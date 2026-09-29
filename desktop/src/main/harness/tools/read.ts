@@ -5,7 +5,7 @@ import { defineTool } from './registry';
 import { canonicalize, resolveP, shellCwdMissHint, lunaPathRefused } from './guards';
 import { deliverableImageMediaType, UNDELIVERABLE_IMAGE_EXTENSIONS, MAX_ATTACHMENT_BYTES } from '../image-support';
 import { readPdfAsToolResult } from '../pdf-text';
-import { fingerprintFile, fingerprintOf } from './file-fingerprint';
+import { fingerprintFile, fingerprintFileInPieces, fingerprintOf } from './file-fingerprint';
 
 const BINARY_SNIFF_BYTES = 8000;
 
@@ -203,30 +203,29 @@ export const ReadTool = defineTool({
     const offset = args.offset ?? 1;
     const limit = Math.min(args.limit ?? 2000, 2000);
     const canonical = canonicalize(args.file_path, ctx.cwd);
-    // G-11 (2026-08-26 tools investigation): the same slice of an UNCHANGED file
-    // was already served this session — the model still has it (the session
-    // forgets these marks whenever history is discarded or shrunk, so this is
-    // never claimed across a compaction or resume). A short notice beats a
-    // second copy: Claude Code and Hermes both do this. Checked BEFORE the file
-    // is read so the repeat costs a stat and nothing else. Still counts as a
-    // Read for the edit gate — the registry stamp happens here as well as on the
-    // full path below (a binary file is only stamped AFTER it passes the binary
-    // refusal, so a refused Read never satisfies the gate; a dedupe hit can
-    // only be for a file that already passed it).
     const servedKey = `${canonical}|${offset}|${limit}`;
     const prior = ctx.servedReads?.get(servedKey);
-    if (prior && prior.mtimeMs === st.mtimeMs) {
-      ctx.readRegistry.set(canonical, prior.fingerprint);
-      const ago = ctx.toolCallIndex !== undefined ? ctx.toolCallIndex - prior.callIndex : undefined;
-      const when = ago !== undefined ? `(${ago} call${ago === 1 ? '' : 's'} ago)` : '(earlier this session)';
-      return {
-        text: `Read ${args.file_path}: lines ${prior.from}–${prior.to} — `
-          + `Unchanged since your earlier Read this session ${when} — the content you already have is current. `
-          + 'Use a different offset/limit to see another part of the file.',
-      };
-    }
     // fs.promises (2026-09-16 C4): up to MAX_READ_BYTES used to be read
     // synchronously on the main thread, several times per turn.
+    // WHY check a repeat BEFORE loading the file: an unchanged repeat is the
+    // common case, and answering it from a piecewise fingerprint skips the
+    // whole-file decode + line split (~100 ms of main-process time at 50 MB)
+    // that would stall every window. A size mismatch skips even the hash. The
+    // bytes, not the mtime, decide: a replacement can keep mtime and size.
+    if (prior && prior.fingerprint.startsWith(`${st.size}:`)) {
+      let current: string | null = null;
+      try { current = await fingerprintFileInPieces(abs); } catch { /* fall through to the normal read and its error */ }
+      if (current === prior.fingerprint) {
+        ctx.readRegistry.set(canonical, current);
+        const ago = ctx.toolCallIndex !== undefined ? ctx.toolCallIndex - prior.callIndex : undefined;
+        const when = ago !== undefined ? `(${ago} call${ago === 1 ? '' : 's'} ago)` : '(earlier this session)';
+        return {
+          text: `Read ${args.file_path}: lines ${prior.from}–${prior.to} — `
+            + `Unchanged since your earlier Read this session ${when} — the content you already have is current. `
+            + 'Use a different offset/limit to see another part of the file.',
+        };
+      }
+    }
     const buf = await fs.promises.readFile(abs);
     if (looksBinary(buf)) return { text: `Read rejected: ${args.file_path}: it is a binary file.`, isError: true };
     const raw = buf.toString('utf8');
@@ -235,15 +234,13 @@ export const ReadTool = defineTool({
     // 4) — drop it so line counts and the paging trailer are honest.
     if (raw.endsWith('\n')) all.pop();
     const totalLines = all.length;
-    // Record for the read-before-edit gate (a content fingerprint, so a later
-    // external change invalidates it and a mere touch does not) — the file
-    // exists and was readable, so it counts as read even if the requested page
-    // is past EOF.
-    const fingerprint = fingerprintOf(buf);
-    ctx.readRegistry.set(canonical, fingerprint);
     if (offset > totalLines) {
       return { text: `Read failed: ${args.file_path}: offset ${offset} is past the end of the file (${totalLines} lines).`, isError: true };
     }
+    // The file changed (or was never served): stamp the read-before-edit gate
+    // from the SAME buffer that passed the binary/offset checks above.
+    const fingerprint = fingerprintOf(buf);
+    ctx.readRegistry.set(canonical, fingerprint);
     const slice = all.slice(offset - 1, offset - 1 + limit);
     const MAX_LINE = 2000;
     // G-5: a second, per-call cap in CHARS on top of the line cap — 2,000 lines

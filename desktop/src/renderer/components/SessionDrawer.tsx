@@ -15,7 +15,9 @@ import { useProjectWatch } from '../hooks/useProjectWatch';
 import { useGitFileStatus } from '../hooks/useGitFileStatus';
 import { useMissingArtifacts, refreshMissingArtifacts } from '../hooks/useMissingArtifacts';
 import { gitFooterState } from '../utils/git-footer';
-import { ActiveArtifactView, type ActiveArtifactHandle } from './artifact-views/ActiveArtifactView';
+import { ActiveArtifactView, type ActiveArtifactHandle, type CommentsHeaderState } from './artifact-views/ActiveArtifactView';
+import { MenuIcon } from './context-menu/menu-icons';
+import { CommentsFloatingActions } from './comments/CommentsFloatingActions';
 import SessionPreviewPane from './SessionPreviewPane';
 // 6b: COPY was originally added ONLY for the "Referenced
 // conversations" list block below (a cut candidate — see Task 6 brief 6b).
@@ -120,6 +122,32 @@ function Ic({ name, size = 15 }: { name: keyof typeof PATHS | string; size?: num
       strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
       {PATHS[name].split('M').filter(Boolean).map((seg, i) => <path key={i} d={'M' + seg} />)}
     </svg>
+  );
+}
+
+// Floating Comments button (doc comments mockup). Round 4 put it in the
+// header icon row; round 5 (Destin: "try putting the comment button just to
+// the left of the edit button") moved it into the floating Edit cluster, in
+// the same pill shape as the Cancel button there. Pressed (accent ring) while
+// Comments mode is on; the count badge is the header Files button's recipe
+// (HeaderBar.tsx).
+function CommentsBtn({ state, onClick }: { state: CommentsHeaderState; onClick: () => void }) {
+  const title = state.active ? 'Back to reading' : 'Comments';
+  return (
+    <button
+      type="button"
+      aria-pressed={state.active}
+      title={title}
+      onClick={onClick}
+      className={`pointer-events-auto flex items-center gap-2 px-4 py-2.5 rounded-full text-sm font-semibold bg-panel border shadow-lg hover:text-fg hover:bg-well transition-colors ${
+        state.active ? 'text-fg border-accent ring-1 ring-accent' : 'text-fg-2 border-edge'
+      }`}
+    >
+      <MenuIcon name="comment" className="w-4 h-4" />
+      Comments
+      {/* G-19: label + muted numeral, never an accent badge (G-8). */}
+      {state.count > 0 && <span className="text-fg-muted">{state.count}</span>}
+    </button>
   );
 }
 
@@ -400,6 +428,14 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // this ref + mirrors its state so the toolbar can swap pencil ↔ save/cancel.
   const editRef = useRef<ActiveArtifactHandle>(null);
   const [editState, setEditState] = useState<{ isEditable: boolean; editing: boolean }>({ isEditable: false, editing: false });
+  const [commentsState, setCommentsState] = useState<CommentsHeaderState>({ available: false, active: false, count: 0, paneVisible: false, actionsRight: 8, actionsWidth: 240, paneLeft: 256, actionsBottom: 36 });
+  // Entering Comments mode folds the file list away however it was entered
+  // (the Comments button, clicking a highlight, a sent pill) — the floating
+  // comment actions share Edit's hide-while-the-list-is-open rule, so with the
+  // list open "Ask Your Assistant" would be hidden the moment the mode opened.
+  useEffect(() => {
+    if (commentsState.active) setListOpen(false);
+  }, [commentsState.active]);
   // D3: every navigation away from a dirty editor goes through this guard
   // (Save / Discard / Cancel dialog) instead of silently discarding the draft.
   const { guard: guardUnsaved, dialog: unsavedDialog } = useUnsavedGuard(
@@ -1240,6 +1276,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                   onDiskRead={applyDiskRead}
                   controlsInHeader
                   onEditStateChange={setEditState}
+                  onCommentsStateChange={setCommentsState}
                 />
               </div>
               {/* Floating Edit ↔ Save cluster, bottom-right of the doc pane.
@@ -1247,14 +1284,73 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                   and back OUT when the list reopens — kept mounted so both
                   directions animate. While EDITING it stays visible regardless,
                   so Save can never be hidden by opening the list. */}
-              {active && (editState.editing || editState.isEditable) && (
+              {/* Doc comments (round 5): the cluster is now a right-aligned
+                  column. Bottom row: [Comments] [Edit]. In Comments mode,
+                  "Show resolved" and "Ask Your Assistant" float above that row,
+                  over the comment column — no bar or panel of their own
+                  (Destin: "they should float over the same … panel"). The
+                  column itself ignores the pointer so the gaps between pills
+                  never block the document; each pill opts back in. */}
+              {/* Round 6 (Destin: "it should pop in and disappear the same
+                  way the edit button does"): the WHOLE cluster now shares
+                  Edit's pop — in when the file list folds away, out when it
+                  reopens (still always shown while editing, so Save can't
+                  hide). `inert` while faded, because each pill re-enables
+                  pointer events for itself and would otherwise stay
+                  clickable while invisible. Clicking Comments folds the list
+                  away, like clicking Edit does, so the buttons Comments mode
+                  needs are on screen the moment it opens. */}
+              {/* Ask Your Assistant at the foot
+                  of the comment column — w-60 = the margin's card width, right-2
+                  = the cards' 8px inset from the edge (measured). Round 10
+                  (Destin: "should only appear when the full pane is actually
+                  visible, and should disappear if the pane is hidden"): shown
+                  only while the full column is on screen — not with the file
+                  list's pop-in rule, and not over the collapsed marker rail. */}
+              {active && commentsState.paneVisible && (
+                // Lined up with the cards' measured edges (ActiveArtifactView,
+                // rounds 11/15) — right with or without a scrollbar.
+                <div className="absolute z-20 pointer-events-none" style={{ right: commentsState.actionsRight, width: commentsState.actionsWidth, bottom: commentsState.actionsBottom }}>
+                  {/* After sending, leave Comments mode so the chat — and the
+                      message just sent — is in view; in the (auto-)expanded
+                      pane the send happened out of sight and the button
+                      "doesn't seem clickable" (review deck R-5). */}
+                  <CommentsFloatingActions path={active.path} beforeSend={() => editRef.current?.toggleComments()} projectRoot={projectRoot} />
+                </div>
+              )}
+              {active && (
                 <div
-                  className={`absolute bottom-9 right-4 z-20 flex items-center gap-2 transition-all duration-200 ${
-                    editState.editing || !showList
-                      ? 'opacity-100 scale-100'
-                      : 'opacity-0 scale-90 pointer-events-none'
+                  inert={!(editState.editing || !showList)}
+                  className={`absolute inset-x-0 bottom-9 z-20 pointer-events-none origin-bottom-right transition-all duration-200 ${
+                    editState.editing || !showList ? 'opacity-100 scale-100' : 'opacity-0 scale-90'
                   }`}
                 >
+                  {/* Comments + Edit sit over the DOCUMENT: in Comments mode they
+                      move left past the 256px comment column (right-68 = 16px
+                      clearance + 256px), otherwise their usual 16px from the edge. */}
+                  {/* In Comments mode: 16px clear of the comment pane's measured
+                      left edge (rounds 13/15). */}
+                  <div
+                    className="absolute bottom-0 flex items-center gap-2"
+                    // bottom: the wrapper sits at bottom-9 (36px); in Comments
+                    // mode this row's bottom edge matches the floating comment
+                    // actions' measured bottom, so the two rows line up.
+                    style={{
+                      right: commentsState.paneVisible ? commentsState.paneLeft + 16 : 16,
+                      bottom: commentsState.paneVisible ? commentsState.actionsBottom - 36 : 0,
+                    }}
+                  >
+                  {commentsState.available && !editState.editing && (
+                    <CommentsBtn
+                      state={commentsState}
+                      onClick={() => editRef.current?.toggleComments()}
+                    />
+                  )}
+              {/* Round 7 (Destin: "the button should stay in the same spot next
+                  to edit when selected"): Edit stays visible in Comments mode —
+                  hiding it slid the Comments button sideways on every toggle. */}
+              {(editState.editing || editState.isEditable) && (
+                <div className="flex items-center gap-2 pointer-events-auto">
                   {editState.editing ? (
                     <>
                       <button
@@ -1268,7 +1364,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                       <button
                         type="button"
                         onClick={() => editRef.current?.saveEdit()}
-                        className="flex items-center gap-2 px-4 py-2.5 rounded-full text-sm font-semibold bg-accent text-on-accent shadow-lg hover:opacity-90 transition-opacity"
+                        className="solid-accent flex items-center gap-2 px-4 py-2.5 rounded-full text-sm font-semibold bg-accent text-on-accent shadow-lg hover:opacity-90 transition-opacity"
                       >
                         <Ic name="check" size={15} />
                         Save
@@ -1278,12 +1374,15 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                     <button
                       type="button"
                       onClick={() => { editRef.current?.startEdit(); setListOpen(false); }}
-                      className="flex items-center gap-2 px-4 py-2.5 rounded-full text-sm font-semibold bg-accent text-on-accent shadow-lg hover:opacity-90 transition-opacity"
+                      className="solid-accent flex items-center gap-2 px-4 py-2.5 rounded-full text-sm font-semibold bg-accent text-on-accent shadow-lg hover:opacity-90 transition-opacity"
                     >
                       <Ic name="editdoc" size={15} />
                       Edit
                     </button>
                   )}
+                </div>
+              )}
+                  </div>
                 </div>
               )}
               {/* metadata strip — bottom of the DOC column (not a full-width row up

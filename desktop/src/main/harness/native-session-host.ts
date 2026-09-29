@@ -27,11 +27,15 @@ import { PAGE_TURNS } from '../transcript-page';
 import { readImageFromDisk } from './image-support';
 import { SessionStore, validatedDeltaReferences, type NativeSessionListEntry } from './session-store';
 import { PermissionBroker } from './permission-broker';
+import { AdminPasswordService, type AdminPasswordServiceLike } from './admin-password-service';
+import { RunningCalls } from './askpass/running-calls';
+import type { AskpassServer } from './askpass/askpass-server';
 import { resolvePreset, type ResolvedPreset } from './preset-registry';
 import { decidePermission } from './permission-engine';
 import { getShell } from './tools/bash';
 import { rulesForMode, sameRule, isCrossProjectRule, CROSS_PROJECT_SLUG, DESTRUCTIVE_DENY_LIST, type NativePermissionMode, type PermissionRule } from '../../shared/permission-types';
-import { assembleSystemPrompt, assembleSystemPromptParts, findProjectInstructions, gitSnapshotAsync } from './prompt-assembly';
+import { assembleSystemPrompt, assembleSystemPromptParts, gitSnapshotAsync } from './prompt-assembly';
+import { prepareProjectInstructions, type ProjectInstructionFile } from './injection/project-instructions';
 import { resolveProfile, effectiveContextForModel, type CapabilityProfile, type ProfileProviderType } from './capability-profile';
 import { CORE_TOOLS } from './tools';
 import type { ToolServices, SpecialistReservation, SpecialistSpawnOpts, SpecialistManageOutcome, SpecialistResumeOutcome } from './tools/types';
@@ -51,7 +55,7 @@ import { PermissionModeStore } from './permission-mode-store';
 import { computeReportBudget } from './specialists/report-budget';
 import { truncateOutput, composeNotice } from './tools/truncate';
 import { APPROX_CHARS_PER_TOKEN } from './message-size';
-import { fitInjection, fitProjectInstructions } from './injection/injection-budget';
+import { fitInjection } from './injection/injection-budget';
 import { frameSkillInvocation } from './skills/skill-invocation';
 import { buildTriggerIndex, type TriggerIndex } from './injection/path-triggers';
 import { costForUsage, isFreePricing, type ModelPricing } from './pricing';
@@ -100,6 +104,8 @@ const NOOP_REMEMBERED_STORE: RememberedRuleStore = {
 type SendUnit = { text: string; attachments: string[] };
 
 const SEND_QUEUE_LIMIT = 10;
+/** Resume could not read the saved conversation. No cause named: a lock, EMFILE and a bad disk look alike. */
+export const TRANSCRIPT_UNREADABLE_MESSAGE = "This conversation's saved data couldn't be read just now. Try again in a moment.";
 
 // Specialists (Task 7) — the ONLY child transcript event types that are
 // re-emitted as stamped DISPLAY copies under the parent's session id.
@@ -300,6 +306,7 @@ interface LiveEntry {
   // The "What the assistant was given" record last pushed for this session, so a
   // model swap can re-push it with the new model's window (republishWindow).
   sessionContext?: SessionContext;
+  projectInstructionFiles?: readonly ProjectInstructionFile[];
   // Per-session append serialization: each transcript event extends this chain
   // (append(prev).then(next)) so the SessionStore contract (serialized appends)
   // holds. Starts resolved; a failed append is logged but never breaks the
@@ -324,7 +331,7 @@ interface LiveEntry {
   // `attachments` are absolute composer file paths; image ones become image
   // parts on the user message. Carried through the QUEUE too, or a message sent
   // while a turn was in flight would silently lose its pictures.
-  queue: { id: string; text: string; attachments: string[] }[];
+  queue: { id: string; text: string; attachments: string[]; ready?: boolean }[];
   // True from dispatch until runTurns finishes the last queued turn. Host-owned
   // (HarnessSession's in-flight state is private); safe because Node is single-threaded.
   inFlight: boolean;
@@ -378,16 +385,6 @@ function persistedUuidsAfterLastClear(events: TranscriptEvent[]): string[] {
 // pass" (a typed message, a queued message, a skill) from "the host did".
 const IDLE_PASS = async (): Promise<void> => {};
 
-/** The bracketed sentence a fitter appends to say what it cut. Read back rather
- *  than re-described here: a second wording would eventually disagree with the
- *  one the model was actually given, and this panel exists to be trusted.
- *  Null when the text carries no such notice. */
-function truncationNote(fittedText: string): string | null {
-  const at = fittedText.lastIndexOf('\n\n[');
-  if (at === -1 || !fittedText.trimEnd().endsWith(']')) return null;
-  return fittedText.slice(at + 3).trimEnd().slice(0, -1);
-}
-
 /** The name a person recognises out of a skill id. Ids are `plugin:skill` or a
  *  bare name; the part after the colon is what the user typed to install it. */
 function skillLabel(id: string): string {
@@ -408,6 +405,42 @@ export class NativeSessionHost extends EventEmitter {
   // re-emitted on this host so ipc-handlers forwards them on the SAME channel
   // as native transcript events (which is the SAME channel CC hook events ride).
   private broker = new PermissionBroker();
+
+  // admin-password design §2.5/§11 task 5: null until app-start wiring
+  // (main's ipc-handlers.ts setup) calls attachAdminPassword() below, which
+  // builds the real AdminPasswordService around this SAME broker and calls
+  // setAdminPasswordService(). A settable field (not a constructor param)
+  // so ipc-handlers.ts/remote-server.ts can keep calling
+  // `nativeHost.submitAdminPassword(...)` — a STABLE reference — the whole
+  // time, rather than each holding their own snapshot of a value that gets
+  // set later.
+  private adminPasswordService: AdminPasswordServiceLike | null = null;
+
+  // admin-password design §2.3/§3/§11 task 5: unconditional (not gated on
+  // whether AskpassServer ever attaches) — a cheap, side-effect-free
+  // bookkeeping map every Bash call registers into regardless, shared by
+  // tools/bash.ts (foreground) and every session's own ShellRegistry
+  // (shellsFor, background/hand-off), and by the SAME instance
+  // attachAdminPassword() below hands to AskpassServer's own verification
+  // chain (verify.ts's ancestor walk reads THIS map).
+  private readonly runningCalls = new RunningCalls();
+
+  // admin-password design §2.4/§11 task 5: childId -> the bookkeeping
+  // resolveSpecialistChildFor() needs to route a specialist's OWN sudo (mid-
+  // command or up-front) to its parent's card, labelled like
+  // child-ask-router.ts labels a routed permission ask. Populated in
+  // buildSpecialistSession (the ONE place a child's askUser/childAskRouter
+  // is also built, so this can never drift from that routing), removed in
+  // destroy() alongside childrenOf de-registration (a child's own entry;
+  // never the parent's).
+  private readonly specialistMetaByChildId = new Map<string, { parentId: string; agentType: string; title: string; parentToolCallId: string }>();
+
+  // admin-password design §2.3/§11 task 5: set by attachAdminPassword() —
+  // null until then (or forever, on a platform/self-test failure), read
+  // LIVE by toolWiring()/buildSpecialistSession() at every session's
+  // creation, so a session created before app-start wiring finishes still
+  // gets the real vars once it IS attached.
+  private adminPasswordEnvValue: Record<string, string> | null = null;
 
   // Per-session permission mode (spec §2.4 layer 2). decide() reads this fresh
   // on every tool, so setPermissionMode() takes effect on the NEXT gated call
@@ -927,7 +960,7 @@ export class NativeSessionHost extends EventEmitter {
     if (loc.live) return { status: 'still-running' };
     const { record } = loc;
     const workDir = record.workDir;
-    const header = this.store.readHeader(opts.childId, workDir);
+    const header = await this.store.readHeaderAsync(opts.childId, workDir);
     if (!header) throw new Error(`Cannot resume specialist ${opts.childId}: its transcript could not be read.`);
     const agentType = header.agentType ?? record.agentType;
     // Task 4 (plan 1c) — resolved against the PARENT's own per-cwd roster
@@ -958,9 +991,9 @@ export class NativeSessionHost extends EventEmitter {
     const { contextLength, profile, pricing, free } = await this.resolveContextAndProfile(binding);
     const title = header.title ?? record.title;
 
-    const [gitSnapshot, triggers] = await Promise.all([gitSnapshotAsync(workDir), buildTriggerIndex(workDir)]);
+    const [gitSnapshot, triggers, projectInstructionFiles] = await Promise.all([gitSnapshotAsync(workDir), buildTriggerIndex(workDir), prepareProjectInstructions(workDir, profile.injectionBudgetTokens)]);
     const session = this.buildSpecialistSession(
-      parentId, opts.childId, workDir, title, specialist, binding, contextLength, profile, pricing, free, opts.parentToolCallId, preset, parent, gitSnapshot, triggers,
+      parentId, opts.childId, workDir, title, specialist, binding, contextLength, profile, pricing, free, opts.parentToolCallId, preset, parent, gitSnapshot, triggers, projectInstructionFiles,
     );
     // Cold state rebuilt from the child's OWN transcript — seedHistory resets
     // readRegistry + todos too (the same reset-on-resume contract root
@@ -1636,7 +1669,17 @@ export class NativeSessionHost extends EventEmitter {
   private shellsFor(sessionId: string): ShellRegistry {
     const existing = this.shellRegistries.get(sessionId);
     if (existing) return existing;
-    const registry = new ShellRegistry(sessionId);
+    const registry = new ShellRegistry(sessionId, {
+      // admin-password design §2.3/§6/§7/§11 task 5: the SAME RunningCalls
+      // instance tools/bash.ts's own foreground spawn path registers into,
+      // and the SAME `wipeUpfront` the tool layer calls — kept as a bound
+      // closure (not the whole service) so a session created before
+      // attachAdminPassword() ever ran still reads whatever gets attached
+      // LATER, exactly like `adminPasswordService`'s own settable-field
+      // reasoning above.
+      runningCalls: this.runningCalls,
+      wipeUpfront: (toolCallId) => this.adminPasswordService?.wipeUpfront(toolCallId),
+    });
     // One event per change, straight to ipc-handlers' listener (same shape as
     // 'specialists-event'): sendForSession + remote buffer/broadcast live there.
     registry.on('change', (run: ShellRunView) => this.emit('shell-event', { sessionId, run } satisfies ShellEvent));
@@ -2309,6 +2352,91 @@ export class NativeSessionHost extends EventEmitter {
     return this.broker.pendingEventsFor(sessionId);
   }
 
+  /** admin-password design §11 task 5's assignment point — see
+   *  `adminPasswordService`'s own comment for why this is a settable field
+   *  rather than a constructor param. */
+  setAdminPasswordService(service: AdminPasswordServiceLike | null): void {
+    this.adminPasswordService = service;
+  }
+
+  /** admin-password design §11 task 5, item 1: the app-start wiring's ONE
+   *  entry point. Builds the real AdminPasswordService around THIS host's
+   *  own broker (private — nothing outside can construct one against it)
+   *  and its own specialist-child bookkeeping, wires its "accepted" signal
+   *  (design §7) into the right session's ShellRegistry, and calls
+   *  setAdminPasswordService(). Callers (ipc-handlers.ts) own AskpassServer
+   *  and RunningCalls' OWN start/stop lifecycle — this host only holds the
+   *  resulting AdminPasswordService and the SAME RunningCalls instance
+   *  (see `runningCallsForAskpass`) `askpass` was itself constructed
+   *  against. `sudoAskpassPath` is the value the caller has ALREADY
+   *  resolved for `SUDO_ASKPASS` (ipc-handlers.ts's `resolveAskpassPaths` —
+   *  the wrapper `youcoded-askpass`, never `askpass.cjs`, which is a
+   *  DIFFERENT file `askpass` itself already holds as its own
+   *  `helperScriptRealpath` for the verifier's argv[1] check; T5-1: the two
+   *  must never come from independent resolutions). */
+  attachAdminPassword(askpass: AskpassServer, sudoAskpassPath: string): AdminPasswordServiceLike {
+    const service = new AdminPasswordService({
+      broker: this.broker,
+      askpass,
+      runningCalls: this.runningCalls,
+      resolveSpecialistChild: (sessionId) => this.resolveSpecialistChildFor(sessionId),
+    });
+    service.on('accepted', ({ sessionId, toolCallId }: { sessionId: string; toolCallId: string }) => {
+      this.shellRegistries.get(sessionId)?.markAdmin(toolCallId);
+    });
+    this.setAdminPasswordService(service);
+    // design §2.3: the caller (ipc-handlers.ts) only calls this once
+    // `askpass.available` is true, so `socketPath` is guaranteed non-null
+    // here — see AskpassServer.start()'s own contract.
+    this.adminPasswordEnvValue = askpass.socketPath
+      ? {
+          SUDO_ASKPASS: sudoAskpassPath,
+          YOUCODED_ASKPASS_SOCKET: askpass.socketPath,
+          YOUCODED_ASKPASS_RUNTIME: process.execPath,
+        }
+      : null;
+    return service;
+  }
+
+  /** admin-password design §11 task 5, item 1: the ONE RunningCalls
+   *  instance this host's Bash/ShellRegistry machinery registers every call
+   *  root into — exposed so the app-start wiring can construct the (also
+   *  singular) AskpassServer against the SAME instance verify.ts's ancestor
+   *  walk must see. Used for nothing else outside that one wiring call. */
+  runningCallsForAskpass(): RunningCalls {
+    return this.runningCalls;
+  }
+
+  /** Test/diagnostic seam (task 5 review, T5-2) — the exact env
+   *  `attachAdminPassword()` last computed (null before/without a
+   *  successful attach). `toolWiring()`/`buildSpecialistSession()` read the
+   *  SAME private field live at session creation; this getter lets a test
+   *  assert on the real wiring's result without constructing a full
+   *  session. */
+  get adminPasswordEnv(): Record<string, string> | null {
+    return this.adminPasswordEnvValue;
+  }
+
+  /** admin-password design §2.4/§11 task 5: childId -> {parentId, agentType,
+   *  title, parentToolCallId} — see `specialistMetaByChildId`'s own comment.
+   *  Returns null for a root session (never in the map) or an id this host
+   *  has no such bookkeeping for. */
+  private resolveSpecialistChildFor(sessionId: string): { parentId: string; childId: string; agentType: string; title: string; parentToolCallId: string } | null {
+    const meta = this.specialistMetaByChildId.get(sessionId);
+    if (!meta) return null;
+    return { parentId: meta.parentId, childId: sessionId, agentType: meta.agentType, title: meta.title, parentToolCallId: meta.parentToolCallId };
+  }
+
+  /** native:submit-admin-password (design §2.5) on both the desktop IPC
+   *  handler and the remote WS case (contract R6) — never logs, never stores
+   *  `password` beyond this call; AdminPasswordService.submit() converts it
+   *  to a Buffer and zeroes it before this returns. `false` while task 5
+   *  hasn't wired a real service yet, and honestly for an unknown/expired
+   *  requestId once it has. */
+  submitAdminPassword(requestId: string, password: string): boolean {
+    return this.adminPasswordService?.submit(requestId, password) ?? false;
+  }
+
   /** Wire the "no session uses model X anymore" callback (→ engine unload). */
   setModelReleasedHandler(fn: (modelId: string) => void): void {
     this.onModelReleased = fn;
@@ -2598,10 +2726,20 @@ export class NativeSessionHost extends EventEmitter {
    *  `profile` is accepted here so Task 6 can add a prompt variant without another
    *  signature change; this task doesn't use it yet (the session itself carries it
    *  via opts.profile). */
-  private toolWiring(sessionId: string, cwd: string, preset: ResolvedPreset, profile: CapabilityProfile, gitSnapshot: string, triggers: TriggerIndex): Pick<HarnessSessionOpts, 'tools' | 'decide' | 'askUser' | 'systemPrompt' | 'promptParts' | 'toolServices' | 'skillCatalog' | 'triggers' | 'internalReadRoots' | 'specialistRoster' | 'shells'> {
+  private toolWiring(sessionId: string, cwd: string, preset: ResolvedPreset, profile: CapabilityProfile, gitSnapshot: string, triggers: TriggerIndex, projectInstructionFiles: readonly ProjectInstructionFile[]): Pick<HarnessSessionOpts, 'tools' | 'decide' | 'askUser' | 'systemPrompt' | 'promptParts' | 'toolServices' | 'skillCatalog' | 'triggers' | 'internalReadRoots' | 'specialistRoster' | 'shells' | 'runningCalls' | 'adminPasswordEnv' | 'adminPasswordService'> {
     return {
       // G-1: this session's background-command registry, host-owned.
       shells: this.shellsFor(sessionId),
+      // admin-password design §2.3/§11 task 5: the ONE process-wide
+      // RunningCalls instance — always present, cheap bookkeeping even when
+      // AskpassServer never attaches (nothing will ever be verified against
+      // an empty registry either way).
+      runningCalls: this.runningCalls,
+      // Spread so a session created before attachAdminPassword() ran gets
+      // ctx.adminPasswordEnv genuinely ABSENT (not `undefined`-valued) —
+      // same convention as `shells` above.
+      ...(this.adminPasswordEnvValue ? { adminPasswordEnv: this.adminPasswordEnvValue } : {}),
+      ...(this.adminPasswordService ? { adminPasswordService: this.adminPasswordService } : {}),
       tools: CORE_TOOLS,
       // Task 4 (plan 1c) — this project folder's roster, read live off the
       // catalog's in-memory state at every roster()/list()/resolve() call
@@ -2727,7 +2865,7 @@ export class NativeSessionHost extends EventEmitter {
       // timeouts) and could land on a different date or branch than the prompt the
       // model actually got. presetName is label-only and reaches no model.
       ...(() => {
-        const promptParts = assembleSystemPromptParts({ presetBody: preset.body, cwd, appVersion: this.appVersion, promptVariant: profile.promptVariant, hasTools: profile.supportsTools, instructionBudgetTokens: profile.injectionBudgetTokens, supportsParallelToolCalls: profile.supportsParallelToolCalls, audience: 'user', presetName: preset.manifest.name, gitSnapshot });
+        const promptParts = assembleSystemPromptParts({ presetBody: preset.body, cwd, appVersion: this.appVersion, promptVariant: profile.promptVariant, hasTools: profile.supportsTools, instructionBudgetTokens: profile.injectionBudgetTokens, supportsParallelToolCalls: profile.supportsParallelToolCalls, audience: 'user', presetName: preset.manifest.name, gitSnapshot, projectInstructionFiles });
         return { promptParts, systemPrompt: promptParts.map((p) => p.text).join('\n\n') };
       })(),
     };
@@ -3063,8 +3201,9 @@ export class NativeSessionHost extends EventEmitter {
    *
    * Called AFTER the session object exists (its assemblyDigest is what the
    * checkpoint was published against) and instead of the bare seedHistory the
-   * two resume paths used to do. Never throws: a signed-out ChatGPT makes
-   * continuationIdentityFor throw, which is just another fallback.
+   * two resume paths used to do. A signed-out ChatGPT makes
+   * continuationIdentityFor throw, which is just another fallback. The ONE
+   * throw is a transcript that exists but cannot be read (see below).
    */
   private async seedResumedHistory(sessionId: string, cwd: string, session: HarnessSession): Promise<void> {
     const store = this.continuationStore();
@@ -3072,7 +3211,15 @@ export class NativeSessionHost extends EventEmitter {
     // click and read the whole transcript synchronously. (restore() below
     // reads it once more to verify the checkpoint's digest — also async since
     // 2026-09-24, blocking-calls B8.)
-    const persisted = await this.store.readEventsAsync(sessionId, cwd);
+    let persisted: TranscriptEvent[];
+    try {
+      persisted = await this.store.readEventsAsync(sessionId, cwd);
+    } catch (err) {
+      // WHY fail (2026-09-27): [] here resumed with NO model memory, silently, and the next turn
+      // republished that as the checkpoint. Both resume paths release what they acquired on a throw.
+      log('ERROR', 'NativeSessionHost', 'resume could not read the transcript', { sessionId, error: String(err) });
+      throw new Error(TRANSCRIPT_UNREADABLE_MESSAGE);
+    }
     // WHY: the portable record also needs pre-reopen event references even when
     // there is no private continuation sidecar to restore or publish.
     this.store.hydrateReferences(sessionId, persisted);
@@ -3130,8 +3277,8 @@ export class NativeSessionHost extends EventEmitter {
 
   /** Subscribe a freshly-built HarnessSession: forward its events to the
    *  renderer immediately, and enqueue each on the session's append chain. */
-  private wire(sessionId: string, cwd: string, session: HarnessSession, mcpLease?: McpLease): void {
-    const entry: LiveEntry = { session, cwd, appendChain: Promise.resolve(), compactionGeneration: this.restoredCompactionGeneration.get(session) ?? 0, queue: [], inFlight: false, mcpLease };
+  private wire(sessionId: string, cwd: string, session: HarnessSession, mcpLease?: McpLease, projectInstructionFiles: readonly ProjectInstructionFile[] = []): void {
+    const entry: LiveEntry = { session, cwd, appendChain: Promise.resolve(), compactionGeneration: this.restoredCompactionGeneration.get(session) ?? 0, queue: [], inFlight: false, mcpLease, projectInstructionFiles };
     this.live.set(sessionId, entry);
     this.retainModel(sessionId, session.binding.modelId); // ref-count this model
     // Persist "Always allow" decisions for THIS session's project. The session
@@ -3167,11 +3314,10 @@ export class NativeSessionHost extends EventEmitter {
     // AFTER the listeners above and BEFORE the held-message drain, so the line is
     // on screen before the first turn's output starts arriving.
     //
-    // Never fatal: this reads the instruction file and syncs the tool set, and a
-    // session must still open if either fails. A missing line is a missing
-    // explanation; a thrown one is a chat that never starts.
+    // Never fatal: this describes the already-captured instructions and tool
+    // set; a missing explanation must not stop a chat from opening.
     try {
-      entry.sessionContext = this.buildSessionContext(cwd, session);
+      entry.sessionContext = this.buildSessionContext(entry);
       this.emit('session-context', { sessionId, context: entry.sessionContext });
     } catch (err) {
       log('ERROR', 'NativeSessionHost', 'could not describe the session context', { sessionId, error: String(err) });
@@ -3199,8 +3345,8 @@ export class NativeSessionHost extends EventEmitter {
   /** What this session was given, for the line above the conversation and the
    *  "What the assistant was given" panel.
    *
-   *  Built ONCE per session, at wire() — root sessions only, so a specialist
-   *  child (which is never wired) never grows a line of its own.
+   *  Built ONCE per session from its prompt's captured inventory, at wire() —
+   *  root sessions only; children have no context-panel record.
    *
    *  NO FILE BODIES. The only text here is the system prompt, which is already
    *  assembled and in memory; every file the panel can show is fetched by
@@ -3212,10 +3358,10 @@ export class NativeSessionHost extends EventEmitter {
    *  a small model — the skill catalog itself, which the model is simply never
    *  told about. A skill being too long to fit is a thing that has not happened
    *  yet, so it is reported on the skill's own row and never in this summary. */
-  private buildSessionContext(cwd: string, session: HarnessSession): SessionContext {
+  private buildSessionContext(entry: LiveEntry): SessionContext {
+    const session = entry.session;
     const inv = session.contextInventory();
-    const found = findProjectInstructions(cwd);
-    const fitted = found ? fitProjectInstructions(found.text, inv.injectionBudgetTokens, found.name) : null;
+    const files = entry.projectInstructionFiles ?? [];
     return {
       modelLabel: session.binding.modelId,
       contextWindowTokens: session.contextWindowTokens,
@@ -3224,9 +3370,10 @@ export class NativeSessionHost extends EventEmitter {
       // The project-instructions part is filtered out: it has its own tab, and
       // showing it under System too would say the same thing twice.
       systemPromptSections: inv.promptParts.filter((p) => p.id !== 'project'),
-      projectInstructions: found && fitted
-        ? { path: found.path, truncated: fitted.truncated, note: truncationNote(fitted.text) }
+      projectInstructions: files.length
+        ? { path: files[files.length - 1].path, truncated: files[files.length - 1].truncated, note: files[files.length - 1].note ?? null }
         : null,
+      projectInstructionFiles: files.map(f => ({ path: f.path, truncated: f.truncated, note: f.note ?? null, ...(f.notUsed ? { notUsed: f.notUsed } : {}) })),
       skills: inv.skills.map((s) => ({ id: s.id, label: skillLabel(s.id), description: s.description })),
       skillsOffered: inv.skillsOffered,
       tools: inv.toolNames,
@@ -3267,10 +3414,11 @@ export class NativeSessionHost extends EventEmitter {
     if (!entry) return { error: 'not-live' };
     const budget = entry.session.profileSnapshot.injectionBudgetTokens;
     if (kind === 'project') {
-      const found = findProjectInstructions(entry.cwd);
+      const files = entry.projectInstructionFiles ?? [];
+      // WHY: id is only a selector into the captured inventory, never a path read.
+      const found = id ? files.find(f => f.path === id) : files[files.length - 1];
       if (!found) return { error: 'not-found' };
-      const fitted = fitProjectInstructions(found.text, budget, found.name);
-      return { path: found.path, text: fitted.text, full: found.text, truncated: fitted.truncated };
+      return { path: found.path, text: found.text, full: found.full, truncated: found.truncated };
     }
     if (!id) return { error: 'not-found' };
     try {
@@ -3335,7 +3483,7 @@ export class NativeSessionHost extends EventEmitter {
     await this.specialistCatalog.ensureFresh(opts.cwd);
     // The <env> git line, read off the main thread before anything is built
     // (2026-09-16 C3). Never throws (a non-repo answers a fixed string).
-    const [gitSnapshot, triggers] = await Promise.all([gitSnapshotAsync(opts.cwd), buildTriggerIndex(opts.cwd)]);
+    const [gitSnapshot, triggers, projectInstructionFiles] = await Promise.all([gitSnapshotAsync(opts.cwd), buildTriggerIndex(opts.cwd), prepareProjectInstructions(opts.cwd, profile.injectionBudgetTokens)]);
     // Acquire this session's MCP servers (Task 6) BEFORE constructing the
     // session, so mcpServers is available for the very first buildAiTools().
     const mcpLease = await this.acquireMcp(opts.sessionId);
@@ -3353,8 +3501,9 @@ export class NativeSessionHost extends EventEmitter {
       session = new HarnessSession(
         { sessionId: opts.sessionId, cwd: opts.cwd, harness, binding: opts.binding, contextLength, profile, pricing, free,
           commitCompaction: proposal => this.commitCompaction(opts.sessionId, session, proposal),
+          takeReadyBusyMessage: () => this.takeReadyBusyMessage(opts.sessionId, session),
           ...(mcpServers ? { mcpServers } : {}),
-          ...this.toolWiring(opts.sessionId, opts.cwd, preset, profile, gitSnapshot, triggers) },
+          ...this.toolWiring(opts.sessionId, opts.cwd, preset, profile, gitSnapshot, triggers, projectInstructionFiles) },
         this.modelFactory,
       );
     } catch (err) {
@@ -3362,7 +3511,7 @@ export class NativeSessionHost extends EventEmitter {
       throw err;
     }
     this.presetIdFor.set(opts.sessionId, preset.manifest.id);
-    this.wire(opts.sessionId, opts.cwd, session, mcpLease);
+    this.wire(opts.sessionId, opts.cwd, session, mcpLease, projectInstructionFiles);
     if (slotsUnknown) this.live.get(opts.sessionId)!.refreshSlotsAfterTurn = true;
   }
 
@@ -3435,9 +3584,9 @@ export class NativeSessionHost extends EventEmitter {
     // buildSpecialistSession is fallible synchronous work, and a throw after
     // the header write would leave a session file on disk for a child that
     // never existed. The git line (C3) and trigger walk (B8) are awaited first.
-    const [gitSnapshot, triggers] = await Promise.all([gitSnapshotAsync(workDir), buildTriggerIndex(workDir)]);
+    const [gitSnapshot, triggers, projectInstructionFiles] = await Promise.all([gitSnapshotAsync(workDir), buildTriggerIndex(workDir), prepareProjectInstructions(workDir, profile.injectionBudgetTokens)]);
     const session = this.buildSpecialistSession(
-      parentId, childId, workDir, title, opts.specialist, binding, contextLength, profile, pricing, free, opts.parentToolCallId, preset, parent, gitSnapshot, triggers,
+      parentId, childId, workDir, title, opts.specialist, binding, contextLength, profile, pricing, free, opts.parentToolCallId, preset, parent, gitSnapshot, triggers, projectInstructionFiles,
     );
 
     // `title` was drawn earlier (before this session was built — see that
@@ -3487,9 +3636,15 @@ export class NativeSessionHost extends EventEmitter {
     pricing: ModelPricing | null, free: boolean,
     parentToolCallId: string, preset: ResolvedPreset, parent: LiveEntry,
     // The child's <env> git line and trigger index, awaited by the caller off the main thread (C3, B8).
-    gitSnapshot: string, triggers: TriggerIndex,
+    gitSnapshot: string, triggers: TriggerIndex, projectInstructionFiles: readonly ProjectInstructionFile[],
   ): HarnessSession {
-    const allowed = new Set(specialist.allowedTools);
+    // WHY: the spawn-time Bash capability already advertises these helpers;
+    // hand the SAME derived list to tool exposure and the permission cap so a
+    // child can manage only its own background runs without editing the definition.
+    const effectiveAllowedTools = specialist.allowedTools.includes('Bash')
+      ? [...new Set([...specialist.allowedTools, 'BashOutput', 'KillShell'])]
+      : [...specialist.allowedTools];
+    const allowed = new Set(effectiveAllowedTools);
     let session: HarnessSession;
     session = new HarnessSession(
       {
@@ -3499,21 +3654,27 @@ export class NativeSessionHost extends EventEmitter {
         // lifecycle controls, and the delegation spawn backstop—not an arbitrary
         // per-child action count, so root limits never flow into a child.
         harness: preset.manifest,
-        // TOOLS: the definition's allowlist, filtered out of the same CORE_TOOLS
-        // set every session is built from. The Task tool is structurally absent
-        // because no definition lists it — that omission IS the depth-1 rule.
-        // G-1: a helper allowed Bash gets the companions too — its own
-        // background command would otherwise be unreadable and unstoppable.
-        tools: CORE_TOOLS.filter((t) => allowed.has(t.name) || (allowed.has('Bash') && (t.name === 'BashOutput' || t.name === 'KillShell'))),
+        // TOOLS: the spawn-time effective list, filtered from CORE_TOOLS.
+        // Task stays absent by definition (depth 1); Bash companions are usable
+        // only when Bash is in that definition, never through an unrelated grant.
+        tools: CORE_TOOLS.filter((t) => allowed.has(t.name)),
         // G-1: children get their OWN registry; their runs die with the child
         // under 'conversation-closed' when destroyChildrenOf tears them down.
         shells: this.shellsFor(childId),
+        // admin-password design §2.3/§11 task 5: same three fields
+        // toolWiring() gives a root session — a specialist's OWN sudo call
+        // (mid-command or up-front) needs the identical registration/env/
+        // service, routed to the PARENT's card via resolveSpecialistChildFor
+        // (populated just below, once childId is known).
+        runningCalls: this.runningCalls,
+        ...(this.adminPasswordEnvValue ? { adminPasswordEnv: this.adminPasswordEnvValue } : {}),
+        ...(this.adminPasswordService ? { adminPasswordService: this.adminPasswordService } : {}),
         // COLD START (spec §1): the specialist body replaces the preset body, and
         // the <env> block describes the CHILD's work directory. Nothing from the
         // parent's conversation crosses over — the brief in the first user turn
         // is the entire context the child gets.
         systemPrompt: assembleSystemPrompt({
-          presetBody: specialist.systemPrompt, cwd: workDir, appVersion: this.appVersion, gitSnapshot,
+          presetBody: specialist.systemPrompt, cwd: workDir, appVersion: this.appVersion, gitSnapshot, projectInstructionFiles,
           promptVariant: profile.promptVariant, hasTools: profile.supportsTools,
           instructionBudgetTokens: profile.injectionBudgetTokens,
           // audience 'parent': the shared doctrine's writing-for-the-user block is
@@ -3546,7 +3707,7 @@ export class NativeSessionHost extends EventEmitter {
         decide: buildChildDecide({
           parentDecide: this.buildDecide(parentId, parent.cwd, preset.presetRules, { specialistScope: specialist.id }),
           charter: specialist.charter,
-          allowedTools: specialist.allowedTools,
+          allowedTools: effectiveAllowedTools,
           // envelopeGranted: true means the hire was PERMITTED, not that the user was necessarily
           // asked. Two ways that happens: (1) a Task-tool ask card (new spawn) or the original
           // spawn's ask card (resume) was answered — real consent; or (2) the active permission
@@ -3592,6 +3753,13 @@ export class NativeSessionHost extends EventEmitter {
       },
       this.modelFactory,
     );
+    // admin-password design §2.4/§11 task 5: registered here — the ONE place
+    // a child's own routing identity (parentId/agentType/title/
+    // parentToolCallId) is already all in scope, exactly what childAskRouter
+    // above was just built from — so resolveSpecialistChildFor can never
+    // drift from the SAME routing a permission ask already gets. Removed in
+    // destroy() alongside childrenOf de-registration.
+    this.specialistMetaByChildId.set(childId, { parentId, agentType: specialist.id, title, parentToolCallId });
     return session;
   }
 
@@ -3785,7 +3953,7 @@ export class NativeSessionHost extends EventEmitter {
       log('WARN', 'NativeSessionHost', 'resume found a live session under the same id — destroying the orphan first', { sessionId });
       await this.destroy(sessionId);
     }
-    const header = this.store.readHeader(sessionId, cwd);
+    const header = await this.store.readHeaderAsync(sessionId, cwd);
     if (!header) return false;
     // Task 6 — a specialist child can never come back through the ROOT resume
     // path: it would get the resolved PRESET's prompt (never its own
@@ -3825,7 +3993,7 @@ export class NativeSessionHost extends EventEmitter {
     // destroy() can only release the lease on the LiveEntry it captured. See
     // McpLease in mcp-manager.ts.
     // The <env> git line + trigger index, off the main thread, before the session is built (C3, B8).
-    const [gitSnapshot, triggers] = await Promise.all([gitSnapshotAsync(cwd), buildTriggerIndex(cwd)]);
+    const [gitSnapshot, triggers, projectInstructionFiles] = await Promise.all([gitSnapshotAsync(cwd), buildTriggerIndex(cwd), prepareProjectInstructions(cwd, profile.injectionBudgetTokens)]);
     const mcpLease = await this.acquireMcp(sessionId);
     const mcpServers = mcpLease?.servers;
     const harness = header.stepGuard === undefined
@@ -3844,8 +4012,9 @@ export class NativeSessionHost extends EventEmitter {
         // `binding` (not header.binding) — same override reason as above.
         { sessionId, cwd, harness, binding, contextLength, profile, pricing, free,
           commitCompaction: proposal => this.commitCompaction(sessionId, session, proposal),
+          takeReadyBusyMessage: () => this.takeReadyBusyMessage(sessionId, session),
           ...(mcpServers ? { mcpServers } : {}),
-          ...this.toolWiring(sessionId, cwd, preset, profile, gitSnapshot, triggers) },
+          ...this.toolWiring(sessionId, cwd, preset, profile, gitSnapshot, triggers, projectInstructionFiles) },
         this.modelFactory,
       );
       // Full history rebuild (spec §2.5): rebuildHistory reconstructs the assistant
@@ -3860,7 +4029,7 @@ export class NativeSessionHost extends EventEmitter {
       throw err;
     }
     this.presetIdFor.set(sessionId, preset.manifest.id);
-    this.wire(sessionId, cwd, session, mcpLease);
+    this.wire(sessionId, cwd, session, mcpLease, projectInstructionFiles);
     if (slotsUnknown) this.live.get(sessionId)!.refreshSlotsAfterTurn = true;
     // Task 9 — AFTER wire(), not before: reconcileDelegations's own
     // queueDelivery() call needs this.live.get(sessionId) to already resolve
@@ -3925,7 +4094,16 @@ export class NativeSessionHost extends EventEmitter {
       // Task 11: mint a stable id per queued entry so the renderer can target
       // this exact message later with removeQueued() (Cancel/Edit before send).
       const queueId = randomUUID();
-      entry.queue.push({ id: queueId, text, attachments });
+      // WHY: both the host drainer and a future in-turn claimant must leave this
+      // head untouched until the IPC acknowledgement has had a macrotask to flush.
+      const queued = { id: queueId, text, attachments, ready: false };
+      entry.queue.push(queued);
+      setImmediate(() => {
+        queued.ready = true;
+        // The turn may have settled while this head was unready. Readiness is
+        // itself a progress signal, not something the next send must discover.
+        if (this.live.get(sessionId) === entry) this.kickReadyQueue(sessionId, entry);
+      });
       return { status: 'queued', queueId };
     }
     entry.inFlight = true;
@@ -3976,97 +4154,104 @@ export class NativeSessionHost extends EventEmitter {
     return true;
   }
 
-  // Runs the dispatched turn, then drains the queue turn-by-turn. send() settling
-  // is the ONLY drain trigger — it settles strictly after turn-complete /
-  // session-error / user-interrupt, and stays unsettled across a permission ask
-  // (an ask pauses the turn; draining on it would hard-throw re-entrancy).
+  /** "Send now" (Destin, 2026-09-28): Stop, then send THIS waiting message
+   *  next, ahead of the others. WHY: ordinary mid-task messages wait for the
+   *  current batch; this is for not waiting at all. Move + stop are sync, so
+   *  the drain after the stop finds it first. Contract as removeQueued. */
+  sendQueuedNow(sessionId: string, queueId: string): boolean {
+    const held = this.startingSends.get(sessionId); // still starting: reorder only
+    if (held) {
+      const i = held.findIndex((q) => q.id === queueId);
+      if (i !== -1) { held.unshift(...held.splice(i, 1)); return true; }
+    }
+    const entry = this.live.get(sessionId);
+    if (!entry) return false;
+    const idx = entry.queue.findIndex((q) => q.id === queueId);
+    if (idx === -1) return false;
+    const [item] = entry.queue.splice(idx, 1);
+    item.ready = true; // its IPC ack flushed long before a button could be pressed
+    entry.queue.unshift(item);
+    this.interrupt(sessionId);
+    return true;
+  }
+
+  /** WHY: only the live root driver may remove an acknowledged FIFO head.
+   * No awaits between checking generation/readiness/quiesce and the shift. */
+  private takeReadyBusyMessage(sessionId: string, session: HarnessSession):
+    { id: string; text: string; attachments: string[]; restore: () => void } | undefined {
+    const entry = this.live.get(sessionId);
+    if (!entry || entry.session !== session || entry.parentSessionId || !entry.inFlight ||
+        entry.quiescing || entry.compacting || entry.queue[0]?.ready === false) return;
+    const item = entry.queue.shift();
+    if (!item) return;
+    return { ...item, restore: () => {
+      if (this.live.get(sessionId) === entry && !entry.quiescing) entry.queue.unshift(item);
+      else log('ERROR', 'NativeSessionHost', 'claimed message could not be restored after delivery failure', { sessionId, queueId: item.id });
+    } };
+  }
+
+  /** Claim an idle slot for a head whose acknowledgement fence just opened.
+   *  Never bypass an unready FIFO head; runTurns does the actual shift. */
+  private kickReadyQueue(sessionId: string, entry: LiveEntry): void {
+    if (entry.inFlight || entry.quiescing || entry.compacting || !entry.queue[0] || entry.queue[0].ready === false) return;
+    entry.inFlight = true;
+    entry.running = new Promise<void>((resolve) => {
+      setImmediate(() => { void this.runTurns(sessionId, entry, IDLE_PASS).then(resolve, resolve); });
+    });
+  }
+
+  // Run turns serially. A settled send, the notice tail and a queued head's
+  // readiness transition are drain triggers. An ask pauses the current turn;
+  // no other send runs until it settles (the driver rejects re-entrancy).
   /** `first` is a plain string for an ordinary send, or a THUNK when the turn
    *  starts some other way — today only /skill-name, whose opener is
    *  `session.runSkill` (same turn machinery, different transcript event).
    *  Queued follow-ups are always plain sends, so queue semantics are unchanged. */
   private async runTurns(sessionId: string, entry: LiveEntry, first: SendUnit | (() => Promise<void>)): Promise<void> {
-    // Fix (Task 4 fix pass 3): the WHOLE body is now wrapped in a single
-    // try/finally so "every runTurns exit clears entry.inFlight" is true by
-    // CONSTRUCTION — one statement, not a comment asserting a property the
-    // code has to remember to uphold at every return/break/throw site. Before
-    // this, `entry.inFlight = false` was a bare statement at the tail: a
-    // throw from ANY of the unguarded `await this.ledger.*` calls inside the
-    // delivery loop below (claimUndelivered at the top of the loop,
-    // releaseClaim on either liveness-mismatch branch) propagated straight
-    // out of this function, so that tail statement was never reached and the
-    // session was permanently stuck "in flight" — the exact bug the loop
-    // unification was meant to prevent, arriving by exception instead of by
-    // `return`. The early `return` in the queue-drain loop below (destroy()
-    // raced this turn) still runs this finally too, which is harmless: by
-    // definition `this.live.get(sessionId) !== entry` there, so `entry` is
-    // already a discarded object and setting its `inFlight` flag touches
-    // nothing live.
+    // WHY: even a failed ledger claim or a replaced generation must release
+    // this pass's slot; the finally covers every exit.
     try {
-      // Task 4 (plan 1c) — re-read this project folder's specialist catalog
-      // before dispatching this pass's turn(s): a file dropped into a
-      // specialists folder since the last turn is offered starting on THIS
-      // turn, without a session restart. ONE call per runTurns invocation
-      // (not per queued follow-up) — every turn drained in this same pass
-      // shares the roster this one read resolved. ensureFresh()'s own
-      // fingerprint check makes an unchanged folder cheap (a handful of
-      // stat() calls, never a re-parse); it never throws (every fallible fs
-      // call inside it is already individually guarded — see catalog.ts's
-      // own WHY comments), so this is not wrapped in its own try/catch.
-      // Fix (Task 4 review): gated on `!entry.parentSessionId` — ROOT sessions
-      // ONLY. A specialist child DOES reach this function: runSpecialist's
-      // runTurn() closure calls this.send(childId, ...), and send() dispatches
-      // unconditionally into this.runTurns() for whatever id it's given, so
-      // every child turn (the opening turn AND the empty-report nudge) used to
-      // run this call too — an earlier comment here claimed otherwise, which
-      // was simply wrong. The real reason to skip it for a child: its roster
-      // is fixed at spawn (R12) and never read again — createChild builds a
-      // child's tools by hand and never calls toolWiring(), so no child ever
-      // consults this.specialistCatalog.roster(cwd) for ITS OWN cwd. Without
-      // this gate, every child turn wrote a fresh entry into the catalog's
-      // per-cwd cache (a Map with no eviction) for a cwd nothing will ever
-      // read a roster for — often a work_dir narrowed to a subfolder nothing
-      // else touches — so the cache grew forever across the process's life.
+      // WHY: refresh the root's roster once per pass, not per queued turn.
+      // Children use their fixed spawn roster; refreshing each child's cwd
+      // would grow the catalog cache without a consumer.
       if (!entry.parentSessionId) await this.specialistCatalog.ensureFresh(entry.cwd);
       let next: SendUnit | (() => Promise<void>) | undefined = first;
-      while (next !== undefined) {
-        // A user-started turn lifts the post-Stop hold: everything parked since
-        // the Stop is spliced into history NOW, silently, so the model reads it
-        // as context for this message rather than getting a turn of its own.
-        // Checked per turn, not once per pass, because a message queued before
-        // the Stop still runs after it (pinned: "the queue still drains").
-        if (entry.holdDeliveries && next !== IDLE_PASS) {
-          entry.holdDeliveries = false;
-          await this.drainDeliveries(sessionId, entry, 'splice');
+      // WHY: notices may await the model after the last queued shift. Alternate
+      // delivery and FIFO dispatch until BOTH lanes are quiet at the same boundary.
+      for (;;) {
+        while (next !== undefined) {
           if (this.live.get(sessionId) !== entry) return;
-        }
-        try {
-          if (typeof next === 'function') await next();
-          else await entry.session.send(next.text, next.attachments);
-        } catch (err) {
-          log('ERROR', 'NativeSessionHost', 'send failed', { sessionId, error: String(err) });
-        }
-        // Destroy() may have removed/replaced the entry mid-turn — stop draining then.
-        if (this.live.get(sessionId) !== entry) return;
-        // A local model is loaded by now (a real turn just ran): re-read the
-        // helper cap the engine could not answer at create/resume/swap. INSIDE
-        // the drain loop, before the shift below, on purpose — a message
-        // queued while this await is in the air is picked up by that shift,
-        // whereas an await placed after the loop (first cut, 2026-09-16)
-        // stranded such a message until the next send, since inFlight was
-        // still true and nothing re-read the queue. Root sessions only (a
-        // child's roster is fixed at spawn); never after a delivery-only pass,
-        // which loads nothing.
-        if (entry.refreshSlotsAfterTurn && !entry.parentSessionId && typeof next !== 'function') {
-          await this.refreshLocalSlots(sessionId, entry);
+          // A user-started turn lifts the post-Stop hold so the model reads
+          // parked reports as context, not as a new turn of their own.
+          if (entry.holdDeliveries && next !== IDLE_PASS) {
+            entry.holdDeliveries = false;
+            await this.drainDeliveries(sessionId, entry, 'splice');
+            if (this.live.get(sessionId) !== entry) return;
+          }
+          try {
+            if (typeof next === 'function') await next();
+            else await entry.session.send(next.text, next.attachments);
+          } catch (err) {
+            log('ERROR', 'NativeSessionHost', 'send failed', { sessionId, error: String(err) });
+          }
           if (this.live.get(sessionId) !== entry) return;
+          // A local model can answer its slot count only after a real turn.
+          // Refresh inside the loop so sends accepted during the await are seen.
+          if (entry.refreshSlotsAfterTurn && !entry.parentSessionId && typeof next !== 'function') {
+            await this.refreshLocalSlots(sessionId, entry);
+            if (this.live.get(sessionId) !== entry) return;
+          }
+          // The atomic shift owns the queue ID; an unready FIFO head blocks
+          // dispatch, and its scheduled readiness transition restarts the pass.
+          next = entry.quiescing || entry.queue[0]?.ready === false ? undefined : entry.queue.shift();
         }
-        // .text: queue entries are {id, text} (Task 11) — the id only matters to
-        // removeQueued(); shift() here is what makes a removed entry unreachable.
-        next = entry.queue.shift();
+        // Stop pressed during this pass: leave reports parked, but never park
+        // submitted user messages. A notice pass can receive sends while awaiting.
+        if (!entry.holdDeliveries && !entry.quiescing) await this.drainDeliveries(sessionId, entry, 'turn');
+        if (this.live.get(sessionId) !== entry || entry.quiescing) return;
+        next = entry.queue[0]?.ready === false ? undefined : entry.queue.shift();
+        if (next === undefined) break;
       }
-      // Stop pressed during this pass: leave everything parked (holdDeliveries'
-      // own WHY). The next user message drains it via the splice above.
-      if (!entry.holdDeliveries) await this.drainDeliveries(sessionId, entry, 'turn');
     } finally {
       entry.inFlight = false;
     }
@@ -5005,6 +5190,10 @@ export class NativeSessionHost extends EventEmitter {
     // De-register from the parent's child set (this session IS a child when
     // parentSessionId is set) so a destroyed child isn't chased again later.
     if (entry.parentSessionId) this.childrenOf.get(entry.parentSessionId)?.delete(sessionId);
+    // admin-password design §2.4/§11 task 5: this session's OWN routing
+    // entry (never the parent's) — a no-op for a root session, which was
+    // never in this map.
+    this.specialistMetaByChildId.delete(sessionId);
     // Resolve any pending asks for this session ('canceled') + expire their
     // cards BEFORE tearing down the stream — same rationale as interrupt(); a
     // loop paused on a permission await must unwind, and the promise must not

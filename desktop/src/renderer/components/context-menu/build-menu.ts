@@ -2,7 +2,24 @@ import { isAndroid, isRemoteMode } from '../../platform';
 import { copyText, readText } from './clipboard';
 import { editorViewFor } from '../artifact-views/cm/editor-registry';
 import type { MenuIconName } from './menu-icons';
-import { COPY } from '../../../shared/chatsearch-refs';
+// "Add comment" writes straight into the shared doc-comments store — no
+// event needed (unlike "Ask about this", which must reach InputBar, a
+// component this module has no other handle on).
+import { addComment as addDocComment } from '../../state/doc-comments-store';
+// Round 2: "Ask about this" builds a ComposeRef pill (ported from
+// session/comments-mock-c) instead of a {quote, sourceLabel} chip.
+import { genRefId, truncateQuote, type ComposeRef } from './compose-ref';
+// F1 (T5 review): the same whitespace-tolerant occurrence-counting
+// `resolveSelector` will later use to re-find a comment's quote — so a
+// comment minted here disambiguates a repeated phrase the SAME way a re-anchor
+// pass will look for it, rather than a locally-reinvented count.
+import { quoteContextAt } from '../../../shared/doc-comments-anchor';
+// F6 (T14 review): the SAME predicate use-quote-marks.ts's collectText uses
+// at resolve time — a placeholder's interaction-state text (ChatImage's
+// "Image from … · Show") must never enter a comment's captured context on
+// this end either, or the two ends would disagree about what the document's
+// "real" text even is.
+import { isAnchorSkipped } from '../comments/anchor-skip';
 
 // Builds the chat right-click menu for a given DOM target. Pure inspection of
 // the DOM + current selection → a list of entries; the host owns positioning,
@@ -64,6 +81,11 @@ function readableText(root: Element): string {
   return text;
 }
 
+/** The chat timeline entry (ChatView's data-entry-key) a target sits in. */
+function entryKeyOf(el: Element): string | undefined {
+  return el.closest<HTMLElement>('[data-entry-key]')?.dataset.entryKey;
+}
+
 function closestBubble(el: Element): Element | null {
   return el.closest('.assistant-bubble, .user-bubble');
 }
@@ -95,18 +117,55 @@ function selectElementContents(el: Element): void {
   sel.addRange(range);
 }
 
-// "Ask about this" drops a quoted reference + follow-up scaffold into the
-// composer (InputBar listens for this CustomEvent — see InputBar.tsx). Simple v1
-// per Destin (2026-07-17): plain prompt text, no new plumbing. The caret lands
-// right after the scaffold so any existing draft becomes the follow-up.
-function askAboutThis(text: string): void {
-  window.dispatchEvent(new CustomEvent('youcoded:compose-insert', { detail: { text } }));
+// "Ask about this" attaches a reference PILL inline in the composer's own
+// sentence instead of dropping scaffold text into the textarea (redesign,
+// doc-comments mockup round 2, Destin: "I'd rather have the comment
+// primarily be seen as highlighted text… ask-about → pill inside the
+// sentence"). Ported mechanism: compose-ref.ts + InputBar's mirror layer
+// (session/comments-mock-c). InputBar appends the marker to the current
+// draft and focuses the textarea for the user's own follow-up.
+function addReference(ref: ComposeRef): void {
+  window.dispatchEvent(new CustomEvent('youcoded:compose-insert', { detail: { ref } }));
 }
 
-function scaffold(lead: string, body: string, fenced: boolean): string {
-  const quoted = fenced ? '```\n' + body + '\n```' : `"${body}"`;
-  return `${lead}\n${quoted}\n\nThe user has a follow-up: `;
+/** "line N" / "lines N-M" from describeArtifactSelection's own strings, or
+ *  null when it fell back to a quote (no reliable source mapping). */
+function parseLineRef(ref: string): { startLine: number; endLine: number } | null {
+  const single = /^line (\d+)$/.exec(ref);
+  if (single) return { startLine: +single[1], endLine: +single[1] };
+  const range = /^lines (\d+)-(\d+)$/.exec(ref);
+  if (range) return { startLine: +range[1], endLine: +range[2] };
+  return null;
 }
+
+/** Compact MARGIN-CARD anchor label: "line 12-18 · file.ts" when there's a
+ *  real source mapping, else just the file name (a quote fallback already
+ *  IS the anchor — repeating it as a label is noise). Comments only — the
+ *  compose-ref PILL label below reads differently (a paragraph mark + the
+ *  quote itself, since a pill has no separate quote sliver to lean on). */
+function sourceLabelFor(ref: string, path: string): string {
+  const line = parseLineRef(ref);
+  return line ? `${ref} · ${baseName(path)}` : baseName(path);
+}
+
+/** Builds the ComposeRef for a DOC selection's "Ask about this" pill: a real
+ *  line range reads as "line 12-18 · file.ts"; a rendered-markdown quote
+ *  fallback (no line mapping) reads as a paragraph mark + the quote, since
+ *  that's the only anchor available. */
+function buildDocRef(quote: string, ref: string, path: string): ComposeRef {
+  const line = parseLineRef(ref);
+  const fileName = baseName(path);
+  return {
+    id: genRefId(),
+    kind: 'doc',
+    path,
+    fileName,
+    quote: quote.slice(0, 2000),
+    label: line ? `${ref} · ${fileName}` : `“${truncateQuote(quote)}”`,
+    lineRange: line ? [line.startLine, line.endLine] : undefined,
+  };
+}
+
 
 // Copy + Select all — shared tail for every read-only chat menu.
 function textBasics(bubble: Element | null): MenuEntry[] {
@@ -238,15 +297,15 @@ function linkMenu(a: HTMLAnchorElement, target: HTMLElement): MenuEntry[] {
 
 function codeMenu(pre: HTMLElement, target: HTMLElement): MenuEntry[] {
   const code = pre.innerText.replace(/\n+$/, '');
-  // Preview-only: prefix the lead with which past conversation this code came
-  // from (see closestPreviewConversation) — a no-op in the live chat, where
-  // this stays exactly 'Earlier, you shared this code:'.
-  const previewRef = closestPreviewConversation(target);
-  const lead = previewRef
-    ? `${COPY.askPreviewContext(previewRef.title, previewRef.id)} Earlier, you shared this code:`
-    : 'Earlier, you shared this code:';
+  const firstLine = code.split('\n', 1)[0] ?? '';
+  // quote + entryKey let the chip find and light up this block again
+  // (chat-ref-highlight.ts); curly quotes match the file chips' labels.
+  const ref: ComposeRef = {
+    id: genRefId(), kind: 'chat', label: `code · “${truncateQuote(firstLine, 24)}”`,
+    quote: code.slice(0, 2000), entryKey: entryKeyOf(target),
+  };
   return [
-    { type: 'item', id: 'ask', label: 'Ask about this', icon: 'ask', primary: true, disabled: !code, run: () => askAboutThis(scaffold(lead, code, true)) },
+    { type: 'item', id: 'ask', label: 'Ask about this', icon: 'ask', primary: true, disabled: !code, run: () => addReference(ref) },
     { type: 'item', id: 'copy-code', label: 'Copy code block', icon: 'code', disabled: !code, run: () => void copyText(code) },
     { type: 'sep' },
     ...textBasics(closestBubble(target)),
@@ -294,22 +353,141 @@ function describeArtifactSelection(sel: string, container: HTMLElement): string 
   return `"${sel}"`;
 }
 
-function artifactMenu(container: HTMLElement): MenuEntry[] {
+/** Spreadsheet cell under a right-click with no text selected: "Ask about
+ *  this" / "Add comment" name the CELL (Excel's comment model — Destin's Excel
+ *  follow-up, 2026-09-24), with its shown value as the quote. `projectRoot`:
+ *  see `artifactMenu`'s own WHY (F3, T5 review) — a `CellSelector` has no
+ *  prefix/suffix, but it still needs to land in the RIGHT project's partition. */
+function cellEntries(td: HTMLElement, path: string, projectRoot: string | undefined): MenuEntry[] {
+  const cell = td.getAttribute('data-cell') || '';
+  const value = (td.textContent ?? '').trim();
+  // The tab name only when the workbook has more than one (XlsxView stamps
+  // both on the grid) — "By rep · B4 · file.xlsx" vs "C4 · file.xlsx".
+  const grid = td.closest<HTMLElement>('[data-sheet]');
+  const sheet = grid && Number(grid.dataset.sheetCount) > 1 ? grid.dataset.sheet : undefined;
+  const label = `${sheet ? `${sheet} · ` : ''}${cell} · ${baseName(path)}`;
+  return [
+    {
+      type: 'item', id: 'ask', label: 'Ask about this', icon: 'ask', primary: true,
+      run: () => addReference({ id: genRefId(), kind: 'doc', path, fileName: baseName(path), label, cell, sheet, quote: value }),
+    },
+    {
+      type: 'item', id: 'comment', label: 'Add comment', icon: 'comment',
+      run: () => { addDocComment(path, value, label, { cell, sheet, projectRoot }); },
+    },
+  ];
+}
+
+/** Full document text + the [start,end) offsets of the CURRENT selection, in
+ *  whatever coordinate space matches `container`'s own `data-artifact-source`
+ *  — the shape `doc-comments-anchor.ts`'s `quoteContextAt` needs to compute a
+ *  real `prefix`/`suffix`/`occurrence` (F1, T5 review) instead of the
+ *  hardcoded `''`/`''`/`0` every comment used to store. Returns `null` when
+ *  no reliable offsets are available (nothing selected, or a Range this
+ *  function can't map) — callers fall back to no context, exactly the old
+ *  honest-degrade behavior. */
+/** Walks `root`'s text nodes to map a DOM Range's boundaries onto offsets
+ *  into `root.textContent` — the same "flatten every text node in document
+ *  order" model both `raw` (a `<pre>`, possibly several highlight.js spans)
+ *  and `rendered` (arbitrary prose markup) content share. `null` when either
+ *  boundary can't be found (a Range whose container isn't a descendant text
+ *  node, e.g. an empty/element-only selection). */
+// F6 (T14 review): returns the SAME whitespace-skip-filtered text the offsets
+// were computed against (not `root.textContent`, which still includes any
+// `data-anchor-skip` placeholder's text) — `start`/`end` and `text` must stay
+// offsets into ONE consistent string, or a quote/prefix/suffix sliced out of
+// `text` could land on the wrong characters entirely.
+function rangeTextOffsets(root: Node, range: Range): { text: string; start: number; end: number } | null {
+  let start = -1;
+  let end = -1;
+  let text = '';
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (isAnchorSkipped(node)) continue; // F6: never counted, never searched
+    if (start === -1 && node === range.startContainer) start = text.length + range.startOffset;
+    if (node === range.endContainer) end = text.length + range.endOffset;
+    text += node.textContent ?? '';
+  }
+  return start === -1 || end === -1 ? null : { text, start, end };
+}
+
+function selectionOffsets(container: HTMLElement): { fullText: string; start: number; end: number } | null {
+  const source = container.getAttribute('data-artifact-source');
+  if (source === 'cm6') {
+    // CM6 virtualizes its DOM (see describeArtifactSelection's own WHY) — the
+    // live EditorView's document/selection are the only reliable source.
+    // CM6 renders code, not markdown/docx prose, so there's no ChatImage
+    // placeholder here to skip.
+    const view = editorViewFor(container);
+    const range = view?.state.selection.main;
+    if (!view || !range || range.empty) return null;
+    return { fullText: view.state.doc.toString(), start: range.from, end: range.to };
+  }
+  // `raw` (a verbatim `<pre>`) and rendered markdown/docx prose both map the
+  // LIVE selection Range onto their own root's flattened text the same way —
+  // never a first-occurrence `indexOf(sel)` (describeArtifactSelection's own
+  // documented "an acceptable miss" for a LABEL only; silently wrong here,
+  // since it would report a repeated phrase's FIRST copy's context for
+  // whichever copy was actually selected, defeating F1's whole point).
+  const root = source === 'raw' ? container.querySelector('pre') : container;
+  if (!root) return null;
+  const selection = window.getSelection();
+  const range = selection && selection.rangeCount ? selection.getRangeAt(0) : null;
+  if (!range) return null;
+  const offsets = rangeTextOffsets(root, range);
+  if (!offsets) return null;
+  return { fullText: offsets.text, start: offsets.start, end: offsets.end };
+}
+
+/** `undefined` (no context — the old honest degrade) whenever offsets aren't
+ *  available; otherwise the real prefix/suffix/occurrence for this exact
+ *  quote at this exact position. */
+function quoteContextFor(container: HTMLElement, sel: string): { prefix: string; suffix: string; occurrence: number } | undefined {
+  if (!sel) return undefined;
+  const offsets = selectionOffsets(container);
+  return offsets ? quoteContextAt(offsets.fullText, offsets.start, offsets.end) : undefined;
+}
+
+function artifactMenu(container: HTMLElement, target?: HTMLElement): MenuEntry[] {
   // data-doc-path, not data-artifact-path: the latter is reserved by the deferred
   // image sub-menu roadmap item for an ABSOLUTE path on <img> elements. This one
   // is the project-relative artifact path, which is what reads well in a prompt.
   const path = container.getAttribute('data-doc-path') || '';
+  // F3 (T5 review): CommentableDocument stamps this on the SAME container as
+  // data-doc-path — reading it here is what lets a comment minted from this
+  // menu land in the RIGHT project's partition (doc-comments-store.ts's
+  // `keyFor`) instead of always falling back to the per-machine loose-file
+  // store, which is what happened when two different projects' viewers had
+  // no way to tell their comments apart.
+  const projectRoot = container.getAttribute('data-project-root') || undefined;
   const sel = selectionText().trim();
   const entries: MenuEntry[] = [];
+  const cell = !sel && path ? target?.closest<HTMLElement>('[data-cell]') : null;
+  if (cell && container.contains(cell)) entries.push(...cellEntries(cell, path, projectRoot));
   if (sel && path) {
     const ref = describeArtifactSelection(sel, container);
+    const sourceLabel = sourceLabelFor(ref, path);
+    const lineOpts = parseLineRef(ref) ?? undefined;
+    const quoteCtx = quoteContextFor(container, sel);
     entries.push({
       type: 'item',
       id: 'ask',
       label: 'Ask about this',
       icon: 'ask',
       primary: true,
-      run: () => askAboutThis(`The user is referencing ${ref} from "${path}". Respond to the following prompt accordingly:\n\n`),
+      run: () => addReference(buildDocRef(sel, ref, path)),
+    });
+    // "Add comment" is the doc-comments mockup's second entry point (the
+    // first is selection + this same right-click menu, per spec surface 1):
+    // it opens an empty margin card anchored to the selection instead of
+    // sending anything — many of these get held and batched via the review
+    // bar's "Send to assistant", unlike "Ask about this" above.
+    entries.push({
+      type: 'item',
+      id: 'comment',
+      label: 'Add comment',
+      icon: 'comment',
+      run: () => { addDocComment(path, sel, sourceLabel, { ...lineOpts, ...quoteCtx, projectRoot }); },
     });
   }
   entries.push(...textBasics(container));
@@ -321,22 +499,20 @@ function textMenu(target: HTMLElement): MenuEntry[] {
   // readableText: "Ask about this" quotes the message as a user could have
   // selected it, without tool card titles or other chrome.
   const quote = (selectionText().trim() || (bubble ? readableText(bubble).trim() : '')) ?? '';
-  // "you said" reads right for an assistant message; flip it for the user's own
-  // bubble, and stay neutral if we can't tell.
-  const lead = bubble?.classList.contains('assistant-bubble')
-    ? 'In an earlier message, you said:'
-    : bubble?.classList.contains('user-bubble')
-      ? 'Earlier I wrote:'
-      : 'Regarding this:';
   const entries: MenuEntry[] = [];
   if (quote) {
-    // Preview-only: name which past conversation this quote came from, so
-    // the assistant answering it can `show`/`turns` its way into the rest —
-    // a no-op in the live chat, where `finalLead` === `lead` and the
-    // scaffold this produces is unchanged (pinned by build-menu.test.tsx).
+    // Preview-only: name which past conversation this quote came from, right
+    // in the pill — a no-op in the live chat, where the label is just the quote.
     const previewRef = closestPreviewConversation(target);
-    const finalLead = previewRef ? `${COPY.askPreviewContext(previewRef.title, previewRef.id)} ${lead}` : lead;
-    entries.push({ type: 'item', id: 'ask', label: 'Ask about this', icon: 'ask', primary: true, run: () => askAboutThis(scaffold(finalLead, quote, false)) });
+    // Curly-quoted like the file chips (Destin, 2026-09-24 chip rework).
+    const label = previewRef
+      ? `“${previewRef.title || 'Untitled thread'}” · “${truncateQuote(quote, 20)}”`
+      : `“${truncateQuote(quote, 28)}”`;
+    // quote + entryKey let the chip light up this message again
+    // (chat-ref-highlight.ts) — Destin: hover/click worked for documents but
+    // "not for message text".
+    const ref: ComposeRef = { id: genRefId(), kind: 'chat', label, quote: quote.slice(0, 2000), entryKey: entryKeyOf(target) };
+    entries.push({ type: 'item', id: 'ask', label: 'Ask about this', icon: 'ask', primary: true, run: () => addReference(ref) });
   }
   entries.push(...textBasics(bubble));
   return entries;
@@ -347,7 +523,9 @@ export function buildContextMenu(target: HTMLElement): MenuEntry[] | null {
   // the composer, and the artifact viewer's edit-mode textarea. Electron ships no
   // default context menu, so without this branch right-click in the artifact
   // editor does nothing at all — no cut/copy/paste of any kind.
-  const editable = target.closest('.input-bar-textarea, .artifact-edit-textarea');
+  // [data-edit-menu]: the comment boxes (CommentCard, NewCommentPopover) are
+  // <Textarea> primitives, which may not carry a bare marker class.
+  const editable = target.closest('.input-bar-textarea, .artifact-edit-textarea, [data-edit-menu]');
   if (editable instanceof HTMLTextAreaElement || editable instanceof HTMLInputElement) {
     return finalize(editableMenu(editable, editable.classList.contains('input-bar-textarea')));
   }
@@ -367,7 +545,7 @@ export function buildContextMenu(target: HTMLElement): MenuEntry[] | null {
   // Checked after the editable surfaces above, which are never chrome.
   const onChrome = isChrome(target);
   const artifactViewer = target.closest('[data-artifact-viewer]');
-  if (artifactViewer instanceof HTMLElement) return onChrome ? null : finalize(artifactMenu(artifactViewer));
+  if (artifactViewer instanceof HTMLElement) return onChrome ? null : finalize(artifactMenu(artifactViewer, target));
 
   // Everything else is scoped to chat content — never hijack the terminal, the
   // settings panels, or other chrome. A previewed past conversation

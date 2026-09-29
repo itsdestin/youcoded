@@ -177,3 +177,68 @@ describe('decidePermission with the matcher safety rules', () => {
       .toEqual({ action: 'allow', denyListed: false });
   });
 });
+
+// Product decision (doc-comments follow-up, 2026-09-27): the assistant asks
+// before changing comments ONLY on Word/Excel files, and never asks for
+// plain-text/markdown/code comments or for reading comments at all.
+describe('doc-comments tools follow the same tier Edit/Write already have, per mode', () => {
+  const MUTATIONS = ['ReplyToComment', 'ResolveComment', 'ReopenComment', 'AddComment', 'MoveComment'] as const;
+
+  it('ask mode: ReadFileComments is always allow, whatever the target', () => {
+    expect(decidePermission('ReadFileComments', 'docs/plan.md', layers('ask')).action).toBe('allow');
+    expect(decidePermission('ReadFileComments', 'docs/brief.docx', layers('ask')).action).toBe('allow');
+    expect(decidePermission('ReadFileComments', undefined, layers('ask')).action).toBe('allow');
+  });
+
+  it('ask mode: a mutation on a plain-text/markdown/code target allows, including the undefined subject a real call carries', () => {
+    for (const tool of MUTATIONS) {
+      // A plain-text/markdown/code target's permissionSubject is undefined
+      // (doc-comments-tools.ts) — decidePermission sees `subject ?? ''`.
+      expect(decidePermission(tool, undefined, layers('ask')).action, tool).toBe('allow');
+      expect(decidePermission(tool, 'docs/plan.md', layers('ask')).action, tool).toBe('allow');
+      expect(decidePermission(tool, 'notes/readme', layers('ask')).action, tool).toBe('allow');
+    }
+  });
+
+  it('ask mode: a mutation on a .docx/.xlsx target asks, matching Edit/Write\'s own tier there', () => {
+    for (const tool of MUTATIONS) {
+      expect(decidePermission(tool, 'docs/brief.docx', layers('ask')).action, tool).toBe('ask');
+      expect(decidePermission(tool, 'reports/q3.xlsx', layers('ask')).action, tool).toBe('ask');
+    }
+  });
+
+  it('ask mode: the .docx/.xlsx match is case-insensitive and survives an absolute Windows path', () => {
+    for (const tool of MUTATIONS) {
+      expect(decidePermission(tool, 'C:\\Users\\dest\\Reports\\Q3.XLSX', layers('ask')).action, tool).toBe('ask');
+      expect(decidePermission(tool, '/home/dest/docs/BRIEF.DOCX', layers('ask')).action, tool).toBe('ask');
+    }
+  });
+
+  it('auto-edit: a mutation on a .docx/.xlsx target allows, the same tier Edit/Write already get in this mode', () => {
+    for (const tool of MUTATIONS) {
+      expect(decidePermission(tool, 'docs/brief.docx', layers('auto-edit')).action, tool).toBe('allow');
+      expect(decidePermission(tool, 'reports/q3.xlsx', layers('auto-edit')).action, tool).toBe('allow');
+      expect(decidePermission(tool, 'docs/plan.md', layers('auto-edit')).action, tool).toBe('allow');
+    }
+  });
+
+  it('full-auto allows every doc-comments tool regardless of target, same as everything else in that mode', () => {
+    for (const tool of [...MUTATIONS, 'ReadFileComments']) {
+      expect(decidePermission(tool, 'docs/brief.docx', layers('full-auto')).action, tool).toBe('allow');
+    }
+  });
+
+  it('a remembered deny on a specific Word file still wins over the mode-baseline ask (and the plain-text allow)', () => {
+    const remembered = [{ tool: 'ReplyToComment', pattern: 'docs/brief.docx', action: 'deny' as const }];
+    expect(decidePermission('ReplyToComment', 'docs/brief.docx', layers('ask', remembered)).action).toBe('deny');
+    // A deny scoped to one exact file must not leak onto a different one.
+    expect(decidePermission('ReplyToComment', 'docs/other.docx', layers('ask', remembered)).action).toBe('ask');
+  });
+
+  it('an "Always allow" grant for one exact Word file keeps working under ask mode, exactly like it already does for Edit', () => {
+    const remembered = [{ tool: 'ReplyToComment', pattern: 'docs/brief.docx', action: 'allow' as const, match: 'exact' as const }];
+    expect(decidePermission('ReplyToComment', 'docs/brief.docx', layers('ask', remembered)).action).toBe('allow');
+    // The grant is scoped to the ONE file it was given for.
+    expect(decidePermission('ReplyToComment', 'docs/other.docx', layers('ask', remembered)).action).toBe('ask');
+  });
+});

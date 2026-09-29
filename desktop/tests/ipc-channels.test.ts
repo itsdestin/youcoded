@@ -995,6 +995,7 @@ describe('native:*/provider:* channel parity', () => {
     'native:set-step-guard': 'IPC.NATIVE_SET_STEP_GUARD',
     'native:sessions-list': 'IPC.NATIVE_SESSIONS_LIST',
     'native:queue-remove': 'IPC.NATIVE_QUEUE_REMOVE',
+    'native:queue-send-now': 'IPC.NATIVE_QUEUE_SEND_NOW',
     'native:compact': 'IPC.NATIVE_COMPACT',
     'native:clear': 'IPC.NATIVE_CLEAR',
     'provider:list': 'IPC.PROVIDER_LIST', 'provider:upsert': 'IPC.PROVIDER_UPSERT',
@@ -1475,6 +1476,143 @@ describe('git:* IPC parity (git surface)', () => {
   });
 });
 
+// docComments:* IPC parity — T3/T4 of the doc-comments build (design
+// docs/active/specs/2026-09-26-doc-comments-build-design.md §1.6). T4 adds
+// the Android arm this block's own header used to say was deliberately
+// deferred: list/add/reply/resolve/reopen/move are now REAL Kotlin `when`
+// branches in SessionService.kt (DocCommentsStore.kt/DocCommentsGate.kt/
+// DocCommentsDispatch.kt), reopen-1's "full phone support" superseding the
+// git-style desktop-only stub an earlier revision of the design gave this
+// feature. watch/unwatch stay `not-implemented-on-mobile` (a general
+// FileObserver-based-push gap, §1.6) — same shape as artifacts:watch-project
+// (review 1, F10), never the bare `{unsupported:true}` catch-all.
+describe('docComments:* IPC parity', () => {
+  const preload = readSourceFile(path.join(__dirname, '../src/main/preload.ts'));
+  const shim = readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts'));
+  const handlers = readSourceFile(path.join(__dirname, '../src/main/ipc-handlers.ts'));
+  const server = readSourceFile(path.join(__dirname, '../src/main/remote-server.ts'));
+  const kotlinPath = path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt');
+  const kotlin = fs.existsSync(kotlinPath) ? readSourceFile(kotlinPath) : null;
+  // F6 (T4 implementation review): the actual per-channel dispatch was
+  // extracted out of SessionService.kt's own `when` block into a pure,
+  // directly-unit-testable function (DocCommentsBridgeTest.kt is the Kotlin
+  // half of that same extraction) — SessionService.kt's own arm for these
+  // eight labels is now just plumbing that hands the message to it.
+  const bridgePath = path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/doccomments/DocCommentsBridge.kt');
+  const bridge = fs.existsSync(bridgePath) ? readSourceFile(bridgePath) : null;
+
+  const channels: Array<[string, string]> = [
+    ['docComments:list', 'DOC_COMMENTS_IPC.LIST'],
+    ['docComments:add', 'DOC_COMMENTS_IPC.ADD'],
+    ['docComments:reply', 'DOC_COMMENTS_IPC.REPLY'],
+    ['docComments:resolve', 'DOC_COMMENTS_IPC.RESOLVE'],
+    ['docComments:reopen', 'DOC_COMMENTS_IPC.REOPEN'],
+    ['docComments:move', 'DOC_COMMENTS_IPC.MOVE'],
+    // Edit/delete build (2026-09-28, design doc §"Edit and delete").
+    ['docComments:edit', 'DOC_COMMENTS_IPC.EDIT'],
+    ['docComments:edit-reply', 'DOC_COMMENTS_IPC.EDIT_REPLY'],
+    ['docComments:delete', 'DOC_COMMENTS_IPC.DELETE'],
+    ['docComments:delete-reply', 'DOC_COMMENTS_IPC.DELETE_REPLY'],
+    ['docComments:watch', 'DOC_COMMENTS_IPC.WATCH'],
+    ['docComments:unwatch', 'DOC_COMMENTS_IPC.UNWATCH'],
+  ];
+
+  for (const [ch, constant] of channels) {
+    it(`${ch} present in preload + remote-shim`, () => {
+      expect(preload).toContain(`'${ch}'`);
+      expect(shim).toContain(`'${ch}'`);
+    });
+    it(`${ch} registered in ipc-handlers.ts (literal, DOC_COMMENTS_IPC constant, or the factored registerDocCommentsHandlers call)`, () => {
+      // T3 factors registration into doc-comments/ipc-handlers.ts (testability
+      // — see doc-comments-ipc-handlers.test.ts), so the MAIN ipc-handlers.ts
+      // file carries only the registerDocCommentsHandlers(...) call, not a
+      // literal or constant for every channel — accept either shape.
+      const registeredHere = handlers.includes(`'${ch}'`) || handlers.includes(constant);
+      const factoredOut = handlers.includes('registerDocCommentsHandlers');
+      expect(registeredHere || factoredOut).toBe(true);
+    });
+    it(`${ch} handled by remote-server.ts (WS case)`, () => {
+      expect(server).toContain(`case '${ch}':`);
+    });
+    it(`${ch} has a Kotlin arm in SessionService.kt`, () => {
+      if (kotlin) expect(kotlin).toContain(`"${ch}"`);
+    });
+  }
+
+  it('docComments:changed push channel present in preload + remote-shim', () => {
+    expect(preload).toContain(`'docComments:changed'`);
+    expect(shim).toContain(`'docComments:changed'`);
+  });
+
+  it('docComments:watch/:unwatch are registered in remote-shim.ts REJECT_ON_NOT_OK (review 1, F10)', () => {
+    // A failed watch must reject to the caller's catch, never resolve as an
+    // ordinary value a comments pane could misread as "subscribed, no
+    // changes yet" — pinned in full (exact list + behaviour) by
+    // remote-shim-refusals.test.ts; this is the narrower presence check that
+    // belongs with this feature's own IPC parity block.
+    const block = shim.match(/REJECT_ON_NOT_OK[\s\S]*?\]\);/);
+    expect(block, 'REJECT_ON_NOT_OK block not found').toBeTruthy();
+    expect(block![0]).toContain(`'docComments:watch'`);
+    expect(block![0]).toContain(`'docComments:unwatch'`);
+  });
+
+  it('the doc-comments IPC surface registration is actually wired into registerIpcHandlers', () => {
+    expect(handlers).toContain('registerDocCommentsHandlers(ipcMain');
+  });
+
+  it('docComments:watch/:unwatch answer the SAME not-implemented-on-mobile shape as artifacts:watch-project, never the bare unsupported catch-all', () => {
+    if (!bridge) return;
+    // The exact JSON shape T4's own pinning-test row calls for: a typed,
+    // explicit branch — {ok:false, error:'not-implemented-on-mobile'} — not
+    // MessageRouter.buildUnsupportedResponse's {ok:false, unsupported:true}
+    // no-branch-at-all catch-all (a different mechanism per ipc-bridge.md).
+    // F6 moved this branch's body into DocCommentsBridge.kt's
+    // handleDocCommentsMessage — SessionService.kt's own combined `when` arm
+    // for all eight docComments:* labels is now just plumbing (see this
+    // describe block's own `bridge` comment above).
+    const watchBranch = bridge.match(/"docComments:watch",\s*"docComments:unwatch"\s*->\s*JSONObject\(\)[\s\S]*?\n/);
+    expect(watchBranch, 'docComments:watch/:unwatch branch not found in DocCommentsBridge.kt').toBeTruthy();
+    expect(watchBranch![0]).toContain('"not-implemented-on-mobile"');
+    expect(watchBranch![0]).not.toContain('unsupported');
+  });
+
+  it('docComments:list/add/reply/resolve/reopen/move/edit/delete are real Kotlin implementations on Android, not stubbed not-implemented-on-mobile', () => {
+    if (!kotlin || !bridge) return;
+    // SessionService.kt's own combined arm hands every one of these labels
+    // to the real dispatch function (F6) — a stub would instead answer
+    // inline with nothing calling out to doccomments/.
+    expect(kotlin).toContain('com.youcoded.app.doccomments.handleDocCommentsMessage');
+    // The real per-type logic lives in DocCommentsBridge.kt now — each
+    // channel below must call its own real store/dispatch function, never
+    // just fall through to the bare not-implemented-on-mobile shape.
+    const realCallByChannel: Record<string, string> = {
+      'docComments:list': 'listNativeComments(',
+      'docComments:add': 'addComment(',
+      'docComments:reply': 'replyToComment(',
+      'docComments:resolve': 'resolveComment(',
+      'docComments:reopen': 'reopenComment(',
+      'docComments:move': 'moveComment(',
+      // Edit/delete build (2026-09-28, design doc §"Edit and delete").
+      'docComments:edit': 'editComment(',
+      'docComments:edit-reply': 'editReply(',
+      'docComments:delete': 'deleteComment(',
+      'docComments:delete-reply': 'deleteReply(',
+    };
+    for (const [ch, realCall] of Object.entries(realCallByChannel)) {
+      // WHY 3000, not 2000: T17/T19 grew every mutation case with its own
+      // native-format `when` branch (DOCX/XLSX dispatch alongside the sidecar
+      // fallback) — `docComments:add`'s case body is now ~2177 chars and
+      // `docComments:reply`'s ~2008, both already past the old 2000 budget
+      // (measured 2026-09-27), which made this test fail to find EITHER
+      // branch at all, not fail on its content.
+      const branch = bridge.match(new RegExp(`"${ch}"\\s*->\\s*\\{[\\s\\S]{0,3000}?\\n        \\}\\n`));
+      expect(branch, `${ch} branch not found in DocCommentsBridge.kt`).toBeTruthy();
+      expect(branch![0]).toContain(realCall);
+      expect(branch![0]).not.toContain('"not-implemented-on-mobile"');
+    }
+  });
+});
+
 // Four-surface parity for the native:* channels.
 //
 // GAP THIS CLOSES (found 2026-07-28): shim/Android coverage in this file is
@@ -1502,6 +1640,8 @@ describe('native:* channel parity', () => {
     'native:get-permission-mode',
     'native:sessions-list',
     'native:kill-shell',
+    // admin-password design §2.5: the password card's Confirm button.
+    'native:submit-admin-password',
     // "What the assistant was given" — the on-demand read of one file's text.
     // The session-context PUSH is pinned separately below: a push has no
     // ipc-handlers request arm and no Kotlin case, so it does not belong in a

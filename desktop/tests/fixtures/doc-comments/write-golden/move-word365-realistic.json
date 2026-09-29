@@ -1,0 +1,12 @@
+{
+  "fixture": "word365-realistic.docx",
+  "path": "docs/word365-realistic.docx",
+  "op": "move",
+  "args": {
+    "id": "w-0",
+    "newExact": "well ahead of plan"
+  },
+  "result": {
+    "ok": true
+  }
+}

@@ -346,6 +346,8 @@ declare global {
         // (caller may now safely refill the composer); false = too late (already
         // draining/sent) or the session isn't live — never throws.
         queueRemove: (sessionId: string, queueId: string) => Promise<boolean>;
+        /** Stop the current task and send this waiting message next. false = already sending. */
+        queueSendNow: (sessionId: string, queueId: string) => Promise<boolean>;
         interrupt: (sessionId: string) => void;
         // Stalled-turn Retry — fire-and-forget, same shape as interrupt above.
         retry: (sessionId: string) => void;
@@ -377,6 +379,10 @@ declare global {
         setStepGuard: (value: number | null) => Promise<number | null>;
         sessionsList: () => Promise<any[]>;
         killShell: (sessionId: string, shellId: string) => Promise<{ ok: true } | { ok: false; reason: string }>;   // G-1
+        // admin-password design §2.5: the card's Confirm button. false means the
+        // ask expired (no live askpass connection left to deliver into) — the
+        // card shows itself as ended, never a retry of the same field.
+        submitAdminPassword: (requestId: string, password: string) => Promise<boolean>;
         // Per-session bound-model residency push (2026-07-14): { sessionId,
         // modelId, state: 'unloaded'|'loading'|'loaded'|'sleeping', sizeBytes }.
         onModelState: (cb: (s: any) => void) => () => void;

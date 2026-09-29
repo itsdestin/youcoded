@@ -2,6 +2,7 @@ import { useCallback, useRef, useEffect, useState, useSyncExternalStore } from '
 import { useChatStore } from '../state/chat-context';
 import type { SpecialistRunView, ToolCallState, SpecialistDefinitionView, DelegatedModelsView, SubagentSegment, SpecialistsListResult } from '../../shared/types';
 import { useOnRemoteReconnect } from './useOnRemoteReconnect';
+import { needsUserAnswer } from '../utils/specialist-cards';
 
 // Specialists 1c — narrow selectors over the chat store. A Task card carries
 // ITS OWN run record on the tool prop (ToolCallState.specialistRun), so these
@@ -198,7 +199,10 @@ export function useSpecialistSummary(sessionId: string | undefined): SpecialistS
       // always empty for a CC helper and its chip never turns amber. Decided
       // with Destin 2026-09-05: working/finished only, rather than guess at
       // attribution and risk pinning an ask on the wrong helper.
-      const asks = cc ? [] : tools.filter(t => t.status === 'awaiting-approval' && !!t.requestId);
+      // needsUserAnswer, not a bare requestId check: a nested password ask
+      // (the helper's own sudo) is 'awaiting-approval' too but keeps its id
+      // inside `passwordAsk`, not `requestId` (coordinator, 2026-09-26).
+      const asks = cc ? [] : tools.filter(needsUserAnswer);
       // An open ask always means 'needs-you', whatever the run status says.
       const group: HelperView['group'] = asks.length > 0 ? 'needs-you' : run.status === 'running' ? 'working' : 'finished';
       helpers.push({
@@ -223,7 +227,7 @@ export function useSpecialistSummary(sessionId: string | undefined): SpecialistS
         run.childId, run.status, run.title, run.stale ? 's' : '', run.steps ?? '', run.model?.label ?? '', segs.length,
         last ? `${last.type}:${last.id}:${'content' in last ? last.content.length : (last as AskSegment).status}` : '',
         tools.slice(-4).map(t => `${t.toolUseId}:${t.status}${t.response ? t.response.length : ''}`).join('+'),
-        asks.map(a => a.requestId).join('+'),
+        asks.map(a => a.requestId ?? a.passwordAsk?.requestId).join('+'),
         tool.status, tool.response?.length ?? '', tool.specialistReport ? tool.specialistReport.status + tool.specialistReport.text.length : '',
       ].join(':'));
     }

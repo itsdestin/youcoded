@@ -1,0 +1,337 @@
+// The docComments:* IPC dispatch logic, extracted out of
+// SessionService.handleBridgeMessage's `when` block — F6 (T4 doc-comments
+// implementation review): that block needed a running Android Service
+// (bootstrap, sessionRegistry, bridgeServer) just to construct, which made it
+// reachable only through the private `when` branches themselves — exercised
+// end-to-end at best, never pinned by a direct assertion on the actual
+// response JSON shape. This function takes exactly what those branches
+// actually read off the Service — `homeDir` and the caller's own live
+// session cwds — as plain parameters, so a JVM unit test
+// (DocCommentsBridgeTest.kt) can drive every docComments:* message type and
+// assert the REAL response object's keys/types/values, not a regex over a
+// serialized string.
+//
+// SessionService.kt's own docComments branches now just compute `homeDir`/
+// `sessionRoots` from the running Service and call this function — see that
+// file's own comment at the call site.
+package com.youcoded.app.doccomments
+
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+
+/**
+ * Handles one `docComments:*` bridge message and returns its response, or
+ * `null` for a `type` this function doesn't own (SessionService.kt's own
+ * `when` never reaches that case in practice — every docComments:* label it
+ * dispatches here is also matched below). Every returned response mirrors
+ * the exact envelope SessionService.kt's IPC branches produced before this
+ * extraction — same field names, same error codes — so this is a pure
+ * refactor, not a behavior change.
+ */
+suspend fun handleDocCommentsMessage(
+    type: String,
+    payload: JSONObject,
+    homeDir: File,
+    sessionRoots: List<String>,
+): JSONObject? {
+    val claudeDir = File(homeDir, ".claude")
+
+    fun missingField(field: String) = JSONObject().put("ok", false).put("error", "missing-field").put("field", field)
+    fun unknownRoot() = JSONObject().put("ok", false).put("error", "unknown-project-root")
+    // T19 landed `.xlsx` writes for real — every docComments:* mutation now
+    // dispatches to a real reader/writer for both native formats, so this
+    // file no longer needs a "not yet supported" answer for either one.
+    // A live session's own cwd counts as a known root too (§1.4's synthetic-
+    // project fallback) — mirrors remote-server.ts's own sessionRoots(), so a
+    // file opened from an unregistered session's drawer doesn't start
+    // refusing.
+    fun gateRefused(projectRoot: String?) = refuseUnknownProjectRoot(projectRoot, homeDir, claudeDir, sessionRoots)
+
+    return when (type) {
+        "docComments:list" -> {
+            val filePath = payload.optString("path", "")
+            if (filePath.isEmpty()) return missingField("path")
+            val projectRoot = payload.optString("projectRoot", "").ifEmpty { null }
+            if (gateRefused(projectRoot)) return unknownRoot()
+            val format = resolveNativeFormat(filePath, projectRoot, homeDir)
+            if (format != null) {
+                when (val r = listNativeComments(format, filePath, projectRoot, homeDir)) {
+                    is NativeListResult.Ok -> JSONObject().put("ok", true).put("comments", JSONArray(r.comments.map { it.toJson() }))
+                    is NativeListResult.Err -> JSONObject().put("ok", false).put("error", r.error)
+                }
+            } else {
+                when (val r = listComments(filePath, projectRoot, homeDir)) {
+                    is StoreResult.Ok -> JSONObject().put("ok", true).put("comments", JSONArray(r.value.map { it.toJson() }))
+                    is StoreResult.Err -> JSONObject().put("ok", false).put("error", r.error.wire)
+                }
+            }
+        }
+
+        "docComments:add" -> {
+            val filePath = payload.optString("path", "")
+            if (filePath.isEmpty()) return missingField("path")
+            val projectRoot = payload.optString("projectRoot", "").ifEmpty { null }
+            if (gateRefused(projectRoot)) return unknownRoot()
+            val text = payload.optString("text", "")
+            if (text.isEmpty()) return missingField("text")
+            val selector = CommentSelector.fromJson(payload.optJSONObject("selector")) ?: return missingField("selector")
+            val author = payload.optString("author", "user")
+            // T17: a `.docx` target now writes for real, dispatched through
+            // DocCommentsDispatch.kt's own containment/allowlist gate — never
+            // the sidecar store, which has no row for a native comment (§1.1).
+            when (resolveNativeFormat(filePath, projectRoot, homeDir)) {
+                NativeFormat.DOCX -> when (val r = addNativeDocxComment(filePath, projectRoot, selector, text, author, homeDir)) {
+                    is NativeMutateResult.Ok -> JSONObject().put("ok", true).put("id", r.value)
+                    is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
+                }
+                // T19: `.xlsx` writes for real now too.
+                NativeFormat.XLSX -> when (val r = addNativeXlsxComment(filePath, projectRoot, selector, text, author, homeDir)) {
+                    is NativeMutateResult.Ok -> JSONObject().put("ok", true).put("id", r.value)
+                    is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
+                }
+                null -> {
+                    // F4 (T5 review): the renderer mints and sends this now.
+                    val callerId = payload.optString("id", "").ifEmpty { null }
+                    when (val r = addComment(filePath, projectRoot, selector, text, author, homeDir, callerId)) {
+                        is StoreResult.Ok -> JSONObject().put("ok", true).put("id", r.value)
+                        is StoreResult.Err -> JSONObject().put("ok", false).put("error", r.error.wire)
+                    }
+                }
+            }
+        }
+
+        // reply/resolve/reopen/move ALL require `path` — the sidecar holding
+        // a given comment id can only be found by knowing the file (design
+        // review 3, F1), same as desktop's own IPC handlers.
+        "docComments:reply" -> {
+            val filePath = payload.optString("path", "")
+            if (filePath.isEmpty()) return missingField("path")
+            val projectRoot = payload.optString("projectRoot", "").ifEmpty { null }
+            if (gateRefused(projectRoot)) return unknownRoot()
+            val commentId = payload.optString("id", "")
+            if (commentId.isEmpty()) return missingField("id")
+            val text = payload.optString("text", "")
+            if (text.isEmpty()) return missingField("text")
+            val author = payload.optString("author", "user")
+            // T5 review parity (design §1.6, F2): `reply`'s response carries
+            // the real persisted `CommentReply` — the SAME enrichment
+            // desktop's own `docComments:reply` IPC response now returns, for
+            // both the native-format and plain-sidecar branches.
+            when (resolveNativeFormat(filePath, projectRoot, homeDir)) {
+                NativeFormat.DOCX -> when (val r = replyToNativeDocxComment(filePath, projectRoot, commentId, text, author, homeDir)) {
+                    is NativeMutateResult.Ok -> JSONObject().put("ok", true).put("reply", r.value.toJson())
+                    is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
+                }
+                NativeFormat.XLSX -> when (val r = replyToNativeXlsxComment(filePath, projectRoot, commentId, text, author, homeDir)) {
+                    is NativeMutateResult.Ok -> JSONObject().put("ok", true).put("reply", r.value.toJson())
+                    is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
+                }
+                null -> when (val r = replyToComment(filePath, projectRoot, commentId, text, author, homeDir)) {
+                    is StoreResult.Ok -> JSONObject().put("ok", true).put("reply", r.value.toJson())
+                    is StoreResult.Err -> JSONObject().put("ok", false).put("error", r.error.wire)
+                }
+            }
+        }
+
+        "docComments:resolve" -> {
+            val filePath = payload.optString("path", "")
+            if (filePath.isEmpty()) return missingField("path")
+            val projectRoot = payload.optString("projectRoot", "").ifEmpty { null }
+            if (gateRefused(projectRoot)) return unknownRoot()
+            val commentId = payload.optString("id", "")
+            if (commentId.isEmpty()) return missingField("id")
+            val by = payload.optString("by", "user")
+            when (resolveNativeFormat(filePath, projectRoot, homeDir)) {
+                NativeFormat.DOCX -> when (val r = resolveNativeDocxComment(filePath, projectRoot, commentId, homeDir)) {
+                    is NativeMutateResult.Ok -> JSONObject().put("ok", true)
+                    is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
+                }
+                NativeFormat.XLSX -> when (val r = resolveNativeXlsxComment(filePath, projectRoot, commentId, homeDir)) {
+                    is NativeMutateResult.Ok -> JSONObject().put("ok", true)
+                    is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
+                }
+                null -> when (val r = resolveComment(filePath, projectRoot, commentId, by, homeDir)) {
+                    is StoreResult.Ok -> JSONObject().put("ok", true)
+                    is StoreResult.Err -> JSONObject().put("ok", false).put("error", r.error.wire)
+                }
+            }
+        }
+
+        "docComments:reopen" -> {
+            val filePath = payload.optString("path", "")
+            if (filePath.isEmpty()) return missingField("path")
+            val projectRoot = payload.optString("projectRoot", "").ifEmpty { null }
+            if (gateRefused(projectRoot)) return unknownRoot()
+            val commentId = payload.optString("id", "")
+            if (commentId.isEmpty()) return missingField("id")
+            val by = payload.optString("by", "user")
+            when (resolveNativeFormat(filePath, projectRoot, homeDir)) {
+                NativeFormat.DOCX -> when (val r = reopenNativeDocxComment(filePath, projectRoot, commentId, homeDir)) {
+                    is NativeMutateResult.Ok -> JSONObject().put("ok", true)
+                    is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
+                }
+                NativeFormat.XLSX -> when (val r = reopenNativeXlsxComment(filePath, projectRoot, commentId, homeDir)) {
+                    is NativeMutateResult.Ok -> JSONObject().put("ok", true)
+                    is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
+                }
+                null -> when (val r = reopenComment(filePath, projectRoot, commentId, by, homeDir)) {
+                    is StoreResult.Ok -> JSONObject().put("ok", true)
+                    is StoreResult.Err -> JSONObject().put("ok", false).put("error", r.error.wire)
+                }
+            }
+        }
+
+        "docComments:move" -> {
+            val filePath = payload.optString("path", "")
+            if (filePath.isEmpty()) return missingField("path")
+            val projectRoot = payload.optString("projectRoot", "").ifEmpty { null }
+            if (gateRefused(projectRoot)) return unknownRoot()
+            val commentId = payload.optString("id", "")
+            if (commentId.isEmpty()) return missingField("id")
+            val newSelector = CommentSelector.fromJson(payload.optJSONObject("newSelector")) ?: return missingField("newSelector")
+            when (resolveNativeFormat(filePath, projectRoot, homeDir)) {
+                NativeFormat.DOCX -> when (val r = moveNativeDocxComment(filePath, projectRoot, commentId, newSelector, homeDir)) {
+                    is NativeMutateResult.Ok -> JSONObject().put("ok", true)
+                    is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
+                }
+                // Coordinator review fix: desktop's own `docComments:move` IPC
+                // response for an xlsx target carries the moved thread's
+                // FRESH id (`moveNativeXlsxComment` in doc-comments-
+                // dispatch.ts returns `{ok:true, id: string}`, confirmed
+                // directly against that file — §4.2/§4.3's "never guessing at
+                // a stale hint" reasoning: a moved thread's OLD id's embedded-
+                // cell hint goes stale the instant it moves, so the very next
+                // call against the SAME thread needs the fresh one to skip a
+                // full-workbook fallback scan). Docx's own move never changes
+                // its id (a `TextQuoteSelector`-anchored comment keeps the
+                // same `w:id`), so ONLY the xlsx branch carries `id` here —
+                // this is a real, intentional per-format asymmetry in
+                // desktop's own shape, not an inconsistency to "fix" away.
+                NativeFormat.XLSX -> when (val r = moveNativeXlsxComment(filePath, projectRoot, commentId, newSelector, homeDir)) {
+                    is NativeMutateResult.Ok -> JSONObject().put("ok", true).put("id", r.value)
+                    is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
+                }
+                null -> when (val r = moveComment(filePath, projectRoot, commentId, newSelector, homeDir)) {
+                    is StoreResult.Ok -> JSONObject().put("ok", true)
+                    is StoreResult.Err -> JSONObject().put("ok", false).put("error", r.error.wire)
+                }
+            }
+        }
+
+        // Edit/delete build (2026-09-28, design doc §"Edit and delete") — same
+        // containment/format-dispatch shape as reply/resolve/reopen/move
+        // above. Decisions.json: anyone's comment/reply can be edited or
+        // deleted; no "edited" marker is stored or shown; deleting a
+        // thread's first comment deletes the whole thread. Mirrors desktop's
+        // own `DOC_COMMENTS_IPC.EDIT`/`EDIT_REPLY`/`DELETE`/`DELETE_REPLY`
+        // handler blocks (ipc-handlers.ts).
+        "docComments:edit" -> {
+            val filePath = payload.optString("path", "")
+            if (filePath.isEmpty()) return missingField("path")
+            val projectRoot = payload.optString("projectRoot", "").ifEmpty { null }
+            if (gateRefused(projectRoot)) return unknownRoot()
+            val commentId = payload.optString("id", "")
+            if (commentId.isEmpty()) return missingField("id")
+            val text = payload.optString("text", "")
+            if (text.isEmpty()) return missingField("text")
+            when (resolveNativeFormat(filePath, projectRoot, homeDir)) {
+                NativeFormat.DOCX -> when (val r = editNativeDocxComment(filePath, projectRoot, commentId, text, homeDir)) {
+                    is NativeMutateResult.Ok -> JSONObject().put("ok", true)
+                    is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
+                }
+                NativeFormat.XLSX -> when (val r = editNativeXlsxComment(filePath, projectRoot, commentId, text, homeDir)) {
+                    is NativeMutateResult.Ok -> JSONObject().put("ok", true)
+                    is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
+                }
+                null -> when (val r = editComment(filePath, projectRoot, commentId, text, homeDir)) {
+                    is StoreResult.Ok -> JSONObject().put("ok", true)
+                    is StoreResult.Err -> JSONObject().put("ok", false).put("error", r.error.wire)
+                }
+            }
+        }
+
+        "docComments:edit-reply" -> {
+            val filePath = payload.optString("path", "")
+            if (filePath.isEmpty()) return missingField("path")
+            val projectRoot = payload.optString("projectRoot", "").ifEmpty { null }
+            if (gateRefused(projectRoot)) return unknownRoot()
+            val commentId = payload.optString("id", "")
+            if (commentId.isEmpty()) return missingField("id")
+            val replyId = payload.optString("replyId", "")
+            if (replyId.isEmpty()) return missingField("replyId")
+            val text = payload.optString("text", "")
+            if (text.isEmpty()) return missingField("text")
+            when (resolveNativeFormat(filePath, projectRoot, homeDir)) {
+                NativeFormat.DOCX -> when (val r = editNativeDocxReply(filePath, projectRoot, commentId, replyId, text, homeDir)) {
+                    is NativeMutateResult.Ok -> JSONObject().put("ok", true).put("reply", r.value.toJson())
+                    is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
+                }
+                NativeFormat.XLSX -> when (val r = editNativeXlsxReply(filePath, projectRoot, commentId, replyId, text, homeDir)) {
+                    is NativeMutateResult.Ok -> JSONObject().put("ok", true).put("reply", r.value.toJson())
+                    is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
+                }
+                null -> when (val r = editReply(filePath, projectRoot, commentId, replyId, text, homeDir)) {
+                    is StoreResult.Ok -> JSONObject().put("ok", true).put("reply", r.value.toJson())
+                    is StoreResult.Err -> JSONObject().put("ok", false).put("error", r.error.wire)
+                }
+            }
+        }
+
+        "docComments:delete" -> {
+            val filePath = payload.optString("path", "")
+            if (filePath.isEmpty()) return missingField("path")
+            val projectRoot = payload.optString("projectRoot", "").ifEmpty { null }
+            if (gateRefused(projectRoot)) return unknownRoot()
+            val commentId = payload.optString("id", "")
+            if (commentId.isEmpty()) return missingField("id")
+            when (resolveNativeFormat(filePath, projectRoot, homeDir)) {
+                NativeFormat.DOCX -> when (val r = deleteNativeDocxComment(filePath, projectRoot, commentId, homeDir)) {
+                    is NativeMutateResult.Ok -> JSONObject().put("ok", true)
+                    is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
+                }
+                NativeFormat.XLSX -> when (val r = deleteNativeXlsxComment(filePath, projectRoot, commentId, homeDir)) {
+                    is NativeMutateResult.Ok -> JSONObject().put("ok", true)
+                    is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
+                }
+                null -> when (val r = deleteComment(filePath, projectRoot, commentId, homeDir)) {
+                    is StoreResult.Ok -> JSONObject().put("ok", true)
+                    is StoreResult.Err -> JSONObject().put("ok", false).put("error", r.error.wire)
+                }
+            }
+        }
+
+        "docComments:delete-reply" -> {
+            val filePath = payload.optString("path", "")
+            if (filePath.isEmpty()) return missingField("path")
+            val projectRoot = payload.optString("projectRoot", "").ifEmpty { null }
+            if (gateRefused(projectRoot)) return unknownRoot()
+            val commentId = payload.optString("id", "")
+            if (commentId.isEmpty()) return missingField("id")
+            val replyId = payload.optString("replyId", "")
+            if (replyId.isEmpty()) return missingField("replyId")
+            when (resolveNativeFormat(filePath, projectRoot, homeDir)) {
+                NativeFormat.DOCX -> when (val r = deleteNativeDocxReply(filePath, projectRoot, commentId, replyId, homeDir)) {
+                    is NativeMutateResult.Ok -> JSONObject().put("ok", true)
+                    is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
+                }
+                NativeFormat.XLSX -> when (val r = deleteNativeXlsxReply(filePath, projectRoot, commentId, replyId, homeDir)) {
+                    is NativeMutateResult.Ok -> JSONObject().put("ok", true)
+                    is NativeMutateResult.Err -> JSONObject().put("ok", false).put("error", r.error)
+                }
+                null -> when (val r = deleteReply(filePath, projectRoot, commentId, replyId, homeDir)) {
+                    is StoreResult.Ok -> JSONObject().put("ok", true)
+                    is StoreResult.Err -> JSONObject().put("ok", false).put("error", r.error.wire)
+                }
+            }
+        }
+
+        // Watching is the one piece that still follows Git's "absent, not
+        // reimplemented" precedent, for EVERY file type (§1.6): Android has
+        // no FileObserver-based watch today — a general no-push gap unrelated
+        // to reopen-1's promise about read/add/reply/resolve.
+        "docComments:watch", "docComments:unwatch" -> JSONObject().put("ok", false).put("error", "not-implemented-on-mobile")
+
+        else -> null
+    }
+}

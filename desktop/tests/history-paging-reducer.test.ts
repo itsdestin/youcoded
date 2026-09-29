@@ -61,6 +61,32 @@ describe('history paging reducer', () => {
     expect(st.get('s')!.activeTurnToolIds.has('live')).toBe(true);
   });
 
+  // 2026-09-27 review: a page read to EOF (a rebuilt renderer's toEnd, a
+  // transfer) overlaps what already arrived live. A tool already on screen must
+  // not come back as a second card — tool cards dedup by toolUseId, not uuid.
+  it('a page overlapping the live stream does not duplicate a tool card already on screen', () => {
+    const liveTool: TranscriptEvent = {
+      type: 'tool-use', sessionId: 's', uuid: 'use-1', timestamp: 3,
+      data: { toolUseId: 't1', toolName: 'Bash', toolInput: { command: 'sleep 10' } },
+    };
+    let st = withSession('s');
+    st = chatReducer(st, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: 's', uuid: 'u1', text: 'run it', timestamp: 1 } as any);
+    st = chatReducer(st, {
+      type: 'TRANSCRIPT_TOOL_USE', sessionId: 's', uuid: 'use-1',
+      toolUseId: 't1', toolName: 'Bash', toolInput: { command: 'sleep 10' },
+    });
+    st = chatReducer(st, {
+      type: 'HISTORY_PAGE_LOADED', sessionId: 's',
+      events: [userEvent('s', 'u0', 'earlier'), asstEvent('s', 'a0', 'done'), userEvent('s', 'u1', 'run it'), liveTool],
+      cursor: null, hasMore: false,
+    });
+    const sess = st.get('s')!;
+    const groupsHoldingT1 = [...sess.toolGroups.values()].filter((g) => g.toolIds.includes('t1'));
+    expect(groupsHoldingT1).toHaveLength(1);
+    expect(sess.timeline.filter((e) => e.kind === 'user').map((e: any) => e.message.content)).toEqual(['earlier', 'run it']);
+    expect(sess.toolCalls.get('t1')?.status).toBe('running');
+  });
+
   it('does not leave an idle resumed session looking like it is working', () => {
     const st = chatReducer(withSession('s'), { type: 'HISTORY_PAGE_LOADED', sessionId: 's',
       events: [userEvent('s', 'prompt', 'before crash'), {

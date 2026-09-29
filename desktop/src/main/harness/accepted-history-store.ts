@@ -17,7 +17,7 @@ const SUMMARY_PREFIX = '[Earlier conversation summary]\n';
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
 
-type FailureReason = 'ineligible' | 'malformed' | 'oversized' | 'missing-transcript'
+type FailureReason = 'ineligible' | 'malformed' | 'oversized' | 'missing-transcript' | 'transcript-unreadable'
   | 'transcript-advanced' | 'binding-mismatch' | 'assembly-mismatch' | 'image-mismatch';
 
 /** Which persisted event type owns each referenceable field, and how its text is
@@ -267,9 +267,12 @@ function parseTranscriptLines(text: string, events: Map<string, TranscriptEvent>
 /** Whole-file read. Serves restore(), which runs once at resume. WHY async
  *  (2026-09-24 blocking-calls B8): a long conversation's transcript is MBs, and
  *  the sync read froze every window on each Resume of a native chat. */
-async function rawTranscript(file: string): Promise<RawTranscript | null> {
+async function rawTranscript(file: string): Promise<RawTranscript | null | 'unreadable'> {
   let data: Buffer;
-  try { data = await fs.promises.readFile(file); } catch { return null; }
+  // WHY 'unreadable' apart from null (2026-09-27): only a MISSING file (or an
+  // unparseable one, below) means the checkpoint's transcript is gone. A lock or
+  // EMFILE read as null made restore() DELETE a valid checkpoint over a blip.
+  try { data = await fs.promises.readFile(file); } catch (err: any) { return err?.code === 'ENOENT' ? null : 'unreadable'; }
   const events = new Map<string, TranscriptEvent>();
   if (!parseTranscriptLines(data.toString('utf8'), events)) return null;
   return { bytes: data.length, digest: digest(data), events };
@@ -636,6 +639,7 @@ export class AcceptedHistoryStore {
     if (manifest.assemblyDigest !== input.assemblyDigest) return { ok: false, reason: 'assembly-mismatch' };
     if (path.resolve(manifest.transcriptPath) !== path.resolve(input.transcriptPath)) return { ok: false, reason: 'missing-transcript' };
     const raw = await rawTranscript(input.transcriptPath);
+    if (raw === 'unreadable') return { ok: false, reason: 'transcript-unreadable' };
     if (!raw) { void this.remove(input.sessionId); return { ok: false, reason: 'missing-transcript' }; }
     if (raw.bytes !== manifest.transcript.bytes || raw.digest !== manifest.transcript.digest) return { ok: false, reason: 'transcript-advanced' };
     const accepted = new Set(manifest.eventUuids);

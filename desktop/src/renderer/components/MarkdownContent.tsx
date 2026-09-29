@@ -11,6 +11,7 @@ import { FilepathToken } from './FilepathToken';
 import { CONVERSATIONS_FENCE, parseConversationRefs } from '../../shared/chatsearch-refs';
 import ChatsearchRefBlock from './tool-views/ChatsearchRefBlock';
 import { SessionRefsEnabled } from './session-refs-context';
+import { ANCHOR_SKIP_ATTR } from './comments/anchor-skip';
 import {
   startStream, advanceStream, withDefinitions, type StreamView,
   DETAILS_OPEN_WITH_SUMMARY, DETAILS_OPEN, DETAILS_SUMMARY, DETAILS_CLOSE, DETAILS_OPEN_ANY,
@@ -345,6 +346,12 @@ function ChatImage({ src, alt, ...props }: any) {
     <button
       type="button"
       onClick={() => setShown(true)}
+      // F6 (doc-comments T14 review): this label is interaction STATE (it
+      // disappears the moment the image is shown), not part of the document's
+      // own words — ANCHOR_SKIP_ATTR (anchor-skip.ts) tells both the
+      // save-time (build-menu.ts) and resolve-time (use-quote-marks.ts) text
+      // walkers to leave it out of a comment's captured/searched text.
+      {...{ [ANCHOR_SKIP_ATTR]: true }}
       className="my-2 inline-flex items-center gap-2 rounded border border-edge bg-inset px-3 py-2 text-sm text-fg-2 hover:bg-panel"
       title={`Load image from ${host}`}
       data-message-find-ignore

@@ -68,11 +68,9 @@ function motionWindowMs(el: Element | null): number {
   return Number.isFinite(reveal) && reveal > 0 ? Math.round(reveal + EXPAND_WINDOW_SLACK_MS) : EXPAND_WINDOW_FALLBACK_MS;
 }
 
-/** A collapsed pill (dot only): px-1.5 (12) + dot (10) + border (2) + the
- *  gap-1 (4) that sits between the dot and its zero-width label. Measured
- *  2026-09-01 at 28px; the packer had budgeted 24 since it was written, so a
- *  row of N dots was under-reserved by 4N px and the active name got squeezed. */
-const COLLAPSED_PILL_PX = 28;
+/** A collapsed pill: pl-1.5 (6) + dot (10) + gap-1.5 (6) + border (2). It was 28 with the
+ *  dot 4px off-centre until 2026-09-27; the gap is now its right padding (pillClass). */
+const COLLAPSED_PILL_PX = 24;
 
 /** The "+N" overflow chip's room: min-w-[18px] + px-1 fits two digits at
  *  ~24px, plus its ml-1 (4). Reserved by the packer only when something
@@ -972,8 +970,28 @@ export default function SessionStrip({
     pointerCaptureId.current = e.pointerId;
   }, [sessions, sessionStatuses, activeSessionId, onSelectSession, metrics, measurementsOf, tearOffModel]);
 
+  // A press whose release never reached handlePointerUp. WHY (Destin,
+  // 2026-09-28: pills "stuck to my mouse ... even when i've clicked away"):
+  // 'html-drag' takes no pointer capture, so a release off the strip was lost,
+  // the press stayed armed, and merely crossing the strip later dragged a pill.
+  const abandonPress = useCallback(() => {
+    if (dragOrigin.current === null) return;
+    const wasDragging = isDragging.current;
+    dragOrigin.current = null; isDragging.current = false; overIdRef.current = null;
+    setDragId(null); setOverId(null); setDragLeft(null); setDragActive(false);
+    setTimeout(() => { suppressClick.current = false; }, 0);
+    if (wasDragging && tearOffModel !== 'html-drag') (window as any).claude?.detach?.dragEnded?.();
+  }, [tearOffModel]);
+
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
     if (e.pointerType) lastPointerType.current = e.pointerType;
+    // No button held = the release was missed (abandonPress). The dragover
+    // feed passes no `buttons`; a live tear-off ends on its captured pointerup.
+    if (dragOrigin.current !== null && liveDetachedWindowId.current === null
+        && typeof e.buttons === 'number' && (e.buttons & 1) === 0) {
+      abandonPress();
+      return;
+    }
     // Live tear-off continuation — runs even after we've cleared dragId so the
     // detached window keeps following the cursor. Must be checked BEFORE the
     // dragId null-guard below.
@@ -1154,7 +1172,23 @@ export default function SessionStrip({
       : leadDrawn;
     const next = nextSlotId(rects, dragId, overIdRef.current, centre, tv.dir);
     if (next !== overIdRef.current) { overIdRef.current = next; setOverId(next); }
-  }, [dragId, tearOffModel]);
+  }, [dragId, tearOffModel, abandonPress]);
+
+  // A release anywhere while a press is armed (handlePointerUp runs first and
+  // disarms, so this catches only the missed ones). pointercancel for a finger
+  // only: a mouse's is the browser drag 'html-drag' wants, ended by dragend.
+  const pressArmed = dragId !== null;
+  useEffect(() => {
+    if (!pressArmed) return;
+    const onUp = () => abandonPress();
+    const onCancel = (e: PointerEvent) => { if (e.pointerType === 'touch') abandonPress(); };
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
+    return () => {
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+    };
+  }, [pressArmed, abandonPress]);
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
     if (isDragging.current) hoverLock.current = { x: e.clientX };   // see hoverLock
@@ -1977,8 +2011,10 @@ export default function SessionStrip({
           const hoverPeek = !isActive && !displayPack.expanded.has(s.id);
           const isDot = !displayPack.expanded.has(s.id);
 
+          // WHY pr-0 (2026-09-27): a dot ends in the 6px gap, a name in its 7px tail —
+          // each matching the left side. px-1.5 left the right visibly wider.
           const pillClass = `
-                  relative flex items-center gap-1 rounded-full px-1.5 py-px
+                  relative flex items-center gap-1.5 rounded-full pl-1.5 pr-0 py-px
                   border select-none touch-none overflow-hidden
                   ${pillSurfaceClass(showName && (isActive || !displayPack.expanded.has(s.id)), dragging)}`;
           const pillBody = (
@@ -2140,7 +2176,7 @@ export default function SessionStrip({
                   }}
                 >
                   <SessionDot color={color} isActive={isActive} />
-                  <span className="session-pill__label text-xs font-medium text-fg-2 px-0.5">{s.name}</span>
+                  <span className="session-pill__label text-xs font-medium text-fg-2"><span className="session-pill__name">{s.name}</span></span>
                 </div>,
                 document.body,
               )}

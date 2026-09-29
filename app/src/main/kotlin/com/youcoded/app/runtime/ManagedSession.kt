@@ -215,12 +215,27 @@ class ManagedSession(
                 bridgeServer?.let { server ->
                     when (event) {
                         is HookEvent.PermissionRequest -> {
+                            // doc-comments build design §5.2a (decided option
+                            // 1, T20): a call to one of the six document-
+                            // comment MCP tools (com.youcoded.app.doccomments.
+                            // DocCommentsPermission, mirroring desktop's
+                            // permission-auto-approve.ts) is auto-approved
+                            // UNCONDITIONALLY for a plain-text/markdown/code
+                            // target, and only in an already-frictionless
+                            // permission mode for a Word/Excel target — this
+                            // runs BEFORE shouldAutoApprove below because a
+                            // doc-comments tool call is never AskUserQuestion/
+                            // ExitPlanMode and never matches any of that
+                            // function's own Bash/file-path regexes.
+                            val docCommentsApprove = com.youcoded.app.doccomments.shouldAutoApproveDocComment(
+                                event.toolName, event.toolInput, event.permissionMode, bridge.docCommentsServerId,
+                            )
                             // Auto-approve per the user's override settings. WHY one call
                             // (2026-09-24): the decision is shouldAutoApprove in
                             // PermissionAutoApprove.kt, which never allows ExitPlanMode or
                             // AskUserQuestion — Claude Code ignores a hook allow for them,
                             // so an allow only hid the card while the menu stayed live.
-                            if (shouldAutoApprove(event.toolName, event.toolInput, permissionOverridesCache)) {
+                            if (docCommentsApprove || shouldAutoApprove(event.toolName, event.toolInput, permissionOverridesCache)) {
                                 val decision = JSONObject().put("decision",
                                     JSONObject().put("behavior", "allow"))
                                 ptyBridge?.getEventBridge()?.respond(event.requestId, decision)

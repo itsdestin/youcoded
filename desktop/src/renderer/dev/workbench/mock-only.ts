@@ -133,4 +133,15 @@ export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   // and Android's catch-all answers unsupported by design. The fakes in mock-shim.ts stay
   // so the status strip, the too-large card and the Download button stay reviewable
   // without a host.
+  // Doc comments edit/delete (2026-09-28, docs/active/design/2026-09-24-doc-comments/
+  // doc-comments.edit-delete.questions.answers.json): `docComments.edit`, `.editReply`,
+  // `.delete` and `.deleteReply` were designed and built here (CommentCard/
+  // HighlightHoverCard's edit/delete icons, doc-comments-store.ts's editComment/
+  // editReply/deleteComment/deleteReply) ahead of the main-process/Kotlin backend.
+  // GONE (same session, 2026-09-28): the real `docComments:edit`/`docComments:edit-reply`/
+  // `docComments:delete`/`docComments:delete-reply` channels now land on preload,
+  // remote-shim, ipc-handlers and remote-server (plain-text sidecar + docx + xlsx),
+  // with the Kotlin arm following on the same session. The fakes in mock-shim.ts
+  // STAY — the workbench still has no real filesystem or Word/Excel parser — only
+  // the "no real backend" claim goes.
 ];

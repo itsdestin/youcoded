@@ -1,0 +1,15 @@
+{
+  "fixture": "docling-xlsx-comments.xlsx",
+  "path": "reports/docling-xlsx-comments.xlsx",
+  "steps": [
+    {
+      "op": "delete",
+      "args": {
+        "id": "xt-1-F7-04C1C54B-2744-A647-93D1-A99C27C7EFDC"
+      },
+      "result": {
+        "ok": true
+      }
+    }
+  ]
+}

@@ -33,6 +33,7 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat/announcement', 'dialog'), params: { announcement: '1' } },
   chat('chat/quick-chips', 'dialog'),
   chat('chat/session-context', 'dialog'),
+  { ...chat('chat/session-context#ancestors', 'dialog'), session: 'wb-2', params: { contextChain: '1' } },
   chat('chat/quit-sessions', 'dialog'),
   // Each first-run warning, once per kind (localStorage is unwritten on a fresh
   // photo-only tab, so every kind is still un-acknowledged).
@@ -58,6 +59,10 @@ export const CHAT: readonly ScreenEntry[] = [
   // Conversations on the practice sessions. wb-2 is the native-runtime session that the
   // seeded conversations, OpenRouter error cards and the stalled replay play into.
   { ...chat('chat#native', 'view'), session: 'wb-2' },
+  // Dev-only fixture: real shared question card with duplicate wording, selected
+  // and typed via explore rather than drawing a stand-in or changing the app.
+  { ...chat('chat#questions-native', 'view'), session: 'wb-2', params: { seed: 'bubbles-questions-native' } },
+  { ...chat('chat#questions-cc', 'view'), session: 'wb-1', params: { seed: 'bubbles-questions-cc' } },
   { ...chat('chat#chatgpt', 'view'), session: 'wb-3' },
   { ...chat('chat#chatgpt-plan-limit', 'view', 'error-state'), session: 'wb-3', params: { planLimit: '1' } },
   { ...chat('chat#stalled', 'view', 'error-state'), session: 'wb-2', params: { stalled: '1' } },

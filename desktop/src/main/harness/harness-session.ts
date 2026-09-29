@@ -36,6 +36,7 @@ import type { NativeTool, ServedRead, ToolContext, ToolResultPayload, ToolServic
 import { checkPathGuard, workspaceMatchFor } from './tools/guards';
 import { destructiveRmVerdict } from './tools/rm-target';
 import { secretPathVerdict } from './tools/bash-secret-paths';
+import { adminCommandVerdict, refuseMessage, visibleSudoLines } from './tools/admin-command';
 import * as os from 'os';
 import { readImageFromDisk, MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, deliverableImageMediaType, MAX_ATTACHMENT_BYTES } from './image-support';
 
@@ -171,6 +172,9 @@ export function rememberedRuleFor(
 }
 import { formatAnswers } from './tools/ask-user-question';
 import { formatArgErrors } from './tools/arg-errors';
+import { parseToolArgs } from './tool-args';
+import { PermissionCallbackFailure, permissionCallback, finalizeRemainingCalls } from './tool-group-finalization';
+import { appendUserHistory, claimBusyMessage, supersedeToolGroup } from './busy-message-boundary';
 import type { AskRequest, AskDecision } from './permission-broker';
 import { CLOUD_DEFAULT, type CapabilityProfile } from './capability-profile';
 import { adaptForWire } from './wire-adapter';
@@ -182,9 +186,14 @@ import { createTaskTool } from './tools/task';
 import { ModelSearchTool } from './tools/model-search';
 import { BUILTIN_ROSTER, type SpecialistRoster } from './specialists/registry';
 import type { ShellRegistry } from './shell-registry';
+import type { RunningCalls } from './askpass/running-calls';
+import type { AdminPasswordServiceLike } from './admin-password-service';
 import { createSkillCatalog, type SkillCatalog } from './skills/skill-catalog';
 import { fitInjection } from './injection/injection-budget';
+import { pendingRules, deliverRules } from './injection/rule-delivery';
+import type { PathTrigger } from './injection/path-triggers';
 import type { TriggerIndex } from './injection/path-triggers';
+import { retainedRuleMessages } from './injection/retained-rule-visibility';
 import { mcpToolsFor, estimateToolSchemaTokens } from './mcp/mcp-tools';
 import type { ReadyServer } from './mcp/mcp-manager';
 import {
@@ -217,6 +226,9 @@ export interface HarnessSessionOpts {
   /** The tool set this session may call. Absent/[] = v0 chat behavior (the
    *  Chat-preset path: plain text, no tool plumbing invoked). */
   tools?: NativeTool[];
+  /** Root-only synchronous FIFO claim. restore returns an unaccepted claim to the host
+   * if an event append fails; no second turn or await occurs during a claim. */
+  takeReadyBusyMessage?: () => ({ id: string; text: string; attachments: string[]; restore?: () => void } | undefined);
   /** Pure permission decision for (tool, subject) — the configured layers
    *  (preset/mode/deny-list/remembered). Absent → every gated tool asks. */
   decide?: (tool: string, subject: string | undefined) => Promise<PermissionDecision>;
@@ -301,6 +313,23 @@ export interface HarnessSessionOpts {
    *  tools as ctx.shells; absent in tests, where Bash refuses a background
    *  start and a time limit still kills. */
   shells?: ShellRegistry;
+  /** admin-password design §2.3/§11 task 5: this session's ONE RunningCalls
+   *  registry, reaching tools as ctx.runningCalls. Absent in tests, same
+   *  convention as `shells`. */
+  runningCalls?: RunningCalls;
+  /** admin-password design §2.3: `SUDO_ASKPASS`/socket/runtime vars, present
+   *  only when the app's AskpassServer actually started. Reaches tools as
+   *  ctx.adminPasswordEnv. */
+  adminPasswordEnv?: Record<string, string>;
+  /** admin-password design §2.4/R20/§6/§11 task 5: `askUpFront` is called
+   *  HERE, in step 5 below, right after the approval card returns allow for
+   *  a visibly-sudo Bash call — BEFORE tool.execute() spawns anything.
+   *  `wipeUpfront` is also threaded into ctx.adminPasswordService so the
+   *  tool layer (bash.ts/shell-registry.ts) can wipe an unconsumed hold on
+   *  call exit. Absent when the app's AskpassServer never started (self-
+   *  test failed, Windows, macOS off) — the up-front ask is then simply
+   *  skipped and sudo fails as it did before this feature existed. */
+  adminPasswordService?: Pick<AdminPasswordServiceLike, 'askUpFront' | 'wipeUpfront'> & Partial<Pick<AdminPasswordServiceLike, 'takeRefusal'>>;
 }
 // The opts second arg carries per-turn model construction hints. `serialToolCalls`
 // (Task 10 / spec §4.2) tells the local-engine factory to inject
@@ -792,8 +821,8 @@ export class HarnessSession extends EventEmitter {
   private toolByName: Map<string, NativeTool>;
   private readRegistry = new Map<string, string>();  // canonical path → content fingerprint at last Read (tools/file-fingerprint.ts)
   /** G-11 (2026-08-26 tools investigation) — what Read has already served this
-   *  session (`path|offset|limit` → mtime + which call). Read answers a repeat
-   *  of an unchanged slice with "the content you already have is current"
+   *  session (`path|offset|limit` → fingerprint + which call). Only after
+   *  verifying current bytes does Read say "the content you already have is current"
    *  instead of the content. That sentence is only true while the earlier
    *  result is still in the model's view, so this is cleared at EVERY site that
    *  discards or shrinks history: seedHistory (resume), clearHistory (/clear),
@@ -827,9 +856,14 @@ export class HarnessSession extends EventEmitter {
   // Resolved capability profile (Task 5). Drives the doom-loop window + tool
   // attachment; re-assigned by setBinding on a mid-session model swap.
   private profile: CapabilityProfile;
-  /** Trigger ids already injected in this session. Survives across turns on
-   *  purpose — a rule is a standing instruction, not a per-turn reminder. */
+  /** Rule dedupe survives turns, but is reconciled after history rewrites. */
   private readonly injectedTriggerIds = new Set<string>();
+  private retainedTriggerMessages = new Set<string>();
+
+  private reconcileTriggerVisibility(): void {
+    this.injectedTriggerIds.clear();
+    this.retainedTriggerMessages = retainedRuleMessages(this.history);
+  }
   /** Delivered-image dedupe: canonical path → { mtimeMs at delivery, the tool
    *  call whose result carried the image }. A model that
    *  re-Reads the SAME unchanged file gets "already visible" text, not a second
@@ -977,9 +1011,8 @@ export class HarnessSession extends EventEmitter {
     continuationBinding?: string; messageOrigins?: Array<string[] | null>;
   }): void {
     this.history = messages;
-    // WHY: a flat accepted seed cannot locate a tail cut. Only the event-by-
-    // event rebuild supplies aligned origins; reject a mismatched or invented
-    // map instead of guessing a portable resume point.
+    this.reconcileTriggerVisibility();
+    // WHY: only event-by-event origins prove a portable resume cut.
     const known = new Set(seed?.eventUuids ?? []);
     this.historyOrigins = seed?.messageOrigins?.length === messages.length &&
       seed.messageOrigins.every(part => part === null || part.every(uuid => known.has(uuid)))
@@ -1351,49 +1384,29 @@ export class HarnessSession extends EventEmitter {
     }
   }
 
-  /** Append any project rules / nested project instructions that the paths this
-   *  step touched activate (M3 item 3).
-   *
-   *  As a MESSAGE, never a system-prompt edit. prompt-assembly.ts is byte-stable
-   *  by construction and a mid-session change would discard the KV cache prefix
-   *  every local model reuses, turning a cheap follow-up turn into a full
-   *  re-prefill of the entire conversation.
-   *
-   *  ONCE per trigger per session. A rule re-sent after every Read of a matching
-   *  file would dominate the conversation and blow the window it was sized
-   *  against — and repetition does not make a model follow a rule harder.
-   *
-   *  Bash is skipped: its permission subject is a command string, not a path,
-   *  so feeding it to a path matcher would be a category error.
-   */
-  private injectPathTriggers(calls: ToolCall[]): void {
-    const index = this.opts.triggers;
-    if (!index) return;
-    for (const call of calls) {
-      // Same reasoning as the path guard: matching a rule glob against a bash
-      // command or a skill id is a category error, not a near-miss.
-      if (NON_PATH_SUBJECT_TOOLS.has(call.toolName)) continue;
-      const tool = this.toolByName.get(call.toolName);
-      const subject = tool?.permissionSubject(call.input as any);
-      if (!subject) continue;
-      for (const t of index.match(subject)) {
-        if (this.injectedTriggerIds.has(t.id)) continue;
-        this.injectedTriggerIds.add(t.id);
-        // t.source is the rule's path relative to cwd — inside the project, so the
-        // model can actually read it when the notice tells it to.
-        const fitted = fitInjection(t.body, this.profile.injectionBudgetTokens, t.source);
+  /** Project guidance is history, never a system-prompt edit (KV-cache prefix).
+   * Selection, fit and retained-context dedupe are shared with the pre-write
+   * barrier in rule-delivery.ts; Bash/Task/Skill/web have no file subjects. */
+  private pendingPathTriggers(calls: ToolCall[]): PathTrigger[] {
+    return pendingRules(calls, this.opts.triggers, this.toolByName,
+      this.profile.injectionBudgetTokens, NON_PATH_SUBJECT_TOOLS,
+      this.injectedTriggerIds, this.retainedTriggerMessages);
+  }
+
+  private appendPathTriggers(triggers: readonly PathTrigger[], bounded = false): void {
+    deliverRules(triggers, this.profile.injectionBudgetTokens, bounded,
+      this.injectedTriggerIds, this.retainedTriggerMessages, content => {
         this.historyOrigins.push(null);
-        this.history.push(markAppGenerated({
-          role: 'user',
-          content: `<project-rule source="${t.source}">\n${fitted.text}\n</project-rule>`,
-        }));
-        this.capture.mutated();   // injected rule text, backed by no event
-      }
-    }
+        this.history.push(markAppGenerated({ role: 'user', content }));
+        this.capture.mutated();
+      });
+  }
+
+  private injectPathTriggers(calls: ToolCall[]): void {
+    this.appendPathTriggers(this.pendingPathTriggers(calls));
   }
 
   /** Add or remove the Skill tool to match the CURRENT profile (M3 item 1).
-   *
    *  Skill is the one conditional tool: its description lists every offered
    *  skill's id and one-liner, and that rides the schema on every turn, so a
    *  small window cannot afford it. Those sessions still reach skills through
@@ -1930,6 +1943,7 @@ export class HarnessSession extends EventEmitter {
     // automatically at the trigger instead of only on an explicit /clear.
     this.shownImages.clear();
     this.history = replacement;
+    this.reconcileTriggerVisibility();
     this.historyOrigins = [null, ...this.historyOrigins.slice(cut)];
     this.reprojectContextUsed(estimateBefore);
     // Existing frozen event (no new type). `summary` is the canonical field the
@@ -1957,9 +1971,7 @@ export class HarnessSession extends EventEmitter {
     return true;
   }
 
-  /** Make a pruned copy of the history the live history, with every
-   *  bookkeeping consequence a prune has. Shared by the 'prune' decision and
-   *  the summary commit above. */
+  /** Adopt a pruned history and its bookkeeping consequences. */
   private commitPrune(pruned: ModelMessage[]): void {
     const before = this.history;
     // Prune can collapse an image 'content' output to text (compaction.ts)
@@ -1978,7 +1990,10 @@ export class HarnessSession extends EventEmitter {
     // tagging those as a transformation would bump the revision and invalidate a
     // published checkpoint for a history that never moved. Only a changed
     // message means "tool output no longer equals its event's text".
-    if (pruned.some((m, i) => m !== before[i])) { this.capture.markPruned(); this.prefixMoved = true; }
+    if (pruned.some((m, i) => m !== before[i]) || pruned.length !== before.length) {
+      this.reconcileTriggerVisibility();
+      this.capture.markPruned(); this.prefixMoved = true;
+    }
     if (countImageOutputs(pruned) < imagesBefore) this.shownImages.clear();
     // G-11: prune may have sliced an old Read result down to 2,000 chars (and
     // a summary discards it outright) — forget what was served so Read never
@@ -2160,6 +2175,7 @@ export class HarnessSession extends EventEmitter {
       this.shownImages.clear();
       this.servedReads.clear(); this.servedSkills.clear(); // same reason as maybeCompact
       this.history = replacement;
+      this.reconcileTriggerVisibility();
       this.historyOrigins = [null, ...this.historyOrigins.slice(cut)];
       this.reprojectContextUsed(estimateBeforeSummary);
       this.emit('transcript-event', committed);
@@ -2191,6 +2207,7 @@ export class HarnessSession extends EventEmitter {
     if (this.abort) return { ok: false, reason: 'turn-in-flight' };
     const estimateBefore = this.rewriteBaseline();
     this.history = [];
+    this.reconcileTriggerVisibility();
     this.historyOrigins = [];
     // What the model still holds after the barrier: the system prompt and the
     // tool schemas, not the conversation. Without this the status bar kept
@@ -2387,22 +2404,10 @@ export class HarnessSession extends EventEmitter {
     }), [], true);
   }
 
-  /** `attachments` are absolute paths to files the user attached in the composer.
-   *  Image ones become image parts on the user message when the model can see
-   *  them; everything else is ignored here and reaches the model as the path
-   *  text the composer already put in `text`.
-   *
-   *  WHY images ride ALONGSIDE the text rather than replacing it: `text` is the
-   *  dedup key. The renderer's optimistic bubble is confirmed by an EXACT match
-   *  against the `user-message` event's text (see native-send.ts), so the string
-   *  must stay byte-identical to what the composer built. The paths therefore
-   *  remain in the text AND the pixels are attached — the model gets both, and
-   *  the bubble still resolves. */
+  /** WHY: keep composer text byte-identical for optimistic bubble dedup;
+   * image parts ride alongside it, and paths persist for replay. */
   async send(text: string, attachments: string[] = []): Promise<void> {
-    // Attachments ride the persisted event (paths only — events carry no binary)
-    // so rebuildHistory can restore the pixels on resume. Emitted only when
-    // present to keep the no-attachment event byte-identical to before (#290
-    // follow-up fix 2).
+    // Persist paths for image replay; keep no-attachment event shape unchanged.
     return this.beginTurn(text, () => this.emitEvent('user-message', attachments.length ? { text, attachments } : { text }), attachments);
   }
 
@@ -2546,34 +2551,29 @@ export class HarnessSession extends EventEmitter {
     return { text, images };
   }
 
-  /** The turn driver. `emit` names how this turn ENTERED the conversation — a
-   *  typed message, or a skill invocation — which is the only thing that differs
-   *  between send() and runSkill(). Everything downstream is identical. */
+  /** WHY: busy input shares the opening send's durable event/image/capture path. */
+  private acceptUserMessage(text: string, attachments: string[], emit: () => string, appGenerated = false): void {
+    appendUserHistory(text, attachments, emit, appGenerated, paths => this.imagePartsFor(paths),
+      markAppGenerated, this.history, this.historyOrigins, uuid => this.capture.recordEvent(uuid));
+  }
+
+  /** Restore an unaccepted ready head before the host's next drain. */
+  private acceptReadyBusyMessage(): boolean {
+    return claimBusyMessage(this.opts.takeReadyBusyMessage, item => this.acceptUserMessage(
+      item.text, item.attachments, () => this.emitEvent('user-message',
+        item.attachments.length ? { text: item.text, attachments: item.attachments } : { text: item.text })));
+  }
+
+  /** `emit` distinguishes user sends from skill invocation; the driver is shared. */
   private async beginTurn(text: string, emit: () => string, attachments: string[] = [], appGenerated = false): Promise<void> {
-    // Re-entrancy guard: a non-null abort means a turn is already streaming.
-    // Throw loudly rather than corrupt the single-slot turn state (see the
-    // class-level CONCURRENCY PRECONDITION note).
+    // Never overwrite the active turn's single-slot state.
     if (this.abort) {
       throw new Error('HarnessSession: a turn is already in flight — callers must serialize send()/runSkill() per session.');
     }
     this.interrupted = false;
     this._currentUsageProgress = null;
     this.bashOutputReadsThisTurn = 0;   // G-1 (D7): the cap is per TURN, notice turns included
-    // The uuid of the user-message / skill-invoked event this turn entered on —
-    // recorded at the history push below, which is the mutation it accounts for.
-    const enteringEventUuid = emit();
-    // A plain string when there are no image parts — that is the byte-identical
-    // shape every existing test and rebuildHistory() already assert on, so the
-    // no-attachment path must not become a one-element parts array.
-    const imageParts = this.imagePartsFor(attachments);
-    const enteringMessage = (imageParts.length
-      ? { role: 'user', content: [{ type: 'text', text }, ...imageParts] } as ModelMessage
-      : { role: 'user', content: text } as ModelMessage);
-    this.history.push(appGenerated ? markAppGenerated(enteringMessage) : enteringMessage);
-    this.historyOrigins.push([enteringEventUuid]);
-    // Both shapes descend from the SAME event — its text, and (for the image
-    // parts) the attachment paths it carries.
-    this.capture.recordEvent(enteringEventUuid);
+    this.acceptUserMessage(text, attachments, emit, appGenerated);
     this.abort = new AbortController();
     this.turnEverParked = false;   // cleared at the start of every turn — see field WHY
     this.lastStepPromptTokens = 0;   // a new turn always begins with a full prefill
@@ -2662,6 +2662,14 @@ export class HarnessSession extends EventEmitter {
       ? undefined
       : this.opts.harness.limits?.maxSteps;
     let stepsSinceApproval = 0;
+    // WHY (Destin, 2026-09-28 PR-review deck Q-2): a message you send mid-task
+    // is you taking part, so the "keep going?" count starts over whenever one
+    // joins the running turn — as it did when every message began a new turn.
+    const absorbReadyMessage = (): boolean => {
+      if (!this.acceptReadyBusyMessage()) return false;
+      stepsSinceApproval = 0;
+      return true;
+    };
     // Consecutive contentless steps (empty-step recovery, spec 2026-08-21).
     // The single silent retry is allowed only at count 1; any real step resets
     // it, so an all-empty turn costs exactly two provider calls.
@@ -2754,8 +2762,8 @@ export class HarnessSession extends EventEmitter {
         this.overflowOutputStarted = false;
         while (true) {
           try {
-            step = await withChatGptRequest(this.opts.sessionId, this.opts.isSpecialistChild ? 'specialist' : 'chat', () => this.withRetry(() =>
-              this.consumeStep(model, aiTools, (t) => { partialAssistantText = t; }),
+            step = await withChatGptRequest(this.opts.sessionId, this.opts.isSpecialistChild ? 'specialist' : 'chat', () => this.withRetry((registerRetraction) =>
+              this.consumeStep(model, aiTools, (t) => { partialAssistantText = t; }, registerRetraction),
             ));
             break;
           } catch (err) {
@@ -2949,18 +2957,20 @@ export class HarnessSession extends EventEmitter {
             });
             continue turnLoop;
           }
-          // Second consecutive empty step: an orderly completion with an honest
-          // reason. Set HERE, not in mapStopReason — 'empty_response' is a
-          // loop-level judgment about two steps, not a mapping of one
-          // provider finishReason.
+          // WHY: second empty is a final boundary; new input re-arms recovery.
+          if (absorbReadyMessage()) {
+            consecutiveEmptySteps = 0;
+            continue turnLoop;
+          }
           stopReason = 'empty_response';
           break;
         }
         consecutiveEmptySteps = 0;   // any real step re-arms the single retry
 
         if (step.toolCalls.length === 0) {
-          // Natural stop. finishReason 'length' (truncated output, including a
-          // truncated tool-call) collapses to 'max_tokens' via mapStopReason.
+          // WHY: no await before completion; late heads use the host drain.
+          if (absorbReadyMessage()) continue turnLoop;
+          // Natural stop; mapStopReason handles truncated output as max_tokens.
           stopReason = mapStopReason(step.finishReason);
           break;
         }
@@ -3002,50 +3012,78 @@ export class HarnessSession extends EventEmitter {
         const recordResult = (uuid: string): void => { this.capture.recordEvent(uuid); resultOrigins.push(uuid); };
         for (let i = 0; i < step.toolCalls.length; i++) {
           const call = step.toolCalls[i];
-          const payload = await this.runOneTool(call, recentCalls);   // NEVER throws
-          if (payload === 'interrupted') {
-            // Interrupt during a permission ask. Back-fill canceled tool-results
-            // for THIS call AND every remaining un-executed call in the step
-            // (earlier calls already have real results in resultParts + emitted
-            // events). Every call's tool-use event was already emitted up front,
-            // so each still gets a matching tool-result event here. Without this,
-            // the assistant(tool-call) message has no matching tool message — a
-            // dangling tool_call that provider APIs hard-reject (HTTP 400) on the
-            // NEXT send, bricking the session (the bad message persists in history
-            // across sends). CC does the same canceled back-fill. The synthesized
-            // tool-result events keep the persisted transcript in agreement with
-            // the model-facing history.
-            for (let j = i; j < step.toolCalls.length; j++) {
-              const rem = step.toolCalls[j];
-              recordResult(
-                this.emitEvent('tool-result', { toolUseId: rem.toolCallId, toolName: rem.toolName, toolResult: CANCELED_TOOL_TEXT, isError: true }));
-              resultParts.push(this.toolResultPart(rem, CANCELED_TOOL_TEXT));
+          if ((call.toolName === 'Write' || call.toolName === 'Edit') &&
+              !this.interrupted && !this.abort.signal.aborted) {
+            const newlyRelevant = this.pendingPathTriggers([call]);
+            if (newlyRelevant.length) {
+              // WHY (Destin, 2026-09-28 PR-review deck Q-5): show the new rules
+              // ONCE, then let the model decide again — even on a small model
+              // whose window only fits a shortened version. A shortened rule
+              // ends with "Read <file> for the rest", so the model can fetch the
+              // remainder itself. The earlier design refused the change outright
+              // when rules could not fit, which silently ended the turn and left
+              // small models unable to edit files in rule-heavy projects.
+              supersedeToolGroup(step.toolCalls, i, resultParts, resultOrigins,
+                data => this.emitEvent('tool-result', data), (rem, text) => this.toolResultPart(rem, text),
+                uuid => this.capture.recordEvent(uuid), (parts, origins) => {
+                  this.history.push({ role: 'tool', content: parts });
+                  this.historyOrigins.push(origins);
+                }, calls => this.injectPathTriggers(calls),
+                'Not run: newly applicable project instructions need review before changing this file.',
+                () => {
+                  if (!this.interrupted && !this.abort?.signal.aborted)
+                    this.appendPathTriggers(newlyRelevant.filter(t => !this.injectedTriggerIds.has(t.id)), true);
+                });
+              if (this.interrupted || this.abort.signal.aborted) {
+                this.emitEvent('user-interrupt', abandonedTurnUsage());
+                return;
+              }
+              absorbReadyMessage(); // ready human correction precedes replan
+              continue turnLoop;
             }
+          }
+          let payload: ToolResultPayload | 'interrupted' | EndTurnResult;
+          try {
+            payload = await this.runOneTool(call, recentCalls);
+          } catch (err) {
+            if (!(err instanceof PermissionCallbackFailure)) throw err;
+            // WHY: the assistant already announced every call. A failed permission
+            // lookup is neither approval nor a human refusal; complete the accepted
+            // group before the outer error path settles the turn.
+            const failure = `Permission check failed: ${describeProviderError(err.cause)}`;
+            const remaining = finalizeRemainingCalls(step.toolCalls, i,
+              j => j === i ? failure : 'Not run: an earlier permission check failed.',
+              (rem, text) => this.emitEvent('tool-result', {
+                toolUseId: rem.toolCallId, toolName: rem.toolName, toolResult: text, isError: true,
+              }), (rem, text) => this.toolResultPart(rem, text));
+            for (const origin of remaining.origins) recordResult(origin);
+            resultParts.push(...remaining.parts);
+            this.history.push({ role: 'tool', content: resultParts });
+            this.historyOrigins.push([...resultOrigins]);
+            throw err;
+          }
+          if (payload === 'interrupted') {
+            // WHY: uses were emitted up front; back-fill canceled results for
+            // this and all unstarted siblings or the next send gets a provider 400.
+            const canceled = finalizeRemainingCalls(step.toolCalls, i, () => CANCELED_TOOL_TEXT,
+              (rem, text) => this.emitEvent('tool-result', { toolUseId: rem.toolCallId, toolName: rem.toolName, toolResult: text, isError: true }),
+              (rem, text) => this.toolResultPart(rem, text));
+            canceled.origins.forEach(recordResult);
+            resultParts.push(...canceled.parts);
             this.history.push({ role: 'tool', content: resultParts });
             this.historyOrigins.push([...resultOrigins]);
             this.emitEvent('user-interrupt', abandonedTurnUsage());
             return;
           }
-          // The user dismissed a question → end the turn ORDERLY. Record THIS
-          // call's real result, then mark every remaining un-executed call in the
-          // step as not-run (same dangling-tool_call hazard the interrupt branch
-          // above guards against). `turn-complete` rather than `user-interrupt`
-          // on purpose: usage should be reported, and anything the user queued
-          // while the turn ran should drain — typing during the turn IS taking
-          // over. The max_steps gate below is the existing precedent for a
-          // driver-decided orderly stop.
+          // WHY: a dismissed question ends the turn orderly with its real result
+          // and not-run siblings; turn-complete reports usage and drains the queue.
           if ('kind' in payload) {
-            recordResult(this.emitEvent('tool-result', {
-              toolUseId: call.toolCallId, toolName: call.toolName,
-              toolResult: payload.payload.text, isError: true,
-            }));
-            resultParts.push(this.toolResultPart(call, payload.payload.text));
-            for (let j = i + 1; j < step.toolCalls.length; j++) {
-              const rem = step.toolCalls[j];
-              recordResult(
-                this.emitEvent('tool-result', { toolUseId: rem.toolCallId, toolName: rem.toolName, toolResult: NOT_RUN_TOOL_TEXT, isError: true }));
-              resultParts.push(this.toolResultPart(rem, NOT_RUN_TOOL_TEXT));
-            }
+            const dismissed = finalizeRemainingCalls(step.toolCalls, i,
+              j => j === i ? payload.payload.text : NOT_RUN_TOOL_TEXT,
+              (rem, text) => this.emitEvent('tool-result', { toolUseId: rem.toolCallId, toolName: rem.toolName, toolResult: text, isError: true }),
+              (rem, text) => this.toolResultPart(rem, text));
+            dismissed.origins.forEach(recordResult);
+            resultParts.push(...dismissed.parts);
             this.history.push({ role: 'tool', content: resultParts });
             this.historyOrigins.push([...resultOrigins]);
             stopReason = DISMISSED_STOP_REASON;
@@ -3075,7 +3113,10 @@ export class HarnessSession extends EventEmitter {
         // just learned, and before it decides the next step.
         this.injectPathTriggers(step.toolCalls);
 
-        stepsSinceApproval++;
+        // WHY (Destin, 2026-09-28 PR-review deck Q-1): a message sent mid-task is
+        // read once the whole batch of actions the assistant already chose has
+        // run — never by discarding planned actions — then it replans with it.
+        if (this.interrupted || this.abort.signal.aborted || !absorbReadyMessage()) stepsSinceApproval++;
         // Budget gate (spec §2.4) — surfaces as a permission ASK, not a new
         // event. Allow resets the counter and continues; anything else ends the
         // turn with stopReason 'max_steps'; canceled is an interrupt.
@@ -3217,9 +3258,7 @@ export class HarnessSession extends EventEmitter {
         },
       });
     } catch (err: any) {
-      // v0's catch, unchanged: push any in-flight partial, then split
-      // interrupt vs error. withRetry has already exhausted retries for a
-      // transient provider error before it lands here.
+      // Push in-flight partials; provider retries have already exhausted.
       // The attempt that produced this partial threw, so the loop never saw its
       // StepResult — this is the one acceptance decision made outside it.
       // trim(): the same emptiness rule as every other assistant push (and as
@@ -3232,12 +3271,14 @@ export class HarnessSession extends EventEmitter {
       } else if (this.lastAttempt !== undefined) {
         this.capture.abandonAttempt(this.lastAttempt);
       }
-      if (this.interrupted || err?.name === 'AbortError' || this.abort?.signal.aborted) {
+      // WHY: a permission callback's own AbortError is not proof the user stopped
+      // the turn. Keep the tag until here while reporting its original detail.
+      const failure = err instanceof PermissionCallbackFailure ? err.cause : err;
+      if (this.interrupted || this.abort?.signal.aborted || (!(err instanceof PermissionCallbackFailure) && err?.name === 'AbortError')) {
         this.emitEvent('user-interrupt', abandonedTurnUsage());
       } else {
-        // An errored turn spent the same real tokens an interrupted one did.
-        const errorCode = classifyProviderError(err);
-        this.emitEvent('session-error', { text: describeProviderError(err), ...(errorCode ? { errorCode } : {}), ...abandonedTurnUsage() });
+        const errorCode = classifyProviderError(failure);
+        this.emitEvent('session-error', { text: describeProviderError(failure), ...(errorCode ? { errorCode } : {}), ...abandonedTurnUsage() });
       }
     } finally {
       this._currentUsageProgress = null;
@@ -3254,6 +3295,7 @@ export class HarnessSession extends EventEmitter {
     model: LanguageModel,
     aiTools: Record<string, any>,
     reportPartial: (text: string) => void,
+    registerRetraction: (retract: () => void) => void,
   ): Promise<StepResult> {
     // Attempt 0 stalls with nothing streamed → runStreamOnce returns
     // STALL_RETRY → we re-run. That AUTOMATIC retry is available once per step:
@@ -3270,7 +3312,7 @@ export class HarnessSession extends EventEmitter {
     // The loop is no longer bounded at two iterations — a MANUAL Retry also
     // returns STALL_RETRY, and the user may press it as often as they like.
     for (let attempt = 0; ; attempt++) {
-      const outcome = await this.runStreamOnce(model, aiTools, reportPartial, attempt === 0);
+      const outcome = await this.runStreamOnce(model, aiTools, reportPartial, attempt === 0, registerRetraction);
       if (outcome !== STALL_RETRY) return outcome;
       // Re-running after EITHER a silent stall (nothing streamed) or a manual
       // Retry (content streamed, then erased via dropPart): clear the on-screen
@@ -3289,6 +3331,7 @@ export class HarnessSession extends EventEmitter {
     aiTools: Record<string, any>,
     reportPartial: (text: string) => void,
     isFirstAttempt: boolean,
+    registerRetraction: (retract: () => void) => void,
   ): Promise<StepResult | typeof STALL_RETRY> {
     // One capture attempt per stream attempt. Its delta uuids stay provisional
     // until the turn loop (or send()'s catch) says what became of the step.
@@ -3525,6 +3568,22 @@ export class HarnessSession extends EventEmitter {
     // rather than appended to.
     const emittedPartIds = new Set<string>();
     const textPartIds = new Set<string>();
+    // WHY: only the retry decision may erase an attempt. Register its LOCAL
+    // output before consuming; an exhausted/non-transient error keeps its honest
+    // partial, while a replay withdraws all four surfaces before the next request.
+    const retractAttempt = () => {
+      reportPartial('');
+      for (const [prepId, entry] of preparing) {
+        this.emitEvent('assistant-thinking', {
+          toolPreparing: { toolCallId: prepId, toolName: entry.toolName, chars: entry.chars, cleared: true },
+        });
+      }
+      if (emittedPartIds.size > 0) {
+        this.emitEvent('assistant-thinking', { dropPart: { partIds: [...emittedPartIds] } });
+      }
+      this.capture.abandonAttempt(attempt);
+    };
+    registerRetraction(retractAttempt);
 
     try {
       while (true) {
@@ -3548,28 +3607,7 @@ export class HarnessSession extends EventEmitter {
           void Promise.resolve(result.usage).catch(() => {});
           void Promise.resolve(result.finishReason).catch(() => {});
           this.resolveRetry = null;
-          // Retract the erased text from the model's own memory, not just the
-          // screen: partialAssistantText is reset per STEP (not per attempt), so
-          // without this, a re-run that throws before emitting anything would
-          // leave send()'s catch pushing the ABANDONED half-sentence — text the
-          // user just watched get erased via dropPart — silently back into
-          // this.history as an assistant message.
-          reportPartial('');
-          // Withdraw any preparing card: the step re-runs INSIDE the same turn,
-          // so endTurn's reaping never fires and the card would spin forever
-          // beside the one the re-run mints. (Same reason as the auto-retry path.)
-          for (const [prepId, entry] of preparing) {
-            this.emitEvent('assistant-thinking', {
-              toolPreparing: { toolCallId: prepId, toolName: entry.toolName, chars: entry.chars, cleared: true },
-            });
-          }
-          // Erase what the abandoned attempt put on screen BEFORE re-running.
-          if (emittedPartIds.size > 0) {
-            this.emitEvent('assistant-thinking', { dropPart: { partIds: [...emittedPartIds] } });
-          }
-          // The fourth place Retry erases: the model's memory, the screen and
-          // the store already forget this text, so its provenance must too.
-          this.capture.abandonAttempt(attempt);
+          retractAttempt();
           return STALL_RETRY;
         }
         if (chunk === 'stall') {
@@ -3582,15 +3620,7 @@ export class HarnessSession extends EventEmitter {
           void Promise.resolve(result.usage).catch(() => {});
           void Promise.resolve(result.finishReason).catch(() => {});
           if (!emittedAny && isFirstAttempt) {
-            // The step re-runs INSIDE the same turn, so endTurn's reaping never
-            // fires. Withdraw any preparing card explicitly or it spins for the
-            // rest of the turn while the retry mints a second card beside it.
-            for (const [prepId, entry] of preparing) {
-              this.emitEvent('assistant-thinking', {
-                toolPreparing: { toolCallId: prepId, toolName: entry.toolName, chars: entry.chars, cleared: true },
-              });
-            }
-            this.capture.abandonAttempt(attempt);   // the re-run starts this step over
+            retractAttempt();   // the re-run starts this step over
             return STALL_RETRY;
           }
           // Name the phase honestly: a model that never STARTED (prefill) has not
@@ -3851,8 +3881,9 @@ export class HarnessSession extends EventEmitter {
   }
 
   /** Run one tool call through the EXACT permission sequence (spec §2.1/§2.4):
-   *  validate → doom-loop → guards → decide → (ask) → execute. NEVER throws —
-   *  every failure mode is a tool RESULT the model can repair from, except a
+   *  validate → doom-loop → guards → decide → (ask) → execute. Permission
+   *  callbacks throw a tagged failure for the driver to finalize the group;
+   *  ordinary tool failures are RESULTS the model can repair from, except a
    *  user cancel which returns the 'interrupted' sentinel, and a dismissed
    *  question which returns EndTurnResult — both let the loop unwind. */
   private async runOneTool(call: ToolCall, recentCalls: string[]): Promise<ToolResultPayload | 'interrupted' | EndTurnResult> {
@@ -3861,24 +3892,7 @@ export class HarnessSession extends EventEmitter {
 
     // 1. Validate (zod) — invalid args are a RESULT the model repairs from, not
     //    a crash, and precede permissions (never ask about garbage).
-    let parsed = tool.inputSchema.safeParse(call.input);
-    if (!parsed.success && typeof call.input === 'string') {
-      // Weak-model hardening (Task 12, spec §3): the ai@7 SDK already parses a
-      // provider tool-call's stringified args into an object for us (see
-      // harness-sdk-toolcall-contract.test.ts), but a weak local model
-      // sometimes puts its WHOLE args object as a STRING one level further in
-      // — e.g. it emits `"{\"prompt\": ...}"` where a real object belongs. If
-      // the raw string itself JSON.parses to an object, give it ONE recovery
-      // attempt before falling back to the normal arg error — never a general
-      // coercion layer (YAGNI: one attempt, then the ordinary failure path).
-      try {
-        const recovered: unknown = JSON.parse(call.input);
-        if (recovered && typeof recovered === 'object') {
-          const reparsed = tool.inputSchema.safeParse(recovered);
-          if (reparsed.success) parsed = reparsed;
-        }
-      } catch { /* not JSON — fall through to the normal arg error below */ }
-    }
+    const parsed = parseToolArgs(tool, call.input);
     if (!parsed.success) {
       // Worded in arg-errors.ts (ledger D-2): names the unknown / missing /
       // mistyped parameter and, for an unknown one, the parameters that exist —
@@ -3910,7 +3924,7 @@ export class HarnessSession extends EventEmitter {
       recentCalls.push(sig);
       if (recentCalls.length > threshold) recentCalls.shift();
       if (recentCalls.length === threshold && recentCalls.every((s) => s === sig)) {
-        const d = await this.opts.askUser?.({ sessionId: this.opts.sessionId, toolName: 'doom_loop', toolInput: { repeated: call.toolName }, denyListed: false });
+        const d = this.opts.askUser ? await permissionCallback(() => this.opts.askUser!({ sessionId: this.opts.sessionId, toolName: 'doom_loop', toolInput: { repeated: call.toolName }, denyListed: false })) : undefined;
         if (d?.behavior === 'canceled') return 'interrupted';
         // Threshold-accurate: the doom-loop window length varies by profile (2 for
         // small local models, 3 for cloud), so quote the ACTUAL threshold, not a
@@ -3928,7 +3942,7 @@ export class HarnessSession extends EventEmitter {
     //     three times IS a doom loop and should still trip.
     if (tool.interactive) {
       if (!this.opts.askUser) return { text: `No user-interaction handler is wired for this session; ${call.toolName} cannot run. This is a configuration error.`, isError: true };
-      const d = await this.opts.askUser({ sessionId: this.opts.sessionId, toolName: call.toolName, toolInput: call.input as any, denyListed: false });
+      const d = await permissionCallback(() => this.opts.askUser!({ sessionId: this.opts.sessionId, toolName: call.toolName, toolInput: call.input as any, denyListed: false }));
       if (d.behavior === 'canceled') return 'interrupted';
       // A HUMAN dismissal ENDS THE TURN: closing the card is the user taking the
       // turn back, not permission to guess. Still a real tool result so
@@ -3994,19 +4008,37 @@ export class HarnessSession extends EventEmitter {
     //     The secret-path floor (tools/bash-secret-paths.ts) works the same way
     //     for a command that names a file the file tools refuse (~/.ssh, .env…):
     //     Bash used to read those with no card at all (Destin, 2026-09-23, option B).
+    //     The admin floor (tools/admin-command.ts, admin-password design §4)
+    //     runs FIRST and takes precedence over both: it names the more serious
+    //     consequence (full control of the computer), so a command that both
+    //     removes a folder and runs sudo shows the admin band, not the removal
+    //     one. `doas`/`su`/`pkexec`/`run0` are refused outright — no ask at
+    //     all — because pkexec/run0 would raise the DESKTOP's own polkit dialog
+    //     (a system pop-up outside the app, wording we don't control), and
+    //     doas/su have no askpass hook this app can intercept.
     const bashCtx = { cwd: this.opts.cwd, shellCwd: this.shellCwd ?? undefined, home: os.homedir() };
     const isBash = call.toolName === 'Bash' && typeof subject === 'string';
-    const rmFloor = isBash ? destructiveRmVerdict(subject, bashCtx) : null;
-    const secretFloor = isBash && !rmFloor ? secretPathVerdict(subject, bashCtx) : null;
+    const adminVerdict = isBash ? adminCommandVerdict(subject) : null;
+    if (adminVerdict?.kind === 'refuse') {
+      // Denied below every rule, same as a deny-list hit — never logs the
+      // command, only which of the four words tripped it.
+      log('INFO', 'HarnessSession', 'the admin floor refused a command outright', { sessionId: this.opts.sessionId, word: adminVerdict.word });
+      // Per-word message (review T1-4): pkexec/run0 vs doas/su fail for
+      // DIFFERENT reasons — refuseMessage states the true one for each word.
+      return { text: refuseMessage(adminVerdict.word), isError: true };
+    }
+    const isAdmin = adminVerdict?.kind === 'admin';
+    const rmFloor = isBash && !isAdmin ? destructiveRmVerdict(subject, bashCtx) : null;
+    const secretFloor = isBash && !isAdmin && !rmFloor ? secretPathVerdict(subject, bashCtx) : null;
     // The kind picks the card's wording, so it never claims more than the check knows.
-    const floorStop: FloorStop | undefined = rmFloor?.kind ?? secretFloor?.kind;
-    if (floorStop) log('INFO', 'HarnessSession', 'a floor below the permission rules forced an ask', { sessionId: this.opts.sessionId, floor: floorStop, reason: rmFloor?.reason ?? `names ${secretFloor?.path}` });
+    const floorStop: FloorStop | undefined = isAdmin ? 'admin' : (rmFloor?.kind ?? secretFloor?.kind);
+    if (floorStop) log('INFO', 'HarnessSession', 'a floor below the permission rules forced an ask', { sessionId: this.opts.sessionId, floor: floorStop, reason: isAdmin ? 'runs sudo' : (rmFloor?.reason ?? `names ${secretFloor?.path}`) });
 
     // 4. Configured decision. An external-directory path forces 'ask' regardless
     //    of rules; otherwise consult decide() (default: ask — never silent-allow).
     const configured: PermissionDecision = externalAsk
       ? { action: 'ask', denyListed: false }
-      : await (this.opts.decide?.(call.toolName, subject) ?? Promise.resolve<PermissionDecision>({ action: 'ask', denyListed: false }));
+      : await permissionCallback(() => this.opts.decide?.(call.toolName, subject) ?? Promise.resolve<PermissionDecision>({ action: 'ask', denyListed: false }));
     // denyListed: true so Full auto shows its stop band (worded per floorStop —
     // deny-list-copy.ts) like any deny-list stop, instead of silently running.
     const decision: PermissionDecision = floorStop && configured.action !== 'deny'
@@ -4033,7 +4065,7 @@ export class HarnessSession extends EventEmitter {
       // as `pattern` — threaded through so a routed CHILD ask (child-ask-
       // router.ts, which has no other way to reach it) can persist the exact
       // same rule a root session's own remember-rule listener would.
-      const d = await this.opts.askUser({ sessionId: this.opts.sessionId, toolName: call.toolName, toolInput: call.input as any, denyListed: decision.denyListed, external: externalAsk, ...(floorStop ? { floorStop } : {}), subject });
+      const d = await permissionCallback(() => this.opts.askUser!({ sessionId: this.opts.sessionId, toolName: call.toolName, toolInput: call.input as any, denyListed: decision.denyListed, external: externalAsk, ...(floorStop ? { floorStop } : {}), subject }));
       if (d.behavior === 'canceled') return 'interrupted';
       // Task 8: d.message carries specific copy for a deny that ISN'T a real
       // user decline — e.g. child-ask-router's outside-the-folder refusal for
@@ -4059,6 +4091,26 @@ export class HarnessSession extends EventEmitter {
         // any width, so nothing is emitted.
         const rule = rememberedRuleFor(call.toolName, subject, d.grantScope);
         if (rule) this.emit('remember-rule', rule);
+      }
+    }
+
+    // admin-password design §2.4/R20/§11 task 5: for a call whose admin
+    // verdict is 'admin' (visible sudo), the card above already returned
+    // allow — isAdmin also forces floorStop:'admin' (step 3b), so this ask
+    // is NEVER skipped by a remembered rule or Full Auto. Ask for the
+    // password now, BEFORE the command spawns (R20), naming the FIRST
+    // visible sudo line; Skip/Stop/session-close/quit cancels it the same
+    // way any other pending ask is canceled (it lives in the SAME broker
+    // pending map) — the call never spawns in that case.
+    if (isAdmin && isBash && this.opts.adminPasswordService) {
+      const expectedArgvLines = visibleSudoLines(subject);
+      if (expectedArgvLines.length > 0) {
+        const upFront = await this.opts.adminPasswordService.askUpFront({
+          sessionId: this.opts.sessionId,
+          toolCallId: call.toolCallId,
+          expectedArgvLines,
+        });
+        if (upFront === 'canceled') return 'interrupted';
       }
     }
 
@@ -4093,6 +4145,12 @@ export class HarnessSession extends EventEmitter {
       // NativeSessionHost.shellsFor). Spread so an unwired session leaves
       // ctx.shells genuinely absent rather than explicitly undefined.
       ...(this.opts.shells ? { shells: this.opts.shells } : {}),
+      // admin-password design §2.3/§6/§11 task 5: same spread convention —
+      // absent means Bash never registers/never gets the askpass env,
+      // exactly the pre-feature behavior.
+      ...(this.opts.runningCalls ? { runningCalls: this.opts.runningCalls } : {}),
+      ...(this.opts.adminPasswordEnv ? { adminPasswordEnv: this.opts.adminPasswordEnv } : {}),
+      ...(this.opts.adminPasswordService ? { adminPasswordService: this.opts.adminPasswordService } : {}),
       todos: this.todos,
       supportsVision: this.profile.supportsVision,
       ...(this.opts.toolServices ? { services: this.opts.toolServices } : {}),
@@ -4102,15 +4160,19 @@ export class HarnessSession extends EventEmitter {
   /** Exponential backoff for transient provider errors (429/5xx/network),
    *  honoring retry-after. Layers ON TOP of the SDK's internal retry (this is
    *  step-level resilience). Exhaustion rethrows → the session-error path. */
-  private async withRetry<T>(fn: () => Promise<T>): Promise<T> {
+  private async withRetry<T>(fn: (registerRetraction: (retract: () => void) => void) => Promise<T>): Promise<T> {
     const delays = this.retryDelays;
     for (let attempt = 0; ; attempt++) {
+      let retractAttempt: (() => void) | undefined;
       try {
-        return await fn();
+        return await fn((retract) => { retractAttempt = retract; });
       } catch (err: any) {
         const status = err?.statusCode ?? err?.status;
         const retryable = status === 429 || (status >= 500 && status < 600) || err?.code === 'ECONNRESET';
         if (!retryable || attempt >= delays.length || this.abort?.signal.aborted) throw err;
+        // WHY: retrying the whole step must first erase ONLY its failed attempt;
+        // previously a late provider error left streamed text on disk and screen.
+        retractAttempt?.();
         const ra = Number(err?.responseHeaders?.['retry-after']) * 1000;
         await new Promise((r) => setTimeout(r, Number.isFinite(ra) && ra > 0 ? ra : delays[attempt]));
       }

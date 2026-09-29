@@ -63,6 +63,9 @@ const FLOOR_NOTES: Record<FloorStop, string> = {
   'removal-unknown': "Always asks: which folder this deletes can't be known in advance",
   'secret-path': 'Always asks: this uses a file that holds passwords or keys',
   'secret-maybe': 'Always asks: this could read a file that holds passwords or keys',
+  // Admin-password design (2026-09-25): an admin command always asks, and the
+  // password card follows the Yes, so the note says so rather than surprising.
+  admin: "Always asks: this runs with full control of your computer. You'll type your password next",
 };
 
 /** Full auto's band for a floor the deny-list has no family for. */
@@ -72,10 +75,19 @@ const FLOOR_COPY: Record<FloorStop, { header: string; subline: string }> = {
   'removal-unknown': { header: HEADERS.deleting, subline: `${SUBLINE_BASE} — which folder this deletes can't be known in advance.` },
   'secret-path': { header: 'Stopped before using a secret file', subline: `${SUBLINE_BASE} — this uses a file that holds passwords or keys.` },
   'secret-maybe': { header: 'Stopped at a possible secret file', subline: `${SUBLINE_BASE} — this could read a file that holds passwords or keys.` },
+  admin: { header: HEADERS.admin, subline: `${SUBLINE_BASE} — ${CLAUSES.admin}` },
 };
 
 export function floorAskNote(floorStop: FloorStop): string {
   return FLOOR_NOTES[floorStop];
+}
+
+/** An admin command's stop band outside Full auto (admin-password design,
+ *  review R-1, 2026-09-26: "should match push/deletion prompt"). Same header as
+ *  Full auto's; the subline drops "Full auto still stops here", which would be
+ *  false in Ask first / Auto-edit. */
+export function adminStopCopy(): { header: string; subline: string } {
+  return { header: HEADERS.admin, subline: `This always asks — ${CLAUSES.admin}` };
 }
 
 export function fullAutoStopCopy(command: string | undefined, floorStop?: FloorStop): { header: string; subline: string } {

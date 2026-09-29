@@ -65,6 +65,25 @@ describe('WebFetch', () => {
       expect({ name: WebFetchTool.name, description: WebFetchTool.description }).toEqual(metadata);
     } finally { vi.unstubAllEnvs(); }
   });
+  it('settles a user Stop during pending DNS without dispatching HTTP', async () => {
+    const controller = new AbortController();
+    let entered!: () => void;
+    let release!: (value: Awaited<ReturnType<typeof publicLookup>>) => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const dns = new Promise<Awaited<ReturnType<typeof publicLookup>>>(resolve => { release = resolve; });
+    const fetchMock = vi.fn(async () => html('not reached'));
+    __setWebFetchTestHooks({ lookup: () => { entered(); return dns; }, fetchImpl: fetchMock });
+    const work = WebFetchTool.execute({ url: 'https://pending.example/' } as any, { ...ctx(), signal: controller.signal });
+    try {
+      await started;
+      controller.abort();
+      await new Promise<void>(resolve => setImmediate(resolve));
+      const result = await Promise.race([work, Promise.resolve(null)]);
+      expect(result).toMatchObject({ isError: true });
+      expect(result?.text).toMatch(/canceled/i);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally { release(await publicLookup()); await work; }
+  });
   it('extracts an article to markdown', async () => {
     __setWebFetchTestHooks({ lookup: publicLookup, fetchImpl: async () => html(
       '<html><head><title>Docs</title></head><body><nav>junk nav</nav><article><h1>API Guide</h1><p>' + 'Real content. '.repeat(40) + '</p></article></body></html>',

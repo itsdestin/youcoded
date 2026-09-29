@@ -1026,6 +1026,27 @@ describe('session:create native resume refusals', () => {
       } finally { fs.rmSync(file, { force: true }); }
     });
 
+    // 2026-09-27: the fallback branch (no usable cwd, no record) used to call
+    // create() whenever a binding was given — appending a SECOND header to a file
+    // that exists but gave no readable header, and starting with no memory.
+    it('the fallback branch refuses an existing unreadable transcript instead of writing a second header', async () => {
+      const folder = path.join(tmpHome, '.youcoded', 'sessions', nativeStoreSlug(tmpHome));
+      fs.mkdirSync(folder, { recursive: true });
+      const file = path.join(folder, `${RESUME_ID}.jsonl`);
+      fs.writeFileSync(file, '');
+      const { handler } = setup({
+        createSession: vi.fn(() => ({ id: RESUME_ID, cwd: tmpHome, status: 'active', provider: 'native' })),
+      });
+      try {
+        await expect(handler('session:create')(
+          { sender: { id: 1 } },
+          { provider: 'native', resumeSessionId: RESUME_ID, cwd: '/nonexistent-cwd', name: 'Resuming…', skipPermissions: false,
+            binding: { providerId: 'openrouter', modelId: 'm' } },
+        )).rejects.toThrow('saved data could not be read');
+        expect(fs.readFileSync(file, 'utf8')).toBe('');   // nothing appended
+      } finally { fs.rmSync(file, { force: true }); }
+    });
+
     it("refuses with the 'saved data is missing' message when there is no record and no binding", async () => {
       const { handler } = setup({
         createSession: vi.fn(() => ({ id: RESUME_ID, name: 'Resuming…', cwd: '/tmp', status: 'active', provider: 'native' })),

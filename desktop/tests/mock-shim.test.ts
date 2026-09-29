@@ -23,6 +23,38 @@ describe('channels', () => {
     createMockShim(createStore(scenario)) as any;
 
   describe('workbench channels', () => {
+    it('answers the seeded native question request once and emits its distinct tool result', async () => {
+      vi.stubGlobal('location', { search: '?seed=bubbles-questions-native' });
+      try {
+        const c = shim();
+        const events: any[] = [];
+        c.on.transcriptEvent((e: any) => events.push(e));
+        const updatedInput = { orderedAnswers: [{ answer: 'Blue', note: 'lighter' }, { answer: 'teal trim' }] };
+        expect(await c.session.respondToPermission('native-d4-visual', { decision: { behavior: 'allow', updatedInput } })).toBe(true);
+        expect(events.filter(e => e.type === 'tool-result')).toEqual([expect.objectContaining({
+          sessionId: 'wb-2', data: expect.objectContaining({ toolUseId: 'd4-native-ask', isError: false,
+            toolResult: expect.stringContaining('teal trim') }),
+        })]);
+        expect(events[0].data.toolResult).toContain('Blue');
+        expect(events[0].data.toolResult).toContain('lighter');
+        expect(events.map(e => e.type)).toEqual(['tool-result', 'turn-complete']);
+        expect(await c.session.respondToPermission('native-d4-visual', { decision: { behavior: 'allow', updatedInput } })).toBe(false);
+      } finally { vi.unstubAllGlobals(); }
+    });
+
+    it('dismisses the seeded native question once through the same fixture response', async () => {
+      vi.stubGlobal('location', { search: '?seed=bubbles-questions-native' });
+      try {
+        const c = shim();
+        const events: any[] = [];
+        c.on.transcriptEvent((e: any) => events.push(e));
+        expect(await c.session.respondToPermission('native-d4-visual', { decision: { behavior: 'deny' } })).toBe(true);
+        expect(events.map(e => e.type)).toEqual(['tool-result', 'turn-complete']);
+        expect(events[0].data.isError).toBe(true);
+        expect(events[1].data.stopReason).toBe('question_dismissed');
+      } finally { vi.unstubAllGlobals(); }
+    });
+
     it('session.browse returns the seeded past sessions', async () => {
       expect((await shim().session.browse()).length).toBeGreaterThan(0);
     });

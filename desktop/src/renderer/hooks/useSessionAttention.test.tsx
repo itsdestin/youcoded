@@ -53,6 +53,31 @@ describe('useSessionAttention', () => {
     expect(result.current.attention.get('s1')?.awaitingApproval).toBe(true);
   });
 
+  it('flips to red + awaitingApproval when a password request lands on a running Bash call', () => {
+    // Bug (Destin, real-machine dogfood): the session read as still working
+    // while the password card waited — nothing marked it as needing input.
+    // PASSWORD_REQUEST flips the tool's status to 'awaiting-approval'
+    // (chat-reducer.ts), the SAME field this hook already reads generically
+    // for a permission ask — no password-specific branch needed here.
+    const { result } = renderHook(useHarness, { wrapper: Providers });
+    act(() => { result.current.dispatch({ type: 'SESSION_INIT', sessionId: 's1' }); });
+    act(() => {
+      result.current.dispatch({
+        type: 'TRANSCRIPT_TOOL_USE', sessionId: 's1', uuid: 'u1', toolUseId: 'bash-1',
+        toolName: 'Bash', toolInput: { command: 'sudo apt update' },
+      });
+    });
+    expect(result.current.attention.get('s1')?.status).toBe('green'); // running, no ask yet
+    act(() => {
+      result.current.dispatch({
+        type: 'PASSWORD_REQUEST', sessionId: 's1', requestId: 'req-1', toolUseId: 'bash-1',
+        command: 'sudo apt update',
+      });
+    });
+    expect(result.current.attention.get('s1')?.status).toBe('red');
+    expect(result.current.attention.get('s1')?.awaitingApproval).toBe(true);
+  });
+
   it('keeps Map IDENTITY stable when a dispatch changes no triple (the perf contract)', () => {
     const { result } = renderHook(useHarness, { wrapper: Providers });
     act(() => { result.current.dispatch({ type: 'SESSION_INIT', sessionId: 's1' }); });

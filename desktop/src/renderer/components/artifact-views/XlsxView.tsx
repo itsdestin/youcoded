@@ -7,6 +7,11 @@ import {
 } from './exceljs-cell';
 import { evalFormula, type CellValue } from './xlsx-formula';
 // Theme-tinted "paper" constants shared with CsvView — see sheet-theme.ts.
+// Doc comments (Destin, chat follow-up: Excel comments same as Word): cell
+// comments share the markdown/Word comment layout; each <td> carries its
+// address in data-cell so the comment's cell can be found and marked.
+import { onSheetReveal } from '../comments/sheet-reveal';
+import { CommentableDocument } from '../comments/CommentableDocument';
 import { PAPER, GUTTER_BG, FBAR_BG, TAB_BG, GRID, GUTTER_FG, SEL, NOTE_FG, NOTE_BG, largeSheetNote } from './sheet-theme';
 
 // Safety caps — agent sheets are small, but guard against a pathological file
@@ -133,17 +138,29 @@ function buildSheet(ws: any): SheetVM {
   return { name: ws.name || 'Sheet', colCount, colWidths, rows, byKey, truncated, rowsTruncated, colsTruncated };
 }
 
-export function XlsxView({ absolutePath }: ArtifactViewProps) {
+export function XlsxView({ absolutePath, path, commentsMode, onOpenComments, focusThreadId, projectRoot }: ArtifactViewProps) {
   // BinaryContent owns loading/error for the byte read and remounts the inner
   // component per file, so sheets/selection/parse errors reset on switch.
   return (
     <BinaryContent absolutePath={absolutePath} noun="spreadsheet">
-      {(bytes) => <XlsxSheets bytes={bytes} />}
+      {(bytes) => (
+        <CommentableDocument
+          path={path}
+          commentsMode={commentsMode}
+          onOpenComments={onOpenComments}
+          focusThreadId={focusThreadId}
+          projectRoot={projectRoot}
+          source="sheet"
+          fill
+        >
+          <XlsxSheets bytes={bytes} path={path} />
+        </CommentableDocument>
+      )}
     </BinaryContent>
   );
 }
 
-function XlsxSheets({ bytes }: { bytes: Uint8Array }) {
+function XlsxSheets({ bytes, path }: { bytes: Uint8Array; path: string }) {
   const [sheets, setSheets] = useState<SheetVM[] | null>(null);
   const [active, setActive] = useState(0);
   const [sel, setSel] = useState<{ r: number; c: number } | null>(null);
@@ -171,6 +188,13 @@ function XlsxSheets({ bytes }: { bytes: Uint8Array }) {
     })();
     return () => { cancelled = true; };
   }, [bytes]);
+
+  // A comment on another tab (its card clicked, or its chip) asks for that
+  // tab to be shown so its cell can be found — comments/sheet-reveal.ts.
+  useEffect(() => onSheetReveal(path, (name) => {
+    const i = sheets?.findIndex((s) => s.name === name) ?? -1;
+    if (i >= 0) { setActive(i); setSel(null); }
+  }), [path, sheets]);
 
   const sheet = sheets?.[active];
   // Formula bar contents for the selected cell: its formula if any, else value.
@@ -200,8 +224,11 @@ function XlsxSheets({ bytes }: { bytes: Uint8Array }) {
         </span>
       </div>
 
-      {/* Grid */}
-      <div className="flex-1 overflow-auto" style={{ position: 'relative' }}>
+      {/* Grid. data-sheet / data-sheet-count: which tab these cells belong to,
+          so a cell comment on another tab never lands on this tab's C4
+          (use-quote-marks.ts cellSelector), and the right-click menu can name
+          the tab when there is more than one (build-menu.ts cellEntries). */}
+      <div className="flex-1 overflow-auto" style={{ position: 'relative' }} data-sheet={sheet.name} data-sheet-count={sheets.length}>
         <table style={{ borderCollapse: 'collapse', fontSize: 13, width: 'max-content' }}>
           <colgroup>
             <col style={{ width: 38 }} />
@@ -237,7 +264,11 @@ function XlsxSheets({ bytes }: { bytes: Uint8Array }) {
                       colSpan={cell.colSpan > 1 ? cell.colSpan : undefined}
                       rowSpan={cell.rowSpan > 1 ? cell.rowSpan : undefined}
                       style={style}
+                      data-cell={`${colLetter(cell.c)}${cell.r}`}
                       onClick={() => setSel({ r: cell.r, c: cell.c })}
+                      // Right-click selects the cell too, so the formula bar
+                      // shows which cell "Add comment" is about to attach to.
+                      onContextMenu={() => setSel({ r: cell.r, c: cell.c })}
                     >
                       {cell.display}
                     </td>

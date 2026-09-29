@@ -1,0 +1,67 @@
+{
+  "fixture": "elden-ring-completionist-checklist.xlsx",
+  "path": "reports/elden-ring-completionist-checklist.xlsx",
+  "steps": [
+    {
+      "op": "add",
+      "args": {
+        "cell": "ZZ999",
+        "sheet": "Sorceries & Incantations List",
+        "text": "T21 golden-fixture parity check — does this round-trip identically on both platforms?",
+        "author": "user"
+      },
+      "result": {
+        "ok": true,
+        "id": "xt-4-ZZ999-FE55FBFD-9BF5-4D90-959E-71F78A86F978",
+        "text": "T21 golden-fixture parity check — does this round-trip identically on both platforms?"
+      }
+    },
+    {
+      "op": "reply",
+      "args": {
+        "id": "xt-4-ZZ999-FE55FBFD-9BF5-4D90-959E-71F78A86F978",
+        "text": "Confirmed on desktop — checking Android next.",
+        "author": "assistant"
+      },
+      "result": {
+        "ok": true,
+        "reply": {
+          "id": "xt-4-ZZ999-FE55FBFD-9BF5-4D90-959E-71F78A86F978-r1",
+          "author": "assistant",
+          "text": "Confirmed on desktop — checking Android next.",
+          "createdAt": 1790568918070
+        }
+      }
+    },
+    {
+      "op": "resolve",
+      "args": {
+        "id": "xt-4-ZZ999-FE55FBFD-9BF5-4D90-959E-71F78A86F978"
+      },
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "op": "reopen",
+      "args": {
+        "id": "xt-4-ZZ999-FE55FBFD-9BF5-4D90-959E-71F78A86F978"
+      },
+      "result": {
+        "ok": true
+      }
+    },
+    {
+      "op": "move",
+      "args": {
+        "id": "xt-4-ZZ999-FE55FBFD-9BF5-4D90-959E-71F78A86F978",
+        "newCell": "ZZ998",
+        "newSheet": "Remembrance List"
+      },
+      "result": {
+        "ok": true,
+        "id": "xt-10-ZZ998-FE55FBFD-9BF5-4D90-959E-71F78A86F978"
+      }
+    }
+  ]
+}

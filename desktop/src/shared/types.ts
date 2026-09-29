@@ -1,4 +1,5 @@
 import type { CatalogMeta } from './catalog-types';
+import type { ProjectInstructionSummary } from './project-instruction-summary';
 
 // 'auto' is Claude Code's classifier-backed mode (CC v2.1.83+, March 2026).
 // Sits between 'auto-accept' (only file edits + 7 safe bash) and 'bypass'
@@ -80,7 +81,23 @@ export interface PortableModelRef {
  *    'secret-maybe': it could (a glob, a find with no usable filter).
  *  The card's wording comes from this, so it never claims more than the check
  *  knows (review N11). */
-export type FloorStop = 'removal' | 'removal-if-empty' | 'removal-unknown' | 'secret-path' | 'secret-maybe';
+export type FloorStop = 'removal' | 'removal-if-empty' | 'removal-unknown' | 'secret-path' | 'secret-maybe' | 'admin';
+
+/** A running Bash call whose `sudo` is waiting for the computer password
+ *  (admin-password design, 2026-09-25). The card asks for it; the password
+ *  itself never enters this state, a transcript or the model's view. */
+export interface PasswordAsk {
+  requestId: string;
+  /** The exact admin step sudo will run, read from the sudo process itself —
+   *  never the prompt text the command supplied (a command can choose its own
+   *  prompt, e.g. "Enter your Google password"). */
+  command: string;
+  /** Set when the admin step is inside another command (an install script):
+   *  that command's name, so the card can say who is asking. */
+  via?: string;
+  /** Set after a wrong password: how many tries sudo has left. */
+  triesLeft?: number;
+}
 
 export type NativeSendResult =
   | { status: 'sent' }
@@ -275,6 +292,9 @@ export interface TranscriptPageRequest {
    */
   claudeSessionId?: string;
   projectSlug?: string;
+  /** First page only: read to EOF, not the tailer's start — a renderer rebuilt while the
+   *  session ran missed the live stream, so recent messages vanished (2026-09-27). */
+  toEnd?: boolean;
 }
 
 export interface PageCursor {
@@ -683,6 +703,11 @@ export type SubagentSegment =
       /** Remote access batch 2: the request id a resolution cleared this row of, kept so a
        *  later expiry (a parent's cancel sends Resolved, then Expired) still finds it. */
       resolvedRequestId?: string;
+      /** admin-password design §2.5/§2.6: this nested Bash call's sudo is
+       *  waiting for the computer password — mirrors ToolCallState.passwordAsk
+       *  so a specialist's own sudo nests under its Task card exactly like a
+       *  permission ask does, instead of showing at the top level. */
+      passwordAsk?: PasswordAsk;
     }
   | {
       /** A steer — "send a note" — from the user (card action) or the parent
@@ -863,6 +888,17 @@ export interface ToolCallState {
    *  → the "Always allow" button is HIDDEN (for the same reason as `external`)
    *  and Full auto's stop band names which floor. See FloorStop. */
   floorStop?: FloorStop;
+  /** Native runtime only: this command's sudo is waiting for the computer
+   *  password. Status flip (Destin, 2026-09-26 dogfood: while the password
+   *  card waits, the card looked like it was still running, with nothing
+   *  marking the session as needing input): the card's own `status` flips to
+   *  'awaiting-approval' for as long as this is set (chat-reducer.ts
+   *  PASSWORD_REQUEST/PASSWORD_RESOLVED) — exactly like a permission ask,
+   *  so it can't be mistaken for a running command. A password ask has no
+   *  `requestId` of its own on this field (only nested inside `passwordAsk`
+   *  itself), so a consumer that used to gate on `!!requestId` alone must
+   *  use `needsUserAnswer()` (specialist-cards.ts) instead. */
+  passwordAsk?: PasswordAsk;
   /** Native broker only: the session's permission mode when the ask fired.
    *  'full-auto' + denyListed swaps the generic button row for the safety-stop
    *  footer (spec 2026-08-12, M5 2b). Absent on CC asks. */
@@ -1006,9 +1042,7 @@ export interface SessionContext {
   /** The whole assembled prompt. Kept as the fallback the panel shows when a host
    *  cannot split it — showing it whole beats showing nothing. */
   systemPrompt?: string | null;
-  /** The root instruction file (CLAUDE.md / AGENTS.md) baked into the system
-   *  prompt. This is the ONE thing genuinely cut at session start. Its text is
-   *  fetched on demand. */
+  /** Legacy single-file summary (also present on Claude Code records). */
   projectInstructions?: {
     path: string;
     /** True when the file was outlined to fit the window. */
@@ -1016,6 +1050,7 @@ export interface SessionContext {
     /** Human line when truncated — "3 of 12 sections shown as headings". */
     note?: string | null;
   } | null;
+  projectInstructionFiles?: ProjectInstructionSummary[]; // Captured chain; bodies on demand.
   /** Your own instructions, the ones that apply in every project
    *  (`~/.claude/CLAUDE.md`). Claude Code reads this file; the native harness
    *  does NOT — it only walks up from the working folder — which is a real
@@ -1063,6 +1098,10 @@ export interface ShellRunView {
   /** True when the command was moved to the background at its time limit
    *  rather than started there — the card says so. */
   detached?: boolean;
+  /** Something this command started is still running with admin rights (it
+   *  passed the admin password card). The card keeps a "Running as admin"
+   *  strip with Stop in view until it ends (admin-password design, Q-still-running). */
+  admin?: boolean;
   startedAt: number;
   endedAt?: number;
   /** The last lines of output so far (the full log lives at logPath). */
@@ -1139,6 +1178,12 @@ export interface ChatMessage {
   // contains spaces (regex detection can't recover those from the joined
   // string). Live-bubble only: transcript-confirmed entries don't carry it.
   attachments?: string[];
+  // NOTE (round 2, doc-comments mockup): a "Ask about this" / "Send to
+  // assistant" reference no longer needs a field here — it rides inside
+  // `content` itself as an inline marker (compose-ref.ts) that UserMessage
+  // decodes back into the same pill the composer showed. See compose-ref.ts's
+  // own header comment for why (a round-1 `references` array + separate chip
+  // row above the composer is gone).
 }
 
 // --- Command drawer / marketplace types ---
@@ -2111,6 +2156,9 @@ export const IPC = {
   // Task 11: cancel/edit a queued-but-not-yet-sent message. invoke →
   // NativeSessionHost.removeQueued(sessionId, queueId): boolean.
   NATIVE_QUEUE_REMOVE: 'native:queue-remove',
+  // "Send now" on a waiting message: invoke → NativeSessionHost.sendQueuedNow
+  // (sessionId, queueId): boolean — stops the current task, sends this next.
+  NATIVE_QUEUE_SEND_NOW: 'native:queue-send-now',
   NATIVE_INTERRUPT: 'native:interrupt',
   // Stalled-turn Retry (fire-and-forget like interrupt above). Re-runs the ONE
   // parked step; unlike interrupt it never cascades to specialist children or
@@ -2139,6 +2187,9 @@ export const IPC = {
   NATIVE_SET_STEP_GUARD: 'native:set-step-guard',
   NATIVE_SESSIONS_LIST: 'native:sessions-list',
   NATIVE_KILL_SHELL: 'native:kill-shell',   // G-1: the Bash card's Stop button
+  // admin-password design §2.5: the card's Confirm button. Request-response —
+  // the card needs the boolean to know whether to show the ask as ended.
+  NATIVE_SUBMIT_ADMIN_PASSWORD: 'native:submit-admin-password',
   // "What the assistant was given" (2026-09-10): the session-start push carrying
   // the inventory, and the on-demand read of ONE file's text. Two channels
   // because file bodies do not belong in a push — see SessionContext above.

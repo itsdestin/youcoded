@@ -19,6 +19,35 @@ import { readFileHead } from './fs-read-head';
 import { getArcadeOps } from './arcade-handlers';
 import { getPagesService } from './pages/pages-service';
 import type { PageFetchRequest } from '../shared/pages-types';
+import {
+  listComments, addComment, replyToComment, resolveComment, reopenComment, moveComment, resolveWatchTarget,
+  editComment, editReply, deleteComment, deleteReply,
+} from './doc-comments/doc-comments-store';
+import { watchComments, unwatchComments, dropDocCommentsSubscriber } from './doc-comments/doc-comments-watcher';
+import {
+  resolveNativeFormat,
+  refuseNativeMutation,
+  listNativeComments,
+  addNativeDocxComment,
+  replyToNativeDocxComment,
+  resolveNativeDocxComment,
+  reopenNativeDocxComment,
+  moveNativeDocxComment,
+  editNativeDocxComment,
+  editNativeDocxReply,
+  deleteNativeDocxComment,
+  deleteNativeDocxReply,
+  addNativeXlsxComment,
+  replyToNativeXlsxComment,
+  resolveNativeXlsxComment,
+  reopenNativeXlsxComment,
+  moveNativeXlsxComment,
+  editNativeXlsxComment,
+  editNativeXlsxReply,
+  deleteNativeXlsxComment,
+  deleteNativeXlsxReply,
+} from './doc-comments/doc-comments-dispatch';
+import { refuseUnknownProjectRoot, isValidCommentSelectorShape, missingSelectorField } from './doc-comments/doc-comments-gate';
 // Shared cap so a local folder's description (set via a remote browser client)
 // can't drift from the synced registry's limit — same constant project-registry.ts
 // and ipc-handlers.ts use.
@@ -230,6 +259,11 @@ interface AuthenticatedClient {
   watchId?: number;
   // Distinct roots this socket watches — capped (MAX_WATCHED_ROOTS_PER_SOCKET).
   watchedRoots?: Set<string>;
+  // Document comments (T3): a SEPARATE subscriber-id space from watchId above
+  // — a different module (doc-comments-watcher.ts) with its own refcounts —
+  // so this client's docComments:watch/:unwatch calls don't share (or
+  // collide with) its artifacts:watch-project subscription.
+  docCommentsWatchId?: number;
 }
 
 // A phone shows one project's Files and one conversation's drawer at a time;
@@ -1074,7 +1108,7 @@ export class RemoteServer {
     // switch defaults to null on this unknown type, so even if a live client
     // saw it broadcast, it is a harmless no-op — nothing here required a
     // renderer change.
-    if (event.type === 'PermissionResolved') {
+    if (event.type === 'PermissionResolved' || event.type === 'PasswordResolved') {
       const requestId = (event.payload as Record<string, unknown> | undefined)?._requestId;
       const buf = this.hookBuffers.get(sessionId);
       if (buf && typeof requestId === 'string') {
@@ -1083,6 +1117,14 @@ export class RemoteServer {
       }
       return;
     }
+    // admin-password design §2.5: a PasswordRequest is never buffered at all
+    // — not even transiently. Unlike a PermissionRequest (which the buffer
+    // exists to replay to a reconnecting phone), a password ask's own
+    // re-announce heartbeat (permission-broker.ts, every 3s) plus this same
+    // live broadcast already cover a reconnect within a few seconds, and this
+    // rolling log must not hold a password ask's command line/tries any
+    // longer than the ask is actually live.
+    if (event.type === 'PasswordRequest') return;
     const buf = this.hookBuffers.get(sessionId) || [];
     buf.push(event);
     // Perf: drop the overflow IN PLACE. This was `buf = buf.slice(...)`, which
@@ -1986,6 +2028,12 @@ export class RemoteServer {
         this.respond(client.ws, type, id, removed);
         break;
       }
+      // "Send now" — same sync boolean contract as queue-remove above.
+      case 'native:queue-send-now': {
+        const sent = this.nativeRuntime ? this.nativeRuntime.nativeHost.sendQueuedNow(payload.sessionId, payload.queueId) : false;
+        this.respond(client.ws, type, id, sent);
+        break;
+      }
       case 'native:sessions-list': {
         this.respond(client.ws, type, id, this.nativeRuntime ? await this.nativeRuntime.nativeHost.listAsync() : []);
         break;
@@ -1996,6 +2044,31 @@ export class RemoteServer {
         const result = this.nativeRuntime
           ? await this.nativeRuntime.nativeHost.killShell(payload.sessionId, payload.shellId)
           : { ok: false, reason: 'not-live' };
+        this.respond(client.ws, type, id, result);
+        break;
+      }
+      case 'native:submit-admin-password': {
+        // admin-password design §2.5, contract R6: a paired phone or browser
+        // may answer the password card too — same "not gated on
+        // native.supported" posture as native:kill-shell above.
+        //
+        // WHY no logging anywhere near this case, and why `payload.password`
+        // is never assigned to a local outside this one expression:
+        // `password` is the one secret this whole feature exists to keep out
+        // of every log, transcript and store (design R13) — this case reads
+        // it once, passes it straight to submitAdminPassword(), and nothing
+        // here retains a reference to it afterward.
+        // T4-2 (review): an authenticated-but-buggy or malicious remote peer
+        // controls this payload — a non-string `password` would otherwise
+        // throw synchronously inside submit()'s `Buffer.from`, an
+        // unnecessary throw path reachable over the WS hop specifically
+        // (nothing awaits this handler's promise, so it would only surface
+        // via the process-wide unhandledRejection log). Refused here
+        // instead, matching submit()'s own "unknown/expired requestId
+        // returns false" contract.
+        const result = this.nativeRuntime && typeof payload.password === 'string' && payload.password.length > 0
+          ? this.nativeRuntime.nativeHost.submitAdminPassword(payload.requestId, payload.password)
+          : false;
         this.respond(client.ws, type, id, result);
         break;
       }
@@ -2226,6 +2299,348 @@ export class RemoteServer {
       case 'pages:fetch': {
         try { this.respond(client.ws, type, id, await getPagesService()?.fetch(String(payload?.id ?? ''), (payload?.request ?? { url: '' }) as PageFetchRequest) ?? { ok: false, reason: 'network', message: 'Pages are not available on this host.' }); }
         catch (err: any) { this.respond(client.ws, type, id, { ok: false, reason: 'network', message: err?.message ?? String(err) }); }
+        break;
+      }
+      // Document comments (T3, design docs/active/specs/2026-09-26-doc-comments-
+      // build-design.md §1.6) — the SAME main-process store desktop windows
+      // use, so a phone over remote access sees and edits the same comments
+      // (review 2, F6: remote is NOT the same gap as Android). reply/resolve/
+      // reopen/move all carry `path`, containment-checked identically to
+      // add's (review 3, F1).
+      //
+      // F1 fix (post-T3 build review, blocker): every case below refuses an
+      // unrecognized `projectRoot` via the SAME shared gate desktop's
+      // doc-comments/ipc-handlers.ts uses (`doc-comments-gate.ts`'s
+      // `refuseUnknownProjectRoot`) BEFORE calling into the store — a remote
+      // client's payload is exactly as untrusted as a native-tool/MCP
+      // caller's, and the store's own containment check only proves `path`
+      // resolves inside WHATEVER root it's given, never that the root itself
+      // is real. `this.sessionRoots()` is the same "records"-mode carve-out
+      // already used elsewhere on this class, so an unregistered but
+      // currently-open session's own comments keep working.
+      case 'docComments:list': {
+        const filePath = String(payload?.path ?? '');
+        const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
+        const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
+        if (gated) { this.respond(client.ws, type, id, gated); break; }
+        // Word/Excel comments live INSIDE the file (§1.1) — dispatch to
+        // T10/T12's own readers instead of the sidecar store, the SAME
+        // by-extension decision ipc-handlers.ts's desktop surface makes.
+        // Review finding #5: decided on the RESOLVED real path (follows a
+        // symlink), never the caller's raw string.
+        const format = await resolveNativeFormat(filePath, projectRoot);
+        this.respond(client.ws, type, id, format
+          ? await listNativeComments(format, { path: filePath, projectRoot })
+          : await listComments({ path: filePath, projectRoot }));
+        break;
+      }
+      case 'docComments:add': {
+        const filePath = String(payload?.path ?? '');
+        const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
+        const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
+        if (gated) { this.respond(client.ws, type, id, gated); break; }
+        const refused = refuseNativeMutation(filePath);
+        if (refused) { this.respond(client.ws, type, id, refused); break; }
+        // Code review 2026-09-27, Android F1: same refusal ipc-handlers.ts's
+        // desktop surface now runs, before this remote-only surface could
+        // otherwise diverge from it (see doc-comments-gate.ts's own header).
+        if (!isValidCommentSelectorShape(payload?.selector)) { this.respond(client.ws, type, id, missingSelectorField()); break; }
+        // Review finding #5: resolved real path, not the raw string.
+        const format = await resolveNativeFormat(filePath, projectRoot);
+        if (format === 'docx') {
+          this.respond(client.ws, type, id, await addNativeDocxComment({
+            path: filePath,
+            projectRoot,
+            selector: payload?.selector,
+            text: String(payload?.text ?? ''),
+            author: payload?.author,
+          }));
+          break;
+        }
+        if (format === 'xlsx') {
+          this.respond(client.ws, type, id, await addNativeXlsxComment({
+            path: filePath,
+            projectRoot,
+            selector: payload?.selector,
+            text: String(payload?.text ?? ''),
+            author: payload?.author,
+          }));
+          break;
+        }
+        this.respond(client.ws, type, id, await addComment({
+          path: filePath,
+          projectRoot,
+          selector: payload?.selector,
+          text: String(payload?.text ?? ''),
+          author: payload?.author,
+          // F4 fix (T5 review): the renderer mints and sends this now.
+          id: typeof payload?.id === 'string' && payload.id.length > 0 ? payload.id : undefined,
+        }));
+        break;
+      }
+      case 'docComments:reply': {
+        const filePath = String(payload?.path ?? '');
+        const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
+        const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
+        if (gated) { this.respond(client.ws, type, id, gated); break; }
+        const refused = refuseNativeMutation(filePath);
+        if (refused) { this.respond(client.ws, type, id, refused); break; }
+        // Review finding #5: resolved real path, not the raw string.
+        const format = await resolveNativeFormat(filePath, projectRoot);
+        if (format === 'docx') {
+          this.respond(client.ws, type, id, await replyToNativeDocxComment({
+            path: filePath,
+            projectRoot,
+            id: String(payload?.id ?? ''),
+            text: String(payload?.text ?? ''),
+            author: payload?.author,
+          }));
+          break;
+        }
+        if (format === 'xlsx') {
+          this.respond(client.ws, type, id, await replyToNativeXlsxComment({
+            path: filePath,
+            projectRoot,
+            id: String(payload?.id ?? ''),
+            text: String(payload?.text ?? ''),
+            author: payload?.author,
+          }));
+          break;
+        }
+        this.respond(client.ws, type, id, await replyToComment({
+          path: filePath,
+          projectRoot,
+          id: String(payload?.id ?? ''),
+          text: String(payload?.text ?? ''),
+          author: payload?.author,
+        }));
+        break;
+      }
+      case 'docComments:resolve': {
+        const filePath = String(payload?.path ?? '');
+        const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
+        const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
+        if (gated) { this.respond(client.ws, type, id, gated); break; }
+        const refused = refuseNativeMutation(filePath);
+        if (refused) { this.respond(client.ws, type, id, refused); break; }
+        // Review finding #5: resolved real path, not the raw string.
+        const format = await resolveNativeFormat(filePath, projectRoot);
+        if (format === 'docx') {
+          this.respond(client.ws, type, id, await resolveNativeDocxComment({
+            path: filePath,
+            projectRoot,
+            id: String(payload?.id ?? ''),
+            by: payload?.by,
+          }));
+          break;
+        }
+        if (format === 'xlsx') {
+          this.respond(client.ws, type, id, await resolveNativeXlsxComment({
+            path: filePath,
+            projectRoot,
+            id: String(payload?.id ?? ''),
+            by: payload?.by,
+          }));
+          break;
+        }
+        this.respond(client.ws, type, id, await resolveComment({
+          path: filePath,
+          projectRoot,
+          id: String(payload?.id ?? ''),
+          by: payload?.by,
+        }));
+        break;
+      }
+      case 'docComments:reopen': {
+        const filePath = String(payload?.path ?? '');
+        const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
+        const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
+        if (gated) { this.respond(client.ws, type, id, gated); break; }
+        const refused = refuseNativeMutation(filePath);
+        if (refused) { this.respond(client.ws, type, id, refused); break; }
+        // Review finding #5: resolved real path, not the raw string.
+        const format = await resolveNativeFormat(filePath, projectRoot);
+        if (format === 'docx') {
+          this.respond(client.ws, type, id, await reopenNativeDocxComment({
+            path: filePath,
+            projectRoot,
+            id: String(payload?.id ?? ''),
+            by: payload?.by,
+          }));
+          break;
+        }
+        if (format === 'xlsx') {
+          this.respond(client.ws, type, id, await reopenNativeXlsxComment({
+            path: filePath,
+            projectRoot,
+            id: String(payload?.id ?? ''),
+            by: payload?.by,
+          }));
+          break;
+        }
+        this.respond(client.ws, type, id, await reopenComment({
+          path: filePath,
+          projectRoot,
+          id: String(payload?.id ?? ''),
+          by: payload?.by,
+        }));
+        break;
+      }
+      case 'docComments:move': {
+        const filePath = String(payload?.path ?? '');
+        const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
+        const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
+        if (gated) { this.respond(client.ws, type, id, gated); break; }
+        const refused = refuseNativeMutation(filePath);
+        if (refused) { this.respond(client.ws, type, id, refused); break; }
+        // Review finding #5: resolved real path, not the raw string.
+        const format = await resolveNativeFormat(filePath, projectRoot);
+        if (format === 'docx') {
+          this.respond(client.ws, type, id, await moveNativeDocxComment({
+            path: filePath,
+            projectRoot,
+            id: String(payload?.id ?? ''),
+            newSelector: payload?.newSelector,
+          }));
+          break;
+        }
+        if (format === 'xlsx') {
+          this.respond(client.ws, type, id, await moveNativeXlsxComment({
+            path: filePath,
+            projectRoot,
+            id: String(payload?.id ?? ''),
+            newSelector: payload?.newSelector,
+          }));
+          break;
+        }
+        this.respond(client.ws, type, id, await moveComment({
+          path: filePath,
+          projectRoot,
+          id: String(payload?.id ?? ''),
+          newSelector: payload?.newSelector,
+        }));
+        break;
+      }
+      // Edit/delete build (2026-09-28, design doc §"Edit and delete") —
+      // same containment/format-dispatch shape as every mutation above.
+      case 'docComments:edit': {
+        const filePath = String(payload?.path ?? '');
+        const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
+        const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
+        if (gated) { this.respond(client.ws, type, id, gated); break; }
+        const refused = refuseNativeMutation(filePath);
+        if (refused) { this.respond(client.ws, type, id, refused); break; }
+        const format = await resolveNativeFormat(filePath, projectRoot);
+        if (format === 'docx') {
+          this.respond(client.ws, type, id, await editNativeDocxComment({
+            path: filePath, projectRoot, id: String(payload?.id ?? ''), text: String(payload?.text ?? ''),
+          }));
+          break;
+        }
+        if (format === 'xlsx') {
+          this.respond(client.ws, type, id, await editNativeXlsxComment({
+            path: filePath, projectRoot, id: String(payload?.id ?? ''), text: String(payload?.text ?? ''),
+          }));
+          break;
+        }
+        this.respond(client.ws, type, id, await editComment({
+          path: filePath, projectRoot, id: String(payload?.id ?? ''), text: String(payload?.text ?? ''),
+        }));
+        break;
+      }
+      case 'docComments:edit-reply': {
+        const filePath = String(payload?.path ?? '');
+        const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
+        const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
+        if (gated) { this.respond(client.ws, type, id, gated); break; }
+        const refused = refuseNativeMutation(filePath);
+        if (refused) { this.respond(client.ws, type, id, refused); break; }
+        const format = await resolveNativeFormat(filePath, projectRoot);
+        if (format === 'docx') {
+          this.respond(client.ws, type, id, await editNativeDocxReply({
+            path: filePath, projectRoot, id: String(payload?.id ?? ''), replyId: String(payload?.replyId ?? ''), text: String(payload?.text ?? ''),
+          }));
+          break;
+        }
+        if (format === 'xlsx') {
+          this.respond(client.ws, type, id, await editNativeXlsxReply({
+            path: filePath, projectRoot, id: String(payload?.id ?? ''), replyId: String(payload?.replyId ?? ''), text: String(payload?.text ?? ''),
+          }));
+          break;
+        }
+        this.respond(client.ws, type, id, await editReply({
+          path: filePath, projectRoot, id: String(payload?.id ?? ''), replyId: String(payload?.replyId ?? ''), text: String(payload?.text ?? ''),
+        }));
+        break;
+      }
+      case 'docComments:delete': {
+        const filePath = String(payload?.path ?? '');
+        const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
+        const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
+        if (gated) { this.respond(client.ws, type, id, gated); break; }
+        const refused = refuseNativeMutation(filePath);
+        if (refused) { this.respond(client.ws, type, id, refused); break; }
+        const format = await resolveNativeFormat(filePath, projectRoot);
+        if (format === 'docx') {
+          this.respond(client.ws, type, id, await deleteNativeDocxComment({ path: filePath, projectRoot, id: String(payload?.id ?? '') }));
+          break;
+        }
+        if (format === 'xlsx') {
+          this.respond(client.ws, type, id, await deleteNativeXlsxComment({ path: filePath, projectRoot, id: String(payload?.id ?? '') }));
+          break;
+        }
+        this.respond(client.ws, type, id, await deleteComment({ path: filePath, projectRoot, id: String(payload?.id ?? '') }));
+        break;
+      }
+      case 'docComments:delete-reply': {
+        const filePath = String(payload?.path ?? '');
+        const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
+        const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
+        if (gated) { this.respond(client.ws, type, id, gated); break; }
+        const refused = refuseNativeMutation(filePath);
+        if (refused) { this.respond(client.ws, type, id, refused); break; }
+        const format = await resolveNativeFormat(filePath, projectRoot);
+        if (format === 'docx') {
+          this.respond(client.ws, type, id, await deleteNativeDocxReply({
+            path: filePath, projectRoot, id: String(payload?.id ?? ''), replyId: String(payload?.replyId ?? ''),
+          }));
+          break;
+        }
+        if (format === 'xlsx') {
+          this.respond(client.ws, type, id, await deleteNativeXlsxReply({
+            path: filePath, projectRoot, id: String(payload?.id ?? ''), replyId: String(payload?.replyId ?? ''),
+          }));
+          break;
+        }
+        this.respond(client.ws, type, id, await deleteReply({
+          path: filePath, projectRoot, id: String(payload?.id ?? ''), replyId: String(payload?.replyId ?? ''),
+        }));
+        break;
+      }
+      case 'docComments:watch': {
+        try {
+          const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
+          const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
+          if (gated) { this.respond(client.ws, type, id, gated); break; }
+          const target = await resolveWatchTarget({ path: String(payload?.path ?? ''), projectRoot });
+          if (!target.ok) { this.respond(client.ws, type, id, target); break; }
+          this.respond(client.ws, type, id, await watchComments(target.target, this.docCommentsSubscriberId(client)));
+        } catch (err: any) {
+          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
+        }
+        break;
+      }
+      case 'docComments:unwatch': {
+        try {
+          const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
+          const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
+          if (gated) { this.respond(client.ws, type, id, gated); break; }
+          const target = await resolveWatchTarget({ path: String(payload?.path ?? ''), projectRoot });
+          if (target.ok && client.docCommentsWatchId !== undefined) unwatchComments(target.target, client.docCommentsWatchId);
+          this.respond(client.ws, type, id, { ok: true });
+        } catch (err: any) {
+          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
+        }
         break;
       }
       case 'search:set-key': {
@@ -2851,7 +3266,10 @@ export class RemoteServer {
         // native id", so CC's transcript file is the source.
         // Async form (2026-09-16 C2 review): the desktop's page handler was
         // converted; the phone's scroll-up read the whole transcript sync too.
-        const nativePage = this.nativeRuntime ? await this.nativeRuntime.nativeHost.getHistoryPageAsync(pageSessionId, beforeOffset) : null;
+        let nativePage: Awaited<ReturnType<NativeSessionHost['getHistoryPageAsync']>> = null;
+        // An existing-but-unreadable native transcript throws: `unresolved` (retry), as ipc-handlers' page.
+        try { nativePage = this.nativeRuntime ? await this.nativeRuntime.nativeHost.getHistoryPageAsync(pageSessionId, beforeOffset) : null; }
+        catch { this.respond(client.ws, type, id, { ...emptyPage, unresolved: true }); break; }
         if (nativePage) {
           this.respond(client.ws, type, id, {
             events: nativePage.events,
@@ -4074,6 +4492,22 @@ export class RemoteServer {
       }
     }
     return client.watchId;
+  }
+
+  /** Same shape as watchSubscriberId above, for doc-comments-watcher.ts's
+   *  OWN, separate refcount map (T3) — arms its own 'close' cleanup rather
+   *  than reusing watchSubscriberId's, since that one only wires
+   *  project-watcher's dropSubscriber and a docComments-only client (no
+   *  artifacts:watch-project call) would otherwise leak its watcher forever. */
+  private docCommentsSubscriberId(client: AuthenticatedClient): number {
+    if (client.docCommentsWatchId === undefined) {
+      const watchId = this.nextWatchId--;
+      client.docCommentsWatchId = watchId;
+      if (typeof (client.ws as any).once === 'function') {
+        client.ws.once('close', () => dropDocCommentsSubscriber(watchId));
+      }
+    }
+    return client.docCommentsWatchId;
   }
 
   // --- Helpers ---

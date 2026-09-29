@@ -929,6 +929,17 @@ class SessionService : Service() {
         super.onDestroy()
     }
 
+    // ── Document comments (docComments:*) shared plumbing — T4 of the
+    // doc-comments build (docs/active/specs/2026-09-26-doc-comments-build-
+    // design.md §1.5, §1.6). The actual dispatch logic (the "is this
+    // projectRoot known" gate plus every list/add/reply/resolve/reopen/move
+    // branch) lives in `com.youcoded.app.doccomments.handleDocCommentsMessage`
+    // (DocCommentsBridge.kt) — extracted out of this Service's own `when`
+    // block (F6, T4 implementation review) so it can be driven directly by a
+    // JVM unit test with no running Service. Only `homeDir` needs a live
+    // Service to compute (`bootstrap?.homeDir`).
+    private fun docCommentsHomeDir(): File = bootstrap?.homeDir ?: filesDir
+
     private suspend fun handleBridgeMessage(
         ws: org.java_websocket.WebSocket,
         msg: MessageRouter.ParsedMessage
@@ -4178,6 +4189,71 @@ class SessionService : Service() {
                     org.json.JSONObject().put("ok", false).put("error", "not-implemented-on-mobile")) }
             }
 
+            // ── Document comments (docComments:*) — T4 of the doc-comments
+            // build (docs/active/specs/2026-09-26-doc-comments-build-design.md
+            // §1.6, §3.2a, §4.3a). Unlike the git block above, list/add/reply/
+            // resolve/reopen/move are REAL for every target type — reopen-1
+            // ("full phone support", Destin) supersedes the desktop-only scope
+            // an earlier revision of the design gave this feature. A
+            // plain-text/markdown `PersistedComment` target is a real
+            // `java.io.File` read/write (DocCommentsStore.kt, same precedent
+            // as artifacts:get/save); a `.docx`/`.xlsx` target's READ dispatches
+            // to T16/T18's own Kotlin readers (DocCommentsDispatch.kt) — its
+            // WRITE refuses honestly with `not-yet-supported` until T17/T19
+            // build the Kotlin write halves (see DocCommentsDispatch.kt's own
+            // header for why that split is correct, not a gap in THIS task).
+            // watch/unwatch stay `not-implemented-on-mobile` for every file
+            // type — a general "no FileObserver-based push" gap (§1.6),
+            // unrelated to reopen-1's promise about read/add/reply/resolve.
+            //
+            // F6 (T4 implementation review): the actual per-type dispatch
+            // (field validation, the projectRoot gate, every store call, the
+            // exact response envelope) lives in
+            // `com.youcoded.app.doccomments.handleDocCommentsMessage`
+            // (DocCommentsBridge.kt) — extracted so it's directly unit-
+            // testable (DocCommentsBridgeTest.kt) with no running Service.
+            // This branch is now just plumbing: compute the two inputs that
+            // DO need a live Service (`homeDir`, this session's own live cwds)
+            // and hand the message off.
+            "docComments:list", "docComments:add", "docComments:reply", "docComments:resolve",
+            "docComments:reopen", "docComments:move",
+            // Edit/delete build (2026-09-28, design doc §"Edit and delete") —
+            // appended after "docComments:move" and before the watch/unwatch
+            // pair, matching desktop's own ipc-channels.ts ordering (EDIT,
+            // EDIT_REPLY, DELETE, DELETE_REPLY, then WATCH/UNWATCH). Existing
+            // labels are never reordered.
+            "docComments:edit", "docComments:edit-reply", "docComments:delete", "docComments:delete-reply",
+            "docComments:watch", "docComments:unwatch" -> {
+                val homeDir = docCommentsHomeDir()
+                val sessionRoots = sessionRegistry.sessions.value.values.map { it.cwd.absolutePath }
+                // F2 (T17 implementation review, major/crash risk): a
+                // format-agnostic LAST-RESORT backstop around the whole
+                // dispatch call. `addNativeDocxComment`/etc. (DocCommentsDispatch.kt)
+                // already catch every exception their own write path can
+                // throw, but this `when` branch runs inside
+                // `serviceScope.launch { handleBridgeMessage(ws, msg) }`
+                // (onCreate() above) with NO CoroutineExceptionHandler
+                // installed on `serviceScope` — an exception this dispatch
+                // layer somehow still didn't catch (a bug in a FUTURE
+                // change here, or a wholly different docComments:* path,
+                // e.g. the sidecar store's own JSON handling) would
+                // otherwise kill the coroutine silently: no response is ever
+                // sent, so the WebView's caller hangs forever, and on
+                // Android an uncaught exception with no handler installed on
+                // its scope is a PROCESS CRASH, not just a dropped message.
+                // Every docComments:* message gets an answer either way.
+                val response = try {
+                    com.youcoded.app.doccomments.handleDocCommentsMessage(msg.type, msg.payload, homeDir, sessionRoots)
+                        // Unreachable in practice — every label in this branch's
+                        // own match arm above is also one handleDocCommentsMessage
+                        // owns; kept as an honest fallback rather than `!!`.
+                        ?: org.json.JSONObject().put("ok", false).put("error", "not-implemented-on-mobile")
+                } catch (_: Exception) {
+                    org.json.JSONObject().put("ok", false).put("error", "write-failed")
+                }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, response) }
+            }
+
             // Project View hub (conversations, repo, context) is desktop-only in v1
             // (see docs/superpowers/specs/2026-06-14-project-view-redesign-design.md).
             // Reply not-implemented so the shared React UI can degrade to an
@@ -4234,6 +4310,9 @@ class SessionService : Service() {
             // native:set-binding below — has a msg.id, so this replies
             // not-implemented-on-mobile rather than no-op'ing.
             "native:queue-remove",
+            // "Send now" on a waiting message — request/response like
+            // native:queue-remove, so it replies not-implemented-on-mobile.
+            "native:queue-send-now",
             "native:interrupt",
             // Stalled-turn Retry. Fire-and-forget (no msg.id) exactly like
             // native:send / native:interrupt, so this is a correct no-op here:
@@ -4264,6 +4343,12 @@ class SessionService : Service() {
             // native harness, so this is the honest refusal; the phone stops a
             // DESKTOP command through the remote WebSocket path instead.
             "native:kill-shell",
+            // admin-password design §2.5/R19: sudo asks the DESKTOP's own
+            // AskpassServer for a password, so this is desktop-only like the
+            // rest of this block — a phone answers a DESKTOP session's card
+            // over the remote WebSocket path (native:submit-admin-password on
+            // remote-server.ts), never through Android's own native runtime.
+            "native:submit-admin-password",
             // "What the assistant was given" (2026-09-10). The context record
             // itself is PUSHED, and reaches a phone inside chat:hydrate over the
             // remote WebSocket — there is nothing to answer here. This is the

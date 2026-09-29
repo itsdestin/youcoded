@@ -269,8 +269,11 @@ describe('ChatView window keys reach only the chat on screen', () => {
     try {
       render(<ChatView sessionId="s1" visible sessionActive />);
       const types = add.mock.calls.map(([type]) => type);
+      // WHY no 'pointerdown' (2026-09-29): its only window listener was the
+      // homemade scroll glide's click-to-cancel, removed when wheel scrolling
+      // went back to the browser (tests/wheel-scroll-stays-native.test.ts).
+      expect(types).toContain('keydown');
       expect(types).toContain('keyup');
-      expect(types).toContain('pointerdown');
     } finally {
       add.mockRestore();
     }
