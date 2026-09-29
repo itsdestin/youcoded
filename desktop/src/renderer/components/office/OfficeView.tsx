@@ -52,7 +52,11 @@ export function OfficeView({ projectRoot = null, visible = true }: { projectRoot
       (e: unknown) => setLoad(/^remote-unsupported:/.test(String((e as Error)?.message ?? '')) ? { state: 'unavailable' } : { state: 'failed' }),
     );
   };
-  useEffect(reloadStatus, [projectRoot]);
+  // WHY on each showing, not only on mount: the page stays mounted while hidden (see `visible`),
+  // so a file opened meanwhile — from the page itself or from a file panel's Edit — would
+  // otherwise never reach Recent until the app restarts. WHY not while hidden: hidden means idle
+  // (performance rule 2), so a hidden page asks nothing; it asks once when shown again.
+  useEffect(() => { if (visible) reloadStatus(); }, [projectRoot, visible]);
   // Each mounted editor's handle, so the strip's save-failed actions reach it.
   const frames = useRef(new Map<string, EditorFrameHandle>());
 

@@ -50,6 +50,21 @@ describe('the Office page', () => {
     expect(status).toHaveBeenCalledWith('/home/you/Projects/garden');
   });
 
+  it('asks for Recent again each time the page is shown, and not while it is hidden', async () => {
+    const status = vi.fn(async () => READY);
+    withOffice({ status });
+    const { findByText, rerender } = render(<OfficeView visible />);
+    await findByText('Files you open in Office will show up here.');
+    expect(status).toHaveBeenCalledTimes(1);
+    rerender(<OfficeView visible={false} />);
+    expect(status).toHaveBeenCalledTimes(1);
+    // A file opened meanwhile must show up when the page comes back (the page stays mounted).
+    status.mockResolvedValueOnce({ ...READY, recent: [FILE] });
+    rerender(<OfficeView visible />);
+    expect(await findByText('plan.docx')).toBeTruthy();
+    expect(status).toHaveBeenCalledTimes(2);
+  });
+
   it("shows a failed save's own reason with Retry, and Retry asks the editor to save", async () => {
     withOffice({
       status: async () => READY,
