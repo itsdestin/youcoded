@@ -15,7 +15,7 @@ enum class PackageTier(
         additionalPackages = emptyList(),
     ),
     DEVELOPER(
-        displayName = "Developer Essentials",
+        displayName = "Developer essentials",
         description = "fd, fzf, jq, bat, tmux, nano, micro",
         additionalPackages = listOf(
             "fd", "micro", "tree",
@@ -29,7 +29,7 @@ enum class PackageTier(
         ),
     ),
     FULL_DEV(
-        displayName = "Full Dev Environment",
+        displayName = "Full dev environment",
         description = "neovim, vim, make, cmake, sqlite",
         additionalPackages = listOf(
             "libsodium", "vim",

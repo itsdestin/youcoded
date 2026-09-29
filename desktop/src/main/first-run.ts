@@ -194,7 +194,7 @@ export class FirstRunManager extends EventEmitter {
   /** Start (or resume) the first-run flow. */
   async run(): Promise<void> {
     // Re-entrancy guard. run() auto-fires on launch AND is reachable from the
-    // "Try Again" button (retry() → run()). Without this guard, a retry click
+    // "Try again" button (retry() → run()). Without this guard, a retry click
     // landing while the auto-run is mid-install spawns a SECOND installClaude(),
     // and the two native installers race on the same ~/.claude/downloads file →
     // "being used by another process". The `running` flag existed but was never
@@ -205,7 +205,7 @@ export class FirstRunManager extends EventEmitter {
     }
     this.running = true;
     // Clear a stale error from a prior attempt so the renderer doesn't render a
-    // live (lastError-gated) "Try Again" button while this run is already
+    // live (lastError-gated) "Try again" button while this run is already
     // installing — second line of defense against the concurrent-install race.
     if (this.state.lastError) this.updateState({ lastError: undefined });
     try {
@@ -559,7 +559,7 @@ export class FirstRunManager extends EventEmitter {
   /** "Use an API key" with a named service (F-1/F-2): the key goes to YouCoded's
    *  own assistant — the built-in OpenRouter row, or a direct-key provider row —
    *  and is tested before setup finishes. Claude Code is not involved.
-   *  WHY no failed 'auth' row on a bad key: that would offer "Try Again", which
+   *  WHY no failed 'auth' row on a bad key: that would offer "Try again", which
    *  re-runs the whole install pass; the key page stays open with the error. */
   async handleNativeApiKey(key: string, service: NativeKeyService, deps: FirstRunNativeDeps): Promise<void> {
     this.updateState({ authMode: 'apikey', lastError: undefined });
@@ -738,7 +738,7 @@ export class FirstRunManager extends EventEmitter {
       return;
     }
     // No failed 'auth' row, same reason as handleNativeApiKey: that would offer
-    // "Try Again", which re-runs the whole install pass. The buttons come back
+    // "Try again", which re-runs the whole install pass. The buttons come back
     // with one line under them.
     const lastError =
       outcome === 'timed-out' ? 'Sign-in timed out. Try again?'

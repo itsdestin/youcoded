@@ -1187,7 +1187,7 @@ function createWindow(firstRunManager?: FirstRunManager) {
             // window without signing in, the next launch sees a state file that
             // no longer says COMPLETE and treats this months-old install as a
             // brand-new machine — re-running the Node/Git/Claude installers and,
-            // with the Skip link gone, stranding them on a "Try Again" screen.
+            // with the Skip link gone, stranding them on a "Try again" screen.
             // With the flag set, the next launch comes back through THIS check.
             markSetupCompleted();
             lateFirstRunManager = new FirstRunManager();

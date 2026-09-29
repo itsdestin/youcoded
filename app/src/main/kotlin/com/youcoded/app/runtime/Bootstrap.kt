@@ -510,7 +510,7 @@ class Bootstrap(internal val context: Context) {
             "libidn2" -> "lib/libidn2.so"
             "libuuid" -> "lib/libuuid.so"
             "wget" -> "bin/wget"
-            // Tier 1: Developer Essentials
+            // Tier 1: Developer essentials
             "fd" -> "bin/fd"
             "micro" -> "bin/micro"
             "tree" -> "bin/tree"
@@ -527,7 +527,7 @@ class Bootstrap(internal val context: Context) {
             "libandroid-glob" -> "lib/libandroid-glob.so"
             "tmux" -> "bin/tmux"
             "nano" -> "bin/nano"
-            // Tier 2: Full Dev Environment
+            // Tier 2: Full dev environment
             "libsodium" -> "lib/libsodium.so"
             "vim" -> "libexec/vim/vim"
             "libmsgpack" -> "lib/libmsgpack-c.so"

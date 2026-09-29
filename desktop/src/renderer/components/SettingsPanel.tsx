@@ -2204,8 +2204,8 @@ export function RemoteAccessMockPanel({ view, onAction }: { view: RemoteAccessVi
 // installs, matching the native first-run TierPickerScreen labels.
 const TIER_OPTIONS = [
   { id: 'CORE', name: 'Core', desc: 'Everything needed for basic Claude Code functionality' },
-  { id: 'DEVELOPER', name: 'Developer Essentials', desc: 'fd, fzf, jq, bat, tmux, nano, micro' },
-  { id: 'FULL_DEV', name: 'Full Dev Environment', desc: 'neovim, vim, make, cmake, sqlite' },
+  { id: 'DEVELOPER', name: 'Developer essentials', desc: 'fd, fzf, jq, bat, tmux, nano, micro' },
+  { id: 'FULL_DEV', name: 'Full dev environment', desc: 'neovim, vim, make, cmake, sqlite' },
 ];
 
 function TierSelector({ tier, onSetTier }: { tier: string; onSetTier: (t: string) => void }) {

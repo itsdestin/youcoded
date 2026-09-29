@@ -1211,7 +1211,7 @@ export class SyncService extends EventEmitter {
     // GitHub sync spaces, keeps its own state file and is invisible to it, so a
     // machine syncing happily to GitHub with no Drive/iCloud backend got a
     // danger-level, NON-dismissible "No sync configured — your backups aren't
-    // set up", which the StatusBar renders as a red "Sync Failing" chip. Seen on
+    // set up", which the StatusBar renders as a red "Sync failing" chip. Seen on
     // a fresh macOS install running 1.3.0-beta.9. Long-lived installs hid the bug
     // via autoDetectBackend(): it probes `rclone lsd gdrive:…`/the iCloud folder
     // and, on a machine that used the legacy backups years ago, silently succeeds

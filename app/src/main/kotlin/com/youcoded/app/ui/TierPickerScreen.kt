@@ -129,7 +129,7 @@ fun TierPickerScreen(
                         Column {
                             Spacer(modifier = Modifier.height(8.dp))
 
-                            // Developer Essentials
+                            // Developer essentials
                             TierCard(
                                 tier = PackageTier.DEVELOPER,
                                 isSelected = selected == PackageTier.DEVELOPER,
@@ -137,7 +137,7 @@ fun TierPickerScreen(
                             )
                             Spacer(modifier = Modifier.height(12.dp))
 
-                            // Full Dev Environment
+                            // Full dev environment
                             TierCard(
                                 tier = PackageTier.FULL_DEV,
                                 isSelected = selected == PackageTier.FULL_DEV,
