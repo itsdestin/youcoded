@@ -85,7 +85,7 @@ function groupBy(entries: UsageEntry[], by: Breakdown): Group[] {
 function moneyLine(g: Group): string {
   if (g.provider === 'local') return 'Free';
   if (g.provider === 'claude-code' || g.provider === 'chatgpt') {
-    return g.estimateUsd > 0 ? `≈ ${formatUsd(g.estimateUsd)} if paid per use` : 'Included in your plan';
+    return g.estimateUsd > 0 ? `worth ≈ ${formatUsd(g.estimateUsd)}` : 'Included in your plan';
   }
   return `${formatUsd(g.costUsd)} spent`;
 }
@@ -149,7 +149,7 @@ export function UsageStats({ compact = false }: { compact?: boolean }) {
       <div className="grid grid-cols-3 gap-2">
         <Stat label="Tokens" value={formatTokenCount(total)} />
         <Stat label="Spent" value={spent > 0 ? formatUsd(spent) : '$0'} hint="Billed to you" />
-        <Stat label="Plan work" value={worth > 0 ? `≈ ${formatUsd(worth)}` : '—'} hint="If paid per use" />
+        <Stat label="Plan worth" value={worth > 0 ? `≈ ${formatUsd(worth)}` : '—'} hint="At pay-per-use prices" />
       </div>
 
       {/* By day (Q-2). A single day has no shape to draw. */}
@@ -207,6 +207,7 @@ function DayBars({ days, height }: { days: UsageDay[]; height: number }) {
   const peak = totals.indexOf(max);
   return (
     <div>
+      <p className="text-2xs text-fg-muted mb-1">Busiest day {formatTokenCount(max)} · {dayLabel(days[peak].date)}</p>
       <div className="flex items-end gap-0.5" style={{ height }} role="img"
         aria-label={`Tokens per day, highest ${formatTokenCount(max)} on ${dayLabel(days[peak].date)}`}>
         {days.map((d, i) => {
@@ -223,11 +224,21 @@ function DayBars({ days, height }: { days: UsageDay[]; height: number }) {
           );
         })}
       </div>
-      <div className="flex justify-between text-2xs text-fg-muted mt-1">
-        <span>{dayLabel(days[0].date)}</span>
-        <span>{formatTokenCount(max)} peak</span>
-        <span>Today</span>
-      </div>
+      {/* UX review U9: a week names every bar; a month or more names its ends. */}
+      {days.length <= 7 ? (
+        <div className="flex gap-0.5 text-2xs text-fg-muted mt-1">
+          {days.map((d, i) => (
+            <span key={d.date} className="flex-1 text-center truncate">
+              {i === days.length - 1 ? 'Today' : dayLabel(d.date).split(',')[0]}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <div className="flex justify-between text-2xs text-fg-muted mt-1">
+          <span>{dayLabel(days[0].date)}</span>
+          <span>Today</span>
+        </div>
+      )}
     </div>
   );
 }

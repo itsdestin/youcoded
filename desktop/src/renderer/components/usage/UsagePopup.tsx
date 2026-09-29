@@ -22,12 +22,12 @@ export function ChatGptExtras({ accounts }: { accounts: UsageAccounts | null }) 
   return (
     <div className="space-y-2">
       {c.modelLimits?.map((l) => (
-        <WindowRow key={l.model} label={`${l.model} limit`} win={{ utilization: l.utilization, resets_at: l.resets_at }} />
+        <WindowRow key={l.model} label={`${l.model}'s own limit`} win={{ utilization: l.utilization, resets_at: l.resets_at }} />
       ))}
       {c.credits && (
         <p className="flex justify-between text-xs">
           <span className="text-fg-muted">Extra credits</span>
-          <span className="text-fg-2 tabular-nums">{c.credits.unlimited ? 'Unlimited' : `${c.credits.balance.toLocaleString()} left`}</span>
+          <span className="text-fg-2 tabular-nums">{c.credits.unlimited ? 'Unlimited' : `${c.credits.balance.toLocaleString()} credits left`}</span>
         </p>
       )}
     </div>
@@ -62,53 +62,63 @@ export function UsagePopup({ open, onClose }: { open: boolean; onClose: () => vo
 }
 
 function UsagePopupBody({ onClose }: { onClose: () => void }) {
+  return (
+    <Dialog open onClose={onClose} title="Usage" size="panel" screen="chat/usage">
+      <div className="space-y-4">
+        <UsageOverview />
+        <div className="flex justify-end">
+          <Button variant="secondary" size="sm" onClick={() => {
+            onClose();
+            window.dispatchEvent(new CustomEvent('youcoded:open-model-providers'));
+          }}>
+            Manage accounts
+          </Button>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
+/** Limits right now, then history — the popup's content, and the whole of
+ *  Assistant settings → Usage (UX review U2/U3: one place named for it, with
+ *  "am I close to a limit" first, same order as the popup). */
+export function UsageOverview({ compact = true }: { compact?: boolean }) {
   const { claude, chatgpt } = usePlanWindows();
   const accounts = useUsageAccounts();
   const openRouterBalance = accounts?.openrouter?.balanceUsd;
   const anyLive = hasWindows(claude) || hasWindows(chatgpt) || openRouterBalance != null;
 
   return (
-    <Dialog open onClose={onClose} title="Usage" size="panel" screen="chat/usage">
-      <div className="space-y-4">
-        {anyLive && (
-          <section className="space-y-2">
-            <h3 className="text-2xs font-medium text-fg-muted tracking-wide uppercase">Limits right now</h3>
-            {hasWindows(claude) && (
-              <Block name="Claude plan" link="https://claude.ai/settings/usage" linkLabel="claude.ai ↗">
-                <PlanWindows usage={claude} />
-              </Block>
-            )}
-            {hasWindows(chatgpt) && (
-              <Block name="ChatGPT plan" link="https://chatgpt.com/#settings/Account" linkLabel="chatgpt.com ↗">
-                <PlanWindows usage={chatgpt} />
-                <ChatGptExtras accounts={accounts} />
-              </Block>
-            )}
-            {openRouterBalance != null && (
-              <Block name="OpenRouter" link={OPENROUTER_CREDITS_URL} linkLabel="Add credit ↗">
-                <p className="flex justify-between text-xs">
-                  <span className="text-fg-muted">Credit left</span>
-                  <span className="text-fg-2 tabular-nums">${openRouterBalance.toFixed(2)}</span>
-                </p>
-              </Block>
-            )}
-          </section>
-        )}
-
+    <div className="space-y-4">
+      {anyLive && (
         <section className="space-y-2">
-          <h3 className="text-2xs font-medium text-fg-muted tracking-wide uppercase">History</h3>
-          <UsageStats compact />
+          <h3 className="text-2xs font-medium text-fg-muted tracking-wide uppercase">Limits right now</h3>
+          {hasWindows(claude) && (
+            <Block name="Claude Code" link="https://claude.ai/settings/usage" linkLabel="claude.ai ↗">
+              <PlanWindows usage={claude} />
+            </Block>
+          )}
+          {hasWindows(chatgpt) && (
+            <Block name="ChatGPT" link="https://chatgpt.com/#settings/Account" linkLabel="chatgpt.com ↗">
+              <PlanWindows usage={chatgpt} />
+              <ChatGptExtras accounts={accounts} />
+            </Block>
+          )}
+          {openRouterBalance != null && (
+            <Block name="OpenRouter" link={OPENROUTER_CREDITS_URL} linkLabel="Add credit ↗">
+              <p className="flex justify-between text-xs">
+                <span className="text-fg-muted">Credit left</span>
+                <span className="text-fg-2 tabular-nums">${openRouterBalance.toFixed(2)}</span>
+              </p>
+            </Block>
+          )}
         </section>
+      )}
 
-        <div className="flex justify-end">
-          <Button variant="secondary" size="sm" onClick={() => {
-            onClose();
-            window.dispatchEvent(new CustomEvent('youcoded:open-model-providers'));
-          }}>
-            Open in Settings
-          </Button>
-        </div>
-      </div>
-    </Dialog>
+      <section className="space-y-2">
+        <h3 className="text-2xs font-medium text-fg-muted tracking-wide uppercase">History</h3>
+        <UsageStats compact={compact} />
+      </section>
+    </div>
   );
 }

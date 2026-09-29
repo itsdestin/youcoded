@@ -55,11 +55,14 @@ export function usageHistoryFixture(empty: boolean): UsageDay[] {
 
 export function usageAccountsFixture(empty: boolean): UsageAccounts {
   if (empty) return {};
+  // UX review U1: a balance is read only for a key that works, so the fake
+  // follows the `?openrouter=` pin — without a verified key there is no line.
+  const orVerified = typeof location !== 'undefined' && new URLSearchParams(location.search).get('openrouter') === 'verified';
   return {
     chatgpt: {
       credits: { balance: 1250, unlimited: false },
       modelLimits: [{ model: 'GPT-6 Sol', utilization: 41, resets_at: new Date(Date.now() + 3 * 86_400_000).toISOString() }],
     },
-    openrouter: { balanceUsd: 12.4, checkedAt: Date.now() - 90_000 },
+    ...(orVerified ? { openrouter: { balanceUsd: 12.4, checkedAt: Date.now() - 90_000 } } : {}),
   };
 }

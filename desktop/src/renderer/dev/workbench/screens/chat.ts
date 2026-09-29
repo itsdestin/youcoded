@@ -31,7 +31,7 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/context', 'dialog'),
   // Usage statistics (design 2026-09-29): what a usage or cost chip opens.
   // `planUsage` adds the Claude plan's windows, so the popup shows all three accounts.
-  { ...chat('chat/usage', 'dialog'), params: { planUsage: '1' } },
+  { ...chat('chat/usage', 'dialog'), params: { planUsage: '1', openrouter: 'verified' } },
   // A real, unexpired announcement — statusData otherwise always sends `null`.
   { ...chat('chat/announcement', 'dialog'), params: { announcement: '1' } },
   chat('chat/quick-chips', 'dialog'),

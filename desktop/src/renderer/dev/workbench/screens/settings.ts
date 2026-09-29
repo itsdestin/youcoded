@@ -10,6 +10,8 @@ export const SETTINGS: readonly ScreenEntry[] = [
   { ...settings('settings/assistant', 'dialog'), sameAs: { name: 'settings/assistant/general', why: 'the panel opens on its General page' } },
   settings('settings/assistant/general', 'dialog'),
   settings('settings/assistant/cloud', 'dialog'),
+  // Usage statistics (design 2026-09-29): limits + history; planUsage adds the Claude bars.
+  { ...settings('settings/assistant/usage', 'dialog'), params: { planUsage: '1', openrouter: 'verified' } },
   settings('settings/assistant/local', 'dialog'),
   settings('settings/assistant/local/engine-advanced', 'dialog'),
   // The one installed model with a load-failure state (mock-shim switch by model id).

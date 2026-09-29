@@ -16,7 +16,7 @@ import FolderSwitcher from '../FolderSwitcher';
 import SessionNaming from './SessionNaming';
 import SavedContextSettings from './SavedContextSettings';
 import { Button, FieldError, SettingRow, Toggle, TypeableSelect } from '../ui';
-import { UsageStats } from '../usage/UsageStats';
+import { UsageOverview } from '../usage/UsagePopup';
 
 // The pages of Assistant settings. Five, in one flat list (review round 1,
 // 2026-09-05 — P-5 note: one "Cloud providers" page for the three sign-in /
@@ -29,7 +29,7 @@ import { UsageStats } from '../usage/UsageStats';
 // Session Defaults, Model Providers, Permissions, Specialists — re-homed, not
 // redrawn: the blocks are the ones the popups rendered.
 
-export type PageId = 'general' | 'cloud' | 'local' | 'permissions' | 'specialists';
+export type PageId = 'general' | 'cloud' | 'usage' | 'local' | 'permissions' | 'specialists';
 
 export interface AssistantDefaults {
   skipPermissions: boolean;
@@ -361,18 +361,20 @@ export const PAGES: PageDef[] = [
       // data-guide-anchor: the first-run tour's "models and providers" stop
       // rings the whole page — every way to be answered, not just API keys.
       <div className="space-y-2" data-guide-anchor="providers">
-        {/* Usage statistics (design 2026-09-29, Q-1): the full history sits
-            on this page, above the accounts it describes; the status-bar
-            chips open the same view in a popup. */}
-        <section className="bg-inset/50 rounded-lg px-3 py-2.5 space-y-2">
-          <p className="text-xs text-fg font-medium">Usage</p>
-          <UsageStats />
-        </section>
         <ClaudeCodeBlock onOpenClaudePreferences={ctx.onOpenClaudePreferences} onCloseParent={ctx.onClosePanel} />
         <ChatGptBlock />
         <OpenRouterBlock keysHeading="Your own API keys" />
       </div>
     ),
+  },
+  {
+    // Usage statistics (design 2026-09-29; UX review U2/U3): its own page, so
+    // it is findable by name, with limits first — the same view the status
+    // bar's usage chips open in a popup.
+    id: 'usage',
+    label: 'Usage',
+    icon: <Icon><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></Icon>,
+    render: () => <UsageOverview compact={false} />,
   },
   {
     id: 'local',
