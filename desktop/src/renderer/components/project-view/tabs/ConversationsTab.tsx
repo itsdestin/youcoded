@@ -115,7 +115,7 @@ function ConversationsTabImpl({ conversations, onOpenPreview }: ConversationsTab
           // the offset) and Context (which scrolled the padded element itself)
           // each sat at a different distance. Same recipe in all three tabs =
           // one scrollbar position.
-          className="scroll-mask flex-1 overflow-auto max-sm:overflow-visible flex flex-col gap-2 content-start p-2 -m-2"
+          className="scroll-mask scroll-mask--wide flex-1 overflow-auto max-sm:overflow-visible flex flex-col gap-2 content-start p-2 -m-2"
         >
           {visible.map((c) => (
             <ConversationRow key={c.sessionId} session={c} tagsById={registry.byId} onOpenPreview={onOpenPreview} />

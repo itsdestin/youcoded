@@ -5,13 +5,10 @@
 // Now each tab's sections start with the same row: heading on the left (with an
 // optional one-line description UNDER it, never beside it), tools on the right.
 import React from 'react';
-import { SectionLabel } from '../ui';
 
-// WHY a constant: the review deck compares the guide's Large heading (full
-// screens: "Big groups on the screen use the Large heading", like Marketplace
-// and Library) against the small label; the chosen one stays.
-const SIZE: 'large' | 'small' = 'large';
-
+// WHY 16px medium in the main text colour (projects-view-2#PV2-2, Destin picked
+// it between the guide's 18px Large and the 12px small label — "somewhere
+// between?"): the full-screen group heading.
 export function TabHeading({ children, description, action }: {
   children: React.ReactNode;
   description?: React.ReactNode;
@@ -23,9 +20,9 @@ export function TabHeading({ children, description, action }: {
       <div className="min-w-0">
         {/* No heading while a search flattens the Files tree — its results
             carry their own "Matches by…" labels; the tools stay put. */}
-        {children == null ? null : SIZE === 'large'
-          ? <h2 className="text-lg font-medium text-fg flex items-center gap-1.5 flex-wrap min-w-0">{children}</h2>
-          : <SectionLabel className="flex items-center gap-1.5 flex-wrap min-w-0">{children}</SectionLabel>}
+        {children == null ? null : (
+          <h2 className="text-base font-medium text-fg flex items-center gap-1.5 flex-wrap min-w-0">{children}</h2>
+        )}
         {description && <p className="text-xs text-fg-muted mt-0.5">{description}</p>}
       </div>
       {action && <div className="shrink-0 flex items-center gap-0.5">{action}</div>}

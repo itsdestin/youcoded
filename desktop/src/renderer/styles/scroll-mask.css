@@ -46,3 +46,9 @@
   -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 28px, black calc(100% - 28px), transparent 100%);
   mask-image: linear-gradient(to bottom, transparent 0, black 28px, black calc(100% - 28px), transparent 100%);
 }
+/* A taller fade for full-screen lists (Projects view, 2026-09-29; projects-view#PV-1:
+   "may need to widen fade a bit to get edges of the cards"): at 40px a card's
+   rounded top edge and side lines still read clearly inside the fade; 72px
+   softens the whole edge of a card as it passes under. */
+.scroll-mask--wide[data-fade-top="true"] { --scroll-mask-top: 72px; }
+.scroll-mask--wide[data-fade-bottom="true"] { --scroll-mask-bottom: 72px; }

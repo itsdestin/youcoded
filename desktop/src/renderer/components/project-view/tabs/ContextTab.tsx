@@ -89,7 +89,7 @@ function ContextTabShell({ children }: { children: React.ReactNode }) {
   const scrollRef = useScrollFade<HTMLDivElement>();
   return (
     <div className="flex flex-col h-full overflow-hidden px-2 sm:px-4 pt-4 pb-4 min-w-0 max-sm:h-auto max-sm:overflow-visible">
-      <div ref={scrollRef} className="scroll-mask flex-1 overflow-auto max-sm:overflow-visible flex flex-col content-start p-2 -m-2">
+      <div ref={scrollRef} className="scroll-mask scroll-mask--wide flex-1 overflow-auto max-sm:overflow-visible flex flex-col content-start p-2 -m-2">
         {children}
       </div>
     </div>

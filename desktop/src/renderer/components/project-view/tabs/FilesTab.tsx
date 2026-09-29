@@ -1013,8 +1013,8 @@ function FilesTabImpl({
           the p-2/-m-2 overflow room the grid does. */}
       <div ref={flatScrollRef} className={isList
         ? `flex-1 min-h-0 flex flex-col gap-2 content-start max-sm:overflow-visible ${
-            flat ? 'scroll-mask overflow-auto' : 'overflow-hidden'}`
-        : 'scroll-mask flex-1 overflow-auto max-sm:overflow-visible grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3 content-start p-2 -m-2'}>
+            flat ? 'scroll-mask scroll-mask--wide overflow-auto' : 'overflow-hidden'}`
+        : 'scroll-mask scroll-mask--wide flex-1 overflow-auto max-sm:overflow-visible grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3 content-start p-2 -m-2'}>
         {flat
           ? (
             <>
