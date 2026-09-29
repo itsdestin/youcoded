@@ -200,6 +200,11 @@ export interface OfficeCopyRunner {
 }
 /** Work that must not interleave with the document's saves (a restore, Task 7). */
 export interface OfficeExclusiveRunner {
+  /** Put the document's current pictures aside for an editor that keeps its typing after a
+   *  restore (fix round 3). Call inside `exclusive` work, before any reload rebuilds them. */
+  keepMedia(token: string): Promise<void>;
+  /** That editor was let go (Close without saving, or its copy was saved): drop the set. */
+  releaseKeptMedia(token: string): Promise<void>;
   /** Run `work` in the document's queue — after every save already asked for, before any asked
    *  for later. When `replacesFile(result)` is true, the editor's saves are refused until it has
    *  reloaded the file (open_file). */
@@ -217,6 +222,11 @@ const copyStateOf = (s: OfficeSession) => {
   if (!c) copyState.set(s, (c = { edited: false, translateFailed: false }));
   return c;
 };
+// The pictures of the document an editor kept after a restore (fix round 3), per session: a copy
+// of <temp>/media taken at the restore, before a reloading editor replaces it. Inside the session
+// temp, so closing the document removes it too.
+const keptMedia = new WeakMap<OfficeSession, string>();
+let keptMediaSeq = 0;
 const hashFile = async (file: string) => createHash('sha256').update(await fsp.readFile(file)).digest('hex');
 
 export function createOfficeCommands(deps: {
@@ -473,6 +483,13 @@ export function createOfficeCommands(deps: {
     try {
       const file = path.join(dir, 'Editor.bin');
       await fsp.writeFile(file, Buffer.from(bin, 'base64'));
+      // WHY media beside it (fix round 3): x2t finds a document's pictures in media/ next to the
+      // Editor.bin it translates. The kept editor's pictures are the set put aside at the restore
+      // (keepMedia) — the reloaded editor has rebuilt <temp>/media for the restored file since.
+      const media = keptMedia.get(s) ?? path.join(s.temp, 'media');
+      await fsp.cp(media, path.join(dir, 'media'), { recursive: true }).catch((e: NodeJS.ErrnoException) => {
+        if (e.code !== 'ENOENT') throw e; // a document without pictures has no media folder
+      });
       return await work(file);
     } finally {
       await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
@@ -528,6 +545,25 @@ export function createOfficeCommands(deps: {
     }
   };
   return Object.assign(run, {
+    async keepMedia(token: string): Promise<void> {
+      const s = deps.sessions.get(token);
+      if (!s) return;
+      const prior = keptMedia.get(s);
+      const dest = path.join(s.temp, `media-kept-${++keptMediaSeq}`);
+      await fsp.cp(path.join(s.temp, 'media'), dest, { recursive: true }).catch(async (e: NodeJS.ErrnoException) => {
+        if (e.code !== 'ENOENT') throw e;
+        await fsp.mkdir(dest, { recursive: true }); // no pictures: an empty set, never the reloaded one's
+      });
+      keptMedia.set(s, dest);
+      if (prior) await fsp.rm(prior, { recursive: true, force: true }).catch(() => {});
+    },
+    async releaseKeptMedia(token: string): Promise<void> {
+      const s = deps.sessions.get(token);
+      const dir = s && keptMedia.get(s);
+      if (!s || !dir) return;
+      keptMedia.delete(s);
+      await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+    },
     async exclusive<T>(token: string, work: () => Promise<T>, replacesFile: (result: T) => boolean): Promise<T> {
       const s = deps.sessions.get(token);
       if (!s) throw new Error(MSG.refused);

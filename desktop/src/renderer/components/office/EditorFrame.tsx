@@ -283,6 +283,16 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     await flush();
     return s.requestSeq > before && s.handedOverSeq === s.requestSeq;
   };
+  // The person let go of typing kept after a restore (Close without saving, or its copy saved).
+  // WHY replacedRef too (fix round 3): this editor still holds the OLD document until it goes
+  // away, so from now on it answers everything locally — clearing the kept flag alone would
+  // let its next autosave reach the restored file. Main drops the pictures it put aside.
+  const letGoOfKept = (token: string | undefined) => {
+    keptRef.current = false;
+    keptBinRef.current = null;
+    replacedRef.current = true;
+    if (token) void officeBridge()?.saveCopy(token, 'release').catch(() => {});
+  };
   const discardPending = () => {
     const s = save.current;
     if (s.timer) { clearTimeout(s.timer); s.timer = 0; }
@@ -450,7 +460,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         // typing must land in the copy, not in a file that cannot be saved.
           discardPending();
           // The typing is safe in the copy: this slot now edits the copy, an ordinary document.
-          keptRef.current = false; keptBinRef.current = null;
+          if (keptRef.current) letGoOfKept(t);
           switchToCb.current?.(r.path, r.folder);
         }
         return r;
@@ -459,7 +469,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         noteCopying(file.path, false);
       }
     },
-    discard: () => { keptRef.current = false; keptBinRef.current = null; discardPending(); markUnchanged(file.path); },
+    discard: () => { if (keptRef.current) letGoOfKept(openedRef.current?.token); discardPending(); markUnchanged(file.path); },
   }), [file.path]);
 
   useEffect(() => {

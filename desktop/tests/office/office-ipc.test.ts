@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
+import { existsSync } from 'node:fs';
 import { promises as fsp } from 'node:fs';
-import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,9 +13,14 @@ vi.mock('../../src/main/artifacts/project-watcher', () => ({ noteOwnWrite: vi.fn
 
 import { registerOfficeIpc } from '../../src/main/office/office-ipc';
 import { createSessions } from '../../src/main/office/office-sessions';
-import { versionsDir } from '../../src/main/office/versions';
+import { snapshot, versionsDir } from '../../src/main/office/versions';
 
 const MEMO = fileURLToPath(new URL('./fixtures/memo.docx', import.meta.url));
+const PICTURE = fileURLToPath(new URL('./fixtures/picture.docx', import.meta.url));
+const ADDON = fileURLToPath(new URL('../../office-addon/', import.meta.url));
+const HAS_ADDON = existsSync(path.join(ADDON, 'manifest.json'));
+// The bundled translator's first run in a test process is slow (it loads its fonts and data).
+const X2T_WARMUP_BUDGET_MS = 120_000;
 
 type Handler = (event: unknown, ...args: unknown[]) => unknown;
 
@@ -437,11 +443,57 @@ describe('office versions and restore', () => {
     expect((await readFile(path.join(s.temp, 'Editor.bin'))).equals(binBefore)).toBe(true);
   });
 
+  it('puts the pictures aside at a restore under an open editor, and drops them when that editor is let go', async () => {
+    const { file, token } = await openedIn(win1);
+    const s = sessions.get(token)!;
+    const [opened] = (await call('office:versions', win1, file)) as { id: string }[];
+    await call('office:restore', win1, file, opened.id);
+    const kept = () => readdir(s.temp).then((n) => n.filter((x) => x.startsWith('media-kept-')));
+    expect(await kept()).toHaveLength(1);
+    await expect(call('office:save-copy', win1, token, 'release')).resolves.toEqual({ ok: true, released: true });
+    expect(await kept()).toEqual([]);
+  });
+
   it("refuses the old editor's bytes as the document's working copy after a restore, until it reloads", async () => {
     const { file, token } = await openedIn(win1);
     const [opened] = (await call('office:versions', win1, file)) as { id: string }[];
     await expect(call('office:restore', win1, file, opened.id)).resolves.toEqual({ ok: true });
     await expect(call('office:invoke', win1, token, 'write_editor_bin', { data: doc('stale').toString('base64') }))
       .rejects.toThrow('This file was restored from a kept version, so Office is reloading it.');
+  });
+});
+
+// A copy made from a kept editor's bytes after a restore (the editor kept its typing): with the
+// REAL translator, so the pictures the old document's bytes refer to must still be found.
+describe.skipIf(!HAS_ADDON)('a copy from kept typing after a restore, with the bundled x2t', () => {
+  it('keeps the old document\'s picture even after the file was restored to one without it and reopened', async () => {
+    const target = path.join(dir, 'kept copy.docx');
+    ipc = fakeIpcMain();
+    registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => true, root: ADDON, userData: path.join(dir, 'userData'), pickCopyTarget: async () => target });
+    const file = path.join(dir, 'pictures.docx');
+    await copyFile(PICTURE, file);
+    const w = Object.assign(fakeSender(9), { send: vi.fn() });
+    const { token } = (await call('office:open', w, file)) as { token: string };
+    const kept = (await call('office:invoke', w, token, 'open_file', {})) as string; // the editor's bytes
+    // A kept version without the picture, restored while the editor still holds the old document.
+    const plain = await snapshot(path.join(dir, 'userData'), file, 'autosave', await readFile(MEMO));
+    await expect(call('office:restore', w, file, plain!.id)).resolves.toEqual({ ok: true });
+    // Another editor of the same document reloads the restored file (its pictures: none).
+    await call('office:invoke', w, token, 'open_file', {});
+    await expect(call('office:save-copy', w, token, 'save', kept)).resolves.toMatchObject({ ok: true, path: target });
+    const copy = await readFile(target);
+    expect(copy.includes('word/media/')).toBe(true);
+    // The restored file itself is the plain version.
+    expect((await readFile(file)).equals(await readFile(MEMO))).toBe(true);
+    w.removeAllListeners();
+  }, X2T_WARMUP_BUDGET_MS);
+
+  it('refuses a handed-in editor copy that is not text, never falling back to the working copy', async () => {
+    const w = Object.assign(fakeSender(10), { send: vi.fn() });
+    const file = path.join(dir, 'p2.docx');
+    await copyFile(PICTURE, file);
+    const { token } = (await call('office:open', w, file)) as { token: string };
+    await expect(call('office:save-copy', w, token, 'save', 42)).resolves.toEqual({ ok: false, message: 'refused' });
+    w.removeAllListeners();
   });
 });

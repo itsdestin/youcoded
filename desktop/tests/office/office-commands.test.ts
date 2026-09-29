@@ -18,6 +18,7 @@ import { OFFICE_MAX_BYTES } from '../../src/shared/office-types';
 const ROOT = fileURLToPath(new URL('../../office-addon/', import.meta.url));
 const MEMO = fileURLToPath(new URL('./fixtures/memo.docx', import.meta.url));
 const NOTICE = fileURLToPath(new URL('./fixtures/notice.docx', import.meta.url));
+const PICTURE = fileURLToPath(new URL('./fixtures/picture.docx', import.meta.url));
 const HAS_ADDON = existsSync(path.join(ROOT, 'manifest.json'));
 if (!HAS_ADDON) console.warn('[office-commands.test] skipping real-x2t tests: office-addon/manifest.json is missing');
 
@@ -209,6 +210,16 @@ describe.skipIf(!HAS_ADDON)('office commands with the bundled x2t', () => {
     await run(s.token, 'open_file', {});
     expect((await readdir(path.join(s.temp, 'media'))).length).toBeGreaterThan(0);
     expect((await readdir(s.temp)).filter((n) => n.startsWith('job-'))).toEqual([]);
+  });
+
+  it('keeps a picture through a save (the saved file still carries word/media)', async () => {
+    const s = await sessionFor(PICTURE);
+    const run = createOfficeCommands({ root: ROOT, sessions });
+    const b64 = (await run(s.token, 'open_file', {})) as string;
+    await run(s.token, 'write_editor_bin', { data: b64 });
+    expect(await run(s.token, 'save_file', {})).toBe('ok');
+    // A zip stores its entry names uncompressed, so the name is findable in the bytes.
+    expect((await readFile(s.path)).includes('word/media/')).toBe(true);
   });
 
   it('calls onOpened after a successful open', async () => {

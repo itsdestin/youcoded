@@ -298,11 +298,15 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
   // Same checks as invoke: the token must be one this window opened.
   async function saveCopy(sender: OfficeSender, token: unknown, mode: unknown, data?: unknown): Promise<OfficeSaveCopyResult> {
     // The editor's own bytes, from an editor kept after a restore (EditorFrame): copied, never saved.
-    const bin = typeof data === 'string' ? data : undefined;
+    // WHY refused, not ignored, when not text (fix round 3): falling back to the working copy
+    // would put some other editor's document in the copy the person asked for.
+    if (data !== undefined && typeof data !== 'string') return { ok: false, message: MSG.refused };
+    const bin = data;
     const reg = deps.getSessions();
     const s = typeof token === 'string' ? reg?.get(token) : undefined;
     if (!reg || !s || s.senderId !== sender.id) return { ok: false, message: MSG.refused };
     const run = commandsFor(reg);
+    if (mode === 'release') { await run.releaseKeptMedia(s.token); return { ok: true, released: true }; }
     if (mode === 'check') return { ok: true, possible: run.canCopy(s.token) };
     if (mode === 'again') {
       try {
@@ -378,7 +382,15 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     }
     let r: { ok: true } | { ok: false; message: string };
     try {
-      r = await commandsFor(reg).exclusive(s.token, work, (x) => x.ok);
+      const run = commandsFor(reg);
+      // WHY the pictures go aside inside the same queue turn (fix round 3): an editor of this
+      // document that keeps its typing may later copy it, and x2t needs ITS pictures — a reload
+      // queued after this would already have replaced <temp>/media with the restored file's.
+      r = await run.exclusive(s.token, async () => {
+        const res = await work();
+        if (res.ok) await run.keepMedia(s.token).catch((e) => log('WARN', 'Office', 'keeping pictures for a kept editor failed', { error: String(e) }));
+        return res;
+      }, (x) => x.ok);
     } catch (e) {
       // The document closed (or quit began) while the restore waited its turn: nothing was done.
       log('WARN', 'Office', 'office:restore did not run', { error: String(e) });

@@ -69,7 +69,9 @@ export interface OfficeBridge {
   /** "Save a copy…" for a document whose save failed: `check` says whether a copy can succeed
    *  (hide the button when not); `save` asks where and writes it, never touching the original;
    *  `again` re-writes that same copy if the editor's bytes changed since (typing meanwhile). */
-  saveCopy(token: string, mode: 'check' | 'save' | 'again', editorBin?: string): Promise<OfficeSaveCopyResult>;
+  /** 'release': the editor that kept its typing after a restore was let go — main drops the
+   *  pictures it put aside for that editor's copy. */
+  saveCopy(token: string, mode: 'check' | 'save' | 'again' | 'release', editorBin?: string): Promise<OfficeSaveCopyResult>;
   /** Window close / app quit (design §4): main asks this window to save every open document,
    *  and waits for flushDone with the same id (or 5 s). Desktop only — absent elsewhere. */
   onFlushRequest?(cb: (id: string, reason: 'close' | 'quit' | 'final') => void): () => void;
@@ -115,6 +117,7 @@ export type OfficeSaveCopyResult =
   /** 'again': whether the editor's newest bytes matched what is already in the copy (then
    *  nothing was written); otherwise the copy was written again with them. */
   | { ok: true; folder: string; path: string; unchanged: boolean }
+  | { ok: true; released: true }
   | { ok: false; cancelled: true }
   | { ok: false; message: string };
 

@@ -881,4 +881,25 @@ describe('two editors on one document when a restore lands', () => {
     expect(saveCopy).toHaveBeenCalledWith('t1', 'save', 'T0xE');
     expect(invoke.mock.calls.filter((c) => c[1] === 'save_file' || c[1] === 'write_editor_bin')).toEqual([]);
   });
+
+  it('after Close without saving, the editor that kept its typing sends nothing to main and main drops its pictures', async () => {
+    let push: ((p: { path: string; token: string }) => void) | null = null;
+    const saveCopy = vi.fn(async () => ({ ok: true as const, released: true as const }));
+    const office = withOffice({ invoke: vi.fn(async () => 'ok'), onChanged: vi.fn((cb) => { push = cb; return () => {}; }), saveCopy });
+    const ref = React.createRef<EditorFrameHandle>();
+    const { container } = render(<EditorFrame ref={ref} file={FILE} />);
+    const iframe = await waitFor(() => { const f = frameOf(container) as HTMLIFrameElement; expect(f?.getAttribute('src')).toBe('office://t1/index.html'); return f; });
+    vi.spyOn(iframe.contentWindow!, 'postMessage').mockImplementation(() => {});
+    const from = (data: unknown) => act(() => { window.dispatchEvent(new MessageEvent('message', { data, origin: 'office://t1', source: iframe.contentWindow })); });
+    await waitFor(() => { from({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } }); expect(saveStateFor(FILE.path).phase).toBe('unsaved'); });
+    act(() => push!({ path: FILE.path, token: 't1' }));
+    expect(saveStateFor(FILE.path)).toMatchObject({ keptAfterRestore: true });
+    act(() => ref.current!.discard());
+    expect(saveCopy).toHaveBeenCalledWith('t1', 'release');
+    const invoke = vi.mocked(office.invoke);
+    invoke.mockClear();
+    // Still the old document until it goes away: anything it sends is answered here.
+    for (const cmd of ['set_document_modified', 'write_editor_bin', 'save_file', 'js_log']) from({ yc: 'rpc', id: cmd, cmd, args: { modified: true, data: 'T0xE' } });
+    expect(invoke).not.toHaveBeenCalled();
+  });
 });
