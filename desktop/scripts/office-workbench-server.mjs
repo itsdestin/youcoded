@@ -28,18 +28,23 @@ const FIXTURES = path.join(DESKTOP, 'src/renderer/dev/workbench/fixtures/office'
 const PORT = 4717;
 
 const require = createRequire(import.meta.url);
-let x2t, protocolModule;
+let x2t, protocolModule, themeFonts;
 try {
   x2t = require(path.join(DESKTOP, 'dist/main/office/x2t.js'));
   // office-protocol.js imports electron's `protocol` at load; outside Electron that import is
   // only the binary's path, and nothing here calls it — OFFICE_CSP is a plain string.
   protocolModule = require(path.join(DESKTOP, 'dist/main/office/office-protocol.js'));
+  themeFonts = require(path.join(DESKTOP, 'dist/main/office/theme-fonts.js'));
 } catch (e) {
   console.error(`Build the main process first (npx tsc -p tsconfig.json in desktop/): ${e.message}`);
   process.exit(1);
 }
 const { convert, FORMAT } = x2t;
 const { OFFICE_CSP } = protocolModule;
+// WHY (Task 9): main serves the theme's web font on the editor's own origin (/yc-fonts/…, fetched
+// from Google's font hosts only); the workbench plays main's part with main's own module, so a
+// picture of a theme with a web font shows that font in the editor's menus, as the app does.
+const fonts = themeFonts.createThemeFonts({ cacheDir: path.join(tmpdir(), 'yc-office-wb-font-cache'), fetch: (u, init) => fetch(u, init) });
 
 const MIME = {
   '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css',
@@ -92,6 +97,14 @@ const server = createServer(async (req, res) => {
   try {
     const u = new URL(req.url ?? '/', `http://127.0.0.1:${PORT}`);
     const rel = decodeURIComponent(u.pathname).replace(/^\/+/, '') || 'index.html';
+    if (rel === 'yc-fonts/css') {
+      const css = await fonts.fetchFontCss(u.searchParams.get('u') ?? '');
+      return css === null ? send(404, 'not found') : send(200, css, 'text/css');
+    }
+    if (rel === 'yc-fonts/file') {
+      const f = await fonts.fetchFontFile(u.searchParams.get('u') ?? '');
+      return f ? send(200, Buffer.from(f.data), f.type) : send(404, 'not found');
+    }
     if (rel.startsWith('fixtures/') || rel.startsWith('samples/')) {
       const file = await confined(FIXTURES, rel.slice(rel.indexOf('/') + 1));
       if (!file) return send(404, 'not found');
