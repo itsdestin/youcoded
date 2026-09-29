@@ -89,7 +89,9 @@ export function utilizationColor(pct: number | null | undefined): string {
   return '#10b981';
 }
 
-function WindowRow({ label, win }: { label: string; win: PlanWindow }) {
+// Exported (usage statistics, 2026-09-29): a ChatGPT per-model limit is the
+// same kind of bar, labelled by its model, so it reuses this one recipe.
+export function WindowRow({ label, win }: { label: string; win: PlanWindow }) {
   const color = utilizationColor(win.utilization);
   return (
     <div>

@@ -10,6 +10,8 @@ import { useClaudeStatus } from './model/availability';
 import { AnchorTip, Button, Dialog, InputGroup, TextInput } from './ui';
 import BrailleSpinner from './BrailleSpinner';
 import { PlanWindows, type PlanUsage } from './plan-windows';
+import { ChatGptExtras } from './usage/UsagePopup';
+import { useUsageAccounts } from './usage/usage-live';
 import { invalidateProviderTypeCache } from '../hooks/use-provider-type';
 import { useScreenOpen, ScreenMark } from '../shoot-mode';
 
@@ -292,6 +294,7 @@ export function ChatGptBlock() {
   // or it does not exist at all. Merged 2026-09-07.
   const supported = (window as any).claude?.chatgpt?.supported === true;
   const [status, setStatus] = useState<ChatGptAccountStatus | null>(null);
+  const accounts = useUsageAccounts();
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
@@ -420,7 +423,14 @@ export function ChatGptBlock() {
         account={status?.state === 'signed-in' || status?.state === 'blocked' ? 'https://chatgpt.com/#settings/Account' : undefined}
         action={action}
       >
-        {status?.state === 'signed-in' && <PlanWindows usage={status.usage} />}
+        {status?.state === 'signed-in' && (
+          <div className="space-y-2">
+            <PlanWindows usage={status.usage} />
+            {/* Usage statistics Q-6: ChatGPT's per-model limit and extra
+                credits, under the plan bars, only when ChatGPT reports them. */}
+            <ChatGptExtras accounts={accounts} />
+          </div>
+        )}
       </ProviderRow>
     </>
   );
@@ -571,6 +581,7 @@ export function OpenRouterBlock({ keysHeading }: { keysHeading?: string } = {}) 
   };
 
   const connected = openrouter?.hasKey === true;
+  const orBalance = useUsageAccounts()?.openrouter?.balanceUsd;
   const words = openRouterKeyWords(openrouter?.health, signInSupported);
   const waiting = signIn.state === 'waiting';
 
@@ -644,7 +655,16 @@ export function OpenRouterBlock({ keysHeading }: { keysHeading?: string } = {}) 
               Connect to OpenRouter
             </Button>
           )}
-        />
+        >
+          {/* Usage statistics Q-5: the credit left, for a key that works —
+              so running low shows here before a reply fails. */}
+          {connected && !waiting && !words.broken && orBalance != null ? (
+            <p className="flex justify-between text-xs">
+              <span className="text-fg-muted">Credit left</span>
+              <span className="text-fg-2 tabular-nums">${orBalance.toFixed(2)}</span>
+            </p>
+          ) : null}
+        </ProviderRow>
       </div>
 
       {/* Other API providers — direct keys (Anthropic/OpenAI/Google) + custom

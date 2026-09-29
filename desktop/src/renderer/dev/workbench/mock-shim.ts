@@ -491,10 +491,13 @@ const NAMESPACES = [
   // here so the workbench shows every seeded comment state (open/replied/
   // resolved/Word/Excel) without a main process.
   'docComments',
+  // Usage statistics (design 2026-09-29) — no real backend yet, registered in mock-only.ts.
+  'usage',
 ];
 
 import { createNamingPreview } from './naming-preview';
 import { seedPages } from './fixtures/pages';
+import { usageHistoryFixture, usageAccountsFixture } from './fixtures/usage';
 import type { PagesBridge, PageDocument, PageSummary, SavedPageKey } from '../../../shared/pages-types';
 
 /** `?fail=<ns.method>[,…]` — those channels REJECT from the first call.
@@ -3506,6 +3509,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     update, dev: devMock, ...(remote ? { remote } : {}),
     pages: createPagesMock(activeScenario === 'empty'),
     docComments: createDocCommentsMock(activeScenario === 'empty'),
+    // Usage statistics (design 2026-09-29): MOCK_ONLY until main records daily totals.
+    usage: {
+      history: async () => usageHistoryFixture(activeScenario === 'empty'),
+      accounts: async () => usageAccountsFixture(activeScenario === 'empty'),
+    },
   } as unknown as Record<string, Record<string, unknown>>;
 }
 

@@ -16,6 +16,7 @@ import FolderSwitcher from '../FolderSwitcher';
 import SessionNaming from './SessionNaming';
 import SavedContextSettings from './SavedContextSettings';
 import { Button, FieldError, SettingRow, Toggle, TypeableSelect } from '../ui';
+import { UsageStats } from '../usage/UsageStats';
 
 // The pages of Assistant settings. Five, in one flat list (review round 1,
 // 2026-09-05 — P-5 note: one "Cloud providers" page for the three sign-in /
@@ -360,6 +361,13 @@ export const PAGES: PageDef[] = [
       // data-guide-anchor: the first-run tour's "models and providers" stop
       // rings the whole page — every way to be answered, not just API keys.
       <div className="space-y-2" data-guide-anchor="providers">
+        {/* Usage statistics (design 2026-09-29, Q-1): the full history sits
+            on this page, above the accounts it describes; the status-bar
+            chips open the same view in a popup. */}
+        <section className="bg-inset/50 rounded-lg px-3 py-2.5 space-y-2">
+          <p className="text-xs text-fg font-medium">Usage</p>
+          <UsageStats />
+        </section>
         <ClaudeCodeBlock onOpenClaudePreferences={ctx.onOpenClaudePreferences} onCloseParent={ctx.onClosePanel} />
         <ChatGptBlock />
         <OpenRouterBlock keysHeading="Your own API keys" />

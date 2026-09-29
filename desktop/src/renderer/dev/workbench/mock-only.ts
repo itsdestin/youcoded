@@ -97,6 +97,11 @@ export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   // Browser encryption is an approved design with no backend: the Advanced section and its
   // screen render only under the workbench preview. Delete this row when it ships.
   { channel: 'remote.preview', feature: 'Remote access secure setup — UI mockup only' },
+  // Usage statistics (design 2026-09-29, docs/active/design/2026-09-29-usage-stats/):
+  // the usage view's history and live balances. Delete these rows when main
+  // records daily totals and reads the OpenRouter/ChatGPT balances.
+  { channel: 'usage.history', feature: 'Usage statistics — daily totals by provider and model' },
+  { channel: 'usage.accounts', feature: 'Usage statistics — OpenRouter balance, ChatGPT credits and model limits' },
   // Welcome back's session.reopenList/session.forgetReopen rows are GONE
   // (T2, 2026-09-24): main + preload + remote-shim now carry the real
   // channels; the mock implementations in mock-shim.ts stay (the workbench

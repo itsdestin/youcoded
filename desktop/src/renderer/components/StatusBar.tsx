@@ -12,6 +12,7 @@ import { type WidgetId, type SessionRuntime, type RelevanceContext, nativeDispla
 import { FastIcon } from './Icons';
 import UpdatePanel from './UpdatePanel';
 import ContextPopup from './ContextPopup';
+import { UsagePopup } from './usage/UsagePopup';
 import OpenTasksChip from './OpenTasksChip';
 import { isAndroid } from '../platform';
 import { SessionTagsChip } from './tags/SessionTagsChip';
@@ -1031,12 +1032,13 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
   // announcement before it became always-on sees it again.
   const show = (id: WidgetId) => (LOCKED_WIDGETS.has(id) || visible.has(id))
     && (widgetApplies(id, runtime) || (chatgptWindows && (id === 'usage-5h' || id === 'usage-7d')));
-  // Where a usage chip goes when clicked: the Claude account page, or — for a
-  // ChatGPT plan — the Model Providers row that shows the plan and its windows.
-  const openUsage = () => chatgptWindows
-    ? window.dispatchEvent(new CustomEvent('youcoded:open-model-providers'))
-    : window.claude.shell.openExternal('https://claude.ai/settings/usage');
-  const usageTitle = chatgptWindows ? 'Your ChatGPT plan — click to open Model Providers' : 'View usage on claude.ai';
+  // Usage statistics (design 2026-09-29, Q-1): a usage or cost chip opens the
+  // usage popup — every limit and balance now, plus history. It used to jump
+  // straight to claude.ai or Model Providers; those are buttons inside it now.
+  const [usagePopupOpen, setUsagePopupOpen] = useState(false);
+  useScreenOpen('chat/usage', () => setUsagePopupOpen(true)); // photo-only build
+  const openUsage = () => setUsagePopupOpen(true);
+  const usageTitle = chatgptWindows ? 'Your ChatGPT plan — click for usage' : 'Your Claude plan — click for usage';
   const ss = sessionStats; // shorthand
 
   // Native-runtime chips (Task 12). Non-null only for native sessions that have
@@ -1412,15 +1414,18 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
             + ' Not exact — a few models charge more above very large prompts.';
         return (
           <Tooltip text={title}>
-          <span
-            className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
+          {/* A button since 2026-09-29 (usage statistics, Q-1): it opens the
+              usage popup, same as the 5h/7d chips. Same hover as UsageChip. */}
+          <button
+            onClick={openUsage}
+            className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:bg-inset transition-colors"
           >
             <span className="text-fg-muted">Cost:</span>
             <span className="text-fg-2">{formatCostUsd(cost)}</span>
             {/* Shown only when the session actually delegated: most never do,
                 and this bar is already crowded. */}
             {specialistCost > 0 && <span className="text-fg-muted">· specialists</span>}
-          </span>
+          </button>
           </Tooltip>
         );
       })()}
@@ -1788,6 +1793,8 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
           updateStatus={updateStatus}
         />
       )}
+
+      <UsagePopup open={usagePopupOpen} onClose={() => setUsagePopupOpen(false)} />
 
       {/* Context popup — portal-rendered; position in tree is cosmetic. */}
       {/* Native sessions have their own numbers: the CC fields (contextPercent /
