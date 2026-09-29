@@ -347,6 +347,8 @@ declare global {
         // (caller may now safely refill the composer); false = too late (already
         // draining/sent) or the session isn't live — never throws.
         queueRemove: (sessionId: string, queueId: string) => Promise<boolean>;
+        /** Stop the current task and send this waiting message next. false = already sending. */
+        queueSendNow: (sessionId: string, queueId: string) => Promise<boolean>;
         interrupt: (sessionId: string) => void;
         // Stalled-turn Retry — fire-and-forget, same shape as interrupt above.
         retry: (sessionId: string) => void;

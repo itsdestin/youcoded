@@ -1,0 +1,19 @@
+{
+  "fixture": "docling-xlsx-comments.xlsx",
+  "path": "reports/docling-xlsx-comments.xlsx",
+  "steps": [
+    {
+      "op": "add",
+      "args": {
+        "cell": "C1",
+        "text": "Which release of docling generated this?",
+        "author": "user"
+      },
+      "result": {
+        "ok": true,
+        "id": "xt-1-C1-E6FF9B22-E3EE-40BB-BE77-2BF3428F14FE",
+        "text": "Which release of docling generated this?"
+      }
+    }
+  ]
+}

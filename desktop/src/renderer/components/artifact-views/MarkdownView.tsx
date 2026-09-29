@@ -3,6 +3,10 @@
 // so the conflict banner has access to the in-progress draft.
 import MarkdownContent from '../MarkdownContent';
 import type { ArtifactViewProps } from './types';
+// Doc comments: the highlights / comment pane layout is shared with the Word
+// and spreadsheet viewers (CommentableDocument's own WHY). Skipped in edit
+// mode: a highlighted span over a live textarea draft has nothing to anchor to.
+import { CommentableDocument } from '../comments/CommentableDocument';
 
 // NOTE: Edit/Save/Cancel live in the HOST's header (SessionDrawer toolbar /
 // ProjectDetailOverlay tools via the controlsInHeader handle) — this view never
@@ -11,6 +15,7 @@ import type { ArtifactViewProps } from './types';
 export function MarkdownView({
   path, content,
   editing = false, draft = '', onDraftChange,
+  commentsMode = 'reading', onOpenComments, focusThreadId, projectRoot,
 }: ArtifactViewProps) {
   if (content === null) {
     // Loading / missing / read-error are rendered by ActiveArtifactView (which
@@ -41,20 +46,28 @@ export function MarkdownView({
 
   const isMarkdown = path.endsWith('.md') || path.endsWith('.markdown');
   return (
-    <div className="flex flex-col h-full">
-      <div
-        className="flex-1 overflow-auto p-4"
-        data-artifact-viewer
-        data-doc-path={path}
-        // Rendered markdown prose doesn't map back to source line numbers (see
-        // describeArtifactSelection in build-menu.ts), so only plain-text files
-        // get the 'raw' treatment that enables line-number citing.
-        data-artifact-source={isMarkdown ? 'rendered' : 'raw'}
-      >
-        {isMarkdown
-          ? <MarkdownContent content={content} />
-          : <pre className="font-mono text-sm whitespace-pre-wrap">{content}</pre>}
-      </div>
-    </div>
+    <CommentableDocument
+      path={path}
+      commentsMode={commentsMode}
+      onOpenComments={onOpenComments}
+      focusThreadId={focusThreadId}
+      projectRoot={projectRoot}
+      // Rendered markdown prose doesn't map back to source line numbers (see
+      // describeArtifactSelection in build-menu.ts), so only plain-text files
+      // get the 'raw' treatment that enables line-number citing.
+      source={isMarkdown ? 'rendered' : 'raw'}
+    >
+      {/* WHY key={content} (2026-09-28 PR review): comment highlights split
+          and wrap the text nodes React rendered here. When the file changed on
+          disk (the assistant editing it), React patched those same nodes in
+          place — doubling highlighted words, or throwing "The node to be
+          removed is not a child of this node" and replacing the viewer with an
+          error. Keying on the text makes React build the document fresh
+          instead of patching nodes the highlights moved; the highlights then
+          re-apply to the new text. Nothing changes while the text is the same. */}
+      {isMarkdown
+        ? <MarkdownContent key={content} content={content} />
+        : <pre key={content} className="font-mono text-sm whitespace-pre-wrap">{content}</pre>}
+    </CommentableDocument>
   );
 }

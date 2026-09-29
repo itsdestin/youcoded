@@ -717,6 +717,23 @@ function AppInner() {
   // Pages' "Create a page" / Edit: the new-session dialog waiting for a folder
   // and model (Destin, 2026-09-17). Null while closed.
   const [pageCreate, setPageCreate] = useState<PageCreateRequest | null>(null);
+  // Document comments' Ask Your Assistant on the Projects screen (review deck
+  // Q-1): the same new-session dialog, started in that file's project with the
+  // request waiting in the composer (FilesTab raises the event).
+  useEffect(() => {
+    const onAsk = (e: Event) => {
+      const d = (e as CustomEvent<{ cwd?: string; initialInput?: string }>).detail;
+      if (!d?.initialInput) return;
+      setPageCreate({
+        title: 'Ask your assistant',
+        subtitle: 'Pick where the conversation starts and which model works through your comments.',
+        initialInput: d.initialInput,
+        cwd: d.cwd,
+      });
+    };
+    window.addEventListener('youcoded:ask-in-new-session', onAsk);
+    return () => window.removeEventListener('youcoded:ask-in-new-session', onAsk);
+  }, []);
   // Ref mirror of artifact state so the (once-registered) tool-use handler can
   // dedup Read-tracking against the session's already-known artifacts without
   // re-subscribing on every reducer tick.
@@ -849,6 +866,20 @@ function AppInner() {
     }
     dispatch({ type: 'QUEUED_MESSAGE_REMOVED', sessionId: sid, queueId });
     inputBarRef.current?.fillDraft(text);
+  }, [dispatch]);
+
+  // "Send now": the row stays until the drain sends it (TRANSCRIPT_USER_MESSAGE
+  // removes it); false = already on its way, handled like Cancel's too-late.
+  const handleSendQueuedNow = useCallback(async (sid: string, queueId: string) => {
+    // WHY catch (PR #585 review): over remote access the request can fail (e.g. the
+    // connection drops) and a click that silently does nothing reads as broken.
+    // The cause is unknown here, so the words stay general and the row stays put.
+    const moved = await window.claude.native.queueSendNow(sid, queueId).catch(() => null);
+    if (moved === null) { setToast("Send now didn't go through — try again."); return; }
+    if (!moved) {
+      setToast('Already sending.');
+      dispatch({ type: 'QUEUED_MESSAGE_REMOVED', sessionId: sid, queueId });
+    }
   }, [dispatch]);
 
   // Compaction watchdog: activity-aware — resets on any reducer update for a
@@ -3887,6 +3918,7 @@ function AppInner() {
                       onAddCredit={chatViewHandlers.addCredit}
                       onCancelQueued={handleCancelQueued}
                       onEditQueued={handleEditQueued}
+                      onSendQueuedNow={handleSendQueuedNow}
                       conversationStatus={conversationStatus}
                       onRefreshConversation={handleRefreshConversation}
                       modelLoadingDemo={s.id === sessionId && new URLSearchParams(location.search).get('mode') === 'workbench' && new URLSearchParams(location.search).get('modelLoading') === '1'}
@@ -4339,7 +4371,9 @@ function AppInner() {
         onCancel={() => setPageCreate(null)}
         // The form created the session; adopt it the way createSession does
         // (list entry, view mode, focus) and leave pages so the chat shows.
-        onCreated={(info) => { setPageCreate(null); adoptCreatedSession(info); dispatchArtifact({ type: 'PAGE_VIEW_CLOSED' }); }}
+        // PROJECT_VIEW_CLOSED too: comments' Ask Your Assistant opens this
+        // from the Projects screen, and the new chat must be what shows next.
+        onCreated={(info) => { setPageCreate(null); adoptCreatedSession(info); dispatchArtifact({ type: 'PAGE_VIEW_CLOSED' }); dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' }); }}
         onManageProjects={() => { setPageCreate(null); dispatchArtifact({ type: 'PROJECT_VIEW_OPENED' }); }}
       />
       {/* The game panel now renders inside the active session's framed-shell

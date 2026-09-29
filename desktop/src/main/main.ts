@@ -32,7 +32,7 @@ import { getFavorites as getGameFavorites, setFavorites as setGameFavorites, get
 import { RemoteConfig } from './remote-config';
 import { LocalSkillProvider } from './skill-provider';
 import { CommandProvider } from './command-provider';
-import { shouldAutoApprove } from './permission-auto-approve';
+import { shouldAutoApprove, shouldAutoApproveDocComment } from './permission-auto-approve';
 import { IPC, PermissionOverrides, PERMISSION_OVERRIDES_DEFAULT, type AttentionState, type AttentionSummary, type AttentionReport, type SessionOwnershipAcquired } from '../shared/types';
 import { VITE_DEV_PORT } from '../shared/ports';
 import { validateHandoffDraft, type DetachedHandoffDraft } from '../shared/handoff-draft';
@@ -1240,6 +1240,24 @@ function createWindow(firstRunManager?: FirstRunManager) {
     });
   }
 
+  // Adversarial review 2026-09-27, finding #2: `shouldAutoApproveDocComment`
+  // must recognize THIS session's own doc-comments MCP server by an
+  // unpredictable, per-session id, never a fixed, guessable, checked-into-a-
+  // repo-able string. `session-manager.ts`'s `doc-comments-mcp-attached`
+  // event (a PRIVATE event, never forwarded to the renderer — see its own
+  // emit-site comment) carries the id generated at deploy time; this map
+  // answers "which id is legitimate for this session" when a PermissionRequest
+  // for it arrives below. Cleared on session-exit so a reused session id
+  // (there is none today, but nothing here should assume it) can't inherit a
+  // stale entry.
+  const docCommentsServerIdsBySession = new Map<string, string>();
+  sessionManager.on('doc-comments-mcp-attached', (sessionId: string, _cwd: string, _token: string, serverId: string) => {
+    docCommentsServerIdsBySession.set(sessionId, serverId);
+  });
+  sessionManager.on('session-exit', (sessionId: string) => {
+    docCommentsServerIdsBySession.delete(sessionId);
+  });
+
   // Forward hook events to renderer
   hookRelay.on('hook-event', (event) => {
     // In bypass mode (--dangerously-skip-permissions), Claude Code handles most
@@ -1256,13 +1274,37 @@ function createWindow(firstRunManager?: FirstRunManager) {
       const toolName = event.payload?.tool_name as string;
       const toolInput = event.payload?.tool_input as Record<string, unknown> | undefined;
       const requestId = event.payload?._requestId as string;
+      // Claude Code's OWN live permission mode ('default'|'acceptEdits'|
+      // 'bypassPermissions'|'plan'|'dontAsk'|'auto') — part of every hook
+      // payload's common base shape (confirmed against the installed CLI
+      // binary's embedded schema, cc-dependencies.md), so it was already
+      // riding in `event.payload` with nothing reading it until now. Optional
+      // by the CLI's own schema — absent reads as `undefined`, which
+      // shouldAutoApproveDocComment treats as "don't know, don't approve."
+      const permissionMode = event.payload?.permission_mode as string | undefined;
+      // This session's own doc-comments MCP server id (finding #2) —
+      // `undefined` for a session that never got one (a non-Claude-Code
+      // provider, or a failed deploy), which `shouldAutoApproveDocComment`
+      // treats as "can't verify, never approve."
+      const docCommentsServerId = docCommentsServerIdsBySession.get(event.sessionId);
 
       // The whole decision lives in permission-auto-approve.ts (pure, tested).
       // It NEVER allows AskUserQuestion or ExitPlanMode: both need the user's
       // own answer, and Claude Code ignores a hook "allow" for them — an
       // auto-allow there only removed the card while Claude Code's own menu
       // stayed live with the send gate open (review 2026-09-23).
-      if (requestId && shouldAutoApprove(toolName, toolInput, permissionOverrides)) {
+      //
+      // doc-comments build design §5.2a (decided option 1): a doc-comment
+      // mutation tool (claude-code-doc-comments-mcp.ts, T9a/T9b) targeting a
+      // plain-text/markdown/code file is auto-approved UNCONDITIONALLY — not
+      // gated behind `permissionOverrides` the way the categories below are,
+      // because that case is meant to never prompt in any mode. A Word/Excel
+      // target is auto-approved only when `permissionMode` is one Claude Code
+      // itself already treats as a frictionless file-edit mode (acceptEdits/
+      // bypassPermissions); `plan`, `default`, an unrecognized mode, or a
+      // missing `permissionMode` all fall through to the ordinary ask below
+      // (see permission-auto-approve.ts's own header for the full reasoning).
+      if (requestId && (shouldAutoApproveDocComment(toolName, toolInput, permissionMode, docCommentsServerId) || shouldAutoApprove(toolName, toolInput, permissionOverrides))) {
         hookRelay.respond(requestId, { decision: { behavior: 'allow' } });
         return;
       }

@@ -41,7 +41,16 @@
     {
       "files": ["src/renderer/**/*.tsx"],
       "rules": {
-        "shadcn/no-restyle": ["warn", { "allow": ["layout"] }],
+        // contracts: solid-accent is a real, globals.css-defined class (opaque
+        // background over wallpaper themes, review deck R-5) — not an
+        // arbitrary restyle — so it's allowed on <Button> specifically,
+        // same escape hatch the raw <button> uses in SessionDrawer.tsx.
+        "shadcn/no-restyle": ["warn", {
+          "allow": ["layout"],
+          "contracts": [
+            { "pattern": "^Button$", "allow": ["layout", "solid-accent"] }
+          ]
+        }],
         "shadcn/no-raw-colors": "warn",
         "shadcn/no-arbitrary-values": "warn",
         "shadcn/no-unknown-classes": "warn",

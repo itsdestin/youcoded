@@ -5,6 +5,7 @@
 // Strictest wins: a cap can only ever narrow what the parent would have allowed.
 import { describe, it, expect, vi } from 'vitest';
 import { buildChildDecide } from '../src/main/harness/specialists/child-permissions';
+import { resolveSpecialist } from '../src/main/harness/specialists/registry';
 import type { PermissionDecision } from '../src/shared/permission-types';
 
 const allow: PermissionDecision = { action: 'allow', denyListed: false };
@@ -30,6 +31,33 @@ describe('buildChildDecide', () => {
     const d = await decide('Write', '/w/x.ts');
     expect(d.action).toBe('deny');
     expect(d.message).toMatch(/read-only/i);
+  });
+
+  // T8 review F2: the five comment-mutation tools write real Word/Excel bytes
+  // when targeted at one, so a read-only charter must refuse them exactly
+  // like it already refuses Write — even though neither NATIVE_CHILD_TOOLS
+  // nor a builtin's allowedTools currently offers a specialist any of these
+  // tools (this test exercises WRITE_TOOLS directly, the layer that would
+  // still catch it if a FUTURE change ever did).
+  it.each(['ReplyToComment', 'ResolveComment', 'ReopenComment', 'AddComment', 'MoveComment'])(
+    'a read-only charter refuses %s even if listed, same as Write',
+    async (tool) => {
+      const decide = buildChildDecide({
+        parentDecide: async () => allow,
+        charter: 'read-only', allowedTools: [tool], envelopeGranted: true,
+      });
+      const d = await decide(tool, 'docs/brief.docx');
+      expect(d.action).toBe('deny');
+      expect(d.message).toMatch(/read-only/i);
+    },
+  );
+
+  it('ReadFileComments is not treated as a write — a read-only charter still allows it', async () => {
+    const decide = buildChildDecide({
+      parentDecide: async () => allow,
+      charter: 'read-only', allowedTools: ['ReadFileComments'], envelopeGranted: true,
+    });
+    expect((await decide('ReadFileComments', 'docs/brief.docx')).action).toBe('allow');
   });
 
   it('parent DENY always wins over the envelope, message passed through', async () => {
@@ -86,6 +114,31 @@ describe('buildChildDecide', () => {
     for (const tool of ['Write', 'Edit', 'Bash']) {
       expect((await decide(tool, '/w/x.ts')).action).toBe('allow');
     }
+  });
+
+  it('the built-in Worker effective toolset permits Bash companions but never overrides a parent deny or floor ask', async () => {
+    const worker = resolveSpecialist('worker')!;
+    const effective = [...worker.allowedTools, 'BashOutput', 'KillShell'];
+    const parentDecide = vi.fn(async (tool: string): Promise<PermissionDecision> =>
+      tool === 'KillShell' ? deny : tool === 'Bash' ? { action: 'ask', denyListed: true } : allow);
+    const decide = buildChildDecide({ parentDecide, charter: worker.charter, allowedTools: effective, envelopeGranted: true });
+    expect((await decide('BashOutput', undefined)).action).toBe('allow');
+    expect(await decide('KillShell', undefined)).toEqual(deny);
+    expect(await decide('Bash', 'rm -rf /')).toEqual({ action: 'ask', denyListed: true });
+    const allAllowed = buildChildDecide({ parentDecide: async () => allow, charter: worker.charter, allowedTools: effective, envelopeGranted: true });
+    for (const name of ['Bash', 'BashOutput', 'KillShell']) expect((await allAllowed(name, undefined)).action).toBe('allow');
+    expect(worker.allowedTools).not.toContain('BashOutput');
+  });
+
+  it('without Bash, read-only definitions never receive its background companions', async () => {
+    const explorer = resolveSpecialist('explorer')!;
+    const parentDecide = vi.fn(async () => allow);
+    const decide = buildChildDecide({ parentDecide, charter: explorer.charter, allowedTools: explorer.allowedTools, envelopeGranted: true });
+    for (const name of ['Bash', 'BashOutput', 'KillShell']) expect((await decide(name, undefined)).action).toBe('deny');
+    expect(parentDecide).not.toHaveBeenCalled();
+    // Even a malformed read-only definition explicitly listing Bash cannot use it.
+    const capped = buildChildDecide({ parentDecide: async () => allow, charter: 'read-only', allowedTools: ['Bash'], envelopeGranted: true });
+    expect((await capped('Bash', 'pwd')).action).toBe('deny');
   });
 
   it('the two caps short-circuit BEFORE the parent is consulted — a refused tool costs no parent lookup', async () => {

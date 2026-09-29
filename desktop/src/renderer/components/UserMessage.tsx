@@ -5,6 +5,13 @@ import { splitFlowingKeywords } from './FlowingKeywords';
 import { formatBubbleTime } from '../utils/format-time';
 import { detectFilepaths } from '../hooks/useInlineFilepathDetector';
 import { FilepathToken } from './FilepathToken';
+// Round 2 (Destin): a reference token typed via "Ask about this" / "Send to
+// assistant" rides in message.content as an invisible marker (compose-ref.ts)
+// — decode it back into the SAME pill the composer showed, inline in the
+// sentence, so a reference reads identically before and after sending.
+import { splitComposeRefs, jumpToRef, type ComposeRef } from './context-menu/compose-ref';
+import { useOpenFilepath } from '../hooks/useOpenFilepath';
+import { TokenPill } from './comments/TokenPill';
 
 interface Props {
   message: ChatMessage;
@@ -25,6 +32,9 @@ function renderTextRun(text: string, keyPrefix: string): React.ReactNode[] {
 }
 
 export default React.memo(function UserMessage({ message, sessionId, showTimestamps }: Props) {
+  // A chip click opens its file when it isn't already open, then jumps to
+  // the source text (compose-ref.ts "Chip ↔ source text").
+  const openFile = useOpenFilepath(sessionId);
   const content = message.content;
 
   // Attached files: message.attachments carries the EXACT picker paths (which
@@ -44,28 +54,41 @@ export default React.memo(function UserMessage({ message, sessionId, showTimesta
     if (i < attachments.length - 1 || text.length > 0) attachmentPills.push(' ');
   }
 
-  // Detect filepaths in the (remaining) typed text and render each as a
-  // clickable pill that opens in the artifact viewer, same as assistant
-  // messages. Non-path spans keep the flowing-keyword + URL-link treatment.
-  // NOTE: this covers the LIVE bubble; a reloaded-from-transcript message
-  // loses attachment paths (the transcript stores images as blocks, not
-  // paths), so pills there fall back to plain text.
-  const matches = detectFilepaths(text);
-
-  let body: React.ReactNode[];
-  if (matches.length === 0) {
-    body = renderTextRun(text, 't');
-  } else {
-    body = [];
+  // Detect filepaths in a plain-text segment and render each as a clickable
+  // pill that opens in the artifact viewer, same as assistant messages.
+  // Non-path spans keep the flowing-keyword + URL-link treatment. NOTE: this
+  // covers the LIVE bubble; a reloaded-from-transcript message loses
+  // attachment paths (the transcript stores images as blocks, not paths), so
+  // pills there fall back to plain text.
+  function renderProseSegment(segment: string, keyPrefix: string): React.ReactNode[] {
+    const matches = detectFilepaths(segment);
+    if (matches.length === 0) return renderTextRun(segment, keyPrefix);
+    const out: React.ReactNode[] = [];
     let cursor = 0;
     matches.forEach((m, mi) => {
-      if (m.start > cursor) body.push(...renderTextRun(text.slice(cursor, m.start), `t${mi}`));
-      body.push(<FilepathToken key={`p${mi}`} path={m.path} sessionId={sessionId} />);
+      if (m.start > cursor) out.push(...renderTextRun(segment.slice(cursor, m.start), `${keyPrefix}t${mi}`));
+      out.push(<FilepathToken key={`${keyPrefix}p${mi}`} path={m.path} sessionId={sessionId} />);
       cursor = m.end;
     });
-    if (cursor < text.length) body.push(...renderTextRun(text.slice(cursor), 'tend'));
+    if (cursor < segment.length) out.push(...renderTextRun(segment.slice(cursor), `${keyPrefix}end`));
+    return out;
   }
-  body = [...attachmentPills, ...body];
+
+  // Reference tokens (compose-ref.ts) split out from the REMAINING text —
+  // they can sit anywhere, interleaved with ordinary words and filepaths.
+  // The pill uses tone="on-accent": this bubble is bg-accent, and the
+  // composer's neutral pill (tuned for a panel background) would sit at low
+  // contrast on it — same reasoning as Button's own on-accent variant.
+  const body: React.ReactNode[] = [...attachmentPills];
+  const segs = splitComposeRefs(text);
+  const pill = (ref: ComposeRef, key: string) => (
+    <TokenPill key={key} ref_={ref} onJump={(r) => jumpToRef(r, openFile)} tone="on-accent" />
+  );
+  for (let i = 0; i < segs.length; i++) {
+    const seg = segs[i];
+    if (seg.type === 'ref') body.push(pill(seg.ref, `ref-${seg.ref.id}-${i}`));
+    else body.push(...renderProseSegment(seg.value, `s${i}-`));
+  }
 
   return (
     <div className="flex justify-end px-4 py-2">

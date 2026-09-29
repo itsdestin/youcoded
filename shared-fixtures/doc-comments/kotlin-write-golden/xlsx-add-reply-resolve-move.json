@@ -1,0 +1,10 @@
+{
+  "fixture": "docling-xlsx-comments.xlsx",
+  "path": "reports/docling-xlsx-comments.xlsx",
+  "addCell": "C1",
+  "replyText": "Kotlin reply.",
+  "replyAuthor": "assistant",
+  "newCell": "H30",
+  "addText": "From Kotlin: which release is this?",
+  "addAuthor": "user"
+}

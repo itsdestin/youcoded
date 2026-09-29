@@ -53,6 +53,20 @@ function collect(session: HarnessSession): TranscriptEvent[] {
 }
 
 describe('HarnessSession.compactNow — user-initiated /compact', () => {
+  it('retains only source-labelled rule messages outside the committed summary span', async () => {
+    const { markAppGenerated } = await import('../src/main/harness/compaction');
+    const oldRule = '<project-rule source="rules/old.md">\nOld\n</project-rule>';
+    const keptRule = '<project-rule source="rules/new.md">\nNew\n</project-rule>';
+    const session = new HarnessSession(OPTS as any, async () => textModel('Summary mentions Old'));
+    session.seedHistory([
+      { role: 'user', content: 'old request' }, markAppGenerated({ role: 'user', content: oldRule } as any),
+      { role: 'assistant', content: 'old answer' }, { role: 'user', content: 'recent request' },
+      { role: 'user', content: 'latest request' }, markAppGenerated({ role: 'user', content: keptRule } as any),
+    ] as any);
+    expect(await session.compactNow()).toEqual({ ok: true });
+    expect((session as any).retainedTriggerMessages.has(oldRule)).toBe(false);
+    expect((session as any).retainedTriggerMessages.has(keptRule)).toBe(true);
+  });
   it('summarizes, emits compact-summary, and replaces history with summary + recent turns', async () => {
     const session = seeded(4, textModel('Earlier: user asked about X; we did Y.'));
     const events = collect(session);

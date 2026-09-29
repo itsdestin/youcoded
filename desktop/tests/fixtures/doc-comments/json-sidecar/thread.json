@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "comments": [
+    {
+      "id": "c-fixture-0001",
+      "path": "docs/plan.md",
+      "selector": {
+        "kind": "text",
+        "selector": {
+          "type": "TextQuoteSelector",
+          "exact": "cut the onboarding step",
+          "prefix": "we should probably ",
+          "suffix": " before shipping",
+          "occurrence": 0
+        }
+      },
+      "text": "Can we cut this?",
+      "author": "person:Priya Shah",
+      "createdAt": 1758000000000,
+      "replies": [
+        {
+          "id": "c-fixture-0001-r1",
+          "author": "user",
+          "text": "Agreed, cutting it.",
+          "createdAt": 1758000100000
+        }
+      ],
+      "resolved": true,
+      "history": [
+        {
+          "by": "user",
+          "at": 1758000200000,
+          "action": "resolved"
+        }
+      ]
+    }
+  ]
+}

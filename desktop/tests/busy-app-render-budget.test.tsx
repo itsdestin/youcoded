@@ -126,7 +126,7 @@ describe('eight tabs open: a reply streaming', () => {
   it('word by word in the visible tab does not redraw the shell', async () => {
     const reply = await app.beginReply(app.visibleId());
     await reply.words(1); // the first word may change the shell (the turn opened)
-    app.resetCounts();
+    await app.resetCounts();
     await reply.words(WORDS - 1);
     expect(app.shellRenders()).toBe(BUDGET.shellPerStreamedWord * (WORDS - 1));
     await reply.end();
@@ -146,7 +146,7 @@ describe('eight tabs open: typing in the composer', () => {
   // Before (master): "/" → 0 shell renders, then 1 per character (3 for "/a", "/ab", "/abc"). Now: 0.
   it('a slash command does not redraw the shell', async () => {
     await app.type('/');
-    app.resetCounts();
+    await app.resetCounts();
     for (const value of ['/a', '/ab', '/abc']) await app.type(value);
     expect(app.shellRenders()).toBe(BUDGET.shellPerSlashKeystroke * 3);
   });
@@ -194,7 +194,7 @@ describe('eight tabs open: background events', () => {
     const hidden = [app.sessionIds[1], app.sessionIds[2]];
     for (const id of hidden) await app.beginReply(id);
     await app.wait(3000); // past the "just started" window
-    app.resetCounts();
+    await app.resetCounts();
     await app.wait(10_000);
     expect(Object.fromEntries(hidden.map((id) => [id, app.chatRenders(id) + app.terminalRenders(id)])))
       .toEqual(Object.fromEntries(hidden.map((id) => [id, BUDGET.hiddenThinkingTabPer10s])));
@@ -209,7 +209,7 @@ describe('eight tabs open: switching tabs', () => {
     const [first, , , , , sixth] = app.sessionIds;
     await app.switchTo(sixth);
     expect(app.otherTabRenders(first, sixth)).toEqual(zeros(first, sixth));
-    app.resetCounts();
+    await app.resetCounts();
     await app.switchTo(first);
     expect(app.otherTabRenders(first, sixth)).toEqual(zeros(first, sixth));
   });
@@ -259,7 +259,7 @@ describe('the probes see real work', () => {
     const visible = app.visibleId();
     await app.beginReply(visible);
     await app.wait(3000);
-    app.resetCounts();
+    await app.resetCounts();
     await app.wait(10_000);
     expect(app.chatRenders(visible)).toBeGreaterThan(0);
   });

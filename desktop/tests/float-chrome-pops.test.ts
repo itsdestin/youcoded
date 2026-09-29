@@ -105,7 +105,10 @@ describe('float chrome never reaches another chrome style', () => {
   it('the component hooks are class names and data attributes only', () => {
     // WHY: these components render for every theme; a hook must not change what
     // any other chrome style paints.
-    expect(readSource(join(RENDERER, 'components/QuickChips.tsx'))).toContain('quick-chip-edit shrink-0');
+    // The chips' edit button is the shared EditPencilButton; QuickChips hands it
+    // the hook as a class, and the button puts it ahead of its own classes.
+    expect(readSource(join(RENDERER, 'components/QuickChips.tsx'))).toContain('className="quick-chip-edit"');
+    expect(readSource(join(RENDERER, 'components/EditPencilButton.tsx'))).toContain('className} shrink-0');
     expect(readSource(join(RENDERER, 'components/tags/SessionTagsChip.tsx'))).toContain('className="status-chip flex');
     expect(readSource(join(RENDERER, 'components/HeaderBar.tsx'))).toContain('className="caption-buttons flex bg-inset');
     expect(readSource(join(RENDERER, 'components/SessionStrip.tsx'))).toContain('data-status={color} className={`session-dot ');

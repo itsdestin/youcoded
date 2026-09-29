@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- EXCERPT: this file has ~150 Override entries for xl/tables/tableN.xml (Google Sheets writes one per named range/table); only Defaults and the parts relevant to comments/threaded comments/persons/worksheet1 are kept here. Source: Elden Ring Completionist Checklist.xlsx (see README.md). -->
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing" Extension="vml"/>
+  <Default ContentType="application/xml" Extension="xml"/>
+  <Default ContentType="application/vnd.openxmlformats-officedocument.obfuscatedFont" Extension="odttf"/>
+  <Default ContentType="application/vnd.openxmlformats-package.relationships+xml" Extension="rels"/>
+  <Override ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml" PartName="/xl/worksheets/sheet1.xml"/>
+  <Override ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml" PartName="/xl/sharedStrings.xml"/>
+  <Override ContentType="application/vnd.ms-excel.person+xml" PartName="/xl/persons/person.xml"/>
+  <Override ContentType="application/vnd.ms-excel.threadedcomments+xml" PartName="/xl/threadedComments/threadedComment1.xml"/>
+  <Override ContentType="application/vnd.ms-excel.threadedcomments+xml" PartName="/xl/threadedComments/threadedComment4.xml"/>
+  <Override ContentType="application/vnd.ms-excel.threadedcomments+xml" PartName="/xl/threadedComments/threadedComment7.xml"/>
+  <Override ContentType="application/vnd.ms-excel.threadedcomments+xml" PartName="/xl/threadedComments/threadedComment5.xml"/>
+  <Override ContentType="application/vnd.ms-excel.threadedcomments+xml" PartName="/xl/threadedComments/threadedComment6.xml"/>
+  <Override ContentType="application/vnd.ms-excel.threadedcomments+xml" PartName="/xl/threadedComments/threadedComment3.xml"/>
+  <Override ContentType="application/vnd.ms-excel.threadedcomments+xml" PartName="/xl/threadedComments/threadedComment8.xml"/>
+  <Override ContentType="application/vnd.ms-excel.threadedcomments+xml" PartName="/xl/threadedComments/threadedComment2.xml"/>
+  <Override ContentType="application/vnd.ms-excel.threadedcomments+xml" PartName="/xl/threadedComments/threadedComment9.xml"/>
+  <Override ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml" PartName="/xl/styles.xml"/>
+  <Override ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml" PartName="/xl/comments1.xml"/>
+  <Override ContentType="application/vnd.openxmlformats-officedocument.theme+xml" PartName="/xl/theme/theme1.xml"/>
+  <Override ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml" PartName="/xl/workbook.xml"/>
+</Types>

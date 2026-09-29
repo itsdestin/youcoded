@@ -89,6 +89,7 @@ interface Props {
   // session's ChatView instance.
   onCancelQueued?: (sessionId: string, queueId: string) => void;
   onEditQueued?: (sessionId: string, queueId: string, text: string) => void;
+  onSendQueuedNow?: (sessionId: string, queueId: string) => void;
   /** Remote access batch 2 (questions deck 2026-09-10, Q-3 "keep it, say so"):
    *  where a PHONE's copy of this conversation stands. `reconnecting` and
    *  `restoring` show a quiet busy strip; `incomplete` says the copy may be
@@ -102,7 +103,7 @@ interface Props {
 }
 
 // Memoised at the bottom of the file — see the WHY there.
-function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onAddCredit, onCancelQueued, onEditQueued, conversationStatus, onRefreshConversation, modelLoadingDemo }: Props) {
+function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onAddCredit, onCancelQueued, onEditQueued, onSendQueuedNow, conversationStatus, onRefreshConversation, modelLoadingDemo }: Props) {
   const state = useChatState(sessionId, { paused: !visible }); // WHY paused: hidden, it redrew per streamed word; live again on show (see useChatState)
   const dispatch = useChatDispatch();
 
@@ -1360,6 +1361,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
             queuedMessages={state.queuedMessages}
             onCancel={onCancelQueued ? (queueId) => onCancelQueued(sessionId, queueId) : undefined}
             onEdit={onEditQueued ? (queueId, text) => onEditQueued(sessionId, queueId, text) : undefined}
+            onSendNow={onSendQueuedNow ? (queueId) => onSendQueuedNow(sessionId, queueId) : undefined}
           />
           {/* WHY mount the actual model floater in the chat column: when Files or
               Games opens, outer-root centering would span the drawer as well. */}

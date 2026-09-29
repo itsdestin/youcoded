@@ -9,6 +9,7 @@ import { ASSISTANT_PRESET } from '../../../shared/harness-manifest';
 import { CORE_TOOLS } from '../tools';
 import { seedFixtureWorkspace } from './fixture-workspace';
 import { assembleSystemPrompt } from '../prompt-assembly';
+import { prepareProjectInstructions } from '../injection/project-instructions';
 import { resolvePreset } from '../preset-registry';
 import { BATTERY_PROMPT } from './battery';
 import type { TranscriptEvent } from '../../../shared/types';
@@ -411,6 +412,9 @@ export async function runCase(opts: RunCaseOpts): Promise<CaseRun> {
   const wrapUpPrompt = opts.wrapUpPrompt ?? WRAP_UP_PROMPT;
 
   const fixtureRoot = seedFixtureWorkspace(opts.instructions);
+  // WHY: evaluator uses the production async inventory, but fixture experiments
+  // cannot silently inherit real instructions above their disposable root.
+  const projectInstructionFiles = await prepareProjectInstructions(fixtureRoot, 20_000, fixtureRoot);
   const events: TranscriptEvent[] = [];
   let toolCalls = 0;
   let asks = 0;
@@ -486,6 +490,7 @@ export async function runCase(opts: RunCaseOpts): Promise<CaseRun> {
         presetBody: resolvePreset('assistant').body,
         cwd: fixtureRoot,
         appVersion: 'eval',
+        projectInstructionFiles,
       }),
       // Load-bearing (2026-08-11): omitted, HarnessSession takes fitToContext's
       // own 32_768 default, which against this harness's output ceiling left a

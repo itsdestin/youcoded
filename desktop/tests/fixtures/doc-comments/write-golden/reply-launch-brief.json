@@ -1,0 +1,13 @@
+{
+  "fixture": "launch-brief.docx",
+  "path": "docs/launch-brief.docx",
+  "op": "reply",
+  "args": {
+    "id": "w-1",
+    "text": "Sounds good, thanks both.",
+    "author": "user"
+  },
+  "result": {
+    "ok": true
+  }
+}

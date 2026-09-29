@@ -17,7 +17,7 @@
     "lint": "oxlint --type-aware",
     "postinstall": "node scripts/patch-node-pty.js && node scripts/patch-xterm-webgl-mipmap.js",
     "typecheck": "tsgo --noEmit -p tsconfig.json && tsgo --noEmit -p tsconfig.tests.json",
-    "lint:design": "oxlint -c .oxlintrc.design.json --format default --max-warnings 542"
+    "lint:design": "oxlint -c .oxlintrc.design.json --format default --max-warnings 537"
   },
   "keywords": [],
   "author": "itsdestin",
@@ -49,6 +49,7 @@
     "diff": "^9.0.0",
     "dompurify": "^3.4.15",
     "exceljs": "^4.4.0",
+    "jszip": "^3.10.1",
     "koffi": "^2.16.3",
     "linkedom": "0.18.13",
     "mammoth": "^1.12.2",
