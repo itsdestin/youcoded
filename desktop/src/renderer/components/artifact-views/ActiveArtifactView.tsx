@@ -28,6 +28,7 @@ import { ScreenMark } from '../../shoot-mode';
 import { isOfficeEditable } from '../office/office-files';
 import { useOfficeAvailable } from '../office/office-availability';
 import { flushOffice } from '../office/office-store';
+import { holdUnsavedEditor } from '../../state/unsaved-editors';
 // Office files edit in the Euro-Office editor (design stage, 2026-09-28) — lazy,
 // so the editor code loads only when someone presses Edit on one.
 const OfficeInlineEditor = lazy(() => import('../office/OfficeInlineEditor').then((m) => ({ default: m.OfficeInlineEditor })));
@@ -514,11 +515,14 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // Desktop app-quit / window-close guard while dirty (D3). Android never
   // fires beforeunload usefully — its back navigation goes through the
   // useEscClose stack in the hosts instead.
+  // Also held in unsaved-editors so a quit refuses BEFORE teardown rather than meeting this
+  // veto after every session was stopped (Task 6 fix round 9).
   useEffect(() => {
     if (!dirty) return;
     const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
     window.addEventListener('beforeunload', handler);
-    return () => window.removeEventListener('beforeunload', handler);
+    const release = holdUnsavedEditor();
+    return () => { window.removeEventListener('beforeunload', handler); release(); };
   }, [dirty]);
 
   // Notify the host whenever editability / edit-mode changes so its header

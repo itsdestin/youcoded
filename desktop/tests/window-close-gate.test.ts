@@ -96,6 +96,20 @@ describe('the window close gate', () => {
     expect(deps.ask).toHaveBeenCalledTimes(2);
   });
 
+  it('two presses during one sessions prompt: one prompt, one re-issued close', async () => {
+    const { g, deps, ev } = gate();
+    let answer!: (a: boolean) => void;
+    deps.ask.mockImplementation(() => new Promise<boolean>((r) => (answer = r)));
+    const first = g.onClose(ev());
+    const secondEv = ev();
+    const second = g.onClose(secondEv);
+    expect(secondEv.preventDefault).toHaveBeenCalled(); // the second press does not close the window
+    answer(true);
+    await Promise.all([first, second]);
+    expect(deps.ask).toHaveBeenCalledTimes(1);
+    expect(deps.close).toHaveBeenCalledTimes(1);
+  });
+
   it('closes freely with no sessions, and never for a Cancel', async () => {
     const free = gate({ sessions: 0 });
     const e = free.ev();

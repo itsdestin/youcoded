@@ -4,9 +4,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import {
-  OFFICE_FLUSH_DONE, OFFICE_FLUSH_REQUEST, OFFICE_PROCEED, OFFICE_UNSAVED_PROMPT,
-  askToFlush, flushThenQuitOfficeSessions, holdCloseForOfficeSave, officeQuitGate,
+  OFFICE_FLUSH_DONE, OFFICE_FLUSH_REQUEST, OFFICE_OTHER_UNSAVED, OFFICE_PROCEED, OFFICE_UNSAVED_PROMPT,
+  askToFlush, flushThenQuitOfficeSessions, holdCloseForOfficeSave, officeQuitGate, watchOtherUnsaved,
 } from '../../src/main/office/office-flush';
+import { gatedQuit, onWillQuit, requestRestart, resetRestartForTests } from '../../src/main/app-restart';
 
 /** A fake ipcMain, shared by every window of one test. */
 const newIpc = () => new EventEmitter();
@@ -215,5 +216,57 @@ describe('quitting with Office documents open', () => {
     await vi.advanceTimersByTimeAsync(1);
     await p;
     expect(quit).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+// A text file with unsaved edits would veto its window's unload after teardown; the quit gate
+// refuses the quit before anything is torn down instead, in that window.
+describe('quitting while a text file has unsaved edits', () => {
+  function editing(id: number) {
+    const ipc = newIpc();
+    watchOtherUnsaved(ipc as never);
+    const w = aWindow(ipc, id);
+    const sender = Object.assign(new EventEmitter(), { id });
+    const report = (unsaved: boolean) => ipc.emit(OFFICE_OTHER_UNSAVED, { sender }, unsaved);
+    const focus = vi.fn();
+    return { ipc, ...w, win: Object.assign(w.win, { focus }), focus, report, sender };
+  }
+
+  it('refuses the quit with no Office save and no teardown, and says so in that window', async () => {
+    const t = editing(21);
+    t.report(true);
+    await expect(officeQuitGate([t.win], depsFor(t.ipc, [21]))).resolves.toBe(false);
+    expect(t.requests).toHaveLength(0); // not even the Office save pass
+    expect(t.pushes).toEqual([{ count: 0, firstPath: '', other: true }]);
+    expect(t.focus).toHaveBeenCalled();
+    t.report(false); // saved: the next quit goes ahead
+    await expect(officeQuitGate([t.win], depsFor(t.ipc, [21]))).resolves.toBe(true);
+    t.sender.emit('destroyed');
+  });
+
+  it('a restart is refused the same way, and never relaunches later', async () => {
+    resetRestartForTests();
+    const t = editing(22);
+    t.report(true);
+    requestRestart(() => {});
+    const d = {
+      gate: (onProceed: () => void) => officeQuitGate([t.win], depsFor(t.ipc, [22]), onProceed),
+      shutdown: vi.fn(async () => {}), relaunch: vi.fn(), quit: vi.fn(), openWindows: () => 1, exit: vi.fn(), setTimer: vi.fn(),
+    };
+    await gatedQuit(d);
+    expect(d.shutdown).not.toHaveBeenCalled();
+    const relaunch = vi.fn();
+    onWillQuit(relaunch);
+    expect(relaunch).not.toHaveBeenCalled();
+    t.sender.emit('destroyed');
+  });
+
+  it('forgets a window once its page reloads or it is gone', async () => {
+    const t = editing(23);
+    t.report(true);
+    t.sender.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
+    await expect(officeQuitGate([t.win], depsFor(t.ipc, [23]))).resolves.toBe(true);
+    t.sender.emit('destroyed');
   });
 });

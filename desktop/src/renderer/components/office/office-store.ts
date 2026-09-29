@@ -193,7 +193,7 @@ function answerFlushRequests(): void {
       office.flushDone?.(id, { failed: reason === 'final' ? 0 : failed.length, firstPath: failed[0] });
     });
   });
-  office.onUnsavedPrompt?.((p) => { heldReload = null; setAlerts({ ...alerts, unsaved: { count: p.count, firstPath: p.firstPath } }); });
+  office.onUnsavedPrompt?.((p) => { heldReload = null; setAlerts({ ...alerts, unsaved: { count: p.count, firstPath: p.firstPath, other: p.other === true } }); });
 }
 
 /** "Close anyway": main goes ahead with the close or quit it held. WHY nothing is taken down
@@ -214,8 +214,9 @@ export function closeAnyway(): void {
 //   unsaved       a window close or quit found documents whose save failed
 //   closeFailed   a tab closed while the page was hidden could not save, so it came back
 interface OfficeAlertsState {
-  /** reload: the prompt is a reload's (fix round 6, M3), so it says "Reload anyway". */
-  unsaved: { count: number; firstPath: string; reload?: boolean } | null;
+  /** reload: the prompt is a reload's (fix round 6, M3), so it says "Reload anyway".
+   *  other: a quit was refused because a text file has unsaved edits (fix round 9): OK only. */
+  unsaved: { count: number; firstPath: string; reload?: boolean; other?: boolean } | null;
   closeFailed: string | null;
 }
 let alerts: OfficeAlertsState = { unsaved: null, closeFailed: null };
@@ -236,6 +237,9 @@ export function clearCloseFailed(): void { setAlerts({ ...alerts, closeFailed: n
  *  keeps them; this page takes them on load, and again whenever main says there are more, and
  *  says so with the same toast a hidden close uses. Returns the unsubscribe. */
 export function watchLostSaves(): () => void {
+  // Also listen for main's prompts from the start (fix round 9): a quit refused for an unsaved
+  // text file must show in a window that never opened an Office document.
+  answerFlushRequests();
   const office = typeof window === 'undefined' ? undefined : window.claude?.office;
   if (!office?.lostSaves) return () => {};
   const take = () => void office.lostSaves?.().then((paths) => { if (paths?.length) noteCloseFailedWhileHidden(paths[0]); }, () => {});

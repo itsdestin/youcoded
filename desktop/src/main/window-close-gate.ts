@@ -80,7 +80,7 @@ export function createCloseGate<Answer>(d: CloseGateDeps<Answer>) {
   let lastHeld = false;
   let reissuedAt: number | null = null;
   let askingHung = false;
-  const answered = new WeakSet<Promise<Answer>>(); // concurrent presses share one prompt
+  let asking = false; // the sessions prompt is up: a second press waits on it, never asks again
   const carryOut = (ev: CloseEvent, r: Remembered<Answer>) => {
     // Sessions owned at confirm time AND still here (one dragged away meanwhile is not ended).
     const owned = d.sessionIds();
@@ -120,12 +120,12 @@ export function createCloseGate<Answer>(d: CloseGateDeps<Answer>) {
       const ids = d.sessionIds();
       if (ids.length === 0) return; // no sessions — close freely
       ev.preventDefault();
-      const asking = d.ask(ids.length);
-      const answer = await asking;
-      // A second press while this was pending resolved the SAME prompt; the first one through
-      // already re-issued the close.
-      if (answered.has(asking)) return;
-      answered.add(asking);
+      // WHY a flag (fix round 9): a second press while the prompt is up must neither ask again
+      // nor re-issue a second close; the first press carries the answer out.
+      if (asking) return;
+      asking = true;
+      let answer: Answer;
+      try { answer = await d.ask(ids.length); } finally { asking = false; }
       if (!closes(answer)) return; // Cancel — the window stays, and the next press asks again
       confirmed = { answer, sessionIds: d.sessionIds() };
       reissuedAt = now();

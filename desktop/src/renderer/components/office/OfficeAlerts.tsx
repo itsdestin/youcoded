@@ -26,17 +26,30 @@ export function OfficeAlerts({ onReview }: { onReview: (path: string) => void })
         // Escape / ✕: dismiss only — the window stays open (main held its close) and the failed
         // tabs keep their actions; nothing else opens. Review is the explicit way there.
         onClose={clearUnsavedPrompt}
-        title={unsaved && unsaved.count === 1 ? "1 Office document couldn't be saved." : `${unsaved?.count ?? 0} Office documents couldn't be saved.`}
+        title={unsaved?.other ? 'A file has unsaved changes.' : unsaved && unsaved.count === 1 ? "1 Office document couldn't be saved." : `${unsaved?.count ?? 0} Office documents couldn't be saved.`}
         size="prompt"
         layer={3}
         screen="office/unsaved-on-close"
       >
-        {/* A reload's prompt says what it will do (fix round 6, M3): it reloads, not closes. */}
-        <p className="text-sm text-fg-2 pb-4">Review shows each one with its choices, such as Retry. {unsaved?.reload ? 'Reloading' : 'Closing'} anyway loses their changes since the last save.</p>
-        <div className="flex gap-2 justify-end">
-          <Button variant="danger" onClick={closeAnyway}>{unsaved?.reload ? 'Reload anyway' : 'Close anyway'}</Button>
-          <Button variant="primary" onClick={review}>Review</Button>
-        </div>
+        {unsaved?.other ? (
+          // A quit refused before anything was torn down (fix round 9): the text file's own
+          // Save is the way on; nothing here can save it for the person.
+          <>
+            <p className="text-sm text-fg-2 pb-4">Save it, then quit again.</p>
+            <div className="flex gap-2 justify-end">
+              <Button variant="primary" onClick={clearUnsavedPrompt}>OK</Button>
+            </div>
+          </>
+        ) : (
+          <>
+            {/* A reload's prompt says what it will do (fix round 6, M3): it reloads, not closes. */}
+            <p className="text-sm text-fg-2 pb-4">Review shows each one with its choices, such as Retry. {unsaved?.reload ? 'Reloading' : 'Closing'} anyway loses their changes since the last save.</p>
+            <div className="flex gap-2 justify-end">
+              <Button variant="danger" onClick={closeAnyway}>{unsaved?.reload ? 'Reload anyway' : 'Close anyway'}</Button>
+              <Button variant="primary" onClick={review}>Review</Button>
+            </div>
+          </>
+        )}
       </Dialog>
       {closeFailed && (
         <Toast

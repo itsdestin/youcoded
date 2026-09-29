@@ -45,7 +45,7 @@ import { registerOfficeProtocol } from './office/office-protocol';
 import { registerOfficeIpc } from './office/office-ipc';
 import { officeAvailable, officeRoot } from './office/office-root';
 import { getOfficeSessions, initOfficeSessionsSafely } from './office/office-session-registry';
-import { flushThenQuitOfficeSessions, holdCloseForOfficeSave, officeQuitGate } from './office/office-flush';
+import { flushThenQuitOfficeSessions, holdCloseForOfficeSave, officeQuitGate, watchOtherUnsaved } from './office/office-flush';
 import { createCloseGate } from './window-close-gate';
 import { gatedQuit, onWillQuit } from './app-restart';
 import { isAppPageUrl } from './app-navigation';
@@ -1931,6 +1931,7 @@ void app.whenReady().then(async () => {
   // office:* (Task 5). WHY even without sessions: the renderer gets "unavailable", not a missing
   // handler. WHY the getter: the registry goes away at quit, and each request must see that.
   registerOfficeIpc(ipcMain, { getSessions: getOfficeSessions, available: () => officeAvailable(), root: officeRoot() });
+  watchOtherUnsaved(); // unsaved text editors refuse a quit before teardown (office-flush.ts, fix round 9)
   perfMark('main:chore:office-protocol:done');
 
   // Marketplace auth store — instantiated once at startup, passed to IPC handlers.

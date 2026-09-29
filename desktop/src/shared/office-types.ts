@@ -72,7 +72,7 @@ export interface OfficeBridge {
   onFlushRequest?(cb: (id: string, reason: 'close' | 'quit' | 'final') => void): () => void;
   /** Main held a close or quit because documents could not be saved: ask the person. The count
    *  covers every window (quit); firstPath is this window's first such document. */
-  onUnsavedPrompt?(cb: (p: { count: number; firstPath: string }) => void): () => void;
+  onUnsavedPrompt?(cb: (p: { count: number; firstPath: string; other?: boolean }) => void): () => void;
   /** failed: how many documents could not be saved — main then keeps the window (or quit)
    *  waiting for the person's choice instead of closing. */
   flushDone?(id: string, result: { failed: number; firstPath?: string }): void;
@@ -83,6 +83,9 @@ export interface OfficeBridge {
   lostSaves?(): Promise<string[]>;
   /** Main recorded such a failure while this page is up: take them (lostSaves). */
   onSavesLost?(cb: () => void): () => void;
+  /** Whether a non-Office editor in this window has unsaved edits (fix round 9): the quit gate
+   *  refuses to start while any window says yes. Desktop only. */
+  setOtherUnsaved?(unsaved: boolean): void;
 }
 
 export type OfficeSaveCopyResult =
