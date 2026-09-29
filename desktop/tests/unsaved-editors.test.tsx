@@ -93,6 +93,19 @@ describe('the refused-quit prompt', () => {
     expect(await screen.findByRole('button', { name: 'Save' })).toBeInTheDocument();
   });
 
+  it('a check that failed outright shows a general sentence with Retry, never the raw error', async () => {
+    const { prompt } = bridge();
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    holdUnsavedEditor({ name: 'plan.txt', parked: { available: () => Promise.reject(new Error("Error invoking remote method 'artifacts:get': /home/you/secret")), save: async () => ({ ok: true as const }) }, discard: () => {} });
+    render(<OfficeAlerts onReview={() => {}} />);
+    prompt();
+    expect(await screen.findByText("YouCoded couldn't read this file.")).toBeInTheDocument();
+    expect(screen.queryByText(/secret|remote method/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(quiet).toHaveBeenCalled();
+    quiet.mockRestore();
+  });
+
   it('when nothing is left unsaved it says so, and Quit goes on only when pressed', async () => {
     const { office, prompt } = bridge();
     let release!: () => void;
@@ -350,7 +363,16 @@ describe('whether a parked draft can still go to its file', () => {
     await expect(draftFileStatus('/p', artifact)).resolves.toBe('protected');
     answer({ ok: false, error: 'read-failed', code: 'EACCES' });
     await expect(draftFileStatus('/p', artifact)).resolves.toMatchObject({ error: expect.any(String) });
-    (window as unknown as { claude: unknown }).claude = { artifacts: { get: vi.fn(async () => { throw new Error('x'); }) } };
-    await expect(draftFileStatus('/p', artifact)).resolves.toMatchObject({ error: expect.stringContaining('x') });
+  });
+
+  // Final review, finding 5: a request that failed outright carries a raw message (it can name
+  // folders); the person sees a general sentence, and the detail goes to the log.
+  it('says only that the file could not be read when the request itself fails, and logs why', async () => {
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    (window as unknown as { claude: unknown }).claude = { artifacts: { get: vi.fn(async () => { throw new Error("EACCES: open '/home/you/secret/notes.md'"); }) } };
+    await expect(draftFileStatus('/p', artifact)).resolves.toEqual({ error: "YouCoded couldn't read this file." });
+    expect(quiet).toHaveBeenCalled();
+    expect(String(quiet.mock.calls[0])).toContain('/home/you/secret');
+    quiet.mockRestore();
   });
 });

@@ -42,11 +42,18 @@ export function canEditArtifact(
  * editable" is 'gone'; a read that failed for another reason says why (the prompt offers Retry),
  * so a passing hiccup never reads as "no longer available".
  */
+/** What a parked draft's row says when checking its file failed for a reason we don't know. */
+export const DRAFT_READ_FAILED = "YouCoded couldn't read this file.";
+
 export async function draftFileStatus(projectRoot: string, artifact: ArtifactRecord): Promise<'editable' | 'gone' | 'protected' | { error: string }> {
   if (rendersFromBytesOnly(artifact.path)) return 'gone';
   let res: any;
   try { res = await (window.claude as any)?.artifacts?.get(projectRoot, artifact.id); } catch (e) {
-    return { error: `YouCoded couldn't read this file: ${e instanceof Error ? e.message : String(e)}` };
+    // WHY general (final review, finding 5): the request itself failed, so its message is an IPC
+    // or bridge error — a raw string that can name folders and asserts nothing a person can act
+    // on. The detail goes to the log; the row offers Retry.
+    console.error('[draftFileStatus] reading the file failed', e);
+    return { error: DRAFT_READ_FAILED };
   }
   if (res && res.ok === true && res.orphan) return 'gone';
   // A protected location can't take the draft whatever happens next (fix round 15).

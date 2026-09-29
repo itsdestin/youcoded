@@ -13,6 +13,7 @@ import { Button, Dialog } from './ui';
 import { useScreenOpen } from '../shoot-mode';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { clearQuitRefused, confirmDiscardForQuit, previewQuitRefused, useOfficeAlerts } from './office/office-store';
+import { DRAFT_READ_FAILED } from './artifact-views/edit-permission';
 import {
   discardUnsaved, holdUnsavedEditor, unsavedEditsNow as previewEdits, useUnsavedEdits,
   type DraftFileStatus, type UnsavedEdit,
@@ -34,8 +35,10 @@ export function UnsavedBeforeQuit() {
   useEffect(() => {
     if (!r) return;
     let live = true;
+    // WHY a general message (final review, finding 5): a rejected check carries a raw error that
+    // can name folders and guesses nothing useful; it is logged, and the row offers Retry.
     void Promise.all(edits.filter((e) => e.parked).map(async (e) => [e, await e.parked!.available()
-      .catch((err: unknown) => ({ error: `YouCoded couldn't read this file: ${String(err)}` }))] as const))
+      .catch((err: unknown) => { console.error('[UnsavedBeforeQuit] checking a parked draft failed', err); return { error: DRAFT_READ_FAILED }; })] as const))
       .then((pairs) => { if (live) setStatus(new Map(pairs)); });
     return () => { live = false; };
   }, [r, edits, recheck]);
