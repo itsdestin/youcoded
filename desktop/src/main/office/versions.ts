@@ -4,7 +4,9 @@
 //
 // On disk, per file: userData/office-versions/<sha1 of the real path>/
 //   index.json        { updatedAt, path, versions: [newest first] } — written only by casWrite
-//   <id>.<ext>        one whole copy per version (id = ISO time without colons + 4 hex)
+//   <id>.<reason>.<ext>  one whole copy per version (id = ISO time without colons + 4 hex). WHY the
+//                     reason in the name: a copy a crash left out of the index is named again with
+//                     its own label ("When you opened it"), not a guessed one.
 //
 // The priority, in order: the person's file is never lost or corrupted; a kept version is never
 // lost by accident (a copy is written whole BEFORE the index names it, and the index drops a
@@ -105,7 +107,9 @@ function locked<T>(dir: string, run: () => Promise<T>): Promise<T> {
   return p;
 }
 
-const copyPath = (dir: string, e: { id: string; ext: string }) => path.join(dir, `${e.id}.${e.ext}`);
+const copyName = (e: { id: string; reason: string; ext: string }) => `${e.id}.${e.reason}.${e.ext}`;
+const copyPath = (dir: string, e: { id: string; reason: string; ext: string }) => path.join(dir, copyName(e));
+const COPY_RE = /^(.+)\.(opened|autosave|before-restore)\.(docx|xlsx|pptx)$/;
 const publicShape = (e: Entry): OfficeVersion => ({ id: e.id, at: e.at, reason: e.reason, bytes: e.bytes });
 const byNewest = (a: Entry, b: Entry) => Date.parse(b.at) - Date.parse(a.at);
 
@@ -139,17 +143,17 @@ async function readIndex(dir: string): Promise<{ versions: Entry[]; token: CasEx
  *  back as ordinary versions. Only copies older than `minAgeMs`, so a snapshot another process
  *  is still naming is left to it. */
 async function adoptCopies(dir: string, versions: Entry[], minAgeMs: number): Promise<Entry[]> {
-  const known = new Set(versions.map((v) => `${v.id}.${v.ext}`));
+  const known = new Set(versions.map(copyName));
   const out = [...versions];
   const now = Date.now();
   for (const name of await fsp.readdir(dir).catch(() => [] as string[])) {
-    const m = /^(.+)\.([a-z]+)$/.exec(name);
-    if (!m || known.has(name) || !ID_RE.test(m[1]) || !EXT_RE.test(m[2])) continue;
+    const m = COPY_RE.exec(name);
+    if (!m || known.has(name) || !ID_RE.test(m[1])) continue;
     const st = await fsp.stat(path.join(dir, name)).catch(() => null);
     if (!st?.isFile() || (minAgeMs > 0 && now - st.mtimeMs < minAgeMs)) continue;
     const iso = m[1].replace(/T(\d{2})(\d{2})(\d{2})/, 'T$1:$2:$3').replace(/-[0-9a-f]{4}$/, '');
     const at = Number.isFinite(Date.parse(iso)) ? new Date(iso).toISOString() : new Date(st.mtimeMs).toISOString();
-    out.push({ id: m[1], at, reason: 'autosave', bytes: st.size, ext: m[2] });
+    out.push({ id: m[1], at, reason: m[2] as Entry['reason'], bytes: st.size, ext: m[3] });
   }
   return out.sort(byNewest);
 }
@@ -162,6 +166,8 @@ async function updateIndex(dir: string, filePath: string, change: (versions: Ent
     // WHY a random tail on the token: two writes in the same millisecond must not carry the same
     // updatedAt, or the second writer's check would pass against the first one's index.
     const index: Index = { updatedAt: `${new Date().toISOString()}#${randomBytes(4).toString('hex')}`, path: filePath, versions: next };
+    // WHY casWrite's default mode (0644) is accepted for the index: it holds only times, sizes and
+    // the file's path, and it sits in this 0700 folder, which no other account can enter.
     const r = await casWrite(path.join(dir, INDEX), token, JSON.stringify(index, null, 1), (json) => (JSON.parse(json) as Index).updatedAt);
     if (r.committed) return next;
   }
@@ -188,19 +194,28 @@ async function snapshotLocked(userData: string, filePath: string, reason: Office
   await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
   const { versions } = await readIndex(dir);
   if (versions[0] && (await sameAsCopy(dir, versions[0], bytes))) return null;
+  // The editor reopening a file just restored would keep a second, identical copy of the version
+  // just restored (a duplicate "When you opened it" row). Checked once, then forgotten.
+  const restoredId = justRestored.get(filePath);
+  if (restoredId !== undefined) {
+    justRestored.delete(filePath);
+    const restored = versions.find((v) => v.id === restoredId);
+    if (reason === 'opened' && restored && (await sameAsCopy(dir, restored, bytes))) return null;
+  }
 
   const entry: Entry = { id: newId(now), at: now.toISOString(), reason, bytes: bytes.length, ext };
   const dest = copyPath(dir, entry);
   const part = `${dest}.part`;
-  // Whole and on disk before any index names it (fsync, then one rename).
-  const fh = await fsp.open(part, 'w', 0o600);
   try {
-    await fh.writeFile(bytes);
-    await fh.sync();
-  } finally {
-    await fh.close();
-  }
-  try {
+    // Whole and on disk before any index names it (fsync, then one rename). WHY inside the try: a
+    // write that fails half-way (a full disk) must not leave its up-to-200 MB `.part` behind.
+    const fh = await fsp.open(part, 'w', 0o600);
+    try {
+      await fh.writeFile(bytes);
+      await fh.sync();
+    } finally {
+      await fh.close();
+    }
     await fsp.rename(part, dest);
     await updateIndex(dir, filePath, (list) => [entry, ...list.filter((v) => v.id !== entry.id)]);
   } catch (e) {
@@ -233,10 +248,14 @@ export async function snapshot(userData: string, filePath: string, reason: Offic
 
 /** The file's kept versions, newest first. */
 export async function list(userData: string, filePath: string): Promise<OfficeVersion[]> {
-  const dir = versionsDir(userData, filePath);
-  const { versions } = await readIndex(dir).catch(() => ({ versions: [] as Entry[] }));
+  // WHY no catch: a real read error must reach the window as "couldn't load", never as an empty
+  // list that tells the person their kept versions are gone. (No folder yet is simply [].)
+  const { versions } = await readIndex(versionsDir(userData, filePath));
   return versions.map(publicShape);
 }
+
+// The version each file was last restored to, for the reopen's "opened" snapshot (see above).
+const justRestored = new Map<string, string>();
 
 class RestoreRefusal extends Error {}
 
@@ -268,6 +287,7 @@ export async function restore(userData: string, filePath: string, id: string): P
       });
       if (current) await snapshotLocked(userData, filePath, 'before-restore', current, new Date());
       await writeBack(filePath, bytes);
+      justRestored.set(filePath, entry.id);
       return { ok: true as const };
     });
   } catch (e) {
@@ -340,7 +360,9 @@ export async function pruneAll(userData: string, now: Date = new Date(), maxTota
         const present = await Promise.all(adopted.map(async (v) => (await fsp.stat(copyPath(dir, v)).catch(() => null)) !== null));
         const missing = new Set(adopted.filter((_, i) => !present[i]).map((v) => v.id));
         const left = await pruneDirLocked(dir, filePath, now, missing);
-        if (left.length === 0) await fsp.rm(dir, { recursive: true, force: true });
+        // WHY only when nothing is left in it: a copy too young to adopt (or a `.part` still being
+        // written) would go with the folder.
+        if (left.length === 0 && (await onlyIndexLeft(dir))) await fsp.rm(dir, { recursive: true, force: true });
         return { filePath, versions: left };
       });
       if (kept.versions.length > 0) perDir.push({ dir, ...kept });
@@ -371,6 +393,11 @@ export async function pruneAll(userData: string, now: Date = new Date(), maxTota
 function mergeById(list: Entry[], extra: Entry[]): Entry[] {
   const ids = new Set(list.map((v) => v.id));
   return [...list, ...extra.filter((v) => !ids.has(v.id))];
+}
+
+async function onlyIndexLeft(dir: string): Promise<boolean> {
+  const names = await fsp.readdir(dir).catch(() => null);
+  return names !== null && names.every((n) => n === INDEX || n === `${INDEX}.lock`);
 }
 
 async function indexPath(dir: string): Promise<string> {

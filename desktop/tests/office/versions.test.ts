@@ -1,4 +1,5 @@
-import { chmod, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { promises as fsp } from 'node:fs';
+import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -87,7 +88,7 @@ describe('the versions store', () => {
     expect(v).toMatchObject({ reason: 'opened', bytes: memo.length });
     expect(v!.id).toMatch(/^\d{4}-\d{2}-\d{2}T\d{6}\.\d{3}Z-[0-9a-f]{4}$/);
     const vdir = versionsDir(userData, file);
-    expect((await readFile(path.join(vdir, `${v!.id}.docx`))).equals(memo)).toBe(true);
+    expect((await readFile(path.join(vdir, `${v!.id}.${v!.reason}.docx`))).equals(memo)).toBe(true);
     const index = JSON.parse(await readFile(path.join(vdir, 'index.json'), 'utf8'));
     expect(typeof index.updatedAt).toBe('string');
     expect(index.versions.map((x: { id: string }) => x.id)).toEqual([v!.id]);
@@ -100,7 +101,7 @@ describe('the versions store', () => {
     const v = await snapshot(userData, file, 'opened', memo);
     const vdir = versionsDir(userData, file);
     expect((await stat(vdir)).mode & 0o077).toBe(0);
-    expect((await stat(path.join(vdir, `${v!.id}.docx`))).mode & 0o077).toBe(0);
+    expect((await stat(path.join(vdir, `${v!.id}.${v!.reason}.docx`))).mode & 0o077).toBe(0);
   });
 
   it('lists versions newest first', async () => {
@@ -137,7 +138,7 @@ describe('the versions store', () => {
     const versions = await list(userData, file);
     expect(versions[0].reason).toBe('before-restore');
     const vdir = versionsDir(userData, file);
-    expect((await readFile(path.join(vdir, `${versions[0].id}.docx`))).equals(edited)).toBe(true);
+    expect((await readFile(path.join(vdir, `${versions[0].id}.before-restore.docx`))).equals(edited)).toBe(true);
     expect(watcher.noteOwnWrite).toHaveBeenCalledWith(file);
     // Nothing is left beside the file (the private write folder is removed).
     expect((await readdir(dir)).filter((n) => n.startsWith('.'))).toEqual([]);
@@ -152,7 +153,7 @@ describe('the versions store', () => {
 
   it('refuses a damaged kept copy rather than write it over the file', async () => {
     const v = await snapshot(userData, file, 'opened', doc('whole'));
-    await writeFile(path.join(versionsDir(userData, file), `${v!.id}.docx`), 'not a document');
+    await writeFile(path.join(versionsDir(userData, file), `${v!.id}.${v!.reason}.docx`), 'not a document');
     const r = await restore(userData, file, v!.id);
     expect(r.ok).toBe(false);
     expect((await readFile(file)).equals(memo)).toBe(true);
@@ -190,13 +191,76 @@ describe('the versions store', () => {
     expect(await list(userData, other)).toHaveLength(1);
   });
 
-  it('names a kept copy again when a crash left it out of the index, rather than deleting it', async () => {
+  it('rebuilds a damaged index from the kept copies, keeping their labels', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date(2026, 8, 28, 9, 0));
     const v = await snapshot(userData, file, 'opened', doc('kept'));
     const vdir = versionsDir(userData, file);
     await writeFile(path.join(vdir, 'index.json'), '{ broken');
     vi.setSystemTime(new Date(2026, 8, 28, 12, 0));
-    expect((await list(userData, file)).map((x) => x.id)).toEqual([v!.id]);
+    expect((await list(userData, file)).map((x) => [x.id, x.reason])).toEqual([[v!.id, 'opened']]);
+  });
+
+  it('names a kept copy again when a crash left it out of the index, with its own label, rather than deleting it', async () => {
+    const kept = await snapshot(userData, file, 'autosave', doc('indexed'));
+    const vdir = versionsDir(userData, file);
+    // A copy written whole whose index entry never landed (a crash between the two), 2 hours ago.
+    const orphan = '2026-09-28T070000.000Z-beef.before-restore.docx';
+    await writeFile(path.join(vdir, orphan), doc('orphan'));
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await utimes(path.join(vdir, orphan), twoHoursAgo, twoHoursAgo);
+    await pruneAll(userData, new Date(2026, 8, 28, 12, 0));
+    const got = await list(userData, file);
+    expect(got.map((x) => x.reason).sort()).toEqual(['autosave', 'before-restore']);
+    expect(got.some((x) => x.id === kept!.id)).toBe(true);
+    expect(got.find((x) => x.reason === 'before-restore')!.id).toBe('2026-09-28T070000.000Z-beef');
+  });
+
+  it('leaves a folder alone when a copy too young to name again is still in it', async () => {
+    const vdir = versionsDir(userData, file);
+    await mkdir(vdir, { recursive: true });
+    await writeFile(path.join(vdir, `${new Date().toISOString().replace(/:/g, '')}-0001.opened.docx`), doc('young'));
+    await pruneAll(userData);
+    expect((await readdir(vdir)).filter((n) => n.endsWith('.opened.docx'))).toHaveLength(1);
+  });
+
+  it('removes a half-written copy when the disk fills, and names nothing in the index', async () => {
+    await snapshot(userData, file, 'opened', doc('first'));
+    const vdir = versionsDir(userData, file);
+    const realOpen = fsp.open.bind(fsp);
+    const spy = vi.spyOn(fsp, 'open').mockImplementation(async (...args: Parameters<typeof fsp.open>) => {
+      const fh = await realOpen(...args);
+      if (!String(args[0]).endsWith('.part')) return fh;
+      // Half the bytes land, then the disk is full.
+      fh.writeFile = async (data: unknown) => {
+        await realOpen(String(args[0]), 'a').then(async (h) => { await h.write(Buffer.from(data as Buffer).subarray(0, 3)); await h.close(); });
+        throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' });
+      };
+      return fh;
+    });
+    try {
+      await expect(snapshot(userData, file, 'autosave', doc('second'))).rejects.toThrow('ENOSPC');
+    } finally {
+      spy.mockRestore();
+    }
+    expect((await readdir(vdir)).filter((n) => n.endsWith('.part'))).toEqual([]);
+    expect((await list(userData, file)).map((x) => x.reason)).toEqual(['opened']);
+  });
+
+  it('does not keep the reopened file again when it is the version just restored', async () => {
+    const opened = await snapshot(userData, file, 'opened', memo);
+    await writeFile(file, doc('edited'));
+    await restore(userData, file, opened!.id);
+    // The editor reopens the restored file: identical to the version restored, so no new row.
+    await expect(snapshot(userData, file, 'opened', memo)).resolves.toBeNull();
+    expect((await list(userData, file)).map((x) => x.reason)).toEqual(['before-restore', 'opened']);
+  });
+
+  it('fails the list on a real read error instead of saying there are no versions', async () => {
+    await snapshot(userData, file, 'opened', memo);
+    const vdir = versionsDir(userData, file);
+    await rm(path.join(vdir, 'index.json'));
+    await mkdir(path.join(vdir, 'index.json')); // reading it now fails with EISDIR
+    await expect(list(userData, file)).rejects.toThrow();
   });
 });
