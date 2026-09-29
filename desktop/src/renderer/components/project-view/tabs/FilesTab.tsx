@@ -128,11 +128,6 @@ import { ChevronIcon } from '../../Icons';
 import { EmptyState, ErrorState, SectionLabel } from '../../ui';
 import { TabHeading } from '../TabHeading';
 import { useScrollFade } from '../../../hooks/useScrollFade';
-// WHY the see-through edge fade (.scroll-mask, 2026-09-29; Destin: "we need to
-// fix scroll fade effects" on the Projects view): cards were cut off hard under
-// the tab row and at the window's bottom edge. Now they fade out wherever there
-// is more to scroll, the same fade popups and the sessions menu use.
-import '../../../styles/scroll-mask.css';
 import { useScreenOpen, ScreenMark } from '../../../shoot-mode';
 
 // The rounded box the list-view rows sit in — the same container language the
@@ -618,6 +613,9 @@ function FilesTabImpl({
   // on it), so the reveal watches the viewport there — same trade-off as
   // ConversationsTab.
   const flatScrollRef = useRef<HTMLDivElement>(null);
+  // WHY (2026-09-29, "fix scroll fade effects"): drives the see-through edge
+  // fade (.scroll-mask) — cards fade under the tab row and the window's edge
+  // instead of being cut off.
   useScrollFade(flatScrollRef);
   const listScrollRef = useRef<HTMLDivElement>(null);
   const noRoot = useRef<HTMLElement | null>(null);

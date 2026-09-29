@@ -17,7 +17,6 @@ import { nextSlotId, clampFloatLeft, layoutRects, reorderIndices, neighbourOffse
 import { useOneShotWindow } from '../hooks/use-one-shot-window';
 import { useEscClose } from '../hooks/use-esc-close';
 import { useScrollFade } from '../hooks/useScrollFade';
-import '../styles/scroll-mask.css'; // WHY: the session list's masked edge fade (quick-fix batch, LB-5).
 import { useArtifactDispatch } from '../state/ArtifactContext';
 import { useTheme } from '../state/theme-context';
 import { isTypingTarget } from '../utils/is-typing-target';

@@ -3,6 +3,7 @@
 @import "./mascot.css";
 @import "./motion.css";
 @import "./float-chrome.css";
+@import "./scroll-mask.css"; /* WHY here, once: every screen using .scroll-mask gets it, and the design lint knows the class. */
 
 @source "../../";
 

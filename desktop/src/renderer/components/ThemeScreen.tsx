@@ -1,6 +1,3 @@
-// The masked edge fade for the themes box (.scroll-mask); imported here, not from
-// globals.css, which is at its line budget.
-import '../styles/scroll-mask.css';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTheme } from '../state/theme-context';
 import { useMarketplace } from '../state/marketplace-context';

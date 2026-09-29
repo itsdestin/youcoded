@@ -23,11 +23,6 @@ import { useNarrowViewport } from '../../../hooks/use-narrow-viewport';
 import { EmptyState } from '../../ui';
 import { TabHeading } from '../TabHeading';
 import { useScrollFade } from '../../../hooks/useScrollFade';
-// WHY the see-through edge fade (.scroll-mask, 2026-09-29; Destin: "we need to
-// fix scroll fade effects" on the Projects view): cards were cut off hard under
-// the tab row and at the window's bottom edge. Now they fade out wherever there
-// is more to scroll, the same fade popups and the sessions menu use.
-import '../../../styles/scroll-mask.css';
 import { useScreenOpen } from '../../../shoot-mode';
 
 interface ConversationsTabProps {
@@ -88,6 +83,9 @@ function ConversationsTabImpl({ conversations, onOpenPreview }: ConversationsTab
   // carries no ref today; threading one down for that head start is not worth
   // a new prop — revisit only if Destin notices it.
   const scrollRef = useRef<HTMLDivElement>(null);
+  // WHY (2026-09-29, "fix scroll fade effects"): drives the see-through edge
+  // fade (.scroll-mask) — cards fade under the tab row and the window's edge
+  // instead of being cut off.
   useScrollFade(scrollRef);
   const noRoot = useRef<HTMLElement | null>(null);
   const narrow = useNarrowViewport();

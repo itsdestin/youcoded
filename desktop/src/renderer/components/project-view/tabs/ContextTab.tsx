@@ -24,11 +24,6 @@ import { timingLabel } from '../context-labels';
 import { CARD_LEVEL_1 } from '../../ui';
 import { TabHeading } from '../TabHeading';
 import { useScrollFade } from '../../../hooks/useScrollFade';
-// WHY the see-through edge fade (.scroll-mask, 2026-09-29; Destin: "we need to
-// fix scroll fade effects" on the Projects view): cards were cut off hard under
-// the tab row and at the window's bottom edge. Now they fade out wherever there
-// is more to scroll, the same fade popups and the sessions menu use.
-import '../../../styles/scroll-mask.css';
 
 interface ContextTabProps {
   // Lifted, cached groups from ProjectView. null = still loading for this project.
@@ -88,6 +83,9 @@ import { useScreenOpen } from '../../../shoot-mode';
 // the panel edge — a third distinct scrollbar position across three tabs. One
 // shell for all three branches so they can't drift apart again.
 function ContextTabShell({ children }: { children: React.ReactNode }) {
+  // WHY (2026-09-29, "fix scroll fade effects"): drives the see-through edge
+  // fade (.scroll-mask) — cards fade under the tab row and the window's edge
+  // instead of being cut off.
   const scrollRef = useScrollFade<HTMLDivElement>();
   return (
     <div className="flex flex-col h-full overflow-hidden px-2 sm:px-4 pt-4 pb-4 min-w-0 max-sm:h-auto max-sm:overflow-visible">

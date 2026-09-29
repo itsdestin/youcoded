@@ -49,8 +49,6 @@ import { matchesQuery } from '../../../shared/text-match';
 // consolidation 2026-09-18).
 import { useChunkedReveal } from '../../hooks/use-chunked-reveal';
 import { useScrollFade } from '../../hooks/useScrollFade';
-// The 'flat' list fades its edges with the see-through mask (.scroll-mask).
-import '../../styles/scroll-mask.css';
 import { resolveModelBrand, type ProviderIconKey } from '../provider-brand';
 import { ProviderIcon } from '../ProviderIcon';
 import { nativeChoiceNeedsApiKey, unavailableReason, useClaudeStatus, type CatalogRow, type ProviderRow } from './availability';
