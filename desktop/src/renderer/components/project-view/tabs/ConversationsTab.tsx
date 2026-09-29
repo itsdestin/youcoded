@@ -21,6 +21,13 @@ import { useNarrowViewport } from '../../../hooks/use-narrow-viewport';
 // this tab has no "new conversation" callback (ProjectView passes only the
 // list and the preview opener; New Conversation lives on the hero above).
 import { EmptyState } from '../../ui';
+import { TabHeading } from '../TabHeading';
+import { useScrollFade } from '../../../hooks/useScrollFade';
+// WHY the see-through edge fade (.scroll-mask, 2026-09-29; Destin: "we need to
+// fix scroll fade effects" on the Projects view): cards were cut off hard under
+// the tab row and at the window's bottom edge. Now they fade out wherever there
+// is more to scroll, the same fade popups and the sessions menu use.
+import '../../../styles/scroll-mask.css';
 import { useScreenOpen } from '../../../shoot-mode';
 
 interface ConversationsTabProps {
@@ -81,6 +88,7 @@ function ConversationsTabImpl({ conversations, onOpenPreview }: ConversationsTab
   // carries no ref today; threading one down for that head start is not worth
   // a new prop — revisit only if Destin notices it.
   const scrollRef = useRef<HTMLDivElement>(null);
+  useScrollFade(scrollRef);
   const noRoot = useRef<HTMLElement | null>(null);
   const narrow = useNarrowViewport();
   // resetKey is constant: there is no search here, and a project switch
@@ -92,7 +100,10 @@ function ConversationsTabImpl({ conversations, onOpenPreview }: ConversationsTab
   });
 
   return (
-    <div className="flex flex-col h-full overflow-hidden px-2 sm:px-4 pt-1 pb-4 min-w-0 max-sm:h-auto max-sm:overflow-visible">
+    <div className="flex flex-col h-full overflow-hidden px-2 sm:px-4 pt-4 pb-4 gap-3 min-w-0 max-sm:h-auto max-sm:overflow-visible">
+      {/* WHY a heading here too: Files and Instructions open with one, and
+          this tab opened straight into cards (header/section consistency). */}
+      <TabHeading>Recent conversations</TabHeading>
       {loading ? (
         <p className="text-sm text-fg-muted">Loading…</p>
       ) : rows.length === 0 ? (
@@ -106,7 +117,7 @@ function ConversationsTabImpl({ conversations, onOpenPreview }: ConversationsTab
           // the offset) and Context (which scrolled the padded element itself)
           // each sat at a different distance. Same recipe in all three tabs =
           // one scrollbar position.
-          className="flex-1 overflow-auto max-sm:overflow-visible flex flex-col gap-2 content-start p-2 -m-2"
+          className="scroll-mask flex-1 overflow-auto max-sm:overflow-visible flex flex-col gap-2 content-start p-2 -m-2"
         >
           {visible.map((c) => (
             <ConversationRow key={c.sessionId} session={c} tagsById={registry.byId} onOpenPreview={onOpenPreview} />

@@ -126,6 +126,13 @@ function folderErrorMessage(error: string, detail: string | undefined, atRoot: b
 import { FolderIcon as FolderCardIcon, DocIcon, ImageIcon, SheetIcon, CodeGlyphIcon, GridViewIcon, ListViewIcon } from '../icons';
 import { ChevronIcon } from '../../Icons';
 import { EmptyState, ErrorState, SectionLabel } from '../../ui';
+import { TabHeading } from '../TabHeading';
+import { useScrollFade } from '../../../hooks/useScrollFade';
+// WHY the see-through edge fade (.scroll-mask, 2026-09-29; Destin: "we need to
+// fix scroll fade effects" on the Projects view): cards were cut off hard under
+// the tab row and at the window's bottom edge. Now they fade out wherever there
+// is more to scroll, the same fade popups and the sessions menu use.
+import '../../../styles/scroll-mask.css';
 import { useScreenOpen, ScreenMark } from '../../../shoot-mode';
 
 // The rounded box the list-view rows sit in — the same container language the
@@ -242,7 +249,7 @@ function FilesTabImpl({
 }) {
   // Root breadcrumb label + empty-state wording — constant now that this tab
   // renders only the one on-disk section.
-  const rootLabel = 'Project Files';
+  const rootLabel = 'Project files';
   const noun = 'files';
   // Searching OR an active type filter flattens the tree to matching FILES only
   // — no folder cards. When you're looking for something, folders are noise;
@@ -611,6 +618,7 @@ function FilesTabImpl({
   // on it), so the reveal watches the viewport there — same trade-off as
   // ConversationsTab.
   const flatScrollRef = useRef<HTMLDivElement>(null);
+  useScrollFade(flatScrollRef);
   const listScrollRef = useRef<HTMLDivElement>(null);
   const noRoot = useRef<HTMLElement | null>(null);
   const narrowViewport = useNarrowViewport();
@@ -902,39 +910,10 @@ function FilesTabImpl({
           Rendered even when search/type-filter has flattened the tree (which
           hides the path itself): the switch has to stay reachable while you
           search, and a row that disappears under you reads as a bug. */}
-      <div className="flex items-center justify-between gap-3 shrink-0 min-w-0">
-        {!flat ? (
-        <div className="flex items-center gap-1 text-xs flex-wrap min-w-0">
-          <button
-            type="button"
-            onClick={() => setCurrentDir('')}
-            className={currentDir ? 'text-fg-muted hover:text-fg transition-colors' : 'text-fg-2 font-medium'}
-          >
-            {rootLabel}
-          </button>
-          {segments.map((seg, i) => {
-            const p = segments.slice(0, i + 1).join('/');
-            const last = i === segments.length - 1;
-            return (
-              <React.Fragment key={p}>
-                <span className="text-fg-faint">/</span>
-                <button
-                  type="button"
-                  onClick={() => setCurrentDir(p)}
-                  className={`truncate max-w-[200px] ${last ? 'text-fg-2 font-medium' : 'text-fg-muted hover:text-fg transition-colors'}`}
-                >
-                  {seg}
-                </button>
-              </React.Fragment>
-            );
-          })}
-        </div>
-        ) : <span />}
-        {/* Minified switch: two bare icon buttons, no pill behind them — this
-            line is quieter than the toolbar row and a filled pill here would
-            outweigh the breadcrumb next to it. The active one is the accent
-            colour rather than an accent fill. */}
-        <div className="shrink-0 flex items-center gap-0.5" role="radiogroup" aria-label="File view">
+      {/* WHY TabHeading: the same heading row as the other two tabs — the
+          folder path is the heading, the view switch its tool. */}
+      <TabHeading action={(
+        <div className="flex items-center gap-0.5" role="radiogroup" aria-label="File view">
           {([
             { id: 'grid' as const, label: 'Grid view', icon: <GridViewIcon size={14} /> },
             { id: 'list' as const, label: 'List view', icon: <ListViewIcon size={14} /> },
@@ -958,7 +937,35 @@ function FilesTabImpl({
             );
           })}
         </div>
-      </div>
+      )}>
+        {!flat ? (
+        <>
+          <button
+            type="button"
+            onClick={() => setCurrentDir('')}
+            className={currentDir ? 'text-fg-muted hover:text-fg transition-colors' : ''}
+          >
+            {rootLabel}
+          </button>
+          {segments.map((seg, i) => {
+            const p = segments.slice(0, i + 1).join('/');
+            const last = i === segments.length - 1;
+            return (
+              <React.Fragment key={p}>
+                <span className="text-fg-faint">/</span>
+                <button
+                  type="button"
+                  onClick={() => setCurrentDir(p)}
+                  className={`truncate max-w-[200px] ${last ? '' : 'text-fg-muted hover:text-fg transition-colors'}`}
+                >
+                  {seg}
+                </button>
+              </React.Fragment>
+            );
+          })}
+        </>
+        ) : null}
+      </TabHeading>
 
       {loading && (
         <p className="text-sm text-fg-muted">Loading {noun}…</p>
@@ -1008,8 +1015,8 @@ function FilesTabImpl({
           the p-2/-m-2 overflow room the grid does. */}
       <div ref={flatScrollRef} className={isList
         ? `flex-1 min-h-0 flex flex-col gap-2 content-start max-sm:overflow-visible ${
-            flat ? 'overflow-auto' : 'overflow-hidden'}`
-        : 'flex-1 overflow-auto max-sm:overflow-visible grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3 content-start p-2 -m-2'}>
+            flat ? 'scroll-mask overflow-auto' : 'overflow-hidden'}`
+        : 'scroll-mask flex-1 overflow-auto max-sm:overflow-visible grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3 content-start p-2 -m-2'}>
         {flat
           ? (
             <>

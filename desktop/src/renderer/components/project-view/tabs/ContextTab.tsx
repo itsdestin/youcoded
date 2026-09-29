@@ -21,7 +21,14 @@ import { ContextIntroBanner } from '../ContextIntroBanner';
 // Plain-text load-timing label — shared with ContextEditorOverlay
 // (context-labels.ts); spelled out in words, never a glyph.
 import { timingLabel } from '../context-labels';
-import { SectionLabel } from '../../ui';
+import { CARD_LEVEL_1 } from '../../ui';
+import { TabHeading } from '../TabHeading';
+import { useScrollFade } from '../../../hooks/useScrollFade';
+// WHY the see-through edge fade (.scroll-mask, 2026-09-29; Destin: "we need to
+// fix scroll fade effects" on the Projects view): cards were cut off hard under
+// the tab row and at the window's bottom edge. Now they fade out wherever there
+// is more to scroll, the same fade popups and the sessions menu use.
+import '../../../styles/scroll-mask.css';
 
 interface ContextTabProps {
   // Lifted, cached groups from ProjectView. null = still loading for this project.
@@ -81,9 +88,10 @@ import { useScreenOpen } from '../../../shoot-mode';
 // the panel edge — a third distinct scrollbar position across three tabs. One
 // shell for all three branches so they can't drift apart again.
 function ContextTabShell({ children }: { children: React.ReactNode }) {
+  const scrollRef = useScrollFade<HTMLDivElement>();
   return (
-    <div className="flex flex-col h-full overflow-hidden px-2 sm:px-4 pt-1 pb-4 min-w-0 max-sm:h-auto max-sm:overflow-visible">
-      <div className="flex-1 overflow-auto max-sm:overflow-visible flex flex-col content-start p-2 -m-2">
+    <div className="flex flex-col h-full overflow-hidden px-2 sm:px-4 pt-4 pb-4 min-w-0 max-sm:h-auto max-sm:overflow-visible">
+      <div ref={scrollRef} className="scroll-mask flex-1 overflow-auto max-sm:overflow-visible flex flex-col content-start p-2 -m-2">
         {children}
       </div>
     </div>
@@ -124,22 +132,26 @@ export function ContextTab({ groups, onEditFile, onOpenInfo }: ContextTabProps) 
                 (i) button on one non-wrapping row compressed the description
                 into overlapping text at ~326px. ml-auto on the button still
                 right-aligns it on the first line. */}
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mb-2 px-1">
-              {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels
-                  batch, guide: no spaced capitals — decisions H-3/L-1…L-4). */}
-              <SectionLabel>
-                {meta.label}
-              </SectionLabel>
-              <span className="text-xs text-fg-muted min-w-0">{meta.desc}</span>
-              <button
-                type="button"
-                className="ml-auto shrink-0 w-6 h-6 rounded-md inline-flex items-center justify-center text-fg-muted hover:text-fg hover:bg-inset transition-colors"
-                title="Learn how these work"
-                aria-label={`How ${meta.label} context works`}
-                onClick={() => onOpenInfo(group.scope)}
-              >
-                <InfoIcon />
-              </button>
+            {/* WHY TabHeading (header/section consistency): the same heading row
+                as Files and Conversations, the description UNDER the heading
+                instead of squeezed beside it, the (i) as its tool. */}
+            <div className="mb-2">
+            <TabHeading
+              description={meta.desc}
+              action={(
+                <button
+                  type="button"
+                  className="w-6 h-6 rounded-md inline-flex items-center justify-center text-fg-muted hover:text-fg hover:bg-inset transition-colors"
+                  title="Learn how these work"
+                  aria-label={`How ${meta.label} context works`}
+                  onClick={() => onOpenInfo(group.scope)}
+                >
+                  <InfoIcon />
+                </button>
+              )}
+            >
+              {meta.label}
+            </TabHeading>
             </div>
 
             {group.files.length === 0 ? (
@@ -150,7 +162,10 @@ export function ContextTab({ groups, onEditFile, onOpenInfo }: ContextTabProps) 
                   <button
                     key={f.id}
                     type="button"
-                    className="w-full text-left flex items-center gap-3 bg-panel border border-edge-dim rounded-lg p-3 shrink-0 hover:bg-inset hover:border-edge transition-colors"
+                    // WHY CARD_LEVEL_1: the app's one first-level card, matching the
+                    // conversation cards on the tab beside it (was bg-panel + a
+                    // dimmer edge, a look no other list uses).
+                    className={`w-full text-left flex items-center gap-3 ${CARD_LEVEL_1} p-3 shrink-0 hover:bg-inset transition-colors`}
                     onClick={() => onEditFile(f)}
                     title={f.absolutePath}
                   >
