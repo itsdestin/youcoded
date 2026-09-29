@@ -106,6 +106,7 @@ export function OfficeView({ projectRoot = null, visible = true }: { projectRoot
                   message={saveState.message ?? "Office couldn't save this file."}
                   frame={frontFrame}
                   visible={visible}
+                  retry={!saveState.keptAfterRestore}
                   onCloseWithoutSaving={() => closeDoc(front.file.path)}
                 />
               : <span className="text-2xs text-fg-muted">{saveLabel(saveState)}</span>}

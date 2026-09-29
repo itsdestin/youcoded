@@ -78,9 +78,8 @@ const isClosing = (s: OfficeSession) => closing || closedSessions.has(s);
 // ── A restore replaced the file under an open editor (Task 7) ──
 // WHY: after a restore, the editor still holds the OLD document. Until it has reloaded the file
 // (its next open_file), any save it sends would translate that old content straight back over
-// the restored file. So a replaced session refuses save_file — quietly: the renderer is already
-// remounting the editor on office:changed — and open_file lifts it. write_editor_bin stays
-// allowed: it fills Office's own working copy, which "Save a copy…" may need.
+// the restored file. So a replaced session refuses write_editor_bin and save_file — quietly: the
+// renderer is already remounting the editor on office:changed — and open_file lifts it.
 const replaced = new WeakSet<OfficeSession>();
 
 /**
@@ -192,10 +191,12 @@ export interface OfficeCopyRunner {
   /** Whether a copy can succeed: an edited Editor.bin exists and the last save did not fail
    *  in the translation itself (a copy would go through that same translation). */
   canCopy(token: string): boolean;
-  /** Translate the document's current Editor.bin into `target`. Never touches the original. */
-  saveCopy(token: string, target: string): Promise<void>;
-  /** Re-translate into the last copy's target if Editor.bin changed since. null: no copy yet. */
-  saveCopyAgain(token: string): Promise<{ target: string; unchanged: boolean } | null>;
+  /** Translate the document's current Editor.bin into `target`. Never touches the original.
+   *  `bin` (base64): translate these editor bytes instead, never stored as the session's
+   *  Editor.bin — an editor kept after a restore (EditorFrame) must not feed any save. */
+  saveCopy(token: string, target: string, bin?: string): Promise<void>;
+  /** Re-translate into the last copy's target if Editor.bin (or `bin`) changed since. null: no copy yet. */
+  saveCopyAgain(token: string, bin?: string): Promise<{ target: string; unchanged: boolean } | null>;
 }
 /** Work that must not interleave with the document's saves (a restore, Task 7). */
 export interface OfficeExclusiveRunner {
@@ -412,10 +413,10 @@ export function createOfficeCommands(deps: {
         // WHY checked on the string's length, before decoding (review P1-3): decoding a huge
         // string would allocate the whole buffer first. base64 decodes to 3/4 of its length.
         if ((data.length * 3) / 4 > binMax) throw userError(MSG.binTooLarge);
-        // WHY allowed while replaced: Editor.bin is Office's own working copy, never the person's
-        // file, and "Save a copy…" needs the editor's newest bytes if a restore landed on typing
-        // the editor still holds (EditorFrame then keeps those edits and offers the copy).
-        return enqueueOther(s, () => writeEditorBin(s, data));
+        // Refused while replaced too: the old document's bytes must not become the Editor.bin a
+        // reloaded editor of this session would later save. (An editor that keeps typing after a
+        // restore hands its bytes to "Save a copy…" directly — saveCopy's `bin` — never here.)
+        return enqueueOther(s, () => (replaced.has(s) ? Promise.reject(userError(MSG.restored, true)) : writeEditorBin(s, data)));
       }
       case 'save_file':
         return save(s);
@@ -462,7 +463,23 @@ export function createOfficeCommands(deps: {
   // "Save a copy…" (fix round 1, the owner's decision on a save that keeps failing): the same
   // safe path as a save — a private folder beside the target, a check that the output is a real
   // document, one rename — but into a new file the person chose. The original is never touched.
-  async function saveCopyFile(s: OfficeSession, target: string): Promise<void> {
+  // WHY a private file for handed-in bytes (fix round 2): an editor kept after a restore shares
+  // this session (and its Editor.bin) with any other editor of the same file in the window; its
+  // old content must reach only the copy, never the Editor.bin the other editor's save translates.
+  async function withBin<T>(s: OfficeSession, bin: string | undefined, work: (file: string) => Promise<T>): Promise<T> {
+    if (bin === undefined) return work(editorBin(s));
+    if ((bin.length * 3) / 4 > binMax) throw userError(MSG.binTooLarge);
+    const dir = await fsp.mkdtemp(path.join(jobsBase(s), 'copy-'));
+    try {
+      const file = path.join(dir, 'Editor.bin');
+      await fsp.writeFile(file, Buffer.from(bin, 'base64'));
+      return await work(file);
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+
+  async function saveCopyFile(s: OfficeSession, target: string, bin: string = editorBin(s)): Promise<void> {
     const fmt = formatFor(target);
     if (fmt === null || fmt !== formatFor(s.path)) throw userError(MSG.unsupportedSave);
     const auth = await authorizeArtifactWrite({ projectRoot: path.dirname(target), fullPath: target, mustStayInRoot: false });
@@ -480,8 +497,8 @@ export function createOfficeCommands(deps: {
     const priv = await fsp.mkdtemp(path.join(dir, `.${base}${SAVE_DIR_MARK}`));
     const tmp = path.join(priv, base);
     try {
-      const hash = await hashFile(editorBin(s));
-      await convert(deps.root, editorBin(s), tmp, fmt, jobsBase(s), abortOf(s).signal);
+      const hash = await hashFile(bin);
+      await convert(deps.root, bin, tmp, fmt, jobsBase(s), abortOf(s).signal);
       await finishCopy(tmp, null);
       copyStateOf(s).lastCopy = { target, hash };
       if (isClosing(s)) throw userError(MSG.closing, true);
@@ -526,32 +543,32 @@ export function createOfficeCommands(deps: {
       const c = copyStateOf(s);
       return c.edited && !c.translateFailed;
     },
-    async saveCopyAgain(token: string): Promise<{ target: string; unchanged: boolean } | null> {
+    async saveCopyAgain(token: string, bin?: string): Promise<{ target: string; unchanged: boolean } | null> {
       const s = deps.sessions.get(token);
       if (!s) throw new Error(MSG.refused);
       const last = copyStateOf(s).lastCopy;
       if (!last) return null;
       // I3 (fix round 4): after a failed hand-over (or none at all) Editor.bin is stale — writing
       // it into the copy again would present old content as current.
-      if (!copyStateOf(s).edited) throw userError(MSG.copyNothing);
+      if (bin === undefined && !copyStateOf(s).edited) throw userError(MSG.copyNothing);
       try {
-        return await enqueueOther(s, async () => {
-          if ((await hashFile(editorBin(s))) === last.hash) return { target: last.target, unchanged: true };
-          await saveCopyFile(s, last.target);
+        return await enqueueOther(s, () => withBin(s, bin, async (file) => {
+          if ((await hashFile(file)) === last.hash) return { target: last.target, unchanged: true };
+          await saveCopyFile(s, last.target, file);
           return { target: last.target, unchanged: false };
-        });
+        }));
       } catch (e) {
         throw toEditorError(e, 'save_copy', last.target);
       }
     },
-    async saveCopy(token: string, target: string): Promise<void> {
+    async saveCopy(token: string, target: string, bin?: string): Promise<void> {
       const s = deps.sessions.get(token);
       if (!s) throw new Error(MSG.refused);
       if (closing) throw new Error(MSG.closing);
-      if (!copyStateOf(s).edited) throw new Error(MSG.copyNothing);
+      if (bin === undefined && !copyStateOf(s).edited) throw new Error(MSG.copyNothing);
       try {
         // In the document's queue, so the copy reads an Editor.bin no write is replacing.
-        await enqueueOther(s, () => saveCopyFile(s, target));
+        await enqueueOther(s, () => withBin(s, bin, (file) => saveCopyFile(s, target, file)));
       } catch (e) {
         throw toEditorError(e, 'save_copy', target);
       }

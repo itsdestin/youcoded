@@ -138,6 +138,13 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
   // reopened it, nothing this editor sends reaches main — its content is the OLD document, and a
   // save of it would undo the restore. (Main refuses such saves too; this is the first line.)
   const replacedRef = useRef(false);
+  // Kept after a restore (fix round 2): a restore replaced the file while THIS editor held unsaved
+  // typing, so it keeps that typing instead of reloading. From then on nothing it holds may reach
+  // the file or the session's Editor.bin (another editor of the same file may be saving from it):
+  // its save_file is answered here, and its bytes (write_editor_bin) are kept here, for "Save a
+  // copy…" to hand to main directly. Cleared only by the person: Close without saving, or a copy.
+  const keptRef = useRef(false);
+  const keptBinRef = useRef<string | null>(null);
   const post = (msg: unknown) => { const o = originRef.current; if (o) ref.current?.contentWindow?.postMessage(msg, o); };
 
   // ── Autosave (design §4), per document ──
@@ -190,6 +197,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     post({ type: 'yc:office-save' });
   };
   const armAutosave = () => {
+    if (keptRef.current) return; // kept after a restore: nothing is saved to the file (above)
     const s = save.current;
     if (s.timer) clearTimeout(s.timer);
     s.timer = setTimeout(() => { s.timer = 0; requestSave(); }, AUTOSAVE_DELAY_MS);
@@ -213,8 +221,20 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
    * save_file is with main and nothing changed since (main drains that save before the document
    * closes) — never while anything is dirty (fix round 2); otherwise the save counts as failed.
    */
+  // Resolves once no asked-for hand-over is outstanding (kept after a restore), or after capMs.
+  const untilNotRequested = (capMs: number) => new Promise<void>((resolve) => {
+    const s = save.current;
+    const done = () => { clearTimeout(cap); s.waiters = s.waiters.filter((w) => w !== check); resolve(); };
+    const check = () => { if (!s.requested) done(); };
+    const cap = setTimeout(done, capMs);
+    s.waiters.push(check);
+    check();
+  });
   const flush = (capMs: number = CLOSE_SAVE_WAIT_MS): Promise<FlushResult> => {
     const s = save.current;
+    // Kept after a restore: this editor's changes can never be saved to the file, so every flush
+    // (a close, Done, quit) reports that — the person chooses Save a copy… or Close without saving.
+    if (keptRef.current) return untilNotRequested(capMs).then(() => ({ ok: false, message: REPLACED_WHILE_EDITING }));
     const settled = () => !s.dirty && !s.requested && !s.saving && !s.timer;
     if (!originRef.current || (settled() && !s.failed)) return Promise.resolve({ ok: true });
     return new Promise<FlushResult>((resolve) => {
@@ -248,6 +268,16 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
    *  so its bytes may predate the newest typing — marking dirty makes it follow up with one more. */
   const handOver = async (): Promise<boolean> => {
     const s = save.current;
+    if (keptRef.current) {
+      // Ask the editor for its bytes; they are kept here (relay below), and its save_file that
+      // follows is answered here — nothing reaches the file or the session's Editor.bin.
+      s.requestSeq += 1;
+      s.requested = true;
+      post({ type: 'yc:office-save' });
+      await untilNotRequested(CLOSE_SAVE_WAIT_MS);
+      s.requested = false;
+      return keptBinRef.current !== null && s.handedOverSeq === s.requestSeq;
+    }
     const before = s.requestSeq;
     s.dirty = true;
     await flush();
@@ -317,10 +347,16 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       // save-failed actions (Save a copy…, Close without saving). Main refuses its saves until
       // it reloads, so it cannot land on the restored file either.
       const s = save.current;
+      if (keptRef.current) return;
       if (s.dirty || s.requested || s.saving || s.timer) {
         if (s.timer) { clearTimeout(s.timer); s.timer = 0; }
-        s.dirty = true; s.failed = true; s.failMessage = REPLACED_WHILE_EDITING;
-        markFailed(file.path, REPLACED_WHILE_EDITING);
+        if (s.requestTimer) { clearTimeout(s.requestTimer); s.requestTimer = 0; }
+        keptRef.current = true;
+        // A save still with main was queued after the restore: main refuses it, and its answer
+        // is ignored here (the relay's answer guards) — it must not leave "Saving…" stuck.
+        s.dirty = true; s.failed = true; s.requested = false; s.saving = false; s.failMessage = REPLACED_WHILE_EDITING;
+        markFailed(file.path, REPLACED_WHILE_EDITING, { keptAfterRestore: true });
+        wake();
         return;
       }
       replacedRef.current = true;
@@ -352,11 +388,14 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
 
   useImperativeHandle(handleRef, () => ({
     command: (cmd) => post({ type: 'yc:office-cmd', cmd }),
-    save: () => { const s = save.current; if (!s.saving && !s.requested) requestSave(); },
+    // No Retry while kept after a restore (the strip hides it too): a save would undo the restore.
+    save: () => { const s = save.current; if (!keptRef.current && !s.saving && !s.requested) requestSave(); },
     canSaveCopy: async () => {
       const b = officeBridge();
       const t = openedRef.current?.token;
       if (!b?.saveCopy || !t) return false;
+      // Kept after a restore: the copy is made from this editor's own bytes, so it is possible.
+      if (keptRef.current) return true;
       const r = await b.saveCopy(t, 'check').catch(() => null);
       return !!r && r.ok && 'possible' in r && r.possible;
     },
@@ -377,11 +416,17 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         // rather than switch or discard anything.
         // Said on the strip itself (the save-failed actions stay): the strip re-renders between
         // "Saving…" and the failure while this runs, which would drop a message kept only here.
-        const refuse = (message: string) => { save.current.failMessage = message; markFailed(file.path, message); return { ok: false as const, message }; };
+        // Kept after a restore: the strip keeps its own message (the copy's failure shows beside it).
+        const refuse = (message: string) => { if (keptRef.current) return { ok: false as const, message }; save.current.failMessage = message; markFailed(file.path, message); return { ok: false as const, message }; };
+        // The editor's own bytes when kept after a restore, handed to main for the copy only.
+        const copy = (mode: 'save' | 'again') => {
+          const bin = keptRef.current ? keptBinRef.current : null;
+          return bin === null ? b.saveCopy(t, mode) : b.saveCopy(t, mode, bin);
+        };
         const COPY_FAILED = "Office couldn't save a copy of this file.";
         if (!(await handOver())) return refuse(COPY_FAILED);
         const failCopy = (e: unknown) => ({ ok: false as const, message: plainMessage(e, COPY_FAILED) });
-        let r: OfficeSaveCopyResult = await b.saveCopy(t, 'save').catch(failCopy);
+        let r: OfficeSaveCopyResult = await copy('save').catch(failCopy);
         // Main refused the copy (e.g. the target is open in Office): say so on the strip.
         if (!r.ok && 'message' in r) return refuse(r.message);
         // WHY one final check, not rounds of catch-up (fix round 4): the overlay below blocks
@@ -390,7 +435,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         // compares the bytes) covers that; if it still differs, nothing is switched or discarded.
         if (r.ok && 'folder' in r) {
           const again: OfficeSaveCopyResult = (await handOver())
-            ? await b.saveCopy(t, 'again').catch(failCopy)
+            ? await copy('again').catch(failCopy)
             : { ok: false, message: COPY_FAILED };
           // 'again' rewrote the copy if the bytes differed, so on success the copy is current.
           // WHY say so rather than delete it (fix round 6, M5): the copy from 'save' is complete
@@ -404,6 +449,8 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         // the tab carries on editing the COPY — the original has nothing left to save, and later
         // typing must land in the copy, not in a file that cannot be saved.
           discardPending();
+          // The typing is safe in the copy: this slot now edits the copy, an ordinary document.
+          keptRef.current = false; keptBinRef.current = null;
           switchToCb.current?.(r.path, r.folder);
         }
         return r;
@@ -412,16 +459,43 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         noteCopying(file.path, false);
       }
     },
-    discard: () => { discardPending(); markUnchanged(file.path); },
+    discard: () => { keptRef.current = false; keptBinRef.current = null; discardPending(); markUnchanged(file.path); },
   }), [file.path]);
 
   useEffect(() => {
     if (!opened) return;
     const b = officeBridge();
+    // Kept after a restore (see keptRef): answer the save's two steps here. true when handled.
+    const keptRelay = (m: RpcMessage): boolean => {
+      const s = save.current;
+      if (m.cmd === 'save_file') {
+        post({ yc: 'rpc-result', id: m.id, error: REPLACED_WHILE_EDITING });
+        s.requested = false;
+        wake();
+        return true;
+      }
+      if (m.cmd === 'write_editor_bin') {
+        const data = (m.args as { data?: unknown } | undefined)?.data;
+        if (typeof data !== 'string') { post({ yc: 'rpc-result', id: m.id, error: "Office couldn't finish that." }); return true; }
+        keptBinRef.current = data;
+        s.handedOverSeq = s.requestSeq;
+        post({ yc: 'rpc-result', id: m.id, result: 'ok' });
+        wake();
+        return true;
+      }
+      if (m.cmd === 'set_document_modified') {
+        // More typing: still only in this editor. The strip stays as it is.
+        if ((m.args as { modified?: unknown } | undefined)?.modified === true) { s.dirty = true; withdrawUnloadApproval(); }
+        post({ yc: 'rpc-result', id: m.id, result: null });
+        return true;
+      }
+      return false;
+    };
     const relay = (m: RpcMessage) => {
       if (!b) return;
       // The file was replaced under this editor (a restore): it is being reopened; answer, send nothing.
       if (replacedRef.current) { post({ yc: 'rpc-result', id: m.id, error: 'This file was restored from a kept version, so Office is reloading it.' }); return; }
+      if (keptRef.current && keptRelay(m)) return;
       const args = m.args && typeof m.args === 'object' ? m.args as Record<string, unknown> : {};
       // The editor says when the document changes; the host decides when to save (3 s later).
       if (m.cmd === 'set_document_modified' && args.modified === true) {
@@ -478,7 +552,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         if (!mountedRef.current) return;
         // M2 (fix round 1): an answer for a document this editor has let go of (a restore
         // replaced it, or it reopened on a new token) says nothing about what it holds now.
-        if (replacedRef.current || openedRef.current?.token !== opened.token) return;
+        if (replacedRef.current || keptRef.current || openedRef.current?.token !== opened.token) return;
         if (m.cmd === 'write_editor_bin') save.current.handedOverSeq = seq;
         if (saving) {
           save.current.drainPending = false;
@@ -500,8 +574,10 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
           if (saving && save.current.drainPending) noteCloseFailedWhileHidden(file.path);
           return;
         }
-        // M2 (fix round 1): see above — no stale "couldn't save" for a document already let go.
-        if (replacedRef.current || openedRef.current?.token !== opened.token) return;
+        // M2 (fix round 1): see above — no stale "couldn't save" for a document already let go,
+        // and none over the kept-after-restore message (main's "restored" refusal of a save sent
+        // just before this editor was told) (fix round 2).
+        if (replacedRef.current || keptRef.current || openedRef.current?.token !== opened.token) return;
         // Any refused step of an asked-for save (write_editor_bin, get_current_path) ends that
         // save without a save_file: it failed, with main's reason (fix round 2).
         if (!saving && (m.cmd === 'write_editor_bin' || m.cmd === 'get_current_path')) {

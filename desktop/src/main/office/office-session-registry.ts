@@ -7,6 +7,7 @@ import path from 'node:path';
 import { log } from '../logger';
 import { awaitIdle, drainSession, stopOfficeCommands } from './office-commands';
 import { createSessions } from './office-sessions';
+import { cancelAllPruning } from './prune-schedule';
 import { killRunningConverters } from './x2t';
 
 // WHY per-instance temp base, not a fixed shared path (fix round 1, review of Task 3): a
@@ -92,6 +93,8 @@ export async function quitOfficeSessions(capMs = 5_000): Promise<void> {
   // WHY before the removal (fix round 1): from here on every new command is refused, and a
   // save still translating (the cap was hit) abandons its copy instead of replacing the file.
   stopOfficeCommands();
+  // Nor may a tidy-up of kept versions start now (Task 7): it would read and delete while the app goes.
+  cancelAllPruning();
   // WHY (fix round 2): if the cap was hit, a converter may still be running. Kill it so it
   // neither outlives the app nor keeps writing into folders being removed; its save then fails
   // and throws its private copy away, leaving the user's file as it was.

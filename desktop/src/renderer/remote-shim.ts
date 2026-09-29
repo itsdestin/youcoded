@@ -2601,7 +2601,7 @@ export function installShim(): void {
       versions: (filePath: string) => invoke('office:versions', { path: filePath }),
       restore: (filePath: string, versionId: string) => invoke('office:restore', { path: filePath, versionId }),
       onChanged: (cb: (p: { path: string; token: string }) => void) => { const h: Callback = (p: any) => cb(p); addListener('office:changed', h); return () => removeListener('office:changed', h); },
-      saveCopy: (token: string, mode: string) => invoke('office:save-copy', { token, mode }),
+      saveCopy: (token: string, mode: string, data?: string) => invoke('office:save-copy', { token, mode, data }),
     },
     // Project View IPC — sibling to artifacts. Object-payload invoke style
     // mirrors the artifacts namespace above; the literal 'project:*' channel

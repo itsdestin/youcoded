@@ -8,20 +8,36 @@ export interface PruneScheduler {
   /** Ask for a run: `delayMs` from now, or later if the last run started under `minGapMs` ago.
    *  Does nothing while a run is already waiting. */
   request(): void;
+  /** Drop a waiting run (a re-register, or quit). A run already going finishes. */
+  cancel(): void;
+}
+
+// Every scheduler not yet cancelled, so quit can stop them all (cancelAllPruning).
+const live = new Set<PruneScheduler>();
+/** Quit: no tidy-up may start while the app is shutting down. */
+export function cancelAllPruning(): void {
+  for (const p of [...live]) p.cancel();
 }
 
 export function createPruneScheduler(run: () => Promise<void>, opts: { delayMs: number; minGapMs: number }): PruneScheduler {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let lastStart = -Infinity;
   let running: Promise<void> = Promise.resolve();
-  return {
+  let cancelled = false;
+  const self: PruneScheduler = {
+    cancel() {
+      cancelled = true;
+      live.delete(self);
+      if (timer) { clearTimeout(timer); timer = null; }
+    },
     request() {
-      if (timer) return;
+      if (timer || cancelled) return;
       const wait = Math.max(opts.delayMs, lastStart + opts.minGapMs - Date.now());
       timer = setTimeout(() => {
         timer = null;
         // WHY chained: a very slow run (a huge versions folder) must not overlap the next one.
         running = running.then(async () => {
+          if (cancelled) return;
           lastStart = Date.now();
           await run().catch(() => {});
         });
@@ -30,4 +46,6 @@ export function createPruneScheduler(run: () => Promise<void>, opts: { delayMs: 
       (timer as { unref?: () => void }).unref?.();
     },
   };
+  live.add(self);
+  return self;
 }

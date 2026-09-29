@@ -10,8 +10,9 @@ import { ArtifactProvider } from '../../src/renderer/state/ArtifactContext';
 import { initialArtifactState } from '../../src/renderer/state/artifact-tracker';
 import { PageHost } from '../../src/renderer/components/pages/PageHost';
 import { OfficeView } from '../../src/renderer/components/office/OfficeView';
+import { EditorFrame, type EditorFrameHandle } from '../../src/renderer/components/office/EditorFrame';
 import { useUnsavedGuard } from '../../src/renderer/components/artifact-views/UnsavedChangesDialog';
-import { markFailed, officeDocFor, openDoc, resetOfficeStoreForTests } from '../../src/renderer/components/office/office-store';
+import { markFailed, officeDocFor, openDoc, resetOfficeStoreForTests, saveStateFor } from '../../src/renderer/components/office/office-store';
 import { resetOfficeAvailabilityForTests } from '../../src/renderer/components/office/office-availability';
 import { OFFICE_PAGE_ID, OFFICE_PAGE_SUMMARY } from '../../src/shared/pages-types';
 import type { OfficeBridge, OfficeFile, OfficeStatus } from '../../src/shared/office-types';
@@ -790,5 +791,94 @@ describe('restoring a kept version of an open document', () => {
     expect(await screen.findByText('This file was restored while you had unsaved changes here. Save a copy to keep them.')).toBeInTheDocument();
     expect(office.close).not.toHaveBeenCalled();
     expect(office.open).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers no Retry for kept typing, and Save a copy writes only the copy, never the restored file', async () => {
+    let fromFrame!: (d: unknown) => void;
+    const saveCopy = vi.fn(async (_t: string, mode: string, _bin?: string) => (mode === 'check'
+      ? { ok: true as const, possible: false }
+      : { ok: true as const, folder: 'Documents', path: '/home/you/Documents/plan (copy).docx', unchanged: true }));
+    const { office, container } = await editing({
+      saveCopy,
+      restore: vi.fn(async () => {
+        fromFrame({ yc: 'rpc', id: 77, cmd: 'set_document_modified', args: { modified: true } });
+        vi.mocked(office.onChanged!).mock.calls[0][0]({ path: FILE.path, token: 't1' });
+        return { ok: true as const };
+      }),
+    }).then((r) => { fromFrame = r.from; return r; });
+    fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
+    await screen.findByText('This file was restored while you had unsaved changes here. Save a copy to keep them.');
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Close without saving' })).toBeInTheDocument();
+    const invoke = vi.mocked(office.invoke);
+    const savesBefore = invoke.mock.calls.filter((c) => c[1] === 'save_file' || c[1] === 'write_editor_bin').length;
+    // The editor answers "save now" with its bytes, then save_file — as it really does.
+    const iframe = frameOf(container) as HTMLIFrameElement;
+    vi.spyOn(iframe.contentWindow!, 'postMessage').mockImplementation((msg: unknown) => {
+      if ((msg as { type?: string }).type !== 'yc:office-save') return;
+      queueMicrotask(() => {
+        fromFrame({ yc: 'rpc', id: 'w', cmd: 'write_editor_bin', args: { data: 'VFlQSU5H' } });
+        fromFrame({ yc: 'rpc', id: 's', cmd: 'save_file', args: {} });
+      });
+    });
+    // A late main refusal of an earlier save must not replace the strip's message either.
+    act(() => markFailed(FILE.path, 'This file was restored from a kept version, so Office is reloading it.'));
+    expect(screen.getByText('This file was restored while you had unsaved changes here. Save a copy to keep them.')).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Save a copy…' }));
+    await waitFor(() => expect(saveCopy).toHaveBeenCalledWith('t1', 'save', 'VFlQSU5H'));
+    expect(await screen.findByText('Saved a copy to Documents — now editing the copy.')).toBeInTheDocument();
+    // Nothing of the kept typing reached main as a save or as the session's Editor.bin.
+    expect(invoke.mock.calls.filter((c) => c[1] === 'save_file' || c[1] === 'write_editor_bin').length).toBe(savesBefore);
+  });
+});
+
+// Two editors holding one document token (the same file named two ways in one window): a
+// restore is decided per editor. The clean one reloads; the one with typing keeps it, and
+// nothing it holds may reach the file or the session the reloaded one saves from.
+describe('two editors on one document when a restore lands', () => {
+  it('reloads the clean one, and the one with typing never saves or hands its bytes to main', async () => {
+    let push: ((p: { path: string; token: string }) => void) | null = null;
+    const saveCopy = vi.fn(async () => ({ ok: true as const, folder: 'Documents', path: '/home/you/Documents/b (copy).docx', unchanged: true }));
+    const office = withOffice({
+      invoke: vi.fn(async () => 'ok'),
+      onChanged: vi.fn((cb) => { push = cb; return () => {}; }),
+      saveCopy,
+    });
+    const A: OfficeFile = { ...FILE, path: '/home/you/plan.docx', name: 'plan.docx' };
+    const B: OfficeFile = { ...FILE, path: '/home/you/link-to-plan.docx', name: 'link-to-plan.docx' };
+    const bRef = React.createRef<EditorFrameHandle>();
+    const { container } = render(<><EditorFrame file={A} /><EditorFrame ref={bRef} file={B} /></>);
+    const frames = await waitFor(() => {
+      const fa = container.querySelector('iframe[title="plan.docx"]') as HTMLIFrameElement;
+      const fb = container.querySelector('iframe[title="link-to-plan.docx"]') as HTMLIFrameElement;
+      expect(fa?.getAttribute('src')).toBe('office://t1/index.html');
+      expect(fb?.getAttribute('src')).toBe('office://t1/index.html');
+      return { fa, fb };
+    });
+    const fromB = (data: unknown) => act(() => { window.dispatchEvent(new MessageEvent('message', { data, origin: 'office://t1', source: frames.fb.contentWindow })); });
+    vi.spyOn(frames.fa.contentWindow!, 'postMessage').mockImplementation(() => {});
+    vi.spyOn(frames.fb.contentWindow!, 'postMessage').mockImplementation((msg: unknown) => {
+      if ((msg as { type?: string }).type !== 'yc:office-save') return;
+      queueMicrotask(() => {
+        fromB({ yc: 'rpc', id: 'w', cmd: 'write_editor_bin', args: { data: 'T0xE' } });
+        fromB({ yc: 'rpc', id: 's', cmd: 'save_file', args: {} });
+      });
+    });
+    await waitFor(() => { fromB({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } }); expect(saveStateFor(B.path).phase).toBe('unsaved'); });
+    act(() => push!({ path: A.path, token: 't1' }));
+    // A (clean) lets go of t1 and opens again; B keeps its typing and says so.
+    await waitFor(() => expect(office.close).toHaveBeenCalledWith('t1'));
+    await waitFor(() => expect(office.open).toHaveBeenCalledTimes(3));
+    expect(saveStateFor(B.path)).toMatchObject({ phase: 'failed', keptAfterRestore: true });
+    const invoke = vi.mocked(office.invoke);
+    invoke.mockClear();
+    // B's Retry does nothing; B's editor saving on its own is answered by the host.
+    act(() => bRef.current!.save());
+    fromB({ yc: 'rpc', id: 2, cmd: 'write_editor_bin', args: { data: 'T0xE' } });
+    fromB({ yc: 'rpc', id: 3, cmd: 'save_file', args: {} });
+    // B's Save a copy hands its own bytes to the copy only.
+    await act(async () => { await bRef.current!.saveCopy(); });
+    expect(saveCopy).toHaveBeenCalledWith('t1', 'save', 'T0xE');
+    expect(invoke.mock.calls.filter((c) => c[1] === 'save_file' || c[1] === 'write_editor_bin')).toEqual([]);
   });
 });

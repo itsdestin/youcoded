@@ -19,7 +19,7 @@ import { createOfficeCommands, OFFICE_COMMANDS } from './office-commands';
 import type { createSessions, OfficeSession } from './office-sessions';
 import { formatFor } from './x2t';
 import * as versions from './versions';
-import { createPruneScheduler } from './prune-schedule';
+import { createPruneScheduler, type PruneScheduler } from './prune-schedule';
 
 type Sessions = ReturnType<typeof createSessions>;
 
@@ -112,13 +112,16 @@ export interface OfficeIpcDeps {
 
 
 const fail = (message: string): OfficeOpen => ({ ok: false, message });
+let activePruner: PruneScheduler | null = null;
 
 export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): void {
   // WHY: ipcMain.handle throws on re-registration. Clearing first keeps hot-reload dev
   // sessions (scripts/run-dev.sh) from crashing on reload.
   for (const ch of CHANNELS) ipcMain.removeHandler(ch);
   ipcMain.removeHandler('office:lost-saves'); // desktop only, so not in CHANNELS (see below)
-  const pruner = deps.pruneVersionsAfterMs === undefined ? null
+  // WHY cancel the previous one: a re-register (a dev reload) must not leave two tidy-ups queued.
+  activePruner?.cancel();
+  const pruner = activePruner = deps.pruneVersionsAfterMs === undefined ? null
     : createPruneScheduler(() => versions.pruneAll(deps.userData), { delayMs: deps.pruneVersionsAfterMs, minGapMs: PRUNE_MIN_GAP_MS });
   pruner?.request(); // the startup pass
 
@@ -293,7 +296,9 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
 
   // "Save a copy…" for a document whose save keeps failing (the owner's decision, fix round 1).
   // Same checks as invoke: the token must be one this window opened.
-  async function saveCopy(sender: OfficeSender, token: unknown, mode: unknown): Promise<OfficeSaveCopyResult> {
+  async function saveCopy(sender: OfficeSender, token: unknown, mode: unknown, data?: unknown): Promise<OfficeSaveCopyResult> {
+    // The editor's own bytes, from an editor kept after a restore (EditorFrame): copied, never saved.
+    const bin = typeof data === 'string' ? data : undefined;
     const reg = deps.getSessions();
     const s = typeof token === 'string' ? reg?.get(token) : undefined;
     if (!reg || !s || s.senderId !== sender.id) return { ok: false, message: MSG.refused };
@@ -301,7 +306,7 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     if (mode === 'check') return { ok: true, possible: run.canCopy(s.token) };
     if (mode === 'again') {
       try {
-        const r = await run.saveCopyAgain(s.token);
+        const r = await run.saveCopyAgain(s.token, bin);
         if (!r) return { ok: false, message: MSG.couldNotCopy };
         return { ok: true, folder: path.basename(path.dirname(r.target)), path: r.target, unchanged: r.unchanged };
       } catch (e) {
@@ -313,7 +318,7 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     if (!target) return { ok: false, cancelled: true };
     if (typeof target !== 'string') return { ok: false, message: target.refused };
     try {
-      await run.saveCopy(s.token, target);
+      await run.saveCopy(s.token, target, bin);
       // The folder's name only — never a full path on screen (the owner's rule for this message).
       return { ok: true, folder: path.basename(path.dirname(target)), path: target };
     } catch (e) {
@@ -366,7 +371,11 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     const work = () => versions.restore(deps.userData, realPath, id);
     // WHY held (M4): an open of this file starting now waits for the restore, so its editor
     // loads the restored file — never the old one, which its next save would write back.
-    if (!s) return reg.holdWhile(realPath, work);
+    if (!s) {
+      const r = await reg.holdWhile(realPath, work);
+      if (r.ok) pruner?.request(); // the before-restore copy counts toward the 1 GB too
+      return r;
+    }
     let r: { ok: true } | { ok: false; message: string };
     try {
       r = await commandsFor(reg).exclusive(s.token, work, (x) => x.ok);
@@ -376,6 +385,7 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
       return { ok: false, message: MSG.couldNotRestore };
     }
     if (r.ok) {
+      pruner?.request(); // the before-restore copy counts toward the 1 GB too
       try { sender.send?.('office:changed', { path: realPath, token: s.token }); } catch { /* the window is going */ }
     }
     return r;
@@ -384,7 +394,7 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
   ipcMain.handle('office:open', (e, filePath) => open(e.sender, filePath));
   ipcMain.handle('office:versions', (_e, filePath) => listVersions(filePath));
   ipcMain.handle('office:restore', (e, filePath, id) => restoreVersion(e.sender, filePath, id));
-  ipcMain.handle('office:save-copy', (e, token, mode) => saveCopy(e.sender, token, mode));
+  ipcMain.handle('office:save-copy', (e, token, mode, data) => saveCopy(e.sender, token, mode, data));
   ipcMain.handle('office:invoke', (e, token, cmd, args) => invoke(e.sender, token, cmd, args));
   ipcMain.handle('office:close', (e, token) => close(e.sender, token));
   // Desktop only, like the close/quit handshake: the remote client and the phone have no editors.

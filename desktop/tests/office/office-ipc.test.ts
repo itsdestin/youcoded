@@ -421,4 +421,27 @@ describe('office versions and restore', () => {
     await mkdir(path.join(vdir, 'index.json'));
     await expect(call('office:versions', win1, file)).rejects.toThrow("Office couldn't load the versions of this file.");
   });
+
+  it("copies an editor's own handed-in bytes without touching the file or the document's working copy", async () => {
+    const pickTarget = path.join(dir, 'kept typing.docx');
+    ipc = fakeIpcMain();
+    registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => available, root: path.join(dir, 'addon'), userData: userData(), convert: copying as never, pickCopyTarget: async () => pickTarget });
+    const { file, token } = await openedIn(win1);
+    const s = sessions.get(token)!;
+    const binBefore = await readFile(path.join(s.temp, 'Editor.bin'));
+    const fileBefore = await readFile(file);
+    const kept = doc('kept typing');
+    await expect(call('office:save-copy', win1, token, 'save', kept.toString('base64'))).resolves.toMatchObject({ ok: true, path: pickTarget });
+    expect((await readFile(pickTarget)).equals(kept)).toBe(true);
+    expect((await readFile(file)).equals(fileBefore)).toBe(true);
+    expect((await readFile(path.join(s.temp, 'Editor.bin'))).equals(binBefore)).toBe(true);
+  });
+
+  it("refuses the old editor's bytes as the document's working copy after a restore, until it reloads", async () => {
+    const { file, token } = await openedIn(win1);
+    const [opened] = (await call('office:versions', win1, file)) as { id: string }[];
+    await expect(call('office:restore', win1, file, opened.id)).resolves.toEqual({ ok: true });
+    await expect(call('office:invoke', win1, token, 'write_editor_bin', { data: doc('stale').toString('base64') }))
+      .rejects.toThrow('This file was restored from a kept version, so Office is reloading it.');
+  });
 });

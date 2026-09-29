@@ -109,6 +109,8 @@ function locked<T>(dir: string, run: () => Promise<T>): Promise<T> {
 
 const copyName = (e: { id: string; reason: string; ext: string }) => `${e.id}.${e.reason}.${e.ext}`;
 const copyPath = (dir: string, e: { id: string; reason: string; ext: string }) => path.join(dir, copyName(e));
+// WHY only this form: copies named `<id>.<ext>` exist only in dev profiles from before this naming,
+// and are left unread (accepted) rather than guessed at.
 const COPY_RE = /^(.+)\.(opened|autosave|before-restore)\.(docx|xlsx|pptx)$/;
 const publicShape = (e: Entry): OfficeVersion => ({ id: e.id, at: e.at, reason: e.reason, bytes: e.bytes });
 const byNewest = (a: Entry, b: Entry) => Date.parse(b.at) - Date.parse(a.at);

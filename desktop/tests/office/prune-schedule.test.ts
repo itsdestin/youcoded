@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createPruneScheduler } from '../../src/main/office/prune-schedule';
+import { cancelAllPruning, createPruneScheduler } from '../../src/main/office/prune-schedule';
 
 // The 1 GB tidy-up of kept versions: run a while after a new version, never on the save itself,
 // requests while one waits join it, and runs are at least 5 minutes apart.
@@ -46,5 +46,23 @@ describe('the kept-versions tidy-up schedule', () => {
     s.request();
     await vi.advanceTimersByTimeAsync(300_000);
     expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it('runs nothing once cancelled, and ignores later requests', async () => {
+    const run = vi.fn(async () => {});
+    const s = createPruneScheduler(run, { delayMs: 30_000, minGapMs: 300_000 });
+    s.request();
+    s.cancel();
+    s.request();
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('stops every waiting tidy-up at quit', async () => {
+    const run = vi.fn(async () => {});
+    createPruneScheduler(run, { delayMs: 30_000, minGapMs: 300_000 }).request();
+    cancelAllPruning();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(run).not.toHaveBeenCalled();
   });
 });

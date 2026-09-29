@@ -381,6 +381,9 @@ export interface OfficeSaveState {
   message?: string;
   /** After "Save a copy…": the folder the copy went to (its name only, never a full path). */
   copiedTo?: string;
+  /** failed because a restore replaced the file while this editor held unsaved typing: the only
+   *  ways out are Save a copy… and Close without saving — a Retry would undo the restore. */
+  keptAfterRestore?: boolean;
 }
 
 const SAVED: OfficeSaveState = { phase: 'saved' };
@@ -427,8 +430,11 @@ export function markSaving(path: string): void {
 export function markSaved(path: string): void {
   setSave(path, { phase: 'saved', savedAt: new Date().toISOString() });
 }
-export function markFailed(path: string, message: string): void {
-  setSave(path, { phase: 'failed', savedAt: saves[path]?.savedAt, message });
+export function markFailed(path: string, message: string, opts: { keptAfterRestore?: boolean } = {}): void {
+  // WHY sticky: while an editor is kept after a restore, no other failure may replace its message
+  // (or bring Retry back) — only the person's choice clears it (markUnchanged / markCopied).
+  if (saves[path]?.keptAfterRestore && !opts.keptAfterRestore) return;
+  setSave(path, { phase: 'failed', savedAt: saves[path]?.savedAt, message, ...(opts.keptAfterRestore ? { keptAfterRestore: true } : {}) });
 }
 
 // ── "Save a copy…" in progress, per file (fix round 5) ──

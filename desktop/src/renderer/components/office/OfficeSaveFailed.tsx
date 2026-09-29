@@ -8,7 +8,9 @@ import { Button, Dialog, ErrorState } from '../ui';
 import type { EditorFrameHandle } from './EditorFrame';
 import { useCopying } from './office-store';
 
-export function OfficeSaveFailed({ path, message, frame, onCloseWithoutSaving, className = '', visible = true }: {
+export function OfficeSaveFailed({ path, message, frame, onCloseWithoutSaving, className = '', visible = true, retry = true }: {
+  /** false when a Retry must not be offered (a restore replaced the file under unsaved typing). */
+  retry?: boolean;
   /** The file this strip is for (its copy-in-progress state). */
   path: string;
   message: string;
@@ -46,7 +48,17 @@ export function OfficeSaveFailed({ path, message, frame, onCloseWithoutSaving, c
   ];
   return (
     <>
-      <ErrorState variant="inline" className={className} message={copyError ?? message} moreActions={more} busy={copying} onRetry={() => frame.current?.save()} />
+      {retry
+        ? <ErrorState variant="inline" className={className} message={copyError ?? message} moreActions={more} busy={copying} onRetry={() => frame.current?.save()} />
+        // WHY not ErrorState here: its type demands a Retry, Diagnose or Report bug, and none
+        // fits — this is a known state (a restore replaced the file under unsaved typing), not
+        // a failure to retry or report. Only the two choices that keep or drop the typing remain.
+        : (
+          <div className={`flex items-center gap-2 ${className}`.trim()} role="status">
+            <span className="text-2xs text-fg-2 min-w-0">{copyError ?? message}</span>
+            {more.map((a) => <Button key={a.label} variant="secondary" size="sm" onClick={a.onClick} disabled={copying}>{a.label}</Button>)}
+          </div>
+        )}
       {confirming && visible && (
         <CloseWithoutSavingConfirm
           onCancel={() => setConfirming(false)}
