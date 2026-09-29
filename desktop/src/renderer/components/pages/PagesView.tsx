@@ -15,7 +15,7 @@
 import React, { useEffect, useState } from 'react';
 import { useArtifactSelector, useArtifactDispatch } from '../../state/ArtifactContext';
 import { useEscClose } from '../../hooks/use-esc-close';
-import { Button, CloseButton, LoadingState, ErrorState, Tooltip } from '../ui';
+import { Button, CloseButton, LoadingState, ErrorState, SectionLabel, Tooltip } from '../ui';
 import type { PageSummary } from '../../../shared/pages-types';
 import { MAX_PINNED_PAGES } from '../../../shared/pages-types';
 import { EditGlyph, PageGlyph, PagesIcon, PinGlyph } from './page-icons';
@@ -119,10 +119,14 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
   );
 }
 
+// WHY SectionLabel, not the old spaced-caps eyebrow (labels batch, guide: no
+// spaced capitals — decisions H-3/L-1…L-4).
 function Section({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <section className="flex flex-col gap-3">
-      <div className="text-2xs font-medium text-fg-muted tracking-wider uppercase px-1">{label}</div>
+      {/* Padding on a wrapper — SectionLabel owns only margin/layout
+          (design lint no-restyle). */}
+      <div className="px-1"><SectionLabel>{label}</SectionLabel></div>
       <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">{children}</div>
     </section>
   );

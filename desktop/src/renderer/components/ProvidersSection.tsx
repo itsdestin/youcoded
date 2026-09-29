@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Button, FieldError, InputGroup, Select, TextInput, Toggle } from './ui';
+import { Button, FieldError, InputGroup, Select, SectionLabel, TextInput, Toggle } from './ui';
 import { isLocalEndpoint, type ProviderStatus, type ProviderConfig, type ProviderType } from '../../shared/provider-types';
 import { invalidateProviderTypeCache } from '../hooks/use-provider-type';
 
@@ -181,8 +181,10 @@ export default function ProvidersSection({ embedded = false }: { embedded?: fals
 
   return (
     <section>
+      {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels batch,
+          guide: no spaced capitals — decisions H-3/L-1…L-4). */}
       {!embedded && (
-        <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-3">Providers</h3>
+        <SectionLabel className="mb-3">Providers</SectionLabel>
       )}
 
       {visibleRows === null ? (
@@ -454,7 +456,7 @@ function AddProviderForm({ onDone, onCancel }: { onDone: () => Promise<void>; on
 
   return (
     <div className="space-y-2 rounded-lg bg-inset border border-edge-dim p-3">
-      <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Add provider</h3>
+      <SectionLabel>Add provider</SectionLabel>
 
       {/* Type — change 21: the native <select> is gone. A native option list is
           drawn by the OS, so a themed app dropped an OS-blue menu out of it;

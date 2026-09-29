@@ -4115,7 +4115,9 @@ function AppInner() {
                 <div className="layer-surface w-full p-3 flex flex-col gap-2" data-guide-anchor="new-session-form">
                   <ScreenMark name="welcome/new-session" />
                   <div>
-                    <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 block">Project Folder</label>
+                    {/* WHY: field caption drops the spaced-caps eyebrow + sentence
+                        case (labels batch, guide: no spaced capitals). */}
+                    <label className="text-xs font-medium text-fg-muted mb-1 block">Project folder</label>
                     {/* Match SessionStrip: the picker's "Manage projects…"
                         footer opens Project View (where adding lives). */}
                     <FolderSwitcher
@@ -4131,7 +4133,7 @@ function AppInner() {
                       user answers "which model?" instead of decoding "Runtime"
                       first. */}
                   <div>
-                    <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 block">Model</label>
+                    <label className="text-xs font-medium text-fg-muted mb-1 block">Model</label>
                     <ModelPicker
                       value={welcomeModelChoice}
                       onSelect={applyWelcomeModelChoice}
@@ -4154,8 +4156,12 @@ function AppInner() {
                     <>
                       <div className="flex items-center justify-between">
                         {/* The same (i) explainer the strip form carries — the
-                            welcome form had none (UX tester run 1, U10). */}
-                        <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase inline-flex items-center">
+                            welcome form had none (UX tester run 1, U10).
+                            WHY still "Skip Permissions" (labels batch): only
+                            the spaced-caps CSS is dropped — the words stay,
+                            same as its dialog titles/tooltip/aria-label
+                            elsewhere in the app (kept like a proper noun). */}
+                        <label className="text-xs font-medium text-fg-muted inline-flex items-center">
                           Skip Permissions
                           <SkipPermissionsInfoTooltip />
                         </label>

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { DetectedEndpoint } from '../../../shared/model-manager-types';
-import { Button, FieldError, LoadingState, TextInput } from '../ui';
+import { Button, FieldError, LoadingState, SectionLabel, TextInput } from '../ui';
 import { StatusStrip } from '../ui/StatusStrip';
 
 /**
@@ -82,7 +82,9 @@ export function LocalAppConnect({ onBack }: { onBack: () => void }) {
         <LoadingState what="model apps on this computer" verb="Looking for" />
       ) : hits.length === 0 ? null : (
         <div className="flex flex-col items-stretch gap-3 w-full">
-          <p className="text-2xs uppercase tracking-wide text-fg-muted text-center">Found on this computer</p>
+          {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels batch,
+              guide: no spaced capitals — decisions H-3/L-1…L-4). */}
+          <SectionLabel className="text-center">Found on this computer</SectionLabel>
           {hits.map((hit) => (
             <Button key={hit.baseUrl} variant="secondary" className={PILL} onClick={() => void connect(hit.baseUrl, APP_NAME[hit.kind])}>
               Connect to {APP_NAME[hit.kind]}{hit.modelCount != null ? ` · ${hit.modelCount} ${hit.modelCount === 1 ? 'model' : 'models'}` : ''}

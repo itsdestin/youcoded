@@ -21,7 +21,7 @@ import WallpaperBackdrop from "../WallpaperBackdrop";
 import InstallingFooterStrip from "./InstallingFooterStrip";
 import MarketplaceAuthChip from "./MarketplaceAuthChip";
 import { Scrim, OverlayPanel } from "../overlays/Overlay";
-import { Button, CloseButton, EmptyState, ErrorState, LoadingState } from "../ui";
+import { Button, CloseButton, EmptyState, ErrorState, LoadingState, SectionLabel } from "../ui";
 import { useEscClose } from "../../hooks/use-esc-close";
 import { useNarrowViewport } from "../../hooks/use-narrow-viewport";
 import { useCurrentPlatform } from "../../state/platform";
@@ -124,7 +124,9 @@ export default function MarketplaceScreen({
     // connected/needs-auth state is moot. When platform is still resolving
     // (null) treat as "not blocked" to avoid a transient grey badge flash.
     if (currentPlatform && item.platforms && item.platforms.length > 0 && !item.platforms.includes(currentPlatform as any)) {
-      return { text: `${platformDisplayName(item.platforms[0])} Only`, tone: 'locked' };
+      // WHY sentence case (labels batch): this pill's uppercase CSS is gone,
+      // so its own text must already be sentence case, not Title Case.
+      return { text: `${platformDisplayName(item.platforms[0])} only`, tone: 'locked' };
     }
     if (item.status === 'planned') return { text: 'Coming soon', tone: 'neutral' };
     if (item.status === 'deprecated') return { text: 'Deprecated', tone: 'neutral' };
@@ -836,7 +838,9 @@ function IntegrationDetailOverlay({
                   <h1 className="text-xl sm:text-2xl font-semibold text-fg">{item.displayName}</h1>
                   {item.tagline && <p className="mt-1 text-sm sm:text-base text-fg-2">{item.tagline}</p>}
                   <div className="mt-3 flex items-center gap-2 flex-wrap">
-                    <span className={`text-3xs uppercase tracking-wide rounded-full px-2 py-0.5 ${STATUS_TONE_CLASS[statusBadge.tone]}`}>
+                    {/* WHY: status pills are normal case, no letter-spacing
+                        (labels batch, guide: "Status and notices"). */}
+                    <span className={`text-3xs rounded-full px-2 py-0.5 ${STATUS_TONE_CLASS[statusBadge.tone]}`}>
                       {statusBadge.text}
                     </span>
                     {item.state.error && (
@@ -867,7 +871,9 @@ function IntegrationDetailOverlay({
 
             {item.longDescription ? (
               <section>
-                <h2 className="text-sm uppercase tracking-wide text-fg-dim mb-2">About</h2>
+                {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels batch,
+          guide: no spaced capitals — decisions H-3/L-1…L-4). */}
+      <SectionLabel className="mb-2">About</SectionLabel>
                 <div className="prose prose-sm max-w-none text-fg-2 whitespace-pre-wrap">
                   {item.longDescription}
                 </div>
@@ -1072,7 +1078,7 @@ function IntegrationSetupDetails({ entry }: { entry: IntegrationCardItem }) {
 
   return (
     <section>
-      <h2 className="text-sm uppercase tracking-wide text-fg-dim mb-2">Setup</h2>
+      <SectionLabel className="mb-2">Setup</SectionLabel>
       <ul className="list-disc pl-5 text-sm text-fg-2 space-y-1">
         {bullets.map((b) => (
           <li key={b}>

@@ -6,7 +6,7 @@ import { SpecialistActions } from './specialists/SpecialistActions';
 import { RunStatusLine } from './specialists/RunStatusLine';
 import { AgentSections } from './tool-views/ToolBody';
 import { friendlyToolDisplay } from './ToolCard';
-import { Dialog, Tooltip } from './ui';
+import { Dialog, SectionLabel, Tooltip } from './ui';
 import BrailleSpinner from './BrailleSpinner';
 import { CheckIcon, FailIcon, QuestionIcon, StoppedIcon } from './Icons';
 import { useScreenOpen } from '../shoot-mode';
@@ -88,7 +88,10 @@ export default function SpecialistsChip({ sessionId }: { sessionId: string | nul
 
 // ---------------------------------------------------------------------------
 
-const SECTION_LABEL = 'text-3xs font-medium text-fg-muted tracking-wider uppercase px-1 pt-1 pb-1.5';
+// WHY SectionLabel, not a hand-typed eyebrow class (labels batch, guide: no
+// spaced capitals — decisions H-3/L-1…L-4). Padding lives on a wrapper below
+// — SectionLabel owns only margin/layout (design lint no-restyle).
+const SECTION_LABEL_WRAPPER_CLASS = 'px-1 pt-1 pb-1.5';
 
 function SpecialistManager({ summary, sessionId, onJump }: { summary: SpecialistSummary; sessionId?: string; onJump: () => void }) {
   const groups: Array<{ id: HelperView['group']; label: string }> = [
@@ -103,7 +106,9 @@ function SpecialistManager({ summary, sessionId, onJump }: { summary: Specialist
         if (items.length === 0) return null;
         return (
           <section key={g.id}>
-            <h3 className={SECTION_LABEL}>{g.label}</h3>
+            <div className={SECTION_LABEL_WRAPPER_CLASS}>
+              <SectionLabel>{g.label}</SectionLabel>
+            </div>
             <div className="space-y-2">
               {items.map(h => <HelperCard key={h.run.childId} h={h} sessionId={sessionId} onJump={onJump} />)}
             </div>

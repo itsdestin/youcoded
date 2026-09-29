@@ -294,8 +294,10 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, ac
           {showUpdateAction ? (
             <UpdateButton id={updateId} kind={kind} />
           ) : compactStatus ? (
+            // WHY: status pills are normal case, no letter-spacing (labels
+            // batch, guide: "Status and notices").
             <span
-              className={`text-3xs uppercase tracking-wide px-2 py-0.5 rounded-full ${STATUS_TONE_CLASS[compactStatus.tone]}`}
+              className={`text-3xs px-2 py-0.5 rounded-full ${STATUS_TONE_CLASS[compactStatus.tone]}`}
             >
               {compactStatus.text}
             </span>
@@ -382,7 +384,7 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, ac
             {trust && <div className="mt-1">{trust}</div>}
             {isLocalTheme && (
               <div className="mt-1 inline-flex items-center gap-1 group relative">
-                <span className="text-3xs uppercase tracking-wide px-2 py-0.5 rounded-full bg-accent/15 text-accent border border-accent/30">
+                <span className="text-3xs px-2 py-0.5 rounded-full bg-accent/15 text-accent border border-accent/30">
                   Local
                 </span>
                 <button
@@ -420,7 +422,7 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, ac
         <div className="flex items-center gap-1 shrink-0">
         {statusBadge ? (
           <span
-            className={`relative z-10 text-3xs uppercase tracking-wide shrink-0 px-2 py-0.5 rounded-full ${STATUS_TONE_CLASS[statusBadge.tone]}`}
+            className={`relative z-10 text-3xs shrink-0 px-2 py-0.5 rounded-full ${STATUS_TONE_CLASS[statusBadge.tone]}`}
           >
             {statusBadge.text}
           </span>
@@ -431,7 +433,7 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, ac
           <UpdateButton id={updateId} kind={kind} />
         ) : (isInstalling || isInstalled) && (
           <span
-            className={`relative z-10 text-3xs uppercase tracking-wide shrink-0 px-2 py-0.5 rounded-full ${
+            className={`relative z-10 text-3xs shrink-0 px-2 py-0.5 rounded-full ${
               isInstalling
                 ? 'text-accent border border-accent/50 bg-accent/10 animate-pulse'
                 : 'text-fg-dim'

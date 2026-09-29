@@ -21,6 +21,7 @@ import { ContextIntroBanner } from '../ContextIntroBanner';
 // Plain-text load-timing label — shared with ContextEditorOverlay
 // (context-labels.ts); spelled out in words, never a glyph.
 import { timingLabel } from '../context-labels';
+import { SectionLabel } from '../../ui';
 
 interface ContextTabProps {
   // Lifted, cached groups from ProjectView. null = still loading for this project.
@@ -124,9 +125,11 @@ export function ContextTab({ groups, onEditFile, onOpenInfo }: ContextTabProps) 
                 into overlapping text at ~326px. ml-auto on the button still
                 right-aligns it on the first line. */}
             <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mb-2 px-1">
-              <span className="text-3xs font-medium text-fg-muted tracking-wider uppercase">
+              {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels
+                  batch, guide: no spaced capitals — decisions H-3/L-1…L-4). */}
+              <SectionLabel>
                 {meta.label}
-              </span>
+              </SectionLabel>
               <span className="text-xs text-fg-muted min-w-0">{meta.desc}</span>
               <button
                 type="button"

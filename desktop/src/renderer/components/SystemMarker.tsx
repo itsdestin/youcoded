@@ -30,7 +30,9 @@ export default function SystemMarker({ marker }: Props) {
             type="button"
             onClick={() => setExpanded((v) => !v)}
             aria-expanded={expanded}
-            className="text-2xs uppercase tracking-wider whitespace-nowrap inline-flex items-center gap-1.5 hover:text-fg-2 transition-colors cursor-pointer"
+            // WHY: drop the spaced-caps eyebrow (labels batch, guide: no
+            // spaced capitals).
+            className="text-2xs whitespace-nowrap inline-flex items-center gap-1.5 hover:text-fg-2 transition-colors cursor-pointer"
           >
             <svg
               width="8"
@@ -48,7 +50,7 @@ export default function SystemMarker({ marker }: Props) {
             </span>
           </button>
         ) : (
-          <span className="text-2xs uppercase tracking-wider whitespace-nowrap">
+          <span className="text-2xs whitespace-nowrap">
             {marker.label}
             <span className="ml-2 text-fg-muted normal-case tracking-normal">· {time}</span>
           </span>
@@ -60,7 +62,10 @@ export default function SystemMarker({ marker }: Props) {
         // summaries. Pre-wrap preserves CC's numbered-list formatting;
         // break-words so long paths/URLs wrap rather than overflow.
         <div className="mt-2 mx-auto max-w-3xl rounded-md border border-edge-dim bg-inset/60 px-4 py-3">
-          <div className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">
+          {/* WHY: drop the spaced-caps eyebrow (labels batch, guide: no
+              spaced capitals). Kept a plain div, not SectionLabel — this
+              sits inside its own small inline panel, not a screen/popup/list. */}
+          <div className="text-xs font-medium text-fg-muted mb-2">
             Compaction summary
           </div>
           <pre className="text-xs text-fg-2 whitespace-pre-wrap break-words font-sans leading-relaxed max-h-96 overflow-y-auto">

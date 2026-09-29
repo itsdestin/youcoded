@@ -74,7 +74,10 @@ export default function MarketplaceHero({ slots, lookup, onOpen }: Props) {
       onTouchEnd={handleTouchEnd}
     >
       <div className="relative z-10">
-        <p className="text-xs uppercase tracking-wide text-fg-dim">Featured</p>
+        {/* WHY: drop the spaced-caps eyebrow (labels batch, guide: no spaced
+            capitals). Kept a plain <p>, not SectionLabel — this annotates the
+            hero card itself, not a group inside a screen/popup/list. */}
+        <p className="text-xs text-fg-dim">Featured</p>
         <h2 className="text-base sm:text-2xl font-semibold text-fg">
           {entry?.displayName || slot.id}
         </h2>

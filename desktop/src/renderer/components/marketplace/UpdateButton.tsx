@@ -79,7 +79,9 @@ export default function UpdateButton({ id, kind, variant = "pill" }: Props) {
           // Accent-tinted pill: it must read as something you can press, unlike
           // the inert "Installed" text it replaces. Tokens, not raw colours, so
           // it re-tints on every theme.
-          className="relative z-10 shrink-0 text-3xs uppercase tracking-wide px-2 py-0.5 rounded-full border border-accent/40 bg-accent/10 text-accent hover:bg-accent/20 disabled:opacity-60 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          // WHY: this is a status/action pill — normal case, no letter-spacing
+          // (labels batch, guide: "Status and notices").
+          className="relative z-10 shrink-0 text-3xs px-2 py-0.5 rounded-full border border-accent/40 bg-accent/10 text-accent hover:bg-accent/20 disabled:opacity-60 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
           {label}
         </button>

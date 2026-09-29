@@ -49,7 +49,11 @@ p { margin: 0; }
 .yc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
 .yc-spacer { flex: 1; }
 
-.yc-eyebrow { font-size: 11px; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-muted); }
+/* WHY: dropped the spaced-caps eyebrow look (labels batch, guide: no spaced
+   capitals — decisions H-3/L-1…L-4). Class name kept — existing Pages
+   reference .yc-eyebrow by name; only its computed style changed, matching
+   the app's own SectionLabel: 12px medium grey, normal case, no tracking. */
+.yc-eyebrow { font-size: 12px; font-weight: 500; color: var(--fg-muted); }
 .yc-title { font-size: 16px; font-weight: 500; color: var(--fg); }
 .yc-muted { color: var(--fg-muted); }
 .yc-dim { color: var(--fg-dim); }
@@ -128,7 +132,9 @@ p { margin: 0; }
 .yc-empty { padding: 32px 16px; text-align: center; color: var(--fg-muted); font-size: 14px; }
 
 table.yc-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-table.yc-table th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-muted); font-weight: 500; padding: 8px; border-bottom: 1px solid var(--edge); }
+/* WHY: dropped uppercase + letter-spacing (labels batch, guide: no spaced
+   capitals) — this is a table column header, so it keeps its 11px size. */
+table.yc-table th { text-align: left; font-size: 11px; color: var(--fg-muted); font-weight: 500; padding: 8px; border-bottom: 1px solid var(--edge); }
 table.yc-table td { padding: 8px; border-bottom: 1px solid var(--edge-dim); }
 
 /* App-shaped pages: a toolbar across the top, a tool rail on the left, a

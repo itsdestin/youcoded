@@ -2503,7 +2503,9 @@ export function ConnectToDesktopButton() {
               {/* Saved devices — always listed */}
               {pairedDevices.length > 0 && (
                 <section>
-                  <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Saved Devices</h3>
+                  {/* WHY SectionLabel, sentence case (labels batch, guide: no
+                      spaced capitals — decisions H-3/L-1…L-4). */}
+                  <SectionLabel className="mb-2">Saved devices</SectionLabel>
                   <div className="space-y-2">
                     {pairedDevices.map(device => (
                       // K6. The row was already two controls in a flex box: a
@@ -2540,8 +2542,12 @@ export function ConnectToDesktopButton() {
               {/* Add new device */}
               {!remoteConnected && !connecting && (
                 <section>
+                  {/* WHY still "Add Device" (labels batch): its established
+                      name elsewhere in this same panel — the button, the
+                      overlay title, "Close Add Device", and its hint text —
+                      kept like a proper noun; only the spaced-caps CSS drops. */}
                   {pairedDevices.length > 0 && (
-                    <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Add Device</h3>
+                    <SectionLabel className="mb-2">Add Device</SectionLabel>
                   )}
                   {!showConnectForm ? (
                     <div className="space-y-2">
@@ -2562,18 +2568,23 @@ export function ConnectToDesktopButton() {
                           form footer — it sits under the whole form, not beside one
                           field, so it is NOT an InputGroup. */}
                       <div>
-                        <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase block mb-1">Device Name</label>
+                        {/* WHY: field captions drop the spaced-caps eyebrow +
+                            sentence case (labels batch). */}
+                        <label className="text-xs font-medium text-fg-muted block mb-1">Device name</label>
                         <TextInput
                           size="sm"
                           value={formName}
                           onChange={e => setFormName(e.target.value)}
                           placeholder="My Desktop"
-                          aria-label="Device Name"
+                          // WHY: matches the visible label's new sentence
+                          // case (labels batch) — this field has no other
+                          // established Title-Case reference elsewhere.
+                          aria-label="Device name"
                           className="w-full"
                         />
                       </div>
                       <div>
-                        <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase block mb-1">Host / IP</label>
+                        <label className="text-xs font-medium text-fg-muted block mb-1">Host / IP</label>
                         <TextInput
                           size="sm"
                           value={formHost}
@@ -2584,7 +2595,7 @@ export function ConnectToDesktopButton() {
                         />
                       </div>
                       <div>
-                        <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase block mb-1">Port</label>
+                        <label className="text-xs font-medium text-fg-muted block mb-1">Port</label>
                         <TextInput
                           size="sm"
                           value={formPort}
@@ -2595,7 +2606,7 @@ export function ConnectToDesktopButton() {
                         />
                       </div>
                       <div>
-                        <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase block mb-1">Password</label>
+                        <label className="text-xs font-medium text-fg-muted block mb-1">Password</label>
                         <TextInput
                           size="sm"
                           type="password"

@@ -134,11 +134,15 @@ describe('the leaderboard', () => {
 
   it('labels the column with the game\'s own scoring word', () => {
     // "Score" is wrong for Flappy and right for 2048 — the registry decides.
-    // The eyebrow uppercases in CSS (G-7), so the DOM text is the real label.
+    // WHY no more `.toContain('uppercase')` (labels batch, guide: no spaced
+    // capitals — decisions H-3/L-1…L-4): G-7's eyebrow is now the shared
+    // SectionLabel primitive, normal case, no letter-spacing. The arcade
+    // lobby/leaderboard menus are NOT exempt from the guide (only game
+    // boards are), so this label moved like every other real site.
     render(<Leaderboard game={FLAPPY} rows={rows} />);
     const eyebrow = screen.getByText(FLAPPY.scoring!.label);
     expect(eyebrow).toBeInTheDocument();
-    expect(eyebrow.className).toContain('uppercase');
+    expect(eyebrow.className).not.toContain('uppercase');
   });
 });
 

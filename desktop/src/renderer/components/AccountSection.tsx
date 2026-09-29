@@ -433,7 +433,9 @@ function SignedInBody({
           empty both leave `blocks` falsy so nothing shows in settings). */}
       {blocks && blocks.length > 0 && (
         <section className="space-y-2">
-          <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Blocked users</h3>
+          {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels batch,
+              guide: no spaced capitals — decisions H-3/L-1…L-4). */}
+          <SectionLabel>Blocked users</SectionLabel>
           {blocks.map((b) => (
             <div key={b.id} className="space-y-1">
               <div className="flex items-center gap-2">
@@ -620,7 +622,9 @@ function EditAccountBody({
     <>
       {/* Edit-mode header: label + the way back to view mode. */}
       <div className="flex items-center justify-between">
-        <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Edit account</h3>
+        {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels batch,
+            guide: no spaced capitals — decisions H-3/L-1…L-4). */}
+        <SectionLabel>Edit account</SectionLabel>
         <Button variant="secondary" onClick={onDone}>
           Done
         </Button>
@@ -628,7 +632,9 @@ function EditAccountBody({
 
       {/* Display name */}
       <section className="space-y-1.5">
-        <label htmlFor="account-display-name" className="text-3xs font-medium text-fg-muted tracking-wider uppercase">
+        {/* WHY: field caption drops the spaced-caps eyebrow, same job as
+            SectionLabel but a real <label htmlFor> (labels batch). */}
+        <label htmlFor="account-display-name" className="text-xs font-medium text-fg-muted">
           Display name
         </label>
         {/* Change 77: Save moved INSIDE the field. Besides matching the spec, this
@@ -657,7 +663,7 @@ function EditAccountBody({
 
       {/* Handle */}
       <section className="space-y-1.5">
-        <label htmlFor="account-handle" className="text-3xs font-medium text-fg-muted tracking-wider uppercase">
+        <label htmlFor="account-handle" className="text-xs font-medium text-fg-muted">
           Handle
         </label>
         {/* Change 77: this was already a hand-rolled InputGroup (bordered wrapper +
@@ -735,8 +741,9 @@ function EditAccountBody({
             tracking-wider` — a retired class ORDER that the K1 guard could not
             catch precisely because it was red, so it sat outside the recipe the
             guard matches on. It is the K1 label now; the danger signal lives in
-            the callout and the button variant below, where it belongs. */}
-        <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Danger zone</h3>
+            the callout and the button variant below, where it belongs.
+            WHY SectionLabel (labels batch): guide "no spaced capitals". */}
+        <SectionLabel>Danger zone</SectionLabel>
         {!deleteExpanded ? (
           // Arming step -> danger-outline. red-500 becomes the --destructive
           // token so packs can restyle it (#C62828 today — no longer identical

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Dialog, SettingRow, SegmentedTabs, Callout, Button } from './ui';
+import { Dialog, SettingRow, SegmentedTabs, Callout, Button, SectionLabel } from './ui';
 import { UnifiedDiff } from './diff/UnifiedDiff';
 import MarkdownContent from './MarkdownContent';
 import { useOpenFilepath } from '../hooks/useOpenFilepath';
@@ -42,7 +42,9 @@ interface Props {
   sessionId: string;
 }
 
-const EYEBROW = 'block text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2';
+// WHY SectionLabel, not a hand-typed eyebrow class (labels batch, guide: no
+// spaced capitals — decisions H-3/L-1…L-4). Every heading below used to share
+// this constant; SectionLabel is now the shared spelling instead.
 
 /** Dot + neutral text is the app's badge shape (design guide G-14): the colour
  *  never carries meaning on its own, the words beside it do. */
@@ -433,7 +435,7 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
 
             {trimmed && (
               <section>
-                <h3 className={EYEBROW}>What was left out</h3>
+                <SectionLabel className="mb-2">What was left out</SectionLabel>
                 <div className="space-y-1.5">
                   {rules?.truncated && (
                     <SettingRow
@@ -464,7 +466,7 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
             )}
 
             <section>
-              <h3 className={EYEBROW}>This chat</h3>
+              <SectionLabel className="mb-2">This chat</SectionLabel>
               <div className="space-y-1.5">
                 <SettingRow variant="item" title="Model" value={context.modelLabel ?? 'Unknown'} />
                 <SettingRow
@@ -489,7 +491,7 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
 
         {tab === 'system' && (
           <section>
-            <h3 className={EYEBROW}>System instructions</h3>
+            <SectionLabel className="mb-2">System instructions</SectionLabel>
             {/* Destin, review-5 G-2: this tab carries BOTH the preset and the
                 general instructions, so what a model "loads in with" is all in
                 one place. Project rules keep their own tab because they are
@@ -524,7 +526,7 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
                 Code chat shows your own rules here too, and "This project's
                 rules" over a card labelled "You, in every project" is a heading
                 that contradicts the thing underneath it. */}
-            <h3 className={EYEBROW}>Rules it was given</h3>
+            <SectionLabel className="mb-2">Rules it was given</SectionLabel>
             <p className="text-2xs text-fg-muted leading-snug mb-2">
               {userRules
                 ? 'Written by you, and read when the chat started.'
@@ -565,7 +567,7 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
 
         {tab === 'skills' && (
           <section>
-            <h3 className={EYEBROW}>Skills</h3>
+            <SectionLabel className="mb-2">Skills</SectionLabel>
             <p className="text-2xs text-fg-muted leading-snug mb-2">Step-by-step guides the assistant follows when a task matches one.</p>
             {skillsHidden && (
               <Callout tone="warning" title="The assistant wasn’t told about these">
@@ -588,7 +590,7 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
         {tab === 'tools' && (
           <section className="space-y-3">
             <div>
-              <h3 className={EYEBROW}>Tools</h3>
+              <SectionLabel className="mb-2">Tools</SectionLabel>
               <p className="text-2xs text-fg-muted leading-snug mb-2">Actions the assistant can take in this chat. Open one to see what it does.</p>
               {tools.length === 0 ? (
                 <p className="text-2xs text-fg-2 leading-relaxed">

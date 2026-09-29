@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useGameState } from '../../state/game-context';
 import { GameConnection } from '../../state/game-types';
-import { TextInput } from '../ui';
+import { SectionLabel, TextInput } from '../ui';
 
 interface Props {
   connection: GameConnection;
@@ -46,7 +46,10 @@ export default function GameChat({ connection }: Props) {
     <div className="border-t border-edge flex flex-col flex-1 min-h-0">
       {/* Header */}
       <div className="px-3 py-1.5 border-b border-edge shrink-0">
-        <span className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Game Chat</span>
+        {/* WHY SectionLabel, sentence case (labels batch, guide: no spaced
+            capitals — decisions H-3/L-1…L-4). This header labels the panel,
+            not a chat bubble, so it isn't covered by the bubble exemption. */}
+        <SectionLabel>Game chat</SectionLabel>
       </div>
 
       {/* Messages */}

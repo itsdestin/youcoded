@@ -13,7 +13,7 @@
 // reading width. NOT `.layer-surface`: that is radius-xl with a popup shadow
 // and overflow:hidden, which reads as a floating overlay, not an in-flow card
 // (ContextIntroBanner has to override its shadow for the same reason).
-import { Button } from '../ui';
+import { Button, SectionLabel } from '../ui';
 import { ThemeMascot, WelcomeAppIcon } from '../Icons';
 
 interface ProjectsEmptyCardProps {
@@ -43,9 +43,9 @@ export function ProjectsEmptyCard({ onAdd }: ProjectsEmptyCardProps) {
         </span>
         <div className="min-w-0 flex flex-col gap-3 items-center sm:items-start">
           <div>
-            {/* Eyebrow: same micro-label as ContextIntroBanner's "About context",
-                at the guide's text-2xs floor for anything that carries meaning. */}
-            <div className="text-2xs font-medium text-fg-muted tracking-wider uppercase mb-1">Projects</div>
+            {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels
+                batch, guide: no spaced capitals — decisions H-3/L-1…L-4). */}
+            <SectionLabel className="mb-1">Projects</SectionLabel>
             <h3 className="text-base font-semibold text-fg leading-snug">Projects keep your work together</h3>
           </div>
           {/* Two plain sentences (Destin, review deck 2026-09-10, E-1: the old

@@ -21,8 +21,6 @@ import {
 import { TERMINAL_WALLPAPER_OPACITY_FLOOR } from '../../themes/theme-engine';
 import { Button, RadioGroup, SegmentedTabs, SettingRow, FOCUS_RING } from '../ui';
 
-export const SECTION_LABEL = 'text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2';
-
 // "Auto" = the absent field = the theme's own choice (AP-S1). Named "Auto" at Destin's
 // request (appearance-panel-review-3, AR3-1): "Auto (Theme)" in place of "Theme's".
 const THEME = 'theme';

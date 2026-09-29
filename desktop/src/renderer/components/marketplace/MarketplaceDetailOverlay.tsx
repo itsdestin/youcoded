@@ -23,6 +23,7 @@ import { CapabilityList } from "./CapabilityList";
 import FeedbackSection from "./FeedbackSection";
 import { CATALOG_TYPE_LABEL, isInstallableSource } from "../../../shared/catalog-types";
 import FileViewerOverlay, { type FileViewerTarget } from "./FileViewerOverlay";
+import { SectionLabel } from "../ui";
 // Task 1: an installed item with an update available needs a way to take it —
 // the overlay swapped straight to Uninstall once installed, so the only route
 // was uninstall-then-reinstall (ROADMAP:736 for themes).
@@ -405,7 +406,9 @@ function SkillBody({
 
       {entry.longDescription ? (
         <section>
-          <h2 className="text-sm uppercase tracking-wide text-fg-dim mb-2">About</h2>
+          {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels batch,
+              guide: no spaced capitals — decisions H-3/L-1…L-4). */}
+          <SectionLabel className="mb-2">About</SectionLabel>
           <div className="prose prose-sm max-w-none text-fg-2">
             <MarkdownContent content={entry.longDescription} />
           </div>
@@ -507,7 +510,7 @@ function ComponentsPeek({
 
   return (
     <section>
-      <h2 className="text-sm uppercase tracking-wide text-fg-dim mb-2">What's inside</h2>
+      <SectionLabel className="mb-2">What's inside</SectionLabel>
       <div className="layer-surface p-3 flex flex-col gap-2 text-sm">
         {clickable.map(({ label, kind, items }) => (
           <div key={label} className="flex flex-wrap items-baseline gap-x-2 gap-y-1">

@@ -19,7 +19,7 @@
 import React, { useState } from 'react';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
 import { useEscClose } from '../../hooks/use-esc-close';
-import { CloseButton } from '../ui';
+import { CloseButton, SectionLabel } from '../ui';
 import { ScreenMark } from '../../shoot-mode';
 
 // The five teaching topics. `overview` is the broad→specific stack; the other
@@ -117,13 +117,10 @@ const INFO_TABS: { id: InfoTabId; label: string; Icon: React.ComponentType<IconP
 
 // ── Reusable sub-components for the topic pages ─────────────────────────────
 
-// Small uppercase micro-label (the prototype's `.lbl`).
+// WHY SectionLabel, not the old spaced-caps eyebrow (labels batch, guide: no
+// spaced capitals — decisions H-3/L-1…L-4). Was the prototype's `.lbl`.
 function MicroLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="text-3xs font-medium text-fg-muted tracking-wider uppercase">
-      {children}
-    </div>
-  );
+  return <SectionLabel>{children}</SectionLabel>;
 }
 
 // Topic page: icon header + facts strip + What/When sections + example block.

@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import type { ModelAlias } from './StatusBar';
 import { FastIcon } from './Icons';
 import { useEscClose } from '../hooks/use-esc-close';
-import { Button, Dialog, TextInput, Toggle, FOCUS_RING, LoadingState, SettingRow } from './ui';
+import { Button, Dialog, TextInput, Toggle, FOCUS_RING, LoadingState, SectionLabel, SettingRow } from './ui';
 import ModelPicker, { type ModelChoice } from './model/ModelPicker';
 import ModelSwitchPrompt, { switchFailureMessage, type ModelSwitchPromptState } from './ModelSwitchPrompt';
 import type { NativeSwitchResult } from '../../shared/types';
@@ -486,9 +486,11 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
                 nothing is worse than a control that isn't there. */}
             {!isNative && (<>
               <section>
-                <h3 className="block text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">
-                  Effort Level
-                </h3>
+                {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels
+                    batch, guide: no spaced capitals — decisions H-3/L-1…L-4). */}
+                <SectionLabel className="mb-2">
+                  Effort level
+                </SectionLabel>
                 <div className="grid grid-cols-5 gap-1.5">
                   {EFFORT_LEVELS.map((level) => {
                     const disabled = level === 'max' && !maxAllowed;
@@ -581,7 +583,9 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
               </div>
 
               <div className="rounded border border-amber-700/40 bg-amber-700/10 p-3 space-y-1.5">
-                <div className="text-xs font-semibold text-amber-700 uppercase tracking-wider">⚠ Billed Per Token</div>
+                {/* WHY: drop the spaced-caps eyebrow, sentence case (labels
+                    batch, guide: no spaced capitals). */}
+                <div className="text-xs font-semibold text-amber-700">⚠ Billed per token</div>
                 <div className="text-xs text-fg">
                   Fast mode routes requests through a priority tier with per-token billing:
                 </div>

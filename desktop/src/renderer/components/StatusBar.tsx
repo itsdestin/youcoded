@@ -16,7 +16,7 @@ import OpenTasksChip from './OpenTasksChip';
 import { isAndroid } from '../platform';
 import { SessionTagsChip } from './tags/SessionTagsChip';
 import SpecialistsChip from './SpecialistsChip';
-import { Dialog, Tooltip } from './ui';
+import { Dialog, SectionLabel, Tooltip } from './ui';
 import { resolveModelBrand, type ProviderIconKey } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
 import type { SessionTotals } from '../state/session-totals';
@@ -491,7 +491,7 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
   // them here (instead of a lone "always on" tag beside Tags & Note) tells the
   // user up front what cannot be switched off, so the rows below are all choices.
   {
-    name: 'Always On',
+    name: 'Always on', // WHY sentence case (labels batch): feeds the section heading below verbatim.
     widgets: [
       {
         id: 'model',
@@ -528,7 +528,7 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
     ],
   },
   {
-    name: 'Rate Limits',
+    name: 'Rate limits',
     widgets: [
       {
         id: 'usage-5h',
@@ -794,9 +794,11 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
       <Dialog screen="chat/status-bar" open onClose={onClose} title="Status Bar Widgets" size="panel">
             {WIDGET_CATEGORIES.map((cat) => (
               <section key={cat.name}>
-                <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">
+                {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels
+                    batch, guide: no spaced capitals — decisions H-3/L-1…L-4). */}
+                <SectionLabel className="mb-2">
                   {cat.name}
-                </h3>
+                </SectionLabel>
                 <div className="space-y-0.5">
                   {cat.widgets.map((w) => {
                     const isExpanded = expandedInfo === w.id;

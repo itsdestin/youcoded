@@ -6,7 +6,7 @@ import { useMarketplace } from '../state/marketplace-context';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import { isAndroid } from '../platform';
-import { EmptyState, ErrorState, FilterChip } from './ui';
+import { EmptyState, ErrorState, FilterChip, SectionLabel } from './ui';
 import { useDrawerFilter, type DrawerFilterStore } from '../state/drawer-filter-store';
 import { ScreenMark } from '../shoot-mode';
 
@@ -345,7 +345,11 @@ export default function CommandDrawer({ open, searchMode, externalFilter: extern
                   section on screen (favorites-only on, or nothing else installed). */}
               {showFavs && (
                 <section className="px-2 pt-2">
-                  <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 px-1">Favorites</h3>
+                  {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels
+                      batch, guide: no spaced capitals — decisions H-3/L-1…L-4).
+                      No px-1 — SectionLabel owns its spacing (design lint
+                      no-restyle) and the parent <section> already has px-2. */}
+                  <SectionLabel className="mb-1">Favorites</SectionLabel>
                   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-1.5">
                     {favsSorted.map(renderSkillCard)}
                     {addSkillsIn === 'favorites' && <AddSkillsCard onClick={openMarketplace} />}
@@ -358,7 +362,7 @@ export default function CommandDrawer({ open, searchMode, externalFilter: extern
                   spare slot at the end of the row rather than a row of its own. */}
               {showOthers && (
                 <section className="px-2 pt-3">
-                  <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 px-1">All installed</h3>
+                  <SectionLabel className="mb-1">All installed</SectionLabel>
                   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-1.5">
                     {othersSorted.map(renderSkillCard)}
                     <AddSkillsCard onClick={openMarketplace} />

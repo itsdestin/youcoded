@@ -332,7 +332,7 @@ export function NativeExtras({ nb, preset, onPreset }: {
           the full tool suite; they differ in prompt + starting permission
           posture. Stamped at create; drives the resolved harnessId. */}
       <div>
-        <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 block">Preset</label>
+        <label className="text-xs font-medium text-fg-muted mb-1 block">Preset</label>
         <div className="flex gap-2">
           {PRESETS.map((p) => (
             <button

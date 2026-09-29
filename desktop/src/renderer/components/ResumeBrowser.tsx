@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Scrim, OverlayPanel, CONTENT_Z } from './overlays/Overlay';
-import { Button, Toggle, LoadingState, EmptyState, ErrorState, FilterChip, FilterMenuChip, Checkbox, CheckboxMark, SearchFilterPill, SettingRow } from './ui';
+import { Button, Toggle, LoadingState, EmptyState, ErrorState, FilterChip, FilterMenuChip, Checkbox, CheckboxMark, SearchFilterPill, SectionLabel, SettingRow } from './ui';
 import SessionRenameDialog from './SessionRenameDialog';
 import { namingApi } from './assistant-settings/naming-api';
 import { useRenamedSessions } from './assistant-settings/use-renamed-sessions';
@@ -1820,7 +1820,13 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               {/* Show Complete — same toggle pattern as Skip Permissions
                   in SessionStrip, but accent-colored to signal "on" rather than "danger". */}
               <div className="flex items-center gap-2">
-                <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Show Complete</label>
+                {/* WHY: field caption drops the spaced-caps eyebrow (labels
+                    batch, guide: no spaced capitals). Kept "Show Complete"
+                    (not sentence-cased) — it's this toggle's established name,
+                    quoted the same way in its aria-label, hint text
+                    (CloseSessionPrompt, SessionCardDetails) and comments
+                    across ResumeBrowser/BuddyResumeList. */}
+                <label className="text-xs font-medium text-fg-muted">Show Complete</label>
                 {/* Shared Toggle (change 15). role="switch" + aria-checked comes
                     from the primitive, which is strictly better than the
                     aria-pressed this used to carry. */}
@@ -1934,9 +1940,11 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                   {visibleItems.map((item) => (
                     item.kind === 'header' ? (
                       <div key={item.key} className={`px-4 py-1 ${item.first ? '' : 'mt-2'}`}>
-                        <span className="text-3xs font-medium text-fg-muted tracking-wider uppercase">
+                        {/* WHY SectionLabel, not the old spaced-caps eyebrow
+                            (labels batch, guide: no spaced capitals). */}
+                        <SectionLabel>
                           {item.label}
-                        </span>
+                        </SectionLabel>
                       </div>
                     ) : (
                       <RowMemo

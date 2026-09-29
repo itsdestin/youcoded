@@ -126,7 +126,9 @@ export function ResumeOptionsForm({ session: s, options, onResume, flush, allowN
         {/* ONE model control for both runtimes, SCOPED to the row's own
             runtime — a resume cannot move a conversation across runtimes. */}
         <div onClick={(e) => e.stopPropagation()}>
-          <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 block">Model</label>
+          {/* WHY: field captions drop the spaced-caps eyebrow (labels batch,
+              guide: no spaced capitals). */}
+          <label className="text-xs font-medium text-fg-muted mb-1 block">Model</label>
           <ModelPicker
             // One picker per conversation: it fills in `prefill` only once per
             // mount, so without the key only the FIRST conversation shown got
@@ -146,7 +148,10 @@ export function ResumeOptionsForm({ session: s, options, onResume, flush, allowN
         {s.provider !== 'native' && (
           <>
             <div className="flex items-center justify-between">
-              <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase inline-flex items-center">
+              {/* WHY still "Skip Permissions" (labels batch): only the
+                  spaced-caps CSS drops — kept like a proper noun, matching
+                  its dialog titles/tooltip/aria-label elsewhere. */}
+              <label className="text-xs font-medium text-fg-muted inline-flex items-center">
                 Skip Permissions
                 <SkipPermissionsInfoTooltip />
               </label>
@@ -159,7 +164,11 @@ export function ResumeOptionsForm({ session: s, options, onResume, flush, allowN
 
         {detachAvailable && (
           <div className="flex items-center justify-between">
-            <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Launch in New Window</label>
+            {/* WHY still "Launch in New Window" (labels batch): matches its
+                aria-label here and its quoted name in remote-shim.ts/
+                mock-shim.ts comments — kept like a proper noun; only the
+                spaced-caps CSS drops. */}
+            <label className="text-xs font-medium text-fg-muted">Launch in New Window</label>
             <Toggle checked={options.newWindow} onChange={options.setNewWindow} aria-label="Launch in New Window" />
           </div>
         )}

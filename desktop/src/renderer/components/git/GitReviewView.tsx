@@ -347,7 +347,9 @@ export function GitReviewView({
           <button
             type="button"
             onClick={showMore}
-            className="text-3xs text-fg-muted tracking-wider uppercase hover:text-fg-2 py-1"
+            // WHY: drop the spaced-caps eyebrow (labels batch, guide: no
+            // spaced capitals), matching UnifiedDiff's own toggle.
+            className="text-xs text-fg-muted hover:text-fg-2 py-1"
           >
             Show more
           </button>

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useEscClose } from '../hooks/use-esc-close';
 import type { TaskState } from '../state/task-state';
-import { Button, Dialog } from './ui';
+import { Button, Dialog, SectionLabel } from './ui';
 
 // L2 popup opened by OpenTasksChip in the StatusBar. Groups tasks by status:
 // In Progress → Pending → Completed (collapsible). A separate "Marked Inactive"
@@ -93,10 +93,13 @@ function Row({ t, group, onMarkInactive, onUnhide }: {
   );
 }
 
+// WHY SectionLabel, not the old spaced-caps eyebrow (labels batch, guide: no
+// spaced capitals — decisions H-3/L-1…L-4). Padding on a wrapper, not on
+// SectionLabel — it owns only margin/layout (design lint no-restyle).
 function SectionHeader({ label }: { label: string }) {
   return (
-    <div className="text-3xs font-medium text-fg-muted tracking-wider uppercase px-2 pt-2 pb-1">
-      {label}
+    <div className="px-2 pt-2 pb-1">
+      <SectionLabel>{label}</SectionLabel>
     </div>
   );
 }
@@ -138,7 +141,7 @@ export default function OpenTasksPopup({ open, tasks, onClose, onMarkInactive, o
           {/* In Progress section — no count suffix, the rows are visible right below. */}
           {running.length > 0 && (
             <>
-              <SectionHeader label="In Progress" />
+              <SectionHeader label="In progress" />
               {running.map(t => (
                 <Row key={t.id} t={t} group="in_progress" onMarkInactive={onMarkInactive} onUnhide={onUnhide} />
               ))}
@@ -161,7 +164,7 @@ export default function OpenTasksPopup({ open, tasks, onClose, onMarkInactive, o
             <>
               <button
                 aria-expanded={completedOpen}
-                className="w-full text-left text-3xs font-medium text-fg-muted tracking-wider uppercase px-2 pt-2 pb-1 flex justify-between items-baseline hover:text-fg"
+                className="w-full text-left text-xs font-medium text-fg-muted px-2 pt-2 pb-1 flex justify-between items-baseline hover:text-fg"
                 onClick={() => setCompletedOpen(v => !v)}
               >
                 <span>Completed</span>
@@ -178,10 +181,10 @@ export default function OpenTasksPopup({ open, tasks, onClose, onMarkInactive, o
             <>
               <button
                 aria-expanded={inactiveOpen}
-                className="w-full text-left text-3xs font-medium text-fg-muted tracking-wider uppercase px-2 pt-2 pb-1 flex justify-between items-baseline hover:text-fg border-t border-edge-dim mt-1"
+                className="w-full text-left text-xs font-medium text-fg-muted px-2 pt-2 pb-1 flex justify-between items-baseline hover:text-fg border-t border-edge-dim mt-1"
                 onClick={() => setInactiveOpen(v => !v)}
               >
-                <span>Marked Inactive</span>
+                <span>Marked inactive</span>
                 <span>{inactive.length} {inactiveOpen ? '▾' : '▸'}</span>
               </button>
               {inactiveOpen && inactive.map(t => (

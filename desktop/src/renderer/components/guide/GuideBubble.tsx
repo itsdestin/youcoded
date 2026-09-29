@@ -67,7 +67,11 @@ export default function GuideBubble({ eyebrow, children, buttons, pose, label }:
             borderRadius: 'var(--radius-lg)',
           }}
         >
-          <span className="text-2xs font-medium uppercase tracking-wider text-on-accent/70">{eyebrow}</span>
+          {/* WHY: drop the spaced-caps eyebrow (labels batch, guide: no
+              spaced capitals). Kept a plain span, not SectionLabel — this
+              sits on the bubble's accent fill, not the muted-grey surfaces
+              SectionLabel assumes. */}
+          <span className="text-2xs font-medium text-on-accent/70">{eyebrow}</span>
           <p className="text-sm leading-snug">{children}</p>
           {/* Right-aligned so the filled Next/Done button sits at the far
               right, with Skip tour beside it (review deck T-1). */}

@@ -159,8 +159,10 @@ export function BuddyNewSessionForm({ onCreated, onCancel, initialInput, initial
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div>
-        <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 block">
-          Project Folder
+        {/* WHY: field captions drop the spaced-caps eyebrow + sentence case
+            (labels batch, guide: no spaced capitals). */}
+        <label className="text-xs font-medium text-fg-muted mb-1 block">
+          Project folder
         </label>
         {/* No onManageProjects on purpose: the buddy window has no
             ArtifactProvider and so no Project View to send anyone to.
@@ -169,7 +171,7 @@ export function BuddyNewSessionForm({ onCreated, onCancel, initialInput, initial
         <FolderSwitcher value={cwd} onChange={setCwd} onManageProjects={onManageProjects} />
       </div>
       <div>
-        <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 block">
+        <label className="text-xs font-medium text-fg-muted mb-1 block">
           Model
         </label>
         <ModelPicker value={modelChoice} onSelect={applyModelChoice} />
@@ -183,7 +185,10 @@ export function BuddyNewSessionForm({ onCreated, onCancel, initialInput, initial
       {showSkipPermissions && (
         <>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase">
+            {/* WHY still "Skip Permissions" (labels batch): kept like a
+                proper noun, matching its dialog titles/tooltip/aria-label
+                elsewhere; only the spaced-caps CSS drops. */}
+            <label className="text-xs font-medium text-fg-muted">
               Skip Permissions
             </label>
             {/* Was a hand-rolled 32x18 track with a raw #DD4444 on-state and a

@@ -4,7 +4,7 @@ import { useAccount } from '../../state/account-context';
 import BrailleSpinner from '../BrailleSpinner';
 import { GameConnection } from '../../state/game-types';
 import { mergeFriends, statusLabel } from './friends-data';
-import { Badge, Button, InputGroup } from '../ui';
+import { Badge, Button, InputGroup, SectionLabel } from '../ui';
 import type { FriendRow, HeadToHead, RequestsPayload } from '../../state/marketplace-api-client';
 import { recordAria, recordLabel, recordsByOpponent } from './head-to-head';
 // Task 7c, workbench-only auto-play — see the effect below and
@@ -449,7 +449,10 @@ function FriendsScreen({ connection, incognito, onToggleIncognito, gameId }: Pro
       {/* Incoming friend requests */}
       {incoming.length > 0 && (
         <div className="px-3 py-2 border-b border-edge">
-          <div className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Friend requests</div>
+          {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels batch,
+              guide: no spaced capitals — decisions H-3/L-1…L-4). The arcade
+              lobby is NOT exempt from the guide (only game boards are). */}
+          <SectionLabel className="mb-2">Friend requests</SectionLabel>
           <ul className="flex flex-col gap-2">
             {incoming.map((req) => (
               <li key={req.id} className="flex flex-col gap-1">
@@ -495,7 +498,7 @@ function FriendsScreen({ connection, incognito, onToggleIncognito, gameId }: Pro
 
       {/* Add a friend by handle */}
       <div className="px-3 py-3 border-b border-edge flex flex-col gap-2">
-        <div className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Add a friend</div>
+        <SectionLabel>Add a friend</SectionLabel>
         {/* Change 77: "Send request" moves INSIDE the field. It was left
             `variant="secondary" size="lg"` purely so it would height-match the
             input sitting beside it — inside the field there is nothing to
@@ -530,7 +533,7 @@ function FriendsScreen({ connection, incognito, onToggleIncognito, gameId }: Pro
       {/* Friends list */}
       {merged.length > 0 && (
         <div className="px-3 py-2 border-b border-edge">
-          <div className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Friends ({merged.length})</div>
+          <SectionLabel className="mb-2">Friends ({merged.length})</SectionLabel>
           <ul className="flex flex-col gap-2">
             {merged.map((row) => (
               <li key={row.id} className="flex flex-col gap-0.5">
@@ -586,7 +589,7 @@ function FriendsScreen({ connection, incognito, onToggleIncognito, gameId }: Pro
       {/* Sent (outgoing) requests — dim, collapsed-feeling */}
       {outgoing.length > 0 && (
         <div className="px-3 py-2 border-b border-edge">
-          <div className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Sent requests</div>
+          <SectionLabel className="mb-2">Sent requests</SectionLabel>
           <ul className="flex flex-col gap-1">
             {outgoing.map((req) => (
               <li key={req.id} className="flex flex-col gap-1">

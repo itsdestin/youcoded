@@ -67,7 +67,10 @@ const QueuedMessagesStrip = React.forwardRef<HTMLDivElement, Props>(function Que
           key={q.queueId}
           className="layer-surface flex items-center gap-2 rounded-xl px-3 py-2 shadow-lg"
         >
-          <div className="text-4xs text-fg-muted tracking-wider uppercase select-none shrink-0">
+          {/* WHY: drop the spaced-caps eyebrow (labels batch, guide: no spaced
+              capitals); bumped 4xs(10px)→3xs(11px) too since this is text a
+              user reads and the guide floors readable text at 11px. */}
+          <div className="text-3xs text-fg-muted select-none shrink-0">
             Queued
           </div>
           <div className="flex-1 min-w-0 truncate text-sm text-fg-2">{q.content}</div>

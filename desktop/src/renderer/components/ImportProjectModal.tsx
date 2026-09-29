@@ -132,7 +132,9 @@ export default function ImportProjectModal({ sourcePath, defaultName, onClose, o
             </div>
             {/* htmlFor/id pair added: the label was floating unassociated, so
                 screen readers announced this field with no name. */}
-            <label htmlFor="import-project-name" className="text-3xs font-medium text-fg-muted tracking-wider uppercase block mt-3">Project name</label>
+            {/* WHY: field caption drops the spaced-caps eyebrow (labels batch,
+                guide: no spaced capitals). */}
+            <label htmlFor="import-project-name" className="text-xs font-medium text-fg-muted block mt-3">Project name</label>
             {/* Shared TextInput (change 20). Stays a plain field, NOT an
                 InputGroup: the "Move and sync" button lives in the modal footer
                 below, not inline beside the field. */}

@@ -89,7 +89,7 @@ function ChevronDown({ size = 18 }: { size?: number }) {
 
 import { createPortal } from 'react-dom';
 import { FolderIcon, GitHubIcon, CogIcon } from './icons';
-import { Button, TextInput, Textarea } from '../ui';
+import { Button, SectionLabel, TextInput, Textarea } from '../ui';
 import { useAnchoredMenu } from '../../hooks/useAnchoredMenu';
 import { OverlayPanel } from '../overlays/Overlay';
 import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
@@ -309,9 +309,11 @@ export function ProjectHero({
             and the editor re-wrapped 2 lines into 3. `flex-1` makes the width
             the row's, so read and edit modes occupy the same box. */}
         <div className="flex-1 min-w-0">
-        <div className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1.5">
+        {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels batch,
+            guide: no spaced capitals — decisions H-3/L-1…L-4). */}
+        <SectionLabel className="mb-1.5">
           Project
-        </div>
+        </SectionLabel>
 
         {/* Name as the switcher trigger. WHY: must NOT truncate — the user
             explicitly called this out. whitespace-normal + break-words let long

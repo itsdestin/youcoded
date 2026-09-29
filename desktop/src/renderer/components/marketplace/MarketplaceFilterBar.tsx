@@ -19,7 +19,7 @@
 
 import React, { useState } from "react";
 import { Scrim, OverlayPanel } from "../overlays/Overlay";
-import { Button, SearchFilterPill, SegmentedTabs, SegmentedTabLabel, PaletteIcon, Select } from "../ui";
+import { Button, SearchFilterPill, SectionLabel, SegmentedTabs, SegmentedTabLabel, PaletteIcon, Select } from "../ui";
 import { CATALOG_ITEM_TYPES, CATALOG_TYPE_LABEL, catalogType, type CatalogItemType } from "../../../shared/catalog-types";
 import { typeIcon } from "./type-icons";
 import { useMarketplace } from "../../state/marketplace-context";
@@ -269,10 +269,12 @@ function FilterSheet({
   );
 }
 
+// WHY SectionLabel, not the old spaced-caps eyebrow (labels batch, guide: no
+// spaced capitals — decisions H-3/L-1…L-4).
 function SheetGroup({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-2">
-      <h3 className="text-xs uppercase tracking-wide text-fg-dim">{label}</h3>
+      <SectionLabel>{label}</SectionLabel>
       <div className="flex flex-wrap gap-2 [&>*]:w-full [&>*]:min-w-0">{children}</div>
     </div>
   );

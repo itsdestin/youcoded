@@ -152,7 +152,9 @@ export default function UsageCard({ snapshot: s }: Props) {
     <div className="flex justify-start px-4 py-1">
       <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-inset border border-edge-dim px-5 py-4 text-fg">
         <div className="flex items-baseline justify-between mb-3">
-          <div className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Session Usage</div>
+          {/* WHY: drop the spaced-caps eyebrow + sentence case (labels batch,
+              guide: no spaced capitals). */}
+          <div className="text-xs font-medium text-fg-muted">Session usage</div>
           <div className="text-xs text-fg-muted">{new Date(s.timestamp).toLocaleTimeString()}</div>
         </div>
 

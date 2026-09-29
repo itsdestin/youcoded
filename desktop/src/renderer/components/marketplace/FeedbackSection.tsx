@@ -10,7 +10,7 @@ import { useAccount } from '../../state/account-context';
 import { useMarketplaceStats } from '../../state/marketplace-stats-context';
 import { forgetHeldComments, readHeldComments, rememberHeldComment, type HeldComment } from '../../state/held-comments';
 import type { CommentEntry } from '../../state/marketplace-api-client';
-import { Button, Textarea } from '../ui';
+import { Button, SectionLabel, Textarea } from '../ui';
 import CommentList from './CommentList';
 import SignInPromptModal from './SignInPromptModal';
 
@@ -246,7 +246,9 @@ export default function FeedbackSection({ pluginId, installed }: { pluginId: str
     <section data-feedback>
       <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
         <div className="flex items-center gap-3">
-          <h2 className="text-sm uppercase tracking-wide text-fg-dim">Feedback</h2>
+          {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels batch,
+              guide: no spaced capitals — decisions H-3/L-1…L-4). */}
+          <SectionLabel>Feedback</SectionLabel>
           {/* Under MIN_VOTES_FOR_PCT a percentage lies ("Helpful 100%" off one
               vote) and the count reads "1 votes" — so say it in words instead.
               At or above it the approved G-19 markup stands unchanged. */}

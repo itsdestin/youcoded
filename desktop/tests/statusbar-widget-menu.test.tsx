@@ -109,7 +109,9 @@ describe('Always On section and announcement popup', () => {
   it('lists Model, Permissions, Tags & Note and Announcements first, with no per-row tag', async () => {
     await openMenu('claude');
     const headings = screen.getAllByRole('heading', { level: 3 }).map(h => h.textContent);
-    expect(headings[0]).toBe('Always On');
+    // WHY sentence case (labels batch, guide: no spaced capitals): this
+    // heading is now the shared SectionLabel primitive.
+    expect(headings[0]).toBe('Always on');
     for (const label of ['Model', 'Permissions', 'Tags & Note', 'Announcements']) {
       expect(screen.getByText(label).closest('button')!.hasAttribute('disabled')).toBe(true);
     }

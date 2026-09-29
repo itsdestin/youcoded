@@ -10,10 +10,10 @@ import type { LoadedTheme } from '../themes/theme-types';
 import { TERMINAL_WALLPAPER_OPACITY_FLOOR } from '../themes/theme-engine';
 import { roundnessToShape, themeRoundness } from '../themes/look-overrides';
 import { ThemeCard } from './appearance/ThemeCard';
-import { LayoutSettings, LookSettings, LookSlider, SECTION_LABEL } from './appearance/LookSettings';
+import { LayoutSettings, LookSettings, LookSlider } from './appearance/LookSettings';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
-import { Button, Select, Toggle, SettingRow } from './ui';
+import { Button, SectionLabel, Select, Toggle, SettingRow } from './ui';
 
 // Plain-language explainer for the Appearance popup. Shown when the user taps
 // the (i) icon in the popup header — see ThemeScreen's `showInfo` state.
@@ -202,7 +202,10 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
     // long list with no signposts. Layout leads (appearance-panel-review AR-1).
     <div className="space-y-5">
       <section className="space-y-2">
-        <h3 className={SECTION_LABEL}>Themes</h3>
+        {/* WHY SectionLabel, not the SECTION_LABEL class string (labels batch,
+            guide: no spaced capitals — decisions H-3/L-1…L-4); the constant
+            LookSettings.tsx used to export is retired. */}
+        <SectionLabel>Themes</SectionLabel>
         {/* The themes box (Destin, appearance-panel-review-3 AR3-2): "doesn't feel like a
             container, just an outline" → a filled, rounded box. It shows about 1.5 theme cards,
             and Browse / Build sit INSIDE it at the bottom with the cards scrolling under them,
@@ -290,7 +293,7 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
         {/* WHY no intro line (redesign round, 2026-09-24): Layout and Look each carried a
             "applies to every theme" sentence, the same point twice. The (i) explainer says it
             once, and the "Auto" tile already shows what the theme itself uses. */}
-        <h3 className={SECTION_LABEL}>Layout</h3>
+        <SectionLabel>Layout</SectionLabel>
         <LayoutSettings />
         {/* WHY here, not its own section (Destin, appearance-panel-review-5 AR5-2: "put
             this right under frames and label the card 'Additional Customizations'"): the
@@ -301,7 +304,7 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
       </section>
 
       <section className="space-y-1.5">
-        <h3 className={SECTION_LABEL}>Effects &amp; chat</h3>
+        <SectionLabel>Effects &amp; chat</SectionLabel>
 
 
         {/* Reduce Visual Effects — always on the main screen (accessibility/perf toggle).
@@ -485,7 +488,10 @@ function ThemeEditView({ theme, reducedEffects, overridden, onPublishTheme, onCl
             are greyed when Reduce Visual Effects is on (the engine forces blur:0). */}
         {(hasWallpaper || hasGradient) && (
           <div>
-            <p className="text-4xs text-fg-muted uppercase tracking-wider mb-2">Glass</p>
+            {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels
+                batch, guide: no spaced capitals); also bumped 4xs(10px)→the
+                guide's 11px reading floor. */}
+            <SectionLabel className="mb-2">Glass</SectionLabel>
             {reducedEffects && (
               <p className="text-3xs text-fg-muted bg-inset border border-edge-dim rounded-md px-2.5 py-1.5 mb-2 leading-relaxed">
                 Reduce Visual Effects is active — blur is disabled. Opacity still applies.
@@ -535,7 +541,7 @@ function ThemeEditView({ theme, reducedEffects, overridden, onPublishTheme, onCl
             those values) or when there's no wallpaper to blur. */}
         {canTuneTerminalOpacity && (
           <div>
-            <p className="text-4xs text-fg-muted uppercase tracking-wider mb-2">Terminal</p>
+            <SectionLabel className="mb-2">Terminal</SectionLabel>
             {canTuneTerminalFilter && reducedEffects && (
               <p className="text-3xs text-fg-muted bg-inset border border-edge-dim rounded-md px-2.5 py-1.5 mb-2 leading-relaxed">
                 Reduce Visual Effects is active — wallpaper blur is disabled. Opacity + brightness still apply.

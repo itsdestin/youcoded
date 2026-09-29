@@ -43,7 +43,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useArtifactSelector, useArtifactDispatch } from '../../state/ArtifactContext';
 import { useDismissTop, useEscClose } from '../../hooks/use-esc-close';
 import { workbenchScreenFrame } from '../../workbench-mode';
-import { Button, LoadingState, ErrorState, Tooltip } from '../ui';
+import { Button, LoadingState, ErrorState, SectionLabel, Tooltip } from '../ui';
 import { ScreenBand } from '../ScreenBand';
 import type { PageDocument, PageFetchRequest, PageFetchResult, PageLoadFailure, PageSummary, PagesBridge } from '../../../shared/pages-types';
 import { MAX_PAGE_DATA_BYTES, MAX_PINNED_PAGES } from '../../../shared/pages-types';
@@ -404,10 +404,16 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   );
 }
 
+// WHY SectionLabel, not the old spaced-caps eyebrow (labels batch, guide: no
+// spaced capitals — decisions H-3/L-1…L-4).
 function RailGroup({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="pb-2">
-      <div className="text-2xs font-medium text-fg-muted tracking-wider uppercase px-2 pt-2 pb-1">{label}</div>
+      {/* Padding on a wrapper — SectionLabel owns only margin/layout
+          (design lint no-restyle). */}
+      <div className="px-2 pt-2 pb-1">
+        <SectionLabel>{label}</SectionLabel>
+      </div>
       {children}
     </div>
   );

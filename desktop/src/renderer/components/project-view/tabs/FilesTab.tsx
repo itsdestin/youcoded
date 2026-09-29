@@ -125,7 +125,7 @@ function folderErrorMessage(error: string, detail: string | undefined, atRoot: b
 // Reveal button above.
 import { FolderIcon as FolderCardIcon, DocIcon, ImageIcon, SheetIcon, CodeGlyphIcon, GridViewIcon, ListViewIcon } from '../icons';
 import { ChevronIcon } from '../../Icons';
-import { EmptyState, ErrorState } from '../../ui';
+import { EmptyState, ErrorState, SectionLabel } from '../../ui';
 import { useScreenOpen, ScreenMark } from '../../../shoot-mode';
 
 // The rounded box the list-view rows sit in — the same container language the
@@ -1024,9 +1024,13 @@ function FilesTabImpl({
                   />
                 </div>
               )}
+              {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels
+                  batch, guide: no spaced capitals — decisions H-3/L-1…L-4). */}
               {searching && !noSearchResults && (
-                <div className={`${fullW} text-3xs uppercase tracking-wider text-fg-muted mb-0.5 px-0.5`}>
-                  Matches by file name ({flatResults.length})
+                <div className={`${fullW} px-0.5`}>
+                  <SectionLabel className="mb-0.5">
+                    Matches by file name ({flatResults.length})
+                  </SectionLabel>
                 </div>
               )}
               {isList
@@ -1047,8 +1051,12 @@ function FilesTabImpl({
                 const capped = contentTruncated || displayCapped;
                 return (
                   <div className={`${fullW} min-w-0`}>
-                    <div className="text-3xs font-medium text-fg-muted tracking-wider uppercase mt-2 mb-1.5 px-0.5">
-                      Matches by file contents ({shownRows}{capped ? '+' : ''})
+                    {/* Padding on this inner wrapper, not SectionLabel itself
+                        — it owns only margin/layout (design lint no-restyle). */}
+                    <div className="px-0.5">
+                      <SectionLabel className="mt-2 mb-1.5">
+                        Matches by file contents ({shownRows}{capped ? '+' : ''})
+                      </SectionLabel>
                     </div>
                     <div className="flex flex-col gap-2">
                       {groups.map((group) => {

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Button, Dialog, Textarea } from './ui';
+import { Button, Dialog, SectionLabel, Textarea } from './ui';
 import { useEscClose } from '../hooks/use-esc-close';
 import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';
 import { useTheme } from '../state/theme-context';
@@ -158,9 +158,11 @@ export default function ContextPopup({
                   thinking about the number the pill shows. Presentation only —
                   the color band is driven by the percentage in BOTH modes. */}
               <div className="pt-1">
-                <div className="text-2xs font-medium text-fg-muted tracking-wider uppercase mb-1.5">
+                {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels
+                    batch, guide: no spaced capitals — decisions H-3/L-1…L-4). */}
+                <SectionLabel className="mb-1.5">
                   Status bar shows
-                </div>
+                </SectionLabel>
                 <div role="radiogroup" aria-label="Context pill display" className="flex w-full rounded-lg overflow-hidden border border-edge-dim">
                   {(['percent', 'tokens'] as const).map((mode, i) => (
                     <button
@@ -190,7 +192,9 @@ export default function ContextPopup({
             <div className="px-4 pb-4 pt-2 space-y-3 border-t border-edge">
               {customizing ? (
                 <div className="space-y-2">
-                  <label htmlFor="compact-instructions" className="block text-3xs font-medium text-fg-muted tracking-wider uppercase">
+                  {/* WHY: field caption drops the spaced-caps eyebrow (labels
+                      batch, guide: no spaced capitals). */}
+                  <label htmlFor="compact-instructions" className="block text-xs font-medium text-fg-muted">
                     Keep these priorities (optional)
                   </label>
                   {/* Change 42: this was the `border-edge rounded-sm focus:ring-1`

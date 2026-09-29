@@ -226,7 +226,11 @@ export function UnifiedDiff({
       {overflow && (
         <button
           onClick={() => setOpen(o => !o)}
-          className="mt-1 text-3xs text-fg-muted tracking-wider uppercase hover:text-fg-2"
+          // WHY: drop the spaced-caps eyebrow (labels batch, guide: no spaced
+          // capitals). Not exempt as a "file viewer" — this is a generic
+          // expand toggle shared across git review and the session-context
+          // popup, not the dedicated file-content viewer.
+          className="mt-1 text-xs text-fg-muted hover:text-fg-2"
         >
           {/* Wording matches CollapsibleBlock (ToolBody.tsx) so every long box in a card reads the same. */}
           {open ? 'Show less' : `Show ${total - DIFF_PREVIEW_LINES} more lines`}

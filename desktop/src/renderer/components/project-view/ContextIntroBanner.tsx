@@ -33,7 +33,7 @@ function persistDismissed(): void {
 
 // Info-circle + close glyphs — shared module (./icons.tsx).
 import { InfoIcon } from './icons';
-import { CloseButton } from '../ui';
+import { CloseButton, SectionLabel } from '../ui';
 
 export function ContextIntroBanner() {
   // Initialize from localStorage so a previously-dismissed banner never flashes
@@ -54,8 +54,9 @@ export function ContextIntroBanner() {
         <InfoIcon size={18} />
       </span>
       <div className="min-w-0">
-        {/* Uppercase micro-label / eyebrow, consistent with the design language. */}
-        <div className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1">About context</div>
+        {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels batch,
+            guide: no spaced capitals — decisions H-3/L-1…L-4). */}
+        <SectionLabel className="mb-1">About context</SectionLabel>
         {/* One plain-language paragraph — no jargon, no glyphs. */}
         <p className="text-xs text-fg-2 leading-relaxed">
           These are the notes and rules YouCoded reads to understand how you want it to work. Some

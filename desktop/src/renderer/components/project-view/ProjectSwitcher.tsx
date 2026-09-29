@@ -30,7 +30,7 @@ interface ProjectSwitcherProps {
 // Shared glyphs — see ./icons.tsx. (The check is the active-project indicator,
 // NOT a status glyph.)
 import { SearchIcon, CheckIcon, PlusIcon } from './icons';
-import { CloseButton } from '../ui';
+import { CloseButton, SectionLabel } from '../ui';
 import { ScreenMark } from '../../shoot-mode';
 
 export function ProjectSwitcher({
@@ -139,10 +139,14 @@ export function ProjectSwitcher({
         </div>
 
         {/* Recent micro-label */}
+        {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels batch,
+            guide: no spaced capitals — decisions H-3/L-1…L-4). */}
+        {/* Padding on a wrapper — SectionLabel owns only margin/layout
+            (design lint no-restyle). */}
         <div className="px-2 pt-2">
-          <span className="text-3xs font-medium text-fg-muted tracking-wider uppercase px-2">
-            Recent
-          </span>
+          <div className="px-2">
+            <SectionLabel>Recent</SectionLabel>
+          </div>
         </div>
 
         {/* Project rows */}

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Button, ErrorState, fieldClasses, Tooltip } from '../ui';
+import { Button, ErrorState, fieldClasses, SectionLabel, Tooltip } from '../ui';
 import { FIELD_TRIGGER_STATES } from '../ui/field';
 import { plainMessage } from '../../utils/ipc-error';
 import { triggerTip } from '../guide/tips';
@@ -259,7 +259,9 @@ function Chip({ active, onClick, children }: {
 function Group({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <span className="text-3xs font-medium text-fg-muted tracking-wider uppercase">{label}</span>
+      {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels batch,
+          guide: no spaced capitals — decisions H-3/L-1…L-4). */}
+      <SectionLabel>{label}</SectionLabel>
       <div className="flex flex-wrap gap-1.5" role="group" aria-label={label}>{children}</div>
     </div>
   );

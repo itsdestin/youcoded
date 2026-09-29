@@ -18,6 +18,7 @@ import { useEscClose } from '../../hooks/use-esc-close';
 import type { FileTypeGroup } from '../../../shared/artifacts/categorization';
 import type { FileSortKey } from './tabs/FilesTab';
 import { ScreenMark } from '../../shoot-mode';
+import { SectionLabel } from '../ui';
 
 const TYPE_OPTIONS: { value: FileTypeGroup; label: string }[] = [
   { value: 'document', label: 'Documents' },
@@ -60,7 +61,9 @@ function Chip({ active, onClick, multi, children }: {
 function Group({ label, multi, children }: { label: string; multi?: boolean; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <span className="text-3xs font-medium text-fg-muted tracking-wider uppercase">{label}</span>
+      {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels batch,
+          guide: no spaced capitals — decisions H-3/L-1…L-4). */}
+      <SectionLabel>{label}</SectionLabel>
       <div className="flex flex-wrap gap-1.5" role={multi ? 'group' : 'radiogroup'} aria-label={label}>{children}</div>
     </div>
   );

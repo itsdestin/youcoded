@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button } from '../ui';
+import { Button, SectionLabel } from '../ui';
 import ModelPicker, { type ModelChoice } from '../model/ModelPicker';
 import { persistLastBinding } from '../RuntimeBinding';
 import { runLeaseTakeoverGate } from '../../state/resume-lease-gate';
@@ -191,7 +191,9 @@ export function BuddyResumeList({ onResumed, onCancel }: Props) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minHeight: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Recent</label>
+        {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels batch,
+            guide: no spaced capitals — decisions H-3/L-1…L-4). */}
+        <SectionLabel>Recent</SectionLabel>
         <button
           onClick={onCancel}
           className="text-3xs text-fg-muted hover:text-fg transition-colors"

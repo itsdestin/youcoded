@@ -12,6 +12,7 @@
 //    leaderboard being down must never look like the game being down (§4.2).
 
 import type { GameDefinition } from './game-registry';
+import { SectionLabel } from '../ui';
 
 export interface LeaderboardRow {
   accountId: string;
@@ -119,9 +120,9 @@ export default function Leaderboard({ game, rows, staleNote, unpublishedBest, on
   );
 }
 
-// G-7: uppercase text-2xs fg-muted is the app's only section header.
+// G-7 WHY SectionLabel, not the old spaced-caps eyebrow (labels batch, guide:
+// no spaced capitals — decisions H-3/L-1…L-4). The arcade lobby/leaderboard
+// menus are NOT exempt from the guide (only the game boards themselves are).
 function Eyebrow({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="text-2xs font-medium text-fg-muted tracking-wide uppercase">{children}</span>
-  );
+  return <SectionLabel>{children}</SectionLabel>;
 }

@@ -16,7 +16,7 @@ import React, { useState } from 'react';
 import type { PageConnection, PageConnectionStatus, PageSummary, PagesBridge } from '../../../shared/pages-types';
 import { isRemoteMode } from '../../platform';
 import { isWorkbenchMode } from '../../workbench-mode';
-import { Button, ErrorState, TextInput } from '../ui';
+import { Button, ErrorState, SectionLabel, TextInput } from '../ui';
 import { Dialog } from '../ui/Dialog';
 import { PageGlyph } from './page-icons';
 import { publishPages } from './use-pages';
@@ -245,7 +245,9 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
         <PageGlyph icon={page.icon} className="w-5 h-5" />
       </span>
       <div className="min-w-0">
-        <div className="text-2xs font-medium text-fg-muted tracking-wider uppercase">{eyebrow}</div>
+        {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels batch,
+            guide: no spaced capitals — decisions H-3/L-1…L-4). */}
+        <SectionLabel>{eyebrow}</SectionLabel>
         <h3 className="text-base font-semibold text-fg leading-snug">{title}</h3>
       </div>
     </div>
@@ -297,7 +299,11 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
       {/* Two boxes on a re-ask, one under each label (review round 3, E-2):
           the new permissions, then what was already allowed. A first ask has
           only the one box and no labels. */}
-      {isChange && <div className="text-2xs font-medium text-fg tracking-wider uppercase" data-new-label>New</div>}
+      {/* WHY: kept a plain div, not SectionLabel — this "New" marker needs
+          text-fg (not SectionLabel's fixed text-fg-muted) to stand out
+          against "Already allowed" below it. Just drops the spaced-caps
+          eyebrow (labels batch, guide: no spaced capitals). */}
+      {isChange && <div className="text-xs font-medium text-fg" data-new-label>New</div>}
       <div className="rounded-lg border border-edge bg-inset/40 p-3 flex flex-col gap-3">
         {asking.map((c) => (
           <ConnectionLine key={c.id} c={c}>
@@ -321,7 +327,7 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
       </div>
       {isChange && (
         <div className="flex flex-col gap-2 pt-1" data-already-allowed>
-          <div className="text-2xs font-medium text-fg-muted tracking-wider uppercase">Already allowed</div>
+          <SectionLabel>Already allowed</SectionLabel>
           <div className="rounded-lg border border-edge bg-inset/40 p-3 flex flex-col gap-3">
             {already.map((c) => <ConnectionLine key={c.id} c={c} small />)}
           </div>

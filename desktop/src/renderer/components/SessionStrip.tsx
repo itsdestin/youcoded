@@ -1,7 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { SessionStatusColor, STATUS_LABEL } from './StatusDot';
-import { Button, Toggle, Tooltip } from './ui';
+import { Button, SectionLabel, Toggle, Tooltip } from './ui';
 import { isAndroid, isRemoteMode } from '../platform';
 import FolderSwitcher from './FolderSwitcher';
 import { SkipPermissionsInfoTooltip } from './SkipPermissionsInfoTooltip';
@@ -2229,9 +2229,13 @@ export default function SessionStrip({
           {/* Android only ever has one window, so the "in this window" scoping label is meaningless there */}
           {sessions.length > 0 && !isAndroid() && (
             <>
-              <div className="px-3 pt-1.5 text-3xs font-medium text-fg-muted tracking-wider uppercase">
-                Sessions in this window
-              </div>
+              {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels
+                  batch, guide: no spaced capitals — decisions H-3/L-1…L-4).
+                  Margin, not padding (px-3 pt-1.5) — SectionLabel owns only
+                  margin/layout (design lint no-restyle), and margin keeps
+                  this a flat sibling of the list below (SessionStrip.test.tsx
+                  finds it via `heading.nextElementSibling`). */}
+              <SectionLabel className="mx-3 mt-1.5">Sessions in this window</SectionLabel>
             </>
           )}
           {/* WHY: This is the menu's flexible middle. With the menu capped to
@@ -2537,9 +2541,8 @@ export default function SessionStrip({
             return (
               <>
                 <div className="border-t border-edge" />
-                <div className="px-3 pt-1.5 text-3xs font-medium text-fg-muted tracking-wider uppercase">
-                  Sessions in other windows
-                </div>
+                {/* Margin, not padding — see the sibling label above for why. */}
+                <SectionLabel className="mx-3 mt-1.5">Sessions in other windows</SectionLabel>
                 {/* WHY: Peer windows can hold an unbounded number of sessions.
                     Keep this group inside the same scrolling middle as local
                     sessions, so it cannot hide the New Session actions below. */}
@@ -2652,7 +2655,9 @@ export default function SessionStrip({
                   dropdown, so this container must shrink and scroll before its
                   Model, permissions, and Create controls reach the bottom edge. */}
               <div>
-                <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 block">Project Folder</label>
+                {/* WHY: field captions drop the spaced-caps eyebrow + sentence
+                    case (labels batch, guide: no spaced capitals). */}
+                <label className="text-xs font-medium text-fg-muted mb-1 block">Project folder</label>
                 <FolderSwitcher
                   value={newCwd}
                   onChange={setNewCwd}
@@ -2666,7 +2671,7 @@ export default function SessionStrip({
                   is DERIVED from the pick (see applyModelChoice), so the user
                   answers "which model?" instead of decoding "Runtime" first. */}
               <div>
-                <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 block">Model</label>
+                <label className="text-xs font-medium text-fg-muted mb-1 block">Model</label>
                 <ModelPicker
                   value={modelChoice}
                   onSelect={applyModelChoice}
@@ -2692,7 +2697,10 @@ export default function SessionStrip({
               {runtime !== 'native' && (
                 <>
                   <div className="flex items-center justify-between">
-                    <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase inline-flex items-center">
+                    {/* WHY still "Skip Permissions" (labels batch): kept like
+                        a proper noun, matching its dialog titles/tooltip/
+                        aria-label elsewhere; only the spaced-caps CSS drops. */}
+                    <label className="text-xs font-medium text-fg-muted inline-flex items-center">
                       Skip Permissions
                       <SkipPermissionsInfoTooltip />
                     </label>
@@ -2720,7 +2728,10 @@ export default function SessionStrip({
               {/* Launch in new window — hidden on platforms without multi-window support */}
               {detachAvailable && (
                 <div className="flex items-center justify-between">
-                  <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Launch in New Window</label>
+                  {/* WHY still "Launch in New Window" (labels batch): matches
+                      its aria-label below and its quoted name in remote-shim/
+                      mock-shim comments; only the spaced-caps CSS drops. */}
+                  <label className="text-xs font-medium text-fg-muted">Launch in New Window</label>
                   {/* Shared Toggle (change 15) — same accent on-state as before. */}
                   <Toggle
                     checked={launchInNewWindow}

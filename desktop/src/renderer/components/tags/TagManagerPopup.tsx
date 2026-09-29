@@ -110,10 +110,15 @@ export function TagManagerPopup({ open, onClose, registry, layer = 2 }: {
           apply picker, so this is the only surface that can surface them again. */}
       {archivedCount > 0 && (
         <div className="flex items-center justify-between">
-          <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase">
-            Show Archived ({archivedCount})
+          {/* WHY: field caption drops the spaced-caps eyebrow + sentence
+              case (labels batch, guide: no spaced capitals). */}
+          <label className="text-xs font-medium text-fg-muted">
+            Show archived ({archivedCount})
           </label>
-          <Toggle checked={showArchived} onChange={setShowArchived} aria-label="Show Archived" />
+          {/* WHY: aria-label matches the visible label's new sentence case
+              (labels batch) — TagPicker.tsx's own comment already says
+              "archived" lowercase, so this isn't an established proper name. */}
+          <Toggle checked={showArchived} onChange={setShowArchived} aria-label="Show archived" />
         </div>
       )}
     </Dialog>

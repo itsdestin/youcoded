@@ -7,6 +7,7 @@ import React from 'react';
 import type { CatalogMeta, Capability } from '../../../shared/catalog-types';
 import { RISKY_CAPABILITY_KINDS } from '../../../shared/catalog-types';
 import { CapabilityIcon } from './type-icons';
+import { SectionLabel } from '../ui';
 
 export const CAPABILITY_TITLE: Record<Capability['kind'], string> = {
   shell: 'Runs commands',
@@ -35,7 +36,9 @@ export function CapabilityList({ catalog }: { catalog: CatalogMeta }) {
   const rest = caps.filter((c) => !RISKY_CAPABILITY_KINDS.includes(c.kind));
   return (
     <section data-capabilities>
-      <h2 className="text-sm uppercase tracking-wide text-fg-dim mb-2">What this can do</h2>
+      {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels batch,
+          guide: no spaced capitals — decisions H-3/L-1…L-4). */}
+      <SectionLabel className="mb-2">What this can do</SectionLabel>
       <div className="layer-surface p-3 flex flex-col gap-2 text-sm">
         {caps.length === 0 && (
           <div className="flex items-center gap-2 text-fg-2">
