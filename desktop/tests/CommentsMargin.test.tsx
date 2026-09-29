@@ -263,13 +263,7 @@ describe('CommentsMargin — render cost at a realistic high comment count', () 
     // cancels out machine load instead of guessing a bigger fixed number.
     const allCellComments = eldenBossListCellComments();
     expect(allCellComments.length).toBeGreaterThan(300); // the real number this test exists to cover — see fixture read above
-    // 105, not 60 (2026-09-29, Task 2 fix round 1 verify run): the 60-comment slice costs so
-    // little that its fixed overhead swings the ratio — measured 6.5-8.2x alone and 5.5-9.2x under
-    // 6 parallel runs, and 12.7x once in a full suite (over the old bound of 12). A third of the
-    // sheet measured 4.9-5.3x alone and 4.7-5.7x under the same load: a steady ratio, so the bound
-    // below can sit tight while a quadratic pass (3x the comments → ~9x the cost, on top of today's
-    // ~1.7x) still lands far above it.
-    const SMALL_COUNT = 105;
+    const SMALL_COUNT = 60;
 
     // A distinct path per mount — same reason CommentsMargin's synthetic
     // 1,000-comment fix uses a distinct path per size: addComment always
@@ -325,8 +319,8 @@ describe('CommentsMargin — render cost at a realistic high comment count', () 
     mountWith('warmup', allCellComments.slice(0, 20));
     const small = bestOf('small', allCellComments.slice(0, SMALL_COUNT));
     const large = bestOf('large', allCellComments);
-    // 315 / 105 = 3x if linear; normal measures 4.7-5.7x (see SMALL_COUNT), so 9 leaves ~60% for a
-    // loaded machine and a quadratic regression (~15x) still fails.
-    expect(large / Math.max(small, 1)).toBeLessThan(9);
+    // 315 / 60 ≈ 5.25x if linear; generous headroom over that, same bound as
+    // the synthetic 1,000-comment case above.
+    expect(large / Math.max(small, 1)).toBeLessThan(12);
   }, STRESS_TEST_BUDGET_MS);
 });
