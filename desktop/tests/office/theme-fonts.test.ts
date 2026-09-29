@@ -111,7 +111,7 @@ describe('createThemeFonts', () => {
   it('refuses to follow a redirect, so the host check cannot be bypassed', async () => {
     const fetch = okFetch();
     await createThemeFonts({ cacheDir, fetch }).fetchFontCss(CSS_URL);
-    expect(fetch.mock.calls[0][1]).toMatchObject({ redirect: 'error' });
+    expect((fetch.mock.calls[0] as unknown[])[1]).toMatchObject({ redirect: 'error' });
   });
 
   it('caches nothing when Google answers with an error', async () => {
