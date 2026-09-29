@@ -290,7 +290,11 @@ function basename(path: string): string {
   return parts[parts.length - 1] || path;
 }
 
-/** Compact age — the row has room for about six characters. */
+/** Compact age — the row has room for about six characters.
+ *  WHY a short date past 7 days, not `${weeks}w` (bug fix: a session from
+ *  months ago read as "60w", which nobody can place on a calendar): a date
+ *  reads at a glance, same compact shape ModelProvidersPopup already uses for
+ *  "installed on" dates. */
 function relativeTime(ts: number): string {
   const mins = Math.floor((Date.now() - ts) / 60000);
   if (mins < 1) return 'now';
@@ -299,5 +303,5 @@ function relativeTime(ts: number): string {
   if (hours < 24) return `${hours}h`;
   const days = Math.floor(hours / 24);
   if (days < 7) return `${days}d`;
-  return `${Math.floor(days / 7)}w`;
+  return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
