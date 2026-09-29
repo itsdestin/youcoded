@@ -464,7 +464,7 @@ describe('the editor asks for a file dialog (Insert → Picture)', () => {
   });
 
   it('a dialog that fails answers null and keeps its error out of the frame', async () => {
-    const pick = vi.fn(async () => { throw new Error('GTK failed at /home/secret/folder'); });
+    const pick = vi.fn(async () => { throw Object.assign(new Error('GTK failed at /home/secret/folder'), { code: 'EACCES' }); });
     ipc = fakeIpcMain();
     registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => available, root: path.join(dir, 'addon'), userData: path.join(dir, 'userData'), pickEditorFiles: pick });
     const { token } = (await call('office:open', win1, await aDocx())) as { token: string };
@@ -473,6 +473,8 @@ describe('the editor asks for a file dialog (Insert → Picture)', () => {
     const logged = vi.mocked(log).mock.calls.filter((c) => c[2] === 'editor file dialog failed');
     expect(logged).toHaveLength(1);
     expect(JSON.stringify(logged)).not.toContain('/home/secret');
+    // ... but the cause survives: its kind and system code
+    expect(logged[0][3]).toEqual({ kind: 'Error', code: 'EACCES' });
   });
 
   it("never shows a dialog for another window's document", async () => {

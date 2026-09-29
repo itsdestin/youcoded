@@ -406,6 +406,26 @@ describe('pictures into a document', () => {
       expect(made).toHaveLength(2); // never connected to the refused target
     });
 
+    it('lets go of the cap\'s listener when each hop is done', async () => {
+      // A signal that counts its listeners (the real one hides them).
+      const ctl = new AbortController();
+      const live = new Set<unknown>();
+      const signal = {
+        get aborted() { return ctl.signal.aborted; },
+        addEventListener: (t: string, f: () => void, o?: unknown) => { live.add(f); ctl.signal.addEventListener(t, f, o as AddEventListenerOptions); },
+        removeEventListener: (t: string, f: () => void) => { live.delete(f); ctl.signal.removeEventListener(t, f); },
+      } as unknown as AbortSignal;
+      const { made, request } = fakeNet();
+      const p = pictureRequestVia(request)('https://example.com/a.png', { signal, allowRedirect: async () => true });
+      made[0].req.emit('redirect', 302, 'GET', 'https://example.org/b.png', {});
+      await vi.waitFor(() => expect(made).toHaveLength(2));
+      expect(live.size).toBe(1); // only the hop in flight
+      answer(made[1].req, 200, { 'content-type': 'image/png' }, PNG);
+      const res = await p;
+      await res.arrayBuffer();
+      expect(live.size).toBe(0);
+    });
+
     describe('the 20 s cap covers the whole download', () => {
       beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }); });
       afterEach(() => { vi.useRealTimers(); });

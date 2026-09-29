@@ -220,8 +220,12 @@ export function pictureRequestVia(request: (opts: Record<string, unknown>) => Ne
     const abort = () => { try { req.abort(); } catch { /* already done */ } };
     // The answer's body, once it has begun: the cap and Electron's own 'aborted' must end it.
     let bodyCtl: ReadableStreamDefaultController<Uint8Array> | null = null;
-    const failBody = () => { try { bodyCtl?.error(new Error('aborted')); } catch { /* already closed */ } bodyCtl = null; };
-    req.on('redirect', (_status, _method, to) => { abort(); resolve({ redirect: to }); });
+    // WHY detached when the hop is done (fix round 3): one download's signal serves every hop, so a
+    // finished hop's listener would otherwise stay on it for the rest of the download.
+    const onAbort = () => { abort(); failBody(); reject(new Error('aborted')); };
+    const detach = () => signal.removeEventListener('abort', onAbort);
+    const failBody = () => { try { bodyCtl?.error(new Error('aborted')); } catch { /* already closed */ } bodyCtl = null; detach(); };
+    req.on('redirect', (_status, _method, to) => { abort(); detach(); resolve({ redirect: to }); });
     req.on('response', (res) => {
       const headers = new Headers();
       for (const [k, v] of Object.entries(res.headers)) headers.set(k, Array.isArray(v) ? v.join(', ') : String(v));
@@ -229,20 +233,20 @@ export function pictureRequestVia(request: (opts: Record<string, unknown>) => Ne
         start(c) {
           bodyCtl = c;
           res.on('data', (d) => bodyCtl?.enqueue(new Uint8Array(d as Buffer)));
-          res.on('end', () => { bodyCtl?.close(); bodyCtl = null; });
+          res.on('end', () => { bodyCtl?.close(); bodyCtl = null; detach(); });
           res.on('error', () => failBody());
           // WHY (fix round 2): after req.abort() Electron's answer emits 'aborted' — never 'end' or
           // 'error' — so without this a reader waiting on the body would wait forever, and the
           // editor's synchronous request with it.
           res.on('aborted', () => failBody());
         },
-        cancel: abort,
+        cancel: () => { abort(); detach(); },
       });
       resolve({ response: new Response(body, { status: res.statusCode, headers }) });
     });
-    req.on('error', reject);
+    req.on('error', (e) => { detach(); reject(e); });
     // The cap: stop the request, and end a body already being read (see 'aborted' above).
-    signal.addEventListener('abort', () => { abort(); failBody(); reject(new Error('aborted')); }, { once: true });
+    signal.addEventListener('abort', onAbort, { once: true });
     req.end();
   });
   return async (url, { signal, allowRedirect }) => {

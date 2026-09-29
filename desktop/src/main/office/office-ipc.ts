@@ -137,6 +137,14 @@ export interface OfficeIpcDeps {
 
 
 const fail = (message: string): OfficeOpen => ({ ok: false, message });
+
+/** What a log line says about an error: its kind and its system code (ENOENT, EACCES…), never its
+ *  message. WHY (Task 1 fix rounds 2-3, a deliberate change to every error log here): an fs or
+ *  dialog error's message carries paths; the kind and code keep the cause without them. */
+const errorKind = (e: unknown) => ({
+  kind: e instanceof Error ? e.name : typeof e,
+  code: (e as NodeJS.ErrnoException | null)?.code ?? null,
+});
 let activePruner: PruneScheduler | null = null;
 
 export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): void {
@@ -214,7 +222,7 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
       opens.delete(id);
       pageLoads.delete(id);
       lost.delete(id);
-      void deps.getSessions()?.closeAllFor(id).catch((e) => log('WARN', 'Office', 'closing a gone window\'s documents failed', { kind: e instanceof Error ? e.name : typeof e }));
+      void deps.getSessions()?.closeAllFor(id).catch((e) => log('WARN', 'Office', 'closing a gone window\'s documents failed', errorKind(e)));
     });
   }
 
@@ -267,7 +275,7 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
       try {
         session = await pending;
       } catch (e) {
-        log('ERROR', 'Office', 'office:open could not start a session', { kind: e instanceof Error ? e.name : typeof e });
+        log('ERROR', 'Office', 'office:open could not start a session', errorKind(e));
         return fail(MSG.couldNotOpen);
       }
     }
@@ -290,7 +298,7 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     // through a link is one entry. WHY not awaited (fix round 1): Recent must never delay or
     // fail an open; a failure is only logged.
     const kind = kindFor(realPath);
-    if (kind) void recent.add(deps.userData, describeFile(realPath, kind, new Date())).catch((e) => log('WARN', 'Office', 'adding to Recent failed', { kind: e instanceof Error ? e.name : typeof e }));
+    if (kind) void recent.add(deps.userData, describeFile(realPath, kind, new Date())).catch((e) => log('WARN', 'Office', 'adding to Recent failed', errorKind(e)));
     return { ok: true, token: session.token, origin: `${SCHEME}://${session.token}` };
   }
 
@@ -332,9 +340,9 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
       paths = await pick(sender, { multiple, filters: a.filters });
     } catch (e) {
       // WHY caught (fix round 1): a failing system dialog's error text can name folders; the frame
-      // gets the same answer as a cancel. WHY only the error's kind is logged (fix round 2): the
+      // gets the same answer as a cancel. WHY only kind and code are logged (fix round 2): the
       // message itself can carry those folders too.
-      log('WARN', 'Office', 'editor file dialog failed', { kind: e instanceof Error ? e.name : typeof e });
+      log('WARN', 'Office', 'editor file dialog failed', errorKind(e));
       return null;
     }
     if (!paths?.length) return null;
@@ -402,7 +410,7 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
       return await versions.list(deps.userData, real);
     } catch (e) {
       // Rejected on purpose: the window then says it couldn't load them, never "no versions".
-      log('ERROR', 'Office', 'office:versions could not read the kept versions', { kind: e instanceof Error ? e.name : typeof e });
+      log('ERROR', 'Office', 'office:versions could not read the kept versions', errorKind(e));
       throw new Error("Office couldn't load the versions of this file.");
     }
   }
@@ -426,7 +434,7 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
       }
       realPath = auth.realPath;
     } catch (e) {
-      log('ERROR', 'Office', 'office:restore could not check the file', { kind: e instanceof Error ? e.name : typeof e });
+      log('ERROR', 'Office', 'office:restore could not check the file', errorKind(e));
       return { ok: false, message: MSG.couldNotRestore };
     }
     if (formatFor(realPath) === null) return { ok: false, message: MSG.unsupported };
@@ -451,12 +459,12 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
       // queued after this would already have replaced <temp>/media with the restored file's.
       r = await run.exclusive(s.token, async () => {
         const res = await work();
-        if (res.ok) await run.keepMedia(s.token).catch((e) => log('WARN', 'Office', 'keeping pictures for a kept editor failed', { kind: e instanceof Error ? e.name : typeof e }));
+        if (res.ok) await run.keepMedia(s.token).catch((e) => log('WARN', 'Office', 'keeping pictures for a kept editor failed', errorKind(e)));
         return res;
       }, (x) => x.ok);
     } catch (e) {
       // The document closed (or quit began) while the restore waited its turn: nothing was done.
-      log('WARN', 'Office', 'office:restore did not run', { kind: e instanceof Error ? e.name : typeof e });
+      log('WARN', 'Office', 'office:restore did not run', errorKind(e));
       return { ok: false, message: MSG.couldNotRestore };
     }
     if (r.ok) {
@@ -556,7 +564,7 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     // with no conversation should still work. A project folder that is gone is NOT recreated:
     // that is a folder the person removed, and saying so is the truthful answer.
     if (toDocuments && typeof wanted === 'string' && path.isAbsolute(wanted)) {
-      await fsp.mkdir(wanted, { recursive: true }).catch((e) => log('WARN', 'Office', 'could not create the Documents folder', { kind: e instanceof Error ? e.name : typeof e }));
+      await fsp.mkdir(wanted, { recursive: true }).catch((e) => log('WARN', 'Office', 'could not create the Documents folder', errorKind(e)));
     }
     const dir = await folderOf(wanted);
     if (!dir) {
@@ -576,7 +584,7 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
       }
       realDir = path.dirname(auth.realPath);
     } catch (e) {
-      log('ERROR', 'Office', 'office:create could not check the folder', { kind: e instanceof Error ? e.name : typeof e });
+      log('ERROR', 'Office', 'office:create could not check the folder', errorKind(e));
       return { ok: false, message: MSG.couldNotCreate };
     }
     try {
