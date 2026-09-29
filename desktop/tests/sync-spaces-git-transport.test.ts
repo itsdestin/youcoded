@@ -340,6 +340,26 @@ describe('GitTransport specifics', () => {
     await h.cleanup();
   });
 
+  it('ignoredDirs names folders the project .gitignore and the default list skip, and no folder that still syncs', async () => {
+    const h = await makeHarness();
+    const a = await h.makeDeviceSpace();
+    const mk = (rel: string) => { fs.mkdirSync(path.dirname(path.join(a.root, rel)), { recursive: true }); fs.writeFileSync(path.join(a.root, rel), 'x'); };
+    fs.writeFileSync(path.join(a.root, '.gitignore'), '.venv-rocm/\ndata/cache/\nkept/\n');
+    mk('.venv-rocm/lib/site.py');   // project .gitignore, a name the default list doesn't know
+    mk('data/cache/1.bin');         // nested, project .gitignore
+    mk('data/notes.md');            // a sibling that syncs
+    mk('build/out.js');             // default list (info/exclude)
+    mk('kept/tracked.md');
+    // A folder ignored AFTER a file in it was synced still carries that file:
+    // it must never be reported, or its edits would stop reaching the watcher.
+    execFileSync('git', ['add', '-f', 'kept/tracked.md'], { cwd: a.root, env: { ...process.env, GIT_DIR: path.join(a.root, '.youcoded', 'sync.git'), GIT_WORK_TREE: a.root } });
+    const dirs = await h.transport.ignoredDirs!(a);
+    expect(dirs).toEqual(expect.arrayContaining(['.venv-rocm', 'data/cache', 'build']));
+    expect(dirs).not.toContain('data');
+    expect(dirs).not.toContain('kept');
+    await h.cleanup();
+  });
+
   it('gitDirSizeBytes returns >0 for a real repo and 0 for a missing dir', async () => {
     const h = await makeHarness();
     const a = await h.makeDeviceSpace();
