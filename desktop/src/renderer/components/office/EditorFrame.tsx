@@ -48,6 +48,8 @@ const CLOSE_SAVE_WAIT_MS = 5_000;
  *  anything this late means the editor gave up without telling the host (a failed
  *  get_current_path, an exception in its save path), and "Saving…" must not stay up forever. */
 const REQUESTED_SAVE_LIMIT_MS = 60_000;
+/** A restore landed while this editor still held unsaved typing (see onDocumentReplaced below). */
+const REPLACED_WHILE_EDITING = 'This file was restored while you had unsaved changes here. Save a copy to keep them.';
 
 
 /** The theme as the editor gets it. WHY no fontLinks (build plan Task 6): the editor's CSP
@@ -309,6 +311,18 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     const token = opened?.token;
     if (!token) return;
     return onDocumentReplaced(token, () => {
+      // Belt and braces (fix round 1): the Versions window saves first and blocks typing until
+      // the restore answers, so nothing should be unsaved here. If something is anyway, this
+      // editor holds the only copy of it: keep it — never reload over it — and show the
+      // save-failed actions (Save a copy…, Close without saving). Main refuses its saves until
+      // it reloads, so it cannot land on the restored file either.
+      const s = save.current;
+      if (s.dirty || s.requested || s.saving || s.timer) {
+        if (s.timer) { clearTimeout(s.timer); s.timer = 0; }
+        s.dirty = true; s.failed = true; s.failMessage = REPLACED_WHILE_EDITING;
+        markFailed(file.path, REPLACED_WHILE_EDITING);
+        return;
+      }
       replacedRef.current = true;
       discardPending();
       markUnchanged(file.path);
@@ -462,6 +476,9 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         // M4 (fix round 4): an answer that lands after this frame unmounted must not write a
         // save state for a file no editor holds any more (it would linger in the store).
         if (!mountedRef.current) return;
+        // M2 (fix round 1): an answer for a document this editor has let go of (a restore
+        // replaced it, or it reopened on a new token) says nothing about what it holds now.
+        if (replacedRef.current || openedRef.current?.token !== opened.token) return;
         if (m.cmd === 'write_editor_bin') save.current.handedOverSeq = seq;
         if (saving) {
           save.current.drainPending = false;
@@ -483,6 +500,8 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
           if (saving && save.current.drainPending) noteCloseFailedWhileHidden(file.path);
           return;
         }
+        // M2 (fix round 1): see above — no stale "couldn't save" for a document already let go.
+        if (replacedRef.current || openedRef.current?.token !== opened.token) return;
         // Any refused step of an asked-for save (write_editor_bin, get_current_path) ends that
         // save without a save_file: it failed, with main's reason (fix round 2).
         if (!saving && (m.cmd === 'write_editor_bin' || m.cmd === 'get_current_path')) {

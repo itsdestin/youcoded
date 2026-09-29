@@ -151,7 +151,9 @@ export function OfficeView({ projectRoot = null, visible = true }: { projectRoot
       </div>
 
       {/* Only while on view: a mounted dialog would otherwise show over chat and hold Escape. */}
-      <VersionsDialog file={visible ? versionsFor : null} onClose={() => showVersions(null)} />
+      {/* Kept mounted while hidden (not shown, holding no Escape): a restore under way keeps its
+          state and finishes; showing the page again shows the window as it is. */}
+      <VersionsDialog file={versionsFor} shown={visible} onClose={() => showVersions(null)} />
     </div>
   );
 }
@@ -273,7 +275,7 @@ const REASON: Record<OfficeVersion['reason'], string> = {
 
 const RESTORE_FAILED = "Office couldn't restore this version.";
 
-function VersionsDialog({ file, onClose }: { file: OfficeFile | null; onClose: () => void }) {
+function VersionsDialog({ file, shown, onClose }: { file: OfficeFile | null; shown: boolean; onClose: () => void }) {
   const [versions, setVersions] = useState<OfficeVersion[] | null>(null);
   // The list could not be read (Retry asks again) — never shown as "no versions", which would
   // tell the person their kept copies are gone.
@@ -313,7 +315,9 @@ function VersionsDialog({ file, onClose }: { file: OfficeFile | null; onClose: (
     }
   };
   return (
-    <Dialog open={file !== null} onClose={onClose} title="Versions" subtitle={file?.name} size="panel" screen="office/versions">
+    // busy while restoring (fix round 1): the window stays until the restore answers, so nothing
+    // can be typed into the editor between its save and the restore.
+    <Dialog open={file !== null && shown} onClose={onClose} busy={restoring !== null} title="Versions" subtitle={file?.name} size="panel" screen="office/versions">
       <p className="text-xs text-fg-muted pb-3">
         Office saves as you work and keeps a copy every few minutes. Restoring one keeps your current version too.
       </p>

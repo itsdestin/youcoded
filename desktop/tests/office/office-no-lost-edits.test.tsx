@@ -722,7 +722,7 @@ describe('restoring a kept version of an open document', () => {
     await waitFor(() => { from({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } }); expect(saveStateFor(FILE.path).phase).toBe('unsaved'); });
     act(() => showVersions(FILE));
     await screen.findByText('When you opened it');
-    return { office, ...r };
+    return { office, from, ...r };
   }
 
   it('saves the unsaved typing first, then restores, then reopens the editor on the restored file', async () => {
@@ -753,5 +753,42 @@ describe('restoring a kept version of an open document', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
     expect(await screen.findByText('That version is no longer kept.')).toBeInTheDocument();
     expect(office.close).not.toHaveBeenCalled();
+  });
+
+  it('cannot be dismissed while a restore runs, and keeps its state when the page is hidden and shown again', async () => {
+    let finish!: () => void;
+    const { office, rerender } = await editing({ restore: vi.fn(() => new Promise<{ ok: true }>((r) => { finish = () => r({ ok: true }); })) });
+    fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
+    await waitFor(() => expect(office.restore).toHaveBeenCalled());
+    expect(screen.getByRole('button', { name: 'Restoring…' })).toBeDisabled();
+    // Escape, the ✕ and a click outside do nothing while it runs.
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.getByRole('button', { name: 'Close Versions' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Close Versions' }));
+    expect(screen.getByText('When you opened it')).toBeInTheDocument();
+    // Hidden mid-restore: not shown, but still there — and still restoring when shown again.
+    rerender(<OfficeView visible={false} />);
+    expect(screen.queryByText('When you opened it')).toBeNull();
+    rerender(<OfficeView visible />);
+    expect(screen.getByRole('button', { name: 'Restoring…' })).toBeInTheDocument();
+    await act(async () => { finish(); });
+    await waitFor(() => expect(screen.queryByText('When you opened it')).toBeNull());
+  });
+
+  it('keeps typing that slipped in after the save, instead of reloading over it', async () => {
+    let fromFrame!: (d: unknown) => void;
+    const { office } = await editing({
+      restore: vi.fn(async () => {
+        // A change reaches the editor after its save and before the restore's answer.
+        fromFrame({ yc: 'rpc', id: 77, cmd: 'set_document_modified', args: { modified: true } });
+        const onChanged = vi.mocked(office.onChanged!).mock.calls[0][0];
+        onChanged({ path: FILE.path, token: 't1' });
+        return { ok: true as const };
+      }),
+    }).then((r) => { fromFrame = r.from; return r; });
+    fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
+    expect(await screen.findByText('This file was restored while you had unsaved changes here. Save a copy to keep them.')).toBeInTheDocument();
+    expect(office.close).not.toHaveBeenCalled();
+    expect(office.open).toHaveBeenCalledTimes(1);
   });
 });
