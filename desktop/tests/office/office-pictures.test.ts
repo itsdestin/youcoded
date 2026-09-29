@@ -5,10 +5,13 @@
 import path from 'node:path';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { promises as fsp } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSessions } from '../../src/main/office/office-sessions';
 import { MEDIA_CSP, OFFICE_CSP, officeRequestHandler } from '../../src/main/office/office-protocol';
-import { grantPicked, PICTURE_MAX_BYTES } from '../../src/main/office/office-pictures';
+import { EventEmitter } from 'node:events';
+import { grantPicked, PICTURE_MAX_BYTES, pictureRequestVia, type PictureRequest } from '../../src/main/office/office-pictures';
+import { nonPublicReason } from '../../src/main/office/public-address';
 
 const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
 
@@ -16,7 +19,8 @@ describe('pictures into a document', () => {
   let dir: string;
   let sessions: ReturnType<typeof createSessions>;
   let fetched: string[];
-  let download: (url: string, init?: RequestInit) => Promise<Response>;
+  let download: PictureRequest;
+  let dns: Record<string, string[]>;
   let handler: (req: Request) => Promise<Response>;
 
   beforeEach(async () => {
@@ -31,7 +35,16 @@ describe('pictures into a document', () => {
       fetched.push(url);
       return new Response(PNG, { headers: { 'content-type': 'image/png' } });
     };
-    handler = officeRequestHandler({ root: path.join(dir, 'addon'), sessions, download: (u, i) => download(u, i) });
+    // example.com and example.org resolve to public addresses; anything unknown fails to resolve
+    dns = { 'example.com': ['93.184.216.34', '2606:2800:220:1:248:1893:25c8:1946'], 'example.org': ['93.184.215.14'] };
+    handler = officeRequestHandler({ root: path.join(dir, 'addon'), sessions, ...net() });
+  });
+
+  /** The handler's network seams: the one-hop request and the name lookup, both fakes. */
+  const net = (timeoutMs?: number) => ({
+    download: ((u, o) => download(u, o)) as PictureRequest,
+    resolveHost: async (h: string) => { if (!dns[h]) throw new Error('ENOTFOUND'); return dns[h]; },
+    downloadTimeoutMs: timeoutMs,
   });
 
   afterEach(async () => {
@@ -118,8 +131,25 @@ describe('pictures into a document', () => {
     expect(res.headers.get('Content-Security-Policy')).toBe(MEDIA_CSP);
     expect(MEDIA_CSP).toMatch(/^sandbox;/);
     expect(MEDIA_CSP).not.toContain('script');
+    // an encoded slash reaches the same folder once decoded, so it gets the same policy
+    const encoded = await handler(new Request(`office://${s.token}/asc%2Fdocmedia/media/x.svg`));
+    expect(encoded.status).toBe(200);
+    expect(encoded.headers.get('Content-Security-Policy')).toBe(MEDIA_CSP);
     // the editor's own files keep the editor's policy
     expect((await handler(new Request(`office://${s.token}/index.html`))).headers.get('Content-Security-Policy')).toBe(OFFICE_CSP);
+  });
+
+  it('refuses a chosen picture that grew past the cap after it was measured', async () => {
+    const s = await sessions.open('/docs/report.docx', 1);
+    const [handle] = grantPicked(s, [path.join(dir, 'pics', 'cat.png')]);
+    // the file measured small, then the read returned more than the cap
+    const read = vi.spyOn(fsp, 'readFile').mockResolvedValueOnce(Buffer.alloc(PICTURE_MAX_BYTES + 1) as never);
+    try {
+      expect((await ask(s.token, 'copy-to-media', handle)).status).toBe(404);
+    } finally {
+      read.mockRestore();
+    }
+    await expect(readdir(path.join(s.temp, 'media'))).rejects.toThrow();
   });
 
   describe('a picture the document already has', () => {
@@ -236,34 +266,133 @@ describe('pictures into a document', () => {
       await expect(readdir(path.join(s.temp, 'media'))).rejects.toThrow();
     });
 
-    it('refuses a redirect that lands on something other than http(s)', async () => {
-      const s = await sessions.open('/docs/report.docx', 1);
-      download = async () => {
-        const r = new Response(PNG, { headers: { 'content-type': 'image/png' } });
-        Object.defineProperty(r, 'url', { value: 'file:///etc/passwd' });
-        return r;
-      };
-      expect((await ask(s.token, 'download-to-media', 'https://example.com/a.png')).status).toBe(404);
-    });
-
     it('gives up on a download that takes too long', async () => {
       const s = await sessions.open('/docs/report.docx', 1);
       let aborted = false;
-      download = (_u, init) => new Promise((_r, reject) => {
-        init?.signal?.addEventListener('abort', () => { aborted = true; reject(new Error('aborted')); });
+      download = (_u, o) => new Promise((_r, reject) => {
+        o.signal.addEventListener('abort', () => { aborted = true; reject(new Error('aborted')); });
       });
-      const h = officeRequestHandler({ root: path.join(dir, 'addon'), sessions, download: (u, i) => download(u, i), downloadTimeoutMs: 50 });
+      const h = officeRequestHandler({ root: path.join(dir, 'addon'), sessions, ...net(50) });
       const res = await h(new Request(`office://${s.token}/asc/download-to-media/${encodeURIComponent('https://example.com/slow.png')}`));
       expect(res.status).toBe(404);
       expect(aborted).toBe(true);
     });
 
-    it('sends no cookies or credentials with the request', async () => {
+    it('never connects to this machine or the local network, by address or by name', async () => {
       const s = await sessions.open('/docs/report.docx', 1);
-      let seen: RequestInit | undefined;
-      download = async (_u, init) => { seen = init; return new Response(PNG, { headers: { 'content-type': 'image/png' } }); };
-      await ask(s.token, 'download-to-media', 'https://example.com/a.png');
-      expect(seen?.credentials).toBe('omit');
+      dns.localhost = ['127.0.0.1', '::1'];
+      dns['printer.lan'] = ['192.168.1.20'];
+      dns['mixed.example'] = ['93.184.216.34', '10.0.0.5']; // one private answer is enough to refuse
+      const urls = [
+        'http://127.0.0.1/a.png', 'http://localhost:8080/a.png', 'http://[::1]/a.png',
+        'http://10.1.2.3/a.png', 'http://172.20.0.1/a.png', 'http://192.168.1.1/a.png', 'http://printer.lan/a.png',
+        'http://169.254.169.254/latest/meta-data', 'http://[fe80::1]/a.png',
+        'http://100.64.0.1/a.png', 'http://[fd12:3456::1]/a.png',
+        'http://[::ffff:127.0.0.1]/a.png', 'http://[::ffff:a00:1]/a.png', 'http://0.0.0.0/a.png',
+        'http://mixed.example/a.png', 'http://unknown.invalid/a.png',
+      ];
+      for (const url of urls) expect((await ask(s.token, 'download-to-media', url)).status, url).toBe(404);
+      expect(fetched).toEqual([]);
+    });
+
+    it('refuses a redirect into the local network or off the web, and follows one to a public address', async () => {
+      const s = await sessions.open('/docs/report.docx', 1);
+      const answers: boolean[] = [];
+      let to = '';
+      download = async (u, o) => {
+        fetched.push(u);
+        const ok = await o.allowRedirect(to);
+        answers.push(ok);
+        if (!ok) throw new Error('redirect refused');
+        return new Response(PNG, { headers: { 'content-type': 'image/png' } });
+      };
+      dns['sneaky.example'] = ['192.168.0.10'];
+      for (const target of ['http://127.0.0.1/x.png', 'http://sneaky.example/x.png', 'http://[fc00::1]/x.png', 'file:///etc/passwd']) {
+        to = target;
+        expect((await ask(s.token, 'download-to-media', 'https://example.com/a.png')).status, target).toBe(404);
+      }
+      to = 'https://example.org/b.png';
+      expect((await ask(s.token, 'download-to-media', 'https://example.com/a.png')).status).toBe(200);
+      expect(answers).toEqual([false, false, false, false, true]);
+    });
+  });
+
+  describe('the addresses a download may reach', () => {
+    it('allows public addresses and names each refused class', () => {
+      expect(nonPublicReason('93.184.216.34')).toBeNull();
+      expect(nonPublicReason('2606:2800:220:1:248:1893:25c8:1946')).toBeNull();
+      const cases: [string, string][] = [
+        ['127.0.0.1', 'loopback'], ['::1', 'loopback'], ['[::1]', 'loopback'],
+        ['10.0.0.1', 'private'], ['172.31.255.255', 'private'], ['192.168.0.1', 'private'],
+        ['169.254.1.1', 'link-local'], ['fe80::1%eth0', 'link-local'],
+        ['100.64.0.1', 'carrier-grade NAT'], ['100.127.255.254', 'carrier-grade NAT'],
+        ['fc00::1', 'unique-local'], ['fdff::1', 'unique-local'],
+        ['::ffff:127.0.0.1', 'loopback'], ['::ffff:7f00:1', 'loopback'], ['::ffff:192.168.1.1', 'private'],
+        ['0.0.0.0', 'unspecified'], ['::', 'unspecified'], ['224.0.0.1', 'multicast'],
+        ['localhost', 'not an address'],
+      ];
+      for (const [ip, why] of cases) expect(nonPublicReason(ip), ip).toBe(why);
+      // the edges just outside the ranges stay public
+      expect(nonPublicReason('100.128.0.1')).toBeNull();
+      expect(nonPublicReason('172.32.0.1')).toBeNull();
+    });
+  });
+
+  describe('the request main makes (Electron net.request, one hop at a time)', () => {
+    /** A stand-in for Electron's ClientRequest: records its options, emits what the test says. */
+    function fakeNet() {
+      type FakeReq = EventEmitter & { followed: number; aborted: boolean; ended: boolean; followRedirect(): void; abort(): void; end(): void };
+      const made: { opts: Record<string, unknown>; req: FakeReq }[] = [];
+      const request = (opts: Record<string, unknown>) => {
+        const req: FakeReq = Object.assign(new EventEmitter(), {
+          followed: 0, aborted: false, ended: false,
+          followRedirect() { throw new Error('not used: followRedirect only works synchronously'); },
+          abort() { (this as { aborted: boolean }).aborted = true; },
+          end() { (this as { ended: boolean }).ended = true; },
+        });
+        made.push({ opts, req });
+        return req as never;
+      };
+      return { made, request };
+    }
+    const answer = (req: EventEmitter, status: number, headers: Record<string, string>, body: Buffer) => {
+      const res = Object.assign(new EventEmitter(), { statusCode: status, headers });
+      req.emit('response', res);
+      res.emit('data', body);
+      res.emit('end');
+    };
+
+    it('sends no cookies, never follows a redirect on its own, and hands back the answer', async () => {
+      const { made, request } = fakeNet();
+      const fetchOne = pictureRequestVia(request);
+      const p = fetchOne('https://example.com/a.png', { signal: new AbortController().signal, allowRedirect: async () => true });
+      const { opts, req } = made[0];
+      expect(opts).toMatchObject({ url: 'https://example.com/a.png', redirect: 'manual', useSessionCookies: false, credentials: 'omit' });
+      answer(req, 200, { 'content-type': 'image/png' }, PNG);
+      const res = await p;
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toBe('image/png');
+      expect(Buffer.from(await res.arrayBuffer())).toEqual(PNG);
+    });
+
+    it('asks before each redirect: follows an allowed one with a new request, stops at a refused one', async () => {
+      const { made, request } = fakeNet();
+      const asked: string[] = [];
+      const fetchOne = pictureRequestVia(request);
+      const p = fetchOne('https://example.com/a.png', {
+        signal: new AbortController().signal,
+        allowRedirect: async (to) => { asked.push(to); return to.startsWith('https://example.org'); },
+      });
+      made[0].req.emit('redirect', 302, 'GET', 'https://example.org/b.png', {});
+      // the first request is dropped; only after the check is a new one made to the target
+      await vi.waitFor(() => expect(made).toHaveLength(2));
+      expect(made[0].req.aborted).toBe(true);
+      expect(made[1].opts).toMatchObject({ url: 'https://example.org/b.png', redirect: 'manual', useSessionCookies: false });
+      made[1].req.emit('redirect', 302, 'GET', 'http://127.0.0.1/c.png', {});
+      await expect(p).rejects.toThrow('redirect refused');
+      expect(asked).toEqual(['https://example.org/b.png', 'http://127.0.0.1/c.png']);
+      expect(made).toHaveLength(2); // never connected to the refused target
     });
   });
 });
+

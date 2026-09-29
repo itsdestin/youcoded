@@ -1,7 +1,8 @@
 import { net, protocol } from 'electron';
+import { lookup as dnsLookup } from 'node:dns/promises';
 import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { copyToMedia, downloadToMedia, PICTURE_DOWNLOAD_TIMEOUT_MS, uploadToMedia } from './office-pictures';
+import { copyToMedia, downloadToMedia, pictureRequestVia, uploadToMedia, type PictureRequest, type ResolveHost } from './office-pictures';
 import type { createSessions } from './office-sessions';
 import { createThemeFonts, currentThemeFontLinks, type ThemeFonts } from './theme-fonts';
 
@@ -89,9 +90,11 @@ type HandlerDeps = {
   root: string;
   sessions: ReturnType<typeof createSessions>;
   fonts?: ThemeFonts;
-  /** Fetches a picture by web address for download-to-media (Task 1). Production: net.fetch;
-   *  tests pass a fake. */
-  download?: (url: string, init?: RequestInit) => Promise<Response>;
+  /** Fetches a picture by web address for download-to-media, one checked hop at a time (Task 1).
+   *  Production: pictureRequestVia(net.request); tests pass a fake. */
+  download?: PictureRequest;
+  /** A host's addresses, checked before connecting. Production: dns.lookup; tests pass a fake. */
+  resolveHost?: ResolveHost;
   /** Test seam: a short cap, so the time limit is testable. */
   downloadTimeoutMs?: number;
 };
@@ -109,7 +112,11 @@ export function officeRequestHandler(deps: HandlerDeps) {
     // origin itself, so the browser's own same-origin checks (storage, fetch, workers) already
     // keep two documents apart — nothing here has to re-implement that.
     const s = deps.sessions.get(u.hostname);
-    const docMedia = u.pathname.startsWith('/asc/docmedia/');
+    // WHY decided by the route actually taken, not the raw pathname (fix round 1): routing reads
+    // the DECODED path, so `asc%2Fdocmedia/…` reaches the pictures folder too — deciding on the
+    // raw text served such a picture under the editor's own policy. A malformed escape never
+    // gets this far: it is a 404 (the catch below).
+    let docMedia = false;
     let res: Response;
     if (!s) res = notFound();
     else {
@@ -127,8 +134,11 @@ export function officeRequestHandler(deps: HandlerDeps) {
           res = name === null ? notFound() : Response.json({ [`media/${name}`]: `${u.protocol}//${u.host}/asc/docmedia/media/${name}` }, { headers: { 'cache-control': 'no-store' } });
         } else if (rel.startsWith('asc/copy-to-media/')) res = mediaName(await copyToMedia(s, rel.slice('asc/copy-to-media/'.length)));
         else if (rel.startsWith('asc/download-to-media/'))
-          res = mediaName(deps.download ? await downloadToMedia(s, rel.slice('asc/download-to-media/'.length), deps.download, deps.downloadTimeoutMs ?? PICTURE_DOWNLOAD_TIMEOUT_MS) : null);
-        else if (rel.startsWith('asc/docmedia/')) res = await serveConfined(s.temp, rel.slice('asc/docmedia/'.length));
+          res = mediaName(deps.download && deps.resolveHost ? await downloadToMedia(s, rel.slice('asc/download-to-media/'.length), { request: deps.download, resolve: deps.resolveHost, timeoutMs: deps.downloadTimeoutMs }) : null);
+        else if (rel.startsWith('asc/docmedia/')) {
+          docMedia = true;
+          res = await serveConfined(s.temp, rel.slice('asc/docmedia/'.length));
+        }
         else if (rel.startsWith('asc/dictionaries/'))
           res = await serveConfined(path.join(deps.root, 'editors', 'dictionaries'), rel.slice('asc/dictionaries/'.length));
         else res = await serveConfined(path.join(deps.root, 'editors'), rel);
@@ -165,8 +175,13 @@ export function officeThemeFonts(userData: string, claudeDir: string): ThemeFont
 }
 
 export function registerOfficeProtocol(deps: HandlerDeps): void {
-  // WHY net.fetch for pictures by address: the system proxy applies, as for theme fonts. The
+  // WHY Electron's net for pictures by address: the system proxy applies, as for theme fonts. The
   // editor itself can reach no network (OFFICE_CSP); main fetches, with the checks in
-  // office-pictures.ts (http(s) only, pictures only, 25 MB, 20 s).
-  protocol.handle(OFFICE_SCHEME, officeRequestHandler({ download: (u, init) => net.fetch(u, init), ...deps }));
+  // office-pictures.ts (http(s) only, public addresses only, every redirect checked, pictures
+  // only, 25 MB, 20 s).
+  protocol.handle(OFFICE_SCHEME, officeRequestHandler({
+    download: pictureRequestVia((o) => net.request(o as unknown as Electron.ClientRequestConstructorOptions)),
+    resolveHost: async (host) => (await dnsLookup(host, { all: true, verbatim: true })).map((a) => a.address),
+    ...deps,
+  }));
 }

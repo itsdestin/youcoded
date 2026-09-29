@@ -326,8 +326,16 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
   // the frame never sees a folder, and copy-to-media reads only what this dialog granted.
   async function openDialog(sender: OfficeSender, s: OfficeSession, a: Record<string, unknown>): Promise<string | string[] | null> {
     const multiple = a.multiple === true;
-    const pick = deps.pickEditorFiles ?? (await import('./office-dialogs')).pickEditorFiles;
-    const paths = await pick(sender, { multiple, filters: a.filters });
+    let paths: string[] | null;
+    try {
+      const pick = deps.pickEditorFiles ?? (await import('./office-dialogs')).pickEditorFiles;
+      paths = await pick(sender, { multiple, filters: a.filters });
+    } catch (e) {
+      // WHY caught (fix round 1): a failing system dialog's error text can name folders; the frame
+      // gets the same answer as a cancel, and the reason goes to the log only.
+      log('WARN', 'Office', 'editor file dialog failed', { error: String(e) });
+      return null;
+    }
     if (!paths?.length) return null;
     const handles = grantPicked(s, paths);
     // Tauri's shape: a list when several may be chosen, else the one file.

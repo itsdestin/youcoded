@@ -457,6 +457,14 @@ describe('the editor asks for a file dialog (Insert → Picture)', () => {
     await expect(call('office:invoke', win1, token, 'open_dialog', {})).resolves.toBeNull();
   });
 
+  it('a dialog that fails answers null and keeps its error out of the frame', async () => {
+    const pick = vi.fn(async () => { throw new Error('GTK failed at /home/secret/folder'); });
+    ipc = fakeIpcMain();
+    registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => available, root: path.join(dir, 'addon'), userData: path.join(dir, 'userData'), pickEditorFiles: pick });
+    const { token } = (await call('office:open', win1, await aDocx())) as { token: string };
+    await expect(call('office:invoke', win1, token, 'open_dialog', {})).resolves.toBeNull();
+  });
+
   it("never shows a dialog for another window's document", async () => {
     const pick = withPicker(['/p/a.png']);
     const { token } = (await call('office:open', win1, await aDocx())) as { token: string };

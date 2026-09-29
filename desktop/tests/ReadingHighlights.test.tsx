@@ -108,7 +108,7 @@ describe('ReadingHighlights — render cost at a realistic high comment count', 
     // WHY a ratio, not a fixed ceiling: matches CommentsMargin.test.tsx's own
     // fix (fdd3db1b9) — a fixed 5s CPU ceiling measured ~1.6s alone but 5.07s
     // in a full-suite run on a loaded machine (2026-09-28), because CPU time
-    // itself inflates under contention. Measuring 200 and 1,000 in the SAME
+    // itself inflates under contention. Measuring 100 and 1,000 in the SAME
     // run cancels out machine load.
     //
     // WHY best-of-3, not one sample each: a single ratio still flaked on a
@@ -128,24 +128,19 @@ describe('ReadingHighlights — render cost at a realistic high comment count', 
     // left in on principle so a future higher TRIALS count doesn't quietly
     // reintroduce it.
     //
-    // WHY 100 vs 1,000 (10x), not CommentsMargin's 200 vs 1,000 (5x), and WHY
-    // 70x: this component's OWN near-linear cost is NOT the same SHAPE as
-    // CommentsMargin's (their algorithms differ even though both anchor
-    // through useQuoteMarks) — at 200-vs-1,000 (5x count) it measured
-    // 10.5x-14.3x on an idle machine and up to 21.9x under `verify.sh --full`
-    // (2026-09-28), squeezing right up against a quadratic blow-up's ~25x
-    // prediction with no room left to tell a real regression from noise.
-    // Widening the gap to 10x moves this component's OWN measured "working as
-    // intended" cost to ~32x-35x idle (vs. a 10x prediction if it were
-    // linear) while a quadratic-shaped blow-up here would be ~100x — 70x
-    // keeps generous headroom above the idle measurement (including this
-    // file's own ~1.5x-2x observed load inflation) while staying well clear
-    // of the quadratic catch line.
+    // WHY the document is the SAME size for every count (2026-09-29, the
+    // recipe CommentsMargin.test.tsx uses): each comment's anchoring searches
+    // the whole document text, so when the document grew with the comment
+    // count, "10x the comments" also meant a 10x longer document — normal cost
+    // measured 32-35x and a loaded full-suite run crossed the old 70x bound with
+    // nothing wrong. Holding the document at DOC_PARAGRAPHS isolates what this
+    // pin is for: cost per COMMENT. 100 vs 1,000 (10x the comments).
+    const DOC_PARAGRAPHS = 1000;
     const mountWith = (path: string, count: number) => {
       // One <p> per quote — see CommentsMargin.test.tsx's own note on why a
       // rendered document is many block elements, not one flat text blob.
       const content = document.createElement('div');
-      for (let i = 0; i < count; i++) {
+      for (let i = 0; i < DOC_PARAGRAPHS; i++) {
         const p = document.createElement('p');
         p.textContent = `filler filler Q${i}filler filler`;
         content.appendChild(p);
@@ -187,6 +182,13 @@ describe('ReadingHighlights — render cost at a realistic high comment count', 
     mountWith('stress/warmup.md', 50);
     const small = bestOf('100-comments', 100);
     const large = bestOf('1000-comments', 1000);
-    expect(large / Math.max(small, 1)).toBeLessThan(70);
+    // 17, not 70 (2026-09-29): with the document held constant, normal cost
+    // measures 8.4-8.8x alone (six runs) and reached 13.3x in one full verify.sh
+    // run (+57% under load, so a 13 bound flaked). 70 was set when the document
+    // grew with the count (normal 32-35x) and flaked at 71.9x; it also let a
+    // planted per-pair DOM change (every new mark touching every earlier one)
+    // through at 26-30x. 17 sits above the loaded measurement and well below
+    // the planted one.
+    expect(large / Math.max(small, 1)).toBeLessThan(17);
   }, STRESS_TEST_BUDGET_MS);
 });
