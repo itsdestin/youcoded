@@ -4,7 +4,7 @@
 // the folder itself MOVES (old path stops existing) before anything happens.
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useEscClose } from '../hooks/use-esc-close';
-import { Button, Dialog, TextInput } from './ui';
+import { Button, Dialog, FieldError, TextInput } from './ui';
 import { plainMessage } from '../utils/ipc-error';
 
 interface Props {
@@ -146,7 +146,9 @@ export default function ImportProjectModal({ sourcePath, defaultName, onClose, o
               className="mt-1 w-full"
               autoFocus
             />
-            {error && <div role="alert" className="mt-2 text-xs text-destructive-fg">{error}</div>}
+            {/* WHY FieldError (guide: no red/coloured body text for messages);
+                it already carries role="alert" itself. */}
+            {error && <FieldError as="div" className="mt-2">{error}</FieldError>}
             {syncOffNote}
             <div className="mt-4 flex justify-end gap-2">
               <Button variant="ghost" size="lg" className="py-1" onClick={onClose} disabled={busy}>Cancel</Button>

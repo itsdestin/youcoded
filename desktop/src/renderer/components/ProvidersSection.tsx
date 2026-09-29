@@ -396,12 +396,13 @@ function ProviderRow({ provider, onChanged }: { provider: ProviderStatus; onChan
         </div>
       )}
 
-      {/* Inline result — green-ish tone for ok, destructive for a failure.
-          Plain words only. */}
+      {/* Inline result — WHY plain/FieldError, not green/red text (guide: no
+          coloured body text for messages): success drops its colour, failure
+          goes through the shared component. */}
       {note && (
-        <p className={`text-3xs mt-2 ${note.tone === 'ok' ? 'text-green-400' : 'text-red-500'}`}>
-          {note.text}
-        </p>
+        note.tone === 'ok'
+          ? <p className="text-3xs mt-2 text-fg-muted">{note.text}</p>
+          : <FieldError as="p" className="mt-2">{note.text}</FieldError>
       )}
 
       {/* Local engine install/status/restart controls moved to the Local Models

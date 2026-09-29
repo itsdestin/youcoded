@@ -41,7 +41,7 @@ import { ArtifactThumbnail } from './ArtifactThumbnail';
 import { matchSessionArtifact } from './filepath-match';
 import { asString } from '../utils/tool-input';
 import { isSendUserLinkToolName } from '../../shared/send-user-link';
-import { Tooltip } from './ui';
+import { FieldError, Tooltip } from './ui';
 
 export const SENT_FILES_TOOL = 'SendUserFile';
 
@@ -218,9 +218,11 @@ export function SentFileTile({ path, sessionId, status, error, narrow, tileBg = 
             Sending…
           </div>
         )}
+        {/* WHY FieldError, not text-red-400 (guide: no coloured body text
+            for messages) */}
         {failed && (
-          <div className="absolute inset-0 flex items-center justify-center bg-canvas/80 text-2xs font-semibold text-red-400">
-            Couldn’t send
+          <div className="absolute inset-0 flex items-center justify-center bg-canvas/80">
+            <FieldError as="span" size="2xs">Couldn’t send</FieldError>
           </div>
         )}
       </div>
@@ -291,9 +293,11 @@ export function SentLinkTile({ link, status, error, narrow, compact = false }: {
     >
       <div className={`relative w-full ${narrow ? 'h-16' : 'h-28'} border-b border-edge bg-canvas flex items-center justify-center text-fg-dim`}>
         <LinkGlyph className={narrow ? 'w-7 h-7' : 'w-10 h-10'} />
+        {/* WHY FieldError, not text-red-400 (guide: no coloured body text
+            for messages) */}
         {failed && (
-          <div className="absolute inset-0 flex items-center justify-center bg-canvas/80 text-2xs font-semibold text-red-400">
-            Couldn’t send
+          <div className="absolute inset-0 flex items-center justify-center bg-canvas/80">
+            <FieldError as="span" size="2xs">Couldn’t send</FieldError>
           </div>
         )}
       </div>
@@ -497,8 +501,12 @@ export function DeliverablesCard({ tools, sessionId }: Props) {
           {footCaptions.map((c, i) => (
             <p key={i} className="px-3 pb-2 -mt-0.5 text-2xs text-fg-muted">{c}</p>
           ))}
+          {/* WHY FieldError, not text-red-400 (guide: no coloured body text
+              for messages) */}
           {failures.map((f) => (
-            <p key={f.key} className="px-3 pb-2 -mt-0.5 text-2xs text-red-400 whitespace-pre-line">{f.text}</p>
+            <div key={f.key} className="px-3 pb-2 -mt-0.5">
+              <FieldError as="p" size="2xs" className="whitespace-pre-line">{f.text}</FieldError>
+            </div>
           ))}
         </>
       )}

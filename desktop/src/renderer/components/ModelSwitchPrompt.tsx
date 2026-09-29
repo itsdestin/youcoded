@@ -1,4 +1,4 @@
-import { Button, Dialog } from './ui';
+import { Button, Dialog, FieldError } from './ui';
 import { useEscClose } from '../hooks/use-esc-close';
 
 /**
@@ -42,8 +42,9 @@ export default function ModelSwitchPrompt({ open, currentLabel, targetLabel, sta
             Summarizing… this can take a minute. Close to stop and stay on {currentLabel}.
           </p>
         )}
+        {/* WHY FieldError (guide: no red/coloured body text for messages) */}
         {state.kind === 'error' && (
-          <p className="text-xs text-destructive-fg" role="alert">{state.message}</p>
+          <FieldError as="p" size="2xs">{state.message}</FieldError>
         )}
         {/* The only action, so it spans the popup (Destin, 2026-09-23). */}
         <Button variant="primary" className="w-full justify-center" onClick={onConfirm} disabled={working}>

@@ -10,7 +10,7 @@
 // Only TYPES come from remote-shim. The caller loads the shim with a dynamic import, so the
 // desktop bundle never evaluates it (the same reason remote-events.ts exists).
 import React, { useCallback, useEffect, useState } from 'react';
-import { Button, TextInput } from './components/ui';
+import { Button, FieldError, TextInput } from './components/ui';
 import type { RemoteConnectionState, SavedKeySignInEvent, SignInFailure } from './remote-shim';
 
 /** The part of the shim this screen drives. */
@@ -124,9 +124,9 @@ function LoginScreen({ onLogin, notice }: { onLogin: (password: string) => Promi
         <Button type="submit" disabled={loading} size="lg" className="justify-center">
           {loading ? 'Connecting...' : 'Connect'}
         </Button>
-        {/* The token, not `text-red-400`, is what community packs can restyle. */}
+        {/* WHY FieldError (guide: no red/coloured body text for messages) */}
         {error && (
-          <p className="text-destructive-fg text-xs text-center">{error}</p>
+          <FieldError as="p" size="2xs" className="text-center">{error}</FieldError>
         )}
       </form>
     </div>

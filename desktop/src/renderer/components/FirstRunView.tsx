@@ -4,7 +4,7 @@ import type { CatalogModel } from '../../shared/provider-types';
 import BrailleSpinner from './BrailleSpinner';
 import { canRetry, describeStep } from './first-run/describe-step';
 import { persistLastBinding, persistRuntimeDefault } from './RuntimeBinding';
-import { Button } from './ui';
+import { Button, FieldError } from './ui';
 import { StatusStrip } from './ui/StatusStrip';
 import { ApiKeySetup } from './first-run/ApiKeySetup';
 import { LocalModelSetup } from './first-run/LocalModelSetup';
@@ -455,10 +455,10 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
               button — and the three sign-in buttons are back on screen too. */}
           {state?.lastError && (
             <div className="flex flex-col items-center gap-2 mt-2">
-              {/* Status colors stay theme-independent per CLAUDE.md. */}
-              <p className="text-xs text-destructive-fg text-center max-w-md">
+              {/* WHY FieldError (guide: no red/coloured body text for messages) */}
+              <FieldError as="p" size="2xs" className="text-center max-w-md">
                 {state.lastError}
-              </p>
+              </FieldError>
               {retryable && (
               <button
                 onClick={handleRetry}

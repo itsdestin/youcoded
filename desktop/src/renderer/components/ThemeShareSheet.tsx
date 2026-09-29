@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useTheme } from '../state/theme-context';
 import { useEscClose } from '../hooks/use-esc-close';
 import type { PublishState } from '../../shared/theme-marketplace-types';
-import { Button, Dialog, LoadingState } from './ui';
+import { Button, Dialog, FieldError, LoadingState } from './ui';
 
 interface ThemeShareSheetProps {
   themeSlug: string;
@@ -160,8 +160,9 @@ export default function ThemeShareSheet({ themeSlug, onClose }: ThemeShareSheetP
             previewLoading,
             onPublish: handlePublish,
           })}
+          {/* WHY FieldError (guide: no red/coloured body text for messages) */}
           {publishError && (
-            <p className="text-xs text-destructive-fg text-center mt-2">{publishError}</p>
+            <FieldError as="p" className="text-center mt-2">{publishError}</FieldError>
           )}
         </div>
       </Dialog>

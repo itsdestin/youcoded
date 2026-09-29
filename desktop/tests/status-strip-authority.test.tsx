@@ -83,12 +83,24 @@ describe('StatusStrip', () => {
 // menu family. Genuine K5 candidates — a status line with nowhere to put the
 // action that resolves it — but on screens this tranche does not touch.
 const CENTRED_STATUS_ELSEWHERE: Record<string, { count: number; why: string }> = {
-  'FirstRunView.tsx': { count: 1, why: 'first-run setup screen, not a settings menu' },
-  'ShareSheet.tsx': { count: 2, why: 'share flow' },
+  // Dropped to 0 (guide batch, 2026-09-29): its one match — a hand-rolled
+  // text-destructive-fg text-center error line — moved to FieldError (guide:
+  // no red/coloured body text for messages). Kept at 0 rather than removed
+  // so the entry stays in step with this rule's workspace-side ast-grep
+  // ignores: list (see the file-level comment on that coordination) and so a
+  // future regression here is still caught.
+  'FirstRunView.tsx': { count: 0, why: 'first-run setup screen, not a settings menu — both matches fixed 2026-09-29' },
+  // Dropped to 0 (guide batch, 2026-09-29): its two matches — linkError and
+  // publishError — both moved to FieldError. Same "kept at 0" reasoning as
+  // FirstRunView.tsx above.
+  'ShareSheet.tsx': { count: 0, why: 'share flow — both matches fixed 2026-09-29' },
+  // Dropped from 2 to 1 (guide batch, 2026-09-29): its publishError line moved
+  // to FieldError. The remaining 1 is the green link-styled-as-a-button below,
+  // which this pattern matches but isn't a status line.
   // 2, not 1, since 2026-09-16: its green link-styled-as-a-button (the same <a> the
   // callout guard exempts) moved from text-emerald-500 to the status text-green-400,
   // which this pattern matches. Same element as before — it is a button, not a status line.
-  'ThemeShareSheet.tsx': { count: 2, why: 'theme share flow; one is the green open-link button' },
+  'ThemeShareSheet.tsx': { count: 1, why: 'theme share flow; the green open-link button' },
   // 'BugReportPopup.tsx' was here with count 1 — the legacy review screen's amber
   // "High Claude usage" caption. That screen was deleted on 2026-09-10 when the
   // approved ticket screen replaced it for every user, so the exemption goes with

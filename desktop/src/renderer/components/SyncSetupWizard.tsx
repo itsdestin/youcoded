@@ -1046,15 +1046,17 @@ function AuthStep({
           <>
             <div className="text-fg-dim text-2xs mb-6 max-w-xs space-y-2">
               <div>A browser window will open for you to sign in. After you sign in, come back here — it'll update automatically.</div>
+              {/* WHY Callout, not text-amber-700 (guide: every warning is the
+                  one tinted box; a multi-sentence notice becomes a Callout) */}
               {isReconnect && backendType === 'drive' && (
-                <div className="text-amber-700 text-3xs pt-1">
+                <Callout tone="warning" className="text-left">
                   Important: sign in with the <strong>same Google account</strong> you originally connected. Picking a different account would start a new backup instead of restoring the existing one.
-                </div>
+                </Callout>
               )}
               {isAdditionalDrive && (
-                <div className="text-amber-700 text-3xs pt-1">
+                <Callout tone="warning" className="text-left">
                   Tip: make sure you pick the <strong>other</strong> Google account (e.g., work vs. personal vs. school) in the browser — not the same one you already connected. You may need to sign out of Google in your browser first, or use an incognito window.
-                </div>
+                </Callout>
               )}
             </div>
             {/* Last of the hardcoded bg-blue-600 buttons (spec change 55) — the sign-in

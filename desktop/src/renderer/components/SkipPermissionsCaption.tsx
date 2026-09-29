@@ -16,9 +16,12 @@
 // It lives outside components/ui/ on purpose. It is one app-specific sentence,
 // not a reusable primitive, and primitive-adoption.test.ts rightly polices what
 // goes in that folder.
+// WHY plain text, not text-destructive-fg (guide: no red/coloured body text
+// for messages) — the "not FieldError" reasoning above is unchanged; only the
+// colour goes, matching FieldError-adopted callers elsewhere in this pass.
 export function SkipPermissionsCaption() {
   return (
-    <p className="text-3xs text-destructive-fg m-0">
+    <p className="text-3xs text-fg-muted m-0">
       Your assistant will execute tools without asking for approval.
     </p>
   );

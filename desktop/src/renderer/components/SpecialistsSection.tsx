@@ -462,7 +462,10 @@ function SkippedRow({ s }: { s: { path: string; source: 'personal' | 'claude-cod
   return (
     <li className="px-3 py-1.5 opacity-50" data-testid={`specialist-skipped-${basename(s.path)}`}>
       <div className="text-xs font-medium text-fg-2 font-mono truncate">{basename(s.path)}</div>
-      <div className="text-2xs text-amber-700">⚠ {s.error} — not offered to the assistant.</div>
+      {/* WHY Callout, not amber text with a ⚠ (guide: every warning is the one
+          tinted box; matches the warnings Callout above in this same file,
+          which this row had been missed by). */}
+      <Callout tone="warning" className="mt-1">{s.error} — not offered to the assistant.</Callout>
     </li>
   );
 }

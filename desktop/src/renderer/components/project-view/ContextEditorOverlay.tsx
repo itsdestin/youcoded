@@ -21,7 +21,7 @@ import {
 // Plain-text load-timing label — shared with ContextTab (context-labels.ts).
 import { timingLabel } from './context-labels';
 import { getPlatform } from '../../platform';
-import { Textarea } from '../ui';
+import { Callout, FieldError, Textarea } from '../ui';
 import { ScreenMark } from '../../shoot-mode';
 
 interface ContextEditorOverlayProps {
@@ -226,17 +226,16 @@ export function ContextEditorOverlay({ project, file, onClose }: ContextEditorOv
     <ProjectDetailOverlay title={file.label} onClose={onClose} tools={tools} meta={meta}>
         <ScreenMark name="projects/context/editor" />
       <div className="flex flex-col h-full min-h-0 px-5 py-4 gap-3">
-        {/* Blast-radius banner — always visible at the top of the body. Global
-            uses prototype inline colors so the amber warning reads clearly
-            regardless of theme; project uses neutral theme tokens. */}
+        {/* Blast-radius banner — always visible at the top of the body. WHY
+            Callout, not hand-rolled hex colours (guide: every warning is the
+            one tinted box; Callout's amber is ALREADY hardcoded per-theme for
+            exactly the "reads clearly regardless of theme" reason this
+            comment used to justify inline hex for): project uses neutral
+            theme tokens. */}
         {!loadError && (isGlobal ? (
-          <div
-            className="border rounded-lg px-3 py-2 text-xs leading-relaxed shrink-0"
-            style={{ color: '#9a6a00', background: '#FFF6E5', borderColor: '#E8C170' }}
-          >
-            <strong>Global file — affects every project.</strong> Editing this changes how Claude
-            works in every folder on this machine, not just this project.
-          </div>
+          <Callout tone="warning" title="Global file — affects every project." className="shrink-0">
+            Editing this changes how Claude works in every folder on this machine, not just this project.
+          </Callout>
         ) : (
           <div className={file.scope === 'project' ? 'py-1 text-xs text-fg-2 leading-relaxed shrink-0' : 'bg-inset border border-edge rounded-lg px-3 py-2 text-xs text-fg-2 shrink-0'}>
             <strong>Project instructions.</strong> Editing this changes how Claude behaves across
@@ -244,9 +243,10 @@ export function ContextEditorOverlay({ project, file, onClose }: ContextEditorOv
           </div>
         ))}
 
-        {/* Inline write error — surfaces the allow-list rejection reason. */}
+        {/* Inline write error — surfaces the allow-list rejection reason.
+            WHY FieldError (guide: no red/coloured body text for messages) */}
         {saveError && (
-          <div className="text-xs text-destructive-fg shrink-0">{saveError}</div>
+          <FieldError as="div" className="shrink-0">{saveError}</FieldError>
         )}
 
         {/* Body: loading / error / view / edit */}
@@ -255,8 +255,9 @@ export function ContextEditorOverlay({ project, file, onClose }: ContextEditorOv
             Loading…
           </div>
         ) : loadError ? (
+          // WHY FieldError (guide: no red/coloured body text for messages)
           <div className="flex-1 min-h-0 flex items-center justify-center">
-            <p className="text-sm text-destructive-fg max-w-md text-center">{loadError}</p>
+            <FieldError as="p" size="2xs" className="max-w-md text-center">{loadError}</FieldError>
           </div>
         ) : editing ? (
           /* Shared Textarea (change 20). Retires the `focus:ring-1` focus ring

@@ -7,7 +7,7 @@ import { OPENROUTER_CREDITS_URL, type OpenRouterSignInStatus, type ProviderHealt
 import { chatGptPlanLabel, type ChatGptAccountStatus } from '../../shared/chatgpt-types';
 import { claudePlanLabel } from '../../shared/claude-account-types';
 import { useClaudeStatus } from './model/availability';
-import { AnchorTip, Button, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, InputGroup, SectionLabel, TextInput } from './ui';
+import { AnchorTip, Button, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, FieldError, InputGroup, SectionLabel, TextInput } from './ui';
 import BrailleSpinner from './BrailleSpinner';
 import { PlanWindows, type PlanUsage } from './plan-windows';
 import { invalidateProviderTypeCache } from '../hooks/use-provider-type';
@@ -92,8 +92,12 @@ function ProviderRow({ title, info, status, detail, action, account, children, s
           column beside them. WHY: two buttons on the right squeezed a refused
           key's one-sentence warning into three short lines (review
           2026-09-18, R2-2: "could fit on a single line"). */}
+      {/* WHY plain/FieldError, not text-destructive-fg (guide: no coloured
+          body text for messages) */}
       {detail && (
-        <p className={`text-2xs mt-0.5 ${detail.tone === 'bad' ? 'text-destructive-fg' : 'text-fg-muted'}`}>{detail.text}</p>
+        detail.tone === 'bad'
+          ? <FieldError as="p" size="2xs" className="mt-0.5">{detail.text}</FieldError>
+          : <p className="text-2xs mt-0.5 text-fg-muted">{detail.text}</p>
       )}
       {children && <div className="mt-2.5">{children}</div>}
     </div>
@@ -762,8 +766,12 @@ function ConnectOpenRouterModal({
             className="w-full"
           />
 
+          {/* WHY plain/FieldError, not green/red text (guide: no coloured
+              body text for messages) */}
           {note && (
-            <p className={`text-3xs ${note.tone === 'ok' ? 'text-green-400' : 'text-red-500'}`}>{note.text}</p>
+            note.tone === 'ok'
+              ? <p className="text-3xs text-fg-muted">{note.text}</p>
+              : <FieldError as="p">{note.text}</FieldError>
           )}
 
           {/* WHY stacked, filled on top (fix batch 1, 2026-09-24): this is a
@@ -955,7 +963,8 @@ export function SearchProvidersBlock({ withHeader = true, card = false }: { with
                 </div>
                 {row.hasKey ? (
                   <div className="flex items-center gap-1.5 shrink-0">
-                    <span className="text-3xs font-medium text-green-400">Key saved</span>
+                    {/* WHY plain text (guide: success lines lose their colour) */}
+                    <span className="text-3xs font-medium text-fg-muted">Key saved</span>
                     {/* danger-outline per spec change 68: "Remove" reads the same
                         everywhere. This one was the neutral half of the
                         ProvidersSection(red)-vs-here(neutral) contradiction; it
@@ -1007,10 +1016,12 @@ export function SearchProvidersBlock({ withHeader = true, card = false }: { with
                 </div>
               )}
 
+              {/* WHY FieldError, not text-red-500 (guide: no coloured body
+                  text for messages) */}
               {note && (
-                <p className={`text-3xs mt-2 ${note.ok ? 'text-fg-muted' : 'text-red-500'}`}>
-                  {note.text}
-                </p>
+                note.ok
+                  ? <p className="text-3xs mt-2 text-fg-muted">{note.text}</p>
+                  : <FieldError as="p" className="mt-2">{note.text}</FieldError>
               )}
             </div>
           );

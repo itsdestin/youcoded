@@ -23,7 +23,7 @@ import {
   MARKETPLACE_API_HOST,
   type CommentEntry,
 } from '../../state/marketplace-api-client';
-import { LoadingState, EmptyState } from '../ui';
+import { LoadingState, EmptyState, FieldError } from '../ui';
 
 // Unauthenticated client — listComments is a public endpoint
 const apiClient = createMarketplaceApiClient({
@@ -124,7 +124,8 @@ export default function CommentList({ pluginId, refreshKey = 0, held = [], onHel
       {/* "No comments yet" would be a lie above the author's own held comment. */}
       {state.status === 'empty' && heldRows.length === 0 && <EmptyState variant="inline" message="No comments yet — ask a question or say how it went." />}
       {state.status === 'empty' && heldRows.length > 0 && <div>{heldRows}</div>}
-      {state.status === 'error' && <p className="text-xs text-destructive-fg">Couldn't load comments.</p>}
+      {/* WHY FieldError (guide: no red/coloured body text for messages) */}
+      {state.status === 'error' && <FieldError as="p">Couldn't load comments.</FieldError>}
       {state.status === 'loaded' && (
         <div>
           {heldRows}

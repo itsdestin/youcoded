@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import type { ModelAlias } from './StatusBar';
 import { FastIcon } from './Icons';
 import { useEscClose } from '../hooks/use-esc-close';
-import { Button, Dialog, TextInput, Toggle, FOCUS_RING, LoadingState, SegmentedTabs, SettingRow } from './ui';
+import { Button, Callout, Dialog, FieldError, TextInput, Toggle, FOCUS_RING, LoadingState, SegmentedTabs, SettingRow } from './ui';
 import { OverlayPanel } from './overlays/Overlay';
 import ModelPicker, { type ModelChoice } from './model/ModelPicker';
 import ModelSwitchPrompt, { switchFailureMessage, type ModelSwitchPromptState } from './ModelSwitchPrompt';
@@ -496,7 +496,8 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
                 hideSearch={!isNative}
                 onManageModels={() => window.dispatchEvent(new CustomEvent('youcoded:open-model-providers'))}
               />
-              {nativeError && <p className="text-xs text-destructive-fg mt-2">{nativeError}</p>}
+              {/* WHY FieldError (guide: no red/coloured body text for messages) */}
+              {nativeError && <FieldError as="p" className="mt-2">{nativeError}</FieldError>}
               {nativeSwapping && <p className="text-xs text-fg-muted mt-2">Switching…</p>}
             </div>
 
@@ -573,21 +574,25 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
                 </div>
               </div>
 
-              <div className="rounded border border-amber-700/40 bg-amber-700/10 p-3 space-y-1.5">
-                {/* WHY: drop the spaced-caps eyebrow, sentence case (labels
-                    batch, guide: no spaced capitals). */}
-                <div className="text-xs font-semibold text-amber-700">⚠ Billed per token</div>
-                <div className="text-xs text-fg">
-                  Fast mode routes requests through a priority tier with per-token billing:
+              {/* WHY the shared Callout, not a hand-rolled amber box (guide:
+                  every warning/info notice is the one tinted box; a longer
+                  notice with more than one sentence is a Callout) — this was
+                  already built to the same recipe (tinted title, plain body)
+                  by hand. */}
+              <Callout tone="warning" title="⚠ Billed per token">
+                <div className="space-y-1.5">
+                  <div className="text-fg">
+                    Fast mode routes requests through a priority tier with per-token billing:
+                  </div>
+                  <div className="text-fg font-mono">
+                    <span className="text-fg-2">Input:</span> $30 / million tokens<br />
+                    <span className="text-fg-2">Output:</span> $150 / million tokens
+                  </div>
+                  <div className="text-fg-muted pt-1 border-t border-amber-500/25">
+                    Your Claude Pro/Max subscription does not cover these charges. They bill directly against API credits on your Anthropic account.
+                  </div>
                 </div>
-                <div className="text-xs text-fg font-mono">
-                  <span className="text-fg-2">Input:</span> $30 / million tokens<br />
-                  <span className="text-fg-2">Output:</span> $150 / million tokens
-                </div>
-                <div className="text-2xs text-fg-muted pt-1 border-t border-amber-700/25">
-                  Your Claude Pro/Max subscription does not cover these charges. They bill directly against API credits on your Anthropic account.
-                </div>
-              </div>
+              </Callout>
 
               <div className="text-xs text-fg-muted">
                 You get the same model with faster streaming output. Turn off anytime from the status bar or this menu.

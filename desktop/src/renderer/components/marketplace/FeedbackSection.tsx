@@ -10,7 +10,7 @@ import { useAccount } from '../../state/account-context';
 import { useMarketplaceStats } from '../../state/marketplace-stats-context';
 import { forgetHeldComments, readHeldComments, rememberHeldComment, type HeldComment } from '../../state/held-comments';
 import type { CommentEntry } from '../../state/marketplace-api-client';
-import { Button, SectionLabel, Textarea } from '../ui';
+import { Button, FieldError, SectionLabel, Textarea } from '../ui';
 import CommentList from './CommentList';
 import SignInPromptModal from './SignInPromptModal';
 
@@ -272,10 +272,13 @@ export default function FeedbackSection({ pluginId, installed }: { pluginId: str
               hover, and several engines suppress title on a disabled button
               entirely — so the tooltip was the only explanation and nobody
               could reach it. */}
+          {/* WHY plain/FieldError (guide: no coloured body text for
+              messages) — `text-danger` was also a dead class here (no
+              --color-danger token exists). */}
           {(voteError || voteReason) && (
-            <p className={`text-xs ${voteError ? 'text-danger' : 'text-fg-muted'}`} role={voteError ? 'status' : undefined}>
-              {voteError ?? voteReason}
-            </p>
+            voteError
+              ? <FieldError as="p">{voteError}</FieldError>
+              : <p className="text-xs text-fg-muted">{voteReason}</p>
           )}
         </div>
       </div>
@@ -293,10 +296,14 @@ export default function FeedbackSection({ pluginId, installed }: { pluginId: str
           aria-label="Write a comment"
         />
         <div className="flex items-center justify-end gap-2">
+          {/* WHY plain/FieldError (guide: no coloured body text for
+              messages) — `text-danger` was also a dead class (no
+              --color-danger token exists), so the error case rendered with
+              no colour at all either way. */}
           {commentNote && (
-            <p className={`text-xs ${commentNote.kind === 'error' ? 'text-danger' : 'text-fg-muted'}`} role="status">
-              {commentNote.text}
-            </p>
+            commentNote.kind === 'error'
+              ? <FieldError as="p">{commentNote.text}</FieldError>
+              : <p className="text-xs text-fg-muted" role="status">{commentNote.text}</p>
           )}
           <Button variant="secondary" size="sm" onClick={post} disabled={posting || draft.trim().length === 0} title={!auth.signedIn ? 'Sign in to comment' : undefined}>
             {posting ? 'Posting…' : 'Post comment'}

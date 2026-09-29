@@ -149,11 +149,12 @@ const TINT = /bg-(amber-500|amber-700|accent|destructive|red-500|red-400|green-5
  */
 const NOT_CALLOUTS: Record<string, { count: number; why: string }> = {
   'Button.tsx': { count: 1, why: "danger-outline's hover fill — a control's own state" },
-  // A REAL hand-rolled warning callout, found 2026-09-16: it wrote its amber as a raw
-  // #FF9800, which this pattern could not see, until the design-check pass moved it onto
-  // the status amber (same colour). Moving it onto <Callout tone="warning"> changes its
-  // look, so it waits for its own review — filed in docs/roadmap (youcoded-dev).
-  'ModelPickerPopup.tsx': { count: 1, why: "Fast mode's \u26a0 Billed Per Token box — a hand-rolled warning callout, follow-up filed" },
+  // 1 -> 0 (guide batch, 2026-09-29): Fast mode's Billed Per Token box moved
+  // onto the real <Callout tone="warning">, closing the follow-up filed
+  // 2026-09-16. Kept at 0 rather than removed so the entry stays in step with
+  // this rule's workspace-side ast-grep ignores: list, and so a future
+  // hand-rolled tint here is still caught.
+  'ModelPickerPopup.tsx': { count: 0, why: "Fast mode's \u26a0 Billed Per Token box — moved onto <Callout tone=\"warning\"> 2026-09-29" },
   'ThemeShareSheet.tsx': { count: 1, why: 'an <a> styled as a button — it has a hover fill' },
   'AssistantTurnBubble.tsx': { count: 1, why: 'the Plan card in the chat timeline — not a menu surface at all' },
   'SessionContextBanner.tsx': {

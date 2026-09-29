@@ -11,7 +11,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useEscClose } from '../hooks/use-esc-close';
 import { getPlatform } from '../platform';
-import { Button, CARD_LEVEL_1, Dialog } from './ui';
+import { Button, CARD_LEVEL_1, Dialog, FieldError } from './ui';
 
 type Stage = 'checking' | 'gh-missing' | 'code' | 'done' | 'error';
 
@@ -253,8 +253,10 @@ export default function ConnectGithubModal({ onClose, onConnected }: Props) {
                 </div>
               </div>
             )}
+            {/* WHY FieldError (guide: no red/coloured body text for messages);
+                it already carries role="alert" itself. */}
             {installNote?.kind === 'error' && (
-              <div role="alert" className="text-xs text-destructive-fg">{installNote.text}</div>
+              <FieldError as="div">{installNote.text}</FieldError>
             )}
 
             {/* "Never mind" removed: it called the same handleClose as the ✕ in

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Button } from './ui';
+import { ErrorState } from './ui';
 
 interface Props {
   /** Label shown in the fallback UI so users know which panel failed */
@@ -24,21 +24,17 @@ export default class ErrorBoundary extends React.Component<Props, State> {
 
   render() {
     if (this.state.error) {
+      // WHY ErrorState, not a hand-rolled text-destructive-fg title (guide: no
+      // red/coloured body text for messages) — this is exactly ErrorState's
+      // general shape (title + explainer + one action), just never routed
+      // through the shared primitive.
       return (
-        <div className="flex flex-col items-center justify-center h-full gap-2 text-fg-muted text-xs p-4">
-          <span className="text-destructive-fg font-medium">{this.props.name} crashed</span>
-          <span className="text-fg-muted max-w-md text-center break-words">
-            {this.state.error.message}
-          </span>
-          {/* Filled-grey (bg-inset/hover:bg-edge) becomes the outline `secondary`
-              per spec decision 60. py-1 keeps the original compact height. */}
-          <Button
-            variant="secondary"
-            onClick={() => this.setState({ error: null })}
-            className="mt-2 py-1"
-          >
-            Retry
-          </Button>
+        <div className="flex items-center justify-center h-full p-4">
+          <ErrorState
+            title={`${this.props.name} crashed`}
+            explainer={this.state.error.message}
+            onRetry={() => this.setState({ error: null })}
+          />
         </div>
       );
     }

@@ -205,7 +205,9 @@ export function CollapsedToolGroup({ tools, sessionId }: { tools: ToolCallState[
               suffix only fires once the group has fully settled (Q3a). */}
           {runningCount === 0 && failedCount > 0 && ` — ${failedCount} failed`}
           {runningCount === 0 && stoppedCount > 0 && ` — ${stoppedCount} stopped`}
-          {askingCount > 0 && <span className="text-amber-700">{` — ${askingCount} waiting on you`}</span>}
+          {/* WHY plain text, not text-amber-700 (guide: no coloured body text
+              for messages) */}
+          {askingCount > 0 && <span>{` — ${askingCount} waiting on you`}</span>}
         </span>
         <ChevronIcon className="w-3.5 h-3.5 shrink-0 text-fg-muted" expanded={expanded} />
       </button>

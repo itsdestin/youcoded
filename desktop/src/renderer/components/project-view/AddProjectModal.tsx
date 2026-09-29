@@ -11,7 +11,7 @@ import { Scrim, OverlayPanel } from '../overlays/Overlay';
 import { useEscClose } from '../../hooks/use-esc-close';
 import ImportProjectModal from '../ImportProjectModal';
 import { plainMessage } from '../../utils/ipc-error';
-import { Button, InputGroup } from '../ui';
+import { Button, FieldError, InputGroup } from '../ui';
 import { ScreenMark } from '../../shoot-mode';
 
 interface Props {
@@ -171,7 +171,8 @@ export default function AddProjectModal({ onClose, onAdded }: Props) {
               <div className="mt-0.5 text-xs text-fg-dim">Pick any folder — you'll choose whether it syncs next.</div>
             </button>
 
-            {error && <div className="mt-2 text-xs text-destructive-fg" role="alert">{error}</div>}
+            {/* WHY FieldError (guide: no red/coloured body text for messages) */}
+            {error && <FieldError as="div" className="mt-2">{error}</FieldError>}
             {syncOffNote}
             <div className="mt-4 flex justify-end">
               <Button variant="ghost" size="lg" className="py-1" onClick={onClose} disabled={busy}>Cancel</Button>
@@ -201,7 +202,8 @@ export default function AddProjectModal({ onClose, onAdded }: Props) {
               <div className="mt-0.5 text-xs text-fg-dim">The folder moves to ~/YouCoded/Projects/ and syncs across your devices. Anything pointing at the old location (shortcuts, open terminals) will need the new path.</div>
             </button>
 
-            {error && <div className="mt-2 text-xs text-destructive-fg" role="alert">{error}</div>}
+            {/* WHY FieldError (guide: no red/coloured body text for messages) */}
+            {error && <FieldError as="div" className="mt-2">{error}</FieldError>}
             {syncOffNote}
             <div className="mt-4 flex justify-between">
               <Button variant="ghost" size="lg" className="py-1" onClick={() => { setError(null); setStep({ kind: 'choose' }); }} disabled={busy}>Back</Button>

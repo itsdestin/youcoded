@@ -1520,13 +1520,15 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                                  !b.syncEnabled ? 'Auto-backup paused' :
                                  'Never backed up'}
                               </div>
+                              {/* WHY plain text, not amber/blue/green (guide:
+                                  no coloured body text for messages; matches
+                                  the status light above, which already
+                                  carries the state). */}
                               {isPending && !actionFeedback[b.id] && (
-                                <span className="text-4xs font-medium text-amber-700">Changes pending upload</span>
+                                <span className="text-4xs font-medium text-fg-muted">Changes pending upload</span>
                               )}
                               {actionFeedback[b.id] && (
-                                <span className={`text-4xs font-medium ${
-                                  actionFeedback[b.id] === 'uploading' ? 'text-blue-400' : 'text-green-400'
-                                }`}>
+                                <span className="text-4xs font-medium text-fg-muted">
                                   {actionFeedback[b.id] === 'uploading' ? 'Uploading...' : 'Uploaded!'}
                                 </span>
                               )}

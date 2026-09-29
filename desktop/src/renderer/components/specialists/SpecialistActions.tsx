@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { ToolCallState } from '../../../shared/types';
+import { FieldError } from '../ui';
 
 /**
  * The two things a person can do to a running helper — from its card, and
@@ -98,11 +99,10 @@ export function SpecialistActions({ sessionId, run, compact = false }: {
           </div>
         </div>
       )}
-      {/* Fix: `danger` isn't a real token (globals.css defines no --color-danger),
-          so this error rendered in ordinary body text with no red at all.
-          `destructive-fg` matches how every other inline error in the app is styled
-          (e.g. AddProjectModal, ContextEditorOverlay). */}
-      {error && <div className="text-xs text-destructive-fg">{error}</div>}
+      {/* WHY FieldError, not text-destructive-fg (guide: no red/coloured body
+          text for messages) — AddProjectModal and ContextEditorOverlay move
+          to the same component in this pass. */}
+      {error && <FieldError as="div">{error}</FieldError>}
     </div>
   );
 }

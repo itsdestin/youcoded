@@ -21,7 +21,7 @@ import WallpaperBackdrop from "../WallpaperBackdrop";
 import InstallingFooterStrip from "./InstallingFooterStrip";
 import MarketplaceAuthChip from "./MarketplaceAuthChip";
 import { Scrim, OverlayPanel } from "../overlays/Overlay";
-import { Button, CloseButton, EmptyState, ErrorState, LoadingState, SectionLabel } from "../ui";
+import { Button, CloseButton, EmptyState, ErrorState, FieldError, LoadingState, SectionLabel } from "../ui";
 import { useEscClose } from "../../hooks/use-esc-close";
 import { useNarrowViewport } from "../../hooks/use-narrow-viewport";
 import { useCurrentPlatform } from "../../state/platform";
@@ -843,8 +843,11 @@ function IntegrationDetailOverlay({
                     <span className={`text-3xs rounded-full px-2 py-0.5 ${STATUS_TONE_CLASS[statusBadge.tone]}`}>
                       {statusBadge.text}
                     </span>
+                    {/* WHY FieldError (guide: no red/coloured body text for messages) */}
                     {item.state.error && (
-                      <span className="text-xs text-destructive-fg truncate max-w-[40ch]" title={item.state.error}>{item.state.error}</span>
+                      <span className="truncate max-w-[40ch]" title={item.state.error}>
+                        <FieldError as="span">{item.state.error}</FieldError>
+                      </span>
                     )}
                   </div>
                 </div>

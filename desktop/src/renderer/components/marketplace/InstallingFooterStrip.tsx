@@ -4,6 +4,7 @@
 // for Android.
 import { useMarketplace, installTrackingKey, type InstallOp } from '../../state/marketplace-context';
 import { plainMessage } from '../../utils/ipc-error';
+import { Callout } from '../ui';
 
 // WHY a word per operation (error inventory 2026-09-10, false message 14): this strip
 // printed "Installing" and "Failed to install {label}" for every entry, so a failed
@@ -55,13 +56,16 @@ export default function InstallingFooterStrip() {
           <span>{inflight}</span>
         </div>
       )}
+      {/* WHY Callout, not a hand-rolled all-red box (guide: every warning/
+          error notice is the one tinted box; text is normal grey/black,
+          never coloured body text) */}
       {errorKeys.map(k => {
         const err = mp.installError.get(k)!;
         const label = labelForKey(k, mp.skillEntries, mp.themeEntries);
         return (
-          <div key={k} className="text-xs text-red-500 border border-red-500/40 bg-red-500/10 rounded px-2 py-1">
+          <Callout key={k} tone="danger">
             {FAILED[err.op]} {label}: {plainMessage(err.message, 'no reason was given')}
-          </div>
+          </Callout>
         );
       })}
     </div>

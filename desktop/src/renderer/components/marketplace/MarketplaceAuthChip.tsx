@@ -15,6 +15,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useAccount } from "../../state/account-context";
+import { FieldError } from "../ui";
 
 function GitHubMark({ size = 16 }: { size?: number }) {
   return (
@@ -106,13 +107,15 @@ export default function MarketplaceAuthChip() {
 
       {/* knowledge-debt #6: signed-out sign-in error — anchored under the chip so a
           failed sign-in isn't silently swallowed. No scrim (matches the signed-in popover). */}
+      {/* WHY FieldError, not text-destructive-fg (guide: no red/coloured body
+          text for messages); it carries its own role="alert", so the outer
+          box no longer needs one. */}
       {signInError && !signedIn && !signInPending && (
         <div
-          role="alert"
           className="layer-surface absolute left-0 top-full mt-2 min-w-[200px] max-w-[260px] rounded-md p-2 text-xs shadow-md"
           style={{ zIndex: 62 }}
         >
-          <span className="text-destructive-fg">Sign-in failed: {signInError}. Click the icon to try again.</span>
+          <FieldError as="span" size="2xs">Sign-in failed: {signInError}. Click the icon to try again.</FieldError>
         </div>
       )}
 

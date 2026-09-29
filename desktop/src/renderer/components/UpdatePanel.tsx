@@ -8,7 +8,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { UpdateLaunchResult } from '../../shared/update-install-types';
 import { createPortal } from 'react-dom';
 import MarkdownContent from './MarkdownContent';
-import { Button, Dialog, LoadingState, ProgressBar } from './ui';
+import { Button, Dialog, FieldError, LoadingState, ProgressBar } from './ui';
 import { BetaChannelRow } from './BetaChannelToggle';
 import { plainMessage, stripInvokeWrapper } from '../utils/ipc-error';
 
@@ -420,13 +420,16 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
                     Run in terminal
                   </Button>
                 </div>
-                {terminalError && <p className="text-xs text-red-600 mt-1">{terminalError}</p>}
+                {/* WHY FieldError (guide: no red/coloured body text for messages) */}
+                {terminalError && <FieldError as="p" size="2xs" className="mt-1">{terminalError}</FieldError>}
               </div>
             )}
             {installState.kind === 'error' && installState.code !== 'verify-failed' && (
               <div className="text-xs mt-2">
                 {installState.code === 'signature-invalid' ? (
-                  <p className="text-amber-700">{updateErrorMessage('signature-invalid')}</p>
+                  // WHY FieldError (guide: no red/coloured body text for messages —
+                  // amber sentences are in scope too)
+                  <FieldError as="p" size="2xs">{updateErrorMessage('signature-invalid')}</FieldError>
                 ) : (
                   <button
                     onClick={handleFallbackBrowser}
