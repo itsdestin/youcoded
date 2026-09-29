@@ -710,6 +710,24 @@ class DocCommentsStoreTest {
         assertEquals(reply2.id, listed.replies[0].id)
     }
 
+    // 2026-09-28 PR review: ids were "<comment>-r<count+1>", so after a
+    // middle reply was deleted the next reply reused a live id.
+    @Test
+    fun `a reply added after a middle reply was deleted gets an unused id`() = runTest {
+        val root = tempProjectRoot()
+        val id = (addComment("docs/plan.md", root.path, TEXT_SELECTOR, "root", "user", root) as StoreResult.Ok).value
+        val replies = listOf("one", "two", "three").map {
+            (replyToComment("docs/plan.md", root.path, id, it, "user", root) as StoreResult.Ok).value
+        }
+        deleteReply("docs/plan.md", root.path, id, replies[1].id, root)
+        val fresh = (replyToComment("docs/plan.md", root.path, id, "four", "user", root) as StoreResult.Ok).value
+        assertTrue(fresh.id != replies[0].id && fresh.id != replies[2].id, "reused id ${fresh.id}")
+
+        deleteReply("docs/plan.md", root.path, id, fresh.id, root)
+        val listed = (listComments("docs/plan.md", root.path, root) as StoreResult.Ok).value.single()
+        assertEquals(listOf("one", "three"), listed.replies.map { it.text })
+    }
+
     @Test
     fun `deleteReply on an unknown reply id refuses comment-not-found`() = runTest {
         val root = tempProjectRoot()

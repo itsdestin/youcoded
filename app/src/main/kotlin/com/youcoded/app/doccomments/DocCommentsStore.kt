@@ -413,7 +413,7 @@ suspend fun replyToComment(
     val sidecarPath = (resolved as StoreResult.Ok).value
     return mutateSidecar(sidecarPath) { file ->
         val comment = findComment(file, id) ?: return@mutateSidecar Apply.NotFound
-        val replyId = "${comment.id}-r${comment.replies.size + 1}"
+        val replyId = nextReplyId(comment)
         val reply = CommentReply(replyId, author, text, System.currentTimeMillis())
         val next = comment.copy(replies = comment.replies + reply)
         Apply.Applied(replaceComment(file, id, next), reply)
@@ -524,4 +524,19 @@ suspend fun deleteReply(path: String, projectRoot: String?, id: String, replyId:
         val next = comment.copy(replies = comment.replies.filter { it.id != replyId })
         Apply.Applied(replaceComment(file, id, next), Unit)
     }
+}
+
+/** WHY the highest existing number + 1, never the reply count + 1
+ *  (2026-09-28 PR review, mirrors doc-comments-store.ts's `nextReplyId`):
+ *  after a middle reply was deleted the count minted an id that was still in
+ *  use, so edits and deletes hit the wrong reply. */
+internal fun nextReplyId(comment: PersistedComment): String {
+    val prefix = "${comment.id}-r"
+    var max = 0
+    for (r in comment.replies) {
+        if (!r.id.startsWith(prefix)) continue
+        val n = r.id.substring(prefix.length).toIntOrNull() ?: continue
+        if (n > max) max = n
+    }
+    return "$prefix${maxOf(max, comment.replies.size) + 1}"
 }

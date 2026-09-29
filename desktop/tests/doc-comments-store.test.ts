@@ -201,6 +201,29 @@ describe('edit / delete', () => {
     expect(onDisk.comments[0].replies).toEqual([expect.objectContaining({ id: second.reply.id, text: 'reply two' })]);
   });
 
+  // 2026-09-28 PR review: reply ids were "<comment>-r<count+1>", so after a
+  // middle reply was deleted (r1, r3 left) the next reply was ALSO r3 —
+  // editing it changed the old one, and deleting it removed both.
+  it('a reply added after a middle reply was deleted gets an unused id, and edits/deletes touch only it', async () => {
+    const added = await addComment({ path: 'docs/plan.md', projectRoot: root, selector: TEXT_SELECTOR, text: 'root', author: 'user' });
+    if (!added.ok) throw new Error('setup');
+    const replies = [];
+    for (const text of ['one', 'two', 'three']) {
+      const r = await replyToComment({ path: 'docs/plan.md', projectRoot: root, id: added.id, text, author: 'user' });
+      if (!r.ok) throw new Error('setup');
+      replies.push(r.reply);
+    }
+    await deleteReply({ path: 'docs/plan.md', projectRoot: root, id: added.id, replyId: replies[1].id });
+    const fresh = await replyToComment({ path: 'docs/plan.md', projectRoot: root, id: added.id, text: 'four', author: 'user' });
+    if (!fresh.ok) throw new Error('reply failed');
+    expect([replies[0].id, replies[2].id]).not.toContain(fresh.reply.id);
+
+    await editReply({ path: 'docs/plan.md', projectRoot: root, id: added.id, replyId: fresh.reply.id, text: 'four, edited' });
+    await deleteReply({ path: 'docs/plan.md', projectRoot: root, id: added.id, replyId: fresh.reply.id });
+    const onDisk = await readSidecar(path.join(root, '.youcoded', 'comments', 'docs', 'plan.md.json'));
+    expect(onDisk.comments[0].replies.map((r: CommentReply) => r.text)).toEqual(['one', 'three']);
+  });
+
   it('deleteReply against an unknown reply id refuses cleanly, leaving the comment untouched', async () => {
     const added = await addComment({ path: 'docs/plan.md', projectRoot: root, selector: TEXT_SELECTOR, text: 'root', author: 'user' });
     if (!added.ok) throw new Error('setup');

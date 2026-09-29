@@ -403,6 +403,26 @@ function mutateSidecar(sidecarPath, apply) {
 // value) — production launches (session-manager.ts) never set this.
 var POLL_TIMEOUT_MS = parseInt(process.env.__POLL_TIMEOUT_ENV__ || '', 10) || 8000;
 var POLL_INTERVAL_MS = 50;
+// Extra wait once the app has claimed a request (see giveUp below): it is
+// actively applying it, so a little more patience beats a duplicate.
+var CLAIMED_GRACE_MS = 30000;
+
+// WHY the highest existing number + 1, never the reply count + 1
+// (2026-09-28 PR review): after a middle reply was deleted (r1, r3 left), the
+// count minted "-r3" again — two replies with one id, so editing the new one
+// changed the old one and deleting it removed both. Mirrors
+// doc-comments-store.ts's nextReplyId.
+function nextReplyId(comment) {
+  var prefix = comment.id + '-r';
+  var max = 0;
+  for (var i = 0; i < comment.replies.length; i++) {
+    var rid = String(comment.replies[i].id || '');
+    if (rid.indexOf(prefix) !== 0) continue;
+    var n = parseInt(rid.slice(prefix.length), 10);
+    if (n > max) max = n;
+  }
+  return prefix + (Math.max(max, comment.replies.length) + 1);
+}
 
 function submitPendingMutation(kind, located, fields) {
   var id = crypto.randomUUID();
@@ -446,19 +466,51 @@ function submitPendingMutation(kind, located, fields) {
         });
       }, function (e) {
         if (e.code !== 'ENOENT') throw e;
-        if (Date.now() >= deadline) {
-          // Adversarial review 2026-09-27, finding #4: state only what is
-          // actually known. The most common real cause of an 8s timeout in
-          // practice is the app being closed, which "try again" cannot fix —
-          // this wording names that possibility instead of promising a
-          // remedy that may not apply.
+        if (Date.now() >= deadline) return giveUp();
+        return sleep(POLL_INTERVAL_MS).then(poll);
+      });
+    }
+    // WHY withdraw on timeout (2026-09-28 PR review): the request used to be
+    // left in place, so a merely SLOW app applied it after the assistant had
+    // been told it failed — and the assistant's retry then posted the same
+    // comment or reply twice. The app now claims a request (renames it)
+    // before acting on it, so deleting it here settles, atomically, which
+    // side got it: deleted = never applied, safe to retry; already gone =
+    // the app is applying it, so keep waiting a while longer instead of
+    // inviting a duplicate.
+    function giveUp() {
+      return fsp.unlink(requestPath).then(function () {
+        // Adversarial review 2026-09-27, finding #4: state only what is
+        // actually known. The most common real cause is the app being
+        // closed, which "try again" alone cannot fix.
+        return {
+          ok: false,
+          error: 'timed-out — YouCoded did not pick this up within '
+            + (POLL_TIMEOUT_MS / 1000) + 's, so nothing was changed. YouCoded may not be open.',
+        };
+      }, function (e) {
+        if (e.code !== 'ENOENT') throw e;
+        return waitForClaimed(Date.now() + CLAIMED_GRACE_MS);
+      });
+    }
+    function waitForClaimed(graceDeadline) {
+      return fsp.readFile(resultPath, 'utf8').then(function (raw) {
+        return fsp.unlink(resultPath).catch(function () {}).then(function () {
+          try {
+            return JSON.parse(raw);
+          } catch (e) {
+            return { ok: false, error: 'malformed-result' };
+          }
+        });
+      }, function (e) {
+        if (e.code !== 'ENOENT') throw e;
+        if (Date.now() >= graceDeadline) {
           return {
             ok: false,
-            error: 'timed-out — YouCoded did not respond within '
-              + (POLL_TIMEOUT_MS / 1000) + 's. It may still be running a slow operation, or YouCoded may not be open.',
+            error: 'still-running — YouCoded started this change but has not finished yet. It may still complete: check with ReadFileComments before trying again.',
           };
         }
-        return sleep(POLL_INTERVAL_MS).then(poll);
+        return sleep(POLL_INTERVAL_MS).then(function () { return waitForClaimed(graceDeadline); });
       });
     }
     return poll();
@@ -511,7 +563,7 @@ function replyToComment(args) {
     return mutateSidecar(located.sidecarPath, function (file) {
       var comment = findComment(file, args.commentId);
       if (!comment) return 'not-found';
-      var replyId = comment.id + '-r' + (comment.replies.length + 1);
+      var replyId = nextReplyId(comment);
       var next = {};
       for (var k in comment) if (Object.prototype.hasOwnProperty.call(comment, k)) next[k] = comment[k];
       next.replies = comment.replies.concat([{ id: replyId, author: 'assistant', text: args.text, createdAt: Date.now() }]);

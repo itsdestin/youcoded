@@ -10,10 +10,6 @@
 // depth), and orphaned .result.json sweeping (finding #4).
 package com.youcoded.app.doccomments
 
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Test
@@ -103,10 +99,8 @@ class DocCommentsPendingQueueTest {
         DocCommentsPendingQueue.resetForTest()
     }
 
-    private fun startQueue(project: File, home: File, sessionId: String = "session-1", token: String = "tok-$sessionId"): CoroutineScope {
-        val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-        DocCommentsPendingQueue.start(scope, sessionId, project.absolutePath, home, File(home, ".claude"), token)
-        return scope
+    private fun startQueue(project: File, home: File, sessionId: String = "session-1", token: String = "tok-$sessionId") {
+        DocCommentsPendingQueue.start(sessionId, project.absolutePath, home, File(home, ".claude"), token)
     }
 
     private fun pendingDir(project: File): File = File(project, ".youcoded/comments/.pending").apply { mkdirs() }
@@ -123,7 +117,7 @@ class DocCommentsPendingQueueTest {
         val project = tempDir("ycd-queue-add-")
         val home = tempDir("ycd-queue-add-home-")
         buildMinimalDocx(project)
-        val scope = startQueue(project, home)
+        startQueue(project, home)
         try {
             val pending = pendingDir(project)
             val token = "tok-session-1"
@@ -141,7 +135,7 @@ class DocCommentsPendingQueueTest {
             assertTrue(comments is NativeListResult.Ok)
             assertEquals(1, comments.comments.size)
         } finally {
-            scope.cancel()
+            DocCommentsPendingQueue.resetForTest()
         }
     }
 
@@ -150,7 +144,7 @@ class DocCommentsPendingQueueTest {
         val project = tempDir("ycd-queue-move-")
         val home = tempDir("ycd-queue-move-home-")
         val docx = buildMinimalDocx(project)
-        val scope = startQueue(project, home)
+        startQueue(project, home)
         try {
             val pending = pendingDir(project)
             val token = "tok-session-1"
@@ -197,7 +191,7 @@ class DocCommentsPendingQueueTest {
             // carries no `id` at all.
             assertFalse(result.has("id"))
         } finally {
-            scope.cancel()
+            DocCommentsPendingQueue.resetForTest()
         }
     }
 
@@ -227,7 +221,7 @@ class DocCommentsPendingQueueTest {
         val fixture = xlsxFixtureFile("q3-sales-by-rep.xlsx")
         val target = File(project, "q3.xlsx")
         fixture.copyTo(target, overwrite = true)
-        val scope = startQueue(project, home)
+        startQueue(project, home)
         try {
             val pending = pendingDir(project)
             val token = "tok-session-1"
@@ -269,7 +263,7 @@ class DocCommentsPendingQueueTest {
             assertTrue(result.getString("id").isNotEmpty())
             assertFalse(result.getString("id") == oldId, "the whole point of the fix: the id must be the FRESH one")
         } finally {
-            scope.cancel()
+            DocCommentsPendingQueue.resetForTest()
         }
     }
 
@@ -278,7 +272,7 @@ class DocCommentsPendingQueueTest {
         val project = tempDir("ycd-queue-badtoken-")
         val home = tempDir("ycd-queue-badtoken-home-")
         buildMinimalDocx(project)
-        val scope = startQueue(project, home, token = "the-real-token")
+        startQueue(project, home, token = "the-real-token")
         try {
             val pending = pendingDir(project)
             writeRequest(pending, "req-bad", addRequestJson("req-bad", "queue-fixture.docx", token = "forged-token"))
@@ -293,7 +287,7 @@ class DocCommentsPendingQueueTest {
             assertTrue(comments is NativeListResult.Ok)
             assertEquals(0, comments.comments.size)
         } finally {
-            scope.cancel()
+            DocCommentsPendingQueue.resetForTest()
         }
     }
 
@@ -302,7 +296,7 @@ class DocCommentsPendingQueueTest {
         val project = tempDir("ycd-queue-notoken-")
         val home = tempDir("ycd-queue-notoken-home-")
         buildMinimalDocx(project)
-        val scope = startQueue(project, home, token = "the-real-token")
+        startQueue(project, home, token = "the-real-token")
         try {
             val pending = pendingDir(project)
             val req = addRequestJson("req-notoken", "queue-fixture.docx", token = "placeholder")
@@ -313,7 +307,7 @@ class DocCommentsPendingQueueTest {
             assertTrue(waitFor { resultFile.exists() })
             assertFalse(JSONObject(resultFile.readText()).optBoolean("ok"))
         } finally {
-            scope.cancel()
+            DocCommentsPendingQueue.resetForTest()
         }
     }
 
@@ -322,10 +316,8 @@ class DocCommentsPendingQueueTest {
         val project = tempDir("ycd-queue-sharedproject-")
         val home = tempDir("ycd-queue-sharedproject-home-")
         buildMinimalDocx(project)
-        val scopeA = CoroutineScope(Dispatchers.IO + SupervisorJob())
-        val scopeB = CoroutineScope(Dispatchers.IO + SupervisorJob())
-        DocCommentsPendingQueue.start(scopeA, "session-A", project.absolutePath, home, File(home, ".claude"), "token-A")
-        DocCommentsPendingQueue.start(scopeB, "session-B", project.absolutePath, home, File(home, ".claude"), "token-B")
+        DocCommentsPendingQueue.start("session-A", project.absolutePath, home, File(home, ".claude"), "token-A")
+        DocCommentsPendingQueue.start("session-B", project.absolutePath, home, File(home, ".claude"), "token-B")
         try {
             val pending = pendingDir(project)
             // Request carries session B's token — still valid, since both
@@ -336,8 +328,7 @@ class DocCommentsPendingQueueTest {
             assertTrue(waitFor { resultFile.exists() })
             assertTrue(JSONObject(resultFile.readText()).optBoolean("ok"))
         } finally {
-            scopeA.cancel()
-            scopeB.cancel()
+            DocCommentsPendingQueue.resetForTest()
         }
     }
 
@@ -346,10 +337,8 @@ class DocCommentsPendingQueueTest {
         val project = tempDir("ycd-queue-refcount-")
         val home = tempDir("ycd-queue-refcount-home-")
         buildMinimalDocx(project)
-        val scopeA = CoroutineScope(Dispatchers.IO + SupervisorJob())
-        val scopeB = CoroutineScope(Dispatchers.IO + SupervisorJob())
-        DocCommentsPendingQueue.start(scopeA, "session-A", project.absolutePath, home, File(home, ".claude"), "token-A")
-        DocCommentsPendingQueue.start(scopeB, "session-B", project.absolutePath, home, File(home, ".claude"), "token-B")
+        DocCommentsPendingQueue.start("session-A", project.absolutePath, home, File(home, ".claude"), "token-A")
+        DocCommentsPendingQueue.start("session-B", project.absolutePath, home, File(home, ".claude"), "token-B")
         try {
             DocCommentsPendingQueue.stop("session-A", project.absolutePath)
 
@@ -367,8 +356,7 @@ class DocCommentsPendingQueueTest {
             // negative" rule, not a longer positive wait re-labeled.
             assertFalse(waitFor(timeoutMs = 800) { result2.exists() }, "queue kept processing after BOTH refs were dropped")
         } finally {
-            scopeA.cancel()
-            scopeB.cancel()
+            DocCommentsPendingQueue.resetForTest()
         }
     }
 
@@ -377,7 +365,7 @@ class DocCommentsPendingQueueTest {
         val project = tempDir("ycd-queue-badkind-")
         val home = tempDir("ycd-queue-badkind-home-")
         buildMinimalDocx(project)
-        val scope = startQueue(project, home, token = "tok")
+        startQueue(project, home, token = "tok")
         try {
             val pending = pendingDir(project)
             val req = addRequestJson("req-badkind", "queue-fixture.docx", token = "tok")
@@ -393,7 +381,7 @@ class DocCommentsPendingQueueTest {
             val comments = listNativeComments(NativeFormat.DOCX, File(project, "queue-fixture.docx").absolutePath, project.absolutePath, home)
             assertEquals(0, (comments as NativeListResult.Ok).comments.size)
         } finally {
-            scope.cancel()
+            DocCommentsPendingQueue.resetForTest()
         }
     }
 
@@ -402,7 +390,7 @@ class DocCommentsPendingQueueTest {
         val project = tempDir("ycd-queue-nokind-")
         val home = tempDir("ycd-queue-nokind-home-")
         buildMinimalDocx(project)
-        val scope = startQueue(project, home, token = "tok")
+        startQueue(project, home, token = "tok")
         try {
             val pending = pendingDir(project)
             val req = addRequestJson("req-nokind", "queue-fixture.docx", token = "tok")
@@ -413,7 +401,7 @@ class DocCommentsPendingQueueTest {
             assertTrue(waitFor { resultFile.exists() })
             assertEquals("unknown-mutation-kind", JSONObject(resultFile.readText()).optString("error"))
         } finally {
-            scope.cancel()
+            DocCommentsPendingQueue.resetForTest()
         }
     }
 
@@ -422,22 +410,25 @@ class DocCommentsPendingQueueTest {
         val project = tempDir("ycd-queue-garbage-")
         val home = tempDir("ycd-queue-garbage-home-")
         buildMinimalDocx(project)
-        val scope = startQueue(project, home, token = "tok")
+        startQueue(project, home, token = "tok")
         try {
             val pending = pendingDir(project)
             File(pending, "garbage.json").writeText("{ this is not json ][")
 
-            // The garbage file is never touched (no matching id to build a
-            // result path from) — assert it just sits there, then prove a
-            // REAL request still gets processed afterward.
-            assertFalse(waitFor(timeoutMs = 500) { !File(pending, "garbage.json").exists() })
+            // The garbage file is never answered (no trustworthy id to build a
+            // result path from). Since 2026-09-28 the queue claims a request
+            // (renames it) before reading it, so garbage is set aside rather
+            // than left to be re-read every tick — prove no answer appears,
+            // then that a REAL request still gets processed afterward.
+            assertTrue(waitFor { !File(pending, "garbage.json").exists() }, "garbage was never picked up")
+            assertFalse(File(pending, "garbage.result.json").exists())
 
             writeRequest(pending, "req-after-garbage", addRequestJson("req-after-garbage", "queue-fixture.docx", token = "tok"))
             val resultFile = File(pending, "req-after-garbage.result.json")
             assertTrue(waitFor { resultFile.exists() }, "a real request after garbage JSON was never processed")
             assertTrue(JSONObject(resultFile.readText()).optBoolean("ok"))
         } finally {
-            scope.cancel()
+            DocCommentsPendingQueue.resetForTest()
         }
     }
 
@@ -455,14 +446,14 @@ class DocCommentsPendingQueueTest {
         val planted = File(pending, "$plantedId.json")
         assertTrue(planted.setLastModified(System.currentTimeMillis() - 60_000))
 
-        val scope = startQueue(project, home, token = "tok")
+        startQueue(project, home, token = "tok")
         try {
             val resultFile = File(pending, "$plantedId.result.json")
             // Negative: bounded wait then assert absence.
             assertFalse(waitFor(timeoutMs = 1000) { resultFile.exists() }, "a back-dated, pre-planted request was applied")
             assertTrue(planted.exists(), "a refused request should be left in place, not silently deleted")
         } finally {
-            scope.cancel()
+            DocCommentsPendingQueue.resetForTest()
         }
     }
 
@@ -477,13 +468,13 @@ class DocCommentsPendingQueueTest {
         // No back-dating this time — its mtime is "now," within
         // FRESHNESS_MARGIN_MS of the queue's own startedAt.
 
-        val scope = startQueue(project, home, token = "tok")
+        startQueue(project, home, token = "tok")
         try {
             val resultFile = File(pending, "$id.result.json")
             assertTrue(waitFor { resultFile.exists() }, "a genuine cold-start race request was never processed")
             assertTrue(JSONObject(resultFile.readText()).optBoolean("ok"))
         } finally {
-            scope.cancel()
+            DocCommentsPendingQueue.resetForTest()
         }
     }
 
@@ -497,11 +488,11 @@ class DocCommentsPendingQueueTest {
         orphan.writeText("""{"ok":true}""")
         assertTrue(orphan.setLastModified(System.currentTimeMillis() - (2 * 60 * 60 * 1000))) // 2h old
 
-        val scope = startQueue(project, home, token = "tok")
+        startQueue(project, home, token = "tok")
         try {
             assertTrue(waitFor { !orphan.exists() }, "a stale orphaned result file was never swept")
         } finally {
-            scope.cancel()
+            DocCommentsPendingQueue.resetForTest()
         }
     }
 
@@ -509,7 +500,7 @@ class DocCommentsPendingQueueTest {
     fun `a path outside the project is refused honestly, never applied`() {
         val project = tempDir("ycd-queue-outside-")
         val home = tempDir("ycd-queue-outside-home-")
-        val scope = startQueue(project, home, token = "tok")
+        startQueue(project, home, token = "tok")
         try {
             val pending = pendingDir(project)
             val req = addRequestJson("req-outside", "../../etc/passwd", token = "tok")
@@ -519,7 +510,43 @@ class DocCommentsPendingQueueTest {
             assertTrue(waitFor { resultFile.exists() })
             assertFalse(JSONObject(resultFile.readText()).optBoolean("ok"))
         } finally {
-            scope.cancel()
+            DocCommentsPendingQueue.resetForTest()
         }
+    }
+
+    // 2026-09-28 PR review: leftover requests and claims piled up forever —
+    // only result files were swept.
+    @Test
+    fun `hour-old leftover requests and claims are swept on start, fresh ones are left alone`() {
+        val project = tempDir("ycd-queue-sweep-leftovers-")
+        val home = tempDir("ycd-queue-sweep-leftovers-home-")
+        val pending = pendingDir(project)
+        val old = System.currentTimeMillis() - 2 * 60 * 60 * 1000L
+        val staleRequest = File(pending, "stale.json").apply { writeText("{}"); setLastModified(old) }
+        val staleClaim = File(pending, "stale2.claimed").apply { writeText("{}"); setLastModified(old) }
+        val freshClaim = File(pending, "fresh.claimed").apply { writeText("{}") }
+        startQueue(project, home, token = "tok")
+        assertTrue(waitFor { !staleRequest.exists() && !staleClaim.exists() }, "leftovers were never swept")
+        assertTrue(freshClaim.exists())
+    }
+
+    // 2026-09-28 PR review: the queue ran in the scope of the FIRST session
+    // to start it, so closing that session stopped it for everyone sharing
+    // the project. `start` no longer takes a session scope at all; this pins
+    // the user-visible half: after the first session stops, the second's
+    // request is still applied.
+    @Test
+    fun `closing the first session keeps the queue working for a second session in the same project`() {
+        val project = tempDir("ycd-queue-first-closes-")
+        val home = tempDir("ycd-queue-first-closes-home-")
+        buildMinimalDocx(project)
+        DocCommentsPendingQueue.start("session-A", project.absolutePath, home, File(home, ".claude"), "token-A")
+        DocCommentsPendingQueue.start("session-B", project.absolutePath, home, File(home, ".claude"), "token-B")
+        DocCommentsPendingQueue.stop("session-A", project.absolutePath)
+        val pending = pendingDir(project)
+        writeRequest(pending, "req-b", addRequestJson("req-b", "queue-fixture.docx", token = "token-B"))
+        val resultFile = File(pending, "req-b.result.json")
+        assertTrue(waitFor { resultFile.exists() }, "queue stopped when the first session closed")
+        assertTrue(JSONObject(resultFile.readText()).optBoolean("ok"))
     }
 }

@@ -217,7 +217,12 @@ describe('CommentsMargin — render cost at a realistic high comment count', () 
       content.remove();
       return (usedCpu.user + usedCpu.system) / 1000;
     };
-    const TRIALS = 3;
+    // 5, not 3 (2026-09-28): best-of-3 still hit 13x once during a full
+    // 15,000-test run while the same code measured 6.3-7.2x across 18
+    // isolated and parallel-loaded reruns — one more outlier-prone sample
+    // per size, not a looser bound, is what keeps a quadratic regression
+    // (~25x) clearly separated from normal linear cost (~5-7x).
+    const TRIALS = 5;
     /** The best (minimum) of TRIALS same-size mounts, each its own path so
      *  the store never carries duplicate comments across trials. */
     const bestOf = (label: string, count: number) => {
@@ -277,7 +282,12 @@ describe('CommentsMargin — render cost at a realistic high comment count', () 
       grid.remove();
       return (usedCpu.user + usedCpu.system) / 1000;
     };
-    const TRIALS = 3;
+    // 5, not 3 (2026-09-28): best-of-3 still hit 13x once during a full
+    // 15,000-test run while the same code measured 6.3-7.2x across 18
+    // isolated and parallel-loaded reruns — one more outlier-prone sample
+    // per size, not a looser bound, is what keeps a quadratic regression
+    // (~25x) clearly separated from normal linear cost (~5-7x).
+    const TRIALS = 5;
     /** The best (minimum) of TRIALS mounts of the same slice, each its own
      *  path (see WHY above — addComment always appends). Contention can only
      *  ADD overhead, never remove it, so the minimum across repeated trials

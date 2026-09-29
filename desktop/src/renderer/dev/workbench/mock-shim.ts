@@ -3588,7 +3588,9 @@ function createDocCommentsMock(empty: boolean) {
       const idx = findIndex(id);
       if (idx === -1) return { ok: false, error: 'comment-not-found' };
       const c = comments[idx];
-      const replyId = `${c.id}-r${c.replies.length + 1}`;
+      // Same rule as the real store's nextReplyId (highest number + 1, so a
+      // deleted middle reply never gets its id reused).
+      const replyId = `${c.id}-r${Math.max(c.replies.length, ...c.replies.map((r: { id: string }) => Number.parseInt(r.id.slice(`${c.id}-r`.length), 10) || 0)) + 1}`;
       comments = comments.map((x, i) => (i === idx ? { ...c, replies: [...c.replies, { id: replyId, author, text, createdAt: Date.now() }] } : x));
       publish(path, projectRoot);
       return { ok: true };

@@ -171,6 +171,9 @@ function sendFailureCopy(result: NativeSendResult | undefined): string {
 const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId, disabled, sendBlocked, minimal, compact, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, initialAttachments, provider }, ref) {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  // Read by window-event listeners that must not re-subscribe on every change.
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
 
   // Voice prompting (deck 2026-09-05). The draft stays the one source of truth:
   // `text` holds what was typed plus the words the engine has SETTLED on;
@@ -661,6 +664,16 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     const listener = (e: Event) => {
       const detail = (e as CustomEvent<{ lead?: string; refs?: ComposeRef[] }>).detail;
       if (!detail?.refs?.length) return;
+      // WHY (2026-09-28 PR review): this used to REPLACE the box's text and
+      // send at once, so anything the user was halfway through typing was
+      // silently thrown away. With a draft (or attached files) waiting, the
+      // comments chip is added to it instead and nothing is sent — sending
+      // would also send the unfinished text. The user finishes and presses
+      // Send. An empty box keeps the one-click send.
+      if ((inputRef.current?.value ?? '').trim() || attachmentsRef.current.length > 0) {
+        insertRefs(detail.refs);
+        return;
+      }
       const markers = detail.refs.map(makeDraftToken).join(' ');
       setText(`${detail.lead ?? ''} ${markers}`.trim());
       // A React state update isn't visible to the DOM textarea until the next
@@ -670,7 +683,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     };
     window.addEventListener('youcoded:compose-send-comments', listener);
     return () => window.removeEventListener('youcoded:compose-send-comments', listener);
-  }, []);
+  }, [insertRefs]);
 
   const removeAttachment = useCallback((path: string) => {
     setAttachments((prev) => prev.filter((a) => a.path !== path));

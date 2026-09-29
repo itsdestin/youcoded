@@ -72,7 +72,7 @@ class SessionRegistry {
         // T20: start this session's docx/xlsx pending-mutation queue AFTER
         // start() — that's when docCommentsServerId/token are known (a
         // failed doc-comments MCP deploy makes this a no-op).
-        bridge.startDocCommentsQueue(scope)
+        bridge.startDocCommentsQueue()
         session.startTitleObserver()
 
         // Wire up the current-session check for blue dot logic

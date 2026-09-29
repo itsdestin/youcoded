@@ -248,7 +248,10 @@ async function sweepStaleResults(pendingDir: string): Promise<void> {
   }
   const now = Date.now();
   await Promise.all(names
-    .filter((name) => name.endsWith('.result.json'))
+    // Also leftover requests (a session killed mid-wait) and claims (the app
+    // killed mid-apply, or a malformed request set aside) — an hour old is
+    // never still wanted, and they otherwise pile up in the project folder.
+    .filter((name) => name.endsWith('.json') || name.endsWith('.claimed'))
     .map(async (name) => {
       const full = path.join(pendingDir, name);
       try {
@@ -286,11 +289,23 @@ async function handleNewRequest(entry: Entry, absPath: string): Promise<void> {
       // security standpoint, from silently applying a stale one.
       return;
     }
+    // Claim before acting (2026-09-28 PR review): renaming `<id>.json` to
+    // `<id>.claimed` is atomic, so exactly one side wins. When the MCP script
+    // times out it withdraws its request by deleting `<id>.json`; if that
+    // happened first, this rename fails and nothing is applied. Before, a
+    // slow request was applied AFTER the assistant had been told it failed,
+    // so its retry posted the same comment or reply twice.
+    const claimedPath = path.join(entry.pendingDir, `${id}.claimed`);
+    try {
+      await fs.rename(absPath, claimedPath);
+    } catch {
+      return; // withdrawn by its sender, or vanished — nothing to do
+    }
     let raw: string;
     try {
-      raw = await fs.readFile(absPath, 'utf8');
+      raw = await fs.readFile(claimedPath, 'utf8');
     } catch {
-      return; // vanished (already handled, or the writer's rename hadn't landed yet) — nothing to do
+      return;
     }
     let req: PendingMutationRequest;
     try {
@@ -300,6 +315,7 @@ async function handleNewRequest(entry: Entry, absPath: string): Promise<void> {
       // safely, so this is a silent drop rather than a guessed response — the
       // MCP script's own poll times out and reports an honest, generic
       // failure rather than hanging forever.
+      await fs.unlink(claimedPath).catch(() => { /* already gone */ });
       return;
     }
     const resultPath = path.join(entry.pendingDir, `${req.id}.result.json`);
@@ -321,7 +337,7 @@ async function handleNewRequest(entry: Entry, absPath: string): Promise<void> {
       }
     }
     await writeResult(resultPath, result);
-    await fs.unlink(absPath).catch(() => { /* already gone */ });
+    await fs.unlink(claimedPath).catch(() => { /* already gone */ });
     void sweepStaleResults(entry.pendingDir);
   } finally {
     entry.inFlight.delete(id);

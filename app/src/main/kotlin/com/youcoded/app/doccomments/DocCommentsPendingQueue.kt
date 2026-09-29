@@ -48,6 +48,7 @@ package com.youcoded.app.doccomments
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -98,6 +99,15 @@ object DocCommentsPendingQueue {
     private val entries = HashMap<String, Entry>()
     private val lock = Any()
 
+    /** WHY the queue owns its scope (2026-09-28 PR review): it used to run in
+     *  the scope of whichever session started it first. Sessions sharing a
+     *  project share ONE queue, so closing that first session cancelled the
+     *  loop while the entry (kept alive by the other session's ref) stayed —
+     *  every Word/Excel comment request from the surviving session then timed
+     *  out until all of them closed. The loop now lives as long as its entry,
+     *  and `stop` cancels it when the last session sharing the project ends. */
+    private val queueScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     private fun tokensMatch(a: Any?, b: String): Boolean {
         if (a !is String || a.length != b.length) return false
         return MessageDigest.isEqual(a.toByteArray(Charsets.UTF_8), b.toByteArray(Charsets.UTF_8))
@@ -120,7 +130,6 @@ object DocCommentsPendingQueue {
      * refcount itself.
      */
     fun start(
-        scope: CoroutineScope,
         sessionId: String,
         projectRoot: String,
         homeDir: File,
@@ -167,7 +176,7 @@ object DocCommentsPendingQueue {
             } catch (_: Exception) {
                 // best-effort, mirrors DocCommentsStore.kt's own directory creation
             }
-            entry.job = scope.launch(Dispatchers.IO) {
+            entry.job = queueScope.launch {
                 sweepStaleResults(pendingDir)
                 while (isActive && !entry.stopped) {
                     pollOnce(entry, homeDir)
@@ -245,18 +254,32 @@ object DocCommentsPendingQueue {
         }
         if (mtime == 0L || mtime < entry.startedAt - FRESHNESS_MARGIN_MS) return
 
+        // Claim before acting (2026-09-28 PR review, mirrors desktop): renaming
+        // `<id>.json` to `<id>.claimed` is atomic, so exactly one side wins. If
+        // the MCP script already withdrew the request after its own timeout
+        // (it deletes `<id>.json`), this rename fails and nothing is applied —
+        // the assistant was told "nothing was changed", so a late apply would
+        // have produced a duplicate comment when it tried again.
+        val claimed = File(entry.pendingDir, "${file.name.removeSuffix(".json")}.claimed")
+        if (!file.renameTo(claimed)) return
+
         val raw = try {
-            file.readText()
+            claimed.readText()
         } catch (_: Exception) {
-            return // vanished (already handled, or the writer's rename hadn't landed yet)
+            claimed.delete()
+            return
         }
         val req = try {
             JSONObject(raw)
         } catch (_: JSONException) {
+            claimed.delete()
             return // malformed request: no trustworthy id to build a result path from
         }
         val id = req.optString("id", "")
-        if (id.isEmpty()) return
+        if (id.isEmpty()) {
+            claimed.delete()
+            return
+        }
         val resultPath = File(entry.pendingDir, "$id.result.json")
 
         val result = if (!hasValidToken(entry, req)) {
@@ -273,7 +296,7 @@ object DocCommentsPendingQueue {
         }
         writeResultAtomic(resultPath, result)
         try {
-            file.delete()
+            claimed.delete()
         } catch (_: Exception) {
             // already gone, or a races-with-someone-else's-delete
         }
@@ -419,7 +442,10 @@ object DocCommentsPendingQueue {
         } ?: return
         val now = System.currentTimeMillis()
         for (name in names) {
-            if (!name.endsWith(".result.json")) continue
+            // Also leftover requests (a session killed mid-wait) and claims
+            // (the app killed mid-apply) — an hour old is never still wanted,
+            // and they otherwise pile up inside the user's project folder.
+            if (!name.endsWith(".json") && !name.endsWith(".claimed")) continue
             val f = File(pendingDir, name)
             try {
                 if (now - f.lastModified() > STALE_RESULT_MS) f.delete()

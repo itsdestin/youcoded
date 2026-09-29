@@ -459,6 +459,24 @@ export async function addComment(args: {
  *  gated to native formats) — so the renderer's own optimistic placeholder
  *  (today a purely local `r-${nextLocalSuffix()}` id) can be swapped in place
  *  immediately for EVERY target type, not just Word/Excel. */
+/** WHY the highest existing number + 1, never the reply count + 1
+ *  (2026-09-28 PR review): after a middle reply was deleted (r1, r3 left),
+ *  the count minted "-r3" a second time — two replies with one id, so
+ *  editing the new reply changed the old one and deleting it removed both.
+ *  `max(…, replies.length)` keeps ids from a sidecar with foreign-shaped
+ *  reply ids from ever colliding either. Mirrored in the MCP script,
+ *  DocCommentsStore.kt and the workbench mock. */
+function nextReplyId(comment: { id: string; replies: { id: string }[] }): string {
+  const prefix = `${comment.id}-r`;
+  let max = 0;
+  for (const r of comment.replies) {
+    if (!r.id.startsWith(prefix)) continue;
+    const n = Number.parseInt(r.id.slice(prefix.length), 10);
+    if (n > max) max = n;
+  }
+  return `${prefix}${Math.max(max, comment.replies.length) + 1}`;
+}
+
 export async function replyToComment(args: {
   path: string;
   projectRoot?: string;
@@ -471,7 +489,7 @@ export async function replyToComment(args: {
   return mutateSidecar<{ reply: CommentReply }>(resolved.sidecarPath, (file) => {
     const comment = findComment(file, args.id);
     if (!comment) return 'not-found';
-    const replyId = `${comment.id}-r${comment.replies.length + 1}`;
+    const replyId = nextReplyId(comment);
     const reply: CommentReply = { id: replyId, author: args.author, text: args.text, createdAt: Date.now() };
     const next: PersistedComment = {
       ...comment,

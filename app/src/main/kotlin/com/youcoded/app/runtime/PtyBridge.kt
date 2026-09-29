@@ -136,12 +136,12 @@ class PtyBridge(
      * a session without a working queue still runs, it just can't apply a
      * Word/Excel comment mutation the assistant asks for.
      */
-    fun startDocCommentsQueue(scope: CoroutineScope) {
+    fun startDocCommentsQueue() {
         val token = docCommentsToken ?: return
         val root = docCommentsProjectRoot ?: return
         val id = mobileSessionId ?: return
         com.youcoded.app.doccomments.DocCommentsPendingQueue.start(
-            scope, id, root, bootstrap.homeDir, File(bootstrap.homeDir, ".claude"), token,
+            id, root, bootstrap.homeDir, File(bootstrap.homeDir, ".claude"), token,
         )
     }
 

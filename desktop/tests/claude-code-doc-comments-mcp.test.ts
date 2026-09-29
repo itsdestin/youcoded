@@ -36,7 +36,7 @@ import {
   ADD_COMMENT_DESCRIPTION,
   MOVE_COMMENT_DESCRIPTION,
 } from '../src/shared/doc-comments-tool-text';
-import { addComment, listComments } from '../src/main/doc-comments/doc-comments-store';
+import { addComment, listComments, replyToComment, deleteReply } from '../src/main/doc-comments/doc-comments-store';
 import type { CommentSelector } from '../src/shared/doc-comments-types';
 
 const SERVER_SOURCE = path.join(os.tmpdir(), `yc-doc-comments-mcp-server-${process.pid}.js`);
@@ -372,6 +372,29 @@ describe('interop with the real native store — same file, both directions', ()
   });
 });
 
+describe('reply ids from the MCP script', () => {
+  // 2026-09-28 PR review.
+  it('a reply after a middle reply was deleted gets an unused id', async () => {
+    const seeded = await addComment({ path: 'ids.md', projectRoot: root, selector: SELECTOR, text: 'root', author: 'user' });
+    if (!seeded.ok) throw new Error('setup');
+    const ids: string[] = [];
+    for (const text of ['one', 'two', 'three']) {
+      const r = await replyToComment({ path: 'ids.md', projectRoot: root, id: seeded.id, text, author: 'user' });
+      if (!r.ok) throw new Error('setup');
+      ids.push(r.reply.id);
+    }
+    await deleteReply({ path: 'ids.md', projectRoot: root, id: seeded.id, replyId: ids[1] });
+
+    const client = start(root);
+    const replied = await client.callTool('ReplyToComment', { path: 'ids.md', commentId: seeded.id, text: 'from the assistant' });
+    expect(replied.result.isError).toBe(false);
+    const listed = await listComments({ path: 'ids.md', projectRoot: root });
+    if (!listed.ok) throw new Error('list failed');
+    const replyIds = listed.comments[0].replies.map((r) => r.id);
+    expect(new Set(replyIds).size).toBe(replyIds.length);
+  });
+});
+
 describe('path containment — model-controlled path at the MCP tool-argument surface', () => {
   it('refuses a ../../-shaped path trying to escape the project', async () => {
     const client = start(root);
@@ -476,16 +499,41 @@ describe('docx/xlsx target — the pending-mutation queue client', () => {
     expect(res.result.isError).toBe(true);
     expect(res.result.content[0].text).toContain('timed-out');
 
-    // The request file itself must actually have been written where the
-    // main-process queue (T9b) is specified to look for it.
+    // The request was written where the main-process queue (T9b) looks —
+    // the directory only exists after an actual submit.
     const pendingDir = path.join(root, '.youcoded', 'comments', '.pending');
-    // The script deletes the RESULT on success, but never the request itself
-    // on a timeout it gave up on — that's acceptable orphan cleanup, not
-    // asserted here; what matters is it existed at some point (or the request
-    // would never have had anything to time out waiting for). We assert the
-    // directory was created, which only happens on an actual submit.
     expect(fs.existsSync(pendingDir)).toBe(true);
+    // 2026-09-28 PR review: a timed-out request is WITHDRAWN, so a slow app
+    // can't apply it after the assistant was told it failed (its retry used
+    // to post the same comment twice) — and the reply says nothing changed.
+    expect(fs.readdirSync(pendingDir).filter((f) => f.endsWith('.json'))).toEqual([]);
+    expect(res.result.content[0].text).toContain('nothing was changed');
   });
+
+  it('a request the app already claimed is waited for past the normal bound, never reported as unchanged', async () => {
+    const client = start(root, { [DOC_COMMENTS_MCP_POLL_TIMEOUT_ENV]: '300' });
+    const callPromise = client.callTool('ReplyToComment', { path: 'report.docx', commentId: 'w-1', text: 'a reply' }, 8000);
+    const pendingDir = path.join(root, '.youcoded', 'comments', '.pending');
+    let requestFile: string | null = null;
+    for (let i = 0; i < 40 && !requestFile; i++) {
+      if (fs.existsSync(pendingDir)) {
+        const files = fs.readdirSync(pendingDir).filter((f) => f.endsWith('.json') && !f.endsWith('.result.json'));
+        if (files.length) requestFile = path.join(pendingDir, files[0]);
+      }
+      if (!requestFile) await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(requestFile).not.toBeNull();
+    // Stand in for the app: claim it (the real queue renames before applying),
+    // then answer only AFTER the script's 300ms bound has passed.
+    const id = path.basename(requestFile!, '.json');
+    fs.renameSync(requestFile!, path.join(pendingDir, `${id}.claimed`));
+    await new Promise((r) => setTimeout(r, 700));
+    fs.writeFileSync(path.join(pendingDir, `${id}.result.json`), JSON.stringify({ ok: true, reply: { id: 'w-1-r2', author: 'assistant', text: 'a reply', createdAt: Date.now() } }));
+
+    const res = await callPromise;
+    expect(res.result.isError).toBe(false);
+    expect(res.result.content[0].text).toContain('Reply w-1-r2 added');
+  }, 15000);
 
   it('a Word/Excel mutation request carries `path`, `format` and the operation-specific fields', async () => {
     const client = start(root, { [DOC_COMMENTS_MCP_POLL_TIMEOUT_ENV]: '5000' });

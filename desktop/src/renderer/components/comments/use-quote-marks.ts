@@ -115,8 +115,51 @@ export function findQuote(root: HTMLElement, quote: string): { start: TextPoint;
   return { start: points[idx], end: { node: last.node, offset: last.offset + 1 } };
 }
 
-/** Wraps [start, end) in one `<mark>` per text node it touches. */
-function wrapSegments(root: HTMLElement, start: TextPoint, end: TextPoint, make: () => HTMLElement): HTMLElement[] {
+/**
+ * Everything one highlight pass changed inside a root, so the next pass (or
+ * an unmount) can put the page back EXACTLY as React left it.
+ *
+ * WHY (2026-09-28 PR review): the page under the highlights belongs to React.
+ * The old undo swapped each <mark> for a brand-new text node and then called
+ * `root.normalize()`, which merges EVERY pair of neighbouring text nodes in
+ * the document — including ones React created for `{a}{b}` and still holds
+ * references to. React's later updates then went to detached nodes, so the
+ * file showed stale words even when it had no comments at all. Now only nodes
+ * this hook created are removed, React's own text nodes get their text back,
+ * and nothing React created is ever merged away.
+ */
+interface WrapRecord {
+  /** Nodes this hook created (marks and split-off text pieces). */
+  created: Set<Node>;
+  /** React-owned text nodes this hook split: their text before the split,
+   *  and what the split left in them (to tell whether React changed them). */
+  splits: Map<Text, { original: string; left: string }>;
+}
+const wrapRecords = new WeakMap<HTMLElement, WrapRecord>();
+
+/** Undoes the previous pass in `root` (see `WrapRecord`). */
+function unwrapAll(root: HTMLElement): void {
+  const record = wrapRecords.get(root);
+  if (!record) return;
+  wrapRecords.delete(root);
+  // Marks first: their children (React's own nodes or our pieces) go back
+  // exactly where the mark stood.
+  for (const node of record.created) {
+    if (node instanceof HTMLElement && node.parentNode) node.replaceWith(...Array.from(node.childNodes));
+  }
+  for (const node of record.created) {
+    if (!(node instanceof HTMLElement)) node.parentNode?.removeChild(node);
+  }
+  for (const [text, { original, left }] of record.splits) {
+    // Only restore a node React hasn't rewritten since the split — if it
+    // has, React's newer text wins and our pieces (already removed) are gone.
+    if (text.data === left) text.data = original;
+  }
+}
+
+/** Wraps [start, end) in one `<mark>` per text node it touches, recording
+ *  every change in `record`. */
+function wrapSegments(root: HTMLElement, start: TextPoint, end: TextPoint, make: () => HTMLElement, record: WrapRecord): HTMLElement[] {
   // Collect the text nodes first — splitting them while a TreeWalker is
   // mid-walk would make it skip or revisit nodes.
   const nodes: Text[] = [];
@@ -135,10 +178,17 @@ function wrapSegments(root: HTMLElement, start: TextPoint, end: TextPoint, make:
     // between paragraphs/list items would otherwise become stray tinted
     // blobs in the gaps between blocks.
     if (!node.data.slice(from, to).trim()) continue;
+    if ((from > 0 || to < node.data.length) && !record.created.has(node) && !record.splits.has(node)) {
+      record.splits.set(node, { original: node.data, left: '' });
+    }
     let target = node;
-    if (to < target.data.length) target.splitText(to);
-    if (from > 0) target = target.splitText(from);
+    if (to < target.data.length) record.created.add(target.splitText(to));
+    if (from > 0) {
+      target = target.splitText(from);
+      record.created.add(target);
+    }
     const mark = make();
+    record.created.add(mark);
     target.parentNode?.insertBefore(mark, target);
     mark.appendChild(target);
     out.push(mark);
@@ -205,7 +255,12 @@ export function useQuoteMarks(
       observer.observe(root, { childList: true, subtree: true });
     };
     pass();
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      // Leave nothing behind for React to trip over once highlights stop
+      // (file closed, switched to edit mode, comments mode changed).
+      unwrapAll(root);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- commentsRef always holds the latest comments; signature (not the array reference) is the real re-anchor trigger, see the WHY above
   }, [containerRef, signature]);
   return marks;
@@ -285,17 +340,16 @@ function cellStatus(root: HTMLElement, sel: CellSelector): 'anchored' | 'detache
 }
 
 function markAll(root: HTMLElement, comments: DocComment[]): Map<string, HTMLElement[]> {
-  // Undo the previous pass's marks first so re-highlighting never nests
-  // <mark>s inside <mark>s as comments/content change.
-  root.querySelectorAll(`[${MARK_ATTR}]`).forEach((el) => {
-    el.replaceWith(document.createTextNode(el.textContent ?? ''));
-  });
+  // Undo the previous pass first so re-highlighting never nests <mark>s
+  // inside <mark>s as comments/content change — and never merges React's own
+  // text nodes (see `WrapRecord`).
+  unwrapAll(root);
   root.querySelectorAll<HTMLElement>(`[${CELL_ATTR}]`).forEach((el) => {
     el.removeAttribute(CELL_ATTR);
     el.removeAttribute('data-comment-id');
     el.classList.remove(...CELL_RESOLVED.split(' '), ...ACTIVE_CLASSES);
   });
-  root.normalize();
+  const record: WrapRecord = { created: new Set(), splits: new Map() };
   const found = new Map<string, HTMLElement[]>();
 
   // Cell comments (spreadsheets): §2.2's trivial presence check.
@@ -357,10 +411,14 @@ function markAll(root: HTMLElement, comments: DocComment[]): Map<string, HTMLEle
           mark.setAttribute('data-comment-id', c.id);
           mark.className = c.resolved ? MARK_RESOLVED : MARK_OPEN;
           return mark;
-        });
+        }, record);
         if (segs.length) found.set(c.id, segs);
       }
     }
+  }
+  if (record.created.size) {
+    for (const [text, entry] of record.splits) entry.left = text.data;
+    wrapRecords.set(root, record);
   }
   return found;
 }

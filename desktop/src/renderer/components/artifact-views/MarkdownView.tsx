@@ -57,9 +57,17 @@ export function MarkdownView({
       // get the 'raw' treatment that enables line-number citing.
       source={isMarkdown ? 'rendered' : 'raw'}
     >
+      {/* WHY key={content} (2026-09-28 PR review): comment highlights split
+          and wrap the text nodes React rendered here. When the file changed on
+          disk (the assistant editing it), React patched those same nodes in
+          place — doubling highlighted words, or throwing "The node to be
+          removed is not a child of this node" and replacing the viewer with an
+          error. Keying on the text makes React build the document fresh
+          instead of patching nodes the highlights moved; the highlights then
+          re-apply to the new text. Nothing changes while the text is the same. */}
       {isMarkdown
-        ? <MarkdownContent content={content} />
-        : <pre className="font-mono text-sm whitespace-pre-wrap">{content}</pre>}
+        ? <MarkdownContent key={content} content={content} />
+        : <pre key={content} className="font-mono text-sm whitespace-pre-wrap">{content}</pre>}
     </CommentableDocument>
   );
 }

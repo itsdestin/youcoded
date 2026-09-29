@@ -580,4 +580,47 @@ describe('orphaned .result.json files are eventually swept (finding #4)', () => 
       expect(fs.existsSync(staleResultPath)).toBe(false);
     });
   });
+
+  // 2026-09-28 PR review: leftover requests (a session killed mid-wait) and
+  // claims (the app killed mid-apply) used to pile up in the project folder
+  // forever — only result files were ever swept.
+  it('hour-old leftover requests and claims are swept too, fresh ones are left alone', async () => {
+    await newRoot();
+    const realRoot = await fs.promises.realpath(root);
+    const dir = pendingDirOf(realRoot);
+    await fs.promises.mkdir(dir, { recursive: true });
+    const veryOld = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    const staleRequest = path.join(dir, `${randomUUID()}.json`);
+    const staleClaim = path.join(dir, `${randomUUID()}.claimed`);
+    for (const f of [staleRequest, staleClaim]) {
+      await fs.promises.writeFile(f, '{}');
+      await fs.promises.utimes(f, veryOld, veryOld);
+    }
+    const freshClaim = path.join(dir, `${randomUUID()}.claimed`);
+    await fs.promises.writeFile(freshClaim, '{}');
+
+    await start('sess-sweep-3', root);
+    await vi.waitFor(() => {
+      expect(fs.existsSync(staleRequest)).toBe(false);
+      expect(fs.existsSync(staleClaim)).toBe(false);
+    });
+    expect(fs.existsSync(freshClaim)).toBe(true);
+  });
+});
+
+// 2026-09-28 PR review.
+describe('a request is claimed before it is applied', () => {
+  it('a handled request leaves neither the request nor its claim behind', async () => {
+    await newRoot();
+    await withDocxFixture('docs/launch-brief.docx');
+    const realRoot = await fs.promises.realpath(root);
+    await start('sess-claim', root);
+    const id = await writeRequest(realRoot, { kind: 'list', format: 'docx', path: 'docs/launch-brief.docx' });
+    await waitForResult(realRoot, id);
+    const dir = pendingDirOf(realRoot);
+    await vi.waitFor(() => {
+      expect(fs.existsSync(path.join(dir, `${id}.json`))).toBe(false);
+      expect(fs.existsSync(path.join(dir, `${id}.claimed`))).toBe(false);
+    });
+  });
 });
