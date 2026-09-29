@@ -42,13 +42,15 @@ export function canEditArtifact(
  * editable" is 'gone'; a read that failed for another reason says why (the prompt offers Retry),
  * so a passing hiccup never reads as "no longer available".
  */
-export async function draftFileStatus(projectRoot: string, artifact: ArtifactRecord): Promise<'editable' | 'gone' | { error: string }> {
+export async function draftFileStatus(projectRoot: string, artifact: ArtifactRecord): Promise<'editable' | 'gone' | 'protected' | { error: string }> {
   if (rendersFromBytesOnly(artifact.path)) return 'gone';
   let res: any;
   try { res = await (window.claude as any)?.artifacts?.get(projectRoot, artifact.id); } catch (e) {
     return { error: `YouCoded couldn't read this file: ${e instanceof Error ? e.message : String(e)}` };
   }
   if (res && res.ok === true && res.orphan) return 'gone';
+  // A protected location can't take the draft whatever happens next (fix round 15).
+  if (res?.error === 'protected-path') return 'protected';
   if (!res || res.ok !== true) return { error: describeReadError(res?.error, res?.code) };
   const absolutePath = typeof res.resolvedPath === 'string' ? res.resolvedPath : artifact.kind === 'internal'
     ? `${projectRoot.replace(/\\/g, '/').replace(/\/+$/, '')}/${artifact.path.replace(/\\/g, '/')}`

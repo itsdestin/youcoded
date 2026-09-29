@@ -93,14 +93,14 @@ describe('the refused-quit prompt', () => {
     expect(await screen.findByRole('button', { name: 'Save' })).toBeInTheDocument();
   });
 
-  it('when nothing is left unsaved it says All saved., and Quit goes on only when pressed', async () => {
+  it('when nothing is left unsaved it says so, and Quit goes on only when pressed', async () => {
     const { office, prompt } = bridge();
     let release!: () => void;
     release = holdUnsavedEditor({ name: 'plan.txt', parked: parked(async () => { release(); return { ok: true as const }; }), discard: () => {} });
     render(<OfficeAlerts onReview={() => {}} />);
     prompt();
     fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
-    expect(await screen.findByText('All saved.')).toBeInTheDocument();
+    expect(await screen.findByText('Nothing left unsaved here.')).toBeInTheDocument();
     expect(office.proceedClose).not.toHaveBeenCalled(); // nothing automatic
     expect(screen.queryByRole('button', { name: /Discard/ })).toBeNull();
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
@@ -118,6 +118,48 @@ describe('the refused-quit prompt', () => {
     expect(screen.getByRole('button', { name: 'Discard and quit' })).toBeDisabled();
     await act(async () => { finish(); });
     expect(screen.getByRole('button', { name: 'Discard and quit' })).toBeEnabled();
+  });
+
+  it('a settings file whose change can\'t be checked: yes, Save anyway, Replace — it saves (no loop)', async () => {
+    const { prompt } = bridge();
+    let release!: () => void;
+    const save = vi.fn(async (o?: ParkedSaveOptions) => {
+      if (!o?.confirmed) return { needsConfirm: true as const };
+      if (!o.force) return { conflict: true as const, unknown: true };
+      release(); // saved: its draft (and mark) goes
+      return { ok: true as const };
+    });
+    release = holdUnsavedEditor({ name: 'settings.json', parked: parked(save), discard: () => {} });
+    render(<OfficeAlerts onReview={() => {}} />);
+    prompt();
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Save anyway' })); // the settings question
+    expect(await screen.findByText('YouCoded can’t tell whether this file changed on disk — save anyway or discard.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save anyway' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Replace' }));
+    await waitFor(() => expect(save).toHaveBeenLastCalledWith({ force: true, confirmed: true }));
+    expect(await screen.findByText('Nothing left unsaved here.')).toBeInTheDocument();
+  });
+
+  it('a file in a protected location offers Discard only', async () => {
+    const { prompt } = bridge();
+    holdUnsavedEditor({ name: 'id_rsa', parked: parked(async () => ({ ok: true as const }), 'protected'), discard: () => {} });
+    holdUnsavedEditor({ name: 'key.txt', parked: parked(async () => ({ protected: true as const })), discard: () => {} });
+    render(<OfficeAlerts onReview={() => {}} />);
+    prompt();
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' })); // key.txt: main refuses it as protected
+    await waitFor(() => expect(screen.getAllByText('(file can’t be saved here)')).toHaveLength(2));
+    expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'Discard' })).toHaveLength(2);
+  });
+
+  it('keeps the restart note once everything is saved', async () => {
+    const { prompt } = bridge();
+    render(<OfficeAlerts onReview={() => {}} />);
+    prompt({ afterTeardown: true, restartDropped: true });
+    expect(screen.getByText('Nothing left unsaved here.')).toBeInTheDocument();
+    expect(screen.getByText('YouCoded will quit instead of restarting.')).toBeInTheDocument();
   });
 
   it('a settings file asks inline before it is saved', async () => {
@@ -259,9 +301,9 @@ describe('saving a parked draft (the editor\'s own save path)', () => {
     withSave({ ok: false, error: 'conflict' });
     stashDraft(draftKey('/p', 'notes.md'), { draft: 'new text', mtimeMs: 1, name: 'notes.md' });
     await expect(saveParkedDraft({ ...base, baseMtimeMs: 1 })).resolves.toEqual({ conflict: true });
-    withSave({ ok: false, error: 'protected-path' });
+    withSave({ ok: false, error: 'disk-full' });
     const r = await saveParkedDraft({ ...base, baseMtimeMs: 1 });
-    expect('error' in r && r.error).toMatch(/protected/);
+    expect('error' in r && r.error).toMatch(/disk-full/);
     expect(takeDraft(draftKey('/p', 'notes.md'))?.draft).toBe('new text');
     clearDraft(draftKey('/p', 'notes.md'));
   });
@@ -271,6 +313,13 @@ describe('saving a parked draft (the editor\'s own save path)', () => {
     expect(save).not.toHaveBeenCalled();
     await saveParkedDraft({ ...base, baseMtimeMs: 1, resolvedPath: '/home/you/.claude/settings.json', confirmed: true });
     expect(save).toHaveBeenCalledWith('/p', 'p', 'p', 'notes.md', 'new text', 's1', { baseMtimeMs: 1, confirmed: true });
+  });
+
+  it("maps main's needs-confirm and protected-path answers to the prompt's own states", async () => {
+    withSave({ ok: false, error: 'needs-confirm' });
+    await expect(saveParkedDraft({ ...base, baseMtimeMs: 1 })).resolves.toEqual({ needsConfirm: true });
+    withSave({ ok: false, error: 'protected-path' });
+    await expect(saveParkedDraft({ ...base, baseMtimeMs: 1 })).resolves.toEqual({ protected: true });
   });
 
   it('never saves blind without a token: that is a possible conflict; Save anyway overwrites', async () => {
@@ -297,6 +346,8 @@ describe('whether a parked draft can still go to its file', () => {
     answer({ ok: true, content: 'x', sizeBytes: 1 });
     await expect(draftFileStatus('/p', { ...artifact, id: 'a.png', path: 'a.png' })).resolves.toBe('gone');
     await expect(draftFileStatus('/p', { ...artifact, id: '.git/config', path: '.git/config' })).resolves.toBe('gone');
+    answer({ ok: false, error: 'protected-path' });
+    await expect(draftFileStatus('/p', artifact)).resolves.toBe('protected');
     answer({ ok: false, error: 'read-failed', code: 'EACCES' });
     await expect(draftFileStatus('/p', artifact)).resolves.toMatchObject({ error: expect.any(String) });
     (window as unknown as { claude: unknown }).claude = { artifacts: { get: vi.fn(async () => { throw new Error('x'); }) } };

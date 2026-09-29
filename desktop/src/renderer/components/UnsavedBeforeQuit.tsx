@@ -11,6 +11,7 @@
 import React, { useEffect, useState, useSyncExternalStore } from 'react';
 import { Button, Dialog } from './ui';
 import { useScreenOpen } from '../shoot-mode';
+import { useScrollFade } from '../hooks/useScrollFade';
 import { clearQuitRefused, confirmDiscardForQuit, previewQuitRefused, useOfficeAlerts } from './office/office-store';
 import {
   discardUnsaved, holdUnsavedEditor, unsavedEditsNow as previewEdits, useUnsavedEdits,
@@ -50,48 +51,60 @@ export function UnsavedBeforeQuit() {
   // Dismissed (Cancel, OK, Esc, ✕): main forgets the held quit/close (fix round 12).
   const dismiss = () => { clearQuitRefused(); window.claude?.office?.dismissPrompt?.(); };
   const allSaved = r !== null && n === 0;
+  const listRef = useScrollFade<HTMLDivElement>();
+  const intro = r?.afterTeardown
+    ? `Your chats have stopped. Save ${n > 1 ? 'the files' : 'the file'}, then quit again.`
+    : `Save ${n > 1 ? 'them' : 'it'}, then ${goOn === 'close' ? 'close the window' : 'quit'} again.`;
+  // Still true once everything is saved: a restart already became a quit.
+  const restartNote = r?.restartDropped ? ' YouCoded will quit instead of restarting.' : '';
   return (
     <Dialog
       open={r !== null}
       onClose={dismiss}
-      title={allSaved ? 'All saved.' : n > 1 ? `${n} files have unsaved changes.` : 'A file has unsaved changes.'}
+      title={allSaved ? 'Nothing left unsaved here.' : n > 1 ? `${n} files have unsaved changes.` : 'A file has unsaved changes.'}
       size="prompt"
       layer={3}
       // Each state its own photo mark (shoot).
       screen={allSaved ? 'app/unsaved-before-quit/all-saved' : r?.confirming ? 'app/unsaved-before-quit/discard' : r?.afterTeardown ? 'app/unsaved-before-quit/after-restart' : 'app/unsaved-before-quit'}
+      // WHY its own layout (fix round 15): the list scrolls in whatever height is left (with the
+      // app's scroll fade as the "more below" cue) while the choices stay pinned under it, so the
+      // buttons are visible at any window height.
+      scrollBody={false}
     >
-      {allSaved ? (
-        <div className="flex gap-2 justify-end">
-          <Button variant="secondary" onClick={dismiss}>Cancel</Button>
-          <Button variant="primary" onClick={proceed}>{goOn === 'close' ? 'Close' : 'Quit'}</Button>
-        </div>
-      ) : (
-        <>
-          <p className="text-sm text-fg-2 pb-3">
-            {r?.afterTeardown
-              ? `Your chats have stopped. Save ${n > 1 ? 'the files' : 'the file'}, then quit again.${r.restartDropped ? ' YouCoded will quit instead of restarting.' : ''}`
-              : `Save ${n > 1 ? 'them' : 'it'}, then ${goOn === 'close' ? 'close the window' : 'quit'} again.`}
-          </p>
-          {/* The list scrolls on its own so the choices below always stay in view. */}
-          <ul className="flex flex-col gap-2 pb-4 max-h-64 overflow-y-auto">
-            {edits.map((e, i) => <UnsavedRow key={`${e.name}-${i}`} edit={e} status={status.get(e)} onRetry={() => setRecheck((x) => x + 1)} />)}
-          </ul>
-          {r?.confirming ? (
-            <div className="flex flex-col gap-3">
-              <p className="text-sm text-fg-2">Discard unsaved changes to {files}?</p>
-              <div className="flex gap-2 justify-end">
-                <Button variant="secondary" onClick={() => confirmDiscardForQuit(false)}>Cancel</Button>
-                <Button variant="danger" onClick={discard} disabled={anySaving}>Discard and {goOn}</Button>
-              </div>
-            </div>
-          ) : (
+      <div className="flex flex-col flex-1 min-h-0 px-4 py-4 gap-3">
+        {allSaved ? (
+          <>
+            {restartNote && <p className="text-sm text-fg-2">{restartNote.trim()}</p>}
             <div className="flex gap-2 justify-end">
-              <Button variant="secondary" disabled={anySaving} onClick={() => { setListed(edits); confirmDiscardForQuit(true); }}>Discard and {goOn}</Button>
-              <Button variant="primary" onClick={dismiss}>OK</Button>
+              <Button variant="secondary" onClick={dismiss}>Cancel</Button>
+              <Button variant="primary" onClick={proceed}>{goOn === 'close' ? 'Close' : 'Quit'}</Button>
             </div>
-          )}
-        </>
-      )}
+          </>
+        ) : (
+          <>
+            <p className="text-sm text-fg-2">{intro}{restartNote}</p>
+            <div ref={listRef} className="scroll-fade flex-1">
+              <ul className="flex flex-col gap-2 py-1">
+                {edits.map((e, i) => <UnsavedRow key={`${e.name}-${i}`} edit={e} status={status.get(e)} onRetry={() => setRecheck((x) => x + 1)} />)}
+              </ul>
+            </div>
+            {r?.confirming ? (
+              <div className="flex flex-col gap-3 shrink-0">
+                <p className="text-sm text-fg-2">Discard unsaved changes to {files}?</p>
+                <div className="flex gap-2 justify-end">
+                  <Button variant="secondary" onClick={() => confirmDiscardForQuit(false)}>Cancel</Button>
+                  <Button variant="danger" onClick={discard} disabled={anySaving}>Discard and {goOn}</Button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex gap-2 justify-end shrink-0">
+                <Button variant="secondary" disabled={anySaving} onClick={() => { setListed(edits); confirmDiscardForQuit(true); }}>Discard and {goOn}</Button>
+                <Button variant="primary" onClick={dismiss}>OK</Button>
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </Dialog>
   );
 }
@@ -104,11 +117,14 @@ export function UnsavedBeforeQuit() {
 // check), and leaves nothing to route.
 type RowState =
   | { kind: 'saving' }
-  | { kind: 'conflict'; unknown?: boolean }
-  | { kind: 'confirm-overwrite'; unknown?: boolean }
+  // `confirmed`: the settings-file question was already answered yes (fix round 15) — carried
+  // through, so Replace does not loop back to it.
+  | { kind: 'conflict'; unknown?: boolean; confirmed?: boolean }
+  | { kind: 'confirm-overwrite'; unknown?: boolean; confirmed?: boolean }
   | { kind: 'confirm-settings' }
   | { kind: 'confirm-discard'; back: RowState | null }
-  | { kind: 'error'; message: string };
+  | { kind: 'error'; message: string }
+  | { kind: 'protected' };
 // WeakMap (fix round 14): a row's state goes with its edit, never lingering after it.
 const rowStates = new WeakMap<UnsavedEdit, RowState>();
 let rowVersion = 0;
@@ -127,7 +143,8 @@ async function saveRow(e: UnsavedEdit, o: { force?: boolean; confirmed?: boolean
   const r = await e.parked!.save(o).catch((err: unknown) => ({ error: `Save failed: ${String(err)}` }));
   if ('ok' in r) { setRow(e, null); return; } // saved: the draft (and its row) is gone
   if ('needsConfirm' in r) { setRow(e, { kind: 'confirm-settings' }); return; }
-  if ('conflict' in r) { setRow(e, { kind: 'conflict', unknown: r.unknown }); return; }
+  if ('protected' in r) { setRow(e, { kind: 'protected' }); return; }
+  if ('conflict' in r) { setRow(e, { kind: 'conflict', unknown: r.unknown, confirmed: o.confirmed }); return; }
   setRow(e, { kind: 'error', message: r.error });
 }
 
@@ -147,6 +164,10 @@ function UnsavedRow({ edit: e, status, onRetry }: { edit: UnsavedEdit; status: D
   } else if (st?.kind === 'confirm-discard') {
     note = text('Discard your changes to this file?');
     actions = <>{small('Cancel', () => setRow(e, st.back))}{small('Discard', () => { setRow(e, null); e.discard(); }, 'danger')}</>;
+  } else if (status === 'protected' || st?.kind === 'protected') {
+    // A protected location (fix round 15): nothing here can save it — Discard only.
+    note = text('(file can’t be saved here)', true);
+    actions = small('Discard', askDiscard);
   } else if (status === 'gone') {
     note = text('(file no longer available)', true);
     actions = small('Discard', askDiscard);
@@ -155,10 +176,10 @@ function UnsavedRow({ edit: e, status, onRetry }: { edit: UnsavedEdit; status: D
     actions = <>{small('Retry', onRetry)}{small('Discard', askDiscard)}</>;
   } else if (st?.kind === 'conflict') {
     note = text(st.unknown ? 'YouCoded can’t tell whether this file changed on disk — save anyway or discard.' : 'Changed on disk since — save anyway or discard.');
-    actions = <>{small('Save anyway', () => setRow(e, { kind: 'confirm-overwrite', unknown: st.unknown }))}{small('Discard', askDiscard)}</>;
+    actions = <>{small('Save anyway', () => setRow(e, { kind: 'confirm-overwrite', unknown: st.unknown, confirmed: st.confirmed }))}{small('Discard', askDiscard)}</>;
   } else if (st?.kind === 'confirm-overwrite') {
     note = text('Replace the file on disk with your version?');
-    actions = <>{small('Cancel', () => setRow(e, { kind: 'conflict', unknown: st.unknown }))}{small('Replace', () => void saveRow(e, { force: true }), 'danger')}</>;
+    actions = <>{small('Cancel', () => setRow(e, { kind: 'conflict', unknown: st.unknown, confirmed: st.confirmed }))}{small('Replace', () => void saveRow(e, { force: true, ...(st.confirmed ? { confirmed: true } : {}) }), 'danger')}</>;
   } else if (st?.kind === 'confirm-settings') {
     note = text('This is a settings file. Save anyway?');
     actions = <>{small('Cancel', () => setRow(e, null))}{small('Save anyway', () => void saveRow(e, { confirmed: true }), 'danger')}</>;

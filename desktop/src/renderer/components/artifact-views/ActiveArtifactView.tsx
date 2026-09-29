@@ -91,6 +91,10 @@ export async function saveParkedDraft(p: {
   }
   if (res && res.ok) { clearDraft(draftKey(p.projectRoot, p.artifact.id)); return { ok: true }; }
   if (res && res.error === 'conflict') return { conflict: true };
+  // Main's own answers the prompt can act on (fix round 15): a settings file → the inline
+  // question (never the editor's "re-enter edit mode" advice); a protected path → Discard only.
+  if (res && res.error === 'needs-confirm') return { needsConfirm: true };
+  if (res && res.error === 'protected-path') return { protected: true };
   return { error: saveErrorMessage(res) };
 }
 
