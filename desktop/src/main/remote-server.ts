@@ -52,8 +52,7 @@ import { refuseUnknownProjectRoot, isValidCommentSelectorShape, missingSelectorF
 // can't drift from the synced registry's limit — same constant project-registry.ts
 // and ipc-handlers.ts use.
 import { PROJECT_DESCRIPTION_MAX } from '../shared/artifacts/types';
-import { listPickerFolders, addFolder, removeFolder, renameFolder, setFolderDescription } from './folders-service';
-import { readDefaults, writeDefaults, getFavorites, setFavorites, getIncognito, setIncognito } from './prefs-service';
+import { getFavorites, setFavorites, getIncognito, setIncognito } from './prefs-service';
 import { staticAssetPolicy } from './remote-static-policy';
 import fs from 'fs';
 import path from 'path';
@@ -93,6 +92,7 @@ import type { ChatGptAuth } from './providers/chatgpt-auth';
 import type { OpenRouterSignIn } from './providers/openrouter-oauth';
 import type { RemoteNativeRuntime } from './create-runtime';
 import { findChannel, serveRemoteChannel } from './ipc/channel-table';
+import { sendToAllWindows } from './window-broadcast';
 import { installClaude } from './prerequisite-installer';
 import { toListResult } from './harness/specialists/catalog';
 import { detectEndpoints } from './models/endpoint-detectors';
@@ -115,7 +115,6 @@ import { installGh } from './github-auth';
 import { combinedGithubStatus } from './github-client';
 import { getGithubConnect, disconnectGithub } from './github-connect';
 import { resolveConversations, readConversation } from './chatsearch-index/refs-service';
-import { getField, setField } from './claude-settings';
 import { resolveStaticFile } from './remote-static-path';
 import { menuAnswerLock } from './menu-answer-lock';
 
@@ -427,6 +426,10 @@ export class RemoteServer {
       /** The native runtime, read on every request (see the `nativeRuntime` field for why it is
        *  an accessor). main.ts returns the runtime createWindow built; tests return a partial fake. */
       getNativeRuntime?: () => RemoteNativeRuntime | null;
+      /** WHY (2026-09-30 one-core R3-1): a change a phone makes through the channel table (a tag
+       *  edited on a phone) must reach this computer's own windows too, not only the phones.
+       *  Defaults to every window of the app (window-broadcast.ts); a test passes its own. */
+      broadcastToWindows?: (channel: string, payload: unknown) => void;
     },
   ) {
     this.devices = new RemoteDeviceStore();
@@ -441,7 +444,9 @@ export class RemoteServer {
     this.serveBuiltPage = opts?.serveBuiltPage ?? true;
     this.untrackWelcomeBack = opts?.untrackWelcomeBack;
     if (opts?.getNativeRuntime) this.getNativeRuntime = opts.getNativeRuntime;
+    this.broadcastToWindows = opts?.broadcastToWindows ?? sendToAllWindows;
   }
+  private broadcastToWindows: (channel: string, payload: unknown) => void;
   private serveBuiltPage: boolean;
   private listCommands: (() => Promise<unknown[]>) | null;
   private prepareCreate: <T extends { cwd?: string }>(payload: T) => T;
@@ -1773,13 +1778,18 @@ export class RemoteServer {
 
     const { type, id, payload } = msg;
 
-    // WHY (2026-09-29 one-core R2): the channel table is consulted BEFORE the switch. It is EMPTY
-    // today, so nothing here changes; R3 moves a family's cases into it, and the entry's policy
-    // (desktop-only, refused) then applies to the phone from one place.
+    // WHY (2026-09-29 one-core R2, filled by R3): the channel table is consulted BEFORE the switch, so
+    // a moved family's entry (and its policy: desktop-only, refused, soft failure answer) applies to
+    // the phone from one place. A `case` left behind for a table name would be dead code.
     const tableDef = findChannel(type);
     if (tableDef) {
       const outcome = await serveRemoteChannel(tableDef, payload, {
         door: 'remote', runtime: this.nativeRuntime, deviceId: client.deviceId,
+        // Every screen: all phones (the sender included), then this computer's windows.
+        broadcast: (channel, data) => {
+          this.broadcast({ type: channel, payload: data });
+          this.broadcastToWindows(channel, data);
+        },
       });
       // Only an awaited request (it has an id) is answered.
       if (outcome.reply && id) this.respond(client.ws, type, id, outcome.payload);
@@ -2760,46 +2770,6 @@ export class RemoteServer {
         this.respond(client.ws, type, id, result);
         break;
       }
-      case 'tags:list': {
-        // Same answer as main's handler: a failed read is { ok: false, error }, never [] —
-        // see listTagsForHost for why.
-        const { listTagsForHost } = await import('./conversations/tag-registry-service');
-        this.respond(client.ws, type, id, await listTagsForHost());
-        break;
-      }
-      case 'tags:create': {
-        const { getTagRegistry } = await import('./conversations/tag-registry-service');
-        const reg = getTagRegistry();
-        if (!reg) { this.respond(client.ws, type, id, { ok: false, error: 'tag registry unavailable' }); break; }
-        try {
-          const tag = await reg.create(String(payload?.label ?? ''), payload?.color);
-          this.broadcast({ type: 'tags:changed', payload: {} });
-          this.respond(client.ws, type, id, { ok: true, tag });
-        } catch (e: any) { this.respond(client.ws, type, id, { ok: false, error: e?.message || String(e) }); }
-        break;
-      }
-      case 'tags:update': {
-        const { getTagRegistry } = await import('./conversations/tag-registry-service');
-        const reg = getTagRegistry();
-        if (!reg) { this.respond(client.ws, type, id, { ok: false, error: 'tag registry unavailable' }); break; }
-        try {
-          const tag = await reg.update(String(payload?.id), payload?.patch ?? {});
-          this.broadcast({ type: 'tags:changed', payload: {} });
-          this.respond(client.ws, type, id, { ok: true, tag });
-        } catch (e: any) { this.respond(client.ws, type, id, { ok: false, error: e?.message || String(e) }); }
-        break;
-      }
-      case 'tags:delete': {
-        const { getTagRegistry } = await import('./conversations/tag-registry-service');
-        const reg = getTagRegistry();
-        if (!reg) { this.respond(client.ws, type, id, { ok: false, error: 'tag registry unavailable' }); break; }
-        try {
-          await reg.delete(String(payload?.id));
-          this.broadcast({ type: 'tags:changed', payload: {} });
-          this.respond(client.ws, type, id, { ok: true });
-        } catch (e: any) { this.respond(client.ws, type, id, { ok: false, error: e?.message || String(e) }); }
-        break;
-      }
       case 'session:set-tag': {
         const { noteFlagChanged, emitConversationMetaChanged } = await import('./conversations/service');
         const { tagFlagKey } = await import('../shared/tags');
@@ -3588,94 +3558,8 @@ export class RemoteServer {
         }
         break;
       }
-      // Session defaults: the SAME functions the desktop handlers call (prefs-service.ts —
-      // WHY there: the copies that lived here had drifted, and a permission setting saved
-      // from a phone was not enforced until the desktop re-read the file).
-      case 'defaults:get': {
-        this.respond(client.ws, type, id, readDefaults());
-        break;
-      }
-      case 'defaults:set': {
-        this.respond(client.ws, type, id, writeDefaults(payload && typeof payload === 'object' ? payload : {}));
-        break;
-      }
       case 'get-home-path': {
         this.respond(client.ws, type, id, os.homedir());
-        break;
-      }
-      // Claude Code settings.json bridge — mirrors ipc-handlers.ts 'settings:get'/'settings:set'.
-      // Dot-path keys supported (e.g. 'permissions.defaultMode').
-      // Both go through claude-settings (2026-09-16 audit D5): the same memoised
-      // read, dot-path walker (prototype-pollution refused — a paired remote
-      // device reaches this handler, 2026-09-10 security review) and locked
-      // atomic write as the desktop handler.
-      case 'settings:get': {
-        try {
-          this.respond(client.ws, type, id, getField((payload as any)?.field ?? ''));
-        } catch {
-          this.respond(client.ws, type, id, undefined);
-        }
-        break;
-      }
-      // Fast + effort mode persistence — mirrors ipc-handlers.ts 'modes:get'/'modes:set'.
-      case 'modes:get': {
-        const modelModesPath = path.join(os.homedir(), '.claude', 'youcoded-model-modes.json');
-        try {
-          const raw = await fs.promises.readFile(modelModesPath, 'utf-8');
-          this.respond(client.ws, type, id, JSON.parse(raw));
-        } catch {
-          this.respond(client.ws, type, id, { fast: false, effort: 'auto' });
-        }
-        break;
-      }
-      case 'modes:set': {
-        const modelModesPath = path.join(os.homedir(), '.claude', 'youcoded-model-modes.json');
-        try {
-          let current = { fast: false, effort: 'auto' } as Record<string, any>;
-          try { current = { ...current, ...JSON.parse(await fs.promises.readFile(modelModesPath, 'utf-8')) }; } catch {}
-          const merged = { ...current, ...(payload as Record<string, any>) };
-          await fs.promises.mkdir(path.dirname(modelModesPath), { recursive: true });
-          await fs.promises.writeFile(modelModesPath, JSON.stringify(merged));
-          this.respond(client.ws, type, id, merged);
-        } catch {
-          this.respond(client.ws, type, id, null);
-        }
-        break;
-      }
-      case 'settings:set': {
-        this.respond(client.ws, type, id, await setField((payload as any)?.field ?? '', (payload as any)?.value));
-        break;
-      }
-      // The folder picker's five operations: the SAME functions the Electron handlers call
-      // (folders-service.ts). WHY: the hand-copied versions here had stopped listing synced
-      // projects, so a phone's new-session picker showed only the saved-folders file (Destin,
-      // 2026-09-11). The catch answers keep what a phone got before on a failed read or write.
-      case 'folders:list': {
-        try {
-          this.respond(client.ws, type, id, listPickerFolders());
-        } catch {
-          this.respond(client.ws, type, id, [{ path: os.homedir(), nickname: 'Home', addedAt: Date.now(), exists: true }]);
-        }
-        break;
-      }
-      case 'folders:add': {
-        try { this.respond(client.ws, type, id, addFolder(payload.folderPath, payload.nickname)); }
-        catch { this.respond(client.ws, type, id, null); }
-        break;
-      }
-      case 'folders:remove': {
-        try { this.respond(client.ws, type, id, removeFolder(payload.folderPath)); }
-        catch { this.respond(client.ws, type, id, false); }
-        break;
-      }
-      case 'folders:rename': {
-        try { this.respond(client.ws, type, id, renameFolder(payload.folderPath, payload.nickname)); }
-        catch { this.respond(client.ws, type, id, false); }
-        break;
-      }
-      case 'folders:set-description': {
-        try { this.respond(client.ws, type, id, setFolderDescription(payload.folderPath, payload.description)); }
-        catch { this.respond(client.ws, type, id, false); }
         break;
       }
       // Game favorites + incognito: the same functions main.ts's handlers call

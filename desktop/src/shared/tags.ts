@@ -39,3 +39,16 @@ export interface TagRecord {
   archived: boolean;
   createdAt: string;
 }
+
+// ── What the tags:* channels answer (one-core R3-1; the contract's request/response types) ──
+
+/** A failed host answer. Never an empty list: see listTagsForHost. */
+type TagFailure = { ok: false; error: string };
+/** tags:list — the list, or why it could not be read. */
+export type TagListResult = TagRecord[] | TagFailure;
+/** tags:create / tags:update */
+export type TagMutationResult = { ok: true; tag: TagRecord } | TagFailure;
+/** tags:delete */
+export type TagDeleteResult = { ok: true } | TagFailure;
+/** tags:update's patch: only the fields being changed. */
+export interface TagPatch { label?: string; color?: TagColor | string; archived?: boolean }

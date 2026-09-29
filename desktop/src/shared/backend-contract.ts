@@ -28,6 +28,8 @@
 
 import type { VoiceBridge } from './voice-types';
 import type { PagesBridge } from './pages-types';
+import type { SavedFolder, PickerFolder, SessionDefaults, ModelModes } from './prefs-types';
+import type { TagListResult, TagMutationResult, TagDeleteResult, TagPatch } from './tags';
 import type {
   NativeSendResult, SessionContext, SessionContextText,
   SessionMetaResult, HandoffAttemptResult, HandoffCreateParams,
@@ -749,11 +751,6 @@ export const IPC = {
 /** handle = request/response; on = fire-and-forget request; push = main → renderer event (no handler). */
 type ChannelKind = 'handle' | 'on' | 'push';
 
-/** How a phone/browser treats a channel. user-action = a person pressed something (gets the
- *  shim's "offline" refusal + is never silently retried); read = safe to repeat; transport =
- *  plumbing between the two ends (ping, ready). Replaces the shim's MESSAGE_KIND list. */
-type ChannelMessageKind = 'user-action' | 'read' | 'transport';
-
 /** What the phone door answers when it refuses a channel (replaces today's per-case refusals).
  *  reply = a fixed answer; unsupported = the generic "not available over remote" answer;
  *  silent = no answer at all (a push, or a no-op the caller never awaits). */
@@ -773,8 +770,19 @@ export interface ChannelCtx<Rt = unknown> {
   deviceId?: string;
   /** Desktop only: the Electron webContents id of the calling window. */
   windowId?: number;
+  /** WHY (2026-09-30 one-core R3-1): tell EVERY screen that something changed: this computer's
+   *  windows AND every paired phone, whichever door the change came in through. Before, a tag
+   *  edited on a phone only told the other phones. Each door fills this the same way. */
+  broadcast(channel: string, payload: unknown): void;
 }
 
+// WHY (2026-09-30 one-core R3-1) three fields R2 declared are gone: `sessionScoped` (nothing reads
+// it until R5's per-session delivery, which re-adds it together with its reader), and
+// `messageKind` / `rejectOnNotOk` (they describe how the phone's BROWSER PAGE treats a channel,
+// and remote-shim.ts, which needs them, cannot import main/ where the table lives). No moved
+// family needs either: MESSAGE_KIND only lists fire-and-forget channels and REJECT_ON_NOT_OK
+// none of these. A later family that needs them moves the shim's list into a shared/ file then,
+// with the reader in the same commit. A field with no reader is a promise nobody keeps.
 export interface ChannelDef<Ctx = ChannelCtx, Payload = any, Result = any> {
   /** One of the IPC names above. */
   name: string;
@@ -787,11 +795,36 @@ export interface ChannelDef<Ctx = ChannelCtx, Payload = any, Result = any> {
   remoteAllowed?: boolean;
   /** What the phone door answers when it refuses; default { kind: 'unsupported' }. */
   refusal?: RemoteRefusal;
-  /** Session-scoped channels go only to phones watching that session (R5/S6). */
-  sessionScoped?: boolean;
-  messageKind: ChannelMessageKind;
-  /** Phone door only: a resolved `{ok:false}` answer becomes a rejection (replaces REJECT_ON_NOT_OK). */
-  rejectOnNotOk?: boolean;
+  /** Phone door only: what a phone is told when the handler THROWS. Default is `{ ok:false, error }`.
+   *  For a channel whose caller expects a list, a boolean or null, that default object would take
+   *  the screen down, so the entry declares the soft answer the phone always got. The desktop
+   *  door ignores it: a throw rejects the invoke there, as it always did. */
+  remoteOnError?: (error: unknown, payload: Payload) => unknown;
+}
+
+/** The request and response type of every channel a table family owns. ONE place: the table
+ *  entry (main/ipc/<family>.ts, via defineChannel) and the window.claude type below both read it,
+ *  so a handler, the desktop bridge and the phone shim cannot disagree about a channel's shape.
+ *  `request` is the ONE object the caller sends (void = no payload). A family adds its rows here
+ *  when it moves into the table. */
+export interface ChannelTypes {
+  'tags:list': { request: void; response: TagListResult };
+  'tags:create': { request: { label: string; color: string }; response: TagMutationResult };
+  'tags:update': { request: { id: string; patch: TagPatch }; response: TagMutationResult };
+  'tags:delete': { request: { id: string }; response: TagDeleteResult };
+  'folders:list': { request: void; response: PickerFolder[] };
+  'folders:add': { request: { folderPath: string; nickname?: string }; response: SavedFolder | null };
+  'folders:remove': { request: { folderPath: string }; response: boolean };
+  'folders:rename': { request: { folderPath: string; nickname: string }; response: boolean };
+  'folders:set-description': { request: { folderPath: string; description: string }; response: boolean };
+  'defaults:get': { request: void; response: SessionDefaults };
+  'defaults:set': { request: Partial<SessionDefaults>; response: SessionDefaults | null };
+  'settings:get': { request: { field: string }; response: unknown };
+  'settings:set': { request: { field: string; value: unknown }; response: boolean };
+  'modes:get': { request: void; response: ModelModes };
+  'modes:set': { request: Partial<ModelModes>; response: ModelModes | null };
+  'analytics:get-opt-in': { request: void; response: boolean };
+  'analytics:set-opt-in': { request: { enabled: boolean }; response: void };
 }
 
 // ── The window.claude bridge: session, on ──────────────────────────────────────
@@ -1119,21 +1152,41 @@ interface ClaudeApi {
     requestTranscriptPage: (req: { sessionId: string; beforeCursor: import('./types').PageCursor | null; claudeSessionId?: string; projectSlug?: string })
       => Promise<import('./types').TranscriptPageResult>;
   };
-  // App-level defaults (skipPermissions, model, projectFolder).
+  // App-level defaults (skipPermissions, model, projectFolder). Types come from ChannelTypes.
   defaults: {
-    // `startModel` — Assistant settings Q-3a (2026-09-05): one default
-    // across every provider. Optional because installs that only ever set
-    // the Claude alias (`model`) have no such field; `model` stays the
-    // fallback and is kept in step on a Claude pick. Persisted by the same
-    // defaults store, which spreads whatever keys it is given.
-    get: () => Promise<{ skipPermissions: boolean; model: string; projectFolder: string; startModel?: import('../renderer/components/model/ModelPicker').ModelChoice; startModelLabel?: { provider: string; model: string } }>;
-    set: (updates: Partial<{ skipPermissions: boolean; model: string; projectFolder: string; startModel: import('../renderer/components/model/ModelPicker').ModelChoice; startModelLabel: { provider: string; model: string } }>) => Promise<any>;
+    get: () => Promise<ChannelTypes['defaults:get']['response']>;
+    set: (updates: ChannelTypes['defaults:set']['request']) => Promise<ChannelTypes['defaults:set']['response']>;
   };
   // Anonymous analytics opt-out — read/write the gate the analytics-service
   // checks on launch. Shape mirrors preload.ts + remote-shim.ts (Phase 6).
   analytics: {
     getOptIn: () => Promise<boolean>;
     setOptIn: (enabled: boolean) => Promise<void>;
+  };
+  // Custom session tags: the registry, shared across sessions (tags:changed says it moved).
+  tags: {
+    list: () => Promise<TagListResult>;
+    create: (label: string, color: string) => Promise<TagMutationResult>;
+    update: (id: string, patch: TagPatch) => Promise<TagMutationResult>;
+    delete: (id: string) => Promise<TagDeleteResult>;
+  };
+  // The new-session folder picker's saved folders.
+  folders: {
+    list: () => Promise<PickerFolder[]>;
+    add: (folderPath: string, nickname?: string) => Promise<SavedFolder | null>;
+    remove: (folderPath: string) => Promise<boolean>;
+    rename: (folderPath: string, nickname: string) => Promise<boolean>;
+    setDescription: (folderPath: string, description: string) => Promise<boolean>;
+  };
+  // Claude Code's settings.json, one dot-path field at a time (e.g. 'permissions.defaultMode').
+  settings: {
+    get: (field: string) => Promise<unknown>;
+    set: (field: string, value: unknown) => Promise<boolean>;
+  };
+  // Fast mode + effort level — local-only state for the /fast and /effort UI.
+  modes: {
+    get: () => Promise<ModelModes>;
+    set: (modes: Partial<ModelModes>) => Promise<ModelModes | null>;
   };
   // Settings → Development feature (bug report, contribute, known issues).
   // Shape mirrors preload.ts dev namespace and remote-shim.ts dev namespace.

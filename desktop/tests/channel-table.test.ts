@@ -1,9 +1,8 @@
 // The channel table (one-core R2): an entry placed in it is served by BOTH doors, the desktop's
 // ipcMain and the phone's RemoteServer, from the same handler and the same policy.
 //
-// R2 ships the table EMPTY, so every entry below is a test-only name (`test:*`), never a real
-// channel. The empty-table pin at the top is meant to be deleted by R3, the run that moves the
-// first real channel in.
+// The mechanism, pinned with test-only names (`test:*`) that the file adds to the table and
+// removes again. What each REAL family answers is pinned by channel-table-families.test.ts.
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import { EventEmitter } from 'node:events';
 
@@ -33,24 +32,24 @@ import { CHANNEL_TABLE, type MainChannelDef } from '../src/main/ipc/channel-tabl
 const calls: Array<{ name: string; payload: any; door: string }> = [];
 const testEntries: MainChannelDef[] = [
   {
-    name: 'test:echo', kind: 'handle', messageKind: 'read',
+    name: 'test:echo', kind: 'handle',
     handler: (payload, ctx) => { calls.push({ name: 'test:echo', payload, door: ctx.door }); return { echoed: payload.value, doubled: payload.value * 2 }; },
   },
   {
-    name: 'test:desktop-only', kind: 'handle', messageKind: 'user-action', desktopOnly: true,
+    name: 'test:desktop-only', kind: 'handle', desktopOnly: true,
     handler: (payload, ctx) => { calls.push({ name: 'test:desktop-only', payload, door: ctx.door }); return { ran: true }; },
   },
   {
-    name: 'test:refused-with-answer', kind: 'handle', messageKind: 'user-action', remoteAllowed: false,
+    name: 'test:refused-with-answer', kind: 'handle', remoteAllowed: false,
     refusal: { kind: 'reply', payload: { ok: false, error: 'host-admin' } },
     handler: (payload, ctx) => { calls.push({ name: 'test:refused-with-answer', payload, door: ctx.door }); return { ran: true }; },
   },
   {
-    name: 'test:fire', kind: 'on', messageKind: 'transport',
+    name: 'test:fire', kind: 'on',
     handler: (payload, ctx) => { calls.push({ name: 'test:fire', payload, door: ctx.door }); },
   },
   {
-    name: 'test:throws', kind: 'handle', messageKind: 'read',
+    name: 'test:throws', kind: 'handle',
     handler: () => { throw new Error('boom from the handler'); },
   },
 ];
@@ -74,6 +73,7 @@ async function overRemote(type: string, payload: any) {
 }
 const overIpc = (channel: string, payload: any) => handlers.get(channel)!({ sender: { id: 7 } }, payload);
 
+const realEntries = CHANNEL_TABLE.length;
 beforeAll(() => {
   CHANNEL_TABLE.push(...testEntries);
   const sessionManager: any = Object.assign(new EventEmitter(), {
@@ -92,7 +92,7 @@ beforeAll(() => {
 });
 
 afterAll(async () => {
-  CHANNEL_TABLE.length = 0; // leave the module the way R2 ships it
+  CHANNEL_TABLE.length = realEntries; // leave the real families in place, drop the test ones
   await cleanup?.();
 });
 

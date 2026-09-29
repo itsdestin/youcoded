@@ -19,7 +19,6 @@ import { IPC, SESSION_FLAG_NAMES, type SessionFlagName, type SessionProvider, ty
 import { isPlaceholderModelId } from '../shared/model-ids';
 import { setPermissionOverrides, forgetSessionAttention } from './main';
 import { LocalSkillProvider } from './skill-provider';
-import { getField, setField } from './claude-settings';
 import { CommandProvider } from './command-provider';
 import { IntegrationInstaller, listWithState } from './integration-installer';
 import { RemoteConfig, MIN_REMOTE_PASSWORD_LENGTH } from './remote-config';
@@ -118,14 +117,12 @@ import { getChangelog } from './changelog-service';
 // Analytics opt-out — Phase 6. The two exported functions read/write
 // ~/.claude/youcoded-analytics.json; runAnalyticsOnLaunch (wired in main.ts)
 // short-circuits when optIn is false.
-import { getOptIn as getAnalyticsOptIn, setOptIn as setAnalyticsOptIn } from './analytics-service';
 // Saved-folder store — extracted so sync-spaces/ can share the reader/writer.
 import { SavedFolder, readFolders, writeFolders } from './saved-folders';
 // Shared cap so a local folder's description can't drift from the synced
 // registry's limit (project-registry.ts uses the same constant).
 import { PROJECT_DESCRIPTION_MAX } from '../shared/artifacts/types';
-import { listPickerFolders, addFolder, removeFolder, renameFolder, setFolderDescription } from './folders-service';
-import { readDefaults, writeDefaults, setPermissionOverridesSink } from './prefs-service';
+import { setPermissionOverridesSink } from './prefs-service';
 import { loadConfigSync, writeConfig, getAppliedAtLaunch, getCachedGpu } from './performance-config';
 import type { PerformanceConfigSnapshot, SessionInfo } from '../shared/types';
 import { ARTIFACT_IPC } from './artifacts/ipc-channels';
@@ -195,8 +192,7 @@ import { createHandoffTransport, registerHandoffIpc } from './conversations/hand
 import { createTransferredExitGate } from './conversations/handoff-exit';
 import { hubLeaseRequest, syncSpacesSyncNowAwaited } from './sync-spaces/service';
 import type { RequesterTakeoverType } from './conversations/takeover';
-import { getTagRegistry, listTagsForHost } from './conversations/tag-registry-service';
-import { tagFlagKey, isTagColor, TagColor } from '../shared/tags';
+import { tagFlagKey } from '../shared/tags';
 import { writeContextFile } from './project-context';
 
 // Max age for clipboard paste images (1 hour)
@@ -1355,49 +1351,9 @@ export function registerIpcHandlers(
     }
   });
 
-  // --- Model modes (fast + effort) persistence ---
-  // ~/.claude/youcoded-model-modes.json holds `{ fast, effort }`. These aren't
-  // verified from transcripts (Claude Code doesn't include them there) — we
-  // trust our local state and rely on the user's ModelPickerPopup as the source of truth.
-  const modelModesPath = path.join(os.homedir(), '.claude', 'youcoded-model-modes.json');
-
-  ipcMain.handle('modes:get', async () => {
-    try {
-      return JSON.parse(fs.readFileSync(modelModesPath, 'utf-8'));
-    } catch {
-      return { fast: false, effort: 'auto' };
-    }
-  });
-
-  ipcMain.handle('modes:set', async (_event, modes: { fast?: boolean; effort?: string }) => {
-    try {
-      let current = { fast: false, effort: 'auto' };
-      try { current = { ...current, ...JSON.parse(fs.readFileSync(modelModesPath, 'utf-8')) }; } catch {}
-      const merged = { ...current, ...modes };
-      fs.mkdirSync(path.dirname(modelModesPath), { recursive: true });
-      fs.writeFileSync(modelModesPath, JSON.stringify(merged));
-      return merged;
-    } catch {
-      return null;
-    }
-  });
-
-  // --- Claude Code settings.json bridge (for Preferences panel) ---
-  // Generic get/set keyed by field name so we don't need a handler per setting.
-  // Field names follow Claude Code's own schema (e.g., 'editorMode', 'defaultMode').
-  // WHY claude-settings (2026-09-16 audit D5): the (mtime, size) parse memo,
-  // the dot-path walker with its prototype-pollution refusal, the atomic
-  // locked write and the "back up a corrupt file, then write fresh" rule all
-  // live in that one module now, shared with the remote-server twin.
-  ipcMain.handle('settings:get', async (_event, { field }: { field: string }) => {
-    try {
-      return getField(field);
-    } catch {
-      return undefined;
-    }
-  });
-
-  ipcMain.handle('settings:set', async (_event, { field, value }: { field: string; value: unknown }) => setField(field, value));
+  // WHY (2026-09-30 one-core R3-1): modes:get / modes:set, settings:get / settings:set,
+  // defaults:get / defaults:set, analytics:* , folders:* and tags:* now live in the channel table
+  // (main/ipc/<family>.ts), served by both doors from one body.
 
   // --- Appearance preference persistence ---
   ipcMain.handle('appearance:get', async () => {
@@ -1449,38 +1405,11 @@ export function registerIpcHandlers(
   });
 
   // --- Session defaults persistence ---
-  // Read/merge/write lives in prefs-service.ts, shared with remote-server.ts so a phone's
-  // read and save behave exactly like this window's. Every read and save also refreshes
-  // main.ts's in-memory override cache (the one the permission hook consults) through the
-  // sink registered here — for a save made from a phone too.
+  // The channels themselves are table entries (main/ipc/defaults.ts); prefs-service.ts holds the
+  // read/merge/write. Every read and save also refreshes main.ts's in-memory override cache (the
+  // one the permission hook consults) through the sink registered here — for a save made from a
+  // phone too.
   setPermissionOverridesSink(setPermissionOverrides);
-  ipcMain.handle('defaults:get', async () => readDefaults(defaultsPrefPath));
-  ipcMain.handle('defaults:set', async (_event, updates: Record<string, any>) =>
-    writeDefaults(updates && typeof updates === 'object' ? updates : {}, defaultsPrefPath));
-
-  // --- Anonymous analytics opt-out (Phase 6) ---------------------------------
-  // Getters and setters for the boolean gate analytics-service reads on launch.
-  // The About → Privacy section's toggle drives these; renderer handles the
-  // optimistic flip with revert-on-failure, so we don't need to return a bool
-  // from the setter.
-  ipcMain.handle('analytics:get-opt-in', () => getAnalyticsOptIn());
-  ipcMain.handle('analytics:set-opt-in', (_event, { enabled }: { enabled: boolean }) => {
-    setAnalyticsOptIn(Boolean(enabled));
-  });
-
-  // --- Folder switcher persistence ---
-  // Reader/writer + SavedFolder type now live in ./saved-folders (imported
-  // above) so the sync-spaces import flow can rewrite an entry when a folder
-  // moves. The FOLDERS_* handlers below call the no-arg forms, which default
-  // to the same ~/.claude/youcoded-folders.json path.
-  // The folder picker's five operations live in folders-service.ts, shared with remote-server.ts
-  // so a phone lists and edits folders exactly as this window does (a hand-copied remote version
-  // had stopped listing synced projects — Destin, 2026-09-11).
-  ipcMain.handle(IPC.FOLDERS_LIST, async () => listPickerFolders());
-  ipcMain.handle(IPC.FOLDERS_ADD, async (_event, { folderPath, nickname }: { folderPath: string; nickname?: string }) => addFolder(folderPath, nickname));
-  ipcMain.handle(IPC.FOLDERS_REMOVE, async (_event, { folderPath }: { folderPath: string }) => removeFolder(folderPath));
-  ipcMain.handle(IPC.FOLDERS_RENAME, async (_event, { folderPath, nickname }: { folderPath: string; nickname: string }) => renameFolder(folderPath, nickname));
-  ipcMain.handle(IPC.FOLDERS_SET_DESCRIPTION, async (_event, { folderPath, description }: { folderPath: string; description: string }) => setFolderDescription(folderPath, description));
 
   // --- Skills discovery & marketplace ---
   ipcMain.handle(IPC.SKILLS_LIST, async () => {
@@ -3951,58 +3880,6 @@ export function registerIpcHandlers(
     }
   });
 
-  // --- Tag registry CRUD ---
-  // A failed read answers { ok: false, error }, never [] — see listTagsForHost for why.
-  ipcMain.handle(IPC.TAGS_LIST, () => listTagsForHost());
-
-  ipcMain.handle(IPC.TAGS_CREATE, async (_e, { label, color }: { label: string; color: string }) => {
-    const reg = getTagRegistry();
-    if (!reg) return { ok: false, error: 'tag registry unavailable' };
-    const c: TagColor = isTagColor(color) ? color : 'tag-gray';
-    try {
-      const tag = await reg.create(String(label ?? ''), c);
-      remoteServer?.broadcast({ type: IPC.TAGS_CHANGED, payload: {} });
-      // Notify local windows too (buddy window + main share the registry).
-      broadcastToAllWindows(IPC.TAGS_CHANGED, {});
-      return { ok: true, tag };
-    } catch (e: any) { return { ok: false, error: e?.message || String(e) }; }
-  });
-
-  ipcMain.handle(IPC.TAGS_UPDATE, async (_e, { id, patch }: { id: string; patch: { label?: string; color?: string; archived?: boolean } }) => {
-    const reg = getTagRegistry();
-    if (!reg) return { ok: false, error: 'tag registry unavailable' };
-    const clean: { label?: string; color?: TagColor; archived?: boolean } = {};
-    if (patch?.label !== undefined) clean.label = String(patch.label);
-    if (patch?.color !== undefined) clean.color = isTagColor(patch.color) ? patch.color : 'tag-gray';
-    if (patch?.archived !== undefined) clean.archived = !!patch.archived;
-    try {
-      const tag = await reg.update(String(id), clean);
-      remoteServer?.broadcast({ type: IPC.TAGS_CHANGED, payload: {} });
-      broadcastToAllWindows(IPC.TAGS_CHANGED, {});
-      // Task 5 gap (final review): the chatsearch metadata snapshot denormalizes
-      // tag LABELS at build time (meta-builder.ts resolves tag ids -> labels once,
-      // into each conversation row) — renaming a tag here doesn't touch those
-      // rows, so without this the index would keep serving the OLD label until
-      // some unrelated refresh happened to rebuild it.
-      emitConversationMetaChanged();
-      return { ok: true, tag };
-    } catch (e: any) { return { ok: false, error: e?.message || String(e) }; }
-  });
-
-  ipcMain.handle(IPC.TAGS_DELETE, async (_e, { id }: { id: string }) => {
-    const reg = getTagRegistry();
-    if (!reg) return { ok: false, error: 'tag registry unavailable' };
-    try {
-      await reg.delete(String(id));
-      remoteServer?.broadcast({ type: IPC.TAGS_CHANGED, payload: {} });
-      broadcastToAllWindows(IPC.TAGS_CHANGED, {});
-      // Same gap as TAGS_UPDATE above — a deleted tag's label must also drop
-      // out of the denormalized index, not just the registry.
-      emitConversationMetaChanged();
-      return { ok: true };
-    } catch (e: any) { return { ok: false, error: e?.message || String(e) }; }
-  });
-
   // --- Apply/remove a tag on a session (writes tag:<id> into the store flag map) ---
   ipcMain.handle(IPC.SESSION_SET_TAG, async (_e, { sessionId, tagId, value }: { sessionId: string; tagId: string; value: boolean }) => {
     if (typeof tagId !== 'string' || !tagId.startsWith('tag_')) {
@@ -5183,11 +5060,15 @@ export function registerIpcHandlers(
     engine: { installed: () => engineManager.registryHook().installed(), install: () => engineManager.install() },
     models: modelManager,
   };
-  // WHY (2026-09-29 one-core R2): the channel table's desktop half. Empty today, so this registers
-  // nothing; R3 moves one family per run into the table and deletes its hand-written
-  // ipcMain.handle blocks above. Kept last so a table entry can never shadow a hand-written one
-  // (Electron refuses a second handler for the same name, which surfaces as a startup throw).
-  registerDesktopChannels(ipcMain, () => runtime);
+  // WHY (2026-09-29 one-core R2, filled by R3): the channel table's desktop half. Every family moved
+  // into the table registers here, and its hand-written ipcMain.handle blocks are gone from this file.
+  // Kept last so a table entry can never shadow a hand-written one (Electron refuses a second
+  // handler for the same name, which surfaces as a startup throw).
+  registerDesktopChannels(ipcMain, () => runtime, (channel, payload) => {
+    // Every screen: the phones, then this computer's own windows (the same pair tagsChanged fires).
+    remoteServer?.broadcast({ type: channel, payload });
+    broadcastToAllWindows(channel, payload);
+  });
   return {
     cleanup, hasUsableProvider, firstRunDeps, openRouterSignIn, handoffAttempts,
     outboxBroadcast: { sessionMeta: broadcastSessionMeta, tagsChanged: broadcastTagsChanged } satisfies OutboxBroadcast,

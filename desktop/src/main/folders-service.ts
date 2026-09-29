@@ -16,10 +16,8 @@ import { readFolders, writeFolders, type SavedFolder } from './saved-folders';
 import { getManagedRoots } from './sync-spaces/service';
 import { PROJECT_DESCRIPTION_MAX } from '../shared/artifacts/types';
 
-export interface PickerFolder extends SavedFolder {
-  exists: boolean;
-  managed?: true;
-}
+import type { PickerFolder } from '../shared/prefs-types';
+export type { PickerFolder };
 
 /** Saved folders (seeded with Home on first use), then every synced project not already saved. */
 export function listPickerFolders(file?: string): PickerFolder[] {

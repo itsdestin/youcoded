@@ -8,23 +8,39 @@
 // message up here BEFORE its old switch. R2 ships the mechanism EMPTY: with zero entries neither
 // door does anything new. R3 moves real channels in, one family at a time.
 //
-// The entry shape (ChannelDef) lives in shared/backend-contract.ts next to the channel names.
-import type { ChannelCtx, ChannelDef } from '../../shared/backend-contract';
+// The entry shape (ChannelDef) lives in shared/backend-contract.ts next to the channel names; a
+// family's entries are written with defineChannel (channel-def.ts) in main/ipc/<family>.ts.
+//
+// WHY (2026-09-30 one-core R3-1): the table now holds its first six families (tags, folders,
+// defaults, modes, analytics, settings). To move a family: add its request/response rows to
+// ChannelTypes, write main/ipc/<family>.ts, list it below, then delete its ipcMain.handle blocks
+// in ipc-handlers.ts and its `case`s in remote-server.ts. Never leave a case behind: the table
+// answers first on the phone, so a leftover case is dead code that looks alive.
+import type { ChannelCtx } from '../../shared/backend-contract';
 import type { RemoteNativeRuntime } from '../create-runtime';
+import type { MainChannelCtx, MainChannelDef } from './channel-def';
+import { tagsChannels } from './tags';
+import { foldersChannels } from './folders';
+import { defaultsChannels } from './defaults';
+import { modesChannels } from './modes';
+import { analyticsChannels } from './analytics';
+import { settingsChannels } from './settings';
 
-/** What a table handler is given besides its payload. Typed with the slice of the runtime the
- *  PHONE door can also reach (RemoteNativeRuntime), because a handler both doors run may only
- *  lean on what both doors have. R3 widens it when a family needs more. */
-type MainChannelCtx = ChannelCtx<RemoteNativeRuntime>;
-export type MainChannelDef<Payload = any, Result = any> = ChannelDef<MainChannelCtx, Payload, Result>;
+export type { MainChannelCtx, MainChannelDef } from './channel-def';
 
-/** EMPTY on purpose (R2). Mutable so a test can place a test-only entry and remove it again. */
-export const CHANNEL_TABLE: MainChannelDef[] = [];
+/** Every channel both doors serve. Mutable so a test can place a test-only entry and remove it again. */
+export const CHANNEL_TABLE: MainChannelDef[] = [
+  ...tagsChannels,
+  ...foldersChannels,
+  ...defaultsChannels,
+  ...modesChannels,
+  ...analyticsChannels,
+  ...settingsChannels,
+];
 
 let indexed: { size: number; byName: Map<string, MainChannelDef> } | null = null;
 /** The entry for a channel name, or undefined. The lookup map is rebuilt only when the table's size changed. */
 export function findChannel(name: string): MainChannelDef | undefined {
-  if (CHANNEL_TABLE.length === 0) return undefined;
   if (!indexed || indexed.size !== CHANNEL_TABLE.length) {
     indexed = { size: CHANNEL_TABLE.length, byName: new Map(CHANNEL_TABLE.map((d) => [d.name, d])) };
   }
@@ -42,12 +58,17 @@ interface IpcMainLike {
 /** Register every table entry with Electron. `handle` entries answer with the handler's own value
  *  (a throw rejects the invoke, exactly as a hand-written ipcMain.handle does); `on` entries are
  *  fire-and-forget; `push` entries have no receiver and register nothing. */
-export function registerDesktopChannels(ipc: IpcMainLike, getRuntime: () => RemoteNativeRuntime | null): void {
+export function registerDesktopChannels(
+  ipc: IpcMainLike,
+  getRuntime: () => RemoteNativeRuntime | null,
+  /** Tell every window and every phone (see ChannelCtx.broadcast). */
+  broadcast: ChannelCtx['broadcast'],
+): void {
   const seen = new Set<string>();
   for (const def of CHANNEL_TABLE) {
     if (seen.has(def.name)) throw new Error(`channel table lists ${def.name} twice`);
     seen.add(def.name);
-    const ctxFor = (event: any): MainChannelCtx => ({ door: 'desktop', runtime: getRuntime(), windowId: event?.sender?.id });
+    const ctxFor = (event: any): MainChannelCtx => ({ door: 'desktop', runtime: getRuntime(), windowId: event?.sender?.id, broadcast });
     if (def.kind === 'handle') {
       ipc.handle(def.name, (event, payload) => def.handler(payload, ctxFor(event)));
     } else if (def.kind === 'on') {
@@ -88,8 +109,10 @@ export async function serveRemoteChannel(def: MainChannelDef, payload: unknown, 
   try {
     return { reply: true, payload: await def.handler(payload, ctx) };
   } catch (error) {
-    // A phone has no rejected-invoke channel, so a throw becomes the {ok:false,error} shape the
+    // A phone has no rejected-invoke channel, so a throw becomes what the entry declares
+    // (remoteOnError: the soft answer its caller expects), else the {ok:false,error} shape the
     // rest of remote-server already answers with.
+    if (def.remoteOnError) return { reply: true, payload: def.remoteOnError(error, payload) };
     return { reply: true, payload: { ok: false, error: error instanceof Error ? error.message : 'That did not work. Try again.' } };
   }
 }

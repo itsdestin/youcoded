@@ -1,0 +1,243 @@
+// The families moved into the channel table (one-core R3-1: tags, folders, defaults, modes,
+// analytics, settings). Three kinds of check:
+//   1. EVERY real table entry is served by both doors through its ONE handler (generic, so the
+//      next run's families are covered the moment they are listed in the table).
+//   2. No hand-written registration or `case` is left behind for a table name.
+//   3. What the doors do that the handler does not: the phone's soft failure answers, refusals,
+//      the tag change reaching every screen, and settings refusing unsafe paths on both doors.
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
+import { EventEmitter } from 'node:events';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+
+const windowSends: Array<[string, unknown]> = [];
+vi.mock('electron', () => {
+  const fakeWindow = { isDestroyed: () => false, webContents: { send: (c: string, p: unknown) => windowSends.push([c, p]) } };
+  const BrowserWindowMock: any = vi.fn(() => ({ loadURL: vi.fn(), on: vi.fn(), webContents: { send: vi.fn() } }));
+  BrowserWindowMock.getAllWindows = vi.fn(() => [fakeWindow]);
+  return {
+    app: { isPackaged: false, getPath: vi.fn(() => '/tmp'), getVersion: vi.fn(() => '0.0.0-test'), whenReady: vi.fn(() => new Promise(() => {})), on: vi.fn(), quit: vi.fn(), setAppUserModelId: vi.fn(), commandLine: { appendSwitch: vi.fn() }, getGPUInfo: vi.fn(() => new Promise(() => {})) },
+    ipcMain: { handle: vi.fn(), on: vi.fn() },
+    BrowserWindow: BrowserWindowMock,
+    Menu: { setApplicationMenu: vi.fn() },
+    protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() },
+    dialog: { showOpenDialog: vi.fn() },
+    clipboard: { readImage: vi.fn(() => ({ isEmpty: () => true })) },
+    nativeImage: {},
+    shell: { openExternal: vi.fn() },
+    powerSaveBlocker: { start: vi.fn(() => 0), stop: vi.fn() },
+    webContents: { getAllWebContents: vi.fn(() => []) },
+  };
+});
+
+// A registry we control, so the tag entries can be driven without the sync-space plumbing.
+const fakeRegistry = {
+  create: vi.fn(async (label: string, color: string) => ({ id: 'tag_1', label, color, archived: false, createdAt: 'now' })),
+  update: vi.fn(async (id: string, patch: any) => ({ id, label: patch.label ?? 'x', color: patch.color ?? 'tag-gray', archived: !!patch.archived, createdAt: 'now' })),
+  delete: vi.fn(async () => {}),
+  list: vi.fn(async () => []),
+};
+let registryOn = true;
+vi.mock('../src/main/conversations/tag-registry-service', () => ({
+  getTagRegistry: () => (registryOn ? fakeRegistry : null),
+  listTagsForHost: async () => (registryOn ? [] : { ok: false, error: "tag storage isn't available" }),
+}));
+const metaChanged = vi.fn();
+vi.mock('../src/main/conversations/service', async (importOriginal) => ({
+  ...(await importOriginal<any>()),
+  emitConversationMetaChanged: () => metaChanged(),
+}));
+
+import { registerIpcHandlers } from '../src/main/ipc-handlers';
+import { registerWithRuntime } from './helpers/register-ipc';
+import { RemoteServer } from '../src/main/remote-server';
+import { CHANNEL_TABLE } from '../src/main/ipc/channel-table';
+import { foldersChannels } from '../src/main/ipc/folders';
+
+let server: RemoteServer;
+let handlers: Map<string, (...args: any[]) => any>;
+let cleanup: () => Promise<void>;
+const windowBroadcasts: Array<[string, unknown]> = [];
+
+function fakeClient() {
+  const frames: any[] = [];
+  const ws: any = Object.assign(new EventEmitter(), { readyState: 1, send: (raw: string) => frames.push(JSON.parse(raw)), close: vi.fn(), ping: vi.fn() });
+  return { frames, client: { id: 'sock', ws, deviceId: 'phone-1', ip: '127.0.0.1', connectedAt: Date.now() } };
+}
+let nextRequest = 0;
+async function overRemote(type: string, payload?: any) {
+  const who = fakeClient();
+  const id = `phone-1:1:${++nextRequest}`;
+  await (server as any).handleMessage(who.client, JSON.stringify({ type, id, payload }));
+  return { answer: who.frames.find((f) => f.type === `${type}:response` && f.id === id)?.payload, frames: who.frames };
+}
+const overIpc = (channel: string, payload?: any) => handlers.get(channel)!({ sender: { id: 7 } }, payload);
+
+beforeAll(() => {
+  const sessionManager: any = Object.assign(new EventEmitter(), {
+    createSession: vi.fn(), destroySession: vi.fn(), listSessions: vi.fn(() => []), sendInput: vi.fn(), resizeSession: vi.fn(),
+  });
+  const hookRelay: any = Object.assign(new EventEmitter(), { respond: vi.fn(() => true) });
+  const config: any = { enabled: false, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
+  server = new RemoteServer(sessionManager, hookRelay, config, undefined, {
+    broadcastToWindows: (channel, payload) => windowBroadcasts.push([channel, payload]),
+  });
+  const mockIpcMain: any = { handle: vi.fn(), on: vi.fn() };
+  const mockWindow: any = { webContents: { send: vi.fn() }, isDestroyed: () => false };
+  const mockSkillProvider: any = { configStore: { getPackages: vi.fn(() => ({})) }, install: vi.fn(), installMany: vi.fn(), ensureBundledPluginsInstalled: vi.fn(), ensureMigrated: vi.fn() };
+  const wiring = registerWithRuntime(registerIpcHandlers, mockIpcMain, sessionManager, mockWindow, mockSkillProvider, undefined as any, hookRelay, config, server);
+  cleanup = wiring.cleanup;
+  handlers = new Map(mockIpcMain.handle.mock.calls.map((c: any) => [c[0], c[1]]));
+});
+afterAll(async () => { await cleanup?.(); });
+beforeEach(() => { windowSends.length = 0; windowBroadcasts.length = 0; registryOn = true; metaChanged.mockClear(); });
+
+describe('every table entry is served by both doors through its one handler', () => {
+  it('the table lists the tags, folders, defaults, modes, analytics and settings channels', () => {
+    const families = new Set(CHANNEL_TABLE.map((d) => d.name.split(':')[0]));
+    for (const f of ['tags', 'folders', 'defaults', 'modes', 'analytics', 'settings']) expect(families.has(f)).toBe(true);
+    expect(CHANNEL_TABLE.length).toBeGreaterThanOrEqual(17);
+  });
+
+  for (const def of CHANNEL_TABLE) {
+    it(`${def.name}: desktop and phone run the same handler`, async () => {
+      const original = def.handler;
+      const seen: string[] = [];
+      def.handler = (_payload: any, ctx: any) => { seen.push(ctx.door); return { sentinel: def.name }; };
+      try {
+        const desktop = await overIpc(def.name, {});
+        const phone = (await overRemote(def.name, {})).answer;
+        expect(desktop).toEqual({ sentinel: def.name });
+        if (def.desktopOnly || def.remoteAllowed === false) {
+          // Refused from the table: the handler never runs for a phone.
+          expect(seen).toEqual(['desktop']);
+          expect(phone).toMatchObject({ ok: false, unsupported: true });
+        } else {
+          expect(seen).toEqual(['desktop', 'remote']);
+          expect(phone).toEqual({ sentinel: def.name });
+        }
+      } finally {
+        def.handler = original;
+      }
+    });
+  }
+});
+
+describe('nothing hand-written is left behind for a table name', () => {
+  const src = (f: string) => fs.readFileSync(path.join(__dirname, '..', 'src', 'main', f), 'utf-8');
+  const remote = src('remote-server.ts');
+  const desktop = src('ipc-handlers.ts');
+  for (const def of CHANNEL_TABLE) {
+    it(`${def.name} has no remote-server case and no ipcMain.handle of its own`, () => {
+      expect(remote).not.toContain(`case '${def.name}'`);
+      expect(desktop).not.toContain(`ipcMain.handle('${def.name}'`);
+      expect(desktop).not.toMatch(new RegExp(`ipcMain\\.handle\\(IPC\\.${def.name.toUpperCase().replace(/[:-]/g, '_')}\\b`));
+    });
+  }
+});
+
+describe('analytics is the computer\'s own switch: refused to a phone as before', () => {
+  it('a phone gets the standard "not available over remote access" answer', async () => {
+    const { answer } = await overRemote('analytics:get-opt-in');
+    expect(answer).toEqual({ ok: false, error: "This feature isn't available over remote access yet (analytics:get-opt-in).", unsupported: true });
+  });
+});
+
+describe('folders: a phone keeps the soft answers it always got when a folder call fails', () => {
+  const boom = () => { throw new Error('disk trouble'); };
+  const swap = async (name: string, run: () => Promise<void>) => {
+    const def = foldersChannels.find((d) => d.name === name)!;
+    const original = def.handler;
+    def.handler = boom;
+    try { await run(); } finally { def.handler = original; }
+  };
+  it('list falls back to Home, add to null, remove/rename/set-description to false', async () => {
+    await swap('folders:list', async () => {
+      const list = (await overRemote('folders:list')).answer;
+      expect(list).toHaveLength(1);
+      expect(list[0]).toMatchObject({ nickname: 'Home', path: os.homedir(), exists: true });
+    });
+    await swap('folders:add', async () => { expect((await overRemote('folders:add', { folderPath: '/x' })).answer).toBeNull(); });
+    for (const n of ['folders:remove', 'folders:rename', 'folders:set-description']) {
+      await swap(n, async () => { expect((await overRemote(n, { folderPath: '/x' })).answer).toBe(false); });
+    }
+  });
+  it('the desktop still rejects (its renderer handles the failure), unchanged', async () => {
+    await swap('folders:list', async () => {
+      await expect(Promise.resolve().then(() => overIpc('folders:list'))).rejects.toThrow('disk trouble');
+    });
+  });
+  it('a folder added from the phone shows in the computer\'s list, and the reverse', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'r31-folder-'));
+    try {
+      await overRemote('folders:add', { folderPath: dir, nickname: 'from phone' });
+      expect((await overIpc('folders:list') as any[]).some((f) => f.path === path.resolve(dir) && f.nickname === 'from phone')).toBe(true);
+      expect(await overIpc('folders:remove', { folderPath: dir })).toBe(true);
+      expect((await overRemote('folders:list')).answer.some((f: any) => f.path === path.resolve(dir))).toBe(false);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe('tags: one body, and a change reaches every screen', () => {
+  it('a tag created on a phone tells the phones AND the computer\'s windows', async () => {
+    const { answer } = await overRemote('tags:create', { label: 'Work', color: 'tag-red' });
+    expect(answer).toMatchObject({ ok: true, tag: { label: 'Work', color: 'tag-red' } });
+    expect(windowBroadcasts).toEqual([['tags:changed', {}]]);
+  });
+  it('a tag created on the computer tells the computer\'s windows', async () => {
+    await overIpc('tags:create', { label: 'Home', color: 'tag-blue' });
+    expect(windowSends).toEqual([['tags:changed', {}]]);
+  });
+  it('an invalid colour becomes grey and a non-text label is made text, on the phone too', async () => {
+    await overRemote('tags:create', { label: 'X', color: 'not-a-colour' });
+    expect(fakeRegistry.create).toHaveBeenLastCalledWith('X', 'tag-gray');
+    await overRemote('tags:update', { id: 'tag_1', patch: { label: 5, color: 'nope', archived: 1 } });
+    expect(fakeRegistry.update).toHaveBeenLastCalledWith('tag_1', { label: '5', color: 'tag-gray', archived: true });
+  });
+  it('renaming or deleting a tag on a phone refreshes the search index, like the computer', async () => {
+    await overRemote('tags:update', { id: 'tag_1', patch: { label: 'New' } });
+    await overRemote('tags:delete', { id: 'tag_1' });
+    expect(metaChanged).toHaveBeenCalledTimes(2);
+  });
+  it('with no registry, both doors answer the same failure and never an empty list', async () => {
+    registryOn = false;
+    for (const [name, payload] of [['tags:create', { label: 'a', color: 'tag-red' }], ['tags:update', { id: 'x', patch: {} }], ['tags:delete', { id: 'x' }]] as const) {
+      expect((await overRemote(name, payload)).answer).toEqual({ ok: false, error: 'tag registry unavailable' });
+      expect(await overIpc(name, payload)).toEqual({ ok: false, error: 'tag registry unavailable' });
+    }
+    expect((await overRemote('tags:list')).answer).toEqual({ ok: false, error: "tag storage isn't available" });
+  });
+});
+
+describe('modes and defaults: same answer, same file, through either door', () => {
+  it('modes set on a phone is read back by the computer, and the default is fast:false effort:auto', async () => {
+    const file = path.join(os.homedir(), '.claude', 'youcoded-model-modes.json');
+    fs.rmSync(file, { force: true });
+    expect(await overIpc('modes:get')).toEqual({ fast: false, effort: 'auto' });
+    expect((await overRemote('modes:set', { fast: true })).answer).toEqual({ fast: true, effort: 'auto' });
+    expect(await overIpc('modes:get')).toEqual({ fast: true, effort: 'auto' });
+    expect((await overRemote('modes:get')).answer).toEqual({ fast: true, effort: 'auto' });
+    fs.rmSync(file, { force: true });
+  });
+  it('defaults: a non-object save writes nothing and both doors read the same record', async () => {
+    const before = await overIpc('defaults:get');
+    expect((await overRemote('defaults:set', 'junk')).answer).toEqual(before);
+    expect((await overRemote('defaults:get')).answer).toEqual(before);
+  });
+});
+
+describe('settings: an unsafe path is refused on BOTH doors (audit D6/B3)', () => {
+  it('a paired phone cannot write onto Object.prototype, and neither can the computer', async () => {
+    expect((await overRemote('settings:set', { field: '__proto__.polluted', value: 1 })).answer).toBe(false);
+    expect(await overIpc('settings:set', { field: 'constructor.prototype.polluted', value: 1 })).toBe(false);
+    expect(({} as any).polluted).toBeUndefined();
+    expect((await overRemote('settings:get', { field: '__proto__' })).answer).toBeUndefined();
+    expect(await overIpc('settings:get', { field: '__proto__' })).toBeUndefined();
+  });
+  it('a real field written by a phone is read by the computer', async () => {
+    expect((await overRemote('settings:set', { field: 'r31Probe.nested', value: 'yes' })).answer).toBe(true);
+    expect(await overIpc('settings:get', { field: 'r31Probe.nested' })).toBe('yes');
+    await overIpc('settings:set', { field: 'r31Probe', value: undefined });
+  });
+});

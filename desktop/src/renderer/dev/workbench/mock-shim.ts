@@ -1830,9 +1830,13 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
 
   const defaults: Ns<'defaults'> = {
     get: async () => store.getState().defaults,
-    set: (updates) => write(() => {
+    // WHY (2026-09-30 one-core R3-1): the real defaults:set answers the saved record (null when it
+    // could not write), and the contract now says so; the fake used to answer { ok }.
+    set: async (updates) => {
+      if (store.refuseWrites) return null;
       store.setState((s) => ({ ...s, defaults: { ...s.defaults, ...updates } }));
-    }),
+      return store.getState().defaults as any;
+    },
   };
 
   let contextPreferences: import('../../../shared/context-preferences').ContextPreferences = { openrouter: 'standard', chatgpt: 'standard' };
