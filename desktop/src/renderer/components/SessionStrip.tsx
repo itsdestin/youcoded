@@ -2450,9 +2450,9 @@ export default function SessionStrip({
                               </button>
                             )}
                           </span>
-                          {s.permissionMode === 'bypass' && (
-                            <span className="shrink-0 text-4xs font-medium px-1 py-0.5 rounded-sm bg-red-400/20 text-red-400">
-                              DANGER
+                          {s.permissionMode === 'bypass' && ( // WHY a normal-case pill, not ALL-CAPS text: guide, status labels are pills.
+                            <span className="shrink-0 inline-flex items-center px-1.5 py-px rounded-full border text-4xs leading-none font-medium text-fg-2 bg-red-400/15 border-red-400/30">
+                              Danger
                             </span>
                           )}
                           <StatusPill color={color} isActive={s.id === activeSessionId} />
@@ -2588,9 +2588,9 @@ export default function SessionStrip({
                             <span className="flex-1 min-w-0 flex flex-col gap-0.5">
                               <span className="flex items-center gap-2 min-w-0">
                                 <span className="flex-1 min-w-0"><SessionName name={s.name} /></span>
-                                {s.permissionMode === 'bypass' && (
-                                  <span className="shrink-0 text-4xs font-medium px-1 py-0.5 rounded-sm bg-red-400/20 text-red-400">
-                                    DANGER
+                                {s.permissionMode === 'bypass' && ( // WHY a normal-case pill, not ALL-CAPS text: guide, status labels are pills.
+                                  <span className="shrink-0 inline-flex items-center px-1.5 py-px rounded-full border text-4xs leading-none font-medium text-fg-2 bg-red-400/15 border-red-400/30">
+                                    Danger
                                   </span>
                                 )}
                                 <StatusPill color={color} isActive={false} />

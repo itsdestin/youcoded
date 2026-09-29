@@ -1239,8 +1239,11 @@ export function BuddyButton() {
                       {enabled && dismissed && (
                         <>
                           <br />
-                          Hidden until restart{' \u00b7 '}
-                          <button onClick={showNow} className="text-accent hover:underline">Show now</button>
+                          <span className="inline-flex items-center gap-1.5 mt-1">
+                            Hidden until restart
+                            {/* WHY outlined, not bare text (guide: secondary actions are outlined) */}
+                            <Button variant="secondary" size="sm" onClick={showNow}>Show now</Button>
+                          </span>
                         </>
                       )}
                     </>
@@ -2119,25 +2122,18 @@ function RemoteButton(props: RemoteButtonProps) {
                         <div className="space-y-2">
                           {/* Distinguish "installed and connected" from "installed but VPN off" —
                               previously detection conflated the two and forced the not-installed branch. */}
-                          {/* K2 value rows. Status keeps its green/muted colour —
-                              that is state, not chrome — but takes the value
-                              slot's size so it lines up with the IP below it
-                              instead of sitting a step smaller. */}
+                          {/* K2 value rows. WHY RowStatus, not a coloured word (guide: status colour lives in the dot, never the word — matches Remote access above). */}
                           <SettingRow
                             variant="item"
                             title="Status"
                             value={
-                              tailscale.connected ? (
-                                <span className="text-green-400">
-                                  Connected{tailscale.hostname ? ` · ${tailscale.hostname}` : ''}
-                                </span>
-                              ) : (
-                                <span className="text-fg-muted">{
-                                  tailscale.state === 'signed-out' ? 'Not signed in'
+                              <RowStatus dotClassName={tailscale.connected ? 'bg-green-400' : 'bg-fg-muted/40'}>
+                                {tailscale.connected
+                                  ? `Connected${tailscale.hostname ? ` · ${tailscale.hostname}` : ''}`
+                                  : tailscale.state === 'signed-out' ? 'Not signed in'
                                     : tailscale.state === 'stopped' ? 'Switched off'
-                                      : 'Not connected'
-                                }</span>
-                              )
+                                      : 'Not connected'}
+                              </RowStatus>
                             }
                           />
                           {/* WHY the address lives here and not only behind Add device: it
@@ -2431,8 +2427,8 @@ export function ConnectToDesktopButton() {
           </div>
         }
         title="Connect to Desktop"
+        // WHY no coloured description: the icon already carries a green dot when connected.
         description={subtitle}
-        descriptionClassName={remoteConnected ? 'text-green-400' : undefined}
         onClick={() => { setOpen(true); setShowConnectForm(false); }}
       />
 
@@ -2472,7 +2468,10 @@ export function ConnectToDesktopButton() {
                 <div className="bg-green-400/10 border border-green-400/25 rounded-lg p-3">
                   <div className="flex items-center gap-2 mb-2">
                     <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-                    <span className="text-xs text-green-400 font-medium">
+                    {/* WHY plain text (guide: success lines lose their
+                        colour — only the dot stays green): was a hand-rolled
+                        text-green-400 sentence. */}
+                    <span className="text-xs text-fg-2 font-medium">
                       Connected to {connectedDeviceName || 'Desktop'}
                     </span>
                   </div>

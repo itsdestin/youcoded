@@ -432,11 +432,14 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, ac
           // alike. It is the real action now.
           <UpdateButton id={updateId} kind={kind} />
         ) : (isInstalling || isInstalled) && (
+          // WHY the "Installed" state also carries a tint (guide: a status
+          // label is a small tinted pill, not plain text) — it used to be a
+          // bare grey word next to its own tinted "Installing…" sibling.
           <span
             className={`relative z-10 text-3xs shrink-0 px-2 py-0.5 rounded-full ${
               isInstalling
                 ? 'text-accent border border-accent/50 bg-accent/10 animate-pulse'
-                : 'text-fg-dim'
+                : STATUS_TONE_CLASS.neutral
             }`}
           >
             {isInstalling ? 'Installing…' : 'Installed'}

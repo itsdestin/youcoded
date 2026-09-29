@@ -149,7 +149,11 @@ describe('SettingsPanel — remote access panel', () => {
     expect(screen.getByText('Offline')).toBeTruthy();
     // WHY: the shipped row hardcodes a green dot for every connected client. Only the online
     // device and the panel's own ready dot may be green — never the remembered offline device.
-    expect(document.querySelectorAll('.bg-green-400').length).toBe(2);
+    // 3, not 2, since 2026-09-29: the Tailscale "Status" row's "Connected · home-laptop" used
+    // to be a hand-rolled `text-green-400` line (guide: status colour lives in the dot, never
+    // the word) — it moved to the shared RowStatus dot, which is a genuine new .bg-green-400
+    // match this selector counts, not a regression.
+    expect(document.querySelectorAll('.bg-green-400').length).toBe(3);
     fireEvent.click(screen.getByRole('button', { name: 'Unpair My tablet' }));
     expect(action).not.toHaveBeenCalled();
     expect(screen.getByText(/pair again/)).toBeTruthy();
