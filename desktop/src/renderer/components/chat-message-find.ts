@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import type { AssistantTurn, TimelineEntry } from '../state/chat-types';
 import { detectLinkTokens } from './markdown-linkify';
 import { detectFilepaths } from '../hooks/useInlineFilepathDetector';
+import { splitComposeRefs } from './context-menu/compose-ref';
 
 // mdast is transitive; keep the shape needed by the direct remark dependencies.
 type MarkdownNode = { type: string; value?: string; lang?: string; children?: MarkdownNode[] };
@@ -52,14 +53,18 @@ function plainUserText(content: string, attachments: readonly string[] = []): st
     prefix += fileBasename(path);
     if (i < attachments.length - 1 || text.length > 0) prefix += ' ';
   }
-  const matches = detectFilepaths(text);
-  let result = '';
-  let cursor = 0;
-  for (const match of matches) {
-    result += text.slice(cursor, match.start) + fileBasename(match.path);
-    cursor = match.end;
-  }
-  return prefix + result + text.slice(cursor);
+  // WHY: sent reference markers become labelled pills before path detection.
+  // Index only their visible label, not hidden quotes/paths or marker syntax.
+  return prefix + splitComposeRefs(text).map((segment) => {
+    if (segment.type === 'ref') return segment.ref.label;
+    const prose = segment.value;
+    let result = '', cursor = 0;
+    for (const match of detectFilepaths(prose)) {
+      result += prose.slice(cursor, match.start) + fileBasename(match.path);
+      cursor = match.end;
+    }
+    return result + prose.slice(cursor);
+  }).join('');
 }
 
 function markdownBlocks(source: string): string[] {
@@ -103,13 +108,30 @@ function markdownBlocks(source: string): string[] {
   return blocks;
 }
 
+function* matchingOffsets(source: string, query: string): Generator<{ start: number; end: number }> {
+  if (!query) return;
+  const lower = source.toLowerCase();
+  // WHY: Unicode case folding can expand a code point (İ → i + combining dot).
+  // Folded offsets are not DOM UTF-16 offsets. Map whole-character boundaries,
+  // and reject partial expansions consistently in both the count and DOM paths.
+  let boundaries: Map<number, number> | undefined;
+  if (lower.length !== source.length) {
+    boundaries = new Map([[0, 0]]);
+    let original = 0, folded = 0;
+    for (const char of source) {
+      original += char.length; folded += char.toLowerCase().length;
+      boundaries.set(folded, original);
+    }
+  }
+  for (let pos = lower.indexOf(query); pos !== -1; pos = lower.indexOf(query, pos + query.length)) {
+    const end = pos + query.length;
+    if (boundaries && (!boundaries.has(pos) || !boundaries.has(end))) continue;
+    yield { start: boundaries?.get(pos) ?? pos, end: boundaries?.get(end) ?? end };
+  }
+}
 function occurrences(blocks: readonly string[], query: string): number {
   let count = 0;
-  for (const block of blocks) {
-    const text = block.toLowerCase();
-    let pos = text.indexOf(query);
-    while (pos !== -1) { count++; pos = text.indexOf(query, pos + query.length); }
-  }
+  for (const block of blocks) for (const _match of matchingOffsets(block, query)) count++;
   return count;
 }
 
@@ -242,9 +264,7 @@ export function resolveBodyRanges(root: HTMLElement, query: string): Range[] {
   const ranges: Range[] = [];
   const q = query.toLowerCase();
   for (const block of blocks) {
-    const lower = block.text.toLowerCase();
-    let offset = lower.indexOf(q);
-    while (offset !== -1) {
+    for (const match of matchingOffsets(block.text, q)) {
       const locate = (position: number) => {
         let remaining = position;
         for (const text of block.nodes) {
@@ -253,13 +273,12 @@ export function resolveBodyRanges(root: HTMLElement, query: string): Range[] {
         }
         return { text: block.nodes[block.nodes.length - 1], offset: block.nodes.at(-1)!.length };
       };
-      const start = locate(offset);
-      const end = locate(offset + query.length);
+      const start = locate(match.start);
+      const end = locate(match.end);
       const range = root.ownerDocument.createRange();
       range.setStart(start.text, start.offset);
       range.setEnd(end.text, end.offset);
       ranges.push(range);
-      offset = lower.indexOf(q, offset + query.length);
     }
   }
   return ranges;

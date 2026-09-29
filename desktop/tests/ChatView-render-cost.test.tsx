@@ -510,10 +510,10 @@ describe('ChatView — auto-scroll pins on content, never on the activity timest
       // anchoring may leave us hundreds of pixels behind even while stick=true.
       act(() => { height = 3000; contentHeight = 2800; top = 1811; growth!.fire(); });
       expect(top).toBe(2100);
-      // ChatView also handles the wheel and calls scrollBy (missing in jsdom).
-      // Stub its native scroller primitive; the stick hook still sees real intent.
-      (scroll as any).scrollBy = ({ top: delta }: { top: number }) => { scroll.scrollTop += delta; };
+      // WHY: upstream restored browser-native scrolling. jsdom delivers intent
+      // but has no default wheel action; model that physical movement explicitly.
       fireEvent.wheel(scroll, { deltaY: -120 });
+      act(() => { scroll.scrollTop -= 120; scroll.dispatchEvent(new Event('scroll')); });
       reads = 0;
       act(() => { height = 3200; contentHeight = 3000; growth!.fire(); });
       expect(top).toBe(1980); // wheel moved up; later growth must not repin

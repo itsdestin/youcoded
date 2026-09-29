@@ -74,6 +74,34 @@ describe('chat message Find corpus', () => {
     expect(index.blocksOf('u', 0)).toEqual(messageBodyBlocks(view.container.querySelector('[data-message-find-body]')!));
     expect(resolveBodyRanges(view.container.querySelector('[data-message-find-body]')!, 'My Folder')).toHaveLength(0);
   });
+  it('projects sent reference pills and surrounding prose exactly like UserMessage', () => {
+    const content = 'Review ⦃"quoted words"_/tmp/hidden-source.txt_L2-3⦄ and /tmp/other.txt now';
+    const message = { id: 'u-ref', content, role: 'user' as const, timestamp: 1000 };
+    const view = render(React.createElement(UserMessage, { message, sessionId: 'test', showTimestamps: false }));
+    const body = view.container.querySelector<HTMLElement>('[data-message-find-body]')!;
+    const index = new ChatMessageFindIndex();
+    index.setRows([{ id: message.id, bodies: [content], markdown: false }]);
+    expect(body.textContent).toContain('lines 2-3 · hidden-source.txt');
+    expect(index.blocksOf(message.id, 0)).toEqual(messageBodyBlocks(body));
+    for (const query of ['Review', 'lines 2-3', 'other.txt', 'now']) {
+      expect(index.search(query)).toHaveLength(1);
+      expect(resolveBodyRanges(body, query)[0].toString()).toBe(query);
+    }
+    expect(index.search('quoted words')).toHaveLength(0);
+    expect(index.search('/tmp')).toHaveLength(0);
+  });
+  it('maps expanding Unicode case folds back to original DOM UTF-16 offsets', () => {
+    const view = render(React.createElement('div', { 'data-testid': 'unicode' }, 'İ', React.createElement('span', null, 'A'), ' İA'));
+    const body = view.getByTestId('unicode');
+    const index = new ChatMessageFindIndex();
+    index.setRows([{ id: 'unicode', bodies: ['İA İA'], markdown: false }]);
+    expect(resolveBodyRanges(body, 'a').map(r => r.toString())).toEqual(['A', 'A']);
+    expect(index.search('a')).toHaveLength(2);
+    expect(resolveBodyRanges(body, 'İ').map(r => r.toString())).toEqual(['İ', 'İ']);
+    // A partial case-expansion is not a navigable source substring.
+    expect(index.search('i')).toHaveLength(0);
+    expect(resolveBodyRanges(body, 'i')).toHaveLength(0);
+  });
   it('does not claim hidden text in collapsed message disclosures is navigable', () => {
     const content = '<details>\n<summary>Visible summary</summary>\n\nHidden inner\n</details>';
     const view = render(React.createElement('div', { 'data-testid': 'body' }, React.createElement(MarkdownContent, { content })));
