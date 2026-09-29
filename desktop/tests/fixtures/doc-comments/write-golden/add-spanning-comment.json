@@ -1,0 +1,14 @@
+{
+  "fixture": "spanning-comment.docx",
+  "path": "docs/spanning-comment.docx",
+  "op": "add",
+  "args": {
+    "exact": "half \nsecond",
+    "text": "A second, independent multi-paragraph comment.",
+    "author": "user"
+  },
+  "result": {
+    "ok": true,
+    "id": "w-6"
+  }
+}

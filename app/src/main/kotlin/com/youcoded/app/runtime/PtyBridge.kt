@@ -28,6 +28,20 @@ class PtyBridge(
     val socketPath: String get() = socketName
     val homeDir: File get() = bootstrap.homeDir
 
+    /** This session's own doc-comments MCP server id (T9c/T20) — set by
+     *  start() once ClaudeCodeDocCommentsMcp.deploy succeeds, null otherwise
+     *  (a failed deploy, or before start() has run). Read by
+     *  ManagedSession.kt's PermissionRequest handling
+     *  (DocCommentsPermission.shouldAutoApproveDocComment) — never a fixed,
+     *  guessable value (adversarial review 2026-09-27, finding #2). */
+    var docCommentsServerId: String? = null
+        private set
+    private var docCommentsToken: String? = null
+    private var docCommentsProjectRoot: String? = null
+    /** This deployment's own directory (T9c/T20 review, finding #3) — deleted
+     *  wholesale in stop() once the session ends. */
+    private var docCommentsDeployDir: String? = null
+
     private val _screenVersion = MutableStateFlow(0)
     val screenVersion: StateFlow<Int> = _screenVersion
 
@@ -113,6 +127,24 @@ class PtyBridge(
         eventBridge = bridge
     }
 
+    /**
+     * T20: start this session's own docx/xlsx pending-mutation queue —
+     * called by SessionRegistry AFTER start() so docCommentsServerId/token
+     * are already set. A no-op when start() hasn't run yet, or when the
+     * doc-comments MCP deploy failed (no token to trust anything with) —
+     * mirrors deployClaudeCodeDocCommentsMcp's own "best-effort" posture:
+     * a session without a working queue still runs, it just can't apply a
+     * Word/Excel comment mutation the assistant asks for.
+     */
+    fun startDocCommentsQueue() {
+        val token = docCommentsToken ?: return
+        val root = docCommentsProjectRoot ?: return
+        val id = mobileSessionId ?: return
+        com.youcoded.app.doccomments.DocCommentsPendingQueue.start(
+            id, root, bootstrap.homeDir, File(bootstrap.homeDir, ".claude"), token,
+        )
+    }
+
     fun start() {
         val env = bootstrap.buildRuntimeEnv().toMutableMap()
         apiKey?.let { env["ANTHROPIC_API_KEY"] = it }
@@ -152,16 +184,66 @@ class PtyBridge(
         val dangerousFlag = if (dangerousMode) " --dangerously-skip-permissions" else ""
         val resumeFlag = if (resumeSessionId != null) " --resume $resumeSessionId" else ""
         val modelFlag = if (model != null) " --model $model" else ""
-        // Give this session YouCoded's SendUserLink tool — Claude Code has no
-        // link deliverable of its own (ClaudeCodeMcp.kt / claude-code-mcp.ts).
-        // Deployed next to the wrapper, from the same shared asset the desktop
-        // embeds, and attached per session: nothing lands in ~/.claude.json.
-        val mcpFlags = ClaudeCodeMcp.deploy(
+        // Give this session YouCoded's MCP-attached tools. WHY combined into
+        // ONE --mcp-config/--allowedTools flag pair rather than one flag
+        // occurrence per server (T9c/T20 fix, mirroring desktop's own
+        // session-manager.ts comment at its identical combine step): Claude
+        // Code's CLI treats a repeated single-value flag as "last value
+        // wins" (verified against the installed CLI's own --help — both
+        // flags are documented as accepting multiple space-separated
+        // values in ONE occurrence) — a second, separate
+        // `--mcp-config X --allowedTools Y` for the doc-comments server
+        // would otherwise silently un-approve SendUserLink.
+        val mcpConfigPaths = mutableListOf<String>()
+        val allowedToolNames = mutableListOf<String>()
+        // SendUserLink — Claude Code has no link deliverable of its own
+        // (ClaudeCodeMcp.kt / claude-code-mcp.ts). Deployed next to the
+        // wrapper, from the same shared asset the desktop embeds, and
+        // attached per session: nothing lands in ~/.claude.json.
+        val linkFlags = ClaudeCodeMcp.deploy(
             mobileDir,
             context.assets.open(ClaudeCodeMcp.SERVER_FILE).bufferedReader().readText(),
             "/system/bin/linker64",
             nodePath.absolutePath,
         )
+        if (linkFlags.isNotEmpty()) {
+            mcpConfigPaths.add(File(mobileDir, ClaudeCodeMcp.CONFIG_FILE).absolutePath)
+            allowedToolNames.add(ClaudeCodeMcp.TOOL_NAME)
+        }
+        // The six document-comment tools (doc-comments build design §5, §9,
+        // T9c/T20) — ReadFileComments alone is pre-approved (a read never
+        // mutates anything); the five mutation tools are deliberately NOT
+        // allow-listed here (see ClaudeCodeDocCommentsMcp.kt's own header and
+        // DocCommentsPermission.kt for the real per-call mechanism).
+        // `cwd` becomes the ONE trusted project root every tool call on this
+        // surface is contained to — never a value the model can influence.
+        // No mobileSessionId argument (T9c/T20 review, finding #2 fix) —
+        // ClaudeCodeDocCommentsMcp.deploy names its own directory from the
+        // serverId it mints internally, never from a caller-supplied value,
+        // so there is no placeholder-fallback path left to reintroduce a
+        // fixed, collision-prone directory.
+        val docComments = try {
+            ClaudeCodeDocCommentsMcp.deploy(
+                mobileDir,
+                context.assets.open(ClaudeCodeDocCommentsMcp.SERVER_FILE).bufferedReader().readText(),
+                "/system/bin/linker64",
+                nodePath.absolutePath,
+                cwd.absolutePath,
+            )
+        } catch (e: Exception) {
+            android.util.Log.w("PtyBridge", "doc-comments MCP deploy failed — this session starts without comment tools", e)
+            null
+        }
+        if (docComments != null) {
+            mcpConfigPaths.add(docComments.configPath)
+            allowedToolNames.addAll(docComments.allowedTools)
+            docCommentsServerId = docComments.serverId
+            docCommentsToken = docComments.token
+            docCommentsProjectRoot = cwd.absolutePath
+            docCommentsDeployDir = docComments.deployDir
+        }
+        val mcpFlags = if (mcpConfigPaths.isEmpty()) ""
+            else " --mcp-config ${mcpConfigPaths.joinToString(" ")} --allowedTools ${allowedToolNames.joinToString(" ")}"
         val launchCmd = "exec /system/bin/linker64 ${nodePath.absolutePath} ${wrapperPath.absolutePath} ${claudePath.absolutePath}$dangerousFlag$resumeFlag$modelFlag$mcpFlags"
 
         File(bootstrap.homeDir, "tmp").mkdirs()
@@ -317,6 +399,26 @@ class PtyBridge(
 
     fun stop() {
         eventBridge?.stop()
+        // T20: drop this session's ref on its project's pending-mutation
+        // queue — the queue itself keeps running for as long as any OTHER
+        // session shares the same project root (mirrors desktop's own
+        // refcounted stopPendingMutationQueue).
+        val root = docCommentsProjectRoot
+        val id = mobileSessionId
+        if (root != null && id != null) {
+            com.youcoded.app.doccomments.DocCommentsPendingQueue.stop(id, root)
+        }
+        // T9c/T20 review, finding #3: delete this session's own doc-comments
+        // deploy directory (config + token) now that it's genuinely done —
+        // a process kill/crash that skips this still gets swept on the next
+        // deploy in a fresh process (ClaudeCodeDocCommentsMcp.sweepStaleDeploysOnce).
+        docCommentsDeployDir?.let { dir ->
+            try {
+                File(dir).deleteRecursively()
+            } catch (e: Exception) {
+                android.util.Log.w("PtyBridge", "doc-comments deploy dir cleanup failed (non-fatal)", e)
+            }
+        }
         session?.finishIfRunning()
         session = null
         _rawBuffer.setLength(0)

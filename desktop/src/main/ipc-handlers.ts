@@ -12,6 +12,7 @@ import type { ChatsearchReadRequest } from '../shared/chatsearch-refs';
 import https from 'https';
 import { execFile } from 'child_process';
 import { SessionManager, prepareRunInTerminal, shellDisplayName } from './session-manager';
+import { wireDocCommentsSessionLifecycle } from './doc-comments/session-lifecycle';
 import { shouldReconcileNativePage, snapshotResumeBoundary } from './transcript-page-source';
 import { HookRelay } from './hook-relay';
 import { IPC, SESSION_FLAG_NAMES, type SessionFlagName, type SessionProvider, type TranscriptEvent, type TranscriptPageRequest, type TranscriptPageResult, type HookEvent, type SpecialistsEvent, type ShellEvent } from '../shared/types';
@@ -157,6 +158,7 @@ import { appendVersion, readSidecar, readSidecarShared, writeSidecar, renameArti
 import { listProjects, removeProject } from './artifacts/central-index';
 import { initPagesService, getPagesService } from './pages/pages-service';
 import { PageConnectionsStore } from './pages/connections-store';
+import { registerDocCommentsHandlers } from './doc-comments/ipc-handlers';
 import { createAuthStore } from './marketplace-auth-store';
 import type { PageFetchRequest } from '../shared/pages-types';
 import { getMachineIdentity } from './device-identity';
@@ -835,6 +837,11 @@ export function registerIpcHandlers(
     process.nextTick(() => sendForSession(info.id, IPC.SESSION_CREATED, info));
   });
   attachStartupDialogLog(sessionManager, hookRelay, log, (id) => sessionManager.markStarted(id)); // desktop.log + SessionInfo.awaitingStart
+
+  // The docx/xlsx pending-mutation queue's lifecycle (T9b/T20/finding #3) —
+  // extracted to its own file (session-lifecycle.ts) to keep this file under
+  // its own line budget; see that file's own header for the full WHY.
+  wireDocCommentsSessionLifecycle(sessionManager);
 
   // window.claude.terminal.getScreenText — reads the visible xterm buffer
   // for the given session. The actual read happens in the renderer (xterm
@@ -5394,6 +5401,22 @@ export function registerIpcHandlers(
     pagesService.deleteSavedKey(String(service ?? ''), String(address ?? '')));
   ipcMain.handle(IPC.PAGES_FETCH, async (_e, id: string, req: PageFetchRequest) =>
     pagesService.fetch(String(id ?? ''), req ?? { url: '' }));
+
+  // ── Document comments (T3, design docs/active/specs/2026-09-26-doc-comments-
+  // build-design.md §1.5/§1.6) — list/add/reply/resolve/reopen/move plus the
+  // chokidar-backed watch/unwatch relay. Factored into its own function so the
+  // containment/plumbing behaviour is testable without this function's full
+  // dependency graph — see doc-comments/ipc-handlers.ts.
+  registerDocCommentsHandlers(ipcMain, {
+    getAllWebContents: () => webContents.getAllWebContents(),
+    remoteBroadcast: (msg) => remoteServer?.broadcast(msg),
+    // F1 fix: a live session's cwd counts as a "known" projectRoot too (same
+    // "records" carve-out remote-server.ts's own sessionRoots() already
+    // grants) — a file opened via an unregistered session's drawer must keep
+    // working, not just closes accepted for saved folders/indexed projects.
+    sessionRoots: () => sessionManager.listSessions().filter(s => s.status !== 'destroyed').map(s => s.cwd),
+  });
+
   // A crashed/closed renderer never sends unwatch — drop its refs on destroy so
   // it cannot pin a watcher forever. One listener per webContents, attached on
   // its first subscribe.

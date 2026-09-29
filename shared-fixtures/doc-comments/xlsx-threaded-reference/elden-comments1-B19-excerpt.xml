@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- EXCERPT from xl/comments1.xml (139KB total). ALL FIVE legacy placeholder <comment> blocks for ref="B19" are kept here — one per independent threaded-comment root sharing that cell (see threadedComment1-B19-excerpt.xml). Each block's xr:uid matches one root's id via the tc= author string. None of the five placeholder texts mention the done="1" resolved status anywhere — resolution is only visible in the real threadedComment XML, never in the legacy placeholder. -->
+<comments xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:xr="http://schemas.microsoft.com/office/spreadsheetml/2014/revision"><authors><author>tc={11a0fac8-69fe-49e4-a4d6-f19627c11856}</author><author>tc={36100e21-63dc-459d-8552-6830736c717e}</author><author>tc={771ed205-e617-451f-9192-f28735894165}</author><author>tc={e054cece-61ec-4749-b1f7-591001d872c5}</author><author>tc={e52d435b-cfa6-4265-a7bf-0ecd3341903f}</author></authors><commentList><comment authorId="14" xr:uid="{11a0fac8-69fe-49e4-a4d6-f19627c11856}" ref="B19"><text><t xml:space="preserve">[Threaded comment]
+ Your version of Excel allows you to read this threaded comment; however, any edits to it will get removed if the file is opened in a newer version of Excel. Learn more: https://go.microsoft.com/fwlink/?linkid=870924
+Comment:
+	Y
+</t></text></comment><comment authorId="68" xr:uid="{36100e21-63dc-459d-8552-6830736c717e}" ref="B19"><text><t xml:space="preserve">[Threaded comment]
+ Your version of Excel allows you to read this threaded comment; however, any edits to it will get removed if the file is opened in a newer version of Excel. Learn more: https://go.microsoft.com/fwlink/?linkid=870924
+Comment:
+	✓
+Reply:
+	Marked as resolved
+Reply:
+	To whoever took the time to make this, You're a Gem!
+Re-opened
+Reply:
+	Thank you kind sir!
+Marked as resolved
+</t></text></comment><comment authorId="144" xr:uid="{771ed205-e617-451f-9192-f28735894165}" ref="B19"><text><t xml:space="preserve">[Threaded comment]
+ Your version of Excel allows you to read this threaded comment; however, any edits to it will get removed if the file is opened in a newer version of Excel. Learn more: https://go.microsoft.com/fwlink/?linkid=870924
+Comment:
+	X
+</t></text></comment><comment authorId="270" xr:uid="{e054cece-61ec-4749-b1f7-591001d872c5}" ref="B19"><text><t xml:space="preserve">[Threaded comment]
+ Your version of Excel allows you to read this threaded comment; however, any edits to it will get removed if the file is opened in a newer version of Excel. Learn more: https://go.microsoft.com/fwlink/?linkid=870924
+Comment:
+	X
+Reply:
+	X
+</t></text></comment><comment authorId="280" xr:uid="{e52d435b-cfa6-4265-a7bf-0ecd3341903f}" ref="B19"><text><t xml:space="preserve">[Threaded comment]
+ Your version of Excel allows you to read this threaded comment; however, any edits to it will get removed if the file is opened in a newer version of Excel. Learn more: https://go.microsoft.com/fwlink/?linkid=870924
+Comment:
+	✅
+</t></text></comment></commentList></comments>

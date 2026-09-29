@@ -25,6 +25,8 @@ import {
 import type { ArtifactRecord } from '../../../shared/artifacts/types';
 import { resolveFixture, CS_ERR_READ } from './fixtures/chatsearch';
 import { SHEET_BEFORE, SHEET_AFTER } from './fixtures/sheets';
+import { SHEET_BY_REP } from './fixtures/sheets-by-rep';
+import { DOC_LAUNCH_BRIEF } from './fixtures/docs';
 import type { MockState, MockSessionMeta } from './scenarios';
 import { stressRowCount } from './scenarios';
 import { specialistRoster, delegatedModels as seedDelegatedModels } from './fixtures/specialists';
@@ -47,6 +49,12 @@ import { triggerTip } from '../../components/guide/tips';
 import { isNoFolderCwd } from '../../../shared/no-folder';
 import { createRemoteAccessPreview } from './fixtures/remote-access';
 import { folderPageFromRecords } from '../../../shared/artifacts/folder-page';
+// Doc comments (T5, design docs/active/specs/2026-09-26-doc-comments-build-
+// design.md §7): the real `docComments:*` channels are hand-written here so
+// the workbench keeps showing every seeded comment state without a main
+// process — see createDocCommentsMock's own WHY below.
+import { seedDocComments } from './fixtures/doc-comments';
+import type { CommentAuthor, CommentSelector, PersistedComment } from '../../../shared/doc-comments-types';
 
 // artifactId -> pretend on-disk size, for exercising the over-cap artifact
 // states (partial-view banner, handoff) against the fake backend.
@@ -242,6 +250,17 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // catch-all on purpose: it must return its unsubscribe synchronously.
   'update.changelog', 'update.download', 'update.cancel', 'update.launch', 'update.getCachedDownload',
   'update.getBetaChannel', 'update.setBetaChannel',
+  // Document comments (T5, design §1.6) — real on all five surfaces (T1-T4);
+  // hand-written so the workbench serves the seeded comment fixtures instead
+  // of the catch-all's `[]`, which the store's own `list()` would read as
+  // "not an {ok:true,...} shape" and quietly show zero comments everywhere.
+  'docComments.list', 'docComments.add', 'docComments.reply', 'docComments.resolve',
+  'docComments.reopen', 'docComments.move', 'docComments.watch', 'docComments.unwatch',
+  'docComments.onChanged',
+  // Edit/delete (2026-09-28) — real on every surface (main-process/Kotlin
+  // build, same session); no longer MOCK_ONLY (see mock-only.ts's changelog
+  // for these four rows' own removal).
+  'docComments.edit', 'docComments.editReply', 'docComments.delete', 'docComments.deleteReply',
 ];
 
 const warned = new Set<string>();
@@ -468,6 +487,10 @@ const NAMESPACES = [
   // was missing, which left Assistant settings → Web search an empty page in
   // the workbench (UX review 1, U1).
   'search',
+  // Document comments (T5) — real on all five surfaces (T1-T4); hand-written
+  // here so the workbench shows every seeded comment state (open/replied/
+  // resolved/Word/Excel) without a main process.
+  'docComments',
 ];
 
 import { createNamingPreview } from './naming-preview';
@@ -2874,9 +2897,20 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       // swaps in the sorted workbook; the viewer re-reads when its file is
       // re-opened, and the video cuts across that re-open.
       if (ext === 'xlsx') {
+        // Doc comments mockup: a two-tab workbook, so cell comments can name
+        // their sheet (fixtures/sheets/make-by-rep.mjs).
+        if (absolutePath.endsWith('q3-sales-by-rep.xlsx')) {
+          return { ok: true, base64: SHEET_BY_REP, mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
+        }
         const after = (globalThis as any).__workbenchSheet === 'after';
         return { ok: true, base64: after ? SHEET_AFTER : SHEET_BEFORE,
                  mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
+      }
+      // Doc comments mockup: a real Word document with real Word comments
+      // (fixtures/docs/make.mjs), for DocxView's highlights and comment pane.
+      if (ext === 'docx') {
+        return { ok: true, base64: DOC_LAUNCH_BRIEF,
+                 mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
       }
       if (ext === 'pdf') {
         const pdf = makeSamplePdfBase64();
@@ -3471,7 +3505,173 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     skills, marketplace, folders, fs, modes, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, search, performance: perfMock,
     update, dev: devMock, ...(remote ? { remote } : {}),
     pages: createPagesMock(activeScenario === 'empty'),
+    docComments: createDocCommentsMock(activeScenario === 'empty'),
   } as unknown as Record<string, Record<string, unknown>>;
+}
+
+/** `window.claude.docComments` for the workbench (T5). Mirrors the real
+ *  main-process store's OWN wire shape (`PersistedComment[]`, `{ok:true,id}`/
+ *  `{ok:false,error}`) so the renderer's real `docComments:list/add/…`
+ *  handling (doc-comments-store.ts) runs unmodified against fixture data —
+ *  the workbench has no `.youcoded/comments/` sidecar and no main process to
+ *  parse a real `.docx`/`.xlsx`, so this is a flat in-memory list keyed by
+ *  path, same as every other file-backed feature's workbench fake. `empty`
+ *  seeds nothing (a first-open file with zero comments is the common case
+ *  reviewers also need to see); every other scenario gets the fixture set
+ *  (open/replied/resolved/Word/Excel — fixtures/doc-comments.ts). */
+function createDocCommentsMock(empty: boolean) {
+  let comments: PersistedComment[] = empty ? [] : seedDocComments();
+  // `?docCommentsFail=<code>` — every `add` fails with that MutationResult
+  // error code instead of saving. WHY (review-deck V-3, doc-comments confirm-2
+  // deck, 2026-09-27): the generic `?fail=docComments.add` switch (above) only
+  // throws a made-up "Mock failure (...)" string, which `describeError` cannot
+  // recognize, so it can never show a SPECIFIC real error's wording (e.g.
+  // `file-open-elsewhere`'s "This file looks open in another app..."). This
+  // mock-only, workbench-only toggle lets the shot rig ask for a named real
+  // error code and see the exact card `describeError` (doc-comments-store.ts)
+  // produces for it — never product code, and inert unless the param is set.
+  const docCommentsFailCode = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('docCommentsFail') : null;
+  // `?docCommentsDetached=1` — adds one seed comment whose quote is not a
+  // substring of any fixture document, so the real `resolveSelector` (run
+  // client-side by use-quote-marks.ts, same as production) can never find it
+  // and marks it `detached` on its own — no fake status field, the actual
+  // "text no longer found" code path. WHY (review-deck V-2, same deck as
+  // above): every real seed comment's quote is deliberately an exact
+  // substring of its fixture (doc-comments.ts's own top comment), so none of
+  // them can show this state without one written to NOT match. Gated behind
+  // the param so ordinary (non-review-deck) workbench sessions keep seeing
+  // only genuinely anchored fixture comments.
+  const detachedDemo: PersistedComment[] = (typeof location !== 'undefined' && new URLSearchParams(location.search).get('docCommentsDetached'))
+    ? [{
+        id: 'demo-detached',
+        path: 'docs/active/plans/2026-09-24-onboarding-redesign.md',
+        selector: { kind: 'text', selector: { type: 'TextQuoteSelector', exact: 'This sentence was in the plan when the comment was left, but the plan moved on without it.', prefix: '', suffix: '', occurrence: 0 } },
+        text: 'Is this still the plan, or did the rewrite drop it?',
+        author: 'user',
+        createdAt: Date.now() - 60 * 60 * 1000,
+        replies: [],
+        resolved: false,
+        history: [],
+      }]
+    : [];
+  if (detachedDemo.length) comments = [...comments, ...detachedDemo];
+  const subs = new Set<(evt: { path: string; projectRoot?: string }) => void>();
+  // `projectRoot` on the push (F3, T5 review): mirrors the real watcher —
+  // harmless here (the workbench only ever has one fixture project), but
+  // keeps this mock's wire shape identical to production's.
+  const publish = (path: string, projectRoot?: string) => subs.forEach((cb) => cb({ path, projectRoot }));
+  // Refcounted the same shape as the real chokidar relay (doc-comments-
+  // watcher.ts) — the workbench never actually pushes an unprompted change
+  // (nothing else writes to this fixture concurrently), but tracking refs
+  // honestly is what a mock-shim contract test can assert against.
+  const watchRefs = new Map<string, number>();
+
+  function findIndex(id: string): number { return comments.findIndex((c) => c.id === id); }
+
+  return {
+    list: async (path: string, _projectRoot?: string) => ({ ok: true, comments: comments.filter((c) => c.path === path) }),
+    // `id` (F4, T5 review): the renderer now mints and sends this — honored
+    // here instead of minting a fresh one, mirroring the real store's own
+    // (now caller-supplied-id-first) `addComment`.
+    add: async (path: string, selector: CommentSelector, text: string, author: CommentAuthor, projectRoot?: string, id?: string) => {
+      // Mirrors ipc-handlers.ts's own `reqStr` refusal — an empty `text` is
+      // never written, same as the real store.
+      if (!text) return { ok: false, error: 'missing-field', field: 'text' };
+      if (docCommentsFailCode) return { ok: false, error: docCommentsFailCode };
+      const realId = id ?? `c-${Math.random().toString(36).slice(2, 10)}`;
+      const comment: PersistedComment = { id: realId, path, selector, text, author, createdAt: Date.now(), replies: [], resolved: false, history: [] };
+      comments = [...comments, comment];
+      publish(path, projectRoot);
+      return { ok: true, id: realId };
+    },
+    reply: async (path: string, id: string, text: string, author: CommentAuthor, projectRoot?: string) => {
+      const idx = findIndex(id);
+      if (idx === -1) return { ok: false, error: 'comment-not-found' };
+      const c = comments[idx];
+      // Same rule as the real store's nextReplyId (highest number + 1, so a
+      // deleted middle reply never gets its id reused).
+      const replyId = `${c.id}-r${Math.max(c.replies.length, ...c.replies.map((r: { id: string }) => Number.parseInt(r.id.slice(`${c.id}-r`.length), 10) || 0)) + 1}`;
+      comments = comments.map((x, i) => (i === idx ? { ...c, replies: [...c.replies, { id: replyId, author, text, createdAt: Date.now() }] } : x));
+      publish(path, projectRoot);
+      return { ok: true };
+    },
+    resolve: async (path: string, id: string, by: CommentAuthor, projectRoot?: string) => {
+      const idx = findIndex(id);
+      if (idx === -1) return { ok: false, error: 'comment-not-found' };
+      const c = comments[idx];
+      comments = comments.map((x, i) => (i === idx ? { ...c, resolved: true, history: [...c.history, { by, at: Date.now(), action: 'resolved' as const }] } : x));
+      publish(path, projectRoot);
+      return { ok: true };
+    },
+    reopen: async (path: string, id: string, by: CommentAuthor, projectRoot?: string) => {
+      const idx = findIndex(id);
+      if (idx === -1) return { ok: false, error: 'comment-not-found' };
+      const c = comments[idx];
+      comments = comments.map((x, i) => (i === idx ? { ...c, resolved: false, history: [...c.history, { by, at: Date.now(), action: 'reopened' as const }] } : x));
+      publish(path, projectRoot);
+      return { ok: true };
+    },
+    move: async (path: string, id: string, newSelector: CommentSelector, projectRoot?: string) => {
+      const idx = findIndex(id);
+      if (idx === -1) return { ok: false, error: 'comment-not-found' };
+      comments = comments.map((x, i) => (i === idx ? { ...x, selector: newSelector } : x));
+      publish(path, projectRoot);
+      return { ok: true };
+    },
+    // Edit/delete (2026-09-28, real on every surface): E-2 (anyone's
+    // comment/reply) means no author/`by` check here, mirroring resolve/
+    // reopen's own shape above but with no such argument at all.
+    edit: async (path: string, id: string, text: string, projectRoot?: string) => {
+      const idx = findIndex(id);
+      if (idx === -1) return { ok: false, error: 'comment-not-found' };
+      if (!text) return { ok: false, error: 'missing-field', field: 'text' };
+      comments = comments.map((x, i) => (i === idx ? { ...x, text } : x));
+      publish(path, projectRoot);
+      return { ok: true };
+    },
+    editReply: async (path: string, id: string, replyId: string, text: string, projectRoot?: string) => {
+      const idx = findIndex(id);
+      if (idx === -1) return { ok: false, error: 'comment-not-found' };
+      if (!text) return { ok: false, error: 'missing-field', field: 'text' };
+      const c = comments[idx];
+      if (!c.replies.some((r) => r.id === replyId)) return { ok: false, error: 'comment-not-found' };
+      comments = comments.map((x, i) => (i === idx ? { ...c, replies: c.replies.map((r) => (r.id === replyId ? { ...r, text } : r)) } : x));
+      publish(path, projectRoot);
+      return { ok: true };
+    },
+    // E-3: deleting a thread's first comment deletes the whole thread — true
+    // for free here too, since a thread IS one PersistedComment plus its
+    // nested `replies`; removing the record removes every reply with it.
+    delete: async (path: string, id: string, projectRoot?: string) => {
+      const idx = findIndex(id);
+      if (idx === -1) return { ok: false, error: 'comment-not-found' };
+      comments = comments.filter((_, i) => i !== idx);
+      publish(path, projectRoot);
+      return { ok: true };
+    },
+    deleteReply: async (path: string, id: string, replyId: string, projectRoot?: string) => {
+      const idx = findIndex(id);
+      if (idx === -1) return { ok: false, error: 'comment-not-found' };
+      const c = comments[idx];
+      if (!c.replies.some((r) => r.id === replyId)) return { ok: false, error: 'comment-not-found' };
+      comments = comments.map((x, i) => (i === idx ? { ...c, replies: c.replies.filter((r) => r.id !== replyId) } : x));
+      publish(path, projectRoot);
+      return { ok: true };
+    },
+    watch: async (path: string, _projectRoot?: string) => {
+      watchRefs.set(path, (watchRefs.get(path) ?? 0) + 1);
+      return { ok: true };
+    },
+    unwatch: async (path: string, _projectRoot?: string) => {
+      const n = (watchRefs.get(path) ?? 1) - 1;
+      if (n <= 0) watchRefs.delete(path); else watchRefs.set(path, n);
+      return { ok: true };
+    },
+    onChanged: (cb: (evt: { path: string; projectRoot?: string }) => void) => {
+      subs.add(cb);
+      return () => { subs.delete(cb); };
+    },
+  };
 }
 
 /** `window.claude.pages` for the workbench (Phase 1 shell). `empty` seeds no

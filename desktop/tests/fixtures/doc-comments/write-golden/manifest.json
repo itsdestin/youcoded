@@ -1,0 +1,175 @@
+{
+  "add-docling": {
+    "format": "xlsx",
+    "fixture": "docling-xlsx-comments.xlsx",
+    "path": "reports/docling-xlsx-comments.xlsx",
+    "ops": [
+      "add"
+    ]
+  },
+  "add-launch-brief": {
+    "format": "docx",
+    "fixture": "launch-brief.docx",
+    "path": "docs/launch-brief.docx",
+    "ops": [
+      "add"
+    ]
+  },
+  "add-spanning-comment": {
+    "format": "docx",
+    "fixture": "spanning-comment.docx",
+    "path": "docs/spanning-comment.docx",
+    "ops": [
+      "add"
+    ]
+  },
+  "add-word365-realistic": {
+    "format": "docx",
+    "fixture": "word365-realistic.docx",
+    "path": "docs/word365-realistic.docx",
+    "ops": [
+      "add"
+    ]
+  },
+  "delete-last-comment-fresh": {
+    "format": "xlsx",
+    "fixture": "fresh-single-comment.xlsx",
+    "path": "fresh-single-comment.xlsx",
+    "ops": [
+      "add",
+      "delete"
+    ]
+  },
+  "delete-reply-docling": {
+    "format": "xlsx",
+    "fixture": "docling-xlsx-comments.xlsx",
+    "path": "reports/docling-xlsx-comments.xlsx",
+    "ops": [
+      "delete-reply"
+    ]
+  },
+  "delete-reply-launch-brief": {
+    "format": "docx",
+    "fixture": "launch-brief.docx",
+    "path": "docs/launch-brief.docx",
+    "ops": [
+      "delete-reply"
+    ]
+  },
+  "delete-thread-docling": {
+    "format": "xlsx",
+    "fixture": "docling-xlsx-comments.xlsx",
+    "path": "reports/docling-xlsx-comments.xlsx",
+    "ops": [
+      "delete"
+    ]
+  },
+  "delete-thread-launch-brief": {
+    "format": "docx",
+    "fixture": "launch-brief.docx",
+    "path": "docs/launch-brief.docx",
+    "ops": [
+      "delete"
+    ]
+  },
+  "edit-docling": {
+    "format": "xlsx",
+    "fixture": "docling-xlsx-comments.xlsx",
+    "path": "reports/docling-xlsx-comments.xlsx",
+    "ops": [
+      "edit"
+    ]
+  },
+  "edit-launch-brief": {
+    "format": "docx",
+    "fixture": "launch-brief.docx",
+    "path": "docs/launch-brief.docx",
+    "ops": [
+      "edit"
+    ]
+  },
+  "edit-reply-docling": {
+    "format": "xlsx",
+    "fixture": "docling-xlsx-comments.xlsx",
+    "path": "reports/docling-xlsx-comments.xlsx",
+    "ops": [
+      "edit-reply"
+    ]
+  },
+  "edit-reply-launch-brief": {
+    "format": "docx",
+    "fixture": "launch-brief.docx",
+    "path": "docs/launch-brief.docx",
+    "ops": [
+      "edit-reply"
+    ]
+  },
+  "elden-sequence": {
+    "format": "xlsx",
+    "fixture": "elden-ring-completionist-checklist.xlsx",
+    "path": "reports/elden-ring-completionist-checklist.xlsx",
+    "ops": [
+      "add",
+      "reply",
+      "resolve",
+      "reopen",
+      "move"
+    ]
+  },
+  "move-docling": {
+    "format": "xlsx",
+    "fixture": "docling-xlsx-comments.xlsx",
+    "path": "reports/docling-xlsx-comments.xlsx",
+    "ops": [
+      "move"
+    ]
+  },
+  "move-launch-brief": {
+    "format": "docx",
+    "fixture": "launch-brief.docx",
+    "path": "docs/launch-brief.docx",
+    "ops": [
+      "move"
+    ]
+  },
+  "move-word365-realistic": {
+    "format": "docx",
+    "fixture": "word365-realistic.docx",
+    "path": "docs/word365-realistic.docx",
+    "ops": [
+      "move"
+    ]
+  },
+  "reopen-launch-brief": {
+    "format": "docx",
+    "fixture": "launch-brief.docx",
+    "path": "docs/launch-brief.docx",
+    "ops": [
+      "reopen"
+    ]
+  },
+  "reply-launch-brief": {
+    "format": "docx",
+    "fixture": "launch-brief.docx",
+    "path": "docs/launch-brief.docx",
+    "ops": [
+      "reply"
+    ]
+  },
+  "resolve-b19-sibling": {
+    "format": "xlsx",
+    "fixture": "elden-ring-completionist-checklist.xlsx",
+    "path": "reports/elden-ring-completionist-checklist.xlsx",
+    "ops": [
+      "resolve"
+    ]
+  },
+  "resolve-spanning-comment": {
+    "format": "docx",
+    "fixture": "spanning-comment.docx",
+    "path": "docs/spanning-comment.docx",
+    "ops": [
+      "resolve"
+    ]
+  }
+}

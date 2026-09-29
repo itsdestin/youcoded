@@ -54,6 +54,17 @@ sealed class HookEvent {
         val toolInput: JSONObject,
         val permissionSuggestions: org.json.JSONArray?,
         val requestId: String,
+        /** Claude Code's OWN live permission mode ('default'|'acceptEdits'|
+         *  'bypassPermissions'|'plan'|'dontAsk'|'auto') — part of every hook
+         *  payload's common base shape (desktop mirror: main.ts reads
+         *  `event.payload.permission_mode`, docs/cc-dependencies.md's "hook
+         *  payload permission_mode field" entry). Optional by the CLI's own
+         *  schema — absent reads as null, which
+         *  DocCommentsPermission.shouldAutoApproveDocComment treats as "don't
+         *  know, don't approve." hook-relay-blocking.js forwards the CLI's
+         *  whole hook JSON verbatim (only adding mobileSessionId/claudePid),
+         *  so this field was already reaching EventBridge unread until now. */
+        val permissionMode: String?,
     ) : HookEvent()
 
     /** Emitted when a held PermissionRequest ends without a delivered user
@@ -133,6 +144,8 @@ sealed class HookEvent {
                         permissionSuggestions = if (obj.has("permission_suggestions"))
                             obj.optJSONArray("permission_suggestions") else null,
                         requestId = obj.optString("_requestId", ""),
+                        permissionMode = if (obj.has("permission_mode") && !obj.isNull("permission_mode"))
+                            obj.optString("permission_mode") else null,
                     )
                     else -> null
                 }

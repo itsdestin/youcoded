@@ -193,10 +193,62 @@ export function rulesForMode(mode: NativePermissionMode): PermissionRule[] {
     // about; asking would train click-through (spec §4.2/4.3 "never asks").
     { tool: 'BashOutput', action: 'allow' },
     { tool: 'KillShell', action: 'allow' },
+    // Doc-comments follow-up (product decision, 2026-09-27): "the assistant
+    // asks before changing comments ONLY on Word/Excel files, and never asks
+    // for plain text/markdown/code comments or for reading comments."
+    // ReadFileComments is a pure read (same reasoning as Read/Skill/
+    // ModelSearch above) — free in every mode, no target-type exception.
+    { tool: 'ReadFileComments', action: 'allow' },
+    // The five comment-MUTATION tools default to allow HERE, with NO pattern
+    // — matching ANY subject, including a Word/Excel path — because a plain-
+    // text/markdown/code comment only ever touches the inert
+    // `.youcoded/comments/` sidecar (never the user's real file bytes) and
+    // must stay frictionless in every mode, the same "internal app metadata"
+    // reasoning SendUserFile above already gets. This pattern-less allow is
+    // deliberately the FIRST word on these five tool names, not the last:
+    // the 'ask' case below appends narrower, LATER (last-match-wins) rules
+    // that override this default specifically when the subject is a Word/
+    // Excel path — see that case's own WHY. auto-edit/full-auto add no such
+    // override, so a Word/Excel-targeted mutation resolves to 'allow' there
+    // too, deliberately matching Edit/Write's own tier in those two modes.
+    { tool: 'ReplyToComment', action: 'allow' },
+    { tool: 'ResolveComment', action: 'allow' },
+    { tool: 'ReopenComment', action: 'allow' },
+    { tool: 'AddComment', action: 'allow' },
+    { tool: 'MoveComment', action: 'allow' },
   ];
   switch (mode) {
     case 'ask':
-      return [{ tool: '*', action: 'ask' }, ...alwaysAllowed];
+      return [{ tool: '*', action: 'ask' }, ...alwaysAllowed,
+        // A Word/Excel-targeted comment mutation writes DIRECTLY into that
+        // file's own bytes (design doc-comments-build-design.md §3.3/§4.3a) —
+        // functionally the same act as an Edit/Write call on that file, which
+        // already asks under THIS mode (Edit/Write get no allow rule until
+        // auto-edit, below). These ten rules are LAST-MATCH-WINS overrides of
+        // the pattern-less allow just above, narrowed to a subject ENDING in
+        // .docx/.xlsx: `subjectMatches` (shared/subject-glob.ts) compiles '*'
+        // to `[\s\S]*` and matches case-INSENSITIVELY, so this covers a
+        // relative or absolute path, a Windows backslash path, and an
+        // upper-case extension (BRIEF.DOCX) alike — verified in
+        // permission-engine.test.ts. Every OTHER subject (a plain-text
+        // sidecar target, or the empty-string subject a plain-text/markdown/
+        // code call's `permissionSubject: () => undefined` carries into
+        // decidePermission) never matches '*.docx'/'*.xlsx' and keeps the
+        // frictionless allow above. A remembered "Always allow" grant for one
+        // exact Word/Excel file (rememberedRules — the LAST layer
+        // decidePermission consults, review ruling #2) still wins over this
+        // ask, exactly like it already does for a remembered Edit grant.
+        { tool: 'ReplyToComment', pattern: '*.docx', action: 'ask' },
+        { tool: 'ReplyToComment', pattern: '*.xlsx', action: 'ask' },
+        { tool: 'ResolveComment', pattern: '*.docx', action: 'ask' },
+        { tool: 'ResolveComment', pattern: '*.xlsx', action: 'ask' },
+        { tool: 'ReopenComment', pattern: '*.docx', action: 'ask' },
+        { tool: 'ReopenComment', pattern: '*.xlsx', action: 'ask' },
+        { tool: 'AddComment', pattern: '*.docx', action: 'ask' },
+        { tool: 'AddComment', pattern: '*.xlsx', action: 'ask' },
+        { tool: 'MoveComment', pattern: '*.docx', action: 'ask' },
+        { tool: 'MoveComment', pattern: '*.xlsx', action: 'ask' },
+      ];
     case 'auto-edit':
       return [{ tool: '*', action: 'ask' }, ...alwaysAllowed,
         { tool: 'Edit', action: 'allow' }, { tool: 'Write', action: 'allow' },

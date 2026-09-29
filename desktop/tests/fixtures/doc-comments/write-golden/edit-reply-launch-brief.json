@@ -1,0 +1,19 @@
+{
+  "fixture": "launch-brief.docx",
+  "path": "docs/launch-brief.docx",
+  "op": "edit-reply",
+  "args": {
+    "id": "w-1",
+    "replyId": "w-1-r1",
+    "text": "Edited: confirmed with legal this afternoon, terms are final."
+  },
+  "result": {
+    "ok": true,
+    "reply": {
+      "id": "w-1-r1",
+      "author": "person:Marcus Lee",
+      "text": "Edited: confirmed with legal this afternoon, terms are final.",
+      "createdAt": 1790173200000
+    }
+  }
+}

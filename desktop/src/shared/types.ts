@@ -1178,6 +1178,12 @@ export interface ChatMessage {
   // contains spaces (regex detection can't recover those from the joined
   // string). Live-bubble only: transcript-confirmed entries don't carry it.
   attachments?: string[];
+  // NOTE (round 2, doc-comments mockup): a "Ask about this" / "Send to
+  // assistant" reference no longer needs a field here — it rides inside
+  // `content` itself as an inline marker (compose-ref.ts) that UserMessage
+  // decodes back into the same pill the composer showed. See compose-ref.ts's
+  // own header comment for why (a round-1 `references` array + separate chip
+  // row above the composer is gone).
 }
 
 // --- Command drawer / marketplace types ---

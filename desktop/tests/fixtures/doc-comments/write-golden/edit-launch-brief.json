@@ -1,0 +1,13 @@
+{
+  "fixture": "launch-brief.docx",
+  "path": "docs/launch-brief.docx",
+  "op": "edit",
+  "args": {
+    "id": "w-0",
+    "text": "Edited: is 30% still realistic after the beta feedback call?"
+  },
+  "result": {
+    "ok": true,
+    "text": "Edited: is 30% still realistic after the beta feedback call?"
+  }
+}

@@ -30,7 +30,17 @@ object ClaudeCodeMcp {
     /** Asset filename, also the on-disk filename. */
     const val SERVER_FILE = "send-user-link-mcp.js"
 
-    private const val CONFIG_FILE = "mcp-config.json"
+    // WHY public (T9c/T20): PtyBridge.start() now composes ONE combined
+    // --mcp-config/--allowedTools flag pair for every MCP server a session
+    // gets (SendUserLink + the doc-comments server) rather than one flag
+    // occurrence per server — Claude Code's CLI parser treats a repeated
+    // single-value flag as "last value wins" (verified against the installed
+    // CLI's own --help, mirrored from desktop's session-manager.ts), so a
+    // second occurrence would silently un-approve SendUserLink. That combiner
+    // needs this deploy's own config path, which `deploy()` below writes but
+    // previously had no way to hand back except embedded inside the returned
+    // flag string.
+    const val CONFIG_FILE = "mcp-config.json"
 
     /**
      * The --mcp-config contents.

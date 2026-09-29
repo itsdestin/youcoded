@@ -1,0 +1,14 @@
+{
+  "fixture": "word365-realistic.docx",
+  "path": "docs/word365-realistic.docx",
+  "op": "add",
+  "args": {
+    "exact": "The results look strong across",
+    "text": "Which regions specifically?",
+    "author": "assistant"
+  },
+  "result": {
+    "ok": true,
+    "id": "w-1"
+  }
+}

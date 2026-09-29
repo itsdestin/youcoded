@@ -107,6 +107,22 @@ export function isTextContentViewer(v: unknown): boolean {
   return TEXT_CONTENT_VIEWERS.has(v as ViewSpec);
 }
 
+// WHY its own check, not exporting CodeEditorView itself: doc comments (mockup,
+// Style A) give code files a simpler, non-scroll-synced comments rail than
+// MarkdownView's inline margin — ActiveArtifactView needs to know "is this the
+// CM6 viewer" without importing the lazy chunk directly.
+export function isCodeEditorViewer(v: unknown): boolean {
+  return v === CodeEditorView;
+}
+
+// Doc comments: the two binary viewers that ALSO take comments — Word (text
+// highlights) and Excel (cell comments), per Destin's questions deck Q-4 and
+// the Excel follow-up. Every other binary preview (image, pdf, csv grid) has
+// nothing a comment could anchor to yet.
+export function isCommentableBinaryViewer(v: unknown): boolean {
+  return v === DocxView || v === XlsxView;
+}
+
 export function getViewer(path: string, opts?: { textHint?: boolean; binaryHint?: boolean }): ViewSpec {
   const ext = path.split('.').pop()?.toLowerCase() ?? '';
   const hit = REGISTRY[ext];
