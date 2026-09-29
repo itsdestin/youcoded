@@ -345,7 +345,10 @@ function ChipEditorPopup({ open, chips, setChips, installed, onClose }: ChipEdit
                           >
                             Save
                           </Button>
-                          <button onClick={cancelEdit} className="px-2 py-1 text-3xs text-fg-muted hover:text-fg">Cancel</button>
+                          {/* WHY outlined (guide: secondary actions are
+                              outlined, never bare text): was a hand-rolled
+                              text-fg-muted button. */}
+                          <Button variant="secondary" size="sm" onClick={cancelEdit}>Cancel</Button>
                         </div>
                       </div>
                     );
@@ -453,7 +456,9 @@ function ChipEditorPopup({ open, chips, setChips, installed, onClose }: ChipEdit
                     >
                       Add custom
                     </Button>
-                    <button onClick={() => setShowAddForm(false)} className="px-2 py-1 text-3xs text-fg-muted hover:text-fg">Cancel</button>
+                    {/* WHY outlined (guide: secondary actions are outlined,
+                        never bare text): was a hand-rolled text-fg-muted button. */}
+                    <Button variant="secondary" size="sm" onClick={() => setShowAddForm(false)}>Cancel</Button>
                   </div>
                 </div>
 
