@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -91,7 +91,57 @@ export default defineConfig({
   plugins: [react()],
   server: { fs: { allow: [__dirname, NODE_MODULES_REAL] } },
   test: {
-    include: ['tests/**/*.{test,spec}.{ts,tsx}', 'src/**/*.{test,spec}.{ts,tsx}'],
+    // Two projects, run one after the other (sequence.groupOrder).
+    //
+    // WHY (2026-09-29): tests/render-cost/ holds CPU-time RATIO pins — "1,000
+    // comments cost about N times what 100 do" — which catch a per-comment
+    // cost turning into a per-PAIR cost. Inside the full parallel suite they
+    // flaked with nothing regressed: a fresh fork per file already (isolate is
+    // the vitest-4 default), but process.cpuUsage() itself inflated 2.4x on the
+    // small mount and 4x on the large one while ~30 sibling workers fought for
+    // cores and cache, so the RATIO moved (ReadingHighlights 8.4-9.2x alone,
+    // 14.1x in verify.sh --full). Rounds of wider bounds and more trials
+    // followed — the treadmill test-suite-hygiene.md forbids — and each wider
+    // bound let more of a real regression through. Running them AFTER every
+    // other file, one file at a time, removes the contention instead of
+    // budgeting for it. Measured bounds: the comments in tests/render-cost/.
+    //
+    // Nothing to wire elsewhere: CI's `npm test` and verify.sh's `vitest run` /
+    // `vitest related` run both projects, on every OS.
+    //
+    // Both projects `extends: true`, so every option below applies to both —
+    // including globalSetup, which therefore runs once per project; both runs
+    // happen before any test starts, so the second only re-creates the same
+    // empty sandbox.
+    // `include` is deliberately NOT at this level: vite's mergeConfig
+    // CONCATENATES arrays, so a root include would put every file in both.
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: 'unit',
+          include: ['tests/**/*.{test,spec}.{ts,tsx}', 'src/**/*.{test,spec}.{ts,tsx}'],
+          exclude: [...configDefaults.exclude, 'tests/render-cost/**'],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'render-cost',
+          include: ['tests/render-cost/**/*.test.{ts,tsx}'],
+          // Group 1 starts only once group 0 ('unit', the default 0) has
+          // finished — so no sibling worker is burning CPU while these measure.
+          sequence: { groupOrder: 1 },
+          // One file at a time: the two files would otherwise contend with
+          // each other, which is the very thing this project exists to avoid.
+          fileParallelism: false,
+          // Lets each stress test call gc() before every measured mount, so a
+          // trial never pays to collect the previous trial's garbage (see
+          // tests/helpers/render-cost.ts).
+          execArgv: ['--expose-gc'],
+        },
+      },
+    ],
     globalSetup: ['tests/global-setup.ts'],
     // Per-file DOM shims (ResizeObserver). Inert under the 'node' environment —
     // the file checks for `window` before touching anything.
