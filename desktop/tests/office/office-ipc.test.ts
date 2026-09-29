@@ -10,6 +10,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // WHY mocked: office-commands imports the project watcher (chokidar and the artifact store);
 // these tests only drive the IPC layer in front of it.
 vi.mock('../../src/main/artifacts/project-watcher', () => ({ noteOwnWrite: vi.fn() }));
+// WHY wrapped: the real logger still runs; one test reads what was logged.
+vi.mock('../../src/main/logger', async (orig) => {
+  const real = await orig<typeof import('../../src/main/logger')>();
+  return { ...real, log: vi.fn(real.log) };
+});
 // WHY wrapped, not replaced: the real walk still runs; the tests count how often it starts.
 vi.mock('../../src/main/office/office-home', async (orig) => {
   const real = await orig<typeof import('../../src/main/office/office-home')>();
@@ -18,6 +23,7 @@ vi.mock('../../src/main/office/office-home', async (orig) => {
 
 import type { OfficeFile } from '../../src/shared/office-types';
 import { registerOfficeIpc } from '../../src/main/office/office-ipc';
+import { log } from '../../src/main/logger';
 import { startWalk } from '../../src/main/office/office-home';
 import { idle as recentIdle } from '../../src/main/office/recent';
 import { createSessions } from '../../src/main/office/office-sessions';
@@ -463,6 +469,10 @@ describe('the editor asks for a file dialog (Insert → Picture)', () => {
     registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => available, root: path.join(dir, 'addon'), userData: path.join(dir, 'userData'), pickEditorFiles: pick });
     const { token } = (await call('office:open', win1, await aDocx())) as { token: string };
     await expect(call('office:invoke', win1, token, 'open_dialog', {})).resolves.toBeNull();
+    // the log gets a reason, never the error's text (it named a folder)
+    const logged = vi.mocked(log).mock.calls.filter((c) => c[2] === 'editor file dialog failed');
+    expect(logged).toHaveLength(1);
+    expect(JSON.stringify(logged)).not.toContain('/home/secret');
   });
 
   it("never shows a dialog for another window's document", async () => {

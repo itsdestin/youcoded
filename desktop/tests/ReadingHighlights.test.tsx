@@ -188,7 +188,10 @@ describe('ReadingHighlights — render cost at a realistic high comment count', 
     // grew with the count (normal 32-35x) and flaked at 71.9x; it also let a
     // planted per-pair DOM change (every new mark touching every earlier one)
     // through at 26-30x. 17 sits above the loaded measurement and well below
-    // the planted one.
+    // the planted one. WHY not CommentsMargin's 200-vs-1,000 step (tried
+    // 2026-09-29): normal 4.7-5.9x, but single runs alone also gave 13.4x and
+    // 2.3x, while the planted change measured only 12.0-17.1x — no bound
+    // separates them.
     expect(large / Math.max(small, 1)).toBeLessThan(17);
   }, STRESS_TEST_BUDGET_MS);
 });

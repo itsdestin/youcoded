@@ -117,16 +117,34 @@ const isWeb = (u: string) => {
 /** Why `url` may not be fetched, or null when it may: http(s) only, and EVERY address its host
  *  resolves to must be public (public-address.ts). WHY every one: a name answering with one
  *  public and one private address could be connected through the private one. */
-async function refusalFor(url: string, resolve: ResolveHost): Promise<string | null> {
+async function refusalFor(url: string, resolve: ResolveHost, signal: AbortSignal): Promise<string | null> {
   if (!isWeb(url)) return 'not an http(s) address';
   const host = new URL(url).hostname.replace(/^\[|\]$/g, '');
-  const addrs = isIP(host) ? [host] : await resolve(host).catch(() => [] as string[]);
+  // WHY raced against the cap (fix round 2): a lookup can hang far past 20 s; the cap must hold
+  // for the whole download, lookups included. An aborted lookup throws (the caller says "timed out").
+  const addrs = isIP(host) ? [host] : await untilAborted(resolve(host), signal).catch((e: unknown) => {
+    if (signal.aborted) throw e;
+    return [] as string[];
+  });
   if (!addrs.length) return 'host did not resolve';
   for (const a of addrs) {
     const why = nonPublicReason(a);
     if (why) return `not a public address (${why})`;
   }
   return null;
+}
+
+/** `p`, or a rejection as soon as `signal` aborts (the work itself is left to finish unseen). */
+function untilAborted<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    if (signal.aborted) { reject(new Error('aborted')); return; }
+    const onAbort = () => reject(new Error('aborted'));
+    signal.addEventListener('abort', onAbort, { once: true });
+    p.then(
+      (v) => { signal.removeEventListener('abort', onAbort); resolve(v); },
+      (e: unknown) => { signal.removeEventListener('abort', onAbort); reject(e); },
+    );
+  });
 }
 
 /** download-to-media: the bare media name, or null (refused; the caller answers 404).
@@ -143,7 +161,7 @@ export async function downloadToMedia(
   // once but then trickles the bytes would otherwise freeze the editor just the same.
   const timer = setTimeout(() => ctl.abort(), deps.timeoutMs ?? PICTURE_DOWNLOAD_TIMEOUT_MS);
   try {
-    const first = await refusalFor(url, deps.resolve);
+    const first = await refusalFor(url, deps.resolve, ctl.signal);
     if (first) return refuse('download-to-media', first);
     let hops = 0;
     let refusedHop: string | null = null;
@@ -153,7 +171,7 @@ export async function downloadToMedia(
       // local network (or off the web) — such a redirect is never followed.
       allowRedirect: async (to) => {
         if (++hops > MAX_REDIRECTS) refusedHop = 'too many redirects';
-        else refusedHop = await refusalFor(to, deps.resolve).then((why) => (why ? `redirect: ${why}` : null));
+        else refusedHop = await refusalFor(to, deps.resolve, ctl.signal).then((why) => (why ? `redirect: ${why}` : null));
         return refusedHop === null;
       },
     }).catch((e: unknown) => {
@@ -195,24 +213,36 @@ interface NetRequest {
  *  app's own cookies for that site stay home. */
 export function pictureRequestVia(request: (opts: Record<string, unknown>) => NetRequest): PictureRequest {
   const hop = (url: string, signal: AbortSignal) => new Promise<{ redirect: string } | { response: Response }>((resolve, reject) => {
+    // WHY checked first (fix round 2): the cap can fire while a redirect's lookup was awaited; a
+    // hop started after that would run with no cap at all (an aborted signal never fires again).
+    if (signal.aborted) { reject(new Error('aborted')); return; }
     const req = request({ url, method: 'GET', redirect: 'manual', useSessionCookies: false, credentials: 'omit' });
     const abort = () => { try { req.abort(); } catch { /* already done */ } };
+    // The answer's body, once it has begun: the cap and Electron's own 'aborted' must end it.
+    let bodyCtl: ReadableStreamDefaultController<Uint8Array> | null = null;
+    const failBody = () => { try { bodyCtl?.error(new Error('aborted')); } catch { /* already closed */ } bodyCtl = null; };
     req.on('redirect', (_status, _method, to) => { abort(); resolve({ redirect: to }); });
     req.on('response', (res) => {
       const headers = new Headers();
       for (const [k, v] of Object.entries(res.headers)) headers.set(k, Array.isArray(v) ? v.join(', ') : String(v));
       const body = new ReadableStream<Uint8Array>({
         start(c) {
-          res.on('data', (d) => c.enqueue(new Uint8Array(d as Buffer)));
-          res.on('end', () => c.close());
-          res.on('error', (e) => c.error(e));
+          bodyCtl = c;
+          res.on('data', (d) => bodyCtl?.enqueue(new Uint8Array(d as Buffer)));
+          res.on('end', () => { bodyCtl?.close(); bodyCtl = null; });
+          res.on('error', () => failBody());
+          // WHY (fix round 2): after req.abort() Electron's answer emits 'aborted' — never 'end' or
+          // 'error' — so without this a reader waiting on the body would wait forever, and the
+          // editor's synchronous request with it.
+          res.on('aborted', () => failBody());
         },
         cancel: abort,
       });
       resolve({ response: new Response(body, { status: res.statusCode, headers }) });
     });
     req.on('error', reject);
-    signal.addEventListener('abort', () => { abort(); reject(new Error('aborted')); }, { once: true });
+    // The cap: stop the request, and end a body already being read (see 'aborted' above).
+    signal.addEventListener('abort', () => { abort(); failBody(); reject(new Error('aborted')); }, { once: true });
     req.end();
   });
   return async (url, { signal, allowRedirect }) => {
@@ -220,6 +250,7 @@ export function pictureRequestVia(request: (opts: Record<string, unknown>) => Ne
       const r = await hop(cur, signal);
       if ('response' in r) return r.response;
       if (!(await allowRedirect(r.redirect))) throw new Error('redirect refused');
+      if (signal.aborted) throw new Error('aborted'); // the cap fired during that check
       cur = r.redirect;
     }
   };

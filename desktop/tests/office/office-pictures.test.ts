@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSessions } from '../../src/main/office/office-sessions';
 import { MEDIA_CSP, OFFICE_CSP, officeRequestHandler } from '../../src/main/office/office-protocol';
 import { EventEmitter } from 'node:events';
-import { grantPicked, PICTURE_MAX_BYTES, pictureRequestVia, type PictureRequest } from '../../src/main/office/office-pictures';
+import { downloadToMedia, grantPicked, PICTURE_MAX_BYTES, pictureRequestVia, type PictureRequest } from '../../src/main/office/office-pictures';
 import { nonPublicReason } from '../../src/main/office/public-address';
 
 const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
@@ -332,6 +332,15 @@ describe('pictures into a document', () => {
         ['localhost', 'not an address'],
       ];
       for (const [ip, why] of cases) expect(nonPublicReason(ip), ip).toBe(why);
+      // an IPv4 address carried inside IPv6 (NAT64, 6to4, the old IPv4-compatible form) is judged
+      // by the IPv4 address it carries
+      const wrapped: [string, string | null][] = [
+        ['64:ff9b::127.0.0.1', 'loopback'], ['64:ff9b::7f00:1', 'loopback'], ['64:ff9b::a9fe:a9fe', 'link-local'],
+        ['64:ff9b::c0a8:101', 'private'], ['64:ff9b::5db8:d822', null],
+        ['2002:7f00:1::1', 'loopback'], ['2002:c0a8:101::', 'private'], ['2002:6440:1::1', 'carrier-grade NAT'], ['2002:5db8:d822::1', null],
+        ['::127.0.0.1', 'loopback'], ['::10.0.0.1', 'private'], ['::a00:1', 'private'], ['::93.184.216.34', null],
+      ];
+      for (const [ip, why] of wrapped) expect(nonPublicReason(ip), ip).toBe(why);
       // the edges just outside the ranges stay public
       expect(nonPublicReason('100.128.0.1')).toBeNull();
       expect(nonPublicReason('172.32.0.1')).toBeNull();
@@ -347,7 +356,9 @@ describe('pictures into a document', () => {
         const req: FakeReq = Object.assign(new EventEmitter(), {
           followed: 0, aborted: false, ended: false,
           followRedirect() { throw new Error('not used: followRedirect only works synchronously'); },
-          abort() { (this as { aborted: boolean }).aborted = true; },
+          // As Electron's does: an abort after the answer began makes the answer emit 'aborted' —
+          // never 'end' or 'error'.
+          abort() { (this as { aborted: boolean }).aborted = true; (this as { res?: EventEmitter }).res?.emit('aborted'); },
           end() { (this as { ended: boolean }).ended = true; },
         });
         made.push({ opts, req });
@@ -357,6 +368,7 @@ describe('pictures into a document', () => {
     }
     const answer = (req: EventEmitter, status: number, headers: Record<string, string>, body: Buffer) => {
       const res = Object.assign(new EventEmitter(), { statusCode: status, headers });
+      (req as EventEmitter & { res?: EventEmitter }).res = res;
       req.emit('response', res);
       res.emit('data', body);
       res.emit('end');
@@ -392,6 +404,47 @@ describe('pictures into a document', () => {
       await expect(p).rejects.toThrow('redirect refused');
       expect(asked).toEqual(['https://example.org/b.png', 'http://127.0.0.1/c.png']);
       expect(made).toHaveLength(2); // never connected to the refused target
+    });
+
+    describe('the 20 s cap covers the whole download', () => {
+      beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }); });
+      afterEach(() => { vi.useRealTimers(); });
+      const CAP = 20_000;
+
+      it('gives up on an answer that sends one piece and then stalls', async () => {
+        const s = await sessions.open('/docs/report.docx', 1);
+        const { made, request } = fakeNet();
+        const p = downloadToMedia(s, 'https://example.com/a.png', { request: pictureRequestVia(request), resolve: async () => ['93.184.216.34'], timeoutMs: CAP });
+        await vi.waitFor(() => expect(made).toHaveLength(1));
+        const res = Object.assign(new EventEmitter(), { statusCode: 200, headers: { 'content-type': 'image/png' } });
+        (made[0].req as EventEmitter & { res?: EventEmitter }).res = res;
+        made[0].req.emit('response', res);
+        res.emit('data', PNG); // ... and nothing more, ever
+        await vi.advanceTimersByTimeAsync(CAP);
+        await expect(p).resolves.toBeNull();
+        expect(made[0].req.aborted).toBe(true);
+      });
+
+      it('gives up during a name lookup that never answers, before connecting', async () => {
+        const s = await sessions.open('/docs/report.docx', 1);
+        const { made, request } = fakeNet();
+        const p = downloadToMedia(s, 'https://example.com/a.png', { request: pictureRequestVia(request), resolve: () => new Promise(() => {}), timeoutMs: CAP });
+        await vi.advanceTimersByTimeAsync(CAP);
+        await expect(p).resolves.toBeNull();
+        expect(made).toHaveLength(0);
+      });
+
+      it('gives up during a redirect\'s lookup and never makes the next request', async () => {
+        const s = await sessions.open('/docs/report.docx', 1);
+        const { made, request } = fakeNet();
+        const resolve = async (h: string) => (h === 'example.com' ? ['93.184.216.34'] : new Promise<string[]>(() => {}));
+        const p = downloadToMedia(s, 'https://example.com/a.png', { request: pictureRequestVia(request), resolve, timeoutMs: CAP });
+        await vi.waitFor(() => expect(made).toHaveLength(1));
+        made[0].req.emit('redirect', 302, 'GET', 'https://slow-dns.example/b.png', {});
+        await vi.advanceTimersByTimeAsync(CAP);
+        await expect(p).resolves.toBeNull();
+        expect(made).toHaveLength(1);
+      });
     });
   });
 });
