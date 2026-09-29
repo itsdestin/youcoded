@@ -48,6 +48,9 @@ import { matchesQuery } from '../../../shared/text-match';
 // shared window every other long list in the app uses (render-cost
 // consolidation 2026-09-18).
 import { useChunkedReveal } from '../../hooks/use-chunked-reveal';
+import { useScrollFade } from '../../hooks/useScrollFade';
+// The 'flat' list fades its edges with the see-through mask (.scroll-mask).
+import '../../styles/scroll-mask.css';
 import { resolveModelBrand, type ProviderIconKey } from '../provider-brand';
 import { ProviderIcon } from '../ProviderIcon';
 import { nativeChoiceNeedsApiKey, unavailableReason, useClaudeStatus, type CatalogRow, type ProviderRow } from './availability';
@@ -329,7 +332,14 @@ export default function ModelPicker({
    *  to collapse back to, since the panel has no closed state to return to.
    *  Only ModelPickerPopup uses 'inline', always paired with `defaultOpen`:
    *  without a trigger, `defaultOpen` is the only way the panel ever opens. */
-  layout?: 'floating' | 'inline';
+  layout?: 'floating' | 'inline' | 'flat';
+  // 'flat' (model picker redesign, 2026-09-29; ui-labels-batch#LB-7: "the model
+  // search element feels oddly integrated" and "a lot of wasted space"): like
+  // 'inline', but with no box of its own — the search field, the rows and the
+  // Manage models footer sit straight on the host popup, the way the sessions
+  // menu and Resume lay out search + list. Rows are plain (no side margin), the
+  // current model a light accent tint like the sessions menu, and the list fades
+  // at its edges instead of ending on a ruled line.
   /** Pins the current `value` to the TOP of the favourites view, even when it
    *  isn't favourited — so a menu that opens straight to the list (`layout:
    *  'inline'`) shows what's active first, rather than only ever showing
@@ -386,6 +396,12 @@ export default function ModelPicker({
   // The scroll root the reveal window measures against and resets to the top
   // — the `overflow-y-auto` list div, not the outer panel.
   const listRef = useRef<HTMLDivElement>(null);
+  // Drives the 'flat' list's edge fade (data-fade-top/bottom → .scroll-mask);
+  // a no-op look for the other layouts, which don't carry that class.
+  useScrollFade(listRef);
+  const flat = layout === 'flat';
+  // 'flat' behaves like 'inline' everywhere but its look: no trigger, no closed state.
+  const embedded = layout === 'inline' || flat;
   const [panelPos, setPanelPos] = useState<{ top?: number; bottom?: number; left: number; width: number; maxHeight: number } | null>(null);
   const [filterPos, setFilterPos] = useState<{ top: number; left: number } | null>(null);
 
@@ -543,7 +559,7 @@ export default function ModelPicker({
   // layout the list IS the dialog's content, with no closed state (see the
   // trigger below), so there Escape only closes the filter and otherwise
   // reaches the dialog itself.
-  useEscClose(open && (layout !== 'inline' || filterOpen), useCallback(() => {
+  useEscClose(open && (!embedded || filterOpen), useCallback(() => {
     if (filterOpen) setFilterOpen(false); else setOpen(false);
   }, [filterOpen]));
 
@@ -568,7 +584,7 @@ export default function ModelPicker({
     // (Effort, Fast mode, even Close needed two clicks). Found by `explore`.
     // Only the filter popover still closes on an outside press there.
     if (!open) return;
-    const inline = layout === 'inline';
+    const inline = embedded;
     const onDown = (e: Event) => {
       const t = e.target as Node;
       if (triggerRef.current?.contains(t)) return;
@@ -788,7 +804,7 @@ export default function ModelPicker({
     // own text colour. Destin, review deck 2026-08-31 (MB-2), choosing between
     // marks-only, marks-plus-current, and every-row-coloured: a list of tinted
     // names reads as decoration rather than meaning.
-    const markColor = selected ? undefined : brand?.color;
+    const markColor = selected && !flat ? undefined : brand?.color;
     return (
       // Two levels now: the OUTER div keeps the row's original left/right
       // margin (px-2, unhighlighted, same on every row) — the accent fill on
@@ -796,8 +812,8 @@ export default function ModelPicker({
       // (2026-09-07 feedback). The INNER div is what actually carries the
       // fill, sized to the space between those margins, so it covers the
       // favourite star's column too instead of stopping at the name button.
-      <div key={e.key} className="group/model flex items-center px-2">
-        <div className={`flex-1 min-w-0 flex items-center gap-1 rounded ${selected ? 'bg-accent' : ''}`}>
+      <div key={e.key} className={`group/model flex items-center ${flat ? '' : 'px-2'}`}>
+        <div className={`flex-1 min-w-0 flex items-center gap-1 rounded-md ${selected ? (flat ? 'bg-accent/15' : 'bg-accent') : ''}`}>
           <Tooltip text={e.unavailable ? `${e.label} · ${e.sourceLabel} — ${e.unavailable}` : ''}>
           <button
             type="button"
@@ -810,7 +826,7 @@ export default function ModelPicker({
             className={`flex-1 min-w-0 text-left text-xs rounded px-2 py-2 transition-colors flex items-center gap-2 ${
               e.unavailable
                 ? 'text-fg-faint cursor-default'
-                : selected ? 'text-on-accent font-medium' : 'text-fg-2 hover:bg-inset'
+                : selected ? (flat ? 'text-fg font-medium' : 'text-on-accent font-medium') : 'text-fg-2 hover:bg-inset'
             }`}
           >
             {/* The company mark. A fixed-width box whether or not a mark resolves,
@@ -829,7 +845,7 @@ export default function ModelPicker({
               {/* Divider dot + source, inline per row — this is what replaced the
                   per-provider sections. One flat list reads the same at 4 models
                   or 400. */}
-              <span className={selected ? 'opacity-70' : 'text-fg-muted'}> · {e.sourceLabel}</span>
+              <span className={selected && !flat ? 'opacity-70' : 'text-fg-muted'}> · {e.sourceLabel}</span>
             </span>
           </button>
           </Tooltip>
@@ -887,7 +903,7 @@ export default function ModelPicker({
             aria-pressed={fav}
             aria-label={fav ? `Unfavourite ${e.label}` : `Favourite ${e.label}`}
             className={`shrink-0 w-6 h-6 mr-1 rounded inline-flex items-center justify-center transition-opacity coarse-hit touch-reveal ${
-              selected
+              selected && !flat
                 ? 'text-on-accent opacity-100'
                 : fav
                   ? 'text-accent opacity-100'
@@ -909,7 +925,7 @@ export default function ModelPicker({
           collapse back to, so a row that only echoes `value` and toggles
           `open` (to no visible effect worth keeping) is redundant with the
           selected row already highlighted in the list below. */}
-      {layout !== 'inline' && (
+      {!embedded && (
       <button
         ref={triggerRef}
         type="button"
@@ -959,7 +975,7 @@ export default function ModelPicker({
         // why there are two hosts for the identical content.
         const panelBody = (
           <>
-            <div className="p-2 border-b border-edge-dim">
+            <div className={flat ? 'pb-2' : 'p-2 border-b border-edge-dim'}>
               <SearchFilterPill
                 ref={pillRef}
                 value={search}
@@ -972,7 +988,13 @@ export default function ModelPicker({
               />
             </div>
 
-            <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto py-1.5">
+            <div
+              ref={listRef}
+              className={flat ? 'scroll-mask min-h-0 overscroll-contain' : 'flex-1 min-h-0 overflow-y-auto py-1.5'}
+              // WHY 238px: six rows (36px) and a half, so a cut-off row says
+              // "more below" — the sessions menu's rule (ui-quick-fixes#QF-1).
+              style={flat ? { maxHeight: 238 } : undefined}
+            >
               {!loaded ? (
                 <p className="text-xs text-fg-muted text-center py-4">Loading…</p>
               ) : (
@@ -1085,7 +1107,15 @@ export default function ModelPicker({
                 that does. A flex sibling of the scroll area (not inside it) so
                 it stays pinned as the list scrolls. Omitted when the host has
                 nowhere to send the user. */}
-            {onManageModels && (
+            {onManageModels && flat && (
+              // WHY an outlined button (decisions F-2: a secondary action is
+              // outlined, never bare text): on the flat layout it sits on the
+              // popup itself, below the list's fade, not in a ruled footer.
+              <Button variant="secondary" size="sm" className="w-full mt-2" onClick={() => { setOpen(false); onManageModels(); }}>
+                Manage models
+              </Button>
+            )}
+            {onManageModels && !flat && (
               <div className="border-t border-edge shrink-0">
                 <button
                   type="button"
@@ -1099,6 +1129,7 @@ export default function ModelPicker({
           </>
         );
 
+        if (flat) return <div ref={panelRef} className="flex flex-col">{panelBody}</div>;
         return layout === 'inline' ? (
           // In flow, right under the trigger — pushes whatever the host draws
           // below it (ModelPickerPopup's Effort/Fast sections) down instead of

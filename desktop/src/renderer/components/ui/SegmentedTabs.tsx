@@ -18,6 +18,11 @@ import { CARD_LEVEL_1, CARD_LEVEL_2 } from './cardLevels';
 export type SegmentedTab = {
   id: string;
   label: React.ReactNode;
+  /** WHY (model picker, 2026-09-29): an option that exists but can't be picked
+   *  right now — Max effort off Opus/Fable — stays visible and greyed, with
+   *  `title` saying why, instead of vanishing from the row. */
+  disabled?: boolean;
+  title?: string;
 };
 
 export type SegmentedTabsProps = {
@@ -72,7 +77,11 @@ export function SegmentedTabs({
     e.preventDefault();
     const i = tabs.findIndex((t) => t.id === value);
     if (i === -1) return;
-    onChange(tabs[(i + delta + tabs.length) % tabs.length].id);
+    // Arrows skip greyed-out options.
+    for (let step = 1; step < tabs.length; step++) {
+      const next = tabs[(i + delta * step + tabs.length * step) % tabs.length];
+      if (!next.disabled) { onChange(next.id); return; }
+    }
   };
 
   const pill = variant === 'pill';
@@ -108,14 +117,16 @@ export function SegmentedTabs({
             aria-selected={active}
             // Roving tabindex: the row is one tab stop, arrows move within it.
             tabIndex={active ? 0 : -1}
-            onClick={() => onChange(tab.id)}
+            disabled={tab.disabled}
+            title={tab.title}
+            onClick={() => { if (!tab.disabled) onChange(tab.id); }}
             className={[
               // Contained tabs split the width evenly (flex-1), so side padding only sets
               // the MINIMUM width — cutting it to px-1 lets five short words fit a 420px
               // popup (Appearance's bubble/message-box strips, 2026-09-24) and changes
               // nothing visible on the two-tab strips, whose text is centred anyway.
               pill ? PILL_TAB_BASE : variant === 'contained' ? TAB_BASE.replace('px-3', 'px-1 min-w-0') : TAB_BASE,
-              active ? TAB_ACTIVE : pill ? PILL_TAB_INACTIVE : TAB_INACTIVE,
+              active ? TAB_ACTIVE : tab.disabled ? 'text-fg-faint cursor-not-allowed' : pill ? PILL_TAB_INACTIVE : TAB_INACTIVE,
               variant === 'contained' || variant === 'nested' ? 'flex-1' : '',
             ]
               .filter(Boolean)

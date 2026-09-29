@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import type { ModelAlias } from './StatusBar';
 import { FastIcon } from './Icons';
 import { useEscClose } from '../hooks/use-esc-close';
-import { Button, Dialog, TextInput, Toggle, FOCUS_RING, LoadingState, SectionLabel, SettingRow } from './ui';
+import { Button, CARD_LEVEL_1, Dialog, TextInput, Toggle, FOCUS_RING, LoadingState, SegmentedTabs, SettingRow } from './ui';
 import ModelPicker, { type ModelChoice } from './model/ModelPicker';
 import ModelSwitchPrompt, { switchFailureMessage, type ModelSwitchPromptState } from './ModelSwitchPrompt';
 import type { NativeSwitchResult } from '../../shared/types';
@@ -444,7 +444,9 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
         {!loaded ? (
           <LoadingState what="models" />
         ) : (
-          <div className="p-5 space-y-5">
+          // WHY p-4 space-y-4 (model picker redesign A): the popups' standard
+          // edge and 16px group gap; p-5/space-y-5 was part of the "wasted space".
+          <div className="p-4 space-y-4">
             {/* Model — the SHARED picker, scoped to this session's runtime. A
                 live session cannot move between runtimes (a CC session has a PTY
                 and no binding; a native one has a binding and no PTY), so the
@@ -468,7 +470,7 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
                 // than the shared component's default float-over-everything
                 // behaviour (built for a picker that's normally closed).
                 defaultOpen
-                layout="inline"
+                layout="flat"
                 // Lead with what's actually running, not just favourites — the
                 // dialog opens with no click to get here, so a model you picked
                 // once but never starred should still be the first thing you see.
@@ -485,36 +487,27 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
                 rendered at all rather than shown inert. A control that does
                 nothing is worse than a control that isn't there. */}
             {!isNative && (<>
-              <section>
-                {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels
-                    batch, guide: no spaced capitals — decisions H-3/L-1…L-4). */}
-                <SectionLabel className="mb-2">
-                  Effort level
-                </SectionLabel>
-                <div className="grid grid-cols-5 gap-1.5">
-                  {EFFORT_LEVELS.map((level) => {
-                    const disabled = level === 'max' && !maxAllowed;
-                    return (
-                      <button
-                        key={level}
-                        onClick={() => !disabled && updateEffort(level)}
-                        disabled={disabled}
-                        title={disabled ? 'Max effort requires Opus or Fable' : undefined}
-                        className={`py-1.5 text-xs rounded transition-colors capitalize ${
-                          effort === level
-                            ? 'bg-accent text-on-accent font-medium'
-                            : disabled
-                            ? 'bg-inset/50 text-fg-faint cursor-not-allowed'
-                            : 'bg-inset text-fg-2 hover:bg-well'
-                        }`}
-                      >
-                        {level}
-                      </button>
-                    );
-                  })}
-                </div>
-                <p className="text-2xs text-fg-muted mt-1.5">
-                  How hard Claude thinks before responding. Higher = slower but smarter.
+              {/* WHY a card with a segmented bar (model picker redesign A;
+                  LB-7: "the effort level thing looks dated and inconsistent"):
+                  the same shape as Remote Access's Keep awake — title, then the
+                  app's segmented control, with the hint inside the card it
+                  describes. Max stays visible but greyed off Opus/Fable. */}
+              <section className={`${CARD_LEVEL_1} px-3 py-2.5 space-y-2`}>
+                <span className="block text-xs text-fg-2">Effort</span>
+                <SegmentedTabs
+                  variant="nested"
+                  aria-label="Effort"
+                  value={effort}
+                  onChange={(id) => updateEffort(id as EffortLevel)}
+                  tabs={EFFORT_LEVELS.map((level) => ({
+                    id: level,
+                    label: level.charAt(0).toUpperCase() + level.slice(1),
+                    disabled: level === 'max' && !maxAllowed,
+                    title: level === 'max' && !maxAllowed ? 'Max effort requires Opus or Fable' : undefined,
+                  }))}
+                />
+                <p className="text-2xs text-fg-muted">
+                  How hard Claude thinks before responding. Higher is slower but smarter.
                 </p>
               </section>
 
