@@ -85,7 +85,7 @@ const realDeps = (): GateDeps => ({ hasDocuments: (id) => getOfficeSessions()?.h
 const flushedForClose = new WeakSet<object>();
 // What "Close anyway" goes ahead with, keyed by the webContents id of the window that shows the
 // prompt (ids, not objects — see askToFlush).
-const held = new Map<number, { kind: 'close'; win: ClosingWindow } | { kind: 'quit'; quitApp: () => void }>();
+const held = new Map<number, { kind: 'close'; win: ClosingWindow; onProceed?: () => void } | { kind: 'quit'; quitApp: () => void }>();
 let skipQuitGate = false;
 
 // "Close anyway" (the renderer's office:proceed) — registered once, on first use.
@@ -99,6 +99,7 @@ function listenForProceed(ipc: FlushIpc): void {
     if (!h || typeof id !== 'number') return;
     held.delete(id);
     if (h.kind === 'close') {
+      h.onProceed?.(); // Close anyway, said explicitly to the close gate (fix round 8)
       flushedForClose.add(h.win);
       if (!h.win.isDestroyed()) h.win.close();
     } else {
@@ -117,7 +118,10 @@ function listenForProceed(ipc: FlushIpc): void {
  * the window open and asks the person (OFFICE_UNSAVED_PROMPT); "Close anyway" closes it.
  * Returns false when there is nothing to save, or on the close it re-issued.
  */
-export function holdCloseForOfficeSave(win: ClosingWindow, ev: { preventDefault(): void }, deps: GateDeps = realDeps(), onFailed?: () => void): boolean {
+export function holdCloseForOfficeSave(
+  win: ClosingWindow, ev: { preventDefault(): void }, deps: GateDeps = realDeps(),
+  cb?: { onFailed(): void; onProceed(): void },
+): boolean {
   if (flushedForClose.has(win)) { flushedForClose.delete(win); return false; }
   if (win.isDestroyed() || !deps.hasDocuments(win.webContents.id)) return false;
   ev.preventDefault();
@@ -125,8 +129,8 @@ export function holdCloseForOfficeSave(win: ClosingWindow, ev: { preventDefault(
   listenForProceed(ipc);
   void askToFlush(win.webContents, ipc, deps.capMs, 'close').then((o) => {
     if (o.how === 'failed') {
-      onFailed?.(); // the close gate forgets a sessions answer if the person then chooses Review
-      held.set(win.webContents.id, { kind: 'close', win });
+      cb?.onFailed(); // the close gate keeps a sessions answer only for Close anyway
+      held.set(win.webContents.id, { kind: 'close', win, onProceed: cb?.onProceed });
       if (!win.webContents.isDestroyed()) win.webContents.send(OFFICE_UNSAVED_PROMPT, { count: o.count, firstPath: o.firstPath });
       return;
     }

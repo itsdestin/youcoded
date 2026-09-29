@@ -5,7 +5,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { QUIT_WATCHDOG_MS, gatedQuit, onWillQuit, requestRestart, resetRestartForTests } from '../src/main/app-restart';
 
-function deps(go: boolean, windowsLeft = false) {
+function deps(go: boolean, open: boolean[] = []) {
   let proceed!: () => void;
   const timers: Array<{ fn: () => void; ms: number }> = [];
   const d = {
@@ -13,8 +13,9 @@ function deps(go: boolean, windowsLeft = false) {
     relaunch: vi.fn(),
     shutdown: vi.fn(async () => {}),
     quit: vi.fn(),
-    windowsLeft: vi.fn(() => windowsLeft),
+    openWindows: vi.fn(() => open),
     exit: vi.fn(),
+    cannotQuit: vi.fn(),
     setTimer: (fn: () => void, ms: number) => { timers.push({ fn, ms }); },
   };
   return { d, proceed: () => proceed(), fire: () => timers.forEach((t) => t.fn()), timers };
@@ -71,8 +72,8 @@ describe('restart and quit', () => {
 });
 
 describe('the quit watchdog', () => {
-  it('exits 10 s after teardown when a window is still open', async () => {
-    const t = deps(true, true);
+  it('exits 10 s after teardown when every window still open is hung', async () => {
+    const t = deps(true, [true, true]);
     await gatedQuit(t.d);
     expect(t.timers.map((x) => x.ms)).toEqual([QUIT_WATCHDOG_MS]);
     expect(t.d.exit).not.toHaveBeenCalled();
@@ -83,22 +84,34 @@ describe('the quit watchdog', () => {
 
   it('relaunches first for a restart (exit skips will-quit)', async () => {
     requestRestart(() => {});
-    const t = deps(true, true);
+    const t = deps(true, [true]);
     await gatedQuit(t.d);
     t.fire();
     expect(t.d.relaunch).toHaveBeenCalledTimes(1);
     expect(t.d.exit).toHaveBeenCalledTimes(1);
   });
 
+  it('never forces a responsive window that vetoed the quit: says why, drops the restart, stays open', async () => {
+    requestRestart(() => {});
+    const t = deps(true, [true, false]); // one hung, one with an unsaved text file
+    await gatedQuit(t.d);
+    t.fire();
+    expect(t.d.exit).not.toHaveBeenCalled();
+    expect(t.d.cannotQuit).toHaveBeenCalledTimes(1);
+    const relaunch = vi.fn();
+    onWillQuit(relaunch); // a later, unrelated quit
+    expect(relaunch).not.toHaveBeenCalled();
+  });
+
   it('does nothing when every window already closed', async () => {
-    const t = deps(true, false);
+    const t = deps(true, []);
     await gatedQuit(t.d);
     t.fire();
     expect(t.d.exit).not.toHaveBeenCalled();
   });
 
   it('is never armed for a quit the gate held', async () => {
-    const t = deps(false, true);
+    const t = deps(false, [true]);
     await gatedQuit(t.d);
     expect(t.timers).toEqual([]);
   });

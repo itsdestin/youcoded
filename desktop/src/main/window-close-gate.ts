@@ -11,24 +11,36 @@
 // a vetoed unload (Electron's `will-prevent-unload`, observed without preventDefault) clears
 // the confirmation so the next X asks again.
 //
-// WHY the sessions answer waits (fix round 7): it used to be carried out (sessions ended) the
+// WHY the sessions answer waits (fix rounds 7–8): it used to be carried out (sessions ended) the
 // moment the person confirmed, before the last Office save. If that save then failed and the
 // person chose Review, the window stayed with its sessions already gone. Now the answer is only
-// remembered; it is carried out on the close that actually goes through — after the final Office
-// pass succeeded, or after Close anyway. An Office pass that fails, followed by a fresh X (the
-// person chose Review and came back), forgets the answer: the sessions are untouched and are
-// asked about again after the next successful save — once, never in a loop.
+// remembered — with the sessions owned at that moment, so one started later is never ended — and
+// carried out on the close that actually goes through: after the final Office pass succeeded, or
+// on Close anyway, which says so explicitly (onProceed). An Office failure clears the remembered
+// answer at once (keeping it only for that Close anyway); any other close that goes through
+// without a proceed asks about the sessions again — once, never in a loop.
 //
 // WHY a hung-window question (fix round 7): a renderer that stopped responding never answers the
 // Office save (main closes after 5 s) nor its own beforeunload, so the window cannot close and
-// every X only starts another wait. A second X within 10 s of a close main re-issued, while the
-// window is unresponsive, asks natively (the page cannot draw anything): close it anyway, or
-// wait. Closing it anyway destroys the window without its unload — the only way out of a hang.
+// every X only starts another wait. A close within 10 s of one main re-issued, while the window
+// is unresponsive, asks natively (the page cannot draw anything): close it anyway, or wait. That
+// close can be the person's second X or main's own next re-issue (after the Office hold that X
+// started) — either way the hang has outlasted a close. Closing anyway destroys the window
+// without its unload — the only way out of a hang. Accepted: that window's chat sessions keep
+// running (nothing ends them), exactly as after a renderer crash; they stay reachable from
+// another window or on the next launch.
 
 export interface CloseEvent { preventDefault(): void }
 
 /** How long after a re-issued close a second X counts as "still waiting on it". */
 export const HUNG_CLOSE_WINDOW_MS = 10_000;
+
+interface OfficeHoldCallbacks {
+  /** The Office save failed and the person is being asked (Review / Close anyway). */
+  onFailed(): void;
+  /** They chose Close anyway: the close main re-issues next goes ahead. */
+  onProceed(): void;
+}
 
 export interface CloseGateDeps<Answer> {
   /** Buddy windows never own sessions: they close freely. */
@@ -36,17 +48,16 @@ export interface CloseGateDeps<Answer> {
   /** Whole-app quit already saved and settled everything; the window just goes. */
   shuttingDown(): boolean;
   /** Office: holds the close (preventDefault) to save first; false when nothing to save or on
-   *  the close it re-issued itself (holdCloseForOfficeSave). `onFailed` runs when that save
-   *  failed and the person is being asked (Review / Close anyway). */
-  holdForOffice(ev: CloseEvent, onFailed: () => void): boolean;
-  /** How many chat sessions this window owns right now. */
-  sessionCount(): number;
+   *  the close it re-issued itself (holdCloseForOfficeSave). */
+  holdForOffice(ev: CloseEvent, cb: OfficeHoldCallbacks): boolean;
+  /** The chat sessions this window owns right now. */
+  sessionIds(): string[];
   /** Ask the person (resolves with their answer; concurrent asks share one prompt). */
   ask(count: number): Promise<Answer>;
-  /** Carry out the answer; true when the window should close. */
-  apply(answer: Answer): boolean;
-  /** Whether the answer lets the window close (Cancel does not). Nothing is carried out yet. */
-  closes(answer: Answer): boolean;
+  /** Carry out the answer for these sessions; true when the window should close. */
+  apply(answer: Answer, sessionIds: string[]): boolean;
+  /** Whether the answer lets the window close (Cancel does not). Default: `answer.close`. */
+  closes?(answer: Answer): boolean;
   isDestroyed(): boolean;
   close(): void;
   /** The window stopped responding (Electron 'unresponsive', not yet 'responsive'). */
@@ -58,15 +69,23 @@ export interface CloseGateDeps<Answer> {
   now?(): number;
 }
 
+type Remembered<Answer> = { answer: Answer; sessionIds: string[] };
+
 export function createCloseGate<Answer>(d: CloseGateDeps<Answer>) {
   const now = d.now ?? Date.now;
-  let confirmed = false;
-  let pending: { answer: Answer } | null = null;
-  let officeFailed = false;
+  const closes = d.closes ?? ((a: Answer) => (a as { close?: boolean }).close === true);
+  let confirmed: Remembered<Answer> | null = null; // answered, waiting for the final Office pass
+  let forProceed: Remembered<Answer> | null = null; // the Office pass failed: only Close anyway uses it
+  let proceeding = false;
   let lastHeld = false;
   let reissuedAt: number | null = null;
   let askingHung = false;
-  const forget = () => { confirmed = false; pending = null; officeFailed = false; };
+  const answered = new WeakSet<Promise<Answer>>(); // concurrent presses share one prompt
+  const carryOut = (ev: CloseEvent, r: Remembered<Answer>) => {
+    // Sessions owned at confirm time AND still here (one dragged away meanwhile is not ended).
+    const owned = d.sessionIds();
+    if (!d.apply(r.answer, r.sessionIds.filter((id) => owned.includes(id)))) ev.preventDefault();
+  };
   return {
     async onClose(ev: CloseEvent): Promise<void> {
       if (d.buddy) return;
@@ -84,42 +103,39 @@ export function createCloseGate<Answer>(d: CloseGateDeps<Answer>) {
         return;
       }
       // Office first, every time — even after the sessions prompt was answered (see above).
-      // Read before this pass starts: its own failure is reported later (onFailed).
-      const afterFailure = officeFailed;
-      officeFailed = false;
-      const held = d.holdForOffice(ev, () => { officeFailed = true; });
-      if (held) {
-        // A fresh X after an Office pass that failed (Review): the remembered answer is stale.
-        if (afterFailure) { confirmed = false; pending = null; }
-        lastHeld = true;
-        return;
-      }
-      // Not held right after a failure: this is Close anyway's re-issued close — go ahead.
+      const held = d.holdForOffice(ev, {
+        onFailed: () => { forProceed = confirmed; confirmed = null; },
+        onProceed: () => { proceeding = true; },
+      });
+      if (held) { lastHeld = true; return; }
       // A close right after a hold is the one Office re-issued (saved, or Close anyway).
       if (lastHeld) { reissuedAt = now(); lastHeld = false; }
-      if (confirmed) {
-        // The final Office pass is done: now the sessions answer is carried out.
-        const p = pending;
-        forget();
-        if (p && !d.apply(p.answer)) ev.preventDefault();
-        return;
-      }
-      const count = d.sessionCount();
-      if (count === 0) return; // no sessions — close freely
+      const proceed = proceeding;
+      proceeding = false;
+      const failedAnswer = forProceed;
+      forProceed = null; // only Close anyway may use it; any other close asks again
+      const r = proceed ? failedAnswer : confirmed;
+      confirmed = null;
+      if (r) { carryOut(ev, r); return; }
+      const ids = d.sessionIds();
+      if (ids.length === 0) return; // no sessions — close freely
       ev.preventDefault();
-      const answer = await d.ask(count);
+      const asking = d.ask(ids.length);
+      const answer = await asking;
       // A second press while this was pending resolved the SAME prompt; the first one through
       // already re-issued the close.
-      if (confirmed) return;
-      if (!d.closes(answer)) return; // Cancel — the window stays, and the next press asks again
-      confirmed = true;
-      pending = { answer };
+      if (answered.has(asking)) return;
+      answered.add(asking);
+      if (!closes(answer)) return; // Cancel — the window stays, and the next press asks again
+      confirmed = { answer, sessionIds: d.sessionIds() };
       reissuedAt = now();
       if (!d.isDestroyed()) d.close();
     },
     /** The page vetoed its unload (Electron `will-prevent-unload`): the close did not happen. */
     onUnloadPrevented(): void {
-      forget();
+      confirmed = null;
+      forProceed = null;
+      proceeding = false;
     },
   };
 }

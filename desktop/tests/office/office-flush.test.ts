@@ -123,6 +123,18 @@ describe('closing a window with Office documents open', () => {
     expect(holdCloseForOfficeSave(win, { preventDefault() {} }, depsFor(ipc, [7]))).toBe(false);
   });
 
+  it('tells the close gate about the failure and, on Close anyway, the proceed', async () => {
+    const ipc = newIpc();
+    const { win } = aWindow(ipc, 7, { failed: 1 });
+    const cb = { onFailed: vi.fn(), onProceed: vi.fn() };
+    holdCloseForOfficeSave(win, { preventDefault() {} }, depsFor(ipc, [7]), cb);
+    await vi.waitFor(() => expect(cb.onFailed).toHaveBeenCalledTimes(1));
+    expect(cb.onProceed).not.toHaveBeenCalled();
+    ipc.emit(OFFICE_PROCEED, { sender: { id: 7 } });
+    expect(cb.onProceed).toHaveBeenCalledTimes(1);
+    expect(win.close).toHaveBeenCalledTimes(1);
+  });
+
   it("never overrides the window's own unload veto (an unsaved text-file edit keeps it open)", async () => {
     const ipc = newIpc();
     const { win, webContents } = aWindow(ipc, 7, { failed: 1 });

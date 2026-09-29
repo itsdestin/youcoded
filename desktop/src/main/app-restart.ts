@@ -13,12 +13,18 @@
 // only marks the restart; `onWillQuit` (Electron's will-quit, which fires only when the quit is
 // really happening) relaunches.
 //
-// WHY a watchdog (fix round 7): once teardown has run, a window whose renderer hangs — or one
-// that vetoes its unload — would keep the app alive forever, with every session already
-// stopped: a quit (or restart) that never finishes. So 10 s after teardown, any window still
-// open is let go of: app.exit (relaunching first for a restart, since exit skips will-quit).
-// That is safe at that point: teardown is done, and the Office 'final' pass already saved what
-// could be saved and released the documents; waiting longer could only hang.
+// WHY a watchdog (fix rounds 7–8): once teardown has run, a window whose renderer hangs would
+// keep the app alive forever, with every session already stopped: a quit (or restart) that never
+// finishes. So 10 s after teardown, if every window still open is hung, the app exits (relaunching
+// first for a restart, since exit skips will-quit). That is safe then: teardown is done, the
+// Office 'final' pass already saved what could be saved and released the documents, and a hung
+// page can neither save nor ask anything. But a window that is still RESPONSIVE and still open
+// vetoed the quit on purpose — a text file with unsaved edits (ActiveArtifactView's guard) — so
+// it is never forced: the restart is dropped, the person is told why the app did not quit, and
+// the app stays open with that edit. (Asking about such editors in the quit gate, before
+// teardown, would need each editor to report its unsaved state to main; not done here.)
+import { app, BrowserWindow, dialog } from 'electron';
+import { isUnresponsive } from './crash-diagnostics';
 
 let restartRequested = false;
 let relaunchOnQuit = false;
@@ -42,14 +48,28 @@ export function onWillQuit(relaunch: () => void): void {
 interface GatedQuitDeps {
   /** The Office quit gate. `onProceed` is what its prompt's Close anyway runs. */
   gate(onProceed: () => void): Promise<boolean>;
-  relaunch(): void;
   /** Tear everything down (shutdownApp). */
   shutdown(): Promise<void>;
-  quit(): void;
-  /** Whether any window is still open (the watchdog's question). */
-  windowsLeft(): boolean;
-  exit(): void;
+  // Electron by default (main.ts passes only the two above); tests pass fakes.
+  relaunch?(): void;
+  quit?(): void;
+  /** For each window still open: whether it is hung. */
+  openWindows?(): boolean[];
+  exit?(): void;
+  /** A responsive window vetoed the quit: say so (a native message box). */
+  cannotQuit?(): void;
   setTimer?(fn: () => void, ms: number): void;
+}
+
+function electronDefaults() {
+  return {
+    relaunch: () => app.relaunch(),
+    quit: () => app.quit(),
+    openWindows: () => BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed()).map((w) => isUnresponsive(w)),
+    exit: () => app.exit(0),
+    cannotQuit: () => { void dialog.showMessageBox({ type: 'info', buttons: ['OK'], message: "YouCoded couldn't quit because a window has unsaved changes." }); },
+    setTimer: (fn: () => void, ms: number) => { setTimeout(fn, ms).unref?.(); },
+  };
 }
 
 /**
@@ -57,7 +77,8 @@ interface GatedQuitDeps {
  * for), tear down, quit, and arm the watchdog. A held quit forgets the restart request here —
  * only Close anyway (onProceed) marks it again.
  */
-export async function gatedQuit(d: GatedQuitDeps): Promise<void> {
+export async function gatedQuit(deps: GatedQuitDeps): Promise<void> {
+  const d = { ...(deps.openWindows && deps.exit ? {} : electronDefaults()), ...deps } as Required<GatedQuitDeps>;
   const restart = restartRequested;
   restartRequested = false;
   const go = await d.gate(() => {
@@ -68,10 +89,16 @@ export async function gatedQuit(d: GatedQuitDeps): Promise<void> {
   if (restart) relaunchOnQuit = true;
   await d.shutdown().finally(() => {
     d.quit();
-    (d.setTimer ?? ((fn, ms) => { setTimeout(fn, ms).unref?.(); }))(() => {
-      if (!d.windowsLeft()) return;
-      onWillQuit(d.relaunch); // exit() skips will-quit, so a restart relaunches here
-      d.exit();
+    d.setTimer(() => {
+      const open = d.openWindows();
+      if (open.length === 0) return;
+      if (open.every((hung) => hung)) {
+        onWillQuit(d.relaunch); // exit() skips will-quit, so a restart relaunches here
+        d.exit();
+        return;
+      }
+      relaunchOnQuit = false; // the quit was vetoed: a later, unrelated quit must not restart
+      d.cannotQuit();
     }, QUIT_WATCHDOG_MS);
   });
 }

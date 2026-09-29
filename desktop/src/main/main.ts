@@ -39,7 +39,7 @@ import { validateHandoffDraft, type DetachedHandoffDraft } from '../shared/hando
 import { MOUNT_PROBE_JS } from './dev-mount-probe';
 import { log, rotateLog } from './logger';
 import { isSmokeTest, reportWhenRendered } from './smoke-probe';
-import { askCloseHungWindow, installCrashDiagnostics, reportPreviousCrashes, wireWindowHangDiagnostics } from './crash-diagnostics';
+import { hangDeps, installCrashDiagnostics, reportPreviousCrashes, wireWindowHangDiagnostics } from './crash-diagnostics';
 import { registerThemeProtocol } from './theme-protocol';
 import { registerOfficeProtocol } from './office/office-protocol';
 import { registerOfficeIpc } from './office/office-ipc';
@@ -823,7 +823,7 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   // Record beachballs. A hung window is otherwise invisible: it keeps servicing
   // background work, so nothing in the app, the OS, or this log says anything is
   // wrong — which is exactly why the 2026-09-03 force quit was unexplainable.
-  const hang = wireWindowHangDiagnostics(win, opts?.buddy ? `buddy:${opts.buddy}` : 'main');
+  wireWindowHangDiagnostics(win, opts?.buddy ? `buddy:${opts.buddy}` : 'main');
 
   // Lift alwaysOnTop to 'screen-saver' level for buddy windows after construction.
   // 'screen-saver' is the highest reliable always-on-top level; floats over
@@ -1006,29 +1006,21 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
     // about to tear down every session anyway — a close event reaching here
     // once shuttingDown is set must ask nothing and let the window close.
     shuttingDown: () => !!shuttingDown,
-    holdForOffice: (ev, onFailed) => holdCloseForOfficeSave(win, ev, undefined, onFailed), // Office docs save first (≤5 s, design §4)
-    sessionCount: () => windowRegistry.sessionsForWindow(wid).length,
+    holdForOffice: (ev, cb) => holdCloseForOfficeSave(win, ev, undefined, cb), // Office docs save first (≤5 s, design §4)
+    sessionIds: () => windowRegistry.sessionsForWindow(wid),
     ask: (count) => closeRequests.request(wid, count, (push) => {
       if (!win.isDestroyed()) win.webContents.send(IPC.WINDOW_CLOSE_REQUEST, push);
     }),
-    // Re-read ownership rather than reusing the count's list: the in-app prompt
-    // does not block the strip the way the old modal OS dialog did, so a
-    // session can be dragged into another window (or closed with its own X)
-    // while this one waits on an answer. Passing a STALE list into
-    // applyCloseAnswer would destroy/untrack a session that no longer belongs
-    // to this window — review finding, T3 (pinned by
-    // close-request-manager.test.ts's applyCloseAnswer suite).
-    apply: (answer) => applyCloseAnswer(answer, windowRegistry.sessionsForWindow(wid), {
+    // The gate passes the sessions owned when the person confirmed AND still owned now: one
+    // dragged away meanwhile (review T3) or started later (fix round 8) is never ended.
+    apply: (answer, ids) => applyCloseAnswer(answer, ids, {
       untrack: (sid) => welcomeBackStore?.untrack(sid),
       destroySession: (sid) => sessionManager.destroySession(sid),
       releaseSession: (sid) => windowRegistry.releaseSession(sid),
     }),
-    closes: (answer) => answer.close,
     isDestroyed: () => win.isDestroyed(),
     close: () => win.close(),
-    unresponsive: () => hang.unresponsive,
-    confirmCloseHung: () => askCloseHungWindow(win),
-    destroy: () => win.destroy(),
+    ...hangDeps(win),
   });
   // A page's beforeunload veto cancelled the close. Observed only: preventDefault would override it.
   win.webContents.on('will-prevent-unload', () => closeGate.onUnloadPrevented());
@@ -2616,10 +2608,7 @@ app.on('before-quit', (e) => {
   e.preventDefault(); // Office first: an unsaved document asks the person before any teardown (office-flush.ts).
   void gatedQuit({ // app-restart.ts: also carries a pending restart through the gate (fix round 6, I-B)
     gate: (onProceed) => officeQuitGate(undefined, undefined, onProceed),
-    relaunch: () => app.relaunch(),
     shutdown: () => shutdownApp(),
-    quit: () => app.quit(),
-    windowsLeft: () => BrowserWindow.getAllWindows().some((w) => !w.isDestroyed()), exit: () => app.exit(0),
   }).catch(() => {});
 });
 app.on('will-quit', () => onWillQuit(() => app.relaunch())); // a restart relaunches only now (app-restart.ts)

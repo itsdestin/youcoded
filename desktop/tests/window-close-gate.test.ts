@@ -8,18 +8,19 @@ type Office = 'none' | 'hold' | 'hold-fail';
 
 function gate(over: { sessions?: number; answer?: boolean } = {}) {
   const state = { sessions: over.sessions ?? 1, destroyed: false, office: 'none' as Office, hung: false, t: 0, closeAnyway: true };
+  let proceed: (() => void) | null = null;
   const deps = {
     buddy: false,
     shuttingDown: () => false,
-    holdForOffice: vi.fn((ev: { preventDefault(): void }, onFailed: () => void) => {
+    holdForOffice: vi.fn((ev: { preventDefault(): void }, cb: { onFailed(): void; onProceed(): void }) => {
       if (state.office === 'none') return false;
       ev.preventDefault();
-      if (state.office === 'hold-fail') onFailed();
+      if (state.office === 'hold-fail') { cb.onFailed(); proceed = cb.onProceed; }
       return true;
     }),
-    sessionCount: () => state.sessions,
+    sessionIds: () => Array.from({ length: state.sessions }, (_, i) => `s${i + 1}`),
     ask: vi.fn(async () => over.answer ?? true),
-    apply: vi.fn((a: boolean) => a),
+    apply: vi.fn((a: boolean, _ids: string[]) => a),
     closes: (a: boolean) => a,
     isDestroyed: () => state.destroyed,
     close: vi.fn(),
@@ -29,7 +30,9 @@ function gate(over: { sessions?: number; answer?: boolean } = {}) {
     now: () => state.t,
   };
   const ev = () => ({ preventDefault: vi.fn() });
-  return { g: createCloseGate<boolean>(deps), deps, state, ev };
+  // Close anyway: main tells the gate, then re-issues the close past the Office hold.
+  const closeAnyway = () => { proceed?.(); proceed = null; state.office = 'none'; };
+  return { g: createCloseGate<boolean>(deps), deps, state, ev, closeAnyway };
 }
 
 describe('the window close gate', () => {
@@ -66,11 +69,11 @@ describe('the window close gate', () => {
   });
 
   it('carries the sessions answer out after Close anyway on a failed Office save', async () => {
-    const { g, deps, state, ev } = gate();
+    const { g, deps, state, ev, closeAnyway } = gate();
     await g.onClose(ev());
     state.office = 'hold-fail';
     await g.onClose(ev());
-    state.office = 'none'; // Close anyway: main re-issues the close past the Office hold
+    closeAnyway();
     const e = ev();
     await g.onClose(e);
     expect(deps.apply).toHaveBeenCalledTimes(1);
@@ -101,6 +104,29 @@ describe('the window close gate', () => {
     const cancel = gate({ answer: false });
     await cancel.g.onClose(cancel.ev());
     expect(cancel.deps.close).not.toHaveBeenCalled();
+  });
+});
+
+describe('the remembered sessions answer', () => {
+  it('Review, then the document is closed, then X: the sessions prompt comes back and no old answer is applied', async () => {
+    const { g, deps, state, ev } = gate();
+    await g.onClose(ev()); // sessions prompt: confirmed
+    state.office = 'hold-fail';
+    await g.onClose(ev()); // the final Office pass fails → Review
+    state.office = 'none'; // the person closes the failed document's tab, then presses X
+    const e = ev();
+    await g.onClose(e);
+    expect(deps.apply).not.toHaveBeenCalled();
+    expect(deps.ask).toHaveBeenCalledTimes(2);
+    expect(e.preventDefault).toHaveBeenCalled();
+  });
+
+  it('ends only the sessions owned when the person confirmed', async () => {
+    const { g, deps, state, ev } = gate({ sessions: 2 });
+    await g.onClose(ev()); // confirmed with s1, s2
+    state.sessions = 3; // a session started before the close goes through
+    await g.onClose(ev());
+    expect(deps.apply).toHaveBeenCalledWith(true, ['s1', 's2']);
   });
 });
 

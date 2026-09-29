@@ -153,8 +153,25 @@ export function wireWindowHangDiagnostics(win: BrowserWindow, label: string): { 
       hungForMs: Date.now() - hungSince,
     });
   });
-  // Read by the window close gate (fix round 7): a second X on a hung window asks natively.
-  return { get unresponsive() { return hungSince !== null; } };
+  // Read by the window close gate and the quit watchdog (fix rounds 7–8).
+  const hang = { get unresponsive() { return hungSince !== null; } };
+  hangs.set(win, hang);
+  return hang;
+}
+
+const hangs = new WeakMap<BrowserWindow, { readonly unresponsive: boolean }>();
+/** Whether this window is hung right now (false for a window never wired). */
+export function isUnresponsive(win: BrowserWindow): boolean {
+  return hangs.get(win)?.unresponsive ?? false;
+}
+
+/** The hung-window part of the close gate's deps, in one place (fix round 8: main.ts budget). */
+export function hangDeps(win: BrowserWindow) {
+  return {
+    unresponsive: () => isUnresponsive(win),
+    confirmCloseHung: () => askCloseHungWindow(win),
+    destroy: () => win.destroy(),
+  };
 }
 
 /**
@@ -162,7 +179,7 @@ export function wireWindowHangDiagnostics(win: BrowserWindow, label: string): { 
  * X while the page is hung (Task 6 fix round 7). Native because the hung page cannot draw one.
  * Resolves true for Close anyway; Wait is the default and what Escape picks.
  */
-export async function askCloseHungWindow(win: BrowserWindow): Promise<boolean> {
+async function askCloseHungWindow(win: BrowserWindow): Promise<boolean> {
   const r = await dialog.showMessageBox(win, {
     type: 'warning',
     buttons: ['Close anyway', 'Wait'],
