@@ -25,7 +25,6 @@ describe('office session registry', () => {
     expect(session.token).toMatch(/^[0-9a-f]{32}$/);
     expect(session.path).toBe('/docs/report.docx');
     expect(session.senderId).toBe(1);
-    expect(session.modified).toBe(false);
     const info = await stat(session.temp);
     expect(info.isDirectory()).toBe(true);
   });

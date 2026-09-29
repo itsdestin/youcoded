@@ -154,6 +154,14 @@ function IconBtn({ name, title, onClick, active, glyph }: { name?: string; title
   );
 }
 
+/** The header's "open elsewhere" button: Open in Office for a file Office edits, otherwise
+ *  Open with the default app. WHY a component (final review, finding 7): the choice used to be
+ *  an inline IIFE crammed onto one line of the header. */
+function OpenElsewhereBtn({ office, onOpenExternal }: { office: ReturnType<typeof officeHeaderAction>; onOpenExternal: () => void }) {
+  if (office) return <IconBtn title={office.title} glyph={office.glyph} onClick={office.onClick} />;
+  return <IconBtn name="external" title="Open with the default app" onClick={onOpenExternal} />;
+}
+
 // React.memo, and the reason it is worth the wrapper: this component lives
 // inside ChatView, which re-renders on EVERY streamed token. Its five props are
 // all plain strings that only change when you switch conversation or project, so
@@ -1119,7 +1127,12 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
         )}
         {/* Edit/Save moved to the floating button at the bottom-right of the
             doc pane (Destin, 2026-07-22) — see the cluster below the content div. */}
-        {active && isElectron && ((o) => o ? <IconBtn title={o.title} glyph={o.glyph} onClick={o.onClick} /> : <IconBtn name="external" title="Open with the default app" onClick={handleOpenExternal} />)(officeHeaderAction(absolutePath, dispatch, () => editRef.current?.cancelEdit()))}
+        {active && isElectron && (
+          <OpenElsewhereBtn
+            office={officeHeaderAction(absolutePath, dispatch, () => editRef.current?.cancelEdit())}
+            onOpenExternal={handleOpenExternal}
+          />
+        )}
         {active && isRemoteMode() && <IconBtn name="download" title="Download" onClick={handleDownload} />}
         {active && <IconBtn name={copiedPath ? 'check' : 'copypath'} title={copiedPath ? 'Copied' : 'Copy path'} onClick={handleCopyPath} />}
         {active && isElectron && <IconBtn title="Reveal in folder" glyph={<RevealFolderIc />} onClick={handleReveal} />}

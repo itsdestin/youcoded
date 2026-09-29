@@ -391,7 +391,6 @@ export function createOfficeCommands(deps: {
       // Every path — success (the folder is then empty), failure, or abandoned at quit.
       await fsp.rm(priv, { recursive: true, force: true }).catch(() => {});
     }
-    s.modified = false;
     if (deps.onSaved) {
       // WHY caught: the file IS saved at this point; failing to keep a version must not make
       // the editor report the save itself as failed (it would retry and save again).
@@ -472,8 +471,9 @@ export function createOfficeCommands(deps: {
           // filters, and as the file to reopen, which open_file ignores anyway (it always opens
           // the session's own file). A full path would tell the frame where the file lives.
           return path.basename(s.path);
+        // WHY only acknowledged: the renderer tracks "changed since the last save" itself
+        // (EditorFrame's relay sees this same command); main never needed its own copy.
         case 'set_document_modified':
-          s.modified = args.modified === true;
           return null;
         case 'recent_files_state':
           return { enabled: false, files: [] };

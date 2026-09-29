@@ -500,6 +500,15 @@ const IPC = {
 // `chatgpt` namespace for why), keeping the handler's own sentence. Anything
 // that is not that exact shape is rethrown untouched.
 const INVOKE_ERROR_PREFIX = /^Error invoking remote method '[^']*': (?:Error: )?/;
+/** Subscribe to one of main's office:* pushes; returns the unsubscribe. WHY a helper (final
+ *  review, finding 7): the five office pushes were each a hand-written listener crammed onto one
+ *  line; one shape keeps them readable and identical. */
+function officePush<A extends unknown[]>(channel: string, cb: (...args: A) => void): () => void {
+  const h = (_e: IpcRendererEvent, ...args: unknown[]) => cb(...(args as A));
+  ipcRenderer.on(channel, h);
+  return () => { ipcRenderer.off(channel, h); };
+}
+
 function unwrapInvokeError<T>(p: Promise<T>): Promise<T> {
   return p.catch((e: unknown) => {
     if (e instanceof Error && INVOKE_ERROR_PREFIX.test(e.message)) {
@@ -1944,9 +1953,20 @@ contextBridge.exposeInMainWorld('claude', {
     invoke: (token: string, cmd: string, args: unknown) => ipcRenderer.invoke('office:invoke', token, cmd, args),
     close: (token: string) => ipcRenderer.invoke('office:close', token),
     versions: (p: string) => ipcRenderer.invoke('office:versions', p),
-    restore: (p: string, id: string) => ipcRenderer.invoke('office:restore', p, id), /* after a restore, the editor holding the token reopens its file (EditorFrame) */ onChanged: (cb: (p: { path: string; token: string }) => void) => { const h = (_e: IpcRendererEvent, p: { path: string; token: string }) => cb(p); ipcRenderer.on('office:changed', h); return () => { ipcRenderer.off('office:changed', h); }; },
-    saveCopy: (token: string, mode: string, data?: string) => ipcRenderer.invoke('office:save-copy', token, mode, data), flushDone: (id: string, result: unknown) => ipcRenderer.send('office:flush-done', id, result), proceedClose: () => ipcRenderer.send('office:proceed'), dismissPrompt: () => ipcRenderer.send('office:dismiss'), lostSaves: () => ipcRenderer.invoke('office:lost-saves'), setOtherUnsaved: (names: string[]) => ipcRenderer.send('office:other-unsaved', names), onSavesLost: (cb: () => void) => { const h = () => cb(); ipcRenderer.on('office:saves-lost', h); return () => { ipcRenderer.off('office:saves-lost', h); }; },
-    onFlushRequest: (cb: (id: string, reason: string) => void) => { const h = (_e: IpcRendererEvent, id: string, reason: string) => cb(id, reason); ipcRenderer.on('office:flush-request', h); return () => { ipcRenderer.off('office:flush-request', h); }; }, onUnsavedPrompt: (cb: (p: unknown) => void) => { const h = (_e: IpcRendererEvent, p: unknown) => cb(p); ipcRenderer.on('office:unsaved-prompt', h); return () => { ipcRenderer.off('office:unsaved-prompt', h); }; },
+    restore: (p: string, id: string) => ipcRenderer.invoke('office:restore', p, id),
+    // After a restore, the editor holding the token reopens its file (EditorFrame).
+    onChanged: (cb: (p: { path: string; token: string }) => void) => officePush('office:changed', cb),
+    saveCopy: (token: string, mode: string, data?: string) => ipcRenderer.invoke('office:save-copy', token, mode, data),
+    // Window close / quit saving (main/office/office-flush.ts) — desktop only.
+    onFlushRequest: (cb: (id: string, reason: string) => void) => officePush('office:flush-request', cb),
+    flushDone: (id: string, result: unknown) => ipcRenderer.send('office:flush-done', id, result),
+    onUnsavedPrompt: (cb: (p: unknown) => void) => officePush('office:unsaved-prompt', cb),
+    proceedClose: () => ipcRenderer.send('office:proceed'),
+    dismissPrompt: () => ipcRenderer.send('office:dismiss'),
+    setOtherUnsaved: (names: string[]) => ipcRenderer.send('office:other-unsaved', names),
+    // Saves lost to a reload, or stopped by the last quit (office-ipc.ts) — desktop only.
+    lostSaves: () => ipcRenderer.invoke('office:lost-saves'),
+    onSavesLost: (cb: () => void) => officePush('office:saves-lost', cb),
   },
   // Project View IPC — sibling to artifacts. Backs the project overlay's
   // conversations / repo / context tabs.

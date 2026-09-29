@@ -7,7 +7,6 @@ export interface OfficeSession {
   path: string;
   temp: string;
   senderId: number;
-  modified: boolean;
   lastSnapshotAt: number;
 }
 
@@ -58,7 +57,6 @@ export function createSessions(tempBase: string, opts: { drain?: (s: OfficeSessi
       path: filePath,
       temp,
       senderId,
-      modified: false,
       lastSnapshotAt: 0,
     };
     sessions.set(session.token, session);

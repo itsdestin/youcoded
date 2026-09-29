@@ -84,13 +84,11 @@ describe('office commands without the translator', () => {
     expect(await run(s.token, 'recent_files_state', {})).toEqual({ enabled: false, files: [] });
   });
 
-  it('records the document-modified flag on the session', async () => {
+  it('acknowledges the document-modified flag without keeping it (the renderer tracks changes)', async () => {
     const s = await sessionFor(MEMO);
     const run = createOfficeCommands({ root: ROOT, sessions });
-    await run(s.token, 'set_document_modified', { modified: true });
-    expect(s.modified).toBe(true);
-    await run(s.token, 'set_document_modified', { modified: false });
-    expect(s.modified).toBe(false);
+    await expect(run(s.token, 'set_document_modified', { modified: true })).resolves.toBeNull();
+    await expect(run(s.token, 'set_document_modified', { modified: false })).resolves.toBeNull();
   });
 
   it('refuses to open a file larger than the size limit', async () => {
@@ -129,7 +127,6 @@ describe('office commands without the translator', () => {
     expect(await run(s.token, 'save_changes', { changes: ['x'], deleteIndex: 3, count: 1 })).toBe('ok');
     expect(convertSpy).not.toHaveBeenCalled();
     expect(await readFile(s.path)).toEqual(original);
-    expect(s.modified).toBe(true);
   });
 
   it("leaves the user's file untouched and no tmp behind when the translation fails", async () => {
@@ -239,13 +236,11 @@ describe.skipIf(!HAS_ADDON)('office commands with the bundled x2t', () => {
     const b64 = (await run(s.token, 'open_file', {})) as string;
     const old = new Date('2020-01-01T00:00:00Z');
     await utimes(s.path, old, old);
-    s.modified = true;
     await run(s.token, 'write_editor_bin', { data: b64 });
     expect(await run(s.token, 'save_file', {})).toBe('ok');
     expect((await stat(s.path)).mtimeMs).not.toBe(old.getTime());
     expect(noteOwnWrite).toHaveBeenCalledWith(s.path);
     expect(await tmpsBeside(s.path)).toEqual([]);
-    expect(s.modified).toBe(false);
     expect(onSaved).toHaveBeenCalledWith(s, before);
     expect(typeof (await run(s.token, 'open_file', {}))).toBe('string');
   });
