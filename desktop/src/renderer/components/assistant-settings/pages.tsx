@@ -16,7 +16,8 @@ import FolderSwitcher from '../FolderSwitcher';
 import SessionNaming from './SessionNaming';
 import SavedContextSettings from './SavedContextSettings';
 import { Button, FieldError, SettingRow, Toggle, TypeableSelect } from '../ui';
-import { UsageOverview } from '../usage/UsagePopup';
+import { UsageView } from '../usage/UsageView';
+import { ScreenMark, useScreenOpen } from '../../shoot-mode';
 
 // The pages of Assistant settings. Five, in one flat list (review round 1,
 // 2026-09-05 — P-5 note: one "Cloud providers" page for the three sign-in /
@@ -29,7 +30,7 @@ import { UsageOverview } from '../usage/UsagePopup';
 // Session Defaults, Model Providers, Permissions, Specialists — re-homed, not
 // redrawn: the blocks are the ones the popups rendered.
 
-export type PageId = 'general' | 'cloud' | 'usage' | 'local' | 'permissions' | 'specialists';
+export type PageId = 'general' | 'cloud' | 'local' | 'permissions' | 'specialists';
 
 export interface AssistantDefaults {
   skipPermissions: boolean;
@@ -341,6 +342,19 @@ function GeneralPage(ctx: PageContext) {
   );
 }
 
+/** The usage view at the foot of Cloud providers. Its own screen name so a
+ *  picture of the page scrolls down to it. */
+function CloudUsageSection() {
+  useScreenOpen('settings/assistant/cloud/usage', () => {}); // photo-only build: the section is on the Cloud page already
+  return (
+    <section className="pt-3">
+      <ScreenMark name="settings/assistant/cloud/usage" />
+      <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Usage</h3>
+      <UsageView />
+    </section>
+  );
+}
+
 // ── The registry ─────────────────────────────────────────────────────────────
 
 export const PAGES: PageDef[] = [
@@ -364,17 +378,12 @@ export const PAGES: PageDef[] = [
         <ClaudeCodeBlock onOpenClaudePreferences={ctx.onOpenClaudePreferences} onCloseParent={ctx.onClosePanel} />
         <ChatGptBlock />
         <OpenRouterBlock keysHeading="Your own API keys" />
+        {/* Usage statistics (design 2026-09-29, review round 1 C-1): the same
+            view the status bar's usage chips open, at the bottom of the page
+            below the accounts it describes. */}
+        <CloudUsageSection />
       </div>
     ),
-  },
-  {
-    // Usage statistics (design 2026-09-29; UX review U2/U3): its own page, so
-    // it is findable by name, with limits first — the same view the status
-    // bar's usage chips open in a popup.
-    id: 'usage',
-    label: 'Usage',
-    icon: <Icon><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></Icon>,
-    render: () => <UsageOverview compact={false} />,
   },
   {
     id: 'local',

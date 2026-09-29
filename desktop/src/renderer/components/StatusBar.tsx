@@ -1036,7 +1036,9 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
   // usage popup — every limit and balance now, plus history. It used to jump
   // straight to claude.ai or Model Providers; those are buttons inside it now.
   const [usagePopupOpen, setUsagePopupOpen] = useState(false);
-  useScreenOpen('chat/usage', () => setUsagePopupOpen(true)); // photo-only build
+  // photo-only build: `chat/usage/<sub>` opens it on another account or range.
+  const [usageShot, setUsageShot] = useState<string | undefined>(undefined);
+  useScreenOpen('chat/usage', (sub) => { setUsageShot(sub); setUsagePopupOpen(true); }, ['chatgpt', 'openrouter', '24h']);
   const openUsage = () => setUsagePopupOpen(true);
   const usageTitle = chatgptWindows ? 'Your ChatGPT plan — click for usage' : 'Your Claude plan — click for usage';
   const ss = sessionStats; // shorthand
@@ -1794,7 +1796,11 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
         />
       )}
 
-      <UsagePopup open={usagePopupOpen} onClose={() => setUsagePopupOpen(false)} />
+      <UsagePopup open={usagePopupOpen} onClose={() => setUsagePopupOpen(false)}
+        initial={usageShot === 'chatgpt' || usageShot === 'openrouter' ? usageShot
+          : chatgptWindows ? 'chatgpt' : runtime === 'claude' ? 'claude-code' : undefined}
+        initialRange={usageShot === '24h' ? '24h' : undefined}
+        screen={usageShot ? `chat/usage/${usageShot}` : 'chat/usage'} />
 
       {/* Context popup — portal-rendered; position in tree is cosmetic. */}
       {/* Native sessions have their own numbers: the CC fields (contextPercent /

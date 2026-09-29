@@ -1,13 +1,13 @@
 // Usage statistics across providers (design 2026-09-29, docs/active/design/
 // 2026-09-29-usage-stats/). The wire shapes the usage view reads. Designed in
 // the workbench ahead of the backend — `usage.history` / `usage.accounts` are
-// MOCK_ONLY until main records daily totals and reads the balances.
+// MOCK_ONLY until main records usage over time and reads the balances.
 
 /** Who the work was billed to. `claude-code` and `chatgpt` are monthly plans
  *  (no per-use charge), `openrouter` and `api` bill per use, `local` is free. */
 export type UsageProviderId = 'claude-code' | 'chatgpt' | 'openrouter' | 'api' | 'local';
 
-/** One model's work on one day. */
+/** One model's work within one time slot. */
 export interface UsageEntry {
   provider: UsageProviderId;
   /** The model's display name, as the model picker shows it. */
@@ -22,10 +22,27 @@ export interface UsageEntry {
   estimateUsd: number | null;
 }
 
-export interface UsageDay {
-  /** Local calendar date, YYYY-MM-DD. */
-  date: string;
+/** A time slot and the work done in it. Hourly slots cover the last day;
+ *  daily slots cover the last 90 (review round 1: usage has to line up with
+ *  the plan windows it counts against, and those are hours and days). */
+export interface UsageSlot {
+  /** Epoch ms of the slot's start. */
+  start: number;
   entries: UsageEntry[];
+}
+
+/** How full one plan window was over time, sampled whenever the provider
+ *  reported it (every reply carries it). A drop is a reset. */
+export interface LimitSeries {
+  provider: 'claude-code' | 'chatgpt';
+  window: 'five_hour' | 'seven_day';
+  points: Array<{ t: number; pct: number }>;
+}
+
+export interface UsageHistory {
+  hours: UsageSlot[];
+  days: UsageSlot[];
+  limits: LimitSeries[];
 }
 
 /** Live account figures that are not plan windows (those already arrive on
