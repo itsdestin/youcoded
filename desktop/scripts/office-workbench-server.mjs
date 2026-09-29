@@ -15,7 +15,7 @@
 // Run from desktop/:  npx tsc -p tsconfig.json && node scripts/office-workbench-server.mjs
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
-import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -44,7 +44,20 @@ const { OFFICE_CSP } = protocolModule;
 // WHY (Task 9): main serves the theme's web font on the editor's own origin (/yc-fonts/…, fetched
 // from Google's font hosts only); the workbench plays main's part with main's own module, so a
 // picture of a theme with a web font shows that font in the editor's menus, as the app does.
-const fonts = themeFonts.createThemeFonts({ cacheDir: path.join(tmpdir(), 'yc-office-wb-font-cache'), fetch: (u, init) => fetch(u, init) });
+// The practice app's themes are its fixtures, so the stylesheets they link are the only ones
+// allowed (main allows only the applied theme's — see theme-fonts.ts).
+const THEMES = path.join(DESKTOP, 'src/renderer/dev/workbench/fixtures/themes');
+async function fixtureFontLinks() {
+  const links = [];
+  for (const slug of await readdir(THEMES).catch(() => [])) {
+    try {
+      const url = JSON.parse(await readFile(path.join(THEMES, slug, 'manifest.json'), 'utf8'))?.font?.['google-font-url'];
+      if (typeof url === 'string') links.push(url);
+    } catch { /* not a theme folder */ }
+  }
+  return links;
+}
+const fonts = themeFonts.createThemeFonts({ cacheDir: path.join(tmpdir(), 'yc-office-wb-font-cache'), fetch: (u, init) => fetch(u, init), themeFontLinks: fixtureFontLinks });
 
 const MIME = {
   '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css',
@@ -97,6 +110,9 @@ const server = createServer(async (req, res) => {
   try {
     const u = new URL(req.url ?? '/', `http://127.0.0.1:${PORT}`);
     const rel = decodeURIComponent(u.pathname).replace(/^\/+/, '') || 'index.html';
+    // Which checkout this server belongs to — shoot (scripts/shoot/office-editor.mjs) reuses a
+    // server only when it serves the same checkout it is photographing.
+    if (rel === 'yc-workbench-info') return send(200, JSON.stringify({ desktop: DESKTOP }), 'application/json');
     if (rel === 'yc-fonts/css') {
       const css = await fonts.fetchFontCss(u.searchParams.get('u') ?? '');
       return css === null ? send(404, 'not found') : send(200, css, 'text/css');

@@ -2,7 +2,7 @@ import { net, protocol } from 'electron';
 import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import type { createSessions } from './office-sessions';
-import { createThemeFonts, type ThemeFonts } from './theme-fonts';
+import { createThemeFonts, currentThemeFontLinks, type ThemeFonts } from './theme-fonts';
 
 // WHY not exported: nothing outside this file needs the literal today — main.ts's scheme
 // registration and the pin test that checks it both spell 'office' themselves, deliberately,
@@ -120,9 +120,14 @@ export function officeRequestHandler(deps: HandlerDeps) {
 }
 
 /** The theme-font service main.ts hands the protocol (Task 9). WHY net.fetch: the system proxy
- *  applies; WHY under userData: a later open works offline and each profile keeps its own. */
-export function officeThemeFonts(userData: string): ThemeFonts {
-  return createThemeFonts({ cacheDir: path.join(userData, 'office-font-cache'), fetch: (u, init) => net.fetch(u, init) });
+ *  applies; WHY under userData: a later open works offline and each profile keeps its own; WHY
+ *  claudeDir: the applied theme's own files say which web font it uses. */
+export function officeThemeFonts(userData: string, claudeDir: string): ThemeFonts {
+  return createThemeFonts({
+    cacheDir: path.join(userData, 'office-font-cache'),
+    fetch: (u, init) => net.fetch(u, init),
+    themeFontLinks: () => currentThemeFontLinks(claudeDir),
+  });
 }
 
 export function registerOfficeProtocol(deps: HandlerDeps): void {

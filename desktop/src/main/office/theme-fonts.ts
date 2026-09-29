@@ -65,6 +65,42 @@ export function rewriteFontCss(css: string): string {
       allowed(u.trim(), FILE_HOST) ? `url("/yc-fonts/file?u=${encodeURIComponent(u.trim())}")` : 'url("data:,")');
 }
 
+/** The Google stylesheet each file names, normalised the way a browser's link.href is. */
+function normal(u: string): string | null {
+  try { return new URL(u).href; } catch { return null; }
+}
+
+/** The font files a rewritten stylesheet points at (its /yc-fonts/file?u=… urls). */
+function referencedFiles(css: string): string[] {
+  return [...css.matchAll(/\/yc-fonts\/file\?u=([^"')\s]+)/g)].flatMap((m) => {
+    try { return [decodeURIComponent(m[1])]; } catch { return []; }
+  });
+}
+
+const SLUG = /^[A-Za-z0-9_-]+$/;
+
+/** The Google stylesheet of the theme YouCoded is showing: the slug in
+ *  ~/.claude/youcoded-appearance.json, its manifest's font['google-font-url'], plus the
+ *  theme-builder's live `_preview` theme when one exists (the app switches to it without
+ *  recording it). WHY main reads the theme files rather than a new IPC message: they are the
+ *  app's own source of truth for the applied theme (theme-context.tsx persists there), and the
+ *  editor — the only one asking for fonts — must not be able to name one itself. Built-in themes
+ *  have no web font, so they allow nothing. */
+export async function currentThemeFontLinks(claudeDir: string): Promise<string[]> {
+  const read = async (f: string): Promise<Record<string, unknown> | null> => {
+    try { return JSON.parse(await readFile(f, 'utf8')) as Record<string, unknown>; } catch { return null; }
+  };
+  const slug = (await read(path.join(claudeDir, 'youcoded-appearance.json')))?.theme;
+  const slugs = [...(typeof slug === 'string' && SLUG.test(slug) ? [slug] : []), '_preview'];
+  const links: string[] = [];
+  for (const s of slugs) {
+    const font = (await read(path.join(claudeDir, 'wecoded-themes', s, 'manifest.json')))?.font as Record<string, unknown> | undefined;
+    const url = font?.['google-font-url'];
+    if (typeof url === 'string' && allowed(url, CSS_HOST)) links.push(url);
+  }
+  return links;
+}
+
 export interface ThemeFonts {
   /** The rewritten stylesheet, or null when the url is not allowed or unreachable. */
   fetchFontCss(u: string): Promise<string | null>;
@@ -72,22 +108,51 @@ export interface ThemeFonts {
   fetchFontFile(u: string): Promise<{ data: Bytes; type: string } | null>;
 }
 
-export function createThemeFonts(deps: { cacheDir: string; fetch: FetchLike }): ThemeFonts {
+export function createThemeFonts(deps: {
+  cacheDir: string;
+  fetch: FetchLike;
+  /** The stylesheets the CURRENT theme links (currentThemeFontLinks in the app). */
+  themeFontLinks: () => Promise<string[]>;
+}): ThemeFonts {
   const inflight = new Map<string, Promise<Bytes | null>>();
+  /** WHY an allow-list, not only a host check (fix round 1): any css2 query or gstatic path is
+   *  a request main would make on the editor's behalf, and its text is a channel out — a
+   *  compromised editor could spell a document into it. So main fetches only the stylesheet the
+   *  current theme names, and only the font files that stylesheet itself referenced. */
+  const referenced = new Set<string>();
 
   const cachePath = (u: string, ext: string) =>
     path.join(deps.cacheDir, createHash('sha256').update(u).digest('hex') + ext);
 
   async function download(u: string, max: number): Promise<Bytes | null> {
+    // WHY stream with a running count (fix round 1): content-length can be absent or wrong, and
+    // reading the whole body first would already have taken the bytes the cap is meant to refuse.
+    const abort = new AbortController();
     try {
       // WHY redirect 'error': a redirect could lead anywhere, which would undo the host check.
-      const res = await deps.fetch(u, { redirect: 'error', headers: { 'user-agent': USER_AGENT } });
-      if (!res.ok) return null;
-      if (Number(res.headers.get('content-length') ?? 0) > max) return null;
-      const data = new Uint8Array(await res.arrayBuffer());
-      return data.byteLength > max ? null : data;
+      const res = await deps.fetch(u, { redirect: 'error', signal: abort.signal, headers: { 'user-agent': USER_AGENT } });
+      if (!res.ok || !res.body) return null;
+      if (Number(res.headers.get('content-length') ?? 0) > max) { abort.abort(); return null; }
+      const reader = res.body.getReader();
+      const parts: Uint8Array[] = [];
+      let size = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > max) {
+          abort.abort();
+          await reader.cancel().catch(() => {});
+          return null;
+        }
+        parts.push(value);
+      }
+      const data = new Uint8Array(size);
+      let at = 0;
+      for (const p of parts) { data.set(p, at); at += p.byteLength; }
+      return data;
     } catch {
-      return null; // offline, blocked, or refused redirect: the editor keeps its fallback font
+      return null; // offline, blocked, aborted or refused redirect: the editor keeps its fallback font
     }
   }
 
@@ -118,12 +183,19 @@ export function createThemeFonts(deps: { cacheDir: string; fetch: FetchLike }): 
 
   return {
     async fetchFontCss(u) {
-      if (!allowed(u, CSS_HOST)) return null;
+      const want = allowed(u, CSS_HOST) && normal(u);
+      if (!want) return null;
+      const current = (await deps.themeFontLinks().catch(() => [])).map(normal);
+      if (!current.includes(want)) return null;
       const data = await cached(u, cachePath(u, '.css'), MAX_CSS_BYTES, (d) =>
         new TextEncoder().encode(rewriteFontCss(new TextDecoder().decode(d))));
-      return data ? new TextDecoder().decode(data) : null;
+      if (!data) return null;
+      const css = new TextDecoder().decode(data);
+      for (const f of referencedFiles(css)) referenced.add(f);
+      return css;
     },
     async fetchFontFile(u) {
+      if (!referenced.has(u)) return null;
       const url = allowed(u, FILE_HOST);
       const type = url && FONT_TYPES[path.posix.extname(url.pathname).toLowerCase()];
       if (!type) return null;

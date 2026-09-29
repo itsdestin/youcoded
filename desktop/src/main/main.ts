@@ -1929,7 +1929,7 @@ void app.whenReady().then(async () => {
   // mkdtemp (full/unwritable/policy-blocked temp dir) must degrade Office to unavailable, not
   // abort the rest of startup and leave the app with no window.
   const officeSessions = await initOfficeSessionsSafely();
-  if (officeSessions) registerOfficeProtocol({ root: officeRoot(), sessions: officeSessions, fonts: officeThemeFonts(app.getPath('userData')) });
+  if (officeSessions) registerOfficeProtocol({ root: officeRoot(), sessions: officeSessions, fonts: officeThemeFonts(app.getPath('userData'), path.join(os.homedir(), '.claude')) });
   // office:* (Task 5). WHY even without sessions: the renderer gets "unavailable", not a missing
   // handler. WHY the getter: the registry goes away at quit, and each request must see that.
   registerOfficeIpc(ipcMain, { getSessions: getOfficeSessions, available: () => officeAvailable(), root: officeRoot(), userData: app.getPath('userData'), documents: app.getPath('documents'), pruneVersionsAfterMs: 30_000 });
