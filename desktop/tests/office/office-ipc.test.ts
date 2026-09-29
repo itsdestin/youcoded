@@ -581,6 +581,137 @@ describe('the editor asks for a save dialog (Save As, Export)', () => {
   });
 });
 
+// Print (finish plan Task 3): bridge.js's Print sends write_editor_bin, then print_document.
+describe('the editor asks to print', () => {
+  type Outcome = 'printed' | 'cancelled' | { failed: 'no-printer' | 'not-loaded' | 'other' };
+  interface Rig { printed: Array<{ file: string; bytes: string; beside: boolean }>; offers: string[]; pick: ReturnType<typeof vi.fn>; convert: ReturnType<typeof vi.fn> }
+  /** Re-registers with a fake print window answering `outcome`, a fake offer, and a translator
+   *  that writes a PDF naming what it was given. */
+  function withPrinter(outcome: Outcome | (() => Promise<Outcome>), opts: { accept?: boolean; target?: string | null; failConvert?: boolean } = {}): Rig {
+    const rig: Rig = { printed: [], offers: [], pick: vi.fn(async () => opts.target ?? null), convert: vi.fn() };
+    rig.convert.mockImplementation(async (_r: string, _f: string, to: string, _fmt: number, _t: string, _s: unknown, extra?: { params?: { json?: string } }) => {
+      if (opts.failConvert) throw new Error('x2t failed at /home/secret');
+      await writeFile(to, `%PDF-1.7 ${extra?.params?.json ?? 'whole'}`);
+    });
+    ipc = fakeIpcMain();
+    registerOfficeIpc(ipc, {
+      getSessions: () => registry, available: async () => available, root: path.join(dir, 'addon'), userData: path.join(dir, 'userData'),
+      convert: rig.convert as never, pickSaveTarget: rig.pick as never,
+      printPdf: async (file: string) => {
+        rig.printed.push({ file, bytes: await readFile(file, 'latin1'), beside: path.dirname(file) === dir });
+        return typeof outcome === 'function' ? outcome() : outcome;
+      },
+      offerPdf: async (_sender: unknown, message: string) => { rig.offers.push(message); return opts.accept ?? false; },
+    });
+    return rig;
+  }
+  async function openEdited(name = 'memo.docx') {
+    const file = name.endsWith('.docx') ? await aDocx(name) : path.join(dir, name);
+    if (!name.endsWith('.docx')) await copyFile(MEMO, file);
+    const { token } = (await call('office:open', win1, file)) as { token: string };
+    await call('office:invoke', win1, token, 'write_editor_bin', { data: Buffer.from('edits').toString('base64') });
+    return { file, token };
+  }
+
+  it('prints a PDF of the document made in Office\'s own temp folder, named after it, and removes it afterwards', async () => {
+    const rig = withPrinter('printed');
+    const { token } = await openEdited();
+    await expect(call('office:invoke', win1, token, 'print_document', {})).resolves.toEqual({});
+    expect(rig.printed).toHaveLength(1);
+    expect(path.basename(rig.printed[0].file)).toBe('memo.pdf');
+    expect(rig.printed[0].beside).toBe(false);
+    expect(rig.printed[0].bytes).toBe('%PDF-1.7 whole');
+    expect(existsSync(rig.printed[0].file)).toBe(false);
+    expect(existsSync(path.dirname(rig.printed[0].file))).toBe(false);
+    expect(rig.offers).toEqual([]);
+    // Nothing beside the person's file, and no print folder left in Office's temp.
+    expect((await readdir(dir)).filter((n) => n !== 'base' && n !== 'userData')).toEqual(['memo.docx']);
+    expect((await readdir(path.join(dir, 'base'))).filter((n) => n.startsWith('print-'))).toEqual([]);
+  });
+
+  it('a cancelled print dialog changes nothing and offers nothing', async () => {
+    const rig = withPrinter('cancelled');
+    const { file, token } = await openEdited();
+    const before = await readFile(file);
+    await expect(call('office:invoke', win1, token, 'print_document', {})).resolves.toEqual({});
+    expect(rig.offers).toEqual([]);
+    expect(rig.pick).not.toHaveBeenCalled();
+    expect(await readFile(file)).toEqual(before);
+    expect(existsSync(rig.printed[0].file)).toBe(false);
+  });
+
+  it('with no printer, says so and offers a PDF instead — written where the person chose', async () => {
+    const target = path.join(dir, 'out', 'memo.pdf');
+    await mkdir(path.dirname(target), { recursive: true });
+    const rig = withPrinter({ failed: 'no-printer' }, { accept: true, target });
+    const { file, token } = await openEdited();
+    await expect(call('office:invoke', win1, token, 'print_document', {})).resolves.toEqual({ saved: { name: 'memo.pdf', folder: 'out' } });
+    expect(rig.offers).toEqual(["Office couldn't find a printer on this computer."]);
+    expect(rig.pick).toHaveBeenCalledWith(win1, { filters: [{ name: 'PDF', extensions: ['pdf'] }], folder: path.dirname(file), name: 'memo', ext: 'docx' });
+    expect(await readFile(target, 'latin1')).toMatch(/^%PDF/);
+    // The print window's own PDF is gone either way.
+    expect(existsSync(rig.printed[0].file)).toBe(false);
+  });
+
+  it('any other failure says Office could not open the print window; declining writes nothing', async () => {
+    const rig = withPrinter({ failed: 'not-loaded' }, { accept: false });
+    const { token } = await openEdited();
+    await expect(call('office:invoke', win1, token, 'print_document', {})).resolves.toEqual({});
+    expect(rig.offers).toEqual(["Office couldn't open the print window."]);
+    expect(rig.pick).not.toHaveBeenCalled();
+    // A print window that throws is the same failure, logged by kind only.
+    const thrown = withPrinter(async () => { throw new Error('boom at /home/secret'); });
+    await expect(call('office:invoke', win1, token, 'print_document', {})).resolves.toEqual({});
+    expect(thrown.offers).toEqual(["Office couldn't open the print window."]);
+  });
+
+  it('prints only the pages the print panel chose, and refuses "selection" rather than print more', async () => {
+    const rig = withPrinter('printed');
+    const { token } = await openEdited();
+    await call('office:invoke', win1, token, 'print_document', { json: JSON.stringify({ nativeOptions: { pages: '2-3', printer: 'x', copies: 4 } }) });
+    expect(rig.printed[0].bytes).toBe('%PDF-1.7 {"nativeOptions":{"pages":"2-3"}}');
+    await call('office:invoke', win1, token, 'print_document', { json: JSON.stringify({ nativeOptions: { pages: 'all' } }) });
+    expect(rig.printed[1].bytes).toBe('%PDF-1.7 whole');
+    await call('office:invoke', win1, token, 'print_document', { json: '{"nativeOptions":{"pages":"1;rm -rf"}}' });
+    expect(rig.printed[2].bytes).toBe('%PDF-1.7 whole');
+    await expect(call('office:invoke', win1, token, 'print_document', { json: JSON.stringify({ printOptions: { selection: 1 } }) }))
+      .rejects.toThrow("Office can't print only the selected part. Print the whole document, or choose its pages.");
+    expect(rig.printed).toHaveLength(3);
+  });
+
+  it('one print at a time', async () => {
+    let finish!: (o: Outcome) => void;
+    withPrinter(() => new Promise<Outcome>((r) => { finish = r; }));
+    const { token } = await openEdited();
+    const first = call('office:invoke', win1, token, 'print_document', {});
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    await expect(call('office:invoke', win1, token, 'print_document', {})).rejects.toThrow('Office is already printing a document. Finish or cancel that first.');
+    finish('printed');
+    await expect(first).resolves.toEqual({});
+    finish = undefined as never;
+    const again = call('office:invoke', win1, token, 'print_document', {});
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    finish('cancelled');
+    await expect(again).resolves.toEqual({});
+  });
+
+  it('a PDF that cannot be made says so in words, never a path, and leaves no temp folder', async () => {
+    const rig = withPrinter('printed', { failConvert: true });
+    const { token } = await openEdited();
+    const err = await Promise.resolve(call('office:invoke', win1, token, 'print_document', {})).catch((e: Error) => e);
+    expect((err as Error).message).toBe("Office couldn't get this document ready to print.");
+    expect(rig.printed).toEqual([]);
+    expect((await readdir(path.join(dir, 'base'))).filter((n) => n.startsWith('print-'))).toEqual([]);
+  });
+
+  it("never prints another window's document", async () => {
+    const rig = withPrinter('printed');
+    const { token } = await openEdited();
+    await expect(call('office:invoke', win2, token, 'print_document', {})).rejects.toThrow('refused');
+    expect(rig.printed).toEqual([]);
+  });
+});
+
 describe('office:save-copy', () => {
   /** Re-registers with a fake save dialog that answers `target`. */
   function withDialog(target: string | null) {

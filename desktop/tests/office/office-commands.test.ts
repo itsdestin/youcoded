@@ -66,7 +66,7 @@ describe('office commands without the translator', () => {
         'set_recent_files_enabled', 'clear_recent_files', 'get_system_fonts', 'list_user_dictionaries', 'recovery_begin',
         'recovery_end', 'recovery_mark_saved', 'recovery_candidates', 'recovery_load', 'recovery_discard', 'open_file',
         'write_editor_bin', 'save_file', 'save_changes', 'convert_for_insert', 'force_close', 'open_dialog',
-        'save_dialog', 'save_file_as',
+        'save_dialog', 'save_file_as', 'print_document',
       ].sort(),
     );
   });
@@ -987,5 +987,30 @@ describe.skipIf(!HAS_ADDON)('Save As with the bundled x2t, to every format each 
 
   it('a presentation: pptx, odp and pdf', async () => {
     await exportAll(path.join(TEMPLATES, 'blank.pptx'), 'docs/slides.pptx', ['pptx', 'odp', 'pdf']);
+  }, X2T_WARMUP_BUDGET_MS);
+});
+
+// Print (finish plan Task 3): the PDF the print window shows.
+describe.skipIf(!HAS_ADDON)('the PDF made for printing, with the bundled x2t', () => {
+  const PAGES = fileURLToPath(new URL('./fixtures/pages.docx', import.meta.url));
+  const pageCount = async (file: string) => ((await readFile(file)).toString('latin1').match(/\/Type\s*\/Page(?!s)/g) ?? []).length;
+
+  it('is the whole document by default, only the chosen pages when asked, and in Office\'s temp, not beside the file', async () => {
+    const s = await sessionFor(PAGES, 'docs/pages.docx');
+    const run = createOfficeCommands({ root: ROOT, sessions });
+    await run(s.token, 'open_file', {});
+    await run(s.token, 'write_editor_bin', { data: (await readFile(path.join(s.temp, 'Editor.bin'))).toString('base64') });
+    const whole = await run.printPdf(s.token);
+    expect(path.basename(whole.file)).toBe('pages.pdf');
+    expect(path.dirname(path.dirname(whole.file))).toBe(path.dirname(s.temp));
+    expect((await readFile(whole.file)).subarray(0, 4).toString('latin1')).toBe('%PDF');
+    const all = await pageCount(whole.file);
+    expect(all).toBeGreaterThan(2);
+    const two = await run.printPdf(s.token, JSON.stringify({ nativeOptions: { pages: '2-3' } }));
+    expect(await pageCount(two.file)).toBe(2);
+    await whole.dispose();
+    await two.dispose();
+    expect(existsSync(path.dirname(whole.file))).toBe(false);
+    expect((await readdir(path.dirname(s.path))).sort()).toEqual(['pages.docx']);
   }, X2T_WARMUP_BUDGET_MS);
 });

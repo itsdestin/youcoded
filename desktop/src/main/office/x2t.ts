@@ -205,7 +205,8 @@ export interface ExportParams {
   /** CSV "Other" delimiter: one character, written as is (measured: '|' honoured). */
   csvDelimiterChar?: string;
   /** Spreadsheet PDF: the print range the editor's PDF dialog chose, as sdkjs's own native print
-   *  reads it (m_sJsonParams → asc_nativePrint; measured: page range and orientation honoured). */
+   *  reads it (m_sJsonParams → asc_nativePrint; measured: page range and orientation honoured).
+   *  Print (Task 3): also a document's or presentation's page list (printParams). */
   json?: string;
 }
 const MAX_ENCODING_INDEX = 52; // c_oAscEncodings runs 0..52 (52: EUC-JP)
@@ -250,6 +251,36 @@ export function exportParams(formatTo: number, sourceExt: string, text: unknown,
     if (clean.adjustOptions && 'printType' in clean.adjustOptions) out.json = JSON.stringify(clean);
   }
   return out;
+}
+
+// ── What to print (finish plan Task 3) ──
+// A page list as the editor's print panel writes it ("2-3", "1,4,6-8"). WHY capped: it comes from
+// the editor frame, and only this shape reaches x2t.
+const PAGE_LIST = /^[1-9][0-9]{0,5}(-[1-9][0-9]{0,5})?(,[1-9][0-9]{0,5}(-[1-9][0-9]{0,5})?){0,99}$/;
+
+/** The checked x2t additions for printing a document of `sourceExt`'s kind: the editor's print
+ *  options (bridge.js's Print), or {} for the whole document. 'selection' when the editor asked
+ *  for only the selected part — x2t works from the saved document, which has no selection, so the
+ *  caller refuses that rather than print more than was asked. */
+export function printParams(sourceExt: string, json: unknown): ExportParams | 'selection' {
+  if (sourceExt === 'xlsx') {
+    // A workbook's print panel gives the same range the PDF export does (sheets, pages, print area).
+    const p = exportParams(FORMAT.pdf, 'xlsx', undefined, json);
+    if (p.json && (JSON.parse(p.json) as { adjustOptions?: { printType?: number } }).adjustOptions?.printType === 2) return 'selection';
+    return p;
+  }
+  if (typeof json !== 'string' || json.length > 64 * 1024) return {};
+  let raw: unknown;
+  try { raw = JSON.parse(json); } catch { return {}; }
+  const j = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const printOptions = j.printOptions && typeof j.printOptions === 'object' ? (j.printOptions as Record<string, unknown>) : null;
+  if (printOptions?.selection) return 'selection';
+  const native = j.nativeOptions && typeof j.nativeOptions === 'object' ? (j.nativeOptions as Record<string, unknown>) : null;
+  const pages = typeof native?.pages === 'string' ? native.pages.replace(/\s+/g, '') : '';
+  // Measured 2026-09-29: x2t's PDF writer prints only these pages (docx "2-3" → 2 pages, pptx "2"
+  // → slide 2). "all" or nothing is the whole document, which needs no parameter.
+  if (PAGE_LIST.test(pages)) return { json: JSON.stringify({ nativeOptions: { pages } }) };
+  return {};
 }
 
 function paramsXml(p: ExportParams | undefined): string {

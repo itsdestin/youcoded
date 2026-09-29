@@ -7,7 +7,7 @@ import { noteOwnWrite } from '../artifacts/project-watcher';
 import { authorizeArtifactWrite } from '../artifacts/write-authorization';
 import { log } from '../logger';
 import type { createSessions, OfficeSession } from './office-sessions';
-import { convert as realConvert, exportFormatFor, exportParams, FORMAT, formatFor, pdfFontData as realPdfFontData, X2T_TIMEOUT_MS, X2tError } from './x2t';
+import { convert as realConvert, exportFormatFor, exportParams, FORMAT, formatFor, pdfFontData as realPdfFontData, printParams, X2T_TIMEOUT_MS, X2tError } from './x2t';
 
 // The editor (Euro-Office's desktop bridge) asks its host for these by name. Exactly the set
 // the spike answered (main2.cjs); anything else is refused before it reaches a handler.
@@ -24,6 +24,9 @@ export const OFFICE_COMMANDS: ReadonlySet<string> = new Set([
   // dialog.save into save_dialog; office-ipc.ts answers both itself (the dialog needs the asking
   // window, and save_file_as names a handle only that dialog granted), then calls saveAs below.
   'save_dialog', 'save_file_as',
+  // WHY (finish plan Task 3): File → Print, the toolbar's print, Ctrl+P. office-ipc.ts answers it
+  // itself (the print window and its fallback need the asking window); printPdf below makes the PDF.
+  'print_document',
 ]);
 
 const MSG = {
@@ -42,6 +45,8 @@ const MSG = {
   copyOpen: 'That file is open in Office. Close it or choose another name.',
   // Save As onto the document itself (Task 2 fix round 1): the name is the problem, not the folder.
   saveAsSelf: "That's the file you're editing. Choose another name.",
+  // Print (Task 3): x2t prints from the saved document, which carries no selection.
+  printSelection: "Office can't print only the selected part. Print the whole document, or choose its pages.",
   refused: 'refused',
 } as const;
 
@@ -208,6 +213,8 @@ function toEditorError(e: unknown, cmd: string, filePath: string): Error {
     // copy, not the person's file — a permission sentence would send them to the wrong place.
     return new Error("Office couldn't save this file.");
   }
+  // Print (Task 3): the PDF for the print window could not be made; the cause is in the log.
+  if (cmd === 'print_document') return new Error("Office couldn't get this document ready to print.");
   return new Error(verb ? `Office couldn't ${verb} this file.` : "Office couldn't finish that.");
 }
 
@@ -225,6 +232,10 @@ export interface OfficeCopyRunner {
   /** Save As / Download as / Export to PDF (finish plan Task 2): translate the document's current
    *  Editor.bin into `target`, in the format its name ends in. The document stays on its file. */
   saveAs(token: string, target: string, options?: SaveAsOptions): Promise<void>;
+  /** Print (finish plan Task 3): translate the document's current Editor.bin into a PDF in a
+   *  private temp folder — never beside the person's file — for the print window. `json`: the
+   *  editor's print options (x2t.ts printParams). Call `dispose` when printing is over. */
+  printPdf(token: string, json?: unknown): Promise<{ file: string; dispose(): Promise<void> }>;
 }
 /** The editor's export choices for a Save As (bridge.js): its TXT/CSV dialog's `text`, and its
  *  save options `json` (a spreadsheet PDF's print range). Checked by x2t.ts exportParams. */
@@ -659,6 +670,37 @@ export function createOfficeCommands(deps: {
         await enqueueOther(s, () => (replaced.has(s) ? Promise.reject(userError(MSG.restored, true)) : saveCopyFile(s, target, editorBin(s), options)));
       } catch (e) {
         throw toEditorError(e, 'save_file_as', target);
+      }
+    },
+    async printPdf(token: string, json?: unknown): Promise<{ file: string; dispose(): Promise<void> }> {
+      const s = deps.sessions.get(token);
+      if (!s) throw new Error(MSG.refused);
+      if (closing) throw new Error(MSG.closing);
+      const params = printParams(path.extname(s.path).slice(1).toLowerCase(), json);
+      if (params === 'selection') throw new Error(MSG.printSelection);
+      try {
+        // WHY in the document's queue: right behind the write_editor_bin bridge.js's Print sends
+        // first, so the PDF holds exactly what is on screen. WHY only the translation: the print
+        // dialog can stay open for minutes, and the document's saves must not wait behind it.
+        return await enqueueOther(s, async () => {
+          if (replaced.has(s)) throw userError(MSG.restored, true);
+          // WHY the instance temp base (removed at quit), a private folder, and the document's name:
+          // the PDF is only for the print window, and its name is what the print job is called.
+          const dir = await fsp.mkdtemp(path.join(jobsBase(s), 'print-'));
+          const dispose = () => fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+          try {
+            const file = path.join(dir, `${path.basename(s.path, path.extname(s.path))}.pdf`);
+            const fonts = await pdfFontData(deps.root, jobsBase(s));
+            await convert(deps.root, editorBin(s), file, FORMAT.pdf, jobsBase(s), abortOf(s).signal, { allFontsPath: fonts, params });
+            await finishCopy(file, null, 'pdf');
+            return { file, dispose };
+          } catch (e) {
+            await dispose();
+            throw e;
+          }
+        });
+      } catch (e) {
+        throw toEditorError(e, 'print_document', s.path);
       }
     },
     async saveCopy(token: string, target: string, bin?: string): Promise<void> {

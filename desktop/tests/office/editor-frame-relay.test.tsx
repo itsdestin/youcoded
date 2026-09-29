@@ -452,6 +452,41 @@ describe('EditorFrame autosave', () => {
   });
 });
 
+// Print (finish plan Task 3): main shows the print dialog. When it could not and the person
+// saved a PDF instead, main answers where it went; the editor is only told "ok".
+describe('EditorFrame and Print', () => {
+  it('tells the editor only "ok", and notes a PDF saved instead of printing', async () => {
+    const bridge = fakeBridge({ invoke: vi.fn(async (_t: string, cmd: string) => (cmd === 'print_document' ? { saved: { name: 'memo.pdf', folder: 'out' } } : 'ok')) as never });
+    const { fromEditor, posted } = await mountFrame();
+    fromEditor({ yc: 'rpc', id: 4, cmd: 'print_document', args: {} });
+    await settle();
+    expect(bridge.invoke).toHaveBeenCalledWith('t1', 'print_document', {});
+    expect(posted).toHaveBeenCalledWith({ yc: 'rpc-result', id: 4, result: 'ok' }, ORIGIN);
+    expect(saveStateFor(FILE.path).note).toBe('Saved a copy as memo.pdf in out.');
+    expect(saveStateFor(FILE.path).phase).toBe('saved');
+  });
+
+  it('a print that went to the printer, or was cancelled, leaves the strip as it was', async () => {
+    fakeBridge({ invoke: vi.fn(async (_t: string, cmd: string) => (cmd === 'print_document' ? {} : 'ok')) as never });
+    const { fromEditor, posted } = await mountFrame();
+    fromEditor({ yc: 'rpc', id: 4, cmd: 'print_document', args: {} });
+    await settle();
+    expect(posted).toHaveBeenCalledWith({ yc: 'rpc-result', id: 4, result: 'ok' }, ORIGIN);
+    expect(saveStateFor(FILE.path).note).toBeFalsy();
+    expect(saveStateFor(FILE.path).phase).toBe('saved');
+  });
+
+  it("says main's reason on the strip when printing failed", async () => {
+    fakeBridge({ invoke: vi.fn(async () => { throw new Error('Office is already printing a document. Finish or cancel that first.'); }) });
+    const { fromEditor, posted } = await mountFrame();
+    fromEditor({ yc: 'rpc', id: 6, cmd: 'print_document', args: {} });
+    await settle();
+    expect(posted).toHaveBeenCalledWith({ yc: 'rpc-result', id: 6, error: 'Office is already printing a document. Finish or cancel that first.' }, ORIGIN);
+    expect(saveStateFor(FILE.path).note).toBe('Office is already printing a document. Finish or cancel that first.');
+    expect(saveStateFor(FILE.path).phase).toBe('saved');
+  });
+});
+
 // Save As / Download as / Export to PDF (finish plan Task 2): main writes the copy and answers
 // where it went; the editor is told only "ok", and YouCoded's own strip says where.
 describe('EditorFrame and Save As', () => {

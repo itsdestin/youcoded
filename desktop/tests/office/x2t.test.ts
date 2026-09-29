@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { inflateSync } from 'node:zlib';
-import { convert, exportFormatFor, exportParams, FORMAT, formatFor, killRunningConverters, pdfFontData, X2tError } from '../../src/main/office/x2t';
+import { convert, exportFormatFor, exportParams, FORMAT, formatFor, killRunningConverters, pdfFontData, printParams, X2tError } from '../../src/main/office/x2t';
 
 const ROOT = fileURLToPath(new URL('../../office-addon/', import.meta.url));
 const MEMO = fileURLToPath(new URL('./fixtures/memo.docx', import.meta.url));
@@ -53,6 +53,31 @@ describe('exportFormatFor', () => {
 });
 
 // Task 2 fix round 1: the editor's export choices, checked before x2t sees them.
+describe('printParams', () => {
+  it('passes a document or presentation page list, and nothing for the whole document', () => {
+    expect(printParams('docx', JSON.stringify({ nativeOptions: { pages: '2-3,5', printer: 'Office', copies: 3 } }))).toEqual({ json: '{"nativeOptions":{"pages":"2-3,5"}}' });
+    expect(printParams('pptx', JSON.stringify({ nativeOptions: { pages: ' 2 ' } }))).toEqual({ json: '{"nativeOptions":{"pages":"2"}}' });
+    expect(printParams('docx', JSON.stringify({ nativeOptions: { pages: 'all' } }))).toEqual({});
+    expect(printParams('docx', undefined)).toEqual({});
+    expect(printParams('docx', 'not json')).toEqual({});
+  });
+  it('drops a malformed page list rather than pass it on', () => {
+    for (const pages of ['0', '1-', '1;2', 'a', '<x/>', '1'.repeat(10), 5]) {
+      expect(printParams('docx', JSON.stringify({ nativeOptions: { pages } }))).toEqual({});
+    }
+  });
+  it('names a selection print, which x2t cannot do from the saved document', () => {
+    expect(printParams('docx', JSON.stringify({ printOptions: { selection: 1 } }))).toBe('selection');
+    expect(printParams('pptx', JSON.stringify({ printOptions: { selection: 1 }, nativeOptions: { pages: '1' } }))).toBe('selection');
+    expect(printParams('xlsx', JSON.stringify({ adjustOptions: { printType: 2 } }))).toBe('selection');
+  });
+  it("gives a workbook the same checked range as its PDF export", () => {
+    const json = JSON.stringify({ adjustOptions: { printType: 1, startPageIndex: 1, endPageIndex: 2, bogus: 'x' }, spreadsheetLayout: { ignorePrintArea: true } });
+    expect(printParams('xlsx', json)).toEqual(exportParams(FORMAT.pdf, 'xlsx', undefined, json));
+    expect(printParams('xlsx', undefined)).toEqual({});
+  });
+});
+
 describe('exportParams', () => {
   it("passes a CSV's encoding index and delimiter, as the editor sends them", () => {
     expect(exportParams(FORMAT.csv, 'xlsx', { codePage: 44, delimiter: [2], delimiterChar: null }, '')).toEqual({ csvEncoding: 44, csvDelimiter: 2 });

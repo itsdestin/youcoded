@@ -613,12 +613,18 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       b.invoke(opened.token, m.cmd, m.args ?? {}).then((result) => {
         // WHY not main's answer for save_file_as: it names the copy's folder for the note below,
         // and the sealed frame is never told folders; bridge.js only needs it to succeed.
-        post({ yc: 'rpc-result', id: m.id, result: m.cmd === 'save_file_as' ? 'ok' : result });
+        // Print (finish plan Task 3) likewise: its answer can name the folder a PDF went to.
+        post({ yc: 'rpc-result', id: m.id, result: m.cmd === 'save_file_as' || m.cmd === 'print_document' ? 'ok' : result });
         // The Save As is over when its copy is written, or when its dialog was cancelled.
         if (m.cmd === 'save_file_as' || (m.cmd === 'save_dialog' && result === null)) saveAsEnded();
         if (m.cmd === 'save_file_as' && mountedRef.current) {
           const r = result as { name?: unknown; folder?: unknown } | null;
           if (r && typeof r.name === 'string' && typeof r.folder === 'string') markNote(file.path, `Saved a copy as ${r.name} in ${r.folder}.`);
+        }
+        // Printing couldn't be shown and the person saved a PDF instead (main's offer): same note.
+        if (m.cmd === 'print_document' && mountedRef.current) {
+          const saved = (result as { saved?: { name?: unknown; folder?: unknown } } | null)?.saved;
+          if (saved && typeof saved.name === 'string' && typeof saved.folder === 'string') markNote(file.path, `Saved a copy as ${saved.name} in ${saved.folder}.`);
         }
         // M4 (fix round 4): an answer that lands after this frame unmounted must not write a
         // save state for a file no editor holds any more (it would linger in the store).
@@ -638,13 +644,16 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
           saveSettled();
         }
       }, (e: unknown) => {
-        const message = plainMessage(e, saving || m.cmd === 'save_file_as' ? "Office couldn't save this file." : "Office couldn't finish that.");
+        const message = plainMessage(e, saving || m.cmd === 'save_file_as' ? "Office couldn't save this file." : m.cmd === 'print_document' ? "Office couldn't print this document." : "Office couldn't finish that.");
         post({ yc: 'rpc-result', id: m.id, error: message });
         // Save As (finish plan Task 2): bridge.js answers a failure with a message box the relay
         // does not show, so main's reason (worded for a person) goes on YouCoded's own strip.
         // A bare 'refused' (a handle main did not grant) is no sentence for a person.
         if (isSaveAsCmd(m.cmd)) saveAsEnded();
         if (isSaveAsCmd(m.cmd) && mountedRef.current) markNote(file.path, message === 'refused' ? "Office couldn't save this file." : message);
+        // WHY (finish plan Task 3): bridge.js's Print only logs a failure, so main's reason (worded
+        // for a person) goes on the strip — or nothing would say why no print dialog came.
+        if (m.cmd === 'print_document' && mountedRef.current) markNote(file.path, message === 'refused' ? "Office couldn't print this document." : message);
         if (!mountedRef.current) {
           // See M4 above. But a save the close let go of (drainPending) that then failed in
           // main's drain is said, with the toast a hidden close uses (fix round 5): the tab is

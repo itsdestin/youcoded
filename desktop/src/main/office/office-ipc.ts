@@ -20,6 +20,7 @@ import { keepAbandonedSavesIn, recordAbandonedSaves, takeAbandonedSaves } from '
 import { createOfficeCommands, OFFICE_COMMANDS } from './office-commands';
 import { grantPicked } from './office-pictures';
 import type { createSessions, OfficeSession } from './office-sessions';
+import type { PrintOutcome } from './office-print';
 import { formatFor } from './x2t';
 import * as versions from './versions';
 import { createPruneScheduler, type PruneScheduler } from './prune-schedule';
@@ -69,6 +70,10 @@ const MSG = {
   folderGone: "This file's folder no longer exists.",
   stillSaving: 'This file is still being saved. Try again in a moment.',
   couldNotRestore: "Office couldn't restore this version.",
+  // Print (finish plan Task 3).
+  printing: 'Office is already printing a document. Finish or cancel that first.',
+  noPrinter: "Office couldn't find a printer on this computer.",
+  couldNotPrint: "Office couldn't open the print window.",
 } as const;
 
 /** WHY a cap across folders (fix round 2): a walk on a hung network folder never ends. Past this
@@ -134,6 +139,12 @@ export interface OfficeIpcDeps {
   /** The system save dialog the editor asks for (office-dialogs.ts pickSaveTarget): Save As,
    *  Download as, Export to PDF. null when cancelled. Tests pass a fake; loaded only when used. */
   pickSaveTarget?(sender: unknown, opts: { filters: unknown; folder: string; name: string; ext: string }): Promise<string | null | { refused: string }>;
+  /** The system print dialog for a PDF (office-print.ts printPdf). Tests pass a fake; loaded only
+   *  when used, like the dialogs above. */
+  printPdf?(file: string): Promise<PrintOutcome>;
+  /** Printing could not be shown: the reason, and an offer to save a PDF instead (office-print.ts
+   *  offerPdf). True when accepted. Tests pass a fake. */
+  offerPdf?(sender: unknown, message: string): Promise<boolean>;
   /** Test seam: the translator (a fake that copies). Production uses x2t. */
   convert?: Parameters<typeof createOfficeCommands>[0]['convert'];
 }
@@ -345,6 +356,7 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     if (cmd === 'open_dialog') return openDialog(sender, s, a);
     if (cmd === 'save_dialog') return saveDialog(sender, s, a);
     if (cmd === 'save_file_as') return saveFileAs(reg, s, a);
+    if (cmd === 'print_document') return printDocument(sender, reg, s, a);
     const page = pageLoads.get(sender.id) ?? 0;
     try {
       return await commandsFor(reg)(token, cmd, a);
@@ -425,6 +437,60 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     // The editor's export choices go along; main checks them before x2t sees any (exportParams).
     await commandsFor(reg).saveAs(s.token, target, { text: a.text, json: a.json });
     return { name: path.basename(target), folder: path.basename(path.dirname(target)) };
+  }
+
+  // ── Print (finish plan Task 3) ──
+  // WHY one at a time across the app: each print shows a system dialog of its own, and a second
+  // one stacked behind the first is easy to lose. The flag lives here, per registration.
+  let printing = false;
+
+  // File → Print, the toolbar's print, Ctrl+P: bridge.js's Print sends write_editor_bin, then this.
+  // Main makes a PDF of the document in its own temp folder and shows the system print dialog for
+  // it. When that dialog can't be shown (no printing service or printer), it says so and offers the
+  // same PDF as a file (Task 2's Save As path). Answers what EditorFrame needs for its note; the
+  // frame itself is only told it went well.
+  async function printDocument(sender: OfficeSender, reg: Sessions, s: OfficeSession, a: Record<string, unknown>): Promise<{ saved?: { name: string; folder: string } }> {
+    if (printing) throw new Error(MSG.printing);
+    printing = true;
+    try {
+      const run = commandsFor(reg);
+      // Its errors are already worded for a person (office-commands toEditorError).
+      const pdf = await run.printPdf(s.token, a.json);
+      let outcome: PrintOutcome;
+      try {
+        const print = deps.printPdf ?? (await import('./office-print')).printPdf;
+        outcome = await print(pdf.file);
+      } catch (e) {
+        log('WARN', 'Office', 'print window failed', errorKind(e));
+        outcome = { failed: 'other' };
+      } finally {
+        // WHY right away: the PDF was only for the print window. The offer below makes its own file.
+        await pdf.dispose();
+      }
+      if (outcome === 'printed' || outcome === 'cancelled') return {};
+      log('WARN', 'Office', 'printing could not be shown', { reason: outcome.failed });
+      let chosen: string | null | { refused: string };
+      try {
+        const offer = deps.offerPdf ?? (await import('./office-print')).offerPdf;
+        if (!(await offer(sender, outcome.failed === 'no-printer' ? MSG.noPrinter : MSG.couldNotPrint))) return {};
+        const pick = deps.pickSaveTarget ?? (await import('./office-dialogs')).pickSaveTarget;
+        const base = path.basename(s.path, path.extname(s.path));
+        chosen = await pick(sender, { filters: [{ name: 'PDF', extensions: ['pdf'] }], folder: path.dirname(s.path), name: base, ext: path.extname(s.path).slice(1).toLowerCase() });
+      } catch (e) {
+        // As the editor's own dialogs: a failing system dialog's text can name folders — logged by
+        // kind and code only, and answered as a cancel.
+        log('WARN', 'Office', 'print fallback dialog failed', errorKind(e));
+        return {};
+      }
+      if (chosen === null) return {};
+      if (typeof chosen === 'object') throw new Error(chosen.refused);
+      // The same safe write as Save As (a private folder beside it, checked, one rename). A
+      // workbook's chosen range goes along (exportParams); a page list is a print-only choice.
+      await run.saveAs(s.token, chosen, { json: a.json });
+      return { saved: { name: path.basename(chosen), folder: path.basename(path.dirname(chosen)) } };
+    } finally {
+      printing = false;
+    }
   }
 
   async function close(sender: OfficeSender, token: unknown): Promise<void> {
