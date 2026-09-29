@@ -195,8 +195,6 @@ function AccountPopup({ onClose }: { onClose: () => void }) {
               <div className="space-y-4">
                 {/* WHY a label first (nothing-bare#NB-3): never a card straight under the
                     popup's title line; the label never repeats the title. */}
-                <section>
-                <SectionLabel className="mb-2">Your profile</SectionLabel>
                 {signedIn && user ? (
                   // key on the canonical handle so SignedInBody remounts (re-seeding
                   // its useState draft initializers) if HandlePrompt saves a handle
@@ -211,14 +209,20 @@ function AccountPopup({ onClose }: { onClose: () => void }) {
                     onClose={onClose}
                   />
                 ) : (
-                  <SignedOutBody signInPending={signInPending} startSignIn={startSignIn} />
+                  <section>
+                    <SectionLabel className="mb-2">Your profile</SectionLabel>
+                    <SignedOutBody signInPending={signInPending} startSignIn={startSignIn} />
+                  </section>
                 )}
-                </section>
 
                 {/* Connected accounts entry — shown regardless of YouCoded
                     sign-in state (the GitHub connection is independent of it),
                     hidden only where the github:* channels don't exist. */}
+                {/* WHY its own label (nothing-bare: once one card on a popup has a
+                    label, every card does). */}
                 {ghStatus !== 'unavailable' && (
+                  <section>
+                  <SectionLabel className="mb-2">Connections</SectionLabel>
                   <SettingRow
                     onClick={() => setPage('connections')}
                     icon={
@@ -234,6 +238,7 @@ function AccountPopup({ onClose }: { onClose: () => void }) {
                     title="Connected services"
                     description={ghSummary}
                   />
+                  </section>
                 )}
               </div>
             )}
@@ -406,104 +411,118 @@ function SignedInBody({
     }
   };
 
+  // WHY labelled cards (2026-09-29, Destin found this view bare in the live
+  // app): the signed-in view never got the card sweep because the screenshot
+  // tool could only show the signed-out one. Same recipe as every Settings
+  // popup — a small label over each card, 16px between groups (the parent's
+  // space-y-4). Text and its buttons share a line where they fit.
   return mode === 'view' ? (
     <>
-      {/* Identity summary — avatar + display name + @handle, all read-only. */}
-      <section className="flex items-center gap-3">
-        <AccountAvatar url={user.avatar_url} size="large" />
-        <div className="min-w-0">
-          <p className="text-sm text-fg font-medium truncate">{user.display_name ?? user.login}</p>
-          {/* Plain words when there's no handle yet — no placeholder glyphs. */}
-          <p className="text-2xs text-fg-muted truncate">
-            {user.handle ? `@${user.handle}` : 'No handle yet'}
-          </p>
+      <section>
+        <SectionLabel className="mb-2">Your profile</SectionLabel>
+        <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
+          {/* Identity — avatar + display name + @handle — with the one edit
+              affordance beside it. */}
+          <div className="flex items-center gap-3">
+            <AccountAvatar url={user.avatar_url} size="large" />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm text-fg font-medium truncate">{user.display_name ?? user.login}</p>
+              {/* Plain words when there's no handle yet — no placeholder glyphs. */}
+              <p className="text-2xs text-fg-muted truncate">
+                {user.handle ? `@${user.handle}` : 'No handle yet'}
+              </p>
+            </div>
+            <Button variant="secondary" size="sm" onClick={() => setMode('edit')} className="shrink-0">
+              <PencilIcon />
+              Edit account
+            </Button>
+          </div>
+          {/* Login method — which GitHub profile backs this YouCoded account.
+              Says "Signs in with", NOT "Connected:" — "connected" belongs to the
+              Connected services page (repo access); reusing the word recreated
+              the two-GitHubs confusion. Sign out sits beside it: it undoes this
+              line. Reversible, so secondary, not the danger family. */}
+          <div className="flex items-center gap-3">
+            <span className="flex-1 min-w-0 flex items-center gap-1.5 text-xs text-fg-2">
+              <GitHubIcon className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">Signs in with GitHub (@{user.login})</span>
+            </span>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={async () => {
+                setSigningOut(true);
+                try {
+                  await signOut();
+                } finally {
+                  setSigningOut(false);
+                }
+              }}
+              disabled={signingOut}
+              className="shrink-0"
+            >
+              {signingOut ? 'Signing out…' : 'Sign out'}
+            </Button>
+          </div>
         </div>
       </section>
 
-      {/* Login-method line — which GitHub profile backs this YouCoded account.
-          Says "Signs in with", NOT "Connected:" — "connected" now belongs to
-          the Connected-accounts page (repo access), and reusing the word here
-          recreated the two-GitHubs confusion this popup was reworked to kill. */}
-      <section className="flex items-center gap-1.5 text-xs text-fg-2">
-        <GitHubIcon className="w-3.5 h-3.5" />
-        <span>Signs in with GitHub (@{user.login})</span>
-      </section>
-
       {/* Blocked users — only rendered when the list is non-empty (loading and
-          empty both leave `blocks` falsy so nothing shows in settings). */}
+          empty both leave `blocks` falsy so nothing shows in settings). One
+          card, each person a nested row. */}
       {blocks && blocks.length > 0 && (
-        <section className="space-y-2">
-          {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels batch,
-              guide: no spaced capitals — decisions H-3/L-1…L-4). */}
-          <SectionLabel>Blocked users</SectionLabel>
-          {blocks.map((b) => (
-            <div key={b.id} className="space-y-1">
-              <div className="flex items-center gap-2">
-                <div className="flex-1 min-w-0 flex items-baseline gap-1.5">
-                  <span className="text-xs text-fg truncate">{b.display_name}</span>
-                  {b.handle && <span className="text-2xs text-fg-muted truncate">@{b.handle}</span>}
+        <section>
+          <SectionLabel className="mb-2">Blocked users</SectionLabel>
+          <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
+            {blocks.map((b) => (
+              <div key={b.id} className={`${CARD_LEVEL_2} px-3 py-2 space-y-1`}>
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 min-w-0 flex items-baseline gap-1.5">
+                    <span className="text-xs text-fg truncate">{b.display_name}</span>
+                    {b.handle && <span className="text-2xs text-fg-muted truncate">@{b.handle}</span>}
+                  </div>
+                  {/* No confirm — unblocking is the recovery action, not the
+                      destructive one (blocking is what's consequence-gated). */}
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => void onUnblock(b.id)}
+                    disabled={unblockingId === b.id}
+                    className="shrink-0"
+                  >
+                    {unblockingId === b.id ? 'Unblocking…' : 'Unblock'}
+                  </Button>
                 </div>
-                {/* No confirm — unblocking is the recovery action, not the
-                    destructive one (blocking is what's consequence-gated). */}
-                <Button
-                  variant="secondary"
-                  onClick={() => void onUnblock(b.id)}
-                  disabled={unblockingId === b.id}
-                  className="shrink-0"
-                >
-                  {unblockingId === b.id ? 'Unblocking…' : 'Unblock'}
-                </Button>
+                {unblockErrors[b.id] && <FieldError as="p">{unblockErrors[b.id]}</FieldError>}
               </div>
-              {unblockErrors[b.id] && <FieldError as="p">{unblockErrors[b.id]}</FieldError>}
-            </div>
-          ))}
+            ))}
+          </div>
         </section>
       )}
-
-      {/* The single edit affordance — pencil icon + label, per the rework spec.
-          The primitive already centers its children and owns the icon gap, so
-          only the full-bleed width survives as a layout extra (the py-2.5 row
-          shortens to md's py-1.5, same as the danger-zone Cancel — change 3). */}
-      <Button variant="secondary" onClick={() => setMode('edit')} className="w-full">
-        <PencilIcon />
-        Edit account
-      </Button>
-
-      {/* Sign out is reversible (you can sign back in), so it stays secondary
-          rather than joining the danger family. */}
-      <Button
-        variant="secondary"
-        onClick={async () => {
-          setSigningOut(true);
-          try {
-            await signOut();
-          } finally {
-            setSigningOut(false);
-          }
-        }}
-        disabled={signingOut}
-        className="w-full"
-      >
-        {signingOut ? 'Signing out…' : 'Sign out'}
-      </Button>
 
       {/* Download my data — GDPR-style export of everything the server stores.
           Desktop shows a save dialog (resolves to {path}); Android writes to
           Downloads. Single-fire guarded while the request is in flight. */}
-      <section className="space-y-1.5">
-        <Button
-          variant="secondary"
-          onClick={() => void onExport()}
-          disabled={exporting}
-          className="w-full"
-        >
-          {exporting ? 'Preparing export…' : 'Download my data'}
-        </Button>
-        <p className="text-3xs text-fg-muted leading-relaxed">
-          Downloads a file containing everything YouCoded's server stores about your account.
-        </p>
-        {exportSavedPath && <p className="text-3xs text-fg-muted">Saved to {exportSavedPath}</p>}
-        {exportError && <FieldError as="p">{exportError}</FieldError>}
+      <section>
+        <SectionLabel className="mb-2">Your data</SectionLabel>
+        <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
+          <div className="flex items-center gap-3">
+            <p className="flex-1 min-w-0 text-xs text-fg-2">
+              A file of everything YouCoded's server stores about your account.
+            </p>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => void onExport()}
+              disabled={exporting}
+              className="shrink-0"
+            >
+              {exporting ? 'Preparing export…' : 'Download my data'}
+            </Button>
+          </div>
+          {exportSavedPath && <p className="text-2xs text-fg-muted">Saved to {exportSavedPath}</p>}
+          {exportError && <FieldError as="p">{exportError}</FieldError>}
+        </div>
       </section>
     </>
   ) : (
@@ -620,16 +639,13 @@ function EditAccountBody({
 
   return (
     <>
-      {/* Edit-mode header: label + the way back to view mode. */}
-      <div className="flex items-center justify-between">
-        {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels batch,
-            guide: no spaced capitals — decisions H-3/L-1…L-4). */}
-        <SectionLabel>Edit account</SectionLabel>
-        <Button variant="secondary" onClick={onDone}>
-          Done
-        </Button>
-      </div>
-
+      {/* WHY one card for the editors, Done at its foot (2026-09-29, same sweep
+          as the view above): the fields sat loose on the popup under a label
+          with Done floating at its right. Done is full width because it stands
+          alone under stacked fields (guide: stacked buttons go full width). */}
+      <section>
+      <SectionLabel className="mb-2">Your profile</SectionLabel>
+      <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
       {/* Display name */}
       <section className="space-y-1.5">
         {/* WHY: field caption drops the spaced-caps eyebrow, same job as
@@ -734,16 +750,22 @@ function EditAccountBody({
         {handleError && <FieldError as="p">{handleError}</FieldError>}
         {handleSaved && !handleError && <p className="text-3xs text-fg-muted">Saved</p>}
       </section>
+      <Button variant="secondary" onClick={onDone} className="w-full">
+        Done
+      </Button>
+      </div>
+      </section>
 
       {/* Danger zone — 2-step: expand, then typed confirm + explicit button. */}
-      <section className="space-y-2">
+      <section>
         {/* K9: was an <h4> at `text-3xs font-medium text-red-500 uppercase
             tracking-wider` — a retired class ORDER that the K1 guard could not
             catch precisely because it was red, so it sat outside the recipe the
             guard matches on. It is the K1 label now; the danger signal lives in
             the callout and the button variant below, where it belongs.
             WHY SectionLabel (labels batch): guide "no spaced capitals". */}
-        <SectionLabel>Danger zone</SectionLabel>
+        <SectionLabel className="mb-2">Danger zone</SectionLabel>
+        <div className={`${CARD_LEVEL_1} p-3`}>
         {!deleteExpanded ? (
           // Arming step -> danger-outline. red-500 becomes the --destructive
           // token so packs can restyle it (#C62828 today — no longer identical
@@ -809,6 +831,7 @@ function EditAccountBody({
             {deleteError && <FieldError as="p">{deleteError}</FieldError>}
           </div>
         )}
+        </div>
       </section>
     </>
   );
