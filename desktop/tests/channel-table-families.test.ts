@@ -54,6 +54,7 @@ import { registerWithRuntime } from './helpers/register-ipc';
 import { RemoteServer } from '../src/main/remote-server';
 import { CHANNEL_TABLE } from '../src/main/ipc/channel-table';
 import { foldersChannels } from '../src/main/ipc/folders';
+import { IPC } from '../src/shared/backend-contract';
 
 let server: RemoteServer;
 let handlers: Map<string, (...args: any[]) => any>;
@@ -132,6 +133,8 @@ describe('nothing hand-written is left behind for a table name', () => {
     it(`${def.name} has no remote-server case and no ipcMain.handle of its own`, () => {
       expect(remote).not.toContain(`case '${def.name}'`);
       expect(desktop).not.toContain(`ipcMain.handle('${def.name}'`);
+      // account:* used to be registered with double quotes in marketplace-api-handlers.ts.
+      expect(src('marketplace-api-handlers.ts')).not.toContain(`ipcMain.handle("${def.name}"`);
       expect(desktop).not.toMatch(new RegExp(`ipcMain\\.handle\\(IPC\\.${def.name.toUpperCase().replace(/[:-]/g, '_')}\\b`));
     });
   }
@@ -239,5 +242,45 @@ describe('settings: an unsafe path is refused on BOTH doors (audit D6/B3)', () =
     expect((await overRemote('settings:set', { field: 'r31Probe.nested', value: 'yes' })).answer).toBe(true);
     expect(await overIpc('settings:get', { field: 'r31Probe.nested' })).toBe('yes');
     await overIpc('settings:set', { field: 'r31Probe', value: undefined });
+  });
+});
+
+// WHY (2026-09-30 one-core R3-2): dev, update and account moved in.
+describe('dev, update and account: every channel is in the table, and phones are refused as before', () => {
+  const PUSHES = new Set(['update:progress', 'dev:install-progress']);
+  it('every dev:*, update:* and account:* name in the contract has a table entry (pushes excepted)', () => {
+    const inTable = new Set(CHANNEL_TABLE.map((d) => d.name));
+    const names = Object.values(IPC).filter((v) => /^(dev|update|account):/.test(v) && !PUSHES.has(v));
+    expect(names.length).toBe(26); // 9 dev + 7 update + 10 account; a new one must be decided here
+    expect(names.filter((n) => !inTable.has(n))).toEqual([]);
+  });
+  it('exactly these are open to a phone; everything else answers "not available over remote access"', () => {
+    const open = CHANNEL_TABLE.filter((d) => /^(dev|update|account):/.test(d.name) && !d.desktopOnly && d.remoteAllowed !== false).map((d) => d.name).sort();
+    expect(open).toEqual(['account:signed-in', 'account:user', 'update:get-beta-channel', 'update:set-beta-channel']);
+  });
+  it('a phone asking for an installer launch or a bug report is refused without the handler running', async () => {
+    for (const type of ['update:launch', 'update:download', 'update:changelog', 'dev:submit-issue', 'dev:log-tail', 'dev:install-workspace', 'dev:open-session-in']) {
+      expect((await overRemote(type, {})).answer, type).toEqual({ ok: false, error: `This feature isn't available over remote access yet (${type}).`, unsupported: true });
+    }
+  });
+  it('the beta channel reads the same over both doors', async () => {
+    const desktop = await overIpc('update:get-beta-channel');
+    expect((await overRemote('update:get-beta-channel')).answer).toEqual(desktop);
+    expect(desktop).toEqual({ betaChannel: expect.toSatisfy((v: unknown) => v === null || typeof v === 'boolean'), effective: expect.any(Boolean) });
+  });
+  it('a failed beta-channel save keeps the phone\'s old {ok:false,error} answer, and the computer still rejects', async () => {
+    const def = CHANNEL_TABLE.find((d) => d.name === 'update:set-beta-channel')!;
+    const original = def.handler;
+    def.handler = () => { throw new Error('config locked'); };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect((await overRemote('update:set-beta-channel', { enabled: true })).answer).toEqual({ ok: false, error: 'config locked' });
+      await expect(Promise.resolve().then(() => overIpc('update:set-beta-channel', { enabled: true }))).rejects.toThrow('config locked');
+    } finally { def.handler = original; warn.mockRestore(); }
+  });
+  it('the dev-only session opener needs the computer\'s session manager and refuses without it', async () => {
+    const def = CHANNEL_TABLE.find((d) => d.name === 'dev:open-session-in')!;
+    expect(def.desktopOnly).toBe(true);
+    expect(() => def.handler({ cwd: '/x' }, { door: 'remote', runtime: null, broadcast: () => {} })).toThrow('session manager');
   });
 });

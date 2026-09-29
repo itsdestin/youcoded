@@ -1980,10 +1980,6 @@ void app.whenReady().then(async () => {
   // plugins installed on another device since last launch. No-ops when signed
   // out; never awaited (bookkeeping must not delay startup).
   void reconcileInstalls(marketplaceAuthStore, skillProvider);
-  // Remote clients read the signed-in state through the WS server, which has no
-  // ipcMain access — without this the game lobby showed "signed out" in a remote
-  // browser while the host app was signed in.
-  remoteServer.setAccountStore(marketplaceAuthStore);
   // Accounts Phase 2 — social graph (friends/requests/blocks) IPC. Shares the
   // same token-bound auth store; handlers live in a sibling module to keep the
   // account file focused on auth + marketplace writes. windowRegistry +
@@ -2000,7 +1996,7 @@ void app.whenReady().then(async () => {
   // the window that opened the mic) it resolves for itself.
   registerVoiceHandlers(app.getPath('userData'));
   // Named "accounts", not "auth-store": this window covers five registrations —
-  // createAuthStore, registerMarketplaceApiHandlers, remoteServer.setAccountStore,
+  // createAuthStore, registerMarketplaceApiHandlers, the account channel table entries,
   // registerSocialHandlers and registerArcadeHandlers — not just the store.
   perfMark('main:chore:accounts:done');
 

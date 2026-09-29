@@ -13,6 +13,7 @@ import {
   markConnectedForNotices,
 } from '../src/renderer/remote-shim';
 import { REMOTE_UNSUPPORTED_EVENT } from '../src/renderer/remote-unsupported';
+import { TABLE_ERROR_FLAG } from '../src/shared/backend-contract';
 
 // WHY each section starts with isolateGlobals(): every section below was its own file, so each
 // began with a clean global object and a fresh module graph. The sections install fakes on
@@ -154,6 +155,24 @@ describe('remote-shim — rejecting failures', () => {
       // And "the host does not implement this" stays its own case, so the user
       // gets the plain-language notice rather than a raw error string.
       expect(responseOutcome('models:settings', { ok: false, unsupported: true })).toBe('unsupported');
+    });
+
+    // WHY (2026-09-30 one-core R3-2): a table handler that throws answers the phone
+    // { ok:false, error, <TABLE_ERROR_FLAG>:true }. The flag, not a per-channel list, is what
+    // makes the shim reject, so a channel moved into the table can never hand its caller a
+    // failure object where the type promises a list, a record or a boolean.
+    it('rejects ANY channel\u2019s reply carrying the table\u2019s error flag, listed or not', () => {
+      const reply = { ok: false, error: 'disk trouble', [TABLE_ERROR_FLAG]: true };
+      expect(REJECT_ON_NOT_OK.has('defaults:set')).toBe(false);
+      expect(responseOutcome('defaults:set', reply)).toBe('failure');
+      expect(responseOutcome('sync:force', reply)).toBe('failure');
+      // No flag = an ordinary answer, and "unsupported" still wins over the flag.
+      expect(responseOutcome('defaults:set', { ok: false, error: 'x' })).toBe('value');
+      expect(responseOutcome('defaults:set', { ...reply, unsupported: true })).toBe('unsupported');
+      const resolve = vi.fn(); const reject = vi.fn();
+      applyResponse({ resolve, reject }, 'defaults:set', reply);
+      expect(reject).toHaveBeenCalledWith(expect.objectContaining({ message: 'disk trouble' }));
+      expect(resolve).not.toHaveBeenCalled();
     });
 
     it('rejects startup errors but keeps admission denials as retryable data', () => {

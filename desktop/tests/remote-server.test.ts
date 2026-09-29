@@ -1247,28 +1247,35 @@ describe('RemoteServer account bridge', () => {
     return server.handleMessage({ ws }, JSON.stringify(msg)).then(() => sent);
   }
 
-  it('reports the host signed-in state', async () => {
-    const { RemoteServer } = await import('../src/main/remote-server');
-    const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
-    server.setAccountStore({ getToken: () => 'tok', getUser: () => ({ login: 'destin' }) });
-    const sent = await sendAndCollect(server, { type: 'account:signed-in', id: 'a1', payload: {} });
-    expect(sent[0].payload).toBe(true);
-  });
-
-  it('returns the cached profile', async () => {
-    const { RemoteServer } = await import('../src/main/remote-server');
-    const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
-    server.setAccountStore({ getToken: () => 'tok', getUser: () => ({ login: 'destin' }) });
-    const sent = await sendAndCollect(server, { type: 'account:user', id: 'a2', payload: {} });
-    expect(sent[0].payload.login).toBe('destin');
-  });
-
-  // Must not hang or throw when main.ts hasn't injected the store yet.
-  it('reports signed-out when no store is injected', async () => {
+  // WHY (2026-09-30 one-core R3-2): signed-in / user are served from the channel table now
+  // (main/ipc/account.ts), not a RemoteServer case; the account objects arrive through
+  // bindAccountDeps. The unbound case runs FIRST because the binding lasts for the file.
+  // Must not hang or throw when the marketplace handlers have not registered yet.
+  it('reports signed-out when the account is not bound yet', async () => {
     const { RemoteServer } = await import('../src/main/remote-server');
     const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
     const sent = await sendAndCollect(server, { type: 'account:signed-in', id: 'a3', payload: {} });
     expect(sent[0].payload).toBe(false);
+    const user = await sendAndCollect(server, { type: 'account:user', id: 'a4', payload: {} });
+    expect(user[0].payload).toBeNull();
+  });
+
+  it('reports the host signed-in state and the cached profile', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const { bindAccountDeps } = await import('../src/main/ipc/account');
+    bindAccountDeps({ store: { getToken: () => 'tok', getUser: () => ({ login: 'destin' }) } as any, client: {} as any, installedSkillSource: null });
+    const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
+    expect((await sendAndCollect(server, { type: 'account:signed-in', id: 'a1', payload: {} }))[0].payload).toBe(true);
+    expect((await sendAndCollect(server, { type: 'account:user', id: 'a2', payload: {} }))[0].payload.login).toBe('destin');
+  });
+
+  it('a phone is still refused the account actions that change who this computer is', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
+    for (const type of ['account:start', 'account:poll', 'account:refresh', 'account:sign-out', 'account:update-profile', 'account:set-handle', 'account:delete', 'account:export']) {
+      const sent = await sendAndCollect(server, { type, id: `r-${type}`, payload: {} });
+      expect(sent[0].payload, type).toMatchObject({ ok: false, unsupported: true });
+    }
   });
 
   // Status data is polled every 10s in ipc-handlers, so without this replay a client

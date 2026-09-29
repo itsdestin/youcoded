@@ -28,6 +28,7 @@ import { registerIpcHandlers } from '../src/main/ipc-handlers';
 import { registerWithRuntime } from './helpers/register-ipc';
 import { RemoteServer } from '../src/main/remote-server';
 import { CHANNEL_TABLE, type MainChannelDef } from '../src/main/ipc/channel-table';
+import { TABLE_ERROR_FLAG } from '../src/shared/backend-contract';
 
 const calls: Array<{ name: string; payload: any; door: string }> = [];
 const testEntries: MainChannelDef[] = [
@@ -51,6 +52,11 @@ const testEntries: MainChannelDef[] = [
   {
     name: 'test:throws', kind: 'handle',
     handler: () => { throw new Error('boom from the handler'); },
+  },
+  {
+    name: 'test:throws-soft', kind: 'handle',
+    handler: () => { throw new Error('boom from the handler'); },
+    remoteOnError: () => 'soft answer',
   },
 ];
 
@@ -136,7 +142,17 @@ describe('a table entry is served by both doors', () => {
 
   it('a throwing handler rejects on Electron and answers {ok:false,error} on the phone', async () => {
     await expect(Promise.resolve().then(() => overIpc('test:throws', {}))).rejects.toThrow('boom from the handler');
-    expect(await overRemote('test:throws', {})).toEqual({ ok: false, error: 'boom from the handler' });
+    // WHY the flag (2026-09-30 one-core R3-2): it is what lets the phone's page reject this reply
+    // for ANY channel; without it the caller would receive a failure object as if it were data.
+    expect(await overRemote('test:throws', {})).toEqual({ ok: false, error: 'boom from the handler', [TABLE_ERROR_FLAG]: true });
+  });
+
+  it('a soft remoteOnError answer is sent unflagged, and the swallowed error is logged', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(await overRemote('test:throws-soft', {})).toBe('soft answer');
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('test:throws-soft'), 'boom from the handler');
+    } finally { warn.mockRestore(); }
   });
 
   it('a name that is not in the table still falls to the old switch (the phone default answer)', async () => {

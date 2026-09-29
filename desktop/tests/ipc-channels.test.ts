@@ -234,9 +234,11 @@ describe('account:* channel parity', () => {
     const src = read('src', 'renderer', 'remote-shim.ts');
     for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
   });
-  it('all account:* types are handled in marketplace-api-handlers.ts', () => {
-    const src = read('src', 'main', 'marketplace-api-handlers.ts');
-    for (const t of NEW_TYPES) expect(src).toContain(`"${t}"`);
+  it('all account:* types are served by the channel table (main/ipc/account.ts)', () => {
+    // WHY (2026-09-30 one-core R3-2): the handlers moved out of marketplace-api-handlers.ts.
+    const src = read('src', 'main', 'ipc', 'account.ts');
+    for (const t of NEW_TYPES) expect(src).toContain(`IPC.${t.toUpperCase().replace(/[:-]/g, '_')}`);
+    expect(read('src', 'main', 'marketplace-api-handlers.ts')).not.toMatch(/ipcMain\.handle\(\s*"account:/);
   });
   it('all account:* types are handled by SessionService.kt (Android)', () => {
     const src = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));

@@ -31,6 +31,17 @@ import type { PagesBridge } from './pages-types';
 import type { SavedFolder, PickerFolder, SessionDefaults, ModelModes } from './prefs-types';
 import type { TagListResult, TagMutationResult, TagDeleteResult, TagPatch } from './tags';
 import type {
+  DevSummarizeArgs, DevSummaryResult, DevSubmitArgs, DevSubmitResult, DevInstallWorkspaceResult,
+  DevSetupWorkspaceResult, DevSetupStatus, DevOpenSessionInArgs,
+} from './dev-types';
+import type {
+  ApiResult, AuthStartResponse, AuthPollResponse, MarketplaceUser, AccountExportResult,
+} from './account-types';
+import type {
+  UpdateDownloadResult, UpdateLaunchResult, UpdateCachedDownload, UpdateBetaChannelState, UpdateChangelogResult,
+} from './update-install-types';
+import type { SessionInfo } from './types';
+import type {
   NativeSendResult, SessionContext, SessionContextText,
   SessionMetaResult, HandoffAttemptResult, HandoffCreateParams,
   SpecialistsEvent, ShellEvent,
@@ -783,6 +794,13 @@ export interface ChannelCtx<Rt = unknown> {
 // family needs either: MESSAGE_KIND only lists fire-and-forget channels and REJECT_ON_NOT_OK
 // none of these. A later family that needs them moves the shim's list into a shared/ file then,
 // with the reader in the same commit. A field with no reader is a promise nobody keeps.
+/** WHY (2026-09-30 one-core R3-2): the flag a phone-side table reply carries when the handler
+ *  THREW and the entry gave no softer answer (`remoteOnError`). The phone's page rejects any reply
+ *  bearing it (remote-shim `responseOutcome`), for every channel, so a moved channel never hands
+ *  its caller a failure object where the type promises a list, a record or a boolean. Lives here
+ *  because the door (main/) and the page (renderer/) both read it and neither may import the other. */
+export const TABLE_ERROR_FLAG = 'tableHandlerFailed' as const;
+
 export interface ChannelDef<Ctx = ChannelCtx, Payload = any, Result = any> {
   /** One of the IPC names above. */
   name: string;
@@ -825,6 +843,35 @@ export interface ChannelTypes {
   'modes:set': { request: Partial<ModelModes>; response: ModelModes | null };
   'analytics:get-opt-in': { request: void; response: boolean };
   'analytics:set-opt-in': { request: { enabled: boolean }; response: void };
+  // dev:* — Settings → Development (one-core R3-2). log-tail stays a bare number on the wire: Android reads it that way.
+  'dev:log-tail': { request: number | undefined; response: string };
+  'dev:diagnostics': { request: void; response: string };
+  'dev:summarize-issue': { request: DevSummarizeArgs; response: DevSummaryResult };
+  'dev:submit-issue': { request: DevSubmitArgs; response: DevSubmitResult };
+  'dev:install-workspace': { request: void; response: DevInstallWorkspaceResult };
+  'dev:setup-workspace': { request: void; response: DevSetupWorkspaceResult };
+  'dev:setup-status': { request: void; response: DevSetupStatus };
+  'dev:setup-clear': { request: void; response: void };
+  'dev:open-session-in': { request: DevOpenSessionInArgs; response: Pick<SessionInfo, 'id'> };
+  // update:* — the app's own update (one-core R3-2). update:progress is a push, not an entry.
+  'update:changelog': { request: { forceRefresh?: boolean } | undefined; response: UpdateChangelogResult };
+  'update:download': { request: void; response: UpdateDownloadResult };
+  'update:cancel': { request: { jobId: string }; response: { success: boolean } };
+  'update:launch': { request: { jobId: string; filePath: string }; response: UpdateLaunchResult };
+  'update:get-cached-download': { request: { version: string }; response: UpdateCachedDownload | null };
+  'update:get-beta-channel': { request: void; response: UpdateBetaChannelState };
+  'update:set-beta-channel': { request: { enabled: boolean }; response: UpdateBetaChannelState };
+  // account:* — the YouCoded account (one-core R3-2).
+  'account:start': { request: void; response: ApiResult<AuthStartResponse> };
+  'account:poll': { request: { deviceCode: string }; response: ApiResult<AuthPollResponse> };
+  'account:signed-in': { request: void; response: boolean };
+  'account:user': { request: void; response: MarketplaceUser | null };
+  'account:refresh': { request: void; response: MarketplaceUser | null };
+  'account:sign-out': { request: void; response: void };
+  'account:update-profile': { request: { displayName: string }; response: ApiResult<{ display_name: string }> };
+  'account:set-handle': { request: { handle: string }; response: ApiResult<{ handle: string }> };
+  'account:delete': { request: void; response: ApiResult<void> };
+  'account:export': { request: void; response: AccountExportResult };
 }
 
 // ── The window.claude bridge: session, on ──────────────────────────────────────
@@ -936,12 +983,7 @@ export type RemoteBridge = Omit<SharedBridge, 'session' | 'on'> & {
   on: BridgeListeners & Record<string, unknown>;
 } & Record<string, unknown>;
 
-// Discriminated union for IPC calls that can fail with a structured error.
-// Kept local to the contract (not imported from main) so shared/ stays clean —
-// same reasoning remote-shim.ts had for duplicating it.
-type ApiResult<T> =
-  | { ok: true; value: T }
-  | { ok: false; status: number; message: string };
+// ApiResult (a call that can fail with a status) now lives in ./account-types, imported above.
 
 // ── window.claude, as the renderer sees it ─────────────────────────────────────
 // (Moved here from renderer/hooks/useIpc.ts's `declare global`, one-core R2.)
@@ -1001,22 +1043,17 @@ interface ClaudeApi {
   // main/changelog-service.ts). When you edit one, edit all three — this copy
   // isn't covered by the ipc-channels.test.ts parity test and will drift silently.
   update: {
-    changelog: (opts: { forceRefresh: boolean }) => Promise<{
-      markdown: string | null;
-      entries: Array<{ version: string; date?: string; body: string }>;
-      fromCache: boolean;
-      error?: boolean;
-    }>;
+    changelog: (opts: { forceRefresh: boolean }) => Promise<UpdateChangelogResult>;
     // In-app update installer (Task 7). Mirrors preload.ts + remote-shim.ts.
-    download: () => Promise<import('./update-install-types').UpdateDownloadResult>;
+    download: () => Promise<UpdateDownloadResult>;
     cancel: (jobId: string) => Promise<{ success: boolean }>;
-    launch: (jobId: string, filePath: string) => Promise<import('./update-install-types').UpdateLaunchResult>;
-    getCachedDownload: (version: string) => Promise<import('./update-install-types').UpdateCachedDownload | null>;
+    launch: (jobId: string, filePath: string) => Promise<UpdateLaunchResult>;
+    getCachedDownload: (version: string) => Promise<UpdateCachedDownload | null>;
     // Beta update channel. `betaChannel` is the saved answer (null = never
     // chosen); `effective` is what the next check will use, which for an
     // unchosen install is whether this build is itself a pre-release.
-    getBetaChannel: () => Promise<{ betaChannel: boolean | null; effective: boolean }>;
-    setBetaChannel: (enabled: boolean) => Promise<{ betaChannel: boolean | null; effective: boolean }>;
+    getBetaChannel: () => Promise<UpdateBetaChannelState>;
+    setBetaChannel: (enabled: boolean) => Promise<UpdateBetaChannelState>;
     onProgress: (handler: (ev: import('./update-install-types').UpdateProgressEvent) => void) => () => void;
   };
   remote: {
@@ -1047,39 +1084,19 @@ interface ClaudeApi {
   // (not wrapped). Keep these types local — do NOT import from main; the
   // renderer/main boundary must stay clean.
   account: {
-    start: () => Promise<ApiResult<{
-      device_code: string;
-      user_code: string;
-      auth_url: string;
-      expires_in: number;
-    }>>;
-    poll: (deviceCode: string) => Promise<ApiResult<
-      | { status: "pending" }
-      | {
-          status: "complete";
-          token: string;
-          // Identity rebuild: the complete branch now carries the resolved user so
-          // the renderer can prompt for a handle right after sign-in (Task 7).
-          user?: {
-            id: string;
-            login: string;
-            avatar_url: string | null;
-            display_name?: string;
-            handle?: string | null;
-          };
-        }
-    >>;
+    start: () => Promise<ApiResult<AuthStartResponse>>;
+    poll: (deviceCode: string) => Promise<ApiResult<AuthPollResponse>>;
     signedIn: () => Promise<boolean>;
-    user: () => Promise<import('../main/marketplace-auth-store').MarketplaceUser | null>;
+    user: () => Promise<MarketplaceUser | null>;
     // Force a /auth/me round-trip; returns the fresh profile or null (401-cleared).
-    refresh: () => Promise<import('../main/marketplace-auth-store').MarketplaceUser | null>;
+    refresh: () => Promise<MarketplaceUser | null>;
     signOut: () => Promise<void>;
     updateProfile: (displayName: string) => Promise<ApiResult<{ display_name: string }>>;
     setHandle: (handle: string) => Promise<ApiResult<{ handle: string }>>;
     deleteAccount: () => Promise<ApiResult<void>>;
     // Export all account data (GET /auth/export). Not ApiResult — resolves to
     // { path } on save, { canceled: true } on cancel, { ok:false, ... } on error.
-    exportData: () => Promise<{ path: string } | { canceled: true } | { ok: false; status: number; error: string }>;
+    exportData: () => Promise<AccountExportResult>;
   };
   // Social graph (accounts Phase 2). All return ApiResult so callers can read
   // .status (404 unknown/blocked handle, 429 caps, 400 self-request). Payload
@@ -1198,29 +1215,20 @@ interface ClaudeApi {
     // `assisted: false` means NOTHING rewrote the text — the fields are the user's
     // own words. A caller that presents them as a result is lying to the user; say
     // `unavailable` instead (design review F17).
-    summarizeIssue: (args: { kind: string; description: string; log?: string }) => Promise<{ title: string; summary: string; flagged_strings: string[]; assisted?: boolean; unavailable?: string }>;
+    summarizeIssue: (args: DevSummarizeArgs) => Promise<DevSummaryResult>;
     // WHY: body is now assembled in the main process; renderer passes raw fields (Fix 2).
-    // `summary` is OPTIONAL as of 2026-09-10: AI help is a separate choice, so a ticket
-    // written and sent with no provider call has no summary to pass (contract R12).
-    // The result is a DISCRIMINATED union for the same reason R23 exists — the old
-    // `{ ok: boolean; url?: string }` could not carry a reason, so a failed submit had
-    // nothing to say and the caller silently opened a browser tab instead.
-    submitIssue: (args: { kind: string; title: string; summary?: string; description: string; log?: string; label: string; browserOnly?: boolean }) => Promise<
-      | { ok: true; url: string }
-      | { ok: false; needsBrowser: true; fallbackUrl: string; truncated: boolean }
-      | { ok: false; error: string; fallbackUrl: string }>;
-    installWorkspace: () => Promise<{ path: string; alreadyInstalled: boolean } | { error: string }>;
+    // `summary` is OPTIONAL as of 2026-09-10: AI help is a separate choice (contract R12).
+    // The result is a DISCRIMINATED union (R23) so a failed submit can say why.
+    submitIssue: (args: DevSubmitArgs) => Promise<DevSubmitResult>;
+    installWorkspace: () => Promise<DevInstallWorkspaceResult>;
     onInstallProgress: (handler: (line: string) => void) => () => void;
-    openSessionIn: (args: { cwd: string; initialInput?: string }) => Promise<{ id: string }>;
-    // Contribution workspace as a managed project (contract R9/R10). NO real
-    // backend yet — registered in dev/workbench/mock-only.ts, which is the
-    // backend to-do list. Deliberately NOT installWorkspace(): that one clones
-    // into a fixed folder and pulls into an existing one, both ruled out by R9.
-    setupWorkspace: () => Promise<{ ok: true; path: string } | { ok: false; error: string }>;
+    openSessionIn: (args: DevOpenSessionInArgs) => Promise<{ id: string }>;
+    // Contribution workspace as a managed project (contract R9/R10). Deliberately NOT
+    // installWorkspace(): that one clones into a fixed folder and pulls into an existing one.
+    setupWorkspace: () => Promise<DevSetupWorkspaceResult>;
     // Setup runs in the main process, so closing the dialog cannot cancel it. The
-    // screen asks where it got to when it reopens — which is what makes "you can
-    // close this and it carries on" a true statement rather than a hopeful one.
-    setupStatus: () => Promise<{ state: 'idle' | 'running' | 'ready' | 'failed'; path?: string; error?: string }>;
+    // screen asks where it got to when it reopens.
+    setupStatus: () => Promise<DevSetupStatus>;
     /** Forget a finished outcome. Without it one failure makes the start button
      *  unreachable for the rest of the session (code review C12). */
     clearSetupStatus: () => Promise<void>;

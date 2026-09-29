@@ -10,11 +10,16 @@
 //   (payload, ctx) and returns a plain value; BOTH doors run it.
 import type { ChannelCtx, ChannelDef, ChannelTypes } from '../../shared/backend-contract';
 import type { RemoteNativeRuntime } from '../create-runtime';
+import type { CreateSessionDeps } from '../dev-tools';
 
 /** What a table handler is given besides its payload. Typed with the slice of the runtime the
  *  PHONE door can also reach (RemoteNativeRuntime), because a handler both doors run may only
  *  lean on what both doors have. A family that needs more widens it. */
-export type MainChannelCtx = ChannelCtx<RemoteNativeRuntime>;
+/** WHY (2026-09-30 one-core R3-2): things only the computer's own process holds (the session
+ *  manager). Filled by the DESKTOP door only, so only a `desktopOnly` entry may lean on it; a phone
+ *  never reaches such an entry, the table refuses it first. */
+export interface DesktopServices { sessionManager: CreateSessionDeps['sessionManager'] }
+export type MainChannelCtx = ChannelCtx<RemoteNativeRuntime> & { desktop?: DesktopServices };
 export type MainChannelDef<Payload = any, Result = any> = ChannelDef<MainChannelCtx, Payload, Result>;
 
 /** A table entry whose name pins its payload and answer types to ChannelTypes. */

@@ -5,7 +5,7 @@
 
 // Type-only, so nothing is added to the bundle the Android WebView loads.
 import type { VoiceReadiness } from '../shared/voice-types';
-import type { RemoteBridge } from '../shared/backend-contract';
+import { TABLE_ERROR_FLAG, type RemoteBridge } from '../shared/backend-contract';
 
 // ── Marketplace types re-declared locally ─────────────────────────────────────
 // WHY: remote-shim.ts lives in renderer/ and cannot import from main/ (Node.js
@@ -764,7 +764,7 @@ export const REJECT_ON_NOT_OK: ReadonlySet<string> = new Set([
 export function responseOutcome(channel: string, payload: unknown): 'unsupported' | 'failure' | 'value' {
   if (!payload || typeof payload !== 'object') return 'value';
   if ((payload as { unsupported?: unknown }).unsupported === true) return 'unsupported';
-  if ((payload as { ok?: unknown }).ok === false && REJECT_ON_NOT_OK.has(channel)) return 'failure';
+  if (((payload as { ok?: unknown }).ok === false && REJECT_ON_NOT_OK.has(channel)) || (payload as Record<string, unknown>)[TABLE_ERROR_FLAG] === true) return 'failure'; // WHY (2026-09-30 one-core R3-2): TABLE_ERROR_FLAG marks a thrown table handler on ANY moved channel
   return 'value';
 }
 

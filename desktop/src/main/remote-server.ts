@@ -479,14 +479,6 @@ export class RemoteServer {
   /** Hands a phone's appearance change to the computer's windows (main owns BrowserWindow). */
   private onAppearanceBroadcast: (prefs: Record<string, unknown>) => void;
 
-  /** Injected by main.ts. Read-only access to the marketplace auth session so
-   *  remote clients can see whether the host is signed in — the game lobby
-   *  renders its sign-in screen off account:signed-in, so without this a remote
-   *  browser showed "signed out" while the host app was signed in. */
-  setAccountStore(store: { getToken(): string | null; getUser(): any }): void {
-    this.accountStore = store;
-  }
-  private accountStore?: { getToken(): string | null; getUser(): any };
 
   /** Task 5: which Conversation Store bucket a session's meta reads/writes
    *  belong to. 'native' when NativeSessionHost recognizes the id (live now,
@@ -2810,32 +2802,6 @@ export class RemoteServer {
         this.respond(client.ws, type, id, { ok: true });
         break;
       }
-      // Update channel. A remote browser cannot install anything (download and
-      // launch are stubbed in the shim), but the channel is the HOST's setting
-      // and reads/writes the host's config.json, so both work over the socket.
-      // Constructed per call rather than held: NativeHome.mutateJson serialises
-      // through a file lock, and this is a once-in-a-while click, not a poll.
-      case 'update:get-beta-channel': {
-        const settings = new UpdateSettings(new NativeHome());
-        this.respond(client.ws, type, id, {
-          betaChannel: settings.read().betaChannel,
-          effective: settings.resolve(app.getVersion()),
-        });
-        break;
-      }
-      case 'update:set-beta-channel': {
-        const settings = new UpdateSettings(new NativeHome());
-        try {
-          await settings.setBetaChannel(payload?.enabled);
-          this.respond(client.ws, type, id, {
-            betaChannel: settings.read().betaChannel,
-            effective: settings.resolve(app.getVersion()),
-          });
-        } catch (err) {
-          this.respond(client.ws, type, id, { ok: false, error: String((err as Error)?.message ?? err) });
-        }
-        break;
-      }
       // Session naming. `unavailable` is answered as a refusal, not silence:
       // the shim's capability probe reads a well-formed preference as "this
       // host can name sessions", so a half-started host must not look ready.
@@ -4185,22 +4151,6 @@ export class RemoteServer {
           // Worker for the game literally named "", i.e. always nothing).
           : type === 'arcade:records' ? await ops.records(payload?.game ?? undefined)
           : await ops.submitScore(payload?.game, payload?.score));
-        break;
-      }
-
-      // --- Account (drives the game lobby's signed-in state) ---
-      case 'account:signed-in': {
-        // No store injected → report signed-out rather than hanging. Mirrors
-        // marketplace-api-handlers' `!!store.getToken()`.
-        this.respond(client.ws, type, id, !!this.accountStore?.getToken());
-        break;
-      }
-      case 'account:user': {
-        // Cached profile only. The Electron handler additionally heals an empty
-        // cache by calling /auth/me; that path needs the API client, which lives
-        // in marketplace-api-handlers. Returning the cache (or null) keeps this
-        // read-only and is enough for the lobby to see a signed-in user.
-        this.respond(client.ws, type, id, this.accountStore?.getUser() ?? null);
         break;
       }
 

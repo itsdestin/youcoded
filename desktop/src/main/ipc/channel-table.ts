@@ -16,15 +16,18 @@
 // ChannelTypes, write main/ipc/<family>.ts, list it below, then delete its ipcMain.handle blocks
 // in ipc-handlers.ts and its `case`s in remote-server.ts. Never leave a case behind: the table
 // answers first on the phone, so a leftover case is dead code that looks alive.
-import type { ChannelCtx } from '../../shared/backend-contract';
+import { TABLE_ERROR_FLAG, type ChannelCtx } from '../../shared/backend-contract';
 import type { RemoteNativeRuntime } from '../create-runtime';
-import type { MainChannelCtx, MainChannelDef } from './channel-def';
+import type { DesktopServices, MainChannelCtx, MainChannelDef } from './channel-def';
 import { tagsChannels } from './tags';
 import { foldersChannels } from './folders';
 import { defaultsChannels } from './defaults';
 import { modesChannels } from './modes';
 import { analyticsChannels } from './analytics';
 import { settingsChannels } from './settings';
+import { devChannels } from './dev';
+import { updateChannels } from './update';
+import { accountChannels } from './account';
 
 export type { MainChannelCtx, MainChannelDef } from './channel-def';
 
@@ -36,6 +39,9 @@ export const CHANNEL_TABLE: MainChannelDef[] = [
   ...modesChannels,
   ...analyticsChannels,
   ...settingsChannels,
+  ...devChannels,
+  ...updateChannels,
+  ...accountChannels,
 ];
 
 let indexed: { size: number; byName: Map<string, MainChannelDef> } | null = null;
@@ -63,12 +69,14 @@ export function registerDesktopChannels(
   getRuntime: () => RemoteNativeRuntime | null,
   /** Tell every window and every phone (see ChannelCtx.broadcast). */
   broadcast: ChannelCtx['broadcast'],
+  /** What only this computer's process holds (see DesktopServices). */
+  getDesktop?: () => DesktopServices | undefined,
 ): void {
   const seen = new Set<string>();
   for (const def of CHANNEL_TABLE) {
     if (seen.has(def.name)) throw new Error(`channel table lists ${def.name} twice`);
     seen.add(def.name);
-    const ctxFor = (event: any): MainChannelCtx => ({ door: 'desktop', runtime: getRuntime(), windowId: event?.sender?.id, broadcast });
+    const ctxFor = (event: any): MainChannelCtx => ({ door: 'desktop', runtime: getRuntime(), windowId: event?.sender?.id, broadcast, desktop: getDesktop?.() });
     if (def.kind === 'handle') {
       ipc.handle(def.name, (event, payload) => def.handler(payload, ctxFor(event)));
     } else if (def.kind === 'on') {
@@ -110,9 +118,15 @@ export async function serveRemoteChannel(def: MainChannelDef, payload: unknown, 
     return { reply: true, payload: await def.handler(payload, ctx) };
   } catch (error) {
     // A phone has no rejected-invoke channel, so a throw becomes what the entry declares
-    // (remoteOnError: the soft answer its caller expects), else the {ok:false,error} shape the
-    // rest of remote-server already answers with.
-    if (def.remoteOnError) return { reply: true, payload: def.remoteOnError(error, payload) };
-    return { reply: true, payload: { ok: false, error: error instanceof Error ? error.message : 'That did not work. Try again.' } };
+    // (remoteOnError: the soft answer its caller expects), else {ok:false,error} carrying
+    // TABLE_ERROR_FLAG, which the phone's page turns back into a rejection for ANY channel.
+    // WHY log the soft path (2026-09-30 one-core R3-2): remoteOnError hides the failure from the
+    // caller by design; without a line here a failing folder read was undiagnosable.
+    const message = error instanceof Error ? error.message : String(error);
+    if (def.remoteOnError) {
+      console.warn(`[channel-table] ${def.name} failed (phone got its soft answer):`, message);
+      return { reply: true, payload: def.remoteOnError(error, payload) };
+    }
+    return { reply: true, payload: { ok: false, error: error instanceof Error ? error.message : 'That did not work. Try again.', [TABLE_ERROR_FLAG]: true } };
   }
 }
