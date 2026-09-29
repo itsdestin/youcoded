@@ -148,7 +148,9 @@ export function OfficeView({ projectRoot = null, visible = true }: { projectRoot
           <div className="shrink-0 flex items-center gap-2 pl-2">
             {/* Save As / Export (finish plan Task 2): its own slot beside the save status, so it
                 never hides "Saving…" (fix round 1). Where the copy went, or why it could not. */}
-            {saveState.phase !== 'failed' && saveState.note && <span className="text-2xs text-fg-muted" role="status">{saveState.note}</span>}
+            {/* WHY truncated with a title (fix round 2): a long file or folder name must never squeeze
+                the document tabs beside it; the whole sentence stays on hover. */}
+            {saveState.phase !== 'failed' && saveState.note && <span className="text-2xs text-fg-muted truncate max-w-xs" title={saveState.note} role="status">{saveState.note}</span>}
             {/* Saving is automatic (Q-save), so this only confirms it happened — or, when a save
                 failed, says main's own reason with Retry (design §4; error-message-standards). */}
             {saveState.phase === 'failed'
