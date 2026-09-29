@@ -46,3 +46,18 @@ export const INITIAL_PREREQUISITES: PrerequisiteState[] = [
   { name: 'claude', displayName: 'Claude Code', status: 'waiting' },
   { name: 'auth', displayName: 'Sign in', status: 'waiting' },
 ];
+
+// WHY (2026-09-30 one-core R3-3): the shapes of the first-run:* channels' answers, in one place so
+// the channel table's rows, preload and the strip above the message box read the same types
+// (SetupDownloadStatus was declared twice, in main/first-run-local.ts and the renderer's strip).
+
+/** The key services "Use an API key" accepts (first-run local models, F-1). */
+export type NativeKeyService = 'anthropic' | 'openai' | 'google' | 'openrouter';
+
+/** What the band above the message box shows about the download setup finished on. */
+export interface SetupDownloadStatus {
+  state: 'downloading' | 'stopped' | 'done';
+  modelLabel: string;
+  percent: number;
+  minutesLeft: number | null;
+}

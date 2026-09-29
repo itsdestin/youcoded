@@ -1380,12 +1380,11 @@ contextBridge.exposeInMainWorld('claude', {
     localSetup: (): Promise<any> => ipcRenderer.invoke(IPC.FIRST_RUN_LOCAL_SETUP),
     connectLocalApp: (baseUrl: string, name: string): Promise<{ ok: boolean; message?: string }> =>
       ipcRenderer.invoke(IPC.FIRST_RUN_CONNECT_LOCAL_APP, { baseUrl, name }),
-    // TODO(one-core R3): main's handler for both local-download channels takes NO argument, so the
-    // sessionId sent here is silently dropped. Left positional (behaviour unchanged) until the
-    // first-run family moves into the table and someone decides whether it should be used.
-    localDownload: (sessionId?: string | null): Promise<any> => ipcRenderer.invoke(IPC.FIRST_RUN_LOCAL_DOWNLOAD, sessionId),
-    resumeLocalDownload: (sessionId?: string | null): Promise<void> =>
-      ipcRenderer.invoke(IPC.FIRST_RUN_RESUME_LOCAL_DOWNLOAD, sessionId),
+    // WHY no sessionId (2026-09-30 one-core R3-3): main's handler for both local-download channels
+    // never read the one this used to send, and the band describes the computer's single setup
+    // download, not a chat. Dropped end to end rather than left as an argument that means nothing.
+    localDownload: (): Promise<any> => ipcRenderer.invoke(IPC.FIRST_RUN_LOCAL_DOWNLOAD),
+    resumeLocalDownload: (): Promise<void> => ipcRenderer.invoke(IPC.FIRST_RUN_RESUME_LOCAL_DOWNLOAD),
     onStateChanged: (cb: (state: any) => void) => {
       const handler = (_e: IpcRendererEvent, state: any) => cb(state);
       ipcRenderer.on(IPC.FIRST_RUN_STATE, handler);

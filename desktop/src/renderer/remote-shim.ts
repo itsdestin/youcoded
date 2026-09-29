@@ -3,9 +3,10 @@
  * Provides the same API surface as the Electron preload bridge.
  */
 
-// Type-only, so nothing is added to the bundle the Android WebView loads.
+// Type-only, plus table-error-flag (one tiny value; imported from backend-contract it would pull the whole contract into the Android bundle — WHY 2026-09-30 one-core R3-3).
 import type { VoiceReadiness } from '../shared/voice-types';
-import { TABLE_ERROR_FLAG, type RemoteBridge } from '../shared/backend-contract';
+import type { RemoteBridge } from '../shared/backend-contract';
+import { TABLE_ERROR_FLAG } from '../shared/table-error-flag';
 
 // ── Marketplace types re-declared locally ─────────────────────────────────────
 // WHY: remote-shim.ts lives in renderer/ and cannot import from main/ (Node.js
@@ -2782,13 +2783,12 @@ export function installShim(): void {
       submitApiKey: (_key: string, _service?: string) => Promise.resolve(),
       devModeDone: () => Promise.resolve(),
       skip: () => Promise.resolve(),
-      // First-run local models (2026-09-14). First-run never shows here, and the
-      // band above the message box describes the HOST's first download, which a
-      // phone has no way to read — so every one answers "nothing".
+      // First-run local models (2026-09-14): never shown here, and the band describes the HOST's
+      // first download, which a phone cannot read — so every one answers "nothing".
       localSetup: () => Promise.resolve(null),
       connectLocalApp: (_baseUrl: string, _name: string) => Promise.resolve({ ok: false, message: 'Setup runs on the computer itself.' }),
-      localDownload: (_sessionId?: string | null) => Promise.resolve(null),
-      resumeLocalDownload: (_sessionId?: string | null) => Promise.resolve(),
+      localDownload: () => Promise.resolve(null),
+      resumeLocalDownload: () => Promise.resolve(),
       onStateChanged: (_cb: Callback) => (() => {}),
     },
     // Android-only bridge methods — when connected to a remote desktop, these

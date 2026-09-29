@@ -44,9 +44,8 @@ import { isSmokeTest, reportWhenRendered } from './smoke-probe';
 import { installCrashDiagnostics, reportPreviousCrashes, wireWindowHangDiagnostics } from './crash-diagnostics';
 import { registerThemeProtocol } from './theme-protocol';
 import { isAppPageUrl } from './app-navigation';
-import { FirstRunManager, markSetupCompleted, setupIsUsable, type FirstRunNativeDeps, type NativeKeyService, type OpenRouterSignInAuth } from './first-run';
-import { pickSuggestedModel } from './first-run-local';
-import type { FirstRunState } from '../shared/first-run-types';
+import { FirstRunManager, markSetupCompleted, setupIsUsable, type FirstRunNativeDeps } from './first-run';
+import { bindFirstRunManager } from './ipc/first-run';
 // Sign in with ChatGPT (backend design 2026-09-05 §1): the account object is
 // built HERE, inside createWindow, and handed to the IPC layer and both
 // first-run managers. It needs its own SecretsStore over the same encrypted
@@ -457,27 +456,14 @@ export function setPermissionOverrides(overrides: Partial<PermissionOverrides>) 
 }
 
 /**
- * First-run local models (2026-09-14): the setup channels that reach the native
- * runtime — local setup's suggestion, connecting a model app already running,
- * and a local download finishing setup. Called by BOTH first-run registrations
- * (a fresh install, and the late sign-in screen); `getManager` because the late
- * one creates its manager after this is wired.
+ * First-run local models (2026-09-14): a finished local download hands setup on. Called by BOTH
+ * first-run paths (a fresh install, and the late sign-in screen); `getManager` because the late one
+ * creates its manager after this is wired.
+ * WHY only the listener is left (2026-09-30 one-core R3-3): the setup channels themselves (local
+ * setup's suggestion, connecting a model app already running) are table entries now
+ * (main/ipc/first-run.ts); a progress subscription is not a channel, so it stays here.
  */
-function registerFirstRunLocalIpc(getManager: () => FirstRunManager | null, deps: FirstRunNativeDeps): void {
-  ipcMain.handle(IPC.FIRST_RUN_LOCAL_SETUP, async () => {
-    try {
-      const os: typeof import('os') = require('os');
-      return { suggested: pickSuggestedModel(await deps.models.curatedList(), os.totalmem()) };
-    } catch (e) {
-      log('ERROR', 'FirstRun', 'Local setup suggestion failed', { error: String(e) });
-      return null;
-    }
-  });
-  ipcMain.handle(IPC.FIRST_RUN_CONNECT_LOCAL_APP, async (_event, { baseUrl, name }: { baseUrl: string; name: string }) => {
-    const manager = getManager();
-    if (!manager) return { ok: false, message: 'Setup is not running.' };
-    return manager.handleConnectLocalApp(baseUrl, name, deps);
-  });
+function wireSetupDownloadHandoff(getManager: () => FirstRunManager | null, deps: FirstRunNativeDeps): void {
   deps.models.on('download-progress', (p) => {
     void getManager()?.handleSetupDownloadProgress(p, deps).catch((e) => {
       log('WARN', 'FirstRun', 'Setup download hand-off failed', { error: String(e) });
@@ -492,10 +478,6 @@ function registerFirstRunIpc(
   // with ChatGPT" button routes through here to the SAME account object the
   // Settings card uses, so a sign-in finished in the wizard is signed in everywhere.
   chatgptAuth: ChatGptAuth,
-  // First-run local models: what "Use an API key" reaches for a named service.
-  nativeDeps: FirstRunNativeDeps,
-  // Sign in with OpenRouter: the SAME object the Settings card drives.
-  openRouterSignIn: OpenRouterSignInAuth,
 ) {
   // Push state updates to renderer
   firstRunManager.on('state-changed', (state) => {
@@ -513,58 +495,12 @@ function registerFirstRunIpc(
     log('INFO', 'FirstRun', 'First-run complete, transitioning to normal app');
   });
 
-  ipcMain.handle(IPC.FIRST_RUN_STATE, async () => {
-    try { return firstRunManager.getState(); }
-    catch { return { currentStep: 'COMPLETE' }; }
-  });
-
-  ipcMain.handle(IPC.FIRST_RUN_RETRY, async () => {
-    try { await firstRunManager.retry(); }
-    catch (e) { log('ERROR', 'FirstRun', 'Retry failed', { error: String(e) }); }
-  });
-
-  ipcMain.handle(IPC.FIRST_RUN_START_AUTH, async (_event, { mode }: { mode: FirstRunState['authMode'] }) => {
-    try {
-      if (mode === 'oauth') {
-        // claude auth login opens the browser itself — don't double-open
-        await firstRunManager.handleOAuthLogin();
-      } else if (mode === 'chatgpt') {
-        // Opens the browser through ChatGptAuth and waits for the callback.
-        // handleChatGptLogin catches signIn()'s own throws (port 1455 held,
-        // no keychain) into lastError itself — the catch below is only the
-        // last resort, since a swallowed throw here would leave the wizard's
-        // button silently doing nothing.
-        await firstRunManager.handleChatGptLogin(chatgptAuth);
-      } else if (mode === 'openrouter') {
-        // Opens the browser and waits; handleOpenRouterLogin writes its own
-        // lastError, so the catch below is the last resort only.
-        await firstRunManager.handleOpenRouterLogin(openRouterSignIn);
-      }
-    } catch (e) { log('ERROR', 'FirstRun', 'Auth failed', { error: String(e) }); }
-  });
-
-  ipcMain.handle(IPC.FIRST_RUN_SUBMIT_API_KEY, async (_event, { key, service }: { key: string; service?: NativeKeyService }) => {
-    // With a service (F-2) the key runs on YouCoded's own assistant; without one
-    // it is the old Claude Code key path.
-    try {
-      if (service) await firstRunManager.handleNativeApiKey(key, service, nativeDeps);
-      else await firstRunManager.handleApiKeySubmit(key);
-    }
-    catch (e) { log('ERROR', 'FirstRun', 'API key submit failed', { error: String(e) }); }
-  });
-
-  ipcMain.handle(IPC.FIRST_RUN_DEV_MODE_DONE, async () => {
-    try { await firstRunManager.handleDevModeDone(); }
-    catch (e) { log('ERROR', 'FirstRun', 'Dev mode failed', { error: String(e) }); }
-  });
-
-  ipcMain.handle(IPC.FIRST_RUN_SKIP, async () => {
-    // One writer for the setup-completed flag (first-run.ts). WHY: it is the
-    // only place that knows WHERE the wizard's files live, so a dev instance
-    // pointed at a scratch folder cannot write the installed app's config.
-    markSetupCompleted();
-    // Transition the state machine so the renderer's onStateChanged fires
-    firstRunManager.skip();
+  // WHY (2026-09-30 one-core R3-3): the request handlers (state, retry, start-auth, submit-api-key,
+  // dev-mode-done, skip) are table entries (main/ipc/first-run.ts); this hands them the manager.
+  bindFirstRunManager({
+    getManager: () => firstRunManager,
+    getState: () => { try { return firstRunManager.getState(); } catch { return { currentStep: 'COMPLETE' }; } },
+    chatgptAuth,
   });
 
   // Start the first-run flow (async, doesn't block)
@@ -1146,8 +1082,8 @@ function createWindow(firstRunManager?: FirstRunManager): OutboxBroadcast {
   const hasUsableProvider = ipcWiring.hasUsableProvider;
 
   if (firstRunManager) {
-    registerFirstRunIpc(mainWindow, firstRunManager, chatgptAuth, ipcWiring.firstRunDeps, ipcWiring.openRouterSignIn);
-    registerFirstRunLocalIpc(() => firstRunManager, ipcWiring.firstRunDeps);
+    registerFirstRunIpc(mainWindow, firstRunManager, chatgptAuth);
+    wireSetupDownloadHandoff(() => firstRunManager, ipcWiring.firstRunDeps);
   } else {
     // Not a first-run — but verify Claude Code can actually run.
     // If auth is missing, re-trigger first-run at the auth step so the user
@@ -1158,7 +1094,9 @@ function createWindow(firstRunManager?: FirstRunManager): OutboxBroadcast {
     // user installed toolkit manually but never logged in, corrupted state, etc.
     let lateFirstRunManager: FirstRunManager | null = null;
     let lateAuthCheck: Promise<any> | null = null;
-    ipcMain.handle(IPC.FIRST_RUN_STATE, () => {
+    // WHY (2026-09-30 one-core R3-3): first-run:state is a table entry (main/ipc/first-run.ts); this is the
+    // answer it gives when no wizard was needed at launch, and the manager it hands the other channels.
+    const lateFirstRunState = () => {
       // If we already spun up a late first-run manager, delegate to it
       if (lateFirstRunManager) {
         try { return lateFirstRunManager.getState(); }
@@ -1200,40 +1138,14 @@ function createWindow(firstRunManager?: FirstRunManager): OutboxBroadcast {
             markSetupCompleted();
             lateFirstRunManager = new FirstRunManager();
             lateFirstRunManager.forceStep('AUTHENTICATE');
-            registerFirstRunLocalIpc(() => lateFirstRunManager, ipcWiring.firstRunDeps);
+            wireSetupDownloadHandoff(() => lateFirstRunManager, ipcWiring.firstRunDeps);
 
-            // Wire up events (but skip FIRST_RUN_STATE — we're already handling it)
+            // Wire up events (but skip FIRST_RUN_STATE — the table's first-run:state answers from here)
             lateFirstRunManager.on('state-changed', (state) => {
               try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC.FIRST_RUN_STATE, state); } catch {}
             });
             lateFirstRunManager.on('launch-wizard', () => {
               log('INFO', 'FirstRun', 'Late first-run complete, transitioning to normal app');
-            });
-
-            // Register the other handlers
-            ipcMain.handle(IPC.FIRST_RUN_RETRY, async () => { try { await lateFirstRunManager!.retry(); } catch {} });
-            // Same three arms as registerFirstRunIpc above (ChatGPT / OpenRouter
-            // per backend design 2026-09-05 §5); swallowed throws are the last
-            // resort only — handleChatGptLogin writes its own lastError.
-            ipcMain.handle(IPC.FIRST_RUN_START_AUTH, async (_event, { mode }: { mode: FirstRunState['authMode'] }) => {
-              try {
-                if (mode === 'oauth') await lateFirstRunManager!.handleOAuthLogin();
-                // Gated on the switch as well as on the renderer's hidden button:
-                // an ungated arm would still open a browser tab and bind port
-                // 1455 with the feature turned off (review T4 F3).
-                else if (mode === 'chatgpt' && chatgptEnabled) await lateFirstRunManager!.handleChatGptLogin(chatgptAuth!);
-                else if (mode === 'openrouter') await lateFirstRunManager!.handleOpenRouterLogin(ipcWiring.openRouterSignIn);
-              } catch {} });
-            ipcMain.handle(IPC.FIRST_RUN_SUBMIT_API_KEY, async (_event, { key, service }: { key: string; service?: NativeKeyService }) => {
-              try {
-                if (service) await lateFirstRunManager!.handleNativeApiKey(key, service, ipcWiring.firstRunDeps);
-                else await lateFirstRunManager!.handleApiKeySubmit(key);
-              } catch {}
-            });
-            ipcMain.handle(IPC.FIRST_RUN_DEV_MODE_DONE, async () => { try { await lateFirstRunManager!.handleDevModeDone(); } catch {} });
-            ipcMain.handle(IPC.FIRST_RUN_SKIP, async () => {
-              markSetupCompleted(); // same one writer as above
-              lateFirstRunManager?.skip();
             });
 
             return lateFirstRunManager.getState();
@@ -1243,7 +1155,11 @@ function createWindow(firstRunManager?: FirstRunManager): OutboxBroadcast {
         })();
       }
       return lateAuthCheck;
-    });
+    };
+    // The other first-run channels find the late manager through getManager, and the ChatGPT arm stays
+    // gated on the kill switch (an ungated arm would open a browser tab and bind port 1455 with the
+    // feature turned off — review T4 F3).
+    bindFirstRunManager({ getManager: () => lateFirstRunManager, getState: lateFirstRunState, chatgptAuth: chatgptEnabled ? chatgptAuth : null });
   }
 
   // Adversarial review 2026-09-27, finding #2: `shouldAutoApproveDocComment`

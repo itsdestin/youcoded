@@ -55,6 +55,12 @@ import { RemoteServer } from '../src/main/remote-server';
 import { CHANNEL_TABLE } from '../src/main/ipc/channel-table';
 import { foldersChannels } from '../src/main/ipc/folders';
 import { IPC } from '../src/shared/backend-contract';
+import { bindFirstRunManager } from '../src/main/ipc/first-run';
+
+// R3-3: the skills family runs through these (bound by registerIpcHandlers).
+const broadcastReloadPlugins = vi.fn();
+const install = vi.fn(async () => ({ status: 'installed', type: 'plugin' }));
+const uninstall = vi.fn(async () => ({ type: 'plugin' }));
 
 let server: RemoteServer;
 let handlers: Map<string, (...args: any[]) => any>;
@@ -78,6 +84,7 @@ const overIpc = (channel: string, payload?: any) => handlers.get(channel)!({ sen
 beforeAll(() => {
   const sessionManager: any = Object.assign(new EventEmitter(), {
     createSession: vi.fn(), destroySession: vi.fn(), listSessions: vi.fn(() => []), sendInput: vi.fn(), resizeSession: vi.fn(),
+    broadcastReloadPlugins,
   });
   const hookRelay: any = Object.assign(new EventEmitter(), { respond: vi.fn(() => true) });
   const config: any = { enabled: false, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
@@ -86,7 +93,7 @@ beforeAll(() => {
   });
   const mockIpcMain: any = { handle: vi.fn(), on: vi.fn() };
   const mockWindow: any = { webContents: { send: vi.fn() }, isDestroyed: () => false };
-  const mockSkillProvider: any = { configStore: { getPackages: vi.fn(() => ({})) }, install: vi.fn(), installMany: vi.fn(), ensureBundledPluginsInstalled: vi.fn(), ensureMigrated: vi.fn() };
+  const mockSkillProvider: any = { configStore: { getPackages: vi.fn(() => ({})) }, install, uninstall, getInstalled: vi.fn(async () => [{ id: 'a-skill' }]), installMany: vi.fn(), ensureBundledPluginsInstalled: vi.fn(), ensureMigrated: vi.fn() };
   const wiring = registerWithRuntime(registerIpcHandlers, mockIpcMain, sessionManager, mockWindow, mockSkillProvider, undefined as any, hookRelay, config, server);
   cleanup = wiring.cleanup;
   handlers = new Map(mockIpcMain.handle.mock.calls.map((c: any) => [c[0], c[1]]));
@@ -282,5 +289,98 @@ describe('dev, update and account: every channel is in the table, and phones are
     const def = CHANNEL_TABLE.find((d) => d.name === 'dev:open-session-in')!;
     expect(def.desktopOnly).toBe(true);
     expect(() => def.handler({ cwd: '/x' }, { door: 'remote', runtime: null, broadcast: () => {} })).toThrow('session manager');
+  });
+});
+
+// WHY (2026-09-30 one-core R3-3): skills, marketplace, theme-marketplace and first-run moved in.
+describe('skills, marketplace, theme-marketplace and first-run: every channel is in the table', () => {
+  const PUSHES = new Set<string>();
+  const FAMILY = /^(skills|marketplace|theme-marketplace|first-run):/;
+  it('every name in the contract has a table entry', () => {
+    const inTable = new Set(CHANNEL_TABLE.map((d) => d.name));
+    const names = Object.values(IPC).filter((v) => FAMILY.test(v) && !PUSHES.has(v));
+    expect(names.length).toBe(55); // 23 skills + 13 marketplace + 9 theme-marketplace + 10 first-run; a new one must be decided here
+    expect(names.filter((n) => !inTable.has(n))).toEqual([]);
+  });
+  it('exactly these are open to a phone (what a phone could do before); everything else is refused', () => {
+    const open = CHANNEL_TABLE.filter((d) => FAMILY.test(d.name) && !d.desktopOnly && d.remoteAllowed !== false).map((d) => d.name).sort();
+    expect(open).toEqual([
+      'skills:apply-output-style', 'skills:create-prompt', 'skills:delete-prompt', 'skills:get-chips', 'skills:get-curated-defaults',
+      'skills:get-detail', 'skills:get-favorites', 'skills:get-integration-info', 'skills:get-override', 'skills:get-share-link',
+      'skills:import-from-link', 'skills:install', 'skills:install-many', 'skills:list', 'skills:list-marketplace', 'skills:publish',
+      'skills:search', 'skills:set-chips', 'skills:set-favorite', 'skills:set-override', 'skills:uninstall',
+    ]);
+  });
+  it('a phone asking for anything else here gets the standard refusal, and the handler never runs', async () => {
+    for (const type of ['skills:update', 'skills:get-featured', 'marketplace:install', 'marketplace:rate', 'marketplace:get-config', 'theme-marketplace:install', 'theme-marketplace:publish', 'first-run:skip', 'first-run:state', 'first-run:local-download']) {
+      expect((await overRemote(type, {})).answer, type).toEqual({ ok: false, error: `This feature isn't available over remote access yet (${type}).`, unsupported: true });
+    }
+  });
+  it('the first-run local-download handlers take no argument (the sessionId they used to be sent was never read)', () => {
+    for (const name of ['first-run:local-download', 'first-run:resume-local-download']) {
+      expect(CHANNEL_TABLE.find((d) => d.name === name)!.handler.length, name).toBe(0);
+    }
+  });
+});
+
+describe('skills: install and uninstall keep working from a phone, and a bundled plugin cannot be removed from it', () => {
+  beforeEach(() => { broadcastReloadPlugins.mockClear(); install.mockClear(); uninstall.mockClear(); });
+  it('a phone installing a plugin gets the real result and running chats reload their plugins', async () => {
+    expect((await overRemote('skills:install', { id: 'some-plugin' })).answer).toEqual({ status: 'installed', type: 'plugin' });
+    expect(install).toHaveBeenCalledWith('some-plugin');
+    expect(broadcastReloadPlugins).toHaveBeenCalledTimes(1);
+  });
+  it('a phone uninstalling an ordinary plugin gets the real result, like the computer', async () => {
+    const phone = (await overRemote('skills:uninstall', { id: 'some-plugin' })).answer;
+    expect(phone).toEqual({ type: 'plugin' });
+    expect(await overIpc('skills:uninstall', { id: 'some-plugin' })).toEqual(phone);
+    expect(broadcastReloadPlugins).toHaveBeenCalledTimes(2);
+  });
+  it('a phone uninstalling a bundled plugin is refused exactly as the computer refuses it, and nothing is removed', async () => {
+    const refusal = { ok: false, error: 'bundled', type: 'plugin' };
+    expect((await overRemote('skills:uninstall', { id: 'youcoded-chatsearch' })).answer).toEqual(refusal);
+    expect(await overIpc('skills:uninstall', { id: 'youcoded-chatsearch' })).toEqual(refusal);
+    expect(uninstall).not.toHaveBeenCalled();
+    expect(broadcastReloadPlugins).not.toHaveBeenCalled();
+  });
+  it('a failing skills call reaches the phone as a failure marker, not as a value', async () => {
+    const def = CHANNEL_TABLE.find((d) => d.name === 'skills:list')!;
+    const original = def.handler;
+    def.handler = () => { throw new Error('disk trouble'); };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect((await overRemote('skills:list')).answer).toMatchObject({ ok: false, error: 'disk trouble', tableHandlerFailed: true });
+    } finally { def.handler = original; warn.mockRestore(); }
+  });
+});
+
+describe('first-run: the wizard channels reach whichever manager main.ts bound', () => {
+  const ctx: any = { door: 'desktop', runtime: null, broadcast: () => {} };
+  const run = (name: string, payload?: unknown) => CHANNEL_TABLE.find((d) => d.name === name)!.handler(payload, ctx);
+  const manager = () => ({ retry: vi.fn(async () => {}), handleOAuthLogin: vi.fn(async () => {}), handleChatGptLogin: vi.fn(async () => {}), handleApiKeySubmit: vi.fn(async () => {}), handleDevModeDone: vi.fn(async () => {}), getState: vi.fn(() => ({ currentStep: 'AUTHENTICATE' })) });
+  it('with no manager bound, state says COMPLETE and connect-local-app says setup is not running', async () => {
+    bindFirstRunManager({ getManager: () => null, getState: () => ({ currentStep: 'COMPLETE' }), chatgptAuth: null });
+    expect(await run('first-run:state')).toEqual({ currentStep: 'COMPLETE' });
+    expect(await run('first-run:connect-local-app', { baseUrl: 'http://x', name: 'x' })).toEqual({ ok: false, message: 'Setup is not running.' });
+    await expect(run('first-run:retry')).resolves.toBeUndefined();
+  });
+  it('the ChatGPT arm runs only when an account was bound (the kill switch binds none)', async () => {
+    const m = manager();
+    bindFirstRunManager({ getManager: () => m as any, getState: () => m.getState(), chatgptAuth: null });
+    await run('first-run:start-auth', { mode: 'chatgpt' });
+    expect(m.handleChatGptLogin).not.toHaveBeenCalled();
+    await run('first-run:start-auth', { mode: 'oauth' });
+    expect(m.handleOAuthLogin).toHaveBeenCalledTimes(1);
+    const account: any = {};
+    bindFirstRunManager({ getManager: () => m as any, getState: () => m.getState(), chatgptAuth: account });
+    await run('first-run:start-auth', { mode: 'chatgpt' });
+    expect(m.handleChatGptLogin).toHaveBeenCalledWith(account);
+    expect(await run('first-run:state')).toEqual({ currentStep: 'AUTHENTICATE' });
+  });
+  it('a failing step is logged and swallowed, never thrown into the window', async () => {
+    const m = manager();
+    m.handleDevModeDone.mockRejectedValue(new Error('nope'));
+    bindFirstRunManager({ getManager: () => m as any, getState: () => m.getState(), chatgptAuth: null });
+    await expect(run('first-run:dev-mode-done')).resolves.toBeUndefined();
   });
 });

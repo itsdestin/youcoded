@@ -30,8 +30,10 @@ import type { ChatGptAuth } from './providers/chatgpt-auth';
 import type { CuratedModel, DownloadProgress } from '../shared/model-manager-types';
 import { writeSetupDownload } from './first-run-local';
 
-/** The key services "Use an API key" accepts (first-run local models, F-1). */
-export type NativeKeyService = 'anthropic' | 'openai' | 'google' | 'openrouter';
+// WHY (2026-09-30 one-core R3-3): NativeKeyService moved to shared/first-run-types.ts (the
+// first-run:submit-api-key channel row names it); re-exported so existing imports keep working.
+import type { NativeKeyService } from '../shared/first-run-types';
+export type { NativeKeyService };
 const NATIVE_KEY_LABEL: Record<Exclude<NativeKeyService, 'openrouter'>, string> = {
   anthropic: 'Anthropic',
   openai: 'OpenAI',

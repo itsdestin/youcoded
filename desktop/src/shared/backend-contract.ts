@@ -41,6 +41,8 @@ import type {
   UpdateDownloadResult, UpdateLaunchResult, UpdateCachedDownload, UpdateBetaChannelState, UpdateChangelogResult,
 } from './update-install-types';
 import type { SessionInfo } from './types';
+import type { MarketplaceChannelTypes, SkillsBridge, MarketplaceBridge, FirstRunBridge } from './marketplace-channel-types';
+export type { MarketplaceThumbs } from './marketplace-channel-types';
 import type {
   NativeSendResult, SessionContext, SessionContextText,
   SessionMetaResult, HandoffAttemptResult, HandoffCreateParams,
@@ -794,12 +796,9 @@ export interface ChannelCtx<Rt = unknown> {
 // family needs either: MESSAGE_KIND only lists fire-and-forget channels and REJECT_ON_NOT_OK
 // none of these. A later family that needs them moves the shim's list into a shared/ file then,
 // with the reader in the same commit. A field with no reader is a promise nobody keeps.
-/** WHY (2026-09-30 one-core R3-2): the flag a phone-side table reply carries when the handler
- *  THREW and the entry gave no softer answer (`remoteOnError`). The phone's page rejects any reply
- *  bearing it (remote-shim `responseOutcome`), for every channel, so a moved channel never hands
- *  its caller a failure object where the type promises a list, a record or a boolean. Lives here
- *  because the door (main/) and the page (renderer/) both read it and neither may import the other. */
-export const TABLE_ERROR_FLAG = 'tableHandlerFailed' as const;
+// TABLE_ERROR_FLAG lives in ./table-error-flag (re-exported here) so the phone's page can import
+// it without pulling this whole contract into its bundle.
+export { TABLE_ERROR_FLAG } from './table-error-flag';
 
 export interface ChannelDef<Ctx = ChannelCtx, Payload = any, Result = any> {
   /** One of the IPC names above. */
@@ -825,7 +824,7 @@ export interface ChannelDef<Ctx = ChannelCtx, Payload = any, Result = any> {
  *  so a handler, the desktop bridge and the phone shim cannot disagree about a channel's shape.
  *  `request` is the ONE object the caller sends (void = no payload). A family adds its rows here
  *  when it moves into the table. */
-export interface ChannelTypes {
+export interface ChannelTypes extends MarketplaceChannelTypes {
   'tags:list': { request: void; response: TagListResult };
   'tags:create': { request: { label: string; color: string }; response: TagMutationResult };
   'tags:update': { request: { id: string; patch: TagPatch }; response: TagMutationResult };
@@ -994,26 +993,10 @@ interface ClaudeApi {
   /** Dev-instance label (run-dev.sh --label). null in the built app and on remote. */
   devLabel?: string | null;
   session: SessionBridge;
-  skills: {
-    list: () => Promise<import('./types').SkillEntry[]>;
-    listMarketplace: (filters?: import('./types').SkillFilters) => Promise<import('./types').SkillEntry[]>;
-    getDetail: (id: string) => Promise<import('./types').SkillDetailView>;
-    search: (query: string) => Promise<import('./types').SkillEntry[]>;
-    install: (id: string) => Promise<void>;
-    uninstall: (id: string) => Promise<void>;
-    getFavorites: () => Promise<string[]>;
-    setFavorite: (id: string, favorited: boolean) => Promise<void>;
-    getChips: () => Promise<import('./types').ChipConfig[]>;
-    setChips: (chips: import('./types').ChipConfig[]) => Promise<void>;
-    getOverride: (id: string) => Promise<import('./types').MetadataOverride | null>;
-    setOverride: (id: string, override: import('./types').MetadataOverride) => Promise<void>;
-    createPrompt: (skill: any) => Promise<import('./types').SkillEntry>;
-    deletePrompt: (id: string) => Promise<void>;
-    publish: (id: string) => Promise<{ prUrl: string }>;
-    getShareLink: (id: string) => Promise<string>;
-    importFromLink: (encoded: string) => Promise<import('./types').SkillEntry>;
-    getCuratedDefaults: () => Promise<string[]>;
-  };
+  // skills, marketplace and firstRun: their member types live beside their channel rows (one-core R3-3).
+  skills: SkillsBridge;
+  marketplace: MarketplaceBridge;
+  firstRun: FirstRunBridge;
   // chatHydrate: remote-shim only (a remote browser receives chat:hydrate on connect; desktop
   // EXPORTS via onChatExportSnapshot instead), so it is optional on the renderer's view.
   on: BridgeListeners & { chatHydrate?: (cb: (payload: any) => void) => () => void };

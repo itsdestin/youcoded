@@ -32,6 +32,9 @@ import { nativeStoreSlug, ccProjectSlug } from './slug-encoding';
 import { NativeHome } from './native-home';
 import type { NativeRuntime } from './create-runtime';
 import { registerDesktopChannels } from './ipc/channel-table';
+import { bindSkillsDeps } from './ipc/skills';
+import { bindThemeMarketplace } from './ipc/theme-marketplace';
+import { bindFirstRunNative } from './ipc/first-run';
 import type { OutboxBroadcast } from './chatsearch-index/outbox-drain';
 import { ProviderRegistry } from './providers/provider-registry';
 // Sign in with ChatGPT (backend design 2026-09-05 §1): constructed by main.ts
@@ -669,6 +672,11 @@ export function registerIpcHandlers(
   // Phase 3a: pass the shared config store so theme installs also record into
   // the unified youcoded-skills.json packages map used for update tracking.
   const themeMarketplace = new ThemeMarketplaceProvider(skillProvider.configStore);
+  // WHY (2026-09-30 one-core R3-3): skills:*, marketplace:* and theme-marketplace:* are table entries
+  // (main/ipc/{skills,marketplace,theme-marketplace}.ts) served to the computer's windows AND to a
+  // phone by one body each. They reach the objects built here through these two binds.
+  bindSkillsDeps({ skillProvider, sessionManager });
+  bindThemeMarketplace(themeMarketplace);
   // Phase 4: installer is now plugin-backed. Wire in a plugin lookup so the
   // installer can resolve an integration's setup.pluginId to the marketplace
   // entry that installPlugin() needs.
@@ -685,59 +693,6 @@ export function registerIpcHandlers(
   // Drop any stale cached integrations index so the new schema fields
   // (iconUrl, platforms, plugin setup) are picked up on first read.
   integrationInstaller.invalidateCatalogCache();
-
-  ipcMain.handle(IPC.THEME_MARKETPLACE_LIST, async (_event, filters) => {
-    return themeMarketplace.listThemes(filters);
-  });
-
-  ipcMain.handle(IPC.THEME_MARKETPLACE_DETAIL, async (_event, { slug }: { slug: string }) => {
-    return themeMarketplace.getThemeDetail(slug);
-  });
-
-  ipcMain.handle(IPC.THEME_MARKETPLACE_INSTALL, async (_event, { slug }: { slug: string }) => {
-    return themeMarketplace.installTheme(slug);
-  });
-
-  ipcMain.handle(IPC.THEME_MARKETPLACE_UNINSTALL, async (_event, { slug }: { slug: string }) => {
-    return themeMarketplace.uninstallTheme(slug);
-  });
-
-  ipcMain.handle(IPC.THEME_MARKETPLACE_PUBLISH, async (_event, { slug }: { slug: string }) => {
-    return themeMarketplace.publishTheme(slug);
-  });
-
-  // Publish-lifecycle: resolve button state (draft / in-review / published-current /
-  // published-drift / unknown) for a user-authored theme on each detail open.
-  ipcMain.handle(IPC.THEME_MARKETPLACE_RESOLVE_PUBLISH_STATE, async (_event, { slug }: { slug: string }) => {
-    return themeMarketplace.resolvePublishStateForSlug(slug);
-  });
-
-  // Manual refresh: drop in-memory registry cache + return a fresh listing in one round-trip.
-  ipcMain.handle(IPC.THEME_MARKETPLACE_REFRESH_REGISTRY, async () => {
-    themeMarketplace.invalidateRegistryCache();
-    return themeMarketplace.listThemes();
-  });
-
-  ipcMain.handle(IPC.THEME_MARKETPLACE_GENERATE_PREVIEW, async (_event, { slug }: { slug: string }) => {
-    try {
-      const manifestPath = path.resolve(userThemeManifest(slug));
-      if (!manifestPath.startsWith(THEMES_DIR + path.sep)) throw new Error('Invalid theme slug');
-      const manifest = JSON.parse(await fs.promises.readFile(manifestPath, 'utf-8'));
-      const previewPath = await generateThemePreview(userThemeDir(slug), manifest);
-      // Verify the file really landed on disk — if the generator returned a
-      // path but writeFile silently failed, the share sheet would render a
-      // broken-image icon. Better to return null and fall back to the swatch.
-      const stat = await fs.promises.stat(previewPath).catch(() => null);
-      if (!stat || stat.size < 150) {
-        console.warn(`[IPC] Preview file missing/tiny after generation: slug=${slug} path=${previewPath} size=${stat?.size ?? 'missing'}`);
-        return null;
-      }
-      return previewPath;
-    } catch (err: any) {
-      console.warn(`[IPC] Failed to generate theme preview: slug=${slug} err=${err?.message ?? err}`);
-      return null;
-    }
-  });
 
   // Forward session-created to the owning window. Deferred via nextTick so
   // the SESSION_CREATE IPC handler can run assignSession first — otherwise
@@ -1398,60 +1353,9 @@ export function registerIpcHandlers(
   setPermissionOverridesSink(setPermissionOverrides);
 
   // --- Skills discovery & marketplace ---
-  ipcMain.handle(IPC.SKILLS_LIST, async () => {
-    return skillProvider.getInstalled();
-  });
-
+  // skills:* / marketplace:* / theme-marketplace:* are table entries now (see the binds above).
   ipcMain.handle(IPC.COMMANDS_LIST, async () => {
     return commandProvider.getCommands();
-  });
-
-  ipcMain.handle(IPC.SKILLS_LIST_MARKETPLACE, async (_event, filters) => {
-    return skillProvider.listMarketplace(filters);
-  });
-
-  ipcMain.handle(IPC.SKILLS_GET_DETAIL, async (_event, { id }: { id: string }) => {
-    return skillProvider.getSkillDetail(id);
-  });
-
-  ipcMain.handle(IPC.SKILLS_SEARCH, async (_event, { query }: { query: string }) => {
-    return skillProvider.search(query);
-  });
-
-  ipcMain.handle(IPC.SKILLS_INSTALL, async (_event, { id }: { id: string }) => {
-    const result = await skillProvider.install(id);
-    // Reload plugins so Claude Code discovers the new plugin. Uses a
-    // short delay because firing immediately races the prompt-ready state
-    // (the reload gets queued but silently no-ops). Matches Android
-    // behavior (SessionService.kt:458).
-    if (result.status === 'installed' && result.type === 'plugin') {
-      sessionManager.broadcastReloadPlugins();
-    }
-    return result;
-  });
-
-  ipcMain.handle(IPC.SKILLS_UNINSTALL, async (_event, { id }: { id: string }) => {
-    // Defense-in-depth: UI disables the uninstall button for bundled
-    // plugins; reject here too so a stale client or direct IPC call can't
-    // bypass it.
-    if (isBundledPlugin(id)) {
-      return { ok: false, error: 'bundled', type: 'plugin' };
-    }
-    const result = await skillProvider.uninstall(id);
-    // Reload plugins so Claude Code drops the uninstalled plugin — matches
-    // Android behavior (SessionService.kt:490)
-    if (result.type === 'plugin') {
-      sessionManager.broadcastReloadPlugins();
-    }
-    return result;
-  });
-
-  ipcMain.handle(IPC.SKILLS_GET_FAVORITES, async () => {
-    return skillProvider.getFavorites();
-  });
-
-  ipcMain.handle(IPC.SKILLS_SET_FAVORITE, async (_event, { id, favorited }: { id: string; favorited: boolean }) => {
-    return skillProvider.setFavorite(id, favorited);
   });
 
   // Theme favorites — parallel to skills:set-favorite. Drives the Appearance
@@ -1471,50 +1375,6 @@ export function registerIpcHandlers(
       }
     } catch { /* best-effort broadcast */ }
     return skillProvider.configStore.getThemeFavorites();
-  });
-
-  ipcMain.handle(IPC.SKILLS_GET_CHIPS, async () => {
-    return skillProvider.getChips();
-  });
-
-  ipcMain.handle(IPC.SKILLS_SET_CHIPS, async (_event, { chips }) => {
-    return skillProvider.setChips(chips);
-  });
-
-  ipcMain.handle(IPC.SKILLS_GET_OVERRIDE, async (_event, { id }: { id: string }) => {
-    return skillProvider.getOverrides().then(o => o[id] || null);
-  });
-
-  ipcMain.handle(IPC.SKILLS_SET_OVERRIDE, async (_event, { id, override }: { id: string; override: any }) => {
-    return skillProvider.setOverride(id, override);
-  });
-
-  ipcMain.handle(IPC.SKILLS_CREATE_PROMPT, async (_event, skill) => {
-    return skillProvider.createPromptSkill(skill);
-  });
-
-  ipcMain.handle(IPC.SKILLS_DELETE_PROMPT, async (_event, { id }: { id: string }) => {
-    return skillProvider.deletePromptSkill(id);
-  });
-
-  ipcMain.handle(IPC.SKILLS_PUBLISH, async (_event, { id }: { id: string }) => {
-    return skillProvider.publish(id);
-  });
-
-  ipcMain.handle(IPC.SKILLS_GET_SHARE_LINK, async (_event, { id }: { id: string }) => {
-    return skillProvider.generateShareLink(id);
-  });
-
-  ipcMain.handle(IPC.SKILLS_IMPORT_FROM_LINK, async (_event, { encoded }: { encoded: string }) => {
-    return skillProvider.importFromLink(encoded);
-  });
-
-  ipcMain.handle(IPC.SKILLS_GET_CURATED_DEFAULTS, async () => {
-    return skillProvider.getCuratedDefaults();
-  });
-
-  ipcMain.handle(IPC.SKILLS_GET_FEATURED, async () => {
-    return skillProvider.getFeatured();
   });
 
   // Marketplace redesign Phase 3 — integrations IPC. list/status are real;
@@ -1544,76 +1404,6 @@ export function registerIpcHandlers(
   // raw Node code — the renderer uses platform-display.ts to humanize.
   ipcMain.handle(IPC.PLATFORM_GET, () => {
     return process.platform;
-  });
-
-  // Phase 4 — user-initiated cache bust. Next fetchIndex/getFeatured refetches.
-  ipcMain.handle(IPC.MARKETPLACE_INVALIDATE_CACHE, async () => {
-    await skillProvider.invalidateCache();
-  });
-
-  // Decomposition v3 §9.9: surface integration info for the detail view badges
-  ipcMain.handle(IPC.SKILLS_GET_INTEGRATION_INFO, async (_event, { id }: { id: string }) => {
-    return skillProvider.getIntegrationInfo(id);
-  });
-
-  // Decomposition v3 §9.10: onboarding bulk-install curated packages
-  ipcMain.handle(IPC.SKILLS_INSTALL_MANY, async (_event, { ids }: { ids: string[] }) => {
-    return skillProvider.installMany(ids);
-  });
-
-  // Decomposition v3 §9.10: onboarding picks an output style
-  ipcMain.handle(IPC.SKILLS_APPLY_OUTPUT_STYLE, async (_event, { styleId }: { styleId: string }) => {
-    skillProvider.applyOutputStyle(styleId);
-    return { ok: true };
-  });
-
-  // Phase 3a: unified marketplace packages map — lets the renderer know which
-  // versions are currently installed (for update detection) and the on-disk
-  // component paths (for uninstall cascade).
-  ipcMain.handle(IPC.MARKETPLACE_GET_PACKAGES, async () => {
-    return skillProvider.configStore.getPackages();
-  });
-
-  // Phase 3b: update an installed plugin/prompt to the latest marketplace
-  // version. Re-downloads files, overwrites at the same path, and bumps the
-  // version in youcoded-skills.json. Config is NOT touched.
-  ipcMain.handle(IPC.SKILLS_UPDATE, async (_event, { id }: { id: string }) => {
-    const result = await skillProvider.update(id);
-    // Reload plugins in active sessions so Claude Code picks up updated code
-    if (result.ok) {
-      sessionManager.broadcastReloadPlugins();
-    }
-    return result;
-  });
-
-  // Phase 3b: update an installed theme to the latest registry version.
-  // Re-downloads theme files at the same slug path and bumps the version.
-  ipcMain.handle(IPC.THEME_MARKETPLACE_UPDATE, async (_event, { slug }: { slug: string }) => {
-    return themeMarketplace.updateTheme(slug);
-  });
-
-  // Phase 3c: per-entry config — reads/writes ~/.claude/youcoded-config/<id>.json.
-  // Only entries that declare configSchema in their marketplace JSON use this.
-  ipcMain.handle(IPC.MARKETPLACE_GET_CONFIG, async (_event, { id }: { id: string }) => {
-    return getMarketplaceConfig(id);
-  });
-
-  ipcMain.handle(IPC.MARKETPLACE_SET_CONFIG, async (_event, { id, values }: { id: string; values: Record<string, unknown> }) => {
-    setMarketplaceConfig(id, values);
-    return { ok: true };
-  });
-
-  // In-app file viewer — reads a SKILL.md / command / agent file for a plugin.
-  // Tries the local install dir first, then falls back to a raw GitHub URL
-  // derived from the marketplace entry's sourceType/sourceRef.
-  ipcMain.handle(IPC.MARKETPLACE_READ_COMPONENT, async (
-    _event, args: { pluginId: string; kind: ComponentKind; name: string },
-  ) => {
-    try {
-      return await readComponent(args, () => skillProvider.listMarketplace());
-    } catch (err) {
-      return { error: (err as Error).message };
-    }
   });
 
   // --- Remote access settings ---
@@ -2955,49 +2745,6 @@ export function registerIpcHandlers(
     if (p.state === 'done') void engineManager.refreshModels().catch(() => { /* pick-time retry covers it */ });
   });
 
-  // First-run local models (2026-09-14): the band above the message box for the
-  // download setup finished on. Registered on EVERY launch — it is read after
-  // setup, when main.ts wires no first-run handlers — and it answers null unless
-  // that first download is still unfinished AND nothing else can answer yet
-  // (round 3 review B-5/B-6). The decision itself is computeSetupDownloadStatus.
-  const setupLive = new Map<string, { latest: DownloadProgress; first: { at: number; bytes: number } }>();
-  modelManager.on('download-progress', (p: DownloadProgress) => {
-    const key = `${p.repo}::${p.quant}`;
-    const prev = setupLive.get(key);
-    // The rate is measured from the first event of THIS attempt, so a resume
-    // does not inherit the previous attempt's clock.
-    const first = prev && prev.latest.downloadId === p.downloadId ? prev.first : { at: Date.now(), bytes: p.receivedBytes };
-    setupLive.set(key, { latest: p, first });
-  });
-  ipcMain.handle(IPC.FIRST_RUN_LOCAL_DOWNLOAD, async () => {
-    try {
-      const dir = firstRunStateDir();
-      const record = readSetupDownload(dir);
-      if (!record) return null;
-      const [providers, claude, installed] = await Promise.all([
-        providerRegistry.list().catch(() => []),
-        claudeAccount.status().catch(() => ({ state: 'unknown' as const })),
-        engineManager.installedModels().catch(() => []),
-      ]);
-      const otherUsable = providers.some((p) => p.ready && p.id !== 'local') || claude.state === 'signed-in';
-      const status = computeSetupDownloadStatus({
-        record, otherUsable, installed, now: Date.now(),
-        live: setupLive.get(`${record.repo}::${record.quant}`) ?? null,
-      });
-      // Finished, or no longer the only way to answer: the band never returns for it.
-      if (otherUsable || status?.state === 'done') clearSetupDownload(dir);
-      return status?.state === 'done' ? null : status;
-    } catch {
-      return null; // a band that cannot be read is a band not shown
-    }
-  });
-  ipcMain.handle(IPC.FIRST_RUN_RESUME_LOCAL_DOWNLOAD, async () => {
-    const record = readSetupDownload(firstRunStateDir());
-    if (!record) return;
-    const row = (await engineManager.installedModels())
-      .find((m) => m.repo === record.repo && m.quant === record.quant && m.status === 'unfinished');
-    if (row) await modelManager.resume(row.id);
-  });
   ipcMain.handle(IPC.ENGINE_SET_BACKEND, async (_e, { backend }: { backend: string }) => { await engineManager.setBackend(backend as any); return engineManager.status(); });
   ipcMain.handle(IPC.ENGINE_SET_CONTEXT, async (_e, { contextSize }: { contextSize: number }) => { await engineManager.setContext(contextSize); return engineManager.status(); });
   // Engine-wide settings (2026-09-05 §B). The answer is the status the moment
@@ -4660,6 +4407,9 @@ export function registerIpcHandlers(
     engine: { installed: () => engineManager.registryHook().installed(), install: () => engineManager.install() },
     models: modelManager,
   };
+  // WHY (2026-09-30 one-core R3-3): the first-run:* channels are table entries (main/ipc/first-run.ts);
+  // the wizard's manager arrives later from main.ts (bindFirstRunManager), the rest is built here.
+  bindFirstRunNative({ nativeDeps: firstRunDeps, openRouterSignIn, providerRegistry, claudeAccount, engineManager, modelManager });
   // WHY (2026-09-29 one-core R2, filled by R3): the channel table's desktop half. Every family moved
   // into the table registers here, and its hand-written ipcMain.handle blocks are gone from this file.
   // Kept last so a table entry can never shadow a hand-written one (Electron refuses a second

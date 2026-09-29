@@ -10,7 +10,6 @@
 // real installed set right after the install closes that window.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ipcMain } from 'electron';
 
 const reconcileInstalls = vi.fn();
 vi.mock('../src/main/install-reconcile', () => ({ reconcileInstalls: (...a: unknown[]) => reconcileInstalls(...a) }));
@@ -28,15 +27,16 @@ vi.mock('../src/renderer/state/marketplace-api-client', () => ({
 vi.mock('../src/main/social-handlers', () => ({ notifySignedOut: vi.fn() }));
 
 import { registerMarketplaceApiHandlers } from '../src/main/marketplace-api-handlers';
+import { marketplaceChannels } from '../src/main/ipc/marketplace';
 
-const handlers = new Map<string, (...a: any[]) => any>();
+// WHY (2026-09-30 one-core R3-3): marketplace:install is a channel-table entry now (main/ipc/marketplace.ts);
+// registerMarketplaceApiHandlers only builds the client and binds it, so the test binds, then runs the entry.
+const call = (name: string, payload: unknown) =>
+  marketplaceChannels.find((d) => d.name === name)!.handler(payload, { door: 'desktop', runtime: null, broadcast: vi.fn() });
 
 beforeEach(() => {
-  handlers.clear();
   reconcileInstalls.mockReset();
   postInstall.mockReset().mockResolvedValue(undefined);
-  (ipcMain.handle as any).mockReset?.();
-  (ipcMain.handle as any).mockImplementation((ch: string, fn: (...a: any[]) => any) => handlers.set(ch, fn));
 });
 
 const store = { getToken: () => 'tok', setToken: vi.fn(), setSession: vi.fn(), getUser: () => null } as never;
@@ -45,7 +45,7 @@ const skills = { getInstalled: async () => [{ id: 'superpowers' }, { id: 'superp
 describe('marketplace:install', () => {
   it('reports the full installed set after recording the clicked id', async () => {
     registerMarketplaceApiHandlers(store, skills);
-    const res = await handlers.get('marketplace:install')!({}, { pluginId: 'superpowers/brainstorming' });
+    const res = await call('marketplace:install', { pluginId: 'superpowers/brainstorming' });
     expect(res).toEqual({ ok: true, value: undefined });
     expect(postInstall).toHaveBeenCalledWith('superpowers/brainstorming');
     expect(reconcileInstalls).toHaveBeenCalledWith(store, skills);
@@ -54,7 +54,7 @@ describe('marketplace:install', () => {
   it('does not reconcile when the install report itself failed', async () => {
     postInstall.mockRejectedValue(new Error('offline'));
     registerMarketplaceApiHandlers(store, skills);
-    const res = await handlers.get('marketplace:install')!({}, 'x');
+    const res = await call('marketplace:install', 'x');
     expect(res).toMatchObject({ ok: false });
     expect(reconcileInstalls).not.toHaveBeenCalled();
   });

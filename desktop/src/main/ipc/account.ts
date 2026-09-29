@@ -39,6 +39,10 @@ export function bindAccountDeps(next: { store: MarketplaceAuthStore; client: Cli
   deps = { ...next, clearSessionOn401: makeClearSessionOn401(next.store, 'marketplace') };
 }
 
+/** The signed-in API client, token store and skill source, for the marketplace write channels
+ *  (main/ipc/marketplace.ts) that call the same Worker with the same token. */
+export function getAccountDeps(): Pick<AccountDeps, 'store' | 'client' | 'installedSkillSource'> { return need(); }
+
 function need(): AccountDeps {
   if (!deps) throw new Error('The account is not ready yet.');
   return deps;

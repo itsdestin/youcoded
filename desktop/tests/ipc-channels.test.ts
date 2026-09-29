@@ -1789,9 +1789,12 @@ describe('marketplace feedback channel parity', () => {
     const src = read('src', 'renderer', 'remote-shim.ts');
     for (const t of NEW_TYPES) expect(src, `${t} missing from remote-shim.ts`).toContain(`'${t}'`);
   });
-  it('registered in marketplace-api-handlers.ts', () => {
-    const src = read('src', 'main', 'marketplace-api-handlers.ts');
-    for (const t of NEW_TYPES) expect(src, `${t} missing from marketplace-api-handlers.ts`).toContain(`"${t}"`);
+  // WHY retargeted (2026-09-30 one-core R3-3): these eight handlers are channel-table entries now
+  // (main/ipc/marketplace.ts); marketplace-api-handlers.ts only builds the client they use.
+  it('a channel-table entry in main/ipc/marketplace.ts', () => {
+    const src = read('src', 'main', 'ipc', 'marketplace.ts');
+    const consts: Record<string, string> = { 'marketplace:thumb': 'IPC.MARKETPLACE_THUMB,', 'marketplace:thumb:get': 'IPC.MARKETPLACE_THUMB_GET,', 'marketplace:comment': 'IPC.MARKETPLACE_COMMENT,' };
+    for (const t of NEW_TYPES) expect(src, `${t} has no channel-table entry`).toContain(`name: ${consts[t]}`);
   });
   it('handled by SessionService.kt (Android)', () => {
     const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
@@ -1804,13 +1807,16 @@ describe('marketplace feedback channel parity', () => {
     // to fix: a lit thumb beside "No votes yet" on reopen, because the count
     // falls back to the /stats snapshot taken at app start. Caught in a dev
     // build after a silent no-op edit, never by the suite — hence this guard.
-    const src = read('src', 'main', 'marketplace-api-handlers.ts');
-    for (const ch of ['marketplace:thumb', 'marketplace:thumb:get']) {
-      const start = src.indexOf(`ipcMain.handle("${ch}"`);
+    const src = read('src', 'main', 'ipc', 'marketplace.ts');
+    // The one helper both handlers answer through must carry both totals...
+    const helper = src.slice(src.indexOf('const thumbs ='), src.indexOf('export const marketplaceChannels'));
+    expect(helper, 'the thumbs helper must forward thumbs_up').toContain('thumbs_up');
+    expect(helper, 'the thumbs helper must forward thumbs_down').toContain('thumbs_down');
+    // ...and each handler must answer THROUGH it.
+    for (const ch of ['IPC.MARKETPLACE_THUMB,', 'IPC.MARKETPLACE_THUMB_GET,']) {
+      const start = src.indexOf(`name: ${ch}`);
       expect(start, `${ch} handler not found`).toBeGreaterThan(-1);
-      const body = src.slice(start, start + 900);
-      expect(body, `${ch} must forward thumbs_up`).toContain('thumbs_up');
-      expect(body, `${ch} must forward thumbs_down`).toContain('thumbs_down');
+      expect(src.slice(start, start + 400), `${ch} must answer through thumbs()`).toContain('thumbs(');
     }
   });
 
@@ -2383,16 +2389,21 @@ describe('first-run local channels', () => {
   });
 
   it('the band channels are registered for every launch, not only during setup', () => {
-    // The band above the message box is read AFTER setup finished, when main.ts
-    // registers no first-run handlers at all — so these two live in ipc-handlers.
-    const handlers = read('src', 'main', 'ipc-handlers.ts');
-    expect(handlers).toContain('ipcMain.handle(IPC.FIRST_RUN_LOCAL_DOWNLOAD');
-    expect(handlers).toContain('ipcMain.handle(IPC.FIRST_RUN_RESUME_LOCAL_DOWNLOAD');
+    // The band above the message box is read AFTER setup finished, when main.ts wires no wizard at
+    // all. WHY (2026-09-30 one-core R3-3): both are table entries now, and registerIpcHandlers (which
+    // runs on every launch) binds what they read.
+    const entries = read('src', 'main', 'ipc', 'first-run.ts');
+    expect(entries, 'no table entry').toContain('name: IPC.FIRST_RUN_LOCAL_DOWNLOAD,');
+    expect(entries, 'no table entry').toContain('name: IPC.FIRST_RUN_RESUME_LOCAL_DOWNLOAD,');
+    expect(read('src', 'main', 'ipc-handlers.ts')).toContain('bindFirstRunNative(');
   });
 
   it('both first-run registrations wire the setup channels', () => {
     const main = read('src', 'main', 'main.ts');
-    expect(main.match(/registerFirstRunLocalIpc\(/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
+    // WHY (2026-09-30 one-core R3-3): the channels are table entries (main/ipc/first-run.ts); each path
+    // hands them its manager (bindFirstRunManager) and wires the download hand-off. Two paths, two of each.
+    expect(main.match(/bindFirstRunManager\(\{/g)?.length ?? 0).toBe(2);
+    expect(main.match(/wireSetupDownloadHandoff\(\(\) =>/g)?.length ?? 0).toBe(2);
   });
 });
 
@@ -2421,8 +2432,12 @@ describe('Sign in with ChatGPT - the wiring that has no other guard', () => {
       .toMatch(/const chatgptEnabled = process\.env\.YOUCODED_CHATGPT !== '0'/);
     // 3. The first-run arm, which would otherwise still open a browser tab and
     //    bind port 1455 with the feature turned off.
-    expect(main, "the wizard's ChatGPT arm ignores the kill switch")
-      .toMatch(/mode === 'chatgpt' && chatgptEnabled/);
+    //    WHY retargeted (2026-09-30 one-core R3-3): the arm is a table entry now; the late sign-in path
+    //    hands it a null ChatGPT account when the switch is off, and the arm only runs for a non-null one.
+    expect(main, "the late sign-in path hands the wizard's ChatGPT arm an account despite the kill switch")
+      .toMatch(/chatgptAuth: chatgptEnabled \? chatgptAuth : null/);
+    expect(read('src', 'main', 'ipc', 'first-run.ts'), "the wizard's ChatGPT arm ignores a null (switched-off) account")
+      .toMatch(/mode === 'chatgpt' && wizard\?\.chatgptAuth/);
   });
 
   it('re-showing the setup wizard marks setup complete first, so it cannot strand an established install', () => {
