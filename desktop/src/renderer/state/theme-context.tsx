@@ -226,7 +226,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   // treatment of StatusBar's derived-metric widgets (commit da18ee7).
   const [showTurnMetadata, setShowTurnMetadataState] = useState(() => getStored(SHOW_TURN_METADATA_KEY, '') === '1');
   // Artifact viewer "Hide code & configs" toggle. Default ON for non-technical
-  // users — they only see Documents & Mockups in the drawer / Project View.
+  // users — they only see Documents & mockups in the drawer / Project View.
   // Artifact viewer "Show deleted" toggle. Default OFF — hide both explicit
   // delete versions AND artifacts whose underlying file has gone missing.
   const [showDeletedArtifacts, setShowDeletedArtifactsState] = useState(() => getStored(SHOW_DELETED_ARTIFACTS_KEY, '') === '1');

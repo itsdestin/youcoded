@@ -615,7 +615,7 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
                   }}
                   className={`px-3 py-1.5 text-xs rounded-lg bg-amber-700 text-black font-medium hover:bg-amber-700/90 transition-colors ${FOCUS_RING}`}
                 >
-                  Enable & Accept Charges
+                  Enable & accept charges
                 </button>
               </div>
             </div>

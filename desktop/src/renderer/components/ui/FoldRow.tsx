@@ -7,7 +7,7 @@ import { SettingRow } from './SettingRow';
  * RIGHT that turns to point down when open.
  *
  * WHY (decisions.md "Fold-out sections", `ui-element-review-settings-pieces#P-1`;
- * design guide "Settings" → "One fold-out style everywhere"): Backup & Sync's
+ * design guide "Settings" → "One fold-out style everywhere"): Backup & sync's
  * "› Sync log" and "▸ Show details" were bare text with the arrow on the LEFT —
  * the shape Destin said he hates ("I HATE the bare dropdowns with a chevron",
  * 2026-09-05) and rejected again in fix batch 1. The box and the right-hand

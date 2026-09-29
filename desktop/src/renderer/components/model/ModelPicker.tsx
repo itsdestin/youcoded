@@ -423,7 +423,7 @@ export default function ModelPicker({
     // on the panel's clipping.
     // WHY first, before the trigger check (2026-09-26): the 'inline' layout
     // draws no trigger, so this used to be skipped there and "Filter and sort"
-    // in the Model & Effort dialog opened nothing (found by `explore`).
+    // in the Model & effort dialog opened nothing (found by `explore`).
     const pill = pillRef.current?.getBoundingClientRect();
     if (pill) {
       setFilterPos({

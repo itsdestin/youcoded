@@ -672,7 +672,7 @@ function SoundButton() {
       <Dialog screen="settings/sound"
         open={open}
         onClose={() => setOpen(false)}
-        title="Sound & Notifications"
+        title="Sound & notifications"
         size="panel"
         panelRef={popupRef}
       >

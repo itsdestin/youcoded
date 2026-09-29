@@ -120,7 +120,7 @@ export type SettingRowProps = {
   control?: React.ReactNode;
   /** Right-aligned read-only value. Shorthand for the value control slot. */
   value?: React.ReactNode;
-  /** Sits between the text column and the control — e.g. Backup & Sync's badge. */
+  /** Sits between the text column and the control — e.g. Backup & sync's badge. */
   accessory?: React.ReactNode;
   /**
    * Whole-row click. Renders a <button> with a chevron, so the row must not
