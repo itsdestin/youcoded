@@ -754,3 +754,40 @@ describe('ModelPicker — inline layout', () => {
     expect(await screen.findByText('Source')).toBeInTheDocument();
   });
 });
+
+// ── The chat's model menu for a Claude Code session ─────────────────────────
+// ui-model-picker#MP-1 (Destin, 2026-09-29): a Claude Code session only ever has
+// its four models, so the menu shows them all with no search field; and "Manage
+// models" is the list's own last row, not a footer apart from the models.
+describe('ModelPicker — flat, no search (Claude Code menu)', () => {
+  beforeEach(() => {
+    (globalThis as any).window = (globalThis as any).window ?? {};
+    (window as any).claude = {
+      providers: { list: vi.fn().mockResolvedValue([]), catalog: vi.fn().mockResolvedValue([]) },
+      models: { onDownloadProgress: () => () => {} },
+    };
+  });
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); delete (window as any).claude; });
+
+  it('lists every Claude model with no search box, then Manage models', async () => {
+    const onManage = vi.fn();
+    render(
+      <ModelPicker
+        value={{ runtime: 'claude', alias: 'sonnet' }}
+        onSelect={() => {}}
+        includeClaude
+        includeNative={false}
+        defaultOpen
+        layout="flat"
+        hideSearch
+        onManageModels={onManage}
+      />,
+    );
+    await screen.findByText(/Manage models/);
+    const text = document.body.textContent ?? '';
+    for (const name of ['Haiku', 'Sonnet', 'Opus', 'Fable']) expect(text).toContain(`${name} · Claude Code`);
+    expect(screen.queryByRole('textbox', { name: 'Search all models' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Manage models/ }));
+    expect(onManage).toHaveBeenCalled();
+  });
+});

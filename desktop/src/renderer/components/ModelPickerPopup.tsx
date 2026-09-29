@@ -496,6 +496,8 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
                 defaultOpen
                 layout="flat"
                 pinSelectedToTop
+                hideSearch={!isNative}
+                onManageModels={() => window.dispatchEvent(new CustomEvent('youcoded:open-model-providers'))}
               />
               {nativeError && <p className="text-xs text-destructive-fg mt-2">{nativeError}</p>}
               {nativeSwapping && <p className="text-xs text-fg-muted mt-2">Switching…</p>}
@@ -504,7 +506,7 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
             {/* Effort and Fast: Claude Code only (see above). Plain menu rows, no
                 cards — a menu's rows sit straight on it, like the sessions menu. */}
             {!isNative && (
-              <div className="relative px-3 pt-2.5 pb-2 space-y-2">
+              <div className="relative px-3 pt-2.5 pb-3 space-y-2">
                 <div aria-hidden className="absolute inset-x-4 top-0 h-px" style={{ background: TAPER }} />
                 <div className="space-y-1.5">
                   <span className="block text-xs text-fg-2" title="How hard Claude thinks before responding. Higher is slower but smarter.">Effort</span>
@@ -533,17 +535,6 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
               </div>
             )}
 
-            {/* Footer: the sessions menu's footer row (Resume · New Session). */}
-            <div className="relative">
-              <div aria-hidden className="absolute inset-x-4 top-0 h-px" style={{ background: TAPER }} />
-              <button
-                type="button"
-                onClick={() => { onClose(); window.dispatchEvent(new CustomEvent('youcoded:open-model-providers')); }}
-                className="w-full px-3 py-2.5 text-xs text-fg-2 hover:bg-inset hover:text-fg transition-colors rounded-b-lg"
-              >
-                Manage models
-              </button>
-            </div>
           </>
         )}
       </OverlayPanel>

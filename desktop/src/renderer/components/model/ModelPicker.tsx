@@ -280,6 +280,7 @@ export default function ModelPicker({
   defaultOpen = false,
   layout = 'floating',
   pinSelectedToTop = false,
+  hideSearch = false,
   emptyLabel = 'Choose a model…',
   triggerClassName,
   onClear,
@@ -346,6 +347,11 @@ export default function ModelPicker({
    *  favourites and leaving the current pick to `search` for. No effect while
    *  searching (the whole catalogue is already the result, unordered). */
   pinSelectedToTop?: boolean;
+  /** No search field; every model is listed (not just favourites). For a list
+   *  that is always short — a Claude Code session only ever has its four models
+   *  (ui-model-picker#MP-1: "for claude code, i don't think we should bother
+   *  showing the search all models menu"). */
+  hideSearch?: boolean;
   /** Card-levels trial (2026-09-27): overrides the trigger's `bg-well
    *  border-edge` deepening (see the WHY below, at the className). Pass ''
    *  to fall back to the shared FIELD default (`bg-inset border-edge-dim`) —
@@ -670,7 +676,8 @@ export default function ModelPicker({
   );
 
   const q = search.trim().toLowerCase();
-  const searching = q.length > 0;
+  // hideSearch lists everything, the same as a search that matched all.
+  const searching = q.length > 0 || hideSearch;
 
   // THE view rule: favourites until you type, then the whole catalogue.
   // The local-models tip's moment: the picker opens and nothing in it runs on
@@ -975,7 +982,7 @@ export default function ModelPicker({
         // why there are two hosts for the identical content.
         const panelBody = (
           <>
-            <div className={flat ? 'pb-2' : 'p-2 border-b border-edge-dim'}>
+            {!hideSearch && <div className={flat ? 'pb-2' : 'p-2 border-b border-edge-dim'}>
               <SearchFilterPill
                 ref={pillRef}
                 value={search}
@@ -986,7 +993,7 @@ export default function ModelPicker({
                 filterOpen={filterOpen}
                 onToggleFilter={() => setFilterOpen((f) => !f)}
               />
-            </div>
+            </div>}
 
             <div
               ref={listRef}
@@ -1108,12 +1115,18 @@ export default function ModelPicker({
                 it stays pinned as the list scrolls. Omitted when the host has
                 nowhere to send the user. */}
             {onManageModels && flat && (
-              // WHY an outlined button (decisions F-2: a secondary action is
-              // outlined, never bare text): on the flat layout it sits on the
-              // popup itself, below the list's fade, not in a ruled footer.
-              <Button variant="secondary" size="sm" className="w-full mt-2" onClick={() => { setOpen(false); onManageModels(); }}>
-                Manage models
-              </Button>
+              // WHY a row that closes the list (ui-model-picker#MP-1: "i don't
+              // like how manage models is separate from the actual models"): it
+              // reads as the list's last entry — same shape, its icon in the
+              // brand-mark column so the words line up with the model names.
+              <button
+                type="button"
+                onClick={() => { setOpen(false); onManageModels(); }}
+                className="w-full text-left text-xs rounded-md px-2 py-2 flex items-center gap-2 text-fg-muted hover:bg-inset hover:text-fg transition-colors"
+              >
+                <span className="w-3.25 shrink-0 inline-flex items-center justify-center"><ModelIcon className="w-3 h-3" /></span>
+                Manage models…
+              </button>
             )}
             {onManageModels && !flat && (
               <div className="border-t border-edge shrink-0">
