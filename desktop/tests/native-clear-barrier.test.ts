@@ -88,6 +88,16 @@ describe('rebuildHistory — context-clear barrier', () => {
 });
 
 describe('HarnessSession.clearHistory', () => {
+  it('forgets source-labelled rule visibility at the successful clear barrier', () => {
+    const s = new HarnessSession({ skillCatalog: EMPTY_SKILL_CATALOG, sessionId: 'rule-clear', cwd: '/tmp/x',
+      harness: ASSISTANT_PRESET, binding: { providerId: 'openrouter', modelId: 'm' } } as any,
+    async () => new MockLanguageModelV4({ doStream: async () => ({ stream: new ReadableStream({ start(c) { c.close(); } }) as any }) }) as any);
+    (s as any).injectedTriggerIds.add('rule:id');
+    (s as any).retainedTriggerMessages.add('<project-rule source="r">\nRule\n</project-rule>');
+    expect(s.clearHistory()).toEqual({ ok: true });
+    expect((s as any).injectedTriggerIds.size).toBe(0);
+    expect((s as any).retainedTriggerMessages.size).toBe(0);
+  });
   const OPTS = { skillCatalog: EMPTY_SKILL_CATALOG, sessionId: 's-1', cwd: '/tmp/x', harness: ASSISTANT_PRESET, binding: { providerId: 'openrouter', modelId: 'm' } };
 
   function session() {

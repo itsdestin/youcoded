@@ -20,6 +20,19 @@ it('compaction prompt carries handoff structure, provenance rules, and active Go
 });
 
 describe('driver compaction', () => {
+  it('successful automatic summary stops vouching for a retired rule, but its prose mention is not loaded guidance', async () => {
+    const text = '<project-rule source="rules/old.md">\nRULE-OLD\n</project-rule>';
+    const model = scriptModel([{ text: 'Summary mentions RULE-OLD' }]);
+    const session = makeSession({ contextLength: 8192, model });
+    session.seedHistory([{ role: 'user', content: 'old ' + 'x'.repeat(9000) },
+      markAppGenerated({ role: 'user', content: text } as any), { role: 'assistant', content: 'ack' },
+      { role: 'user', content: 'next' }, { role: 'assistant', content: 'ack' }, { role: 'user', content: 'latest' }] as any);
+    (session as any).abort = new AbortController();
+    try { expect(await (session as any).maybeCompact(model, {}, true)).toBe(true); }
+    finally { (session as any).abort = null; }
+    expect((session as any).retainedTriggerMessages.has(text)).toBe(false);
+    expect((session as any).history[0].content).toContain('RULE-OLD');
+  });
   it('checks fresh input even after a low-usage completed turn, without front trimming', async () => {
     const calls: any[] = [];
     const inner = scriptModel([{ text: 'handoff', usage: { inputTokens: 3800 } }, { text: 'done' }]);

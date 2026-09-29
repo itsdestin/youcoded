@@ -3,9 +3,10 @@ import '@testing-library/jest-dom/vitest';
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-library/react';
-import { ChatProvider, useChatDispatch, useChatStore } from '../state/chat-context';
+import { ChatProvider, useChatDispatch, useChatStore, useChatState } from '../state/chat-context';
 import { SkillProvider } from '../state/skill-context';
 import InputBar, { InputBarHandle } from './InputBar';
+import QueuedMessagesStrip from './QueuedMessagesStrip';
 import { buildContextMenu } from './context-menu/build-menu';
 import type { VoiceEvent, VoiceReadiness } from '../../shared/voice-types';
 
@@ -470,6 +471,56 @@ describe('InputBar — stop button (Task 10 placement)', () => {
       capturedDispatch!({ type: 'NATIVE_SESSION_ERROR', sessionId: 'sess-1', message: 'boom' });
     });
     expect(screen.queryByRole('button', { name: 'Stop generating' })).not.toBeInTheDocument();
+  });
+
+  it('keeps Stop beside native busy queued input, with only Edit and Cancel on its queued row', () => {
+    const onEdit = vi.fn();
+    const onCancel = vi.fn();
+    function QueuedFromStore() {
+      const state = useChatState('sess-1');
+      return <QueuedMessagesStrip queuedMessages={state.queuedMessages} onEdit={onEdit} onCancel={onCancel} />;
+    }
+    render(
+      <ChatProvider>
+        <SkillProvider>
+          <DispatchCapture />
+          <InputBar sessionId="sess-1" provider="native" />
+          <QueuedFromStore />
+        </SkillProvider>
+      </ChatProvider>,
+    );
+    act(() => {
+      capturedDispatch!({ type: 'SESSION_INIT', sessionId: 'sess-1' });
+      capturedDispatch!({ type: 'USER_PROMPT', sessionId: 'sess-1', content: 'first action', timestamp: 1 });
+      capturedDispatch!({ type: 'QUEUED_MESSAGE_ADDED', sessionId: 'sess-1', queueId: 'q-1', content: 'follow up', timestamp: 2 });
+    });
+    const stop = screen.getByRole('button', { name: 'Stop generating' });
+    expect(stop).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Send message' })).toBeInTheDocument();
+    const strip = screen.getByLabelText('Queued messages');
+    const queuedActions = () => [...strip.querySelectorAll('button')].map(button => button.getAttribute('aria-label'));
+    // An exact DOM inventory detects any extra urgent-send control, regardless
+    // of its label. The separate forbidden-name check catches one elsewhere.
+    const expected = ['Edit queued message', 'Cancel queued message'];
+    expect(queuedActions()).toEqual(expected);
+    const injected = document.createElement('button');
+    injected.setAttribute('aria-label', 'Send now');
+    strip.append(injected);
+    expect(() => expect(queuedActions()).toEqual(expected)).toThrow();
+    injected.remove();
+    expect(screen.queryByRole('button', { name: /send now|after this finishes|stop and send|steer|urgent|priority/i })).not.toBeInTheDocument();
+    fireEvent.click(stop);
+    expect((window as any).claude.native.interrupt).toHaveBeenCalledWith('sess-1');
+    expect((window as any).claude.session.sendInput).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit queued message' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel queued message' }));
+    expect(onEdit).toHaveBeenCalledWith('q-1', 'follow up');
+    expect(onCancel).toHaveBeenCalledWith('q-1');
+    act(() => {
+      capturedDispatch!({ type: 'PERMISSION_REQUEST', sessionId: 'sess-1', toolName: 'Bash', input: { command: 'build' }, requestId: 'req-1' });
+    });
+    expect(screen.getByRole('button', { name: 'Stop generating' })).toBeEnabled();
+    expect(queuedActions()).toEqual(expected);
   });
 
   it('provider="native": click calls native.interrupt, never session.sendInput', () => {

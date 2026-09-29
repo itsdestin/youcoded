@@ -392,6 +392,7 @@ const IPC = {
   NATIVE_SEND: 'native:send',
   // Task 11: cancel/edit a queued-but-not-yet-sent message.
   NATIVE_QUEUE_REMOVE: 'native:queue-remove',
+  NATIVE_QUEUE_SEND_NOW: 'native:queue-send-now',
   NATIVE_INTERRUPT: 'native:interrupt',
   // Stalled-turn Retry — fire-and-forget, same shape as interrupt above.
   NATIVE_RETRY: 'native:retry',
@@ -1522,6 +1523,7 @@ contextBridge.exposeInMainWorld('claude', {
     // (unlike interrupt below) — the renderer needs the true/false result to
     // decide between "removed, proceed" and a "too late" toast.
     queueRemove: (sessionId: string, queueId: string) => ipcRenderer.invoke(IPC.NATIVE_QUEUE_REMOVE, { sessionId, queueId }),
+    queueSendNow: (sessionId: string, queueId: string) => ipcRenderer.invoke(IPC.NATIVE_QUEUE_SEND_NOW, { sessionId, queueId }),
     // Fire-and-forget: match ipcMain.on handler that destructures { sessionId }.
     interrupt: (sessionId: string) => ipcRenderer.send(IPC.NATIVE_INTERRUPT, { sessionId }),
     // Fire-and-forget like interrupt: the stalled card needs no answer — either

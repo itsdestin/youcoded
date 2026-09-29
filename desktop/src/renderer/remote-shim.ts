@@ -3005,6 +3005,7 @@ export function installShim(): void {
       send: (sessionId: string, text: string, attachments?: string[]) => invoke('native:send', { sessionId, text, attachments }),
       // Task 11: cancel/edit a queued message — request/response (mirrors preload.ts).
       queueRemove: (sessionId: string, queueId: string) => invoke('native:queue-remove', { sessionId, queueId }),
+      queueSendNow: (sessionId: string, queueId: string) => invoke('native:queue-send-now', { sessionId, queueId }),
       // Fire-and-forget: no response expected
       interrupt: (sessionId: string) => fire('native:interrupt', { sessionId }),
       // Fire-and-forget like interrupt above — the stalled card needs no answer.

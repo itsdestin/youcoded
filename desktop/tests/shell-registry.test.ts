@@ -10,7 +10,7 @@ import {
   formatElapsed, formatFinishedNotice, formatLongRunningNotice, stateText, spawnDetached,
 } from '../src/main/harness/shell-registry';
 import { RunningCalls } from '../src/main/harness/askpass/running-calls';
-import { spillRoot, sweepOldSpillFiles } from '../src/main/harness/tools/spill-paths';
+import { spillRoot, spillDirFor, sweepOldSpillFiles } from '../src/main/harness/tools/spill-paths';
 import { CWD_SENTINEL, ENV_SENTINEL, stripSentinelLines, normalizeNewlines } from '../src/main/harness/tools/shell-text';
 
 const posix = process.platform !== 'win32';
@@ -71,6 +71,19 @@ describe.skipIf(!posix)('ShellRegistry (POSIX processes)', () => {
   beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shell-reg-')); reg = new ShellRegistry(`t-${path.basename(dir)}`); });
   afterEach(async () => { await reg.killAll('app-quit', { graceMs: 0 }); fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }); });
 
+  it('a background registration failure returns a specific error without publishing a run', () => {
+    // A file occupying this session's log-directory slot makes mkdir fail
+    // without touching any active integration or requiring elevated permissions.
+    const slot = spillDirFor((reg as any).sessionId);
+    fs.mkdirSync(path.dirname(slot), { recursive: true });
+    fs.writeFileSync(slot, 'block directory');
+    try {
+      const result = reg.start(startSpec('sleep 30', dir));
+      expect(result).toMatchObject({ ok: false, reason: 'spawn-failed', detail: expect.stringMatching(/EEXIST|file already exists/) });
+      expect(reg.list()).toEqual([]);
+    } finally { fs.rmSync(slot, { force: true }); }
+  });
+
   it('start: mints an sh- id, logs from the first byte, exits with the real code, emits exit once', async () => {
     const exits: any[] = [];
     reg.on('exit', (r) => exits.push(r));
@@ -88,6 +101,17 @@ describe.skipIf(!posix)('ShellRegistry (POSIX processes)', () => {
     expect(fs.readFileSync(r.run.logPath, 'utf8')).toBe('hello\n');
     expect(exits).toHaveLength(1);
     expect(reg.list().map((x) => x.shellId)).toEqual([r.run.shellId]);
+  });
+
+  it('a registered log stream error leaves the in-memory tail available and settles once', async () => {
+    const exits: any[] = [];
+    reg.on('exit', (r) => exits.push(r));
+    const result = reg.start(startSpec('echo retained', dir));
+    if (!result.ok) throw new Error('start failed');
+    result.run.logStream.emit('error', new Error('log stream unavailable'));
+    await result.run.exited;
+    expect(reg.tailText(result.run, 10)).toContain('retained');
+    expect(exits).toHaveLength(1);
   });
 
   it('read: returns only what arrived since the last read', async () => {

@@ -1,5 +1,6 @@
 import React from 'react';
 import { Button } from './ui';
+import { EditPencilButton } from './EditPencilButton';
 
 // Task 12: renders messages the native host FIFO'd behind an in-flight turn
 // (SessionChatState.queuedMessages) docked at the bottom of the chat area —
@@ -23,6 +24,62 @@ import { Button } from './ui';
 // enqueue the message also never see it in their own strip — same
 // renderer-local scope.
 
+/** Same trash glyph as the doc-comments delete action (comments/CommentActions
+ *  .tsx on its branch, Destin 2026-09-28: "matching ... delete a comment") —
+ *  24×24 viewBox, stroke currentColor, the app's inline-icon convention. */
+function TrashGlyph() {
+  return (
+    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M3 6h18" />
+      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+    </svg>
+  );
+}
+
+/** "Send now" (Destin, 2026-09-28 review decks): rightmost in the row, styled
+ *  like the message box's own send button — the same primary <Button> (theme
+ *  accent fill, the same arrow glyph) rather than a hand-styled look, so it
+ *  reads as "send" wherever the theme puts its accent. On hover or keyboard
+ *  focus the words "Interrupt and Send Now" roll out to the left of the
+ *  arrow inside the button; the trash beside it is the next item in the row,
+ *  so it slides left with a fixed gap.
+ *  WHY the reveal is on an inner span: the primitive owns the button's own
+ *  colours, size and effects (design lint `no-restyle`); only the label's
+ *  max-width animates, with the session pills' sanctioned motion tokens
+ *  (pill-label-style.ts, ast-grep `pill-label-reveals-with-motion-tokens`).
+ *  WHY one inner wrapper: the Button's own gap would otherwise leave a space
+ *  beside the arrow while the label is hidden.
+ *  Touch has no hover, so on a phone it stays the arrow alone; its meaning is
+ *  in the accessible name for screen readers. */
+function SendNowButton({ onClick }: { onClick: () => void }) {
+  return (
+    <Button variant="primary" size="sm" aria-label="Interrupt and send now" onClick={onClick} className="group">
+      <span className="flex items-center">
+        <span
+          aria-hidden
+          className="max-w-0 overflow-x-clip overflow-y-visible whitespace-nowrap opacity-0 group-hover:max-w-48 group-hover:opacity-100 group-hover:pr-1.5 group-focus-visible:max-w-48 group-focus-visible:opacity-100 group-focus-visible:pr-1.5"
+          // WHY textBox (Destin, round 3: "text looks too high"): a font's line
+          // box includes its own ascender/descender space, which is lopsided in
+          // some theme fonts (Meadow Mist's), so centring the LINE put the letters
+          // ~1px high. Trimming to cap height and baseline centres the letters
+          // themselves, in any theme font, without a per-font pixel nudge.
+          // overflow-x-clip (not overflow-hidden): the reveal only needs a
+          // sideways clip, and a vertical one would cut the trimmed descenders.
+          style={{ textBox: 'trim-both cap alphabetic', transition: 'max-width var(--dur-reveal) var(--ease-reveal), opacity var(--dur-reveal) var(--ease-reveal), padding var(--dur-reveal) var(--ease-reveal)' } as React.CSSProperties}
+        >
+          Interrupt and Send Now
+        </span>
+        {/* The message box's send arrow, turned to point UP (Destin, round 3:
+            "i want an up arrow") — same stroke and caps as InputBar's. */}
+        <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 19V5M5 12l7-7 7 7" />
+        </svg>
+      </span>
+    </Button>
+  );
+}
+
 interface QueuedMessage {
   queueId: string;
   content: string;
@@ -39,6 +96,8 @@ interface Props {
   // sessionId + queueId through, no IPC/dispatch happens here).
   onCancel?: (queueId: string) => void;
   onEdit?: (queueId: string, text: string) => void;
+  // "Send now" — App stops the current task and sends this message next.
+  onSendNow?: (queueId: string) => void;
 }
 
 // forwardRef (review fix, post-approval): ChatView needs the strip's OWN
@@ -51,7 +110,7 @@ interface Props {
 // itself to the absolutely-positioned child's content, so measuring a
 // wrapper instead of this element would always read 0.
 const QueuedMessagesStrip = React.forwardRef<HTMLDivElement, Props>(function QueuedMessagesStrip(
-  { queuedMessages, onCancel, onEdit },
+  { queuedMessages, onCancel, onEdit, onSendNow },
   ref,
 ) {
   if (queuedMessages.length === 0) return null;
@@ -71,19 +130,10 @@ const QueuedMessagesStrip = React.forwardRef<HTMLDivElement, Props>(function Que
             Queued
           </div>
           <div className="flex-1 min-w-0 truncate text-sm text-fg-2">{q.content}</div>
-          {(onEdit || onCancel) && (
+          {(onEdit || onCancel || onSendNow) && (
             <div className="flex items-center gap-0.5 shrink-0">
-              {onEdit && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Edit queued message"
-                  onClick={() => onEdit(q.queueId, q.content)}
-                  className="w-6 h-6 rounded-full text-fg-dim hover:text-fg text-xs leading-none"
-                >
-                  ✎
-                </Button>
-              )}
+              {/* The quick chips' own edit button (Destin, 2026-09-28). */}
+              {onEdit && <EditPencilButton plain label="Edit queued message" onClick={() => onEdit(q.queueId, q.content)} />}
               {onCancel && (
                 <Button
                   variant="ghost"
@@ -92,9 +142,10 @@ const QueuedMessagesStrip = React.forwardRef<HTMLDivElement, Props>(function Que
                   onClick={() => onCancel(q.queueId)}
                   className="w-6 h-6 rounded-full text-fg-dim hover:text-fg text-xs leading-none"
                 >
-                  ✕
+                  <TrashGlyph />
                 </Button>
               )}
+              {onSendNow && <SendNowButton onClick={() => onSendNow(q.queueId)} />}
             </div>
           )}
         </div>

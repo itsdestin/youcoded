@@ -187,7 +187,9 @@ describe('row 3 — a helper is needed and cannot work here', () => {
 
     // Twice over: the collapsed settings row reads it too, which is how a user
     // sees it without opening anything.
-    expect(screen.getAllByText(UNSUPPORTED_ROW)).toHaveLength(2);
+    // WHY: the popup heading appears before the async helper-status response;
+    // wait for the actual unsupported state, not just the popup shell.
+    await waitFor(() => expect(screen.getAllByText(UNSUPPORTED_ROW)).toHaveLength(2));
     expect(screen.getByText(/other desktops do not let apps place their own windows/))
       .toBeInTheDocument();
     // No switch to flip: offering one would be an action that does nothing.

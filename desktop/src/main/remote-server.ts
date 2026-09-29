@@ -2028,6 +2028,12 @@ export class RemoteServer {
         this.respond(client.ws, type, id, removed);
         break;
       }
+      // "Send now" — same sync boolean contract as queue-remove above.
+      case 'native:queue-send-now': {
+        const sent = this.nativeRuntime ? this.nativeRuntime.nativeHost.sendQueuedNow(payload.sessionId, payload.queueId) : false;
+        this.respond(client.ws, type, id, sent);
+        break;
+      }
       case 'native:sessions-list': {
         this.respond(client.ws, type, id, this.nativeRuntime ? await this.nativeRuntime.nativeHost.listAsync() : []);
         break;

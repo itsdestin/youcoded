@@ -4310,6 +4310,9 @@ class SessionService : Service() {
             // native:set-binding below — has a msg.id, so this replies
             // not-implemented-on-mobile rather than no-op'ing.
             "native:queue-remove",
+            // "Send now" on a waiting message — request/response like
+            // native:queue-remove, so it replies not-implemented-on-mobile.
+            "native:queue-send-now",
             "native:interrupt",
             // Stalled-turn Retry. Fire-and-forget (no msg.id) exactly like
             // native:send / native:interrupt, so this is a correct no-op here:
