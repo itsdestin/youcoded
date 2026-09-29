@@ -1086,4 +1086,21 @@ export class GitTransport implements SyncTransport {
     } catch { return 0; }
     return total;
   }
+
+  /** Folders git itself says are wholly ignored — info/exclude (DEFAULT_IGNORES
+   *  + over-cap lines) AND every .gitignore in the project, negations included.
+   *  WHY ask git instead of re-implementing gitignore: this is the exact
+   *  authority stageAll uses, so the watcher can never disagree with what
+   *  syncs (the 2026-09-29 report: a watcher list narrower than the sync list
+   *  held ~249k watches on a project where ~2k entries actually sync).
+   *  `--directory` reports a wholly ignored folder as ONE "dir/" entry without
+   *  descending — cheap even over a huge .venv — and git recurses instead of
+   *  collapsing when a folder holds a TRACKED file, so a folder with anything
+   *  that still syncs is never returned. null on failure: the engine then keeps
+   *  the scope it already has (name-only at startup), never watching less. */
+  async ignoredDirs(space: SyncSpace): Promise<string[] | null> {
+    const r = await this.git(space, ['ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--directory']);
+    if (r.code !== 0) return null;
+    return r.stdout.split('\0').filter(e => e.endsWith('/')).map(e => e.slice(0, -1));
+  }
 }

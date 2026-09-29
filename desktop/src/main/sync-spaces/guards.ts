@@ -47,6 +47,17 @@ export const DEFAULT_IGNORES: string[] = [
   ...NEVER_SYNC,
 ];
 
+/** Bare folder names DEFAULT_IGNORES skips wherever they appear ('build/' →
+ *  'build'). WHY: the sync watcher's `ignored` check is synchronous, so it
+ *  cannot ask git about a folder the moment one appears. These names cover the
+ *  common case — `python -m venv`, `cargo build`, `npm run build` creating a
+ *  huge folder mid-session — instantly; the engine's git-derived list covers
+ *  the rest (a project's own .gitignore) on its next refresh. Derived, not
+ *  hand-copied, so it can never drift from what sync actually skips. */
+export const DEFAULT_IGNORED_DIR_NAMES: ReadonlySet<string> = new Set(
+  DEFAULT_IGNORES.filter(p => p.endsWith('/') && !p.includes('*')).map(p => p.slice(0, -1)),
+);
+
 /** True when a relative path matches the DEFAULT_IGNORES set. Interprets the
  *  gitignore-style entries for non-git consumers (the iCloud backup filter):
  *  'name/' matches a path segment anywhere; 'name' matches a basename exactly;
@@ -89,8 +100,8 @@ export const MAX_SYNC_FILE_BYTES = 50 * 1024 * 1024;
 
 // Spec §18 watcher-scale guardrail, applied at IMPORT time: folders with more
 // files than this are refused with a clear message instead of silently hanging
-// chokidar. An engine-level guardrail (for folders that GROW past the cap
-// after import) is Plan 1b scope. Count excludes DEFAULT_IGNORES (node_modules
+// chokidar. Folders that GROW past it after import are caught by the engine's
+// own WATCH_BUDGET (engine.ts), which drops them to poll-only. Count excludes DEFAULT_IGNORES (node_modules
 // etc.) — those never sync, so they shouldn't disqualify a folder either.
 export const MAX_IMPORT_FILE_COUNT = 20_000;
 

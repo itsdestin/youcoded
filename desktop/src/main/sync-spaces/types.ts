@@ -88,6 +88,14 @@ export interface SyncTransport {
    *  RepairOutcome trace (tier + counts); `| void` keeps existing fakes and
    *  future transports free to not bother. */
   repair?(space: SyncSpace): Promise<RepairOutcome | void>;
+  /** Folders (relative to the space root, '/'-separated, no trailing slash)
+   *  whose ENTIRE contents sync would never upload — by the transport's own
+   *  rules, including the project's .gitignore files. The engine skips
+   *  watching them, so the watcher's scope is decided by the same authority
+   *  that decides what syncs. Optional: without it the engine falls back to
+   *  DEFAULT_IGNORES folder names only. Resolves null when it cannot tell, so
+   *  a failed probe never reads as "nothing is ignored". */
+  ignoredDirs?(space: SyncSpace): Promise<string[] | null>;
 }
 
 // `at` is stamped by service.broadcast() at emit time (ms epoch). Optional so
