@@ -19,7 +19,7 @@ import { replay, score, type Fixture, type Score } from './popup-bench/bench-lib
 
 const DIR = process.env.POPUP_CORPUS_DIR || path.join(__dirname, 'fixtures', 'popup-corpus');
 /** The candidate the app ships — must be perfect on the corpus. */
-const SHIPPED = process.env.POPUP_BENCH_REQUIRE ?? '';
+const SHIPPED = process.env.POPUP_BENCH_REQUIRE ?? 'shipped';
 
 const files = fs.existsSync(DIR) ? fs.readdirSync(DIR).filter((x) => x.endsWith('.json')).sort() : [];
 const totals = new Map<string, Score>(CANDIDATES.map((c) => [c.name, { popupRegions: 0, missed: [], gaps: [], falseAlarms: [], falseAlarmMs: 0, latencies: [] }]));

@@ -7,6 +7,7 @@
 // detector reads: terminal-registry.getVisibleScreenText (rows joined, blank
 // rows dropped).
 import { parseInkSelect, readStartupDialog } from '../../src/renderer/parser/ink-select-parser';
+import { readInputFocus, inputIsBlocked } from '../../src/renderer/parser/cc-input-focus';
 
 export type Candidate = { name: string; describe: string; blocked: (screen: string) => boolean };
 
@@ -83,6 +84,11 @@ function footerNearBottom(screen: string, within = 6): boolean {
 }
 
 export const CANDIDATES: Candidate[] = [
+  {
+    name: 'shipped',
+    describe: 'What the app ships: src/renderer/parser/cc-input-focus.ts',
+    blocked: (s) => inputIsBlocked(readInputFocus(s)),
+  },
   {
     name: 'today',
     describe: 'What ships now: a numbered/cursor menu whose title is on the known list',

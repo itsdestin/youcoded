@@ -112,6 +112,12 @@ const BASE = [
     steps: [...sendMessage('show me what the menus look like'), idleUntilBox('after the reply'), { wait: 1500 }],
   },
   {
+    name: 'reply-exact-live-menu',
+    description: 'a reply whose LAST lines are exactly a live menu: ❯ cursor, numbered options, footer — then the message box',
+    script: [{ text: 'Choose how to continue:\n\n❯ 1. Yes, and switch to auto mode\n  2. Yes, just this once\n  3. No, and tell Claude what to do differently\n\nEnter to confirm · Esc to cancel', wordMs: 20 }],
+    steps: [...sendMessage('which one?'), { waitFor: 'Enter to confirm · Esc to cancel', state: 'none', note: 'after the reply' }, { wait: 2500 }],
+  },
+  {
     name: 'reply-long-scrolling',
     description: 'a reply taller than the screen: numbered lists, tables with ❯, a footer-like last line',
     script: [{ text: LONG_REPLY, wordMs: 4 }],

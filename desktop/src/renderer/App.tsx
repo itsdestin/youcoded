@@ -53,7 +53,7 @@ import { GameProvider, useGameState, useGameDispatch } from './state/game-contex
 import { hookEventToAction } from './state/hook-dispatcher';
 import { buildUsageSnapshot, pruneExpiredUsage, type SubscriptionUsage } from './state/usage-snapshot';
 import { invalidateProviderTypeCache, resolveProviderType, useModelProviderType } from './hooks/use-provider-type';
-import { hasPendingInteraction, pendingInteractionKind, pendingInteractionRefusalCopy, canPtySend } from './state/pty-input-gate';
+import { sendBlock, pendingInteractionRefusalCopy, canPtySend } from './state/pty-input-gate';
 import { buildOutgoingMessage } from './components/outgoing-message';
 import type { SyncWarning } from '../main/sync-state';
 import { latestUnresolvedError, type SyncStatusData } from './components/sync-dot-state';
@@ -760,10 +760,12 @@ function AppInner() {
   // writes (ToolCard plan keys, TrustGate, prompt option clicks, terminal
   // view) must NOT use this helper. Returns false when the send was refused.
   const notifyIfPtyBlocked = useCallback((sid: string): boolean => {
-    const session = chatStateMapRef.current.get(sid);
-    if (session && hasPendingInteraction(session)) {
+    // sendBlock also reads the live terminal: a Claude Code pop-up no hook
+    // reported would otherwise swallow the command (see pty-input-gate.ts).
+    const block = sendBlock(chatStateMapRef.current.get(sid), sid);
+    if (block) {
       // Name the blocker — see pendingInteractionRefusalCopy.
-      setToast(pendingInteractionRefusalCopy(pendingInteractionKind(session)));
+      setToast(pendingInteractionRefusalCopy(block.kind, block.screen));
       return true;
     }
     return false;
@@ -4022,12 +4024,11 @@ function AppInner() {
                     ChatInputBar when minimal={isTerminalTouch}, slotted in
                     the QuickChips position so both modes share one container. */}
                 {!isShellSession && (<>
-                <ChatInputBar ref={inputBarRef} sendBlocked={isPendingTab} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={composerDisabled({ trustGate: trustGateActive, moved: !!movedGate, started: sessionInitialized, terminalTouch: isTerminalTouch })} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry) => {
+                <ChatInputBar ref={inputBarRef} sendBlocked={isPendingTab} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={composerDisabled({ trustGate: trustGateActive, moved: !!movedGate, started: sessionInitialized, terminalTouch: isTerminalTouch })} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry, block) => {
                   // Name the blocker so reaching for "Send anyway" is an informed
                   // choice (it presses Esc into Claude Code first — which on a
                   // live permission or plan menu DECLINES it).
-                  const blocked = chatStateMapRef.current.get(sessionId ?? '');
-                  setToast({ message: pendingInteractionRefusalCopy(blocked ? pendingInteractionKind(blocked) : null), durationMs: 8000, action: { label: 'Send anyway', onClick: () => { setToast(null); retry(); } } });
+                  setToast({ message: pendingInteractionRefusalCopy(block.kind, block.screen), durationMs: 8000, action: { label: 'Send anyway', onClick: () => { setToast(null); retry(); } } });
                 }} getSessionState={(sid) => chatStateMapRef.current.get(sid)} onOpenModelPicker={() => setModelPickerOpen(true)} onModelSwitchCommand={handleModelSwitchCommand} initialInput={currentSession?.initialInput} initialAttachments={currentSession?.initialAttachments} provider={currentSession?.provider} />
                 <StatusBar
                   statusData={statusBarData}
@@ -4784,7 +4785,7 @@ function AppInner() {
 // getUsageSnapshot lets /cost and /usage snapshot live stats from App state.
 import type { UsageSnapshot } from './state/chat-types';
 import type { SessionChatState } from './state/chat-types';
-const ChatInputBar = React.forwardRef<InputBarHandle, { sessionId: string; view?: ViewMode; onOpenDrawer: (searchMode: boolean) => void; onCloseDrawer?: () => void; onDrawerSearch?: (query: string) => void; disabled?: boolean; sendBlocked?: boolean; minimal?: boolean; onResumeCommand?: () => void; getUsageSnapshot?: (sessionId: string) => UsageSnapshot | null; onOpenPreferences?: () => void; onToast?: (msg: string) => void; onSendBlocked?: (retry: () => void) => void; getSessionState?: (sessionId: string) => SessionChatState | undefined; onOpenModelPicker?: () => void; onModelSwitchCommand?: (alias: ModelAlias) => 'sent' | 'blocked' | 'ineligible'; initialInput?: string; initialAttachments?: string[]; provider?: 'claude' | 'native' }>(
+const ChatInputBar = React.forwardRef<InputBarHandle, { sessionId: string; view?: ViewMode; onOpenDrawer: (searchMode: boolean) => void; onCloseDrawer?: () => void; onDrawerSearch?: (query: string) => void; disabled?: boolean; sendBlocked?: boolean; minimal?: boolean; onResumeCommand?: () => void; getUsageSnapshot?: (sessionId: string) => UsageSnapshot | null; onOpenPreferences?: () => void; onToast?: (msg: string) => void; onSendBlocked?: React.ComponentProps<typeof InputBar>['onSendBlocked']; getSessionState?: (sessionId: string) => SessionChatState | undefined; onOpenModelPicker?: () => void; onModelSwitchCommand?: (alias: ModelAlias) => 'sent' | 'blocked' | 'ineligible'; initialInput?: string; initialAttachments?: string[]; provider?: 'claude' | 'native' }>(
   function ChatInputBar({ sessionId, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, disabled, sendBlocked, minimal, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, initialAttachments, provider }, ref) {
     return <InputBar ref={ref} sessionId={sessionId} view={view} onOpenDrawer={onOpenDrawer} onCloseDrawer={onCloseDrawer} onDrawerSearch={onDrawerSearch} disabled={disabled} sendBlocked={sendBlocked} minimal={minimal} onResumeCommand={onResumeCommand} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={onOpenPreferences} onToast={onToast} onSendBlocked={onSendBlocked} getSessionState={getSessionState} onOpenModelPicker={onOpenModelPicker} onModelSwitchCommand={onModelSwitchCommand} initialInput={initialInput} initialAttachments={initialAttachments} provider={provider} />;
   },
