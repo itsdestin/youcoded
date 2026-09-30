@@ -32,6 +32,9 @@ import { skillsChannels } from './skills';
 import { marketplaceChannels } from './marketplace';
 import { themeMarketplaceChannels } from './theme-marketplace';
 import { firstRunChannels } from './first-run';
+import { syncChannels } from './sync';
+import { syncSpacesChannels } from './sync-spaces';
+import { githubChannels } from './github';
 
 export type { MainChannelCtx, MainChannelDef } from './channel-def';
 
@@ -50,6 +53,9 @@ export const CHANNEL_TABLE: MainChannelDef[] = [
   ...marketplaceChannels,
   ...themeMarketplaceChannels,
   ...firstRunChannels,
+  ...syncChannels,
+  ...syncSpacesChannels,
+  ...githubChannels,
 ];
 
 let indexed: { size: number; byName: Map<string, MainChannelDef> } | null = null;

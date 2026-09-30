@@ -33,6 +33,7 @@ import { NativeHome } from './native-home';
 import type { NativeRuntime } from './create-runtime';
 import { registerDesktopChannels } from './ipc/channel-table';
 import { bindSkillsDeps } from './ipc/skills';
+import { bindSyncSpacesDeps } from './ipc/sync-spaces';
 import { bindThemeMarketplace } from './ipc/theme-marketplace';
 import { bindFirstRunNative } from './ipc/first-run';
 import type { OutboxBroadcast } from './chatsearch-index/outbox-drain';
@@ -85,26 +86,22 @@ import { ThemeMarketplaceProvider } from './theme-marketplace-provider';
 import { generateThemePreview } from './theme-preview-generator';
 // The KDE script that lets the buddy move itself on a Wayland desktop.
 import { helperStatus, installHelper, removeHelper, type HelperStatus } from './kwin-helper';
-import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning, addBackend, removeBackend, updateBackend, pushBackend, setSyncHealthGate, type SyncWarning } from './sync-state';
+import { setSyncHealthGate, type SyncWarning } from './sync-state';
 import { startStatusPushGate } from './status-push-gate';
 // Cross-device sync spaces (spec 2026-07-03) — the folder-based sync engine.
 import {
-  syncSpacesStatus, syncSpacesEnable, syncSpacesSyncNow, syncSpacesCreateProject, syncSpacesImportProject,
-  syncSpacesRenameProject, syncSpacesStopProject, syncSpacesSetProjectDescription, getManagedRoots, isSyncSpacesEnabled, getLastSyncByDevice,
+  getManagedRoots, isSyncSpacesEnabled, getLastSyncByDevice,
   getSelfLastSyncEpochMs, isSyncSpacesSyncing,
 } from './sync-spaces/service';
 // Self-row recency derivation (spec §4) — pure fn so the ms→wire-seconds
 // conversion and the sync-spaces-vs-legacy-marker precedence are unit tested.
 import { deriveSelfLastSyncEpochSec } from './sync-spaces/self-sync-status';
-import { readDevices, renameDevice, removeDevice } from './sync-spaces/device-registry';
 // Connect-GitHub modal (device-flow auth) — detectGh/installGh are step fns;
 // createGithubConnect is the stateful orchestrator that owns the in-flight flow.
-import { installGh } from './github-auth';
-import { createGithubConnect, setGithubConnect, disconnectGithub } from './github-connect';
-import { combinedGithubStatus, getGithubClient } from './github-client';
+import { createGithubConnect, setGithubConnect } from './github-connect';
+import { getGithubClient } from './github-client';
 import { getConfig as getMarketplaceConfig, setConfig as setMarketplaceConfig } from './marketplace-config-store';
 import { readComponent, type ComponentKind } from './marketplace-file-reader';
-import { checkSyncPrereqs, installRclone, checkGdriveRemote, authGdrive, authGithub, createGithubRepo } from './sync-setup-handlers';
 import { log } from './logger';
 import { attachStartupDialogLog } from './startup-dialog-log';
 import { menuAnswerLock } from './menu-answer-lock';
@@ -2281,13 +2278,6 @@ export function registerIpcHandlers(
     }
   });
 
-  // Plan 2b Task 11: give the remote server the SAME lease client/requester +
-  // deviceId so its WS clients reach the identical lease/device state the
-  // Electron IPC handlers use (same lease state as the phone door). Absent when sync is off.
-  if (leaseWiring && remoteServer) {
-    remoteServer.setLeaseWiring({ client: leaseWiring.client, requester: leaseWiring.requester, deviceId: leaseWiring.deviceId, machineId: leaseWiring.machineId });
-  }
-
   // Perf cycle 2: paged history. A window opening/resuming a session asks for
   // the NEWEST page (beforeCursor null) and, as the user scrolls up, for each
   // older page. Request/response — unlike TRANSCRIPT_REPLAY, which streams
@@ -3514,79 +3504,12 @@ export function registerIpcHandlers(
     return { ok: true };
   });
 
-  // --- Sync management ---
-  // Control plane for YouCoded toolkit sync — reads state files written
-  // by sync.sh / session-start.sh and triggers sync via the existing scripts.
-  ipcMain.handle(IPC.SYNC_GET_STATUS, () => getSyncStatus());
-  ipcMain.handle(IPC.SYNC_GET_CONFIG, () => getSyncConfig());
-  ipcMain.handle(IPC.SYNC_SET_CONFIG, (_e, { updates }) => setSyncConfig(updates));
-  ipcMain.handle(IPC.SYNC_FORCE, () => forceSync());
-  ipcMain.handle(IPC.SYNC_GET_LOG, (_e, { lines }) => getSyncLog(lines));
-  ipcMain.handle(IPC.SYNC_DISMISS_WARNING, (_e, { warning }) => dismissWarning(warning));
-
-  // Cross-device sync spaces (spec 2026-07-03) — folder-based sync engine,
-  // distinct from the legacy sync:* backup control plane above. The service
-  // module owns the singleton engine/manager/roots.
-  ipcMain.handle(IPC.SYNC_SPACES_STATUS, () => syncSpacesStatus());
-  ipcMain.handle(IPC.SYNC_SPACES_ENABLE, (_e, { enabled }: { enabled: boolean }) => syncSpacesEnable(!!enabled));
-  // spaceId (optional) narrows the sync to one space for the Project View
-  // "Sync now" button; SyncPanel calls with no arg = sync everything.
-  ipcMain.handle(IPC.SYNC_SPACES_SYNC_NOW, (_e, { spaceId }: { spaceId?: string }) =>
-    syncSpacesSyncNow(spaceId ? String(spaceId) : undefined));
-  ipcMain.handle(IPC.SYNC_SPACES_CREATE_PROJECT, (_e, { name }: { name: string }) => syncSpacesCreateProject(String(name ?? '')));
-  ipcMain.handle(IPC.SYNC_SPACES_IMPORT_PROJECT, (_e, { sourcePath, name }: { sourcePath: string; name: string }) =>
-    // Live-cwd guard input: the folder must not move under a running session.
-    syncSpacesImportProject(String(sourcePath ?? ''), String(name ?? ''),
-      sessionManager.listSessions().filter(s => s.status !== 'destroyed').map(s => s.cwd)));
-  // Cross-device rename (display-name only) + stop-syncing (2026-07-12).
-  ipcMain.handle(IPC.SYNC_SPACES_RENAME_PROJECT, (_e, p: { name: string; displayName: string }) =>
-    syncSpacesRenameProject(String(p?.name ?? ''), String(p?.displayName ?? '')));
-  ipcMain.handle(IPC.SYNC_SPACES_STOP_PROJECT, (_e, p: { name: string }) =>
-    syncSpacesStopProject(String(p?.name ?? '')));
-  // Synced project description (Task 3) — payload-object shape, matching renameProject.
-  ipcMain.handle(IPC.SYNC_SPACES_SET_PROJECT_DESCRIPTION, (_e, p: { name: string; description: string }) =>
-    syncSpacesSetProjectDescription(String(p?.name ?? ''), String(p?.description ?? '')));
-
-  // Conversation-lease takeover (Plan 2b Task 9). Thin passthroughs to the lease
-  // client (query) and the requester flow (takeover/force) built in main.ts.
-  // When lease wiring is absent (sync disabled), every handler degrades to a
-  // "free / error" answer so the renderer's resume gate proceeds unblocked
-  // (spec §3 never-block).
-  ipcMain.handle(IPC.SYNC_SPACES_LEASE_QUERY, (_e, p: { claudeSessionId: string }) =>
-    leaseWiring?.client.query(String(p?.claudeSessionId ?? '')) ?? { held: false, source: 'none' });
-  ipcMain.handle(IPC.SYNC_SPACES_LEASE_TAKEOVER, (_e, p: { claudeSessionId: string; transferNonce?: string }) =>
-    leaseWiring?.requester.takeover(String(p?.claudeSessionId ?? ''), p?.transferNonce) ?? { outcome: 'error' });
-  ipcMain.handle(IPC.SYNC_SPACES_LEASE_FORCE, (_e, p: { claudeSessionId: string }) =>
-    leaseWiring?.requester.force(String(p?.claudeSessionId ?? '')) ?? { ok: false });
-
-  // Device registry (Plan 2b spec §10a): the "Your devices" list (Task 12 UI
-  // consumes these). self:true marks the current machine so the UI can label it.
-  ipcMain.handle(IPC.SYNC_SPACES_LIST_DEVICES, () => {
-    const pr = getManagedRoots()?.personalRoot;
-    if (!pr) return [];
-    // machineId, not deviceId — rows are keyed per-MACHINE, so the per-install
-    // lease id would never match and no row would render "(this device)".
-    const selfId = leaseWiring?.machineId ?? '';
-    return readDevices(pr).map((d) => ({ ...d, self: !!selfId && d.id === selfId }));
-  });
-  ipcMain.handle(IPC.SYNC_SPACES_RENAME_DEVICE, async (_e, p: { id: string; name: string }) => {
-    const pr = getManagedRoots()?.personalRoot;
-    if (!pr) return { ok: false };
-    try { await renameDevice(pr, String(p?.id ?? ''), String(p?.name ?? '')); return { ok: true }; }
-    catch { return { ok: false }; }
-  });
-  ipcMain.handle(IPC.SYNC_SPACES_REMOVE_DEVICE, async (_e, p: { id: string }) => {
-    const pr = getManagedRoots()?.personalRoot;
-    if (!pr) return { ok: false };
-    const id = String(p?.id ?? '');
-    if (!id) return { ok: false };
-    // Refuse to remove THIS machine: upsertSelf re-creates the row on the next
-    // launch, so it would read as a no-op that "didn't work". The UI hides the
-    // affordance for self; this is the enforcement half (remote clients too).
-    if (id === (leaseWiring?.machineId ?? '')) return { ok: false, error: 'cannot remove this device' };
-    try { await removeDevice(pr, id); return { ok: true }; }
-    catch { return { ok: false }; }
-  });
+  // --- Sync management, sync spaces, GitHub connect ---
+  // WHY (2026-09-30 one-core R3-4): sync:*, syncspaces:* and the github:* request/response channels are
+  // table entries (main/ipc/sync.ts, sync-spaces.ts, github.ts) served to windows and phones by one body.
+  // What stays here is what only this function can build: the deps those entries reach, and the
+  // GitHub device-flow orchestrator whose done-push has to fan out to windows AND phones.
+  bindSyncSpacesDeps({ sessionManager, leaseWiring });
 
   // Connect-GitHub modal (device-flow auth). ONE orchestrator holds the single
   // in-flight flow; its emitDone fans the connect-done push out to BOTH the
@@ -3598,81 +3521,7 @@ export function registerIpcHandlers(
   });
   // Register as the process-wide singleton so remote clients drive the SAME flow.
   setGithubConnect(githubConnect);
-  // Combined status (Phase 2): authed = stored app token OR gh login — a
-  // stock machine that connected in-app reads as authed with no gh at all.
-  // Keeps the legacy {installed, authed, login} shape (additive fields only).
-  ipcMain.handle(IPC.GITHUB_STATUS, () => combinedGithubStatus());
-  ipcMain.handle(IPC.GITHUB_CONNECT_START, () => githubConnect.start());
-  ipcMain.handle(IPC.GITHUB_CONNECT_CANCEL, () => { githubConnect.cancel(); return { ok: true }; });
-  ipcMain.handle(IPC.GITHUB_INSTALL_GH, () => installGh());
-  ipcMain.handle(IPC.GITHUB_DISCONNECT, () => disconnectGithub());
-
-  // V2: Per-instance backend management (storage backends + multi-instance support)
-  ipcMain.handle('sync:add-backend', (_e, instance) => addBackend(instance));
-  ipcMain.handle('sync:remove-backend', (_e, { id }) => removeBackend(id));
-  ipcMain.handle('sync:update-backend', (_e, { id, updates }) => updateBackend(id, updates));
-  ipcMain.handle('sync:push-backend', (_e, { id }) => pushBackend(id));
-  // sync:pull-backend ("Download now") was removed in sync-legacy-demolition.
-
-  // Open a backend's remote location in the default browser/file explorer
-  ipcMain.handle('sync:open-folder', async (_e, { id }: { id: string }) => {
-    const { shell } = require('electron');
-    const config = await getSyncConfig();
-    const backend = config.backends.find((b: any) => b.id === id);
-    if (!backend) return;
-
-    switch (backend.type) {
-      case 'drive': {
-        // Deep-link to the actual sync folder on Google Drive by resolving its
-        // file ID via rclone, then opening https://drive.google.com/drive/folders/<id>.
-        // Falls back to the generic Drive homepage if rclone or the folder lookup fails.
-        const rcloneRemote = backend.config?.rcloneRemote || 'gdrive';
-        const driveRoot = backend.config?.DRIVE_ROOT || 'Claude';
-        const parentPath = `${rcloneRemote}:${driveRoot}/Backup`;
-        const targetName = 'personal';
-        const fallbackUrl = 'https://drive.google.com';
-        try {
-          const stdout: string = await new Promise((resolve, reject) => {
-            execFile(
-              'rclone',
-              ['lsjson', parentPath, '--dirs-only'],
-              { timeout: 15000 },
-              (err, out) => (err ? reject(err) : resolve(String(out || ''))),
-            );
-          });
-          const entries = JSON.parse(stdout) as Array<{ Name: string; ID?: string }>;
-          const match = entries.find((e) => e.Name === targetName && e.ID);
-          if (match?.ID) {
-            shell.openExternal(`https://drive.google.com/drive/folders/${match.ID}`);
-          } else {
-            shell.openExternal(fallbackUrl);
-          }
-        } catch {
-          shell.openExternal(fallbackUrl);
-        }
-        break;
-      }
-      case 'github': {
-        const repoUrl = backend.config?.PERSONAL_SYNC_REPO || '';
-        if (repoUrl) shell.openExternal(repoUrl);
-        break;
-      }
-      case 'icloud': {
-        const icloudPath = backend.config?.ICLOUD_PATH || '';
-        if (icloudPath) shell.openPath(icloudPath);
-        break;
-      }
-    }
-  });
-
-  // Guided setup wizard: prerequisite detection, tool installation, OAuth, repo creation.
-  // Each handler runs one specific command — no generic shell exec.
-  ipcMain.handle('sync:setup:check-prereqs', (_e, { backend }) => checkSyncPrereqs(backend));
-  ipcMain.handle('sync:setup:install-rclone', () => installRclone());
-  ipcMain.handle('sync:setup:check-gdrive', () => checkGdriveRemote());
-  ipcMain.handle('sync:setup:auth-gdrive', () => authGdrive());
-  ipcMain.handle('sync:setup:auth-github', () => authGithub());
-  ipcMain.handle('sync:setup:create-repo', (_e, { repoName }) => createGithubRepo(repoName));
+  // The request/response side (status, connect-start/cancel, install-gh, disconnect) is main/ipc/github.ts.
 
   // --- Permission response (blocking hooks + native asks) ---
   // Native asks share the channel; ids are 'native-'-prefixed so routing is

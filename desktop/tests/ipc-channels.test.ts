@@ -777,14 +777,15 @@ describe('syncspaces:* channel parity (desktop surfaces)', () => {
   ];
   const preload = readSourceFile(path.join(__dirname, '../src/main/preload.ts'));
   const shim = readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts'));
-  const handlers = readSourceFile(path.join(__dirname, '../src/main/ipc-handlers.ts'));
-  const remoteServer = readSourceFile(path.join(__dirname, '../src/main/remote-server.ts'));
+  // WHY (2026-09-30 one-core R3-4): the desktop and phone halves are ONE table entry now
+  // (main/ipc/sync-spaces.ts), so the two host-side surfaces collapse to one check; that both doors
+  // serve it from the table is channel-table-families.test.ts.
+  const table = readSourceFile(path.join(__dirname, '../src/main/ipc/sync-spaces.ts'));
   for (const [ch, constant] of channels) {
-    it(`${ch} present in preload, remote-shim, ipc-handlers, remote-server`, () => {
+    it(`${ch} present in preload, remote-shim and the channel table`, () => {
       expect(preload).toContain(ch);
       expect(shim).toContain(ch);
-      expect(handlers).toContain(constant);
-      expect(remoteServer).toContain(ch);
+      expect(table).toContain(constant);
     });
   }
   it('syncspaces:event push channel present in preload + remote-shim', () => {
@@ -889,14 +890,13 @@ describe('github:* channel parity (desktop surfaces)', () => {
   ];
   const preload = readSourceFile(path.join(__dirname, '../src/main/preload.ts'));
   const shim = readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts'));
-  const handlers = readSourceFile(path.join(__dirname, '../src/main/ipc-handlers.ts'));
-  const remoteServer = readSourceFile(path.join(__dirname, '../src/main/remote-server.ts'));
+  // WHY (2026-09-30 one-core R3-4): one table entry serves both doors (main/ipc/github.ts).
+  const table = readSourceFile(path.join(__dirname, '../src/main/ipc/github.ts'));
   for (const [ch, constant] of channels) {
-    it(`${ch} present in preload, remote-shim, ipc-handlers, remote-server`, () => {
+    it(`${ch} present in preload, remote-shim and the channel table`, () => {
       expect(preload).toContain(ch);
       expect(shim).toContain(ch);
-      expect(handlers).toContain(constant);
-      expect(remoteServer).toContain(ch);
+      expect(table).toContain(constant);
     });
   }
 

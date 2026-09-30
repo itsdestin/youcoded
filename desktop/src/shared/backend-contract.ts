@@ -42,6 +42,7 @@ import type {
 } from './update-install-types';
 import type { SessionInfo } from './types';
 import type { MarketplaceChannelTypes, SkillsBridge, MarketplaceBridge, FirstRunBridge } from './marketplace-channel-types';
+import type { SyncChannelTypes } from './sync-channel-types';
 export type { MarketplaceThumbs } from './marketplace-channel-types';
 import type {
   NativeSendResult, SessionContext, SessionContextText,
@@ -824,7 +825,7 @@ export interface ChannelDef<Ctx = ChannelCtx, Payload = any, Result = any> {
  *  so a handler, the desktop bridge and the phone shim cannot disagree about a channel's shape.
  *  `request` is the ONE object the caller sends (void = no payload). A family adds its rows here
  *  when it moves into the table. */
-export interface ChannelTypes extends MarketplaceChannelTypes {
+export interface ChannelTypes extends MarketplaceChannelTypes, SyncChannelTypes {
   'tags:list': { request: void; response: TagListResult };
   'tags:create': { request: { label: string; color: string }; response: TagMutationResult };
   'tags:update': { request: { id: string; patch: TagPatch }; response: TagMutationResult };

@@ -68,7 +68,6 @@ import { handleRemoteHandoff, type createHandoffTransport } from './conversation
 import { prepareRunInTerminal, shellDisplayName } from './session-manager';
 import type { HookRelay } from './hook-relay';
 import type { RemoteConfig } from './remote-config';
-import type { RequesterTakeoverType } from './conversations/takeover';
 import { RemoteConfig as RemoteConfigStatics } from './remote-config';
 import { RemoteDeviceStore, type RemoteDeviceView } from './remote-devices';
 import type { LocalSkillProvider } from './skill-provider';
@@ -102,18 +101,6 @@ import { UpdateSettings } from './update-settings';
 import { readTranscriptMeta } from './transcript-utils';
 import { listPastSessions, loadHistory, SAFE_ID_RE } from './session-browser';
 import { readTranscriptPage } from './transcript-page';
-import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning, addBackend, removeBackend, updateBackend, pushBackend } from './sync-state';
-// Cross-device sync spaces (spec 2026-07-03) — same service functions the
-// Electron IPC handlers call, so remote browsers get identical behavior.
-import { syncSpacesStatus, syncSpacesEnable, syncSpacesSyncNow, syncSpacesCreateProject, syncSpacesImportProject, syncSpacesRenameProject, syncSpacesStopProject, syncSpacesSetProjectDescription, getManagedRoots } from './sync-spaces/service';
-import { readDevices, renameDevice, removeDevice } from './sync-spaces/device-registry';
-import { checkSyncPrereqs, installRclone, checkGdriveRemote, authGdrive, authGithub, createGithubRepo } from './sync-setup-handlers';
-// Connect-GitHub modal (device-flow auth). status/install are stateless direct
-// calls; connect start/cancel drive the shared orchestrator singleton created in
-// ipc-handlers (its emitDone broadcasts github:connect-done to remote clients).
-import { installGh } from './github-auth';
-import { combinedGithubStatus } from './github-client';
-import { getGithubConnect, disconnectGithub } from './github-connect';
 import { resolveConversations, readConversation } from './chatsearch-index/refs-service';
 import { resolveStaticFile } from './remote-static-path';
 import { menuAnswerLock } from './menu-answer-lock';
@@ -380,18 +367,6 @@ export class RemoteServer {
   // permissionStore is for permissions:list only; revokes go through nativeHost.
   private getNativeRuntime: () => RemoteNativeRuntime | null = () => null;
   private get nativeRuntime(): RemoteNativeRuntime | null { return this.getNativeRuntime(); }
-  // Plan 2b Task 11: conversation-lease + device wiring, injected by ipc-handlers
-  // via setLeaseWiring() AFTER main.ts builds the lease client/requester (they
-  // live in the whenReady scope, not reachable at RemoteServer construction).
-  // Null until wired; the syncspaces:lease-*/device WS cases degrade the same
-  // way the desktop handlers do (free/error) so a remote resume never hard-blocks.
-  private leaseWiring: {
-    client: import('./conversations/lease-client').LeaseClient;
-    requester: RequesterTakeoverType;
-    deviceId: string;  // per-INSTALL — leases only
-    machineId: string; // per-MACHINE — device-registry self-marking only
-  } | null = null;
-
   constructor(
     private sessionManager: SessionManager,
     private hookRelay: HookRelay,
@@ -508,19 +483,6 @@ export class RemoteServer {
     if (!store) return 'claude';
     try { return (await store.get('native', String(sessionId ?? ''))) ? 'native' : 'claude'; }
     catch { return 'claude'; }
-  }
-
-  /** Injected by ipc-handlers after main.ts builds the lease client/requester,
-   *  so remote WS clients reach the SAME lease state the Electron IPC handlers
-   *  use machineId marks self in list-devices —
-   *  deviceId is the per-INSTALL lease id and must NOT be used for that. */
-  setLeaseWiring(w: {
-    client: import('./conversations/lease-client').LeaseClient;
-    requester: RequesterTakeoverType;
-    deviceId: string;
-    machineId: string;
-  }): void {
-    this.leaseWiring = w;
   }
 
   /** Injected by ipc-handlers right after it builds sessionIdMap + the
@@ -3573,89 +3535,7 @@ export class RemoteServer {
         this.respond(client.ws, type, id, { ok: false, error: HOST_ADMIN_REFUSAL });
         break;
       }
-      // --- Sync management ---
-      case 'sync:get-status': {
-        const syncStatus = await getSyncStatus();
-        this.respond(client.ws, type, id, syncStatus);
-        break;
-      }
-      case 'sync:get-config': {
-        const syncConfig = await getSyncConfig();
-        this.respond(client.ws, type, id, syncConfig);
-        break;
-      }
-      case 'sync:set-config': {
-        const updatedConfig = await setSyncConfig(payload.updates || payload);
-        this.respond(client.ws, type, id, updatedConfig);
-        break;
-      }
-      case 'sync:force': {
-        const syncResult = await forceSync();
-        this.respond(client.ws, type, id, syncResult);
-        break;
-      }
-      case 'sync:get-log': {
-        const logLines = await getSyncLog(payload?.lines);
-        this.respond(client.ws, type, id, logLines);
-        break;
-      }
-      case 'sync:dismiss-warning': {
-        // The remote-shim always sends { warning }, so payload.warning is
-        // the authoritative path. Guard against missing payload rather than
-        // falling back to the whole object (which would be a silent no-op).
-        await dismissWarning(payload?.warning ?? '');
-        this.respond(client.ws, type, id, { ok: true });
-        break;
-      }
 
-      // Cross-device sync spaces (spec 2026-07-03). Remote-shim sends payloads
-      // wrapped as { enabled } / { name }; unwrap the same way the sync:* cases
-      // above do. The syncspaces:event push reaches remote clients via the
-      // broadcast in service.ts (see broadcastToRenderers wiring below).
-      case 'syncspaces:status': {
-        this.respond(client.ws, type, id, await syncSpacesStatus());
-        break;
-      }
-      case 'syncspaces:enable': {
-        this.respond(client.ws, type, id, await syncSpacesEnable(!!payload?.enabled));
-        break;
-      }
-      case 'syncspaces:sync-now': {
-        // Optional spaceId narrows to one space (Project View "Sync now"); omit for all.
-        this.respond(client.ws, type, id, await syncSpacesSyncNow(
-          payload?.spaceId ? String(payload.spaceId) : undefined));
-        break;
-      }
-      case 'syncspaces:create-project': {
-        this.respond(client.ws, type, id, await syncSpacesCreateProject(String(payload?.name ?? '')));
-        break;
-      }
-      case 'syncspaces:import-project': {
-        this.respond(client.ws, type, id, await syncSpacesImportProject(
-          String(payload?.sourcePath ?? ''), String(payload?.name ?? ''),
-          this.sessionManager.listSessions().filter(s => s.status !== 'destroyed').map(s => s.cwd)));
-        break;
-      }
-      // Cross-device rename (display-name only) + stop-syncing (2026-07-12).
-      case 'syncspaces:rename-project': {
-        this.respond(client.ws, type, id, await syncSpacesRenameProject(
-          String(payload?.name ?? ''), String(payload?.displayName ?? '')));
-        break;
-      }
-      case 'syncspaces:stop-project': {
-        this.respond(client.ws, type, id, await syncSpacesStopProject(String(payload?.name ?? '')));
-        break;
-      }
-      // Synced project description (Task 3) — payload-object shape, matching rename-project.
-      case 'syncspaces:set-project-description': {
-        this.respond(client.ws, type, id, await syncSpacesSetProjectDescription(
-          String(payload?.name ?? ''), String(payload?.description ?? '')));
-        break;
-      }
-      // Conversation-lease takeover (Plan 2b Task 9/11). Thin passthroughs to the
-      // lease client (query) and requester flow (takeover/force), matching the
-      // desktop ipc handlers. When wiring is absent (sync disabled) they degrade
-      // to a free/error answer so the remote resume gate proceeds (spec §3 never-block).
       // Session references (spec 2026-08-10). Both go through refs-service, the
       // same functions ipc-handlers calls, so a phone and the desktop cannot
       // disagree about which folders may be read.
@@ -3667,176 +3547,6 @@ export class RemoteServer {
         // async — await before respond (unlike ipcMain.handle, respond does not
         // unwrap promises).
         this.respond(client.ws, type, id, await readConversation(payload as never));
-        break;
-      }
-      case 'syncspaces:lease-query': {
-        // query() is async — await before respond (unlike ipcMain.handle, respond
-        // doesn't unwrap promises).
-        this.respond(client.ws, type, id,
-          (await this.leaseWiring?.client.query(String(payload?.claudeSessionId ?? ''))) ?? { held: false, source: 'none' });
-        break;
-      }
-      case 'syncspaces:lease-takeover': {
-        this.respond(client.ws, type, id,
-          (await this.leaseWiring?.requester.takeover(String(payload?.claudeSessionId ?? ''))) ?? { outcome: 'error' });
-        break;
-      }
-      case 'syncspaces:lease-force': {
-        this.respond(client.ws, type, id,
-          (await this.leaseWiring?.requester.force(String(payload?.claudeSessionId ?? ''))) ?? { ok: false });
-        break;
-      }
-      // Device registry (Plan 2b spec §10a). readDevices/renameDevice are direct
-      // service-level calls (like the syncspaces:* rows above); self:true marks
-      // the current machine via the injected machineId.
-      case 'syncspaces:list-devices': {
-        const pr = getManagedRoots()?.personalRoot;
-        // machineId — must match the Electron handler exactly (ipc-channels.test.ts
-        // pins the channel pair; this is the semantic half it can't see).
-        const selfId = this.leaseWiring?.machineId ?? '';
-        this.respond(client.ws, type, id,
-          pr ? readDevices(pr).map((d) => ({ ...d, self: !!selfId && d.id === selfId })) : []);
-        break;
-      }
-      case 'syncspaces:rename-device': {
-        const pr = getManagedRoots()?.personalRoot;
-        if (!pr) { this.respond(client.ws, type, id, { ok: false }); break; }
-        try { await renameDevice(pr, String(payload?.id ?? ''), String(payload?.name ?? '')); this.respond(client.ws, type, id, { ok: true }); }
-        catch { this.respond(client.ws, type, id, { ok: false }); }
-        break;
-      }
-      case 'syncspaces:remove-device': {
-        const pr = getManagedRoots()?.personalRoot;
-        if (!pr) { this.respond(client.ws, type, id, { ok: false }); break; }
-        const target = String(payload?.id ?? '');
-        if (!target) { this.respond(client.ws, type, id, { ok: false }); break; }
-        // Same self-guard as the Electron handler — a remote client must not be
-        // able to remove the host machine's own row (it re-registers anyway).
-        if (target === (this.leaseWiring?.machineId ?? '')) {
-          this.respond(client.ws, type, id, { ok: false, error: 'cannot remove this device' });
-          break;
-        }
-        try { await removeDevice(pr, target); this.respond(client.ws, type, id, { ok: true }); }
-        catch { this.respond(client.ws, type, id, { ok: false }); }
-        break;
-      }
-
-      // Connect-GitHub modal (device-flow auth) — remote browser parity. The flow
-      // is all main-process; the browser just renders the code/URL and waits for
-      // the github:connect-done broadcast. The access token never crosses the WS.
-      case 'github:status': {
-        // Combined status (Phase 2) — same payload as the desktop handler:
-        // authed = stored app token OR gh login (legacy shape + additive fields).
-        this.respond(client.ws, type, id, await combinedGithubStatus());
-        break;
-      }
-      case 'github:connect-start': {
-        // Drives the shared orchestrator singleton; completion arrives as the
-        // github:connect-done broadcast (fanned out to every client).
-        const gc = getGithubConnect();
-        this.respond(client.ws, type, id, gc ? await gc.start() : { error: 'unavailable' });
-        break;
-      }
-      case 'github:connect-cancel': {
-        getGithubConnect()?.cancel();
-        this.respond(client.ws, type, id, { ok: true });
-        break;
-      }
-      case 'github:install-gh': {
-        this.respond(client.ws, type, id, await installGh());
-        break;
-      }
-      case 'github:disconnect': {
-        this.respond(client.ws, type, id, await disconnectGithub());
-        break;
-      }
-
-      // V2: Per-instance backend management (remote browser parity)
-      case 'sync:add-backend': {
-        const added = await addBackend(payload);
-        this.respond(client.ws, type, id, added);
-        break;
-      }
-      case 'sync:remove-backend': {
-        await removeBackend(payload.id || payload);
-        this.respond(client.ws, type, id, { ok: true });
-        break;
-      }
-      case 'sync:update-backend': {
-        const updated = await updateBackend(payload.id, payload.updates);
-        this.respond(client.ws, type, id, updated);
-        break;
-      }
-      case 'sync:push-backend': {
-        const pushResult = await pushBackend(payload.id || payload);
-        this.respond(client.ws, type, id, pushResult);
-        break;
-      }
-      // sync:pull-backend ("Download now") removed in sync-legacy-demolition.
-      case 'sync:open-folder': {
-        // Remote clients can't open local folders — return the URL for them to open manually.
-        // For Drive, resolve the actual sync folder ID via rclone so the client deep-links
-        // to the synced folder, not just drive.google.com's homepage.
-        const cfg = await getSyncConfig();
-        const backend = cfg.backends.find((b: any) => b.id === (payload.id || payload));
-        let url = '';
-        if (backend?.type === 'drive') {
-          const rcloneRemote = backend.config?.rcloneRemote || 'gdrive';
-          const driveRoot = backend.config?.DRIVE_ROOT || 'Claude';
-          try {
-            const { execFile } = require('child_process');
-            const stdout: string = await new Promise((resolve, reject) => {
-              execFile(
-                'rclone',
-                ['lsjson', `${rcloneRemote}:${driveRoot}/Backup`, '--dirs-only'],
-                { timeout: 15000 },
-                (err: any, out: string) => (err ? reject(err) : resolve(String(out || ''))),
-              );
-            });
-            const entries = JSON.parse(stdout) as Array<{ Name: string; ID?: string }>;
-            const match = entries.find((e) => e.Name === 'personal' && e.ID);
-            url = match?.ID
-              ? `https://drive.google.com/drive/folders/${match.ID}`
-              : 'https://drive.google.com';
-          } catch {
-            url = 'https://drive.google.com';
-          }
-        } else if (backend?.type === 'github') {
-          url = backend.config?.PERSONAL_SYNC_REPO || '';
-        }
-        this.respond(client.ws, type, id, { url });
-        break;
-      }
-
-      // Guided setup wizard (prerequisite detection, install, OAuth, repo creation)
-      case 'sync:setup:check-prereqs': {
-        const prereqs = await checkSyncPrereqs(payload.backend || payload);
-        this.respond(client.ws, type, id, prereqs);
-        break;
-      }
-      case 'sync:setup:install-rclone': {
-        const installResult = await installRclone();
-        this.respond(client.ws, type, id, installResult);
-        break;
-      }
-      case 'sync:setup:check-gdrive': {
-        const gdriveCheck = await checkGdriveRemote();
-        this.respond(client.ws, type, id, gdriveCheck);
-        break;
-      }
-      case 'sync:setup:auth-gdrive': {
-        const gdriveAuth = await authGdrive();
-        this.respond(client.ws, type, id, gdriveAuth);
-        break;
-      }
-      case 'sync:setup:auth-github': {
-        const ghAuth = await authGithub();
-        this.respond(client.ws, type, id, ghAuth);
-        break;
-      }
-      case 'sync:setup:create-repo': {
-        const repoResult = await createGithubRepo(payload.repoName || payload);
-        this.respond(client.ws, type, id, repoResult);
         break;
       }
 
