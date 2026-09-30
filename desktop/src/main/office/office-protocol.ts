@@ -2,6 +2,7 @@ import { net, protocol } from 'electron';
 import { lookup as dnsLookup } from 'node:dns/promises';
 import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
+import { readEditorSettings } from './editor-settings';
 import { copyToMedia, downloadToMedia, pictureRequestVia, uploadToMedia, type PictureRequest, type ResolveHost } from './office-pictures';
 import type { createSessions } from './office-sessions';
 import { createThemeFonts, currentThemeFontLinks, type ThemeFonts } from './theme-fonts';
@@ -97,6 +98,8 @@ type HandlerDeps = {
   resolveHost?: ResolveHost;
   /** Test seam: a short cap, so the time limit is testable. */
   downloadTimeoutMs?: number;
+  /** The editor settings remembered between documents (Task 4, editor-settings.ts). */
+  editorSettings?: () => Promise<Record<string, string>>;
 };
 
 /** The answer to copy-to-media / download-to-media (Task 1): the bare media name as text, which
@@ -125,7 +128,11 @@ export function officeRequestHandler(deps: HandlerDeps) {
         // (an incomplete sequence like "%E0%A4%A"). A malformed request is refused the same
         // way an absent file is, not turned into an uncaught exception in the main process.
         const rel = decodeURIComponent(u.pathname).replace(/^\/+/, '') || 'index.html';
-        if (rel === 'yc-fonts/css' || rel === 'yc-fonts/file') res = await serveFont(deps.fonts, rel.slice('yc-fonts/'.length), u.searchParams.get('u'));
+        // The editor's remembered settings (finish plan Task 4): yc-early.js reads this before any
+        // editor code runs and seeds the page's localStorage with it. WHY no-store: a setting
+        // changed in one document must reach the next one, never a cached answer.
+        if (rel === 'yc-settings.json') res = Response.json(deps.editorSettings ? await deps.editorSettings() : {}, { headers: { 'cache-control': 'no-store' } });
+        else if (rel === 'yc-fonts/css' || rel === 'yc-fonts/file') res = await serveFont(deps.fonts, rel.slice('yc-fonts/'.length), u.searchParams.get('u'));
         // Drag and drop (Task 1): the add-on's yc-bridge.js posts a dropped picture's bytes to
         // upload/drop and reads {"media/<name>": "<address>"} back — the shape a document server's
         // upload answers, so sdkjs's own web upload path gets the same answer.
@@ -162,6 +169,9 @@ export function officeRequestHandler(deps: HandlerDeps) {
     return new Response(res.body, { status: res.status, headers: h });
   };
 }
+
+/** The remembered editor settings main.ts hands the protocol (Task 4, editor-settings.ts). */
+export const officeEditorSettings = (userData: string) => () => readEditorSettings(userData);
 
 /** The theme-font service main.ts hands the protocol (Task 9). WHY net.fetch: the system proxy
  *  applies; WHY under userData: a later open works offline and each profile keeps its own; WHY

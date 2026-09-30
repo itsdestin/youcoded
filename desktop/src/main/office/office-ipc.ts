@@ -17,6 +17,7 @@ import { OFFICE_MAX_BYTES, type OfficeFile, type OfficeOpen, type OfficeSaveCopy
 import { authorizeArtifactWrite } from '../artifacts/write-authorization';
 import { log } from '../logger';
 import { keepAbandonedSavesIn, recordAbandonedSaves, takeAbandonedSaves } from './abandoned-saves';
+import { saveEditorSettings } from './editor-settings';
 import { createOfficeCommands, OFFICE_COMMANDS } from './office-commands';
 import { grantPicked } from './office-pictures';
 import type { createSessions, OfficeSession } from './office-sessions';
@@ -357,6 +358,7 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     if (cmd === 'save_dialog') return saveDialog(sender, s, a);
     if (cmd === 'save_file_as') return saveFileAs(reg, s, a);
     if (cmd === 'print_document') return printDocument(sender, reg, s, a);
+    if (cmd === 'save_editor_settings') return saveSettings(a);
     const page = pageLoads.get(sender.id) ?? 0;
     try {
       return await commandsFor(reg)(token, cmd, a);
@@ -372,6 +374,18 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
       if (cmd === 'save_file' && sender.isDestroyed?.()) void recordAbandonedSaves([s.path], deps.userData);
       throw e;
     }
+  }
+
+  // The editor's own settings (finish plan Task 4). WHY answered null even when the write fails:
+  // a setting that isn't remembered is no reason to interrupt the person — the choice still holds
+  // in the open document — and an fs error names paths the frame must never see. It is logged.
+  async function saveSettings(a: Record<string, unknown>): Promise<null> {
+    try {
+      await saveEditorSettings(deps.userData, a.settings);
+    } catch (e) {
+      log('WARN', 'Office', 'editor settings could not be saved', errorKind(e));
+    }
+    return null;
   }
 
   // Insert → Picture → From file (finish plan Task 1): Tauri's dialog.open, which the add-on's

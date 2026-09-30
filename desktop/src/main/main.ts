@@ -41,7 +41,7 @@ import { log, rotateLog } from './logger';
 import { isSmokeTest, reportWhenRendered } from './smoke-probe';
 import { hangDeps, installCrashDiagnostics, reportPreviousCrashes, wireWindowHangDiagnostics } from './crash-diagnostics';
 import { registerThemeProtocol } from './theme-protocol';
-import { officeThemeFonts, registerOfficeProtocol } from './office/office-protocol';
+import { officeEditorSettings, officeThemeFonts, registerOfficeProtocol } from './office/office-protocol';
 import { sealOfficeFrames } from './office/office-frame-guard';
 import { registerOfficeIpc } from './office/office-ipc';
 import { officeAvailable, officeRoot } from './office/office-root';
@@ -1971,7 +1971,7 @@ void app.whenReady().then(async () => {
   // mkdtemp (full/unwritable/policy-blocked temp dir) must degrade Office to unavailable, not
   // abort the rest of startup and leave the app with no window.
   const officeSessions = await initOfficeSessionsSafely();
-  if (officeSessions) registerOfficeProtocol({ root: officeRoot(), sessions: officeSessions, fonts: officeThemeFonts(app.getPath('userData'), path.join(os.homedir(), '.claude')) });
+  if (officeSessions) registerOfficeProtocol({ root: officeRoot(), sessions: officeSessions, fonts: officeThemeFonts(app.getPath('userData'), path.join(os.homedir(), '.claude')), editorSettings: officeEditorSettings(app.getPath('userData')) });
   // office:* (Task 5). WHY even without sessions: the renderer gets "unavailable", not a missing
   // handler. WHY the getter: the registry goes away at quit, and each request must see that.
   registerOfficeIpc(ipcMain, { getSessions: getOfficeSessions, available: () => officeAvailable(), root: officeRoot(), userData: app.getPath('userData'), documents: app.getPath('documents'), pruneVersionsAfterMs: 30_000 });

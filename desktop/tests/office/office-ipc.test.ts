@@ -26,6 +26,7 @@ import { registerOfficeIpc } from '../../src/main/office/office-ipc';
 import { log } from '../../src/main/logger';
 import { startWalk } from '../../src/main/office/office-home';
 import { idle as recentIdle } from '../../src/main/office/recent';
+import { readEditorSettings } from '../../src/main/office/editor-settings';
 import { createSessions } from '../../src/main/office/office-sessions';
 import { snapshot, versionsDir } from '../../src/main/office/versions';
 
@@ -133,6 +134,15 @@ describe('office IPC channels', () => {
   it('refuses a command the editor bridge is not allowed to ask for', async () => {
     const { token } = (await call('office:open', win1, await aDocx())) as { token: string };
     await expect(call('office:invoke', win1, token, 'read_any_file', { path: '/etc/passwd' })).rejects.toThrow('refused');
+  });
+
+  it('remembers the editor settings a document changed, keeping only settings keys', async () => {
+    const { token } = (await call('office:open', win1, await aDocx())) as { token: string };
+    await expect(call('office:invoke', win1, token, 'save_editor_settings', { settings: { 'de-settings-unit': '1', 'guest-username': 'someone', 'ui-theme-id': 'x' } })).resolves.toBeNull();
+    expect(await readEditorSettings(path.join(dir, 'userData'))).toEqual({ 'de-settings-unit': '1' });
+    // Only the window that opened the document may send them.
+    await expect(call('office:invoke', win2, token, 'save_editor_settings', { settings: { 'de-settings-unit': '2' } })).rejects.toThrow('refused');
+    expect(await readEditorSettings(path.join(dir, 'userData'))).toEqual({ 'de-settings-unit': '1' });
   });
 
   it('refuses an editor request whose token or command is not text', async () => {

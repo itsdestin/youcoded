@@ -27,6 +27,10 @@ export const OFFICE_COMMANDS: ReadonlySet<string> = new Set([
   // WHY (finish plan Task 3): File → Print, the toolbar's print, Ctrl+P. office-ipc.ts answers it
   // itself (the print window and its fallback need the asking window); printPdf below makes the PDF.
   'print_document',
+  // WHY (finish plan Task 4): the add-on's bridge reports the editor's own settings as they change
+  // (Advanced settings, view toggles), so the next document starts with them. office-ipc.ts
+  // answers it itself (editor-settings.ts keeps only allowed settings keys; nothing else is kept).
+  'save_editor_settings',
 ]);
 
 const MSG = {

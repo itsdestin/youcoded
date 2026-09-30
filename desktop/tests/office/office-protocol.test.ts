@@ -40,6 +40,19 @@ describe('officeRequestHandler', () => {
     expect(await res.text()).toBe('<html>editor</html>');
   });
 
+  it('serves the remembered editor settings to an open document, never cached', async () => {
+    const session = await sessions.open('/docs/report.docx', 1);
+    const withSettings = officeRequestHandler({ root, sessions, editorSettings: async () => ({ 'de-settings-unit': '1' }) });
+    const res = await withSettings(new Request(`office://${session.token}/yc-settings.json`));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    expect(await res.json()).toEqual({ 'de-settings-unit': '1' });
+    // No document, no answer.
+    expect((await withSettings(new Request('office://0123456789abcdef0123456789abcdef/yc-settings.json'))).status).toBe(404);
+    // Without the settings service the editor simply starts with its defaults.
+    expect(await (await handler(new Request(`office://${session.token}/yc-settings.json`))).json()).toEqual({});
+  });
+
   it('seals the CSP to this document\'s own origin instead of every office: document', () => {
     expect(OFFICE_CSP).toContain("default-src 'self'");
     expect(OFFICE_CSP).toContain("connect-src 'self'");
