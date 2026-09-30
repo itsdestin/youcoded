@@ -164,10 +164,15 @@ function wrapSegments(root: HTMLElement, start: TextPoint, end: TextPoint, make:
   // mid-walk would make it skip or revisit nodes.
   const nodes: Text[] = [];
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  let inside = false;
-  for (let n = walker.nextNode() as Text | null; n; n = walker.nextNode() as Text | null) {
-    if (n === start.node) inside = true;
-    if (inside) nodes.push(n);
+  // WHY the walk starts AT the quote, not at the top of the document (2026-09-30 one-core R3-4): it used
+  // to begin at `root` and step over every earlier text node for every comment, so the pass visited
+  // ~n/2 nodes per comment — quadratic in the comment count (1,000 comments: 1.5 million node visits
+  // against 15,000 for 100, a 99x rise for 10x the comments). The start node is already known, so begin
+  // there. Same nodes collected, same order; ReadingHighlights.test.tsx now pins the count of visits.
+  walker.currentNode = start.node;
+  let n: Text | null = start.node;
+  for (; n; n = walker.nextNode() as Text | null) {
+    nodes.push(n);
     if (n === end.node) break;
   }
   const out: HTMLElement[] = [];
