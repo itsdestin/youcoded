@@ -36,6 +36,10 @@ vi.mock('electron', () => {
 
 import { registerIpcHandlers } from '../src/main/ipc-handlers';
 import { registerWithRuntime } from './helpers/register-ipc';
+import { findChannel } from '../src/main/ipc/channel-table';
+
+// A phone's session:create: the same table entry a window reaches, with no window behind it.
+const phoneCreate = (opts: any) => findChannel('session:create')!.handler(opts, { door: 'remote', runtime: null, broadcast: () => {} } as any);
 import * as conversationsService from '../src/main/conversations/service';
 import { startConversationStore, stopConversationStore, getConversationStore, pruneNativePhantomRecords } from '../src/main/conversations/service';
 import { startTagRegistry } from '../src/main/conversations/tag-registry-service';
@@ -137,6 +141,7 @@ describe('skills:uninstall bundled-plugin rejection', () => {
     const mockSkillProvider = {
       configStore: { getPackages: vi.fn(() => ({})) },
       uninstall,
+      resolveUninstallTarget: vi.fn().mockResolvedValue('some-other-plugin'),
       install: vi.fn(),
       installMany: vi.fn(),
       ensureBundledPluginsInstalled: vi.fn(),
@@ -432,10 +437,8 @@ describe('session:create resumed admission', () => {
       on: vi.fn(), sendInput: vi.fn(), resizeSession: vi.fn(),
     };
     const registry = { assignSession: vi.fn(), getOwner: vi.fn(() => undefined), getKind: vi.fn(() => 'main'), getLeaderId: vi.fn(() => 7) };
-    let fromPhone: ((opts: any) => Promise<any>) | null = null;
     const remoteServer = {
-      broadcast: vi.fn(), setSessionMetaWiring: vi.fn(), setSessionNamingWiring: vi.fn(), setLastTopic: vi.fn(),
-      setSessionCreate: vi.fn((fn: any) => { fromPhone = fn; }),
+      broadcast: vi.fn(), setSessionMetaWiring: vi.fn(), setLastTopic: vi.fn(),
       getClientCount: vi.fn(() => 0), broadcastStatusData: vi.fn(), onStatusChange: vi.fn(() => () => {}),
     };
     const mainSend = vi.fn();
@@ -444,7 +447,7 @@ describe('session:create resumed admission', () => {
       { configStore: { getPackages: vi.fn(() => ({})) } } as any,
       undefined as any, undefined, undefined, remoteServer as any, registry as any);
     const create = (ipc.handle as any).mock.calls.find((c: any) => c[0] === 'session:create')[1];
-    expect(await fromPhone!({ name: 'Resume', cwd: '/tmp', skipPermissions: false, resumeSessionId: 'c2' })).toBe(info);
+    expect(await phoneCreate({ name: 'Resume', cwd: '/tmp', skipPermissions: false, resumeSessionId: 'c2' })).toBe(info);
     expect(registry.assignSession).not.toHaveBeenCalled();
     mainSend.mockClear();
     expect(await create({ sender: { id: 1 } }, { name: 'Resume', cwd: '/tmp', skipPermissions: false, resumeSessionId: 'c2' })).toMatchObject({ ...info, reused: true });
@@ -530,26 +533,42 @@ describe('session:create native resume — missing stored header', () => {
     };
     const mockWindow = { webContents: { send: vi.fn() }, isDestroyed: () => false };
     const mockSkillProvider = { configStore: { getPackages: vi.fn(() => ({})) } };
-    let creator: ((opts: any) => Promise<any>) | null = null;
     const remoteServer = {
       broadcast: vi.fn(),
-      setSessionMetaWiring: vi.fn(), setSessionNamingWiring: vi.fn(), setLastTopic: vi.fn(),
-      setSessionCreate: vi.fn((fn: any) => { creator = fn; }),
+      setSessionMetaWiring: vi.fn(), setLastTopic: vi.fn(),
       getClientCount: vi.fn(() => 0), broadcastStatusData: vi.fn(), onStatusChange: vi.fn(() => () => {}),
     };
     registerWithRuntime(registerIpcHandlers, 
       mockIpcMain as any, mockSessionManager as any, mockWindow as any, mockSkillProvider as any,
       undefined as any, undefined, undefined, remoteServer as any,
     );
-    expect(creator).toBeTypeOf('function');
     mockSessionManager.createSession.mockReturnValue({ id: 'ghost-native-2', name: 'Resuming…', cwd: '/tmp', status: 'active', provider: 'native' });
     // The resume with no stored data and no binding: the phone's create runs the
     // desktop's native start, which refuses it and tears the session down.
-    await expect(creator!(
+    await expect(phoneCreate(
       { provider: 'native', resumeSessionId: 'ghost-native-2', cwd: '/tmp', name: 'Resuming…', skipPermissions: false },
     )).rejects.toThrow('saved data is missing');
     expect(mockSessionManager.createSession).toHaveBeenCalledOnce();
     expect(mockSessionManager.destroySession).toHaveBeenCalledWith('ghost-native-2');
+  });
+
+  // A "No folder" conversation started from a phone must open in the app's private empty folder, as one started
+  // on the computer does (remote-access.md, 2026-09-16). The shared create applies the swap, so a phone cannot
+  // skip it — it used to depend on the phone door being handed its own copy of the rewrite.
+  it('a "No folder" conversation a phone starts opens in the app-owned empty folder', async () => {
+    const { NO_FOLDER_CWD, NO_FOLDER_DIR_NAME } = await import('../src/shared/no-folder');
+    const mockIpcMain = { handle: vi.fn(), on: vi.fn() };
+    const mockSessionManager = {
+      createSession: vi.fn((o: any) => ({ id: 'nf-1', name: 'x', cwd: o.cwd, status: 'active', provider: 'claude' })),
+      destroySession: vi.fn(() => true), listSessions: vi.fn(() => []), getSession: vi.fn(),
+      sendInput: vi.fn(), resizeSession: vi.fn(), on: vi.fn(),
+    };
+    registerWithRuntime(registerIpcHandlers, mockIpcMain as any, mockSessionManager as any,
+      { webContents: { send: vi.fn() }, isDestroyed: () => false } as any, { configStore: { getPackages: vi.fn(() => ({})) } } as any);
+    await phoneCreate({ name: 'x', cwd: NO_FOLDER_CWD, skipPermissions: false });
+    const cwd = mockSessionManager.createSession.mock.calls[0][0].cwd;
+    expect(cwd).not.toBe(NO_FOLDER_CWD);
+    expect(cwd.endsWith(NO_FOLDER_DIR_NAME)).toBe(true);
   });
 });
 
@@ -798,8 +817,7 @@ describe('status push: deduplicated, paused while nobody can see it, resumed on 
       onStatusChange: vi.fn((cb: (s: any) => void) => { statusListener = cb; return () => {}; }),
       broadcast: vi.fn(),
       // Wiring the handlers hand a real server at boot; inert here.
-      setSessionMetaWiring: vi.fn(), setSessionNamingWiring: vi.fn(), setLastTopic: vi.fn(),
-      setSessionCreate: vi.fn(),
+      setSessionMetaWiring: vi.fn(), setLastTopic: vi.fn(),
     } : undefined;
     const mockSkillProvider = { configStore: { getPackages: vi.fn(() => ({})) }, getInstalled: vi.fn(() => []) };
     registerWithRuntime(registerIpcHandlers, 
@@ -1419,6 +1437,27 @@ describe('Welcome back tracking hooks', () => {
     const destroy = (ipc.handle as any).mock.calls.find((c: any) => c[0] === 'session:destroy')[1];
     await destroy({}, { sessionId: 'desktop-d1' });
     expect(store.untrack).toHaveBeenCalledWith('desktop-d1');
+  });
+
+  // A phone's own X is the same explicit close: session:destroy is one table entry, so it runs the computer's
+  // teardown and untracks. It used to run a shorter body of its own and needed its own untrack hook.
+  it('a session a phone closes is untracked too, and one whose close fails is not', async () => {
+    const ipc = { handle: vi.fn(), on: vi.fn() };
+    const manager: any = {
+      createSession: vi.fn(), getSession: vi.fn(() => undefined), listSessions: vi.fn(() => []),
+      destroySession: vi.fn(() => true), on: vi.fn(), sendInput: vi.fn(), resizeSession: vi.fn(),
+    };
+    const store = makeFakeStore();
+    registerWithRuntime(registerIpcHandlers, ipc as any, manager, mainWindow(), skillProvider(),
+      undefined as any, undefined, undefined, undefined, undefined, undefined, undefined, store as any);
+    const phone = { door: 'remote', runtime: null, broadcast: () => {} } as any;
+    const destroy = (id: string) => findChannel('session:destroy')!.handler({ sessionId: id }, phone);
+    expect(await destroy('desktop-p1')).toBe(true);
+    expect(store.untrack).toHaveBeenCalledWith('desktop-p1');
+    store.untrack.mockClear();
+    manager.destroySession.mockReturnValueOnce(false);
+    expect(await destroy('desktop-p2')).toBe(false);
+    expect(store.untrack).not.toHaveBeenCalled();
   });
 
   it('the first user-message transcript event tracks a brand-new session, once', async () => {

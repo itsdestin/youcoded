@@ -43,6 +43,7 @@ import type {
 import type { SessionInfo } from './types';
 import type { MarketplaceChannelTypes, SkillsBridge, MarketplaceBridge, FirstRunBridge } from './marketplace-channel-types';
 import type { SyncChannelTypes } from './sync-channel-types';
+import type { SessionChannelTypes } from './session-channel-types';
 export type { MarketplaceThumbs } from './marketplace-channel-types';
 import type {
   NativeSendResult, SessionContext, SessionContextText,
@@ -818,6 +819,12 @@ export interface ChannelDef<Ctx = ChannelCtx, Payload = any, Result = any> {
    *  the screen down, so the entry declares the soft answer the phone always got. The desktop
    *  door ignores it: a throw rejects the invoke there, as it always did. */
   remoteOnError?: (error: unknown, payload: Payload) => unknown;
+  /** Phone door only: a check on what a phone sent, run BEFORE the handler. Returns undefined to let it
+   *  through, or the answer to give instead (the handler then never runs). WHY (2026-09-30 one-core R3-4):
+   *  session:create's "a terminal can only be opened from the app itself" refusal was a check buried in
+   *  the phone's old `case`; a mechanical merge into one handler would have dropped it or applied it to
+   *  the computer's own windows. As table policy it is declared once, on the entry, for the phone only. */
+  remoteGuard?: (payload: Payload) => unknown | undefined;
 }
 
 /** The request and response type of every channel a table family owns. ONE place: the table
@@ -825,7 +832,7 @@ export interface ChannelDef<Ctx = ChannelCtx, Payload = any, Result = any> {
  *  so a handler, the desktop bridge and the phone shim cannot disagree about a channel's shape.
  *  `request` is the ONE object the caller sends (void = no payload). A family adds its rows here
  *  when it moves into the table. */
-export interface ChannelTypes extends MarketplaceChannelTypes, SyncChannelTypes {
+export interface ChannelTypes extends MarketplaceChannelTypes, SyncChannelTypes, SessionChannelTypes {
   'tags:list': { request: void; response: TagListResult };
   'tags:create': { request: { label: string; color: string }; response: TagMutationResult };
   'tags:update': { request: { id: string; patch: TagPatch }; response: TagMutationResult };

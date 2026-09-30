@@ -66,6 +66,7 @@ const resolveUninstallTarget = vi.fn(async (id: string) => (id === 'youcoded-cha
 
 let server: RemoteServer;
 let handlers: Map<string, (...args: any[]) => any>;
+let onHandlers: Map<string, (...args: any[]) => any>;
 let cleanup: () => Promise<void>;
 const windowBroadcasts: Array<[string, unknown]> = [];
 
@@ -99,6 +100,7 @@ beforeAll(() => {
   const wiring = registerWithRuntime(registerIpcHandlers, mockIpcMain, sessionManager, mockWindow, mockSkillProvider, undefined as any, hookRelay, config, server);
   cleanup = wiring.cleanup;
   handlers = new Map(mockIpcMain.handle.mock.calls.map((c: any) => [c[0], c[1]]));
+  onHandlers = new Map(mockIpcMain.on.mock.calls.map((c: any) => [c[0], c[1]]));
 });
 afterAll(async () => { await cleanup?.(); });
 beforeEach(() => { windowSends.length = 0; windowBroadcasts.length = 0; registryOn = true; metaChanged.mockClear(); });
@@ -116,16 +118,21 @@ describe('every table entry is served by both doors through its one handler', ()
       const seen: string[] = [];
       def.handler = (_payload: any, ctx: any) => { seen.push(ctx.door); return { sentinel: def.name }; };
       try {
-        const desktop = await overIpc(def.name, {});
-        const phone = (await overRemote(def.name, {})).answer;
-        expect(desktop).toEqual({ sentinel: def.name });
+        // A fire-and-forget entry has no answer on either door: it is called, and only that is visible.
+        const desktop = def.kind === 'on' ? (onHandlers.get(def.name)!({ sender: { id: 7 } }, {}), undefined) : await overIpc(def.name, {});
+        const phone = await overRemote(def.name, {});
+        if (def.kind !== 'on') expect(desktop).toEqual({ sentinel: def.name });
         if (def.desktopOnly || def.remoteAllowed === false) {
-          // Refused from the table: the handler never runs for a phone.
+          // Refused from the table: the handler never runs for a phone, and it gets the entry's declared refusal.
           expect(seen).toEqual(['desktop']);
-          expect(phone).toMatchObject({ ok: false, unsupported: true });
+          const refusal = def.refusal ?? { kind: 'unsupported' };
+          if (refusal.kind === 'silent') expect(phone.frames).toEqual([]);
+          else if (refusal.kind === 'reply') expect(phone.answer).toEqual(refusal.payload);
+          else expect(phone.answer).toMatchObject({ ok: false, unsupported: true });
         } else {
           expect(seen).toEqual(['desktop', 'remote']);
-          expect(phone).toEqual({ sentinel: def.name });
+          if (def.kind === 'on') expect(phone.frames).toEqual([]);
+          else expect(phone.answer).toEqual({ sentinel: def.name });
         }
       } finally {
         def.handler = original;

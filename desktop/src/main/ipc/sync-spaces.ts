@@ -22,7 +22,7 @@ import type { LeaseClient } from '../conversations/lease-client';
 import type { RequesterTakeoverType } from '../conversations/takeover';
 import { defineChannel, type MainChannelDef } from './channel-def';
 
-export interface SyncSpacesLeaseWiring {
+interface SyncSpacesLeaseWiring {
   client: LeaseClient;
   requester: RequesterTakeoverType;
   /** per-INSTALL: leases only. */

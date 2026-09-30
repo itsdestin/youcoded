@@ -30,9 +30,11 @@ describe('session:selected, renderer → main', () => {
   });
 
   it('main caches it per window', () => {
-    const handler = /ipcMain\.on\(IPC\.SESSION_SELECTED,[\s\S]{0,400}?setSelectedSession\(\s*evt\.sender\.id/;
-    assertPatternMatches(handler, 'ipcMain.on(IPC.SESSION_SELECTED, (evt, sessionId) => {\n windowRegistry?.setSelectedSession(evt.sender.id, x)', 'the cache write');
-    expect(src('main', 'ipc-handlers.ts')).toMatch(handler);
+    // WHY (2026-09-30 one-core R3-4): a channel-table entry now (main/ipc/session.ts); the desktop door
+    // hands it the calling window's id as ctx.windowId. Desktop-only, and silent for a phone.
+    const handler = /IPC\.SESSION_SELECTED,\s*kind:\s*'on',\s*desktopOnly:\s*true[\s\S]{0,400}?setSelectedSession\(\s*ctx\.windowId/;
+    assertPatternMatches(handler, "IPC.SESSION_SELECTED, kind: 'on', desktopOnly: true, refusal: { kind: 'silent' },\n handler: ({ sessionId }, ctx) => { ops().windowRegistry?.setSelectedSession(ctx.windowId, x)", 'the cache write');
+    expect(src('main', 'ipc', 'session.ts')).toMatch(handler);
   });
 
   it('the remote shim has the member and sends nothing — a phone has no desktop window to report', () => {

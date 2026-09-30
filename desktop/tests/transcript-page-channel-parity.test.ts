@@ -30,8 +30,10 @@ describe('transcript:page channel parity (desktop + remote; Android is a later c
     expect(read('src/main/preload.ts')).toMatch(/requestTranscriptPage:\s*\(/);
   });
 
-  it('handled in ipc-handlers.ts', () => {
-    expect(read('src/main/ipc-handlers.ts')).toContain('IPC.TRANSCRIPT_PAGE');
+  // WHY (2026-09-30 one-core R3-4): one table entry serves both doors (main/ipc/session.ts).
+  it('handled by the channel table entry, which serves the computer and a phone', () => {
+    expect(read('src/main/ipc/session.ts')).toContain('IPC.TRANSCRIPT_PAGE');
+    expect(read('src/main/remote-server.ts')).not.toContain(`case '${CHANNEL}'`);
   });
 
   it('sent by remote-shim.ts as a real call, not a no-op stub', () => {
@@ -42,9 +44,6 @@ describe('transcript:page channel parity (desktop + remote; Android is a later c
     expect(shim).not.toMatch(/requestTranscriptPage:\s*\([^)]*\)\s*=>\s*\{\s*\}/);
   });
 
-  it('answered by a remote-server.ts WS case', () => {
-    expect(read('src/main/remote-server.ts')).toContain(`'${CHANNEL}'`);
-  });
 
   // "I could not locate the transcript" vs "you have reached the beginning of
   // the conversation" were the same answer until 2026-09-07, and the renderer
@@ -55,6 +54,6 @@ describe('transcript:page channel parity (desktop + remote; Android is a later c
   it('both answering surfaces distinguish "unresolved" from "no more history"', () => {
     expect(read('src/shared/types.ts')).toMatch(/unresolved\?: true/);
     expect(read('src/main/ipc-handlers.ts')).toMatch(/unresolved: true/);
-    expect(read('src/main/remote-server.ts')).toMatch(/unresolved: true/);
+    expect(read('src/main/ipc/session.ts')).toMatch(/unresolved: true/);
   });
 });

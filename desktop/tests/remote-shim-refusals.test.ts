@@ -69,6 +69,9 @@ describe('remote-shim — rejecting failures', () => {
       if (body.includes('{ ok: false, error:') || helperRefuses)
         for (const channel of starts[i][0]) out.add(channel);
     }
+    // WHY (2026-09-30 one-core R3-4): session:create moved into the channel table; its `{ ok:false }`
+    // answers now come from the entry's phone guard and soft failure answer, not from a `case`.
+    if (/IPC\.SESSION_CREATE[\s\S]*?remoteGuard[\s\S]*?ok: false[\s\S]*?remoteOnError[\s\S]*?ok: false/.test(read('../src/main/ipc/session.ts'))) out.add('session:create');
     return out;
   }
 

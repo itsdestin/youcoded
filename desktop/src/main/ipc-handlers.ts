@@ -15,7 +15,7 @@ import { SessionManager, prepareRunInTerminal, shellDisplayName } from './sessio
 import { wireDocCommentsSessionLifecycle } from './doc-comments/session-lifecycle';
 import { shouldReconcileNativePage, snapshotResumeBoundary } from './transcript-page-source';
 import { HookRelay } from './hook-relay';
-import { IPC, SESSION_FLAG_NAMES, type SessionFlagName, type SessionProvider, type TranscriptEvent, type TranscriptPageRequest, type TranscriptPageResult, type HookEvent, type SpecialistsEvent, type ShellEvent } from '../shared/types';
+import { IPC, type TranscriptEvent, type TranscriptPageRequest, type TranscriptPageResult, type HookEvent, type SpecialistsEvent, type ShellEvent } from '../shared/types';
 import { isPlaceholderModelId } from '../shared/model-ids';
 import { setPermissionOverrides, forgetSessionAttention } from './main';
 import { LocalSkillProvider } from './skill-provider';
@@ -34,6 +34,7 @@ import type { NativeRuntime } from './create-runtime';
 import { registerDesktopChannels } from './ipc/channel-table';
 import { bindSkillsDeps } from './ipc/skills';
 import { bindSyncSpacesDeps } from './ipc/sync-spaces';
+import { bindSessionOps, sessionProviderFor } from './ipc/session';
 import { bindThemeMarketplace } from './ipc/theme-marketplace';
 import { bindFirstRunNative } from './ipc/first-run';
 import type { OutboxBroadcast } from './chatsearch-index/outbox-drain';
@@ -75,11 +76,8 @@ import type { PermissionRule } from '../shared/permission-types';
 import { SearchService } from './harness/search/search-service';
 import type { NativePermissionMode } from '../shared/permission-types';
 import { resolveMappingAction, findLiveSessionForConversation } from './session-id-mapping';
-import { listPastSessions, loadHistory, readSessionTranscriptMeta } from './session-browser';
-import { perfMark } from './perf-marks';
-import { shareInFlight } from './share-in-flight';
+import { readSessionTranscriptMeta } from './session-browser';
 import { TranscriptPageSources, type ResolvedPageSource } from './transcript-page-source';
-import { readTranscriptMeta } from './transcript-utils';
 import { startThemeWatcher, listUserThemes, userThemeDir, userThemeManifest, THEMES_DIR } from './theme-watcher';
 import { isBundledPlugin } from '../shared/bundled-plugins';
 import { ThemeMarketplaceProvider } from './theme-marketplace-provider';
@@ -104,7 +102,6 @@ import { getConfig as getMarketplaceConfig, setConfig as setMarketplaceConfig } 
 import { readComponent, type ComponentKind } from './marketplace-file-reader';
 import { log } from './logger';
 import { attachStartupDialogLog } from './startup-dialog-log';
-import { menuAnswerLock } from './menu-answer-lock';
 import { getUpdateService } from './update-service';
 // Analytics opt-out — Phase 6. The two exported functions read/write
 // ~/.claude/youcoded-analytics.json; runAnalyticsOnLaunch (wired in main.ts)
@@ -162,7 +159,7 @@ import { listConversations, repoInfo, listContextFiles, readContext } from './pr
 // cwd, title and flag changes. Keyed by CLAUDE session id (resolved from the
 // desktop id via sessionIdMap below), matching the store's record id.
 import { noteTranscriptEvent, noteSessionStarted, noteSessionEnded,
-  noteFlagChanged, noteSessionNote, noteModelUsed, getConversationStore, flushSessionToSpace,
+  noteModelUsed, getConversationStore, flushSessionToSpace,
   buildLocalProjectResolver, emitConversationMetaChanged,
   pinHandoffDestination, publishStoppedHandoff, syncPublishedHandoff,
   importConfirmedHandoff, resolveHandoffProject, resolveSavedHandoffProject, HANDOFF_SYNC_TIMEOUT_MS,
@@ -184,7 +181,6 @@ import { createHandoffTransport, registerHandoffIpc } from './conversations/hand
 import { createTransferredExitGate } from './conversations/handoff-exit';
 import { hubLeaseRequest, syncSpacesSyncNowAwaited } from './sync-spaces/service';
 import type { RequesterTakeoverType } from './conversations/takeover';
-import { tagFlagKey } from '../shared/tags';
 import { writeContextFile } from './project-context';
 
 // Max age for clipboard paste images (1 hour)
@@ -1039,9 +1035,8 @@ export function registerIpcHandlers(
     }
     return started ? result : { ...result, reused: true as const };
   };
-  ipcMain.handle(IPC.SESSION_CREATE, (event, opts) => createSession(event, opts));
-  // Optional for test doubles that only model the older remote interface.
-  remoteServer?.setSessionCreate?.((opts) => createSession(null, opts));
+  // WHY (2026-09-30 one-core R3-4): session:create is a table entry (main/ipc/session.ts) calling this
+  // closure through bindSessionOps, for a window (with its sender) and for a phone (with none).
 
   // Pull-style directory snapshot — renderers call this on mount to avoid
   // racing the WINDOW_DIRECTORY_UPDATED push that fires before React subscribes.
@@ -1051,7 +1046,9 @@ export function registerIpcHandlers(
     });
   }
 
-  ipcMain.handle(IPC.SESSION_DESTROY, async (_event, { sessionId }: { sessionId: string }) => {
+  // The teardown behind session:destroy (table entry, main/ipc/session.ts): the computer's windows AND a
+  // phone run this one body, so a phone's close also releases the hold and forgets it for Welcome back.
+  const destroySession = async (sessionId: string): Promise<boolean> => {
     // WHY: admission is keyed by CONVERSATION id; a Claude session's desktop id
     // differs. Capture it before teardown can drop the mapping.
     const conversationId = sessionIdMap.get(sessionId) ?? sessionId;
@@ -1098,49 +1095,10 @@ export function registerIpcHandlers(
       untrackWelcomeBack(sessionId);
     }
     return result;
-  });
+  };
 
-  // Multi-window aware: when a windowRegistry is wired up, scope the list to
-  // sessions owned by the calling renderer's window — otherwise a freshly-
-  // spawned peer window picks up every session on mount and its ownership-
-  // acquired dedup leaves strangers stuck in the local list. Sessions with no
-  // owner yet (e.g., remote-created) fall back to the primary window's list
-  // so remote clients still see everything. RemoteServer uses its own path
-  // and doesn't go through this handler.
-  ipcMain.handle(IPC.SESSION_LIST, async (event) => {
-    // Stamp each native session with the TYPE of the provider it is bound to.
-    // WHY: the renderer decides whose usage numbers to show from the session's
-    // model id alone otherwise, and two providers can list the same id — a user
-    // with both an OpenAI API key and the ChatGPT plan has `gpt-5.5` twice. The
-    // session itself knows which one it is bound to; the model id does not.
-    // (Review T6 F1 / design §4.9.) resolvePortableModel returns null for a
-    // non-native session or a provider that has left the registry — never a
-    // guess, so the renderer falls back to "unknown" rather than to the wrong
-    // plan.
-    const all = await stampProviderTypes(sessionManager.listSessions());
-    if (!windowRegistry) return all;
-    const callerId = event.sender.id;
-    const primaryId = windowRegistry.getLeaderId();
-    return all.filter((s) => {
-      const owner = windowRegistry.getOwner(s.id);
-      if (owner == null) return callerId === primaryId; // unowned → primary only
-      return owner === callerId;
-    });
-  });
-
-  // Remote access batch 2 (§2, R2): each window reports the session it shows; main
-  // caches it per window (WindowRegistry) so the remote snapshot and
-  // session:destroyed can tell a phone what the desktop is showing. Fire-and-forget:
-  // nothing on the desktop reads it back.
-  ipcMain.on(IPC.SESSION_SELECTED, (evt, { sessionId }: { sessionId: unknown }) => {
-    windowRegistry?.setSelectedSession(evt.sender.id, typeof sessionId === 'string' ? sessionId : null);
-  });
-
-  ipcMain.handle(IPC.SESSION_SWITCH, async (_event, { sessionId: _sessionId }: { sessionId: string }) => {
-    // Switch is a client-side concern on desktop — the renderer manages active session.
-    // This handler exists for protocol parity with Android/remote.
-    return { ok: true };
-  });
+  // session:list / :selected / :switch are table entries now (main/ipc/session.ts); the window-scoped list
+  // and the per-window selection cache read windowRegistry through bindSessionOps.
 
   // File picker dialog (attachment paperclip)
   ipcMain.handle(IPC.DIALOG_OPEN_FILE, async () => {
@@ -1253,19 +1211,6 @@ export function registerIpcHandlers(
   ipcMain.handle(IPC.OPEN_PATH, async (_event, { filePath }: { filePath: string }) => {
     if (typeof filePath !== 'string' || filePath.length === 0) return 'no path';
     return shell.openPath(filePath);
-  });
-
-  // Read model + context from a transcript JSONL file (async, first/last byte-range reads)
-  ipcMain.handle(IPC.READ_TRANSCRIPT_META, async (_event, { path: transcriptPath }: { path: string }) => {
-    try {
-      const claudeProjects = path.join(os.homedir(), '.claude', 'projects');
-      const resolved = path.resolve(transcriptPath);
-      // Fix: + path.sep so a sibling dir like ~/.claude/projects-evil can't pass the prefix check
-      if (!resolved.startsWith(claudeProjects + path.sep)) return null;
-      return await readTranscriptMeta(transcriptPath);
-    } catch {
-      return null;
-    }
   });
 
   // --- Model preference persistence ---
@@ -1557,54 +1502,7 @@ export function registerIpcHandlers(
     });
   }
 
-  // --- Session browser (resume) ---
-  // One scan answers every browse made while it runs with the same live sessions
-  // excluded (share-in-flight.ts has the why: two full scans per first open).
-  const browseOnce = shareInFlight<Awaited<ReturnType<typeof listPastSessions>>>();
-  ipcMain.handle(IPC.SESSION_BROWSE, async () => {
-    // Collect active Claude Code session IDs so we can exclude them.
-    // Bug 1 (2026-07-13 dogfood): a stale sessionIdMap entry (missed exit event,
-    // or a create+resume pair leaving two desktop ids on one claude id) hid a
-    // CLOSED session from the browser until restart. Filter to mappings whose
-    // desktop session actually still exists — the map is a cache, not truth.
-    const activeIds = new Set<string>();
-    for (const [desktopId, claudeId] of sessionIdMap.entries()) {
-      if (sessionManager.getSession(desktopId)) activeIds.add(claudeId);
-    }
-    // Task 5: native rows now join the SAME store-overlay enrichment pass CC
-    // rows get (flags/tags/note/device/title precedence, lastUsedModel) instead
-    // of being bare-concatenated after the fact — see listPastSessions's
-    // nativeEntries param. nativeHost.list() is the live/persisted session
-    // registry; passing it in (rather than session-browser.ts reading disk
-    // itself) keeps NativeSessionHost the one source of truth for what native
-    // sessions exist.
-    // WHY the marks: measured 2026-09-26, this native list is most of a first
-    // Resume open on a big history (it runs before listPastSessions starts).
-    return browseOnce([...activeIds].sort().join(','), async () => {
-      perfMark('bg:browse:native-list:start');
-      const nativeEntries = await nativeHost.listAsync();
-      perfMark('bg:browse:native-list:done', { native: nativeEntries.length });
-      return listPastSessions(activeIds, nativeEntries);
-    });
-  });
-
-  ipcMain.handle(IPC.SESSION_HISTORY, async (
-    _event,
-    { sessionId, projectSlug, count, all }: { sessionId: string; projectSlug: string; count: number; all: boolean },
-  ) => {
-    return loadHistory(sessionId, projectSlug, count, all);
-  });
-
-
-  // PTY input (fire-and-forget, not request-response)
-  ipcMain.on(IPC.SESSION_INPUT, (_event, { sessionId, text }: { sessionId: string; text: string }) => {
-    sessionManager.sendInput(sessionId, text);
-  });
-
-  // PTY resize (fire-and-forget)
-  ipcMain.on(IPC.SESSION_RESIZE, (_event, { sessionId, cols, rows }: { sessionId: string; cols: number; rows: number }) => {
-    sessionManager.resizeSession(sessionId, cols, rows);
-  });
+  // session:browse / :history / :input / :resize are table entries (main/ipc/session.ts).
 
   // --- PTY output buffering ---
   // Buffer output per-session until the renderer signals its terminal is mounted.
@@ -1635,7 +1533,7 @@ export function registerIpcHandlers(
   });
 
   // Renderer signals terminal is mounted and listening
-  ipcMain.on(IPC.TERMINAL_READY, (_event, { sessionId }: { sessionId: string }) => {
+  const signalTerminalReady = (sessionId: string): void => {
     readySessions.add(sessionId);
     const buffered = pendingOutput.get(sessionId);
     if (buffered) {
@@ -1644,7 +1542,7 @@ export function registerIpcHandlers(
       }
       pendingOutput.delete(sessionId);
     }
-  });
+  };
 
   // No-op: Electron has no hardware back button. Registered for shape
   // parity with SessionService.kt's handleBridgeMessage() so the
@@ -2283,7 +2181,10 @@ export function registerIpcHandlers(
   // older page. Request/response — unlike TRANSCRIPT_REPLAY, which streams
   // every historical event back over TRANSCRIPT_EVENT and cost ~22s of main +
   // renderer work on a huge conversation.
-  ipcMain.handle(IPC.TRANSCRIPT_PAGE, async (evt, req: TranscriptPageRequest): Promise<TranscriptPageResult> => {
+  // (transcript:page is a table entry, main/ipc/session.ts; this is the computer's body for it, given the
+  // asking window's id. A phone's body lives beside the entry: it has no window to know about.)
+  const desktopTranscriptPage = async (req: TranscriptPageRequest, windowId: number | undefined): Promise<TranscriptPageResult> => {
+    const evt = { sender: { id: windowId ?? -1 } };
     const empty: TranscriptPageResult = { events: [], cursor: null, hasMore: false };
     if (!req || typeof req.sessionId !== 'string') return empty;
     const { sessionId, beforeCursor } = req;
@@ -2355,7 +2256,7 @@ export function registerIpcHandlers(
     return { ...page, reconcileInterrupted: entirelyOld, reconcileInterruptedToolIds: old
       ? [...new Set(old.events.filter(ev => ev.type === 'tool-use').map(ev => ev.data.toolUseId).filter((id): id is string => !!id))]
       : undefined };
-  });
+  };
 
   // Transcript replay: a window that just acquired a session asks for every
   // historical event so its reducer can hydrate. Events stream back on the
@@ -3215,120 +3116,18 @@ export function registerIpcHandlers(
   // never the thing keeping native writes out — nativeMetaRefusal below (now
   // deleted) was. Retiring that refusal is only safe BECAUSE Task 4 landed
   // real native writes first — see the design's Task 5 note.
-  // `_resolved` is unused on purpose: the phantom-record gate keys off the raw
-  // sessionId, not the resolved path. The param stays to match the `canWrite`
-  // signature RemoteServer.setSessionMetaWiring expects.
-  const canWriteStoreRecord = (sessionId: string, _resolved: string): boolean => {
+  const canWriteStoreRecord = (sessionId: string): boolean => {
     return sessionIdMap.has(sessionId) || !sessionManager.getSession(sessionId);
   };
 
-  // Parity wiring (Item 6, design §12 survivor 1): give remote WS clients the
-  // SAME sessionId resolution + phantom-record gate the ipcMain handlers above
-  // use for session:set-tag / session:set-note, so tagging/noting a session
-  // over remote can't bypass a gate that only ever covered the local path.
+  // WHY (2026-09-30 one-core R3-4): the tag / note / naming / browse channels are table entries now, so a
+  // phone reaches the SAME id map and phantom-record gate by construction. All that is left of the old
+  // "meta wiring" is the id lookup the phone's Files screen uses to match a session to its conversation.
   remoteServer?.setSessionMetaWiring({
     resolve: (sessionId: string) => sessionIdMap.get(sessionId) || sessionId,
-    canWrite: canWriteStoreRecord,
-    // The desktop half of a phone-originated tag/note: the same push the ipcMain
-    // handlers make after their own write (2026-09-16, sync.md).
-    notify: (sessionId: string, payload: Record<string, unknown>) =>
-      sendForSession(sessionId, IPC.SESSION_META_CHANGED, sessionId, payload),
   });
 
-  // Provider bucket to READ a resolved session's meta from. 'native' when
-  // NativeSessionHost recognizes the id (live now, or a persisted
-  // ~/.youcoded/sessions file); otherwise probe the store's native bucket —
-  // a store-only native browse row (record synced, transcript not local yet;
-  // Task 5) is still native even though isNativeSessionId can't see it (C1).
-  // A null store (boot window) falls back to 'claude' exactly as before.
-  // WRITES do NOT use this: they pass isNativeSessionId(resolved) straight to
-  // noteFlagChanged/noteSessionNote, which defer the native-bucket probe to
-  // flush time so a boot-window buffered write re-derives once the store is up.
-  const sessionProviderFor = async (resolved: string): Promise<SessionProvider> => {
-    if (nativeHost.isNativeSessionId(resolved)) return 'native';
-    const store = getConversationStore();
-    if (!store) return 'claude';
-    try { return (await store.get('native', resolved)) ? 'native' : 'claude'; }
-    catch { return 'claude'; }
-  };
-
-  ipcMain.handle(IPC.SESSION_MENU_LOCK, (_e, { sessionId: sid, holder, action }: { sessionId: string; holder: string; action: string }) => menuAnswerLock.handle(sid, holder, action));
-  ipcMain.handle(IPC.SESSION_SET_FLAG, async (_event, { sessionId, flag, value }: { sessionId: string; flag: string; value: boolean }) => {
-    if (!SESSION_FLAG_NAMES.includes(flag as SessionFlagName)) {
-      return { ok: false, error: `unknown flag: ${flag}` };
-    }
-    const resolved = sessionIdMap.get(sessionId) || sessionId;
-    try {
-      // Plan 2c: flags are STORE-ONLY now. The legacy conversation-index
-      // dual-write (svc.setSessionFlag) was removed — the Conversation Store is
-      // the sole authority for flags; the frozen legacy index is read-only for
-      // residual legacy-only rows. safeWrite semantics live inside noteFlagChanged.
-      //
-      // Phantom-record gate (review fix 5): only write when `resolved` is
-      // actually a CLAUDE id. Either the mapping is known (sessionId was a
-      // desktop id → resolved is the mapped claude id), or sessionId is NOT a
-      // live desktop session (Resume Browser rows pass claude ids for past
-      // sessions — safe to write as-is). Without this gate, flagging a LIVE
-      // session before its SessionStart hook establishes the mapping would
-      // seed a flag-only record keyed by the desktop randomUUID — UUID-shaped
-      // (passes the store's id guard), synced to every device, and never
-      // pruned (flagged records are deliberately kept). When gated out, the
-      // flag re-applies once the SessionStart hook establishes the mapping and
-      // the user (or a re-flag) drives it again — flags are store-only now,
-      // so there's no legacy index still catching it in the meantime.
-      if (canWriteStoreRecord(sessionId, resolved)) {
-        // Item 6: await the real result and answer honestly — the write can
-        // now report ok:false (store not up yet / never came up / rejected)
-        // instead of the old fire-and-forget that always said ok:true even
-        // when the write silently evaporated (2026-07-19 incident class, for
-        // the store-availability dimension). Task 5: provider is now derived
-        // per-session instead of hardcoded 'claude' — the write lands in
-        // whichever bucket get-meta/browse will read it back from.
-        const res = await noteFlagChanged(resolved, flag, !!value, nativeHost.isNativeSessionId(resolved));
-        if (!res.ok) {
-          return { ok: false, error: 'Could not save — conversation storage is not available on this device.' };
-        }
-      }
-      const payload = { flag, value: !!value };
-      sendForSession(resolved, IPC.SESSION_META_CHANGED, resolved, payload);
-      remoteServer?.broadcast({
-        type: IPC.SESSION_META_CHANGED,
-        payload: { sessionId: resolved, ...payload },
-      });
-      emitConversationMetaChanged();
-      return { ok: true };
-    } catch (e: any) {
-      return { ok: false, error: e?.message || String(e) };
-    }
-  });
-
-  // --- Apply/remove a tag on a session (writes tag:<id> into the store flag map) ---
-  ipcMain.handle(IPC.SESSION_SET_TAG, async (_e, { sessionId, tagId, value }: { sessionId: string; tagId: string; value: boolean }) => {
-    if (typeof tagId !== 'string' || !tagId.startsWith('tag_')) {
-      return { ok: false, error: `invalid tag id: ${tagId}` };
-    }
-    const resolved = sessionIdMap.get(sessionId) || sessionId;
-    const key = tagFlagKey(tagId);
-    try {
-      // Same phantom-record gate as SESSION_SET_FLAG: only write the store when
-      // `resolved` is a known CLAUDE id or a non-live session (regardless of
-      // provider — see canWriteStoreRecord's comment; Task 5 dropped the
-      // native carve-out). Tags are stored as `tag:<id>` flags.
-      if (canWriteStoreRecord(sessionId, resolved)) {
-        // Item 6: same honest-write parity as SESSION_SET_FLAG. Provider is
-        // derived, not hardcoded — see SESSION_SET_FLAG's comment.
-        const res = await noteFlagChanged(resolved, key, !!value, nativeHost.isNativeSessionId(resolved));
-        if (!res.ok) {
-          return { ok: false, error: 'Could not save — conversation storage is not available on this device.' };
-        }
-      }
-      const payload = { flag: key, value: !!value };
-      sendForSession(resolved, IPC.SESSION_META_CHANGED, resolved, payload);
-      remoteServer?.broadcast({ type: IPC.SESSION_META_CHANGED, payload: { sessionId: resolved, ...payload } });
-      emitConversationMetaChanged();
-      return { ok: true };
-    } catch (e: any) { return { ok: false, error: e?.message || String(e) }; }
-  });
+  // session:menu-lock / :set-flag / :set-tag are table entries (main/ipc/session.ts).
 
   // --- Set/clear a session note ---
   /* ── Session naming ────────────────────────────────────────────────────
@@ -3420,89 +3219,11 @@ export function registerIpcHandlers(
     });
   };
 
-  ipcMain.handle(IPC.SESSION_NAMING_GET, () => namingGet());
-  ipcMain.handle(IPC.SESSION_NAMING_SET, (_e, { value }: { value: unknown }) => namingSet(value));
-  ipcMain.handle(IPC.SESSION_NAMING_TITLE, (_e, { sessionId, fallback }: { sessionId: string; fallback: string }) => namingTitle(sessionId, fallback));
-  ipcMain.handle(IPC.SESSION_NAMING_RENAME, (_e, { sessionId, title }: { sessionId: string; title: string }) => namingRename(sessionId, title));
-
-  // Same four, for a phone or browser driving THIS desktop. One implementation,
-  // so a remote rename cannot bypass a gate the local path enforces — the
-  // reason session:set-tag / set-note got the same treatment (design §12).
+  // The four naming channels are table entries (main/ipc/session.ts) over these closures, so a phone's
+  // rename cannot bypass a gate the local path enforces (design §12).
   publishNamingMode();
-  remoteServer?.setSessionNamingWiring({
-    get: namingGet,
-    set: namingSet,
-    title: namingTitle,
-    rename: namingRename,
-  });
 
-  ipcMain.handle(IPC.SESSION_SET_NOTE, async (_e, { sessionId, note }: { sessionId: string; note: string }) => {
-    const resolved = sessionIdMap.get(sessionId) || sessionId;
-    const text = String(note ?? '');
-    if (text.length > 8000) return { ok: false, error: 'note exceeds 8000 characters' };
-    try {
-      if (canWriteStoreRecord(sessionId, resolved)) {
-        // Item 6: same honest-write parity as SESSION_SET_FLAG. Provider is
-        // derived, not hardcoded — see SESSION_SET_FLAG's comment.
-        const res = await noteSessionNote(resolved, text, nativeHost.isNativeSessionId(resolved));
-        if (!res.ok) {
-          return { ok: false, error: 'Could not save — conversation storage is not available on this device.' };
-        }
-      }
-      const payload = { note: text };
-      sendForSession(resolved, IPC.SESSION_META_CHANGED, resolved, payload);
-      remoteServer?.broadcast({ type: IPC.SESSION_META_CHANGED, payload: { sessionId: resolved, ...payload } });
-      emitConversationMetaChanged();
-      return { ok: true };
-    } catch (e: any) { return { ok: false, error: e?.message || String(e) }; }
-  });
-
-  // --- Read a live/past session's applied tags + note (session:browse excludes
-  // live sessions, so Plan B's in-session StatusBar element reads meta here) ---
-  ipcMain.handle(IPC.SESSION_GET_META, async (_e, { sessionId }: { sessionId: string }) => {
-    const store = getConversationStore();
-    const resolved = sessionIdMap.get(sessionId) || sessionId;
-    // Task 5: read from whichever provider bucket this session actually writes
-    // to — native records are real now, so there's no more up-front refusal.
-    // `supported` stays in the result shape (Android still answers false).
-    // WHY `unreadable` (error inventory 2026-09-10, false message 12): a missing store
-    // and a failed read both used to answer blank tags and note — indistinguishable
-    // from a conversation that has none. The close prompt showed "No note" for a
-    // conversation that had one and used that blank as the baseline for a note
-    // write. A record that is simply absent (`!rec`) is still a real "none".
-    if (!store) return { tags: [], note: '', supported: true, unreadable: "conversation storage isn't available" };
-    try {
-      const rec = await store.get(await sessionProviderFor(resolved), resolved);
-      if (!rec) return { tags: [], note: '', supported: true };
-      const tags: string[] = [];
-      // Reserved flags travel alongside the tags now: the in-session chip shows
-      // Priority as a built-in tag, so it needs the value, not just the tag
-      // list. Whitelisted to SESSION_FLAG_NAMES so an internal flag key can
-      // never leak to the renderer by being added to a record.
-      const reserved: Partial<Record<string, boolean>> = {};
-      for (const [k, v] of Object.entries(rec.flags)) {
-        if (v.value && k.startsWith('tag:')) tags.push(k.slice(4));
-        else if (v.value && (SESSION_FLAG_NAMES as string[]).includes(k)) reserved[k] = true;
-      }
-      return { tags, note: rec.note || '', supported: true, flags: reserved };
-    } catch (e) { return { tags: [], note: '', supported: true, unreadable: e instanceof Error && e.message ? e.message : "the conversation's record could not be read" }; }
-  });
-
-  // Welcome back (design §1, §3): both handlers await `ready` rather than
-  // relying on any boot-order assumption — the store's own contract (review 1
-  // D5). Absent store (tests that omit it) reads as "nothing to offer".
-  ipcMain.handle(IPC.SESSION_REOPEN_LIST, async (): Promise<string[]> => {
-    if (!welcomeBackStore) return [];
-    await welcomeBackStore.ready;
-    return welcomeBackStore.offerIds();
-  });
-
-  ipcMain.handle(IPC.SESSION_FORGET_REOPEN, async (_e, { ids }: { ids: string[] }): Promise<{ ok: boolean }> => {
-    if (!welcomeBackStore) return { ok: true };
-    await welcomeBackStore.ready;
-    welcomeBackStore.forget(Array.isArray(ids) ? ids.filter((id) => typeof id === 'string') : []);
-    return { ok: true };
-  });
+  // session:set-note / :get-meta / :reopen-list / :forget-reopen are table entries (main/ipc/session.ts).
 
   // --- Sync management, sync spaces, GitHub connect ---
   // WHY (2026-09-30 one-core R3-4): sync:*, syncspaces:* and the github:* request/response channels are
@@ -4259,6 +3980,16 @@ export function registerIpcHandlers(
   // WHY (2026-09-30 one-core R3-3): the first-run:* channels are table entries (main/ipc/first-run.ts);
   // the wizard's manager arrives later from main.ts (bindFirstRunManager), the rest is built here.
   bindFirstRunNative({ nativeDeps: firstRunDeps, openRouterSignIn, providerRegistry, claudeAccount, engineManager, modelManager });
+  // WHY (2026-09-30 one-core R3-4): session:* / session-naming:* / transcript:page / transcript:read-meta are
+  // table entries (main/ipc/session.ts). They lean on this function's private state — the window-ownership
+  // bookkeeping and the create / destroy teardown — so those bodies stay here as closures and are handed over.
+  bindSessionOps({
+    sessionManager, sessionIdMap, nativeHost, stampProviderTypes, windowRegistry, welcomeBackStore,
+    createSession: (sender, opts) => createSession(sender ? { sender } : null, opts),
+    destroySession, signalTerminalReady, desktopTranscriptPage, canWriteStoreRecord, sendForSession,
+    remoteBroadcast: (message) => remoteServer?.broadcast(message),
+    naming: { get: namingGet, set: namingSet, title: namingTitle, rename: namingRename },
+  });
   // WHY (2026-09-29 one-core R2, filled by R3): the channel table's desktop half. Every family moved
   // into the table registers here, and its hand-written ipcMain.handle blocks are gone from this file.
   // Kept last so a table entry can never shadow a hand-written one (Electron refuses a second

@@ -1243,40 +1243,19 @@ describe('RemoteServer — session focus', () => {
       expect(frames).toEqual([{ type: 'session:destroyed', payload: { sessionId: 's1', exitCode: 0, focus: { sessionId: 's2' } } }]);
     });
 
-    it('when a remote client destroys it', async () => {
+    // The session manager emits session-exit for EVERY destroy (a phone's own X included), which is what
+    // tells the phones — so a phone that closes a session hears it once, with the desktop's focus. (The old
+    // phone-only teardown also sent a second, shorter notice; session:destroy is a table entry now and runs
+    // the computer's teardown, which is tested in ipc-handlers.test.ts.)
+    it('when a remote client destroys it, it hears the session end once, from the exit', async () => {
       const { server, frames, client } = await makeServer(null);
+      const { bindSessionOps } = await import('../src/main/ipc/session');
+      bindSessionOps({ destroySession: async (id: string) => { server.onSessionExit(id, 0); return true; } } as any);
       await server.handleMessage(client, JSON.stringify({ type: 'session:destroy', id: 'd1', payload: { sessionId: 's1' } }));
-      expect(frames.find((f) => f.type === 'session:destroyed')?.payload).toEqual({ sessionId: 's1', focus: { sessionId: null } });
-    });
-
-    // Welcome back (design 2026-09-24 §2): a phone/remote browser's own X is the
-    // same "explicit destroy" case the desktop's SESSION_DESTROY IPC handler
-    // untracks for — this WS host answers session:destroy independently and
-    // never reaches that handler, so it needs its own untrack call.
-    it('untracks Welcome back when a remote client destroys it', async () => {
-      const { RemoteServer } = await import('../src/main/remote-server');
-      const sm = Object.assign(new EventEmitter(), { listSessions: vi.fn(() => []), destroySession: vi.fn(() => true) });
-      const config = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
-      const untrackWelcomeBack = vi.fn();
-      const server: any = new RemoteServer(sm as never, new EventEmitter() as never, config as never, undefined,
-        { getFocusSessionId: () => null, untrackWelcomeBack });
-      const client = { id: 'c', ws: { readyState: 1, bufferedAmount: 0, send: () => {} }, deviceId: 'd', ip: '', connectedAt: 0 };
-      server.clients.add(client);
-      await server.handleMessage(client, JSON.stringify({ type: 'session:destroy', id: 'd1', payload: { sessionId: 's1' } }));
-      expect(untrackWelcomeBack).toHaveBeenCalledWith('s1');
-    });
-
-    it('does not untrack Welcome back when the destroy fails', async () => {
-      const { RemoteServer } = await import('../src/main/remote-server');
-      const sm = Object.assign(new EventEmitter(), { listSessions: vi.fn(() => []), destroySession: vi.fn(() => false) });
-      const config = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
-      const untrackWelcomeBack = vi.fn();
-      const server: any = new RemoteServer(sm as never, new EventEmitter() as never, config as never, undefined,
-        { getFocusSessionId: () => null, untrackWelcomeBack });
-      const client = { id: 'c', ws: { readyState: 1, bufferedAmount: 0, send: () => {} }, deviceId: 'd', ip: '', connectedAt: 0 };
-      server.clients.add(client);
-      await server.handleMessage(client, JSON.stringify({ type: 'session:destroy', id: 'd1', payload: { sessionId: 's1' } }));
-      expect(untrackWelcomeBack).not.toHaveBeenCalled();
+      expect(frames.filter((f) => f.type === 'session:destroyed')).toEqual([
+        { type: 'session:destroyed', payload: { sessionId: 's1', exitCode: 0, focus: { sessionId: null } } },
+      ]);
+      expect(frames.find((f) => f.type === 'session:destroy:response')?.payload).toBe(true);
     });
   });
 

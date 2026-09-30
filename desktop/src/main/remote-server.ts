@@ -73,8 +73,7 @@ import { RemoteDeviceStore, type RemoteDeviceView } from './remote-devices';
 import type { LocalSkillProvider } from './skill-provider';
 import type { SerializedChatState } from '../renderer/state/chat-types';
 import { VITE_DEV_PORT } from '../shared/ports';
-import type { NativeSessionHost } from './harness/native-session-host';
-import type { NativeSendResult, SessionProvider, HookEvent, SpecialistsEvent, ShellEvent } from '../shared/types';
+import type { NativeSendResult, HookEvent, SpecialistsEvent, ShellEvent } from '../shared/types';
 import type { ProviderRegistry } from './providers/provider-registry';
 import type { ModelCatalog } from './providers/model-catalog';
 import type { SearchKeyStore } from './harness/search/search-key-store';
@@ -98,12 +97,8 @@ import { detectEndpoints } from './models/endpoint-detectors';
 import { BrowserWindow, app } from 'electron';
 import { NativeHome } from './native-home';
 import { UpdateSettings } from './update-settings';
-import { readTranscriptMeta } from './transcript-utils';
-import { listPastSessions, loadHistory, SAFE_ID_RE } from './session-browser';
-import { readTranscriptPage } from './transcript-page';
 import { resolveConversations, readConversation } from './chatsearch-index/refs-service';
 import { resolveStaticFile } from './remote-static-path';
-import { menuAnswerLock } from './menu-answer-lock';
 
 // 4M UTF-16 units per session — enough for full conversation replay. Named for what it
 // counts (batch 2): JavaScript string length, not bytes.
@@ -273,13 +268,6 @@ export interface RemoteStatus {
   clientCount: number; // phones connected now — WHY here (audit W18): the gear badge polled it every 10 s per window; emitStatus() fires on every connect/disconnect instead
 }
 
-interface SessionNamingWiring {
-  get: () => Promise<{ mode: string; model: unknown }>;
-  set: (value: unknown) => Promise<{ ok: boolean; error?: string }>;
-  title: (sessionId: string, fallback: string) => Promise<{ title: string; manual: boolean }>;
-  rename: (sessionId: string, title: string) => Promise<{ ok: boolean; error?: string }>;
-}
-
 /**
  * Which copy of the app a phone's browser is served.
  *
@@ -383,21 +371,6 @@ export class RemoteServer {
       /** Serve the built copy of the app when one exists (see choosePhonePageSource). main.ts
        *  passes app.isPackaged or run-dev.sh --phone-build; the default keeps the old behaviour. */
       serveBuiltPage?: boolean;
-      /** The same rewrite the desktop's own session:create applies before the session
-       *  manager sees a cwd — today the "No folder" sentinel → the app-owned empty folder.
-       *  WHY (2026-09-16, remote-access.md): the phone's session:create went straight to
-       *  createSession, so a "No folder" conversation started from a phone opened in the
-       *  home folder instead of the private place the desktop gives it. main.ts wires it;
-       *  tests that pass nothing get the payload untouched. */
-      prepareCreate?: <T extends { cwd?: string }>(payload: T) => T;
-      /** Welcome back (design 2026-09-24 §2): a phone/remote browser's own X on a
-       *  session must untrack it too — the desktop's SESSION_DESTROY IPC handler
-       *  does this for the Electron path, but this WS host answers session:destroy
-       *  for remote clients independently and never reaches that handler. Wired
-       *  from main.ts to the (later-constructed) welcome-back-store, the same lazy
-       *  closure-over-a-module-var pattern as `prepareCreate` above. Absent in
-       *  tests that don't care — every call site is optional-chained. */
-      untrackWelcomeBack?: (desktopId: string) => void;
       /** The native runtime, read on every request (see the `nativeRuntime` field for why it is
        *  an accessor). main.ts returns the runtime createWindow built; tests return a partial fake. */
       getNativeRuntime?: () => RemoteNativeRuntime | null;
@@ -414,28 +387,18 @@ export class RemoteServer {
     this.getFocusSessionId = opts?.getFocusSessionId ?? (() => null);
     this.onAppearanceBroadcast = opts?.onAppearanceBroadcast ?? (() => {});
     this.listCommands = opts?.listCommands ?? null;
-    this.prepareCreate = opts?.prepareCreate ?? ((p) => p);
     this.listThemes = opts?.listThemes ?? (() => require('./theme-watcher').listUserThemes());
     this.serveBuiltPage = opts?.serveBuiltPage ?? true;
-    this.untrackWelcomeBack = opts?.untrackWelcomeBack;
     if (opts?.getNativeRuntime) this.getNativeRuntime = opts.getNativeRuntime;
     this.broadcastToWindows = opts?.broadcastToWindows ?? sendToAllWindows;
   }
   private broadcastToWindows: (channel: string, payload: unknown) => void;
   private serveBuiltPage: boolean;
   private listCommands: (() => Promise<unknown[]>) | null;
-  private prepareCreate: <T extends { cwd?: string }>(payload: T) => T;
   private listThemes: () => string[];
-  private untrackWelcomeBack?: (desktopId: string) => void;
-  private sessionCreate?: (opts: Parameters<SessionManager['createSession']>[0]) => Promise<import('../shared/types').SessionCreateResult>;
   private handoffRoute?: ReturnType<typeof createHandoffTransport>;
   /** WHY: remote requests share the exact Electron backend; no connection may supply another owner's identity. */
   setHandoffRoute(route: ReturnType<typeof createHandoffTransport>): void { this.handoffRoute = route; }
-
-  /** WHY: a phone must go through the same admission and native startup as IPC. */
-  setSessionCreate(create: (opts: Parameters<SessionManager['createSession']>[0]) => Promise<import('../shared/types').SessionCreateResult>): void {
-    this.sessionCreate = create;
-  }
 
   /** One line per connection event in the host's log. WHY (2026-09-11 phone pass): an empty
    *  project list and a flashing password screen could not be traced, because the host recorded
@@ -454,72 +417,14 @@ export class RemoteServer {
   /** Hands a phone's appearance change to the computer's windows (main owns BrowserWindow). */
   private onAppearanceBroadcast: (prefs: Record<string, unknown>) => void;
 
-  /** Task 5: which Conversation Store bucket a session's meta reads/writes
-   *  belong to. 'native' when NativeSessionHost recognizes the id (live now,
-   *  or a persisted ~/.youcoded/sessions file); 'claude' otherwise, including
-   *  when the native runtime isn't wired yet (nothing to recognize as native).
-   *  Remote clients pass raw session ids — no sessionIdMap resolution is
-   *  needed because native ids are mapped to themselves (ipc-handlers sets
-   *  sessionIdMap identity for native). Mirrors ipc-handlers' sessionProviderFor
-   *  so a session's meta lands in — and reads back from — the same bucket
-   *  regardless of which surface (Electron IPC or remote WS) touched it. */
-  private isNativeId(sessionId: unknown): boolean {
-    const rt = this.nativeRuntime;
-    return rt ? rt.nativeHost.isNativeSessionId(String(sessionId ?? '')) : false;
-  }
-
-  // Provider bucket to READ a session's meta from — mirrors ipc-handlers'
-  // sessionProviderFor exactly (design §12 survivor 1: any gate covers BOTH
-  // surfaces). 'native' when the runtime recognizes the id (live/on-disk);
-  // otherwise probe the store's native bucket so a store-only native browse row
-  // (record synced, transcript not local; Task 5) reads back from native
-  // instead of seeding a claude phantom (C1). Null store → 'claude', as before.
-  // WRITES pass isNativeId() straight to noteFlagChanged/noteSessionNote, which
-  // defer the probe to flush time (boot-window correctness) — same as ipcMain.
-  private async sessionProviderFor(sessionId: unknown): Promise<SessionProvider> {
-    if (this.isNativeId(sessionId)) return 'native';
-    const { getConversationStore } = await import('./conversations/service');
-    const store = getConversationStore();
-    if (!store) return 'claude';
-    try { return (await store.get('native', String(sessionId ?? ''))) ? 'native' : 'claude'; }
-    catch { return 'claude'; }
-  }
-
-  /** Injected by ipc-handlers right after it builds sessionIdMap + the
-   *  phantom-record gate (canWriteStoreRecord), so remote WS clients
-   *  (session:set-tag / session:set-note) get the IDENTICAL desktop→claude id
-   *  resolution and writability gate the ipcMain handlers use. Before this,
-   *  the remote path had neither — the exact "gate covers one surface but not
-   *  the other" shape the 2026-07-19 native-refusal incident was about, just
-   *  for a different gate. Undefined until wired (or in tests that never call
-   *  registerIpcHandlers's full setup): falls back to no resolution / no gate,
-   *  i.e. the pre-parity behavior. */
-  setSessionMetaWiring(w: {
-    resolve: (sessionId: string) => string;
-    canWrite: (sessionId: string, resolved: string) => boolean;
-    /** Refresh the DESKTOP window that owns the session (ipc-handlers backs it
-     *  with sendForSession + SESSION_META_CHANGED). WHY (2026-09-16, sync.md):
-     *  a tag or note set from a phone reached every OTHER remote client through
-     *  the broadcast below, but the open desktop window kept the old value until
-     *  some unrelated event refreshed it — this server has no path to a window
-     *  of its own, so the wiring has to carry one. Optional so older wirings
-     *  and tests keep working. */
-    notify?: (sessionId: string, payload: Record<string, unknown>) => void;
-  }): void {
+  /** Injected by ipc-handlers right after it builds sessionIdMap: the desktop-id -> conversation-id lookup the
+   *  phone's Files screen uses to match a session to its conversation. WHY it shrank (2026-09-30 one-core
+   *  R3-4): the tag / note / browse channels that also needed the phantom-record gate and the push into
+   *  the owning window are table entries now, so they reach those directly. */
+  setSessionMetaWiring(w: { resolve: (sessionId: string) => string }): void {
     this.sessionMetaWiring = w;
   }
-  private sessionMetaWiring?: {
-    resolve: (sessionId: string) => string;
-    canWrite: (sessionId: string, resolved: string) => boolean;
-    notify?: (sessionId: string, payload: Record<string, unknown>) => void;
-  };
-
-  /** Session naming, injected from ipc-handlers so a remote client runs the
-   *  SAME implementation as the local one — ownership checks, model-catalog
-   *  validation and the persist-then-broadcast order included. Absent until
-   *  registerIpcHandlers runs; the dispatch below answers honestly meanwhile. */
-  setSessionNamingWiring(w: SessionNamingWiring): void { this.sessionNamingWiring = w; }
-  private sessionNamingWiring?: SessionNamingWiring;
+  private sessionMetaWiring?: { resolve: (sessionId: string) => string };
 
   // loadTokens/saveTokens are deliberately NOT carried across this merge. They read the flat
   // `.remote-tokens.json` file of opaque strings that this batch replaced with per-device
@@ -1786,110 +1691,12 @@ export class RemoteServer {
         await this.rehydrateClient(client, seq);
         break;
       }
-      case 'session:selected':
-        // Batch 2 (§2): desktop windows report their selection to main over IPC. A
-        // remote client has no desktop window, so it must never write that cache —
-        // and gets no answer, as a push never does.
-        break;
       // --- Request/response ---
       case 'handoff:begin': case 'handoff:status': case 'handoff:wait':
       case 'handoff:retry': case 'handoff:saved-copy': case 'handoff:force': case 'handoff:cancel':
       case 'handoff:create-params': {
         await handleRemoteHandoff(this.handoffRoute, `remote:${client.id}`, type, payload,
           () => this.clients.has(client), result => this.respond(client.ws, type, id, result));
-        break;
-      }
-      case 'session:create': {
-        // This payload is passed to createSession unfiltered, so without this
-        // guard a remote browser could ask for `{provider:'shell', cwd:'/'}`.
-        //
-        // BE PRECISE ABOUT WHAT THIS BUYS. It does NOT stop an authenticated
-        // remote client from reaching a shell: engine:run-in-terminal below is
-        // open to remote clients too, and session:input is unconditional. What
-        // it removes is the two things that payload alone would carry — an
-        // attacker-chosen cwd, and an initialCommand nothing validated. It is
-        // not a privilege boundary: an authenticated remote client already had
-        // equivalent reach before the shell provider existed, through this same
-        // unfiltered path into Claude Code, and a remote client is a human
-        // pressing keys. The property that matters — the APP never runs a
-        // command for anyone — is enforced by prepareRunInTerminal, not here.
-        if (payload?.provider === 'shell') {
-          this.respond(client.ws, type, id, { ok: false, error: 'A terminal session can only be opened from the app itself.' });
-          break;
-        }
-        // WHY: every remote opening must pass admission, and every startup
-        // failure must answer the request (not become an unhandled rejection).
-        try {
-          if (!this.sessionCreate) throw new Error('Session opening is not ready. Try again.');
-          this.respond(client.ws, type, id, await this.sessionCreate(this.prepareCreate(payload)));
-        } catch (error) {
-          this.respond(client.ws, type, id, { ok: false, error: error instanceof Error ? error.message : 'Could not open this conversation.' });
-        }
-        break;
-      }
-      case 'session:destroy': {
-        // Tear down the native HarnessSession too (mirrors Electron
-        // SESSION_DESTROY) so a native session isn't leaked when destroyed via
-        // remote. No-op for non-native ids; guarded until the stack is wired.
-        await this.nativeRuntime?.nativeHost.destroy(payload.sessionId || payload);
-        const result = this.sessionManager.destroySession(payload.sessionId || payload);
-        this.respond(client.ws, type, id, result);
-        if (result) {
-          this.broadcast({ type: 'session:destroyed', payload: { sessionId: payload.sessionId || payload, focus: { sessionId: this.getFocusSessionId() } } });
-          // Welcome back (design §2): this IS a phone/remote browser's own X —
-          // the same "explicit destroy" case Electron's SESSION_DESTROY handler
-          // untracks for. Without this, a session closed from a phone was wrongly
-          // offered back on the desktop's next launch.
-          this.untrackWelcomeBack?.(payload.sessionId || payload);
-        }
-        break;
-      }
-      // Welcome back (design 2026-09-24 §3, S-phone): the per-install "open at
-      // last shutdown" screen is desktop-only — a phone or remote browser
-      // never shows it — so this host always answers as if nothing is
-      // offered, with no dependency on the desktop-only welcome-back-store.
-      case 'session:reopen-list': {
-        this.respond(client.ws, type, id, []);
-        break;
-      }
-      case 'session:forget-reopen': {
-        this.respond(client.ws, type, id, { ok: true });
-        break;
-      }
-      // The SAME lock the desktop window uses (menu-answer-lock.ts, review F4).
-      case 'session:menu-lock': this.respond(client.ws, type, id, menuAnswerLock.handle(payload.sessionId, payload.holder, payload.action)); break;
-      case 'session:list': {
-        const sessions = this.sessionManager.listSessions();
-        this.respond(client.ws, type, id, sessions);
-        break;
-      }
-      case 'session:switch': {
-        // Session switching is client-side state — acknowledge so the request doesn't time out
-        this.respond(client.ws, type, id, { ok: true });
-        break;
-      }
-      case 'session:browse': {
-        // WHY resolve (simplification audit B1): listPastSessions compares the
-        // exclusion set against CLAUDE transcript ids, but a live session's
-        // desktop id is a separate UUID minted by SessionManager. The Electron
-        // path (ipc-handlers' SESSION_BROWSE) maps desktop → claude id through
-        // sessionIdMap first; this path passed raw desktop ids, so a session
-        // that was open on the desktop could still be listed as resumable on
-        // the phone. sessionMetaWiring.resolve IS that map (identity for
-        // native ids and for a CC session whose SessionStart hasn't arrived
-        // yet — a desktop UUID that no transcript id can match, so it is a
-        // harmless extra member). Iterating LIVE sessions keeps the Electron
-        // path's Bug-1 filter: a stale map entry for a closed session is never
-        // consulted. Undefined wiring (tests / not yet wired) = the old raw ids.
-        const resolve = this.sessionMetaWiring?.resolve ?? ((id: string) => id);
-        const activeIds = new Set(this.sessionManager.listSessions().map(s => resolve(s.id)));
-        // Task 5: remote browse gains native rows for the first time, through
-        // the SAME enrichment pass the Electron IPC path uses (see
-        // ipc-handlers' SESSION_BROWSE) — previously this surface only ever
-        // returned CC rows, so a remote web client's Resume Browser silently
-        // never showed native sessions at all.
-        const sessions = await listPastSessions(activeIds, this.nativeRuntime ? await this.nativeRuntime.nativeHost.listAsync() : undefined);
-        this.respond(client.ws, type, id, sessions);
         break;
       }
       // --- Native runtime (Phase 1 Plan A) — same instances as Electron IPC ---
@@ -2723,135 +2530,6 @@ export class RemoteServer {
         this.respond(client.ws, type, id, result);
         break;
       }
-      case 'session:set-tag': {
-        const { noteFlagChanged, emitConversationMetaChanged } = await import('./conversations/service');
-        const { tagFlagKey } = await import('../shared/tags');
-        const tagId = String(payload?.tagId ?? '');
-        if (!tagId.startsWith('tag_')) { this.respond(client.ws, type, id, { ok: false, error: 'invalid tag id' }); break; }
-        // Parity with the ipcMain path: resolve the raw (possibly desktop) id
-        // through the SAME map before checking nativeness/writability — see
-        // setSessionMetaWiring. Falls back to identity/unconditional-write when
-        // unwired (pre-parity behavior), so this never regresses if the setter
-        // hasn't been called yet.
-        const rawId = String(payload?.sessionId ?? '');
-        const resolved = this.sessionMetaWiring?.resolve(rawId) ?? rawId;
-        if (!this.sessionMetaWiring || this.sessionMetaWiring.canWrite(rawId, resolved)) {
-          // Item 6: await the real result and answer honestly instead of the old
-          // fire-and-forget that always said ok:true even when the write
-          // silently evaporated (store not up yet / never came up / rejected).
-          // Task 5: provider is derived, not hardcoded — writes land in the
-          // SAME bucket session:get-meta / session:browse will read back.
-          const res = await noteFlagChanged(resolved, tagFlagKey(tagId), !!payload?.value, this.isNativeId(resolved));
-          if (!res.ok) {
-            this.respond(client.ws, type, id, { ok: false, error: 'Could not save — conversation storage is not available on this device.' });
-            break;
-          }
-        }
-        // Task 5 gap (final review): this remote mirror of session:set-tag
-        // never told chatsearch a tag changed, so a tag applied from a phone/
-        // browser stayed invisible to the CLI until an unrelated refresh.
-        emitConversationMetaChanged();
-        // ROADMAP 2026-07-23: the ipcMain twin broadcasts session:meta-changed
-        // after a successful persist; without this a SECOND remote client (or
-        // the same session on another device) stayed stale until a full
-        // refresh. Same frame shape as ipc-handlers SESSION_SET_TAG. The echo
-        // to the originating client is a harmless refetch (consumers ignore
-        // the payload and refetch meta).
-        this.broadcast({ type: 'session:meta-changed', payload: { sessionId: resolved, flag: tagFlagKey(tagId), value: !!payload?.value } });
-        // ...and the desktop window that owns it — see setSessionMetaWiring's notify.
-        this.sessionMetaWiring?.notify?.(resolved, { flag: tagFlagKey(tagId), value: !!payload?.value });
-        this.respond(client.ws, type, id, { ok: true });
-        break;
-      }
-      // Session naming. `unavailable` is answered as a refusal, not silence:
-      // the shim's capability probe reads a well-formed preference as "this
-      // host can name sessions", so a half-started host must not look ready.
-      case 'session-naming:get': {
-        const w = this.sessionNamingWiring;
-        this.respond(client.ws, type, id, w
-          ? await w.get()
-          : { ok: false, error: 'The assistant isn’t ready yet.' });
-        break;
-      }
-      case 'session-naming:set': {
-        const w = this.sessionNamingWiring;
-        this.respond(client.ws, type, id, w
-          ? await w.set(payload?.value)
-          : { ok: false, error: 'The assistant isn’t ready yet.' });
-        break;
-      }
-      case 'session-naming:title': {
-        const w = this.sessionNamingWiring;
-        this.respond(client.ws, type, id, w
-          ? await w.title(String(payload?.sessionId ?? ''), String(payload?.fallback ?? ''))
-          : { title: String(payload?.fallback ?? ''), manual: false });
-        break;
-      }
-      case 'session-naming:rename': {
-        const w = this.sessionNamingWiring;
-        this.respond(client.ws, type, id, w
-          ? await w.rename(String(payload?.sessionId ?? ''), String(payload?.title ?? ''))
-          : { ok: false, error: 'The assistant isn’t ready yet.' });
-        break;
-      }
-      case 'session:set-note': {
-        const { noteSessionNote, emitConversationMetaChanged } = await import('./conversations/service');
-        const text = String(payload?.note ?? '');
-        if (text.length > 8000) { this.respond(client.ws, type, id, { ok: false, error: 'note too long' }); break; }
-        const rawId = String(payload?.sessionId ?? '');
-        const resolved = this.sessionMetaWiring?.resolve(rawId) ?? rawId;
-        if (!this.sessionMetaWiring || this.sessionMetaWiring.canWrite(rawId, resolved)) {
-          // Task 5: provider is derived, not hardcoded — see session:set-tag.
-          const res = await noteSessionNote(resolved, text, this.isNativeId(resolved));
-          if (!res.ok) {
-            this.respond(client.ws, type, id, { ok: false, error: 'Could not save — conversation storage is not available on this device.' });
-            break;
-          }
-        }
-        // Same gap as session:set-tag above — the remote mirror of
-        // session:set-note must also tell chatsearch a note changed.
-        emitConversationMetaChanged();
-        // Same parity gap as session:set-tag above — see that comment.
-        this.broadcast({ type: 'session:meta-changed', payload: { sessionId: resolved, note: text } });
-        // ...and the desktop window that owns it — see setSessionMetaWiring's notify.
-        this.sessionMetaWiring?.notify?.(resolved, { note: text });
-        this.respond(client.ws, type, id, { ok: true });
-        break;
-      }
-      case 'session:get-meta': {
-        const { getConversationStore } = await import('./conversations/service');
-        const store = getConversationStore();
-        // WHY `unreadable` (error inventory 2026-09-10, false message 12): a missing store
-        // and a failed read used to answer blank tags and note, which the close prompt
-        // showed as "No note" and then used as the baseline for a note write. Same answer
-        // as main's session:get-meta; an absent record is still a real "none".
-        let out: { tags: string[]; note: string; supported: boolean; unreadable?: string } = { tags: [], note: '', supported: true };
-        // Task 5: resolve through the same map set-tag/set-note use (a latent
-        // gap here previously — this handler read the raw id straight through,
-        // which only worked by accident for ids that never needed resolving)
-        // and read from whichever provider bucket this session actually writes
-        // to. No more up-front native refusal — native records are real.
-        const rawId = String(payload?.sessionId ?? '');
-        const resolved = this.sessionMetaWiring?.resolve(rawId) ?? rawId;
-        if (!store) {
-          out = { tags: [], note: '', supported: true, unreadable: "conversation storage isn't available" };
-        } else {
-          try {
-            const rec = await store.get(await this.sessionProviderFor(resolved), resolved);
-            if (rec) {
-              const tags: string[] = [];
-              for (const [k, v] of Object.entries(rec.flags)) {
-                if ((v as any).value && k.startsWith('tag:')) tags.push(k.slice(4));
-              }
-              out = { tags, note: rec.note || '', supported: true };
-            }
-          } catch (e) {
-            out = { tags: [], note: '', supported: true, unreadable: e instanceof Error && e.message ? e.message : "the conversation's record could not be read" };
-          }
-        }
-        this.respond(client.ws, type, id, out);
-        break;
-      }
       // Local engine (Plan B). status is sync; install/restart resolve to a
       // fresh status() so the remote client mirrors the desktop IPC contract.
       case 'engine:status': {
@@ -3114,107 +2792,6 @@ export class RemoteServer {
         }
         break;
       }
-      case 'session:history': {
-        const { sessionId: histSessionId, projectSlug: histSlug, count, all } = payload;
-        // Fix: validate the client-supplied id BEFORE the fs.access probe loop
-        // below — loadHistory's SAFE_ID_RE guard only runs after the probe, so
-        // a traversal-shaped id ('../../x') made the loop a file-existence
-        // oracle for arbitrary *.jsonl paths. The typeof check matters too:
-        // SAFE_ID_RE.test(undefined) coerces to the string "undefined", which
-        // the regex would accept. Invalid ids get the same [] loadHistory returns.
-        if (typeof histSessionId !== 'string' || !SAFE_ID_RE.test(histSessionId)) {
-          this.respond(client.ws, type, id, []);
-          break;
-        }
-        // Find the JSONL file across all project slugs. The shim sends the
-        // caller's projectSlug (argument-order fix, same day as the SAFE_ID_RE
-        // hardening above) — probe it FIRST, parity with Android's handler,
-        // so the common case skips the O(projects) directory scan. A stale or
-        // invalid slug just falls through to the scan; SAFE_ID_RE gates it
-        // before it can shape a path.
-        const projectsDir = path.join(os.homedir(), '.claude', 'projects');
-        const slugs = await fs.promises.readdir(projectsDir).catch(() => [] as string[]);
-        const candidates = (typeof histSlug === 'string' && SAFE_ID_RE.test(histSlug))
-          ? [histSlug, ...slugs.filter((s) => s !== histSlug)]
-          : slugs;
-        let foundSlug = '';
-        for (const slug of candidates) {
-          const candidate = path.join(projectsDir, slug, histSessionId + '.jsonl');
-          try {
-            await fs.promises.access(candidate);
-            foundSlug = slug;
-            break;
-          } catch {}
-        }
-        if (!foundSlug) {
-          this.respond(client.ws, type, id, []);
-          break;
-        }
-        const history = await loadHistory(histSessionId, foundSlug, count, all);
-        this.respond(client.ws, type, id, history);
-        break;
-      }
-      // Perf cycle 2: paged history over the bridge. The phone hydrates via
-      // chat:hydrate on connect; scrolling up asks for older pages here.
-      // Resolves the JSONL the same way session:history does (validate the id
-      // FIRST, then probe the caller's slug before scanning) — a traversal-
-      // shaped id must never shape a path.
-      case 'transcript:page': {
-        const { sessionId: pageSessionId, beforeCursor } = payload;
-        const emptyPage = { events: [], cursor: null, hasMore: false };
-        if (typeof pageSessionId !== 'string' || !SAFE_ID_RE.test(pageSessionId)) {
-          this.respond(client.ws, type, id, emptyPage);
-          break;
-        }
-        const beforeOffset = (beforeCursor && typeof beforeCursor.offset === 'number') ? beforeCursor.offset : null;
-
-        // Native sessions page over the merged event array; null means "not a
-        // native id", so CC's transcript file is the source.
-        // Async form (2026-09-16 C2 review): the desktop's page handler was
-        // converted; the phone's scroll-up read the whole transcript sync too.
-        let nativePage: Awaited<ReturnType<NativeSessionHost['getHistoryPageAsync']>> = null;
-        // An existing-but-unreadable native transcript throws: `unresolved` (retry), as ipc-handlers' page.
-        try { nativePage = this.nativeRuntime ? await this.nativeRuntime.nativeHost.getHistoryPageAsync(pageSessionId, beforeOffset) : null; }
-        catch { this.respond(client.ws, type, id, { ...emptyPage, unresolved: true }); break; }
-        if (nativePage) {
-          this.respond(client.ws, type, id, {
-            events: nativePage.events,
-            cursor: nativePage.hasMore ? { path: `native:${pageSessionId}`, offset: nativePage.nextIndex, sizeAtRead: 0 } : null,
-            hasMore: nativePage.hasMore,
-          });
-          break;
-        }
-
-        const pageProjectsDir = path.join(os.homedir(), '.claude', 'projects');
-        const pageSlugs = await fs.promises.readdir(pageProjectsDir).catch(() => [] as string[]);
-        const pageSlugHint = payload.projectSlug;
-        const pageCandidates = (typeof pageSlugHint === 'string' && SAFE_ID_RE.test(pageSlugHint))
-          ? [pageSlugHint, ...pageSlugs.filter((sl) => sl !== pageSlugHint)]
-          : pageSlugs;
-        let pagePath = '';
-        for (const slug of pageCandidates) {
-          const candidate = path.join(pageProjectsDir, slug, pageSessionId + '.jsonl');
-          try { await fs.promises.access(candidate); pagePath = candidate; break; } catch { /* try the next slug */ }
-        }
-        if (!pagePath) {
-          // Same distinction the desktop handler makes (shared/types.ts,
-          // TranscriptPageResult.unresolved): "I could not find the transcript"
-          // must not read as "you have reached the beginning of the
-          // conversation", which the renderer records by dropping the cursor
-          // and the scroll-up sentinel for good. The renderer is the SAME React
-          // code over this bridge, so the phone needs the same answer.
-          this.respond(client.ws, type, id, { ...emptyPage, unresolved: true });
-          break;
-        }
-        const page = await readTranscriptPage({
-          jsonlPath: pagePath,
-          sessionId: pageSessionId,
-          endOffset: beforeOffset,
-          subagentsDir: path.join(path.dirname(pagePath), pageSessionId, 'subagents'),
-        });
-        this.respond(client.ws, type, id, page);
-        break;
-      }
       case 'permission:respond': {
         const { requestId, decision } = payload;
         // Native asks share the channel; 'native-'-prefixed ids route to the
@@ -3380,35 +2957,6 @@ export class RemoteServer {
       }
       case 'game:setIncognito': {
         this.respond(client.ws, type, id, setIncognito(payload));
-        break;
-      }
-      case 'transcript:read-meta': {
-        // Fix: mirror model:read-last below — accept { path } or a raw string,
-        // and reject non-string values BEFORE touching path.resolve. The old
-        // `payload.path || payload` + resolve-outside-the-try shape meant one
-        // malformed frame ({ path: {...} }, a bare object, or a null payload)
-        // threw out of handleMessage as an unhandled rejection instead of
-        // answering null.
-        const transcriptPath = (payload && typeof payload === 'object' && 'path' in payload)
-          ? payload.path
-          : payload;
-        if (typeof transcriptPath !== 'string') {
-          this.respond(client.ws, type, id, null);
-          break;
-        }
-        try {
-          const claudeProjects = path.join(os.homedir(), '.claude', 'projects');
-          const resolvedPath = path.resolve(transcriptPath);
-          // Fix: + path.sep so a sibling dir like ~/.claude/projects-evil can't pass the prefix check
-          if (!resolvedPath.startsWith(claudeProjects + path.sep)) {
-            this.respond(client.ws, type, id, null);
-            break;
-          }
-          const meta = await readTranscriptMeta(transcriptPath);
-          this.respond(client.ws, type, id, meta);
-        } catch {
-          this.respond(client.ws, type, id, null);
-        }
         break;
       }
       case 'model:read-last': {
@@ -3589,11 +3137,6 @@ export class RemoteServer {
         break;
       }
 
-      // --- Fire-and-forget ---
-      case 'session:input': {
-        this.sessionManager.sendInput(payload.sessionId, payload.text);
-        break;
-      }
       // Native runtime interrupt — fire-and-forget (no response). The host no-ops unknown ids.
       case 'native:interrupt': {
         this.nativeRuntime?.nativeHost.interrupt(payload.sessionId);
@@ -3603,15 +3146,6 @@ export class RemoteServer {
       // The host no-ops when nothing is parked (stream already resumed).
       case 'native:retry': {
         this.nativeRuntime?.nativeHost.retryStalledStep(payload.sessionId);
-        break;
-      }
-      case 'session:resize': {
-        this.sessionManager.resizeSession(payload.sessionId, payload.cols, payload.rows);
-        break;
-      }
-      case 'session:terminal-ready': {
-        // Remote clients don't need the buffering gate that ipc-handlers uses,
-        // because we replay the PTY buffer on connect instead.
         break;
       }
 

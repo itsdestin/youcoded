@@ -192,7 +192,7 @@ describe('transcript:page locator memory', () => {
     expect(older.reconcileInterrupted).toBe(true);
   });
 
-  // The phone's session:create runs the desktop's own create path (setSessionCreate), so a
+  // The phone's session:create runs the desktop's own create path (the session:create table entry), so a
   // Claude Code resume started from a phone takes the same pre-spawn snapshot.
   it('a Claude Code resume started from a phone is bounded the same way', async () => {
     writeTranscript(2);
@@ -206,14 +206,14 @@ describe('transcript:page locator memory', () => {
       destroySession: vi.fn(), listSessions: vi.fn(() => []), getSession: vi.fn(),
       sendInput: vi.fn(), resizeSession: vi.fn(), on: vi.fn(),
     };
-    let createFromPhone: ((opts: any) => Promise<any>) | null = null;
     const remote = {
-      broadcast: vi.fn(), setSessionMetaWiring: vi.fn(), setSessionNamingWiring: vi.fn(),
+      broadcast: vi.fn(), setSessionMetaWiring: vi.fn(),
       setLastTopic: vi.fn(), getClientCount: vi.fn(() => 0), broadcastStatusData: vi.fn(), onStatusChange: vi.fn(() => () => {}),
-      setSessionCreate: vi.fn((fn: any) => { createFromPhone = fn; }),
     };
     const handler = pageHandler(new WindowRegistry(), manager, remote);
-    await createFromPhone!({ provider: 'claude', cwd: '/home/destin/project', resumeSessionId: CC_ID, name: 'Resuming' });
+    // The phone's session:create is the table entry a window reaches too (main/ipc/session.ts).
+    const { findChannel } = await import('../src/main/ipc/channel-table');
+    await findChannel('session:create')!.handler({ provider: 'claude', cwd: '/home/destin/project', resumeSessionId: CC_ID, name: 'Resuming' }, { door: 'remote', runtime: null, broadcast: () => {} } as any);
     fs.appendFileSync(file, turnLines(2)); // a live turn appended after the resume began
     const page = await handler(evt, {
       sessionId: 'desktop-2', beforeCursor: null, claudeSessionId: CC_ID, projectSlug: SLUG,

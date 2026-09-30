@@ -19,7 +19,12 @@ import type { CreateSessionDeps } from '../dev-tools';
  *  manager). Filled by the DESKTOP door only, so only a `desktopOnly` entry may lean on it; a phone
  *  never reaches such an entry, the table refuses it first. */
 export interface DesktopServices { sessionManager: CreateSessionDeps['sessionManager'] }
-export type MainChannelCtx = ChannelCtx<RemoteNativeRuntime> & { desktop?: DesktopServices };
+/** WHY (2026-09-30 one-core R3-4): the calling window's web contents, desktop door only. A few
+ *  desktop handlers must know whether the window is still there (session:create fails cleanly if
+ *  the window closed while it started) or send straight back to it (transcript replay). A phone
+ *  has none. */
+interface DesktopSender { id: number; isDestroyed?(): boolean; send?(channel: string, ...args: any[]): void }
+export type MainChannelCtx = ChannelCtx<RemoteNativeRuntime> & { desktop?: DesktopServices; sender?: DesktopSender };
 export type MainChannelDef<Payload = any, Result = any> = ChannelDef<MainChannelCtx, Payload, Result>;
 
 /** A table entry whose name pins its payload and answer types to ChannelTypes. */

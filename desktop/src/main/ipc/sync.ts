@@ -81,8 +81,8 @@ export const syncChannels: MainChannelDef[] = [
       if (ctx.door === 'remote') return { url: target?.url ?? '' };
       if (!target) return undefined;
       // Only the computer's own door gets here (a phone returned above), so `shell` is this machine's.
-      if (target.url) shell.openExternal(target.url);
-      else if (target.path) shell.openPath(target.path);
+      if (target.url) void shell.openExternal(target.url);
+      else if (target.path) void shell.openPath(target.path);
       return undefined;
     },
   }),

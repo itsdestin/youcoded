@@ -389,14 +389,14 @@ describe('session:menu-lock channel parity', () => {
   it('is invoked by preload.ts', () => {
     expect(read('src', 'main', 'preload.ts')).toMatch(/ipcRenderer\.invoke\(IPC\.SESSION_MENU_LOCK\b/);
   });
-  it('is handled in ipc-handlers.ts by the shared host lock', () => {
-    expect(read('src', 'main', 'ipc-handlers.ts')).toMatch(/ipcMain\.handle\(IPC\.SESSION_MENU_LOCK,[^\n]*menuAnswerLock\.handle\(/);
+  // WHY (2026-09-30 one-core R3-4): one table entry serves both doors, so the ONE shared host lock is
+  // asserted once, where the entry is (main/ipc/session.ts).
+  it('is served by one channel-table entry over the shared host lock', () => {
+    expect(read('src', 'main', 'ipc', 'session.ts')).toMatch(/IPC\.SESSION_MENU_LOCK,[^\n]*menuAnswerLock\.handle\(/);
+    expect(read('src', 'main', 'remote-server.ts')).not.toContain("case 'session:menu-lock'");
   });
   it('is invoked by remote-shim.ts', () => {
     expect(read('src', 'renderer', 'remote-shim.ts')).toContain(`invoke('${CHANNEL}'`);
-  });
-  it('is handled in remote-server.ts by the shared host lock', () => {
-    expect(read('src', 'main', 'remote-server.ts')).toMatch(/case 'session:menu-lock':[^\n]*menuAnswerLock\.handle\(/);
   });
   it('is handled by SessionService.kt (Android)', () => {
     const src = readSourceFile(path.join(
@@ -1112,21 +1112,20 @@ describe('session:reopen-list / session:forget-reopen channel parity (Welcome ba
     expect(remoteShim).toContain("invoke('session:forget-reopen'");
   });
 
-  it('ipc-handlers.ts awaits the store\'s ready promise for both handlers', () => {
-    expect(ipcHandlers).toMatch(/ipcMain\.handle\(IPC\.SESSION_REOPEN_LIST,/);
-    expect(ipcHandlers).toMatch(/ipcMain\.handle\(IPC\.SESSION_FORGET_REOPEN,/);
-    expect(ipcHandlers).toContain('await welcomeBackStore.ready');
+  // WHY (2026-09-30 one-core R3-4): both are table entries (main/ipc/session.ts). desktopOnly, with the
+  // "nothing to offer" answer declared as the entry's refusal, so a phone gets it byte-for-byte without
+  // the handler (and the real store) ever running.
+  it('the channel table awaits the store\'s ready promise for both handlers', () => {
+    const table = read('src', 'main', 'ipc', 'session.ts');
+    expect(table).toMatch(/IPC\.SESSION_REOPEN_LIST, kind: 'handle', desktopOnly: true, refusal: \{ kind: 'reply', payload: \[\] \}/);
+    expect(table).toMatch(/IPC\.SESSION_FORGET_REOPEN, kind: 'handle', desktopOnly: true, refusal: \{ kind: 'reply', payload: \{ ok: true \} \}/);
+    expect(table).toContain('await store.ready');
+    expect(ipcHandlers).not.toMatch(/ipcMain\.handle\(IPC\.SESSION_(REOPEN_LIST|FORGET_REOPEN)/);
   });
 
-  it('remote-server.ts (a phone never shows this screen) answers []/{ok:true}', () => {
-    expect(remoteServer).toContain("case 'session:reopen-list'");
-    expect(remoteServer).toContain("case 'session:forget-reopen'");
-    // Scoped to the case body, not the whole file — a bare "id, []" match
-    // elsewhere would pass vacuously.
-    const reopenBlock = remoteServer.slice(remoteServer.indexOf("case 'session:reopen-list'"), remoteServer.indexOf("case 'session:forget-reopen'"));
-    expect(reopenBlock).toContain('this.respond(client.ws, type, id, []);');
-    const forgetBlock = remoteServer.slice(remoteServer.indexOf("case 'session:forget-reopen'"), remoteServer.indexOf("case 'session:forget-reopen'") + 300);
-    expect(forgetBlock).toContain('this.respond(client.ws, type, id, { ok: true });');
+  it('a phone is told there is nothing to offer, and remote-server.ts keeps no case for either', () => {
+    expect(remoteServer).not.toContain("case 'session:reopen-list'");
+    expect(remoteServer).not.toContain("case 'session:forget-reopen'");
   });
 
   it('SessionService.kt (Android never shows this screen) answers []/{ok:true}', () => {

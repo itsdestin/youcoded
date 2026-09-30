@@ -35,6 +35,7 @@ import { firstRunChannels } from './first-run';
 import { syncChannels } from './sync';
 import { syncSpacesChannels } from './sync-spaces';
 import { githubChannels } from './github';
+import { sessionChannels } from './session';
 
 export type { MainChannelCtx, MainChannelDef } from './channel-def';
 
@@ -56,6 +57,7 @@ export const CHANNEL_TABLE: MainChannelDef[] = [
   ...syncChannels,
   ...syncSpacesChannels,
   ...githubChannels,
+  ...sessionChannels,
 ];
 
 let indexed: { size: number; byName: Map<string, MainChannelDef> } | null = null;
@@ -90,15 +92,21 @@ export function registerDesktopChannels(
   for (const def of CHANNEL_TABLE) {
     if (seen.has(def.name)) throw new Error(`channel table lists ${def.name} twice`);
     seen.add(def.name);
-    const ctxFor = (event: any): MainChannelCtx => ({ door: 'desktop', runtime: getRuntime(), windowId: event?.sender?.id, broadcast, desktop: getDesktop?.() });
+    const ctxFor = (event: any): MainChannelCtx => ({ door: 'desktop', runtime: getRuntime(), windowId: event?.sender?.id, sender: event?.sender, broadcast, desktop: getDesktop?.() });
     if (def.kind === 'handle') {
       ipc.handle(def.name, (event, payload) => def.handler(payload, ctxFor(event)));
     } else if (def.kind === 'on') {
       ipc.on(def.name, (event, payload) => {
         // An ipcMain.on listener that throws would surface as an uncaught main-process exception.
-        Promise.resolve()
-          .then(() => def.handler(payload, ctxFor(event)))
-          .catch((error) => console.warn(`[channel-table] ${def.name} failed:`, error instanceof Error ? error.message : error));
+        // WHY the handler is called directly, not through Promise.resolve().then (2026-09-30 one-core
+        // R3-4): keystrokes and terminal resizes are `on` channels and arrive at typing speed; the extra
+        // promise and microtask hop per message is overhead they never had, and it let a message queue
+        // behind other microtasks. A synchronous throw and a rejected promise are both caught here.
+        const warn = (error: unknown) => console.warn(`[channel-table] ${def.name} failed:`, error instanceof Error ? error.message : error);
+        try {
+          const result = def.handler(payload, ctxFor(event));
+          if (result && typeof (result as PromiseLike<unknown>).then === 'function') (result as Promise<unknown>).catch(warn);
+        } catch (error) { warn(error); }
       });
     }
   }
@@ -127,6 +135,10 @@ export async function serveRemoteChannel(def: MainChannelDef, payload: unknown, 
       console.warn(`[channel-table] ${def.name} failed:`, error instanceof Error ? error.message : error);
     }
     return { reply: false };
+  }
+  if (def.remoteGuard) {
+    const refused = def.remoteGuard(payload);
+    if (refused !== undefined) return { reply: true, payload: refused };
   }
   try {
     return { reply: true, payload: await def.handler(payload, ctx) };
