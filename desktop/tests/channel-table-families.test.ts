@@ -61,6 +61,8 @@ import { bindFirstRunManager } from '../src/main/ipc/first-run';
 const broadcastReloadPlugins = vi.fn();
 const install = vi.fn(async () => ({ status: 'installed', type: 'plugin' }));
 const uninstall = vi.fn(async () => ({ type: 'plugin' }));
+// Stands in for the provider's own id resolution: a skill id names its parent plugin (see skill-provider-bundled.test.ts for the real one).
+const resolveUninstallTarget = vi.fn(async (id: string) => (id === 'youcoded-chatsearch:chatsearch' ? 'youcoded-chatsearch' : id === 'some-plugin' ? 'some-plugin' : null));
 
 let server: RemoteServer;
 let handlers: Map<string, (...args: any[]) => any>;
@@ -93,7 +95,7 @@ beforeAll(() => {
   });
   const mockIpcMain: any = { handle: vi.fn(), on: vi.fn() };
   const mockWindow: any = { webContents: { send: vi.fn() }, isDestroyed: () => false };
-  const mockSkillProvider: any = { configStore: { getPackages: vi.fn(() => ({})) }, install, uninstall, getInstalled: vi.fn(async () => [{ id: 'a-skill' }]), installMany: vi.fn(), ensureBundledPluginsInstalled: vi.fn(), ensureMigrated: vi.fn() };
+  const mockSkillProvider: any = { configStore: { getPackages: vi.fn(() => ({})) }, install, uninstall, resolveUninstallTarget, getInstalled: vi.fn(async () => [{ id: 'a-skill' }]), installMany: vi.fn(), ensureBundledPluginsInstalled: vi.fn(), ensureMigrated: vi.fn() };
   const wiring = registerWithRuntime(registerIpcHandlers, mockIpcMain, sessionManager, mockWindow, mockSkillProvider, undefined as any, hookRelay, config, server);
   cleanup = wiring.cleanup;
   handlers = new Map(mockIpcMain.handle.mock.calls.map((c: any) => [c[0], c[1]]));
@@ -340,6 +342,13 @@ describe('skills: install and uninstall keep working from a phone, and a bundled
     const refusal = { ok: false, error: 'bundled', type: 'plugin' };
     expect((await overRemote('skills:uninstall', { id: 'youcoded-chatsearch' })).answer).toEqual(refusal);
     expect(await overIpc('skills:uninstall', { id: 'youcoded-chatsearch' })).toEqual(refusal);
+    expect(uninstall).not.toHaveBeenCalled();
+    expect(broadcastReloadPlugins).not.toHaveBeenCalled();
+  });
+  it('a bundled plugin cannot be removed through the id of one of its skills either, from either door', async () => {
+    const refusal = { ok: false, error: 'bundled', type: 'plugin' };
+    expect((await overRemote('skills:uninstall', { id: 'youcoded-chatsearch:chatsearch' })).answer).toEqual(refusal);
+    expect(await overIpc('skills:uninstall', { id: 'youcoded-chatsearch:chatsearch' })).toEqual(refusal);
     expect(uninstall).not.toHaveBeenCalled();
     expect(broadcastReloadPlugins).not.toHaveBeenCalled();
   });

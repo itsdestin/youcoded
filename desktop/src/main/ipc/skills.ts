@@ -53,8 +53,13 @@ export const skillsChannels: MainChannelDef[] = [
     handler: async ({ id }) => {
       // Defense-in-depth: the UI disables the button for bundled plugins; refuse here too so a
       // stale client, a direct call or a phone cannot bypass it.
-      if (isBundledPlugin(id)) return { ok: false, error: 'bundled', type: 'plugin' } as const;
+      const refusal = { ok: false, error: 'bundled', type: 'plugin' } as const;
+      if (isBundledPlugin(id)) return refusal;
       const { skillProvider, sessionManager } = skillsDeps();
+      // WHY (2026-09-30 one-core R3-4): a skill id ("plugin:skill") removes its parent plugin, so
+      // the guard must judge the plugin the id resolves to, not the id as typed.
+      const owner = await skillProvider.resolveUninstallTarget(id);
+      if (owner && isBundledPlugin(owner)) return refusal;
       const result = await skillProvider.uninstall(id);
       // Reload plugins so Claude Code drops the uninstalled plugin.
       if (result.type === 'plugin') sessionManager.broadcastReloadPlugins();
