@@ -26,6 +26,9 @@ export const PAGES: readonly ScreenEntry[] = [
   pg('office/document', 'view', 'office'),
   pg('office/spreadsheet', 'view', 'office'),
   pg('office/presentation', 'view', 'office'),
+  // Office's comments panel, restyled like the app's comment cards (finish plan Task 6).
+  pg('office/document-comments', 'view', 'office'),
+  pg('office/spreadsheet-comments', 'view', 'office'),
   pg('office/versions', 'dialog', 'office'),
   // A window close or quit found documents whose save failed (Task 6 fix round 2).
   pg('office/unsaved-on-close', 'dialog', 'office'),

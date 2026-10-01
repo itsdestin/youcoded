@@ -19,7 +19,7 @@ import { Button, Dialog, DocumentTabs, EmptyState, ErrorState, LoadingState } fr
 import type { DocumentTab } from '../ui';
 import type { OfficeBridge, OfficeFile, OfficeKind, OfficeStatus, OfficeVersion } from '../../../shared/office-types';
 import { HistoryGlyph, HomeGlyph, KIND_LABEL, OfficeKindGlyph } from './office-icons';
-import { HOME_TAB, cancelClose, closeDoc, finishClose, flushOffice, markCopied, noteCloseFailedWhileHidden, openDoc, replaceDoc, selectTab, showVersions, useCopying, useOfficeTabs, useSaveState } from './office-store';
+import { HOME_TAB, officeCommentsPreview, cancelClose, closeDoc, finishClose, flushOffice, markCopied, noteCloseFailedWhileHidden, openDoc, replaceDoc, selectTab, showVersions, useCopying, useOfficeTabs, useSaveState } from './office-store';
 import { officeFileFor } from './office-files';
 import type { OfficeSaveState } from './office-store';
 import { OfficeSaveFailed } from './OfficeSaveFailed';
@@ -206,7 +206,8 @@ export function OfficeView({ projectRoot = null, visible = true }: { projectRoot
             file={d.file}
             hidden={d.closing || d.file.path !== active}
             // Kept but not shown (PageHost): no photo mark — the screen is not on view.
-            screen={visible ? `office/${d.file.kind}` : undefined}
+            // (Photo-only: `-comments` when shoot opened a document with its comments panel.)
+            screen={visible ? `office/${d.file.kind}${officeCommentsPreview() ? '-comments' : ''}` : undefined}
             closing={d.closing}
             onClosed={() => finishClose(d.file.path)}
             onCloseFailed={() => {

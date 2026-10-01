@@ -44,6 +44,7 @@ import { registerThemeProtocol } from './theme-protocol';
 import { officeEditorSettings, officeThemeFonts, registerOfficeProtocol } from './office/office-protocol';
 import { sealOfficeFrames } from './office/office-frame-guard';
 import { registerOfficeIpc } from './office/office-ipc';
+import { registerOfficeComments } from './office/office-comments';
 import { officeAvailable, officeRoot } from './office/office-root';
 import { getOfficeSessions, initOfficeSessionsSafely } from './office/office-session-registry';
 import { flushThenQuitOfficeSessions, holdCloseForOfficeSave, officeQuitGate, refuseCloseForOtherUnsaved, watchOtherUnsaved } from './office/office-flush';
@@ -1975,6 +1976,7 @@ void app.whenReady().then(async () => {
   // office:* (Task 5). WHY even without sessions: the renderer gets "unavailable", not a missing
   // handler. WHY the getter: the registry goes away at quit, and each request must see that.
   registerOfficeIpc(ipcMain, { getSessions: getOfficeSessions, available: () => officeAvailable(), root: officeRoot(), userData: app.getPath('userData'), documents: app.getPath('documents'), pruneVersionsAfterMs: 30_000 });
+  registerOfficeComments(); // comments on an open document go through its editor (office-comments.ts)
   perfMark('main:chore:office-protocol:done');
 
   // Marketplace auth store — instantiated once at startup, passed to IPC handlers.

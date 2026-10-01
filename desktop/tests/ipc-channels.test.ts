@@ -1522,6 +1522,19 @@ describe('office:* channel parity', () => {
     }
   });
 
+  // Comments on an open document go through its editor: main asks the window, the window answers
+  // and says when a comment changed. Like the close/quit handshake, desktop only — the remote
+  // client and the phone have no Office editors to ask.
+  it('the live-comments handshake is carried by preload and main, and by no other host', () => {
+    const comments = readSourceFile(path.join(__dirname, '../src/main/office/office-comments.ts'));
+    for (const ch of ['office:comments-request', 'office:comments-answer', 'office:comments-changed']) {
+      expect(preload).toContain(`'${ch}'`);
+      expect(comments).toContain(`'${ch}'`);
+      expect(shim).not.toContain(`'${ch}'`);
+      if (kotlin) expect(kotlin).not.toContain(`"${ch}"`);
+    }
+  });
+
   it('saves lost to a reload are told by preload and main, and by no other host', () => {
     for (const ch of ['office:lost-saves', 'office:saves-lost']) {
       expect(preload).toContain(`'${ch}'`);

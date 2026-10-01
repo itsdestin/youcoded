@@ -8,14 +8,16 @@
 //   editor → host  {yc:'ready'}                 the editor listens for "open-file" now
 //                  {yc:'rpc', id, cmd, args}    one request for main (the add-on's __TAURI__ relay)
 //                  {type:'yc:office-loaded' | 'yc:office-state' | 'yc:office-esc'}
+//                  {type:'yc:office-comments-result', id, result}, {type:'yc:office-comments-changed'}
 //   host → editor  {yc:'rpc-result', id, result | error}, {yc:'event', name, payload}
 //                  {type:'yc:office-theme' | 'yc:office-mode' | 'yc:office-cmd' | 'yc:office-save'}
+//                  {type:'yc:office-comments', id, op}   main's comment request (office-comments.ts)
 // The host only relays: main re-checks every command and that this window opened the document.
 import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { EmptyState, ErrorState, LoadingState } from '../ui';
 import type { OfficeBridge, OfficeFile, OfficeSaveCopyResult } from '../../../shared/office-types';
 import { OFFICE_MODE_MESSAGE, OFFICE_THEME_MESSAGE, editorFontLinks, readOfficeTheme, watchOfficeTheme } from './office-theme';
-import { markChanged, markFailed, markNote, markSaved, markSaving, markUnchanged, noteCloseFailedWhileHidden, noteCopying, onDocumentReplaced, registerFlush, withdrawUnloadApproval } from './office-store';
+import { markChanged, markFailed, markNote, markSaved, markSaving, markUnchanged, noteCloseFailedWhileHidden, noteCopying, onCommentsRequest, onDocumentReplaced, registerFlush, withdrawUnloadApproval } from './office-store';
 import type { FlushResult } from './office-store';
 import { ScreenMark } from '../../shoot-mode';
 import { useDismissTop } from '../../hooks/use-esc-close';
@@ -129,6 +131,8 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
   const ref = useRef<HTMLIFrameElement>(null);
   // 'unavailable': this host refuses Office outright (remote, phone) — a fact, not a failure.
   const [phase, setPhase] = useState<'starting' | 'open' | 'failed' | 'unavailable'>('starting');
+  const phaseRef = useRef(phase);
+  phaseRef.current = phase;
   const [failure, setFailure] = useState('');
   // Every open document has its own sealed office://<token> origin, handed out by office.open.
   // null until main has answered.
@@ -415,6 +419,24 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     // eslint-disable-next-line react-hooks/exhaustive-deps -- discardPending reads refs only
   }, [opened?.token, file.path]);
 
+  // Comments on this document go through this editor while it is open (finish plan Task 6,
+  // main/office/office-comments.ts): a write to the file would be erased by its next autosave.
+  // WHY "not ready" while opening, after a restore, or kept after one: the editor has no
+  // document yet, or holds one that will never be saved — main keeps the request and tries
+  // again (or writes the file once this editor has let go of it).
+  useEffect(() => {
+    const token = opened?.token;
+    if (!token) return;
+    return onCommentsRequest(token, (id, op) => {
+      if (phaseRef.current !== 'open' || replacedRef.current || keptRef.current) {
+        officeBridge()?.commentsAnswer?.(id, { ok: false, error: 'editor-not-ready' });
+        return;
+      }
+      post({ type: 'yc:office-comments', id, op });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- post reads refs only
+  }, [opened?.token]);
+
   // The closed tab saves first, then lets go (design §4: "on tab close").
   useEffect(() => {
     if (!closing) return;
@@ -427,6 +449,18 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     });
     return () => { cancelled = true; };
   }, [closing]);
+
+  // Photo-only (`shoot`'s *-comments screens): the editor's comments panel is opened, and the photo
+  // mark waits a moment for it to draw.
+  const wantsPanel = !!screen && screen.endsWith('-comments');
+  const [panelShown, setPanelShown] = useState(false);
+  useEffect(() => {
+    if (!wantsPanel || phase !== 'open') return;
+    post({ type: 'yc:office-cmd', cmd: 'comments' });
+    const t = setTimeout(() => setPanelShown(true), 1500);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- post reads refs only
+  }, [wantsPanel, phase]);
 
   // The shown document takes focus on a tab switch, so keyboard and screen
   // reader follow what is on screen (UX review 1, U4).
@@ -723,6 +757,11 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       if (d?.type === 'yc:office-loaded') setPhase('open');
       if (d?.type === 'yc:office-state' && d.state) stateCb.current?.(d.state);
       if (d?.type === 'yc:office-esc') dismissRef.current();
+      // The editor's answer to main's comment request, and its news that a comment changed (by
+      // anyone) — so the reading views of this file refresh (finish plan Task 6).
+      const c = d as { id?: unknown; result?: unknown } | null;
+      if (d?.type === 'yc:office-comments-result' && typeof c?.id === 'string') b?.commentsAnswer?.(c.id, c.result);
+      if (d?.type === 'yc:office-comments-changed') b?.commentsChanged?.(opened.token);
     };
     window.addEventListener('message', onMessage);
     const stopTheme = watchOfficeTheme(() => post({ type: OFFICE_THEME_MESSAGE, theme: editorTheme(opened.origin) }));
@@ -732,7 +771,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
 
   return (
     <div className="absolute inset-0 overflow-hidden" hidden={hidden}>
-      {phase === 'open' && !hidden && screen && <ScreenMark name={screen} />}
+      {phase === 'open' && !hidden && screen && (!wantsPanel || panelShown) && <ScreenMark name={screen} />}
       <iframe
         ref={ref}
         src={origin === null ? undefined : `${origin}/index.html`}

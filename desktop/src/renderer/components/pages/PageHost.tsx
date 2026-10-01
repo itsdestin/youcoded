@@ -48,7 +48,7 @@ import { ScreenBand } from '../ScreenBand';
 import type { PageDocument, PageFetchRequest, PageFetchResult, PageLoadFailure, PageSummary, PagesBridge } from '../../../shared/pages-types';
 import { MAX_PAGE_DATA_BYTES, MAX_PINNED_PAGES, OFFICE_PAGE_ID } from '../../../shared/pages-types';
 import { OfficeView } from '../office/OfficeView';
-import { HOME_TAB, officeDocFor, previewOfficeTabs, revealInline, selectTab, useOfficeTabs } from '../office/office-store';
+import { HOME_TAB, officeDocFor, previewOfficeComments, previewOfficeTabs, revealInline, selectTab, useOfficeTabs } from '../office/office-store';
 import { OfficeAlerts } from '../office/OfficeAlerts';
 import { PageGlyph, PagesIcon, PinGlyph } from './page-icons';
 import { PagesEmptyCard } from './PagesEmptyCard';
@@ -122,6 +122,9 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   useScreenOpen('office/spreadsheet', () => { void previewOfficeTabs(1); dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true }); });
   // WHY: the third editor (slides) needs its own picture too — the look is per editor.
   useScreenOpen('office/presentation', () => { void previewOfficeTabs(2); dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true }); });
+  // Office's own comments panel, restyled to match the app's comment cards (finish plan Task 6).
+  useScreenOpen('office/document-comments', () => { previewOfficeComments('document'); dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true }); });
+  useScreenOpen('office/spreadsheet-comments', () => { previewOfficeComments('spreadsheet'); dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true }); });
   useScreenOpen('office/versions', () => { void previewOfficeTabs(0, true); dispatch({ type: 'PAGE_OPENED', pageId: OFFICE_PAGE_ID, focus: true }); });
   const summary = pages.find((p) => p.id === pageId) ?? null;
   // Office is built in (office-questions#Q-entry): it lists, pins and opens like

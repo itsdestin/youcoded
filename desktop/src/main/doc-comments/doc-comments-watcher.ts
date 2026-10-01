@@ -47,6 +47,8 @@ interface Entry {
   // below can tell "torn down" apart from "replaced by a new entry for the
   // same key", which a bare `!entries.has(key)` check cannot.
   stopped: boolean;
+  /** A 'document' entry's source path as its subscribers named it (nudgeDocumentComments). */
+  documentSourcePath?: string;
 }
 
 // F3 fix (T5 review): `projectRoot` rides along on every push so a renderer
@@ -149,6 +151,7 @@ export async function watchComments(target: CommentsWatchTarget, subscriberId: n
     // (F3, T5 review's reasoning applies identically — two projects can share
     // a `report.docx`), not just 'project's.
     projectRoot: target.kind === 'project' || target.kind === 'document' ? target.projectRoot : undefined,
+    documentSourcePath: target.kind === 'document' ? target.sourcePath : undefined,
   };
   // Register BEFORE the async watcher start so a concurrent watchComments for
   // the same key refcounts THIS entry instead of starting a second watcher
@@ -220,6 +223,14 @@ function closeEntry(key: string, entry: Entry): void {
   for (const t of entry.timers.values()) clearTimeout(t);
   entry.timers.clear();
   void entry.watcher?.close().catch(() => { /* already dead */ });
+}
+
+/** A comment changed inside an Office editor holding this (real) path (finish plan Task 6,
+ *  main/office/office-comments.ts): the reading views of the file re-read it now — from that
+ *  editor — rather than after its autosave reaches the file. Debounced like a file change. */
+export function nudgeDocumentComments(absolutePath: string): void {
+  const entry = entries.get(`document:${absolutePath}`);
+  if (entry?.documentSourcePath !== undefined) scheduleChange(entry, entry.documentSourcePath);
 }
 
 /** Drop one subscription; closes the watcher once the last one is gone. */

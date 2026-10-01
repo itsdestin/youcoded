@@ -94,6 +94,15 @@ export function createSessions(tempBase: string, opts: { drain?: (s: OfficeSessi
     return [...sessions.values()].find((s) => s.path === filePath);
   }
 
+  /** The newest session of `filePath`. WHY (finish plan Task 6): a window whose page reloaded
+   *  keeps its old sessions until it closes, so the first session of a path can belong to an
+   *  editor that no longer exists; comment requests go to the newest, the one on screen. */
+  function latestByPath(filePath: string): OfficeSession | undefined {
+    let found: OfficeSession | undefined;
+    for (const s of sessions.values()) if (s.path === filePath) found = s;
+    return found;
+  }
+
   /** Whether Office holds `filePath` in any way: open, still draining its close (its last save
    *  may yet land), or about to open. WHY all three (fix round 5): "Save a copy…" must never
    *  write over such a file — the draining save, or the opening editor's first save, would
@@ -121,5 +130,5 @@ export function createSessions(tempBase: string, opts: { drain?: (s: OfficeSessi
     return [...sessions.values()].some((s) => s.senderId === senderId);
   }
 
-  return { open, get, close, closeAllFor, byPath, inUse, hasFor, holdWhile };
+  return { open, get, close, closeAllFor, byPath, latestByPath, inUse, hasFor, holdWhile };
 }

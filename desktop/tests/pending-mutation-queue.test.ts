@@ -301,6 +301,22 @@ describe('forwards a reply\'s persisted CommentReply once the writer starts retu
     }
   });
 
+  it('a change kept for an Office editor that is not ready yet is reported as queued, not as done or failed', async () => {
+    // The file is open in Office and its editor is still opening (live-comments.ts): the
+    // assistant must hear that the change is queued, so it neither retries nor reports success.
+    const spy = vi.spyOn(docCommentsDispatch, 'addNativeDocxComment').mockResolvedValue({ ok: true, queued: true });
+    try {
+      await newRoot();
+      await withDocxFixture('docs/launch-brief.docx');
+      const realRoot = await fs.promises.realpath(root);
+      await start('sess-queued', root);
+      const id = await writeRequest(realRoot, { kind: 'add', format: 'docx', path: 'docs/launch-brief.docx', selector: { kind: 'text', selector: { type: 'TextQuoteSelector', exact: 'x', prefix: '', suffix: '', occurrence: 0 } }, text: 'later', author: 'assistant' });
+      expect(await waitForResult(realRoot, id)).toEqual({ ok: true, queued: true });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('still returns a bare {ok:true} for a mock that omits `reply` — the field is genuinely optional, not assumed', async () => {
     // Same spy technique, deliberately WITHOUT a `reply` field this time —
     // proves the queue's forwarding is conditional on the field actually

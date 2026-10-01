@@ -158,6 +158,11 @@ function hasValidToken(entry: Entry, req: PendingMutationRequest): boolean {
  *  watcher's own verified `entry.realRoot` — see this file's own header,
  *  finding #1: `req.projectRoot` (self-reported, unauthenticated) is never
  *  used for authorization, and is not even read here. */
+/** Finish plan Task 6: the file is open in Office and its editor could not take the change yet
+ *  (still opening, or busy); the change is kept and made as soon as it can be (live-comments.ts).
+ *  The assistant is told so (claude-code-doc-comments-mcp.ts) rather than told it failed. */
+const isQueued = (r: object): boolean => 'queued' in r && (r as { queued?: unknown }).queued === true;
+
 async function applyRequest(req: PendingMutationRequest, trustedProjectRoot: string): Promise<PendingMutationResult> {
   const format: NativeFormat = req.format;
   const base = { path: req.path, projectRoot: trustedProjectRoot };
@@ -168,11 +173,13 @@ async function applyRequest(req: PendingMutationRequest, trustedProjectRoot: str
   if (req.kind === 'add') {
     const args = { ...base, selector: req.selector!, text: req.text ?? '', author: req.author ?? 'assistant' };
     const result = format === 'docx' ? await addNativeDocxComment(args) : await addNativeXlsxComment(args);
-    return result.ok ? { ok: true, id: result.id } : { ok: false, error: result.error };
+    if (isQueued(result)) return { ok: true, queued: true };
+    return result.ok ? { ok: true, id: (result as { id: string }).id } : { ok: false, error: result.error };
   }
   if (req.kind === 'reply') {
     const args = { ...base, id: req.commentId!, text: req.text ?? '', author: req.author ?? 'assistant' };
     const result = format === 'docx' ? await replyToNativeDocxComment(args) : await replyToNativeXlsxComment(args);
+    if (isQueued(result)) return { ok: true, queued: true };
     if (!result.ok) return { ok: false, error: result.error };
     // Design commit 6c612cb9 (§1.5/§1.6/§7): a reply's ordinal id can't be
     // pre-computed client-side, so the persisted CommentReply is meant to
@@ -190,16 +197,19 @@ async function applyRequest(req: PendingMutationRequest, trustedProjectRoot: str
   if (req.kind === 'resolve') {
     const args = { ...base, id: req.commentId!, by: req.author ?? 'assistant' };
     const result = format === 'docx' ? await resolveNativeDocxComment(args) : await resolveNativeXlsxComment(args);
+    if (isQueued(result)) return { ok: true, queued: true };
     return result.ok ? { ok: true } : { ok: false, error: result.error };
   }
   if (req.kind === 'reopen') {
     const args = { ...base, id: req.commentId!, by: req.author ?? 'assistant' };
     const result = format === 'docx' ? await reopenNativeDocxComment(args) : await reopenNativeXlsxComment(args);
+    if (isQueued(result)) return { ok: true, queued: true };
     return result.ok ? { ok: true } : { ok: false, error: result.error };
   }
   if (req.kind === 'move') {
     const args = { ...base, id: req.commentId!, newSelector: req.newSelector! };
     const result = format === 'docx' ? await moveNativeDocxComment(args) : await moveNativeXlsxComment(args);
+    if (isQueued(result)) return { ok: true, queued: true };
     if (!result.ok) return { ok: false, error: result.error };
     // Code review 2026-09-27, desktop F1: an xlsx move's OWN id changes (its
     // old id's embedded-cell hint goes stale the instant the comment moves —

@@ -104,3 +104,19 @@ describe('office session registry', () => {
     expect(opened).toBe(true);
   });
 });
+
+describe('the newest session of a file', () => {
+  it('is the one comment requests go to: an older one may belong to a page that reloaded', async () => {
+    const base = await mkdtemp(path.join(tmpdir(), 'yc-office-latest-'));
+    try {
+      const reg = createSessions(base);
+      const first = await reg.open('/docs/a.docx', 1);
+      const second = await reg.open('/docs/a.docx', 1);
+      expect(reg.byPath('/docs/a.docx')).toBe(first);
+      expect(reg.latestByPath('/docs/a.docx')).toBe(second);
+      expect(reg.latestByPath('/docs/b.docx')).toBeUndefined();
+    } finally {
+      await rm(base, { recursive: true, force: true, maxRetries: 3 });
+    }
+  });
+});

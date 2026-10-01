@@ -379,6 +379,27 @@ export function onDocumentReplaced(token: string, reload: () => void): () => voi
   return () => { group.delete(reload); if (group.size === 0 && reloaders.get(token) === group) reloaders.delete(token); };
 }
 
+// ── Comments through the open editor (finish plan Task 6) ──
+// Main sends each comment request for an open document to the window that opened it, naming
+// the document by token (main/office/office-comments.ts); the editor holding that token runs it.
+// One subscription, fanned out by token, for the same reason as onDocumentReplaced above.
+const commentHandlers = new Map<string, (id: string, op: unknown) => void>();
+let commentsSubscribed = false;
+/** Run `handler` for main's comment requests to the document behind `token`. Returns the unsubscribe. */
+export function onCommentsRequest(token: string, handler: (id: string, op: unknown) => void): () => void {
+  const office = typeof window === 'undefined' ? undefined : window.claude?.office;
+  if (!commentsSubscribed && office?.onCommentsRequest) {
+    commentsSubscribed = true;
+    office.onCommentsRequest((r) => {
+      const h = r && typeof r.token === 'string' ? commentHandlers.get(r.token) : undefined;
+      // No editor here for it (it just closed): main keeps the request and tries again.
+      if (h) h(r.id, r.op); else office.commentsAnswer?.(r.id, { ok: false, error: 'editor-not-ready' });
+    });
+  }
+  commentHandlers.set(token, handler);
+  return () => { if (commentHandlers.get(token) === handler) commentHandlers.delete(token); };
+}
+
 // ── Save state, per file (Task 6; design §4) ──
 // Autosave is the only save there is (office-questions#Q-save), so the strip only reports it:
 // the last save landed, one is pending or running, or one failed — with main's own reason.
@@ -491,10 +512,23 @@ function setOfficeTabsForPreview(docs: OpenDoc[], active: string, versionsFor: O
  *  one in front (office/presentation, polish pass 2026-09-28): an asleep document is not mounted,
  *  so the presentation editor could never be photographed. */
 export async function previewOfficeTabs(front: number, withVersions = false): Promise<void> {
+  commentsPreview = false;
   const recent = (await window.claude?.office?.status(null))?.recent ?? [];
   const docs = recent.slice(0, 3).map((file, i) => ({ file, asleep: i === 2 && front !== 2 }));
   const f = docs[front]?.file;
   setOfficeTabsForPreview(docs, f?.path ?? HOME_TAB, withVersions && f ? f : null);
+}
+
+// Photo-only (`shoot`, finish plan Task 6): one document with Office's comments panel open — a
+// workbench fixture whose comments were made through the live editor (the Word one holds the same
+// comments as the reading view's launch brief, for comparison).
+let commentsPreview = false;
+export function officeCommentsPreview(): boolean { return commentsPreview; }
+export function previewOfficeComments(kind: 'document' | 'spreadsheet'): void {
+  const name = kind === 'document' ? 'Launch brief.docx' : 'Garden budget review.xlsx';
+  const path = `/home/you/Projects/community-garden/${name}`;
+  commentsPreview = true;
+  setOfficeTabsForPreview([{ file: { path, name, kind, folder: 'community-garden', at: new Date().toISOString() }, asleep: false }], path);
 }
 
 /** Tests only: back to no documents and no save states. */
@@ -509,6 +543,8 @@ export function resetOfficeStoreForTests(): void {
   answering = false;
   reloaders.clear();
   changedSubscribed = false;
+  commentHandlers.clear();
+  commentsSubscribed = false;
   unsavedChecks.clear();
   unloadApproval = 'none';
   heldReload = null;

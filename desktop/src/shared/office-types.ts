@@ -94,6 +94,12 @@ export interface OfficeBridge {
   /** The names (never folders) of this window's unsaved non-Office edits — open editors and
    *  parked drafts (fix rounds 9–11): the quit gate refuses while any window has one. Desktop only. */
   setOtherUnsaved?(names: string[]): void;
+  /** Comments on an open document go through its editor (finish plan Task 6, main/office/
+   *  office-comments.ts): main asks (token, request id, op), the editor's window answers, and says
+   *  when a comment changed in the editor. Desktop only. */
+  onCommentsRequest?(cb: (req: { token: string; id: string; op: unknown }) => void): () => void;
+  commentsAnswer?(id: string, result: unknown): void;
+  commentsChanged?(token: string): void;
 }
 
 /** main → renderer: Office documents that couldn't be saved (count), or — `other` — a quit or the

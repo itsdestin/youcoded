@@ -665,3 +665,50 @@ describe('the Save As note', () => {
     expect(saveStateFor(FILE.path).note).toBeUndefined();
   });
 });
+
+// Comments on an open document go through its editor (main/office/office-comments.ts): main's
+// request reaches the editor holding the token, the editor's answer goes back to main, and its
+// news that a comment changed is passed on so reading views refresh.
+describe('EditorFrame relaying comment requests', () => {
+  function withComments() {
+    const bridge = fakeBridge();
+    let request: ((r: { token: string; id: string; op: unknown }) => void) | null = null;
+    const extra = {
+      onCommentsRequest: vi.fn((cb: (r: { token: string; id: string; op: unknown }) => void) => { request = cb; return () => {}; }),
+      commentsAnswer: vi.fn(),
+      commentsChanged: vi.fn(),
+    };
+    Object.assign(bridge, extra);
+    return { ...extra, ask: (token: string, id: string, op: unknown) => act(() => { request!({ token, id, op }); }) };
+  }
+
+  it('answers "not ready" while the document is still opening, without bothering the editor', async () => {
+    const c = withComments();
+    const { sent } = await mountFrame();
+    c.ask('t1', 'q1', { kind: 'list' });
+    expect(c.commentsAnswer).toHaveBeenCalledWith('q1', { ok: false, error: 'editor-not-ready' });
+    expect(sent().some((m) => m.type === 'yc:office-comments')).toBe(false);
+  });
+
+  it('passes a request to the drawn editor and its answer back to main; another token\'s request is not its', async () => {
+    const c = withComments();
+    const { fromEditor, sent } = await mountFrame();
+    fromEditor({ type: 'yc:office-loaded' });
+    c.ask('t1', 'q2', { kind: 'add', text: 'hi' });
+    expect(sent().filter((m) => m.type === 'yc:office-comments')).toEqual([{ type: 'yc:office-comments', id: 'q2', op: { kind: 'add', text: 'hi' } }]);
+    c.ask('other-token', 'q3', { kind: 'list' });
+    expect(c.commentsAnswer).toHaveBeenCalledWith('q3', { ok: false, error: 'editor-not-ready' });
+    fromEditor({ type: 'yc:office-comments-result', id: 'q2', result: { ok: true, id: 'e1' } });
+    expect(c.commentsAnswer).toHaveBeenCalledWith('q2', { ok: true, id: 'e1' });
+    // Only the editor's own frame speaks for it.
+    fromEditor({ type: 'yc:office-comments-result', id: 'q9', result: { ok: true } }, { source: null });
+    expect(c.commentsAnswer).not.toHaveBeenCalledWith('q9', expect.anything());
+  });
+
+  it('says when a comment changed in the editor, naming the document by its token', async () => {
+    const c = withComments();
+    const { fromEditor } = await mountFrame();
+    fromEditor({ type: 'yc:office-comments-changed' });
+    expect(c.commentsChanged).toHaveBeenCalledWith('t1');
+  });
+});
