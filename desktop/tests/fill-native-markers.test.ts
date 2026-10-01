@@ -8,6 +8,7 @@ import { applyOpenReply, type OpenOk } from '../src/renderer/state/session-fill'
 import { playInto } from './helpers/fill-harness';
 import { newState, screenOf, SID } from './helpers/fill-scenarios';
 import { ev } from './helpers/transcript-events';
+import { eventToAction } from '../src/renderer/state/transcript-event-actions';
 import type { TranscriptEvent } from '../src/shared/types';
 
 let t = 1_700_000_000_000;
@@ -55,5 +56,25 @@ describe('reopening a native chat that was cleared', () => {
     const tl = await reopen(events);
     expect(tl.filter((l) => l.startsWith('skill:'))).toHaveLength(1);
     expect(tl.filter((l) => l.startsWith('marker:'))).toHaveLength(1);
+  });
+});
+
+describe('the buddy and the preview run the same page case', () => {
+  it('both dispatch HISTORY_PAGE_LOADED into chatReducer itself (a source pin: there is no second reducer to fix)', async () => {
+    const fs = await import('node:fs');
+    const read = (p: string) => fs.readFileSync(new URL(`../src/renderer/${p}`, import.meta.url), 'utf8');
+    expect(read('components/buddy/BubbleFeed.tsx')).toContain("type: 'HISTORY_PAGE_LOADED'");
+    expect(read('state/chat-context.ts')).toContain('chatReducer');
+    expect(read('components/SessionPreviewPane.tsx')).toContain("type: 'HISTORY_PAGE_LOADED'");
+    expect(read('components/SessionPreviewPane.tsx')).toContain('chatReducer(state, action as ChatAction)');
+  });
+
+  it('a page loaded into the buddy\'s state shape (SESSION_INIT, live clear, then the page) shows the divider once', () => {
+    const clear = e(ev('context-clear', {}, { uuid: 'bc1' }));
+    const hello = e(ev('user-message', { text: 'hi' }, { uuid: 'bu1' }));
+    let st = chatReducer(new Map(), { type: 'SESSION_INIT', sessionId: SID });
+    for (const x of [hello, clear]) for (const a of eventToAction(x, { live: true })) st = chatReducer(st, a);
+    st = chatReducer(st, { type: 'HISTORY_PAGE_LOADED', sessionId: SID, events: [hello, clear], cursor: null, hasMore: false });
+    expect(screenOf(st)!.timeline).toEqual(['user: hi', 'marker: Conversation cleared']);
   });
 });

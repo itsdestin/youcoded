@@ -16,12 +16,15 @@
 //     sessions and the user-level file was NOT given to a phone.
 //   R6-1 (2026-10-01; Destin, 2026-09-30, answers 8 and 9): clear and invoke-skill are open to a phone, and a phone now gets the
 //   instruction-file read too, through the phone's own deny list (see the session-context-text entry).
+import fs from 'fs';
 import { IPC } from '../../shared/backend-contract';
-import { locateContextFile, readWholeContextFile } from '../claude-code-context';
+import { findProjectInstructionsPath, locateContextFile, readWholeContextFile } from '../claude-code-context';
 import { isPhoneDeniedFile, KEPT_ON_COMPUTER } from '../phone-read-deny';
 import { noteModelUsed } from '../conversations/service';
 import { defineChannel, type MainChannelCtx, type MainChannelDef } from './channel-def';
 
+/** The most a phone is sent of one instruction file (the computer's panel has no cap; instruction files are small). */
+const PHONE_CONTEXT_MAX_BYTES = 1024 * 1024;
 const NOT_LIVE_SEND = { status: 'failed', reason: 'not-live' } as const;
 
 /** The one place the YOUCODED_NATIVE=0 kill switch is read in main (one-core R3-5, audit M6).
@@ -156,14 +159,26 @@ export const nativeChannels: MainChannelDef[] = [
           const fromHost = host.sessionContextText(sessionId, kind as 'project' | 'skill', id);
           if (!('error' in fromHost) || fromHost.error !== 'not-live') return fromHost;
         }
-        // A skill's file, or a door with no session folders to consult: the host's own answer, as before.
-        if (kind === 'skill' || !ctx.remote) return host ? host.sessionContextText(sessionId, kind as 'project' | 'skill', id) : { error: 'not-live' };
+        // WHY only these two (R6-1 review): a phone may read the instruction files, not a skill's file or any kind it invents. Anything else
+        // gets the host's own answer (which is what a phone always got), or not-live when there is no host.
+        if ((kind !== 'project' && kind !== 'user') || !ctx.remote) return host ? host.sessionContextText(sessionId, kind as 'project' | 'skill', id) : { error: 'not-live' };
         const sessions = { getSession: (sid: string) => { const cwd = ctx.remote!.sessionCwd(sid); return cwd ? { cwd } : undefined; } };
-        const located = locateContextFile(sessions, sessionId, kind, id);
+        const cwd = kind === 'project' ? sessions.getSession(sessionId)?.cwd : undefined;
+        if (kind === 'project' && !cwd) return { error: 'not-live' };
+        const found = kind === 'project' ? await findProjectInstructionsPath(cwd!) : locateContextFile(sessions, sessionId, kind, id);
+        const located = typeof found === 'string' ? { path: found } : found ?? { error: 'not-found' };
         if ('error' in located) return located;
         // The deny list judges the real path BEFORE the file is read, so a refused file is never opened.
         if (await isPhoneDeniedFile(located.path)) return { error: KEPT_ON_COMPUTER };
-        return readWholeContextFile(sessions, sessionId, kind, id);
+        // Read exactly the path that was judged (no second lookup), and only a regular file of sane size: a named pipe would hang the read.
+        try {
+          const real = await fs.promises.realpath(located.path);
+          const st = await fs.promises.stat(real);
+          if (!st.isFile()) return { error: 'unreadable' };
+          if (st.size > PHONE_CONTEXT_MAX_BYTES) return { error: 'too-large' };
+          const text = await fs.promises.readFile(real, 'utf8');
+          return { path: located.path, text, full: text, truncated: false };
+        } catch { return { error: 'unreadable' }; }
       }
       if (kind !== 'user' && host) {
         const fromHost = host.sessionContextText(sessionId, kind, id);

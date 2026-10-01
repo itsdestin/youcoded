@@ -10,6 +10,8 @@ import { findChannel, serveRemoteChannel } from '../src/main/ipc/channel-table';
 import { bindThemeMarketplace } from '../src/main/ipc/theme-marketplace';
 import { bindSkillsDeps } from '../src/main/ipc/skills';
 import { bindAccountDeps } from '../src/main/ipc/account';
+import { spawnSync } from 'child_process';
+import { locateContextFile } from '../src/main/claude-code-context';
 import { authOkMessage } from '../src/main/remote-server';
 
 const phoneCtx = (extra: any = {}): any => ({ door: 'remote', runtime: null, broadcast: vi.fn(), ...extra });
@@ -105,11 +107,38 @@ describe('the instruction-file read for a phone (answer 9), under the R3-SEC pho
     expect(out.payload.text).toBe('global rules');
   });
 
-  it('a session that is not open gets not-live and no folder is read; a phone cannot name a folder of its own', async () => {
+  it('a session that is not open gets not-live, and a folder the phone supplies is ignored for one that is', async () => {
+    const real = tmp(), other = tmp();
+    fs.writeFileSync(path.join(real, 'CLAUDE.md'), 'the session folder');
+    fs.writeFileSync(path.join(other, 'CLAUDE.md'), 'a folder the phone named');
+    const ctx = ctxFor({ s1: real });
+    const known: any = await phone('native:session-context-text', { sessionId: 's1', kind: 'project', cwd: other, projectRoot: other, path: path.join(other, 'CLAUDE.md') }, ctx);
+    expect(known.payload.text).toBe('the session folder');
+    const unknown: any = await phone('native:session-context-text', { sessionId: 'nope', kind: 'project', cwd: other }, ctx);
+    expect(unknown.payload).toEqual({ error: 'not-live' });
+  });
+
+  it('an invented kind never reaches a skill file: the phone gets the host\'s answer and the locator finds nothing', async () => {
     const dir = tmp();
-    fs.writeFileSync(path.join(dir, 'CLAUDE.md'), 'secret plan');
-    const out: any = await phone('native:session-context-text', { sessionId: 'nope', kind: 'project', cwd: dir, path: path.join(dir, 'CLAUDE.md') }, ctxFor({ s1: dir }));
-    expect(out.payload).toEqual({ error: 'not-live' });
+    fs.mkdirSync(path.join(dir, '.claude', 'skills', 'mine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.claude', 'skills', 'mine', 'SKILL.md'), '---\nname: mine\ndescription: d\n---\nSECRET SKILL BODY');
+    for (const kind of ['bogus', '', 'Skill', 'skills']) {
+      const out: any = await ask(kind, ctxFor({ s1: dir }), 's1', 'mine');
+      expect(JSON.stringify(out), kind).not.toContain('SECRET SKILL BODY');
+      expect(out.payload, kind).toEqual({ error: 'not-live' });
+    }
+    expect(locateContextFile({ getSession: () => ({ cwd: dir }) }, 's1', 'bogus' as any, 'mine')).toEqual({ error: 'not-found' });
+  });
+
+  it('a project file that is a named pipe is refused without hanging, and an oversize one is refused', async () => {
+    const dir = tmp();
+    if (process.platform !== 'win32') {
+      spawnSync('mkfifo', [path.join(dir, 'CLAUDE.md')]);
+      expect(((await ask('project', ctxFor({ s1: dir }))) as any).payload).toEqual({ error: 'unreadable' });
+    }
+    const big = tmp();
+    fs.writeFileSync(path.join(big, 'CLAUDE.md'), 'x'.repeat(1024 * 1024 + 1));
+    expect(((await ask('project', ctxFor({ s1: big }))) as any).payload).toEqual({ error: 'too-large' });
   });
 
   it('a CLAUDE.md that is really a link to a private key is refused as "kept on the computer", never opened', async () => {

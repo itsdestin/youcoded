@@ -110,6 +110,21 @@ export function readWholeContextFile(
   }
 }
 
+/** The same walk as findProjectInstructions (AGENTS.md then CLAUDE.md per folder, stop at the repo root) without reading anything, and
+ *  without blocking the main process. For a PHONE: findProjectInstructions reads the file it finds, which would open a denied link, a
+ *  named pipe or a huge file before the phone's checks run. */
+export async function findProjectInstructionsPath(cwd: string): Promise<string | null> {
+  const exists = (p: string) => fs.promises.access(p).then(() => true, () => false);
+  let dir = cwd;
+  while (true) {
+    for (const name of ['AGENTS.md', 'CLAUDE.md']) { const p = path.join(dir, name); if (await exists(p)) return p; }
+    if (await exists(path.join(dir, '.git'))) return null;
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
 /** WHY split out (2026-10-01 one-core R6-1): a PHONE's read must be judged against the phone deny list BEFORE any byte is read, so the
  *  "which file is it" half is its own function. readWholeContextFile is unchanged for the computer: same answers, same order. */
 export function locateContextFile(
@@ -125,12 +140,12 @@ export function locateContextFile(
     const cwd = sessions.getSession(sessionId)?.cwd;
     if (!cwd) return { error: 'not-live' };
     file = findProjectInstructions(cwd)?.path ?? null;
-  } else {
+  } else if (kind === 'skill') {
     const cwd = sessions.getSession(sessionId)?.cwd;
     const found = [...scanSkills(), ...(cwd ? scanProjectSkills(cwd) : [])].find((s) => s.id === id);
     // skillDir is where the scanner found it; SKILL.md is the one on-disk layout
     // (skill-catalog.ts owns that fact — this reads the same shape).
     file = found?.skillDir ? path.join(found.skillDir, 'SKILL.md') : null;
-  }
+  } // WHY explicit (R6-1 review): any other kind (a phone can send anything) locates nothing, rather than falling into the skill branch
   return file ? { path: file } : { error: 'not-found' };
 }
