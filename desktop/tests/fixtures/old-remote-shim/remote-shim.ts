@@ -7,7 +7,7 @@
 
 // Type-only, so nothing is added to the bundle the Android WebView loads.
 import type { VoiceReadiness } from '../../../src/shared/voice-types';
-import type { RemoteBridge } from '../../../src/shared/bridge-types';
+// (v1.3.0 type-only import of bridge-types dropped: that file no longer exists; types are not checked in this frozen copy)
 
 // ── Marketplace types re-declared locally ─────────────────────────────────────
 // WHY: remote-shim.ts lives in renderer/ and cannot import from main/ (Node.js
@@ -3111,7 +3111,7 @@ export function installShim(): void {
     // WHY `satisfies`: a compile-time-only check (no runtime effect) that this
     // object implements every `session`, `on` and favorites member preload.ts
     // does — see SharedBridge in shared/bridge-types.ts.
-  } satisfies RemoteBridge;
+  };
 
   // The one intentional gap in the shared shape: voice typing exists on the
   // Android app and on the desktop, and NOWHERE else. Deleting the namespace

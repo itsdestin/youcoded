@@ -384,10 +384,15 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   // can refresh the list; the active-theme fallback effect (above) uses the
   // refreshed list to reset to the default if the user just uninstalled the
   // theme they had applied.
+  // WHY (2026-10-01, one-core R5-2): the theme list is read asynchronously; when the provider is
+  // gone before the read finishes, setting state afterwards ran against a torn-down window and
+  // surfaced as an unhandled error in a full-suite run (app-welcome-back-gating.test.tsx).
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const reloadUserThemes = useCallback(async () => {
     try {
       const claude = (window as any).claude;
-      if (!claude?.theme?.list) { setUserThemesLoaded(true); return; }
+      if (!claude?.theme?.list) { if (alive.current) setUserThemesLoaded(true); return; }
       const slugs: string[] = await claude.theme.list();
       const loaded: LoadedTheme[] = [];
       for (const slug of slugs) {
@@ -400,10 +405,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
           console.warn(`[ThemeProvider] Failed to load user theme "${slug}":`, e);
         }
       }
+      if (!alive.current) return;
       setUserThemes(loaded);
       setUserThemesLoaded(true);
     } catch {
-      setUserThemesLoaded(true); // Mark loaded even on error so fallback can run
+      if (alive.current) setUserThemesLoaded(true); // Mark loaded even on error so fallback can run
     }
   }, []);
 
