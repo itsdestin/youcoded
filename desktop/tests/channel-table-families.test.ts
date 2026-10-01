@@ -333,16 +333,21 @@ describe('skills, marketplace, theme-marketplace and first-run: every channel is
       // R6-1: rate, vote (plugin and theme), comment and the installed-packages read (what "update available" compares against)
       'marketplace:comment', 'marketplace:get-packages', 'marketplace:rate', 'marketplace:rate:delete', 'marketplace:theme:like',
       'marketplace:thumb', 'marketplace:thumb:get',
+      // R6-3: the install-count report and the Report button
+      'marketplace:install', 'marketplace:report',
       'skills:apply-output-style', 'skills:create-prompt', 'skills:delete-prompt', 'skills:get-chips', 'skills:get-curated-defaults',
       'skills:get-detail', 'skills:get-favorites', 'skills:get-featured', 'skills:get-integration-info', 'skills:get-override', 'skills:get-share-link',
       'skills:import-from-link', 'skills:install', 'skills:install-many', 'skills:list', 'skills:list-marketplace', 'skills:publish',
       'skills:search', 'skills:set-chips', 'skills:set-favorite', 'skills:set-override', 'skills:uninstall',
-      // R6-1: browsing the theme marketplace (reads only)
-      'theme-marketplace:detail', 'theme-marketplace:list',
-    ]);
+      // R6-3: the Update button
+      'skills:update',
+      // R6-1: browsing the theme marketplace; R6-3: install, remove, update, publish (and the state read the Publish sheet needs)
+      'theme-marketplace:detail', 'theme-marketplace:install', 'theme-marketplace:list', 'theme-marketplace:publish',
+      'theme-marketplace:resolve-publish-state', 'theme-marketplace:uninstall', 'theme-marketplace:update',
+    ].sort());
   });
   it('a phone asking for anything else here gets the standard refusal, and the handler never runs', async () => {
-    for (const type of ['skills:update', 'marketplace:install', 'marketplace:report', 'marketplace:get-config', 'theme-marketplace:install', 'theme-marketplace:update', 'theme-marketplace:uninstall', 'theme-marketplace:publish', 'theme-marketplace:refresh-registry', 'first-run:skip', 'first-run:state', 'first-run:local-download']) {
+    for (const type of ['marketplace:get-config', 'marketplace:set-config', 'theme-marketplace:refresh-registry', 'theme-marketplace:generate-preview', 'first-run:skip', 'first-run:state', 'first-run:local-download']) {
       expect((await overRemote(type, {})).answer, type).toEqual({ ok: false, error: `This feature isn't available over remote access yet (${type}).`, unsupported: true });
     }
   });

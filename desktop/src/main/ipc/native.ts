@@ -146,7 +146,7 @@ export const nativeChannels: MainChannelDef[] = [
   // instructions have no host answer, so the file is read plainly.
   // WHY a phone gets that plain read now (R6-1; Destin, 2026-09-30, answer 9: the phone's panel may read the project and user
   // instruction files for Claude Code sessions, as the computer's does): so the phone's panel matches the computer's. What a phone
-  // does NOT get: (a) a skill's file (he approved the instruction files, not skills), and (b) any file the phone deny list refuses
+  // does NOT get: (a) a skill's file was withheld in R6-1 and is read from R6-3 on (same checks as the instruction files), and (b) any file the phone deny list refuses
   // (R3-SEC): the file is judged on its REAL path, so a CLAUDE.md that is really a link to a secret is refused with the same
   // "kept on the computer" answer every other phone read gives. The project file is found by walking up from the folder of a
   // session that is open right now, so a phone cannot name a folder of its own.
@@ -159,9 +159,11 @@ export const nativeChannels: MainChannelDef[] = [
           const fromHost = host.sessionContextText(sessionId, kind as 'project' | 'skill', id);
           if (!('error' in fromHost) || fromHost.error !== 'not-live') return fromHost;
         }
-        // WHY only these two (R6-1 review): a phone may read the instruction files, not a skill's file or any kind it invents. Anything else
-        // gets the host's own answer (which is what a phone always got), or not-live when there is no host.
-        if ((kind !== 'project' && kind !== 'user') || !ctx.remote) return host ? host.sessionContextText(sessionId, kind as 'project' | 'skill', id) : { error: 'not-live' };
+        // WHY these three and no others (R6-3; Destin, 2026-10-01: a skill's own file may show on a phone, under the same protections): a
+        // phone may read the instruction files and a skill's SKILL.md, never any kind it invents (R6-1 review). Anything else gets the host's
+        // own answer (which is what a phone always got), or not-live when there is no host. For a skill the phone sends only an id: the
+        // skill's folder is looked up on the computer from its own skill scan, never taken from the phone.
+        if ((kind !== 'project' && kind !== 'user' && kind !== 'skill') || !ctx.remote) return host ? host.sessionContextText(sessionId, kind as 'project' | 'skill', id) : { error: 'not-live' };
         const sessions = { getSession: (sid: string) => { const cwd = ctx.remote!.sessionCwd(sid); return cwd ? { cwd } : undefined; } };
         const cwd = kind === 'project' ? sessions.getSession(sessionId)?.cwd : undefined;
         if (kind === 'project' && !cwd) return { error: 'not-live' };

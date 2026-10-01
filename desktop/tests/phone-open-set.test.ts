@@ -18,6 +18,15 @@ const OPENED_IN_R6_1 = [
   'native:clear', 'native:invoke-skill',                                       // 8 clear a session, run a skill command
 ];
 
+/** What R6-3 opened, from Destin's answers of 2026-10-01 (deck r6-phone-abilities-questions). resolve-publish-state comes WITH publish, because
+ *  the Publish sheet reads it to show "already open for review" or "published"; without it a phone could send a second pull request. */
+const OPENED_IN_R6_3 = [
+  'skills:update',                                                              // the Update button
+  'theme-marketplace:install', 'theme-marketplace:uninstall', 'theme-marketplace:update', // theme install, remove, update
+  'theme-marketplace:publish', 'theme-marketplace:resolve-publish-state',      // theme publish (and the state read its sheet needs)
+  'marketplace:install', 'marketplace:report',                                  // install count, Report button
+];
+
 describe('the complete list of what a phone may call', () => {
   const live = CHANNEL_TABLE.filter(phoneOpen).map((d) => d.name).sort();
 
@@ -27,13 +36,11 @@ describe('the complete list of what a phone may call', () => {
   });
 
   it('includes every channel opened on request, and none of the neighbours that were not approved', () => {
-    for (const name of OPENED_IN_R6_1) expect(live, name).toContain(name);
+    for (const name of [...OPENED_IN_R6_1, ...OPENED_IN_R6_3]) expect(live, name).toContain(name);
     const stillRefused = [
-      'theme-marketplace:install', 'theme-marketplace:uninstall', 'theme-marketplace:update', 'theme-marketplace:publish',
-      'theme-marketplace:refresh-registry', 'theme-marketplace:resolve-publish-state', 'theme-marketplace:generate-preview',
-      'skills:update', 'marketplace:install', 'marketplace:report', 'marketplace:get-config', 'marketplace:set-config',
-      'marketplace:invalidate-cache', 'marketplace:read-component',
-      'chatgpt:sign-in', 'openrouter:sign-in',
+      'theme-marketplace:refresh-registry', 'theme-marketplace:generate-preview',
+      'marketplace:get-config', 'marketplace:set-config', 'marketplace:invalidate-cache', 'marketplace:read-component',
+      'chatgpt:sign-in', 'openrouter:sign-in', 'dialog:open-folder',
     ];
     for (const name of stillRefused) expect(live, name).not.toContain(name);
   });

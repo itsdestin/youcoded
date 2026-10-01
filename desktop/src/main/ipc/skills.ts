@@ -88,9 +88,11 @@ export const skillsChannels: MainChannelDef[] = [
     name: IPC.SKILLS_APPLY_OUTPUT_STYLE, kind: 'handle',
     handler: ({ styleId }) => { skillsDeps().skillProvider.applyOutputStyle(styleId); return { ok: true }; },
   }),
-  // Re-download an installed plugin at its latest marketplace version. Refused on a phone before, still refused.
+  // Re-download an installed plugin at its latest marketplace version.
+  // WHY open to a phone (2026-10-01 one-core R6-3; Destin, 2026-10-01: the Update button works from a phone): it takes only a skill id,
+  // looked up in the marketplace list on the computer, and runs the same installer as an install (already open); no path comes from the phone.
   defineChannel({
-    name: IPC.SKILLS_UPDATE, kind: 'handle', remoteAllowed: false,
+    name: IPC.SKILLS_UPDATE, kind: 'handle',
     handler: async ({ id }) => {
       const { skillProvider, sessionManager } = skillsDeps();
       const result = await skillProvider.update(id);

@@ -9,8 +9,8 @@
 // them is the owner's decision, not something a move grants.
 // R6-1 (2026-10-01; Destin, 2026-09-30, answers 1-3): he decided. A phone may now SEE what is installed (get-packages, which
 // is what the "update available" badge compares against) and may rate, vote (plugins and themes) and comment AS THE OWNER
-// (his YouCoded sign-in is spent from the computer, which is what he approved). Still refused to a phone: install report,
-// report-a-review, per-entry config, cache invalidation and the file viewer.
+// (his YouCoded sign-in is spent from the computer, which is what he approved). R6-3 (2026-10-01; Destin's answers
+// that day): install report and report-a-review are open too. Still refused to a phone: per-entry config, cache invalidation and the file viewer.
 // The token, the API client and the skill source come from the account family's bindAccountDeps
 // (built by registerMarketplaceApiHandlers), the provider from bindSkillsDeps.
 import { IPC, type MarketplaceThumbs } from '../../shared/backend-contract';
@@ -51,7 +51,9 @@ export const marketplaceChannels: MainChannelDef[] = [
   // ── Write endpoints, wrapped in ApiResult so the caller keeps the HTTP status (a custom Error's
   // fields do not survive the trip across the bridge). All go through main because the sign-in token lives here.
   defineChannel({
-    name: IPC.MARKETPLACE_INSTALL, kind: 'handle', remoteAllowed: false,
+    // WHY open to a phone (2026-10-01 one-core R6-3; Destin, 2026-10-01): a signed-in phone that installs a skill reports the install count
+    // once, with the owner's sign-in; it takes only a plugin id and writes no file.
+    name: IPC.MARKETPLACE_INSTALL, kind: 'handle',
     handler: ({ pluginId }) => wrap(async () => {
       const { client, store, installedSkillSource } = getAccountDeps();
       await client.postInstall(pluginId);
@@ -71,5 +73,6 @@ export const marketplaceChannels: MainChannelDef[] = [
     handler: (input) => wrap(async () => { const r = await getAccountDeps().client.postComment(input); return { id: r.id, hidden: r.hidden }; }),
   }),
   defineChannel({ name: IPC.MARKETPLACE_THEME_LIKE, kind: 'handle', handler: ({ themeId }) => wrap(() => getAccountDeps().client.toggleThemeLike(themeId)) }),
-  defineChannel({ name: IPC.MARKETPLACE_REPORT, kind: 'handle', remoteAllowed: false, handler: (input) => wrap(() => getAccountDeps().client.postReport(input)) }),
+  // WHY open to a phone (2026-10-01 one-core R6-3; Destin, 2026-10-01: the Report button): the same owner-signed write as rate and comment.
+  defineChannel({ name: IPC.MARKETPLACE_REPORT, kind: 'handle', handler: (input) => wrap(() => getAccountDeps().client.postReport(input)) }),
 ];
