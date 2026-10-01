@@ -1,3 +1,4 @@
+import { deadPid } from './helpers/dead-pid';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs'; import * as path from 'path'; import * as os from 'os';
 import fsModule from 'node:fs';
@@ -5046,7 +5047,7 @@ describe('NativeSessionHost', () => {
         childId: 'child-dead', parentToolCallId: 'tc-1', agentType: 'explorer', title: 'Nadia',
         workDir: root, description: 'd', background: true,
         status: 'running', startedAt: Date.now(), delivered: false,
-        owner: { pid: 999999, instanceId: 'dead-instance' }, missedSteers: [],
+        owner: { pid: deadPid(), instanceId: 'dead-instance' }, missedSteers: [],
       });
       // A record owned by THIS process (OWNER is a module singleton, so it
       // reads as alive to every host built in this test file) — reconcile
@@ -5226,7 +5227,7 @@ describe('NativeSessionHost', () => {
         workDir: root, description: 'find the config loader', background: true,
         status: 'completed', startedAt: Date.now() - 60_000, endedAt: Date.now(), steps: 2,
         rawReport: 'REPORT: config lives in src/config.ts', delivered: false, owner: OWNER,
-        missedSteers: [], claimedBy: { pid: 999999, instanceId: 'gone' }, claimedAt: Date.now() - 30_000,
+        missedSteers: [], claimedBy: { pid: deadPid(), instanceId: 'gone' }, claimedAt: Date.now() - 30_000,
       });
       await h.destroy('root-1');
 
