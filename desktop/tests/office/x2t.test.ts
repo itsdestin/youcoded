@@ -274,6 +274,18 @@ describe.skipIf(process.platform === 'win32')('convert failure shapes with a sta
     expect((err as X2tError).code).toBe('stopped');
   });
 
+  // Add-on v0.1.37: a presentation that took one of PowerPoint's standard themes points at the
+  // theme's pictures as "theme<N>/media/…", which x2t finds only under the task's theme folder.
+  // Measured 2026-10-01: without it a saved presentation lost every theme background picture.
+  it("names the add-on's slide theme folder in every task, so a standard theme's pictures are saved", async () => {
+    const task = path.join(root, 'task.xml');
+    const out = path.join(root, 'out.pptx');
+    await fakeX2t(`cp "$1" '${task}'; printf x > '${out}'`);
+    await convert(root, path.join(root, 'Editor.bin'), out, FORMAT.pptx, root);
+    const xml = await readFile(task, 'utf8');
+    expect(xml).toContain(`<m_sThemeDir>${path.join(root, 'editors', 'sdkjs', 'slide', 'themes')}</m_sThemeDir>`);
+  });
+
   it('stops a running converter at quit and reports it as stopped', async () => {
     await fakeX2t('echo started; exec sleep 30');
     const pending = convert(root, '/in.docx', path.join(root, 'out.bin'), FORMAT.bin, root).catch((e) => e);

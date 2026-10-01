@@ -151,6 +151,12 @@ export async function convert(
       `<m_sTempDir>${xmlEscape(job)}</m_sTempDir>` +
       `<m_sFontDir>${xmlEscape(path.join(bin, 'fonts'))}</m_sFontDir>` +
       `<m_sAllFontsPath>${xmlEscape(extra.allFontsPath ?? path.join(bin, 'AllFonts.js'))}</m_sAllFontsPath>` +
+      // WHY (add-on v0.1.37, PowerPoint's standard themes): a slide that took one of them points
+      // at its pictures as "theme<N>/media/…" — the editor's own name for the add-on's files —
+      // and x2t looks those up only under this folder (what OnlyOffice's desktop app passes too).
+      // Measured 2026-10-01: without it, a saved presentation lost every theme background picture.
+      // It names a folder of the add-on itself, never one of the person's.
+      `<m_sThemeDir>${xmlEscape(path.join(root, 'editors', 'sdkjs', 'slide', 'themes'))}</m_sThemeDir>` +
       paramsXml(extra.params) +
       '</TaskQueueDataConvert>';
     await fsp.writeFile(params, xml, 'utf8');
