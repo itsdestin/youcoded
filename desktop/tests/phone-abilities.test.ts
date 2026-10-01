@@ -245,8 +245,14 @@ describe('the instruction-file read for a phone (answer 9), under the R3-SEC pho
     it('only a regular file up to 1 MB: a named pipe and an oversize file are refused', async () => {
       const big = tmp(); mkSkill(big, 'mine', 'x'.repeat(1024 * 1024 + 1));
       expect(((await ask('skill', ctxFor({ s1: big }), 's1', 'mine')) as any).payload).toEqual({ error: 'too-large' });
-      // A SKILL.md that is a folder is not a regular file: nothing is read and no text comes back. (A named pipe cannot be tested here:
-      // the computer's own skill scan reads every SKILL.md while listing skills, so it would hang before the phone's checks, as on the computer.)
+      // A named pipe: the computer's skill scan no longer opens it (it used to hang here), and the phone's own read refuses it.
+      if (process.platform !== 'win32') {
+        const pdir = tmp(); const psd = mkSkill(pdir);
+        fs.rmSync(path.join(psd, 'SKILL.md'));
+        spawnSync('mkfifo', [path.join(psd, 'SKILL.md')]);
+        expect(((await ask('skill', ctxFor({ s1: pdir }), 's1', 'mine')) as any).payload).toEqual({ error: 'unreadable' });
+      }
+      // A SKILL.md that is a folder is not a regular file either: no text comes back.
       const dir = tmp(); const sd = mkSkill(dir);
       fs.rmSync(path.join(sd, 'SKILL.md'));
       fs.mkdirSync(path.join(sd, 'SKILL.md'));
