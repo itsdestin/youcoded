@@ -37,14 +37,17 @@ describe('what is in the table and who may call it', () => {
     expect(names.filter((n) => !inTable.has(n))).toEqual([]);
   });
 
-  it('a phone may use exactly what it could before: only /clear and /skill-name stay refused (they had no phone case)', async () => {
+  it('a phone may use every native channel, /clear and /skill-name included, and the old refusal is gone', async () => {
     const refused = CHANNEL_TABLE.filter((d) => FAMILY.test(d.name) && (d.desktopOnly || d.remoteAllowed === false)).map((d) => d.name).sort();
-    expect(refused).toEqual(['native:clear', 'native:invoke-skill']);
-    for (const name of refused) {
-      expect(await serveRemoteChannel(findChannel(name)!, { sessionId: 's' }, phoneCtx({ nativeHost: { clear: vi.fn() } }))).toEqual({
-        reply: true, payload: { ok: false, error: `This feature isn't available over remote access yet (${name}).`, unsupported: true },
-      });
-    }
+    expect(refused).toEqual([]);
+    // The old refusal is gone: the phone's door now reaches the assistant host for both.
+    const clear = vi.fn(() => ({ ok: true }));
+    const invokeSkill = vi.fn(async () => ({ ok: true }));
+    const rt = { nativeHost: { clear, invokeSkill } };
+    expect(await serveRemoteChannel(findChannel('native:clear')!, { sessionId: 's' }, phoneCtx(rt))).toEqual({ reply: true, payload: { ok: true } });
+    expect(await serveRemoteChannel(findChannel('native:invoke-skill')!, { sessionId: 's', skill: 'x', args: 'a' }, phoneCtx(rt))).toEqual({ reply: true, payload: { ok: true } });
+    expect(clear).toHaveBeenCalledWith('s');
+    expect(invokeSkill).toHaveBeenCalledWith('s', 'x', 'a');
   });
 
   it('the push channels and the capability flag are not entries', () => {
@@ -136,7 +139,7 @@ describe('permission mode and settings', () => {
 
 describe('native:session-context-text: one entry, two honest bodies', () => {
   const desktop = (host: any, read = vi.fn()) => desktopCtx({ nativeHost: host }, { desktop: { sessionManager: { getSession: () => ({ cwd: os.tmpdir() }) } } });
-  it('a phone gets the assistant host\'s answer only, never the computer\'s plain file read', async () => {
+  it('a phone with no session folder to consult still gets the assistant host\'s answer only (the instruction-file read needs one; see phone-abilities.test.ts)', async () => {
     const host = { sessionContextText: vi.fn(() => ({ error: 'not-live' })) };
     expect(await call('native:session-context-text', { sessionId: 's', kind: 'project' }, phoneCtx({ nativeHost: host }))).toEqual({ error: 'not-live' });
     expect(await call('native:session-context-text', { sessionId: 's', kind: 'user' }, phoneCtx({ nativeHost: host }))).toEqual({ error: 'not-live' });

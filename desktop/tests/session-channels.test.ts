@@ -38,10 +38,10 @@ describe('session channels: what is in the table and who may call it', () => {
     expect(names.filter((n) => !inTable.has(n))).toEqual([]);
   });
 
-  it('a phone may use exactly what it could before; set-flag stays refused and the window-only ones stay computer-only', () => {
+  it('a phone may use exactly what it could before plus set-flag; the window-only ones stay computer-only', () => {
     const entries = CHANNEL_TABLE.filter((d) => FAMILY.test(d.name) && !NOT_YET.has(d.name));
     const refused = entries.filter((d) => d.desktopOnly || d.remoteAllowed === false).map((d) => d.name).sort();
-    expect(refused).toEqual(['session:forget-reopen', 'session:reopen-list', 'session:selected', 'session:set-flag', 'session:terminal-ready']);
+    expect(refused).toEqual(['session:forget-reopen', 'session:reopen-list', 'session:selected', 'session:terminal-ready']);
   });
 
   it('a phone asking for the refused ones gets what it always got: an empty answer, silence, or the standard refusal', async () => {
@@ -50,9 +50,17 @@ describe('session channels: what is in the table and who may call it', () => {
     expect(await answer('session:forget-reopen')).toEqual({ reply: true, payload: { ok: true } });
     expect(await answer('session:selected')).toEqual({ reply: false });
     expect(await answer('session:terminal-ready')).toEqual({ reply: false });
-    expect(await answer('session:set-flag')).toEqual({
-      reply: true, payload: { ok: false, error: "This feature isn't available over remote access yet (session:set-flag).", unsupported: true },
-    });
+  });
+
+  it('a phone may set a session flag: the old refusal is gone and the handler runs', async () => {
+    const def = findChannel('session:set-flag')!;
+    expect(def.desktopOnly).toBeFalsy();
+    expect(def.remoteAllowed).not.toBe(false);
+    // An unknown flag name reaches the handler's own check, which the refusal used to hide.
+    bindSessionOps({ sessionIdMap: new Map(), nativeHost: { isNativeSessionId: () => false } } as any);
+    const out: any = await serveRemoteChannel(def, { sessionId: 's', flag: 'bogus', value: true }, phoneCtx);
+    expect(out.payload).toEqual({ ok: false, error: 'unknown flag: bogus' });
+    expect(out.payload.unsupported).toBeUndefined();
   });
 });
 

@@ -393,9 +393,12 @@ const sessionEntries: MainChannelDef[] = [
   }),
 
   // ── Flags, tags, notes ───────────────────────────────────────────────────────
-  // Set a named flag (complete, priority, ...). Refused to a phone, as before (it had no case for it).
+  // Set a named flag (complete, priority, ...).
+  // WHY open to a phone now (2026-10-01 one-core R6-1; Destin, 2026-09-30: "a phone may set session flags (complete, priority). Yes."):
+  // it was refused only because the phone's old code had no case for it. The body is the computer's own, so a phone's flag lands in the
+  // same store record and is announced to every screen the same way. Tags and notes were already open to a phone.
   defineChannel({
-    name: IPC.SESSION_SET_FLAG, kind: 'handle', remoteAllowed: false,
+    name: IPC.SESSION_SET_FLAG, kind: 'handle',
     handler: async ({ sessionId, flag, value }) => {
       if (!SESSION_FLAG_NAMES.includes(flag as SessionFlagName)) return { ok: false as const, error: `unknown flag: ${flag}` };
       const { sessionIdMap, nativeHost } = ops();

@@ -11,11 +11,14 @@
 //   - native:send ignores attachments that are not text paths, as the phone's old case did (the
 //     computer now does too).
 //   - set-permission-mode with a bad mode now shows an error (it used to resolve an error object).
-//   - clear and invoke-skill stay refused to a phone (they had no phone case); so do the push channels.
-//   - session-context-text keeps answering from the assistant host only; the computer's extra plain
-//     file read for Claude Code sessions and the user-level file is NOT given to a phone.
+//   - clear and invoke-skill were refused to a phone (they had no phone case); so are the push channels.
+//   - session-context-text answered from the assistant host only; the computer's extra plain file read for Claude Code
+//     sessions and the user-level file was NOT given to a phone.
+//   R6-1 (2026-10-01; Destin, 2026-09-30, answers 8 and 9): clear and invoke-skill are open to a phone, and a phone now gets the
+//   instruction-file read too, through the phone's own deny list (see the session-context-text entry).
 import { IPC } from '../../shared/backend-contract';
-import { readWholeContextFile } from '../claude-code-context';
+import { locateContextFile, readWholeContextFile } from '../claude-code-context';
+import { isPhoneDeniedFile, KEPT_ON_COMPUTER } from '../phone-read-deny';
 import { noteModelUsed } from '../conversations/service';
 import { defineChannel, type MainChannelCtx, type MainChannelDef } from './channel-def';
 
@@ -66,16 +69,18 @@ export const nativeChannels: MainChannelDef[] = [
       catch (err: any) { return { ok: false as const, reason: 'error', detail: err?.message ?? String(err) }; }
     },
   }),
-  // /clear and /skill-name had no phone case: a phone is refused, as before (a question for Destin in the R3-5 report).
+  // /clear and /skill-name.
+  // WHY open to a phone (R6-1; Destin, 2026-09-30: "a phone may clear a session and run a skill command. Yes."): the bodies already
+  // worked for any caller (they only reach the assistant host through ctx.runtime, which the phone's door fills too).
   defineChannel({
-    name: IPC.NATIVE_CLEAR, kind: 'handle', remoteAllowed: false,
+    name: IPC.NATIVE_CLEAR, kind: 'handle',
     handler: ({ sessionId }, ctx) => {
       try { return ctx.runtime!.nativeHost.clear(sessionId); }
       catch (err: any) { return { ok: false as const, reason: 'error', detail: err?.message ?? String(err) }; }
     },
   }),
   defineChannel({
-    name: IPC.NATIVE_INVOKE_SKILL, kind: 'handle', remoteAllowed: false,
+    name: IPC.NATIVE_INVOKE_SKILL, kind: 'handle',
     handler: async ({ sessionId, skill, args }, ctx) => {
       try { return await ctx.runtime!.nativeHost.invokeSkill(sessionId, skill, args); }
       catch (err: any) { return { ok: false as const, reason: 'error', detail: err?.message ?? String(err) }; }
@@ -134,14 +139,32 @@ export const nativeChannels: MainChannelDef[] = [
       : false,
   }),
   // "What the assistant was given": one file's text, read when its row is opened. The assistant host answers
-  // for its own sessions (only it knows the budget the text was cut to); the computer also falls back to a
-  // plain file read for a Claude Code session and for the user-level instructions. A phone is NOT given that
-  // fallback (it never had it): it gets the host's answer, which is "not-live" for anything else.
+  // for its own sessions (only it knows the budget the text was cut to); a Claude Code session and the user-level
+  // instructions have no host answer, so the file is read plainly.
+  // WHY a phone gets that plain read now (R6-1; Destin, 2026-09-30, answer 9: the phone's panel may read the project and user
+  // instruction files for Claude Code sessions, as the computer's does): so the phone's panel matches the computer's. What a phone
+  // does NOT get: (a) a skill's file (he approved the instruction files, not skills), and (b) any file the phone deny list refuses
+  // (R3-SEC): the file is judged on its REAL path, so a CLAUDE.md that is really a link to a secret is refused with the same
+  // "kept on the computer" answer every other phone read gives. The project file is found by walking up from the folder of a
+  // session that is open right now, so a phone cannot name a folder of its own.
   defineChannel({
     name: IPC.NATIVE_SESSION_CONTEXT_TEXT, kind: 'handle',
-    handler: ({ sessionId, kind, id }, ctx) => {
+    handler: async ({ sessionId, kind, id }, ctx) => {
       const host = ctx.runtime?.nativeHost;
-      if (ctx.door === 'remote' || !ctx.desktop) return host ? host.sessionContextText(sessionId, kind as 'project' | 'skill', id) : { error: 'not-live' };
+      if (ctx.door === 'remote' || !ctx.desktop) {
+        if (kind !== 'user' && host) {
+          const fromHost = host.sessionContextText(sessionId, kind as 'project' | 'skill', id);
+          if (!('error' in fromHost) || fromHost.error !== 'not-live') return fromHost;
+        }
+        // A skill's file, or a door with no session folders to consult: the host's own answer, as before.
+        if (kind === 'skill' || !ctx.remote) return host ? host.sessionContextText(sessionId, kind as 'project' | 'skill', id) : { error: 'not-live' };
+        const sessions = { getSession: (sid: string) => { const cwd = ctx.remote!.sessionCwd(sid); return cwd ? { cwd } : undefined; } };
+        const located = locateContextFile(sessions, sessionId, kind, id);
+        if ('error' in located) return located;
+        // The deny list judges the real path BEFORE the file is read, so a refused file is never opened.
+        if (await isPhoneDeniedFile(located.path)) return { error: KEPT_ON_COMPUTER };
+        return readWholeContextFile(sessions, sessionId, kind, id);
+      }
       if (kind !== 'user' && host) {
         const fromHost = host.sessionContextText(sessionId, kind, id);
         if (!('error' in fromHost) || fromHost.error !== 'not-live') return fromHost;

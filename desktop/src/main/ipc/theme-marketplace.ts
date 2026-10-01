@@ -2,8 +2,10 @@
 //
 // WHY (2026-09-30 one-core R3-3): registered in ipc-handlers.ts; a phone had no case for any of
 // them and was told "not available over remote access". Kept exactly: every entry is
-// `remoteAllowed:false` (installing or publishing a theme changes this computer). Widening that is
-// a separate decision for the owner, not something a move should grant.
+// `remoteAllowed:false` (installing or publishing a theme changes this computer).
+// WHY list and detail are open now (2026-10-01 one-core R6-1; Destin, 2026-09-30: "a phone may browse the theme
+// marketplace. Yes."): they only READ the public theme registry. Everything that installs, removes, updates,
+// publishes or draws a share picture for a theme stays refused to a phone; he approved browsing, not those.
 import fs from 'fs';
 import { IPC } from '../../shared/backend-contract';
 import type { ThemeMarketplaceProvider } from '../theme-marketplace-provider';
@@ -23,8 +25,8 @@ function themes(): ThemeMarketplaceProvider {
 }
 
 export const themeMarketplaceChannels: MainChannelDef[] = [
-  defineChannel({ name: IPC.THEME_MARKETPLACE_LIST, kind: 'handle', remoteAllowed: false, handler: (filters) => themes().listThemes(filters) }),
-  defineChannel({ name: IPC.THEME_MARKETPLACE_DETAIL, kind: 'handle', remoteAllowed: false, handler: ({ slug }) => themes().getThemeDetail(slug) }),
+  defineChannel({ name: IPC.THEME_MARKETPLACE_LIST, kind: 'handle', handler: (filters) => themes().listThemes(filters) }),
+  defineChannel({ name: IPC.THEME_MARKETPLACE_DETAIL, kind: 'handle', handler: ({ slug }) => themes().getThemeDetail(slug) }),
   defineChannel({ name: IPC.THEME_MARKETPLACE_INSTALL, kind: 'handle', remoteAllowed: false, handler: ({ slug }) => themes().installTheme(slug) }),
   defineChannel({ name: IPC.THEME_MARKETPLACE_UNINSTALL, kind: 'handle', remoteAllowed: false, handler: ({ slug }) => themes().uninstallTheme(slug) }),
   // Re-install a theme at the same slug, overwriting its files.

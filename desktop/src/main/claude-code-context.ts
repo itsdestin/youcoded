@@ -99,6 +99,25 @@ export function readWholeContextFile(
   kind: 'project' | 'user' | 'skill',
   id?: string,
 ): { path: string; text: string; full: string; truncated: boolean } | { error: string } {
+  const located = locateContextFile(sessions, sessionId, kind, id);
+  if ('error' in located) return located;
+  const file = located.path;
+  try {
+    const text = fs.readFileSync(file, 'utf8');
+    return { path: file, text, full: text, truncated: false };
+  } catch {
+    return { error: 'unreadable' };
+  }
+}
+
+/** WHY split out (2026-10-01 one-core R6-1): a PHONE's read must be judged against the phone deny list BEFORE any byte is read, so the
+ *  "which file is it" half is its own function. readWholeContextFile is unchanged for the computer: same answers, same order. */
+export function locateContextFile(
+  sessions: { getSession(id: string): { cwd: string } | undefined },
+  sessionId: string,
+  kind: 'project' | 'user' | 'skill',
+  id?: string,
+): { path: string } | { error: string } {
   let file: string | null = null;
   if (kind === 'user') {
     file = userInstructionsPath();
@@ -113,11 +132,5 @@ export function readWholeContextFile(
     // (skill-catalog.ts owns that fact — this reads the same shape).
     file = found?.skillDir ? path.join(found.skillDir, 'SKILL.md') : null;
   }
-  if (!file) return { error: 'not-found' };
-  try {
-    const text = fs.readFileSync(file, 'utf8');
-    return { path: file, text, full: text, truncated: false };
-  } catch {
-    return { error: 'unreadable' };
-  }
+  return file ? { path: file } : { error: 'not-found' };
 }

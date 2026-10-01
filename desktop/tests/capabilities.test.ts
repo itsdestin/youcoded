@@ -54,7 +54,7 @@ describe('a computer older than the session record', () => {
   it('a computer that has a record says so explicitly', () => {
     expect(normalizeCapabilities({ sessionRecord: true }).sessionRecord).toBe(true);
     const server = fs.readFileSync(path.join(root, 'src', 'main', 'remote-server.ts'), 'utf8');
-    expect(server).toContain('{ ...REMOTE_SCREEN_CAPABILITIES, sessionRecord: true }');
+    expect(server).toContain('{ ...REMOTE_SCREEN_CAPABILITIES, sessionRecord: true, nativeSessions: process.env.YOUCODED_NATIVE !== \'0\' }');
   });
 });
 

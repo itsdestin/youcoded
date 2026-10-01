@@ -105,8 +105,8 @@ describe('RemoteServer — pairing', () => {
       const second = await connect(server, { deviceId: first.last()!.deviceId as string, secret: first.last()!.secret as string });
       for (const ws of [first, second]) {
         expect(ws.last()).toMatchObject({ type: 'auth:ok', platform: 'desktop', sessionNaming: true, protocolVersion: 1 });
-        // A screen watching a computer cannot open the computer's folders, tear a window out, or run the app's own engine.
-        expect(ws.last()!.capabilities).toMatchObject({ nativeWindows: false, openInOs: false, nativeSessions: false, terminalTransport: 'text', terminalScreenRead: false });
+        // A screen watching a computer cannot open the computer's folders or tear a window out; it MAY drive the app's own engine, which runs on the computer.
+        expect(ws.last()!.capabilities).toMatchObject({ nativeWindows: false, openInOs: false, nativeSessions: true, terminalTransport: 'text', terminalScreenRead: false });
       }
     });
 

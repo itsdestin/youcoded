@@ -48,6 +48,9 @@ export interface RemoteServices {
   watchSubscriberId(): number;
   /** This phone's watcher id if it has one yet, without making one (an unwatch before any watch is a no-op). */
   currentWatchId(): number | undefined;
+  /** WHY (2026-10-01 one-core R6-1): the folder an open session runs in, for the phone's read of a Claude Code session's instruction file
+   *  (native:session-context-text). Only a session that is open on the computer has one, so a phone cannot name a folder of its own. */
+  sessionCwd(sessionId: string): string | undefined;
   /** The roots this phone is already watching (capped per socket). */
   watchedRoots: Set<string>;
   /** A short-lived download link bound to this phone and this socket. */

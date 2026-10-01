@@ -11,7 +11,9 @@
 //     so the phone is refused the same way and gets the real answer (FIX; narrower, not wider).
 //   - set-favorite / set-chips / set-override / delete-prompt: the phone was told `{ok:true}`, the
 //     computer got nothing back. Now both get nothing back (no screen reads it).
-//   - get-featured and update: refused on a phone before; still refused (`remoteAllowed:false`).
+//   - get-featured and update: refused on a phone before. R6-1 (Destin, 2026-09-30: a phone may see the featured and
+//     update-available skills): get-featured is now open (a read of the public featured list). `update` (re-download an
+//     installed plugin) stays refused: he approved SEEING updates, not applying them.
 // The provider and the session manager are built in registerIpcHandlers, so they arrive through
 // bindSkillsDeps; a phone and the computer share the same two objects.
 import { IPC } from '../../shared/backend-contract';
@@ -79,7 +81,7 @@ export const skillsChannels: MainChannelDef[] = [
   defineChannel({ name: IPC.SKILLS_IMPORT_FROM_LINK, kind: 'handle', handler: ({ encoded }) => skillsDeps().skillProvider.importFromLink(encoded) }),
   defineChannel({ name: IPC.SKILLS_GET_CURATED_DEFAULTS, kind: 'handle', handler: () => skillsDeps().skillProvider.getCuratedDefaults() }),
   // The marketplace's hero and rails: refused on a phone before, still refused.
-  defineChannel({ name: IPC.SKILLS_GET_FEATURED, kind: 'handle', remoteAllowed: false, handler: () => skillsDeps().skillProvider.getFeatured() }),
+  defineChannel({ name: IPC.SKILLS_GET_FEATURED, kind: 'handle', handler: () => skillsDeps().skillProvider.getFeatured() }),
   defineChannel({ name: IPC.SKILLS_GET_INTEGRATION_INFO, kind: 'handle', handler: ({ id }) => skillsDeps().skillProvider.getIntegrationInfo(id) }),
   defineChannel({ name: IPC.SKILLS_INSTALL_MANY, kind: 'handle', handler: ({ ids }) => skillsDeps().skillProvider.installMany(ids ?? []) }),
   defineChannel({

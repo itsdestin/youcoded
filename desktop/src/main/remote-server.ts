@@ -165,7 +165,7 @@ export function authOkMessage(who: { deviceId: string; secret?: string }, focusS
     platform: 'desktop' as const,
     sessionNaming: true,
     protocolVersion: PROTOCOL_VERSION,
-    capabilities: { ...REMOTE_SCREEN_CAPABILITIES, sessionRecord: true }, // this computer keeps a record (R5-4a); the default is false for older hosts
+    capabilities: { ...REMOTE_SCREEN_CAPABILITIES, sessionRecord: true, nativeSessions: process.env.YOUCODED_NATIVE !== '0' }, // sessionRecord: R5-4a. nativeSessions (R6-1): a native session runs HERE, so a phone may start one when this computer's window may; older hosts say neither (false)
     // The session the computer is showing, so a phone with no place of its own opens it (batch 2 §3). It used to ride the snapshot.
     focus: { sessionId: focusSessionId },
   };
@@ -1032,7 +1032,7 @@ export class RemoteServer {
         // WHY (2026-09-30 one-core R3-7): what only this phone's socket holds, for the file channels — which folders
         // a phone may see, its own watcher id (dropped when its socket closes), and its download links.
         remote: {
-          sessionRoots: () => this.sessionRoots(),
+          sessionRoots: () => this.sessionRoots(), /* R6-1 sessionCwd: one open session's folder, for native:session-context-text's instruction-file read */ sessionCwd: (sessionId) => { const s = this.sessionManager.getSession(sessionId); return s && s.status !== 'destroyed' && typeof s.cwd === 'string' && s.cwd.length > 0 ? s.cwd : undefined; },
           watchSubscriberId: () => this.watchSubscriberId(client),
           currentWatchId: () => client.watchId,
           get watchedRoots() { return (client.watchedRoots ??= new Set<string>()); },

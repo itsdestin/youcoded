@@ -327,17 +327,22 @@ describe('skills, marketplace, theme-marketplace and first-run: every channel is
     expect(names.length).toBe(55); // 23 skills + 13 marketplace + 9 theme-marketplace + 10 first-run; a new one must be decided here
     expect(names.filter((n) => !inTable.has(n))).toEqual([]);
   });
-  it('exactly these are open to a phone (what a phone could do before); everything else is refused', () => {
+  it('exactly these are open to a phone (what a phone could do before, plus the abilities opened on request); everything else is refused', () => {
     const open = CHANNEL_TABLE.filter((d) => FAMILY.test(d.name) && !d.desktopOnly && d.remoteAllowed !== false).map((d) => d.name).sort();
     expect(open).toEqual([
+      // R6-1: rate, vote (plugin and theme), comment and the installed-packages read (what "update available" compares against)
+      'marketplace:comment', 'marketplace:get-packages', 'marketplace:rate', 'marketplace:rate:delete', 'marketplace:theme:like',
+      'marketplace:thumb', 'marketplace:thumb:get',
       'skills:apply-output-style', 'skills:create-prompt', 'skills:delete-prompt', 'skills:get-chips', 'skills:get-curated-defaults',
-      'skills:get-detail', 'skills:get-favorites', 'skills:get-integration-info', 'skills:get-override', 'skills:get-share-link',
+      'skills:get-detail', 'skills:get-favorites', 'skills:get-featured', 'skills:get-integration-info', 'skills:get-override', 'skills:get-share-link',
       'skills:import-from-link', 'skills:install', 'skills:install-many', 'skills:list', 'skills:list-marketplace', 'skills:publish',
       'skills:search', 'skills:set-chips', 'skills:set-favorite', 'skills:set-override', 'skills:uninstall',
+      // R6-1: browsing the theme marketplace (reads only)
+      'theme-marketplace:detail', 'theme-marketplace:list',
     ]);
   });
   it('a phone asking for anything else here gets the standard refusal, and the handler never runs', async () => {
-    for (const type of ['skills:update', 'skills:get-featured', 'marketplace:install', 'marketplace:rate', 'marketplace:get-config', 'theme-marketplace:install', 'theme-marketplace:publish', 'first-run:skip', 'first-run:state', 'first-run:local-download']) {
+    for (const type of ['skills:update', 'marketplace:install', 'marketplace:report', 'marketplace:get-config', 'theme-marketplace:install', 'theme-marketplace:update', 'theme-marketplace:uninstall', 'theme-marketplace:publish', 'theme-marketplace:refresh-registry', 'first-run:skip', 'first-run:state', 'first-run:local-download']) {
       expect((await overRemote(type, {})).answer, type).toEqual({ ok: false, error: `This feature isn't available over remote access yet (${type}).`, unsupported: true });
     }
   });
