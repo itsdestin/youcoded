@@ -19,7 +19,7 @@ import { log } from '../logger';
 import { saveEditorSettings } from './editor-settings';
 import { createOfficeCommands, OFFICE_COMMANDS } from './office-commands';
 import { grantPicked } from './office-pictures';
-import { keepRecoveryIn } from './office-recovery';
+import { discardRecoveryFor, keepRecoveryIn, offerRecovery, pruneRecovery } from './office-recovery';
 import type { createSessions, OfficeSession } from './office-sessions';
 import type { PrintOutcome } from './office-print';
 import { formatFor } from './x2t';
@@ -195,6 +195,8 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
   // sessions (scripts/run-dev.sh) from crashing on reload.
   for (const ch of CHANNELS) ipcMain.removeHandler(ch);
   keepRecoveryIn(deps.userData); // where each open document's crash-recovery journal lives (Task 8)
+  // Journals of files that are gone, or untouched for 30 days, go — off the startup path (fix round 1).
+  void pruneRecovery().catch((e) => log('WARN', 'Office', 'tidying recovery journals failed', errorKind(e)));
   // WHY cancel the previous one: a re-register (a dev reload) must not leave two tidy-ups queued.
   activePruner?.cancel();
   const pruner = activePruner = deps.pruneVersionsAfterMs === undefined ? null
@@ -328,7 +330,10 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     // fail an open; a failure is only logged.
     const kind = kindFor(realPath);
     if (kind) void recent.add(deps.userData, describeFile(realPath, kind, new Date())).catch((e) => log('WARN', 'Office', 'adding to Recent failed', errorKind(e)));
-    return { ok: true, token: session.token, origin: `${SCHEME}://${session.token}` };
+    // Edits kept for this file while it changed outside Office: offered on the strip, never
+    // replayed on their own (Task 8 fix round 1). A failure to check only means no offer, logged.
+    const recoverOffer = await offerRecovery(realPath).catch((e) => { log('WARN', 'Office', 'checking for kept edits failed', errorKind(e)); return false; });
+    return { ok: true, token: session.token, origin: `${SCHEME}://${session.token}`, ...(recoverOffer ? { recoverOffer: true } : {}) };
   }
 
   async function invoke(sender: OfficeSender, token: unknown, cmd: unknown, args: unknown): Promise<unknown> {
@@ -576,6 +581,8 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     if (!s) {
       const r = await reg.holdWhile(realPath, work);
       if (r.ok) pruner?.request(); // the before-restore copy counts toward the 1 GB too
+      // Edits journaled against the replaced content mean nothing now (Task 8 fix round 1).
+      if (r.ok) await discardRecoveryFor(realPath).catch(() => {});
       return r;
     }
     let r: { ok: true } | { ok: false; message: string };
@@ -596,6 +603,8 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     }
     if (r.ok) {
       pruner?.request(); // the before-restore copy counts toward the 1 GB too
+      // The open editor reloads on the restored file and begins a fresh journal (fix round 1).
+      await discardRecoveryFor(realPath).catch(() => {});
       try { sender.send?.('office:changed', { path: realPath, token: s.token }); } catch { /* the window is going */ }
     }
     return r;

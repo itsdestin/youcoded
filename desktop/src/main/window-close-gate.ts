@@ -37,6 +37,9 @@ export interface CloseGateDeps<Answer> {
   /** The LAST window has unsaved edits (a text editor, a parked draft, an Office document): it was
    *  just shown their list instead of closing (fix round 11). */
   refuseForUnsaved?(): boolean;
+  /** Office (Task 8 fix round 1): this window's editors send their newest edits to the recovery
+   *  journal before it closes. null when it has no Office documents; capped by the caller. */
+  syncJournals?(): Promise<void> | null;
   /** The chat sessions this window owns right now. */
   sessionIds(): string[];
   /** Ask the person (resolves with their answer; concurrent asks share one prompt). */
@@ -65,6 +68,7 @@ export function createCloseGate<Answer>(d: CloseGateDeps<Answer>) {
   let lastCloseAt: number | null = null;
   let askingHung = false;
   let asking = false; // the sessions prompt is up: a second press waits on it, never asks again
+  let journalsSynced = false; // the close this gate re-issued after its editors journaled
   return {
     async onClose(ev: CloseEvent): Promise<void> {
       if (d.buddy) return;
@@ -94,6 +98,19 @@ export function createCloseGate<Answer>(d: CloseGateDeps<Answer>) {
         confirmed = null;
         return;
       }
+      // Office editors journal their last second of edits before the window goes (fix round 1).
+      // WHY on every close that would go through, not once: a cancelled close lets typing go on.
+      if (!journalsSynced) {
+        const sync = d.syncJournals?.();
+        if (sync) {
+          ev.preventDefault();
+          await sync;
+          journalsSynced = true;
+          if (!d.isDestroyed()) d.close();
+          return;
+        }
+      }
+      journalsSynced = false;
       const r = confirmed;
       confirmed = null;
       if (r) {

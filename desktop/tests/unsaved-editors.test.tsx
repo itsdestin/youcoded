@@ -232,7 +232,7 @@ describe('the refused-quit prompt', () => {
     expect(screen.getByRole('button', { name: 'Discard' })).toBeInTheDocument(); // per-row discard offered
   });
 
-  it('Discard and quit asks in place, then throws the edits away and lets main go on', () => {
+  it('Discard and quit asks in place, then throws the edits away and lets main go on', async () => {
     const { office, prompt } = bridge();
     const discardA = vi.fn();
     const discardB = vi.fn();
@@ -249,6 +249,8 @@ describe('the refused-quit prompt', () => {
     // main heard "nothing unsaved" BEFORE it was told to go on
     const order = [...office.setOtherUnsaved.mock.invocationCallOrder].pop()!;
     expect(office.setOtherUnsaved).toHaveBeenLastCalledWith([]);
+    // Main goes on once every discard has finished (an Office document's drops its journal first).
+    await waitFor(() => expect(office.proceedClose).toHaveBeenCalled());
     expect(office.proceedClose.mock.invocationCallOrder[0]).toBeGreaterThan(order);
   });
 

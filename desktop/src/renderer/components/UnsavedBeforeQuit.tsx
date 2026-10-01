@@ -51,7 +51,7 @@ export function UnsavedBeforeQuit() {
   const goOn = r?.mode === 'close' ? 'close' : 'quit';
   // Main held the quit (or close) for this prompt: go on now (main/unsaved-quit.ts).
   const proceed = () => { clearQuitRefused(); window.claude?.office?.proceedClose?.(); };
-  const discard = () => { discardUnsaved(listed); proceed(); };
+  const discard = () => { void discardUnsaved(listed).then(proceed); };
   // Dismissed (Cancel, OK, Esc, ✕): main forgets the held quit/close (fix round 12).
   const dismiss = () => { clearQuitRefused(); window.claude?.office?.dismissPrompt?.(); };
   const allSaved = r !== null && n === 0;

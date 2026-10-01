@@ -2014,6 +2014,9 @@ contextBridge.exposeInMainWorld('claude', {
     // After a restore, the editor holding the token reopens its file (EditorFrame).
     onChanged: (cb: (p: { path: string; token: string }) => void) => officePush('office:changed', cb),
     saveCopy: (token: string, mode: string, data?: string) => ipcRenderer.invoke('office:save-copy', token, mode, data),
+    // Before its window closes, its editors journal their newest edits (main/office/office-journal-sync.ts) — desktop only.
+    onJournalRequest: (cb: (id: string) => void) => officePush('office:journal-request', cb),
+    journalDone: (id: string) => ipcRenderer.send('office:journal-done', id),
     // A quit refused for unsaved files (main/unsaved-quit.ts) — desktop only.
     onUnsavedPrompt: (cb: (p: unknown) => void) => officePush('office:unsaved-prompt', cb),
     proceedClose: () => ipcRenderer.send('office:proceed'),

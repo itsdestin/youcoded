@@ -66,7 +66,7 @@ describe('office commands without the translator', () => {
         'set_recent_files_enabled', 'clear_recent_files', 'get_system_fonts', 'list_user_dictionaries', 'recovery_begin',
         'recovery_end', 'recovery_mark_saved', 'recovery_candidates', 'recovery_load', 'recovery_discard', 'open_file',
         'write_editor_bin', 'save_file', 'save_changes', 'convert_for_insert', 'force_close', 'open_dialog',
-        'save_dialog', 'save_file_as', 'print_document', 'save_editor_settings',
+        'save_dialog', 'save_file_as', 'print_document', 'recovery_accept_held', 'recovery_discard_held', 'save_editor_settings',
       ].sort(),
     );
   });

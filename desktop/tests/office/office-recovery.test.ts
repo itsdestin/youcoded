@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../../src/main/artifacts/project-watcher', () => ({ noteOwnWrite: vi.fn() }));
 
 import { createOfficeCommands, drainSession } from '../../src/main/office/office-commands';
-import { keepRecoveryIn, resetRecoveryForTests } from '../../src/main/office/office-recovery';
+import { RECOVERY_MAX_AGE_MS, discardRecoveryFor, keepRecoveryIn, offerRecovery, pruneRecovery, resetRecoveryForTests } from '../../src/main/office/office-recovery';
 import { createSessions } from '../../src/main/office/office-sessions';
 
 const MEMO = fileURLToPath(new URL('./fixtures/memo.docx', import.meta.url));
@@ -150,19 +150,75 @@ describe('the recovery journal', () => {
     expect(await fsp.readdir(journals())).toHaveLength(0);
   });
 
-  it('says when the file changed outside Office since, and keeps it as a version first', async () => {
+  it('a file changed outside Office since: its edits are set aside at open and offered, never replayed on their own', async () => {
     const a = await editor();
     await a.run(a.s.token, 'save_changes', { changes: ['c1'], deleteIndex: null, count: 1 });
     await settle();
     await sessions.close(a.s.token);
     await fsp.appendFile(file, 'changed elsewhere');
+    expect(await offerRecovery(file)).toBe(true); // office:open asks this before the editor starts
+    const b = await editor(); // so the editor opens the file as it is, and journals afresh
+    expect(await b.run(b.s.token, 'recovery_candidates', {})).toEqual([]);
+    await b.run(b.s.token, 'save_changes', { changes: ['typed meanwhile'], deleteIndex: null, count: 1 });
+    expect(await offerRecovery(file)).toBe(true); // still offered until the person answers
+    // Recover: the kept edits come back; reopening replays them over the file as it was.
+    expect(await b.run(b.s.token, 'recovery_accept_held', {})).toBe(true);
+    await sessions.close(b.s.token);
     const onOpened = vi.fn(async () => {});
     const s = await sessions.open(file, 1);
     const run = createOfficeCommands({ root: dir, sessions, convert: convert as never, onOpened });
+    expect(await offerRecovery(file)).toBe(false);
     const [c] = (await run(s.token, 'recovery_candidates', {})) as Array<{ id: string }>;
-    const r = (await run(s.token, 'recovery_load', { id: c.id })) as { outsideChange: boolean };
-    expect(r.outsideChange).toBe(true);
+    const r = (await run(s.token, 'recovery_load', { id: c.id })) as { changes: string[]; outsideChange: boolean };
+    expect(r.changes).toEqual(['c1']);
+    expect(r.outsideChange).toBe(true); // the strip says the file's own version is in Versions
     expect(onOpened).toHaveBeenCalledTimes(1);
+  });
+
+  it('Discard on the offer drops the kept edits', async () => {
+    const a = await editor();
+    await a.run(a.s.token, 'save_changes', { changes: ['c1'], deleteIndex: null, count: 1 });
+    await settle();
+    await sessions.close(a.s.token);
+    await fsp.appendFile(file, 'changed elsewhere');
+    expect(await offerRecovery(file)).toBe(true);
+    const b = await editor0();
+    await b.run(b.s.token, 'recovery_discard_held', {});
+    expect(await offerRecovery(file)).toBe(false);
+  });
+
+  it('an unchanged file is not offered: its edits replay at open', async () => {
+    const a = await editor();
+    await a.run(a.s.token, 'save_changes', { changes: ['c1'], deleteIndex: null, count: 1 });
+    await sessions.close(a.s.token);
+    expect(await offerRecovery(file)).toBe(false);
+    const b = await editor0();
+    expect(await b.run(b.s.token, 'recovery_candidates', {})).toHaveLength(1);
+  });
+
+  it('a restore drops the journal kept against the old content', async () => {
+    const a = await editor();
+    await a.run(a.s.token, 'save_changes', { changes: ['c1'], deleteIndex: null, count: 1 });
+    await sessions.close(a.s.token);
+    await discardRecoveryFor(file);
+    const b = await editor0();
+    expect(await b.run(b.s.token, 'recovery_candidates', {})).toEqual([]);
+  });
+
+  it('the startup tidy-up removes journals of files that are gone, and ones untouched for 30 days', async () => {
+    const a = await editor();
+    await a.run(a.s.token, 'save_changes', { changes: ['c1'], deleteIndex: null, count: 1 });
+    await sessions.close(a.s.token);
+    await pruneRecovery();
+    expect(await fsp.readdir(journals())).toHaveLength(1); // a fresh journal of a file that exists stays
+    await pruneRecovery(Date.now() + RECOVERY_MAX_AGE_MS + 1);
+    expect(await fsp.readdir(journals())).toHaveLength(0);
+    const b = await editor();
+    await b.run(b.s.token, 'save_changes', { changes: ['c2'], deleteIndex: null, count: 1 });
+    await sessions.close(b.s.token);
+    await fsp.rm(file);
+    await pruneRecovery();
+    expect(await fsp.readdir(journals())).toHaveLength(0);
   });
 
   it('skips a last line cut short by a crash, and refuses another document\'s id', async () => {

@@ -48,6 +48,7 @@ import { registerOfficeComments } from './office/office-comments';
 import { officeAvailable, officeRoot } from './office/office-root';
 import { getOfficeSessions, initOfficeSessionsSafely, quitOfficeSessions } from './office/office-session-registry';
 import { refuseCloseForUnsaved, refuseQuitForUnsaved, watchUnsavedEdits } from './unsaved-quit';
+import { syncJournals } from './office/office-journal-sync';
 import { createCloseGate } from './window-close-gate';
 import { gatedQuit, onWillQuit, quitAfterTeardown } from './app-restart';
 import { isAppPageUrl } from './app-navigation';
@@ -1008,6 +1009,7 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
     // once shuttingDown is set must ask nothing and let the window close.
     shuttingDown: () => !!shuttingDown,
     refuseForUnsaved: () => refuseCloseForUnsaved(win, (w) => !!buddyManagerRef?.isBuddyWindow(w as never)),
+    syncJournals: () => (getOfficeSessions()?.hasFor(win.webContents.id) ? syncJournals(win.webContents) : null), // Office edits to the recovery journal first (≤1.5 s, Task 8 fix round 1)
     sessionIds: () => windowRegistry.sessionsForWindow(wid),
     ask: (count) => closeRequests.request(wid, count, (push) => {
       if (!win.isDestroyed()) win.webContents.send(IPC.WINDOW_CLOSE_REQUEST, push);

@@ -292,14 +292,56 @@ describe('quitting, closing or reloading with an Office document not saved yet',
     expect(win().postMessage).toHaveBeenCalledWith({ type: 'yc:office-save' }, 'office://t1');
   });
 
-  it('Discard and quit throws its changes away, with its recovery journal, then goes on', async () => {
-    const { prompt, office, proceedClose } = await changed();
+  it('Discard and quit throws its changes away, and goes on only once its recovery journal is gone', async () => {
+    let dropped!: () => void;
+    const invoke = vi.fn((_t: string, cmd: string) => (cmd === 'recovery_discard' ? new Promise<null>((r) => (dropped = () => r(null))) : Promise.resolve(null)));
+    const { prompt, proceedClose } = await changed({ invoke } as Partial<OfficeBridge>);
     act(() => prompt()({ mode: 'quit', afterTeardown: false, restartDropped: false }));
     fireEvent.click(await screen.findByRole('button', { name: 'Discard and quit' }));
     fireEvent.click(screen.getAllByRole('button', { name: 'Discard and quit' }).at(-1)!);
-    expect(proceedClose).toHaveBeenCalledTimes(1);
-    expect(office.invoke).toHaveBeenCalledWith('t1', 'recovery_discard', {});
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('t1', 'recovery_discard', {}));
+    expect(proceedClose).not.toHaveBeenCalled(); // the quit waits for the journal to go
+    await act(async () => { dropped(); await Promise.resolve(); await Promise.resolve(); });
+    await waitFor(() => expect(proceedClose).toHaveBeenCalledTimes(1));
     expect(saveStateFor(FILE.path).phase).toBe('saved');
+  });
+
+  it('a closing window asks each editor for its newest edits, and answers main after the editor did', async () => {
+    let request!: (id: string) => void;
+    const journalDone = vi.fn();
+    const { win, send } = await changed({ onJournalRequest: vi.fn((cb: (id: string) => void) => { request = cb; return () => {}; }), journalDone } as Partial<OfficeBridge>);
+    await waitFor(() => expect(request).toBeDefined());
+    send({ type: 'yc:office-loaded' }); // the document is drawn: its editor can be asked
+    vi.mocked(win().postMessage).mockClear();
+    act(() => request('j1'));
+    expect(win().postMessage).toHaveBeenCalledWith({ type: 'yc:office-journal' }, 'office://t1');
+    expect(journalDone).not.toHaveBeenCalled();
+    send({ type: 'yc:office-journaled' }); // the editor sent its edits (save_changes) and says so
+    await waitFor(() => expect(journalDone).toHaveBeenCalledWith('j1'));
+  });
+
+  it('edits kept for a file that changed since are offered, and Recover reopens the editor with them', async () => {
+    const opened = vi.fn(async () => ({ ok: true as const, token: 't1', origin: 'office://t1', recoverOffer: true as const }));
+    const invoke = vi.fn(async (_t: string, cmd: string) => (cmd === 'recovery_accept_held' ? true : null));
+    withOffice({ open: opened, invoke } as Partial<OfficeBridge>);
+    act(() => openDoc(FILE));
+    render(<OfficeView />);
+    expect(await screen.findByText('Unsaved changes from last time were kept, but this file has changed since.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Recover unsaved changes' }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('t1', 'recovery_accept_held', {}));
+    await waitFor(() => expect(opened).toHaveBeenCalledTimes(2)); // the editor reopens and replays them
+  });
+
+  it('Discard on that offer drops the kept edits and leaves the document as it opened', async () => {
+    const opened = vi.fn(async () => ({ ok: true as const, token: 't1', origin: 'office://t1', recoverOffer: true as const }));
+    const invoke = vi.fn(async () => null);
+    withOffice({ open: opened, invoke } as Partial<OfficeBridge>);
+    act(() => openDoc(FILE));
+    render(<OfficeView />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Discard' }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('t1', 'recovery_discard_held', {}));
+    await waitFor(() => expect(screen.queryByText(/were kept, but this file has changed since/)).toBeNull());
+    expect(opened).toHaveBeenCalledTimes(1);
   });
 
   it('a reload saves first, and reloads whether or not the save made it (the journal keeps the rest)', async () => {

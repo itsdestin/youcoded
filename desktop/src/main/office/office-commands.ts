@@ -6,7 +6,7 @@ import { renameReplacing } from '../artifacts/cas-write';
 import { noteOwnWrite } from '../artifacts/project-watcher';
 import { authorizeArtifactWrite } from '../artifacts/write-authorization';
 import { log } from '../logger';
-import { beforeBinReplaced, beginRecovery, closeRecovery, discardRecovery, loadRecovery, markRecoverySaved, recordChanges, recoveryCandidates, recoveryRev } from './office-recovery';
+import { acceptHeldRecovery, beforeBinReplaced, beginRecovery, closeRecovery, discardHeldRecovery, discardRecovery, loadRecovery, markRecoverySaved, recordChanges, recoveryCandidates, recoveryRev } from './office-recovery';
 import type { createSessions, OfficeSession } from './office-sessions';
 import { convert as realConvert, exportFormatFor, exportParams, FORMAT, formatFor, pdfFontData as realPdfFontData, printParams, X2T_TIMEOUT_MS, X2tError } from './x2t';
 
@@ -28,6 +28,10 @@ export const OFFICE_COMMANDS: ReadonlySet<string> = new Set([
   // WHY (finish plan Task 3): File → Print, the toolbar's print, Ctrl+P. office-ipc.ts answers it
   // itself (the print window and its fallback need the asking window); printPdf below makes the PDF.
   'print_document',
+  // WHY (finish plan Task 8 fix round 1): the strip's answer to edits kept for a file that changed
+  // outside Office (office-recovery.ts offerRecovery). Sent by YouCoded's own page, never needed
+  // by the editor; main re-checks the session like any command, and both only touch its own file.
+  'recovery_accept_held', 'recovery_discard_held',
   // WHY (finish plan Task 4): the add-on's bridge reports the editor's own settings as they change
   // (Advanced settings, view toggles), so the next document starts with them. office-ipc.ts
   // answers it itself (editor-settings.ts keeps only allowed settings keys; nothing else is kept).
@@ -523,6 +527,10 @@ export function createOfficeCommands(deps: {
         return recoveryCandidates(s);
       case 'recovery_discard':
         return discardRecovery(s).then(() => null);
+      case 'recovery_accept_held':
+        return acceptHeldRecovery(s);
+      case 'recovery_discard_held':
+        return discardHeldRecovery(s.path).then(() => null);
       // In the queue, like open_file: it puts the recovered starting point into the session's temp.
       case 'recovery_load':
         return enqueueOther(s, () => recover(s, args.id));

@@ -17,7 +17,7 @@ import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } f
 import { EmptyState, ErrorState, LoadingState } from '../ui';
 import type { OfficeBridge, OfficeFile, OfficeSaveCopyResult } from '../../../shared/office-types';
 import { OFFICE_MODE_MESSAGE, OFFICE_THEME_MESSAGE, editorFontLinks, readOfficeTheme, watchOfficeTheme } from './office-theme';
-import { markChanged, markFailed, markNote, markSaved, markSaving, markUnchanged, noteCloseFailedWhileHidden, noteCopying, onCommentsRequest, onDocumentReplaced, registerFlush } from './office-store';
+import { markChanged, markFailed, markNote, markSaved, markSaving, markUnchanged, noteCloseFailedWhileHidden, noteCopying, noteRecoverOffer, onCommentsRequest, onDocumentReplaced, registerFlush } from './office-store';
 import type { FlushResult } from './office-store';
 import { ScreenMark } from '../../shoot-mode';
 import { useDismissTop } from '../../hooks/use-esc-close';
@@ -35,7 +35,9 @@ export interface EditorFrameHandle {
   /** Save once more (so main has the newest edits), then write them to a copy the person picks. */
   saveCopy(): Promise<OfficeSaveCopyResult>;
   /** "Close without saving" was confirmed: forget the unsaved changes so a close lets go. */
-  discard(): void;
+  discard(): Promise<void>;
+  /** The strip's answer to edits kept for a file that changed since (Task 8 fix round 1). */
+  answerRecoverOffer(recover: boolean): Promise<void>;
 }
 
 /** WHY 3 s (design §4): long enough that a burst of typing is one save, short enough that
@@ -346,13 +348,27 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
   // "Close without saving" / "Discard and quit": the person let the unsaved changes go. WHY the
   // recovery journal goes too (Task 8): otherwise the next open of the file would offer back the
   // very changes they chose to throw away.
-  const discard = () => {
+  const discard = async (): Promise<void> => {
     const token = openedRef.current?.token;
     if (keptRef.current) letGoOfKept(token);
     discardPending();
     markUnchanged(file.path);
-    if (token) void officeBridge()?.invoke(token, 'recovery_discard', {}).catch(() => {});
+    if (token) await officeBridge()?.invoke(token, 'recovery_discard', {}).catch(() => {});
   };
+  // Send the newest edits to the recovery journal now (the window is closing, fix round 1): the
+  // editor answers yc:office-journaled once it has sent them, or 1 s passes.
+  const journalWaiters = useRef<Array<() => void>>([]);
+  const journal = (): Promise<void> => {
+    if (!originRef.current || phaseRef.current !== 'open' || replacedRef.current || keptRef.current) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const done = () => { clearTimeout(t); journalWaiters.current = journalWaiters.current.filter((w) => w !== done); resolve(); };
+      const t = setTimeout(done, 1_000);
+      journalWaiters.current.push(done);
+      post({ type: 'yc:office-journal' });
+    });
+  };
+  const journalRef = useRef(journal);
+  journalRef.current = journal;
   const discardRef = useRef(discard);
   discardRef.current = discard;
 
@@ -371,6 +387,8 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       if (gone) { void b.close(r.token).catch(() => {}); return; }
       token = r.token;
       replacedRef.current = false;
+      // Edits kept from last time for a file that changed since: offered on the strip (fix round 1).
+      noteRecoverOffer(file.path, r.recoverOffer === true);
       setOpened({ token: r.token, origin: r.origin });
     }, (e: unknown) => {
       // WHY (Task 5 fix rounds 1-2): on the remote client and the phone the host refuses Office
@@ -391,7 +409,9 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
 
   // Registered so a file panel's Done and the header briefcase can wait for the last save
   // before this editor goes (office-store flushOffice), and so the quit prompt's Discard reaches it.
-  useEffect(() => registerFlush(file.path, (capMs) => flushRef.current(capMs), { discard: () => discardRef.current() }), [file.path]);
+  useEffect(() => registerFlush(file.path, (capMs) => flushRef.current(capMs), {
+    discard: () => discardRef.current(), journal: () => journalRef.current(),
+  }), [file.path]);
 
   // Restore (Task 7): main replaced the file under this editor. Reopen it from the start — close
   // this token, open again, a fresh editor page on the restored file. WHY nothing unsaved is lost:
@@ -551,6 +571,22 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       }
     },
     discard: () => discardRef.current(),
+    answerRecoverOffer: async (recover) => {
+      const b = officeBridge();
+      const t = openedRef.current?.token;
+      noteRecoverOffer(file.path, false);
+      if (!b || !t) return;
+      if (!recover) { await b.invoke(t, 'recovery_discard_held', {}).catch(() => {}); return; }
+      // The kept edits become this document's journal; reopening the editor replays them (the
+      // file as it is was kept in Versions when it opened).
+      const ok = await b.invoke(t, 'recovery_accept_held', {}).catch(() => false);
+      if (ok !== true) { markNote(file.path, "Office couldn't recover the unsaved changes."); return; }
+      discardPending();
+      replacedRef.current = true;
+      setPhase('starting');
+      setOpened(null);
+      setAttempt((n) => n + 1);
+    },
   }), [file.path]);
 
   useEffect(() => {
@@ -766,6 +802,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       if (d?.type === 'yc:office-loaded') setPhase('open');
       if (d?.type === 'yc:office-state' && d.state) stateCb.current?.(d.state);
       if (d?.type === 'yc:office-esc') dismissRef.current();
+      if (d?.type === 'yc:office-journaled') journalWaiters.current.slice().forEach((w) => w());
       // The editor's answer to main's comment request, and its news that a comment changed (by
       // anyone) — so the reading views of this file refresh (finish plan Task 6).
       const c = d as { id?: unknown; result?: unknown } | null;

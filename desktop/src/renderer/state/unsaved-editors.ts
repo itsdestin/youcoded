@@ -27,8 +27,9 @@ export interface UnsavedEdit {
   /** A parked draft (no editor on screen): whether its file could still take it, and saving it
    *  there from the prompt (fix round 13). Absent for an editor that is on screen. */
   parked?: { available(): Promise<DraftFileStatus>; save(o?: ParkedSaveOptions): Promise<ParkedSaveResult> };
-  /** Throw these edits away (the discard choice in the refused prompt). */
-  discard(): void;
+  /** Throw these edits away (the discard choice in the refused prompt). An Office document's
+   *  resolves once main has dropped its recovery journal (Task 8 fix round 1). */
+  discard(): void | Promise<void>;
 }
 
 const holders = new Map<symbol, UnsavedEdit>();
@@ -53,7 +54,7 @@ export function holdUnsavedEditor(edit: UnsavedEdit): () => void {
   const key = Symbol('unsaved-edit');
   // WHY discard lets go at once: the discard choice tells main to go ahead right after, so main
   // must already have heard "nothing unsaved" — the editor's own cleanup runs a render later.
-  holders.set(key, { ...edit, discard: () => { if (holders.delete(key)) changed(); edit.discard(); } });
+  holders.set(key, { ...edit, discard: () => { if (holders.delete(key)) changed(); return edit.discard(); } });
   changed();
   return () => { if (holders.delete(key)) changed(); };
 }
@@ -68,9 +69,10 @@ export function useUnsavedEdits(): UnsavedEdit[] {
 
 /** "Discard and quit" / "Discard and close": throw away the edits the person saw listed when
  *  they chose to (fix round 12) — one that appeared since is kept, and main refuses again. */
-export function discardUnsaved(listed: readonly UnsavedEdit[]): void {
+export function discardUnsaved(listed: readonly UnsavedEdit[]): Promise<void> {
   const current = new Set(holders.values());
-  listed.forEach((e) => { if (current.has(e)) e.discard(); });
+  // WHY awaited (fix round 1): the quit that follows must not race an Office journal's removal.
+  return Promise.all(listed.map((e) => (current.has(e) ? Promise.resolve(e.discard()).catch(() => {}) : undefined))).then(() => {});
 }
 
 /** Tests only. */

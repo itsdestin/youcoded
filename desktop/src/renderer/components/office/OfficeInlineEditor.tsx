@@ -18,6 +18,7 @@ import type { EditorFrameHandle, OfficeCommand, OfficeCommandState } from './Edi
 import { CommandGlyph } from './office-icons';
 import { flushOffice, holdInline, markCopied, noteInlineCopy, officeDocFor, openDoc, registerFlush, registerInlineReveal, useSaveState } from './office-store';
 import { OfficeSaveFailed } from './OfficeSaveFailed';
+import { OfficeRecoverOffer } from './OfficeRecoverOffer';
 import { useArtifactDispatch } from '../../state/ArtifactContext';
 import { OFFICE_PAGE_ID } from '../../../shared/pages-types';
 
@@ -112,6 +113,8 @@ export function OfficeInlineEditor({ absolutePath, artifactId, onCancelEdit }: A
           (I1, Task 6 fix round 1): Done and closing the panel wait on it rather than dropping
           the changes. "Close without saving" leaves the in-place edit. */}
       {/* Save As / Export (finish plan Task 2): where the separate file went, or why it could not. */}
+      {/* Edits kept for a file that changed since: the person chooses (Task 8 fix round 1). */}
+      <OfficeRecoverOffer path={file.path} frame={frame} className="shrink-0 px-3 py-1.5 border-b border-edge-dim" />
       {saveState.phase !== 'failed' && saveState.note && (
         <div className="shrink-0 px-3 py-1.5 text-2xs text-fg-muted border-b border-edge-dim" role="status">
           {saveState.note}

@@ -37,7 +37,9 @@ export interface OfficeVersion {
 
 /** The answer to opening a document: its token and the sealed origin its editor runs on.
  *  The renderer frames `${origin}/index.html`. */
-export type OfficeOpen = { ok: true; token: string; origin: string } | { ok: false; message: string };
+/** recoverOffer (Task 8 fix round 1): edits kept from last time for a file that changed since —
+ *  the strip offers Recover unsaved changes / Discard. */
+export type OfficeOpen = { ok: true; token: string; origin: string; recoverOffer?: true } | { ok: false; message: string };
 
 export interface OfficeStatus {
   /** False when this build carries no Office add-on (e.g. a platform without a bundle yet). */
@@ -72,6 +74,10 @@ export interface OfficeBridge {
   /** 'release': the editor that kept its typing after a restore was let go — main drops the
    *  pictures it put aside for that editor's copy. */
   saveCopy(token: string, mode: 'check' | 'save' | 'again' | 'release', editorBin?: string): Promise<OfficeSaveCopyResult>;
+  /** Before this window closes, main asks its editors to send their newest edits to the recovery
+   *  journal, and waits (≤1.5 s) for journalDone with the same id. Desktop only. */
+  onJournalRequest?(cb: (id: string) => void): () => void;
+  journalDone?(id: string): void;
   /** A quit, or the last window's close, was refused because this window has unsaved files
    *  (main/unsaved-quit.ts): show their list. Desktop only. */
   onUnsavedPrompt?(cb: (p: OfficeUnsavedPrompt) => void): () => void;

@@ -68,6 +68,18 @@ async function fileStamp(file: string): Promise<{ size: number; mtimeMs: number 
   const st = await fsp.stat(file).catch(() => null);
   return st ? { size: st.size, mtimeMs: st.mtimeMs } : null;
 }
+/** How long an open waits for a journal's earlier writes (a reloaded page's last edits). WHY capped
+ *  (fix round 1): a wedged disk must not hold an open; past it the file opens as it is, logged. */
+const CHAIN_WAIT_MS = 2_000;
+async function settled(file: string): Promise<boolean> {
+  const chain = journals.get(file)?.chain;
+  if (!chain) return true;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const ok = await Promise.race([chain.then(() => true), new Promise<boolean>((r) => (timer = setTimeout(() => r(false), CHAIN_WAIT_MS)))]);
+  clearTimeout(timer);
+  if (!ok) log('WARN', 'Office', 'recovery journal still writing; opening the file as it is');
+  return ok;
+}
 async function writeInfo(j: Journal, s: OfficeSession): Promise<void> {
   const info = { path: s.path, docType: j.docType, savedRev: j.savedRev, file: await fileStamp(s.path) };
   // Write-then-rename: a crash mid-write must not leave half an info file (the journal would be lost).
@@ -156,7 +168,7 @@ export function markRecoverySaved(s: OfficeSession, rev: number): void {
   if (j.start) void queue(j, () => writeInfo(j, s));
 }
 
-interface OnDisk { info: { path: string; docType: string; savedRev: number; file: { size: number; mtimeMs: number } | null }; list: string[]; rev: number }
+interface OnDisk { info: { path: string; docType: string; savedRev: number; file: { size: number; mtimeMs: number } | null; overChange?: boolean }; list: string[]; rev: number }
 async function readJournal(dir: string): Promise<OnDisk | null> {
   try {
     const info = JSON.parse(await fsp.readFile(path.join(dir, 'info.json'), 'utf8'));
@@ -187,7 +199,7 @@ async function readJournal(dir: string): Promise<OnDisk | null> {
 export async function recoveryCandidates(s: OfficeSession): Promise<Array<{ id: string; name: string; docType: string; modifiedMs: number }>> {
   if (!root) return [];
   const dir = path.join(root, keyOf(s.path));
-  await journals.get(s.path)?.chain; // a reloaded page's last edits may still be writing
+  if (!(await settled(s.path))) return []; // a reloaded page's last edits may still be writing
   const j = await readJournal(dir);
   if (!j || j.info.path !== s.path || j.rev <= j.info.savedRev) return [];
   const st = await fsp.stat(path.join(dir, 'changes.log')).catch(() => null);
@@ -204,7 +216,7 @@ export async function recoveryCandidates(s: OfficeSession): Promise<Array<{ id: 
 export async function loadRecovery(s: OfficeSession, id: unknown, maxBytes: number): Promise<{ id: string; data: string; name: string; path: string; docType: string; changes: string[]; outsideChange: boolean } | null> {
   if (!root || id !== keyOf(s.path)) return null;
   const dir = path.join(root, keyOf(s.path));
-  await journals.get(s.path)?.chain;
+  if (!(await settled(s.path))) return null;
   const j = await readJournal(dir);
   if (!j || j.info.path !== s.path || j.rev <= j.info.savedRev) return null;
   const base = path.join(dir, 'base.bin');
@@ -225,8 +237,83 @@ export async function loadRecovery(s: OfficeSession, id: unknown, maxBytes: numb
     id: keyOf(s.path), data: (await fsp.readFile(base)).toString('base64'),
     // The name only: bridge.js uses the path for the document's name and extension, never to read.
     name: path.basename(s.path), path: path.basename(s.path), docType: j.info.docType, changes: j.list,
-    outsideChange: !!was && !!now && (was.size !== now.size || was.mtimeMs !== now.mtimeMs),
+    outsideChange: j.info.overChange === true || !!was && !!now && (was.size !== now.size || was.mtimeMs !== now.mtimeMs),
   };
+}
+
+// ── Edits kept for a file that changed outside Office since (fix round 1) ──
+// WHY never replayed on their own: the edits were made to the file as it was, and replaying them
+// would overwrite what changed it since (the assistant's comments, another app). So at open such a
+// journal is set aside (<key>.held), the file opens as it is on disk, and the person chooses on
+// the strip: Recover unsaved changes (the held journal comes back and the editor reopens with it;
+// the file as it is stays in Versions, kept when it opened) or Discard. Kept until they answer.
+const heldDir = (file: string) => path.join(root!, `${keyOf(file)}.held`);
+const exists = (p: string) => fsp.stat(p).then(() => true, () => false);
+
+/** office:open, before the editor starts: whether to offer this file's held edits (sets them aside
+ *  first when the file changed since). Never touches a journal a live session is writing. */
+export async function offerRecovery(file: string): Promise<boolean> {
+  if (!root) return false;
+  if (await exists(heldDir(file))) return true;
+  if (journals.has(file)) return false;
+  const dir = path.join(root, keyOf(file));
+  const j = await readJournal(dir);
+  if (!j || j.info.path !== file || j.rev <= j.info.savedRev) return false;
+  const now = await fileStamp(file);
+  const was = j.info.file;
+  if (now && was && now.size === was.size && now.mtimeMs === was.mtimeMs) return false; // unchanged: replayed at open
+  await fsp.rename(dir, heldDir(file));
+  return true;
+}
+
+/** Recover unsaved changes: the held journal replaces whatever this session journaled since, and
+ *  is marked as made over a changed file (so the strip says the file's version is in Versions). */
+export async function acceptHeldRecovery(s: OfficeSession): Promise<boolean> {
+  if (!root || !(await exists(heldDir(s.path)))) return false;
+  await settled(s.path); // what this session journaled meanwhile is replaced below
+  journals.delete(s.path);
+  const dir = path.join(root, keyOf(s.path));
+  await fsp.rm(dir, { recursive: true, force: true });
+  await fsp.rename(heldDir(s.path), dir);
+  const info = JSON.parse(await fsp.readFile(path.join(dir, 'info.json'), 'utf8'));
+  info.file = await fileStamp(s.path);
+  info.overChange = true;
+  await fsp.writeFile(path.join(dir, 'info.json'), JSON.stringify(info));
+  return true;
+}
+
+/** Discard on the offer: the held edits go. */
+export async function discardHeldRecovery(file: string): Promise<void> {
+  if (root) await fsp.rm(heldDir(file), { recursive: true, force: true }).catch(() => {});
+}
+
+/** A restore put a kept version back (fix round 1): edits journaled against the old content are
+ *  meaningless now. The reloading editor begins a fresh journal from the restored file. */
+export async function discardRecoveryFor(file: string): Promise<void> {
+  if (!root) return;
+  await settled(file);
+  journals.delete(file);
+  await fsp.rm(path.join(root, keyOf(file)), { recursive: true, force: true }).catch(() => {});
+  await discardHeldRecovery(file);
+}
+
+/** Startup tidy-up (fix round 1), never awaited by anyone: journals of files that are gone, and
+ *  journals nothing touched for 30 days, are removed. */
+export const RECOVERY_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+export async function pruneRecovery(now = Date.now()): Promise<void> {
+  if (!root) return;
+  const names = await fsp.readdir(root).catch(() => [] as string[]);
+  for (const name of names) {
+    const dir = path.join(root, name);
+    try {
+      const info = JSON.parse(await fsp.readFile(path.join(dir, 'info.json'), 'utf8')) as { path?: unknown };
+      const touched = Math.max(...(await Promise.all(['info.json', 'changes.log'].map((f) => fsp.stat(path.join(dir, f)).then((st) => st.mtimeMs, () => 0)))));
+      const gone = typeof info.path !== 'string' || !(await exists(info.path));
+      if (!gone && now - touched < RECOVERY_MAX_AGE_MS) continue;
+      if (typeof info.path === 'string' && journals.has(info.path)) continue; // being written right now
+    } catch { /* no readable info: a broken journal, nothing can recover it */ }
+    await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 /** recovery_discard, Close without saving, Discard and quit: these edits are let go of on purpose.

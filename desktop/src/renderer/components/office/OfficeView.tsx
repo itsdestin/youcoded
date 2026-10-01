@@ -23,6 +23,7 @@ import { HOME_TAB, officeCommentsPreview, cancelClose, closeDoc, finishClose, fl
 import { officeFileFor } from './office-files';
 import type { OfficeSaveState } from './office-store';
 import { OfficeSaveFailed } from './OfficeSaveFailed';
+import { OfficeRecoverOffer } from './OfficeRecoverOffer';
 import { EditorFrame, stripExt } from './EditorFrame';
 import type { EditorFrameHandle } from './EditorFrame';
 import { ScreenMark } from '../../shoot-mode';
@@ -154,6 +155,8 @@ export function OfficeView({ projectRoot = null, visible = true }: { projectRoot
                 never hides "Saving…" (fix round 1). Where the copy went, or why it could not. */}
             {/* WHY truncated with a title (fix round 2): a long file or folder name must never squeeze
                 the document tabs beside it; the whole sentence stays on hover. */}
+            {/* Edits kept for a file that changed since: the person chooses (Task 8 fix round 1). */}
+            <OfficeRecoverOffer path={front.file.path} frame={frontFrame} className="max-w-xl" />
             {saveState.phase !== 'failed' && saveState.note && <span className="text-2xs text-fg-muted truncate max-w-xs" title={saveState.note} role="status">{saveState.note}</span>}
             {/* Saving is automatic (Q-save), so this only confirms it happened — or, when a save
                 failed, says main's own reason with Retry (design §4; error-message-standards). */}

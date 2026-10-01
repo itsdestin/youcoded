@@ -68,16 +68,20 @@ export type FlushResult = { ok: true } | { ok: false; message: string };
 // for this first (≤5 s), so the file itself holds them.
 const flushers = new Map<string, (capMs?: number) => Promise<FlushResult>>();
 // Each mounted editor's "throw these unsaved changes away" (Discard and quit, Task 8).
-const discarders = new Map<string, () => void>();
+const discarders = new Map<string, () => void | Promise<void>>();
+// Each mounted editor's "send your newest edits to the recovery journal now" (fix round 1).
+const journalers = new Map<string, () => Promise<void>>();
 /** WHY 4 s: a reload waits for every document's save at once, each capped, never longer. */
 const RELOAD_FLUSH_CAP_MS = 4_000;
 
 export function registerFlush(
-  path: string, flush: (capMs?: number) => Promise<FlushResult>, opts: { discard?: () => void } = {},
+  path: string, flush: (capMs?: number) => Promise<FlushResult>,
+  opts: { discard?: () => void | Promise<void>; journal?: () => Promise<void> } = {},
 ): () => void {
   flushers.set(path, flush);
   if (opts.discard) discarders.set(path, opts.discard); else discarders.delete(path);
-  return () => { if (flushers.get(path) === flush) { flushers.delete(path); discarders.delete(path); } };
+  if (opts.journal) journalers.set(path, opts.journal); else journalers.delete(path);
+  return () => { if (flushers.get(path) === flush) { flushers.delete(path); discarders.delete(path); journalers.delete(path); } };
 }
 
 /**
@@ -150,6 +154,28 @@ export function watchUnsavedPrompt(): void {
     // list empties by itself a moment later ("Nothing left unsaved here." → Quit).
     flushers.forEach((f) => void f().catch(() => null));
   });
+  // The window is closing (main/office/office-journal-sync.ts, fix round 1): every editor sends its
+  // newest edits to the journal, then main hears that they went (main caps the wait at 1.5 s).
+  office.onJournalRequest?.((id) => {
+    void Promise.all([...journalers.values()].map((j) => j().catch(() => {}))).then(() => office.journalDone?.(id));
+  });
+}
+
+// ── Edits kept for a file that changed outside Office (Task 8 fix round 1) ──
+// Main offers them when the file opens (office:open's recoverOffer); the strip shows Recover
+// unsaved changes / Discard until the person answers (OfficeRecoverOffer).
+let recoverOffers: ReadonlySet<string> = new Set();
+const offerListeners = new Set<() => void>();
+export function noteRecoverOffer(path: string, on: boolean): void {
+  if (recoverOffers.has(path) === on) return;
+  const next = new Set(recoverOffers);
+  if (on) next.add(path); else next.delete(path);
+  recoverOffers = next;
+  offerListeners.forEach((l) => l());
+}
+export function useRecoverOffer(path: string | null): boolean {
+  const get = () => (path ? recoverOffers.has(path) : false);
+  return useSyncExternalStore((l) => { offerListeners.add(l); return () => { offerListeners.delete(l); }; }, get, get);
 }
 
 // ── Alerts shown outside the Office page (fix round 2) ──
@@ -444,6 +470,8 @@ export function resetOfficeStoreForTests(): void {
   inlineHolders.clear();
   flushers.clear();
   discarders.clear();
+  journalers.clear();
+  recoverOffers = new Set();
   unsavedHolds.forEach((release) => release());
   unsavedHolds.clear();
   inlineCopies.clear();

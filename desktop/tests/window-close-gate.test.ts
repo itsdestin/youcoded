@@ -123,6 +123,34 @@ describe('the window close gate', () => {
   });
 });
 
+describe('Office documents in a closing window', () => {
+  it("its editors journal their last edits first; then the close goes on", async () => {
+    const { deps, ev } = gate({ sessions: 0 });
+    let finish!: () => void;
+    const syncJournals = vi.fn(() => new Promise<void>((r) => (finish = r)));
+    const g = createCloseGate<boolean>({ ...deps, syncJournals });
+    const first = ev();
+    const pending = g.onClose(first);
+    expect(first.preventDefault).toHaveBeenCalled();
+    expect(deps.close).not.toHaveBeenCalled();
+    finish();
+    await pending;
+    expect(deps.close).toHaveBeenCalledTimes(1);
+    const reissued = ev();
+    await g.onClose(reissued); // the re-issued close passes straight through
+    expect(reissued.preventDefault).not.toHaveBeenCalled();
+    expect(syncJournals).toHaveBeenCalledTimes(1);
+  });
+
+  it('a window without Office documents closes without waiting', async () => {
+    const { deps, ev } = gate({ sessions: 0 });
+    const g = createCloseGate<boolean>({ ...deps, syncJournals: () => null });
+    const e = ev();
+    await g.onClose(e);
+    expect(e.preventDefault).not.toHaveBeenCalled();
+  });
+});
+
 describe('a window that stopped responding', () => {
   // The hung path: X → the page cannot run its unload, so the window stays. A second X then asks natively.
   async function stuck(sessions = 0) {
