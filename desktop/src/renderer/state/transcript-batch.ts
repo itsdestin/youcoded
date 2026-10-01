@@ -8,6 +8,7 @@
 import type { ChatAction } from './chat-types';
 import { eventToAction } from './transcript-event-actions';
 import type { TranscriptEvent } from '../../shared/types';
+import type { SessionLive } from '../../shared/session-live-types';
 
 // The whole frame's actions in one call, in arrival order. WHY an array
 // (2026-09-16 A4): the store applies them one by one but notifies its
@@ -71,6 +72,54 @@ export function routeTranscriptEvent(event: TranscriptEvent, deps: TranscriptRou
     fallbackContextTokens: compacting ? deps.fallbackContextTokens(event.sessionId) : undefined,
   });
   for (const action of actions) deps.batcher.push(action);
+}
+
+/**
+ * One shared line or live fact from the computer's record (`session:live`), turned into reducer actions and sent through the SAME frame batcher
+ * as transcript events (one-core R5-4a).
+ *
+ * WHY the batcher and not a plain dispatch: a divider or a queue change is numbered AFTER the transcript events before it, and a plain dispatch
+ * would land ahead of those still waiting for their frame, drawing "Conversation cleared" above the message sent just before it. This is
+ * the same ordering rule `routeTranscriptEvent` keeps (R4-3).
+ *
+ * WHY every screen runs this and none infers the same thing itself: see shared/session-live-types.ts. The compaction spinner takes the context
+ * size from THIS screen's own status reading, the figure the typing screen used to capture, so the finished note can say what was freed.
+ */
+export function routeSessionLive(live: SessionLive, deps: { batcher: Pick<TranscriptBatcher, 'push'>; contextTokens(sessionId: string): number | null; now?: () => number }): void {
+  const { sessionId } = live;
+  const now = deps.now ?? Date.now;
+  switch (live.kind) {
+    case 'queue':
+      deps.batcher.push({ type: 'QUEUE_SYNCED', sessionId, queue: live.queue });
+      return;
+    case 'model':
+      deps.batcher.push({ type: 'MODEL_ANNOUNCED', sessionId, model: live.model });
+      return;
+    case 'model-switch':
+      deps.batcher.push({ type: 'MODEL_SWITCH_MARKER', sessionId, markerId: live.id, timestamp: now(), label: live.label });
+      return;
+    case 'clear':
+      deps.batcher.push({ type: 'CLEAR_TIMELINE', sessionId, markerId: live.id, timestamp: now() });
+      return;
+    case 'compact-start':
+      deps.batcher.push({ type: 'COMPACTION_PENDING', sessionId, cardId: live.id, beforeContextTokens: deps.contextTokens(sessionId) });
+      return;
+    case 'compact-end':
+      // A stop drops the spinner quietly ("Compaction may have failed" would be false after a Stop); anything else leaves the failed note.
+      deps.batcher.push(live.outcome === 'cancelled'
+        ? { type: 'COMPACTION_CANCELLED', sessionId }
+        : { type: 'COMPACTION_COMPLETE', sessionId, markerId: `compact-end-${live.id}`, afterContextTokens: null, aborted: true });
+      return;
+    case 'prompt-show':
+      deps.batcher.push({
+        type: 'SHOW_PROMPT', sessionId, promptId: live.promptId, title: live.title, description: live.description,
+        buttons: live.buttons as never, defaultIndex: live.defaultIndex,
+      });
+      return;
+    case 'prompt-dismiss':
+      deps.batcher.push({ type: 'DISMISS_PROMPT', sessionId, promptId: live.promptId });
+      return;
+  }
 }
 
 export interface TranscriptBatcher {

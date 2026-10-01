@@ -13,6 +13,7 @@ import {
 } from './chat-types';
 import { SubagentSegment, SpecialistNote, SpecialistRunView, ToolCallState, ToolGroupState, type PasswordAsk } from '../../shared/types';
 import { pageEventToAction } from './transcript-page-actions';
+import { isPlaceholderModelId } from '../../shared/model-ids';
 import { addTurnUsage, addSubagentUsage, addPatchLines, mergeTotals } from './session-totals';
 import { applyBackgroundTaskEnd, ccBackgroundOnLaunch, reopenResumedHelper, stopRunningBackground } from './cc-background';
 
@@ -465,7 +466,6 @@ function endTurn(
     // re-rendered the PREVIOUS turn's "Reading your prompt — N%" line while the
     // model was mid-generation (2026-07-28 audit).
     promptProcessing: null,
-    streamingText: '',
     currentGroupId: null,
     currentTurnId: null,
     activeTurnToolIds: new Set(),
@@ -1032,6 +1032,25 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
           { queueId: action.queueId, content: action.content, timestamp: action.timestamp },
         ],
       });
+      return next;
+    }
+
+    // One-core R5-4a: the host's queue as it is now. Same rows and order = the very same state back (no redraw).
+    case 'QUEUE_SYNCED': {
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+      const cur = session.queuedMessages;
+      if (cur.length === action.queue.length && cur.every((q, i) => q.queueId === action.queue[i].queueId && q.content === action.queue[i].content)) return state;
+      next.set(action.sessionId, { ...session, queuedMessages: action.queue.map((q) => ({ queueId: q.queueId, content: q.content, timestamp: q.timestamp })) });
+      return next;
+    }
+
+    // One-core R5-4a: the host announced the session's model (see SessionChatState.modelAnnounced for why it waits for a later turn).
+    case 'MODEL_ANNOUNCED': {
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+      if (session.modelAnnounced?.model === action.model) return state;
+      next.set(action.sessionId, { ...session, modelAnnounced: { model: action.model, turnId: session.currentTurnId } });
       return next;
     }
 
@@ -1664,6 +1683,10 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         ...session, assistantTurns, timeline, currentTurnId, seenUuids,
         currentGroupId: null, // next tool_use creates a new group
         lastActivityAt: Date.now(),
+        // A reply from a LATER turn carries the model that really answered, so it replaces the host's announcement (R5-4a); the turn that
+        // was already running when the announcement came keeps the old model's name on its text and must not undo it.
+        ...(session.modelAnnounced && action.model && !isPlaceholderModelId(action.model) && currentTurnId !== session.modelAnnounced.turnId
+          ? { modelAnnounced: null } : {}),
         // Visible OUTPUT arrived (not merely activity). The thinking indicator
         // suppresses itself while this is fresh — a filling bubble is already proof
         // the model is alive, so a spinner beside it is noise.
@@ -3263,6 +3286,8 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
     case 'CLEAR_TIMELINE': {
       const session = next.get(action.sessionId);
       if (!session) return state;
+      // The same divider delivered twice (a replay of the host's numbered event) is drawn once (one-core R5-4a).
+      if (session.timeline.some((e) => e.kind === 'system-marker' && e.marker.id === action.markerId)) return state;
       next.set(action.sessionId, {
         ...session,
         ...endTurn(session),
@@ -3301,6 +3326,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
     case 'MODEL_SWITCH_MARKER': {
       const session = next.get(action.sessionId);
       if (!session) return state;
+      if (session.timeline.some((e) => e.kind === 'system-marker' && e.marker.id === action.markerId)) return state; // see CLEAR_TIMELINE
       next.set(action.sessionId, {
         ...session,
         timeline: [

@@ -1070,10 +1070,14 @@ function routePush(type: string, payload: any): void {
       dispatchEvent('tags:changed', undefined, payload || {});
       break;
     case 'session:permission-mode':
-      // Android-only: corrects React's optimistic Shift+Tab cycling state.
-      // Desktop uses pty:output text detection in App.tsx, but Android doesn't
-      // forward raw PTY bytes to the renderer (terminal is rendered natively).
+      // Corrects React's optimistic Shift+Tab cycling state. From the Android app's own runtime (it has no raw terminal bytes in the
+      // renderer) AND, since one-core R5-4a, from the computer's host, which reads the mode footer off the terminal once for every screen.
       dispatchEvent('session:permission-mode', payload.sessionId, payload.mode);
+      break;
+    case 'session:live':
+      // The shared lines and live facts the host's record publishes (one-core R5-4a): queue, model label, dividers, the compaction
+      // spinner and prompt cards. An older computer never sends it.
+      if (payload && typeof payload === 'object') dispatchEvent('session:live', payload);
       break;
     case 'status:data':
       dispatchEvent('status:data', payload);
@@ -2006,6 +2010,8 @@ export function installShim(): void {
       // Stop being sent ONE conversation (one-core R5-3). `open` starts a watch, this ends it. What the page has drawn stays, and so does
       // its position (`fillCursors`), so opening it again resumes with just what happened meanwhile. On the phone's OWN bridge there is
       // no host record and no watch: refused quietly, exactly like `open`, so nothing is ever sent to the on-device runtime.
+      // A card the computer's own window read off its terminal: refused to a phone (a phone draws the host's), exactly as a hand-made request would be.
+      reportPrompt: (_report: unknown) => Promise.resolve({ ok: false }),
       unwatch: (sessionId: string) => {
         if (isAndroidLocal()) return refuseQuietlyOnPhone('session:unwatch');
         // The terminal frames of an unwatched session are dropped from this moment, even one already on the wire.
@@ -2054,7 +2060,7 @@ export function installShim(): void {
       reopenList: () => invoke('session:reopen-list'),
       forgetReopen: (ids: string[]) => invoke('session:forget-reopen', { ids }),
       canSend: () => ws?.readyState === WebSocket.OPEN && connectionState === 'connected',
-      sendInput: (sessionId: string, text: string) => fire('session:input', { sessionId, text }),
+      sendInput: (sessionId: string, text: string, notice?: 'model-switch') => fire('session:input', { sessionId, text, notice }),
       resize: (sessionId: string, cols: number, rows: number) => fire('session:resize', { sessionId, cols, rows }),
       signalReady: (sessionId: string) => fire('session:terminal-ready', { sessionId }),
       // Tracked while in flight so the host's resolution of THIS answer is not shown as
@@ -2130,8 +2136,10 @@ export function installShim(): void {
       specialistEvent: (cb: Callback) => { addListener('specialists:event', cb); return () => removeListener('specialists:event', cb); },
       // G-1: background command run records — mirrors preload's on.shellEvent.
       shellEvent: (cb: Callback) => { addListener('native:shell-event', cb); return () => removeListener('native:shell-event', cb); },
-      // Android-only push event — see remote-shim handleMessage above for rationale.
+      // See remote-shim handleMessage above: the Android app's own runtime and the computer's host both push it.
       sessionPermissionMode: (cb: Callback) => addListener('session:permission-mode', cb),
+      // The shared lines and live facts the host's record publishes (one-core R5-4a).
+      sessionLive: (cb: Callback) => { addListener('session:live', cb); return () => removeListener('session:live', cb); },
       uiAction: (cb: Callback) => addListener('ui:action:received', cb),
       transcriptEvent: (cb: (event: import('../shared/types').TranscriptEvent) => void) => addListener('transcript:event', cb),
       transcriptShrink: (cb: Callback) => addListener('transcript:shrink', cb),

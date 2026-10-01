@@ -219,7 +219,6 @@ describe('TRANSCRIPT_* reducer actions', () => {
 
     const session = state.get(SESSION)!;
     expect(session.isThinking).toBe(false);
-    expect(session.streamingText).toBe('');
     expect(session.currentGroupId).toBeNull();
   });
 

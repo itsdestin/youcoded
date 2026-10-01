@@ -179,6 +179,10 @@ describe('the compaction marker can finally say what it freed', () => {
   });
 
   it('native /compact marks its card awaitsResult so the 3-minute watchdog never guesses; CC does not', async () => {
+    // The Android app's own runtime has no host record, so its screen still raises the spinner itself (one-core R5-4a); on a host with a record
+    // the host's event does, and tests/session-live-two-screens.test.ts covers that.
+    const { ANDROID_LOCAL_CAPABILITIES } = await import('../src/shared/capabilities');
+    vi.stubGlobal('window', { claude: { capabilities: ANDROID_LOCAL_CAPABILITIES } });
     const { dispatchSlashCommand } = await import('../src/renderer/state/slash-command-dispatcher');
     for (const native of [true, false]) {
       const dispatch = vi.fn();
@@ -187,6 +191,7 @@ describe('the compaction marker can finally say what it freed', () => {
       const pending = dispatch.mock.calls.map(c => c[0]).find(a => a.type === 'COMPACTION_PENDING');
       expect(pending.awaitsResult).toBe(native ? true : undefined);
     }
+    vi.unstubAllGlobals();
   });
 
   it('a Stop during native /compact cancels the card instead of "Compaction may have failed"', async () => {

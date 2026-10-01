@@ -282,7 +282,6 @@ export interface SessionChatState {
   usageProgressAt: number;
   /** Progress heartbeat identity is separate from durable transcript seenUuids. */
   usageProgressUuid: string | null;
-  streamingText: string;
   /** ID of the current tool group (tools are appended here until next message) */
   currentGroupId: string | null;
   /** ID of the current assistant turn (text + tool groups accumulate here) */
@@ -443,6 +442,15 @@ export interface SessionChatState {
    * have shown, so the drain-side removal can content-match it.
    */
   queuedMessages: Array<{ queueId: string; content: string; timestamp: number }>;
+  /**
+   * The model the computer last said this session switched to, until a reply proves it (one-core R5-4a). WHY: the chip's model was worked
+   * out from the newest assistant turn, so every screen but the one that picked a model showed the old one until the next reply.
+   * The host now announces `/model` and picker changes (`session:live`, kind `model`); this holds the announcement and
+   * `useActiveSessionModel` prefers it. `turnId` is the turn in flight when it arrived (null when idle): that turn's remaining text
+   * still carries the OLD model and must not undo the announcement; the first reply of a LATER turn replaces it with the model that
+   * really answered. Not serialized: it describes the live session only.
+   */
+  modelAnnounced: { model: string; turnId: string | null } | null;
 
   /** Session-so-far totals for the status bar and /usage (spec §2). Accumulated
    *  as events arrive rather than walked on demand — see session-totals.ts for
@@ -480,7 +488,6 @@ export function createSessionChatState(): SessionChatState {
     inProgressUsage: null,
     usageProgressAt: 0,
     usageProgressUuid: null,
-    streamingText: '',
     currentGroupId: null,
     currentTurnId: null,
     lastActivityAt: 0,
@@ -501,6 +508,7 @@ export function createSessionChatState(): SessionChatState {
     modelEverResident: false,
     seenUuids: new Set(),
     queuedMessages: [],
+    modelAnnounced: null,
     history: { cursor: null, hasMore: false, loading: false },
     totals: emptyTotals(),
     sessionContext: null,
@@ -544,6 +552,19 @@ export type ChatAction =
       queueId: string;
       content: string;
       timestamp: number;
+    }
+  | {
+      // One-core R5-4a: the host's queue of waiting messages as it is NOW (a snapshot, `session:live` kind `queue`). Replaces the list, so a
+      // screen that missed a change, a screen that did not send the message and a screen that reconnected all end up showing the same rows.
+      type: 'QUEUE_SYNCED';
+      sessionId: string;
+      queue: Array<{ queueId: string; content: string; timestamp: number }>;
+    }
+  | {
+      // One-core R5-4a: the host announced a model change (`session:live` kind `model`); see SessionChatState.modelAnnounced.
+      type: 'MODEL_ANNOUNCED';
+      sessionId: string;
+      model: string;
     }
   | {
       // Task 12 (replaces QUEUED_PROMPT_CANCELED): removes a queuedMessages
@@ -1098,7 +1119,6 @@ export interface SerializedSessionChatState {
   toolGroups: Array<[string, ToolGroupState]>;
   assistantTurns: Array<[string, AssistantTurn]>;
   isThinking: boolean;
-  streamingText: string;
   currentGroupId: string | null;
   currentTurnId: string | null;
   lastActivityAt: number;
@@ -1163,7 +1183,6 @@ export function serializeChatState(state: ChatState): SerializedChatState {
         toolGroups: Array.from(s.toolGroups.entries()),
         assistantTurns: Array.from(s.assistantTurns.entries()),
         isThinking: s.isThinking,
-        streamingText: s.streamingText,
         currentGroupId: s.currentGroupId,
         currentTurnId: s.currentTurnId,
         lastActivityAt: s.lastActivityAt,
@@ -1208,7 +1227,6 @@ export function deserializeChatState(s: SerializedChatState): ChatState {
       inProgressUsage: null,
       usageProgressAt: 0,
       usageProgressUuid: null,
-      streamingText: ser.streamingText,
       currentGroupId: ser.currentGroupId,
       currentTurnId: ser.currentTurnId,
       lastActivityAt: ser.lastActivityAt,
@@ -1243,6 +1261,7 @@ export function deserializeChatState(s: SerializedChatState): ChatState {
       seenUuids: new Set(ser.seenUuids ?? []),
       // Older hosts predate queuedMessages — default to an empty list.
       queuedMessages: ser.queuedMessages ?? [],
+      modelAnnounced: null, // live-session only (R5-4a), never in a snapshot
       // Older hosts predate paged history — default to "nothing older known",
       // which is what a hydrated snapshot already represents.
       history: ser.history

@@ -614,7 +614,7 @@ describe('InputBar — InputBarHandle hasDraft/fillDraft (Task 11)', () => {
 // no timeline write) instead of a queued-flavored USER_PROMPT — see
 // chat-reducer.ts and the Task 12 brief for why the old timeline bubble froze
 // above content from the still-streaming prior turn.
-describe('InputBar native send — queued ack dispatches QUEUED_MESSAGE_ADDED, not a timeline entry (Task 12)', () => {
+describe('InputBar native send — a queued ack draws nothing itself: the computer\'s queue does (one-core R5-4a)', () => {
   beforeEach(() => {
     (global as any).ResizeObserver = NoopResizeObserver;
     capturedDispatch = null;
@@ -635,7 +635,7 @@ describe('InputBar native send — queued ack dispatches QUEUED_MESSAGE_ADDED, n
     vi.restoreAllMocks();
   });
 
-  it('dispatches QUEUED_MESSAGE_ADDED with the ack queueId, and writes NO timeline entry', async () => {
+  it('writes no strip row and no timeline entry for a queued ack (the host announces the queue to every screen)', async () => {
     (window as any).claude.native.send.mockResolvedValue({ status: 'queued', queueId: 'q-99' });
 
     let capturedStore: ReturnType<typeof useChatStore> | null = null;
@@ -659,15 +659,11 @@ describe('InputBar native send — queued ack dispatches QUEUED_MESSAGE_ADDED, n
     fireEvent.change(textarea, { target: { value: 'queue me' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
 
-    await waitFor(() => {
-      const queued = capturedStore!.getState().get('sess-1')?.queuedMessages ?? [];
-      expect(queued.length).toBe(1);
-    });
+    await waitFor(() => expect((window as any).claude.native.send).toHaveBeenCalled());
+    await act(async () => { await Promise.resolve(); });
     const session = capturedStore!.getState().get('sess-1')!;
     expect(session.timeline).toHaveLength(0);
-    expect(session.queuedMessages).toEqual([
-      { queueId: 'q-99', content: 'queue me', timestamp: expect.any(Number) },
-    ]);
+    expect(session.queuedMessages).toEqual([]);
   });
 });
 

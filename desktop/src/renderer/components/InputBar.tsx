@@ -849,13 +849,8 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
           // emitted yet). A 'sent' ack is unchanged: nothing is streaming, so
           // the optimistic bubble's position is already correct.
           if (result.status === 'queued') {
-            dispatch({
-              type: 'QUEUED_MESSAGE_ADDED',
-              sessionId,
-              queueId: result.queueId,
-              content: outgoing.content,
-              timestamp: Date.now(),
-            });
+            // Nothing to draw from here (one-core R5-4a): the computer holds the queue and says so (`session:live`, kind `queue`), and EVERY
+            // screen's strip, this one included, is drawn from that. Drawing this row here as well put it there twice, or only here.
           } else {
             dispatch({
               type: 'USER_PROMPT',

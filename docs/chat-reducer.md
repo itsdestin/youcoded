@@ -39,7 +39,7 @@ To prevent stale `running` / `awaiting-approval` entries from old turns affectin
 
 - Iterates `activeTurnToolIds` and marks any `running` or `awaiting-approval` tool as `failed` with error `'Turn ended'` — **except** a native `preparing` card, which is **deleted** instead (`removePreparingTool`). The model was still composing that call's arguments, so no tool was ever invoked and "failed" would name an event that did not happen. Deleting also prunes the group it emptied and that group's turn segment, or an empty group renders as a stray bar.
 - Returns a fresh empty `activeTurnToolIds: new Set()`
-- Clears `isThinking`, `streamingText`, `currentGroupId`, `currentTurnId`, and resets `attentionState: 'ok'`
+- Clears `isThinking`, `currentGroupId`, `currentTurnId`, and resets `attentionState: 'ok'`
 - Returns `toolGroups` and `assistantTurns` too, because of that pruning — see the trap below
 
 **Always use this helper when adding a new turn-ending code path.** Don't manually clear these fields.

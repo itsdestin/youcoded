@@ -46,6 +46,22 @@ vi.mock('../src/renderer/state/chat-context', () => ({
 }));
 
 import { usePromptDetector } from '../src/renderer/hooks/usePromptDetector';
+import { DESKTOP_WINDOW_CAPABILITIES, REMOTE_SCREEN_CAPABILITIES, ANDROID_LOCAL_CAPABILITIES } from '../src/shared/capabilities';
+
+// A computer window reports a card to the host, which publishes it and every screen (this one included) draws it (one-core R5-4a). The tests
+// below pin WHEN the detector decides to show or dismiss, so the stand-in host here hands a report straight back as the drawing it would cause.
+const hostDraws = () => ({
+  capabilities: DESKTOP_WINDOW_CAPABILITIES,
+  session: {
+    reportPrompt: async (r: any) => {
+      mocks.dispatch(r.action === 'show'
+        ? { type: 'SHOW_PROMPT', sessionId: r.sessionId, promptId: r.promptId, title: r.title, description: r.description, buttons: r.buttons, defaultIndex: r.defaultIndex }
+        : { type: 'DISMISS_PROMPT', sessionId: r.sessionId, promptId: r.promptId });
+      return { ok: true };
+    },
+  },
+});
+beforeEach(() => { (window as any).claude = hostDraws(); });
 
 // A recognized setup prompt (title in SETUP_PROMPT_TITLES).
 const RESUME_MENU = `Resume Session
@@ -581,5 +597,33 @@ describe('usePromptDetector — re-issuing a card for an identical follow-up, gu
     mocks.screen.text = NEW_DIALOG;
     fireBuffer('s1');
     expect(dismissed()).toContain(`${first.promptId}~1`);
+  });
+});
+
+
+describe('usePromptDetector — where a card is drawn from (one-core R5-4a)', () => {
+  beforeEach(() => { vi.useFakeTimers(); mocks.dispatch.mockClear(); mocks.callbacks.length = 0; mocks.screen.text = RESUME_MENU; mocks.sessions.clear(); });
+  afterEach(() => { vi.useRealTimers(); });
+  const seeMenu = () => { renderHook(() => usePromptDetector()); fireBuffer('s1'); act(() => { vi.advanceTimersByTime(400); }); };
+
+  it('a computer window REPORTS the card to the host and does not draw one of its own', () => {
+    const report = vi.fn(async () => ({ ok: true }));
+    (window as any).claude = { capabilities: DESKTOP_WINDOW_CAPABILITIES, session: { reportPrompt: report } };
+    seeMenu();
+    expect(report).toHaveBeenCalledTimes(1);
+    expect((report.mock.calls[0] as any[])[0]).toMatchObject({ sessionId: 's1', action: 'show', title: 'Resume Session' });
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+  });
+  it('a phone, which has no terminal screen to read, neither reports nor draws a card of its own', () => {
+    const report = vi.fn(async () => ({ ok: true }));
+    (window as any).claude = { capabilities: REMOTE_SCREEN_CAPABILITIES, session: { reportPrompt: report } };
+    seeMenu();
+    expect(report).not.toHaveBeenCalled();
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+  });
+  it('the Android app\'s own runtime, which has no host record, still draws the card itself', () => {
+    (window as any).claude = { capabilities: ANDROID_LOCAL_CAPABILITIES };
+    seeMenu();
+    expect(mocks.dispatch.mock.calls.some((c) => c[0].type === 'SHOW_PROMPT')).toBe(true);
   });
 });

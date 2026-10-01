@@ -31,7 +31,7 @@ import { buildSessionCreateArgs } from '../shared/session-create-args';
 import GamePanel from './components/game/GamePanel';
 import TerminalRightSlot from './components/TerminalRightSlot';
 import { ChatProvider, useChatDispatch, useChatStore, useSessionIsThinking } from './state/chat-context';
-import { installTranscriptBatcher, flushTranscriptActions, routeTranscriptEvent, routeTranscriptShrink } from './state/transcript-batch';
+import { installTranscriptBatcher, flushTranscriptActions, routeTranscriptEvent, routeTranscriptShrink, routeSessionLive } from './state/transcript-batch';
 import {
   remotePlaceHost, remotePlaceStorages, readRemotePlace, writeRemotePlace,
   choosePlaceOnHydrate, chooseAfterDestroyed,
@@ -108,7 +108,6 @@ import { setGlobalShortcutsBlocked } from './utils/shortcut-gate';
 
 import type { SkillEntry, PermissionMode, AttentionState, CommandEntry, SessionProvider, PastSession } from '../shared/types';
 import type { NativePermissionMode } from '../shared/permission-types';
-import { detectPermissionMode, syncKeyedSubscriptions, clearKeyedSubscriptions } from './state/permission-mode-scan';
 import { RESUMING_NATIVE, RESUMING_CLAUDE } from '../shared/session-title';
 import { createFirstPageLoader, type FirstPageLoader, type PageHint } from './state/first-page-loader';
 
@@ -771,12 +770,12 @@ function AppInner() {
     return false;
   }, []);
 
-  const guardedPtySend = useCallback((sid: string, text: string): boolean => {
+  const guardedPtySend = useCallback((sid: string, text: string, notice?: 'model-switch'): boolean => {
     // Honest guard (M1): refuse before sending, so callers' `if (!guardedPtySend)`
     // bails actually fire for native/destroyed sessions and skip optimistic writes.
     if (!canPtySend(sessionsRef.current.find((x) => x.id === sid), chatStateMapRef.current.get(sid))) return false;
     if (notifyIfPtyBlocked(sid)) return false;
-    window.claude.session.sendInput(sid, text);
+    window.claude.session.sendInput(sid, text, notice);
     return true;
   }, [notifyIfPtyBlocked]);
 
@@ -900,6 +899,9 @@ function AppInner() {
   // compaction is pending); AppInner no longer re-renders per dispatch to run
   // it. The pre-existing no-clear-timers-on-unmount behavior is preserved.
   useEffect(() => {
+    // A host with a record owns this watchdog (main/session-live.ts ends a compaction that went quiet and every screen draws that);
+    // only the Android app's own runtime, which has no such record, still watches here (one-core R5-4a).
+    if (getCapabilities().sessionRecord) return;
     const check = () => {
       const map = chatStore.getState();
       // Perf: this runs on every reducer dispatch. Steady state (no compaction
@@ -1485,6 +1487,21 @@ function AppInner() {
       routeTranscriptShrink(payload, transcriptRouteDeps);
     });
 
+    // One-core R5-4a: the shared lines and live facts from the computer's record: the queue of waiting messages, the model label, the
+    // model-switch and "Conversation cleared" dividers, the compaction spinner and prompt cards. Every screen draws them from here and none
+    // infers them (a host with no record, the Android app's own runtime, keeps inferring: capabilities.sessionRecord).
+    const liveOff = window.claude.on.sessionLive?.((live) => {
+      if (!live?.sessionId) return;
+      routeSessionLive(live, { batcher: transcriptBatcher, contextTokens: (sid: string) => statusData.sessionStatsMap[sid]?.contextTokens ?? null });
+      if (live.kind !== 'model') return;
+      // The chip and the session's own record of its model (the All Sessions menu labels from it). A native session holds the model id itself.
+      const native = sessionsRef.current.find((x) => x.id === live.sessionId)?.provider === 'native';
+      const alias = native ? live.model : matchModelAlias(live.model);
+      if (alias === 'unknown') return;
+      if (!native) setSessionModels((prev) => (prev.get(live.sessionId) === alias ? prev : new Map(prev).set(live.sessionId, alias as ModelAlias)));
+      setSessions((prev) => prev.map((x) => (x.id === live.sessionId && x.model !== alias ? { ...x, model: alias } : x)));
+    });
+
     const renamedHandler = window.claude.on.sessionRenamed((sid, name) => {
       setSessions((prev) =>
         prev.map((s) => (s.id === sid ? { ...s, name } : s)),
@@ -1637,7 +1654,7 @@ function AppInner() {
     // raw PTY bytes — ManagedSession.detectPermissionMode broadcasts this
     // event from its 1Hz screen poll instead.
     const sessionPermissionModeHandler = (window.claude.on as any).sessionPermissionMode?.((sid: string, mode: string) => {
-      const valid: PermissionMode[] = ['normal', 'auto-accept', 'plan', 'bypass'];
+      const valid: PermissionMode[] = ['normal', 'auto-accept', 'plan', 'auto', 'bypass'];
       if (!valid.includes(mode as PermissionMode)) return;
       setPermissionModes((prev) => {
         if (prev.get(sid) === mode) return prev;
@@ -1739,6 +1756,7 @@ function AppInner() {
       window.claude.off('status:data', statusHandler);
       if (transcriptHandler) window.claude.off('transcript:event', transcriptHandler);
       if (shrinkHandler) window.claude.off('transcript:shrink', shrinkHandler);
+      liveOff?.();
       if (uiActionHandler) window.claude.off('ui:action:received', uiActionHandler);
       if (promptShowHandler) window.claude.off('prompt:show', promptShowHandler);
       if (promptDismissHandler) window.claude.off('prompt:dismiss', promptDismissHandler);
@@ -1754,42 +1772,8 @@ function AppInner() {
     };
   }, [dispatch]);
 
-  // Desktop permission-mode detection, scoped per-session. Watches for Claude
-  // Code's in-terminal mode indicator strings ("bypass permissions on", etc.)
-  // and updates the HeaderBar badge. Previously a single global pty:output
-  // listener handled this, forcing every PTY chunk to be dual-broadcast.
-  // Subscribing per-session halves steady-state IPC traffic.
-  //
-  // Android doesn't forward raw PTY bytes — it emits 'session:permission-mode'
-  // instead (handled in the big effect above), so this effect is effectively
-  // desktop-only. On Android the ptyOutputForSession call is still safe but
-  // will never deliver data matching the mode strings.
-  //
-  // Perf (2026-09-23): subscriptions are kept per session id in a ref and
-  // DIFFED when the list changes (only added/removed sessions touch IPC), and
-  // each chunk is ruled out by one case-insensitive regex before any
-  // lower-cased copy is made — see state/permission-mode-scan.ts.
-  const permissionModeSubsRef = useRef<Map<string, () => void>>(new Map());
-  useEffect(() => {
-    const claudeOn = (window.claude.on as any);
-    if (typeof claudeOn.ptyOutputForSession !== 'function') return;
-    syncKeyedSubscriptions(permissionModeSubsRef.current, sessions.map((s) => s.id), (sid) =>
-      claudeOn.ptyOutputForSession(sid, (data: string) => {
-        const mode = detectPermissionMode(data);
-        if (mode) {
-          setPermissionModes((prev) => {
-            if (prev.get(sid) === mode) return prev;
-            return new Map(prev).set(sid, mode);
-          });
-        }
-      }));
-  }, [sessions]);
-  // Unmount only: drop every remaining per-session listener. Kept separate so
-  // a session-list change never tears down the listeners of sessions that stay.
-  useEffect(() => {
-    const subs = permissionModeSubsRef.current;
-    return () => clearKeyedSubscriptions(subs);
-  }, []);
+  // The permission mode of a Claude Code session is read off its terminal ONCE, in the computer's main process, and pushed to every screen
+  // (`session:permission-mode`, handled above); each screen used to scan its own copy of every session's terminal bytes here (one-core R5-4a).
 
   // Fetch session list on mount — catches sessions that existed before event handlers were registered
   // (e.g., remote browser reconnecting after the replay buffer events already fired, or a renderer
@@ -2244,7 +2228,7 @@ function AppInner() {
   // cycling and the typed `/model <alias>` chat command both route through
   // this so the guarded PTY send, the optimistic pill update, and the
   // drift-verification handshake below stay in exactly ONE place.
-  const switchSessionModel = useCallback((sid: string, target: ModelAlias): 'sent' | 'blocked' | 'ineligible' => {
+  const switchSessionModel = useCallback((sid: string, target: ModelAlias, typed = false): 'sent' | 'blocked' | 'ineligible' => {
     // Native/shell sessions can't cycle CC aliases — see supportsAliasCycling
     // for the failure this prevents (a chip relabeled to a model the session
     // isn't running, plus a stray write to the global model preference).
@@ -2252,7 +2236,9 @@ function AppInner() {
     // Send first, guarded: while a prompt is pending, "/model …\r" would land
     // on CC's live Ink menu and answer it. Refusing BEFORE the optimistic
     // state writes also keeps the model pill truthful when nothing was sent.
-    if (!guardedPtySend(sid, `/model ${target}\r`)) return 'blocked';
+    // `typed`: a /model command typed in the chat (not the picker or Shift+Space, which write the same bytes) tells the computer so, and the
+    // computer draws its "Model switched to ..." divider on every screen (one-core R5-4a).
+    if (!guardedPtySend(sid, `/model ${target}\r`, typed ? 'model-switch' : undefined)) return 'blocked';
     rememberSessionModel(sid, target);
     setPendingModel(target);
     // Fix: don't verify against in-flight events from the current turn —
@@ -2282,7 +2268,7 @@ function AppInner() {
   // is Claude-Code-local and produces no turn to end the "thinking" spinner).
   const handleModelSwitchCommand = useCallback((alias: ModelAlias): 'sent' | 'blocked' | 'ineligible' => {
     if (!sessionId) return 'ineligible';
-    return switchSessionModel(sessionId, alias);
+    return switchSessionModel(sessionId, alias, true);
   }, [sessionId, switchSessionModel]);
 
   useEffect(() => {

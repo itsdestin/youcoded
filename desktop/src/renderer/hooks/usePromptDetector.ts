@@ -1,10 +1,12 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { parseInkSelect, menuToButtons, readStartupDialog, type ParsedMenu } from '../parser/ink-select-parser';
 import { setUnreadableStartupDialog } from '../state/startup-dialog-store';
 import { useChatDispatch, useChatStore } from '../state/chat-context';
 import { getVisibleScreenText, onBufferReady } from './terminal-registry';
 import { parsePlanMenu } from '../parser/plan-menu-parser';
 import { expiredToolIds, nextAbsentCount } from '../state/expired-card-resolver';
+import { getCapabilities } from '../platform';
+import type { ChatAction } from '../state/chat-types';
 
 // How long to wait before showing a parser-detected prompt, giving the hook
 // system time to deliver a PermissionRequest via the named pipe relay.
@@ -88,7 +90,27 @@ const REISSUE_MS = 1000;
  * the PromptCard is shown as a fallback.
  */
 export function usePromptDetector(options: PromptDetectorOptions = {}) {
-  const dispatch = useChatDispatch();
+  const chatDispatch = useChatDispatch();
+  // WHERE A CARD IS DRAWN FROM (one-core R5-4a). A card for a question Claude Code asks in its terminal used to be drawn by each screen's own scan
+  // of its own copy of the terminal, so a card could land at a different place on a phone and the computer, or exist on one only. Now the computer's
+  // window that reads the terminal REPORTS the card and the computer publishes it once, as a numbered event every screen (that window included)
+  // draws (hooks/useSessionLive via App); a phone, which has no terminal screen to read, draws the computer's card and never its own. Only a host
+  // with no such record (the Android app's own runtime) still draws from here.
+  // Stable: the buffer listener below is re-created whenever this changes.
+  const dispatch = useCallback((action: ChatAction): void => {
+    const caps = getCapabilities();
+    if (!caps.sessionRecord) { chatDispatch(action); return; }
+    if (!caps.terminalScreenRead) return;
+    const report = (window as any).claude?.session?.reportPrompt;
+    if (typeof report !== 'function') return;
+    if (action.type === 'SHOW_PROMPT') {
+      void report({ sessionId: action.sessionId, action: 'show', promptId: action.promptId, title: action.title,
+        ...(action.description !== undefined ? { description: action.description } : {}),
+        buttons: action.buttons, ...(action.defaultIndex !== undefined ? { defaultIndex: action.defaultIndex } : {}) }).catch(() => {});
+    } else if (action.type === 'DISMISS_PROMPT') {
+      void report({ sessionId: action.sessionId, action: 'dismiss', promptId: action.promptId }).catch(() => {});
+    } else chatDispatch(action); // PERMISSION_CARD_RESOLVED and the like stay this screen's own
+  }, [chatDispatch]);
   const store = useChatStore();
   // Latest options without re-subscribing the buffer listener on every render.
   const optionsRef = useRef(options);
