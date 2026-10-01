@@ -494,7 +494,7 @@ const NAMESPACES = [
 ];
 
 import { createNamingPreview } from './naming-preview';
-import { seedPages } from './fixtures/pages';
+import { seedPages, homeDesignPages } from './fixtures/pages';
 import { fakeHomeAssistantFetch } from './fixtures/fake-home-assistant';
 import type { PagesBridge, PageDocument, PageSummary, SavedPageKey } from '../../../shared/pages-types';
 
@@ -3691,6 +3691,7 @@ function createPagesMock(empty: boolean): PagesBridge {
   if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('pagesHome') === 'refused') {
     pages = pages.map((p) => (p.id !== 'page-home' ? p : { ...p, connections: (p.connections ?? []).map((c) => (c.kind === 'device' ? { ...c, address: 'my-home.example.com' } : c)) }));
   }
+  if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('pagesHome') === 'designs') pages = [...pages, ...homeDesignPages()];
   if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('pagesHome') === 'connected') {
     pages = pages.map((p) => (p.id !== 'page-home' ? p : {
       ...p,

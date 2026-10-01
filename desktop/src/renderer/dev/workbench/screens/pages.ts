@@ -22,6 +22,10 @@ export const PAGES: readonly ScreenEntry[] = [
   { ...pg('pages/page/page-home#key', 'view', 'approval'), params: { pagesStep: 'keys' } },
   { ...pg('pages/page/page-home#refused', 'view', 'approval', 'error-state'), params: { pagesHome: 'refused' } },
   { ...pg('pages/page/page-home#connected', 'view'), params: { pagesHome: 'connected' } },
+  // Light-controls choice deck: one design each.
+  { ...pg('pages/page/page-home-tile', 'view'), params: { pagesHome: 'designs' } },
+  { ...pg('pages/page/page-home-power', 'view'), params: { pagesHome: 'designs' } },
+  { ...pg('pages/page/page-home-slider', 'view'), params: { pagesHome: 'designs' } },
   pg('pages/page/page-analytics', 'view', 'approval'),
   pg('pages/page/page-trip-board', 'view', 'approval', 'error-state'),
   pg('pages/library', 'view'),

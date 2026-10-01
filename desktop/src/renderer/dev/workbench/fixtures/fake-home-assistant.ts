@@ -10,21 +10,22 @@ interface Thing {
   brightness?: number | null; modes?: string[] | null;
   cur?: number | null; target?: number | null; min?: number; max?: number; step?: number;
   vol?: number | null; title?: string | null; features?: number;
+  rgb?: number[] | null; k?: number | null;
 }
 
 function seed(): Array<{ id: string; name: string; items: Thing[] }> {
   const dim = ['brightness'];
   return [
     { id: 'destins_room', name: "Destin's Room", items: [
-      { id: 'light.overhead_light', name: 'Overhead light', state: 'on', brightness: 255, modes: dim },
-      { id: 'light.desk_backlight', name: 'Desk backlight', state: 'on', brightness: 102, modes: dim },
-      { id: 'light.hue_play_1', name: 'Hue Play 1', state: 'off', brightness: null, modes: ['color_temp', 'xy'] },
+      { id: 'light.overhead_light', name: 'Overhead light', state: 'on', brightness: 255, modes: ['color_temp'], k: 3000 },
+      { id: 'light.desk_backlight', name: 'Desk backlight', state: 'on', brightness: 102, modes: ['color_temp', 'xy'], rgb: [50, 110, 255] },
+      { id: 'light.hue_play_1', name: 'Hue Play 1', state: 'on', brightness: 200, modes: ['color_temp', 'xy'], rgb: [150, 80, 255] },
       { id: 'light.tv_backlight', name: 'TV backlight', state: 'unavailable', modes: dim },
       { id: 'media_player.destins_room_tv', name: "Destin's Samsung TV", state: 'off', features: 4, vol: 0.2 },
       { id: 'media_player.destins_room', name: "Destin's Room speaker", state: 'playing', features: 4, vol: 0.35, title: 'Weightless — Marconi Union' },
     ] },
     { id: 'living_room', name: 'Living Room', items: [
-      { id: 'light.living_room_lamp', name: 'Floor lamp', state: 'on', brightness: 180, modes: dim },
+      { id: 'light.living_room_lamp', name: 'Floor lamp', state: 'on', brightness: 180, modes: ['color_temp'], k: 2700 },
       { id: 'light.living_room_ceiling', name: 'Ceiling', state: 'off', brightness: null, modes: dim },
       { id: 'camera.living_room_camera', name: 'Living room camera', state: 'idle' },
     ] },
@@ -89,6 +90,8 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
         if (typeof data.brightness_pct === 'number') t.brightness = Math.round(data.brightness_pct * 2.55);
         else if (id.startsWith('light.') && !t.brightness) t.brightness = 255;
       }
+      if (action === 'turn_on' && Array.isArray(data.rgb_color)) { t.rgb = data.rgb_color as number[]; t.k = null; }
+      if (action === 'turn_on' && typeof data.color_temp_kelvin === 'number') { t.k = data.color_temp_kelvin; t.rgb = null; }
       if (action === 'volume_set' && typeof data.volume_level === 'number') t.vol = data.volume_level;
       if (action === 'set_temperature' && typeof data.temperature === 'number') t.target = data.temperature;
     }

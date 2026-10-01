@@ -189,11 +189,13 @@ function KeyHelp({ c }: { c: KeyedLine }) {
   // Home-device deck, S-key-and-control: a device that names where its keys
   // are made gets a button straight there, on the address the person allowed,
   // so nobody has to find a settings screen inside Home Assistant by hand.
+  // Full width (screens review, S-key: "make the open home assistant button
+  // full width"), matching the stacked buttons below it.
   const openOnDevice = c.kind === 'device' && c.keyPage ? (
     <div>
       <Button
         variant="secondary"
-        size="sm"
+        className="w-full"
         data-open-key-page
         onClick={() => { void window.claude.shell.openExternal(`http://${c.address}${c.keyPage}`); }}
       >

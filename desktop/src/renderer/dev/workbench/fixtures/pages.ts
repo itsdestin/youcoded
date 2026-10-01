@@ -14,7 +14,7 @@
 // and redo — because the samples are what sets the expectation for the
 // creator skill.
 import type { PageDocument } from '../../../../shared/pages-types';
-import { HOME_ASSISTANT_PAGE_HTML, HOME_ASSISTANT_PAGE_JSON } from './home-assistant-page';
+import { HOME_ASSISTANT_PAGE_HTML, HOME_ASSISTANT_PAGE_JSON, homeAssistantPageHtml, type LightDesign } from './home-assistant-page';
 
 const T = '2026-09-14T18:20:00.000Z';
 
@@ -451,6 +451,22 @@ function connectedPages(): PageDocument[] {
       codeChanged: true,
     },
   ];
+}
+
+/** Light-controls choice deck (2026-10-01): the Home page in each candidate
+ *  design, already connected, with two lights' colour palettes open. Only
+ *  under `?pagesHome=designs`, so the ordinary library is unchanged. */
+export function homeDesignPages(): PageDocument[] {
+  const designs: Array<[LightDesign, string]> = [['tile', 'Home · tiles'], ['power', 'Home · power buttons'], ['slider', 'Home · big sliders']];
+  return designs.map(([design, name]) => ({
+    id: `page-home-${design}`, name, icon: 'page', home: { kind: 'personal' }, pinned: false,
+    description: HOME_ASSISTANT_PAGE_JSON.description,
+    updatedAt: '2026-10-01T08:00:00.000Z', htmlStamp: 1790841600000,
+    html: homeAssistantPageHtml(design),
+    data: { expanded: ['light.desk_backlight', 'light.hue_play_1'] },
+    connections: [{ ...(HOME_ASSISTANT_PAGE_JSON.connections[0] as { id: string; service: string; keyPage: string; keyHelp: { steps: string[] } }), kind: 'device', address: '100.99.234.114:8123', access: 'full', needsKey: true, approved: true, savedKey: true }],
+    refresh: { at: new Date().toISOString(), failed: false },
+  }));
 }
 
 export function seedPages(): PageDocument[] {
