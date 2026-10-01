@@ -407,253 +407,6 @@ export interface PromptProcessing { promptTokens: number; budgetMs: number; sour
 
 export interface ToolPreparing { toolCallId: string; toolName: string; chars: number; cleared?: boolean }
 
-export interface TranscriptEvent {
-  type: TranscriptEventType;
-  sessionId: string; // desktop session ID
-  /** The JSONL line's uuid — used for deduplication */
-  uuid: string;
-  timestamp: number;
-  data: {
-    text?: string;
-    /** session-error only: which known failure `text` is (e.g.
-     *  'openrouter-key-rejected'), so the chat's error card can offer the one
-     *  action that fixes it. Optional — absent means "show the text as is". */
-    errorCode?: string;
-    /** user-message only: a slash command read from its command tags. The chat starts no turn for
-     *  it, because many commands get no reply (2026-09-11). */
-    slashCommand?: boolean;
-    toolUseId?: string;
-    toolName?: string;
-    toolInput?: Record<string, unknown>;
-    toolResult?: string;
-    isError?: boolean;
-    stopReason?: string;
-    /** Edit/MultiEdit tool-result payloads carry structuredPatch hunks. */
-    structuredPatch?: StructuredPatchHunk[];
-    /** Claude Code tool-result only: this call started work that keeps going
-     *  in the background (an Agent's `agentId`, or a Bash command's
-     *  `backgroundTaskId`), so the result is a launch receipt, not the outcome.
-     *  The outcome arrives later as a 'background-task' event. */
-    backgroundTaskId?: string;
-    /** Claude Code SendMessage tool-result only: the finished helper it resumed
-     *  (`toolUseResult.resumedAgentId`) — that helper's card works again. */
-    resumedTaskId?: string;
-    /** 'background-task' only: which task(s) ended and how. `taskIds` is a list
-     *  because Claude Code reports several orphaned commands in one notice on
-     *  resume. `result` is a helper's final report; `summary` is Claude Code's
-     *  one-line description ("Agent \"X\" finished", "... (exit code 0)"). */
-    backgroundTask?: BackgroundTaskEnd;
-    /** Native user-message events: absolute composer attachment paths, persisted so
-     *  resume can re-read the pixels (events carry no binary). #290 follow-up fix 2. */
-    attachments?: string[];
-    /** Native tool-result events: absolute paths of images the tool delivered
-     *  (Read on an image). Resume re-reads them; the UI may render a chip. */
-    images?: string[];
-    /** Claude Code tool-result events only: the JSONL line's OWN timestamp
-     *  (epoch ms), 0 when the line has none. `timestamp` above is stamped at
-     *  PARSE time, which is "now" for a whole transcript read from offset 0 on
-     *  resume — so it cannot tell replayed history from a live result. The
-     *  Deliverables auto-open rule (deliverable-auto-open.ts) reads this; native
-     *  events keep their original `timestamp` through replay and need no field. */
-    recordedAt?: number;
-    /** Byte offset of this JSONL line's start in the transcript file, stamped by
-     *  the paged-history reader (transcript-page.ts) on user-message events.
-     *  The seed for a future eviction cursor (cycle 3); unused today. Absent on
-     *  live-tailer events, which never know their own offset. */
-    offset?: number;
-    // Task 1.1: widened turn-complete payload so the reducer can attach the
-    // per-turn model, token/cache usage, and the Anthropic requestId to the
-    // completing AssistantTurn for UI surfacing. All optional — the field is
-    // shared across event types. Writers: turn-complete (the turn's requests)
-    // and, since 2026-09-10, a native compact-summary (the summary call's OWN
-    // bill, which is a separate request and used to vanish from every total).
-    /** Native runtime only — `compact-summary` and `context-clear`: tokens
-     *  OCCUPYING the window once that history rewrite has landed, and (compaction
-     *  only) what it occupied just before.
-     *
-     *  WHY they exist as their OWN fields rather than inside `usage` above: that
-     *  `usage` block is the summarize REQUEST's bill, a different measurement
-     *  entirely, and `usage.contextUsedTokens` on a turn-complete is a MEASURED
-     *  prompt count. These two are the measured count re-based by the estimated
-     *  size of what the rewrite removed (harness-session.ts →
-     *  reprojectContextUsed), because a rewrite outside a turn never gets a fresh
-     *  reading from the provider. Keeping them separate stops a reader treating
-     *  an estimate-adjusted figure as a measurement.
-     *
-     *  Consumers: the status bar's native context gauge re-bases on
-     *  `contextUsedAfter` (the chip otherwise showed the PRE-compaction window
-     *  until the next message), and the compaction marker subtracts the pair to
-     *  say how much was actually freed. `contextUsedBefore` is absent when the
-     *  session had never measured a window at all. */
-    contextUsedAfter?: number;
-    contextUsedBefore?: number;
-    /** Model ID used for the completing turn (e.g. "claude-opus-4-7"). */
-    model?: string;
-    /** Anthropic API request id from the JSONL line's top-level `requestId`. */
-    anthropicRequestId?: string;
-    /** Token + cache usage snapshot from message.usage. */
-    usage?: TranscriptUsage;
-    /**
-     * Populated only on events emitted from a subagent JSONL — identifies
-     * the parent Agent tool_use that this subagent's work threads into.
-     */
-    parentAgentToolUseId?: string;
-    /**
-     * Task 4 (native specialists, background execution) — marks a `user-message`
-     * event as a SYNTHETIC turn the host injected (a background specialist's
-     * finished report, or its typed failure notice), not something the user
-     * actually typed. Data-field extension, not a new TranscriptEventType — the
-     * frozen emit surface stays frozen.
-     *
-     * CONSUMED by the renderer since 2026-08-16: App.tsx/BubbleFeed.tsx forward
-     * it onto TRANSCRIPT_USER_MESSAGE, the reducer stamps it on the timeline
-     * entry, and ChatView/BubbleFeed draw such an entry as a compact
-     * SpecialistReportCard (a collapsed "task finished" row, tool-card style)
-     * instead of a user bubble — the text is what the PARENT MODEL reads, and
-     * showing it as the user's own words, or even as a big notice, put text in
-     * the chat nobody actually said (Destin, 1b hands-on).
-     * Values today: 'specialist-report' (a background helper's report),
-     * 'shell-running' (a background command still going at a 5/15-minute
-     * mark — a plain note, never a card) and
-     * 'shell-complete' (G-1: a background command finished or was stopped by
-     * the user); a plain `string` (not a union) so a future injected kind never
-     * needs a TranscriptEvent schema change.
-     */
-    injected?: string;
-    /**
-     * Structured companion to `injected: 'specialist-report'` (2026-08-16):
-     * who finished, what they were asked, how it ended — so the card header
-     * is exact rather than parsed back out of the prose the model reads.
-     * `parentToolCallId` names the Task card that started this child.
-     */
-    injectedMeta?: InjectedMeta;
-    /** Stable subagent ID — matches the filename agent-<agentId>.jsonl on disk. */
-    agentId?: string;
-    /** Streaming-part id used to merge reasoning chunks; emitted by the native harness, not CC's watcher. */
-    partId?: string;
-    /**
-     * Native runtime only. Set on an `assistant-thinking` heartbeat when the
-     * streaming watchdog has seen NO chunk for STALL_WARNING_MS. Drives the
-     * ThinkingIndicator's "taking a while… retrying" countdown. `willRetry` =
-     * the harness will auto-retry the step when the countdown ends (nothing had
-     * streamed yet, first attempt). false ends the countdown one of two ways:
-     * on Clock 1 alone (nothing ever streamed, first attempt) with a
-     * session-error; on Clock 2 (something already streamed) or a turn that
-     * has already parked once, the turn PARKS instead — see `stalled` below.
-     * A heartbeat WITHOUT this field means activity resumed and clears the
-     * warning.
-     */
-    stallWarning?: StallWarning;
-    /** Native root-turn measured, cumulative usage after a completed request.
-     *  Payload-less assistant-thinking only: transient, never a transcript line.
-     *  Unlike turn-complete, contextUsedTokens is absent without a measured prompt. */
-    usageProgress?: TranscriptUsage;
-    /**
-     * Native runtime only. The mid-stream watchdog gave up waiting and the turn
-     * is now PARKED: the stream reader is still open, nothing has been torn
-     * down, and the turn ends only when a chunk arrives or the user presses
-     * Retry / Stop. Display-only (no text, no partId) so SessionStore drops it.
-     *
-     * Deliberately a bare `true` and not a timestamp: the renderer stamps its
-     * own clock on first receipt, so a remote client counting up never inherits
-     * clock skew from the host.
-     */
-    stalled?: true;
-    /**
-     * Native runtime only. Discard these streaming parts — the attempt that
-     * wrote them is being abandoned by a manual Retry, and the re-run would
-     * otherwise APPEND to the same bubble (the SDK's part id falls back to the
-     * literal 'text-0', so a repeat is the likely case, not a corner case).
-     * This is why the automatic retry has always refused to run after content
-     * streamed; the manual one is allowed to, because it erases first.
-     * Display-only (no text, no partId) — never persisted.
-     */
-    dropPart?: { partIds: string[] };
-    /**
-     * Native runtime only. Emitted on `assistant-thinking` the moment a step's
-     * stream opens, BEFORE any token arrives, so the UI can say the model is
-     * reading the prompt rather than showing an idle spinner. Local models take
-     * minutes to prefill a long prompt and there is otherwise nothing to tell
-     * that apart from a hang — which is what made the 75s stall watchdog's false
-     * alarm so alarming (2026-07-26). `budgetMs` is how long prefill is allowed
-     * to take before the watchdog treats the silence as a real stall.
-     */
-    promptProcessing?: PromptProcessing;
-    /**
-     * Native runtime only. The model is GENERATING a tool call's arguments —
-     * nothing has executed yet. This is what makes a "preparing" ToolCard
-     * appear instead of minutes of bare thinking spinner on a big Write.
-     *
-     * Rides `assistant-thinking` with NO text and NO partId so
-     * SessionStore.append drops it (session-store.ts): partial arguments must
-     * never reach the JSONL, or a resume would replay a half-written file.
-     *
-     * `toolCallId` is the provider's REAL id — identical to the one the
-     * completed `tool-call` stream part carries — which is what lets the card
-     * transition in place instead of being swapped.
-     *
-     * `cleared: true` means "remove this preparing card": the stall auto-retry
-     * re-runs a step WITHOUT ending the turn, so its cards must be withdrawn
-     * explicitly (every other death path ends the turn, where endTurn reaps).
-     */
-    toolPreparing?: ToolPreparing;
-    /**
-     * Populated only on `user-interrupt` events. Distinguishes the two exact
-     * marker strings Claude Code writes: `[Request interrupted by user]`
-     * (plain) vs `[Request interrupted by user for tool use]` (tool-use).
-     */
-    kind?: 'plain' | 'tool-use';
-    /**
-     * Populated on `compact-summary` events. The full text of the compaction
-     * summary CC wrote into the JSONL — pre-stripped of system tags. The
-     * reducer attaches it to the SystemMarker so the user can click-to-expand
-     * the otherwise-thin "Compacted" divider.
-     */
-    summary?: string;
-    /**
-     * Native runtime only: set on a `compact-summary` emitted by the harness's
-     * SPONTANEOUS two-stage compaction (spec §4.4). CC's transcript-watcher
-     * compact-summary events never carry it. The renderer renders the marker for
-     * an auto-compaction without the manual-/compact `compactionPending` flag —
-     * without it a native auto-compaction would replace ~all history and show
-     * NOTHING. Kept off CC's path so manual /compact and resume-from-summary are
-     * unchanged.
-     */
-    autoCompaction?: boolean;
-    /** Native compact-summary only: the user-message event opening the kept
-     *  tail's turn (null = unknown). Its PRESENCE tells the renderer this
-     *  compaction kept a tail, so only entries above that message dim. */
-    retainedFromUuid?: string | null;
-    /** Persisted coalesced-part UUID/range witness; no duplicate text or private metadata. */
-    deltaReferences?: DeltaRef[];
-    /** Native compact-summary portable checkpoint; references cite persisted parts. */
-    compactionRecord?: CompactionRecord;
-    /** `skill-invoked` only (M3 item 1). `skillId` is the resolved, qualified id
-     *  (wecoded-themes-plugin:theme-builder); `body` is the SKILL.md text that
-     *  enters model history on rebuild and is deliberately NOT rendered;
-     *  `skillPath` lets the card open the real file in the artifact viewer. */
-    skillId?: string;
-    displayName?: string;
-    args?: string;
-    body?: string;
-    skillPath?: string;
-    /**
-     * `replay-complete` only. Whether main could AFFIRM the session has no work
-     * in flight, which is what gates the reducer's orphan reap — the same replay
-     * fires when a window re-docks a genuinely mid-turn session, where the
-     * running tool is real and must not be failed. Only NativeSessionHost can
-     * answer (`entry.inFlight`); CC sessions report false.
-     *
-     * DECLARED, not just commented, because producer (ipc-handlers.ts) and
-     * consumer (App.tsx, BubbleFeed.tsx) are otherwise linked by nothing but a
-     * matching string literal through an `any`-typed `evt.sender.send`. A typo
-     * on either side reads undefined → false, silently disabling the reap with
-     * the whole suite still green (found reviewing PR #287, 2026-08-10).
-     */
-    sessionIdle?: boolean;
-  };
-}
-
 // --- Transcript event payloads, one shape per event type (M5, one-core R4-4) ---
 //
 // WHY a union keyed on `type` instead of one bag of optional fields: the old
@@ -919,10 +672,10 @@ export interface TranscriptDataMap {
 export type DataOf<T extends TranscriptEventType> = TranscriptDataMap[T];
 
 /** The whole event for type `T`, for helpers that handle one kind. */
-export type EventOf<T extends TranscriptEventType> = Extract<TypedTranscriptEvent, { type: T }>;
+export type EventOf<T extends TranscriptEventType> = Extract<TranscriptEvent, { type: T }>;
 
 /** Every event type as its own `{type, data}` member, so `switch (event.type)` narrows `data`. */
-export type TypedTranscriptEvent = {
+export type TranscriptEvent = {
   [K in TranscriptEventType]: {
     type: K;
     sessionId: string; // desktop session ID
@@ -932,6 +685,22 @@ export type TypedTranscriptEvent = {
     data: TranscriptDataMap[K];
   };
 }[TranscriptEventType];
+
+/** The event types a specialist's own JSONL can produce, i.e. the ones that carry
+ *  the SubagentStamp. Excludes the types only the host/main mints at the top
+ *  level (replay-complete, session-error, context-clear, skill-invoked,
+ *  subagent-usage), which is how a stamped one of THOSE becomes a type error. */
+export type StampableEventType = Exclude<TranscriptEventType,
+  'replay-complete' | 'session-error' | 'context-clear' | 'skill-invoked' | 'subagent-usage'>;
+export type StampableEvent = EventOf<StampableEventType>;
+
+/** Tag a specialist's event with the Agent call that started it (and which
+ *  specialist spoke), as a COPY — the original is never mutated. ONE place for
+ *  the stamp so SubagentWatcher (Claude Code) and NativeSessionHost's
+ *  mergeChildEvents/wireChildLive (native) cannot drift apart. */
+export function stampSubagent<E extends StampableEvent>(event: E, parentAgentToolUseId: string, agentId: string): E {
+  return { ...event, data: { ...event.data, parentAgentToolUseId, agentId } };
+}
 
 type UnionToIntersection<U> = (U extends unknown ? (x: U) => void : never) extends (x: infer I) => void ? I : never;
 
@@ -943,7 +712,7 @@ type UnionToIntersection<U> = (U extends unknown ? (x: U) => void : never) exten
 export type LooseTranscriptData = Partial<UnionToIntersection<TranscriptDataMap[TranscriptEventType]>>;
 
 /** Upcast a typed payload to the loose view. No cast: each member is a subtype. */
-export function looseData(event: Pick<TypedTranscriptEvent, 'data'>): LooseTranscriptData {
+export function looseData(event: Pick<TranscriptEvent, 'data'>): LooseTranscriptData {
   return event.data;
 }
 

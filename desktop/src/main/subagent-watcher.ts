@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { parseTranscriptLine } from './transcript-watcher';
 import { SubagentIndex, SubagentMeta } from './subagent-index';
-import { TranscriptEvent } from '../shared/types';
+import { TranscriptEvent, StampableEvent, stampSubagent } from '../shared/types';
 
 /** `agent-<id>.jsonl` — a helper's transcript (not its .meta.json). */
 function isAgentJsonl(name: string): boolean {
@@ -175,7 +175,10 @@ export class SubagentWatcher {
   flushPendingFor(agentId: string): void {
     const res = this.index.tryFlushPending(agentId);
     if (!res) return;
-    for (const ev of res.events as TranscriptEvent[]) {
+    // WHY the cast: SubagentIndex buffers events as opaque `unknown` (it only counts
+    // and orders them); the only thing that ever buffers into it is deliver() below,
+    // which is handed parseTranscriptLine's output, i.e. StampableEvents.
+    for (const ev of res.events as StampableEvent[]) {
       this.emitFn(this.stamp(ev, res.parentToolUseId, agentId));
     }
   }
@@ -564,7 +567,7 @@ export class SubagentWatcher {
   // Fix 1: consult index.lookup as the single source of truth for binding.
   // The old two-check pattern (state.bound + index.lookup) was fragile —
   // a stale state.bound=true after an unbind() would silently drop events.
-  private deliver(state: PerFileState, ev: TranscriptEvent): void {
+  private deliver(state: PerFileState, ev: StampableEvent): void {
     const parentToolUseId = this.index.lookup(state.agentId);
     if (parentToolUseId) {
       this.emitFn(this.stamp(ev, parentToolUseId, state.agentId));
@@ -582,7 +585,7 @@ export class SubagentWatcher {
     if (!this.index.lookup(state.agentId)) this.armPruneTimer();
   }
 
-  private stamp(ev: TranscriptEvent, parentAgentToolUseId: string, agentId: string): TranscriptEvent {
-    return { ...ev, data: { ...ev.data, parentAgentToolUseId, agentId } };
+  private stamp(ev: StampableEvent, parentAgentToolUseId: string, agentId: string): StampableEvent {
+    return stampSubagent(ev, parentAgentToolUseId, agentId);
   }
 }

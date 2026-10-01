@@ -16,7 +16,8 @@
 import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
 import * as path from 'path';
-import type { TranscriptEvent, NativeSendResult, NativeSwitchResult, NativeSwitchFailure, SpecialistsEvent, HookEvent, DelegatedModelsView, SpecialistRunView, ShellEvent, ShellRunView, InjectedMeta, SessionContext, SessionContextText } from '../../shared/types';
+import { stampSubagent } from '../../shared/types';
+import type { TranscriptEvent, EventOf, StampableEvent, NativeSendResult, NativeSwitchResult, NativeSwitchFailure, SpecialistsEvent, HookEvent, DelegatedModelsView, SpecialistRunView, ShellEvent, ShellRunView, InjectedMeta, SessionContext, SessionContextText } from '../../shared/types';
 import { ShellRegistry, formatFinishedNotice, formatLongRunningNotice, stateText, NOTICE_TAIL_LINES, type ShellRun } from './shell-registry';
 import type { ModelBinding } from '../../shared/provider-types';
 import { HarnessSession, type ModelFactory, type HarnessSessionOpts, type AcceptedHistorySnapshot } from './harness-session';
@@ -146,7 +147,7 @@ export const SUBAGENT_DISPLAY_TYPES = new Set<TranscriptEvent['type']>(['tool-us
  * stallWarning countdown, or a toolPreparing notice all fail this — none
  * carries data.text — and stay child-only.
  */
-function isSubagentDisplayEvent(e: TranscriptEvent): boolean {
+function isSubagentDisplayEvent(e: TranscriptEvent): e is StampableEvent {
   return SUBAGENT_DISPLAY_TYPES.has(e.type)
     || (e.type === 'assistant-thinking' && typeof e.data.text === 'string' && e.data.text.length > 0);
 }
@@ -206,11 +207,7 @@ export function mergeChildEvents(
     if (idx === -1) continue; // defensive skip — see the function's own WHY above
     const stamped = events
       .filter(isSubagentDisplayEvent)
-      .map((e) => ({
-        ...e,
-        sessionId: parentId,
-        data: { ...e.data, parentAgentToolUseId: record.parentToolCallId, agentId: record.childId },
-      } satisfies TranscriptEvent));
+      .map((e) => ({ ...stampSubagent(e, record.parentToolCallId, record.childId), sessionId: parentId }));
     merged.splice(idx + 1, 0, ...stamped);
   }
   return merged;
@@ -3083,7 +3080,7 @@ export class NativeSessionHost extends EventEmitter {
   /** The portable checkpoint is the compact-summary line itself. Return the RAW
    * append result to the harness; only the chain's copy swallows rejections. */
   private commitCompaction(sessionId: string, session: HarnessSession,
-    proposal: Parameters<NonNullable<HarnessSessionOpts['commitCompaction']>>[0]): Promise<TranscriptEvent> {
+    proposal: Parameters<NonNullable<HarnessSessionOpts['commitCompaction']>>[0]): Promise<EventOf<'compact-summary'>> {
     const entry = this.live.get(sessionId);
     if (!entry || entry.session !== session || entry.committing) return Promise.reject(new Error('stale-compaction'));
     const generation = entry.compactionGeneration;
@@ -3114,11 +3111,13 @@ export class NativeSessionHost extends EventEmitter {
       }
       const record = { v: 1 as const, generation: generation + 1,
         sourceRevision: proposal.sourceRevision, resumeFrom, coveredThrough };
-      const event: TranscriptEvent = {
+      // WHY no cast now (M5): `data` is typed as compact-summary's payload, so a
+      // mistyped compactionRecord field is a compile error instead of a silent cast.
+      const event: EventOf<'compact-summary'> = {
         ...proposal.event,
         data: { ...proposal.event.data, compactionRecord: {
           ...record, sourceDigest: compactionSourceDigest(sourceEvents, String(proposal.event.data.summary ?? ''), record),
-        } } as TranscriptEvent['data'],
+        } },
       };
       // Advance only for a candidate that actually reaches the append point.
       // A later candidate under this live entry gets a distinct generation.
@@ -3822,11 +3821,7 @@ export class NativeSessionHost extends EventEmitter {
       // The original is never mutated — the persisted event above and this copy
       // are two different objects on purpose.
       if (!isSubagentDisplayEvent(event)) return;
-      this.emit('transcript-event', {
-        ...event,
-        sessionId: parentId,
-        data: { ...event.data, parentAgentToolUseId: parentToolCallId, agentId: childId },
-      } satisfies TranscriptEvent);
+      this.emit('transcript-event', { ...stampSubagent(event, parentToolCallId, childId), sessionId: parentId });
     });
   }
 
