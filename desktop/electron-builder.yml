@@ -162,6 +162,10 @@ files:
   - hook-scripts/**/*
   - assets/**/*
   - package.json
+  # WHY: office-root.ts imports the pin (compiled to require('../../../office-pin.json'), which
+  # resolves to app.asar's root). Without it a packaged app could not start at all — the main
+  # process died on that require (first seen in the Linux CI smoke test, Task 9).
+  - office-pin.json
 # WHY a resource, not inside app.asar: x2t is a native program that must run from a real
 # folder, and the AGPL add-on stays a separate program beside the MIT app (contract R2).
 # WHY ${platform}-${arch} (Task 9): each installer needs its own platform's converter, and the

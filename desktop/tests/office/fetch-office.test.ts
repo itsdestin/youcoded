@@ -268,6 +268,10 @@ describe('the release build finds every platform\'s Office bundle', () => {
     expect(path.join(DESKTOP, from)).toBe(releaseDest(key));
   });
 
+  it('packs office-pin.json into the app, since the main process reads it at start', () => {
+    expect(CONFIG.files).toContain('office-pin.json');
+  });
+
   it('builds installers with fetch-office --release --required before packaging', () => {
     expect(pkg.scripts.build).toMatch(/^node scripts\/fetch-office\.mjs --release --required &&/);
   });
