@@ -240,8 +240,18 @@ const sessionEntries: MainChannelDef[] = [
   // A computer window reports a card it read off its terminal (one-core R5-4a). Computer windows only: a phone's terminal copy is not read for
   // cards (its screen draws the host's), so this adds no new thing a phone may do.
   defineChannel({
-    name: IPC.SESSION_PROMPT_REPORT, kind: 'handle', desktopOnly: true,
-    handler: (report) => ops().liveFacts?.reportPrompt(report) ?? { ok: false },
+    name: IPC.SESSION_PROMPT_REPORT, kind: 'handle',
+    handler: (report, ctx) => {
+      const o = ops();
+      if (ctx.door === 'desktop') return o.liveFacts?.reportPrompt(report) ?? { ok: false };
+      // A phone may report a card its OWN terminal copy shows (the computer may have no window reading the terminal), and nothing wider:
+      // only for a conversation it is watching, only a card of the parser's own shape (see cleanCard), never a "sync" that could take a
+      // card away. Without these a phone could put arbitrary buttons in front of the person at the computer.
+      const sid = typeof report?.sessionId === 'string' ? report.sessionId : '';
+      const watching = ctx.audienceId !== undefined && !!sid && !!o.windowRegistry?.getSocketWatchers(sid).includes(ctx.audienceId);
+      if (!watching) return { ok: false };
+      return o.liveFacts?.reportPrompt(report, { fromPhone: true }) ?? { ok: false };
+    },
   }),
   defineChannel({ name: IPC.SESSION_RESIZE, kind: 'on', handler: ({ sessionId, cols, rows }) => { ops().sessionManager.resizeSession(sessionId, cols, rows); } }),
   // The renderer says its terminal is mounted; main then releases the output it buffered. A phone needs no

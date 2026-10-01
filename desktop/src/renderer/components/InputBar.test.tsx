@@ -492,7 +492,7 @@ describe('InputBar — stop button (Task 10 placement)', () => {
     act(() => {
       capturedDispatch!({ type: 'SESSION_INIT', sessionId: 'sess-1' });
       capturedDispatch!({ type: 'USER_PROMPT', sessionId: 'sess-1', content: 'first action', timestamp: 1 });
-      capturedDispatch!({ type: 'QUEUED_MESSAGE_ADDED', sessionId: 'sess-1', queueId: 'q-1', content: 'follow up', timestamp: 2 });
+      capturedDispatch!({ type: 'QUEUE_SYNCED', sessionId: 'sess-1', queue: [{ queueId: 'q-1', content: 'follow up', timestamp: 2 }] });
     });
     const stop = screen.getByRole('button', { name: 'Stop generating' });
     expect(stop).toBeEnabled();
@@ -610,10 +610,7 @@ describe('InputBar — InputBarHandle hasDraft/fillDraft (Task 11)', () => {
   });
 });
 
-// Task 12: a 'queued' native ack dispatches QUEUED_MESSAGE_ADDED (list entry,
-// no timeline write) instead of a queued-flavored USER_PROMPT — see
-// chat-reducer.ts and the Task 12 brief for why the old timeline bubble froze
-// above content from the still-streaming prior turn.
+// A 'queued' native ack writes neither a timeline bubble nor a strip row from this screen: the computer announces its queue (QUEUE_SYNCED).
 describe('InputBar native send — a queued ack draws nothing itself: the computer\'s queue does (one-core R5-4a)', () => {
   beforeEach(() => {
     (global as any).ResizeObserver = NoopResizeObserver;

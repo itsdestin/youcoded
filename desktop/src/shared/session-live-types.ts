@@ -11,7 +11,7 @@
 /** One message waiting behind the running turn (native sessions): what the docked strip draws. */
 interface QueuedItem { queueId: string; content: string; timestamp: number }
 
-interface PromptCardButton { label: string; input: string; submitInput?: string; pick?: unknown }
+export interface PromptCardButton { label: string; input: string; submitInput?: string; pick?: { signature: string; index: number } }
 
 export type SessionLiveBody =
   /** The queue as it is NOW (a snapshot, so a screen that missed events is right after the next one). Native sessions only. */
@@ -20,6 +20,8 @@ export type SessionLiveBody =
   | { kind: 'model'; model: string }
   /** The thin "Model switched to Opus" divider. `id` is deterministic, so a replay cannot draw it twice. */
   | { kind: 'model-switch'; id: string; label: string }
+  /** Claude Code refused the model switch the host announced: take that divider back. */
+  | { kind: 'model-switch-retract'; id: string }
   /** The thin "Conversation cleared" divider (Claude Code; a native clear is already a transcript event). */
   | { kind: 'clear'; id: string }
   /** A compaction began: draw the spinner. The "Compacted" note itself comes from the transcript's own compaction line. */
@@ -35,4 +37,6 @@ export type SessionLive = { sessionId: string } & SessionLiveBody;
 /** What a computer window tells the host about a card it saw in the terminal (`session:prompt-report`). */
 export type PromptReport =
   | { sessionId: string; action: 'show'; promptId: string; title: string; description?: string; buttons: PromptCardButton[]; defaultIndex?: number }
-  | { sessionId: string; action: 'dismiss'; promptId: string };
+  | { sessionId: string; action: 'dismiss'; promptId: string }
+  /** A computer window's first read of its terminal: the menus on screen right now; the host dismisses any open card not among them. */
+  | { sessionId: string; action: 'sync'; seen: string[] };

@@ -2010,8 +2010,8 @@ export function installShim(): void {
       // Stop being sent ONE conversation (one-core R5-3). `open` starts a watch, this ends it. What the page has drawn stays, and so does
       // its position (`fillCursors`), so opening it again resumes with just what happened meanwhile. On the phone's OWN bridge there is
       // no host record and no watch: refused quietly, exactly like `open`, so nothing is ever sent to the on-device runtime.
-      // A card the computer's own window read off its terminal: refused to a phone (a phone draws the host's), exactly as a hand-made request would be.
-      reportPrompt: (_report: unknown) => Promise.resolve({ ok: false }),
+      // A card this screen's terminal shows, reported so the computer publishes it once to every screen (one-core R5-4a). Not on the Android runtime.
+      reportPrompt: (report: unknown) => (isAndroidLocal() ? Promise.resolve({ ok: false }) : invoke('session:prompt-report', report)),
       unwatch: (sessionId: string) => {
         if (isAndroidLocal()) return refuseQuietlyOnPhone('session:unwatch');
         // The terminal frames of an unwatched session are dropped from this moment, even one already on the wire.

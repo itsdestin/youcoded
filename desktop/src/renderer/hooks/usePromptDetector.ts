@@ -94,13 +94,12 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
   // WHERE A CARD IS DRAWN FROM (one-core R5-4a). A card for a question Claude Code asks in its terminal used to be drawn by each screen's own scan
   // of its own copy of the terminal, so a card could land at a different place on a phone and the computer, or exist on one only. Now the computer's
   // window that reads the terminal REPORTS the card and the computer publishes it once, as a numbered event every screen (that window included)
-  // draws (hooks/useSessionLive via App); a phone, which has no terminal screen to read, draws the computer's card and never its own. Only a host
+  // draws (hooks/useSessionLive via App); a phone reports too (the computer may have no window reading the terminal; the host dedupes the same card) and draws the host's card, never its own. Only a host
   // with no such record (the Android app's own runtime) still draws from here.
   // Stable: the buffer listener below is re-created whenever this changes.
   const dispatch = useCallback((action: ChatAction): void => {
     const caps = getCapabilities();
     if (!caps.sessionRecord) { chatDispatch(action); return; }
-    if (!caps.terminalScreenRead) return;
     const report = (window as any).claude?.session?.reportPrompt;
     if (typeof report !== 'function') return;
     if (action.type === 'SHOW_PROMPT') {
@@ -116,6 +115,7 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
   const optionsRef = useRef(options);
   optionsRef.current = options;
   const lastMenuRef = useRef<Map<string, string>>(new Map());
+  const syncedRef = useRef<Set<string>>(new Set());
   const pendingTimerRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const dismissTimerRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   // The menu id whose SHOW_PROMPT actually fired, per session. Gates the
@@ -313,6 +313,16 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
       if (!screen) return;
 
       const menu = parseInkSelect(screen);
+      // First read of this session's terminal by THIS window (it just started, or reloaded): say which menus are on screen, so the host drops any
+      // card it still holds for a menu that left while no window was watching (the going-away would never have been reported). Windows only.
+      if (!syncedRef.current.has(sid)) {
+        syncedRef.current.add(sid);
+        const caps = getCapabilities();
+        const report = (window as any).claude?.session?.reportPrompt;
+        if (caps.sessionRecord && caps.terminalScreenRead && typeof report === 'function') {
+          void report({ sessionId: sid, action: 'sync', seen: menu ? [menu.id] : [] }).catch(() => {});
+        }
+      }
       const lastMenuId = lastMenuRef.current.get(sid) || null;
       const starting = optionsRef.current.isStarting?.(sid) ?? false;
 

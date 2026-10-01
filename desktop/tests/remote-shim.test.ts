@@ -684,6 +684,21 @@ describe('remote-shim — terminal backlog', () => {
       expect(late).toHaveLength(1);                                      // told the latest at once
     });
 
+    it('routes the computer\'s session:live pushes (queue, model, dividers, cards) to subscribers, and the mode push to its own listener (one-core R5-4a)', () => {
+      const lives: any[] = [];
+      const modes: Array<[string, string]> = [];
+      const off = (window as any).claude.on.sessionLive((l: any) => lives.push(l));
+      (window as any).claude.on.sessionPermissionMode((sid: string, mode: string) => modes.push([sid, mode]));
+      ws.receive({ type: 'session:live', payload: { sessionId: 's1', kind: 'queue', queue: [{ queueId: 'q', content: 'x', timestamp: 1 }] } });
+      ws.receive({ type: 'session:permission-mode', payload: { sessionId: 's1', mode: 'plan' } });
+      ws.receive({ type: 'session:live', payload: null });                 // a malformed push is ignored, not thrown
+      expect(lives.map((l) => l.kind)).toEqual(['queue']);
+      expect(modes).toEqual([['s1', 'plan']]);
+      off();
+      ws.receive({ type: 'session:live', payload: { sessionId: 's1', kind: 'model', model: 'sonnet' } });
+      expect(lives).toHaveLength(1);                                       // unsubscribed
+    });
+
     it('forgets a destroyed session\'s offsets and backlog', async () => {
       await openIt(ws, 's1');
       output('s1', 'abc', 0);

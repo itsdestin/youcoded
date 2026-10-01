@@ -98,11 +98,14 @@ export function routeSessionLive(live: SessionLive, deps: { batcher: Pick<Transc
     case 'model-switch':
       deps.batcher.push({ type: 'MODEL_SWITCH_MARKER', sessionId, markerId: live.id, timestamp: now(), label: live.label });
       return;
+    case 'model-switch-retract':
+      deps.batcher.push({ type: 'MODEL_SWITCH_RETRACT', sessionId, markerId: live.id });
+      return;
     case 'clear':
       deps.batcher.push({ type: 'CLEAR_TIMELINE', sessionId, markerId: live.id, timestamp: now() });
       return;
     case 'compact-start':
-      deps.batcher.push({ type: 'COMPACTION_PENDING', sessionId, cardId: live.id, beforeContextTokens: deps.contextTokens(sessionId) });
+      deps.batcher.push({ type: 'COMPACTION_PENDING', sessionId, cardId: live.id, beforeContextTokens: deps.contextTokens(sessionId), hostOwned: true });
       return;
     case 'compact-end':
       // A stop drops the spinner quietly ("Compaction may have failed" would be false after a Stop); anything else leaves the failed note.

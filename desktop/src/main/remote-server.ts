@@ -165,7 +165,7 @@ export function authOkMessage(who: { deviceId: string; secret?: string }, focusS
     platform: 'desktop' as const,
     sessionNaming: true,
     protocolVersion: PROTOCOL_VERSION,
-    capabilities: { ...REMOTE_SCREEN_CAPABILITIES },
+    capabilities: { ...REMOTE_SCREEN_CAPABILITIES, sessionRecord: true }, // this computer keeps a record (R5-4a); the default is false for older hosts
     // The session the computer is showing, so a phone with no place of its own opens it (batch 2 §3). It used to ride the snapshot.
     focus: { sessionId: focusSessionId },
   };

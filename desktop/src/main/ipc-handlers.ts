@@ -1490,6 +1490,7 @@ export function registerIpcHandlers(
 
   transcriptWatcher.on('transcript-event', (event: any) => {
     publish(event.sessionId, IPC.TRANSCRIPT_EVENT, event);
+    liveFacts.noteTranscript(event.sessionId, event); // a refused /model, a card Claude Code has moved past (R5-4a)
     // Conversation Store (Phase 2a): feed live activity into the record store.
     // event.sessionId is the DESKTOP id; the store keys by CLAUDE id, so resolve
     // via sessionIdMap and skip if we haven't seen the mapping yet (a hook event

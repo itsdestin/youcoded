@@ -27,20 +27,31 @@ import type { PermissionMode } from './types';
  * "plan mode off", reporting the wrong mode.
  */
 const MAYBE_MODE_RE = /(?:bypass permissions|auto mode|accept edits|plan mode) o(?:n|ff)/i;
+const PHRASES_RE = /(bypass permissions|auto mode|accept edits|plan mode) o(n|ff)/gi;
+
+/**
+ * Is this match the footer, not words in a reply? (review fix, one-core R5-4a: the mode now feeds the session record, so a false match
+ * is no longer one screen's chip.) Claude Code draws the footer as a glyph then the phrase on ONE line — "⏸ plan mode on",
+ * "⏵⏵ accept edits on (shift+tab to cycle)" (real 2.1.281 captures) — so a phrase counts only when a footer glyph sits before it on the same
+ * line, or "(shift+tab" follows it. A sentence that merely says "plan mode on" has neither.
+ */
+function isFooterMatch(data: string, index: number, length: number): boolean {
+  const lineStart = Math.max(data.lastIndexOf('\n', index), data.lastIndexOf('\r', index)) + 1;
+  if (/[⏵⏸]/.test(data.slice(Math.max(lineStart, index - 60), index))) return true;
+  return /^(?:\s|\x1b\[[0-9;?]*[A-Za-z])*\(shift\+tab/i.test(data.slice(index + length, index + length + 40));
+}
 
 export function detectPermissionMode(data: string): PermissionMode | null {
   if (!MAYBE_MODE_RE.test(data)) return null;
-  const lower = data.toLowerCase();
-  // CC v2.1.83+ auto mode banner reads "auto mode on (shift+tab to cycle)" —
-  // checked before "accept edits on" because the substring "auto mode" doesn't
-  // overlap, but order is preserved for symmetry with the off-list below.
-  if (lower.includes('bypass permissions on')) return 'bypass';
-  if (lower.includes('auto mode on')) return 'auto';
-  if (lower.includes('accept edits on')) return 'auto-accept';
-  if (lower.includes('plan mode on')) return 'plan';
-  if (lower.includes('bypass permissions off')
-    || lower.includes('auto mode off')
-    || lower.includes('accept edits off')
-    || lower.includes('plan mode off')) return 'normal';
-  return null;
+  const found = new Set<string>();
+  for (const m of data.matchAll(PHRASES_RE)) {
+    if (isFooterMatch(data, m.index!, m[0].length)) found.add(m[0].toLowerCase());
+  }
+  if (found.size === 0) return null;
+  // Same priority as before: an "on" outranks an "off" wherever it sits; bypass, then auto, then accept edits, then plan.
+  if (found.has('bypass permissions on')) return 'bypass';
+  if (found.has('auto mode on')) return 'auto';
+  if (found.has('accept edits on')) return 'auto-accept';
+  if (found.has('plan mode on')) return 'plan';
+  return 'normal';
 }

@@ -566,7 +566,7 @@ export function createMockShim(store: MockStore): Window['claude'] {
     // WHY (one-core R4-1): the workbench stands in for whichever screen it is filming, so it answers `capabilities` the way
     // that screen's host would: a phone browser or paired Android app (?connection=remote), the Android app's own runtime
     // (?platform=android), or the computer's window. The app asks capabilities, so the same screens render as before.
-    capabilities: isRemoteMode() ? { ...REMOTE_SCREEN_CAPABILITIES }
+    capabilities: isRemoteMode() ? { ...REMOTE_SCREEN_CAPABILITIES, sessionRecord: true }
       : getPlatform() === 'android' ? { ...ANDROID_LOCAL_CAPABILITIES } : { ...DESKTOP_WINDOW_CAPABILITIES },
     protocolVersion: PROTOCOL_VERSION,
     devLabel: 'Session Naming · Workbench',

@@ -4,6 +4,10 @@ import { createSessionChatState } from '../chat-types';
 import type { ChatState } from '../chat-types';
 import type { ToolCallState } from '../../../shared/types';
 
+// One waiting message appended to what the host's queue snapshot already said (the host announces the WHOLE queue; one-core R5-4a).
+const queueRow = (st: any, sessionId: string, queueId: string, content: string, timestamp: number) =>
+  chatReducer(st, { type: 'QUEUE_SYNCED', sessionId, queue: [...(st.get(sessionId)?.queuedMessages ?? []), { queueId, content, timestamp }] } as any);
+
 function stateWithInFlightTurn(sessionId = 'sess-1', turnId = 'turn-1'): ChatState {
   const session = createSessionChatState();
   session.currentTurnId = turnId;
@@ -477,10 +481,10 @@ function withStreamingTurn(sessionId = SID, turnId = 't1', groupId = 'g1'): Chat
   return new Map([[sessionId, session]]);
 }
 
-describe('chatReducer QUEUED_MESSAGE_ADDED / QUEUED_MESSAGE_REMOVED (Task 12)', () => {
-  it('QUEUED_MESSAGE_ADDED appends to queuedMessages and touches NEITHER the timeline NOR turn state', () => {
+describe('chatReducer QUEUE_SYNCED / QUEUED_MESSAGE_REMOVED (Task 12)', () => {
+  it('a queue snapshot sets to queuedMessages and touches NEITHER the timeline NOR turn state', () => {
     let s = withStreamingTurn(); // currentTurnId 't1', currentGroupId 'g1', isThinking true
-    s = chatReducer(s, { type: 'QUEUED_MESSAGE_ADDED', sessionId: SID, queueId: 'q-1', content: 'next msg', timestamp: 5 });
+    s = queueRow(s, SID, 'q-1', 'next msg', 5);
     const sess = s.get(SID)!;
     expect(sess.currentTurnId).toBe('t1');   // NOT nulled — later deltas keep merging into the live turn
     expect(sess.currentGroupId).toBe('g1');  // NOT nulled — tool grouping unaffected
@@ -488,24 +492,24 @@ describe('chatReducer QUEUED_MESSAGE_ADDED / QUEUED_MESSAGE_REMOVED (Task 12)', 
     expect(sess.queuedMessages).toEqual([{ queueId: 'q-1', content: 'next msg', timestamp: 5 }]);
   });
 
-  it('QUEUED_MESSAGE_ADDED is a no-op for an unknown session id', () => {
+  it('a queue snapshot is a no-op for an unknown session id', () => {
     const s = new Map<string, ReturnType<typeof createSessionChatState>>();
     const before = s;
-    const after = chatReducer(before, { type: 'QUEUED_MESSAGE_ADDED', sessionId: 'ghost', queueId: 'q-1', content: 'x', timestamp: 1 });
+    const after = queueRow(before, 'ghost', 'q-1', 'x', 1);
     expect(after).toBe(before);
   });
 
   it('QUEUED_MESSAGE_REMOVED removes only the matching entry by queueId', () => {
     let s: ChatState = new Map([[SID, createSessionChatState()]]);
-    s = chatReducer(s, { type: 'QUEUED_MESSAGE_ADDED', sessionId: SID, queueId: 'q-1', content: 'first', timestamp: 1 });
-    s = chatReducer(s, { type: 'QUEUED_MESSAGE_ADDED', sessionId: SID, queueId: 'q-2', content: 'second', timestamp: 2 });
+    s = queueRow(s, SID, 'q-1', 'first', 1);
+    s = queueRow(s, SID, 'q-2', 'second', 2);
     s = chatReducer(s, { type: 'QUEUED_MESSAGE_REMOVED', sessionId: SID, queueId: 'q-1' });
     expect(s.get(SID)!.queuedMessages).toEqual([{ queueId: 'q-2', content: 'second', timestamp: 2 }]);
   });
 
   it('QUEUED_MESSAGE_REMOVED is a no-op when the queueId is not present', () => {
     let s: ChatState = new Map([[SID, createSessionChatState()]]);
-    s = chatReducer(s, { type: 'QUEUED_MESSAGE_ADDED', sessionId: SID, queueId: 'q-1', content: 'first', timestamp: 1 });
+    s = queueRow(s, SID, 'q-1', 'first', 1);
     const before = s;
     const after = chatReducer(before, { type: 'QUEUED_MESSAGE_REMOVED', sessionId: SID, queueId: 'ghost-id' });
     expect(after).toBe(before);
@@ -527,7 +531,7 @@ describe('chatReducer TRANSCRIPT_USER_MESSAGE — true-position confirm for a dr
     // possible landing position is wherever TRANSCRIPT_USER_MESSAGE appends
     // it: the end.
     let s = withStreamingTurn();
-    s = chatReducer(s, { type: 'QUEUED_MESSAGE_ADDED', sessionId: SID, queueId: 'q-1', content: 'queued text', timestamp: 1 });
+    s = queueRow(s, SID, 'q-1', 'queued text', 1);
     s = chatReducer(s, {
       type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SID, uuid: 'u-1', text: 'queued text', timestamp: 2,
     });
@@ -543,8 +547,8 @@ describe('chatReducer TRANSCRIPT_USER_MESSAGE — true-position confirm for a dr
 
   it('drain-confirm removes the oldest queuedMessages entry with matching content', () => {
     let s: ChatState = new Map([[SID, createSessionChatState()]]);
-    s = chatReducer(s, { type: 'QUEUED_MESSAGE_ADDED', sessionId: SID, queueId: 'q-1', content: 'hi', timestamp: 1 });
-    s = chatReducer(s, { type: 'QUEUED_MESSAGE_ADDED', sessionId: SID, queueId: 'q-2', content: 'hi', timestamp: 2 });
+    s = queueRow(s, SID, 'q-1', 'hi', 1);
+    s = queueRow(s, SID, 'q-2', 'hi', 2);
     s = chatReducer(s, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SID, uuid: 'u-1', text: 'hi', timestamp: 3 });
     // Oldest-content-match discipline (mirrors the pending-bubble dedup):
     // q-1 (the OLDER entry) is removed, q-2 survives for the next drain.
@@ -572,7 +576,7 @@ describe('chatReducer TRANSCRIPT_USER_MESSAGE — true-position confirm for a dr
     // by the same TRANSCRIPT_USER_MESSAGE dispatch.
     let s: ChatState = new Map([[SID, createSessionChatState()]]);
     s = chatReducer(s, { type: 'USER_PROMPT', sessionId: SID, content: 'same text', timestamp: 1 });
-    s = chatReducer(s, { type: 'QUEUED_MESSAGE_ADDED', sessionId: SID, queueId: 'q-1', content: 'same text', timestamp: 2 });
+    s = queueRow(s, SID, 'q-1', 'same text', 2);
     s = chatReducer(s, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SID, uuid: 'u-1', text: 'same text', timestamp: 3 });
     const timeline = s.get(SID)!.timeline;
     expect(timeline).toHaveLength(1); // pending bubble confirmed in place, not double-appended

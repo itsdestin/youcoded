@@ -988,11 +988,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         ...(action.attachments?.length ? { attachments: action.attachments } : {}),
       };
 
-      // Task 12: the queued-send branch that used to live here (append a
-      // pending+queued bubble without touching turn state) is gone — a
-      // queued native send now dispatches QUEUED_MESSAGE_ADDED instead of
-      // USER_PROMPT (see InputBar.tsx), which never touches the timeline at
-      // all. USER_PROMPT is unconditionally the 'sent' path again.
+      // USER_PROMPT is unconditionally the 'sent' path: a queued native send never reaches it (the host announces its queue, QUEUE_SYNCED).
       next.set(action.sessionId, {
         ...session,
         timeline: [...session.timeline, { kind: 'user', message, pending: true }],
@@ -1018,23 +1014,6 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       return next;
     }
 
-    // Task 12: native send acked 'queued' — add to the docked-strip list.
-    // Deliberately does NOT touch the timeline or turn/group/isThinking state
-    // (that was the Task 3/11 bug: an enqueue-time timeline bubble froze
-    // above content the still-streaming prior turn hadn't emitted yet).
-    case 'QUEUED_MESSAGE_ADDED': {
-      const session = next.get(action.sessionId);
-      if (!session) return state;
-      next.set(action.sessionId, {
-        ...session,
-        queuedMessages: [
-          ...session.queuedMessages,
-          { queueId: action.queueId, content: action.content, timestamp: action.timestamp },
-        ],
-      });
-      return next;
-    }
-
     // One-core R5-4a: the host's queue as it is now. Same rows and order = the very same state back (no redraw).
     case 'QUEUE_SYNCED': {
       const session = next.get(action.sessionId);
@@ -1042,6 +1021,15 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       const cur = session.queuedMessages;
       if (cur.length === action.queue.length && cur.every((q, i) => q.queueId === action.queue[i].queueId && q.content === action.queue[i].content)) return state;
       next.set(action.sessionId, { ...session, queuedMessages: action.queue.map((q) => ({ queueId: q.queueId, content: q.content, timestamp: q.timestamp })) });
+      return next;
+    }
+
+    case 'MODEL_SWITCH_RETRACT': {
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+      const timeline = session.timeline.filter((e) => !(e.kind === 'system-marker' && e.marker.id === action.markerId));
+      if (timeline.length === session.timeline.length) return state;
+      next.set(action.sessionId, { ...session, timeline });
       return next;
     }
 
@@ -1396,8 +1384,8 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       // Task 12 (drain-side removal): independent of whether a pending
       // TIMELINE bubble matches below — clear the OLDEST queuedMessages entry
       // with matching content, if any. WHY independent rather than gated on
-      // confirmedIdx: a `sent` message never wrote a queuedMessages entry (no
-      // QUEUED_MESSAGE_ADDED fired for it), so this scan simply finds nothing
+      // confirmedIdx: a `sent` message never has a queuedMessages entry (the host
+      // never announced it as waiting), so this scan simply finds nothing
       // and is a no-op on that path — running it unconditionally is correct,
       // not "unconditionally-but-harmless-because-usually-empty." A `queued`
       // message, symmetrically, never has a pending bubble to match (Task 12
@@ -3145,7 +3133,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         ...session,
         timeline: [...filtered, { kind: 'compacting', id: action.cardId, startedAt }],
         compactionPending: { startedAt, beforeContextTokens: action.beforeContextTokens,
-          ...(action.awaitsResult ? { awaitsResult: true } : {}) },
+          ...(action.awaitsResult ? { awaitsResult: true } : {}), ...(action.hostOwned ? { hostOwned: true } : {}) },
       });
       return next;
     }

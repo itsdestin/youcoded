@@ -45,6 +45,19 @@ describe('reading a handshake\'s capabilities', () => {
   });
 });
 
+describe('a computer older than the session record', () => {
+  it('a handshake with no sessionRecord (or none at all) means FALSE, so the screen keeps inferring the lines itself', () => {
+    expect(normalizeCapabilities({ git: true }).sessionRecord).toBe(false);
+    expect(normalizeCapabilities(undefined).sessionRecord).toBe(false);
+    expect(normalizeCapabilities({ sessionRecord: 'yes' }).sessionRecord).toBe(false);
+  });
+  it('a computer that has a record says so explicitly', () => {
+    expect(normalizeCapabilities({ sessionRecord: true }).sessionRecord).toBe(true);
+    const server = fs.readFileSync(path.join(root, 'src', 'main', 'remote-server.ts'), 'utf8');
+    expect(server).toContain('{ ...REMOTE_SCREEN_CAPABILITIES, sessionRecord: true }');
+  });
+});
+
 describe('every copy of the values agrees', () => {
   it('the preload\'s generated copy is the shared one, with the native kill switch as its one runtime part', () => {
     const preload = readSource(path.join(root, 'src', 'main', 'preload.ts'));

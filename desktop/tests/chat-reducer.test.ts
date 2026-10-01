@@ -5,6 +5,10 @@ import { hookEventToAction } from '../src/renderer/state/hook-dispatcher';
 import { selectNativeStatusChips } from '../src/renderer/components/StatusBar';
 import type { HookEvent } from '../src/shared/types';
 
+// One waiting message appended to what the host's queue snapshot already said (the host announces the WHOLE queue; one-core R5-4a).
+const queueRow = (st: any, sessionId: string, queueId: string, content: string, timestamp: number) =>
+  dispatch(st, { type: 'QUEUE_SYNCED', sessionId, queue: [...(st.get(sessionId)?.queuedMessages ?? []), { queueId, content, timestamp }] } as any);
+
 const SESSION = 'test-session';
 
 function initState(): ChatState {
@@ -1025,17 +1029,17 @@ describe('native runtime reducer paths', () => {
   });
 
   // ---- Task 12: queued messages leave the timeline — docked strip list ----
-  describe('QUEUED_MESSAGE_ADDED / QUEUED_MESSAGE_REMOVED', () => {
-    it('QUEUED_MESSAGE_ADDED appends to queuedMessages, not the timeline', () => {
-      state = dispatch(state, { type: 'QUEUED_MESSAGE_ADDED', sessionId: SESSION, queueId: 'q-1', content: 'queued msg', timestamp: 1 });
+  describe('QUEUE_SYNCED / QUEUED_MESSAGE_REMOVED', () => {
+    it('a queue snapshot sets to queuedMessages, not the timeline', () => {
+      state = queueRow(state, SESSION, 'q-1', 'queued msg', 1);
       expect(state.get(SESSION)!.timeline).toHaveLength(0);
       expect(state.get(SESSION)!.queuedMessages).toEqual([{ queueId: 'q-1', content: 'queued msg', timestamp: 1 }]);
     });
 
     it('QUEUED_MESSAGE_REMOVED removes only the matching entry, leaving others untouched', () => {
       state = dispatch(state, { type: 'USER_PROMPT', sessionId: SESSION, content: 'keep me (sent)', timestamp: 1 });
-      state = dispatch(state, { type: 'QUEUED_MESSAGE_ADDED', sessionId: SESSION, queueId: 'q-1', content: 'cancel me', timestamp: 2 });
-      state = dispatch(state, { type: 'QUEUED_MESSAGE_ADDED', sessionId: SESSION, queueId: 'q-2', content: 'keep me (queued)', timestamp: 3 });
+      state = queueRow(state, SESSION, 'q-1', 'cancel me', 2);
+      state = queueRow(state, SESSION, 'q-2', 'keep me (queued)', 3);
       expect(state.get(SESSION)!.timeline).toHaveLength(1); // only the sent-path bubble
       expect(state.get(SESSION)!.queuedMessages).toHaveLength(2);
 
@@ -1046,7 +1050,7 @@ describe('native runtime reducer paths', () => {
     });
 
     it('is a no-op when the drain already won the race (TRANSCRIPT_USER_MESSAGE confirmed first)', () => {
-      state = dispatch(state, { type: 'QUEUED_MESSAGE_ADDED', sessionId: SESSION, queueId: 'q-1', content: 'racer', timestamp: 1 });
+      state = queueRow(state, SESSION, 'q-1', 'racer', 1);
       // Confirm arrives first — the drain-side removal (TRANSCRIPT_USER_MESSAGE) already cleared the list entry.
       state = dispatch(state, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'u-1', text: 'racer', timestamp: 2 });
       const before = state.get(SESSION)!;
@@ -1061,14 +1065,14 @@ describe('native runtime reducer paths', () => {
     });
 
     it('is a no-op for an unknown session id', () => {
-      state = dispatch(state, { type: 'QUEUED_MESSAGE_ADDED', sessionId: SESSION, queueId: 'q-1', content: 'irrelevant', timestamp: 1 });
+      state = queueRow(state, SESSION, 'q-1', 'irrelevant', 1);
       const before = state;
       state = dispatch(state, { type: 'QUEUED_MESSAGE_REMOVED', sessionId: 'ghost-session', queueId: 'q-1' });
       expect(state).toBe(before);
     });
 
     it('TRANSCRIPT_USER_MESSAGE appends the drained queued message at the END (true position), not in place of a bubble that was never written', () => {
-      state = dispatch(state, { type: 'QUEUED_MESSAGE_ADDED', sessionId: SESSION, queueId: 'q-1', content: 'confirm me', timestamp: 1 });
+      state = queueRow(state, SESSION, 'q-1', 'confirm me', 1);
       expect(state.get(SESSION)!.timeline).toHaveLength(0);
       state = dispatch(state, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'u-1', text: 'confirm me', timestamp: 2 });
       const timeline = state.get(SESSION)!.timeline;

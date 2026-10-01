@@ -31,7 +31,8 @@ import { buildSessionCreateArgs } from '../shared/session-create-args';
 import GamePanel from './components/game/GamePanel';
 import TerminalRightSlot from './components/TerminalRightSlot';
 import { ChatProvider, useChatDispatch, useChatStore, useSessionIsThinking } from './state/chat-context';
-import { installTranscriptBatcher, flushTranscriptActions, routeTranscriptEvent, routeTranscriptShrink, routeSessionLive } from './state/transcript-batch';
+import { installTranscriptBatcher, flushTranscriptActions, routeTranscriptEvent, routeTranscriptShrink } from './state/transcript-batch';
+import { applySessionLive } from './state/apply-session-live';
 import {
   remotePlaceHost, remotePlaceStorages, readRemotePlace, writeRemotePlace,
   choosePlaceOnHydrate, chooseAfterDestroyed,
@@ -69,6 +70,7 @@ import { useAttentionSummary } from './hooks/useAttentionSummary';
 import { useSessionSummaries } from './hooks/useSessionSummaries';
 import { useRemoteWatch } from './hooks/useRemoteWatch';
 import { useActiveSessionModel } from './hooks/useActiveSessionModel';
+import { useCompactionWatchdog } from './hooks/useCompactionWatchdog';
 import { useNativeSessionUsage, useNativeContextOverride, useNativeContextWindow, useTurnsWithUsage } from './hooks/useNativeSessionUsage';
 import { useNativeSessionTotals } from './hooks/useNativeSessionTotals';
 import { useZoomControls } from './hooks/useZoomControls';
@@ -883,68 +885,8 @@ function AppInner() {
     }
   }, [dispatch]);
 
-  // Compaction watchdog: activity-aware — resets on any reducer update for a
-  // session with compactionPending set. Any transcript event bumps the timer
-  // forward, so long compactions (large sessions) don't trigger a false "may
-  // have failed" message as long as events keep flowing. Only fires if nothing
-  // happens for 180s straight, which genuinely means something's stuck.
-  //
-  // Prior bug: fixed 60s timer. Big sessions took longer than 60s legitimately,
-  // hit the watchdog, dispatched aborted=true, cleared pending flag — then the
-  // real shrink event arrived but had no pending flag to key off of, so the
-  // user saw "may have failed" even though compaction succeeded.
-  const compactWatchdogs = useRef(new Map<string, ReturnType<typeof setTimeout>>());
-  // Tranche 1: store subscription instead of a [chatStateMap] effect. Same
-  // activity-aware body (the timer still resets on every dispatch while a
-  // compaction is pending); AppInner no longer re-renders per dispatch to run
-  // it. The pre-existing no-clear-timers-on-unmount behavior is preserved.
-  useEffect(() => {
-    // A host with a record owns this watchdog (main/session-live.ts ends a compaction that went quiet and every screen draws that);
-    // only the Android app's own runtime, which has no such record, still watches here (one-core R5-4a).
-    if (getCapabilities().sessionRecord) return;
-    const check = () => {
-      const map = chatStore.getState();
-      // Perf: this runs on every reducer dispatch. Steady state (no compaction
-      // in flight, no live watchdogs) short-circuits without walking the
-      // session map. When a compaction is live we still iterate — preserving
-      // the activity-awareness described above (timer resets on every dispatch).
-      if (compactWatchdogs.current.size === 0) {
-        let anyPending = false;
-        for (const session of map.values()) {
-          if (session.compactionPending && !session.compactionPending.awaitsResult) { anyPending = true; break; }
-        }
-        if (!anyPending) return;
-      }
-      for (const [sid, session] of map) {
-        const existing = compactWatchdogs.current.get(sid);
-        // A native compaction's IPC call reports its own end (awaitsResult).
-        if (session.compactionPending && !session.compactionPending.awaitsResult) {
-          // Reset on every reducer tick while pending — if transcript events are
-          // flowing for this session, the timer keeps bumping and never fires.
-          if (existing) clearTimeout(existing);
-          const timer = setTimeout(() => {
-            const current = chatStateMapRef.current.get(sid);
-            if (current?.compactionPending) {
-              dispatch({
-                type: 'COMPACTION_COMPLETE',
-                sessionId: sid,
-                markerId: `compact-timeout-${Date.now()}`,
-                afterContextTokens: null,
-                aborted: true,
-              });
-            }
-            compactWatchdogs.current.delete(sid);
-          }, 180_000);
-          compactWatchdogs.current.set(sid, timer);
-        } else if (existing) {
-          clearTimeout(existing);
-          compactWatchdogs.current.delete(sid);
-        }
-      }
-    };
-    check();
-    return chatStore.subscribeAll(check);
-  }, [chatStore, dispatch]);
+  // Ends a compaction spinner this screen raised itself (hooks/useCompactionWatchdog.ts); the computer ends the ones it raised.
+  useCompactionWatchdog(chatStore, dispatch);
 
   // Attention-reporter ref declared up here so hooks-order stays deterministic;
   // the useEffect that writes to it lives AFTER sessionStatuses is computed
@@ -1490,17 +1432,13 @@ function AppInner() {
     // One-core R5-4a: the shared lines and live facts from the computer's record: the queue of waiting messages, the model label, the
     // model-switch and "Conversation cleared" dividers, the compaction spinner and prompt cards. Every screen draws them from here and none
     // infers them (a host with no record, the Android app's own runtime, keeps inferring: capabilities.sessionRecord).
-    const liveOff = window.claude.on.sessionLive?.((live) => {
-      if (!live?.sessionId) return;
-      routeSessionLive(live, { batcher: transcriptBatcher, contextTokens: (sid: string) => statusData.sessionStatsMap[sid]?.contextTokens ?? null });
-      if (live.kind !== 'model') return;
-      // The chip and the session's own record of its model (the All Sessions menu labels from it). A native session holds the model id itself.
-      const native = sessionsRef.current.find((x) => x.id === live.sessionId)?.provider === 'native';
-      const alias = native ? live.model : matchModelAlias(live.model);
-      if (alias === 'unknown') return;
-      if (!native) setSessionModels((prev) => (prev.get(live.sessionId) === alias ? prev : new Map(prev).set(live.sessionId, alias as ModelAlias)));
-      setSessions((prev) => prev.map((x) => (x.id === live.sessionId && x.model !== alias ? { ...x, model: alias } : x)));
-    });
+    const liveOff = window.claude.on.sessionLive?.((live) => applySessionLive(live, {
+      batcher: transcriptBatcher,
+      contextTokens: (sid) => statusData.sessionStatsMap[sid]?.contextTokens ?? null,
+      isNative: (sid) => sessionsRef.current.find((x) => x.id === sid)?.provider === 'native',
+      setChipModel: (sid, alias) => setSessionModels((prev) => (prev.get(sid) === alias ? prev : new Map(prev).set(sid, alias as ModelAlias))),
+      setSessionModel: (sid, model) => setSessions((prev) => prev.map((x) => (x.id === sid && x.model !== model ? { ...x, model } : x))),
+    }));
 
     const renamedHandler = window.claude.on.sessionRenamed((sid, name) => {
       setSessions((prev) =>

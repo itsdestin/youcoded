@@ -842,12 +842,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
             setAttachments((cur) => (cur.length > 0 ? cur : files));
             return;
           }
-          // Task 12: a 'queued' ack dispatches QUEUED_MESSAGE_ADDED instead of
-          // USER_PROMPT — the docked strip renders it, NOT the timeline (the
-          // Task 3/11 bug this replaces: an enqueue-time timeline bubble
-          // froze above content the still-streaming prior turn hadn't
-          // emitted yet). A 'sent' ack is unchanged: nothing is streaming, so
-          // the optimistic bubble's position is already correct.
+          // A 'sent' ack gets the optimistic bubble (nothing is streaming, so its position is already right); a 'queued' one draws nothing here.
           if (result.status === 'queued') {
             // Nothing to draw from here (one-core R5-4a): the computer holds the queue and says so (`session:live`, kind `queue`), and EVERY
             // screen's strip, this one included, is drawn from that. Drawing this row here as well put it there twice, or only here.

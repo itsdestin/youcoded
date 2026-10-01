@@ -166,6 +166,8 @@ interface Rec {
   passwordAsks: Set<string>;
   /** Cards for a question Claude Code is asking in its terminal, still open (one-core R5-4a). Outside the ring, like asks. */
   prompts: Map<string, OpenPrompt>;
+  /** When each open card was raised (main's clock), so activity that is older than a card cannot dismiss it. */
+  promptAt: Map<string, number>;
   /** The mode the host last read off a Claude Code session's terminal (R5-4a); null until it has seen one. */
   terminalMode: string | null;
   /** A compaction is in progress: the spinner a screen that opens now must draw (R5-4a; restores what a phone lost in R5-2). */
@@ -234,7 +236,7 @@ export class SessionRecords {
     this.records.set(sessionId, {
       epoch: randomBytes(8).toString('hex'),
       headSeq: 0, ring: [], ringBytes: 0, tail: [], tailBytes: 0, pty: { chunks: [], length: 0, base: 0 }, oversize: 0,
-      asks: new Map(), passwordAsks: new Set(), prompts: new Map(), terminalMode: null, compacting: null,
+      asks: new Map(), passwordAsks: new Set(), prompts: new Map(), promptAt: new Map(), terminalMode: null, compacting: null,
       facts: {
         working: false, attention: 'ok', reportedAttention: null, hasHistory: false,
         lastActivityAt: this.now(), permissionMode: null, model: null, modelState: null,
@@ -496,6 +498,12 @@ export class SessionRecords {
   /** A compaction is waiting for its summary line (the host watches that it does not wait forever). */
   isCompacting(sessionId: string): boolean { return !!this.records.get(sessionId)?.compacting; }
 
+  /** The cards open now, with when each was raised: what the host checks against the terminal and against later activity. */
+  openPrompts(sessionId: string): Array<{ promptId: string; title: string; at: number }> {
+    const rec = this.records.get(sessionId);
+    return rec ? [...rec.prompts.values()].map((p) => ({ promptId: p.promptId, title: p.title, at: rec.promptAt.get(p.promptId) ?? 0 })) : [];
+  }
+
   /** Is this card already open? (The host publishes a card once however many screens report it.) */
   hasPrompt(sessionId: string, promptId: string): boolean { return !!this.records.get(sessionId)?.prompts.has(promptId); }
 
@@ -690,9 +698,10 @@ export class SessionRecords {
         if (typeof live.promptId !== 'string' || !live.promptId) return;
         if (rec.prompts.size >= OPEN_PROMPTS_MAX && !rec.prompts.has(live.promptId)) return;
         rec.prompts.set(live.promptId, live as OpenPrompt);
+        rec.promptAt.set(live.promptId, this.now());
         return;
       case 'prompt-dismiss':
-        if (typeof live.promptId === 'string') rec.prompts.delete(live.promptId);
+        if (typeof live.promptId === 'string') { rec.prompts.delete(live.promptId); rec.promptAt.delete(live.promptId); }
         return;
       default:
         return;

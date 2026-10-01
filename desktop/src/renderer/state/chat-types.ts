@@ -369,7 +369,7 @@ export interface SessionChatState {
    * Holds the pre-compaction contextTokens count so COMPACTION_COMPLETE can compute
    * how much was freed.
    */
-  compactionPending: { startedAt: number; beforeContextTokens: number | null; awaitsResult?: boolean } | null;
+  compactionPending: { startedAt: number; beforeContextTokens: number | null; awaitsResult?: boolean; hostOwned?: boolean } | null;
   /**
    * Native sessions only. Tokens occupying the model's window after the last
    * HISTORY REWRITE that happened outside a turn — a /compact or a /clear.
@@ -539,26 +539,17 @@ export type ChatAction =
       attachments?: string[];
     }
   | {
-      // Task 12: a native send came back 'queued' (host FIFO'd it behind an
-      // in-flight turn). Adds to SessionChatState.queuedMessages — NEVER
-      // touches the timeline or turn state (that's exactly the Task 3/11 bug
-      // this replaces: an enqueue-time timeline bubble could land above
-      // content the still-streaming prior turn hadn't emitted yet). content
-      // is the same display string USER_PROMPT would have used for the
-      // bubble, so TRANSCRIPT_USER_MESSAGE's drain-side removal can
-      // content-match it.
-      type: 'QUEUED_MESSAGE_ADDED';
-      sessionId: string;
-      queueId: string;
-      content: string;
-      timestamp: number;
-    }
-  | {
       // One-core R5-4a: the host's queue of waiting messages as it is NOW (a snapshot, `session:live` kind `queue`). Replaces the list, so a
       // screen that missed a change, a screen that did not send the message and a screen that reconnected all end up showing the same rows.
       type: 'QUEUE_SYNCED';
       sessionId: string;
       queue: Array<{ queueId: string; content: string; timestamp: number }>;
+    }
+  | {
+      // The host took back a "Model switched to X" divider because Claude Code refused the switch (one-core R5-4a review).
+      type: 'MODEL_SWITCH_RETRACT';
+      sessionId: string;
+      markerId: string;
     }
   | {
       // One-core R5-4a: the host announced a model change (`session:live` kind `model`); see SessionChatState.modelAnnounced.
@@ -1043,6 +1034,8 @@ export type ChatAction =
       // so App's 3-minute "may have failed" watchdog must not guess instead —
       // a slow local summary legitimately runs longer and its marker was lost.
       awaitsResult?: boolean;
+      // The computer raised this spinner and ends it itself (main/session-live.ts watchdog): no screen watchdog guesses (one-core R5-4a).
+      hostOwned?: boolean;
     }
   // A native summary the user stopped (or a switch popup that gave up): drop the
   // spinner with NO marker — nothing was compacted, and nothing "may have failed".
@@ -1136,7 +1129,7 @@ export interface SerializedSessionChatState {
   // makes the elapsed number approximate on remote; that is accepted.
   stalledSince?: number | null;
   lastBufferActivityAt: number;
-  compactionPending: { startedAt: number; beforeContextTokens: number | null; awaitsResult?: boolean } | null;
+  compactionPending: { startedAt: number; beforeContextTokens: number | null; awaitsResult?: boolean; hostOwned?: boolean } | null;
   // Optional so a pre-field snapshot from an older host still deserializes.
   // Serialized because it is a fact about the SESSION's window, not about one
   // client's view: a phone that reconnects after the desktop compacted must see

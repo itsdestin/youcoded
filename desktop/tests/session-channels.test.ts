@@ -41,7 +41,7 @@ describe('session channels: what is in the table and who may call it', () => {
   it('a phone may use exactly what it could before; set-flag stays refused and the window-only ones stay computer-only', () => {
     const entries = CHANNEL_TABLE.filter((d) => FAMILY.test(d.name) && !NOT_YET.has(d.name));
     const refused = entries.filter((d) => d.desktopOnly || d.remoteAllowed === false).map((d) => d.name).sort();
-    expect(refused).toEqual(['session:forget-reopen', 'session:prompt-report', 'session:reopen-list', 'session:selected', 'session:set-flag', 'session:terminal-ready']);
+    expect(refused).toEqual(['session:forget-reopen', 'session:reopen-list', 'session:selected', 'session:set-flag', 'session:terminal-ready']);
   });
 
   it('a phone asking for the refused ones gets what it always got: an empty answer, silence, or the standard refusal', async () => {

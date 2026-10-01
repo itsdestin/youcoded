@@ -93,7 +93,9 @@ export const REMOTE_SCREEN_CAPABILITIES: Capabilities = {
   projectWrites: false,
   contentSearch: false,
   liveHandoff: true,
-  sessionRecord: true,
+  // FALSE on purpose: a host that sends no `sessionRecord` (a computer older than the record) has none, so the screen keeps inferring the
+  // lines itself. A host WITH a record says true explicitly in its handshake (remote-server.ts), never by this default (review fix, R5-4a F3).
+  sessionRecord: false,
 };
 
 /** What the Android app can do on its OWN runtime (not paired to a computer). Mirrored in MessageRouter.kt. */
