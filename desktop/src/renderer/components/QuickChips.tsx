@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { isAndroid } from '../platform';
 import { useSkills } from '../state/skill-context';
 import type { ChipConfig } from '../../shared/types';
-import { Button, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, SectionLabel, TextInput, Textarea, Tooltip } from './ui';
+import { Button, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, SectionLabel, SettingRow, TextInput, Textarea, Toggle, Tooltip } from './ui';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import { useScreenOpen } from '../shoot-mode';
@@ -111,7 +111,7 @@ export default function QuickChips({ onChipTap }: Props) {
 }
 
 // TRIAL: which chip editor the pick-menus-3 deck shows.
-const QC_STYLE = 'rows' as 'rows' | 'pills' | 'fields';
+const QC_STYLE = 'rows' as 'rows' | 'shelves-card' | 'shelves-page' | 'shelves-pop';
 
 // ── Chip Editor Popup ──────────────────────────────────────────────────────
 
@@ -308,51 +308,81 @@ function ChipEditorPopup({ open, chips, setChips, installed, onClose }: ChipEdit
                 prompt, with the grip and pencil only on hover — so reordering and editing,
                 which already worked, were invisible. Now each row shows its whole prompt
                 (two lines) under the name and keeps its grip in view. */}
-            {/* TRIAL sketches for the pick-menus-3 deck (Destin: "want to see some
-                alternatives"). Click-to-edit works in both; reordering is not wired. */}
-            {QC_STYLE === 'pills' && chips.length > 0 && (
-              <section>
-                <SectionLabel className="mb-2">Your chips ({chips.length} of 10)</SectionLabel>
-                <div className={`${CARD_LEVEL_1} p-3 flex flex-wrap gap-1.5`}>
-                  {chips.map((chip, i) => (
-                    <button key={i} type="button" onClick={() => beginEdit(i)}
-                      className={`h-6 px-2.5 rounded-md bg-panel border text-2xs text-fg-2 hover:bg-inset hover:text-fg transition-colors ${editIdx === i ? 'border-accent text-fg' : 'border-edge-dim'}`}>
-                      {chip.label}
+            {/* TRIAL sketches for the pick-menus-4 deck (pick-menus-3#PM3-1: "a few more
+                alternatives with similar style. maybe two drag spots for active/inactive. edit
+                icon on each chip with hover. want to see the edit surface after clicking").
+                The "set aside" shelf is faked from the last two chips — chips have no hidden
+                state yet; dragging between shelves is not wired. */}
+            {QC_STYLE !== 'rows' && chips.length > 0 && (() => {
+              const shown = chips.slice(0, Math.max(0, chips.length - 2));
+              const aside = chips.slice(Math.max(0, chips.length - 2));
+              const editing = editIdx !== null ? chips[editIdx] : null;
+              const fields = (
+                <div className="space-y-1.5">
+                  <TextInput size="sm" value={editLabel} onChange={(e) => setEditLabel(e.target.value.slice(0, 20))} aria-label="Chip label" className="w-full" />
+                  <Textarea size="sm" value={editPrompt} onChange={(e) => setEditPrompt(e.target.value.slice(0, 500))} rows={3} aria-label="Chip prompt" className="w-full" />
+                </div>
+              );
+              const actions = (
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={saveEdit} disabled={!editLabel.trim() || !editPrompt.trim()}>Save</Button>
+                  <Button variant="secondary" size="sm" onClick={cancelEdit}>Cancel</Button>
+                  <span className="flex-1" />
+                  <Button variant="secondary" size="sm" onClick={() => editIdx !== null && remove(editIdx)}>Remove</Button>
+                </div>
+              );
+              const pill = (chip: ChipConfig, i: number, dim: boolean) => (
+                <span key={i} className="relative group/chip inline-flex">
+                  <span className={`h-6 pl-2.5 pr-1 rounded-md bg-panel border inline-flex items-center gap-1 text-2xs cursor-grab ${editIdx === i ? 'border-accent text-fg' : 'border-edge-dim text-fg-2'} ${dim ? 'opacity-60 border-dashed' : ''}`}>
+                    {chip.label}
+                    <button type="button" aria-label={`Edit ${chip.label}`} onClick={() => beginEdit(i)}
+                      className={`w-4 h-4 rounded-sm flex items-center justify-center text-fg-faint ${i === 1 ? 'opacity-100' : 'opacity-0'} group-hover/chip:opacity-100 focus-visible:opacity-100 hover:text-fg transition-opacity`}>
+                      <PencilIcon size={9} />
                     </button>
-                  ))}
-                </div>
-                <p className="mt-2 text-3xs text-fg-muted">Click a chip to change it; drag one to move it.</p>
-                {editIdx !== null && (
-                  <div className={`${CARD_LEVEL_1} mt-2 p-3 space-y-1.5`}>
-                    <TextInput size="sm" value={editLabel} onChange={(e) => setEditLabel(e.target.value.slice(0, 20))} aria-label="Chip label" className="w-full" />
-                    <Textarea size="sm" value={editPrompt} onChange={(e) => setEditPrompt(e.target.value.slice(0, 500))} rows={3} aria-label="Chip prompt" className="w-full" />
-                    <div className="flex gap-2">
-                      <Button size="sm" onClick={saveEdit} disabled={!editLabel.trim() || !editPrompt.trim()}>Save</Button>
-                      <Button variant="secondary" size="sm" onClick={cancelEdit}>Cancel</Button>
-                      <span className="flex-1" />
-                      <Button variant="secondary" size="sm" onClick={() => remove(editIdx)}>Remove</Button>
+                  </span>
+                  {QC_STYLE === 'shelves-pop' && editIdx === i && (
+                    <div className="absolute left-0 top-7 z-10 w-72 rounded-lg border border-edge bg-panel shadow-lg p-3 space-y-2">
+                      {fields}{actions}
                     </div>
+                  )}
+                </span>
+              );
+              if (QC_STYLE === 'shelves-page' && editing) {
+                return (
+                  <section className="space-y-3">
+                    <button type="button" onClick={cancelEdit} className="text-xs text-fg-muted hover:text-fg">‹ All chips</button>
+                    <SectionLabel className="mb-2">Edit “{editing.label}”</SectionLabel>
+                    <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
+                      {fields}
+                    </div>
+                    <div className={`${CARD_LEVEL_1} px-3 py-1`}>
+                      <SettingRow header variant="item" title="Show above the message box" description="Off keeps it here, set aside"
+                        control={<Toggle checked={true} onChange={() => {}} aria-label="Show above the message box" />} />
+                    </div>
+                    {actions}
+                  </section>
+                );
+              }
+              return (
+                <section className="space-y-4">
+                  <div>
+                    <SectionLabel className="mb-2">Shown above the message box</SectionLabel>
+                    <div className={`${CARD_LEVEL_1} p-3 flex flex-wrap gap-1.5 min-h-12`}>{shown.map((c, i) => pill(c, i, false))}</div>
                   </div>
-                )}
-              </section>
-            )}
-            {QC_STYLE === 'fields' && chips.length > 0 && (
-              <section>
-                <SectionLabel className="mb-2">Your chips ({chips.length} of 10)</SectionLabel>
-                <div className="space-y-2">
-                  {chips.map((chip, i) => (
-                    <div key={i} className={`${CARD_LEVEL_1} p-2 flex gap-2 items-start`}>
-                      <span className="pt-1.5 text-fg-faint"><DragGrip /></span>
-                      <div className="flex-1 min-w-0 space-y-1">
-                        <TextInput size="sm" defaultValue={chip.label} aria-label="Chip label" className="w-full" />
-                        <Textarea size="sm" defaultValue={chip.prompt} rows={2} aria-label="Chip prompt" className="w-full" />
-                      </div>
-                      <button type="button" aria-label="Remove chip" onClick={() => remove(i)} className="shrink-0 px-1 pt-1 text-fg-muted hover:text-fg">&times;</button>
+                  <div>
+                    <SectionLabel className="mb-2">Set aside</SectionLabel>
+                    <div className={`${CARD_LEVEL_1} p-3 flex flex-wrap gap-1.5 min-h-12`}>{aside.map((c, j) => pill(c, shown.length + j, true))}</div>
+                  </div>
+                  <p className="text-3xs text-fg-muted">Drag a chip between the two to show or hide it, or along a row to reorder.</p>
+                  {QC_STYLE === 'shelves-card' && editing && (
+                    <div>
+                      <SectionLabel className="mb-2">Edit “{editing.label}”</SectionLabel>
+                      <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>{fields}{actions}</div>
                     </div>
-                  ))}
-                </div>
-              </section>
-            )}
+                  )}
+                </section>
+              );
+            })()}
             {QC_STYLE === 'rows' && chips.length > 0 && (
               <section>
               <SectionLabel className="mb-2">Your chips ({chips.length} of 10)</SectionLabel>

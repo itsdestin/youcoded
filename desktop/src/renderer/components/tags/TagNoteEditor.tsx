@@ -20,9 +20,10 @@ import { NoteEditor } from './NoteEditor';
 import type { TagRegistryApi } from '../../hooks/useTagRegistry';
 import { Button, CARD_LEVEL_1, SectionLabel, SettingRow, Toggle } from '../ui';
 import { PinIcon } from './PinIcon';
+import { TagCloudSketch, TagOnOffSketch } from './TagSketches';
 
 // TRIAL: which tag row the pick-menus-3 deck shows.
-const TAG_ROW_STYLE = 'switch' as 'switch' | 'chip';
+const TAG_ROW_STYLE = 'switch' as 'switch' | 'chip' | 'cloud' | 'onoff';
 
 const FIELD_LIFT = 'bg-well border-edge';
 
@@ -63,13 +64,19 @@ export function TagNoteEditor({
               control={<Toggle checked={pin.pinned} onChange={pin.onPin} aria-label="Pin to top" />} />
           </div>
         )}
+        {TAG_ROW_STYLE === 'onoff' ? (
+          <TagOnOffSketch registry={registry} appliedIds={appliedIds} onToggle={onToggleTag} />
+        ) : (
         <section>
           <SectionLabel className="mb-2">Tags</SectionLabel>
           <div className={`${CARD_LEVEL_1} p-3`}>
-            <TagPicker appliedIds={appliedIds} onToggle={onToggleTag} registry={registry}
-              manageInline rowStyle={TAG_ROW_STYLE} builtIns={pin ? [] : builtIns} />
+            {TAG_ROW_STYLE === 'cloud'
+              ? <TagCloudSketch registry={registry} appliedIds={appliedIds} onToggle={onToggleTag} />
+              : <TagPicker appliedIds={appliedIds} onToggle={onToggleTag} registry={registry}
+                  manageInline rowStyle={TAG_ROW_STYLE} builtIns={pin ? [] : builtIns} />}
           </div>
         </section>
+        )}
         <section>
           <SectionLabel className="mb-2">Note</SectionLabel>
           <div className={`${CARD_LEVEL_1} p-3`}>
