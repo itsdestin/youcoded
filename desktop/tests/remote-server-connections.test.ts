@@ -299,6 +299,29 @@ describe('RemoteServer — readiness', () => {
     expect(ws.frames.length).toBe(4);
   });
 
+  it('an older app (client:ready with a seq and no version, expecting a chat snapshot) is refused with 4005 and a plain reason, not left blank', async () => {
+    const server = await makeServer();
+    const { ws } = connect(server);
+    const close = vi.spyOn(ws, 'close');
+    ws.emit('message', JSON.stringify({ type: 'client:ready', payload: { seq: 1, reconnect: false, ptyOffsets: {} } }));
+    await tick(); await tick();
+    expect(close).toHaveBeenCalledWith(4005, "This app is older than your computer's YouCoded. Update the app to keep using remote access.");
+    expect(ws.frames).toEqual([]);
+  });
+
+  it('a page that says its version is welcome; a page that says an old version is refused', async () => {
+    const server = await makeServer();
+    const a = connect(server);
+    a.ws.emit('message', JSON.stringify({ type: 'client:ready', payload: { reconnect: false, protocolVersion: 2 } }));
+    await tick(); await tick();
+    expect(a.ws.types()).toContain('session:created');
+    const b = connect(server);
+    const close = vi.spyOn(b.ws, 'close');
+    b.ws.emit('message', JSON.stringify({ type: 'client:ready', payload: { protocolVersion: 1 } }));
+    await tick(); await tick();
+    expect(close).toHaveBeenCalledWith(4005, expect.any(String));
+  });
+
   it('a second client:ready on one connection is ignored', async () => {
     const server = await makeServer();
     const { ws } = connect(server);
@@ -453,7 +476,7 @@ describe('RemoteServer — reliability', () => {
       const log = vi.spyOn(console, 'log').mockImplementation(() => {});
       const server = await makeServer();
       const ws = await signIn(server, { readyHandshake: true });
-      await send(ws, { type: 'client:ready', payload: { seq: 1, reconnect: false, ptyOffsets: {} } });
+      await send(ws, { type: 'client:ready', payload: { reconnect: false, protocolVersion: 2 } });
       ws.close(1006);
       const lines = log.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('[remote-server] ') && l.includes(' device '));
       expect(lines.some((l) => /connected/.test(l))).toBe(true);

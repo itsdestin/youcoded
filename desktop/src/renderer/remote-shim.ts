@@ -12,6 +12,7 @@ import { TABLE_ERROR_FLAG } from '../shared/table-error-flag';
 // WHY: remote-shim.ts lives in renderer/ and cannot import from main/ (Node.js
 import { REMOTE_UNSUPPORTED_EVENT, hasFeatureName, remoteFeatureName, remoteUnsupportedMessage } from './remote-unsupported';
 import { REMOTE_RECONNECTED_EVENT, REMOTE_REFRESH_EVENT } from './remote-events';
+import { FILL_PROTOCOL_VERSION } from '../shared/fill-protocol';
 import { announce } from './utils/announce';
 import { REMOTE_SCREEN_CAPABILITIES, normalizeCapabilities, normalizeProtocolVersion } from '../shared/capabilities';
 // The phone's own runtime while paired: localBridgeUrl + invokeLocalBridge (WHY there).
@@ -322,7 +323,7 @@ function maybeSendClientReady(): void {
   if (connectionState !== 'connected' || readySentThisGeneration) return;
   if (!listeners.get('session:created')?.size) return;   // App has not mounted its session listeners yet
   readySentThisGeneration = true;
-  fire('client:ready', { reconnect: readyReconnect });
+  fire('client:ready', { reconnect: readyReconnect, protocolVersion: FILL_PROTOCOL_VERSION });
 }
 /** Whether to preserve __PLATFORM__ on next auth:ok (prevents desktop overwriting 'android') */
 let preservePlatform = false;
@@ -1994,6 +1995,8 @@ export function installShim(): void {
         isAndroidLocal() ? refuseQuietlyOnPhone('session:open') : openSessionRemote(req),
       // Hand a list of pushes (an open's `before` / `after`) to the same listeners a live push reaches.
       play: (pushes: Array<{ type: string; payload: unknown }>) => playPushes(pushes),
+      // The host asks a PHONE to fill again by closing its connection (the reconnect fills everything), so this never fires here.
+      onRefill: (_cb: (sessionId: string) => void) => () => {},
       destroy: (sessionId: string) => invoke('session:destroy', { sessionId }),
       list: () => invoke('session:list'),
       browse: () => invoke('session:browse'),

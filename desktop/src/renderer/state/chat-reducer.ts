@@ -939,7 +939,10 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
     // renderer-local survives: rows this screen queued (a native queued send waits for the host to drain it).
     case 'SESSION_FILL_RESET': {
       const prev = next.get(action.sessionId);
-      next.set(action.sessionId, { ...createSessionChatState(), ...(prev ? { queuedMessages: prev.queuedMessages } : {}) });
+      // Also kept: this screen's own sends the transcript has not echoed yet (pending bubbles). The echo, when the fill's recent past or a
+      // later live event carries it, confirms the oldest matching pending (TRANSCRIPT_USER_MESSAGE) instead of appending a second copy.
+      const pending = prev ? prev.timeline.filter((e) => e.kind === 'user' && e.pending) : [];
+      next.set(action.sessionId, { ...createSessionChatState(), ...(prev ? { queuedMessages: prev.queuedMessages, timeline: pending } : {}) });
       return next;
     }
 

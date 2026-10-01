@@ -22,6 +22,7 @@ import { RemoteDeviceStore, type RemoteDeviceView } from './remote-devices';
 import type { LocalSkillProvider } from './skill-provider';
 import { VITE_DEV_PORT } from '../shared/ports';
 import { PROTOCOL_VERSION, REMOTE_SCREEN_CAPABILITIES } from '../shared/capabilities';
+import { isOldFillClient, CLOSE_OLD_CLIENT, OLD_APP_REASON } from '../shared/fill-protocol';
 import type { NativeSendResult } from '../shared/types';
 import type { ProviderRegistry } from './providers/provider-registry';
 import type { ModelCatalog } from './providers/model-catalog';
@@ -924,6 +925,16 @@ export class RemoteServer {
     }, PING_INTERVAL_MS);
   }
 
+  /** Hang up on one phone by its registry id so it reconnects and fills everything again (a fill of its that never completed). */
+  dropAudience(audienceId: number): void {
+    for (const client of this.clients) {
+      if (client.audienceId !== audienceId) continue;
+      this.logDevice(client, 'fill never completed; closing so it reconnects and fills again');
+      client.ws.close(4010, 'Catch-up needed');
+      this.removeClient(client);
+    }
+  }
+
   /** A phone left: take it out of the window registry (idempotent). */
   private leaveAudience(client: AuthenticatedClient): void {
     if (client.audienceId === undefined) return;
@@ -1050,6 +1061,14 @@ export class RemoteServer {
       // --- Readiness ---
       case 'client:ready': {
         // Push, no reply: the page has mounted its listeners, so the global state it needs can be sent (sendHello). Once per connection.
+        // A page from before the one fill path expects a chat snapshot that is gone; it would show empty conversations with no
+        // explanation. Say so and let it go (its shipped code treats 4005 as final, so it does not retry in a loop).
+        if (isOldFillClient(payload)) {
+          this.logDevice(client, 'older app (expects a chat snapshot); refused');
+          client.ws.close(CLOSE_OLD_CLIENT, OLD_APP_REASON);
+          this.removeClient(client);
+          break;
+        }
         if (client.helloSent) break;
         client.helloSent = true;
         this.logDevice(client, 'page ready');

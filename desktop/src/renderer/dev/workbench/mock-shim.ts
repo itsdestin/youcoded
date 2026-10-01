@@ -1012,6 +1012,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       return { ok: true as const, epoch: 'workbench', headSeq: 0, resume: 'page' as const, before: [], page, after: [], facts };
     },
     play: () => {},
+    onRefill: () => () => {},
     browse: async () => store.getState().past,
     // Welcome back — MOCK_ONLY until the per-install list lands in main.
     reopenList: async () => delay(store.getState().reopen),

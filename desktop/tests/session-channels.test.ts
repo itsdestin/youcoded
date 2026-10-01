@@ -20,7 +20,7 @@ const NOT_YET = new Set<string>([
 ]);
 const PUSHES = new Set<string>([
   IPC.SESSION_CREATED, IPC.SESSION_DESTROYED, IPC.SESSION_MOVED, IPC.SESSION_RENAMED, IPC.SESSION_META_CHANGED,
-  IPC.TRANSCRIPT_EVENT, IPC.TRANSCRIPT_SHRINK,
+  IPC.TRANSCRIPT_EVENT, IPC.TRANSCRIPT_SHRINK, IPC.SESSION_REFILL,
 ]);
 
 const desktopCtx = (extra: any = {}): any => ({ door: 'desktop', runtime: null, broadcast: () => {}, ...extra });

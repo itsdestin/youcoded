@@ -329,6 +329,8 @@ export const IPC = {
   // record's recent past and what only memory holds, or just the events a reconnecting screen missed. Replaced the remote
   // snapshot, the torn-off window's replay and the hook-event replay.
   SESSION_OPEN: 'session:open',
+  // Push to ONE window: its fill never completed (the hold expired), so it must fill that conversation again (R5-2 review fix).
+  SESSION_REFILL: 'session:refill',
   // The asks still open in a session, replayed at the end of every fill (a push in the answer's `after`, never sent by itself).
   HOOK_REPLAY_COMPLETE: 'hook:replay-complete',
   SESSION_DETACH_START: 'session:detach-start',
@@ -938,6 +940,8 @@ interface SessionBridge {
   open(req: { sessionId: string; claudeSessionId?: string; projectSlug?: string; fresh?: boolean }): Promise<import('./session-open-types').OpenReply | undefined>;
   /** Hand an open's pushes (`before` / `after`) to the same listeners a live push reaches. */
   play(pushes: Array<{ type: string; payload: unknown }>): void;
+  /** The computer asks this screen to fill a conversation again (its first fill never completed). */
+  onRefill(cb: (sessionId: string) => void): () => void;
   destroy(sessionId: string): Promise<boolean>;
   list(): Promise<any[]>;
   /** False on a remote client whose connection is down; always true on desktop. */

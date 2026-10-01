@@ -313,7 +313,7 @@ const sessionEntries: MainChannelDef[] = [
         : (ctx.audienceId !== undefined ? { key: `s${ctx.audienceId}`, id: ctx.audienceId, socket: true } : null);
       const sessionId = typeof req?.sessionId === 'string' ? req.sessionId : '';
       if (audience && sessionId) {
-        rt.fills.begin(audience.key, sessionId);
+        rt.fills.begin(audience.key, sessionId, { reset: true });
         // A phone gets a session's pushes once it has opened it: the same "this audience member wants this session" fact a
         // buddy window's subscribe is (R5-1). Joined BEFORE the head is sampled so nothing between them is missed.
         if (audience.socket) o.windowRegistry?.subscribe(sessionId, audience.id);

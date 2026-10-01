@@ -303,6 +303,20 @@ export class SessionRecords {
     }
   }
 
+  /**
+   * The conversation's transcript FILE changed under the session (a Claude Code /clear or an in-session /resume rotates onto a new file):
+   * everything before is no longer part of what a screen shows, so the fill tail starts over. WHY (R5-2 review): a Claude Code /clear is
+   * a screen-local action, not an event the record sees, so without this a screen that opened afterwards replayed the pre-clear
+   * messages from the tail and then the new file's page. The ring is untouched (a screen that is already filled is cleared by its own
+   * /clear, and a resume still replays only what it missed).
+   */
+  startNewTranscript(sessionId: string): void {
+    const rec = this.records.get(sessionId);
+    if (!rec) return;
+    rec.tail = [];
+    rec.tailBytes = 0;
+  }
+
   /** The recent transcript, merged, in order: what a screen that opens now applies first, as live events (R5-2). */
   fillTail(sessionId: string): Array<{ type: string; payload: unknown }> {
     return (this.records.get(sessionId)?.tail ?? []).map((t) => ({ type: t.type, payload: t.payload }));

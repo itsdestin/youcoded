@@ -398,6 +398,13 @@ export function registerIpcHandlers(
 
   // WHY (one-core R5-1): the ONE way a session-scoped push leaves the core — the windows by the registry's audience, every
   // phone, and the session's record. A hand-written sendForSession + broadcast pair is rejected by ast-grep (no-paired-session-send-and-broadcast).
+  // WHY (R5-2 review): a screen whose fill never completed has had its held pushes dropped; tell it to fill again. A window is asked to
+  // (session:refill); a phone is hung up on, and its reconnect fills every conversation.
+  runtime.fills.setExpireHandler((key, sessionId) => {
+    const id = Number(key.slice(1));
+    if (key[0] === 'w') { const wc = webContents.fromId(id); if (wc && !wc.isDestroyed()) wc.send(IPC.SESSION_REFILL, sessionId); }
+    else remoteServer?.dropAudience(id);
+  });
   const publish = createPublish({
     records: runtime.records,
     fills: runtime.fills,
@@ -1968,6 +1975,7 @@ export function registerIpcHandlers(
       // CLEAR_TIMELINE-equivalent coupled to the remap.
       awaitingFirstResumeHook.delete(desktopId);
       if (current && current !== claudeId) {
+        runtime.records.startNewTranscript(desktopId); // /clear or an in-session /resume: the pre-rotation messages are no longer what a screen shows
         admittedResumes.delete(desktopId);
         teardownSessionWatchers(desktopId);
         // 2b: /clear rotates the CC session id WITHOUT firing session-exit, so the

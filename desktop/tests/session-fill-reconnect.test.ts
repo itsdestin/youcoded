@@ -148,14 +148,39 @@ describe('the answer and the live stream never overlap or leave a gap', () => {
     expect(sent).toHaveLength(1);
   });
 
-  it('a screen that never gets its answer is not held forever', async () => {
+  it('a screen that never gets its answer is not held forever: its held pushes are DROPPED (never delivered ahead of the answer) and it is told to fill again', async () => {
     const fills = new AudienceFills();
     const delivered: number[] = [];
-    fills.begin('w1', S, 20);
+    const expired: string[] = [];
+    fills.setExpireHandler((key, sid) => expired.push(`${key}/${sid}`));
+    fills.begin('w1', S, { timeoutMs: 20 });
     fills.hold('w1', S, () => delivered.push(1));
     await new Promise((r) => setTimeout(r, 60));
-    expect(delivered).toEqual([1]);
+    expect(delivered).toEqual([]);
+    expect(expired).toEqual(['w1/s1']);
     expect(fills.filling('w1', S)).toBe(false);
+  });
+
+  it('a queue that grows past its bound expires the hold the same way', () => {
+    const fills = new AudienceFills();
+    const expired: string[] = [];
+    fills.setExpireHandler((key) => expired.push(key));
+    fills.begin('s7', S);
+    for (let i = 0; i < 5_001; i++) fills.hold('s7', S, () => {});
+    expect(expired).toEqual(['s7']);
+    expect(fills.pending()).toBe(0);
+  });
+
+  it('a tear-off holds from the transfer; the ask resets the queue, so what the answer already contains is not delivered again', async () => {
+    const { sent, fills, records, publish } = wire();
+    fills.begin('s7', S);                                   // transfer-time hold
+    publish(S, 'transcript:event', delta(1));              // published after the transfer, before the ask
+    fills.begin('s7', S, { reset: true });                 // the ask
+    const reply = ok(await openSession(deps(records), { sessionId: S, fresh: true }));
+    sent.push({ kind: 'reply' });
+    fills.release('s7', S);
+    expect(sent.map((s) => s.kind)).toEqual(['reply']);    // the early push is in the answer, not delivered twice
+    expect(reply.before.some((p: any) => p.payload.uuid === 'd1')).toBe(true);
   });
 
   it('a screen that goes away mid-fill is owed nothing', () => {
@@ -167,5 +192,40 @@ describe('the answer and the live stream never overlap or leave a gap', () => {
     fills.release('s7', S);
     expect(delivered).toEqual([]);
     expect(fills.pending()).toBe(0);
+  });
+});
+
+describe('the terminal has no hole between the ask and the answer', () => {
+  it('a chunk printed while the page is being read is inside the answer (the phone drops live frames until the answer arrives)', async () => {
+    const records = new SessionRecords();
+    records.begin(S);
+    records.notePty(S, 'AAAA');
+    let release!: () => void;
+    const slow = new Promise<void>((r) => { release = r; });
+    const pending = openSession({ ...deps(records), page: async () => { await slow; return bigPage(); } }, { sessionId: S, fresh: true, pty: {} });
+    records.notePty(S, 'BBBB');                      // printed during the page read
+    release();
+    const reply = ok(await pending);
+    expect(reply.pty).toEqual({ epoch: records.epochOf(S), offset: 0, data: 'AAAABBBB', reset: false });
+  });
+
+  it('a chunk printed right after the answer is cut continues exactly where the answer ends (no hole, no overlap)', async () => {
+    const records = new SessionRecords();
+    records.begin(S);
+    records.notePty(S, 'AAAA');
+    const reply = ok(await openSession(deps(records), { sessionId: S, fresh: true, pty: {} }));
+    const next = records.notePty(S, 'CC')!;
+    expect(next.offset).toBe(reply.pty!.offset + reply.pty!.data.length);
+  });
+
+  it('a reconnect (events) cuts the terminal at the same instant as the events', async () => {
+    const records = new SessionRecords();
+    records.begin(S);
+    records.notePty(S, 'AAAA');
+    const have = { epoch: records.epochOf(S)!, seq: records.headSeq(S) };
+    records.notePty(S, 'BB');
+    const reply = ok(await openSession(deps(records), { sessionId: S, have, pty: { epoch: records.epochOf(S)!, units: 4 } }));
+    expect(reply.resume).toBe('events');
+    expect(reply.pty).toMatchObject({ offset: 4, data: 'BB', reset: false });
   });
 });

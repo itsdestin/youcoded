@@ -225,6 +225,7 @@ const IPC = {
   SESSION_OWNERSHIP_LOST: 'session:ownership-lost',
   DETACH_CLAIM_PENDING: 'detach:claim-pending',
   SESSION_OPEN: 'session:open',
+  SESSION_REFILL: 'session:refill',
   HOOK_REPLAY_COMPLETE: 'hook:replay-complete',
   SESSION_DETACH_START: 'session:detach-start',
   SESSION_DETACH_LIVE: 'session:detach-live',
@@ -610,6 +611,11 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke(IPC.SESSION_OPEN, req),
     // Hand pushes (an open's `before` / `after`) to the SAME listeners a live push reaches. `ipcRenderer` is an event emitter, so
     // emitting the channel locally runs exactly the handlers `on.*` registered, with no second set of rules for a filled window.
+    onRefill: (cb: (sessionId: string) => void) => {
+      const handler = (_e: IpcRendererEvent, sessionId: string) => cb(sessionId);
+      ipcRenderer.on(IPC.SESSION_REFILL, handler);
+      return () => { ipcRenderer.removeListener(IPC.SESSION_REFILL, handler); };
+    },
     play: (pushes: Array<{ type: string; payload: unknown }>) => {
       for (const p of pushes ?? []) {
         if (!PLAYABLE_PUSHES.has(p.type)) continue;

@@ -161,7 +161,28 @@ describe('first-page loader (one fill)', () => {
   });
 });
 
+describe('a conversation that ended while the screen was away', () => {
+  it('is shown as ended, counts as answered (the strip must not say "may be behind"), and is never asked about again', async () => {
+    const gone: string[] = [];
+    const open = vi.fn(async () => ({ ok: false, error: 'ended', gone: true } as OpenReply));
+    const loader = createFirstPageLoader({ open, requestPage: vi.fn(), dispatch: () => {}, flush: () => {}, play: () => {}, gone: (s) => gone.push(s), sleep: async () => {} });
+    expect(await loader.refill('s', { fresh: false })).toBe('ok');
+    expect(gone).toEqual(['s']);
+    loader.noteLiveActivity('s');
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('refill (a reconnect, or Refresh)', () => {
+  it('fills even a conversation whose first load gave up (a tear-off window always fills)', async () => {
+    let n = 0;
+    const r = rig(() => (++n <= FIRST_PAGE_UNRESOLVED_ATTEMPTS ? unresolved : real));
+    await r.loader.load('s');
+    expect(r.types().at(-1)).toBe('HISTORY_PAGE_FAILED');
+    expect(await r.loader.refill('s', { fresh: true })).toBe('ok');
+    expect(r.types()).toContain('HISTORY_PAGE_LOADED');
+  });
+
   it('sends where the screen got to (no fresh) and applies ONLY the missed events when the computer can continue', async () => {
     const actions: ChatAction[] = [];
     const played: Push[][] = [];

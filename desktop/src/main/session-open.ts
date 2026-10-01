@@ -88,8 +88,10 @@ export async function openSession(deps: OpenDeps, req: OpenRequest, opts: { remo
   const decision = records.resume(sessionId, req.fresh ? null : req.have)!;
   const facts = records.facts(sessionId)!;
   const base = { epoch: decision.epoch, headSeq: decision.headSeq, facts: { working: facts.working, attention: facts.attention } };
-  // The terminal rides the same answer (a phone only), cut from the same instant.
-  const pty = req.pty ? records.ptyFrom(sessionId, req.pty) ?? undefined : undefined;
+  // The terminal rides the same answer (a phone only). WHY its cut is NOT taken here (review fix): the phone drops live terminal frames until
+  // this answer arrives, so a frame published while the page is being read would be in neither the answer nor the live stream. The cut is
+  // taken right before the answer is built, after the page read, with nothing awaited between the cut and the return.
+  const cutPty = () => (req.pty ? records.ptyFrom(sessionId, req.pty) ?? undefined : undefined);
 
   // Asks still waiting: the host's own answer for a native session (its broker), the record's for anything else.
   // A password ask is never replayed to a phone (the hook buffer's old rule: a rolling log must not hold a password ask's
@@ -105,6 +107,7 @@ export async function openSession(deps: OpenDeps, req: OpenRequest, opts: { remo
     const after = withoutAsksClosedLater(missed);
     // The consent rule: every card still awaiting that is not named here was answered while the screen was away.
     after.push({ type: 'hook:replay-complete', payload: { sessionId, pendingRequestIds: pendingIds() } });
+    const pty = cutPty();
     return { ok: true, ...base, resume: 'events', before: [], page: null, after, ...(pty ? { pty } : {}) };
   }
 
@@ -130,5 +133,6 @@ export async function openSession(deps: OpenDeps, req: OpenRequest, opts: { remo
     payload: { type: 'replay-complete', sessionId, uuid: `replay-complete-${sessionId}`, timestamp: Date.now(), data: { sessionIdle: !!native && native.idle() } },
   });
   after.push({ type: 'hook:replay-complete', payload: { sessionId, pendingRequestIds: asks.map((p) => idOf(p.payload)).filter((x): x is string => !!x) } });
+  const pty = cutPty();   // after the page read: see cutPty
   return { ok: true, ...base, resume: 'page', before, page, after, ...(pty ? { pty } : {}) };
 }

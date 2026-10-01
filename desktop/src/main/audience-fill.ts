@@ -11,26 +11,50 @@
 //
 // Electron-free: a delivery is a closure, so a window's `webContents.send` and a phone's socket write are the same here.
 const DEFAULT_TIMEOUT_MS = 30_000;
+/** More than this waiting for one screen means something is wrong (a streamed answer held for a long time): expire the hold. */
+const MAX_HELD = 5_000;
 
 interface Hold { queue: Array<() => void>; timer: ReturnType<typeof setTimeout> | null }
 
 export class AudienceFills {
   // audience key ('w<windowId>' or 's<socketId>') -> session id -> what is waiting
   private readonly holds = new Map<string, Map<string, Hold>>();
+  private onExpire: ((key: string, sessionId: string) => void) | null = null;
 
   /**
-   * Start holding `sessionId`'s pushes for this screen. Idempotent (a second begin keeps the queue and restarts the
-   * timer). The timeout is a safety net: a screen that never gets its answer (a window that closed mid-fill) must not
-   * sit on a queue forever, so when it fires the held pushes are delivered as they are.
+   * What happens to a screen whose answer never came (review fix, R5-2). The held pushes are DROPPED, not delivered: delivering them
+   * before the answer would be applied to a session with no history, and the answer, when it finally arrives, starts the session over
+   * and would erase them anyway. The screen is told to fill again instead (a window: a refill push; a phone: its connection is
+   * closed so it reconnects and fills), which is the only way to be sure it ends up complete.
    */
-  begin(key: string, sessionId: string, timeoutMs = DEFAULT_TIMEOUT_MS): void {
+  setExpireHandler(fn: ((key: string, sessionId: string) => void) | null): void { this.onExpire = fn; }
+
+  /**
+   * Start holding `sessionId`'s pushes for this screen. A second begin keeps the queue and restarts the timer (unless `reset`).
+   * The timeout is a safety net: a screen that never gets its answer must not sit on a queue forever; when it fires the held
+   * pushes are dropped and the screen is told to fill again (setExpireHandler).
+   */
+  begin(key: string, sessionId: string, opts: { timeoutMs?: number; reset?: boolean } = {}): void {
     let bySession = this.holds.get(key);
     if (!bySession) { bySession = new Map(); this.holds.set(key, bySession); }
     let hold = bySession.get(sessionId);
     if (!hold) { hold = { queue: [], timer: null }; bySession.set(sessionId, hold); }
+    // `reset`: the ask itself. Everything queued before it (a tear-off holds from the transfer) happened BEFORE the sample the answer
+    // is cut at, so the answer already contains it; keeping it would deliver it a second time after the answer.
+    if (opts.reset) hold.queue = [];
     if (hold.timer) clearTimeout(hold.timer);
-    hold.timer = setTimeout(() => this.release(key, sessionId), timeoutMs);
+    hold.timer = setTimeout(() => this.expire(key, sessionId), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
     hold.timer.unref?.();
+  }
+
+  private expire(key: string, sessionId: string): void {
+    const bySession = this.holds.get(key);
+    const hold = bySession?.get(sessionId);
+    if (!bySession || !hold) return;
+    if (hold.timer) clearTimeout(hold.timer);
+    bySession.delete(sessionId);
+    if (bySession.size === 0) this.holds.delete(key);
+    try { this.onExpire?.(key, sessionId); } catch (err) { console.warn('[audience-fill] expiry handler failed:', String(err)); }
   }
 
   filling(key: string, sessionId: string): boolean {
@@ -42,6 +66,7 @@ export class AudienceFills {
     const hold = this.holds.get(key)?.get(sessionId);
     if (!hold) return false;
     hold.queue.push(deliver);
+    if (hold.queue.length > MAX_HELD) this.expire(key, sessionId);
     return true;
   }
 

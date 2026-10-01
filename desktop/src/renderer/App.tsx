@@ -692,6 +692,7 @@ function AppInner() {
   // old one-shot guard left a live conversation blank ("Start a conversation")
   // whenever its only load lost the resume race or hit a Windows file lock.
   // See first-page-loader.ts.
+  const goneRef = useRef<(sid: string) => void>(() => {});
   const firstPagesRef = useRef<FirstPageLoader | null>(null);
   if (!firstPagesRef.current) firstPagesRef.current = createFirstPageLoader({
     // WHY open, not a page request (one-core R5-2): a window, a torn-off window and a phone all fill a conversation the same way — the
@@ -700,6 +701,7 @@ function AppInner() {
     open: async (req) => (window.claude.session as any).open(req),
     requestPage: async (req) => (window as any).claude?.detach?.requestTranscriptPage?.(req),
     dispatch,
+    gone: (sid) => goneRef.current(sid),
     flush: flushTranscriptActions,
     play: (pushes) => (window.claude.session as any).play?.(pushes),
   });
@@ -1818,6 +1820,8 @@ function AppInner() {
     void Promise.all(ids.map((id: string) => firstPages.refill(id, { fresh }))).then(reportFillRound);
   }, [firstPages, reportFillRound]);
   useOnRemoteReconnect(() => fillAgain(false));
+  // The computer says this window's fill of a conversation never completed (its hold expired): fill it again from a fresh page.
+  useEffect(() => (window.claude.session as any).onRefill?.((sid: string) => { void firstPages.refill(sid, { fresh: true }); }), [firstPages]);
   useEffect(() => {
     const onRefresh = () => fillAgain(true);
     window.addEventListener(REMOTE_REFRESH_EVENT, onRefresh);
@@ -1982,7 +1986,9 @@ function AppInner() {
       // marker). This used to be a page read here plus a separate replayLiveState call chained after it, and a Claude Code session's
       // open ask was not part of it at all. Main holds this window's pushes for the session until the answer is out, so the answer
       // and the live stream never overlap or leave a gap.
-      void loadFirstPage(sid);
+      // Always fill (never `load`, which does nothing for an id this window already loaded or gave up on): the host holds this window's
+      // pushes for the conversation from the transfer until the answer is out, so a window that does not ask would sit frozen.
+      void firstPages.refill(sid, { fresh: true });
     };
 
     const cleanupAcquired = det.onOwnershipAcquired?.(applyAcquired);
@@ -2673,6 +2679,8 @@ function AppInner() {
     dispatchArtifact({ type: 'SESSION_REMOVED', sessionId: id });
     clearMoved(id);
   }, [dispatch, dispatchArtifact, clearMoved]);
+  // A conversation that ended while this screen was away: shown the way an ended one is (its pill goes away), never as "may be behind".
+  useEffect(() => { goneRef.current = removeSessionLocally; }, [removeSessionLocally]);
   useEffect(() => {
     // WHY: a remote reconnect has a NEW owner; the server already canceled
     // the old connection's attempt. Do not offer a retry with its stale ID.

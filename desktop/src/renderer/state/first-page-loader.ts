@@ -63,6 +63,8 @@ export interface FirstPageLoaderDeps {
   flush: () => void;
   /** Hand pushes to the listeners a live push reaches (`window.claude.session.play`). */
   play: (pushes: Push[]) => void;
+  /** The computer says this conversation has ended (it ended while this screen was away): show it as ended and stop asking. */
+  gone?: (sessionId: string) => void;
   sleep?: (ms: number) => Promise<void>;
 }
 
@@ -150,6 +152,12 @@ export function createFirstPageLoader(deps: FirstPageLoaderDeps): FirstPageLoade
     }
     // Closed while we waited (retainOnly dropped it): record nothing.
     if (busyOrDone.get(sid) !== token) return 'failed';
+    if (reply && !reply.ok && reply.gone) {
+      // An ended conversation is an ANSWER, not a failure: nothing to retry, and the strip must not say "may be behind" for it.
+      deps.gone?.(sid);
+      inflight.delete(sid); busyOrDone.delete(sid); failed.delete(sid); runs.delete(sid);
+      return 'ok';
+    }
     if (!reply || !reply.ok) return bad();
 
     const filler = { dispatch: deps.dispatch, flush: deps.flush, play: deps.play };

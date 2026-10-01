@@ -359,7 +359,7 @@ describe('remote-shim — client:ready', () => {
       (window as any).claude.on.sessionCreated(() => {});
       const readies = ws.sentOf('client:ready');
       expect(readies).toHaveLength(1);
-      expect(readies[0].payload).toEqual({ reconnect: false });
+      expect(readies[0].payload).toEqual({ reconnect: false, protocolVersion: 2 });
       expect(readies[0].id).toBeUndefined();                    // no reply expected
     });
 
