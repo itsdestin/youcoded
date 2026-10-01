@@ -1657,3 +1657,35 @@ describe('chat reducer copy-on-write', () => {
     expect(chatReducer(s, { type: 'PERMISSION_REQUEST', sessionId: COW, toolName: 'Read', input: { file_path: '/a' }, requestId: 'req-1' } as ChatAction)).toBe(s);
   });
 });
+
+describe('a sent message the computer may not have received', () => {
+  const sent = (sendId?: string): ChatState => dispatch(initState(), { type: 'USER_PROMPT', sessionId: SESSION, content: 'hello', timestamp: 1, ...(sendId ? { sendId } : {}) } as ChatAction);
+  const bubble = (s: ChatState) => s.get(SESSION)!.timeline.find((e) => e.kind === 'user') as any;
+
+  it('carries its id on the bubble, takes a note, changes it and clears it, touching only that bubble', () => {
+    let s = dispatch(sent('id1'), { type: 'USER_PROMPT', sessionId: SESSION, content: 'other', timestamp: 2, sendId: 'id2' } as ChatAction);
+    expect(bubble(s).sendId).toBe('id1');
+    s = dispatch(s, { type: 'SEND_NOTE', sessionId: SESSION, sendId: 'id1', note: 'unsure' });
+    expect(bubble(s).sendNote).toBe('unsure');
+    expect((s.get(SESSION)!.timeline[1] as any).sendNote).toBeUndefined();
+    s = dispatch(s, { type: 'SEND_NOTE', sessionId: SESSION, sendId: 'id1', note: 'not-sent' });
+    expect(bubble(s).sendNote).toBe('not-sent');
+    s = dispatch(s, { type: 'SEND_NOTE', sessionId: SESSION, sendId: 'id1', note: null });
+    expect(bubble(s).sendNote).toBeUndefined();
+  });
+
+  it('the same note again, a note for an unknown id and a note for a bubble already confirmed are the very same state back', () => {
+    const s = dispatch(sent('id1'), { type: 'SEND_NOTE', sessionId: SESSION, sendId: 'id1', note: 'unsure' });
+    expect(dispatch(s, { type: 'SEND_NOTE', sessionId: SESSION, sendId: 'id1', note: 'unsure' })).toBe(s);
+    expect(dispatch(s, { type: 'SEND_NOTE', sessionId: SESSION, sendId: 'nobody', note: 'not-sent' })).toBe(s);
+    const confirmed = dispatch(s, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, text: 'hello', timestamp: 3, uuid: 'e1' } as ChatAction);
+    expect(dispatch(confirmed, { type: 'SEND_NOTE', sessionId: SESSION, sendId: 'id1', note: 'not-sent' })).toBe(confirmed);
+  });
+
+  it('discarding removes just that unconfirmed bubble', () => {
+    let s = dispatch(sent('id1'), { type: 'USER_PROMPT', sessionId: SESSION, content: 'keep', timestamp: 2, sendId: 'id2' } as ChatAction);
+    s = dispatch(s, { type: 'SEND_DISCARD', sessionId: SESSION, sendId: 'id1' });
+    expect(s.get(SESSION)!.timeline.map((e: any) => e.message?.content)).toEqual(['keep']);
+    expect(dispatch(s, { type: 'SEND_DISCARD', sessionId: SESSION, sendId: 'id1' })).toBe(s);
+  });
+});

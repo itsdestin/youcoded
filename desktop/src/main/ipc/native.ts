@@ -42,10 +42,15 @@ export const nativeChannels: MainChannelDef[] = [
   // M1: answers {status:'sent'|'queued'|'failed'} so the screen can draw truthful bubbles; send() never throws.
   defineChannel({
     name: IPC.NATIVE_SEND, kind: 'handle',
-    handler: ({ sessionId, text, attachments }, ctx) => {
+    handler: ({ sessionId, text, attachments, sendId }, ctx) => {
       // Only text paths are handed to the host (the phone's old rule; a hand-made message cannot slip anything else in).
       const files = (Array.isArray(attachments) ? attachments : []).filter((a): a is string => typeof a === 'string');
-      return ctx.runtime ? ctx.runtime.nativeHost.send(sessionId, text, files) : NOT_LIVE_SEND;
+      if (!ctx.runtime) return NOT_LIVE_SEND;
+      const result = ctx.runtime.nativeHost.send(sessionId, text, files);
+      // The host took it (sent now, or queued behind the running turn): note the id so a phone that lost the answer can learn so (R5-4b).
+      // A 'failed' answer is NOT noted: the host did not accept it, which is exactly what "not received" means.
+      if (sendId !== undefined && result && result.status !== 'failed') ctx.runtime.records.noteSend(sessionId, sendId);
+      return result;
     },
   }),
   defineChannel({ name: IPC.NATIVE_QUEUE_REMOVE, kind: 'handle', handler: ({ sessionId, queueId }, ctx) => ctx.runtime ? ctx.runtime.nativeHost.removeQueued(sessionId, queueId) : false }),

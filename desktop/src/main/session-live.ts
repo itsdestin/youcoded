@@ -13,13 +13,16 @@
 //   - /model <alias> and /compact, from what a screen TYPED into the terminal (the computer is the one that writes those bytes);
 //   - "Conversation cleared", from the SessionStart hook's `source: "clear"` (Claude Code's own field, not terminal text).
 //
+// Cards a terminal shows and the "may be stuck" reading are found by main/session-screens.ts (the computer's own copy of each terminal) and
+// published through this class, so there is one writer of each.
+//
 // Electron-free and injected, like publish.ts: tests drive it with a record and a fake publish.
 import type { Publish } from './publish';
 import type { SessionRecords } from './session-record';
 import { detectPermissionMode } from '../shared/permission-mode-detect';
 import { claudeAliasForModelId, CLAUDE_ALIAS_LABELS, isPlaceholderModelId } from '../shared/model-ids';
 import { IPC } from '../shared/backend-contract';
-import type { PromptReport, PromptCardButton, SessionLiveBody } from '../shared/session-live-types';
+import type { PromptCardButton, SessionLiveBody } from '../shared/session-live-types';
 
 /** Typed into the terminal as a whole write: `/model opus[1m]` + Enter. A write that is only part of a line never matches. */
 const MODEL_COMMAND_RE = /^\/model[ \t]+(\S+)[ \t]*\r?$/;
@@ -41,7 +44,6 @@ const MODEL_REJECT_WINDOW_MS = 8000;
 const MODEL_REJECT_RE = /model[^\n]{0,80}(?:not found|invalid|unknown|not available|unavailable|isn't available|does not exist|can't be used)|(?:invalid|unknown|unsupported)[^\n]{0,24}model/i;
 /** Assistant output, a tool or a finished turn means Claude Code is past any menu it was showing (a menu blocks its input). */
 const MOVED_ON_TYPES = new Set(['assistant-text', 'tool-use', 'turn-complete']);
-const MAX_CARD_BUTTONS = 8;
 
 /** A compaction with no event of any kind for this long has stopped (the screens' own watchdog used this number). */
 export const COMPACT_IDLE_LIMIT_MS = 180_000;
@@ -240,62 +242,25 @@ export class SessionLiveFacts {
   }
 
   /**
-   * A computer window saw a card in its terminal (usage limit, trust folder, resume ...) and says so. The host publishes it ONCE however
-   * many windows report the same card, as a numbered event, so every screen draws it in the same place; a screen that opens later is handed
-   * the cards still open (record.liveFill).
+   * The computer's own reading of a terminal (main/session-screens.ts) found a card (usage limit, trust folder, resume ...). The host publishes it
+   * ONCE, as a numbered event every screen draws in the same place; a screen that opens later is handed the cards still open (record.liveFill).
+   * (Until R5-4b a computer window or a phone read the terminal and REPORTED the card; nothing outside the host can put a card in front of the
+   * person at the computer any more.)
    */
-  reportPrompt(report: PromptReport, opts: { fromPhone?: boolean } = {}): { ok: boolean } {
-    if (!report || typeof report.sessionId !== 'string' || !report.sessionId) return { ok: false };
-    const sid = report.sessionId;
-    // A window that has just (re)started reads its terminal and says which menus are on screen; any card the record still holds for a menu that is
-    // NOT there is dismissed (a window that reloaded while a menu was up never reports it going away; review fix, R5-4a F2). Windows only: a phone's
-    // terminal copy can be empty while it catches up, and must never be able to take a card away that the computer is still showing.
-    if (report.action === 'sync') {
-      if (opts.fromPhone || !Array.isArray(report.seen)) return { ok: false };
-      const seen = new Set(report.seen.filter((x): x is string => typeof x === 'string').map(baseId));
-      for (const p of this.deps.records.openPrompts(sid)) if (!seen.has(baseId(p.promptId))) this.live(sid, { kind: 'prompt-dismiss', promptId: p.promptId });
-      return { ok: true };
-    }
-    if (typeof report.promptId !== 'string' || !report.promptId || report.promptId.length > 200) return { ok: false };
-    if (report.action === 'dismiss') {
-      // A dismissal of a card that is not open says nothing new (a second window reporting the same menu going away).
-      if (!this.deps.records.hasPrompt(sid, report.promptId)) return { ok: true };
-      this.live(sid, { kind: 'prompt-dismiss', promptId: report.promptId });
-      return { ok: true };
-    }
-    if (report.action !== 'show') return { ok: false };
-    const card = cleanCard(report);
-    if (!card) return { ok: false };
-    // The same card reported by a window AND a phone (their terminal copies can differ in width, so their ids can differ): one card.
-    if (this.deps.records.hasPrompt(sid, card.promptId) || this.deps.records.openPrompts(sid).some((p) => p.title === card.title)) return { ok: true };
-    this.live(sid, { kind: 'prompt-show', ...card });
-    return { ok: true };
+  showPrompt(sessionId: string, card: { promptId: string; title: string; description?: string; buttons: PromptCardButton[]; defaultIndex?: number }): void {
+    // One card per question: the same promptId, or another card with the same title, is already up.
+    if (this.deps.records.hasPrompt(sessionId, card.promptId) || this.deps.records.openPrompts(sessionId).some((p) => p.title === card.title)) return;
+    this.live(sessionId, { kind: 'prompt-show', ...card });
   }
-}
 
-const baseId = (id: string): string => id.replace(/~\d+$/, '');
-
-/**
- * A report is rebuilt field by field, never passed through: a card is something every screen draws and a click on a button writes into the
- * terminal, so a phone (which may now report what ITS terminal copy shows) can only produce a card of the shape the parser produces. A button is a
- * label plus either one digit (a numbered menu) or a position to navigate to; no other keystroke, no second write.
- */
-function cleanCard(r: Extract<PromptReport, { action: 'show' }>): { promptId: string; title: string; description?: string; buttons: PromptCardButton[]; defaultIndex?: number } | null {
-  if (typeof r.title !== 'string' || !r.title || r.title.length > 160) return null;
-  if (r.description !== undefined && (typeof r.description !== 'string' || r.description.length > 4000)) return null;
-  if (!Array.isArray(r.buttons) || r.buttons.length > MAX_CARD_BUTTONS) return null;
-  const buttons: PromptCardButton[] = [];
-  for (const b of r.buttons as unknown[]) {
-    const x = (b ?? {}) as Record<string, unknown>;
-    if (typeof x.label !== 'string' || x.label.length > 300 || typeof x.input !== 'string' || !/^[1-9]?$/.test(x.input) || x.submitInput !== undefined) return null;
-    const out: PromptCardButton = { label: x.label, input: x.input };
-    if (x.pick !== undefined) {
-      const p = x.pick as Record<string, unknown>;
-      if (!p || typeof p.signature !== 'string' || p.signature.length > 600 || !Number.isInteger(p.index) || (p.index as number) < 0 || (p.index as number) >= MAX_CARD_BUTTONS) return null;
-      out.pick = { signature: p.signature, index: p.index as number };
-    } else if (x.input === '') return null; // a button that does nothing
-    buttons.push(out);
+  /** The menu a card was drawn for has left the terminal. A card that is not open says nothing new. */
+  dismissPrompt(sessionId: string, promptId: string): void {
+    if (!this.deps.records.hasPrompt(sessionId, promptId)) return;
+    this.live(sessionId, { kind: 'prompt-dismiss', promptId });
   }
-  if (r.defaultIndex !== undefined && (!Number.isInteger(r.defaultIndex) || r.defaultIndex < 0 || r.defaultIndex >= MAX_CARD_BUTTONS)) return null;
-  return { promptId: r.promptId, title: r.title, ...(r.description !== undefined ? { description: r.description } : {}), buttons, ...(r.defaultIndex !== undefined ? { defaultIndex: r.defaultIndex } : {}) };
+
+  /** The computer's "may be stuck" reading changed for a Claude Code turn (the only writer of it; see session-screens.ts). */
+  attention(sessionId: string, state: 'ok' | 'stuck'): void {
+    this.live(sessionId, { kind: 'attention', state });
+  }
 }

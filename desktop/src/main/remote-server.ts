@@ -614,10 +614,11 @@ export class RemoteServer {
 
   // --- Event handlers ---
 
-  private onPtyOutput = (sessionId: string, data: string) => {
+  private onPtyOutput = (sessionId: string, data: string, noted?: { epoch: string; offset: number } | null) => {
     // WHY the record (one-core R5-2): the terminal's bytes, with their own epoch and offset, live in the session's record beside its
-    // events, so a phone's `session:open` resumes the terminal and the chat from ONE place. This only appends and relays.
-    const at = this.getNativeRuntime()?.records.notePty(sessionId, data);
+    // events, so a phone's `session:open` resumes the terminal and the chat from ONE place. R5-4b: the core notes every chunk itself (whether or not
+    // this server runs) and passes where it sat; this only relays. A chunk that arrives without a position (a caller with no core) is noted here.
+    const at = noted ?? this.getNativeRuntime()?.records.notePty(sessionId, data);
     // A session the record has already closed (a late chunk) is not relayed: it has no stream to be a position in.
     if (!at) return;
     // The live relay: unchanged from what a client has always seen, now with the stream's epoch and the chunk's offset.

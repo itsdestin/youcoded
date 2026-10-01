@@ -1,6 +1,7 @@
 // The computer's own reading of a Claude Code session's live facts (one-core R5-4a): permission mode from the terminal footer (against REAL
 // Claude Code 2.1.281 captures), /model and /compact from what a screen typed, "Conversation cleared" from the SessionStart hook's own
-// `source`, and prompt cards reported by a window. Real record, real publish; only the two deliveries are fakes.
+// `source`, and the prompt cards and the "may be stuck" reading the computer's own terminal copy finds (main/session-screens.ts). Real record, real
+// publish; only the two deliveries are fakes.
 import { describe, it, expect, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
@@ -131,23 +132,40 @@ describe('/model, /compact and /clear', () => {
   });
 });
 
-describe('prompt cards a window reports', () => {
-  const show = { sessionId: S, action: 'show' as const, promptId: 'p1', title: 'Usage Limit Reached', buttons: [{ label: 'Stop and wait', input: '2' }] };
-  it('is published once however many windows report it, held for a later screen, and gone when dismissed', () => {
+describe('prompt cards the computer finds in a terminal', () => {
+  const card = { promptId: 'p1', title: 'Usage Limit Reached', buttons: [{ label: 'Stop and wait', input: '2' }] };
+  it('is published once however often it is found, held for a later screen, and gone when dismissed', () => {
     const h = host();
-    expect(h.live.reportPrompt(show)).toEqual({ ok: true });
-    h.live.reportPrompt(show);
+    h.live.showPrompt(S, card);
+    h.live.showPrompt(S, card);
     expect(h.lives().filter((l) => l.kind === 'prompt-show')).toHaveLength(1);
     expect(h.records.liveFill(S).filter((p: any) => p.payload.kind === 'prompt-show')).toHaveLength(1);
-    h.live.reportPrompt({ sessionId: S, action: 'dismiss', promptId: 'p1' });
-    h.live.reportPrompt({ sessionId: S, action: 'dismiss', promptId: 'p1' });
+    h.live.dismissPrompt(S, 'p1');
+    h.live.dismissPrompt(S, 'p1');
     expect(h.lives().filter((l) => l.kind === 'prompt-dismiss')).toHaveLength(1);
     expect(h.records.liveFill(S).some((p: any) => p.payload.kind === 'prompt-show')).toBe(false);
   });
-  it('refuses a malformed report', () => {
+  it('a second card with the same title (another id for the same question) is not a second card', () => {
     const h = host();
-    for (const bad of [null, { sessionId: S }, { sessionId: S, action: 'show', promptId: 'p' }, { sessionId: '', action: 'show', promptId: 'p', title: 't', buttons: [] }]) expect(h.live.reportPrompt(bad as any).ok).toBe(false);
-    expect(h.sent).toEqual([]);
+    h.live.showPrompt(S, card);
+    h.live.showPrompt(S, { ...card, promptId: 'other-width-id' });
+    expect(h.lives().filter((l) => l.kind === 'prompt-show')).toHaveLength(1);
+  });
+  it('the only way to put a card in front of the person is the host itself: nothing a screen sends can', () => {
+    expect((host().live as any).reportPrompt).toBeUndefined();
+  });
+});
+
+describe('the "may be stuck" reading', () => {
+  it('is published as a numbered event, held for a screen that opens later, and shows on the summary with no window involved', () => {
+    const h = host();
+    h.live.attention(S, 'stuck');
+    expect(h.lives().at(-1)).toEqual({ sessionId: S, kind: 'attention', state: 'stuck' });
+    expect(h.records.liveFill(S)).toContainEqual({ type: 'session:live', payload: { sessionId: S, kind: 'attention', state: 'stuck' } });
+    expect(h.records.summary(S)!.attention).toBe('stuck');
+    h.live.attention(S, 'ok');
+    expect(h.records.summary(S)!.attention).toBe('ok');
+    expect(h.records.liveFill(S).some((p: any) => p.payload.kind === 'attention')).toBe(false);
   });
 });
 
@@ -222,58 +240,14 @@ describe('a model switch Claude Code refuses', () => {
 });
 
 describe('a card that is gone must not stay', () => {
-  const card = (id: string, title = 'Usage Limit Reached') => ({ sessionId: S, action: 'show' as const, promptId: id, title, buttons: [{ label: 'Stop', input: '2' }] });
-  it('a window that restarted says what is on screen; cards for menus that left are dismissed, the one still there stays', () => {
-    const h = host();
-    h.live.reportPrompt(card('gone-menu')); h.live.reportPrompt(card('still-here', 'Trust This Folder?'));
-    h.live.reportPrompt({ sessionId: S, action: 'sync', seen: ['still-here'] });
-    expect(h.records.openPrompts(S).map((p) => p.promptId)).toEqual(['still-here']);
-    expect(h.lives().filter((l) => l.kind === 'prompt-dismiss')).toEqual([{ sessionId: S, kind: 'prompt-dismiss', promptId: 'gone-menu' }]);
-  });
-  it('a re-issued "~1" card counts as its menu; an empty screen clears everything', () => {
-    const h = host();
-    h.live.reportPrompt(card('m1~1'));
-    h.live.reportPrompt({ sessionId: S, action: 'sync', seen: ['m1'] });
-    expect(h.records.openPrompts(S)).toHaveLength(1);
-    h.live.reportPrompt({ sessionId: S, action: 'sync', seen: [] });
-    expect(h.records.openPrompts(S)).toHaveLength(0);
-  });
-  it('a phone can never sync (a catching-up terminal copy must not take a card away)', () => {
-    const h = host();
-    h.live.reportPrompt(card('p'));
-    expect(h.live.reportPrompt({ sessionId: S, action: 'sync', seen: [] }, { fromPhone: true }).ok).toBe(false);
-    expect(h.records.openPrompts(S)).toHaveLength(1);
-  });
   it('output from Claude Code newer than the card means it moved on: the card is dismissed; older (replayed) output does not', () => {
     const h = host();
-    h.live.reportPrompt(card('p'));
+    h.live.showPrompt(S, { promptId: 'p', title: 'Usage Limit Reached', buttons: [{ label: 'Stop', input: '2' }] });
     const at = h.records.openPrompts(S)[0].at;
     h.live.noteTranscript(S, { type: 'assistant-text', timestamp: at - 5000, data: { text: 'old replay' } });
     expect(h.records.openPrompts(S)).toHaveLength(1);
     h.live.noteTranscript(S, { type: 'assistant-text', timestamp: at + 1, data: { text: 'now' } });
     expect(h.records.openPrompts(S)).toHaveLength(0);
     expect(h.lives().at(-1)).toMatchObject({ kind: 'prompt-dismiss', promptId: 'p' });
-  });
-});
-
-describe('a phone reporting a card (interim until the computer reads terminals itself)', () => {
-  const ok = { sessionId: S, action: 'show' as const, promptId: 'p', title: 'Resume Session', buttons: [{ label: 'As is', input: '1' }, { label: 'Summary', input: '', pick: { signature: 'sig', index: 1 } }] };
-  it('is published, deduped against the same card from a window (even under another id)', () => {
-    const h = host();
-    expect(h.live.reportPrompt(ok, { fromPhone: true }).ok).toBe(true);
-    h.live.reportPrompt({ ...ok, promptId: 'other-width-id' });
-    expect(h.lives().filter((l) => l.kind === 'prompt-show')).toHaveLength(1);
-  });
-  it.each([
-    ['a button that types text', { ...ok, buttons: [{ label: 'x', input: 'rm -rf ~\r' }] }],
-    ['a second write', { ...ok, buttons: [{ label: 'x', input: '1', submitInput: '\r' }] }],
-    ['an escape sequence', { ...ok, buttons: [{ label: 'x', input: '\x1b[A' }] }],
-    ['a button that does nothing', { ...ok, buttons: [{ label: 'x', input: '' }] }],
-    ['too many buttons', { ...ok, buttons: Array.from({ length: 12 }, () => ({ label: 'x', input: '1' })) }],
-    ['a huge title', { ...ok, title: 'x'.repeat(500) }],
-  ])('refuses %s', (_n, bad) => {
-    const h = host();
-    expect(h.live.reportPrompt(bad as any, { fromPhone: true }).ok).toBe(false);
-    expect(h.sent).toEqual([]);
   });
 });

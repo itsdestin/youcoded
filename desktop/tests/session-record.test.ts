@@ -372,3 +372,107 @@ describe('the summary announcement also covers the queue length and the host\'s 
     expect(r.summary(S)!.hasHistory).toBe(true);
   });
 });
+
+describe('what the computer reads a session\'s screen for', () => {
+  const user = { sessionId: S, type: 'user-message', uuid: 'um1', timestamp: 1, data: { text: 'go' } };
+  const toolUse = (id: string, extra: Record<string, unknown> = {}) => ({ sessionId: S, type: 'tool-use', uuid: `tu-${id}`, timestamp: 1, data: { toolUseId: id, toolName: 'Bash', ...extra } });
+  const toolResult = (id: string) => ({ sessionId: S, type: 'tool-result', uuid: `tr-${id}`, timestamp: 1, data: { toolUseId: id, toolResult: 'ok', isError: false } });
+  const turnDone = { sessionId: S, type: 'turn-complete', uuid: 'td1', timestamp: 2, data: {} };
+
+  it('working, a tool running, an ask waiting, started and cards open, as plain facts', () => {
+    const r = new SessionRecords();
+    r.begin(S);
+    expect(r.screenNeed(S)).toEqual({ working: false, toolRunning: false, asking: false, started: false, cards: 0 });
+    r.note(S, 'transcript:event', user);
+    r.note(S, 'transcript:event', toolUse('t1'));
+    r.note(S, 'hook:event', ask('a1'));
+    expect(r.screenNeed(S)).toEqual({ working: true, toolRunning: true, asking: true, started: true, cards: 0 });
+    r.note(S, 'hook:event', hook('PermissionResolved', 'a1'));
+    r.note(S, 'transcript:event', toolResult('t1'));
+    r.note(S, 'session:live', { sessionId: S, kind: 'prompt-show', promptId: 'p1', title: 'Usage Limit Reached', buttons: [] });
+    expect(r.screenNeed(S)).toEqual({ working: true, toolRunning: false, asking: false, started: true, cards: 1 });
+    r.note(S, 'transcript:event', turnDone);
+    expect(r.screenNeed(S)!.working).toBe(false);
+    expect(r.screenNeed('nope')).toBeNull();
+  });
+
+  it('a tool running is a started tool-use without its result, never a helper\'s inner tool, and the turn ending clears them all', () => {
+    const r = new SessionRecords();
+    r.begin(S);
+    r.note(S, 'transcript:event', user);
+    r.note(S, 'transcript:event', toolUse('inner', { parentAgentToolUseId: 'outer' }));
+    expect(r.screenNeed(S)!.toolRunning).toBe(false);
+    r.note(S, 'transcript:event', toolUse('t1'));
+    r.note(S, 'transcript:event', toolUse('t2'));
+    r.note(S, 'transcript:event', toolResult('t1'));
+    expect(r.screenNeed(S)!.toolRunning).toBe(true);                      // t2 is still going
+    r.note(S, 'transcript:event', turnDone);
+    expect(r.screenNeed(S)!.toolRunning).toBe(false);
+  });
+
+  it('an ask Claude Code closed its hook on (kept) is not waiting on the person, a password ask is', () => {
+    const r = new SessionRecords();
+    r.begin(S);
+    r.note(S, 'hook:event', ask('a1'));
+    r.note(S, 'hook:event', { type: 'PermissionExpired', sessionId: S, payload: { _requestId: 'a1', _reason: 'hook-closed' }, timestamp: 2 });
+    expect(r.screenNeed(S)!.asking).toBe(false);
+    r.note(S, 'hook:event', { type: 'PasswordRequest', sessionId: S, payload: { _requestId: 'pw1' }, timestamp: 3 });
+    expect(r.screenNeed(S)!.asking).toBe(true);
+  });
+
+  it('tells its one listener only when one of those facts changes (a streamed answer of thousands of events is silent), and when the session ends', () => {
+    const r = new SessionRecords();
+    r.begin(S);
+    const heard: string[] = [];
+    r.onScreenNeedChange((id) => heard.push(id));
+    r.note(S, 'transcript:event', user);                                   // working
+    expect(heard).toHaveLength(1);
+    for (let i = 0; i < 300; i++) r.note(S, 'transcript:event', text(i + 10));
+    expect(heard).toHaveLength(1);
+    r.note(S, 'hook:event', hook('PostToolUse', 'x'));                      // the first hook: started
+    expect(heard).toHaveLength(2);
+    r.note(S, 'transcript:event', turnDone);
+    expect(heard).toHaveLength(3);
+    r.drop(S);
+    expect(heard).toHaveLength(4);
+    expect(r.screenNeed(S)).toBeNull();
+  });
+
+  it('the pty stream\'s newest part is handed over whole chunks at a time, with where it ends', () => {
+    const r = new SessionRecords();
+    r.begin(S);
+    r.notePty(S, 'a'.repeat(5000)); r.notePty(S, 'b'.repeat(5000)); r.notePty(S, 'c'.repeat(10));
+    const tail = r.ptyTail(S, 6000)!;
+    expect(tail.end).toBe(10010);
+    expect(tail.data.endsWith('c'.repeat(10))).toBe(true);
+    expect(tail.data.length).toBeGreaterThanOrEqual(6000);
+    expect(r.ptyTail('nope', 10)).toBeNull();
+  });
+});
+
+describe('what a summary says about "stuck"', () => {
+  it('the computer\'s reading shows when nothing else is wrong, another writer\'s state wins, and the turn ending takes it back', () => {
+    const r = new SessionRecords();
+    r.begin(S);
+    r.note(S, 'transcript:event', { sessionId: S, type: 'user-message', uuid: 'u', timestamp: 1, data: { text: 'go' } });
+    r.note(S, 'session:live', { sessionId: S, kind: 'attention', state: 'stuck' });
+    expect(r.summary(S)!.attention).toBe('stuck');
+    r.note(S, 'transcript:event', { sessionId: S, type: 'session-error', uuid: 'e', timestamp: 2, data: {} });
+    expect(r.summary(S)!.attention).toBe('error');
+    r.note(S, 'session:live', { sessionId: S, kind: 'attention', state: 'stuck' });
+    r.note(S, 'transcript:event', { sessionId: S, type: 'user-message', uuid: 'u2', timestamp: 3, data: { text: 'again' } });
+    r.note(S, 'session:live', { sessionId: S, kind: 'attention', state: 'stuck' });
+    r.note(S, 'transcript:event', { sessionId: S, type: 'turn-complete', uuid: 't', timestamp: 4, data: {} });
+    expect(r.summary(S)!.attention).toBe('ok');
+    expect(r.liveFill(S).some((p: any) => p.payload.kind === 'attention')).toBe(false);
+  });
+
+  it('a dot that changes because of it is announced', () => {
+    const r = new SessionRecords();
+    r.begin(S);
+    const heard: string[] = [];
+    r.onSummaryChange((id) => heard.push(id));
+    r.note(S, 'session:live', { sessionId: S, kind: 'attention', state: 'stuck' });
+    expect(heard).toEqual([S]);
+  });
+});

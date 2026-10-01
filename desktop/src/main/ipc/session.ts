@@ -30,7 +30,9 @@ import { listPastSessions, loadHistory, SAFE_ID_RE } from '../session-browser';
 import { readTranscriptMeta } from '../transcript-utils';
 import type { Publish } from '../publish';
 import type { SessionLiveFacts } from '../session-live';
+import type { SessionScreens } from '../session-screens';
 import { openSession, type NativeLive } from '../session-open';
+import { isSendId, SEND_OUTCOMES_MAX_IDS } from '../../shared/send-outcome-types';
 import { readTranscriptPage } from '../transcript-page';
 import { menuAnswerLock } from '../menu-answer-lock';
 import { shareInFlight } from '../share-in-flight';
@@ -68,6 +70,8 @@ export interface SessionOps {
   publish: Publish;
   /** The computer's reading of a Claude Code session's live facts (one-core R5-4a). */
   liveFacts?: SessionLiveFacts;
+  /** The computer's own copy of each Claude Code terminal (one-core R5-4b): told what is typed and the terminal's size. */
+  screens?: SessionScreens;
   naming: {
     get(): Promise<unknown>;
     set(value: unknown): Promise<unknown>;
@@ -231,29 +235,18 @@ const sessionEntries: MainChannelDef[] = [
   // `notice` is optional: a typed chat command says so, so the host knows which kind of write drew a divider (one-core R5-4a).
   defineChannel({
     name: IPC.SESSION_INPUT, kind: 'on',
-    handler: ({ sessionId, text, notice }) => {
+    handler: ({ sessionId, text, notice, sendId }, ctx) => {
       const o = ops();
       // Only a write that reached the terminal is a fact worth announcing (a refused one changed nothing).
-      if (o.sessionManager.sendInput(sessionId, text)) o.liveFacts?.noteInput(sessionId, text, notice);
+      if (o.sessionManager.sendInput(sessionId, text)) {
+        o.liveFacts?.noteInput(sessionId, text, notice);
+        o.screens?.noteInput(sessionId, text);
+        // The write was accepted, so the computer "received" this send: a phone that lost its connection right after can learn that (R5-4b).
+        if (sendId !== undefined) ctx.runtime?.records.noteSend(sessionId, sendId);
+      }
     },
   }),
-  // A computer window reports a card it read off its terminal (one-core R5-4a). Computer windows only: a phone's terminal copy is not read for
-  // cards (its screen draws the host's), so this adds no new thing a phone may do.
-  defineChannel({
-    name: IPC.SESSION_PROMPT_REPORT, kind: 'handle',
-    handler: (report, ctx) => {
-      const o = ops();
-      if (ctx.door === 'desktop') return o.liveFacts?.reportPrompt(report) ?? { ok: false };
-      // A phone may report a card its OWN terminal copy shows (the computer may have no window reading the terminal), and nothing wider:
-      // only for a conversation it is watching, only a card of the parser's own shape (see cleanCard), never a "sync" that could take a
-      // card away. Without these a phone could put arbitrary buttons in front of the person at the computer.
-      const sid = typeof report?.sessionId === 'string' ? report.sessionId : '';
-      const watching = ctx.audienceId !== undefined && !!sid && !!o.windowRegistry?.getSocketWatchers(sid).includes(ctx.audienceId);
-      if (!watching) return { ok: false };
-      return o.liveFacts?.reportPrompt(report, { fromPhone: true }) ?? { ok: false };
-    },
-  }),
-  defineChannel({ name: IPC.SESSION_RESIZE, kind: 'on', handler: ({ sessionId, cols, rows }) => { ops().sessionManager.resizeSession(sessionId, cols, rows); } }),
+  defineChannel({ name: IPC.SESSION_RESIZE, kind: 'on', handler: ({ sessionId, cols, rows }) => { const o = ops(); if (o.sessionManager.resizeSession(sessionId, cols, rows)) o.screens?.noteResize(sessionId, cols, rows); } }),
   // The renderer says its terminal is mounted; main then releases the output it buffered. A phone needs no
   // such gate (it replays the PTY buffer on connect), so the message is dropped silently.
   defineChannel({
@@ -384,6 +377,18 @@ const sessionEntries: MainChannelDef[] = [
         ctx.runtime?.fills.cancel(`s${ctx.audienceId}`, sessionId);
       }
       return { ok: true as const };
+    },
+  }),
+
+  // "Did the computer get my message?" (one-core R5-4b). A screen that lost its connection mid-send asks what the record noted for the ids it has
+  // no echo for. Read-only; any screen may ask about any session it can see (an id says nothing about the message's text).
+  defineChannel({
+    name: IPC.SESSION_SEND_OUTCOMES, kind: 'handle',
+    handler: (req, ctx) => {
+      const sessionId = typeof req?.sessionId === 'string' ? req.sessionId : '';
+      const ids = (Array.isArray(req?.ids) ? req.ids : []).slice(0, SEND_OUTCOMES_MAX_IDS);
+      if (!ctx.runtime || !sessionId) return { epoch: null, outcomes: Object.fromEntries(ids.filter(isSendId).map((i) => [i, 'unknown' as const])) };
+      return ctx.runtime.records.sendOutcomes(sessionId, ids, req?.epoch);
     },
   }),
 

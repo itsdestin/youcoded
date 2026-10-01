@@ -162,6 +162,19 @@ export class SessionManager extends EventEmitter {
     this.pipeName = name;
   }
 
+  /**
+   * One place that numbers every terminal chunk in the session's record, and answers where it sits (epoch and offset). Set by the core
+   * (ipc-handlers) so the stream is kept WHETHER OR NOT the phone server is running; it used to be noted only by RemoteServer, so with remote
+   * access off the record had no terminal bytes and the computer's own reading of the screen (session-screens.ts) had nothing to start from.
+   * The result rides the `pty-output` event as its third argument, so every listener sees the same position.
+   */
+  private chunkNoter: ((sessionId: string, data: string) => { epoch: string; offset: number } | null) | null = null;
+  setChunkNoter(fn: ((sessionId: string, data: string) => { epoch: string; offset: number } | null) | null): void { this.chunkNoter = fn; }
+
+  /** Each PTY session's current size (the spawn size, then every resize), so a headless copy of its terminal lays text out at the same width. */
+  private readonly ptySizes = new Map<string, { cols: number; rows: number }>();
+  getPtySize(id: string): { cols: number; rows: number } | null { return this.ptySizes.get(id) ?? null; }
+
   createSession(opts: CreateSessionOpts): SessionInfo {
     const provider: SessionProvider = opts.provider || 'claude';
     // Resolve CWD: fall back to home directory if empty or nonexistent.
@@ -387,7 +400,7 @@ export class SessionManager extends EventEmitter {
       log('ERROR', 'SessionManager', 'Worker spawn failed', { sessionId: id, error: String(err) });
       if (this.sessions.has(id)) {
         this.sessions.get(id)!.info.status = 'destroyed';
-        this.sessions.delete(id);
+        this.sessions.delete(id); this.ptySizes.delete(id);
         this.emit('session-exit', id, 1);
       }
     });
@@ -442,7 +455,7 @@ export class SessionManager extends EventEmitter {
     worker.on('message', (msg: any) => {
       switch (msg.type) {
         case 'data':
-          this.emit('pty-output', id, msg.data);
+          this.emit('pty-output', id, msg.data, this.chunkNoter?.(id, msg.data) ?? null);
           // Type the command onto the prompt, exactly once.
           flushCommand();
           break;
@@ -470,7 +483,7 @@ export class SessionManager extends EventEmitter {
           const exitingSession = this.sessions.get(id)!;
           exitingSession.info.status = 'destroyed';
           this.emit('session-exit', id, deliberate ? 0 : msg.exitCode);
-          this.sessions.delete(id);
+          this.sessions.delete(id); this.ptySizes.delete(id);
           break;
       }
     });
@@ -489,7 +502,7 @@ export class SessionManager extends EventEmitter {
       const exitingSession = this.sessions.get(id)!;
       exitingSession.info.status = 'destroyed';
       this.emit('session-exit', id, 0);
-      this.sessions.delete(id);
+      this.sessions.delete(id); this.ptySizes.delete(id);
     });
 
     // Tell the worker to spawn the CLI, passing our session ID
@@ -513,6 +526,7 @@ export class SessionManager extends EventEmitter {
         sessionId: isShell ? '' : id,
         pipeName: isShell ? '' : this.pipeName,
       });
+      this.ptySizes.set(id, { cols: opts.cols || 80, rows: opts.rows || 24 });
     } catch {
       // The 'error' handler above will clean up the session asynchronously.
     }
@@ -561,7 +575,7 @@ export class SessionManager extends EventEmitter {
     const session = this.sessions.get(id);
     if (!session) return false;
     session.info.status = 'destroyed';
-    this.sessions.delete(id);
+    this.sessions.delete(id); this.ptySizes.delete(id);
     // Uniform teardown: native sessions (no worker) still emit session-exit so
     // downstream cleanup (window release, remote broadcast) runs identically.
     this.emit('session-exit', id, 0);
@@ -587,6 +601,7 @@ export class SessionManager extends EventEmitter {
     const session = this.sessions.get(id);
     if (!session || !session.worker) return false; // native sessions have no PTY
     try { session.worker.send({ type: 'resize', cols, rows }); } catch { return false; }
+    this.ptySizes.set(id, { cols, rows });
     return true;
   }
 

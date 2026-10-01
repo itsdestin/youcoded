@@ -253,7 +253,10 @@ export type TimelineEntry =
   // `uuid` (remote access batch 2): the transcript line this entry was confirmed or
   // created from. A hydrate uses it to tell an echo the phone has not applied yet from
   // older history the two copies simply loaded to different depths.
-  | { kind: 'user'; message: ChatMessage; pending?: boolean; injected?: string; injectedMeta?: InjectedMeta; uuid?: string }
+  // `sendId` / `sendNote` (one-core R5-4b): the screen's id for a message it sent, and what it knows about whether the computer got it while no echo has
+  // arrived (`unsure` = could not tell, `not-sent` = the computer's record shows it never arrived). Both are dropped when the transcript confirms the
+  // bubble, so a note can never outlive the doubt it describes.
+  | { kind: 'user'; message: ChatMessage; pending?: boolean; injected?: string; injectedMeta?: InjectedMeta; uuid?: string; sendId?: string; sendNote?: 'unsure' | 'not-sent' }
   | { kind: 'assistant-turn'; turnId: string }
   | { kind: 'prompt'; prompt: InteractivePrompt }
   // /cost and /usage render a snapshot card inline. Permanent (not dismissible).
@@ -537,6 +540,21 @@ export type ChatAction =
       // Exact attached-file paths (see ChatMessage.attachments) — lets the
       // bubble render pills for paths with spaces that regex detection misses.
       attachments?: string[];
+      /** This screen's id for the send (one-core R5-4b), so the bubble can say whether the computer got it. */
+      sendId?: string;
+    }
+  | {
+      // What the computer's record said about an unconfirmed send (one-core R5-4b): `unsure`, `not-sent`, or null (it was received: no note).
+      type: 'SEND_NOTE';
+      sessionId: string;
+      sendId: string;
+      note: 'unsure' | 'not-sent' | null;
+    }
+  | {
+      // "Send again": the unconfirmed bubble goes, and the same words go out as a new send with its own bubble (one-core R5-4b).
+      type: 'SEND_DISCARD';
+      sessionId: string;
+      sendId: string;
     }
   | {
       // One-core R5-4a: the host's queue of waiting messages as it is NOW (a snapshot, `session:live` kind `queue`). Replaces the list, so a
@@ -658,6 +676,8 @@ export type ChatAction =
       type: 'ATTENTION_STATE_CHANGED';
       sessionId: string;
       state: AttentionState;
+      /** Apply only while the session's attention is this (one-core R5-4b: the computer clears ITS "stuck" without wiping a different state). */
+      onlyFrom?: AttentionState;
     }
   | {
       // Heartbeat fired when the transcript watcher sees an assistant

@@ -30,13 +30,13 @@ export type SessionLiveBody =
   | { kind: 'compact-end'; id: string; outcome: 'cancelled' | 'failed' }
   /** A card for a question Claude Code is asking in its own terminal (usage limit, trust folder, resume, ...). */
   | { kind: 'prompt-show'; promptId: string; title: string; description?: string; buttons: PromptCardButton[]; defaultIndex?: number }
-  | { kind: 'prompt-dismiss'; promptId: string };
+  | { kind: 'prompt-dismiss'; promptId: string }
+  /**
+   * The computer's own reading of a Claude Code turn: "may be stuck" (the spinner stopped moving, or nothing at all came from Claude Code),
+   * or back to ok. Sent only when it changes; the computer is the ONLY writer of this reading (one-core R5-4b).
+   */
+  | { kind: 'attention'; state: 'ok' | 'stuck' };
 
 export type SessionLive = { sessionId: string } & SessionLiveBody;
 
-/** What a computer window tells the host about a card it saw in the terminal (`session:prompt-report`). */
-export type PromptReport =
-  | { sessionId: string; action: 'show'; promptId: string; title: string; description?: string; buttons: PromptCardButton[]; defaultIndex?: number }
-  | { sessionId: string; action: 'dismiss'; promptId: string }
-  /** A computer window's first read of its terminal: the menus on screen right now; the host dismisses any open card not among them. */
-  | { sessionId: string; action: 'sync'; seen: string[] };
+

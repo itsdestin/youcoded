@@ -77,19 +77,29 @@ describe('two screens match with no reply from the second', () => {
     for (const s of [A, B]) { expect(s.get().compactionPending).toBeNull(); expect(markers(s.get())).toEqual(['Compacted · freed 4,000 tokens']); }
   });
 
-  it('prompt card: reported by the computer\'s window, drawn once on both, removed on both when dismissed', () => {
+  it('prompt card: found by the computer in the terminal, drawn once on both, removed on both when dismissed', () => {
     const { A, B, facts } = setup();
-    const card = { sessionId: S, action: 'show' as const, promptId: 'p1', title: 'Usage Limit Reached', buttons: [{ label: 'Stop and wait', input: '2' }] };
-    facts.reportPrompt(card); facts.reportPrompt(card);
+    const card = { promptId: 'p1', title: 'Usage Limit Reached', buttons: [{ label: 'Stop and wait', input: '2' }] };
+    facts.showPrompt(S, card); facts.showPrompt(S, card);
     for (const s of [A, B]) expect(s.get().timeline.filter((e: any) => e.kind === 'prompt')).toHaveLength(1);
-    facts.reportPrompt({ sessionId: S, action: 'dismiss', promptId: 'p1' });
+    facts.dismissPrompt(S, 'p1');
     for (const s of [A, B]) expect(s.get().timeline.filter((e: any) => e.kind === 'prompt')).toHaveLength(0);
+  });
+
+  it('the stuck banner: the computer says it once and both screens show it, and clearing it clears only its own', () => {
+    const { A, B, facts } = setup();
+    facts.attention(S, 'stuck');
+    for (const s of [A, B]) expect(s.get().attentionState).toBe('stuck');
+    A.apply({ type: 'ATTENTION_STATE_CHANGED', sessionId: S, state: 'error' });
+    facts.attention(S, 'ok');
+    expect(A.get().attentionState).toBe('error'); // somebody else's state is not wiped by the computer taking back its own
+    expect(B.get().attentionState).toBe('ok');
   });
 
   it('a screen that opens mid-compaction with a card open is handed both (the spinner a phone joining mid-compaction used to lose)', async () => {
     const { records, facts } = setup();
     facts.noteInput(S, '/compact\r');
-    facts.reportPrompt({ sessionId: S, action: 'show', promptId: 'p9', title: 'Resume Session', buttons: [] });
+    facts.showPrompt(S, { promptId: 'p9', title: 'Resume Session', buttons: [] });
     const reply: any = await openSession({
       records, knows: () => true, native: () => null,
       page: async () => ({ events: [], cursor: null, hasMore: false }),

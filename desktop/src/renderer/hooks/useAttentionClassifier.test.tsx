@@ -24,7 +24,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import type { AttentionState } from '../state/chat-types';
-import { DESKTOP_WINDOW_CAPABILITIES } from '../../shared/capabilities';
+import { ANDROID_LOCAL_CAPABILITIES, DESKTOP_WINDOW_CAPABILITIES } from '../../shared/capabilities';
 
 const { dispatch } = vi.hoisted(() => ({ dispatch: vi.fn() }));
 vi.mock('../state/chat-context', () => ({ useChatDispatch: () => dispatch }));
@@ -55,8 +55,9 @@ function mount(opts: {
 const CLEAR_OK = { type: 'ATTENTION_STATE_CHANGED', sessionId: 's1', state: 'ok' };
 
 describe('useAttentionClassifier — only clears attention for sessions it owns', () => {
-  // The computer's own window has a terminal buffer to read (`terminalScreenRead`); a screen watching a computer does not.
-  beforeEach(() => { dispatch.mockClear(); (window as any).claude = { capabilities: DESKTOP_WINDOW_CAPABILITIES }; });
+  // This hook now runs only on a host with a terminal buffer and NO record of its own (the Android app's own runtime): everywhere else the
+  // computer's main process owns the "may be stuck" reading (one-core R5-4b), and the last test below pins that the hook stays out of its way.
+  beforeEach(() => { dispatch.mockClear(); (window as any).claude = { capabilities: ANDROID_LOCAL_CAPABILITIES }; });
   afterEach(() => { delete (window as any).claude; });
 
   it('dispatches NOTHING for a parked native session (no PTY buffer to read)', () => {
@@ -104,6 +105,13 @@ describe('useAttentionClassifier — only clears attention for sessions it owns'
 
   it('dispatches nothing for a Claude Code session that is already ok', () => {
     mount({ provider: 'claude', currentAttentionState: 'ok' });
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('on a host whose main process reads the terminal (the computer\'s windows, every phone), neither sets nor clears anything', () => {
+    (window as any).claude = { capabilities: DESKTOP_WINDOW_CAPABILITIES };
+    mount({ provider: 'claude', currentAttentionState: 'stuck' });
+    mount({ provider: 'claude', currentAttentionState: 'stuck', isThinking: true });
     expect(dispatch).not.toHaveBeenCalled();
   });
 });

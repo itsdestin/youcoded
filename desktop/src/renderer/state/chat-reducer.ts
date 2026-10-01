@@ -991,7 +991,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       // USER_PROMPT is unconditionally the 'sent' path: a queued native send never reaches it (the host announces its queue, QUEUE_SYNCED).
       next.set(action.sessionId, {
         ...session,
-        timeline: [...session.timeline, { kind: 'user', message, pending: true }],
+        timeline: [...session.timeline, { kind: 'user', message, pending: true, ...(action.sendId ? { sendId: action.sendId } : {}) }],
         isThinking: true,
         // A message sent while a reply is still streaming does not end that reply: Claude
         // Code records the message at the next turn boundary, and TRANSCRIPT_USER_MESSAGE
@@ -1011,6 +1011,30 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         // previous one's prefill percentage.
         promptProcessing: null,
       });
+      return next;
+    }
+
+    // One-core R5-4b: what the computer's record said about a message this screen sent and has no echo for. Touches only that one still-pending bubble.
+    case 'SEND_NOTE': {
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+      const idx = session.timeline.findIndex((e) => e.kind === 'user' && e.pending === true && e.sendId === action.sendId);
+      if (idx < 0) return state;
+      const entry = session.timeline[idx] as Extract<TimelineEntry, { kind: 'user' }>;
+      if ((entry.sendNote ?? null) === action.note) return state;
+      const timeline = session.timeline.slice();
+      const { sendNote: _old, ...rest } = entry;
+      timeline[idx] = action.note ? { ...rest, sendNote: action.note } : rest;
+      next.set(action.sessionId, { ...session, timeline });
+      return next;
+    }
+
+    case 'SEND_DISCARD': {
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+      const idx = session.timeline.findIndex((e) => e.kind === 'user' && e.pending === true && e.sendId === action.sendId);
+      if (idx < 0) return state;
+      next.set(action.sessionId, { ...session, timeline: [...session.timeline.slice(0, idx), ...session.timeline.slice(idx + 1)] });
       return next;
     }
 
@@ -1232,6 +1256,8 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       const session = next.get(action.sessionId);
       if (!session) return state;
       if (session.attentionState === action.state) return state;
+      // WHY onlyFrom (R5-4b): the computer says "no longer stuck" about ITS own reading; it must not wipe a state another writer set (died, error).
+      if (action.onlyFrom !== undefined && session.attentionState !== action.onlyFrom) return state;
       next.set(action.sessionId, { ...session, attentionState: action.state });
       return next;
     }

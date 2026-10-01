@@ -16,6 +16,10 @@ export function registerWithRuntime(register: (...args: any[]) => any, ...args: 
   const padded = [...args];
   while (padded.length < 12) padded.push(undefined);
   const [, sessionManager] = padded;
+  // The core notes each terminal chunk through the session manager and reads its size (one-core R5-4b); a test's hand-made manager only has to
+  // supply what the test is about, so the two small methods are filled in here when it did not.
+  if (sessionManager && typeof sessionManager.setChunkNoter !== 'function') sessionManager.setChunkNoter = () => {};
+  if (sessionManager && typeof sessionManager.getPtySize !== 'function') sessionManager.getPtySize = () => null;
   const runtime = createRuntime({
     userDataDir: (app as any)?.getPath?.('userData') ?? os.tmpdir(),
     appVersion: (app as any)?.getVersion?.() ?? '0.0.0-test',

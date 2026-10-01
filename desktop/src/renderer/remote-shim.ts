@@ -11,7 +11,7 @@ import { TABLE_ERROR_FLAG } from '../shared/table-error-flag';
 // ── Marketplace types re-declared locally ─────────────────────────────────────
 // WHY: remote-shim.ts lives in renderer/ and cannot import from main/ (Node.js
 import { REMOTE_UNSUPPORTED_EVENT, hasFeatureName, remoteFeatureName, remoteUnsupportedMessage } from './remote-unsupported';
-import { REMOTE_RECONNECTED_EVENT, REMOTE_REFRESH_EVENT } from './remote-events';
+import { REMOTE_RECONNECTED_EVENT, REMOTE_REFRESH_EVENT, OUTCOME_UNKNOWN_EVENT } from './remote-events';
 import { FILL_PROTOCOL_VERSION } from '../shared/fill-protocol';
 import { announce } from './utils/announce';
 import { REMOTE_SCREEN_CAPABILITIES, normalizeCapabilities, normalizeProtocolVersion } from '../shared/capabilities';
@@ -37,18 +37,19 @@ interface PendingRequest {
   type: string;
   /** Sent, no reply, timed out: it MAY have run. Asked about on reconnect, never retried. */
   outcomeUnknown?: boolean;
+  /** The screen's id for a chat message this request carries (`native:send`), so the outcome event can name the message (one-core R5-4b). */
+  sendId?: string;
 }
 
 /**
- * Ids whose fate the host could not tell us, announced as a window event.
+ * Ids whose fate the host could not tell us, announced as a window event: `{id, type, outcome, sendId?}` (the constant lives in remote-events.ts, which a renderer hook may import without pulling this file in).
  *
- * NOTHING LISTENS TO THIS YET. The sentence here used to read "The UI reads this to say so
- * plainly", which was not true: the reconciliation runs and the event fires, and the person
- * is told nothing either way. Sending is still safe — a request is never re-run — but the
- * "we don't know whether that happened" state has no screen. Filed as an open item in
- * docs/roadmap/remote-access.md rather than invented at review time.
+ * One-core R5-4b: a request that was a chat message (`native:send`) names it by `sendId`, and `hooks/useSendReconcile.ts` listens: it asks the
+ * computer's record whether the message arrived and says so on the message ("Not sure this was sent", "Not sent", or nothing once it is confirmed).
+ * A request is still never re-run: "Send again" is the person's decision. Every other request type has no screen for this yet and the event is ignored
+ * for them (a permission answer keeps its own "couldn't confirm" note on its card).
  */
-export const OUTCOME_UNKNOWN_EVENT = 'youcoded:outcome-unknown';
+export { OUTCOME_UNKNOWN_EVENT };
 
 export type RemoteConnectionState = 'disconnected' | 'connecting' | 'authenticating' | 'connected';
 
@@ -412,8 +413,17 @@ function failRequestsCutOffByDrop(): void {
     clearTimeout(entry.timeout);
     if (isAndroidLocal()) pending.delete(id);
     else entry.outcomeUnknown = true;
-    entry.reject(new Error('Lost the connection before the computer answered.'));
+    entry.reject(unknownOutcomeError('Lost the connection before the computer answered.'));
   }
+}
+
+/**
+ * An error for a request that was SENT and never answered. `outcomeUnknown` lets a caller tell "the computer may have it" from "it was refused
+ * before it left" (a send while disconnected), so a chat message in this state is shown with "Not sure this was sent" rather than as a failure
+ * (one-core R5-4b).
+ */
+function unknownOutcomeError(message: string): Error & { outcomeUnknown: true } {
+  return Object.assign(new Error(message), { outcomeUnknown: true as const });
 }
 
 export function onConnectionStateChange(cb: (state: RemoteConnectionState) => void) {
@@ -542,7 +552,7 @@ function reconcileUnknownOutcomes(): void {
       if (!entry) continue;
       pending.delete(id);
       window.dispatchEvent(new CustomEvent(OUTCOME_UNKNOWN_EVENT, {
-        detail: { id, type: entry.type, outcome: outcomes[id] === 'completed' ? 'completed' : 'unknown' },
+        detail: { id, type: entry.type, outcome: outcomes[id] === 'completed' ? 'completed' : 'unknown', ...(entry.sendId ? { sendId: entry.sendId } : {}) },
       }));
     }
   }).catch(() => { /* still unknown; the entries stay marked */ });
@@ -669,9 +679,9 @@ function invoke(type: string, payload?: any, opts?: { timeoutMs?: number }): Pro
       // what let the app tell you an action failed when it had actually succeeded and only
       // the reply was lost. It is now marked, asked about on reconnect, and never retried.
       entry.outcomeUnknown = true;
-      reject(new Error(`Request ${type} timed out`));
+      reject(unknownOutcomeError(`Request ${type} timed out`));
     }, timeoutMs);
-    pending.set(id, { resolve, reject, timeout, type });
+    pending.set(id, { resolve, reject, timeout, type, ...(typeof payload?.sendId === 'string' ? { sendId: payload.sendId } : {}) });
     // (Combined branch: bugfix-remote removed the reconnect replay list, so only
     // master's handoff send-failure path remains here.)
     // WHY: user actions are never queued; reject immediately and forget their
@@ -2010,8 +2020,6 @@ export function installShim(): void {
       // Stop being sent ONE conversation (one-core R5-3). `open` starts a watch, this ends it. What the page has drawn stays, and so does
       // its position (`fillCursors`), so opening it again resumes with just what happened meanwhile. On the phone's OWN bridge there is
       // no host record and no watch: refused quietly, exactly like `open`, so nothing is ever sent to the on-device runtime.
-      // A card this screen's terminal shows, reported so the computer publishes it once to every screen (one-core R5-4a). Not on the Android runtime.
-      reportPrompt: (report: unknown) => (isAndroidLocal() ? Promise.resolve({ ok: false }) : invoke('session:prompt-report', report)),
       unwatch: (sessionId: string) => {
         if (isAndroidLocal()) return refuseQuietlyOnPhone('session:unwatch');
         // The terminal frames of an unwatched session are dropped from this moment, even one already on the wire.
@@ -2060,7 +2068,12 @@ export function installShim(): void {
       reopenList: () => invoke('session:reopen-list'),
       forgetReopen: (ids: string[]) => invoke('session:forget-reopen', { ids }),
       canSend: () => ws?.readyState === WebSocket.OPEN && connectionState === 'connected',
-      sendInput: (sessionId: string, text: string, notice?: 'model-switch') => fire('session:input', { sessionId, text, notice }),
+      sendInput: (sessionId: string, text: string, notice?: 'model-switch', sendId?: string) => fire('session:input', { sessionId, text, notice, sendId }),
+      // What the computer noted for these send ids (one-core R5-4b), asked about the record this page last filled the session from. The Android
+      // app's own runtime has no host record and nothing to lose on a network: resolves to undefined, nothing is sent.
+      sendOutcomes: (sessionId: string, ids: string[]) => isAndroidLocal()
+        ? Promise.resolve(undefined)
+        : invoke('session:send-outcomes', { sessionId, ids, ...(fillCursors.get(sessionId)?.epoch ? { epoch: fillCursors.get(sessionId)!.epoch } : {}) }),
       resize: (sessionId: string, cols: number, rows: number) => fire('session:resize', { sessionId, cols, rows }),
       signalReady: (sessionId: string) => fire('session:terminal-ready', { sessionId }),
       // Tracked while in flight so the host's resolution of THIS answer is not shown as
@@ -3100,7 +3113,7 @@ export function installShim(): void {
       // Object payloads match how remote-server.ts's WS cases read them
       // (payload.sessionId / payload.text / payload.binding).
       // M1: invoke — returns {status,reason} so remote UI matches desktop
-      send: (sessionId: string, text: string, attachments?: string[]) => invoke('native:send', { sessionId, text, attachments }),
+      send: (sessionId: string, text: string, attachments?: string[], sendId?: string) => invoke('native:send', { sessionId, text, attachments, sendId }),
       // Task 11: cancel/edit a queued message — request/response (mirrors preload.ts).
       queueRemove: (sessionId: string, queueId: string) => invoke('native:queue-remove', { sessionId, queueId }),
       queueSendNow: (sessionId: string, queueId: string) => invoke('native:queue-send-now', { sessionId, queueId }),

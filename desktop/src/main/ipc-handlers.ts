@@ -116,6 +116,7 @@ import type { SessionInfo } from '../shared/types';
 import { ARTIFACT_IPC } from './artifacts/ipc-channels';
 import { createPublish } from './publish';
 import { SessionLiveFacts } from './session-live';
+import { SessionScreens } from './session-screens';
 import { startSessionSummaryPush, SESSION_SUMMARY_CHANNEL } from './session-summary-push';
 import { listProjects } from './artifacts/central-index';
 import { initPagesService, getPagesService } from './pages/pages-service';
@@ -422,6 +423,22 @@ export function registerIpcHandlers(
     // A Claude Code session: not native (its host says these things itself) and not a plain shell.
     isClaude: (id) => { const p = sessionManager.getSession(id)?.provider; return p !== 'native' && p !== 'shell' && !!sessionManager.getSession(id); },
   });
+
+  // WHY (one-core R5-4b): the computer's own copy of each running Claude Code terminal, read for the "may be stuck" check and for the cards a terminal
+  // shows. Everything it finds leaves through liveFacts (so through publish). It exists only while a turn runs, a session is starting or a menu is up.
+  // The terminal bytes it is fed are noted in the record by the session manager itself (setChunkNoter below), whether or not phone access is on.
+  let onMainAttention: ((sessionId: string, state: 'ok' | 'stuck') => void) | null = null; // set once the status relay below exists
+  const screens = new SessionScreens({
+    records: runtime.records,
+    live: liveFacts,
+    isClaude: (id) => { const p = sessionManager.getSession(id)?.provider; return p !== 'native' && p !== 'shell' && !!sessionManager.getSession(id); },
+    size: (id) => sessionManager.getPtySize(id),
+    // The tray, the badge and a status bar read the same cache a window's relay fills (attentionMap); the computer's reading goes in too, so
+    // they are right with no window relaying.
+    onAttention: (id, state) => { onMainAttention?.(id, state); },
+  });
+  runtime.records.onScreenNeedChange((id) => screens.refresh(id));
+  sessionManager.setChunkNoter((id, data) => runtime.records.notePty(id, data));
 
   // WHY (2026-09-29 one-core R1): returned from registerIpcHandlers as plain values (was two
   // module-level `let`s assigned here as a side effect, so a caller that ran first silently
@@ -998,9 +1015,10 @@ export function registerIpcHandlers(
   // deserialize output for sessions it may not own. App.tsx now subscribes
   // per-session in sync with session:created / session:destroyed events, so
   // the global broadcast is no longer needed.
-  sessionManager.on('pty-output', (sessionId: string, data: string) => {
+  sessionManager.on('pty-output', (sessionId: string, data: string, at?: { offset: number } | null) => {
     // One reading of the permission-mode footer for the session, instead of every screen scanning its own copy (one-core R5-4a).
     liveFacts.noteOutput(sessionId, data);
+    screens.noteOutput(sessionId, data, at); // the computer's own copy of the terminal (one-core R5-4b)
     if (readySessions.has(sessionId)) {
       sendForSession(sessionId, `pty:output:${sessionId}`, [data]);
     } else {
@@ -1031,6 +1049,7 @@ export function registerIpcHandlers(
     sendForSession(sessionId, IPC.SESSION_DESTROYED, [sessionId, exitCode]);
     runtime.records.drop(sessionId); // the session is over: its record goes with it (one-core R5-1)
     liveFacts.forget(sessionId);
+    screens.forget(sessionId);
     pendingOutput.delete(sessionId);
     readySessions.delete(sessionId);
     windowRegistry?.endSession(sessionId); // over: windows' AND phones' watches go (a window merely releasing keeps phones', R5-3)
@@ -1485,6 +1504,12 @@ export function registerIpcHandlers(
       summaryPush.push(); // the summary carries the same attention value, so it follows at once too
     },
   });
+  // The computer's own "may be stuck" reading (one-core R5-4b) joins the same cache and relay a window's report fills, so the status bar and the
+  // tray are right with no window open. The record already holds it (it is the event), and its summary change pushes the dot.
+  onMainAttention = (sessionId, state) => {
+    lastAttentionBySession.set(sessionId, state);
+    if (remoteServer) void buildStatusDataShared().then((data) => remoteServer?.broadcastStatusData(data));
+  };
 
   // (lastModelSeen — last model id written per CLAUDE session id — lives in session-state.ts.)
 
@@ -2432,7 +2457,7 @@ export function registerIpcHandlers(
   bindSessionOps({
     sessionManager, sessionIdMap, nativeHost, stampProviderTypes, windowRegistry, welcomeBackStore,
     createSession: (sender, opts) => createSession(sender ? { sender } : null, opts),
-    destroySession, signalTerminalReady, transcriptPage, canWriteStoreRecord, publish, liveFacts,
+    destroySession, signalTerminalReady, transcriptPage, canWriteStoreRecord, publish, liveFacts, screens,
     naming: { get: namingGet, set: namingSet, title: namingTitle, rename: namingRename },
   });
   // WHY (2026-09-29 one-core R2, filled by R3): the channel table's desktop half. Every family moved

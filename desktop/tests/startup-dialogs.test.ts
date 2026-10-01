@@ -16,7 +16,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import {
   parseInkSelect, menuToButtons, readStartupDialog,
-} from '../src/renderer/parser/ink-select-parser';
+} from '../src/shared/ink-select-parser';
 import { answerInkMenu, INK_MENU_TIMING, type InkMenuIO } from '../src/renderer/state/ink-menu-driver';
 import {
   FixtureTerminal, listPlanFixtures, loadPlanFixture, STARTUP_FIXTURE_DIR, type PlanFixture,

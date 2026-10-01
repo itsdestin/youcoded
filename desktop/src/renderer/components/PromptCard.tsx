@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { InteractivePrompt } from '../state/chat-types';
-import { TRUST_PROMPT_TITLE } from '../parser/ink-select-parser';
+import { TRUST_PROMPT_TITLE } from '../../shared/ink-select-parser';
 import { CheckIcon } from './Icons';
 import { Button, ButtonVariant } from './ui/Button';
 import { isAndroid } from '../platform';

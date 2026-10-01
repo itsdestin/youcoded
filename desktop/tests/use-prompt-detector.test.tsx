@@ -48,21 +48,10 @@ vi.mock('../src/renderer/state/chat-context', () => ({
 import { usePromptDetector } from '../src/renderer/hooks/usePromptDetector';
 import { DESKTOP_WINDOW_CAPABILITIES, REMOTE_SCREEN_CAPABILITIES, ANDROID_LOCAL_CAPABILITIES } from '../src/shared/capabilities';
 
-// A computer window reports a card to the host, which publishes it and every screen (this one included) draws it (one-core R5-4a). The tests
-// below pin WHEN the detector decides to show or dismiss, so the stand-in host here hands a report straight back as the drawing it would cause.
-const hostDraws = () => ({
-  capabilities: DESKTOP_WINDOW_CAPABILITIES,
-  session: {
-    reportPrompt: async (r: any) => {
-      if (r.action === 'sync') return { ok: true };   // reconciling cards is the host's business (tests below)
-      mocks.dispatch(r.action === 'show'
-        ? { type: 'SHOW_PROMPT', sessionId: r.sessionId, promptId: r.promptId, title: r.title, description: r.description, buttons: r.buttons, defaultIndex: r.defaultIndex }
-        : { type: 'DISMISS_PROMPT', sessionId: r.sessionId, promptId: r.promptId });
-      return { ok: true };
-    },
-  },
-});
-beforeEach(() => { (window as any).claude = hostDraws(); });
+// The lifecycle tests below pin WHEN the detector decides to show or dismiss a card. That reading runs in the renderer only on a host with no record of
+// its own (the Android app's own runtime); everywhere else the computer's main process reads the terminal (tests/session-screens.test.ts runs the SAME
+// decisions there). So these run as that host, where the detector draws what it finds directly.
+beforeEach(() => { (window as any).claude = { capabilities: ANDROID_LOCAL_CAPABILITIES }; });
 
 // A recognized setup prompt (title in SETUP_PROMPT_TITLES).
 const RESUME_MENU = `Resume Session
@@ -602,51 +591,28 @@ describe('usePromptDetector — re-issuing a card for an identical follow-up, gu
 });
 
 
-describe('usePromptDetector — where a card is drawn from (one-core R5-4a)', () => {
+describe('usePromptDetector — where a card is drawn from (one-core R5-4b)', () => {
   beforeEach(() => { vi.useFakeTimers(); mocks.dispatch.mockClear(); mocks.callbacks.length = 0; mocks.screen.text = RESUME_MENU; mocks.sessions.clear(); });
   afterEach(() => { vi.useRealTimers(); });
   const seeMenu = () => { renderHook(() => usePromptDetector()); fireBuffer('s1'); act(() => { vi.advanceTimersByTime(400); }); };
 
-  it('a computer window REPORTS the card to the host and does not draw one of its own', () => {
-    const report = vi.fn(async () => ({ ok: true }));
+  it('a computer window reads no card: the computer does, and a window draws the one it publishes', () => {
+    (window as any).claude = { capabilities: DESKTOP_WINDOW_CAPABILITIES };
+    seeMenu();
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+  });
+  it('a phone reads no card either, so it can put none in front of the person at the computer, and needs no computer window open to get one', () => {
+    const send = vi.fn();
+    (window as any).claude = { capabilities: { ...REMOTE_SCREEN_CAPABILITIES, sessionRecord: true }, session: { sendInput: send } };
+    seeMenu();
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+  it('a screen no longer has any way to tell the computer about a card', () => {
+    const report = vi.fn();
     (window as any).claude = { capabilities: DESKTOP_WINDOW_CAPABILITIES, session: { reportPrompt: report } };
     seeMenu();
-    const shows = (report.mock.calls as any[][]).map((c) => c[0]).filter((r) => r.action === 'show');
-    expect(shows).toHaveLength(1);
-    expect(shows[0]).toMatchObject({ sessionId: 's1', action: 'show', title: 'Resume Session' });
-    expect(mocks.dispatch).not.toHaveBeenCalled();
-  });
-  it('a phone REPORTS what its own terminal copy shows (the computer may have no window reading it) and draws no card of its own', () => {
-    const report = vi.fn(async () => ({ ok: true }));
-    (window as any).claude = { capabilities: { ...REMOTE_SCREEN_CAPABILITIES, sessionRecord: true }, session: { reportPrompt: report } };
-    seeMenu();
-    const shows = (report.mock.calls as any[][]).map((c) => c[0]).filter((r) => r.action === 'show');
-    expect(shows).toHaveLength(1);
-    expect(mocks.dispatch).not.toHaveBeenCalled();
-  });
-  it('a computer window\'s FIRST read of a terminal says which menu is on screen; a phone sends no such sync', () => {
-    const win = vi.fn(async () => ({ ok: true }));
-    (window as any).claude = { capabilities: DESKTOP_WINDOW_CAPABILITIES, session: { reportPrompt: win } };
-    renderHook(() => usePromptDetector());
-    mocks.screen.text = RESUME_MENU;
-    fireBuffer('s1'); fireBuffer('s1');
-    const syncs = (win.mock.calls as any[][]).map((c) => c[0]).filter((r) => r.action === 'sync');
-    expect(syncs).toHaveLength(1);                       // once per session, not per flush
-    expect(syncs[0].seen).toHaveLength(1);
-    const ph = vi.fn(async () => ({ ok: true }));
-    (window as any).claude = { capabilities: { ...REMOTE_SCREEN_CAPABILITIES, sessionRecord: true }, session: { reportPrompt: ph } };
-    mocks.callbacks.length = 0;
-    renderHook(() => usePromptDetector());
-    fireBuffer('s2');
-    expect((ph.mock.calls as any[][]).some((c) => c[0].action === 'sync')).toBe(false);
-  });
-  it('a window reloaded with the menu already gone syncs an EMPTY list', () => {
-    const win = vi.fn(async () => ({ ok: true }));
-    (window as any).claude = { capabilities: DESKTOP_WINDOW_CAPABILITIES, session: { reportPrompt: win } };
-    renderHook(() => usePromptDetector());
-    mocks.screen.text = 'just a prompt >';
-    fireBuffer('s1');
-    expect((win.mock.calls as any[][])[0][0]).toEqual({ sessionId: 's1', action: 'sync', seen: [] });
+    expect(report).not.toHaveBeenCalled();
   });
   it('the Android app\'s own runtime, which has no host record, still draws the card itself', () => {
     (window as any).claude = { capabilities: ANDROID_LOCAL_CAPABILITIES };

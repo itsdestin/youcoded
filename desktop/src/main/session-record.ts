@@ -28,6 +28,7 @@
 import { randomBytes } from 'crypto';
 import type { SessionSummary } from '../shared/session-summary-types';
 import type { SessionLive } from '../shared/session-live-types';
+import { isSendId, type SendOutcome } from '../shared/send-outcome-types';
 
 export const RING_MAX_EVENTS = 2000;
 export const RING_MAX_BYTES = 2 * 1024 * 1024;
@@ -44,6 +45,8 @@ const OPEN_PROMPTS_MAX = 20;
 const OPEN_ASKS_MAX = 200;
 /** Recently seen event uuids, so a replayed event does not start a turn twice (the renderer's seenUuids). */
 const SEEN_UUIDS_MAX = 512;
+/** Send ids a session's record remembers (the lost-send check, R5-4b). Past this the oldest are let go, and an id not found can no longer be called "not received". */
+const SENDS_MAX = 500;
 /** Ids of sessions that ended, so a late event cannot resurrect a dead session's record. */
 const TOMBSTONES_MAX = 256;
 
@@ -112,7 +115,7 @@ export interface SessionFacts {
   working: boolean;
   /** What the events themselves say: ok, stuck (stall warning), stalled, error. */
   attention: string;
-  /** The last state a window relayed (the stuck check still runs in renderers; R5-4 moves it here). */
+  /** The last state a window relayed, or the computer's own "stuck" reading when it said one (R5-4b: the stuck check runs in main, which is the only writer of it). */
   reportedAttention: string | null;
   /** Asks waiting for an answer, including password asks (counted, never stored). */
   awaitingCount: number;
@@ -172,12 +175,24 @@ interface Rec {
   terminalMode: string | null;
   /** A compaction is in progress: the spinner a screen that opens now must draw (R5-4a; restores what a phone lost in R5-2). */
   compacting: { id: string } | null;
+  /** Tool calls of the running turn that have started and not finished (the reducer's `running` tools; one-core R5-4b: the stuck check is off while one runs). */
+  runningTools: Set<string>;
+  /** Claude Code has run a hook for this session: its startup dialogs are behind it (the screens' "initialized" gate). */
+  started: boolean;
+  /** The computer's own "may be stuck" reading for this turn (R5-4b), as last published; the summary and a late screen read it. */
+  stuck: boolean;
   facts: Omit<SessionFacts, 'awaitingCount' | 'queued'>;
   /** Highest host timestamp a progress/terminal event has fenced (mirrors the reducer's usageProgressAt). */
   progressAt: number;
   seen: Set<string>;
   /** The summary fields as of the last announcement (see `onSummaryChange`): a cheap string compare says "did a dot just change?". */
   summaryKey: string;
+  /** `screenNeedKey` as of the last announcement. */
+  needKey: string;
+  /** Ids of the sends the computer received for this session, oldest first (R5-4b). */
+  sends: Set<string>;
+  /** True once an old id was let go: an id that is NOT in `sends` may then be one of those. */
+  sendsLetGo: boolean;
 }
 
 const asObject = (v: unknown): Record<string, any> => (v && typeof v === 'object' ? (v as Record<string, any>) : {});
@@ -190,6 +205,7 @@ export class SessionRecords {
   private readonly maxBytes: number;
   private readonly now: () => number;
   private summaryListener: ((sessionId: string) => void) | null = null;
+  private needListener: ((sessionId: string) => void) | null = null;
 
   constructor(opts: { maxEvents?: number; maxBytes?: number; now?: () => number } = {}) {
     this.maxEvents = opts.maxEvents ?? RING_MAX_EVENTS;
@@ -214,8 +230,11 @@ export class SessionRecords {
     // queue length and the HOST's permission mode are read through the live source (they are not events), so a change to them is only
     // seen when something asks; they are in the key so that when a push IS built they count, and R5-4 can read them from the summary.
     const live = this.safeLive(sessionId);
-    return `${f.working ? 1 : 0}|${rec.asks.size + rec.passwordAsks.size}|${reported ?? f.attention}|${f.hasHistory ? 1 : 0}|${live?.permissionMode ?? f.permissionMode ?? ''}|${f.model ?? ''}|${live?.queued?.length ?? 0}`;
+    return `${f.working ? 1 : 0}|${rec.asks.size + rec.passwordAsks.size}|${reported ?? this.attentionOf(rec)}|${f.hasHistory ? 1 : 0}|${live?.permissionMode ?? f.permissionMode ?? ''}|${f.model ?? ''}|${live?.queued?.length ?? 0}`;
   }
+
+  /** What the summary shows for attention: another writer's state wins; the computer's "stuck" shows when nothing else is wrong. */
+  private attentionOf(rec: Rec): string { return rec.facts.attention !== 'ok' ? rec.facts.attention : rec.stuck ? 'stuck' : 'ok'; }
 
   private safeLive(sessionId: string): ReturnType<LiveFactsSource> {
     try { return this.liveSource?.(sessionId) ?? null; } catch { return null; }
@@ -224,10 +243,49 @@ export class SessionRecords {
   /** After anything that may have moved a summary field: announce it if it did. */
   private announceIfChanged(sessionId: string, rec: Rec): void {
     const key = this.summaryKeyOf(sessionId, rec);
-    if (key === rec.summaryKey) return;
-    rec.summaryKey = key;
-    try { this.summaryListener?.(sessionId); } catch (err) { console.warn('[session-record] summary listener failed:', String(err)); }
+    if (key !== rec.summaryKey) {
+      rec.summaryKey = key;
+      try { this.summaryListener?.(sessionId); } catch (err) { console.warn('[session-record] summary listener failed:', String(err)); }
+    }
+    // The screen-reading module (main/session-screens.ts) wants to know when what it reads FOR changes: a turn began or ended, a tool started or
+    // finished, an ask opened or closed, Claude Code started. Same cheap string compare, so a streamed answer (thousands of events, no change) costs nothing.
+    if (this.needListener) {
+      const need = this.screenNeedKey(rec);
+      if (need !== rec.needKey) {
+        rec.needKey = need;
+        try { this.needListener(sessionId); } catch (err) { console.warn('[session-record] screen-need listener failed:', String(err)); }
+      }
+    }
   }
+
+  private screenNeedKey(rec: Rec): string {
+    return `${rec.facts.working ? 1 : 0}|${rec.runningTools.size > 0 ? 1 : 0}|${this.liveAskCount(rec)}|${rec.started ? 1 : 0}|${rec.prompts.size}`;
+  }
+
+  /** Asks that are really waiting on the person: a kept ask (Claude Code closed its hook) is not, the card the screen draws is a separate matter. */
+  private liveAskCount(rec: Rec): number {
+    let n = rec.passwordAsks.size;
+    for (const a of rec.asks.values()) if (!a.expired) n++;
+    return n;
+  }
+
+  /**
+   * What the computer reads a session's screen FOR (one-core R5-4b), as plain facts:
+   *  - `working`: a turn is in flight (the reducer's isThinking);
+   *  - `toolRunning`: a tool call of this turn has started and not finished;
+   *  - `asking`: an ask is waiting on the person (permission or password);
+   *  - `started`: Claude Code has run a hook, so its startup dialogs are over;
+   *  - `cards`: prompt cards open.
+   * The stuck check runs only while `working && !toolRunning && !asking` — the same gate the renderer's hook used.
+   */
+  screenNeed(sessionId: string): { working: boolean; toolRunning: boolean; asking: boolean; started: boolean; cards: number } | null {
+    const rec = this.records.get(sessionId);
+    if (!rec) return null;
+    return { working: rec.facts.working, toolRunning: rec.runningTools.size > 0, asking: this.liveAskCount(rec) > 0, started: rec.started, cards: rec.prompts.size };
+  }
+
+  /** Called whenever what `screenNeed` reports changes for a session (and once when the session is dropped). One listener: main/session-screens.ts. */
+  onScreenNeedChange(listener: ((sessionId: string) => void) | null): void { this.needListener = listener; }
 
   /** Create this session's record if it has none (idempotent). A destroyed session's id stays closed. */
   open(sessionId: string): boolean {
@@ -237,11 +295,12 @@ export class SessionRecords {
       epoch: randomBytes(8).toString('hex'),
       headSeq: 0, ring: [], ringBytes: 0, tail: [], tailBytes: 0, pty: { chunks: [], length: 0, base: 0 }, oversize: 0,
       asks: new Map(), passwordAsks: new Set(), prompts: new Map(), promptAt: new Map(), terminalMode: null, compacting: null,
+      runningTools: new Set(), started: false, stuck: false,
       facts: {
         working: false, attention: 'ok', reportedAttention: null, hasHistory: false,
         lastActivityAt: this.now(), permissionMode: null, model: null, modelState: null,
       },
-      progressAt: 0, seen: new Set(), summaryKey: '',
+      progressAt: 0, seen: new Set(), summaryKey: '', needKey: '', sends: new Set(), sendsLetGo: false,
     });
     // A session appearing is a summary change (the strip learns it exists as "idle, no history").
     this.announceIfChanged(sessionId, this.records.get(sessionId)!);
@@ -259,7 +318,10 @@ export class SessionRecords {
   /** The session ended: its record is gone, and a late event cannot bring it back. */
   drop(sessionId: string): void {
     const existed = this.records.delete(sessionId);
-    if (existed) { try { this.summaryListener?.(sessionId); } catch (err) { console.warn('[session-record] summary listener failed:', String(err)); } }
+    if (existed) {
+      try { this.summaryListener?.(sessionId); } catch (err) { console.warn('[session-record] summary listener failed:', String(err)); }
+      try { this.needListener?.(sessionId); } catch (err) { console.warn('[session-record] screen-need listener failed:', String(err)); }
+    }
     this.gone.add(sessionId);
     if (this.gone.size > TOMBSTONES_MAX) {
       const oldest = this.gone.values().next().value;
@@ -426,6 +488,51 @@ export class SessionRecords {
     return { epoch: rec.epoch, offset: from, data: parts.join(''), reset };
   }
 
+  /**
+   * The newest terminal output, at least `minUnits` of it when the stream holds that much (whole chunks, so it never starts inside a chunk's escape
+   * sequence), and the stream position just past it. What the computer's headless copy of the terminal is seeded from (one-core R5-4b).
+   */
+  ptyTail(sessionId: string, minUnits: number): { data: string; end: number } | null {
+    const rec = this.records.get(sessionId);
+    if (!rec) return null;
+    const { pty } = rec;
+    const parts: string[] = [];
+    let got = 0;
+    for (let i = pty.chunks.length - 1; i >= 0 && got < minUnits; i--) { parts.push(pty.chunks[i]); got += pty.chunks[i].length; }
+    return { data: parts.reverse().join(''), end: pty.base + pty.length };
+  }
+
+  /**
+   * The computer received a message for this session that carried this id (R5-4b): a native session's host accepted it, or a Claude Code session's
+   * terminal write was accepted. Answers a phone that lost the connection mid-send and asks "did you get it?" (sendOutcomes).
+   */
+  noteSend(sessionId: string, sendId: unknown): void {
+    if (!isSendId(sendId)) return;
+    const rec = this.records.get(sessionId);
+    if (!rec) return;
+    rec.sends.add(sendId);
+    if (rec.sends.size > SENDS_MAX) {
+      const oldest = rec.sends.values().next().value;
+      if (oldest !== undefined) rec.sends.delete(oldest);
+      rec.sendsLetGo = true;
+    }
+  }
+
+  /**
+   * What the record can say about sends a phone has no echo for. `epoch` is the one the phone last filled this session at: the record is in memory,
+   * so a different epoch means the computer restarted (or the session was recreated) and everything before is unknown, not "not received".
+   */
+  sendOutcomes(sessionId: string, ids: readonly unknown[], epoch?: unknown): { epoch: string | null; outcomes: Record<string, SendOutcome> } {
+    const rec = this.records.get(sessionId);
+    const outcomes: Record<string, SendOutcome> = {};
+    const known = !!rec && typeof epoch === 'string' && epoch === rec.epoch;
+    for (const id of ids) {
+      if (!isSendId(id)) continue;
+      outcomes[id] = !rec || !known ? 'unknown' : rec.sends.has(id) ? 'received' : rec.sendsLetGo ? 'unknown' : 'not-received';
+    }
+    return { epoch: rec?.epoch ?? null, outcomes };
+  }
+
   /** A window relayed this session's attention state (remote:attention-changed). */
   noteReportedAttention(sessionId: string, state: string): void {
     if (!this.open(sessionId)) return;
@@ -522,6 +629,8 @@ export class SessionRecords {
     if (rec.terminalMode) out.push({ type: 'session:permission-mode', payload: { sessionId, mode: rec.terminalMode } });
     for (const p of rec.prompts.values()) out.push({ type: 'session:live', payload: p });
     if (rec.compacting) out.push({ type: 'session:live', payload: { sessionId, kind: 'compact-start', id: rec.compacting.id } });
+    // A screen that opens while the computer thinks the turn may be stuck is told so (a phone opened after the banner would have shown none).
+    if (rec.stuck) out.push({ type: 'session:live', payload: { sessionId, kind: 'attention', state: 'stuck' } });
     return out;
   }
 
@@ -542,8 +651,9 @@ export class SessionRecords {
     const f = this.facts(sessionId);
     if (!f) return null;
     const reported = f.reportedAttention && f.reportedAttention !== 'ok' ? f.reportedAttention : null;
+    const rec = this.records.get(sessionId)!;
     return {
-      working: f.working, awaitingCount: f.awaitingCount, attention: reported ?? f.attention,
+      working: f.working, awaitingCount: f.awaitingCount, attention: reported ?? this.attentionOf(rec),
       hasHistory: f.hasHistory, queuedCount: f.queued.length, permissionMode: f.permissionMode, model: f.model,
     };
   }
@@ -577,6 +687,10 @@ export class SessionRecords {
     // chat-reducer endTurn(): turn over, attention back to ok, orphaned asks failed.
     rec.facts.working = false;
     rec.facts.attention = 'ok';
+    rec.runningTools.clear();
+    // "May be stuck" cannot outlive its turn, whoever said it (the computer's reading, or a window's relay of it).
+    rec.stuck = false;
+    if (rec.facts.reportedAttention === 'stuck') rec.facts.reportedAttention = null;
     rec.asks.clear();
     rec.passwordAsks.clear();
     if (typeof terminalTimestamp === 'number') rec.progressAt = Math.max(rec.progressAt, terminalTimestamp);
@@ -606,7 +720,7 @@ export class SessionRecords {
       f.modelState = { state: String(p.state ?? ''), modelId: typeof p.modelId === 'string' ? p.modelId : null };
       return;
     }
-    if (type === 'hook:event') { this.foldHook(rec, asObject(payload)); return; }
+    if (type === 'hook:event') { rec.started = true; this.foldHook(rec, asObject(payload)); return; }
     // A Claude Code session's mode, read from its terminal by the host (R5-4a): the same fact a native host pushes as native:permission-mode.
     if (type === 'session:permission-mode') {
       const mode = asObject(payload).mode;
@@ -657,6 +771,11 @@ export class SessionRecords {
         if (stamped) return;
         f.hasHistory = true;
         f.attention = 'ok';
+        // A started tool is "running" until its result lands (the reducer's tool status), which switches the stuck check off (R5-4b).
+        if (typeof d.toolUseId === 'string' && d.toolUseId) {
+          if (ev.type === 'tool-use') { if (rec.runningTools.size < OPEN_ASKS_MAX) rec.runningTools.add(d.toolUseId); }
+          else rec.runningTools.delete(d.toolUseId);
+        }
         return;
       case 'turn-complete':
         if (stamped) return;
@@ -702,6 +821,11 @@ export class SessionRecords {
         return;
       case 'prompt-dismiss':
         if (typeof live.promptId === 'string') { rec.prompts.delete(live.promptId); rec.promptAt.delete(live.promptId); }
+        return;
+      case 'attention':
+        // The computer's own reading wins over a window's last relayed value for this one state (a closed window can no longer clear it).
+        rec.stuck = live.state === 'stuck';
+        rec.facts.reportedAttention = live.state === 'stuck' ? 'stuck' : null;
         return;
       default:
         return;

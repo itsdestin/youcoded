@@ -226,10 +226,10 @@ const IPC = {
   DETACH_CLAIM_PENDING: 'detach:claim-pending',
   SESSION_OPEN: 'session:open',
   SESSION_UNWATCH: 'session:unwatch',
+  SESSION_SEND_OUTCOMES: 'session:send-outcomes',
   SESSION_SUMMARY: 'session:summary',
   SESSION_LIVE: 'session:live',
   SESSION_PERMISSION_MODE: 'session:permission-mode',
-  SESSION_PROMPT_REPORT: 'session:prompt-report',
   SESSION_REFILL: 'session:refill',
   HOOK_REPLAY_COMPLETE: 'hook:replay-complete',
   SESSION_DETACH_START: 'session:detach-start',
@@ -620,8 +620,6 @@ contextBridge.exposeInMainWorld('claude', {
     // End a PHONE's watch of one conversation (one-core R5-3). A window has no such thing (its audience is ownership), so the
     // computer's door answers ok and changes nothing; this exists so the bridge has one shape on every screen.
     unwatch: (sessionId: string) => ipcRenderer.invoke(IPC.SESSION_UNWATCH, { sessionId }),
-    // A computer window tells the host about a card it read off its terminal; the host numbers it and every screen draws it (one-core R5-4a).
-    reportPrompt: (report: any) => ipcRenderer.invoke(IPC.SESSION_PROMPT_REPORT, report),
     // Hand pushes (an open's `before` / `after`) to the SAME listeners a live push reaches. `ipcRenderer` is an event emitter, so
     // emitting the channel locally runs exactly the handlers `on.*` registered, with no second set of rules for a filled window.
     onRefill: (cb: (sessionId: string) => void) => {
@@ -645,8 +643,11 @@ contextBridge.exposeInMainWorld('claude', {
     // lives in main (menu-answer-lock.ts), shared with the remote host.
     menuLock: (sessionId: string, holder: string, action: 'acquire' | 'release'): Promise<boolean> =>
       ipcRenderer.invoke(IPC.SESSION_MENU_LOCK, { sessionId, holder, action }),
-    sendInput: (sessionId: string, text: string, notice?: 'model-switch') =>
-      ipcRenderer.send(IPC.SESSION_INPUT, { sessionId, text, notice }),
+    sendInput: (sessionId: string, text: string, notice?: 'model-switch', sendId?: string) =>
+      ipcRenderer.send(IPC.SESSION_INPUT, { sessionId, text, notice, sendId }),
+    // "Did the computer get my message?" (one-core R5-4b). A window's sends never cross a network, but the shape is the same on every screen.
+    sendOutcomes: (sessionId: string, ids: string[]) =>
+      ipcRenderer.invoke(IPC.SESSION_SEND_OUTCOMES, { sessionId, ids }),
     resize: (sessionId: string, cols: number, rows: number) =>
       ipcRenderer.send(IPC.SESSION_RESIZE, { sessionId, cols, rows }),
     signalReady: (sessionId: string) =>
@@ -1589,7 +1590,7 @@ contextBridge.exposeInMainWorld('claude', {
   native: {
     supported: process.env.YOUCODED_NATIVE !== '0',
     // M1: invoke — matches the handle signature, returns {status,reason}
-    send: (sessionId: string, text: string, attachments?: string[]) => ipcRenderer.invoke(IPC.NATIVE_SEND, { sessionId, text, attachments }),
+    send: (sessionId: string, text: string, attachments?: string[], sendId?: string) => ipcRenderer.invoke(IPC.NATIVE_SEND, { sessionId, text, attachments, sendId }),
     // Task 11: cancel/edit a queued message before it sends. Request-response
     // (unlike interrupt below) — the renderer needs the true/false result to
     // decide between "removed, proceed" and a "too late" toast.

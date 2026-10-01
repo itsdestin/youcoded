@@ -122,6 +122,12 @@ export function routeSessionLive(live: SessionLive, deps: { batcher: Pick<Transc
     case 'prompt-dismiss':
       deps.batcher.push({ type: 'DISMISS_PROMPT', sessionId, promptId: live.promptId });
       return;
+    case 'attention':
+      // Back to ok clears only the computer's own "stuck", never a state another writer set.
+      deps.batcher.push(live.state === 'ok'
+        ? { type: 'ATTENTION_STATE_CHANGED', sessionId, state: 'ok', onlyFrom: 'stuck' }
+        : { type: 'ATTENTION_STATE_CHANGED', sessionId, state: live.state });
+      return;
   }
 }
 

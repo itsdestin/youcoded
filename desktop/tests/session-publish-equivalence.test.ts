@@ -77,6 +77,7 @@ function boot(): World {
   Object.assign(sessionManager, {
     createSession: vi.fn(), destroySession: vi.fn(() => true), listSessions: vi.fn(() => []), getSession: vi.fn(() => undefined),
     sendInput: vi.fn(), resizeSession: vi.fn(), hasSession: vi.fn(() => true),
+    setChunkNoter: vi.fn(), getPtySize: vi.fn(() => null),
   });
   const mainWindow: any = {
     isDestroyed: () => false,

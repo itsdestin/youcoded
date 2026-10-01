@@ -332,6 +332,7 @@ export const IPC = {
   // Stop receiving ONE session's pushes (one-core R5-3). `session:open` starts a phone's watch (and fills it); this ends it. A phone
   // watches the conversation on its screen plus a few it looked at lately; everything else reaches it only as `session:summary`.
   SESSION_UNWATCH: 'session:unwatch',
+  SESSION_SEND_OUTCOMES: 'session:send-outcomes',
   // Push to everyone: the small per-session facts (working, asks waiting, attention, history) the session strip's dots are drawn from,
   // so a phone can colour a session it does not watch (R5-1 added it, R5-3 reads it).
   SESSION_SUMMARY: 'session:summary',
@@ -344,7 +345,6 @@ export const IPC = {
   SESSION_PERMISSION_MODE: 'session:permission-mode',
   // A computer window reports a card it saw in its terminal; the host numbers it and publishes it to every screen (one-core R5-4a).
   // Computer windows only: a phone's terminal copy is not read for cards, it draws the host's.
-  SESSION_PROMPT_REPORT: 'session:prompt-report',
   // Push to ONE window: its fill never completed (the hold expired), so it must fill that conversation again (R5-2 review fix).
   SESSION_REFILL: 'session:refill',
   // The asks still open in a session, replayed at the end of every fill (a push in the answer's `after`, never sent by itself).
@@ -956,8 +956,6 @@ interface SessionBridge {
   open(req: { sessionId: string; claudeSessionId?: string; projectSlug?: string; fresh?: boolean }): Promise<import('./session-open-types').OpenReply | undefined>;
   /** End a phone's watch of one conversation (one-core R5-3); `open` starts it. A window answers ok and changes nothing. */
   unwatch(sessionId: string): Promise<{ ok: true }>;
-  /** A computer window reports a card it read off its terminal; the host publishes it to every screen (one-core R5-4a). */
-  reportPrompt(report: import('./session-live-types').PromptReport): Promise<{ ok: boolean }>;
   /** Hand an open's pushes (`before` / `after`) to the same listeners a live push reaches. */
   play(pushes: Array<{ type: string; payload: unknown }>): void;
   /** The computer asks this screen to fill a conversation again (its first fill never completed). */
@@ -966,8 +964,13 @@ interface SessionBridge {
   list(): Promise<any[]>;
   /** False on a remote client whose connection is down; always true on desktop. */
   canSend(): boolean;
-  /** `notice: 'model-switch'` says this write is a typed `/model <alias>` chat command, so the host draws its divider on every screen (R5-4a). */
-  sendInput(sessionId: string, text: string, notice?: 'model-switch'): void;
+  /** `notice: 'model-switch'` says this write is a typed `/model <alias>` chat command, so the host draws its divider on every screen (R5-4a).
+   *  `sendId` is the screen's id for a chat message (the write that submits it), so a phone that lost its connection mid-send can ask the host
+   *  whether it was received (`sendOutcomes`, R5-4b). */
+  sendInput(sessionId: string, text: string, notice?: 'model-switch', sendId?: string): void;
+  /** What the computer's record noted for these send ids (one-core R5-4b). Resolves to undefined on a bridge with no host record (the Android
+   *  app's own runtime), where nothing can be lost on a network. */
+  sendOutcomes(sessionId: string, ids: string[]): Promise<import('./send-outcome-types').SendOutcomesReply | undefined>;
   resize(sessionId: string, cols: number, rows: number): void;
   signalReady(sessionId: string): void;
   respondToPermission(requestId: string, decision: object): Promise<boolean>;
@@ -1301,7 +1304,7 @@ interface ClaudeApi {
     // attachments: absolute composer file paths. Image ones are attached to
     // the user message when the model can see images; they ALSO remain in
     // `text`, which is the optimistic bubble's dedup key.
-    send: (sessionId: string, text: string, attachments?: string[]) => Promise<NativeSendResult>;
+    send: (sessionId: string, text: string, attachments?: string[], sendId?: string) => Promise<NativeSendResult>;
     // Task 11: cancel/edit a queued-but-not-yet-sent message. true = removed
     // (caller may now safely refill the composer); false = too late (already
     // draining/sent) or the session isn't live — never throws.

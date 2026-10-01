@@ -21,7 +21,7 @@ type SpecialistsWriteResult = { ok: true } | { ok: false; error: string };
 
 export interface NativeChannelTypes {
   // Native runtime: sending, queueing, stopping.
-  'native:send': { request: { sessionId: string; text: string; attachments?: string[] }; response: NativeSendResult };
+  'native:send': { request: { sessionId: string; text: string; attachments?: string[]; /** the phone's id for this send (R5-4b) */ sendId?: string }; response: NativeSendResult };
   'native:queue-remove': { request: { sessionId: string; queueId: string }; response: boolean };
   'native:queue-send-now': { request: { sessionId: string; queueId: string }; response: boolean };
   'native:interrupt': { request: { sessionId: string }; response: void };

@@ -47,8 +47,9 @@ describe('a phone is never shown a channel id', () => {
     expect(classifier).toContain("import { getCapabilities } from '../platform';");
     // assertPatternMatches proves the regex can match SOMETHING before it is trusted to
     // prove the source does — a pattern matching nothing passes a `not`, and reads green.
-    const shape = /const hasBuffer = \(provider === undefined \|\| provider === 'claude'\) && getCapabilities\(\)\.terminalScreenRead;/;
-    assertPatternMatches(shape, "const hasBuffer = (provider === undefined || provider === 'claude') && getCapabilities().terminalScreenRead;", 'classifier remote gate');
+    // R5-4b: and not `sessionRecord`: wherever the computer keeps a record its main process owns the "may be stuck" reading.
+    const shape = /const hasBuffer = \(provider === undefined \|\| provider === 'claude'\) && getCapabilities\(\)\.terminalScreenRead && !getCapabilities\(\)\.sessionRecord;/;
+    assertPatternMatches(shape, "const hasBuffer = (provider === undefined || provider === 'claude') && getCapabilities().terminalScreenRead && !getCapabilities().sessionRecord;", 'classifier remote gate');
     expect(REMOTE_SCREEN_CAPABILITIES.terminalScreenRead).toBe(false);
     expect(classifier).toMatch(shape);
   });
