@@ -5,7 +5,7 @@ import { useChatDispatch, useChatStore } from '../state/chat-context';
 import { getVisibleScreenText, onBufferReady } from './terminal-registry';
 import { parsePlanMenu } from '../parser/plan-menu-parser';
 import { expiredToolIds, nextAbsentCount } from '../state/expired-card-resolver';
-import { readInputFocus } from '../parser/cc-input-focus';
+import { readInputFocus, inputIsBlocked } from '../parser/cc-input-focus';
 import type { SessionChatState } from '../state/chat-types';
 
 // How long to wait before showing a parser-detected prompt, giving the hook
@@ -142,6 +142,11 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
   // re-issued when an identical dialog followed an answered one (review F5).
   const shownPromptIdRef = useRef<Map<string, string>>(new Map());
   const reissueTimerRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  // Last screen verdict sent to main per session (reportInputBlocked).
+  const reportedBlockedRef = useRef<Map<string, boolean>>(new Map());
+  // The GENERIC card on show per session (its promptId) — withdrawn if a hook
+  // ask arrives after it (see the awaiting-approval effect below).
+  const genericShownRef = useRef<Map<string, string>>(new Map());
 
   // Track when awaiting-approval was last cleared per session, so the parser
   // can suppress re-detection during the post-permission cooldown window.
@@ -169,6 +174,17 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
           if (tool && tool.status === 'awaiting-approval') { hasAwaiting = true; break; }
         }
         const wasAwaiting = prevAwaitingRef.current.get(sid) ?? false;
+        // A hook ask arrived AFTER a generic card went up for the same menu
+        // (its event trailed the 1 s wait — review F2, 2026-09-30): the hook's
+        // card owns the menu, so withdraw the generic one. Two cards for one
+        // question, both typing into it, is the duplicate this guards against.
+        if (!wasAwaiting && hasAwaiting) {
+          const generic = genericShownRef.current.get(sid);
+          if (generic) {
+            genericShownRef.current.delete(sid);
+            dispatch({ type: 'DISMISS_PROMPT', sessionId: sid, promptId: generic });
+          }
+        }
         if (wasAwaiting && !hasAwaiting) {
           lastPermissionClearedRef.current.set(sid, Date.now());
         }
@@ -177,7 +193,7 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
     };
     check();
     return store.subscribeAll(check);
-  }, [store]);
+  }, [store, dispatch]);
 
   useEffect(() => {
     // Show a card for `menu` after the debounce, re-checking everything first.
@@ -221,6 +237,7 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
         const verified = buttons.some((b) => b.pick);
         shownPromptRef.current.set(sid, menu.id);
         shownPromptIdRef.current.set(sid, promptId);
+        if (generic) genericShownRef.current.set(sid, promptId); else genericShownRef.current.delete(sid);
         dispatch({
           type: 'SHOW_PROMPT',
           sessionId: sid,
@@ -279,6 +296,15 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
     };
 
     const unsub = onBufferReady((sid: string) => {
+      // Tell main whether a pop-up holds this session's keyboard (on change
+      // only): main types /reload-plugins on its own and has no screen to read.
+      // Before the live-ask bail below, so the verdict never goes stale.
+      const blocked = inputIsBlocked(readInputFocus(getVisibleScreenText(sid)));
+      if (reportedBlockedRef.current.get(sid) !== blocked) {
+        reportedBlockedRef.current.set(sid, blocked);
+        window.claude?.session?.reportInputBlocked?.(sid, blocked);
+      }
+
       // Skip prompt detection when a PermissionRequest approval is active
       // (the hook-based UI is handling the permission flow)
       const sessionState = store.getState().get(sid);
@@ -369,6 +395,7 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
           }
           if (lastMenuId && shownPromptRef.current.get(sid) === lastMenuId) {
             shownPromptRef.current.delete(sid);
+            genericShownRef.current.delete(sid);
             dispatch({ type: 'DISMISS_PROMPT', sessionId: sid, promptId: shownPromptIdRef.current.get(sid) ?? lastMenuId });
           }
           clearTimeout(reissueTimerRef.current.get(sid));
@@ -416,6 +443,7 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
             if (shownPromptRef.current.get(sid) === lastMenuId) {
               shownPromptRef.current.delete(sid);
             }
+            genericShownRef.current.delete(sid);
             dispatch({
               type: 'DISMISS_PROMPT',
               sessionId: sid,

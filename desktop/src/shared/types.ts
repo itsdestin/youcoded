@@ -1782,6 +1782,8 @@ export const IPC = {
   HANDOFF_CREATE_PARAMS: 'handoff:create-params',
   SESSION_DESTROY: 'session:destroy',
   SESSION_INPUT: 'session:input',
+  // Renderer → main: a pop-up (read off the screen) holds this session's keyboard.
+  SESSION_INPUT_BLOCKED: 'session:input-blocked',
   SESSION_RESIZE: 'session:resize',
   SESSION_LIST: 'session:list',
   SESSION_SWITCH: 'session:switch',

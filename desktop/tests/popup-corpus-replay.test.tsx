@@ -8,8 +8,9 @@
 // permission, question and plan menus look the same on screen — they belong
 // to the hook system's cards, and must never get a second card. So for every
 // capture, with the hook event arriving at once, after 150 ms, after 400 ms,
-// or never:
-//   • a hook-owned menu gets NO detector card while its hook card is up;
+// after 1.5 s (later than the generic card's 1 s wait), or never:
+//   • a hook-owned menu gets NO detector card while its hook card is up — and
+//     one that went up before a late hook is withdrawn when the hook arrives;
 //   • with no hook at all, at most one fallback card per menu;
 //   • a moment with no pop-up never gets a card (quoted menus in replies,
 //     numbered lists, suggestion lists, the status line…);
@@ -25,6 +26,9 @@ const mocks = vi.hoisted(() => ({
   callbacks: [] as Array<(sid: string) => void>,
   screen: { text: '' },
   sessions: new Map<string, any>(),
+  // The detector subscribes to the chat store (its awaiting-approval effect);
+  // a raised or cleared hook ask notifies it, as the real store would.
+  subscribers: new Set<() => void>(),
 }));
 
 vi.mock('../src/renderer/hooks/terminal-registry', async (importActual) => {
@@ -43,7 +47,10 @@ vi.mock('../src/renderer/hooks/terminal-registry', async (importActual) => {
 
 vi.mock('../src/renderer/state/chat-context', () => ({
   useChatDispatch: () => mocks.dispatch,
-  useChatStore: () => ({ getState: () => mocks.sessions, subscribeAll: () => () => {} }),
+  useChatStore: () => ({
+    getState: () => mocks.sessions,
+    subscribeAll: (cb: () => void) => { mocks.subscribers.add(cb); return () => mocks.subscribers.delete(cb); },
+  }),
 }));
 
 import { usePromptDetector } from '../src/renderer/hooks/usePromptDetector';
@@ -58,7 +65,9 @@ const HOOK_OWNED = /permission|question|plan approval|overwrite/;
 const DISMISS_SETTLE_MS = 700;
 
 type Delay = number | 'never';
-const DELAYS: Delay[] = [0, 150, 400, 'never'];
+const DELAYS: Delay[] = [0, 150, 400, 1500, 'never'];
+/** The detector's GENERIC_CARD_DEBOUNCE_MS — a hook later than this can meet a card. */
+const GENERIC_WAIT_MS = 1000;
 
 interface Region { state: string; note: string; from: number; to: number; t0: number; ms: number }
 
@@ -86,6 +95,7 @@ async function run(file: string, delay: Delay) {
   mocks.dispatch.mockReset();
   mocks.callbacks.length = 0;
   mocks.sessions.clear();
+  mocks.subscribers.clear();
   const events: { at: number; seg: number; type: string; promptId: string; title?: string }[] = [];
   let segIndex = 0;
   mocks.dispatch.mockImplementation((a: any) => {
@@ -95,6 +105,7 @@ async function run(file: string, delay: Delay) {
   const setAsk = (on: boolean) => {
     if (on) mocks.sessions.set(SID, { toolCalls: new Map([['t1', { status: 'awaiting-approval' }]]), activeTurnToolIds: ['t1'], timeline: [] });
     else mocks.sessions.delete(SID);
+    act(() => { for (const cb of [...mocks.subscribers]) cb(); });
   };
 
   const failures: string[] = [];
@@ -130,7 +141,14 @@ async function run(file: string, delay: Delay) {
       // Judge the region.
       const inRegion = events.filter((e) => e.type === 'SHOW_PROMPT' && e.seg >= r.from && e.seg <= r.to);
       if (r.state === 'none' && inRegion.length) failures.push(`card with no pop-up: [${r.note}] "${inRegion[0].title}"`);
-      if (hookOwned && delay !== 'never' && inRegion.length) failures.push(`duplicate card beside the hook card: [${r.note}] "${inRegion[0].title}"`);
+      if (hookOwned && typeof delay === 'number' && delay < GENERIC_WAIT_MS && inRegion.length) failures.push(`duplicate card beside the hook card: [${r.note}] "${inRegion[0].title}"`);
+      // A late hook may meet a card already up; it must be withdrawn by the
+      // time the region ends (the hook card owns the menu from then on).
+      if (hookOwned && typeof delay === 'number' && delay >= GENERIC_WAIT_MS && delay < r.ms && inRegion.length) {
+        const open = new Set<string>();
+        for (const e of events) { if (e.seg > r.to) break; if (e.type === 'SHOW_PROMPT') open.add(e.promptId); else open.delete(e.promptId); }
+        if (open.size) failures.push(`card left up beside a late hook card: [${r.note}] ${[...open].join(', ')}`);
+      }
       if (r.state === 'popup' && inRegion.length > 1) failures.push(`${inRegion.length} cards for one pop-up: [${r.note}]`);
       if (r.state === 'popup' && inRegion.length && (delay === 0 || delay === 'never')) cardsFor.push(`${delay === 'never' ? 'no hook ' : ''}${fx.scenario} [${r.note}] → "${inRegion[0].title}"`);
       if (r.state === 'none' && r.ms >= DISMISS_SETTLE_MS) {

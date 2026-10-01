@@ -1828,25 +1828,6 @@ pre.yc-code code {
   to   { opacity: 1; transform: none; }
 }
 
-/* "Show card" on a refused send (utils/focus-chat-card.ts): the waiting card
-   is scrolled into view and its edge lights up once, then fades. An inset
-   outline on a pseudo-element, animating only opacity (performance rule 6);
-   inset because the cards clip their own overflow. Played once, not infinite. */
-.card-attention { position: relative; }
-.card-attention::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  box-shadow: inset 0 0 0 2px var(--accent);
-  pointer-events: none;
-  animation: card-attention 1.4s ease-out 1 forwards;
-}
-@keyframes card-attention {
-  0%, 45% { opacity: 1; }
-  100%    { opacity: 0; }
-}
-
 /* Hover hint entrance.
    WHY it exists (Destin, live deck L-3, 2026-09-10): sweeping the pointer along
    a row of chips made hints pop in and out instantly, because a neighbour opens

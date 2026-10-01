@@ -50,6 +50,10 @@ interface SessionBridge {
   /** False on a remote client whose connection is down; always true on desktop. */
   canSend(): boolean;
   sendInput(sessionId: string, text: string): void;
+  /** The renderer's screen verdict: a Claude Code pop-up holds this session's
+   *  keyboard (parser/cc-input-focus.ts). Main gates its own automated writes
+   *  (/reload-plugins) on it. Fire-and-forget. */
+  reportInputBlocked(sessionId: string, blocked: boolean): void;
   resize(sessionId: string, cols: number, rows: number): void;
   signalReady(sessionId: string): void;
   respondToPermission(requestId: string, decision: object): Promise<unknown>;

@@ -1977,6 +1977,12 @@ export function registerIpcHandlers(
     sessionManager.sendInput(sessionId, text);
   });
 
+  // A Claude Code pop-up holds this session's keyboard (fire-and-forget; the
+  // renderer reads the screen, main has none) — gates /reload-plugins.
+  ipcMain.on(IPC.SESSION_INPUT_BLOCKED, (_event, sessionId: string, blocked: boolean) => {
+    sessionManager.setInputBlocked(sessionId, blocked === true);
+  });
+
   // PTY resize (fire-and-forget)
   ipcMain.on(IPC.SESSION_RESIZE, (_event, sessionId: string, cols: number, rows: number) => {
     sessionManager.resizeSession(sessionId, cols, rows);

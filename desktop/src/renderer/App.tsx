@@ -53,8 +53,9 @@ import { GameProvider, useGameState, useGameDispatch } from './state/game-contex
 import { hookEventToAction } from './state/hook-dispatcher';
 import { buildUsageSnapshot, pruneExpiredUsage, type SubscriptionUsage } from './state/usage-snapshot';
 import { invalidateProviderTypeCache, resolveProviderType, useModelProviderType } from './hooks/use-provider-type';
-import { sendBlock, pendingInteractionRefusalCopy, pendingCardRef, canPtySend } from './state/pty-input-gate';
-import { focusChatCard } from './utils/focus-chat-card';
+import { sendBlock, canPtySend } from './state/pty-input-gate';
+import { useBlockedSend } from './hooks/useBlockedSend';
+import type { ToastAction } from './components/ui/Toast';
 import { buildOutgoingMessage } from './components/outgoing-message';
 import type { SyncWarning } from '../main/sync-state';
 import { latestUnresolvedError, type SyncStatusData } from './components/sync-dot-state';
@@ -622,13 +623,8 @@ function AppInner() {
   // ran 3s/4s/6s/8s depending on how much text there was to read. A single
   // primitive default would have silently cut the 8s handoff-failure messages to
   // 3s. Omit it for the common 3s case; the primitive supplies that default.
-  // `primary`: the dark, leading button (a refused send's Show card / Open
-  // terminal), drawn LAST so it sits on the right; others keep the old style.
-  type ToastAction = { label: string; onClick: () => void; primary?: boolean };
   type ToastState =
     | string
-    // `actions`: up to two buttons, left to right (a refused send offers
-    // "Send anyway", then the way forward: "Show card" / "Open terminal").
     | { message: string; durationMs?: number; action?: ToastAction; actions?: ToastAction[] };
   const [toast, setToast] = useState<ToastState | null>(null);
   // Components with no prop path to this state (the file drawer's Download and
@@ -756,6 +752,10 @@ function AppInner() {
     return chatStore.subscribeAll(() => { chatStateMapRef.current = chatStore.getState(); });
   }, [chatStore]);
 
+  // Refused sends and their toast (pending cards, then the live screen).
+  const { showBlockedSend, notifyIfPtyBlocked } = useBlockedSend({ chatState: chatStateMapRef,
+    showToast: setToast, openTerminal: (sid) => setViewModes((prev) => new Map(prev).set(sid, 'terminal')) });
+
   // Guarded PTY send for command-shaped writes triggered by UI actions
   // (command drawer, skill runs, /sync, /config, /model, Settings sends).
   // While a permission/AskUserQuestion/plan request is pending, CC's native
@@ -765,42 +765,6 @@ function AppInner() {
   // InputBar.sendMessage applies to typed messages. Deliberate menu-driving
   // writes (ToolCard plan keys, TrustGate, prompt option clicks, terminal
   // view) must NOT use this helper. Returns false when the send was refused.
-  // The one refusal toast for a blocked send, with a way to the blocker.
-  // WHY a button (Destin, 2026-09-30): "answer the card first" left the user
-  // hunting for a card that may be scrolled away, and "something is open in
-  // the terminal" for a view they were not looking at. "Show card" scrolls to
-  // the waiting card and lights it up; when the blocker is only on Claude
-  // Code's screen (no card), "Open terminal" switches this session there.
-  // `retry` (InputBar's sends only) adds "Send anyway".
-  const showBlockedSend = useCallback((sid: string, block: NonNullable<ReturnType<typeof sendBlock>>, retry?: () => void) => {
-    const openTerminal = () => setViewModes((prev) => new Map(prev).set(sid, 'terminal'));
-    const card = block.kind === 'screen' ? null : pendingCardRef(chatStateMapRef.current.get(sid));
-    const forward: ToastAction = card
-      // Not in the visible chat (folded far up): the menu is live in the
-      // terminal too, so go there instead of doing nothing.
-      ? { label: 'Show card', primary: true, onClick: () => { setToast(null); if (!focusChatCard(card)) openTerminal(); } }
-      : { label: 'Open terminal', primary: true, onClick: () => { setToast(null); openTerminal(); } };
-    // Order and weight per Destin's review (2026-09-30, deck S-1/S-2): the way
-    // forward is the dark button on the right; Send anyway keeps its original
-    // style, directly to its left.
-    setToast({
-      message: pendingInteractionRefusalCopy(block.kind, block.screen),
-      durationMs: 8000,
-      actions: retry ? [{ label: 'Send anyway', onClick: () => { setToast(null); retry(); } }, forward] : [forward],
-    });
-  }, []);
-
-  const notifyIfPtyBlocked = useCallback((sid: string): boolean => {
-    // sendBlock also reads the live terminal: a Claude Code pop-up no hook
-    // reported would otherwise swallow the command (see pty-input-gate.ts).
-    const block = sendBlock(chatStateMapRef.current.get(sid), sid);
-    if (block) {
-      showBlockedSend(sid, block);
-      return true;
-    }
-    return false;
-  }, [showBlockedSend]);
-
   const guardedPtySend = useCallback((sid: string, text: string): boolean => {
     // Honest guard (M1): refuse before sending, so callers' `if (!guardedPtySend)`
     // bails actually fire for native/destroyed sessions and skip optimistic writes.
@@ -3447,6 +3411,11 @@ function AppInner() {
     // the guard that makes pty-input-gate's "exactly once, at creation, and
     // never again" true.
     if (sessionsRef.current.find((x) => x.id === sessionId)?.provider === 'shell') return;
+    // An unreported Claude Code pop-up has the keyboard (review F5): Shift+Tab
+    // would go to it, and the optimistic chip would show a mode never applied.
+    // Hook-reported cards keep today's behaviour, so only the screen verdict.
+    const block = sendBlock(chatStateMapRef.current.get(sessionId), sessionId);
+    if (block?.kind === 'screen') { showBlockedSend(sessionId, block); return; }
     const canAuto = currentModel === 'opus[1m]';
     const cycle: PermissionMode[] = [
       'normal',
@@ -3468,7 +3437,7 @@ function AppInner() {
     // same warning the form's toggle shows.
     if (next === 'bypass') { gateSkip(apply); return; }
     apply();
-  }, [sessionId, canBypass, currentPermissionMode, currentModel, gateSkip]);
+  }, [sessionId, canBypass, currentPermissionMode, currentModel, gateSkip, showBlockedSend]);
   cyclePermissionRef.current = cyclePermission;
 
   useEffect(() => {
@@ -4652,22 +4621,10 @@ function AppInner() {
           message={typeof toast === 'string' ? toast : toast.message}
           durationMs={typeof toast === 'string' ? undefined : toast.durationMs}
           onDismiss={() => setToast(null)}
-          action={(() => {
-            if (typeof toast === 'string') return undefined;
-            const list = toast.actions ?? (toast.action ? [toast.action] : []);
-            if (!list.length) return undefined;
-            // A `primary` action is the dark button; the rest keep the toast
-            // action's original secondary style.
-            return (
-              <span className="flex items-center gap-1.5">
-                {list.map((x) => (
-                  <Button key={x.label} variant={x.primary ? 'primary' : 'secondary'} size="sm" onClick={x.onClick}>
-                    {x.label}
-                  </Button>
-                ))}
-              </span>
-            );
-          })()}
+          action={typeof toast !== 'string' && toast.action ? (
+            <Button variant="secondary" size="sm" onClick={toast.action.onClick}>{toast.action.label}</Button>
+          ) : undefined}
+          actions={typeof toast === 'string' ? undefined : toast.actions}
         />
       )}
       {/* Plan 2b Task 9 — conversation-lease takeover dialog (3-state redesign,

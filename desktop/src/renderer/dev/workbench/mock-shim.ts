@@ -1095,6 +1095,8 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // makes for Claude Code sessions ('\r', '\x1b') never start a script.
     canSend: () => true,
     sendInput: (sessionId: string, text: string) => startReply(sessionId, text, true),
+    // No main process here: the screen verdict has no automated writer to gate.
+    reportInputBlocked: () => {},
     // Real signature is Promise<boolean> (useIpc.ts/preload.ts), not {ok} —
     // resolvePermission already returns a boolean (false = stale/unknown id).
     respondToPermission: async (requestId: string, decision: any) => {

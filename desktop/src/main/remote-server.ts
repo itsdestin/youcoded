@@ -4151,6 +4151,11 @@ export class RemoteServer {
         this.sessionManager.sendInput(payload.sessionId, payload.text);
         break;
       }
+      // A remote browser's screen verdict is ignored: the desktop window's own
+      // detector reports for every session and is the authority (same rule as
+      // attentionState). Android's WebView reports to SessionService instead.
+      case 'session:input-blocked':
+        break;
       // Native runtime interrupt — fire-and-forget (no response). The host no-ops unknown ids.
       case 'native:interrupt': {
         this.nativeRuntime?.nativeHost.interrupt(payload.sessionId);

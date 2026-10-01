@@ -33,7 +33,8 @@ const ANSI = /\x1b\[[0-9;?]*[a-zA-Z]/g;
 /** A full-width rule drawn at column 0 — the edges of Claude Code's message
  *  box, and the top edge of a classic-renderer pop-up. Rules inside replies,
  *  code blocks and pop-up bodies are indented, so they never match. */
-const EDGE = /^[─━]{20,}\s*$/;
+// 10, not more: a phone-width terminal draws a short box (review F11).
+const EDGE = /^[─━]{10,}\s*$/;
 
 /** The first row inside the message box: the prompt mark, or bash mode's "!". */
 const INPUT_ROW = /^(❯|!)(\s|$)/;
@@ -63,7 +64,8 @@ function boxAt(rows: string[]): number {
   let last = -1;
   for (let i = rows.length - 1; i >= 0; i--) if (EDGE.test(rows[i])) { last = i; break; }
   if (last < 0) return -1;
-  for (let i = last - 1; i >= Math.max(0, last - 40); i--) {
+  // A tall multi-line draft sits between the rules — look well up (F11).
+  for (let i = last - 1; i >= Math.max(0, last - 200); i--) {
     if (EDGE.test(rows[i])) return i + 1 < last && INPUT_ROW.test(rows[i + 1]) ? last : -1;
   }
   return -1;

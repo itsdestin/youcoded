@@ -388,6 +388,7 @@ export class SessionManager extends EventEmitter {
       if (this.sessions.has(id)) {
         this.sessions.get(id)!.info.status = 'destroyed';
         this.sessions.delete(id);
+        this.inputBlocked.delete(id);
         this.emit('session-exit', id, 1);
       }
     });
@@ -471,6 +472,7 @@ export class SessionManager extends EventEmitter {
           exitingSession.info.status = 'destroyed';
           this.emit('session-exit', id, deliberate ? 0 : msg.exitCode);
           this.sessions.delete(id);
+          this.inputBlocked.delete(id);
           break;
       }
     });
@@ -490,6 +492,7 @@ export class SessionManager extends EventEmitter {
       exitingSession.info.status = 'destroyed';
       this.emit('session-exit', id, 0);
       this.sessions.delete(id);
+      this.inputBlocked.delete(id);
     });
 
     // Tell the worker to spawn the CLI, passing our session ID
@@ -562,6 +565,7 @@ export class SessionManager extends EventEmitter {
     if (!session) return false;
     session.info.status = 'destroyed';
     this.sessions.delete(id);
+    this.inputBlocked.delete(id);
     // Uniform teardown: native sessions (no worker) still emit session-exit so
     // downstream cleanup (window release, remote broadcast) runs identically.
     this.emit('session-exit', id, 0);
@@ -644,10 +648,25 @@ export class SessionManager extends EventEmitter {
     }, delayMs);
   }
 
+  /** Per session: the renderer read a pop-up holding the keyboard (see
+   *  setInputBlocked). Absent = not blocked. */
+  private inputBlocked = new Set<string>();
+
+  /** The renderer's screen verdict (parser/cc-input-focus.ts): a Claude Code
+   *  pop-up no hook reported holds this session's keyboard. Main has no screen
+   *  of its own, so its automated writes ask this as well as the hook gate. */
+  setInputBlocked(id: string, blocked: boolean): void {
+    if (blocked && this.sessions.has(id)) this.inputBlocked.add(id);
+    else this.inputBlocked.delete(id);
+  }
+
   private sendReloadWhenClear(id: string, attempt: number): void {
     const session = this.sessions.get(id);
     if (!session || session.info.status !== 'active') return;
-    if (this.reloadPluginsGate?.(id)) {
+    // WHY the screen verdict too (2026-09-30 review F1): the hook gate only
+    // knows reported asks; "/reload-plugins\r" typed into an unreported
+    // pop-up (auto-mode setup offer, compaction menu) would answer it.
+    if (this.reloadPluginsGate?.(id) || this.inputBlocked.has(id)) {
       if (attempt >= SessionManager.RELOAD_MAX_RETRIES) return;
       setTimeout(
         () => this.sendReloadWhenClear(id, attempt + 1),

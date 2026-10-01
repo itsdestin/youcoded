@@ -9,8 +9,11 @@
 // open session and hides the others, and a prompt card's id is derived from
 // the menu's text, so two sessions can carry the same one.
 
-const ATTENTION_CLASS = 'card-attention';
-const ATTENTION_MS = 1400;
+// The app's one "here it is" flash — the same ring the Specialists panel's
+// jump-to-card uses (globals.css .specialist-jump-flash), so a card looks the
+// same however you reached it (review F10, 2026-09-30).
+const ATTENTION_CLASS = 'specialist-jump-flash';
+const ATTENTION_MS = 1600;
 
 /** The card's element: a permission/question card by its tool id, or a
  *  prompt card by its prompt id. */
