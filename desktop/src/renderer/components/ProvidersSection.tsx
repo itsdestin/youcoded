@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Button, FieldError, InputGroup, Pill, Select, SectionLabel, TextInput, Toggle } from './ui';
+import { Button, FieldError, InputGroup, Select, SectionLabel, TextInput, Toggle } from './ui';
 import { isLocalEndpoint, type ProviderStatus, type ProviderConfig, type ProviderType } from '../../shared/provider-types';
 import { invalidateProviderTypeCache } from '../hooks/use-provider-type';
 
@@ -305,13 +305,8 @@ function ProviderRow({ provider, onChanged }: { provider: ProviderStatus; onChan
     <div className="bg-inset/50 hover:bg-inset rounded-lg px-3 py-2.5 transition-colors">
       <div className="flex items-center gap-3">
         <div className="flex-1 min-w-0">
-          {/* WHY the state as a pill beside the name (status pills trial,
-              2026-09-29): same rule and quiet tones as the Cloud providers
-              cards — grey, amber only when a key is still needed. */}
-          <p className="text-xs text-fg font-medium flex items-center gap-1.5 min-w-0">
-            <span className="truncate">{provider.label}</span>
-            <Pill tone={stateWord(provider) === 'Needs API key' ? 'warning' : 'neutral'}>{stateWord(provider)}</Pill>
-          </p>
+          <p className="text-xs text-fg font-medium truncate">{provider.label}</p>
+          <p className="text-3xs text-fg-muted">{stateWord(provider)}</p>
         </div>
 
         {/* Enable/disable toggle — hidden for the dormant local engine (nothing

@@ -7,7 +7,7 @@ import { OPENROUTER_CREDITS_URL, type OpenRouterSignInStatus, type ProviderHealt
 import { chatGptPlanLabel, type ChatGptAccountStatus } from '../../shared/chatgpt-types';
 import { claudePlanLabel } from '../../shared/claude-account-types';
 import { useClaudeStatus } from './model/availability';
-import { AnchorTip, Button, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, FieldError, InputGroup, Pill, SectionLabel, TextInput, type PillTone } from './ui';
+import { AnchorTip, Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, FieldError, InputGroup, SectionLabel, TextInput } from './ui';
 import BrailleSpinner from './BrailleSpinner';
 import { PlanWindows, type PlanUsage } from './plan-windows';
 import { invalidateProviderTypeCache } from '../hooks/use-provider-type';
@@ -42,25 +42,7 @@ function SectionHeader({ title, info }: { title: string; info: { label: string; 
 // same muted grey · one action on the right · optional plan bars underneath.
 // No green "connected" text and no "Default engine" badge — the status line
 // says the state in words and the plan bars say how much is left.
-// WHY short states become a pill beside the name (status pills trial,
-// 2026-09-29; guide: "a status label is a small tinted pill … name and status on
-// the top line"): a one- or two-word state is a label, not a sentence. Tones
-// stay quiet — grey for the ordinary states (review 2026-09-05 P-1: "neutral
-// treatment", no green "connected"), amber for an unchecked key, the danger
-// tint only for a key that no longer works. Sentences ("Signed in as …") stay
-// lines. The words are grey in every tone.
-const STATE_PILL: Record<string, PillTone> = {
-  'Connected': 'neutral',
-  'Not connected': 'neutral',
-  'Not signed in': 'neutral',
-  'Key saved — not checked yet': 'warning',
-  'Key not accepted': 'danger',
-  'Key expired': 'danger',
-  'Wrong kind of key': 'danger',
-  'Key refused': 'danger',
-};
-
-function ProviderRow({ title, info, status, detail, action, account, children, screen }: {
+function ProviderRow({ title, info, status, detail, notice, action, account, children, screen }: {
   title: string;
   /** The `shoot` name of this card (photo-only build): marks it so a picture of the
    *  page scrolls to this card instead of whatever sits at the top. */
@@ -68,7 +50,13 @@ function ProviderRow({ title, info, status, detail, action, account, children, s
   /** The (i) explainer, beside the name INSIDE the card (round 3, P-1): the
    *  eyebrow heading above the card repeated the name, so it is gone. */
   info?: { label: string; body: React.ReactNode };
-  status: React.ReactNode;
+  status?: React.ReactNode;
+  /** WHY (status pills round, 2026-09-29; ui-status-pills#PL-1/PL-2): a card that
+   *  needs attention says so in ONE notice box across its foot — the words and
+   *  the buttons that fix it together, buttons inside at the right — instead of
+   *  a status word up top, an error line below and the fix buttons somewhere
+   *  else. The card's own top-right buttons step aside while it shows. */
+  notice?: { tone: 'warning' | 'danger'; text: React.ReactNode; actions?: React.ReactNode } | null;
   /** A second line under the status: OpenAI's refusal reason, a hint. Tone
    *  'bad' is the destructive colour for a reason the user must read. */
   detail?: { text: React.ReactNode; tone?: 'muted' | 'bad' } | null;
@@ -91,11 +79,10 @@ function ProviderRow({ title, info, status, detail, action, account, children, s
           <p className="text-xs text-fg font-medium inline-flex items-center gap-1.5">
             {title}
             {info && <AnchorTip label={info.label} title={title}>{info.body}</AnchorTip>}
-            {typeof status === 'string' && STATE_PILL[status] && <Pill tone={STATE_PILL[status]}>{status}</Pill>}
           </p>
-          {!(typeof status === 'string' && STATE_PILL[status]) && <p className="text-2xs mt-0.5 text-fg-muted">{status}</p>}
+          {status && <p className="text-2xs mt-0.5 text-fg-muted">{status}</p>}
         </div>
-        {(account || action) && (
+        {(account || (action && !notice)) && (
           <div className="shrink-0 flex items-center gap-1.5">
             {account && (
               <Button variant="secondary" size="sm"
@@ -103,7 +90,7 @@ function ProviderRow({ title, info, status, detail, action, account, children, s
                 My account
               </Button>
             )}
-            {action}
+            {!notice && action}
           </div>
         )}
       </div>
@@ -117,6 +104,11 @@ function ProviderRow({ title, info, status, detail, action, account, children, s
         detail.tone === 'bad'
           ? <FieldError as="p" size="2xs" className="mt-0.5">{detail.text}</FieldError>
           : <p className="text-2xs mt-0.5 text-fg-muted">{detail.text}</p>
+      )}
+      {notice && (
+        <div className="mt-2">
+          <Callout tone={notice.tone} actions={notice.actions}>{notice.text}</Callout>
+        </div>
       )}
       {children && <div className="mt-2.5">{children}</div>}
     </div>
@@ -444,7 +436,10 @@ export function ChatGptBlock() {
           ),
         }}
         status={line}
-        detail={note ? { text: note, tone: 'bad' } : detail}
+        // Blocked: OpenAI's reason and the one thing to do (Sign out) in one
+        // danger box, like the OpenRouter card's broken key (ui-status-pills#PL-2).
+        detail={note ? { text: note, tone: 'bad' } : status?.state === 'blocked' ? null : detail}
+        notice={status?.state === 'blocked' && !note ? { tone: 'danger', text: status.reason, actions: action } : null}
         account={status?.state === 'signed-in' || status?.state === 'blocked' ? 'https://chatgpt.com/#settings/Account' : undefined}
         action={action}
       >
@@ -470,15 +465,17 @@ function shortDate(iso: string | undefined): string | null {
  *  and a refused key says why and what to do — in the destructive tone, since
  *  nothing OpenRouter-backed works until it is fixed. */
 function openRouterKeyWords(health: ProviderHealth | undefined, canSignIn = false): {
-  status: string; detail: { text: string; tone?: 'muted' | 'bad' } | null; broken: boolean;
+  status: string | null; detail: { text: string; tone?: 'muted' | 'bad' } | null; broken: boolean; unchecked?: boolean;
 } {
   if (!health) return { status: 'Checking…', detail: null, broken: false };
-  if (health.verdict === 'verified') return { status: 'Connected', detail: null, broken: false };
+  // No status for a key that works (PL-2: "no online status").
+  if (health.verdict === 'verified') return { status: null, detail: null, broken: false };
   if (health.verdict === 'unchecked') {
     return {
       status: 'Key saved — not checked yet',
-      detail: { text: "OpenRouter couldn't be reached to check it. The app tries again on its own, or press Test." },
+      detail: { text: "Key saved, but not checked yet — OpenRouter couldn't be reached. The app tries again on its own." },
       broken: false,
+      unchecked: true,
     };
   }
   // The fix sentence names the card's own main button: "Sign in again" where
@@ -593,6 +590,11 @@ export function OpenRouterBlock({ keysHeading }: { keysHeading?: string } = {}) 
     }
     await readSignIn();
   };
+  // "Try again" on an unchecked key: the same check opening the page runs.
+  const retest = async () => {
+    try { if (openrouter?.id) await window.claude.providers.test(openrouter.id); } catch { /* the verdict below says what happened */ }
+    await refresh();
+  };
   const cancelSignIn = async () => {
     try { await openRouterSignInApi()!.cancelSignIn(); } catch { /* the poll shows the truth */ }
     await readSignIn();
@@ -638,13 +640,35 @@ export function OpenRouterBlock({ keysHeading }: { keysHeading?: string } = {}) 
               <BrailleSpinner size="sm" />
               Waiting for the browser…
             </span>
-          ) : openrouter === undefined ? 'Checking…' : connected ? words.status : 'Not connected'}
+          ) : openrouter === undefined ? 'Checking…'
+            // A key with a problem says so in the notice below, not twice (PL-1).
+            : connected ? (words.broken || words.unchecked ? null : words.status) : 'Not connected'}
           // My account only for a key that works: with a refused key there is
           // no account connection to visit (review SI-4).
           account={connected && !waiting && !words.broken ? OPENROUTER_CREDITS_URL : undefined}
           detail={waiting ? null
             : signIn.state === 'failed' && signIn.message ? { text: signIn.message, tone: 'bad' }
-            : connected ? words.detail : null}
+            : null}
+          // WHY one notice with its fix inside (ui-status-pills#PL-1/PL-2): a broken
+          // key is the danger box holding the way back in; an unchecked key the
+          // warning box holding Replace key and Try again (the filled one).
+          notice={waiting || !connected || !(words.broken || words.unchecked) || !words.detail ? null : {
+            tone: words.broken ? 'danger' : 'warning',
+            text: words.detail.text,
+            actions: words.broken ? (signInSupported ? (
+              <>
+                <Button variant="secondary" size="sm" onClick={() => setConnectOpen(true)}>API Key</Button>
+                <Button size="sm" onClick={() => void startSignIn()}>Sign in with OpenRouter</Button>
+              </>
+            ) : (
+              <Button size="sm" onClick={() => setConnectOpen(true)}>Replace key</Button>
+            )) : (
+              <>
+                <Button variant="secondary" size="sm" onClick={() => setConnectOpen(true)}>Replace key</Button>
+                <Button size="sm" onClick={() => void retest()}>Try again</Button>
+              </>
+            ),
+          }}
           action={waiting ? (
             <Button variant="secondary" size="sm" onClick={() => void cancelSignIn()}>
               Cancel

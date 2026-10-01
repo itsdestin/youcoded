@@ -92,7 +92,6 @@ export type { CalloutProps, CalloutTone } from './Callout';
 export { FoldRow } from './FoldRow';
 export { ConsentRow } from './ConsentRow';
 export { Pill } from './Pill';
-export type { PillTone } from './Pill';
 
 export { ZoomPill } from './ZoomPill';
 export type { ZoomPillProps } from './ZoomPill';
