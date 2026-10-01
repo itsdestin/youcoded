@@ -88,8 +88,16 @@ function homeAssistantPageHtml(): string {
      then S-nest: "all of the cards just need to be sub-containers of the
      grouped/expandable card. centered properly" — no indent, no guide line). */
   .lights { position: relative; overflow: hidden; display: flex; flex-direction: column; border-radius: var(--radius-md, 8px); border: 1px solid var(--edge-dim); background: var(--inset); }
-  .lights > .tile.all { border: 0; border-radius: 0; background: transparent; }
-  .lights-body { display: flex; flex-direction: column; gap: 8px; padding: 0 8px 8px; }
+  /* One surface: the glow tints the whole card, not just the header, so
+     nothing draws a hard edge between the All row and the lights below it
+     (S-inside: "harsh line separating the top part"). The header is inset
+     like the cards under it, so its bulb lines up with theirs. */
+  .lights > .glow { position: absolute; inset: 0; background: var(--c); opacity: 0; pointer-events: none; transition: opacity 200ms ease; }
+  .lights.on > .glow { opacity: .10; }
+  .lights > .tile.all { border: 0; border-radius: 0; background: transparent; padding: 10px 20px 8px; }
+  .lights > .tile.all .glow { display: none; }
+  .lights-body { position: relative; display: flex; flex-direction: column; gap: 8px; padding: 0 8px 8px; }
+  @media (prefers-reduced-motion: reduce) { .lights > .glow { transition: none; } }
   .lights-body > .tile { background: var(--well); }
   .tile.all .line { gap: 8px; }
   .bulb-col { display: flex; flex-direction: column; align-items: center; gap: 2px; flex-shrink: 0; }
@@ -471,7 +479,7 @@ function homeAssistantPageHtml(): string {
       '<span class="name">Lights<div class="sub">' + esc(status) + '</div></span></button>' +
       (editing ? '' : '<button class="fold" data-fold="' + esc(room.id) + '" aria-expanded="' + isOpen + '" aria-label="' + (isOpen ? 'Hide' : 'Show') + ' each light in ' + esc(room.name) + '" title="' + (isOpen ? 'Hide each light' : 'Show each light') + '">' + CHEVRON + '</button>') +
       '</div></div>';
-    return '<div class="lights">' + all + (isOpen ? '<div class="lights-body">' + lights.map(function (it) { return itemHtml(it, ctx); }).join('') + '</div>' : '') + '</div>';
+    return '<div class="lights' + (anyOn ? ' on' : '') + '" style="--c:' + c + '"><span class="glow"></span>' + all + (isOpen ? '<div class="lights-body">' + lights.map(function (it) { return itemHtml(it, ctx); }).join('') + '</div>' : '') + '</div>';
   }
 
   var camCache = {};
