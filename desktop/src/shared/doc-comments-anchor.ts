@@ -56,10 +56,22 @@ function compact(text: string): { compact: string; toOriginal: number[] } {
  * rather than always being stored as occurrence 0) — a bare re-export of this
  * helper with no outside caller is dead weight knip would flag.
  */
+// WHY a one-entry cache: a file's highlight pass calls resolveSelector once
+// per comment against the SAME document text, and re-compacting that whole
+// text every time made the pass grow with comments × document length (a CPU
+// profile of 2,000 comments: ~45% of the time in compact()). Compacting once
+// per distinct text keeps it linear. Results are identical, so the
+// hand-copied MCP version of this file need not change.
+let compactCache: { text: string; result: ReturnType<typeof compact> } | null = null;
+function compactOnce(text: string): ReturnType<typeof compact> {
+  if (compactCache?.text !== text) compactCache = { text, result: compact(text) };
+  return compactCache.result;
+}
+
 function findAllOccurrences(fullText: string, exact: string): ResolvedRange[] {
   const needle = exact.replace(/\s+/g, '');
   if (!needle) return [];
-  const { compact: hay, toOriginal } = compact(fullText);
+  const { compact: hay, toOriginal } = compactOnce(fullText);
   const results: ResolvedRange[] = [];
   let searchFrom = 0;
   for (;;) {

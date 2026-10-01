@@ -47,6 +47,12 @@ interface Entry {
   // below can tell "torn down" apart from "replaced by a new entry for the
   // same key", which a bare `!entries.has(key)` check cannot.
   stopped: boolean;
+  // macOS start-gap reconcile (see reconcileMissedChanges): its pending
+  // timers, and the mtime each sidecar had when reconcile last pushed it.
+  reconcileTimers: ReturnType<typeof setTimeout>[];
+  reconciledMtimes: Map<string, number>;
+  // Source paths chokidar itself has reported — never re-pushed by reconcile.
+  delivered: Set<string>;
 }
 
 // F3 fix (T5 review): `projectRoot` rides along on every push so a renderer
@@ -107,7 +113,11 @@ function keyFor(target: CommentsWatchTarget): string {
 function sourcePathFor(commentsDir: string, absPath: string): string | null {
   const rel = path.relative(commentsDir, absPath);
   if (rel.startsWith('..') || path.isAbsolute(rel) || !rel.endsWith('.json')) return null;
-  return rel.slice(0, -'.json'.length);
+  // WHY forward slashes: on Windows path.relative() returns `docs\live.md`,
+  // while every subscriber (desktop renderer, remote browser, Android) names
+  // the file `docs/live.md` — so a comment change in any subfolder never
+  // matched an open pane and its live refresh silently never happened.
+  return rel.slice(0, -'.json'.length).split(path.sep).join('/');
 }
 
 function scheduleChange(entry: Entry, sourcePath: string): void {
@@ -145,6 +155,9 @@ export async function watchComments(target: CommentsWatchTarget, subscriberId: n
     refs: new Map([[subscriberId, 1]]),
     timers: new Map(),
     stopped: false,
+    reconcileTimers: [],
+    reconciledMtimes: new Map(),
+    delivered: new Set(),
     // T3 follow-up: a 'document' target's own `projectRoot` rides along too
     // (F3, T5 review's reasoning applies identically — two projects can share
     // a `report.docx`), not just 'project's.
@@ -197,7 +210,10 @@ export async function watchComments(target: CommentsWatchTarget, subscriberId: n
     watcher.on('all', (_event: string, absPath: string) => {
       if (target.kind === 'project') {
         const sourcePath = sourcePathFor(target.commentsDir, absPath);
-        if (sourcePath !== null) scheduleChange(entry!, sourcePath);
+        if (sourcePath !== null) {
+          entry!.delivered.add(sourcePath);
+          scheduleChange(entry!, sourcePath);
+        }
       } else {
         scheduleChange(entry!, target.sourcePath);
       }
@@ -205,6 +221,18 @@ export async function watchComments(target: CommentsWatchTarget, subscriberId: n
     // An unhandled 'error' on an EventEmitter throws — degrade instead.
     watcher.on('error', () => { /* keep last-known state; no live refresh */ });
     entry.watcher = watcher;
+    if (target.kind === 'project' && reconcilePlatform === 'darwin') {
+      const startedAtMs = Date.now() - RECONCILE_MTIME_SLACK_MS;
+      for (const delay of RECONCILE_DELAYS_MS) {
+        const t = setTimeout(() => {
+          if (entry!.stopped || entry!.watcher !== watcher) return;
+          void reconcileMissedChanges(watcher, target.commentsDir, startedAtMs, entry!.reconciledMtimes,
+            entry!.delivered, (sourcePath) => scheduleChange(entry!, sourcePath)).catch(() => { /* best-effort */ });
+        }, delay);
+        t.unref?.();
+        entry.reconcileTimers.push(t);
+      }
+    }
     return { ok: true };
   } catch {
     // The watch path doesn't exist yet (a project with zero comments so far)
@@ -218,6 +246,8 @@ function closeEntry(key: string, entry: Entry): void {
   entry.stopped = true;
   entries.delete(key);
   for (const t of entry.timers.values()) clearTimeout(t);
+  for (const t of entry.reconcileTimers) clearTimeout(t);
+  entry.reconcileTimers = [];
   entry.timers.clear();
   void entry.watcher?.close().catch(() => { /* already dead */ });
 }
@@ -240,6 +270,74 @@ export function dropDocCommentsSubscriber(subscriberId: number): void {
   for (const [key, entry] of entries) {
     if (entry.refs.delete(subscriberId) && entry.refs.size === 0) closeEntry(key, entry);
   }
+}
+
+// --- macOS start gap ---------------------------------------------------------
+// WHY (2026-10-01, CI on macos-latest): on macOS, chokidar's per-directory
+// fs.watch is backed by FSEvents, whose stream only starts delivering a
+// moment AFTER chokidar reports 'ready'. A sub-folder created in that window
+// — exactly what a project's very first comment on `docs/x.md` does
+// (`.youcoded/comments/docs/` plus its sidecar, in one burst) — is never seen,
+// so chokidar never attaches a watch to it, and EVERY later comment on any
+// file in that folder silently never refreshed other open windows until the
+// pane was reopened. Linux (inotify) and Windows deliver from the moment the
+// watch exists, so this runs on macOS only and leaves them untouched.
+//
+// The fix re-checks the tree a few times across the gap: any folder chokidar
+// is not watching is added to the watcher, and any sidecar written since the
+// watch began whose change may have been dropped is pushed once.
+const RECONCILE_DELAYS_MS = [250, 1_000, 3_000, 8_000];
+// File-system mtimes can trail Date.now() slightly; anything written this
+// close before the watch started may still have been missed.
+const RECONCILE_MTIME_SLACK_MS = 2_000;
+// A file must have been still this long before reconcile treats its change as
+// missed: comfortably past chokidar's 500 ms awaitWriteFinish window.
+const RECONCILE_STABLE_MS = 1_500;
+const reconcilePlatform: NodeJS.Platform = process.platform;
+
+interface ReconcilableWatcher {
+  getWatched(): Record<string, string[]>;
+  add(paths: string | string[]): unknown;
+}
+
+/** One reconcile pass over a project's comments tree (see the WHY above).
+ *  Exported for its deterministic test; the watcher schedules it on macOS. */
+export async function reconcileMissedChanges(
+  watcher: ReconcilableWatcher,
+  commentsDir: string,
+  startedAtMs: number,
+  reconciledMtimes: Map<string, number>,
+  delivered: ReadonlySet<string>,
+  onChange: (sourcePath: string) => void,
+  nowMs: number = Date.now(),
+): Promise<void> {
+  const watchedDirs = new Set(Object.keys(watcher.getWatched()).map((d) => path.resolve(d)));
+  const walk = async (dir: string): Promise<void> => {
+    let names: import('fs').Dirent[];
+    try { names = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const d of names) {
+      const abs = path.join(dir, d.name);
+      if (d.isDirectory()) {
+        if (d.name === '.pending') continue; // never watched (F20) — see watchComments' `ignored`
+        if (!watchedDirs.has(path.resolve(abs))) watcher.add(abs);
+        await walk(abs);
+      } else if (d.isFile() && d.name.endsWith('.json')) {
+        let mtimeMs: number;
+        try { mtimeMs = (await fs.stat(abs)).mtimeMs; } catch { continue; }
+        if (mtimeMs < startedAtMs || reconciledMtimes.get(abs) === mtimeMs) continue;
+        // WHY these two skips: a write chokidar is still holding (its 500 ms
+        // awaitWriteFinish) or has already delivered is NOT missed — pushing it
+        // here too sent a second refresh for one change (macOS CI: the
+        // burst-coalescing and .pending tests saw 2 pushes, not 1).
+        if (nowMs - mtimeMs < RECONCILE_STABLE_MS) continue;
+        const sourcePath = sourcePathFor(commentsDir, abs);
+        if (sourcePath === null || delivered.has(sourcePath)) continue;
+        reconciledMtimes.set(abs, mtimeMs);
+        onChange(sourcePath);
+      }
+    }
+  };
+  await walk(commentsDir);
 }
 
 /** Test helper: tear everything down between cases. */

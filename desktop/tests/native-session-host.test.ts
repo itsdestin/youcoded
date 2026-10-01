@@ -3973,6 +3973,11 @@ describe('NativeSessionHost', () => {
       const recAfterRun2 = (h as any).ledger.listFor(root, 'root-1').find((r: any) => r.childId === childId);
       expect(recAfterRun2.rawReport).toContain('SECOND REPORT');
 
+      // WHY await the parent's delivery pass first: injecting run 2's report
+      // runs a turn that still appends to the session file under
+      // .youcoded/sessions after the transcript event fires; ending the test
+      // mid-pass raced afterEach's folder removal (ENOTEMPTY, Linux CI).
+      await (h as any).live.get('root-1')?.running;
       await h.destroyAll();
     });
 

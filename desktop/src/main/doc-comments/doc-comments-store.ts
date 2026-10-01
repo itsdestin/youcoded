@@ -91,11 +91,18 @@ export type Refusal = { ok: false; error: DocCommentsError };
  */
 const MAX_WALKUP_DEPTH = 200;
 
+// WHY ENAMETOOLONG walks up too: macOS refuses a realpath longer than its
+// PATH_MAX with ENAMETOOLONG before it ever reports ENOENT, so a deep
+// model-supplied path threw out of addComment instead of reaching the cap
+// below and refusing honestly. Walking up shortens the path, exactly as for a
+// missing tail.
+const WALK_UP_CODES = new Set(['ENOENT', 'ENOTDIR', 'ENAMETOOLONG']);
+
 async function realpathWithNonexistentTail(targetAbs: string): Promise<string | null> {
   try {
     return await fs.realpath(targetAbs);
   } catch (e: any) {
-    if (e.code !== 'ENOENT' && e.code !== 'ENOTDIR') throw e;
+    if (!WALK_UP_CODES.has(e.code)) throw e;
   }
   const segments: string[] = [];
   let dir = targetAbs;
@@ -107,7 +114,7 @@ async function realpathWithNonexistentTail(targetAbs: string): Promise<string | 
       const realParent = await fs.realpath(parent);
       return path.join(realParent, ...segments);
     } catch (e: any) {
-      if (e.code !== 'ENOENT' && e.code !== 'ENOTDIR') throw e;
+      if (!WALK_UP_CODES.has(e.code)) throw e;
       dir = parent;
     }
   }

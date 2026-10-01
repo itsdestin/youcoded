@@ -275,11 +275,29 @@ function totalRenders(): number {
   for (const m of Object.values(subtreeRenders)) for (const v of m.values()) n += v;
   return n;
 }
+//
+// WHY a quiet streak plus a MessageChannel hop (2026-10-01, macOS CI: the same
+// 1-stray-render failure came back): Node does not order a MessagePort message
+// against setImmediate — on a loaded machine React's queued task can still be
+// pending when one setImmediate has run, so "unchanged after one hop" stopped
+// the drain early. Each hop now also round-trips a MessageChannel (the
+// transport React's scheduler itself uses), and the drain ends only after
+// several consecutive hops with no new render.
+const DRAIN_QUIET_HOPS = 5;
 async function drainScheduledWork(): Promise<void> {
-  let last = -1;
-  for (let i = 0; i < 25 && totalRenders() !== last; i++) {
-    last = totalRenders();
-    await act(async () => { await new Promise<void>((resolve) => { setImmediate(resolve); }); });
+  let last = totalRenders();
+  let quiet = 0;
+  for (let i = 0; i < 100 && quiet < DRAIN_QUIET_HOPS; i++) {
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        const { port1, port2 } = new MessageChannel();
+        port1.onmessage = () => { port1.close(); setImmediate(resolve); };
+        port2.postMessage(null);
+      });
+    });
+    const now = totalRenders();
+    quiet = now === last ? quiet + 1 : 0;
+    last = now;
   }
 }
 

@@ -12,6 +12,13 @@ import { EditTool } from '../src/main/harness/tools/edit';
 import { BashTool } from '../src/main/harness/tools/bash';
 import { WebFetchTool } from '../src/main/harness/tools/web-fetch';
 import type { ToolContext } from '../src/main/harness/tools/types';
+import { canonicalize } from '../src/main/harness/tools/guards';
+
+// WHY the registry is read through canonicalize(): the tools key it by the
+// canonical form (forward slashes, lower-case on Windows), so looking it up by
+// the raw path.join() result found nothing on Windows and these fingerprint
+// assertions compared undefined with undefined.
+const registryKey = (p: string, cwd: string) => canonicalize(p, cwd);
 
 let dir: string;
 let ctx: ToolContext;
@@ -328,13 +335,14 @@ describe('G-11: a repeat Read of an unchanged slice returns a short notice', () 
     fs.utimesSync(p, stamp, stamp);
     const shared = new Map();
     await ReadTool.execute({ file_path: 'a.txt' }, { ...ctx, servedReads: shared, toolCallIndex: 1 });
-    const oldFingerprint = ctx.readRegistry.get(p);
+    const oldFingerprint = ctx.readRegistry.get(registryKey(p, dir));
+    expect(oldFingerprint).toBeDefined();
     fs.writeFileSync(p, 'NEW_CONTENT');
     fs.utimesSync(p, stamp, stamp);
     const second = await ReadTool.execute({ file_path: 'a.txt' }, { ...ctx, servedReads: shared, toolCallIndex: 2 });
     expect(second.text).toContain('NEW_CONTENT');
     expect(second.text).not.toContain('the content you already have is current');
-    expect(ctx.readRegistry.get(p)).not.toBe(oldFingerprint);
+    expect(ctx.readRegistry.get(registryKey(p, dir))).not.toBe(oldFingerprint);
     const edit = await EditTool.execute({ file_path: 'a.txt', old_string: 'NEW_CONTENT', new_string: 'EDITED_TEXT' }, ctx);
     expect(edit.isError).toBeFalsy();
   });
@@ -346,13 +354,14 @@ describe('G-11: a repeat Read of an unchanged slice returns a short notice', () 
     fs.utimesSync(p, stamp, stamp);
     const shared = new Map();
     await ReadTool.execute({ file_path: 'a.txt' }, { ...ctx, servedReads: shared, toolCallIndex: 1 });
-    const oldFingerprint = ctx.readRegistry.get(p);
+    const oldFingerprint = ctx.readRegistry.get(registryKey(p, dir));
+    expect(oldFingerprint).toBeDefined();
     fs.writeFileSync(p, Buffer.from('NEW\0CONTENT'));
     fs.utimesSync(p, stamp, stamp);
     const binary = await ReadTool.execute({ file_path: 'a.txt' }, { ...ctx, servedReads: shared, toolCallIndex: 2 });
     expect(binary.isError).toBe(true);
     expect(binary.text).toContain('binary file');
-    expect(ctx.readRegistry.get(p)).toBe(oldFingerprint);
+    expect(ctx.readRegistry.get(registryKey(p, dir))).toBe(oldFingerprint);
     const edit = await EditTool.execute({ file_path: 'a.txt', old_string: 'OLD_CONTENT', new_string: 'bad' }, ctx);
     expect(edit.isError).toBe(true);
     const write = await WriteTool.execute({ file_path: 'a.txt', content: 'bad' }, ctx);
@@ -362,7 +371,7 @@ describe('G-11: a repeat Read of an unchanged slice returns a short notice', () 
     const missing = await ReadTool.execute({ file_path: 'a.txt' }, { ...ctx, servedReads: shared, toolCallIndex: 3 });
     expect(missing.isError).toBe(true);
     expect(missing.text).not.toContain('content you already have is current');
-    expect(ctx.readRegistry.get(p)).toBe(oldFingerprint);
+    expect(ctx.readRegistry.get(registryKey(p, dir))).toBe(oldFingerprint);
   });
 
   it('an invalid page never stamps a changed file or reuses its old notice', async () => {
@@ -371,12 +380,13 @@ describe('G-11: a repeat Read of an unchanged slice returns a short notice', () 
     fs.writeFileSync(p, 'old\n'); fs.utimesSync(p, stamp, stamp);
     const shared = new Map();
     await ReadTool.execute({ file_path: 'a.txt', offset: 1 }, { ...ctx, servedReads: shared, toolCallIndex: 1 });
-    const oldFingerprint = ctx.readRegistry.get(p);
+    const oldFingerprint = ctx.readRegistry.get(registryKey(p, dir));
+    expect(oldFingerprint).toBeDefined();
     fs.writeFileSync(p, 'new\n'); fs.utimesSync(p, stamp, stamp);
     const rejected = await ReadTool.execute({ file_path: 'a.txt', offset: 9 }, { ...ctx, servedReads: shared, toolCallIndex: 2 });
     expect(rejected.isError).toBe(true);
     expect(rejected.text).toContain('past the end');
-    expect(ctx.readRegistry.get(p)).toBe(oldFingerprint);
+    expect(ctx.readRegistry.get(registryKey(p, dir))).toBe(oldFingerprint);
     const blocked = await EditTool.execute({ file_path: 'a.txt', old_string: 'new', new_string: 'bad' }, ctx);
     expect(blocked.isError).toBe(true);
   });

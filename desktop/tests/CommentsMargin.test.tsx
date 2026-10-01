@@ -173,6 +173,22 @@ describe('CommentsMargin — a comment resolveSelector could not anchor', () => 
 // inflate far past CPU time alone. Same fix applied here defensively.
 const STRESS_TEST_BUDGET_MS = 90_000;
 
+/** CPU ms per mount for ONE trial: mounts repeatedly (each with its own
+ *  index, so callers can give each mount a distinct path) until at least
+ *  MIN_TRIAL_CPU_MS has accumulated, then averages.
+ *  WHY (2026-10-01): Windows counts process CPU time in ~15.6 ms ticks, so a
+ *  small mount measured once read as 0, 15.6 or 31.2 ms — a ratio could swing
+ *  2x with nothing changed (the 315-comment pin hit 12.3x on a Windows
+ *  runner). Accumulating ~10 ticks keeps that rounding under ~10%. */
+const MIN_TRIAL_CPU_MS = 150;
+let mountSerial = 0;
+function cpuMsPerMount(mount: (serial: number) => number): number {
+  let total = 0;
+  let n = 0;
+  do { total += mount(mountSerial++); n++; } while (total < MIN_TRIAL_CPU_MS);
+  return total / n;
+}
+
 describe('CommentsMargin — render cost at a realistic high comment count', () => {
   it('renders 1,000 text comments in one pass, with cost growing in line with the count', () => {
     // WHY a ratio, not a fixed ceiling: the first version asserted 1,000
@@ -227,7 +243,7 @@ describe('CommentsMargin — render cost at a realistic high comment count', () 
      *  the store never carries duplicate comments across trials. */
     const bestOf = (label: string, count: number) => {
       const samples: number[] = [];
-      for (let t = 0; t < TRIALS; t++) samples.push(mountWith(`stress/${label}-${t}.md`, count));
+      for (let t = 0; t < TRIALS; t++) samples.push(cpuMsPerMount((k) => mountWith(`stress/${label}-${t}-${k}.md`, count)));
       return Math.min(...samples);
     };
 
@@ -296,7 +312,7 @@ describe('CommentsMargin — render cost at a realistic high comment count', () 
      *  here also flaked under load. */
     const bestOf = (label: string, cellComments: Array<{ cell: string; sheet: string }>) => {
       const samples: number[] = [];
-      for (let t = 0; t < TRIALS; t++) samples.push(mountWith(`${label}-${t}`, cellComments));
+      for (let t = 0; t < TRIALS; t++) samples.push(cpuMsPerMount((k) => mountWith(`${label}-${t}-${k}`, cellComments)));
       return Math.min(...samples);
     };
 
