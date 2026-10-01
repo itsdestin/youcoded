@@ -20,7 +20,7 @@ export interface OpenRequest {
   fresh?: boolean;
 }
 
-export interface OpenFacts {
+interface OpenFacts {
   /** A turn is in flight, as the record folded it. A page read from disk cannot say. */
   working: boolean;
   attention: string;

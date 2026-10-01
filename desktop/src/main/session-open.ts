@@ -31,7 +31,7 @@ import type { SessionRecords } from './session-record';
 import type { HookEvent, SpecialistRunView, ShellRunView, TranscriptEvent, TranscriptPageResult } from '../shared/types';
 import type { Push, OpenRequest, OpenReply } from '../shared/session-open-types';
 
-export type { Push, OpenRequest, OpenFacts, OpenReply } from '../shared/session-open-types';
+export type { Push, OpenRequest, OpenReply } from '../shared/session-open-types';
 
 /** What only a native session's host knows (null for any other session). */
 export interface NativeLive {

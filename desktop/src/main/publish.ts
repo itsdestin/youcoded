@@ -18,7 +18,7 @@ import type { SessionRecords } from './session-record';
 import type { AudienceFills } from './audience-fill';
 
 /** Which screens, if any, wait for a held push: returns true when it took the delivery (it is queued). */
-export type HoldFn = (audienceId: number, deliver: () => void) => boolean;
+type HoldFn = (audienceId: number, deliver: () => void) => boolean;
 
 export interface PublishDeps {
   records: Pick<SessionRecords, 'note' | 'epochOf'>;

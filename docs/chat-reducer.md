@@ -239,10 +239,9 @@ there. Both `'ok'` dispatch sites are now gated on `hasBuffer` (`provider === un
 provider === 'claude'`), and `hasBuffer` is a real dependency rather than a stale closure
 read; the currently-unreachable teardown site is guarded too so the pair cannot drift.
 
-Blast radius before the fix was narrow but real: `chat:hydrate` is REMOTE-ONLY (the
-desktop path deliberately does not serve it), so ordinary desktop mounts with `'ok'` long
+Blast radius before the fix was narrow but real: a screen filled from a remote copy (then `chat:hydrate`, now `session:open`) is the only one that starts on an already-parked session, so ordinary desktop mounts with `'ok'` long
 before any park. What broke was **a phone reconnecting to an already-parked desktop
-session** — hydrate carried `attentionState: 'stalled'` correctly and the classifier
+session** — the copy carried `attentionState: 'stalled'` correctly and the classifier
 discarded it, so the user saw a spinner instead of the card with the buttons. Claude Code
 behaviour is byte-identical, because `hasBuffer` is true for every CC session. Guard:
 `useAttentionClassifier.test.tsx` (a `renderHook` probe), plus a live CDP probe against

@@ -30,7 +30,7 @@ function rig(answer: (n: number, req: any) => TranscriptPageResult | null | Prom
     dispatch: (a) => actions.push(a), flush: () => actions.push({ type: 'FLUSH' } as any), play: (p) => { played.push(p); actions.push({ type: 'PLAY' } as any); },
     sleep: async () => {},
   });
-  const types = () => actions.map((a) => a.type);
+  const types = (): string[] => actions.map((a) => a.type as string);
   return { loader, actions, opens, pages, played, types, requests: () => n };
 }
 

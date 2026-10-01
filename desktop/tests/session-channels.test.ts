@@ -112,7 +112,7 @@ describe('session:list: the computer\'s window sees its own sessions, a phone se
 });
 
 describe('transcript:page: one entry, one body', () => {
-  it('a window and a phone are asked through the SAME body (one-core R5-2: a page depends on the session, not on who asks)', async () => {
+  it('a window and a phone are asked through the SAME body (a page depends on the session, not on who asks)', async () => {
     const transcriptPage = vi.fn(async () => ({ events: [], cursor: null, hasMore: false }));
     bindSessionOps({ transcriptPage } as any);
     const def = findChannel('transcript:page')!;

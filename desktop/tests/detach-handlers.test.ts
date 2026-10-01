@@ -15,6 +15,7 @@ import { WindowRegistry } from '../src/main/window-registry';
 import { PendingAcquireQueue } from '../src/main/pending-acquire';
 import { bindDetach, detachChannels } from '../src/main/ipc/detach';
 import { IPC } from '../src/shared/backend-contract';
+import { AudienceFills } from '../src/main/audience-fill';
 
 type FakeWin = {
   id: number;
@@ -35,6 +36,7 @@ type FakeWin = {
 let windows: Map<number, FakeWin>;
 let registry: WindowRegistry;
 let pending: PendingAcquireQueue<any>;
+let fills: AudienceFills;
 let nextId: number;
 let created: Array<{ opts: any; win: FakeWin }>;
 const sessions: Record<string, any> = { s1: { id: 's1', cwd: '/p' }, s2: { id: 's2', cwd: '/q' } };
@@ -71,6 +73,7 @@ beforeEach(() => {
   windows = new Map();
   registry = new WindowRegistry();
   pending = new PendingAcquireQueue();
+  fills = new AudienceFills();
   nextId = 100;
   created = [];
   cursor.x = 500; cursor.y = 300;
@@ -78,6 +81,7 @@ beforeEach(() => {
     windowRegistry: registry,
     sessionManager: { getSession: (id: string) => sessions[id] } as any,
     pendingAcquire: pending,
+    fills,
     createAppWindow: (opts) => { const win = fakeWindow(nextId++); created.push({ opts, win }); return win as any; },
     windowFromWcId: (id) => (windows.get(id) as any) ?? null,
   });
@@ -96,6 +100,19 @@ describe('detach: dragging a conversation into a window of its own', () => {
     expect(registry.getOwner('s1')).toBe(created[0].win.id);
     expect(lost(src)).toEqual([{ channel: IPC.SESSION_OWNERSHIP_LOST, payload: { sessionId: 's1' } }]);
     expect(src.closed).toBe(true);
+  });
+
+  it('holds the new window\'s pushes for the conversation from the moment it owns it, until its fill is answered', () => {
+    fakeWindow(1); fakeWindow(2);
+    registry.assignSession('s1', 1);
+    call(IPC.SESSION_DETACH_START, { sessionId: 's1', screenX: 0, screenY: 0 }, 1);
+    const fresh = created[0].win;
+    // WHY (one-core R5-2): a push that reached the new window before its answer would be applied to a conversation with no history yet.
+    expect(fills.filling(`w${fresh.id}`, 's1')).toBe(true);
+    const got: number[] = [];
+    fills.hold(`w${fresh.id}`, 's1', () => got.push(1));
+    fills.release(`w${fresh.id}`, 's1');
+    expect(got).toEqual([1]);
   });
 
   it('queues the handoff for a window that has not mounted yet, and delivers it exactly once when it pulls', () => {

@@ -552,7 +552,6 @@ describe('RemoteServer — appearance relay', () => {
     // broadcastToWindows (the same hook a tag change from a phone uses), so the test watches that.
     const onAppearanceBroadcast = vi.fn();
     const server: any = new RemoteServer(sm as never, new EventEmitter() as never, config as never, undefined, {
-      requestSnapshot: () => Promise.resolve({ sessions: [] }),
       broadcastToWindows: (channel, payload) => { if (channel === 'appearance:sync') onAppearanceBroadcast(payload); },
     });
     return { server, onAppearanceBroadcast };

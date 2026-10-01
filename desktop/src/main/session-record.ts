@@ -31,7 +31,7 @@ export const RING_MAX_EVENTS = 2000;
 export const RING_MAX_BYTES = 2 * 1024 * 1024;
 /** The fill tail's bounds: merged entries are few, so the byte bound is what matters. */
 export const TAIL_MAX_ENTRIES = 4000;
-export const TAIL_MAX_BYTES = 2 * 1024 * 1024;
+const TAIL_MAX_BYTES = 2 * 1024 * 1024;
 /** The terminal stream, in UTF-16 units (JavaScript string length): the same 4M the old per-session buffer held. */
 export const PTY_STREAM_UNITS = 4 * 1024 * 1024;
 /** While the newest terminal chunk is this small, append INTO it instead of pushing another entry (one-keystroke chunks). */

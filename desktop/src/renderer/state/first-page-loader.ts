@@ -66,7 +66,7 @@ export interface FirstPageLoaderDeps {
   sleep?: (ms: number) => Promise<void>;
 }
 
-export type FillOutcome = 'ok' | 'failed';
+type FillOutcome = 'ok' | 'failed';
 
 export interface FirstPageLoader {
   /** Fill `sessionId` from a fresh page unless it is loading or loaded already. A `hint` reaches an attempt already in flight. */
