@@ -24,7 +24,7 @@ const ROOMS_TEMPLATE = `{%- set ns = namespace(rooms=[]) -%}
 {%- set d = e.split('.')[0] -%}
 {%- if d in ['light','climate','media_player','camera'] and states[e] is not none -%}
 {%- set s = states[e] -%}
-{%- set ens.items = ens.items + [{'id': e, 'name': s.name, 'state': s.state, 'brightness': s.attributes.get('brightness'), 'modes': s.attributes.get('supported_color_modes'), 'cur': s.attributes.get('current_temperature'), 'target': s.attributes.get('temperature'), 'min': s.attributes.get('min_temp'), 'max': s.attributes.get('max_temp'), 'step': s.attributes.get('target_temp_step'), 'vol': s.attributes.get('volume_level'), 'title': s.attributes.get('media_title'), 'features': s.attributes.get('supported_features', 0), 'rgb': s.attributes.get('rgb_color'), 'k': s.attributes.get('color_temp_kelvin')}] -%}
+{%- set ens.items = ens.items + [{'id': e, 'name': s.name, 'state': s.state, 'brightness': s.attributes.get('brightness'), 'modes': s.attributes.get('supported_color_modes'), 'cur': s.attributes.get('current_temperature'), 'target': s.attributes.get('temperature'), 'min': s.attributes.get('min_temp'), 'max': s.attributes.get('max_temp'), 'step': s.attributes.get('target_temp_step'), 'vol': s.attributes.get('volume_level'), 'title': s.attributes.get('media_title'), 'features': s.attributes.get('supported_features', 0), 'rgb': s.attributes.get('rgb_color'), 'k': s.attributes.get('color_temp_kelvin'), 'modesHvac': s.attributes.get('hvac_modes'), 'action': s.attributes.get('hvac_action')}] -%}
 {%- endif -%}
 {%- endfor -%}
 {%- if ens.items -%}{%- set ns.rooms = ns.rooms + [{'id': a, 'name': area_name(a), 'items': ens.items}] -%}{%- endif -%}
@@ -120,6 +120,35 @@ function homeAssistantPageHtml(): string {
   .sw-any { width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--edge); cursor: pointer; background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red); position: relative; overflow: hidden; }
   .sw-any input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
   .room-acts { display: flex; gap: 6px; }
+
+  /* Thermostat (round 2: "improve the ac/thermostat card visually"): a tile
+     tinted by what it is set to do — blue cooling, orange heating — with the
+     room's temperature large, the setting between two big round buttons, a
+     scale showing both, and the modes as one row of pills. */
+  .clim { --m: var(--fg-muted); position: relative; overflow: hidden; display: flex; flex-direction: column; gap: 12px; padding: 12px; border-radius: var(--radius-md, 8px); border: 1px solid var(--edge-dim); background: var(--inset); }
+  .clim.cool { --m: rgb(60, 150, 255); } .clim.heat { --m: rgb(255, 130, 40); } .clim.auto, .clim.heat_cool { --m: rgb(140, 120, 255); } .clim.dry, .clim.fan_only { --m: rgb(60, 190, 170); }
+  .clim .glow { position: absolute; inset: 0; background: radial-gradient(circle at 20% 0%, var(--m), transparent 70%); opacity: .18; pointer-events: none; }
+  .clim.off .glow { opacity: 0; }
+  .clim-top { display: flex; align-items: flex-end; gap: 12px; position: relative; }
+  .clim-now .temp { font-size: 40px; }
+  .clim-doing { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--fg-2); }
+  .clim-doing::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--m); }
+  .clim-set { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+  .clim-set .val { text-align: center; min-width: 54px; }
+  .clim .sub { font-size: 11px; color: var(--fg-muted); }
+  .clim-set .val b { display: block; font-family: var(--font-mono); font-size: 22px; font-weight: 500; color: var(--fg); }
+  .step { width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--edge); background: var(--well); color: var(--fg); font-size: 18px; line-height: 1; cursor: pointer; display: grid; place-items: center; padding: 0; }
+  .step:hover { border-color: var(--m); }
+  .step:disabled { opacity: .4; cursor: default; }
+  .scale { position: relative; height: 6px; border-radius: 9999px; background: var(--well); }
+  .scale .fill { position: absolute; top: 0; bottom: 0; border-radius: 9999px; background: var(--m); opacity: .55; }
+  .scale .mk { position: absolute; top: 50%; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; }
+  .scale .mk.now { background: var(--fg); border: 2px solid var(--panel); }
+  .scale .mk.set { background: var(--m); border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--m); }
+  .scale-lbl { display: flex; justify-content: space-between; font-size: 10px; color: var(--fg-muted); margin-top: -6px; }
+  .modes { display: flex; gap: 6px; flex-wrap: wrap; position: relative; }
+  .mode { appearance: none; font: inherit; font-size: 11px; padding: 4px 10px; border-radius: 9999px; border: 1px solid var(--edge); background: transparent; color: var(--fg-2); cursor: pointer; }
+  .mode[aria-pressed="true"] { background: var(--m); border-color: var(--m); color: #111; }
 </style></head>
 <body>
 <div class="yc-page yc-stack" id="root">
@@ -251,6 +280,31 @@ function homeAssistantPageHtml(): string {
       hideBtn(it.id) + (media ? '' : colourBtn(it)) + '</div>' + bright + vol + (media ? '' : paletteHtml(it)) + '</div>';
   }
 
+  var MODE_NAMES = { off: 'Off', cool: 'Cool', heat: 'Heat', heat_cool: 'Auto', auto: 'Auto', dry: 'Dry', fan_only: 'Fan' };
+  var DOING = { cooling: 'Cooling', heating: 'Heating', idle: 'Holding', off: 'Off', drying: 'Drying', fan: 'Fan only' };
+  function climateHtml(it) {
+    var na = gone(it), mode = it.state;
+    if (na) return '<div class="clim gone"><div class="line"><div class="name">' + esc(it.name) + '<div class="sub">Not responding</div></div>' + hideBtn(it.id) + '</div></div>';
+    var lo = it.min != null ? it.min : 50, hi = it.max != null ? it.max : 90;
+    var at = function (v) { return Math.max(0, Math.min(100, (v - lo) / (hi - lo) * 100)); };
+    var hasSet = it.target != null && mode !== 'off';
+    var now = it.cur != null ? at(it.cur) : null, set = hasSet ? at(it.target) : null;
+    var scale = now == null ? '' : '<div class="scale" aria-hidden="true">' +
+      (set != null ? '<span class="fill" style="left:' + Math.min(now, set) + '%;width:' + Math.abs(now - set) + '%"></span><span class="mk set" style="left:' + set + '%"></span>' : '') +
+      '<span class="mk now" style="left:' + now + '%"></span></div><div class="scale-lbl"><span>' + lo + '°</span><span>' + hi + '°</span></div>';
+    var doing = it.action ? (DOING[it.action] || it.action) : (MODE_NAMES[mode] || mode);
+    var modes = Array.isArray(it.modesHvac) && it.modesHvac.length ? '<div class="modes" role="group" aria-label="Mode">' + it.modesHvac.map(function (m) {
+      return '<button class="mode" aria-pressed="' + (m === mode) + '" data-mode="' + esc(it.id) + '" data-hvac="' + esc(m) + '">' + esc(MODE_NAMES[m] || m) + '</button>';
+    }).join('') + '</div>' : '';
+    return '<div class="clim ' + esc(mode) + '"><span class="glow"></span>' +
+      '<div class="line" style="position:relative"><div class="name">' + esc(it.name) + '</div>' + hideBtn(it.id) + '</div>' +
+      '<div class="clim-top"><div class="clim-now"><div class="temp">' + (it.cur != null ? esc(it.cur) + '°' : '—') + '</div><div class="clim-doing">' + esc(doing) + '</div></div>' +
+      (hasSet ? '<div class="clim-set"><button class="step" aria-label="Cooler" data-temp="' + esc(it.id) + '" data-delta="' + (-(it.step || 1)) + '"' + (it.target <= lo ? ' disabled' : '') + '>−</button>' +
+        '<div class="val"><b>' + esc(it.target) + '°</b><span class="sub">Set to</span></div>' +
+        '<button class="step" aria-label="Warmer" data-temp="' + esc(it.id) + '" data-delta="' + (it.step || 1) + '"' + (it.target >= hi ? ' disabled' : '') + '>+</button></div>' : '<div class="clim-set sub">Off</div>') +
+      '</div>' + scale + modes + '</div>';
+  }
+
   function hideBtn(id) {
     var h = hidden.has(id);
     return '<button class="yc-button yc-button--ghost yc-button--sm hide" data-hide="' + esc(id) + '">' + (h ? 'Show' : 'Hide') + '</button>';
@@ -261,15 +315,7 @@ function homeAssistantPageHtml(): string {
     var cls = 'thing' + (off ? ' off' : '') + (na ? ' gone' : '');
     var sub = na ? '<div class="sub">Not responding</div>' : '';
     if (d === 'light') return tileHtml(it, BULB, false);
-    if (d === 'climate') {
-      var unit = '°';
-      var step = it.step || 1;
-      return '<div class="' + cls + ' col"><div class="line"><div class="name">' + esc(it.name) + sub + '</div>' + hideBtn(it.id) + '</div>' +
-        (na ? '' : '<div class="line"><div><div class="temp">' + (it.cur != null ? esc(it.cur) + unit : '—') + '</div><div class="sub">Now</div></div><span class="yc-spacer"></span>' +
-        '<button class="yc-button yc-button--icon yc-button--round" aria-label="Cooler" data-temp="' + esc(it.id) + '" data-delta="' + (-step) + '">−</button>' +
-        '<div style="text-align:center;min-width:56px"><div class="yc-title">' + (it.target != null ? esc(it.target) + unit : 'Off') + '</div><div class="sub">Set to</div></div>' +
-        '<button class="yc-button yc-button--icon yc-button--round" aria-label="Warmer" data-temp="' + esc(it.id) + '" data-delta="' + step + '">+</button></div>') + '</div>';
-    }
+    if (d === 'climate') return climateHtml(it);
     if (d === 'media_player') return tileHtml(it, /tv/i.test(it.id + ' ' + it.name) ? TV : SPEAKER, true);
     if (d === 'camera') {
       return '<div class="' + cls + ' col"><div class="line"><div class="name">' + esc(it.name) + sub + '</div>' + hideBtn(it.id) + '</div>' +
@@ -300,12 +346,11 @@ function homeAssistantPageHtml(): string {
       var items = room.items.filter(function (it) { return editing || !hidden.has(it.id); });
       if (!items.length) return '';
       var lights = room.items.filter(function (it) { return domain(it.id) === 'light' && !gone(it) && !hidden.has(it.id); });
-      // Two plain buttons rather than one switch (round 2: "all on/all off"),
-      // so a room that is half lit can go either way in one press.
-      var allOn = lights.length > 0 && lights.every(isOn), allOff = lights.every(function (it) { return !isOn(it); });
-      var acts = lights.length > 1 ? '<div class="room-acts">' +
-        '<button class="yc-button yc-button--sm" data-room-on="' + esc(room.id) + '"' + (allOn ? ' disabled' : '') + '>All on</button>' +
-        '<button class="yc-button yc-button--sm" data-room-off="' + esc(room.id) + '"' + (allOff ? ' disabled' : '') + '>All off</button></div>' : '';
+      // ONE button that flips (round 2 review: "a single all on/all off
+      // button that just flips back and forth depending on whether any
+      // lights are on"): any light on → All off; none on → All on.
+      var anyOn = lights.some(isOn);
+      var acts = lights.length > 1 ? '<button class="yc-button yc-button--sm" data-room="' + esc(room.id) + '" data-room-to="' + (anyOn ? 'off' : 'on') + '">' + (anyOn ? 'All off' : 'All on') + '</button>' : '';
       return '<section class="yc-card room"><div class="room-head"><h2>' + esc(room.name) + '</h2>' + acts + '</div>' + items.map(itemHtml).join('') + '</section>';
     }).join('');
     root.innerHTML = html || '<div class="yc-empty">Nothing to show. Put devices in rooms in Home Assistant, or press Hide things to bring hidden ones back.</div>';
@@ -336,10 +381,18 @@ function homeAssistantPageHtml(): string {
       render();
       return;
     }
-    var roomOn = t.getAttribute('data-room-on'), roomOff = t.getAttribute('data-room-off');
-    if (roomOn || roomOff) {
-      var turnOn = !!roomOn;
-      var room = rooms.find(function (r) { return r.id === (roomOn || roomOff); });
+    var mid = t.getAttribute('data-mode');
+    if (mid) {
+      var hv = t.getAttribute('data-hvac');
+      setLocal(mid, { state: hv });
+      service('climate', 'set_hvac_mode', { entity_id: mid, hvac_mode: hv }, mid);
+      return;
+    }
+    var roomId = t.getAttribute('data-room');
+    if (roomId) {
+      // One button that flips (round 2): any light on → it turns them all off.
+      var turnOn = t.getAttribute('data-room-to') === 'on';
+      var room = rooms.find(function (r) { return r.id === roomId; });
       var ids = room.items.filter(function (it) { return domain(it.id) === 'light' && !gone(it) && !hidden.has(it.id); }).map(function (it) { return it.id; });
       ids.forEach(function (x) { setLocal(x, { state: turnOn ? 'on' : 'off' }); });
       service('light', turnOn ? 'turn_on' : 'turn_off', { entity_id: ids }, 'room:' + room.id);

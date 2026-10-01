@@ -11,6 +11,7 @@ interface Thing {
   cur?: number | null; target?: number | null; min?: number; max?: number; step?: number;
   vol?: number | null; title?: string | null; features?: number;
   rgb?: number[] | null; k?: number | null;
+  modesHvac?: string[]; action?: string | null;
 }
 
 function seed(): Array<{ id: string; name: string; items: Thing[] }> {
@@ -34,7 +35,7 @@ function seed(): Array<{ id: string; name: string; items: Thing[] }> {
       { id: 'light.under_cabinet', name: 'Under cabinet', state: 'on', brightness: 255, modes: ['onoff'] },
     ] },
     { id: 'upstairs', name: 'Upstairs', items: [
-      { id: 'climate.thermostat', name: 'Thermostat', state: 'cool', cur: 74, target: 72, min: 50, max: 90, step: 1 },
+      { id: 'climate.thermostat', name: 'Thermostat', state: 'cool', cur: 74, target: 72, min: 50, max: 90, step: 1, modesHvac: ['off', 'cool', 'heat', 'heat_cool'], action: 'cooling' },
     ] },
     { id: 'front_door', name: 'Front door', items: [
       { id: 'camera.doorbell', name: 'Doorbell', state: 'unavailable' },
@@ -92,6 +93,10 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
       }
       if (action === 'turn_on' && Array.isArray(data.rgb_color)) { t.rgb = data.rgb_color as number[]; t.k = null; }
       if (action === 'turn_on' && typeof data.color_temp_kelvin === 'number') { t.k = data.color_temp_kelvin; t.rgb = null; }
+      if (action === 'set_hvac_mode' && typeof data.hvac_mode === 'string') {
+        t.state = data.hvac_mode;
+        t.action = data.hvac_mode === 'off' ? 'off' : data.hvac_mode === 'heat' ? 'heating' : data.hvac_mode === 'cool' ? 'cooling' : 'idle';
+      }
       if (action === 'volume_set' && typeof data.volume_level === 'number') t.vol = data.volume_level;
       if (action === 'set_temperature' && typeof data.temperature === 'number') t.target = data.temperature;
     }
