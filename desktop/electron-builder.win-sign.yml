@@ -1,0 +1,29 @@
+# Windows code signing — used ONLY by the release and master-beta workflows, on the
+# Windows leg, after GitHub has signed in to Azure (`npm run build -- --config
+# electron-builder.win-sign.yml`). Everything else comes from electron-builder.yml.
+#
+# WHY a separate file instead of adding this to electron-builder.yml: with
+# azureSignOptions present, electron-builder signs EVERY Windows build and fails when
+# it cannot reach Azure. desktop-ci.yml builds Windows on every master push and
+# nightly, local `npm run build` runs on Windows dev machines, and forks have no
+# Azure access — all of those must keep building unsigned. Only the jobs that hold
+# the windows-signing environment's sign-in may sign.
+#
+# The certificate is Destin's own (Azure Artifact Signing, individual validation,
+# 2026-10-01): Microsoft will not validate an organisation under three years old, so
+# the installer's publisher reads "Destin Moss" until the LLC qualifies (~2029-09).
+# Pinned by tests/windows-signing-config.test.ts.
+extends: ./electron-builder.yml
+win:
+  # WHY: same fail-loud switch the Mac build uses. If a file cannot be signed the
+  # build stops instead of shipping an unsigned installer next to signed ones.
+  forceCodeSigning: true
+  azureSignOptions:
+    # Must match the certificate's subject name. electron-builder only writes it into
+    # app-update.yml for electron-updater, which YouCoded does not use (the in-app
+    # updater checks the signed release manifest), so a mismatch here breaks nothing.
+    publisherName: Destin Moss
+    # West US 3 — the region the destinmoss account was created in.
+    endpoint: https://wus3.codesigning.azure.net
+    codeSigningAccountName: destinmoss
+    certificateProfileName: youcoded-public
