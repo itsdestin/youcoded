@@ -1,6 +1,7 @@
 // "Save a copy…"'s file dialog: the overwrite question and the extension the copy is given.
 import { describe, expect, it, vi } from 'vitest';
 import { BrowserWindow, dialog } from 'electron';
+import path from 'node:path';
 import { pickCopyTarget, pickEditorFiles, pickSaveTarget, resolveCopyTarget } from '../../src/main/office/office-dialogs';
 
 describe('where a copy goes', () => {
@@ -65,6 +66,8 @@ describe('the file dialog the editor asks for (Insert → Picture)', () => {
 });
 
 // Save As / Download as / Export to PDF (finish plan Task 2).
+// WHY path.join in the expectations: the dialog's default path is joined with the OS's own
+// separator, so on Windows it reads \home\you\work\plan.pdf (CI runs this suite there too).
 describe('the save dialog the editor asks for', () => {
   const lastOpts = () => vi.mocked(dialog.showSaveDialog).mock.calls.at(-1)!.at(-1) as { properties: string[]; filters: { name: string; extensions: string[] }[]; defaultPath: string };
   const pdf = [{ name: 'PDF', extensions: ['pdf'] }];
@@ -73,7 +76,7 @@ describe('the save dialog the editor asks for', () => {
     (BrowserWindow as unknown as { fromWebContents: () => null }).fromWebContents = () => null;
     vi.mocked(dialog.showSaveDialog).mockResolvedValueOnce({ canceled: true, filePath: undefined } as never);
     await expect(pickSaveTarget({}, { filters: pdf, folder: '/home/you/work', name: 'plan' })).resolves.toBeNull();
-    expect(lastOpts().defaultPath).toBe('/home/you/work/plan.pdf');
+    expect(lastOpts().defaultPath).toBe(path.join('/home/you/work', 'plan.pdf'));
     expect(lastOpts().filters).toEqual(pdf);
     expect(lastOpts().properties).toContain('showOverwriteConfirmation');
   });
@@ -82,10 +85,10 @@ describe('the save dialog the editor asks for', () => {
     (BrowserWindow as unknown as { fromWebContents: () => null }).fromWebContents = () => null;
     vi.mocked(dialog.showSaveDialog).mockResolvedValueOnce({ canceled: true, filePath: undefined } as never);
     await pickSaveTarget({}, { filters: [{ name: 'Word', extensions: ['docx'] }], folder: '/home/you/work', name: 'plan', ext: 'docx' });
-    expect(lastOpts().defaultPath).toBe('/home/you/work/plan (copy).docx');
+    expect(lastOpts().defaultPath).toBe(path.join('/home/you/work', 'plan (copy).docx'));
     vi.mocked(dialog.showSaveDialog).mockResolvedValueOnce({ canceled: true, filePath: undefined } as never);
     await pickSaveTarget({}, { filters: pdf, folder: '/home/you/work', name: 'plan', ext: 'docx' });
-    expect(lastOpts().defaultPath).toBe('/home/you/work/plan.pdf');
+    expect(lastOpts().defaultPath).toBe(path.join('/home/you/work', 'plan.pdf'));
   });
 
   it("keeps a typed name in one of the offered formats, and adds the first format's extension otherwise", async () => {

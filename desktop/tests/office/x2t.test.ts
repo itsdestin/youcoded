@@ -205,7 +205,8 @@ describe.skipIf(!HAS_ADDON)('convert with the bundled x2t', () => {
   });
 
   it('handles a folder name containing XML special characters', async () => {
-    const odd = await mkdtemp(path.join(dir, 'Tom & <Jerry> "q"-'));
+    // WHY a smaller set on Windows: < > " cannot be in a Windows file name at all; & and ' can.
+    const odd = await mkdtemp(path.join(dir, process.platform === 'win32' ? "Tom & Jerry's-" : 'Tom & <Jerry> "q"-'));
     const bin = path.join(odd, 'Editor.bin');
     await convert(ROOT, MEMO, bin, FORMAT.bin, dir);
     expect((await stat(bin)).size).toBeGreaterThan(0);

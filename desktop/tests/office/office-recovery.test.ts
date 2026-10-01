@@ -117,7 +117,8 @@ describe('the recovery journal', () => {
     await settle();
     const [name] = await fsp.readdir(journals());
     expect(name).not.toContain('plan');
-    expect((await fsp.stat(path.join(journals(), name))).mode & 0o077).toBe(0);
+    // WHY POSIX only: Windows has no group/other permission bits (its mode always reads 0o666).
+    if (process.platform !== 'win32') expect((await fsp.stat(path.join(journals(), name))).mode & 0o077).toBe(0);
   });
 
   it('a discard (Close without saving, Discard and quit) is never offered back', async () => {
