@@ -192,6 +192,15 @@ interface AuthenticatedClient {
   // so this client's docComments:watch/:unwatch calls don't share (or
   // collide with) its artifacts:watch-project subscription.
   docCommentsWatchId?: number;
+  /** This phone's id in the window registry (one-core R5-1): negative, from the same counter as the two
+   *  watch ids above so no two audience members share one. Set when the client joins, never reassigned. */
+  audienceId?: number;
+}
+
+/** The slice of WindowRegistry a phone connection needs: join on connect, leave on drop. */
+export interface SocketAudience {
+  registerSocket(id: number): void;
+  unregisterSocket(id: number): void;
 }
 
 export interface ClientInfo {
@@ -330,8 +339,12 @@ export class RemoteServer {
        *  edited on a phone) must reach this computer's own windows too, not only the phones.
        *  Defaults to every window of the app (window-broadcast.ts); a test passes its own. */
       broadcastToWindows?: (channel: string, payload: unknown) => void;
+      /** WHY (2026-10-01 one-core R5-1, seam S6): phones are members of the same registry as windows, so
+       *  "who wants this session" is one list. Absent in tests that do not model one. */
+      audience?: SocketAudience;
     },
   ) {
+    this.audience = opts?.audience ?? null;
     this.devices = new RemoteDeviceStore();
     // Default is a no-op that returns an empty snapshot — allows the server to
     // be constructed before the main window exists (e.g. during first-run setup).
@@ -342,6 +355,7 @@ export class RemoteServer {
     this.broadcastToWindows = opts?.broadcastToWindows ?? sendToAllWindows;
   }
   private broadcastToWindows: (channel: string, payload: unknown) => void;
+  private audience: SocketAudience | null;
   private serveBuiltPage: boolean;
   private handoffRoute?: ReturnType<typeof createHandoffTransport>;
   /** WHY: remote requests share the exact Electron backend; no connection may supply another owner's identity. */
@@ -604,6 +618,7 @@ export class RemoteServer {
       // WHY: stop clears clients before close events run; invalidate pending starts now.
       this.handoffRoute?.cancelOwner(`remote:${client.id}`);
       client.ws.close(1001, 'Server shutting down');
+      this.leaveAudience(client);
     }
     this.clients.clear();
     // Nothing to clear for devices: the store is file-backed, so toggling remote access off
@@ -686,6 +701,7 @@ export class RemoteServer {
    *  can stand down when the last one leaves (simplification audit W14). */
   private removeClient(client: AuthenticatedClient): void {
     if (!this.clients.delete(client)) return;
+    this.leaveAudience(client);
     // WHY: close/error/liveness drops must invalidate in-flight starts for this connection only.
     this.handoffRoute?.cancelOwner(`remote:${client.id}`);
     if (this.clients.size === 0 && this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null; }
@@ -858,13 +874,23 @@ export class RemoteServer {
     // replay-complete that would clear the card as answered (T2 re-review, 7).
     this.bufferHookEvent(expired);
     this.broadcast({ type: 'hook:event', payload: expired });
+    // WHY (one-core R5-1): Claude Code's hook events reach phones through this listener, not through publish, so
+    // the session's record is fed here — from the very events broadcast. R5-2 folds the two deliveries into one.
+    this.noteHookForRecord(sessionId, expired);
   };
 
   private onHookEvent = (event: any) => {
     this.bufferHookEvent(event);
     // Broadcast live
     this.broadcast({ type: 'hook:event', payload: event });
+    this.noteHookForRecord(event?.sessionId, event);
   };
+
+  /** Only a session this app already opened a record for: the relay can carry events for sessions it does not own. */
+  private noteHookForRecord(sessionId: unknown, event: unknown): void {
+    const records = this.getNativeRuntime()?.records;
+    if (records && typeof sessionId === 'string' && records.has(sessionId)) records.note(sessionId, 'hook:event', event);
+  }
 
   /** Push one hook event onto the rolling per-session replay buffer, WITHOUT
    *  broadcasting it — split out of onHookEvent (which still does both, for
@@ -1248,6 +1274,11 @@ export class RemoteServer {
     }, PING_INTERVAL_MS);
   }
 
+  /** A phone left: take it out of the window registry (idempotent). */
+  private leaveAudience(client: AuthenticatedClient): void {
+    if (client.audienceId !== undefined) this.audience?.unregisterSocket(client.audienceId);
+  }
+
   private addClient(ws: WebSocket, deviceId: string, ip: string, opts: { sendsReady?: boolean } = {}): void {
     // The per-connection id stays connection-scoped; the DEVICE id is the durable one the
     // panel lists. Two id spaces, deliberately not merged.
@@ -1256,6 +1287,9 @@ export class RemoteServer {
       phase: 'restoring', queue: [], queueDegraded: false, fallbackTimer: null,
     };
     this.clients.add(client);
+    // Join the window registry as a member with a negative id (one-core R5-1). Delivery still reaches every
+    // phone; membership is what R5-3 will filter on.
+    if (this.audience) { client.audienceId = this.nextWatchId--; this.audience.registerSocket(client.audienceId); }
     this.startLiveness(); this.emitStatus(); // liveness is a no-op while already armed — see its WHY; the status carries the new clientCount
     this.logDevice(client, `connected (${opts.sendsReady ? 'page announces readiness' : 'older page'})`);
     // WHY a fallback and not an immediate replay (design §1): the restore used to start
@@ -1791,7 +1825,12 @@ export class RemoteServer {
     return ring.some(e => e.id === id && e.at >= cutoff) ? 'completed' : 'unknown';
   }
 
-  broadcast(msg: { type: string; payload: any }): void {
+  /**
+   * @param audienceIds the registry's answer to "which phones want this" (one-core R5-1). Omitted means every
+   * phone, which is every call but publish's. A phone that never joined the registry (no audienceId) is
+   * always included, so a client record added straight to `clients` (tests) behaves as it always did.
+   */
+  broadcast(msg: { type: string; payload: any }, audienceIds?: readonly number[]): void {
     // Perf: with nobody connected there is no one to send to, so skip the
     // JSON.stringify as well. This matters because broadcast() runs on EVERY PTY
     // chunk and the remote server is always on — a user who never opens remote
@@ -1802,7 +1841,9 @@ export class RemoteServer {
     // getClientCount() reports, and it is empty here).
     if (this.clients.size === 0) return;
     let data: string | null = null;
+    const only = audienceIds ? new Set(audienceIds) : null;
     for (const client of this.clients) {
+      if (only && client.audienceId !== undefined && !only.has(client.audienceId)) continue;
       // A client that is not live yet gets this after its restore (design §1 B) — except
       // pty:output, which the PTY buffer replay covers up to the moment it goes live.
       if (client.phase && client.phase !== 'live') {

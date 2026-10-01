@@ -956,8 +956,8 @@ describe('native:*/provider:* channel parity', () => {
     expect(shim).toContain(`case 'native:permission-mode':`);
     expect(shim).toContain('onPermissionMode:');
     const main = read('src', 'main', 'ipc-handlers.ts');
-    expect(main).toContain('sendForSession(e.sessionId, IPC.NATIVE_PERMISSION_MODE, e)');
-    expect(main).toContain('remoteServer?.broadcast({ type: IPC.NATIVE_PERMISSION_MODE, payload: e })');
+    // One call reaches the windows and every phone (publish.ts); tests/session-publish-equivalence.test.ts pins the delivery.
+    expect(main).toContain('publish(e.sessionId, IPC.NATIVE_PERMISSION_MODE, e)');
   });
 });
 
@@ -1356,8 +1356,8 @@ describe('model memory lifecycle channel parity', () => {
   });
   it('the models-changed push still reaches every window and every phone', () => {
     const src = read('src', 'main', 'ipc-handlers.ts');
-    expect(src).toContain("remoteServer?.broadcast({ type: 'native:model-state'");
-    expect(src).toContain('sendForSession(sessionId, IPC.NATIVE_MODEL_STATE, full)');
+    // One publish reaches the windows and every phone (publish.ts); the equivalence test pins what each receives.
+    expect(src).toContain('publish(sessionId, IPC.NATIVE_MODEL_STATE, full)');
   });
   it('SessionService.kt stubs every request-response channel', () => {
     const src = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));

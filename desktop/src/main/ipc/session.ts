@@ -28,6 +28,7 @@ import { tagFlagKey } from '../../shared/tags';
 import { SESSION_FLAG_NAMES, type SessionFlagName, type SessionInfo, type SessionProvider, type TranscriptPageResult } from '../../shared/types';
 import { listPastSessions, loadHistory, SAFE_ID_RE } from '../session-browser';
 import { readTranscriptMeta } from '../transcript-utils';
+import type { Publish } from '../publish';
 import { readTranscriptPage } from '../transcript-page';
 import { menuAnswerLock } from '../menu-answer-lock';
 import { shareInFlight } from '../share-in-flight';
@@ -60,9 +61,8 @@ export interface SessionOps {
   desktopTranscriptPage(req: any, windowId: number | undefined): Promise<TranscriptPageResult>;
   /** The phantom-record gate: may a write reach the conversation store for this id? */
   canWriteStoreRecord(sessionId: string): boolean;
-  sendForSession(sessionId: string, channel: string, ...args: unknown[]): void;
-  /** Tell every paired phone (not the computer's windows). */
-  remoteBroadcast(message: { type: string; payload: unknown }): void;
+  /** The one way a session-scoped push leaves the core: the session's windows, every phone, and its record. */
+  publish: Publish;
   naming: {
     get(): Promise<unknown>;
     set(value: unknown): Promise<unknown>;
@@ -128,8 +128,8 @@ const SAVE_REFUSED = 'Could not save — conversation storage is not available o
 
 /** After a meta write: tell the owning window and every phone, and refresh the search index. */
 function announceMeta(resolved: string, change: Record<string, unknown>): void {
-  ops().sendForSession(resolved, IPC.SESSION_META_CHANGED, resolved, change);
-  ops().remoteBroadcast({ type: IPC.SESSION_META_CHANGED, payload: { sessionId: resolved, ...change } });
+  // Windows get (sessionId, change); phones get {sessionId, ...change} — the shapes the old pair sent (one-core R5-1).
+  ops().publish(resolved, IPC.SESSION_META_CHANGED, { sessionId: resolved, ...change }, { windowArgs: [resolved, change] });
   emitConversationMetaChanged();
 }
 

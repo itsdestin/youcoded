@@ -341,6 +341,8 @@ const remoteServer = new RemoteServer(sessionManager, hookRelay, remoteConfig, s
     knownSessionIds: () => sessionManager.listSessions().map((s) => s.id),
   }),
   getFocusSessionId: () => windowRegistry.getFocusSessionId(),
+  // Phones join the window registry as members with negative ids (one-core R5-1, seam S6).
+  audience: windowRegistry,
 });
 
 // WHY push and not poll: a bind failure happens once, seconds after launch, and a panel

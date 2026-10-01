@@ -114,6 +114,8 @@ import { PROJECT_DESCRIPTION_MAX } from '../shared/artifacts/types';
 import { setPermissionOverridesSink } from './prefs-service';
 import type { SessionInfo } from '../shared/types';
 import { ARTIFACT_IPC } from './artifacts/ipc-channels';
+import { createPublish } from './publish';
+import { startSessionSummaryPush, SESSION_SUMMARY_CHANNEL } from './session-summary-push';
 import { listProjects } from './artifacts/central-index';
 import { initPagesService, getPagesService } from './pages/pages-service';
 import { PageConnectionsStore } from './pages/connections-store';
@@ -365,13 +367,10 @@ export function registerIpcHandlers(
   // exist (preserves the existing pre-buddy fallback behavior for
   // remote-created sessions during Phase 1).
   const sendForSession = (sessionId: string, channel: string, ...args: any[]) => {
-    const ids = new Set<number>();
-    const ownerId = windowRegistry?.getOwner(sessionId);
-    if (ownerId != null) ids.add(ownerId);
-    if (windowRegistry) {
-      for (const subId of windowRegistry.getSubscribers(sessionId)) ids.add(subId);
-    }
-    if (ids.size > 0) {
+    // WHY the registry answers this (one-core R5-1): windows and phones are both registry members, one audience question.
+    const audience = windowRegistry?.resolveAudience(sessionId);
+    const ids = audience ? audience.windowIds : [];
+    if (ids.length > 0) {
       for (const wid of ids) {
         // wid is a webContents.id, NOT a BrowserWindow.id — different ID
         // spaces. BrowserWindow.fromId silently returns null for a
@@ -391,13 +390,22 @@ export function registerIpcHandlers(
     if (!mainWindow.isDestroyed()) mainWindow.webContents.send(channel, ...args);
   };
 
+  // WHY (one-core R5-1): the ONE way a session-scoped push leaves the core — the windows by the registry's audience, every
+  // phone, and the session's record. A hand-written sendForSession + broadcast pair is rejected by ast-grep (no-paired-session-send-and-broadcast).
+  const publish = createPublish({
+    records: runtime.records,
+    toWindows: (sessionId, channel, args) => sendForSession(sessionId, channel, ...args),
+    toSockets: (message, socketIds) => remoteServer?.broadcast(message, socketIds),
+    socketsFor: (sessionId) => windowRegistry?.resolveAudience(sessionId).socketIds,
+  });
+
   // WHY (2026-09-29 one-core R1): returned from registerIpcHandlers as plain values (was two
   // module-level `let`s assigned here as a side effect, so a caller that ran first silently
   // did nothing). main.ts hands them to the chatsearch outbox drainer, which changes flags,
   // notes and tags outside any window's handler and must still repaint every window and phone.
   const broadcastSessionMeta = (sessionId: string, payload: { flag: string; value: boolean } | { note: string }): void => {
-    sendForSession(sessionId, IPC.SESSION_META_CHANGED, sessionId, payload);
-    remoteServer?.broadcast({ type: IPC.SESSION_META_CHANGED, payload: { sessionId, ...payload } });
+    // Windows get (sessionId, change); phones get {sessionId, ...change} — the two shapes the pair always sent.
+    publish(sessionId, IPC.SESSION_META_CHANGED, { sessionId, ...payload }, { windowArgs: [sessionId, payload] });
   };
 
   // Broadcast a session-scoped channel to EVERY registered main window. Use this
@@ -496,6 +504,8 @@ export function registerIpcHandlers(
   // assignSession sitting after any await would drain too late. See the WHY on
   // the assignSession block itself; pinned by tests/ipc-handlers-create-ownership.test.ts.
   sessionManager.on('session-created', (info) => {
+    // A new record, a new epoch (one-core R5-1). Synchronous, so it exists before any of the session's events.
+    runtime.records.begin(info.id);
     process.nextTick(() => sendForSession(info.id, IPC.SESSION_CREATED, info));
   });
   attachStartupDialogLog(sessionManager, hookRelay, log, (id) => sessionManager.markStarted(id)); // desktop.log + SessionInfo.awaitingStart
@@ -777,8 +787,7 @@ export function registerIpcHandlers(
       process.nextTick(() => {
         try {
           const payload = { sessionId: info.id, context: buildClaudeCodeContext(info.cwd, info.model ?? null) };
-          sendForSession(info.id, IPC.NATIVE_SESSION_CONTEXT, payload);
-          remoteServer?.broadcast({ type: 'native:session-context', payload });
+          publish(info.id, IPC.NATIVE_SESSION_CONTEXT, payload);
         } catch (err) {
           log('ERROR', 'ipc-handlers', 'could not describe a Claude Code session context', { sessionId: info.id, error: String(err) });
         }
@@ -993,6 +1002,7 @@ export function registerIpcHandlers(
   // so the reducer can distinguish clean shutdowns from 'session-died' cases.
   sessionManager.on('session-exit', (sessionId: string, exitCode: number) => {
     sendForSession(sessionId, IPC.SESSION_DESTROYED, sessionId, exitCode);
+    runtime.records.drop(sessionId); // the session is over: its record goes with it (one-core R5-1)
     pendingOutput.delete(sessionId);
     readySessions.delete(sessionId);
     windowRegistry?.releaseSession(sessionId);
@@ -1206,6 +1216,13 @@ export function registerIpcHandlers(
     mainWindow, windowRegistry, remoteServer,
   });
   setSyncHealthGate(statusPush.hasAudience); // the sync health check asks the same question (audit W12)
+  // WHY (one-core R5-1): the per-session summary rides its own push beside attentionMap; no screen reads it yet (R5-3).
+  const summaryPush = startSessionSummaryPush({
+    records: runtime.records,
+    deliver: (payload) => { send(SESSION_SUMMARY_CHANNEL, payload); remoteServer?.broadcast({ type: SESSION_SUMMARY_CHANNEL, payload }); },
+    hasAudience: statusPush.hasAudience,
+    onPhoneConnected: remoteServer ? (listener) => remoteServer.onStatusChange((status) => { if (status.clientCount > 0) listener(); }) : undefined,
+  });
 
   // Also push immediately on first hook event (session is active)
   let sentInitialStatus = false;
@@ -1427,21 +1444,21 @@ export function registerIpcHandlers(
     attentionChanged: (payload) => {
       if (!payload?.sessionId) return;
       lastAttentionBySession.set(payload.sessionId, payload.state);
+      // The record holds the same relayed value (one-core R5-1); R5-4 retires the second cache.
+      runtime.records.noteReportedAttention(payload.sessionId, payload.state);
       // Broadcast immediately so remote clients see the change without waiting for the 10s status:data timer. The rebuild is
       // async and shared (C5).
       if (remoteServer) {
         void buildStatusDataShared().then((data) => remoteServer?.broadcastStatusData(data));
       }
+      summaryPush.push(); // the summary carries the same attention value, so it follows at once too
     },
   });
 
   // (lastModelSeen — last model id written per CLAUDE session id — lives in session-state.ts.)
 
   transcriptWatcher.on('transcript-event', (event: any) => {
-    sendForSession(event.sessionId, IPC.TRANSCRIPT_EVENT, event);
-    if (remoteServer) {
-      remoteServer.broadcast({ type: 'transcript:event', payload: event });
-    }
+    publish(event.sessionId, IPC.TRANSCRIPT_EVENT, event);
     // Conversation Store (Phase 2a): feed live activity into the record store.
     // event.sessionId is the DESKTOP id; the store keys by CLAUDE id, so resolve
     // via sessionIdMap and skip if we haven't seen the mapping yet (a hook event
@@ -1518,10 +1535,7 @@ export function registerIpcHandlers(
   // Native transcript events ride the SAME channel as CC's — the reducer
   // consumes an identical event shape regardless of runtime.
   nativeHost.on('transcript-event', (event: TranscriptEvent) => {
-    sendForSession(event.sessionId, IPC.TRANSCRIPT_EVENT, event);
-    if (remoteServer) {
-      remoteServer.broadcast({ type: 'transcript:event', payload: event });
-    }
+    publish(event.sessionId, IPC.TRANSCRIPT_EVENT, event);
     // WHY: this is the single line that makes native conversations exist in
     // the store (design §5); Task 3 made it correct rather than mislabeling.
     // Native ids are identity-mapped (sessionIdMap.set(info.id, info.id) in
@@ -1553,7 +1567,6 @@ export function registerIpcHandlers(
   // PermissionRequest/PermissionExpired — hook-dispatcher/ToolCard render them
   // unchanged. Ids are 'native-'-prefixed so permission:respond routes by id.
   nativeHost.on('hook-event', (event: HookEvent) => {
-    sendForSession(event.sessionId, IPC.HOOK_EVENT, event);
     if (remoteServer) {
       // Fix (not in the original plan — see the branch's commit history):
       // native hook events reach remote clients ONLY through this direct
@@ -1566,8 +1579,10 @@ export function registerIpcHandlers(
       // replay loop in restoreClient() picks these up for free, and its
       // PermissionResolved purge keeps answered asks out of that replay.
       remoteServer.bufferHookEvent(event);
-      remoteServer.broadcast({ type: 'hook:event', payload: event });
     }
+    // WHY after the buffer (one-core R5-1): the pair was window send, buffer, phone broadcast; the two sends
+    // are one call now and the buffer write is synchronous, so nothing can observe the order of those.
+    publish(event.sessionId, IPC.HOOK_EVENT, event);
   });
 
   // Task 8 (plan 1c) — the ledger's own write is the ONLY thing that fires
@@ -1576,15 +1591,14 @@ export function registerIpcHandlers(
   // event, one changed hire. Push-only — there is no specialists:event
   // REQUEST handler anywhere, same shape as native:model-state.
   nativeHost.on('specialists-event', (event: SpecialistsEvent) => {
-    sendForSession(event.sessionId, IPC.SPECIALISTS_EVENT, event);
     if (remoteServer) {
       // Task 9 (plan 1c): the phone hydrates over this WebSocket, never
       // through TRANSCRIPT_REPLAY, so it needs its own connect-time catch-up
       // for a helper's run status — bufferSpecialistRun feeds the buffer
       // restoreClient() reads from on connect (mirrors bufferHookEvent above).
       remoteServer.bufferSpecialistRun(event);
-      remoteServer.broadcast({ type: 'specialists:event', payload: event });
     }
+    publish(event.sessionId, IPC.SPECIALISTS_EVENT, event);
   });
 
   // What this session was given, pushed once when it opens (contract R23: every
@@ -1596,21 +1610,15 @@ export function registerIpcHandlers(
   // client that connects later hydrates the whole chat state over chat:hydrate,
   // and this record travels inside it. Buffering it as well would deliver it twice.
   nativeHost.on('session-context', (event: { sessionId: string; context: unknown }) => {
-    sendForSession(event.sessionId, IPC.NATIVE_SESSION_CONTEXT, event);
-    if (remoteServer) {
-      remoteServer.broadcast({ type: 'native:session-context', payload: event });
-    }
+    publish(event.sessionId, IPC.NATIVE_SESSION_CONTEXT, event);
   });
 
   // G-1: one background command's run record changed. Same four-surface push
   // shape as specialists:event — window + remote broadcast, buffered for a
   // reconnecting phone. Push-only; there is no request handler.
   nativeHost.on('shell-event', (event: ShellEvent) => {
-    sendForSession(event.sessionId, IPC.NATIVE_SHELL_EVENT, event);
-    if (remoteServer) {
-      remoteServer.bufferShellRun(event);
-      remoteServer.broadcast({ type: 'native:shell-event', payload: event });
-    }
+    if (remoteServer) remoteServer.bufferShellRun(event);
+    publish(event.sessionId, IPC.NATIVE_SHELL_EVENT, event);
   });
 
   // Perf cycle 2: paged history. A window opening/resuming a session asks for
@@ -1819,8 +1827,7 @@ export function registerIpcHandlers(
   // session was really running on. The host emits from ONE place (seedMode /
   // setPermissionMode), so both the IPC and the remote set paths are covered.
   nativeHost.on('permission-mode', (e: { sessionId: string; mode: NativePermissionMode }) => {
-    sendForSession(e.sessionId, IPC.NATIVE_PERMISSION_MODE, e);
-    remoteServer?.broadcast({ type: IPC.NATIVE_PERMISSION_MODE, payload: e });
+    publish(e.sessionId, IPC.NATIVE_PERMISSION_MODE, e);
   });
   // WHY (2026-09-30 one-core R3-6): provider:*, chatgpt:*, openrouter:*, claude-code:*, search:*, engine:*,
   // models:* and endpoints:detect request channels are table entries (main/ipc/provider.ts, chatgpt.ts,
@@ -1858,8 +1865,7 @@ export function registerIpcHandlers(
         if (lastSessionModelState.get(sessionId) === sig) continue;
         lastSessionModelState.set(sessionId, sig);
         const full = { sessionId, ...payload };
-        sendForSession(sessionId, IPC.NATIVE_MODEL_STATE, full);
-        remoteServer?.broadcast({ type: 'native:model-state', payload: full });
+        publish(sessionId, IPC.NATIVE_MODEL_STATE, full);
       }
     }
   });
@@ -1879,10 +1885,7 @@ export function registerIpcHandlers(
   // /clear and /compact both truncate or rewrite the JSONL. App.tsx listens
   // to detect compaction completion (pending → COMPACTION_COMPLETE).
   transcriptWatcher.on('transcript-shrink', (payload: any) => {
-    sendForSession(payload.sessionId, IPC.TRANSCRIPT_SHRINK, payload);
-    if (remoteServer) {
-      remoteServer.broadcast({ type: 'transcript:shrink', payload });
-    }
+    publish(payload.sessionId, IPC.TRANSCRIPT_SHRINK, payload);
   });
 
   // Broadcast session rename to remote WebSocket clients + update SessionInfo
@@ -2499,6 +2502,7 @@ export function registerIpcHandlers(
   const cleanup = function cleanup(): Promise<void> {
     stopThemeWatcher();
     statusPush.stop();
+    summaryPush.stop();
     transcriptWatcher.stopAll();
     // The runtime's half of quit (sign-in listener, native sessions, admin-password asks,
     // the llama-server, and session-state's topic watchers + maps) lives with the runtime
@@ -2525,8 +2529,7 @@ export function registerIpcHandlers(
   bindSessionOps({
     sessionManager, sessionIdMap, nativeHost, stampProviderTypes, windowRegistry, welcomeBackStore,
     createSession: (sender, opts) => createSession(sender ? { sender } : null, opts),
-    destroySession, signalTerminalReady, desktopTranscriptPage, canWriteStoreRecord, sendForSession,
-    remoteBroadcast: (message) => remoteServer?.broadcast(message),
+    destroySession, signalTerminalReady, desktopTranscriptPage, canWriteStoreRecord, publish,
     naming: { get: namingGet, set: namingSet, title: namingTitle, rename: namingRename },
   });
   // WHY (2026-09-29 one-core R2, filled by R3): the channel table's desktop half. Every family moved

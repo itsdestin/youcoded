@@ -3,6 +3,8 @@ import { EventEmitter } from 'events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createPublish } from '../src/main/publish';
+import { SessionRecords } from '../src/main/session-record';
 
 // Mock ws module — use require() inside vi.mock to avoid hoisting issues
 vi.mock('ws', async () => {
@@ -876,7 +878,13 @@ describe('RemoteServer session meta + browse', () => {
         listAsync: async () => opts.nativeEntries ?? [],
       },
       canWriteStoreRecord: () => opts.canWrite ?? true,
-      sendForSession, remoteBroadcast,
+      // WHY a real publish over the two spies (one-core R5-1): the assertions below still read what the windows and
+      // the phones were told, so they pin the delivery, not the call shape.
+      publish: createPublish({
+        records: new SessionRecords(),
+        toWindows: (sessionId, channel, args) => sendForSession(sessionId, channel, ...args),
+        toSockets: (message) => remoteBroadcast(message),
+      }),
     } as any);
   }
 

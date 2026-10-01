@@ -133,7 +133,11 @@ export class WindowRegistry extends EventEmitter {
 
   /** Add a subscription. Idempotent. Emits 'changed' on mutation. Throws if window unknown. */
   subscribe(sessionId: string, windowId: number): void {
-    if (!this.windows.has(windowId)) {
+    // WHY sockets too (one-core R5-1): a phone's watch is the same "this audience member wants this
+    // session" fact a buddy window's subscribe is. A socket is not a window, so its changes never emit
+    // 'changed' (that rebroadcasts the window directory to every renderer).
+    const isSocket = this.sockets.has(windowId);
+    if (!isSocket && !this.windows.has(windowId)) {
       throw new Error(`WindowRegistry: unknown window ${windowId}`);
     }
     let set = this.subscriptions.get(sessionId);
@@ -143,7 +147,7 @@ export class WindowRegistry extends EventEmitter {
     }
     const before = set.size;
     set.add(windowId);
-    if (set.size !== before) this.emit('changed');
+    if (set.size !== before && !isSocket) this.emit('changed');
   }
 
   /** Remove a subscription. Idempotent. Emits 'changed' on mutation. */
@@ -152,13 +156,23 @@ export class WindowRegistry extends EventEmitter {
     if (!set) return;
     const removed = set.delete(windowId);
     if (set.size === 0) this.subscriptions.delete(sessionId);
-    if (removed) this.emit('changed');
+    if (removed && !this.sockets.has(windowId)) this.emit('changed');
   }
 
   /** Read-only view of subscribers for a session. */
   getSubscribers(sessionId: string): Set<number> {
+    // WINDOWS only: callers (sendForSession, the remote snapshot's owner pick) treat every id here as a
+    // webContents id. Phones that watch a session are read through getSocketWatchers.
     const set = this.subscriptions.get(sessionId);
-    return set ? new Set(set) : new Set();
+    const out = new Set<number>();
+    if (set) for (const id of set) if (!this.sockets.has(id)) out.add(id);
+    return out;
+  }
+
+  /** Phones watching this session (R5-3 turns this into the delivery filter; nothing reads it for delivery yet). */
+  getSocketWatchers(sessionId: string): number[] {
+    const set = this.subscriptions.get(sessionId);
+    return set ? [...set].filter((id) => this.sockets.has(id)) : [];
   }
 
   /**
@@ -178,6 +192,46 @@ export class WindowRegistry extends EventEmitter {
 
   getOwner(sessionId: string): number | undefined {
     return this.ownership.get(sessionId);
+  }
+
+  // Phones (remote sockets) as audience members, with NEGATIVE ids so they can never collide with a
+  // webContents id. WHY (2026-10-01 one-core R5-1, seam S6): "who wants this session's events" used to be
+  // two lists — this registry for windows and RemoteServer.clients for phones — and the ~15 paired
+  // sendForSession + broadcast call sites were exactly where they drifted. Sockets are NOT windows: they are
+  // not in `windows`, so the directory, the leader election and getWindowIds never see them, and joining or
+  // leaving never emits 'changed'.
+  private readonly sockets = new Set<number>();
+
+  registerSocket(id: number): void {
+    if (!Number.isInteger(id) || id >= 0) throw new Error(`WindowRegistry: a socket id must be a negative integer, got ${id}`);
+    this.sockets.add(id);
+  }
+
+  /** A phone left: drop it and every subscription it held (silently — it was never a window). */
+  unregisterSocket(id: number): void {
+    if (!this.sockets.delete(id)) return;
+    for (const [sid, set] of this.subscriptions) {
+      set.delete(id);
+      if (set.size === 0) this.subscriptions.delete(sid);
+    }
+  }
+
+  isSocket(id: number): boolean { return this.sockets.has(id); }
+  getSocketIds(): number[] { return Array.from(this.sockets); }
+
+  /**
+   * Who a session-scoped push goes to. Windows: the owner plus subscribers; when there are none the push
+   * falls back to the primary window (the unowned-session rule sendForSession always had). Sockets: EVERY
+   * registered phone today. WHY no filter yet: per-session delivery (R5-3) must not ship before the fill path
+   * (R5-2) exists, or a phone that switches to a session it was not receiving has nothing to catch up from.
+   * R5-3 changes this one line to the session's watchers.
+   */
+  resolveAudience(sessionId: string): { windowIds: number[]; socketIds: number[]; fallbackToPrimary: boolean } {
+    const windowIds = new Set<number>();
+    const ownerId = this.ownership.get(sessionId);
+    if (ownerId != null) windowIds.add(ownerId);
+    for (const subId of this.getSubscribers(sessionId)) windowIds.add(subId);
+    return { windowIds: [...windowIds], socketIds: this.getSocketIds(), fallbackToPrimary: windowIds.size === 0 };
   }
 
   // sessionId -> the window that inherited it through an ownership TRANSFER and

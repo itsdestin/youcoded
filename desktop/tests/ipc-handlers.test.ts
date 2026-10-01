@@ -810,11 +810,12 @@ describe('status push: deduplicated, paused while nobody can see it, resumed on 
       isMinimized: () => false,
       on: vi.fn(),
     };
-    let statusListener: ((s: any) => void) | null = null;
+    // A SET of listeners, like the real server: the status push and the per-session summary push (one-core R5-1) both listen.
+    const statusListeners = new Set<(s: any) => void>();
     const remoteServer = opts.clients ? {
       getClientCount: opts.clients,
       broadcastStatusData: vi.fn(),
-      onStatusChange: vi.fn((cb: (s: any) => void) => { statusListener = cb; return () => {}; }),
+      onStatusChange: vi.fn((cb: (s: any) => void) => { statusListeners.add(cb); return () => { statusListeners.delete(cb); }; }),
       broadcast: vi.fn(),
       // Wiring the handlers hand a real server at boot; inert here.
       setSessionMetaWiring: vi.fn(), setLastTopic: vi.fn(),
@@ -831,7 +832,7 @@ describe('status push: deduplicated, paused while nobody can see it, resumed on 
     const focus = (app.on as any).mock.calls.filter((c: any[]) => c[0] === 'browser-window-focus').at(-1)[1] as () => void;
     const sends = () => win.webContents.send.mock.calls.filter((c: any[]) => c[0] === 'status:data').length;
     const tick = () => vi.advanceTimersByTimeAsync(10_000);
-    return { win, sends, tick, focus, phoneConnects: () => statusListener?.({ clientCount: 1 }), remoteServer };
+    return { win, sends, tick, focus, phoneConnects: () => { for (const l of [...statusListeners]) l({ clientCount: 1 }); }, remoteServer };
   }
 
   it('sends a changed payload once and does not repeat an identical one', async () => {
