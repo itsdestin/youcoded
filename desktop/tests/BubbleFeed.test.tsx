@@ -250,6 +250,12 @@ describe('BubbleFeed live transcript events', () => {
     expect(deliver({ type: 'streaming-text' })).toEqual([]);
   });
 
+  it('treats a wire type named after an inherited object property as unknown, not as a ledger row', () => {
+    for (const type of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+      expect(deliver({ type }), type).toEqual([]);
+    }
+  });
+
   it('stamps a tool-use with the event timestamp', () => {
     expect(deliver({ type: 'tool-use', data: { toolUseId: 't', toolName: 'Read' } }))
       .toContainEqual(expect.objectContaining({ type: 'TRANSCRIPT_TOOL_USE', timestamp: 500 }));

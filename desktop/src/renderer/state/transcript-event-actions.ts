@@ -55,11 +55,15 @@ export function eventToAction(event: TranscriptEvent, opts: EventToActionOptions
 
   switch (type) {
     case 'user-message':
+      // WHY nothing: a user message with no text would draw an empty bubble. The old
+      // live paths threw on it (inside the batch, drawing nothing) and no producer
+      // sends one, so "draw nothing" is what a user saw before. Every path agrees.
+      if (!d.text) return [];
       return [{
         type: 'TRANSCRIPT_USER_MESSAGE',
         sessionId,
         uuid,
-        text: d.text ?? '',
+        text: d.text,
         timestamp,
         // A slash command read from its command tags starts no turn (chat-reducer).
         slashCommand: d.slashCommand,

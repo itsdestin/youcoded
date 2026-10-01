@@ -115,7 +115,11 @@ export function BubbleFeed({ sessionId }: Props) {
       if (!event?.type || event?.sessionId !== sessionId) return;
       // The buddy's three known live gaps (see the ledger). An unknown type has no
       // ledger row; eventToAction ignores it.
-      const rule = BUDDY_LIVE[event.type as TranscriptEventType];
+      // Own-property lookup: a wire type named `constructor` or `toString` must read as
+      // "no ledger row", not as the function every object inherits.
+      const rule = Object.prototype.hasOwnProperty.call(BUDDY_LIVE, event.type)
+        ? BUDDY_LIVE[event.type as TranscriptEventType]
+        : undefined;
       if (rule && rule !== 'same') return;
 
       // WHY one translator: this feed shares `eventToAction` with the main window

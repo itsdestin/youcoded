@@ -99,3 +99,35 @@ describe('eventToAction ignores what it does not know', () => {
     expect(eventToAction(e, { live: false })).toEqual([]);
   });
 });
+
+// A malformed line must never throw inside an IPC listener, on any screen. The old
+// live switches threw on a missing text (batched, so it surfaced a frame later);
+// the page path never did. All three paths now agree (R4-2 review F2/F3, R4-3).
+describe('eventToAction on events with a missing text or data bag', () => {
+  const PATHS: Array<[string, (e: TranscriptEvent) => ReturnType<typeof eventToAction>]> = [
+    ['main window (live)', (e) => eventToAction(e, { live: true })],
+    ['buddy (live)', (e) => eventToAction(e, { live: true, compactionPending: false, fallbackContextTokens: null })],
+    ['history page', (e) => eventToAction(e, { live: false })],
+  ];
+  const bare = (type: string, data?: unknown) =>
+    ({ type, sessionId: 's', uuid: 'u', timestamp: 1, data }) as unknown as TranscriptEvent;
+
+  for (const [path, run] of PATHS) {
+    it(`${path}: an assistant-text with no text becomes an empty text`, () => {
+      for (const data of [undefined, {}]) {
+        expect(run(bare('assistant-text', data))).toEqual([expect.objectContaining({ type: 'TRANSCRIPT_ASSISTANT_TEXT', text: '' })]);
+      }
+    });
+
+    it(`${path}: a user-message with no text draws no bubble`, () => {
+      for (const data of [undefined, {}, { text: '' }]) expect(run(bare('user-message', data))).toEqual([]);
+    });
+
+    it(`${path}: no event type throws when its data bag is missing`, () => {
+      for (const c of MATRIX) {
+        expect(() => run({ ...c.event, data: undefined } as unknown as TranscriptEvent), `${c.event.type}`).not.toThrow();
+        expect(() => run({ ...c.event, data: {} } as unknown as TranscriptEvent), `${c.event.type} {}`).not.toThrow();
+      }
+    });
+  }
+});
