@@ -10,13 +10,12 @@
 // Companion files: native-context-occupancy.test.ts (the harness half),
 // statusbar-native-usage.test.ts (the rest of the chip selector).
 import { describe, it, expect, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { chatReducer } from '../src/renderer/state/chat-reducer';
 import type { ChatState, ChatAction } from '../src/renderer/state/chat-types';
 import { selectNativeStatusChips } from '../src/renderer/components/StatusBar';
 import { buildUsageSnapshot } from '../src/renderer/state/usage-snapshot';
 import { pageEventToAction } from '../src/renderer/state/transcript-page-actions';
+import { eventToAction } from '../src/renderer/state/transcript-event-actions';
 import { emptyTotals } from '../src/renderer/state/session-totals';
 import type { TranscriptEvent } from '../src/shared/types';
 
@@ -217,12 +216,12 @@ describe('the compaction marker can finally say what it freed', () => {
   });
 
   it('uses the transcript uuid as the marker id so the reducer can dedupe event replay', () => {
-    // WHY a cross-file source guard: the App transcript callback depends on live
-    // IPC wiring, while the reducer's replay test above alone cannot catch a
-    // fresh clock-based id minted by the event adapter on every delivery.
-    const source = readFileSync(fileURLToPath(new URL('../src/renderer/App.tsx', import.meta.url)), 'utf8');
-    const compactCase = source.split("case 'compact-summary': {")[1]?.split("case '")[0];
-    expect(compactCase).toMatch(/markerId:\s*`compact-done-\$\{event\.uuid\}`/);
+    // The translator (not a clock) mints the id, so the same event delivered twice
+    // yields the same id. The reducer's replay test above covers the dedupe itself.
+    const event = { type: 'compact-summary', sessionId: SESSION, uuid: 'cs-9', timestamp: 1, data: { autoCompaction: true } } as TranscriptEvent;
+    const marker = () => eventToAction(event, { live: true }).find((a) => a.type === 'COMPACTION_COMPLETE');
+    expect(marker()).toMatchObject({ markerId: 'compact-done-cs-9' });
+    expect(marker()).toEqual(marker());
   });
 
   it('still falls back to Claude Code’s own reading when the event carries none', () => {
