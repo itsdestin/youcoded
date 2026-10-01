@@ -9,9 +9,11 @@
 // relays every terminal byte, so it keeps a headless xterm (the same engine the window uses) and reads the same screen the same way
 // (shared/terminal-screen-text.ts). Everything it finds leaves through SessionLiveFacts, as numbered events every screen draws.
 //
-// COST (measured, scratchpad r5-4b-cpu): a terminal exists ONLY while it is wanted — a turn is running, the session has not yet started (its
-// startup dialogs), a card is open, or an idle chunk looked like a dialog — is seeded from the last 256K units of the record's terminal stream, keeps
-// 60 rows of scrollback, and is disposed a few seconds after nothing wants it. An idle session has no terminal at all (tests/session-screens.test.ts).
+// COST (measured, scratchpad r54b-bench): every live Claude Code session keeps ONE terminal from its start to its end, with a small scrollback. It
+// does work only when bytes arrive (a write is parsed when it is written), so an idle session costs memory and no CPU. (Review fix, R5-4b: the first
+// version made a terminal only while a turn ran or a chunk "looked like a dialog"; Claude Code positions words with cursor moves, so no real chunk
+// ever looked like one and a dialog in an idle session was missed. Nothing is guessed from bytes any more.) The terminal sees the session's output
+// from its first byte, so it never has to be seeded from the middle of a stream (a cut stream leaves stale rows behind Claude Code's erase-up redraws).
 //
 // Electron-free and injected, like session-live.ts: tests drive it with a real record and a fake terminal or the real @xterm/headless.
 import { Terminal } from '@xterm/headless';
@@ -22,20 +24,13 @@ import { screenTextOf, visibleScreenTextOf, type ScreenBuffer } from '../shared/
 import { StuckTracker, STUCK_TICK_MS, STUCK_TAIL_ROWS } from '../shared/stuck-tracker';
 import { PromptCardReader } from '../shared/prompt-card-reader';
 
-/** How much of the record's terminal stream a new headless terminal is fed first (UTF-16 units; about 4 ms of parsing). */
-const SEED_UNITS = 256 * 1024;
 /** Rows of history the headless copy keeps. The check reads 40 rows and the card reader the visible screen, so 60 is plenty (1,000 cost 4x the memory). */
 const SCREEN_SCROLLBACK_ROWS = 60;
 /** The card reader looks at most this often. The window's reader looked on every flush (up to 60 a second); a menu is a human-speed thing. */
 const SCAN_MS = 100;
-/** A terminal nothing wants any more is kept this long before it is disposed (a dialog right after a turn's end is still caught). */
-const IDLE_DISPOSE_MS = 3000;
 /** The size a terminal has until a window reports its real one. */
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
-/** What an idle chunk must contain for the computer to start reading the screen: Claude Code's dialog footer, or a numbered select row. */
-const DIALOG_HINT = /enter to confirm|esc to (?:cancel|exit|reject)|space to select|[❯>]\s*1[.:]\s/i;
-const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
 
 /** The slice of an xterm terminal this uses (so a test can pass a fake). */
 export interface ScreenTerminal {
@@ -47,7 +42,7 @@ export interface ScreenTerminal {
 }
 
 export interface SessionScreensDeps {
-  records: Pick<SessionRecords, 'screenNeed' | 'ptyTail'>;
+  records: Pick<SessionRecords, 'screenNeed'>;
   live: Pick<SessionLiveFacts, 'attention' | 'showPrompt' | 'dismissPrompt'>;
   /** A Claude Code session (not native, not a shell)? */
   isClaude(sessionId: string): boolean;
@@ -67,13 +62,8 @@ export interface SessionScreensDeps {
 
 interface PerSession {
   term: ScreenTerminal | null;
-  /** Stream position (record units) the terminal has been fed up to; a chunk that ends at or before it is already in there. */
-  fedEnd: number;
-  /** Writes handed to the terminal that have not finished parsing. */
+  /** Writes handed to THIS terminal that have not finished parsing (reset with each new terminal, so a late callback of a disposed one cannot touch it). */
   pending: number;
-  /** An idle chunk looked like a dialog: keep reading until the menu is resolved. */
-  dialogHint: boolean;
-  disposeTimer: unknown | null;
   scanTimer: unknown | null;
   /** The stuck check, while its gate is open. */
   tracker: StuckTracker | null;
@@ -91,7 +81,7 @@ interface PerSession {
 }
 
 const fresh = (): PerSession => ({
-  term: null, fedEnd: 0, pending: 0, dialogHint: false, disposeTimer: null, scanTimer: null, tracker: null, tickTimer: null, tickWhenReady: false,
+  term: null, pending: 0, scanTimer: null, tracker: null, tickTimer: null, tickWhenReady: false,
   stuckShown: false, reader: null, answeredId: null, lastAskClearedAt: 0, wasAsking: false,
 });
 
@@ -143,42 +133,27 @@ export class SessionScreens {
   // Feeding
   // ------------------------------------------------------------------------------------------------------------------------------------
 
-  /**
-   * One chunk of a session's terminal output. `at` is where the record put it in the terminal stream (the record notes the chunk BEFORE this runs, so
-   * a terminal created by this very chunk is seeded with it and must not be fed it twice).
-   */
-  noteOutput(sessionId: string, data: string, at?: { offset: number } | null): void {
+  /** One chunk of a session's terminal output, fed to the session's terminal (made here if the session has none yet). */
+  noteOutput(sessionId: string, data: string): void {
     if (!data || !this.deps.isClaude(sessionId)) return;
-    const s = this.per.get(sessionId);
-    if (s?.term) { this.feed(sessionId, s, data, at); return; }
-    // No terminal: only a chunk that looks like a dialog (or a session that wants one anyway) starts reading.
-    const hint = DIALOG_HINT.test(data.replace(ANSI, ''));
-    const need = this.deps.records.screenNeed(sessionId);
-    if (!need) return;
-    if (!hint && !(need.working || !need.started || need.cards > 0)) return;
-    const st = this.state(sessionId);
-    if (hint) st.dialogHint = true;
-    this.ensure(sessionId, st);
-    this.feed(sessionId, st, data, at);
-  }
-
-  private feed(sessionId: string, s: PerSession, data: string, at?: { offset: number } | null): void {
-    let chunk = data;
-    if (at) {
-      const end = at.offset + data.length;
-      if (end <= s.fedEnd) return; // already in the seed
-      if (at.offset < s.fedEnd) chunk = data.slice(s.fedEnd - at.offset);
-      s.fedEnd = end;
+    let s = this.per.get(sessionId);
+    if (!s?.term) {
+      if (!this.deps.records.screenNeed(sessionId)) return; // no record: the session is over
+      s = this.state(sessionId);
+      this.ensure(sessionId, s);
     }
-    this.write(sessionId, s, chunk);
+    this.write(sessionId, s, data);
   }
 
   private write(sessionId: string, s: PerSession, data: string): void {
-    if (!s.term) return;
+    const term = s.term;
+    if (!term) return;
     s.pending++;
-    s.term.write(data, () => {
+    term.write(data, () => {
+      // A callback from a terminal that has since been disposed (the session record was recreated) must not touch the one that replaced it.
+      if (s.term !== term) return;
       s.pending--;
-      if (s.pending > 0 || !s.term) return;
+      if (s.pending > 0) return;
       if (s.tickWhenReady) { s.tickWhenReady = false; this.tick(sessionId); }
     });
     this.scheduleScan(sessionId, s);
@@ -203,39 +178,35 @@ export class SessionScreens {
   // Lifetime
   // ------------------------------------------------------------------------------------------------------------------------------------
 
-  /** Make this session's terminal if it has none, seeded from the record's terminal stream. */
+  /** Make this session's terminal if it has none. It lives until the session ends. */
   private ensure(sessionId: string, s: PerSession): void {
-    this.clearTimer(s.disposeTimer); s.disposeTimer = null;
     if (s.term) return;
     const size = this.deps.size?.(sessionId) ?? this.sizes.get(sessionId) ?? { cols: DEFAULT_COLS, rows: DEFAULT_ROWS };
     s.term = this.deps.createTerminal ? this.deps.createTerminal(size.cols, size.rows) : realTerminal(size.cols, size.rows);
-    s.fedEnd = 0;
+    s.pending = 0;
     s.reader = new PromptCardReader({
       readScreen: () => { try { return s.term ? visibleScreenTextOf(s.term.buffer.active, s.term.rows) : null; } catch { return null; } },
       need: () => { const n = this.deps.records.screenNeed(sessionId); return n ? { asking: n.asking, started: n.started } : null; },
       askClearedAt: () => s.lastAskClearedAt,
       isAnswered: (id) => s.answeredId === id,
       show: (card) => this.deps.live.showPrompt(sessionId, card),
-      dismiss: (id) => { s.answeredId = null; this.deps.live.dismissPrompt(sessionId, id); this.afterDismiss(sessionId); },
+      dismiss: (id) => { s.answeredId = null; this.deps.live.dismissPrompt(sessionId, id); },
       now: this.now,
       setTimer: (fn, ms) => this.setTimer(fn, ms),
       clearTimer: (h) => this.clearTimer(h),
     });
-    const tail = this.deps.records.ptyTail(sessionId, SEED_UNITS);
-    if (tail) { s.fedEnd = tail.end; if (tail.data) this.write(sessionId, s, tail.data); }
   }
 
   private dispose(sessionId: string, s: PerSession): void {
-    this.clearTimer(s.disposeTimer); s.disposeTimer = null;
     this.clearTimer(s.scanTimer); s.scanTimer = null;
     s.reader?.dispose(); s.reader = null; s.answeredId = null;
     this.stopTicks(sessionId, s);
     const t = s.term;
-    s.term = null; s.tracker = null; s.dialogHint = false; s.pending = 0; s.tickWhenReady = false;
+    s.term = null; s.tracker = null; s.pending = 0; s.tickWhenReady = false;
     try { t?.dispose(); } catch { /* already gone */ }
   }
 
-  /** The session is over (or the app is closing): nothing left to read. */
+  /** The session is over (or the app is closing): its terminal goes. */
   forget(sessionId: string): void {
     const s = this.per.get(sessionId);
     if (s) { this.dispose(sessionId, s); this.per.delete(sessionId); }
@@ -246,34 +217,23 @@ export class SessionScreens {
   stop(): void { for (const id of [...this.per.keys()]) this.forget(id); }
 
   /**
-   * What the record says a session needs has changed (SessionRecords.onScreenNeedChange): a turn began or ended, a tool started or finished, an ask
-   * opened or closed, Claude Code started, a card opened or closed. Decides whether a terminal should exist and whether the stuck check runs.
+   * What the record says a session needs has changed (SessionRecords.onScreenNeedChange): a session began, a turn began or ended, a tool started or
+   * finished, an ask opened or closed, Claude Code started, a card opened or closed. Makes sure the session has its terminal and decides whether the
+   * stuck check runs.
    */
   refresh(sessionId: string): void {
     const need = this.deps.records.screenNeed(sessionId);
     if (!need || !this.deps.isClaude(sessionId)) { this.forget(sessionId); return; }
     const s = this.state(sessionId);
+    this.ensure(sessionId, s);
 
     // The post-permission cooldown: remember when the last live ask closed.
     if (s.wasAsking && !need.asking) s.lastAskClearedAt = this.now();
     s.wasAsking = need.asking;
-
-    const busy = !!s.reader?.busy;
-    const wanted = need.working || !need.started || need.cards > 0 || s.dialogHint || busy;
-    if (wanted) {
-      this.ensure(sessionId, s);
-      this.scheduleScan(sessionId, s);
-    } else if (s.term && s.disposeTimer === null) {
-      s.disposeTimer = this.setTimer(() => {
-        s.disposeTimer = null;
-        const n = this.deps.records.screenNeed(sessionId);
-        const still = !!n && (n.working || !n.started || n.cards > 0 || s.dialogHint || !!s.reader?.busy);
-        if (!still) this.dispose(sessionId, s);
-      }, IDLE_DISPOSE_MS);
-    }
+    this.scheduleScan(sessionId, s);
 
     // The stuck check runs only while the turn is "thinking": nothing running, nothing waiting on the person (the window's gate, unchanged).
-    const gate = !!s.term && need.working && !need.toolRunning && !need.asking;
+    const gate = need.working && !need.toolRunning && !need.asking;
     if (gate && s.tickTimer === null) this.startTicks(sessionId, s);
     else if (!gate && s.tickTimer !== null) this.stopTicks(sessionId, s);
     else if (!gate && s.stuckShown) this.clearStuck(sessionId, s);
@@ -326,18 +286,8 @@ export class SessionScreens {
   }
 
   private scan(sessionId: string): void {
-    const s = this.per.get(sessionId);
-    if (!s?.term || !s.reader) return;
-    s.reader.scan();
-    // Nothing on screen needs reading: a terminal kept only for a dialog hint can go.
-    if (!s.reader.busy) {
-      if (s.dialogHint) s.dialogHint = false;
-      this.refresh(sessionId);
-    }
+    this.per.get(sessionId)?.reader?.scan();
   }
-
-  /** A card came down: a terminal nothing wants any more can go. */
-  private afterDismiss(sessionId: string): void { this.refresh(sessionId); }
 }
 
 /** The real thing: @xterm/headless, with the same width table the window's terminal uses (so a wrapped line breaks in the same place). */

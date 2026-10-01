@@ -438,7 +438,9 @@ export function registerIpcHandlers(
     onAttention: (id, state) => { onMainAttention?.(id, state); },
   });
   runtime.records.onScreenNeedChange((id) => screens.refresh(id));
-  sessionManager.setChunkNoter((id, data) => runtime.records.notePty(id, data));
+  // The record keeps a session's terminal bytes (up to 4M units) for a phone's terminal view, and ONLY while phone access is on, exactly as the
+  // phone server's own buffer did before the record existed. The computer's headless terminals are fed every chunk directly and need none of it.
+  sessionManager.setChunkNoter((id, data) => (remoteServer?.isRunning() ? runtime.records.notePty(id, data) : null));
 
   // WHY (2026-09-29 one-core R1): returned from registerIpcHandlers as plain values (was two
   // module-level `let`s assigned here as a side effect, so a caller that ran first silently
@@ -1015,10 +1017,10 @@ export function registerIpcHandlers(
   // deserialize output for sessions it may not own. App.tsx now subscribes
   // per-session in sync with session:created / session:destroyed events, so
   // the global broadcast is no longer needed.
-  sessionManager.on('pty-output', (sessionId: string, data: string, at?: { offset: number } | null) => {
+  sessionManager.on('pty-output', (sessionId: string, data: string) => {
     // One reading of the permission-mode footer for the session, instead of every screen scanning its own copy (one-core R5-4a).
     liveFacts.noteOutput(sessionId, data);
-    screens.noteOutput(sessionId, data, at); // the computer's own copy of the terminal (one-core R5-4b)
+    screens.noteOutput(sessionId, data); // the computer's own copy of the terminal (one-core R5-4b)
     if (readySessions.has(sessionId)) {
       sendForSession(sessionId, `pty:output:${sessionId}`, [data]);
     } else {

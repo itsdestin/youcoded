@@ -85,7 +85,7 @@ export function makeRig(opts: { started?: boolean; claude?: boolean } = {}): Rig
     term: () => current,
     created: () => created,
     now: () => t,
-    output: (data) => { const at = records.notePty(S, data); screens.noteOutput(S, data, at); },
+    output: (data) => { screens.noteOutput(S, data); },
     advance, settle,
     note: (type, payload) => { records.note(S, type, payload); },
   };

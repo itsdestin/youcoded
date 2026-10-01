@@ -67,7 +67,7 @@ function rig() {
     }
     t = end;
   };
-  const output = (data: string) => { const at = records.notePty(S, data); screens.noteOutput(S, data, at); };
+  const output = (data: string) => { screens.noteOutput(S, data); };
   return { registry, records, phone, screens, output, advance };
 }
 

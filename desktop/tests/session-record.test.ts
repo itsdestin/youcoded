@@ -437,17 +437,6 @@ describe('what the computer reads a session\'s screen for', () => {
     expect(heard).toHaveLength(4);
     expect(r.screenNeed(S)).toBeNull();
   });
-
-  it('the pty stream\'s newest part is handed over whole chunks at a time, with where it ends', () => {
-    const r = new SessionRecords();
-    r.begin(S);
-    r.notePty(S, 'a'.repeat(5000)); r.notePty(S, 'b'.repeat(5000)); r.notePty(S, 'c'.repeat(10));
-    const tail = r.ptyTail(S, 6000)!;
-    expect(tail.end).toBe(10010);
-    expect(tail.data.endsWith('c'.repeat(10))).toBe(true);
-    expect(tail.data.length).toBeGreaterThanOrEqual(6000);
-    expect(r.ptyTail('nope', 10)).toBeNull();
-  });
 });
 
 describe('what a summary says about "stuck"', () => {

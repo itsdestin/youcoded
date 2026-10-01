@@ -641,6 +641,21 @@ describe('remote-shim — terminal backlog', () => {
       expect(seen).toEqual(['hello world', '!!']);
     });
 
+    it('asks whether a message arrived under the record epoch it was SENT under, not the one the page holds after a later refill', async () => {
+      await openIt(ws, 's1', { epoch: 'OLD', headSeq: 1 });
+      (window as any).claude.session.sendInput('s1', 'hi\r', undefined, 'send-1');
+      await openIt(ws, 's1', { epoch: 'NEW', headSeq: 1 });         // the computer restarted; the page was filled again under another epoch
+      const asked = (window as any).claude.session.sendOutcomes('s1', ['send-1', 'never-sent-here']);
+      await vi.waitFor(() => expect(ws.sentOf('session:send-outcomes').length).toBe(2));
+      const reqs = ws.sentOf('session:send-outcomes');
+      expect(reqs.map((r: any) => r.payload)).toEqual([
+        { sessionId: 's1', ids: ['send-1'], epoch: 'OLD' },
+        { sessionId: 's1', ids: ['never-sent-here'] },                // an id this page did not send has no epoch: the computer answers unknown
+      ]);
+      for (const r of reqs) ws.receive({ type: 'session:send-outcomes:response', id: r.id, payload: { epoch: 'NEW', outcomes: Object.fromEntries(r.payload.ids.map((i: string) => [i, 'unknown'])) } });
+      await expect(asked).resolves.toMatchObject({ outcomes: { 'send-1': 'unknown', 'never-sent-here': 'unknown' } });
+    });
+
     it('unwatching a conversation tells the computer, drops any terminal frame still on the wire, and keeps its place for next time', async () => {
       await openIt(ws, 's1', { epoch: 'E', headSeq: 7 });
       output('s1', 'abc', 0);

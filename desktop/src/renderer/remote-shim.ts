@@ -633,6 +633,14 @@ async function openSessionRemote(req: { sessionId: string; claudeSessionId?: str
   return reply;
 }
 
+/** The record epoch a page held when it sent each message (bounded): the lost-send check must ask under THAT epoch (one-core R5-4b review). */
+const sendEpochs = new Map<string, string | undefined>();
+function noteSendEpoch(sessionId: string, sendId: string | undefined): void {
+  if (!sendId) return;
+  sendEpochs.set(sendId, fillCursors.get(sessionId)?.epoch);
+  if (sendEpochs.size > 200) sendEpochs.delete(sendEpochs.keys().next().value as string);
+}
+
 function playPushes(pushes: Array<{ type: string; payload: unknown }>): void {
   for (const p of pushes ?? []) {
     try { routePush(p.type, p.payload); } catch (e) { console.error(`[remote-shim] replayed push ${p.type} failed:`, e); }
@@ -2068,12 +2076,20 @@ export function installShim(): void {
       reopenList: () => invoke('session:reopen-list'),
       forgetReopen: (ids: string[]) => invoke('session:forget-reopen', { ids }),
       canSend: () => ws?.readyState === WebSocket.OPEN && connectionState === 'connected',
-      sendInput: (sessionId: string, text: string, notice?: 'model-switch', sendId?: string) => fire('session:input', { sessionId, text, notice, sendId }),
-      // What the computer noted for these send ids (one-core R5-4b), asked about the record this page last filled the session from. The Android
-      // app's own runtime has no host record and nothing to lose on a network: resolves to undefined, nothing is sent.
-      sendOutcomes: (sessionId: string, ids: string[]) => isAndroidLocal()
-        ? Promise.resolve(undefined)
-        : invoke('session:send-outcomes', { sessionId, ids, ...(fillCursors.get(sessionId)?.epoch ? { epoch: fillCursors.get(sessionId)!.epoch } : {}) }),
+      sendInput: (sessionId: string, text: string, notice?: 'model-switch', sendId?: string) => (noteSendEpoch(sessionId, sendId), fire('session:input', { sessionId, text, notice, sendId })),
+      // What the computer noted for these send ids (one-core R5-4b), asked about with the record epoch each message was SENT under (`sendEpochs`),
+      // never the one the page holds now: after a computer restart and a refill the new epoch would say "not received" about a message the old
+      // computer did receive. The Android app's own runtime has no host record and nothing to lose on a network: resolves to undefined.
+      sendOutcomes: async (sessionId: string, ids: string[]) => {
+        if (isAndroidLocal()) return undefined;
+        // Group by the epoch each message was sent under; an id this page never sent (or lost on reload) has none, and the computer answers "unknown".
+        const groups = new Map<string | undefined, string[]>();
+        for (const id of ids) { const e = sendEpochs.get(id); groups.set(e, [...(groups.get(e) ?? []), id]); }
+        let epoch: string | null = null; const outcomes: Record<string, 'received' | 'not-received' | 'unknown'> = {};
+        const replies = await Promise.all([...groups].map(([e, group]) => invoke('session:send-outcomes', { sessionId, ids: group, ...(e ? { epoch: e } : {}) })));
+        for (const r of replies) { epoch = r?.epoch ?? epoch; Object.assign(outcomes, r?.outcomes ?? {}); }
+        return { epoch, outcomes };
+      },
       resize: (sessionId: string, cols: number, rows: number) => fire('session:resize', { sessionId, cols, rows }),
       signalReady: (sessionId: string) => fire('session:terminal-ready', { sessionId }),
       // Tracked while in flight so the host's resolution of THIS answer is not shown as
@@ -3113,7 +3129,7 @@ export function installShim(): void {
       // Object payloads match how remote-server.ts's WS cases read them
       // (payload.sessionId / payload.text / payload.binding).
       // M1: invoke — returns {status,reason} so remote UI matches desktop
-      send: (sessionId: string, text: string, attachments?: string[], sendId?: string) => invoke('native:send', { sessionId, text, attachments, sendId }),
+      send: (sessionId: string, text: string, attachments?: string[], sendId?: string) => (noteSendEpoch(sessionId, sendId), invoke('native:send', { sessionId, text, attachments, sendId })),
       // Task 11: cancel/edit a queued message — request/response (mirrors preload.ts).
       queueRemove: (sessionId: string, queueId: string) => invoke('native:queue-remove', { sessionId, queueId }),
       queueSendNow: (sessionId: string, queueId: string) => invoke('native:queue-send-now', { sessionId, queueId }),

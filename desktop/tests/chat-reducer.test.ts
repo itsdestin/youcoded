@@ -1688,4 +1688,18 @@ describe('a sent message the computer may not have received', () => {
     expect(s.get(SESSION)!.timeline.map((e: any) => e.message?.content)).toEqual(['keep']);
     expect(dispatch(s, { type: 'SEND_DISCARD', sessionId: SESSION, sendId: 'id1' })).toBe(s);
   });
+
+  it('a message that never arrived stops the spinner it started when nothing else is running, but never a running turn\'s', () => {
+    const idle = sent('id1');
+    expect(idle.get(SESSION)!.isThinking).toBe(true);                         // the optimistic send put it up
+    expect(dispatch(idle, { type: 'SEND_NOTE', sessionId: SESSION, sendId: 'id1', note: 'unsure' }).get(SESSION)!.isThinking).toBe(true);   // not known: left alone
+    expect(dispatch(idle, { type: 'SEND_NOTE', sessionId: SESSION, sendId: 'id1', note: 'not-sent' }).get(SESSION)!.isThinking).toBe(false);
+    expect(dispatch(idle, { type: 'SEND_DISCARD', sessionId: SESSION, sendId: 'id1' }).get(SESSION)!.isThinking).toBe(false);
+    // A turn was already running when this was sent mid-stream: it keeps its spinner.
+    let busy = dispatch(initState(), { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, text: 'first', timestamp: 1, uuid: 'u0' } as ChatAction);
+    busy = dispatch(busy, { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, text: 'working', timestamp: 2, uuid: 'a0', turnId: 't1' } as ChatAction);
+    busy = dispatch(busy, { type: 'USER_PROMPT', sessionId: SESSION, content: 'more', timestamp: 3, sendId: 'id9' } as ChatAction);
+    expect(busy.get(SESSION)!.currentTurnId).toBeTruthy();
+    expect(dispatch(busy, { type: 'SEND_NOTE', sessionId: SESSION, sendId: 'id9', note: 'not-sent' }).get(SESSION)!.isThinking).toBe(true);
+  });
 });

@@ -55,7 +55,7 @@ import { IPC } from '../src/shared/types';
 const PRIMARY = 1, OWNER = 2, BUDDY = 3, OTHER = 4;
 const SID = 'sess-1';
 
-interface World { registry: WindowRegistry; phoneMessages: any[]; runtime: any; remote: any; outbox: any; sentTo: (id: number) => Array<{ channel: string; args: any[] }> }
+interface World { registry: WindowRegistry; phoneMessages: any[]; runtime: any; remote: any; sessionManager: any; outbox: any; sentTo: (id: number) => Array<{ channel: string; args: any[] }> }
 
 function boot(): World {
   h.sent.clear();
@@ -69,7 +69,7 @@ function boot(): World {
 
   const phoneMessages: any[] = [];
   const remote = {
-    getClientCount: vi.fn(() => 0), broadcastStatusData: vi.fn(), onStatusChange: vi.fn(() => () => {}),
+    isRunning: vi.fn(() => false), getClientCount: vi.fn(() => 0), broadcastStatusData: vi.fn(), onStatusChange: vi.fn(() => () => {}),
     broadcast: vi.fn((m: any) => { phoneMessages.push(m); }),
     setSessionMetaWiring: vi.fn(), setLastTopic: vi.fn(), setHandoffRoute: vi.fn(),
   };
@@ -91,7 +91,7 @@ function boot(): World {
     { handle: vi.fn(), on: vi.fn() } as any, sessionManager, mainWindow, skillProvider,
     undefined as any, undefined, undefined, remote as any, registry as any, undefined as any, runtime, undefined,
   );
-  return { registry, phoneMessages, runtime, remote, outbox: wiring.outboxBroadcast, sentTo: (id) => h.sent.get(id) ?? [] };
+  return { registry, phoneMessages, runtime, remote, sessionManager, outbox: wiring.outboxBroadcast, sentTo: (id) => h.sent.get(id) ?? [] };
 }
 
 const only = (w: World, channel: string) => (id: number) => w.sentTo(id).filter((s) => s.channel === channel);
@@ -192,5 +192,18 @@ describe('the record sees what publish delivered', () => {
     expect(events.map((e: any) => e.type)).toEqual(noted.map((f) => f.channel));
     expect(events.map((e: any) => e.seq)).toEqual(noted.map((_f, i) => i + 1));
     expect(events.at(-1).payload).toEqual(noted.at(-1)!.payload);
+  });
+});
+
+describe('the record keeps a session\'s terminal bytes only while phone access is on (as the phone server\'s own buffer did)', () => {
+  it('a chunk is noted for the phone\'s terminal view while the phone server runs, and not at all when it does not', () => {
+    const w = boot();
+    w.runtime.records.begin('s1');
+    const noter = w.sessionManager.setChunkNoter.mock.calls.at(-1)[0];
+    expect(noter('s1', 'hello')).toBeNull();
+    expect(w.runtime.records.stats().ptyUnits).toBe(0);
+    w.remote.isRunning.mockReturnValue(true);
+    expect(noter('s1', 'hello')).toMatchObject({ offset: 0 });
+    expect(w.runtime.records.stats().ptyUnits).toBe(5);
   });
 });

@@ -875,6 +875,15 @@ function patchNestedAsk(
  *  amber card for a countdown the host never announced, and the next warning
  *  swapped it back. Same shape as `stalledSince`: one rule at one place, not a
  *  `stallWarning: null` line in every 'ok' writer (and the next one forgotten). */
+/**
+ * USER_PROMPT turns the working spinner on at send time. When the message turns out never to have reached the computer, that spinner is cleared, but ONLY
+ * if nothing else is going on in the conversation (no turn in flight, no tool, no compaction): a message sent mid-turn must not stop the running turn's spinner.
+ */
+function spinnerWithNoTurn(session: SessionChatState): Partial<SessionChatState> {
+  const idle = !session.currentTurnId && session.activeTurnToolIds.size === 0 && !session.compactionPending;
+  return idle && session.isThinking ? { isThinking: false } : {};
+}
+
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   let next = chatReducerCases(state, action);
   const id = (action as { sessionId?: string }).sessionId;
@@ -1025,7 +1034,8 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       const timeline = session.timeline.slice();
       const { sendNote: _old, ...rest } = entry;
       timeline[idx] = action.note ? { ...rest, sendNote: action.note } : rest;
-      next.set(action.sessionId, { ...session, timeline });
+      // A message the computer never got starts no turn: the spinner USER_PROMPT put up has nothing behind it (review fix, R5-4b).
+      next.set(action.sessionId, { ...session, timeline, ...(action.note === 'not-sent' ? spinnerWithNoTurn(session) : {}) });
       return next;
     }
 
@@ -1034,7 +1044,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       if (!session) return state;
       const idx = session.timeline.findIndex((e) => e.kind === 'user' && e.pending === true && e.sendId === action.sendId);
       if (idx < 0) return state;
-      next.set(action.sessionId, { ...session, timeline: [...session.timeline.slice(0, idx), ...session.timeline.slice(idx + 1)] });
+      next.set(action.sessionId, { ...session, timeline: [...session.timeline.slice(0, idx), ...session.timeline.slice(idx + 1)], ...spinnerWithNoTurn(session) });
       return next;
     }
 

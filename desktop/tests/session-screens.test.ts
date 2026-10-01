@@ -12,6 +12,8 @@ import { screenTextOf, visibleScreenTextOf } from '../src/shared/terminal-screen
 import { getScreenText, getVisibleScreenText } from '../src/renderer/hooks/terminal-registry';
 import { FixtureTerminal, listPlanFixtures, loadPlanFixture, STARTUP_FIXTURE_DIR, type PlanFixture } from './helpers/plan-menu-fixtures';
 import { makeRig, S, turnStarts, turnEnds } from './helpers/screens-rig';
+import { SessionRecords } from '../src/main/session-record';
+import { SessionScreens } from '../src/main/session-screens';
 
 // ---- The renderer's decision, as it was (useAttentionClassifier's tick, copied from before R5-4b) -------------------------------------------------
 type Att = 'ok' | 'stuck';
@@ -116,37 +118,25 @@ describe('the computer reads a screen exactly as the window does (real captures,
   });
 });
 
-describe('no terminal exists when nothing is running', () => {
-  it('an idle session that prints output (its prompt redrawing, a status line) allocates nothing', async () => {
+describe('every live Claude Code session has one terminal, from its start to its end', () => {
+  it('a session has its terminal from the moment it begins, an idle one costs no work, and its end disposes it', async () => {
     const rig = makeRig({ started: true });
+    expect(rig.screens.terminalCount()).toBe(1);
     for (let i = 0; i < 50; i++) rig.output(`\x1b[2K\x1b[G❯ \x1b[2mstatus ${i}\x1b[22m`);
     await rig.advance(10_000);
+    expect(rig.created()).toBe(1);                                 // never made again, never disposed while the session lives
+    expect(rig.lives().length).toBe(0);                            // and says nothing while nothing is wrong
+    rig.records.drop(S);
     expect(rig.screens.terminalCount()).toBe(0);
-    expect(rig.created()).toBe(0);
   });
 
-  it('a turn creates one, seeded from the record\'s terminal stream (the bytes before it are on screen, none twice), and the end of the turn disposes it', async () => {
+  it('is fed every chunk from the first byte, once each', async () => {
     const rig = makeRig({ started: true });
     rig.output('\x1b[2J\x1b[Hbefore the turn');
-    expect(rig.screens.terminalCount()).toBe(0);
     for (const [type, payload] of turnStarts()) rig.note(type, payload);
-    expect(rig.screens.terminalCount()).toBe(1);
-    await rig.settle();
-    expect(screenTextOf(rig.term()!.buffer.active, 40)).toBe('before the turn');
     rig.output('\r\nduring the turn');
     await rig.settle();
     expect(screenTextOf(rig.term()!.buffer.active, 40)).toBe('before the turn\nduring the turn');
-    for (const [type, payload] of turnEnds()) rig.note(type, payload);
-    await rig.advance(5_000);
-    expect(rig.screens.terminalCount()).toBe(0);
-  });
-
-  it('a chunk that creates the terminal is not fed to it a second time', async () => {
-    const rig = makeRig({ started: true });
-    for (const [type, payload] of turnStarts()) rig.note(type, payload);
-    rig.output('once');
-    await rig.settle();
-    expect(screenTextOf(rig.term()!.buffer.active, 40)).toBe('once');
   });
 
   it('only a Claude Code session is read (a shell or a native session never gets a terminal)', async () => {
@@ -157,12 +147,45 @@ describe('no terminal exists when nothing is running', () => {
     expect(rig.screens.terminalCount()).toBe(0);
   });
 
-  it('keeps 60 rows of history, not 1,000 (the memory the measurement was made at)', async () => {
+  it('keeps only a short scrollback (the check reads 40 rows and the card reader the visible screen)', async () => {
     const rig = makeRig({ started: true });
-    for (const [type, payload] of turnStarts()) rig.note(type, payload);
     rig.output(Array.from({ length: 400 }, (_, i) => `line ${i}`).join('\r\n'));
     await rig.settle();
     expect(rig.term()!.buffer.active.length).toBeLessThanOrEqual(60 + rig.term()!.rows);
+  });
+
+  it('a write that finishes after its terminal was disposed does not disturb the next terminal of the session', () => {
+    // Fake terminals whose write callbacks the test fires by hand, and which count how often the stuck check reads them.
+    const made: Array<{ callbacks: Array<() => void>; reads: number }> = [];
+    const records = new SessionRecords(); records.begin(S);
+    records.note(S, 'hook:event', { type: 'SessionStart', sessionId: S, payload: {} });
+    const timers: Array<() => void> = [];
+    const screens = new SessionScreens({
+      records, live: { attention() {}, showPrompt() {}, dismissPrompt() {} } as any, isClaude: () => true,
+      setTimer: () => ({}), clearTimer: () => {}, setRepeat: (fn) => { timers.push(fn); return {}; }, clearRepeat: () => {},
+      createTerminal: () => {
+        const t = { callbacks: [] as Array<() => void>, reads: 0 }; made.push(t);
+        return {
+          rows: 24, resize() {}, dispose() {}, write: (_d: string, cb?: () => void) => { if (cb) t.callbacks.push(cb); },
+          buffer: { active: { get length() { t.reads++; return 0; }, getLine: () => undefined } },
+        } as any;
+      },
+    });
+    screens.refresh(S);
+    screens.noteOutput(S, 'first');                                 // terminal 1 has a parse in flight
+    screens.forget(S);                                              // the session record is recreated: terminal 1 goes
+    records.drop(S); records.begin(S);
+    records.note(S, 'hook:event', { type: 'SessionStart', sessionId: S, payload: {} });
+    screens.refresh(S);                                             // terminal 2
+    screens.noteOutput(S, 'second');                                // terminal 2 has a parse in flight
+    for (const [type, payload] of turnStarts()) records.note(S, type, payload);   // the check starts, and waits for that parse
+    screens.refresh(S);
+    const readsBefore = made[1].reads;
+    made[0].callbacks.forEach((cb) => cb());                        // terminal 1's late callback lands
+    expect(made[1].reads, 'a stale callback must not start the check early').toBe(readsBefore);
+    made[1].callbacks.forEach((cb) => cb());                        // terminal 2's own parse finishes: now it may
+    expect(made[1].reads).toBeGreaterThan(readsBefore);
+    screens.stop();
   });
 });
 
@@ -208,38 +231,64 @@ describe('with no computer window open, the phone is still told (the dots and th
   });
 });
 
-describe('cards: the computer reads the same menus the window did, from real startup captures', () => {
+describe('cards: the computer reads the same menus the window did, from real captures', () => {
   interface Startup extends PlanFixture { marks: { t: number; label: string; chunkIndex: number }[] }
-  const starts = listPlanFixtures(STARTUP_FIXTURE_DIR).filter((f) => !f.includes('answer-no') && !f.includes('digit-ignored'));
+  const startups = listPlanFixtures(STARTUP_FIXTURE_DIR).filter((f) => !f.includes('answer-no') && !f.includes('digit-ignored'));
+  const plans = listPlanFixtures();
 
-  it.each(starts)('%s: a card goes up for each dialog the window would have drawn one for, with the same buttons, and comes down when the dialog goes', async (file) => {
-    const fx = loadPlanFixture(file, STARTUP_FIXTURE_DIR) as Startup;
+  /** Replay a capture into the computer's terminal (in pieces of `split` bytes, 0 = as captured) and into the window's own, and collect what each decides. */
+  async function replay(dir: string | undefined, file: string, started: boolean, split: number) {
+    const fx = (dir ? loadPlanFixture(file, dir) : loadPlanFixture(file)) as Startup;
     const ref = new FixtureTerminal(fx); open.push(ref);
-    const rig = makeRig({ started: false });         // a session still starting: Claude Code has run no hook yet
+    const rig = makeRig({ started });                       // started:false = Claude Code has run no hook yet; true = an idle, already-started session
     rig.screens.noteResize(S, fx.cols, fx.rows);
     const seen: Array<{ promptId: string; title: string; buttons: any[]; defaultIndex?: number }> = [];
     const expected: typeof seen = [];
     let lastExpectedId = '';
     for (let i = 0; i < fx.chunks.length; i++) {
-      rig.output(decode(fx, i));
+      const text = decode(fx, i);
+      if (split > 0) for (let k = 0; k < text.length; k += split) rig.output(text.slice(k, k + split)); else rig.output(text);
       await ref.advanceTo(i + 1);
       await rig.settle();
       await rig.advance(700);                                   // past the show debounce
       // What the window's own rule decides from the same screen.
       const menu = parseInkSelect(getVisibleScreenText(ref.id) ?? '');
-      const title = menu ? cardTitleFor(menu, true) : null;
+      const title = menu ? cardTitleFor(menu, !started) : null;
       if (menu && title && menu.id !== lastExpectedId) {
         const buttons = menuToButtons(menu);
         expected.push({ promptId: menu.id, title, buttons: buttons.map((b) => ({ label: b.label, input: b.input, ...(b.pick ? { pick: b.pick } : {}) })), ...(buttons.some((b) => b.pick) ? { defaultIndex: menu.selectedIndex } : {}) });
       }
       lastExpectedId = menu ? menu.id : '';
-      for (const l of rig.lives()) if (l.kind === 'prompt-show' && !seen.some((s) => s.promptId === l.promptId)) seen.push({ promptId: l.promptId, title: l.title, buttons: l.buttons.map((b: any) => ({ label: b.label, input: b.input, ...(b.pick ? { pick: b.pick } : {}) })), ...(l.defaultIndex !== undefined ? { defaultIndex: l.defaultIndex } : {}) });
+      for (const l of rig.lives()) if (l.kind === 'prompt-show' && !seen.some((x) => x.promptId === l.promptId)) seen.push({ promptId: l.promptId, title: l.title, buttons: l.buttons.map((b: any) => ({ label: b.label, input: b.input, ...(b.pick ? { pick: b.pick } : {}) })), ...(l.defaultIndex !== undefined ? { defaultIndex: l.defaultIndex } : {}) });
     }
     await rig.advance(2_000);
-    expect(seen).toEqual(expected);
-    // Everything shown has come down by the end (the capture ends at a prompt, or with the dialog still up).
     const stillThere = parseInkSelect(getVisibleScreenText(ref.id) ?? '');
-    expect(rig.records.openPrompts(S).length).toBe(stillThere && cardTitleFor(stillThere, true) ? 1 : 0);
+    return { seen, expected, open: rig.records.openPrompts(S).length, shouldBeOpen: stillThere && cardTitleFor(stillThere, !started) ? 1 : 0 };
+  }
+
+  it.each(startups)('%s: while the session is starting, a card goes up for each dialog the window would have drawn one for, with the same buttons, and comes down when the dialog goes', async (file) => {
+    const r = await replay(STARTUP_FIXTURE_DIR, file, false, 0);
+    expect(r.seen).toEqual(r.expected);
+    expect(r.open).toBe(r.shouldBeOpen);
+  });
+
+  // The review's hole: Claude Code spaces words with cursor moves, so nothing about the bytes "looks like" a dialog. An idle, already-started session must
+  // still get exactly the cards the window's rule gives, however the output is cut into chunks.
+  it.each([0, 8, 40])('every startup capture replayed into an IDLE, ALREADY-STARTED session (chunks cut every %i bytes) gives the cards the window rule gives', async (split) => {
+    let total = 0;
+    for (const file of startups) {
+      const r = await replay(STARTUP_FIXTURE_DIR, file, true, split);
+      expect(r.seen, file).toEqual(r.expected);
+      expect(r.open, file).toBe(r.shouldBeOpen);
+      total += r.expected.length;
+      for (const o of open.splice(0)) o.dispose();
+    }
+    expect(total, 'the window rule must find cards in these captures, or this proves nothing').toBeGreaterThanOrEqual(15);
+  }, 120_000);
+
+  it.each(plans)('%s: replayed into an idle, started session, the same cards as the window rule (a permission menu is no setup card)', async (file) => {
+    const r = await replay(undefined, file, true, 0);
+    expect(r.seen).toEqual(r.expected);
   });
 
   it('a menu a permission ask owns is left alone, and a numbered list in a reply is not a card once the session has started', async () => {
@@ -254,16 +303,14 @@ describe('cards: the computer reads the same menus the window did, from real sta
     expect(rig.records.openPrompts(S)).toEqual([]);                       // "Do you want to proceed?" is not a known setup prompt
   });
 
-  it('a terminal that looks like a dialog while idle is read, a card goes up, and it is let go again once the card is down', async () => {
+  it('a usage-limit dialog in an idle session gets a card, and it comes down with the dialog', async () => {
     const rig = makeRig({ started: true });
     rig.output(USAGE_LIMIT);
-    expect(rig.screens.terminalCount()).toBe(1);                          // the footer was the hint
     await rig.settle();
     await rig.advance(1_000);
     expect(rig.records.openPrompts(S).map((p) => p.title)).toEqual(['Usage Limit Reached']);
     rig.output('\x1b[2J\x1b[H❯ \r\n? for shortcuts');
     await rig.advance(10_000);
     expect(rig.records.openPrompts(S)).toEqual([]);
-    expect(rig.screens.terminalCount()).toBe(0);
   });
 });

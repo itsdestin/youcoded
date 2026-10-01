@@ -489,20 +489,6 @@ export class SessionRecords {
   }
 
   /**
-   * The newest terminal output, at least `minUnits` of it when the stream holds that much (whole chunks, so it never starts inside a chunk's escape
-   * sequence), and the stream position just past it. What the computer's headless copy of the terminal is seeded from (one-core R5-4b).
-   */
-  ptyTail(sessionId: string, minUnits: number): { data: string; end: number } | null {
-    const rec = this.records.get(sessionId);
-    if (!rec) return null;
-    const { pty } = rec;
-    const parts: string[] = [];
-    let got = 0;
-    for (let i = pty.chunks.length - 1; i >= 0 && got < minUnits; i--) { parts.push(pty.chunks[i]); got += pty.chunks[i].length; }
-    return { data: parts.reverse().join(''), end: pty.base + pty.length };
-  }
-
-  /**
    * The computer received a message for this session that carried this id (R5-4b): a native session's host accepted it, or a Claude Code session's
    * terminal write was accepted. Answers a phone that lost the connection mid-send and asks "did you get it?" (sendOutcomes).
    */
