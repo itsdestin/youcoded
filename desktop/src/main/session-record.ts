@@ -24,7 +24,7 @@ import { randomBytes } from 'crypto';
 export const RING_MAX_EVENTS = 2000;
 export const RING_MAX_BYTES = 2 * 1024 * 1024;
 /** A session cannot hold more open asks than this (a runaway producer must not grow it without bound). */
-export const OPEN_ASKS_MAX = 200;
+const OPEN_ASKS_MAX = 200;
 /** Recently seen event uuids, so a replayed event does not start a turn twice (the renderer's seenUuids). */
 const SEEN_UUIDS_MAX = 512;
 /** Ids of sessions that ended, so a late event cannot resurrect a dead session's record. */

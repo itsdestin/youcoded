@@ -13,7 +13,7 @@ import type { SessionRecords, SessionSummary } from './session-record';
 
 export const SESSION_SUMMARY_CHANNEL = 'session:summary';
 
-export interface SessionSummaryPayload { summaries: Record<string, SessionSummary> }
+interface SessionSummaryPayload { summaries: Record<string, SessionSummary> }
 
 export interface SessionSummaryPushOptions {
   records: Pick<SessionRecords, 'summaries'>;

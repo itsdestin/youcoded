@@ -26,7 +26,7 @@ export interface PublishDeps {
   socketsFor?(sessionId: string): number[] | undefined;
 }
 
-export interface PublishOptions {
+interface PublishOptions {
   /**
    * What the WINDOWS receive after the channel name, when it differs from the phones' payload. Default: the
    * payload itself. Only session:meta-changed needs it (windows get `(sessionId, change)`, phones get

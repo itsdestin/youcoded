@@ -88,7 +88,7 @@ const nativeScript = (): Step[] => [
   { label: 'tool starts', t: ev('tool-use', { toolUseId: 'tool-1', toolName: 'Bash', toolInput: { command: 'ls' } }, at(1009)) },
   { label: 'ask raised', hook: hook('PermissionRequest', 'native-r1', { tool_name: 'Bash', tool_input: { command: 'ls' } }) },
   { label: 'ask answered', hook: hook('PermissionResolved', 'native-r1') },
-  { label: 'tool result', t: ev('tool-result', { toolUseId: 'tool-1', toolResult: 'ok' }, at(1010)) },
+  { label: 'tool result', t: ev('tool-result', { toolUseId: 'tool-1', toolResult: 'ok', isError: false }, at(1010)) },
   { label: 'second ask raised', hook: hook('PermissionRequest', 'native-r2', { tool_name: 'Bash', tool_input: { command: 'rm x' } }) },
   { label: 'second ask times out', hook: hook('PermissionExpired', 'native-r2', { _reason: 'app-timeout' }) },
   { label: 'third ask raised', hook: hook('PermissionRequest', 'native-r3', { tool_name: 'Write', tool_input: { path: 'a' } }) },
