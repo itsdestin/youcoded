@@ -20,7 +20,7 @@ const plain = (v: unknown) => JSON.parse(JSON.stringify(v ?? null));
 
 
 describe('eventToAction reproduces the old main-window switch', () => {
-  it('the window still applies exactly the same four actions directly (R4-3 owns changing that)', () => {
+  it('the main window still applies exactly the same four actions directly instead of batching them', () => {
     expect([...DIRECT_DISPATCH_TYPES].sort()).toEqual(
       ['CLEAR_TIMELINE', 'COMPACTION_COMPLETE', 'NATIVE_HISTORY_REWRITTEN', 'TRANSCRIPT_SKILL_INVOKED']);
   });
