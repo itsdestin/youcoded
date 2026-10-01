@@ -1,5 +1,5 @@
 {
- "ccVersion": "2.1.285",
+ "ccVersion": "2.1.286",
  "titles": [
   "(git diff HEAD)",
   "(no commits yet)",
@@ -82,10 +82,10 @@
   "GitHub CLI not found",
   "Google Vertex AI",
   "Held message from another session",
+  "Hook events",
   "How do you authenticate to AWS?",
   "How do you authenticate to Google Cloud?",
   "How should the plan be implemented?",
-  "Import MCP Servers from Claude Desktop",
   "Import to Claude Code",
   "Install GitHub App",
   "Invalid GitHub URL format",
@@ -186,6 +186,7 @@
   "You already have auto-mode entries — add to them, or start fresh?",
   "You can also configure this in /config",
   "You've spent $5 on the Anthropic API this session.",
+  "You’re resuming {an} {older} session. Continue with {newer}?",
   "setup draw",
   "the file ran to its end",
   "then drafting a proposal — this can take a moment (Esc to cancel)"

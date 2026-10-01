@@ -140,7 +140,11 @@ async function main() {
   const scoreDir = fs.mkdtempSync(path.join(os.tmpdir(), 'popup-drift-ok-'));
   for (const r of results) if (!r.error) fs.copyFileSync(path.join(outDir, `${r.name}.json`), path.join(scoreDir, `${r.name}.json`));
   const benchReport = path.join(outDir, 'bench-report.txt');
-  const bench = runVitest(['tests/popup-detector-bench.test.ts'], { POPUP_CORPUS_DIR: scoreDir, POPUP_BENCH_REPORT: benchReport });
+  // Nothing captured cleanly → nothing to score; that is the capture finding
+  // above, not proof the app is wrong.
+  const nothingToScore = fs.readdirSync(scoreDir).length === 0;
+  const bench = nothingToScore ? { ok: true, out: '' }
+    : runVitest(['tests/popup-detector-bench.test.ts'], { POPUP_CORPUS_DIR: scoreDir, POPUP_BENCH_REPORT: benchReport });
   say('');
   say(bench.ok ? 'The app\'s pop-up detector calls every moment of every fresh capture correctly.'
     : 'The app\'s pop-up detector gets fresh captures WRONG:');
@@ -152,7 +156,8 @@ async function main() {
     for (const l of (block ? block.split('\n') : shipped).slice(0, 40)) say(`    ${l}`);
     say('    (a MISSED pop-up swallows chat sends; a FALSE alarm refuses sends for nothing)');
   }
-  const replay = runVitest(['tests/popup-corpus-replay.test.tsx'], { POPUP_CORPUS_DIR: scoreDir });
+  const replay = nothingToScore ? { ok: true, out: '' } : runVitest(['tests/popup-corpus-replay.test.tsx'], { POPUP_CORPUS_DIR: scoreDir });
+  if (nothingToScore) say('(No capture succeeded, so nothing was scored.)');
   say(replay.ok ? 'Cards: none beside a permission card, none without a pop-up, every card dismissed.'
     : 'Cards misbehave on the fresh captures:');
   if (!replay.ok) for (const l of replay.out.split('\n').filter((x) => /^\s+\+\s+"|×/.test(x)).slice(0, 30)) say(`    ${l.trim()}`);
@@ -179,11 +184,20 @@ async function main() {
     say(`Saved ${results.length - failed.length} fresh captures to tests/fixtures/popup-corpus/ and the title inventory.`);
   }
 
-  const bad = failed.length || !bench.ok || !replay.ok;
+  // Two different findings, worded apart so the report never overstates:
+  // the app's detector or cards got a fresh screen WRONG (users affected), or a
+  // scenario no longer reached its screen (Claude Code reworded/reshaped it —
+  // that situation went untested until the scenario is updated).
+  const appWrong = !bench.ok || !replay.ok;
+  const bad = failed.length || appWrong;
   say('');
-  say(bad
-    ? `ATTENTION: Claude Code ${ccVersion} changed something the app's pop-up handling depends on — see above. Until fixed, users may have sends refused for nothing, or swallowed by a pop-up.`
-    : `No change the app's pop-up handling depends on (Claude Code ${ccVersion}).`);
+  if (appWrong) {
+    say(`ATTENTION: on Claude Code ${ccVersion} the app's pop-up handling gets fresh screens wrong — see above. Until fixed, users may have sends refused for nothing, or swallowed by a pop-up.`);
+  }
+  if (failed.length) {
+    say(`ATTENTION: ${failed.length} scenario(s) no longer reach their expected screen on Claude Code ${ccVersion} — it changed those screens. ${appWrong ? '' : 'The app handled every screen it was shown, but '}those situations went untested: update the scenario's waitFor in test-conpty/popup-scenarios.mjs, then re-run.`);
+  }
+  if (!bad) say(`No change the app's pop-up handling depends on (Claude Code ${ccVersion}).`);
   if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, '```\n' + lines.join('\n') + '\n```\n');
 
   await removeTempTree(outDir);

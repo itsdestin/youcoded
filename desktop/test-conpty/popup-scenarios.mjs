@@ -387,7 +387,7 @@ const BASE = [
   { name: 'slash-config', description: '/config settings panel (search box, tabs); first Esc clears the search, second closes', steps: slash('config', 'Search settings', { close: [ESC, ESC] }) },
   { name: 'slash-model', description: '/model picker', steps: slash('model', 'Select model') },
   { name: 'slash-permissions', description: '/permissions (tabs + search)', steps: slash('permissions', 'Recently denied') },
-  { name: 'slash-hooks', description: '/hooks (long scrolling list)', steps: slash('hooks', 'hooks configured') },
+  { name: 'slash-hooks', description: '/hooks (a list; reworded in 2.1.286, so anchored on its read-only notice)', steps: slash('hooks', 'This menu is read-only') },
   { name: 'slash-resume', description: '/resume (search, wrapped footer)', steps: slash('resume', 'Resume session') },
   { name: 'slash-add-dir', description: '/add-dir (a text-entry pop-up)', steps: slash('add-dir', 'Add directory to workspace') },
   { name: 'slash-export', description: '/export (short menu, "Esc to cancel" only)', steps: slash('export', 'Export conversation') },
