@@ -6,7 +6,7 @@ import { SpecialistActions } from './specialists/SpecialistActions';
 import { RunStatusLine } from './specialists/RunStatusLine';
 import { AgentSections } from './tool-views/ToolBody';
 import { friendlyToolDisplay } from './ToolCard';
-import { Dialog, SectionLabel, Tooltip } from './ui';
+import { Callout, Dialog, SectionLabel, Tooltip } from './ui';
 import BrailleSpinner from './BrailleSpinner';
 import { CheckIcon, FailIcon, QuestionIcon, StoppedIcon } from './Icons';
 import { useScreenOpen } from '../shoot-mode';
@@ -144,16 +144,47 @@ function StatusPill({ h }: { h: HelperView }) {
   return <span className={`${base} border-edge text-fg-muted`}><CheckIcon className="w-3 h-3" />Finished</span>;
 }
 
+// TRIAL: which placement the deck shows.
+const ASK_AT = 'foot' as 'foot' | 'top';
+
 function HelperCard({ h, sessionId, onJump }: { h: HelperView; sessionId?: string; onJump: () => void }) {
   const { run, tool } = h;
   const first = run.title.split(' ')[0];
   const done = h.group === 'finished';
   const jump = () => { jumpToCard(h.parentToolCallId); onJump(); };
-  const attention = h.group === 'needs-you';
+  // WHAT IT NEEDS — each ask is the shared slim notice box (Callout compact, the look
+  // approved for Cloud provider cards, provider-notices-2): request and buttons on one
+  // line (round 6), inset INSIDE the card rather than a tinted strip welded to its edge.
+  const asks = h.asks.map(seg => {
+    const { label } = friendlyToolDisplay(segToTool(seg));
+    const subject = askSubject(seg.input);
+    return (
+      <Callout key={seg.requestId ?? seg.passwordAsk?.requestId} tone="warning" compact>
+        <div data-testid="helper-card-ask">
+          <SpecialistAskBlock
+            segment={seg}
+            sessionId={sessionId}
+            specialistName={first}
+            compact
+            leading={
+              <div className="text-xs leading-snug">
+                <span className="font-medium text-fg">{first} wants to: </span>
+                <span className="text-fg-2">{label}</span>
+                {subject && subject !== label && <div className="text-2xs font-mono text-fg-dim break-all">{subject}</div>}
+              </div>
+            }
+          />
+        </div>
+      </Callout>
+    );
+  });
 
   return (
     <div
-      className={`rounded-lg border ${attention ? 'border-amber-700/40' : 'border-edge'} bg-inset/50 overflow-hidden ${done ? 'opacity-80' : ''}`}
+      // WHY no amber outline (specialist-ask, 2026-10-01; Destin, LB-6: the ask "looks
+      // janky"): the card keeps the normal edge in every state. "Needs you" is said by
+      // the status pill and by the notice box below, not by repainting the whole card.
+      className={`rounded-lg border border-edge bg-inset/50 overflow-hidden ${done ? 'opacity-80' : ''}`}
       data-testid={`helper-card-${run.childId}`}
     >
       {/* ── WHO / WHAT / HOW FAR ─────────────────────────────────────────── */}
@@ -186,8 +217,9 @@ function HelperCard({ h, sessionId, onJump }: { h: HelperView; sessionId?: strin
               pill instead. Offering dead buttons is worse than offering none. */}
           {run.status === 'running' && sessionId && h.kind === 'native'
             ? <div className="shrink-0"><SpecialistActions sessionId={sessionId} run={run} compact /></div>
-            : !attention && <StatusPill h={h} />}
+            : <StatusPill h={h} />}
         </div>
+        {ASK_AT === 'top' && asks}
         {run.description && <div className="text-xs text-fg-2">{run.description}</div>}
         <RunStatusLine run={run} report={tool.specialistReport} elapsedUnknown={h.elapsedUnknown} />
         {/* The chat card's own Briefing / Activity / Report sections, verbatim
@@ -196,29 +228,7 @@ function HelperCard({ h, sessionId, onJump }: { h: HelperView; sessionId?: strin
         <AgentSections tool={tool} sessionId={sessionId} suppressAsk accordion />
       </div>
 
-      {/* ── WHAT IT NEEDS — the bottom of the card, request and buttons on
-             one line (Destin, round 6). */}
-      {h.asks.map(seg => {
-        const { label } = friendlyToolDisplay(segToTool(seg));
-        const subject = askSubject(seg.input);
-        return (
-          <div key={seg.requestId ?? seg.passwordAsk?.requestId} className="border-t border-amber-700/30 bg-amber-700/[0.06] px-3 py-2" data-testid="helper-card-ask">
-            <SpecialistAskBlock
-              segment={seg}
-              sessionId={sessionId}
-              specialistName={first}
-              compact
-              leading={
-                <div className="text-xs leading-snug">
-                  <span className="font-medium text-fg">{first} wants to: </span>
-                  <span className="text-fg-2">{label}</span>
-                  {subject && subject !== label && <div className="text-2xs font-mono text-fg-dim break-all">{subject}</div>}
-                </div>
-              }
-            />
-          </div>
-        );
-      })}
+      {ASK_AT === 'foot' && asks.length > 0 && <div className="px-3 pb-3 space-y-2">{asks}</div>}
     </div>
   );
 }
