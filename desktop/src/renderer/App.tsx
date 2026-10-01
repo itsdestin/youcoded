@@ -42,6 +42,7 @@ import { createArtifactToolUseTracker } from './state/artifact-tool-use-tracker'
 import { createDeliverableAutoOpen } from './state/deliverable-auto-open';
 import { openFilepath } from './hooks/useOpenFilepath';
 import { useOnRemoteReconnect } from './hooks/useOnRemoteReconnect';
+import { useSendReconcile } from './hooks/useSendReconcile';
 import { REMOTE_REFRESH_EVENT } from './remote-events';
 import { useSessionDefaults } from './hooks/useSessionDefaults';
 import { showFirstRunWelcome } from './first-run-screen';
@@ -1763,6 +1764,7 @@ function AppInner() {
     void Promise.all(ids.map((id: string) => firstPages.refill(id, { fresh }))).then(reportFillRound);
   }, [firstPages, reportFillRound, remoteWatch]);
   useOnRemoteReconnect(() => fillAgain(false));
+  useSendReconcile(); // what became of a message sent as the connection dropped (one-core R5-4b)
   // The computer says this window's fill of a conversation never completed (its hold expired): fill it again from a fresh page.
   useEffect(() => (window.claude.session as any).onRefill?.((sid: string) => { void firstPages.refill(sid, { fresh: true }); }), [firstPages]);
   useEffect(() => {

@@ -898,7 +898,8 @@ describe('InputBar — voice prompting (T9)', () => {
     // (The Claude Code path writes the text on a timer, so wait for it.)
     expect(sendInput).toHaveBeenCalledWith('sess-1', '\x1b');
     await waitFor(() => {
-      expect(sendInput).toHaveBeenCalledWith('sess-1', expect.stringContaining('push it through'));
+      // The message's write carries the send's id, so a phone that loses the connection right after can ask whether it arrived.
+      expect(sendInput).toHaveBeenCalledWith('sess-1', expect.stringContaining('push it through'), undefined, expect.stringMatching(/^s[a-z0-9]+-[0-9a-f]{12}-[a-z0-9]+$/));
     });
     expect(voiceBridge.stop).not.toHaveBeenCalled();
   });

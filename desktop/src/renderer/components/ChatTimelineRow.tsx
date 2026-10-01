@@ -34,6 +34,7 @@ import CopyPicker from './CopyPicker';
 import { TimelineEntryHint } from './TimelineEntryHint';
 import { archivedTooltip } from '../state/archive-boundary';
 import type { PromptAnswerResult } from '../state/prompt-input';
+import { sendAgain } from '../state/submit-outgoing';
 
 /** What a row may call back into ChatView. Read through a ref at call time so
  *  a row that skipped rendering never holds a stale handler. */
@@ -83,7 +84,18 @@ function renderContent(p: Props): React.ReactNode {
           showTimestamps={showTimestamps}
         />
       ) : (
-        <UserMessage message={entry.message} sessionId={sessionId} showTimestamps={showTimestamps} />
+        <UserMessage
+          message={entry.message}
+          sessionId={sessionId}
+          showTimestamps={showTimestamps}
+          // A note only while the computer's record leaves a doubt about this message (one-core R5-4b). The handler is built only then, so an
+          // ordinary row keeps the memoised bubble's props identical across renders.
+          sendNote={entry.sendNote}
+          onSendAgain={entry.sendNote && entry.sendId ? (() => {
+            const act = p.actionsRef.current;
+            if (act) sendAgain({ sessionId, sendId: entry.sendId!, provider: p.provider === 'shell' ? undefined : p.provider, content: entry.message.content, attachments: entry.message.attachments, dispatch: act.dispatch });
+          }) : undefined}
+        />
       );
     case 'assistant-turn':
       // ChatView only builds this row after shouldRenderAssistantTurn(turn).

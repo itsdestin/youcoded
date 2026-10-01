@@ -12,11 +12,19 @@ import { FilepathToken } from './FilepathToken';
 import { splitComposeRefs, jumpToRef, type ComposeRef } from './context-menu/compose-ref';
 import { useOpenFilepath } from '../hooks/useOpenFilepath';
 import { TokenPill } from './comments/TokenPill';
+import { Button } from './ui';
 
 interface Props {
   message: ChatMessage;
   sessionId: string;
   showTimestamps: boolean;
+  /**
+   * What the computer's record leaves in doubt about this message (one-core R5-4b): `unsure` (it could not tell) or `not-sent` (it shows the computer
+   * never got it). Drawn under the bubble with a "Send again" button; absent once the message is confirmed.
+   */
+  sendNote?: 'unsure' | 'not-sent';
+  /** "Send again": the person's own decision, never automatic (a duplicate is worse than a wait). */
+  onSendAgain?: () => void;
 }
 
 // Render a plain-text run with the existing treatment: flowing-keyword spans +
@@ -31,7 +39,7 @@ function renderTextRun(text: string, keyPrefix: string): React.ReactNode[] {
   );
 }
 
-export default React.memo(function UserMessage({ message, sessionId, showTimestamps }: Props) {
+export default React.memo(function UserMessage({ message, sessionId, showTimestamps, sendNote, onSendAgain }: Props) {
   // A chip click opens its file when it isn't already open, then jumps to
   // the source text (compose-ref.ts "Chip ↔ source text").
   const openFile = useOpenFilepath(sessionId);
@@ -90,15 +98,27 @@ export default React.memo(function UserMessage({ message, sessionId, showTimesta
     else body.push(...renderProseSegment(seg.value, `s${i}-`));
   }
 
+  const bubble = (
+    <div className="user-bubble max-w-[80%] break-words rounded-2xl rounded-br-sm bg-accent px-5 py-3 text-sm text-on-accent whitespace-pre-wrap">
+      {body}
+      {showTimestamps && (
+        <div className="bubble-timestamp text-4xs text-on-accent/50 text-right mt-1 -mb-0.5 select-none leading-none">
+          {formatBubbleTime(message.timestamp)}
+        </div>
+      )}
+    </div>
+  );
+  if (!sendNote) return <div className="flex justify-end px-4 py-2">{bubble}</div>;
+
+  // The wording says what is KNOWN and how (error-message-standards.md): "not-sent" is the computer's record showing it never arrived; "unsure" is
+  // the record unable to tell (it restarted, or the question could not be asked), so it claims nothing about a cause.
+  const noteText = sendNote === 'not-sent' ? "This didn't send — your computer never received it." : 'Not sure this was sent.';
   return (
-    <div className="flex justify-end px-4 py-2">
-      <div className="user-bubble max-w-[80%] break-words rounded-2xl rounded-br-sm bg-accent px-5 py-3 text-sm text-on-accent whitespace-pre-wrap">
-        {body}
-        {showTimestamps && (
-          <div className="bubble-timestamp text-4xs text-on-accent/50 text-right mt-1 -mb-0.5 select-none leading-none">
-            {formatBubbleTime(message.timestamp)}
-          </div>
-        )}
+    <div className="px-4 py-2">
+      <div className="flex justify-end">{bubble}</div>
+      <div className="mt-1 flex items-center justify-end gap-2 text-xs text-fg-dim select-text" role="status" data-send-note={sendNote}>
+        <span>{noteText}</span>
+        {onSendAgain && <Button variant="ghost" size="sm" onClick={onSendAgain}>Send again</Button>}
       </div>
     </div>
   );
