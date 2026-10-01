@@ -83,14 +83,13 @@ function homeAssistantPageHtml(): string {
   /* ── Round 4: folding lights, Edit mode, Everything off ─────────────── */
   .bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
   .confirm { display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 12px; border-radius: 9999px; border: 1px solid var(--edge); background: var(--inset); font-size: 13px; }
-  /* A room's lights: one card whose header IS the All row, and each light
-     indented beneath it while open, on a guide line (round 4 review, S-fold:
-     "the groups don't nest properly" — All and the lights looked like
-     equals side by side, so the lights did not read as belonging to it). */
+  /* A room's lights: one card whose header IS the All row, with each light
+     as a card inside it, evenly inset on every side (round 4 reviews, S-fold
+     then S-nest: "all of the cards just need to be sub-containers of the
+     grouped/expandable card. centered properly" — no indent, no guide line). */
   .lights { position: relative; overflow: hidden; display: flex; flex-direction: column; border-radius: var(--radius-md, 8px); border: 1px solid var(--edge-dim); background: var(--inset); }
   .lights > .tile.all { border: 0; border-radius: 0; background: transparent; }
-  .lights-body { position: relative; display: flex; flex-direction: column; gap: 8px; padding: 10px 10px 10px 26px; border-top: 1px solid var(--edge-dim); }
-  .lights-body::before { content: ''; position: absolute; left: 13px; top: 12px; bottom: 12px; width: 2px; border-radius: 2px; background: var(--edge); }
+  .lights-body { display: flex; flex-direction: column; gap: 8px; padding: 0 8px 8px; }
   .lights-body > .tile { background: var(--well); }
   .tile.all .line { gap: 8px; }
   .bulb-col { display: flex; flex-direction: column; align-items: center; gap: 2px; flex-shrink: 0; }
