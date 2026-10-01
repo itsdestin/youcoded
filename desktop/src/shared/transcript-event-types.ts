@@ -394,5 +394,9 @@ export type LooseTranscriptData = Partial<UnionToIntersection<TranscriptDataMap[
 
 /** Upcast a typed payload to the loose view. No cast: each member is a subtype. */
 export function looseData(event: Pick<TranscriptEvent, 'data'>): LooseTranscriptData {
-  return event.data;
+  // WHY `?? {}`: the type says `data` is always there, but this is the view readers use on
+  // UNTRUSTED disk/wire lines, which can carry a type and uuid and no `data` at all. The
+  // readers used `event.data?.x` before the union, so a missing `data` must read as "no
+  // fields", never throw (a throw here fails a whole session resume). Callers only read.
+  return event.data ?? {};
 }
