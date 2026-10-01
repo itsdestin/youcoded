@@ -1,4 +1,5 @@
-// Downloads the pinned Office add-on (itsdestin/youcoded-office, AGPL) into office-addon/.
+// Downloads the pinned Office add-on (itsdestin/youcoded-office, AGPL) into office-addon/ (dev),
+// or, with --release, every arch pinned for this OS into office-build/<platform>-<arch>/.
 // WHY at build and dev time, not first use: contract R2 — Office ships INSIDE the installer.
 // WHY a separate program in a separate folder: the MIT app and the AGPL editors stay apart (R2).
 import { createHash } from 'node:crypto';
@@ -12,10 +13,28 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DESKTOP = path.resolve(here, '..');
 const DEST = path.join(DESKTOP, 'office-addon');
+// WHY a second folder for release builds (Task 9): one build machine can make installers for
+// more than one platform — the Mac runner cuts both the Intel and the Apple-silicon dmg — and
+// each must carry its own converter. electron-builder.yml takes each installer's add-on from
+// office-build/${platform}-${arch}; office-addon/ stays the dev copy for this machine.
+const RELEASE_DIR = path.join(DESKTOP, 'office-build');
 
+// WHY Node's own platform and arch names (darwin, win32, x64, arm64): they are exactly what
+// electron-builder's ${platform} and ${arch} expand to, so the pin's keys, the add-on's
+// tarball names and the installer's resource folder all spell a platform the same way.
 export function platformKey(platform = process.platform, arch = process.arch) {
-  const p = { linux: 'linux', darwin: 'mac', win32: 'win' }[platform];
-  return p ? `${p}-${arch}` : null;
+  return ['linux', 'darwin', 'win32'].includes(platform) ? `${platform}-${arch}` : null;
+}
+
+/** Where a release build puts `key`'s add-on (what electron-builder.yml's extraResources reads). */
+export function releaseDest(key, root = RELEASE_DIR) {
+  return path.join(root, key);
+}
+
+/** The pinned platforms a release build on `platform` installs: every arch pinned for this OS.
+ *  WHY not just this machine's arch: see RELEASE_DIR. */
+export function releaseKeys(pin, platform = process.platform) {
+  return Object.keys(pin.platforms).filter((k) => k.startsWith(`${platform}-`)).sort();
 }
 
 export function planFetch(pin, manifest, key) {
@@ -26,16 +45,18 @@ export function planFetch(pin, manifest, key) {
 }
 
 // WHY a pure function deciding exit codes, not inline process.exit() calls: 'ok' is always 0.
-// 'unsupported' and 'network-failed' are the two failure modes an OFFLINE DEVELOPER hits
-// (no bundle for this platform yet, or fetch/HTTP failure) — gated by --required, because
-// `dev:main` (no flag) must still start the app with Office reporting itself unavailable,
-// while `build --required` (contract R2: Office ships INSIDE the installer) must fail loudly
-// rather than silently ship without it. A checksum mismatch or extraction failure is neither:
-// it means the download or the tarball itself is corrupt/tampered, which is a bug regardless
-// of network state, so main() throws for those and the top-level catch always exits 1 —
-// exitCodeFor is never consulted for them.
+// 'unsupported' (no bundle is pinned for this platform) is always 0 too (Task 9): euro-office-lite
+// publishes no converter for some platforms (ARM Linux), and those builds must still succeed —
+// they ship without Office, and the app then opens Office files with the computer's default app.
+// 'network-failed' is gated by --required: `dev:main` (no flag) must still start the app offline
+// with Office reporting itself unavailable, while `build --required` (contract R2: Office ships
+// INSIDE the installer of every platform that has a bundle) must fail loudly rather than silently
+// ship without it. A checksum mismatch or extraction failure is neither: it means the download
+// or the tarball itself is corrupt/tampered, which is a bug regardless of network state, so
+// install() throws for those and the top-level catch always exits 1 — exitCodeFor is never
+// consulted for them.
 export function exitCodeFor(status, required) {
-  if (status === 'ok') return 0;
+  if (status === 'ok' || status === 'unsupported') return 0;
   return required ? 1 : 0;
 }
 
@@ -108,17 +129,18 @@ export async function stageAndReplace({ dest, pin, extract }) {
   }
 }
 
-async function main(required) {
-  const pin = JSON.parse(await readFile(path.join(DESKTOP, 'office-pin.json'), 'utf8'));
-  const manifest = await readFile(path.join(DEST, 'manifest.json'), 'utf8').then(JSON.parse, () => null);
-  const plan = planFetch(pin, manifest, platformKey());
+// Installs `key`'s pinned bundle into `dest` (skipping it when the right version is there).
+async function install(pin, key, dest) {
+  const manifest = await readFile(path.join(dest, 'manifest.json'), 'utf8').then(JSON.parse, () => null);
+  const plan = planFetch(pin, manifest, key);
+  const where = path.relative(DESKTOP, dest);
 
   if (plan.action === 'skip') {
-    console.log(`office add-on ${pin.version} present`);
+    console.log(`office add-on ${pin.version} (${key}) present in ${where}/`);
     return 'ok';
   }
   if (plan.action === 'unsupported') {
-    console.log(`office add-on: no bundle for ${platformKey()} yet — Office will say it is not available`);
+    console.log(`office add-on: no bundle for ${key} — Office will say it is not available`);
     return 'unsupported';
   }
 
@@ -132,33 +154,56 @@ async function main(required) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     buf = Buffer.from(await res.arrayBuffer());
   } catch (e) {
-    console.log(`office add-on: download failed (${e.message}) — Office will say it is not available`);
+    console.log(`office add-on: download of ${key} failed (${e.message}) — Office will say it is not available`);
     return 'network-failed';
   }
 
   const got = createHash('sha256').update(buf).digest('hex');
-  if (got !== plan.sha256) throw new Error(`office add-on checksum mismatch: expected ${plan.sha256}, got ${got}`);
+  if (got !== plan.sha256) throw new Error(`office add-on ${key} checksum mismatch: expected ${plan.sha256}, got ${got}`);
 
-  const tgz = path.join(os.tmpdir(), `youcoded-office-${pin.version}.tar.gz`);
+  // WHY the key in the temp name: a release build fetches two bundles one after the other.
+  const tgz = path.join(os.tmpdir(), `youcoded-office-${pin.version}-${key}-${process.pid}.tar.gz`);
   await writeFile(tgz, buf);
   try {
+    await mkdir(path.dirname(dest), { recursive: true });
     await stageAndReplace({
-      dest: DEST,
+      dest,
       pin,
       extract: (stagingDir) => promisify(execFile)('tar', ['-xzf', tgz, '-C', stagingDir]),
     });
   } finally {
     await rm(tgz, { force: true });
   }
-  console.log(`office add-on ${pin.version} installed in office-addon/`);
+  console.log(`office add-on ${pin.version} (${key}) installed in ${where}/`);
   return 'ok';
+}
+
+async function main({ required, release }) {
+  const pin = JSON.parse(await readFile(path.join(DESKTOP, 'office-pin.json'), 'utf8'));
+  if (!release) return install(pin, platformKey(), DEST);
+  const keys = releaseKeys(pin);
+  if (keys.length === 0) {
+    console.log(`office add-on: no bundle pinned for ${process.platform} — this build ships without Office`);
+    return 'unsupported';
+  }
+  // WHY one at a time, worst status wins: a release must not ship one arch with Office and
+  // quietly drop it from the other.
+  let status = 'ok';
+  for (const key of keys) {
+    const s = await install(pin, key, releaseDest(key));
+    if (s !== 'ok') status = s;
+  }
+  return status;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   // WHY --required only on `build`: contract R2 says a release must never silently ship
   // without Office; `dev:main` omits it so starting the app offline still works.
+  // WHY --release on `build`: it fills office-build/<platform>-<arch>/ for every arch pinned
+  // for this OS (the installers' copies) instead of this machine's office-addon/ dev copy.
   const required = process.argv.includes('--required');
-  main(required)
+  const release = process.argv.includes('--release');
+  main({ required, release })
     .then((status) => process.exit(exitCodeFor(status, required)))
     .catch((e) => { console.error(e.message); process.exit(1); });
 }

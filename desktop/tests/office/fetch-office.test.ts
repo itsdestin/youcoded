@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { exitCodeFor, planFetch, stageAndReplace, sweepStaleStaging } from '../../scripts/fetch-office.mjs';
+import { parse as parseYaml } from 'yaml';
+import { exitCodeFor, planFetch, platformKey, releaseDest, releaseKeys, stageAndReplace, sweepStaleStaging } from '../../scripts/fetch-office.mjs';
+import realPin from '../../office-pin.json';
+import pkg from '../../package.json';
+import { readSource } from '../helpers/guard-scope';
 
 // Pins the fetch-vs-skip decision fetch-office.mjs makes at dev/build time, without touching
 // the network: office comes down as a real tar.gz (~104MB) that a unit test should never fetch.
@@ -40,11 +44,33 @@ describe('planFetch', () => {
   });
 
   it('reports unsupported for a platform key with no pinned bundle', () => {
-    expect(planFetch(pin, null, 'win-x64')).toEqual({ action: 'unsupported' });
+    expect(planFetch(pin, null, 'linux-arm64')).toEqual({ action: 'unsupported' });
   });
 
   it('reports unsupported when there is no platform key at all', () => {
     expect(planFetch(pin, null, null)).toEqual({ action: 'unsupported' });
+  });
+});
+
+// Task 9: keys use Node's own platform/arch names, which is what electron-builder's ${platform}
+// and ${arch} expand to — so the pin, the add-on's tarballs and the installer agree.
+describe('platformKey', () => {
+  it("names each platform the way Node and electron-builder do", () => {
+    expect(platformKey('linux', 'x64')).toBe('linux-x64');
+    expect(platformKey('darwin', 'arm64')).toBe('darwin-arm64');
+    expect(platformKey('win32', 'x64')).toBe('win32-x64');
+    expect(platformKey('freebsd', 'x64')).toBeNull();
+  });
+});
+
+describe('releaseKeys', () => {
+  const many = { version: '0.1.0', platforms: { 'darwin-x64': {}, 'darwin-arm64': {}, 'linux-x64': {}, 'win32-x64': {} } };
+  it('takes every arch pinned for the build OS, since one Mac build cuts both dmgs', () => {
+    expect(releaseKeys(many, 'darwin')).toEqual(['darwin-arm64', 'darwin-x64']);
+    expect(releaseKeys(many, 'win32')).toEqual(['win32-x64']);
+  });
+  it('takes nothing for an OS with no pinned bundle', () => {
+    expect(releaseKeys(many, 'freebsd')).toEqual([]);
   });
 });
 
@@ -56,9 +82,11 @@ describe('exitCodeFor', () => {
     expect(exitCodeFor('ok', true)).toBe(0);
   });
 
-  it('lets an unsupported platform pass without --required, but fails with it', () => {
+  // Task 9: a platform with no bundle at all (ARM Linux — upstream ships no converter for it)
+  // must still build; it ships without Office, so even a release build passes.
+  it('lets an unsupported platform pass, even with --required', () => {
     expect(exitCodeFor('unsupported', false)).toBe(0);
-    expect(exitCodeFor('unsupported', true)).toBe(1);
+    expect(exitCodeFor('unsupported', true)).toBe(0);
   });
 
   it('lets a network failure pass without --required, but fails with it', () => {
@@ -209,3 +237,56 @@ describe('sweepStaleStaging', () => {
 async function readdirOrEmpty(dir: string): Promise<string[]> {
   return readdir(dir).catch(() => []);
 }
+
+// WHY (release build): three things must agree for an installer to carry Office —
+// office-pin.json's platform keys, the folder `npm run build` fetches each one into
+// (fetch-office.mjs --release), and the folder electron-builder.yml packs for each
+// platform/arch. None of them imports the others, so a rename in one ships an installer with
+// no Office and every build still green. Each test reads the REAL files.
+const DESKTOP = path.join(__dirname, '..', '..');
+const CONFIG: Record<string, any> = parseYaml(readSource(path.join(DESKTOP, 'electron-builder.yml')));
+const office = (CONFIG.extraResources as { from: string; to: string }[]).find((r) => r.to === 'office')!;
+// The installers the release workflows build: Windows x64, both Mac arches, Linux x64.
+const SHIPPED = ['darwin-arm64', 'darwin-x64', 'linux-x64', 'win32-x64'];
+
+describe('the release build finds every platform\'s Office bundle', () => {
+  it('pins a bundle for every installer the release builds', () => {
+    expect(Object.keys(realPin.platforms).sort()).toEqual(SHIPPED);
+  });
+
+  it.each(Object.entries(realPin.platforms))('%s points at that platform\'s tarball of the pinned version, with a checksum', (key, entry) => {
+    expect(entry.url).toBe(
+      `https://github.com/itsdestin/youcoded-office/releases/download/v${realPin.version}/youcoded-office-${realPin.version}-${key}.tar.gz`,
+    );
+    expect(entry.sha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it.each(SHIPPED)('electron-builder packs %s from the folder the build fetched it into', (key) => {
+    const [platform, arch] = key.split('-');
+    // WHY regexes, not '${…}' strings: these are electron-builder's own macros, written literally.
+    const from = office.from.replace(/\$\{platform\}/, platform).replace(/\$\{arch\}/, arch);
+    expect(path.join(DESKTOP, from)).toBe(releaseDest(key));
+  });
+
+  it('builds installers with fetch-office --release --required before packaging', () => {
+    expect(pkg.scripts.build).toMatch(/^node scripts\/fetch-office\.mjs --release --required &&/);
+  });
+});
+
+// The Mac signer skips the add-on's non-code files but must sign the converter: Apple silicon
+// will not run unsigned code, and our app seal replaces upstream's signature.
+describe('macOS signing of the Office converter', () => {
+  const ignore = (CONFIG.mac.signIgnore as string[]).map((r) => new RegExp(r));
+  const skipped = (f: string) => ignore.some((r) => r.test(`/x/YouCoded.app/Contents/Resources/office/${f}`));
+  it('signs x2t and its libraries', () => {
+    expect(skipped('converter/x2t')).toBe(false);
+    expect(skipped('converter/libkernel.dylib')).toBe(false);
+  });
+  it('skips the editor files, fonts and templates', () => {
+    for (const f of ['editors/sdkjs/word/sdk-all-min.js', 'editors/web-apps/x.png', 'converter/fonts/Carlito-Bold.ttf', 'templates/blank.docx', 'converter/DoctRenderer.config'])
+      expect(skipped(f)).toBe(true);
+  });
+  it('leaves the rest of the app alone', () => {
+    expect(ignore.some((r) => r.test('/x/YouCoded.app/Contents/MacOS/YouCoded'))).toBe(false);
+  });
+});

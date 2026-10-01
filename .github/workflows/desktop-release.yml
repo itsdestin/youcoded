@@ -82,6 +82,13 @@ jobs:
             "@vscode/ripgrep-darwin-x64@$RG" \
             "@napi-rs/canvas-darwin-x64@$CANVAS"
 
+      # WHY before the tests (Task 9): the Office tests that run the real converter skip when no
+      # add-on is installed, so without this they ran on Linux developer machines only. Fetching
+      # this runner's own bundle runs them on Windows and macOS too — the only place a Windows or
+      # Mac converter problem shows before a user meets it.
+      - name: Fetch the Office add-on
+        run: node scripts/fetch-office.mjs --required
+
       - name: Run tests
         run: npm test
 

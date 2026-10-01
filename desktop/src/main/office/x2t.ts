@@ -80,7 +80,9 @@ function xmlEscape(s: string): string {
  *  stoppable, and be killed at quit. */
 function runX2t(bin: string, args: string[], signal?: AbortSignal): Promise<void> {
   // WHY the library path: x2t loads its shared libraries from its own folder. On macOS the
-  // DYLD_ variable is the equivalent — unverified there, noted for design task 9.
+  // libraries are found through x2t's own @executable_path rpath (Task 9), and DYLD_ is a
+  // harmless backup (a signed app's hardened runtime ignores it). Windows needs neither: it
+  // looks for a program's DLLs in the program's own folder first.
   // Each variable is set only on the platform that reads it (fix round 1).
   const env: NodeJS.ProcessEnv = { ...process.env };
   if (process.platform === 'linux') env.LD_LIBRARY_PATH = bin;
@@ -92,7 +94,10 @@ function runX2t(bin: string, args: string[], signal?: AbortSignal): Promise<void
     // WHY `signal` (Task 5 fix round 2): execFile kills the child with killSignal when it
     // aborts, so one document's translation can be stopped without touching the others'.
     const opts = { cwd: bin, env, timeout: X2T_TIMEOUT_MS, killSignal: 'SIGKILL' as const, maxBuffer: 64 * 1024 * 1024, signal };
-    const child = execFile(path.join(bin, 'x2t'), args, opts, (err, _stdout, stderr) => {
+    // WHY the .exe spelled out (Task 9): the Windows bundle's converter is x2t.exe; naming it
+    // exactly does not lean on Windows guessing the extension.
+    const exe = path.join(bin, process.platform === 'win32' ? 'x2t.exe' : 'x2t');
+    const child = execFile(exe, args, opts, (err, _stdout, stderr) => {
       running.delete(child);
       if (!err) return resolve();
       const e = err as NodeJS.ErrnoException & { signal?: string | null; killed?: boolean };
