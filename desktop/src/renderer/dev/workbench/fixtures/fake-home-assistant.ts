@@ -12,6 +12,7 @@ interface Thing {
   vol?: number | null; title?: string | null; features?: number;
   rgb?: number[] | null; k?: number | null;
   modesHvac?: string[]; action?: string | null;
+  dev?: string;
 }
 
 function seed(): Array<{ id: string; name: string; items: Thing[] }> {
@@ -44,6 +45,8 @@ function seed(): Array<{ id: string; name: string; items: Thing[] }> {
 }
 
 const ROOMS = seed();
+// Every thing belongs to a device, so the page can link to its screen.
+for (const r of ROOMS) for (const t of r.items) t.dev = `dev_${t.id.split('.')[1]}`;
 
 function find(id: string): Thing | undefined {
   for (const r of ROOMS) for (const t of r.items) if (t.id === id) return t;

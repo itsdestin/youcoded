@@ -3691,13 +3691,20 @@ function createPagesMock(empty: boolean): PagesBridge {
   if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('pagesHome') === 'refused') {
     pages = pages.map((p) => (p.id !== 'page-home' ? p : { ...p, connections: (p.connections ?? []).map((c) => (c.kind === 'device' ? { ...c, address: 'my-home.example.com' } : c)) }));
   }
-  if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('pagesHome') === 'connected') {
+  // `?pagesHome=connected`: one room's lights card open (with a palette), the
+  // rest folded, two favourites starred. `?pagesHome=edit`: the same page in
+  // Edit mode (home-page-v2 round 4).
+  const homeView = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('pagesHome') : null;
+  if (homeView === 'connected' || homeView === 'edit') {
     pages = pages.map((p) => (p.id !== 'page-home' ? p : {
       ...p,
       connections: (p.connections ?? []).map((c) => (c.kind === 'device' ? { ...c, address: '100.99.234.114:8123', approved: true, savedKey: true } : c)),
       refresh: { at: new Date().toISOString(), failed: false },
-      // Two palettes open, so the review screen shows the colour selection.
-      data: { expanded: ['light.desk_backlight', 'light.hue_play_1'] },
+      data: {
+        open: ['destins_room'], expanded: ['light.desk_backlight'],
+        fav: ['light.living_room_lamp', 'climate.thermostat'],
+        ...(homeView === 'edit' ? { editing: true } : {}),
+      },
     }));
   }
   // One key is saved from the start (Trip board uses it), so the Weather page
