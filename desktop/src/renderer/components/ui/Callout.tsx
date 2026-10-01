@@ -80,12 +80,17 @@ export type CalloutProps = {
    *  right"): a sentence-long notice beside two buttons wrapped into a narrow
    *  column. Default 'right' keeps every existing notice as it was. */
   actionsPlacement?: 'right' | 'below';
+  /** One short line beside its buttons, in a slim box. WHY (provider-notices-2,
+   *  2026-10-01: "shorten the copy to see if we can fit in one line"; "why is
+   *  this red box so tall"): the full p-3 box around a single line read as
+   *  twice the height of what it says. Centred, thin padding; opt-in. */
+  compact?: boolean;
   /** Optional: a title-only notice (e.g. "Download interrupted" with its
    *  Resume/Delete) has nothing more to say underneath. */
   children?: React.ReactNode;
 };
 
-export function Callout({ tone = 'info', title, className = '', collapsible = false, actions, actionsPlacement = 'right', children }: CalloutProps) {
+export function Callout({ tone = 'info', title, className = '', collapsible = false, actions, actionsPlacement = 'right', compact = false, children }: CalloutProps) {
   const t = TONE[tone];
   if (collapsible && title) {
     return (
@@ -118,6 +123,14 @@ export function Callout({ tone = 'info', title, className = '', collapsible = fa
       {children && <div className={`text-xs ${t.body}`}>{children}</div>}
     </>
   );
+  if (compact) {
+    return (
+      <div className={`rounded-lg px-2.5 py-1.5 border flex flex-wrap items-center gap-x-3 gap-y-1.5 ${t.surface} ${className}`.trim()}>
+        <div className="flex-1 min-w-40">{text}</div>
+        {actions && <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">{actions}</div>}
+      </div>
+    );
+  }
   if (!actions) {
     return <div className={`rounded-lg p-3 border ${t.surface} ${className}`.trim()}>{text}</div>;
   }

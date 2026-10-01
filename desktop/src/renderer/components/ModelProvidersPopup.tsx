@@ -107,7 +107,7 @@ function ProviderRow({ title, info, status, detail, notice, action, account, chi
       )}
       {notice && (
         <div className="mt-2">
-          <Callout tone={notice.tone} actions={notice.actions} actionsPlacement="below">{notice.text}</Callout>
+          <Callout tone={notice.tone} actions={notice.actions} compact>{notice.text}</Callout>
         </div>
       )}
       {children && <div className="mt-2.5">{children}</div>}
@@ -477,39 +477,41 @@ function openRouterKeyWords(health: ProviderHealth | undefined, canSignIn = fals
   if (health.verdict === 'unchecked') {
     return {
       status: 'Key saved — not checked yet',
-      detail: { text: "Key saved, but not checked yet — OpenRouter couldn't be reached. The app tries again on its own." },
+      // Short enough to sit on one line beside its buttons (provider-notices-2#PN2-1).
+      detail: { text: 'Key saved, not checked yet.' },
       broken: false,
       unchecked: true,
     };
   }
-  // The fix sentence names the card's own main button: "Sign in again" where
-  // sign-in works, "Replace key" where it doesn't (remote access).
-  const fix = canSignIn ? 'Sign in again, or paste a new API key.' : null;
+  // No fix sentence any more (provider-notices-2#PN2-2): the buttons inside
+  // the notice are the fix — Sign in / API Key, or Replace key over remote.
+  void canSignIn;
   switch (health.reason) {
     case 'openrouter-key-expired': {
       const day = shortDate(health.expiresAt);
       return {
         status: 'Key expired',
-        detail: { text: `This key stopped working${day ? ` on ${day}` : ''}. ${fix ?? 'Create a new key on OpenRouter, then replace it here.'}`, tone: 'bad' },
+        // One short line (PN2-2): the buttons beside it say what to do next.
+        detail: { text: `This key expired${day ? ` on ${day}` : ''}.`, tone: 'bad' },
         broken: true,
       };
     }
     case 'openrouter-wrong-key-type':
       return {
         status: 'Wrong kind of key',
-        detail: { text: `This is an account-management key, which can't run models. ${fix ?? 'Create a regular API key on OpenRouter, then replace it here.'}`, tone: 'bad' },
+        detail: { text: "This kind of key can't run models.", tone: 'bad' },
         broken: true,
       };
     case 'openrouter-forbidden':
       return {
         status: 'Key refused',
-        detail: { text: `OpenRouter refused this key. ${fix ?? 'Check it on OpenRouter, then replace it here.'}`, tone: 'bad' },
+        detail: { text: 'OpenRouter refused this key.', tone: 'bad' },
         broken: true,
       };
     default:
       return {
         status: 'Key not accepted',
-        detail: { text: `OpenRouter didn't accept this key. ${fix ?? 'Replace it to keep using OpenRouter models.'}`, tone: 'bad' },
+        detail: { text: "OpenRouter didn't accept this key.", tone: 'bad' },
         broken: true,
       };
   }
