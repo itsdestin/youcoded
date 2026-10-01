@@ -19,7 +19,6 @@ import { useEntryFolding } from '../../hooks/use-entry-folding';
 import { findArchiveBoundary, archivedTooltip } from '../../state/archive-boundary';
 import { eventToAction } from '../../state/transcript-event-actions';
 import { BUDDY_LIVE } from './buddy-live-events';
-import type { TranscriptEventType } from '../../../shared/types';
 
 interface Props {
   sessionId: string | null;
@@ -110,7 +109,7 @@ export function BubbleFeed({ sessionId }: Props) {
       if (rafId === null) rafId = requestAnimationFrame(flush);
     }
 
-    const unsubTranscript = window.claude.on.transcriptEvent((event: any) => {
+    const unsubTranscript = window.claude.on.transcriptEvent((event) => {
       // Only process events for the session this feed is watching
       if (!event?.type || event?.sessionId !== sessionId) return;
       // The buddy's three known live gaps (see the ledger). An unknown type has no
@@ -118,7 +117,7 @@ export function BubbleFeed({ sessionId }: Props) {
       // Own-property lookup: a wire type named `constructor` or `toString` must read as
       // "no ledger row", not as the function every object inherits.
       const rule = Object.prototype.hasOwnProperty.call(BUDDY_LIVE, event.type)
-        ? BUDDY_LIVE[event.type as TranscriptEventType]
+        ? BUDDY_LIVE[event.type]
         : undefined;
       if (rule && rule !== 'same') return;
 

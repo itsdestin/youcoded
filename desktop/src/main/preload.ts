@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer, IpcRendererEvent, webFrame } from 'electron
 import type { AuthStartResponse, AuthPollResponse, PostRatingInput } from '../renderer/state/marketplace-api-client';
 import type { MarketplaceUser } from './marketplace-auth-store';
 import type { ApiResult } from './marketplace-api-handlers';
-import type { AttentionSummary, AttentionReport, PerformanceConfigSnapshot, SessionMetaResult } from '../shared/types';
+import type { AttentionSummary, AttentionReport, PerformanceConfigSnapshot, SessionMetaResult, TranscriptEvent } from '../shared/types';
 // Type-only (erased at build), so the sandboxed preload still resolves nothing at
 // runtime — same footing as the '../shared/types' line above.
 import type { FirstRunState } from '../shared/first-run-types';
@@ -769,8 +769,8 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.on(IPC.UI_ACTION_RECEIVED, handler);
       return handler;
     },
-    transcriptEvent: (cb: (event: any) => void) => {
-      const handler = (_e: IpcRendererEvent, event: any) => cb(event);
+    transcriptEvent: (cb: (event: TranscriptEvent) => void) => {
+      const handler = (_e: IpcRendererEvent, event: TranscriptEvent) => cb(event);
       ipcRenderer.on(IPC.TRANSCRIPT_EVENT, handler);
       return handler;
     },

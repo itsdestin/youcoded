@@ -1457,7 +1457,7 @@ function AppInner() {
       // Claude Code's statusline reading: the marker's "after" figure when the event has none.
       fallbackContextTokens: (sid: string) => statusData.sessionStatsMap[sid]?.contextTokens ?? null,
     };
-    const transcriptHandler = (window.claude.on as any).transcriptEvent?.((event: any) => {
+    const transcriptHandler = window.claude.on.transcriptEvent?.((event) => {
       if (!event?.type || !event?.sessionId) return;
       // Live event = main can read this transcript: re-ask a failed first page (first-page-loader.ts).
       firstPages.noteLiveActivity(event.sessionId);
@@ -1716,7 +1716,7 @@ function AppInner() {
       onSessionArtifacts: (sessionId, artifacts) =>
         dispatchArtifact({ type: 'SESSION_ARTIFACTS_LOADED', sessionId, artifacts: artifacts as any }),
     });
-    const artifactToolUseHandler = (window.claude.on as any).transcriptEvent?.((event: any) => {
+    const artifactToolUseHandler = window.claude.on.transcriptEvent?.((event) => {
       artifactTracker.handle(event);
     });
 
@@ -1742,7 +1742,7 @@ function AppInner() {
         );
       },
     });
-    const deliverableAutoOpenHandler = (window.claude.on as any).transcriptEvent?.((event: any) => {
+    const deliverableAutoOpenHandler = window.claude.on.transcriptEvent?.((event) => {
       deliverableAutoOpen.handle(event);
     });
 
@@ -2288,7 +2288,7 @@ function AppInner() {
   useEffect(() => {
     if (!pendingModel) return;
 
-    const handler = (window.claude.on as any).transcriptEvent?.((event: any) => {
+    const handler = window.claude.on.transcriptEvent?.((event) => {
       if (!event || event.sessionId !== sessionId) return;
 
       // A user-message after the switch means the next assistant response
@@ -2302,7 +2302,7 @@ function AppInner() {
       // Skip events from the turn that was already in-flight when we switched
       if (!postSwitchTurnReady.current) return;
 
-      const actualModel = event.data.model as string;
+      const actualModel = event.data.model;
       // Fix: a `<synthetic>` turn is CC talking, not a model — "You've hit your
       // session limit", "You're out of usage credits", "Please run /login". It
       // carries no evidence about which model the switch landed on, so

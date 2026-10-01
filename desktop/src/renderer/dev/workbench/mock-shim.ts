@@ -896,7 +896,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     renamed: new Set<(id: string, name: string) => void>(),
     meta: new Set<(id: string, meta: any) => void>(),
     // Scripted replies: transcript/hook subscribers a played reply emits into.
-    transcript: new Set<(e: any) => void>(),
+    transcript: new Set<(e: TranscriptEvent) => void>(),
     hook: new Set<(e: any) => void>(),
   };
 
@@ -1129,7 +1129,8 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       // rather than leaving a never-ending Thinking chip after the real result.
       subs.transcript.forEach(f => f({ type: 'turn-complete', sessionId: 'wb-2',
         uuid: 'wb-d4-native-end', timestamp: Date.now(),
-        data: { stopReason: dismissed ? 'question_dismissed' : 'end_turn', model: null } }));
+        // WHY no `model: null` (M5): the typed payload is `model?: string`; absent reads as null downstream.
+        data: { stopReason: dismissed ? 'question_dismissed' : 'end_turn' } }));
       return true;
     },
 
@@ -3084,7 +3085,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       if (!studentSwitch || row !== 'wb-past-0') return empty;
       const raw = REPLY_SCRIPTS['./fixtures/replies/briefing.jsonl'];
       if (!raw) return empty;
-      return { ...empty, events: scriptToEvents(req.sessionId, parseReplyScript(raw), "brief me on tomorrow's econ midterm") as TranscriptEvent[] };
+      return { ...empty, events: scriptToEvents(req.sessionId, parseReplyScript(raw), "brief me on tomorrow's econ midterm") };
     },
     // Both called unconditionally from App.tsx's mount effect. The workbench is
     // one window that never inherits a session, so there is nothing to claim
@@ -3190,10 +3191,10 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // Scripted replies: the transcript/hook events a played reply fixture emits
   // (playReply in sendInput above). Same attachment pattern as specialistEvent
   // below — Ns<'on'> doesn't carry these members.
-  (on as any).transcriptEvent = (cb: (e: any) => void) => { subs.transcript.add(cb); return () => { subs.transcript.delete(cb); }; };
+  (on as any).transcriptEvent = (cb: (e: TranscriptEvent) => void) => { subs.transcript.add(cb); return () => { subs.transcript.delete(cb); }; };
   // Probe hook, same shape as __workbenchAppearanceSync: play one transcript
   // event (e.g. a native compact-summary) into the renderer for a screenshot.
-  if (typeof window !== 'undefined') (window as any).__workbenchTranscript = (e: unknown) => { subs.transcript.forEach((f) => f(e)); return subs.transcript.size; };
+  if (typeof window !== 'undefined') (window as any).__workbenchTranscript = (e: TranscriptEvent) => { subs.transcript.forEach((f) => f(e)); return subs.transcript.size; };
   (on as any).hookEvent = (cb: (e: any) => void) => { subs.hook.add(cb); return () => { subs.hook.delete(cb); }; };
   // Specialists 1c: the delegation feed (run records + delivered notes). Not
   // on Ns<'on'> yet (no real channel) — attached separately so the typed

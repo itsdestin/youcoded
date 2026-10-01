@@ -40,7 +40,7 @@ import type {
 import type {
   UpdateDownloadResult, UpdateLaunchResult, UpdateCachedDownload, UpdateBetaChannelState, UpdateChangelogResult,
 } from './update-install-types';
-import type { SessionInfo } from './types';
+import type { SessionInfo, TranscriptEvent } from './types';
 import type { MarketplaceChannelTypes, SkillsBridge, MarketplaceBridge, FirstRunBridge } from './marketplace-channel-types';
 import type { SyncChannelTypes } from './sync-channel-types';
 import type { SessionChannelTypes } from './session-channel-types';
@@ -990,7 +990,9 @@ interface BridgeListeners {
   shellEvent(cb: (e: ShellEvent) => void): () => void;
   sessionPermissionMode(cb: (sessionId: string, mode: string) => void): BridgeHandler;
   uiAction(cb: (action: any) => void): BridgeHandler;
-  transcriptEvent(cb: (event: any) => void): BridgeHandler;
+  // WHY typed (M5): every producer now builds a TranscriptEvent union member, so the
+  // listener can narrow on `event.type` instead of reading an `any` bag.
+  transcriptEvent(cb: (event: TranscriptEvent) => void): BridgeHandler;
   transcriptShrink(cb: (payload: { sessionId: string; oldSize: number; newSize: number }) => void): BridgeHandler;
 }
 
