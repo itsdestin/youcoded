@@ -131,7 +131,9 @@ const SAVE_REFUSED = 'Could not save — conversation storage is not available o
 /** After a meta write: tell the owning window and every phone, and refresh the search index. */
 function announceMeta(resolved: string, change: Record<string, unknown>): void {
   // Windows get (sessionId, change); phones get {sessionId, ...change} — the shapes the old pair sent (one-core R5-1).
-  ops().publish(resolved, IPC.SESSION_META_CHANGED, { sessionId: resolved, ...change }, { windowArgs: [resolved, change] });
+  // WHY everyPhone (one-core R5-3): `resolved` is the conversation's CLAUDE id, which no phone watches; per-session delivery would
+  // otherwise deliver this to nobody (found by the dev smoke: a tag change reached only a phone that watched every conversation).
+  ops().publish(resolved, IPC.SESSION_META_CHANGED, { sessionId: resolved, ...change }, { windowArgs: [resolved, change], everyPhone: true });
   emitConversationMetaChanged();
 }
 

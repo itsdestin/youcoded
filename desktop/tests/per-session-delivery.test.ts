@@ -112,6 +112,22 @@ describe('a phone is sent only the conversations it watches', () => {
   });
 });
 
+describe('a tag or note change made through the channel table reaches phones that watch nothing', () => {
+  it('session:set-tag and session:set-note publish to every phone (they are keyed by the Claude id no phone watches)', async () => {
+    const calls: Array<{ id: string; type: string; options: any }> = [];
+    bindSessionOps({
+      publish: (id: string, type: string, _payload: unknown, options: any) => { calls.push({ id, type, options }); },
+      sessionIdMap: new Map([['desktop-1', 'claude-1']]),
+      nativeHost: { isNativeSessionId: () => false },
+      canWriteStoreRecord: () => false,   // the store write is skipped; only the announcement is under test
+    } as any);
+    await findChannel('session:set-tag')!.handler({ sessionId: 'desktop-1', tagId: 'tag_x', value: true }, { door: 'remote', runtime: null, broadcast: () => {} } as any);
+    await findChannel('session:set-note')!.handler({ sessionId: 'desktop-1', note: 'hello' }, { door: 'remote', runtime: null, broadcast: () => {} } as any);
+    expect(calls.map((c) => [c.id, c.type])).toEqual([['claude-1', 'session:meta-changed'], ['claude-1', 'session:meta-changed']]);
+    expect(calls.every((c) => c.options?.everyPhone === true)).toBe(true);
+  });
+});
+
 describe('the watch survives a window letting go, and ends with the session', () => {
   it('releaseSession drops the window\'s ownership and subscribers but keeps every phone\'s watch', async () => {
     const h = await scriptedHost({ phones: 2 });
