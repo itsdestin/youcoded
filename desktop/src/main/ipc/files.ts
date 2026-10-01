@@ -15,21 +15,34 @@ import os from 'os';
 import path from 'path';
 import { IPC } from '../../shared/backend-contract';
 import { readFileHead } from '../fs-read-head';
+import { uploadDir, MAX_UPLOAD_BYTES, UPLOAD_TOO_LARGE_SENTENCE, sanitizeUploadName } from '../upload-store';
 import { defineChannel, type MainChannelDef } from './channel-def';
+import { refuseHeadOutsideKnownFolders } from './file-gates';
 
 export const filesChannels: MainChannelDef[] = [
-  defineChannel({ name: IPC.FS_READ_HEAD, kind: 'handle', handler: (p) => readFileHead(p?.filePath, p?.maxBytes) }),
+  defineChannel({
+    name: IPC.FS_READ_HEAD, kind: 'handle',
+    // WHY (2026-10-01 one-core R3-SEC): a phone is held to the folders the computer shows (plus the upload folder its
+    // attach preview reads) and to the phone deny list; the computer's own windows stay ungated, as the composer
+    // attaches whatever the person picks in the OS file dialog.
+    handler: async (p, ctx) => (ctx.door === 'remote' ? await refuseHeadOutsideKnownFolders(p?.filePath) : null) ?? readFileHead(p?.filePath, p?.maxBytes),
+  }),
   defineChannel({ name: IPC.GET_HOME_PATH, kind: 'handle', handler: () => os.homedir() }),
   defineChannel({
     name: IPC.FILE_UPLOAD, kind: 'handle', remoteOnly: true,
     handler: async (payload) => {
-      const uploadDir = path.join(os.tmpdir(), 'claude-desktop-uploads');
+      // WHY (2026-10-01 one-core R3-SEC): a size cap, checked on the base64 text BEFORE it is decoded (base64 is 4
+      // characters per 3 bytes), so an oversized upload never allocates a buffer. Refused with a sentence the
+      // phone shows, not a generic failure.
+      if (typeof payload?.data !== 'string') return { error: 'Upload failed' };
+      if (Math.floor((payload.data.length * 3) / 4) > MAX_UPLOAD_BYTES) return { error: UPLOAD_TOO_LARGE_SENTENCE };
+      const dir = uploadDir();
       try {
-        await fs.promises.mkdir(uploadDir, { recursive: true });
-        // Sanitize filename — strip path separators and limit length
-        const rawName = String(payload.name || 'upload').replace(/[/\\:*?"<>|]/g, '_').slice(0, 200);
-        const filePath = path.join(uploadDir, `${Date.now()}-${rawName}`);
+        await fs.promises.mkdir(dir, { recursive: true });
+        // Sanitize filename — strip path separators and control characters, limit length
+        const filePath = path.join(dir, `${Date.now()}-${sanitizeUploadName(payload.name)}`);
         const buffer = Buffer.from(payload.data, 'base64');
+        if (buffer.length > MAX_UPLOAD_BYTES) return { error: UPLOAD_TOO_LARGE_SENTENCE };
         await fs.promises.writeFile(filePath, buffer);
         return { path: filePath };
       } catch {

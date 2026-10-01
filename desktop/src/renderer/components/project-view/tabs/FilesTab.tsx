@@ -104,6 +104,8 @@ function folderErrorMessage(error: string, detail: string | undefined, atRoot: b
         : 'This folder isn’t there any more.';
     case 'not-a-folder':
       return 'This is a file now, not a folder.';
+    case 'kept-on-computer':
+      return 'This is kept on the computer and isn’t available over remote access.';
     case 'protected-path':
       return 'YouCoded doesn’t open this folder, because it can hold passwords or keys.';
     case 'outside-project':

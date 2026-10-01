@@ -121,7 +121,7 @@ export const artifactsChannels: MainChannelDef[] = [
       if (typeof p?.relDir !== 'string') return badRequest;
       return (await refuseUnknownProject(p.projectId, ctx)) ?? undefined;
     },
-    handler: ({ projectId, relDir, opts }) => listFolder(projectId, relDir, opts),
+    handler: ({ projectId, relDir, opts }, ctx) => listFolder(projectId, relDir, ctx.door === 'remote' ? { ...opts, refusePrivate: true } : opts),
   }),
 
   // RESOLVE_PATH → ONE file path tapped in chat, answered with the record the drawer opens. A phone can name
@@ -142,7 +142,10 @@ export const artifactsChannels: MainChannelDef[] = [
     // WHY (2026-10-01 one-core R3-8, R3-7 review): the old desktop handler ignored `trackedOnly` (it never took one),
     // so the computer's door ignores it too: only the phone's door sets it, and a window that sent one gets no change.
     handler: ({ projectRoot, path: filePath, trackedOnly }, ctx) =>
-      resolveArtifactPath(projectRoot, filePath, ctx.door === 'remote' && trackedOnly !== undefined ? { trackedOnly } : undefined),
+      resolveArtifactPath(projectRoot, filePath, ctx.door === 'remote'
+        // WHY refusePrivate (2026-10-01 one-core R3-SEC): only the phone's door; the computer's answer is unchanged.
+        ? { ...(trackedOnly !== undefined ? { trackedOnly } : {}), refusePrivate: true }
+        : undefined),
   }),
 
   // The Project View project list — saved folders reconciled with the central index (projects-index.ts).
@@ -171,7 +174,7 @@ export const artifactsChannels: MainChannelDef[] = [
     },
     remotePayload: (p) => ({ ...p, maxBytes: REMOTE_TEXT_PREVIEW_MAX_BYTES }),
     // WHY maxBytes only for a phone (2026-10-01 one-core R3-8, R3-7 review): the old desktop handler took no ceiling.
-    handler: ({ projectRoot, artifactId, full, maxBytes }, ctx) => readArtifactText(projectRoot, artifactId, { full: full === true, maxBytes: ctx.door === 'remote' ? maxBytes : undefined }),
+    handler: ({ projectRoot, artifactId, full, maxBytes }, ctx) => readArtifactText(projectRoot, artifactId, { full: full === true, maxBytes: ctx.door === 'remote' ? maxBytes : undefined, refusePrivate: ctx.door === 'remote' }),
   }),
 
   // Read a file as base64 for the binary viewers. SECURITY: this RETURNS file contents and a phone can reach
@@ -183,14 +186,14 @@ export const artifactsChannels: MainChannelDef[] = [
     remoteOnError: readFailure,
     remotePayload: (p) => ({ ...p, maxBytes: REMOTE_BINARY_PREVIEW_MAX_BYTES }),
     // WHY maxBytes only for a phone (2026-10-01 one-core R3-8, R3-7 review): the old desktop handler took no ceiling.
-    handler: ({ absolutePath, maxBytes }, ctx) => readArtifactBytes(absolutePath, { maxBytes: ctx.door === 'remote' ? maxBytes : undefined }),
+    handler: ({ absolutePath, maxBytes }, ctx) => readArtifactBytes(absolutePath, { maxBytes: ctx.door === 'remote' ? maxBytes : undefined, refusePrivate: ctx.door === 'remote' }),
   }),
 
   defineChannel({
     name: IPC.ARTIFACTS_SEARCH_CONTENT, kind: 'handle',
     remoteOnError: readFailure,
     remoteGuard: async (p, ctx) => (await refuseUnknownRoot(p?.projectRoot, ctx)) ?? undefined,
-    handler: ({ projectRoot, query }) => searchArtifactContent(projectRoot, query),
+    handler: ({ projectRoot, query }, ctx) => searchArtifactContent(projectRoot, query, { refusePrivate: ctx.door === 'remote' }),
   }),
 
   // Batch-check whether each requested artifact's resolved path still exists on disk, so "file not on disk"

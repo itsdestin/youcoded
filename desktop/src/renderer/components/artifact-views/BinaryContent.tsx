@@ -24,6 +24,9 @@ export function describeBytesError(error: string, noun: string): string {
       // Was: "…use “Open externally”" — a control this component never rendered.
       // The button below is that control, finally present.
       return `This ${noun} is larger than YouCoded can display.`;
+    case 'kept-on-computer':
+      // WHY (2026-10-01 one-core R3-SEC): the phone deny list (keys, saved logins, .git…).
+      return `This ${noun} is kept on the computer and isn’t available over remote access.`;
     case 'not-allowed':
       return `This ${noun} is outside your project folders and can’t be previewed.`;
     case 'unavailable':

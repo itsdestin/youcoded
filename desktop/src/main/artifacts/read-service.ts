@@ -33,6 +33,7 @@ import { searchProjectContent } from './content-search';
 import { listFolderPage } from './folder-listing';
 import type { FolderPage, FolderSort } from '../../shared/artifacts/folder-page';
 import { readFolders } from '../saved-folders';
+import { isPhoneDeniedFile, KEPT_ON_COMPUTER } from '../phone-read-deny';
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 
@@ -63,6 +64,9 @@ export async function judgeRecordLocation(projectRoot: string, artifact: Artifac
 /** The phone's ceiling for one read; absent on the desktop's own transport. */
 export interface ReadCeiling {
   maxBytes?: number;
+  /** WHY (2026-10-01 one-core R3-SEC): set by the phone's door only. A phone is refused files on the phone deny list
+   *  (credentials, keys, `.git`, the app's own secrets) on the resolved path; the computer's windows never set it. */
+  refusePrivate?: boolean;
 }
 
 export interface TooLarge {
@@ -173,7 +177,7 @@ export async function listAllFiles(projectId: string, opts?: { force?: boolean }
 export async function listFolder(
   projectId: unknown,
   relDir: unknown,
-  opts?: { sort?: FolderSort; offset?: number; limit?: number; snapshot?: string; namesOnly?: boolean },
+  opts?: { sort?: FolderSort; offset?: number; limit?: number; snapshot?: string; namesOnly?: boolean; refusePrivate?: boolean },
 ): Promise<FolderPage> {
   if (typeof projectId !== 'string' || projectId.length === 0) return { ok: false, error: 'bad-request' };
   const projects = await listProjects(CLAUDE_DIR);
@@ -186,6 +190,7 @@ type ResolvePathError =
   | 'not-found'        // inside the folder, nothing exists at that path
   | 'not-a-file'       // inside the folder, but a folder (or other non-file)
   | 'protected-path'   // a credential location refused for reads (editable-path-policy.ts)
+  | 'kept-on-computer' // a PHONE only: the phone deny list (phone-read-deny.ts) — a key, a credential, .git…
   | 'outside-project'  // not inside the folder and not a tracked file
   | 'not-tracked';     // trackedOnly: not a file this folder's records name. Its own
                        // code, not the remote gate's not-allowed (which means NOTHING
@@ -231,7 +236,7 @@ function trackedAbsoluteForm(a: ArtifactRecord, projectRoot: string): string | n
 export async function resolveArtifactPath(
   projectRoot: unknown,
   clickedPath: unknown,
-  opts?: { trackedOnly?: boolean },
+  opts?: { trackedOnly?: boolean; refusePrivate?: boolean },
 ): Promise<ResolvePathResult> {
   if (typeof projectRoot !== 'string' || projectRoot.length === 0
       || typeof clickedPath !== 'string' || clickedPath.length === 0) {
@@ -280,6 +285,9 @@ export async function resolveArtifactPath(
     // inside it pointing somewhere else.
     return { ok: false, error: auth.error === 'protected-path' ? 'protected-path' : 'outside-project' };
   }
+  // WHY (2026-10-01 one-core R3-SEC): the answer carries the file's modified time and size, so a phone is not told
+  // about a refused file either (checked on the resolved path, after the folder checks above).
+  if (opts?.refusePrivate && await isPhoneDeniedFile(absolute, auth.realPath)) return { ok: false, error: KEPT_ON_COMPUTER };
   let st: fs.Stats;
   try {
     st = await fs.promises.stat(auth.realPath);
@@ -349,6 +357,9 @@ export async function readArtifactText(
     return { ok: false, error: readAuth.error };
   }
   const realPath = readAuth.realPath;
+  // WHY (2026-10-01 one-core R3-SEC): a phone never reads a file on the phone deny list, wherever it sits inside a
+  // known folder and however it was named (a link to a secret is caught by its resolved path).
+  if (opts?.refusePrivate && await isPhoneDeniedFile(fullPath, realPath)) return { ok: false, error: KEPT_ON_COMPUTER };
 
   // Size gate BEFORE reading: a multi-MB readFile blocks the main thread,
   // ships whole over IPC/WS, then blocks the renderer rendering it.
@@ -479,6 +490,16 @@ export async function isKnownRoot(root: unknown, extraRoots: readonly string[] =
   return false;
 }
 
+/**
+ * WHY (2026-10-01 one-core R3-SEC): fs:read-head is gated for a phone to the folders the computer shows. Is this
+ * RESOLVED file inside a saved folder or an indexed project? (A folder known only because a chat runs there does
+ * not count: a phone can start a chat anywhere, "No folder" lands in the home folder.)
+ */
+export async function isInsideKnownRoot(realPath: string): Promise<boolean> {
+  const canon = canonicalize(realPath, null);
+  return (await knownRoots()).some((r) => canon === r || canon.startsWith(r + '/'));
+}
+
 /** A `projectId` is known when it names an indexed project, or is itself a known root (the synth-project convention). */
 export async function isKnownProjectRef(projectId: unknown, extraRoots: readonly string[] = []): Promise<boolean> {
   if (typeof projectId !== 'string' || projectId.length === 0) return false;
@@ -535,6 +556,8 @@ export async function readArtifactBytes(absolutePath: unknown, opts?: ReadCeilin
   try {
     const auth = await authorizeBytesRead(absolutePath);
     if (!auth.ok) return auth;
+    // WHY (2026-10-01 one-core R3-SEC): the phone deny list, on the resolved path (see phone-read-deny.ts).
+    if (opts?.refusePrivate && await isPhoneDeniedFile(absolutePath as string, auth.realPath)) return { ok: false, error: KEPT_ON_COMPUTER };
     // Size gate before reading — a huge file would freeze the renderer (and
     // the WS transport) long before the viewer could reject it. The phone's
     // ceiling, when given, is the smaller number.
@@ -549,11 +572,11 @@ export async function readArtifactBytes(absolutePath: unknown, opts?: ReadCeilin
 }
 
 /** Project-wide content search (ripgrep in main). */
-export function searchArtifactContent(projectRoot: unknown, query: unknown) {
+export function searchArtifactContent(projectRoot: unknown, query: unknown, opts?: { refusePrivate?: boolean }) {
   if (typeof projectRoot !== 'string' || projectRoot.length === 0 || typeof query !== 'string') {
     return Promise.resolve({ ok: false, hits: [], truncated: false, error: 'projectRoot and query are required' });
   }
-  return searchProjectContent(projectRoot, query);
+  return searchProjectContent(projectRoot, query, opts);
 }
 
 /**

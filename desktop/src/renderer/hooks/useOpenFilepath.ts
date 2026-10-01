@@ -110,6 +110,8 @@ function describeRefusal(error: string, name: string): string {
       return `Couldn’t open ${name} — that path isn’t a file (folders can’t be opened here).`;
     case 'protected-path':
       return `Couldn’t open ${name}. ${describeReadError('protected-path')}`;
+    case 'kept-on-computer':
+      return `Couldn’t open ${name}. ${describeReadError('kept-on-computer')}`;
     case 'not-allowed':
       // Remote host only: the folder is not a saved project, an indexed
       // project, or the folder of a chat running on the computer, so NOTHING

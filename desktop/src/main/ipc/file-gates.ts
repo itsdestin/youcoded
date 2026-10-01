@@ -14,7 +14,12 @@
 // drawer's list, the existence check, a record read by its id, and Download's record route. WHY: a phone
 // can start a session in any folder (and "No folder" lands in the home folder), so a session folder
 // counting as a full root handed out every file in it by path (T7 re-review, finding 1).
-import { isKnownRoot, isKnownProjectRef } from '../artifacts/read-service';
+import fs from 'fs';
+import path from 'path';
+import { isKnownRoot, isKnownProjectRef, isInsideKnownRoot } from '../artifacts/read-service';
+import { isPhoneDeniedFile, KEPT_ON_COMPUTER } from '../phone-read-deny';
+import { uploadDir } from '../upload-store';
+import { canonicalize } from '../../shared/artifacts/canonicalize';
 import { readSidecarShared } from '../artifacts/artifact-store';
 import type { MainChannelCtx } from './channel-def';
 
@@ -39,4 +44,20 @@ export async function refuseUnlessRecorded(root: string, artifactId: string): Pr
   const sidecar = await readSidecarShared(root).catch(() => null);
   const recorded = !!sidecar && !('corrupted' in sidecar) && sidecar.artifacts.some((a) => a.id === artifactId);
   return recorded ? null : { ok: false, error: 'not-allowed' };
+}
+
+/**
+ * WHY (2026-10-01 one-core R3-SEC): the gate on a PHONE's fs:read-head, which used to answer for any file on the
+ * computer. The file must be (1) not on the phone deny list, and (2) inside a folder the computer shows (saved
+ * folders, indexed projects) or in the temp folder phone uploads land in (the attach preview reads it). Judged on the
+ * resolved path. Null means allowed. A file that does not exist is judged by its typed name, so the answer never tells
+ * a phone whether a path outside those folders exists.
+ */
+export async function refuseHeadOutsideKnownFolders(filePath: unknown): Promise<{ ok: false; error: string } | null> {
+  if (typeof filePath !== 'string' || filePath.length === 0 || !path.isAbsolute(filePath)) return { ok: false, error: 'no path' };
+  if (await isPhoneDeniedFile(filePath)) return { ok: false, error: KEPT_ON_COMPUTER };
+  const real = await fs.promises.realpath(filePath).catch(() => path.resolve(filePath));
+  if (await isInsideKnownRoot(real)) return null;
+  const upDir = canonicalize(await fs.promises.realpath(uploadDir()).catch(() => uploadDir()), null);
+  return canonicalize(real, null).startsWith(upDir + '/') ? null : { ok: false, error: 'not-allowed' };
 }

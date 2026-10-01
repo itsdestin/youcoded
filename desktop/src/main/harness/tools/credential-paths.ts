@@ -88,6 +88,59 @@ export function isCredentialPath(canonical: string, home: string): boolean {
   return false;
 }
 
+// ── PHONE read deny list ─────────────────────────────────────────────────────────────────────────────
+// WHY (2026-10-01 one-core R3-SEC): a paired phone could read a project's `.git/config` (a remote address can
+// carry a token), `.git-credentials`, `id_rsa`, `*.pem`, and through fs:read-head ANY file on the computer, e.g.
+// the remote password hash. This is the ONE list every phone file read consults (main/phone-read-deny.ts).
+//
+// It EXTENDS this file rather than forking it: it calls isCredentialPath unchanged and adds names that match
+// ANYWHERE in the path (a project's own `.git-credentials` / `id_rsa`), which the home-anchored list above
+// deliberately did not cover. isCredentialPath itself is NOT changed, so the native assistant's file tools
+// (harness/tools/guards.ts) refuse exactly what they refused before; only the phone door calls the function below.
+// `.env` is deliberately NOT here: artifacts:get serves it on purpose (the pane is the human escape hatch for
+// editing a .env, editable-path-policy.ts D5), and read-binary / fs:read-head / search already refuse it.
+// Everything is compared lowercase on the RESOLVED path, so symlinks, `..` and Windows/macOS case do not dodge it.
+
+/** Directory names whose whole subtree a phone never reads, at any depth. */
+const PHONE_DENY_SEGMENTS = new Set(['.git', '.ssh', '.gnupg', '.aws', '.azure', '.kube']);
+
+/** File names a phone never reads, at any depth. */
+const PHONE_DENY_BASENAMES = new Set([
+  '.git-credentials', '.git-credentials-store', '.netrc', '_netrc', '.npmrc', '.pypirc', '.pgpass', '.credentials.json',
+  'id_rsa', 'id_ed25519', 'id_ecdsa', 'id_dsa',
+  // The app's own secret and config files (remote-paths.ts, providers/secrets-store.ts, chatgpt-auth.ts).
+  'native-secrets.json', 'chatgpt-account.json', '.claude.json', '.remote-tokens.json',
+]);
+
+/** Extensions of key and certificate bundles. */
+const PHONE_DENY_EXTENSIONS = ['.pem', '.key', '.p12', '.pfx'];
+
+/** The remote-access files: `youcoded-remote.json` (password hash) and `.remote-devices.json` (paired devices),
+ *  each with an optional `.<profile>` suffix a dev instance uses (remote-paths.ts). */
+const PHONE_DENY_PATTERNS = [/^youcoded-remote(\.[^./]+)?\.json$/, /^\.remote-devices(\.[^./]+)?\.json$/];
+
+/** True when a phone must be refused this file. `canonical` is a canonicalize()'d absolute path (forward slashes,
+ *  `..` resolved), `home` the same-canonicalized home directory. */
+export function isPhoneDeniedPath(canonical: string, home: string): boolean {
+  if (isCredentialPath(canonical, home)) return true;
+  const c = canonical.toLowerCase();
+  const parts = c.split('/');
+  const base = parts[parts.length - 1] ?? '';
+  if (parts.some((seg) => PHONE_DENY_SEGMENTS.has(seg))) return true;
+  if (PHONE_DENY_BASENAMES.has(base)) return true;
+  if (PHONE_DENY_EXTENSIONS.some((ext) => base.endsWith(ext))) return true;
+  if (PHONE_DENY_PATTERNS.some((re) => re.test(base))) return true;
+  return c.includes('/.config/gh/');
+}
+
+/** ripgrep exclusions for the same list, so a phone's content search never prints a line of a refused file. */
+export const PHONE_DENY_SEARCH_GLOBS: readonly string[] = [
+  ...[...PHONE_DENY_SEGMENTS].map((seg) => `!${seg}`),
+  ...[...PHONE_DENY_BASENAMES].map((b) => `!${b}`),
+  ...PHONE_DENY_EXTENSIONS.map((ext) => `!*${ext}`),
+  '!youcoded-remote*.json', '!.remote-devices*.json',
+];
+
 /**
  * ripgrep exclusion globs so a `--hidden` search from a parent directory never
  * descends INTO these credential locations (the Grep gap: the search root passes

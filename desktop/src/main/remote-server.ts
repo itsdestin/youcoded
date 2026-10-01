@@ -9,7 +9,7 @@ import { dropDocCommentsSubscriber } from './doc-comments/doc-comments-watcher';
 import { staticAssetPolicy } from './remote-static-policy';
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
+import { sweepOldUploads } from './upload-store';
 import { randomUUID } from 'crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { isAllowedWsOrigin } from './remote-origin';
@@ -502,22 +502,11 @@ export class RemoteServer {
     // Status data is now fed by ipc-handlers.ts via broadcastStatusData() —
     // no independent polling needed. This eliminates duplicate file reads.
 
-    // Cleanup uploaded files older than 1 hour
-    const uploadDir = path.join(os.tmpdir(), 'claude-desktop-uploads');
-    this.uploadCleanupTimer = setInterval(async () => {
-      try {
-        const files = await fs.promises.readdir(uploadDir);
-        const now = Date.now();
-        for (const file of files) {
-          try {
-            const stat = await fs.promises.stat(path.join(uploadDir, file));
-            if (now - stat.mtimeMs > 3600_000) {
-              await fs.promises.unlink(path.join(uploadDir, file));
-            }
-          } catch {}
-        }
-      } catch {}
-    }, 3600_000);
+    // Cleanup uploaded files older than 1 hour.
+    // WHY (2026-10-01 one-core R3-SEC): the sweep is upload-store.ts's, and it also runs once now: the hourly timer
+    // alone never fired in an app that is restarted more than hourly, so uploads piled up in the temp folder.
+    void sweepOldUploads();
+    this.uploadCleanupTimer = setInterval(() => { void sweepOldUploads(); }, 3600_000);
 
     // Topic names are tracked by ipc-handlers.ts and forwarded via setLastTopic() + broadcast()
 

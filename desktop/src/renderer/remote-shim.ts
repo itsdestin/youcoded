@@ -12,6 +12,7 @@ import { TABLE_ERROR_FLAG } from '../shared/table-error-flag';
 // WHY: remote-shim.ts lives in renderer/ and cannot import from main/ (Node.js
 import { REMOTE_UNSUPPORTED_EVENT, hasFeatureName, remoteFeatureName, remoteUnsupportedMessage } from './remote-unsupported';
 import { REMOTE_RECONNECTED_EVENT } from './remote-events';
+import { announce } from './utils/announce';
 // The phone's own runtime while paired: localBridgeUrl + invokeLocalBridge (WHY there).
 import { localBridgeUrl, invokeLocalBridge } from './android-local-bridge';
 import type { FirstRunState } from '../shared/first-run-types';
@@ -1842,19 +1843,17 @@ async function pickAndUploadFiles(): Promise<string[]> {
   // Read each file as base64 and upload to the desktop
   for (const file of Array.from(files)) {
     try {
-      const buffer = await file.arrayBuffer();
-      const bytes = new Uint8Array(buffer);
+      const bytes = new Uint8Array(await file.arrayBuffer());
       let binary = '';
-      for (let i = 0; i < bytes.length; i++) {
-        binary += String.fromCharCode(bytes[i]);
-      }
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
       const base64 = btoa(binary);
       const result = await invoke('file:upload', {
         name: file.name,
         data: base64,
         size: file.size,
       });
-      if (result?.path) paths.push(result.path);
+      // WHY (2026-10-01 one-core R3-SEC): a refusal (file over the size cap) now comes back as a sentence; show it instead of dropping the file silently.
+      if (result?.path) paths.push(result.path); else if (typeof result?.error === 'string') announce(result.error, 5000);
     } catch (err) {
       console.error('Failed to upload file:', file.name, err);
     }
