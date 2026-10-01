@@ -427,6 +427,8 @@ interface Props {
   // The chip renders identically for both — only the value + cycle handler differ.
   permissionMode?: PermissionMode | NativePermissionMode | 'unknown';
   onCyclePermission?: () => void;
+  /** One-core R6-2: the mode shown was drawn by a phone before the computer confirmed it. */
+  permissionPending?: boolean;
   // Fast + effort state and opener. When non-default, chips render next to the model
   // chip. Clicking either (or the model chip directly) opens the ModelPickerPopup.
   fast?: boolean;
@@ -986,7 +988,7 @@ const INPUT_NOTE = 'Input is counted per request — a long turn re-sends its hi
 
 export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App hands this bar a memoised projection + stable handlers (hooks/useStatusBarProps.ts), so unrelated shell state no longer re-renders it
   statusData, onRunSync, onOpenSync, model, modelProviderType, provider, usagePlan,
-  permissionMode, onCyclePermission, fast, effort, onOpenModelPicker,
+  permissionMode, onCyclePermission, permissionPending, fast, effort, onOpenModelPicker,
   sessionId, onDispatch,
   openTasksCounts, onOpenOpenTasks,
   nativeUsage, nativeContextLength, nativeContextOverride, turnsWithUsage, nativeTotals,
@@ -1189,7 +1191,8 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
           : 'Click to cycle permission mode (Shift+Tab)'}>
         <button
           onClick={onCyclePermission}
-          className="px-1.5 py-0.5 rounded-sm border cursor-pointer hover:brightness-125 transition-colors"
+          className={`px-1.5 py-0.5 rounded-sm border cursor-pointer hover:brightness-125 transition-colors${permissionPending ? ' opacity-60' : ''}`}
+          aria-busy={permissionPending || undefined}
           style={{
             backgroundColor: PERMISSION_DISPLAY[permissionMode].bg,
             color: PERMISSION_DISPLAY[permissionMode].color,

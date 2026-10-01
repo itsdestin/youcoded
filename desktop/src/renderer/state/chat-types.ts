@@ -808,6 +808,15 @@ export type ChatAction =
       requestId: string;
     }
   | {
+      // One-core R6-2 (instant buttons on a phone), see state/permission-answer.ts. `pending`: the answer is drawn before the computer confirms;
+      // `waiting`: its reply was lost; `settled`: confirmed, drop the mark; `undone`: put the card back (`unconfirmed`: say the answer could not be confirmed).
+      type: 'PERMISSION_ANSWER';
+      sessionId: string;
+      requestId: string;
+      step: 'pending' | 'waiting' | 'settled' | 'undone';
+      unconfirmed?: boolean;
+    }
+  | {
       // admin-password design §2.5/§2.6: sets ToolCallState.passwordAsk (or
       // the matching nested Task-card segment for a specialist's own sudo) on
       // the Bash card named by `toolUseId` — matched directly, unlike

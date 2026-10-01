@@ -16,6 +16,7 @@ import { pageEventToAction } from './transcript-page-actions';
 import { isPlaceholderModelId } from '../../shared/model-ids';
 import { addTurnUsage, addSubagentUsage, addPatchLines, mergeTotals } from './session-totals';
 import { applyBackgroundTaskEnd, ccBackgroundOnLaunch, reopenResumedHelper, stopRunningBackground } from './cc-background';
+import { answerStep, reannounced } from './permission-answer';
 
 // Fix: message ids are used as React keys. A hydrated remote client restarts
 // this counter at 0 while its snapshot already holds msg-1..msg-N, so new live
@@ -1903,6 +1904,8 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
             // tool-use replacing it — the note, and the id a later expiry needs.
             answeredElsewhere: synTool.answeredElsewhere,
             resolvedRequestId: synTool.resolvedRequestId,
+            answerPending: synTool.answerPending, // R6-2: an answer still unconfirmed survives the real tool-use replacing the synthetic card
+            answerUnconfirmed: synTool.answerUnconfirmed,
             permissionSuggestions: synTool.permissionSuggestions,
             denyListed: synTool.denyListed,
             // Carried for the same reason as denyListed: ToolCard gates the
@@ -1992,7 +1995,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
             floorStop: superseded.floorStop,
             permissionMode: superseded.permissionMode,
           }
-        : { status: 'running' as const, answeredElsewhere: superseded?.answeredElsewhere, resolvedRequestId: superseded?.resolvedRequestId };
+        : { status: 'running' as const, answeredElsewhere: superseded?.answeredElsewhere, resolvedRequestId: superseded?.resolvedRequestId, answerPending: superseded?.answerPending, answerUnconfirmed: superseded?.answerUnconfirmed };
       toolCalls.set(action.toolUseId, {
         toolUseId: action.toolUseId,
         toolName: action.toolName,
@@ -2508,6 +2511,11 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       for (const tool of session.toolCalls.values()) {
         if (tool.requestId === action.requestId && tool.status === 'awaiting-approval') return state;
       }
+      // One-core R6-2: this screen has answered this ask and drawn it as answered. A beat sent before the answer landed must not bring the
+      // card back; one that arrives after the answer's reply was lost means the computer still has the ask open (the card goes back).
+      const again = reannounced(session.toolCalls, action.requestId);
+      if (again === 'ignore') return state;
+      if (again) { next.set(action.sessionId, { ...session, toolCalls: again }); return next; }
       const toolCalls = new Map(session.toolCalls);
 
       // This action is REPEATABLE (2026-08-16): main re-announces every
@@ -2807,6 +2815,15 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       }
 
       next.set(action.sessionId, { ...session, toolCalls });
+      return next;
+    }
+
+    // One-core R6-2: a phone's instant permission answer (state/permission-answer.ts).
+    case 'PERMISSION_ANSWER': {
+      const session = next.get(action.sessionId);
+      const tools = session && answerStep(session.toolCalls, action);
+      if (!session || !tools) return state;
+      next.set(action.sessionId, { ...session, toolCalls: tools });
       return next;
     }
 

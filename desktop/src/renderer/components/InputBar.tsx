@@ -28,6 +28,7 @@ import type { UsageSnapshot } from '../state/chat-types';
 import { hasPendingInteraction, pendingInteractionKind, pendingInteractionRefusalCopy } from '../state/pty-input-gate';
 import { buildOutgoingMessage } from './outgoing-message';
 import { sendToClaudeCode, sendToNative } from '../state/submit-outgoing';
+import { optimisticScreen, connected } from '../state/pending-action';
 import type { NativeSendResult } from '../../shared/types';
 import type { ClaudeAlias } from '../../shared/model-ids';
 import { useScrollFade } from '../hooks/useScrollFade';
@@ -812,7 +813,9 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
           // mid-round-trip: then the host MAY have the message). sendToNative turns every case into one of four answers; see submit-outgoing.ts.
           // (Error inventory 2026-09-10, false message 5: that a rejected send "didn't go anywhere" is NOT known, so an unanswered send is worded
           // "couldn't confirm" — or, new in R5-4b, drawn as a bubble that says "Not sure this was sent" and is checked against the computer's record.)
-          const out = await sendToNative({ sessionId, provider, ptyText: outgoing.ptyText, content: outgoing.content, paths: files.map((f) => f.path), dispatch });
+          // One-core R6-2: on a phone with nothing running, the bubble goes up now, before the computer answers (the composer was already cleared by `send()`).
+          const instant = optimisticScreen() && connected() && getSessionState?.(sessionId)?.isThinking === false;
+          const out = await sendToNative({ sessionId, provider, ptyText: outgoing.ptyText, content: outgoing.content, paths: files.map((f) => f.path), dispatch, instant });
           if (out.status !== 'failed') return; // sent / queued / unsure: the bubble (or the host's queue strip) says it, and an unsure one says so on itself
           onToast?.(sendFailureCopy(out.result));
           // A failed ack must not silently lose the draft (the file's own invariant: a refused send keeps the draft). `send()` already ran

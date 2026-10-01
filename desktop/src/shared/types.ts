@@ -632,6 +632,12 @@ export interface ToolCallState {
    *  Expired, for a cancelled ask — without this the card read "Answered on the
    *  computer" for an ask nobody answered). */
   resolvedRequestId?: string;
+  /** One-core R6-2: a phone answered this card and drew the answer BEFORE the computer confirmed it (state/permission-answer.ts). The card is shown as
+   *  answered (`running`) with `requestId` cleared; this keeps the id so the answer can be put back if the computer refuses, and so a re-announce of
+   *  the same ask that was sent before the answer landed does not draw the card a second time. `inFlight` = the answer's reply has not come back. */
+  answerPending?: { requestId: string; inFlight: boolean };
+  /** The card was put back after an answer got no reply: it says so, and stays answerable (the same sentence a card says on the computer). */
+  answerUnconfirmed?: boolean;
   response?: string;
   error?: string;
   /** Set when the tool result carries a structuredPatch (Edit/MultiEdit). */

@@ -1281,3 +1281,60 @@ describe('InputBar — idle unfocus vs the on-screen keyboard', () => {
     expect(document.activeElement).not.toBe(textarea);
   });
 });
+
+// Instant send on a phone: the box clears and the bubble goes up before the computer has answered. The computer's own window keeps drawing the bubble
+// only after the answer (a send that finds a turn running is queued by the host and drawn from its queue, never as a bubble here).
+describe('InputBar — instant send on a phone', () => {
+  let reply: (r: unknown) => void = () => {};
+  let store: ReturnType<typeof useChatStore>;
+  function Probe() { store = useChatStore(); return null; }
+  const bubbles = () => store.getSession('sess-1').timeline.filter((e: any) => e.kind === 'user');
+
+  async function mount(mode: 'remote' | 'local', onToast = vi.fn()) {
+    const { setConnectionMode } = await import('../platform');
+    setConnectionMode(mode);
+    (global as any).ResizeObserver = NoopResizeObserver;
+    (window as any).claude = {
+      native: { supported: true, send: vi.fn(() => new Promise((res) => { reply = res; })) },
+      session: { sendInput: vi.fn(), canSend: () => true },
+      skills: { list: vi.fn().mockResolvedValue([]), getFavorites: vi.fn().mockResolvedValue([]), getChips: vi.fn().mockResolvedValue([]), getCuratedDefaults: vi.fn().mockResolvedValue([]) },
+    };
+    render(<ChatProvider><SkillProvider><Probe />
+      <InputBar sessionId="sess-1" provider="native" onToast={onToast} getSessionState={(id) => store.getSession(id)} />
+    </SkillProvider></ChatProvider>);
+    act(() => store.dispatch({ type: 'SESSION_INIT', sessionId: 'sess-1' }));
+    const input = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: 'hello there' } });
+    return input;
+  }
+  afterEach(async () => { cleanup(); (await import('../platform')).setConnectionMode('local'); });
+
+  it('clears the box and shows the bubble at once, before the computer answers', async () => {
+    const input = await mount('remote');
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(input.value).toBe('');
+    expect(bubbles()).toHaveLength(1);
+    expect((bubbles()[0] as any).message.content).toBe('hello there');
+    await act(async () => { reply({ status: 'sent' }); await Promise.resolve(); });
+    expect(bubbles()).toHaveLength(1);
+  });
+
+  it('takes the bubble down and gives the words back when the computer refuses', async () => {
+    const onToast = vi.fn();
+    const input = await mount('remote', onToast);
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    await act(async () => { reply({ status: 'failed', reason: 'not-live' }); await Promise.resolve(); await Promise.resolve(); });
+    expect(bubbles()).toHaveLength(0);
+    expect(input.value).toBe('hello there');
+    expect(onToast).toHaveBeenCalledTimes(1);
+  });
+
+  it('the computer\'s own window still waits for the answer before drawing the bubble', async () => {
+    const input = await mount('local');
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(input.value).toBe('');
+    expect(bubbles()).toHaveLength(0);
+    await act(async () => { reply({ status: 'sent' }); await Promise.resolve(); await Promise.resolve(); });
+    expect(bubbles()).toHaveLength(1);
+  });
+});

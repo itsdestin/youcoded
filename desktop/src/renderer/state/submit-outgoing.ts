@@ -10,6 +10,7 @@ import type { NativeSendResult } from '../../shared/types';
 import { sendChatMessage } from '../components/native-send';
 import { newSendId } from './send-ids';
 import { SEND_CHECK_EVENT } from './send-reconcile';
+import { runPending, optimisticScreen } from './pending-action';
 
 /** The gap between attached-file paths sent to Claude Code: longer than Ink's 500 ms paste window, so each path is its own paste (verified on a 4-image send). */
 const FILE_GAP_MS = 600;
@@ -24,7 +25,13 @@ export interface OutgoingSend {
   /** Exact attached-file paths. */
   paths: string[];
   dispatch: (action: ChatAction) => void;
+  /** Native only (one-core R6-2): draw the bubble BEFORE the computer answers. The caller says yes only on a phone whose conversation is idle, where the
+   *  computer would draw the very same bubble: a send that finds a turn running is queued by the computer and drawn from its queue, never as a bubble here. */
+  instant?: boolean;
 }
+
+/** A reply-less Claude Code send still has no echo this long after the write: ask the computer's record whether it got the message (a refused terminal write says nothing else). */
+export const CC_SEND_CHECK_MS = 6000;
 
 /**
  * Send a message to a Claude Code session: the bubble goes up BEFORE the write (the transcript confirms it once Claude Code records the line), the
@@ -38,6 +45,9 @@ export function sendToClaudeCode(o: OutgoingSend): string {
   });
   // The pty worker splits text + \r with a gap so Enter is not swallowed by Ink's paste buffer. An attachments-only send is just "\r".
   setTimeout(() => { window.claude.session.sendInput(o.sessionId, o.ptyText + '\r', undefined, sendId); }, o.paths.length * FILE_GAP_MS);
+  // One-core R6-2: the bubble is already up (instant); a phone also checks once, a few seconds on, that the computer's terminal took the write. A bubble the echo
+  // has confirmed by then costs nothing (nothing is asked); one it has not gets the computer's answer on it ("This didn't send" + Send again). Nothing is resent.
+  if (optimisticScreen()) setTimeout(() => window.dispatchEvent(new CustomEvent(SEND_CHECK_EVENT)), o.paths.length * FILE_GAP_MS + CC_SEND_CHECK_MS);
   return sendId;
 }
 
@@ -55,6 +65,7 @@ export type NativeOutcome =
 
 export async function sendToNative(o: OutgoingSend): Promise<NativeOutcome> {
   const sendId = newSendId();
+  if (o.instant) return sendToNativeNow(o, sendId);
   let result: NativeSendResult | undefined;
   let unknown = false;
   try {
@@ -77,6 +88,44 @@ export async function sendToNative(o: OutgoingSend): Promise<NativeOutcome> {
     o.dispatch({ type: 'USER_PROMPT', sessionId: o.sessionId, content: o.content, timestamp: Date.now(), attachments: o.paths, sendId });
   }
   return { status: result.status === 'queued' ? 'queued' : 'sent', sendId };
+}
+
+/**
+ * The instant native send (phone, idle conversation): the bubble goes up first, then the computer answers.
+ *   sent   -> the bubble stays (pending until the transcript echoes it, as ever);
+ *   queued -> the computer found a turn running after all: it holds the message and draws its own queue strip, so the bubble comes down;
+ *   failed -> the bubble comes down and the caller (the composer) says so and keeps the draft;
+ *   no answer -> the bubble stays with "Not sure this was sent" and the record is asked (state/send-reconcile.ts); nothing is resent.
+ */
+async function sendToNativeNow(o: OutgoingSend, sendId: string): Promise<NativeOutcome> {
+  let outcome: NativeOutcome = { status: 'sent', sendId };
+  const bubble = (): ChatAction => ({ type: 'USER_PROMPT', sessionId: o.sessionId, content: o.content, timestamp: Date.now(), attachments: o.paths, sendId });
+  await runPending({
+    key: `send:${sendId}`,
+    sessionId: o.sessionId,
+    apply: () => o.dispatch(bubble()),
+    async send() {
+      let result: NativeSendResult | undefined;
+      try {
+        result = await sendChatMessage('native', o.sessionId, o.ptyText, o.paths, sendId);
+      } catch (err) {
+        if ((err as { outcomeUnknown?: boolean } | null)?.outcomeUnknown) throw err;
+        console.error('native send invoke rejected:', err);
+      }
+      if (!result || result.status === 'failed') { outcome = { status: 'failed', result, sendId }; return { undo: { kind: 'refused' } }; }
+      if (result.status === 'queued') { outcome = { status: 'queued', sendId }; return { undo: { kind: 'redirected' } }; }
+      return 'answered';
+    },
+    undo: () => o.dispatch({ type: 'SEND_DISCARD', sessionId: o.sessionId, sendId }),
+    // The answer never came: the message MAY be there. Its own note and the record's check settle it (the same path as a send that was not instant).
+    handOff() {
+      outcome = { status: 'unsure', sendId };
+      o.dispatch({ type: 'SEND_NOTE', sessionId: o.sessionId, sendId, note: 'unsure' });
+      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(SEND_CHECK_EVENT));
+    },
+    check: () => 'present',
+  });
+  return outcome;
 }
 
 /** The words and files of a sent bubble, back out of it (the bubble's content is the file paths, then the text). */
