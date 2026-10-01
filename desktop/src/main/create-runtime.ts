@@ -54,6 +54,7 @@ import type { PortableModelRef } from './conversations/store-core';
 import type { SessionInfo } from '../shared/types';
 import type { Platform } from './platform';
 import { createSessionState, type SessionState } from './ipc/session-state';
+import { SessionRecords } from './session-record';
 
 export interface CreateRuntimeDeps {
   /** The profile folder (Electron's userData in the app). Every private file lives under it. */
@@ -77,7 +78,10 @@ export type RemoteNativeRuntime = Pick<NativeRuntime,
   | 'chatgptAuth' | 'claudeAccount' | 'openRouterSignIn' | 'resolvePortableModel'
   // WHY sessionState (2026-09-30 one-core R3-7): the artifact channels match a session's files to its conversation
   // through the ONE id map, for a window and for a phone.
-  | 'sessionState'>;
+  | 'sessionState'
+  // WHY records (one-core R5-1): RemoteServer feeds Claude Code's hook events into the record, which
+  // reaches phones through its own listener, not through publish (R5-2 merges them).
+  | 'records'>;
 
 type TitleAppliedListener = (desktopId: string, title: string) => void;
 
@@ -111,6 +115,8 @@ export interface NativeRuntime {
   stampProviderTypes: (rows: SessionInfo[]) => Promise<SessionInfo[]>;
   /** The per-session maps every door shares — ONE copy, owned here. */
   sessionState: SessionState;
+  /** The computer's record of each session: epoch, numbered event ring, open asks, live facts (session-record.ts). */
+  records: SessionRecords;
   /** A door subscribes to hear an automatic title land (window push + phone push). */
   onTitleApplied(listener: TitleAppliedListener): void;
   /** Runtime half of app quit. Returns the engine-stop promise so quit can await it. */
@@ -599,12 +605,20 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
   // models:* handlers themselves are registered in ipc-handlers, next to the engine block).
   const modelManager = new ModelManager(nativeHome, engineManager, userDataDir);
 
+  // WHY here (one-core R5-1): the record belongs to the core, not to either door, so the window door's publish
+  // and the phone door's hook feed write to ONE copy. Native sessions' queue and mode are read from the host
+  // that owns them (never copied); every other fact is folded from the events publish carries.
+  const records = new SessionRecords();
+  records.setLiveSource((sessionId) => (nativeHost.isNativeSessionId(sessionId)
+    ? { queued: nativeHost.queuedMessageIds(sessionId), permissionMode: nativeHost.getPermissionMode(sessionId) }
+    : null));
+
   return {
     nativeHome, permissionStore, stepGuardSettings, contextSettings, secretsStore, engineManager,
     chatgptAuth: chatgptForUi, providerRegistry, openRouterSignIn, modelCatalog, claudeAccount,
     searchKeyStore, searchService, specialistCatalog, nativeHost, modelManager, namingSettings,
     sessionNamer, applyAutomaticTitle, queueTitle, publishNamingMode, resolvePortableModel,
-    stampProviderTypes, sessionState,
+    stampProviderTypes, sessionState, records,
     onTitleApplied: (listener) => { titleListeners.push(listener); },
     cleanup: () => {
       openRouterSignIn.dispose();
@@ -617,6 +631,7 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
       // Awaited by the caller: never leave an orphaned llama-server on quit.
       const engineStopped = engineManager.stopAll().catch(() => {});
       sessionState.dispose();
+      records.clear();
       return engineStopped;
     },
   };

@@ -2175,6 +2175,15 @@ export class NativeSessionHost extends EventEmitter {
   // is the read-side answer to "what personality is this session running as".
   private presetIdFor = new Map<string, string>();   // resolved (post-legacy-mapping) preset id
 
+  /** Ids (not text) of messages waiting behind the running turn, oldest first, including ones typed while the session
+   *  was starting. WHY (R5-1): the session record reads the queue from its one owner instead of keeping a copy. */
+  queuedMessageIds(sessionId: string): string[] {
+    return [
+      ...(this.startingSends.get(sessionId) ?? []).map((q) => q.id),
+      ...(this.live.get(sessionId)?.queue ?? []).map((q) => q.id),
+    ];
+  }
+
   /** This session's current permission mode (default 'ask' when not seeded). */
   getPermissionMode(sessionId: string): NativePermissionMode { return this.modeFor.get(sessionId) ?? 'ask'; }
   /** This session's resolved preset id (null if not live). */
