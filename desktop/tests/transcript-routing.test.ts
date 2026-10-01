@@ -13,15 +13,12 @@ import { chatReducer } from '../src/renderer/state/chat-reducer';
 import type { ChatAction, ChatState } from '../src/renderer/state/chat-types';
 import { eventToAction } from '../src/renderer/state/transcript-event-actions';
 import { installTranscriptBatcher, routeTranscriptEvent, routeTranscriptShrink, type TranscriptBatcher } from '../src/renderer/state/transcript-batch';
-import type { TranscriptEvent } from '../src/shared/types';
-import { malformedEv } from './helpers/transcript-events';
+import type { TranscriptEvent, TranscriptEventType, DataOf, EventOf } from '../src/shared/types';
+import { ev as mkEv } from './helpers/transcript-events';
 
 const SID = 's1';
-// WHY loose (M5): these fixtures are minimal ON PURPOSE (a skill-invoked with only an id,
-// no payload at all) — they pin how routing copes, so they must not have to satisfy the
-// typed union the way `ev<T>` in helpers/transcript-events.ts does.
-const ev = (type: string, uuid: string, data: Record<string, unknown> = {}, timestamp = 1000): TranscriptEvent =>
-  malformedEv(type, data, { sessionId: SID, uuid, timestamp });
+const ev = <T extends TranscriptEventType>(type: T, uuid: string, data: DataOf<T>, timestamp = 1000): EventOf<T> =>
+  mkEv(type, data, { sessionId: SID, uuid, timestamp });
 
 let frames: FrameRequestCallback[] = [];
 const realRaf = window.requestAnimationFrame;
@@ -78,7 +75,7 @@ describe('transcript actions keep arrival order', () => {
 
   it('a message followed by /clear then another message keeps all three in order', () => {
     route(ev('user-message', 'u1', { text: 'before' }));
-    route(ev('context-clear', 'c1'));
+    route(ev('context-clear', 'c1', {}));
     route(ev('user-message', 'u2', { text: 'after' }));
     runFrame();
     expect(shown()).toEqual(['user:before', 'marker:clear-c1', 'user:after']);
@@ -87,7 +84,7 @@ describe('transcript actions keep arrival order', () => {
   it('the actions reach the store in exactly the order eventToAction produced them, for a mixed frame', () => {
     const events = [
       ev('user-message', 'u1', { text: 'a' }),
-      ev('skill-invoked', 'k1', { skillId: 'x' }),
+      ev('skill-invoked', 'k1', { skillId: 'x', displayName: 'X', body: 'b' }),
       ev('assistant-text', 'a1', { text: 'reply' }),
       ev('context-clear', 'c1', { contextUsedAfter: 0 }),
       ev('compact-summary', 'k2', { autoCompaction: true, contextUsedAfter: 5 }),
