@@ -192,3 +192,32 @@ describe('the record sees what publish delivered', () => {
     expect(events.at(-1).payload).toEqual({ sessionId: SID, flag: 'tag:t1', value: true });
   });
 });
+
+describe('the replay buffer is written between the windows and the phones, as the old pairs did', () => {
+  const CASES: Array<[string, string, any, keyof World['remote']]> = [
+    ['native hook event', 'hook-event', { type: 'PermissionRequest', sessionId: SID, payload: { _requestId: 'native-r9' }, timestamp: 1 }, 'bufferHookEvent'],
+    ['specialists event', 'specialists-event', { kind: 'run', sessionId: SID, run: { childId: 'c1' } }, 'bufferSpecialistRun'],
+    ['shell event', 'shell-event', { sessionId: SID, run: { shellId: 's1' } }, 'bufferShellRun'],
+  ];
+  for (const [name, source, payload, buffer] of CASES) {
+    it(`${name}: windows, then the buffer, then phones`, () => {
+      const w = boot();
+      const order: string[] = [];
+      w.remote.broadcast.mockImplementation(() => { order.push('phones'); });
+      const before = () => h.sent.get(OWNER)?.length ?? 0;
+      const n = before();
+      // The owner window's send is the first leg: note it by watching its recorder grow when the buffer runs.
+      w.remote[buffer as 'bufferHookEvent'].mockImplementation(() => { order.push(before() > n ? 'buffer (after windows)' : 'buffer (BEFORE windows)'); });
+      w.runtime.nativeHost.emit(source, payload);
+      expect(order).toEqual(['buffer (after windows)', 'phones']);
+    });
+
+    it(`${name}: a buffer that throws still leaves the windows with the event and phones without it (as before)`, () => {
+      const w = boot();
+      w.remote[buffer as 'bufferHookEvent'].mockImplementation(() => { throw new Error('malformed'); });
+      expect(() => w.runtime.nativeHost.emit(source, payload)).toThrow('malformed');
+      expect(h.sent.get(OWNER)?.length ?? 0).toBe(1);
+      expect(w.phoneMessages).toEqual([]);
+    });
+  }
+});

@@ -48,12 +48,44 @@ export const SPLIT_DELIVERY: Record<string, string> = {
   'pty:output': 'bytes, not events: kept in RemoteServer.ptyBuffers until R5-2',
 };
 
+/**
+ * A cheap size for the ring's byte bound, WITHOUT serialising the event.
+ * WHY (R5-1 review): note() used to JSON.stringify every published event. RemoteServer.broadcast deliberately skips its
+ * own stringify when no phone is connected, so that was a new per-event cost, tens of ms for a multi-MB tool result.
+ * A string's .length is O(1), so this walks the object counting string lengths plus a small per-key/per-node overhead,
+ * and gives up after SIZE_WALK_NODES nodes (the rest is charged at the average so far). It tracks JSON length closely.
+ * The unit is UTF-16 code units: V8 holds a string at 1 or 2 bytes per unit, so the held memory is between 1x and 2x
+ * this number (about 2x for non-Latin text) and the on-the-wire UTF-8 size can be up to 1.5x for it. The 2 MB bound is
+ * therefore "2 M units", a memory ceiling of about 2-4 MB per session, not exact bytes.
+ */
+const SIZE_WALK_NODES = 2000;
+export function estimateSize(payload: unknown): number {
+  let size = 0, nodes = 0;
+  const stack: unknown[] = [payload];
+  while (stack.length) {
+    const v = stack.pop();
+    if (typeof v === 'string') { size += v.length + 2; continue; }
+    if (v === null || typeof v !== 'object') { size += 5; continue; }
+    if (++nodes > SIZE_WALK_NODES) { size += Math.round(size / SIZE_WALK_NODES) * stack.length; break; }
+    if (Array.isArray(v)) {
+      // Push at most a budget's worth of elements (a 200k-element array must not cost 200k pushes); charge the rest flat.
+      const take = Math.min(v.length, SIZE_WALK_NODES);
+      size += 2 + v.length + (v.length - take) * 8;
+      for (let i = 0; i < take; i++) stack.push(v[i]);
+      continue;
+    }
+    let keys = 0;
+    for (const k in v as object) { if (++keys > SIZE_WALK_NODES) { size += 16; break; } size += k.length + 4; stack.push((v as Record<string, unknown>)[k]); }
+  }
+  return size;
+}
+
 export interface RecordedEvent {
   seq: number;
   type: string;
   /** Main's clock when it was recorded (ms). */
   at: number;
-  /** Size counted against the ring's byte bound (JSON length of the payload). */
+  /** Size counted against the ring's byte bound (estimateSize: about the JSON length, in UTF-16 units). */
   bytes: number;
   payload: unknown;
 }
@@ -186,8 +218,7 @@ export class SessionRecords {
     this.fold(rec, type, payload);
     // A password ask is announced and re-announced by the broker; the ring never holds its command line.
     if (type === 'hook:event' && asObject(payload).type === 'PasswordRequest') return seq;
-    let bytes: number;
-    try { bytes = JSON.stringify(payload)?.length ?? 0; } catch { bytes = 0; }
+    const bytes = estimateSize(payload);
     if (bytes > this.maxBytes) { rec.oversize++; return seq; }
     rec.ring.push({ seq, type, at, bytes, payload });
     rec.ringBytes += bytes;

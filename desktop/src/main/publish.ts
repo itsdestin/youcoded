@@ -33,6 +33,9 @@ interface PublishOptions {
    * `{sessionId, ...change}` — a shape difference that predates this file and is kept as it was).
    */
   windowArgs?: unknown[];
+  /** Runs between the windows' leg and the phones' leg (the replay-buffer write the old pairs did there; if it throws,
+   *  phones are skipped exactly as before). */
+  afterWindows?: () => void;
 }
 
 export type Publish = (sessionId: string, type: string, payload: unknown, options?: PublishOptions) => void;
@@ -41,6 +44,7 @@ export function createPublish(deps: PublishDeps): Publish {
   return function publish(sessionId, type, payload, options) {
     // Windows first, then phones: the order the pairs always had.
     deps.toWindows(sessionId, type, options?.windowArgs ?? [payload]);
+    options?.afterWindows?.();
     deps.toSockets({ type, payload }, deps.socketsFor?.(sessionId));
     // The record is bookkeeping. A bug in it must never cost a screen its event, so it comes last and is fenced.
     try { deps.records.note(sessionId, type, payload); }

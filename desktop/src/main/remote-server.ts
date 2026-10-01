@@ -889,7 +889,9 @@ export class RemoteServer {
   /** Only a session this app already opened a record for: the relay can carry events for sessions it does not own. */
   private noteHookForRecord(sessionId: unknown, event: unknown): void {
     const records = this.getNativeRuntime()?.records;
-    if (records && typeof sessionId === 'string' && records.has(sessionId)) records.note(sessionId, 'hook:event', event);
+    // Fenced like publish: the record is bookkeeping and must never cost a phone or window its hook event.
+    try { if (records && typeof sessionId === 'string' && records.has(sessionId)) records.note(sessionId, 'hook:event', event); }
+    catch (err) { console.warn('[remote-server] session record could not note a hook event:', String(err)); }
   }
 
   /** Push one hook event onto the rolling per-session replay buffer, WITHOUT
@@ -1755,7 +1757,8 @@ export class RemoteServer {
   }
 
   // Negative and descending: never a webContents id (those are positive).
-  private nextWatchId = -1;
+  // WHY -1000 (R5-1 review): -1 is the `?? -1` stand-in ipc/buddy.ts uses for a missing sender; a phone must never own it.
+  private nextWatchId = -1000;
 
   // Download links (§10). The revocation check reads the device store lazily,
   // at each GET, so a device unpaired while its link was alive is refused.

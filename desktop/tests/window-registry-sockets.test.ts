@@ -103,6 +103,34 @@ describe('RemoteServer — a connected phone joins and leaves the registry', () 
     expect(b.client.audienceId).toBeLessThan(0);
   });
 
+  it('a phone never owns -1, the stand-in the buddy window uses for a missing sender', async () => {
+    const reg = new WindowRegistry();
+    reg.registerWindow(10, 1, 'buddy');
+    const server = await makeServer(reg);
+    connect(server);
+    expect(reg.getSocketIds().every((id) => id <= -1000)).toBe(true);
+    // The buddy subscribe handler does subscribe(sessionId, sender?.id ?? -1): with a phone connected it must still refuse.
+    expect(() => reg.subscribe('s1', -1)).toThrow(/unknown window/);
+    server.stop(true);
+  });
+
+  it('a record that throws never costs a phone its hook event', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const records = { has: () => true, note: () => { throw new Error('record bug'); } };
+    const server: any = new RemoteServer(Object.assign(new EventEmitter(), { getAllSessions: () => [] }) as never, new EventEmitter() as never,
+      { enabled: true, port: 9900, toSafeObject: () => ({}) } as never, undefined, { getNativeRuntime: () => ({ records }) as never });
+    const ws: any = Object.assign(new EventEmitter(), { readyState: 1, bufferedAmount: 0, sent: [] as any[], send(raw: string) { this.sent.push(JSON.parse(raw)); }, close: vi.fn() });
+    server.addClient(ws, 'd', '127.0.0.1');
+    [...server.clients][0].phase = 'live';
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const event = { type: 'PermissionRequest', sessionId: 's1', payload: { _requestId: 'r' }, timestamp: 1 };
+    expect(() => server.onHookEvent(event)).not.toThrow();
+    expect(() => server.onPermissionExpired('s1', 'r', 'app-timeout')).not.toThrow();
+    expect(ws.sent.map((m: any) => m.type)).toEqual(['hook:event', 'hook:event']);
+    warn.mockRestore();
+    server.stop(true);
+  });
+
   it('stopping the server removes every phone', async () => {
     const reg = new WindowRegistry();
     const server = await makeServer(reg);

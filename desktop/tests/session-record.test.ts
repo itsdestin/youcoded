@@ -1,6 +1,6 @@
 // The session record (src/main/session-record.ts): the numbered ring, the epoch, the open asks, the resume rule.
-import { describe, it, expect } from 'vitest';
-import { SessionRecords, RING_MAX_EVENTS, RING_MAX_BYTES, SESSION_SCOPED_PUSHES } from '../src/main/session-record';
+import { describe, it, expect, vi } from 'vitest';
+import { SessionRecords, estimateSize, RING_MAX_EVENTS, RING_MAX_BYTES, SESSION_SCOPED_PUSHES } from '../src/main/session-record';
 
 const S = 's1';
 const text = (n: number, size = 20) => ({ sessionId: S, type: 'assistant-text', uuid: `u${n}`, timestamp: n, data: { text: 'x'.repeat(size) } });
@@ -242,5 +242,49 @@ describe('what is carried', () => {
       'hook:event', 'native:model-state', 'native:permission-mode', 'native:session-context', 'native:shell-event',
       'session:meta-changed', 'specialists:event', 'transcript:event', 'transcript:shrink',
     ]);
+  });
+});
+
+describe('sizing an event without serialising it', () => {
+  const bigResult = () => ({ sessionId: S, type: 'tool-result', uuid: 'big', timestamp: 1, data: { toolUseId: 't', toolResult: 'abcdefghij\n'.repeat(480_000), isError: false } }); // ~5 MB
+
+  it('does not JSON.stringify a 5 MB tool result, and costs a tiny fraction of serialising it', () => {
+    const r = new SessionRecords();
+    r.begin(S);
+    const ev = bigResult();
+    const spy = vi.spyOn(JSON, 'stringify');
+    const c0 = process.cpuUsage();
+    r.note(S, 'transcript:event', ev);
+    const c = process.cpuUsage(c0);
+    const stringified = spy.mock.calls.length;
+    spy.mockRestore();
+    const s0 = process.cpuUsage();
+    JSON.stringify(ev);
+    const full = process.cpuUsage(s0);
+    expect(stringified).toBe(0);
+    // CPU time, not wall clock. Serialising 5 MB is milliseconds; the estimate reads a length.
+    expect(c.user + c.system).toBeLessThan((full.user + full.system) / 4 + 1000);
+  });
+
+  it('counts a multi-MB event as oversize (numbered, not held) and keeps the ring bound', () => {
+    const r = new SessionRecords();
+    r.note(S, 'transcript:event', bigResult());
+    expect(r.headSeq(S)).toBe(1);
+    expect(r.events(S)).toHaveLength(0);
+  });
+
+  it('tracks the JSON length closely for ordinary events (within 25%)', () => {
+    for (const e of [text(1, 20), text(2, 2000), ask('r1'), { type: 'tool-use', data: { toolUseId: 't', toolName: 'Bash', toolInput: { command: 'ls -la /tmp && cat x' } } }]) {
+      const real = JSON.stringify(e).length;
+      expect(Math.abs(estimateSize(e) - real) / real).toBeLessThan(0.25);
+    }
+  });
+
+  it('gives up walking a huge object after a fixed number of nodes (bounded CPU)', () => {
+    const wide = { items: Array.from({ length: 200_000 }, (_, i) => ({ i })) };
+    const c0 = process.cpuUsage();
+    estimateSize(wide);
+    const c = process.cpuUsage(c0);
+    expect(c.user + c.system).toBeLessThan(20_000); // microseconds
   });
 });

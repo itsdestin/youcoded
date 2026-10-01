@@ -1567,22 +1567,18 @@ export function registerIpcHandlers(
   // PermissionRequest/PermissionExpired — hook-dispatcher/ToolCard render them
   // unchanged. Ids are 'native-'-prefixed so permission:respond routes by id.
   nativeHost.on('hook-event', (event: HookEvent) => {
-    if (remoteServer) {
-      // Fix (not in the original plan — see the branch's commit history):
-      // native hook events reach remote clients ONLY through this direct
-      // broadcast() call. RemoteServer's own onHookEvent — which is what
-      // fills hookBuffers for connect-time replay — is wired solely to the
-      // LEGACY CC hookRelay, never to nativeHost. Without this a phone
-      // reconnecting while a native permission ask was open would see no card
-      // until the next 3s heartbeat (permission-broker.ts). bufferHookEvent()
-      // feeds the SAME hookBuffers map the legacy path fills, so the existing
-      // replay loop in restoreClient() picks these up for free, and its
-      // PermissionResolved purge keeps answered asks out of that replay.
-      remoteServer.bufferHookEvent(event);
-    }
-    // WHY after the buffer (one-core R5-1): the pair was window send, buffer, phone broadcast; the two sends
-    // are one call now and the buffer write is synchronous, so nothing can observe the order of those.
-    publish(event.sessionId, IPC.HOOK_EVENT, event);
+    // Fix (not in the original plan — see the branch's commit history):
+    // native hook events reach remote clients ONLY through this direct
+    // broadcast() call. RemoteServer's own onHookEvent — which is what
+    // fills hookBuffers for connect-time replay — is wired solely to the
+    // LEGACY CC hookRelay, never to nativeHost. Without this a phone
+    // reconnecting while a native permission ask was open would see no card
+    // until the next 3s heartbeat (permission-broker.ts). bufferHookEvent()
+    // feeds the SAME hookBuffers map the legacy path fills, so the existing
+    // replay loop in restoreClient() picks these up for free, and its
+    // PermissionResolved purge keeps answered asks out of that replay.
+    // WHY afterWindows (R5-1 review): the pair was window send, buffer write, phone broadcast; publish keeps that order.
+    publish(event.sessionId, IPC.HOOK_EVENT, event, { afterWindows: () => remoteServer?.bufferHookEvent(event) });
   });
 
   // Task 8 (plan 1c) — the ledger's own write is the ONLY thing that fires
@@ -1591,14 +1587,11 @@ export function registerIpcHandlers(
   // event, one changed hire. Push-only — there is no specialists:event
   // REQUEST handler anywhere, same shape as native:model-state.
   nativeHost.on('specialists-event', (event: SpecialistsEvent) => {
-    if (remoteServer) {
-      // Task 9 (plan 1c): the phone hydrates over this WebSocket, never
-      // through TRANSCRIPT_REPLAY, so it needs its own connect-time catch-up
-      // for a helper's run status — bufferSpecialistRun feeds the buffer
-      // restoreClient() reads from on connect (mirrors bufferHookEvent above).
-      remoteServer.bufferSpecialistRun(event);
-    }
-    publish(event.sessionId, IPC.SPECIALISTS_EVENT, event);
+    // Task 9 (plan 1c): the phone hydrates over this WebSocket, never
+    // through TRANSCRIPT_REPLAY, so it needs its own connect-time catch-up
+    // for a helper's run status — bufferSpecialistRun feeds the buffer
+    // restoreClient() reads from on connect (mirrors bufferHookEvent above).
+    publish(event.sessionId, IPC.SPECIALISTS_EVENT, event, { afterWindows: () => remoteServer?.bufferSpecialistRun(event) });
   });
 
   // What this session was given, pushed once when it opens (contract R23: every
@@ -1617,8 +1610,7 @@ export function registerIpcHandlers(
   // shape as specialists:event — window + remote broadcast, buffered for a
   // reconnecting phone. Push-only; there is no request handler.
   nativeHost.on('shell-event', (event: ShellEvent) => {
-    if (remoteServer) remoteServer.bufferShellRun(event);
-    publish(event.sessionId, IPC.NATIVE_SHELL_EVENT, event);
+    publish(event.sessionId, IPC.NATIVE_SHELL_EVENT, event, { afterWindows: () => remoteServer?.bufferShellRun(event) });
   });
 
   // Perf cycle 2: paged history. A window opening/resuming a session asks for
