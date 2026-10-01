@@ -391,7 +391,10 @@ function describeError(res: Exclude<MutationResult, { ok: true }>): string {
 // `cellSelectorKey` already separates two identifiers with `\u0000` (a byte
 // that can never appear in a real path or project root).
 function keyFor(path: string, projectRoot: string | undefined): string {
-  return `${projectRoot ?? ''}\u0000${path}`;
+  // WHY the backslash fold: main pushes `docComments:changed` with `/`
+  // separators, but a Windows caller may have subscribed with `docs\live.md`;
+  // both spellings name the same file and must land on the same key.
+  return `${projectRoot ?? ''}\u0000${path.replace(/\\/g, '/')}`;
 }
 function projectRootOfKey(key: string): string | undefined {
   const root = key.slice(0, key.indexOf('\u0000'));

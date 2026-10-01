@@ -95,7 +95,11 @@ describe('doc-comments watcher', () => {
   it('coalesces a burst of writes to the SAME file into one push', async () => {
     const target: CommentsWatchTarget = { kind: 'project', commentsDir, projectRoot: root };
     await watchComments(target, 1);
-    await untilLive(commentsDir, 'burst.md.json');
+    // WHY a separate probe file: untilLive may rewrite its file several times
+    // before one lands, and a LATER rewrite's own debounced push can arrive
+    // after `changes = []` — probing burst.md itself counted that leftover as
+    // a second burst push (seen on Linux CI: "expected 2 to be 1").
+    await untilLive(commentsDir, 'burst-probe.md.json');
     changes = [];
     const file = path.join(commentsDir, 'burst.md.json');
     // Several rapid rewrites inside the SAME debounce window must collapse to

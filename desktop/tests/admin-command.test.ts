@@ -183,7 +183,10 @@ describe('visibleSudoLines: sudo argv with sudo and its own options stripped', (
 
   // Same two fixes as adminCommandVerdict, kept symmetric (review T1-1/T1-2).
   it('finds a sudo line inside find -exec', () => {
-    expect(visibleSudoLines('find . -exec sudo rm {} \\;')).toEqual([['rm', '{}']]);
+    // WHY the explicit linux ctx: `\;` is a POSIX escape. Without a ctx the
+    // tokenizer follows the HOST platform (below), so on a Windows runner the
+    // backslash stayed a literal word and the test failed for that reason alone.
+    expect(visibleSudoLines('find . -exec sudo rm {} \\;', { platform: 'linux' })).toEqual([['rm', '{}']]);
   });
 
   it('a heredoc body mentioning sudo yields no line when the feeder only writes it', () => {

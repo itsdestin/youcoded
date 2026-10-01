@@ -107,7 +107,11 @@ function keyFor(target: CommentsWatchTarget): string {
 function sourcePathFor(commentsDir: string, absPath: string): string | null {
   const rel = path.relative(commentsDir, absPath);
   if (rel.startsWith('..') || path.isAbsolute(rel) || !rel.endsWith('.json')) return null;
-  return rel.slice(0, -'.json'.length);
+  // WHY forward slashes: on Windows path.relative() returns `docs\live.md`,
+  // while every subscriber (desktop renderer, remote browser, Android) names
+  // the file `docs/live.md` — so a comment change in any subfolder never
+  // matched an open pane and its live refresh silently never happened.
+  return rel.slice(0, -'.json'.length).split(path.sep).join('/');
 }
 
 function scheduleChange(entry: Entry, sourcePath: string): void {
