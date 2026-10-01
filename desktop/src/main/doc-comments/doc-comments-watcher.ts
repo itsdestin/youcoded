@@ -51,6 +51,8 @@ interface Entry {
   // timers, and the mtime each sidecar had when reconcile last pushed it.
   reconcileTimers: ReturnType<typeof setTimeout>[];
   reconciledMtimes: Map<string, number>;
+  // Source paths chokidar itself has reported — never re-pushed by reconcile.
+  delivered: Set<string>;
 }
 
 // F3 fix (T5 review): `projectRoot` rides along on every push so a renderer
@@ -155,6 +157,7 @@ export async function watchComments(target: CommentsWatchTarget, subscriberId: n
     stopped: false,
     reconcileTimers: [],
     reconciledMtimes: new Map(),
+    delivered: new Set(),
     // T3 follow-up: a 'document' target's own `projectRoot` rides along too
     // (F3, T5 review's reasoning applies identically — two projects can share
     // a `report.docx`), not just 'project's.
@@ -207,7 +210,10 @@ export async function watchComments(target: CommentsWatchTarget, subscriberId: n
     watcher.on('all', (_event: string, absPath: string) => {
       if (target.kind === 'project') {
         const sourcePath = sourcePathFor(target.commentsDir, absPath);
-        if (sourcePath !== null) scheduleChange(entry!, sourcePath);
+        if (sourcePath !== null) {
+          entry!.delivered.add(sourcePath);
+          scheduleChange(entry!, sourcePath);
+        }
       } else {
         scheduleChange(entry!, target.sourcePath);
       }
@@ -221,7 +227,7 @@ export async function watchComments(target: CommentsWatchTarget, subscriberId: n
         const t = setTimeout(() => {
           if (entry!.stopped || entry!.watcher !== watcher) return;
           void reconcileMissedChanges(watcher, target.commentsDir, startedAtMs, entry!.reconciledMtimes,
-            (sourcePath) => scheduleChange(entry!, sourcePath)).catch(() => { /* best-effort */ });
+            entry!.delivered, (sourcePath) => scheduleChange(entry!, sourcePath)).catch(() => { /* best-effort */ });
         }, delay);
         t.unref?.();
         entry.reconcileTimers.push(t);
@@ -284,6 +290,9 @@ const RECONCILE_DELAYS_MS = [250, 1_000, 3_000, 8_000];
 // File-system mtimes can trail Date.now() slightly; anything written this
 // close before the watch started may still have been missed.
 const RECONCILE_MTIME_SLACK_MS = 2_000;
+// A file must have been still this long before reconcile treats its change as
+// missed: comfortably past chokidar's 500 ms awaitWriteFinish window.
+const RECONCILE_STABLE_MS = 1_500;
 const reconcilePlatform: NodeJS.Platform = process.platform;
 
 interface ReconcilableWatcher {
@@ -298,7 +307,9 @@ export async function reconcileMissedChanges(
   commentsDir: string,
   startedAtMs: number,
   reconciledMtimes: Map<string, number>,
+  delivered: ReadonlySet<string>,
   onChange: (sourcePath: string) => void,
+  nowMs: number = Date.now(),
 ): Promise<void> {
   const watchedDirs = new Set(Object.keys(watcher.getWatched()).map((d) => path.resolve(d)));
   const walk = async (dir: string): Promise<void> => {
@@ -314,9 +325,15 @@ export async function reconcileMissedChanges(
         let mtimeMs: number;
         try { mtimeMs = (await fs.stat(abs)).mtimeMs; } catch { continue; }
         if (mtimeMs < startedAtMs || reconciledMtimes.get(abs) === mtimeMs) continue;
-        reconciledMtimes.set(abs, mtimeMs);
+        // WHY these two skips: a write chokidar is still holding (its 500 ms
+        // awaitWriteFinish) or has already delivered is NOT missed — pushing it
+        // here too sent a second refresh for one change (macOS CI: the
+        // burst-coalescing and .pending tests saw 2 pushes, not 1).
+        if (nowMs - mtimeMs < RECONCILE_STABLE_MS) continue;
         const sourcePath = sourcePathFor(commentsDir, abs);
-        if (sourcePath !== null) onChange(sourcePath);
+        if (sourcePath === null || delivered.has(sourcePath)) continue;
+        reconciledMtimes.set(abs, mtimeMs);
+        onChange(sourcePath);
       }
     }
   };

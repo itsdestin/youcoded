@@ -379,7 +379,7 @@ describe('reconcileMissedChanges — what a watch that missed its first moments 
     await fs.promises.writeFile(path.join(commentsDir, 'docs', 'live.md.json'), '{}');
     const watcher = blindWatcher();
     const pushed: string[] = [];
-    await reconcileMissedChanges(watcher, commentsDir, startedAt, new Map(), (p) => pushed.push(p));
+    await reconcileMissedChanges(watcher, commentsDir, startedAt, new Map(), new Set(), (p) => pushed.push(p), Date.now() + 5_000);
     expect(watcher.add).toHaveBeenCalledWith(path.join(commentsDir, 'docs'));
     expect(pushed).toEqual(['docs/live.md']);
   });
@@ -390,9 +390,20 @@ describe('reconcileMissedChanges — what a watch that missed its first moments 
     const watcher = blindWatcher();
     const seenMtimes = new Map<string, number>();
     const pushed: string[] = [];
-    await reconcileMissedChanges(watcher, commentsDir, startedAt, seenMtimes, (p) => pushed.push(p));
-    await reconcileMissedChanges(watcher, commentsDir, startedAt, seenMtimes, (p) => pushed.push(p));
+    await reconcileMissedChanges(watcher, commentsDir, startedAt, seenMtimes, new Set(), (p) => pushed.push(p), Date.now() + 5_000);
+    await reconcileMissedChanges(watcher, commentsDir, startedAt, seenMtimes, new Set(), (p) => pushed.push(p), Date.now() + 5_000);
     expect(pushed).toEqual(['plan.md']);
+  });
+
+  it('never re-pushes a change the watcher already delivered, or one it is still settling', async () => {
+    const startedAt = Date.now() - 2_000;
+    await fs.promises.writeFile(path.join(commentsDir, 'seen.md.json'), '{}');
+    await fs.promises.writeFile(path.join(commentsDir, 'fresh.md.json'), '{}');
+    const watcher = blindWatcher();
+    const pushed: string[] = [];
+    // 'seen' was delivered by chokidar; 'fresh' is checked "now", inside the settle window.
+    await reconcileMissedChanges(watcher, commentsDir, startedAt, new Map(), new Set(['seen.md']), (p) => pushed.push(p), Date.now());
+    expect(pushed).toEqual([]);
   });
 
   it('leaves files from before the watch began and the .pending queue alone', async () => {
@@ -404,7 +415,7 @@ describe('reconcileMissedChanges — what a watch that missed its first moments 
     await fs.promises.writeFile(path.join(commentsDir, '.pending', 'req-1.json'), '{}');
     const watcher = blindWatcher();
     const pushed: string[] = [];
-    await reconcileMissedChanges(watcher, commentsDir, Date.now() - 2_000, new Map(), (p) => pushed.push(p));
+    await reconcileMissedChanges(watcher, commentsDir, Date.now() - 2_000, new Map(), new Set(), (p) => pushed.push(p), Date.now() + 5_000);
     expect(pushed).toEqual([]);
     expect(watcher.add).not.toHaveBeenCalled();
   });
