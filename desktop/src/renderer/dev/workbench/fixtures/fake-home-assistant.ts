@@ -70,7 +70,12 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
   let url: URL;
   try { url = new URL(req.url); } catch { return null; }
   if (!url.pathname.startsWith('/api/')) return null;
-  if (url.pathname === '/api/template') return ok(JSON.stringify(ROOMS));
+  // Rooms with nothing in them are left out, as the real template does; each
+  // item carries the id of the device it belongs to (`device_id(e)`), which
+  // a room move needs (fakeHomeAssistantSocket).
+  if (url.pathname === '/api/template') {
+    return ok(JSON.stringify(ROOMS.filter((r) => r.items.length).map((r) => ({ ...r, items: r.items.map((t) => ({ ...t, device: deviceOf(t.id) })) }))));
+  }
   const cam = /^\/api\/camera_proxy\/(.+)$/.exec(url.pathname);
   if (cam) {
     const t = find(cam[1]);
@@ -103,4 +108,98 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
     return ok('[]');
   }
   return null;
+}
+
+// ── The socket: renames and room moves (home-page-v2 deck, Q-where) ──────
+// Home Assistant changes names and rooms only over its websocket. The real
+// app opens it, sends the connection's greeting with the key, then the
+// page's messages; this answers the same messages the same way, so the page
+// can be operated end to end with no house. Areas are kept apart from ROOMS
+// so a room created empty still exists before anything is moved into it.
+
+const AREAS = ROOMS.map((r) => ({ area_id: r.id, name: r.name }));
+
+/** The pretend device behind an entity: one device per entity, which is
+ *  how most single-light bulbs and speakers appear in Home Assistant. */
+function deviceOf(entityId: string): string {
+  return `dev_${entityId.replace(/[^a-z0-9]/g, '_')}`;
+}
+
+function moveTo(entityId: string, areaId: string): boolean {
+  const area = AREAS.find((a) => a.area_id === areaId);
+  if (!area) return false;
+  let thing: Thing | undefined;
+  for (const r of ROOMS) {
+    const i = r.items.findIndex((t) => t.id === entityId);
+    if (i >= 0) [thing] = r.items.splice(i, 1);
+  }
+  if (!thing) return false;
+  let room = ROOMS.find((r) => r.id === areaId);
+  if (!room) { room = { id: areaId, name: area.name, items: [] }; ROOMS.push(room); }
+  room.items.push(thing);
+  return true;
+}
+
+function reply(id: unknown, result: unknown, error?: string): string {
+  return JSON.stringify(error
+    ? { id, type: 'result', success: false, error: { code: 'not_found', message: error } }
+    : { id, type: 'result', success: true, result });
+}
+
+function answerOne(raw: string): string | null {
+  let m: Record<string, unknown>;
+  try { m = JSON.parse(raw); } catch { return null; }
+  const { id, type } = m;
+  switch (type) {
+    case 'config/area_registry/list': return reply(id, AREAS);
+    case 'config/area_registry/create': {
+      const name = String(m.name ?? '').trim();
+      if (!name) return reply(id, null, 'A room needs a name.');
+      let areaId = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+      while (AREAS.some((a) => a.area_id === areaId)) areaId += '_2';
+      const area = { area_id: areaId, name };
+      AREAS.push(area);
+      return reply(id, area);
+    }
+    case 'config/area_registry/update': {
+      const area = AREAS.find((a) => a.area_id === m.area_id);
+      if (!area) return reply(id, null, 'No such room.');
+      if (typeof m.name === 'string' && m.name.trim()) {
+        area.name = m.name.trim();
+        const room = ROOMS.find((r) => r.id === area.area_id);
+        if (room) room.name = area.name;
+      }
+      return reply(id, area);
+    }
+    case 'config/entity_registry/update': {
+      const t = find(String(m.entity_id ?? ''));
+      if (!t) return reply(id, null, 'No such device.');
+      // `name: null` puts the device's own name back, as in Home Assistant.
+      if (typeof m.name === 'string' && m.name.trim()) t.name = m.name.trim();
+      if (typeof m.area_id === 'string' && !moveTo(t.id, m.area_id)) return reply(id, null, 'No such room.');
+      return reply(id, { entity_entry: { entity_id: t.id, name: t.name } });
+    }
+    case 'config/device_registry/update': {
+      const entity = ROOMS.flatMap((r) => r.items).find((t) => deviceOf(t.id) === m.device_id);
+      if (!entity) return reply(id, null, 'No such device.');
+      if (typeof m.area_id === 'string' && !moveTo(entity.id, m.area_id)) return reply(id, null, 'No such room.');
+      return reply(id, { id: m.device_id, area_id: m.area_id });
+    }
+    default: return reply(id, null, `Unknown command ${String(type)}.`);
+  }
+}
+
+/** Answers a socket exchange with the pretend Home Assistant: the greeting
+ *  pair first (`auth_required`, then `auth_ok` — the real app sends the key),
+ *  then one answer per message the page sent, cut at `until` like the app. */
+export function fakeHomeAssistantSocket(req: PageFetchRequest): PageFetchResult | null {
+  let url: URL;
+  try { url = new URL(req.url); } catch { return null; }
+  if (url.pathname !== '/api/websocket' || !req.socket) return null;
+  const frames = [JSON.stringify({ type: 'auth_required', ha_version: '2026.9.0' }), JSON.stringify({ type: 'auth_ok', ha_version: '2026.9.0' })];
+  for (const m of req.socket.send) {
+    const a = answerOne(m);
+    if (a) frames.push(a);
+  }
+  return { ok: true, status: 101, headers: {}, body: JSON.stringify(frames.slice(0, req.socket.until)) };
 }

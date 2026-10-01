@@ -88,6 +88,14 @@ export type PageConnection =
       keyIn?: 'header' | 'query';
       keyParam?: string;
       keyScheme?: KeyScheme;
+      /** The first message of a socket exchange (`PageFetchRequest.socket`),
+       *  sent BY THE APP before any of the page's own, with `{{key}}` replaced
+       *  by the saved key. It is how a device that signs in over its socket
+       *  (Home Assistant: `{"type":"auth","access_token":"{{key}}"}`) gets the
+       *  key without the page ever holding it: the page cannot put the key in
+       *  a message of its own, so it cannot write it somewhere it could read
+       *  back. Part of the approval fingerprint. */
+      socketHello?: string;
     };
 
 /** A connection as the person sees it on one page. */
@@ -133,6 +141,16 @@ export interface PageFetchRequest {
    *  anything that is not an image, so it cannot become a way to carry other
    *  bytes past the text redaction. Default: text. */
   as?: 'text' | 'picture';
+  /** A one-shot socket exchange with an approved `device` that may make
+   *  changes (home-page-v2 deck, Q-where: renames and room moves happen in
+   *  the device itself, which some devices only offer over a socket). The
+   *  app opens `ws://` (or `wss://` for an https URL) to the SAME approved
+   *  host and port, sends the connection's `socketHello` and then `send` in
+   *  order, collects text messages until it holds `until` of them (or the
+   *  device closes), and closes. The answer's `body` is a JSON array of the
+   *  messages received, in order, with the key removed. Nothing stays open:
+   *  a page that is hidden or closed holds no socket. */
+  socket?: { send: string[]; until: number; timeoutMs?: number };
 }
 
 type PageFetchRefusal =

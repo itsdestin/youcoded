@@ -67,6 +67,12 @@ function pagesBridge(): PagesBridge | undefined {
 /** A page's own script wrote these, so nothing is assumed about them: only a
  *  flat object of strings is forwarded as request headers (main allows three
  *  of them through anyway — design §4 step 4). */
+function isSocketPlan(v: unknown): v is NonNullable<PageFetchRequest['socket']> {
+  const o = v as { send?: unknown; until?: unknown; timeoutMs?: unknown } | null;
+  return !!o && typeof o === 'object' && Array.isArray(o.send) && o.send.every((m) => typeof m === 'string')
+    && typeof o.until === 'number' && (o.timeoutMs === undefined || typeof o.timeoutMs === 'number');
+}
+
 function isStringMap(v: unknown): v is Record<string, string> {
   return !!v && typeof v === 'object' && !Array.isArray(v) && Object.values(v).every((x) => typeof x === 'string');
 }
@@ -198,7 +204,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
     };
     const onMessage = (e: MessageEvent) => {
       if (e.source !== frameRef.current?.contentWindow) return;
-      const d = e.data as { type?: unknown; data?: unknown; id?: unknown; url?: unknown; method?: unknown; headers?: unknown; body?: unknown; as?: unknown } | null;
+      const d = e.data as { type?: unknown; data?: unknown; id?: unknown; url?: unknown; method?: unknown; headers?: unknown; body?: unknown; as?: unknown; socket?: unknown } | null;
       if (!d) return;
       // Esc inside the page = Esc on the view: leave, unless Settings or the
       // library is open over it (their own Esc handling owns the key then).
@@ -224,6 +230,9 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
           ...(typeof d.body === 'string' ? { body: d.body } : {}),
           // A camera snapshot comes back as a data: link (home-device deck).
           ...(d.as === 'picture' ? { as: 'picture' as const } : {}),
+          // A one-shot socket exchange with a home device (renames, room
+          // moves). Shape-checked here; main checks everything that matters.
+          ...(isSocketPlan(d.socket) ? { socket: d.socket } : {}),
         };
         bridge.fetch(pageId, req).then(answer, () => {
           answer({ ok: false, reason: 'network', message: 'The request could not be completed.' });
