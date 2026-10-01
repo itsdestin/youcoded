@@ -136,8 +136,8 @@ describe('office session registry lifecycle', () => {
   });
 
   // Final review, finding 4: quit waits at most 5 s. A save still running then is stopped and its
-  // file stays as it was — so quit writes the file down for the next launch to report.
-  it('writes down each save it had to stop at quit', async () => {
+  // file stays as it was; its edits stay in the document's recovery journal (Task 8).
+  it('stops a save still running at quit, leaving the file as it was', async () => {
     const docs = await fsp.mkdtemp(path.join(tmpdir(), 'office-quit-docs-'));
     createdBases.push(docs);
     const file = path.join(docs, 'a.docx');
@@ -156,19 +156,10 @@ describe('office session registry lifecycle', () => {
     await run(s.token, 'write_editor_bin', { data: Buffer.from('bin').toString('base64') });
     const saved = run(s.token, 'save_file', {}).catch((e: Error) => e);
     await translating;
-    const record = vi.fn(async () => {});
-    await mod.quitOfficeSessions(50, record);
-    expect(record).toHaveBeenCalledWith([file]);
+    await mod.quitOfficeSessions(50);
     kill();
     expect(await saved).toBeInstanceOf(Error);
     expect(await fsp.readFile(file, 'utf8')).toBe('original');
-  });
-
-  it('writes nothing down when quit found every save finished', async () => {
-    await mod.initOfficeSessions();
-    const record = vi.fn(async () => {});
-    await mod.quitOfficeSessions(50, record);
-    expect(record).not.toHaveBeenCalled();
   });
 
   it('does nothing (not throw) if cleanup runs before any init', async () => {

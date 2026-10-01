@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-// Unsaved non-Office edits (open text editors, parked drafts): the window tells main their file
+// Unsaved edits (open text editors, parked drafts; Office documents too since Task 8 — see
+// office-no-lost-edits.test.tsx): the window tells main their file
 // names so a quit — or the last window's close — can be refused before anything is torn down,
 // and the refused prompt lists them with a way to open each parked draft or discard them all.
 import React from 'react';
@@ -23,14 +24,13 @@ function bridge() {
   const office = {
     setOtherUnsaved: vi.fn(),
     proceedClose: vi.fn(),
-    onFlushRequest: vi.fn(), flushDone: vi.fn(),
     onUnsavedPrompt: vi.fn((cb: typeof prompt) => { prompt = cb; }),
   };
   (window as unknown as { claude: unknown }).claude = { office };
-  return { office, prompt: (p: Partial<OfficeUnsavedPrompt> = {}) => act(() => prompt({ count: 0, firstPath: '', other: true, ...p })) };
+  return { office, prompt: (p: Partial<OfficeUnsavedPrompt> = {}) => act(() => prompt({ mode: 'quit', afterTeardown: false, restartDropped: false, ...p })) };
 }
 
-describe('unsaved non-Office edits', () => {
+describe('unsaved edits', () => {
   it('reports the file names to main only when they change', () => {
     const { office } = bridge();
     const a = holdUnsavedEditor({ name: 'notes.md', discard: () => {} });

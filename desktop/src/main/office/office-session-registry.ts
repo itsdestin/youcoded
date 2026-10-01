@@ -5,8 +5,8 @@ import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { log } from '../logger';
-import { recordAbandonedSaves } from './abandoned-saves';
-import { awaitIdle, drainSession, pathsWithSaveInFlight, stopOfficeCommands } from './office-commands';
+import { awaitIdle, drainSession, stopOfficeCommands } from './office-commands';
+import { settleAllRecovery } from './office-recovery';
 import { createSessions } from './office-sessions';
 import { cancelAllPruning } from './prune-schedule';
 import { killRunningConverters } from './x2t';
@@ -87,13 +87,12 @@ export async function cleanupOfficeSessions(): Promise<void> {
 // a finished copy (kept beside the file, not in the temp base) over it. The removal itself is
 // still started, not awaited, for the reason given on cleanupOfficeSessions above. main.ts
 // starts this early in shutdown and awaits it last, so the wait overlaps the other teardown.
-export async function quitOfficeSessions(capMs = 5_000, record: (paths: string[]) => Promise<void> = recordAbandonedSaves): Promise<void> {
+// A save still running at the cap is stopped and its file stays as it was; its edits stay in the
+// document's recovery journal (Task 8), which the next open of that file offers back.
+export async function quitOfficeSessions(capMs = 5_000): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const idle = await Promise.race([awaitIdle().then(() => true), new Promise<boolean>((r) => (timer = setTimeout(() => r(false), capMs)))]).catch(() => false);
+  await Promise.race([awaitIdle(), new Promise<void>((r) => (timer = setTimeout(r, capMs)))]).catch(() => {});
   clearTimeout(timer);
-  // WHY recorded (final review, finding 4): every save still running now is about to be stopped,
-  // and its file stays as it was before it. The app will be gone, so the next launch says so.
-  if (!idle) await record(pathsWithSaveInFlight()).catch(() => {});
   // WHY before the removal (fix round 1): from here on every new command is refused, and a
   // save still translating (the cap was hit) abandons its copy instead of replacing the file.
   stopOfficeCommands();
@@ -103,5 +102,9 @@ export async function quitOfficeSessions(capMs = 5_000, record: (paths: string[]
   // neither outlives the app nor keeps writing into folders being removed; its save then fails
   // and throws its private copy away, leaving the user's file as it was.
   killRunningConverters();
+  // All-saved recovery journals go; one with edits its file never got stays (Task 8). Capped: a
+  // wedged disk must not hold the quit — a journal left behind is only removed at its next open.
+  await Promise.race([settleAllRecovery(), new Promise<void>((r) => (timer = setTimeout(r, 1_000)))]).catch(() => {});
+  clearTimeout(timer);
   void cleanupOfficeSessions();
 }

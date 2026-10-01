@@ -16,10 +16,10 @@ import path from 'node:path';
 import { OFFICE_MAX_BYTES, type OfficeFile, type OfficeOpen, type OfficeSaveCopyResult, type OfficeStatus, type OfficeVersion } from '../../shared/office-types';
 import { authorizeArtifactWrite } from '../artifacts/write-authorization';
 import { log } from '../logger';
-import { keepAbandonedSavesIn, recordAbandonedSaves, takeAbandonedSaves } from './abandoned-saves';
 import { saveEditorSettings } from './editor-settings';
 import { createOfficeCommands, OFFICE_COMMANDS } from './office-commands';
 import { grantPicked } from './office-pictures';
+import { keepRecoveryIn } from './office-recovery';
 import type { createSessions, OfficeSession } from './office-sessions';
 import type { PrintOutcome } from './office-print';
 import { formatFor } from './x2t';
@@ -99,7 +99,6 @@ interface OfficeSender {
   id: number;
   once(event: 'destroyed', listener: () => void): unknown;
   isDestroyed?(): boolean;
-  on?(event: 'did-start-navigation', listener: (details: { isMainFrame?: boolean; isSameDocument?: boolean }) => void): unknown;
   send?(channel: string, ...args: unknown[]): void;
 }
 
@@ -195,11 +194,7 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
   // WHY: ipcMain.handle throws on re-registration. Clearing first keeps hot-reload dev
   // sessions (scripts/run-dev.sh) from crashing on reload.
   for (const ch of CHANNELS) ipcMain.removeHandler(ch);
-  ipcMain.removeHandler('office:lost-saves'); // desktop only, so not in CHANNELS (see below)
-  keepAbandonedSavesIn(deps.userData); // where quit records the saves it had to stop
-  // Whether a page has taken the last run's stopped saves yet. WHY a flag as well as the file's
-  // removal: two windows asking at the same moment would both read the file before either removed it.
-  let lastRunTaken = false;
+  keepRecoveryIn(deps.userData); // where each open document's crash-recovery journal lives (Task 8)
   // WHY cancel the previous one: a re-register (a dev reload) must not leave two tidy-ups queued.
   activePruner?.cancel();
   const pruner = activePruner = deps.pruneVersionsAfterMs === undefined ? null
@@ -247,25 +242,15 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
   // tab, and an Edit in a file panel), and each place is handed the same token. Only the
   // last one's close may tear the session down. Keyed by window, then token.
   const opens = new Map<number, Map<string, number>>();
-  // ── Saves lost to a reload (fix round 6, M4) ──
-  // WHY: a reload lets go of a save still with main (the renderer's 4 s cap); if that save then
-  // fails, the page that asked is gone and its failure would vanish. So main counts each
-  // window's page loads, remembers a save that failed after its page changed, and the new page
-  // takes the list (office:lost-saves) and shows "An Office document couldn't be saved.".
-  const pageLoads = new Map<number, number>();
-  const lost = new Map<number, string[]>();
+  // (A save that fails after its page reloaded, or its window closed, needs no report of its own
+  // since Task 8: its edits are in the document's recovery journal, offered back at the next open.)
   function watch(sender: OfficeSender): void {
     const id = sender.id;
     if (watched.has(id)) return;
     watched.add(id);
-    sender.on?.('did-start-navigation', (details) => {
-      if (details?.isMainFrame && !details.isSameDocument) pageLoads.set(id, (pageLoads.get(id) ?? 0) + 1);
-    });
     sender.once('destroyed', () => {
       watched.delete(id);
       opens.delete(id);
-      pageLoads.delete(id);
-      lost.delete(id);
       void deps.getSessions()?.closeAllFor(id).catch((e) => log('WARN', 'Office', 'closing a gone window\'s documents failed', errorKind(e)));
     });
   }
@@ -359,21 +344,7 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     if (cmd === 'save_file_as') return saveFileAs(reg, s, a);
     if (cmd === 'print_document') return printDocument(sender, reg, s, a);
     if (cmd === 'save_editor_settings') return saveSettings(a);
-    const page = pageLoads.get(sender.id) ?? 0;
-    try {
-      return await commandsFor(reg)(token, cmd, a);
-    } catch (e) {
-      // The page that asked was reloaded meanwhile: keep the failure for the new one (M4).
-      if (cmd === 'save_file' && (pageLoads.get(sender.id) ?? 0) !== page && !sender.isDestroyed?.()) {
-        lost.set(sender.id, [...(lost.get(sender.id) ?? []), s.path]);
-        try { sender.send?.('office:saves-lost'); } catch { /* the window is going */ }
-      }
-      // WHY (final review follow-up): the window that asked has closed (its close let go of this
-      // save, which main was still finishing), so no page of it can be told. The same record quit
-      // uses carries it to the next launch's toast. Not awaited: the caller is gone anyway.
-      if (cmd === 'save_file' && sender.isDestroyed?.()) void recordAbandonedSaves([s.path], deps.userData);
-      throw e;
-    }
+    return commandsFor(reg)(token, cmd, a);
   }
 
   // The editor's own settings (finish plan Task 4). WHY answered null even when the write fails:
@@ -636,17 +607,6 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
   ipcMain.handle('office:save-copy', (e, token, mode, data) => saveCopy(e.sender, token, mode, data));
   ipcMain.handle('office:invoke', (e, token, cmd, args) => invoke(e.sender, token, cmd, args));
   ipcMain.handle('office:close', (e, token) => close(e.sender, token));
-  // Desktop only, like the close/quit handshake: the remote client and the phone have no editors.
-  // The first page to ask also takes the saves the last quit had to stop (final review,
-  // finding 4): each is reported once, in one window, and then forgotten.
-  ipcMain.handle('office:lost-saves', async (e): Promise<string[]> => {
-    const id = (e.sender as OfficeSender).id;
-    const list = lost.get(id) ?? [];
-    lost.delete(id);
-    const first = !lastRunTaken;
-    lastRunTaken = true;
-    return first ? [...(await takeAbandonedSaves(deps.userData)), ...list] : list;
-  });
 
   // ── The start screen (Task 8): Recent, the focused project's files, New, Open ──
 

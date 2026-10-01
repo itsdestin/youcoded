@@ -23,6 +23,7 @@ vi.mock('../../src/main/office/office-home', async (orig) => {
 
 import type { OfficeFile } from '../../src/shared/office-types';
 import { registerOfficeIpc } from '../../src/main/office/office-ipc';
+import { drainSession } from '../../src/main/office/office-commands';
 import { log } from '../../src/main/logger';
 import { startWalk } from '../../src/main/office/office-home';
 import { idle as recentIdle } from '../../src/main/office/recent';
@@ -99,9 +100,8 @@ async function aDocx(name = 'memo.docx'): Promise<string> {
 describe('office IPC channels', () => {
   it('registers all nine channels, clearing each one first so a reload can register again', () => {
     const all = ['office:status', 'office:create', 'office:pick', 'office:open', 'office:invoke', 'office:close', 'office:versions', 'office:restore', 'office:save-copy'];
-    // office:lost-saves is desktop only (not in the four-surface list) but cleared the same way.
-    expect([...ipc.handlers.keys()].sort()).toEqual([...all, 'office:lost-saves'].sort());
-    expect([...ipc.removed].sort()).toEqual([...all, 'office:lost-saves'].sort());
+    expect([...ipc.handlers.keys()].sort()).toEqual([...all].sort());
+    expect([...ipc.removed].sort()).toEqual([...all].sort());
     expect(() => registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => true, root: dir, userData: dir })).not.toThrow();
   });
 
@@ -753,71 +753,30 @@ describe('office:save-copy', () => {
   });
 });
 
-// Final review, finding 4: quit stops a save still running after 5 s. The next launch's first
-// page is told about each such file once, through the same lost-saves list a reload uses.
-describe('saves the last quit had to stop', () => {
-  it('are handed to the first page that asks after a launch, once', async () => {
-    const earlier = path.join(dir, 'budget.xlsx');
-    await mkdir(path.join(dir, 'userData'), { recursive: true });
-    await writeFile(path.join(dir, 'userData', 'office-abandoned-saves.json'), JSON.stringify([earlier]));
-    // A fresh registration is a fresh launch; the one beforeEach made has not been asked yet.
-    await expect(call('office:lost-saves', win1)).resolves.toEqual([earlier]);
-    await expect(call('office:lost-saves', win1)).resolves.toEqual([]);
-    await expect(call('office:lost-saves', win2)).resolves.toEqual([]);
-    expect(existsSync(path.join(dir, 'userData', 'office-abandoned-saves.json'))).toBe(false);
+// Task 8: a window that closes before its last save loses nothing — its document's edits are in
+// the recovery journal, and the next open of the file (any window) is offered them back.
+describe('a window closed before its last save', () => {
+  const copying = vi.fn(async (_root: string, input: string, output: string) => { await copyFile(input, output); });
+  beforeEach(() => {
+    // As in the app: closing a document waits for its commands and its journal before its temp goes.
+    registry = createSessions(path.join(dir, 'base'), { drain: (s) => drainSession(s, 1_000) });
+    ipc = fakeIpcMain();
+    registerOfficeIpc(ipc, { getSessions: () => registry, available: async () => available, root: path.join(dir, 'addon'), userData: path.join(dir, 'userData'), convert: copying as never });
   });
 
-  it("include a save that failed after its window had closed, told on the next launch", async () => {
-    await mkdir(path.join(dir, 'userData'), { recursive: true });
-    let closed = false;
-    const w = Object.assign(fakeSender(7), { send: vi.fn(), isDestroyed: () => closed });
+  it('keeps its edits for the next open of the file', async () => {
     const file = await aDocx();
+    const w = fakeSender(9);
     const { token } = (await call('office:open', w, file)) as { token: string };
-    const saving = call('office:invoke', w, token, 'save_file', {});
-    closed = true; // the window closes while main is still finishing the save
-    await expect(saving).rejects.toThrow();
-    await vi.waitFor(() => expect(existsSync(path.join(dir, 'userData', 'office-abandoned-saves.json'))).toBe(true));
-    await expect(call('office:lost-saves', win1)).resolves.toEqual([file]);
-    w.removeAllListeners();
-  });
-
-  it('do not include a failed save whose window is still open (it shows the failure itself)', async () => {
-    const file = await aDocx();
-    const { token } = (await call('office:open', win1, file)) as { token: string };
-    await expect(call('office:invoke', win1, token, 'save_file', {})).rejects.toThrow();
-    await expect(call('office:lost-saves', win1)).resolves.toEqual([]);
-  });
-});
-
-// A reload lets go of a save still with main; if that save then fails, the new page is told.
-describe('a save that fails after its page was reloaded', () => {
-  async function opened(sender: ReturnType<typeof fakeSender>) {
-    const file = await aDocx();
-    const r = (await call('office:open', sender, file)) as { ok: true; token: string };
-    return { file, token: r.token };
-  }
-  const reload = (sender: ReturnType<typeof fakeSender>) => sender.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
-
-  it('is kept for the new page, which takes it once, and nudges it', async () => {
-    const w = Object.assign(fakeSender(5), { send: vi.fn() });
-    const { file, token } = await opened(w);
-    const saving = call('office:invoke', w, token, 'save_file', {});
-    reload(w); // the page that asked goes before the save's answer
-    await expect(saving).rejects.toThrow();
-    expect(w.send).toHaveBeenCalledWith('office:saves-lost');
-    await expect(call('office:lost-saves', w)).resolves.toEqual([file]);
-    await expect(call('office:lost-saves', w)).resolves.toEqual([]);
-    w.removeAllListeners();
-  });
-
-  it('is not kept when the page that asked is still there (it shows the failure itself)', async () => {
-    const w = Object.assign(fakeSender(6), { send: vi.fn() });
-    const { token } = await opened(w);
-    w.emit('did-start-navigation', { isMainFrame: false, isSameDocument: false }); // an embedded frame
-    await expect(call('office:invoke', w, token, 'save_file', {})).rejects.toThrow();
-    expect(w.send).not.toHaveBeenCalled();
-    await expect(call('office:lost-saves', w)).resolves.toEqual([]);
-    w.removeAllListeners();
+    await call('office:invoke', w, token, 'open_file', {});
+    await call('office:invoke', w, token, 'recovery_begin', { docType: 'word' });
+    await call('office:invoke', w, token, 'save_changes', { changes: ['typed'], deleteIndex: null, count: 1 });
+    w.emit('destroyed'); // the window went before any save
+    await vi.waitFor(async () => {
+      const next = (await call('office:open', win1, file)) as { token: string };
+      const offered = (await call('office:invoke', win1, next.token, 'recovery_candidates', {})) as Array<{ id: string; name: string }>;
+      expect(offered.map((c) => c.name)).toEqual([path.basename(file)]);
+    });
   });
 });
 

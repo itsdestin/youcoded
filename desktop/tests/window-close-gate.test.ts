@@ -1,23 +1,15 @@
-// A window's X: Office saves first, then the sessions prompt, then the window goes. The sessions
-// answer is carried out only on the close that goes through; a close the page vetoed asks again;
-// a hung window can be closed anyway.
+// A window's X: the last window's unsaved files first, then the sessions prompt, then the window
+// goes. The sessions answer is carried out only on the close that goes through; a close the page
+// vetoed asks again; a hung window can be closed anyway. (Task 8 removed the Office save step.)
 import { describe, expect, it, vi } from 'vitest';
 import { HUNG_CLOSE_WINDOW_MS, createCloseGate } from '../src/main/window-close-gate';
 
-type Office = 'none' | 'hold' | 'hold-fail';
-
 function gate(over: { sessions?: number; answer?: boolean } = {}) {
-  const state = { sessions: over.sessions ?? 1, destroyed: false, office: 'none' as Office, hung: false, t: 0, closeAnyway: true };
-  let proceed: (() => void) | null = null;
+  const state = { sessions: over.sessions ?? 1, destroyed: false, hung: false, t: 0, closeAnyway: true, refuse: false };
   const deps = {
     buddy: false,
     shuttingDown: () => false,
-    holdForOffice: vi.fn((ev: { preventDefault(): void }, cb: { onFailed(): void; onProceed(): void }) => {
-      if (state.office === 'none') return false;
-      ev.preventDefault();
-      if (state.office === 'hold-fail') { cb.onFailed(); proceed = cb.onProceed; }
-      return true;
-    }),
+    refuseForUnsaved: vi.fn(() => state.refuse),
     sessionIds: () => Array.from({ length: state.sessions }, (_, i) => `s${i + 1}`),
     ask: vi.fn(async () => over.answer ?? true),
     apply: vi.fn((a: boolean, _ids: string[]) => a),
@@ -30,9 +22,7 @@ function gate(over: { sessions?: number; answer?: boolean } = {}) {
     now: () => state.t,
   };
   const ev = () => ({ preventDefault: vi.fn() });
-  // Close anyway: main tells the gate, then re-issues the close past the Office hold.
-  const closeAnyway = () => { proceed?.(); proceed = null; state.office = 'none'; };
-  return { g: createCloseGate<boolean>(deps), deps, state, ev, closeAnyway };
+  return { g: createCloseGate<boolean>(deps), deps, state, ev };
 }
 
 describe('the window close gate', () => {
@@ -42,7 +32,7 @@ describe('the window close gate', () => {
     await g.onClose(first);
     expect(first.preventDefault).toHaveBeenCalled();
     expect(deps.ask).toHaveBeenCalledWith(1);
-    expect(deps.apply).not.toHaveBeenCalled(); // not yet: the final Office pass comes first
+    expect(deps.apply).not.toHaveBeenCalled();
     expect(deps.close).toHaveBeenCalledTimes(1);
     const again = ev();
     await g.onClose(again); // the re-issued close
@@ -51,48 +41,27 @@ describe('the window close gate', () => {
     expect(deps.ask).toHaveBeenCalledTimes(1);
   });
 
-  it('leaves the sessions alone when the final Office save fails and the person chooses Review', async () => {
-    const { g, deps, state, ev } = gate();
-    await g.onClose(ev()); // sessions prompt: confirmed
-    state.office = 'hold-fail';
-    await g.onClose(ev()); // the re-issued close: Office saves, fails, asks (Review / Close anyway)
-    expect(deps.apply).not.toHaveBeenCalled();
-    // Review… then later a fresh X: Office saves again (and succeeds this time)…
-    state.office = 'hold';
-    await g.onClose(ev());
-    state.office = 'none';
-    const reissued = ev();
-    await g.onClose(reissued); // …and the sessions prompt comes back, once — nothing was ended
-    expect(deps.apply).not.toHaveBeenCalled();
-    expect(deps.ask).toHaveBeenCalledTimes(2);
-    expect(reissued.preventDefault).toHaveBeenCalled();
-  });
-
-  it('carries the sessions answer out after Close anyway on a failed Office save', async () => {
-    const { g, deps, state, ev, closeAnyway } = gate();
-    await g.onClose(ev());
-    state.office = 'hold-fail';
-    await g.onClose(ev());
-    closeAnyway();
-    const e = ev();
-    await g.onClose(e);
-    expect(deps.apply).toHaveBeenCalledTimes(1);
-    expect(e.preventDefault).not.toHaveBeenCalled();
-    expect(deps.ask).toHaveBeenCalledTimes(1);
-  });
-
-  it('asks again (Office and sessions) after the page vetoed the confirmed close', async () => {
-    const { g, deps, state, ev } = gate();
+  it('asks again after the page vetoed the confirmed close', async () => {
+    const { g, deps, ev } = gate();
     await g.onClose(ev());
     await g.onClose(ev()); // goes through (apply)…
-    g.onUnloadPrevented(); // …but the unload guard kept the window
-    state.office = 'hold';
-    await g.onClose(ev());
-    expect(deps.holdForOffice).toHaveBeenCalledTimes(3);
-    state.office = 'none';
+    g.onUnloadPrevented(); // …but an unsaved text file's guard kept the window
     const e = ev();
     await g.onClose(e);
     expect(e.preventDefault).toHaveBeenCalled();
+    expect(deps.ask).toHaveBeenCalledTimes(2);
+  });
+
+  it('a veto between the answer and its close drops the answer', async () => {
+    const { g, deps, ev } = gate();
+    let answer!: (a: boolean) => void;
+    deps.ask.mockImplementationOnce(() => new Promise<boolean>((r) => (answer = r)));
+    const first = g.onClose(ev());
+    answer(true);
+    await first; // confirmed, close re-issued — and the page vetoes it before it arrives
+    g.onUnloadPrevented();
+    await g.onClose(ev()); // a fresh X
+    expect(deps.apply).not.toHaveBeenCalled();
     expect(deps.ask).toHaveBeenCalledTimes(2);
   });
 
@@ -110,51 +79,29 @@ describe('the window close gate', () => {
     expect(deps.close).toHaveBeenCalledTimes(1);
   });
 
-  it("the last window's unsaved text edits are asked about before anything else", async () => {
-    const { g, deps, ev } = gate();
-    let refuse = true;
-    const withRefuse = createCloseGate<boolean>({ ...deps, refuseForUnsaved: () => refuse });
+  it("the last window's unsaved files are asked about before anything else", async () => {
+    const { g, deps, state, ev } = gate();
+    state.refuse = true;
     const e = ev();
-    await withRefuse.onClose(e);
+    await g.onClose(e);
     expect(e.preventDefault).toHaveBeenCalled();
-    expect(deps.holdForOffice).not.toHaveBeenCalled();
     expect(deps.ask).not.toHaveBeenCalled();
-    refuse = false; // discarded: the close goes on through Office and the sessions prompt
-    await withRefuse.onClose(ev());
-    expect(deps.holdForOffice).toHaveBeenCalledTimes(1);
+    state.refuse = false; // saved or discarded: the close goes on to the sessions prompt
+    await g.onClose(ev());
     expect(deps.ask).toHaveBeenCalledTimes(1);
-    void g;
   });
 
   it('a refusal on the close re-issued after the sessions prompt drops that answer', async () => {
-    const { deps, ev } = gate();
-    let refuse = false;
-    const g = createCloseGate<boolean>({ ...deps, refuseForUnsaved: () => refuse });
+    const { g, deps, state, ev } = gate();
     await g.onClose(ev()); // sessions prompt: confirmed, close re-issued…
-    refuse = true;
-    await g.onClose(ev()); // …which the unsaved text edits refuse
-    refuse = false; // later (discarded or saved) a fresh X
+    state.refuse = true;
+    await g.onClose(ev()); // …which the unsaved files refuse
+    state.refuse = false; // later (saved) a fresh X
     const e = ev();
     await g.onClose(e);
     expect(deps.apply).not.toHaveBeenCalled(); // the old answer is not carried out
     expect(deps.ask).toHaveBeenCalledTimes(2); // asked again
     expect(e.preventDefault).toHaveBeenCalled();
-  });
-
-  it('a refusal uses up a Close anyway: the next close does not carry out the old answer', async () => {
-    const { deps, state, ev, closeAnyway } = gate();
-    let refuse = false;
-    const g = createCloseGate<boolean>({ ...deps, refuseForUnsaved: () => refuse });
-    await g.onClose(ev()); // sessions prompt answered
-    state.office = 'hold-fail';
-    await g.onClose(ev()); // Office save failed…
-    closeAnyway(); // …Close anyway
-    refuse = true;
-    await g.onClose(ev()); // its re-issued close is refused for unsaved text
-    refuse = false;
-    await g.onClose(ev()); // a fresh X later
-    expect(deps.apply).not.toHaveBeenCalled();
-    expect(deps.ask).toHaveBeenCalledTimes(2);
   });
 
   it('closes freely with no sessions, and never for a Cancel', async () => {
@@ -165,21 +112,6 @@ describe('the window close gate', () => {
     const cancel = gate({ answer: false });
     await cancel.g.onClose(cancel.ev());
     expect(cancel.deps.close).not.toHaveBeenCalled();
-  });
-});
-
-describe('the remembered sessions answer', () => {
-  it('Review, then the document is closed, then X: the sessions prompt comes back and no old answer is applied', async () => {
-    const { g, deps, state, ev } = gate();
-    await g.onClose(ev()); // sessions prompt: confirmed
-    state.office = 'hold-fail';
-    await g.onClose(ev()); // the final Office pass fails → Review
-    state.office = 'none'; // the person closes the failed document's tab, then presses X
-    const e = ev();
-    await g.onClose(e);
-    expect(deps.apply).not.toHaveBeenCalled();
-    expect(deps.ask).toHaveBeenCalledTimes(2);
-    expect(e.preventDefault).toHaveBeenCalled();
   });
 
   it('ends only the sessions owned when the person confirmed', async () => {
@@ -192,22 +124,18 @@ describe('the remembered sessions answer', () => {
 });
 
 describe('a window that stopped responding', () => {
-  // The hung path: X → Office hold → no answer in 5 s → main re-issues the close → the page
-  // cannot run its unload, so the window stays. A second X then asks natively.
-  async function stuck() {
-    const t = gate({ sessions: 0 });
-    t.state.office = 'hold';
-    await t.g.onClose(t.ev()); // Office asks the (hung) page
-    t.state.office = 'none';
-    t.state.t = 5_000;
-    await t.g.onClose(t.ev()); // main re-issued the close after its cap
+  // The hung path: X → the page cannot run its unload, so the window stays. A second X then asks natively.
+  async function stuck(sessions = 0) {
+    const t = gate({ sessions });
+    if (sessions > 0) t.deps.ask.mockImplementation(() => new Promise<boolean>(() => {})); // the hung page never answers
+    void t.g.onClose(t.ev()); // the first X
     t.state.hung = true;
     return t;
   }
 
   it('asks "close it anyway?" on a second X within 10 s, and destroys the window on yes', async () => {
     const { g, deps, state, ev } = await stuck();
-    state.t = 5_000 + HUNG_CLOSE_WINDOW_MS - 1;
+    state.t = HUNG_CLOSE_WINDOW_MS - 1;
     const e = ev();
     await g.onClose(e);
     expect(e.preventDefault).toHaveBeenCalled();
@@ -215,22 +143,30 @@ describe('a window that stopped responding', () => {
     expect(deps.destroy).toHaveBeenCalledTimes(1);
   });
 
+  it('also when the first X is waiting on a sessions prompt the hung page cannot show', async () => {
+    const { g, deps, state, ev } = await stuck(1);
+    state.t = 2_000;
+    await g.onClose(ev());
+    expect(deps.confirmCloseHung).toHaveBeenCalledTimes(1);
+    expect(deps.destroy).toHaveBeenCalledTimes(1);
+  });
+
   it('waits when the person chooses Wait', async () => {
     const { g, deps, state, ev } = await stuck();
     state.closeAnyway = false;
-    state.t = 6_000;
+    state.t = 1_000;
     await g.onClose(ev());
     expect(deps.destroy).not.toHaveBeenCalled();
   });
 
   it('does not ask when the window is responsive, or after 10 s', async () => {
     const late = await stuck();
-    late.state.t = 5_000 + HUNG_CLOSE_WINDOW_MS + 1;
+    late.state.t = HUNG_CLOSE_WINDOW_MS + 1;
     await late.g.onClose(late.ev());
     expect(late.deps.confirmCloseHung).not.toHaveBeenCalled();
     const fine = await stuck();
     fine.state.hung = false;
-    fine.state.t = 6_000;
+    fine.state.t = 1_000;
     await fine.g.onClose(fine.ev());
     expect(fine.deps.confirmCloseHung).not.toHaveBeenCalled();
   });

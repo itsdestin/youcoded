@@ -12,7 +12,7 @@
 // When the editor cannot answer — still opening, a cell being typed in, no answer in 3 s — the
 // change is kept, per file and in order, and tried again every 1.5 s; if the editor closes first,
 // it is written to the file as before. A read is never kept: it reads the file instead.
-// Desktop only, like the close/quit handshake (office-flush.ts): the phone and the remote client
+// Desktop only, like the quit prompt (main/unsaved-quit.ts): the phone and the remote client
 // have no Office editors, so they carry none of these channels.
 import { randomBytes } from 'node:crypto';
 import { ipcMain, webContents } from 'electron';

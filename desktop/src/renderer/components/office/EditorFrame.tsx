@@ -17,7 +17,7 @@ import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } f
 import { EmptyState, ErrorState, LoadingState } from '../ui';
 import type { OfficeBridge, OfficeFile, OfficeSaveCopyResult } from '../../../shared/office-types';
 import { OFFICE_MODE_MESSAGE, OFFICE_THEME_MESSAGE, editorFontLinks, readOfficeTheme, watchOfficeTheme } from './office-theme';
-import { markChanged, markFailed, markNote, markSaved, markSaving, markUnchanged, noteCloseFailedWhileHidden, noteCopying, onCommentsRequest, onDocumentReplaced, registerFlush, withdrawUnloadApproval } from './office-store';
+import { markChanged, markFailed, markNote, markSaved, markSaving, markUnchanged, noteCloseFailedWhileHidden, noteCopying, onCommentsRequest, onDocumentReplaced, registerFlush } from './office-store';
 import type { FlushResult } from './office-store';
 import { ScreenMark } from '../../shoot-mode';
 import { useDismissTop } from '../../hooks/use-esc-close';
@@ -72,6 +72,9 @@ const SAVE_AS_END_MS = 2_000;
 const SAVE_AS_MAX_MS = 10 * 60_000;
 /** A restore landed while this editor still held unsaved typing (see onDocumentReplaced below). */
 const REPLACED_WHILE_EDITING = 'This file was restored while you had unsaved changes here. Save a copy to keep them.';
+/** The editor replayed changes a crash (or a window closed before its save) kept from it (Task 8). */
+const RECOVERED = "Recovered changes that hadn't been saved.";
+const RECOVERED_OVER_CHANGE = "Recovered changes that hadn't been saved. The file had changed since; that version is in Versions.";
 
 
 /** The theme as the editor gets it. WHY fontLinks are rewritten (Task 9): the editor's CSP
@@ -340,6 +343,18 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     s.dirty = false; s.failed = false; s.requested = false; s.drainPending = false;
     wake();
   };
+  // "Close without saving" / "Discard and quit": the person let the unsaved changes go. WHY the
+  // recovery journal goes too (Task 8): otherwise the next open of the file would offer back the
+  // very changes they chose to throw away.
+  const discard = () => {
+    const token = openedRef.current?.token;
+    if (keptRef.current) letGoOfKept(token);
+    discardPending();
+    markUnchanged(file.path);
+    if (token) void officeBridge()?.invoke(token, 'recovery_discard', {}).catch(() => {});
+  };
+  const discardRef = useRef(discard);
+  discardRef.current = discard;
 
   // Open the document in main, and close it again when this frame goes away, so its
   // temporary files do not outlive the tab. A late answer (this frame already gone) is closed
@@ -375,12 +390,8 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
   }, [file.path, attempt]);
 
   // Registered so a file panel's Done and the header briefcase can wait for the last save
-  // before this editor goes (office-store flushOffice).
-  // `unsaved` feeds the window's unload guard (office-store, fix round 5): changed, asked to
-  // save, saving, or failed — anything a reload would lose.
-  useEffect(() => registerFlush(file.path, (capMs) => flushRef.current(capMs), {
-    unsaved: () => { const s = save.current; return s.dirty || s.requested || s.saving || s.failed || !!s.timer; },
-  }), [file.path]);
+  // before this editor goes (office-store flushOffice), and so the quit prompt's Discard reaches it.
+  useEffect(() => registerFlush(file.path, (capMs) => flushRef.current(capMs), { discard: () => discardRef.current() }), [file.path]);
 
   // Restore (Task 7): main replaced the file under this editor. Reopen it from the start — close
   // this token, open again, a fresh editor page on the restored file. WHY nothing unsaved is lost:
@@ -539,7 +550,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         noteCopying(file.path, false);
       }
     },
-    discard: () => { if (keptRef.current) letGoOfKept(openedRef.current?.token); discardPending(); markUnchanged(file.path); },
+    discard: () => discardRef.current(),
   }), [file.path]);
 
   useEffect(() => {
@@ -571,7 +582,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       }
       if (m.cmd === 'set_document_modified') {
         // More typing: still only in this editor. The strip stays as it is.
-        if ((m.args as { modified?: unknown } | undefined)?.modified === true) { s.dirty = true; withdrawUnloadApproval(); }
+        if ((m.args as { modified?: unknown } | undefined)?.modified === true) s.dirty = true;
         post({ yc: 'rpc-result', id: m.id, result: null });
         return true;
       }
@@ -607,13 +618,6 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         s.dirty = true;
         // Typing again: any Save As is over, and "not modified" is the editor's own again.
         s.saveAsUntil = 0;
-        // Any change withdraws a close's pending approval of the unload — also while failed,
-        // where markChanged below is skipped (fix round 6, M1). Accepted (fix round 7): the
-        // editor's own late "modified" echo after a failed save can arrive just after Close
-        // anyway and withdraw it too. Nothing is lost that way — the window stays open with the
-        // edits, and the next X asks again about the Office documents (only them: the sessions
-        // answer was already carried out with that Close anyway).
-        withdrawUnloadApproval();
         // WHY not a new change after a failed save (measured in the dev window, fix round 1):
         // the editor answers its own failed save by marking the document modified again. Taking
         // that as typing retried a read-only file every 3 s and flipped the strip between the
@@ -673,6 +677,11 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         post({ yc: 'rpc-result', id: m.id, result: m.cmd === 'save_file_as' || m.cmd === 'print_document' ? 'ok' : result });
         // The Save As is over when its copy is written, or when its dialog was cancelled.
         if (m.cmd === 'save_file_as' || (m.cmd === 'save_dialog' && result === null)) saveAsEnded();
+        // Recovered (Task 8): say so once the editor has the changes back. The strip shows it
+        // briefly; the editor also marks the document modified, so autosave writes them.
+        if (m.cmd === 'recovery_load' && mountedRef.current) {
+          markNote(file.path, (result as { outsideChange?: unknown } | null)?.outsideChange === true ? RECOVERED_OVER_CHANGE : RECOVERED);
+        }
         if (m.cmd === 'save_file_as' && mountedRef.current) {
           const r = result as { name?: unknown; folder?: unknown } | null;
           if (r && typeof r.name === 'string' && typeof r.folder === 'string') markNote(file.path, `Saved a copy as ${r.name} in ${r.folder}.`);

@@ -1,7 +1,7 @@
-// Which non-Office edits in this window are unsaved: a text file open for editing in the file
-// viewer, or a draft parked after its editor went away (draft-store). Main reads the file names
-// through `office:other-unsaved` before a quit tears anything down, and before the last window
-// closes (Task 6 fix rounds 9–11).
+// Which edits in this window are unsaved: a text file open for editing in the file viewer, a draft
+// parked after its editor went away (draft-store), or an Office document not saved yet (office-store,
+// Task 8). Main reads the file names through `office:other-unsaved` before a quit tears anything
+// down, and before the last window closes (Task 6 fix rounds 9–11; main/unsaved-quit.ts).
 //
 // WHY main has to know up front: such an editor vetoes its window's unload (ActiveArtifactView's
 // beforeunload guard) — rightly — but a quit only meets that veto AFTER teardown, when every
@@ -43,7 +43,9 @@ function changed(): void {
   const key = JSON.stringify(names);
   if (key === reported) return;
   reported = key;
-  window.claude?.office?.setOtherUnsaved?.(names);
+  // WHY the guard: Office's save-state store reports here too (Task 8), and it also runs in tests
+  // and code paths without a window.
+  if (typeof window !== 'undefined') window.claude?.office?.setOtherUnsaved?.(names);
 }
 
 /** An unsaved edit holds this until it is saved, discarded or restored: call the release. */

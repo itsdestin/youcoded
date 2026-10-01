@@ -30,8 +30,6 @@ export const PAGES: readonly ScreenEntry[] = [
   pg('office/document-comments', 'view', 'office'),
   pg('office/spreadsheet-comments', 'view', 'office'),
   pg('office/versions', 'dialog', 'office'),
-  // A window close or quit found documents whose save failed (Task 6 fix round 2).
-  pg('office/unsaved-on-close', 'dialog', 'office'),
   pg('pages/library', 'view'),
   pg('pages/library/connections', 'dialog'),
   pg('pages/library/edit', 'dialog'),

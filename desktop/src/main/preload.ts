@@ -2001,7 +2001,7 @@ contextBridge.exposeInMainWorld('claude', {
       return () => ipcRenderer.removeListener('git:changed', handler);
     },
   },
-  // Office (§3a): editor requests reach main only via invoke (main re-checks); flush = save before close/quit (§4). Shape: shared/office-types.ts; handlers: main/office/office-ipc.ts, office-flush.ts.
+  // Office (§3a): editor requests reach main only via invoke (main re-checks). Shape: shared/office-types.ts; handlers: main/office/office-ipc.ts, main/unsaved-quit.ts.
   office: {
     status: (projectRoot: string | null) => ipcRenderer.invoke('office:status', projectRoot),
     create: (kind: string, projectRoot: string | null) => ipcRenderer.invoke('office:create', kind, projectRoot),
@@ -2014,16 +2014,11 @@ contextBridge.exposeInMainWorld('claude', {
     // After a restore, the editor holding the token reopens its file (EditorFrame).
     onChanged: (cb: (p: { path: string; token: string }) => void) => officePush('office:changed', cb),
     saveCopy: (token: string, mode: string, data?: string) => ipcRenderer.invoke('office:save-copy', token, mode, data),
-    // Window close / quit saving (main/office/office-flush.ts) — desktop only.
-    onFlushRequest: (cb: (id: string, reason: string) => void) => officePush('office:flush-request', cb),
-    flushDone: (id: string, result: unknown) => ipcRenderer.send('office:flush-done', id, result),
+    // A quit refused for unsaved files (main/unsaved-quit.ts) — desktop only.
     onUnsavedPrompt: (cb: (p: unknown) => void) => officePush('office:unsaved-prompt', cb),
     proceedClose: () => ipcRenderer.send('office:proceed'),
     dismissPrompt: () => ipcRenderer.send('office:dismiss'),
     setOtherUnsaved: (names: string[]) => ipcRenderer.send('office:other-unsaved', names),
-    // Saves lost to a reload, or stopped by the last quit (office-ipc.ts) — desktop only.
-    lostSaves: () => ipcRenderer.invoke('office:lost-saves'),
-    onSavesLost: (cb: () => void) => officePush('office:saves-lost', cb),
     // Comments on an open document go through its editor (main/office/office-comments.ts) — desktop only.
     onCommentsRequest: (cb: (req: { token: string; id: string; op: unknown }) => void) => officePush('office:comments-request', cb),
     commentsAnswer: (id: string, result: unknown, token: string) => ipcRenderer.send('office:comments-answer', id, result, token),

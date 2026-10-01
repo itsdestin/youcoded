@@ -1,16 +1,15 @@
-// A restart goes through the ordinary quit: the Office gate saves (or asks) first, and the app
-// starts again only once the quit is really happening — Review cancels it, Close anyway
-// restarts, and a cancelled quit never relaunches later. Every quit after teardown is refused
+// A restart goes through the ordinary quit: the quit gate asks first about unsaved files, and the
+// app starts again only once the quit is really happening — a held quit cancels the restart, and a
+// cancelled quit never relaunches later. Every quit after teardown is refused
 // on the spot if a responsive window has unsaved text edits (and says so each time); otherwise
 // it arms a 10 s watchdog that lets a still-open (hung) window go.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { QUIT_WATCHDOG_MS, gatedQuit, onWillQuit, quitAfterTeardown, requestRestart, resetRestartForTests } from '../src/main/app-restart';
 
 function deps(go: boolean, open = 0) {
-  let proceed!: () => void;
   const timers: Array<{ fn: () => void; ms: number }> = [];
   const d = {
-    gate: vi.fn(async (onProceed: () => void) => { proceed = onProceed; return go; }),
+    gate: vi.fn(() => go),
     relaunch: vi.fn(),
     shutdown: vi.fn(async () => {}),
     quit: vi.fn(),
@@ -20,7 +19,7 @@ function deps(go: boolean, open = 0) {
     setTimer: (fn: () => void, ms: number) => { timers.push({ fn, ms }); return null; },
     clearTimer: vi.fn(),
   };
-  return { d, proceed: () => proceed(), fire: () => timers.splice(0).forEach((t) => t.fn()), timers };
+  return { d, fire: () => timers.splice(0).forEach((t) => t.fn()), timers };
 }
 
 beforeEach(() => resetRestartForTests());
@@ -40,7 +39,7 @@ describe('restart and quit', () => {
     expect(relaunch).toHaveBeenCalledTimes(1);
   });
 
-  it('a restart held by an unsaved document restarts only on Close anyway', async () => {
+  it('a restart held for unsaved files tears nothing down and never relaunches', async () => {
     requestRestart(() => {});
     const held = deps(false);
     await gatedQuit(held.d);
@@ -48,14 +47,9 @@ describe('restart and quit', () => {
     const early = vi.fn();
     onWillQuit(early);
     expect(early).not.toHaveBeenCalled();
-    held.proceed(); // Close anyway
-    expect(held.d.quit).toHaveBeenCalledTimes(1);
-    const relaunch = vi.fn();
-    onWillQuit(relaunch);
-    expect(relaunch).toHaveBeenCalledTimes(1);
   });
 
-  it('after Review cancelled a restart, a later ordinary quit does not restart the app', async () => {
+  it('after a held restart, a later ordinary quit does not restart the app', async () => {
     requestRestart(() => {});
     await gatedQuit(deps(false).d);
     await gatedQuit(deps(true).d);

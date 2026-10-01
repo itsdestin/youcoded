@@ -1,6 +1,7 @@
 // "A file has unsaved changes" — a quit, or the last window's close, refused because this window
-// holds unsaved non-Office edits: a text file open for editing, or a draft parked after its
-// editor went away (Task 6 fix rounds 9–14; state/unsaved-editors.ts, draft-store.ts).
+// holds unsaved edits: a text file open for editing, a draft parked after its editor went away
+// (Task 6 fix rounds 9–14; state/unsaved-editors.ts, draft-store.ts), or an Office document whose
+// autosave has not landed yet (Task 8 — it saves as the prompt opens, office-store.ts).
 //
 // WHY it names the files and offers actions (fix round 11): a parked draft has no editor on
 // screen, so "save it" alone left the person with nothing to save — and closing the window then
@@ -48,7 +49,7 @@ export function UnsavedBeforeQuit() {
   const n = edits.length;
   const files = n === 1 ? '1 file' : `${n} files`;
   const goOn = r?.mode === 'close' ? 'close' : 'quit';
-  // Main held the quit (or close) for this prompt: go on now (office-flush 'refused').
+  // Main held the quit (or close) for this prompt: go on now (main/unsaved-quit.ts).
   const proceed = () => { clearQuitRefused(); window.claude?.office?.proceedClose?.(); };
   const discard = () => { discardUnsaved(listed); proceed(); };
   // Dismissed (Cancel, OK, Esc, ✕): main forgets the held quit/close (fix round 12).

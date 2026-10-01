@@ -1510,20 +1510,20 @@ describe('office:* channel parity', () => {
     expect(unsupported).toContain(`'office:'`);
   });
 
-  // Window close / app quit saving: a main→renderer push and its reply, desktop only. The
-  // remote client and the phone have no Office documents to save, so they carry neither.
-  it('the close/quit save handshake is carried by preload and main, and by no other host', () => {
-    const flush = readSourceFile(path.join(__dirname, '../src/main/office/office-flush.ts'));
-    for (const ch of ['office:flush-request', 'office:flush-done', 'office:unsaved-prompt', 'office:proceed', 'office:other-unsaved', 'office:dismiss']) {
+  // The quit prompt for unsaved files (main/unsaved-quit.ts): a main→renderer push and its
+  // replies, desktop only. The remote client and the phone have no quit of their own to hold.
+  it('the unsaved-files quit prompt is carried by preload and main, and by no other host', () => {
+    const gate = readSourceFile(path.join(__dirname, '../src/main/unsaved-quit.ts'));
+    for (const ch of ['office:unsaved-prompt', 'office:proceed', 'office:other-unsaved', 'office:dismiss']) {
       expect(preload).toContain(`'${ch}'`);
-      expect(flush).toContain(`'${ch}'`);
+      expect(gate).toContain(`'${ch}'`);
       expect(shim).not.toContain(`'${ch}'`);
       if (kotlin) expect(kotlin).not.toContain(`"${ch}"`);
     }
   });
 
   // Comments on an open document go through its editor: main asks the window, the window answers
-  // and says when a comment changed. Like the close/quit handshake, desktop only — the remote
+  // and says when a comment changed. Like the quit prompt, desktop only — the remote
   // client and the phone have no Office editors to ask.
   it('the live-comments handshake is carried by preload and main, and by no other host', () => {
     const comments = readSourceFile(path.join(__dirname, '../src/main/office/office-comments.ts'));
@@ -1535,14 +1535,6 @@ describe('office:* channel parity', () => {
     }
   });
 
-  it('saves lost to a reload are told by preload and main, and by no other host', () => {
-    for (const ch of ['office:lost-saves', 'office:saves-lost']) {
-      expect(preload).toContain(`'${ch}'`);
-      expect(handlers).toContain(`'${ch}'`);
-      expect(shim).not.toContain(`'${ch}'`);
-      if (kotlin) expect(kotlin).not.toContain(`"${ch}"`);
-    }
-  });
 });
 
 // docComments:* IPC parity — T3/T4 of the doc-comments build (design

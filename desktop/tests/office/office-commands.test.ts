@@ -256,7 +256,7 @@ describe.skipIf(!HAS_ADDON)('office commands with the bundled x2t', () => {
     const run = createOfficeCommands({ root: ROOT, sessions, convert: counting });
     const b64 = (await run(s.token, 'open_file', {})) as string;
     runs = 0;
-    const all = [run(s.token, 'write_editor_bin', { data: b64 }), run(s.token, 'save_file', {}), run(s.token, 'save_file', {}), run(s.token, 'save_changes', {})];
+    const all = [run(s.token, 'write_editor_bin', { data: b64 }), run(s.token, 'save_file', {}), run(s.token, 'save_file', {}), run(s.token, 'save_changes', { changes: [] })];
     expect(await Promise.all(all)).toEqual(['ok', 'ok', 'ok', 'ok']);
     expect(runs).toBe(1);
   });

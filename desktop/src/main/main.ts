@@ -46,8 +46,8 @@ import { sealOfficeFrames } from './office/office-frame-guard';
 import { registerOfficeIpc } from './office/office-ipc';
 import { registerOfficeComments } from './office/office-comments';
 import { officeAvailable, officeRoot } from './office/office-root';
-import { getOfficeSessions, initOfficeSessionsSafely } from './office/office-session-registry';
-import { flushThenQuitOfficeSessions, holdCloseForOfficeSave, officeQuitGate, refuseCloseForOtherUnsaved, watchOtherUnsaved } from './office/office-flush';
+import { getOfficeSessions, initOfficeSessionsSafely, quitOfficeSessions } from './office/office-session-registry';
+import { refuseCloseForUnsaved, refuseQuitForUnsaved, watchUnsavedEdits } from './unsaved-quit';
 import { createCloseGate } from './window-close-gate';
 import { gatedQuit, onWillQuit, quitAfterTeardown } from './app-restart';
 import { isAppPageUrl } from './app-navigation';
@@ -997,7 +997,7 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
     if (details?.isMainFrame && !details.isSameDocument) closeRequests.dropFor(wid);
   });
   win.webContents.on('render-process-gone', () => closeRequests.dropFor(wid));
-  // The close: Office saves first, then the sessions prompt (window-close-gate.ts, fix round 6 I-A).
+  // The close: the last window's unsaved files, then the sessions prompt (window-close-gate.ts).
   const closeGate = createCloseGate({
     buddy: !!opts?.buddy,
     // Whole-app quit wins over a pending prompt (design §4 step 5):
@@ -1007,8 +1007,7 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
     // about to tear down every session anyway — a close event reaching here
     // once shuttingDown is set must ask nothing and let the window close.
     shuttingDown: () => !!shuttingDown,
-    refuseForUnsaved: () => refuseCloseForOtherUnsaved(win, (w) => !!buddyManagerRef?.isBuddyWindow(w as never)),
-    holdForOffice: (ev, cb) => holdCloseForOfficeSave(win, ev, undefined, cb), // Office docs save first (≤5 s, design §4)
+    refuseForUnsaved: () => refuseCloseForUnsaved(win, (w) => !!buddyManagerRef?.isBuddyWindow(w as never)),
     sessionIds: () => windowRegistry.sessionsForWindow(wid),
     ask: (count) => closeRequests.request(wid, count, (push) => {
       if (!win.isDestroyed()) win.webContents.send(IPC.WINDOW_CLOSE_REQUEST, push);
@@ -1136,7 +1135,7 @@ function createWindow(firstRunManager?: FirstRunManager) {
       deviceId: deviceIdentity.id, machineId: machineIdentity?.id ?? '' },
     chatgptAuth, welcomeBackStore);
   cleanupIpcHandlers = ipcWiring.cleanup;
-  watchOtherUnsaved(); // unsaved text editors refuse a quit before teardown (office-flush.ts, fix rounds 9–10)
+  watchUnsavedEdits(); // unsaved files refuse a quit before teardown (unsaved-quit.ts, fix rounds 9–10)
   cancelWindowHandoffs = (id) => ipcWiring.handoffAttempts?.cancelOwner(`window:${id}`);
   const hasUsableProvider = ipcWiring.hasUsableProvider;
 
@@ -2581,8 +2580,8 @@ async function runShutdown(): Promise<void> {
     welcomeBackStore?.flush() ?? Promise.resolve(),
     new Promise<void>((r) => setTimeout(r, 1_000)),
   ]).catch(() => {});
-  // Office: every window saves its open documents (≤5 s, office-flush.ts), then a save mid-translation finishes (≤5 s) and the temp base goes. Awaited last.
-  const officeQuit = flushThenQuitOfficeSessions();
+  // Office: a save mid-translation finishes (≤5 s), then the temp base goes; unsaved edits stay in their recovery journals (Task 8). Awaited last.
+  const officeQuit = quitOfficeSessions();
   // Capture the engine-stop promise: cleanup() starts llama-server teardown and we
   // must let it finish before app.quit(), else the engine outlives the app and keeps
   // the fixed port bound for the next instance to wrongly adopt (2026-07-20 fix).
@@ -2651,9 +2650,9 @@ app.on('before-quit', (e) => {
   // Second pass: shutdownApp() already ran (or is running) and re-issued the quit below — let it
   // proceed (watchdog armed), unless a window has unsaved text edits (app-restart.ts, fix round 11).
   if (shuttingDown) { if (!quitAfterTeardown()) e.preventDefault(); return; }
-  e.preventDefault(); // Office first: an unsaved document asks the person before any teardown (office-flush.ts).
+  e.preventDefault(); // Unsaved files first: their list shows before any teardown (unsaved-quit.ts).
   void gatedQuit({ // app-restart.ts: also carries a pending restart through the gate (fix round 6, I-B)
-    gate: (onProceed) => officeQuitGate(undefined, undefined, onProceed),
+    gate: () => !refuseQuitForUnsaved(),
     shutdown: () => shutdownApp(),
   }).catch(() => {});
 });

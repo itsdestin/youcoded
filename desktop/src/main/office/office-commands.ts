@@ -6,6 +6,7 @@ import { renameReplacing } from '../artifacts/cas-write';
 import { noteOwnWrite } from '../artifacts/project-watcher';
 import { authorizeArtifactWrite } from '../artifacts/write-authorization';
 import { log } from '../logger';
+import { beforeBinReplaced, beginRecovery, closeRecovery, discardRecovery, loadRecovery, markRecoverySaved, recordChanges, recoveryCandidates, recoveryRev } from './office-recovery';
 import type { createSessions, OfficeSession } from './office-sessions';
 import { convert as realConvert, exportFormatFor, exportParams, FORMAT, formatFor, pdfFontData as realPdfFontData, printParams, X2T_TIMEOUT_MS, X2tError } from './x2t';
 
@@ -126,6 +127,10 @@ export async function drainSession(s: OfficeSession, capMs = CLOSE_DRAIN_MS): Pr
   // Past the cap a translation may still be running: stop it, so it neither keeps writing
   // into the folder about to be removed nor lingers. Harmless when nothing is running.
   abortOf(s).abort();
+  // WHY after the drain (Task 8): its last save has landed (or not) by now, so the recovery
+  // journal knows whether the file holds every edit — then it goes; otherwise it stays for the
+  // next open of the file to offer back (a window closed before its last save).
+  await closeRecovery(s);
 }
 
 // ── One command at a time per document (review P1-2; design §3 "one save in flight") ──
@@ -142,13 +147,9 @@ interface SessionQueue {
   pendingSave: Promise<unknown> | null;
 }
 const queues = new WeakMap<OfficeSession, SessionQueue>();
-// Saves asked for and not yet settled, per document — what quit reports when it stops waiting
-// (quitOfficeSessions → abandoned-saves.ts). A plain Map: an entry lives only while its save does.
-const savesInFlight = new Map<OfficeSession, number>();
-/** The files with a save still queued or translating (quit asks, after its wait ran out). */
-export function pathsWithSaveInFlight(): string[] {
-  return [...new Set([...savesInFlight.keys()].map((s) => s.path))];
-}
+// Which of the editor's edits the session's Editor.bin holds (the recovery journal's revision when
+// its bytes arrived, Task 8): a save of that Editor.bin makes them no longer anything to recover.
+const binRev = new WeakMap<OfficeSession, number>();
 // Every queued command, across all sessions, until it settles — what awaitIdle() waits for.
 const inflight = new Set<Promise<unknown>>();
 
@@ -344,13 +345,16 @@ export function createOfficeCommands(deps: {
     return b64;
   }
 
-  async function writeEditorBin(s: OfficeSession, data: string): Promise<string> {
+  async function writeEditorBin(s: OfficeSession, data: string, rev: number): Promise<string> {
     // WHY write-then-rename even inside our own temp: a write cut off half-way must never leave
     // a half Editor.bin that the next save would translate over the user's real file.
     const tmp = `${editorBin(s)}.part`;
     try {
       await fsp.writeFile(tmp, Buffer.from(data, 'base64'));
+      // The Editor.bin about to be replaced is the recovery journal's starting point (Task 8).
+      await beforeBinReplaced(s);
       await fsp.rename(tmp, editorBin(s));
+      binRev.set(s, rev);
       copyStateOf(s).edited = true;
     } catch (e) {
       // The Editor.bin left behind is older than the editor's content now, so a copy of it
@@ -361,6 +365,20 @@ export function createOfficeCommands(deps: {
       throw e;
     }
     return 'ok';
+  }
+
+  // A crash-recovery open (recovery_load): what openFile does, but from the journal's starting
+  // point instead of the file — the editor then replays the edits the file never got.
+  async function recover(s: OfficeSession, id: unknown): Promise<unknown> {
+    await authorize(s);
+    const r = await loadRecovery(s, id, binMax);
+    // Nothing to recover after all (discarded meanwhile, or unreadable): bridge.js opens the file.
+    if (!r) throw userError(MSG.refused, true);
+    replaced.delete(s);
+    // The file as it is now is kept as "When you opened it" (Versions), as on any open — so when
+    // it changed outside Office since, the recovered edits never cost that version.
+    if (deps.onOpened) await deps.onOpened(s).catch((e) => log('WARN', 'Office', 'onOpened failed', { error: String(e) }));
+    return r;
   }
 
   // WHY tmp + rename (same as artifacts:save): the user's file is replaced in one step, so a
@@ -420,6 +438,8 @@ export function createOfficeCommands(deps: {
       // WHY the abort check (fix round 2): on Windows a busy rename is retried for a moment;
       // if quit gives up on this save meanwhile, it must stop rather than land late.
       await renameReplacing(tmp, s.path, process.platform, () => isClosing(s));
+      // The file now holds every edit the translated Editor.bin did: nothing of them to recover.
+      markRecoverySaved(s, binRev.get(s) ?? 0);
     } catch (e) {
       if (isClosing(s)) throw userError(MSG.closing, true);
       throw e;
@@ -455,12 +475,6 @@ export function createOfficeCommands(deps: {
       return saveFile(s);
     });
     q.pendingSave = p;
-    savesInFlight.set(s, (savesInFlight.get(s) ?? 0) + 1);
-    const settled = () => {
-      const n = (savesInFlight.get(s) ?? 1) - 1;
-      if (n > 0) savesInFlight.set(s, n); else savesInFlight.delete(s);
-    };
-    p.then(settled, settled);
     return p;
   }
 
@@ -479,20 +493,39 @@ export function createOfficeCommands(deps: {
         // WHY checked on the string's length, before decoding (review P1-3): decoding a huge
         // string would allocate the whole buffer first. base64 decodes to 3/4 of its length.
         if ((data.length * 3) / 4 > binMax) throw userError(MSG.binTooLarge);
+        // Which edits these bytes hold: every batch received before them (Task 8). Taken now, not
+        // when the queue reaches it, because the editor keeps sending batches meanwhile.
+        const rev = recoveryRev(s);
         // Refused while replaced too: the old document's bytes must not become the Editor.bin a
         // reloaded editor of this session would later save. (An editor that keeps typing after a
         // restore hands its bytes to "Save a copy…" directly — saveCopy's `bin` — never here.)
-        return enqueueOther(s, () => (replaced.has(s) ? Promise.reject(userError(MSG.restored, true)) : writeEditorBin(s, data)));
+        return enqueueOther(s, () => (replaced.has(s) ? Promise.reject(userError(MSG.restored, true)) : writeEditorBin(s, data, rev)));
       }
       case 'save_file':
         return save(s);
-      // WHY not a save (Task 6 fix round 1): save_changes is sdkjs's crash-recovery change log
-      // (a list of edits since the last point, no document bytes). The editor's own save
-      // (asc_Save) sends it FIRST and then write_editor_bin + save_file, so treating it as a save
-      // ran x2t twice per save — the first time on the previous Editor.bin. Crash recovery is out
-      // of scope for this plan, so it is acknowledged and nothing is written.
-      case 'save_changes':
+      // ── Crash recovery (Task 8; office-recovery.ts) ──
+      // WHY not a save (Task 6 fix round 1): save_changes is sdkjs's change log — a batch of edits,
+      // no document bytes — sent as the person types and again at the start of every save. It is
+      // kept in the document's recovery journal, outside the save queue: a journal entry must never
+      // wait behind a slow translation, or a crash meanwhile would lose it.
+      case 'save_changes': {
+        const changes = args.changes;
+        const d = args.deleteIndex ?? null;
+        if (!Array.isArray(changes) || !changes.every((c) => typeof c === 'string') || (d !== null && !Number.isInteger(d))) throw userError(MSG.refused);
+        if (changes.reduce((n: number, c: string) => n + c.length, 0) > binMax) throw userError(MSG.refused);
+        recordChanges(s, changes, d as number | null);
         return Promise.resolve('ok');
+      }
+      case 'recovery_begin':
+        beginRecovery(s, args.docType);
+        return Promise.resolve(null);
+      case 'recovery_candidates':
+        return recoveryCandidates(s);
+      case 'recovery_discard':
+        return discardRecovery(s).then(() => null);
+      // In the queue, like open_file: it puts the recovered starting point into the session's temp.
+      case 'recovery_load':
+        return enqueueOther(s, () => recover(s, args.id));
     }
     return enqueueOther(s, async () => {
       switch (cmd) {
@@ -517,10 +550,9 @@ export function createOfficeCommands(deps: {
           return '';
         case 'list_user_dictionaries':
           return { folders: [], refused: [] };
-        case 'recovery_candidates':
-          return [];
-        // The host owns closing the tab and titling the window; crash recovery (recovery_*)
-        // and inserting another file (convert_for_insert) are follow-ups outside this plan.
+        // The host owns closing the tab and titling the window, and inserting another file
+        // (convert_for_insert) is a follow-up outside this plan. recovery_mark_saved and
+        // recovery_end: main marks saves itself (saveFile), from the bytes each one translated.
         default:
           return null;
       }

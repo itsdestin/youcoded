@@ -59,10 +59,10 @@ export function OfficeInlineEditor({ absolutePath, artifactId, onCancelEdit }: A
   useEffect(() => {
     if (!copyPath) return undefined;
     noteInlineCopy(absolutePath, copyPath);
-    const stop = registerFlush(absolutePath, () => flushOffice(copyPath), { alias: true });
+    const stop = registerFlush(absolutePath, () => flushOffice(copyPath));
     return () => { stop(); noteInlineCopy(absolutePath, null); };
   }, [absolutePath, copyPath]);
-  // Review from the unsaved prompt (fix round 3): leave any page view covering the chat, and
+  // Open Office from the failed-close toast (fix round 3): leave any page view covering the chat, and
   // bring this editor into view with the keyboard on it.
   const rootRef = useRef<HTMLDivElement>(null);
   useEffect(() => registerInlineReveal(editPath, () => {

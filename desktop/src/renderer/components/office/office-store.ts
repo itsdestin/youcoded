@@ -7,6 +7,7 @@
 // and it holds each file's save state for the tab strip's "Saved" label (Task 6).
 import { useSyncExternalStore } from 'react';
 import type { OfficeFile } from '../../../shared/office-types';
+import { holdUnsavedEditor } from '../../state/unsaved-editors';
 
 export const HOME_TAB = 'home';
 
@@ -61,83 +62,50 @@ export function holdInline(path: string, release: () => void): () => void {
 export type FlushResult = { ok: true } | { ok: false; message: string };
 
 // Each mounted editor's "save what is unsaved, then resolve" (EditorFrame's flush).
-// WHY: autosave waits 3 s after the last change, so anything that ends an editor — Done, the
-// briefcase, closing the panel, leaving a tab, the hand-off to an Office tab, window close and
-// quit — would drop the last few seconds of typing. Those paths wait for this first (≤5 s).
+// WHY: autosave waits 3–20 s after the last change, so anything that ends an editor — Done, the
+// briefcase, closing the panel, leaving a tab, the hand-off to an Office tab, a reload — would
+// leave the last few seconds of typing only in the recovery journal (Task 8). Those paths wait
+// for this first (≤5 s), so the file itself holds them.
 const flushers = new Map<string, (capMs?: number) => Promise<FlushResult>>();
-/** WHY 4 s (fix round 4): a window close or quit must answer inside main's 5 s cap, or main
- *  takes silence for a hung window and closes it anyway. Every document is saved at once, each
- *  capped at 4 s, so the answer always beats main's timeout. */
-const CLOSE_FLUSH_CAP_MS = 4_000;
-// Paths whose flusher only forwards to another editor's (an in-place edit that moved to its
-// copy). WHY kept apart (fix round 3): a close or quit counts each failed document once.
-const aliasPaths = new Set<string>();
+// Each mounted editor's "throw these unsaved changes away" (Discard and quit, Task 8).
+const discarders = new Map<string, () => void>();
+/** WHY 4 s: a reload waits for every document's save at once, each capped, never longer. */
+const RELOAD_FLUSH_CAP_MS = 4_000;
 
 export function registerFlush(
-  path: string, flush: (capMs?: number) => Promise<FlushResult>,
-  opts: { alias?: boolean; unsaved?: () => boolean } = {},
+  path: string, flush: (capMs?: number) => Promise<FlushResult>, opts: { discard?: () => void } = {},
 ): () => void {
   flushers.set(path, flush);
-  if (opts.alias) aliasPaths.add(path); else aliasPaths.delete(path);
-  if (opts.unsaved) unsavedChecks.set(path, opts.unsaved); else unsavedChecks.delete(path);
-  answerFlushRequests();
-  guardUnload();
-  return () => { if (flushers.get(path) === flush) { flushers.delete(path); aliasPaths.delete(path); unsavedChecks.delete(path); } };
-}
-
-// ── The window's own unload guard (fix round 5) ──
-// WHY: anything that reloads or leaves the page — a Retry that reloads the window, a future
-// navigation — would drop an Office edit that is not saved yet, or whose save failed, without a
-// word: only main's close and quit ask the editors to save first. So the top window vetoes its
-// unload while an editor has unsaved work (changed, asked to save, saving or failed) — unless
-// that work was just dealt with: main's close or quit got its answer (every document saved), or
-// the person chose Close anyway. That approval lets exactly one unload through (a close vetoed
-// by something else, e.g. an unsaved text file, uses it up), and any new change withdraws it.
-// Quit's last pass ('final') is the exception: the quit is decided, so nothing may stop it.
-// Each mounted editor's "is anything unsaved" (EditorFrame).
-const unsavedChecks = new Map<string, () => boolean>();
-let unloadApproval: 'none' | 'once' | 'quit' = 'none';
-function approveUnload(kind: 'once' | 'quit'): void {
-  if (unloadApproval !== 'quit') unloadApproval = kind;
-}
-/** The editor reported a change (EditorFrame, fix round 6 M1): a pending one-unload approval no
- *  longer covers everything — even for a document whose save failed (markChanged is skipped
- *  there, so withdrawing cannot hang on it). */
-export function withdrawUnloadApproval(): void {
-  if (unloadApproval === 'once') unloadApproval = 'none';
-}
-function onBeforeUnload(e: BeforeUnloadEvent): void {
-  if (unloadApproval === 'quit') return;
-  if (unloadApproval === 'once') { unloadApproval = 'none'; return; }
-  if (![...unsavedChecks.values()].some((unsaved) => unsaved())) return;
-  e.preventDefault();
-  e.returnValue = ''; // older Chromium needs the returnValue set, too
-}
-let unloadGuarded = false;
-function guardUnload(): void {
-  if (unloadGuarded || typeof window === 'undefined') return;
-  unloadGuarded = true;
-  window.addEventListener('beforeunload', onBeforeUnload);
+  if (opts.discard) discarders.set(path, opts.discard); else discarders.delete(path);
+  return () => { if (flushers.get(path) === flush) { flushers.delete(path); discarders.delete(path); } };
 }
 
 /**
- * Reload the window once every Office document is saved (fix round 5): the app's "reload"
- * Retry buttons go through this instead of location.reload(), so they save first and never
- * run into the unload guard. A document that cannot be saved raises the same prompt a window
- * close does; Close anyway then reloads.
+ * Reload the window once every Office document has saved (or 4 s passed): the app's "reload"
+ * Retry buttons go through this instead of location.reload(). WHY no prompt any more (Task 8): a
+ * save that fails or runs late loses nothing — its edits are in the document's recovery journal,
+ * and the next open of the file offers them back.
  */
 export function reloadAfterOfficeSave(reload: () => void = () => window.location.reload()): void {
-  const entries = [...flushers.entries()].filter(([path]) => !aliasPaths.has(path));
-  void Promise.all(entries.map(([, f]) => f(CLOSE_FLUSH_CAP_MS).catch(() => null))).then((results) => {
-    // A flusher that threw (null) counts as failed (fix round 6, M6): nothing says it saved.
-    const failed = entries.filter((_, i) => results[i]?.ok !== true).map(([path]) => path);
-    if (failed.length === 0) { approveUnload('once'); reload(); return; }
-    heldReload = reload;
-    setAlerts({ ...alerts, unsaved: { count: failed.length, firstPath: failed[0], reload: true } });
-  });
+  void Promise.all([...flushers.values()].map((f) => f(RELOAD_FLUSH_CAP_MS).catch(() => null))).then(() => reload());
 }
-// The reload a failed save held, for Close anyway (null when the prompt is main's close or quit).
-let heldReload: (() => void) | null = null;
+
+// ── Unsaved Office documents count in the one quit prompt (Task 8) ──
+// WHY: a quit, or closing the last window, asks first while any file has unsaved changes
+// (UnsavedBeforeQuit, main/unsaved-quit.ts). An Office document is unsaved from the editor's
+// "modified" until its save lands — the strip's state below, anything but "Saved". Discard there
+// throws the changes away (its editor's discard, which also drops its recovery journal).
+const unsavedHolds = new Map<string, () => void>();
+function syncUnsavedHold(path: string): void {
+  const unsaved = (saves[path]?.phase ?? 'saved') !== 'saved';
+  const release = unsavedHolds.get(path);
+  if (unsaved && !release) {
+    unsavedHolds.set(path, holdUnsavedEditor({ name: path.split(/[\\/]/).pop() ?? path, discard: () => discarders.get(path)?.() }));
+  } else if (!unsaved && release) {
+    unsavedHolds.delete(path);
+    release();
+  }
+}
 
 // ── In-place edits that moved to their copy ("Save a copy…", fix round 2) ──
 // The file panel still shows the original; its briefcase must open the copy (fix round 3).
@@ -168,72 +136,38 @@ export function flushOffice(path: string): Promise<FlushResult> {
   return flushers.get(path)?.() ?? Promise.resolve({ ok: true });
 }
 
-// Window close and app quit (design §4, main/office/office-flush.ts): main asks this window to
-// save every open document and waits for the answer (or 5 s). Subscribed once, on the first
-// editor; the host without Office (remote, phone) has no such push and nothing subscribes.
-let answering = false;
-function answerFlushRequests(): void {
+// A quit (or the last window's close) refused for unsaved files (main/unsaved-quit.ts): show
+// their list. Subscribed once, from OfficeAlerts — in every window, Office page or not; the host
+// without Office (remote, phone) has no such push and nothing subscribes.
+let promptWatched = false;
+export function watchUnsavedPrompt(): void {
   const office = typeof window === 'undefined' ? undefined : window.claude?.office;
-  if (answering || !office?.onFlushRequest || !office.flushDone) return;
-  answering = true;
-  office.onFlushRequest((id, reason) => {
-    const entries = [...flushers.entries()].filter(([path]) => !aliasPaths.has(path));
-    void Promise.all(entries.map(([, f]) => f(CLOSE_FLUSH_CAP_MS).catch(() => null))).then((results) => {
-      // WHY report failures (fix round 2): a document whose save failed must not be closed with
-      // its window without the person choosing that. Main holds the close (or quit) and sends
-      // the prompt (counting every window's documents, office:unsaved-prompt).
-      // A flusher that threw (null) counts as failed (fix round 6, M6): nothing says it saved.
-      const failed = entries.filter((_, i) => results[i]?.ok !== true).map(([path]) => path);
-      // The unload that main's close or quit goes on to may pass the window guard (see above).
-      if (reason === 'final') approveUnload('quit'); else if (failed.length === 0) approveUnload('once');
-      // WHY 'final' reports none (accepted, fix round 4 — M2): it is quit's last pass, after the
-      // person already chose Close anyway. A document that newly fails in this pass is not asked
-      // about again; asking would re-open a prompt during shutdown for a choice already made.
-      // The editors stay as they are: the add-on keeps them from vetoing the unload (v0.1.2+).
-      office.flushDone?.(id, { failed: reason === 'final' ? 0 : failed.length, firstPath: failed[0] });
-    });
+  if (promptWatched || !office?.onUnsavedPrompt) return;
+  promptWatched = true;
+  office.onUnsavedPrompt((p) => {
+    setAlerts({ ...alerts, quitRefused: { mode: p.mode === 'close' ? 'close' : 'quit', afterTeardown: p.afterTeardown === true, restartDropped: p.restartDropped === true, confirming: false } });
+    // WHY save the Office documents now: each one listed is only waiting for its autosave, so the
+    // list empties by itself a moment later ("Nothing left unsaved here." → Quit).
+    flushers.forEach((f) => void f().catch(() => null));
   });
-  office.onUnsavedPrompt?.((p) => {
-    // A quit refused for an unsaved text file (fix rounds 9–10) is its own message.
-    if (p.other === true) { setAlerts({ ...alerts, quitRefused: { mode: p.mode ?? 'quit', afterTeardown: p.afterTeardown === true, restartDropped: p.restartDropped === true, confirming: false } }); return; }
-    heldReload = null;
-    setAlerts({ ...alerts, unsaved: { count: p.count, firstPath: p.firstPath } });
-  });
-}
-
-/** "Close anyway": main goes ahead with the close or quit it held. WHY nothing is taken down
- *  (fix round 4): the editors keep their edits and failed-save state, so if the window survives
- *  (another veto, e.g. an unsaved text file) nothing was lost. The add-on (v0.1.3) keeps an
- *  editor page from vetoing the unload itself. */
-export function closeAnyway(): void {
-  setAlerts({ ...alerts, unsaved: null });
-  // The person chose to let the failed documents go: the unload that follows may pass the guard.
-  approveUnload('once');
-  const reload = heldReload;
-  heldReload = null;
-  if (reload) reload(); else window.claude?.office?.proceedClose?.();
 }
 
 // ── Alerts shown outside the Office page (fix round 2) ──
 // The page may be closed (kept invisible), so these render beside it (OfficeAlerts).
-//   unsaved       a window close or quit found documents whose save failed
 //   closeFailed   a tab closed while the page was hidden could not save, so it came back
 interface OfficeAlertsState {
-  /** reload: the prompt is a reload's (fix round 6, M3), so it says "Reload anyway". */
-  unsaved: { count: number; firstPath: string; reload?: boolean } | null;
-  /** A quit (or the last window's close) was refused for unsaved non-Office edits (fix rounds
-   *  9–11); `confirming` = the in-place "Discard unsaved changes…?" step is showing. */
+  /** A quit (or the last window's close) was refused for unsaved files (fix rounds 9–11);
+   *  `confirming` = the in-place "Discard unsaved changes…?" step is showing. */
   quitRefused: QuitRefused | null;
   closeFailed: string | null;
 }
 export interface QuitRefused { mode: 'quit' | 'close'; afterTeardown: boolean; restartDropped: boolean; confirming: boolean }
-let alerts: OfficeAlertsState = { unsaved: null, closeFailed: null, quitRefused: null };
+let alerts: OfficeAlertsState = { closeFailed: null, quitRefused: null };
 const alertListeners = new Set<() => void>();
 function setAlerts(next: OfficeAlertsState) { alerts = next; alertListeners.forEach((l) => l()); }
 export function useOfficeAlerts(): OfficeAlertsState {
   return useSyncExternalStore((l) => { alertListeners.add(l); return () => { alertListeners.delete(l); }; }, () => alerts, () => alerts);
 }
-export function clearUnsavedPrompt(): void { heldReload = null; setAlerts({ ...alerts, unsaved: null }); }
 export function clearQuitRefused(): void { setAlerts({ ...alerts, quitRefused: null }); }
 export function confirmDiscardForQuit(confirming: boolean): void {
   if (alerts.quitRefused) setAlerts({ ...alerts, quitRefused: { ...alerts.quitRefused, confirming } });
@@ -243,36 +177,8 @@ export function confirmDiscardForQuit(confirming: boolean): void {
 export function previewQuitRefused(v: Partial<QuitRefused> = {}): void {
   setAlerts({ ...alerts, quitRefused: { mode: 'quit', afterTeardown: false, restartDropped: false, confirming: false, ...(alerts.quitRefused ?? {}), ...v } });
 }
-/** Photo-only (`shoot`): the prompt as a window close with two unsaved documents shows it. */
-export function previewUnsavedPrompt(): void {
-  setAlerts({ ...alerts, unsaved: { count: 2, firstPath: state.docs[0]?.file.path ?? '' } });
-}
 export function noteCloseFailedWhileHidden(path: string): void { setAlerts({ ...alerts, closeFailed: path }); }
-// Lost saves still to be said, one toast each (final review, finding 4): the last quit can have
-// stopped several documents' saves, and each file gets its own toast — the next shows when the
-// current one goes.
-const lostQueue: string[] = [];
-function sayLost(paths: string[]): void {
-  for (const p of paths) if (p !== alerts.closeFailed && !lostQueue.includes(p)) lostQueue.push(p);
-  if (!alerts.closeFailed && lostQueue.length > 0) noteCloseFailedWhileHidden(lostQueue.shift()!);
-}
-export function clearCloseFailed(): void { setAlerts({ ...alerts, closeFailed: lostQueue.shift() ?? null }); }
-
-/** Saves that failed after the page that asked for them was reloaded (fix round 6, M4), and —
- *  on the first page after a launch — saves the last quit had to stop (final review, finding 4):
- *  main keeps them; this page takes them on load, and again whenever main says there are more,
- *  and says so with the same toast a hidden close uses, once per file. Returns the unsubscribe. */
-export function watchLostSaves(): () => void {
-  // Also listen for main's prompts from the start (fix round 9): a quit refused for an unsaved
-  // text file must show in a window that never opened an Office document.
-  answerFlushRequests();
-  const office = typeof window === 'undefined' ? undefined : window.claude?.office;
-  if (!office?.lostSaves) return () => {};
-  const take = () => void office.lostSaves?.().then((paths) => { if (paths?.length) sayLost(paths); }, () => {});
-  const stop = office.onSavesLost?.(take) ?? (() => {});
-  take();
-  return stop;
-}
+export function clearCloseFailed(): void { setAlerts({ ...alerts, closeFailed: null }); }
 
 /** The file's Office tab, if it has one (a closing tab still counts: its editor is mounted). */
 export function officeDocFor(path: string): OpenDoc | null {
@@ -429,12 +335,14 @@ function setSave(path: string, next: OfficeSaveState) {
   if (!('note' in next) && saves[path]?.note) next = { ...next, note: saves[path].note };
   saves = { ...saves, [path]: next };
   saveListeners.forEach((l) => l());
+  syncUnsavedHold(path);
 }
 function forgetSaveState(path: string) {
   if (!(path in saves)) return;
   const { [path]: _gone, ...rest } = saves;
   saves = rest;
   saveListeners.forEach((l) => l());
+  syncUnsavedHold(path);
 }
 function subscribeSaves(l: () => void) { saveListeners.add(l); return () => { saveListeners.delete(l); }; }
 
@@ -446,8 +354,6 @@ export function useSaveState(path: string | null): OfficeSaveState {
   return useSyncExternalStore(subscribeSaves, get, get);
 }
 export function markChanged(path: string): void {
-  // A new change withdraws a close's approval: that close has not saved it (see the guard).
-  withdrawUnloadApproval();
   setSave(path, { phase: 'unsaved', savedAt: saves[path]?.savedAt });
 }
 /** "Save a copy…" landed: the changes are in the copy, and the file itself is left as it was. */
@@ -537,21 +443,18 @@ export function resetOfficeStoreForTests(): void {
   saves = {};
   inlineHolders.clear();
   flushers.clear();
-  aliasPaths.clear();
+  discarders.clear();
+  unsavedHolds.forEach((release) => release());
+  unsavedHolds.clear();
   inlineCopies.clear();
   inlineRevealers.clear();
-  answering = false;
+  promptWatched = false;
   reloaders.clear();
   changedSubscribed = false;
   commentHandlers.clear();
   commentsSubscribed = false;
-  unsavedChecks.clear();
-  unloadApproval = 'none';
-  heldReload = null;
   copyingPaths = new Set();
-  if (unloadGuarded) { window.removeEventListener('beforeunload', onBeforeUnload); unloadGuarded = false; }
-  alerts = { unsaved: null, closeFailed: null, quitRefused: null };
-  lostQueue.length = 0;
+  alerts = { closeFailed: null, quitRefused: null };
   listeners.forEach((l) => l());
   saveListeners.forEach((l) => l());
 }

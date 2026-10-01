@@ -2643,7 +2643,7 @@ export function installShim(): void {
     },
     // Office is desktop only (R28). WHY every member routes through invoke(): the host has no handler, so the
     // call is refused ("Office isn't available via remote access yet.") — not a "not a function" crash.
-    // No onFlushRequest/flushDone: close/quit saving is the desktop window's own (office-flush.ts). onChanged never fires (restore is refused).
+    // No onUnsavedPrompt: the quit gate is the desktop window's own (unsaved-quit.ts). onChanged never fires (restore is refused).
     office: {
       status: (projectRoot: string | null) => invoke('office:status', { projectRoot }),
       create: (kind: string, projectRoot: string | null) => invoke('office:create', { kind, projectRoot }),
