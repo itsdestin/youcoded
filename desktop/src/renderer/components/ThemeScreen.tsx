@@ -4,12 +4,10 @@ import { useMarketplace } from '../state/marketplace-context';
 import SettingsExplainer, { type ExplainerSection } from './SettingsExplainer';
 import type { LoadedTheme } from '../themes/theme-types';
 import { ThemeCard } from './appearance/ThemeCard';
-import {
-  BubbleSettings, GlassLook, LayoutSettings, ParticleSettings, ResetLook, RoundnessSettings, StackedRow,
-} from './appearance/LookSettings';
+import { LayoutSettings, LookSettings } from './appearance/LookSettings';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
-import { Button, CARD_LEVEL_1, SectionLabel, Toggle, SettingRow } from './ui';
+import { Button, SectionLabel, Toggle, SettingRow } from './ui';
 
 // Plain-language explainer for the Appearance popup. Shown when the user taps
 // the (i) icon in the popup header — see ThemeScreen's `showInfo` state.
@@ -27,7 +25,7 @@ const APPEARANCE_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
       heading: 'What the settings do',
       bullets: [
         { term: 'Your themes', text: 'Every theme installed on your device. Tap one to use it right away.' },
-        { term: 'Window, Chat, Glass & effects', text: "Your own layout (which brings its matching message box), roundness, message bubbles, glass and particles, applied to every theme. Each one starts on \"Auto\", which keeps the theme exactly as its author made it. Change one and it applies to every theme until you set it back to Auto." },
+        { term: 'Layout and additional customizations', text: "Your own layout (which brings its matching message box), message bubbles, roundness, glass and particles, applied to every theme. Each one starts on \"Auto\", which keeps the theme exactly as its author made it. Change one and it applies to every theme until you set it back to Auto." },
         { term: 'Glass', text: 'How see-through the panels and bubbles are over a wallpaper. Clear, Frosted and Solid are one-tap choices; Fine-tune sets each blur and see-through level yourself. Themes without a wallpaper are not affected.' },
         { term: 'The share icon', text: 'Appears on themes you built yourself. It publishes that theme to the marketplace so others can install it.' },
         { term: 'Particles', text: 'Falling rain, dust, embers or snow over the app. Auto keeps whatever the theme comes with.' },
@@ -138,9 +136,9 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
 
   return (
     // D1: header, close and scroll body come from the Dialog.
-    // Headed sections: Themes · Window · Chat · Glass & effects (AQ-4, 2026-10-01).
-    // space-y-4: the guide's 16px between groups (popup-spacing SP-4).
-    <div className="space-y-4">
+    // Headed sections: Themes · Layout (with the Additional customizations fold) ·
+    // Effects & chat. space-y-5 kept as it was; only the fold's contents changed.
+    <div className="space-y-5">
       <section className="space-y-2">
         {/* WHY SectionLabel, not the SECTION_LABEL class string (labels batch,
             guide: no spaced capitals — decisions H-3/L-1…L-4); the constant
@@ -227,61 +225,48 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
         </div>
       </section>
 
-      {/* WHY three named cards, nothing folded (appearance-questions AQ-4, 2026-10-01:
-          Destin picked "Named groups, nothing folded"). Before: bare Layout tiles, one
-          folded "Additional customizations" grab-bag, and "Effects & chat" mixing an
-          accessibility switch with a chat setting. Now each group is a small label over a
-          level-1 card (guide: a label first, nothing bare), split by what it changes. */}
       <section>
-        <SectionLabel className="mb-2">Window</SectionLabel>
-        <div className={`${CARD_LEVEL_1} p-3 space-y-4`}>
-          <StackedRow title="Layout"><LayoutSettings /></StackedRow>
-          <RoundnessSettings />
+        {/* WHY below Themes (Destin, appearance-panel-review-6 AR6-1: "put layout section
+            below themes section"): picking a theme is the panel's main job, so it leads. */}
+        {/* WHY the rest stays folded (appearance-review AR-2, 2026-10-01): a trial with every
+            group open in its own card was rejected — "collapse everything aside from the
+            layout/frame into additional customizations." Particles joined the fold then. */}
+        <SectionLabel>Layout</SectionLabel>
+        <LayoutSettings />
+        <div className="mt-2">
+          <LookSettings />
         </div>
       </section>
 
-      <section>
-        <SectionLabel className="mb-2">Chat</SectionLabel>
-        <div className={`${CARD_LEVEL_1} p-3 space-y-4`}>
-          <BubbleSettings />
-          <SettingRow
-            header
-            variant="item"
-            title="Message timestamps"
-            description="Show time sent in each chat bubble"
-            control={
-              <Toggle
-                checked={showTimestamps}
-                onChange={(next) => setShowTimestamps(next)}
-                aria-label="Message timestamps"
-              />
-            }
-          />
-        </div>
-      </section>
-
-      <section className="space-y-2">
-        <SectionLabel>Glass &amp; effects</SectionLabel>
-        <div className={`${CARD_LEVEL_1} p-3 space-y-4`}>
-          <GlassLook />
-          <ParticleSettings />
-          {/* Reduce visual effects — global: disables particles, forces blur to 0,
-              shortens animations. It sits with the glass and particles it switches off. */}
-          <SettingRow
-            header
-            variant="item"
-            title="Reduce visual effects"
-            description="Disables particles, blur, and animations"
-            control={
-              <Toggle
-                checked={reducedEffects}
-                onChange={(next) => setReducedEffects(next)}
-                aria-label="Reduce visual effects"
-              />
-            }
-          />
-        </div>
-        <ResetLook />
+      <section className="space-y-1.5">
+        {/* WHY outside the fold (Destin, 2026-10-01: "they should stay outside"): Reduce
+            visual effects is the accessibility/performance switch people look for in a
+            hurry, and timestamps is a quick on/off; neither hides behind a row. */}
+        <SectionLabel>Effects &amp; chat</SectionLabel>
+        <SettingRow
+          variant="item"
+          title="Reduce visual effects"
+          description="Disables particles, blur, and animations"
+          control={
+            <Toggle
+              checked={reducedEffects}
+              onChange={(next) => setReducedEffects(next)}
+              aria-label="Reduce visual effects"
+            />
+          }
+        />
+        <SettingRow
+          variant="item"
+          title="Message timestamps"
+          description="Show time sent in each chat bubble"
+          control={
+            <Toggle
+              checked={showTimestamps}
+              onChange={(next) => setShowTimestamps(next)}
+              aria-label="Message timestamps"
+            />
+          }
+        />
       </section>
     </div>
   );

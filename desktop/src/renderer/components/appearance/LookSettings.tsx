@@ -5,10 +5,10 @@
 // with Fine-tune on request, AP-4 bubble shape / roundness, AP-S1
 // nobody's look changes until they change a setting; appearance-panel-review-3 —
 // pictures for every choice, painted in the theme's real colours; review-4 — no Message
-// box setting (it now rides on the layout, look-overrides.ts). The folded "Additional
-// customizations" row is gone (appearance-questions AQ-4, 2026-10-01): each piece below
-// sits in a named, always-open card on the Appearance screen — Window, Chat, Glass &
-// effects.
+// box setting (it now rides on the layout, look-overrides.ts). Everything but Layout sits
+// behind the one "Additional customizations" row (appearance-review AR-2, 2026-10-01,
+// after an all-open trial: "collapse everything aside from the layout/frame"); Particles
+// joined it when the per-theme editor was removed (appearance-questions AQ-2).
 //
 // What must last is the FUNCTIONALITY — `lookOverrides` / `setLookOverrides` on
 // useTheme(), the rules in themes/look-overrides.ts, and "absent field = Auto".
@@ -218,7 +218,7 @@ const GLASS_SLIDERS: { field: GlassField; label: string; min: number; max: numbe
 
 /** A setting with its choices underneath: title (and optional hint) on top, the choices
  *  full width below — the design guide's rule for a set of choices (SA-1 "mixed"). */
-export function StackedRow({ title, hint, children }: { title: string; hint?: ReactNode; children: ReactNode }) {
+function StackedRow({ title, hint, children }: { title: string; hint?: ReactNode; children: ReactNode }) {
   return (
     <div className="space-y-1.5">
       <div>
@@ -343,7 +343,7 @@ export function LayoutSettings() {
 /** Particles for every theme (appearance-questions AQ-2, 2026-10-01): kept from the
  *  removed per-theme editor, now an Auto-first choice like the rest. Words, not
  *  pictures: falling snow and drifting dust don't read in a 44px still. */
-export function ParticleSettings() {
+function ParticleSettings() {
   const { allThemes, activeTheme, theme: activeSlug, lookOverrides: look, setLookOverrides: set, reducedEffects } = useTheme();
   const raw = allThemes.find(t => t.slug === activeSlug) ?? activeTheme;
   const own = raw.effects?.particles ?? 'none';
@@ -370,7 +370,7 @@ export function ParticleSettings() {
 const PARTICLE_LABEL: Record<LookParticles, string> = { none: 'None', rain: 'Rain', dust: 'Dust', ember: 'Ember', snow: 'Snow' };
 
 /** Message bubble shapes, Auto first. */
-export function BubbleSettings() {
+function BubbleSettings() {
   const { activeTheme, allThemes, theme: activeSlug, lookOverrides: look, setLookOverrides: set } = useTheme();
   const raw = allThemes.find(t => t.slug === activeSlug) ?? activeTheme;
   const themeBubble: BubbleStyle = raw.layout?.['bubble-style'] ?? 'default';
@@ -391,7 +391,7 @@ export function BubbleSettings() {
 }
 
 /** Corner roundness, Auto first. */
-export function RoundnessSettings() {
+function RoundnessSettings() {
   const { activeTheme, allThemes, theme: activeSlug, lookOverrides: look, setLookOverrides: set } = useTheme();
   const raw = allThemes.find(t => t.slug === activeSlug) ?? activeTheme;
   const themeRound = themeRoundness(raw);
@@ -414,21 +414,53 @@ export function RoundnessSettings() {
 }
 
 /** Glass presets plus Fine-tune, for the Glass & effects card. */
-export function GlassLook() {
+function GlassLook() {
   const { activeTheme, allThemes, theme: activeSlug, lookOverrides: look, setLookOverrides: set, reducedEffects } = useTheme();
   const raw = allThemes.find(t => t.slug === activeSlug) ?? activeTheme;
   return <GlassSettings active={activeTheme} raw={raw} look={look} set={set} reducedEffects={reducedEffects} />;
 }
 
-/** "Reset all to Auto", shown only once something differs from the theme. WHY it
- *  outlives the folded row it sat in: the settings are now spread over three cards,
- *  and this is still the one way back to the theme exactly as its author made it. */
-export function ResetLook() {
+/** "Reset all to Auto", shown only once something differs from the theme. */
+function ResetLook() {
   const { lookOverrides: look, setLookOverrides: set } = useTheme();
   if (!hasAnyOverride(look)) return null;
   return (
     <Button variant="secondary" size="sm" onClick={() => set({})} className="w-full">
       Reset all to Auto
     </Button>
+  );
+}
+
+const LOOK_KEYS: (keyof LookOverrides)[] = ['glass', 'bubbleStyle', 'roundness', 'particles'];
+
+/** Bubbles, roundness, glass and particles, behind one "Additional customizations" row.
+ *  WHY folded (Destin, review-3 AR3-2 "Look tucked away", reaffirmed appearance-review
+ *  AR-2 2026-10-01): the most-used settings — themes, layout, the two switches — stay up
+ *  front; these open in place. The row's tinted box continues below it when open
+ *  (review-4 AR4-3: "all of the submenus should exist within the customize look container"). */
+export function LookSettings() {
+  const { lookOverrides: look } = useTheme();
+  const changed = LOOK_KEYS.filter(k => look[k] !== undefined).length;
+  const [open, setOpen] = useState(false);
+  return (
+    <div>
+      <SettingRow
+        variant="item"
+        title="Additional customizations"
+        description={changed === 0 ? 'Message bubbles, corners, glass, particles' : `${changed} changed from the theme`}
+        expanded={open}
+        onClick={() => setOpen(v => !v)}
+        className={open ? 'rounded-b-none' : ''}
+      />
+      {open && (
+        <div className="space-y-4 bg-inset/50 rounded-b-lg px-3 pt-2 pb-3">
+          <BubbleSettings />
+          <RoundnessSettings />
+          <GlassLook />
+          <ParticleSettings />
+          <ResetLook />
+        </div>
+      )}
+    </div>
   );
 }
