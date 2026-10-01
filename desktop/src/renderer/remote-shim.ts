@@ -5,7 +5,6 @@
 
 // Type-only, plus table-error-flag (one tiny value; imported from backend-contract it would pull the whole contract into the Android bundle — WHY 2026-09-30 one-core R3-3).
 import type { VoiceReadiness } from '../shared/voice-types';
-import type { TranscriptEvent } from '../shared/types';
 import type { RemoteBridge } from '../shared/backend-contract';
 import { TABLE_ERROR_FLAG } from '../shared/table-error-flag';
 
@@ -2049,8 +2048,7 @@ export function installShim(): void {
       // Android-only push event — see remote-shim handleMessage above for rationale.
       sessionPermissionMode: (cb: Callback) => addListener('session:permission-mode', cb),
       uiAction: (cb: Callback) => addListener('ui:action:received', cb),
-      // WHY typed (M5): same listener shape the contract declares — the socket payload is a TranscriptEvent.
-      transcriptEvent: (cb: (event: TranscriptEvent) => void) => addListener('transcript:event', cb),
+      transcriptEvent: (cb: (event: import('../shared/types').TranscriptEvent) => void) => addListener('transcript:event', cb),
       transcriptShrink: (cb: Callback) => addListener('transcript:shrink', cb),
       promptShow: (cb: Callback) => addListener('prompt:show', cb),
       promptDismiss: (cb: Callback) => addListener('prompt:dismiss', cb),

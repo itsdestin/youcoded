@@ -1340,16 +1340,12 @@ export class HarnessSession extends EventEmitter {
   /** Returns the uuid it minted so a caller that ALSO changes history can record
    *  where that history came from (cache Stage 4). The public event shape is
    *  unchanged — this is a return value, not a new field. */
-  // WHY generic in the event type: `type` and `data` are tied together, so passing
-  // a field that does not belong to that event type (the old bag allowed any
-  // field on any type) is a compile error at the call site.
+  // WHY generic: `data` must belong to `type`, so a wrong field is a compile error (M5).
   private emitEvent<T extends TranscriptEventType>(type: T, data: DataOf<T>): string {
     // WHY: two measured requests can finish in the same millisecond. Stamp
     // progress strictly forward so a delayed attach cannot overwrite the newer
     // reading; leave all other transcript timestamps on their usual clock.
-    // WHY the cast: TypeScript cannot narrow the generic `data` from a check on the
-    // generic `type`, so name the one payload this branch reads. Safe because
-    // emitEvent<T> already ties `data` to `type` at every call site.
+    // WHY the cast: TS cannot narrow generic `data` from generic `type`; safe, call sites tie them.
     const progress = type === 'assistant-thinking' ? (data as DataOf<'assistant-thinking'>).usageProgress : undefined;
     const timestamp = progress
       ? (this.lastUsageProgressTimestamp = Math.max(Date.now(), this.lastUsageProgressTimestamp + 1))
@@ -1357,12 +1353,11 @@ export class HarnessSession extends EventEmitter {
     if (type === 'turn-complete' || type === 'user-interrupt' || type === 'session-error') {
       this.lastUsageProgressTimestamp = Math.max(this.lastUsageProgressTimestamp, timestamp);
     }
-    // WHY the cast: the object literal's `type: T` / `data: DataOf<T>` pair is the
-    // right shape but TypeScript cannot prove a generic pair is one union member.
+    // WHY the cast: TS cannot prove a generic type/data pair is one union member.
     const event = { type, sessionId: this.opts.sessionId, uuid: randomUUID(), timestamp, data } as EventOf<T>;
     // WHY the accessor holds the exact event: late attach needs its timestamp and
     // uuid as well as the payload, and must never replay a finished turn's state.
-    if (progress) this._currentUsageProgress = event as EventOf<'assistant-thinking'>;
+    if (progress) this._currentUsageProgress = event;
     if (type === 'turn-complete' || type === 'user-interrupt' || type === 'session-error') this._currentUsageProgress = null;
     this.emit('transcript-event', event);
     return event.uuid;
