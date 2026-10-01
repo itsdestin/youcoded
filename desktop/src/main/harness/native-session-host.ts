@@ -328,7 +328,7 @@ interface LiveEntry {
   // `attachments` are absolute composer file paths; image ones become image
   // parts on the user message. Carried through the QUEUE too, or a message sent
   // while a turn was in flight would silently lose its pictures.
-  queue: { id: string; text: string; attachments: string[]; ready?: boolean }[];
+  queue: { id: string; text: string; attachments: string[]; ready?: boolean; /** when it was queued (ms), for the strip */ at?: number }[];
   // True from dispatch until runTurns finishes the last queued turn. Host-owned
   // (HarnessSession's in-flight state is private); safe because Node is single-threaded.
   inFlight: boolean;
@@ -2184,6 +2184,27 @@ export class NativeSessionHost extends EventEmitter {
     ];
   }
 
+  /** The waiting messages themselves, oldest first: what the docked strip draws on EVERY screen (one-core R5-4a). `content` is the text
+   *  exactly as it was sent, which is also what the strip showed when only the sending screen drew it. */
+  queuedMessagesFor(sessionId: string): { queueId: string; content: string; timestamp: number }[] {
+    const item = (q: { id: string; text: string; at?: number }) => ({ queueId: q.id, content: q.text, timestamp: q.at ?? 0 });
+    return [
+      ...(this.startingSends.get(sessionId) ?? []).map(item),
+      ...(this.live.get(sessionId)?.queue ?? []).map(item),
+    ];
+  }
+
+  /** The last queue announced per session, as its ids. WHY (R5-4a): the queue changes in about ten places (a send, a cancel, a drain, a
+   *  hand-over, a teardown); each calls announceQueue and only a CHANGE is published, so a drain that finds nothing new stays silent. */
+  private lastQueueAnnounced = new Map<string, string>();
+  private announceQueue(sessionId: string): void {
+    const items = this.queuedMessagesFor(sessionId);
+    const key = items.map((q) => q.queueId).join(',');
+    if ((this.lastQueueAnnounced.get(sessionId) ?? '') === key) return;
+    if (key) this.lastQueueAnnounced.set(sessionId, key); else this.lastQueueAnnounced.delete(sessionId);
+    this.emit('queue-changed', { sessionId, queue: items });
+  }
+
   /** This session's current permission mode (default 'ask' when not seeded). */
   getPermissionMode(sessionId: string): NativePermissionMode { return this.modeFor.get(sessionId) ?? 'ask'; }
   /** This session's resolved preset id (null if not live). */
@@ -3050,7 +3071,7 @@ export class NativeSessionHost extends EventEmitter {
    * the instant the session exists, so the message the user typed is never
    * thrown away — which is the real harm; better wording alone still loses it.
    */
-  private startingSends = new Map<string, { id: string; text: string; attachments: string[] }[]>();
+  private startingSends = new Map<string, { id: string; text: string; attachments: string[]; at?: number }[]>();
 
   /** Mark an id as being built. Called at the TOP of create() and resume(), so
    *  the window a pre-live send can fall into is covered from its first tick. */
@@ -3061,7 +3082,7 @@ export class NativeSessionHost extends EventEmitter {
   /** Stop holding sends for an id, returning whatever was held. Called by wire()
    *  on success, and by create()/resume() when they give up — a message held for
    *  a session that never came up must not sit in memory forever. */
-  private endStarting(sessionId: string): { id: string; text: string; attachments: string[] }[] {
+  private endStarting(sessionId: string): { id: string; text: string; attachments: string[]; at?: number }[] {
     const held = this.startingSends.get(sessionId) ?? [];
     this.startingSends.delete(sessionId);
     return held;
@@ -3341,6 +3362,7 @@ export class NativeSessionHost extends EventEmitter {
       const [first, ...rest] = held;
       entry.queue.push(...rest);
       this.send(sessionId, first.text, first.attachments);
+      this.announceQueue(sessionId); // the first one is no longer waiting
     }
   }
 
@@ -4081,7 +4103,8 @@ export class NativeSessionHost extends EventEmitter {
       if (held) {
         if (held.length >= SEND_QUEUE_LIMIT) return { status: 'failed', reason: 'starting' };
         const queueId = randomUUID();
-        held.push({ id: queueId, text, attachments });
+        held.push({ id: queueId, text, attachments, at: Date.now() });
+        this.announceQueue(sessionId);
         return { status: 'queued', queueId };
       }
       return { status: 'failed', reason: 'not-live' };
@@ -4100,8 +4123,9 @@ export class NativeSessionHost extends EventEmitter {
       const queueId = randomUUID();
       // WHY: both the host drainer and a future in-turn claimant must leave this
       // head untouched until the IPC acknowledgement has had a macrotask to flush.
-      const queued = { id: queueId, text, attachments, ready: false };
+      const queued = { id: queueId, text, attachments, ready: false, at: Date.now() };
       entry.queue.push(queued);
+      this.announceQueue(sessionId); // every screen shows it, not only the one that sent it (R5-4a)
       setImmediate(() => {
         queued.ready = true;
         // The turn may have settled while this head was unready. Readiness is
@@ -4148,13 +4172,14 @@ export class NativeSessionHost extends EventEmitter {
     const held = this.startingSends.get(sessionId);
     if (held) {
       const i = held.findIndex((q) => q.id === queueId);
-      if (i !== -1) { held.splice(i, 1); return true; }
+      if (i !== -1) { held.splice(i, 1); this.announceQueue(sessionId); return true; }
     }
     const entry = this.live.get(sessionId);
     if (!entry) return false;
     const idx = entry.queue.findIndex((q) => q.id === queueId);
     if (idx === -1) return false;
     entry.queue.splice(idx, 1);
+    this.announceQueue(sessionId);
     return true;
   }
 
@@ -4166,7 +4191,7 @@ export class NativeSessionHost extends EventEmitter {
     const held = this.startingSends.get(sessionId); // still starting: reorder only
     if (held) {
       const i = held.findIndex((q) => q.id === queueId);
-      if (i !== -1) { held.unshift(...held.splice(i, 1)); return true; }
+      if (i !== -1) { held.unshift(...held.splice(i, 1)); this.announceQueue(sessionId); return true; }
     }
     const entry = this.live.get(sessionId);
     if (!entry) return false;
@@ -4175,6 +4200,7 @@ export class NativeSessionHost extends EventEmitter {
     const [item] = entry.queue.splice(idx, 1);
     item.ready = true; // its IPC ack flushed long before a button could be pressed
     entry.queue.unshift(item);
+    this.announceQueue(sessionId); // "send now" moves it to the front
     this.interrupt(sessionId);
     return true;
   }
@@ -4188,8 +4214,9 @@ export class NativeSessionHost extends EventEmitter {
         entry.quiescing || entry.compacting || entry.queue[0]?.ready === false) return;
     const item = entry.queue.shift();
     if (!item) return;
+    this.announceQueue(sessionId);
     return { ...item, restore: () => {
-      if (this.live.get(sessionId) === entry && !entry.quiescing) entry.queue.unshift(item);
+      if (this.live.get(sessionId) === entry && !entry.quiescing) { entry.queue.unshift(item); this.announceQueue(sessionId); }
       else log('ERROR', 'NativeSessionHost', 'claimed message could not be restored after delivery failure', { sessionId, queueId: item.id });
     } };
   }
@@ -4248,6 +4275,7 @@ export class NativeSessionHost extends EventEmitter {
           // The atomic shift owns the queue ID; an unready FIFO head blocks
           // dispatch, and its scheduled readiness transition restarts the pass.
           next = entry.quiescing || entry.queue[0]?.ready === false ? undefined : entry.queue.shift();
+          if (next !== undefined) this.announceQueue(sessionId); // it is being sent now, no longer waiting (R5-4a)
         }
         // Stop pressed during this pass: leave reports parked, but never park
         // submitted user messages. A notice pass can receive sends while awaiting.
@@ -4255,6 +4283,7 @@ export class NativeSessionHost extends EventEmitter {
         if (this.live.get(sessionId) !== entry || entry.quiescing) return;
         next = entry.queue[0]?.ready === false ? undefined : entry.queue.shift();
         if (next === undefined) break;
+        this.announceQueue(sessionId);
       }
     } finally {
       entry.inFlight = false;
@@ -4614,16 +4643,29 @@ export class NativeSessionHost extends EventEmitter {
     // Being wound down for a takeover (quiesce): would append past the flush.
     // (Combined branch: checked before master's compaction guards, same as send.)
     if (entry.quiescing) return { ok: false, reason: 'not-live' };
-    if (entry.inFlight || entry.compacting || entry.queue.length > 0) return { ok: false, reason: 'turn-in-flight' };
+    if (entry.inFlight || entry.compacting || entry.queue.length > 0) {
+      // A refusal still shows what the screen that typed it always showed (a spinner, then a "may have failed" note); say so on every screen.
+      this.emit('compaction', { sessionId, phase: 'start' });
+      this.emit('compaction', { sessionId, phase: 'end', outcome: 'failed' });
+      return { ok: false, reason: 'turn-in-flight' };
+    }
     // WHY: claim the idle session synchronously, before compactNow awaits a
     // provider. A simultaneous send must receive a refusal, not a false 'sent'
     // acknowledgement for a turn the session's re-entrancy guard will drop.
     entry.compacting = true;
+    // One-core R5-4a: say a compaction began, so every screen draws the spinner (it used to be drawn only by the screen that typed /compact).
+    // The success case ends with the harness's own compact-summary line, which every screen turns into the "Compacted" note; only a
+    // compaction that ends WITHOUT one needs an explicit end.
+    this.emit('compaction', { sessionId, phase: 'start' });
     try {
       const result = await entry.session.compactNow(focus, targetContextLength);
       // Failed candidates do not rewrite history or publish a checkpoint.
       if (result.ok) this.publishAcceptedHistory(sessionId, entry, 'compaction');
+      else this.emit('compaction', { sessionId, phase: 'end', outcome: result.reason === 'interrupted' ? 'cancelled' : 'failed' });
       return result;
+    } catch (err) {
+      this.emit('compaction', { sessionId, phase: 'end', outcome: 'failed' });
+      throw err;
     } finally {
       entry.compacting = false;
       // WHY: a report queued while the summary held the idle slot has no
@@ -4813,6 +4855,7 @@ export class NativeSessionHost extends EventEmitter {
     // through endQuiesce().
     entry.quiescing = true;
     entry.queue.length = 0;                        // (1) no post-flush turn can start
+    this.announceQueue(sessionId);                 // (the strip empties on every screen)
     // (1b) Tear down specialist children before quiescing this session: a
     // running child keeps appending to ITS file and keeps the parent's Task call
     // pending, both of which contradict what quiesce promises the caller (no
@@ -4874,6 +4917,8 @@ export class NativeSessionHost extends EventEmitter {
     const { contextLength, profile, pricing, free, slotsUnknown } = await this.resolveContextAndProfile(binding);
     entry.session.setBinding(binding, contextLength, profile, pricing, free);
     entry.refreshSlotsAfterTurn = slotsUnknown;
+    // One-core R5-4a: the model label changes on every screen the moment the host swaps (it used to change only on the screen that picked).
+    this.emit('model-changed', { sessionId, model: binding.modelId });
     this.republishWindow(sessionId, entry);
     // Cache Stage 4: a model swap changes the assembled prefix (and, for a
     // ChatGPT account swap, the identity the ciphertext was accepted under),
@@ -5170,6 +5215,7 @@ export class NativeSessionHost extends EventEmitter {
     // A session torn down while it was still starting has nowhere to deliver a
     // held message, so drop it here rather than leave it stranded in memory.
     this.endStarting(sessionId);
+    this.lastQueueAnnounced.delete(sessionId);
     // Specialist children go next, and unconditionally — before the not-live
     // early return, because a child must never outlive its parent even if the
     // parent's own entry is already gone (a double destroy, or a teardown

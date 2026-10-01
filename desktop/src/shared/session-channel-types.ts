@@ -10,6 +10,7 @@ import type {
 } from './types';
 import type { CreateSessionOpts } from '../main/session-manager';
 import type { OpenRequest, OpenReply } from './session-open-types';
+import type { PromptReport } from './session-live-types';
 
 /** What a session-meta write answers: `ok:false` carries the reason a screen can show. */
 type SessionWriteResult = { ok: true } | { ok: false; error: string };
@@ -28,7 +29,7 @@ export interface SessionChannelTypes {
   'session:selected': { request: { sessionId: string | null }; response: void };
   'session:switch': { request: { sessionId: string }; response: { ok: true } };
   // Terminal traffic: fire-and-forget on every door.
-  'session:input': { request: { sessionId: string; text: string }; response: void };
+  'session:input': { request: { sessionId: string; text: string; /** a typed chat command, so the host can draw its divider (R5-4a) */ notice?: 'model-switch' }; response: void };
   'session:resize': { request: { sessionId: string; cols: number; rows: number }; response: void };
   'session:terminal-ready': { request: { sessionId: string }; response: void };
   'session:menu-lock': { request: { sessionId: string; holder: string; action: 'acquire' | 'release' }; response: boolean };
@@ -42,6 +43,8 @@ export interface SessionChannelTypes {
   // End a phone's watch of one session (one-core R5-3). `session:open` is what starts a watch; there is no separate "watch" call, because a
   // watch without a fill would deliver events onto a conversation the phone has no history for.
   'session:unwatch': { request: { sessionId: string }; response: { ok: true } };
+  // A computer window reports a card it read off its terminal (one-core R5-4a); the host numbers it and shows it on every screen.
+  'session:prompt-report': { request: PromptReport; response: { ok: boolean } };
   // Tags, notes, flags and names.
   'session:set-flag': { request: { sessionId: string; flag: string; value: boolean }; response: SessionWriteResult };
   'session:set-tag': { request: { sessionId: string; tagId: string; value: boolean }; response: SessionWriteResult };

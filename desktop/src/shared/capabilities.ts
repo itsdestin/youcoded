@@ -49,6 +49,11 @@ export interface Capabilities {
   contentSearch: boolean;
   /** A running conversation on another device can be taken over from here ("live handoff"). */
   liveHandoff: boolean;
+  /** The host keeps a numbered record of each session and publishes the shared lines (a model-switch or "Conversation
+   *  cleared" divider, the compaction spinner, a prompt card, the messages queued on the computer) as events, so this screen
+   *  draws them from the record and does NOT infer them itself (one-core R5-4a). False only on the Android app's own runtime,
+   *  which has no such record: there the screen keeps drawing what it infers. */
+  sessionRecord: boolean;
 }
 
 /** What the computer's own window can do. The preload copies this and overrides `nativeSessions` from the
@@ -67,6 +72,7 @@ export const DESKTOP_WINDOW_CAPABILITIES: Capabilities = {
   projectWrites: true,
   contentSearch: true,
   liveHandoff: true,
+  sessionRecord: true,
 };
 
 /** What a screen watching a computer over the network can do (a phone's browser, or the Android app paired to a
@@ -87,6 +93,7 @@ export const REMOTE_SCREEN_CAPABILITIES: Capabilities = {
   projectWrites: false,
   contentSearch: false,
   liveHandoff: true,
+  sessionRecord: true,
 };
 
 /** What the Android app can do on its OWN runtime (not paired to a computer). Mirrored in MessageRouter.kt. */
@@ -104,6 +111,7 @@ export const ANDROID_LOCAL_CAPABILITIES: Capabilities = {
   projectWrites: true,
   contentSearch: false,
   liveHandoff: false,
+  sessionRecord: false,
 };
 
 const KEYS = Object.keys(REMOTE_SCREEN_CAPABILITIES) as Array<keyof Capabilities>;

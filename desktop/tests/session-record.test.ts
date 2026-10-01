@@ -237,10 +237,10 @@ describe('live facts and the summary', () => {
 });
 
 describe('what is carried', () => {
-  it('lists the nine session-scoped pushes', () => {
+  it('lists the eleven session-scoped pushes', () => {
     expect([...SESSION_SCOPED_PUSHES].sort()).toEqual([
       'hook:event', 'native:model-state', 'native:permission-mode', 'native:session-context', 'native:shell-event',
-      'session:meta-changed', 'specialists:event', 'transcript:event', 'transcript:shrink',
+      'session:live', 'session:meta-changed', 'session:permission-mode', 'specialists:event', 'transcript:event', 'transcript:shrink',
     ]);
   });
 });

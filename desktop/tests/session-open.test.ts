@@ -71,7 +71,7 @@ describe('openSession: a first open (page)', () => {
     r.begin(S);
     const cc = ok(await openSession(deps(r), { sessionId: S }));
     expect(cc.after.at(-2).payload.data.sessionIdle).toBe(false);
-    const live: NativeLive = { askEvents: () => [], specialistRuns: () => [], shellRuns: () => [], usageProgress: () => null, sessionContext: () => null, idle: () => true };
+    const live: NativeLive = { askEvents: () => [], specialistRuns: () => [], shellRuns: () => [], usageProgress: () => null, sessionContext: () => null, idle: () => true , queue: () => [], permissionMode: () => null};
     const nat = ok(await openSession(deps(r, { native: () => live }), { sessionId: S }));
     expect(nat.after.find((p: any) => p.type === 'transcript:event').payload.data.sessionIdle).toBe(true);
   });
@@ -82,10 +82,10 @@ describe('openSession: a first open (page)', () => {
     const progress = { sessionId: S, type: 'assistant-thinking', uuid: 'prog', timestamp: 5, data: { usageProgress: {} } };
     const live: NativeLive = {
       askEvents: () => [ask('native-r1') as any], specialistRuns: () => [{ childId: 'c1' } as any], shellRuns: () => [{ shellId: 'sh1' } as any],
-      usageProgress: () => progress as any, sessionContext: () => ({ k: 1 }), idle: () => false,
+      usageProgress: () => progress as any, sessionContext: () => ({ k: 1 }), idle: () => false, queue: () => [], permissionMode: () => null,
     };
     const reply = ok(await openSession(deps(r, { native: () => live }), { sessionId: S }));
-    expect(reply.after.map((p: any) => p.type)).toEqual(['hook:event', 'specialists:event', 'native:shell-event', 'transcript:event', 'native:session-context', 'transcript:event', 'hook:replay-complete']);
+    expect(reply.after.map((p: any) => p.type)).toEqual(['hook:event', 'specialists:event', 'native:shell-event', 'transcript:event', 'native:session-context', 'session:live', 'transcript:event', 'hook:replay-complete']);
     expect(reply.after[1].payload).toEqual({ kind: 'run', sessionId: S, run: { childId: 'c1' } });
     expect(reply.after.at(-1).payload.pendingRequestIds).toEqual(['native-r1']);
   });
@@ -93,7 +93,7 @@ describe('openSession: a first open (page)', () => {
   it('never replays a password ask to a phone (its command line); a window gets it', async () => {
     const r = new SessionRecords();
     r.begin(S);
-    const live: NativeLive = { askEvents: () => [ask('p1', 'PasswordRequest') as any, ask('a1') as any], specialistRuns: () => [], shellRuns: () => [], usageProgress: () => null, sessionContext: () => null, idle: () => false };
+    const live: NativeLive = { askEvents: () => [ask('p1', 'PasswordRequest') as any, ask('a1') as any], specialistRuns: () => [], shellRuns: () => [], usageProgress: () => null, sessionContext: () => null, idle: () => false , queue: () => [], permissionMode: () => null};
     const phone = ok(await openSession(deps(r, { native: () => live }), { sessionId: S }, { remote: true }));
     expect(phone.after.filter((p: any) => p.type === 'hook:event').map((p: any) => p.payload.type)).toEqual(['PermissionRequest']);
     const win = ok(await openSession(deps(r, { native: () => live }), { sessionId: S }));

@@ -46,6 +46,7 @@ object MessageRouter {
             put("projectWrites", true)
             put("contentSearch", false)
             put("liveHandoff", false)
+            put("sessionRecord", false)
         }
     }
 

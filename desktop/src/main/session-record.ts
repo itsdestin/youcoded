@@ -27,6 +27,7 @@
 // create-runtime imports Electron, and the record is built there.
 import { randomBytes } from 'crypto';
 import type { SessionSummary } from '../shared/session-summary-types';
+import type { SessionLive } from '../shared/session-live-types';
 
 export const RING_MAX_EVENTS = 2000;
 export const RING_MAX_BYTES = 2 * 1024 * 1024;
@@ -37,6 +38,8 @@ const TAIL_MAX_BYTES = 2 * 1024 * 1024;
 export const PTY_STREAM_UNITS = 4 * 1024 * 1024;
 /** While the newest terminal chunk is this small, append INTO it instead of pushing another entry (one-keystroke chunks). */
 const PTY_CHUNK_COALESCE_BELOW = 4096;
+/** Prompt cards held open per session: a card is a menu on a terminal screen, so more than a handful at once is a runaway. */
+const OPEN_PROMPTS_MAX = 20;
 /** A session cannot hold more open asks than this (a runaway producer must not grow it without bound). */
 const OPEN_ASKS_MAX = 200;
 /** Recently seen event uuids, so a replayed event does not start a turn twice (the renderer's seenUuids). */
@@ -50,6 +53,9 @@ export const SESSION_SCOPED_PUSHES = [
   'transcript:event', 'transcript:shrink', 'hook:event', 'specialists:event',
   'native:shell-event', 'native:session-context', 'native:permission-mode', 'native:model-state',
   'session:meta-changed',
+  // One-core R5-4a: the shared lines and live facts (queue, model, dividers, compaction spinner, prompt cards), and the permission mode a
+  // Claude Code session's host now reads from its terminal.
+  'session:live', 'session:permission-mode',
 ] as const;
 
 /** Session-scoped pushes whose DELIVERY is not a `publish` call, with the reason each is not. (Claude Code's hook relay used to be
@@ -132,6 +138,9 @@ export type ResumeDecision =
   | { resume: 'events'; epoch: string; headSeq: number; events: RecordedEvent[] }
   | { resume: 'page'; epoch: string; headSeq: number };
 
+/** An open prompt card, as the `session:live` event that raised it (so a screen that opens later is handed the same event). */
+type OpenPrompt = Extract<SessionLive, { kind: 'prompt-show' }>;
+
 interface OpenAsk { event: unknown; /** Claude Code closed its hook but its own menu may still wait. */ expired: boolean }
 
 /** One entry of the fill tail: a recent push, with a streaming part's deltas merged. */
@@ -155,6 +164,12 @@ interface Rec {
   asks: Map<string, OpenAsk>;
   /** Password asks: only their ids are kept, never the command (hook buffer rule, remote-server.ts). */
   passwordAsks: Set<string>;
+  /** Cards for a question Claude Code is asking in its terminal, still open (one-core R5-4a). Outside the ring, like asks. */
+  prompts: Map<string, OpenPrompt>;
+  /** The mode the host last read off a Claude Code session's terminal (R5-4a); null until it has seen one. */
+  terminalMode: string | null;
+  /** A compaction is in progress: the spinner a screen that opens now must draw (R5-4a; restores what a phone lost in R5-2). */
+  compacting: { id: string } | null;
   facts: Omit<SessionFacts, 'awaitingCount' | 'queued'>;
   /** Highest host timestamp a progress/terminal event has fenced (mirrors the reducer's usageProgressAt). */
   progressAt: number;
@@ -219,7 +234,7 @@ export class SessionRecords {
     this.records.set(sessionId, {
       epoch: randomBytes(8).toString('hex'),
       headSeq: 0, ring: [], ringBytes: 0, tail: [], tailBytes: 0, pty: { chunks: [], length: 0, base: 0 }, oversize: 0,
-      asks: new Map(), passwordAsks: new Set(),
+      asks: new Map(), passwordAsks: new Set(), prompts: new Map(), terminalMode: null, compacting: null,
       facts: {
         working: false, attention: 'ok', reportedAttention: null, hasHistory: false,
         lastActivityAt: this.now(), permissionMode: null, model: null, modelState: null,
@@ -478,6 +493,30 @@ export class SessionRecords {
     return out;
   }
 
+  /** A compaction is waiting for its summary line (the host watches that it does not wait forever). */
+  isCompacting(sessionId: string): boolean { return !!this.records.get(sessionId)?.compacting; }
+
+  /** Is this card already open? (The host publishes a card once however many screens report it.) */
+  hasPrompt(sessionId: string, promptId: string): boolean { return !!this.records.get(sessionId)?.prompts.has(promptId); }
+
+  /**
+   * The live facts a screen that opens NOW must be handed, as the events it would have received (R5-4a): the compaction spinner, the open
+   * prompt cards and the model label. The queue and a native session's mode are read from the host (session-open.ts). A screen that only
+   * missed some events is sent the ring instead, which carries the same facts as events.
+   * WHY here and not in the ring: a fill's `before` is the transcript's recent past; none of these are transcript lines, and the ring
+   * is trimmed, so a spinner raised an hour ago would be gone from it while still true.
+   */
+  liveFill(sessionId: string): Array<{ type: string; payload: unknown }> {
+    const rec = this.records.get(sessionId);
+    if (!rec) return [];
+    const out: Array<{ type: string; payload: unknown }> = [];
+    if (rec.facts.model) out.push({ type: 'session:live', payload: { sessionId, kind: 'model', model: rec.facts.model } });
+    if (rec.terminalMode) out.push({ type: 'session:permission-mode', payload: { sessionId, mode: rec.terminalMode } });
+    for (const p of rec.prompts.values()) out.push({ type: 'session:live', payload: p });
+    if (rec.compacting) out.push({ type: 'session:live', payload: { sessionId, kind: 'compact-start', id: rec.compacting.id } });
+    return out;
+  }
+
   facts(sessionId: string): SessionFacts | null {
     const rec = this.records.get(sessionId);
     if (!rec) return null;
@@ -560,6 +599,15 @@ export class SessionRecords {
       return;
     }
     if (type === 'hook:event') { this.foldHook(rec, asObject(payload)); return; }
+    // A Claude Code session's mode, read from its terminal by the host (R5-4a): the same fact a native host pushes as native:permission-mode.
+    if (type === 'session:permission-mode') {
+      const mode = asObject(payload).mode;
+      if (typeof mode === 'string') { f.permissionMode = mode; rec.terminalMode = mode; }
+      return;
+    }
+    if (type === 'session:live') { this.foldLive(rec, asObject(payload) as Record<string, any>); return; }
+    // The transcript file shrank: a compaction (or a clear) is over, so a spinner that is still up has nothing left to wait for.
+    if (type === 'transcript:shrink') { rec.compacting = null; return; }
     if (type !== 'transcript:event') return;
 
     const ev = asObject(payload);
@@ -616,6 +664,35 @@ export class SessionRecords {
         return;
       case 'replay-complete':
         if (d.sessionIdle === true) this.endTurn(rec);
+        return;
+      // The compaction's own line ends the spinner (the "Compacted" note is drawn from it).
+      case 'compact-summary':
+        rec.compacting = null;
+        return;
+      default:
+        return;
+    }
+  }
+
+  /** The shared lines and live facts (R5-4a). Only what a screen that opens LATER still needs is kept; a divider is just a numbered event. */
+  private foldLive(rec: Rec, live: Record<string, any>): void {
+    switch (live.kind) {
+      case 'model':
+        if (typeof live.model === 'string' && live.model) rec.facts.model = live.model;
+        return;
+      case 'compact-start':
+        if (typeof live.id === 'string') rec.compacting = { id: live.id };
+        return;
+      case 'compact-end':
+        rec.compacting = null;
+        return;
+      case 'prompt-show':
+        if (typeof live.promptId !== 'string' || !live.promptId) return;
+        if (rec.prompts.size >= OPEN_PROMPTS_MAX && !rec.prompts.has(live.promptId)) return;
+        rec.prompts.set(live.promptId, live as OpenPrompt);
+        return;
+      case 'prompt-dismiss':
+        if (typeof live.promptId === 'string') rec.prompts.delete(live.promptId);
         return;
       default:
         return;

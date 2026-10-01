@@ -36,7 +36,7 @@ export function nativeLive(run: Run, records: SessionRecords): NativeLive {
   return {
     askEvents: () => openAsksOf(run),
     specialistRuns: () => [], shellRuns: () => [], usageProgress: () => null, sessionContext: () => null,
-    idle: () => !records.facts(SID)!.working,
+    idle: () => !records.facts(SID)!.working, queue: () => [], permissionMode: () => null,
   };
 }
 

@@ -29,6 +29,7 @@ import { SESSION_FLAG_NAMES, type SessionFlagName, type SessionInfo, type Sessio
 import { listPastSessions, loadHistory, SAFE_ID_RE } from '../session-browser';
 import { readTranscriptMeta } from '../transcript-utils';
 import type { Publish } from '../publish';
+import type { SessionLiveFacts } from '../session-live';
 import { openSession, type NativeLive } from '../session-open';
 import { readTranscriptPage } from '../transcript-page';
 import { menuAnswerLock } from '../menu-answer-lock';
@@ -65,6 +66,8 @@ export interface SessionOps {
   canWriteStoreRecord(sessionId: string): boolean;
   /** The one way a session-scoped push leaves the core: the session's windows, every phone, and its record. */
   publish: Publish;
+  /** The computer's reading of a Claude Code session's live facts (one-core R5-4a). */
+  liveFacts?: SessionLiveFacts;
   naming: {
     get(): Promise<unknown>;
     set(value: unknown): Promise<unknown>;
@@ -165,6 +168,8 @@ function nativeLiveFor(host: NativeSessionHost, sessionId: string): NativeLive |
     usageProgress: () => host.currentUsageProgressFor(sessionId),
     sessionContext: () => host.sessionContextFor(sessionId),
     idle: () => host.isIdle(sessionId),
+    queue: () => host.queuedMessagesFor(sessionId),
+    permissionMode: () => host.getPermissionMode(sessionId),
   };
 }
 
@@ -223,7 +228,21 @@ const sessionEntries: MainChannelDef[] = [
   // ── Terminal traffic (fire-and-forget) ───────────────────────────────────────
   // WHY these two call straight through: they run at typing speed. The table lookup is one Map read and
   // the desktop door calls the handler directly (no promise hop), so they carry no overhead they lacked.
-  defineChannel({ name: IPC.SESSION_INPUT, kind: 'on', handler: ({ sessionId, text }) => { ops().sessionManager.sendInput(sessionId, text); } }),
+  // `notice` is optional: a typed chat command says so, so the host knows which kind of write drew a divider (one-core R5-4a).
+  defineChannel({
+    name: IPC.SESSION_INPUT, kind: 'on',
+    handler: ({ sessionId, text, notice }) => {
+      const o = ops();
+      // Only a write that reached the terminal is a fact worth announcing (a refused one changed nothing).
+      if (o.sessionManager.sendInput(sessionId, text)) o.liveFacts?.noteInput(sessionId, text, notice);
+    },
+  }),
+  // A computer window reports a card it read off its terminal (one-core R5-4a). Computer windows only: a phone's terminal copy is not read for
+  // cards (its screen draws the host's), so this adds no new thing a phone may do.
+  defineChannel({
+    name: IPC.SESSION_PROMPT_REPORT, kind: 'handle', desktopOnly: true,
+    handler: (report) => ops().liveFacts?.reportPrompt(report) ?? { ok: false },
+  }),
   defineChannel({ name: IPC.SESSION_RESIZE, kind: 'on', handler: ({ sessionId, cols, rows }) => { ops().sessionManager.resizeSession(sessionId, cols, rows); } }),
   // The renderer says its terminal is mounted; main then releases the output it buffered. A phone needs no
   // such gate (it replays the PTY buffer on connect), so the message is dropped silently.

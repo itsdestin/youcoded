@@ -115,6 +115,7 @@ import { setPermissionOverridesSink } from './prefs-service';
 import type { SessionInfo } from '../shared/types';
 import { ARTIFACT_IPC } from './artifacts/ipc-channels';
 import { createPublish } from './publish';
+import { SessionLiveFacts } from './session-live';
 import { startSessionSummaryPush, SESSION_SUMMARY_CHANNEL } from './session-summary-push';
 import { listProjects } from './artifacts/central-index';
 import { initPagesService, getPagesService } from './pages/pages-service';
@@ -411,6 +412,15 @@ export function registerIpcHandlers(
     toWindows: (sessionId, channel, args, hold) => sendForSession(sessionId, channel, args, hold),
     toSockets: (message, socketIds, hold) => remoteServer?.broadcast(message, socketIds, hold),
     socketsFor: (sessionId) => windowRegistry?.resolveAudience(sessionId).socketIds,
+  });
+
+  // WHY (one-core R5-4a): the computer's one reading of a Claude Code session's live facts (permission mode, /model, /compact, "Conversation
+  // cleared") and the one place a card a window saw in its terminal becomes an event every screen draws. Everything it says leaves through publish.
+  const liveFacts = new SessionLiveFacts({
+    publish,
+    records: runtime.records,
+    // A Claude Code session: not native (its host says these things itself) and not a plain shell.
+    isClaude: (id) => { const p = sessionManager.getSession(id)?.provider; return p !== 'native' && p !== 'shell' && !!sessionManager.getSession(id); },
   });
 
   // WHY (2026-09-29 one-core R1): returned from registerIpcHandlers as plain values (was two
@@ -989,6 +999,8 @@ export function registerIpcHandlers(
   // per-session in sync with session:created / session:destroyed events, so
   // the global broadcast is no longer needed.
   sessionManager.on('pty-output', (sessionId: string, data: string) => {
+    // One reading of the permission-mode footer for the session, instead of every screen scanning its own copy (one-core R5-4a).
+    liveFacts.noteOutput(sessionId, data);
     if (readySessions.has(sessionId)) {
       sendForSession(sessionId, `pty:output:${sessionId}`, [data]);
     } else {
@@ -1018,6 +1030,7 @@ export function registerIpcHandlers(
   sessionManager.on('session-exit', (sessionId: string, exitCode: number) => {
     sendForSession(sessionId, IPC.SESSION_DESTROYED, [sessionId, exitCode]);
     runtime.records.drop(sessionId); // the session is over: its record goes with it (one-core R5-1)
+    liveFacts.forget(sessionId);
     pendingOutput.delete(sessionId);
     readySessions.delete(sessionId);
     windowRegistry?.endSession(sessionId); // over: windows' AND phones' watches go (a window merely releasing keeps phones', R5-3)
@@ -1698,6 +1711,19 @@ export function registerIpcHandlers(
   // only the caller — so chips elsewhere could show a stricter mode than the
   // session was really running on. The host emits from ONE place (seedMode /
   // setPermissionMode), so both the IPC and the remote set paths are covered.
+  // One-core R5-4a: the messages waiting behind a running turn, as the host holds them, so EVERY screen draws (and can cancel) the same strip.
+  nativeHost.on('queue-changed', (e: { sessionId: string; queue: { queueId: string; content: string; timestamp: number }[] }) => {
+    publish(e.sessionId, IPC.SESSION_LIVE, { sessionId: e.sessionId, kind: 'queue', queue: e.queue });
+  });
+  // A native compaction began or ended without a summary line (stopped or refused): the spinner on every screen.
+  nativeHost.on('compaction', (e: { sessionId: string; phase: 'start' | 'end'; outcome?: 'cancelled' | 'failed' }) => {
+    if (e.phase === 'start') liveFacts.compactStarted(e.sessionId);
+    else liveFacts.compactEnded(e.sessionId, e.outcome ?? 'failed');
+  });
+  // A native session's model changed (the picker, from any screen): the label on every screen.
+  nativeHost.on('model-changed', (e: { sessionId: string; model: string }) => {
+    publish(e.sessionId, IPC.SESSION_LIVE, { sessionId: e.sessionId, kind: 'model', model: e.model });
+  });
   nativeHost.on('permission-mode', (e: { sessionId: string; mode: NativePermissionMode }) => {
     publish(e.sessionId, IPC.NATIVE_PERMISSION_MODE, e);
   });
@@ -1960,6 +1986,9 @@ export function registerIpcHandlers(
         log('INFO', 'SessionMap', 'remapping session id', {
           desktopId, from: current, to: claudeId, hookEventName, source,
         });
+        // One-core R5-4a: Claude Code's own `source: "clear"` says this rotation is a /clear, so every screen draws "Conversation cleared"
+        // (it used to be drawn only by the screen that typed it, and could double on a phone that typed it too).
+        liveFacts.noteSessionStart(desktopId, source, claudeId);
       }
 
       // Remap (e.g. /clear rotated the CC session id): tear down the old
@@ -2402,7 +2431,7 @@ export function registerIpcHandlers(
   bindSessionOps({
     sessionManager, sessionIdMap, nativeHost, stampProviderTypes, windowRegistry, welcomeBackStore,
     createSession: (sender, opts) => createSession(sender ? { sender } : null, opts),
-    destroySession, signalTerminalReady, transcriptPage, canWriteStoreRecord, publish,
+    destroySession, signalTerminalReady, transcriptPage, canWriteStoreRecord, publish, liveFacts,
     naming: { get: namingGet, set: namingSet, title: namingTitle, rename: namingRename },
   });
   // WHY (2026-09-29 one-core R2, filled by R3): the channel table's desktop half. Every family moved

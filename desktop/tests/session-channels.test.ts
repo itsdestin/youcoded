@@ -20,7 +20,7 @@ const NOT_YET = new Set<string>([
 ]);
 const PUSHES = new Set<string>([
   IPC.SESSION_CREATED, IPC.SESSION_DESTROYED, IPC.SESSION_MOVED, IPC.SESSION_RENAMED, IPC.SESSION_META_CHANGED,
-  IPC.TRANSCRIPT_EVENT, IPC.TRANSCRIPT_SHRINK, IPC.SESSION_REFILL, IPC.SESSION_SUMMARY,
+  IPC.TRANSCRIPT_EVENT, IPC.TRANSCRIPT_SHRINK, IPC.SESSION_REFILL, IPC.SESSION_SUMMARY, IPC.SESSION_LIVE, IPC.SESSION_PERMISSION_MODE,
 ]);
 
 const desktopCtx = (extra: any = {}): any => ({ door: 'desktop', runtime: null, broadcast: () => {}, ...extra });
@@ -33,15 +33,15 @@ describe('session channels: what is in the table and who may call it', () => {
     const inTable = new Set(CHANNEL_TABLE.map((d) => d.name));
     const names = Object.values(IPC).filter((v) => FAMILY.test(v) && !PUSHES.has(v) && !NOT_YET.has(v));
     // 23 = create destroy list selected switch input resize terminal-ready menu-lock browse history read-meta
-    //      page open unwatch set-flag set-tag set-note get-meta reopen-list forget-reopen + 4 naming; a new one must be decided here.
-    expect(names.length).toBe(25);
+    //      page open unwatch prompt-report set-flag set-tag set-note get-meta reopen-list forget-reopen + 4 naming; a new one must be decided here.
+    expect(names.length).toBe(26);
     expect(names.filter((n) => !inTable.has(n))).toEqual([]);
   });
 
   it('a phone may use exactly what it could before; set-flag stays refused and the window-only ones stay computer-only', () => {
     const entries = CHANNEL_TABLE.filter((d) => FAMILY.test(d.name) && !NOT_YET.has(d.name));
     const refused = entries.filter((d) => d.desktopOnly || d.remoteAllowed === false).map((d) => d.name).sort();
-    expect(refused).toEqual(['session:forget-reopen', 'session:reopen-list', 'session:selected', 'session:set-flag', 'session:terminal-ready']);
+    expect(refused).toEqual(['session:forget-reopen', 'session:prompt-report', 'session:reopen-list', 'session:selected', 'session:set-flag', 'session:terminal-ready']);
   });
 
   it('a phone asking for the refused ones gets what it always got: an empty answer, silence, or the standard refusal', async () => {

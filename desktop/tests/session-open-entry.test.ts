@@ -54,7 +54,7 @@ describe('session:open for a phone', () => {
 
   it('never replays a password ask to a phone (door says remote)', async () => {
     const w = world();
-    w.runtime.nativeHost = { isLive: () => true, pendingAskEventsFor: () => [{ type: 'PasswordRequest', sessionId: S, payload: { _requestId: 'p' }, timestamp: 1 }], specialistRunsFor: () => [], shellRunsFor: () => [], currentUsageProgressFor: () => null, sessionContextFor: () => null, isIdle: () => false };
+    w.runtime.nativeHost = { isLive: () => true, pendingAskEventsFor: () => [{ type: 'PasswordRequest', sessionId: S, payload: { _requestId: 'p' }, timestamp: 1 }], specialistRunsFor: () => [], shellRunsFor: () => [], currentUsageProgressFor: () => null, sessionContextFor: () => null, isIdle: () => false, queuedMessagesFor: () => [], getPermissionMode: () => 'ask' };
     const phone: any = await w.def.handler({ sessionId: S }, { door: 'remote', runtime: w.runtime, audienceId: -1000, broadcast: () => {}, afterReply: w.afterReply } as any);
     expect(phone.after.some((p: any) => p.payload?.type === 'PasswordRequest')).toBe(false);
   });

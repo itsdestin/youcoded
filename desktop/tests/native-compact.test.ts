@@ -362,7 +362,7 @@ describe('native /compact focus propagation', () => {
       expect(compact.mock.calls).toEqual([['s', 'remember tests'], ['s', undefined]]);
     } finally { (globalThis as any).window = previous; }
     const compactNow = vi.fn(async () => ({ ok: true }));
-    const fake = { live: new Map([['s', { inFlight: false, queue: [], session: { compactNow } }]]), publishAcceptedHistory: vi.fn(), pendingDeliveryParents: new Set(), pendingHostNotices: new Map() };
+    const fake = { emit: vi.fn(), live: new Map([['s', { inFlight: false, queue: [], session: { compactNow } }]]), publishAcceptedHistory: vi.fn(), pendingDeliveryParents: new Set(), pendingHostNotices: new Map() };
     await NativeSessionHost.prototype.compact.call(fake as any, 's', 'remember tests');
     await NativeSessionHost.prototype.compact.call(fake as any, 's');
     expect(compactNow.mock.calls).toEqual([['remember tests', undefined], [undefined, undefined]]);
@@ -383,7 +383,7 @@ describe('native /compact focus propagation', () => {
     let finish!: (result: { ok: true }) => void;
     const compactNow = vi.fn(() => new Promise<{ ok: true }>(resolve => { finish = resolve; }));
     const entry = { inFlight: false, queue: [], session: { compactNow } };
-    const fake = { live: new Map([['s', entry]]), publishAcceptedHistory: vi.fn(), startingSends: new Map(), runTurns: vi.fn(async () => {}), pendingDeliveryParents: new Set(), pendingHostNotices: new Map() };
+    const fake = { emit: vi.fn(), live: new Map([['s', entry]]), publishAcceptedHistory: vi.fn(), startingSends: new Map(), runTurns: vi.fn(async () => {}), pendingDeliveryParents: new Set(), pendingHostNotices: new Map() };
     const pending = NativeSessionHost.prototype.compact.call(fake as any, 's');
     expect(NativeSessionHost.prototype.send.call(fake as any, 's', 'a new message')).toEqual({ status: 'failed', reason: 'compacting' });
     expect(await NativeSessionHost.prototype.compact.call(fake as any, 's')).toEqual({ ok: false, reason: 'turn-in-flight' });
@@ -395,7 +395,7 @@ describe('native /compact focus propagation', () => {
   it('does not let clear, a skill or idle delivery enter a manual summary', async () => {
     let finish!: (result: { ok: true }) => void;
     const entry = { inFlight: false, queue: [], session: { compactNow: vi.fn(() => new Promise<{ ok: true }>(resolve => { finish = resolve; })), clearHistory: vi.fn() } };
-    const fake = { live: new Map([['s', entry]]), publishAcceptedHistory: vi.fn(), pendingDeliveryParents: new Set(['s']), pendingHostNotices: new Map(), kickIdleDeliveryPass: vi.fn() };
+    const fake = { emit: vi.fn(), live: new Map([['s', entry]]), publishAcceptedHistory: vi.fn(), pendingDeliveryParents: new Set(['s']), pendingHostNotices: new Map(), kickIdleDeliveryPass: vi.fn() };
     const pending = NativeSessionHost.prototype.compact.call(fake as any, 's');
     expect(NativeSessionHost.prototype.clear.call(fake as any, 's')).toEqual({ ok: false, reason: 'turn-in-flight' });
     expect(entry.session.clearHistory).not.toHaveBeenCalled();
@@ -409,7 +409,7 @@ describe('native /compact focus propagation', () => {
 
   it('does not publish accepted history when manual compaction refuses without a rewrite', async () => {
     const compactNow = vi.fn(async () => ({ ok: false, reason: 'summary-failed' }));
-    const fake = { live: new Map([['s', { inFlight: false, queue: [], session: { compactNow } }]]), publishAcceptedHistory: vi.fn(), pendingDeliveryParents: new Set(), pendingHostNotices: new Map() };
+    const fake = { emit: vi.fn(), live: new Map([['s', { inFlight: false, queue: [], session: { compactNow } }]]), publishAcceptedHistory: vi.fn(), pendingDeliveryParents: new Set(), pendingHostNotices: new Map() };
     expect(await NativeSessionHost.prototype.compact.call(fake as any, 's')).toEqual({ ok: false, reason: 'summary-failed' });
     expect(fake.publishAcceptedHistory).not.toHaveBeenCalled();
   });

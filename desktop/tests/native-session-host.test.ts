@@ -1979,6 +1979,50 @@ describe('NativeSessionHost', () => {
       expect(host.send('ghost', 'x')).toEqual({ status: 'failed', reason: 'not-live' });
     });
 
+    // One-core R5-4a: the waiting messages are announced as the host's queue, so every screen (not only the one that sent them) draws and
+    // can cancel the same strip. Each change is ONE announcement carrying the whole queue.
+    it('announces the queue on every change: a message waits, is cancelled, is sent next', async () => {
+      const seen: Array<Array<{ queueId: string; content: string }>> = [];
+      host.on('queue-changed', (e: any) => { expect(e.sessionId).toBe(id); seen.push(e.queue.map((q: any) => ({ queueId: q.queueId, content: q.content }))); });
+      expect(host.send(id, 'first').status).toBe('sent');
+      expect(seen, 'a message that starts a turn is not "waiting"').toEqual([]);
+      const a = host.send(id, 'second') as { queueId: string };
+      const b = host.send(id, 'third') as { queueId: string };
+      expect(seen).toEqual([
+        [{ queueId: a.queueId, content: 'second' }],
+        [{ queueId: a.queueId, content: 'second' }, { queueId: b.queueId, content: 'third' }],
+      ]);
+      expect(host.removeQueued(id, a.queueId)).toBe(true);
+      expect(seen.at(-1)).toEqual([{ queueId: b.queueId, content: 'third' }]);
+      expect(host.queuedMessagesFor(id).map((q) => q.content)).toEqual(['third']);
+      await waitForTurnComplete(host, 1);
+      await vi.waitFor(() => expect(host.queuedMessagesFor(id)).toEqual([]));
+      expect(seen.at(-1), 'once it is sent the strip is empty').toEqual([]);
+      expect(host.queuedMessagesFor(id)).toEqual([]);
+    });
+
+    it('a repeat with the same waiting messages is not announced again', () => {
+      const seen: unknown[] = [];
+      host.on('queue-changed', (e: any) => seen.push(e));
+      host.send(id, 'first');
+      host.send(id, 'second');
+      const n = seen.length;
+      (host as any).announceQueue(id);
+      expect(seen.length).toBe(n);
+    });
+
+    it('announces a compaction start, and an end only when it finished without a summary line', async () => {
+      const ev: any[] = [];
+      host.on('compaction', (e: any) => ev.push(e));
+      host.send(id, 'busy');
+      const refused = await host.compact(id);                 // a turn is in flight: refused
+      expect(refused).toEqual({ ok: false, reason: 'turn-in-flight' });
+      expect(ev).toEqual([
+        { sessionId: id, phase: 'start' },
+        { sessionId: id, phase: 'end', outcome: 'failed' },
+      ]);
+    });
+
     it('overlapping send queues FIFO and both turns complete in order', async () => {
       const events: string[] = [];
       host.on('transcript-event', (e) => { if (e.type === 'user-message') events.push(e.data.text); });

@@ -335,6 +335,16 @@ export const IPC = {
   // Push to everyone: the small per-session facts (working, asks waiting, attention, history) the session strip's dots are drawn from,
   // so a phone can colour a session it does not watch (R5-1 added it, R5-3 reads it).
   SESSION_SUMMARY: 'session:summary',
+  // Numbered, session-scoped push of the shared lines and live facts the host's record publishes (one-core R5-4a): the queue of messages
+  // waiting on the computer, the model label, the model-switch and "Conversation cleared" dividers, the compaction spinner and the
+  // prompt cards. Payload `SessionLive` (shared/session-live-types.ts). Every screen draws them; none infers them (capabilities.sessionRecord).
+  SESSION_LIVE: 'session:live',
+  // Push: a Claude Code session's permission mode as the HOST read it off the terminal (one-core R5-4a). Payload `{ sessionId, mode }`. The Android
+  // app's own runtime pushes the same name for the same fact, so one handler serves both.
+  SESSION_PERMISSION_MODE: 'session:permission-mode',
+  // A computer window reports a card it saw in its terminal; the host numbers it and publishes it to every screen (one-core R5-4a).
+  // Computer windows only: a phone's terminal copy is not read for cards, it draws the host's.
+  SESSION_PROMPT_REPORT: 'session:prompt-report',
   // Push to ONE window: its fill never completed (the hold expired), so it must fill that conversation again (R5-2 review fix).
   SESSION_REFILL: 'session:refill',
   // The asks still open in a session, replayed at the end of every fill (a push in the answer's `after`, never sent by itself).
@@ -946,6 +956,8 @@ interface SessionBridge {
   open(req: { sessionId: string; claudeSessionId?: string; projectSlug?: string; fresh?: boolean }): Promise<import('./session-open-types').OpenReply | undefined>;
   /** End a phone's watch of one conversation (one-core R5-3); `open` starts it. A window answers ok and changes nothing. */
   unwatch(sessionId: string): Promise<{ ok: true }>;
+  /** A computer window reports a card it read off its terminal; the host publishes it to every screen (one-core R5-4a). */
+  reportPrompt(report: import('./session-live-types').PromptReport): Promise<{ ok: boolean }>;
   /** Hand an open's pushes (`before` / `after`) to the same listeners a live push reaches. */
   play(pushes: Array<{ type: string; payload: unknown }>): void;
   /** The computer asks this screen to fill a conversation again (its first fill never completed). */
@@ -954,7 +966,8 @@ interface SessionBridge {
   list(): Promise<any[]>;
   /** False on a remote client whose connection is down; always true on desktop. */
   canSend(): boolean;
-  sendInput(sessionId: string, text: string): void;
+  /** `notice: 'model-switch'` says this write is a typed `/model <alias>` chat command, so the host draws its divider on every screen (R5-4a). */
+  sendInput(sessionId: string, text: string, notice?: 'model-switch'): void;
   resize(sessionId: string, cols: number, rows: number): void;
   signalReady(sessionId: string): void;
   respondToPermission(requestId: string, decision: object): Promise<boolean>;
@@ -992,6 +1005,8 @@ interface BridgeListeners {
   remoteConversationStatus(cb: (status: { phase: string }) => void): () => void;
   hookEvent(cb: (event: any) => void): BridgeHandler;
   statusData(cb: (data: any) => void): BridgeHandler;
+  /** The shared lines and live facts of a session the screen shows (one-core R5-4a; shared/session-live-types.ts). */
+  sessionLive(cb: (live: import('./session-live-types').SessionLive) => void): () => void;
   /** Per-session summaries pushed about every session (one-core R5-3): `{ summaries: { [sessionId]: SessionSummary } }`. */
   sessionSummary(cb: (payload: { summaries: Record<string, import('./session-summary-types').SessionSummary> }) => void): () => void;
   sessionRenamed(cb: (sessionId: string, name: string) => void): BridgeHandler;

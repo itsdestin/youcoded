@@ -1,12 +1,18 @@
-import type { PermissionMode } from '../../shared/types';
+import type { PermissionMode } from './types';
 
 /**
  * Reads Claude Code's in-terminal permission-mode footer ("bypass permissions
  * on", "auto mode on (shift+tab to cycle)", "plan mode off", …) out of one raw
  * PTY chunk. Returns null when the chunk names no mode.
  *
- * WHY a prefilter (perf, 2026-09-23): App subscribes to EVERY open session's
- * raw terminal stream, and this ran per chunk — lower-casing the whole chunk
+ * WHY here, in shared/ (one-core R5-4a): this used to live in the renderer and run on EVERY
+ * screen's copy of every session's terminal bytes, so a phone that connected after the footer
+ * had scrolled off showed the launch mode. The computer's main process now runs it once per
+ * session (main/session-live.ts) and publishes the result through the session's record, so main
+ * needs to import it and the renderer no longer does. Real Claude Code 2.1.281 captures
+ * (tests/fixtures/plan-menu/) pin it in tests/session-live-mode.test.ts.
+ *
+ * WHY a prefilter (perf, 2026-09-23): this ran per chunk — lower-casing the whole chunk
  * (a fresh string copy) and then scanning it with up to eight .includes().
  * Almost no chunk mentions a mode, so one case-insensitive regex pass now
  * rules the chunk out first; only a chunk that could match pays for the
@@ -37,40 +43,4 @@ export function detectPermissionMode(data: string): PermissionMode | null {
     || lower.includes('accept edits off')
     || lower.includes('plan mode off')) return 'normal';
   return null;
-}
-
-/**
- * Keeps exactly one live subscription per id in `subs`, touching only what
- * changed: ids that left are unsubscribed, new ids are subscribed, and ids
- * that stayed keep the subscription they already have.
- *
- * WHY (perf, 2026-09-23): the permission-mode watcher used to tear down and
- * re-create the listener for EVERY session whenever the session list changed
- * at all (a rename, a status flip, a new tab) — N IPC unsubscribes and N
- * resubscribes for a one-session change. Diffing by id makes that one.
- */
-export function syncKeyedSubscriptions(
-  subs: Map<string, () => void>,
-  ids: Iterable<string>,
-  subscribe: (id: string) => (() => void) | void,
-): void {
-  const wanted = new Set(ids);
-  for (const [id, remove] of subs) {
-    if (wanted.has(id)) continue;
-    subs.delete(id);
-    try { remove(); } catch { /* unsubscribe API may no-op */ }
-  }
-  for (const id of wanted) {
-    if (subs.has(id)) continue;
-    const remove = subscribe(id);
-    subs.set(id, typeof remove === 'function' ? remove : () => {});
-  }
-}
-
-/** Unsubscribes everything in `subs` and empties it (component unmount). */
-export function clearKeyedSubscriptions(subs: Map<string, () => void>): void {
-  for (const remove of subs.values()) {
-    try { remove(); } catch { /* unsubscribe API may no-op */ }
-  }
-  subs.clear();
 }

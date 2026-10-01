@@ -52,6 +52,22 @@ describe('what is in the table and who may call it', () => {
   });
 });
 
+describe('cancelling a queued message from a phone (one-core R5-4a)', () => {
+  it('the phone may cancel and send-now a waiting message, with the same host call the computer makes', async () => {
+    for (const name of ['native:queue-remove', 'native:queue-send-now']) {
+      const def = findChannel(name)!;
+      expect(def.desktopOnly, name).toBeFalsy();
+      expect(def.remoteAllowed, name).not.toBe(false);
+    }
+    const removeQueued = vi.fn(() => true);
+    const rt: any = { nativeHost: { removeQueued } };
+    expect(await call('native:queue-remove', { sessionId: 's', queueId: 'q1' }, phoneCtx(rt))).toBe(true);
+    expect(await call('native:queue-remove', { sessionId: 's', queueId: 'q1' }, desktopCtx(rt))).toBe(true);
+    expect(removeQueued).toHaveBeenNthCalledWith(1, 's', 'q1');
+    expect(removeQueued).toHaveBeenNthCalledWith(2, 's', 'q1');
+  });
+});
+
 describe('native:send', () => {
   it('hands the host only text paths, for a window and for a phone alike', async () => {
     const send = vi.fn(() => ({ status: 'sent' }));

@@ -227,6 +227,9 @@ const IPC = {
   SESSION_OPEN: 'session:open',
   SESSION_UNWATCH: 'session:unwatch',
   SESSION_SUMMARY: 'session:summary',
+  SESSION_LIVE: 'session:live',
+  SESSION_PERMISSION_MODE: 'session:permission-mode',
+  SESSION_PROMPT_REPORT: 'session:prompt-report',
   SESSION_REFILL: 'session:refill',
   HOOK_REPLAY_COMPLETE: 'hook:replay-complete',
   SESSION_DETACH_START: 'session:detach-start',
@@ -525,6 +528,7 @@ const DESKTOP_WINDOW_CAPABILITIES = {
   projectWrites: true,
   contentSearch: true,
   liveHandoff: true,
+  sessionRecord: true,
 } as const;
 // <<< GENERATED-CAPABILITIES
 
@@ -533,6 +537,8 @@ const DESKTOP_WINDOW_CAPABILITIES = {
 const PLAYABLE_PUSHES = new Set<string>([
   'transcript:event', 'transcript:shrink', 'hook:event', 'hook:replay-complete', 'specialists:event',
   'native:shell-event', 'native:session-context', 'native:permission-mode', 'native:model-state',
+  // One-core R5-4a: the shared lines and live facts, and a Claude Code session's mode as the host read it.
+  'session:live', 'session:permission-mode',
 ]);
 
 // Strip the transport prefix Electron puts on a rejected invoke (see the
@@ -614,6 +620,8 @@ contextBridge.exposeInMainWorld('claude', {
     // End a PHONE's watch of one conversation (one-core R5-3). A window has no such thing (its audience is ownership), so the
     // computer's door answers ok and changes nothing; this exists so the bridge has one shape on every screen.
     unwatch: (sessionId: string) => ipcRenderer.invoke(IPC.SESSION_UNWATCH, { sessionId }),
+    // A computer window tells the host about a card it read off its terminal; the host numbers it and every screen draws it (one-core R5-4a).
+    reportPrompt: (report: any) => ipcRenderer.invoke(IPC.SESSION_PROMPT_REPORT, report),
     // Hand pushes (an open's `before` / `after`) to the SAME listeners a live push reaches. `ipcRenderer` is an event emitter, so
     // emitting the channel locally runs exactly the handlers `on.*` registered, with no second set of rules for a filled window.
     onRefill: (cb: (sessionId: string) => void) => {
@@ -637,8 +645,8 @@ contextBridge.exposeInMainWorld('claude', {
     // lives in main (menu-answer-lock.ts), shared with the remote host.
     menuLock: (sessionId: string, holder: string, action: 'acquire' | 'release'): Promise<boolean> =>
       ipcRenderer.invoke(IPC.SESSION_MENU_LOCK, { sessionId, holder, action }),
-    sendInput: (sessionId: string, text: string) =>
-      ipcRenderer.send(IPC.SESSION_INPUT, { sessionId, text }),
+    sendInput: (sessionId: string, text: string, notice?: 'model-switch') =>
+      ipcRenderer.send(IPC.SESSION_INPUT, { sessionId, text, notice }),
     resize: (sessionId: string, cols: number, rows: number) =>
       ipcRenderer.send(IPC.SESSION_RESIZE, { sessionId, cols, rows }),
     signalReady: (sessionId: string) =>
@@ -797,11 +805,19 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.on('native:shell-event', handler);
       return () => ipcRenderer.removeListener('native:shell-event', handler);
     },
-    // Shape parity with remote-shim — desktop never fires this push event
-    // (mode detection runs in App.tsx via pty:output text matching), so this
-    // is a no-op subscriber that just keeps `window.claude.on` symmetric.
-    sessionPermissionMode: (_cb: (sessionId: string, mode: string) => void) => {
-      return () => {};
+    // A Claude Code session's permission mode. WHY real now (one-core R5-4a): the computer's main process reads the mode footer off the
+    // terminal once and pushes it here (it used to be a no-op on the desktop, where each window scanned its own copy of the bytes);
+    // the Android app's own runtime pushes the same event for the same fact. Same callback shape as remote-shim.
+    sessionPermissionMode: (cb: (sessionId: string, mode: string) => void) => {
+      const handler = (_e: IpcRendererEvent, e: { sessionId: string; mode: string }) => { if (e) cb(e.sessionId, e.mode); };
+      ipcRenderer.on(IPC.SESSION_PERMISSION_MODE, handler);
+      return handler; // like every on.* that App removes with window.claude.off(channel, handler)
+    },
+    // The shared lines and live facts of a session (queue, model, dividers, compaction spinner, prompt cards): one-core R5-4a.
+    sessionLive: (cb: (live: any) => void) => {
+      const handler = (_e: IpcRendererEvent, live: any) => cb(live);
+      ipcRenderer.on(IPC.SESSION_LIVE, handler);
+      return () => { ipcRenderer.removeListener(IPC.SESSION_LIVE, handler); };
     },
     uiAction: (cb: (action: any) => void) => {
       const handler = (_e: IpcRendererEvent, action: any) => cb(action);

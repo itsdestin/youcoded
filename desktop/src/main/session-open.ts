@@ -42,6 +42,10 @@ export interface NativeLive {
   sessionContext(): unknown | null;
   /** True only when the host can affirm nothing is in flight (never guessed). */
   idle(): boolean;
+  /** The messages waiting behind the running turn (R5-4a): a fresh screen starts from the host's truth, an empty list included. */
+  queue(): Array<{ queueId: string; content: string; timestamp: number }>;
+  /** The session's permission mode, so a screen that connects later shows the real one (the push is not replayed). */
+  permissionMode(): string | null;
 }
 
 export interface OpenDeps {
@@ -127,7 +131,14 @@ export async function openSession(deps: OpenDeps, req: OpenRequest, opts: { remo
     if (progress) after.push({ type: 'transcript:event', payload: progress });
     const context = native.sessionContext();
     if (context) after.push({ type: 'native:session-context', payload: { sessionId, context } });
+    // One-core R5-4a: the queue strip and mode chip come from the host, so a phone that connects mid-turn shows the computer's queue.
+    after.push({ type: 'session:live', payload: { sessionId, kind: 'queue', queue: native.queue() } });
+    const mode = native.permissionMode();
+    if (mode) after.push({ type: 'native:permission-mode', payload: { sessionId, mode } });
   }
+  // One-core R5-4a: what is still true of the session and is not a transcript line: the model label, a Claude Code session's mode, the cards
+  // still open and a compaction in progress (the spinner a phone that joins mid-compaction lost in R5-2).
+  after.push(...records.liveFill(sessionId));
   // The idle marker reaps tool cards the history left 'running'. Only a native host can affirm idleness; a Claude Code
   // session reports false and keeps today's behaviour rather than risk failing a tool that really is running.
   after.push({
