@@ -111,7 +111,8 @@ const replaced = new WeakSet<OfficeSession>();
  *  save that would have finished — losing the edits the renderer had already counted as saved.
  *  Nothing on screen waits for this (the window or tab is already gone), so the save gets the
  *  whole time x2t allows it. Quit does not wait this long: quitOfficeSessions stops every
- *  translator after 5 s, which ends this wait too, and records the saves it stopped. */
+ *  translator after 5 s, which ends this wait too; a save it stopped leaves the file as it was,
+ *  and its edits stay in the document's recovery journal for the next open (Task 8). */
 export const CLOSE_DRAIN_MS = X2T_TIMEOUT_MS + 5_000;
 
 /**

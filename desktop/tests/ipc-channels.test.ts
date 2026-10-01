@@ -1522,9 +1522,8 @@ describe('office:* channel parity', () => {
     }
   });
 
-  // Comments on an open document go through its editor: main asks the window, the window answers
-  // and says when a comment changed. Like the quit prompt, desktop only — the remote
-  // client and the phone have no Office editors to ask.
+  // A closing window asks its editors to journal their newest edits (and start saving any unsaved
+  // ones) before it goes: main asks, the window answers. Desktop only, like the quit prompt.
   it('the journal-before-close handshake is carried by preload and main, and by no other host', () => {
     const sync = readSourceFile(path.join(__dirname, '../src/main/office/office-journal-sync.ts'));
     for (const ch of ['office:journal-request', 'office:journal-done']) {
@@ -1535,6 +1534,9 @@ describe('office:* channel parity', () => {
     }
   });
 
+  // Comments on an open document go through its editor: main asks the window, the window answers
+  // and says when a comment changed. Like the quit prompt, desktop only — the remote
+  // client and the phone have no Office editors to ask.
   it('the live-comments handshake is carried by preload and main, and by no other host', () => {
     const comments = readSourceFile(path.join(__dirname, '../src/main/office/office-comments.ts'));
     for (const ch of ['office:comments-request', 'office:comments-answer', 'office:comments-changed']) {
