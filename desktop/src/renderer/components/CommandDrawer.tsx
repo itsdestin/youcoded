@@ -4,6 +4,7 @@ import SkillCard from './SkillCard';
 import { useSkills } from '../state/skill-context';
 import { useMarketplace } from '../state/marketplace-context';
 import { useScrollFade } from '../hooks/useScrollFade';
+import { useDrawerResize } from '../hooks/useDrawerResize';
 import { useEscClose } from '../hooks/use-esc-close';
 import { isAndroid } from '../platform';
 import { EmptyState, ErrorState, FilterChip, SectionLabel } from './ui';
@@ -67,6 +68,8 @@ export default function CommandDrawer({ open, searchMode, externalFilter: extern
   // the filter via externalFilter; in browse mode, the drawer's own input does
   const effectiveQuery = searchMode ? (externalFilter ?? '') : search;
   const isSearching = effectiveQuery.trim().length > 0;
+
+  const resize = useDrawerResize(open, onClose);
 
   // Focus internal search on open — only in browse mode (compass button).
   // In search mode the InputBar keeps focus so the user sees the "/" prefix.
@@ -223,16 +226,28 @@ export default function CommandDrawer({ open, searchMode, externalFilter: extern
           Removing this class silently reopens that bug; guarded by
           tests/drawer-card-glass.test.ts. */}
       <div
-        className={`command-drawer fixed bottom-0 left-0 right-0 z-50 bg-panel border-t border-edge-dim rounded-t-xl overflow-hidden transition-transform duration-300 ease-out ${
+        ref={resize.drawerRef}
+        className={`command-drawer fixed bottom-0 left-0 right-0 z-50 flex flex-col bg-panel border-t border-edge-dim rounded-t-xl overflow-hidden transition-transform duration-300 ease-out ${
           open ? 'translate-y-0' : 'translate-y-full'
         }`}
-        style={{ maxHeight: '45vh' }}
+        // WHY a set height, not a 45vh cap (LB-3, 2026-10-01): it opens at 70% and the
+        // handle moves it, so the box keeps its height even when few skills are listed.
+        // The height eases only on a click-to-full; while dragging it follows the pointer.
+        style={{ height: resize.height, transitionProperty: resize.dragging ? 'transform' : 'transform, height' }}
       >
         {open && !searchMode && <ScreenMark name="chat/skills" />}
         {open && searchMode && <ScreenMark name="chat/commands" />}
-        {/* Grab handle */}
-        <div className="flex justify-center py-2">
-          <div className="w-8 h-1 rounded-full bg-fg-faint" />
+        {/* Grab handle — drag to resize, click (or Enter) for full height and back,
+            drag far down to close. touch-none so a finger drag isn't read as a scroll. */}
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label={resize.isMax ? 'Resize drawer — press Enter for the default height' : 'Resize drawer — press Enter for full height'}
+          tabIndex={0}
+          className="shrink-0 flex justify-center py-2 cursor-ns-resize touch-none select-none group focus:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded-t-xl"
+          {...resize.handleProps}
+        >
+          <div className="w-8 h-1 rounded-full bg-fg-faint group-hover:bg-fg-muted transition-colors" />
         </div>
 
         {/* Search bar — read-only mirror in search mode (InputBar drives the
@@ -244,7 +259,7 @@ export default function CommandDrawer({ open, searchMode, externalFilter: extern
              trailing icon buttons are navigation (Library, Marketplace), not
              field actions. Left hand-rolled on purpose — revisit only with a
              deliberate design decision, not as a sweep. */}
-        <div className="px-4 pb-3">
+        <div className="shrink-0 px-4 pb-3">
           <div
             className="flex items-center gap-2 bg-well rounded-lg px-3 py-2 border border-edge-dim"
             {...(searchMode ? { onClick: () => {/* no-op: keep focus in InputBar */} } : {})}
@@ -302,7 +317,7 @@ export default function CommandDrawer({ open, searchMode, externalFilter: extern
         {/* Padding lives on an inner wrapper so the scroll-fade element itself has
             no padding — sticky fade pseudos sit flush with the drawer's outer edges.
             The drawer's own overflow:hidden + rounded-t-xl clips the top corners. */}
-        <div ref={scrollRef} className="scroll-fade" style={{ maxHeight: 'calc(45vh - 80px)' }}>
+        <div ref={scrollRef} className="scroll-fade min-h-0 flex-1">
           <div className="pb-4">
           {isSearching ? (
             // Search mode: flat filtered list of skills + commands, no chip row
