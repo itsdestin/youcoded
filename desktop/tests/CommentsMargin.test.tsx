@@ -256,39 +256,35 @@ describe('CommentsMargin — render cost at a realistic high comment count', () 
       }
 
       const containerRef = { current: grid };
-      const startedCpu = process.cpuUsage();
-      const { container, unmount } = render(<CommentsMargin containerRef={containerRef} path={path} narrow={false} />);
-      const usedCpu = process.cpuUsage(startedCpu);
-      expect(container.querySelectorAll('[data-comments-list] > div')).toHaveLength(cellComments.length);
-      unmount();
+      // WHY counted work, not CPU time (2026-10-01, one-core R5-2): this ratio of CPU time tripped
+      // again in a full-suite run on a busy machine, after widening the bound and adding trials.
+      // CPU time includes the engine's helper threads, which inflate with load. Count the
+      // document searches the pass makes instead (every querySelector / querySelectorAll call).
+      // That count does not change with load, so one mount per size is enough. The pass makes a
+      // fixed handful of searches per comment, so cost grows in line with the count; a pass that
+      // searched once per cell per comment would multiply it by the cell count.
+      const proto = Element.prototype;
+      const realOne = proto.querySelector;
+      const realAll = proto.querySelectorAll;
+      let searches = 0;
+      proto.querySelector = function (this: Element, sel: string) { searches++; return realOne.call(this, sel); } as typeof realOne;
+      proto.querySelectorAll = function (this: Element, sel: string) { searches++; return realAll.call(this, sel); } as typeof realAll;
+      let rendered: ReturnType<typeof render>;
+      try {
+        rendered = render(<CommentsMargin containerRef={containerRef} path={path} narrow={false} />);
+      } finally { proto.querySelector = realOne; proto.querySelectorAll = realAll; }
+      expect(rendered.container.querySelectorAll('[data-comments-list] > div')).toHaveLength(cellComments.length);
+      rendered.unmount();
       grid.remove();
-      return (usedCpu.user + usedCpu.system) / 1000;
-    };
-    // 5, not 3 (2026-09-28): best-of-3 still hit 13x once during a full
-    // 15,000-test run while the same code measured 6.3-7.2x across 18
-    // isolated and parallel-loaded reruns — one more outlier-prone sample
-    // per size, not a looser bound, is what keeps a quadratic regression
-    // (~25x) clearly separated from normal linear cost (~5-7x).
-    const TRIALS = 5;
-    /** The best (minimum) of TRIALS mounts of the same slice, each its own
-     *  path (see WHY above — addComment always appends). Contention can only
-     *  ADD overhead, never remove it, so the minimum across repeated trials
-     *  is the closest any sample gets to the uncontended cost — same fix as
-     *  the synthetic 1,000-comment case above, after a single-sample ratio
-     *  here also flaked under load. */
-    const bestOf = (label: string, cellComments: Array<{ cell: string; sheet: string }>) => {
-      const samples: number[] = [];
-      for (let t = 0; t < TRIALS; t++) samples.push(mountWith(`${label}-${t}`, cellComments));
-      return Math.min(...samples);
+      return searches;
     };
 
-    // Warm-up mount so one-time costs (module init, JIT) don't land on a
-    // measured trial and make the ratio look better than it is.
+    // Warm-up mount so one-time module init does not land on a measured mount.
     mountWith('warmup', allCellComments.slice(0, 20));
-    const small = bestOf('small', allCellComments.slice(0, SMALL_COUNT));
-    const large = bestOf('large', allCellComments);
-    // 315 / 60 ≈ 5.25x if linear; generous headroom over that, same bound as
-    // the synthetic 1,000-comment case above.
+    const small = mountWith('small', allCellComments.slice(0, SMALL_COUNT));
+    const large = mountWith('large', allCellComments);
+    // 315 / 60 = 5.25x if linear; generous headroom over that. A per-cell search inside the
+    // per-comment pass lands near 100x.
     expect(large / Math.max(small, 1)).toBeLessThan(12);
   }, STRESS_TEST_BUDGET_MS);
 });
