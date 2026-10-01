@@ -427,6 +427,9 @@ describe('RemoteServer and the shell provider', () => {
   it('accepts an ordinary install command, semicolon and all', async () => {
     const { RemoteServer } = await import('../src/main/remote-server');
     const server: any = new RemoteServer(shellSessionManager, shellHookRelay, shellConfig);
+    // WHY (2026-09-30 one-core R3-6): engine:run-in-terminal is a table entry; it opens its shell through the
+    // session manager bound with the rest of the session operations, for a phone as for a window.
+    (await import('../src/main/ipc/session')).bindSessionOps({ sessionManager: shellSessionManager } as any);
     const sent = await drive(server, {
       type: 'engine:run-in-terminal', id: 'r2', payload: { command: 'sudo pacman -S rocm; echo done' },
     });
@@ -512,7 +515,8 @@ describe('RemoteServer carries a per-model settings save end to end', () => {
       type: 'models:set-settings', id: 's3', payload: { modelId: 'alpha', patch: { contextLength: 512 } },
     });
 
-    expect(sent[0].payload).toEqual({ ok: false, error: 'Context length must be at least 1024 tokens.' });
+    // The table's failure marker rides along so the phone's page rejects it for any channel.
+    expect(sent[0].payload).toEqual({ ok: false, error: 'Context length must be at least 1024 tokens.', tableHandlerFailed: true });
   });
 
   it('answers nothing, not a made-up settings record, when there is no engine', async () => {

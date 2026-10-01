@@ -62,10 +62,6 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { isAllowedWsOrigin } from './remote-origin';
 import type { SessionManager } from './session-manager';
 import type { createHandoffTransport } from './conversations/handoff-transport';
-// Value import (not type-only): the "Run in terminal" case below runs the SAME
-// validation the desktop handler runs — a remote client's payload is the least
-// trusted input either of them sees.
-import { prepareRunInTerminal, shellDisplayName } from './session-manager';
 import type { HookRelay } from './hook-relay';
 import type { RemoteConfig } from './remote-config';
 import { RemoteConfig as RemoteConfigStatics } from './remote-config';
@@ -79,7 +75,6 @@ import type { ModelCatalog } from './providers/model-catalog';
 import type { SearchKeyStore } from './harness/search/search-key-store';
 import type { SearchService } from './harness/search/search-service';
 import type { EngineManager } from './engine/engine-manager';
-import { enginePrereqs } from './engine/rocm-prereqs';
 import type { ModelManager } from './models/model-manager';
 import type { PermissionStore } from './harness/permission-store';
 import type { StepGuardSettings } from './harness/step-guard-settings';
@@ -91,9 +86,7 @@ import type { OpenRouterSignIn } from './providers/openrouter-oauth';
 import type { RemoteNativeRuntime } from './create-runtime';
 import { findChannel, serveRemoteChannel } from './ipc/channel-table';
 import { sendToAllWindows } from './window-broadcast';
-import { installClaude } from './prerequisite-installer';
 import { toListResult } from './harness/specialists/catalog';
-import { detectEndpoints } from './models/endpoint-detectors';
 import { BrowserWindow, app } from 'electron';
 import { NativeHome } from './native-home';
 import { UpdateSettings } from './update-settings';
@@ -1643,6 +1636,7 @@ export class RemoteServer {
     if (tableDef) {
       const outcome = await serveRemoteChannel(tableDef, payload, {
         door: 'remote', runtime: this.nativeRuntime, deviceId: client.deviceId, clientId: client.id,
+        isConnected: () => client.ws.readyState === WebSocket.OPEN,
         // Every screen: all phones (the sender included), then this computer's windows.
         broadcast: (channel, data) => {
           this.broadcast({ type: channel, payload: data });
@@ -1692,165 +1686,9 @@ export class RemoteServer {
         break;
       }
       // --- Request/response ---
-      // WHY (2026-09-30 one-core R3-5): handoff:*, native:*, permission(s):*, specialists:* and model:* are
-      // table entries (the files in main/ipc); the table answers before this switch, so none of them has a case here.
-      case 'provider:list': {
-        this.respond(client.ws, type, id, this.nativeRuntime ? await this.nativeRuntime.providerRegistry.list() : []);
-        break;
-      }
-      // The provider CRUD/key/catalog handlers can THROW (bad input, built-in
-      // removal, keychain failure). Each responds an error object on throw so
-      // the remote client's request id resolves instead of hanging to timeout.
-      case 'provider:upsert': {
-        try {
-          const res = this.nativeRuntime ? await this.nativeRuntime.providerRegistry.upsert(payload) : null;
-          this.respond(client.ws, type, id, res);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      case 'provider:remove': {
-        try {
-          if (this.nativeRuntime) await this.nativeRuntime.providerRegistry.remove(payload.id ?? payload);
-          this.respond(client.ws, type, id, true);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      case 'provider:test': {
-        try {
-          const res = this.nativeRuntime
-            ? await this.nativeRuntime.providerRegistry.testConnection(
-              payload.id ?? payload,
-              typeof payload?.key === 'string' ? payload.key : undefined,
-            )
-            : { ok: false, message: 'Native runtime not available.' };
-          this.respond(client.ws, type, id, res);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, message: err?.message ?? String(err) });
-        }
-        break;
-      }
-      case 'provider:set-key': {
-        try {
-          if (this.nativeRuntime) await this.nativeRuntime.providerRegistry.setKey(payload.id, payload.key);
-          this.respond(client.ws, type, id, true);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      case 'provider:catalog': {
-        try {
-          const res = this.nativeRuntime
-            ? await this.nativeRuntime.modelCatalog.get(await this.nativeRuntime.providerRegistry.list())
-            : [];
-          this.respond(client.ws, type, id, res);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      // Sign in with ChatGPT (backend design 2026-09-05 §5) — the four cases exist
-      // for the five-surface parity test and answer honestly. Remote clients never
-      // see the card (the whole Model Providers section is gated on native.supported,
-      // false on remote — review R1-7); the only remote-visible ChatGPT surface is
-      // status:data.chatgptUsage, which broadcastStatusData already carries.
-      // status / cancel / sign-out are real against the SAME account object the
-      // desktop handlers use (kill-switched to null by ipc-handlers → signed-out /
-      // false). sign-in answers false: the browser and the 127.0.0.1:1455 listener
-      // live on the desktop, so a phone cannot complete the round-trip. Each case
-      // try/catches → { ok: false, error } like the provider cases above, so a
-      // thrown sentence resolves the request id instead of hanging it to timeout.
-      case 'chatgpt:status': {
-        try {
-          const auth = this.nativeRuntime?.chatgptAuth ?? null;
-          this.respond(client.ws, type, id, auth ? auth.status() : { state: 'signed-out' });
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      case 'chatgpt:sign-in': {
-        this.respond(client.ws, type, id, false);
-        break;
-      }
-      case 'chatgpt:cancel-sign-in': {
-        try {
-          const auth = this.nativeRuntime?.chatgptAuth ?? null;
-          this.respond(client.ws, type, id, auth ? await auth.cancelSignIn() : false);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      // Sign in with OpenRouter: status and cancel are the desktop's; sign-in
-      // answers false for the same reason as chatgpt:sign-in above.
-      case 'openrouter:sign-in-status': {
-        this.respond(client.ws, type, id, this.nativeRuntime?.openRouterSignIn?.status() ?? { state: 'idle' });
-        break;
-      }
-      case 'openrouter:sign-in': {
-        this.respond(client.ws, type, id, false);
-        break;
-      }
-      case 'openrouter:cancel-sign-in': {
-        try {
-          const s = this.nativeRuntime?.openRouterSignIn ?? null;
-          this.respond(client.ws, type, id, s ? await s.cancelSignIn() : false);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      case 'chatgpt:sign-out': {
-        try {
-          const auth = this.nativeRuntime?.chatgptAuth ?? null;
-          this.respond(client.ws, type, id, auth ? await auth.signOut() : false);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      // Claude Code's live sign-in (2026-09-09). The DESKTOP's answer, not the
-      // browser's: the phone has no `claude` binary, and the session it is
-      // driving runs here. `unknown` when the runtime is not wired yet, which
-      // every reader treats as available — a remote client must never grey out
-      // a model on the strength of a missing object.
-      case 'claude-code:status': {
-        try {
-          const account = this.nativeRuntime?.claudeAccount ?? null;
-          if (payload?.refresh) account?.invalidate();
-          this.respond(client.ws, type, id, account ? await account.status() : { state: 'unknown' });
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      // Install Claude Code on this desktop (first-run local models, F-5) — the
-      // same installer and the same answer as the desktop IPC handler, then the
-      // cached "not-installed" is dropped so the card re-reads it.
-      case 'claude-code:install': {
-        try {
-          const result = await installClaude();
-          this.nativeRuntime?.claudeAccount?.invalidate();
-          this.respond(client.ws, type, id, result);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      // WebSearch providers (Phase 2 Plan B) — mirror the desktop IPC handlers so
-      // remote WS clients reach the SAME searchKeyStore/searchService instances.
-      // set/remove-key can throw (empty key, keychain failure); each responds an
-      // error object so the client's request id resolves instead of timing out.
-      // search:test is never-throws — { ok, message } is the result.
-      case 'search:list': {
-        this.respond(client.ws, type, id, this.nativeRuntime ? await this.nativeRuntime.searchKeyStore.list() : []);
-        break;
-      }
+      // WHY (2026-09-30 one-core R3-6): handoff:*, native:*, permission(s):*, specialists:*, model:*, provider:*,
+      // chatgpt:*, openrouter:*, claude-code:*, search:*, engine:*, models:* and endpoints:detect are table entries
+      // (the files in main/ipc); the table answers before this switch, so none of them has a case here.
       // YouCoded Pages (Phase 1). The service is the same one the desktop
       // windows use; a phone over remote access sees the same library.
       case 'pages:list': {
@@ -2254,31 +2092,6 @@ export class RemoteServer {
         }
         break;
       }
-      case 'search:set-key': {
-        try {
-          if (this.nativeRuntime) await this.nativeRuntime.searchKeyStore.setKey(payload.backend, payload.key);
-          this.respond(client.ws, type, id, true);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      case 'search:remove-key': {
-        try {
-          if (this.nativeRuntime) await this.nativeRuntime.searchKeyStore.removeKey(payload.backend);
-          this.respond(client.ws, type, id, true);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      case 'search:test': {
-        const res = this.nativeRuntime
-          ? await this.nativeRuntime.searchService.testBackend(payload.backend, payload.key)
-          : { ok: false, message: 'Native runtime not available.' };
-        this.respond(client.ws, type, id, res);
-        break;
-      }
       // Remembered "Always allow" rules (M5 2a) — mirror the desktop IPC handlers
       // so a remote client (a phone, typically) reaches the SAME permissionStore /
       // nativeHost instances. There is no generic passthrough here: a channel with
@@ -2290,268 +2103,6 @@ export class RemoteServer {
         // remote browser gets the same cap and the same sensitive-path
         // refusal, never a wider read.
         this.respond(client.ws, type, id, await readFileHead(payload?.filePath, payload?.maxBytes));
-        break;
-      }
-      // Local engine (Plan B). status is sync; install/restart resolve to a
-      // fresh status() so the remote client mirrors the desktop IPC contract.
-      case 'engine:status': {
-        this.respond(client.ws, type, id, this.nativeRuntime ? this.nativeRuntime.engineManager.status() : null);
-        break;
-      }
-      case 'engine:install': {
-        try {
-          if (this.nativeRuntime) await this.nativeRuntime.engineManager.install();
-          this.respond(client.ws, type, id, this.nativeRuntime?.engineManager.status() ?? null);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      case 'engine:restart': {
-        try {
-          if (this.nativeRuntime) await this.nativeRuntime.engineManager.restart();
-          this.respond(client.ws, type, id, this.nativeRuntime?.engineManager.status() ?? null);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      // Model manager (Plan C). Every handler can throw (network, HF API, disk
-      // guard, bad input) so each responds an error object on throw — the remote
-      // client's request id resolves instead of hanging to timeout. Payloads are
-      // objects matching remote-shim's invoke() calls (payload.query / .repo /
-      // .quant / .downloadId / .id / .backend). download-progress is broadcast
-      // from ipc-handlers' emitter; no per-case push needed here.
-      case 'engine:set-backend': {
-        try {
-          if (this.nativeRuntime) await this.nativeRuntime.engineManager.setBackend((payload.backend ?? payload) as any);
-          this.respond(client.ws, type, id, this.nativeRuntime?.engineManager.status() ?? null);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      case 'engine:set-context': {
-        try {
-          if (this.nativeRuntime) await this.nativeRuntime.engineManager.setContext((payload.contextSize ?? payload) as number);
-          this.respond(client.ws, type, id, this.nativeRuntime?.engineManager.status() ?? null);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      // Every engine-wide setting in one write (2026-09-05 §B). The whole
-      // payload IS the patch here — unlike the single-value cases above there is
-      // no bare-value form to unwrap, because a patch is always an object.
-      case 'engine:set-config': {
-        try {
-          if (this.nativeRuntime) await this.nativeRuntime.engineManager.setConfig(payload ?? {});
-          this.respond(client.ws, type, id, this.nativeRuntime?.engineManager.status() ?? null);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      // "Run in terminal" over the remote link. The shell runs on the HOST — a
-      // remote client is a browser and has no terminal of its own — so this is
-      // the same plain-shell session the desktop button makes, and the client
-      // sees it appear through the session:created broadcast.
-      case 'engine:run-in-terminal': {
-        try {
-          // This payload arrives over the network. A `\r` anywhere inside the
-          // string would make the host RUN the command with nobody at the
-          // keyboard, so the same validator the desktop handler uses runs here
-          // — see prepareRunInTerminal in session-manager.ts.
-          const checked = prepareRunInTerminal(payload?.command ?? payload);
-          // The host's newest live session names the folder the user is working
-          // in; with none, createSession falls back to the home folder.
-          let cwd = '';
-          for (const s of this.sessionManager.listSessions()) {
-            if (s.status !== 'destroyed') cwd = s.cwd;
-          }
-          const info = this.sessionManager.createSession({
-            name: shellDisplayName(checked.shell),
-            cwd,
-            skipPermissions: false,
-            provider: 'shell',
-            initialCommand: checked.command,
-            shellToken: checked.shellToken,
-          });
-          this.respond(client.ws, type, id, { sessionId: info.id });
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      // What a faster engine build needs installed (2026-09-05 §A5). Reads THIS
-      // machine — the one running the server — which is the right answer: the
-      // remote browser is only a window onto it, and the engine that would be
-      // switched runs here.
-      case 'engine:prereqs': {
-        try {
-          this.respond(client.ws, type, id, enginePrereqs((payload.backend ?? payload) as string, { refresh: true }));
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      case 'models:curated': {
-        try {
-          const res = this.nativeRuntime ? await this.nativeRuntime.modelManager.curatedList() : [];
-          this.respond(client.ws, type, id, res);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      case 'models:search': {
-        try {
-          const res = this.nativeRuntime ? await this.nativeRuntime.modelManager.search(payload.query ?? payload) : [];
-          this.respond(client.ws, type, id, res);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      case 'models:quants': {
-        try {
-          const res = this.nativeRuntime ? await this.nativeRuntime.modelManager.quants(payload.repo ?? payload) : [];
-          this.respond(client.ws, type, id, res);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      case 'models:download': {
-        try {
-          const res = this.nativeRuntime ? await this.nativeRuntime.modelManager.download(payload.repo, payload.quant) : null;
-          this.respond(client.ws, type, id, res);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      case 'models:download-cancel': {
-        try {
-          this.nativeRuntime?.modelManager.cancel(payload.downloadId ?? payload);
-          this.respond(client.ws, type, id, true);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      case 'models:delete': {
-        try {
-          if (this.nativeRuntime) await this.nativeRuntime.engineManager.deleteModel(payload.id ?? payload);
-          this.respond(client.ws, type, id, true);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      case 'models:installed': {
-        try {
-          const res = this.nativeRuntime ? await this.nativeRuntime.engineManager.installedModels() : [];
-          this.respond(client.ws, type, id, res);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      // Resume an interrupted download (2026-08-26) — mirrors the Electron IPC
-      // handler. Replaces the orphaned-.partial scan, whose listing folded into
-      // models:installed.
-      case 'models:resume': {
-        try {
-          const res = this.nativeRuntime
-            ? await this.nativeRuntime.modelManager.resume(payload.modelId ?? payload)
-            : { downloadId: '' };
-          this.respond(client.ws, type, id, res);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      // Per-model settings + vision (2026-09-05 local-engine upgrades §C/§E4).
-      // All three act on the HOST's engine, which is the only engine there is —
-      // the remote client is a browser. The shim rejects an { ok:false } answer
-      // for these three, so a refused save reaches the dialog's error line
-      // instead of looking like a save that worked.
-      case 'models:settings': {
-        try {
-          const res = this.nativeRuntime
-            ? this.nativeRuntime.engineManager.modelSettings(payload.modelId ?? payload)
-            : null;
-          this.respond(client.ws, type, id, res);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      case 'models:set-settings': {
-        try {
-          const res = this.nativeRuntime
-            ? await this.nativeRuntime.engineManager.setModelSettings(payload.modelId, payload.patch ?? {})
-            : null;
-          this.respond(client.ws, type, id, res);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      case 'models:add-vision': {
-        try {
-          // `null`, not `{ downloadId: '' }`, when there is no engine to talk
-          // to — matching its two siblings above. An empty download id is a FAKE
-          // SUCCESS: the row would start showing a download that never begins
-          // and never ends.
-          const res = this.nativeRuntime
-            ? await this.nativeRuntime.modelManager.addVision(payload.modelId ?? payload)
-            : null;
-          this.respond(client.ws, type, id, res);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      case 'engine:models': {
-        try {
-          const res = this.nativeRuntime ? await this.nativeRuntime.engineManager.liveModels() : [];
-          this.respond(client.ws, type, id, res);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      case 'models:memory-check': {
-        try {
-          const res = this.nativeRuntime
-            ? await this.nativeRuntime.modelManager.memoryCheck(payload.modelId ?? payload)
-            : { verdict: 'ok', headline: '', detail: '' };
-          this.respond(client.ws, type, id, res);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      case 'models:load': {
-        try {
-          if (this.nativeRuntime) await this.nativeRuntime.engineManager.loadModel(payload.modelId ?? payload);
-          this.respond(client.ws, type, id, true);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      case 'endpoints:detect': {
-        try {
-          const res = this.nativeRuntime
-            ? await detectEndpoints(fetch, await this.nativeRuntime.providerRegistry.list())
-            : [];
-          this.respond(client.ws, type, id, res);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
         break;
       }
       // Read-only lists a phone's screens load at start. Each was "unhandled channel" in the

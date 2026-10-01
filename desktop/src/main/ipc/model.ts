@@ -14,6 +14,34 @@ import { defineChannel, type MainChannelDef } from './channel-def';
 // Resolved per call, like the phone's copy was, so a changed home folder in a test is honoured.
 const modelPrefPath = () => path.join(os.homedir(), '.claude', 'youcoded-model.json');
 
+// WHY (2026-09-30 one-core R3-6, R3-5 review): the screen fires model:set-preference without waiting, and
+// the write is async, so (a) a read could land on a half-written file and fall back to 'sonnet', and (b) two
+// quick sets could finish out of order and leave the OLDER choice on disk. Writes now go to a temp file and
+// are renamed into place (a reader sees the old file or the new one, never half of one), one at a time per
+// file, in the order they were asked. No existing async atomic-write helper in the codebase (searched:
+// the one in chatsearch-index is synchronous, which would block the main process).
+const writeChains = new Map<string, Promise<unknown>>();
+let writeCounter = 0;
+function writeFileAtomicQueued(file: string, content: string): Promise<void> {
+  const run = async () => {
+    await fs.promises.mkdir(path.dirname(file), { recursive: true });
+    const tmp = `${file}.tmp-${process.pid}-${++writeCounter}`;
+    try {
+      await fs.promises.writeFile(tmp, content);
+      await fs.promises.rename(tmp, file);
+    } catch (err) {
+      await fs.promises.rm(tmp, { force: true }).catch(() => {});
+      throw err;
+    }
+  };
+  const next = (writeChains.get(file) ?? Promise.resolve()).then(run, run);
+  // The chain must keep going after a failed write, and must not hold a finished file in the map forever.
+  const settled = next.catch(() => {});
+  writeChains.set(file, settled);
+  void settled.then(() => { if (writeChains.get(file) === settled) writeChains.delete(file); });
+  return next;
+}
+
 export const modelChannels: MainChannelDef[] = [
   defineChannel({
     name: IPC.MODEL_GET_PREFERENCE, kind: 'handle',
@@ -26,8 +54,7 @@ export const modelChannels: MainChannelDef[] = [
     name: IPC.MODEL_SET_PREFERENCE, kind: 'handle',
     handler: async ({ model }) => {
       try {
-        await fs.promises.mkdir(path.dirname(modelPrefPath()), { recursive: true });
-        await fs.promises.writeFile(modelPrefPath(), JSON.stringify({ model }));
+        await writeFileAtomicQueued(modelPrefPath(), JSON.stringify({ model }));
         return true;
       } catch { return false; }
     },

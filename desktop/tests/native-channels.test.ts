@@ -207,6 +207,40 @@ describe('model preference files', () => {
   });
 });
 
+// WHY (2026-09-30 one-core R3-6, R3-5 review): the screen fires the preference write without waiting, so two
+// quick writes must land in the order asked, and a read during a write must see a whole file.
+describe('model preference writes are atomic and in order', () => {
+  let home: string;
+  beforeEach(() => { home = fs.mkdtempSync(path.join(os.tmpdir(), 'r36-model-')); vi.spyOn(os, 'homedir').mockReturnValue(home); });
+  afterEach(() => fs.rmSync(home, { recursive: true, force: true }));
+  it('two quick sets leave the LATER choice on disk even when the first write is the slow one', async () => {
+    const real = fs.promises.writeFile.bind(fs.promises);
+    let n = 0;
+    vi.spyOn(fs.promises, 'writeFile').mockImplementation((async (...args: Parameters<typeof real>) => {
+      if (n++ === 0) await new Promise((r) => setTimeout(r, 40)); // the first write takes longer than the second
+      return real(...args);
+    }) as any);
+    const first = call('model:set-preference', { model: 'opus' }, desktopCtx(null));
+    const second = call('model:set-preference', { model: 'haiku' }, desktopCtx(null));
+    expect(await Promise.all([first, second])).toEqual([true, true]);
+    expect(await call('model:get-preference', undefined, phoneCtx(null))).toBe('haiku');
+  });
+  it('a read in the middle of a write sees the old whole file, never half of the new one, and no temp file is left', async () => {
+    expect(await call('model:set-preference', { model: 'opus' }, desktopCtx(null))).toBe(true);
+    const real = fs.promises.writeFile.bind(fs.promises);
+    let midRead: unknown;
+    vi.spyOn(fs.promises, 'writeFile').mockImplementation((async (file: any, data: any, ...rest: any[]) => {
+      await (real as any)(file, String(data).slice(0, 4), ...rest); // the file as a reader could catch it mid-write
+      midRead = await call('model:get-preference', undefined, phoneCtx(null));
+      return (real as any)(file, data, ...rest);
+    }) as any);
+    expect(await call('model:set-preference', { model: 'sonnet-5' }, desktopCtx(null))).toBe(true);
+    expect(midRead).toBe('opus');
+    expect(await call('model:get-preference', undefined, phoneCtx(null))).toBe('sonnet-5');
+    expect(fs.readdirSync(path.join(home, '.claude')).filter((f) => f.includes('.tmp-'))).toEqual([]);
+  });
+});
+
 describe('handoff attempts are owned by the connection that began them', () => {
   it('a window owns its attempt as window:<id>, a phone as remote:<client id>', async () => {
     const route: any = vi.fn(async () => ({ id: 'a', status: 'waiting' }));

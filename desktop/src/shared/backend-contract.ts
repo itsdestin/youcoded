@@ -45,6 +45,7 @@ import type { MarketplaceChannelTypes, SkillsBridge, MarketplaceBridge, FirstRun
 import type { SyncChannelTypes } from './sync-channel-types';
 import type { SessionChannelTypes } from './session-channel-types';
 import type { NativeChannelTypes } from './native-channel-types';
+import type { ModelsChannelTypes } from './models-channel-types';
 export type { MarketplaceThumbs } from './marketplace-channel-types';
 import type {
   NativeSendResult, SessionContext, SessionContextText,
@@ -789,6 +790,10 @@ export interface ChannelCtx<Rt = unknown> {
   /** Remote only: the connected phone's id. WHY (2026-09-30 one-core R3-5): a handoff attempt is owned by
    *  the connection that began it, so it can be cancelled when that connection closes. */
   clientId?: string;
+  /** Remote only: is the phone that sent this still connected? WHY (2026-09-30 one-core R3-6): a call
+   *  that WAITS (the boot wait for the session ops) must not run after its phone has gone, or it would
+   *  create a session nobody asked to see. Absent on the computer's door, which never waits. */
+  isConnected?(): boolean;
   /** WHY (2026-09-30 one-core R3-1): tell EVERY screen that something changed: this computer's
    *  windows AND every paired phone, whichever door the change came in through. Before, a tag
    *  edited on a phone only told the other phones. Each door fills this the same way. */
@@ -836,7 +841,7 @@ export interface ChannelDef<Ctx = ChannelCtx, Payload = any, Result = any> {
  *  so a handler, the desktop bridge and the phone shim cannot disagree about a channel's shape.
  *  `request` is the ONE object the caller sends (void = no payload). A family adds its rows here
  *  when it moves into the table. */
-export interface ChannelTypes extends MarketplaceChannelTypes, SyncChannelTypes, SessionChannelTypes, NativeChannelTypes {
+export interface ChannelTypes extends MarketplaceChannelTypes, SyncChannelTypes, SessionChannelTypes, NativeChannelTypes, ModelsChannelTypes {
   'tags:list': { request: void; response: TagListResult };
   'tags:create': { request: { label: string; color: string }; response: TagMutationResult };
   'tags:update': { request: { id: string; patch: TagPatch }; response: TagMutationResult };

@@ -41,6 +41,13 @@ import { permissionsChannels } from './permissions';
 import { specialistsChannels } from './specialists';
 import { modelChannels } from './model';
 import { handoffChannels } from './handoff';
+import { providerChannels } from './provider';
+import { chatgptChannels } from './chatgpt';
+import { openrouterChannels } from './openrouter';
+import { claudeCodeChannels } from './claude-code';
+import { searchChannels } from './search';
+import { engineChannels } from './engine';
+import { modelsChannels } from './models';
 
 export type { MainChannelCtx, MainChannelDef } from './channel-def';
 
@@ -68,6 +75,13 @@ export const CHANNEL_TABLE: MainChannelDef[] = [
   ...specialistsChannels,
   ...modelChannels,
   ...handoffChannels,
+  ...providerChannels,
+  ...chatgptChannels,
+  ...openrouterChannels,
+  ...claudeCodeChannels,
+  ...searchChannels,
+  ...engineChannels,
+  ...modelsChannels,
 ];
 
 let indexed: { size: number; byName: Map<string, MainChannelDef> } | null = null;

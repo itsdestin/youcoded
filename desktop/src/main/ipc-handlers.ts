@@ -11,7 +11,7 @@ import { resolveConversations, readConversation } from './chatsearch-index/refs-
 import type { ChatsearchReadRequest } from '../shared/chatsearch-refs';
 import https from 'https';
 import { execFile } from 'child_process';
-import { SessionManager, prepareRunInTerminal, shellDisplayName } from './session-manager';
+import { SessionManager } from './session-manager';
 import { wireDocCommentsSessionLifecycle } from './doc-comments/session-lifecycle';
 import { shouldReconcileNativePage, snapshotResumeBoundary } from './transcript-page-source';
 import { HookRelay } from './hook-relay';
@@ -54,14 +54,10 @@ import { reapplyStoredTitle, type ResumeTitleDeps } from './native-resume-title'
 import { EngineManager } from './engine/engine-manager';
 // Faster-engine prerequisites (2026-09-05 §A5) — a pure-ish read of this
 // machine, so it needs no manager instance.
-import { enginePrereqs } from './engine/rocm-prereqs';
 import type { EngineModel as EngineModelType } from '../shared/engine-types';
 import { ModelManager } from './models/model-manager';
-import type { DownloadProgress, ModelSettingsWrite } from '../shared/model-manager-types';
-import { installClaude } from './prerequisite-installer';
 import { firstRunStateDir, type FirstRunNativeDeps } from './first-run';
 import { clearSetupDownload, computeSetupDownloadStatus, readSetupDownload } from './first-run-local';
-import { detectEndpoints } from './models/endpoint-detectors';
 import { SessionStore } from './harness/session-store';
 import { NativeSessionHost } from './harness/native-session-host';
 import { adminCapabilityReady } from './harness/admin-capability';
@@ -2342,67 +2338,14 @@ export function registerIpcHandlers(
     sendForSession(e.sessionId, IPC.NATIVE_PERMISSION_MODE, e);
     remoteServer?.broadcast({ type: IPC.NATIVE_PERMISSION_MODE, payload: e });
   });
-  // Provider management (Settings → Providers).
-  ipcMain.handle(IPC.PROVIDER_LIST, async () => providerRegistry.list());
-  ipcMain.handle(IPC.PROVIDER_UPSERT, async (_e, config: any) => providerRegistry.upsert(config));
-  ipcMain.handle(IPC.PROVIDER_REMOVE, async (_e, { id }: { id: string }) => { await providerRegistry.remove(id); return true; });
-  // `key`: an optional candidate checked instead of the saved key (the Connect
-  // dialog refuses a bad key before it can replace a working one).
-  ipcMain.handle(IPC.PROVIDER_TEST, async (_e, { id, key }: { id: string; key?: unknown }) =>
-    providerRegistry.testConnection(id, typeof key === 'string' ? key : undefined));
-  ipcMain.handle(IPC.PROVIDER_SET_KEY, async (_e, { id, key }: { id: string; key: string }) => { await providerRegistry.setKey(id, key); return true; });
-  ipcMain.handle(IPC.PROVIDER_CATALOG, async () => modelCatalog.get(await providerRegistry.list()));
-  // Sign in with ChatGPT (backend design 2026-09-05 §3, §5, §6). status is a
-  // cheap sync read (the card polls it every second while waiting). The verbs
-  // resolve boolean; signIn() is allowed to THROW its two verbatim sentences
-  // (port 1455 held by another program, keychain unavailable) — nothing here
-  // catches them, so Electron rejects the renderer's promise and preload's
-  // unwrapInvokeError strips the transport prefix before the card shows
-  // e.message. Under the kill switch chatgptForUi is null: signed-out / false.
-  ipcMain.handle(IPC.OPENROUTER_SIGN_IN_STATUS, async () => openRouterSignIn.status());
-  ipcMain.handle(IPC.OPENROUTER_SIGN_IN, async () => openRouterSignIn.signIn());
-  ipcMain.handle(IPC.OPENROUTER_CANCEL_SIGN_IN, async () => openRouterSignIn.cancelSignIn());
-  ipcMain.handle(IPC.CHATGPT_STATUS, async () => chatgptForUi ? chatgptForUi.status() : { state: 'signed-out' as const });
-  ipcMain.handle(IPC.CHATGPT_SIGN_IN, async () => chatgptForUi ? chatgptForUi.signIn() : false);
-  ipcMain.handle(IPC.CHATGPT_CANCEL_SIGN_IN, async () => chatgptForUi ? chatgptForUi.cancelSignIn() : false);
-  ipcMain.handle(IPC.CHATGPT_SIGN_OUT, async () => chatgptForUi ? chatgptForUi.signOut() : false);
-  // Claude Code's own sign-in, read LIVE (2026-09-09). The model menu and the
-  // Cloud providers card both read this; before it existed they read the setup
-  // wizard's saved notes, which on every launch after the first arrive with no
-  // auth fields at all — so a signed-in install had every Claude model greyed
-  // out with "Sign in to use". Cached 60s inside ClaudeAccount; `refresh`
-  // drops that cache. Never throws: a failed probe answers `unknown`, which
-  // every reader treats as available.
-  ipcMain.handle(IPC.CLAUDE_CODE_STATUS, async (_e, opts?: { refresh?: boolean }) => {
-    if (opts?.refresh) claudeAccount.invalidate();
-    return claudeAccount.status();
-  });
-  // Install Claude Code on demand (first-run local models, F-5): setup no longer
-  // installs it for everyone, so the Claude Code card offers it. The installer's
-  // own { success, error } is the answer; the cached "not-installed" is dropped
-  // so the card's refresh reads the new state.
-  ipcMain.handle(IPC.CLAUDE_CODE_INSTALL, async () => {
-    const result = await installClaude();
-    claudeAccount.invalidate();
-    return result;
-  });
-  // WebSearch key management (Settings → Providers → Search). list returns the
-  // fixed Tavily/Exa rows with hasKey flags; set/remove manage the encrypted key;
-  // test is never-throws ({ ok, message } is the result, not an exception).
-  ipcMain.handle(IPC.SEARCH_LIST, async () => searchKeyStore.list());
-  ipcMain.handle(IPC.SEARCH_SET_KEY, async (_e, { backend, key }: { backend: 'tavily' | 'exa'; key: string }) => { await searchKeyStore.setKey(backend, key); return true; });
-  ipcMain.handle(IPC.SEARCH_REMOVE_KEY, async (_e, { backend }: { backend: 'tavily' | 'exa' }) => { await searchKeyStore.removeKey(backend); return true; });
-  ipcMain.handle(IPC.SEARCH_TEST, async (_e, { backend, key }: { backend: 'tavily' | 'exa'; key: string }) => searchService.testBackend(backend, key));
+  // WHY (2026-09-30 one-core R3-6): provider:*, chatgpt:*, openrouter:*, claude-code:*, search:*, engine:*,
+  // models:* and endpoints:detect request channels are table entries (main/ipc/provider.ts, chatgpt.ts,
+  // openrouter.ts, claude-code.ts, search.ts, engine.ts, models.ts). Their PUSHES (engine:install-progress,
+  // engine:status-changed, models:download-progress ...) stay below: they fan out to windows and phones as before.
   // WHY (2026-09-30 one-core R3-5): permissions:* and specialists:* request channels are table entries
   // (main/ipc/permissions.ts, specialists.ts); their pushes (specialists:event ...) are sent from the ledger wiring above.
-  // --- Local engine IPC (Plan B) ---
-  // install/restart resolve to a fresh status() so the caller doesn't need a
-  // second round-trip. The push emitters below keep every window + remote in
-  // sync during long installs and on any run-state transition.
-  ipcMain.handle(IPC.ENGINE_STATUS, async () => engineManager.status());
-  ipcMain.handle(IPC.ENGINE_INSTALL, async () => { await engineManager.install(); return engineManager.status(); });
-  ipcMain.handle(IPC.ENGINE_RESTART, async () => { await engineManager.restart(); return engineManager.status(); });
-  // Push: install progress + run-state transitions → every window + remotes.
+  // --- Local engine pushes (Plan B) ---
+  // Install progress + run-state transitions → every window + remotes.
   engineManager.on('install-progress', (p) => {
     send(IPC.ENGINE_INSTALL_PROGRESS, p);
     remoteServer?.broadcast({ type: 'engine:install-progress', payload: p });
@@ -2436,12 +2379,6 @@ export function registerIpcHandlers(
       }
     }
   });
-  // Whole live per-model state (initial fetch for the coordinator's consumers).
-  ipcMain.handle(IPC.ENGINE_MODELS, async () => engineManager.liveModels());
-  // #2 create-time / swap-time memory guard; #4 [Reload Model].
-  ipcMain.handle(IPC.MODELS_MEMORY_CHECK, async (_e, { modelId }: { modelId: string }) => modelManager.memoryCheck(modelId));
-  ipcMain.handle(IPC.MODELS_LOAD, async (_e, { modelId }: { modelId: string }) => { await engineManager.loadModel(modelId); return true; });
-  // --- Model manager IPC (Plan C) ---
   // Download progress fans out to every window + remotes on one push channel,
   // mirroring the engine install-progress emitter above.
   modelManager.on('download-progress', (p) => {
@@ -2455,95 +2392,6 @@ export function registerIpcHandlers(
     if (p.state === 'done') void engineManager.refreshModels().catch(() => { /* pick-time retry covers it */ });
   });
 
-  ipcMain.handle(IPC.ENGINE_SET_BACKEND, async (_e, { backend }: { backend: string }) => { await engineManager.setBackend(backend as any); return engineManager.status(); });
-  ipcMain.handle(IPC.ENGINE_SET_CONTEXT, async (_e, { contextSize }: { contextSize: number }) => { await engineManager.setContext(contextSize); return engineManager.status(); });
-  // Engine-wide settings (2026-09-05 §B). The answer is the status the moment
-  // the value was SAVED — `configApplyPending` on it says whether the engine has
-  // picked it up yet, and a 'status-changed' push follows when it has.
-  ipcMain.handle(IPC.ENGINE_SET_CONFIG, async (_e, patch: { contextSize?: number; speed?: any }) => {
-    await engineManager.setConfig(patch ?? {});
-    return engineManager.status();
-  });
-  // "Run in terminal" (§F): open a plain-shell session and TYPE the set-up
-  // command onto its prompt. Nothing runs — the user presses Enter, and the
-  // password an installer asks for is typed into their own terminal, not into
-  // a dialog of ours.
-  ipcMain.handle(IPC.ENGINE_RUN_IN_TERMINAL, async (event, { command }: { command: string }) => {
-    // Refuses an empty command, a command carrying a control character (a `\r`
-    // inside the string runs it with nobody pressing Enter), and a $SHELL that
-    // is not installed. Throws with the real reason, which reaches EngineCard's
-    // FieldError beside the button — see session-manager.ts.
-    const checked = prepareRunInTerminal(command);
-    // WHY the folder comes from the calling window's own sessions: the button
-    // lives in Settings, which has no folder of its own, and the project the
-    // user is working in is whatever their live sessions are open on. The
-    // newest one wins; with no session at all (a fresh install setting up its
-    // first engine) createSession falls back to the home folder.
-    let cwd = '';
-    for (const sid of windowRegistry?.sessionsForWindow(event.sender.id) ?? []) {
-      const s = sessionManager.getSession(sid);
-      if (s && s.status !== 'destroyed') cwd = s.cwd;
-    }
-    const info = sessionManager.createSession({
-      name: shellDisplayName(checked.shell),
-      cwd,
-      skipPermissions: false,
-      provider: 'shell',
-      initialCommand: checked.command,
-      // Proof the command went through the validator — createSession refuses a
-      // shell session without it.
-      shellToken: checked.shellToken,
-    });
-    // Same ownership handshake SESSION_CREATE does, and for the same reason:
-    // session-created is forwarded one nextTick later, so without an owner
-    // registered here the new session would appear in the FIRST window instead
-    // of the one whose Settings the user is standing in. A buddy window can't
-    // own a session, so its leader takes it.
-    if (windowRegistry) {
-      let targetId = event.sender.id;
-      if (windowRegistry.getKind(event.sender.id) === 'buddy') {
-        const leader = windowRegistry.getLeaderId();
-        if (leader != null) targetId = leader;
-      }
-      try { windowRegistry.assignSession(info.id, targetId); }
-      catch (e) { log('WARN', 'IPC', 'assignSession failed for the shell session', { error: String(e) }); }
-    }
-    return { sessionId: info.id };
-  });
-  // Faster-engine prerequisites (2026-09-05 §A5). `refresh: true` on purpose:
-  // this channel is only ever called by the card, including its "Check again"
-  // button AFTER the user has run the install command — a cached answer there
-  // would report the software still missing and strand them in the set-up box.
-  ipcMain.handle(IPC.ENGINE_PREREQS, async (_e, { backend }: { backend: string }) => enginePrereqs(backend, { refresh: true }));
-  ipcMain.handle(IPC.MODELS_CURATED, async () => modelManager.curatedList());
-  ipcMain.handle(IPC.MODELS_SEARCH, async (_e, { query }: { query: string }) => modelManager.search(query));
-  ipcMain.handle(IPC.MODELS_QUANTS, async (_e, { repo }: { repo: string }) => modelManager.quants(repo));
-  ipcMain.handle(IPC.MODELS_DOWNLOAD, async (_e, { repo, quant }: { repo: string; quant: any }) => modelManager.download(repo, quant));
-  ipcMain.handle(IPC.MODELS_DOWNLOAD_CANCEL, async (_e, { downloadId }: { downloadId: string }) => { modelManager.cancel(downloadId); return true; });
-  ipcMain.handle(IPC.MODELS_DELETE, async (_e, { id }: { id: string }) => { await engineManager.deleteModel(id); return true; });
-  ipcMain.handle(IPC.MODELS_INSTALLED, async () => engineManager.installedModels());
-  // Resume an interrupted download (2026-08-26). Reads the manifest written
-  // beside the .partial — no Hugging Face round trip, so it works when the
-  // network is the reason the download stopped.
-  ipcMain.handle(IPC.MODELS_RESUME, async (_e, { modelId }: { modelId: string }) => modelManager.resume(modelId));
-  // --- Per-model settings + vision (2026-09-05 local-engine upgrades §C/§E4) ---
-  // Read: the STORED settings, so the dialog can also show "Applies after the
-  // current reply" and the model's last load error, neither of which the user
-  // sets. A model nobody has touched reads as every default.
-  ipcMain.handle(IPC.MODELS_SETTINGS, async (_e, { modelId }: { modelId: string }) => engineManager.modelSettings(modelId));
-  // Write: the value saves at once and the ENGINE is left alone — rewriting the
-  // preset file here would make the router unload the model mid-reply, which is
-  // the one thing this feature promises will not happen. Every rejection
-  // (context too small, an engine option the binary does not know, a bad
-  // toggle) throws with the reason the user needs, and the dialog shows it.
-  ipcMain.handle(IPC.MODELS_SET_SETTINGS, async (_e, { modelId, patch }: { modelId: string; patch: ModelSettingsWrite }) =>
-    engineManager.setModelSettings(modelId, patch ?? {}));
-  // Add vision to a model already on disk. Returns the download id straight
-  // away; the bytes report on the ordinary models:download-progress stream, so
-  // the row's existing progress bar covers it with no second channel.
-  ipcMain.handle(IPC.MODELS_ADD_VISION, async (_e, { modelId }: { modelId: string }) => modelManager.addVision(modelId));
-  ipcMain.handle(IPC.ENDPOINTS_DETECT, async () =>
-    detectEndpoints(fetch, ((await providerRegistry.list()) as any[])));
   // /clear and /compact both truncate or rewrite the JSONL. App.tsx listens
   // to detect compaction completion (pending → COMPACTION_COMPLETE).
   transcriptWatcher.on('transcript-shrink', (payload: any) => {

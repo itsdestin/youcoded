@@ -164,6 +164,22 @@ describe('a phone call that arrives before the sessions are bound waits for them
       expect(await out).toEqual({ reply: true, payload: [{ id: 'a' }] });
     } finally { vi.useRealTimers(); }
   });
+  // WHY (2026-09-30 one-core R3-6, R3-5 review): a request queued during the boot wait whose phone has
+  // disconnected by the time the bind lands must NOT run (a create would make a session nobody asked for).
+  it('skips a queued request whose phone disconnected during the wait, and still runs one whose phone stayed', async () => {
+    vi.useFakeTimers();
+    try {
+      const createSession = vi.fn(async () => ({ id: 'made' }));
+      let connected = true;
+      const gone = serveRemoteChannel(findChannel('session:create')!, { cwd: '/' }, { ...phoneCtx, isConnected: () => connected });
+      const stayed = serveRemoteChannel(findChannel('session:create')!, { cwd: '/' }, { ...phoneCtx, isConnected: () => true });
+      await vi.advanceTimersByTimeAsync(2_000);
+      connected = false; // the first phone drops while waiting
+      bindSessionOps({ createSession } as any);
+      await gone; await stayed;
+      expect(createSession).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
+  });
   it('gives up with the plain sentence after 15 seconds (the computer own door registers after the bind, so it never waits)', async () => {
     vi.useFakeTimers();
     try {

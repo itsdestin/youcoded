@@ -80,6 +80,14 @@ describe('remote-shim — rejecting failures', () => {
     for (const [c, constant] of [['native:get-step-guard', 'NATIVE_GET_STEP_GUARD'], ['native:set-step-guard', 'NATIVE_SET_STEP_GUARD'],
       ['native:get-context-preferences', 'NATIVE_GET_CONTEXT_PREFERENCES'], ['native:set-context-preferences', 'NATIVE_SET_CONTEXT_PREFERENCES']])
       if (nativeEntries.includes(`IPC.${constant}`)) out.add(c);
+    // WHY (2026-09-30 one-core R3-6): the engine and model-manager channels moved into the table too. A table
+    // handler that throws answers { ok:false, error } carrying the failure marker for ANY channel, so each of
+    // these still can fail on the phone's door.
+    const engineEntries = read('../src/main/ipc/engine.ts') + read('../src/main/ipc/models.ts') + read('../src/main/ipc/claude-code.ts');
+    for (const [c, constant] of [['claude-code:install', 'CLAUDE_CODE_INSTALL'], ['engine:run-in-terminal', 'ENGINE_RUN_IN_TERMINAL'],
+      ['engine:set-config', 'ENGINE_SET_CONFIG'], ['engine:prereqs', 'ENGINE_PREREQS'], ['models:settings', 'MODELS_SETTINGS'],
+      ['models:set-settings', 'MODELS_SET_SETTINGS'], ['models:add-vision', 'MODELS_ADD_VISION']])
+      if (engineEntries.includes(`name: IPC.${constant},`)) out.add(c);
     return out;
   }
 
@@ -91,7 +99,7 @@ describe('remote-shim — rejecting failures', () => {
       expect(canFail.has('models:set-settings')).toBe(true);
       expect(canFail.has('engine:set-config')).toBe(true);
       // A channel that responds with no try/catch is genuinely not in the set.
-      expect(canFail.has('engine:status')).toBe(false);
+      expect(canFail.has('platform:get')).toBe(false);
     });
 
     // The membership itself. Pinned exactly: this is the assertion that goes red

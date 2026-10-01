@@ -42,7 +42,9 @@ import { defineChannel, type MainChannelDef } from './channel-def';
 /** What registerIpcHandlers hands over: the shared maps and objects, and the few bodies that lean on
  *  its private state. A phone and the computer's windows reach the same ones. */
 export interface SessionOps {
-  sessionManager: Pick<SessionManager, 'listSessions' | 'sendInput' | 'resizeSession' | 'getSession'>;
+  // WHY createSession too (2026-09-30 one-core R3-6): engine:run-in-terminal opens its plain-shell session through
+  // the same manager, for a window and for a phone.
+  sessionManager: Pick<SessionManager, 'listSessions' | 'sendInput' | 'resizeSession' | 'getSession' | 'createSession'>;
   /** desktop session id -> conversation id (session-state.ts): the ONE copy. */
   sessionIdMap: Map<string, string>;
   nativeHost: NativeSessionHost;
@@ -92,6 +94,13 @@ function untilBound(): Promise<void> {
     const wake = () => { clearTimeout(timer); resolve(); };
     bindWaiters.push(wake);
   });
+}
+/** The bound ops for a handler outside this file that needs them (engine:run-in-terminal): waits for the bind
+ *  like a session entry does, and refuses to run for a phone that has gone. */
+export async function sessionOpsWhenReady(ctx: { isConnected?(): boolean }): Promise<SessionOps> {
+  if (!boundOps) await untilBound();
+  if (ctx.isConnected && !ctx.isConnected()) throw new Error('The phone that asked has disconnected.');
+  return boundOps!;
 }
 function ops(): SessionOps {
   if (!boundOps) throw new Error('Sessions are not ready yet. Try again.');
@@ -438,5 +447,11 @@ const NEEDS_NO_BIND = new Set<string>([IPC.SESSION_HISTORY, IPC.READ_TRANSCRIPT_
  *  calls the handler directly with no await: session:create must claim its window before its first await. */
 export const sessionChannels: MainChannelDef[] = sessionEntries.map((def) => NEEDS_NO_BIND.has(def.name) ? def : ({
   ...def,
-  handler: (payload: any, ctx: any) => (boundOps ? def.handler(payload, ctx) : untilBound().then(() => def.handler(payload, ctx))),
+  handler: (payload: any, ctx: any) => (boundOps ? def.handler(payload, ctx) : untilBound().then(() => {
+    // WHY (2026-09-30 one-core R3-6, R3-5 review): a phone that asked during the boot wait and then
+    // disconnected must not have its request run afterwards (a session create would make a session nobody
+    // asked to see). Its reply would be dropped anyway, so skip the work.
+    if (ctx?.isConnected && !ctx.isConnected()) return undefined;
+    return def.handler(payload, ctx);
+  })),
 }));
