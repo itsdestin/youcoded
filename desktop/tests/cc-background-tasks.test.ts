@@ -111,7 +111,7 @@ const card = (s: ChatState, id = 'toolu_A') => s.get(S)!.toolCalls.get(id)!;
 const toAction = (e: TranscriptEvent) => pageEventToAction(e)!;
 const ev = (line: string) => parseTranscriptLine(line, S);
 function launchAgent(s: ChatState): ChatState {
-  s = d(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: S, uuid: 'u1', toolUseId: 'toolu_A', toolName: 'Agent', toolInput: { description: 'Fetch guidance', prompt: 'go' } } as ChatAction);
+  s = d(s, { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: S, uuid: 'u1', toolUseId: 'toolu_A', toolName: 'Agent', toolInput: { description: 'Fetch guidance', prompt: 'go' } } as ChatAction);
   return d(s, toAction(ev(agentReceipt)[0]));
 }
 
@@ -165,7 +165,7 @@ describe('chatReducer — Claude Code background runs', () => {
   // SendMessage to a finished helper resumes it (159 resumes measured); its
   // next notice names the SendMessage call, not the Agent card.
   const resume = (s: ChatState) => {
-    s = d(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: S, uuid: 'u2', toolUseId: 'toolu_SM', toolName: 'SendMessage', toolInput: { to: 'a3ecf', message: 'keep going' } } as ChatAction);
+    s = d(s, { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: S, uuid: 'u2', toolUseId: 'toolu_SM', toolName: 'SendMessage', toolInput: { to: 'a3ecf', message: 'keep going' } } as ChatAction);
     const line = JSON.stringify({ type: 'user', uuid: 'r9', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_SM', content: 'ok' }] }, toolUseResult: { success: true, message: 'Resuming agent a3ecf', resumedAgentId: 'a3ecf' } });
     return d(s, toAction(ev(line)[0]));
   };

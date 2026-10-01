@@ -29,7 +29,7 @@ function dispatch(state: ChatState, action: ChatAction): ChatState {
  *  ledger write (chat-reducer.ts's SPECIALIST_RUN_CHANGED comment). */
 function seedTaskCard(state: ChatState, toolUseId = TASK_ID): ChatState {
   return dispatch(state, {
-    type: 'TRANSCRIPT_TOOL_USE',
+    type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
     sessionId: SESSION,
     uuid: `uuid-${toolUseId}`,
     toolUseId,
@@ -349,7 +349,7 @@ describe('SPECIALIST_RUN_CHANGED — ask plumbing (pinning existing behavior)', 
     // tool and input. It must reclaim the placeholder in place, not push a
     // second segment.
     state = dispatch(state, {
-      type: 'TRANSCRIPT_TOOL_USE',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
       sessionId: SESSION,
       uuid: 'uuid-child-tool-1',
       toolUseId: 'child-tool-1',
@@ -378,7 +378,7 @@ describe('PERMISSION_REQUEST — a helper ask with no Task card', () => {
   it('gets its own card instead of taking over the parent\'s running Bash', () => {
     let state = initState();
     state = dispatch(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'u-parent-bash',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'u-parent-bash',
       toolUseId: 'parent-bash', toolName: 'Bash', toolInput: { command: 'npm test' },
     });
     state = dispatch(state, {

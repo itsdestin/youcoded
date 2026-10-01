@@ -47,7 +47,7 @@ describe('history paging reducer', () => {
     };
     let st = withSession('s');
     st = chatReducer(st, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: 's', uuid: 'live-use',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: 's', uuid: 'live-use',
       toolUseId: 'live', toolName: 'Bash', toolInput: { command: 'sleep 10' },
     });
     st = chatReducer(st, {
@@ -72,7 +72,7 @@ describe('history paging reducer', () => {
     let st = withSession('s');
     st = chatReducer(st, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: 's', uuid: 'u1', text: 'run it', timestamp: 1 } as any);
     st = chatReducer(st, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: 's', uuid: 'use-1',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: 's', uuid: 'use-1',
       toolUseId: 't1', toolName: 'Bash', toolInput: { command: 'sleep 10' },
     });
     st = chatReducer(st, {

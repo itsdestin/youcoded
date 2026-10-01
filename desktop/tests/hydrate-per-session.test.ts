@@ -182,7 +182,7 @@ describe('what a copy delivers', () => {
   );
 
   it('an older page with tool steps after the hydrate adds no duplicate tool group or turn', () => {
-    const toolUse = (sid: string, uuid: string, id: string): ChatAction => ({ type: 'TRANSCRIPT_TOOL_USE', sessionId: sid, uuid, toolUseId: id, toolName: 'Bash', toolInput: { command: id } });
+    const toolUse = (sid: string, uuid: string, id: string): ChatAction => ({ type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: sid, uuid, toolUseId: id, toolName: 'Bash', toolInput: { command: id } });
     const toolResult = (sid: string, uuid: string, id: string): ChatAction => ({ type: 'TRANSCRIPT_TOOL_RESULT', sessionId: sid, uuid, toolUseId: id, result: 'ok', isError: false } as any);
     const copy = hostCopy([init('s1'), said('s1', 'n-u', 'new'), toolUse('s1', 'n-t', 'tool-new'), toolResult('s1', 'n-r', 'tool-new'), answered('s1', 'n-a', 'done')]);
     let phone = chatReducer(run([init('s1')]), { type: 'HYDRATE_CHAT_STATE', sessions: copy });

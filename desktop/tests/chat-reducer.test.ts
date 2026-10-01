@@ -1207,7 +1207,7 @@ describe('SESSION_MOVED reducer action', () => {
       timestamp: 1000,
     });
     state = dispatch(state, {
-      type: 'TRANSCRIPT_TOOL_USE',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
       sessionId: SESSION,
       uuid: 'u2',
       toolUseId: 'tool-1',
@@ -1511,7 +1511,7 @@ describe('PERMISSION_EXPIRED keeps or settles the card by reason', () => {
 
   it('a kept placeholder stays kept when the real tool-use replaces it, and can still be settled', () => {
     let s = expire(withAsk(), 'hook-closed');
-    s = dispatch(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'u1', toolUseId: 'toolu_1', toolName: 'Bash', toolInput: {} } as ChatAction);
+    s = dispatch(s, { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'u1', toolUseId: 'toolu_1', toolName: 'Bash', toolInput: {} } as ChatAction);
     expect([...s.get(SESSION)!.toolCalls.keys()].filter((k) => k.startsWith('perm-'))).toEqual([]);
     expect(card(s, 'toolu_1')).toMatchObject({ status: 'awaiting-approval', expired: true });
     s = dispatch(s, { type: 'PERMISSION_CARD_RESOLVED', sessionId: SESSION, toolUseId: 'toolu_1' });
@@ -1521,7 +1521,7 @@ describe('PERMISSION_EXPIRED keeps or settles the card by reason', () => {
   it('a re-emitted tool-use does not reset a kept card to running (the send gates must keep holding)', async () => {
     const { hasPendingInteraction } = await import('../src/renderer/state/pty-input-gate');
     let s = expire(withAsk(), 'hook-closed');
-    const use = { type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'u1', toolUseId: 'toolu_1', toolName: 'Bash', toolInput: {} } as ChatAction;
+    const use = { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'u1', toolUseId: 'toolu_1', toolName: 'Bash', toolInput: {} } as ChatAction;
     s = dispatch(dispatch(s, use), use);
     expect(card(s, 'toolu_1')).toMatchObject({ status: 'awaiting-approval', expired: true });
     expect(hasPendingInteraction(s.get(SESSION)!)).toBe(true);
@@ -1529,7 +1529,7 @@ describe('PERMISSION_EXPIRED keeps or settles the card by reason', () => {
 
   it("the tool's own result settles a kept card and clears the flag (answered in the terminal)", () => {
     let s = expire(withAsk(), 'hook-closed');
-    s = dispatch(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'u1', toolUseId: 'toolu_1', toolName: 'Bash', toolInput: {} } as ChatAction);
+    s = dispatch(s, { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'u1', toolUseId: 'toolu_1', toolName: 'Bash', toolInput: {} } as ChatAction);
     const ok = dispatch(s, { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'u2', toolUseId: 'toolu_1', result: 'ok', isError: false } as ChatAction);
     expect(card(ok, 'toolu_1')).toMatchObject({ status: 'complete' });
     expect(card(ok, 'toolu_1').expired).toBeUndefined();

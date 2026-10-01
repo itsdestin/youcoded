@@ -857,12 +857,13 @@ export type ChatAction =
       toolUseId: string;
       toolName: string;
       toolInput: Record<string, unknown>;
-      // The transcript event's own stamp (epoch ms). Optional because the
-      // top-level card never needed it; a CHILD tool row (parentAgentToolUseId
-      // set) carries it onto its segment so a specialist's mid-run note can be
-      // placed among the tool calls by time (chat-reducer.ts
-      // reconcileNoteSegments) instead of at the bottom of the trail.
-      timestamp?: number;
+      // The transcript event's own stamp (epoch ms). REQUIRED so that a producer
+      // that forgets it fails the build: the buddy once dropped it and every
+      // specialist note fell to the tail of its trail there. The top-level card
+      // ignores it; a CHILD tool row (parentAgentToolUseId set) carries it onto its
+      // segment so a specialist's mid-run note can be placed among the tool calls by
+      // time (chat-reducer.ts reconcileNoteSegments).
+      timestamp: number;
       parentAgentToolUseId?: string;
       agentId?: string;
     }

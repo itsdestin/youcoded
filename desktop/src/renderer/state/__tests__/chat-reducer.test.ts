@@ -234,7 +234,7 @@ describe('chatReducer tool card duplication', () => {
   }
 
   const askAction = {
-    type: 'TRANSCRIPT_TOOL_USE' as const,
+    type: 'TRANSCRIPT_TOOL_USE' as const, timestamp: 1,
     sessionId: 'sess-1',
     uuid: 'line-uuid-1',
     toolUseId: 'toolu_ask_1',
@@ -334,7 +334,7 @@ describe('chatReducer permission ask renders the requesting tool input', () => {
     // delivers its tool_result — a window in which it is still a match target.
     let state = initState();
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: 'sess-1', uuid: 'u1',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: 'sess-1', uuid: 'u1',
       toolUseId: 'toolu_ask_1', toolName: 'AskUserQuestion', toolInput: Q1,
     } as any);
     state = chatReducer(state, perm('req-1', Q1) as any);
@@ -361,7 +361,7 @@ describe('chatReducer permission ask renders the requesting tool input', () => {
       type: 'PERMISSION_RESPONDED', sessionId: 'sess-1', requestId: 'req-1',
     } as any);
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: 'sess-1', uuid: 'u1',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: 'sess-1', uuid: 'u1',
       toolUseId: 'toolu_ask_1', toolName: 'AskUserQuestion', toolInput: Q1,
     } as any);
     state = chatReducer(state, {
@@ -385,7 +385,7 @@ describe('chatReducer permission ask renders the requesting tool input', () => {
     } as any);
     // Ask #2's tool_use lands before ask #1's did — different questions.
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: 'sess-1', uuid: 'u2',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: 'sess-1', uuid: 'u2',
       toolUseId: 'toolu_ask_2', toolName: 'AskUserQuestion', toolInput: Q2,
     } as any);
 
@@ -402,7 +402,7 @@ describe('chatReducer permission ask renders the requesting tool input', () => {
     // Bash's name above AskUserQuestion's questions.
     let state = initState();
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: 'sess-1', uuid: 'u1',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: 'sess-1', uuid: 'u1',
       toolUseId: 'toolu_bash_1', toolName: 'Bash', toolInput: { command: 'ls' },
     } as any);
     state = chatReducer(state, perm('req-1', Q1) as any);
@@ -415,7 +415,7 @@ describe('chatReducer permission ask renders the requesting tool input', () => {
     // hook-dispatcher.ts defaults a missing payload.tool_input to `{}`.
     let state = initState();
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: 'sess-1', uuid: 'u1',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: 'sess-1', uuid: 'u1',
       toolUseId: 'toolu_ask_1', toolName: 'AskUserQuestion', toolInput: Q1,
     } as any);
     state = chatReducer(state, {
@@ -432,11 +432,11 @@ describe('chatReducer permission ask renders the requesting tool input', () => {
     // card for ask #2 already exists, the request must bind to THAT card.
     let state = initState();
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: 'sess-1', uuid: 'u1',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: 'sess-1', uuid: 'u1',
       toolUseId: 'toolu_ask_1', toolName: 'AskUserQuestion', toolInput: Q1,
     } as any);
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: 'sess-1', uuid: 'u2',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: 'sess-1', uuid: 'u2',
       toolUseId: 'toolu_ask_2', toolName: 'AskUserQuestion', toolInput: Q2,
     } as any);
     state = chatReducer(state, perm('req-2', Q2) as any);
@@ -696,7 +696,7 @@ describe('chatReducer tool-group collapse semantics (Task 8 / BUG B)', () => {
 
   function toolUse(toolUseId: string, uuid: string, sessionId = SID) {
     return {
-      type: 'TRANSCRIPT_TOOL_USE' as const,
+      type: 'TRANSCRIPT_TOOL_USE' as const, timestamp: 1,
       sessionId,
       uuid,
       toolUseId,
@@ -815,7 +815,7 @@ describe('chatReducer PERMISSION_REQUEST tool identity', () => {
   }
 
   const bashUse = {
-    type: 'TRANSCRIPT_TOOL_USE' as const,
+    type: 'TRANSCRIPT_TOOL_USE' as const, timestamp: 1,
     sessionId: 'sess-1',
     uuid: 'u-bash',
     toolUseId: 'toolu_bash_1',
@@ -880,7 +880,7 @@ describe('chatReducer TRANSCRIPT_REPLAY_COMPLETE', () => {
   it('fails a tool left running by an interrupted transcript', () => {
     let state = initState();
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
       sessionId: 'sess-1',
       uuid: 'u-1',
       toolUseId: 'toolu_1',
@@ -904,7 +904,7 @@ describe('chatReducer TRANSCRIPT_REPLAY_COMPLETE', () => {
   it('leaves a completed replayed tool alone', () => {
     let state = initState();
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
       sessionId: 'sess-1', uuid: 'u-1',
       toolUseId: 'toolu_1', toolName: 'Bash', toolInput: { command: 'ls' },
     } as any);
@@ -932,7 +932,7 @@ describe('chatReducer TRANSCRIPT_REPLAY_COMPLETE on a live session', () => {
   it('leaves a running tool alone when the session is NOT idle', () => {
     let state: ChatState = new Map([['sess-1', createSessionChatState()]]);
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
       sessionId: 'sess-1', uuid: 'u-1',
       toolUseId: 'toolu_1', toolName: 'Bash', toolInput: { command: 'sleep 1000' },
     } as any);
@@ -991,7 +991,7 @@ describe('chatReducer NATIVE_TOOL_PREPARING', () => {
     let state = chatReducer(initState(), prep(2048));
     const groupIdBefore = groupsOf(state)[0].id;
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'u-1',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'u-1',
       toolUseId: 'c1', toolName: 'Write', toolInput: { file_path: 'a.ts', content: 'x' },
     } as any);
 
@@ -1021,7 +1021,7 @@ describe('chatReducer NATIVE_TOOL_PREPARING', () => {
     // result is still coming — the dangling-pair failure the runtime forbids.
     let state = chatReducer(initState(), prep(2048));
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'u-1',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'u-1',
       toolUseId: 'c1', toolName: 'Write', toolInput: { file_path: 'a.ts' },
     } as any);
     state = chatReducer(state, prep(2048, { cleared: true }));
@@ -1035,7 +1035,7 @@ describe('chatReducer NATIVE_TOOL_PREPARING', () => {
     // describe an event that did not happen (Destin, 2026-08-12).
     let state = chatReducer(initState(), prep(2048));
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'u-1',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'u-1',
       toolUseId: 'real-1', toolName: 'Bash', toolInput: { command: 'ls' },
     } as any);
     state = chatReducer(state, {
