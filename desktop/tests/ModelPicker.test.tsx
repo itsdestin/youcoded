@@ -799,3 +799,42 @@ describe('ModelPicker — offers only the models this screen can run', () => {
     expect(screen.getAllByText(/Sonnet/i).length).toBeGreaterThan(0);
   });
 });
+
+/** Review fix: a picker whose choice is saved or run by the COMPUTER (naming model, specialist tiers, switching or resuming a
+ *  native conversation) must keep native models on a phone; only a picker choosing what THIS screen runs hides them. */
+describe('ModelPicker — pickers that choose for the computer keep native models on a phone', () => {
+  const LABEL = 'Nimbus Native One';
+  function bridge(caps = REMOTE_SCREEN_CAPABILITIES) {
+    (globalThis as any).window.claude = {
+      capabilities: caps,
+      providers: {
+        list: vi.fn().mockResolvedValue([{ id: 'cloud', type: 'openrouter', label: 'Cloud', ready: true }]),
+        catalog: vi.fn().mockResolvedValue([{ id: 'nimbus-1', providerId: 'cloud', label: LABEL }]),
+      },
+      models: { onDownloadProgress: () => () => {} },
+    };
+  }
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); delete (window as any).claude; });
+  const search = async (q: string) => fireEvent.change(await screen.findByLabelText('Search all models'), { target: { value: q } });
+
+  it('a native-only picker marked runsOn="host" lists native models on a phone', async () => {
+    bridge();
+    render(<ModelPicker value={null} onSelect={() => {}} includeClaude={false} runsOn="host" defaultOpen layout="inline" />);
+    await search('Nimbus');
+    expect(await screen.findByText(LABEL)).toBeInTheDocument();
+  });
+
+  it('a native-only picker that chooses what THIS screen runs, on a phone, says so in one sentence instead of showing nothing', async () => {
+    bridge();
+    render(<ModelPicker value={null} onSelect={() => {}} includeClaude={false} defaultOpen layout="inline" />);
+    await waitFor(() => expect((window.claude.providers.catalog as any).mock.calls.length).toBeGreaterThan(0));
+    expect(await screen.findByText('These models can only be chosen on your computer.')).toBeInTheDocument();
+    expect(screen.queryByText(/not set up any model providers/)).toBeNull();
+  });
+
+  it('a saved native model this screen does not list shows its friendly name, not the bare id', async () => {
+    bridge();
+    render(<ModelPicker value={{ runtime: 'native', providerId: 'cloud', modelId: 'nimbus-1' }} onSelect={() => {}} />);
+    expect(await screen.findByRole('button', { name: 'Model' })).toHaveTextContent(`${LABEL} · Cloud`);
+  });
+});

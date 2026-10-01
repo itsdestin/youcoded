@@ -1429,8 +1429,8 @@ function scheduleReconnect(token: string): void {
     localStorage.removeItem('youcoded-remote-token');
     // Reconnect to local bridge
     forgetConversationPhase();
-    connect('android-local', false).catch(() => {});
-    import('./platform').then(({ setConnectionMode }) => setConnectionMode('local'));
+    // WHY the mode flips in the .then (R4-1): capabilities change on the local runtime's auth:ok, so the mode changes WITH them, as in disconnectFromHost.
+    connect('android-local', false).then(() => import('./platform')).then(({ setConnectionMode }) => setConnectionMode('local')).catch(() => {});
     return;
   }
 

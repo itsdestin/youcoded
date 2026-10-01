@@ -832,6 +832,18 @@ describe('remote-shim — overlapping connections', () => {
       expect(FakeWebSocket.instances.filter((s) => s.url.startsWith('ws://localhost:'))).toHaveLength(1);
     });
 
+    it('goes back to local mode only once its own runtime has answered, so the mode and the capabilities change together', async () => {
+      await pairThenReconnectRefused('revoked');
+      const { isRemoteMode } = await import('../src/renderer/platform');
+      expect(isRemoteMode()).toBe(true);              // the fallback has started, nothing has answered yet
+      const own = FakeWebSocket.instances.find((w) => w.url.startsWith('ws://localhost:'))!;
+      own.open();
+      own.receive({ type: 'auth:ok', platform: 'android', protocolVersion: 1, capabilities: { terminalTransport: 'raw-bytes', terminalScreenRead: true } });
+      await settle();
+      expect(isRemoteMode()).toBe(false);
+      expect(claude().capabilities).toMatchObject({ terminalTransport: 'raw-bytes', terminalScreenRead: true });
+    });
+
     it('keeps the pairing when the computer only switched remote access off', async () => {
       await pairThenReconnectRefused('no-password-configured');
       expect(store['youcoded-remote-target']).toBe('ws://desk:9900/ws');

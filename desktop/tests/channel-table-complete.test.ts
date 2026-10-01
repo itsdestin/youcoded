@@ -24,23 +24,38 @@ function sources(dir: string): string[] {
 // second `switch` in another file). The scanners below take the file's text, so the self-tests at the bottom can feed
 // them each evasion and prove every one is caught.
 
-/** Names that stand for the Electron ipcMain object in this file: `ipcMain`/`ipc`, a parameter typed `IpcMain…`, and anything assigned from an alias. */
-function ipcAliases(sf: ts.SourceFile): Set<string> {
-  const names = new Set<string>(['ipcMain', 'ipc']);
+/** What stands for the Electron ipcMain object in this file: bare names (`ipcMain`, a parameter typed `IpcMain*`, a variable assigned from an
+ *  alias) and PROPERTY names proven to hold it (`this.bus = ipcMain`, `{ ipc: ipcMain }`, a class field or constructor parameter
+ *  property typed `IpcMain*`). Property names are matched by name inside this one file only, so an unrelated `.on(` object that was
+ *  never assigned ipcMain is not flagged. (R4-1: the first version also treated every object named `ipc` as ipcMain.) */
+function ipcAliases(sf: ts.SourceFile): { names: Set<string>; props: Set<string> } {
+  const names = new Set<string>(['ipcMain']);
+  const props = new Set<string>();
   const isAlias = (e: ts.Expression | undefined): boolean => !!e && ((ts.isIdentifier(e) && names.has(e.text))
-    || (ts.isPropertyAccessExpression(e) && e.name.text === 'ipcMain')
-    || (ts.isParenthesizedExpression(e) && isAlias(e.expression)) || (ts.isAsExpression(e) && isAlias(e.expression)));
-  // Two passes so `const a = ipcMain; const b = a;` resolves whatever order they are written in.
-  for (let pass = 0; pass < 2; pass++) {
+    || (ts.isPropertyAccessExpression(e) && (e.name.text === 'ipcMain' || props.has(e.name.text)))
+    || (ts.isParenthesizedExpression(e) && isAlias(e.expression)) || (ts.isAsExpression(e) && isAlias(e.expression))
+    || (ts.isNonNullExpression(e) && isAlias(e.expression)));
+  const typedIpc = (t: ts.TypeNode | undefined) => !!t && /\bIpcMain\w*\b/.test(t.getText(sf));
+  // Several passes so an alias of an alias resolves whatever order the statements are written in.
+  for (let pass = 0; pass < 3; pass++) {
     const visit = (n: ts.Node) => {
-      if (ts.isParameter(n) && ts.isIdentifier(n.name) && n.type && /\bIpcMain\w*\b/.test(n.type.getText(sf))) names.add(n.name.text);
+      if (ts.isParameter(n) && ts.isIdentifier(n.name) && typedIpc(n.type)) {
+        names.add(n.name.text);
+        if (n.modifiers?.length) props.add(n.name.text); // constructor(private bus: IpcMain) -> this.bus
+      }
       if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && isAlias(n.initializer)) names.add(n.name.text);
-      if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isIdentifier(n.left) && isAlias(n.right)) names.add(n.left.text);
+      if (ts.isPropertyDeclaration(n) && ts.isIdentifier(n.name) && (isAlias(n.initializer) || typedIpc(n.type))) props.add(n.name.text);
+      if (ts.isPropertyAssignment(n) && ts.isIdentifier(n.name) && isAlias(n.initializer)) props.add(n.name.text); // { ipc: ipcMain }
+      if (ts.isShorthandPropertyAssignment(n) && names.has(n.name.text)) props.add(n.name.text);                   // { ipcMain }
+      if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken && isAlias(n.right)) {
+        if (ts.isIdentifier(n.left)) names.add(n.left.text);
+        else if (ts.isPropertyAccessExpression(n.left)) props.add(n.left.name.text);                               // this.x = ipcMain
+      }
       ts.forEachChild(n, visit);
     };
     visit(sf);
   }
-  return names;
+  return { names, props };
 }
 
 const REGISTERING = new Set(['handle', 'handleOnce', 'on', 'once', 'addListener', 'prependListener', 'prependOnceListener']);
@@ -51,8 +66,10 @@ export function scanIpcRegistrations(file: string, text: string): string[] {
   if (!/ipc|IpcMain/i.test(text)) return [];
   const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
   const aliases = ipcAliases(sf);
-  const isIpc = (e: ts.Expression): boolean => (ts.isIdentifier(e) && aliases.has(e.text))
-    || (ts.isPropertyAccessExpression(e) && e.name.text === 'ipcMain') || (ts.isParenthesizedExpression(e) && isIpc(e.expression));
+  const isIpc = (e: ts.Expression): boolean => (ts.isIdentifier(e) && aliases.names.has(e.text))
+    || (ts.isPropertyAccessExpression(e) && (e.name.text === 'ipcMain' || aliases.props.has(e.name.text)))
+    || (ts.isParenthesizedExpression(e) && isIpc(e.expression)) || (ts.isNonNullExpression(e) && isIpc(e.expression))
+    || (ts.isAsExpression(e) && isIpc(e.expression));
   const out: string[] = [];
   const visit = (n: ts.Node) => {
     if (ts.isCallExpression(n)) {
@@ -61,6 +78,8 @@ export function scanIpcRegistrations(file: string, text: string): string[] {
         : ts.isElementAccessExpression(callee) && ts.isStringLiteralLike(callee.argumentExpression) ? callee.argumentExpression.text : '';
       const recv = ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee) ? callee.expression : undefined;
       if (recv && REGISTERING.has(method) && isIpc(recv) && n.arguments.length >= 2) out.push(n.arguments[0].getText(sf));
+      // `ipcMain[m]('x:y', f)`: a method name chosen at run time can be any registering method.
+      if (recv && ts.isElementAccessExpression(callee) && !ts.isStringLiteralLike(callee.argumentExpression) && isIpc(recv)) out.push('<computed method>');
       // `ipcMain.handle.bind(ipcMain)(...)`-style: a registering method detached then called.
       if (recv && ['bind', 'call', 'apply'].includes(method) && ts.isPropertyAccessExpression(recv) && REGISTERING.has(recv.name.text) && isIpc(recv.expression)) out.push(`<detached ${recv.name.text}>`);
     }
@@ -77,11 +96,18 @@ export function scanIpcRegistrations(file: string, text: string): string[] {
   return out;
 }
 
-/** What a `case` label looks like when it names a channel: a string with a colon (`'x:y'`), or anything that is not a plain literal and
- *  not a bare constant (`IPC.X`, a template, a call, a computed expression). Numbers and bare identifiers (enum/numeric tags) are not channels. */
-function channelShapedLabel(e: ts.Expression): string | null {
+/** What a `case` label looks like when it names a channel: a string with a colon (`'x:y'`); anything that is not a plain literal (`IPC.X`, a
+ *  template, a call, a computed expression); an identifier that holds such a string in this file (`const CH = 'x:y'; case CH:`); or an
+ *  IMPORTED identifier (its value lives elsewhere, so it cannot be shown to be harmless). Numbers and local numeric/enum tags are not
+ *  channels. */
+function channelShapedLabel(e: ts.Expression, ctx: { strings: Map<string, string>; imported: Set<string> }): string | null {
   if (ts.isStringLiteralLike(e)) return e.text.includes(':') ? e.text : null;
-  if (ts.isNumericLiteral(e) || ts.isIdentifier(e) || (ts.isPrefixUnaryExpression(e) && ts.isNumericLiteral(e.operand))) return null;
+  if (ts.isNumericLiteral(e) || (ts.isPrefixUnaryExpression(e) && ts.isNumericLiteral(e.operand))) return null;
+  if (ts.isIdentifier(e)) {
+    const v = ctx.strings.get(e.text);
+    if (v !== undefined) return v.includes(':') ? `<constant ${e.text} = ${v}>` : null;
+    return ctx.imported.has(e.text) ? `<imported ${e.text}>` : null;
+  }
   return `<computed ${e.getText().slice(0, 40)}>`;
 }
 
@@ -90,10 +116,17 @@ function channelShapedLabel(e: ts.Expression): string | null {
 export function scanChannelCases(file: string, text: string, strict = false): string[] {
   if (!/\bcase\b/.test(text)) return [];
   const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+  const ctx = { strings: new Map<string, string>(), imported: new Set<string>() };
+  const collect = (n: ts.Node) => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer && ts.isStringLiteralLike(n.initializer)) ctx.strings.set(n.name.text, n.initializer.text);
+    if (ts.isImportSpecifier(n)) ctx.imported.add(n.name.text);
+    ts.forEachChild(n, collect);
+  };
+  collect(sf);
   const out: string[] = [];
   const visit = (n: ts.Node) => {
     if (ts.isCaseClause(n)) {
-      const label = strict ? (ts.isStringLiteralLike(n.expression) ? n.expression.text : `<computed ${n.expression.getText(sf).slice(0, 40)}>`) : channelShapedLabel(n.expression);
+      const label = strict ? (ts.isStringLiteralLike(n.expression) ? n.expression.text : `<computed ${n.expression.getText(sf).slice(0, 40)}>`) : channelShapedLabel(n.expression, ctx);
       if (label !== null) out.push(label);
     }
     ts.forEachChild(n, visit);
@@ -105,7 +138,7 @@ export function scanChannelCases(file: string, text: string, strict = false): st
 const rel = (file: string) => path.relative(root, file).split(path.sep).join('/');
 
 // WHY the scan runs ONCE and is warmed in beforeAll under its own budget (test-suite-hygiene: a file's one-time cost never lands inside
-// the first test): it parses every file of desktop/src/main, which takes seconds, and five tests read the result.
+// the first test): it parses every file of desktop/src/main (measured about 1 s on a quiet machine, over 30 s under full-suite load), and five tests read the result.
 const SCAN_BUDGET_MS = 90_000;
 let scanned: { registrations: string[]; cases: string[] } | null = null;
 function scan() {
@@ -188,6 +221,22 @@ describe('the scanners catch every way round the guard', () => {
     expect(regs(`const { handle } = ipcMain; handle('a:b', f);`)).toEqual(['<destructured registering method>']);
     expect(regs(`const reg = ipcMain.handle; reg('a:b', f);`)).toEqual(['<detached handle>']);
     expect(regs(`ipcMain.handle.bind(ipcMain)('a:b', f);`)).toEqual(['<detached handle>']);
+  });
+  it('catches a property alias (this.x = ipcMain, { ipc: ipcMain }, a typed field or constructor property) and a computed method name', () => {
+    expect(regs(`class A { go() { this.bus = ipcMain; this.bus.handle('a:b', f); } }`)).toEqual([`'a:b'`]);
+    expect(regs(`const deps = { ipc: ipcMain }; deps.ipc.on('a:b', f);`)).toEqual([`'a:b'`]);
+    expect(regs(`class A { private bus: IpcMain; go() { this.bus.once('a:b', f); } }`)).toEqual([`'a:b'`]);
+    expect(regs(`class A { constructor(private bus: IpcMain) {} go() { this.bus.handle('a:b', f); } }`)).toEqual([`'a:b'`]);
+    expect(regs(`const m = 'handle'; ipcMain[m]('a:b', f);`)).toEqual(['<computed method>']);
+    expect(regs(`(ipcMain as any)[m]('a:b', f);`)).toEqual(['<computed method>']);
+  });
+  it('does not flag an unrelated object that happens to be called ipc or bus', () => {
+    expect(regs(`const ipc = makeSocket(); ipc.on('data', f); this.bus.on('x', f);`)).toEqual([]);
+  });
+  it('catches an identifier case label that holds a channel string, or is imported, outside the phone door', () => {
+    expect(scanChannelCases('x.ts', `const CH = 'a:b'; switch (t) { case CH: break; }`)).toEqual(['<constant CH = a:b>']);
+    expect(scanChannelCases('x.ts', `import { CH } from './c'; switch (t) { case CH: break; }`)).toEqual(['<imported CH>']);
+    expect(scanChannelCases('x.ts', `const T_BOOL = 7; switch (t) { case T_BOOL: break; }`)).toEqual([]);
   });
   it('does not flag cleanup or unrelated receivers', () => {
     expect(regs(`ipcMain.off('a:b', f); ipcMain.removeHandler('a:b'); emitter.on('x', f); window.on('closed', f);`)).toEqual([]);

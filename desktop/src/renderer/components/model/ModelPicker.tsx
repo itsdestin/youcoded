@@ -271,6 +271,7 @@ export default function ModelPicker({
   onSelect,
   includeClaude = true,
   includeNative: includeNativeWanted = true,
+  runsOn = 'this-screen',
   onManageModels,
   prefill,
   defaultOpen = false,
@@ -298,6 +299,11 @@ export default function ModelPicker({
    *  which is the create-time case. */
   includeClaude?: boolean;
   includeNative?: boolean;
+  /** WHERE the chosen model will run. 'this-screen' (the default: new-session forms, the default-model row) = the app's own
+   *  engine on THIS screen, so native models are hidden on a screen that cannot run it. 'host' = the choice is saved or
+   *  executed by the computer (naming model, specialist tiers, switching or resuming a native conversation that lives on the
+   *  computer), so a phone may pick native models too. Before this prop the filter hid them from those pickers and left them empty. */
+  runsOn?: 'this-screen' | 'host';
   /** Opens Settings -> Model Providers. Mirrors the project picker's
    *  "Manage projects..." footer (FolderSwitcher.tsx:295); the footer is
    *  omitted entirely on surfaces with nowhere to send the user. */
@@ -337,7 +343,9 @@ export default function ModelPicker({
   // engine runs only where the screen's `nativeSessions` capability says so. Over remote access (and on Android) the picker used
   // to list the computer's native models anyway; choosing one saved a default that quietly did nothing there, and "Add provider"
   // led to pages that screen hides. A screen that cannot run them is no longer offered them. The computer's own window is unchanged.
-  const includeNative = includeNativeWanted && getCapabilities().nativeSessions;
+  const includeNative = includeNativeWanted && (runsOn === 'host' || getCapabilities().nativeSessions);
+  // Native models were asked for but this screen cannot run them: a picker with nothing else in it says so instead of looking broken.
+  const nativeHiddenHere = includeNativeWanted && !includeNative;
   const [providers, setProviders] = useState<ProviderRow[]>([]);
   const [catalog, setCatalog] = useState<CatalogRow[]>([]);
   // Claude Code's LIVE sign-in (2026-09-09). Unknown and not-yet-answered both
@@ -744,8 +752,12 @@ export default function ModelPicker({
     if (hit) return `${hit.label} · ${hit.sourceLabel}`;
     // A binding whose catalog row hasn't loaded (or a typed freeform id) still
     // needs a truthful label rather than falling back to "Choose a model…".
-    return value.runtime === 'claude' ? value.alias : value.modelId;
-  }, [value, entries, emptyLabel]);
+    if (value.runtime === 'claude') return value.alias;
+    // A saved native model this screen does not list (hidden on a phone) still shows its friendly name when the catalogue knows it.
+    const row = catalog.find((m) => m.id === value.modelId && m.providerId === value.providerId);
+    const prov = providers.find((p) => p.id === value.providerId);
+    return row ? `${row.label}${prov ? ` · ${prov.label}` : ''}` : value.modelId;
+  }, [value, entries, emptyLabel, catalog, providers]);
 
   const pick = (c: ModelChoice, label?: { provider: string; model: string }) => { onSelect(c, label); setOpen(false); setFilterOpen(false); };
 
@@ -973,7 +985,12 @@ export default function ModelPicker({
                       <ErrorState variant="inline" message={`Couldn't load your models: ${loadError}`} onRetry={() => setReload((n) => n + 1)} />
                     </div>
                   )}
-                  {!anyPickable && !loadError && (
+                  {!anyPickable && !loadError && nativeHiddenHere && !includeClaude && (
+                    <div className="px-4 py-4 text-center">
+                      <p className="text-xs text-fg-muted leading-relaxed">These models can only be chosen on your computer.</p>
+                    </div>
+                  )}
+                  {!anyPickable && !loadError && !(nativeHiddenHere && !includeClaude) && (
                     <div className="px-4 py-4 text-center space-y-2.5">
                       <p className="text-xs text-fg-muted leading-relaxed">You have not set up any model providers.</p>
                       <Button

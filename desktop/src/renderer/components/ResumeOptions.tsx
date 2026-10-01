@@ -136,6 +136,7 @@ export function ResumeOptionsForm({ session: s, options, onResume, flush, allowN
             onSelect={(c) => options.select(s, c)}
             includeClaude={s.provider !== 'native'}
             includeNative={s.provider === 'native'}
+            runsOn="host" // resuming runs on the computer, which has the engine
             prefill={s.lastUsedModel}
             onManageModels={() => window.dispatchEvent(new CustomEvent('youcoded:open-model-providers'))}
           />
