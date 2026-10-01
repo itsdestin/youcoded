@@ -16,6 +16,7 @@
 // change the address and the old approval no longer matches, so the page asks
 // again (deck S-change). Renaming the id alone does not re-ask.
 import type { KeyScheme, PageAccess, PageConnection } from '../../shared/pages-types';
+import { cleanDeviceAddress, urlMatchesDevice } from '../../shared/page-device-address';
 
 /** Where a key connection's key is attached when the manifest does not say.
  *  A header is the common case and the safer one: a key in a query string is
@@ -30,7 +31,7 @@ export interface KeyPlacement { in: 'header' | 'query'; param: string; scheme: K
  *  WHY a scheme at all: a bare key in an Authorization header is rejected by
  *  most services, so without it the commonest kind of key never worked. */
 export function keyPlacement(c: PageConnection): KeyPlacement {
-  if (c.kind !== 'key') return { ...DEFAULT_KEY_PLACEMENT };
+  if (c.kind !== 'key' && c.kind !== 'device') return { ...DEFAULT_KEY_PLACEMENT };
   const inQuery = !!c.keyParam && c.keyIn === 'query';
   const param = c.keyParam ?? DEFAULT_KEY_PLACEMENT.param;
   // A query parameter never carries a word; a header takes the author's word,
@@ -86,6 +87,15 @@ function cleanParam(raw: unknown): string | null {
   const name = raw.trim().toLowerCase();
   if (!name || name.length > 64 || !/^[a-z0-9!#$%&'*+.^_`|~-]+$/.test(name)) return null;
   return name;
+}
+
+/** A path on a device where its key is made (Home Assistant:
+ *  `/profile/security`). Plain path characters only, so the Open button can
+ *  never be pointed anywhere but the allowed device. */
+function cleanKeyPage(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const p = raw.trim();
+  return /^(\/[A-Za-z0-9_.-]+)+\/?$/.test(p) && p.length <= 120 && !p.includes('..') ? p : undefined;
 }
 
 function cleanSteps(raw: unknown): { steps: string[] } | undefined {
@@ -156,6 +166,23 @@ export function parseConnections(raw: unknown): PageConnection[] {
         }
         break;
       }
+      // Home-device deck (2026-10-01). The address is the page's SUGGESTION:
+      // the person may change it on the approval card, and the approval records
+      // what they allowed. A suggestion that is not a home address is dropped,
+      // so the card never offers a website in a device's clothing.
+      case 'device': {
+        const address = cleanDeviceAddress(o.address);
+        const service = typeof o.service === 'string' ? o.service.trim().slice(0, MAX_SERVICE) : '';
+        if (address && service) {
+          c = { id, kind: 'device', service, address, access: cleanAccess(o.access), needsKey: o.needsKey !== false, keyHelp: cleanSteps(o.keyHelp) };
+          const keyPage = cleanKeyPage(o.keyPage);
+          if (keyPage) c.keyPage = keyPage;
+          const param = cleanParam(o.keyParam);
+          if (param) { c.keyIn = o.keyIn === 'query' ? 'query' : 'header'; c.keyParam = param; }
+          if (o.keyScheme === 'bearer' || o.keyScheme === 'token' || o.keyScheme === 'none') c.keyScheme = o.keyScheme;
+        }
+        break;
+      }
       default: break;
     }
     if (!c) continue;
@@ -164,7 +191,9 @@ export function parseConnections(raw: unknown): PageConnection[] {
     if (out.length >= MAX_CONNECTIONS) break;
   }
   const hasOpen = out.some((c) => c.kind === 'open');
-  const hasCredential = out.some((c) => c.kind === 'key' || c.kind === 'youcoded' || c.kind === 'github');
+  // A device counts as credentialled even without a key: a page that could
+  // read the home AND send anywhere is the bridge the block exists to stop.
+  const hasCredential = out.some((c) => c.kind === 'key' || c.kind === 'youcoded' || c.kind === 'github' || c.kind === 'device');
   if (hasOpen && hasCredential) return [];
   return out;
 }
@@ -191,15 +220,41 @@ export function fingerprint(c: PageConnection): string {
         ? '' : `|${p.in}:${p.param}`;
       return `key|${c.service}|${c.address}|${c.access}${moved}`;
     }
+    // No address: the person chooses it, and it is recorded beside the
+    // approval (see withApprovedAddress). A page whose author later suggests a
+    // different address therefore does not re-ask — the one allowed stands.
+    // Placement and needsKey are in it because both change what is sent.
+    case 'device': {
+      const p = keyPlacement(c);
+      const moved = p.in === DEFAULT_KEY_PLACEMENT.in && p.param === DEFAULT_KEY_PLACEMENT.param ? '' : `|${p.in}:${p.param}`;
+      return `device|${c.service}|${c.access}|${c.needsKey ? 'key' : 'nokey'}${moved}`;
+    }
   }
+}
+
+/** A device connection carries the address the person ALLOWED once approved,
+ *  never the manifest's suggestion. Every reader that decides what a page may
+ *  reach (the listing, approve, the fetch door) goes through this, so the
+ *  suggestion can never be what is actually contacted. An approval with no
+ *  usable address leaves the suggestion in place — and fetch() refuses a
+ *  device that has none recorded. */
+export function withApprovedAddress(c: PageConnection, approvedAddress: string | undefined): PageConnection {
+  if (c.kind !== 'device' || !approvedAddress) return c;
+  const address = cleanDeviceAddress(approvedAddress);
+  return address ? { ...c, address } : c;
 }
 
 /** Does this connection cover that hostname? EXACT match, never a suffix: a
  *  suffix test would let `api.example.com.attacker.test` pass for
  *  `api.example.com`. `open` covers anything the network guard allows. */
-export function covers(c: PageConnection, hostname: string): boolean {
+export function covers(c: PageConnection, target: string | URL): boolean {
+  const hostname = typeof target === 'string' ? target : target.hostname;
   const host = hostname.trim().replace(/\.$/, '').toLowerCase();
   switch (c.kind) {
+    // A device is host AND port: another service on the same box is not the
+    // device that was allowed. A bare hostname (no URL) cannot prove its port,
+    // so it never matches.
+    case 'device': return typeof target !== 'string' && urlMatchesDevice(target, c.address);
     case 'open': return true;
     case 'public': return c.address === host;
     case 'key': return c.address === host;
@@ -227,7 +282,7 @@ export function methodAllowed(c: PageConnection, method: string, pathname = '/')
     return (c.writePaths ?? []).some((p) => pathname === p || pathname.startsWith(p + '/'));
   }
   const lookupOnly = c.kind === 'public'
-    || ((c.kind === 'key' || c.kind === 'github') && c.access === 'lookup');
+    || ((c.kind === 'key' || c.kind === 'github' || c.kind === 'device') && c.access === 'lookup');
   if (!lookupOnly) return ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(m);
   return m === 'GET' || m === 'HEAD';
 }

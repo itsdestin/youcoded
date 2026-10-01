@@ -5396,9 +5396,9 @@ export function registerIpcHandlers(
   ipcMain.handle(IPC.PAGES_SET_DATA, async (_e, id: string, data: unknown) => pagesService.store.setData(String(id ?? ''), data));
   // Phase 2. `remote: false` here and `true` in remote-server.ts is the whole
   // of "no keys on the phone" (design review 1, finding 13): a desktop window
-  // may paste a key, a remote caller may only reuse one already saved.
-  ipcMain.handle(IPC.PAGES_APPROVE, async (_e, id: string, keys: Record<string, string>) =>
-    pagesService.approve(String(id ?? ''), keys ?? {}, { remote: false }));
+  // may paste a key, a remote caller may only reuse one already saved. `addresses`: per device line (re-checked in main).
+  ipcMain.handle(IPC.PAGES_APPROVE, async (_e, id: string, keys: Record<string, string>, addresses?: Record<string, string>) =>
+    pagesService.approve(String(id ?? ''), keys ?? {}, { remote: false, addresses: addresses ?? {} }));
   ipcMain.handle(IPC.PAGES_REMOVE_CONNECTION, async (_e, id: string, connectionId: string) =>
     pagesService.removeConnection(String(id ?? ''), String(connectionId ?? '')));
   ipcMain.handle(IPC.PAGES_REFRESH, async (_e, id: string) => pagesService.refresh(String(id ?? '')));

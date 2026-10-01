@@ -2572,7 +2572,7 @@ export function installShim(): void {
       // Phase 2. Approving from here may only REUSE a key already saved on the
       // desktop; the host refuses pasted key material from a remote caller, so
       // the rule holds even if this file is bypassed entirely.
-      approve: (id: string, keys: Record<string, string>) => invoke('pages:approve', { id, keys }),
+      approve: (id: string, keys: Record<string, string>, addresses?: Record<string, string>) => invoke('pages:approve', { id, keys, addresses }),
       removeConnection: (id: string, connectionId: string) => invoke('pages:remove-connection', { id, connectionId }),
       refresh: (id: string) => invoke('pages:refresh', { id }),
       savedKeys: () => invoke('pages:saved-keys'),

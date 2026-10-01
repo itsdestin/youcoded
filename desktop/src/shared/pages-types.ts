@@ -65,15 +65,40 @@ export type PageConnection =
   | { id: string; kind: 'github'; access: PageAccess }
   /** The whole internet — its own blunt approval, never combined with a key
    *  or sign-in on the same page (follow-up deck Q-open, Q-open-mix). */
-  | { id: string; kind: 'open' };
+  | { id: string; kind: 'open' }
+  /** ONE device in the home or on the person's Tailscale network, such as Home
+   *  Assistant (home-device questions deck, 2026-10-01). The page SUGGESTS an
+   *  address; the person may change it on the approval card, and what they
+   *  allow is what the app uses (Q-address). Only home and Tailscale addresses
+   *  are accepted (S-only-home, `page-device-address.ts`). Never combined with
+   *  `open` on one page, like every other credentialled kind. */
+  | {
+      id: string; kind: 'device'; service: string;
+      /** `host` or `host:port`. Before approval: the page's suggestion. After:
+       *  the address the person allowed, which may differ from the manifest. */
+      address: string;
+      access: PageAccess;
+      /** False for a device that needs no key (most home devices do). */
+      needsKey: boolean;
+      keyHelp?: { steps: string[] };
+      /** A path on the device where its key is made (Home Assistant:
+       *  `/profile/security`). The key step offers a button that opens it in
+       *  the browser, so the person does not have to find it. */
+      keyPage?: string;
+      keyIn?: 'header' | 'query';
+      keyParam?: string;
+      keyScheme?: KeyScheme;
+    };
 
 /** A connection as the person sees it on one page. */
 export type PageConnectionStatus = PageConnection & {
   /** False for a line added since the last approval — the page pauses and the
    *  approval screen marks just this line New (deck S-change). */
   approved: boolean;
-  /** `key` only: a key for this service is already saved, so the approval
-   *  offers it instead of asking again (deck Q-key-reuse). */
+  /** `key` and `device`: a key for this service is already saved, so the
+   *  approval offers it instead of asking again (deck Q-key-reuse). For a
+   *  device it is the key saved for the SUGGESTED address; a changed address
+   *  asks for a key again, because keys are kept per service AND address. */
   savedKey?: boolean;
 };
 
@@ -103,6 +128,11 @@ export interface PageFetchRequest {
   /** Only Accept, Accept-Language and Content-Type survive. */
   headers?: Record<string, string>;
   body?: string;
+  /** `picture`: answer an image as a `data:` link the page can put straight
+   *  into an <img> (camera snapshots — home-device deck, Q-scope). Refused for
+   *  anything that is not an image, so it cannot become a way to carry other
+   *  bytes past the text redaction. Default: text. */
+  as?: 'text' | 'picture';
 }
 
 type PageFetchRefusal =
@@ -181,9 +211,11 @@ export interface PagesBridge {
    *  unsubscribe. */
   onChanged: (cb: (pages: PageSummary[]) => void) => () => void;
   // Phase 2 — workbench-only until the screens are approved (mock-only.ts).
-  /** Approves every unapproved line. `keys` carries a pasted key per `key`
-   *  connection id, or 'saved' to use the one already kept. */
-  approve?: (id: string, keys: Record<string, string>) => Promise<PageApproveResult>;
+  /** Approves every unapproved line. `keys` carries a pasted key per `key` or
+   *  `device` connection id, or 'saved' to use the one already kept.
+   *  `addresses` carries the address the person allowed per `device` id; main
+   *  re-checks it is a home address before recording anything. */
+  approve?: (id: string, keys: Record<string, string>, addresses?: Record<string, string>) => Promise<PageApproveResult>;
   /** Stops future use of one connection; the page asks again next time. */
   removeConnection?: (id: string, connectionId: string) => Promise<PageSummary[]>;
   /** Fetch fresh information now (the band's refresh button). */

@@ -9,7 +9,8 @@
 import path from 'node:path';
 import chokidar, { type FSWatcher } from 'chokidar';
 import { PagesStore, PAGES_DIR, isUnderPagesDir, type PagesStoreDeps } from './pages-store';
-import { applyScheme, fingerprint, keyPlacement } from './page-connections';
+import { applyScheme, fingerprint, keyPlacement, withApprovedAddress } from './page-connections';
+import { cleanDeviceAddress } from '../../shared/page-device-address';
 import { hashHtml, savedKeyId, splitSavedKeyId, type PageApproval } from './connections-store';
 import { PageRateGate, performPageFetch, type PageCredential } from './page-fetch';
 import type { ExternalChangeEvent } from '../artifacts/project-watcher';
@@ -140,7 +141,7 @@ class PagesService {
    * written and a sentence the card can show (finding 11). Recording the
    * approval first would leave a page marked connected with no key behind it.
    */
-  async approve(id: string, keys: Record<string, string>, opts: { remote: boolean }): Promise<PageApproveResult> {
+  async approve(id: string, keys: Record<string, string>, opts: { remote: boolean; addresses?: Record<string, string> }): Promise<PageApproveResult> {
     const store = this.deps.connections;
     if (!store) return { ok: false, message: 'Page connections are not available on this computer.' };
     const info = await this.store.connectionsOf(id);
@@ -150,7 +151,18 @@ class PagesService {
     let recorded: Record<string, PageApproval>;
     try { recorded = await store.approvalsFor(pageKey); }
     catch (e) { return { ok: false, message: messageOf(e) }; }
-    const waiting = info.connections.filter((c) => recorded[c.id]?.fingerprint !== fingerprint(c));
+    // A device line waiting for a yes takes the address the person allowed
+    // (home-device deck, Q-address), re-checked here because the card's check
+    // is only a courtesy: a crafted message must not record a website.
+    const waiting: PageConnection[] = [];
+    for (const c of info.connections) {
+      if (recorded[c.id]?.fingerprint === fingerprint(c)) continue;
+      if (c.kind !== 'device') { waiting.push(c); continue; }
+      const raw = opts.addresses?.[c.id];
+      const address = raw === undefined ? c.address : cleanDeviceAddress(raw);
+      if (!address) return { ok: false, message: `${String(raw)} is not an address inside your home or Tailscale network, so it cannot be allowed.` };
+      waiting.push({ ...c, address });
+    }
     if (waiting.length === 0) {
       // Nothing waits for a yes, so this is the person dismissing "code changed
       // since you allowed this" (deck 3, Q-code-change): the current code
@@ -170,7 +182,7 @@ class PagesService {
     }
 
     for (const c of waiting) {
-      if (c.kind !== 'key') continue;
+      if (c.kind !== 'key' && !(c.kind === 'device' && c.needsKey)) continue;
       const typed = (keys?.[c.id] ?? '').trim();
       const reuseSaved = typed === '' || typed === 'saved';
       if (!reuseSaved && opts.remote) return { ok: false, message: NO_KEYS_FROM_REMOTE };
@@ -188,7 +200,9 @@ class PagesService {
     const at = new Date().toISOString();
     const htmlHash = hashHtml(info.html);
     const fresh: Record<string, PageApproval> = {};
-    for (const c of waiting) fresh[c.id] = { fingerprint: fingerprint(c), approvedAt: at, htmlHash };
+    for (const c of waiting) {
+      fresh[c.id] = { fingerprint: fingerprint(c), approvedAt: at, htmlHash, ...(c.kind === 'device' ? { address: c.address } : {}) };
+    }
     try { await store.recordApprovals(pageKey, fresh); }
     catch (e) { return { ok: false, message: messageOf(e) }; }
     const pages = await this.listAndWatch();
@@ -233,7 +247,7 @@ class PagesService {
       out.push({
         ...parts,
         usedBy: pages
-          .filter((p) => (p.connections ?? []).some((c) => c.kind === 'key' && c.approved && savedKeyId(c.service, c.address) === id))
+          .filter((p) => (p.connections ?? []).some((c) => (c.kind === 'key' || c.kind === 'device') && c.approved && savedKeyId(c.service, c.address) === id))
           .map((p) => ({ id: p.id, name: p.name })),
       });
     }
@@ -247,7 +261,7 @@ class PagesService {
     // Every page that stood on this key is paused now, so its band is stale.
     // Read that list BEFORE the delete, while the approvals still say who.
     const affected = before
-      .filter((p) => (p.connections ?? []).some((c) => c.kind === 'key' && c.service === service && c.address === address))
+      .filter((p) => (p.connections ?? []).some((c) => (c.kind === 'key' || c.kind === 'device') && c.service === service && c.address === address))
       .map((p) => p.id);
     await this.deps.connections?.deleteSavedKey(service, address).catch(() => { /* nothing saved under that name */ });
     for (const id of affected) this.freshness.delete(id);
@@ -270,13 +284,24 @@ class PagesService {
         return { ok: false, reason: 'not-approved', message: 'This page is no longer in your library.' };
       }
       let approved: Record<string, string> = {};
+      let records: Record<string, PageApproval> = {};
       try {
-        const records = await store.approvalsFor(pageKey);
+        records = await store.approvalsFor(pageKey);
         approved = Object.fromEntries(Object.entries(records).map(([k, v]) => [k, v.fingerprint]));
       } catch (e) { return { ok: false, reason: 'not-approved', message: messageOf(e) }; }
 
+      // A device is reached ONLY at the address the person allowed. One with
+      // no recorded address (an approval from before addresses were kept, or a
+      // hand-edited file) is dropped from the list, so nothing matches it and
+      // the request is refused as not allowed — never sent to the suggestion.
+      const connections = info.connections.flatMap((c) => {
+        if (c.kind !== 'device') return [c];
+        const address = records[c.id]?.address;
+        return address ? [withApprovedAddress(c, address)] : [];
+      });
+
       const result = await performPageFetch(request, {
-        connections: info.connections,
+        connections,
         approved,
         credential: (c) => this.credentialFor(c),
         // guardedFetch owns the 30s deadline; this is only the handle it needs.
@@ -310,8 +335,11 @@ class PagesService {
       case 'public':
       case 'open':
         return null;
+      case 'device':
       case 'key': {
-        if (!store) return null;
+        // A keyed device is a saved key at the ALLOWED address (c.address is
+        // already the approved one by the time the door asks).
+        if (!store || (c.kind === 'device' && !c.needsKey)) return null;
         const record = await store.savedKey(c.service, c.address);
         if (!record) return null;
         const value = await store.keyValue(record).catch(() => null);
@@ -347,7 +375,7 @@ class PagesService {
     for (const p of pages) {
       const key = await this.store.approvalKeyFor(p.id);
       if (key) livePageKeys.add(key);
-      for (const c of p.connections ?? []) if (c.kind === 'key') usedKeyIds.add(savedKeyId(c.service, c.address));
+      for (const c of p.connections ?? []) if (c.kind === 'key' || c.kind === 'device') usedKeyIds.add(savedKeyId(c.service, c.address));
     }
     await store.prune(livePageKeys, usedKeyIds).catch(() => { /* housekeeping, never a user-visible failure */ });
   }

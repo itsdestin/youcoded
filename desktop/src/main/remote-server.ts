@@ -2272,7 +2272,7 @@ export class RemoteServer {
       // key already saved on this computer is still allowed. pages:fetch runs
       // HERE, with this computer's credential; only the redacted answer travels.
       case 'pages:approve': {
-        try { this.respond(client.ws, type, id, await getPagesService()?.approve(String(payload?.id ?? ''), (payload?.keys ?? {}) as Record<string, string>, { remote: true }) ?? { ok: false, message: 'Pages are not available on this host.' }); }
+        try { this.respond(client.ws, type, id, await getPagesService()?.approve(String(payload?.id ?? ''), (payload?.keys ?? {}) as Record<string, string>, { remote: true, addresses: (payload?.addresses ?? {}) as Record<string, string> }) ?? { ok: false, message: 'Pages are not available on this host.' }); }
         catch (err: any) { this.respond(client.ws, type, id, { ok: false, message: err?.message ?? String(err) }); }
         break;
       }

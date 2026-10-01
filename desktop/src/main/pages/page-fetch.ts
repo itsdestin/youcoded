@@ -20,7 +20,7 @@
 //      keys back in error text, and a page could otherwise harvest its own key
 //      and save it into its synced data.json.
 import {
-  guardedFetch, readBodyCapped, NetGuardError,
+  guardedFetch, readBodyCapped, readBytesCapped, NetGuardError,
   type GuardedFetchOpts, type HostDecision,
 } from '../harness/tools/net-guard';
 import { covers, fingerprint, methodAllowed } from './page-connections';
@@ -34,6 +34,10 @@ import type { PageConnection, PageFetchRequest, PageFetchResult } from '../../sh
  *  The per-minute cap was 60; one refresh of that dashboard is 11 requests, so
  *  60 allowed five filter changes a minute. 120 still stops a runaway loop. */
 const MAX_BODY_BYTES = 1_000_000;
+/** A camera snapshot (home-device deck, Q-scope). Larger than a text answer
+ *  because a 1080p JPEG is routinely 300–900 KB; still bounded, because the
+ *  answer crosses IPC as a base64 string a third bigger again. */
+const MAX_PICTURE_BYTES = 3_000_000;
 const REQUEST_TIMEOUT_MS = 30_000;
 export const MAX_CONCURRENT_PER_PAGE = 4;
 export const MAX_PER_PAGE_PER_MINUTE = 120;
@@ -142,7 +146,8 @@ export async function performPageFetch(request: PageFetchRequest, ctx: PageFetch
   // Step 2: the connection whose address EQUALS this hostname. `covers` is an
   // exact, case-folded match — never a suffix, or
   // `api.example.com.attacker.test` would pass for `api.example.com`.
-  const connection = ctx.connections.find((c) => covers(c, url.hostname));
+  // A device matches on host AND port, so the whole URL goes in.
+  const connection = ctx.connections.find((c) => covers(c, url));
   if (!connection) {
     return { ok: false, reason: 'not-approved', message: `This page is not allowed to reach ${url.hostname}.` };
   }
@@ -186,8 +191,8 @@ export async function performPageFetch(request: PageFetchRequest, ctx: PageFetch
   // Step 5. Every hop is re-checked against the SAME connection, so a 302 to a
   // host the approval does not name is refused outright rather than followed.
   let refusedHost: string | null = null;
-  const allowHost = (hostname: string): HostDecision => {
-    if (covers(connection, hostname)) return { ok: true };
+  const allowHost = (hostname: string, _hop: number, hopUrl: URL): HostDecision => {
+    if (covers(connection, connection.kind === 'device' ? hopUrl : hostname)) return { ok: true };
     refusedHost = hostname;
     return { ok: false, message: `That page was sent on to ${hostname}, which it is not allowed to reach.` };
   };
@@ -202,17 +207,35 @@ export async function performPageFetch(request: PageFetchRequest, ctx: PageFetch
       credentialHeaders,
       credentialQueryParams,
       allowHost,
+      // A device connection is the ONE place a page reaches inside the home,
+      // and then only inside it (S-only-home): every hop must be a home or
+      // Tailscale address. Every other kind keeps the public-only guard.
+      reach: connection.kind === 'device' ? 'home' : 'public',
       fetchImpl: ctx.fetchImpl,
       lookup: ctx.lookup,
     });
 
     // Step 6.
-    const { text } = await readBodyCapped(res, MAX_BODY_BYTES);
     const out: Record<string, string> = {};
     for (const name of RESPONSE_HEADER_ALLOWLIST) {
       const value = res.headers.get(name);
       if (value !== null) out[name] = redact(value, secrets);
     }
+    if (request.as === 'picture') {
+      // Only an image type becomes a picture. Anything else is refused rather
+      // than encoded: base64 would carry it past the text redaction below, so
+      // "picture" must never be a way to read a page's own key back.
+      const type = (res.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
+      if (res.status >= 200 && res.status < 300 && !/^image\/(jpeg|png|gif|webp)$/.test(type)) {
+        await res.body?.cancel().catch(() => { /* already closed */ });
+        return { ok: false, reason: 'network', message: `${url.hostname} did not answer with a picture.` };
+      }
+      const { bytes, truncated } = await readBytesCapped(res, MAX_PICTURE_BYTES);
+      if (truncated) return { ok: false, reason: 'network', message: `That picture from ${url.hostname} is too large to show.` };
+      const body = res.status >= 200 && res.status < 300 ? `data:${type};base64,${bytes.toString('base64')}` : redact(bytes.toString('utf8'), secrets);
+      return { ok: true, status: res.status, headers: out, body };
+    }
+    const { text } = await readBodyCapped(res, MAX_BODY_BYTES);
     return { ok: true, status: res.status, headers: out, body: redact(text, secrets) };
   } catch (error) {
     const raw = error instanceof Error ? error.message : String(error);

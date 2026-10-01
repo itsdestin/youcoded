@@ -76,7 +76,7 @@ export function readThemeCss(root: HTMLElement = document.documentElement): stri
  *  it. `e.source !== parent` drops anything that did not come from the host,
  *  and every answer is matched against this bootstrap's own request map, so a
  *  forged `youcoded:fetch:result` resolves nothing (design review 1, finding 8). */
-function bootstrap(dataJson: string): string {
+function bootstrap(dataJson: string, devicesJson = '{}'): string {
   return `(function(){
   var ID = ${JSON.stringify(PAGE_THEME_STYLE_ID)};
   var THEME = ${JSON.stringify(PAGE_THEME_MESSAGE)};
@@ -98,6 +98,10 @@ function bootstrap(dataJson: string): string {
   });
   window.youcoded = {
     data: ${dataJson},
+    // Home-device deck, Q-address: the page suggested an address but the
+    // person may have allowed another, so the page asks here where its device
+    // is. Only ALLOWED devices appear; a page waiting for a yes sees none.
+    devices: ${devicesJson},
     save: function (data) { window.youcoded.data = data; try { parent.postMessage({ type: SET, data: data }, '*'); } catch (e) {} },
     onData: function (cb) { if (typeof cb === 'function') subs.push(cb); },
     onRefresh: function (cb) { if (typeof cb === 'function') refreshSubs.push(cb); },
@@ -109,7 +113,7 @@ function bootstrap(dataJson: string): string {
         try {
           parent.postMessage({
             type: FETCH, id: id, url: String(url),
-            method: o.method, headers: o.headers, body: o.body
+            method: o.method, headers: o.headers, body: o.body, as: o.as
           }, '*');
         } catch (e) {
           delete waiting[id];
@@ -313,17 +317,22 @@ export function prepareHostedDocument(
   themeCss: string,
   kitCss: string,
   data: unknown = null,
-  connections: readonly { kind: string }[] = [],
+  connections: readonly { kind: string; id?: string; address?: string; approved?: boolean }[] = [],
 ): string {
   // `</script>` inside the data would end the script early; escape the one
   // sequence that matters in a JSON literal placed in a script.
   const dataJson = JSON.stringify(data ?? null).replace(/<\//g, '<\\/');
+  // Each allowed device as `http://<address>`: the page builds its requests
+  // on this, and main still refuses anything that is not exactly that device.
+  const devices: Record<string, string> = {};
+  for (const c of connections) if (c.kind === 'device' && c.approved && c.id && c.address) devices[c.id] = `http://${c.address}`;
+  const devicesJson = JSON.stringify(devices).replace(/<\//g, '<\\/');
   const ours =
     `<meta http-equiv="Content-Security-Policy" content="${pageCsp(connections)}">` +
     '<meta http-equiv="x-dns-prefetch-control" content="off">' +
     `<style id="${PAGE_THEME_STYLE_ID}">${themeCss}</style>` +
     `<style id="youcoded-kit">${kitCss}</style>` +
-    `<script>${bootstrap(dataJson)}</script>`;
+    `<script>${bootstrap(dataJson, devicesJson)}</script>`;
   const a = splitAuthorDocument(html);
   return `<!doctype html><html${a.htmlAttrs}><head>${ours}${a.head}</head><body${a.bodyAttrs}>${a.body}</body></html>`;
 }

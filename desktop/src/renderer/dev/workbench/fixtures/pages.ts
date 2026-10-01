@@ -14,6 +14,7 @@
 // and redo — because the samples are what sets the expectation for the
 // creator skill.
 import type { PageDocument } from '../../../../shared/pages-types';
+import { HOME_ASSISTANT_PAGE_HTML, HOME_ASSISTANT_PAGE_JSON } from './home-assistant-page';
 
 const T = '2026-09-14T18:20:00.000Z';
 
@@ -426,6 +427,17 @@ function connectedPages(): PageDocument[] {
       html: simplePage('Reader', 'Link reader', [['Paste a link to begin', '']]),
       // The whole internet: its own blunt approval, alone on the page.
       connections: [{ id: 'open', kind: 'open', approved: false }],
+    },
+    {
+      // Home-device deck (2026-10-01): the Home Assistant page, waiting for its
+      // first yes, so the device approval card (address box, key step with the
+      // Open Home Assistant button) is what opens. After Allow, the workbench's
+      // pretend Home Assistant (mock-shim's fake-home-assistant) answers it.
+      ...base, id: 'page-home', name: HOME_ASSISTANT_PAGE_JSON.name, icon: 'page',
+      description: HOME_ASSISTANT_PAGE_JSON.description,
+      updatedAt: '2026-10-01T08:00:00.000Z', htmlStamp: 1790841600000,
+      html: HOME_ASSISTANT_PAGE_HTML,
+      connections: [{ ...(HOME_ASSISTANT_PAGE_JSON.connections[0] as { id: string; service: string; address: string; keyPage: string; keyHelp: { steps: string[] } }), kind: 'device', access: 'full', needsKey: true, approved: false, savedKey: false }],
     },
     {
       ...base, id: 'page-release-board', name: 'Release board', icon: 'list',

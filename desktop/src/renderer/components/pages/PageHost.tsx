@@ -121,7 +121,9 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // means the answer on disk moved, so the document is read again: approving a
   // line is what turns the approval screen back into the page.
   const connSig = useMemo(
-    () => (summary?.connections ?? []).map((c) => `${c.id}:${c.approved ? 1 : 0}`).join('|'),
+    // A device's address is in it too: allowing a different address must
+    // rebuild the document, so `youcoded.devices` names the one now allowed.
+    () => (summary?.connections ?? []).map((c) => `${c.id}:${c.approved ? 1 : 0}${c.kind === 'device' ? `@${c.address}` : ''}`).join('|'),
     [summary],
   );
 
@@ -196,7 +198,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
     };
     const onMessage = (e: MessageEvent) => {
       if (e.source !== frameRef.current?.contentWindow) return;
-      const d = e.data as { type?: unknown; data?: unknown; id?: unknown; url?: unknown; method?: unknown; headers?: unknown; body?: unknown } | null;
+      const d = e.data as { type?: unknown; data?: unknown; id?: unknown; url?: unknown; method?: unknown; headers?: unknown; body?: unknown; as?: unknown } | null;
       if (!d) return;
       // Esc inside the page = Esc on the view: leave, unless Settings or the
       // library is open over it (their own Esc handling owns the key then).
@@ -220,6 +222,8 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
           ...(typeof d.method === 'string' ? { method: d.method } : {}),
           ...(isStringMap(d.headers) ? { headers: d.headers } : {}),
           ...(typeof d.body === 'string' ? { body: d.body } : {}),
+          // A camera snapshot comes back as a data: link (home-device deck).
+          ...(d.as === 'picture' ? { as: 'picture' as const } : {}),
         };
         bridge.fetch(pageId, req).then(answer, () => {
           answer({ ok: false, reason: 'network', message: 'The request could not be completed.' });

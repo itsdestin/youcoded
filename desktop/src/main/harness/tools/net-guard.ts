@@ -8,6 +8,7 @@
 // Honest friction, not a security boundary — the accepted Phase 2 posture.
 import { isIP } from 'net';
 import { lookup as dnsLookup } from 'dns/promises';
+import { isHomeIpv4 } from '../../../shared/page-device-address';
 
 export class NetGuardError extends Error {}
 
@@ -102,6 +103,37 @@ export async function assertPublicHttpUrl(raw: string, lookup: LookupFn = defaul
   return url;
 }
 
+/** The mirror image of assertPublicHttpUrl, for a page's device connection
+ *  (home-device deck, S-only-home: "only addresses inside your home or your
+ *  Tailscale network"). The address must be a home IPv4 literal, or a name
+ *  whose EVERY answer is one — so a `.ts.net` or `.local` name that resolves
+ *  to the public internet is refused, and the connection can never be turned
+ *  into a way out. IPv6 answers are ignored rather than trusted: no home
+ *  device in scope needs one, and link-local fe80:: answers are unusable
+ *  without a zone anyway. Same DNS-rebind honesty limit as above. */
+export async function assertHomeHttpUrl(raw: string, lookup: LookupFn = defaultLookup, signal?: AbortSignal): Promise<URL> {
+  signal?.throwIfAborted();
+  let url: URL;
+  try { url = new URL(raw); } catch { throw new NetGuardError(`"${raw}" is not a valid URL.`); }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new NetGuardError(`Only http and https URLs can be fetched (got ${url.protocol.replace(':', '')}).`);
+  }
+  const host = url.hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  if (isIP(host)) {
+    if (!isHomeIpv4(host)) throw new NetGuardError(`${host} is not an address inside your home or Tailscale network.`);
+    return url;
+  }
+  let addrs: Array<{ address: string; family: number }>;
+  try { addrs = await lookup(host); }
+  catch { throw new NetGuardError(`Could not find ${host} on your network. Check the device is on and the address is right.`); }
+  signal?.throwIfAborted();
+  const v4 = addrs.filter((a) => a.family === 4 || /^\d+\.\d+\.\d+\.\d+$/.test(a.address));
+  if (v4.length === 0) throw new NetGuardError(`Could not find ${host} on your network. Check the device is on and the address is right.`);
+  const outside = v4.find((a) => !isHomeIpv4(a.address));
+  if (outside) throw new NetGuardError(`${host} points at ${outside.address}, which is outside your home network — reaching it is blocked.`);
+  return url;
+}
+
 const MAX_REDIRECTS = 5;
 
 /** An allowHost answer. A refusal carries the sentence the caller shows; it is
@@ -129,7 +161,9 @@ export interface GuardedFetchOpts {
    * page's API key to whatever host the answer named. Public is not the same
    * question as allowed.
    */
-  allowHost?: (hostname: string, hop: number) => HostDecision;
+  /** `url` is the whole hop address, for a caller whose rule includes the
+   *  port (a page's device connection: one service on one box). */
+  allowHost?: (hostname: string, hop: number, url: URL) => HostDecision;
   /**
    * Headers sent ONLY while the hop's host still equals hop 0's. A redirect to
    * a different host keeps the request and loses these — the credential does
@@ -142,6 +176,14 @@ export interface GuardedFetchOpts {
    * and because the stripped address is what `finalUrl` reports.
    */
   credentialQueryParams?: readonly string[];
+  /**
+   * `public` (default): every hop must be on the public internet — the guard
+   * every web tool and page connection has always had. `home`: every hop must
+   * be INSIDE the home or Tailscale network, for a page's approved device
+   * connection only. Never both: a request that could reach either is exactly
+   * the bridge from the internet into the home the default exists to stop.
+   */
+  reach?: 'public' | 'home';
 }
 
 /** Fetch with MANUAL redirect following: every hop re-runs assertPublicHttpUrl.
@@ -159,10 +201,12 @@ export async function guardedFetch(rawUrl: string, opts: GuardedFetchOpts): Prom
   let method = (opts.method ?? 'GET').toUpperCase();
   let body = opts.body;
   for (let hop = 0; ; hop++) {
-    const url = await assertPublicHttpUrl(current, lookup, deadline);
+    const url = opts.reach === 'home'
+      ? await assertHomeHttpUrl(current, lookup, deadline)
+      : await assertPublicHttpUrl(current, lookup, deadline);
     const host = url.hostname.toLowerCase();
     if (originHost === null) originHost = host;
-    const decision = opts.allowHost?.(url.hostname, hop);
+    const decision = opts.allowHost?.(url.hostname, hop, url);
     if (decision && !decision.ok) throw new NetGuardError(decision.message);
     // Off-host: the request goes on, the credential does not. Both the header
     // form and the in-the-URL form, because a service that redirects while
@@ -209,6 +253,14 @@ export async function guardedFetch(rawUrl: string, opts: GuardedFetchOpts): Prom
  *  truncated preview; the tool layer already signals truncation to the user. */
 export async function readBodyCapped(res: Response, maxBytes: number): Promise<{ text: string; truncated: boolean }> {
   if (!res.body) return { text: await res.text(), truncated: false };
+  const { bytes, truncated } = await readBytesCapped(res, maxBytes);
+  return { text: bytes.toString('utf8'), truncated };
+}
+
+/** The same capped read, as bytes — for a camera snapshot, where decoding to
+ *  text would corrupt the picture. */
+export async function readBytesCapped(res: Response, maxBytes: number): Promise<{ bytes: Buffer; truncated: boolean }> {
+  if (!res.body) return { bytes: Buffer.from(await res.arrayBuffer()), truncated: false };
   const reader = res.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0; let truncated = false;
@@ -224,5 +276,5 @@ export async function readBodyCapped(res: Response, maxBytes: number): Promise<{
     }
     chunks.push(value);
   }
-  return { text: Buffer.concat(chunks).toString('utf8'), truncated };
+  return { bytes: Buffer.concat(chunks), truncated };
 }

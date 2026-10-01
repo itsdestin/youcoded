@@ -17,6 +17,9 @@ export const PAGES: readonly ScreenEntry[] = [
   { ...pg('pages/page/page-task-board#phone-keys', 'view', 'approval'), params: { pagesPhone: '1' } },
   pg('pages/page/page-headlines', 'view', 'approval'),
   pg('pages/page/page-link-reader', 'view', 'approval'),
+  // Home-device deck (2026-10-01): a device line, with its address box.
+  pg('pages/page/page-home', 'view', 'approval'),
+  { ...pg('pages/page/page-home#connected', 'view'), params: { pagesHome: 'connected' } },
   pg('pages/page/page-analytics', 'view', 'approval'),
   pg('pages/page/page-trip-board', 'view', 'approval', 'error-state'),
   pg('pages/library', 'view'),

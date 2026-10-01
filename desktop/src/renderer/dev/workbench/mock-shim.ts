@@ -495,6 +495,7 @@ const NAMESPACES = [
 
 import { createNamingPreview } from './naming-preview';
 import { seedPages } from './fixtures/pages';
+import { fakeHomeAssistantFetch } from './fixtures/fake-home-assistant';
 import type { PagesBridge, PageDocument, PageSummary, SavedPageKey } from '../../../shared/pages-types';
 
 /** `?fail=<ns.method>[,…]` — those channels REJECT from the first call.
@@ -3682,6 +3683,16 @@ function createDocCommentsMock(empty: boolean) {
  *  the real host will, so the header and the library never disagree. */
 function createPagesMock(empty: boolean): PagesBridge {
   let pages: PageDocument[] = empty ? [] : seedPages();
+  // `?pagesHome=connected` opens the Home page already allowed at the
+  // Tailscale address, so its running state is a screen of its own rather
+  // than something only a click-through reaches (home-device deck review).
+  if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('pagesHome') === 'connected') {
+    pages = pages.map((p) => (p.id !== 'page-home' ? p : {
+      ...p,
+      connections: (p.connections ?? []).map((c) => (c.kind === 'device' ? { ...c, address: '100.99.234.114:8123', approved: true, savedKey: true } : c)),
+      refresh: { at: new Date().toISOString(), failed: false },
+    }));
+  }
   // One key is saved from the start (Trip board uses it), so the Weather page
   // can show "Uses your saved OpenWeather key".
   const savedServices = new Map<string, string>(empty ? [] : [['OpenWeather', 'api.openweathermap.org']]);
@@ -3711,20 +3722,34 @@ function createPagesMock(empty: boolean): PagesBridge {
     // The workbench never reaches the network: every fixture page's numbers are
     // baked in. The door still answers, so a page that calls it gets an honest
     // refusal rather than a promise that never settles.
-    fetch: async () => ({ ok: false as const, reason: 'network' as const, message: 'The workbench has no network; this page shows saved numbers.' }),
+    // The one exception: an allowed device connection is answered by the
+    // pretend Home Assistant, so the Home page can be operated end to end.
+    fetch: async (id, req) => {
+      const page = pages.find((p) => p.id === id);
+      const device = page?.connections?.find((c) => c.kind === 'device' && c.approved);
+      if (device && device.kind === 'device' && req.url.startsWith(`http://${device.address}/`)) {
+        await delay(120);
+        const answer = fakeHomeAssistantFetch(req);
+        if (answer) return answer;
+      }
+      return { ok: false as const, reason: 'network' as const, message: 'The workbench has no network; this page shows saved numbers.' };
+    },
     onChanged: (cb) => { subs.add(cb); return () => { subs.delete(cb); }; },
     // ── Phase 2 (connections) — no backend yet; mock-only.ts carries the rows ──
     // Allow: every waiting line becomes approved, a pasted key becomes a saved
     // key, and the page gets its first "Updated just now".
-    approve: async (id, keys) => {
+    approve: async (id, keys, addresses = {}) => {
       await delay();
       pages = pages.map((p) => {
         if (p.id !== id) return p;
-        for (const c of p.connections ?? []) {
-          if (c.kind === 'key' && keys[c.id] && keys[c.id] !== 'saved') savedServices.set(c.service, c.address);
+        // A device takes the address the person allowed (home-device deck,
+        // Q-address), exactly as the real store records it.
+        const conns = (p.connections ?? []).map((c) => (c.kind === 'device' && addresses[c.id] ? { ...c, address: addresses[c.id] } : c));
+        for (const c of conns) {
+          if ((c.kind === 'key' || c.kind === 'device') && keys[c.id] && keys[c.id] !== 'saved') savedServices.set(c.service, c.address);
         }
         // Allowing (or dismissing "code changed") records the current code too.
-        return { ...p, codeChanged: false, connections: (p.connections ?? []).map((c) => ({ ...c, approved: true, ...(c.kind === 'key' ? { savedKey: true } : {}) })), refresh: p.refresh ?? { at: new Date().toISOString(), failed: false } };
+        return { ...p, codeChanged: false, connections: conns.map((c) => ({ ...c, approved: true, ...(c.kind === 'key' || c.kind === 'device' ? { savedKey: true } : {}) })), refresh: p.refresh ?? { at: new Date().toISOString(), failed: false } };
       });
       publish();
       return { ok: true, pages: summaries() };
