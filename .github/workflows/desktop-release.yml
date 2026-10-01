@@ -114,6 +114,16 @@ jobs:
         shell: bash
         run: bash scripts/verify-mac-signature.sh
 
+      # WHY (final review, 2026-09-30): nothing else ever runs the Office converter INSIDE the
+      # packaged app — the copy electron-builder re-signed, and for the Intel dmg one from a
+      # different bundle than this runner's. This checks each app's x2t and dylibs are for its
+      # dmg's CPU, then opens, saves and exports a docx as PDF with them through the app's own
+      # x2t code (dist/main/office/x2t.js). The Intel copy runs under Rosetta when the runner has it.
+      - name: Run the packaged Office converter
+        if: matrix.name == 'macos'
+        shell: bash
+        run: node scripts/office-packaged-smoke.mjs release
+
       - name: Smoke test
         # Launch the production build briefly and verify no renderer crash.
         # Uses xvfb on Linux since there's no display server in CI.
