@@ -97,6 +97,11 @@ function totals(over: Record<string, unknown>) {
 // when the info button's `!reason` gate was removed entirely — it simply could
 // not see the button. Proven by mutation: un-gate the "(i)" at StatusBar.tsx
 // and this file must go red.
+/** The row's switch, or null when the row offers none (fixed or dimmed). */
+function switchFor(label: string): HTMLElement | null {
+  return screen.queryByRole('switch', { name: label });
+}
+
 function rowAround(label: HTMLElement, reason: string): HTMLElement {
   let el: HTMLElement | null = label;
   while (el && !(el.textContent ?? '').includes(reason)) el = el.parentElement;
@@ -106,22 +111,20 @@ function rowAround(label: HTMLElement, reason: string): HTMLElement {
 describe('Always On section and announcement popup', () => {
   // WHY: these four are the controls the bar always draws; the menu names them
   // once, at the top, instead of tagging a single row "always on".
-  it('lists Model, Permissions, Tags & note and Announcements first, with no per-row tag', async () => {
+  // pick-menus#PM-2: one line at the top instead of four rows that can't change.
+  it('names Model, Permissions, Tags & note and Announcements in one line, with no rows for them', async () => {
     await openMenu('claude');
+    expect(screen.getByText('Model, permissions, tags & note and announcements are always shown.')).toBeTruthy();
     const headings = screen.getAllByRole('heading', { level: 3 }).map(h => h.textContent);
-    // WHY sentence case (labels batch, guide: no spaced capitals): this
-    // heading is now the shared SectionLabel primitive.
-    expect(headings[0]).toBe('Always on');
+    expect(headings[0]).toBe('Rate limits');
     for (const label of ['Model', 'Permissions', 'Tags & note', 'Announcements']) {
-      expect(screen.getByText(label).closest('button')!.hasAttribute('disabled')).toBe(true);
+      expect(switchFor(label)).toBeNull();
     }
-    expect(screen.queryByText('always on')).toBeNull();
   });
 
   it('turns Git branch off for a fresh install', async () => {
     await openMenu('claude');
-    const box = screen.getByText('Git branch').closest('button')!.querySelector('span')!;
-    expect(box.className).not.toContain('bg-accent');
+    expect(switchFor('Git branch')!.getAttribute('aria-checked')).toBe('false');
   });
 
   it('shows the announcement even when it was hidden before, and opens the full text on click', async () => {
@@ -146,7 +149,7 @@ describe('Customize status bar menu', () => {
       usageProgress: progress(false), timestamp: 10, uuid: 'unpriced' }));
     expect(screen.getByText('not listed')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /status bar widgets|customize/i }));
-    expect(screen.getByText('Session cost').closest('button')?.disabled).toBe(false);
+    expect(switchFor('Session cost')?.hasAttribute('disabled')).toBe(false);
     act(() => store.dispatch({ type: 'TRANSCRIPT_THINKING_HEARTBEAT', sessionId: 's1',
       usageProgress: progress(true), timestamp: 11, uuid: 'free' }));
     expect(screen.queryByText('not listed')).toBeNull();
@@ -178,8 +181,8 @@ describe('Customize status bar menu', () => {
     window.localStorage.setItem('youcoded-statusbar-widgets', JSON.stringify(['usage-5h', 'usage-7d']));
     await openMenu('native', undefined, undefined, 'chatgpt');
     expect(screen.queryByText('Claude Code sessions only')).toBeNull();
-    expect(screen.getByText('5h usage').closest('button')).toBeTruthy();
-    expect(screen.getByText('7d usage').closest('button')).toBeTruthy();
+    expect(switchFor('5h usage')).toBeTruthy();
+    expect(switchFor('7d usage')).toBeTruthy();
   });
 
   it('explains nothing in a Claude Code session', async () => {
@@ -214,7 +217,7 @@ describe('Customize status bar menu', () => {
     await openMenu('native', totals({ anyUnpriced: true }));
     expect(screen.queryByText('No published price for this model')).toBeNull();
     expect(screen.queryByText("Models on your own machine don't cost anything to run")).toBeNull();
-    expect(screen.getByText('Session cost').closest('button')).toBeTruthy();
+    expect(switchFor('Session cost')).toBeTruthy();
   });
 
   // Task 20, defect B. A free local parent that delegated to a metered
@@ -224,7 +227,7 @@ describe('Customize status bar menu', () => {
   it('never tells a session it is free to run when metered work also ran', async () => {
     await openMenu('native', totals({ anyFree: true, anyUnpriced: true }));
     expect(screen.queryByText("Models on your own machine don't cost anything to run")).toBeNull();
-    expect(screen.getByText('Session cost').closest('button')).toBeTruthy();
+    expect(switchFor('Session cost')).toBeTruthy();
   });
 
   it('stacks the reason under the label instead of beside it', async () => {
@@ -342,11 +345,11 @@ describe('the bar and the Customize menu agree about Cost', () => {
 
       // --- what the menu offered ---
       const label = screen.getByText('Session cost');
-      const rowEnabled = label.closest('button') !== null;
+      const rowEnabled = switchFor('Session cost') !== null;
       expect(rowEnabled).toBe(shape.rowEnabled);
       if (shape.reason === null) {
-        // Nothing but the label on the row — no sentence at all.
-        expect(label.parentElement!.textContent).toBe('Session cost');
+        // No reason under the label — just the row's own one-line hint.
+        expect(label.nextElementSibling!.textContent).toBe('Estimated cost of this session in USD.');
       } else {
         expect(label.nextElementSibling!.textContent).toBe(shape.reason);
       }

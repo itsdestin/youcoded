@@ -16,7 +16,7 @@ import OpenTasksChip from './OpenTasksChip';
 import { isAndroid } from '../platform';
 import { SessionTagsChip } from './tags/SessionTagsChip';
 import SpecialistsChip from './SpecialistsChip';
-import { Dialog, SectionLabel, Tooltip } from './ui';
+import { CARD_LEVEL_1, CARD_LEVEL_2, CheckboxMark, Dialog, FoldRow, SectionLabel, SettingRow, Toggle, Tooltip } from './ui';
 import { resolveModelBrand, type ProviderIconKey } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
 import type { SessionTotals } from '../state/session-totals';
@@ -462,7 +462,6 @@ interface Props {
   nativeTotals?: SessionTotals | null;
 }
 
-
 const warnStyles = {
   danger: 'bg-red-400/15 text-red-400 border-red-400/25',
   warn: 'bg-amber-700/15 text-amber-700 border-amber-700/25',
@@ -477,8 +476,7 @@ interface WidgetDef {
   label: string;
   defaultVisible: boolean;
   locked?: boolean;     // core control — always on, non-toggleable in the config menu
-  description: string;  // Shown in (i) tooltip in config popup
-  bestFor: string;      // Who benefits most from this widget
+  description: string;  // Its first sentence is the row's hint in the config popup
 }
 
 interface WidgetCategory {
@@ -499,7 +497,6 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         defaultVisible: true,
         locked: true,
         description: 'Which model this session is using. Click it to switch models.',
-        bestFor: 'Everyone. Always know which model is answering.',
       },
       {
         id: 'permission-mode',
@@ -507,7 +504,6 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         defaultVisible: true,
         locked: true,
         description: 'How much Claude may do without asking first. Click it to change the mode.',
-        bestFor: 'Everyone. Always see whether Claude will ask before acting.',
       },
       {
         id: 'session-tags',
@@ -515,7 +511,6 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         defaultVisible: true,
         locked: true,
         description: 'Tag the current session and attach a freeform note. Always shown next to the model and permission controls.',
-        bestFor: 'Everyone. Organize and annotate sessions so they\'re easy to find and resume later.',
       },
       {
         id: 'announcement',
@@ -523,7 +518,6 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         defaultVisible: true,
         locked: true,
         description: 'Messages from the YouCoded team — new releases, outages, tips. Click the announcement in the bar to read the whole message.',
-        bestFor: 'Everyone. Only appears when there is something to say.',
       },
     ],
   },
@@ -535,14 +529,12 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         label: '5h usage',
         defaultVisible: true,
         description: 'Shows how much of your 5-hour rate limit you\'ve used. Resets on a rolling window.',
-        bestFor: 'Everyone. Helps you pace usage and avoid hitting rate limits during heavy sessions.',
       },
       {
         id: 'usage-7d',
         label: '7d usage',
         defaultVisible: true,
         description: 'Shows how much of your 7-day rate limit you\'ve used. Resets on a rolling window.',
-        bestFor: 'Everyone. Track your weekly usage pattern so you don\'t run out mid-week.',
       },
     ],
   },
@@ -554,28 +546,24 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         label: 'Context %',
         defaultVisible: true,
         description: 'How much of your assistant\'s conversation memory remains. Lower means it may forget earlier context.',
-        bestFor: 'Everyone. When this drops below 20%, consider starting a new session to avoid lost context.',
       },
       {
         id: 'session-cost',
         label: 'Session cost',
         defaultVisible: false,
         description: 'Estimated cost of this session in USD. For Pro/Max subscribers this is informational only (you\'re not billed per-token).',
-        bestFor: 'API users tracking spend. Also useful for Pro/Max users curious about what their session would cost on the API.',
       },
       {
         id: 'session-time',
         label: 'Session duration',
         defaultVisible: false,
         description: 'Total session time and how much of it your assistant spent thinking (API time). Helps you understand your workflow pace.',
-        bestFor: 'Power users who want to see how much of a session is active assistant work vs your own thinking/typing time.',
       },
       {
         id: 'active-ratio',
         label: 'Active ratio',
         defaultVisible: false,
         description: 'What percentage of the session your assistant was actively thinking (API time / wall time). Low means you\'re mostly reading; high means it is doing heavy lifting.',
-        bestFor: 'Understanding your workflow rhythm. A 5% ratio on a long session means you\'re mostly reviewing; 50%+ means it is working hard.',
       },
     ],
   },
@@ -587,21 +575,18 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         label: 'Input tokens',
         defaultVisible: false,
         description: 'Cumulative input tokens sent to your assistant this session. Includes your messages, files, and system context.',
-        bestFor: 'Power users monitoring how much context is being sent. Helpful for optimizing large-file workflows.',
       },
       {
         id: 'tokens-out',
         label: 'Output tokens',
         defaultVisible: false,
         description: 'Cumulative output tokens your assistant has generated this session. Higher means more verbose responses.',
-        bestFor: 'Users who want to understand how much your assistant is writing. Useful for gauging response verbosity.',
       },
       {
         id: 'cache-stats',
         label: 'Cache efficiency',
         defaultVisible: false,
         description: 'Tokens read from the prompt cache vs created. Higher cached reads mean faster, cheaper requests.',
-        bestFor: 'API users and power users. Shows how effectively prompt caching is working in your conversation.',
       },
       {
         // The id stays 'cache-hit-rate' on purpose — it is the persisted key for
@@ -611,14 +596,12 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         label: 'Context reuse',
         defaultVisible: false,
         description: 'How much of each prompt was reused from cache instead of re-read. Reused context is cheaper and much faster.',
-        bestFor: 'Long conversations. A sudden drop means the cache stopped working — usually an idle gap, or a change of model.',
       },
       {
         id: 'output-speed',
         label: 'Output speed',
         defaultVisible: false,
         description: 'Average output tokens per second across the session. Varies by model — Haiku is fastest, Opus is slowest.',
-        bestFor: 'Comparing model performance. Useful when deciding whether to switch models for faster iteration.',
       },
     ],
   },
@@ -630,14 +613,12 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         label: 'Code changes',
         defaultVisible: false,
         description: 'Lines of code added and removed this session. A quick productivity snapshot.',
-        bestFor: 'Developers using Claude for coding tasks. See at a glance how much code Claude has written.',
       },
       {
         id: 'git-branch',
         label: 'Git branch',
         defaultVisible: false,
         description: 'The current git repository and branch for your working directory.',
-        bestFor: 'Developers working across multiple branches or repos.',
       },
     ],
   },
@@ -649,7 +630,6 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         label: 'Open tasks',
         defaultVisible: true,
         description: 'Chip showing tasks Claude is tracking in the current session (running + pending counts). Hides when there are no open tasks. Click to see the full list.',
-        bestFor: 'Everyone who uses sessions where Claude juggles multiple tasks. Lets you see what\'s in flight without scrolling the chat.',
       },
     ],
   },
@@ -661,21 +641,18 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         label: 'Sync warnings',
         defaultVisible: true,
         description: 'Alerts when sync isn\'t working (no internet, stale data, unsynced skills).',
-        bestFor: 'YouCoded toolkit users. Keeps you aware of sync issues that could cause data loss.',
       },
       {
         id: 'theme',
         label: 'Theme',
         defaultVisible: true,
         description: 'Shows the active theme. Click to cycle through your configured themes.',
-        bestFor: 'Anyone who uses multiple themes or wants quick access to theme switching.',
       },
       {
         id: 'version',
         label: 'Version',
         defaultVisible: true,
         description: 'Current YouCoded version. Glows when an update is available.',
-        bestFor: 'Everyone. Stay up to date with the latest features and fixes.',
       },
     ],
   },
@@ -735,16 +712,8 @@ function PencilIcon() {
   );
 }
 
-// Info (i) icon for widget descriptions
-function InfoIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} width="12" height="12" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
-      <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/>
-      <path d="m8.93 6.588-2.29.287-.082.38.45.083c.294.07.352.176.288.469l-.738 3.468c-.194.897.105 1.319.808 1.319.545 0 1.178-.252 1.465-.598l.088-.416c-.2.176-.492.246-.686.246-.275 0-.375-.193-.304-.533L8.93 6.588zM9 4.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0z"/>
-    </svg>
-  );
-}
-
+/** A widget's hint: the first sentence of its description. */
+const firstSentence = (text: string) => { const m = text.match(/^.*?[.!?](\s|$)/); return (m ? m[0] : text).trim(); };
 
 // --- Config Popup ---
 // Centered modal (matches SettingsPanel popup style) for customizing status bar widgets
@@ -759,8 +728,6 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
   relevance: RelevanceContext;
 }) {
   useEscClose(open, onClose);
-  // Track which widget's (i) tooltip is expanded
-  const [expandedInfo, setExpandedInfo] = useState<WidgetId | null>(null);
   // Track whether the Theme widget's cycle editor is expanded. Separate from
   // expandedInfo because the cycle editor is Theme-specific and collapses the
   // info panel when opened (and vice-versa) — they're mutually exclusive rows.
@@ -792,178 +759,70 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
           was a bare overflow-y-auto div with no min-height:0, which .scroll-fade
           supplies. */}
       <Dialog screen="chat/status-bar" open onClose={onClose} title="Status bar widgets" size="panel">
-            {WIDGET_CATEGORIES.map((cat) => (
-              <section key={cat.name}>
-                {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels
-                    batch, guide: no spaced capitals — decisions H-3/L-1…L-4). */}
-                <SectionLabel className="mb-2">
-                  {cat.name}
-                </SectionLabel>
-                <div className="space-y-0.5">
-                  {cat.widgets.map((w) => {
-                    const isExpanded = expandedInfo === w.id;
-                    const isThemeRow = w.id === 'theme';
-                    const showCycleEditor = isThemeRow && cycleEditorOpen;
-                    const reason = widgetUnavailableReason(w.id, relevance);
-                    return (
-                      <div key={w.id}>
-                        <div className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-inset transition-colors">
-                          {/* Toggle checkbox — locked widgets (fixed controls)
-                              render always-checked and non-interactive. When the
-                              widget doesn't apply to this session's runtime,
-                              swap the button for a plain, non-focusable row: it
-                              is not a control here, so it must not look or
-                              behave like one. The saved on/off choice is
-                              untouched and returns when the user switches to a
-                              session where the widget applies. */}
-                          {reason ? (
-                            /* Label on its own line, reason on the line beneath
-                               it. WHY not side by side (how this used to read):
-                               a long reason squeezed the label and wrapped
-                               "Session duration" onto two lines, so that one row
-                               stood taller than every other row in the menu.
-                               Stacked, each part gets a full line and every
-                               dimmed row is the same height. The empty spacer
-                               keeps the label's left edge on the same x as the
-                               enabled rows, whose labels sit after a checkbox. */
-                            <div className="flex items-start gap-2 flex-1 text-left opacity-50">
-                              <span className="w-3.5 h-3.5 flex-shrink-0" />
-                              <div className="flex-1 min-w-0">
-                                <div className="text-2xs text-fg">{w.label}</div>
-                                <div className="text-3xs text-fg-muted italic">{reason}</div>
-                              </div>
-                            </div>
-                          ) : (
-                          <button
-                            onClick={() => { if (!w.locked) toggle(w.id); }}
-                            disabled={w.locked}
-                            className={`flex items-center gap-2 flex-1 text-left rounded-md px-1 -mx-1 ${w.locked ? 'cursor-default' : 'state-layer stepped-hover'}`}
-                          >
-                            <span
-                              className={`w-3.5 h-3.5 rounded-sm border flex-shrink-0 flex items-center justify-center transition-colors ${
-                                (w.locked || visible.has(w.id))
-                                  ? 'bg-accent border-accent text-on-accent'
-                                  : 'border-edge-dim'
-                              }`}
-                            >
-                              {(w.locked || visible.has(w.id)) && (
-                                <svg width="9" height="9" viewBox="0 0 16 16" fill="currentColor">
-                                  <path d="M13.854 3.646a.5.5 0 0 1 0 .708l-7 7a.5.5 0 0 1-.708 0l-3.5-3.5a.5.5 0 1 1 .708-.708L6.5 10.293l6.646-6.647a.5.5 0 0 1 .708 0z" />
-                                </svg>
-                              )}
-                            </span>
-                            <span className="text-2xs text-fg">{w.label}</span>
-                          </button>
-                          )}
-
-                          {/* Pencil — Theme widget only. Opens the cycle editor
-                              (which themes the pill rotates through). Moved here
-                              from per-card checkmarks in the Appearance popup.
-                              Gated on !reason too (belt-and-braces: 'theme' never
-                              gets a reason today, but a dimmed row must never
-                              carry a focusable element, full stop). */}
-                          {isThemeRow && !reason && (
-                            <Tooltip text="Edit theme cycle">
-                            <button
-                              onClick={() => {
-                                setCycleEditorOpen(v => !v);
-                                setExpandedInfo(null);
-                              }}
-                              className={`flex-shrink-0 p-0.5 rounded-sm transition-colors ${
-                                showCycleEditor ? 'text-accent' : 'text-fg-faint hover:text-fg-muted'
-                              }`}
-                              aria-label="Edit theme cycle"
-                            >
-                              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                              </svg>
-                            </button>
-                            </Tooltip>
-                          )}
-
-                          {/* (i) info toggle — hidden for a dimmed row. The row
-                              already isn't a control (it's just explained why),
-                              and the reason line itself is the info; a second
-                              focusable element here would be the same defect as
-                              leaving the checkbox tabbable. */}
-                          {!reason && (
-                            <Tooltip text="More info">
-                            <button
-                              onClick={() => {
-                                setExpandedInfo(isExpanded ? null : w.id);
-                                if (isThemeRow) setCycleEditorOpen(false);
-                              }}
-                              className={`flex-shrink-0 p-0.5 rounded-sm transition-colors ${
-                                isExpanded ? 'text-accent' : 'text-fg-faint hover:text-fg-muted'
-                              }`}
-                            >
-                              <InfoIcon />
-                            </button>
-                            </Tooltip>
-                          )}
+        {/* WHY labelled cards with a hint under every name (pick-menus, 2026-10-01; Destin,
+            LB-9: "rethink these kinds of checkbox menus … this still doesn't look/feel
+            right"): the rows sat bare on the popup (guide: a label first, nothing bare)
+            and every explanation hid behind its own (i). The hint is the description's
+            first sentence; the "Best for" advice behind the (i) is dropped. Switches on
+            the right, like Settings (pick-menus#PM-1). */}
+        {/* WHY one line, not four locked rows (pick-menus#PM-2): the menu now opens on
+            things you can change. The names come from the locked rows themselves. */}
+        <p className="text-xs text-fg-muted">
+          {ALL_WIDGET_DEFS.filter((w) => w.locked).map((w, i) => (i ? w.label.toLowerCase() : w.label)).join(', ').replace(/, ([^,]*)$/, ' and $1')} are always shown.
+        </p>
+        {WIDGET_CATEGORIES.filter((cat) => cat.widgets.some((w) => !w.locked)).map((cat) => (
+          <section key={cat.name}>
+            <SectionLabel className="mb-2">{cat.name}</SectionLabel>
+            <div className={`${CARD_LEVEL_1} px-3 divide-y divide-edge-dim`}>
+              {cat.widgets.map((w) => {
+                const reason = widgetUnavailableReason(w.id, relevance);
+                const on = !!w.locked || visible.has(w.id);
+                const hint = reason ?? firstSentence(w.description);
+                const canToggle = !w.locked && !reason;
+                return (
+                  <div key={w.id} className="py-1" data-widget-row={w.id}>
+                    {/* The shared settings row (switch vertically centred beside title and
+                        hint). A row that doesn't apply here is dimmed with its reason as the
+                        hint and NO switch — not a control in this session; its saved choice
+                        returns in a session where it applies. */}
+                    <SettingRow
+                      header
+                      variant="item"
+                      title={w.label}
+                      description={hint}
+                      className={reason ? 'opacity-50' : ''}
+                      control={canToggle ? <Toggle checked={on} onChange={() => toggle(w.id)} aria-label={w.label} /> : undefined}
+                    />
+                    {/* The Theme pill's cycle: which themes a tap rotates through. A fold
+                        under its own row instead of a pencil beside it. */}
+                    {w.id === 'theme' && !reason && (
+                      <FoldRow className="mt-2" title="Theme cycle" description={`${cycleList.length} theme${cycleList.length === 1 ? '' : 's'} — tap the pill to rotate`}
+                        open={cycleEditorOpen} onToggle={setCycleEditorOpen}>
+                        <ScreenMark name="chat/status-bar/themes" />
+                        <div className={`${CARD_LEVEL_2} p-1`}>
+                          {allThemes.map(t => {
+                            const inCycle = cycleList.includes(t.slug);
+                            const isOnly = inCycle && cycleList.length === 1;
+                            return (
+                              <button key={t.slug} type="button" onClick={() => toggleCycle(t.slug)} disabled={isOnly}
+                                title={isOnly ? 'At least one theme must stay in the cycle' : undefined}
+                                className={`flex items-center gap-2 w-full px-2 py-1 rounded-sm text-left text-2xs transition-colors ${isOnly ? 'cursor-not-allowed' : 'hover:bg-inset'}`}>
+                                <CheckboxMark checked={inCycle} />
+                                <span className="w-2.5 h-2.5 rounded-full shrink-0 border border-edge-dim"
+                                  style={{ background: `linear-gradient(135deg, ${t.tokens.canvas}, ${t.tokens.accent})` }} />
+                                <span className="text-fg truncate">{t.name}</span>
+                              </button>
+                            );
+                          })}
                         </div>
-
-                        {/* Expanded info panel */}
-                        {isExpanded && (
-                          <div className="ml-7 mr-2 mb-1.5 px-2.5 py-2 rounded-md bg-inset border border-edge-dim text-3xs space-y-1.5">
-                            <p className="text-fg-dim leading-relaxed">{w.description}</p>
-                            <p className="text-fg-muted leading-relaxed">
-                              <span className="font-medium text-fg-muted">Best for:</span> {w.bestFor}
-                            </p>
-                          </div>
-                        )}
-
-                        {/* Theme cycle editor — inline, mirrors the info-panel layout.
-                            Tapping the theme pill in the status bar rotates through
-                            every theme checked here. Must keep ≥1 in the cycle. */}
-                        {showCycleEditor && (
-                          <div className="ml-7 mr-2 mb-1.5 px-2.5 py-2 rounded-md bg-inset border border-edge-dim text-3xs space-y-1.5">
-                            <ScreenMark name="chat/status-bar/themes" />
-                            <p className="text-fg-dim leading-relaxed">
-                              Pick which themes the pill rotates through when you tap it.
-                            </p>
-                            <div className="space-y-0.5 pt-1">
-                              {allThemes.map(t => {
-                                const inCycle = cycleList.includes(t.slug);
-                                const isOnly = inCycle && cycleList.length === 1;
-                                return (
-                                  <Tooltip key={t.slug} text={isOnly ? 'At least one theme must stay in the cycle' : ''}>
-                                  <button
-                                    onClick={() => toggleCycle(t.slug)}
-                                    disabled={isOnly}
-                                    className={`flex items-center gap-2 w-full px-1.5 py-1 rounded-sm text-left transition-colors ${
-                                      isOnly ? 'opacity-50 cursor-not-allowed' : 'hover:bg-panel'
-                                    }`}
-                                  >
-                                    <span
-                                      className={`w-3 h-3 rounded-sm border flex-shrink-0 flex items-center justify-center transition-colors ${
-                                        inCycle ? 'bg-accent border-accent text-on-accent' : 'border-edge-dim'
-                                      }`}
-                                    >
-                                      {inCycle && (
-                                        <svg width="8" height="8" viewBox="0 0 16 16" fill="currentColor">
-                                          <path d="M13.854 3.646a.5.5 0 0 1 0 .708l-7 7a.5.5 0 0 1-.708 0l-3.5-3.5a.5.5 0 1 1 .708-.708L6.5 10.293l6.646-6.647a.5.5 0 0 1 .708 0z" />
-                                        </svg>
-                                      )}
-                                    </span>
-                                    <span
-                                      className="w-2.5 h-2.5 rounded-full flex-shrink-0 border border-edge-dim"
-                                      style={{ background: `linear-gradient(135deg, ${t.tokens.canvas}, ${t.tokens.accent})` }}
-                                    />
-                                    <span className="text-fg truncate">{t.name}</span>
-                                  </button>
-                                  </Tooltip>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </section>
-            ))}
+                      </FoldRow>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        ))}
       </Dialog>
     </>,
     document.body
