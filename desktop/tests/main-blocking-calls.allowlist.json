@@ -523,6 +523,7 @@
     {"file": "skill-provider.ts", "fn": "resolvePluginDir", "call": "fs.existsSync", "count": 2},
     {"file": "skill-scanner.ts", "fn": "loadCuratedRegistry", "call": "fs.readFileSync", "count": 2},
     {"file": "skill-scanner.ts", "fn": "readSkillMeta", "call": "fs.readFileSync", "count": 1},
+    {"file": "skill-scanner.ts", "fn": "readSkillMeta", "call": "fs.statSync", "count": 1},
     {"file": "skill-scanner.ts", "fn": "readdirSafe", "call": "fs.readdirSync", "count": 1},
     {"file": "skill-scanner.ts", "fn": "scanProjectSkills", "call": "fs.existsSync", "count": 1},
     {"file": "skill-scanner.ts", "fn": "scanSkills", "call": "fs.existsSync", "count": 3},
