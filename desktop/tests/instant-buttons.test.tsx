@@ -591,17 +591,20 @@ describe('Permission mode', () => {
     return { m, read: () => m.get(S), write: (mode: string) => { m.set(S, mode); } };
   }
   const NATIVE = ['ask', 'auto-edit', 'full-auto'];
+  /** The native chip: `set` is the computer's answer to the change, `host` what the computer says the session's mode is when asked. */
+  const nativeChip = (md: ReturnType<typeof modes>, set: () => Promise<unknown>, host: () => Promise<unknown> = async () => md.read()) =>
+    act(() => { setNativeModeNow({ sessionId: S, from: 'ask', to: 'auto-edit', valid: NATIVE, read: md.read, write: md.write, set, readHost: host }); });
 
   it('INSTANT (native): the chip shows the new mode before the computer has answered', () => {
     wire(); const md = modes('ask'); const reply = deferred<string>();
-    act(() => { setNativeModeNow({ sessionId: S, from: 'ask', to: 'auto-edit', valid: NATIVE, read: md.read, write: md.write, set: () => reply.promise }); });
+    nativeChip(md, () => reply.promise);
     expect(md.read()).toBe('auto-edit');
     expect(isPending(`mode:${S}`)).toBe(true);
   });
 
   it('CONFIRM (native): the answer is the mode the computer APPLIED, and that is what stays (even if it differs)', async () => {
     wire(); const md = modes('ask'); const reply = deferred<string>();
-    act(() => { setNativeModeNow({ sessionId: S, from: 'ask', to: 'auto-edit', valid: NATIVE, read: md.read, write: md.write, set: () => reply.promise }); });
+    nativeChip(md, () => reply.promise);
     await act(async () => { reply.resolve('full-auto'); await Promise.resolve(); });
     expect(md.read()).toBe('full-auto');
     expect(isPending(`mode:${S}`)).toBe(false);
@@ -610,7 +613,7 @@ describe('Permission mode', () => {
 
   it('REFUSED (native): the computer refuses: the old mode is back and the person is told', async () => {
     wire(); const md = modes('ask'); const reply = deferred<unknown>();
-    act(() => { setNativeModeNow({ sessionId: S, from: 'ask', to: 'auto-edit', valid: NATIVE, read: md.read, write: md.write, set: () => reply.promise }); });
+    nativeChip(md, () => reply.promise);
     await act(async () => { reply.resolve({ ok: false, error: 'no' }); await Promise.resolve(); });   // the shim's shape for a host failure
     expect(md.read()).toBe('ask');
     expect(isPending(`mode:${S}`)).toBe(false);
@@ -619,34 +622,45 @@ describe('Permission mode', () => {
 
   it('REFUSED (native), a rejection: the same, and a newer mode the record has pushed meanwhile is NOT overwritten by the undo', async () => {
     wire(); const md = modes('ask'); const reply = deferred<unknown>();
-    act(() => { setNativeModeNow({ sessionId: S, from: 'ask', to: 'auto-edit', valid: NATIVE, read: md.read, write: md.write, set: () => reply.promise }); });
+    nativeChip(md, () => reply.promise);
     md.write('full-auto');                                         // the computer's own push (another device changed it)
     await act(async () => { reply.reject(new Error('refused')); await Promise.resolve(); });
     expect(md.read()).toBe('full-auto');
   });
 
-  it('DROPPED (native), the record\'s push says the change took: the chip keeps it and nothing is said', async () => {
+  it('DROPPED (native), the computer says the change took: the chip keeps it and nothing is said', async () => {
     wire(); const md = modes('ask'); const reply = deferred<unknown>();
-    act(() => { setNativeModeNow({ sessionId: S, from: 'ask', to: 'auto-edit', valid: NATIVE, read: md.read, write: md.write, set: () => reply.promise }); });
+    nativeChip(md, () => reply.promise, async () => 'auto-edit');
     up = false;
     await act(async () => { reply.reject(lostAnswer()); await Promise.resolve(); });
-    expect(isPending(`mode:${S}`)).toBe(true);
+    expect(isPending(`mode:${S}`)).toBe(true);                     // offline: the screen waits
     up = true;
-    md.write('auto-edit');                                         // the reconnect's fill: the host's mode push
     await act(async () => { await reconcilePending(); });
     expect(md.read()).toBe('auto-edit');
     expect(isPending(`mode:${S}`)).toBe(false);
     expect(notices).toEqual([]);
   });
 
-  it('DROPPED (native), the record\'s push says it did not: the chip shows the record\'s mode and the person is told', async () => {
+  it('DROPPED (native), the computer says it did NOT: the chip shows the computer\'s mode (a reconnect carries no mode push when none changed) and the person is told', async () => {
     wire(); const md = modes('ask'); const reply = deferred<unknown>();
-    act(() => { setNativeModeNow({ sessionId: S, from: 'ask', to: 'auto-edit', valid: NATIVE, read: md.read, write: md.write, set: () => reply.promise }); });
+    nativeChip(md, () => reply.promise, async () => 'ask');
     up = false;
     await act(async () => { reply.reject(lostAnswer()); await Promise.resolve(); });
     up = true;
-    md.write('ask');                                               // the fill's push: still the old mode
-    await act(async () => { await reconcilePending(); });
+    await act(async () => { await reconcilePending(); });          // no push arrived: only asking the computer can show the truth
+    expect(md.read()).toBe('ask');
+    expect(isPending(`mode:${S}`)).toBe(false);
+    expect(notices).toHaveLength(1);
+  });
+
+  it('DROPPED (native), and the computer cannot be asked either: after a few tries the old mode is put back rather than a mode nobody confirmed being left on screen', async () => {
+    vi.useFakeTimers();
+    wire(); const md = modes('ask'); const reply = deferred<unknown>();
+    const host = vi.fn(async () => { throw new Error('timed out'); });
+    nativeChip(md, () => reply.promise, host);
+    await act(async () => { reply.reject(lostAnswer()); await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(7000 * 4); });
+    expect(host).toHaveBeenCalledTimes(3);
     expect(md.read()).toBe('ask');
     expect(isPending(`mode:${S}`)).toBe(false);
     expect(notices).toHaveLength(1);
@@ -706,7 +720,7 @@ describe('Permission mode', () => {
   it('THE COMPUTER\'S OWN WINDOW: both functions decline, so App\'s existing code runs unchanged', () => {
     setConnectionMode('local');
     wire(); const md = modes('ask');
-    expect(setNativeModeNow({ sessionId: S, from: 'ask', to: 'auto-edit', valid: NATIVE, read: md.read, write: md.write, set: async () => 'auto-edit' })).toBe(false);
+    expect(setNativeModeNow({ sessionId: S, from: 'ask', to: 'auto-edit', valid: NATIVE, read: md.read, write: md.write, set: async () => 'auto-edit', readHost: async () => 'ask' })).toBe(false);
     expect(cycleClaudeModeNow({ sessionId: S, from: 'normal', to: 'plan', read: md.read, write: md.write, sendKey: () => {} })).toBe(false);
     expect(md.read()).toBe('ask');
   });

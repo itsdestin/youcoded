@@ -3014,6 +3014,7 @@ function AppInner() {
       read: () => modesRef.current.native.get(sessionId),
       write: (m) => setNativePermissionModes((prev) => (prev.get(sessionId) === m ? prev : new Map(prev).set(sessionId, m as NativePermissionMode))),
       set: () => window.claude.native.setPermissionMode(sessionId, next),
+      readHost: () => (window as any).claude.native.getPermissionMode(sessionId), // (in preload and the shim, not in the renderer's Window type: see seedNativeMode)
     })) return;
     try {
       const applied = await window.claude.native.setPermissionMode(sessionId, next);

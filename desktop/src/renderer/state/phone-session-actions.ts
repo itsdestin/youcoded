@@ -49,9 +49,10 @@ interface ModeScreen { sessionId: string; from: string; to: string; read: () => 
 
 /**
  * Cycle a native session's mode. On a phone the chip shows the new mode at once; the computer's answer is the mode it APPLIED, and that is what stays. A
- * refusal puts the old mode back; a lost reply waits for the reconnect's fill, whose mode push is the record's own word (the screen then keeps that).
+ * refusal puts the old mode back. A lost reply is settled by ASKING THE COMPUTER what mode the session has (`readHost`): a reconnect's fill carries the
+ * mode only when it changed while the phone was away, so the screen's own copy proves nothing about a change that never arrived.
  */
-export function setNativeModeNow(o: ModeScreen & { set: () => Promise<unknown>; valid: readonly string[] }): boolean {
+export function setNativeModeNow(o: ModeScreen & { set: () => Promise<unknown>; readHost: () => Promise<unknown>; valid: readonly string[] }): boolean {
   if (!optimisticScreen() || !connected()) return false;
   void runPending({
     key: `mode:${o.sessionId}`,
@@ -60,15 +61,20 @@ export function setNativeModeNow(o: ModeScreen & { set: () => Promise<unknown>; 
     async send() {
       const applied = await o.set();
       // The remote path turns a host failure into an {ok:false} object (remote-shim): anything that is not a known mode is a refusal.
-      if (typeof applied === 'string' && o.valid.includes(applied)) { o.write(applied); return 'answered'; }
+      if (typeof applied === 'string' && o.valid.includes(applied)) { o.write(applied); return 'answered' as const; }
       return { undo: { kind: 'refused' as const } };
     },
     undo() {
-      // Only put the old mode back if nothing newer (the record's own push) has replaced the one this change drew.
+      // Only put the old mode back if nothing newer (the computer's own answer or push) has replaced the one this change drew.
       if (o.read() === o.to) o.write(o.from);
       announce("The permission mode didn't change. Your computer didn't confirm it.");
     },
-    check: () => (o.read() === o.to ? 'present' : 'absent'),
+    async check() {
+      const mode = await o.readHost();      // a failed read throws: the helper tries again, then puts the old mode back
+      if (typeof mode !== 'string' || !o.valid.includes(mode)) throw new Error('unreadable mode');
+      o.write(mode);                        // whatever the computer has is what the chip shows
+      return mode === o.to ? 'present' : 'absent';
+    },
     settleAfterMs: MODE_SETTLE_MS,
   });
   return true;
