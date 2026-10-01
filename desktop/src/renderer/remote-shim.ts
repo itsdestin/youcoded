@@ -2743,7 +2743,12 @@ export function installShim(): void {
     android: {
       getTier: () => targetUrl ? Promise.resolve('CORE') : invoke('android:get-tier'),
       setTier: (tier: string) => targetUrl ? Promise.resolve() : invoke('android:set-tier', { tier }),
-      getAbout: () => targetUrl ? Promise.resolve({ version: '', build: '' }) : invoke('android:get-about'),
+      // WHY the side connection while paired (2026-09-29): the version shown is
+      // THIS phone's app, which only the phone's runtime knows. Answering
+      // `{ version: '' }` here made About read "YouCoded " with no version on a
+      // paired phone. Same route as the paired-devices list below.
+      getAbout: () => isAndroidPaired() ? invokeLocalBridge('android:get-about')
+        : targetUrl ? Promise.resolve({ version: '', build: '' }) : invoke('android:get-about'),
       // The saved computers live in the phone's runtime: while paired they are asked on a
       // side connection (invokeLocalBridge — WHY there), never answered "done" unasked.
       // A plain browser tab keeps its old answers; it has no such list.

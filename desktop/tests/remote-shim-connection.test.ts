@@ -854,6 +854,20 @@ describe('remote-shim — overlapping connections', () => {
       await expect(saving).resolves.toBe(true);
     });
 
+    // 2026-09-29: About on a paired phone read "YouCoded " with no version — the
+    // shim answered an empty one instead of asking the phone that knows it.
+    it('the app version comes from the phone, not a blank', async () => {
+      const desk = await paired();
+      const asking = claude().android.getAbout();
+      const local = latest();
+      expect(local).not.toBe(desk);
+      local.open();
+      local.receive({ type: 'auth:ok', platform: 'android' });
+      const [req] = local.sentOf('android:get-about');
+      local.receive({ type: 'android:get-about:response', id: req.id, payload: { version: '1.3.0', build: '42' } });
+      await expect(asking).resolves.toEqual({ version: '1.3.0', build: '42' });
+    });
+
     it('a phone runtime that never answers fails the call instead of pretending it worked', async () => {
       await paired();
       const removing = claude().android.removePairedDevice('desk', 9900);
