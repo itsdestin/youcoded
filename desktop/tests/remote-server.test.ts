@@ -163,7 +163,9 @@ describe('RemoteServer', () => {
     expect(await request('native:set-context-preferences', { patch: { chatgpt: 'long' } })).toEqual({ openrouter: 'long', chatgpt: 'long' });
     expect(contextSettings.update).toHaveBeenCalledWith({ chatgpt: 'long' });
     contextSettings.update.mockRejectedValueOnce(new Error('lock held'));
-    expect(await request('native:set-context-preferences', { patch: { chatgpt: 'standard' } })).toEqual({ ok: false, error: 'lock held' });
+    // WHY toMatchObject (2026-09-30 one-core R3-5): a throw now answers through the table, whose failure
+    // answer also carries the flag the phone's page turns back into a rejection.
+    expect(await request('native:set-context-preferences', { patch: { chatgpt: 'standard' } })).toMatchObject({ ok: false, error: 'lock held' });
     vi.stubEnv('YOUCODED_NATIVE', '0');
     try {
       expect(await request('native:get-context-preferences')).toMatchObject({ ok: false });
@@ -233,6 +235,10 @@ describe('RemoteServer and the shell provider', () => {
     const route: any = vi.fn(async () => ({ id: 'attempt', status: 'waiting' }));
     route.cancelOwner = vi.fn();
     server.setHandoffRoute(route);
+    // WHY (2026-09-30 one-core R3-5): the handoff:* table entries reach the attempt controller through the
+    // route the computer's setup binds; the server keeps its own copy only to cancel a dropped phone's attempts.
+    const { bindHandoffRoute } = await import('../src/main/ipc/handoff');
+    bindHandoffRoute(route);
     const frames: any[] = [];
     const client = { id: 'connection-a', ws: { readyState: 1, send: (raw: string) => frames.push(JSON.parse(raw)) } };
     const other: any = { id: 'connection-b' };
@@ -254,6 +260,7 @@ describe('RemoteServer and the shell provider', () => {
     server.stop();
     expect(route.cancelOwner).toHaveBeenCalledWith('remote:connection-b');
     expect(shellSessionManager.createSession).not.toHaveBeenCalled();
+    bindHandoffRoute(undefined);
   });
 
   // WHY (2026-09-30 one-core R3-4): session:create is a channel-table entry, so these tests give the table
@@ -285,11 +292,29 @@ describe('RemoteServer and the shell provider', () => {
   });
 
   it('cannot bypass admission before the shared creation operation is wired', async () => {
-    const { RemoteServer } = await import('../src/main/remote-server');
-    const server: any = new RemoteServer(shellSessionManager, shellHookRelay, shellConfig);
-    const sent = await drive(server, { type: 'session:create', id: 'early', payload: { resumeSessionId: 'c1' } });
-    expect(shellSessionManager.createSession).not.toHaveBeenCalled();
-    expect(sent[0].payload).toEqual({ ok: false, error: 'Session opening is not ready. Try again.' });
+    // WHY (2026-09-30 one-core R3-5, review F4): a phone's create that arrives before the computer has wired
+    // the shared creation operation WAITS for it (it used to be answered "not ready" at once); it still never
+    // reaches the server's own createSession, and if the wiring never comes it ends in the same plain answer.
+    vi.useFakeTimers();
+    try {
+      const { RemoteServer } = await import('../src/main/remote-server');
+      const server: any = new RemoteServer(shellSessionManager, shellHookRelay, shellConfig);
+      const create = vi.fn(async () => ({ id: 'late' }));
+      const pending = drive(server, { type: 'session:create', id: 'early', payload: { resumeSessionId: 'c1' } });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(create).not.toHaveBeenCalled();
+      expect(shellSessionManager.createSession).not.toHaveBeenCalled();
+      await withCreate(create); // the computer finishes starting: the waiting create now runs through it
+      const sent = await pending;
+      expect(create).toHaveBeenCalledWith(null, { resumeSessionId: 'c1' });
+      expect(sent[0].payload).toEqual({ id: 'late' });
+      expect(shellSessionManager.createSession).not.toHaveBeenCalled();
+      // And with no wiring ever, the wait ends in the plain answer instead of hanging.
+      (await import('../src/main/ipc/session')).bindSessionOps(null);
+      const never = drive(server, { type: 'session:create', id: 'never', payload: { resumeSessionId: 'c1' } });
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect((await never)[0].payload).toEqual({ ok: false, error: 'Sessions are not ready yet. Try again.' });
+    } finally { vi.useRealTimers(); }
   });
 
   it('refuses session:create for a shell, which would be a bare shell on the host', async () => {
@@ -1169,6 +1194,19 @@ describe('RemoteServer session meta + browse', () => {
       expect(activeIdsArg.has('desktop-1')).toBe(false); // the raw desktop id matches no transcript
     });
 
+    // WHY (2026-09-30 one-core R3-5, review F2): a NATIVE session's desktop id is its conversation id, but it
+    // enters the id map only after its native start finishes; browsing in that window offered the brand-new
+    // conversation as resumable. A live native id is excluded even though it is not mapped yet.
+    it('also hides a brand-new native session that is open but not in the id map yet', async () => {
+      const server = await phoneServer();
+      await bindOps({ map: {}, live: ['native-new', 'claude-open'], native: ['native-new'] });
+
+      await sendAndCollect(server, { type: 'session:browse', id: 'b4', payload: {} });
+
+      const [activeIdsArg] = mockSessionBrowser.listPastSessions.mock.calls[0];
+      expect([...activeIdsArg]).toEqual(['native-new']); // a Claude desktop id still matches no transcript and stays out
+    });
+
     // Bug 1 (2026-07-13 dogfood): a stale map entry for a CLOSED session must not hide it from the list.
     it('a stale map entry for a session that is no longer open does not hide its conversation', async () => {
       const server = await phoneServer();
@@ -1760,6 +1798,26 @@ describe('RemoteServer session:history id validation', () => {
     expect(mockSessionBrowser.loadHistory).toHaveBeenCalledWith('abc-123', 'my-project', 5, undefined);
     expect(sent).toHaveLength(1);
     expect(sent[0].payload).toEqual({ events: [] });
+  });
+
+  // WHY (2026-09-30 one-core R3-5, review F3): both doors used to list ~/.claude/projects on EVERY call even
+  // when the caller's project folder was right (the usual case); the hint is now probed first.
+  it('probes the caller\'s project folder first and lists the projects directory only when that misses', async () => {
+    const slugDir = path.join(tmpHome, '.claude', 'projects', 'my-project');
+    fs.writeFileSync(path.join(slugDir, 'abc-123.jsonl'), '');
+    const readdirSpy = vi.spyOn(fs.promises, 'readdir');
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
+
+    await sendAndCollect(server, { type: 'session:history', id: 'h5', payload: { sessionId: 'abc-123', projectSlug: 'my-project', count: 5 } });
+    expect(mockSessionBrowser.loadHistory).toHaveBeenLastCalledWith('abc-123', 'my-project', 5, undefined);
+    expect(readdirSpy).not.toHaveBeenCalled();
+
+    // A stale hint (the project folder changed) still finds the transcript, by scanning.
+    await sendAndCollect(server, { type: 'session:history', id: 'h6', payload: { sessionId: 'abc-123', projectSlug: 'old-folder', count: 5 } });
+    expect(readdirSpy).toHaveBeenCalledTimes(1);
+    expect(mockSessionBrowser.loadHistory).toHaveBeenLastCalledWith('abc-123', 'my-project', 5, undefined);
+    readdirSpy.mockRestore();
   });
 });
 

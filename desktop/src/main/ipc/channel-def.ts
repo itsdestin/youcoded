@@ -18,7 +18,11 @@ import type { CreateSessionDeps } from '../dev-tools';
 /** WHY (2026-09-30 one-core R3-2): things only the computer's own process holds (the session
  *  manager). Filled by the DESKTOP door only, so only a `desktopOnly` entry may lean on it; a phone
  *  never reaches such an entry, the table refuses it first. */
-export interface DesktopServices { sessionManager: CreateSessionDeps['sessionManager'] }
+export interface DesktopServices {
+  /** WHY getSession too (2026-09-30 one-core R3-5): native:session-context-text reads a Claude Code
+   *  session's project folder to find its instruction file. */
+  sessionManager: CreateSessionDeps['sessionManager'] & { getSession(id: string): { cwd: string } | undefined };
+}
 /** WHY (2026-09-30 one-core R3-4): the calling window's web contents, desktop door only. A few
  *  desktop handlers must know whether the window is still there (session:create fails cleanly if
  *  the window closed while it started) or send straight back to it (transcript replay). A phone

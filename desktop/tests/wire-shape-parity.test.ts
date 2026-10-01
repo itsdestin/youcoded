@@ -171,7 +171,9 @@ describe('the desktop handler reads the keys preload sends', () => {
       const missing = [...hk].filter((k) => !sent.has(k));
       if (missing.length) wrong.push(`${ch}: handler reads {${missing.join(',')}} but preload sends {${[...sent].join(',')}}`);
     }
-    expect(compared).toBeGreaterThan(120);
+    // WHY 90, not 120 (2026-09-30 one-core R3-5): each family moved into the channel table leaves this scan (its
+    // handlers are typed against ChannelTypes by the compiler instead), so the count shrinks run by run; 98 remain.
+    expect(compared).toBeGreaterThan(90);
     // Not vacuous for the riskiest shapes: each constant-map family (and the voice audio channel,
     // named by a file-local constant) must actually be reaching the comparison.
     const seen = [...handlers.keys()].filter((k) => preload.has(k));

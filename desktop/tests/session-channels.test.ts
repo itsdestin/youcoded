@@ -150,3 +150,32 @@ describe('a phone-side guard is table policy, not a check buried in a handler', 
     expect(guard(undefined)).toBeUndefined();
   });
 });
+
+// WHY (2026-09-30 one-core R3-5, review F4): the phone's socket opens before registerIpcHandlers binds the
+// session operations. A call that arrives in that window waits for the bind and then runs, instead of being
+// answered "Sessions are not ready yet"; with no bind it ends in that same plain sentence.
+describe('a phone call that arrives before the sessions are bound waits for them', () => {
+  it('runs once the bind lands, with the real answer', async () => {
+    vi.useFakeTimers();
+    try {
+      const out = serveRemoteChannel(findChannel('session:list')!, undefined, phoneCtx);
+      await vi.advanceTimersByTimeAsync(2_000);
+      bindSessionOps({ sessionManager: { listSessions: () => [{ id: 'a' }] }, stampProviderTypes: async (r: any[]) => r } as any);
+      expect(await out).toEqual({ reply: true, payload: [{ id: 'a' }] });
+    } finally { vi.useRealTimers(); }
+  });
+  it('gives up with the plain sentence after 15 seconds (the computer own door registers after the bind, so it never waits)', async () => {
+    vi.useFakeTimers();
+    try {
+      const out = serveRemoteChannel(findChannel('session-naming:get')!, undefined, phoneCtx);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(await out).toMatchObject({ reply: true, payload: { ok: false, error: 'Sessions are not ready yet. Try again.' } });
+    } finally { vi.useRealTimers(); }
+  });
+  it('a bound call still runs synchronously, so session:create claims its window before its first await', () => {
+    const createSession = vi.fn(async () => ({ id: 'x' }));
+    bindSessionOps({ createSession } as any);
+    void findChannel('session:create')!.handler({ cwd: '/' }, { door: 'desktop', runtime: null, broadcast: () => {}, sender: { id: 3 } } as any);
+    expect(createSession).toHaveBeenCalledTimes(1); // no await between the call and the check
+  });
+});

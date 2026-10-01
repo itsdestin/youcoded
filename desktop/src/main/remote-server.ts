@@ -61,7 +61,7 @@ import { randomUUID } from 'crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { isAllowedWsOrigin } from './remote-origin';
 import type { SessionManager } from './session-manager';
-import { handleRemoteHandoff, type createHandoffTransport } from './conversations/handoff-transport';
+import type { createHandoffTransport } from './conversations/handoff-transport';
 // Value import (not type-only): the "Run in terminal" case below runs the SAME
 // validation the desktop handler runs — a remote client's payload is the least
 // trusted input either of them sees.
@@ -1642,7 +1642,7 @@ export class RemoteServer {
     const tableDef = findChannel(type);
     if (tableDef) {
       const outcome = await serveRemoteChannel(tableDef, payload, {
-        door: 'remote', runtime: this.nativeRuntime, deviceId: client.deviceId,
+        door: 'remote', runtime: this.nativeRuntime, deviceId: client.deviceId, clientId: client.id,
         // Every screen: all phones (the sender included), then this computer's windows.
         broadcast: (channel, data) => {
           this.broadcast({ type: channel, payload: data });
@@ -1692,176 +1692,8 @@ export class RemoteServer {
         break;
       }
       // --- Request/response ---
-      case 'handoff:begin': case 'handoff:status': case 'handoff:wait':
-      case 'handoff:retry': case 'handoff:saved-copy': case 'handoff:force': case 'handoff:cancel':
-      case 'handoff:create-params': {
-        await handleRemoteHandoff(this.handoffRoute, `remote:${client.id}`, type, payload,
-          () => this.clients.has(client), result => this.respond(client.ws, type, id, result));
-        break;
-      }
-      // --- Native runtime (Phase 1 Plan A) — same instances as Electron IPC ---
-      case 'native:set-binding': {
-        const ok = this.nativeRuntime ? await this.nativeRuntime.nativeHost.setBinding(payload.sessionId, payload.binding) : false;
-        this.respond(client.ws, type, id, ok);
-        break;
-      }
-      // U11 — same fit-checked switch as the desktop picker, so a phone can't
-      // move an overfull chat onto a model it does not fit.
-      case 'native:switch-model': {
-        try {
-          const result = this.nativeRuntime
-            ? await this.nativeRuntime.nativeHost.switchModel(payload.sessionId, payload.binding, payload.summarize === true)
-            : { status: 'failed', reason: 'not-live' };
-          this.respond(client.ws, type, id, result);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { status: 'failed', reason: 'error', detail: err?.message ?? String(err) });
-        }
-        break;
-      }
-      case 'native:set-permission-mode': {
-        // setPermissionMode THROWS on an unknown mode string — respond an error
-        // object (same convention as the provider CRUD handlers below) so the
-        // remote client's request id resolves instead of hanging to timeout.
-        try {
-          const mode = this.nativeRuntime ? this.nativeRuntime.nativeHost.setPermissionMode(payload.sessionId, payload.mode) : null;
-          this.respond(client.ws, type, id, mode);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      case 'native:get-permission-mode': {
-        // Read-only — never throws. Falls back to 'ask' when no native runtime
-        // (mirrors NativeSessionHost.getPermissionMode's default).
-        const mode = this.nativeRuntime ? this.nativeRuntime.nativeHost.getPermissionMode(payload.sessionId) : 'ask';
-        this.respond(client.ws, type, id, mode);
-        break;
-      }
-      case 'native:get-context-preferences': {
-        try {
-          if (!this.nativeRuntime || process.env.YOUCODED_NATIVE === '0') throw new Error('Native context preferences are not supported');
-          this.respond(client.ws, type, id, this.nativeRuntime.contextSettings.read());
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      case 'native:set-context-preferences': {
-        try {
-          // WHY refuse an absent runtime: a successful response would claim a save
-          // that never happened. The remote shim rejects this channel's ok:false.
-          if (!this.nativeRuntime || process.env.YOUCODED_NATIVE === '0') throw new Error('Native context preferences are not supported');
-          this.respond(client.ws, type, id, await this.nativeRuntime.contextSettings.update(payload.patch));
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      case 'native:get-step-guard': {
-        try {
-          const value = this.nativeRuntime ? this.nativeRuntime.stepGuardSettings.read() : null;
-          this.respond(client.ws, type, id, value);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      case 'native:set-step-guard': {
-        try {
-          const value = this.nativeRuntime ? await this.nativeRuntime.stepGuardSettings.update(payload.value) : null;
-          this.respond(client.ws, type, id, value);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      case 'native:compact': {
-        // WHY: /compact with optional focus is shared by the desktop and remote
-        // renderer; answer from the same live host rather than silently rejecting
-        // the phone's request after it has already shown a compaction spinner.
-        try {
-          const result = this.nativeRuntime
-            ? await this.nativeRuntime.nativeHost.compact(payload.sessionId, payload.focus)
-            : { ok: false, reason: 'not-live' };
-          this.respond(client.ws, type, id, result);
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, reason: 'error', detail: err?.message ?? String(err) });
-        }
-        break;
-      }
-      // WHY attachments are passed: the shim sends them (host paths the phone's picker
-      // already uploaded here), and dropping them meant a phone's attached files never
-      // reached the assistant — only the text did. Same argument the desktop handler
-      // passes; anything that is not a string is ignored rather than handed to the host.
-      // M1: mirrors the desktop invoke — never throw (transport-parity rule).
-      case 'native:send': {
-        const notLive = { status: 'failed', reason: 'not-live' } satisfies NativeSendResult;
-        const files = (Array.isArray(payload?.attachments) ? payload.attachments : []).filter((a: unknown) => typeof a === 'string');
-        const result = this.nativeRuntime ? this.nativeRuntime.nativeHost.send(payload.sessionId, payload.text, files) : notLive;
-        this.respond(client.ws, type, id, result);
-        break;
-      }
-      // Task 11: removeQueued is sync + never throws — mirrors the desktop invoke.
-      case 'native:queue-remove': {
-        const removed = this.nativeRuntime ? this.nativeRuntime.nativeHost.removeQueued(payload.sessionId, payload.queueId) : false;
-        this.respond(client.ws, type, id, removed);
-        break;
-      }
-      // "Send now" — same sync boolean contract as queue-remove above.
-      case 'native:queue-send-now': {
-        const sent = this.nativeRuntime ? this.nativeRuntime.nativeHost.sendQueuedNow(payload.sessionId, payload.queueId) : false;
-        this.respond(client.ws, type, id, sent);
-        break;
-      }
-      case 'native:sessions-list': {
-        this.respond(client.ws, type, id, this.nativeRuntime ? await this.nativeRuntime.nativeHost.listAsync() : []);
-        break;
-      }
-      case 'native:kill-shell': {
-        // G-1: the phone's Stop button. Mirrors the desktop invoke's result
-        // shape exactly, so the card's refusal handling is identical on both.
-        const result = this.nativeRuntime
-          ? await this.nativeRuntime.nativeHost.killShell(payload.sessionId, payload.shellId)
-          : { ok: false, reason: 'not-live' };
-        this.respond(client.ws, type, id, result);
-        break;
-      }
-      case 'native:submit-admin-password': {
-        // admin-password design §2.5, contract R6: a paired phone or browser
-        // may answer the password card too — same "not gated on
-        // native.supported" posture as native:kill-shell above.
-        //
-        // WHY no logging anywhere near this case, and why `payload.password`
-        // is never assigned to a local outside this one expression:
-        // `password` is the one secret this whole feature exists to keep out
-        // of every log, transcript and store (design R13) — this case reads
-        // it once, passes it straight to submitAdminPassword(), and nothing
-        // here retains a reference to it afterward.
-        // T4-2 (review): an authenticated-but-buggy or malicious remote peer
-        // controls this payload — a non-string `password` would otherwise
-        // throw synchronously inside submit()'s `Buffer.from`, an
-        // unnecessary throw path reachable over the WS hop specifically
-        // (nothing awaits this handler's promise, so it would only surface
-        // via the process-wide unhandledRejection log). Refused here
-        // instead, matching submit()'s own "unknown/expired requestId
-        // returns false" contract.
-        const result = this.nativeRuntime && typeof payload.password === 'string' && payload.password.length > 0
-          ? this.nativeRuntime.nativeHost.submitAdminPassword(payload.requestId, payload.password)
-          : false;
-        this.respond(client.ws, type, id, result);
-        break;
-      }
-      case 'native:session-context-text': {
-        // "What the assistant was given" — one file's text, read on the DESKTOP,
-        // where the session and its files live. Without this case the panel opens
-        // on a phone and every row reads "This file couldn't be read": the
-        // default arm answers {unsupported:true}, which is not an answer.
-        const result = this.nativeRuntime
-          ? this.nativeRuntime.nativeHost.sessionContextText(payload.sessionId, payload.kind, payload.id)
-          : { error: 'not-live' };
-        this.respond(client.ws, type, id, result);
-        break;
-      }
+      // WHY (2026-09-30 one-core R3-5): handoff:*, native:*, permission(s):*, specialists:* and model:* are
+      // table entries (the files in main/ipc); the table answers before this switch, so none of them has a case here.
       case 'provider:list': {
         this.respond(client.ws, type, id, this.nativeRuntime ? await this.nativeRuntime.providerRegistry.list() : []);
         break;
@@ -2460,76 +2292,6 @@ export class RemoteServer {
         this.respond(client.ws, type, id, await readFileHead(payload?.filePath, payload?.maxBytes));
         break;
       }
-      case 'permissions:list': {
-        // Read-only: the store is the disk authority. No native runtime → no
-        // grants to show, same shape the renderer already handles for an empty list.
-        this.respond(client.ws, type, id, this.nativeRuntime ? await this.nativeRuntime.permissionStore.list() : []);
-        break;
-      }
-      case 'permissions:remove': {
-        // nativeHost.revokeRule, NEVER permissionStore.remove — the host also
-        // clears the live in-memory rule so an already-running session stops
-        // granting what was just revoked. false = nothing matched (stale list),
-        // which is also the honest answer when the runtime isn't wired.
-        const removed = this.nativeRuntime
-          ? await this.nativeRuntime.nativeHost.revokeRule(payload.slug, payload.rule as PermissionRule)
-          : false;
-        this.respond(client.ws, type, id, removed);
-        break;
-      }
-      case 'permissions:remove-project': {
-        // Same disk-plus-live-memory contract as permissions:remove above.
-        const removed = this.nativeRuntime
-          ? await this.nativeRuntime.nativeHost.revokeProject(payload.slug)
-          : false;
-        this.respond(client.ws, type, id, removed);
-        break;
-      }
-      // Specialists 1c (Task 8) — mirrors the desktop IPC handlers so a
-      // remote client (a phone, typically) reaches the SAME specialistCatalog
-      // / nativeHost instances. NOT gated on native.supported — a phone must
-      // still be able to see the roster and answer a hire's ask. A
-      // disconnected runtime answers the general-non-committal message
-      // (error-message-standards.md) rather than hanging or guessing why.
-      case 'specialists:list': {
-        if (!this.nativeRuntime) {
-          this.respond(client.ws, type, id, { definitions: [], skipped: [], folders: { personal: '', claudeUser: '' } });
-          break;
-        }
-        const { specialistCatalog } = this.nativeRuntime;
-        if (payload?.ensurePersonalFolder) await specialistCatalog.ensurePersonalFolder();
-        await specialistCatalog.reload(payload?.cwd);
-        this.respond(client.ws, type, id, toListResult(specialistCatalog.snapshot(payload?.cwd)));
-        break;
-      }
-      case 'specialists:delegated-get': {
-        const result = this.nativeRuntime
-          ? await this.nativeRuntime.nativeHost.getDelegatedModels()
-          : { budget: null, frontier: null };
-        this.respond(client.ws, type, id, result);
-        break;
-      }
-      case 'specialists:delegated-set': {
-        const result = this.nativeRuntime
-          ? await this.nativeRuntime.nativeHost.setDelegatedModel(payload.tier, payload.binding)
-          : { ok: false, error: 'The assistant runtime isn’t connected.' };
-        this.respond(client.ws, type, id, result);
-        break;
-      }
-      case 'specialists:steer': {
-        const result = this.nativeRuntime
-          ? this.nativeRuntime.nativeHost.steerFromUser(payload.sessionId, payload.childId, payload.text)
-          : { ok: false, error: 'The assistant runtime isn’t connected.' };
-        this.respond(client.ws, type, id, result);
-        break;
-      }
-      case 'specialists:interrupt': {
-        const result = this.nativeRuntime
-          ? this.nativeRuntime.nativeHost.interruptFromUser(payload.sessionId, payload.childId)
-          : { ok: false, error: 'The assistant runtime isn’t connected.' };
-        this.respond(client.ws, type, id, result);
-        break;
-      }
       // Local engine (Plan B). status is sync; install/restart resolve to a
       // fresh status() so the remote client mirrors the desktop IPC contract.
       case 'engine:status': {
@@ -2792,16 +2554,6 @@ export class RemoteServer {
         }
         break;
       }
-      case 'permission:respond': {
-        const { requestId, decision } = payload;
-        // Native asks share the channel; 'native-'-prefixed ids route to the
-        // broker first, then fall through to hookRelay (mirrors ipc-handlers).
-        const result = this.nativeRuntime?.nativeHost.respondPermission(requestId, decision)
-          ? true
-          : this.hookRelay.respond(requestId, decision);
-        this.respond(client.ws, type, id, result);
-        break;
-      }
       // Read-only lists a phone's screens load at start. Each was "unhandled channel" in the
       // 2026-09-11 phone pass log and its screen fell back to empty. The same functions the
       // desktop handlers call, so the two cannot drift; a failure is answered as a failure
@@ -2838,29 +2590,6 @@ export class RemoteServer {
           this.respond(client.ws, type, id, { path: filePath });
         } catch (err) {
           this.respond(client.ws, type, id, { error: 'Upload failed' });
-        }
-        break;
-      }
-      case 'model:get-preference': {
-        const modelPrefPath = path.join(os.homedir(), '.claude', 'youcoded-model.json');
-        try {
-          const raw = await fs.promises.readFile(modelPrefPath, 'utf8');
-          const parsed = JSON.parse(raw);
-          this.respond(client.ws, type, id, parsed.model || 'sonnet');
-        } catch {
-          this.respond(client.ws, type, id, 'sonnet');
-        }
-        break;
-      }
-      case 'model:set-preference': {
-        const modelPrefPath = path.join(os.homedir(), '.claude', 'youcoded-model.json');
-        const model = payload.model || payload;
-        try {
-          await fs.promises.mkdir(path.dirname(modelPrefPath), { recursive: true });
-          await fs.promises.writeFile(modelPrefPath, JSON.stringify({ model }));
-          this.respond(client.ws, type, id, true);
-        } catch {
-          this.respond(client.ws, type, id, false);
         }
         break;
       }
@@ -2957,43 +2686,6 @@ export class RemoteServer {
       }
       case 'game:setIncognito': {
         this.respond(client.ws, type, id, setIncognito(payload));
-        break;
-      }
-      case 'model:read-last': {
-        // Mirror of ipc-handlers.ts model:read-last — reads the last assistant
-        // message's model field from a JSONL transcript. Accepts either a raw
-        // string or { transcriptPath } so the same shim wrapping works on
-        // Android (wraps in object) and remote browsers (passes string).
-        const transcriptPath = (payload && typeof payload === 'object' && 'transcriptPath' in payload)
-          ? payload.transcriptPath
-          : payload;
-        if (typeof transcriptPath !== 'string') {
-          this.respond(client.ws, type, id, null);
-          break;
-        }
-        try {
-          const claudeProjects = path.join(os.homedir(), '.claude', 'projects');
-          const resolved = path.resolve(transcriptPath);
-          if (!resolved.startsWith(claudeProjects + path.sep)) {
-            this.respond(client.ws, type, id, null);
-            break;
-          }
-          const content = await fs.promises.readFile(transcriptPath, 'utf-8');
-          const lines = content.trim().split('\n');
-          let model: string | null = null;
-          for (let i = lines.length - 1; i >= 0; i--) {
-            try {
-              const entry = JSON.parse(lines[i]);
-              if (entry.type === 'assistant' && entry.message?.model) {
-                model = entry.message.model;
-                break;
-              }
-            } catch { /* skip malformed line */ }
-          }
-          this.respond(client.ws, type, id, model);
-        } catch {
-          this.respond(client.ws, type, id, null);
-        }
         break;
       }
       case 'remote:get-config': {
@@ -3134,18 +2826,6 @@ export class RemoteServer {
           wc.setZoomLevel(0);
         }
         this.respond(client.ws, type, id, toPercent(wc.getZoomLevel()));
-        break;
-      }
-
-      // Native runtime interrupt — fire-and-forget (no response). The host no-ops unknown ids.
-      case 'native:interrupt': {
-        this.nativeRuntime?.nativeHost.interrupt(payload.sessionId);
-        break;
-      }
-      // Stalled-turn Retry — fire-and-forget, same shape as interrupt above.
-      // The host no-ops when nothing is parked (stream already resumed).
-      case 'native:retry': {
-        this.nativeRuntime?.nativeHost.retryStalledStep(payload.sessionId);
         break;
       }
 

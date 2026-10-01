@@ -70,8 +70,29 @@ export interface SessionOps {
 }
 
 let boundOps: SessionOps | null = null;
+// WHY (2026-09-30 one-core R3-5, review F4): the phone's socket opens before registerIpcHandlers has
+// bound these, and for those first seconds a phone's session or naming call used to be answered
+// ("Sessions are not ready yet") instead of served. A call that arrives unbound now WAITS for the bind
+// (up to BOOT_WAIT_MS) and then runs normally; the computer's own door registers after the bind, so it
+// never waits.
+const BOOT_WAIT_MS = 15_000;
+let bindWaiters: Array<() => void> = [];
 /** Called once by registerIpcHandlers (null unbinds, for tests). */
-export function bindSessionOps(next: SessionOps | null): void { boundOps = next; }
+export function bindSessionOps(next: SessionOps | null): void {
+  boundOps = next;
+  if (next) { const waiting = bindWaiters; bindWaiters = []; for (const wake of waiting) wake(); }
+}
+function untilBound(): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      bindWaiters = bindWaiters.filter((w) => w !== wake);
+      reject(new Error('Sessions are not ready yet. Try again.'));
+    }, BOOT_WAIT_MS);
+    timer.unref?.();
+    const wake = () => { clearTimeout(timer); resolve(); };
+    bindWaiters.push(wake);
+  });
+}
 function ops(): SessionOps {
   if (!boundOps) throw new Error('Sessions are not ready yet. Try again.');
   return boundOps;
@@ -103,6 +124,24 @@ function announceMeta(resolved: string, change: Record<string, unknown>): void {
   emitConversationMetaChanged();
 }
 
+/** The transcript file for a conversation id, probing the caller's project-folder hint FIRST and scanning
+ *  the projects directory only on a miss.
+ *  WHY (2026-09-30 one-core R3-5, review F3): both doors listed ~/.claude/projects on every call even
+ *  when the hint was right (the common case: one stat would do); a long scroll-up pages dozens of times.
+ *  The caller has already checked `sessionId` against SAFE_ID_RE; the hint is checked here before it can
+ *  shape a path. Returns the project folder name, or '' when no transcript is found. */
+async function findTranscriptSlug(sessionId: string, slugHint: unknown): Promise<{ slug: string; projectsDir: string }> {
+  const projectsDir = path.join(os.homedir(), '.claude', 'projects');
+  const exists = (slug: string) => fs.promises.access(path.join(projectsDir, slug, sessionId + '.jsonl')).then(() => true, () => false);
+  const hint = typeof slugHint === 'string' && SAFE_ID_RE.test(slugHint) ? slugHint : '';
+  if (hint && await exists(hint)) return { slug: hint, projectsDir };
+  const slugs = await fs.promises.readdir(projectsDir).catch(() => [] as string[]);
+  for (const slug of slugs) {
+    if (slug !== hint && await exists(slug)) return { slug, projectsDir };
+  }
+  return { slug: '', projectsDir };
+}
+
 /** The phone's paged history. Kept as the phone's own body: a phone has no window ownership, resume
  *  boundary or watcher, so it resolves the transcript file itself (the computer's version is
  *  desktopTranscriptPage, bound above). Validate the id FIRST, then probe the caller's slug before
@@ -126,17 +165,8 @@ async function phoneTranscriptPage(req: any, nativeHost: NativeSessionHost | und
     };
   }
 
-  const pageProjectsDir = path.join(os.homedir(), '.claude', 'projects');
-  const pageSlugs = await fs.promises.readdir(pageProjectsDir).catch(() => [] as string[]);
-  const pageSlugHint = req.projectSlug;
-  const pageCandidates = (typeof pageSlugHint === 'string' && SAFE_ID_RE.test(pageSlugHint))
-    ? [pageSlugHint, ...pageSlugs.filter((sl) => sl !== pageSlugHint)]
-    : pageSlugs;
-  let pagePath = '';
-  for (const slug of pageCandidates) {
-    const candidate = path.join(pageProjectsDir, slug, pageSessionId + '.jsonl');
-    try { await fs.promises.access(candidate); pagePath = candidate; break; } catch { /* try the next slug */ }
-  }
+  const { slug: pageSlug, projectsDir: pageProjectsDir } = await findTranscriptSlug(pageSessionId, req.projectSlug);
+  const pagePath = pageSlug ? path.join(pageProjectsDir, pageSlug, pageSessionId + '.jsonl') : '';
   // "I could not find the transcript" must not read as "you have reached the beginning of the
   // conversation", which the renderer records by dropping the cursor and the scroll-up sentinel for good.
   if (!pagePath) return { ...emptyPage, unresolved: true };
@@ -148,7 +178,7 @@ async function phoneTranscriptPage(req: any, nativeHost: NativeSessionHost | und
   });
 }
 
-export const sessionChannels: MainChannelDef[] = [
+const sessionEntries: MainChannelDef[] = [
   // ── Lifecycle ────────────────────────────────────────────────────────────────
   defineChannel({
     name: IPC.SESSION_CREATE, kind: 'handle',
@@ -227,6 +257,13 @@ export const sessionChannels: MainChannelDef[] = [
       for (const [desktopId, claudeId] of sessionIdMap.entries()) {
         if (sessionManager.getSession(desktopId)) activeIds.add(claudeId);
       }
+      // WHY (2026-09-30 one-core R3-5, review F2): a NATIVE session's desktop id IS its conversation id, but
+      // it is entered in the map only after its native start finishes; browsing in that window offered the
+      // brand-new conversation as resumable. The old phone lookup excluded every live id; this keeps that for
+      // native ids only (a Claude desktop id matches no transcript, and the tests pin it stays out).
+      for (const live of sessionManager.listSessions()) {
+        if (nativeHost.isNativeSessionId(live.id)) activeIds.add(live.id);
+      }
       // Native rows join the SAME enrichment pass Claude Code rows get (flags/tags/note/device/title
       // precedence, lastUsedModel); NativeSessionHost stays the one source of truth for what exists.
       return browseOnce([...activeIds].sort().join(','), async () => {
@@ -244,17 +281,9 @@ export const sessionChannels: MainChannelDef[] = [
       // traversal-shaped id would make the probe a file-existence oracle. The typeof check matters too:
       // SAFE_ID_RE.test(undefined) coerces to the string "undefined", which the regex accepts.
       if (typeof sessionId !== 'string' || !SAFE_ID_RE.test(sessionId)) return [];
-      // Probe the caller's slug FIRST (the common case skips the directory scan); a stale or invalid slug
-      // falls through to the scan, and SAFE_ID_RE gates it before it can shape a path.
-      const projectsDir = path.join(os.homedir(), '.claude', 'projects');
-      const slugs = await fs.promises.readdir(projectsDir).catch(() => [] as string[]);
-      const candidates = (typeof projectSlug === 'string' && SAFE_ID_RE.test(projectSlug))
-        ? [projectSlug, ...slugs.filter((s) => s !== projectSlug)]
-        : slugs;
-      let foundSlug = '';
-      for (const slug of candidates) {
-        try { await fs.promises.access(path.join(projectsDir, slug, sessionId + '.jsonl')); foundSlug = slug; break; } catch { /* next */ }
-      }
+      // WHY (2026-09-30 one-core R3-5, F3): the caller's slug is probed first and the directory scanned only
+      // on a miss (findTranscriptSlug); SAFE_ID_RE gates both before they can shape a path.
+      const { slug: foundSlug } = await findTranscriptSlug(sessionId, projectSlug);
       if (!foundSlug) return [];
       return loadHistory(sessionId, foundSlug, count, all);
     },
@@ -401,3 +430,13 @@ export const sessionChannels: MainChannelDef[] = [
     },
   }),
 ];
+
+/** Entries whose handler never reads the bound ops, so they have nothing to wait for. */
+const NEEDS_NO_BIND = new Set<string>([IPC.SESSION_HISTORY, IPC.READ_TRANSCRIPT_META, IPC.SESSION_SWITCH, IPC.TRANSCRIPT_PAGE]);
+
+/** Every other entry, made to wait for the bind when called before it (see untilBound). WHY the bound path
+ *  calls the handler directly with no await: session:create must claim its window before its first await. */
+export const sessionChannels: MainChannelDef[] = sessionEntries.map((def) => NEEDS_NO_BIND.has(def.name) ? def : ({
+  ...def,
+  handler: (payload: any, ctx: any) => (boundOps ? def.handler(payload, ctx) : untilBound().then(() => def.handler(payload, ctx))),
+}));

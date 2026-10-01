@@ -177,7 +177,9 @@ import { bindingToPortableModel } from './conversations/portable-model';
 import { createHolderTakeover } from './conversations/takeover';
 import { createResumeAdmission } from './conversations/resume-admission';
 import { createHandoffAttempts } from './conversations/handoff-attempt';
-import { createHandoffTransport, registerHandoffIpc } from './conversations/handoff-transport';
+import { createHandoffTransport } from './conversations/handoff-transport';
+import { bindHandoffRoute } from './ipc/handoff';
+import { bindPermissionHooks } from './ipc/permissions';
 import { createTransferredExitGate } from './conversations/handoff-exit';
 import { hubLeaseRequest, syncSpacesSyncNowAwaited } from './sync-spaces/service';
 import type { RequesterTakeoverType } from './conversations/takeover';
@@ -1213,26 +1215,7 @@ export function registerIpcHandlers(
     return shell.openPath(filePath);
   });
 
-  // --- Model preference persistence ---
-  ipcMain.handle('model:get-preference', async () => {
-    try {
-      const raw = fs.readFileSync(modelPrefPath, 'utf-8');
-      const parsed = JSON.parse(raw);
-      return parsed.model || 'sonnet';
-    } catch {
-      return 'sonnet';
-    }
-  });
-
-  ipcMain.handle('model:set-preference', async (_event, { model }: { model: string }) => {
-    try {
-      fs.mkdirSync(path.dirname(modelPrefPath), { recursive: true });
-      fs.writeFileSync(modelPrefPath, JSON.stringify({ model }));
-      return true;
-    } catch {
-      return false;
-    }
-  });
+  // WHY (2026-09-30 one-core R3-5): model:get-preference / set-preference live in the channel table (main/ipc/model.ts).
 
   // WHY (2026-09-30 one-core R3-1): modes:get / modes:set, settings:get / settings:set,
   // defaults:get / defaults:set, analytics:* , folders:* and tags:* now live in the channel table
@@ -1263,29 +1246,7 @@ export function registerIpcHandlers(
     }
   });
 
-  // --- Transcript model verification ---
-  ipcMain.handle('model:read-last', async (_event, { transcriptPath }: { transcriptPath: string }) => {
-    try {
-      // Security: validate path stays within Claude projects directory (prevents arbitrary file read)
-      const claudeProjects = path.join(os.homedir(), '.claude', 'projects');
-      const resolved = path.resolve(transcriptPath);
-      if (!resolved.startsWith(claudeProjects + path.sep)) return null;
-
-      const content = fs.readFileSync(transcriptPath, 'utf-8');
-      const lines = content.trim().split('\n');
-      for (let i = lines.length - 1; i >= 0; i--) {
-        try {
-          const entry = JSON.parse(lines[i]);
-          if (entry.type === 'assistant' && entry.message?.model) {
-            return entry.message.model;
-          }
-        } catch { continue; }
-      }
-      return null;
-    } catch {
-      return null;
-    }
-  });
+  // model:read-last is a table entry too (main/ipc/model.ts).
 
   // --- Session defaults persistence ---
   // The channels themselves are table entries (main/ipc/defaults.ts); prefs-service.ts holds the
@@ -1585,7 +1546,6 @@ export function registerIpcHandlers(
   const updateService = getUpdateService();
   const getUpdateStatus = () => updateService.getUpdateStatus();
   updateService.fetchLatestRelease().catch(() => {});
-  const modelPrefPath = path.join(os.homedir(), '.claude', 'youcoded-model.json');
   const appearancePrefPath = path.join(os.homedir(), '.claude', 'youcoded-appearance.json');
   const defaultsPrefPath = path.join(os.homedir(), '.claude', 'youcoded-defaults.json');
 
@@ -1878,7 +1838,7 @@ export function registerIpcHandlers(
     },
   }) : null;
   const handoffRoute = createHandoffTransport(handoffAttempts);
-  registerHandoffIpc(ipcMain, handoffRoute);
+  bindHandoffRoute(handoffRoute); // WHY (2026-09-30 one-core R3-5): handoff:* are table entries (main/ipc/handoff.ts) for windows AND phones.
   remoteServer?.setHandoffRoute?.(handoffRoute);
   const transferredExit = createTransferredExitGate(resumeAdmission,
     (sessionId) => handoffAttempts?.hasSession(sessionId) ?? false,
@@ -2369,94 +2329,9 @@ export function registerIpcHandlers(
     sendLiveOnlyState(evt.sender, sessionId, nativeHost.isLive(sessionId));
   });
 
-  // --- Native runtime IPC (Phase 1 Plan A) ---
-  // M1: invoke — returns {status:'sent'|'queued'|'failed', reason?} so the renderer
-  // can render truthful bubbles. send() is sync and never throws (host contract).
-  // `attachments` are absolute composer file paths (optional — older renderers
-  // and the remote shim may omit it). Image ones become image parts on the user
-  // message; the paths also stay in `text`, which is the bubble's dedup key.
-  ipcMain.handle(IPC.NATIVE_SEND, (_e, { sessionId, text, attachments }: { sessionId: string; text: string; attachments?: string[] }) =>
-    nativeHost.send(sessionId, text, attachments ?? []));
-  // Task 11: cancel/edit a queued-but-not-yet-sent message. removeQueued is
-  // sync and never throws — the boolean IS the answer (true = removed, false =
-  // too late / unknown), so this is a thin pass-through like NATIVE_SEND above.
-  ipcMain.handle(IPC.NATIVE_QUEUE_REMOVE, (_e, { sessionId, queueId }: { sessionId: string; queueId: string }) =>
-    nativeHost.removeQueued(sessionId, queueId));
-  // "Send now" on a waiting message — same sync, never-throws boolean contract.
-  ipcMain.handle(IPC.NATIVE_QUEUE_SEND_NOW, (_e, { sessionId, queueId }: { sessionId: string; queueId: string }) =>
-    nativeHost.sendQueuedNow(sessionId, queueId));
-  // Fire-and-forget I/O (no response): interrupt only. The host never throws for unknown ids.
-  ipcMain.on(IPC.NATIVE_INTERRUPT, (_e, { sessionId }: { sessionId: string }) => {
-    nativeHost.interrupt(sessionId);
-  });
-  // Stalled-turn Retry — fire-and-forget, same shape as interrupt above. The
-  // host no-ops when nothing is parked (stream already resumed).
-  ipcMain.on(IPC.NATIVE_RETRY, (_e, { sessionId }: { sessionId: string }) => {
-    nativeHost.retryStalledStep(sessionId);
-  });
-  // User-initiated /compact for a native session. Never throws across IPC: a
-  // failure returns a coded reason so the renderer can surface a specific,
-  // accurate message instead of a guessed one (docs/error-message-standards.md).
-  ipcMain.handle(IPC.NATIVE_COMPACT, async (_e, { sessionId, focus }: { sessionId: string; focus?: string }) => {
-    try {
-      return await nativeHost.compact(sessionId, focus);
-    } catch (err: any) {
-      return { ok: false, reason: 'error', detail: err?.message ?? String(err) };
-    }
-  });
-  // /clear as a context BARRIER — appends a marker; the log is never rewritten.
-  ipcMain.handle(IPC.NATIVE_CLEAR, (_e, { sessionId }: { sessionId: string }) => {
-    try {
-      return nativeHost.clear(sessionId);
-    } catch (err: any) {
-      return { ok: false, reason: 'error', detail: err?.message ?? String(err) };
-    }
-  });
-  // /skill-name — loads one skill's instructions as a turn (M3 item 1). Works on
-  // every model, unlike the Skill TOOL, which small windows never get.
-  ipcMain.handle(IPC.NATIVE_INVOKE_SKILL, async (_e, { sessionId, skill, args }: { sessionId: string; skill: string; args?: string }) => {
-    try {
-      return await nativeHost.invokeSkill(sessionId, skill, args);
-    } catch (err: any) {
-      return { ok: false, reason: 'error', detail: err?.message ?? String(err) };
-    }
-  });
-  // U11: the picker's switch. Same model-used write-through as set-binding
-  // below, but only once the switch actually happened.
-  ipcMain.handle(IPC.NATIVE_SWITCH_MODEL, async (_e, { sessionId, binding, summarize }: { sessionId: string; binding: any; summarize?: boolean }) => {
-    try {
-      const result = await nativeHost.switchModel(sessionId, binding, summarize === true);
-      if (result.status === 'switched') {
-        const ref = await resolvePortableModel(sessionId);
-        if (ref) noteModelUsed(sessionId, ref);
-      }
-      return result;
-    } catch (err: any) {
-      return { status: 'failed', reason: 'error', detail: err?.message ?? String(err) };
-    }
-  });
-  ipcMain.handle(IPC.NATIVE_SET_BINDING, async (_e, { sessionId, binding }: { sessionId: string; binding: any }) => {
-    const ok = await nativeHost.setBinding(sessionId, binding);
-    // Task 4: a successful mid-session model swap is exactly the "model may
-    // have changed" case noteModelUsed exists for — write it through so the
-    // resume selector reflects the swap without waiting for the next turn.
-    if (ok) {
-      const ref = await resolvePortableModel(sessionId);
-      if (ref) noteModelUsed(sessionId, ref);
-    }
-    return ok;
-  });
-  // Per-session permission mode (renderer chip). setPermissionMode throws on an
-  // unknown mode string — the reject surfaces to the renderer invoke() so the
-  // chip sees the failure instead of a false "applied"; on success it returns the
-  // applied mode as the authoritative value.
-  ipcMain.handle(IPC.NATIVE_SET_PERMISSION_MODE, async (_e, { sessionId, mode }: { sessionId: string; mode: NativePermissionMode }) =>
-    nativeHost.setPermissionMode(sessionId, mode));
-  // Read-only mode fetch — seeds the renderer chip on create/resume so a fresh
-  // Coder session shows AUTO EDIT rather than the default ASK. Never throws
-  // (getPermissionMode falls back to 'ask' for an unknown/non-live id).
-  ipcMain.handle(IPC.NATIVE_GET_PERMISSION_MODE, async (_e, { sessionId }: { sessionId: string }) =>
-    nativeHost.getPermissionMode(sessionId));
+  // WHY (2026-09-30 one-core R3-5): the native:* request channels (send, queue, interrupt, compact, models,
+  // permission mode, context prefs, step guard, sessions-list, kill-shell, admin password, context text) are
+  // table entries (main/ipc/native.ts). The PUSH below stays here: it fans out to windows and phones as before.
   // Push every seeded or changed mode to each window showing the session AND
   // every phone. WHY: the get above can answer before a starting session has
   // its mode, and a change made in one window or on the phone used to reach
@@ -2466,34 +2341,6 @@ export function registerIpcHandlers(
   nativeHost.on('permission-mode', (e: { sessionId: string; mode: NativePermissionMode }) => {
     sendForSession(e.sessionId, IPC.NATIVE_PERMISSION_MODE, e);
     remoteServer?.broadcast({ type: IPC.NATIVE_PERMISSION_MODE, payload: e });
-  });
-  ipcMain.handle(IPC.NATIVE_GET_CONTEXT_PREFERENCES, () => {
-    if (process.env.YOUCODED_NATIVE === '0') throw new Error('Native context preferences are not supported');
-    return contextSettings.read();
-  });
-  ipcMain.handle(IPC.NATIVE_SET_CONTEXT_PREFERENCES, async (_e, { patch }: { patch: unknown }) => {
-    if (process.env.YOUCODED_NATIVE === '0') throw new Error('Native context preferences are not supported');
-    return contextSettings.update(patch);
-  });
-  ipcMain.handle(IPC.NATIVE_GET_STEP_GUARD, () => stepGuardSettings.read());
-  ipcMain.handle(IPC.NATIVE_SET_STEP_GUARD, async (_e, { value }: { value: number | null }) => stepGuardSettings.update(value));
-  ipcMain.handle(IPC.NATIVE_SESSIONS_LIST, async () => nativeHost.listAsync());
-  // G-1: the Bash card's Stop button, on every surface.
-  ipcMain.handle(IPC.NATIVE_KILL_SHELL, (_e, { sessionId, shellId }: { sessionId: string; shellId: string }) => nativeHost.killShell(sessionId, shellId));
-  // "What the assistant was given" — one file's text, read when the user opens
-  // that row. Synchronous disk read of a file the session already depends on;
-  // the host answers { error } rather than throwing, so a deleted skill shows a
-  // line in the panel instead of an unhandled rejection in the renderer.
-  ipcMain.handle(IPC.NATIVE_SESSION_CONTEXT_TEXT, (_e, { sessionId, kind, id }: { sessionId: string; kind: 'project' | 'user' | 'skill'; id?: string }) => {
-    // The native harness answers for its own sessions, because only it knows the
-    // budget the text would be cut to. Everything else — a Claude Code session,
-    // and the user-level instructions the harness never reads — is a plain file
-    // read: nothing shortened it, so both sides of the comparison are the file.
-    if (kind !== 'user') {
-      const fromHost = nativeHost.sessionContextText(sessionId, kind, id);
-      if (!('error' in fromHost) || fromHost.error !== 'not-live') return fromHost;
-    }
-    return readWholeContextFile(sessionManager, sessionId, kind, id);
   });
   // Provider management (Settings → Providers).
   ipcMain.handle(IPC.PROVIDER_LIST, async () => providerRegistry.list());
@@ -2546,36 +2393,8 @@ export function registerIpcHandlers(
   ipcMain.handle(IPC.SEARCH_SET_KEY, async (_e, { backend, key }: { backend: 'tavily' | 'exa'; key: string }) => { await searchKeyStore.setKey(backend, key); return true; });
   ipcMain.handle(IPC.SEARCH_REMOVE_KEY, async (_e, { backend }: { backend: 'tavily' | 'exa' }) => { await searchKeyStore.removeKey(backend); return true; });
   ipcMain.handle(IPC.SEARCH_TEST, async (_e, { backend, key }: { backend: 'tavily' | 'exa'; key: string }) => searchService.testBackend(backend, key));
-  // Remembered "Always allow" rules (Settings → Permissions, M5 2a).
-  // list READS the store directly — it only reports what is on disk.
-  // remove / remove-project go through nativeHost.revokeRule / revokeProject and
-  // NEVER through permissionStore.remove / removeProject: the store touches disk
-  // only, while the host also clears the per-session in-memory `rememberedFor`
-  // map that buildDecide unions into every decision. A disk-only delete would
-  // leave an already-running session granting exactly what the user just
-  // revoked — the failure this whole feature exists to prevent.
-  // Both revokes return true only when something actually matched; false means
-  // the renderer's list was stale, and it says so instead of claiming success.
-  ipcMain.handle(IPC.PERMISSIONS_LIST, async () => permissionStore.list());
-  ipcMain.handle(IPC.PERMISSIONS_REMOVE, async (_e, { slug, rule }: { slug: string; rule: PermissionRule }) => nativeHost.revokeRule(slug, rule));
-  ipcMain.handle(IPC.PERMISSIONS_REMOVE_PROJECT, async (_e, { slug }: { slug: string }) => nativeHost.revokeProject(slug));
-  // Specialists 1c (Task 8) — roster + tier reads/writes + card actions.
-  // list ALWAYS re-reads (catalog.reload) so a file dropped into a specialists
-  // folder a moment ago shows up without a separate "did it change" check;
-  // ensurePersonalFolder is opt-in (Settings' "Open folder" needs somewhere
-  // to open the FIRST time, before any file has ever been written there).
-  ipcMain.handle(IPC.SPECIALISTS_LIST, async (_e, opts?: { cwd?: string; ensurePersonalFolder?: boolean }) => {
-    if (opts?.ensurePersonalFolder) await specialistCatalog.ensurePersonalFolder();
-    await specialistCatalog.reload(opts?.cwd);
-    return toListResult(specialistCatalog.snapshot(opts?.cwd));
-  });
-  ipcMain.handle(IPC.SPECIALISTS_DELEGATED_GET, async () => nativeHost.getDelegatedModels());
-  ipcMain.handle(IPC.SPECIALISTS_DELEGATED_SET, async (_e, { tier, binding }: { tier: 'budget' | 'frontier'; binding: { providerId: string; modelId: string } | null }) =>
-    nativeHost.setDelegatedModel(tier, binding));
-  ipcMain.handle(IPC.SPECIALISTS_STEER, async (_e, { sessionId, childId, text }: { sessionId: string; childId: string; text: string }) =>
-    nativeHost.steerFromUser(sessionId, childId, text));
-  ipcMain.handle(IPC.SPECIALISTS_INTERRUPT, async (_e, { sessionId, childId }: { sessionId: string; childId: string }) =>
-    nativeHost.interruptFromUser(sessionId, childId));
+  // WHY (2026-09-30 one-core R3-5): permissions:* and specialists:* request channels are table entries
+  // (main/ipc/permissions.ts, specialists.ts); their pushes (specialists:event ...) are sent from the ledger wiring above.
   // --- Local engine IPC (Plan B) ---
   // install/restart resolve to a fresh status() so the caller doesn't need a
   // second round-trip. The push emitters below keep every window + remote in
@@ -3244,30 +3063,10 @@ export function registerIpcHandlers(
   setGithubConnect(githubConnect);
   // The request/response side (status, connect-start/cancel, install-gh, disconnect) is main/ipc/github.ts.
 
-  // --- Permission response (blocking hooks + native asks) ---
-  // Native asks share the channel; ids are 'native-'-prefixed so routing is
-  // exact — try the native broker first, then fall through to hookRelay (which
-  // may be absent in native-only sessions).
-  ipcMain.handle(IPC.PERMISSION_RESPOND, async (_event, { requestId, decision }: { requestId: string; decision: object }) => {
-    if (nativeHost.respondPermission(requestId, decision as Record<string, unknown>)) return true;
-    return hookRelay ? hookRelay.respond(requestId, decision) : false;
-  });
-
-  // admin-password design §2.5: the card's Confirm button. `password` is never
-  // logged, echoed, or stored on this hop — it goes straight into
-  // nativeHost.submitAdminPassword() (AdminPasswordService.submit() under
-  // it), which converts it to a Buffer and hands it to the verified askpass
-  // socket without holding it beyond that call.
-  // T4-2 (review): a malformed/malicious payload's `password` is only typed
-  // as `string` at compile time — nothing upstream of this line actually
-  // checks it. A non-string reaching `Buffer.from(password, 'utf8')` inside
-  // submit() throws synchronously; Electron rejects the ipcMain.handle
-  // promise for that (no crash), but it's an unnecessary throw path a
-  // buggy/malicious renderer can trigger. Refused here instead, matching
-  // submit()'s own "unknown/expired requestId returns false" contract —
-  // never logs `password` (a non-string value included).
-  ipcMain.handle(IPC.NATIVE_SUBMIT_ADMIN_PASSWORD, (_event, { requestId, password }: { requestId: string; password: string }) =>
-    typeof password === 'string' && password.length > 0 ? nativeHost.submitAdminPassword(requestId, password) : false);
+  // WHY (2026-09-30 one-core R3-5): permission:respond and native:submit-admin-password are table entries
+  // (main/ipc/permissions.ts, native.ts). The hook relay is the one thing the permission entry needs that the
+  // runtime does not carry, so it is handed over here.
+  bindPermissionHooks(hookRelay);
 
   // WHY (2026-09-30 one-core R3-2): the dev:* handlers moved to main/ipc/dev.ts (the channel table).
 

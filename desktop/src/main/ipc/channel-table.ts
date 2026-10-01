@@ -36,6 +36,11 @@ import { syncChannels } from './sync';
 import { syncSpacesChannels } from './sync-spaces';
 import { githubChannels } from './github';
 import { sessionChannels } from './session';
+import { nativeChannels } from './native';
+import { permissionsChannels } from './permissions';
+import { specialistsChannels } from './specialists';
+import { modelChannels } from './model';
+import { handoffChannels } from './handoff';
 
 export type { MainChannelCtx, MainChannelDef } from './channel-def';
 
@@ -58,6 +63,11 @@ export const CHANNEL_TABLE: MainChannelDef[] = [
   ...syncSpacesChannels,
   ...githubChannels,
   ...sessionChannels,
+  ...nativeChannels,
+  ...permissionsChannels,
+  ...specialistsChannels,
+  ...modelChannels,
+  ...handoffChannels,
 ];
 
 let indexed: { size: number; byName: Map<string, MainChannelDef> } | null = null;

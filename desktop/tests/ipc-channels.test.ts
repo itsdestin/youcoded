@@ -58,6 +58,8 @@ describe('IPC channel consistency', () => {
   test('handoff channels explicitly refuse Android-local while both desktop transports expose them', () => {
     const kotlin = readSource('..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt');
     const host = readSource('src', 'main', 'remote-server.ts');
+    // WHY (2026-09-30 one-core R3-5): both desktop doors now serve handoff:* from ONE table entry each.
+    const entries = readSource('src', 'main', 'ipc', 'handoff.ts');
     const shim = readSource('src', 'renderer', 'remote-shim.ts');
     // WHY: a missing Android branch returns unsupported by default, but explicit refusal pins the intent.
     for (const [name, action] of Object.entries({ HANDOFF_BEGIN: 'begin', HANDOFF_STATUS: 'status',
@@ -67,7 +69,8 @@ describe('IPC channel consistency', () => {
       expect(preloadIpc.get(name)).toBe(channel);
       expect(typesIpc.get(name)).toBe(channel);
       expect(kotlin).toContain(`"${channel}"`);
-      expect(host).toContain(`case '${channel}':`);
+      expect(entries).toContain(`IPC.${name}`);
+      expect(host).not.toContain(`case '${channel}':`);
       expect(shim).toContain(`invoke('${channel}'`);
     }
     expect(kotlin).toMatch(/"handoff:create-params"\s*->\s*\{[\s\S]*?put\("unsupported", true\)/);
@@ -352,14 +355,15 @@ describe('native:retry channel parity', () => {
   it('is declared in preload.ts', () => {
     expect(read('src', 'main', 'preload.ts')).toContain(`'${CHANNEL}'`);
   });
-  it('is handled in ipc-handlers.ts', () => {
-    expect(read('src', 'main', 'ipc-handlers.ts')).toContain('NATIVE_RETRY');
+  // WHY (2026-09-30 one-core R3-5): one table entry serves both the computer's windows and a phone.
+  it('is served by one channel-table entry (main/ipc/native.ts)', () => {
+    expect(read('src', 'main', 'ipc', 'native.ts')).toContain('IPC.NATIVE_RETRY');
   });
   it('is referenced in remote-shim.ts', () => {
     expect(read('src', 'renderer', 'remote-shim.ts')).toContain(`'${CHANNEL}'`);
   });
-  it('is handled in remote-server.ts', () => {
-    expect(read('src', 'main', 'remote-server.ts')).toContain(`'${CHANNEL}'`);
+  it('has no leftover case in remote-server.ts (the table answers first)', () => {
+    expect(read('src', 'main', 'remote-server.ts')).not.toContain(`case '${CHANNEL}'`);
   });
   it('is answered not-implemented by SessionService.kt (Android)', () => {
     const src = readSourceFile(path.join(
@@ -980,20 +984,25 @@ describe('native:*/provider:* channel parity', () => {
     const src = read('src', 'renderer', 'remote-shim.ts');
     for (const t of NEW_TYPES) expect(src, `${t} missing from remote-shim.ts`).toContain(`'${t}'`);
   });
-  it('registered in ipc-handlers.ts (literal or IPC constant)', () => {
-    const src = read('src', 'main', 'ipc-handlers.ts');
-    for (const t of NEW_TYPES) expect(src.includes(`'${t}'`) || src.includes(CHANNEL_TO_CONST[t]), `${t} missing from ipc-handlers.ts`).toBe(true);
+  // WHY (2026-09-30 one-core R3-5): native:* are channel-table entries (main/ipc/native.ts), served to windows
+  // AND phones by one body; provider:* are still hand-registered in ipc-handlers.ts.
+  it('registered in ipc-handlers.ts (literal or IPC constant) or served by the native table entries', () => {
+    const src = read('src', 'main', 'ipc-handlers.ts') + read('src', 'main', 'ipc', 'native.ts');
+    for (const t of NEW_TYPES) expect(src.includes(`'${t}'`) || src.includes(CHANNEL_TO_CONST[t]), `${t} missing from ipc-handlers.ts / ipc/native.ts`).toBe(true);
   });
   it('stubbed in SessionService.kt (Android)', () => {
     const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
     for (const t of NEW_TYPES) expect(kt, `${t} missing from SessionService.kt`).toContain(`"${t}"`);
   });
-  // native:get-permission-mode is the one native channel with a remote-server WS
-  // case (Task 14 — the chip must seed over remote too); assert that fifth surface.
-  it('native:get-permission-mode handled by remote-server.ts (WS case)', () => {
-    const src = read('src', 'main', 'remote-server.ts');
-    expect(src, "native:get-permission-mode missing from remote-server.ts").toContain(`'native:get-permission-mode'`);
-  });
+  // WHY (2026-09-30 one-core R3-5): the request/response native channels are ONE table entry each, so a
+  // phone is answered by the same body as a window and there is no second `case` to forget. Pinned: each
+  // entry exists, and remote-server has no leftover case for it.
+  it.each(['native:get-permission-mode', 'native:get-step-guard', 'native:set-step-guard', 'native:send', 'native:queue-remove', 'native:queue-send-now', 'native:sessions-list'])(
+    '%s is a table entry with no leftover case in remote-server.ts', (channel) => {
+      const constant = 'IPC.' + channel.toUpperCase().replace(/[:-]/g, '_');
+      expect(read('src', 'main', 'ipc', 'native.ts')).toMatch(new RegExp(`name: ${constant.replace('.', '\\.')}, kind: 'handle'`));
+      expect(read('src', 'main', 'remote-server.ts')).not.toContain(`case '${channel}'`);
+    });
   // The mode push (push-only, so no Kotlin or remote-server request case): the
   // chip in every window and on every phone depends on receiving it.
   it('native:permission-mode push is sent by main and consumed by preload + remote-shim', () => {
@@ -1005,24 +1014,6 @@ describe('native:*/provider:* channel parity', () => {
     const main = read('src', 'main', 'ipc-handlers.ts');
     expect(main).toContain('sendForSession(e.sessionId, IPC.NATIVE_PERMISSION_MODE, e)');
     expect(main).toContain('remoteServer?.broadcast({ type: IPC.NATIVE_PERMISSION_MODE, payload: e })');
-  });
-  it.each(['native:get-step-guard', 'native:set-step-guard'])('%s is answered by remote-server', (channel) => {
-    const src = read('src', 'main', 'remote-server.ts');
-    const caseBlock = src.slice(src.indexOf(`case '${channel}'`));
-    expect(caseBlock.slice(0, 500), `${channel} must send a response`).toContain('this.respond(');
-  });
-  it('native:send is answered by remote-server (request/response, not fire-and-forget)', () => {
-    const src = read('src', 'main', 'remote-server.ts');
-    const caseBlock = src.slice(src.indexOf(`case 'native:send'`));
-    expect(caseBlock.slice(0, 400)).toContain('this.respond(');
-  });
-  // Task 11's queue-remove is also request/response (the renderer needs the
-  // true/false result) — same fifth-surface + shape checks as native:send above.
-  it('native:queue-remove handled by remote-server.ts (WS case, request/response)', () => {
-    const src = read('src', 'main', 'remote-server.ts');
-    expect(src, "native:queue-remove missing from remote-server.ts").toContain(`'native:queue-remove'`);
-    const caseBlock = src.slice(src.indexOf(`case 'native:queue-remove'`));
-    expect(caseBlock.slice(0, 400)).toContain('this.respond(');
   });
 });
 
@@ -1660,13 +1651,14 @@ describe('permissions:* channel parity', () => {
     const src = read('src', 'renderer', 'remote-shim.ts');
     for (const t of NEW_TYPES) expect(src, `${t} missing from remote-shim.ts`).toContain(`'${t}'`);
   });
-  it('registered in ipc-handlers.ts', () => {
-    const src = read('src', 'main', 'ipc-handlers.ts');
-    for (const t of NEW_TYPES) expect(src.includes(`'${t}'`) || src.includes(CHANNEL_TO_CONST[t]), `${t} missing from ipc-handlers.ts`).toBe(true);
-  });
-  it('handled by remote-server.ts (WS case)', () => {
-    const src = read('src', 'main', 'remote-server.ts');
-    for (const t of NEW_TYPES) expect(src, `${t} missing from remote-server.ts`).toContain(`'${t}'`);
+  // WHY (2026-09-30 one-core R3-5): served by ONE channel-table entry each (main/ipc/permissions.ts).
+  it('served by one channel-table entry each, with no leftover case in remote-server.ts', () => {
+    const table = read('src', 'main', 'ipc', 'permissions.ts');
+    const host = read('src', 'main', 'remote-server.ts');
+    for (const t of NEW_TYPES) {
+      expect(table, `${t} missing from ipc/permissions.ts`).toContain(CHANNEL_TO_CONST[t]);
+      expect(host, `${t} still has a case in remote-server.ts`).not.toContain(`case '${t}'`);
+    }
   });
   it('stubbed in SessionService.kt (Android)', () => {
     const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
@@ -1703,13 +1695,14 @@ describe('specialists:* channel parity', () => {
     const src = read('src', 'renderer', 'remote-shim.ts');
     for (const t of NEW_TYPES) expect(src, `${t} missing from remote-shim.ts`).toContain(`'${t}'`);
   });
-  it('registered in ipc-handlers.ts', () => {
-    const src = read('src', 'main', 'ipc-handlers.ts');
-    for (const t of NEW_TYPES) expect(src.includes(`'${t}'`) || src.includes(CHANNEL_TO_CONST[t]), `${t} missing from ipc-handlers.ts`).toBe(true);
-  });
-  it('handled by remote-server.ts (WS case)', () => {
-    const src = read('src', 'main', 'remote-server.ts');
-    for (const t of NEW_TYPES) expect(src, `${t} missing from remote-server.ts`).toContain(`'${t}'`);
+  // WHY (2026-09-30 one-core R3-5): served by ONE channel-table entry each (main/ipc/specialists.ts).
+  it('served by one channel-table entry each, with no leftover case in remote-server.ts', () => {
+    const table = read('src', 'main', 'ipc', 'specialists.ts');
+    const host = read('src', 'main', 'remote-server.ts');
+    for (const t of NEW_TYPES) {
+      expect(table, `${t} missing from ipc/specialists.ts`).toContain(CHANNEL_TO_CONST[t]);
+      expect(host, `${t} still has a case in remote-server.ts`).not.toContain(`case '${t}'`);
+    }
   });
   it('stubbed in SessionService.kt (Android)', () => {
     const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));

@@ -417,11 +417,11 @@ describe('native /compact focus propagation', () => {
   it('keeps optional focus on desktop and remote bridges through the same IPC payload; Android explicitly refuses the channel', () => {
     const preload = source('main/preload.ts');
     const remote = source('renderer/remote-shim.ts');
-    const handler = source('main/ipc-handlers.ts');
+    const handler = source('main/ipc/native.ts'); // WHY (2026-09-30 one-core R3-5): one table entry serves both doors
     const android = fs.readFileSync(path.join(__dirname, '..', '..', 'app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt'), 'utf8');
     expect(preload).toMatch(/compact: \(sessionId: string, focus\?: string\) => ipcRenderer\.invoke\(IPC\.NATIVE_COMPACT, \{ sessionId, focus \}\)/);
     expect(remote).toMatch(/compact: \(sessionId: string, focus\?: string\) => invoke\('native:compact', \{ sessionId, focus \}\)/);
-    expect(handler).toMatch(/ipcMain\.handle\(IPC\.NATIVE_COMPACT, async \(_e, \{ sessionId, focus \}/);
+    expect(handler).toMatch(/name: IPC\.NATIVE_COMPACT, kind: 'handle',\s+handler: async \(\{ sessionId, focus \}, ctx\)/);
     expect(android).toContain('"native:compact",');
   });
 });

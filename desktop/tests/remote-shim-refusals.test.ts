@@ -64,14 +64,22 @@ describe('remote-shim — rejecting failures', () => {
       starts.push([[...m[0].matchAll(/case '([^']+)'/g)].map(label => label[1]), m.index]);
     for (let i = 0; i < starts.length; i++) {
       const body = server.slice(starts[i][1], starts[i + 1]?.[1] ?? server.length);
-      const helperRefuses = body.includes('handleRemoteHandoff(') &&
-        read('../src/main/conversations/handoff-transport.ts').includes('{ ok: false, error:');
-      if (body.includes('{ ok: false, error:') || helperRefuses)
+      if (body.includes('{ ok: false, error:'))
         for (const channel of starts[i][0]) out.add(channel);
     }
     // WHY (2026-09-30 one-core R3-4): session:create moved into the channel table; its `{ ok:false }`
     // answers now come from the entry's phone guard and soft failure answer, not from a `case`.
     if (/IPC\.SESSION_CREATE[\s\S]*?remoteGuard[\s\S]*?ok: false[\s\S]*?remoteOnError[\s\S]*?ok: false/.test(read('../src/main/ipc/session.ts'))) out.add('session:create');
+    // WHY (2026-09-30 one-core R3-5): handoff:* moved into the table; the phone's failure answer is the
+    // entry's remoteOnError ({ ok:false, error }). The four native settings reads/writes moved too: a table
+    // handler that throws answers { ok:false, error } for ANY channel (the table's generic failure answer).
+    const handoffEntries = read('../src/main/ipc/handoff.ts');
+    if (/phoneFailure = [^\n]*ok: false/.test(handoffEntries) && /remoteOnError: phoneFailure/.test(handoffEntries))
+      for (const a of ['begin', 'status', 'wait', 'retry', 'saved-copy', 'force', 'cancel', 'create-params']) out.add(`handoff:${a}`);
+    const nativeEntries = read('../src/main/ipc/native.ts');
+    for (const [c, constant] of [['native:get-step-guard', 'NATIVE_GET_STEP_GUARD'], ['native:set-step-guard', 'NATIVE_SET_STEP_GUARD'],
+      ['native:get-context-preferences', 'NATIVE_GET_CONTEXT_PREFERENCES'], ['native:set-context-preferences', 'NATIVE_SET_CONTEXT_PREFERENCES']])
+      if (nativeEntries.includes(`IPC.${constant}`)) out.add(c);
     return out;
   }
 

@@ -74,7 +74,7 @@ export interface CreateRuntimeDeps {
 export type RemoteNativeRuntime = Pick<NativeRuntime,
   'nativeHost' | 'providerRegistry' | 'modelCatalog' | 'engineManager' | 'modelManager' | 'searchKeyStore'
   | 'searchService' | 'permissionStore' | 'stepGuardSettings' | 'contextSettings' | 'specialistCatalog'
-  | 'chatgptAuth' | 'claudeAccount' | 'openRouterSignIn'>;
+  | 'chatgptAuth' | 'claudeAccount' | 'openRouterSignIn' | 'resolvePortableModel'>;
 
 type TitleAppliedListener = (desktopId: string, title: string) => void;
 
