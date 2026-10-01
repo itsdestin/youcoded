@@ -11,7 +11,7 @@ import path from 'node:path';
 const windows: Array<{ id: number; sends: Array<[string, unknown]>; isDestroyed: () => boolean }> = [];
 vi.mock('electron', () => {
   const BrowserWindow: any = vi.fn();
-  BrowserWindow.getAllWindows = () => windows.map((w) => ({ isDestroyed: w.isDestroyed, webContents: { id: w.id, send: (c: string, p: unknown) => w.sends.push([c, p]) } }));
+  BrowserWindow.getAllWindows = () => windows.map((w: any) => ({ isDestroyed: w.isDestroyed, webContents: w.webContents ?? { id: w.id, send: (c: string, p: unknown) => w.sends.push([c, p]) } }));
   BrowserWindow.fromWebContents = () => null;
   return {
     app: { relaunch: vi.fn(), exit: vi.fn(), dock: undefined },
@@ -33,6 +33,7 @@ import { HOST_ADMIN_REFUSAL, bindRemoteAdmin } from '../src/main/ipc/remote-admi
 import { bindWindow } from '../src/main/ipc/window';
 import { bindUi } from '../src/main/ipc/ui';
 import { bindAppearance } from '../src/main/ipc/appearance';
+import { bindBuddy } from '../src/main/ipc/buddy';
 
 const NEW_FAMILY = /^(docComments|theme|appearance|favorites|game|arcade|zoom|platform|commands|ui|system|terminal|app|performance|attention|shell|dialog|clipboard|window|detach|buddy|integrations|remote|voice|social):|^(session:(detach|drag|drop|replay)|transcript:replay)/;
 const NEW_NAMES = ['ui:action', 'remote:attention-changed'];
@@ -240,16 +241,25 @@ describe('the small singles', () => {
     expect(await phone('arcade:status', undefined)).toEqual({ reply: true, payload: { ok: false, status: 0, message: 'Game scores are unavailable on this host.' } });
   });
 
-  it('zoom is answered for a phone paired to the computer: 100 with no window, the window\'s level otherwise', async () => {
+  it('zoom keeps each door\'s own window: the computer zooms its main window, a phone the first open window', async () => {
+    const mk = (start: number) => { let level = start; return { level: () => level, win: { isDestroyed: () => false, webContents: { getZoomLevel: () => level, setZoomLevel: (l: number) => { level = l; } } } as any }; };
+    // No window anywhere: both answer 100.
     bindWindow({ getMainWindow: () => null });
     expect(await phone('zoom:get', undefined)).toEqual({ reply: true, payload: 100 });
-    let level = 0;
-    const win: any = { isDestroyed: () => false, webContents: { getZoomLevel: () => level, setZoomLevel: (l: number) => { level = l; } } };
-    bindWindow({ getMainWindow: () => win });
+    expect(await findChannel('zoom:get')!.handler(undefined, desktopCtx())).toBe(100);
+    // The main window is gone (its last session was torn off) but another window is open: the phone still zooms, the computer's door still answers 100.
+    const survivor = mk(0);
+    windows.push({ id: 5, sends: [], isDestroyed: () => false, ...({ webContents: survivor.win.webContents } as any) });
+    bindWindow({ getMainWindow: () => ({ isDestroyed: () => true }) as any });
     expect(await phone('zoom:in', undefined)).toEqual({ reply: true, payload: Math.round(Math.pow(1.2, 0.5) * 100) });
-    expect(await findChannel('zoom:out')!.handler(undefined, desktopCtx())).toBe(100);
-    expect(await phone('zoom:reset', undefined)).toEqual({ reply: true, payload: 100 });
-    level = 4.9; expect(await findChannel('zoom:in')!.handler(undefined, desktopCtx())).toBe(Math.round(Math.pow(1.2, 5) * 100));
+    expect(survivor.level()).toBe(0.5);
+    expect(await findChannel('zoom:in')!.handler(undefined, desktopCtx())).toBe(100);
+    // The main window is alive: the computer's door zooms it (clamped at the top), reset answers 100.
+    const main = mk(4.9);
+    bindWindow({ getMainWindow: () => main.win });
+    expect(await findChannel('zoom:in')!.handler(undefined, desktopCtx())).toBe(Math.round(Math.pow(1.2, 5) * 100));
+    expect(await findChannel('zoom:reset')!.handler(undefined, desktopCtx())).toBe(100);
+    expect(main.level()).toBe(0);
   });
 });
 
@@ -280,5 +290,36 @@ describe('document comments: one body, both doors', () => {
       expect(watched.reply && (watched as any).payload.ok).toBe(true);
       expect(await phone('docComments:unwatch', { path: 'a.md', projectRoot: dir }, phoneCtx({ remote: remote(-7) }))).toEqual({ reply: true, payload: { ok: true } });
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe('the buddy keeps its consent gate', () => {
+  const status = { needed: true, supported: true, installed: false };
+  const helper = (refusal: string | null) => ({
+    refresh: vi.fn(async () => status), showRefusal: vi.fn(() => refusal), install: vi.fn(), remove: vi.fn(),
+  });
+  const manager = () => ({ show: vi.fn(), hide: vi.fn(), toggleChat: vi.fn(), dismiss: vi.fn(), dragEnded: vi.fn(), setViewedSession: vi.fn(),
+    getViewedSession: vi.fn(() => 's1'), moveMascotFromPointer: vi.fn(), getStatus: vi.fn(() => ({ dismissed: false, visible: true })), captureWindows: vi.fn(() => []), chatWebContents: vi.fn() });
+
+  it('buddy:show re-reads the helper status and refuses with the gate\'s words, never showing the buddy', async () => {
+    const m = manager(); const h = helper('The buddy needs its KDE helper on this desktop, and the helper is not running.');
+    bindBuddy({ buddyManager: m as any, helper: h as any });
+    expect(await findChannel('buddy:show')!.handler(undefined, desktopCtx())).toEqual({ ok: false, reason: 'The buddy needs its KDE helper on this desktop, and the helper is not running.' });
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    expect(h.showRefusal).toHaveBeenCalledWith(status);
+    expect(m.show).not.toHaveBeenCalled();
+  });
+
+  it('buddy:show shows the buddy when the gate lets it through, and the install/remove calls re-read the status after a change', async () => {
+    const m = manager(); const h = helper(null);
+    bindBuddy({ buddyManager: m as any, helper: h as any });
+    expect(await findChannel('buddy:show')!.handler(undefined, desktopCtx())).toEqual({ ok: true });
+    expect(m.show).toHaveBeenCalledTimes(1);
+    h.install.mockResolvedValueOnce({ ok: true }); h.refresh.mockClear();
+    expect(await findChannel('buddy:install-helper')!.handler(undefined, desktopCtx())).toEqual({ ok: true });
+    expect(h.refresh).toHaveBeenCalledTimes(1);
+    h.remove.mockResolvedValueOnce({ ok: false, error: 'nope' }); h.refresh.mockClear();
+    expect(await findChannel('buddy:remove-helper')!.handler(undefined, desktopCtx())).toEqual({ ok: false, error: 'nope' });
+    expect(h.refresh).not.toHaveBeenCalled();
   });
 });

@@ -7,9 +7,10 @@
 //
 // Zoom is the exception, kept exactly as it was: a remote browser paired to this computer drives the computer's own zoom
 // (the shim sends zoom:in/out/reset/get over the socket when it has a target; with none it uses a CSS fallback of its
-// own, which is the shim's half and unchanged). The phone's copy acted on "the first open window" and the computer's on
-// the main window; one body now acts on the main window, which is the first window in every normal case. Every call
-// answers the new percentage, or 100 when there is no window.
+// own, which is the shim's half and unchanged). Each door keeps the window it always acted on: the computer's door zooms
+// the main window handed over at startup, a phone's door zooms "the first open window" (the main window in every normal
+// case, and a surviving window if the main one has been closed, as happens after its last session is torn off). Every call
+// answers the new percentage, or 100 when there is no such window.
 import path from 'path';
 import { app, BrowserWindow, nativeImage } from 'electron';
 import { IPC } from '../../shared/backend-contract';
@@ -47,8 +48,8 @@ const ZOOM_STEP = 0.5; // ~12% per step
 const ZOOM_MIN = -3;   // ~50%
 const ZOOM_MAX = 5;    // ~300%
 const zoomLevelToPercent = (level: number): number => Math.round(Math.pow(1.2, level) * 100);
-function zoomBy(delta: number | 'reset' | 'get'): number {
-  const win = mainWindow();
+function zoomBy(delta: number | 'reset' | 'get', door: 'desktop' | 'remote'): number {
+  const win = door === 'remote' ? BrowserWindow.getAllWindows()[0] : mainWindow();
   if (!win || win.isDestroyed()) return 100;
   const wc = win.webContents;
   if (delta === 'get') return zoomLevelToPercent(wc.getZoomLevel());
@@ -135,8 +136,8 @@ export const windowChannels: MainChannelDef[] = [
   }),
 
   // Zoom — also answered for a paired phone (see the header).
-  defineChannel({ name: IPC.ZOOM_IN, kind: 'handle', handler: () => zoomBy(ZOOM_STEP) }),
-  defineChannel({ name: IPC.ZOOM_OUT, kind: 'handle', handler: () => zoomBy(-ZOOM_STEP) }),
-  defineChannel({ name: IPC.ZOOM_RESET, kind: 'handle', handler: () => zoomBy('reset') }),
-  defineChannel({ name: IPC.ZOOM_GET, kind: 'handle', handler: () => zoomBy('get') }),
+  defineChannel({ name: IPC.ZOOM_IN, kind: 'handle', handler: (_p, ctx) => zoomBy(ZOOM_STEP, ctx.door) }),
+  defineChannel({ name: IPC.ZOOM_OUT, kind: 'handle', handler: (_p, ctx) => zoomBy(-ZOOM_STEP, ctx.door) }),
+  defineChannel({ name: IPC.ZOOM_RESET, kind: 'handle', handler: (_p, ctx) => zoomBy('reset', ctx.door) }),
+  defineChannel({ name: IPC.ZOOM_GET, kind: 'handle', handler: (_p, ctx) => zoomBy('get', ctx.door) }),
 ];
