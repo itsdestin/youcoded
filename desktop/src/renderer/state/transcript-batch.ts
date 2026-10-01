@@ -32,6 +32,20 @@ type Dispatch = (action: ChatAction) => void;
 // below still takes the single-action Dispatch: a hydrate is one action.
 type DispatchBatch = (actions: ChatAction[]) => void;
 
+/**
+ * The transcript actions the main window applies the instant they arrive instead of
+ * queueing them with the frame's batch. That is how the window behaved before the
+ * three translators were merged, and the merge deliberately kept it.
+ *
+ * Known quirk: because these skip the queue they can apply AHEAD of earlier actions
+ * from the same frame (a /clear landing before the reply text that preceded it).
+ * Moving them into the batch is a visible change with its own run (R4-3), so this
+ * set is exported only so the tests and App.tsx read the same list. Do not grow it.
+ */
+export const DIRECT_DISPATCH_TYPES: ReadonlySet<ChatAction['type']> = new Set<ChatAction['type']>([
+  'TRANSCRIPT_SKILL_INVOKED', 'CLEAR_TIMELINE', 'NATIVE_HISTORY_REWRITTEN', 'COMPACTION_COMPLETE',
+]);
+
 export interface TranscriptBatcher {
   /** Queue an action for the next frame (or the next 16 ms while hidden). */
   push(action: ChatAction): void;

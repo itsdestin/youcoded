@@ -161,21 +161,26 @@ export function eventToAction(event: TranscriptEvent, opts: EventToActionOptions
       return out;
     }
 
-    case 'tool-use':
-      return [{
+    case 'tool-use': {
+      // Built WITHOUT the `as ChatAction` the other cases use, so the compiler checks
+      // it against the action's real shape: `timestamp` is required there, and a
+      // missing one (the buddy once dropped it) is a build error, not a visual bug.
+      // The `!`s are the untyped event data at the boundary (M5 types it).
+      const action: Extract<ChatAction, { type: 'TRANSCRIPT_TOOL_USE' }> = {
         type: 'TRANSCRIPT_TOOL_USE',
         sessionId,
         uuid,
-        toolUseId: d.toolUseId,
-        toolName: d.toolName,
+        toolUseId: d.toolUseId!,
+        toolName: d.toolName!,
         toolInput: d.toolInput || {},
         // A specialist's mid-run note is placed among its tool rows by time
-        // (reconcileNoteSegments); the top-level card ignores it. It is a REQUIRED
-        // field of the action, so no producer can forget it again.
+        // (reconcileNoteSegments); the top-level card ignores it.
         timestamp,
         parentAgentToolUseId: d.parentAgentToolUseId,
         agentId: d.agentId,
-      } as ChatAction];
+      };
+      return [action];
+    }
 
     case 'tool-result':
       return [{

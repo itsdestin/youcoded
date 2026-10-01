@@ -10,7 +10,7 @@
     "shared/backend-contract.ts": 1504,
     "main/ipc-handlers.ts": 2551,
     "main/harness/native-session-host.ts": 5311,
-    "renderer/App.tsx": 5000,
+    "renderer/App.tsx": 4695,
     "main/remote-server.ts": 1865,
     "main/harness/harness-session.ts": 4227,
     "renderer/components/SettingsPanel.tsx": 3256,

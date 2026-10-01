@@ -32,7 +32,8 @@ import GamePanel from './components/game/GamePanel';
 import TerminalRightSlot from './components/TerminalRightSlot';
 import { ChatProvider, useChatDispatch, useChatStore, useSessionIsThinking } from './state/chat-context';
 import type { ChatAction } from './state/chat-types';
-import { installTranscriptBatcher, applyChatHydrate } from './state/transcript-batch';
+import { installTranscriptBatcher, applyChatHydrate, DIRECT_DISPATCH_TYPES } from './state/transcript-batch';
+import { eventToAction } from './state/transcript-event-actions';
 import {
   remotePlaceHost, remotePlaceStorages, readRemotePlace, writeRemotePlace,
   choosePlaceOnHydrate, chooseAfterDestroyed, shouldLoadFirstPage,
@@ -1445,339 +1446,33 @@ function AppInner() {
     const transcriptBatcher = installTranscriptBatcher(chatStore.dispatchMany);
     const batchTranscriptDispatch = (action: ChatAction) => transcriptBatcher.push(action);
 
+    // WHY one translator: this window, the buddy feed and the history pages all turn a
+    // transcript event into reducer actions through `eventToAction`
+    // (state/transcript-event-actions.ts), so a payload field can no longer be
+    // forgotten in one of three hand-mirrored switches. Only what is genuinely
+    // this window's stays here: the batching, the direct-dispatch set, the
+    // first-page nudge and the two facts only this window can read.
+    //
+    // DIRECT_DISPATCH_TYPES (state/transcript-batch.ts) go straight to the store, not through
+    // the frame batcher, exactly as before the merge. See its comment: moving them into the
+    // batch is R4-3's visible change, not this one's.
     const transcriptHandler = (window.claude.on as any).transcriptEvent?.((event: any) => {
       if (!event?.type || !event?.sessionId) return;
       // Live event = main can read this transcript: re-ask a failed first page (first-page-loader.ts).
       firstPages.noteLiveActivity(event.sessionId);
 
-      switch (event.type) {
-        case 'user-message':
-          batchTranscriptDispatch({
-            type: 'TRANSCRIPT_USER_MESSAGE',
-            sessionId: event.sessionId,
-            uuid: event.uuid,
-            text: event.data.text,
-            timestamp: event.timestamp,
-            // A slash command read from its command tags — MUST mirror BubbleFeed.tsx and
-            // transcript-page-actions.ts. It starts no turn (chat-reducer).
-            slashCommand: event.data.slashCommand,
-            // Host-injected turn marker (a delivered specialist report) + its
-            // structured header — MUST mirror BubbleFeed.tsx. See TimelineEntry.injected.
-            injected: event.data.injected,
-            injectedMeta: event.data.injectedMeta,
-            // Forward the subagent stamp so the reducer can tell "briefing
-            // written into a subagent's JSONL" apart from a real user prompt
-            // and drop the former (it's already shown on the Agent card).
-            parentAgentToolUseId: event.data.parentAgentToolUseId,
-            agentId: event.data.agentId,
-          });
-          break;
-        case 'user-interrupt':
-          // ESC-passthrough: transcript-watcher detected a user-initiated
-          // interrupt (ESC sent to the PTY). Reducer records it so we can
-          // tag the next assistant turn as interrupted.
-          batchTranscriptDispatch({
-            type: 'TRANSCRIPT_INTERRUPT',
-            sessionId: event.sessionId,
-            uuid: event.uuid,
-            timestamp: event.timestamp,
-            kind: event.data.kind,
-            // Native only: what the abandoned turn already spent. No
-            // turn-complete follows an interrupt, so this event is the only
-            // place those tokens can be counted from.
-            usage: event.data.usage,
-          });
-          break;
-        case 'assistant-text':
-          batchTranscriptDispatch({
-            type: 'TRANSCRIPT_ASSISTANT_TEXT',
-            sessionId: event.sessionId,
-            uuid: event.uuid,
-            text: event.data.text,
-            timestamp: event.timestamp,
-            // Task 2.4: forward the per-message model from the transcript so the
-            // reducer can stamp turn.model on the first text of each turn.
-            model: event.data.model,
-            // Native runtime: per-token delta id — same partId merges into the
-            // last text segment (mirror BubbleFeed.tsx, must stay identical).
-            partId: event.data.partId,
-            parentAgentToolUseId: event.data.parentAgentToolUseId,
-            agentId: event.data.agentId,
-          });
-          break;
-        case 'tool-use':
-          batchTranscriptDispatch({
-            type: 'TRANSCRIPT_TOOL_USE',
-            sessionId: event.sessionId,
-            uuid: event.uuid,
-            toolUseId: event.data.toolUseId,
-            toolName: event.data.toolName,
-            toolInput: event.data.toolInput || {},
-            // Carried so a specialist's mid-run note can be placed among its
-            // tool rows by time (reconcileNoteSegments); the top-level card
-            // ignores it. Three mirrors must stay identical: this switch,
-            // BubbleFeed.tsx (buddy window) and transcript-page-actions.ts
-            // (replayed page) — pinned by transcript-event-surface-parity.test.ts.
-            timestamp: event.timestamp,
-            parentAgentToolUseId: event.data.parentAgentToolUseId,
-            agentId: event.data.agentId,
-          });
-          break;
-        case 'tool-result':
-          batchTranscriptDispatch({
-            type: 'TRANSCRIPT_TOOL_RESULT',
-            sessionId: event.sessionId,
-            uuid: event.uuid,
-            toolUseId: event.data.toolUseId,
-            result: event.data.toolResult || '',
-            isError: event.data.isError || false,
-            structuredPatch: event.data.structuredPatch,
-            backgroundTaskId: event.data.backgroundTaskId,
-            resumedTaskId: event.data.resumedTaskId,
-            parentAgentToolUseId: event.data.parentAgentToolUseId,
-            agentId: event.data.agentId,
-          });
-          break;
-        case 'background-task':
-          // Claude Code: background work a card launched has ended — the only
-          // signal that it did (its tool result was just the launch receipt).
-          // Three mirrors: App.tsx, BubbleFeed.tsx, transcript-page-actions.ts.
-          if (event.data.backgroundTask) {
-            batchTranscriptDispatch({
-              type: 'TRANSCRIPT_BACKGROUND_TASK',
-              sessionId: event.sessionId,
-              uuid: event.uuid,
-              toolUseId: event.data.toolUseId,
-              taskIds: event.data.backgroundTask.taskIds,
-              status: event.data.backgroundTask.status,
-              summary: event.data.backgroundTask.summary,
-              result: event.data.backgroundTask.result,
-              parentAgentToolUseId: event.data.parentAgentToolUseId,
-            });
-          }
-          break;
-        case 'replay-complete':
-          // End of a transcript replay — reap cards the history left 'running'.
-          // Synthesized by the replay handler in main, never parsed from a
-          // transcript. sessionIdle false means main could not affirm the
-          // session is idle (live re-dock, or a CC session), so the reducer
-          // leaves everything alone.
-          batchTranscriptDispatch({
-            type: 'TRANSCRIPT_REPLAY_COMPLETE',
-            sessionId: event.sessionId,
-            sessionIdle: event.data?.sessionIdle === true,
-          });
-          break;
-        case 'turn-complete':
-          // Task 2.2: forward the full metadata payload. transcript-watcher emits these as
-          // optional fields on event.data (shared/types.ts); coalesce undefined → null so
-          // the action type (string | null, not optional) stays well-typed.
-          batchTranscriptDispatch({
-            type: 'TRANSCRIPT_TURN_COMPLETE',
-            sessionId: event.sessionId,
-            uuid: event.uuid,
-            timestamp: event.timestamp,
-            stopReason: event.data.stopReason ?? null,
-            model: event.data.model ?? null,
-            anthropicRequestId: event.data.anthropicRequestId ?? null,
-            usage: event.data.usage ?? null,
-            // Forward the subagent stamp so the reducer can drop a sub-agent's
-            // end_turn instead of overwriting parent turn.model and tearing down
-            // the parent's in-flight state via endTurn(). Mirrors assistant-text /
-            // tool-use / tool-result dispatches above.
-            parentAgentToolUseId: event.data.parentAgentToolUseId,
-            agentId: event.data.agentId,
-          });
-          // Native StatusBar chips (context/tokens/speed) are sourced from THIS
-          // turn-complete usage via the reducer (App.tsx `nativeStatusUsage` memo →
-          // selectNativeStatusChips), which serves both desktop and remote. The old
-          // reportUsage → native:usage-report → status:data cache path was dead
-          // (nothing read its nativeUsageMap) and was removed in the whole-branch review.
-          break;
-        case 'subagent-usage':
-          // Bookkeeping only — never touches the timeline, the turn state, or
-          // the subagent card's segments. It exists so the parent's totals can
-          // include the work it delegated (spec §2). Arrives on the PARENT's
-          // stream (native-session-host emits it there), and replays from the
-          // parent's record on resume like any other persisted event.
-          batchTranscriptDispatch({
-            type: 'TRANSCRIPT_SUBAGENT_USAGE',
-            sessionId: event.sessionId,
-            uuid: event.uuid,
-            timestamp: event.timestamp,
-            usage: event.data.usage ?? null,
-            parentAgentToolUseId: event.data.parentAgentToolUseId,
-            agentId: event.data.agentId,
-          });
-          break;
-        case 'assistant-thinking': {
-          // Text payload → real reasoning content (collapsible in chat).
-          // No payload → lifecycle heartbeat only (existing behavior:
-          // bumps lastActivityAt and clears any stale attention banner).
-          if (event.data?.text) {
-            batchTranscriptDispatch({
-              type: 'TRANSCRIPT_ASSISTANT_REASONING',
-              sessionId: event.sessionId,
-              uuid: event.uuid,
-              text: event.data.text,
-              timestamp: event.timestamp,
-              partId: event.data.partId,
-              // Specialists 1c: a child's stamped reasoning routes into its
-              // Task card, not the parent's bubble. MUST mirror BubbleFeed.tsx.
-              parentAgentToolUseId: event.data.parentAgentToolUseId,
-            });
-          } else {
-            // Argument-generation progress: draw/update the preparing tool card.
-            // Dispatched IN ADDITION to the heartbeat, not instead of it — the
-            // heartbeat's promptProcessing:null is the right outcome here (prefill
-            // is over once arguments are streaming), and suppressing it would
-            // strand the previous phase's progress line on screen.
-            // MUST mirror BubbleFeed.tsx.
-            if (event.data?.toolPreparing) {
-              batchTranscriptDispatch({
-                type: 'NATIVE_TOOL_PREPARING',
-                sessionId: event.sessionId,
-                toolCallId: event.data.toolPreparing.toolCallId,
-                toolName: event.data.toolPreparing.toolName,
-                chars: event.data.toolPreparing.chars,
-                cleared: event.data.toolPreparing.cleared,
-              });
-            }
-            // Fix: erase an abandoned half-written sentence BEFORE the heartbeat
-            // below parks/clears the turn — if this ran after a retry's new text
-            // landed, it would erase the wrong (retried) content instead of the
-            // stale one. MUST mirror BubbleFeed.tsx, and must stay in this order.
-            if (event.data?.dropPart) {
-              batchTranscriptDispatch({
-                type: 'NATIVE_PARTS_DROPPED',
-                sessionId: event.sessionId,
-                partIds: event.data.dropPart.partIds,
-              });
-            }
-            batchTranscriptDispatch({
-              type: 'TRANSCRIPT_THINKING_HEARTBEAT',
-              sessionId: event.sessionId,
-              // WHY: use the source stamp/UUID so a late attach cannot undo
-              // a newer live measurement; this remains display-only.
-              usageProgress: event.data?.usageProgress,
-              uuid: event.uuid,
-              timestamp: event.timestamp,
-              // Native watchdog: a stall-warning payload drives the countdown,
-              // `stalled` parks the turn, a plain heartbeat clears both.
-              // MUST mirror BubbleFeed.tsx.
-              stallWarning: event.data?.stallWarning,
-              stalled: event.data?.stalled,
-              promptProcessing: event.data?.promptProcessing,
-            });
-          }
-          break;
-        }
-        case 'session-error':
-          // Native runtime only: a provider/stream failure. End the turn and
-          // surface the 'error' AttentionBanner (mirror BubbleFeed.tsx).
-          batchTranscriptDispatch({
-            type: 'NATIVE_SESSION_ERROR',
-            sessionId: event.sessionId,
-            timestamp: event.timestamp,
-            message: event.data.text ?? 'The model request failed.',
-            errorCode: event.data.errorCode,
-            // Same reasoning as the interrupt above: a turn that died mid-flight
-            // still spent what its completed steps spent.
-            uuid: event.uuid,
-            usage: event.data.usage,
-          });
-          break;
-        case 'skill-invoked':
-          // /skill-name (M3 item 1). The instructions live in event.data.body and
-          // are deliberately NOT dispatched — they belong to the model's history,
-          // not the timeline. Rendering them as a user bubble put 26k characters
-          // of SKILL.md on screen (Destin, 2026-07-28).
-          dispatch({
-            type: 'TRANSCRIPT_SKILL_INVOKED',
-            sessionId: event.sessionId,
-            uuid: event.uuid,
-            timestamp: event.timestamp,
-            skillId: event.data.skillId ?? 'skill',
-            displayName: event.data.displayName ?? event.data.skillId ?? 'Skill',
-            args: event.data.args,
-            skillPath: event.data.skillPath,
-          });
-          break;
-        case 'context-clear':
-          // The durable /clear barrier (native runtime). This is the ONLY thing
-          // that clears a native session's timeline — the dispatcher defers to
-          // it rather than clearing optimistically, so a refused clear leaves
-          // the conversation untouched. It also fires during transcript REPLAY,
-          // which is what makes a resumed session show the same post-clear view
-          // the user left behind instead of resurrecting the old conversation.
-          dispatch({
-            type: 'CLEAR_TIMELINE',
-            sessionId: event.sessionId,
-            markerId: `clear-${event.uuid}`,
-            timestamp: event.timestamp,
-          });
-          // The barrier drops the whole conversation from the model's window, so
-          // the gauge has to move with it — no turn runs to re-measure, and the
-          // pre-clear reading would otherwise stand over an empty conversation.
-          if (event.data.contextUsedAfter !== undefined) {
-            dispatch({
-              type: 'NATIVE_HISTORY_REWRITTEN',
-              sessionId: event.sessionId,
-              uuid: event.uuid,
-              contextUsedTokens: event.data.contextUsedAfter,
-            });
-          }
-          break;
-        case 'compact-summary': {
-          // Bookkeeping first, and OUTSIDE the marker guard below: the window
-          // this rewrite left behind and the summarize call's own bill are true
-          // whether or not this window draws a marker for it. Folding them into
-          // COMPACTION_COMPLETE would lose both whenever that guard didn't fire.
-          if (event.data.contextUsedAfter !== undefined || event.data.usage) {
-            dispatch({
-              type: 'NATIVE_HISTORY_REWRITTEN',
-              sessionId: event.sessionId,
-              uuid: event.uuid,
-              contextUsedTokens: event.data.contextUsedAfter ?? null,
-              usage: event.data.usage,
-            });
-          }
-          // Canonical compaction-complete signal — fired by the transcript
-          // watcher when Claude Code writes an isCompactSummary entry. Works
-          // for both in-session /compact (appends to same JSONL, so shrink
-          // never fires) and resume-from-summary (first entry of new JSONL).
-          const sessionState = chatStateMapRef.current.get(event.sessionId);
-          // event.data.autoCompaction marks a SPONTANEOUS native compaction —
-          // it has no compactionPending flag (that's only set by /compact), yet
-          // the user must still see a marker since ~all their history was just
-          // summarized away. Render it in that case too, bypassing the guard.
-          if (sessionState?.compactionPending || event.data.autoCompaction) {
-            // The harness's own pair wins where it exists. `sessionStatsMap` is
-            // Claude Code's statusline, which a NATIVE session never writes — so
-            // before these two fields a native compaction could only ever say
-            // "Conversation compacted", never how much it freed, and a
-            // spontaneous one could not even fall back (no COMPACTION_PENDING
-            // ran to record a "before").
-            const contextTokens = statusData.sessionStatsMap[event.sessionId]?.contextTokens ?? null;
-            dispatch({
-              type: 'COMPACTION_COMPLETE',
-              sessionId: event.sessionId,
-              // WHY: re-docking replays the same event. A stable event UUID lets
-              // the reducer discard its duplicate marker while keeping the turn.
-              markerId: `compact-done-${event.uuid}`,
-              afterContextTokens: event.data.contextUsedAfter ?? contextTokens,
-              beforeContextTokens: event.data.contextUsedBefore,
-              // Forward the summary text so the SystemMarker can offer
-              // click-to-expand (replaces the dead "ctrl+o to see full summary"
-              // affordance from CC's TUI, which never worked inside YouCoded).
-              ...(event.data.summary ? { summary: event.data.summary } : {}),
-              ...(event.data.autoCompaction ? { auto: true } : {}),
-              // Native only: where the kept tail starts, so only older messages dim.
-              ...(event.data.retainedFromUuid !== undefined ? { retainedFromUuid: event.data.retainedFromUuid } : {}),
-            });
-          }
-          break;
-        }
+      // Only a compaction reads window state, so only it pays for the lookups.
+      const compacting = event.type === 'compact-summary';
+      const actions = eventToAction(event, {
+        live: true,
+        // Did THIS window just run /compact? (A native automatic compaction needs no flag.)
+        compactionPending: compacting ? !!chatStateMapRef.current.get(event.sessionId)?.compactionPending : undefined,
+        // Claude Code's statusline reading: the marker's "after" figure when the event has none.
+        fallbackContextTokens: compacting ? (statusData.sessionStatsMap[event.sessionId]?.contextTokens ?? null) : undefined,
+      });
+      for (const action of actions) {
+        if (DIRECT_DISPATCH_TYPES.has(action.type)) dispatch(action);
+        else batchTranscriptDispatch(action);
       }
     });
 

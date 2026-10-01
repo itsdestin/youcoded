@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest';
 import golden from './fixtures/transcript-event-actions.golden.json';
 import { MATRIX } from './helpers/transcript-event-matrix';
 import { eventToAction } from '../src/renderer/state/transcript-event-actions';
+import { DIRECT_DISPATCH_TYPES } from '../src/renderer/state/transcript-batch';
 import { pageEventToAction } from '../src/renderer/state/transcript-page-actions';
 import type { TranscriptEvent } from '../src/shared/types';
 
@@ -17,11 +18,13 @@ import type { TranscriptEvent } from '../src/shared/types';
 // a missing field and an undefined one the same.
 const plain = (v: unknown) => JSON.parse(JSON.stringify(v ?? null));
 
-// What App.tsx dispatches directly (not through the frame batcher). Kept as it was;
-// moving these into the batch is a separate, visible decision (run R4-3).
-const APP_DIRECT = new Set(['TRANSCRIPT_SKILL_INVOKED', 'CLEAR_TIMELINE', 'NATIVE_HISTORY_REWRITTEN', 'COMPACTION_COMPLETE']);
 
 describe('eventToAction reproduces the old main-window switch', () => {
+  it('the window still applies exactly the same four actions directly (R4-3 owns changing that)', () => {
+    expect([...DIRECT_DISPATCH_TYPES].sort()).toEqual(
+      ['CLEAR_TIMELINE', 'COMPACTION_COMPLETE', 'NATIVE_HISTORY_REWRITTEN', 'TRANSCRIPT_SKILL_INVOKED']);
+  });
+
   for (const c of MATRIX) {
     it(c.name, () => {
       const actions = eventToAction(c.event, {
@@ -31,8 +34,9 @@ describe('eventToAction reproduces the old main-window switch', () => {
       });
       const old = (golden as any)[c.name].app as { via: string; action: unknown }[];
       expect(plain(actions)).toEqual(old.map((o) => o.action));
-      // The batch/direct split App applies on top is a pure function of the type.
-      expect(actions.map((a) => (APP_DIRECT.has(a.type) ? 'direct' : 'batch'))).toEqual(old.map((o) => o.via));
+      // The batch/direct split App applies on top (its real set, kept exactly as it was
+      // before the merge; moving these into the batch is run R4-3) is a pure function of the type.
+      expect(actions.map((a) => (DIRECT_DISPATCH_TYPES.has(a.type) ? 'direct' : 'batch'))).toEqual(old.map((o) => o.via));
     });
   }
 });
