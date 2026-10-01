@@ -5,7 +5,7 @@
 // is open, doc-comments' requests are sent to the editor that holds it (live-comments.ts says
 // what to send; this module gets it there and back):
 //   main → its window   office:comments-request {token, id, op}   (the window that opened it)
-//   window → main       office:comments-answer  id, result        (only that window may answer)
+//   window → main       office:comments-answer  id, result, token (that window, for that document)
 //   window → main       office:comments-changed token             (a comment changed in the editor)
 // The window relays to its editor frame (EditorFrame → the add-on's yc-comments.js).
 //
@@ -14,6 +14,7 @@
 // it is written to the file as before. A read is never kept: it reads the file instead.
 // Desktop only, like the close/quit handshake (office-flush.ts): the phone and the remote client
 // have no Office editors, so they carry none of these channels.
+import { randomBytes } from 'node:crypto';
 import { ipcMain, webContents } from 'electron';
 import { log } from '../logger';
 import { getOfficeSessions } from './office-session-registry';
@@ -55,15 +56,16 @@ let seq = 0;
 export function createOfficeComments(deps: OfficeCommentsDeps): LiveCommentsRouter & { pending(path: string): number } {
   const capMs = deps.capMs ?? ANSWER_CAP_MS;
   const retryMs = deps.retryMs ?? RETRY_MS;
-  const waiting = new Map<string, { senderId: number; done: (r: unknown) => void }>();
+  const waiting = new Map<string, { senderId: number; token: string; done: (r: unknown) => void }>();
   const kept = new Map<string, Kept[]>();
   const draining = new Set<string>();
   let timer: ReturnType<typeof setTimeout> | null = null;
 
-  deps.ipc.on(OFFICE_COMMENTS_ANSWER, (e, id, result) => {
+  deps.ipc.on(OFFICE_COMMENTS_ANSWER, (e, id, result, token) => {
     const w = typeof id === 'string' ? waiting.get(id) : undefined;
-    // Only the window that was asked answers for its editor.
-    if (!w || (e as { sender?: { id?: unknown } } | null)?.sender?.id !== w.senderId) return;
+    // Only the window that was asked answers, and only for the document it was asked about: a
+    // window can hold several documents, and a request id alone is no proof of which one answered.
+    if (!w || (e as { sender?: { id?: unknown } } | null)?.sender?.id !== w.senderId || token !== w.token) return;
     waiting.delete(id as string);
     w.done(result);
   });
@@ -77,11 +79,13 @@ export function createOfficeComments(deps: OfficeCommentsDeps): LiveCommentsRout
   function ask(s: Session, op: LiveOp & { key: string }): Promise<LiveAnswer> {
     const win = deps.windowFor(s.senderId);
     if (!win || win.isDestroyed()) return Promise.reject(new EditorNotReady());
-    const id = `c${++seq}`;
+    // Unguessable, so no editor can answer for another request it was never sent.
+    const id = randomBytes(12).toString('hex');
     return new Promise<LiveAnswer>((resolve, reject) => {
       const t = setTimeout(() => { waiting.delete(id); reject(new EditorNotReady()); }, capMs);
       waiting.set(id, {
         senderId: s.senderId,
+        token: s.token,
         done: (raw) => {
           clearTimeout(t);
           const r = raw as { ok?: unknown; error?: unknown } | null;

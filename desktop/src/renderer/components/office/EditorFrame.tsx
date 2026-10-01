@@ -429,7 +429,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     if (!token) return;
     return onCommentsRequest(token, (id, op) => {
       if (phaseRef.current !== 'open' || replacedRef.current || keptRef.current) {
-        officeBridge()?.commentsAnswer?.(id, { ok: false, error: 'editor-not-ready' });
+        officeBridge()?.commentsAnswer?.(id, { ok: false, error: 'editor-not-ready' }, token);
         return;
       }
       post({ type: 'yc:office-comments', id, op });
@@ -760,7 +760,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       // The editor's answer to main's comment request, and its news that a comment changed (by
       // anyone) — so the reading views of this file refresh (finish plan Task 6).
       const c = d as { id?: unknown; result?: unknown } | null;
-      if (d?.type === 'yc:office-comments-result' && typeof c?.id === 'string') b?.commentsAnswer?.(c.id, c.result);
+      if (d?.type === 'yc:office-comments-result' && typeof c?.id === 'string') b?.commentsAnswer?.(c.id, c.result, opened.token);
       if (d?.type === 'yc:office-comments-changed') b?.commentsChanged?.(opened.token);
     };
     window.addEventListener('message', onMessage);

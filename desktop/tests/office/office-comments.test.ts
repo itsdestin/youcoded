@@ -27,7 +27,7 @@ function setup(opts: { open?: boolean; inUse?: boolean } = {}) {
       if (channel !== OFFICE_COMMENTS_REQUEST) return;
       sent.push(req);
       const a = reply(req.op);
-      if (a) queueMicrotask(() => ipc.emit(OFFICE_COMMENTS_ANSWER, { sender: { id: 5 } }, req.id, a));
+      if (a) queueMicrotask(() => ipc.emit(OFFICE_COMMENTS_ANSWER, { sender: { id: 5 } }, req.id, a, req.token));
     }),
   };
   const changed: string[] = [];
@@ -61,13 +61,15 @@ describe('office comments router', () => {
     expect(sent[0].op.key).toMatch(/:0$/);
   });
 
-  it('only the window that was asked may answer', async () => {
+  it('only the window that was asked may answer, and only for the document it was asked about', async () => {
     const { ipc, router, sent, setReply } = setup();
     setReply(() => undefined);
     const p = router.run(FILE, add, async () => null, { queueable: true });
     await vi.advanceTimersByTimeAsync(0);
-    ipc.emit(OFFICE_COMMENTS_ANSWER, { sender: { id: 99 } }, sent[0].id, { ok: true, id: 'forged' });
-    ipc.emit(OFFICE_COMMENTS_ANSWER, { sender: { id: 5 } }, sent[0].id, { ok: true, id: 'real' });
+    ipc.emit(OFFICE_COMMENTS_ANSWER, { sender: { id: 99 } }, sent[0].id, { ok: true, id: 'forged' }, 't1');
+    // The right window, but speaking for another of its documents.
+    ipc.emit(OFFICE_COMMENTS_ANSWER, { sender: { id: 5 } }, sent[0].id, { ok: true, id: 'other-doc' }, 't2');
+    ipc.emit(OFFICE_COMMENTS_ANSWER, { sender: { id: 5 } }, sent[0].id, { ok: true, id: 'real' }, 't1');
     expect(await p).toEqual({ how: 'live', value: { ok: true, id: 'real' } });
   });
 

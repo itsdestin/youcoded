@@ -686,7 +686,7 @@ describe('EditorFrame relaying comment requests', () => {
     const c = withComments();
     const { sent } = await mountFrame();
     c.ask('t1', 'q1', { kind: 'list' });
-    expect(c.commentsAnswer).toHaveBeenCalledWith('q1', { ok: false, error: 'editor-not-ready' });
+    expect(c.commentsAnswer).toHaveBeenCalledWith('q1', { ok: false, error: 'editor-not-ready' }, 't1');
     expect(sent().some((m) => m.type === 'yc:office-comments')).toBe(false);
   });
 
@@ -697,9 +697,9 @@ describe('EditorFrame relaying comment requests', () => {
     c.ask('t1', 'q2', { kind: 'add', text: 'hi' });
     expect(sent().filter((m) => m.type === 'yc:office-comments')).toEqual([{ type: 'yc:office-comments', id: 'q2', op: { kind: 'add', text: 'hi' } }]);
     c.ask('other-token', 'q3', { kind: 'list' });
-    expect(c.commentsAnswer).toHaveBeenCalledWith('q3', { ok: false, error: 'editor-not-ready' });
+    expect(c.commentsAnswer).toHaveBeenCalledWith('q3', { ok: false, error: 'editor-not-ready' }, 'other-token');
     fromEditor({ type: 'yc:office-comments-result', id: 'q2', result: { ok: true, id: 'e1' } });
-    expect(c.commentsAnswer).toHaveBeenCalledWith('q2', { ok: true, id: 'e1' });
+    expect(c.commentsAnswer).toHaveBeenCalledWith('q2', { ok: true, id: 'e1' }, 't1');
     // Only the editor's own frame speaks for it.
     fromEditor({ type: 'yc:office-comments-result', id: 'q9', result: { ok: true } }, { source: null });
     expect(c.commentsAnswer).not.toHaveBeenCalledWith('q9', expect.anything());

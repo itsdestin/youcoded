@@ -2026,7 +2026,7 @@ contextBridge.exposeInMainWorld('claude', {
     onSavesLost: (cb: () => void) => officePush('office:saves-lost', cb),
     // Comments on an open document go through its editor (main/office/office-comments.ts) — desktop only.
     onCommentsRequest: (cb: (req: { token: string; id: string; op: unknown }) => void) => officePush('office:comments-request', cb),
-    commentsAnswer: (id: string, result: unknown) => ipcRenderer.send('office:comments-answer', id, result),
+    commentsAnswer: (id: string, result: unknown, token: string) => ipcRenderer.send('office:comments-answer', id, result, token),
     commentsChanged: (token: string) => ipcRenderer.send('office:comments-changed', token),
   },
   // Project View IPC — sibling to artifacts. Backs the project overlay's

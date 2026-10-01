@@ -98,7 +98,7 @@ export interface OfficeBridge {
    *  office-comments.ts): main asks (token, request id, op), the editor's window answers, and says
    *  when a comment changed in the editor. Desktop only. */
   onCommentsRequest?(cb: (req: { token: string; id: string; op: unknown }) => void): () => void;
-  commentsAnswer?(id: string, result: unknown): void;
+  commentsAnswer?(id: string, result: unknown, token: string): void;
   commentsChanged?(token: string): void;
 }
 

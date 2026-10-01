@@ -393,7 +393,7 @@ export function onCommentsRequest(token: string, handler: (id: string, op: unkno
     office.onCommentsRequest((r) => {
       const h = r && typeof r.token === 'string' ? commentHandlers.get(r.token) : undefined;
       // No editor here for it (it just closed): main keeps the request and tries again.
-      if (h) h(r.id, r.op); else office.commentsAnswer?.(r.id, { ok: false, error: 'editor-not-ready' });
+      if (h) h(r.id, r.op); else office.commentsAnswer?.(r.id, { ok: false, error: 'editor-not-ready' }, r.token);
     });
   }
   commentHandlers.set(token, handler);
