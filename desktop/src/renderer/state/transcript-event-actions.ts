@@ -22,7 +22,8 @@ import type { ChatAction } from './chat-types';
  * Replaying "the model is thinking" from disk would park a turn that finished
  * hours ago, and replaying an error would re-raise a banner the user already
  * moved past. The one heartbeat-shaped event that DOES replay is the saved retry
- * marker (`dropPart`): it shapes what the answer is, so history applies it too. The bookkeeping half of `compact-summary` (what the summarize call
+ * marker (`dropPart`): it shapes what the answer is, so history applies it too.
+ * The bookkeeping half of `compact-summary` (what the summarize call
  * cost, the window it left behind) DOES replay, so totals survive a reopen.
  *
  * Unknown types return []. Kotlin's runtime also sends a flat 'streaming-text'

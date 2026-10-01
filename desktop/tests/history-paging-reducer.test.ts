@@ -298,6 +298,28 @@ describe('history page honours saved dropPart markers', () => {
     expect(texts(st)).toEqual(['REPLACEMENT']);
   });
 
+  it('replaying the same marker twice changes nothing the second time', () => {
+    const page = [userEvent('s', 'u1', 'hi'), text('a1', 'HALF-ANSWER', 'text-0'),
+      drop('d1', ['text-0']), text('a2', 'REPLACEMENT', 'text-0'), done('t1')];
+    const once = load(page);
+    // The same page again (uuids already seen) and a second raw drop must both leave it alone.
+    const twice = chatReducer(load(page, once), { type: 'NATIVE_PARTS_DROPPED', sessionId: 's', partIds: ['text-0'] });
+    expect(texts(once)).toEqual(['REPLACEMENT']);
+    expect(texts(twice)).toContain('REPLACEMENT');
+    expect(JSON.stringify(texts(twice))).not.toContain('HALF-ANSWER');
+  });
+
+  it('an older page carrying a marker leaves a live open turn untouched', () => {
+    let live = withSession('s');
+    live = chatReducer(live, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: 's', uuid: 'lu', text: 'now', timestamp: 9 } as any);
+    live = chatReducer(live, { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: 's', uuid: 'la', text: 'LIVE-PARTIAL', timestamp: 9, partId: 'text-0' } as any);
+    const st = load([userEvent('s', 'u1', 'hi'), text('a1', 'HALF-ANSWER', 'text-0'),
+      drop('d1', ['text-0']), text('a2', 'REPLACEMENT', 'text-0'), done('t1')], live);
+    expect(texts(st)).toContain('LIVE-PARTIAL');
+    expect(texts(st)).toContain('REPLACEMENT');
+    expect(JSON.stringify(texts(st))).not.toContain('HALF-ANSWER');
+  });
+
   describe('end to end from the saved file', () => {
     let root = '';
     afterEach(() => { if (root) fs.rmSync(root, { recursive: true, force: true }); });
