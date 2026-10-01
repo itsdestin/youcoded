@@ -48,14 +48,11 @@ export const HOME_ASSISTANT_PAGE_JSON = {
   ],
 };
 
-/** The three light-control designs on the light-controls choice deck
- *  (screens review, S-page: "a better power button for the lights instead of
- *  the basic toggle… style the brightness sliders differently and add
- *  color/palette control"). `switch` is the first version, kept as the
- *  baseline until one is picked. */
-export type LightDesign = 'switch' | 'tile' | 'power' | 'slider';
-
-export function homeAssistantPageHtml(design: LightDesign): string {
+/** Light controls are TILES (light-controls choice deck, 2026-10-01, C-lights:
+ *  picked over glowing power buttons and big sliders). Round 2 notes: room-wide
+ *  "all on / all off" buttons, a better colour button and colour selection, and
+ *  the speaker's volume in the same style. */
+function homeAssistantPageHtml(): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>Home</title>
 <style>
@@ -70,19 +67,13 @@ export function homeAssistantPageHtml(design: LightDesign): string {
   .thing.gone { opacity: .55; }
   .thing.col { flex-direction: column; align-items: stretch; }
   .thing .line { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
-  .switch { position: relative; width: 36px; height: 20px; flex-shrink: 0; border-radius: 9999px; border: 1px solid var(--edge); background: var(--well); cursor: pointer; padding: 0; transition: background-color 150ms ease; }
-  .switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--fg-muted); transition: transform 150ms ease, background-color 150ms ease; }
-  .switch[aria-checked="true"] { background: var(--accent); border-color: var(--accent); }
-  .switch[aria-checked="true"]::after { transform: translateX(16px); background: var(--on-accent); }
-  .switch:disabled { opacity: .5; cursor: default; }
-  .switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .temp { font-family: var(--font-mono); font-size: 28px; font-weight: 500; line-height: 1; }
   .cam { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: var(--radius-md, 8px); background: var(--well); display: block; }
   .cam-empty { width: 100%; height: 56px; border-radius: var(--radius-md, 8px); background: var(--well); display: grid; place-items: center; color: var(--fg-muted); font-size: 12px; }
   .hide { display: none; }
   .editing .hide { display: inline-flex; }
   .banner { padding: 10px 12px; border-radius: var(--radius-md, 8px); border: 1px solid var(--edge); background: var(--well); font-size: 13px; }
-  @media (prefers-reduced-motion: reduce) { .switch, .switch::after { transition: none; } }
+  @media (prefers-reduced-motion: reduce) { .tile .glow, .sw { transition: none; } }
 
   /* ── Light controls, shared ─────────────────────────────────────────── */
   /* A range painted as a filled bar: --pct is the fill, --c the light's own
@@ -96,10 +87,7 @@ export function homeAssistantPageHtml(design: LightDesign): string {
   .sw[aria-pressed="true"] { outline: 2px solid var(--fg); outline-offset: 2px; }
   .sw:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .pct { font-family: var(--font-mono); font-size: 11px; color: var(--fg-muted); }
-  .chip-btn { appearance: none; font: inherit; font-size: 11px; padding: 2px 8px; border-radius: 9999px; border: 1px solid var(--edge); background: transparent; color: var(--fg-2); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
-  .chip-btn .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--c); border: 1px solid var(--edge); }
-
-  /* ── Design A: the tile is the button ───────────────────────────────── */
+  /* ── Tiles: the tile is the button ─────────────────────────────────── */
   .tile { position: relative; overflow: hidden; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: var(--radius-md, 8px); border: 1px solid var(--edge-dim); background: var(--inset); }
   .tile .line { display: flex; align-items: center; gap: 10px; position: relative; }
   .tile .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -111,27 +99,29 @@ export function homeAssistantPageHtml(design: LightDesign): string {
   .tile .lr { height: 14px; position: relative; }
   .tile .lr::-webkit-slider-thumb { width: 14px; height: 14px; border-radius: 50%; background: transparent; }
 
-  /* ── Design B: a round power button that glows ──────────────────────── */
-  .pw { width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--edge); background: var(--well); color: var(--fg-muted); display: grid; place-items: center; cursor: pointer; padding: 0; flex-shrink: 0; transition: box-shadow 200ms ease, background-color 200ms ease; }
-  .pw[aria-pressed="true"] { background: var(--c); border-color: var(--c); color: #1a1a1a; box-shadow: 0 0 0 4px color-mix(in srgb, var(--c) 30%, transparent), 0 0 16px var(--c); }
-  .pw:disabled { opacity: .5; cursor: default; }
-  .pw:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-  .v-power .lr { height: 6px; background: linear-gradient(to right, color-mix(in srgb, var(--c) 25%, var(--well)), var(--c)); }
-  .v-power .lr::-webkit-slider-thumb { width: 18px; height: 18px; border-radius: 50%; background: var(--fg); border: 3px solid var(--c); box-shadow: 0 1px 4px rgba(0,0,0,.35); }
+  .tile.media .bulb { border-radius: var(--radius-md, 8px); }
+  .tile.media.on .bulb { background: var(--accent); color: var(--on-accent); box-shadow: none; }
+  .tile .vol { display: flex; align-items: center; gap: 8px; position: relative; }
+  .tile .vol svg { flex-shrink: 0; color: var(--fg-muted); }
 
-  /* ── Design C: the slider is the control ────────────────────────────── */
-  .big { position: relative; height: 36px; }
-  .big .lr { height: 36px; border-radius: var(--radius-md, 10px); }
-  .big .lr::-webkit-slider-thumb { width: 4px; height: 36px; background: transparent; }
-  .big .on-btn { position: absolute; left: 6px; top: 6px; width: 24px; height: 24px; border-radius: 50%; border: 0; padding: 0; display: grid; place-items: center; cursor: pointer; background: rgba(0,0,0,.18); color: #fff; }
-  .big .label { position: absolute; left: 38px; right: 10px; top: 0; bottom: 0; display: flex; align-items: center; gap: 8px; pointer-events: none; font-size: 13px; }
-  .big .label .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
-  .big.off .lr { background: var(--well); }
-  /* On a lit bar the words sit over the light's own colour, which can be any
-     colour at all; white with a dark halo reads on every one of them. */
-  .big:not(.off) .label .nm, .big:not(.off) .label .pct { color: #fff; text-shadow: 0 0 3px rgba(0,0,0,.85), 0 1px 2px rgba(0,0,0,.7); }
+  /* The colour button: a dot of the light's current colour, ringed, on the
+     tile itself — what it does is what it shows. */
+  .cbtn { width: 26px; height: 26px; flex-shrink: 0; border-radius: 50%; padding: 0; cursor: pointer; position: relative; background: var(--c); border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--edge); }
+  .cbtn[aria-expanded="true"] { box-shadow: 0 0 0 2px var(--fg); }
+  .cbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  /* Colour selection: whites and colours as two labelled rows, the chosen
+     one ticked, and a rainbow swatch for any colour at all. */
+  .palette { flex-direction: column; gap: 8px; padding: 10px; border-radius: var(--radius-md, 8px); background: var(--panel); border: 1px solid var(--edge-dim); }
+  .pal-row { display: grid; grid-template-columns: 56px 1fr; align-items: center; gap: 8px; }
+  .pal-sw { display: flex; flex-wrap: wrap; gap: 8px; }
+  .pal-lbl { width: 56px; flex-shrink: 0; font-size: 11px; color: var(--fg-muted); }
+  .sw { width: 28px; height: 28px; position: relative; }
+  .sw[aria-pressed="true"]::after { content: ''; position: absolute; left: 8px; top: 4px; width: 7px; height: 12px; border: solid #111; border-width: 0 2.5px 2.5px 0; transform: rotate(45deg); filter: drop-shadow(0 0 1px #fff); }
+  .sw-any { width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--edge); cursor: pointer; background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red); position: relative; overflow: hidden; }
+  .sw-any input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+  .room-acts { display: flex; gap: 6px; }
 </style></head>
-<body class="v-${design}">
+<body>
 <div class="yc-page yc-stack" id="root">
   <div class="yc-row yc-row--between">
     <div><div class="yc-eyebrow">Home Assistant</div><h1>Home</h1></div>
@@ -146,7 +136,6 @@ export function homeAssistantPageHtml(design: LightDesign): string {
 <script>
 (function () {
   var TEMPLATE = ${JSON.stringify(ROOMS_TEMPLATE)};
-  var DESIGN = ${JSON.stringify(design)};
   var POLL_MS = 5000, CAMERA_MS = 10000;
   var base = (window.youcoded.devices || {}).ha;
   var rooms = null, editing = false, timer = null, camTimer = null, busy = {};
@@ -220,58 +209,48 @@ export function homeAssistantPageHtml(design: LightDesign): string {
   function canColour(it) { return Array.isArray(it.modes) && it.modes.some(function (m) { return m === 'xy' || m === 'hs' || m === 'rgb' || m === 'rgbw' || m === 'rgbww'; }); }
   function canWhite(it) { return Array.isArray(it.modes) && it.modes.some(function (m) { return m === 'color_temp' || m === 'xy' || m === 'hs' || m === 'rgb' || m === 'rgbw' || m === 'rgbww'; }); }
   var BULB = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1 2V17h6v-.3c0-.8.4-1.5 1-2A7 7 0 0 0 12 2z"/></svg>';
-  var POWER = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 3v9"/><path d="M6.3 7.2a8 8 0 1 0 11.4 0"/></svg>';
+  var SPEAKER = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg>';
+  var TV = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="13" rx="2"/><path d="M8 21h8"/></svg>';
+  function hex(c) { return '#' + c.map(function (n) { return ('0' + n.toString(16)).slice(-2); }).join(''); }
 
+  function swatch(it, p) {
+    var c = p.k ? kelvinRgb(p.k) : p.rgb;
+    var on = p.k ? (it.k && Math.abs(it.k - p.k) < 300 && !Array.isArray(it.rgb)) : (Array.isArray(it.rgb) && it.rgb.join() === p.rgb.join());
+    return '<button class="sw" style="--sw: rgb(' + c.join(',') + ')" title="' + p.name + '" aria-label="' + p.name + '" aria-pressed="' + (on ? 'true' : 'false') + '" data-colour="' + esc(it.id) + '" data-' + (p.k ? 'k="' + p.k : 'rgb="' + p.rgb.join(',')) + '"></button>';
+  }
   function paletteHtml(it) {
     if (!expanded.has(it.id) || !isOn(it) || gone(it)) return '';
-    return '<div class="palette" role="group" aria-label="Colour of ' + esc(it.name) + '">' + PALETTE.filter(function (p) {
-      return p.k ? canWhite(it) : canColour(it);
-    }).map(function (p) {
-      var c = p.k ? kelvinRgb(p.k) : p.rgb;
-      var on = p.k ? (it.k && Math.abs(it.k - p.k) < 300 && !Array.isArray(it.rgb)) : (Array.isArray(it.rgb) && it.rgb.join() === p.rgb.join());
-      return '<button class="sw" style="--sw: rgb(' + c.join(',') + ')" title="' + p.name + '" aria-label="' + p.name + '" aria-pressed="' + (on ? 'true' : 'false') + '" data-colour="' + esc(it.id) + '" data-' + (p.k ? 'k="' + p.k : 'rgb="' + p.rgb.join(',')) + '"></button>';
-    }).join('') + '</div>';
+    var whites = canWhite(it) ? '<div class="pal-row"><span class="pal-lbl">Whites</span><span class="pal-sw">' + PALETTE.filter(function (p) { return p.k; }).map(function (p) { return swatch(it, p); }).join('') + '</span></div>' : '';
+    var current = Array.isArray(it.rgb) ? it.rgb : [255, 255, 255];
+    var colours = canColour(it) ? '<div class="pal-row"><span class="pal-lbl">Colours</span><span class="pal-sw">' + PALETTE.filter(function (p) { return p.rgb; }).map(function (p) { return swatch(it, p); }).join('') +
+      '<label class="sw-any" title="Any colour"><input type="color" value="' + hex(current) + '" aria-label="Any colour for ' + esc(it.name) + '" data-any="' + esc(it.id) + '"></label></span></div>' : '';
+    return '<div class="palette" role="group" aria-label="Colour of ' + esc(it.name) + '">' + whites + colours + '</div>';
   }
   function colourBtn(it) {
     if (!canWhite(it) || !isOn(it) || gone(it)) return '';
-    return '<button class="chip-btn" style="--c:' + colourOf(it) + '" data-expand="' + esc(it.id) + '" aria-expanded="' + (expanded.has(it.id) ? 'true' : 'false') + '"><span class="dot"></span>Colour</button>';
+    return '<button class="cbtn" style="--c:' + colourOf(it) + '" data-expand="' + esc(it.id) + '" aria-expanded="' + (expanded.has(it.id) ? 'true' : 'false') + '" aria-label="Colour of ' + esc(it.name) + '" title="Colour"></button>';
   }
   function rangeHtml(it, pct) {
     return '<input class="lr" type="range" min="1" max="100" value="' + pct + '" style="--pct:' + pct + '%;--c:' + colourOf(it) + '" aria-label="Brightness of ' + esc(it.name) + '" data-bright="' + esc(it.id) + '">';
   }
 
-  function lightHtml(it) {
+  function tileHtml(it, icon, media) {
     var off = !isOn(it), na = gone(it), on = !off && !na;
     var pct = it.brightness ? Math.round(it.brightness / 2.55) : 0;
-    var sub = na ? '<div class="sub">Not responding</div>' : '';
-    var c = colourOf(it);
-    if (DESIGN === 'tile') {
-      return '<div class="tile' + (on ? ' on' : '') + (na ? ' gone' : '') + '" style="--c:' + c + '"><span class="glow"></span>' +
-        '<div class="line"><button class="tile-face" data-toggle="' + esc(it.id) + '" aria-pressed="' + on + '"' + (na ? ' disabled' : '') + ' aria-label="' + esc(it.name) + (on ? ', on' : ', off') + '">' +
-        '<span class="bulb">' + BULB + '</span><span class="name">' + esc(it.name) + (na ? sub : '<div class="sub">' + (on ? (dimmable(it) ? pct + '%' : 'On') : 'Off') + '</div>') + '</span></button>' +
-        hideBtn(it.id) + colourBtn(it) + '</div>' +
-        (on && dimmable(it) ? rangeHtml(it, pct) : '') + paletteHtml(it) + '</div>';
-    }
-    if (DESIGN === 'power') {
-      return '<div class="thing col' + (off ? ' off' : '') + (na ? ' gone' : '') + '" style="--c:' + c + '"><div class="line">' +
-        '<button class="pw" data-toggle="' + esc(it.id) + '" aria-pressed="' + on + '" aria-label="' + esc(it.name) + (on ? ' is on' : ' is off') + '"' + (na ? ' disabled' : '') + '>' + POWER + '</button>' +
-        '<div class="name">' + esc(it.name) + sub + '</div>' + hideBtn(it.id) + colourBtn(it) + (on && dimmable(it) ? '<span class="pct">' + pct + '%</span>' : '') + '</div>' +
-        (on && dimmable(it) ? rangeHtml(it, pct) : '') + paletteHtml(it) + '</div>';
-    }
-    if (DESIGN === 'slider') {
-      var bar = na
-        ? '<div class="thing gone"><div class="name">' + esc(it.name) + sub + '</div>' + hideBtn(it.id) + '</div>'
-        : '<div class="big' + (on ? '' : ' off') + '" style="--c:' + c + '">' + (dimmable(it) || !on ? '<input class="lr" type="range" min="0" max="100" value="' + (on ? pct : 0) + '" style="--pct:' + (on ? pct : 0) + '%;--c:' + c + '" aria-label="Brightness of ' + esc(it.name) + '" data-bright="' + esc(it.id) + '">' : '<div class="lr" style="--pct:100%;--c:' + c + ';height:36px;border-radius:10px"></div>') +
-          '<button class="on-btn" data-toggle="' + esc(it.id) + '" aria-pressed="' + on + '" aria-label="' + esc(it.name) + (on ? ' is on' : ' is off') + '">' + BULB + '</button>' +
-          '<div class="label"><span class="nm">' + esc(it.name) + '</span><span class="pct">' + (on ? (dimmable(it) ? pct + '%' : 'On') : 'Off') + '</span></div></div>';
-      return '<div class="yc-stack" style="gap:6px">' + bar + (on ? '<div class="yc-row">' + colourBtn(it) + '<span class="yc-spacer"></span>' + hideBtn(it.id) + '</div>' : '') + paletteHtml(it) + '</div>';
-    }
-    return null;
+    var status = na ? 'Not responding'
+      : media ? (on ? (it.title || 'On') : 'Off')
+      : on ? (dimmable(it) ? pct + '%' : 'On') : 'Off';
+    var c = media ? 'var(--accent)' : colourOf(it);
+    var vol = media && on && (it.features & 4) && it.vol != null
+      ? '<div class="vol">' + SPEAKER + '<input class="lr" type="range" min="0" max="100" value="' + Math.round(it.vol * 100) + '" style="--pct:' + Math.round(it.vol * 100) + '%;--c:var(--accent)" aria-label="Volume of ' + esc(it.name) + '" data-vol="' + esc(it.id) + '"></div>'
+      : '';
+    var bright = !media && on && dimmable(it) ? rangeHtml(it, pct) : '';
+    return '<div class="tile' + (media ? ' media' : '') + (on ? ' on' : '') + (na ? ' gone' : '') + '" style="--c:' + c + '"><span class="glow"></span>' +
+      '<div class="line"><button class="tile-face" data-toggle="' + esc(it.id) + '" aria-pressed="' + on + '"' + (na ? ' disabled' : '') + ' aria-label="' + esc(it.name) + (on ? ', on' : ', off') + '">' +
+      '<span class="bulb">' + icon + '</span><span class="name">' + esc(it.name) + '<div class="sub">' + esc(status) + '</div></span></button>' +
+      hideBtn(it.id) + (media ? '' : colourBtn(it)) + '</div>' + bright + vol + (media ? '' : paletteHtml(it)) + '</div>';
   }
 
-  function sw(id, on, label, disabled) {
-    return '<button class="switch" role="switch" aria-checked="' + (on ? 'true' : 'false') + '" aria-label="' + esc(label) + '" data-toggle="' + esc(id) + '"' + (disabled ? ' disabled' : '') + '></button>';
-  }
   function hideBtn(id) {
     var h = hidden.has(id);
     return '<button class="yc-button yc-button--ghost yc-button--sm hide" data-hide="' + esc(id) + '">' + (h ? 'Show' : 'Hide') + '</button>';
@@ -281,13 +260,7 @@ export function homeAssistantPageHtml(design: LightDesign): string {
     var d = domain(it.id), off = !isOn(it), na = gone(it);
     var cls = 'thing' + (off ? ' off' : '') + (na ? ' gone' : '');
     var sub = na ? '<div class="sub">Not responding</div>' : '';
-    if (d === 'light' && DESIGN !== 'switch') return lightHtml(it);
-    if (d === 'light') {
-      var pct = it.brightness ? Math.round(it.brightness / 2.55) : 0;
-      var slider = (!na && dimmable(it) && !off)
-        ? '<input class="yc-range" type="range" min="1" max="100" value="' + pct + '" aria-label="Brightness of ' + esc(it.name) + '" data-bright="' + esc(it.id) + '">' : '';
-      return '<div class="' + cls + (slider ? ' col' : '') + '"><div class="line"><div class="name">' + esc(it.name) + sub + '</div>' + hideBtn(it.id) + sw(it.id, !off && !na, it.name, na) + '</div>' + slider + '</div>';
-    }
+    if (d === 'light') return tileHtml(it, BULB, false);
     if (d === 'climate') {
       var unit = '°';
       var step = it.step || 1;
@@ -297,12 +270,7 @@ export function homeAssistantPageHtml(design: LightDesign): string {
         '<div style="text-align:center;min-width:56px"><div class="yc-title">' + (it.target != null ? esc(it.target) + unit : 'Off') + '</div><div class="sub">Set to</div></div>' +
         '<button class="yc-button yc-button--icon yc-button--round" aria-label="Warmer" data-temp="' + esc(it.id) + '" data-delta="' + step + '">+</button></div>') + '</div>';
     }
-    if (d === 'media_player') {
-      var canVol = (it.features & 4) && it.vol != null && !off && !na;
-      var now = it.title && !off ? '<div class="sub">' + esc(it.title) + '</div>' : sub;
-      return '<div class="' + cls + (canVol ? ' col' : '') + '"><div class="line"><div class="name">' + esc(it.name) + now + '</div>' + hideBtn(it.id) + sw(it.id, !off && !na, it.name, na) + '</div>' +
-        (canVol ? '<input class="yc-range" type="range" min="0" max="100" value="' + Math.round(it.vol * 100) + '" aria-label="Volume of ' + esc(it.name) + '" data-vol="' + esc(it.id) + '">' : '') + '</div>';
-    }
+    if (d === 'media_player') return tileHtml(it, /tv/i.test(it.id + ' ' + it.name) ? TV : SPEAKER, true);
     if (d === 'camera') {
       return '<div class="' + cls + ' col"><div class="line"><div class="name">' + esc(it.name) + sub + '</div>' + hideBtn(it.id) + '</div>' +
         (na ? '<div class="cam-empty">Camera not responding</div>' : '<img class="cam" alt="" role="img" aria-label="' + esc(it.name) + '" data-cam="' + esc(it.id) + '"' + (camCache[it.id] ? ' src="' + camCache[it.id] + '"' : '') + '>') + '</div>';
@@ -332,9 +300,13 @@ export function homeAssistantPageHtml(design: LightDesign): string {
       var items = room.items.filter(function (it) { return editing || !hidden.has(it.id); });
       if (!items.length) return '';
       var lights = room.items.filter(function (it) { return domain(it.id) === 'light' && !gone(it) && !hidden.has(it.id); });
-      var anyOn = lights.some(isOn);
-      var roomSw = lights.length > 1 ? sw('room:' + room.id, anyOn, 'All lights in ' + room.name, false) : '';
-      return '<section class="yc-card room"><div class="room-head"><h2>' + esc(room.name) + '</h2>' + roomSw + '</div>' + items.map(itemHtml).join('') + '</section>';
+      // Two plain buttons rather than one switch (round 2: "all on/all off"),
+      // so a room that is half lit can go either way in one press.
+      var allOn = lights.length > 0 && lights.every(isOn), allOff = lights.every(function (it) { return !isOn(it); });
+      var acts = lights.length > 1 ? '<div class="room-acts">' +
+        '<button class="yc-button yc-button--sm" data-room-on="' + esc(room.id) + '"' + (allOn ? ' disabled' : '') + '>All on</button>' +
+        '<button class="yc-button yc-button--sm" data-room-off="' + esc(room.id) + '"' + (allOff ? ' disabled' : '') + '>All off</button></div>' : '';
+      return '<section class="yc-card room"><div class="room-head"><h2>' + esc(room.name) + '</h2>' + acts + '</div>' + items.map(itemHtml).join('') + '</section>';
     }).join('');
     root.innerHTML = html || '<div class="yc-empty">Nothing to show. Put devices in rooms in Home Assistant, or press Hide things to bring hidden ones back.</div>';
   }
@@ -364,16 +336,18 @@ export function homeAssistantPageHtml(design: LightDesign): string {
       render();
       return;
     }
+    var roomOn = t.getAttribute('data-room-on'), roomOff = t.getAttribute('data-room-off');
+    if (roomOn || roomOff) {
+      var turnOn = !!roomOn;
+      var room = rooms.find(function (r) { return r.id === (roomOn || roomOff); });
+      var ids = room.items.filter(function (it) { return domain(it.id) === 'light' && !gone(it) && !hidden.has(it.id); }).map(function (it) { return it.id; });
+      ids.forEach(function (x) { setLocal(x, { state: turnOn ? 'on' : 'off' }); });
+      service('light', turnOn ? 'turn_on' : 'turn_off', { entity_id: ids }, 'room:' + room.id);
+      return;
+    }
     var id = t.getAttribute('data-toggle');
     if (id) {
       var on = (t.getAttribute('aria-checked') || t.getAttribute('aria-pressed')) !== 'true';
-      if (id.indexOf('room:') === 0) {
-        var room = rooms.find(function (r) { return 'room:' + r.id === id; });
-        var ids = room.items.filter(function (it) { return domain(it.id) === 'light' && !gone(it) && !hidden.has(it.id); }).map(function (it) { return it.id; });
-        ids.forEach(function (x) { setLocal(x, { state: on ? 'on' : 'off' }); });
-        service('light', on ? 'turn_on' : 'turn_off', { entity_id: ids }, id);
-        return;
-      }
       setLocal(id, { state: on ? 'on' : 'off' });
       service(domain(id), on ? 'turn_on' : 'turn_off', { entity_id: id }, id);
       return;
@@ -403,6 +377,13 @@ export function homeAssistantPageHtml(design: LightDesign): string {
       if (Number(t.value) === 0) { setLocal(b, { state: 'off' }); service('light', 'turn_off', { entity_id: b }, b); return; }
       setLocal(b, { state: 'on', brightness: Math.round(t.value * 2.55) }); service('light', 'turn_on', { entity_id: b, brightness_pct: Number(t.value) }, b); return;
     }
+    // Any colour, from the rainbow swatch's colour picker.
+    var any = t.getAttribute && t.getAttribute('data-any');
+    if (any) {
+      var m = /^#(..)(..)(..)$/.exec(t.value);
+      if (m) { var c3 = [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)]; setLocal(any, { rgb: c3 }); service('light', 'turn_on', { entity_id: any, rgb_color: c3 }, any); }
+      return;
+    }
     var v = t.getAttribute && t.getAttribute('data-vol');
     if (v) { setLocal(v, { vol: t.value / 100 }); service('media_player', 'volume_set', { entity_id: v, volume_level: t.value / 100 }, v); }
   });
@@ -425,6 +406,4 @@ export function homeAssistantPageHtml(design: LightDesign): string {
 </body></html>`;
 }
 
-/** The page as it is installed today: the first version's switches, until a
- *  design is picked on the light-controls deck. */
-export const HOME_ASSISTANT_PAGE_HTML = homeAssistantPageHtml('switch');
+export const HOME_ASSISTANT_PAGE_HTML = homeAssistantPageHtml();

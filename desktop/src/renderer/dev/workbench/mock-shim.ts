@@ -494,7 +494,7 @@ const NAMESPACES = [
 ];
 
 import { createNamingPreview } from './naming-preview';
-import { seedPages, homeDesignPages } from './fixtures/pages';
+import { seedPages } from './fixtures/pages';
 import { fakeHomeAssistantFetch } from './fixtures/fake-home-assistant';
 import type { PagesBridge, PageDocument, PageSummary, SavedPageKey } from '../../../shared/pages-types';
 
@@ -3691,12 +3691,13 @@ function createPagesMock(empty: boolean): PagesBridge {
   if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('pagesHome') === 'refused') {
     pages = pages.map((p) => (p.id !== 'page-home' ? p : { ...p, connections: (p.connections ?? []).map((c) => (c.kind === 'device' ? { ...c, address: 'my-home.example.com' } : c)) }));
   }
-  if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('pagesHome') === 'designs') pages = [...pages, ...homeDesignPages()];
   if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('pagesHome') === 'connected') {
     pages = pages.map((p) => (p.id !== 'page-home' ? p : {
       ...p,
       connections: (p.connections ?? []).map((c) => (c.kind === 'device' ? { ...c, address: '100.99.234.114:8123', approved: true, savedKey: true } : c)),
       refresh: { at: new Date().toISOString(), failed: false },
+      // Two palettes open, so the review screen shows the colour selection.
+      data: { expanded: ['light.desk_backlight', 'light.hue_play_1'] },
     }));
   }
   // One key is saved from the start (Trip board uses it), so the Weather page
