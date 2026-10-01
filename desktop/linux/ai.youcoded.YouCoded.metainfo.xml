@@ -45,9 +45,9 @@
     <category>Utility</category>
   </categories>
   <content_rating type="oars-1.1"/>
-  <!-- PLACEHOLDER PICKS (2026-10-01): the assistant's top three of five candidates.
-       Destin chooses the final set; swap the files in youcoded/docs/screenshots/ and
-       these captions together. The catalog shows type="default" first. -->
+  <!-- Destin approved this set and order (2026-10-01). To change a picture, swap the
+       file in youcoded/docs/screenshots/ and its caption here together. The catalog
+       shows type="default" first. -->
   <screenshots>
     <screenshot type="default">
       <caption>A conversation, in the Meadow Mist theme</caption>
