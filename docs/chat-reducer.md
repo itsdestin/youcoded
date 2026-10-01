@@ -19,7 +19,7 @@ Three screens turn a `TranscriptEvent` into reducer actions, and all three call 
 | Buddy window, live | `buddy/BubbleFeed.tsx` | `{ live: true, compactionPending, fallbackContextTokens: null }` (no CC statusline) |
 | A history page | `pageEventToAction` (`transcript-page-actions.ts`), used by `HISTORY_PAGE_LOADED` | `{ live: false }`, first action only |
 
-- **`live: false` is history.** It returns nothing for conditions that only mean something while a turn runs: a heartbeat/progress `assistant-thinking`, `session-error`, `replay-complete`, the compaction MARKER and the `/clear` gauge re-base. Its bookkeeping half (`NATIVE_HISTORY_REWRITTEN` for a compaction's bill and window) does replay.
+- **`live: false` is history.** It returns nothing for conditions that only mean something while a turn runs: a heartbeat/progress `assistant-thinking`, `session-error`, `replay-complete`, the compaction MARKER and the `/clear` gauge re-base (a saved `dropPart` retry marker is the exception: it replays). Its bookkeeping half (`NATIVE_HISTORY_REWRITTEN` for a compaction's bill and window) does replay.
 - **The switch is exhaustive over `TranscriptEventType`** with a `never` default: a new type without a case fails the build. At runtime an unknown type (Kotlin's flat `'streaming-text'`) returns `[]` and never throws.
 - **The buddy's differences live in one typed ledger**, `BUDDY_LIVE` (`buddy/buddy-live-events.ts`): `Record<TranscriptEventType, 'same' | { skip: reason }>`. Today exactly three skips (live only; its page path draws them): `user-interrupt`, `skill-invoked`, `context-clear`.
 - **Every main-window action goes through the frame batcher, in arrival order** (`routeTranscriptEvent`; the file-shrink backup goes through `routeTranscriptShrink`). Four types (skill card, `/clear`, history rewrite, compaction marker) once skipped it and could land ABOVE a message sent just before them in the same frame; nothing recorded a reason, and none reads state straight after its dispatch. Do not add a direct-dispatch route. A message with no text draws no bubble on any path; an assistant text with none becomes `''`.
@@ -220,6 +220,15 @@ Ordering is guaranteed end to end without any explicit sequencing: the harness e
 `dropPart` BEFORE returning its retry sentinel, and `eventToAction` returns
 `NATIVE_PARTS_DROPPED` ahead of the heartbeat action in the same array (both windows
 apply that array in order), with both dispatch queues plain FIFO.
+
+A saved `dropPart` marker also replays on a HISTORY page (`live: false` returns just
+`NATIVE_PARTS_DROPPED`, no heartbeat): before 2026-10-01 pages skipped it, so a reopened
+conversation showed the discarded half-answer glued before the real one. The marker is
+stored AFTER the parts it drops, and a page replays in order on scratch state, so the
+drop finds them. Pages cut only at a user message and a retry stays inside one turn, so
+the target is on the same page; the one exception (a single turn over the page byte cap,
+so the newer page starts mid-turn) finds no open turn and is a no-op. Guard:
+`history-paging-reducer.test.ts` → `history page honours saved dropPart markers`.
 
 ### The PTY classifier must not reset a state it never set
 

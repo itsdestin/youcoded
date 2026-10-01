@@ -1304,7 +1304,14 @@
         }
       }
     ],
-    "page": null
+    "page": {
+      "type": "NATIVE_PARTS_DROPPED",
+      "sessionId": "s1",
+      "partIds": [
+        "p1",
+        "p2"
+      ]
+    }
   },
   "assistant-thinking usageProgress": {
     "app": [
@@ -1400,7 +1407,13 @@
         }
       }
     ],
-    "page": null
+    "page": {
+      "type": "NATIVE_PARTS_DROPPED",
+      "sessionId": "s1",
+      "partIds": [
+        "p1"
+      ]
+    }
   },
   "session-error message only": {
     "app": [

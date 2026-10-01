@@ -6,6 +6,9 @@
 // (`buddy`) and pageEventToAction (`page`), for every event type x payload variant
 // in tests/helpers/transcript-event-matrix.ts. So these tests prove the merge kept
 // each screen's behaviour, rather than asserting what the new code happens to do.
+// ONE deliberate departure (R5-pre, 2026-10-01): the two dropPart entries' `page` was
+// `null` (a bug: reopened history showed discarded retry text), and now holds the
+// NATIVE_PARTS_DROPPED action the live path already produced.
 import { describe, it, expect } from 'vitest';
 import golden from './fixtures/transcript-event-actions.golden.json';
 import { MATRIX } from './helpers/transcript-event-matrix';

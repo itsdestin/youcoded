@@ -9,7 +9,8 @@ import { eventToAction } from './transcript-event-actions';
  * WHY a wrapper: the mapping itself lives in `eventToAction` (the one translator
  * App, the buddy feed and this share). `live: false` is what makes it
  * history-shaped: heartbeats, `session-error`, `replay-complete`, the compaction
- * marker and the /clear gauge re-base are live conditions and yield nothing, and
+ * marker and the /clear gauge re-base are live conditions and yield nothing (a saved
+ * retry marker, `dropPart`, is NOT: it replays as NATIVE_PARTS_DROPPED), and
  * every remaining event yields at most one action, so `[0]` loses nothing.
  * Used by chat-reducer's HISTORY_PAGE_LOADED, in the main window and the buddy.
  */

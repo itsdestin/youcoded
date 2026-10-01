@@ -21,7 +21,8 @@ import type { ChatAction } from './chat-types';
  * (only the window that ran /compact draws one) and the /clear gauge re-base.
  * Replaying "the model is thinking" from disk would park a turn that finished
  * hours ago, and replaying an error would re-raise a banner the user already
- * moved past. The bookkeeping half of `compact-summary` (what the summarize call
+ * moved past. The one heartbeat-shaped event that DOES replay is the saved retry
+ * marker (`dropPart`): it shapes what the answer is, so history applies it too. The bookkeeping half of `compact-summary` (what the summarize call
  * cost, the window it left behind) DOES replay, so totals survive a reopen.
  *
  * Unknown types return []. Kotlin's runtime also sends a flat 'streaming-text'
@@ -128,8 +129,20 @@ export function eventToAction(event: TranscriptEvent, opts: EventToActionOptions
           parentAgentToolUseId: ev.data.parentAgentToolUseId,
         } as ChatAction];
       }
+      // A saved retry marker is a record of what the answer IS, not a live condition,
+      // so it replays on a history page too. WHY: the marker comes AFTER the part it
+      // discards and is stored on disk; skipping it on pages made a reopened
+      // conversation show the discarded half-answer glued in front of the real one
+      // (same part id merges them). Applied on the scratch state, it removes parts the
+      // page already drew. Pages cut only at a user message and a retry stays inside
+      // one turn, so its target is on this page; the exception (one turn over the page
+      // byte cap) finds no open turn and the reducer ignores it.
+      if (!opts.live) {
+        return ev.data.dropPart
+          ? [{ type: 'NATIVE_PARTS_DROPPED', sessionId, partIds: ev.data.dropPart.partIds } as ChatAction]
+          : [];
+      }
       // No text = a lifecycle heartbeat. LIVE only, see the header.
-      if (!opts.live) return [];
       const out: ChatAction[] = [];
       // Argument-generation progress: draw/update the preparing tool card.
       // IN ADDITION to the heartbeat, not instead of it: the heartbeat's

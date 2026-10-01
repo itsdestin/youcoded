@@ -805,4 +805,11 @@ describe('native heartbeat forwarding is shared by both windows', () => {
       expect(types).toEqual(['NATIVE_PARTS_DROPPED', 'TRANSCRIPT_THINKING_HEARTBEAT']);
     });
   }
+
+  // A history page keeps the saved marker (it used to return nothing, so a reopened
+  // conversation showed the discarded retry text) but never the live-only heartbeat.
+  it('a history page forwards dropPart and drops the heartbeat', () => {
+    const types = eventToAction(ev({ dropPart: { partIds: ['p'] } }), { live: false }).map((a) => a.type);
+    expect(types).toEqual(['NATIVE_PARTS_DROPPED']);
+  });
 });
