@@ -226,3 +226,35 @@ describe('refill (a reconnect, or Refresh)', () => {
     expect(r.opens).toHaveLength(1);
   });
 });
+
+describe('watch (a phone starts receiving a conversation)', () => {
+  it('a conversation this page never filled takes a first fill and shows its loading state', async () => {
+    const r = rig(() => real);
+    await r.loader.watch('s');
+    expect(r.opens).toHaveLength(1);
+    expect(r.opens[0]).toMatchObject({ sessionId: 's', fresh: true });
+    expect(r.types()[0]).toBe('HISTORY_PAGE_REQUESTED');
+  });
+
+  it('one it filled before and then stopped watching is filled AGAIN from where it got to (not a fresh page)', async () => {
+    const r = rig(() => real);
+    await r.loader.watch('s');
+    await r.loader.watch('s');
+    expect(r.opens).toHaveLength(2);
+    expect(r.opens[1].fresh).toBeUndefined();         // the shim adds `have` from its cursor; no Refresh
+    expect(r.types().filter((t) => t === 'HISTORY_PAGE_REQUESTED')).toHaveLength(1); // no loading state over content it already holds
+  });
+
+  it('waits for a fill already running instead of filling twice (a tap and the screen\'s own effect both ask)', async () => {
+    const r = rig(() => real);
+    await Promise.all([r.loader.watch('s'), r.loader.watch('s')]);
+    expect(r.opens).toHaveLength(1);
+  });
+
+  it('a first fill that failed is asked as a first fill again', async () => {
+    const r = rig((n) => (n === 1 ? null : real));
+    expect(await r.loader.watch('s')).toBe('failed');
+    expect(await r.loader.watch('s')).toBe('ok');
+    expect(r.opens[1]).toMatchObject({ fresh: true });
+  });
+});

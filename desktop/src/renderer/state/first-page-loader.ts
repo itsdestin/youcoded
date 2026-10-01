@@ -76,6 +76,12 @@ export interface FirstPageLoader {
   /** Fill it AGAIN: a reconnect sends where this screen got to and gets back only what it missed (or a fresh page when it cannot
    *  be continued); `fresh` (Refresh) always takes a fresh page. Waits for a load already running instead of starting a second. */
   refill: (sessionId: string, opts: { fresh: boolean }) => Promise<FillOutcome>;
+  /**
+   * Start watching `sessionId` on a phone (one-core R5-3). A conversation this page has never filled takes a first fill (and shows its
+   * loading state); one it filled before and then stopped watching is filled AGAIN from where it got to, which sends only what it missed
+   * (or a fresh page when it was away too long). Either way `session:open` is what makes the computer start sending it.
+   */
+  watch: (sessionId: string, hint?: PageHint) => Promise<FillOutcome>;
   /** A live transcript event arrived: re-ask if this session's load failed. */
   noteLiveActivity: (sessionId: string) => void;
   /** Forget every session not in `liveIds` (closed sessions; a native id can
@@ -204,9 +210,16 @@ export function createFirstPageLoader(deps: FirstPageLoaderDeps): FirstPageLoade
     }
   };
 
+  const watch = (sid: string, hint?: PageHint): Promise<FillOutcome> => {
+    // Never filled here (or its first fill failed and was forgotten): a first fill. Otherwise it is a conversation this page already holds.
+    if (!busyOrDone.has(sid) && !inflight.has(sid)) return load(sid, hint);
+    return refill(sid, { fresh: false });
+  };
+
   return {
     load,
     refill,
+    watch,
     // One Set lookup per live event — the hot path pays nothing else.
     noteLiveActivity: (sid) => { if (failed.has(sid)) void load(sid); },
     retainOnly: (liveIds) => {

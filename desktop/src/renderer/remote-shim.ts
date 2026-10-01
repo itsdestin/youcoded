@@ -241,6 +241,9 @@ function requestRehydrate(): Promise<{ ok: boolean }> {
   // Not while the socket is down: the reconnect's own fill brings a fresh copy, and a queued Refresh would run a second one right behind it.
   if (connectionState !== 'connected') return Promise.resolve({ ok: false });
   const round = beginFillRound();
+  // Refresh means "a fresh page for every conversation". The ones this page is watching are filled right now by App; the ones it is NOT
+  // watching are not (nothing is sent for them), so forget where they got to: the next time one is opened it takes a fresh page too.
+  for (const sid of [...fillCursors.keys()]) if (!openedHere.has(sid)) { fillCursors.delete(sid); ptyOffsets.delete(sid); }
   if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') window.dispatchEvent(new CustomEvent(REMOTE_REFRESH_EVENT, { detail: { round } }));
   return Promise.resolve({ ok: true });
 }
@@ -257,6 +260,8 @@ const ptyOffsets = new Map<string, { epoch: string; units: number }>();
  *  page holds a position that is older than the frame (a reconnect) or none at all (a first connect), and drawing the frame
  *  would leave a hole. The answer carries the bytes up to the instant it was cut, and every frame after it is contiguous. */
 const openedHere = new Set<string>();
+/** The host's latest per-session summary (`session:summary`), for a screen that subscribes late. Forgotten on a first connect to a host. */
+let lastSessionSummaries: { summaries?: Record<string, unknown> } | null = null;
 
 // Remote access batch 2 (design §1 C): terminal frames that arrive before the terminal
 // for that session has a listener. The restore sends the terminal replay the moment the
@@ -1073,6 +1078,11 @@ function routePush(type: string, payload: any): void {
     case 'status:data':
       dispatchEvent('status:data', payload);
       break;
+    case 'session:summary':
+      // The small per-session facts every session's dot is drawn from (one-core R5-3). Kept so a screen that subscribes AFTER the
+      // host's push (App mounts after auth:ok; the host pushes at connect) is handed the latest at once instead of waiting for a change.
+      if (payload && typeof payload === 'object') { lastSessionSummaries = payload; dispatchEvent('session:summary', payload); }
+      break;
     case 'ui:action':
       dispatchEvent('ui:action:received', payload);
       break;
@@ -1316,7 +1326,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           // nothing, so a first connect to it forgets the terminal's and every conversation's, BEFORE anything asks for a fill.
           readyReconnect = hasConnectedBefore && lastReadyHost === getWsUrl();
           openedHere.clear(); // every conversation is opened again on this connection
-          if (!readyReconnect) { ptyOffsets.clear(); ptyBacklog.clear(); fillCursors.clear(); }
+          if (!readyReconnect) { ptyOffsets.clear(); ptyBacklog.clear(); fillCursors.clear(); lastSessionSummaries = null; }
           lastReadyHost = getWsUrl();
           // A new round of fills starts with this connection (a connect or a reconnect): the strip says "restoring" until App has filled
           // every conversation it holds and reports how it went. WHY before the reconnect event: App's listener starts filling at once.
@@ -1993,6 +2003,15 @@ export function installShim(): void {
       // `transcript:page` is, and the caller reads that as "nothing to load".
       open: (req: { sessionId: string; claudeSessionId?: string; projectSlug?: string; fresh?: boolean }) =>
         isAndroidLocal() ? refuseQuietlyOnPhone('session:open') : openSessionRemote(req),
+      // Stop being sent ONE conversation (one-core R5-3). `open` starts a watch, this ends it. What the page has drawn stays, and so does
+      // its position (`fillCursors`), so opening it again resumes with just what happened meanwhile. On the phone's OWN bridge there is
+      // no host record and no watch: refused quietly, exactly like `open`, so nothing is ever sent to the on-device runtime.
+      unwatch: (sessionId: string) => {
+        if (isAndroidLocal()) return refuseQuietlyOnPhone('session:unwatch');
+        // The terminal frames of an unwatched session are dropped from this moment, even one already on the wire.
+        openedHere.delete(sessionId);
+        return invoke('session:unwatch', { sessionId });
+      },
       // Hand a list of pushes (an open's `before` / `after`) to the same listeners a live push reaches.
       play: (pushes: Array<{ type: string; payload: unknown }>) => playPushes(pushes),
       // The host asks a PHONE to fill again by closing its connection (the reconnect fills everything), so this never fires here.
@@ -2089,6 +2108,13 @@ export function installShim(): void {
       },
       hookEvent: (cb: Callback) => addListener('hook:event', cb),
       statusData: (cb: Callback) => addListener('status:data', cb),
+      // Per-session summaries (one-core R5-3): a phone draws its dots and attention sound from these, because it no longer receives the
+      // events of conversations it is not watching. A late subscriber is told the latest at once (it missed the push).
+      sessionSummary: (cb: Callback) => {
+        const handler = addListener('session:summary', cb);
+        if (lastSessionSummaries) cb(lastSessionSummaries);
+        return () => removeListener('session:summary', handler);
+      },
       sessionRenamed: (cb: Callback) => addListener('session:renamed', cb),
       // Plan 2b Task 10 — "this conversation moved to <device>" push (parity
       // with preload's sessionMoved). Returns the cb so off() can remove it.

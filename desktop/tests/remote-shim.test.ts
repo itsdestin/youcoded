@@ -641,6 +641,49 @@ describe('remote-shim — terminal backlog', () => {
       expect(seen).toEqual(['hello world', '!!']);
     });
 
+    it('unwatching a conversation tells the computer, drops any terminal frame still on the wire, and keeps its place for next time', async () => {
+      await openIt(ws, 's1', { epoch: 'E', headSeq: 7 });
+      output('s1', 'abc', 0);
+      const seen: string[] = [];
+      (window as any).claude.on.ptyOutputForSession('s1', (d: string) => seen.push(d));
+      expect(seen).toEqual(['abc']);
+      const done = (window as any).claude.session.unwatch('s1');
+      const req = ws.sentOf('session:unwatch').at(-1);
+      expect(req.payload).toEqual({ sessionId: 's1' });
+      ws.receive({ type: 'session:unwatch:response', id: req.id, payload: { ok: true } });
+      await expect(done).resolves.toEqual({ ok: true });
+      output('s1', 'late frame', 3);
+      expect(seen).toEqual(['abc']);                                   // dropped: not watched
+      // Opening it again says where it got to, so the computer sends only what it missed.
+      const again = await openIt(ws, 's1');
+      expect(again.payload.have).toEqual({ epoch: 'E', seq: 7 });
+      expect(again.payload.pty).toEqual({ epoch: 'e1', units: 3 });
+    });
+
+    it('Refresh forgets where it got to in the conversations it is NOT watching, so they take a fresh page when next opened', async () => {
+      await openIt(ws, 's1', { epoch: 'E', headSeq: 7 });
+      await openIt(ws, 's2', { epoch: 'E', headSeq: 9 });
+      const done = (window as any).claude.session.unwatch('s2');
+      ws.receive({ type: 'session:unwatch:response', id: ws.sentOf('session:unwatch').at(-1).id, payload: { ok: true } });
+      await done;
+      await (window as any).claude.remote.rehydrate();
+      const watched = await openIt(ws, 's1', { __req: { fresh: true } });
+      expect(watched.payload.have).toBeUndefined();                     // a Refresh asks for a fresh page
+      const unwatched = await openIt(ws, 's2');
+      expect(unwatched.payload.have).toBeUndefined();                   // and so does the one it was not watching
+    });
+
+    it('hands the computer\'s per-session summary to subscribers, and to one that subscribes after the push', async () => {
+      const first: any[] = [];
+      (window as any).claude.on.sessionSummary((p: any) => first.push(p));
+      ws.receive({ type: 'session:summary', payload: { summaries: { s1: { working: true, awaitingCount: 0, attention: 'ok', hasHistory: true, queuedCount: 0, permissionMode: null, model: null } } } });
+      expect(first).toHaveLength(1);
+      expect(first[0].summaries.s1.working).toBe(true);
+      const late: any[] = [];
+      (window as any).claude.on.sessionSummary((p: any) => late.push(p));
+      expect(late).toHaveLength(1);                                      // told the latest at once
+    });
+
     it('forgets a destroyed session\'s offsets and backlog', async () => {
       await openIt(ws, 's1');
       output('s1', 'abc', 0);
@@ -908,6 +951,28 @@ describe('remote-shim — conversation status', () => {
       ws.receive({ type: 'session:destroyed', payload: { sessionId: 's1', exitCode: 0, focus: { sessionId: 's2' } } });
       ws.receive({ type: 'session:destroyed', payload: { sessionId: 's3', exitCode: 1 } });
       expect(got).toEqual([['s1', 0, 's2'], ['s3', 1, null]]);
+    });
+  });
+
+  describe('watching on the Android app\'s own bridge', () => {
+    it('never sends session:unwatch to the on-device runtime: it is refused quietly, like session:open', async () => {
+      vi.resetModules();
+      FakeWebSocket.instances = [];
+      (globalThis as any).WebSocket = FakeWebSocket;
+      (globalThis as any).window = globalThis;
+      (globalThis as any).location = { protocol: 'file:', host: '', search: '?bridgeToken=t&bridgePort=9901' };
+      (globalThis as any).localStorage = { _s: {} as Record<string, string>, getItem(k: string) { return this._s[k] ?? null; }, setItem(k: string, v: string) { this._s[k] = v; }, removeItem(k: string) { delete this._s[k]; } };
+      const local = await import('../src/renderer/remote-shim');
+      local.installShim();
+      const p = local.connect('android-local', false);
+      const ws = FakeWebSocket.instances[0];
+      ws.open();
+      ws.receive({ type: 'auth:ok', platform: 'android' });
+      await p;
+      await expect((window as any).claude.session.unwatch('s1')).rejects.toThrow(/remote-unsupported: session:unwatch/);
+      await expect((window as any).claude.session.open({ sessionId: 's1' })).rejects.toThrow(/remote-unsupported: session:open/);
+      expect(ws.sentOf('session:unwatch')).toEqual([]);
+      expect(ws.sentOf('session:open')).toEqual([]);
     });
   });
 

@@ -64,8 +64,10 @@ import { usePartyGame } from './hooks/usePartyGame';
 import { useChessGame } from './hooks/useChessGame';
 import { useRemoteAttentionSync } from './hooks/useRemoteAttentionSync';
 import { useSubmitConfirmation } from './hooks/useSubmitConfirmation';
-import { useSessionAttention, mergePeerSessionStatuses } from './hooks/useSessionAttention';
+import { useSessionAttention, mergePeerSessionStatuses, mergeSummaryStatuses, viewedAfterSummaries } from './hooks/useSessionAttention';
 import { useAttentionSummary } from './hooks/useAttentionSummary';
+import { useSessionSummaries } from './hooks/useSessionSummaries';
+import { useRemoteWatch } from './hooks/useRemoteWatch';
 import { useActiveSessionModel } from './hooks/useActiveSessionModel';
 import { useNativeSessionUsage, useNativeContextOverride, useNativeContextWindow, useTurnsWithUsage } from './hooks/useNativeSessionUsage';
 import { useNativeSessionTotals } from './hooks/useNativeSessionTotals';
@@ -1019,6 +1021,10 @@ function AppInner() {
   // useSessionAttention). sessionStatuses keeps its old shape for HeaderBar.
   const sessionAttention = useSessionAttention(sessions, viewedSessions, sessionId);
   const attentionSummary = useAttentionSummary();
+  // WHY (one-core R5-3): a phone watches only the conversation on its screen and a few it looked at lately, so every other
+  // conversation's dot (and the attention sound, which reads the dots) comes from the computer's per-session summary, not from events
+  // this screen no longer receives. Null on the computer's own windows, which keep deriving theirs from the events they get.
+  const sessionSummaries = useSessionSummaries(isRemoteMode());
   const sessionStatuses = useMemo(() => {
     const m = new Map<string, SessionStatusColor>();
     for (const [id, info] of sessionAttention) m.set(id, info.status);
@@ -1039,14 +1045,15 @@ function AppInner() {
     // owns always keeps its local derivation — blue depends on what *you* have
     // looked at, which only this window knows. Precedence lives in the pure
     // mergePeerSessionStatuses so it can be pinned by tests.
-    return mergePeerSessionStatuses({
+    const merged = mergePeerSessionStatuses({
       base: m,
       localSessionIds: new Set<string>(sessions.map((s: any) => s.id)),
       windowDirectory,
       summaryPerSession: attentionSummary.perSession,
       attentionMap: statusData.attentionMap,
     });
-  }, [sessionAttention, attentionSummary, sessions, windowDirectory, statusData.attentionMap]);
+    return mergeSummaryStatuses({ base: merged, sessionIds: sessions.map((s: any) => s.id), summaries: sessionSummaries, viewedSessions, activeSessionId: sessionId });
+  }, [sessionAttention, attentionSummary, sessions, windowDirectory, statusData.attentionMap, sessionSummaries, viewedSessions, sessionId]);
 
   // Play the 'attention' sound when any session transitions to red (awaiting
   // approval). Red is a visible state, so color-driven dedup is correct here.
@@ -1110,6 +1117,9 @@ function AppInner() {
   // endTurn / process-exit / native-error, each of which also flips the status
   // triple → sessionAttention identity changes → this effect runs.
   useEffect(() => {
+    // WHY skipped on a phone with summaries (one-core R5-3): it watches only a few conversations, so this loop would miss the others'
+    // turns ending, and would chime twice for a watched one (this loop AND the summary effect below). One source per screen.
+    if (sessionSummaries) return;
     const prev = prevThinkingRef.current;
     const next = new Map<string, boolean>();
     for (const [id, state] of chatStore.getState()) {
@@ -1122,7 +1132,23 @@ function AppInner() {
       if (was === true && !isThinking) playSound('ready');
     }
     prevThinkingRef.current = next;
-  }, [sessionAttention]);
+  }, [sessionAttention, sessionSummaries]);
+
+  // The same "a turn finished" chime for a phone, from the summaries: a conversation it is not watching still finishes, and the person
+  // wants to hear it (one-core R5-3). Only a true -> false change chimes; a conversation appearing already idle does not.
+  const prevSummaryWorkingRef = useRef<Map<string, boolean>>(new Map());
+  useEffect(() => {
+    if (!sessionSummaries) { prevSummaryWorkingRef.current = new Map(); return; }
+    const prev = prevSummaryWorkingRef.current;
+    const next = new Map<string, boolean>();
+    for (const [id, summary] of Object.entries(sessionSummaries)) {
+      next.set(id, summary.working);
+      if (prev.get(id) === true && !summary.working) playSound('ready');
+    }
+    prevSummaryWorkingRef.current = next;
+  }, [sessionSummaries]);
+  // A conversation that starts working is no longer "viewed" — the computer's chats say so below; a phone's summaries say so here.
+  useEffect(() => { if (sessionSummaries) setViewedSessions((prev) => viewedAfterSummaries(prev, sessionSummaries) as Set<string>); }, [sessionSummaries]);
 
   // Attention reporter effect: pushes per-session attention state + the
   // derived dot color to main whenever sessionAttention changes. Main
@@ -1812,13 +1838,23 @@ function AppInner() {
 
   const loadFirstPage = useCallback((sid: string, hint?: PageHint) => firstPages.load(sid, hint), [firstPages]);
 
+  // Which conversations a phone watches (one-core R5-3): the one on screen plus a few it looked at lately. Inert on the computer's own
+  // windows, which own what they show. Placed here (not with the other phone state) because it needs the first-page loader.
+  const remoteWatch = useRemoteWatch({ enabled: isRemoteMode(), activeId: sessionId, sessionIds: useMemo(() => sessions.map((x: any) => x.id), [sessions]), loader: firstPages });
+  // Read through a ref by the handlers below that must not re-register every time the watch set changes.
+  const remoteWatchRef = useRef(remoteWatch);
+  remoteWatchRef.current = remoteWatch;
+
   // Fill every conversation this screen holds AGAIN (one-core R5-2). After a reconnect it sends where it got to, and the computer answers with
   // exactly the events it missed — or a fresh page when the record changed or the gap is older than it keeps; Refresh always takes a fresh
   // page. Either way the shim is told how it went, so the strip says "up to date" or "may be behind".
   const fillAgain = useCallback((fresh: boolean) => {
-    const ids = sessionsRef.current.map((x: any) => x.id).filter((id: string) => !String(id).startsWith('pending-handoff:'));
+    // WHY only what is watched on a phone (one-core R5-3): refilling opens (watches) the conversation, and a phone must not start
+    // receiving all of them again just because the connection came back. The rest keep their position and catch up when next opened.
+    const watched = remoteWatch.watchedIds();
+    const ids = (watched ?? sessionsRef.current.map((x: any) => x.id)).filter((id: string) => !String(id).startsWith('pending-handoff:'));
     void Promise.all(ids.map((id: string) => firstPages.refill(id, { fresh }))).then(reportFillRound);
-  }, [firstPages, reportFillRound]);
+  }, [firstPages, reportFillRound, remoteWatch]);
   useOnRemoteReconnect(() => fillAgain(false));
   // The computer says this window's fill of a conversation never completed (its hold expired): fill it again from a fresh page.
   useEffect(() => (window.claude.session as any).onRefill?.((sid: string) => { void firstPages.refill(sid, { fresh: true }); }), [firstPages]);
@@ -1842,7 +1878,8 @@ function AppInner() {
     firstPages.retainOnly(new Set(sessions.map((s) => s.id)));
     // WHY: session:created may precede the attempt's admitted reply. Its
     // unlocated first page must not consume the receiver's one locator read.
-    if (!pendingRef.current?.active) for (const s of sessions) if (!String(s.id).startsWith('pending-handoff:')) void loadFirstPage(s.id);
+    // A phone fills only what it watches (useRemoteWatch fills the one on screen when it is chosen); every other conversation is not sent to it.
+    if (!pendingRef.current?.active && !isRemoteMode()) for (const s of sessions) if (!String(s.id).startsWith('pending-handoff:')) void loadFirstPage(s.id);
   }, [sessions, loadFirstPage, firstPages]);
 
   useEffect(() => {
@@ -1871,8 +1908,8 @@ function AppInner() {
       for (const s of list) {
         dispatch({ type: 'SESSION_INIT', sessionId: s.id });
         // Fill it from the computer's record. (The old `toEnd` here — a renderer rebuilt while its sessions kept running must read to the
-        // end of the file — is what every fill does now.)
-        fills.push(loadFirstPage(s.id));
+        // end of the file — is what every fill does now.) A phone fills only the conversation it opens on, below (one-core R5-3).
+        if (!isRemoteMode()) fills.push(loadFirstPage(s.id));
         setViewModes((vm) => vm.has(s.id) ? vm : new Map(vm).set(s.id, 'chat'));
         setPermissionModes((pm) => pm.has(s.id) ? pm : new Map(pm).set(s.id, matchPermissionMode(s.permissionMode)));
         // These sessions were already running before this window's event
@@ -1894,8 +1931,9 @@ function AppInner() {
       if (isRemoteMode()) {
         const choice = decideRemotePlace(list.map((s: any) => s.id));
         setSessionId((prev) => prev ?? choice);
-        // The place is decided: the sessions effect may fill the rest, and the strip is told how the round went when they have.
-        void Promise.all(fills).then(reportFillRound);
+        // The place is decided: watch (= fill) that one conversation, and tell the strip how the round went when it is done. The rest are
+        // not sent to this phone until it opens them (one-core R5-3); their dots come from the computer's summary.
+        void Promise.all(choice ? [remoteWatchRef.current.watch(choice)] : []).then(reportFillRound);
       } else {
         setSessionId((prev) => prev ?? (mayAutoSelect() ? list[0].id : null));
       }
@@ -3382,6 +3420,9 @@ function AppInner() {
     // discard a dirty editor draft — route the user-initiated switch through
     // the D3 guard. Programmatic switches (session died/closed) stay unguarded.
     guardDirtyEditor(() => {
+      // A phone starts watching the conversation BEFORE it is drawn (one-core R5-3): the loading state is up in the same frame as the
+      // switch, so a conversation it has never opened never shows as empty. A no-op for one it already watches, and on the computer.
+      void remoteWatchRef.current.watch(id);
       setSessionId(id);
       // Notify Android/remote bridge so the native terminal view switches too
       (window as any).claude?.session?.switch?.(id);
@@ -3594,6 +3635,7 @@ function AppInner() {
                       onSendQueuedNow={handleSendQueuedNow}
                       conversationStatus={conversationStatus}
                       onRefreshConversation={handleRefreshConversation}
+                      filling={remoteWatch.isFilling(s.id)}
                       modelLoadingDemo={s.id === sessionId && new URLSearchParams(location.search).get('mode') === 'workbench' && new URLSearchParams(location.search).get('modelLoading') === '1'}
                     />
                   </ErrorBoundary>}
