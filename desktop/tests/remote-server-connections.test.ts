@@ -299,14 +299,15 @@ describe('RemoteServer — readiness', () => {
     expect(ws.frames.length).toBe(4);
   });
 
-  it('an older app (client:ready with a seq and no version, expecting a chat snapshot) is refused with 4005 and a plain reason, not left blank', async () => {
+  it('an older page (client:ready with a seq and no version, expecting a chat snapshot) is answered with a degraded snapshot of one refresh notice, not left blank and not looped (tests/old-phone-page.test.ts drives the real old page)', async () => {
     const server = await makeServer();
     const { ws } = connect(server);
     const close = vi.spyOn(ws, 'close');
     ws.emit('message', JSON.stringify({ type: 'client:ready', payload: { seq: 1, reconnect: false, ptyOffsets: {} } }));
     await tick(); await tick();
-    expect(close).toHaveBeenCalledWith(4005, "This app is older than your computer's YouCoded. Update the app to keep using remote access.");
-    expect(ws.frames).toEqual([]);
+    expect(close).not.toHaveBeenCalled();
+    const hydrate = ws.frames.find((f: any) => f.type === 'chat:hydrate');
+    expect(hydrate.payload).toMatchObject({ degraded: true, seq: 1 });
   });
 
   it('a page that says its version is welcome; a page that says an old version is refused', async () => {

@@ -6,6 +6,8 @@ export const FILL_PROTOCOL_VERSION = 2;
 export const OLD_APP_REASON = "This app is older than your computer's YouCoded. Update the app to keep using remote access.";
 /** The WebSocket close code for it (the shipped shim already treats 4005 as final: no endless retry). */
 export const CLOSE_OLD_CLIENT = 4005;
+/** The one line an already-open OLD phone page is shown in every conversation (it cannot be told anything else; see remote-server). */
+export const REFRESH_NOTICE = 'Refresh this page to finish updating';
 /** Is this `client:ready` payload from a page that expects the old snapshot? */
 export function isOldFillClient(payload: unknown): boolean {
   const p = (payload ?? {}) as { seq?: unknown; protocolVersion?: unknown };

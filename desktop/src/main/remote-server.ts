@@ -22,7 +22,8 @@ import { RemoteDeviceStore, type RemoteDeviceView } from './remote-devices';
 import type { LocalSkillProvider } from './skill-provider';
 import { VITE_DEV_PORT } from '../shared/ports';
 import { PROTOCOL_VERSION, REMOTE_SCREEN_CAPABILITIES } from '../shared/capabilities';
-import { isOldFillClient, CLOSE_OLD_CLIENT, OLD_APP_REASON } from '../shared/fill-protocol';
+import { isOldFillClient, CLOSE_OLD_CLIENT, OLD_APP_REASON, REFRESH_NOTICE } from '../shared/fill-protocol';
+import { createSessionChatState, serializeChatState } from '../renderer/state/chat-types';
 import type { NativeSendResult } from '../shared/types';
 import type { ProviderRegistry } from './providers/provider-registry';
 import type { ModelCatalog } from './providers/model-catalog';
@@ -1064,7 +1065,19 @@ export class RemoteServer {
         // A page from before the one fill path expects a chat snapshot that is gone; it would show empty conversations with no
         // explanation. Say so and let it go (its shipped code treats 4005 as final, so it does not retry in a loop).
         if (isOldFillClient(payload)) {
-          this.logDevice(client, 'older app (expects a chat snapshot); refused');
+          this.logDevice(client, 'older page (expects a chat snapshot); told to refresh');
+          if (typeof payload?.seq === 'number') {
+            // A page loaded BEFORE this computer updated (a phone browser left open). Nothing in it reloads itself on a close code (its
+            // 4005 handling forgets the key and shows the password box with no message), so instead of a refusal loop it is answered
+            // the way it understands: the session list, then a degraded snapshot whose every conversation holds ONE plain notice. Its
+            // own strip says the copy may be behind; reloading the tab fetches the new page (index.html is served no-cache).
+            this.sendHello(client);
+            const notice = { id: 'refresh-notice', timestamp: Date.now(), label: REFRESH_NOTICE, variant: 'info' as const };
+            const sessions = new Map(this.sessionManager.listSessions().map((s: { id: string }) => [s.id, { ...createSessionChatState(), timeline: [{ kind: 'system-marker' as const, marker: notice }] }]));
+            const snapshot = { ...serializeChatState(sessions), degraded: true, focus: { sessionId: this.getFocusSessionId() }, seq: payload.seq };
+            if (client.ws.readyState === WebSocket.OPEN) client.ws.send(JSON.stringify({ type: 'chat:hydrate', payload: snapshot }));
+            break;
+          }
           client.ws.close(CLOSE_OLD_CLIENT, OLD_APP_REASON);
           this.removeClient(client);
           break;
