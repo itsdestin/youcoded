@@ -106,6 +106,26 @@ export async function waitForMessageBox(sessionId: string, timeoutMs = 2000, ste
   }
 }
 
+/**
+ * The card a refused send is waiting on, for the refusal's "Show card" button:
+ * the current turn's permission/question/plan card, else an unanswered prompt
+ * card. Same scan as pendingInteractionKind, so the two always agree.
+ */
+export function pendingCardRef(session: SessionChatState | undefined): { toolUseId: string } | { promptId: string } | null {
+  if (!session) return null;
+  for (const id of session.activeTurnToolIds) {
+    if (session.toolCalls.get(id)?.status === 'awaiting-approval') return { toolUseId: id };
+  }
+  for (const entry of session.timeline) {
+    if (entry.kind === 'prompt'
+        && entry.prompt.promptId !== HISTORY_EXPAND_PROMPT_ID
+        && !entry.prompt.completed) {
+      return { promptId: entry.prompt.promptId };
+    }
+  }
+  return null;
+}
+
 /** What blocks a send: a hook card, a detected prompt card, or the screen. */
 export type SendBlockKind = 'approval' | 'prompt' | 'screen';
 
@@ -114,17 +134,17 @@ export type SendBlockKind = 'approval' | 'prompt' | 'screen';
  *  question, and a kept card with its Dismiss). */
 export function pendingInteractionRefusalCopy(kind: SendBlockKind | null, block?: ReturnType<typeof screenInputBlock>): string {
   if (kind === 'screen') {
-    // Name what is open when Claude Code printed a heading for it; the other
-    // views say how to leave them.
+    // The two other views say how to leave them.
     if (block?.kind === 'other-view') {
       return block.view === 'agents'
         ? "Claude Code's terminal is showing its agents list — anything sent there would start a new session. Press Esc in terminal view first."
         : "Claude Code's terminal is searching your past prompts — press Esc in terminal view first.";
     }
-    const heading = block?.kind === 'popup' ? block.heading.replace(/[?:.]+$/, '') : '';
-    return heading
-      ? `Claude Code is asking something in the terminal ("${heading}") — answer it first.`
-      : 'Claude Code has something open in the terminal — answer or close it first.';
+    // No quoted heading: what sits under a pop-up's top edge is often a tab
+    // row or a body line ("Settings Status Config Usage Stats" for /status,
+    // seen in a dev window 2026-09-30), which reads as nonsense in a sentence.
+    // The toast's "Open terminal" button shows the real thing.
+    return 'Claude Code has something open in the terminal — answer or close it first.';
   }
   return kind === 'approval'
     ? 'Your assistant is waiting for your response — answer the card in the chat first.'

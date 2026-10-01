@@ -53,7 +53,8 @@ import { GameProvider, useGameState, useGameDispatch } from './state/game-contex
 import { hookEventToAction } from './state/hook-dispatcher';
 import { buildUsageSnapshot, pruneExpiredUsage, type SubscriptionUsage } from './state/usage-snapshot';
 import { invalidateProviderTypeCache, resolveProviderType, useModelProviderType } from './hooks/use-provider-type';
-import { sendBlock, pendingInteractionRefusalCopy, canPtySend } from './state/pty-input-gate';
+import { sendBlock, pendingInteractionRefusalCopy, pendingCardRef, canPtySend } from './state/pty-input-gate';
+import { focusChatCard } from './utils/focus-chat-card';
 import { buildOutgoingMessage } from './components/outgoing-message';
 import type { SyncWarning } from '../main/sync-state';
 import { latestUnresolvedError, type SyncStatusData } from './components/sync-dot-state';
@@ -621,9 +622,12 @@ function AppInner() {
   // ran 3s/4s/6s/8s depending on how much text there was to read. A single
   // primitive default would have silently cut the 8s handoff-failure messages to
   // 3s. Omit it for the common 3s case; the primitive supplies that default.
+  type ToastAction = { label: string; onClick: () => void };
   type ToastState =
     | string
-    | { message: string; durationMs?: number; action?: { label: string; onClick: () => void } };
+    // `actions`: up to two buttons, the first the way forward (a refused send
+    // offers "Show card" / "Open terminal", then "Send anyway").
+    | { message: string; durationMs?: number; action?: ToastAction; actions?: ToastAction[] };
   const [toast, setToast] = useState<ToastState | null>(null);
   // Components with no prop path to this state (the file drawer's Download and
   // Copy path, the too-big card) announce through a window event — see
@@ -759,17 +763,38 @@ function AppInner() {
   // InputBar.sendMessage applies to typed messages. Deliberate menu-driving
   // writes (ToolCard plan keys, TrustGate, prompt option clicks, terminal
   // view) must NOT use this helper. Returns false when the send was refused.
+  // The one refusal toast for a blocked send, with a way to the blocker.
+  // WHY a button (Destin, 2026-09-30): "answer the card first" left the user
+  // hunting for a card that may be scrolled away, and "something is open in
+  // the terminal" for a view they were not looking at. "Show card" scrolls to
+  // the waiting card and lights it up; when the blocker is only on Claude
+  // Code's screen (no card), "Open terminal" switches this session there.
+  // `retry` (InputBar's sends only) adds "Send anyway".
+  const showBlockedSend = useCallback((sid: string, block: NonNullable<ReturnType<typeof sendBlock>>, retry?: () => void) => {
+    const openTerminal = () => setViewModes((prev) => new Map(prev).set(sid, 'terminal'));
+    const card = block.kind === 'screen' ? null : pendingCardRef(chatStateMapRef.current.get(sid));
+    const forward: ToastAction = card
+      // Not in the visible chat (folded far up): the menu is live in the
+      // terminal too, so go there instead of doing nothing.
+      ? { label: 'Show card', onClick: () => { setToast(null); if (!focusChatCard(card)) openTerminal(); } }
+      : { label: 'Open terminal', onClick: () => { setToast(null); openTerminal(); } };
+    setToast({
+      message: pendingInteractionRefusalCopy(block.kind, block.screen),
+      durationMs: 8000,
+      actions: retry ? [forward, { label: 'Send anyway', onClick: () => { setToast(null); retry(); } }] : [forward],
+    });
+  }, []);
+
   const notifyIfPtyBlocked = useCallback((sid: string): boolean => {
     // sendBlock also reads the live terminal: a Claude Code pop-up no hook
     // reported would otherwise swallow the command (see pty-input-gate.ts).
     const block = sendBlock(chatStateMapRef.current.get(sid), sid);
     if (block) {
-      // Name the blocker — see pendingInteractionRefusalCopy.
-      setToast(pendingInteractionRefusalCopy(block.kind, block.screen));
+      showBlockedSend(sid, block);
       return true;
     }
     return false;
-  }, []);
+  }, [showBlockedSend]);
 
   const guardedPtySend = useCallback((sid: string, text: string): boolean => {
     // Honest guard (M1): refuse before sending, so callers' `if (!guardedPtySend)`
@@ -4028,7 +4053,7 @@ function AppInner() {
                   // Name the blocker so reaching for "Send anyway" is an informed
                   // choice (it presses Esc into Claude Code first — which on a
                   // live permission or plan menu DECLINES it).
-                  setToast({ message: pendingInteractionRefusalCopy(block.kind, block.screen), durationMs: 8000, action: { label: 'Send anyway', onClick: () => { setToast(null); retry(); } } });
+                  if (sessionId) showBlockedSend(sessionId, block, retry);
                 }} getSessionState={(sid) => chatStateMapRef.current.get(sid)} onOpenModelPicker={() => setModelPickerOpen(true)} onModelSwitchCommand={handleModelSwitchCommand} initialInput={currentSession?.initialInput} initialAttachments={currentSession?.initialAttachments} provider={currentSession?.provider} />
                 <StatusBar
                   statusData={statusBarData}
@@ -4622,13 +4647,21 @@ function AppInner() {
           message={typeof toast === 'string' ? toast : toast.message}
           durationMs={typeof toast === 'string' ? undefined : toast.durationMs}
           onDismiss={() => setToast(null)}
-          action={
-            typeof toast !== 'string' && toast.action ? (
-              <Button variant="secondary" size="sm" onClick={toast.action.onClick}>
-                {toast.action.label}
-              </Button>
-            ) : undefined
-          }
+          action={(() => {
+            if (typeof toast === 'string') return undefined;
+            const list = toast.actions ?? (toast.action ? [toast.action] : []);
+            if (!list.length) return undefined;
+            // First button leads (secondary); any second one is quieter (ghost).
+            return (
+              <span className="flex items-center gap-1">
+                {list.map((x, i) => (
+                  <Button key={x.label} variant={i === 0 ? 'secondary' : 'ghost'} size="sm" onClick={x.onClick}>
+                    {x.label}
+                  </Button>
+                ))}
+              </span>
+            );
+          })()}
         />
       )}
       {/* Plan 2b Task 9 — conversation-lease takeover dialog (3-state redesign,

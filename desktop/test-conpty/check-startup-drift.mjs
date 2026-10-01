@@ -29,7 +29,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { resolveClaude, ccVersionOf, removeTempTree } from './cc-capture-lib.mjs';
+import { resolveClaude, ccVersionOf, removeTempTree, installLatest } from './cc-capture-lib.mjs';
 import { runScenario, selectScenarios } from './capture-startup-dialogs.mjs';
 import { diffSummaries } from './startup-dialog-shape.mjs';
 
@@ -40,19 +40,6 @@ const SAVED_DIR = path.join(desktop, 'tests', 'fixtures', 'startup-dialogs');
 const argv = process.argv.slice(2);
 const has = (f) => argv.includes(`--${f}`);
 const get = (f) => { const i = argv.indexOf(`--${f}`); return i < 0 ? undefined : argv[i + 1]; };
-
-/** npm's latest Claude Code, installed into a temp dir (postinstall run explicitly:
- *  npm 11+ blocks install scripts by default). Returns the binary path. */
-function installLatest() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-latest-'));
-  execFileSync('npm', ['install', '--no-audit', '--no-fund', '--prefix', dir, '@anthropic-ai/claude-code@latest'], { stdio: 'inherit' });
-  const pkg = path.join(dir, 'node_modules', '@anthropic-ai', 'claude-code');
-  const bin = path.join(dir, 'node_modules', '.bin', process.platform === 'win32' ? 'claude.cmd' : 'claude');
-  try { execFileSync(bin, ['--version'], { stdio: 'ignore' }); } catch {
-    execFileSync(process.execPath, [path.join(pkg, 'install.cjs')], { stdio: 'inherit' });
-  }
-  return { bin, dir };
-}
 
 /** The saved fixture per scenario key (newest Claude Code version if several). */
 function loadSaved() {
