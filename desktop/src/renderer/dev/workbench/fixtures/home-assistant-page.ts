@@ -24,7 +24,7 @@ const ROOMS_TEMPLATE = `{%- set ns = namespace(rooms=[]) -%}
 {%- set d = e.split('.')[0] -%}
 {%- if d in ['light','climate','media_player','camera'] and states[e] is not none -%}
 {%- set s = states[e] -%}
-{%- set ens.items = ens.items + [{'id': e, 'name': s.name, 'state': s.state, 'brightness': s.attributes.get('brightness'), 'modes': s.attributes.get('supported_color_modes'), 'cur': s.attributes.get('current_temperature'), 'target': s.attributes.get('temperature'), 'min': s.attributes.get('min_temp'), 'max': s.attributes.get('max_temp'), 'step': s.attributes.get('target_temp_step'), 'vol': s.attributes.get('volume_level'), 'title': s.attributes.get('media_title'), 'features': s.attributes.get('supported_features', 0), 'rgb': s.attributes.get('rgb_color'), 'k': s.attributes.get('color_temp_kelvin'), 'modesHvac': s.attributes.get('hvac_modes'), 'action': s.attributes.get('hvac_action'), 'dev': device_id(e)}] -%}
+{%- set ens.items = ens.items + [{'id': e, 'name': s.name, 'state': s.state, 'brightness': s.attributes.get('brightness'), 'modes': s.attributes.get('supported_color_modes'), 'cur': s.attributes.get('current_temperature'), 'target': s.attributes.get('temperature'), 'min': s.attributes.get('min_temp'), 'max': s.attributes.get('max_temp'), 'step': s.attributes.get('target_temp_step'), 'vol': s.attributes.get('volume_level'), 'title': s.attributes.get('media_title'), 'features': s.attributes.get('supported_features', 0), 'rgb': s.attributes.get('rgb_color'), 'k': s.attributes.get('color_temp_kelvin'), 'modesHvac': s.attributes.get('hvac_modes'), 'action': s.attributes.get('hvac_action'), 'device': device_id(e)}] -%}
 {%- endif -%}
 {%- endfor -%}
 {%- if ens.items -%}{%- set ns.rooms = ns.rooms + [{'id': a, 'name': area_name(a), 'items': ens.items}] -%}{%- endif -%}
@@ -39,6 +39,9 @@ export const HOME_ASSISTANT_PAGE_JSON = {
     {
       id: 'ha', kind: 'device', service: 'Home Assistant', address: 'homeassistant.local:8123',
       access: 'full', keyPage: '/profile/security',
+      // Renames and room moves go over Home Assistant's websocket (Q-where):
+      // the app sends this greeting first, with the key filled in by the app.
+      socketHello: '{"type":"auth","access_token":"{{key}}"}',
       keyHelp: { steps: [
         'Press Open Home Assistant below and sign in.',
         'Scroll to the bottom, to "Long-lived access tokens", and press Create token.',
@@ -417,7 +420,7 @@ function homeAssistantPageHtml(): string {
       ib('rename', id, PENCIL, 'Rename') +
       (ctx.key === 'fav' ? '<span class="grow"></span>' : pick) +
       ib('hide', id, h ? EYE_OFF : EYE, h ? 'Show on this page' : 'Hide from this page', ' aria-pressed="false"') +
-      (it.dev ? haLink('/config/devices/device/' + encodeURIComponent(it.dev), 'Open ' + it.name + ' in Home Assistant') : '') +
+      (it.device ? haLink('/config/devices/device/' + encodeURIComponent(it.device), 'Open ' + it.name + ' in Home Assistant') : '') +
       '</div>';
   }
 
@@ -529,16 +532,30 @@ function homeAssistantPageHtml(): string {
   }
 
   // ── Changes made in Home Assistant itself (Q-where: names and rooms) ─────
-  // TODO(round 4): send these through the device connection's live channel
-  // once it lands (session/ha-pages-live). Until then they change this
-  // page's copy only, and the next check puts Home Assistant's back.
-  function registry(messages) { return Promise.resolve(messages); }
+  // Names and rooms change in Home Assistant itself, over its websocket.
+  // One exchange: the app opens it, sends the greeting with the key, then
+  // these messages; the answer is every message Home Assistant sent back.
+  function registry(messages) {
+    var send = messages.map(function (m, i) { return JSON.stringify(Object.assign({ id: i + 1 }, m)); });
+    return window.youcoded.fetch(base + '/api/websocket', { socket: { send: send, until: send.length + 2, timeoutMs: 10000 } }).then(function (r) {
+      var frames = [];
+      try { frames = JSON.parse(r.body).map(function (f) { return JSON.parse(f); }); } catch (e) { /* answered below */ }
+      if (frames.some(function (f) { return f.type === 'auth_invalid'; })) throw new Error('Home Assistant did not accept the key. Remove this connection and add a new key.');
+      var results = frames.filter(function (f) { return f.type === 'result'; });
+      if (results.length < send.length) throw new Error('Home Assistant did not answer in time. Nothing may have changed.');
+      var bad = results.filter(function (f) { return !f.success; })[0];
+      if (bad) throw new Error('Home Assistant said: ' + (bad.error && bad.error.message ? bad.error.message : 'that did not work') + '.');
+      return results.map(function (f) { return f.result; });
+    });
+  }
+  function afterChange() { setTimeout(load, 400); }
   function renameThing(id, name) {
     var it = thing(id);
     if (!it || !name || name === it.name) return;
     setLocal(id, { name: name });
     registry([{ type: 'config/entity_registry/update', entity_id: id, name: name }])
-      .catch(function (e) { banner(e && e.message ? e.message : 'Home Assistant did not take the new name.'); });
+      .catch(function (e) { banner(e && e.message ? e.message : 'Home Assistant did not take the new name.'); })
+      .then(afterChange);
   }
   function moveThing(id, roomId, roomName) {
     var from = roomOf(id), it = thing(id);
@@ -548,9 +565,16 @@ function homeAssistantPageHtml(): string {
     if (!to) { to = { id: roomId, name: roomName || roomId, items: [] }; rooms.push(to); }
     to.items.push(it);
     render();
-    var msgs = roomName ? [{ type: 'config/area_registry/create', name: roomName }] : [];
-    msgs.push(it.dev ? { type: 'config/device_registry/update', device_id: it.dev, area_id: roomId } : { type: 'config/entity_registry/update', entity_id: id, area_id: roomId });
-    registry(msgs).catch(function (e) { banner(e && e.message ? e.message : 'Home Assistant did not move it.'); });
+    var moveTo = function (areaId) {
+      return registry([it.device ? { type: 'config/device_registry/update', device_id: it.device, area_id: areaId } : { type: 'config/entity_registry/update', entity_id: id, area_id: areaId }]);
+    };
+    // A new room is made first: Home Assistant picks its id, and the move
+    // needs that id, so it is two exchanges.
+    (roomName
+      ? registry([{ type: 'config/area_registry/create', name: roomName }]).then(function (res) { return moveTo(res[0] && res[0].area_id ? res[0].area_id : roomId); })
+      : moveTo(roomId))
+      .catch(function (e) { banner(e && e.message ? e.message : 'Home Assistant did not move it.'); })
+      .then(afterChange);
   }
   function slug(name) { return String(name).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'room'; }
 
