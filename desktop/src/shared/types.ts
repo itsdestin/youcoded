@@ -323,6 +323,90 @@ export interface TranscriptPageResult {
   unresolved?: true;
 }
 
+/**
+ * Token + cache usage as it rides transcript events (message.usage). Named, not
+ * inline, so `usageProgress` and the typed producers can refer to it without
+ * reaching back through TranscriptEvent['data'] (M5: that self-reference stops
+ * compiling once `data` becomes a union).
+ */
+export interface TranscriptUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  /** Native runtime only: output tokens / stream seconds. CC never reports this. */
+  tokensPerSecond?: number;
+  /** Native runtime only: the session's REAL context window (resolved in main,
+   *  Task 4/5). Carried on the per-turn payload so the renderer's StatusBar can
+   *  compute context % without a separate IPC. Constant per session; CC omits it. */
+  contextLength?: number | null;
+  /** Native runtime only: tokens OCCUPYING the window after this turn — the
+   *  last step's prompt plus its output. Distinct from inputTokens, which
+   *  sums every step and therefore re-counts the history once per step. */
+  contextUsedTokens?: number;
+  /** Transient native progress only: no legacy in+out context fallback.
+   *  Not set on completed turns (including old transcript records). */
+  liveProgress?: true;
+  /** Native runtime only (cache follow-ups item 8, 2026-09-10): true when a
+   *  request in this turn followed something the harness itself did to the
+   *  prompt prefix — a prune commit, a summary compaction, a model swap — so
+   *  a low cache-read figure on this turn is the known price of that event,
+   *  not a regression. Low reads WITHOUT this flag are the thing to
+   *  investigate. */
+  expectedRebuild?: boolean;
+  /** Native runtime only: USD for THIS turn, priced at the model that ran
+   *  it. `null` means the model has no published price — distinct from
+   *  absent, which means no pricing information at all (a Claude Code turn).
+   *  The renderer sums these; it never multiplies tokens by a rate itself. */
+  costUsd?: number | null;
+  /** Native runtime only: this turn ran on a model that costs nothing to
+   *  run — a local engine, or a metered model published at a rate of zero.
+   *  Deliberately NOT the same as `costUsd: null`, which means "metered,
+   *  but no published rate": the status bar words the two differently
+   *  ("runs on your machine" vs "no published price"). Only main can tell
+   *  them apart — it is the only side that knows the provider type. */
+  free?: boolean;
+  /** Native runtime only, and only where the provider reports one: the USD
+   *  figure the PROVIDER ITSELF charged for this turn's requests. Today only
+   *  OpenRouter-shaped providers report a cost, so this is ABSENT on a local
+   *  model, an Anthropic or OpenAI key, and a plain OpenAI-compatible
+   *  endpoint.
+   *
+   *  Absent means "the provider told us nothing" — never $0, and never
+   *  "we checked and it matched". A reported 0 (a genuinely free model) is
+   *  a real reading and is kept as 0, which is why this is `number` and not
+   *  `number | null`: unlike costUsd there is no third state to spell.
+   *
+   *  Present ONLY when every step of the turn reported one, so it always
+   *  covers exactly the same steps as `costUsd` and the two can be compared
+   *  honestly. Diagnostic: main compares them and logs a gap; nothing in
+   *  the UI reads this. */
+  providerCostUsd?: number;
+}
+
+/** A portable compaction checkpoint (see `compact-summary`): references cite persisted parts, never copied text. */
+export interface CompactionRecord {
+  v: 1;
+  generation: number;
+  sourceRevision: number;
+  /** Hash of the source transcript plus the claimed cut; no copied text. */
+  sourceDigest?: string;
+  resumeFrom: { eventUuid: string; anchorUuid: string; type: TranscriptEventType; partId?: string; start: number; end: number };
+  coveredThrough: { eventUuid: string; anchorUuid: string; type: TranscriptEventType; partId?: string; start: number; end: number };
+}
+
+/** A `background-task` event's payload: which task(s) ended and how. `taskIds` is a list because Claude Code reports several orphaned commands in one notice on resume. */
+export interface BackgroundTaskEnd { taskIds: string[]; status: Exclude<CcBackgroundStatus, 'running'>; summary?: string; result?: string }
+
+/** One coalesced-part UUID/range witness (see `assistant-text`.deltaReferences). */
+export interface DeltaRef { eventUuid: string; start: number; end: number }
+
+export interface StallWarning { retryInMs: number; willRetry: boolean }
+
+export interface PromptProcessing { promptTokens: number; budgetMs: number; source?: 'prompt' | 'tool-output'; processed?: number; cached?: number; etaMs?: number | null; timeMs?: number }
+
+export interface ToolPreparing { toolCallId: string; toolName: string; chars: number; cleared?: boolean }
+
 export interface TranscriptEvent {
   type: TranscriptEventType;
   sessionId: string; // desktop session ID
@@ -358,7 +442,7 @@ export interface TranscriptEvent {
      *  because Claude Code reports several orphaned commands in one notice on
      *  resume. `result` is a helper's final report; `summary` is Claude Code's
      *  one-line description ("Agent \"X\" finished", "... (exit code 0)"). */
-    backgroundTask?: { taskIds: string[]; status: Exclude<CcBackgroundStatus, 'running'>; summary?: string; result?: string };
+    backgroundTask?: BackgroundTaskEnd;
     /** Native user-message events: absolute composer attachment paths, persisted so
      *  resume can re-read the pixels (events carry no binary). #290 follow-up fix 2. */
     attachments?: string[];
@@ -408,60 +492,7 @@ export interface TranscriptEvent {
     /** Anthropic API request id from the JSONL line's top-level `requestId`. */
     anthropicRequestId?: string;
     /** Token + cache usage snapshot from message.usage. */
-    usage?: {
-      inputTokens: number;
-      outputTokens: number;
-      cacheReadTokens: number;
-      cacheCreationTokens: number;
-      /** Native runtime only: output tokens / stream seconds. CC never reports this. */
-      tokensPerSecond?: number;
-      /** Native runtime only: the session's REAL context window (resolved in main,
-       *  Task 4/5). Carried on the per-turn payload so the renderer's StatusBar can
-       *  compute context % without a separate IPC. Constant per session; CC omits it. */
-      contextLength?: number | null;
-      /** Native runtime only: tokens OCCUPYING the window after this turn — the
-       *  last step's prompt plus its output. Distinct from inputTokens, which
-       *  sums every step and therefore re-counts the history once per step. */
-      contextUsedTokens?: number;
-      /** Transient native progress only: no legacy in+out context fallback.
-       *  Not set on completed turns (including old transcript records). */
-      liveProgress?: true;
-      /** Native runtime only (cache follow-ups item 8, 2026-09-10): true when a
-       *  request in this turn followed something the harness itself did to the
-       *  prompt prefix — a prune commit, a summary compaction, a model swap — so
-       *  a low cache-read figure on this turn is the known price of that event,
-       *  not a regression. Low reads WITHOUT this flag are the thing to
-       *  investigate. */
-      expectedRebuild?: boolean;
-      /** Native runtime only: USD for THIS turn, priced at the model that ran
-       *  it. `null` means the model has no published price — distinct from
-       *  absent, which means no pricing information at all (a Claude Code turn).
-       *  The renderer sums these; it never multiplies tokens by a rate itself. */
-      costUsd?: number | null;
-      /** Native runtime only: this turn ran on a model that costs nothing to
-       *  run — a local engine, or a metered model published at a rate of zero.
-       *  Deliberately NOT the same as `costUsd: null`, which means "metered,
-       *  but no published rate": the status bar words the two differently
-       *  ("runs on your machine" vs "no published price"). Only main can tell
-       *  them apart — it is the only side that knows the provider type. */
-      free?: boolean;
-      /** Native runtime only, and only where the provider reports one: the USD
-       *  figure the PROVIDER ITSELF charged for this turn's requests. Today only
-       *  OpenRouter-shaped providers report a cost, so this is ABSENT on a local
-       *  model, an Anthropic or OpenAI key, and a plain OpenAI-compatible
-       *  endpoint.
-       *
-       *  Absent means "the provider told us nothing" — never $0, and never
-       *  "we checked and it matched". A reported 0 (a genuinely free model) is
-       *  a real reading and is kept as 0, which is why this is `number` and not
-       *  `number | null`: unlike costUsd there is no third state to spell.
-       *
-       *  Present ONLY when every step of the turn reported one, so it always
-       *  covers exactly the same steps as `costUsd` and the two can be compared
-       *  honestly. Diagnostic: main compares them and logs a gap; nothing in
-       *  the UI reads this. */
-      providerCostUsd?: number;
-    };
+    usage?: TranscriptUsage;
     /**
      * Populated only on events emitted from a subagent JSONL — identifies
      * the parent Agent tool_use that this subagent's work threads into.
@@ -512,11 +543,11 @@ export interface TranscriptEvent {
      * A heartbeat WITHOUT this field means activity resumed and clears the
      * warning.
      */
-    stallWarning?: { retryInMs: number; willRetry: boolean };
+    stallWarning?: StallWarning;
     /** Native root-turn measured, cumulative usage after a completed request.
      *  Payload-less assistant-thinking only: transient, never a transcript line.
      *  Unlike turn-complete, contextUsedTokens is absent without a measured prompt. */
-    usageProgress?: NonNullable<TranscriptEvent['data']['usage']>;
+    usageProgress?: TranscriptUsage;
     /**
      * Native runtime only. The mid-stream watchdog gave up waiting and the turn
      * is now PARKED: the stream reader is still open, nothing has been torn
@@ -547,7 +578,7 @@ export interface TranscriptEvent {
      * alarm so alarming (2026-07-26). `budgetMs` is how long prefill is allowed
      * to take before the watchdog treats the silence as a real stall.
      */
-    promptProcessing?: { promptTokens: number; budgetMs: number; source?: 'prompt' | 'tool-output'; processed?: number; cached?: number; etaMs?: number | null; timeMs?: number };
+    promptProcessing?: PromptProcessing;
     /**
      * Native runtime only. The model is GENERATING a tool call's arguments —
      * nothing has executed yet. This is what makes a "preparing" ToolCard
@@ -565,7 +596,7 @@ export interface TranscriptEvent {
      * re-runs a step WITHOUT ending the turn, so its cards must be withdrawn
      * explicitly (every other death path ends the turn, where endTurn reaps).
      */
-    toolPreparing?: { toolCallId: string; toolName: string; chars: number; cleared?: boolean };
+    toolPreparing?: ToolPreparing;
     /**
      * Populated only on `user-interrupt` events. Distinguishes the two exact
      * marker strings Claude Code writes: `[Request interrupted by user]`
@@ -594,17 +625,9 @@ export interface TranscriptEvent {
      *  compaction kept a tail, so only entries above that message dim. */
     retainedFromUuid?: string | null;
     /** Persisted coalesced-part UUID/range witness; no duplicate text or private metadata. */
-    deltaReferences?: Array<{ eventUuid: string; start: number; end: number }>;
+    deltaReferences?: DeltaRef[];
     /** Native compact-summary portable checkpoint; references cite persisted parts. */
-    compactionRecord?: {
-      v: 1;
-      generation: number;
-      sourceRevision: number;
-      /** Hash of the source transcript plus the claimed cut; no copied text. */
-      sourceDigest?: string;
-      resumeFrom: { eventUuid: string; anchorUuid: string; type: TranscriptEventType; partId?: string; start: number; end: number };
-      coveredThrough: { eventUuid: string; anchorUuid: string; type: TranscriptEventType; partId?: string; start: number; end: number };
-    };
+    compactionRecord?: CompactionRecord;
     /** `skill-invoked` only (M3 item 1). `skillId` is the resolved, qualified id
      *  (wecoded-themes-plugin:theme-builder); `body` is the SKILL.md text that
      *  enters model history on rebuild and is deliberately NOT rendered;

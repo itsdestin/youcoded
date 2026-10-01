@@ -1,4 +1,4 @@
-import { ChatMessage, ToolCallState, ToolGroupState, type AttentionState, type SpecialistRunView, type ShellRunView, type PageCursor, type TranscriptEvent, type SessionContext, type SessionContextSkill, type SessionContextText, type FloorStop } from '../../shared/types';
+import { ChatMessage, ToolCallState, ToolGroupState, type AttentionState, type SpecialistRunView, type ShellRunView, type PageCursor, type TranscriptEvent, type SessionContext, type SessionContextSkill, type SessionContextText, type FloorStop, type InjectedMeta } from '../../shared/types';
 import { emptyTotals, type SessionTotals } from './session-totals';
 // Re-export so test files and future consumers can import these types from
 // chat-types directly, without reaching into the shared/types boundary.
@@ -1266,4 +1266,7 @@ export function deserializeChatState(s: SerializedChatState): ChatState {
 }
 
 /** Structured header for a host-injected specialist report — mirrors TranscriptEvent.data.injectedMeta. */
-export type InjectedMeta = NonNullable<NonNullable<import('../../shared/types').TranscriptEvent['data']>['injectedMeta']>;
+// WHY a re-export: InjectedMeta used to be derived from TranscriptEvent['data'] (a
+// self-reference that cannot survive `data` becoming a union, M5). The real type
+// lives in shared/types.ts; renderer files keep importing it from here.
+export type { InjectedMeta };
