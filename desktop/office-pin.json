@@ -1,21 +1,21 @@
 {
-  "version": "0.1.30",
+  "version": "0.1.31",
   "platforms": {
     "linux-x64": {
-      "url": "https://github.com/itsdestin/youcoded-office/releases/download/v0.1.30/youcoded-office-0.1.30-linux-x64.tar.gz",
-      "sha256": "875f047c1a33bcee69cf9a4da5289a71f33aa43bdfdd9ed7b7be34b3b3a9b957"
+      "url": "https://github.com/itsdestin/youcoded-office/releases/download/v0.1.31/youcoded-office-0.1.31-linux-x64.tar.gz",
+      "sha256": "a7af63355cc3991b25e2b107bf5b54d5f6b4c0ff6671653bbd47d0e371ef6c42"
     },
     "darwin-x64": {
-      "url": "https://github.com/itsdestin/youcoded-office/releases/download/v0.1.30/youcoded-office-0.1.30-darwin-x64.tar.gz",
-      "sha256": "8a93e3cea4a0b48b338ee2f7c9b5e512ff99b6c2c2fcc9292f73025300146f88"
+      "url": "https://github.com/itsdestin/youcoded-office/releases/download/v0.1.31/youcoded-office-0.1.31-darwin-x64.tar.gz",
+      "sha256": "ea18728cd430d0dbdd782fd71701cc2be970baee87f66970daa67fc713c314b3"
     },
     "darwin-arm64": {
-      "url": "https://github.com/itsdestin/youcoded-office/releases/download/v0.1.30/youcoded-office-0.1.30-darwin-arm64.tar.gz",
-      "sha256": "305c3b0270f37a4640087eaf1c3dc6fe8914aac0d0281424a9ba6384e78b0ddf"
+      "url": "https://github.com/itsdestin/youcoded-office/releases/download/v0.1.31/youcoded-office-0.1.31-darwin-arm64.tar.gz",
+      "sha256": "998d9e8cdcb30630d4e10e28e8b39050ebe254684c16554a73c9e3db14a6b6d7"
     },
     "win32-x64": {
-      "url": "https://github.com/itsdestin/youcoded-office/releases/download/v0.1.30/youcoded-office-0.1.30-win32-x64.tar.gz",
-      "sha256": "f34f6f7e3c6e6bbe289ce438ef91dd8b20844917dfabbcc9bc052a138bb55a5d"
+      "url": "https://github.com/itsdestin/youcoded-office/releases/download/v0.1.31/youcoded-office-0.1.31-win32-x64.tar.gz",
+      "sha256": "0a26ccb0100918122b615658d2583eff430087eb91bac882c10a78af5f96c7dd"
     }
   }
 }
