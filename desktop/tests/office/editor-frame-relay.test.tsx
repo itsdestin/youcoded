@@ -5,7 +5,7 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, renderHook, waitFor } from '@testing-library/react';
-import { EditorFrame } from '../../src/renderer/components/office/EditorFrame';
+import { EditorFrame, autosaveDelay } from '../../src/renderer/components/office/EditorFrame';
 import { closeDoc, openDoc, resetOfficeStoreForTests, saveStateFor, useOfficeAlerts } from '../../src/renderer/components/office/office-store';
 import type { OfficeBridge, OfficeFile } from '../../src/shared/office-types';
 
@@ -189,6 +189,45 @@ describe('EditorFrame autosave', () => {
     expect(saves()).toBe(0);
     act(() => { vi.advanceTimersByTime(1); });
     expect(saves()).toBe(1);
+  });
+
+  // Finish plan Task 5 (measured 2026-09-30): a 20 MB workbook freezes ~2 s gathering its bytes,
+  // so saving 3 s into every pause put that freeze wherever the person paused. A document whose
+  // editor was slow to hand its bytes over waits ten times that long (at most 20 s); a quick one
+  // keeps 3 s.
+  it('waits longer before autosaving a document whose editor froze long to hand its bytes over', async () => {
+    fakeBridge();
+    const { fromEditor, saves } = await mountFrame();
+    vi.useFakeTimers();
+    // First save: the default 3 s, and the editor takes 1.5 s to hand its bytes over.
+    fromEditor({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } });
+    act(() => { vi.advanceTimersByTime(3_000); });
+    expect(saves()).toBe(1);
+    act(() => { vi.advanceTimersByTime(1_500); });
+    fromEditor({ yc: 'rpc', id: 2, cmd: 'write_editor_bin', args: { data: 'AA==' } });
+    fromEditor({ yc: 'rpc', id: 3, cmd: 'save_file', args: { data: '' } });
+    await settle();
+    expect(saveStateFor(FILE.path).phase).toBe('saved');
+    // Next change: not after 3 s, but after 15 s (10 x 1.5 s).
+    fromEditor({ yc: 'rpc', id: 4, cmd: 'set_document_modified', args: { modified: true } });
+    act(() => { vi.advanceTimersByTime(14_999); });
+    expect(saves()).toBe(1);
+    act(() => { vi.advanceTimersByTime(1); });
+    expect(saves()).toBe(2);
+    // This time the bytes come at once: the next change is back to 3 s.
+    fromEditor({ yc: 'rpc', id: 5, cmd: 'write_editor_bin', args: { data: 'AA==' } });
+    fromEditor({ yc: 'rpc', id: 6, cmd: 'save_file', args: { data: '' } });
+    await settle();
+    fromEditor({ yc: 'rpc', id: 7, cmd: 'set_document_modified', args: { modified: true } });
+    act(() => { vi.advanceTimersByTime(3_000); });
+    expect(saves()).toBe(3);
+  });
+
+  it('never waits more than 20 s, however long the editor froze', () => {
+    expect(autosaveDelay(0)).toBe(3_000);
+    expect(autosaveDelay(100)).toBe(3_000);
+    expect(autosaveDelay(450)).toBe(4_500);
+    expect(autosaveDelay(60_000)).toBe(20_000);
   });
 
   it('drops the pending save when the editor says the document is unchanged after all', async () => {

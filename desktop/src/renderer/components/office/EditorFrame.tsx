@@ -39,6 +39,17 @@ export interface EditorFrameHandle {
 /** WHY 3 s (design §4): long enough that a burst of typing is one save, short enough that
  *  closing the laptop loses almost nothing. Each change restarts it. */
 const AUTOSAVE_DELAY_MS = 3_000;
+/** WHY a longer wait for big documents (finish plan Task 5, measured in the dev window
+ *  2026-09-30): the editor freezes while it gathers the document's bytes for a save — ~0.1 s for a
+ *  20 MB Word file, ~0.45 s for a 5 MB workbook, ~1.9 s for a 20 MB one. Saving 3 s into every
+ *  pause put that freeze wherever the person paused to think, so a workbook that freezes for 2 s
+ *  waits ~20 s instead: the freeze stays under a tenth of the pause that triggers it. Measured as
+ *  the time from asking for a save to the bytes arriving; small documents keep 3 s. Closing,
+ *  Done and quit still save at once (flush), so nothing waits longer when the person leaves. */
+const AUTOSAVE_FREEZE_FACTOR = 10;
+const AUTOSAVE_MAX_DELAY_MS = 20_000;
+export const autosaveDelay = (handOverMs: number) =>
+  Math.min(AUTOSAVE_MAX_DELAY_MS, Math.max(AUTOSAVE_DELAY_MS, Math.round(handOverMs * AUTOSAVE_FREEZE_FACTOR)));
 /** WHY 5 s (design §4): the longest a closing tab waits for its last save before it lets go.
  *  Main still drains a save it already has (office-sessions close), so this only bounds how
  *  long the hidden editor lingers. */
@@ -190,6 +201,9 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     // dropped unsaved changes; saveAsDirty: the document had unsaved changes when a Save As began;
     // saveAsUntil: until then a "not modified" is the Save As ending, not the document.
     droppedAt: 0, saveAsDirty: false, saveAsUntil: 0,
+    // How long the editor took, last time, from being asked to save to handing its bytes over
+    // (its freeze); askedAt is when the outstanding ask was posted (0: none). See autosaveDelay.
+    askedAt: 0, handOverMs: 0,
   });
   // A save that failed without save_file failing (fix round 2): the editor's write_editor_bin
   // was refused, the editor's save path gave up, or no save_file ever came. Same outcome as a
@@ -199,6 +213,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     if (s.requestTimer) { clearTimeout(s.requestTimer); s.requestTimer = 0; }
     if (!s.requested || s.saving) return;
     s.requested = false;
+    s.askedAt = 0;
     s.dirty = true;
     s.failed = true;
     s.failMessage = message;
@@ -212,6 +227,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     s.failed = false;
     s.requested = true;
     s.requestSeq += 1;
+    s.askedAt = Date.now();
     if (s.requestTimer) clearTimeout(s.requestTimer);
     s.requestTimer = setTimeout(() => { s.requestTimer = 0; failRequested("Office didn't finish saving this file."); }, REQUESTED_SAVE_LIMIT_MS);
     post({ type: 'yc:office-save' });
@@ -220,7 +236,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     if (keptRef.current) return; // kept after a restore: nothing is saved to the file (above)
     const s = save.current;
     if (s.timer) clearTimeout(s.timer);
-    s.timer = setTimeout(() => { s.timer = 0; requestSave(); }, AUTOSAVE_DELAY_MS);
+    s.timer = setTimeout(() => { s.timer = 0; requestSave(); }, autosaveDelay(s.handOverMs));
   };
   // Every waiter re-checks after any change of save state.
   const wake = () => save.current.waiters.slice().forEach((w) => w());
@@ -597,6 +613,11 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         s.saveAsDirty = s.dirty || Date.now() - s.droppedAt < SAVE_AS_START_MS;
         s.saveAsUntil = Date.now() + SAVE_AS_MAX_MS;
       }
+      // The bytes of an asked-for save: how long the editor froze to gather them (autosaveDelay).
+      if (m.cmd === 'write_editor_bin' && save.current.requested && save.current.askedAt) {
+        save.current.handOverMs = Date.now() - save.current.askedAt;
+        save.current.askedAt = 0;
+      }
       const saving = isSaveCmd(m.cmd);
       // The request this hand-over answers (see requestSeq): the one current when it arrived.
       const seq = save.current.requestSeq;
@@ -606,6 +627,7 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         s.saveAsUntil = 0; // a real save of the document: no Save As is holding "not modified" now
         // A save is running now; a pending timer would only start a second one behind it.
         s.requested = false;
+        s.askedAt = 0; // a later Save As's bytes are no measure of an autosave's freeze
         if (s.requestTimer) { clearTimeout(s.requestTimer); s.requestTimer = 0; }
         if (s.timer) { clearTimeout(s.timer); s.timer = 0; }
         markSaving(file.path);
