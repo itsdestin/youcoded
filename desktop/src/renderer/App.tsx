@@ -64,7 +64,7 @@ import { usePartyGame } from './hooks/usePartyGame';
 import { useChessGame } from './hooks/useChessGame';
 import { useRemoteAttentionSync } from './hooks/useRemoteAttentionSync';
 import { useSubmitConfirmation } from './hooks/useSubmitConfirmation';
-import { useSessionAttention, mergePeerSessionStatuses, mergeSummaryStatuses, viewedAfterSummaries } from './hooks/useSessionAttention';
+import { useSessionAttention, mergePeerSessionStatuses, mergeSummaryStatuses } from './hooks/useSessionAttention';
 import { useAttentionSummary } from './hooks/useAttentionSummary';
 import { useSessionSummaries } from './hooks/useSessionSummaries';
 import { useRemoteWatch } from './hooks/useRemoteWatch';
@@ -1024,7 +1024,7 @@ function AppInner() {
   // WHY (one-core R5-3): a phone watches only the conversation on its screen and a few it looked at lately, so every other
   // conversation's dot (and the attention sound, which reads the dots) comes from the computer's per-session summary, not from events
   // this screen no longer receives. Null on the computer's own windows, which keep deriving theirs from the events they get.
-  const sessionSummaries = useSessionSummaries(isRemoteMode());
+  const sessionSummaries = useSessionSummaries(isRemoteMode(), setViewedSessions);
   const sessionStatuses = useMemo(() => {
     const m = new Map<string, SessionStatusColor>();
     for (const [id, info] of sessionAttention) m.set(id, info.status);
@@ -1134,21 +1134,6 @@ function AppInner() {
     prevThinkingRef.current = next;
   }, [sessionAttention, sessionSummaries]);
 
-  // The same "a turn finished" chime for a phone, from the summaries: a conversation it is not watching still finishes, and the person
-  // wants to hear it (one-core R5-3). Only a true -> false change chimes; a conversation appearing already idle does not.
-  const prevSummaryWorkingRef = useRef<Map<string, boolean>>(new Map());
-  useEffect(() => {
-    if (!sessionSummaries) { prevSummaryWorkingRef.current = new Map(); return; }
-    const prev = prevSummaryWorkingRef.current;
-    const next = new Map<string, boolean>();
-    for (const [id, summary] of Object.entries(sessionSummaries)) {
-      next.set(id, summary.working);
-      if (prev.get(id) === true && !summary.working) playSound('ready');
-    }
-    prevSummaryWorkingRef.current = next;
-  }, [sessionSummaries]);
-  // A conversation that starts working is no longer "viewed" — the computer's chats say so below; a phone's summaries say so here.
-  useEffect(() => { if (sessionSummaries) setViewedSessions((prev) => viewedAfterSummaries(prev, sessionSummaries) as Set<string>); }, [sessionSummaries]);
 
   // Attention reporter effect: pushes per-session attention state + the
   // derived dot color to main whenever sessionAttention changes. Main

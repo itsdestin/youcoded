@@ -1,4 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { playSound } from '../utils/sounds';
+import { viewedAfterSummaries } from './useSessionAttention';
 import type { SessionSummary } from '../../shared/session-summary-types';
 
 /**
@@ -12,7 +14,11 @@ import type { SessionSummary } from '../../shared/session-summary-types';
  * Re-renders only when a summary actually changed: the computer pushes the whole map on any change anywhere and every 10 s, and a
  * phone sitting idle must not redraw its whole tree for an identical one (same reason as useAttentionSummary).
  */
-export function useSessionSummaries(enabled: boolean): Record<string, SessionSummary> | null {
+export function useSessionSummaries(
+  enabled: boolean,
+  /** The screen's "viewed conversations" setter: a conversation that starts working is no longer viewed (so it turns blue when it finishes elsewhere). */
+  setViewed?: (update: (prev: Set<string>) => Set<string>) => void,
+): Record<string, SessionSummary> | null {
   const [summaries, setSummaries] = useState<Record<string, SessionSummary> | null>(null);
   useEffect(() => {
     if (!enabled) { setSummaries(null); return; }
@@ -30,5 +36,21 @@ export function useSessionSummaries(enabled: boolean): Record<string, SessionSum
     });
     return () => { unsub?.(); };
   }, [enabled]);
+
+  // The "a turn finished" chime for a phone, from the summaries: a conversation it is not watching still finishes, and the person wants
+  // to hear it (one-core R5-3). Only true -> false chimes; a conversation appearing already idle does not.
+  const prevWorking = useRef<Map<string, boolean>>(new Map());
+  useEffect(() => {
+    if (!enabled || !summaries) { prevWorking.current = new Map(); return; }
+    const next = new Map<string, boolean>();
+    for (const [id, summary] of Object.entries(summaries)) {
+      next.set(id, summary.working);
+      if (prevWorking.current.get(id) === true && !summary.working) playSound('ready');
+    }
+    prevWorking.current = next;
+  }, [enabled, summaries]);
+  useEffect(() => {
+    if (enabled && summaries && setViewed) setViewed((prev) => viewedAfterSummaries(prev, summaries) as Set<string>);
+  }, [enabled, summaries, setViewed]);
   return enabled ? summaries : null;
 }

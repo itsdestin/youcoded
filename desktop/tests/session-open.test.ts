@@ -181,3 +181,19 @@ describe('openSession: a reconnect (events)', () => {
     expect(ok(await openSession(deps(r), { sessionId: S, have: have(r), fresh: true })).resume).toBe('page');                   // Refresh
   });
 });
+
+describe('openSession: a resumed conversation', () => {
+  it('tells the summary it has history when the page it read is not empty (so a phone draws it blue, like the computer)', async () => {
+    const r = new SessionRecords();
+    r.begin(S);
+    expect(r.summary(S)!.hasHistory).toBe(false);
+    ok(await openSession(deps(r, { page: async () => page(2) }), { sessionId: S }));
+    expect(r.summary(S)!.hasHistory).toBe(true);
+  });
+  it('leaves an empty conversation empty', async () => {
+    const r = new SessionRecords();
+    r.begin(S);
+    ok(await openSession(deps(r, { page: async () => page(0) }), { sessionId: S }));
+    expect(r.summary(S)!.hasHistory).toBe(false);
+  });
+});

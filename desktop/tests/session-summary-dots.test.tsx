@@ -44,6 +44,11 @@ const script: Step[] = [
   { label: 'ask answered', hook: hook('PermissionResolved', 'r1') },
   { label: 'a second ask raised', hook: hook('PermissionRequest', 'r2', { tool_name: 'Bash', tool_input: { command: 'rm x' } }) },
   { label: 'a second ask timed out', hook: hook('PermissionExpired', 'r2', { _reason: 'app-timeout' }) },
+  { label: 'password ask raised on the tool', hook: hook('PasswordRequest', 'pw1', { toolUseId: 't1', command: 'sudo ls' }) },
+  { label: 'password ask answered', hook: hook('PasswordResolved', 'pw1') },
+  { label: 'a helper (Task card) starts', t: ev('tool-use', { toolUseId: 'task-1', toolName: 'Task', toolInput: { description: 'x' } }, at(6)) },
+  { label: 'a helper raises an ask', hook: hook('PermissionRequest', 'h1', { tool_name: 'Bash', tool_input: { command: 'rm y' }, specialist: { childId: 'c1', agentType: 'x', title: 'X', parentToolCallId: 'task-1' } }) },
+  { label: 'the helper ask is answered', hook: hook('PermissionResolved', 'h1') },
   { label: 'classifier: waiting for input', relay: 'awaiting-input' },
   { label: 'classifier: shell idle', relay: 'shell-idle' },
   { label: 'classifier: stuck', relay: 'stuck' },
@@ -132,5 +137,22 @@ describe('a conversation that starts working is no longer viewed (so it turns bl
   it('hands back the same set when nothing changed, so React does not re-render', () => {
     const viewed = new Set(['a']);
     expect(viewedAfterSummaries(viewed, { a: { ...base, working: false }, z: { ...base, working: true } })).toBe(viewed);
+  });
+});
+
+describe('a conversation resumed from disk (history loaded as a page, no live event yet)', () => {
+  it('is blue on the phone exactly when it is blue on the computer, and gray once viewed', () => {
+    const { wrapper, store } = makeStoreWrapper(['old']);
+    const { result } = renderHook(() => useSessionAttention([{ id: 'old' }, { id: 'other' }], new Set(), 'other'), { wrapper });
+    const records = new SessionRecords();
+    records.begin('old');
+    // the computer's chat: a page of history lands
+    const page = [ev('user-message', { text: 'earlier' }, { sessionId: 'old', timestamp: 1, uuid: 'p1' })];
+    act(() => { store.dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId: 'old', events: page, cursor: null, hasMore: false } as ChatAction); });
+    // the computer's record learns it the way session:open tells it
+    records.noteHistory('old');
+    expect(result.current.get('old')!.status).toBe('blue');
+    expect(statusFromSummary(records.summary('old')!, true)).toBe('blue');
+    expect(statusFromSummary(records.summary('old')!, false)).toBe('gray');
   });
 });

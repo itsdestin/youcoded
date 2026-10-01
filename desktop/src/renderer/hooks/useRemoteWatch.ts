@@ -29,6 +29,8 @@ export function useRemoteWatch(opts: {
     if (!enabled || !sid || sid.startsWith('pending-handoff:')) return Promise.resolve('ok');
     const { added, evicted } = setRef.current.touch(sid);
     for (const old of evicted) {
+      // An open for it may still be running: its answer is for a watch that is ending, so the next watch must start a new one.
+      loader.abandon(old);
       // Fire and forget: if the message is lost the computer just keeps sending one more conversation until the next reconnect.
       try { Promise.resolve((window.claude.session as { unwatch?: (id: string) => Promise<unknown> }).unwatch?.(old)).catch(() => {}); } catch { /* bridge without it */ }
     }

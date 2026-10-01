@@ -191,15 +191,22 @@ export class SessionRecords {
   onSummaryChange(listener: ((sessionId: string) => void) | null): void { this.summaryListener = listener; }
 
   /** The fields a summary push is built from, as one string: equal strings mean no dot can have changed. */
-  private summaryKeyOf(rec: Rec): string {
+  private summaryKeyOf(sessionId: string, rec: Rec): string {
     const f = rec.facts;
     const reported = f.reportedAttention && f.reportedAttention !== 'ok' ? f.reportedAttention : null;
-    return `${f.working ? 1 : 0}|${rec.asks.size + rec.passwordAsks.size}|${reported ?? f.attention}|${f.hasHistory ? 1 : 0}|${f.permissionMode ?? ''}|${f.model ?? ''}`;
+    // queue length and the HOST's permission mode are read through the live source (they are not events), so a change to them is only
+    // seen when something asks; they are in the key so that when a push IS built they count, and R5-4 can read them from the summary.
+    const live = this.safeLive(sessionId);
+    return `${f.working ? 1 : 0}|${rec.asks.size + rec.passwordAsks.size}|${reported ?? f.attention}|${f.hasHistory ? 1 : 0}|${live?.permissionMode ?? f.permissionMode ?? ''}|${f.model ?? ''}|${live?.queued?.length ?? 0}`;
+  }
+
+  private safeLive(sessionId: string): ReturnType<LiveFactsSource> {
+    try { return this.liveSource?.(sessionId) ?? null; } catch { return null; }
   }
 
   /** After anything that may have moved a summary field: announce it if it did. */
   private announceIfChanged(sessionId: string, rec: Rec): void {
-    const key = this.summaryKeyOf(rec);
+    const key = this.summaryKeyOf(sessionId, rec);
     if (key === rec.summaryKey) return;
     rec.summaryKey = key;
     try { this.summaryListener?.(sessionId); } catch (err) { console.warn('[session-record] summary listener failed:', String(err)); }
@@ -407,6 +414,18 @@ export class SessionRecords {
     if (!this.open(sessionId)) return;
     const rec = this.records.get(sessionId)!;
     rec.facts.reportedAttention = state;
+    this.announceIfChanged(sessionId, rec);
+  }
+
+  /**
+   * The conversation already has messages on disk (a resume, or a screen that opened it and read a non-empty page). WHY (one-core R5-3
+   * review): `hasHistory` otherwise counts only events seen live, so a conversation resumed from disk read "no history" on a phone (gray)
+   * while the computer's own chat, which loaded the page, showed it unseen (blue).
+   */
+  noteHistory(sessionId: string): void {
+    const rec = this.records.get(sessionId);
+    if (!rec || rec.facts.hasHistory) return;
+    rec.facts.hasHistory = true;
     this.announceIfChanged(sessionId, rec);
   }
 

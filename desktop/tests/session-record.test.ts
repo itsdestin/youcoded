@@ -342,3 +342,33 @@ describe('the summary change announcement (what a phone\'s dots wait for)', () =
     warn.mockRestore();
   });
 });
+
+describe('the summary announcement also covers the queue length and the host\'s permission mode', () => {
+  it('announces when a native session\'s queue grows or the host\'s mode changes, though no event carried them', () => {
+    const r = new SessionRecords();
+    let queued: string[] = [];
+    let mode: string | null = 'ask';
+    r.setLiveSource(() => ({ queued, permissionMode: mode }));
+    r.begin(S);
+    const heard: string[] = [];
+    r.onSummaryChange((sid) => heard.push(sid));
+    r.note(S, 'transcript:event', { sessionId: S, type: 'assistant-text', uuid: 'a', timestamp: 1, data: { text: 'x', partId: 'p' } });
+    heard.length = 0;
+    queued = ['q1'];
+    r.note(S, 'transcript:event', { sessionId: S, type: 'assistant-text', uuid: 'b', timestamp: 2, data: { text: 'y', partId: 'p' } });
+    expect(heard).toHaveLength(1);
+    mode = 'auto-edit';
+    r.note(S, 'transcript:event', { sessionId: S, type: 'assistant-text', uuid: 'c', timestamp: 3, data: { text: 'z', partId: 'p' } });
+    expect(heard).toHaveLength(2);
+  });
+
+  it('noteHistory says a resumed conversation has history, once', () => {
+    const r = new SessionRecords();
+    r.begin(S);
+    const heard: string[] = [];
+    r.onSummaryChange((sid) => heard.push(sid));
+    r.noteHistory(S); r.noteHistory(S);
+    expect(heard).toEqual([S]);
+    expect(r.summary(S)!.hasHistory).toBe(true);
+  });
+});

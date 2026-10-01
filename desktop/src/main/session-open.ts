@@ -116,6 +116,8 @@ export async function openSession(deps: OpenDeps, req: OpenRequest, opts: { remo
   const asks = askEvents();
   const page = await deps.page({ sessionId, claudeSessionId: req.claudeSessionId, projectSlug: req.projectSlug });
 
+  // A non-empty page means the conversation has messages: the summary must say so, or a phone reads a resumed conversation as empty (gray, not blue).
+  if (page?.events?.length) records.noteHistory(sessionId);
   const after: Push[] = [...asks];
   if (native) {
     for (const run of native.specialistRuns()) after.push({ type: 'specialists:event', payload: { kind: 'run', sessionId, run } });

@@ -258,3 +258,32 @@ describe('watch (a phone starts receiving a conversation)', () => {
     expect(r.opens[1]).toMatchObject({ fresh: true });
   });
 });
+
+describe('abandon (the phone stopped watching while its open was still running)', () => {
+  it('open in flight, evicted, tapped again: a NEW open goes out, and the stale answer is applied to nothing', async () => {
+    const releases: Array<() => void> = [];
+    const actions: ChatAction[] = [];
+    const opens: any[] = [];
+    const loader = createFirstPageLoader({
+      open: vi.fn(async (req) => { opens.push(req); await new Promise<void>((r) => releases.push(r)); return pageReply(real); }),
+      requestPage: vi.fn(async () => real),
+      dispatch: (a) => actions.push(a), flush: () => {}, play: () => {}, sleep: async () => {},
+    });
+    const first = loader.watch('a');            // the tap: open #1 is running
+    loader.abandon('a');                        // three more taps evicted it (unwatch sent)
+    const second = loader.watch('a');           // tapped again
+    expect(opens).toHaveLength(2);              // a new open, not the stale one
+    releases.forEach((r) => r());
+    expect(await first).toBe('failed');         // the stale answer records nothing
+    expect(await second).toBe('ok');
+    expect(actions.filter((a) => a.type === 'HISTORY_PAGE_LOADED')).toHaveLength(1);
+  });
+
+  it('a finished fill is not abandoned (its cursor still resumes)', async () => {
+    const r = rig(() => real);
+    await r.loader.watch('s');
+    r.loader.abandon('s');
+    await r.loader.watch('s');
+    expect(r.opens[1].fresh).toBeUndefined();
+  });
+});

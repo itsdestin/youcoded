@@ -25,6 +25,9 @@ if (typeof (globalThis as any).IntersectionObserver === 'undefined') {
   (globalThis as any).IntersectionObserver = class { observe() {} unobserve() {} disconnect() {} takeRecords() { return []; } };
 }
 
+vi.mock('../src/renderer/utils/sounds', () => ({ playSound: vi.fn() }));
+import { playSound } from '../src/renderer/utils/sounds';
+import { useSessionSummaries } from '../src/renderer/hooks/useSessionSummaries';
 import ChatView from '../src/renderer/components/ChatView';
 import { useRemoteWatch } from '../src/renderer/hooks/useRemoteWatch';
 import type { FirstPageLoader } from '../src/renderer/state/first-page-loader';
@@ -81,6 +84,7 @@ describe('useRemoteWatch on a phone', () => {
     let release: Array<() => void> = [];
     const loader = {
       watch: vi.fn((sid: string) => { filled.push(sid); return new Promise<'ok'>((r) => { release.push(() => r('ok')); }); }),
+      abandon: vi.fn(),
     } as unknown as FirstPageLoader;
     return { loader, filled, finish: () => { release.forEach((r) => r()); release = []; } };
   }
@@ -112,6 +116,7 @@ describe('useRemoteWatch on a phone', () => {
     await act(async () => { finish(); });
     expect(unwatch).toHaveBeenCalledTimes(1);
     expect(unwatch).toHaveBeenCalledWith('a');
+    expect((loader.abandon as any)).toHaveBeenCalledWith('a');   // an open still running for it must not be joined by the next tap
     // going back to one that is still watched costs nothing
     const callsBefore = (loader.watch as any).mock.calls.length;
     rerender({ activeId: 'c' });
@@ -144,5 +149,40 @@ describe('useRemoteWatch on a phone', () => {
     rerender({ ids: ['a', 'b'], activeId: 'a' });     // the id comes back
     await act(async () => { finish(); });
     expect((loader.watch as any).mock.calls.map((c: any[]) => c[0])).toEqual(['a', 'b', 'a']);
+  });
+});
+
+describe('useSessionSummaries on a phone: the finished chime and the viewed reset', () => {
+  const base = { awaitingCount: 0, attention: 'ok', hasHistory: true, queuedCount: 0, permissionMode: null, model: null };
+  let push: (p: unknown) => void = () => {};
+  beforeEach(() => {
+    (playSound as any).mockClear();
+    (window as any).claude = { on: { sessionSummary: (cb: (p: unknown) => void) => { push = cb; return () => {}; } } };
+  });
+  afterEach(() => { delete (window as any).claude; });
+
+  it('chimes once when a conversation stops working, not when it appears idle or starts', () => {
+    renderHook(() => useSessionSummaries(true));
+    act(() => push({ summaries: { a: { ...base, working: false } } }));
+    act(() => push({ summaries: { a: { ...base, working: true } } }));
+    expect(playSound).not.toHaveBeenCalled();
+    act(() => push({ summaries: { a: { ...base, working: false } } }));
+    expect(playSound).toHaveBeenCalledTimes(1);
+    expect(playSound).toHaveBeenCalledWith('ready');
+  });
+
+  it('a conversation that starts working is dropped from the viewed set', () => {
+    let viewed = new Set(['a', 'b']);
+    const setViewed = (u: (p: Set<string>) => Set<string>) => { viewed = u(viewed); };
+    renderHook(() => useSessionSummaries(true, setViewed));
+    act(() => push({ summaries: { a: { ...base, working: true }, b: { ...base, working: false } } }));
+    expect([...viewed]).toEqual(['b']);
+  });
+
+  it('does nothing on the computer', () => {
+    renderHook(() => useSessionSummaries(false));
+    act(() => push({ summaries: { a: { ...base, working: true } } }));
+    act(() => push({ summaries: { a: { ...base, working: false } } }));
+    expect(playSound).not.toHaveBeenCalled();
   });
 });

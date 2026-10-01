@@ -82,6 +82,13 @@ export interface FirstPageLoader {
    * (or a fresh page when it was away too long). Either way `session:open` is what makes the computer start sending it.
    */
   watch: (sessionId: string, hint?: PageHint) => Promise<FillOutcome>;
+  /**
+   * Stop treating a fill in flight as this conversation's fill (one-core R5-3 review): the phone told the computer to stop sending it
+   * (`session:unwatch`) while its `session:open` was still running, so that open's answer is for a watch that no longer exists and is
+   * applied to nothing. The next `watch` then starts a NEW open (a first fill, a fresh page); without this it would join the stale one and
+   * the conversation would look filled while the computer sends it nothing.
+   */
+  abandon: (sessionId: string) => void;
   /** A live transcript event arrived: re-ask if this session's load failed. */
   noteLiveActivity: (sessionId: string) => void;
   /** Forget every session not in `liveIds` (closed sessions; a native id can
@@ -216,10 +223,17 @@ export function createFirstPageLoader(deps: FirstPageLoaderDeps): FirstPageLoade
     return refill(sid, { fresh: false });
   };
 
+  const abandon = (sid: string): void => {
+    // Only a fill still running is abandoned; a finished one is a conversation this page holds and resumes from its cursor.
+    if (!inflight.has(sid)) return;
+    inflight.delete(sid); busyOrDone.delete(sid); failed.delete(sid); runs.delete(sid);
+  };
+
   return {
     load,
     refill,
     watch,
+    abandon,
     // One Set lookup per live event — the hot path pays nothing else.
     noteLiveActivity: (sid) => { if (failed.has(sid)) void load(sid); },
     retainOnly: (liveIds) => {
