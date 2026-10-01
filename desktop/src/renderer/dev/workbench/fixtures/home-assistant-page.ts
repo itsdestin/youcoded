@@ -299,6 +299,7 @@ function homeAssistantPageHtml(): string {
       // while a text box is open waits for the next one.
       if (!first && (renaming || newRoomFor)) return;
       rooms = JSON.parse(r.body);
+      applyHeld();
       banner('');
       render();
       // Pictures as soon as there are cameras to put them in, not on a delay.
@@ -313,9 +314,25 @@ function homeAssistantPageHtml(): string {
       .then(function () { delete busy[id]; setTimeout(load, 400); });
   }
 
-  // Optimistic: the switch moves the moment it is pressed, then the next
-  // check confirms or corrects it.
+  // Optimistic: the switch moves the moment it is pressed. A TV or light can
+  // take a few seconds to actually change, and a check that lands before it
+  // has would flip the switch back and then forward again — so a pressed
+  // switch holds its new position for up to 8 seconds, until Home Assistant
+  // agrees (round 5 testing: "on/off doesn't work super well").
+  var held = {};
+  var HOLD_MS = 8000;
+  function holdState(id, state) { held[id] = { state: state, until: Date.now() + HOLD_MS }; }
+  function applyHeld() {
+    var now = Date.now();
+    (rooms || []).forEach(function (room) { room.items.forEach(function (it) {
+      var h = held[it.id];
+      if (!h) return;
+      if (now > h.until || (it.state === h.state) || (h.state === 'on' && isOn(it))) { delete held[it.id]; return; }
+      it.state = h.state;
+    }); });
+  }
   function setLocal(id, patch) {
+    if (patch && typeof patch.state === 'string') holdState(id, patch.state);
     (rooms || []).forEach(function (room) { room.items.forEach(function (it) { if (it.id === id) Object.assign(it, patch); }); });
     render();
   }
@@ -421,21 +438,25 @@ function homeAssistantPageHtml(): string {
   }
 
   function tileHtml(it, icon, media, ctx) {
-    var off = !isOn(it), na = gone(it), on = !off && !na;
+    // A TV with a paired remote is switched by the remote, which works the
+    // TV's real power; its Cast side only knows whether something is
+    // casting, so its "off" left the TV on (round 5 testing).
+    var rc = media ? remoteFor(it, roomOf(it.id)) : null;
+    var power = rc || it;
+    var off = !isOn(power), na = gone(power), on = !off && !na;
     var pct = it.brightness ? Math.round(it.brightness / 2.55) : 0;
     var status = na ? 'Not responding'
-      : media ? (on ? (it.title || 'On') : 'Off')
+      : media ? (on ? (isOn(it) && it.title ? it.title : 'On') : 'Off')
       : on ? (dimmable(it) ? pct + '%' : 'On') : 'Off';
     var c = media ? 'var(--accent)' : colourOf(it);
     var vol = media && on && (it.features & 4) && it.vol != null
       ? '<div class="vol">' + SPEAKER + '<input class="lr" type="range" min="0" max="100" value="' + Math.round(it.vol * 100) + '" style="--pct:' + Math.round(it.vol * 100) + '%;--c:var(--accent)" aria-label="Volume of ' + esc(it.name) + '" data-vol="' + esc(it.id) + '"></div>'
       : '';
     var bright = !media && on && dimmable(it) ? rangeHtml(it, pct) : '';
-    var rc = media ? remoteFor(it, roomOf(it.id)) : null;
     var rOpen = rc && remoteOpen.has(rc.id);
     var rBtn = rc ? '<button class="rbtn" data-remote="' + esc(rc.id) + '" aria-expanded="' + !!rOpen + '" aria-label="Remote for ' + esc(it.name) + '" title="Remote">' + REMOTE + '</button>' : '';
     return '<div class="tile' + (media ? ' media' : '') + (on ? ' on' : '') + (na ? ' gone' : '') + (hidden.has(it.id) ? ' is-hidden' : '') + '" style="--c:' + c + '"><span class="glow"></span>' +
-      '<div class="line"><button class="tile-face" data-toggle="' + esc(it.id) + '" aria-pressed="' + on + '"' + (na ? ' disabled' : '') + ' aria-label="' + esc(it.name) + (on ? ', on' : ', off') + '">' +
+      '<div class="line"><button class="tile-face" data-toggle="' + esc(power.id) + '" aria-pressed="' + on + '"' + (na ? ' disabled' : '') + ' aria-label="' + esc(it.name) + (on ? ', on' : ', off') + '">' +
       '<span class="bulb">' + icon + '</span><span class="name">' + esc(it.name) + '<div class="sub">' + esc(status) + '</div></span></button>' +
       (media ? rBtn : colourBtn(it)) + '</div>' + bright + vol + (media ? '' : paletteHtml(it)) + (rOpen ? remoteHtml(rc) : '') + editRow(it, ctx) + '</div>';
   }
