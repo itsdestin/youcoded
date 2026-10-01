@@ -5,7 +5,7 @@
 //
 // Every send carries an id the screen makes up (`newSendId`). The computer's record notes the ids it received, so a screen that loses its connection
 // mid-send can ask afterwards whether the message arrived (state/send-reconcile.ts) instead of guessing. It is NEVER resent by itself.
-import type { ChatAction } from './chat-types';
+import type { ChatAction, SessionChatState } from './chat-types';
 import type { NativeSendResult } from '../../shared/types';
 import { sendChatMessage } from '../components/native-send';
 import { newSendId } from './send-ids';
@@ -28,6 +28,16 @@ export interface OutgoingSend {
   /** Native only (one-core R6-2): draw the bubble BEFORE the computer answers. The caller says yes only on a phone whose conversation is idle, where the
    *  computer would draw the very same bubble: a send that finds a turn running is queued by the computer and drawn from its queue, never as a bubble here. */
   instant?: boolean;
+}
+
+/**
+ * May a native send be drawn before the computer answers? Only when this screen's own copy of the record says nothing is going on: no turn, no tool, no
+ * waiting message. A busy conversation makes the computer QUEUE the message and draw it in its own queue strip (rows with Cancel and Send-now that only the
+ * computer's queue can honour), so nothing is drawn here for it; and a screen that is a moment behind a turn that started elsewhere must not flash a bubble
+ * that the strip then replaces. Anything this does not clear waits for the answer, exactly as before.
+ */
+export function canDrawSendNow(session: Pick<SessionChatState, 'isThinking' | 'currentTurnId' | 'activeTurnToolIds' | 'queuedMessages'> | undefined): boolean {
+  return !!session && !session.isThinking && !session.currentTurnId && session.activeTurnToolIds.size === 0 && session.queuedMessages.length === 0;
 }
 
 /** A reply-less Claude Code send still has no echo this long after the write: ask the computer's record whether it got the message (a refused terminal write says nothing else). */

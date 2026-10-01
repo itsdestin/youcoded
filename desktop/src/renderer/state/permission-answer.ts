@@ -84,3 +84,18 @@ export function answerStep(tools: Tools, a: { requestId: string; step: 'pending'
     : a.step === 'settled' ? answerSettled(tools, a.requestId)
     : answerUndone(tools, a.requestId, a.unconfirmed === true);
 }
+
+/**
+ * The computer's list of asks still open arrived (the end of a fill). Every answer this screen drew whose reply is NOT still on its way is settled by that
+ * list: still listed = the computer never got the answer, so the card goes back, answerable, saying so; not listed = the ask is closed, so the card stays
+ * answered. An answer whose reply is still on its way is left to that reply. Consent rule: a card is never left "allowed" because nothing contradicted it.
+ */
+export function reconcileAnswers(tools: Tools, open: ReadonlySet<string>): Tools | null {
+  let next: Tools | null = null;
+  for (const t of tools.values()) {
+    const a = t.answerPending;
+    if (!a || a.inFlight) continue;
+    next = (open.has(a.requestId) ? answerUndone(next ?? tools, a.requestId, true) : answerSettled(next ?? tools, a.requestId)) ?? next;
+  }
+  return next;
+}

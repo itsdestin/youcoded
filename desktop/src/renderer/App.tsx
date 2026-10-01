@@ -117,8 +117,8 @@ import { createFirstPageLoader, type FirstPageLoader, type PageHint } from './st
 import FirstRunView from './components/FirstRunView';
 import { getCapabilities, getPlatform, isRemoteMode, onConnectionModeChange } from './platform';
 import { APP_NOTICE_EVENT, type AppNoticeDetail } from './utils/announce';
-import { usePendingKeys, registerPendingResume, reconcilePending, confirmPending } from './state/pending-action';
-import { closeSession, setNativeModeNow, cycleClaudeModeNow } from './state/phone-session-actions';
+import { reconcilePending, confirmPending } from './state/pending-action';
+import { usePhoneSessionActions } from './hooks/usePhoneSessionActions';
 
 /** Remote access batch 2: where a phone's copy of the conversation stands. */
 type ConversationStatus = 'reconnecting' | 'restoring' | 'incomplete' | 'complete';
@@ -270,12 +270,7 @@ function AppInner() {
   });
 
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const sessionIdRef = useRef(sessionId);
-  sessionIdRef.current = sessionId;
   const [sessions, setSessions] = useState<any[]>([]);
-  // One-core R6-2: a phone hides a closing conversation at once (it returns if the computer refuses) and dims the mode chip until confirmed.
-  const closingKeys = usePendingKeys('close:'), modePending = usePendingKeys('mode:');
-  const stripSessions = useMemo(() => (closingKeys.size ? sessions.filter((s) => !closingKeys.has(`close:${s.id}`)) : sessions), [sessions, closingKeys]);
   // Ref mirror of `sessions` for handlers that need to read the latest list
   // without re-subscribing on every change (e.g. the artifact tool-use handler
   // which needs to resolve cwd by sessionId).
@@ -322,9 +317,6 @@ function AppInner() {
   // read lazily (no per-session seeding) since NativeSessionHost also defaults to
   // 'ask' and the chip is the only setter. Task 13.
   const [nativePermissionModes, setNativePermissionModes] = useState<Map<string, NativePermissionMode | 'unknown'>>(new Map());
-  // R6-2: the modes as shown now, read back by a phone's instant mode change.
-  const modesRef = useRef({ cc: permissionModes, native: nativePermissionModes });
-  modesRef.current = { cc: permissionModes, native: nativePermissionModes };
   // Sessions that have received their first hook event (Claude is initialized).
   // Until this fires, show an "Initializing" overlay to prevent premature input.
   const [initializedSessions, setInitializedSessions] = useState<Set<string>>(new Set());
@@ -1776,7 +1768,6 @@ function AppInner() {
     // R6-2: changes whose answer was lost are settled against what the fills just put on the screen.
     void Promise.all(ids.map((id: string) => firstPages.refill(id, { fresh }))).then((outcomes) => { reportFillRound(outcomes); void reconcilePending(); });
   }, [firstPages, reportFillRound, remoteWatch]);
-  useEffect(() => { registerPendingResume((sid) => firstPages.refill(sid, { fresh: false })); return () => registerPendingResume(null); }, [firstPages]);
   useOnRemoteReconnect(() => fillAgain(false));
   useSendReconcile(); // what became of a message sent as the connection dropped (one-core R5-4b)
   // The computer says this window's fill of a conversation never completed (its hold expired): fill it again from a fresh page.
@@ -2644,6 +2635,12 @@ function AppInner() {
   }, [dispatch, dispatchArtifact, clearMoved]);
   // A conversation that ended while this screen was away: shown the way an ended one is (its pill goes away), never as "may be behind".
   useEffect(() => { goneRef.current = removeSessionLocally; }, [removeSessionLocally]);
+  // R6-2: a phone's instant Close and mode chip; the computer's own window takes the old direct paths.
+  const refillQuiet = useCallback((sid: string) => firstPages.refill(sid, { fresh: false }), [firstPages]);
+  const { stripSessions, modePending, closeNow, cycleNativeNow, cycleClaudeNow } = usePhoneSessionActions({
+    sessionId, sessions, setSessionId, removeSessionLocally, permissionModes, nativePermissionModes, setPermissionModes, setNativePermissionModes,
+    validNativeModes: VALID_NATIVE_MODES, refill: refillQuiet,
+  });
   useEffect(() => {
     // WHY: a remote reconnect has a NEW owner; the server already canceled
     // the old connection's attempt. Do not offer a retry with its stale ID.
@@ -3009,13 +3006,7 @@ function AppInner() {
     const idx = cycle.indexOf(currentNativeMode as NativePermissionMode);
     const next = cycle[(idx + 1) % cycle.length];
     const apply = async () => {
-    if (setNativeModeNow({
-      sessionId, from: currentNativeMode, to: next, valid: VALID_NATIVE_MODES,
-      read: () => modesRef.current.native.get(sessionId),
-      write: (m) => setNativePermissionModes((prev) => (prev.get(sessionId) === m ? prev : new Map(prev).set(sessionId, m as NativePermissionMode))),
-      set: () => window.claude.native.setPermissionMode(sessionId, next),
-      readHost: () => (window as any).claude.native.getPermissionMode(sessionId), // (in preload and the shim, not in the renderer's Window type: see seedNativeMode)
-    })) return;
+    if (cycleNativeNow(sessionId, currentNativeMode, next)) return;   // R6-2: a phone draws the new mode at once (hooks/usePhoneSessionActions.ts)
     try {
       const applied = await window.claude.native.setPermissionMode(sessionId, next);
       // Validate before storing: the normal path returns a bare mode string, but
@@ -3037,7 +3028,7 @@ function AppInner() {
     // Cycling INTO Full auto is switching it on: the first time, the warning.
     if (next === 'full-auto') { gateFullAuto(() => { void apply(); }); return; }
     await apply();
-  }, [sessionId, currentNativeMode, gateFullAuto]);
+  }, [sessionId, currentNativeMode, gateFullAuto, cycleNativeNow]);
 
   // Shift+Tab cycles permission mode in chat view
   // (In terminal view, the raw escape code reaches the PTY directly)
@@ -3072,12 +3063,7 @@ function AppInner() {
     const idx = cycle.indexOf(currentPermissionMode as PermissionMode);
     const next = cycle[(idx + 1) % cycle.length];
     const apply = () => {
-      if (cycleClaudeModeNow({
-        sessionId, from: currentPermissionMode, to: next,
-        read: () => modesRef.current.cc.get(sessionId),
-        write: (m) => setPermissionModes((prev) => (prev.get(sessionId) === m ? prev : new Map(prev).set(sessionId, m as PermissionMode | 'unknown'))),
-        sendKey: () => window.claude.session.sendInput(sessionId, '\x1b[Z'),
-      })) return;
+      if (cycleClaudeNow(sessionId, currentPermissionMode, next)) return;
       setPermissionModes((prev) => new Map(prev).set(sessionId, next));
       // Send Shift+Tab to the PTY to cycle Claude Code's permission mode
       window.claude.session.sendInput(sessionId, '\x1b[Z');
@@ -3086,7 +3072,7 @@ function AppInner() {
     // same warning the form's toggle shows.
     if (next === 'bypass') { gateSkip(apply); return; }
     apply();
-  }, [sessionId, canBypass, currentPermissionMode, currentModel, gateSkip]);
+  }, [sessionId, canBypass, currentPermissionMode, currentModel, gateSkip, cycleClaudeNow]);
   cyclePermissionRef.current = cyclePermission;
 
   useEffect(() => {
@@ -3366,19 +3352,6 @@ function AppInner() {
       (window as any).claude?.session?.switch?.(id);
     });
   }, []);
-  // R6-2: a phone hides the conversation at once and the computer's answer decides; the computer's own window makes the old call (state/phone-session-actions.ts).
-  const closeNow = useCallback((id: string, name?: string) => closeSession({
-    id, name,
-    destroy: () => window.claude.session.destroy(id),
-    list: () => window.claude.session.list(),
-    leave: () => {
-      if (sessionIdRef.current !== id) return () => {};   // WHY: move off a conversation being closed, to where the computer's own "closed" notice would go; undo puts the selection back unless the person chose another
-      const moved = chooseAfterDestroyed({ destroyedId: id, currentId: id, remainingIds: sessionsRef.current.filter((s) => s.id !== id).map((s) => s.id), focusSessionId: null });
-      setSessionId(moved);
-      return () => setSessionId((cur) => (cur === moved ? id : cur));
-    },
-    finish: () => removeSessionLocally(id),
-  }), [removeSessionLocally]);
   const handleCloseSession = useCallback((id: string, name?: string) => {
     // WHY: a pending tab is not a writer. Closing it invalidates admission
     // synchronously; session:destroy and the ordinary close prompt are wrong here.

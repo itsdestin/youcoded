@@ -42,6 +42,9 @@ export interface PendingAction {
   check(): 'present' | 'absent' | Promise<'present' | 'absent'>;
   /** The answer was lost and another path settles it (a chat message's own "Not sure this was sent" note): forget this handle after calling it. */
   handOff?(): void;
+  /** The record is the only evidence for this change (a permission answer): a resume that fails or throws counts as a failed check (retry, then `undo`) and `check`
+   *  is not consulted on a screen the record did not just fill. Consent rule: nothing stays "given" because the computer could not be asked. */
+  needsResume?: boolean;
   /** How long to wait for the record to show a change from a channel with no reply, before asking it. */
   settleAfterMs?: number;
   /** The record's own published state can settle the change on its own, without waiting for a reply (a stop whose turn ended, a mode the host read).
@@ -89,11 +92,15 @@ function end(e: Entry, how: 'confirmed' | 'undone', reason?: PendingUndo): Pendi
 /** Ask the record (resume first, so the screen is as current as the computer can make it), then keep or undo the change. */
 async function settle(e: Entry, opts: { resume: boolean }): Promise<PendingEnd> {
   if (live.get(e.a.key) !== e) return 'confirmed';
+  let resumeFailed = false;
   try {
-    if (opts.resume && e.a.sessionId && resumeSession) await resumeSession(e.a.sessionId);
-  } catch { /* the fill said how it went (the strip); the screen's own state is still the best the record has given */ }
+    if (opts.resume && e.a.sessionId && resumeSession) resumeFailed = (await resumeSession(e.a.sessionId)) === 'failed';
+  } catch { resumeFailed = true; }   // (the fill said how it went on the strip; for most changes the screen's own state is still the best the record has given)
   let seen: 'present' | 'absent';
-  try { seen = await e.a.check(); } catch {
+  try {
+    if (resumeFailed && e.a.needsResume) throw new Error('the record could not be read');
+    seen = await e.a.check();
+  } catch {
     // The record could not be asked (the connection is flaky): try again a little later, and after a few failures put the change back rather than leave the
     // screen showing something nobody could confirm (a hidden conversation, a mode, an answered card).
     e.failedChecks = (e.failedChecks ?? 0) + 1;
@@ -122,6 +129,8 @@ export async function runPending(a: PendingAction): Promise<PendingEnd> {
   a.apply();
   if (a.observe?.subscribe) e.unsub = a.observe.subscribe(() => { if (a.observe!.done()) end(e, 'confirmed'); });
   emit();
+  // The record may ALREADY show the change (a Stop on a turn that had ended but whose button was still up): clear the mark now, not at the next change.
+  if (a.observe?.done()) end(e, 'confirmed');
   let result: SendResult;
   try {
     result = await a.send();

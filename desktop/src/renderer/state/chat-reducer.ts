@@ -16,7 +16,7 @@ import { pageEventToAction } from './transcript-page-actions';
 import { isPlaceholderModelId } from '../../shared/model-ids';
 import { addTurnUsage, addSubagentUsage, addPatchLines, mergeTotals } from './session-totals';
 import { applyBackgroundTaskEnd, ccBackgroundOnLaunch, reopenResumedHelper, stopRunningBackground } from './cc-background';
-import { answerStep, reannounced } from './permission-answer';
+import { answerStep, reannounced, reconcileAnswers } from './permission-answer';
 
 // Fix: message ids are used as React keys. A hydrated remote client restarts
 // this counter at 0 while its snapshot already holds msg-1..msg-N, so new live
@@ -2929,6 +2929,11 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       // socket closed. The result arrives through the transcript or a Refresh.
       const session = next.get(action.sessionId);
       if (!session) return state;
+      // One-core R6-2: the fill's list of asks still open is the computer's own word on every answer this screen drew and has no reply for.
+      if (action.type === 'PERMISSION_REPLAY_COMPLETE') {
+        const answered = reconcileAnswers(session.toolCalls, new Set(action.pendingRequestIds));
+        if (answered) return chatReducer(new Map(next).set(action.sessionId, { ...session, toolCalls: answered }), action);
+      }
       const single = action.type === 'PERMISSION_RESOLVED_ELSEWHERE' ? action.requestId : null;
       const silent = action.type === 'PERMISSION_RESOLVED_ELSEWHERE' && action.silent === true;
       const pending = action.type === 'PERMISSION_REPLAY_COMPLETE' ? new Set(action.pendingRequestIds) : null;

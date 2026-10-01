@@ -91,8 +91,14 @@ export function answerPermission(o: {
         o.broadcast?.(expired);
       }
     },
-    // Still holding the mark after the record was asked = the record did not list the ask as open again = the computer has the answer.
-    check: () => ([...o.tools().values()].some((t) => t.answerPending?.requestId === requestId) ? 'present' : 'absent'),
+    // The record's list of open asks (the end of a fill, `reconcileAnswers`) has already put the card back or dropped the mark. A mark that is STILL here means no
+    // list arrived (the fill did not carry one): that is not confirmation, so it throws (retry, then the card goes back, answerable).
+    needsResume: true,
+    check() {
+      const tools = [...o.tools().values()];
+      if (tools.some((t) => t.answerPending?.requestId === requestId)) throw new Error('the computer has not said whether it still has the question');
+      return tools.some((t) => t.status === 'awaiting-approval' && t.requestId === requestId) ? 'absent' : 'present';
+    },
     settleAfterMs: 7000,
   });
   return true;

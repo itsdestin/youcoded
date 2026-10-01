@@ -16,12 +16,15 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, act, fireEvent } from '@testing-library/react';
 import { createChatStore, useChatState } from '../src/renderer/state/chat-context';
 import { makeStoreWrapper } from './helpers/chat-store-harness';
+import { SessionRecords } from '../src/main/session-record';
+import { openSession } from '../src/main/session-open';
+import { hookEventToAction } from '../src/renderer/state/hook-dispatcher';
 import type { ChatAction } from '../src/renderer/state/chat-types';
 import { setConnectionMode } from '../src/renderer/platform';
 import { isPending, resetPendingForTests, registerPendingResume, reconcilePending, confirmPending, runPending } from '../src/renderer/state/pending-action';
 import { stopTurn, answerPermission, STOP_SETTLE_MS } from '../src/renderer/state/phone-actions';
 import { closeSession, setNativeModeNow, cycleClaudeModeNow } from '../src/renderer/state/phone-session-actions';
-import { sendToNative, sendToClaudeCode, CC_SEND_CHECK_MS } from '../src/renderer/state/submit-outgoing';
+import { sendToNative, sendToClaudeCode, canDrawSendNow, CC_SEND_CHECK_MS } from '../src/renderer/state/submit-outgoing';
 import { APP_NOTICE_EVENT } from '../src/renderer/utils/announce';
 import StopButton from '../src/renderer/components/StopButton';
 import ToolCard from '../src/renderer/components/ToolCard';
@@ -134,6 +137,12 @@ describe('Stop', () => {
     p.dispatch(interrupt());                                   // the same event played again by a resume
     expect(interruptedTurns(p)).toBe(1);
     expect(notices).toEqual([]);                               // a stop that worked says nothing
+  });
+
+  it('A turn that had already ended when Stop was pressed (its button still up) clears the mark at once, not after the wait', () => {
+    wire(); const p = phone();                                     // no turn running: isThinking is false
+    act(() => stopTurn({ sessionId: S, provider: 'claude', turn: turnWatch(p) }));
+    expect(isPending(`stop:${S}`)).toBe(false);
   });
 
   it('CONFIRM: a turn that simply finished by itself while the stop was on its way also clears the mark (nothing left to stop)', () => {
@@ -301,18 +310,113 @@ describe('Permission answer', () => {
     expect(isPending('perm:req-1')).toBe(false);
   });
 
-  it('DROPPED, the record no longer lists the ask: the computer had the answer, so the mark simply goes and the card stays answered (no note)', async () => {
+  // The computer's side is the REAL record and the REAL `session:open` answer (events path: a reconnect or a timeout asks with where it got to), played into the
+  // real reducer the way App's listeners play it. The events path sends NO ask events, only the list of asks still open at the end.
+  function realHost() {
+    const records = new SessionRecords(); records.begin(S);
+    const askEvent = { type: 'PermissionRequest', sessionId: S, payload: { _requestId: 'req-1', tool_name: 'Bash', tool_input: { command: 'ls' } }, timestamp: 1 } as any;
+    records.note(S, 'hook:event', askEvent);
+    const have = () => ({ epoch: records.epochOf(S)!, seq: records.resume(S, null)!.headSeq });
+    const deps = { records, knows: () => true, native: () => null, page: async () => ({ events: [], cursor: null, hasMore: false }) } as any;
+    const replies: any[] = [];
+    const resume = (p: ReturnType<typeof phone>, cursor: { epoch: string; seq: number }) => async () => {
+      const reply: any = await openSession(deps, { sessionId: S, have: cursor }, { remote: true });
+      replies.push(reply);
+      for (const push of reply.after as Array<{ type: string; payload: any }>) {
+        if (push.type === 'hook:event') { const a = hookEventToAction(push.payload); if (a) p.store.dispatch(a); }
+        else if (push.type === 'hook:replay-complete') p.store.dispatch({ type: 'PERMISSION_REPLAY_COMPLETE', sessionId: S, pendingRequestIds: push.payload.pendingRequestIds });
+      }
+      return 'ok';
+    };
+    return { records, askEvent, have, resume, replies, resolve: () => records.note(S, 'hook:event', { type: 'PermissionResolved', sessionId: S, payload: { _requestId: 'req-1' }, timestamp: 2 } as any) };
+  }
+  /** The phone shows the ask (played from the same event) and answers it; the answer's reply is lost while the connection stays up. */
+  async function answeredWithLostReply(host: ReturnType<typeof realHost>) {
     const w = wire(); const reply = deferred<boolean>(); w.session.respondToPermission.mockReturnValue(reply.promise);
-    const p = phone(); ask(p); answer(p);
-    up = false;
+    const p = phone();
+    p.dispatch({ type: 'TRANSCRIPT_TOOL_USE', sessionId: S, uuid: 'tu', toolUseId: 'tool-1', toolName: 'Bash', toolInput: { command: 'ls' }, timestamp: 4 } as ChatAction);
+    p.dispatch(hookEventToAction(host.askEvent)!);
+    answer(p);
     await act(async () => { reply.reject(lostAnswer()); await Promise.resolve(); });
-    up = true;
-    await act(async () => { await reconcilePending(); });          // the fill listed no open ask for it
+    return { w, p };
+  }
+
+  it('TIMEOUT, the computer still lists the ask (and sends no ask event on this path): the answer never arrived, so the card goes back answerable with a note, and nothing is resent', async () => {
+    vi.useFakeTimers();
+    const host = realHost(); const cursor = host.have();
+    const { w, p } = await answeredWithLostReply(host);
+    registerPendingResume(host.resume(p, cursor));
+    expect(card(p).answerPending).toEqual({ requestId: 'req-1', inFlight: false });
+    await act(async () => { await vi.advanceTimersByTimeAsync(7100); });
+    expect(host.replies[0].resume).toBe('events');
+    expect(host.replies[0].after.some((x: any) => x.type === 'hook:event')).toBe(false);   // the list is the only evidence
+    expect(card(p).status).toBe('awaiting-approval');
+    expect(card(p).requestId).toBe('req-1');
+    expect(card(p).answerUnconfirmed).toBe(true);
+    expect(isPending('perm:req-1')).toBe(false);
+    expect(w.session.respondToPermission).toHaveBeenCalledTimes(1);
+  });
+
+  it('TIMEOUT, the computer no longer lists the ask: the computer had the answer, so the mark goes, the card stays answered, no note', async () => {
+    vi.useFakeTimers();
+    const host = realHost(); const cursor = host.have();
+    const { w, p } = await answeredWithLostReply(host);
+    host.resolve();
+    registerPendingResume(host.resume(p, cursor));
+    await act(async () => { await vi.advanceTimersByTimeAsync(7100); });
     expect(card(p).status).toBe('running');
     expect(card(p).answerPending).toBeUndefined();
     expect(card(p).answerUnconfirmed).toBeUndefined();
     expect(w.remote.broadcastAction).toHaveBeenCalledWith({ type: 'PERMISSION_RESPONDED', sessionId: S, requestId: 'req-1' });
-    expect(notices).toEqual([]);
+  });
+
+  it('DROPPED, then the reconnect\'s fill (real host answer) lists the ask: the card goes back answerable; after the fill the mark is not "confirmed" by silence', async () => {
+    const host = realHost(); const cursor = host.have();
+    const { p } = await answeredWithLostReply(host);
+    await act(async () => { await host.resume(p, cursor)(); await reconcilePending(); });
+    expect(card(p).status).toBe('awaiting-approval');
+    expect(card(p).answerUnconfirmed).toBe(true);
+  });
+
+  it('A FAILED RESUME is not confirmation: the card is asked about again, and after a few failures it goes back answerable (never left "allowed")', async () => {
+    vi.useFakeTimers();
+    const host = realHost();
+    const { w, p } = await answeredWithLostReply(host);
+    const failing = vi.fn(async () => 'failed');
+    registerPendingResume(failing);
+    await act(async () => { await vi.advanceTimersByTimeAsync(7000 * 4); });
+    expect(failing).toHaveBeenCalledTimes(3);
+    expect(card(p).status).toBe('awaiting-approval');
+    expect(card(p).answerUnconfirmed).toBe(true);
+    expect(w.session.respondToPermission).toHaveBeenCalledTimes(1);
+  });
+
+  it('A RESUME THAT SUCCEEDS BUT CARRIES NO LIST of open asks is not confirmation either: the mark is still there, so the card goes back answerable', async () => {
+    vi.useFakeTimers();
+    const host = realHost();
+    const { p } = await answeredWithLostReply(host);
+    registerPendingResume(async () => 'ok');                       // nothing reached the reducer
+    await act(async () => { await vi.advanceTimersByTimeAsync(7000 * 4); });
+    expect(card(p).status).toBe('awaiting-approval');
+    expect(card(p).answerUnconfirmed).toBe(true);
+  });
+
+  it('A THROWING RESUME counts the same as a failed one', async () => {
+    vi.useFakeTimers();
+    const host = realHost();
+    const { p } = await answeredWithLostReply(host);
+    registerPendingResume(async () => { throw new Error('socket closed'); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(7000 * 4); });
+    expect(card(p).status).toBe('awaiting-approval');
+    expect(card(p).answerUnconfirmed).toBe(true);
+  });
+
+  it('a list that names an ask while its answer is STILL on its way leaves the card answered (the reply decides)', () => {
+    const w = wire(); w.session.respondToPermission.mockReturnValue(deferred<boolean>().promise);
+    const p = phone(); ask(p); answer(p);
+    p.dispatch({ type: 'PERMISSION_REPLAY_COMPLETE', sessionId: S, pendingRequestIds: ['req-1'] });
+    expect(card(p).status).toBe('running');
+    expect(card(p).answerPending?.inFlight).toBe(true);
   });
 
   it('THE REAL TOOL-USE arriving while the answer waits keeps the mark (the synthetic card is replaced, the pending answer travels with it)', () => {
@@ -488,6 +592,16 @@ describe('Send', () => {
     expect(p.session().isThinking).toBe(true);
     await act(async () => { reply.resolve({ status: 'sent' }); await out!; });
     expect(bubbles(p)).toHaveLength(1);                            // confirmed: still one bubble
+  });
+
+  it('only a conversation this screen sees as completely quiet gets the instant bubble: a turn, a tool or a waiting message each send it down the wait-for-the-answer path', () => {
+    const quiet = phone().session();
+    expect(canDrawSendNow(quiet)).toBe(true);
+    expect(canDrawSendNow(undefined)).toBe(false);
+    expect(canDrawSendNow({ ...quiet, isThinking: true })).toBe(false);
+    expect(canDrawSendNow({ ...quiet, currentTurnId: 'turn-1' })).toBe(false);
+    expect(canDrawSendNow({ ...quiet, activeTurnToolIds: new Set(['t']) })).toBe(false);
+    expect(canDrawSendNow({ ...quiet, queuedMessages: [{ queueId: 'q', content: 'x', timestamp: 1 }] })).toBe(false);
   });
 
   it('NOT INSTANT when a turn is running (the computer queues it and draws its own strip): the bubble waits for the answer, exactly as before', async () => {
