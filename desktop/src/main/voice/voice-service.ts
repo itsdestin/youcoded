@@ -157,6 +157,9 @@ interface Session {
 export class VoiceService {
   private session: Session | null = null;
   private worker: VoiceWorkerHandle | null = null;
+  /** The worker has said `ready`: its engine is loaded. Until then a stop waits
+   *  on the LOAD (60 s clock), not on the 20 s "return your words" clock. */
+  private workerReady = false;
   /** The last non-empty line the worker printed. Quoted verbatim when we have
    *  to report a crash or a kill — it is the only true thing we have. */
   private lastStderr: string | null = null;
@@ -226,10 +229,17 @@ export class VoiceService {
     if (this.session) {
       // WHY refuse rather than steal: two windows sharing one microphone would
       // put half of your sentence in the wrong text box.
-      const sameWindow = this.session.webContentsId === webContentsId;
-      throw new Error(sameWindow
-        ? 'Voice typing is already listening in this window.'
-        : 'Voice typing is already listening in another YouCoded window. Stop it there first.');
+      if (this.session.webContentsId !== webContentsId) {
+        throw new Error('Voice typing is already listening in another YouCoded window. Stop it there first.');
+      }
+      // Fix (2026-09-30): the SAME window asking again replaces its own leftover
+      // session instead of being refused. A window's composer only asks when it
+      // believes nothing is listening, so a session still here is one it lost
+      // track of — the composer was taken off screen mid-dictation, or the page
+      // reloaded (a reload keeps the window, so `onWindowGone` never fires). That
+      // session has no microphone feeding it, so nothing would ever end it, and
+      // refusing here broke voice in that window until the app was restarted.
+      this.cancel();
     }
     const unsupported = unsupportedReason(this.platform, this.arch);
     if (unsupported) throw new Error(unsupported);
@@ -267,7 +277,10 @@ export class VoiceService {
       return;
     }
     this.worker.send({ type: 'stop' });
-    this.armStopDeadline();
+    // While the engine is still loading, the load deadline is the clock that
+    // applies; the worker runs the last pass the moment it is ready, and the
+    // `ready` handler arms this one then.
+    if (this.workerReady) this.armStopDeadline();
   }
 
   /** Close the mic and throw everything away. Emits nothing, by contract. */
@@ -321,6 +334,7 @@ export class VoiceService {
     if (this.worker) return;
     const w = this.deps.spawnWorker();
     this.worker = w;
+    this.workerReady = false;
     this.lastStderr = null;
     // Every callback checks that the worker which spoke is still OUR worker.
     // WHY: a killed engine's `exit` can arrive after the user has tapped the mic
@@ -352,6 +366,9 @@ export class VoiceService {
         // The recogniser exists; the load clock stops. Queued audio is already
         // draining inside the worker, so there is nothing else to do here.
         this.clearTimer('load');
+        this.workerReady = true;
+        // A stop that arrived during the load starts its own clock now.
+        if (this.session?.finishing && !this.session.terminated) this.armStopDeadline();
         return;
       case 'pass-begin':
         this.beginPass(m.segmentSeconds);

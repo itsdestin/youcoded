@@ -37,6 +37,19 @@ interface Options {
 const REASON_REFUSED = MIC_REFUSED_SENTENCE;
 const REASON_NO_DEVICE = 'No microphone was found on this computer.';
 const REASON_GENERAL = 'Voice could not open a microphone.';
+// What we observed when the microphone stops by itself mid-dictation — no guess
+// at why (unplugged, switched off, a sound-system hiccup all look the same).
+const REASON_MIC_LOST = 'Voice stopped because the microphone stopped sending sound.';
+
+// How long opening the microphone may take before we give up on it.
+// WHY (2026-09-30): opening it is three steps the browser and the sound system
+// answer, and none of them is promised to answer at all. One that never did left
+// the composer "starting" forever, and every later tap and space-hold was ignored
+// until the app restarted. Ten seconds is far past a healthy open (well under a
+// second) and short enough that the user is told rather than left guessing.
+// macOS's permission prompt is NOT inside this clock — it is answered during
+// `bridge.start()`, before the microphone is opened.
+const OPEN_DEADLINE_MS = 10_000;
 
 // How long the composer waits for a sign of life from the speech engine before
 // it gives up. WHY it is not simply "how long a reply may take": one pass over a
@@ -251,7 +264,20 @@ export function useVoiceInput({ onPartial, onFinal }: Options) {
 
   // Nothing may outlive the component: an unmounted composer with an open
   // microphone is a recording light nobody can turn off.
-  useEffect(() => () => { clearWatchdog(); closeCapture(); }, [clearWatchdog, closeCapture]);
+  //
+  // Fix (2026-09-30): and the HOST's session must not outlive it either. Closing
+  // only our microphone left the main process holding a session that no sound
+  // would ever reach — its silence stop rides on arriving sound, so nothing ended
+  // it — and every later tap in this window was refused with "already listening
+  // in this window" until the app restarted. (The host now also replaces a
+  // window's leftover session, voice-service.ts start(); this is the direct fix.)
+  useEffect(() => () => {
+    clearWatchdog();
+    closeCapture();
+    // A start still in flight unwinds itself as a cancel when it sees this.
+    if (startingRef.current) abortStartRef.current = true;
+    else if (phaseRef.current !== 'idle') void bridge?.cancel().catch(() => {});
+  }, [bridge, clearWatchdog, closeCapture]);
 
   // Elapsed time while listening — the one number that tells you the mic is
   // still open when you have paused to think.
@@ -298,24 +324,52 @@ export function useVoiceInput({ onPartial, onFinal }: Options) {
       // On a PHONE this is where it ends: the bridge call IS the microphone.
       // Nothing here opens one, and nothing here judges whether the phone has one.
       if (canCapture) {
+        let handle: CaptureHandle | null = null;
+        const opening = openCapture((chunk, rms) => {
+          // The samples and their loudness go to the main process together —
+          // the "two quiet seconds closes the mic" rule is decided there, from
+          // the untouched number.
+          bridge.sendAudio?.(chunk, rms);
+          // The meter is driven from HERE rather than waiting for the host to
+          // send a level back, so the ring answers the user's voice
+          // immediately instead of a round trip later.
+          handleEvent({ type: 'level', value: meterLevel(rms) });
+        }, () => {
+          // The microphone stopped by itself. Only THIS dictation's microphone
+          // counts — a late one from a timed-out open is not ours.
+          if (!handle || captureRef.current !== handle) return;
+          captureRef.current = null;   // already closed by voice-capture
+          setError(REASON_MIC_LOST);
+          // Finish like a Stop, not a Cancel: the words heard before the mic
+          // went quiet are real, and they still land in the box.
+          void stopRef.current();
+        });
+        let deadline: number | undefined;
         try {
-          captureRef.current = await openCapture((chunk, rms) => {
-            // The samples and their loudness go to the main process together —
-            // the "two quiet seconds closes the mic" rule is decided there, from
-            // the untouched number.
-            bridge.sendAudio?.(chunk, rms);
-            // The meter is driven from HERE rather than waiting for the host to
-            // send a level back, so the ring answers the user's voice
-            // immediately instead of a round trip later.
-            handleEvent({ type: 'level', value: meterLevel(rms) });
-          });
+          handle = await Promise.race([
+            opening,
+            new Promise<never>((_, reject) => {
+              deadline = window.setTimeout(() => {
+                const err = new Error(`The microphone did not open within ${OPEN_DEADLINE_MS / 1000} seconds.`);
+                err.name = 'TimeoutError';
+                reject(err);
+              }, OPEN_DEADLINE_MS);
+            }),
+          ]);
+          captureRef.current = handle;
         } catch (err) {
+          // If it was the deadline that won, the open may still finish later —
+          // close that microphone the moment it does, so no recording light is
+          // left on behind the card.
+          opening.then((late) => { if (captureRef.current !== late) late.close(); }, () => {});
           // The microphone would not open. Undo the host's start (a cancel says
           // nothing back, by contract) and show the "check again" card — NOT the
           // "voice stopped" card, which is for a mic that worked and then died.
           try { await bridge.cancel(); } catch { /* the host is already idle */ }
           setMicBlock(captureFailureReadiness(err));
           return;
+        } finally {
+          window.clearTimeout(deadline);
         }
       }
 
@@ -359,6 +413,11 @@ export function useVoiceInput({ onPartial, onFinal }: Options) {
     // is heartbeating, and a heartbeat arms this.
     try { await bridge.stop(); } catch (err) { clearWatchdog(); setPhaseBoth('idle'); setError(describe(err)); }
   }, [armWatchdog, bridge, clearWatchdog, finishCapture, setPhaseBoth]);
+
+  // Read by the microphone's "lost" callback, which is created inside `start`
+  // before `stop` exists in that closure.
+  const stopRef = useRef(stop);
+  stopRef.current = stop;
 
   const cancel = useCallback(async () => {
     if (startingRef.current) { abortStartRef.current = true; return; }
