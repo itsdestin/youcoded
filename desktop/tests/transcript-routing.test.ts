@@ -9,12 +9,10 @@
 // listener calls, and read the resulting timeline. A test that listed action types
 // would pass while the order was wrong, so they look at what the user would see.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
 import { chatReducer } from '../src/renderer/state/chat-reducer';
 import type { ChatAction, ChatState } from '../src/renderer/state/chat-types';
 import { eventToAction } from '../src/renderer/state/transcript-event-actions';
-import { installTranscriptBatcher, routeTranscriptEvent, type TranscriptBatcher } from '../src/renderer/state/transcript-batch';
+import { installTranscriptBatcher, routeTranscriptEvent, routeTranscriptShrink, type TranscriptBatcher } from '../src/renderer/state/transcript-batch';
 import type { TranscriptEvent } from '../src/shared/types';
 
 const SID = 's1';
@@ -94,7 +92,7 @@ describe('transcript actions keep arrival order', () => {
     for (const e of events) route(e);
     runFrame();
     const expected = events.flatMap((e) => eventToAction(e, { live: true, compactionPending: false, fallbackContextTokens: null }));
-    expect(applied.map((a) => a.type)).toEqual(expected.map((a) => a.type));
+    expect(applied.map((a) => [a.type, (a as any).uuid])).toEqual(expected.map((a) => [a.type, (a as any).uuid]));
   });
 
   it('nothing is applied before the frame fires (every action waits in the batch)', () => {
@@ -106,24 +104,35 @@ describe('transcript actions keep arrival order', () => {
   });
 });
 
-describe('App hands its transcript events to routeTranscriptEvent', () => {
-  // App cannot be mounted in a test, so its wiring is pinned by reading its text:
-  // the listener must call the helper, pass the batcher, and not dispatch itself.
-  const app = readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'App.tsx'), 'utf8').replace(/\r/g, '');
-  const start = app.indexOf('.transcriptEvent?.(');
-  const listener = app.slice(start, app.indexOf('transcriptShrink', start));
+describe('a file shrink and a compaction event in the same frame', () => {
+  const pending = () => apply({ type: 'COMPACTION_PENDING', sessionId: SID, cardId: 'card', beforeContextTokens: 90000 });
+  const deps = () => ({ batcher, compactionPending: () => !!state.get(SID)!.compactionPending, fallbackContextTokens: () => 5000 });
+  const marker = () => state.get(SID)!.timeline.find((t) => t.kind === 'system-marker' && t.marker.id.startsWith('compact-done')) as any;
 
-  it('finds the listener', () => { expect(start).toBeGreaterThan(0); expect(listener.length).toBeGreaterThan(50); });
-  it('calls routeTranscriptEvent with the frame batcher', () => {
-    expect(listener).toMatch(/routeTranscriptEvent\(\s*event\s*,/);
-    expect(listener).toMatch(/batcher:\s*transcriptBatcher\b/);
+  it('keeps the compaction event\'s summary and freed-token figure (the shrink must not overtake it)', () => {
+    pending();
+    // The event is queued; the shrink arrives before the frame fires.
+    routeTranscriptEvent(ev('compact-summary', 'k1', { summary: 'The real summary', contextUsedBefore: 90000, contextUsedAfter: 12000 }), deps());
+    routeTranscriptShrink({ sessionId: SID }, deps());
+    runFrame();
+    expect(marker().marker.id).toBe('compact-done-k1');
+    expect(marker().marker.summary).toBe('The real summary');
+    expect(marker().marker.label).toBe('Compacted · freed 78,000 tokens');
   });
-  it('reads the two compaction facts from this window', () => {
-    expect(listener).toMatch(/compactionPending[^\n]*chatStateMapRef/);
-    expect(listener).toMatch(/fallbackContextTokens[^\n]*statusData\.sessionStatsMap/);
+
+  it('still completes a compaction on its own when only the shrink arrives', () => {
+    pending();
+    routeTranscriptShrink({ sessionId: SID }, deps());
+    runFrame();
+    expect(marker()).toBeTruthy();
   });
-  it('does not dispatch to the store itself', () => {
-    expect(listener).not.toMatch(/\bdispatch(Many)?\(/);
-    expect(app).not.toMatch(/DIRECT_DISPATCH_TYPES/);
+
+  it('ignores a shrink when this window is not waiting on /compact', () => {
+    routeTranscriptShrink({ sessionId: SID }, deps());
+    runFrame();
+    expect(applied).toEqual([]);
   });
 });
+
+// Whether App's two listeners route through these helpers (and never dispatch themselves)
+// is pinned by the ast-grep rule scripts/ast-grep/rules/app-transcript-listeners-batched.yml.

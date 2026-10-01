@@ -45,6 +45,28 @@ export interface TranscriptRouteDeps {
 }
 
 /**
+ * The backup compaction signal: Claude Code rewrote or shortened the transcript file.
+ * Only a window waiting on /compact acts on it.
+ *
+ * WHY it goes through the batcher too (R4-3 review): a `compact-summary` event still
+ * waiting in the frame batch carries the marker's summary and freed-token figure. A
+ * shrink that dispatched straight to the store landed FIRST, cleared `compactionPending`,
+ * and the queued summary was then dropped as stale: a marker with no summary. In the
+ * batch the reducer sees both in arrival order and keeps the first, the real one.
+ */
+export function routeTranscriptShrink(payload: { sessionId?: string } | null | undefined, deps: TranscriptRouteDeps): void {
+  const sessionId = payload?.sessionId;
+  if (!sessionId) return;
+  if (!deps.compactionPending(sessionId)) return; // /clear or unrelated shrink — ignore
+  deps.batcher.push({
+    type: 'COMPACTION_COMPLETE',
+    sessionId,
+    markerId: `compact-done-${Date.now()}`,
+    afterContextTokens: deps.fallbackContextTokens(sessionId),
+  });
+}
+
+/**
  * One live transcript event, from the wire to the frame batch, in arrival order.
  *
  * WHY every action goes through the batcher (R4-3, Destin 2026-10-01): four types

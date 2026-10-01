@@ -31,7 +31,7 @@ import { buildSessionCreateArgs } from '../shared/session-create-args';
 import GamePanel from './components/game/GamePanel';
 import TerminalRightSlot from './components/TerminalRightSlot';
 import { ChatProvider, useChatDispatch, useChatStore, useSessionIsThinking } from './state/chat-context';
-import { installTranscriptBatcher, applyChatHydrate, routeTranscriptEvent } from './state/transcript-batch';
+import { installTranscriptBatcher, applyChatHydrate, routeTranscriptEvent, routeTranscriptShrink } from './state/transcript-batch';
 import {
   remotePlaceHost, remotePlaceStorages, readRemotePlace, writeRemotePlace,
   choosePlaceOnHydrate, chooseAfterDestroyed, shouldLoadFirstPage,
@@ -1450,17 +1450,18 @@ function AppInner() {
     // batcher and could land AHEAD of earlier same-frame actions (a /clear drawn above
     // the message sent just before it); R4-3 removed that. Only what is genuinely this
     // window's stays here: the first-page nudge and the two facts only it can read.
+    const transcriptRouteDeps = {
+      batcher: transcriptBatcher,
+      // Did THIS window just run /compact? (A native automatic compaction needs no flag.)
+      compactionPending: (sid: string) => !!chatStateMapRef.current.get(sid)?.compactionPending,
+      // Claude Code's statusline reading: the marker's "after" figure when the event has none.
+      fallbackContextTokens: (sid: string) => statusData.sessionStatsMap[sid]?.contextTokens ?? null,
+    };
     const transcriptHandler = (window.claude.on as any).transcriptEvent?.((event: any) => {
       if (!event?.type || !event?.sessionId) return;
       // Live event = main can read this transcript: re-ask a failed first page (first-page-loader.ts).
       firstPages.noteLiveActivity(event.sessionId);
-      routeTranscriptEvent(event, {
-        batcher: transcriptBatcher,
-        // Did THIS window just run /compact? (A native automatic compaction needs no flag.)
-        compactionPending: (sid) => !!chatStateMapRef.current.get(sid)?.compactionPending,
-        // Claude Code's statusline reading: the marker's "after" figure when the event has none.
-        fallbackContextTokens: (sid) => statusData.sessionStatsMap[sid]?.contextTokens ?? null,
-      });
+      routeTranscriptEvent(event, transcriptRouteDeps);
     });
 
     // Backup completion path: file-shrink detection. Primary detection now
@@ -1468,16 +1469,8 @@ function AppInner() {
     // isCompactSummary field). Shrink is still wired so we recover correctly
     // if Claude Code's future behavior changes to rewrite/truncate the JSONL.
     const shrinkHandler = (window.claude.on as any).transcriptShrink?.((payload: { sessionId: string }) => {
-      if (!payload?.sessionId) return;
-      const sessionState = chatStateMapRef.current.get(payload.sessionId);
-      if (!sessionState?.compactionPending) return; // /clear or unrelated shrink — ignore
-      const contextTokens = statusData.sessionStatsMap[payload.sessionId]?.contextTokens ?? null;
-      dispatch({
-        type: 'COMPACTION_COMPLETE',
-        sessionId: payload.sessionId,
-        markerId: `compact-done-${Date.now()}`,
-        afterContextTokens: contextTokens,
-      });
+      // Batched like every other transcript action (see routeTranscriptShrink).
+      routeTranscriptShrink(payload, transcriptRouteDeps);
     });
 
     const renamedHandler = window.claude.on.sessionRenamed((sid, name) => {
