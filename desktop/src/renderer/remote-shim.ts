@@ -455,6 +455,8 @@ export const MESSAGE_KIND: Readonly<Record<string, 'user-action' | 'read' | 'tra
   'handoff:retry': 'user-action', 'handoff:saved-copy': 'user-action', 'handoff:force': 'user-action',
   'handoff:cancel': 'user-action', 'handoff:create-params': 'user-action',
   'session:input': 'user-action',
+  // A screen verdict, true only while connected — never replayed later.
+  'session:input-blocked': 'transport',
   'session:resize': 'read',
   'session:terminal-ready': 'transport',
   'native:interrupt': 'user-action',
@@ -1965,6 +1967,7 @@ export function installShim(): void {
       forgetReopen: (ids: string[]) => invoke('session:forget-reopen', { ids }),
       canSend: () => ws?.readyState === WebSocket.OPEN && connectionState === 'connected',
       sendInput: (sessionId: string, text: string) => fire('session:input', { sessionId, text }),
+      reportInputBlocked: (sessionId: string, blocked: boolean) => fire('session:input-blocked', { sessionId, blocked }),
       resize: (sessionId: string, cols: number, rows: number) => fire('session:resize', { sessionId, cols, rows }),
       signalReady: (sessionId: string) => fire('session:terminal-ready', { sessionId }),
       // Tracked while in flight so the host's resolution of THIS answer is not shown as

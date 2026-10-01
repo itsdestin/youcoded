@@ -554,6 +554,22 @@ describe('SessionManager', () => {
       expect(reloadSends()).toHaveLength(1);
     });
 
+    it('also defers while the renderer reports a pop-up holding the keyboard', () => {
+      // The hook gate only knows reported asks; an unreported Claude Code
+      // pop-up is read off the screen by the renderer (cc-input-focus.ts).
+      const info = manager.createSession({ name: 's1', cwd: tmpDir, skipPermissions: false });
+      manager.setReloadPluginsGate(() => false);
+      manager.setInputBlocked(info.id, true);
+
+      manager.broadcastReloadPlugins(100);
+      vi.advanceTimersByTime(100);
+      expect(reloadSends()).toHaveLength(0);
+
+      manager.setInputBlocked(info.id, false);
+      vi.advanceTimersByTime(5000);
+      expect(reloadSends()).toHaveLength(1);
+    });
+
     it('gives up after the retry cap instead of retrying forever', () => {
       manager.createSession({ name: 's1', cwd: tmpDir, skipPermissions: false });
       manager.setReloadPluginsGate(() => true);

@@ -208,7 +208,9 @@ export default React.memo(function PromptCard({ prompt, onSelect, keyboardShortc
   return (
     <div className="flex justify-start px-4 py-1">
       <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-inset px-2 py-1">
-        <div className="border border-edge rounded-lg overflow-hidden">
+        {/* data-prompt-id: a refused send's "Show card" scrolls here
+            (utils/focus-chat-card.ts). */}
+        <div className="border border-edge rounded-lg overflow-hidden" data-prompt-id={prompt.promptId}>
           {/* Header — the prompt's title, as the parser resolved it */}
           <div className="flex items-center gap-1.5 px-3 py-2">
             <span className="text-fg-faint text-xs select-none">|</span>

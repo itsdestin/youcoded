@@ -5,7 +5,11 @@ import {
   canPtySend,
   pendingInteractionKind,
   pendingInteractionRefusalCopy,
+  pendingCardRef,
+  sendBlock,
 } from '../src/renderer/state/pty-input-gate';
+import { Terminal } from '@xterm/headless';
+import { registerTerminal, unregisterTerminal } from '../src/renderer/hooks/terminal-registry';
 import { createSessionChatState, SessionChatState, HISTORY_EXPAND_PROMPT_ID } from '../src/renderer/state/chat-types';
 import type { ToolCallState } from '../src/renderer/state/chat-types';
 
@@ -184,9 +188,72 @@ describe('pendingInteractionKind and its refusal copy', () => {
     }
   });
 
-  it('the copy points at the card for an approval, at the prompt otherwise', () => {
-    expect(pendingInteractionRefusalCopy('approval')).toMatch(/answer the card in the chat first/);
-    expect(pendingInteractionRefusalCopy('prompt')).toMatch(/answer the prompt first/);
-    expect(pendingInteractionRefusalCopy(null)).toMatch(/answer the prompt first/);
+  it('every reason reads the same one sentence (the button says where to look)', () => {
+    for (const kind of ['approval', 'prompt', 'screen', null] as const) {
+      expect(pendingInteractionRefusalCopy(kind)).toBe('Claude Code is waiting on something — answer it first.');
+    }
+  });
+});
+
+// The refusal toast's way forward: "Show card" needs the waiting card's id;
+// with no card, the live screen is what blocks and "Open terminal" is offered.
+describe('pendingCardRef — which card "Show card" scrolls to', () => {
+  it('names the current turn\'s waiting permission card by its tool id', () => {
+    const session = withTool(createSessionChatState(), makeTool({ toolUseId: 'tu-9', status: 'awaiting-approval', requestId: 'r' }));
+    expect(pendingCardRef(session)).toEqual({ toolUseId: 'tu-9' });
+  });
+
+  it('names an unanswered prompt card by its prompt id, skipping the history marker', () => {
+    const session = createSessionChatState();
+    session.timeline.push({ kind: 'prompt', prompt: { promptId: HISTORY_EXPAND_PROMPT_ID, title: '', buttons: [], completed: false } } as never);
+    session.timeline.push({ kind: 'prompt', prompt: { promptId: 'menu_export', title: 'Export conversation', buttons: [], completed: false } } as never);
+    expect(pendingCardRef(session)).toEqual({ promptId: 'menu_export' });
+  });
+
+  it('is null when nothing waits', () => {
+    expect(pendingCardRef(createSessionChatState())).toBeNull();
+    expect(pendingCardRef(undefined)).toBeNull();
+  });
+});
+
+describe('sendBlock — the screen blocks what the chat state cannot see', () => {
+  const RULE = '─'.repeat(60);
+  async function withScreen(id: string, rows: string[], run: () => void) {
+    const term = new Terminal({ cols: 80, rows: 20, allowProposedApi: true });
+    registerTerminal(id, term as never);
+    await new Promise<void>((r) => term.write(rows.join('\r\n'), r));
+    try { run(); } finally { unregisterTerminal(id); term.dispose(); }
+  }
+
+  it('a Claude Code pop-up in place of the message box blocks, as "screen"', async () => {
+    await withScreen('s-popup', ['history', RULE, '  Export conversation', '  ❯ 1. Copy to clipboard', '    2. Save to file', '  Esc to cancel'], () => {
+      const block = sendBlock(createSessionChatState(), 's-popup');
+      expect(block?.kind).toBe('screen');
+      expect(block!.screen?.kind).toBe('popup');
+    });
+  });
+
+  it('the live message box does not block', async () => {
+    await withScreen('s-box', ['history', RULE, '❯ ', RULE, '  ⏵⏵ auto mode on (shift+tab to cycle)'], () => {
+      expect(sendBlock(createSessionChatState(), 's-box')).toBeNull();
+    });
+  });
+
+  it('a waiting card wins over the screen (it names the card to answer)', async () => {
+    await withScreen('s-both', ['history', RULE, '  Bash command', '  ❯ 1. Yes', '    2. No', '  Esc to cancel'], () => {
+      const session = withTool(createSessionChatState(), makeTool({ status: 'awaiting-approval', requestId: 'r' }));
+      expect(sendBlock(session, 's-both')?.kind).toBe('approval');
+    });
+  });
+
+  it('the agents list blocks too, though it draws a box (a send there would start a new session)', async () => {
+    await withScreen('s-agents', ['Working', RULE, '❯ describe a task for a new session', RULE, '  ⏵⏵ auto mode · enter to return · space to reply · ctrl+x to delete'], () => {
+      const block = sendBlock(createSessionChatState(), 's-agents');
+      expect(block?.screen).toEqual({ kind: 'other-view', view: 'agents' });
+    });
+  });
+
+  it('no terminal at all is no verdict — the send is not refused', () => {
+    expect(sendBlock(createSessionChatState(), 'no-such-session')).toBeNull();
   });
 });

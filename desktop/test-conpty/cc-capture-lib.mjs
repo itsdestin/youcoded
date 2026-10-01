@@ -124,3 +124,18 @@ export async function removeTempTree(dir, { attempts = 10, delayMs = 500 } = {})
   }
   return false;
 }
+
+// Shared by check-startup-drift.mjs and check-popup-drift.mjs.
+/** npm's latest Claude Code, installed into a temp dir (postinstall run explicitly:
+ *  npm 11+ blocks install scripts by default). Returns the binary path. */
+export function installLatest() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cc-latest-'));
+  execFileSync('npm', ['install', '--no-audit', '--no-fund', '--prefix', dir, '@anthropic-ai/claude-code@latest'], { stdio: 'inherit' });
+  const pkg = path.join(dir, 'node_modules', '@anthropic-ai', 'claude-code');
+  const bin = path.join(dir, 'node_modules', '.bin', process.platform === 'win32' ? 'claude.cmd' : 'claude');
+  try { execFileSync(bin, ['--version'], { stdio: 'ignore' }); } catch {
+    execFileSync(process.execPath, [path.join(pkg, 'install.cjs')], { stdio: 'inherit' });
+  }
+  return { bin, dir };
+}
+

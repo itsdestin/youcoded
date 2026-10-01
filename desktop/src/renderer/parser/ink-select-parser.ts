@@ -153,7 +153,11 @@ const CHECKBOX_ROW = /^\[[ ✔✓x×]\]\s/;
  *  boundary between the prompt's own body and whatever the session printed
  *  before it. `│` is deliberately absent: it's a SIDE border that appears on
  *  body lines, not a boundary. */
-const PROMPT_BOUNDARY = /^[─═━┌┐└┘╭╮╯╰├┤┬┴┼╔╗╚╝]{8,}$/;
+// The fullscreen renderer (settings `tui: "fullscreen"`) tops a pop-up with a
+// ▔ edge instead, which can carry a label inside it ("▔▔▔ ◐ medium · /effort ▔").
+// Without it the title reader climbed into the conversation above and named a
+// fullscreen /export menu "Enable auto mode?" from an old notice (2026-09-30).
+const PROMPT_BOUNDARY = /^(?:[─═━┌┐└┘╭╮╯╰├┤┬┴┼╔╗╚╝]{8,}|▔{8,}.*)$/;
 
 function stripAnsi(line: string): string {
   return line.replace(ANSI_ESCAPE, '');
@@ -251,6 +255,15 @@ export function parseInkSelect(screenText: string): ParsedMenu | null {
   // We use the indentation of the text AFTER the ❯ to find siblings.
   const afterSelector = selectorLine.replace(/^\s*[❯>]/, ' ');
   const referenceIndent = indentOf(afterSelector);
+  // The TRUE column of the option text: the leading whitespace before ❯ kept.
+  // `referenceIndent` drops it, which was within isOptionLine's ±2 tolerance
+  // for classic-renderer menus (indented 2) but not for the fullscreen
+  // renderer's (indented 3: "   ❯ 1. Copy" over "     2. Save"), so no
+  // fullscreen menu ever parsed and none got a card (2026-09-30,
+  // tests/fixtures/popup-corpus/fs-*). Siblings may match either column, so
+  // every menu that parsed before still parses the same way.
+  const trueIndent = indentOf(selectorLine.replace(/[❯>]/, ' '));
+  const isSibling = (line: string) => isOptionLine(line, referenceIndent) || isOptionLine(line, trueIndent);
 
   const options: string[] = [];
   // Index-aligned with `options` — the digit CC printed for each one.
@@ -276,7 +289,7 @@ export function parseInkSelect(screenText: string): ParsedMenu | null {
     const trimmed = lines[i].trim();
     if (!trimmed) break;
     if (isContinuation(lines[i])) { carry.unshift(trimmed); continue; }
-    if (!isOptionLine(lines[i], referenceIndent)) break;
+    if (!isSibling(lines[i])) break;
     // Don't include lines that look like titles (end with ? or :)
     if (/[?:]$/.test(trimmed) && !/^\d+[.:]\s+/.test(trimmed)) break;
     options.unshift([stripNumbering(trimmed), ...carry].join(' '));
@@ -297,7 +310,7 @@ export function parseInkSelect(screenText: string): ParsedMenu | null {
     const trimmed = lines[i].trim();
     if (!trimmed) break;
     if (isContinuation(lines[i])) { options[options.length - 1] += ' ' + trimmed; continue; }
-    if (!isOptionLine(lines[i], referenceIndent)) break;
+    if (!isSibling(lines[i])) break;
     options.push(stripNumbering(trimmed));
     optionNumbers.push(numberOf(trimmed));
   }
