@@ -495,7 +495,7 @@ const NAMESPACES = [
 
 import { createNamingPreview } from './naming-preview';
 import { seedPages } from './fixtures/pages';
-import { fakeHomeAssistantFetch } from './fixtures/fake-home-assistant';
+import { fakeHomeAssistantFetch, fakeHomeAssistantSocket } from './fixtures/fake-home-assistant';
 import type { PagesBridge, PageDocument, PageSummary, SavedPageKey } from '../../../shared/pages-types';
 
 /** `?fail=<ns.method>[,…]` — those channels REJECT from the first call.
@@ -3743,7 +3743,8 @@ function createPagesMock(empty: boolean): PagesBridge {
       const device = page?.connections?.find((c) => c.kind === 'device' && c.approved);
       if (device && device.kind === 'device' && req.url.startsWith(`http://${device.address}/`)) {
         await delay(120);
-        const answer = fakeHomeAssistantFetch(req);
+        // A socket exchange (renames, room moves) gets the pretend socket.
+        const answer = req.socket ? fakeHomeAssistantSocket(req) : fakeHomeAssistantFetch(req);
         if (answer) return answer;
       }
       return { ok: false as const, reason: 'network' as const, message: 'The workbench has no network; this page shows saved numbers.' };

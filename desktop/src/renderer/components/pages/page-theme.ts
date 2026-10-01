@@ -113,7 +113,7 @@ function bootstrap(dataJson: string, devicesJson = '{}'): string {
         try {
           parent.postMessage({
             type: FETCH, id: id, url: String(url),
-            method: o.method, headers: o.headers, body: o.body, as: o.as
+            method: o.method, headers: o.headers, body: o.body, as: o.as, socket: o.socket
           }, '*');
         } catch (e) {
           delete waiting[id];

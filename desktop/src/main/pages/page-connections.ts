@@ -98,6 +98,17 @@ function cleanKeyPage(raw: unknown): string | undefined {
   return /^(\/[A-Za-z0-9_.-]+)+\/?$/.test(p) && p.length <= 120 && !p.includes('..') ? p : undefined;
 }
 
+/** A device's socket greeting. Bounded, and the key token at most once: the
+ *  app substitutes the key into this one message only, so it is the single
+ *  place a key ever enters a socket. Dropped (not trimmed) when it breaks a
+ *  rule, so a half-greeting is never sent. */
+const MAX_SOCKET_HELLO = 512;
+export const SOCKET_KEY_TOKEN = '{{key}}';
+function cleanSocketHello(raw: unknown): string | undefined {
+  if (typeof raw !== 'string' || !raw.trim() || raw.length > MAX_SOCKET_HELLO) return undefined;
+  return raw.split(SOCKET_KEY_TOKEN).length <= 2 ? raw : undefined;
+}
+
 function cleanSteps(raw: unknown): { steps: string[] } | undefined {
   const list = (raw as { steps?: unknown } | null)?.steps;
   if (!Array.isArray(list)) return undefined;
@@ -180,6 +191,8 @@ export function parseConnections(raw: unknown): PageConnection[] {
           const param = cleanParam(o.keyParam);
           if (param) { c.keyIn = o.keyIn === 'query' ? 'query' : 'header'; c.keyParam = param; }
           if (o.keyScheme === 'bearer' || o.keyScheme === 'token' || o.keyScheme === 'none') c.keyScheme = o.keyScheme;
+          const hello = cleanSocketHello(o.socketHello);
+          if (hello) c.socketHello = hello;
         }
         break;
       }
@@ -227,7 +240,11 @@ export function fingerprint(c: PageConnection): string {
     case 'device': {
       const p = keyPlacement(c);
       const moved = p.in === DEFAULT_KEY_PLACEMENT.in && p.param === DEFAULT_KEY_PLACEMENT.param ? '' : `|${p.in}:${p.param}`;
-      return `device|${c.service}|${c.access}|${c.needsKey ? 'key' : 'nokey'}${moved}`;
+      // The greeting rides only when present, so every approval made before it
+      // existed keeps its fingerprint. Adding or changing it asks again: it
+      // decides where the key goes.
+      const hello = c.socketHello ? `|hello:${c.socketHello}` : '';
+      return `device|${c.service}|${c.access}|${c.needsKey ? 'key' : 'nokey'}${moved}${hello}`;
     }
   }
 }
