@@ -40,7 +40,8 @@ import { registerWithRuntime } from './helpers/register-ipc';
 import { RemoteServer } from '../src/main/remote-server';
 import { __resetProjectWatchersForTest } from '../src/main/artifacts/project-watcher';
 import { isPhoneDeniedPath, isCredentialPath } from '../src/main/harness/tools/credential-paths';
-import { MAX_UPLOAD_BYTES, UPLOAD_TOO_LARGE_SENTENCE, sweepOldUploads, uploadDir } from '../src/main/upload-store';
+import { normalizeTypedPath, isPhoneDeniedFile } from '../src/main/phone-read-deny';
+import { MAX_UPLOAD_BYTES, UPLOAD_TOO_LARGE_SENTENCE, UPLOAD_FOLDER_FULL_SENTENCE, MAX_UPLOAD_FOLDER_BYTES, sweepOldUploads, uploadDir } from '../src/main/upload-store';
 
 const canSymlink = (() => {
   const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-deny-probe-'));
@@ -90,8 +91,11 @@ beforeAll(() => {
     fs.symlinkSync(path.join(home, '.git-credentials'), path.join(project, 'innocent-link.txt'));
     fs.symlinkSync(path.join(home, '.git-credentials'), path.join(project, 'CLAUDE.md'));
   }
+  fs.mkdirSync(path.join(project, '.ssh'), { recursive: true });
   fs.writeFileSync(path.join(home, '.claude', 'youcoded-folders.json'),
-    JSON.stringify([{ path: project, nickname: 'p', addedAt: Date.now() }, { path: home, nickname: 'home', addedAt: Date.now() }]));
+    JSON.stringify([{ path: project, nickname: 'p', addedAt: Date.now() }, { path: home, nickname: 'home', addedAt: Date.now() },
+      // Saved on purpose: a person can save a .ssh or .git folder as a folder, so the search-root refusal is reachable.
+      { path: path.join(project, '.ssh'), nickname: 'ssh', addedAt: Date.now() }, { path: path.join(project, '.git'), nickname: 'git', addedAt: Date.now() }]));
 
   const sessionManager: any = Object.assign(new EventEmitter(), { createSession: vi.fn(), destroySession: vi.fn(), listSessions: vi.fn(() => []), sendInput: vi.fn(), resizeSession: vi.fn() });
   const hookRelay: any = Object.assign(new EventEmitter(), { respond: vi.fn(() => true) });
@@ -131,8 +135,14 @@ describe('the deny list itself', () => {
     '/home/u/p/id_rsa', '/home/u/p/id_ed25519', '/home/u/p/id_ecdsa', '/home/u/p/id_dsa', '/home/u/p/a.pem', '/home/u/p/A.KEY', '/home/u/p/a.p12',
     '/home/u/p/a.pfx', '/home/u/p/.ssh/config', '/home/u/.claude/youcoded-remote.json', '/home/u/.claude/youcoded-remote.dev.json',
     '/home/u/.claude/.remote-devices.json', '/home/u/.config/youcoded/native-secrets.json', '/home/u/.claude.json', '/home/u/.claude/.credentials.json',
+    // review fixes
+    '/home/u/.config/youcoded/github-token.json', '/home/u/.config/youcoded/marketplace-auth.json', '/home/u/.config/youcoded/search-providers.json',
+    '/home/u/.config/youcoded/page-connections.json', '/home/u/.config/rclone/rclone.conf', '/home/u/.gitconfig', '/home/u/.bash_history',
+    '/home/u/.zsh_history', '/home/u/.local/share/fish/fish_history', '/home/u/.python_history', '/home/u/.node_repl_history', '/home/u/vault.kdbx',
+    '/home/u/.vault-token', '/home/u/.aws/credentials', '/home/u/.config/gh/hosts.yml', '/home/u/p/.docker/config.json', '/home/u/.kube/config',
+    '/home/u/p/id_rsa_work', '/home/u/p/id_ed25519.bak', '/home/u/p/ID_RSA',
   ])('refuses %s', (p) => { expect(isPhoneDeniedPath(p, '/home/u')).toBe(true); });
-  it.each(['/home/u/p/notes.md', '/home/u/p/.env', '/home/u/p/src/keys.ts', '/home/u/p/id_rsa.pub', '/home/u/p/.github/workflows/a.yml', '/home/u/p/gitconfig.md'])(
+  it.each(['/home/u/p/notes.md', '/home/u/p/.env', '/home/u/p/src/keys.ts', '/home/u/p/id_rsa.pub', '/home/u/p/id_ed25519_work.pub', '/home/u/p/.github/workflows/a.yml', '/home/u/p/gitconfig.md'])(
     'serves %s (.env stays readable by design: artifacts:get serves it as the editing escape hatch)', (p) => { expect(isPhoneDeniedPath(p, '/home/u')).toBe(false); });
 });
 
@@ -243,17 +253,25 @@ describe('fs:read-head', () => {
     expect(await phone('fs:read-head', { filePath: f })).toMatchObject({ ok: false, error: 'not-allowed' });
     expect((await computer('fs:read-head', { filePath: f })).ok).toBe(true);
   });
-  it('a phone reads a file in a known folder, and is refused the denied ones inside it; the computer reads them all', async () => {
-    expect((await phone('fs:read-head', { filePath: path.join(project, 'notes.md') })).ok).toBe(true);
-    for (const rel of ['.git/config', '.git-credentials', 'id_rsa', 'deploy.pem']) {
-      expect(await phone('fs:read-head', { filePath: path.join(project, rel) })).toMatchObject({ ok: false, error: KEPT });
+  it('a phone is refused EVERY file in a known folder (only its own uploads preview); the computer reads them all', async () => {
+    for (const rel of ['notes.md', '.git/config', '.git-credentials', 'id_rsa', 'deploy.pem']) {
+      const r = await phone('fs:read-head', { filePath: path.join(project, rel) });
+      expect(r.ok, rel).toBe(false);
     }
+    expect(await phone('fs:read-head', { filePath: path.join(project, '.git', 'config') })).toMatchObject({ error: KEPT });
     expect(await phone('fs:read-head', { filePath: path.join(home, '.claude', 'youcoded-remote.json') })).toMatchObject({ ok: false, error: KEPT });
     expect((await computer('fs:read-head', { filePath: path.join(project, '.git', 'config') })).ok).toBe(true);
-    expect((await computer('fs:read-head', { filePath: path.join(home, '.claude', 'youcoded-remote.json') })).ok).toBe(true);
+    expect((await computer('fs:read-head', { filePath: path.join(project, 'notes.md') })).ok).toBe(true);
   });
   it.skipIf(!canSymlink)('a link in a project to a secret is refused', async () => {
     expect(await phone('fs:read-head', { filePath: path.join(project, 'innocent-link.txt') })).toMatchObject({ ok: false, error: KEPT });
+  });
+  it.skipIf(!canSymlink)('a link placed in the upload folder that points at a project file is refused', async () => {
+    fs.mkdirSync(uploadDir(), { recursive: true });
+    const link = path.join(uploadDir(), `deny-test-link-${process.pid}.txt`);
+    fs.symlinkSync(path.join(project, 'notes.md'), link);
+    try { expect(await phone('fs:read-head', { filePath: link })).toMatchObject({ ok: false, error: 'not-allowed' }); }
+    finally { fs.rmSync(link, { force: true }); }
   });
   it('a path that does not exist outside the folders is not-allowed, not "orphan" (no existence oracle)', async () => {
     expect(await phone('fs:read-head', { filePath: path.join(stranger, 'nope.txt') })).toMatchObject({ ok: false, error: 'not-allowed' });
@@ -314,5 +332,55 @@ describe('the upload sweep', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(elsewhere, { recursive: true, force: true });
     }
+  });
+});
+
+describe('search roots, upload ceiling and Windows names', () => {
+  it('search-content: a root that is itself a .ssh or .git folder is refused to a phone', async () => {
+    fs.mkdirSync(path.join(project, '.ssh'), { recursive: true });
+    fs.writeFileSync(path.join(project, '.ssh', 'config'), 'Host SSH-HOST-MARKER\n');
+    for (const root of [path.join(project, '.ssh'), path.join(project, '.git')]) {
+      const r = await phone('artifacts:search-content', { projectRoot: root, query: 'SSH-HOST-MARKER' });
+      expect(r.ok).toBe(false);
+      expect(JSON.stringify(r)).not.toContain('SSH-HOST-MARKER');
+    }
+  });
+  it('search-content: ID_RSA and X.KEY (upper case) are skipped for a phone but found by the computer', async () => {
+    fs.writeFileSync(path.join(project, 'ID_RSA'), 'UPPER-KEY-MARKER\n');
+    fs.writeFileSync(path.join(project, 'X.KEY'), 'UPPER-KEY-MARKER\n');
+    expect((await phone('artifacts:search-content', { projectRoot: project, query: 'UPPER-KEY-MARKER' })).hits ?? []).toEqual([]);
+    expect(((await computer('artifacts:search-content', { projectRoot: project, query: 'UPPER-KEY-MARKER' })).hits ?? []).length).toBeGreaterThan(0);
+  });
+  it('project:list-context: a phone gets no description or size for a context file that is a link to a secret', async () => {
+    if (!canSymlink) return;
+    const viaPhone = await phone('project:list-context', { projectPath: project });
+    const row = (viaPhone.groups as any[]).flatMap((g) => g.files).find((f) => f.absolutePath?.endsWith('CLAUDE.md'));
+    expect(row).toBeDefined();
+    expect(row.description).toBeUndefined();
+    expect(JSON.stringify(viaPhone)).not.toMatch(/ghp_?HOME/);
+    const viaComputer = await computer('project:list-context', { projectPath: project });
+    expect(JSON.stringify(viaComputer)).toContain('ghpHOME'); // the description drops underscores
+  });
+  it('Windows typed names: trailing dots, spaces and :stream suffixes are stripped before matching', async () => {
+    expect(normalizeTypedPath('c:/u/p/id_rsa.')).toBe('c:/u/p/id_rsa');
+    expect(normalizeTypedPath('c:/u/p/id_rsa ')).toBe('c:/u/p/id_rsa');
+    expect(normalizeTypedPath('c:/u/p/id_rsa::$DATA')).toBe('c:/u/p/id_rsa');
+    expect(normalizeTypedPath('c:/u/p/.git./config')).toBe('c:/u/p/.git/config');
+    expect(normalizeTypedPath('/home/u/p/notes.md')).toBe('/home/u/p/notes.md');
+    // End to end on a name that does not exist (the unresolved case): refused by its normalised name.
+    expect(await isPhoneDeniedFile(path.join(project, 'nope', 'id_rsa.'))).toBe(true);
+    expect(await isPhoneDeniedFile(path.join(project, 'nope', 'id_rsa::$DATA'))).toBe(true);
+    expect(await isPhoneDeniedFile(path.join(project, 'nope', 'notes.md'))).toBe(false);
+  });
+  it('file:upload: when the upload folder is over its total ceiling a new upload is refused with a sentence', async () => {
+    fs.mkdirSync(uploadDir(), { recursive: true });
+    const filler = path.join(uploadDir(), `deny-test-filler-${process.pid}`);
+    const fd = fs.openSync(filler, 'w'); fs.ftruncateSync(fd, MAX_UPLOAD_FOLDER_BYTES); fs.closeSync(fd);
+    try {
+      expect(await phone('file:upload', { name: 'x.txt', data: Buffer.from('hello').toString('base64') })).toEqual({ error: UPLOAD_FOLDER_FULL_SENTENCE });
+    } finally { fs.rmSync(filler, { force: true }); }
+    const ok = await phone('file:upload', { name: 'x.txt', data: Buffer.from('hello').toString('base64') });
+    expect(typeof ok.path).toBe('string');
+    fs.rmSync(ok.path, { force: true });
   });
 });

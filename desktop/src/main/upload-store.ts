@@ -24,6 +24,23 @@ export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 /** The phone-facing sentence when a file is over the cap. */
 export const UPLOAD_TOO_LARGE_SENTENCE = 'That file is over 25 MB, the most a phone can send to the computer. Attach a smaller one.';
 
+/**
+ * The most the whole upload folder may hold. WHY (2026-10-01 one-core R3-SEC review): the per-file cap alone let a phone fill
+ * the computer's disk 25 MB at a time, with files kept an hour. 200 MB is eight maximum files or dozens of photos.
+ */
+export const MAX_UPLOAD_FOLDER_BYTES = 200 * 1024 * 1024;
+export const UPLOAD_FOLDER_FULL_SENTENCE = 'The computer’s space for attachments is full right now. Try again in a little while, or attach fewer files.';
+
+/** Total size of the regular files directly inside the upload folder. */
+export async function uploadFolderBytes(dir = uploadDir()): Promise<number> {
+  let total = 0;
+  for (const name of await fs.promises.readdir(dir).catch(() => [] as string[])) {
+    const st = await fs.promises.lstat(path.join(dir, name)).catch(() => null);
+    if (st?.isFile()) total += st.size;
+  }
+  return total;
+}
+
 /** An upload is deleted once it is this old. Unchanged from the hourly timer this replaces. */
 const UPLOAD_MAX_AGE_MS = 3600_000;
 

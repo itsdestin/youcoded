@@ -89,6 +89,8 @@ export function searchProjectContent(projectRoot: string, query: string, opts?: 
 
   const rgArgs = [
     '--no-config', '--hidden', '--json',
+    // WHY (2026-10-01 one-core R3-SEC review): a phone's deny globs must also match ID_RSA / X.KEY on a case-insensitive disk.
+    ...(opts?.refusePrivate ? ['--glob-case-insensitive'] : []),
     '-F', '-i',                          // literal, case-insensitive
     '--max-count', String(MAX_PER_FILE),
     // rg respects .gitignore in git projects; these keep non-git projects from

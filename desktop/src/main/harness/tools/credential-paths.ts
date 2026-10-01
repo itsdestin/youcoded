@@ -107,13 +107,24 @@ const PHONE_DENY_SEGMENTS = new Set(['.git', '.ssh', '.gnupg', '.aws', '.azure',
 /** File names a phone never reads, at any depth. */
 const PHONE_DENY_BASENAMES = new Set([
   '.git-credentials', '.git-credentials-store', '.netrc', '_netrc', '.npmrc', '.pypirc', '.pgpass', '.credentials.json',
-  'id_rsa', 'id_ed25519', 'id_ecdsa', 'id_dsa',
-  // The app's own secret and config files (remote-paths.ts, providers/secrets-store.ts, chatgpt-auth.ts).
+  '.gitconfig', 'rclone.conf', '.vault-token',
+  // Shell and REPL histories (they hold typed passwords and tokens).
+  '.bash_history', '.zsh_history', '.sh_history', 'fish_history', '.python_history', '.node_repl_history',
+  '.psql_history', '.mysql_history', '.sqlite_history', '.irb_history',
+  // The app's own secret and config files (remote-paths.ts, providers/secrets-store.ts, chatgpt-auth.ts,
+  // github-client.ts, marketplace-auth-store.ts, harness/search/search-key-store.ts, pages/connections-store.ts).
   'native-secrets.json', 'chatgpt-account.json', '.claude.json', '.remote-tokens.json',
+  'github-token.json', 'marketplace-auth.json', 'search-providers.json', 'page-connections.json',
 ]);
 
+/** Private-key names by prefix (id_rsa, id_rsa_work, id_rsa.bak…), but never the matching PUBLIC key (`.pub`). */
+const PHONE_DENY_KEY_PREFIXES = ['id_rsa', 'id_ed25519', 'id_ecdsa', 'id_dsa'];
+
+/** Paths under these (any depth) are refused: tool configs that carry a login. */
+const PHONE_DENY_SUBPATHS = ['/.config/gh/', '/.docker/config.json', '/.kube/config'];
+
 /** Extensions of key and certificate bundles. */
-const PHONE_DENY_EXTENSIONS = ['.pem', '.key', '.p12', '.pfx'];
+const PHONE_DENY_EXTENSIONS = ['.pem', '.key', '.p12', '.pfx', '.kdbx'];
 
 /** The remote-access files: `youcoded-remote.json` (password hash) and `.remote-devices.json` (paired devices),
  *  each with an optional `.<profile>` suffix a dev instance uses (remote-paths.ts). */
@@ -128,9 +139,10 @@ export function isPhoneDeniedPath(canonical: string, home: string): boolean {
   const base = parts[parts.length - 1] ?? '';
   if (parts.some((seg) => PHONE_DENY_SEGMENTS.has(seg))) return true;
   if (PHONE_DENY_BASENAMES.has(base)) return true;
+  if (!base.endsWith('.pub') && PHONE_DENY_KEY_PREFIXES.some((k) => base.startsWith(k))) return true;
   if (PHONE_DENY_EXTENSIONS.some((ext) => base.endsWith(ext))) return true;
   if (PHONE_DENY_PATTERNS.some((re) => re.test(base))) return true;
-  return c.includes('/.config/gh/');
+  return PHONE_DENY_SUBPATHS.some((sub) => c.includes(sub));
 }
 
 /** ripgrep exclusions for the same list, so a phone's content search never prints a line of a refused file. */
@@ -138,6 +150,9 @@ export const PHONE_DENY_SEARCH_GLOBS: readonly string[] = [
   ...[...PHONE_DENY_SEGMENTS].map((seg) => `!${seg}`),
   ...[...PHONE_DENY_BASENAMES].map((b) => `!${b}`),
   ...PHONE_DENY_EXTENSIONS.map((ext) => `!*${ext}`),
+  // Key-name prefixes: the public .pub keys are skipped by search too (nothing worth finding in them).
+  ...PHONE_DENY_KEY_PREFIXES.map((k) => `!${k}*`),
+  ...PHONE_DENY_SUBPATHS.map((sub) => `!**${sub}${sub.endsWith('/') ? '**' : ''}`),
   '!youcoded-remote*.json', '!.remote-devices*.json',
 ];
 

@@ -16,7 +16,7 @@
 // counting as a full root handed out every file in it by path (T7 re-review, finding 1).
 import fs from 'fs';
 import path from 'path';
-import { isKnownRoot, isKnownProjectRef, isInsideKnownRoot } from '../artifacts/read-service';
+import { isKnownRoot, isKnownProjectRef } from '../artifacts/read-service';
 import { isPhoneDeniedFile, KEPT_ON_COMPUTER } from '../phone-read-deny';
 import { uploadDir } from '../upload-store';
 import { canonicalize } from '../../shared/artifacts/canonicalize';
@@ -47,17 +47,17 @@ export async function refuseUnlessRecorded(root: string, artifactId: string): Pr
 }
 
 /**
- * WHY (2026-10-01 one-core R3-SEC): the gate on a PHONE's fs:read-head, which used to answer for any file on the
- * computer. The file must be (1) not on the phone deny list, and (2) inside a folder the computer shows (saved
- * folders, indexed projects) or in the temp folder phone uploads land in (the attach preview reads it). Judged on the
- * resolved path. Null means allowed. A file that does not exist is judged by its typed name, so the answer never tells
- * a phone whether a path outside those folders exists.
+ * WHY (2026-10-01 one-core R3-SEC, review fix): the gate on a PHONE's fs:read-head, which used to answer for any file on
+ * the computer. The only thing a phone previews through it is an attachment it just uploaded (AttachmentChip, the one
+ * caller anywhere in the renderer), so it may read ONLY the temp folder uploads land in, never a project or home folder.
+ * Judged on the resolved path, so a link in the upload folder to a file elsewhere is refused; the phone deny list is
+ * checked as well. Null means allowed. A file that does not exist is judged by its typed name, so the answer never
+ * tells a phone whether a path elsewhere exists.
  */
 export async function refuseHeadOutsideKnownFolders(filePath: unknown): Promise<{ ok: false; error: string } | null> {
   if (typeof filePath !== 'string' || filePath.length === 0 || !path.isAbsolute(filePath)) return { ok: false, error: 'no path' };
   if (await isPhoneDeniedFile(filePath)) return { ok: false, error: KEPT_ON_COMPUTER };
   const real = await fs.promises.realpath(filePath).catch(() => path.resolve(filePath));
-  if (await isInsideKnownRoot(real)) return null;
   const upDir = canonicalize(await fs.promises.realpath(uploadDir()).catch(() => uploadDir()), null);
   return canonicalize(real, null).startsWith(upDir + '/') ? null : { ok: false, error: 'not-allowed' };
 }

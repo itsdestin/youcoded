@@ -15,7 +15,7 @@ import os from 'os';
 import path from 'path';
 import { IPC } from '../../shared/backend-contract';
 import { readFileHead } from '../fs-read-head';
-import { uploadDir, MAX_UPLOAD_BYTES, UPLOAD_TOO_LARGE_SENTENCE, sanitizeUploadName } from '../upload-store';
+import { uploadDir, MAX_UPLOAD_BYTES, UPLOAD_TOO_LARGE_SENTENCE, sanitizeUploadName, sweepOldUploads, uploadFolderBytes, MAX_UPLOAD_FOLDER_BYTES, UPLOAD_FOLDER_FULL_SENTENCE } from '../upload-store';
 import { defineChannel, type MainChannelDef } from './channel-def';
 import { refuseHeadOutsideKnownFolders } from './file-gates';
 
@@ -39,6 +39,12 @@ export const filesChannels: MainChannelDef[] = [
       const dir = uploadDir();
       try {
         await fs.promises.mkdir(dir, { recursive: true });
+        // WHY (2026-10-01 one-core R3-SEC review): a ceiling on the whole folder, after an inline sweep of old files.
+        const incoming = Math.floor((payload.data.length * 3) / 4);
+        if ((await uploadFolderBytes(dir)) + incoming > MAX_UPLOAD_FOLDER_BYTES) {
+          await sweepOldUploads(dir);
+          if ((await uploadFolderBytes(dir)) + incoming > MAX_UPLOAD_FOLDER_BYTES) return { error: UPLOAD_FOLDER_FULL_SENTENCE };
+        }
         // Sanitize filename — strip path separators and control characters, limit length
         const filePath = path.join(dir, `${Date.now()}-${sanitizeUploadName(payload.name)}`);
         const buffer = Buffer.from(payload.data, 'base64');

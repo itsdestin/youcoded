@@ -40,7 +40,7 @@ export const projectChannels: MainChannelDef[] = [
     name: IPC.PROJECT_LIST_CONTEXT, kind: 'handle',
     remoteOnError: readFailure,
     remoteGuard: async (p, ctx) => (await refuseUnknownRoot(p?.projectPath, ctx)) ?? undefined,
-    handler: ({ projectPath }) => listContextFiles(projectPath),
+    handler: ({ projectPath }, ctx) => listContextFiles(projectPath, { refusePrivate: ctx.door === 'remote' }),
   }),
   // Allow-listed to the discovered context set — project-context.ts refuses anything else.
   defineChannel({

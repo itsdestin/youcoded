@@ -490,16 +490,6 @@ export async function isKnownRoot(root: unknown, extraRoots: readonly string[] =
   return false;
 }
 
-/**
- * WHY (2026-10-01 one-core R3-SEC): fs:read-head is gated for a phone to the folders the computer shows. Is this
- * RESOLVED file inside a saved folder or an indexed project? (A folder known only because a chat runs there does
- * not count: a phone can start a chat anywhere, "No folder" lands in the home folder.)
- */
-export async function isInsideKnownRoot(realPath: string): Promise<boolean> {
-  const canon = canonicalize(realPath, null);
-  return (await knownRoots()).some((r) => canon === r || canon.startsWith(r + '/'));
-}
-
 /** A `projectId` is known when it names an indexed project, or is itself a known root (the synth-project convention). */
 export async function isKnownProjectRef(projectId: unknown, extraRoots: readonly string[] = []): Promise<boolean> {
   if (typeof projectId !== 'string' || projectId.length === 0) return false;
@@ -572,9 +562,14 @@ export async function readArtifactBytes(absolutePath: unknown, opts?: ReadCeilin
 }
 
 /** Project-wide content search (ripgrep in main). */
-export function searchArtifactContent(projectRoot: unknown, query: unknown, opts?: { refusePrivate?: boolean }) {
+export async function searchArtifactContent(projectRoot: unknown, query: unknown, opts?: { refusePrivate?: boolean }) {
   if (typeof projectRoot !== 'string' || projectRoot.length === 0 || typeof query !== 'string') {
     return Promise.resolve({ ok: false, hits: [], truncated: false, error: 'projectRoot and query are required' });
+  }
+  // WHY (2026-10-01 one-core R3-SEC review): the globs only skip denied names BELOW the search root; a root that is itself
+  // a .ssh or .git folder (or inside one) would have every file under it searched. Refused for a phone.
+  if (opts?.refusePrivate && await isPhoneDeniedFile(projectRoot)) {
+    return { ok: false, hits: [], truncated: false, error: 'This folder is kept on the computer and isn’t available over remote access.' };
   }
   return searchProjectContent(projectRoot, query, opts);
 }
