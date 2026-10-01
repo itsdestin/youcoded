@@ -92,6 +92,16 @@ linux:
   # maintainer is required by the deb/rpm packagers.
   maintainer: itsdestin <itsdestin@users.noreply.github.com>
   synopsis: Desktop GUI for Claude Code with the YouCoded toolkit
+  # WHY: the AppImage catalog (and other Linux app stores) read this file from
+  # usr/share/metainfo/ inside the AppImage for our description and OUR chosen
+  # screenshots; without it they show a robot's picture of the sign-in screen.
+  # electron-builder copies the app folder into the AppImage's root, so this path
+  # lands exactly there. extraFiles is per platform, not per target, so the deb /
+  # rpm / pacman packages also carry a copy under /opt/YouCoded/usr/share/metainfo/,
+  # where nothing reads it: harmless, just unused.
+  extraFiles:
+    - from: linux/ai.youcoded.YouCoded.metainfo.xml
+      to: usr/share/metainfo/ai.youcoded.YouCoded.metainfo.xml
 pacman:
   # electron-builder auto-generates Debian-style dependency names for the
   # pacman target, and `libappindicator-gtk3` is AUR-only — not in Arch's
