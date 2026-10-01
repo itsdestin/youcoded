@@ -1,4 +1,4 @@
-import { getPlatform } from '../../platform';
+import { getCapabilities } from '../../platform';
 import { Button } from '../ui';
 import { EDIT_MAX_BYTES, FULL_READ_MAX_BYTES } from '../../../shared/artifacts/editable-path-policy';
 
@@ -32,10 +32,11 @@ export function PartialFileBanner({ sizeBytes, onLoadFull, onOpenExternally }: {
   // Android has no handler, so the button would silently do nothing there.
   // Offering a button that does nothing is worse than offering none, so on
   // those platforms the bar states the fact and carries no action at all.
-  const isElectron = getPlatform() === 'electron';
+  // R4-1: `openInOs` capability, not a platform-name guess.
+  const canOpenInOs = getCapabilities().openInOs;
   const action = canLoadFull
     ? { label: 'Load the whole file', onClick: onLoadFull }
-    : isElectron
+    : canOpenInOs
       ? { label: 'Open externally', onClick: onOpenExternally }
       : null;
 

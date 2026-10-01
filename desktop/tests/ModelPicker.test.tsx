@@ -6,6 +6,7 @@ import { render, cleanup, fireEvent, screen, waitFor, act } from '@testing-libra
 import ModelPicker, { type ModelChoice } from '../src/renderer/components/model/ModelPicker';
 import { installFiringIntersectionObserver } from './helpers/firing-intersection-observer';
 import { REVEAL_CHUNK } from '../src/renderer/hooks/use-chunked-reveal';
+import { DESKTOP_WINDOW_CAPABILITIES, REMOTE_SCREEN_CAPABILITIES } from '../src/shared/capabilities';
 
 // ── A failed provider load ───────────────────────────────────────────────────
 /**
@@ -22,6 +23,7 @@ import { REVEAL_CHUNK } from '../src/renderer/hooks/use-chunked-reveal';
 describe('ModelPicker — a failed provider load is not "no providers set up"', () => {
   function bridge(list: ReturnType<typeof vi.fn>, catalog: ReturnType<typeof vi.fn>) {
     (globalThis as any).window.claude = {
+      capabilities: DESKTOP_WINDOW_CAPABILITIES, // the computer's window: native models can run here
       providers: { list, catalog },
       models: { onDownloadProgress: () => () => {} },
     };
@@ -114,6 +116,7 @@ describe('list refresh after a download', () => {
     subscribers = [];
     unsubscribes = 0;
     (globalThis as any).window.claude = {
+      capabilities: DESKTOP_WINDOW_CAPABILITIES,
       providers: {
         list: vi.fn(async () => [
           { id: 'openrouter', type: 'openrouter', label: 'OpenRouter', ready: true },
@@ -269,6 +272,7 @@ describe('ModelPicker selectable-first ordering', () => {
 
   function bridge() {
     (globalThis as any).window.claude = {
+      capabilities: DESKTOP_WINDOW_CAPABILITIES,
       providers: {
         list: vi.fn(async () => providers),
         catalog: vi.fn(async () => catalog),
@@ -443,6 +447,7 @@ describe('ModelPicker recommended-models bands', () => {
 
   function bridge() {
     (globalThis as any).window.claude = {
+      capabilities: DESKTOP_WINDOW_CAPABILITIES,
       providers: {
         list: vi.fn(async () => providers),
         catalog: vi.fn(async () => catalog),
@@ -727,6 +732,7 @@ describe('ModelPicker recommended-models bands', () => {
 describe('ModelPicker — inline layout', () => {
   beforeEach(() => {
     (globalThis as any).window.claude = {
+      capabilities: DESKTOP_WINDOW_CAPABILITIES,
       providers: { list: vi.fn().mockResolvedValue([]), catalog: vi.fn().mockResolvedValue([]) },
       models: { onDownloadProgress: () => () => {} },
     };
@@ -752,5 +758,44 @@ describe('ModelPicker — inline layout', () => {
     host();
     fireEvent.click(await screen.findByRole('button', { name: 'Filter and sort' }));
     expect(await screen.findByText('Source')).toBeInTheDocument();
+  });
+});
+
+/** Remote-access roadmap: "the model picker offers models the browser cannot actually run, so choosing one saves a default that
+ *  quietly does nothing there". The app's own engine runs only on a screen whose capabilities say so. */
+describe('ModelPicker — offers only the models this screen can run', () => {
+  const NATIVE_LABEL = 'Nimbus Native One';
+  function bridge(capabilities: typeof DESKTOP_WINDOW_CAPABILITIES) {
+    (globalThis as any).window.claude = {
+      capabilities,
+      providers: {
+        list: vi.fn().mockResolvedValue([{ id: 'cloud', type: 'openrouter', label: 'Cloud', ready: true }]),
+        catalog: vi.fn().mockResolvedValue([{ id: 'nimbus-1', providerId: 'cloud', label: NATIVE_LABEL }]),
+      },
+      models: { onDownloadProgress: () => () => {} },
+    };
+  }
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); delete (window as any).claude; });
+
+  const host = () => render(<ModelPicker value={null} onSelect={() => {}} defaultOpen layout="inline" />);
+
+  it("the computer's own window lists the app's native models next to Claude Code's", async () => {
+    bridge(DESKTOP_WINDOW_CAPABILITIES);
+    host();
+    // The list opens on favourites; search reaches the whole catalogue.
+    fireEvent.change(await screen.findByLabelText('Search all models'), { target: { value: 'Nimbus' } });
+    expect(await screen.findByText(NATIVE_LABEL)).toBeInTheDocument();
+  });
+
+  it('a screen that cannot run them (a phone, the paired Android app) lists Claude Code models only', async () => {
+    bridge(REMOTE_SCREEN_CAPABILITIES);
+    host();
+    const search = await screen.findByLabelText('Search all models');
+    // The list has loaded (the provider call answered); the native row is simply not offered, even when searched for by name.
+    await waitFor(() => expect((window.claude.providers.catalog as any).mock.calls.length).toBeGreaterThan(0));
+    fireEvent.change(search, { target: { value: 'Nimbus' } });
+    expect(screen.queryByText(NATIVE_LABEL)).toBeNull();
+    fireEvent.change(search, { target: { value: 'Sonnet' } });
+    expect(screen.getAllByText(/Sonnet/i).length).toBeGreaterThan(0);
   });
 });

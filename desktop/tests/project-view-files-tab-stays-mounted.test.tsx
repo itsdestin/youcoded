@@ -27,6 +27,8 @@ import { FilesTab } from '../src/renderer/components/project-view/tabs/FilesTab'
 import { folderPageFromRecords } from '../src/shared/artifacts/folder-page';
 import { ProjectView } from '../src/renderer/components/project-view/ProjectView';
 import { ArtifactProvider } from '../src/renderer/state/ArtifactContext';
+import { isRemoteMode } from '../src/renderer/platform';
+import { DESKTOP_WINDOW_CAPABILITIES, REMOTE_SCREEN_CAPABILITIES } from '../src/shared/capabilities';
 
 // WHY the counter lives on useProjectWatch: FilesTab calls it unconditionally
 // at the top of its body, so every call is one render of the REAL component.
@@ -83,6 +85,9 @@ beforeEach(() => {
   listAllFiles.mockResolvedValue({ ok: true, files: FILES });
   listFolder.mockImplementation((_id: string, dir: string, opts: any) => Promise.resolve(folderPageFromRecords(FILES as any, dir, opts)));
   (window as any).claude = {
+    // The host's answer for the screen under test; a getter so a test that flips the connection mode mid-way (the
+    // "+ Add file" case) gets the other screen's answer, as a reconnect to a different host would.
+    get capabilities() { return isRemoteMode() ? REMOTE_SCREEN_CAPABILITIES : DESKTOP_WINDOW_CAPABILITIES; },
     artifacts: {
       listAllFiles,
       listFolder,

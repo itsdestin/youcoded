@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 
 import { validateTheme } from '../themes/theme-validator';
 import { applyThemeToDom, applyThemeFont, buildBackgroundStyle, buildPatternStyle } from '../themes/theme-engine';
-import { isRemoteMode } from '../platform';
+import { getCapabilities } from '../platform';
 import type { ThemeDefinition, LoadedTheme } from '../themes/theme-types';
 import { resolveAllAssetPaths } from '../themes/theme-asset-resolver';
 import { applyLookOverrides, parseLookOverrides, type LookOverrides } from '../themes/look-overrides';
@@ -600,7 +600,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     // theme/color tokens" (2026-09-10). Tokens and shape still apply, so a phone paired to
     // this computer looks like this computer.
     applyThemeToDom(
-      isRemoteMode() ? { ...activeTheme, background: undefined } : activeTheme,
+      !getCapabilities().themePictures ? { ...activeTheme, background: undefined } : activeTheme,
       reducedEffects,
     );
     applyHighlightTheme(activeTheme.dark);

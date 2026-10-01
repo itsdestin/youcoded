@@ -115,7 +115,7 @@ describe('screens that load once ask again after a reconnect', () => {
   it('the platform, which no longer remembers a failed read for the page\'s life', async () => {
     const getPlatform = vi.fn().mockRejectedValueOnce(new Error('lost')).mockResolvedValue('linux');
     (window as any).claude = { getPlatform };
-    const { useCurrentPlatform } = await import('../src/renderer/state/platform');
+    const { useCurrentPlatform } = await import('../src/renderer/platform');
     const h = renderHook(() => useCurrentPlatform());
     await flush();
     expect(h.result.current).toBeNull();

@@ -20,7 +20,7 @@ import {
 } from './detail-tool-icons';
 // Plain-text load-timing label — shared with ContextTab (context-labels.ts).
 import { timingLabel } from './context-labels';
-import { getPlatform } from '../../platform';
+import { getCapabilities } from '../../platform';
 import { Textarea } from '../ui';
 import { ScreenMark } from '../../shoot-mode';
 
@@ -188,7 +188,8 @@ export function ContextEditorOverlay({ project, file, onClose }: ContextEditorOv
       )}
       {/* Desktop-only (shell.showItemInFolder) — gate so it can't render dead
           on remote/Android, matching SessionDrawer + FilesTab. */}
-      {getPlatform() === 'electron' && (
+      {/* R4-1: `openInOs` capability, not a platform-name guess. */}
+      {getCapabilities().openInOs && (
         <button type="button" className={TOOL_BTN_NEUTRAL} onClick={handleReveal}>
           <FolderIcon size={13} />
           Reveal

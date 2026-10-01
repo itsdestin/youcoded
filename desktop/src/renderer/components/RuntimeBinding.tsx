@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { isAndroid, isRemoteMode } from '../platform';
+import { getCapabilities } from '../platform';
 import { PRESETS } from '../../shared/harness-manifest';
 import { FieldError, SettingRow, Toggle } from './ui';
 import { plainMessage } from '../utils/ipc-error';
@@ -98,10 +98,13 @@ export function persistLastBinding(binding: Binding): void {
   try { localStorage.setItem('youcoded-last-binding', JSON.stringify(binding)); } catch { /* storage full/blocked — non-fatal */ }
 }
 
-// Native runtime is desktop-only AND gated on the capability flag — with a single
+// Native runtime is gated on the screen's `nativeSessions` capability — with a single
 // runtime there's nothing to select, so the whole selector hides.
+// WHY a capability read (one-core R4-1): this was `!isAndroid() && !isRemoteMode() && native.supported`, three
+// questions guessing at one fact. The computer's window answers it from the same kill switch `native.supported` reads;
+// a phone and the Android app are told false.
 function isNativeSupported(): boolean {
-  return !isAndroid() && !isRemoteMode() && (window as any).claude?.native?.supported === true;
+  return getCapabilities().nativeSessions;
 }
 
 // Which runtime a brand-new session form should open on. Plain 'claude' unless

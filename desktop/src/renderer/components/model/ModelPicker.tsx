@@ -51,6 +51,7 @@ import { useChunkedReveal } from '../../hooks/use-chunked-reveal';
 import { resolveModelBrand, type ProviderIconKey } from '../provider-brand';
 import { ProviderIcon } from '../ProviderIcon';
 import { nativeChoiceNeedsApiKey, unavailableReason, useClaudeStatus, type CatalogRow, type ProviderRow } from './availability';
+import { getCapabilities } from '../../platform';
 
 export type ModelChoice =
   | { runtime: 'claude'; alias: string }
@@ -269,7 +270,7 @@ export default function ModelPicker({
   value,
   onSelect,
   includeClaude = true,
-  includeNative = true,
+  includeNative: includeNativeWanted = true,
   onManageModels,
   prefill,
   defaultOpen = false,
@@ -332,6 +333,11 @@ export default function ModelPicker({
    *  searching (the whole catalogue is already the result, unordered). */
   pinSelectedToTop?: boolean;
 }) {
+  // WHY (one-core R4-1, seam S9; remote-access roadmap "the model picker offers models the browser cannot run"): the app's own
+  // engine runs only where the screen's `nativeSessions` capability says so. Over remote access (and on Android) the picker used
+  // to list the computer's native models anyway; choosing one saved a default that quietly did nothing there, and "Add provider"
+  // led to pages that screen hides. A screen that cannot run them is no longer offered them. The computer's own window is unchanged.
+  const includeNative = includeNativeWanted && getCapabilities().nativeSessions;
   const [providers, setProviders] = useState<ProviderRow[]>([]);
   const [catalog, setCatalog] = useState<CatalogRow[]>([]);
   // Claude Code's LIVE sign-in (2026-09-09). Unknown and not-yet-answered both
@@ -484,7 +490,8 @@ export default function ModelPicker({
       setLoadError(null);
       setLoaded(true);
 
-      if (prefill && !prefillAppliedRef.current && !value) {
+      // A prefill names a native model: skipped on a screen that cannot run one (see includeNative above).
+      if (includeNative && prefill && !prefillAppliedRef.current && !value) {
         const match = catalogRows.find((m) => {
           const p = providerRows.find((row) => row.id === m.providerId);
           return !!p && p.type === prefill.providerType && m.id === prefill.modelId;

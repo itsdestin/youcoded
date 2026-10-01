@@ -61,7 +61,7 @@ function fakeWindow(id: number): FakeWin {
 }
 
 /** Run a table entry the way the computer's door does: handler(payload, ctx). `from` is the calling window. */
-function call(name: string, payload: unknown, from = -1): any {
+function call(name: string, payload?: unknown, from = -1): any {
   const def = detachChannels.find((d) => d.name === name);
   if (!def) throw new Error(`no entry ${name}`);
   return def.handler(payload as any, { sender: { id: from } } as any);

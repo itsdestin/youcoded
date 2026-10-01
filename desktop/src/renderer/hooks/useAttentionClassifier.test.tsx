@@ -21,9 +21,10 @@
 // purpose: the assertion is literally "this hook dispatches nothing", and a
 // no-op reducer action is invisible in reducer state (ok → ok changes
 // nothing), so observing the store could not tell the two behaviours apart.
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import type { AttentionState } from '../state/chat-types';
+import { DESKTOP_WINDOW_CAPABILITIES } from '../../shared/capabilities';
 
 const { dispatch } = vi.hoisted(() => ({ dispatch: vi.fn() }));
 vi.mock('../state/chat-context', () => ({ useChatDispatch: () => dispatch }));
@@ -54,7 +55,9 @@ function mount(opts: {
 const CLEAR_OK = { type: 'ATTENTION_STATE_CHANGED', sessionId: 's1', state: 'ok' };
 
 describe('useAttentionClassifier — only clears attention for sessions it owns', () => {
-  beforeEach(() => { dispatch.mockClear(); });
+  // The computer's own window has a terminal buffer to read (`terminalScreenRead`); a screen watching a computer does not.
+  beforeEach(() => { dispatch.mockClear(); (window as any).claude = { capabilities: DESKTOP_WINDOW_CAPABILITIES }; });
+  afterEach(() => { delete (window as any).claude; });
 
   it('dispatches NOTHING for a parked native session (no PTY buffer to read)', () => {
     mount({ provider: 'native', currentAttentionState: 'stalled' });

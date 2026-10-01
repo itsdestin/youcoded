@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, test, expect, beforeEach, vi } from 'vitest';
 
-// platform-bootstrap.ts sets window.__PLATFORM__ once on import from
+// platform.ts sets window.__PLATFORM__ once on import from
 // synchronously-available signals (location.protocol, window.claude).
 // Packaged Electron on Windows loads the renderer via `win.loadFile()`,
 // so location.protocol is 'file:' — the same as Android's WebView.
@@ -13,7 +13,7 @@ async function runBootstrap(): Promise<string | undefined> {
   vi.resetModules();
   delete (window as any).__PLATFORM__;
   delete document.documentElement.dataset.platform;
-  await import('../src/renderer/platform-bootstrap');
+  await import('../src/renderer/platform');
   return (window as any).__PLATFORM__;
 }
 
@@ -24,7 +24,7 @@ function setProtocol(protocol: 'file:' | 'http:' | 'https:') {
   });
 }
 
-describe('platform-bootstrap', () => {
+describe('platform startup detection', () => {
   beforeEach(() => {
     delete (window as any).claude;
   });
@@ -56,5 +56,26 @@ describe('platform-bootstrap', () => {
     (window as any).claude = {};
     await runBootstrap();
     expect(document.documentElement.dataset.platform).toBe('electron');
+  });
+});
+
+describe('getCapabilities', () => {
+  async function load() {
+    vi.resetModules();
+    return await import('../src/renderer/platform');
+  }
+  beforeEach(() => { delete (window as any).claude; });
+
+  test('a screen that has heard nothing from its host gets the conservative set', async () => {
+    const { getCapabilities } = await load();
+    expect(getCapabilities()).toMatchObject({ nativeWindows: false, openInOs: false, nativeSessions: false, terminalTransport: 'text' });
+  });
+
+  test('reads what the host said, on every call (the answer can change when the screen reconnects elsewhere)', async () => {
+    const { getCapabilities } = await load();
+    (window as any).claude = { capabilities: { openInOs: true, terminalTransport: 'raw-bytes' } };
+    expect(getCapabilities()).toMatchObject({ openInOs: true, terminalTransport: 'raw-bytes', nativeWindows: false });
+    (window as any).claude = { capabilities: { openInOs: false } };
+    expect(getCapabilities().openInOs).toBe(false);
   });
 });

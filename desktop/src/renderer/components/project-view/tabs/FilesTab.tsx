@@ -39,7 +39,7 @@ import {
 
 // Compact relative-time for the detail meta strip (shared util).
 import { formatRelativeTime as relTime } from '../../../utils/format-time';
-import { getPlatform, isRemoteMode } from '../../../platform';
+import { getCapabilities, isRemoteMode } from '../../../platform';
 import { downloadFile } from '../../artifact-views/download-file';
 import { useNarrowViewport } from '../../../hooks/use-narrow-viewport';
 
@@ -549,7 +549,8 @@ function FilesTabImpl({
   const [syntheticHit, setSyntheticHit] = useState<ArtifactRecord | null>(null);
   useEffect(() => {
     const q = search.trim();
-    if (!q || q.length < 2 || getPlatform() !== 'electron') {
+    // R4-1: `contentSearch` capability (the computer's own window only, as before), not a platform-name guess.
+    if (!q || q.length < 2 || !getCapabilities().contentSearch) {
       setContentHits([]);
       setContentTruncated(false);
       setContentSearching(false);
@@ -1236,7 +1237,8 @@ function ArtifactDetail({ artifact, project, artifactDispatch: dispatch, initial
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [content, initialLine, artifact.id]);
 
-  const isElectron = getPlatform() === 'electron';
+  // R4-1: `openInOs` capability (was `getPlatform() === 'electron'`): can this screen open files in the computer's apps.
+  const canOpenInOs = getCapabilities().openInOs;
   const handleReveal = () => (window.claude as any).shell?.showItemInFolder?.(absPath);
   // Open the file with the OS default app (HTML→browser, .docx→Word, etc.) —
   // the right action for formats the in-app viewer can't render (html) or only
@@ -1288,9 +1290,9 @@ function ArtifactDetail({ artifact, project, artifactDispatch: dispatch, initial
         </button>
       ))}
       {/* shell.openPath / showItemInFolder are desktop-only — remote stubs them
-          as no-ops and Android has no handler. Gate on isElectron so the
+          as no-ops and Android has no handler. Gate on canOpenInOs so the
           buttons can't render dead, matching SessionDrawer's toolbar. */}
-      {isElectron && (
+      {canOpenInOs && (
         <>
           <button type="button" className={TOOL_BTN_NEUTRAL} onClick={handleOpenExternal} title="Open with the default app">
             <ExternalLinkIcon size={13} />

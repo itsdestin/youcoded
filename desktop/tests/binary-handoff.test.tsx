@@ -3,13 +3,16 @@
 // 2026-08-25 BinaryFallback said "Cannot preview this file type" even when the
 // reason was size, and BinaryContent's over-size message told the user to "use
 // Open externally" next to a component that rendered no button at all.
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { render, screen, cleanup } from '@testing-library/react';
 import { BinaryFallback } from '../src/renderer/components/artifact-views/BinaryFallback';
 import { describeBytesError } from '../src/renderer/components/artifact-views/BinaryContent';
+import { DESKTOP_WINDOW_CAPABILITIES } from '../src/shared/capabilities';
 
-afterEach(cleanup);
+// "Open externally" is offered only where the screen's `openInOs` capability says the computer's apps can be reached.
+beforeEach(() => { (window as any).claude = { capabilities: DESKTOP_WINDOW_CAPABILITIES }; });
+afterEach(() => { cleanup(); delete (window as any).claude; });
 
 describe('handoff copy', () => {
   it('names the format, not a generic refusal', () => {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { hasFeatureName, remoteUnsupportedMessage } from '../src/renderer/remote-unsupported';
+import { REMOTE_SCREEN_CAPABILITIES } from '../src/shared/capabilities';
 
 import { readStripped, assertPatternMatches } from './helpers/guard-scope';
 
@@ -42,11 +43,13 @@ describe('a phone is never shown a channel id', () => {
     // The root cause, and a documented invariant: `.claude/rules/react-renderer.md` says a
     // remote browser takes attention from status:data's attentionMap and must not run its
     // own classifier. It was running, once a second, for the life of every connection.
-    expect(classifier).toContain("import { isRemoteMode } from '../platform';");
+    // R4-1: the gate is the screen's `terminalScreenRead` capability, which the host reports false to every remote screen.
+    expect(classifier).toContain("import { getCapabilities } from '../platform';");
     // assertPatternMatches proves the regex can match SOMETHING before it is trusted to
     // prove the source does — a pattern matching nothing passes a `not`, and reads green.
-    const shape = /const hasBuffer = \(provider === undefined \|\| provider === 'claude'\) && !isRemoteMode\(\);/;
-    assertPatternMatches(shape, "const hasBuffer = (provider === undefined || provider === 'claude') && !isRemoteMode();", 'classifier remote gate');
+    const shape = /const hasBuffer = \(provider === undefined \|\| provider === 'claude'\) && getCapabilities\(\)\.terminalScreenRead;/;
+    assertPatternMatches(shape, "const hasBuffer = (provider === undefined || provider === 'claude') && getCapabilities().terminalScreenRead;", 'classifier remote gate');
+    expect(REMOTE_SCREEN_CAPABILITIES.terminalScreenRead).toBe(false);
     expect(classifier).toMatch(shape);
   });
 });
@@ -148,6 +151,8 @@ describe('a phone paired to this computer looks like this computer', () => {
   it('takes the colours and leaves the wallpaper behind', () => {
     // A theme's background files live on the computer that owns them, so their paths mean
     // nothing in a phone browser. Dropping `background` also zeroes the glass knobs.
-    expect(themeCtx).toMatch(/isRemoteMode\(\) \? \{ \.\.\.activeTheme, background: undefined \}/);
+    // R4-1: asked as the `themePictures` capability, which the host reports false to every remote screen.
+    expect(themeCtx).toMatch(/!getCapabilities\(\)\.themePictures \? \{ \.\.\.activeTheme, background: undefined \}/);
+    expect(REMOTE_SCREEN_CAPABILITIES.themePictures).toBe(false);
   });
 });

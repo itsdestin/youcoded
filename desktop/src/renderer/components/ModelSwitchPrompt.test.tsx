@@ -11,6 +11,7 @@ import { render, cleanup, fireEvent, screen, waitFor, act } from '@testing-libra
 import ModelPickerPopup from './ModelPickerPopup';
 import { EscCloseProvider } from '../hooks/use-esc-close';
 import { switchFailureMessage } from './ModelSwitchPrompt';
+import { DESKTOP_WINDOW_CAPABILITIES } from '../../shared/capabilities';
 
 const CATALOG = [
   { id: 'big-model', providerId: 'cloud', label: 'Big Model' },
@@ -20,6 +21,7 @@ const CATALOG = [
 function bridge(switchModel: ReturnType<typeof vi.fn>) {
   const interrupt = vi.fn();
   (window as any).claude = {
+    capabilities: DESKTOP_WINDOW_CAPABILITIES, // the computer's window: native models can run here
     providers: {
       list: vi.fn().mockResolvedValue([{ id: 'cloud', type: 'openrouter', label: 'Cloud', ready: true }]),
       catalog: vi.fn().mockResolvedValue(CATALOG),

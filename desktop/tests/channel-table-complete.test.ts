@@ -5,7 +5,7 @@
 // remote-server.ts, would be a second copy of a feature that drifts from the table's (the exact problem the move fixed).
 // This reads the source as code and fails on either, except for the few named, reasoned exceptions below; every
 // exception must still exist, so the list can only shrink.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
@@ -104,18 +104,30 @@ export function scanChannelCases(file: string, text: string, strict = false): st
 
 const rel = (file: string) => path.relative(root, file).split(path.sep).join('/');
 
-/** Every Electron-registration in all of desktop/src/main, as `file: channel expression`. */
-function ipcRegistrations(): string[] {
-  return sources(root).flatMap((file) => scanIpcRegistrations(file, fs.readFileSync(file, 'utf8')).map((c) => `${rel(file)}: ${c}`)).sort();
+// WHY the scan runs ONCE and is warmed in beforeAll under its own budget (test-suite-hygiene: a file's one-time cost never lands inside
+// the first test): it parses every file of desktop/src/main, which takes seconds, and five tests read the result.
+const SCAN_BUDGET_MS = 90_000;
+let scanned: { registrations: string[]; cases: string[] } | null = null;
+function scan() {
+  if (scanned) return scanned;
+  const registrations: string[] = [];
+  const cases: string[] = [];
+  for (const file of sources(root)) {
+    const text = fs.readFileSync(file, 'utf8');
+    const isDoor = rel(file) === 'remote-server.ts';
+    for (const c of scanIpcRegistrations(file, text)) registrations.push(`${rel(file)}: ${c}`);
+    // The phone door's own labels are listed bare (that is how the exceptions name them); elsewhere with the file.
+    for (const l of scanChannelCases(file, text, isDoor)) cases.push(isDoor ? l : `${rel(file)}: ${l}`);
+  }
+  return (scanned = { registrations: registrations.sort(), cases: cases.sort() });
 }
+beforeAll(() => { scan(); }, SCAN_BUDGET_MS);
+
+/** Every Electron-registration in all of desktop/src/main, as `file: channel expression`. */
+const ipcRegistrations = () => scan().registrations;
 
 /** Every channel-shaped `case` label anywhere in desktop/src/main, as `label` for remote-server.ts (the phone door) and `file: label` elsewhere. */
-function remoteCases(): string[] {
-  return sources(root).flatMap((file) => {
-    const isDoor = rel(file) === 'remote-server.ts';
-    return scanChannelCases(file, fs.readFileSync(file, 'utf8'), isDoor).map((l) => (isDoor ? l : `${rel(file)}: ${l}`));
-  }).sort();
-}
+const remoteCases = () => scan().cases;
 
 // The exceptions, each with its reason. None is a feature: they are the door's own wiring or connection housekeeping.
 const ALLOWED_REGISTRATIONS: Record<string, string> = {
@@ -182,7 +194,7 @@ describe('the scanners catch every way round the guard', () => {
   });
   it('catches a case that is not a string literal, a channel-shaped case anywhere, and a computed case in the phone door', () => {
     expect(scanChannelCases('x.ts', `switch (t) { case IPC.X: break; }`)).toEqual(['<computed IPC.X>']);
-    expect(scanChannelCases('x.ts', 'switch (t) { case `a:${b}`: break; }')).toEqual([expect.stringContaining('<computed')]);
+    expect(scanChannelCases('x.ts', ['switch (t) { case `a:$', '{b}`: break; }'].join(''))).toEqual([expect.stringContaining('<computed')]);
     expect(scanChannelCases('x.ts', `switch (t) { case 'a:b': break; case 'plain': break; case 3: break; case T_BOOL: break; }`)).toEqual(['a:b']);
     expect(scanChannelCases('remote-server.ts', `switch (t) { case CH: break; case 'x:y': break; }`, true)).toEqual(['<computed CH>', 'x:y']);
   });

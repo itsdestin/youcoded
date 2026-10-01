@@ -111,7 +111,7 @@ import { RESUMING_NATIVE, RESUMING_CLAUDE } from '../shared/session-title';
 import { createFirstPageLoader, type FirstPageLoader, type PageHint } from './state/first-page-loader';
 
 import FirstRunView from './components/FirstRunView';
-import { getPlatform, isAndroid, isRemoteMode, onConnectionModeChange } from './platform';
+import { getCapabilities, getPlatform, isRemoteMode, onConnectionModeChange } from './platform';
 import { APP_NOTICE_EVENT, type AppNoticeDetail } from './utils/announce';
 
 /** Remote access batch 2: where a phone's copy of the conversation stands. */
@@ -3037,7 +3037,7 @@ function AppInner() {
       claudeSessionId,
       askTakeover,
       onHandoff: async () => {
-        if (getPlatform() === 'android' && !isRemoteMode()) {
+        if (!getCapabilities().liveHandoff) { // R4-1: capability (false only on the Android app's own runtime), was a two-flag guess
           setToast('Live handoff is available from a computer or a remote connection to one.');
           return;
         }
@@ -3516,8 +3516,8 @@ function AppInner() {
   const welcomeBackAsked = useRef(false);
   useEffect(() => {
     if (welcomeBackAsked.current || isFirstRun !== false || !sessionListLoaded || remoteCatchingUp) return;
-    if (!(myWindowId != null && leaderWindowId !== -1) && !isRemoteMode() && !isAndroid()) return; // leader not yet known
-    if (isRemoteMode() || isAndroid() || !isLeader) { welcomeBackAsked.current = true; return; }
+    if (!(myWindowId != null && leaderWindowId !== -1) && getCapabilities().nativeWindows) return; // leader not yet known
+    if (!getCapabilities().nativeWindows || !isLeader) { welcomeBackAsked.current = true; return; } // R4-1: only a screen with its own windows has a leader window
     welcomeBackAsked.current = true;
     if (sessions.length > 0) return;
     let alive = true;
@@ -3646,7 +3646,7 @@ function AppInner() {
   }, [isFirstRun, tourOpen, sessions.length, hasResumable]);
   useEffect(() => {
     if (isFirstRun !== false) return;
-    if (bumpCounter('launches') === 3 && getPlatform() === 'electron') triggerTip('floater');
+    if (bumpCounter('launches') === 3 && getCapabilities().buddy) triggerTip('floater'); // R4-1: the tip is about the buddy, so it asks `buddy`
   }, [isFirstRun]);
   useEffect(() => {
     if (!settingsOpen || tourOpen) return;

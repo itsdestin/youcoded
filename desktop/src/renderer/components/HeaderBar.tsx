@@ -4,7 +4,7 @@ import { GamepadIcon } from './Icons';
 import SessionStrip from './SessionStrip';
 import type { SessionStatusColor } from './StatusDot';
 import type { SessionProvider } from '../../shared/types';
-import { isAndroid, isRemoteMode } from '../platform';
+import { getCapabilities, isAndroid, isRemoteMode } from '../platform';
 // Artifact drawer trigger — reads session artifact count for the badge.
 import { useArtifactSelector, useArtifactDispatch } from '../state/ArtifactContext';
 import OverflowMenu from './OverflowMenu';
@@ -32,10 +32,10 @@ const isMac = typeof navigator !== 'undefined' && navigator.platform.startsWith(
 // connection authenticates, long after this module loaded, so a constant read
 // 'local' for ever and a phone browser got Minimize / Maximize / Close buttons
 // that squeezed the conversation name to one letter (tester U10, 2026-09-10).
+// R4-1: `nativeWindows` capability replaces `!isAndroid() && !isRemoteMode()`: only the computer's own window has caption buttons.
 export const showCaptionButtons = () => typeof navigator !== 'undefined'
   && !isMac
-  && !isAndroid()
-  && !isRemoteMode();
+  && getCapabilities().nativeWindows;
 
 /** Toggle sits on the opposite side of the OS window-control buttons
  *  so the header is balanced. macOS traffic lights live on the left,

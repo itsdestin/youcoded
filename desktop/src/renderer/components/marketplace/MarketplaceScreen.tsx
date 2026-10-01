@@ -24,7 +24,7 @@ import { Scrim, OverlayPanel } from "../overlays/Overlay";
 import { Button, CloseButton, EmptyState, ErrorState, LoadingState } from "../ui";
 import { useEscClose } from "../../hooks/use-esc-close";
 import { useNarrowViewport } from "../../hooks/use-narrow-viewport";
-import { useCurrentPlatform } from "../../state/platform";
+import { useCurrentPlatform } from "../../platform";
 import { platformDisplayName, platformListDisplay } from "../../../shared/platform-display";
 import type { SkillEntry, IntegrationEntry, IntegrationState } from "../../../shared/types";
 import type { ThemeRegistryEntryWithStatus } from "../../../shared/theme-marketplace-types";

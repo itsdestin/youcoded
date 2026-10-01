@@ -14,7 +14,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/react';
 import { ProjectHero } from './ProjectHero';
 
-vi.mock('../../platform', () => ({ getPlatform: () => 'electron' }));
+// R4-1: the card asks the screen's capabilities whether it can open a folder in the computer's file manager.
+vi.mock('../../platform', () => ({ getPlatform: () => 'electron', getCapabilities: () => ({ openInOs: true }) }));
 
 // The collapse is narrow-ONLY, so every test has to state which width it's
 // describing. jsdom has no matchMedia at all, so useNarrowViewport would throw

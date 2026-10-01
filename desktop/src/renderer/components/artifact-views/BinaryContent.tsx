@@ -1,6 +1,6 @@
 import React from 'react';
 import { useArtifactBytes } from './useArtifactBytes';
-import { getPlatform, isRemoteMode } from '../../platform';
+import { getCapabilities, isRemoteMode } from '../../platform';
 import { Button } from '../ui';
 import { RemoteFileCard } from './RemoteFileCard';
 
@@ -58,12 +58,13 @@ export function BinaryContent({ absolutePath, noun, children }: {
     // The action the old copy pointed at but never rendered. Desktop-only for
     // the same reason BinaryFallback gates it: shell.openPath is a no-op on
     // remote and absent on Android, so the button would silently do nothing.
-    const isElectron = getPlatform() === 'electron';
+    // R4-1: `openInOs` capability, not a platform-name guess.
+    const canOpenInOs = getCapabilities().openInOs;
     return (
       <CenterNote>
         <div className="flex flex-col items-center gap-3">
           <span>{describeBytesError(error ?? 'read-failed', noun)}</span>
-          {isElectron && (
+          {canOpenInOs && (
             <Button size="sm" onClick={() => (window.claude as any).shell?.openPath?.(absolutePath)}>
               Open in default app
             </Button>

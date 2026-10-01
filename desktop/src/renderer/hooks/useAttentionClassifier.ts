@@ -6,7 +6,7 @@ import {
   ClassifierContext,
 } from '../state/attention-classifier';
 import type { AttentionState } from '../state/chat-types';
-import { isRemoteMode } from '../platform';
+import { getCapabilities } from '../platform';
 
 // How often the classifier re-reads the buffer while active.
 const TICK_MS = 1000;
@@ -98,7 +98,8 @@ export function useAttentionClassifier(sessionId: string, args: HookArgs): void 
   // (2026-09-10). Android-local is NOT this case: that WebView talks to a runtime on the
   // same device, which does have the buffer, so the test is isRemoteMode() and not the
   // platform string.
-  const hasBuffer = (provider === undefined || provider === 'claude') && !isRemoteMode();
+  // R4-1: the screen says whether it has a terminal buffer (`terminalScreenRead`); false for any screen watching a computer.
+  const hasBuffer = (provider === undefined || provider === 'claude') && getCapabilities().terminalScreenRead;
   const active = hasBuffer && isThinking && !hasRunningTools && !hasAwaitingApproval && visible;
 
   useEffect(() => {

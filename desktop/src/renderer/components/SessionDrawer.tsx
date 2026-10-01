@@ -33,7 +33,7 @@ import { runGuardedDiscard } from './git/discard-guard';
 import type { ArtifactRecord, VersionEvent } from '../../shared/artifacts/types';
 import { fileTypeGroup } from '../../shared/artifacts/categorization';
 import type { FileTypeGroup } from '../../shared/artifacts/categorization';
-import { getPlatform, isRemoteMode } from '../platform';
+import { getCapabilities, isRemoteMode } from '../platform';
 import { downloadFile } from './artifact-views/download-file';
 import { formatRelativeTime } from '../utils/format-time';
 import { Button, CloseButton, EmptyState, ErrorState, FieldError, SearchFilterPill, Tooltip } from './ui';
@@ -466,10 +466,10 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
   }, [filterOpen]);
-  const isElectron = getPlatform() === 'electron';
+  const canOpenInOs = getCapabilities().openInOs, canGit = getCapabilities().git; // R4-1: two capabilities (was one `getPlatform() === 'electron'` for both)
   const gitReviewOpen = useArtifactSelector((s) => s.gitReviewBySession?.[sessionId] ?? false);
   // Footer git status only for the open file, only while the drawer is visible.
-  const gitStatus = useGitFileStatus(projectRoot, active && isElectron ? active.path : null, drawerOpen, active?.id ?? null);
+  const gitStatus = useGitFileStatus(projectRoot, active && canGit ? active.path : null, drawerOpen, active?.id ?? null);
   const gitFooter = gitFooterState(gitStatus);
   // L3 discard confirm (Task 9). discardError is the ONE error surface for the
   // review view — rendered via GitReviewView's externalError prop, cleared (a)
@@ -566,7 +566,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
 
   // Open the file with the OS default app (HTML→browser, .docx→Word, etc.) —
   // the right action for formats the in-app viewer can't fully render. Desktop
-  // only (shell.openPath); the button is gated on isElectron like Reveal.
+  // only (shell.openPath); the button is gated on canOpenInOs like Reveal.
   const handleOpenExternal = useCallback(() => {
     if (absolutePath) (window.claude as any).shell?.openPath?.(absolutePath);
   }, [absolutePath]);
@@ -1153,10 +1153,10 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
         )}
         {/* Edit/Save moved to the floating button at the bottom-right of the
             doc pane (Destin, 2026-07-22) — see the cluster below the content div. */}
-        {active && isElectron && <IconBtn name="external" title="Open with the default app" onClick={handleOpenExternal} />}
+        {active && canOpenInOs && <IconBtn name="external" title="Open with the default app" onClick={handleOpenExternal} />}
         {active && isRemoteMode() && <IconBtn name="download" title="Download" onClick={handleDownload} />}
         {active && <IconBtn name={copiedPath ? 'check' : 'copypath'} title={copiedPath ? 'Copied' : 'Copy path'} onClick={handleCopyPath} />}
-        {active && isElectron && <IconBtn title="Reveal in folder" glyph={<RevealFolderIc />} onClick={handleReveal} />}
+        {active && canOpenInOs && <IconBtn title="Reveal in folder" glyph={<RevealFolderIc />} onClick={handleReveal} />}
         {/* Expand is a no-op at phone width — the drawer is already the whole
             screen — so it is not offered there (tester U6, 2026-09-10). */}
         {!narrowViewport && (

@@ -25,7 +25,8 @@
 // action lists of the tests above that block.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { openFilepath } from '../src/renderer/hooks/useOpenFilepath';
-import { setConnectionMode } from '../src/renderer/platform';
+import { isRemoteMode, setConnectionMode } from '../src/renderer/platform';
+import { DESKTOP_WINDOW_CAPABILITIES, REMOTE_SCREEN_CAPABILITIES } from '../src/shared/capabilities';
 import type { ArtifactState } from '../src/renderer/state/artifact-tracker';
 import type { ArtifactAction } from '../src/renderer/state/artifact-actions';
 import type { ArtifactRecord } from '../src/shared/artifacts/types';
@@ -76,6 +77,9 @@ function installClaudeArtifacts(stubs: {
   (globalThis as any).window = {
     ...(globalThis as any).window,
     claude: {
+      // The host's answer for this screen: a screen watching a computer may not write (`projectWrites`). Picked by the
+      // connection mode each test sets before installing, so the cases keep naming the screen they are about.
+      capabilities: isRemoteMode() ? REMOTE_SCREEN_CAPABILITIES : DESKTOP_WINDOW_CAPABILITIES,
       artifacts: { listProject, listAllFiles, listSession, appendVersion, ...(resolvePath ? { resolvePath } : {}) },
     },
   };
