@@ -39,6 +39,9 @@ export interface SessionChannelTypes {
   'transcript:page': { request: TranscriptPageRequest; response: TranscriptPageResult };
   // The one way a screen is filled (one-core R5-2): see main/session-open.ts for the ask and the answer.
   'session:open': { request: OpenRequest; response: OpenReply };
+  // End a phone's watch of one session (one-core R5-3). `session:open` is what starts a watch; there is no separate "watch" call, because a
+  // watch without a fill would deliver events onto a conversation the phone has no history for.
+  'session:unwatch': { request: { sessionId: string }; response: { ok: true } };
   // Tags, notes, flags and names.
   'session:set-flag': { request: { sessionId: string; flag: string; value: boolean }; response: SessionWriteResult };
   'session:set-tag': { request: { sessionId: string; tagId: string; value: boolean }; response: SessionWriteResult };

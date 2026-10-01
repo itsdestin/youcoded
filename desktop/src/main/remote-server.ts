@@ -123,6 +123,8 @@ interface AuthenticatedClient {
 export interface SocketAudience {
   registerSocket(id: number): void;
   unregisterSocket(id: number): void;
+  /** Phones watching a session (per-session delivery, one-core R5-3). Optional so a test double need not model it: absent = every phone. */
+  getSocketWatchers?(sessionId: string): number[];
 }
 
 export interface ClientInfo {
@@ -619,7 +621,9 @@ export class RemoteServer {
     // A session the record has already closed (a late chunk) is not relayed: it has no stream to be a position in.
     if (!at) return;
     // The live relay: unchanged from what a client has always seen, now with the stream's epoch and the chunk's offset.
-    this.broadcast({ type: 'pty:output', payload: { sessionId, data, epoch: at.epoch, offset: at.offset } });
+    // WHY only the phones watching it (one-core R5-3): terminal output is the heaviest stream there is, and a phone used to be sent
+    // every session's bytes only to have its page throw away the ones it had not opened. Now it is sent the sessions it watches.
+    this.broadcast({ type: 'pty:output', payload: { sessionId, data, epoch: at.epoch, offset: at.offset } }, this.audience?.getSocketWatchers?.(sessionId));
   };
 
   private onSessionCreated = (info: any) => {

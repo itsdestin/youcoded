@@ -419,7 +419,7 @@ export function registerIpcHandlers(
   // notes and tags outside any window's handler and must still repaint every window and phone.
   const broadcastSessionMeta = (sessionId: string, payload: { flag: string; value: boolean } | { note: string }): void => {
     // Windows get (sessionId, change); phones get {sessionId, ...change} — the two shapes the pair always sent.
-    publish(sessionId, IPC.SESSION_META_CHANGED, { sessionId, ...payload }, { windowArgs: [sessionId, payload] });
+    publish(sessionId, IPC.SESSION_META_CHANGED, { sessionId, ...payload }, { windowArgs: [sessionId, payload], everyPhone: true });
   };
 
   // Broadcast a session-scoped channel to EVERY registered main window. Use this
@@ -776,7 +776,8 @@ export function registerIpcHandlers(
           throw new Error(`Native startup failed (${String(e)}); teardown failed (${String(cleanupError)}).`);
         } finally { nativeStarting.delete(info.id); nativeExited.delete(info.id); }
         sessionIdMap.delete(info.id);
-        windowRegistry?.releaseSession(info.id);
+        // WHY endSession (one-core R5-3): the session never started, so no phone should keep a watch on it (releaseSession keeps phones').
+        windowRegistry?.endSession(info.id);
         log('ERROR', 'IPC', 'native session start failed', { sessionId: info.id, error: String(e) });
         throw e;
       }
@@ -880,7 +881,7 @@ export function registerIpcHandlers(
       // Explicit user-initiated destroy → treat as clean exit (0). The
       // reducer no-ops clean exits unless a turn was in flight.
       sendForSession(sessionId, IPC.SESSION_DESTROYED, [sessionId, 0]);
-      windowRegistry?.releaseSession(sessionId);
+      windowRegistry?.endSession(sessionId); // the session is over: windows' AND phones' interest ends (R5-3)
       // Welcome back (design §2): this is the session's own X — untrack it so
       // it is NOT offered back next launch. Deliberately NOT in
       // sessionManager.destroySession/session-exit (below): those also run on
@@ -1019,7 +1020,7 @@ export function registerIpcHandlers(
     runtime.records.drop(sessionId); // the session is over: its record goes with it (one-core R5-1)
     pendingOutput.delete(sessionId);
     readySessions.delete(sessionId);
-    windowRegistry?.releaseSession(sessionId);
+    windowRegistry?.endSession(sessionId); // over: windows' AND phones' watches go (a window merely releasing keeps phones', R5-3)
   });
 
   // --- Prune stale context files on startup ---
@@ -1230,13 +1231,16 @@ export function registerIpcHandlers(
     mainWindow, windowRegistry, remoteServer,
   });
   setSyncHealthGate(statusPush.hasAudience); // the sync health check asks the same question (audit W12)
-  // WHY (one-core R5-1): the per-session summary rides its own push beside attentionMap; no screen reads it yet (R5-3).
+  // WHY (one-core R5-1): the per-session summary rides its own push beside attentionMap; a phone's dots and attention sound read it (R5-3).
   const summaryPush = startSessionSummaryPush({
     records: runtime.records,
     deliver: (payload) => { send(SESSION_SUMMARY_CHANNEL, payload); remoteServer?.broadcast({ type: SESSION_SUMMARY_CHANNEL, payload }); },
     hasAudience: statusPush.hasAudience,
     onPhoneConnected: remoteServer ? (listener) => remoteServer.onStatusChange((status) => { if (status.clientCount > 0) listener(); }) : undefined,
+    hasPhone: () => (remoteServer?.getClientCount() ?? 0) > 0,
   });
+  // WHY (one-core R5-3): a dot a phone draws from the summary must change when the session does, not on the next 10 s tick.
+  runtime.records.onSummaryChange(() => summaryPush.notify());
 
   // Also push immediately on first hook event (session is active)
   let sentInitialStatus = false;
@@ -1341,7 +1345,7 @@ export function registerIpcHandlers(
         if (!sessionManager.destroySession(info.id)) throw new Error('Attempt writer could not be stopped.');
       }
       sessionIdMap.delete(info.id);
-      windowRegistry?.releaseSession(info.id);
+      windowRegistry?.endSession(info.id); // the attempt's writer is gone: nothing left to watch (R5-3)
     },
   }) : null;
   const handoffRoute = createHandoffTransport(handoffAttempts);

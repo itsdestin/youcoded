@@ -84,6 +84,20 @@ export class AudienceFills {
     }
   }
 
+  /**
+   * The screen stopped watching this session while its fill may still be in flight (one-core R5-3, session:unwatch): drop what was
+   * held WITHOUT delivering it. Nothing is lost: the screen's position is the answer's head number, and a later open resumes from there
+   * (or takes a fresh page), so these events are re-sent then rather than arriving late for a session it no longer shows.
+   */
+  cancel(key: string, sessionId: string): void {
+    const bySession = this.holds.get(key);
+    const hold = bySession?.get(sessionId);
+    if (!bySession || !hold) return;
+    if (hold.timer) clearTimeout(hold.timer);
+    bySession.delete(sessionId);
+    if (bySession.size === 0) this.holds.delete(key);
+  }
+
   /** The screen is gone (window closed, phone dropped): forget everything it was owed. */
   forget(key: string): void {
     const bySession = this.holds.get(key);

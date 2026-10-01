@@ -225,6 +225,8 @@ const IPC = {
   SESSION_OWNERSHIP_LOST: 'session:ownership-lost',
   DETACH_CLAIM_PENDING: 'detach:claim-pending',
   SESSION_OPEN: 'session:open',
+  SESSION_UNWATCH: 'session:unwatch',
+  SESSION_SUMMARY: 'session:summary',
   SESSION_REFILL: 'session:refill',
   HOOK_REPLAY_COMPLETE: 'hook:replay-complete',
   SESSION_DETACH_START: 'session:detach-start',
@@ -609,6 +611,9 @@ contextBridge.exposeInMainWorld('claude', {
     // main holds this window's pushes for the session, so the answer and the live stream never overlap or leave a gap.
     open: (req: { sessionId: string; claudeSessionId?: string; projectSlug?: string; fresh?: boolean }) =>
       ipcRenderer.invoke(IPC.SESSION_OPEN, req),
+    // End a PHONE's watch of one conversation (one-core R5-3). A window has no such thing (its audience is ownership), so the
+    // computer's door answers ok and changes nothing; this exists so the bridge has one shape on every screen.
+    unwatch: (sessionId: string) => ipcRenderer.invoke(IPC.SESSION_UNWATCH, { sessionId }),
     // Hand pushes (an open's `before` / `after`) to the SAME listeners a live push reaches. `ipcRenderer` is an event emitter, so
     // emitting the channel locally runs exactly the handlers `on.*` registered, with no second set of rules for a filled window.
     onRefill: (cb: (sessionId: string) => void) => {
@@ -734,6 +739,14 @@ contextBridge.exposeInMainWorld('claude', {
       const handler = (_e: IpcRendererEvent, data: any) => cb(data);
       ipcRenderer.on(IPC.STATUS_DATA, handler);
       return handler;
+    },
+    // The small per-session facts (working, asks waiting, attention, history) the computer pushes about EVERY session (one-core R5-3).
+    // A phone draws its dots from them; the computer's own windows derive theirs from the events they already receive, so nothing here
+    // subscribes on the desktop. Present so the bridge has one shape on every screen.
+    sessionSummary: (cb: (payload: any) => void) => {
+      const handler = (_e: IpcRendererEvent, payload: any) => cb(payload);
+      ipcRenderer.on(IPC.SESSION_SUMMARY, handler);
+      return () => { ipcRenderer.removeListener(IPC.SESSION_SUMMARY, handler); };
     },
     sessionRenamed: (cb: (sessionId: string, name: string) => void) => {
       const handler = (_e: IpcRendererEvent, sid: string, name: string) => cb(sid, name);

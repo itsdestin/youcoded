@@ -97,16 +97,39 @@ export class WindowRegistry extends EventEmitter {
     this.emit('changed');
   }
 
-  /** Release ownership of a session (if any). Always emits 'changed'. */
+  /**
+   * Release ownership of a session (if any). Always emits 'changed'.
+   *
+   * WHY the phones' watches SURVIVE this (one-core R5-3): a window letting go of a session says nothing about the
+   * phones watching it. Before per-session delivery nothing read a phone's watch, so wiping the whole set here was
+   * harmless; now a phone's watch is its ONLY way to receive the session, and a release that wiped it would silently
+   * stop that phone's chat (and its terminal) without the phone ever being told. Only windows' subscriptions go.
+   * A session that has truly ended calls `endSession` instead.
+   */
   releaseSession(sessionId: string): void {
     this.ownership.delete(sessionId);
     // WHY (2026-09-16, per-session-maps investigation): a dead session's
     // subscriber set used to survive until the subscribing window closed —
     // the buddy window subscribes without owning, so every session it ever
-    // mirrored left an entry behind. Nothing routes events to a session that
-    // no longer exists, so the set is dead weight the moment it is released.
-    this.subscriptions.delete(sessionId);
+    // mirrored left an entry behind. The WINDOW part of the set is still dropped here; the phone part is kept (see above).
+    const set = this.subscriptions.get(sessionId);
+    if (set) {
+      for (const id of [...set]) if (!this.sockets.has(id)) set.delete(id);
+      if (set.size === 0) this.subscriptions.delete(sessionId);
+    }
     this.emit('changed');
+  }
+
+  /**
+   * The session is over (its process exited or it was destroyed): forget every audience member's interest in it,
+   * windows and phones. WHY separate from `releaseSession` (one-core R5-3): a phone is told the session ended by the
+   * global `session:destroyed` push and drops its own watch; a watch left behind here would be a leak, and worse, would
+   * make a session id that comes back (a native session is keyed by the id it resumes) deliver its NEW record's events
+   * to a phone that never filled it.
+   */
+  endSession(sessionId: string): void {
+    this.subscriptions.delete(sessionId);
+    this.releaseSession(sessionId);
   }
 
   // sessionId -> Set of subscriber windowIds. Separate from `ownership`:
@@ -153,7 +176,7 @@ export class WindowRegistry extends EventEmitter {
     return out;
   }
 
-  /** Phones watching this session (R5-3 turns this into the delivery filter; nothing reads it for delivery yet). */
+  /** Phones watching this session: the delivery filter for every session-scoped push and for terminal output (R5-3). */
   getSocketWatchers(sessionId: string): number[] {
     const set = this.subscriptions.get(sessionId);
     return set ? [...set].filter((id) => this.sockets.has(id)) : [];
@@ -210,8 +233,8 @@ export class WindowRegistry extends EventEmitter {
    *
    * WHY watchers and not every phone (one-core R5-2): a phone's screen is filled from the record as of an event
    * number, so a push that reached it BEFORE it opened the session would be applied to a session with no history and
-   * then overlap the fill. Every phone opens every session it lists until R5-3 narrows that to the ones on screen, so
-   * what a phone receives is unchanged; what changes is that "who wants this" is now a fact the phone stated.
+   * then overlap the fill. A phone watches only the conversation on its screen and a few it looked at lately (R5-3,
+   * `session:open` starts a watch, `session:unwatch` ends it), so everything else is simply not sent to it.
    */
   resolveAudience(sessionId: string): { windowIds: number[]; socketIds: number[]; fallbackToPrimary: boolean } {
     const windowIds = new Set<number>();

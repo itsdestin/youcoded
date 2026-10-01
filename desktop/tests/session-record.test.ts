@@ -288,3 +288,57 @@ describe('sizing an event without serialising it', () => {
     expect(c.user + c.system).toBeLessThan(20_000); // microseconds
   });
 });
+
+describe('the summary change announcement (what a phone\'s dots wait for)', () => {
+  const userMsg = (n: number) => ({ sessionId: S, type: 'user-message', uuid: `m${n}`, timestamp: n, data: { text: 'go' } });
+  const streamed = (n: number) => ({ sessionId: S, type: 'assistant-text', uuid: `t${n}`, timestamp: n, data: { text: 'w', partId: 'p' } });
+
+  function watched() {
+    const r = new SessionRecords();
+    const heard: string[] = [];
+    r.onSummaryChange((sid) => heard.push(sid));
+    r.begin(S);
+    heard.length = 0;
+    return { r, heard };
+  }
+
+  it('says a session appeared and says it ended', () => {
+    const r = new SessionRecords();
+    const heard: string[] = [];
+    r.onSummaryChange((sid) => heard.push(sid));
+    r.begin(S);
+    expect(heard).toEqual([S]);
+    r.drop(S);
+    expect(heard).toEqual([S, S]);
+    r.drop(S);                                  // dropping what is not there says nothing
+    expect(heard).toHaveLength(2);
+  });
+
+  it('says it the moment a turn starts, a question is raised or answered, the attention flips, and a turn ends', () => {
+    const { r, heard } = watched();
+    r.note(S, 'transcript:event', userMsg(1));  expect(heard).toHaveLength(1);   // working + history
+    r.note(S, 'hook:event', ask('a1'));          expect(heard).toHaveLength(2);   // a question waits
+    r.note(S, 'hook:event', hook('PermissionResolved', 'a1')); expect(heard).toHaveLength(3);
+    r.note(S, 'transcript:event', { sessionId: S, type: 'assistant-thinking', uuid: 'h1', timestamp: 5, data: { stalled: true } }); expect(heard).toHaveLength(4);
+    r.noteReportedAttention(S, 'awaiting-input'); expect(heard).toHaveLength(5);  // a window's classifier
+    r.note(S, 'transcript:event', { sessionId: S, type: 'turn-complete', uuid: 'c1', timestamp: 6, data: { stopReason: 'end_turn' } }); expect(heard).toHaveLength(6);
+  });
+
+  it('stays quiet for a streamed answer: thousands of events, no summary field moves', () => {
+    const { r, heard } = watched();
+    r.note(S, 'transcript:event', userMsg(1));
+    heard.length = 0;
+    for (let i = 0; i < 500; i++) r.note(S, 'transcript:event', streamed(i));
+    expect(heard.length).toBeLessThanOrEqual(1);  // only the first answer text can change a field (nothing here sets a model)
+  });
+
+  it('a listener that throws never costs the session its event', () => {
+    const r = new SessionRecords();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    r.onSummaryChange(() => { throw new Error('listener bug'); });
+    r.begin(S);
+    expect(() => r.note(S, 'transcript:event', userMsg(1))).not.toThrow();
+    expect(r.events(S)).toHaveLength(1);
+    warn.mockRestore();
+  });
+});

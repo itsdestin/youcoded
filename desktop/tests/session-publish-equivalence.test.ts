@@ -104,6 +104,8 @@ interface Family {
   payload: any;
   windowArgs?: (payload: any) => any[];
   phonePayload?: (payload: any) => any;
+  /** Not a session's event stream: every phone gets it un-numbered and the record never holds it (one-core R5-3). */
+  conversationLevel?: boolean;
 }
 
 const ev = { sessionId: SID, type: 'assistant-text', uuid: 'u1', timestamp: 1, data: { text: 'hi', model: 'm1' } };
@@ -138,6 +140,9 @@ const FAMILIES: Family[] = [
     name: 'session meta changed', channel: IPC.SESSION_META_CHANGED, payload: { flag: 'tag:t1', value: true },
     fire: (w, p) => w.outbox.sessionMeta(SID, p),
     windowArgs: (p) => [SID, p], phonePayload: (p) => ({ sessionId: SID, ...p }),
+    // WHY (one-core R5-3): keyed by the conversation's Claude id, which no phone watches, so it goes to EVERY phone, un-numbered, and the
+    // session's record never holds it. Pinned by the per-session delivery test below.
+    conversationLevel: true,
   },
 ];
 
@@ -160,7 +165,8 @@ describe('publish delivers what each sendForSession + broadcast pair delivered',
       it('reaches every phone once, as {type, payload} numbered with the record\'s {epoch, seq}', () => {
         f.fire(w, f.payload);
         // WHY the numbers (one-core R5-2): publish numbers the event first, so a phone can say where it got to and be sent what it missed.
-        expect(phoneOf(w, f.channel)).toEqual([{ type: f.channel, payload: f.phonePayload ? f.phonePayload(f.payload) : f.payload, epoch: expect.any(String), seq: 1 }]);
+        const message = { type: f.channel, payload: f.phonePayload ? f.phonePayload(f.payload) : f.payload };
+        expect(phoneOf(w, f.channel)).toEqual([f.conversationLevel ? message : { ...message, epoch: expect.any(String), seq: 1 }]);
       });
 
       it('falls back to the primary window when nobody owns the session (and phones still hear it)', () => {
@@ -181,8 +187,9 @@ describe('the record sees what publish delivered', () => {
     w.runtime.records.begin(SID);
     for (const f of FAMILIES) f.fire(w, f.payload);
     const events = w.runtime.records.events(SID);
-    expect(events.map((e: any) => e.type)).toEqual(FAMILIES.map((f) => f.channel));
-    expect(events.map((e: any) => e.seq)).toEqual(FAMILIES.map((_f, i) => i + 1));
-    expect(events.at(-1).payload).toEqual({ sessionId: SID, flag: 'tag:t1', value: true });
+    const noted = FAMILIES.filter((f) => !f.conversationLevel);
+    expect(events.map((e: any) => e.type)).toEqual(noted.map((f) => f.channel));
+    expect(events.map((e: any) => e.seq)).toEqual(noted.map((_f, i) => i + 1));
+    expect(events.at(-1).payload).toEqual(noted.at(-1)!.payload);
   });
 });

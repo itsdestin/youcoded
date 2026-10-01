@@ -46,6 +46,13 @@ interface PublishOptions {
    * `{sessionId, ...change}` — a shape difference that predates this file and is kept as it was).
    */
   windowArgs?: unknown[];
+  /**
+   * A conversation-level push, not a session's event stream (one-core R5-3): every phone gets it, and the session's record does not note it.
+   * WHY: `session:meta-changed` (a tag, a note, a flag) is keyed by the conversation's CLAUDE id, which no phone watches (phones watch the
+   * computer's own session ids), so per-session delivery would have silently stopped a phone hearing a tag or note change live; and
+   * noting it would have made the record open a phantom session under that id. It is small and rare, so everyone gets it.
+   */
+  everyPhone?: boolean;
   /** Runs between the windows' leg and the phones' leg (if it throws, phones are skipped). */
   afterWindows?: () => void;
   /** Replaces the windows' leg when a session-scoped push has a window route of its own (the Claude Code hook relay goes to the
@@ -60,7 +67,7 @@ export function createPublish(deps: PublishDeps): Publish {
     // Numbered FIRST so the phone's copy carries its number. The record is bookkeeping: a bug in it must never cost a
     // screen its event, so it is fenced and the push goes out unnumbered if it throws.
     let stamp: { epoch: string; seq: number } | null = null;
-    try {
+    if (!options?.everyPhone) try {
       const seq = deps.records.note(sessionId, type, payload);
       const epoch = seq === null ? null : deps.records.epochOf(sessionId);
       if (seq !== null && epoch) stamp = { epoch, seq };
@@ -71,6 +78,6 @@ export function createPublish(deps: PublishDeps): Publish {
     // Windows first, then phones: the order the pairs always had.
     (options?.windows ?? deps.toWindows)(sessionId, type, options?.windowArgs ?? [payload], holdWindow);
     options?.afterWindows?.();
-    deps.toSockets({ type, payload, ...(stamp ?? {}) }, deps.socketsFor?.(sessionId), holdSocket);
+    deps.toSockets({ type, payload, ...(stamp ?? {}) }, options?.everyPhone ? undefined : deps.socketsFor?.(sessionId), options?.everyPhone ? undefined : holdSocket);
   };
 }

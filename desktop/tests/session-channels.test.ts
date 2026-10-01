@@ -20,7 +20,7 @@ const NOT_YET = new Set<string>([
 ]);
 const PUSHES = new Set<string>([
   IPC.SESSION_CREATED, IPC.SESSION_DESTROYED, IPC.SESSION_MOVED, IPC.SESSION_RENAMED, IPC.SESSION_META_CHANGED,
-  IPC.TRANSCRIPT_EVENT, IPC.TRANSCRIPT_SHRINK, IPC.SESSION_REFILL,
+  IPC.TRANSCRIPT_EVENT, IPC.TRANSCRIPT_SHRINK, IPC.SESSION_REFILL, IPC.SESSION_SUMMARY,
 ]);
 
 const desktopCtx = (extra: any = {}): any => ({ door: 'desktop', runtime: null, broadcast: () => {}, ...extra });
@@ -33,8 +33,8 @@ describe('session channels: what is in the table and who may call it', () => {
     const inTable = new Set(CHANNEL_TABLE.map((d) => d.name));
     const names = Object.values(IPC).filter((v) => FAMILY.test(v) && !PUSHES.has(v) && !NOT_YET.has(v));
     // 23 = create destroy list selected switch input resize terminal-ready menu-lock browse history read-meta
-    //      page open set-flag set-tag set-note get-meta reopen-list forget-reopen + 4 naming; a new one must be decided here.
-    expect(names.length).toBe(24);
+    //      page open unwatch set-flag set-tag set-note get-meta reopen-list forget-reopen + 4 naming; a new one must be decided here.
+    expect(names.length).toBe(25);
     expect(names.filter((n) => !inTable.has(n))).toEqual([]);
   });
 

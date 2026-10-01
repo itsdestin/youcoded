@@ -329,6 +329,12 @@ export const IPC = {
   // record's recent past and what only memory holds, or just the events a reconnecting screen missed. Replaced the remote
   // snapshot, the torn-off window's replay and the hook-event replay.
   SESSION_OPEN: 'session:open',
+  // Stop receiving ONE session's pushes (one-core R5-3). `session:open` starts a phone's watch (and fills it); this ends it. A phone
+  // watches the conversation on its screen plus a few it looked at lately; everything else reaches it only as `session:summary`.
+  SESSION_UNWATCH: 'session:unwatch',
+  // Push to everyone: the small per-session facts (working, asks waiting, attention, history) the session strip's dots are drawn from,
+  // so a phone can colour a session it does not watch (R5-1 added it, R5-3 reads it).
+  SESSION_SUMMARY: 'session:summary',
   // Push to ONE window: its fill never completed (the hold expired), so it must fill that conversation again (R5-2 review fix).
   SESSION_REFILL: 'session:refill',
   // The asks still open in a session, replayed at the end of every fill (a push in the answer's `after`, never sent by itself).
@@ -938,6 +944,8 @@ interface SessionBridge {
   /** The ONE way a conversation is filled (one-core R5-2; main/session-open.ts has the ask and the answer). Resolves to the answer, or to
    *  undefined when this bridge has no host record to fill from (the Android app on its own runtime). */
   open(req: { sessionId: string; claudeSessionId?: string; projectSlug?: string; fresh?: boolean }): Promise<import('./session-open-types').OpenReply | undefined>;
+  /** End a phone's watch of one conversation (one-core R5-3); `open` starts it. A window answers ok and changes nothing. */
+  unwatch(sessionId: string): Promise<{ ok: true }>;
   /** Hand an open's pushes (`before` / `after`) to the same listeners a live push reaches. */
   play(pushes: Array<{ type: string; payload: unknown }>): void;
   /** The computer asks this screen to fill a conversation again (its first fill never completed). */
@@ -984,6 +992,8 @@ interface BridgeListeners {
   remoteConversationStatus(cb: (status: { phase: string }) => void): () => void;
   hookEvent(cb: (event: any) => void): BridgeHandler;
   statusData(cb: (data: any) => void): BridgeHandler;
+  /** Per-session summaries pushed about every session (one-core R5-3): `{ summaries: { [sessionId]: SessionSummary } }`. */
+  sessionSummary(cb: (payload: { summaries: Record<string, import('./session-summary-types').SessionSummary> }) => void): () => void;
   sessionRenamed(cb: (sessionId: string, name: string) => void): BridgeHandler;
   sessionMoved(cb: (payload: { sessionId: string; device?: string; claudeSessionId?: string; projectSlug?: string; projectPath?: string }) => void): BridgeHandler;
   sessionMetaChanged(cb: (sessionId: string, meta: { flag: string; value: boolean }) => void): () => void;

@@ -26,6 +26,7 @@
 // Electron-free on purpose: tests/create-runtime.test.ts proves nothing reachable from
 // create-runtime imports Electron, and the record is built there.
 import { randomBytes } from 'crypto';
+import type { SessionSummary } from '../shared/session-summary-types';
 
 export const RING_MAX_EVENTS = 2000;
 export const RING_MAX_BYTES = 2 * 1024 * 1024;
@@ -122,17 +123,7 @@ export interface SessionFacts {
   queued: string[];
 }
 
-/** What a session strip and its dots need, small enough to push to everyone. */
-export interface SessionSummary {
-  working: boolean;
-  awaitingCount: number;
-  /** Relayed attention when it says something is wrong, else what the events say. */
-  attention: string;
-  hasHistory: boolean;
-  queuedCount: number;
-  permissionMode: string | null;
-  model: string | null;
-}
+export type { SessionSummary } from '../shared/session-summary-types';
 
 /** Facts only the host (not an event) can answer. Supplied by create-runtime for native sessions. */
 export type LiveFactsSource = (sessionId: string) => Partial<Pick<SessionFacts, 'queued' | 'permissionMode'>> | null;
@@ -168,6 +159,8 @@ interface Rec {
   /** Highest host timestamp a progress/terminal event has fenced (mirrors the reducer's usageProgressAt). */
   progressAt: number;
   seen: Set<string>;
+  /** The summary fields as of the last announcement (see `onSummaryChange`): a cheap string compare says "did a dot just change?". */
+  summaryKey: string;
 }
 
 const asObject = (v: unknown): Record<string, any> => (v && typeof v === 'object' ? (v as Record<string, any>) : {});
@@ -179,6 +172,7 @@ export class SessionRecords {
   private readonly maxEvents: number;
   private readonly maxBytes: number;
   private readonly now: () => number;
+  private summaryListener: ((sessionId: string) => void) | null = null;
 
   constructor(opts: { maxEvents?: number; maxBytes?: number; now?: () => number } = {}) {
     this.maxEvents = opts.maxEvents ?? RING_MAX_EVENTS;
@@ -187,6 +181,29 @@ export class SessionRecords {
   }
 
   setLiveSource(source: LiveFactsSource | null): void { this.liveSource = source; }
+
+  /**
+   * Tell `listener` the moment a session's SUMMARY (what a dot is drawn from) changes: a turn starts or ends, an ask opens or closes, the
+   * attention state flips, the first message arrives, a session begins or ends. WHY (one-core R5-3): the summary used to ride a 10 s
+   * timer, which is far too slow for a dot a phone now draws from it alone; the attention sound would also play ten seconds late.
+   * It fires on a CHANGE, not on every event (a streamed answer is thousands of events and no summary changes), so it is cheap.
+   */
+  onSummaryChange(listener: ((sessionId: string) => void) | null): void { this.summaryListener = listener; }
+
+  /** The fields a summary push is built from, as one string: equal strings mean no dot can have changed. */
+  private summaryKeyOf(rec: Rec): string {
+    const f = rec.facts;
+    const reported = f.reportedAttention && f.reportedAttention !== 'ok' ? f.reportedAttention : null;
+    return `${f.working ? 1 : 0}|${rec.asks.size + rec.passwordAsks.size}|${reported ?? f.attention}|${f.hasHistory ? 1 : 0}|${f.permissionMode ?? ''}|${f.model ?? ''}`;
+  }
+
+  /** After anything that may have moved a summary field: announce it if it did. */
+  private announceIfChanged(sessionId: string, rec: Rec): void {
+    const key = this.summaryKeyOf(rec);
+    if (key === rec.summaryKey) return;
+    rec.summaryKey = key;
+    try { this.summaryListener?.(sessionId); } catch (err) { console.warn('[session-record] summary listener failed:', String(err)); }
+  }
 
   /** Create this session's record if it has none (idempotent). A destroyed session's id stays closed. */
   open(sessionId: string): boolean {
@@ -200,8 +217,10 @@ export class SessionRecords {
         working: false, attention: 'ok', reportedAttention: null, hasHistory: false,
         lastActivityAt: this.now(), permissionMode: null, model: null, modelState: null,
       },
-      progressAt: 0, seen: new Set(),
+      progressAt: 0, seen: new Set(), summaryKey: '',
     });
+    // A session appearing is a summary change (the strip learns it exists as "idle, no history").
+    this.announceIfChanged(sessionId, this.records.get(sessionId)!);
     return true;
   }
 
@@ -215,7 +234,8 @@ export class SessionRecords {
 
   /** The session ended: its record is gone, and a late event cannot bring it back. */
   drop(sessionId: string): void {
-    this.records.delete(sessionId);
+    const existed = this.records.delete(sessionId);
+    if (existed) { try { this.summaryListener?.(sessionId); } catch (err) { console.warn('[session-record] summary listener failed:', String(err)); } }
     this.gone.add(sessionId);
     if (this.gone.size > TOMBSTONES_MAX) {
       const oldest = this.gone.values().next().value;
@@ -237,6 +257,7 @@ export class SessionRecords {
     const at = this.now();
     rec.facts.lastActivityAt = at;
     this.fold(rec, type, payload);
+    this.announceIfChanged(sessionId, rec);
     // A password ask is announced and re-announced by the broker; the ring never holds its command line.
     if (type === 'hook:event' && asObject(payload).type === 'PasswordRequest') return seq;
     const bytes = estimateSize(payload);
@@ -384,7 +405,9 @@ export class SessionRecords {
   /** A window relayed this session's attention state (remote:attention-changed). */
   noteReportedAttention(sessionId: string, state: string): void {
     if (!this.open(sessionId)) return;
-    this.records.get(sessionId)!.facts.reportedAttention = state;
+    const rec = this.records.get(sessionId)!;
+    rec.facts.reportedAttention = state;
+    this.announceIfChanged(sessionId, rec);
   }
 
   epochOf(sessionId: string): string | null { return this.records.get(sessionId)?.epoch ?? null; }

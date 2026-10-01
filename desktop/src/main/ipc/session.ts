@@ -339,6 +339,23 @@ const sessionEntries: MainChannelDef[] = [
     },
   }),
 
+  // End a phone's watch of one session (one-core R5-3). The phone keeps what it has drawn and is sent nothing more for this session
+  // (the summary keeps flowing), until it opens it again: `session:open` is the only thing that starts a watch.
+  // WHY a window gets a plain "ok" and nothing happens: a window's audience is ownership and its own subscriptions (the buddy), which
+  // other channels manage; per-session delivery is a phone's concern only, and the computer's windows must not be affected by it.
+  defineChannel({
+    name: IPC.SESSION_UNWATCH, kind: 'handle',
+    handler: async (req, ctx) => {
+      const sessionId = typeof req?.sessionId === 'string' ? req.sessionId : '';
+      if (ctx.door !== 'desktop' && ctx.audienceId !== undefined && sessionId) {
+        ops().windowRegistry?.unsubscribe(sessionId, ctx.audienceId);
+        // An open still in flight must not deliver its held pushes to a screen that has just said it no longer wants them.
+        ctx.runtime?.fills.cancel(`s${ctx.audienceId}`, sessionId);
+      }
+      return { ok: true as const };
+    },
+  }),
+
   // ── Flags, tags, notes ───────────────────────────────────────────────────────
   // Set a named flag (complete, priority, ...). Refused to a phone, as before (it had no case for it).
   defineChannel({
