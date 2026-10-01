@@ -1,0 +1,1876 @@
+{
+  "user-message plain": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_USER_MESSAGE",
+          "sessionId": "s1",
+          "uuid": "u-user-message",
+          "text": "hi",
+          "timestamp": 1700
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_USER_MESSAGE",
+          "sessionId": "s1",
+          "uuid": "u-user-message",
+          "text": "hi",
+          "timestamp": 1700
+        }
+      }
+    ],
+    "page": {
+      "type": "TRANSCRIPT_USER_MESSAGE",
+      "sessionId": "s1",
+      "uuid": "u-user-message",
+      "text": "hi",
+      "timestamp": 1700
+    }
+  },
+  "user-message slash command": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_USER_MESSAGE",
+          "sessionId": "s1",
+          "uuid": "u-user-message",
+          "text": "/x",
+          "timestamp": 1700,
+          "slashCommand": true
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_USER_MESSAGE",
+          "sessionId": "s1",
+          "uuid": "u-user-message",
+          "text": "/x",
+          "timestamp": 1700,
+          "slashCommand": true
+        }
+      }
+    ],
+    "page": {
+      "type": "TRANSCRIPT_USER_MESSAGE",
+      "sessionId": "s1",
+      "uuid": "u-user-message",
+      "text": "/x",
+      "timestamp": 1700,
+      "slashCommand": true
+    }
+  },
+  "user-message injected": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_USER_MESSAGE",
+          "sessionId": "s1",
+          "uuid": "u-user-message",
+          "text": "report",
+          "timestamp": 1700,
+          "injected": true,
+          "injectedMeta": {
+            "from": "helper"
+          }
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_USER_MESSAGE",
+          "sessionId": "s1",
+          "uuid": "u-user-message",
+          "text": "report",
+          "timestamp": 1700,
+          "injected": true,
+          "injectedMeta": {
+            "from": "helper"
+          }
+        }
+      }
+    ],
+    "page": {
+      "type": "TRANSCRIPT_USER_MESSAGE",
+      "sessionId": "s1",
+      "uuid": "u-user-message",
+      "text": "report",
+      "timestamp": 1700,
+      "injected": true,
+      "injectedMeta": {
+        "from": "helper"
+      }
+    }
+  },
+  "user-message subagent-stamped": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_USER_MESSAGE",
+          "sessionId": "s1",
+          "uuid": "u-user-message",
+          "text": "brief",
+          "timestamp": 1700,
+          "parentAgentToolUseId": "parent-1",
+          "agentId": "agent-1"
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_USER_MESSAGE",
+          "sessionId": "s1",
+          "uuid": "u-user-message",
+          "text": "brief",
+          "timestamp": 1700,
+          "parentAgentToolUseId": "parent-1",
+          "agentId": "agent-1"
+        }
+      }
+    ],
+    "page": {
+      "type": "TRANSCRIPT_USER_MESSAGE",
+      "sessionId": "s1",
+      "uuid": "u-user-message",
+      "text": "brief",
+      "timestamp": 1700,
+      "parentAgentToolUseId": "parent-1",
+      "agentId": "agent-1"
+    }
+  },
+  "user-interrupt plain": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_INTERRUPT",
+          "sessionId": "s1",
+          "uuid": "u-user-interrupt",
+          "timestamp": 1700,
+          "kind": "plain"
+        }
+      }
+    ],
+    "buddy": [],
+    "page": {
+      "type": "TRANSCRIPT_INTERRUPT",
+      "sessionId": "s1",
+      "uuid": "u-user-interrupt",
+      "timestamp": 1700,
+      "kind": "plain"
+    }
+  },
+  "user-interrupt tool-use": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_INTERRUPT",
+          "sessionId": "s1",
+          "uuid": "u-user-interrupt",
+          "timestamp": 1700,
+          "kind": "tool-use"
+        }
+      }
+    ],
+    "buddy": [],
+    "page": {
+      "type": "TRANSCRIPT_INTERRUPT",
+      "sessionId": "s1",
+      "uuid": "u-user-interrupt",
+      "timestamp": 1700,
+      "kind": "tool-use"
+    }
+  },
+  "user-interrupt native with usage and no kind": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_INTERRUPT",
+          "sessionId": "s1",
+          "uuid": "u-user-interrupt",
+          "timestamp": 1700,
+          "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5
+          }
+        }
+      }
+    ],
+    "buddy": [],
+    "page": {
+      "type": "TRANSCRIPT_INTERRUPT",
+      "sessionId": "s1",
+      "uuid": "u-user-interrupt",
+      "timestamp": 1700,
+      "usage": {
+        "inputTokens": 10,
+        "outputTokens": 5
+      }
+    }
+  },
+  "assistant-text plain": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_ASSISTANT_TEXT",
+          "sessionId": "s1",
+          "uuid": "u-assistant-text",
+          "text": "yo",
+          "timestamp": 1700
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_ASSISTANT_TEXT",
+          "sessionId": "s1",
+          "uuid": "u-assistant-text",
+          "text": "yo",
+          "timestamp": 1700
+        }
+      }
+    ],
+    "page": {
+      "type": "TRANSCRIPT_ASSISTANT_TEXT",
+      "sessionId": "s1",
+      "uuid": "u-assistant-text",
+      "text": "yo",
+      "timestamp": 1700
+    }
+  },
+  "assistant-text model and partId": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_ASSISTANT_TEXT",
+          "sessionId": "s1",
+          "uuid": "u-assistant-text",
+          "text": "yo",
+          "timestamp": 1700,
+          "model": "m1",
+          "partId": "p1"
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_ASSISTANT_TEXT",
+          "sessionId": "s1",
+          "uuid": "u-assistant-text",
+          "text": "yo",
+          "timestamp": 1700,
+          "model": "m1",
+          "partId": "p1"
+        }
+      }
+    ],
+    "page": {
+      "type": "TRANSCRIPT_ASSISTANT_TEXT",
+      "sessionId": "s1",
+      "uuid": "u-assistant-text",
+      "text": "yo",
+      "timestamp": 1700,
+      "model": "m1",
+      "partId": "p1"
+    }
+  },
+  "assistant-text subagent-stamped": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_ASSISTANT_TEXT",
+          "sessionId": "s1",
+          "uuid": "u-assistant-text",
+          "text": "yo",
+          "timestamp": 1700,
+          "parentAgentToolUseId": "parent-1",
+          "agentId": "agent-1"
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_ASSISTANT_TEXT",
+          "sessionId": "s1",
+          "uuid": "u-assistant-text",
+          "text": "yo",
+          "timestamp": 1700,
+          "parentAgentToolUseId": "parent-1",
+          "agentId": "agent-1"
+        }
+      }
+    ],
+    "page": {
+      "type": "TRANSCRIPT_ASSISTANT_TEXT",
+      "sessionId": "s1",
+      "uuid": "u-assistant-text",
+      "text": "yo",
+      "timestamp": 1700,
+      "parentAgentToolUseId": "parent-1",
+      "agentId": "agent-1"
+    }
+  },
+  "tool-use plain": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_TOOL_USE",
+          "sessionId": "s1",
+          "uuid": "u-tool-use",
+          "toolUseId": "t1",
+          "toolName": "Read",
+          "toolInput": {
+            "path": "a"
+          },
+          "timestamp": 1700
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_TOOL_USE",
+          "sessionId": "s1",
+          "uuid": "u-tool-use",
+          "toolUseId": "t1",
+          "toolName": "Read",
+          "toolInput": {
+            "path": "a"
+          },
+          "timestamp": 1700
+        }
+      }
+    ],
+    "page": {
+      "type": "TRANSCRIPT_TOOL_USE",
+      "sessionId": "s1",
+      "uuid": "u-tool-use",
+      "toolUseId": "t1",
+      "toolName": "Read",
+      "toolInput": {
+        "path": "a"
+      },
+      "timestamp": 1700
+    }
+  },
+  "tool-use without input": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_TOOL_USE",
+          "sessionId": "s1",
+          "uuid": "u-tool-use",
+          "toolUseId": "t1",
+          "toolName": "Read",
+          "toolInput": {},
+          "timestamp": 1700
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_TOOL_USE",
+          "sessionId": "s1",
+          "uuid": "u-tool-use",
+          "toolUseId": "t1",
+          "toolName": "Read",
+          "toolInput": {},
+          "timestamp": 1700
+        }
+      }
+    ],
+    "page": {
+      "type": "TRANSCRIPT_TOOL_USE",
+      "sessionId": "s1",
+      "uuid": "u-tool-use",
+      "toolUseId": "t1",
+      "toolName": "Read",
+      "toolInput": {},
+      "timestamp": 1700
+    }
+  },
+  "tool-use subagent-stamped": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_TOOL_USE",
+          "sessionId": "s1",
+          "uuid": "u-tool-use",
+          "toolUseId": "t1",
+          "toolName": "Read",
+          "toolInput": {},
+          "timestamp": 1700,
+          "parentAgentToolUseId": "parent-1",
+          "agentId": "agent-1"
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_TOOL_USE",
+          "sessionId": "s1",
+          "uuid": "u-tool-use",
+          "toolUseId": "t1",
+          "toolName": "Read",
+          "toolInput": {},
+          "timestamp": 1700,
+          "parentAgentToolUseId": "parent-1",
+          "agentId": "agent-1"
+        }
+      }
+    ],
+    "page": {
+      "type": "TRANSCRIPT_TOOL_USE",
+      "sessionId": "s1",
+      "uuid": "u-tool-use",
+      "toolUseId": "t1",
+      "toolName": "Read",
+      "toolInput": {},
+      "timestamp": 1700,
+      "parentAgentToolUseId": "parent-1",
+      "agentId": "agent-1"
+    }
+  },
+  "tool-result plain": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_TOOL_RESULT",
+          "sessionId": "s1",
+          "uuid": "u-tool-result",
+          "toolUseId": "t1",
+          "result": "ok",
+          "isError": false
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_TOOL_RESULT",
+          "sessionId": "s1",
+          "uuid": "u-tool-result",
+          "toolUseId": "t1",
+          "result": "ok",
+          "isError": false
+        }
+      }
+    ],
+    "page": {
+      "type": "TRANSCRIPT_TOOL_RESULT",
+      "sessionId": "s1",
+      "uuid": "u-tool-result",
+      "toolUseId": "t1",
+      "result": "ok",
+      "isError": false
+    }
+  },
+  "tool-result error with patch and task ids": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_TOOL_RESULT",
+          "sessionId": "s1",
+          "uuid": "u-tool-result",
+          "toolUseId": "t1",
+          "result": "bad",
+          "isError": true,
+          "structuredPatch": [
+            {
+              "oldStart": 1
+            }
+          ],
+          "backgroundTaskId": "b1",
+          "resumedTaskId": "r1"
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_TOOL_RESULT",
+          "sessionId": "s1",
+          "uuid": "u-tool-result",
+          "toolUseId": "t1",
+          "result": "bad",
+          "isError": true,
+          "structuredPatch": [
+            {
+              "oldStart": 1
+            }
+          ],
+          "backgroundTaskId": "b1",
+          "resumedTaskId": "r1"
+        }
+      }
+    ],
+    "page": {
+      "type": "TRANSCRIPT_TOOL_RESULT",
+      "sessionId": "s1",
+      "uuid": "u-tool-result",
+      "toolUseId": "t1",
+      "result": "bad",
+      "isError": true,
+      "structuredPatch": [
+        {
+          "oldStart": 1
+        }
+      ],
+      "backgroundTaskId": "b1",
+      "resumedTaskId": "r1"
+    }
+  },
+  "tool-result without result": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_TOOL_RESULT",
+          "sessionId": "s1",
+          "uuid": "u-tool-result",
+          "toolUseId": "t1",
+          "result": "",
+          "isError": false
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_TOOL_RESULT",
+          "sessionId": "s1",
+          "uuid": "u-tool-result",
+          "toolUseId": "t1",
+          "result": "",
+          "isError": false
+        }
+      }
+    ],
+    "page": {
+      "type": "TRANSCRIPT_TOOL_RESULT",
+      "sessionId": "s1",
+      "uuid": "u-tool-result",
+      "toolUseId": "t1",
+      "result": "",
+      "isError": false
+    }
+  },
+  "tool-result subagent-stamped": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_TOOL_RESULT",
+          "sessionId": "s1",
+          "uuid": "u-tool-result",
+          "toolUseId": "t1",
+          "result": "ok",
+          "isError": false,
+          "parentAgentToolUseId": "parent-1",
+          "agentId": "agent-1"
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_TOOL_RESULT",
+          "sessionId": "s1",
+          "uuid": "u-tool-result",
+          "toolUseId": "t1",
+          "result": "ok",
+          "isError": false,
+          "parentAgentToolUseId": "parent-1",
+          "agentId": "agent-1"
+        }
+      }
+    ],
+    "page": {
+      "type": "TRANSCRIPT_TOOL_RESULT",
+      "sessionId": "s1",
+      "uuid": "u-tool-result",
+      "toolUseId": "t1",
+      "result": "ok",
+      "isError": false,
+      "parentAgentToolUseId": "parent-1",
+      "agentId": "agent-1"
+    }
+  },
+  "background-task ended": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_BACKGROUND_TASK",
+          "sessionId": "s1",
+          "uuid": "u-background-task",
+          "toolUseId": "t1",
+          "taskIds": [
+            "a"
+          ],
+          "status": "completed",
+          "summary": "s",
+          "result": "r",
+          "parentAgentToolUseId": "parent-1"
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_BACKGROUND_TASK",
+          "sessionId": "s1",
+          "uuid": "u-background-task",
+          "toolUseId": "t1",
+          "taskIds": [
+            "a"
+          ],
+          "status": "completed",
+          "summary": "s",
+          "result": "r",
+          "parentAgentToolUseId": "parent-1"
+        }
+      }
+    ],
+    "page": {
+      "type": "TRANSCRIPT_BACKGROUND_TASK",
+      "sessionId": "s1",
+      "uuid": "u-background-task",
+      "toolUseId": "t1",
+      "taskIds": [
+        "a"
+      ],
+      "status": "completed",
+      "summary": "s",
+      "result": "r",
+      "parentAgentToolUseId": "parent-1"
+    }
+  },
+  "background-task without payload": {
+    "app": [],
+    "buddy": [],
+    "page": null
+  },
+  "replay-complete idle": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_REPLAY_COMPLETE",
+          "sessionId": "s1",
+          "sessionIdle": true
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_REPLAY_COMPLETE",
+          "sessionId": "s1",
+          "sessionIdle": true
+        }
+      }
+    ],
+    "page": null
+  },
+  "replay-complete not idle": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_REPLAY_COMPLETE",
+          "sessionId": "s1",
+          "sessionIdle": false
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_REPLAY_COMPLETE",
+          "sessionId": "s1",
+          "sessionIdle": false
+        }
+      }
+    ],
+    "page": null
+  },
+  "replay-complete without data": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_REPLAY_COMPLETE",
+          "sessionId": "s1",
+          "sessionIdle": false
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_REPLAY_COMPLETE",
+          "sessionId": "s1",
+          "sessionIdle": false
+        }
+      }
+    ],
+    "page": null
+  },
+  "turn-complete full": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_TURN_COMPLETE",
+          "sessionId": "s1",
+          "uuid": "u-turn-complete",
+          "timestamp": 1700,
+          "stopReason": "end_turn",
+          "model": "m1",
+          "anthropicRequestId": "req",
+          "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5
+          }
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_TURN_COMPLETE",
+          "sessionId": "s1",
+          "uuid": "u-turn-complete",
+          "timestamp": 1700,
+          "stopReason": "end_turn",
+          "model": "m1",
+          "anthropicRequestId": "req",
+          "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5
+          }
+        }
+      }
+    ],
+    "page": {
+      "type": "TRANSCRIPT_TURN_COMPLETE",
+      "sessionId": "s1",
+      "uuid": "u-turn-complete",
+      "timestamp": 1700,
+      "stopReason": "end_turn",
+      "model": "m1",
+      "anthropicRequestId": "req",
+      "usage": {
+        "inputTokens": 10,
+        "outputTokens": 5
+      }
+    }
+  },
+  "turn-complete minimal": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_TURN_COMPLETE",
+          "sessionId": "s1",
+          "uuid": "u-turn-complete",
+          "timestamp": 1700,
+          "stopReason": null,
+          "model": null,
+          "anthropicRequestId": null,
+          "usage": null
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_TURN_COMPLETE",
+          "sessionId": "s1",
+          "uuid": "u-turn-complete",
+          "timestamp": 1700,
+          "stopReason": null,
+          "model": null,
+          "anthropicRequestId": null,
+          "usage": null
+        }
+      }
+    ],
+    "page": {
+      "type": "TRANSCRIPT_TURN_COMPLETE",
+      "sessionId": "s1",
+      "uuid": "u-turn-complete",
+      "timestamp": 1700,
+      "stopReason": null,
+      "model": null,
+      "anthropicRequestId": null,
+      "usage": null
+    }
+  },
+  "turn-complete subagent-stamped": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_TURN_COMPLETE",
+          "sessionId": "s1",
+          "uuid": "u-turn-complete",
+          "timestamp": 1700,
+          "stopReason": "end_turn",
+          "model": null,
+          "anthropicRequestId": null,
+          "usage": null,
+          "parentAgentToolUseId": "parent-1",
+          "agentId": "agent-1"
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_TURN_COMPLETE",
+          "sessionId": "s1",
+          "uuid": "u-turn-complete",
+          "timestamp": 1700,
+          "stopReason": "end_turn",
+          "model": null,
+          "anthropicRequestId": null,
+          "usage": null,
+          "parentAgentToolUseId": "parent-1",
+          "agentId": "agent-1"
+        }
+      }
+    ],
+    "page": {
+      "type": "TRANSCRIPT_TURN_COMPLETE",
+      "sessionId": "s1",
+      "uuid": "u-turn-complete",
+      "timestamp": 1700,
+      "stopReason": "end_turn",
+      "model": null,
+      "anthropicRequestId": null,
+      "usage": null,
+      "parentAgentToolUseId": "parent-1",
+      "agentId": "agent-1"
+    }
+  },
+  "subagent-usage with usage": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_SUBAGENT_USAGE",
+          "sessionId": "s1",
+          "uuid": "u-subagent-usage",
+          "timestamp": 1700,
+          "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5
+          },
+          "parentAgentToolUseId": "parent-1",
+          "agentId": "agent-1"
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_SUBAGENT_USAGE",
+          "sessionId": "s1",
+          "uuid": "u-subagent-usage",
+          "timestamp": 1700,
+          "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5
+          },
+          "parentAgentToolUseId": "parent-1",
+          "agentId": "agent-1"
+        }
+      }
+    ],
+    "page": {
+      "type": "TRANSCRIPT_SUBAGENT_USAGE",
+      "sessionId": "s1",
+      "uuid": "u-subagent-usage",
+      "timestamp": 1700,
+      "usage": {
+        "inputTokens": 10,
+        "outputTokens": 5
+      },
+      "parentAgentToolUseId": "parent-1",
+      "agentId": "agent-1"
+    }
+  },
+  "subagent-usage without usage": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_SUBAGENT_USAGE",
+          "sessionId": "s1",
+          "uuid": "u-subagent-usage",
+          "timestamp": 1700,
+          "usage": null,
+          "parentAgentToolUseId": "parent-1",
+          "agentId": "agent-1"
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_SUBAGENT_USAGE",
+          "sessionId": "s1",
+          "uuid": "u-subagent-usage",
+          "timestamp": 1700,
+          "usage": null,
+          "parentAgentToolUseId": "parent-1",
+          "agentId": "agent-1"
+        }
+      }
+    ],
+    "page": {
+      "type": "TRANSCRIPT_SUBAGENT_USAGE",
+      "sessionId": "s1",
+      "uuid": "u-subagent-usage",
+      "timestamp": 1700,
+      "usage": null,
+      "parentAgentToolUseId": "parent-1",
+      "agentId": "agent-1"
+    }
+  },
+  "assistant-thinking reasoning text": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_ASSISTANT_REASONING",
+          "sessionId": "s1",
+          "uuid": "u-assistant-thinking",
+          "text": "hmm",
+          "timestamp": 1700,
+          "partId": "p1",
+          "parentAgentToolUseId": "parent-1"
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_ASSISTANT_REASONING",
+          "sessionId": "s1",
+          "uuid": "u-assistant-thinking",
+          "text": "hmm",
+          "timestamp": 1700,
+          "partId": "p1",
+          "parentAgentToolUseId": "parent-1"
+        }
+      }
+    ],
+    "page": {
+      "type": "TRANSCRIPT_ASSISTANT_REASONING",
+      "sessionId": "s1",
+      "uuid": "u-assistant-thinking",
+      "text": "hmm",
+      "timestamp": 1700,
+      "partId": "p1",
+      "parentAgentToolUseId": "parent-1"
+    }
+  },
+  "assistant-thinking empty text is a heartbeat": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_THINKING_HEARTBEAT",
+          "sessionId": "s1",
+          "uuid": "u-assistant-thinking",
+          "timestamp": 1700
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_THINKING_HEARTBEAT",
+          "sessionId": "s1",
+          "uuid": "u-assistant-thinking",
+          "timestamp": 1700
+        }
+      }
+    ],
+    "page": null
+  },
+  "assistant-thinking heartbeat": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_THINKING_HEARTBEAT",
+          "sessionId": "s1",
+          "uuid": "u-assistant-thinking",
+          "timestamp": 1700
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_THINKING_HEARTBEAT",
+          "sessionId": "s1",
+          "uuid": "u-assistant-thinking",
+          "timestamp": 1700
+        }
+      }
+    ],
+    "page": null
+  },
+  "assistant-thinking stallWarning": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_THINKING_HEARTBEAT",
+          "sessionId": "s1",
+          "uuid": "u-assistant-thinking",
+          "timestamp": 1700,
+          "stallWarning": {
+            "retryInMs": 5000,
+            "willRetry": true
+          }
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_THINKING_HEARTBEAT",
+          "sessionId": "s1",
+          "uuid": "u-assistant-thinking",
+          "timestamp": 1700,
+          "stallWarning": {
+            "retryInMs": 5000,
+            "willRetry": true
+          }
+        }
+      }
+    ],
+    "page": null
+  },
+  "assistant-thinking stalled": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_THINKING_HEARTBEAT",
+          "sessionId": "s1",
+          "uuid": "u-assistant-thinking",
+          "timestamp": 1700,
+          "stalled": true
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_THINKING_HEARTBEAT",
+          "sessionId": "s1",
+          "uuid": "u-assistant-thinking",
+          "timestamp": 1700,
+          "stalled": true
+        }
+      }
+    ],
+    "page": null
+  },
+  "assistant-thinking promptProcessing": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_THINKING_HEARTBEAT",
+          "sessionId": "s1",
+          "uuid": "u-assistant-thinking",
+          "timestamp": 1700,
+          "promptProcessing": {
+            "promptTokens": 100,
+            "budgetMs": 5000,
+            "processed": 40
+          }
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_THINKING_HEARTBEAT",
+          "sessionId": "s1",
+          "uuid": "u-assistant-thinking",
+          "timestamp": 1700
+        }
+      }
+    ],
+    "page": null
+  },
+  "assistant-thinking toolPreparing": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "NATIVE_TOOL_PREPARING",
+          "sessionId": "s1",
+          "toolCallId": "c1",
+          "toolName": "Write",
+          "chars": 12
+        }
+      },
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_THINKING_HEARTBEAT",
+          "sessionId": "s1",
+          "uuid": "u-assistant-thinking",
+          "timestamp": 1700
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "NATIVE_TOOL_PREPARING",
+          "sessionId": "s1",
+          "toolCallId": "c1",
+          "toolName": "Write",
+          "chars": 12
+        }
+      },
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_THINKING_HEARTBEAT",
+          "sessionId": "s1",
+          "uuid": "u-assistant-thinking",
+          "timestamp": 1700
+        }
+      }
+    ],
+    "page": null
+  },
+  "assistant-thinking toolPreparing cleared": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "NATIVE_TOOL_PREPARING",
+          "sessionId": "s1",
+          "toolCallId": "c1",
+          "toolName": "Write",
+          "chars": 0,
+          "cleared": true
+        }
+      },
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_THINKING_HEARTBEAT",
+          "sessionId": "s1",
+          "uuid": "u-assistant-thinking",
+          "timestamp": 1700
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "NATIVE_TOOL_PREPARING",
+          "sessionId": "s1",
+          "toolCallId": "c1",
+          "toolName": "Write",
+          "chars": 0,
+          "cleared": true
+        }
+      },
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_THINKING_HEARTBEAT",
+          "sessionId": "s1",
+          "uuid": "u-assistant-thinking",
+          "timestamp": 1700
+        }
+      }
+    ],
+    "page": null
+  },
+  "assistant-thinking dropPart": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "NATIVE_PARTS_DROPPED",
+          "sessionId": "s1",
+          "partIds": [
+            "p1",
+            "p2"
+          ]
+        }
+      },
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_THINKING_HEARTBEAT",
+          "sessionId": "s1",
+          "uuid": "u-assistant-thinking",
+          "timestamp": 1700
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "NATIVE_PARTS_DROPPED",
+          "sessionId": "s1",
+          "partIds": [
+            "p1",
+            "p2"
+          ]
+        }
+      },
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_THINKING_HEARTBEAT",
+          "sessionId": "s1",
+          "uuid": "u-assistant-thinking",
+          "timestamp": 1700
+        }
+      }
+    ],
+    "page": null
+  },
+  "assistant-thinking usageProgress": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_THINKING_HEARTBEAT",
+          "sessionId": "s1",
+          "usageProgress": {
+            "contextUsedTokens": 900
+          },
+          "uuid": "u-assistant-thinking",
+          "timestamp": 1700
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_THINKING_HEARTBEAT",
+          "sessionId": "s1",
+          "usageProgress": {
+            "contextUsedTokens": 900
+          },
+          "uuid": "u-assistant-thinking",
+          "timestamp": 1700
+        }
+      }
+    ],
+    "page": null
+  },
+  "assistant-thinking toolPreparing and dropPart together": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "NATIVE_TOOL_PREPARING",
+          "sessionId": "s1",
+          "toolCallId": "c1",
+          "toolName": "Write",
+          "chars": 3
+        }
+      },
+      {
+        "via": "batch",
+        "action": {
+          "type": "NATIVE_PARTS_DROPPED",
+          "sessionId": "s1",
+          "partIds": [
+            "p1"
+          ]
+        }
+      },
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_THINKING_HEARTBEAT",
+          "sessionId": "s1",
+          "uuid": "u-assistant-thinking",
+          "timestamp": 1700
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "NATIVE_TOOL_PREPARING",
+          "sessionId": "s1",
+          "toolCallId": "c1",
+          "toolName": "Write",
+          "chars": 3
+        }
+      },
+      {
+        "via": "batch",
+        "action": {
+          "type": "NATIVE_PARTS_DROPPED",
+          "sessionId": "s1",
+          "partIds": [
+            "p1"
+          ]
+        }
+      },
+      {
+        "via": "batch",
+        "action": {
+          "type": "TRANSCRIPT_THINKING_HEARTBEAT",
+          "sessionId": "s1",
+          "uuid": "u-assistant-thinking",
+          "timestamp": 1700
+        }
+      }
+    ],
+    "page": null
+  },
+  "session-error message only": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "NATIVE_SESSION_ERROR",
+          "sessionId": "s1",
+          "timestamp": 1700,
+          "message": "boom",
+          "uuid": "u-session-error"
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "NATIVE_SESSION_ERROR",
+          "sessionId": "s1",
+          "timestamp": 1700,
+          "message": "boom"
+        }
+      }
+    ],
+    "page": null
+  },
+  "session-error with code and usage": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "NATIVE_SESSION_ERROR",
+          "sessionId": "s1",
+          "timestamp": 1700,
+          "message": "boom",
+          "errorCode": "openrouter-key-rejected",
+          "uuid": "u-session-error",
+          "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5
+          }
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "NATIVE_SESSION_ERROR",
+          "sessionId": "s1",
+          "timestamp": 1700,
+          "message": "boom",
+          "errorCode": "openrouter-key-rejected"
+        }
+      }
+    ],
+    "page": null
+  },
+  "session-error without text": {
+    "app": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "NATIVE_SESSION_ERROR",
+          "sessionId": "s1",
+          "timestamp": 1700,
+          "message": "The model request failed.",
+          "uuid": "u-session-error"
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "NATIVE_SESSION_ERROR",
+          "sessionId": "s1",
+          "timestamp": 1700,
+          "message": "The model request failed."
+        }
+      }
+    ],
+    "page": null
+  },
+  "skill-invoked full": {
+    "app": [
+      {
+        "via": "direct",
+        "action": {
+          "type": "TRANSCRIPT_SKILL_INVOKED",
+          "sessionId": "s1",
+          "uuid": "u-skill-invoked",
+          "timestamp": 1700,
+          "skillId": "brainstorm",
+          "displayName": "Brainstorm",
+          "args": "x",
+          "skillPath": "/p/SKILL.md"
+        }
+      }
+    ],
+    "buddy": [],
+    "page": {
+      "type": "TRANSCRIPT_SKILL_INVOKED",
+      "sessionId": "s1",
+      "uuid": "u-skill-invoked",
+      "timestamp": 1700,
+      "skillId": "brainstorm",
+      "displayName": "Brainstorm",
+      "args": "x",
+      "skillPath": "/p/SKILL.md"
+    }
+  },
+  "skill-invoked minimal": {
+    "app": [
+      {
+        "via": "direct",
+        "action": {
+          "type": "TRANSCRIPT_SKILL_INVOKED",
+          "sessionId": "s1",
+          "uuid": "u-skill-invoked",
+          "timestamp": 1700,
+          "skillId": "skill",
+          "displayName": "Skill"
+        }
+      }
+    ],
+    "buddy": [],
+    "page": {
+      "type": "TRANSCRIPT_SKILL_INVOKED",
+      "sessionId": "s1",
+      "uuid": "u-skill-invoked",
+      "timestamp": 1700,
+      "skillId": "skill",
+      "displayName": "Skill"
+    }
+  },
+  "skill-invoked id only": {
+    "app": [
+      {
+        "via": "direct",
+        "action": {
+          "type": "TRANSCRIPT_SKILL_INVOKED",
+          "sessionId": "s1",
+          "uuid": "u-skill-invoked",
+          "timestamp": 1700,
+          "skillId": "only-id",
+          "displayName": "only-id"
+        }
+      }
+    ],
+    "buddy": [],
+    "page": {
+      "type": "TRANSCRIPT_SKILL_INVOKED",
+      "sessionId": "s1",
+      "uuid": "u-skill-invoked",
+      "timestamp": 1700,
+      "skillId": "only-id",
+      "displayName": "only-id"
+    }
+  },
+  "context-clear old line": {
+    "app": [
+      {
+        "via": "direct",
+        "action": {
+          "type": "CLEAR_TIMELINE",
+          "sessionId": "s1",
+          "markerId": "clear-u-context-clear",
+          "timestamp": 1700
+        }
+      }
+    ],
+    "buddy": [],
+    "page": {
+      "type": "CLEAR_TIMELINE",
+      "sessionId": "s1",
+      "markerId": "clear-u-context-clear",
+      "timestamp": 1700
+    }
+  },
+  "context-clear with window after": {
+    "app": [
+      {
+        "via": "direct",
+        "action": {
+          "type": "CLEAR_TIMELINE",
+          "sessionId": "s1",
+          "markerId": "clear-u-context-clear",
+          "timestamp": 1700
+        }
+      },
+      {
+        "via": "direct",
+        "action": {
+          "type": "NATIVE_HISTORY_REWRITTEN",
+          "sessionId": "s1",
+          "uuid": "u-context-clear",
+          "contextUsedTokens": 1234
+        }
+      }
+    ],
+    "buddy": [],
+    "page": {
+      "type": "CLEAR_TIMELINE",
+      "sessionId": "s1",
+      "markerId": "clear-u-context-clear",
+      "timestamp": 1700
+    }
+  },
+  "context-clear with zero window after": {
+    "app": [
+      {
+        "via": "direct",
+        "action": {
+          "type": "CLEAR_TIMELINE",
+          "sessionId": "s1",
+          "markerId": "clear-u-context-clear",
+          "timestamp": 1700
+        }
+      },
+      {
+        "via": "direct",
+        "action": {
+          "type": "NATIVE_HISTORY_REWRITTEN",
+          "sessionId": "s1",
+          "uuid": "u-context-clear",
+          "contextUsedTokens": 0
+        }
+      }
+    ],
+    "buddy": [],
+    "page": {
+      "type": "CLEAR_TIMELINE",
+      "sessionId": "s1",
+      "markerId": "clear-u-context-clear",
+      "timestamp": 1700
+    }
+  },
+  "compact-summary pending, harness figures": {
+    "app": [
+      {
+        "via": "direct",
+        "action": {
+          "type": "NATIVE_HISTORY_REWRITTEN",
+          "sessionId": "s1",
+          "uuid": "u-compact-summary",
+          "contextUsedTokens": 100,
+          "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5
+          }
+        }
+      },
+      {
+        "via": "direct",
+        "action": {
+          "type": "COMPACTION_COMPLETE",
+          "sessionId": "s1",
+          "markerId": "compact-done-u-compact-summary",
+          "afterContextTokens": 100,
+          "beforeContextTokens": 900,
+          "summary": "sum"
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "COMPACTION_COMPLETE",
+          "sessionId": "s1",
+          "markerId": "compact-done-1790847203513",
+          "afterContextTokens": null,
+          "summary": "sum"
+        }
+      }
+    ],
+    "page": {
+      "type": "NATIVE_HISTORY_REWRITTEN",
+      "sessionId": "s1",
+      "uuid": "u-compact-summary",
+      "contextUsedTokens": 100,
+      "usage": {
+        "inputTokens": 10,
+        "outputTokens": 5
+      }
+    }
+  },
+  "compact-summary pending, statusline fallback": {
+    "app": [
+      {
+        "via": "direct",
+        "action": {
+          "type": "COMPACTION_COMPLETE",
+          "sessionId": "s1",
+          "markerId": "compact-done-u-compact-summary",
+          "afterContextTokens": 777,
+          "summary": "sum"
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "COMPACTION_COMPLETE",
+          "sessionId": "s1",
+          "markerId": "compact-done-1790847203513",
+          "afterContextTokens": null,
+          "summary": "sum"
+        }
+      }
+    ],
+    "page": null
+  },
+  "compact-summary pending, nothing known": {
+    "app": [
+      {
+        "via": "direct",
+        "action": {
+          "type": "COMPACTION_COMPLETE",
+          "sessionId": "s1",
+          "markerId": "compact-done-u-compact-summary",
+          "afterContextTokens": null
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "COMPACTION_COMPLETE",
+          "sessionId": "s1",
+          "markerId": "compact-done-1790847203513",
+          "afterContextTokens": null
+        }
+      }
+    ],
+    "page": null
+  },
+  "compact-summary not pending": {
+    "app": [
+      {
+        "via": "direct",
+        "action": {
+          "type": "NATIVE_HISTORY_REWRITTEN",
+          "sessionId": "s1",
+          "uuid": "u-compact-summary",
+          "contextUsedTokens": 100
+        }
+      }
+    ],
+    "buddy": [],
+    "page": {
+      "type": "NATIVE_HISTORY_REWRITTEN",
+      "sessionId": "s1",
+      "uuid": "u-compact-summary",
+      "contextUsedTokens": 100
+    }
+  },
+  "compact-summary automatic, not pending": {
+    "app": [
+      {
+        "via": "direct",
+        "action": {
+          "type": "NATIVE_HISTORY_REWRITTEN",
+          "sessionId": "s1",
+          "uuid": "u-compact-summary",
+          "contextUsedTokens": 100,
+          "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5
+          }
+        }
+      },
+      {
+        "via": "direct",
+        "action": {
+          "type": "COMPACTION_COMPLETE",
+          "sessionId": "s1",
+          "markerId": "compact-done-u-compact-summary",
+          "afterContextTokens": 100,
+          "beforeContextTokens": 900,
+          "summary": "sum",
+          "auto": true,
+          "retainedFromUuid": "keep-1"
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "COMPACTION_COMPLETE",
+          "sessionId": "s1",
+          "markerId": "compact-done-1790847203513",
+          "afterContextTokens": null,
+          "summary": "sum",
+          "auto": true,
+          "retainedFromUuid": "keep-1"
+        }
+      }
+    ],
+    "page": {
+      "type": "NATIVE_HISTORY_REWRITTEN",
+      "sessionId": "s1",
+      "uuid": "u-compact-summary",
+      "contextUsedTokens": 100,
+      "usage": {
+        "inputTokens": 10,
+        "outputTokens": 5
+      }
+    }
+  },
+  "compact-summary automatic with null retained uuid": {
+    "app": [
+      {
+        "via": "direct",
+        "action": {
+          "type": "COMPACTION_COMPLETE",
+          "sessionId": "s1",
+          "markerId": "compact-done-u-compact-summary",
+          "afterContextTokens": null,
+          "auto": true,
+          "retainedFromUuid": null
+        }
+      }
+    ],
+    "buddy": [
+      {
+        "via": "batch",
+        "action": {
+          "type": "COMPACTION_COMPLETE",
+          "sessionId": "s1",
+          "markerId": "compact-done-1790847203513",
+          "afterContextTokens": null,
+          "auto": true,
+          "retainedFromUuid": null
+        }
+      }
+    ],
+    "page": null
+  },
+  "compact-summary usage only": {
+    "app": [
+      {
+        "via": "direct",
+        "action": {
+          "type": "NATIVE_HISTORY_REWRITTEN",
+          "sessionId": "s1",
+          "uuid": "u-compact-summary",
+          "contextUsedTokens": null,
+          "usage": {
+            "inputTokens": 10,
+            "outputTokens": 5
+          }
+        }
+      }
+    ],
+    "buddy": [],
+    "page": {
+      "type": "NATIVE_HISTORY_REWRITTEN",
+      "sessionId": "s1",
+      "uuid": "u-compact-summary",
+      "contextUsedTokens": null,
+      "usage": {
+        "inputTokens": 10,
+        "outputTokens": 5
+      }
+    }
+  }
+}
