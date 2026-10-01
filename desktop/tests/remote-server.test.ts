@@ -781,8 +781,8 @@ describe('RemoteServer unhandled channels', () => {
     expect(sent).toHaveLength(0);
   });
 
-  // Regression: useAttentionClassifier polls the unbridged
-  // `terminal:get-screen-text` once a second, so an unconditional warn logged a
+  // Regression: useAttentionClassifier polls an unbridged channel (it was
+  // `terminal:get-screen-text`, now a table entry the table refuses) once a second, so an unconditional warn logged a
   // line per second for the life of the connection. That drowned the log and,
   // because a write to a closed stdout throws EPIPE, helped crash the main
   // process outright on 2026-07-20.
@@ -793,12 +793,12 @@ describe('RemoteServer unhandled channels', () => {
 
     try {
       for (let i = 0; i < 5; i++) {
-        await sendAndCollect(server, { type: 'terminal:get-screen-text', id: `poll-${i}`, payload: {} });
+        await sendAndCollect(server, { type: 'unbridged:poll', id: `poll-${i}`, payload: {} });
       }
       expect(warn).toHaveBeenCalledTimes(1);
 
       // A DIFFERENT channel still warns — dedup must not silence new gaps.
-      await sendAndCollect(server, { type: 'social:list-friends', id: 'other', payload: {} });
+      await sendAndCollect(server, { type: 'unbridged:other', id: 'other', payload: {} });
       expect(warn).toHaveBeenCalledTimes(2);
     } finally {
       warn.mockRestore();
@@ -814,7 +814,7 @@ describe('RemoteServer unhandled channels', () => {
 
     try {
       for (let i = 0; i < 3; i++) {
-        const sent = await sendAndCollect(server, { type: 'terminal:get-screen-text', id: `poll-${i}`, payload: {} });
+        const sent = await sendAndCollect(server, { type: 'unbridged:poll', id: `poll-${i}`, payload: {} });
         expect(sent).toHaveLength(1);
         expect(sent[0].id).toBe(`poll-${i}`);
         expect(sent[0].payload.unsupported).toBe(true);

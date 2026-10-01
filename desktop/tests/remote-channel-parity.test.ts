@@ -22,9 +22,28 @@ describe('remote channels — every channel is answered', () => {
     return [...new Set([...shim.matchAll(/invoke\('(remote:[^']+)'/g)].map(m => m[1]))].sort();
   }
 
-  /** Every `remote:*` channel the WS host has a case for. */
+  // WHY (2026-10-01 one-core R3-8): the remote:* administration channels are channel-table entries (main/ipc/remote-admin.ts), so a
+  // channel the host "answers" is a `case` OR an entry the phone is not left to the unsupported default for: one it may call, or one
+  // that carries the refusal `refusal: hostAdminRefusal` (the answer a phone has always been given). The entries are read as text, one
+  // `defineChannel({ name: IPC.X ...` each, with each constant resolved to its channel string through the contract.
+  const contractSource = read('../src/shared/backend-contract.ts');
+  const adminSource = readStripped(fileURLToPath(new URL('../src/main/ipc/remote-admin.ts', import.meta.url)));
+  const adminEntries = adminSource.split('defineChannel({').slice(1).map((chunk) => {
+    const konst = /name: IPC\.([A-Z0-9_]+)/.exec(chunk)?.[1] ?? '';
+    const head = chunk.slice(0, 260);
+    return {
+      name: new RegExp(`\\b${konst}: '([^']+)'`).exec(contractSource)?.[1] ?? `?${konst}`,
+      answered: !/desktopOnly: true/.test(head) && (!/remoteAllowed: false/.test(head) || /refusal: hostAdminRefusal/.test(head)),
+      refused: /remoteAllowed: false/.test(head) && /refusal: hostAdminRefusal/.test(head),
+    };
+  });
+
+  /** Every `remote:*` channel the WS host answers: a `case`, or a table entry that is not left to the unsupported default. */
   function hostedRemoteChannels(): string[] {
-    return [...new Set([...server.matchAll(/case '(remote:[^']+)':/g)].map(m => m[1]))].sort();
+    return [...new Set([
+      ...[...server.matchAll(/case '(remote:[^']+)':/g)].map(m => m[1]),
+      ...adminEntries.filter(e => e.answered).map(e => e.name),
+    ])].sort();
   }
 
   /**
@@ -56,8 +75,9 @@ describe('remote channels — every channel is answered', () => {
       // rejection only for channels in REJECT_ON_NOT_OK; anywhere else it resolves as an
       // ordinary value and the caller reads a refusal as success — which is how Unpair
       // removed a row from the list for a device that kept full access.
-      const refused = [...server.matchAll(/case '(remote:[^']+)': \{\s*\n\s*this\.respond\([^\n]*ok: false/g)]
-        .map(m => m[1]).sort();
+      // WHY (2026-10-01 one-core R3-8): the refusals are table entries that carry `refusal: hostAdminRefusal`.
+      expect(adminEntries.filter(e => e.name.startsWith('?'))).toEqual([]);
+      const refused = adminEntries.filter(e => e.refused).map(e => e.name).sort();
       expect(refused.length).toBeGreaterThan(0);
       const rejectList = /export const REJECT_ON_NOT_OK[^[]*\[([\s\S]*?)\n\]\);/.exec(shim)?.[1] ?? '';
       const unguarded = refused.filter(c => !rejectList.includes(`'${c}'`));
@@ -184,9 +204,12 @@ describe('remote channels — device list channels', () => {
         expect(preload).toContain(`'${c}'`);
         expect(shim).toContain(`'${c}'`);
       }
-      expect(handlers).toContain('IPC.REMOTE_DEVICES_LIST');
-      expect(handlers).toContain('IPC.REMOTE_DEVICES_RENAME');
-      expect(handlers).toContain('IPC.REMOTE_DEVICES_UNPAIR');
+      // WHY remote-admin.ts (2026-10-01 one-core R3-8): the three are channel-table entries now, not ipc-handlers.ts handlers.
+      const adminEntries = read('../src/main/ipc/remote-admin.ts');
+      expect(adminEntries).toContain('name: IPC.REMOTE_DEVICES_LIST');
+      expect(adminEntries).toContain('name: IPC.REMOTE_DEVICES_RENAME');
+      expect(adminEntries).toContain('name: IPC.REMOTE_DEVICES_UNPAIR');
+      expect(handlers).not.toContain('ipcMain.handle(IPC.REMOTE_DEVICES');
     });
 
     it('Android answers all three rather than falling through to unsupported', () => {

@@ -47,6 +47,7 @@ import type { SessionChannelTypes } from './session-channel-types';
 import type { NativeChannelTypes } from './native-channel-types';
 import type { ModelsChannelTypes } from './models-channel-types';
 import type { FilesChannelTypes } from './files-channel-types';
+import type { AppChannelTypes } from './app-channel-types';
 export type { MarketplaceThumbs } from './marketplace-channel-types';
 import type {
   NativeSendResult, SessionContext, SessionContextText,
@@ -840,6 +841,10 @@ export interface ChannelDef<Ctx = ChannelCtx, Payload = any, Result = any> {
    *  (2026-09-30 one-core R3-7): the phone's file reads carry a smaller size ceiling than the computer's;
    *  declared here it is forced by the door, so a phone cannot send a bigger one of its own. */
   remotePayload?: (payload: Payload, ctx: Ctx) => Payload | Promise<Payload>;
+  /** Phone door only, after the handler succeeds: reshapes what the phone is sent. WHY (2026-10-01 one-core R3-8):
+   *  remote:devices:list answers a bare list to a window but `{ devices: [...] }` to a phone, and the phone's page reads the
+   *  wrapped form; declared on the entry it stays byte-identical without a second handler. */
+  remoteReply?: (result: Result, payload: Payload) => unknown;
   /** Only the phone door serves it: the desktop door registers nothing. WHY (2026-09-30 one-core R3-7):
    *  file:upload exists only for a phone's attach button; registering it on the computer would add a
    *  write-to-disk channel to the window surface that never existed. */
@@ -851,7 +856,7 @@ export interface ChannelDef<Ctx = ChannelCtx, Payload = any, Result = any> {
  *  so a handler, the desktop bridge and the phone shim cannot disagree about a channel's shape.
  *  `request` is the ONE object the caller sends (void = no payload). A family adds its rows here
  *  when it moves into the table. */
-export interface ChannelTypes extends MarketplaceChannelTypes, SyncChannelTypes, SessionChannelTypes, NativeChannelTypes, ModelsChannelTypes, FilesChannelTypes {
+export interface ChannelTypes extends MarketplaceChannelTypes, SyncChannelTypes, SessionChannelTypes, NativeChannelTypes, ModelsChannelTypes, FilesChannelTypes, AppChannelTypes {
   'tags:list': { request: void; response: TagListResult };
   'tags:create': { request: { label: string; color: string }; response: TagMutationResult };
   'tags:update': { request: { id: string; patch: TagPatch }; response: TagMutationResult };

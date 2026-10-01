@@ -133,10 +133,15 @@ describe('a phone paired to this computer looks like this computer', () => {
   it('the host will hand over a theme definition, read-only and path-guarded', () => {
     // The phone already learned WHICH theme (appearance:get was bridged); it could not
     // find out what the name meant, so a community theme fell back to a built-in.
-    expect(server).toContain("case 'theme:read-file': {");
-    expect(server).toContain("if (!/^[a-z0-9_]+(?:-[a-z0-9_]+)*$/.test(slug))");
-    expect(server).toContain("if (!manifestPath.startsWith(THEMES_DIR + path.sep))");
-    // Reading only. Writing a theme stays desktop-only like every other host change.
+    // WHY appearance.ts (2026-10-01 one-core R3-8): theme:read-file and theme:write-file are channel-table entries now; the same two guards
+    // sit in the one handler both doors run, and the phone's soft answers are the entry's remoteOnError.
+    const entries = read('../src/main/ipc/appearance.ts');
+    expect(entries).toContain('name: IPC.THEME_READ_FILE');
+    expect(entries).toContain("const SAFE_SLUG_RE = /^[a-z0-9_]+(?:-[a-z0-9_]+)*$/;");
+    expect(entries).toContain('if (!manifestPath.startsWith(THEMES_DIR + path.sep))');
+    expect(entries).toContain("'Theme not found'");
+    // Reading only. Writing a theme stays the computer's like every other host change: the table refuses it for a phone.
+    expect(entries).toMatch(/name: IPC\.THEME_WRITE_FILE, kind: 'handle', remoteAllowed: false/);
     expect(server).not.toContain("case 'theme:write-file'");
   });
 

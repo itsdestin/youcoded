@@ -1,5 +1,5 @@
 // arcade-handlers.ts
-// IPC handler registration for the games arcade's scores (spec §6.1, §6.6).
+// The games arcade's scores (spec §6.1, §6.6); the arcade:* channels are table entries in main/ipc/game.ts.
 // Structurally a sibling of social-handlers.ts: every call needs the account
 // bearer token, so all of it lives in the main process — the token never
 // crosses the contextBridge into the renderer bundle.
@@ -10,7 +10,6 @@
 // game-registry.ts, in the renderer. Keeping it that way means adding a game
 // never touches this file, the IPC surface, or the Worker.
 
-import { ipcMain } from "electron";
 import type { MarketplaceAuthStore } from "./marketplace-auth-store";
 import { createMarketplaceApiClient, MARKETPLACE_API_HOST } from "../renderer/state/marketplace-api-client";
 import type { ApiResult } from "./marketplace-api-handlers";
@@ -20,17 +19,6 @@ import type { GameBoard, GameScoreRow, HeadToHead } from "../renderer/state/mark
 // `.status` has to survive the contextBridge for 401 to stay distinguishable
 // from "the network is down".
 import { wrap, makeClearSessionOn401 } from "./handler-utils";
-
-// ── Channel list for the double-registration guard ───────────────────────────
-// Byte-identical to the strings in preload.ts, remote-shim.ts, remote-server.ts
-// and SessionService.kt. Pinned by the `arcade:*` parity describe in
-// tests/ipc-channels.test.ts — drift silently breaks one platform.
-const CHANNELS = [
-  "arcade:status",
-  "arcade:leaderboard",
-  "arcade:submit-score",
-  "arcade:records",
-] as const;
 
 /** What the renderer gets back for a board: the board itself, plus `cachedAt`
  *  set ONLY when this is a remembered copy served because the live fetch
@@ -131,23 +119,15 @@ export function createArcadeOps(store: MarketplaceAuthStore): ArcadeOps {
   };
 }
 
-// WHY (2026-09-29 one-core R2): every request from a window is now ONE object ({ sessionId, text }, not (sessionId, text)) — the same object the phone sends, so one handler can serve both doors and two same-typed arguments can no longer be swapped unnoticed. tests/wire-shape-parity.test.ts checks these keys against preload's.
-export function registerArcadeHandlers(store: MarketplaceAuthStore): void {
-  // WHY: ipcMain.handle throws on re-registration. Clearing first keeps
-  // hot-reload dev sessions (scripts/run-dev.sh) from crashing on reload.
-  for (const ch of CHANNELS) ipcMain.removeHandler(ch);
-
-  const instance = createArcadeOps(store);
-  ops = instance;
-
-  ipcMain.handle("arcade:status", () => instance.status());
-  ipcMain.handle("arcade:leaderboard", (_e, { game }: { game: string }) => instance.leaderboard(game));
-  ipcMain.handle("arcade:submit-score", (_e, { game, score }: { game: string; score: number }) =>
-    instance.submitScore(game, score));
-  ipcMain.handle("arcade:records", (_e, { game }: { game?: string }) => instance.records(game));
+/** Build the arcade's operations over the account's auth store and remember them for the table entries.
+ *  WHY (2026-10-01 one-core R3-8): the four arcade:* channels are table entries (main/ipc/game.ts) that reach the one
+ *  instance through getArcadeOps(); nothing is registered with Electron here any more, so a hot reload simply replaces
+ *  the instance (no removeHandler dance). */
+export function initArcadeOps(store: MarketplaceAuthStore): void {
+  ops = createArcadeOps(store);
 }
 
-/** The live instance, for remote-server.ts's WebSocket cases. `null` before
+/** The live instance, for the arcade table entries (main/ipc/game.ts). `null` before
  *  registration (minimal boots and tests) — callers must handle that rather
  *  than assume, which is why this returns the union instead of throwing. */
 export function getArcadeOps(): ArcadeOps | null {

@@ -9,8 +9,9 @@ import { CHANNEL_TABLE, findChannel, registerDesktopChannels, serveRemoteChannel
 import { bindSessionOps } from '../src/main/ipc/session';
 
 const FAMILY = /^(session|session-naming|transcript):/;
-// Not entries yet: transcript:replay-from-start, session:replay-live-state and the drag / detach / ownership
-// messages are desktop window plumbing (the window/detach group), and pushes are never entries.
+// Not part of THIS family's count: transcript:replay-from-start, session:replay-live-state and the drag / detach messages
+// are computer-window plumbing, table entries of their own (main/ipc/detach.ts, replay.ts; pinned in last-channels.test.ts);
+// the ownership and attention messages are pushes, which are never entries.
 const NOT_YET = new Set<string>([
   IPC.TRANSCRIPT_REPLAY, IPC.SESSION_REPLAY_LIVE_STATE, IPC.SESSION_DETACH_START, IPC.SESSION_DETACH_LIVE,
   IPC.SESSION_DRAG_WINDOW_MOVE, IPC.SESSION_DRAG_STARTED, IPC.SESSION_DRAG_ENDED, IPC.SESSION_DRAG_DROPPED,
@@ -38,7 +39,7 @@ describe('session channels: what is in the table and who may call it', () => {
   });
 
   it('a phone may use exactly what it could before; set-flag stays refused and the window-only ones stay computer-only', () => {
-    const entries = CHANNEL_TABLE.filter((d) => FAMILY.test(d.name));
+    const entries = CHANNEL_TABLE.filter((d) => FAMILY.test(d.name) && !NOT_YET.has(d.name));
     const refused = entries.filter((d) => d.desktopOnly || d.remoteAllowed === false).map((d) => d.name).sort();
     expect(refused).toEqual(['session:forget-reopen', 'session:reopen-list', 'session:selected', 'session:set-flag', 'session:terminal-ready']);
   });

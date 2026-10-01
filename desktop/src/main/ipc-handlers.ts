@@ -1,9 +1,8 @@
-import { app, IpcMain, BrowserWindow, dialog, clipboard, nativeImage, shell, powerSaveBlocker, webContents } from 'electron';
+import { app, IpcMain, BrowserWindow, powerSaveBlocker, webContents } from 'electron';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { resolveNoFolderCwd } from './no-folder';
-import { loadDefaultAppIcon, fitForMacDock } from './app-icon';
 import { randomUUID } from 'crypto';
 import { buildClaudeCodeContext, readWholeContextFile } from './claude-code-context';
 import https from 'https';
@@ -17,8 +16,8 @@ import { isPlaceholderModelId } from '../shared/model-ids';
 import { setPermissionOverrides, forgetSessionAttention } from './main';
 import { LocalSkillProvider } from './skill-provider';
 import { CommandProvider } from './command-provider';
-import { IntegrationInstaller, listWithState } from './integration-installer';
-import { RemoteConfig, MIN_REMOTE_PASSWORD_LENGTH } from './remote-config';
+import { IntegrationInstaller } from './integration-installer';
+import { RemoteConfig } from './remote-config';
 import { RemoteServer } from './remote-server';
 import { TranscriptWatcher } from './transcript-watcher';
 import { readTranscriptPage } from './transcript-page';
@@ -28,6 +27,15 @@ import { nativeStoreSlug, ccProjectSlug } from './slug-encoding';
 // registry that owns HarnessSessions and their persistence.
 import { NativeHome } from './native-home';
 import type { NativeRuntime } from './create-runtime';
+import { bindAppearance } from './ipc/appearance';
+import { bindWindow } from './ipc/window';
+import { bindShell } from './ipc/shell';
+import { bindApp } from './ipc/app';
+import { bindUi } from './ipc/ui';
+import { bindIntegrations } from './ipc/integrations';
+import { bindBuddy } from './ipc/buddy';
+import { bindRemoteAdmin } from './ipc/remote-admin';
+import { bindReplay } from './ipc/replay';
 import { registerDesktopChannels } from './ipc/channel-table';
 import { bindSkillsDeps } from './ipc/skills';
 import { bindSyncSpacesDeps } from './ipc/sync-spaces';
@@ -71,7 +79,7 @@ import type { NativePermissionMode } from '../shared/permission-types';
 import { resolveMappingAction, findLiveSessionForConversation } from './session-id-mapping';
 import { readSessionTranscriptMeta } from './session-browser';
 import { TranscriptPageSources, type ResolvedPageSource } from './transcript-page-source';
-import { startThemeWatcher, listUserThemes, userThemeDir, userThemeManifest, THEMES_DIR } from './theme-watcher';
+import { startThemeWatcher } from './theme-watcher';
 import { isBundledPlugin } from '../shared/bundled-plugins';
 import { ThemeMarketplaceProvider } from './theme-marketplace-provider';
 import { generateThemePreview } from './theme-preview-generator';
@@ -104,13 +112,12 @@ import { getUpdateService } from './update-service';
 // registry's limit (project-registry.ts uses the same constant).
 import { PROJECT_DESCRIPTION_MAX } from '../shared/artifacts/types';
 import { setPermissionOverridesSink } from './prefs-service';
-import { loadConfigSync, writeConfig, getAppliedAtLaunch, getCachedGpu } from './performance-config';
-import type { PerformanceConfigSnapshot, SessionInfo } from '../shared/types';
+import type { SessionInfo } from '../shared/types';
 import { ARTIFACT_IPC } from './artifacts/ipc-channels';
 import { listProjects } from './artifacts/central-index';
 import { initPagesService, getPagesService } from './pages/pages-service';
 import { PageConnectionsStore } from './pages/connections-store';
-import { registerDocCommentsHandlers } from './doc-comments/ipc-handlers';
+import { wireDocCommentsPush } from './doc-comments/ipc-handlers';
 import { createAuthStore } from './marketplace-auth-store';
 import { getMachineIdentity } from './device-identity';
 // Shared with remote-server.ts — see that module's header for why these left
@@ -152,7 +159,6 @@ import { hubLeaseRequest, syncSpacesSyncNowAwaited } from './sync-spaces/service
 import type { RequesterTakeoverType } from './conversations/takeover';
 
 // Max age for clipboard paste images (1 hour)
-const CLIPBOARD_MAX_AGE_MS = 60 * 60 * 1000;
 
 // Root of ~/.claude — used by artifact handlers to locate the central index.
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
@@ -438,196 +444,20 @@ export function registerIpcHandlers(
   // --- Theme file watcher ---
   const stopThemeWatcher = startThemeWatcher();
 
-  ipcMain.handle(IPC.THEME_LIST, async () => {
-    return listUserThemes();
-  });
-
-  // Security: strict slug format to prevent path traversal before path.resolve.
-  // Allow leading underscore for reserved internal slugs (e.g. _preview used by theme-builder).
-  const SAFE_SLUG_RE = /^[a-z0-9_]+(?:-[a-z0-9_]+)*$/;
-
-  ipcMain.handle(IPC.THEME_READ_FILE, async (_event, { slug }: { slug: string }) => {
-    if (!SAFE_SLUG_RE.test(slug)) throw new Error('Invalid theme slug');
-    const manifestPath = path.resolve(userThemeManifest(slug));
-    if (!manifestPath.startsWith(THEMES_DIR + path.sep)) throw new Error('Invalid theme slug');
-    return fs.promises.readFile(manifestPath, 'utf-8');
-  });
-
-  ipcMain.handle(IPC.THEME_WRITE_FILE, async (_event, { slug, content }: { slug: string; content: string }) => {
-    if (!SAFE_SLUG_RE.test(slug)) throw new Error('Invalid theme slug');
-    const themeDir = path.resolve(userThemeDir(slug));
-    if (!themeDir.startsWith(THEMES_DIR + path.sep)) throw new Error('Invalid theme slug');
-    await fs.promises.mkdir(path.join(themeDir, 'assets'), { recursive: true });
-    await fs.promises.writeFile(path.join(themeDir, 'manifest.json'), content, 'utf-8');
-  });
-
-  // Window controls — used by custom caption buttons on Windows/Linux.
-  // Operate on the SENDING window (BrowserWindow.fromWebContents), not the
-  // primary mainWindow — otherwise window 2's caption buttons all act on
-  // window 1.
-  ipcMain.handle(IPC.WINDOW_MINIMIZE, (event) => {
-    const win = BrowserWindow.fromWebContents(event.sender);
-    if (win && !win.isDestroyed()) win.minimize();
-  });
-  ipcMain.handle(IPC.WINDOW_MAXIMIZE, (event) => {
-    const win = BrowserWindow.fromWebContents(event.sender);
-    if (win && !win.isDestroyed()) {
-      win.isMaximized() ? win.unmaximize() : win.maximize();
-    }
-  });
-  ipcMain.handle(IPC.WINDOW_CLOSE, (event) => {
-    const win = BrowserWindow.fromWebContents(event.sender);
-    if (win && !win.isDestroyed()) win.close();
-  });
-  // macOS traffic-light repositioning. Non-Mac platforms don't have native
-  // traffic lights, so this is a no-op there. Called from theme-engine when
-  // chrome-style changes — floating chrome's rounded header would otherwise
-  // leave the OS-default (8,12) lights stranded over empty space.
-  ipcMain.handle(IPC.WINDOW_SET_TRAFFIC_LIGHT_POS, (event, { pos }: { pos: { x: number; y: number } | null }) => {
-    if (process.platform !== 'darwin') return;
-    const win = BrowserWindow.fromWebContents(event.sender);
-    if (!win || win.isDestroyed()) return;
-    // Electron 28+: setWindowButtonPosition(null) resets to the platform default.
-    // Older fallback: passing undefined also resets. We type-narrow before calling.
-    const anyWin = win as unknown as { setWindowButtonPosition: (p: Electron.Point | null) => void };
-    anyWin.setWindowButtonPosition(pos ?? null);
-  });
-
-  // Theme-driven window + dock icon hot-swap. Called from theme-context whenever
-  // the active theme changes. Two URL forms are accepted:
-  //   1. theme-asset://<slug>/<relative-path>  — a file in a community/user theme's
-  //      asset dir (server resolves the path and confines reads to that dir, so
-  //      renderer cannot read arbitrary files).
-  //   2. data:image/png;base64,<...> — an icon the renderer draws (unused since the
-  //      tint was retired 2026-09-10; kept for theme-matched icons). Size-capped.
-  // null or failure resets to the platform's bundled default (app-icon.ts — it was
-  // icon.png, whose edge-to-edge tile looked oversized in the Mac Dock).
-  const ASSETS_DIR = path.join(__dirname, '../../assets');
-  const THEMES_DIR_FOR_ICON = path.join(os.homedir(), '.claude', 'wecoded-themes');
-  const MAX_DATA_ICON_BYTES = 1024 * 1024; // 1 MB — a 256px PNG is typically <100KB
-  ipcMain.handle(IPC.WINDOW_SET_ICON, (_e, { url }: { url: string | null }) => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
-    let iconImg = loadDefaultAppIcon(ASSETS_DIR);
-    if (url && typeof url === 'string') {
-      try {
-        if (url.startsWith('theme-asset://')) {
-          const parsed = new URL(url);
-          const slug = parsed.hostname;
-          if (SAFE_SLUG_RE.test(slug)) {
-            const rel = decodeURIComponent(parsed.pathname.replace(/^\//, ''));
-            const themeDir = path.join(THEMES_DIR_FOR_ICON, slug);
-            const resolved = path.resolve(themeDir, rel);
-            if (resolved.startsWith(themeDir + path.sep)) {
-              const img = nativeImage.createFromPath(resolved);
-              if (!img.isEmpty()) iconImg = img;
-            }
-          }
-        } else if (url.startsWith('data:image/png;base64,') && url.length <= MAX_DATA_ICON_BYTES) {
-          const img = nativeImage.createFromDataURL(url);
-          if (!img.isEmpty()) iconImg = img;
-        }
-      } catch { /* fall through to default */ }
-    }
-    mainWindow.setIcon(iconImg);
-    // WHY fitForMacDock: edge-to-edge theme art is shrunk onto Apple's grid, as shipped.
-    if (process.platform === 'darwin' && app.dock) app.dock.setIcon(fitForMacDock(iconImg));
-  });
-
-  // Zoom controls — each returns the new zoom percentage for the overlay UI
-  const ZOOM_STEP = 0.5; // ~12% per step (Electron uses logarithmic scale)
-  const ZOOM_MIN = -3;   // ~50%
-  const ZOOM_MAX = 5;    // ~300%
-
-  function zoomLevelToPercent(level: number): number {
-    return Math.round(Math.pow(1.2, level) * 100);
-  }
-
-  ipcMain.handle(IPC.ZOOM_IN, () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return 100;
-    const current = mainWindow.webContents.getZoomLevel();
-    const next = Math.min(current + ZOOM_STEP, ZOOM_MAX);
-    mainWindow.webContents.setZoomLevel(next);
-    return zoomLevelToPercent(next);
-  });
-
-  ipcMain.handle(IPC.ZOOM_OUT, () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return 100;
-    const current = mainWindow.webContents.getZoomLevel();
-    const next = Math.max(current - ZOOM_STEP, ZOOM_MIN);
-    mainWindow.webContents.setZoomLevel(next);
-    return zoomLevelToPercent(next);
-  });
-
-  ipcMain.handle(IPC.ZOOM_RESET, () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return 100;
-    mainWindow.webContents.setZoomLevel(0);
-    return 100;
-  });
-
-  ipcMain.handle(IPC.ZOOM_GET, () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return 100;
-    return zoomLevelToPercent(mainWindow.webContents.getZoomLevel());
-  });
+  // WHY (2026-10-01 one-core R3-8): theme:*, appearance:*, window:* controls and zoom:* are table entries
+  // (main/ipc/appearance.ts, window.ts). The theme favourites live in the skill config store and the window controls act on
+  // the main window and the window list, which are built here, so they are handed over.
+  bindAppearance(skillProvider.configStore);
+  bindWindow({ getMainWindow: () => mainWindow, getDirectory: () => windowRegistry?.getDirectory((id) => sessionManager.getSession(id)) });
+  bindShell({ getMainWindow: () => mainWindow });
 
   // --- The Linux/KDE buddy helper (design §4) ---
-  // Three channels, and only three surfaces (here, preload.ts, remote-shim.ts).
-  // The buddy has no Android or remote-server presence at all today, so adding
-  // one for the helper would grow this feature into a platform-parity sweep —
-  // deliberately not done, and recorded in ipc-channels.test.ts so it does not
-  // read as an oversight later.
+  // WHY (2026-10-01 one-core R3-8): buddy:helper-status / install-helper / remove-helper are table entries (main/ipc/buddy.ts);
+  // the cached status, the consent gate's refusal and the install/remove calls stay here (the drag path and the consent
+  // test read them) and are handed over.
+  bindBuddy({ helper: { refresh: refreshBuddyHelperStatus, showRefusal: buddyShowRefusal, install: installHelper, remove: removeHelper } });
 
-  // Always a LIVE read, never the cache: the user can turn the script off in
-  // KDE's own System Settings at any moment, and the settings popup asks for
-  // this every time it opens (design §4 — "re-checked on window-show").
-  ipcMain.handle(IPC.BUDDY_HELPER_STATUS, () => refreshBuddyHelperStatus());
-
-  ipcMain.handle(IPC.BUDDY_INSTALL_HELPER, async () => {
-    const res = await installHelper();
-    // Re-read after a change, not before: the buddy's drag path reads this
-    // cached value on every frame, and until it says "installed" the buddy is
-    // still gated off. Doing it here means the user's very next click works.
-    if (res.ok) await refreshBuddyHelperStatus();
-    return res;
-  });
-
-  ipcMain.handle(IPC.BUDDY_REMOVE_HELPER, async () => {
-    const res = await removeHelper();
-    // Same reason in reverse: once the script is out of KDE, the buddy can no
-    // longer be moved, so the cache has to know before the next show().
-    if (res.ok) await refreshBuddyHelperStatus();
-    return res;
-  });
-
-  // --- Performance / GPU pref ---
-  // The Settings → Performance section reads/writes ~/.claude/youcoded-performance.json
-  // through these handlers. The Chromium force-{high,low}-power-gpu switch is
-  // applied at module load in main.ts (cannot be changed at runtime), so set-config
-  // only persists the value — the renderer is responsible for prompting a restart.
-  ipcMain.handle(IPC.PERFORMANCE_GET_CONFIG, (): PerformanceConfigSnapshot => {
-    const cfg = loadConfigSync();
-    const gpu = getCachedGpu();
-    return {
-      preferPowerSaving: cfg.preferPowerSaving,
-      appliedAtLaunch: getAppliedAtLaunch(),
-      multiGpuDetected: gpu.multiGpuDetected,
-      gpuList: gpu.gpuList,
-    };
-  });
-
-  ipcMain.handle(IPC.PERFORMANCE_SET_CONFIG, (_event, payload: { preferPowerSaving: boolean }) => {
-    // Validate the payload — IPC inputs are untrusted (a remote browser
-    // client could send anything). We coerce to a strict boolean.
-    const next = payload?.preferPowerSaving === true;
-    writeConfig({ preferPowerSaving: next });
-    return { ok: true as const };
-  });
-
-  ipcMain.handle(IPC.APP_RESTART, () => {
-    // Generic restart channel — reused by any future setting that needs a
-    // restart to apply. relaunch() schedules the restart for after exit().
-    app.relaunch();
-    app.exit(0);
-  });
+  // WHY (2026-10-01 one-core R3-8): performance:*, app:restart and attention:* are table entries (main/ipc/app.ts).
 
   // --- Theme marketplace ---
   // Phase 3a: pass the shared config store so theme installs also record into
@@ -675,25 +505,7 @@ export function registerIpcHandlers(
   // its own line budget; see that file's own header for the full WHY.
   wireDocCommentsSessionLifecycle(sessionManager);
 
-  // window.claude.terminal.getScreenText — reads the visible xterm buffer
-  // for the given session. The actual read happens in the renderer (xterm
-  // lives there), so main calls back via executeJavaScript. ~1s cadence
-  // under the classifier; round-trip overhead is negligible.
-  ipcMain.handle('terminal:get-screen-text', async (event, { sessionId, tailRows }: { sessionId: string; tailRows?: number }) => {
-    try {
-      // Tail read: serializing the full 1000+-row scrollback every second was
-      // pure waste. The caller says how many buffer rows it wants (the
-      // attention classifier asks for 40 — audit W24); a caller that omits it
-      // gets the 120-row tail this handler always used. Only a positive
-      // integer is honoured — anything else falls back to the default.
-      const rows = Number.isInteger(tailRows) && (tailRows as number) > 0 ? (tailRows as number) : 120;
-      return await event.sender.executeJavaScript(
-        `window.__terminalRegistry?.getScreenText(${JSON.stringify(sessionId)}, ${rows}) ?? ''`
-      );
-    } catch {
-      return '';
-    }
-  });
+  // WHY (2026-10-01 one-core R3-8): terminal:get-screen-text is a table entry (main/ipc/ui.ts).
 
   // Deps for the resume-time title re-apply (native-resume-title.ts). These are
   // exactly the two calls the title feeder's own onTitle makes — the pill only
@@ -1006,14 +818,6 @@ export function registerIpcHandlers(
   // WHY (2026-09-30 one-core R3-4): session:create is a table entry (main/ipc/session.ts) calling this
   // closure through bindSessionOps, for a window (with its sender) and for a phone (with none).
 
-  // Pull-style directory snapshot — renderers call this on mount to avoid
-  // racing the WINDOW_DIRECTORY_UPDATED push that fires before React subscribes.
-  if (windowRegistry) {
-    ipcMain.handle(IPC.WINDOW_GET_DIRECTORY, async () => {
-      return windowRegistry.getDirectory((id) => sessionManager.getSession(id));
-    });
-  }
-
   // The teardown behind session:destroy (table entry, main/ipc/session.ts): the computer's windows AND a
   // phone run this one body, so a phone's close also releases the hold and forgets it for Welcome back.
   const destroySession = async (sessionId: string): Promise<boolean> => {
@@ -1068,149 +872,14 @@ export function registerIpcHandlers(
   // session:list / :selected / :switch are table entries now (main/ipc/session.ts); the window-scoped list
   // and the per-window selection cache read windowRegistry through bindSessionOps.
 
-  // File picker dialog (attachment paperclip)
-  ipcMain.handle(IPC.DIALOG_OPEN_FILE, async () => {
-    // NO `filters` on purpose — do NOT re-add a filter list here. Destin's ask
-    // is "default to all files, on all platforms", and Electron's dialog API
-    // cannot deliver an All-Files DEFAULT alongside a category dropdown:
-    //   - Linux: a live D-Bus capture of org.freedesktop.portal.FileChooser.OpenFile
-    //     (KDE Plasma, 2026-08-12) showed Electron strips the wildcard filter
-    //     (file_dialog_linux.cc GetFilterInfo() keeps only include_all_files,
-    //     hardcodes file_type_index=0), Chromium re-appends "*.*" LAST and emits
-    //     no current_filter key — so the portal selects the first listed filter
-    //     (Images), and app-side ordering can never win. electron#43491, closed
-    //     not-planned. A lone All-Files filter is no fix either: '*' serializes
-    //     as the glob '*.*', which excludes extensionless files like Makefile.
-    //   - Windows: same rule by design — the dialog "picks the first filter as
-    //     default, except the All Files one". electron#19492, closed not-planned.
-    //   - macOS: filters are a selection allowlist, not a dropdown default, so
-    //     a list adds nothing once All Files is present.
-    // If a category dropdown is ever wanted, that means an upstream Electron
-    // patch or an in-app picker — not a filters array. Pinned by
-    // tests/ipc-handlers.test.ts → "dialog:open-file attachment picker filters".
-    const result = await dialog.showOpenDialog(mainWindow, {
-      properties: ['openFile', 'multiSelections'],
-    });
-    return result.canceled ? [] : result.filePaths;
-  });
-
-  // Sound file picker dialog — for custom notification sounds
-  ipcMain.handle(IPC.DIALOG_OPEN_SOUND, async () => {
-    const result = await dialog.showOpenDialog(mainWindow, {
-      properties: ['openFile'],
-      filters: [
-        // AIFF/AIF/AIFC covers Apple system sounds in /System/Library/Sounds/.
-        // Chromium can't decode AIFF natively; sounds.ts has a JS AIFF parser for it.
-        { name: 'Audio Files', extensions: ['mp3', 'wav', 'ogg', 'opus', 'aac', 'm4a', 'flac', 'webm', 'aiff', 'aif', 'aifc'] },
-        { name: 'All Files', extensions: ['*'] },
-      ],
-    });
-    return result.canceled ? null : result.filePaths[0] ?? null;
-  });
-
-  // Folder picker dialog
-  ipcMain.handle(IPC.DIALOG_OPEN_FOLDER, async () => {
-    const result = await dialog.showOpenDialog(mainWindow, {
-      properties: ['openDirectory'],
-    });
-    return result.canceled ? null : result.filePaths[0];
-  });
-
-  // Save clipboard image to temp file (async I/O, cleanup on timer)
-  const clipboardTmpDir = path.join(os.tmpdir(), 'claude-desktop-attachments');
-  let clipboardCleanupScheduled = false;
-
-  async function cleanupClipboardTemp(): Promise<void> {
-    try {
-      const files = await fs.promises.readdir(clipboardTmpDir);
-      const now = Date.now();
-      for (const file of files) {
-        if (!file.startsWith('paste-')) continue;
-        try {
-          const stat = await fs.promises.stat(path.join(clipboardTmpDir, file));
-          if (now - stat.mtimeMs > CLIPBOARD_MAX_AGE_MS) {
-            await fs.promises.unlink(path.join(clipboardTmpDir, file));
-          }
-        } catch {}
-      }
-    } catch {}
-  }
-
-  ipcMain.handle(IPC.CLIPBOARD_SAVE_IMAGE, async () => {
-    const img = clipboard.readImage();
-    if (img.isEmpty()) return null;
-    await fs.promises.mkdir(clipboardTmpDir, { recursive: true });
-
-    if (!clipboardCleanupScheduled) {
-      clipboardCleanupScheduled = true;
-      setInterval(cleanupClipboardTemp, 3600_000);
-    }
-
-    const filePath = path.join(clipboardTmpDir, `paste-${Date.now()}.png`);
-    await fs.promises.writeFile(filePath, img.toPNG());
-    return filePath;
-  });
-
-  // Open the YouCoded CHANGELOG on GitHub in the default browser
-  ipcMain.handle(IPC.OPEN_CHANGELOG, async () => {
-    await shell.openExternal('https://github.com/itsdestin/youcoded/blob/master/CHANGELOG.md');
-  });
-
-  // Open any URL in the default browser (allowlisted to http/https — the
-  // scheme is the boundary; any HOST is fine, because the model legitimately
-  // hands the user localhost/LAN dev-server links via SendUserLink and the
-  // user clicks them explicitly. Never file:, javascript:, etc.
-  ipcMain.handle(IPC.OPEN_EXTERNAL, async (_event, { url }: { url: string }) => {
-    if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
-      await shell.openExternal(url);
-    }
-  });
-
-  // Reveal a local file in the OS file manager. Used by the artifact panel's
-  // "Reveal in folder" action. No-op for empty / non-string paths.
-  ipcMain.handle(IPC.SHOW_ITEM_IN_FOLDER, async (_event, { filePath }: { filePath: string }) => {
-    if (typeof filePath === 'string' && filePath.length > 0) {
-      shell.showItemInFolder(filePath);
-    }
-  });
-
-  // Open a local file with the OS default app (HTML→browser, .docx→Word, etc.).
-  // shell.openPath resolves with '' on success or an error string on failure.
-  ipcMain.handle(IPC.OPEN_PATH, async (_event, { filePath }: { filePath: string }) => {
-    if (typeof filePath !== 'string' || filePath.length === 0) return 'no path';
-    return shell.openPath(filePath);
-  });
+  // WHY (2026-10-01 one-core R3-8): dialog:*, clipboard:save-image and shell:* (open changelog / external / path, show item) are
+  // table entries (main/ipc/shell.ts).
 
   // WHY (2026-09-30 one-core R3-5): model:get-preference / set-preference live in the channel table (main/ipc/model.ts).
 
   // WHY (2026-09-30 one-core R3-1): modes:get / modes:set, settings:get / settings:set,
   // defaults:get / defaults:set, analytics:* , folders:* and tags:* now live in the channel table
   // (main/ipc/<family>.ts), served by both doors from one body.
-
-  // --- Appearance preference persistence ---
-  ipcMain.handle('appearance:get', async () => {
-    try {
-      const raw = fs.readFileSync(appearancePrefPath, 'utf-8');
-      return JSON.parse(raw);
-    } catch {
-      return null;
-    }
-  });
-
-  ipcMain.handle('appearance:set', async (_event, prefs: Record<string, any>) => {
-    try {
-      let existing: Record<string, any> = {};
-      try {
-        existing = JSON.parse(fs.readFileSync(appearancePrefPath, 'utf-8'));
-      } catch {}
-      const merged = { ...existing, ...prefs };
-      fs.mkdirSync(path.dirname(appearancePrefPath), { recursive: true });
-      fs.writeFileSync(appearancePrefPath, JSON.stringify(merged));
-      return true;
-    } catch {
-      return false;
-    }
-  });
 
   // model:read-last is a table entry too (main/ipc/model.ts).
 
@@ -1223,57 +892,11 @@ export function registerIpcHandlers(
 
   // --- Skills discovery & marketplace ---
   // skills:* / marketplace:* / theme-marketplace:* are table entries now (see the binds above).
-  ipcMain.handle(IPC.COMMANDS_LIST, async () => {
-    return commandProvider.getCommands();
-  });
-
-  // Theme favorites — parallel to skills:set-favorite. Drives the Appearance
-  // panel's favorites-only list and the "My favorite themes" Library section.
-  ipcMain.handle(IPC.APPEARANCE_GET_FAVORITE_THEMES, async () => {
-    return skillProvider.configStore.getThemeFavorites();
-  });
-
-  ipcMain.handle(IPC.APPEARANCE_FAVORITE_THEME, async (_event, { slug, favorited }: { slug: string; favorited: boolean }) => {
-    skillProvider.configStore.setThemeFavorite(slug, favorited);
-    // Broadcast to peer windows so ThemeContext re-reads without requiring a
-    // polled IPC fetch. Reuses the existing appearance broadcast pipe.
-    try {
-      const prefs = { themeFavoritesChanged: Date.now() };
-      for (const win of BrowserWindow.getAllWindows()) {
-        win.webContents.send('appearance:sync', prefs);
-      }
-    } catch { /* best-effort broadcast */ }
-    return skillProvider.configStore.getThemeFavorites();
-  });
-
-  // Marketplace redesign Phase 3 — integrations IPC. list/status are real;
-  // install/uninstall/configure are scaffolded (manifest-only; the actual
-  // OAuth + script runner lands with the Google Workspace slice).
-  ipcMain.handle(IPC.INTEGRATIONS_LIST, async () => {
-    return listWithState(integrationInstaller);
-  });
-  ipcMain.handle(IPC.INTEGRATIONS_STATUS, async (_e, { slug }: { slug: string }) => {
-    return integrationInstaller.status(slug);
-  });
-  ipcMain.handle(IPC.INTEGRATIONS_INSTALL, async (_e, { slug }: { slug: string }) => {
-    return integrationInstaller.install(slug);
-  });
-  ipcMain.handle(IPC.INTEGRATIONS_UNINSTALL, async (_e, { slug }: { slug: string }) => {
-    return integrationInstaller.uninstall(slug);
-  });
-  ipcMain.handle(IPC.INTEGRATIONS_CONFIGURE, async (_e, { slug, settings }: { slug: string; settings: Record<string, unknown> }) => {
-    return integrationInstaller.configure(slug, settings);
-  });
-  ipcMain.handle(IPC.INTEGRATIONS_CONNECT, async (_e, { slug }: { slug: string }) => {
-    return integrationInstaller.connect(slug);
-  });
-
-  // Reports process.platform so the renderer can gate UI (e.g. hide Install
-  // buttons on macOS-only integrations when running on Windows). Returns the
-  // raw Node code — the renderer uses platform-display.ts to humanize.
-  ipcMain.handle(IPC.PLATFORM_GET, () => {
-    return process.platform;
-  });
+  // WHY (2026-10-01 one-core R3-8): commands:list, platform:get, the favourite themes and integrations:* are table entries
+  // (main/ipc/ui.ts, appearance.ts, integrations.ts). The command list and the integration installer are built here, so
+  // they are handed over.
+  bindUi({ getCommands: () => commandProvider.getCommands(), emitUiAction: (action) => sessionManager.emit('ui-action', action) });
+  bindIntegrations(integrationInstaller);
 
   // --- Remote access settings ---
   let keepAwakeBlockerId: number | null = null;
@@ -1305,124 +928,19 @@ export function registerIpcHandlers(
     }
   }
 
+  bindRemoteAdmin({ config: remoteConfig, server: remoteServer, applyKeepAwake });
   if (remoteConfig) {
     // Apply saved keep-awake on startup
     if (remoteConfig.keepAwakeHours > 0) applyKeepAwake(remoteConfig.keepAwakeHours);
-    ipcMain.handle(IPC.REMOTE_GET_CONFIG, async () => {
-      return {
-        ...remoteConfig.toSafeObject(),
-        clientCount: remoteServer?.getClientCount() ?? 0,
-      };
-    });
-
-    ipcMain.handle(IPC.REMOTE_SET_PASSWORD, async (_event, password: string) => {
-      // Backstop for the length rule the Settings UI enforces (2026-09-10 security
-      // review, #5): refuse a new password under the minimum rather than silently
-      // storing a one-character one. Returns false so the UI can show its message;
-      // the boolean contract is unchanged (this handler only ever returned true).
-      if (typeof password !== 'string' || password.length < MIN_REMOTE_PASSWORD_LENGTH) {
-        return false;
-      }
-      await remoteConfig.setPassword(password);
-      remoteServer?.invalidateTokens();
-      return true;
-    });
-
-    ipcMain.handle(IPC.REMOTE_SET_CONFIG, async (_event, updates: { enabled?: boolean; keepAwakeHours?: number }) => {
-      const wasEnabled = remoteConfig.enabled;
-      if (typeof updates.enabled === 'boolean') remoteConfig.enabled = updates.enabled;
-      if (typeof updates.keepAwakeHours === 'number') {
-        remoteConfig.keepAwakeHours = updates.keepAwakeHours;
-        applyKeepAwake(updates.keepAwakeHours);
-      }
-      remoteConfig.save();
-
-      // Fix: flipping this toggle used to persist `enabled` and stop there.
-      // remoteServer.start() ran exactly once, at boot (main.ts), when the flag
-      // was still false — so turning remote access on did nothing until the app
-      // was restarted, with no indication that a restart was required. The user
-      // saw the toggle on and the browser saw ERR_CONNECTION_REFUSED.
-      const toggled = typeof updates.enabled === 'boolean' && updates.enabled !== wasEnabled;
-      if (toggled && remoteServer) {
-        if (remoteConfig.enabled) {
-          try {
-            await remoteServer.start();
-          } catch (err: any) {
-            // Roll the flag back so the persisted state, the UI and reality all
-            // agree — otherwise the toggle reads "on" against a dead server.
-            remoteConfig.enabled = false;
-            remoteConfig.save();
-            // Surface the real OS error (EADDRINUSE etc.) rather than guessing
-            // at a cause — see docs/error-message-standards.md.
-            const detail = err?.message ? String(err.message) : String(err);
-            console.error('[remote] start failed:', detail);
-            return {
-              ...remoteConfig.toSafeObject(),
-              error: `Remote access could not start on port ${remoteConfig.port}: ${detail}`,
-            };
-          }
-        } else {
-          remoteServer.stop();
-        }
-      }
-      return remoteConfig.toSafeObject();
-    });
-
-    ipcMain.handle(IPC.REMOTE_DETECT_TAILSCALE, async () => {
-      return RemoteConfig.detectTailscale(remoteConfig.port);
-    });
-
-    ipcMain.handle(IPC.REMOTE_GET_CLIENT_COUNT, async () => {
-      return remoteServer?.getClientCount() ?? 0;
-    });
-
-    ipcMain.handle(IPC.REMOTE_GET_CLIENT_LIST, async () => {
-      return remoteServer?.getClientList() ?? [];
-    });
-
-    // WHY these are desktop IPC and have no remote equivalent: renaming and unpairing decide
-    // who may reach this computer. The remote socket refuses them (HOST_ADMIN_REFUSAL).
-    ipcMain.handle(IPC.REMOTE_STATUS, async () => {
-      return remoteServer?.getStatus() ?? { state: 'stopped', port: 0, clientCount: 0 };
-    });
-
-    // Remote access batch 2 (§6): Refresh belongs to a remote client's copy of the
-    // conversation. A desktop window IS the copy; say so rather than pretend to refresh.
+    // WHY (2026-10-01 one-core R3-8): remote:get-config, set-password, set-config, detect-tailscale, get-client-count,
+    // get-client-list, status, devices:* and install/auth-tailscale are table entries (main/ipc/remote-admin.ts), including
+    // the refusals a phone gets for set-password, set-config, rename and unpair (HOST_ADMIN_REFUSAL). The config, server and the
+    // keep-awake timer that lives above are handed over. remote:rehydrate below is connection housekeeping, not a feature: the
+    // phone's answer is in remote-server.ts, and a window, which IS the copy, says so here.
     ipcMain.handle(IPC.REMOTE_REHYDRATE, async () => ({ ok: false, code: 'not-remote' }));
 
-    ipcMain.handle(IPC.REMOTE_DEVICES_LIST, async () => {
-      return remoteServer?.getDeviceList() ?? [];
-    });
-
-    ipcMain.handle(IPC.REMOTE_DEVICES_RENAME, async (_event, { deviceId, name }: { deviceId: string; name: string }) => {
-      return remoteServer?.renameDevice(deviceId, name) ?? false;
-    });
-
-    ipcMain.handle(IPC.REMOTE_DEVICES_UNPAIR, async (_event, { deviceId }: { deviceId: string }) => {
-      return remoteServer?.unpairDevice(deviceId) ?? false;
-    });
-
-    ipcMain.handle(IPC.REMOTE_INSTALL_TAILSCALE, async () => {
-      return RemoteConfig.installTailscale();
-    });
-
-    ipcMain.handle(IPC.REMOTE_AUTH_TAILSCALE, async () => {
-      const result = await RemoteConfig.startTailscaleAuth();
-      if (result.url) {
-        // Fire-and-forget: openExternal rejects when the OS has no handler for
-        // the scheme. The URL is returned to the renderer either way, so the
-        // user can still copy it — but the rejection must not escape as an
-        // unhandled rejection.
-        void shell.openExternal(result.url).catch(() => {});
-      }
-      return result;
-    });
-
-    // UI action sync: Electron window broadcasts an action → forward to all remote clients
-    ipcMain.on(IPC.UI_ACTION_BROADCAST, (_event, action: any) => {
-      remoteServer?.broadcast({ type: 'ui:action', payload: action });
-    });
-
+    // WHY (2026-10-01 one-core R3-8): ui:action:broadcast (a window's screen action, relayed to every phone) is a table
+    // entry (main/ipc/ui.ts).
     // UI action sync: Remote client broadcasts an action → forward to Electron window
     sessionManager.on('ui-action', (action: any) => {
       send(IPC.UI_ACTION_RECEIVED, action);
@@ -1471,13 +989,6 @@ export function registerIpcHandlers(
     }
   };
 
-  // No-op: Electron has no hardware back button. Registered for shape
-  // parity with SessionService.kt's handleBridgeMessage() so the
-  // 'system:notify-stack-state' string exists in ipc-handlers.ts too.
-  ipcMain.on(IPC.SYSTEM_NOTIFY_STACK_STATE, () => {
-    // intentionally empty
-  });
-
   // Forward session exit events — exitCode is piped through to the renderer
   // so the reducer can distinguish clean shutdowns from 'session-died' cases.
   sessionManager.on('session-exit', (sessionId: string, exitCode: number) => {
@@ -1512,7 +1023,6 @@ export function registerIpcHandlers(
   const updateService = getUpdateService();
   const getUpdateStatus = () => updateService.getUpdateStatus();
   updateService.fetchLatestRelease().catch(() => {});
-  const appearancePrefPath = path.join(os.homedir(), '.claude', 'youcoded-appearance.json');
   const defaultsPrefPath = path.join(os.homedir(), '.claude', 'youcoded-defaults.json');
 
   // WHY async (2026-09-16 smoothness sweep, C5): these three readers feed the
@@ -1911,17 +1421,18 @@ export function registerIpcHandlers(
     leaseWiring.setHolderTakeover((sid, from, transferNonce) => { void holderTakeover(sid, from, transferNonce); });
   }
 
-  // `lastAttentionBySession` is declared alongside the other status-value
-  // caches above buildStatusData(); the listener that writes into it is
-  // registered here where the handler block begins.
-  ipcMain.on('remote:attention-changed', (_e, payload: { sessionId: string; state: string }) => {
-    if (!payload?.sessionId) return;
-    lastAttentionBySession.set(payload.sessionId, payload.state);
-    // Broadcast immediately so remote clients see the change without waiting
-    // for the 10s status:data timer. The rebuild is async and shared (C5).
-    if (remoteServer) {
-      void buildStatusDataShared().then((data) => remoteServer?.broadcastStatusData(data));
-    }
+  // WHY (2026-10-01 one-core R3-8): remote:attention-changed is a table entry (main/ipc/app.ts); this hands it the cache above and
+  // the status relay. A window says a session's attention classifier changed.
+  bindApp({
+    attentionChanged: (payload) => {
+      if (!payload?.sessionId) return;
+      lastAttentionBySession.set(payload.sessionId, payload.state);
+      // Broadcast immediately so remote clients see the change without waiting for the 10s status:data timer. The rebuild is
+      // async and shared (C5).
+      if (remoteServer) {
+        void buildStatusDataShared().then((data) => remoteServer?.broadcastStatusData(data));
+      }
+    },
   });
 
   // (lastModelSeen — last model id written per CLAUDE session id — lives in session-state.ts.)
@@ -2189,7 +1700,7 @@ export function registerIpcHandlers(
   // normal TRANSCRIPT_EVENT channel (uuid dedup handles overlap with live).
   // We send directly to the requesting window — NOT via sendForSession —
   // because ownership has already transferred to them by the time this fires.
-  ipcMain.on(IPC.TRANSCRIPT_REPLAY, async (evt, { sessionId }: { sessionId: string }) => {
+  const replayFromStart = async (evt: { sender: Electron.WebContents }, { sessionId }: { sessionId: string }): Promise<void> => {
     // Native sessions replay from the SessionStore; getHistory returns null for
     // non-native ids so CC's watcher stays the source for claude sessions.
     // Async (2026-09-16 C2): the whole-history read is off the main thread; the
@@ -2212,7 +1723,7 @@ export function registerIpcHandlers(
     // (The blocks this used to inline now live in sendLiveOnlyState, which
     // SESSION_REPLAY_LIVE_STATE also serves — see its WHY.)
     sendLiveOnlyState(evt.sender, sessionId, nativeEvents !== null);
-  });
+  };
 
   /**
    * Re-send the parts of a session's state that exist ONLY in main's memory and
@@ -2289,11 +1800,14 @@ export function registerIpcHandlers(
   // what this channel supplies. `handle`, not `on`: the renderer awaits the
   // page FIRST and then this, so the replay-complete marker cannot reap tool
   // cards before the page that creates them has been applied.
-  ipcMain.handle(IPC.SESSION_REPLAY_LIVE_STATE, (evt, { sessionId }: { sessionId: string }) => {
+  const replayLiveState = (evt: { sender: Electron.WebContents }, { sessionId }: { sessionId: string }): void => {
     // isLive, not `getHistory(id) !== null` (2026-09-16 C2): that read the whole
     // history, parent and every helper child, to compute this one boolean.
     sendLiveOnlyState(evt.sender, sessionId, nativeHost.isLive(sessionId));
-  });
+  };
+  // WHY (2026-10-01 one-core R3-8): transcript:replay-from-start and session:replay-live-state are table entries
+  // (main/ipc/replay.ts, computer-only by design: R5 replaces both). The two bodies stay here, beside sendLiveOnlyState.
+  bindReplay({ replayFromStart, replayLiveState });
 
   // WHY (2026-09-30 one-core R3-5): the native:* request channels (send, queue, interrupt, compact, models,
   // permission mode, context prefs, step guard, sessions-list, kill-shell, admin password, context text) are
@@ -2951,19 +2465,12 @@ export function registerIpcHandlers(
       remoteServer?.broadcast({ type: IPC.PAGES_CHANGED, payload: pages });
     },
   });
-  // ── Document comments (T3, design docs/active/specs/2026-09-26-doc-comments-
-  // build-design.md §1.5/§1.6) — list/add/reply/resolve/reopen/move plus the
-  // chokidar-backed watch/unwatch relay. Factored into its own function so the
-  // containment/plumbing behaviour is testable without this function's full
-  // dependency graph — see doc-comments/ipc-handlers.ts.
-  registerDocCommentsHandlers(ipcMain, {
+  // ── Document comments (T3, design docs/active/specs/2026-09-26-doc-comments-build-design.md §1.5/§1.6) ──
+  // WHY (2026-10-01 one-core R3-8): the docComments:* request channels are table entries (main/ipc/doc-comments.ts); only
+  // the watcher's change push (to every window and every phone) is wired here.
+  wireDocCommentsPush({
     getAllWebContents: () => webContents.getAllWebContents(),
     remoteBroadcast: (msg) => remoteServer?.broadcast(msg),
-    // F1 fix: a live session's cwd counts as a "known" projectRoot too (same
-    // "records" carve-out remote-server.ts's own sessionRoots() already
-    // grants) — a file opened via an unregistered session's drawer must keep
-    // working, not just closes accepted for saved folders/indexed projects.
-    sessionRoots: () => sessionManager.listSessions().filter(s => s.status !== 'destroyed').map(s => s.cwd),
   });
 
   // ── Git surface: the change PUSH (spec docs/archive/specs/2026-07-22-git-surface.md) ──
@@ -3030,7 +2537,13 @@ export function registerIpcHandlers(
     // Every screen: the phones, then this computer's own windows (the same pair tagsChanged fires).
     remoteServer?.broadcast({ type: channel, payload });
     broadcastToAllWindows(channel, payload);
-  }, () => ({ sessionManager, sendToWindows }));
+  }, () => ({
+    sessionManager, sendToWindows,
+    // WHY (2026-10-01 one-core R3-8): a theme change in one window reaches the phones through this, and the document-comment
+    // gate counts a live session's folder as a known project root (the F1 fix's "records" carve-out).
+    sendToPhones: (message) => remoteServer?.broadcast(message),
+    sessionRoots: () => sessionManager.listSessions().filter((s) => s.status !== 'destroyed').map((s) => s.cwd),
+  }));
   return {
     cleanup, hasUsableProvider, firstRunDeps, openRouterSignIn, handoffAttempts,
     outboxBroadcast: { sessionMeta: broadcastSessionMeta, tagsChanged: broadcastTagsChanged } satisfies OutboxBroadcast,

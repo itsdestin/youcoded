@@ -5,41 +5,7 @@ import { dropSubscriber } from './artifacts/project-watcher';
 import { RemoteDownloads } from './remote-download';
 // Games arcade scores — remote browsers share the desktop's operations and
 // its stale-board cache (main/arcade-handlers.ts).
-import { getArcadeOps } from './arcade-handlers';
-import {
-  listComments, addComment, replyToComment, resolveComment, reopenComment, moveComment, resolveWatchTarget,
-  editComment, editReply, deleteComment, deleteReply,
-} from './doc-comments/doc-comments-store';
-import { watchComments, unwatchComments, dropDocCommentsSubscriber } from './doc-comments/doc-comments-watcher';
-import {
-  resolveNativeFormat,
-  refuseNativeMutation,
-  listNativeComments,
-  addNativeDocxComment,
-  replyToNativeDocxComment,
-  resolveNativeDocxComment,
-  reopenNativeDocxComment,
-  moveNativeDocxComment,
-  editNativeDocxComment,
-  editNativeDocxReply,
-  deleteNativeDocxComment,
-  deleteNativeDocxReply,
-  addNativeXlsxComment,
-  replyToNativeXlsxComment,
-  resolveNativeXlsxComment,
-  reopenNativeXlsxComment,
-  moveNativeXlsxComment,
-  editNativeXlsxComment,
-  editNativeXlsxReply,
-  deleteNativeXlsxComment,
-  deleteNativeXlsxReply,
-} from './doc-comments/doc-comments-dispatch';
-import { refuseUnknownProjectRoot, isValidCommentSelectorShape, missingSelectorField } from './doc-comments/doc-comments-gate';
-// Shared cap so a local folder's description (set via a remote browser client)
-// can't drift from the synced registry's limit — same constant project-registry.ts
-// and ipc-handlers.ts use.
-import { PROJECT_DESCRIPTION_MAX } from '../shared/artifacts/types';
-import { getFavorites, setFavorites, getIncognito, setIncognito } from './prefs-service';
+import { dropDocCommentsSubscriber } from './doc-comments/doc-comments-watcher';
 import { staticAssetPolicy } from './remote-static-policy';
 import fs from 'fs';
 import path from 'path';
@@ -233,7 +199,7 @@ export interface ClientInfo {
   connectedAt: number;
 }
 
-const HOST_ADMIN_REFUSAL = 'Change this on the computer itself.';
+// WHY (2026-10-01 one-core R3-8): HOST_ADMIN_REFUSAL moved with the admin channels to main/ipc/remote-admin.ts.
 
 export interface RemoteStatus {
   state: 'listening' | 'stopped' | 'failed';
@@ -333,15 +299,12 @@ export class RemoteServer {
     private sessionManager: SessionManager,
     private hookRelay: HookRelay,
     private config: RemoteConfig,
-    private skillProvider?: LocalSkillProvider,
+    // WHY unused now (2026-10-01 one-core R3-8): the favourite-themes read was this class's last use of the skill provider; it is a
+    // table entry (main/ipc/appearance.ts) that reaches the config store through a bind. Kept so every caller's argument order holds.
+    _skillProvider?: LocalSkillProvider,
     opts?: {
       requestSnapshot?: () => Promise<SerializedChatState>;
       getFocusSessionId?: () => string | null;
-      onAppearanceBroadcast?: (prefs: Record<string, unknown>) => void;
-      /** The desktop's commands:list (CommandProvider.getCommands), for the phone's / menu. */
-      listCommands?: () => Promise<unknown[]>;
-      /** The desktop's theme:list. Injectable for tests; defaults to the same function. */
-      listThemes?: () => string[];
       /** Serve the built copy of the app when one exists (see choosePhonePageSource). main.ts
        *  passes app.isPackaged or run-dev.sh --phone-build; the default keeps the old behaviour. */
       serveBuiltPage?: boolean;
@@ -359,17 +322,12 @@ export class RemoteServer {
     // be constructed before the main window exists (e.g. during first-run setup).
     this.requestSnapshot = opts?.requestSnapshot ?? (() => Promise.resolve({ sessions: [] }));
     this.getFocusSessionId = opts?.getFocusSessionId ?? (() => null);
-    this.onAppearanceBroadcast = opts?.onAppearanceBroadcast ?? (() => {});
-    this.listCommands = opts?.listCommands ?? null;
-    this.listThemes = opts?.listThemes ?? (() => require('./theme-watcher').listUserThemes());
     this.serveBuiltPage = opts?.serveBuiltPage ?? true;
     if (opts?.getNativeRuntime) this.getNativeRuntime = opts.getNativeRuntime;
     this.broadcastToWindows = opts?.broadcastToWindows ?? sendToAllWindows;
   }
   private broadcastToWindows: (channel: string, payload: unknown) => void;
   private serveBuiltPage: boolean;
-  private listCommands: (() => Promise<unknown[]>) | null;
-  private listThemes: () => string[];
   private handoffRoute?: ReturnType<typeof createHandoffTransport>;
   /** WHY: remote requests share the exact Electron backend; no connection may supply another owner's identity. */
   setHandoffRoute(route: ReturnType<typeof createHandoffTransport>): void { this.handoffRoute = route; }
@@ -389,7 +347,6 @@ export class RemoteServer {
   // remaining session), so the host reports the cache as it is.
   private getFocusSessionId: () => string | null;
   /** Hands a phone's appearance change to the computer's windows (main owns BrowserWindow). */
-  private onAppearanceBroadcast: (prefs: Record<string, unknown>) => void;
 
   // loadTokens/saveTokens are deliberately NOT carried across this merge. They read the flat
   // `.remote-tokens.json` file of opaque strings that this batch replaced with per-device
@@ -1617,6 +1574,20 @@ export class RemoteServer {
           currentWatchId: () => client.watchId,
           get watchedRoots() { return (client.watchedRoots ??= new Set<string>()); },
           mintDownload: (request) => this.downloads.mint(request as any, { deviceId: client.deviceId, socketId: client.id }),
+          // WHY (2026-10-01 one-core R3-8): the document-comment watcher id (its own refcount map), the relay to the
+          // other phones (a theme or screen change made on this phone), and a push to this computer's windows.
+          docCommentsSubscriberId: () => this.docCommentsSubscriberId(client),
+          currentDocCommentsId: () => client.docCommentsWatchId,
+          relayToOthers: (message, opts) => {
+            const data = JSON.stringify(message);
+            for (const c of this.clients) {
+              if (c === client) continue;
+              if (opts?.queueWhileRestoring && c.phase && c.phase !== 'live') { this.enqueueForRestoring(c, message); continue; }
+              if (c.ws.readyState === WebSocket.OPEN) c.ws.send(data);
+            }
+          },
+          sendToWindows: (channel, payload) => this.broadcastToWindows(channel, payload),
+          host: { config: this.config, getClientCount: () => this.getClientCount(), getClientList: () => this.getClientList(), getStatus: () => this.getStatus(), getDeviceList: () => this.getDeviceList() },
         },
         // Every screen: all phones (the sender included), then this computer's windows.
         broadcast: (channel, data) => {
@@ -1673,511 +1644,19 @@ export class RemoteServer {
       // WHY (2026-09-30 one-core R3-7): the pages:* channels are table entries (main/ipc/pages.ts); the table answers
       // before this switch, so none has a case here. pages:approve's "no keys from a phone" rule is the entry's
       // `ctx.door === 'remote'`.
-      // Document comments (T3, design docs/active/specs/2026-09-26-doc-comments-
-      // build-design.md §1.6) — the SAME main-process store desktop windows
-      // use, so a phone over remote access sees and edits the same comments
-      // (review 2, F6: remote is NOT the same gap as Android). reply/resolve/
-      // reopen/move all carry `path`, containment-checked identically to
-      // add's (review 3, F1).
-      //
-      // F1 fix (post-T3 build review, blocker): every case below refuses an
-      // unrecognized `projectRoot` via the SAME shared gate desktop's
-      // doc-comments/ipc-handlers.ts uses (`doc-comments-gate.ts`'s
-      // `refuseUnknownProjectRoot`) BEFORE calling into the store — a remote
-      // client's payload is exactly as untrusted as a native-tool/MCP
-      // caller's, and the store's own containment check only proves `path`
-      // resolves inside WHATEVER root it's given, never that the root itself
-      // is real. `this.sessionRoots()` is the same "records"-mode carve-out
-      // already used elsewhere on this class, so an unregistered but
-      // currently-open session's own comments keep working.
-      case 'docComments:list': {
-        const filePath = String(payload?.path ?? '');
-        const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
-        const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
-        if (gated) { this.respond(client.ws, type, id, gated); break; }
-        // Word/Excel comments live INSIDE the file (§1.1) — dispatch to
-        // T10/T12's own readers instead of the sidecar store, the SAME
-        // by-extension decision ipc-handlers.ts's desktop surface makes.
-        // Review finding #5: decided on the RESOLVED real path (follows a
-        // symlink), never the caller's raw string.
-        const format = await resolveNativeFormat(filePath, projectRoot);
-        this.respond(client.ws, type, id, format
-          ? await listNativeComments(format, { path: filePath, projectRoot })
-          : await listComments({ path: filePath, projectRoot }));
-        break;
-      }
-      case 'docComments:add': {
-        const filePath = String(payload?.path ?? '');
-        const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
-        const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
-        if (gated) { this.respond(client.ws, type, id, gated); break; }
-        const refused = refuseNativeMutation(filePath);
-        if (refused) { this.respond(client.ws, type, id, refused); break; }
-        // Code review 2026-09-27, Android F1: same refusal ipc-handlers.ts's
-        // desktop surface now runs, before this remote-only surface could
-        // otherwise diverge from it (see doc-comments-gate.ts's own header).
-        if (!isValidCommentSelectorShape(payload?.selector)) { this.respond(client.ws, type, id, missingSelectorField()); break; }
-        // Review finding #5: resolved real path, not the raw string.
-        const format = await resolveNativeFormat(filePath, projectRoot);
-        if (format === 'docx') {
-          this.respond(client.ws, type, id, await addNativeDocxComment({
-            path: filePath,
-            projectRoot,
-            selector: payload?.selector,
-            text: String(payload?.text ?? ''),
-            author: payload?.author,
-          }));
-          break;
-        }
-        if (format === 'xlsx') {
-          this.respond(client.ws, type, id, await addNativeXlsxComment({
-            path: filePath,
-            projectRoot,
-            selector: payload?.selector,
-            text: String(payload?.text ?? ''),
-            author: payload?.author,
-          }));
-          break;
-        }
-        this.respond(client.ws, type, id, await addComment({
-          path: filePath,
-          projectRoot,
-          selector: payload?.selector,
-          text: String(payload?.text ?? ''),
-          author: payload?.author,
-          // F4 fix (T5 review): the renderer mints and sends this now.
-          id: typeof payload?.id === 'string' && payload.id.length > 0 ? payload.id : undefined,
-        }));
-        break;
-      }
-      case 'docComments:reply': {
-        const filePath = String(payload?.path ?? '');
-        const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
-        const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
-        if (gated) { this.respond(client.ws, type, id, gated); break; }
-        const refused = refuseNativeMutation(filePath);
-        if (refused) { this.respond(client.ws, type, id, refused); break; }
-        // Review finding #5: resolved real path, not the raw string.
-        const format = await resolveNativeFormat(filePath, projectRoot);
-        if (format === 'docx') {
-          this.respond(client.ws, type, id, await replyToNativeDocxComment({
-            path: filePath,
-            projectRoot,
-            id: String(payload?.id ?? ''),
-            text: String(payload?.text ?? ''),
-            author: payload?.author,
-          }));
-          break;
-        }
-        if (format === 'xlsx') {
-          this.respond(client.ws, type, id, await replyToNativeXlsxComment({
-            path: filePath,
-            projectRoot,
-            id: String(payload?.id ?? ''),
-            text: String(payload?.text ?? ''),
-            author: payload?.author,
-          }));
-          break;
-        }
-        this.respond(client.ws, type, id, await replyToComment({
-          path: filePath,
-          projectRoot,
-          id: String(payload?.id ?? ''),
-          text: String(payload?.text ?? ''),
-          author: payload?.author,
-        }));
-        break;
-      }
-      case 'docComments:resolve': {
-        const filePath = String(payload?.path ?? '');
-        const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
-        const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
-        if (gated) { this.respond(client.ws, type, id, gated); break; }
-        const refused = refuseNativeMutation(filePath);
-        if (refused) { this.respond(client.ws, type, id, refused); break; }
-        // Review finding #5: resolved real path, not the raw string.
-        const format = await resolveNativeFormat(filePath, projectRoot);
-        if (format === 'docx') {
-          this.respond(client.ws, type, id, await resolveNativeDocxComment({
-            path: filePath,
-            projectRoot,
-            id: String(payload?.id ?? ''),
-            by: payload?.by,
-          }));
-          break;
-        }
-        if (format === 'xlsx') {
-          this.respond(client.ws, type, id, await resolveNativeXlsxComment({
-            path: filePath,
-            projectRoot,
-            id: String(payload?.id ?? ''),
-            by: payload?.by,
-          }));
-          break;
-        }
-        this.respond(client.ws, type, id, await resolveComment({
-          path: filePath,
-          projectRoot,
-          id: String(payload?.id ?? ''),
-          by: payload?.by,
-        }));
-        break;
-      }
-      case 'docComments:reopen': {
-        const filePath = String(payload?.path ?? '');
-        const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
-        const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
-        if (gated) { this.respond(client.ws, type, id, gated); break; }
-        const refused = refuseNativeMutation(filePath);
-        if (refused) { this.respond(client.ws, type, id, refused); break; }
-        // Review finding #5: resolved real path, not the raw string.
-        const format = await resolveNativeFormat(filePath, projectRoot);
-        if (format === 'docx') {
-          this.respond(client.ws, type, id, await reopenNativeDocxComment({
-            path: filePath,
-            projectRoot,
-            id: String(payload?.id ?? ''),
-            by: payload?.by,
-          }));
-          break;
-        }
-        if (format === 'xlsx') {
-          this.respond(client.ws, type, id, await reopenNativeXlsxComment({
-            path: filePath,
-            projectRoot,
-            id: String(payload?.id ?? ''),
-            by: payload?.by,
-          }));
-          break;
-        }
-        this.respond(client.ws, type, id, await reopenComment({
-          path: filePath,
-          projectRoot,
-          id: String(payload?.id ?? ''),
-          by: payload?.by,
-        }));
-        break;
-      }
-      case 'docComments:move': {
-        const filePath = String(payload?.path ?? '');
-        const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
-        const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
-        if (gated) { this.respond(client.ws, type, id, gated); break; }
-        const refused = refuseNativeMutation(filePath);
-        if (refused) { this.respond(client.ws, type, id, refused); break; }
-        // Review finding #5: resolved real path, not the raw string.
-        const format = await resolveNativeFormat(filePath, projectRoot);
-        if (format === 'docx') {
-          this.respond(client.ws, type, id, await moveNativeDocxComment({
-            path: filePath,
-            projectRoot,
-            id: String(payload?.id ?? ''),
-            newSelector: payload?.newSelector,
-          }));
-          break;
-        }
-        if (format === 'xlsx') {
-          this.respond(client.ws, type, id, await moveNativeXlsxComment({
-            path: filePath,
-            projectRoot,
-            id: String(payload?.id ?? ''),
-            newSelector: payload?.newSelector,
-          }));
-          break;
-        }
-        this.respond(client.ws, type, id, await moveComment({
-          path: filePath,
-          projectRoot,
-          id: String(payload?.id ?? ''),
-          newSelector: payload?.newSelector,
-        }));
-        break;
-      }
-      // Edit/delete build (2026-09-28, design doc §"Edit and delete") —
-      // same containment/format-dispatch shape as every mutation above.
-      case 'docComments:edit': {
-        const filePath = String(payload?.path ?? '');
-        const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
-        const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
-        if (gated) { this.respond(client.ws, type, id, gated); break; }
-        const refused = refuseNativeMutation(filePath);
-        if (refused) { this.respond(client.ws, type, id, refused); break; }
-        const format = await resolveNativeFormat(filePath, projectRoot);
-        if (format === 'docx') {
-          this.respond(client.ws, type, id, await editNativeDocxComment({
-            path: filePath, projectRoot, id: String(payload?.id ?? ''), text: String(payload?.text ?? ''),
-          }));
-          break;
-        }
-        if (format === 'xlsx') {
-          this.respond(client.ws, type, id, await editNativeXlsxComment({
-            path: filePath, projectRoot, id: String(payload?.id ?? ''), text: String(payload?.text ?? ''),
-          }));
-          break;
-        }
-        this.respond(client.ws, type, id, await editComment({
-          path: filePath, projectRoot, id: String(payload?.id ?? ''), text: String(payload?.text ?? ''),
-        }));
-        break;
-      }
-      case 'docComments:edit-reply': {
-        const filePath = String(payload?.path ?? '');
-        const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
-        const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
-        if (gated) { this.respond(client.ws, type, id, gated); break; }
-        const refused = refuseNativeMutation(filePath);
-        if (refused) { this.respond(client.ws, type, id, refused); break; }
-        const format = await resolveNativeFormat(filePath, projectRoot);
-        if (format === 'docx') {
-          this.respond(client.ws, type, id, await editNativeDocxReply({
-            path: filePath, projectRoot, id: String(payload?.id ?? ''), replyId: String(payload?.replyId ?? ''), text: String(payload?.text ?? ''),
-          }));
-          break;
-        }
-        if (format === 'xlsx') {
-          this.respond(client.ws, type, id, await editNativeXlsxReply({
-            path: filePath, projectRoot, id: String(payload?.id ?? ''), replyId: String(payload?.replyId ?? ''), text: String(payload?.text ?? ''),
-          }));
-          break;
-        }
-        this.respond(client.ws, type, id, await editReply({
-          path: filePath, projectRoot, id: String(payload?.id ?? ''), replyId: String(payload?.replyId ?? ''), text: String(payload?.text ?? ''),
-        }));
-        break;
-      }
-      case 'docComments:delete': {
-        const filePath = String(payload?.path ?? '');
-        const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
-        const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
-        if (gated) { this.respond(client.ws, type, id, gated); break; }
-        const refused = refuseNativeMutation(filePath);
-        if (refused) { this.respond(client.ws, type, id, refused); break; }
-        const format = await resolveNativeFormat(filePath, projectRoot);
-        if (format === 'docx') {
-          this.respond(client.ws, type, id, await deleteNativeDocxComment({ path: filePath, projectRoot, id: String(payload?.id ?? '') }));
-          break;
-        }
-        if (format === 'xlsx') {
-          this.respond(client.ws, type, id, await deleteNativeXlsxComment({ path: filePath, projectRoot, id: String(payload?.id ?? '') }));
-          break;
-        }
-        this.respond(client.ws, type, id, await deleteComment({ path: filePath, projectRoot, id: String(payload?.id ?? '') }));
-        break;
-      }
-      case 'docComments:delete-reply': {
-        const filePath = String(payload?.path ?? '');
-        const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
-        const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
-        if (gated) { this.respond(client.ws, type, id, gated); break; }
-        const refused = refuseNativeMutation(filePath);
-        if (refused) { this.respond(client.ws, type, id, refused); break; }
-        const format = await resolveNativeFormat(filePath, projectRoot);
-        if (format === 'docx') {
-          this.respond(client.ws, type, id, await deleteNativeDocxReply({
-            path: filePath, projectRoot, id: String(payload?.id ?? ''), replyId: String(payload?.replyId ?? ''),
-          }));
-          break;
-        }
-        if (format === 'xlsx') {
-          this.respond(client.ws, type, id, await deleteNativeXlsxReply({
-            path: filePath, projectRoot, id: String(payload?.id ?? ''), replyId: String(payload?.replyId ?? ''),
-          }));
-          break;
-        }
-        this.respond(client.ws, type, id, await deleteReply({
-          path: filePath, projectRoot, id: String(payload?.id ?? ''), replyId: String(payload?.replyId ?? ''),
-        }));
-        break;
-      }
-      case 'docComments:watch': {
-        try {
-          const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
-          const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
-          if (gated) { this.respond(client.ws, type, id, gated); break; }
-          const target = await resolveWatchTarget({ path: String(payload?.path ?? ''), projectRoot });
-          if (!target.ok) { this.respond(client.ws, type, id, target); break; }
-          this.respond(client.ws, type, id, await watchComments(target.target, this.docCommentsSubscriberId(client)));
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
-      case 'docComments:unwatch': {
-        try {
-          const projectRoot = typeof payload?.projectRoot === 'string' ? payload.projectRoot : undefined;
-          const gated = await refuseUnknownProjectRoot(projectRoot, this.sessionRoots());
-          if (gated) { this.respond(client.ws, type, id, gated); break; }
-          const target = await resolveWatchTarget({ path: String(payload?.path ?? ''), projectRoot });
-          if (target.ok && client.docCommentsWatchId !== undefined) unwatchComments(target.target, client.docCommentsWatchId);
-          this.respond(client.ws, type, id, { ok: true });
-        } catch (err: any) {
-          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
-        }
-        break;
-      }
+      // WHY (2026-10-01 one-core R3-8): the docComments:* channels are table entries (main/ipc/doc-comments.ts); the table
+      // answers before this switch, so none has a case here. Their `projectRoot` gate (the F1 fix) is the same
+      // shared check on both doors, fed this class's sessionRoots() through ctx.remote.
       // WHY (2026-09-30 one-core R3-7): fs:read-head, file:upload and get-home-path are table entries (main/ipc/files.ts).
       // Read-only lists a phone's screens load at start. Each was "unhandled channel" in the
       // 2026-09-11 phone pass log and its screen fell back to empty. The same functions the
       // desktop handlers call, so the two cannot drift; a failure is answered as a failure
       // (REJECT_ON_NOT_OK in the shim), never as an empty list.
-      case 'theme:list': {
-        try { this.respond(client.ws, type, id, this.listThemes()); }
-        catch (err) { this.respond(client.ws, type, id, { ok: false, error: String((err as Error)?.message ?? err) }); }
-        break;
-      }
-      case 'commands:list': {
-        try { this.respond(client.ws, type, id, this.listCommands ? await this.listCommands() : []); }
-        catch (err) { this.respond(client.ws, type, id, { ok: false, error: String((err as Error)?.message ?? err) }); }
-        break;
-      }
-      case 'appearance:get-favorite-themes': {
-        try { this.respond(client.ws, type, id, this.skillProvider ? this.skillProvider.configStore.getThemeFavorites() : []); }
-        catch (err) { this.respond(client.ws, type, id, { ok: false, error: String((err as Error)?.message ?? err) }); }
-        break;
-      }
-      case 'platform:get':
-        // The COMPUTER's platform. The screens that ask are about what can be installed or run
-        // there (Marketplace integrations; the Linux helper, which is also gated to a desktop).
-        this.respond(client.ws, type, id, process.platform);
-        break;
-      // WHY reading a theme file is bridged and nothing else under `theme:` is: the phone
-      // ALREADY learns which theme the host is on — `appearance:get` above hands it the
-      // slug — and then could not find out what that slug means, because loading the
-      // definition went unanswered. So a community theme fell back to a built-in and the
-      // phone looked like a different app. Destin's own theme is one (2026-09-10).
-      //
-      // Read-only, and the same two guards the desktop handler uses: a slug that is not a
-      // plain slug is refused, and the resolved path must still be inside the themes
-      // directory, so `../` cannot walk out of it. Writing a theme stays desktop-only,
-      // like every other change to the host.
-      case 'theme:read-file': {
-        const slug = String(payload?.slug ?? '');
-        if (!/^[a-z0-9_]+(?:-[a-z0-9_]+)*$/.test(slug)) {
-          this.respond(client.ws, type, id, { ok: false, error: 'Invalid theme slug' });
-          break;
-        }
-        const { userThemeManifest, THEMES_DIR } = require('./theme-watcher');
-        const manifestPath = path.resolve(userThemeManifest(slug));
-        if (!manifestPath.startsWith(THEMES_DIR + path.sep)) {
-          this.respond(client.ws, type, id, { ok: false, error: 'Invalid theme slug' });
-          break;
-        }
-        try {
-          this.respond(client.ws, type, id, await fs.promises.readFile(manifestPath, 'utf-8'));
-        } catch {
-          // Not installed on this computer. The client keeps the theme it has rather than
-          // being handed a fallback it did not choose.
-          this.respond(client.ws, type, id, { ok: false, error: 'Theme not found' });
-        }
-        break;
-      }
-      case 'appearance:get': {
-        const appearancePath = path.join(os.homedir(), '.claude', 'youcoded-appearance.json');
-        try {
-          const raw = await fs.promises.readFile(appearancePath, 'utf8');
-          this.respond(client.ws, type, id, JSON.parse(raw));
-        } catch {
-          this.respond(client.ws, type, id, null);
-        }
-        break;
-      }
-      case 'appearance:set': {
-        const appearancePath = path.join(os.homedir(), '.claude', 'youcoded-appearance.json');
-        try {
-          let existing: Record<string, any> = {};
-          try {
-            existing = JSON.parse(await fs.promises.readFile(appearancePath, 'utf8'));
-          } catch {}
-          const merged = { ...existing, ...payload };
-          await fs.promises.mkdir(path.dirname(appearancePath), { recursive: true });
-          await fs.promises.writeFile(appearancePath, JSON.stringify(merged));
-          this.respond(client.ws, type, id, true);
-        } catch {
-          this.respond(client.ws, type, id, false);
-        }
-        break;
-      }
-      // A theme or display change made on a phone (remote-server-connections.test.ts). WHY: a
-      // phone used to read the computer's theme once, at page load, and never hear a change
-      // after that in either direction (Destin, 2026-09-11: "dev is on meadow mist and remote
-      // chose golden daybreak"). The phone has already saved it with appearance:set; this
-      // only tells everyone else, the way a desktop window tells its peer windows.
-      case 'appearance:broadcast': {
-        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) break;
-        this.onAppearanceBroadcast(payload);
-        const msg = { type: 'appearance:sync', payload };
-        for (const c of this.clients) {
-          if (c === client) continue;
-          if (c.phase && c.phase !== 'live') { this.enqueueForRestoring(c, msg); continue; }
-          if (c.ws.readyState === WebSocket.OPEN) c.ws.send(JSON.stringify(msg));
-        }
-        break;
-      }
-      // Game favorites + incognito: the same functions main.ts's handlers call
-      // (prefs-service.ts). favorites:get used to answer the whole file here but a list there.
-      case 'favorites:get': {
-        this.respond(client.ws, type, id, getFavorites());
-        break;
-      }
-      case 'favorites:set': {
-        this.respond(client.ws, type, id, setFavorites(payload?.favorites ?? payload));
-        break;
-      }
-      case 'game:getIncognito': {
-        this.respond(client.ws, type, id, getIncognito());
-        break;
-      }
-      case 'game:setIncognito': {
-        this.respond(client.ws, type, id, setIncognito(payload));
-        break;
-      }
-      case 'remote:get-config': {
-        const config = {
-          ...this.config.toSafeObject(),
-          clientCount: this.getClientCount(),
-        };
-        this.respond(client.ws, type, id, config);
-        break;
-      }
-      // Host administration does not travel over this socket at all. It stays on desktop
-      // IPC, which no remote client can reach.
-      //
-      // WHY not the old source-address check: it compared client.ip to 127.0.0.1. Behind a
-      // loopback bind — which is where this is going — every remote device arrives as
-      // 127.0.0.1, so that check would pass for all of them and any paired phone could
-      // change the host password, which also throws every other device off. Refusing the
-      // whole class is what makes the bind safe. set-config was never checked at all, so a
-      // phone could switch remote access off on the computer.
-      case 'remote:set-password': {
-        this.respond(client.ws, type, id, { ok: false, error: HOST_ADMIN_REFUSAL });
-        break;
-      }
-      case 'remote:set-config': {
-        this.respond(client.ws, type, id, { ok: false, error: HOST_ADMIN_REFUSAL });
-        break;
-      }
-      // remote:disconnect-client has NO case on purpose, and this comment is the guard's
-      // explanation. It was kept as an explicit `{ok:false}` refusal so an un-upgraded
-      // client would be told no rather than met with silence — but that reasoning was
-      // backwards. A shim only turns `{ok:false}` into an error for channels in its own
-      // REJECT_ON_NOT_OK, and no released version lists this one, so the refusal resolved
-      // as an ordinary value: another false success. Falling through to `default:` answers
-      // `{unsupported:true}`, which EVERY shim version rejects. Silence was never the
-      // alternative; the honest "no" is the one the default already gives.
-      case 'remote:detect-tailscale': {
-        const { RemoteConfig } = require('./remote-config');
-        const result = await RemoteConfig.detectTailscale(this.config.port);
-        this.respond(client.ws, type, id, result);
-        break;
-      }
-      case 'remote:get-client-count': {
-        this.respond(client.ws, type, id, this.getClientCount());
-        break;
-      }
-      case 'remote:get-client-list': {
-        this.respond(client.ws, type, id, this.getClientList());
-        break;
-      }
+      // WHY (2026-10-01 one-core R3-8): theme:*, appearance:*, favorites:*, game:*, arcade:*, commands:list, platform:get, ui:action,
+      // zoom:* and the remote:* administration channels are table entries (main/ipc/appearance.ts, game.ts, ui.ts, window.ts,
+      // remote-admin.ts); the table answers before this switch, so none has a case here. The refusals a phone gets for
+      // set-password, set-config, devices:rename and devices:unpair are declared on those entries (HOST_ADMIN_REFUSAL), and
+      // remote:disconnect-client still has no entry or case on purpose, so it falls to `default:` below.
       case 'remote:request-outcome': {
         const ids: string[] = Array.isArray(payload?.ids) ? payload.ids : [];
         const outcomes: Record<string, 'completed' | 'unknown'> = {};
@@ -2193,105 +1672,6 @@ export class RemoteServer {
         this.respond(client.ws, type, id, { outcomes });
         break;
       }
-      // WHY this case exists at all: the channel was added to preload, the shim, the
-      // desktop IPC handlers and Android — but not here, and this is the host a remote
-      // BROWSER talks to. Without it the answer is `{unsupported:true}`, which the shim
-      // rejects; the panel asks for it in the same Promise.all as the config, the
-      // Tailscale info and the device list, so one missing case opened the whole Remote
-      // Access screen blank on a phone. Reading status is not administration — it is the
-      // same question the indicator already answers — so it is answered, not refused.
-      case 'remote:status': {
-        this.respond(client.ws, type, id, this.getStatus());
-        break;
-      }
-      case 'remote:devices:list': {
-        this.respond(client.ws, type, id, { devices: this.getDeviceList() });
-        break;
-      }
-      // Renaming and unpairing are host administration: they decide who may reach this
-      // computer, so they stay on desktop IPC like the password does. See HOST_ADMIN_REFUSAL.
-      case 'remote:devices:rename': {
-        this.respond(client.ws, type, id, { ok: false, error: HOST_ADMIN_REFUSAL });
-        break;
-      }
-      case 'remote:devices:unpair': {
-        this.respond(client.ws, type, id, { ok: false, error: HOST_ADMIN_REFUSAL });
-        break;
-      }
-
-      // WHY (2026-09-30 one-core R3-7): chatsearch:resolve / chatsearch:read are table entries (main/ipc/chatsearch.ts).
-
-      // --- UI state sync: broadcast actions to all OTHER clients ---
-      case 'ui:action': {
-        const data = JSON.stringify({ type: 'ui:action', payload });
-        for (const c of this.clients) {
-          if (c !== client && c.ws.readyState === WebSocket.OPEN) {
-            c.ws.send(data);
-          }
-        }
-        // Also forward to Electron window via IPC if this came from a remote client
-        this.sessionManager.emit('ui-action', payload);
-        break;
-      }
-
-      // --- Zoom controls (applies to the desktop Electron window) ---
-      case 'zoom:in':
-      case 'zoom:out':
-      case 'zoom:reset':
-      case 'zoom:get': {
-        const win = BrowserWindow.getAllWindows()[0];
-        if (!win || win.isDestroyed()) {
-          this.respond(client.ws, type, id, 100);
-          break;
-        }
-        const ZOOM_STEP = 0.5;
-        const ZOOM_MIN = -3;
-        const ZOOM_MAX = 5;
-        const toPercent = (l: number) => Math.round(Math.pow(1.2, l) * 100);
-        const wc = win.webContents;
-        if (type === 'zoom:in') {
-          wc.setZoomLevel(Math.min(wc.getZoomLevel() + ZOOM_STEP, ZOOM_MAX));
-        } else if (type === 'zoom:out') {
-          wc.setZoomLevel(Math.max(wc.getZoomLevel() - ZOOM_STEP, ZOOM_MIN));
-        } else if (type === 'zoom:reset') {
-          wc.setZoomLevel(0);
-        }
-        this.respond(client.ws, type, id, toPercent(wc.getZoomLevel()));
-        break;
-      }
-
-      // --- Project View / files over remote (batch 3) ---
-      // WHY (2026-09-30 one-core R3-7): every artifacts:* and project:* channel a phone may call (and the watch,
-      // unwatch and download ones) is a table entry (main/ipc/artifacts.ts, project.ts) with the folder gate and size
-      // ceiling declared as its phone policy. The write channels (save, append-version, import, rename, ...) stay
-      // unbridged: the table refuses them for a phone with the same answer this switch's default gave.
-
-      // --- Games arcade scores (spec §6.1) ---
-      // The SAME operations the Electron IPC path runs, including the shared
-      // stale-board cache — a remote browser must never see a different
-      // leaderboard from the desktop window sitting beside it.
-      case 'arcade:status':
-      case 'arcade:leaderboard':
-      case 'arcade:submit-score':
-      case 'arcade:records': {
-        const ops = getArcadeOps();
-        if (!ops) {
-          // Registration never ran (minimal boot). General but non-committal —
-          // we do not guess a cause we have not verified.
-          this.respond(client.ws, type, id, { ok: false, status: 0, message: 'Game scores are unavailable on this host.' });
-          break;
-        }
-        this.respond(client.ws, type, id,
-          type === 'arcade:status' ? await ops.status()
-          : type === 'arcade:leaderboard' ? await ops.leaderboard(payload?.game)
-          // An absent payload.game means EVERY game — passing undefined through
-          // is the whole filter, so don't coerce it to '' (that would ask the
-          // Worker for the game literally named "", i.e. always nothing).
-          : type === 'arcade:records' ? await ops.records(payload?.game ?? undefined)
-          : await ops.submitScore(payload?.game, payload?.score));
-        break;
-      }
-
       default: {
         // WHY this exists: the switch had no default, so any channel the remote
         // server doesn't implement was silently dropped. The shim registers a

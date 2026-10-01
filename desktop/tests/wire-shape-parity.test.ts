@@ -124,8 +124,15 @@ describe('preload and remote-shim send the same object keys for a channel', () =
 // reads its keys from the FIRST parameter (an ipcMain handler's first is the event). Without this the scan shrinks to
 // nothing as the last family moves, and the check that a handler reads the keys preload sends would silently stop
 // covering the very channels the table now serves.
-/** Keys a handler reads that the PHONE DOOR sets itself (an entry's `remotePayload`), so preload never sends them. */
-const DOOR_SET_KEYS = new Set(['maxBytes', 'trackedOnly']);
+/** Keys a handler reads that the PHONE DOOR sets itself (an entry's `remotePayload`), so preload never sends them.
+ *  WHY per channel (2026-10-01 one-core R3-8, R3-7 review): the exemption used to cover these two names for EVERY
+ *  channel, so a handler on any other channel that misspelled into `maxBytes` would have passed. Now only the three
+ *  entries whose remotePayload sets the key are exempt, and only for that key. */
+const DOOR_SET_KEYS = new Map<string, Set<string>>([
+  ['artifacts:resolve-path', new Set(['trackedOnly'])],
+  ['artifacts:get', new Set(['maxBytes'])],
+  ['artifacts:read-binary', new Set(['maxBytes'])],
+]);
 
 function tableHandlerKeys(): { keys: Map<string, Set<string>>; unresolved: string[] } {
   const unresolved: string[] = [];
@@ -150,7 +157,7 @@ function tableHandlerKeys(): { keys: Map<string, Set<string>>; unresolved: strin
           for (const el of p0.name.elements) {
             if (el.dotDotDotToken) continue;
             const key = el.propertyName ? el.propertyName.getText(sf) : el.name.getText(sf);
-            if (!DOOR_SET_KEYS.has(key)) set.add(key);
+            if (!DOOR_SET_KEYS.get(ch)?.has(key)) set.add(key);
           }
         }
       }

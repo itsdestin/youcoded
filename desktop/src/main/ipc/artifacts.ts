@@ -139,8 +139,10 @@ export const artifactsChannels: MainChannelDef[] = [
     },
     // Forced by the door, whatever the phone sent: a folder the computer does not itself show is tracked-only.
     remotePayload: async (p) => ({ ...p, trackedOnly: !(await isKnownRoot(p.projectRoot)) }),
-    handler: ({ projectRoot, path: filePath, trackedOnly }) =>
-      resolveArtifactPath(projectRoot, filePath, trackedOnly === undefined ? undefined : { trackedOnly }),
+    // WHY (2026-10-01 one-core R3-8, R3-7 review): the old desktop handler ignored `trackedOnly` (it never took one),
+    // so the computer's door ignores it too: only the phone's door sets it, and a window that sent one gets no change.
+    handler: ({ projectRoot, path: filePath, trackedOnly }, ctx) =>
+      resolveArtifactPath(projectRoot, filePath, ctx.door === 'remote' && trackedOnly !== undefined ? { trackedOnly } : undefined),
   }),
 
   // The Project View project list — saved folders reconciled with the central index (projects-index.ts).
@@ -168,7 +170,8 @@ export const artifactsChannels: MainChannelDef[] = [
       return undefined;
     },
     remotePayload: (p) => ({ ...p, maxBytes: REMOTE_TEXT_PREVIEW_MAX_BYTES }),
-    handler: ({ projectRoot, artifactId, full, maxBytes }) => readArtifactText(projectRoot, artifactId, { full: full === true, maxBytes }),
+    // WHY maxBytes only for a phone (2026-10-01 one-core R3-8, R3-7 review): the old desktop handler took no ceiling.
+    handler: ({ projectRoot, artifactId, full, maxBytes }, ctx) => readArtifactText(projectRoot, artifactId, { full: full === true, maxBytes: ctx.door === 'remote' ? maxBytes : undefined }),
   }),
 
   // Read a file as base64 for the binary viewers. SECURITY: this RETURNS file contents and a phone can reach
@@ -179,7 +182,8 @@ export const artifactsChannels: MainChannelDef[] = [
     name: IPC.ARTIFACTS_READ_BINARY, kind: 'handle',
     remoteOnError: readFailure,
     remotePayload: (p) => ({ ...p, maxBytes: REMOTE_BINARY_PREVIEW_MAX_BYTES }),
-    handler: ({ absolutePath, maxBytes }) => readArtifactBytes(absolutePath, { maxBytes }),
+    // WHY maxBytes only for a phone (2026-10-01 one-core R3-8, R3-7 review): the old desktop handler took no ceiling.
+    handler: ({ absolutePath, maxBytes }, ctx) => readArtifactBytes(absolutePath, { maxBytes: ctx.door === 'remote' ? maxBytes : undefined }),
   }),
 
   defineChannel({

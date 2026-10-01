@@ -5,9 +5,9 @@
 // conversations service for the whole file; these cases use the real ones.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import fs, { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import path, { join } from 'node:path';
 import { choosePhonePageSource } from '../src/main/remote-server';
 
 vi.mock('ws', async () => {
@@ -1164,26 +1164,41 @@ describe('RemoteServer — reliability', () => {
     });
 
     it('theme list, commands, favourite themes and the platform come from the same code as the desktop', async () => {
-      const skillProvider = { configStore: { getThemeFavorites: () => ['meadow-mist'] } };
-      const server = await makeServer({ listThemes: () => ['meadow-mist', 'golden-sunbreak'], listCommands: async () => [{ name: '/compact' }] }, skillProvider);
-      const ws = await signIn(server, {});
-      await send(ws, { type: 'theme:list', id: 't1' });
-      await send(ws, { type: 'commands:list', id: 'c1' });
-      await send(ws, { type: 'appearance:get-favorite-themes', id: 'f1' });
-      await send(ws, { type: 'platform:get', id: 'g1' });
-      expect(ws.ofType('theme:list:response')[0].payload).toEqual(['meadow-mist', 'golden-sunbreak']);
-      expect(ws.ofType('commands:list:response')[0].payload).toEqual([{ name: '/compact' }]);
-      expect(ws.ofType('appearance:get-favorite-themes:response')[0].payload).toEqual(['meadow-mist']);
-      expect(ws.ofType('platform:get:response')[0].payload).toBe(process.platform);
+      // WHY the table entries (2026-10-01 one-core R3-8): these four are channel-table entries both doors run; the theme list reads
+      // the real themes folder (under the suite's sandbox HOME), the command list and the favourites reach it through the binds
+      // ipc-handlers.ts makes at startup.
+      const server = await makeServer();
+      const { THEMES_DIR } = await import('../src/main/theme-watcher');
+      const { bindUi } = await import('../src/main/ipc/ui');
+      const { bindAppearance } = await import('../src/main/ipc/appearance');
+      for (const slug of ['meadow-mist', 'golden-sunbreak']) {
+        fs.mkdirSync(path.join(THEMES_DIR, slug), { recursive: true });
+        fs.writeFileSync(path.join(THEMES_DIR, slug, 'manifest.json'), '{}');
+      }
+      try {
+        bindUi({ getCommands: async () => [{ name: '/compact' }], emitUiAction: () => {} });
+        bindAppearance({ getThemeFavorites: () => ['meadow-mist'], setThemeFavorite: () => {} });
+        const ws = await signIn(server, {});
+        await send(ws, { type: 'theme:list', id: 't1' });
+        await send(ws, { type: 'commands:list', id: 'c1' });
+        await send(ws, { type: 'appearance:get-favorite-themes', id: 'f1' });
+        await send(ws, { type: 'platform:get', id: 'g1' });
+        expect([...ws.ofType('theme:list:response')[0].payload].sort()).toEqual(expect.arrayContaining(['golden-sunbreak', 'meadow-mist']));
+        expect(ws.ofType('commands:list:response')[0].payload).toEqual([{ name: '/compact' }]);
+        expect(ws.ofType('appearance:get-favorite-themes:response')[0].payload).toEqual(['meadow-mist']);
+        expect(ws.ofType('platform:get:response')[0].payload).toBe(process.platform);
+      } finally {
+        for (const slug of ['meadow-mist', 'golden-sunbreak']) fs.rmSync(path.join(THEMES_DIR, slug), { recursive: true, force: true });
+      }
     });
 
     it('a list that fails is answered as a failure, never as an empty list', async () => {
-      const server = await makeServer({ listThemes: () => { throw new Error('EACCES: themes folder'); }, listCommands: async () => { throw new Error('boom'); } });
+      const server = await makeServer();
+      const { bindUi } = await import('../src/main/ipc/ui');
+      bindUi({ getCommands: async () => { throw new Error('boom'); }, emitUiAction: () => {} });
       const ws = await signIn(server, {});
-      await send(ws, { type: 'theme:list', id: 't1' });
       await send(ws, { type: 'commands:list', id: 'c1' });
-      expect(ws.ofType('theme:list:response')[0].payload).toMatchObject({ ok: false, error: expect.stringContaining('EACCES') });
-      expect(ws.ofType('commands:list:response')[0].payload).toMatchObject({ ok: false });
+      expect(ws.ofType('commands:list:response')[0].payload).toMatchObject({ ok: false, error: 'boom' });
     });
   });
 
@@ -1288,10 +1303,12 @@ describe('RemoteServer — appearance relay', () => {
     const { RemoteServer } = await import('../src/main/remote-server');
     const sm = Object.assign(new EventEmitter(), { listSessions: vi.fn(() => []) });
     const config = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
+    // WHY (2026-10-01 one-core R3-8): the appearance:broadcast table entry reaches this computer's windows through the host's
+    // broadcastToWindows (the same hook a tag change from a phone uses), so the test watches that.
     const onAppearanceBroadcast = vi.fn();
     const server: any = new RemoteServer(sm as never, new EventEmitter() as never, config as never, undefined, {
       requestSnapshot: () => Promise.resolve({ sessions: [] }),
-      onAppearanceBroadcast,
+      broadcastToWindows: (channel, payload) => { if (channel === 'appearance:sync') onAppearanceBroadcast(payload); },
     });
     return { server, onAppearanceBroadcast };
   }

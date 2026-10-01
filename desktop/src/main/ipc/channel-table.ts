@@ -54,6 +54,20 @@ import { chatsearchChannels } from './chatsearch';
 import { gitChannels } from './git';
 import { pagesChannels } from './pages';
 import { filesChannels } from './files';
+import { docCommentsChannels } from './doc-comments';
+import { appearanceChannels } from './appearance';
+import { gameChannels } from './game';
+import { uiChannels } from './ui';
+import { appChannels } from './app';
+import { shellChannels } from './shell';
+import { windowChannels } from './window';
+import { detachChannels } from './detach';
+import { replayChannels } from './replay';
+import { buddyChannels } from './buddy';
+import { integrationsChannels } from './integrations';
+import { remoteAdminChannels } from './remote-admin';
+import { voiceChannels } from './voice';
+import { socialChannels } from './social';
 
 export type { MainChannelCtx, MainChannelDef } from './channel-def';
 
@@ -94,6 +108,20 @@ export const CHANNEL_TABLE: MainChannelDef[] = [
   ...gitChannels,
   ...pagesChannels,
   ...filesChannels,
+  ...docCommentsChannels,
+  ...appearanceChannels,
+  ...gameChannels,
+  ...uiChannels,
+  ...appChannels,
+  ...shellChannels,
+  ...windowChannels,
+  ...detachChannels,
+  ...replayChannels,
+  ...buddyChannels,
+  ...integrationsChannels,
+  ...remoteAdminChannels,
+  ...voiceChannels,
+  ...socialChannels,
 ];
 
 let indexed: { size: number; byName: Map<string, MainChannelDef> } | null = null;
@@ -182,7 +210,8 @@ export async function serveRemoteChannel(def: MainChannelDef, payload: unknown, 
       if (refused !== undefined) return { reply: true, payload: refused };
     }
     const phonePayload = def.remotePayload ? await def.remotePayload(payload, ctx) : payload;
-    return { reply: true, payload: await def.handler(phonePayload, ctx) };
+    const result = await def.handler(phonePayload, ctx);
+    return { reply: true, payload: def.remoteReply ? def.remoteReply(result, phonePayload) : result };
   } catch (error) {
     // A phone has no rejected-invoke channel, so a throw becomes what the entry declares
     // (remoteOnError: the soft answer its caller expects), else {ok:false,error} carrying

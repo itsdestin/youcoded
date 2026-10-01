@@ -23,6 +23,12 @@ export interface DesktopServices {
    *  or repo changed. The artifact and git change pushes always went to windows only; `ctx.broadcast`
    *  would also reach phones, a wider audience than they had. */
   sendToWindows(channel: string, payload: unknown): void;
+  /** WHY (2026-10-01 one-core R3-8): tell every phone (and NOT the computer's windows). A theme change in one window
+   *  already reaches the other windows itself; only the phones need this. */
+  sendToPhones(message: { type: string; payload: unknown }): void;
+  /** WHY (2026-10-01 one-core R3-8): the folders of every open session, for the document-comment folder gate (the
+   *  phone door's twin is RemoteServices.sessionRoots). */
+  sessionRoots(): string[];
   /** WHY getSession too (2026-09-30 one-core R3-5): native:session-context-text reads a Claude Code
    *  session's project folder to find its instruction file. */
   sessionManager: CreateSessionDeps['sessionManager'] & { getSession(id: string): { cwd: string } | undefined };
@@ -46,6 +52,27 @@ export interface RemoteServices {
   watchedRoots: Set<string>;
   /** A short-lived download link bound to this phone and this socket. */
   mintDownload(request: { absolutePath: unknown; projectRoot?: string; artifactId?: string }): Promise<unknown>;
+  /** WHY (2026-10-01 one-core R3-8): this phone's document-comment watcher id (its own refcount map, separate from the
+   *  project watcher's), made on first use and dropped when its socket closes. */
+  docCommentsSubscriberId(): number;
+  /** The id above if this phone has one yet, without making one (an unwatch before any watch is a no-op). */
+  currentDocCommentsId(): number | undefined;
+  /** Send a message to every OTHER phone (never the one asking). `queueWhileRestoring` holds it for a phone that is
+   *  still catching up, as a live push would be. A theme or screen change made on this phone uses it. */
+  relayToOthers(message: { type: string; payload: unknown }, opts?: { queueWhileRestoring?: boolean }): void;
+  /** Send to this computer's own windows only. */
+  sendToWindows(channel: string, payload: unknown): void;
+  /** WHY (2026-10-01 one-core R3-8): the remote-access host this phone is talking to, for the read-only admin channels
+   *  (config, client count, status, device list). The computer's door reads the same host through remote-admin.ts's bind. */
+  host: RemoteHost;
+}
+/** The slice of the remote-access host the admin entries read. */
+export interface RemoteHost {
+  config: { toSafeObject(): Record<string, unknown>; port: number };
+  getClientCount(): number;
+  getClientList(): unknown[];
+  getStatus(): unknown;
+  getDeviceList(): unknown[];
 }
 export type MainChannelCtx = ChannelCtx<RemoteNativeRuntime> & { desktop?: DesktopServices; remote?: RemoteServices; sender?: DesktopSender };
 export type MainChannelDef<Payload = any, Result = any> = ChannelDef<MainChannelCtx, Payload, Result>;

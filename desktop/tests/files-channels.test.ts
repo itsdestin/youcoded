@@ -118,6 +118,21 @@ afterAll(async () => {
 });
 beforeEach(() => { windowPushes.length = 0; phoneBroadcasts.length = 0; pagesOn = true; for (const fn of Object.values(pagesFake)) if (typeof fn === 'function' && 'mockClear' in fn) (fn as any).mockClear(); });
 
+describe('the computer\'s door ignores the two keys only the phone door sets', () => {
+  it('a window that sends maxBytes or trackedOnly gets the unlimited read the old desktop handlers gave', async () => {
+    const big = path.join(folder, 'big-desktop.txt');
+    fs.writeFileSync(big, 'b'.repeat(1.5 * 1024 * 1024));
+    // The phone's 1 MiB preview ceiling refuses this file; the computer never had one, even if a window sends a smaller number.
+    const viaWindow = await overIpc('artifacts:get', { projectRoot: folder, artifactId: 'big-desktop.txt', maxBytes: 10 });
+    expect(viaWindow).not.toMatchObject({ error: 'too-large' });
+    const bin = await overIpc('artifacts:read-binary', { absolutePath: big, maxBytes: 10 });
+    expect(bin).not.toMatchObject({ error: 'too-large' });
+    // trackedOnly:true would refuse every path that is not on the folder's records; the window's lookup is not narrowed.
+    const resolved = await overIpc('artifacts:resolve-path', { projectRoot: folder, path: 'notes.md', trackedOnly: true });
+    expect(resolved).not.toMatchObject({ error: 'not-tracked' });
+  });
+});
+
 describe('which of these a phone may call: exactly what it could before', () => {
   const entries = CHANNEL_TABLE.filter((d) => inFamily(d.name));
   const phoneOpen = (d: (typeof entries)[number]) => !d.desktopOnly && d.remoteAllowed !== false;

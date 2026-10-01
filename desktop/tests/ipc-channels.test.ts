@@ -227,7 +227,8 @@ describe('shell:open-external channel parity', () => {
     // The scheme check is the actual security boundary for a URL the model
     // chose — the tile is only ever opened by a user click, but file:,
     // intent: and javascript: must never reach an opener on any platform.
-    expect(readFrom('src', 'main', 'ipc-handlers.ts')).toMatch(/\^https\?:\\\/\\\//);
+    // WHY ipc/shell.ts (one-core R3-8): shell:open-external is a channel-table entry now.
+    expect(readFrom('src', 'main', 'ipc', 'shell.ts')).toMatch(/\^https\?:\\\/\\\//);
     const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
     expect(kt).toContain('url.startsWith("http://") || url.startsWith("https://")');
   });
@@ -295,9 +296,13 @@ describe('social:* channel parity', () => {
     const src = read('src', 'renderer', 'remote-shim.ts');
     for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
   });
-  it('all social:* types are handled in social-handlers.ts', () => {
-    const src = read('src', 'main', 'social-handlers.ts');
-    for (const t of NEW_TYPES) expect(src).toContain(`"${t}"`);
+  it('all social:* request types are served by one channel-table entry each, with no hand-written copy left', () => {
+    // WHY (2026-10-01 one-core R3-8): main/ipc/social.ts holds the entries; social-handlers.ts builds the operations behind them.
+    // social:presence-event is the push to windows, not a request.
+    for (const t of NEW_TYPES.filter((n) => n !== 'social:presence-event')) {
+      expectTableEntry('social', konstOf(t), t);
+      expect(read('src', 'main', 'social-handlers.ts'), `${t} is still registered by hand in social-handlers.ts`).not.toContain(`ipcMain.handle("${t}"`);
+    }
   });
   it('all social:* types are handled by SessionService.kt (Android)', () => {
     const src = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
@@ -339,9 +344,8 @@ describe('terminal:get-screen-text channel parity', () => {
     expect(src).toMatch(/invoke\('terminal:get-screen-text',\s*\{\s*sessionId,\s*tailRows\s*\}\)/);
   });
 
-  it('terminal:get-screen-text is referenced in ipc-handlers.ts', () => {
-    const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'ipc-handlers.ts'));
-    expect(src).toContain(`'${CHANNEL}'`);
+  it('terminal:get-screen-text is served by one channel-table entry (main/ipc/ui.ts)', () => {
+    expectTableEntry('ui', 'TERMINAL_GET_SCREEN_TEXT', CHANNEL);
   });
 
   it('terminal:get-screen-text is handled by SessionService.kt (Android)', () => {
@@ -1099,11 +1103,10 @@ describe('window:close-request / window:answer-close / window:close-request-canc
   it('main.ts pushes the request/cancelled pair and handles the answer', () => {
     expect(main).toContain('IPC.WINDOW_CLOSE_REQUEST');
     expect(main).toContain('IPC.WINDOW_CLOSE_REQUEST_CANCELLED');
-    expect(main).toMatch(/ipcMain\.handle\(IPC\.WINDOW_ANSWER_CLOSE,/);
-    // ipc-handlers.ts owns every OTHER window:* handler (WINDOW_CLOSE,
-    // WINDOW_GET_ID, ...) — this one is registered in main.ts instead because
-    // it must reach the module-scope closeRequests manager, not a per-window
-    // BrowserWindow the way the rest of that file's handlers do.
+    // WHY (2026-10-01 one-core R3-8): the answer is a channel-table entry (main/ipc/window.ts), like every other window:* control; it
+    // reaches the module-scope closeRequests manager through the answerClose hand-over main.ts makes.
+    expectTableEntry('window', 'WINDOW_ANSWER_CLOSE', 'window:answer-close');
+    expect(main).toMatch(/answerClose:[^\n]*closeRequests\.answer\(/);
     expect(ipcHandlers).not.toContain('WINDOW_ANSWER_CLOSE');
   });
 
@@ -1434,17 +1437,13 @@ describe('docComments:* IPC parity', () => {
       expect(preload).toContain(`'${ch}'`);
       expect(shim).toContain(`'${ch}'`);
     });
-    it(`${ch} registered in ipc-handlers.ts (literal, DOC_COMMENTS_IPC constant, or the factored registerDocCommentsHandlers call)`, () => {
-      // T3 factors registration into doc-comments/ipc-handlers.ts (testability
-      // — see doc-comments-ipc-handlers.test.ts), so the MAIN ipc-handlers.ts
-      // file carries only the registerDocCommentsHandlers(...) call, not a
-      // literal or constant for every channel — accept either shape.
-      const registeredHere = handlers.includes(`'${ch}'`) || handlers.includes(constant);
-      const factoredOut = handlers.includes('registerDocCommentsHandlers');
-      expect(registeredHere || factoredOut).toBe(true);
-    });
-    it(`${ch} handled by remote-server.ts (WS case)`, () => {
-      expect(server).toContain(`case '${ch}':`);
+    it(`${ch} is served by one channel-table entry, with no hand-written copy left`, () => {
+      // WHY (2026-10-01 one-core R3-8): main/ipc/doc-comments.ts holds one entry per channel, served to windows and phones by one body;
+      // doc-comments/ipc-handlers.ts keeps only the change push and remote-server.ts has no case for it.
+      const entries = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'ipc', 'doc-comments.ts'));
+      expect(entries, `${ch}: no entry in ipc/doc-comments.ts`).toContain(`name: ${constant}`);
+      expect(readSourceFile(path.join(__dirname, '..', 'src', 'main', 'doc-comments', 'ipc-handlers.ts'))).not.toContain('ipcMain');
+      expect(server).not.toContain(`case '${ch}':`);
     });
     it(`${ch} has a Kotlin arm in SessionService.kt`, () => {
       if (kotlin) expect(kotlin).toContain(`"${ch}"`);
@@ -1468,8 +1467,8 @@ describe('docComments:* IPC parity', () => {
     expect(block![0]).toContain(`'docComments:unwatch'`);
   });
 
-  it('the doc-comments IPC surface registration is actually wired into registerIpcHandlers', () => {
-    expect(handlers).toContain('registerDocCommentsHandlers(ipcMain');
+  it('the document-comment change push is wired into registerIpcHandlers', () => {
+    expect(handlers).toContain('wireDocCommentsPush(');
   });
 
   it('docComments:watch/:unwatch answer the SAME not-implemented-on-mobile shape as artifacts:watch-project, never the bare unsupported catch-all', () => {
@@ -1828,14 +1827,12 @@ describe('arcade:* channel parity', () => {
     for (const t of TYPES) expect(src, `${t} missing from remote-shim.ts`).toContain(`'${t}'`);
   });
 
-  it('registered in arcade-handlers.ts', () => {
-    const src = read('src', 'main', 'arcade-handlers.ts');
-    for (const t of TYPES) expect(src, `${t} missing from arcade-handlers.ts`).toContain(`"${t}"`);
-  });
-
-  it('handled by remote-server.ts (WS case)', () => {
-    const src = read('src', 'main', 'remote-server.ts');
-    for (const t of TYPES) expect(src, `${t} missing from remote-server.ts`).toContain(`'${t}'`);
+  it('served by one channel-table entry each (main/ipc/game.ts), with no hand-written copy left', () => {
+    // WHY (2026-10-01 one-core R3-8): both doors run the entries; arcade-handlers.ts only builds the operations behind them.
+    for (const t of TYPES) {
+      expectTableEntry('game', konstOf(t), t);
+      expect(read('src', 'main', 'arcade-handlers.ts'), `${t} is still registered by hand in arcade-handlers.ts`).not.toContain(`"${t}"`);
+    }
   });
 
   it('has a REAL Android handler arm, not a not-implemented stub', () => {
@@ -1888,13 +1885,12 @@ describe('buddy:* helper channel parity', () => {
     for (const t of TYPES) expect(src, `${t} missing from preload.ts`).toContain(`'${t}'`);
   });
 
-  it('handled in ipc-handlers.ts', () => {
-    const src = read('src', 'main', 'ipc-handlers.ts');
-    // Asserted through the constant, not the string: this file imports the map
+  it('served by one channel-table entry each (main/ipc/buddy.ts)', () => {
+    // Asserted through the constant, not the string: the entries import the map
     // rather than writing channel names out, so a literal search would fail on
-    // correct code.
-    for (const name of ['BUDDY_HELPER_STATUS', 'BUDDY_INSTALL_HELPER', 'BUDDY_REMOVE_HELPER']) {
-      expect(src, `IPC.${name} has no handler in ipc-handlers.ts`).toContain(`IPC.${name}`);
+    // correct code. WHY buddy.ts (2026-10-01 one-core R3-8): they were ipcMain handlers in ipc-handlers.ts.
+    for (const [name, channel] of [['BUDDY_HELPER_STATUS', 'buddy:helper-status'], ['BUDDY_INSTALL_HELPER', 'buddy:install-helper'], ['BUDDY_REMOVE_HELPER', 'buddy:remove-helper']]) {
+      expectTableEntry('buddy', name, channel);
     }
   });
 
@@ -1971,27 +1967,17 @@ describe('voice:* channel parity', () => {
     }
   });
 
-  it('voice-handlers.ts really registers an arm for every voice channel', () => {
-    // Fix (whole-branch review F5): this used to be `toContain("'voice:start'")`
-    // over the raw source, which the file's own CHANNELS list already satisfied
-    // — deleting every ipcMain.handle call left it green. Match the registration
-    // itself, so the test fails when the arm goes away rather than when a string
-    // does.
-    for (const t of SHARED) {
-      expect(handlers, `${t} has no ipcMain.handle in voice-handlers.ts`)
-        .toMatch(new RegExp(`ipcMain\\.handle\\('${t}'`));
-    }
-    // The permission question is a handle; the audio stream is a fire-and-forget
-    // `on` ten times a second, so it is registered the other way on purpose.
-    expect(handlers).toMatch(/ipcMain\.handle\('voice:mic-access'/);
-    expect(handlers).toMatch(/ipcMain\.on\(AUDIO_CHANNEL/);
+  it('every voice channel is a channel-table entry (main/ipc/voice.ts), and the handlers file only sends the push', () => {
+    // WHY (2026-10-01 one-core R3-8): the arms were ipcMain registrations in voice-handlers.ts. Match the entry itself, so the test
+    // fails when the arm goes away rather than when a string does. The permission question is a `handle`; the audio stream is a
+    // fire-and-forget `on` ten times a second, so it is an `on` entry on purpose.
+    for (const t of [...SHARED, 'voice:mic-access']) expectTableEntry('voice', konstOf(t), t);
+    const entries = read('src', 'main', 'ipc', 'voice.ts');
+    expect(entries).toMatch(/name: IPC\.VOICE_AUDIO, kind: 'on'/);
+    expect(handlers).not.toContain('ipcMain');
     // The push has no handler at all — it is sent TO the window.
     expect(handlers).toMatch(/const EVENT_CHANNEL = 'voice:event'/);
     expect(handlers).toMatch(/send\(EVENT_CHANNEL/);
-    // And every channel is on the list the double-registration guard clears.
-    for (const t of [...SHARED, 'voice:mic-access']) {
-      expect(handlers, `${t} missing from the CHANNELS clear-list`).toContain(`  '${t}',`);
-    }
   });
 
   it('remote-shim.ts carries the five shared channels and the push event', () => {

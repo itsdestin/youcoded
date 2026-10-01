@@ -88,6 +88,18 @@ describe('remote-shim — rejecting failures', () => {
       ['engine:set-config', 'ENGINE_SET_CONFIG'], ['engine:prereqs', 'ENGINE_PREREQS'], ['models:settings', 'MODELS_SETTINGS'],
       ['models:set-settings', 'MODELS_SET_SETTINGS'], ['models:add-vision', 'MODELS_ADD_VISION']])
       if (engineEntries.includes(`name: IPC.${constant},`)) out.add(c);
+    // WHY (2026-10-01 one-core R3-8): the last phone channels moved into the table. The four host-administration refusals are the
+    // entries that carry `refusal: hostAdminRefusal` ({ ok:false, error: HOST_ADMIN_REFUSAL }); the document-comment watch pair, the
+    // theme and command lists and the favourite themes can throw, and a table handler that throws answers { ok:false, error }
+    // carrying the failure marker for ANY channel.
+    const adminEntries = read('../src/main/ipc/remote-admin.ts');
+    for (const [c, constant] of [['remote:set-password', 'REMOTE_SET_PASSWORD'], ['remote:set-config', 'REMOTE_SET_CONFIG'],
+      ['remote:devices:rename', 'REMOTE_DEVICES_RENAME'], ['remote:devices:unpair', 'REMOTE_DEVICES_UNPAIR']])
+      if (new RegExp(`name: IPC\\.${constant}, kind: 'handle', remoteAllowed: false, refusal: hostAdminRefusal`).test(adminEntries)) out.add(c);
+    if (read('../src/main/ipc/doc-comments.ts').includes('DOC_COMMENTS_IPC.WATCH')) { out.add('docComments:watch'); out.add('docComments:unwatch'); }
+    if (read('../src/main/ipc/appearance.ts').includes('name: IPC.THEME_LIST')) out.add('theme:list');
+    if (read('../src/main/ipc/appearance.ts').includes('name: IPC.APPEARANCE_GET_FAVORITE_THEMES')) out.add('appearance:get-favorite-themes');
+    if (read('../src/main/ipc/ui.ts').includes('name: IPC.COMMANDS_LIST')) out.add('commands:list');
     return out;
   }
 
