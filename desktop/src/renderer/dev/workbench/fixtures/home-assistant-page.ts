@@ -24,7 +24,7 @@ const ROOMS_TEMPLATE = `{%- set ns = namespace(rooms=[]) -%}
 {%- set d = e.split('.')[0] -%}
 {%- if d in ['light','climate','media_player','camera','remote'] and states[e] is not none -%}
 {%- set s = states[e] -%}
-{%- set ens.items = ens.items + [{'id': e, 'name': s.name, 'state': s.state, 'brightness': s.attributes.get('brightness'), 'modes': s.attributes.get('supported_color_modes'), 'cur': s.attributes.get('current_temperature'), 'target': s.attributes.get('temperature'), 'min': s.attributes.get('min_temp'), 'max': s.attributes.get('max_temp'), 'step': s.attributes.get('target_temp_step'), 'vol': s.attributes.get('volume_level'), 'title': s.attributes.get('media_title'), 'features': s.attributes.get('supported_features', 0), 'rgb': s.attributes.get('rgb_color'), 'k': s.attributes.get('color_temp_kelvin'), 'modesHvac': s.attributes.get('hvac_modes'), 'action': s.attributes.get('hvac_action'), 'device': device_id(e)}] -%}
+{%- set ens.items = ens.items + [{'id': e, 'name': s.name, 'state': s.state, 'brightness': s.attributes.get('brightness'), 'modes': s.attributes.get('supported_color_modes'), 'cur': s.attributes.get('current_temperature'), 'target': s.attributes.get('temperature'), 'min': s.attributes.get('min_temp'), 'max': s.attributes.get('max_temp'), 'step': s.attributes.get('target_temp_step'), 'vol': s.attributes.get('volume_level'), 'title': s.attributes.get('media_title'), 'features': s.attributes.get('supported_features', 0), 'rgb': s.attributes.get('rgb_color'), 'k': s.attributes.get('color_temp_kelvin'), 'modesHvac': s.attributes.get('hvac_modes'), 'action': s.attributes.get('hvac_action'), 'device': device_id(e), 'model': device_attr(device_id(e), 'model'), 'dc': s.attributes.get('device_class')}] -%}
 {%- endif -%}
 {%- endfor -%}
 {%- if ens.items -%}{%- set ns.rooms = ns.rooms + [{'id': a, 'name': area_name(a), 'items': ens.items}] -%}{%- endif -%}
@@ -87,6 +87,11 @@ function homeAssistantPageHtml(): string {
   .cam { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: var(--radius-md, 8px); background: var(--well); display: block; }
   .cam-empty { width: 100%; height: 56px; border-radius: var(--radius-md, 8px); background: var(--well); display: grid; place-items: center; color: var(--fg-muted); font-size: 12px; }
   /* ── Round 5: the TV remote ────────────────────────────────────────── */
+  .play { display: flex; align-items: center; justify-content: center; gap: 10px; position: relative; }
+  .play .key { width: 36px; height: 36px; }
+  .play .key.main { width: 44px; height: 44px; background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .tile .name .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .kind { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-muted); }
   .rbtn { width: 32px; height: 32px; flex-shrink: 0; border-radius: 50%; border: 1px solid var(--edge); background: var(--well); color: var(--fg-2); cursor: pointer; display: grid; place-items: center; padding: 0; position: relative; }
   .rbtn:hover { color: var(--fg); border-color: var(--fg-muted); }
   .rbtn[aria-expanded="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
@@ -393,19 +398,32 @@ function homeAssistantPageHtml(): string {
         k('VOLUME_UP', 'Volume up', ico('<path d="M11 5 6 9H2v6h4l5 4z"/><path d="M16 12h5M18.5 9.5v5"/>')) +
       '</div></div></div>';
   }
-  // Which remote belongs to this TV tile: one in the same room whose name
-  // starts with the TV's name ("Destin's Room TV remote" → "Destin's Room
+  // Which remote belongs to this TV tile: one in the same room named the
+  // TV's name plus "remote" ("Destin's Room TV remote" → "Destin's Room
   // TV"), else the room's only remote when the room has one working TV.
   function remoteFor(it, room) {
-    if (!room) return null;
+    if (!room || !isTv(it)) return null;
     var remotes = room.items.filter(function (x) { return domain(x.id) === 'remote'; });
     if (!remotes.length) return null;
-    var byName = remotes.filter(function (r) { return r.name.toLowerCase().indexOf(it.name.toLowerCase()) === 0; })[0];
+    // The whole name must match once "remote" is taken off: a prefix match
+    // gave the soundbar "Destin's Room" the remote of "Destin's Room TV".
+    var base = function (n) { return n.toLowerCase().replace(/\\s*remote\\s*$/, '').trim(); };
+    var byName = remotes.filter(function (r) { return base(r.name) === it.name.toLowerCase().trim(); })[0];
     if (byName) return byName;
     var tvs = room.items.filter(function (x) { return domain(x.id) === 'media_player' && isTv(x) && !gone(x) && !remoteDevice(x); });
     return remotes.length === 1 && tvs.length === 1 && tvs[0].id === it.id ? remotes[0] : null;
   }
-  function isTv(it) { return /tv/i.test(it.id + ' ' + it.name); }
+  // What kind of player it is, from Home Assistant's device model and class
+  // (round 5 testing: the soundbar looked like the TV and got its remote).
+  function kindOf(it) {
+    var m = (it.model || '') + ' ' + it.name;
+    if (/beam|\\barc\\b|\\bray\\b|playbar|playbase|soundbar|sound bar/i.test(m)) return 'soundbar';
+    if (/nest hub|display/i.test(m)) return 'display';
+    if (it.dc === 'tv' || /\\btv\\b|chromecast|streamer|television/i.test(m)) return 'tv';
+    return 'speaker';
+  }
+  var KIND_LABEL = { tv: 'TV', soundbar: 'Soundbar', display: 'Display', speaker: 'Speaker' };
+  function isTv(it) { return kindOf(it) === 'tv'; }
   // The pairing adds a media player on the remote's own device; it would be
   // a second tile for the same TV, so it is left off the page.
   function remoteDevice(it) {
@@ -413,6 +431,12 @@ function homeAssistantPageHtml(): string {
     var r = roomOf(it.id);
     return !!(r && r.items.some(function (x) { return domain(x.id) === 'remote' && x.device === it.device; }));
   }
+  var SOUNDBAR = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="9" width="20" height="6" rx="2"/><path d="M6 12h.01M10 12h.01M14 12h.01M18 12h.01"/></svg>';
+  var DISPLAY = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>';
+  var PREV = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 20 9 12l10-8z"/><path d="M5 19V5"/></svg>';
+  var NEXT = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 4 10 8-10 8z"/><path d="M19 5v14"/></svg>';
+  var PLAY = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4v16l13-8z"/></svg>';
+  var PAUSE = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>';
   var TV = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="13" rx="2"/><path d="M8 21h8"/></svg>';
   function hex(c) { return '#' + c.map(function (n) { return ('0' + n.toString(16)).slice(-2); }).join(''); }
 
@@ -445,9 +469,24 @@ function homeAssistantPageHtml(): string {
     var power = rc || it;
     var off = !isOn(power), na = gone(power), on = !off && !na;
     var pct = it.brightness ? Math.round(it.brightness / 2.55) : 0;
+    var kind = media ? kindOf(it) : null;
+    // A soundbar playing the TV's sound reports the title "TV".
+    var what = it.title === 'TV' && kind === 'soundbar' ? 'TV sound' : it.title;
     var status = na ? 'Not responding'
-      : media ? (on ? (isOn(it) && it.title ? it.title : 'On') : 'Off')
+      : media ? (on ? (isOn(it) && what ? (it.state === 'paused' ? 'Paused · ' : '') + what : 'On') : 'Off')
       : on ? (dimmable(it) ? pct + '%' : 'On') : 'Off';
+    // Speakers and soundbars get play/pause and skip while something is
+    // playing; a TV gets its remote instead (round 5 testing: "soundbar
+    // shouldn't have full tv controls").
+    var playing = it.state === 'playing' || it.state === 'paused';
+    var f = it.features || 0;
+    var playRow = media && kind !== 'tv' && playing && (f & 1)
+      ? '<div class="play">' +
+        ((f & 16) ? '<button class="key" data-mp="' + esc(it.id) + '" data-svc="media_previous_track" aria-label="Previous" title="Previous">' + PREV + '</button>' : '') +
+        '<button class="key main" data-mp="' + esc(it.id) + '" data-svc="media_play_pause" aria-label="' + (it.state === 'playing' ? 'Pause' : 'Play') + '" title="' + (it.state === 'playing' ? 'Pause' : 'Play') + '">' + (it.state === 'playing' ? PAUSE : PLAY) + '</button>' +
+        ((f & 32) ? '<button class="key" data-mp="' + esc(it.id) + '" data-svc="media_next_track" aria-label="Next" title="Next">' + NEXT + '</button>' : '') +
+        '</div>'
+      : '';
     var c = media ? 'var(--accent)' : colourOf(it);
     var vol = media && on && (it.features & 4) && it.vol != null
       ? '<div class="vol">' + SPEAKER + '<input class="lr" type="range" min="0" max="100" value="' + Math.round(it.vol * 100) + '" style="--pct:' + Math.round(it.vol * 100) + '%;--c:var(--accent)" aria-label="Volume of ' + esc(it.name) + '" data-vol="' + esc(it.id) + '"></div>'
@@ -457,8 +496,8 @@ function homeAssistantPageHtml(): string {
     var rBtn = rc ? '<button class="rbtn" data-remote="' + esc(rc.id) + '" aria-expanded="' + !!rOpen + '" aria-label="Remote for ' + esc(it.name) + '" title="Remote">' + REMOTE + '</button>' : '';
     return '<div class="tile' + (media ? ' media' : '') + (on ? ' on' : '') + (na ? ' gone' : '') + (hidden.has(it.id) ? ' is-hidden' : '') + '" style="--c:' + c + '"><span class="glow"></span>' +
       '<div class="line"><button class="tile-face" data-toggle="' + esc(power.id) + '" aria-pressed="' + on + '"' + (na ? ' disabled' : '') + ' aria-label="' + esc(it.name) + (on ? ', on' : ', off') + '">' +
-      '<span class="bulb">' + icon + '</span><span class="name">' + esc(it.name) + '<div class="sub">' + esc(status) + '</div></span></button>' +
-      (media ? rBtn : colourBtn(it)) + '</div>' + bright + vol + (media ? '' : paletteHtml(it)) + (rOpen ? remoteHtml(rc) : '') + editRow(it, ctx) + '</div>';
+      '<span class="bulb">' + icon + '</span><span class="name">' + (kind ? '<div class="kind">' + KIND_LABEL[kind] + '</div>' : '') + esc(it.name) + '<div class="sub">' + esc(status) + '</div></span></button>' +
+      (media ? rBtn : colourBtn(it)) + '</div>' + bright + vol + playRow + (media ? '' : paletteHtml(it)) + (rOpen ? remoteHtml(rc) : '') + editRow(it, ctx) + '</div>';
   }
 
   var MODE_NAMES = { off: 'Off', cool: 'Cool', heat: 'Heat', heat_cool: 'Auto', auto: 'Auto', dry: 'Dry', fan_only: 'Fan' };
@@ -549,7 +588,7 @@ function homeAssistantPageHtml(): string {
     var sub = na ? '<div class="sub">Not responding</div>' : '';
     if (d === 'light') return tileHtml(it, BULB, false, ctx);
     if (d === 'climate') return climateHtml(it, ctx);
-    if (d === 'media_player') return tileHtml(it, /tv/i.test(it.id + ' ' + it.name) ? TV : SPEAKER, true, ctx);
+    if (d === 'media_player') { var k = kindOf(it); return tileHtml(it, k === 'tv' ? TV : k === 'soundbar' ? SOUNDBAR : k === 'display' ? DISPLAY : SPEAKER, true, ctx); }
     if (d === 'camera') {
       return '<div class="' + cls + ' col"><div class="line"><div class="name">' + esc(it.name) + sub + '</div></div>' +
         (na ? '<div class="cam-empty">Camera not responding</div>' : '<img class="cam" alt="" role="img" aria-label="' + esc(it.name) + '" data-cam="' + esc(it.id) + '"' + (camCache[it.id] ? ' src="' + camCache[it.id] + '"' : '') + '>') + editRow(it, ctx) + '</div>';
@@ -702,6 +741,13 @@ function homeAssistantPageHtml(): string {
     if (!t) return;
     var act = t.getAttribute('data-act');
     if (act) { onAct(act, t.getAttribute('data-id'), t); return; }
+    var mp = t.getAttribute('data-mp');
+    if (mp) {
+      var svc = t.getAttribute('data-svc');
+      if (svc === 'media_play_pause') { var cur = thing(mp); if (cur) setLocal(mp, { state: cur.state === 'playing' ? 'paused' : 'playing' }); }
+      service('media_player', svc, { entity_id: mp }, mp);
+      return;
+    }
     var ro = t.getAttribute('data-remote');
     if (ro) {
       if (remoteOpen.has(ro)) remoteOpen.delete(ro); else remoteOpen.add(ro);

@@ -12,6 +12,7 @@ interface Thing {
   vol?: number | null; title?: string | null; features?: number;
   rgb?: number[] | null; k?: number | null;
   modesHvac?: string[]; action?: string | null;
+  model?: string; dc?: string;
 }
 
 function seed(): Array<{ id: string; name: string; items: Thing[] }> {
@@ -22,15 +23,18 @@ function seed(): Array<{ id: string; name: string; items: Thing[] }> {
       { id: 'light.desk_backlight', name: 'Desk backlight', state: 'on', brightness: 102, modes: ['color_temp', 'xy'], rgb: [50, 110, 255] },
       { id: 'light.hue_play_1', name: 'Hue Play 1', state: 'on', brightness: 200, modes: ['color_temp', 'xy'], rgb: [150, 80, 255] },
       { id: 'light.tv_backlight', name: 'TV backlight', state: 'unavailable', modes: dim },
-      { id: 'media_player.destins_room_tv', name: "Destin's Samsung TV", state: 'off', features: 4, vol: 0.2 },
-      { id: 'media_player.destins_room', name: "Destin's Room speaker", state: 'playing', features: 4, vol: 0.35, title: 'Weightless — Marconi Union' },
+      { id: 'media_player.destins_room_tv', name: "Destin's Samsung TV", state: 'off', features: 4, vol: 0.2, model: 'QN65Q80CAFXZA', dc: 'tv' },
+      // Named like the room, as the real Sonos Beam is: it must never get the
+      // TV's remote (round 5 testing).
+      { id: 'media_player.destins_room', name: "Destin's Room", state: 'playing', features: 4 | 1 | 16 | 32, vol: 0.35, title: 'TV', model: 'Sonos Beam' },
       // A Google TV paired for remote control: its Cast tile, and the remote.
-      { id: 'media_player.destins_room_google_tv', name: "Destin's Room TV", state: 'playing', features: 4, vol: 0.4, title: 'YouTube' },
+      { id: 'media_player.destins_room_google_tv', name: "Destin's Room TV", state: 'playing', features: 4, vol: 0.4, title: 'YouTube', model: 'Google TV Streamer', dc: 'tv' },
       { id: 'remote.destins_room_tv_remote', name: "Destin's Room TV remote", state: 'on' },
     ] },
     { id: 'living_room', name: 'Living Room', items: [
       { id: 'light.living_room_lamp', name: 'Floor lamp', state: 'on', brightness: 180, modes: ['color_temp'], k: 2700 },
       { id: 'light.living_room_ceiling', name: 'Ceiling', state: 'off', brightness: null, modes: dim },
+      { id: 'media_player.living_room_speaker', name: 'Living Room speaker', state: 'paused', features: 4 | 1 | 16 | 32, vol: 0.3, title: 'Clair de Lune — Debussy', model: 'Google Nest Mini' },
       { id: 'camera.living_room_camera', name: 'Living room camera', state: 'idle' },
     ] },
     { id: 'kitchen', name: 'Kitchen', items: [
