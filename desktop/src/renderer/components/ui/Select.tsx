@@ -12,9 +12,9 @@ import { fieldClasses, FIELD_TRIGGER_STATES, type FieldSize } from './field';
  * <select>'s option list stays OS-rendered, so you get the OS blue-highlight menu
  * dropping out of a themed app. This renders the list itself.
  *
- * Three product call sites: ThemeScreen particles, ProvidersSection
- * add-provider type, SkillEditor category (plus three in the dev workbench
- * toolbar). RuntimeBinding's provider + model pair used to be here too; both
+ * Product call sites include ProvidersSection's add-provider type (ThemeScreen's
+ * particles and the SkillEditor's category went with those screens, 2026-10-01;
+ * plus three in the dev workbench toolbar). RuntimeBinding's provider + model pair used to be here too; both
  * were replaced by model/ModelPicker.tsx's one merged list. (SessionDrawer's
  * sort select folds into FileFilterPopover instead — change 38.)
  */

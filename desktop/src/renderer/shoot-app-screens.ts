@@ -46,10 +46,6 @@ export type AppScreenSetters = {
   gateSkip: (proceed: () => void) => void;
   gateSmallModel: (proceed: () => void) => void;
   gateFullAuto: (proceed: () => void) => void;
-  // SkillEditor's own id prop — App.tsx holds the only state, with no live
-  // trigger wired to it yet; a fixture id opens the real editor, a bogus one
-  // opens its "not found" branch.
-  setEditorSkillId: Setter<string | null>;
   // ThemeShareSheet's / ShareSheet's own slug/id props — same shape as above,
   // reusing marketplace/detail's and marketplace/theme-detail's fixture items.
   setPublishThemeSlug: Setter<string | null>;
@@ -102,8 +98,6 @@ export function useAppScreens(s: AppScreenSetters): void {
     else if (kind === 'full-auto') s.gateFullAuto(() => {});
     else if (kind === 'small-model') s.gateSmallModel(() => {});
   }, FIRST_TIME_KINDS);
-  useScreenOpen('chat/skills/edit', () => s.setEditorSkillId('civic-report'));
-  useScreenOpen('chat/skills/edit-missing', () => s.setEditorSkillId('shoot-skill-missing'));
   useScreenOpen('marketplace/theme-share', () => s.setPublishThemeSlug('meadow-mist'));
   useScreenOpen('marketplace/share', () => s.setShareSkillId('civic-report'));
 }

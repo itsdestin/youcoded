@@ -12,10 +12,6 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/close-session', 'dialog'),
   chat('chat/find', 'bar'),
   chat('chat/skills', 'drawer'),
-  // App.tsx's own editorSkillId — no live trigger reaches it yet; a fixture id
-  // opens the real editor, a bogus one its "not found" branch.
-  chat('chat/skills/edit', 'dialog'),
-  chat('chat/skills/edit-missing', 'dialog', 'error-state'),
   chat('chat/commands', 'drawer'),
   { ...chat('chat/overflow', 'menu', 'narrow'), viewport: { width: 390, height: 844 } },
   chat('chat/model-picker', 'dialog'),

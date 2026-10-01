@@ -58,7 +58,7 @@ All popups, modals, drawers, and floating menus share a single set of theme-driv
 |-------|------|---------|-----------|----------|
 | L0 | Content | — | — | App chrome (chat, header, input, status) |
 | L1 | Drawer | 40 | 50 | SettingsPanel, CommandDrawer, ResumeBrowser |
-| L2 | Popup | 60 | 61 | PreferencesPopup, ModelPickerPopup, ShareSheet, ThemeShareSheet, SkillEditor, StatusBar WidgetConfigPopup, ShortcutsPopup |
+| L2 | Popup | 60 | 61 | PreferencesPopup, ModelPickerPopup, ShareSheet, ThemeShareSheet, StatusBar WidgetConfigPopup, ShortcutsPopup |
 | L3 | Critical | 70 | 71 | Destructive confirmations (DiscardConfirmDialog, DonateConfirm, ProjectView delete, ModelProvidersPopup, SyncPanel, ModelPickerPopup) |
 | L4 | System | 100 | 100 | Toasts, always-visible indicators |
 
