@@ -24,7 +24,6 @@ export const SETTINGS: readonly ScreenEntry[] = [
   settings('settings/assistant/specialists', 'dialog'),
   settings('settings/appearance', 'dialog'),
   settings('settings/appearance/about', 'dialog'),
-  settings('settings/appearance/edit', 'dialog'),
   settings('settings/buddy', 'dialog'),
   settings('settings/sound', 'dialog'),
   // Only a two-graphics-chip computer shows this row; `gpus=2` makes the practice app one.

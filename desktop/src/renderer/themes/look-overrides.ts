@@ -12,7 +12,7 @@
 // applyLookOverrides returns the very same theme object — the promise on AP-S1
 // that nobody's app changes until they change a setting is this identity.
 
-import type { BubbleStyle, ChromeStyle, InputStyle, LoadedTheme, ThemeBackground } from './theme-types';
+import type { BubbleStyle, ChromeStyle, InputStyle, LoadedTheme, ParticlePreset, ThemeBackground } from './theme-types';
 
 /** The seven glass knobs a theme's background can carry. */
 export type GlassValues = {
@@ -34,9 +34,17 @@ export interface LookOverrides {
   /** The Fine-tune sliders' values; used only while `glass` is 'custom'. */
   glassCustom?: GlassValues;
   bubbleStyle?: BubbleStyle;
-  /** 0 = square … 1 = fully round, the same scale the user-theme editor uses. */
+  /** 0 = square … 1 = fully round. */
   roundness?: number;
+  /** Falling particles for every theme. WHY here (appearance-questions AQ-2, 2026-10-01):
+   *  the per-theme editor that was the only way to change them is gone, and Destin
+   *  picked particles as the one setting of its to keep, for every theme. 'custom' is
+   *  not offered — it needs the theme's own particle picture. */
+  particles?: LookParticles;
 }
+
+export const LOOK_PARTICLES = ['none', 'rain', 'dust', 'ember', 'snow'] as const;
+export type LookParticles = Extract<ParticlePreset, typeof LOOK_PARTICLES[number]>;
 
 /** What the three one-tap glass choices mean. Terminal knobs are left to the
  *  theme — only Fine-tune reaches them — because the terminal already has its
@@ -59,8 +67,7 @@ export const GLASS_DEFAULTS: Required<GlassValues> = {
   'terminal-brightness': 0.86,
 };
 
-/** The corner radii for a 0–1 roundness (moved here from ThemeScreen so the
- *  user-theme editor and the global override draw corners the same way). */
+/** The corner radii for a 0–1 roundness. */
 export function roundnessToShape(value: number) {
   const sm  = Math.round(value * 8);
   const md  = Math.round(value * 16);
@@ -102,7 +109,7 @@ const LAYOUT_INPUT_STYLE: Record<ChromeStyle, InputStyle> = {
 
 export function hasAnyOverride(o: LookOverrides): boolean {
   return o.chromeStyle !== undefined || o.glass !== undefined || o.bubbleStyle !== undefined
-    || o.roundness !== undefined;
+    || o.roundness !== undefined || o.particles !== undefined;
 }
 
 export function applyLookOverrides(theme: LoadedTheme, o: LookOverrides): LoadedTheme {
@@ -125,6 +132,9 @@ export function applyLookOverrides(theme: LoadedTheme, o: LookOverrides): Loaded
   if (o.roundness !== undefined) {
     next = { ...next, shape: { ...(next.shape ?? {}), ...roundnessToShape(o.roundness) } };
   }
+  if (o.particles) {
+    next = { ...next, effects: { ...(next.effects ?? {}), particles: o.particles } };
+  }
   const glass = glassValuesFor(o);
   if (glass && hasSeeThroughBackground(next)) {
     next = { ...next, background: { ...(next.background as ThemeBackground), ...glass } };
@@ -143,6 +153,7 @@ export function parseLookOverrides(raw: unknown): LookOverrides {
   out.chromeStyle = oneOf(r.chromeStyle, ['default', 'floating', 'float'] as const);
   out.glass = oneOf(r.glass, ['clear', 'frosted', 'solid', 'custom'] as const);
   out.bubbleStyle = oneOf(r.bubbleStyle, ['default', 'pill', 'flat', 'bordered'] as const);
+  out.particles = oneOf(r.particles, LOOK_PARTICLES);
   if (typeof r.roundness === 'number' && r.roundness >= 0 && r.roundness <= 1) out.roundness = r.roundness;
   if (r.glassCustom && typeof r.glassCustom === 'object') {
     const g: GlassValues = {};

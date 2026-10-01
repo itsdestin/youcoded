@@ -18,8 +18,9 @@ type Props = {
   favorite: boolean;
   onSelect: () => void;
   onToggleFavorite: () => void;
-  /** Present only on the user's own themes — the pencil that opens the editor. */
-  onEdit?: () => void;
+  /** Present only on the user's own themes — the share icon that publishes it
+   *  (appearance-questions AQ-3, 2026-10-01: it replaces the removed editor's pencil). */
+  onShare?: () => void;
   /** The theme library's copy of the preview (registry `preview` URL). Used when the
    *  theme has no preview.png of its own on this device. */
   fallbackPreview?: string;
@@ -30,16 +31,18 @@ const StarGlyph = ({ filled }: { filled: boolean }) => (
     <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
   </svg>
 );
-const PencilGlyph = () => (
+// The same share glyph the marketplace detail page uses for its Share button.
+const ShareGlyph = () => (
   <svg width={13} height={13} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-    <path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    <circle cx="18" cy="5" r="3" /><circle cx="6" cy="12" r="3" /><circle cx="18" cy="19" r="3" />
+    <line x1="8.6" y1="13.5" x2="15.4" y2="17.5" /><line x1="15.4" y1="6.5" x2="8.6" y2="10.5" />
   </svg>
 );
 
 /** The card's icon buttons — Resume browser's recipe (bare icons, faint → stronger on
  *  hover, a filled star in the accent). */
-function CardIcons({ favorite, onToggleFavorite, onEdit, name }: {
-  favorite: boolean; onToggleFavorite: () => void; onEdit?: () => void; name: string;
+function CardIcons({ favorite, onToggleFavorite, onShare, name }: {
+  favorite: boolean; onToggleFavorite: () => void; onShare?: () => void; name: string;
 }) {
   const tone = 'text-fg-faint hover:text-fg-2';
   // py-0.5 (not Resume's py-1.5): the strip is 20px tall. coarse-hit keeps a 44px
@@ -47,9 +50,9 @@ function CardIcons({ favorite, onToggleFavorite, onEdit, name }: {
   const btn = 'px-1 py-0.5 rounded-sm coarse-hit focus:outline-none focus-visible:ring-2 focus-visible:ring-accent transition-colors';
   return (
     <div className="flex items-center shrink-0">
-      {onEdit && (
-        <button type="button" onClick={(e) => { e.stopPropagation(); onEdit(); }} aria-label={`Edit ${name}`} title="Edit theme" className={`${btn} ${tone}`}>
-          <PencilGlyph />
+      {onShare && (
+        <button type="button" onClick={(e) => { e.stopPropagation(); onShare(); }} aria-label={`Publish ${name} to the marketplace`} title="Publish to Marketplace" className={`${btn} ${tone}`}>
+          <ShareGlyph />
         </button>
       )}
       <button
@@ -83,7 +86,7 @@ function Preview({ theme, fallback, className }: { theme: LoadedTheme; fallback?
   return <img src={src} alt="" className={`${className} object-cover object-top`} onError={() => setAttempt((n) => n + 1)} />;
 }
 
-export function ThemeCard({ theme, active, favorite, onSelect, onToggleFavorite, onEdit, fallbackPreview }: Props) {
+export function ThemeCard({ theme, active, favorite, onSelect, onToggleFavorite, onShare, fallbackPreview }: Props) {
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.target !== e.currentTarget) return;
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(); }
@@ -116,7 +119,7 @@ export function ThemeCard({ theme, active, favorite, onSelect, onToggleFavorite,
         <span className="text-2xs font-medium text-fg truncate">{theme.name}</span>
         {activePill}
         <span className="flex-1" />
-        <CardIcons favorite={favorite} onToggleFavorite={onToggleFavorite} onEdit={onEdit} name={theme.name} />
+        <CardIcons favorite={favorite} onToggleFavorite={onToggleFavorite} onShare={onShare} name={theme.name} />
       </div>
     </div>
   );

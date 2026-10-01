@@ -748,20 +748,17 @@ function SoundButton() {
 
 /** Compact "Appearance" row — opens ThemeScreen in a centered popup modal */
 function ThemeButton({ onSendInput, onRunCommand, onOpenMarketplace, onPublishTheme }: { onSendInput?: (text: string) => void; onRunCommand?: (command: string) => void; onOpenMarketplace?: () => void; onPublishTheme?: (slug: string) => void }) {
-  const { activeTheme, allThemes } = useTheme();
+  const { activeTheme } = useTheme();
   const [open, setOpen] = useState(false);
   useScreenOpen('settings/appearance', () => setOpen(true)); // photo-only build: `shoot` opens it by name
   // The first-run tour moving on closes this dialog (guide-events.ts).
   useGuideReset(useCallback(() => setOpen(false), []));
   // ThemeScreen fills this Dialog but does not own it, so it cannot reach the
   // shell's header. Both view flags live here and drive title/onBack; the
-  // component gets them back as props. Same lift K12 did for `showInfo`,
-  // extended to the theme editor so its header can go too.
+  // component gets it back as a prop (K12). The theme editor view that used to share
+  // this header was removed (appearance-questions AQ-1, 2026-10-01).
   const [showInfo, setShowInfo] = useState(false);
-  const [editingSlug, setEditingSlug] = useState<string | null>(null);
   useScreenOpen('settings/appearance/about', () => setShowInfo(true));
-  useScreenOpen('settings/appearance/edit', () => setEditingSlug('halftone-dimension')); // a fixture community theme
-  const editingTheme = editingSlug ? (allThemes.find((t) => t.slug === editingSlug) ?? null) : null;
   const popupRef = useRef<HTMLDivElement>(null);
 
   const { canvas, panel, inset, accent } = activeTheme.tokens;
@@ -801,15 +798,10 @@ function ThemeButton({ onSendInput, onRunCommand, onOpenMarketplace, onPublishTh
         onClose={() => setOpen(false)}
         title={
           showInfo ? 'About Appearance'
-            : editingTheme ? `Edit: ${editingTheme.name}`
-              : 'Appearance' // holds Look + Effects too since 2026-09-24, not only themes
+            : 'Appearance' // holds Look + Effects too since 2026-09-24, not only themes
         }
-        onBack={
-          showInfo ? () => setShowInfo(false)
-            : editingTheme ? () => setEditingSlug(null)
-              : undefined
-        }
-        headerActions={!showInfo && !editingTheme ? <InfoIconButton onClick={() => setShowInfo(true)} /> : undefined}
+        onBack={showInfo ? () => setShowInfo(false) : undefined}
+        headerActions={!showInfo ? <InfoIconButton onClick={() => setShowInfo(true)} /> : undefined}
         aria-label="Appearance"
         // A panel, not a document. Its theme cards are a 6px gradient strip and
         // a truncated name -- there is no canvas to size for, so the grid sets
@@ -821,7 +813,6 @@ function ThemeButton({ onSendInput, onRunCommand, onOpenMarketplace, onPublishTh
         panelRef={popupRef}
       >
         {showInfo && <ScreenMark name="settings/appearance/about" />}
-        {editingTheme && <ScreenMark name="settings/appearance/edit" />}
         <ThemeScreen
           onClose={() => setOpen(false)}
           onSendInput={onSendInput}
@@ -829,8 +820,6 @@ function ThemeButton({ onSendInput, onRunCommand, onOpenMarketplace, onPublishTh
           onOpenMarketplace={onOpenMarketplace}
           onPublishTheme={(slug) => { setOpen(false); onPublishTheme?.(slug); }}
           showInfo={showInfo}
-          editingSlug={editingSlug}
-          onEditSlug={setEditingSlug}
         />
       </Dialog>
     </>

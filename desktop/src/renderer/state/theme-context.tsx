@@ -357,9 +357,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   // The theme as the user sees it: its own choices, with any global override on top.
   // WHY every source (user themes too): the override is the user's, not the theme's —
-  // a theme they built still follows it. The user-theme EDITOR must therefore read the
-  // raw theme from allThemes, never this, or saving a tweak would bake the override
-  // into their theme file (ThemeScreen's editingTheme).
+  // a theme they built still follows it. Anything that WRITES a theme file must read the
+  // raw theme from allThemes, never this, or it would bake the override into the file.
   const activeTheme = useMemo(
     () => applyLookOverrides(activeThemeRaw, lookOverrides),
     [activeThemeRaw, lookOverrides],

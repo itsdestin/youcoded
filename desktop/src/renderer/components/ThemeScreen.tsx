@@ -1,16 +1,15 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef } from 'react';
 import { useTheme } from '../state/theme-context';
 import { useMarketplace } from '../state/marketplace-context';
-import { computeOnAccent } from '../themes/theme-validator';
 import SettingsExplainer, { type ExplainerSection } from './SettingsExplainer';
 import type { LoadedTheme } from '../themes/theme-types';
-import { TERMINAL_WALLPAPER_OPACITY_FLOOR } from '../themes/theme-engine';
-import { roundnessToShape, themeRoundness } from '../themes/look-overrides';
 import { ThemeCard } from './appearance/ThemeCard';
-import { LayoutSettings, LookSettings, LookSlider } from './appearance/LookSettings';
+import {
+  BubbleSettings, GlassLook, LayoutSettings, ParticleSettings, ResetLook, RoundnessSettings, StackedRow,
+} from './appearance/LookSettings';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
-import { Button, SectionLabel, Select, Toggle, SettingRow } from './ui';
+import { Button, CARD_LEVEL_1, SectionLabel, Toggle, SettingRow } from './ui';
 
 // Plain-language explainer for the Appearance popup. Shown when the user taps
 // the (i) icon in the popup header — see ThemeScreen's `showInfo` state.
@@ -28,9 +27,10 @@ const APPEARANCE_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
       heading: 'What the settings do',
       bullets: [
         { term: 'Your themes', text: 'Every theme installed on your device. Tap one to use it right away.' },
-        { term: 'Layout and additional customizations', text: "Your own layout (which brings its matching message box), message bubbles, roundness and glass, applied to every theme. Each one starts on \"Auto\", which keeps the theme exactly as its author made it. Change one and it applies to every theme until you set it back to Auto." },
+        { term: 'Window, Chat, Glass & effects', text: "Your own layout (which brings its matching message box), roundness, message bubbles, glass and particles, applied to every theme. Each one starts on \"Auto\", which keeps the theme exactly as its author made it. Change one and it applies to every theme until you set it back to Auto." },
         { term: 'Glass', text: 'How see-through the panels and bubbles are over a wallpaper. Clear, Frosted and Solid are one-tap choices; Fine-tune sets each blur and see-through level yourself. Themes without a wallpaper are not affected.' },
-        { term: 'The pencil icon', text: 'Appears on themes you built yourself. It opens an edit menu for that theme: accent color, roundness, particles, glass, and publishing it to the marketplace.' },
+        { term: 'The share icon', text: 'Appears on themes you built yourself. It publishes that theme to the marketplace so others can install it.' },
+        { term: 'Particles', text: 'Falling rain, dust, embers or snow over the app. Auto keeps whatever the theme comes with.' },
         { term: 'Theme cycle', text: 'Configured from the status bar widget editor (tap the gear in the status bar → the pencil next to "Theme"). Themes in the cycle rotate when you tap the theme pill at the bottom.' },
         { term: 'Reduce visual effects', text: 'Turns off particles, glass blur, and animations. Use this if the app feels slow or if movement bothers you. Glass blur sliders are automatically disabled while this is on.' },
         { term: 'Message timestamps', text: 'Shows the time each chat message was sent inside the bubble.' },
@@ -43,7 +43,7 @@ const APPEARANCE_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
       bullets: [
         { term: 'Theme looks broken or colors are missing', text: "The theme file may be corrupted. Switch back to a built-in theme (Light/Dark/Midnight/Crème) first, then try the broken one again." },
         { term: 'App feels slow or laggy', text: 'Turn on "Reduce visual effects". Particles and glass blur use the most power — disabling them usually fixes it instantly.' },
-        { term: "Can't edit most of a theme", text: "Only themes you made yourself can be edited. For any other theme, use the Look settings, which apply to every theme, or tap 'Build new theme' to make your own copy." },
+        { term: 'Changing a theme itself', text: "The settings here apply to every theme. To change a theme's own colours or picture, tap 'Build new theme' and describe what you want, or ask Claude to edit one you built." },
         { term: "Theme cycle isn't switching", text: 'Open the status bar widget editor and use the pencil next to "Theme" to pick at least 2 themes for the cycle.' },
         { term: 'Custom font not showing', text: "YouCoded reads fonts installed on your computer. If the font you want isn't installed system-wide, it can't be selected here. Install it through your operating system first." },
         { term: 'Published theme not appearing in marketplace', text: 'Theme submissions are reviewed before they go live. Yours should appear within a day or two if it passes the safety checks.' },
@@ -51,27 +51,6 @@ const APPEARANCE_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
     },
   ],
 };
-
-const PARTICLE_OPTIONS = ['none', 'rain', 'dust', 'ember', 'snow', 'custom'] as const;
-
-// Shape PARTICLE_OPTIONS for the shared <Select> (change 21). Labels stay the
-// raw preset names so the visible text is unchanged from the old <option> list.
-const PARTICLE_SELECT_OPTIONS = PARTICLE_OPTIONS.map((p) => ({ value: p, label: p }));
-
-/** The particle choices to offer for a theme whose preset is `current`.
- *
- *  WHY (2026-09-23, roadmap themes, bug 5 of the 2026-07-19 input-migration
- *  family): a theme file can carry a preset that is not in the list (hand-made,
- *  built by Claude, or from a newer app). The dropdown then matched nothing and
- *  showed the empty "Select…" placeholder, so it read as unset and the next
- *  pick replaced it. The theme's own value is kept as an extra choice, exactly
- *  as written, so it shows as selected and survives untouched unless the user
- *  picks something else. */
-export function particleSelectOptions(current: unknown): { value: string; label: string }[] {
-  if (typeof current !== 'string' || !current.trim()) return PARTICLE_SELECT_OPTIONS;
-  if (PARTICLE_SELECT_OPTIONS.some((o) => o.value === current)) return PARTICLE_SELECT_OPTIONS;
-  return [...PARTICLE_SELECT_OPTIONS, { value: current, label: current }];
-}
 
 interface Props {
   onClose: () => void;
@@ -93,21 +72,14 @@ interface Props {
    * header instead of reimplementing the one D1 already owns.
    */
   showInfo: boolean;
-  /**
-   * Lifted for the same reason as `showInfo`: the Dialog's header has to name
-   * the theme being edited and offer the way back, and this component cannot
-   * reach a Dialog it does not own.
-   */
-  editingSlug: string | null;
-  onEditSlug: (slug: string | null) => void;
 }
 
-// Only the user's own themes have an edit menu now. WHY (2026-09-24): the per-theme
-// glass tweaks that gave built-in and marketplace themes a pencil were retired in
-// favour of one global Look (appearance-panel-questions AP-3), which left their
-// pencil with nothing behind it — so it is not drawn at all, rather than greyed on
-// nearly every card. The card itself lives in appearance/ThemeCard.tsx.
-function canCustomize(theme: LoadedTheme): boolean {
+// Only the user's own themes can be published from here. WHY a share icon and no editor
+// (appearance-questions AQ-1/AQ-3, 2026-10-01): the per-theme editor repeated the
+// every-theme settings below and greyed itself out when they were set, so it is gone;
+// Publish, the one thing still only reachable there, is the share icon on the card.
+// The card itself lives in appearance/ThemeCard.tsx.
+function canPublish(theme: LoadedTheme): boolean {
   return theme.source === 'user';
 }
 
@@ -115,10 +87,10 @@ function canCustomize(theme: LoadedTheme): boolean {
 // in D1 — the owner renders the (i) button into the header via `headerActions`.
 // ThemeScreen only reads the boolean; it never needs to flip it. Removing the
 // unused prop + `InfoIconButton` import found by the 2026-08-06 sweep.
-export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpenMarketplace, onPublishTheme, showInfo, editingSlug, onEditSlug }: Props) {
+export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpenMarketplace, onPublishTheme, showInfo }: Props) {
   // Always mounted when open (parent conditionally renders) — so open=true is correct here.
   useEscClose(true, onClose);
-  const { allThemes, activeTheme, theme: activeSlug, setTheme, reducedEffects, setReducedEffects, showTimestamps, setShowTimestamps, lookOverrides } = useTheme();
+  const { allThemes, theme: activeSlug, setTheme, reducedEffects, setReducedEffects, showTimestamps, setShowTimestamps } = useTheme();
   // MarketplaceContext supplies favorites and the toggle action.
   const mp = useMarketplace();
   const themeFavSet = useMemo(() => new Set(mp.themeFavorites), [mp.themeFavorites]);
@@ -159,45 +131,16 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
   }, [gridThemes]);
   const markFavsTouched = () => { userScrolledFavs.current = true; };
 
-  // Slug of the theme currently being edited (pencil opened). Null = main list.
-
-  // Open edit view for a theme. We also activate it so edits preview live
-  // behind the popup — users expect to see changes as they drag sliders.
-  const openEditor = (slug: string) => {
-    if (slug !== activeSlug) setTheme(slug);
-    onEditSlug(slug);
-  };
-
-  // The RAW theme, never activeTheme: activeTheme carries the user's global Look
-  // overrides, and the editor writes the object it is given back to the theme
-  // file — reading activeTheme would bake those overrides into the theme.
-  const editingTheme = editingSlug ? allThemes.find(t => t.slug === editingSlug) ?? null : null;
-
   if (showInfo) {
     // Header + scroll body come from the Dialog above this component now.
     return <SettingsExplainer intro={APPEARANCE_EXPLAINER.intro} sections={APPEARANCE_EXPLAINER.sections} />;
   }
 
-  if (editingTheme) {
-    return (
-      <ThemeEditView
-        theme={editingTheme}
-        reducedEffects={reducedEffects}
-        overridden={{ glass: !!lookOverrides.glass, roundness: lookOverrides.roundness !== undefined }}
-        onPublishTheme={onPublishTheme}
-        onClose={onClose}
-      />
-    );
-  }
-
   return (
-    // D1: header, close and scroll body come from the Dialog. The body keeps
-    // space-y-4 rather than the shell's space-y-5 — the theme grid is dense on
-    // purpose — but takes the shell's px-4 py-4 in place of its own p-3.
-    // Headed sections (2026-09-24): Layout · Themes · Look · Effects & chat. Before,
-    // it was one unlabelled column, and the new Look settings would have made it a
-    // long list with no signposts. Layout leads (appearance-panel-review AR-1).
-    <div className="space-y-5">
+    // D1: header, close and scroll body come from the Dialog.
+    // Headed sections: Themes · Window · Chat · Glass & effects (AQ-4, 2026-10-01).
+    // space-y-4: the guide's 16px between groups (popup-spacing SP-4).
+    <div className="space-y-4">
       <section className="space-y-2">
         {/* WHY SectionLabel, not the SECTION_LABEL class string (labels batch,
             guide: no spaced capitals — decisions H-3/L-1…L-4); the constant
@@ -229,8 +172,8 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
                 favorite={themeFavSet.has(t.slug)}
                 onSelect={() => setTheme(t.slug)}
                 onToggleFavorite={() => { mp.favoriteTheme(t.slug, !themeFavSet.has(t.slug)).catch(() => {}); }}
-                // The pencil — the editor — exists only on the user's own themes (canCustomize).
-                onEdit={canCustomize(t) ? () => openEditor(t.slug) : undefined}
+                // The share icon exists only on the user's own themes (canPublish).
+                onShare={canPublish(t) && onPublishTheme ? () => onPublishTheme(t.slug) : undefined}
                 fallbackPreview={libraryPreviews.get(t.slug)}
               />
             ))}
@@ -284,327 +227,62 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
         </div>
       </section>
 
+      {/* WHY three named cards, nothing folded (appearance-questions AQ-4, 2026-10-01:
+          Destin picked "Named groups, nothing folded"). Before: bare Layout tiles, one
+          folded "Additional customizations" grab-bag, and "Effects & chat" mixing an
+          accessibility switch with a chat setting. Now each group is a small label over a
+          level-1 card (guide: a label first, nothing bare), split by what it changes. */}
       <section>
-        {/* WHY below Themes (Destin, appearance-panel-review-6 AR6-1: "put layout section
-            below themes section"): picking a theme is the panel's main job, so it leads. */}
-        {/* WHY no intro line (redesign round, 2026-09-24): Layout and Look each carried a
-            "applies to every theme" sentence, the same point twice. The (i) explainer says it
-            once, and the "Auto" tile already shows what the theme itself uses. */}
-        <SectionLabel>Layout</SectionLabel>
-        <LayoutSettings />
-        {/* WHY here, not its own section (Destin, appearance-panel-review-5 AR5-2: "put
-            this right under frames and label the card 'Additional customizations'"): the
-            rest of the Look sits with the layout it refines, above the themes. */}
-        <div className="mt-2">
-          <LookSettings />
+        <SectionLabel className="mb-2">Window</SectionLabel>
+        <div className={`${CARD_LEVEL_1} p-3 space-y-4`}>
+          <StackedRow title="Layout"><LayoutSettings /></StackedRow>
+          <RoundnessSettings />
         </div>
       </section>
 
-      <section className="space-y-1.5">
-        <SectionLabel>Effects &amp; chat</SectionLabel>
-
-
-        {/* Reduce visual effects — always on the main screen (accessibility/perf toggle).
-            Global: disables particles, forces blur to 0, shortens animations. Previously
-            this was nested inside the wallpaper-only Glass section, hiding it from users
-            on solid/gradient themes who also benefit from the accessibility setting. */}
-        <SettingRow
-          variant="item"
-          title="Reduce visual effects"
-          description="Disables particles, blur, and animations"
-          control={
-            // Was a hand-rolled 36x20 switch (change 15): same geometry, but the
-            // shared Toggle also carries role="switch" + aria-checked, which this
-            // one never had — a screen reader read it as an unlabelled button.
-            <Toggle
-              checked={reducedEffects}
-              onChange={(next) => setReducedEffects(next)}
-              aria-label="Reduce visual effects"
-            />
-          }
-        />
-
-        {/* Message timestamps toggle */}
-        <SettingRow
-          variant="item"
-          title="Message timestamps"
-          description="Show time sent in each chat bubble"
-          // Same migration as the toggle above (change 15).
-          control={
-            <Toggle
-              checked={showTimestamps}
-              onChange={(next) => setShowTimestamps(next)}
-              aria-label="Message timestamps"
-            />
-          }
-        />
+      <section>
+        <SectionLabel className="mb-2">Chat</SectionLabel>
+        <div className={`${CARD_LEVEL_1} p-3 space-y-4`}>
+          <BubbleSettings />
+          <SettingRow
+            header
+            variant="item"
+            title="Message timestamps"
+            description="Show time sent in each chat bubble"
+            control={
+              <Toggle
+                checked={showTimestamps}
+                onChange={(next) => setShowTimestamps(next)}
+                aria-label="Message timestamps"
+              />
+            }
+          />
+        </div>
       </section>
-    </div>
-  );
-}
 
-// Theme edit view — opened via the pencil, which only the user's OWN themes have
-// (canCustomize). Everything here writes the theme file itself: accent, roundness,
-// particles, glass, terminal, publish. Built-in and marketplace themes lost their
-// glass-only version of this view when per-theme tweaks were retired (2026-09-24).
-interface EditProps {
-  /** The RAW theme (no global Look overrides applied) — it is written back to disk. */
-  theme: LoadedTheme;
-  reducedEffects: boolean;
-  /** Which of this editor's settings the user's global Look is currently overriding.
-   *  Their sliders are greyed with a line saying why (appearance-panel-questions AP-3:
-   *  the global setting wins while it is on). */
-  overridden: { glass: boolean; roundness: boolean };
-  onPublishTheme?: (slug: string) => void;
-  /** Closes the popup after publishing. An ACTION, not header chrome. */
-  onClose: () => void;
-}
-
-// D1: the "Edit: {name}" title and the back chevron are the Dialog's, driven by
-// the same `editingSlug` that selects this view. Its own header reimplemented
-// the back arrow as a bare "←" glyph at a third size.
-function ThemeEditView({ theme, reducedEffects, overridden, onPublishTheme, onClose }: EditProps) {
-  const accentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isUserTheme = theme.source === 'user';
-  const hasWallpaper = theme.background?.type === 'image';
-  const hasGradient = theme.background?.type === 'gradient';
-  // Pre-baked terminal-value asset already has blur/brightness cooked in — the
-  // runtime-filter slider wouldn't affect it, so hide those two sliders.
-  const hasBakedTerminalBg = hasWallpaper && !!theme.background?.['terminal-value'];
-  const canTuneTerminalOpacity = hasWallpaper || hasGradient;
-  const canTuneTerminalFilter = hasWallpaper && !hasBakedTerminalBg;
-
-  const updateAccent = useCallback((hex: string) => {
-    if (!isUserTheme) return;
-    if (accentTimerRef.current) clearTimeout(accentTimerRef.current);
-    accentTimerRef.current = setTimeout(() => {
-      const onAccent = computeOnAccent(hex);
-      const updated = { ...theme, tokens: { ...theme.tokens, accent: hex, 'on-accent': onAccent } };
-      (window as any).claude?.theme?.writeFile?.(theme.slug, JSON.stringify(updated, null, 2));
-    }, 150);
-  }, [theme, isUserTheme]);
-
-  // Change 40 (§9.D): the roundness slider is CONTROLLED, but its source of
-  // truth (currentRoundness, below) is derived from the theme FILE via an async
-  // writeFile — it does not update within a drag. A bare `value={currentRoundness}`
-  // would therefore freeze the thumb mid-drag. So we keep a local draft the drag
-  // updates instantly, and re-sync it whenever currentRoundness changes for an
-  // EXTERNAL reason (switching which theme is being edited) — the exact staleness
-  // §9.D flagged. Same draft+resync shape as EngineCard's context knob.
-  const [roundnessDraft, setRoundnessDraft] = useState(0.5);
-
-  const updateRoundness = useCallback((value: number) => {
-    if (!isUserTheme) return;
-    const shape = roundnessToShape(value);
-    const updated = { ...theme, shape };
-    (window as any).claude?.theme?.writeFile?.(theme.slug, JSON.stringify(updated, null, 2));
-  }, [theme, isUserTheme]);
-
-  const updateParticles = useCallback((preset: string) => {
-    if (!isUserTheme) return;
-    const updated = { ...theme, effects: { ...(theme.effects ?? {}), particles: preset as any } };
-    (window as any).claude?.theme?.writeFile?.(theme.slug, JSON.stringify(updated, null, 2));
-  }, [theme, isUserTheme]);
-
-  // Glass fields are written to the user's theme file.
-  const updateBackground = useCallback((field: string, value: number) => {
-    if (!isUserTheme) return;
-    const updated = { ...theme, background: { ...(theme.background ?? { type: 'solid' as const, value: 'transparent' }), [field]: value } };
-    (window as any).claude?.theme?.writeFile?.(theme.slug, JSON.stringify(updated, null, 2));
-  }, [theme, isUserTheme]);
-
-  const setGlassField = updateBackground;
-
-  const currentRoundness = themeRoundness(theme);
-
-  // Re-sync the draft when the underlying theme's roundness changes for a reason
-  // other than this slider (e.g. the editor is pointed at a different theme).
-  useEffect(() => { setRoundnessDraft(currentRoundness); }, [currentRoundness]);
-
-  return (
-    <div className="space-y-4">
-        {(overridden.glass || overridden.roundness) && (
-          <p className="text-3xs text-fg-muted bg-inset border border-edge-dim rounded-md px-2.5 py-1.5 leading-relaxed">
-            Your Look settings are overriding this theme's {overridden.glass && overridden.roundness ? 'glass and roundness' : overridden.glass ? 'glass' : 'roundness'}, so {overridden.glass && overridden.roundness ? 'those sliders are' : 'that slider is'} greyed out. Set {overridden.glass && overridden.roundness ? 'them' : 'it'} back to Auto in Additional customizations to see this theme's own values.
-          </p>
-        )}
-
-        {/* User-theme-only controls */}
-        {isUserTheme && (
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-fg-2">Accent</span>
-              <div className="flex items-center gap-2">
-                <input
-                  type="color"
-                  value={theme.tokens.accent}
-                  onChange={e => updateAccent(e.target.value)}
-                  className="w-6 h-6 rounded-sm cursor-pointer border-0 bg-transparent"
-                />
-                <span className="text-3xs text-fg-muted font-mono">{theme.tokens.accent}</span>
-              </div>
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-xs text-fg-2">Roundness</span>
-              <div className="flex items-center gap-2 flex-1">
-                <span className="text-3xs text-fg-faint">□</span>
-                <input
-                  type="range" min="0" max="1" step="0.05"
-                  value={roundnessDraft}
-                  disabled={overridden.roundness}
-                  onChange={e => { const v = parseFloat(e.target.value); setRoundnessDraft(v); updateRoundness(v); }}
-                  className="flex-1 accent-accent"
-                />
-                <span className="text-3xs text-fg-faint">◯</span>
-              </div>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-fg-2">Particles</span>
-              {/* Was a native <select> (change 21). A native select's option list is
-                  drawn by the OS, so the open menu showed the OS blue-highlight
-                  styling inside a themed app — styling the closed trigger alone
-                  couldn't fix that. <Select> renders the list itself.
-                  The width wrapper keeps the row's right-hand control from
-                  stretching: the Select trigger is w-full by design. */}
-              <div className="w-32 shrink-0">
-                <Select
-                  size="sm"
-                  options={particleSelectOptions(theme.effects?.particles)}
-                  value={theme.effects?.particles ?? 'none'}
-                  onChange={updateParticles}
-                  aria-label="Particles"
-                />
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Glass — themes with an image OR gradient background composite a real layer
-            behind the chrome, so blurring/translucency produces a visible effect. Solid
-            themes have nothing behind the chrome so the sliders are hidden. Blur sliders
-            are greyed when Reduce visual effects is on (the engine forces blur:0). */}
-        {(hasWallpaper || hasGradient) && (
-          <div>
-            {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels
-                batch, guide: no spaced capitals); also bumped 4xs(10px)→the
-                guide's 11px reading floor. */}
-            <SectionLabel className="mb-2">Glass</SectionLabel>
-            {reducedEffects && (
-              <p className="text-3xs text-fg-muted bg-inset border border-edge-dim rounded-md px-2.5 py-1.5 mb-2 leading-relaxed">
-                Reduce visual effects is active — blur is disabled. Opacity still applies.
-              </p>
-            )}
-            <div className="space-y-3">
-              <LookSlider
-                label="Panel blur"
-                min={0} max={30} step={1}
-                value={theme.background?.['panels-blur'] ?? 24}
-                disabled={reducedEffects || overridden.glass}
-                onChange={v => setGlassField('panels-blur', v)}
-                format={v => String(Math.round(v))}
+      <section className="space-y-2">
+        <SectionLabel>Glass &amp; effects</SectionLabel>
+        <div className={`${CARD_LEVEL_1} p-3 space-y-4`}>
+          <GlassLook />
+          <ParticleSettings />
+          {/* Reduce visual effects — global: disables particles, forces blur to 0,
+              shortens animations. It sits with the glass and particles it switches off. */}
+          <SettingRow
+            header
+            variant="item"
+            title="Reduce visual effects"
+            description="Disables particles, blur, and animations"
+            control={
+              <Toggle
+                checked={reducedEffects}
+                onChange={(next) => setReducedEffects(next)}
+                aria-label="Reduce visual effects"
               />
-              <LookSlider
-                label="Panel opacity"
-                min={0.3} max={1} step={0.02}
-                value={theme.background?.['panels-opacity'] ?? 0.88}
-                disabled={overridden.glass}
-                onChange={v => setGlassField('panels-opacity', v)}
-                format={v => `${Math.round(v * 100)}%`}
-              />
-              <LookSlider
-                label="Bubble blur"
-                min={0} max={24} step={1}
-                value={theme.background?.['bubble-blur'] ?? 16}
-                disabled={reducedEffects || overridden.glass}
-                onChange={v => setGlassField('bubble-blur', v)}
-                format={v => String(Math.round(v))}
-              />
-              <LookSlider
-                label="Bubble opacity"
-                min={0.3} max={1} step={0.02}
-                value={theme.background?.['bubble-opacity'] ?? 0.88}
-                disabled={overridden.glass}
-                onChange={v => setGlassField('bubble-opacity', v)}
-                format={v => `${Math.round(v * 100)}%`}
-              />
-            </div>
-          </div>
-        )}
-
-        {/* Terminal — transparency knobs for TerminalView. Opacity applies to
-            any see-through background (wallpaper OR gradient). Blur + brightness
-            are runtime-CSS-filter on the wallpaper layer, so they're hidden when
-            the theme ships a pre-baked `terminal-value` asset (bake dictates
-            those values) or when there's no wallpaper to blur. */}
-        {canTuneTerminalOpacity && (
-          <div>
-            <SectionLabel className="mb-2">Terminal</SectionLabel>
-            {canTuneTerminalFilter && reducedEffects && (
-              <p className="text-3xs text-fg-muted bg-inset border border-edge-dim rounded-md px-2.5 py-1.5 mb-2 leading-relaxed">
-                Reduce visual effects is active — wallpaper blur is disabled. Opacity + brightness still apply.
-              </p>
-            )}
-            {hasBakedTerminalBg && (
-              <p className="text-3xs text-fg-muted bg-inset border border-edge-dim rounded-md px-2.5 py-1.5 mb-2 leading-relaxed">
-                This theme ships a pre-blurred terminal wallpaper — blur + brightness are baked in. Only opacity is adjustable here.
-              </p>
-            )}
-            <div className="space-y-3">
-              {/* Fix (ROADMAP L18): this slider only renders under a wallpaper or
-                  gradient (canTuneTerminalOpacity), and there the engine raises
-                  any `terminal-opacity` below TERMINAL_WALLPAPER_OPACITY_FLOOR
-                  to the floor (P-20.2, computeTerminalSurface). A 30% minimum
-                  let the user drag through 50 percentage points of nothing —
-                  the terminal did not change and the label lied about it. The
-                  minimum is the floor, and the shown value is the EFFECTIVE
-                  one (a pack that stored 0.6 reads "80%", which is what it
-                  actually paints). Flat themes have no slider at all. */}
-              <LookSlider
-                label="Terminal opacity"
-                min={TERMINAL_WALLPAPER_OPACITY_FLOOR} max={1} step={0.02}
-                value={Math.max(TERMINAL_WALLPAPER_OPACITY_FLOOR, theme.background?.['terminal-opacity'] ?? 0.6)}
-                disabled={overridden.glass}
-                onChange={v => setGlassField('terminal-opacity', v)}
-                format={v => `${Math.round(v * 100)}%`}
-              />
-              {canTuneTerminalFilter && (
-                <>
-                  <LookSlider
-                    label="Wallpaper blur"
-                    min={0} max={30} step={1}
-                    value={theme.background?.['terminal-blur'] ?? 8}
-                    disabled={reducedEffects || overridden.glass}
-                    onChange={v => setGlassField('terminal-blur', v)}
-                    format={v => String(Math.round(v))}
-                  />
-                  <LookSlider
-                    label="Wallpaper brightness"
-                    min={0.5} max={1.2} step={0.02}
-                    value={theme.background?.['terminal-brightness'] ?? 0.86}
-                    disabled={overridden.glass}
-                    onChange={v => setGlassField('terminal-brightness', v)}
-                    format={v => `${Math.round(v * 100)}%`}
-                  />
-                </>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Publish — user themes only */}
-        {isUserTheme && onPublishTheme && (
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => {
-              onPublishTheme(theme.slug);
-              onClose();
-            }}
-            className="w-full"
-          >
-            Publish to Marketplace
-          </Button>
-        )}
+            }
+          />
+        </div>
+        <ResetLook />
+      </section>
     </div>
   );
 }
