@@ -174,27 +174,19 @@ describe('CommentsMargin — a comment resolveSelector could not anchor', () => 
 const STRESS_TEST_BUDGET_MS = 90_000;
 
 describe('CommentsMargin — render cost at a realistic high comment count', () => {
-  it('renders 1,000 text comments in one pass, with cost growing in line with the count', () => {
-    // WHY a ratio, not a fixed ceiling: the first version asserted 1,000
-    // comments stayed under 5s of CPU. It measured ~1.6s alone but 5.08s in a
-    // full-suite run on a loaded machine (2026-09-27) — CPU time inflates under
-    // contention too, so any fixed number is a flake waiting to happen. What
-    // this pin actually exists to catch is the per-comment cost blowing up
-    // (e.g. every mark re-walking the whole document: 5x the comments → ~25x
-    // the cost). Measuring 200 and 1,000 in the SAME run cancels out machine
-    // load: linear work is ~5x, and anything under 12x is still near-linear.
-    //
-    // WHY best-of-3, not one sample each: a single ratio still flaked on a
-    // heavily loaded machine (2026-09-28: measured 16x against this 12x bound
-    // in ReadingHighlights.test.tsx's identical pin, one of the two mounts
-    // landing on a scheduling/GC hiccup the other didn't — same risk here).
-    // Contention can only ADD overhead to a mount, never remove it, so the
-    // MINIMUM across repeated trials of the same size is the closest any
-    // sample gets to the uncontended cost.
+  it('renders 1,000 text comments in one pass, with work growing in line with the count', () => {
+    // WHY counted work, not time (2026-10-01, one-core R4-3): this pin measured CPU time as a
+    // 1,000-vs-200 ratio over best-of-5 mounts and still failed under `verify.sh --full` on a busy
+    // machine (a 90 s timeout at load average 70), after earlier rounds of widening the bound and
+    // adding trials. Process CPU time includes the engine's helper threads, which inflate with
+    // load. Same fix as ReadingHighlights.test.tsx (R3-4): count the document text nodes the
+    // anchoring pass visits. That count does not change with load, so one mount per size is
+    // enough. The pass reads the document's text once and resolves every comment against it, so
+    // 1,000 comments visit about ten times the nodes of 100; anchoring that rewalked the document
+    // per comment would visit about a hundred times as many. 30x sits well clear of both.
     const mountWith = (path: string, count: number) => {
-      // One <p> per quote — a rendered markdown document is many block
-      // elements, never one flat text blob, so this is the realistic DOM shape
-      // (many one-line paragraphs, not one many-line paragraph).
+      // One <p> per quote: a rendered markdown document is many block elements, never one flat
+      // text blob, so this is the realistic DOM shape.
       const content = document.createElement('div');
       for (let i = 0; i < count; i++) {
         const p = document.createElement('p');
@@ -206,37 +198,27 @@ describe('CommentsMargin — render cost at a realistic high comment count', () 
         addComment(path, `Q${i}filler`, 'label', { prefix: '', suffix: '', occurrence: 0 });
       }
       const containerRef = { current: content };
-      const startedCpu = process.cpuUsage();
-      const { container, unmount } = render(<CommentsMargin containerRef={containerRef} path={path} narrow={false} />);
-      const usedCpu = process.cpuUsage(startedCpu);
-      // Every comment anchored (proves the pass actually did the full-count
-      // work being measured, not an early bail-out).
+      // Count the text nodes the pass visits (the walker every text scan goes through).
+      const walkerProto = Object.getPrototypeOf(document.createTreeWalker(content)) as { nextNode: () => Node | null };
+      const realNextNode = walkerProto.nextNode;
+      let visits = 0;
+      walkerProto.nextNode = function (this: unknown) { visits++; return realNextNode.call(this); };
+      let rendered: ReturnType<typeof render>;
+      try {
+        rendered = render(<CommentsMargin containerRef={containerRef} path={path} narrow={false} />);
+      } finally { walkerProto.nextNode = realNextNode; }
+      // Every comment anchored: proves the full pass ran, not an early bail-out.
       expect(content.querySelectorAll('mark')).toHaveLength(count);
-      expect(container.querySelectorAll('[data-comments-list] > div')).toHaveLength(count);
-      unmount();
+      expect(rendered.container.querySelectorAll('[data-comments-list] > div')).toHaveLength(count);
+      rendered.unmount();
       content.remove();
-      return (usedCpu.user + usedCpu.system) / 1000;
+      return visits;
     };
-    // 5, not 3 (2026-09-28): best-of-3 still hit 13x once during a full
-    // 15,000-test run while the same code measured 6.3-7.2x across 18
-    // isolated and parallel-loaded reruns — one more outlier-prone sample
-    // per size, not a looser bound, is what keeps a quadratic regression
-    // (~25x) clearly separated from normal linear cost (~5-7x).
-    const TRIALS = 5;
-    /** The best (minimum) of TRIALS same-size mounts, each its own path so
-     *  the store never carries duplicate comments across trials. */
-    const bestOf = (label: string, count: number) => {
-      const samples: number[] = [];
-      for (let t = 0; t < TRIALS; t++) samples.push(mountWith(`stress/${label}-${t}.md`, count));
-      return Math.min(...samples);
-    };
-
-    // Warm-up mount so one-time costs (module init, JIT) don't land on a
-    // measured trial and make the ratio look better than it is.
+    // Warm-up first, so one-time module init does not land on a measured mount.
     mountWith('stress/warmup.md', 50);
-    const small = bestOf('200-comments', 200);
-    const large = bestOf('1000-comments', 1000);
-    expect(large / Math.max(small, 1)).toBeLessThan(12);
+    const small = mountWith('stress/100-comments.md', 100);
+    const large = mountWith('stress/1000-comments.md', 1000);
+    expect(large / Math.max(small, 1)).toBeLessThan(30);
   }, STRESS_TEST_BUDGET_MS);
 
   it('renders the elden-ring fixture\'s busiest real sheet (315 cell comments), with cost growing in line with the count', () => {
