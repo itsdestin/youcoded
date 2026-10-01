@@ -22,7 +22,7 @@ const ROOMS_TEMPLATE = `{%- set ns = namespace(rooms=[]) -%}
 {%- set ens = namespace(items=[]) -%}
 {%- for e in area_entities(a) -%}
 {%- set d = e.split('.')[0] -%}
-{%- if d in ['light','climate','media_player','camera'] and states[e] is not none -%}
+{%- if d in ['light','climate','media_player','camera','remote'] and states[e] is not none -%}
 {%- set s = states[e] -%}
 {%- set ens.items = ens.items + [{'id': e, 'name': s.name, 'state': s.state, 'brightness': s.attributes.get('brightness'), 'modes': s.attributes.get('supported_color_modes'), 'cur': s.attributes.get('current_temperature'), 'target': s.attributes.get('temperature'), 'min': s.attributes.get('min_temp'), 'max': s.attributes.get('max_temp'), 'step': s.attributes.get('target_temp_step'), 'vol': s.attributes.get('volume_level'), 'title': s.attributes.get('media_title'), 'features': s.attributes.get('supported_features', 0), 'rgb': s.attributes.get('rgb_color'), 'k': s.attributes.get('color_temp_kelvin'), 'modesHvac': s.attributes.get('hvac_modes'), 'action': s.attributes.get('hvac_action'), 'device': device_id(e)}] -%}
 {%- endif -%}
@@ -55,7 +55,13 @@ export const HOME_ASSISTANT_PAGE_JSON = {
  *  picked over glowing power buttons and big sliders). Round 2 notes: room-wide
  *  "all on / all off" buttons, a better colour button and colour selection, and
  *  the speaker's volume in the same style. */
-/** Round 4 (home-page-v2 questions deck, 2026-10-01): a room's lights fold
+/** Round 5 (home-page-v2 deck, Q-tv remote): a Google TV paired through Home
+ *  Assistant's Android TV Remote gives a `remote.*` entity. Its TV's tile
+ *  gets a Remote button that opens a remote under it: app buttons, arrows
+ *  and OK, back, home, play/pause, volume. The extra media player the pairing
+ *  adds is left off the page, so the TV is one tile, not two.
+ *
+ *  Round 4 (home-page-v2 questions deck, 2026-10-01): a room's lights fold
  *  into one card headed by an "All" bulb tile that only switches lights
  *  (Q-card lights-only, Q-all bulb-all); folds are remembered (Q-fold
  *  remember); an Edit mode for favourites, order, hiding, renaming and moving
@@ -80,6 +86,33 @@ function homeAssistantPageHtml(): string {
   .temp { font-family: var(--font-mono); font-size: 28px; font-weight: 500; line-height: 1; }
   .cam { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: var(--radius-md, 8px); background: var(--well); display: block; }
   .cam-empty { width: 100%; height: 56px; border-radius: var(--radius-md, 8px); background: var(--well); display: grid; place-items: center; color: var(--fg-muted); font-size: 12px; }
+  /* ── Round 5: the TV remote ────────────────────────────────────────── */
+  .rbtn { width: 32px; height: 32px; flex-shrink: 0; border-radius: 50%; border: 1px solid var(--edge); background: var(--well); color: var(--fg-2); cursor: pointer; display: grid; place-items: center; padding: 0; position: relative; }
+  .rbtn:hover { color: var(--fg); border-color: var(--fg-muted); }
+  .rbtn[aria-expanded="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .rbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .remote { position: relative; display: flex; flex-direction: column; gap: 12px; padding: 12px; border-radius: var(--radius-md, 8px); background: var(--panel); border: 1px solid var(--edge-dim); }
+  .apps { display: flex; flex-wrap: wrap; gap: 6px; }
+  .app { appearance: none; font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 9999px; border: 1px solid var(--edge); background: var(--well); color: var(--fg); cursor: pointer; }
+  .app:hover { border-color: var(--accent); }
+  .remote-main { display: flex; align-items: center; justify-content: center; gap: 18px; flex-wrap: wrap; }
+  /* The arrows: a round pad, OK in the middle — the shape of the real remote. */
+  .dpad { position: relative; width: 132px; height: 132px; border-radius: 50%; background: var(--well); border: 1px solid var(--edge-dim); flex-shrink: 0; }
+  .dpad button { position: absolute; appearance: none; border: 0; background: transparent; color: var(--fg-2); cursor: pointer; display: grid; place-items: center; padding: 0; border-radius: 50%; }
+  .dpad button:hover { color: var(--fg); background: var(--inset); }
+  .dpad button:active { background: var(--edge-dim); }
+  .dpad button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .dpad .up, .dpad .down { left: 46px; width: 40px; height: 40px; }
+  .dpad .up { top: 4px; } .dpad .down { bottom: 4px; }
+  .dpad .left, .dpad .right { top: 46px; width: 40px; height: 40px; }
+  .dpad .left { left: 4px; } .dpad .right { right: 4px; }
+  .dpad .ok { left: 41px; top: 41px; width: 50px; height: 50px; background: var(--inset); border: 1px solid var(--edge); color: var(--fg); font-size: 12px; font-weight: 600; }
+  .keys { display: grid; grid-template-columns: repeat(3, 40px); gap: 8px; }
+  .key { width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--edge); background: var(--well); color: var(--fg-2); cursor: pointer; display: grid; place-items: center; padding: 0; }
+  .key:hover { color: var(--fg); border-color: var(--fg-muted); }
+  .key:active { background: var(--edge-dim); }
+  .key:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
   /* ── Round 4: folding lights, Edit mode, Everything off ─────────────── */
   .bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
   .confirm { display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 12px; border-radius: 9999px; border: 1px solid var(--edge); background: var(--inset); font-size: 13px; }
@@ -234,6 +267,8 @@ function homeAssistantPageHtml(): string {
   var order = saved.order && typeof saved.order === 'object' ? saved.order : {};
   // One text box at a time: renaming a thing, or naming a new room for it.
   var renaming = null, newRoomFor = null, confirmOff = false;
+  // Round 5: which TVs have their remote open (kept like the colour palettes).
+  var remoteOpen = new Set(Array.isArray(saved.remote) ? saved.remote : []);
   if (saved.editing) editing = true;
   var $ = function (id) { return document.getElementById(id); };
 
@@ -314,6 +349,53 @@ function homeAssistantPageHtml(): string {
   var EYE = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
   var EYE_OFF = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3l18 18"/><path d="M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6A17 17 0 0 0 2 12s3.5 7 10 7a9.9 9.9 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>';
   var OUT = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>';
+  function ico(d, w) { return '<svg width="' + (w || 18) + '" height="' + (w || 18) + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + '</svg>'; }
+  var REMOTE = ico('<rect x="7" y="2" width="10" height="20" rx="3"/><circle cx="12" cy="8" r="2"/><path d="M10 14h.01M14 14h.01M10 17h.01M14 17h.01"/>', 16);
+  // Apps open through the remote by their web address; the TV hands each to
+  // its app. These are the ones Home Assistant's own docs list as working.
+  var APPS = [
+    { name: 'YouTube', url: 'https://www.youtube.com' },
+    { name: 'Netflix', url: 'https://www.netflix.com/title' },
+    { name: 'Prime Video', url: 'https://app.primevideo.com' },
+    { name: 'Disney+', url: 'https://www.disneyplus.com' },
+  ];
+  function remoteHtml(r) {
+    var id = esc(r.id);
+    var k = function (cmd, label, icon, cls) { return '<button class="' + (cls || 'key') + '" data-rc="' + id + '" data-cmd="' + cmd + '" aria-label="' + label + '" title="' + label + '">' + icon + '</button>'; };
+    return '<div class="remote" role="group" aria-label="Remote for ' + esc(r.name) + '">' +
+      '<div class="apps">' + APPS.map(function (a) { return '<button class="app" data-rc="' + id + '" data-app="' + esc(a.url) + '">' + esc(a.name) + '</button>'; }).join('') + '</div>' +
+      '<div class="remote-main"><div class="dpad">' +
+        k('DPAD_UP', 'Up', ico('<path d="m18 15-6-6-6 6"/>'), 'up') + k('DPAD_LEFT', 'Left', ico('<path d="m15 18-6-6 6-6"/>'), 'left') +
+        k('DPAD_CENTER', 'OK', 'OK', 'ok') + k('DPAD_RIGHT', 'Right', ico('<path d="m9 18 6-6-6-6"/>'), 'right') + k('DPAD_DOWN', 'Down', ico('<path d="m6 9 6 6 6-6"/>'), 'down') +
+      '</div><div class="keys">' +
+        k('BACK', 'Back', ico('<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>')) +
+        k('HOME', 'Home', ico('<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>')) +
+        k('MEDIA_PLAY_PAUSE', 'Play or pause', ico('<path d="m6 4 8 6-8 6z"/><path d="M17 5v10M21 5v10"/>')) +
+        k('VOLUME_DOWN', 'Volume down', ico('<path d="M11 5 6 9H2v6h4l5 4z"/><path d="M16 12h5"/>')) +
+        k('MUTE', 'Mute', ico('<path d="M11 5 6 9H2v6h4l5 4z"/><path d="m22 9-6 6M16 9l6 6"/>')) +
+        k('VOLUME_UP', 'Volume up', ico('<path d="M11 5 6 9H2v6h4l5 4z"/><path d="M16 12h5M18.5 9.5v5"/>')) +
+      '</div></div></div>';
+  }
+  // Which remote belongs to this TV tile: one in the same room whose name
+  // starts with the TV's name ("Destin's Room TV remote" → "Destin's Room
+  // TV"), else the room's only remote when the room has one working TV.
+  function remoteFor(it, room) {
+    if (!room) return null;
+    var remotes = room.items.filter(function (x) { return domain(x.id) === 'remote'; });
+    if (!remotes.length) return null;
+    var byName = remotes.filter(function (r) { return r.name.toLowerCase().indexOf(it.name.toLowerCase()) === 0; })[0];
+    if (byName) return byName;
+    var tvs = room.items.filter(function (x) { return domain(x.id) === 'media_player' && isTv(x) && !gone(x) && !remoteDevice(x); });
+    return remotes.length === 1 && tvs.length === 1 && tvs[0].id === it.id ? remotes[0] : null;
+  }
+  function isTv(it) { return /tv/i.test(it.id + ' ' + it.name); }
+  // The pairing adds a media player on the remote's own device; it would be
+  // a second tile for the same TV, so it is left off the page.
+  function remoteDevice(it) {
+    if (!it.device || domain(it.id) !== 'media_player') return false;
+    var r = roomOf(it.id);
+    return !!(r && r.items.some(function (x) { return domain(x.id) === 'remote' && x.device === it.device; }));
+  }
   var TV = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="13" rx="2"/><path d="M8 21h8"/></svg>';
   function hex(c) { return '#' + c.map(function (n) { return ('0' + n.toString(16)).slice(-2); }).join(''); }
 
@@ -349,10 +431,13 @@ function homeAssistantPageHtml(): string {
       ? '<div class="vol">' + SPEAKER + '<input class="lr" type="range" min="0" max="100" value="' + Math.round(it.vol * 100) + '" style="--pct:' + Math.round(it.vol * 100) + '%;--c:var(--accent)" aria-label="Volume of ' + esc(it.name) + '" data-vol="' + esc(it.id) + '"></div>'
       : '';
     var bright = !media && on && dimmable(it) ? rangeHtml(it, pct) : '';
+    var rc = media ? remoteFor(it, roomOf(it.id)) : null;
+    var rOpen = rc && remoteOpen.has(rc.id);
+    var rBtn = rc ? '<button class="rbtn" data-remote="' + esc(rc.id) + '" aria-expanded="' + !!rOpen + '" aria-label="Remote for ' + esc(it.name) + '" title="Remote">' + REMOTE + '</button>' : '';
     return '<div class="tile' + (media ? ' media' : '') + (on ? ' on' : '') + (na ? ' gone' : '') + (hidden.has(it.id) ? ' is-hidden' : '') + '" style="--c:' + c + '"><span class="glow"></span>' +
       '<div class="line"><button class="tile-face" data-toggle="' + esc(it.id) + '" aria-pressed="' + on + '"' + (na ? ' disabled' : '') + ' aria-label="' + esc(it.name) + (on ? ', on' : ', off') + '">' +
       '<span class="bulb">' + icon + '</span><span class="name">' + esc(it.name) + '<div class="sub">' + esc(status) + '</div></span></button>' +
-      (media ? '' : colourBtn(it)) + '</div>' + bright + vol + (media ? '' : paletteHtml(it)) + editRow(it, ctx) + '</div>';
+      (media ? rBtn : colourBtn(it)) + '</div>' + bright + vol + (media ? '' : paletteHtml(it)) + (rOpen ? remoteHtml(rc) : '') + editRow(it, ctx) + '</div>';
   }
 
   var MODE_NAMES = { off: 'Off', cool: 'Cool', heat: 'Heat', heat_cool: 'Auto', auto: 'Auto', dry: 'Dry', fan_only: 'Fan' };
@@ -509,7 +594,7 @@ function homeAssistantPageHtml(): string {
 
   function roomHtml(room, roomIds) {
     var key = 'r:' + room.id;
-    var items = ordered(room.items.filter(function (it) { return editing || !hidden.has(it.id); }), key, function (x) { return x.id; });
+    var items = ordered(room.items.filter(function (it) { return (editing || !hidden.has(it.id)) && domain(it.id) !== 'remote' && !remoteDevice(it); }), key, function (x) { return x.id; });
     if (!items.length) return '';
     var ctx = { key: key, ids: items.map(function (x) { return x.id; }) };
     var lights = items.filter(isLight), rest = items.filter(function (it) { return !isLight(it); });
@@ -596,6 +681,23 @@ function homeAssistantPageHtml(): string {
     if (!t) return;
     var act = t.getAttribute('data-act');
     if (act) { onAct(act, t.getAttribute('data-id'), t); return; }
+    var ro = t.getAttribute('data-remote');
+    if (ro) {
+      if (remoteOpen.has(ro)) remoteOpen.delete(ro); else remoteOpen.add(ro);
+      persist({ remote: Array.from(remoteOpen) });
+      render();
+      return;
+    }
+    // A remote press goes straight to the TV: no redraw, no re-check, so
+    // pressing Down five times is five quick presses.
+    var rcId = t.getAttribute('data-rc');
+    if (rcId) {
+      var cmd = t.getAttribute('data-cmd'), app = t.getAttribute('data-app');
+      (cmd ? call('/api/services/remote/send_command', { entity_id: rcId, command: cmd })
+        : call('/api/services/remote/turn_on', { entity_id: rcId, activity: app }))
+        .catch(function (e) { banner(e && e.message ? e.message : 'The TV did not get that.'); });
+      return;
+    }
     var fd = t.getAttribute('data-fold');
     if (fd) {
       if (open.has(fd)) open.delete(fd); else open.add(fd);
@@ -766,6 +868,7 @@ function homeAssistantPageHtml(): string {
     open = new Set(Array.isArray(d.open) ? d.open : []);
     fav = new Set(Array.isArray(d.fav) ? d.fav : []);
     order = d.order && typeof d.order === 'object' ? d.order : {};
+    remoteOpen = new Set(Array.isArray(d.remote) ? d.remote : []);
     render();
   });
   start();

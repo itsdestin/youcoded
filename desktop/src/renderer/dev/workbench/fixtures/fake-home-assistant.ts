@@ -24,6 +24,9 @@ function seed(): Array<{ id: string; name: string; items: Thing[] }> {
       { id: 'light.tv_backlight', name: 'TV backlight', state: 'unavailable', modes: dim },
       { id: 'media_player.destins_room_tv', name: "Destin's Samsung TV", state: 'off', features: 4, vol: 0.2 },
       { id: 'media_player.destins_room', name: "Destin's Room speaker", state: 'playing', features: 4, vol: 0.35, title: 'Weightless — Marconi Union' },
+      // A Google TV paired for remote control: its Cast tile, and the remote.
+      { id: 'media_player.destins_room_google_tv', name: "Destin's Room TV", state: 'playing', features: 4, vol: 0.4, title: 'YouTube' },
+      { id: 'remote.destins_room_tv_remote', name: "Destin's Room TV remote", state: 'on' },
     ] },
     { id: 'living_room', name: 'Living Room', items: [
       { id: 'light.living_room_lamp', name: 'Floor lamp', state: 'on', brightness: 180, modes: ['color_temp'], k: 2700 },

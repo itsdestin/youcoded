@@ -23,6 +23,7 @@ export const PAGES: readonly ScreenEntry[] = [
   { ...pg('pages/page/page-home#refused', 'view', 'approval', 'error-state'), params: { pagesHome: 'refused' } },
   { ...pg('pages/page/page-home#connected', 'view'), params: { pagesHome: 'connected' } },
   { ...pg('pages/page/page-home#edit', 'view'), params: { pagesHome: 'edit' } },
+  { ...pg('pages/page/page-home#remote', 'view'), params: { pagesHome: 'remote' } },
   pg('pages/page/page-analytics', 'view', 'approval'),
   pg('pages/page/page-trip-board', 'view', 'approval', 'error-state'),
   pg('pages/library', 'view'),
