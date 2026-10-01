@@ -74,12 +74,18 @@ export type CalloutProps = {
    * the buttons wrap onto their own line, still right-aligned.
    */
   actions?: React.ReactNode;
+  /** 'below': the words run the full width and the buttons sit on their own
+   *  line at the bottom right. WHY (provider-notices#PN-1/PN-2, 2026-10-01:
+   *  "fit the text all the way across and put the buttons at the bottom
+   *  right"): a sentence-long notice beside two buttons wrapped into a narrow
+   *  column. Default 'right' keeps every existing notice as it was. */
+  actionsPlacement?: 'right' | 'below';
   /** Optional: a title-only notice (e.g. "Download interrupted" with its
    *  Resume/Delete) has nothing more to say underneath. */
   children?: React.ReactNode;
 };
 
-export function Callout({ tone = 'info', title, className = '', collapsible = false, actions, children }: CalloutProps) {
+export function Callout({ tone = 'info', title, className = '', collapsible = false, actions, actionsPlacement = 'right', children }: CalloutProps) {
   const t = TONE[tone];
   if (collapsible && title) {
     return (
@@ -114,6 +120,14 @@ export function Callout({ tone = 'info', title, className = '', collapsible = fa
   );
   if (!actions) {
     return <div className={`rounded-lg p-3 border ${t.surface} ${className}`.trim()}>{text}</div>;
+  }
+  if (actionsPlacement === 'below') {
+    return (
+      <div className={`rounded-lg p-3 border ${t.surface} ${className}`.trim()}>
+        {text}
+        <div className="mt-2 flex flex-wrap items-center justify-end gap-2">{actions}</div>
+      </div>
+    );
   }
   return (
     <div className={`rounded-lg p-3 border ${t.surface} ${className}`.trim()}>

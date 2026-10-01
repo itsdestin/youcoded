@@ -82,7 +82,7 @@ function ProviderRow({ title, info, status, detail, notice, action, account, chi
           </p>
           {status && <p className="text-2xs mt-0.5 text-fg-muted">{status}</p>}
         </div>
-        {(account || (action && !notice)) && (
+        {(account || (action && !notice?.actions)) && (
           <div className="shrink-0 flex items-center gap-1.5">
             {account && (
               <Button variant="secondary" size="sm"
@@ -90,7 +90,7 @@ function ProviderRow({ title, info, status, detail, notice, action, account, chi
                 My account
               </Button>
             )}
-            {!notice && action}
+            {!notice?.actions && action}
           </div>
         )}
       </div>
@@ -107,7 +107,7 @@ function ProviderRow({ title, info, status, detail, notice, action, account, chi
       )}
       {notice && (
         <div className="mt-2">
-          <Callout tone={notice.tone} actions={notice.actions}>{notice.text}</Callout>
+          <Callout tone={notice.tone} actions={notice.actions} actionsPlacement="below">{notice.text}</Callout>
         </div>
       )}
       {children && <div className="mt-2.5">{children}</div>}
@@ -439,7 +439,11 @@ export function ChatGptBlock() {
         // Blocked: OpenAI's reason and the one thing to do (Sign out) in one
         // danger box, like the OpenRouter card's broken key (ui-status-pills#PL-2).
         detail={note ? { text: note, tone: 'bad' } : status?.state === 'blocked' ? null : detail}
-        notice={status?.state === 'blocked' && !note ? { tone: 'danger', text: status.reason, actions: action } : null}
+        // No button inside: nothing in the app can lift a block, and a Sign out
+        // inside made the box twice as tall as its one sentence
+        // (provider-notices#PN-4: "much taller than it needs to be") — it stays
+        // with the card's other buttons at the top.
+        notice={status?.state === 'blocked' && !note ? { tone: 'danger', text: status.reason } : null}
         account={status?.state === 'signed-in' || status?.state === 'blocked' ? 'https://chatgpt.com/#settings/Account' : undefined}
         action={action}
       >
