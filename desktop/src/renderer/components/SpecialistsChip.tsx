@@ -144,9 +144,6 @@ function StatusPill({ h }: { h: HelperView }) {
   return <span className={`${base} border-edge text-fg-muted`}><CheckIcon className="w-3 h-3" />Finished</span>;
 }
 
-// TRIAL: which placement the deck shows.
-const ASK_AT = 'foot' as 'foot' | 'top';
-
 function HelperCard({ h, sessionId, onJump }: { h: HelperView; sessionId?: string; onJump: () => void }) {
   const { run, tool } = h;
   const first = run.title.split(' ')[0];
@@ -219,7 +216,6 @@ function HelperCard({ h, sessionId, onJump }: { h: HelperView; sessionId?: strin
             ? <div className="shrink-0"><SpecialistActions sessionId={sessionId} run={run} compact /></div>
             : <StatusPill h={h} />}
         </div>
-        {ASK_AT === 'top' && asks}
         {run.description && <div className="text-xs text-fg-2">{run.description}</div>}
         <RunStatusLine run={run} report={tool.specialistReport} elapsedUnknown={h.elapsedUnknown} />
         {/* The chat card's own Briefing / Activity / Report sections, verbatim
@@ -228,7 +224,9 @@ function HelperCard({ h, sessionId, onJump }: { h: HelperView; sessionId?: strin
         <AgentSections tool={tool} sessionId={sessionId} suppressAsk accordion />
       </div>
 
-      {ASK_AT === 'foot' && asks.length > 0 && <div className="px-3 pb-3 space-y-2">{asks}</div>}
+      {/* At the card's foot, after Briefing and Activity (specialist-ask-choice#SA-1;
+          the top placement was not chosen). */}
+      {asks.length > 0 && <div className="px-3 pb-3 space-y-2">{asks}</div>}
     </div>
   );
 }
