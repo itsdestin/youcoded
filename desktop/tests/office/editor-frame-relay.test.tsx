@@ -6,7 +6,7 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, renderHook, waitFor } from '@testing-library/react';
 import { EditorFrame, autosaveDelay } from '../../src/renderer/components/office/EditorFrame';
-import { closeDoc, openDoc, resetOfficeStoreForTests, saveStateFor, useOfficeAlerts } from '../../src/renderer/components/office/office-store';
+import { closeDoc, openDoc, resetOfficeStoreForTests, saveStateFor, useOfficeAlerts, useSaveState } from '../../src/renderer/components/office/office-store';
 import type { OfficeBridge, OfficeFile } from '../../src/shared/office-types';
 
 const FILE: OfficeFile = { path: '/home/you/plan.docx', name: 'plan.docx', kind: 'document', folder: 'you', at: '2026-09-28T00:00:00Z' };
@@ -221,6 +221,57 @@ describe('EditorFrame autosave', () => {
     fromEditor({ yc: 'rpc', id: 7, cmd: 'set_document_modified', args: { modified: true } });
     act(() => { vi.advanceTimersByTime(3_000); });
     expect(saves()).toBe(3);
+  });
+
+  // v0.1.31 (perf investigation 2026-10-01): the add-on now sends "modified" once per change of
+  // its value, not twice per typed character. The editor's batches of edits (save_changes, about
+  // once a second while typing) are what keep pushing the autosave back, so a long burst of typing
+  // is still one save after the person pauses, never a save in the middle of a sentence.
+  it('keeps pushing the autosave back while edit batches arrive, then saves 3 s after the last', async () => {
+    fakeBridge();
+    const { fromEditor, saves } = await mountFrame();
+    vi.useFakeTimers();
+    fromEditor({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } });
+    for (let i = 0; i < 5; i++) {
+      act(() => { vi.advanceTimersByTime(1_000); });
+      fromEditor({ yc: 'rpc', id: 10 + i, cmd: 'save_changes', args: { changes: ['x'], deleteIndex: null } });
+    }
+    act(() => { vi.advanceTimersByTime(2_999); });
+    expect(saves()).toBe(0);
+    act(() => { vi.advanceTimersByTime(1); });
+    expect(saves()).toBe(1);
+  });
+
+  it('an edit batch with nothing unsaved, or while a save is out, starts no save', async () => {
+    fakeBridge();
+    const { fromEditor, saves } = await mountFrame();
+    vi.useFakeTimers();
+    // An undo back to the saved state: "not modified", then its batch.
+    fromEditor({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } });
+    fromEditor({ yc: 'rpc', id: 2, cmd: 'set_document_modified', args: { modified: false } });
+    fromEditor({ yc: 'rpc', id: 3, cmd: 'save_changes', args: { changes: ['x'], deleteIndex: null } });
+    act(() => { vi.advanceTimersByTime(10_000); });
+    expect(saves()).toBe(0);
+    // An asked-for save sends its own batch first: that batch is not a new change.
+    fromEditor({ yc: 'rpc', id: 4, cmd: 'set_document_modified', args: { modified: true } });
+    act(() => { vi.advanceTimersByTime(3_000); });
+    expect(saves()).toBe(1);
+    fromEditor({ yc: 'rpc', id: 5, cmd: 'save_changes', args: { changes: ['x'], deleteIndex: null } });
+    act(() => { vi.advanceTimersByTime(10_000); });
+    expect(saves()).toBe(1);
+  });
+
+  it('a repeated "modified" leaves the save state, and everything that reads it, alone', async () => {
+    fakeBridge();
+    const { fromEditor } = await mountFrame();
+    let renders = 0;
+    renderHook(() => { renders++; return useSaveState(FILE.path); });
+    fromEditor({ yc: 'rpc', id: 1, cmd: 'set_document_modified', args: { modified: true } });
+    const after = renders;
+    fromEditor({ yc: 'rpc', id: 2, cmd: 'set_document_modified', args: { modified: true } });
+    fromEditor({ yc: 'rpc', id: 3, cmd: 'set_document_modified', args: { modified: true } });
+    expect(saveStateFor(FILE.path).phase).toBe('unsaved');
+    expect(renders).toBe(after);
   });
 
   it('never waits more than 20 s, however long the editor froze', () => {

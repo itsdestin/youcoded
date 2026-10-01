@@ -17,7 +17,7 @@ import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } f
 import { EmptyState, ErrorState, LoadingState } from '../ui';
 import type { OfficeBridge, OfficeFile, OfficeSaveCopyResult } from '../../../shared/office-types';
 import { OFFICE_MODE_MESSAGE, OFFICE_THEME_MESSAGE, editorFontLinks, readOfficeTheme, watchOfficeTheme } from './office-theme';
-import { markChanged, markFailed, markNote, markSaved, markSaving, markUnchanged, noteCloseFailedWhileHidden, noteCopying, noteRecoverOffer, onCommentsRequest, onDocumentReplaced, registerFlush } from './office-store';
+import { markChanged, markFailed, markNote, markSaved, markSaving, markUnchanged, noteCloseFailedWhileHidden, noteCopying, noteRecoverOffer, onCommentsRequest, onDocumentReplaced, registerFlush, saveStateFor } from './office-store';
 import type { FlushResult } from './office-store';
 import { ScreenMark } from '../../shoot-mode';
 import { useDismissTop } from '../../hooks/use-esc-close';
@@ -677,9 +677,21 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
         // error and "Saving…". Its "modified" flag only ever reports a change once, so while
         // failed, only Retry, a flush or the save-failed actions try again.
         if (!s.failed) {
-          markChanged(file.path);
+          // WHY only when not already unsaved (perf investigation 2026-10-01): an older add-on sends
+          // this twice per typed character, and each mark redrew every reader of the save state.
+          if (saveStateFor(file.path).phase !== 'unsaved') markChanged(file.path);
           if (!s.saving && !s.requested) armAutosave();
         }
+      }
+      // WHY the editor's batches of edits push the autosave back (add-on v0.1.31): the add-on now
+      // sends "modified" only when its value changes, so it no longer arrives with every keystroke.
+      // sdkjs sends a batch about once a second while the person types (yc-bridge streamEdits), so
+      // each one restarts the wait and a burst of typing is still saved once, after the pause. Not
+      // with nothing unsaved (an undo back to the saved state), and not while a save is asked for
+      // or running — the editor's own save sends a batch first, which is no new change.
+      if (m.cmd === 'save_changes') {
+        const s = save.current;
+        if (s.dirty && !s.failed && !s.saving && !s.requested) armAutosave();
       }
       // WHY: the editor says "modified" and at once "not modified" while it lays a document out
       // (measured 2026-09-28 on a workbook: true then false in the same millisecond), and

@@ -360,9 +360,20 @@ function setSave(path: string, next: OfficeSaveState) {
   // A Save As note outlives the save states around it (the document's own autosave follows a Save
   // As within seconds); only its own timer, or a new note, replaces it.
   if (!('note' in next) && saves[path]?.note) next = { ...next, note: saves[path].note };
+  // WHY an identical state changes nothing (perf investigation 2026-10-01): every call made a new
+  // object and told every listener, so OfficeView and each open editor redrew per keystroke while
+  // the editor kept saying "modified". Only a real change of the state reaches them now.
+  if (sameSave(saves[path], next)) return;
   saves = { ...saves, [path]: next };
   saveListeners.forEach((l) => l());
   syncUnsavedHold(path);
+}
+/** The same save state field for field (an absent field and an undefined one are the same). */
+function sameSave(a: OfficeSaveState | undefined, b: OfficeSaveState): boolean {
+  if (!a) return false;
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)] as Array<keyof OfficeSaveState>);
+  for (const k of keys) if (a[k] !== b[k]) return false;
+  return true;
 }
 function forgetSaveState(path: string) {
   if (!(path in saves)) return;
