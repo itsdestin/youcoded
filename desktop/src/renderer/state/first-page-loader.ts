@@ -1,6 +1,8 @@
 import type { ChatAction } from './chat-types';
 import type { TranscriptPageRequest, TranscriptPageResult } from '../../shared/types';
+import type { OpenReply, Push } from '../../shared/session-open-types';
 import { decideFirstPage, FIRST_PAGE_RETRY_MS } from './first-page-retry';
+import { applyOpenReply } from './session-fill';
 
 /**
  * Loads each session's FIRST page of history (the newest one) exactly once —
@@ -33,6 +35,11 @@ import { decideFirstPage, FIRST_PAGE_RETRY_MS } from './first-page-retry';
  *
  * Extracted from App.tsx so it can be tested — App.tsx cannot be mounted in a
  * test (see first-page-retry.ts).
+ *
+ * ONE FILL (2026-10-01 one-core R5-2): the first request is now `session:open` — the computer's answer carries the newest page AND what
+ * only memory holds (state/session-fill.ts applies it), so a window, a torn-off window and a phone all fill here, and a reconnecting
+ * phone fills again through `refill`, which sends where it got to and gets back only the events it missed. The page retry below
+ * (the transcript not found yet) asks `transcript:page` for the page alone: the open's other half has already been applied.
  */
 
 interface PageLocator { claudeSessionId: string; projectSlug: string }
@@ -47,18 +54,26 @@ export type PageHint = Partial<PageLocator> & { toEnd?: boolean };
 export const FIRST_PAGE_MAX_RUNS = 4;
 
 export interface FirstPageLoaderDeps {
-  request: (req: TranscriptPageRequest) => Promise<TranscriptPageResult | null | undefined>;
+  /** `session:open`. Rejects, or answers undefined, on a bridge with no host record to fill from (the Android app's own runtime). */
+  open: (req: { sessionId: string; claudeSessionId?: string; projectSlug?: string; fresh?: boolean }) => Promise<OpenReply | undefined>;
+  /** `transcript:page`, for the retry while the transcript is not found yet. */
+  requestPage: (req: TranscriptPageRequest) => Promise<TranscriptPageResult | null | undefined>;
   dispatch: (action: ChatAction) => void;
-  /** false = not now (a remote client waiting for its hydrate). NOT recorded,
-   *  so a later call can still load. */
-  mayLoad: (sessionId: string) => boolean;
+  /** Apply the transcript events handed to the frame batcher (see session-fill.ts). */
+  flush: () => void;
+  /** Hand pushes to the listeners a live push reaches (`window.claude.session.play`). */
+  play: (pushes: Push[]) => void;
   sleep?: (ms: number) => Promise<void>;
 }
 
+export type FillOutcome = 'ok' | 'failed';
+
 export interface FirstPageLoader {
-  /** Load `sessionId`'s newest page unless it is loading or loaded already. A
-   *  `hint` reaches an attempt already in flight. */
-  load: (sessionId: string, hint?: PageHint) => Promise<void>;
+  /** Fill `sessionId` from a fresh page unless it is loading or loaded already. A `hint` reaches an attempt already in flight. */
+  load: (sessionId: string, hint?: PageHint) => Promise<FillOutcome>;
+  /** Fill it AGAIN: a reconnect sends where this screen got to and gets back only what it missed (or a fresh page when it cannot
+   *  be continued); `fresh` (Refresh) always takes a fresh page. Waits for a load already running instead of starting a second. */
+  refill: (sessionId: string, opts: { fresh: boolean }) => Promise<FillOutcome>;
   /** A live transcript event arrived: re-ask if this session's load failed. */
   noteLiveActivity: (sessionId: string) => void;
   /** Forget every session not in `liveIds` (closed sessions; a native id can
@@ -80,46 +95,89 @@ export function createFirstPageLoader(deps: FirstPageLoaderDeps): FirstPageLoade
    *  page (applyAcquired chains replayLiveState, which reaps tool cards the page
    *  left 'running') must wait for the run already going, not get an instant
    *  resolve because someone else started it (2026-09-27 review). */
-  const inflight = new Map<string, Promise<void>>();
+  const inflight = new Map<string, Promise<FillOutcome>>();
 
-  const fail = (sid: string) => {
+  const fail = (sid: string): FillOutcome => {
     deps.dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId: sid });
     busyOrDone.delete(sid);
     failed.add(sid);
+    return 'failed';
   };
 
-  const load = (sid: string, hint?: PageHint): Promise<void> => {
-    // Recorded BEFORE the guard: the attempt loop reads it each time round.
-    if (hint) hints.set(sid, { ...hints.get(sid), ...hint });
-    if (busyOrDone.has(sid)) return inflight.get(sid) ?? Promise.resolve();
-    if ((runs.get(sid) ?? 0) >= FIRST_PAGE_MAX_RUNS) return Promise.resolve();
-    if (!deps.mayLoad(sid)) return Promise.resolve();
+  const start = (sid: string, opts: { fresh: boolean; refill: boolean }): Promise<FillOutcome> => {
     const token = {};
     busyOrDone.set(sid, token);
     failed.delete(sid);
-    runs.set(sid, (runs.get(sid) ?? 0) + 1);
-    deps.dispatch({ type: 'HISTORY_PAGE_REQUESTED', sessionId: sid });
-    const running = run(sid, token).finally(() => { if (inflight.get(sid) === running) inflight.delete(sid); });
+    const running = run(sid, token, opts).finally(() => { if (inflight.get(sid) === running) inflight.delete(sid); });
     inflight.set(sid, running);
     return running;
   };
 
-  const run = async (sid: string, token: object): Promise<void> => {
-    for (let attempt = 0; ; attempt++) {
+  const load = (sid: string, hint?: PageHint): Promise<FillOutcome> => {
+    // Recorded BEFORE the guard: the attempt loop reads it each time round.
+    if (hint) hints.set(sid, { ...hints.get(sid), ...hint });
+    if (busyOrDone.has(sid)) return inflight.get(sid) ?? Promise.resolve('ok');
+    if ((runs.get(sid) ?? 0) >= FIRST_PAGE_MAX_RUNS) return Promise.resolve('ok');
+    runs.set(sid, (runs.get(sid) ?? 0) + 1);
+    deps.dispatch({ type: 'HISTORY_PAGE_REQUESTED', sessionId: sid });
+    // A first load never resumes: whatever this screen holds for the id (nothing, or a copy from a session that had this id before)
+    // is not something to continue from.
+    return start(sid, { fresh: true, refill: false });
+  };
+
+  const refill = (sid: string, opts: { fresh: boolean }): Promise<FillOutcome> => {
+    // A load already running IS a fill; asking again would apply the answer twice.
+    const running = inflight.get(sid);
+    if (running) return running;
+    return start(sid, { fresh: opts.fresh, refill: true });
+  };
+
+  const run = async (sid: string, token: object, opts: { fresh: boolean; refill: boolean }): Promise<FillOutcome> => {
+    const h = hints.get(sid);
+    // A failed REFILL leaves the screen as it was (it still shows what it had, which the strip says may be behind); only a first load
+    // that failed is forgotten and re-asked by the next live event.
+    const bad = (): FillOutcome => (opts.refill ? 'failed' : fail(sid));
+    // ATTEMPT 0 is the fill: one `session:open`, whose answer carries the page and everything else a screen needs.
+    let reply: OpenReply | undefined;
+    try {
+      reply = await deps.open({
+        sessionId: sid, claudeSessionId: h?.claudeSessionId, projectSlug: h?.projectSlug,
+        ...(opts.fresh ? { fresh: true } : {}),
+      });
+    } catch {
+      // The computer could not be asked (the connection dropped, a bridge with no host record).
+      return busyOrDone.get(sid) === token ? bad() : 'failed';
+    }
+    // Closed while we waited (retainOnly dropped it): record nothing.
+    if (busyOrDone.get(sid) !== token) return 'failed';
+    if (!reply || !reply.ok) return bad();
+
+    const filler = { dispatch: deps.dispatch, flush: deps.flush, play: deps.play };
+    if (reply.resume === 'events') {
+      applyOpenReply(filler, sid, reply, { acceptPage: false });
+      return 'ok';
+    }
+    const first = reply.page ?? { events: [], cursor: null, hasMore: false, unresolved: true };
+    let decision = decideFirstPage(first, 0);
+    // The page is applied now only when it is good; otherwise the rest of the answer is applied and the page is asked for again below.
+    try { applyOpenReply(filler, sid, reply, { acceptPage: decision === 'accept' }); }
+    catch (err) { console.error('[first-page] applying the fill failed', err); return bad(); }
+    if (decision === 'accept') { hints.delete(sid); return 'ok'; }
+    if (decision === 'give-up') return bad();
+
+    for (let attempt = 1; ; attempt++) {
+      await sleep(FIRST_PAGE_RETRY_MS);
       let page: TranscriptPageResult | null | undefined;
       try {
-        const h = hints.get(sid);
-        page = await deps.request({ sessionId: sid, beforeCursor: null,
-          claudeSessionId: h?.claudeSessionId, projectSlug: h?.projectSlug,
-          ...(h?.toEnd ? { toEnd: true } : {}) });
+        const hh = hints.get(sid);
+        page = await deps.requestPage({ sessionId: sid, beforeCursor: null, toEnd: true,
+          claudeSessionId: hh?.claudeSessionId, projectSlug: hh?.projectSlug });
       } catch {
-        if (busyOrDone.get(sid) === token) fail(sid);
-        return;
+        return busyOrDone.get(sid) === token ? bad() : 'failed';
       }
-      // Closed while we waited (retainOnly dropped it): record nothing.
-      if (busyOrDone.get(sid) !== token) return;
-      if (!page) { fail(sid); return; }
-      const decision = decideFirstPage(page, attempt);
+      if (busyOrDone.get(sid) !== token) return 'failed';
+      if (!page) return bad();
+      decision = decideFirstPage(page, attempt);
       if (decision === 'accept') {
         hints.delete(sid);
         try {
@@ -130,17 +188,17 @@ export function createFirstPageLoader(deps: FirstPageLoaderDeps): FirstPageLoade
           // The page replay threw. Same outcome the App closure had (it sat in
           // its try), but now re-askable, and bounded by FIRST_PAGE_MAX_RUNS.
           console.error('[first-page] applying the first page failed', err);
-          fail(sid);
+          return bad();
         }
-        return;
+        return 'ok';
       }
-      if (decision === 'give-up') { fail(sid); return; }
-      await sleep(FIRST_PAGE_RETRY_MS);
+      if (decision === 'give-up') return bad();
     }
   };
 
   return {
     load,
+    refill,
     // One Set lookup per live event — the hot path pays nothing else.
     noteLiveActivity: (sid) => { if (failed.has(sid)) void load(sid); },
     retainOnly: (liveIds) => {

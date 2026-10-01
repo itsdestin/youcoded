@@ -177,7 +177,8 @@ describe('remote channels — every channel is answered', () => {
   // built on a sibling branch: presence would be red here until the merge, and a
   // one-sided name after the merge is exactly the drift this file exists to catch.
   describe('the bare frames batch 2 adds are named on both ends or neither', () => {
-    for (const name of ['client:ready', 'pty:reset']) {
+    // pty:reset is no longer pushed by the host (one-core R5-2): a session:open answer carries `reset`, and the shim replays it locally.
+    for (const name of ['client:ready']) {
       it(`${name}`, () => {
         const inShim = shimCode.includes(`'${name}`);
         const inHost = serverCode.includes(`'${name}`);
@@ -254,13 +255,13 @@ describe('remote channels — rehydrate channels', () => {
       expect(src('shared', 'backend-contract.ts')).toMatch(constant);
     });
 
-    it('preload declares rehydrate, reportHydrate and the status push', () => {
+    it('preload declares rehydrate, reportFill and the status push', () => {
       const preload = src('main', 'preload.ts');
       const invoke = /rehydrate:\s*\(\)\s*=>\s*ipcRenderer\.invoke\(IPC\.REMOTE_REHYDRATE\)/;
       assertPatternMatches(invoke, 'rehydrate: () => ipcRenderer.invoke(IPC.REMOTE_REHYDRATE)', 'the preload invoke');
       expect(preload).toMatch(invoke);
-      const report = /reportHydrate:\s*\([^)]*\)\s*=>\s*\{\s*\}/;
-      assertPatternMatches(report, 'reportHydrate: (_report: { seq?: number; kept: string[] }) => {}', 'an empty arrow');
+      const report = /reportFill:\s*\([^)]*\)\s*=>\s*\{\s*\}/;
+      assertPatternMatches(report, 'reportFill: (_report: { round?: number; failed?: number }) => {}', 'an empty arrow');
       expect(preload).toMatch(report);
       const status = /remoteConversationStatus:\s*\([^)]*\)\s*=>\s*\(\)\s*=>\s*\{\s*\}/;
       assertPatternMatches(status, 'remoteConversationStatus: (_cb: unknown) => () => {}', 'a no-op subscriber');
@@ -273,12 +274,13 @@ describe('remote channels — rehydrate channels', () => {
       expect(src('main', 'ipc-handlers.ts')).toMatch(handler);
     });
 
-    it('the shim invokes remote:rehydrate and exposes reportHydrate and the status push', () => {
+    it('the shim starts a Refresh round and exposes reportFill and the status push', () => {
       const shim = src('renderer', 'remote-shim.ts');
-      const inv = /invoke\('remote:rehydrate',\s*\{\s*seq/;
-      assertPatternMatches(inv, "invoke('remote:rehydrate', { seq })", 'the shim invoke');
-      expect(shim).toMatch(inv);
-      expect(shim).toMatch(/reportHydrate:\s*\(/);
+      // WHY no invoke any more (one-core R5-2): Refresh is filled by App through session:open; the shim only starts the round.
+      const start = /dispatchEvent\(new CustomEvent\(REMOTE_REFRESH_EVENT/;
+      assertPatternMatches(start, 'window.dispatchEvent(new CustomEvent(REMOTE_REFRESH_EVENT, {', 'the shim Refresh');
+      expect(shim).toMatch(start);
+      expect(shim).toMatch(/reportFill:\s*\(/);
       expect(shim).toMatch(/remoteConversationStatus:\s*\(/);
     });
 

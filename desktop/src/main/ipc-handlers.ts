@@ -10,6 +10,7 @@ import { execFile } from 'child_process';
 import { SessionManager } from './session-manager';
 import { wireDocCommentsSessionLifecycle } from './doc-comments/session-lifecycle';
 import { shouldReconcileNativePage, snapshotResumeBoundary } from './transcript-page-source';
+import { SAFE_ID_RE } from './session-browser';
 import { HookRelay } from './hook-relay';
 import { IPC, type TranscriptEvent, type TranscriptPageRequest, type TranscriptPageResult, type HookEvent, type SpecialistsEvent, type ShellEvent } from '../shared/types';
 import { isPlaceholderModelId } from '../shared/model-ids';
@@ -35,11 +36,10 @@ import { bindUi } from './ipc/ui';
 import { bindIntegrations } from './ipc/integrations';
 import { bindBuddy } from './ipc/buddy';
 import { bindRemoteAdmin } from './ipc/remote-admin';
-import { bindReplay } from './ipc/replay';
 import { registerDesktopChannels } from './ipc/channel-table';
 import { bindSkillsDeps } from './ipc/skills';
 import { bindSyncSpacesDeps } from './ipc/sync-spaces';
-import { bindSessionOps, sessionProviderFor } from './ipc/session';
+import { bindSessionOps, sessionProviderFor, findTranscriptSlug } from './ipc/session';
 import { bindThemeMarketplace } from './ipc/theme-marketplace';
 import { bindFirstRunNative } from './ipc/first-run';
 import type { OutboxBroadcast } from './chatsearch-index/outbox-drain';
@@ -366,7 +366,9 @@ export function registerIpcHandlers(
   // back to the primary mainWindow when neither owner nor subscribers
   // exist (preserves the existing pre-buddy fallback behavior for
   // remote-created sessions during Phase 1).
-  const sendForSession = (sessionId: string, channel: string, ...args: any[]) => {
+  // WHY `hold` (one-core R5-2): a window that is being filled with this session (session-open.ts) keeps what it would receive until
+  // its answer is out; `hold` is told each recipient and may take the delivery.
+  const sendForSession = (sessionId: string, channel: string, args: any[], hold?: (windowId: number, deliver: () => void) => boolean) => {
     // WHY the registry answers this (one-core R5-1): windows and phones are both registry members, one audience question.
     const audience = windowRegistry?.resolveAudience(sessionId);
     const ids = audience ? audience.windowIds : [];
@@ -377,8 +379,12 @@ export function registerIpcHandlers(
         // webContents.id, so previously every peer-window event fell through
         // to the mainWindow fallback (window 1). webContents.fromId does the
         // correct lookup.
-        const wc = webContents.fromId(wid);
-        if (wc && !wc.isDestroyed()) wc.send(channel, ...args);
+        const deliver = () => {
+          const wc = webContents.fromId(wid);
+          if (wc && !wc.isDestroyed()) wc.send(channel, ...args);
+        };
+        if (hold?.(wid, deliver)) continue;
+        deliver();
       }
       return;
     }
@@ -394,8 +400,9 @@ export function registerIpcHandlers(
   // phone, and the session's record. A hand-written sendForSession + broadcast pair is rejected by ast-grep (no-paired-session-send-and-broadcast).
   const publish = createPublish({
     records: runtime.records,
-    toWindows: (sessionId, channel, args) => sendForSession(sessionId, channel, ...args),
-    toSockets: (message, socketIds) => remoteServer?.broadcast(message, socketIds),
+    fills: runtime.fills,
+    toWindows: (sessionId, channel, args, hold) => sendForSession(sessionId, channel, args, hold),
+    toSockets: (message, socketIds, hold) => remoteServer?.broadcast(message, socketIds, hold),
     socketsFor: (sessionId) => windowRegistry?.resolveAudience(sessionId).socketIds,
   });
 
@@ -506,7 +513,7 @@ export function registerIpcHandlers(
   sessionManager.on('session-created', (info) => {
     // A new record, a new epoch (one-core R5-1). Synchronous, so it exists before any of the session's events.
     runtime.records.begin(info.id);
-    process.nextTick(() => sendForSession(info.id, IPC.SESSION_CREATED, info));
+    process.nextTick(() => sendForSession(info.id, IPC.SESSION_CREATED, [info]));
   });
   attachStartupDialogLog(sessionManager, hookRelay, log, (id) => sessionManager.markStarted(id)); // desktop.log + SessionInfo.awaitingStart
 
@@ -536,7 +543,7 @@ export function registerIpcHandlers(
     getStoredTitle: async (sessionId) => (await getConversationStore()?.get('native', sessionId))?.title,
     onTitle: (sessionId, title, opts) => {
       if (opts?.provisional) provisionalResumeTitles.mark(sessionId, title);
-      sendForSession(sessionId, IPC.SESSION_RENAMED, sessionId, title);
+      sendForSession(sessionId, IPC.SESSION_RENAMED, [sessionId, title]);
       broadcastRename(sessionId, title);
     },
     getOpeningTitle: (sessionId) => nativeHost.openingTitle(sessionId),
@@ -865,7 +872,7 @@ export function registerIpcHandlers(
     if (result) {
       // Explicit user-initiated destroy → treat as clean exit (0). The
       // reducer no-ops clean exits unless a turn was in flight.
-      sendForSession(sessionId, IPC.SESSION_DESTROYED, sessionId, 0);
+      sendForSession(sessionId, IPC.SESSION_DESTROYED, [sessionId, 0]);
       windowRegistry?.releaseSession(sessionId);
       // Welcome back (design §2): this is the session's own X — untrack it so
       // it is NOT offered back next launch. Deliberately NOT in
@@ -975,7 +982,7 @@ export function registerIpcHandlers(
   // the global broadcast is no longer needed.
   sessionManager.on('pty-output', (sessionId: string, data: string) => {
     if (readySessions.has(sessionId)) {
-      sendForSession(sessionId, `pty:output:${sessionId}`, data);
+      sendForSession(sessionId, `pty:output:${sessionId}`, [data]);
     } else {
       let buf = pendingOutput.get(sessionId);
       if (!buf) {
@@ -992,7 +999,7 @@ export function registerIpcHandlers(
     const buffered = pendingOutput.get(sessionId);
     if (buffered) {
       for (const data of buffered) {
-        sendForSession(sessionId, `pty:output:${sessionId}`, data);
+        sendForSession(sessionId, `pty:output:${sessionId}`, [data]);
       }
       pendingOutput.delete(sessionId);
     }
@@ -1001,7 +1008,7 @@ export function registerIpcHandlers(
   // Forward session exit events — exitCode is piped through to the renderer
   // so the reducer can distinguish clean shutdowns from 'session-died' cases.
   sessionManager.on('session-exit', (sessionId: string, exitCode: number) => {
-    sendForSession(sessionId, IPC.SESSION_DESTROYED, sessionId, exitCode);
+    sendForSession(sessionId, IPC.SESSION_DESTROYED, [sessionId, exitCode]);
     runtime.records.drop(sessionId); // the session is over: its record goes with it (one-core R5-1)
     pendingOutput.delete(sessionId);
     readySessions.delete(sessionId);
@@ -1528,7 +1535,7 @@ export function registerIpcHandlers(
   // buddy subscribers) plus phones and the window directory — the same two calls the
   // inline applyAutomaticTitle made before the hoist.
   runtime.onTitleApplied((desktopId, title) => {
-    sendForSession(desktopId, IPC.SESSION_RENAMED, desktopId, title);
+    sendForSession(desktopId, IPC.SESSION_RENAMED, [desktopId, title]);
     broadcastRename(desktopId, title);
   });
 
@@ -1563,78 +1570,53 @@ export function registerIpcHandlers(
     }
   });
 
-  // Native permission asks ride the SAME hook:event channel + broadcast as CC's
-  // PermissionRequest/PermissionExpired — hook-dispatcher/ToolCard render them
-  // unchanged. Ids are 'native-'-prefixed so permission:respond routes by id.
+  // Native permission asks ride the SAME hook:event channel as CC's PermissionRequest/PermissionExpired —
+  // hook-dispatcher/ToolCard render them unchanged. Ids are 'native-'-prefixed so permission:respond routes by id.
+  // A screen that opens later learns which asks are still waiting from the host's broker (session-open.ts), not from a buffer here.
   nativeHost.on('hook-event', (event: HookEvent) => {
-    // Fix (not in the original plan — see the branch's commit history):
-    // native hook events reach remote clients ONLY through this direct
-    // broadcast() call. RemoteServer's own onHookEvent — which is what
-    // fills hookBuffers for connect-time replay — is wired solely to the
-    // LEGACY CC hookRelay, never to nativeHost. Without this a phone
-    // reconnecting while a native permission ask was open would see no card
-    // until the next 3s heartbeat (permission-broker.ts). bufferHookEvent()
-    // feeds the SAME hookBuffers map the legacy path fills, so the existing
-    // replay loop in restoreClient() picks these up for free, and its
-    // PermissionResolved purge keeps answered asks out of that replay.
-    // WHY afterWindows (R5-1 review): the pair was window send, buffer write, phone broadcast; publish keeps that order.
-    publish(event.sessionId, IPC.HOOK_EVENT, event, { afterWindows: () => remoteServer?.bufferHookEvent(event) });
+    publish(event.sessionId, IPC.HOOK_EVENT, event);
   });
 
   // Task 8 (plan 1c) — the ledger's own write is the ONLY thing that fires
   // this (see the 'specialists-event' emit in NativeSessionHost's
   // constructor, next to DelegationLedger's construction): one mutate, one
   // event, one changed hire. Push-only — there is no specialists:event
-  // REQUEST handler anywhere, same shape as native:model-state.
+  // REQUEST handler anywhere, same shape as native:model-state. A screen that opens later gets the latest run per helper
+  // from the host's ledger (session-open.ts).
   nativeHost.on('specialists-event', (event: SpecialistsEvent) => {
-    // Task 9 (plan 1c): the phone hydrates over this WebSocket, never
-    // through TRANSCRIPT_REPLAY, so it needs its own connect-time catch-up
-    // for a helper's run status — bufferSpecialistRun feeds the buffer
-    // restoreClient() reads from on connect (mirrors bufferHookEvent above).
-    publish(event.sessionId, IPC.SPECIALISTS_EVENT, event, { afterWindows: () => remoteServer?.bufferSpecialistRun(event) });
+    publish(event.sessionId, IPC.SPECIALISTS_EVENT, event);
   });
 
   // What this session was given, pushed once when it opens (contract R23: every
   // chat carries the line). Push-only, like specialists:event and shell-event
   // below — there is no request handler, because nothing asks: the strip is part
-  // of the session's own opening.
-  //
-  // NOT buffered for a reconnecting phone the way the two below are: a remote
-  // client that connects later hydrates the whole chat state over chat:hydrate,
-  // and this record travels inside it. Buffering it as well would deliver it twice.
+  // of the session's own opening. A screen that opens later is handed the record by session:open.
   nativeHost.on('session-context', (event: { sessionId: string; context: unknown }) => {
     publish(event.sessionId, IPC.NATIVE_SESSION_CONTEXT, event);
   });
 
-  // G-1: one background command's run record changed. Same four-surface push
-  // shape as specialists:event — window + remote broadcast, buffered for a
-  // reconnecting phone. Push-only; there is no request handler.
+  // G-1: one background command's run record changed. Same shape as specialists:event — push-only; there is no request
+  // handler, and a screen that opens later gets the latest run per command from the host (session-open.ts).
   nativeHost.on('shell-event', (event: ShellEvent) => {
-    publish(event.sessionId, IPC.NATIVE_SHELL_EVENT, event, { afterWindows: () => remoteServer?.bufferShellRun(event) });
+    publish(event.sessionId, IPC.NATIVE_SHELL_EVENT, event);
   });
 
-  // Perf cycle 2: paged history. A window opening/resuming a session asks for
-  // the NEWEST page (beforeCursor null) and, as the user scrolls up, for each
-  // older page. Request/response — unlike TRANSCRIPT_REPLAY, which streams
-  // every historical event back over TRANSCRIPT_EVENT and cost ~22s of main +
-  // renderer work on a huge conversation.
-  // (transcript:page is a table entry, main/ipc/session.ts; this is the computer's body for it, given the
-  // asking window's id. A phone's body lives beside the entry: it has no window to know about.)
-  const desktopTranscriptPage = async (req: TranscriptPageRequest, windowId: number | undefined): Promise<TranscriptPageResult> => {
-    const evt = { sender: { id: windowId ?? -1 } };
+  // Perf cycle 2: paged history. A screen asks for the NEWEST page (beforeCursor null) and, as the reader scrolls up, for
+  // each older one. Request/response — unlike the whole-transcript replay this replaced, which streamed every historical
+  // event back over TRANSCRIPT_EVENT and cost ~22s of main + renderer work on a huge conversation.
+  //
+  // WHY ONE BODY (2026-10-01 one-core R5-2): the computer's window and a phone used to be served by two functions
+  // (desktopTranscriptPage and phoneTranscriptPage), and the phone's had none of the resume-boundary
+  // reconcile, so a resumed Claude Code session showed its interrupted tool cards as still running on a phone. A page does
+  // not depend on who asks: it depends on the session. The only thing the old computer body used the asking window for
+  // was the "inherited by transfer" mark (read to EOF for a window that missed the live stream); `toEnd` says that
+  // directly, and `session:open` (session-open.ts) always sets it, so the mark and its registry bookkeeping are gone.
+  const transcriptPage = async (req: TranscriptPageRequest): Promise<TranscriptPageResult> => {
     const empty: TranscriptPageResult = { events: [], cursor: null, hasMore: false };
     if (!req || typeof req.sessionId !== 'string') return empty;
     const { sessionId, beforeCursor } = req;
-
-    // Did this window INHERIT the session (tear-off / re-dock) rather than watch
-    // it live? Consumed unconditionally — including on the native path below,
-    // which needs no special handling but must not leave the mark set for a
-    // later, unrelated page read. See WindowRegistry.markInheritedByTransfer.
-    const inherited = !beforeCursor
-      && !!windowRegistry?.consumeInheritedByTransfer(sessionId, evt.sender.id);
-    // A rebuilt renderer missed the live stream too (TranscriptPageRequest.toEnd). Not a
-    // one-shot mark like `inherited`, and native reconcile stays keyed to real transfers.
-    const readToEnd = inherited || (!beforeCursor && req.toEnd === true);
+    // A screen that opens, or whose renderer was rebuilt, missed the live stream: its first page reads to EOF.
+    const readToEnd = !beforeCursor && req.toEnd === true;
 
     // Native sessions page over the merged event array; getHistoryPage returns
     // null for non-native ids, so CC's watcher stays the source for claude
@@ -1643,14 +1625,14 @@ export function registerIpcHandlers(
     let nativePage: Awaited<ReturnType<typeof nativeHost.getHistoryPageAsync>>;
     // An existing-but-unreadable native transcript throws: answer `unresolved` (retry), never an empty beginning.
     try { nativePage = await nativeHost.getHistoryPageAsync(sessionId, beforeCursor ? beforeCursor.offset : null); }
-    catch { if (inherited) windowRegistry?.markInheritedByTransfer(sessionId, evt.sender.id); return { ...empty, unresolved: true }; }
+    catch { return { ...empty, unresolved: true }; }
     if (nativePage !== null) {
       return {
         events: nativePage.events,
         // `offset` carries an ARRAY INDEX for native sources; opaque to the renderer.
         cursor: nativePage.hasMore ? { path: `native:${sessionId}`, offset: nativePage.nextIndex!, sizeAtRead: 0 } : null,
         hasMore: nativePage.hasMore,
-        reconcileInterrupted: shouldReconcileNativePage({ nativeIdle: idleBeforeRead && nativeHost.isIdle(sessionId), inherited, olderPage: !!beforeCursor }),
+        reconcileInterrupted: shouldReconcileNativePage({ nativeIdle: idleBeforeRead && nativeHost.isIdle(sessionId), olderPage: !!beforeCursor }),
       };
     }
 
@@ -1661,22 +1643,22 @@ export function registerIpcHandlers(
       // later scroll-up requests carry only the cursor, not those ids.
       pageSources.rememberLocator(sessionId, req.claudeSessionId, req.projectSlug);
       source = pageSources.get(sessionId);
+      // The id may itself be the conversation's transcript id (what the old phone body probed the projects folder for).
+      // Checked last, and only for an id that passes the plain-id gate, before it can shape a path.
+      if (!source && SAFE_ID_RE.test(sessionId)) {
+        const found = await findTranscriptSlug(sessionId, req.projectSlug);
+        if (found.slug) {
+          const jsonlPath = path.join(found.projectsDir, found.slug, sessionId + '.jsonl');
+          source = { jsonlPath, subagentsDir: path.join(path.dirname(jsonlPath), sessionId, 'subagents'), startOffset: 0 };
+        }
+      }
       // NOT `empty`: "I cannot find the file" and "this is the beginning of the
       // conversation" were the same answer until 2026-09-07, and the renderer
       // acted on the second — dropping the cursor and the scroll-up sentinel
       // for good. Say which one this is so the caller can retry.
-      if (!source) {
-        // Put the one-shot tear-off mark back. It was consumed above (before we
-        // knew whether we could serve anything) and it is what makes the
-        // inheriting window's first page read to EOF — an attempt that served
-        // NO events must not be the one that spends it, or the retry that
-        // finally succeeds renders the conversation frozen at the moment the
-        // session was resumed.
-        if (inherited) windowRegistry?.markInheritedByTransfer(sessionId, evt.sender.id);
-        return { ...empty, unresolved: true };
-      }
+      if (!source) return { ...empty, unresolved: true };
     }
-    // The first page stops at the watcher cutoff; zero, an inherited window or a rebuilt renderer reads to EOF.
+    // The first page stops at the watcher cutoff; zero, a screen that opened or a rebuilt renderer reads to EOF.
     // HISTORY_PAGE_LOADED dedups any overlap against the live seenUuids.
     const saved = resumePageBoundaries.get(sessionId);
     const resumeOffset = saved?.jsonlPath === source.jsonlPath ? saved.offset : null;
@@ -1695,119 +1677,6 @@ export function registerIpcHandlers(
       : undefined };
   };
 
-  // Transcript replay: a window that just acquired a session asks for every
-  // historical event so its reducer can hydrate. Events stream back on the
-  // normal TRANSCRIPT_EVENT channel (uuid dedup handles overlap with live).
-  // We send directly to the requesting window — NOT via sendForSession —
-  // because ownership has already transferred to them by the time this fires.
-  const replayFromStart = async (evt: { sender: Electron.WebContents }, { sessionId }: { sessionId: string }): Promise<void> => {
-    // Native sessions replay from the SessionStore; getHistory returns null for
-    // non-native ids so CC's watcher stays the source for claude sessions.
-    // Async (2026-09-16 C2): the whole-history read is off the main thread; the
-    // sends below still go out in order, and the renderer's uuid dedup already
-    // covers a live event that lands between the read and the replay.
-    let events: TranscriptEvent[];
-    let nativeEvents: TranscriptEvent[] | null;
-    try {
-      nativeEvents = await nativeHost.getHistoryAsync(sessionId);
-      events = nativeEvents ?? []; // WHY no CC replay (B1): nothing sends this channel; history pages via TRANSCRIPT_PAGE
-    } catch (err) {
-      log('WARN', 'IPC', 'transcript replay failed to read the history', { sessionId, error: String((err as any)?.message ?? err) });
-      return;
-    }
-    // The window may have closed during the read (a tear-off dismissed mid-replay).
-    if (evt.sender.isDestroyed()) return;
-    for (const ev of events) {
-      evt.sender.send(IPC.TRANSCRIPT_EVENT, ev);
-    }
-    // (The blocks this used to inline now live in sendLiveOnlyState, which
-    // SESSION_REPLAY_LIVE_STATE also serves — see its WHY.)
-    sendLiveOnlyState(evt.sender, sessionId, nativeEvents !== null);
-  };
-
-  /**
-   * Re-send the parts of a session's state that exist ONLY in main's memory and
-   * have no record in the transcript on disk. A window hydrating from history —
-   * whether by whole-transcript replay or by a single page — cannot reconstruct
-   * any of it, so it must be pushed:
-   *
-   *  - open permission asks: the JSONL has no record that an ask is still
-   *    AWAITING an answer, so the rebuilt card comes back with no buttons and
-   *    (a root ask has no timeout) the turn hangs forever;
-   *  - specialist run records: a specialist card's status IS its run record,
-   *    which the transcript says nothing about;
-   *  - background Bash run records: same, for a shell card's background state;
-   *  - the replay-complete marker, which reaps tool cards the history left
-   *    'running' (a transcript ends wherever the process died, so its last
-   *    tool_use may have no matching result — Destin, 2026-08-09 dogfood).
-   *
-   * Sent DIRECT to the requesting window rather than via sendForSession: on the
-   * ownership-handoff path the caller already owns the session, and on the
-   * replay path ownership has likewise already transferred.
-   *
-   * `isNative` gates the first three: CC sessions have no broker-held asks, no
-   * ledger and no shell registry, so they report nothing and keep today's
-   * behaviour. The marker is sent for both, with sessionIdle false for CC —
-   * only the native host can tell "genuinely mid-turn" from "died mid-tool".
-   */
-  function sendLiveOnlyState(sender: Electron.WebContents, sessionId: string, isNative: boolean): void {
-    if (isNative) {
-      for (const ev of nativeHost.pendingAskEventsFor(sessionId)) {
-        sender.send(IPC.HOOK_EVENT, ev);
-      }
-    }
-    if (isNative) {
-      for (const run of nativeHost.specialistRunsFor(sessionId)) {
-        sender.send(IPC.SPECIALISTS_EVENT, { kind: 'run', sessionId, run } satisfies SpecialistsEvent);
-      }
-      for (const run of nativeHost.shellRunsFor(sessionId)) {
-        sender.send(IPC.NATIVE_SHELL_EVENT, { sessionId, run } satisfies ShellEvent);
-      }
-    }
-    // WHY: progress never entered JSONL, so only the native host can restore it.
-    // Send after history and before the idle marker; the renderer compares stamps
-    // if a newer live heartbeat arrived while the asynchronous replay was read.
-    if (isNative) {
-      const progress = nativeHost.currentUsageProgressFor(sessionId);
-      if (progress) sender.send(IPC.TRANSCRIPT_EVENT, progress);
-    }
-    // sessionIdle gates the reap because this SAME state re-send fires when a
-    // window re-docks a session that is genuinely mid-turn. Only the native
-    // host can answer that (`entry.inFlight`); CC sessions have no equivalent
-    // signal, so they report false and keep today's behaviour rather than risk
-    // failing a tool that really is running. Synthesized here and never
-    // persisted, so it cannot be re-read from a transcript.
-    // Annotated, NOT passed inline: sender.send takes ...args: any[], which
-    // erases the contextual type — an inline literal is checked against nothing,
-    // so a typo'd `sessionIdle` compiles clean and silently disables the reap
-    // (measured 2026-08-10). The annotation is what makes the field name a
-    // compile error instead of a silent undefined.
-    const replayComplete: TranscriptEvent = {
-      type: 'replay-complete',
-      sessionId,
-      uuid: `replay-complete-${sessionId}`,
-      timestamp: Date.now(),
-      data: { sessionIdle: isNative && nativeHost.isIdle(sessionId) },
-    };
-    sender.send(IPC.TRANSCRIPT_EVENT, replayComplete);
-  }
-
-  // Ownership-handoff counterpart to TRANSCRIPT_REPLAY. A window that inherits
-  // a session now hydrates its transcript from ONE page (TRANSCRIPT_PAGE, read
-  // to EOF for an inherited session) instead of a whole-transcript replay that
-  // cost ~22s on a long conversation and visibly rebuilt the view. That page
-  // carries everything on disk but nothing that lives only in memory, which is
-  // what this channel supplies. `handle`, not `on`: the renderer awaits the
-  // page FIRST and then this, so the replay-complete marker cannot reap tool
-  // cards before the page that creates them has been applied.
-  const replayLiveState = (evt: { sender: Electron.WebContents }, { sessionId }: { sessionId: string }): void => {
-    // isLive, not `getHistory(id) !== null` (2026-09-16 C2): that read the whole
-    // history, parent and every helper child, to compute this one boolean.
-    sendLiveOnlyState(evt.sender, sessionId, nativeHost.isLive(sessionId));
-  };
-  // WHY (2026-10-01 one-core R3-8): transcript:replay-from-start and session:replay-live-state are table entries
-  // (main/ipc/replay.ts, computer-only by design: R5 replaces both). The two bodies stay here, beside sendLiveOnlyState.
-  bindReplay({ replayFromStart, replayLiveState });
 
   // WHY (2026-09-30 one-core R3-5): the native:* request channels (send, queue, interrupt, compact, models,
   // permission mode, context prefs, step guard, sessions-list, kill-shell, admin password, context text) are
@@ -2351,7 +2220,7 @@ export function registerIpcHandlers(
       try {
         const res = await setManualSessionName(provider, resolved, String(title ?? ''));
         if (!res.ok) return res;
-        sendForSession(desktopId, IPC.SESSION_RENAMED, desktopId, res.name);
+        sendForSession(desktopId, IPC.SESSION_RENAMED, [desktopId, res.name]);
         broadcastRename(desktopId, res.name);
         emitConversationMetaChanged();
         return { ok: true, name: res.name };
@@ -2521,7 +2390,7 @@ export function registerIpcHandlers(
   bindSessionOps({
     sessionManager, sessionIdMap, nativeHost, stampProviderTypes, windowRegistry, welcomeBackStore,
     createSession: (sender, opts) => createSession(sender ? { sender } : null, opts),
-    destroySession, signalTerminalReady, desktopTranscriptPage, canWriteStoreRecord, publish,
+    destroySession, signalTerminalReady, transcriptPage, canWriteStoreRecord, publish,
     naming: { get: namingGet, set: namingSet, title: namingTitle, rename: namingRename },
   });
   // WHY (2026-09-29 one-core R2, filled by R3): the channel table's desktop half. Every family moved
@@ -2540,7 +2409,7 @@ export function registerIpcHandlers(
     sessionRoots: () => sessionManager.listSessions().filter((s) => s.status !== 'destroyed').map((s) => s.cwd),
   }));
   return {
-    cleanup, hasUsableProvider, firstRunDeps, openRouterSignIn, handoffAttempts,
+    cleanup, hasUsableProvider, firstRunDeps, openRouterSignIn, handoffAttempts, publish,
     outboxBroadcast: { sessionMeta: broadcastSessionMeta, tagsChanged: broadcastTagsChanged } satisfies OutboxBroadcast,
   };
 }

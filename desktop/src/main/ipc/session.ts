@@ -25,10 +25,11 @@ import os from 'os';
 import path from 'path';
 import { IPC } from '../../shared/backend-contract';
 import { tagFlagKey } from '../../shared/tags';
-import { SESSION_FLAG_NAMES, type SessionFlagName, type SessionInfo, type SessionProvider, type TranscriptPageResult } from '../../shared/types';
+import { SESSION_FLAG_NAMES, type SessionFlagName, type SessionInfo, type SessionProvider, type TranscriptPageRequest, type TranscriptPageResult } from '../../shared/types';
 import { listPastSessions, loadHistory, SAFE_ID_RE } from '../session-browser';
 import { readTranscriptMeta } from '../transcript-utils';
 import type { Publish } from '../publish';
+import { openSession, type NativeLive } from '../session-open';
 import { readTranscriptPage } from '../transcript-page';
 import { menuAnswerLock } from '../menu-answer-lock';
 import { shareInFlight } from '../share-in-flight';
@@ -57,8 +58,9 @@ export interface SessionOps {
   createSession(sender: { id: number; isDestroyed?: () => boolean } | null, opts: any): Promise<any>;
   destroySession(sessionId: string): Promise<boolean>;
   signalTerminalReady(sessionId: string): void;
-  /** The computer's paged history for one window (window ownership, resume boundaries, watchers). */
-  desktopTranscriptPage(req: any, windowId: number | undefined): Promise<TranscriptPageResult>;
+  /** One page of a conversation's history: the SAME body for a window and a phone (resume boundaries, watchers, the transcript
+   *  file by id). WHY one (one-core R5-2): see ipc-handlers.ts transcriptPage. */
+  transcriptPage(req: TranscriptPageRequest): Promise<TranscriptPageResult>;
   /** The phantom-record gate: may a write reach the conversation store for this id? */
   canWriteStoreRecord(sessionId: string): boolean;
   /** The one way a session-scoped push leaves the core: the session's windows, every phone, and its record. */
@@ -139,7 +141,7 @@ function announceMeta(resolved: string, change: Record<string, unknown>): void {
  *  when the hint was right (the common case: one stat would do); a long scroll-up pages dozens of times.
  *  The caller has already checked `sessionId` against SAFE_ID_RE; the hint is checked here before it can
  *  shape a path. Returns the project folder name, or '' when no transcript is found. */
-async function findTranscriptSlug(sessionId: string, slugHint: unknown): Promise<{ slug: string; projectsDir: string }> {
+export async function findTranscriptSlug(sessionId: string, slugHint: unknown): Promise<{ slug: string; projectsDir: string }> {
   const projectsDir = path.join(os.homedir(), '.claude', 'projects');
   const exists = (slug: string) => fs.promises.access(path.join(projectsDir, slug, sessionId + '.jsonl')).then(() => true, () => false);
   const hint = typeof slugHint === 'string' && SAFE_ID_RE.test(slugHint) ? slugHint : '';
@@ -151,40 +153,17 @@ async function findTranscriptSlug(sessionId: string, slugHint: unknown): Promise
   return { slug: '', projectsDir };
 }
 
-/** The phone's paged history. Kept as the phone's own body: a phone has no window ownership, resume
- *  boundary or watcher, so it resolves the transcript file itself (the computer's version is
- *  desktopTranscriptPage, bound above). Validate the id FIRST, then probe the caller's slug before
- *  scanning — a traversal-shaped id must never shape a path. */
-async function phoneTranscriptPage(req: any, nativeHost: NativeSessionHost | undefined): Promise<TranscriptPageResult> {
-  const { sessionId: pageSessionId, beforeCursor } = req ?? {};
-  const emptyPage: TranscriptPageResult = { events: [], cursor: null, hasMore: false };
-  if (typeof pageSessionId !== 'string' || !SAFE_ID_RE.test(pageSessionId)) return emptyPage;
-  const beforeOffset = (beforeCursor && typeof beforeCursor.offset === 'number') ? beforeCursor.offset : null;
-
-  // Native sessions page over the merged event array; null means "not a native id", so CC's transcript
-  // file is the source. An existing-but-unreadable native transcript throws: `unresolved` (retry).
-  let nativePage: Awaited<ReturnType<NativeSessionHost['getHistoryPageAsync']>> = null;
-  try { nativePage = nativeHost ? await nativeHost.getHistoryPageAsync(pageSessionId, beforeOffset) : null; }
-  catch { return { ...emptyPage, unresolved: true }; }
-  if (nativePage) {
-    return {
-      events: nativePage.events,
-      cursor: nativePage.hasMore ? { path: `native:${pageSessionId}`, offset: nativePage.nextIndex!, sizeAtRead: 0 } : null,
-      hasMore: nativePage.hasMore,
-    };
-  }
-
-  const { slug: pageSlug, projectsDir: pageProjectsDir } = await findTranscriptSlug(pageSessionId, req.projectSlug);
-  const pagePath = pageSlug ? path.join(pageProjectsDir, pageSlug, pageSessionId + '.jsonl') : '';
-  // "I could not find the transcript" must not read as "you have reached the beginning of the
-  // conversation", which the renderer records by dropping the cursor and the scroll-up sentinel for good.
-  if (!pagePath) return { ...emptyPage, unresolved: true };
-  return readTranscriptPage({
-    jsonlPath: pagePath,
-    sessionId: pageSessionId,
-    endOffset: beforeOffset,
-    subagentsDir: path.join(path.dirname(pagePath), pageSessionId, 'subagents'),
-  });
+/** What only a native session's host knows, in the shape session-open.ts asks for (null for any other session). */
+function nativeLiveFor(host: NativeSessionHost, sessionId: string): NativeLive | null {
+  if (!host.isLive(sessionId)) return null;
+  return {
+    askEvents: () => host.pendingAskEventsFor(sessionId),
+    specialistRuns: () => host.specialistRunsFor(sessionId),
+    shellRuns: () => host.shellRunsFor(sessionId),
+    usageProgress: () => host.currentUsageProgressFor(sessionId),
+    sessionContext: () => host.sessionContextFor(sessionId),
+    idle: () => host.isIdle(sessionId),
+  };
 }
 
 const sessionEntries: MainChannelDef[] = [
@@ -313,14 +292,51 @@ const sessionEntries: MainChannelDef[] = [
       } catch { return null; }
     },
   }),
-  // Paged history: the newest page, then each older one as the reader scrolls up. The computer's version
-  // knows which window is asking (ownership handoffs, resume boundaries, the watcher); a phone has none of
-  // that and resolves the transcript itself. One entry, two honest bodies.
+  // Paged history: the newest page, then each older one as the reader scrolls up. ONE body for a window and a phone
+  // (one-core R5-2): a page depends on the session, not on who asks.
   defineChannel({
     name: IPC.TRANSCRIPT_PAGE, kind: 'handle',
-    handler: (req, ctx) => (ctx.door === 'remote'
-      ? phoneTranscriptPage(req, ctx.runtime?.nativeHost as NativeSessionHost | undefined)
-      : ops().desktopTranscriptPage(req, ctx.windowId)),
+    handler: (req) => ops().transcriptPage(req),
+  }),
+  // The ONE way a screen is filled (one-core R5-2, session-open.ts): the newest page, the record's recent past and what only
+  // memory holds, or just the events a reconnecting screen missed. From the moment it arrives until the answer is sent, this
+  // screen's pushes for the session are held (audience-fill.ts), so the answer and the live stream never overlap or leave a gap.
+  defineChannel({
+    name: IPC.SESSION_OPEN, kind: 'handle',
+    handler: async (req, ctx) => {
+      const o = ops();
+      const rt = ctx.runtime;
+      if (!rt) return { ok: false as const, error: 'The computer is still starting. Try again.' };
+      // WHO is asking: a window (webContents id) or a phone (its id in the window registry). The key is how holds are named.
+      const audience = ctx.door === 'desktop'
+        ? (ctx.windowId !== undefined ? { key: `w${ctx.windowId}`, id: ctx.windowId, socket: false } : null)
+        : (ctx.audienceId !== undefined ? { key: `s${ctx.audienceId}`, id: ctx.audienceId, socket: true } : null);
+      const sessionId = typeof req?.sessionId === 'string' ? req.sessionId : '';
+      if (audience && sessionId) {
+        rt.fills.begin(audience.key, sessionId);
+        // A phone gets a session's pushes once it has opened it: the same "this audience member wants this session" fact a
+        // buddy window's subscribe is (R5-1). Joined BEFORE the head is sampled so nothing between them is missed.
+        if (audience.socket) o.windowRegistry?.subscribe(sessionId, audience.id);
+      }
+      let reply;
+      try {
+        reply = await openSession({
+          records: rt.records,
+          knows: (id) => !!o.sessionManager.getSession(id),
+          page: (r) => o.transcriptPage({ sessionId: r.sessionId, beforeCursor: null, claudeSessionId: r.claudeSessionId, projectSlug: r.projectSlug, toEnd: true }),
+          native: (id) => nativeLiveFor(rt.nativeHost as NativeSessionHost, id),
+        }, req, { remote: ctx.door === 'remote' });
+      } catch (err) {
+        if (audience && sessionId) rt.fills.release(audience.key, sessionId);
+        throw err;
+      }
+      // The answer is sent by the door when this returns; the held pushes follow it, in order.
+      if (audience && sessionId) {
+        if (ctx.afterReply) ctx.afterReply(() => rt.fills.release(audience.key, sessionId));
+        else rt.fills.release(audience.key, sessionId);
+      }
+      return reply;
+    },
   }),
 
   // ── Flags, tags, notes ───────────────────────────────────────────────────────

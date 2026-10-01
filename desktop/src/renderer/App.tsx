@@ -31,16 +31,17 @@ import { buildSessionCreateArgs } from '../shared/session-create-args';
 import GamePanel from './components/game/GamePanel';
 import TerminalRightSlot from './components/TerminalRightSlot';
 import { ChatProvider, useChatDispatch, useChatStore, useSessionIsThinking } from './state/chat-context';
-import { installTranscriptBatcher, applyChatHydrate, routeTranscriptEvent, routeTranscriptShrink } from './state/transcript-batch';
+import { installTranscriptBatcher, flushTranscriptActions, routeTranscriptEvent, routeTranscriptShrink } from './state/transcript-batch';
 import {
   remotePlaceHost, remotePlaceStorages, readRemotePlace, writeRemotePlace,
-  choosePlaceOnHydrate, chooseAfterDestroyed, shouldLoadFirstPage,
+  choosePlaceOnHydrate, chooseAfterDestroyed,
 } from './state/remote-place';
 import { ArtifactProvider, createArtifactStore } from './state/ArtifactContext';
 import { createArtifactToolUseTracker } from './state/artifact-tool-use-tracker';
 import { createDeliverableAutoOpen } from './state/deliverable-auto-open';
 import { openFilepath } from './hooks/useOpenFilepath';
 import { useOnRemoteReconnect } from './hooks/useOnRemoteReconnect';
+import { REMOTE_REFRESH_EVENT } from './remote-events';
 import { useSessionDefaults } from './hooks/useSessionDefaults';
 import { showFirstRunWelcome } from './first-run-screen';
 // Central slash-command router — also used by the drawer so drawer-initiated
@@ -126,7 +127,6 @@ import { StatsWithHealthBridge } from './components/StatsWithHealthBridge';
 import { RootErrorBoundary } from './components/RootErrorBoundary';
 import ThemeEffects from './components/ThemeEffects';
 import { ZoomOverlay } from './components/ZoomOverlay';
-import { RemoteSnapshotExporter } from './components/RemoteSnapshotExporter';
 import RemoteUnsupportedNotice from './components/RemoteUnsupportedNotice';
 import { SessionDropZone } from './components/SessionDropZone';
 import { ContextMenuHost } from './components/context-menu/ContextMenuHost';
@@ -367,15 +367,12 @@ function AppInner() {
   // Remote access batch 2: the phone's copy of the conversation (see the
   // remoteConversationStatus subscription below). Undefined on the desktop.
   const [conversationStatus, setConversationStatus] = useState<ConversationStatus | undefined>(undefined);
-  // Remote access batch 2 (§3): on a remote client nothing picks a conversation until the
-  // computer's copy has arrived — the hydrate handler (or a destroyed conversation's
-  // focus) decides the place. Every automatic selection asks mayAutoSelect() first; the
-  // desktop is unaffected. Reset whenever a restore starts (the strip's "restoring").
+  // Remote access batch 2 (§3): on a remote client nothing picks a conversation until the computer's session list has arrived — the list
+  // reply (or a destroyed conversation's focus) decides the place (decideRemotePlace). Every automatic selection asks mayAutoSelect()
+  // first; the desktop is unaffected. Reset when this page starts talking to a different computer.
   const placeDecidedRef = useRef(false);
   const mayAutoSelect = () => !isRemoteMode() || placeDecidedRef.current;
-  // Bumped when a hydrate lands, so sessions waiting on it load their first page.
-  const [hydrateTick, setHydrateTick] = useState(0);
-  // Batch 2 (§3): before the computer's copy arrives, the no-conversation screen says it is
+  // Batch 2 (§3): before the computer's list arrives, the no-conversation screen says it is
   // catching up instead of offering New Session — a tap there created a stray conversation.
   const remoteCatchingUp = isRemoteMode() && (conversationStatus === 'restoring' || conversationStatus === 'reconnecting');
   const handleRefreshConversation = useCallback(() => {
@@ -697,12 +694,14 @@ function AppInner() {
   // See first-page-loader.ts.
   const firstPagesRef = useRef<FirstPageLoader | null>(null);
   if (!firstPagesRef.current) firstPagesRef.current = createFirstPageLoader({
-    request: async (req) => (window as any).claude?.detach?.requestTranscriptPage?.(req),
+    // WHY open, not a page request (one-core R5-2): a window, a torn-off window and a phone all fill a conversation the same way — the
+    // computer's answer carries the newest page AND what only memory holds (state/session-fill.ts). The page request is only the
+    // retry while the transcript is not found yet.
+    open: async (req) => (window.claude.session as any).open(req),
+    requestPage: async (req) => (window as any).claude?.detach?.requestTranscriptPage?.(req),
     dispatch,
-    // Batch 2 (§4): the computer's copy is the only source on a remote client — wait for
-    // it, and never load a page on top of a session it delivered. Not recorded as asked,
-    // so the sessions effect retries when the hydrate lands (hydrateTick).
-    mayLoad: (sid) => shouldLoadFirstPage({ remote: isRemoteMode(), placeDecided: placeDecidedRef.current, hydrated: !!chatStore.getState().get(sid)?.history.hydrated }),
+    flush: flushTranscriptActions,
+    play: (pushes) => (window.claude.session as any).play?.(pushes),
   });
   const firstPages = firstPagesRef.current;
   // Artifact tracker — global reducer for session/project artifact state.
@@ -1633,61 +1632,20 @@ function AppInner() {
       });
     });
 
-    // Remote-only: host sends a full chat state snapshot immediately after the
-    // remote client connects. Dispatches HYDRATE_CHAT_STATE so the reducer
-    // pre-populates all session timelines without waiting for transcript replay.
-    // Typed-optional on the shared surface — present only on remote-shim.
-    // Remote access batch 2 (§7): after a reconnect the host replays only the asks
-    // still open and then names them; every awaiting card not named was answered
-    // while this phone was away. Remote-only (preload's stub never fires).
+    // The list of permission asks still open in a session, sent at the end of every fill (`session.open`, one-core R5-2): every awaiting
+    // card not named was answered while this screen could not see it, and goes back to "answered elsewhere" with a neutral note, never
+    // a failure. (A Claude Code session's asks come from the computer's record, so this now also covers a torn-off window.)
     const hookReplayCompleteOff = (window.claude.on as any).hookReplayComplete?.((p: { sessionId: string; pendingRequestIds: string[] }) => {
       if (!p?.sessionId) return;
       dispatch({ type: 'PERMISSION_REPLAY_COMPLETE', sessionId: p.sessionId, pendingRequestIds: Array.isArray(p.pendingRequestIds) ? p.pendingRequestIds : [] });
     });
-
-    // applyChatHydrate flushes this client's pending transcript batch FIRST —
-    // the phone's half of the cut line (state/transcript-batch.ts).
-    const chatHydrateHandler = window.claude.on.chatHydrate?.((payload: any) => {
-      const kept = applyChatHydrate(dispatch, payload, chatStore.getState);
-      // Batch 2 (§3): the place is decided here — the stored place if that conversation
-      // still exists, else what the desktop is showing, else the first.
-      if (isRemoteMode()) {
-        const choice = choosePlaceOnHydrate({
-          // The conversation on screen first (T4 review, 6): one picked while catching up, or
-          // any place in a browser that blocks storage, must not be undone by the hydrate.
-          stored: focusedSessionIdRef.current ?? readRemotePlace(remotePlaceStorages(), remotePlaceHost()),
-          existingSessionIds: [...chatStore.getState().keys()],
-          focusSessionId: payload?.focus?.sessionId ?? null,
-        });
-        placeDecidedRef.current = true;
-        setHydrateTick((t) => t + 1);
-        if (choice) setSessionId(choice);
-      }
-      // §6: the shim shows "may be out of date" while any session was kept.
-      (window.claude as any).remote?.reportHydrate?.({ seq: payload?.seq, kept });
-    });
-    // Remote access batch 2 (2026-09-10): where the phone's copy of the
-    // conversation stands — reconnecting, restoring, incomplete, complete. Only
-    // a remote client ever receives it; ChatView renders the strip (preload
-    // declares it and never fires).
+    // The dev workbench only (workbench/seed-chat.ts): fixture timelines built through the real reducer, handed in whole. No real bridge
+    // declares it.
+    const seedChatOff = (window.claude.on as any).seedChat?.((payload: any) => { dispatch({ type: 'CHAT_STATE_SEEDED', sessions: payload }); });
+    // Where the phone's copy of the conversation stands — reconnecting, restoring, incomplete, complete. Only a remote client ever
+    // receives it; ChatView renders the strip (preload declares it and never fires).
     const conversationStatusOff = (window.claude as any).on.remoteConversationStatus?.((s: { phase: ConversationStatus }) => {
       setConversationStatus(s?.phase);
-      // A restore is starting (connect, reconnect or Refresh): the place is decided again
-      // when its hydrate lands, so nothing jumps the phone meanwhile.
-      if (s?.phase === 'restoring') placeDecidedRef.current = false;
-      // A restore that ended WITHOUT a hydrate — a refused Refresh, a host restore that
-      // failed, a copy that never came (T4 review, 1): decide the place with what the phone
-      // has, so it is never left with nothing selected and no history loading.
-      if ((s?.phase === 'incomplete' || s?.phase === 'complete') && isRemoteMode() && !placeDecidedRef.current) {
-        placeDecidedRef.current = true;
-        setHydrateTick((t) => t + 1);
-        const choice = choosePlaceOnHydrate({
-          stored: focusedSessionIdRef.current ?? readRemotePlace(remotePlaceStorages(), remotePlaceHost()),
-          existingSessionIds: [...chatStore.getState().keys()],
-          focusSessionId: null,
-        });
-        if (choice) setSessionId((prev) => prev ?? choice);
-      }
     });
 
     // Artifact tracker: when Claude writes/edits a file inside the active project
@@ -1773,7 +1731,7 @@ function AppInner() {
       if (promptDismissHandler) window.claude.off('prompt:dismiss', promptDismissHandler);
       if (promptCompleteHandler) window.claude.off('prompt:complete', promptCompleteHandler);
       if (sessionPermissionModeHandler) window.claude.off('session:permission-mode', sessionPermissionModeHandler);
-      if (chatHydrateHandler) window.claude.off('chat:hydrate', chatHydrateHandler);
+      if (typeof seedChatOff === 'function') seedChatOff();
       if (typeof hookReplayCompleteOff === 'function') hookReplayCompleteOff();
       if (typeof conversationStatusOff === 'function') conversationStatusOff();
       if (artifactToolUseHandler) window.claude.off('transcript:event', artifactToolUseHandler);
@@ -1830,7 +1788,41 @@ function AppInner() {
   // claudeSessionId/projectSlug are the fallback locator for a session the
   // transcript watcher does not know yet (a just-resumed CC session) — see
   // TranscriptPageRequest.
+  // Remote access batch 2 (§3): where a remote client opens — its stored place if that conversation still exists, else what the computer is
+  // showing, else the first. Decided once, when the computer's session list arrives (it used to wait for the snapshot).
+  const decideRemotePlace = (ids: string[]): string | null => {
+    const choice = choosePlaceOnHydrate({
+      // The conversation on screen first (T4 review, 6): one picked while the list was loading, or any place in a browser that blocks
+      // storage, must not be undone by this decision.
+      stored: focusedSessionIdRef.current ?? readRemotePlace(remotePlaceStorages(), remotePlaceHost()),
+      existingSessionIds: ids,
+      focusSessionId: (window.claude as any).remote?.focus?.() ?? null,
+    });
+    placeDecidedRef.current = true;
+    return choice;
+  };
+
+  // A round of fills ended (a connect, a reconnect or a Refresh): tell the shim how many conversations could not be filled, so the strip
+  // can say they may be behind (and offer Refresh). A no-op on the desktop.
+  const reportFillRound = useCallback((outcomes: string[]) => {
+    (window.claude as any).remote?.reportFill?.({ failed: outcomes.filter((o) => o !== 'ok').length });
+  }, []);
+
   const loadFirstPage = useCallback((sid: string, hint?: PageHint) => firstPages.load(sid, hint), [firstPages]);
+
+  // Fill every conversation this screen holds AGAIN (one-core R5-2). After a reconnect it sends where it got to, and the computer answers with
+  // exactly the events it missed — or a fresh page when the record changed or the gap is older than it keeps; Refresh always takes a fresh
+  // page. Either way the shim is told how it went, so the strip says "up to date" or "may be behind".
+  const fillAgain = useCallback((fresh: boolean) => {
+    const ids = sessionsRef.current.map((x: any) => x.id).filter((id: string) => !String(id).startsWith('pending-handoff:'));
+    void Promise.all(ids.map((id: string) => firstPages.refill(id, { fresh }))).then(reportFillRound);
+  }, [firstPages, reportFillRound]);
+  useOnRemoteReconnect(() => fillAgain(false));
+  useEffect(() => {
+    const onRefresh = () => fillAgain(true);
+    window.addEventListener(REMOTE_REFRESH_EVENT, onRefresh);
+    return () => window.removeEventListener(REMOTE_REFRESH_EVENT, onRefresh);
+  }, [fillAgain]);
 
   // Every session this window knows about gets its most recent page — not just
   // the paths that happen to create one. History used to arrive as a side effect
@@ -1847,7 +1839,7 @@ function AppInner() {
     // WHY: session:created may precede the attempt's admitted reply. Its
     // unlocated first page must not consume the receiver's one locator read.
     if (!pendingRef.current?.active) for (const s of sessions) if (!String(s.id).startsWith('pending-handoff:')) void loadFirstPage(s.id);
-  }, [sessions, loadFirstPage, firstPages, hydrateTick]);
+  }, [sessions, loadFirstPage, firstPages]);
 
   useEffect(() => {
     window.claude.session.list().then((list: any[]) => {
@@ -1856,7 +1848,11 @@ function AppInner() {
       performance.mark('yc:sessions-listed');
       // Even an empty list is an answer: it is what tells the welcome screen it may decide.
       setSessionListLoaded(true);
-      if (!list || list.length === 0) return;
+      if (!list || list.length === 0) {
+        // A remote client with nothing to fill is done filling (and decides its place: there is none).
+        if (isRemoteMode()) { decideRemotePlace([]); reportFillRound([]); }
+        return;
+      }
 
       // Fix: this per-session seeding used to run INSIDE the setSessions updater
       // below. Updaters must be PURE — React re-invokes them (concurrent
@@ -1867,10 +1863,12 @@ function AppInner() {
       // after a reload. Every setter here is has()-guarded, so running it across
       // the whole list (rather than only the not-yet-known ones) is idempotent
       // and never clobbers what session:created already seeded.
+      const fills: Promise<string>[] = [];
       for (const s of list) {
         dispatch({ type: 'SESSION_INIT', sessionId: s.id });
-        // WHY toEnd: it streamed while no chat listened (reload/remount) — read to EOF or recent messages vanish.
-        void loadFirstPage(s.id, { toEnd: true });
+        // Fill it from the computer's record. (The old `toEnd` here — a renderer rebuilt while its sessions kept running must read to the
+        // end of the file — is what every fill does now.)
+        fills.push(loadFirstPage(s.id));
         setViewModes((vm) => vm.has(s.id) ? vm : new Map(vm).set(s.id, 'chat'));
         setPermissionModes((pm) => pm.has(s.id) ? pm : new Map(pm).set(s.id, matchPermissionMode(s.permissionMode)));
         // These sessions were already running before this window's event
@@ -1889,7 +1887,14 @@ function AppInner() {
         if (newSessions.length === 0) return prev;
         return [...prev, ...newSessions];
       });
-      setSessionId((prev) => prev ?? (mayAutoSelect() ? list[0].id : null));
+      if (isRemoteMode()) {
+        const choice = decideRemotePlace(list.map((s: any) => s.id));
+        setSessionId((prev) => prev ?? choice);
+        // The place is decided: the sessions effect may fill the rest, and the strip is told how the round went when they have.
+        void Promise.all(fills).then(reportFillRound);
+      } else {
+        setSessionId((prev) => prev ?? (mayAutoSelect() ? list[0].id : null));
+      }
       // Existing sessions that have STARTED skip the "Initializing" cover; one
       // still on its startup dialogs does not (SessionInfo.awaitingStart).
       setInitializedSessions((prev) => {
@@ -1898,21 +1903,9 @@ function AppInner() {
         return next;
       });
 
-      // Rehydrate each session's chat from disk. Fix: without this, a renderer
-      // reload (crash, Ctrl+R) left every pre-existing session with an EMPTY
-      // timeline — SESSION_INIT only allocates a blank slot, and no live
-      // transcript event ever re-sends history, so the conversation looked
-      // deleted. Every OTHER entry into an already-running session already
-      // replays (ownership handoff, native resume, buddy feed); the mount path
-      // was the one that didn't.
-      //
-      // Ordering: the transcript:event listener is registered by an effect
-      // declared ABOVE this one, so it is already attached when these replayed
-      // events stream back; uuid dedup absorbs any overlap with live events.
-      // History: requested in the loop above; the session-list effect covers every
-      // other entry point. Remote/Android hydrate via chat:hydrate on connect instead.
+      // History: filled above (and by the session-list effect for every other entry point) from the computer's record.
     }).catch(() => {});
-  }, [dispatch, loadFirstPage]);
+  }, [dispatch, loadFirstPage, reportFillRound]);
 
   // Multi-window ownership wiring (Phase 2 of detach feature).
   // Subscribes to directory/leader/ownership pushes from main and mutates
@@ -1984,18 +1977,12 @@ function AppInner() {
       // "Initializing" overlay, it would flash briefly before replay completes.
       if (!sessionInfo.awaitingStart) setInitializedSessions((prev) => (prev.has(sid) ? prev : new Set(prev).add(sid)));
       if (freshWindow) setSessionId(sid);
-      // Hydrate from ONE page, not a whole-transcript replay. Main knows this
-      // window INHERITED the session and serves its first page read to EOF
-      // (WindowRegistry.markInheritedByTransfer) — so the page is complete
-      // through the newest message, which the stop-at-startOffset page was not.
-      //
-      // Called here rather than left to the sessions effect below so the order
-      // is deterministic: this claims the first-page load first, and replayLiveState
-      // is chained AFTER the page resolves. That ordering is load-bearing —
-      // replayLiveState ends with the replay-complete marker, which reaps tool
-      // cards the history left 'running', and it must not run before the page
-      // that creates those cards has been applied.
-      void loadFirstPage(sid).then(() => det.replayLiveState?.(sid));
+      // Fill from the computer's record (one-core R5-2): the newest page read to the end of the file, the record's recent past (a native
+      // answer still streaming exists only in memory) and what only memory holds (an ask still waiting, a helper's run, the idle
+      // marker). This used to be a page read here plus a separate replayLiveState call chained after it, and a Claude Code session's
+      // open ask was not part of it at all. Main holds this window's pushes for the session until the answer is out, so the answer
+      // and the live stream never overlap or leave a gap.
+      void loadFirstPage(sid);
     };
 
     const cleanupAcquired = det.onOwnershipAcquired?.(applyAcquired);
@@ -2052,7 +2039,7 @@ function AppInner() {
   useEffect(() => {
     const unsub = onConnectionModeChange((mode) => {
       // Flush all session state
-      // Batch 2 (§3): a new host means a new place, decided by its hydrate.
+      // Batch 2 (§3): a new host means a new place, decided when its session list arrives.
       placeDecidedRef.current = false;
       // Back on this device's own runtime there is no computer's copy to describe; a strip
       // left saying "reconnecting" would never clear (T4 review, 3).
@@ -2081,9 +2068,13 @@ function AppInner() {
           // A new computer's sessions: ask each native one for its real mode.
           if (s.provider === 'native') seedNativeMode(s.id, setNativePermissionModes);
         }
-        // Never over a place already on screen: this reply can land after the hydrate chose
-        // one (T4 review, 7).
-        setSessionId((prev) => prev ?? (mayAutoSelect() ? list[0].id : null));
+        // Never over a place already on screen: this reply can land after another decision chose one (T4 review, 7).
+        if (isRemoteMode()) {
+          const choice = decideRemotePlace(list.map((s: any) => s.id));
+          setSessionId((prev) => prev ?? choice);
+        } else {
+          setSessionId((prev) => prev ?? (mayAutoSelect() ? list[0].id : null));
+        }
         // Existing sessions that have started (not those still on startup dialogs)
         setInitializedSessions(new Set(startedIds(list)));
       }).catch(() => {});
@@ -3454,7 +3445,6 @@ function AppInner() {
     <div className={`app-shell flex w-screen h-full text-fg ${getPlatform() === 'android' && currentViewMode === 'terminal' ? '' : 'bg-canvas'}`}>
       {/* Mount-only: listens for chat:export-snapshot from main, serializes
           ChatState, and sends the snapshot back for remote-browser hydration. */}
-      <RemoteSnapshotExporter />
       {/* Mount-only: announces channels the remote WS server doesn't bridge
           yet, so a remote browser gets "X isn't available via remote access
           yet" instead of a silently empty panel. No-op on desktop. */}

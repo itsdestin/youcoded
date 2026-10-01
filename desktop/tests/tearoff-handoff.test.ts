@@ -69,35 +69,6 @@ describe('PendingAcquireQueue — a handoff survives a renderer that is not list
   });
 });
 
-describe('WindowRegistry — the inherited-session mark', () => {
-  it('is consumed exactly once, by the inheriting window', () => {
-    const r = new WindowRegistry();
-    r.markInheritedByTransfer('s1', 42);
-    expect(r.consumeInheritedByTransfer('s1', 42)).toBe(true);
-    expect(r.consumeInheritedByTransfer('s1', 42)).toBe(false);
-  });
-
-  it('does not fire for a different window', () => {
-    const r = new WindowRegistry();
-    r.markInheritedByTransfer('s1', 42);
-    expect(r.consumeInheritedByTransfer('s1', 43)).toBe(false);
-    // …and the real inheritor still gets it.
-    expect(r.consumeInheritedByTransfer('s1', 42)).toBe(true);
-  });
-
-  it('is false for a session nobody inherited', () => {
-    const r = new WindowRegistry();
-    expect(r.consumeInheritedByTransfer('never-transferred', 42)).toBe(false);
-  });
-
-  it('is dropped when the inheriting window unregisters', () => {
-    const r = new WindowRegistry();
-    r.registerWindow(42, Date.now());
-    r.markInheritedByTransfer('s1', 42);
-    r.unregisterWindow(42);
-    expect(r.consumeInheritedByTransfer('s1', 42)).toBe(false);
-  });
-});
 
 // ---------------------------------------------------------------------------
 // The end-to-end half: the real transcript:page handler, asked for the same
@@ -287,34 +258,8 @@ describe('transcript:page — a window that INHERITED a session reads to the end
     expect(promptsIn(page)).toEqual(['prompt 0', 'prompt 1', 'prompt 2']);
   });
 
-  it('an inheriting window gets the tail too, ending on the real newest message', async () => {
-    buildResumedTranscript(3, 4);
-    const { pageHandler, registry } = buildHandlers();
-    registry.markInheritedByTransfer('s1', 2);
-    const page = await pageHandler({ sender: { id: 2 } }, { sessionId: 's1', beforeCursor: null });
-    const prompts = promptsIn(page);
-    expect(prompts).toEqual([
-      'prompt 0', 'prompt 1', 'prompt 2', 'prompt 3', 'prompt 4', 'prompt 5', 'prompt 6',
-    ]);
-    expect(prompts[prompts.length - 1]).toBe('prompt 6');
-  });
 
-  it('the mark belongs to the inheritor — another window still gets the short page', async () => {
-    buildResumedTranscript(3, 4);
-    const { pageHandler, registry } = buildHandlers();
-    registry.markInheritedByTransfer('s1', 2);
-    const page = await pageHandler({ sender: { id: 1 } }, { sessionId: 's1', beforeCursor: null });
-    expect(promptsIn(page)).toEqual(['prompt 0', 'prompt 1', 'prompt 2']);
-  });
 
-  it('is one-shot: a later page read by the same window is ordinary again', async () => {
-    buildResumedTranscript(3, 4);
-    const { pageHandler, registry } = buildHandlers();
-    registry.markInheritedByTransfer('s1', 2);
-    await pageHandler({ sender: { id: 2 } }, { sessionId: 's1', beforeCursor: null });
-    const second = await pageHandler({ sender: { id: 2 } }, { sessionId: 's1', beforeCursor: null });
-    expect(promptsIn(second)).toEqual(['prompt 0', 'prompt 1', 'prompt 2']);
-  });
 
   // 2026-09-27: messages vanished MID-conversation. A renderer rebuilt while
   // the session kept running (reload, crash recovery, remount) got the short
@@ -337,16 +282,4 @@ describe('transcript:page — a window that INHERITED a session reads to the end
     expect(promptsIn(flagged)).toEqual(promptsIn(plain));
   });
 
-  it('paging BACKWARD never consumes the mark — only a first page can', async () => {
-    buildResumedTranscript(3, 4);
-    const { pageHandler, registry } = buildHandlers();
-    registry.markInheritedByTransfer('s1', 2);
-    // A cursor-bearing request is a scroll-back, not a hydration.
-    await pageHandler(
-      { sender: { id: 2 } },
-      { sessionId: 's1', beforeCursor: { path: watcherState.jsonlPath, offset: 10, sizeAtRead: 0 } },
-    );
-    const first = await pageHandler({ sender: { id: 2 } }, { sessionId: 's1', beforeCursor: null });
-    expect(promptsIn(first)).toContain('prompt 6');
-  });
 });

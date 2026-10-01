@@ -166,15 +166,12 @@ const remoteCases = () => scan().cases;
 const ALLOWED_REGISTRATIONS: Record<string, string> = {
   'ipc/channel-table.ts: def.name':
     'the computer door itself: the ONE place every table entry is registered with Electron',
-  'chat-snapshot.ts: RESPONSE_CHANNEL':
-    'a private reply listener for the chat snapshot main asks a window for (a request/answer pair between main and one renderer, not a feature a caller invokes)',
   'ipc-handlers.ts: IPC.REMOTE_REHYDRATE':
-    'connection housekeeping: the phone\'s refresh of its own copy is answered in remote-server.ts; a window IS the copy and says so here. It cannot be a table entry, because the table is consulted first and would swallow the phone\'s',
+    'connection housekeeping: preload\'s shape parity with the phone\'s Refresh button (the phone\'s Refresh is filled by session:open, one-core R5-2); a window IS the copy and says so here',
 };
 const ALLOWED_CASES: Record<string, string> = {
-  'client:ready': 'connection housekeeping: starts a phone\'s catch-up sequence',
-  'remote:ping': 'connection housekeeping: the phone\'s wake check, answered in every phase',
-  'remote:rehydrate': 'connection housekeeping: re-sends a phone\'s copy of the conversation (see the desktop half above)',
+  'client:ready': 'connection housekeeping: the page is listening, so the host sends the session list, topic names and last status',
+  'remote:ping': 'connection housekeeping: the phone\'s wake check',
   'remote:request-outcome': 'connection housekeeping: "did my action run?" for a request the phone sent before it lost its connection',
 };
 

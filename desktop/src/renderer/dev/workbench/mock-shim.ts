@@ -96,8 +96,7 @@ const WORKBENCH_TEXT_HEADS: Record<string, string> = {
 export const HAND_WRITTEN: ReadonlyArray<string> = [
   'sessionNaming.get', 'sessionNaming.set', 'sessionNaming.title', 'sessionNaming.rename',
   'devLabel', 'capabilities', 'protocolVersion', 'getPlatform', 'getHomePath', 'getFavorites', 'setFavorites',
-  'getIncognito', 'setIncognito', 'onChatExportSnapshot',
-  'sendChatSnapshotResponse', 'fireRemoteAttentionChanged',
+  'getIncognito', 'setIncognito', 'fireRemoteAttentionChanged',
   'off', 'removeAllListeners',
   'session.list', 'session.create', 'session.browse', 'session.destroy',
   'session.setFlag', 'session.setTag', 'session.setNote', 'session.getMeta',
@@ -228,10 +227,8 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'appearance.set', 'appearance.broadcast', 'appearance.onSync',
   'skills.listMarketplace', 'skills.list', 'skills.getFavorites', 'skills.setFavorite', 'skills.getFeatured',
   'marketplace.getPackages', 'theme.marketplace',
-  // Real, but served by remote-shim.ts rather than preload.ts — Electron
-  // clients get their timelines from the transcript watcher instead. The
-  // contract test checks both files for exactly this reason.
-  'on.chatHydrate',
+  // The workbench's own seeding (mock-only.ts lists it): no real bridge has it.
+  'on.seedChat',
   // Task 9 (status-bar relevance review): the CC scenario needs the 5h/7d
   // usage chips and the statusline-sourced cost/token/line-change numbers,
   // both of which ride status:data — previously unwired here, so they sat at
@@ -597,12 +594,6 @@ export function createMockShim(store: MockStore): Window['claude'] {
     setFavorites: async () => undefined,
     getIncognito: async () => false,
     setIncognito: async () => undefined,
-    // Desktop's chat-snapshot export path. The workbench hydrates via
-    // on.chatHydrate instead (seed-chat.ts), so these are inert by design:
-    // registering a callback that never fires is what a browser tab with no
-    // main process actually offers.
-    onChatExportSnapshot: () => () => {},
-    sendChatSnapshotResponse: () => undefined,
     fireRemoteAttentionChanged: () => undefined,
     off: () => {},
     removeAllListeners: () => {},
@@ -1011,6 +1002,16 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   const session: Ns<'session'> & UntypedSessionWrites = {
     handoff: handoff as any,
     list: async () => store.getState().sessions,
+    // The fill (one-core R5-2). The workbench window already holds the conversations it seeded (seed-chat.ts), so a session with no
+    // history of its own is answered "you have everything" (a page-less answer starts nothing over); a RESUMED session's saved history
+    // (the briefing, a handoff row) comes back as a page, exactly as the old first-page request answered it.
+    open: async (req: { sessionId: string; claudeSessionId?: string }) => {
+      const page = await detach.requestTranscriptPage!({ sessionId: req.sessionId, claudeSessionId: req.claudeSessionId } as any);
+      const facts = { working: false, attention: 'ok' };
+      if (page.events.length === 0) return { ok: true as const, epoch: 'workbench', headSeq: 0, resume: 'events' as const, before: [], page: null, after: [], facts };
+      return { ok: true as const, epoch: 'workbench', headSeq: 0, resume: 'page' as const, before: [], page, after: [], facts };
+    },
+    play: () => {},
     browse: async () => store.getState().past,
     // Welcome back — MOCK_ONLY until the per-install list lands in main.
     reopenList: async () => delay(store.getState().reopen),
@@ -3087,12 +3088,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       if (!raw) return empty;
       return { ...empty, events: scriptToEvents(req.sessionId, parseReplyScript(raw), "brief me on tomorrow's econ midterm") };
     },
-    // Both called unconditionally from App.tsx's mount effect. The workbench is
-    // one window that never inherits a session, so there is nothing to claim
-    // and no memory-only state to re-send — but the keys must exist, because a
-    // missing one is a TypeError at mount, not a no-op.
+    // Called unconditionally from App.tsx's mount effect. The workbench is one window that never inherits a session, so there is
+    // nothing to claim — but the key must exist, because a missing one is a TypeError at mount, not a no-op.
     claimPending: async () => [],
-    replayLiveState: async () => {},
   };
 
   // No `tags` namespace exists in useIpc.ts at all, so none of this is
@@ -3133,18 +3131,18 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     sessionMetaChanged: (fn: (id: string, meta: any) => void) => () => void;
     // MOCK_ONLY until batch 2's backend lands the channel on every surface.
     remoteConversationStatus: typeof onRemoteConversationStatus;
+    seedChat: (cb: (payload: unknown) => void) => () => void;
   } = {
     sessionCreated: (cb) => { subs.created.add(cb); return () => { subs.created.delete(cb); }; },
     sessionDestroyed: (cb) => { subs.destroyed.add(cb); return () => { subs.destroyed.delete(cb); }; },
     sessionRenamed: (cb) => { subs.renamed.add(cb); return () => { subs.renamed.delete(cb); }; },
     sessionMetaChanged: (cb) => { subs.meta.add(cb); return () => { subs.meta.delete(cb); }; },
 
-    // Seeds the chat timelines the moment App subscribes (App.tsx:1465), the
-    // same way remote-shim delivers a snapshot to a remote browser on connect.
-    // Fires synchronously rather than on a timer: App's subscribe happens in an
-    // effect, so dispatching here lands in the same commit and the timeline is
-    // present on first paint instead of flashing empty.
-    chatHydrate: (cb) => {
+    // Seeds the chat timelines the moment App subscribes (App.tsx `seedChat`): fixtures replayed through the real reducer and handed in
+    // whole. MOCK_ONLY: no real bridge has a seed (a real screen is filled from the computer's record). Fires synchronously rather than
+    // on a timer: App's subscribe happens in an effect, so dispatching here lands in the same commit and the timeline is present on
+    // first paint instead of flashing empty.
+    seedChat: (cb: (payload: unknown) => void) => {
       cb(buildHydratePayload());
       return () => {};
     },

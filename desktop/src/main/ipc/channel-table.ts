@@ -62,7 +62,6 @@ import { appChannels } from './app';
 import { shellChannels } from './shell';
 import { windowChannels } from './window';
 import { detachChannels } from './detach';
-import { replayChannels } from './replay';
 import { buddyChannels } from './buddy';
 import { integrationsChannels } from './integrations';
 import { remoteAdminChannels } from './remote-admin';
@@ -116,7 +115,6 @@ export const CHANNEL_TABLE: MainChannelDef[] = [
   ...shellChannels,
   ...windowChannels,
   ...detachChannels,
-  ...replayChannels,
   ...buddyChannels,
   ...integrationsChannels,
   ...remoteAdminChannels,
@@ -158,7 +156,9 @@ export function registerDesktopChannels(
     seen.add(def.name);
     // WHY (2026-09-30 one-core R3-7): a phone-only entry (file:upload) is never registered on the computer.
     if (def.remoteOnly) continue;
-    const ctxFor = (event: any): MainChannelCtx => ({ door: 'desktop', runtime: getRuntime(), windowId: event?.sender?.id, sender: event?.sender, broadcast, desktop: getDesktop?.() });
+    // afterReply: setImmediate runs after the microtask that sends the invoke's answer, so a callback registered by the
+    // handler runs once the answer is out (session:open lets the held pushes through then).
+    const ctxFor = (event: any): MainChannelCtx => ({ door: 'desktop', runtime: getRuntime(), windowId: event?.sender?.id, sender: event?.sender, broadcast, desktop: getDesktop?.(), afterReply: (fn) => { setImmediate(fn); } });
     if (def.kind === 'handle') {
       ipc.handle(def.name, (event, payload) => def.handler(payload, ctxFor(event)));
     } else if (def.kind === 'on') {

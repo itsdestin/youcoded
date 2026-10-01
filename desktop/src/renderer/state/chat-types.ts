@@ -513,7 +513,12 @@ export type ChatAction =
   // Replaces the entire ChatState Map with a deserialized snapshot. Fired once
   // per remote-access connect so browser clients get the full chat history
   // immediately rather than rebuilding it from replayed transcript events.
-  | { type: 'HYDRATE_CHAT_STATE'; sessions: SerializedChatState }
+  /** Dev workbench only (workbench/seed-chat.ts): timelines built by replaying fixtures, handed in whole. */
+  | { type: 'CHAT_STATE_SEEDED'; sessions: SerializedChatState }
+  /** A session is about to be filled from a fresh page (main/session-open.ts): start it over, keeping rows this screen queued. */
+  | { type: 'SESSION_FILL_RESET'; sessionId: string }
+  /** The computer's record says a turn is in flight and the page-filled copy does not show it. Only turns the indicator on. */
+  | { type: 'SESSION_WORKING_SYNCED'; sessionId: string; working: boolean }
   | { type: 'SESSION_INIT'; sessionId: string }
   | { type: 'SESSION_REMOVE'; sessionId: string }
   | {
@@ -1145,16 +1150,6 @@ export interface SerializedSessionChatState {
 
 export interface SerializedChatState {
   sessions: Array<[string, SerializedSessionChatState]>;
-  // Set when the host could not produce a real snapshot (renderer export timed
-  // out, or serialization threw) and fell back to an empty payload. Lets the
-  // client tell "the host has no sessions" apart from "the host failed" —
-  // without it, both look like a valid empty snapshot. Optional so a payload
-  // from a pre-field host still deserializes.
-  degraded?: true;
-  // Remote access batch 2 (§2, R2): the session the desktop is showing (its
-  // last-focused main window's selection), so a phone with no place of its own
-  // opens it. Optional so a payload from a pre-field host still deserializes.
-  focus?: { sessionId: string | null };
 }
 
 export function serializeChatState(state: ChatState): SerializedChatState {

@@ -414,7 +414,6 @@ describe('proxy semantics', () => {
       const c = shim();
       await expect(c.getIncognito()).resolves.toBe(false);
       await expect(c.getHomePath()).resolves.toContain('/');
-      expect(typeof c.onChatExportSnapshot(() => {})).toBe('function');
       expect(() => c.fireRemoteAttentionChanged({})).not.toThrow();
     });
 

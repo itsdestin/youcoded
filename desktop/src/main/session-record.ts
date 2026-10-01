@@ -3,10 +3,10 @@
 // WHY (2026-10-01 one-core R5-1): main used to forward every session event to the windows and
 // phones and keep nothing, so what a screen "knew" about a session (is it working, is a
 // question waiting, what came after event N) lived only in whichever window's chat reducer had
-// seen the events. This is the one copy the computer keeps. It is ADDITIVE in this run: it is
-// fed by `publish` (publish.ts) from the same events that are delivered today, and nothing
-// reads it yet except tests and the per-session summary push. Later runs fill screens from it
-// (R5-2), then filter delivery by it (R5-3).
+// seen the events. This is the one copy the computer keeps. R5-1 made it; R5-2 (this file's
+// tail and terminal stream, session-open.ts) fills every screen from it: a phone, a torn-off
+// window and a reconnecting phone all ask `session:open` and get a page, this record's recent
+// past, and what is still waiting. R5-3 will filter delivery by it.
 //
 // Per session:
 //   - an EPOCH: random, new when the record is created, never bumped by /clear or /compact
@@ -14,8 +14,14 @@
 //     it and a client outside the range gets a fresh page instead);
 //   - a numbered event RING: at most RING_MAX_EVENTS events or RING_MAX_BYTES, whichever is
 //     reached first. It only has to cover a reconnect gap; history comes from the page;
+//   - a TAIL: the same recent transcript events with a streaming answer's per-word deltas merged into
+//     one entry per part, so a screen that opens mid-answer gets the whole answer so far (the part of
+//     it still only in memory) however long the answer is. Used to FILL a screen; the ring is used to
+//     RESUME one;
 //   - OPEN ASKS, kept OUTSIDE the ring so trimming can never lose a waiting question;
-//   - LIVE FACTS: working, attention, how many asks wait, mode, model, queue.
+//   - LIVE FACTS: working, attention, how many asks wait, mode, model, queue;
+//   - the TERMINAL STREAM: the session's output bytes with their own epoch and offset, so a phone's
+//     terminal resumes exactly where it left off (moved here from RemoteServer.ptyBuffers).
 //
 // Electron-free on purpose: tests/create-runtime.test.ts proves nothing reachable from
 // create-runtime imports Electron, and the record is built there.
@@ -23,6 +29,13 @@ import { randomBytes } from 'crypto';
 
 export const RING_MAX_EVENTS = 2000;
 export const RING_MAX_BYTES = 2 * 1024 * 1024;
+/** The fill tail's bounds: merged entries are few, so the byte bound is what matters. */
+export const TAIL_MAX_ENTRIES = 4000;
+export const TAIL_MAX_BYTES = 2 * 1024 * 1024;
+/** The terminal stream, in UTF-16 units (JavaScript string length): the same 4M the old per-session buffer held. */
+export const PTY_STREAM_UNITS = 4 * 1024 * 1024;
+/** While the newest terminal chunk is this small, append INTO it instead of pushing another entry (one-keystroke chunks). */
+const PTY_CHUNK_COALESCE_BELOW = 4096;
 /** A session cannot hold more open asks than this (a runaway producer must not grow it without bound). */
 const OPEN_ASKS_MAX = 200;
 /** Recently seen event uuids, so a replayed event does not start a turn twice (the renderer's seenUuids). */
@@ -38,14 +51,11 @@ export const SESSION_SCOPED_PUSHES = [
   'session:meta-changed',
 ] as const;
 
-/** Session-scoped pushes whose DELIVERY is still split across two files, with the reason each is not
- *  a `publish` call yet. The record is fed from them anyway (see RemoteServer.onHookEvent). */
+/** Session-scoped pushes whose DELIVERY is not a `publish` call, with the reason each is not. (Claude Code's hook relay used to be
+ *  here, delivered by main.ts to the windows and by RemoteServer to the phones; R5-2 publishes it from main.ts.) */
 export const SPLIT_DELIVERY: Record<string, string> = {
-  // Claude Code's hook relay: the windows leg is main.ts (owner only, never buddy subscribers) and the
-  // phone leg is RemoteServer's own listener. Merging them would change who receives what.
-  'hook:event (Claude Code relay)': 'two audiences that differ today; folded in R5-2 with the fill path',
-  // Terminal bytes are not events (they have their own offset/epoch buffer, moved in R5-2).
-  'pty:output': 'bytes, not events: kept in RemoteServer.ptyBuffers until R5-2',
+  // Terminal bytes are not events: they are numbered by their own stream position (notePty), relayed to every phone by RemoteServer.
+  'pty:output': 'bytes, not events: appended to the record\'s terminal stream and relayed by RemoteServer, each chunk with its epoch and offset',
 };
 
 /**
@@ -133,11 +143,22 @@ export type ResumeDecision =
 
 interface OpenAsk { event: unknown; /** Claude Code closed its hook but its own menu may still wait. */ expired: boolean }
 
+/** One entry of the fill tail: a recent push, with a streaming part's deltas merged. */
+interface TailEntry { type: string; payload: unknown; bytes: number; /** true once `payload` is this file's own clone (safe to grow). */ owned: boolean }
+
+/** The terminal's output as a window onto a monotonic stream (moved here from RemoteServer.ptyBuffers, remote access batch 2 design §7):
+ *  `epoch` names the stream (random per record, so a restart or a recreated session gets a new one); `base` is how many
+ *  units were trimmed off the head, so a chunk's stream position is `base + length` when appended. */
+interface PtyStream { chunks: string[]; length: number; base: number }
+
 interface Rec {
   epoch: string;
   headSeq: number;
   ring: RecordedEvent[];
   ringBytes: number;
+  tail: TailEntry[];
+  tailBytes: number;
+  pty: PtyStream;
   /** Events too large to hold at all (counted so a gap is explainable). */
   oversize: number;
   asks: Map<string, OpenAsk>;
@@ -173,7 +194,7 @@ export class SessionRecords {
     if (this.records.has(sessionId)) return true;
     this.records.set(sessionId, {
       epoch: randomBytes(8).toString('hex'),
-      headSeq: 0, ring: [], ringBytes: 0, oversize: 0,
+      headSeq: 0, ring: [], ringBytes: 0, tail: [], tailBytes: 0, pty: { chunks: [], length: 0, base: 0 }, oversize: 0,
       asks: new Map(), passwordAsks: new Set(),
       facts: {
         working: false, attention: 'ok', reportedAttention: null, hasHistory: false,
@@ -220,6 +241,7 @@ export class SessionRecords {
     if (type === 'hook:event' && asObject(payload).type === 'PasswordRequest') return seq;
     const bytes = estimateSize(payload);
     if (bytes > this.maxBytes) { rec.oversize++; return seq; }
+    this.noteTail(rec, type, payload, bytes);
     rec.ring.push({ seq, type, at, bytes, payload });
     rec.ringBytes += bytes;
     // Drop the oldest until both bounds hold. WHY shift in a loop and not slice: the ring is trimmed one
@@ -231,6 +253,118 @@ export class SessionRecords {
     }
     if (drop > 0) rec.ring.splice(0, drop);
     return seq;
+  }
+
+  /**
+   * Keep a transcript push in the fill tail, merging a streaming part's deltas into ONE entry.
+   * WHY (R5-2): a native answer streams as thousands of tiny deltas, and only the part that has FINISHED is on disk
+   * (session-store.ts flushes a part when the next one starts), so the text of the part still streaming exists only
+   * in memory. A screen that opens mid-answer gets the page from disk plus this tail; the ring alone could not hold
+   * a long answer (2,000 events), while the merged entry is one string. The merged entry keeps the FIRST delta's
+   * uuid, which is also the uuid the disk's coalesced copy of that part carries, so the page's copy of a part the
+   * tail already holds is skipped by the reducer's uuid check instead of drawn twice.
+   */
+  private noteTail(rec: Rec, type: string, payload: unknown, bytes: number): void {
+    if (type !== 'transcript:event' && type !== 'transcript:shrink') return;
+    const e = asObject(payload);
+    const d = asObject(e.data);
+    const last = rec.tail[rec.tail.length - 1];
+    const mergeable = type === 'transcript:event' && typeof d.text === 'string' && d.partId && !d.parentAgentToolUseId
+      && (e.type === 'assistant-text' || (e.type === 'assistant-thinking'));
+    if (mergeable && last && last.type === type) {
+      const l = asObject(last.payload);
+      const ld = asObject(l.data);
+      if (l.type === e.type && l.sessionId === e.sessionId && ld.partId === d.partId && typeof ld.text === 'string' && !ld.parentAgentToolUseId) {
+        // Clone once (the object is the very one the windows and phones were handed), then grow the clone.
+        if (!last.owned) { last.payload = { ...l, data: { ...ld } }; last.owned = true; }
+        const grown = asObject(asObject(last.payload).data);
+        grown.text = ld.text + d.text;
+        last.bytes += d.text.length;
+        rec.tailBytes += d.text.length;
+        this.trimTail(rec);
+        return;
+      }
+    }
+    rec.tail.push({ type, payload, bytes, owned: false });
+    rec.tailBytes += bytes;
+    this.trimTail(rec);
+  }
+
+  /** Keep the tail inside its bounds by dropping from the FRONT up to the next user message, so it starts at a turn. */
+  private trimTail(rec: Rec): void {
+    while (rec.tail.length > 1 && (rec.tail.length > TAIL_MAX_ENTRIES || rec.tailBytes > TAIL_MAX_BYTES)) {
+      let cut = 1;
+      for (let i = 1; i < rec.tail.length; i++) {
+        const t = rec.tail[i];
+        if (t.type === 'transcript:event' && asObject(t.payload).type === 'user-message') { cut = i; break; }
+      }
+      for (let i = 0; i < cut; i++) rec.tailBytes -= rec.tail[i].bytes;
+      rec.tail.splice(0, cut);
+    }
+  }
+
+  /** The recent transcript, merged, in order: what a screen that opens now applies first, as live events (R5-2). */
+  fillTail(sessionId: string): Array<{ type: string; payload: unknown }> {
+    return (this.records.get(sessionId)?.tail ?? []).map((t) => ({ type: t.type, payload: t.payload }));
+  }
+
+  /**
+   * Append terminal output to the session's stream and answer where it sits: the stream's `epoch` and the chunk's
+   * `offset` (the position of its first unit), which ride the live push so a phone can say how far it has drawn.
+   * Perf: a list of chunks, not one big string, so an append costs O(chunk) instead of O(whole buffer) (the old
+   * RemoteServer.ptyBuffers note: re-copying ~4 MB on every chunk once a busy session filled the cap).
+   */
+  notePty(sessionId: string, data: string): { epoch: string; offset: number } | null {
+    if (!this.open(sessionId)) return null;
+    const rec = this.records.get(sessionId)!;
+    const pty = rec.pty;
+    const offset = pty.base + pty.length;
+    // An empty chunk adds nothing to a replay but WOULD add an array entry; the live push still goes out unchanged.
+    if (data.length > 0) {
+      const last = pty.chunks.length - 1;
+      if (last >= 0 && pty.chunks[last].length < PTY_CHUNK_COALESCE_BELOW) pty.chunks[last] += data;
+      else pty.chunks.push(data);
+      pty.length += data.length;
+      // Trim WHOLE chunks off the head back under the cap; the cut lands on a chunk boundary, so the window can hold
+      // slightly less than the cap, and a replay is less likely to start mid-escape-sequence.
+      while (pty.length > PTY_STREAM_UNITS && pty.chunks.length > 1) {
+        const dropped = pty.chunks.shift()!.length;
+        pty.length -= dropped;
+        pty.base += dropped;
+      }
+      // One chunk bigger than the whole cap cannot be dropped without losing everything: trim its tail instead.
+      if (pty.length > PTY_STREAM_UNITS) {
+        const only = pty.chunks[0];
+        pty.base += only.length - PTY_STREAM_UNITS;
+        pty.chunks[0] = only.slice(only.length - PTY_STREAM_UNITS);
+        pty.length = pty.chunks[0].length;
+      }
+    }
+    return { epoch: rec.epoch, offset };
+  }
+
+  /**
+   * The terminal bytes a phone is missing. `have` is what it says it has drawn ({epoch, units}). A matching epoch and a
+   * position still inside the window gets exactly the units past it; anything else (a new stream, a position trimmed away)
+   * gets the whole window and `reset: true` when it had drawn something it cannot continue, so it clears its screen first.
+   */
+  ptyFrom(sessionId: string, have?: { epoch?: string; units?: number } | null): { epoch: string; offset: number; data: string; reset: boolean } | null {
+    const rec = this.records.get(sessionId);
+    if (!rec) return null;
+    const { pty } = rec;
+    const total = pty.base + pty.length;
+    let from = pty.base;
+    let reset = false;
+    if (have && have.epoch === rec.epoch && typeof have.units === 'number' && have.units >= pty.base && have.units <= total) from = have.units;
+    else reset = !!have && typeof have.epoch === 'string';
+    let skip = from - pty.base;
+    const parts: string[] = [];
+    for (const chunk of pty.chunks) {
+      if (skip >= chunk.length) { skip -= chunk.length; continue; }
+      parts.push(skip > 0 ? chunk.slice(skip) : chunk);
+      skip = 0;
+    }
+    return { epoch: rec.epoch, offset: from, data: parts.join(''), reset };
   }
 
   /** A window relayed this session's attention state (remote:attention-changed). */
@@ -261,7 +395,9 @@ export class SessionRecords {
     // Everything after have.seq must still be held: have.seq + 1 >= oldest. (An oversize event leaves a gap.)
     if (oldest === undefined || have.seq + 1 < oldest) return { resume: 'page', ...base };
     const events = rec.ring.filter((e) => e.seq > have.seq!);
-    if (events[0]?.seq !== have.seq + 1) return { resume: 'page', ...base };
+    // WHY the count, not only the first number (R5-2, found by the reconnect gate test): an event too large to hold is numbered but not kept, so
+    // a hole can sit in the MIDDLE of what is held. Everything after have.seq must be there, which is exactly headSeq - have.seq events.
+    if (events[0]?.seq !== have.seq + 1 || events.length !== rec.headSeq - have.seq) return { resume: 'page', ...base };
     return { resume: 'events', ...base, events };
   }
 
@@ -269,6 +405,21 @@ export class SessionRecords {
   openAsks(sessionId: string): unknown[] {
     const rec = this.records.get(sessionId);
     return rec ? [...rec.asks.values()].map((a) => a.event) : [];
+  }
+
+  /**
+   * The asks as events a screen can replay: each ask's request, and for one Claude Code closed its hook on (its own menu
+   * may still wait) the same 'hook-closed' expiry the screen heard live, so the card comes back "kept" rather than live.
+   */
+  asksForFill(sessionId: string): unknown[] {
+    const rec = this.records.get(sessionId);
+    if (!rec) return [];
+    const out: unknown[] = [];
+    for (const [id, ask] of rec.asks) {
+      out.push(ask.event);
+      if (ask.expired) out.push({ type: 'PermissionExpired', sessionId, payload: { _requestId: id, _reason: 'hook-closed' }, timestamp: this.now() });
+    }
+    return out;
   }
 
   facts(sessionId: string): SessionFacts | null {
@@ -304,10 +455,13 @@ export class SessionRecords {
   }
 
   /** What the record holds right now (the memory measurement and the inspection tests read this). */
-  stats(): { sessions: number; events: number; ringBytes: number; openAsks: number } {
-    let events = 0, ringBytes = 0, openAsks = 0;
-    for (const r of this.records.values()) { events += r.ring.length; ringBytes += r.ringBytes; openAsks += r.asks.size; }
-    return { sessions: this.records.size, events, ringBytes, openAsks };
+  stats(): { sessions: number; events: number; ringBytes: number; openAsks: number; tailEntries: number; tailBytes: number; ptyUnits: number } {
+    let events = 0, ringBytes = 0, openAsks = 0, tailEntries = 0, tailBytes = 0, ptyUnits = 0;
+    for (const r of this.records.values()) {
+      events += r.ring.length; ringBytes += r.ringBytes; openAsks += r.asks.size;
+      tailEntries += r.tail.length; tailBytes += r.tailBytes; ptyUnits += r.pty.length;
+    }
+    return { sessions: this.records.size, events, ringBytes, openAsks, tailEntries, tailBytes, ptyUnits };
   }
 
   // --- folding events into live facts ---------------------------------------------------------

@@ -71,7 +71,6 @@ function boot(): World {
   const remote = {
     getClientCount: vi.fn(() => 0), broadcastStatusData: vi.fn(), onStatusChange: vi.fn(() => () => {}),
     broadcast: vi.fn((m: any) => { phoneMessages.push(m); }),
-    bufferHookEvent: vi.fn(), bufferSpecialistRun: vi.fn(), bufferShellRun: vi.fn(),
     setSessionMetaWiring: vi.fn(), setLastTopic: vi.fn(), setHandoffRoute: vi.fn(),
   };
   const sessionManager: any = new EventEmitter();
@@ -105,8 +104,6 @@ interface Family {
   payload: any;
   windowArgs?: (payload: any) => any[];
   phonePayload?: (payload: any) => any;
-  /** Side effects the pair also did beside the two sends (replay buffers) that must still happen. */
-  extra?(w: World, payload: any): void;
 }
 
 const ev = { sessionId: SID, type: 'assistant-text', uuid: 'u1', timestamp: 1, data: { text: 'hi', model: 'm1' } };
@@ -118,18 +115,15 @@ const FAMILIES: Family[] = [
     name: 'hook event (native ask)', channel: IPC.HOOK_EVENT,
     payload: { type: 'PermissionRequest', sessionId: SID, payload: { _requestId: 'native-r1', tool_name: 'Bash' }, timestamp: 1 },
     fire: (w, p) => w.runtime.nativeHost.emit('hook-event', p),
-    extra: (w, p) => expect(w.remote.bufferHookEvent).toHaveBeenCalledWith(p),
   },
   {
     name: 'specialists event', channel: IPC.SPECIALISTS_EVENT, payload: { kind: 'run', sessionId: SID, run: { childId: 'c1' } },
     fire: (w, p) => w.runtime.nativeHost.emit('specialists-event', p),
-    extra: (w, p) => expect(w.remote.bufferSpecialistRun).toHaveBeenCalledWith(p),
   },
   { name: 'session context', channel: IPC.NATIVE_SESSION_CONTEXT, payload: { sessionId: SID, context: { a: 1 } }, fire: (w, p) => w.runtime.nativeHost.emit('session-context', p) },
   {
     name: 'shell event', channel: IPC.NATIVE_SHELL_EVENT, payload: { sessionId: SID, run: { shellId: 's1' } },
     fire: (w, p) => w.runtime.nativeHost.emit('shell-event', p),
-    extra: (w, p) => expect(w.remote.bufferShellRun).toHaveBeenCalledWith(p),
   },
   { name: 'permission mode', channel: IPC.NATIVE_PERMISSION_MODE, payload: { sessionId: SID, mode: 'auto-edit' }, fire: (w, p) => w.runtime.nativeHost.emit('permission-mode', p) },
   {
@@ -163,10 +157,10 @@ describe('publish delivers what each sendForSession + broadcast pair delivered',
         expect(at(PRIMARY)).toEqual([]); // the primary window is the ownerless fallback only
       });
 
-      it('reaches every phone once, as {type, payload}', () => {
+      it('reaches every phone once, as {type, payload} numbered with the record\'s {epoch, seq}', () => {
         f.fire(w, f.payload);
-        expect(phoneOf(w, f.channel)).toEqual([{ type: f.channel, payload: f.phonePayload ? f.phonePayload(f.payload) : f.payload }]);
-        f.extra?.(w, f.payload);
+        // WHY the numbers (one-core R5-2): publish numbers the event first, so a phone can say where it got to and be sent what it missed.
+        expect(phoneOf(w, f.channel)).toEqual([{ type: f.channel, payload: f.phonePayload ? f.phonePayload(f.payload) : f.payload, epoch: expect.any(String), seq: 1 }]);
       });
 
       it('falls back to the primary window when nobody owns the session (and phones still hear it)', () => {
@@ -191,33 +185,4 @@ describe('the record sees what publish delivered', () => {
     expect(events.map((e: any) => e.seq)).toEqual(FAMILIES.map((_f, i) => i + 1));
     expect(events.at(-1).payload).toEqual({ sessionId: SID, flag: 'tag:t1', value: true });
   });
-});
-
-describe('the replay buffer is written between the windows and the phones, as the old pairs did', () => {
-  const CASES: Array<[string, string, any, keyof World['remote']]> = [
-    ['native hook event', 'hook-event', { type: 'PermissionRequest', sessionId: SID, payload: { _requestId: 'native-r9' }, timestamp: 1 }, 'bufferHookEvent'],
-    ['specialists event', 'specialists-event', { kind: 'run', sessionId: SID, run: { childId: 'c1' } }, 'bufferSpecialistRun'],
-    ['shell event', 'shell-event', { sessionId: SID, run: { shellId: 's1' } }, 'bufferShellRun'],
-  ];
-  for (const [name, source, payload, buffer] of CASES) {
-    it(`${name}: windows, then the buffer, then phones`, () => {
-      const w = boot();
-      const order: string[] = [];
-      w.remote.broadcast.mockImplementation(() => { order.push('phones'); });
-      const before = () => h.sent.get(OWNER)?.length ?? 0;
-      const n = before();
-      // The owner window's send is the first leg: note it by watching its recorder grow when the buffer runs.
-      w.remote[buffer as 'bufferHookEvent'].mockImplementation(() => { order.push(before() > n ? 'buffer (after windows)' : 'buffer (BEFORE windows)'); });
-      w.runtime.nativeHost.emit(source, payload);
-      expect(order).toEqual(['buffer (after windows)', 'phones']);
-    });
-
-    it(`${name}: a buffer that throws still leaves the windows with the event and phones without it (as before)`, () => {
-      const w = boot();
-      w.remote[buffer as 'bufferHookEvent'].mockImplementation(() => { throw new Error('malformed'); });
-      expect(() => w.runtime.nativeHost.emit(source, payload)).toThrow('malformed');
-      expect(h.sent.get(OWNER)?.length ?? 0).toBe(1);
-      expect(w.phoneMessages).toEqual([]);
-    });
-  }
 });

@@ -104,13 +104,11 @@ vi.mock('../src/main/session-browser', async (importOriginal) => ({
 }));
 
 /**
- * Drive the restore sequence for a bare socket, the way the old-client fallback or a
- * `client:ready` would: a restoring client record around the socket, then restoreClient.
- * (Batch 2 replaced `replayBuffers(ws)` + its 500 ms timer with this.)
+ * Send a bare socket the host's hello (session list, topic names, last status), the way `client:ready` does.
+ * (One-core R5-2: the restore sequence this used to drive is gone.)
  */
 async function restore(server: any, ws: any) {
-  const client = { id: 'test', ws, deviceId: 'd', ip: '', connectedAt: 0, phase: 'restoring', queue: [] };
-  await server.restoreClient(client, { reconnect: false, replayBuffers: true });
+  server.sendHello({ id: 'test', ws, deviceId: 'd', ip: '', connectedAt: 0 });
 }
 
 // WHY (2026-09-29 one-core R1): RemoteServer no longer has a setNativeRuntime() setter; it reads the
@@ -186,10 +184,11 @@ describe('RemoteServer', () => {
     const { RemoteServer } = await import('../src/main/remote-server');
     const server = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
     await server.start();
-    // Batch 2 (T2 re-review): a relay expiry must reach the host buffer while it runs.
-    expect(mockHookRelay.listenerCount('permission-expired')).toBe(1);
-    server.stop();
+    // One-core R5-2: Claude Code's hook events are published from main.ts (publish.ts), so this server no longer listens to the relay.
     expect(mockHookRelay.listenerCount('permission-expired')).toBe(0);
+    expect(mockSessionManager.listenerCount('pty-output')).toBe(1);
+    server.stop();
+    expect(mockSessionManager.listenerCount('pty-output')).toBe(0);
   });
 
   it('does not start when config.enabled is false', async () => {
@@ -1081,7 +1080,7 @@ describe('RemoteServer session meta + browse', () => {
 
       // Same frame shape both doors send: a second remote client viewing this session must refetch its meta.
       const payload = { sessionId: 'desktop-1', flag: 'tag:tag_abc', value: true };
-      expect(remoteBroadcast).toHaveBeenCalledWith({ type: 'session:meta-changed', payload });
+      expect(remoteBroadcast).toHaveBeenCalledWith({ type: 'session:meta-changed', payload, epoch: expect.any(String), seq: expect.any(Number) });
       expect(sendForSession).toHaveBeenCalledWith('desktop-1', 'session:meta-changed', 'desktop-1', { flag: 'tag:tag_abc', value: true });
     });
   });
@@ -1168,7 +1167,7 @@ describe('RemoteServer session meta + browse', () => {
 
       await sendAndCollect(server, msg());
 
-      expect(remoteBroadcast).toHaveBeenCalledWith({ type: 'session:meta-changed', payload: { sessionId: 'desktop-1', note: 'hello' } });
+      expect(remoteBroadcast).toHaveBeenCalledWith({ type: 'session:meta-changed', payload: { sessionId: 'desktop-1', note: 'hello' }, epoch: expect.any(String), seq: expect.any(Number) });
       expect(sendForSession).toHaveBeenCalledWith('desktop-1', 'session:meta-changed', 'desktop-1', { note: 'hello' });
     });
   });
@@ -1348,42 +1347,7 @@ describe('RemoteServer specialist run + native hook replay', () => {
     await restore(server, ws);
   }
 
-  it('a new client receives the latest specialists:event {kind:"run"} per child, not an append-only log', async () => {
-    const { RemoteServer } = await import('../src/main/remote-server');
-    const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
-    const { frames, ws } = fakeWs();
 
-    // Same child, two statuses — only the LATEST should replay (a card shows
-    // one current status, not a history of every intermediate one).
-    server.bufferSpecialistRun({ kind: 'run', sessionId: 's1', run: { childId: 'c1', status: 'running', title: 'Nadia' } });
-    server.bufferSpecialistRun({ kind: 'run', sessionId: 's1', run: { childId: 'c1', status: 'completed', title: 'Nadia' } });
-    // A second, different child — must ALSO replay (per-child, not per-session).
-    server.bufferSpecialistRun({ kind: 'run', sessionId: 's1', run: { childId: 'c2', status: 'running', title: 'Otis' } });
-
-    await replayAndWait(server, ws);
-
-    const runEvents = frames.filter((m) => m.type === 'specialists:event');
-    expect(runEvents).toHaveLength(2);
-    const byChild = Object.fromEntries(runEvents.map((e) => [e.payload.run.childId, e.payload.run.status]));
-    expect(byChild).toEqual({ c1: 'completed', c2: 'running' });
-  });
-
-  it('G-1: a new client receives the latest native:shell-event per shell id, and a destroyed session drops its buffer', async () => {
-    const { RemoteServer } = await import('../src/main/remote-server');
-    const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
-    const { frames, ws } = fakeWs();
-    server.bufferShellRun({ sessionId: 's1', run: { toolUseId: 't1', shellId: 'sh-1', status: 'running', startedAt: 1, tail: 'a', logPath: '/l' } });
-    server.bufferShellRun({ sessionId: 's1', run: { toolUseId: 't1', shellId: 'sh-1', status: 'exited', exitCode: 0, startedAt: 1, endedAt: 2, tail: 'ab', logPath: '/l' } });
-    server.bufferShellRun({ sessionId: 's1', run: { toolUseId: 't2', shellId: 'sh-2', status: 'running', startedAt: 1, tail: '', logPath: '/m' } });
-    await replayAndWait(server, ws);
-    const events = frames.filter((m) => m.type === 'native:shell-event');
-    expect(events).toHaveLength(2);
-    expect(Object.fromEntries(events.map((e) => [e.payload.run.shellId, e.payload.run.status]))).toEqual({ 'sh-1': 'exited', 'sh-2': 'running' });
-    server.onSessionExit('s1');
-    const { frames: again, ws: ws2 } = fakeWs();
-    await replayAndWait(server, ws2);
-    expect(again.filter((m) => m.type === 'native:shell-event')).toHaveLength(0);
-  });
 
   it('G-1: native:kill-shell over WS answers with the host result, and not-live without a runtime', async () => {
     const { RemoteServer } = await import('../src/main/remote-server');
@@ -1415,23 +1379,6 @@ describe('RemoteServer specialist run + native hook replay', () => {
     expect(compact).toHaveBeenLastCalledWith('s1', undefined);
   });
 
-  it('a reconnecting client receives an open native ask\'s PermissionRequest', async () => {
-    const { RemoteServer } = await import('../src/main/remote-server');
-    const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
-    const { frames, ws } = fakeWs();
-
-    // Simulates the ipc-handlers.ts nativeHost.on('hook-event', ...) call
-    // site: native asks reach remote clients via a direct broadcast(), never
-    // through this class's own onHookEvent (that's wired only to the legacy
-    // hookRelay) — bufferHookEvent is the fix, called from that same site.
-    server.bufferHookEvent({ sessionId: 's1', type: 'PermissionRequest', payload: { _requestId: 'native-x' }, timestamp: Date.now() });
-
-    await replayAndWait(server, ws);
-
-    const open = frames.filter((m) => m.type === 'hook:event' && m.payload.payload?._requestId === 'native-x');
-    expect(open).toHaveLength(1);
-    expect(open[0].payload.type).toBe('PermissionRequest');
-  });
 
   // Fix pass (2026-08-16 review finding, "the catch-up replays asks that were
   // already answered"): PermissionBroker now emits PermissionResolved from
@@ -1440,85 +1387,13 @@ describe('RemoteServer specialist run + native hook replay', () => {
   // bufferHookEvent() must treat that as a purge signal instead of just
   // another event to append, or a reconnecting phone still gets replayed a
   // dead question with live-looking Yes/No buttons.
-  it('a reconnecting client is NOT replayed an ask that was already answered', async () => {
-    const { RemoteServer } = await import('../src/main/remote-server');
-    const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
-    const { frames, ws } = fakeWs();
 
-    // Simulates the full lifecycle: the ask goes out, then gets answered
-    // BEFORE anyone reconnects — mirrors respond() emitting PermissionRequest
-    // then (on answer) PermissionResolved, same order permission-broker.ts
-    // produces.
-    server.bufferHookEvent({ sessionId: 's1', type: 'PermissionRequest', payload: { _requestId: 'native-answered' }, timestamp: Date.now() });
-    server.bufferHookEvent({ sessionId: 's1', type: 'PermissionResolved', payload: { _requestId: 'native-answered' }, timestamp: Date.now() });
 
-    await replayAndWait(server, ws);
-
-    const stale = frames.filter((m) => m.type === 'hook:event' && m.payload.payload?._requestId === 'native-answered');
-    expect(stale).toHaveLength(0);
-  });
-
-  it('purges only the matching request id, leaving a different open ask in the same session alone', async () => {
-    const { RemoteServer } = await import('../src/main/remote-server');
-    const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
-    const { frames, ws } = fakeWs();
-
-    server.bufferHookEvent({ sessionId: 's1', type: 'PermissionRequest', payload: { _requestId: 'native-answered' }, timestamp: Date.now() });
-    server.bufferHookEvent({ sessionId: 's1', type: 'PermissionResolved', payload: { _requestId: 'native-answered' }, timestamp: Date.now() });
-    // A second, still-open ask in the SAME session — must survive the purge.
-    server.bufferHookEvent({ sessionId: 's1', type: 'PermissionRequest', payload: { _requestId: 'native-open' }, timestamp: Date.now() });
-
-    await replayAndWait(server, ws);
-
-    const answered = frames.filter((m) => m.type === 'hook:event' && m.payload.payload?._requestId === 'native-answered');
-    const open = frames.filter((m) => m.type === 'hook:event' && m.payload.payload?._requestId === 'native-open');
-    expect(answered).toHaveLength(0);
-    expect(open).toHaveLength(1);
-    expect(open[0].payload.type).toBe('PermissionRequest');
-  });
-
-  it('PermissionResolved itself is never replayed — it is a purge signal, not a card', async () => {
-    const { RemoteServer } = await import('../src/main/remote-server');
-    const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
-    const { frames, ws } = fakeWs();
-
-    server.bufferHookEvent({ sessionId: 's1', type: 'PermissionRequest', payload: { _requestId: 'native-answered' }, timestamp: Date.now() });
-    server.bufferHookEvent({ sessionId: 's1', type: 'PermissionResolved', payload: { _requestId: 'native-answered' }, timestamp: Date.now() });
-
-    await replayAndWait(server, ws);
-
-    expect(frames.some((m) => m.type === 'hook:event' && m.payload.type === 'PermissionResolved')).toBe(false);
-  });
 
   // admin-password design §2.5: a PasswordRequest must never be buffered at
   // all, not even transiently — the broker's own re-announce heartbeat and
   // the live broadcast are what cover a reconnect within a few seconds.
-  it('a PasswordRequest is never buffered, so a reconnecting client is never replayed one', async () => {
-    const { RemoteServer } = await import('../src/main/remote-server');
-    const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
-    const { frames, ws } = fakeWs();
 
-    server.bufferHookEvent({ sessionId: 's1', type: 'PasswordRequest', payload: { _requestId: 'pw-1', toolUseId: 'bash-1', command: 'apt update' }, timestamp: Date.now() });
-
-    await replayAndWait(server, ws);
-
-    expect(frames.some((m) => m.type === 'hook:event' && m.payload.type === 'PasswordRequest')).toBe(false);
-  });
-
-  it('a PasswordResolved purges a same-id PasswordRequest if one somehow got in, and is never replayed itself', async () => {
-    const { RemoteServer } = await import('../src/main/remote-server');
-    const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
-    const { frames, ws } = fakeWs();
-
-    // A different open ask must survive, mirroring the PermissionResolved test above.
-    server.bufferHookEvent({ sessionId: 's1', type: 'PermissionRequest', payload: { _requestId: 'native-open' }, timestamp: Date.now() });
-    server.bufferHookEvent({ sessionId: 's1', type: 'PasswordResolved', payload: { _requestId: 'pw-1' }, timestamp: Date.now() });
-
-    await replayAndWait(server, ws);
-
-    expect(frames.some((m) => m.type === 'hook:event' && m.payload.type === 'PasswordResolved')).toBe(false);
-    expect(frames.some((m) => m.type === 'hook:event' && m.payload.payload?._requestId === 'native-open')).toBe(true);
-  });
 
   // admin-password design §2.5/R6/R13: a paired phone or browser may answer
   // the password card, and `password` must never reach a log line anywhere
@@ -1840,13 +1715,7 @@ describe('RemoteServer session:history id validation', () => {
 // unconditionally, because the remote server is always on. It is now an array of
 // chunks joined only at connect time. These tests pin the two things that must NOT
 // change (the replayed tail, and the live broadcast) alongside the new bounds.
-describe('RemoteServer replay buffers stay bounded and replay the same tail', () => {
-  // Mirrors the module constants; they are not exported, and hard-coding them here
-  // means a change to either one shows up as a failing test rather than silently
-  // re-scaling the assertions.
-  const PTY_CAP = 4 * 1024 * 1024;
-  const HOOK_CAP = 10_000;
-
+describe('RemoteServer terminal relay (the stream itself lives in the session record: tests/session-record-fill.test.ts)', () => {
   let mockSessionManager: any;
   let mockHookRelay: any;
   let mockConfig: any;
@@ -1857,98 +1726,14 @@ describe('RemoteServer replay buffers stay bounded and replay the same tail', ()
     mockConfig = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
   });
 
-  function fakeWs() {
-    const frames: any[] = [];
-    return { frames, ws: { readyState: 1, send: (raw: string) => frames.push(JSON.parse(raw)) } as any };
-  }
-
-  // Same restore the Task 9 suite above drives.
-  async function replayAndWait(server: any, ws: any) {
-    await restore(server, ws);
-  }
-
   async function newServer() {
     const { RemoteServer } = await import('../src/main/remote-server');
-    return new RemoteServer(mockSessionManager, mockHookRelay, mockConfig) as any;
+    const { SessionRecords } = await import('../src/main/session-record');
+    const server = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig) as any;
+    // WHY a real record (one-core R5-2): the terminal's bytes, epoch and offsets are the record's now; the server appends and relays.
+    giveRuntime(server, { records: new SessionRecords() });
+    return server;
   }
-
-  it('never lets a session buffer exceed the 4 MB cap, however the output is chopped up', async () => {
-    const server = await newServer();
-    // 100 x 64 KiB = 6.25 MiB pushed through a 4 MiB cap.
-    const chunk = 64 * 1024;
-    for (let i = 0; i < 100; i++) {
-      server.onPtyOutput('s1', String.fromCharCode(97 + (i % 26)).repeat(chunk));
-    }
-    const buf = server.ptyBuffers.get('s1');
-    expect(buf.length).toBeLessThanOrEqual(PTY_CAP);
-    // The running counter must agree with what is actually stored, or the trim
-    // loop would drift and the cap would stop meaning anything.
-    expect(buf.length).toBe(buf.chunks.join('').length);
-  });
-
-  it('replays the tail of the output, not the head', async () => {
-    const server = await newServer();
-    const chunk = 64 * 1024; // divides the cap exactly, so the tail is exact
-    let full = '';
-    for (let i = 0; i < 100; i++) {
-      const data = String.fromCharCode(97 + (i % 26)).repeat(chunk);
-      full += data;
-      server.onPtyOutput('s1', data);
-    }
-
-    const { frames, ws } = fakeWs();
-    await replayAndWait(server, ws);
-
-    const pty = frames.filter((m) => m.type === 'pty:output' && m.payload.sessionId === 's1');
-    expect(pty).toHaveLength(1);
-    expect(pty[0].payload.data).toBe(full.slice(-PTY_CAP));
-  });
-
-  it('trims on a chunk boundary when the chunks do not divide the cap evenly', async () => {
-    const server = await newServer();
-    const chunk = 100_000; // does not divide 4 MiB
-    let full = '';
-    for (let i = 0; i < 60; i++) {
-      const data = String.fromCharCode(97 + (i % 26)).repeat(chunk);
-      full += data;
-      server.onPtyOutput('s1', data);
-    }
-
-    const { frames, ws } = fakeWs();
-    await replayAndWait(server, ws);
-    const replayed = frames.find((m) => m.type === 'pty:output').payload.data;
-
-    // Still a suffix of everything written, still under the cap — but because whole
-    // chunks are dropped rather than cutting mid-chunk, it can be up to one chunk
-    // shorter than the old string buffer would have been. That is expected.
-    expect(full.endsWith(replayed)).toBe(true);
-    expect(replayed.length).toBeLessThanOrEqual(PTY_CAP);
-    expect(replayed.length).toBeGreaterThan(PTY_CAP - chunk);
-  });
-
-  it('caps a single chunk that is bigger than the whole buffer', async () => {
-    const server = await newServer();
-    const huge = 'z'.repeat(PTY_CAP + 5000);
-    server.onPtyOutput('s1', huge);
-    const buf = server.ptyBuffers.get('s1');
-    expect(buf.length).toBe(PTY_CAP);
-    expect(buf.chunks.join('')).toBe(huge.slice(-PTY_CAP));
-  });
-
-  it('does not accumulate array entries for empty output, or for one-character output', async () => {
-    const server = await newServer();
-    for (let i = 0; i < 100; i++) server.onPtyOutput('s1', '');
-    expect(server.ptyBuffers.get('s1').chunks).toHaveLength(0);
-    expect(server.ptyBuffers.get('s1').length).toBe(0);
-
-    // 20,000 single keystrokes must not become 20,000 array entries — they are
-    // coalesced into ~4 KB chunks (see PTY_CHUNK_COALESCE_BELOW).
-    for (let i = 0; i < 20_000; i++) server.onPtyOutput('s1', 'x');
-    const buf = server.ptyBuffers.get('s1');
-    expect(buf.length).toBe(20_000);
-    expect(buf.chunks.join('')).toBe('x'.repeat(20_000));
-    expect(buf.chunks.length).toBeLessThan(20);
-  });
 
   it('still broadcasts every PTY chunk live to a connected client', async () => {
     // Guards the pitfall this change sits next to: a broadcast nobody asked for is
@@ -1985,16 +1770,6 @@ describe('RemoteServer replay buffers stay bounded and replay the same tail', ()
     }
   });
 
-  it('bounds the hook-event buffer at 10,000 events and keeps the newest ones', async () => {
-    const server = await newServer();
-    for (let i = 0; i < HOOK_CAP + 500; i++) {
-      server.bufferHookEvent({ sessionId: 's1', type: 'Notification', payload: { n: i }, timestamp: 0 });
-    }
-    const buf = server.hookBuffers.get('s1');
-    expect(buf).toHaveLength(HOOK_CAP);
-    expect(buf[0].payload.n).toBe(500);              // oldest 500 dropped
-    expect(buf[buf.length - 1].payload.n).toBe(HOOK_CAP + 499); // newest kept
-  });
 });
 
 // The gear badge used to poll remote:get-client-count every 10 s per window

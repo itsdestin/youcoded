@@ -74,7 +74,10 @@ export interface RemoteHost {
   getStatus(): unknown;
   getDeviceList(): unknown[];
 }
-export type MainChannelCtx = ChannelCtx<RemoteNativeRuntime> & { desktop?: DesktopServices; remote?: RemoteServices; sender?: DesktopSender };
+/** WHY (2026-10-01 one-core R5-2): `session:open` fills ONE screen and must know which (to hold that screen's pushes while it is
+ *  filled) and when its answer has been sent (to let them through). `audienceId` is the screen's id in the window registry
+ *  (a phone's negative id; a window's own is `windowId`); `afterReply` runs a callback once the door has sent the answer. */
+export type MainChannelCtx = ChannelCtx<RemoteNativeRuntime> & { desktop?: DesktopServices; remote?: RemoteServices; sender?: DesktopSender; audienceId?: number; afterReply?: (fn: () => void) => void };
 export type MainChannelDef<Payload = any, Result = any> = ChannelDef<MainChannelCtx, Payload, Result>;
 
 /** A table entry whose name pins its payload and answer types to ChannelTypes. */

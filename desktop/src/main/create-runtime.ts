@@ -55,6 +55,7 @@ import type { SessionInfo } from '../shared/types';
 import type { Platform } from './platform';
 import { createSessionState, type SessionState } from './ipc/session-state';
 import { SessionRecords } from './session-record';
+import { AudienceFills } from './audience-fill';
 
 export interface CreateRuntimeDeps {
   /** The profile folder (Electron's userData in the app). Every private file lives under it. */
@@ -79,9 +80,9 @@ export type RemoteNativeRuntime = Pick<NativeRuntime,
   // WHY sessionState (2026-09-30 one-core R3-7): the artifact channels match a session's files to its conversation
   // through the ONE id map, for a window and for a phone.
   | 'sessionState'
-  // WHY records (one-core R5-1): RemoteServer feeds Claude Code's hook events into the record, which
-  // reaches phones through its own listener, not through publish (R5-2 merges them).
-  | 'records'>;
+  // WHY records and fills (one-core R5-2): the phone door fills a screen from the record (session:open) and holds a
+  // screen's pushes while it is being filled, the same as the computer's door.
+  | 'records' | 'fills'>;
 
 type TitleAppliedListener = (desktopId: string, title: string) => void;
 
@@ -117,6 +118,8 @@ export interface NativeRuntime {
   sessionState: SessionState;
   /** The computer's record of each session: epoch, numbered event ring, open asks, live facts (session-record.ts). */
   records: SessionRecords;
+  /** Pushes held for a screen that is being filled with a session (audience-fill.ts). */
+  fills: AudienceFills;
   /** A door subscribes to hear an automatic title land (window push + phone push). */
   onTitleApplied(listener: TitleAppliedListener): void;
   /** Runtime half of app quit. Returns the engine-stop promise so quit can await it. */
@@ -609,6 +612,7 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
   // and the phone door's hook feed write to ONE copy. Native sessions' queue and mode are read from the host
   // that owns them (never copied); every other fact is folded from the events publish carries.
   const records = new SessionRecords();
+  const fills = new AudienceFills();
   records.setLiveSource((sessionId) => (nativeHost.isNativeSessionId(sessionId)
     ? { queued: nativeHost.queuedMessageIds(sessionId), permissionMode: nativeHost.getPermissionMode(sessionId) }
     : null));
@@ -618,7 +622,7 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
     chatgptAuth: chatgptForUi, providerRegistry, openRouterSignIn, modelCatalog, claudeAccount,
     searchKeyStore, searchService, specialistCatalog, nativeHost, modelManager, namingSettings,
     sessionNamer, applyAutomaticTitle, queueTitle, publishNamingMode, resolvePortableModel,
-    stampProviderTypes, sessionState, records,
+    stampProviderTypes, sessionState, records, fills,
     onTitleApplied: (listener) => { titleListeners.push(listener); },
     cleanup: () => {
       openRouterSignIn.dispose();
@@ -632,6 +636,7 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
       const engineStopped = engineManager.stopAll().catch(() => {});
       sessionState.dispose();
       records.clear();
+      fills.clear();
       return engineStopped;
     },
   };

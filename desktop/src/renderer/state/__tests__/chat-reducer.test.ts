@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { chatReducer } from '../chat-reducer';
-import { createSessionChatState, serializeChatState } from '../chat-types';
+import { createSessionChatState } from '../chat-types';
 import type { ChatState } from '../chat-types';
 import type { ToolCallState } from '../../../shared/types';
 
@@ -451,106 +451,6 @@ describe('chatReducer permission ask renders the requesting tool input', () => {
 // Remote-access hydration guards. Both invariants here are the kind that fail
 // silently in production — a wrong-looking timeline, or a chat that vanishes —
 // so they are pinned rather than left to manual verification.
-describe('chatReducer HYDRATE_CHAT_STATE', () => {
-  /** A snapshot as a long-running host would send it: ids from its own counter. */
-  function snapshotWithLegacyIds() {
-    const session = createSessionChatState();
-    session.timeline.push({
-      kind: 'user',
-      message: { id: 'msg-1', role: 'user', content: 'hydrated message', timestamp: 1000 },
-    } as any);
-    return serializeChatState(new Map([['sess-1', session]]));
-  }
-
-  /** Timeline message ids — they live on entry.message.id, not entry.id. */
-  function messageIds(state: ChatState, sessionId = 'sess-1'): string[] {
-    return state
-      .get(sessionId)!
-      .timeline.filter((e: any) => e.kind === 'user')
-      .map((e: any) => e.message.id);
-  }
-
-  it('never mints a live message id that collides with a hydrated one', async () => {
-    // The bug: the module-level id counter restarts at 0 on a fresh remote
-    // client while the snapshot already holds msg-1..msg-N, so the next live
-    // message reused an existing React key and the list mis-reconciled.
-    //
-    // resetModules() is load-bearing. This MUST run against a freshly-imported
-    // reducer so the counter really is at 0 — reusing the file-level import
-    // makes the test vacuous, because earlier tests here have already advanced
-    // the counter past the ids in the snapshot and no collision can occur.
-    vi.resetModules();
-    const { chatReducer: freshReducer } = await import('../chat-reducer');
-
-    let state: ChatState = new Map();
-    state = freshReducer(state, {
-      type: 'HYDRATE_CHAT_STATE',
-      sessions: snapshotWithLegacyIds(),
-    } as any);
-
-    const hydratedIds = new Set(messageIds(state));
-    expect(hydratedIds.has('msg-1')).toBe(true);
-
-    state = freshReducer(state, {
-      type: 'USER_PROMPT',
-      sessionId: 'sess-1',
-      content: 'live message',
-      timestamp: 2000,
-    } as any);
-
-    const ids = messageIds(state);
-    const liveId = ids[ids.length - 1];
-    expect(liveId).toBeDefined();
-    expect(hydratedIds.has(liveId)).toBe(false);
-    expect(new Set(ids).size).toBe(ids.length);
-  });
-
-  it('ignores an empty snapshot instead of blanking live state', () => {
-    // An empty payload is what the host sends on export timeout or serialize
-    // failure — not a claim that there are no sessions. Applying it wiped a
-    // reconnecting client's chat with no error surfaced.
-    let state: ChatState = new Map();
-    state = chatReducer(state, {
-      type: 'HYDRATE_CHAT_STATE',
-      sessions: snapshotWithLegacyIds(),
-    } as any);
-
-    const before = state;
-    state = chatReducer(state, {
-      type: 'HYDRATE_CHAT_STATE',
-      sessions: { sessions: [], degraded: true },
-    } as any);
-
-    expect(state).toBe(before);
-    expect(state.get('sess-1')!.timeline).toHaveLength(1);
-  });
-
-  it('still replaces state for a non-empty snapshot', () => {
-    // Guard against over-correcting the empty-snapshot fix into "never replaces".
-    let state: ChatState = new Map();
-    state = chatReducer(state, {
-      type: 'HYDRATE_CHAT_STATE',
-      sessions: snapshotWithLegacyIds(),
-    } as any);
-
-    const replacement = createSessionChatState();
-    replacement.timeline.push({
-      id: 'msg-99',
-      role: 'user',
-      content: 'replacement',
-      timestamp: 3000,
-    } as any);
-
-    state = chatReducer(state, {
-      type: 'HYDRATE_CHAT_STATE',
-      sessions: serializeChatState(new Map([['sess-2', replacement]])),
-    } as any);
-
-    expect(state.has('sess-1')).toBe(false);
-    expect(state.get('sess-2')!.timeline).toHaveLength(1);
-  });
-});
-
 // ─────────────────────────────────────────────────────────────────────────
 // Task 12: queued messages leave the timeline — docked strip + true-position
 // confirm. Replaces the Task 3/11 timeline-based queued mechanics (the

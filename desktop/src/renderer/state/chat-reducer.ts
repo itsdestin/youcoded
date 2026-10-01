@@ -864,71 +864,6 @@ function patchNestedAsk(
   return null;
 }
 
-/** A hydrated copy counts as empty when it carries no conversation at all — the blank
- *  slot a window seeds for every session it has heard of. */
-function isEmptyCopy(ser: SerializedChatState['sessions'][number][1]): boolean {
-  return (ser.timeline?.length ?? 0) === 0 && (ser.assistantTurns?.length ?? 0) === 0;
-}
-
-/**
- * Which of the phone's sessions a hydrate leaves as the phone's own copy (remote access
- * batch 2, design §6). The shim turns a non-empty answer into "may be out of date",
- * because a kept session's turn state is only as current as the phone's last event.
- * The ONE definition, used by HYDRATE_CHAT_STATE and by App's report to the shim.
- */
-export function keptByHydrate(prev: ChatState, snapshot: SerializedChatState): string[] {
-  if (snapshot.sessions.length === 0) return [...prev.keys()];
-  if (!snapshot.degraded) return [];
-  const replaced = new Set(snapshot.sessions.filter(([, ser]) => !isEmptyCopy(ser)).map(([id]) => id));
-  return [...prev.keys()].filter((id) => !replaced.has(id));
-}
-
-/**
- * The phone's own unsent actions survive a hydrate (design §6, R2-13): pending user
- * bubbles and queued messages. Only the ones the computer's copy has NOT already echoed
- * — an echo the copy holds would otherwise show twice, because the reducer drops a
- * transcript message whose uuid the copy has already seen, so that pending bubble would
- * never clear.
- *
- * WHICH copy entries are unapplied echoes (T4 review, 4): user entries the phone never
- * saw (by transcript uuid) that come AFTER the last user entry it did see. Counting all
- * entries with the same text broke whenever the two copies had loaded older history to
- * different depths — a phone that scrolled further showed an echoed "yes" twice, and a
- * computer that scrolled further swallowed a freshly typed "continue". Unapplied echoes
- * are consumed oldest-first by pending bubbles, then queued rows, matching text the way
- * TRANSCRIPT_USER_MESSAGE confirms a bubble. A copy from a host that predates the uuid
- * counts every entry, as the phone had nothing better to go on.
- *
- * A first copy (no phone copy yet) adopts NO queued rows: the computer's queue is the
- * computer's own, not an action this phone took (T4 review, 12).
- */
-function carryUnsent(prev: SessionChatState | undefined, copy: SessionChatState): SessionChatState {
-  if (!prev) return { ...copy, queuedMessages: [] };
-  const seen = prev.seenUuids;
-  let lastKnown = -1;
-  copy.timeline.forEach((e, i) => {
-    if (e.kind === 'user' && !e.pending && e.uuid && seen.has(e.uuid)) lastKnown = i;
-  });
-  const unapplied = new Map<string, number>();
-  copy.timeline.forEach((e, i) => {
-    if (i <= lastKnown || e.kind !== 'user' || e.pending || e.injected) return;
-    if (e.uuid && seen.has(e.uuid)) return;
-    const key = visibleText(e.message.content);
-    unapplied.set(key, (unapplied.get(key) ?? 0) + 1);
-  });
-  // visibleText, like sameUserMessage: the copy holds CC's RECORDED text, spacing may differ.
-  const consume = (text: string) => {
-    const key = visibleText(text);
-    const n = unapplied.get(key) ?? 0;
-    if (n <= 0) return false;
-    unapplied.set(key, n - 1);
-    return true;
-  };
-  const carried = prev.timeline.filter((e) => e.kind === 'user' && e.pending && !consume(e.message.content));
-  const queuedMessages = prev.queuedMessages.filter((q) => !consume(q.content));
-  return { ...copy, timeline: carried.length ? [...copy.timeline, ...carried] : copy.timeline, queuedMessages };
-}
-
 /** A stall WARNING belongs to the amber 'stuck' state and nothing else.
  *
  *  WHY (roadmap: the amber "Still waiting" card and the "Retrying in 15s…"
@@ -988,47 +923,34 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       return new Map();
     }
 
-    case 'HYDRATE_CHAT_STATE': {
-      // Fix: an empty snapshot is what the host sends when its renderer times
-      // out (chat-snapshot.ts TIMEOUT_MS) or serialization throws — NOT a
-      // signal that there are no sessions. Applying it blanked a reconnecting
-      // client's entire chat with no error surfaced. Never replace real state
-      // with nothing.
-      if (action.sessions.sessions.length === 0) {
-        console.warn('[chat-reducer] ignoring empty chat:hydrate snapshot');
-        return state;
-      }
-      try {
-        const copies = deserializeChatState(action.sessions);
-        const hydrated = (s: SessionChatState): SessionChatState => ({ ...s, history: { ...s.history, hydrated: true } });
-        // Remote access batch 2 (design §6, R1-1): a COMPLETE copy replaces the whole
-        // state — the computer's copy is the only source (§4). An INCOMPLETE one replaces
-        // only the sessions it holds with a non-empty copy, keeps the phone's copy of
-        // every other and deletes nothing: a window that did not answer must not empty
-        // the phone (contract R3). Both keep the phone's own unsent actions, and every
-        // delivered session is marked so the phone never loads a first page on top of it.
-        if (!action.sessions.degraded) {
-          const out: ChatState = new Map();
-          for (const [id, ser] of action.sessions.sessions) {
-            const merged = carryUnsent(state.get(id), copies.get(id)!);
-            // A blank copy is not a delivery (T4 review, 5): a window that gave up loading
-            // that conversation's first page sends it empty, and marking it would stop the
-            // phone from loading its own.
-            out.set(id, isEmptyCopy(ser) ? merged : hydrated(merged));
-          }
-          return out;
-        }
-        const out: ChatState = new Map(state);
-        for (const [id, ser] of action.sessions.sessions) {
-          const copy = copies.get(id)!;
-          if (!isEmptyCopy(ser)) out.set(id, hydrated(carryUnsent(state.get(id), copy)));
-          else if (!out.has(id)) out.set(id, copy);   // a blank slot, not a delivered copy
-        }
-        return out;
-      } catch (err) {
-        console.error('[chat-reducer] HYDRATE_CHAT_STATE deserialize failed:', err);
-        return state;
-      }
+    // WHY (one-core R5-2): a screen is filled by `session:open` (main/session-open.ts), not by a copy of another window's chat
+    // state, so the old HYDRATE_CHAT_STATE (the phone's snapshot apply, with its degraded/kept/carry-unsent rules) is gone. What is
+    // left is the dev workbench's seeding: it builds timelines by replaying fixtures through this reducer and hands the result in
+    // whole (workbench/seed-chat.ts). Nothing on a real screen dispatches it.
+    case 'CHAT_STATE_SEEDED': {
+      if (action.sessions.sessions.length === 0) return state;
+      const copies = deserializeChatState(action.sessions);
+      for (const [id, copy] of copies) next.set(id, copy);
+      return next;
+    }
+
+    // A fresh page is about to be applied to a session this screen already shows (a reconnect that found the record changed or
+    // the gap too old, a Refresh, or the first open): start the session over so the answer is the only source. What is
+    // renderer-local survives: rows this screen queued (a native queued send waits for the host to drain it).
+    case 'SESSION_FILL_RESET': {
+      const prev = next.get(action.sessionId);
+      next.set(action.sessionId, { ...createSessionChatState(), ...(prev ? { queuedMessages: prev.queuedMessages } : {}) });
+      return next;
+    }
+
+    // The record says a turn is in flight and this screen's copy, filled from a page, does not show it (a page read from disk cannot
+    // say; a Claude Code turn that was mid-answer when this screen opened). Only ever turns the thinking indicator ON: ending a
+    // turn is the transcript's job (turn-complete / the idle marker), never a fill's.
+    case 'SESSION_WORKING_SYNCED': {
+      const session = next.get(action.sessionId);
+      if (!session || !action.working || session.isThinking) return state;
+      next.set(action.sessionId, { ...session, isThinking: true });
+      return next;
     }
 
     case 'SESSION_INIT': {
@@ -2420,18 +2342,21 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       // tool finished before the process died, and a card claiming success for
       // work that may never have run is the misleading-success failure
       // docs/error-message-standards.md exists to prevent.
-      // NOTE the asymmetry with NATIVE_SESSION_ERROR, which spreads endTurn()
-      // and then RE-ASSERTS attentionState/errorMessage. This spread does not,
-      // so it resets attentionState to 'ok' and clears errorMessage — which
-      // would wipe an error banner and unblock the input gate
+      // NOTE the asymmetry with NATIVE_SESSION_ERROR, which spreads endTurn() and then RE-ASSERTS attentionState/errorMessage: endTurn
+      // resets attentionState to 'ok' and clears errorMessage, which would wipe an error banner and unblock the input gate
       // (pty-input-gate.ts keys on attentionState !== 'ok').
-      // Safe today only because no replay lands on a session holding an error:
-      // onOwnershipLost dispatches SESSION_REMOVE, which deletes the state, so
-      // every re-dock replays into a fresh slot. If that ever changes, this
-      // needs the same re-assert NATIVE_SESSION_ERROR does.
+      //
+      // WHY it is re-asserted here now (one-core R5-2): this used to be safe only because no replay landed on a session holding an error
+      // (a window that inherited a session started from a blank slot). A screen that is filled by `session:open` replays the record's
+      // recent past FIRST (a provider error is a live-only event, so it is in that past) and then this marker, so the marker lands on
+      // exactly such a session. An error the turn died of is not something "the session was closed" undoes.
+      const ended = endTurn(withShells, 'Session was closed while this was running');
       next.set(action.sessionId, {
         ...withShells,
-        ...endTurn(withShells, 'Session was closed while this was running'),
+        ...ended,
+        ...(session.attentionState === 'error'
+          ? { attentionState: 'error' as const, errorMessage: session.errorMessage, errorCode: session.errorCode }
+          : {}),
       });
       return next;
     }

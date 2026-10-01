@@ -62,14 +62,13 @@ const SLUG = '-home-destin-project';
 
 describe('history page interruption boundary', () => {
   it('reconciles native history only when the host confirms the session is idle', () => {
-    expect(shouldReconcileNativePage({ nativeIdle: true, inherited: false, olderPage: false })).toBe(true);
-    expect(shouldReconcileNativePage({ nativeIdle: false, inherited: false, olderPage: false })).toBe(false);
+    expect(shouldReconcileNativePage({ nativeIdle: true, olderPage: false })).toBe(true);
+    expect(shouldReconcileNativePage({ nativeIdle: false, olderPage: false })).toBe(false);
   });
 
-  it('reconciles idle older pages, but never guesses that a busy or transferred page is stale', () => {
-    expect(shouldReconcileNativePage({ nativeIdle: true, inherited: false, olderPage: true })).toBe(true);
-    expect(shouldReconcileNativePage({ nativeIdle: false, inherited: false, olderPage: true })).toBe(false);
-    expect(shouldReconcileNativePage({ nativeIdle: true, inherited: true, olderPage: true })).toBe(false);
+  it('reconciles idle older pages, but never guesses that a busy page is stale', () => {
+    expect(shouldReconcileNativePage({ nativeIdle: true, olderPage: true })).toBe(true);
+    expect(shouldReconcileNativePage({ nativeIdle: false, olderPage: true })).toBe(false);
   });
 });
 
@@ -181,8 +180,8 @@ describe('transcript:page locator memory', () => {
     });
     expect(page.reconcileInterruptedToolIds).toEqual(['old-tool']);
     expect(page.events.some((e: any) => e.data?.text === 'prompt 2')).toBe(true);
-    registry.markInheritedByTransfer('desktop-1', 1);
-    const redocked = await handler(evt, { sessionId: 'desktop-1', beforeCursor: null });
+    // A screen that opens (a re-dock, a phone) reads to the end of the file: `toEnd`, which session:open always sets.
+    const redocked = await handler(evt, { sessionId: 'desktop-1', beforeCursor: null, toEnd: true });
     expect(redocked.reconcileInterruptedToolIds).toEqual(['old-tool']);
     expect(redocked.events.some((e: any) => e.data?.text === 'prompt 2')).toBe(true);
     // An older page wholly before the restart is historical even after the
@@ -251,13 +250,8 @@ describe('transcript:page locator memory', () => {
       const first = await handler(evt, { sessionId: 'desktop-1', beforeCursor: null });
       expect(first.reconcileInterruptedToolIds).toBeUndefined();
 
-      const registry = new WindowRegistry();
-      const inheritedHandler = pageHandler(registry);
-      registry.markInheritedByTransfer('desktop-1', 1);
-      const consume = vi.spyOn(registry, 'consumeInheritedByTransfer');
-      const inherited = await inheritedHandler(evt, { sessionId: 'desktop-1', beforeCursor: null });
-      expect(consume).toHaveBeenCalledWith('desktop-1', 1);
-      expect(inherited.reconcileInterruptedToolIds).toBeUndefined();
+      const opened = await handler(evt, { sessionId: 'desktop-1', beforeCursor: null, toEnd: true });
+      expect(opened.reconcileInterruptedToolIds).toBeUndefined();
     } finally {
       spy.mockRestore();
     }
@@ -298,23 +292,6 @@ describe('transcript:page locator memory', () => {
       sessionId: 'desktop-1', beforeCursor: { path: 'x', offset: 10, sizeAtRead: 10 },
     });
     expect(older.unresolved).toBe(true);
-  });
-
-  // A window that INHERITED a session by tear-off is marked so its first page
-  // reads to EOF (WindowRegistry.markInheritedByTransfer) — without that it
-  // renders a conversation frozen at the moment the session was resumed. The
-  // mark is a ONE-SHOT consumed by the first `beforeCursor: null` request, and
-  // first-page requests now retry for longer while main reports `unresolved`,
-  // so an attempt that served nothing must not be the one that spends it.
-  it('an unresolved answer does not spend the tear-off read-to-EOF mark', async () => {
-    const registry = new WindowRegistry();
-    registry.markInheritedByTransfer('desktop-1', 1);
-    const handler = pageHandler(registry);
-
-    const page = await handler(evt, { sessionId: 'desktop-1', beforeCursor: null });
-    expect(page.unresolved).toBe(true);
-
-    expect(registry.consumeInheritedByTransfer('desktop-1', 1)).toBe(true);
   });
 
   it('forgets a remembered locator when its session is destroyed', async () => {

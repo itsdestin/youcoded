@@ -224,7 +224,8 @@ const IPC = {
   SESSION_OWNERSHIP_ACQUIRED: 'session:ownership-acquired',
   SESSION_OWNERSHIP_LOST: 'session:ownership-lost',
   DETACH_CLAIM_PENDING: 'detach:claim-pending',
-  SESSION_REPLAY_LIVE_STATE: 'session:replay-live-state',
+  SESSION_OPEN: 'session:open',
+  HOOK_REPLAY_COMPLETE: 'hook:replay-complete',
   SESSION_DETACH_START: 'session:detach-start',
   SESSION_DETACH_LIVE: 'session:detach-live',
   SESSION_DRAG_WINDOW_MOVE: 'session:drag-window-move',
@@ -234,7 +235,6 @@ const IPC = {
   SESSION_DRAG_ADOPT: 'session:drag-adopt',
   SESSION_DROP_RESOLVE: 'session:drop-resolve',
   CROSS_WINDOW_CURSOR: 'session:cross-window-cursor',
-  TRANSCRIPT_REPLAY: 'transcript:replay-from-start',
   TRANSCRIPT_PAGE: 'transcript:page',
   APPEARANCE_BROADCAST: 'appearance:broadcast',
   APPEARANCE_SYNC: 'appearance:sync',
@@ -426,8 +426,6 @@ const IPC = {
   MARKETPLACE_COMMENT: 'marketplace:comment',
   MARKETPLACE_THEME_LIKE: 'marketplace:theme:like',
   MARKETPLACE_REPORT: 'marketplace:report',
-  CHAT_EXPORT_SNAPSHOT: 'chat:export-snapshot',
-  CHAT_SNAPSHOT_RESPONSE: 'chat:snapshot-response',
   REMOTE_ATTENTION_CHANGED: 'remote:attention-changed',
   ANALYTICS_GET_OPT_IN: 'analytics:get-opt-in',
   ANALYTICS_SET_OPT_IN: 'analytics:set-opt-in',
@@ -527,6 +525,13 @@ const DESKTOP_WINDOW_CAPABILITIES = {
 } as const;
 // <<< GENERATED-CAPABILITIES
 
+// The pushes `session.open`'s answer replays through the live listeners (see session.play below). A list, not "anything", so a
+// confused answer cannot make this window emit a channel it never meant to (an ipcRenderer.emit of an arbitrary name).
+const PLAYABLE_PUSHES = new Set<string>([
+  'transcript:event', 'transcript:shrink', 'hook:event', 'hook:replay-complete', 'specialists:event',
+  'native:shell-event', 'native:session-context', 'native:permission-mode', 'native:model-state',
+]);
+
 // Strip the transport prefix Electron puts on a rejected invoke (see the
 // `chatgpt` namespace for why), keeping the handler's own sentence. Anything
 // that is not that exact shape is rethrown untouched.
@@ -598,6 +603,19 @@ contextBridge.exposeInMainWorld('claude', {
     },
     create: (opts: { name: string; cwd: string; skipPermissions: boolean; cols?: number; rows?: number; resumeSessionId?: string; provider?: 'claude' | 'native'; model?: string }) =>
       ipcRenderer.invoke(IPC.SESSION_CREATE, opts),
+    // The ONE way a conversation is filled (one-core R5-2; the host half is main/session-open.ts): the newest page, the record's recent
+    // past and what only memory holds. The caller applies the answer, then calls `play` for the pushes in it. Until the answer is sent,
+    // main holds this window's pushes for the session, so the answer and the live stream never overlap or leave a gap.
+    open: (req: { sessionId: string; claudeSessionId?: string; projectSlug?: string; fresh?: boolean }) =>
+      ipcRenderer.invoke(IPC.SESSION_OPEN, req),
+    // Hand pushes (an open's `before` / `after`) to the SAME listeners a live push reaches. `ipcRenderer` is an event emitter, so
+    // emitting the channel locally runs exactly the handlers `on.*` registered, with no second set of rules for a filled window.
+    play: (pushes: Array<{ type: string; payload: unknown }>) => {
+      for (const p of pushes ?? []) {
+        if (!PLAYABLE_PUSHES.has(p.type)) continue;
+        try { ipcRenderer.emit(p.type, {}, p.payload); } catch (e) { console.error('[preload] replayed push failed:', p.type, e); }
+      }
+    },
     destroy: (sessionId: string) =>
       ipcRenderer.invoke(IPC.SESSION_DESTROY, { sessionId }),
     list: () => ipcRenderer.invoke(IPC.SESSION_LIST),
@@ -691,10 +709,12 @@ contextBridge.exposeInMainWorld('claude', {
     ptyResetForSession: (_sessionId: string, _cb: () => void) => {
       return () => {};
     },
-    // Remote access batch 2 (§7): the host's list of still-open permission asks
-    // after a reconnect replay. Desktop cards are answered in place — never fires.
-    hookReplayComplete: (_cb: (payload: { sessionId: string; pendingRequestIds: string[] }) => void) => {
-      return () => {};
+    // The list of permission asks still open in a session, sent at the end of every fill (`session.open`, one-core R5-2): a card
+    // that is awaiting and not named was answered while this screen could not see it.
+    hookReplayComplete: (cb: (payload: { sessionId: string; pendingRequestIds: string[] }) => void) => {
+      const handler = (_e: IpcRendererEvent, payload: any) => cb(payload);
+      ipcRenderer.on(IPC.HOOK_REPLAY_COMPLETE, handler);
+      return () => { ipcRenderer.removeListener(IPC.HOOK_REPLAY_COMPLETE, handler); };
     },
     // Remote access batch 2 (§6): where a phone's copy of the conversation stands. Only
     // the remote shim ever pushes it — declared, never fires here.
@@ -782,21 +802,10 @@ contextBridge.exposeInMainWorld('claude', {
       return handler;
     },
   },
-  // Remote-access state sync — Electron-only surfaces (not in remote-shim.ts).
-  // The remote server handles chat:hydrate via WebSocket directly; remote
-  // browsers receive attentionMap via status:data. These bindings are only
-  // needed on the desktop side of the snapshot export / attention relay pipeline.
-  //
-  // onChatExportSnapshot: main pushes a requestId; renderer replies via sendChatSnapshotResponse.
-  // sendChatSnapshotResponse: renderer→main reply carrying the serialized chat state.
+  // Remote-access state sync — Electron-only surface (not in remote-shim.ts).
   // fireRemoteAttentionChanged: renderer→main fire when attentionState diffs (Task 8).
-  onChatExportSnapshot: (cb: (requestId: string) => void) => {
-    const handler = (_e: IpcRendererEvent, requestId: string) => cb(requestId);
-    ipcRenderer.on(IPC.CHAT_EXPORT_SNAPSHOT, handler);
-    return () => ipcRenderer.off(IPC.CHAT_EXPORT_SNAPSHOT, handler);
-  },
-  sendChatSnapshotResponse: (payload: { requestId: string; snapshot: unknown; loadingSessionIds?: string[] }) =>
-    ipcRenderer.send(IPC.CHAT_SNAPSHOT_RESPONSE, payload),
+  // (The chat-snapshot export that used to live here — a phone's copy of this window's chat state — is gone: a phone fills from the
+  // computer's record, one-core R5-2.)
   fireRemoteAttentionChanged: (payload: { sessionId: string; state: string }) =>
     ipcRenderer.send(IPC.REMOTE_ATTENTION_CHANGED, payload),
   skills: {
@@ -1043,7 +1052,7 @@ contextBridge.exposeInMainWorld('claude', {
     // Batch 2 (§6): shape parity with the remote shim. The strip that calls these only
     // shows on a remote client; the desktop has no remote copy to refresh or report.
     rehydrate: () => ipcRenderer.invoke(IPC.REMOTE_REHYDRATE),
-    reportHydrate: (_report: { seq?: number; kept: string[] }) => {},
+    reportFill: (_report: { round?: number; failed?: number }) => {},
   },
   model: {
     getPreference: (): Promise<string> => ipcRenderer.invoke(IPC.MODEL_GET_PREFERENCE),
@@ -1336,29 +1345,16 @@ contextBridge.exposeInMainWorld('claude', {
     // subscribed, so it's missed on first load).
     getDirectory: (): Promise<any> =>
       ipcRenderer.invoke(IPC.WINDOW_GET_DIRECTORY),
-    // Fire-and-forget: main streams every historical TRANSCRIPT_EVENT for this
-    // session back over the normal transcript:event channel. The reducer's
-    // uuid-based dedup handles any overlap with live events.
-    requestTranscriptReplay: (sessionId: string) =>
-      ipcRenderer.send(IPC.TRANSCRIPT_REPLAY, { sessionId }),
     // Pull the ownership handoffs main queued while this window was booting.
     // Called once from App's mount effect, right after onOwnershipAcquired is
     // subscribed — a push that lands before that subscription is DROPPED by
     // Electron, not queued, which is why the pull exists.
     claimPending: (): Promise<any[]> =>
       ipcRenderer.invoke(IPC.DETACH_CLAIM_PENDING),
-    // Re-send the session state that exists only in main's memory (open
-    // permission asks, specialist + background-shell run records, and the
-    // replay-complete marker). Awaited AFTER the history page lands, because
-    // the marker reaps tool cards the page left 'running' and must not run
-    // before those cards exist.
-    replayLiveState: (sessionId: string): Promise<void> =>
-      ipcRenderer.invoke(IPC.SESSION_REPLAY_LIVE_STATE, { sessionId }),
-    // Perf cycle 2: request/response, unlike the fire-and-forget replay above.
-    // Returns ONE page of history (newest when beforeCursor is null, else the
+    // Perf cycle 2: request/response. Returns ONE page of history (newest when beforeCursor is null, else the
     // page immediately older than the cursor) so opening a huge conversation
     // renders ~30 turns instead of thousands.
-    requestTranscriptPage: (req: { sessionId: string; beforeCursor: unknown; claudeSessionId?: string; projectSlug?: string }) =>
+    requestTranscriptPage: (req: { sessionId: string; beforeCursor: unknown; claudeSessionId?: string; projectSlug?: string; toEnd?: boolean }) =>
       ipcRenderer.invoke(IPC.TRANSCRIPT_PAGE, req),
   },
   theme: {

@@ -19,10 +19,6 @@ import type {
 
 export type WindowKind = 'main' | 'buddy';
 
-// Remote access batch 2 (§2): how long a transfer counts as "the copy is still arriving"
-// for the remote snapshot. The inheriting window requests its first page as soon as it
-// acquires the session (tens of milliseconds); 10 s leaves wide margin under load.
-const PENDING_TRANSFER_MS = 10_000;
 const MAX_SESSION_ID_LENGTH = 256;
 
 interface WindowEntry {
@@ -85,14 +81,6 @@ export class WindowRegistry extends EventEmitter {
     }
     // Release subscriptions too — buddy windows subscribe without owning.
     this.releaseAllSubscriptionsForWindow(id, /* silent */ true);
-    // A window that closed before reading its inherited page leaves a mark that
-    // would otherwise outlive it and mis-serve whoever inherits that id later.
-    for (const [sessionId, winId] of this.inheritedByTransfer) {
-      if (winId === id) {
-        this.inheritedByTransfer.delete(sessionId);
-        this.transferMarkedAt.delete(sessionId);
-      }
-    }
     // A closed window shows nothing: drop its selection and, if it was the last one
     // focused, fall back to the leader for the remote snapshot's focus.
     this.selected.delete(id);
@@ -112,10 +100,6 @@ export class WindowRegistry extends EventEmitter {
   /** Release ownership of a session (if any). Always emits 'changed'. */
   releaseSession(sessionId: string): void {
     this.ownership.delete(sessionId);
-    // Called when the session exits or is destroyed: nothing will read its first page
-    // again, so a transfer gap left behind would degrade the remote snapshot for good.
-    this.inheritedByTransfer.delete(sessionId);
-    this.transferMarkedAt.delete(sessionId);
     // WHY (2026-09-16, per-session-maps investigation): a dead session's
     // subscriber set used to survive until the subscribing window closed —
     // the buddy window subscribes without owning, so every session it ever
@@ -221,88 +205,35 @@ export class WindowRegistry extends EventEmitter {
 
   /**
    * Who a session-scoped push goes to. Windows: the owner plus subscribers; when there are none the push
-   * falls back to the primary window (the unowned-session rule sendForSession always had). Sockets: EVERY
-   * registered phone today. WHY no filter yet: per-session delivery (R5-3) must not ship before the fill path
-   * (R5-2) exists, or a phone that switches to a session it was not receiving has nothing to catch up from.
-   * R5-3 changes this one line to the session's watchers.
+   * falls back to the primary window (the unowned-session rule sendForSession always had). Sockets: the
+   * phones that have OPENED the session (session:open subscribes them).
+   *
+   * WHY watchers and not every phone (one-core R5-2): a phone's screen is filled from the record as of an event
+   * number, so a push that reached it BEFORE it opened the session would be applied to a session with no history and
+   * then overlap the fill. Every phone opens every session it lists until R5-3 narrows that to the ones on screen, so
+   * what a phone receives is unchanged; what changes is that "who wants this" is now a fact the phone stated.
    */
   resolveAudience(sessionId: string): { windowIds: number[]; socketIds: number[]; fallbackToPrimary: boolean } {
     const windowIds = new Set<number>();
     const ownerId = this.ownership.get(sessionId);
     if (ownerId != null) windowIds.add(ownerId);
     for (const subId of this.getSubscribers(sessionId)) windowIds.add(subId);
-    return { windowIds: [...windowIds], socketIds: this.getSocketIds(), fallbackToPrimary: windowIds.size === 0 };
-  }
-
-  // sessionId -> the window that inherited it through an ownership TRANSFER and
-  // has not yet read its first page of history.
-  //
-  // Why this exists: TRANSCRIPT_PAGE's first page deliberately stops at the
-  // transcript watcher's startOffset, because everything after that byte was
-  // already delivered to the requester over the live TRANSCRIPT_EVENT stream.
-  // That contract holds for a window that has been listening since the watcher
-  // attached — and is FALSE for a window that just inherited the session, which
-  // received none of it. Such a window used to render history that ended at the
-  // moment the session was resumed, silently missing every message since
-  // (Destin, 2026-09-03: "the latest message shown is not actually the latest").
-  // A marked session's first page reads to EOF instead. One-shot: consumed by
-  // the first page read, so paging further back behaves normally.
-  private readonly inheritedByTransfer = new Map<string, number>();
-
-  // When each mark was set — the remote snapshot counts a mark as "pending" only for a
-  // bounded time (see isPendingTransfer). The one-shot read-to-EOF mark itself never
-  // expires.
-  private readonly transferMarkedAt = new Map<string, number>();
-
-  /** Mark a session as inherited by `windowId`, so its first page reads to EOF. */
-  markInheritedByTransfer(sessionId: string, windowId: number, now: number = Date.now()): void {
-    this.inheritedByTransfer.set(sessionId, windowId);
-    this.transferMarkedAt.set(sessionId, now);
+    return { windowIds: [...windowIds], socketIds: this.getSocketWatchers(sessionId), fallbackToPrimary: windowIds.size === 0 };
   }
 
   /**
-   * True exactly once, for the window that inherited this session — and clears
-   * the mark. Any other window (or a second read) gets false and today's
-   * stop-at-startOffset behaviour.
+   * Move a session from the window that owns it to another. Returns false (and changes
+   * nothing) when `fromWindowId` is not the current owner — the race protection main.ts's
+   * transferOwnership relies on.
+   *
+   * WHY no "inherited" mark any more (one-core R5-2): the target window used to be marked so its first
+   * page read to the end of the file (it missed the live stream), and the remote snapshot skipped the
+   * session until that page was read. Every screen now fills through `session:open`, which always reads
+   * to the end of the file and carries the record's recent past, so there is nothing to mark.
    */
-  consumeInheritedByTransfer(sessionId: string, windowId: number): boolean {
-    if (this.inheritedByTransfer.get(sessionId) !== windowId) return false;
-    this.inheritedByTransfer.delete(sessionId);
-    this.transferMarkedAt.delete(sessionId);
-    return true;
-  }
-
-  /**
-   * Remote access batch 2 (design §2): is this session's copy in its new window still
-   * arriving? A NON-consuming read of the same mark consumeInheritedByTransfer spends —
-   * the remote snapshot asks it on every connect and must never steal the mark that
-   * makes the inheriting window's first page read to EOF. While it is set, that
-   * window's copy stops at the moment the session was resumed, so the snapshot omits
-   * the session and says it is degraded rather than hand a phone a stale copy.
-   */
-  //
-  // BOUNDED (T3 review, 3): the mark only has to cover the moments between the transfer
-  // and the inheriting window asking for its first page — from then on that window's own
-  // `history.loading`, which the exporter reports, covers the incomplete copy through
-  // every retry. A session whose page can never resolve (a shell, an exited session with
-  // no transcript) re-marks on each failed read and then gives up, and an unbounded mark
-  // degraded every snapshot for the life of that window.
-  isPendingTransfer(sessionId: string, now: number = Date.now()): boolean {
-    const markedAt = this.transferMarkedAt.get(sessionId);
-    return this.inheritedByTransfer.has(sessionId) && markedAt !== undefined && now - markedAt < PENDING_TRANSFER_MS;
-  }
-
-  /**
-   * Move a session from the window that owns it to another, and mark the gap. Returns
-   * false (and changes nothing) when `fromWindowId` is not the current owner — the
-   * race protection main.ts's transferOwnership relied on. One method so the pending
-   * state the remote snapshot reads is produced by the real transfer path, never by a
-   * second copy of its two steps.
-   */
-  transferSession(sessionId: string, fromWindowId: number, toWindowId: number, now: number = Date.now()): boolean {
+  transferSession(sessionId: string, fromWindowId: number, toWindowId: number): boolean {
     if (this.ownership.get(sessionId) !== fromWindowId) return false;
     this.assignSession(sessionId, toWindowId);
-    this.markInheritedByTransfer(sessionId, toWindowId, now);
     return true;
   }
 

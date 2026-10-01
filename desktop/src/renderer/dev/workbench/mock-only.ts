@@ -94,6 +94,9 @@
 // Add a row the moment you design a channel ahead of its backend; delete the row, never the
 // guard, when it ships. An empty list is the healthy state.
 export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
+  // The workbench builds its conversations by replaying fixtures through the real reducer and handing the result to App whole. A real
+  // screen never gets a seed: it is filled from the computer's record (session.open, one-core R5-2). Stays as long as the workbench does.
+  { channel: 'on.seedChat', feature: 'Dev workbench: conversations seeded from fixtures' },
   // Browser encryption is an approved design with no backend: the Advanced section and its
   // screen render only under the workbench preview. Delete this row when it ships.
   { channel: 'remote.preview', feature: 'Remote access secure setup — UI mockup only' },

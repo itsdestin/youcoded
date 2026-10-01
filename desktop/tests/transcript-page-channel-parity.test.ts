@@ -6,7 +6,7 @@ import * as path from 'node:path';
  * Three-surface parity for `transcript:page` (perf cycle 2).
  *
  * Android is DELIBERATELY absent: on-device paging is a later cycle (Destin's
- * decision 1a, 2026-08-27). The phone hydrates over `chat:hydrate` today and
+ * decision 1a, 2026-08-27). A phone is filled by `session:open` (one-core R5-2) and
  * pages through the remote bridge when connected to a desktop, so the Kotlin
  * surface has nothing to answer yet. When on-device paging lands, this block
  * grows a SessionService.kt assertion.
@@ -54,6 +54,5 @@ describe('transcript:page channel parity (desktop + remote; Android is a later c
   it('both answering surfaces distinguish "unresolved" from "no more history"', () => {
     expect(read('src/shared/types.ts')).toMatch(/unresolved\?: true/);
     expect(read('src/main/ipc-handlers.ts')).toMatch(/unresolved: true/);
-    expect(read('src/main/ipc/session.ts')).toMatch(/unresolved: true/);
   });
 });

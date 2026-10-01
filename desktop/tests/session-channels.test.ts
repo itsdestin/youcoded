@@ -9,11 +9,11 @@ import { CHANNEL_TABLE, findChannel, registerDesktopChannels, serveRemoteChannel
 import { bindSessionOps } from '../src/main/ipc/session';
 
 const FAMILY = /^(session|session-naming|transcript):/;
-// Not part of THIS family's count: transcript:replay-from-start, session:replay-live-state and the drag / detach messages
-// are computer-window plumbing, table entries of their own (main/ipc/detach.ts, replay.ts; pinned in last-channels.test.ts);
+// Not part of THIS family's count: the drag / detach messages are computer-window plumbing, table entries of their own
+// (main/ipc/detach.ts; pinned in last-channels.test.ts);
 // the ownership and attention messages are pushes, which are never entries.
 const NOT_YET = new Set<string>([
-  IPC.TRANSCRIPT_REPLAY, IPC.SESSION_REPLAY_LIVE_STATE, IPC.SESSION_DETACH_START, IPC.SESSION_DETACH_LIVE,
+  IPC.SESSION_DETACH_START, IPC.SESSION_DETACH_LIVE,
   IPC.SESSION_DRAG_WINDOW_MOVE, IPC.SESSION_DRAG_STARTED, IPC.SESSION_DRAG_ENDED, IPC.SESSION_DRAG_DROPPED,
   IPC.SESSION_DRAG_ADOPT, IPC.SESSION_DROP_RESOLVE, IPC.SESSION_FOCUS_REQUEST, IPC.SESSION_ATTENTION_SUMMARY,
   IPC.SESSION_OWNERSHIP_ACQUIRED, IPC.SESSION_OWNERSHIP_LOST, IPC.CROSS_WINDOW_CURSOR,
@@ -33,8 +33,8 @@ describe('session channels: what is in the table and who may call it', () => {
     const inTable = new Set(CHANNEL_TABLE.map((d) => d.name));
     const names = Object.values(IPC).filter((v) => FAMILY.test(v) && !PUSHES.has(v) && !NOT_YET.has(v));
     // 23 = create destroy list selected switch input resize terminal-ready menu-lock browse history read-meta
-    //      page set-flag set-tag set-note get-meta reopen-list forget-reopen + 4 naming; a new one must be decided here.
-    expect(names.length).toBe(23);
+    //      page open set-flag set-tag set-note get-meta reopen-list forget-reopen + 4 naming; a new one must be decided here.
+    expect(names.length).toBe(24);
     expect(names.filter((n) => !inTable.has(n))).toEqual([]);
   });
 
@@ -111,18 +111,17 @@ describe('session:list: the computer\'s window sees its own sessions, a phone se
   });
 });
 
-describe('transcript:page: one entry, two honest bodies', () => {
-  it('the computer\'s window is asked through the window-aware body with its id; a phone never reaches it', async () => {
-    const desktopTranscriptPage = vi.fn(async () => ({ events: [], cursor: null, hasMore: false }));
-    bindSessionOps({ desktopTranscriptPage } as any);
+describe('transcript:page: one entry, one body', () => {
+  it('a window and a phone are asked through the SAME body (one-core R5-2: a page depends on the session, not on who asks)', async () => {
+    const transcriptPage = vi.fn(async () => ({ events: [], cursor: null, hasMore: false }));
+    bindSessionOps({ transcriptPage } as any);
     const def = findChannel('transcript:page')!;
     await def.handler({ sessionId: 's1', beforeCursor: null }, desktopCtx({ windowId: 4 }));
-    expect(desktopTranscriptPage).toHaveBeenCalledWith({ sessionId: 's1', beforeCursor: null }, 4);
-    desktopTranscriptPage.mockClear();
-    // A traversal-shaped id is refused before any disk is touched, and never reaches the window-aware body.
-    const phone = await serveRemoteChannel(def, { sessionId: '../../etc/passwd', beforeCursor: null }, phoneCtx);
+    expect(transcriptPage).toHaveBeenCalledWith({ sessionId: 's1', beforeCursor: null });
+    transcriptPage.mockClear();
+    const phone = await serveRemoteChannel(def, { sessionId: 's1', beforeCursor: null, toEnd: true }, phoneCtx);
     expect(phone).toEqual({ reply: true, payload: { events: [], cursor: null, hasMore: false } });
-    expect(desktopTranscriptPage).not.toHaveBeenCalled();
+    expect(transcriptPage).toHaveBeenCalledWith({ sessionId: 's1', beforeCursor: null, toEnd: true });
   });
 });
 

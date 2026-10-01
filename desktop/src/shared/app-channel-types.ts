@@ -112,8 +112,6 @@ export interface AppChannelTypes {
   'session:drag-started': { request: void; response: Nothing };
   'session:drag-ended': { request: void; response: Nothing };
   'session:drop-resolve': { request: void; response: { targetWindowId: number | null } };
-  'transcript:replay-from-start': { request: { sessionId: string }; response: Nothing };
-  'session:replay-live-state': { request: { sessionId: string }; response: Nothing };
 
   // ── The buddy ──
   'buddy:show': { request: void; response: BuddyShowResult };

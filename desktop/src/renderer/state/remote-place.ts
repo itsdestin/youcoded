@@ -1,11 +1,11 @@
-// Where a phone opens, and when it may load history of its own
-// (remote access batch 2, design §3 and §4; contract R2, R5).
+// Where a phone opens (remote access batch 2, design §3; contract R2).
 //
-// WHY a module of pure functions: App decides these at five places that cannot be
+// WHY a module of pure functions: App decides these at several places that cannot be
 // exercised in a unit test (App does not mount outside the real bridge), and the rules
 // are exactly the part that is easy to get subtly wrong — a phone that jumps away from
-// what you were reading, or loads a page of history on top of the computer's copy and
-// shows every message twice. The rules are tested here (tests/remote-place.test.ts).
+// what you were reading. The rules are tested here (tests/remote-place.test.ts).
+// (The second rule this file held, when a phone may load history of its own, went with the
+// snapshot it waited for: every screen fills from the computer's record, one-core R5-2.)
 // App's own use of them was pinned in tests/remote-place-app-wiring.test.ts, an exact-line
 // source pin with no behaviour value; deleted 2026-09-16 (Plan B Task 4) with no replacement —
 // App still cannot be mounted in a unit test, so that wiring stays covered only by this file's
@@ -61,12 +61,8 @@ export function remotePlaceHost(): string {
 }
 
 /**
- * Where the phone opens when the computer's copy has been applied: its stored place if
+ * Where the phone opens once the computer's session list has arrived: its stored place if
  * that conversation still exists, else the one the desktop is showing, else the first.
- *
- * Decision (T4): "still exists" means after the apply — including a conversation an
- * incomplete copy KEPT — not only one the snapshot carried. Otherwise an incomplete
- * Refresh would jump the phone away from what it was reading (contract R3).
  */
 export function choosePlaceOnHydrate(input: {
   stored: string | null;
@@ -92,19 +88,4 @@ export function chooseAfterDestroyed(input: {
   if (currentId !== destroyedId) return currentId;
   if (focusSessionId && focusSessionId !== destroyedId && remainingIds.includes(focusSessionId)) return focusSessionId;
   return remainingIds[0] ?? null;
-}
-
-/**
- * Whether this window may ask for a session's first page of history.
- *
- * A remote client waits for the computer's copy first — a page requested before it
- * arrives lands on top of it — and never loads one for a session the copy delivered:
- * the replayed page's turn and tool-group ids are this client's, so entries the uuid
- * dedup does not cover appeared twice (design §4). A session created after the copy,
- * or one an incomplete first copy omitted, still loads its own.
- */
-export function shouldLoadFirstPage(input: { remote: boolean; placeDecided: boolean; hydrated: boolean }): boolean {
-  if (!input.remote) return true;
-  if (!input.placeDecided) return false;
-  return !input.hydrated;
 }

@@ -116,12 +116,11 @@ export function useAttentionClassifier(sessionId: string, args: HookArgs): void 
       // classifier reads. Clearing it is the classifier reaching outside its
       // own subsystem.
       //
-      // What it actually broke: `chat:hydrate` is remote-only (preload.ts:513
-      // deliberately does not serve it on desktop; remote-server.ts:729 is the
-      // only sender), so ordinary desktop use was unaffected — ChatView mounts
+      // What it actually broke (the snapshot a phone was filled from, `chat:hydrate`, is gone since one-core R5-2; the same state now
+      // arrives through a `session:open` fill, so the case still stands): ordinary desktop use was unaffected — ChatView mounts
       // long before any turn parks, with the state already 'ok'. The broken
       // case is a phone or browser reconnecting over the remote WebSocket to a
-      // desktop session that is ALREADY parked: hydrate correctly delivers
+      // desktop session that is ALREADY parked: a fill correctly delivers
       // attentionState 'stalled', and this line immediately wiped it, so the
       // phone showed a plain spinner with no red card, no Retry and no Stop.
       // Spec §11 requires remote to work.

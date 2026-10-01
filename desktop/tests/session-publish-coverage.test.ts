@@ -49,7 +49,6 @@ const ALLOWED: Array<{ file: string; type: string; scope: 'global' | 'split'; wh
   { file: 'social-handlers.ts', type: '"social:presence-event"', scope: 'global', why: 'presence is about people, not a session' },
   { file: 'remote-server.ts', type: "'status:data'", scope: 'global', why: 'the status bar' },
   { file: 'remote-server.ts', type: "'pty:output'", scope: 'split', why: SPLIT_DELIVERY['pty:output'] },
-  { file: 'remote-server.ts', type: "'hook:event'", scope: 'split', why: SPLIT_DELIVERY['hook:event (Claude Code relay)'] },
   { file: 'remote-server.ts', type: "'session:created'", scope: 'global', why: 'the session list: everyone needs it' },
   { file: 'remote-server.ts', type: "'session:destroyed'", scope: 'global', why: 'the session list: everyone needs it' },
   { file: 'remote-server.ts', type: 'channel', scope: 'global', why: 'a change a phone made through the channel table, handed to every phone (tags and similar)' },

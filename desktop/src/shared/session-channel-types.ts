@@ -9,6 +9,7 @@ import type {
   TranscriptPageRequest, TranscriptPageResult,
 } from './types';
 import type { CreateSessionOpts } from '../main/session-manager';
+import type { OpenRequest, OpenReply } from './session-open-types';
 
 /** What a session-meta write answers: `ok:false` carries the reason a screen can show. */
 type SessionWriteResult = { ok: true } | { ok: false; error: string };
@@ -36,6 +37,8 @@ export interface SessionChannelTypes {
   'session:history': { request: { sessionId: string; projectSlug: string; count?: number; all?: boolean }; response: HistoryMessage[] };
   'transcript:read-meta': { request: { path: string } | string; response: { model: string; contextPercent: number | null } | null };
   'transcript:page': { request: TranscriptPageRequest; response: TranscriptPageResult };
+  // The one way a screen is filled (one-core R5-2): see main/session-open.ts for the ask and the answer.
+  'session:open': { request: OpenRequest; response: OpenReply };
   // Tags, notes, flags and names.
   'session:set-flag': { request: { sessionId: string; flag: string; value: boolean }; response: SessionWriteResult };
   'session:set-tag': { request: { sessionId: string; tagId: string; value: boolean }; response: SessionWriteResult };

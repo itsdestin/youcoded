@@ -55,13 +55,17 @@ describe('WindowRegistry — phones as audience members', () => {
     expect(() => reg.subscribe('s1', -9)).toThrow(/unknown window/);
   });
 
-  it('resolves a session\'s audience: owner plus subscribers, every phone, and the primary fallback only when no window is there', () => {
+  it('resolves a session\'s audience: owner plus subscribers, the phones that OPENED the session, and the primary fallback only when no window is there', () => {
     reg.registerSocket(-1);
     reg.registerSocket(-2);
-    expect(reg.resolveAudience('s1')).toEqual({ windowIds: [], socketIds: [-1, -2], fallbackToPrimary: true });
+    // WHY watchers only (one-core R5-2): a phone is sent a session's pushes once it has opened it (session:open subscribes it).
+    expect(reg.resolveAudience('s1')).toEqual({ windowIds: [], socketIds: [], fallbackToPrimary: true });
+    reg.subscribe('s1', -2);
     reg.assignSession('s1', 10);
     reg.subscribe('s1', 11);
-    expect(reg.resolveAudience('s1')).toEqual({ windowIds: [10, 11], socketIds: [-1, -2], fallbackToPrimary: false });
+    expect(reg.resolveAudience('s1')).toEqual({ windowIds: [10, 11], socketIds: [-2], fallbackToPrimary: false });
+    // another session the phone has not opened reaches no phone
+    expect(reg.resolveAudience('other').socketIds).toEqual([]);
   });
 });
 
@@ -75,7 +79,6 @@ describe('RemoteServer — a connected phone joins and leaves the registry', () 
     const ws: any = Object.assign(new EventEmitter(), { readyState: 1, bufferedAmount: 0, sent: [] as any[], send(raw: string) { this.sent.push(JSON.parse(raw)); }, close: vi.fn() });
     server.addClient(ws, deviceId, '127.0.0.1');
     const client = [...server.clients].find((c: any) => c.ws === ws);
-    client.phase = 'live'; // past its restore: broadcasts go straight to the socket
     return { ws, client };
   }
 
@@ -114,21 +117,19 @@ describe('RemoteServer — a connected phone joins and leaves the registry', () 
     server.stop(true);
   });
 
-  it('a record that throws never costs a phone its hook event', async () => {
-    const { RemoteServer } = await import('../src/main/remote-server');
-    const records = { has: () => true, note: () => { throw new Error('record bug'); } };
-    const server: any = new RemoteServer(Object.assign(new EventEmitter(), { getAllSessions: () => [] }) as never, new EventEmitter() as never,
-      { enabled: true, port: 9900, toSafeObject: () => ({}) } as never, undefined, { getNativeRuntime: () => ({ records }) as never });
-    const ws: any = Object.assign(new EventEmitter(), { readyState: 1, bufferedAmount: 0, sent: [] as any[], send(raw: string) { this.sent.push(JSON.parse(raw)); }, close: vi.fn() });
-    server.addClient(ws, 'd', '127.0.0.1');
-    [...server.clients][0].phase = 'live';
+  it('a record that throws never costs a phone or a window its event (publish sends it unnumbered)', async () => {
+    const { createPublish } = await import('../src/main/publish');
+    const sent: any[] = []; const windows: any[] = [];
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const event = { type: 'PermissionRequest', sessionId: 's1', payload: { _requestId: 'r' }, timestamp: 1 };
-    expect(() => server.onHookEvent(event)).not.toThrow();
-    expect(() => server.onPermissionExpired('s1', 'r', 'app-timeout')).not.toThrow();
-    expect(ws.sent.map((m: any) => m.type)).toEqual(['hook:event', 'hook:event']);
+    const publish = createPublish({
+      records: { note: () => { throw new Error('record bug'); }, epochOf: () => null },
+      toWindows: (sid, ch, args) => { windows.push([sid, ch, args]); },
+      toSockets: (m) => { sent.push(m); },
+    });
+    expect(() => publish('s1', 'hook:event', { type: 'PermissionRequest' })).not.toThrow();
+    expect(windows).toHaveLength(1);
+    expect(sent).toEqual([{ type: 'hook:event', payload: { type: 'PermissionRequest' } }]);
     warn.mockRestore();
-    server.stop(true);
   });
 
   it('stopping the server removes every phone', async () => {

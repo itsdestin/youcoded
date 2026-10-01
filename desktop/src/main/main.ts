@@ -96,7 +96,6 @@ import { reconcileInstalls } from './install-reconcile';
 import { startSocial, destroySocialHandlers } from './social-handlers';
 import { initArcadeOps } from './arcade-handlers';
 import { startVoice, shutdownVoiceHandlers } from './voice/voice-handlers';
-import { requestMergedChatSnapshot } from './chat-snapshot';
 import { BuddyWindowManager } from './buddy-window-manager';
 import { BAR_SIZE, MASCOT_SIZE, CHAT_SIZE } from './buddy-bar-geometry';
 // The KDE script that lets the buddy move itself on a Wayland desktop, and
@@ -318,10 +317,8 @@ const commandProvider = new CommandProvider(
 // When skills change (plugin install/uninstall), invalidate the command
 // cache so skill-name dedup re-evaluates.
 skillProvider.setCacheInvalidationListener(() => commandProvider.invalidateCache());
-// Pass a snapshot provider so RemoteServer can request the full chat state when a
-// remote client restores. Batch 2 (§2): from EVERY main window, each session from its
-// owner — see requestMergedChatSnapshot. The closures read mainWindow by reference; it
-// is null here and set before any client can connect.
+// WHY (2026-10-01 one-core R5-2): the remote snapshot provider that used to be passed here (a copy of every window's chat
+// state, requestMergedChatSnapshot) is gone: a phone fills each session from the computer's record through `session:open`.
 // WHY (2026-09-29 one-core R1): built once in createWindow, read by RemoteServer through an accessor
 // (module order: see remote-server.ts).
 let nativeRuntime: NativeRuntime | null = null;
@@ -331,15 +328,6 @@ const remoteServer = new RemoteServer(sessionManager, hookRelay, remoteConfig, s
   // The installed app serves the phone its built copy; a dev window serves live code unless
   // run-dev.sh --phone-build made a fresh copy (see choosePhonePageSource).
   serveBuiltPage: app.isPackaged || process.env.YOUCODED_REMOTE_BUILT === '1',
-  requestSnapshot: () => requestMergedChatSnapshot({
-    registry: windowRegistry,
-    webContentsFor: (id) => {
-      const wc = webContents.fromId(id);
-      return wc && !wc.isDestroyed() ? wc : null;
-    },
-    fallbackWindowId: () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents.id : undefined),
-    knownSessionIds: () => sessionManager.listSessions().map((s) => s.id),
-  }),
   getFocusSessionId: () => windowRegistry.getFocusSessionId(),
   // Phones join the window registry as members with negative ids (one-core R5-1, seam S6).
   audience: windowRegistry,
@@ -869,6 +857,7 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
     attentionReports.delete(wid);
     debouncedBroadcastAttention();
     pendingAcquire.forget(wid);
+    nativeRuntime?.fills.forget(`w${wid}`); // a closed window is owed nothing (one-core R5-2)
     windowRegistry.unregisterWindow(wid);
     // Spec §7.6: "Buddy closes with main." If this was the last main window
     // (i.e., all remaining open windows are buddy windows), tear down the
@@ -1162,8 +1151,25 @@ function createWindow(firstRunManager?: FirstRunManager): OutboxBroadcast {
     docCommentsServerIdsBySession.delete(sessionId);
   });
 
+  // The windows' leg of a Claude Code hook event: the window that owns the session, else the main window. Never a buddy
+  // subscriber (a hook event has always been owner-only, which is why this is not sendForSession). WHY here and not in
+  // publish (one-core R5-2): publish delivers the phones' leg and the record; this is only the route the windows take.
+  const sendHookToOwner = (skip: boolean) => (sessionId: string, channel: string, args: unknown[], hold?: (windowId: number, deliver: () => void) => boolean) => {
+    if (skip) return; // an auto-approved ask never reached any window
+    const ownerId = windowRegistry.getOwner(sessionId);
+    const win = ownerId != null ? windowFromWcId(ownerId) : null;
+    const target = win && !win.isDestroyed() ? win : (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null);
+    if (!target) return;
+    const wid = target.webContents.id;
+    const deliver = () => { if (!target.isDestroyed()) target.webContents.send(channel, ...args); };
+    if (hold?.(wid, deliver)) return;
+    deliver();
+  };
+
   // Forward hook events to renderer
   hookRelay.on('hook-event', (event) => {
+    // Auto-approved asks are answered here and never shown in a window; a phone has always been told about them anyway.
+    let autoApproved = false;
     // In bypass mode (--dangerously-skip-permissions), Claude Code handles most
     // permissions natively. But a few things still fire PermissionRequest:
     //   - Protected path writes (.git/, .bashrc, .claude/ except commands/agents/skills/worktrees)
@@ -1210,23 +1216,15 @@ function createWindow(firstRunManager?: FirstRunManager): OutboxBroadcast {
       // (see permission-auto-approve.ts's own header for the full reasoning).
       if (requestId && (shouldAutoApproveDocComment(toolName, toolInput, permissionMode, docCommentsServerId) || shouldAutoApprove(toolName, toolInput, permissionOverrides))) {
         hookRelay.respond(requestId, { decision: { behavior: 'allow' } });
-        return;
+        autoApproved = true;
       }
     }
 
-    // Route to the window that owns this session; fall back to mainWindow if
-    // ownership is unknown (e.g., session not yet created via IPC).
-    const ownerId = windowRegistry.getOwner(event.sessionId);
-    if (ownerId != null) {
-      const win = windowFromWcId(ownerId);
-      if (win && !win.isDestroyed()) {
-        win.webContents.send(IPC.HOOK_EVENT, event);
-        return;
-      }
-    }
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send(IPC.HOOK_EVENT, event);
-    }
+    // WHY publish (one-core R5-2): a Claude Code ask used to reach the windows here and the phones through RemoteServer's own
+    // listener, so the record (which a fill is answered from) only heard it while remote access was on. One publish numbers it,
+    // records it and delivers it to the phones that watch this session; the windows' leg stays exactly the route this
+    // listener always used (see sendHookToOwner).
+    ipcWiring.publish(event.sessionId, IPC.HOOK_EVENT, event, { windows: sendHookToOwner(autoApproved) });
   });
 
   // Tell the renderer a held ask ended without a user decision, and WHY:
@@ -1243,17 +1241,9 @@ function createWindow(firstRunManager?: FirstRunManager): OutboxBroadcast {
       payload: { _requestId: requestId, _reason: reason },
       timestamp: Date.now(),
     };
-    const ownerId = windowRegistry.getOwner(sessionId);
-    if (ownerId != null) {
-      const win = windowFromWcId(ownerId);
-      if (win && !win.isDestroyed()) {
-        win.webContents.send(IPC.HOOK_EVENT, evt);
-        return;
-      }
-    }
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send(IPC.HOOK_EVENT, evt);
-    }
+    // Same route and same record as hook-event above; the phones hear the expiry too (they used to, through RemoteServer's own
+    // listener). `_reason` rides inside the payload, so an older phone ignores it and resolves the card, the safe default.
+    ipcWiring.publish(sessionId, IPC.HOOK_EVENT, evt, { windows: sendHookToOwner(false) });
   });
   return ipcWiring.outboxBroadcast; // for startOutboxDrain (chatsearch): its flag/note/tag pushes
 }
@@ -1266,7 +1256,7 @@ function bindWindowPlumbing() {
   // Welcome back (design §4, plan T3): the renderer's answer to a window:close-request push. closeRequests routes the
   // answer to the right pending entry by requestId, so one hand-over serves every window.
   bindWindow({ answerClose: (answer) => closeRequests.answer(answer.requestId, { close: answer.close, reopen: answer.reopen }) });
-  bindDetach({ windowRegistry, sessionManager, pendingAcquire, createAppWindow, windowFromWcId });
+  bindDetach({ windowRegistry, sessionManager, pendingAcquire, fills: nativeRuntime?.fills, createAppWindow, windowFromWcId });
 }
 
 // Apply GPU preference. Reads ~/.claude/youcoded-performance.json synchronously.

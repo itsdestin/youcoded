@@ -350,69 +350,69 @@ describe('remote-shim — client:ready', () => {
       await connectPromise;
     }
 
-    it('is sent the first time the chat:hydrate listener is added after auth:ok — not before', async () => {
+    it('is sent the first time the session:created listener is added after auth:ok — not before', async () => {
       const p = shim.connect('pw', false);
       const ws = FakeWebSocket.instances[0];
       await authenticate(ws, p);
       expect(ws.sentOf('client:ready')).toEqual([]);          // App has not mounted its listener yet
 
-      (window as any).claude.on.chatHydrate(() => {});
+      (window as any).claude.on.sessionCreated(() => {});
       const readies = ws.sentOf('client:ready');
       expect(readies).toHaveLength(1);
-      expect(readies[0].payload).toEqual({ seq: 1, reconnect: false, ptyOffsets: {} });
+      expect(readies[0].payload).toEqual({ reconnect: false });
       expect(readies[0].id).toBeUndefined();                    // no reply expected
     });
 
     it('a listener added while the socket is still authenticating sends one client:ready at auth:ok, reconnect:false', async () => {
       const p = shim.connect('pw', false);
       const ws = FakeWebSocket.instances[0];
-      (window as any).claude.on.chatHydrate(() => {});           // App mounted before auth finished
+      (window as any).claude.on.sessionCreated(() => {});           // App mounted before auth finished
       ws.open();
       expect(ws.sentOf('client:ready')).toEqual([]);
       ws.receive({ type: 'auth:ok', deviceId: 'dev-1', secret: 's', platform: 'desktop' });
       await p;
       const readies = ws.sentOf('client:ready');
       expect(readies).toHaveLength(1);
-      expect(readies[0].payload).toMatchObject({ seq: 1, reconnect: false });
+      expect(readies[0].payload).toMatchObject({ reconnect: false });
     });
 
     it('a first connect to a DIFFERENT host is not a reconnect, however many times the old one was reached', async () => {
       const p1 = shim.connect('pw', false);
       const ws1 = FakeWebSocket.instances[0];
       await authenticate(ws1, p1);
-      (window as any).claude.on.chatHydrate(() => {});
+      (window as any).claude.on.sessionCreated(() => {});
       expect(ws1.sentOf('client:ready')[0].payload.reconnect).toBe(false);
 
       (globalThis as any).location.host = 'other-desktop:9900';   // the page now points at another host
       const p2 = shim.connect('pw', false);
       const ws2 = FakeWebSocket.instances[1];
       await authenticate(ws2, p2);
-      expect(ws2.sentOf('client:ready')[0].payload).toMatchObject({ seq: 2, reconnect: false });
+      expect(ws2.sentOf('client:ready')[0].payload).toMatchObject({ reconnect: false });
 
       const p3 = shim.connect('pw', false);                         // the same host again: now a reconnect
       const ws3 = FakeWebSocket.instances[2];
       await authenticate(ws3, p3);
-      expect(ws3.sentOf('client:ready')[0].payload).toMatchObject({ seq: 3, reconnect: true });
+      expect(ws3.sentOf('client:ready')[0].payload).toMatchObject({ reconnect: true });
     });
 
     it('a second listener add (an effect re-run, a StrictMode double mount) sends no second client:ready', async () => {
       const p = shim.connect('pw', false);
       const ws = FakeWebSocket.instances[0];
       await authenticate(ws, p);
-      const h = (window as any).claude.on.chatHydrate(() => {});
-      (window as any).claude.off('chat:hydrate', h);
-      (window as any).claude.on.chatHydrate(() => {});
-      (window as any).claude.on.chatHydrate(() => {});
+      const h = (window as any).claude.on.sessionCreated(() => {});
+      (window as any).claude.off('session:created', h);
+      (window as any).claude.on.sessionCreated(() => {});
+      (window as any).claude.on.sessionCreated(() => {});
       expect(ws.sentOf('client:ready')).toHaveLength(1);
     });
 
-    it('on a reconnect the listener is still registered, so client:ready goes out on auth:ok with reconnect:true and the next seq', async () => {
+    it('on a reconnect the listener is still registered, so client:ready goes out on auth:ok with reconnect:true', async () => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       const p = shim.connect('pw', false);
       const ws1 = FakeWebSocket.instances[0];
       await authenticate(ws1, p);
-      (window as any).claude.on.chatHydrate(() => {});
-      expect(ws1.sentOf('client:ready')[0].payload.seq).toBe(1);
+      (window as any).claude.on.sessionCreated(() => {});
+      expect(ws1.sentOf('client:ready')).toHaveLength(1);
 
       ws1.close();                                              // the connection drops
       vi.advanceTimersByTime(1000);                             // the shim's first reconnect delay
@@ -424,20 +424,7 @@ describe('remote-shim — client:ready', () => {
 
       const readies = ws2.sentOf('client:ready');
       expect(readies).toHaveLength(1);
-      expect(readies[0].payload.seq).toBe(2);                   // monotonic for the shim's lifetime
       expect(readies[0].payload.reconnect).toBe(true);
-    });
-
-    it('applies only a hydrate whose seq is the latest it sent', async () => {
-      const p = shim.connect('pw', false);
-      const ws = FakeWebSocket.instances[0];
-      await authenticate(ws, p);
-      const applied: any[] = [];
-      (window as any).claude.on.chatHydrate((s: any) => applied.push(s));
-      ws.receive({ type: 'chat:hydrate', payload: { sessions: [], seq: 7 } });   // stale (never sent)
-      ws.receive({ type: 'chat:hydrate', payload: { sessions: [], seq: 1 } });   // the one it asked for
-      ws.receive({ type: 'chat:hydrate', payload: { sessions: [] } });           // an old host sends no seq
-      expect(applied.map((s) => s.seq)).toEqual([1, undefined]);
     });
 
     it('drops a frame from a socket that is no longer the current one', async () => {

@@ -16,6 +16,7 @@ import { IPC } from '../../shared/backend-contract';
 import type { SessionOwnershipAcquired } from '../../shared/types';
 import { validateHandoffDraft, type DetachedHandoffDraft } from '../../shared/handoff-draft';
 import type { PendingAcquireQueue } from '../pending-acquire';
+import type { AudienceFills } from '../audience-fill';
 import type { WindowRegistry } from '../window-registry';
 import type { SessionManager } from '../session-manager';
 import { defineChannel, type MainChannelDef } from './channel-def';
@@ -27,12 +28,14 @@ export interface DetachDeps {
   windowRegistry: WindowRegistry;
   sessionManager: Pick<SessionManager, 'getSession'>;
   pendingAcquire: PendingAcquireQueue<SessionOwnershipAcquired>;
+  /** WHY (one-core R5-2): a window that inherits a session has its pushes for it held until its fill (session:open) is answered. */
+  fills?: AudienceFills;
   createAppWindow(opts: { x: number; y: number; width: number; height: number; inactive?: boolean }): BrowserWindow;
   windowFromWcId(id: number): BrowserWindow | null | undefined;
 }
 
 function makeOps(deps: DetachDeps) {
-  const { windowRegistry, sessionManager, pendingAcquire, createAppWindow, windowFromWcId } = deps;
+  const { windowRegistry, sessionManager, pendingAcquire, fills, createAppWindow, windowFromWcId } = deps;
   // Renderer asks "did I inherit anything while I was still booting?"
   //
   // WHY (2026-09-03): a tear-off hands the session to a window created one statement earlier, so
@@ -54,13 +57,12 @@ function makeOps(deps: DetachDeps) {
     draft?: DetachedHandoffDraft) {
     const info = sessionManager.getSession(sessionId);
     if (!info) return;
-    // Stale (another event already moved it) → transferSession refuses and changes
-    // nothing. Otherwise it assigns the target AND marks the gap: the target has not
-    // been receiving this session's live transcript stream, so its first page of
-    // history must read to EOF rather than stopping at the watcher's startOffset
-    // (WindowRegistry.markInheritedByTransfer), and the remote snapshot omits the
-    // session until that page is read (isPendingTransfer).
+    // Stale (another event already moved it) → transferSession refuses and changes nothing. Otherwise it assigns the target.
     if (!windowRegistry.transferSession(sessionId, srcWindowId, targetWindowId)) return;
+    // WHY hold from here (one-core R5-2): the target has not been receiving this session's stream, and it is about to fill
+    // from the record (session:open). A push that reached it before that answer would be applied to a session with no
+    // history and then overlap the answer, so its pushes wait until the answer is out (audience-fill.ts).
+    fills?.begin(`w${targetWindowId}`, sessionId);
     const src = windowFromWcId(srcWindowId);
     const tgt = windowFromWcId(targetWindowId);
     src?.webContents.send(IPC.SESSION_OWNERSHIP_LOST, { sessionId });

@@ -325,13 +325,12 @@ export const IPC = {
   // (never queues) a send with no listener — so the renderer asks for what it
   // inherited once mounted. Returns SessionOwnershipAcquired[] and clears it.
   DETACH_CLAIM_PENDING: 'detach:claim-pending',
-  // Re-send the parts of a session's state that live ONLY in main's memory and
-  // have no record in the transcript on disk: open permission asks, specialist
-  // run records, background shell run records, and the replay-complete marker
-  // that reaps tool cards the history left 'running'. Split out of
-  // TRANSCRIPT_REPLAY so an ownership handoff can hydrate from one PAGE of
-  // history instead of a whole-transcript replay.
-  SESSION_REPLAY_LIVE_STATE: 'session:replay-live-state',
+  // The ONE way a screen is filled (one-core R5-2, session-open.ts): invoke({ sessionId, have?, pty? }) → the newest page, the
+  // record's recent past and what only memory holds, or just the events a reconnecting screen missed. Replaced the remote
+  // snapshot, the torn-off window's replay and the hook-event replay.
+  SESSION_OPEN: 'session:open',
+  // The asks still open in a session, replayed at the end of every fill (a push in the answer's `after`, never sent by itself).
+  HOOK_REPLAY_COMPLETE: 'hook:replay-complete',
   SESSION_DETACH_START: 'session:detach-start',
   // Chrome-style live tear-off: spawn the peer window mid-drag (before pointerup)
   // once the pill has moved far enough from the header. Source window then
@@ -345,13 +344,9 @@ export const IPC = {
   SESSION_DRAG_ADOPT: 'session:drag-adopt',
   SESSION_DROP_RESOLVE: 'session:drop-resolve',
   CROSS_WINDOW_CURSOR: 'session:cross-window-cursor',
-  // Request the full transcript history for a session — used when a window
-  // acquires ownership and needs to hydrate its reducer from disk.
-  TRANSCRIPT_REPLAY: 'transcript:replay-from-start',
   // Perf cycle 2: request/response. Returns the last page of history (the most
-  // recent PAGE_TURNS turns), or the page before a cursor. Replaces
-  // TRANSCRIPT_REPLAY for first load — replay stays only for the ownership
-  // handoff, which also re-sends broker-held asks and specialist runs.
+  // recent PAGE_TURNS turns), or the page before a cursor. The whole-transcript
+  // replay it replaced is gone (R5-2): a screen fills through SESSION_OPEN.
   TRANSCRIPT_PAGE: 'transcript:page',
   // Appearance sync across peer windows — Renderer → Main broadcasts, Main
   // → other Renderers applies without re-broadcasting. Lets a theme change
@@ -681,8 +676,6 @@ export const IPC = {
   MARKETPLACE_COMMENT: 'marketplace:comment',
   MARKETPLACE_THEME_LIKE: 'marketplace:theme:like',
   MARKETPLACE_REPORT: 'marketplace:report',
-  CHAT_EXPORT_SNAPSHOT: 'chat:export-snapshot',
-  CHAT_SNAPSHOT_RESPONSE: 'chat:snapshot-response',
   REMOTE_ATTENTION_CHANGED: 'remote:attention-changed',
   ANALYTICS_GET_OPT_IN: 'analytics:get-opt-in',
   ANALYTICS_SET_OPT_IN: 'analytics:set-opt-in',
@@ -917,7 +910,7 @@ export interface ChannelTypes extends MarketplaceChannelTypes, SyncChannelTypes,
 //     a new member there is an "unknown property" error until it is added here,
 //     and adding it here makes remote-shim.ts fail until it implements it.
 //   - remote-shim.ts is checked against RemoteBridge: it must implement every
-//     member here and may carry more (on.chatHydrate and on.prompt*, which only
+//     member here and may carry more (on.prompt*, which only
 //     a remote client receives).
 // Parameter TYPES are checked, names are not. Same-typed positional parameters
 // (sessionId, projectSlug) could be swapped unnoticed — that is why R2 also moved
@@ -940,6 +933,11 @@ interface SessionBridge {
     setCreateParams(id: string, create: HandoffCreateParams): Promise<HandoffAttemptResult>;
   };
   create(opts: { name: string; cwd: string; skipPermissions: boolean; cols?: number; rows?: number; resumeSessionId?: string; provider?: 'claude' | 'native'; model?: string; binding?: { providerId: string; modelId: string } }): Promise<any>;
+  /** The ONE way a conversation is filled (one-core R5-2; main/session-open.ts has the ask and the answer). Resolves to the answer, or to
+   *  undefined when this bridge has no host record to fill from (the Android app on its own runtime). */
+  open(req: { sessionId: string; claudeSessionId?: string; projectSlug?: string; fresh?: boolean }): Promise<import('./session-open-types').OpenReply | undefined>;
+  /** Hand an open's pushes (`before` / `after`) to the same listeners a live push reaches. */
+  play(pushes: Array<{ type: string; payload: unknown }>): void;
   destroy(sessionId: string): Promise<boolean>;
   list(): Promise<any[]>;
   /** False on a remote client whose connection is down; always true on desktop. */
@@ -1037,9 +1035,7 @@ interface ClaudeApi {
   skills: SkillsBridge;
   marketplace: MarketplaceBridge;
   firstRun: FirstRunBridge;
-  // chatHydrate: remote-shim only (a remote browser receives chat:hydrate on connect; desktop
-  // EXPORTS via onChatExportSnapshot instead), so it is optional on the renderer's view.
-  on: BridgeListeners & { chatHydrate?: (cb: (payload: any) => void) => () => void };
+  on: BridgeListeners;
   dialog: {
     openFile: () => Promise<string[]>;
     openFolder: () => Promise<string | null>;
@@ -1182,11 +1178,9 @@ interface ClaudeApi {
   detach: {
     getDirectory: () => Promise<import('./types').WindowDirectory>;
     onDirectoryUpdated: (cb: (dir: import('./types').WindowDirectory) => void) => () => void;
-    requestTranscriptReplay: (sessionId: string) => void;
-    /** Ownership handoffs main queued while this window was booting. */
+    /** Ownership handoffs main queued while this window was booting (the hand-off itself: which session, the unsent
+     *  draft, whether to open on it; the session's CONTENT arrives through session.open). */
     claimPending: () => Promise<import('./types').SessionOwnershipAcquired[]>;
-    /** Re-send the session state that exists only in main's memory. */
-    replayLiveState: (sessionId: string) => Promise<void>;
     /** Perf cycle 2: one page of history. `beforeCursor` null = the newest
      *  page; pass a previous page's `cursor` for the page before it. */
     requestTranscriptPage: (req: { sessionId: string; beforeCursor: import('./types').PageCursor | null; claudeSessionId?: string; projectSlug?: string })

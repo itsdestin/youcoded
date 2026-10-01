@@ -4957,6 +4957,12 @@ export class NativeSessionHost extends EventEmitter {
     return entry?.inFlight ? entry.session.currentUsageProgress : null;
   }
 
+  /** The record of what this session was given, for a screen that opens after it was announced (the push fires once at
+   *  session start, so a window or phone that was not there needs it from here — R5-2, session-open.ts). */
+  sessionContextFor(sessionId: string): SessionContext | null {
+    return this.live.get(sessionId)?.sessionContext ?? null;
+  }
+
   getHistory(sessionId: string): TranscriptEvent[] | null {
     const plan = this.historyPlan(sessionId);
     if (!plan) return null;
