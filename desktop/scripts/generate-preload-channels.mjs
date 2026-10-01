@@ -25,8 +25,13 @@ const ts = require('typescript');
 const here = path.dirname(fileURLToPath(import.meta.url));
 const CONTRACT = path.join(here, '..', 'src', 'shared', 'backend-contract.ts');
 const PRELOAD = path.join(here, '..', 'src', 'main', 'preload.ts');
+const CAPABILITIES = path.join(here, '..', 'src', 'shared', 'capabilities.ts');
 export const BEGIN = '// >>> GENERATED-CHANNELS — written by scripts/generate-preload-channels.mjs from shared/backend-contract.ts. Do not edit by hand.';
 export const END = '// <<< GENERATED-CHANNELS';
+// WHY a second block (one-core R4-1): the desktop window reads the same `capabilities` object a phone is sent in
+// `auth:ok`, and the preload cannot import it either. Same rule as the channels: written once in shared/, copied here.
+export const CAP_BEGIN = '// >>> GENERATED-CAPABILITIES — written by scripts/generate-preload-channels.mjs from shared/capabilities.ts. Do not edit by hand.';
+export const CAP_END = '// <<< GENERATED-CAPABILITIES';
 
 /** [key, value] pairs of the contract's `export const IPC = { ... } as const`, in source order. */
 export function readContractChannels(source) {
@@ -51,6 +56,41 @@ export function readContractChannels(source) {
   return pairs;
 }
 
+/** The literal value of `export const <name> = <literal>` in a source file: numbers, booleans, strings and plain objects of them. */
+export function readConstLiteral(source, name) {
+  const sf = ts.createSourceFile('capabilities.ts', source, ts.ScriptTarget.Latest, true);
+  const evalNode = (n) => {
+    while (ts.isAsExpression(n) || ts.isParenthesizedExpression(n)) n = n.expression;
+    if (ts.isNumericLiteral(n)) return Number(n.text);
+    if (ts.isStringLiteral(n)) return n.text;
+    if (n.kind === ts.SyntaxKind.TrueKeyword) return true;
+    if (n.kind === ts.SyntaxKind.FalseKeyword) return false;
+    if (ts.isObjectLiteralExpression(n)) {
+      return n.properties.map((p) => {
+        if (!ts.isPropertyAssignment(p) || !ts.isIdentifier(p.name)) throw new Error(`${name}: "${p.getText(sf)}" must be key: literal`);
+        return [p.name.text, evalNode(p.initializer)];
+      });
+    }
+    throw new Error(`${name}: "${n.getText(sf)}" is not a plain literal (the generator copies it verbatim)`);
+  };
+  let found;
+  sf.forEachChild((node) => {
+    if (!ts.isVariableStatement(node)) return;
+    for (const d of node.declarationList.declarations) {
+      if (ts.isIdentifier(d.name) && d.name.text === name && d.initializer) found = evalNode(d.initializer);
+    }
+  });
+  if (found === undefined) throw new Error(`export const ${name} not found in capabilities.ts`);
+  return found;
+}
+
+/** The capabilities block: PROTOCOL_VERSION and the desktop window's capabilities as plain literals. */
+export function renderCapabilitiesBlock(version, pairs) {
+  const lit = (v) => (typeof v === 'string' ? `'${v}'` : String(v));
+  const rows = pairs.map(([k, v]) => `  ${k}: ${lit(v)},`).join('\n');
+  return `${CAP_BEGIN}\nconst PROTOCOL_VERSION = ${version};\nconst DESKTOP_WINDOW_CAPABILITIES = {\n${rows}\n} as const;\n${CAP_END}`;
+}
+
 /** The text that sits between (and including) the BEGIN and END markers. */
 export function renderBlock(pairs) {
   const rows = pairs.map(([k, v]) => `  ${k}: '${v}',`).join('\n');
@@ -58,24 +98,26 @@ export function renderBlock(pairs) {
 }
 
 /** preload.ts with its generated block replaced (or throws if the markers are missing). */
-export function applyBlock(preloadSource, block) {
-  const start = preloadSource.indexOf(BEGIN);
-  const end = preloadSource.indexOf(END);
-  if (start < 0 || end < start) throw new Error('GENERATED-CHANNELS markers not found in preload.ts');
-  return preloadSource.slice(0, start) + block + preloadSource.slice(end + END.length);
+export function applyBlock(preloadSource, block, begin = BEGIN, end = END) {
+  const start = preloadSource.indexOf(begin);
+  const stop = preloadSource.indexOf(end);
+  if (start < 0 || stop < start) throw new Error(`${end.replace('// <<< ', '')} markers not found in preload.ts`);
+  return preloadSource.slice(0, start) + block + preloadSource.slice(stop + end.length);
 }
 
 export function expectedPreload() {
   const pairs = readContractChannels(fs.readFileSync(CONTRACT, 'utf8'));
   const current = fs.readFileSync(PRELOAD, 'utf8');
-  return { current, next: applyBlock(current, renderBlock(pairs)) };
+  const capSource = fs.readFileSync(CAPABILITIES, 'utf8');
+  const caps = renderCapabilitiesBlock(readConstLiteral(capSource, 'PROTOCOL_VERSION'), readConstLiteral(capSource, 'DESKTOP_WINDOW_CAPABILITIES'));
+  return { current, next: applyBlock(applyBlock(current, renderBlock(pairs)), caps, CAP_BEGIN, CAP_END) };
 }
 
 function main() {
   const { current, next } = expectedPreload();
   if (process.argv.includes('--check')) {
     if (current !== next) {
-      console.error('preload.ts channel list is stale vs shared/backend-contract.ts — run: node scripts/generate-preload-channels.mjs');
+      console.error('preload.ts generated blocks are stale vs shared/backend-contract.ts / shared/capabilities.ts — run: node scripts/generate-preload-channels.mjs');
       process.exit(1);
     }
     return;

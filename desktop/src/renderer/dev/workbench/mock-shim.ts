@@ -12,7 +12,8 @@ import type { DelegatedModelsView } from '../../../shared/types';
 import { RUNS } from './specialist-runs';
 import { FULL_READ_MAX_BYTES } from '../../../shared/artifacts/editable-path-policy';
 import { REMOTE_TEXT_PREVIEW_MAX_BYTES, REMOTE_BINARY_PREVIEW_MAX_BYTES } from '../../../shared/remote-file-limits';
-import { isRemoteMode } from '../../platform';
+import { getPlatform, isRemoteMode } from '../../platform';
+import { ANDROID_LOCAL_CAPABILITIES, DESKTOP_WINDOW_CAPABILITIES, PROTOCOL_VERSION, REMOTE_SCREEN_CAPABILITIES } from '../../../shared/capabilities';
 import { REMOTE_UNSUPPORTED_EVENT, remoteFeatureName, remoteUnsupportedMessage } from '../../remote-unsupported';
 import { previewKind } from '../../../shared/artifacts/categorization';
 import { READ_HEAD_DEFAULT_BYTES, READ_HEAD_MAX_BYTES } from '../../../shared/read-head';
@@ -94,7 +95,7 @@ const WORKBENCH_TEXT_HEADS: Record<string, string> = {
  *  (tests/mock-shim-window.test.ts) checks each against preload.ts. */
 export const HAND_WRITTEN: ReadonlyArray<string> = [
   'sessionNaming.get', 'sessionNaming.set', 'sessionNaming.title', 'sessionNaming.rename',
-  'devLabel', 'getPlatform', 'getHomePath', 'getFavorites', 'setFavorites',
+  'devLabel', 'capabilities', 'protocolVersion', 'getPlatform', 'getHomePath', 'getFavorites', 'setFavorites',
   'getIncognito', 'setIncognito', 'onChatExportSnapshot',
   'sendChatSnapshotResponse', 'fireRemoteAttentionChanged',
   'off', 'removeAllListeners',
@@ -565,6 +566,12 @@ export function createMockShim(store: MockStore): Window['claude'] {
   const impls = handWritten(store);
 
   const bridge: Record<string, unknown> = {
+    // WHY (one-core R4-1): the workbench stands in for whichever screen it is filming, so it answers `capabilities` the way
+    // that screen's host would: a phone browser or paired Android app (?connection=remote), the Android app's own runtime
+    // (?platform=android), or the computer's window. The app asks capabilities, so the same screens render as before.
+    capabilities: isRemoteMode() ? { ...REMOTE_SCREEN_CAPABILITIES }
+      : getPlatform() === 'android' ? { ...ANDROID_LOCAL_CAPABILITIES } : { ...DESKTOP_WINDOW_CAPABILITIES },
+    protocolVersion: PROTOCOL_VERSION,
     devLabel: 'Session Naming · Workbench',
     sessionNaming: createNamingPreview((id, title) => {
       store.setState((s) => ({ ...s,

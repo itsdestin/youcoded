@@ -99,6 +99,17 @@ describe('RemoteServer — pairing', () => {
       expect(second.last()!.secret).toBeUndefined();
     });
 
+    it('both sign-in paths tell the screen the protocol version and what it can do', async () => {
+      const { server } = await makeServer();
+      const first = await connect(server, { password: 'correct-horse', deviceName: 'My phone' });
+      const second = await connect(server, { deviceId: first.last()!.deviceId as string, secret: first.last()!.secret as string });
+      for (const ws of [first, second]) {
+        expect(ws.last()).toMatchObject({ type: 'auth:ok', platform: 'desktop', sessionNaming: true, protocolVersion: 1 });
+        // A screen watching a computer cannot open the computer's folders, tear a window out, or run the app's own engine.
+        expect(ws.last()!.capabilities).toMatchObject({ nativeWindows: false, openInOs: false, nativeSessions: false, terminalTransport: 'text', terminalScreenRead: false });
+      }
+    });
+
     it('the same browser signing in with the password again keeps its one row', async () => {
       // Destin, 2026-09-11: "each sign in seems to create a new device entry … even though all the
       // same device". The browser names its own row; the host still never matches devices by name.

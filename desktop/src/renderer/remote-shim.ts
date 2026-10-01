@@ -13,6 +13,7 @@ import { TABLE_ERROR_FLAG } from '../shared/table-error-flag';
 import { REMOTE_UNSUPPORTED_EVENT, hasFeatureName, remoteFeatureName, remoteUnsupportedMessage } from './remote-unsupported';
 import { REMOTE_RECONNECTED_EVENT } from './remote-events';
 import { announce } from './utils/announce';
+import { REMOTE_SCREEN_CAPABILITIES, normalizeCapabilities, normalizeProtocolVersion } from '../shared/capabilities';
 // The phone's own runtime while paired: localBridgeUrl + invokeLocalBridge (WHY there).
 import { localBridgeUrl, invokeLocalBridge } from './android-local-bridge';
 import type { FirstRunState } from '../shared/first-run-types';
@@ -1226,6 +1227,14 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           myDeviceId = msg.deviceId ?? myDeviceId;
           if (typeof msg.deviceId === 'string' && msg.deviceId) rememberDeviceRow(getWsUrl(), msg.deviceId);
           authResolved = true;
+          // WHY here (one-core R4-1, S7): the host says what this screen can do, before anything announces the connection. An
+          // older computer sends nothing and gets the conservative defaults. Replaced on EVERY auth:ok: a reconnect or a
+          // switch between the Android app's own runtime and a paired computer takes the new host's answer.
+          const bridge = (window as any).claude;
+          if (bridge) {
+            bridge.capabilities = normalizeCapabilities(msg.capabilities);
+            bridge.protocolVersion = normalizeProtocolVersion(msg.protocolVersion);
+          }
           reconnectDelay = 1000; // Reset backoff on success
           reconnectAttempts = 0;
           // Signed in: the sign-in screen is gone, and a later drop is the strip's to report.
@@ -1893,6 +1902,9 @@ export function installShim(): void {
   }
 
   (window as any).claude = {
+    // Conservative until the host's auth:ok says more (see the auth:ok branch).
+    capabilities: { ...REMOTE_SCREEN_CAPABILITIES },
+    protocolVersion: 0,
     // Parity with preload's devLabel. Always null here: a remote/Android client
     // has no process env, and the label describes the DEV INSTANCE you're sitting
     // in front of, not the host it happens to be talking to.

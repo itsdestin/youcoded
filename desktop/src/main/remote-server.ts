@@ -22,6 +22,7 @@ import { RemoteDeviceStore, type RemoteDeviceView } from './remote-devices';
 import type { LocalSkillProvider } from './skill-provider';
 import type { SerializedChatState } from '../renderer/state/chat-types';
 import { VITE_DEV_PORT } from '../shared/ports';
+import { PROTOCOL_VERSION, REMOTE_SCREEN_CAPABILITIES } from '../shared/capabilities';
 import type { NativeSendResult, HookEvent, SpecialistsEvent, ShellEvent } from '../shared/types';
 import type { ProviderRegistry } from './providers/provider-registry';
 import type { ModelCatalog } from './providers/model-catalog';
@@ -219,6 +220,20 @@ export interface RemoteStatus {
  */
 export function choosePhonePageSource(opts: { serveBuiltPage: boolean; hasBuild: boolean }): 'built' | 'dev-server' {
   return opts.serveBuiltPage && opts.hasBuild ? 'built' : 'dev-server';
+}
+
+/** The handshake a signed-in screen receives. WHY (one-core R4-1, S7): `protocolVersion` and `capabilities` tell the screen what it
+ *  may do (shared/capabilities.ts); `sessionNaming` is the older single capability the UI reads before first paint. */
+export function authOkMessage(who: { deviceId: string; secret?: string }) {
+  return {
+    type: 'auth:ok' as const,
+    deviceId: who.deviceId,
+    ...(who.secret !== undefined ? { secret: who.secret } : {}),
+    platform: 'desktop' as const,
+    sessionNaming: true,
+    protocolVersion: PROTOCOL_VERSION,
+    capabilities: { ...REMOTE_SCREEN_CAPABILITIES },
+  };
 }
 
 export class RemoteServer {
@@ -1158,9 +1173,9 @@ export class RemoteServer {
             releaseUnauth(); // authenticated — free the pre-auth slot
             this.config.markPaired();
             this.addClient(ws, result.device.id, ip, { sendsReady: msg.readyHandshake === true });
-            // Same capability flag as the pairing path below — master's own note says the
-            // two sites must stay in step, and a returning device paints the same UI.
-            ws.send(JSON.stringify({ type: 'auth:ok', deviceId: result.device.id, platform: 'desktop', sessionNaming: true }));
+            // WHY one builder (R4-1): the two sign-in paths used to spell the handshake by hand and had to be kept
+            // in step; a returning device paints the same UI as a newly paired one.
+            ws.send(JSON.stringify(authOkMessage({ deviceId: result.device.id })));
             // The restore waits for client:ready (addClient armed the old-client fallback).
             return;
           }
@@ -1188,9 +1203,7 @@ export class RemoteServer {
           releaseUnauth(); // authenticated — free the pre-auth slot
           this.config.markPaired();
           this.addClient(ws, paired.deviceId, ip, { sendsReady: msg.readyHandshake === true });
-          // `sessionNaming` is a CAPABILITY the remote UI reads before first paint, added on
-          // master while this branch was open. It rides on every auth:ok this host sends.
-          ws.send(JSON.stringify({ type: 'auth:ok', deviceId: paired.deviceId, secret: paired.secret, platform: 'desktop', sessionNaming: true }));
+          ws.send(JSON.stringify(authOkMessage({ deviceId: paired.deviceId, secret: paired.secret })));
           // The restore waits for client:ready (addClient armed the old-client fallback).
         } else {
           this.recordFailedAttempt();

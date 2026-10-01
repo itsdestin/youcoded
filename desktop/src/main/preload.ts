@@ -508,6 +508,25 @@ const IPC = {
 } as const;
 // <<< GENERATED-CHANNELS
 
+// >>> GENERATED-CAPABILITIES — written by scripts/generate-preload-channels.mjs from shared/capabilities.ts. Do not edit by hand.
+const PROTOCOL_VERSION = 1;
+const DESKTOP_WINDOW_CAPABILITIES = {
+  nativeWindows: true,
+  openInOs: true,
+  openExternal: true,
+  git: true,
+  themePictures: true,
+  themeRigs: true,
+  terminalTransport: 'text',
+  terminalScreenRead: true,
+  nativeSessions: true,
+  buddy: true,
+  projectWrites: true,
+  contentSearch: true,
+  liveHandoff: true,
+} as const;
+// <<< GENERATED-CAPABILITIES
+
 // Strip the transport prefix Electron puts on a rejected invoke (see the
 // `chatgpt` namespace for why), keeping the handler's own sentence. Anything
 // that is not that exact shape is rethrown untouched.
@@ -539,6 +558,13 @@ contextBridge.exposeInMainWorld('claude', {
   // Same sandboxed process.env read the `native.supported` kill switch uses.
 
   devLabel: process.env.YOUCODED_DEV_LABEL?.trim() || null,
+
+  // WHY (one-core R4-1, seam S7): what this screen can do, as ONE object. A phone is sent the same shape in `auth:ok`
+  // (main/remote-server.ts); the screens read `window.claude.capabilities` and never guess from "am I Android". The
+  // window's own values come from shared/capabilities.ts (copied into the generated block above); only the native
+  // engine varies per run, by the same kill switch `native.supported` reads.
+  protocolVersion: PROTOCOL_VERSION,
+  capabilities: { ...DESKTOP_WINDOW_CAPABILITIES, nativeSessions: process.env.YOUCODED_NATIVE !== '0' },
 
   // Session naming. Its own top-level namespace because the renderer decides
   // whether the whole feature exists by asking whether this own-property is

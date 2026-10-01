@@ -156,6 +156,44 @@ describe('remote-shim — saved-key sign-in', () => {
       expect(store[KEY]).toBe('dev-1:secret');
     });
 
+    it('takes the computer\'s protocol version and capabilities from auth:ok, and starts from conservative defaults before it', async () => {
+      const claude = () => (globalThis as any).claude;
+      expect(claude().protocolVersion).toBe(0);
+      expect(claude().capabilities).toMatchObject({ nativeWindows: false, openInOs: false, nativeSessions: false, terminalTransport: 'text' });
+      store[KEY] = 'dev-1:secret';
+      start();
+      latest().open();
+      latest().receive({ type: 'auth:ok', deviceId: 'dev-1', platform: 'desktop', protocolVersion: 1,
+        capabilities: { openInOs: true, terminalTransport: 'raw-bytes', liveHandoff: false } });
+      await Promise.resolve();
+      expect(claude().protocolVersion).toBe(1);
+      expect(claude().capabilities).toMatchObject({ openInOs: true, terminalTransport: 'raw-bytes', liveHandoff: false, nativeWindows: false });
+    });
+
+    it('an older computer that sends no capabilities leaves the screen on the conservative set', async () => {
+      store[KEY] = 'dev-1:secret';
+      start();
+      latest().open();
+      latest().receive({ type: 'auth:ok', deviceId: 'dev-1', platform: 'desktop' });
+      await Promise.resolve();
+      expect((globalThis as any).claude.protocolVersion).toBe(0);
+      expect((globalThis as any).claude.capabilities).toMatchObject({ nativeWindows: false, openInOs: false, git: false, nativeSessions: false, projectWrites: false, terminalTransport: 'text' });
+    });
+
+    it('a reconnect to a different host replaces what the first one said', async () => {
+      store[KEY] = 'dev-1:secret';
+      start();
+      latest().open();
+      latest().receive({ type: 'auth:ok', deviceId: 'dev-1', platform: 'desktop', protocolVersion: 1, capabilities: { openInOs: true } });
+      await Promise.resolve();
+      latest().close(1006);
+      await vi.advanceTimersByTimeAsync(1000);
+      latest().open();
+      latest().receive({ type: 'auth:ok', deviceId: 'dev-1', platform: 'desktop' });
+      await Promise.resolve();
+      expect((globalThis as any).claude.capabilities.openInOs).toBe(false);
+    });
+
     it('a reconnect after a drop whose key is then refused stops instead of retrying forever', async () => {
       store[KEY] = 'dev-1:secret';
       start();

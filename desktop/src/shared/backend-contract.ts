@@ -54,6 +54,7 @@ import type {
   SessionMetaResult, HandoffAttemptResult, HandoffCreateParams,
   SpecialistsEvent, ShellEvent,
 } from './types';
+import type { Capabilities } from './capabilities';
 
 // ── Channel names ──────────────────────────────────────────────────────────────
 
@@ -996,6 +997,10 @@ interface BridgeListeners {
 /** The members of window.claude these types pin. Every other member is
  *  unchecked here (`Record<string, unknown>` below lets it through). */
 interface SharedBridge {
+  /** WHY (one-core R4-1, S7): what this screen can do + the handshake version. The computer's window reads them from its
+   *  preload, a phone or the Android app from `auth:ok` (conservative defaults until then); no screen guesses from the platform. */
+  capabilities: Capabilities;
+  protocolVersion: number;
   session: SessionBridge;
   on: BridgeListeners;
   /** The arcade's favourite games (favorites:get / favorites:set). */
@@ -1022,6 +1027,9 @@ export type RemoteBridge = Omit<SharedBridge, 'session' | 'on'> & {
 // one family at a time, together with the channel-table entries that own them.
 // `session` and `on` come from the checked bridge types above.
 interface ClaudeApi {
+  /** See SharedBridge (platform.ts's getCapabilities() reads it, with conservative defaults when it is missing). */
+  capabilities: Capabilities;
+  protocolVersion: number;
   /** Dev-instance label (run-dev.sh --label). null in the built app and on remote. */
   devLabel?: string | null;
   session: SessionBridge;
