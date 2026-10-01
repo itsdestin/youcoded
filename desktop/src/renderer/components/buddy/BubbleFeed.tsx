@@ -17,6 +17,9 @@ import ThinkingIndicator from '../ThinkingIndicator';
 import { useTheme } from '../../state/theme-context';
 import { useEntryFolding } from '../../hooks/use-entry-folding';
 import { findArchiveBoundary, archivedTooltip } from '../../state/archive-boundary';
+import { eventToAction } from '../../state/transcript-event-actions';
+import { BUDDY_LIVE } from './buddy-live-events';
+import type { TranscriptEventType } from '../../../shared/types';
 
 interface Props {
   sessionId: string | null;
@@ -110,247 +113,19 @@ export function BubbleFeed({ sessionId }: Props) {
     const unsubTranscript = window.claude.on.transcriptEvent((event: any) => {
       // Only process events for the session this feed is watching
       if (!event?.type || event?.sessionId !== sessionId) return;
+      // The buddy's three known live gaps (see the ledger). An unknown type has no
+      // ledger row; eventToAction ignores it.
+      const rule = BUDDY_LIVE[event.type as TranscriptEventType];
+      if (rule && rule !== 'same') return;
 
-      switch (event.type) {
-        case 'user-message':
-          batchDispatch({
-            type: 'TRANSCRIPT_USER_MESSAGE',
-            sessionId: event.sessionId,
-            uuid: event.uuid,
-            text: event.data.text,
-            timestamp: event.timestamp,
-            // A slash command read from its command tags — MUST mirror App.tsx.
-            slashCommand: event.data.slashCommand,
-            // Host-injected turn marker + header — MUST mirror App.tsx.
-            injected: event.data.injected,
-            injectedMeta: event.data.injectedMeta,
-            // Forward the subagent stamp so the reducer can drop subagent
-            // briefings (they're already shown on the parent Agent card).
-            parentAgentToolUseId: event.data.parentAgentToolUseId,
-            agentId: event.data.agentId,
-          });
-          break;
-        case 'assistant-text':
-          batchDispatch({
-            type: 'TRANSCRIPT_ASSISTANT_TEXT',
-            sessionId: event.sessionId,
-            uuid: event.uuid,
-            text: event.data.text,
-            timestamp: event.timestamp,
-            // Forward the per-message model so the reducer can stamp
-            // turn.model on the first text of each turn (mirror App.tsx).
-            model: event.data.model,
-            // Native runtime: per-token delta id — same partId merges into the
-            // last text segment (mirror App.tsx, must stay identical).
-            partId: event.data.partId,
-            // Forward the subagent stamp so the reducer routes subagent
-            // events into the parent Agent tool's subagentSegments instead
-            // of appending them to the main timeline as separate bubbles.
-            // Without this the subagent's thinking, tools, and replies all
-            // appear inline as if the main Claude instance produced them.
-            parentAgentToolUseId: event.data.parentAgentToolUseId,
-            agentId: event.data.agentId,
-          });
-          break;
-        case 'tool-use':
-          batchDispatch({
-            type: 'TRANSCRIPT_TOOL_USE',
-            sessionId: event.sessionId,
-            uuid: event.uuid,
-            toolUseId: event.data.toolUseId,
-            toolName: event.data.toolName,
-            toolInput: event.data.toolInput || {},
-            // Carried so a specialist's mid-run note can be placed among its
-            // tool rows by time (reconcileNoteSegments) in the buddy window
-            // too — without it buddy rows were unstamped and every note fell
-            // to the tail. Mirror App.tsx / transcript-page-actions.ts, must
-            // stay identical (pinned by transcript-event-surface-parity.test.ts).
-            timestamp: event.timestamp,
-            // Route subagent tool_use into the parent Agent card's
-            // subagentSegments — see assistant-text comment above.
-            parentAgentToolUseId: event.data.parentAgentToolUseId,
-            agentId: event.data.agentId,
-          });
-          break;
-        case 'tool-result':
-          batchDispatch({
-            type: 'TRANSCRIPT_TOOL_RESULT',
-            sessionId: event.sessionId,
-            uuid: event.uuid,
-            toolUseId: event.data.toolUseId,
-            result: event.data.toolResult || '',
-            isError: event.data.isError || false,
-            structuredPatch: event.data.structuredPatch,
-            backgroundTaskId: event.data.backgroundTaskId,
-            resumedTaskId: event.data.resumedTaskId,
-            // Route subagent tool_result into the parent Agent card's
-            // subagentSegments — see assistant-text comment above.
-            parentAgentToolUseId: event.data.parentAgentToolUseId,
-            agentId: event.data.agentId,
-          });
-          break;
-        case 'background-task':
-          // Claude Code: background work a card launched has ended — the only
-          // signal that it did (its tool result was just the launch receipt).
-          // Three mirrors: App.tsx, BubbleFeed.tsx, transcript-page-actions.ts.
-          if (event.data.backgroundTask) {
-            batchDispatch({
-              type: 'TRANSCRIPT_BACKGROUND_TASK',
-              sessionId: event.sessionId,
-              uuid: event.uuid,
-              toolUseId: event.data.toolUseId,
-              taskIds: event.data.backgroundTask.taskIds,
-              status: event.data.backgroundTask.status,
-              summary: event.data.backgroundTask.summary,
-              result: event.data.backgroundTask.result,
-              parentAgentToolUseId: event.data.parentAgentToolUseId,
-            });
-          }
-          break;
-        case 'turn-complete':
-          // Forward per-turn metadata so the buddy reducer stamps stopReason,
-          // model, anthropicRequestId, and usage on AssistantTurn — matches
-          // App.tsx's main-window dispatch. Without this, buddy turns would
-          // have these fields permanently null even though transcript-watcher
-          // emits them, breaking the per-turn metadata strip / StopReasonFooter
-          // / AttentionBanner request-id readout if the buddy ever surfaces
-          // those UIs. Coalesce undefined → null because the action type
-          // requires (string | null), not optional.
-          batchDispatch({
-            type: 'TRANSCRIPT_TURN_COMPLETE',
-            sessionId: event.sessionId,
-            uuid: event.uuid,
-            timestamp: event.timestamp,
-            stopReason: event.data.stopReason ?? null,
-            model: event.data.model ?? null,
-            anthropicRequestId: event.data.anthropicRequestId ?? null,
-            usage: event.data.usage ?? null,
-            // Forward the subagent stamp so the reducer can drop a sub-agent's
-            // end_turn instead of polluting parent turn.model — see App.tsx mirror.
-            parentAgentToolUseId: event.data.parentAgentToolUseId,
-            agentId: event.data.agentId,
-          });
-          break;
-        case 'subagent-usage':
-          // Task 23 item 4 — parity with App.tsx's mirror of this case.
-          // Bookkeeping only: never touches the timeline, the turn state, or a
-          // subagent card's segments. It exists so the parent's totals include
-          // the work it delegated (spec §2), and it arrives on the PARENT's
-          // stream. Nothing in the buddy window reads `totals` today, so this
-          // changes nothing a user can see — it is here for the same reason
-          // turn-complete just above forwards its usage: this feed drives its
-          // OWN chatReducer instance, so if the buddy ever surfaces those
-          // numbers they must not silently be missing every delegated run.
-          batchDispatch({
-            type: 'TRANSCRIPT_SUBAGENT_USAGE',
-            sessionId: event.sessionId,
-            uuid: event.uuid,
-            timestamp: event.timestamp,
-            usage: event.data.usage ?? null,
-            parentAgentToolUseId: event.data.parentAgentToolUseId,
-            agentId: event.data.agentId,
-          });
-          break;
-        case 'assistant-thinking':
-          // Reasoning chunks carry a text payload (native harness / thinking
-          // models); the CC transcript path is heartbeat-only. Truthiness
-          // check (not typeof) so an empty-string payload stays a heartbeat —
-          // MUST match App.tsx's predicate or the two windows diverge.
-          if (event.data?.text) {
-            batchDispatch({
-              type: 'TRANSCRIPT_ASSISTANT_REASONING',
-              sessionId: event.sessionId,
-              uuid: event.uuid,
-              text: event.data.text,
-              timestamp: event.timestamp,
-              partId: event.data.partId,
-              // Specialists 1c — MUST mirror App.tsx.
-              parentAgentToolUseId: event.data.parentAgentToolUseId,
-            });
-          } else {
-            // Preparing tool card — the buddy feed renders tool cards too, so
-            // omitting this would make it draw the card only once arguments
-            // finish while the main window draws it immediately. MUST mirror
-            // App.tsx or the two windows diverge.
-            if (event.data?.toolPreparing) {
-              batchDispatch({
-                type: 'NATIVE_TOOL_PREPARING',
-                sessionId: event.sessionId,
-                toolCallId: event.data.toolPreparing.toolCallId,
-                toolName: event.data.toolPreparing.toolName,
-                chars: event.data.toolPreparing.chars,
-                cleared: event.data.toolPreparing.cleared,
-              });
-            }
-            // Fix: erase an abandoned half-written sentence BEFORE the heartbeat
-            // below parks/clears the turn — must stay before it, and MUST mirror
-            // App.tsx or the two windows diverge.
-            if (event.data?.dropPart) {
-              batchDispatch({
-                type: 'NATIVE_PARTS_DROPPED',
-                sessionId: event.sessionId,
-                partIds: event.data.dropPart.partIds,
-              });
-            }
-            batchDispatch({
-              type: 'TRANSCRIPT_THINKING_HEARTBEAT',
-              sessionId: event.sessionId,
-              // WHY: mirror App's stamped, display-only progress path so a
-              // delayed attach cannot replace a newer live measurement.
-              usageProgress: event.data?.usageProgress,
-              uuid: event.uuid,
-              timestamp: event.timestamp,
-              // Native watchdog stall countdown + parked turn — payload sets,
-              // absence clears. MUST mirror App.tsx or the two windows diverge.
-              stallWarning: event.data?.stallWarning,
-              stalled: event.data?.stalled,
-            });
-          }
-          break;
-        case 'session-error':
-          // Native runtime only: a provider/stream failure. End the turn and
-          // surface the 'error' AttentionBanner (mirror App.tsx).
-          batchDispatch({
-            type: 'NATIVE_SESSION_ERROR',
-            sessionId: event.sessionId,
-            timestamp: event.timestamp,
-            message: event.data.text ?? 'The model request failed.',
-            errorCode: event.data.errorCode,
-          });
-          break;
-        // compact-summary: buddy doesn't drive compaction UI (no /compact command),
-        // but we still need to close any pending compaction spinner if it was opened
-        // because the owner session triggered compaction. A native auto-compaction
-        // (event.data.autoCompaction) has no pending flag but must still show a
-        // marker — bypass the guard in that case (mirror App.tsx).
-        case 'compact-summary':
-          if (stateRef.current.compactionPending || event.data.autoCompaction) {
-            batchDispatch({
-              type: 'COMPACTION_COMPLETE',
-              sessionId: event.sessionId,
-              markerId: `compact-done-${Date.now()}`,
-              afterContextTokens: null,
-              // Forward summary so buddy's marker matches main window's expandable behavior.
-              ...(event.data.summary ? { summary: event.data.summary } : {}),
-              ...(event.data.autoCompaction ? { auto: true } : {}),
-              ...(event.data.retainedFromUuid !== undefined ? { retainedFromUuid: event.data.retainedFromUuid } : {}),
-            });
-          }
-          break;
-        case 'replay-complete':
-          // End of a transcript replay — reap tool cards the history left
-          // 'running'. The buddy feeds its OWN chatReducer instance (separate
-          // BrowserWindow), so App.tsx handling this does nothing for us and the
-          // orphaned card kept spinning here (found reviewing PR #287).
-          // sessionIdle false means main could not affirm the session is idle
-          // (live re-dock, or a CC session) and the reducer leaves it alone.
-          batchDispatch({
-            type: 'TRANSCRIPT_REPLAY_COMPLETE',
-            sessionId: event.sessionId,
-            sessionIdle: event.data?.sessionIdle === true,
-          });
-          break;
-      }
+      // WHY one translator: this feed shares `eventToAction` with the main window
+      // instead of keeping its own copy of every case. The buddy has no CC statusline,
+      // so there is no fallback figure for a compaction marker's "after" number.
+      for (const action of eventToAction(event, {
+        live: true,
+        compactionPending: !!stateRef.current.compactionPending,
+        fallbackContextTokens: null,
+      })) batchDispatch(action);
     });
 
     // Request the most recent PAGE of history AFTER the listener is wired so no

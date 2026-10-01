@@ -17,6 +17,9 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, act } from '@testing-library/react';
 import { FOLD_IDLE_MS } from '../src/renderer/hooks/use-entry-folding';
+import { MATRIX } from './helpers/transcript-event-matrix';
+import { eventToAction } from '../src/renderer/state/transcript-event-actions';
+import { BUDDY_LIVE } from '../src/renderer/components/buddy/buddy-live-events';
 
 const mocks = vi.hoisted(() => ({ state: {} as any, dispatch: vi.fn() }));
 
@@ -193,5 +196,62 @@ describe('BubbleFeed folding', () => {
     // hook's default) and must never fold.
     expect(kept.style.height).toBe('');
     expect(kept.children.length).toBeGreaterThan(0);
+  });
+});
+
+describe('BubbleFeed live transcript events', () => {
+  // Delivers one live event the way the buddy window's IPC would, with the
+  // animation-frame batcher flushed by hand, and returns what was dispatched.
+  function deliver(event: Record<string, unknown>, state: Record<string, unknown> = {}) {
+    mocks.state = sessionState(state);
+    let handler: (e: unknown) => void = () => {};
+    (window as any).claude.on.transcriptEvent = (h: (e: unknown) => void) => { handler = h; return h; };
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { frames.push(cb); return frames.length; });
+    render(<BubbleFeed sessionId="s1" />);
+    mocks.dispatch.mockClear();
+    handler({ sessionId: 's1', uuid: 'u1', timestamp: 500, ...event });
+    act(() => { for (const f of frames.splice(0)) f(0); });
+    return mocks.dispatch.mock.calls.map((c) => c[0] as { type: string });
+  }
+
+  it('shows the same compaction marker as the main window: event id, freed-token counts, summary', () => {
+    const calls = deliver(
+      { type: 'compact-summary', data: { summary: 'S', autoCompaction: true, contextUsedBefore: 900, contextUsedAfter: 100 } },
+    );
+    expect(calls).toContainEqual(expect.objectContaining({
+      type: 'COMPACTION_COMPLETE', markerId: 'compact-done-u1',
+      beforeContextTokens: 900, afterContextTokens: 100, summary: 'S', auto: true,
+    }));
+  });
+
+  it('draws no compaction marker for a compaction this window did not start', () => {
+    const calls = deliver({ type: 'compact-summary', data: { summary: 'S', contextUsedAfter: 100 } }, { compactionPending: false });
+    expect(calls.map((c) => c.type)).not.toContain('COMPACTION_COMPLETE');
+  });
+
+  it('draws every other event type and payload exactly as the shared translator says', () => {
+    // The buddy listener must route through eventToAction for everything its ledger
+    // does not skip, so it can never again forget a type (replay-complete, PR #287).
+    for (const c of MATRIX) {
+      if (BUDDY_LIVE[c.event.type] !== 'same') continue;
+      const expected = eventToAction(c.event, { live: true, compactionPending: c.ctx?.compactionPending, fallbackContextTokens: null });
+      expect(deliver({ ...c.event }, { compactionPending: c.ctx?.compactionPending ?? false }), c.name).toEqual(expected);
+    }
+  });
+
+  it('still skips its three known live gaps', () => {
+    for (const type of ['user-interrupt', 'skill-invoked', 'context-clear']) {
+      expect(deliver({ type, data: { skillId: 'x', contextUsedAfter: 1 } }), type).toEqual([]);
+    }
+  });
+
+  it('ignores an event type nobody has heard of without throwing', () => {
+    expect(deliver({ type: 'streaming-text' })).toEqual([]);
+  });
+
+  it('stamps a tool-use with the event timestamp', () => {
+    expect(deliver({ type: 'tool-use', data: { toolUseId: 't', toolName: 'Read' } }))
+      .toContainEqual(expect.objectContaining({ type: 'TRANSCRIPT_TOOL_USE', timestamp: 500 }));
   });
 });
