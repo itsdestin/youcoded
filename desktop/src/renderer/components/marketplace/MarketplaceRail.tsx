@@ -55,7 +55,8 @@ export default function MarketplaceRail({ title, description, onSeeAll, children
     <section className="flex flex-col gap-2" role="region" aria-label={title}>
       <header className="flex items-baseline justify-between gap-3 px-1">
         <div className="min-w-0">
-          <h3 className="text-lg font-medium text-fg">{title}</h3>
+          {/* WHY 16px (text-base), not 18px: the full-screen group heading, matching the Projects view's TabHeading (projects-view-2#PV2-2; redesign backlog 14). */}
+          <h3 className="text-base font-medium text-fg">{title}</h3>
           {description && <p className="text-xs text-fg-dim truncate">{description}</p>}
         </div>
         {onSeeAll && (

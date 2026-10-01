@@ -599,7 +599,8 @@ export default function MarketplaceScreen({
                 The chunked window keeps every entry reachable by scrolling,
                 same as the removed slice(0, 48) never did. */}
             <section className="flex flex-col gap-2">
-              <h3 className="text-lg font-medium text-fg px-1">Explore everything</h3>
+              {/* WHY 16px (text-base), not 18px: the full-screen group heading, matching the Projects view's TabHeading (projects-view-2#PV2-2; redesign backlog 14). */}
+              <h3 className="text-base font-medium text-fg px-1">Explore everything</h3>
               {/* P-1 #4: loading / unreachable state under the heading. */}
               {registryState ?? (
                 <MarketplaceGrid

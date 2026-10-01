@@ -346,7 +346,8 @@ function Section({ title, empty, action, children }: {
   const hasContent = React.Children.toArray(children).filter(Boolean).length > 0;
   return (
     <section>
-      <h2 className="text-lg font-medium text-fg px-1 mb-2">{title}</h2>
+      {/* WHY 16px (text-base), not 18px: the full-screen group heading, matching the Projects view's TabHeading (projects-view-2#PV2-2; redesign backlog 14). */}
+      <h2 className="text-base font-medium text-fg px-1 mb-2">{title}</h2>
       {hasContent ? children : <EmptyState message={empty} action={action} />}
     </section>
   );
