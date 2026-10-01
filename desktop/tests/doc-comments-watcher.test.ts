@@ -18,6 +18,7 @@ import {
   initDocCommentsWatcher,
   dropDocCommentsSubscriber,
   __resetDocCommentsWatcherForTest,
+  reconcileMissedChanges,
 } from '../src/main/doc-comments/doc-comments-watcher';
 import type { CommentsWatchTarget } from '../src/main/doc-comments/doc-comments-store';
 
@@ -347,5 +348,64 @@ describe('doc-comments watcher', () => {
       for (const target of targets) unwatchComments(target, 1);
       unwatchComments(targets[0], 2);
     });
+  });
+});
+
+// The macOS start gap: FSEvents starts delivering only after chokidar's
+// 'ready', so a folder created in that window is never watched. A fake
+// watcher that saw NOTHING stands in for that exact miss, so this is
+// deterministic on every platform.
+describe('reconcileMissedChanges — what a watch that missed its first moments recovers', () => {
+  let commentsDir: string;
+  let rootDir: string;
+  beforeEach(async () => {
+    rootDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-comments-reconcile-'));
+    commentsDir = path.join(rootDir, '.youcoded', 'comments');
+    await fs.promises.mkdir(commentsDir, { recursive: true });
+  });
+  afterEach(async () => { await fs.promises.rm(rootDir, { recursive: true, force: true, maxRetries: 5 }); });
+
+  function blindWatcher() {
+    const watched: Record<string, string[]> = { [commentsDir]: [] };
+    return {
+      add: vi.fn((p: string) => { watched[p as string] = []; }),
+      getWatched: () => watched,
+    };
+  }
+
+  it('starts watching a folder created before the watch could see it, and pushes its comment file', async () => {
+    const startedAt = Date.now() - 2_000;
+    await fs.promises.mkdir(path.join(commentsDir, 'docs'), { recursive: true });
+    await fs.promises.writeFile(path.join(commentsDir, 'docs', 'live.md.json'), '{}');
+    const watcher = blindWatcher();
+    const pushed: string[] = [];
+    await reconcileMissedChanges(watcher, commentsDir, startedAt, new Map(), (p) => pushed.push(p));
+    expect(watcher.add).toHaveBeenCalledWith(path.join(commentsDir, 'docs'));
+    expect(pushed).toEqual(['docs/live.md']);
+  });
+
+  it('pushes a missed file once, not again on the next pass while it is unchanged', async () => {
+    const startedAt = Date.now() - 2_000;
+    await fs.promises.writeFile(path.join(commentsDir, 'plan.md.json'), '{}');
+    const watcher = blindWatcher();
+    const seenMtimes = new Map<string, number>();
+    const pushed: string[] = [];
+    await reconcileMissedChanges(watcher, commentsDir, startedAt, seenMtimes, (p) => pushed.push(p));
+    await reconcileMissedChanges(watcher, commentsDir, startedAt, seenMtimes, (p) => pushed.push(p));
+    expect(pushed).toEqual(['plan.md']);
+  });
+
+  it('leaves files from before the watch began and the .pending queue alone', async () => {
+    const old = path.join(commentsDir, 'old.md.json');
+    await fs.promises.writeFile(old, '{}');
+    const past = new Date(Date.now() - 60_000);
+    await fs.promises.utimes(old, past, past);
+    await fs.promises.mkdir(path.join(commentsDir, '.pending'), { recursive: true });
+    await fs.promises.writeFile(path.join(commentsDir, '.pending', 'req-1.json'), '{}');
+    const watcher = blindWatcher();
+    const pushed: string[] = [];
+    await reconcileMissedChanges(watcher, commentsDir, Date.now() - 2_000, new Map(), (p) => pushed.push(p));
+    expect(pushed).toEqual([]);
+    expect(watcher.add).not.toHaveBeenCalled();
   });
 });

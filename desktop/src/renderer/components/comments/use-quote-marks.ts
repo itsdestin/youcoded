@@ -162,12 +162,20 @@ function unwrapAll(root: HTMLElement): void {
 function wrapSegments(root: HTMLElement, start: TextPoint, end: TextPoint, make: () => HTMLElement, record: WrapRecord): HTMLElement[] {
   // Collect the text nodes first — splitting them while a TreeWalker is
   // mid-walk would make it skip or revisit nodes.
+  //
+  // WHY the walk STARTS at start.node (not at the top of root): markAll calls
+  // this once per comment, and walking from the top every time made a file's
+  // highlight pass grow with comments × document length — 1,000 comments cost
+  // ~8x what 200 did instead of ~5x, and macOS CI measured past the 12x
+  // render-cost bound. Starting where the quote starts makes each call cost
+  // only the quote's own span. A start node no longer inside root yields no
+  // marks, exactly as the old top-down walk (which never found it) did.
   const nodes: Text[] = [];
+  if (!root.contains(start.node)) return [];
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  let inside = false;
-  for (let n = walker.nextNode() as Text | null; n; n = walker.nextNode() as Text | null) {
-    if (n === start.node) inside = true;
-    if (inside) nodes.push(n);
+  walker.currentNode = start.node;
+  for (let n: Text | null = start.node; n; n = walker.nextNode() as Text | null) {
+    nodes.push(n);
     if (n === end.node) break;
   }
   const out: HTMLElement[] = [];
