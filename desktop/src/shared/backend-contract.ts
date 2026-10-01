@@ -46,6 +46,7 @@ import type { SyncChannelTypes } from './sync-channel-types';
 import type { SessionChannelTypes } from './session-channel-types';
 import type { NativeChannelTypes } from './native-channel-types';
 import type { ModelsChannelTypes } from './models-channel-types';
+import type { FilesChannelTypes } from './files-channel-types';
 export type { MarketplaceThumbs } from './marketplace-channel-types';
 import type {
   NativeSendResult, SessionContext, SessionContextText,
@@ -541,6 +542,7 @@ export const IPC = {
   // Capped in main at READ_HEAD_MAX_BYTES (shared/read-head.ts) whatever the
   // renderer asks for; sensitive paths refused. See main/fs-read-head.ts.
   FS_READ_HEAD: 'fs:read-head',
+  FILE_UPLOAD: 'file:upload',
   PERMISSIONS_LIST: 'permissions:list',
   PERMISSIONS_REMOVE: 'permissions:remove',
   PERMISSIONS_REMOVE_PROJECT: 'permissions:remove-project',
@@ -833,7 +835,15 @@ export interface ChannelDef<Ctx = ChannelCtx, Payload = any, Result = any> {
    *  session:create's "a terminal can only be opened from the app itself" refusal was a check buried in
    *  the phone's old `case`; a mechanical merge into one handler would have dropped it or applied it to
    *  the computer's own windows. As table policy it is declared once, on the entry, for the phone only. */
-  remoteGuard?: (payload: Payload) => unknown | undefined;
+  remoteGuard?: (payload: Payload, ctx: Ctx) => unknown | undefined | Promise<unknown | undefined>;
+  /** Phone door only, after remoteGuard lets a call through: the payload the handler is given. WHY
+   *  (2026-09-30 one-core R3-7): the phone's file reads carry a smaller size ceiling than the computer's;
+   *  declared here it is forced by the door, so a phone cannot send a bigger one of its own. */
+  remotePayload?: (payload: Payload, ctx: Ctx) => Payload | Promise<Payload>;
+  /** Only the phone door serves it: the desktop door registers nothing. WHY (2026-09-30 one-core R3-7):
+   *  file:upload exists only for a phone's attach button; registering it on the computer would add a
+   *  write-to-disk channel to the window surface that never existed. */
+  remoteOnly?: boolean;
 }
 
 /** The request and response type of every channel a table family owns. ONE place: the table
@@ -841,7 +851,7 @@ export interface ChannelDef<Ctx = ChannelCtx, Payload = any, Result = any> {
  *  so a handler, the desktop bridge and the phone shim cannot disagree about a channel's shape.
  *  `request` is the ONE object the caller sends (void = no payload). A family adds its rows here
  *  when it moves into the table. */
-export interface ChannelTypes extends MarketplaceChannelTypes, SyncChannelTypes, SessionChannelTypes, NativeChannelTypes, ModelsChannelTypes {
+export interface ChannelTypes extends MarketplaceChannelTypes, SyncChannelTypes, SessionChannelTypes, NativeChannelTypes, ModelsChannelTypes, FilesChannelTypes {
   'tags:list': { request: void; response: TagListResult };
   'tags:create': { request: { label: string; color: string }; response: TagMutationResult };
   'tags:update': { request: { id: string; patch: TagPatch }; response: TagMutationResult };

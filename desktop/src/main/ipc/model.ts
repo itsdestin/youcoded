@@ -9,6 +9,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { IPC } from '../../shared/backend-contract';
+import { atomicWrite } from '../atomic-write';
 import { defineChannel, type MainChannelDef } from './channel-def';
 
 // Resolved per call, like the phone's copy was, so a changed home folder in a test is honoured.
@@ -16,24 +17,12 @@ const modelPrefPath = () => path.join(os.homedir(), '.claude', 'youcoded-model.j
 
 // WHY (2026-09-30 one-core R3-6, R3-5 review): the screen fires model:set-preference without waiting, and
 // the write is async, so (a) a read could land on a half-written file and fall back to 'sonnet', and (b) two
-// quick sets could finish out of order and leave the OLDER choice on disk. Writes now go to a temp file and
-// are renamed into place (a reader sees the old file or the new one, never half of one), one at a time per
-// file, in the order they were asked. No existing async atomic-write helper in the codebase (searched:
-// the one in chatsearch-index is synchronous, which would block the main process).
+// quick sets could finish out of order and leave the OLDER choice on disk. Writes go through the shared
+// temp-file-and-rename helper (main/atomic-write.ts; WHY 2026-09-30 one-core R3-7: this file used to carry a
+// private copy of it), one at a time per file, in the order they were asked.
 const writeChains = new Map<string, Promise<unknown>>();
-let writeCounter = 0;
 function writeFileAtomicQueued(file: string, content: string): Promise<void> {
-  const run = async () => {
-    await fs.promises.mkdir(path.dirname(file), { recursive: true });
-    const tmp = `${file}.tmp-${process.pid}-${++writeCounter}`;
-    try {
-      await fs.promises.writeFile(tmp, content);
-      await fs.promises.rename(tmp, file);
-    } catch (err) {
-      await fs.promises.rm(tmp, { force: true }).catch(() => {});
-      throw err;
-    }
-  };
+  const run = () => atomicWrite(file, content);
   const next = (writeChains.get(file) ?? Promise.resolve()).then(run, run);
   // The chain must keep going after a failed write, and must not hold a finished file in the map forever.
   const settled = next.catch(() => {});

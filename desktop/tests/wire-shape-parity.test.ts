@@ -119,6 +119,48 @@ describe('preload and remote-shim send the same object keys for a channel', () =
 // The other half of the same drift: preload sends { sessionId, text } but the handler destructures
 // { sessionId, message } and gets `message === undefined` with no error anywhere.
 
+// WHY (2026-09-30 one-core R3-7): a family moved into the channel table has no `ipcMain.handle` call left to scan,
+// so the table's own entries are scanned too: `defineChannel({ name: IPC.X, handler: ({ a, b }, ctx) => ... })`
+// reads its keys from the FIRST parameter (an ipcMain handler's first is the event). Without this the scan shrinks to
+// nothing as the last family moves, and the check that a handler reads the keys preload sends would silently stop
+// covering the very channels the table now serves.
+/** Keys a handler reads that the PHONE DOOR sets itself (an entry's `remotePayload`), so preload never sends them. */
+const DOOR_SET_KEYS = new Set(['maxBytes', 'trackedOnly']);
+
+function tableHandlerKeys(): { keys: Map<string, Set<string>>; unresolved: string[] } {
+  const unresolved: string[] = [];
+  const out = new Map<string, Set<string>>();
+  const dir = path.join(root, 'src', 'main', 'ipc');
+  for (const name of fs.readdirSync(dir).filter((f) => f.endsWith('.ts'))) {
+    const file = path.join(dir, name);
+    const src = fs.readFileSync(file, 'utf8');
+    if (!src.includes('defineChannel')) continue;
+    const sf = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true);
+    const visit = (n: ts.Node) => {
+      if (ts.isCallExpression(n) && n.expression.getText(sf) === 'defineChannel' && n.arguments.length === 1 && ts.isObjectLiteralExpression(n.arguments[0])) {
+        const props = n.arguments[0].properties;
+        const nameProp = props.find((p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && p.name.getText(sf) === 'name');
+        const handler = props.find((p) => p.name?.getText(sf) === 'handler');
+        const fn = handler && ts.isPropertyAssignment(handler) ? handler.initializer : handler && ts.isMethodDeclaration(handler) ? handler : undefined;
+        const ch = nameProp ? resolveChannel(nameProp.initializer, sf, fileStringConsts(sf)) : undefined;
+        if (nameProp && !ch) unresolved.push(`${path.relative(root, file)}: ${nameProp.initializer.getText(sf)}`);
+        const p0 = fn && (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn) || ts.isMethodDeclaration(fn)) ? fn.parameters[0] : undefined;
+        if (ch && p0 && ts.isObjectBindingPattern(p0.name)) {
+          const set = out.get(ch) ?? out.set(ch, new Set()).get(ch)!;
+          for (const el of p0.name.elements) {
+            if (el.dotDotDotToken) continue;
+            const key = el.propertyName ? el.propertyName.getText(sf) : el.name.getText(sf);
+            if (!DOOR_SET_KEYS.has(key)) set.add(key);
+          }
+        }
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+  }
+  return { keys: out, unresolved };
+}
+
 function handlerKeys(): { keys: Map<string, Set<string>>; unresolved: string[] } {
   const unresolved: string[] = [];
   const out = new Map<string, Set<string>>();
@@ -159,7 +201,11 @@ function handlerKeys(): { keys: Map<string, Set<string>>; unresolved: string[] }
 
 describe('the desktop handler reads the keys preload sends', () => {
   it('every key a handler destructures is a key preload writes for that channel', () => {
-    const { keys: handlers, unresolved } = handlerKeys();
+    const direct = handlerKeys();
+    const table = tableHandlerKeys();
+    const handlers = new Map(direct.keys);
+    for (const [ch, ks] of table.keys) handlers.set(ch, new Set([...(handlers.get(ch) ?? []), ...ks]));
+    const unresolved = [...direct.unresolved, ...table.unresolved];
     expect(unresolved).toEqual([]);
     let compared = 0;
     const wrong: string[] = [];
@@ -177,12 +223,18 @@ describe('the desktop handler reads the keys preload sends', () => {
     // and that nearly every one it finds is a channel preload also sends; a parse that stopped matching either
     // side drops that share to 0 and fails. (Handlers preload never sends are desktop-internal: window,
     // dialog and the like, a small minority.)
-    expect(handlers.size).toBeGreaterThan(0);
+    // WHY the table scan carries the floor (2026-09-30 one-core R3-7, R3-6 review): `handlers.size > 0` held only while
+    // some ipcMain handler still took an object; once every family is in the table that scan finds nothing and the
+    // check failed for the wrong reason. The table only ever GROWS, so a floor on ITS entries never needs lowering,
+    // and a parse that stopped matching them (the real failure) still drops it to 0 and fails.
+    expect(table.keys.size, 'the scan found no channel-table handlers that read keys').toBeGreaterThan(100);
     expect(compared / handlers.size).toBeGreaterThanOrEqual(0.8);
     // Not vacuous for the riskiest shapes: each constant-map family (and the voice audio channel,
     // named by a file-local constant) must actually be reaching the comparison.
     const seen = [...handlers.keys()].filter((k) => preload.has(k));
-    for (const prefix of ['artifacts:', 'git:', 'project:', 'chatsearch:', 'voice:audio']) {
+    // WHY (2026-09-30 one-core R3-7): artifacts, git and project are table entries now (scanned through their entries); the
+    // chatsearch handlers read `p?.key` rather than destructuring, so they have no keys to compare.
+    for (const prefix of ['artifacts:', 'git:', 'project:', 'voice:audio']) {
       expect(seen.some((k) => k.startsWith(prefix)), `no ${prefix} channel was compared`).toBe(true);
     }
     expect(wrong).toEqual([]);

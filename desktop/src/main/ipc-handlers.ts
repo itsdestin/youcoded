@@ -5,10 +5,7 @@ import os from 'os';
 import { resolveNoFolderCwd } from './no-folder';
 import { loadDefaultAppIcon, fitForMacDock } from './app-icon';
 import { randomUUID } from 'crypto';
-import { CHATSEARCH_IPC } from './chatsearch-index/ipc-channels';
 import { buildClaudeCodeContext, readWholeContextFile } from './claude-code-context';
-import { resolveConversations, readConversation } from './chatsearch-index/refs-service';
-import type { ChatsearchReadRequest } from '../shared/chatsearch-refs';
 import https from 'https';
 import { execFile } from 'child_process';
 import { SessionManager } from './session-manager';
@@ -103,7 +100,6 @@ import { getUpdateService } from './update-service';
 // ~/.claude/youcoded-analytics.json; runAnalyticsOnLaunch (wired in main.ts)
 // short-circuits when optIn is false.
 // Saved-folder store — extracted so sync-spaces/ can share the reader/writer.
-import { SavedFolder, readFolders, writeFolders } from './saved-folders';
 // Shared cap so a local folder's description can't drift from the synced
 // registry's limit (project-registry.ts uses the same constant).
 import { PROJECT_DESCRIPTION_MAX } from '../shared/artifacts/types';
@@ -111,46 +107,21 @@ import { setPermissionOverridesSink } from './prefs-service';
 import { loadConfigSync, writeConfig, getAppliedAtLaunch, getCachedGpu } from './performance-config';
 import type { PerformanceConfigSnapshot, SessionInfo } from '../shared/types';
 import { ARTIFACT_IPC } from './artifacts/ipc-channels';
-// 2026-08-27 OOM fix: read-only handlers (list, get, save, check-existence,
-// the binary-roots pass) go through readSidecarShared — one parsed copy per
-// project however many callers ask at once. Only the manual include/exclude
-// handlers, which mutate and write back, keep the private readSidecar.
-import { appendVersion, readSidecar, readSidecarShared, writeSidecar, renameArtifact, removeArtifactRecord } from './artifacts/artifact-store';
-import { listProjects, removeProject } from './artifacts/central-index';
+import { listProjects } from './artifacts/central-index';
 import { initPagesService, getPagesService } from './pages/pages-service';
 import { PageConnectionsStore } from './pages/connections-store';
 import { registerDocCommentsHandlers } from './doc-comments/ipc-handlers';
 import { createAuthStore } from './marketplace-auth-store';
-import type { PageFetchRequest } from '../shared/pages-types';
 import { getMachineIdentity } from './device-identity';
 // Shared with remote-server.ts — see that module's header for why these left
 // this file (they were closures, so the remote transport could not reach them).
-import { countArtifacts, listProjectsIndex } from './artifacts/projects-index';
 import { invalidateDiscoveryCache } from './artifacts/project-file-discovery';
-import { ensureProject, ensureProjectCoalesced, applyGitTreatmentCoalesced } from './artifacts/project-manager';
-import { sweepStaleTmp } from './artifacts/cas-write';
-import { canonicalize } from '../shared/artifacts/canonicalize';
-import { readFileHead } from './fs-read-head';
-import { initProjectWatchers, watchProject, unwatchProject, dropSubscriber, noteOwnWrite, invalidateSidecarIdCache } from './artifacts/project-watcher';
-import { authorizeArtifactWrite } from './artifacts/write-authorization';
-import { trackedArtifacts } from './artifacts/visible-artifacts';
-import { importFile } from './artifacts/import-file';
-import { GIT_IPC } from './git/ipc-channels';
-import {
-  gitFileStatus, gitFileReview, gitCommitFileDiff,
-  gitStage, gitUnstage, gitCommit, gitDiscard,
-} from './git/git-service';
-import { initGitWatchers, watchGit, unwatchGit, dropGitSubscriber } from './git/git-watcher';
-import { resolveRepoRoot, invalidateRepoRootCache } from './git/git-exec';
+import { initProjectWatchers, noteOwnWrite } from './artifacts/project-watcher';
+import { initGitWatchers } from './git/git-watcher';
+import { broadcastGitChanged } from './ipc/git';
 import { gitBranchLabel } from './git/git-branch-label';
-import { PROJECT_IPC } from './project/ipc-channels';
 // The artifact and Project View READ bodies, shared with remote-server.ts
 // (remote access batch 3) so a phone gets the desktop's own answers.
-import {
-  listSessionFiles, listProjectFiles, listAllFiles, listFolder, readArtifactText, readArtifactBytes,
-  searchArtifactContent, checkArtifactExistence, resolveArtifactPath, judgeRecordLocation,
-} from './artifacts/read-service';
-import { listConversations, repoInfo, listContextFiles, readContext } from './project-read-service';
 // Conversation Store (Phase 2a): live intake of transcript activity, session
 // cwd, title and flag changes. Keyed by CLAUDE session id (resolved from the
 // desktop id via sessionIdMap below), matching the store's record id.
@@ -179,7 +150,6 @@ import { bindPermissionHooks } from './ipc/permissions';
 import { createTransferredExitGate } from './conversations/handoff-exit';
 import { hubLeaseRequest, syncSpacesSyncNowAwaited } from './sync-spaces/service';
 import type { RequesterTakeoverType } from './conversations/takeover';
-import { writeContextFile } from './project-context';
 
 // Max age for clipboard paste images (1 hour)
 const CLIPBOARD_MAX_AGE_MS = 60 * 60 * 1000;
@@ -2787,12 +2757,8 @@ export function registerIpcHandlers(
     return sessionIdMap.has(sessionId) || !sessionManager.getSession(sessionId);
   };
 
-  // WHY (2026-09-30 one-core R3-4): the tag / note / naming / browse channels are table entries now, so a
-  // phone reaches the SAME id map and phantom-record gate by construction. All that is left of the old
-  // "meta wiring" is the id lookup the phone's Files screen uses to match a session to its conversation.
-  remoteServer?.setSessionMetaWiring({
-    resolve: (sessionId: string) => sessionIdMap.get(sessionId) || sessionId,
-  });
+  // WHY (2026-09-30 one-core R3-7): the phone's "which conversation is this session" lookup (setSessionMetaWiring) is gone:
+  // the file channels read the runtime's one id map directly (ipc/artifacts.ts).
 
   // session:menu-lock / :set-flag / :set-tag are table entries (main/ipc/session.ts).
 
@@ -2918,308 +2884,16 @@ export function registerIpcHandlers(
 
   // WHY (2026-09-30 one-core R3-2): the dev:* handlers moved to main/ipc/dev.ts (the channel table).
 
-  // --- Artifact viewer IPC handlers ---
-  // All request-response handlers plus the CHANGED push event (emitted via
-  // webContents.send() inside SAVE and APPEND_VERSION — no ipcMain.handle needed
-  // for push events).
+  // WHY (2026-09-30 one-core R3-7): the artifacts:*, project:*, chatsearch:* , git:* and pages:* request/response
+  // channels, fs:read-head and get-home-path are table entries (main/ipc/artifacts.ts, project.ts, chatsearch.ts,
+  // git.ts, pages.ts, files.ts) served to windows and phones by one body. What stays here is what only this
+  // function can build: the change PUSHES (artifacts:changed from the watchers, git:changed, pages:changed) and
+  // the watcher / pages-service setup below.
 
-  // Fix: data-flow gap — the renderer Tracker calls this when it observes a
-  // Write/Edit/MultiEdit transcript event so the central index is populated and
-  // artifacts appear in the Session Drawer even before the user opens it.
-  // ensureProject and applyGitTreatment are both idempotent.
-  //
-  // Burst-safe by construction (2026-08-15): opening a long conversation
-  // replays ~1,000 of these at once (the tracker cannot tell replayed history
-  // from live events — see transcript-watcher's offset-0 read and
-  // TRANSCRIPT_REPLAY). The coalesced helpers answer the burst with one index
-  // write and one .gitignore read; appendVersion queues per project and applies
-  // the whole burst in a few read/write cycles instead of a thousand, each of
-  // which used to pin a parsed 4.4 MB sidecar in memory until the app OOM'd.
-  // A Claude Code session's conversation id when it differs from its desktop id (VersionEvent.conversationId).
-  const conversationIdFor = (id: string): string | undefined => [sessionIdMap.get(id)].find((c) => c && c !== id);
-  ipcMain.handle(ARTIFACT_IPC.APPEND_VERSION, async (
-    _e,
-    { projectRoot, sessionId, args }: { projectRoot: string; sessionId: string; args: {
-      path: string;
-      kind: 'internal' | 'external';
-      absolutePath: string | null;
-      type: 'create' | 'edit' | 'delete' | 'read' | 'delivered';
-      author: 'agent' | 'user';
-      toolUseId?: string;
-    } }
-  ) => {
-    const { project } = await ensureProjectCoalesced(CLAUDE_DIR, projectRoot, sessionId);
-    await applyGitTreatmentCoalesced(projectRoot);
-    const result = await appendVersion(projectRoot, project.id, project.name, {
-      path: args.path,
-      kind: args.kind,
-      absolutePath: args.absolutePath,
-      sessionId,
-      type: args.type,
-      author: args.author,
-      toolUseId: typeof args.toolUseId === 'string' && args.toolUseId ? args.toolUseId : undefined,
-      // WHY: a Claude Code resume gets a fresh desktop id, so a files list keyed on it alone lost
-      // everything before the resume; the conversation's own id lets LIST_SESSION find these again.
-      conversationId: conversationIdFor(sessionId),
-    });
-    // AFTER the append resolves, not before it (2026-08-15 review): appendVersion
-    // is queued now, so an invalidate issued before the call could be followed
-    // by a watcher rebuild that read the OLD sidecar — leaving a just-created
-    // artifact unmapped until the cache's next TTL. Invalidating once the write
-    // has committed closes that window.
-    invalidateSidecarIdCache(projectRoot); // watcher path-to-id map is stale
-    // A newly created/edited file may also be a discovered doc — drop the cached
-    // disk scan so it shows up on the next LIST_PROJECT without waiting for TTL.
-    invalidateDiscoveryCache(projectRoot);
-    // Broadcast the REAL artifact id so listeners can match it — the previous
-    // artifactId: null was dropped by every consumer, which meant the
-    // ActiveArtifactView "Claude also edited this file" conflict banner could
-    // never fire for agent edits (its entire purpose).
-    // A deduped append changed nothing on disk — it is a replayed tool call
-    // that was recorded the first time round — so it must not announce an
-    // edit: that banner would be a lie about a file nobody just touched.
-    if (!result.deduped) {
-      webContents.getAllWebContents().forEach((wc) =>
-        wc.send(ARTIFACT_IPC.CHANGED, {
-          projectRoot,
-          artifactId: result.artifactId,
-          kind: args.type,
-          by: args.author,
-        })
-      );
-    }
-    return { ok: result.committed, project };
-  });
-
-  ipcMain.handle(ARTIFACT_IPC.RENAME, async (
-    _e,
-    { projectRoot, artifactId, newName }: { projectRoot: string; artifactId: string; newName: string }
-  ) => {
-    const result = await renameArtifact(projectRoot, artifactId, newName);
-    invalidateSidecarIdCache(projectRoot); // watcher path-to-id map is stale
-    if (result.ok) {
-      // Broadcast so every open window's artifact UI re-lists with the new name.
-      webContents.getAllWebContents().forEach((wc) =>
-        wc.send(ARTIFACT_IPC.CHANGED, { projectRoot, artifactId, kind: 'rename', by: 'user' })
-      );
-    }
-    return result;
-  });
-
-  // Remove a tracking RECORD (never the file). See removeArtifactRecord for
-  // semantics — Session Drawer per-row remove.
-  ipcMain.handle(ARTIFACT_IPC.REMOVE_RECORD, async (
-    _e,
-    { projectRoot, artifactId }: { projectRoot: string; artifactId: string }
-  ) => {
-    const result = await removeArtifactRecord(projectRoot, artifactId);
-    invalidateSidecarIdCache(projectRoot); // watcher path-to-id map is stale
-    if (result.ok) {
-      webContents.getAllWebContents().forEach((wc) =>
-        wc.send(ARTIFACT_IPC.CHANGED, { projectRoot, artifactId, kind: 'remove', by: 'user' })
-      );
-    }
-    return result;
-  });
-
-  // The artifact READ bodies live in artifacts/read-service.ts (remote access
-  // batch 3): remote-server.ts calls the same functions for a phone, so the two
-  // transports cannot drift on roots, denylist or shape. The legacy-record
-  // repair each listing runs is inside the service.
-  ipcMain.handle(ARTIFACT_IPC.LIST_SESSION, (_e, { sessionId, projectRoot }: { sessionId: string; projectRoot: string }) =>
-    listSessionFiles(sessionId, projectRoot, conversationIdFor(sessionId)));
-
-  // Project View IPC — list project-scoped conversations, git repo info, and
-  // the discovered context files (CLAUDE.md, rules, etc.). The reads go
-  // through project-read-service.ts (shared with the remote host); the context
-  // WRITE stays desktop-only. A conversation's messages are read through
-  // chatsearch:read (below), the one preview reader.
-  ipcMain.handle(PROJECT_IPC.LIST_CONVERSATIONS, (_e, { projectPath }: { projectPath: string }) =>
-    listConversations(projectPath));
-  ipcMain.handle(PROJECT_IPC.REPO_INFO, (_e, { projectPath }: { projectPath: string }) => repoInfo(projectPath));
-  ipcMain.handle(PROJECT_IPC.LIST_CONTEXT, (_e, { projectPath }: { projectPath: string }) => listContextFiles(projectPath));
-  ipcMain.handle(PROJECT_IPC.READ_CONTEXT_FILE, (_e, { projectPath, absolutePath }: { projectPath: string; absolutePath: string }) =>
-    readContext(projectPath, absolutePath));
-  ipcMain.handle(PROJECT_IPC.WRITE_CONTEXT_FILE, async (_e, { projectPath, absolutePath, content }: { projectPath: string; absolutePath: string; content: string }) => {
-    return writeContextFile(projectPath, absolutePath, content);
-  });
-
-  // Session references (spec 2026-08-10): resolve the chatsearch short ids a
-  // search printed against the index the app writes, and read bounded
-  // transcript slices by id. Both go through refs-service so this handler and
-  // the remote WebSocket case cannot assemble paths differently.
-  ipcMain.handle(CHATSEARCH_IPC.RESOLVE, async (_e, { shortIds }: { shortIds: string[] }) => resolveConversations(shortIds));
-  ipcMain.handle(CHATSEARCH_IPC.READ, async (_e, req: ChatsearchReadRequest) => readConversation(req));
-
-  // Project counting/discovery helpers moved to ./artifacts/projects-index so
-  // the remote WebSocket server can compute the IDENTICAL result. They used to
-  // be closures here, which is why remote browsers' Project View was empty:
-  // remote-server.ts had no artifacts:list-projects-index handler and could not
-  // have written one without duplicating all of this. See that module for the
-  // full doc comments on what each count means.
-
-  // LIST_PROJECT → TRACKED SIDECAR ARTIFACTS ONLY. No on-disk discovery is merged
-  // in — that is LIST_ALL_FILES's job.
-  //
-  // What comes back is whatever trackedArtifacts() admits (visible-artifacts.ts
-  // owns the rules): internal records with at least one non-read version, plus
-  // anything legacy-pinned in manualIncludes, minus anything in manualExcludes.
-  // EXTERNAL records need a pin — Project View briefly showed unpinned externals
-  // in an "External Artifacts" section (2026-07-23) but it was removed the same
-  // day (~95% incidental noise against real sidecars), and the pin requirement
-  // reverted with it. Consumers now: FilepathToken (resolve a pill to an
-  // artifact) and the withCount path (the hero/switcher count). No Project View
-  // section reads this any more.
-  //
-  // Deleted records (tombstones) ARE returned — not because anything here wants
-  // them, but because trackedArtifacts() does not filter on `status`. The
-  // session drawer's "Show deleted" toggle reads a DIFFERENT handler
-  // (LIST_SESSION), which returns tombstones on its own — do not assume the
-  // drawer depends on this one. Callers that don't want tombstones must filter.
-  //
-  // visibleCount (withCount) is a separate, independently-computed count from
-  // countArtifacts — non-deleted and on-disk — shared with the hero + switcher.
-  ipcMain.handle(ARTIFACT_IPC.LIST_PROJECT, (_e, { projectId, opts }: { projectId: string; opts?: { withCount?: boolean } }) =>
-    listProjectFiles(projectId, opts));
-
-  // LIST_ALL_FILES → the Project Files section: the folder as it exists on
-  // disk, unioned with tracked internals discovery missed (read-service.ts).
-  ipcMain.handle(ARTIFACT_IPC.LIST_ALL_FILES, (_e, { projectId, opts }: { projectId: string; opts?: { force?: boolean } }) =>
-    listAllFiles(projectId, opts));
-
-  // RESOLVE_PATH → ONE file path tapped in chat, answered with the record the
-  // drawer opens. Replaces listing the whole project to find one file (a phone
-  // measured 3,090 records / ~1 MB for a single tap). The desktop's own
-  // renderer only names the folder of the chat it is showing, so no root gate
-  // here; the remote host adds one (remote-server.ts fileReads).
-  ipcMain.handle(ARTIFACT_IPC.RESOLVE_PATH, (_e, { projectRoot, path: filePath }: { projectRoot: string; path: string }) =>
-    resolveArtifactPath(projectRoot, filePath));
-
-  // LIST_FOLDER → one folder of Project Files, a page at a time, straight from
-  // disk (folder-listing.ts). No depth cap and no home-folder gate.
-  ipcMain.handle(ARTIFACT_IPC.LIST_FOLDER, (_e, { projectId, relDir, opts }: { projectId: string; relDir: string; opts?: { sort?: 'name' | 'recent'; offset?: number; limit?: number; snapshot?: string; namesOnly?: boolean } }) =>
-    listFolder(projectId, relDir, opts));
-
-  // full: the user clicked "Load the whole file" on the partial-view bar. Still
-  // refused above FULL_READ_MAX_BYTES — the flag opts into a BIGGER read, not an
-  // unbounded one. No `maxBytes` here: the desktop's own limits are untouched.
-  // WHY (2026-09-29 one-core R2): one object on the wire, the same one the phone sends
-  // (`full` flat, not nested in `opts`).
-  ipcMain.handle(ARTIFACT_IPC.GET, (_e, { projectRoot, artifactId, full }: { projectRoot: string; artifactId: string; full?: boolean }) =>
-    readArtifactText(projectRoot, artifactId, { full }));
-
-  // Read a file as base64 for the binary viewers (xlsx/docx/pdf/image).
-  // SECURITY: this IPC RETURNS file contents, and over remote access it is
-  // reachable from a phone. read-service.ts resolves symlinks FIRST, then
-  // restricts reads to the user's project roots and tracked artifacts, refusing
-  // well-known secret locations even inside those roots.
-  ipcMain.handle(ARTIFACT_IPC.READ_BINARY, (_e, { absolutePath }: { absolutePath: string }) => readArtifactBytes(absolutePath));
-
-  // First bytes of a user-chosen file, for the composer's attachment cards
-  // (rendered markdown / mono text preview). The cap, the deny list and the
-  // reasoning for NOT roots-gating it live in main/fs-read-head.ts +
-  // shared/read-head.ts; remote-server.ts calls the same function.
-  ipcMain.handle(IPC.FS_READ_HEAD, (_e, { filePath, maxBytes }: { filePath: string; maxBytes?: number }) =>
-    readFileHead(filePath, maxBytes));
-
-  ipcMain.handle(ARTIFACT_IPC.SAVE, async (
-    _e,
-    // WHY (2026-09-29 one-core R2): one object on the wire, the phone's shape — the old
-    // `opts` bag is flattened into it, so `opts` below is whatever is left after the named fields.
-    // baseMtimeMs: optimistic-concurrency token from artifacts:get — the save is
-    // rejected ('conflict') when the file changed underneath (spec §12.9).
-    // confirmed: the user clicked through the confirm-tier dialog; main REQUIRES
-    // it for needs-confirm paths so the policy decision cannot be skipped by a
-    // caller that never showed the dialog (D5 — mistake-prevention tier).
-    { projectRoot, projectId, projectName, artifactId, content: newContent, sessionId, ...opts }: {
-      projectRoot: string; projectId: string; projectName: string; artifactId: string;
-      content: string; sessionId: string; baseMtimeMs?: number; confirmed?: boolean;
-    },
-  ) => {
-    const sidecar = await readSidecarShared(projectRoot);
-    const artifact = (sidecar && !('corrupted' in sidecar))
-      ? sidecar.artifacts.find((a) => a.id === artifactId)
-      : undefined;
-
-    let fullPath: string;
-    // A `../` record is judged as artifacts:get judges it (F3), so the tier below sees its REAL location.
-    const judged = artifact ? await judgeRecordLocation(projectRoot, artifact) : null;
-    if (judged && !judged.ok) return judged.error === 'missing' ? { ok: false, error: 'artifact-not-found' } : judged;
-    if (judged?.ok) {
-      fullPath = judged.realPath;
-    } else if (artifact) {
-      // NOTE the tracked branch historically wrote artifact.absolutePath! with
-      // NO check at all — the sidecar-escalation hole (spec §12.1). Everything
-      // below now runs on the RESOLVED path for both branches.
-      fullPath = artifact.kind === 'internal'
-        ? path.join(projectRoot, artifact.path)
-        : artifact.absolutePath!;
-    } else {
-      // Discovered (on-disk) file: the id IS a canonical relative path. Fast
-      // string-level traversal reject before touching the filesystem.
-      const resolved = path.resolve(projectRoot, artifactId);
-      const root = path.resolve(projectRoot);
-      if (resolved !== root && !resolved.startsWith(root + path.sep)) {
-        return { ok: false, error: 'artifact-not-found' };
-      }
-      fullPath = resolved;
-    }
-
-    // Symlink resolution → in-root enforcement → D5 tier policy → concurrency
-    // token, all on the RESOLVED path (write-authorization.ts owns the logic +
-    // its tests — this is the feature's security boundary, keep it pinned).
-    const auth = await authorizeArtifactWrite({
-      projectRoot,
-      fullPath,
-      mustStayInRoot: !artifact || artifact.kind === 'internal',
-      baseMtimeMs: opts?.baseMtimeMs,
-      confirmed: opts?.confirmed,
-    });
-    if (!auth.ok) return auth;
-    const realPath = auth.realPath;
-
-    // Suppress the watcher echo of our own write (spec §8.4), then atomic
-    // write: .tmp + rename so the original is never half-written.
-    // pid+time-suffixed temp name: two processes (dev + built app) writing the
-    // same file must not race the same .tmp — the loser's rename would ENOENT.
-    // These tmp files land in the USER'S project tree, so sweep crash orphans
-    // for this file first and unlink our own tmp on failure — a pid+time name
-    // is never overwritten by the next write, so a strand would linger forever
-    // (git status noise, visible in the Files UI).
-    noteOwnWrite(realPath);
-    await sweepStaleTmp(path.dirname(realPath), path.basename(realPath));
-    const tmpPath = `${realPath}.${process.pid}.${Date.now()}.tmp`;
-    try {
-      await fs.promises.writeFile(tmpPath, newContent, 'utf8');
-      await fs.promises.rename(tmpPath, realPath);
-    } catch (e) {
-      try { await fs.promises.unlink(tmpPath); } catch { /* already gone */ }
-      throw e;
-    }
-    const st = await fs.promises.stat(realPath).catch(() => null);
-
-    if (artifact) {
-      invalidateSidecarIdCache(projectRoot);
-      await appendVersion(projectRoot, projectId, projectName, {
-        path: artifact.path,
-        kind: artifact.kind,
-        absolutePath: artifact.absolutePath,
-        sessionId,
-        type: 'edit',
-        author: 'user',
-      });
-    } else {
-      // NO sidecar mutation for discovered files, so editing a doc never
-      // silently creates a .youcoded/ tracking dir.
-      invalidateDiscoveryCache(projectRoot); // refresh the cached mtime next scan
-    }
-    // Broadcast the change to every renderer so all open windows update their artifact UI
-    webContents.getAllWebContents().forEach((wc) =>
-      wc.send(ARTIFACT_IPC.CHANGED, { projectRoot, artifactId, kind: 'edit', by: 'user' })
-    );
-    // Fresh token so the editor can keep saving without a refetch round-trip.
-    return { ok: true, mtimeMs: st?.mtimeMs };
-  });
+  // WHY (2026-09-30 one-core R3-7): artifact and git changes made by the computer's own windows have always
+  // gone to every window and never to a phone; the table entries reach that audience through this.
+  const sendToWindows = (channel: string, payload: unknown) =>
+    webContents.getAllWebContents().forEach((wc) => wc.send(channel, payload));
 
   // ── External-change watcher (spec §8) ──
   // Watchers live in main, refcounted per webContents (project-watcher.ts owns
@@ -3277,24 +2951,6 @@ export function registerIpcHandlers(
       remoteServer?.broadcast({ type: IPC.PAGES_CHANGED, payload: pages });
     },
   });
-  ipcMain.handle(IPC.PAGES_LIST, async () => { pagesService.ensureWatching(); return pagesService.listAndWatch(); });
-  ipcMain.handle(IPC.PAGES_GET, async (_e, { id }: { id: string }) => pagesService.store.get(String(id ?? '')));
-  ipcMain.handle(IPC.PAGES_SET_PINNED, async (_e, { id, pinned }: { id: string; pinned: boolean }) => pagesService.store.setPinned(String(id ?? ''), !!pinned));
-  ipcMain.handle(IPC.PAGES_SET_DATA, async (_e, { id, data }: { id: string; data: unknown }) => pagesService.store.setData(String(id ?? ''), data));
-  // Phase 2. `remote: false` here and `true` in remote-server.ts is the whole
-  // of "no keys on the phone" (design review 1, finding 13): a desktop window
-  // may paste a key, a remote caller may only reuse one already saved.
-  ipcMain.handle(IPC.PAGES_APPROVE, async (_e, { id, keys }: { id: string; keys: Record<string, string> }) =>
-    pagesService.approve(String(id ?? ''), keys ?? {}, { remote: false }));
-  ipcMain.handle(IPC.PAGES_REMOVE_CONNECTION, async (_e, { id, connectionId }: { id: string; connectionId: string }) =>
-    pagesService.removeConnection(String(id ?? ''), String(connectionId ?? '')));
-  ipcMain.handle(IPC.PAGES_REFRESH, async (_e, { id }: { id: string }) => pagesService.refresh(String(id ?? '')));
-  ipcMain.handle(IPC.PAGES_SAVED_KEYS, async () => pagesService.savedKeys());
-  ipcMain.handle(IPC.PAGES_DELETE_SAVED_KEY, async (_e, { service, address }: { service: string; address: string }) =>
-    pagesService.deleteSavedKey(String(service ?? ''), String(address ?? '')));
-  ipcMain.handle(IPC.PAGES_FETCH, async (_e, { id, request: req }: { id: string; request: PageFetchRequest }) =>
-    pagesService.fetch(String(id ?? ''), req ?? { url: '' }));
-
   // ── Document comments (T3, design docs/active/specs/2026-09-26-doc-comments-
   // build-design.md §1.5/§1.6) — list/add/reply/resolve/reopen/move plus the
   // chokidar-backed watch/unwatch relay. Factored into its own function so the
@@ -3310,282 +2966,11 @@ export function registerIpcHandlers(
     sessionRoots: () => sessionManager.listSessions().filter(s => s.status !== 'destroyed').map(s => s.cwd),
   });
 
-  // A crashed/closed renderer never sends unwatch — drop its refs on destroy so
-  // it cannot pin a watcher forever. One listener per webContents, attached on
-  // its first subscribe.
-  const watchedSenders = new Set<number>();
-  ipcMain.handle(ARTIFACT_IPC.WATCH_PROJECT, async (e, { projectRoot }: { projectRoot: string }) => {
-    if (typeof projectRoot !== 'string' || projectRoot.length === 0) return { ok: false };
-    const senderId = e.sender.id;
-    if (!watchedSenders.has(senderId)) {
-      watchedSenders.add(senderId);
-      e.sender.once('destroyed', () => {
-        watchedSenders.delete(senderId);
-        dropSubscriber(senderId);
-      });
-    }
-    return watchProject(projectRoot, senderId);
-  });
-  ipcMain.handle(ARTIFACT_IPC.UNWATCH_PROJECT, async (e, { projectRoot }: { projectRoot: string }) => {
-    if (typeof projectRoot !== 'string' || projectRoot.length === 0) return { ok: false };
-    unwatchProject(projectRoot, e.sender.id);
-    return { ok: true };
-  });
-
-  // ── Git surface (spec docs/archive/specs/2026-07-22-git-surface.md) ──
-  // Known-roots gate: a git operation may only target a saved folder or an
-  // indexed project root — same allow-list the read-binary guard builds.
-  const knownGitRoot = async (projectRoot: unknown): Promise<boolean> => {
-    if (typeof projectRoot !== 'string' || projectRoot.length === 0) return false;
-    const canon = canonicalize(projectRoot, null);
-    const roots = [
-      ...readFolders().map((f) => canonicalize(f.path, null)),
-      ...(await listProjects(CLAUDE_DIR)).map((p) => canonicalize(p.path, null)),
-    ];
-    return roots.includes(canon);
-  };
-  const gitGate = async <T extends object>(projectRoot: unknown, blocked: T, run: () => Promise<T>): Promise<T> => {
-    if (!(await knownGitRoot(projectRoot))) return blocked;
-    return run();
-  };
-  const broadcastGitChanged = (repoRoot: string) => {
-    // Commits and checkouts can create or retarget repos — drop the cache so
-    // the next footer query re-resolves.
-    invalidateRepoRootCache();
-    webContents.getAllWebContents().forEach((wc) => wc.send(GIT_IPC.CHANGED, { repoRoot }));
-  };
-
-  initGitWatchers((evt) => broadcastGitChanged(evt.repoRoot));
-
-  ipcMain.handle(GIT_IPC.FILE_STATUS, (_e, { projectRoot, relPath }: { projectRoot: string; relPath: string }) =>
-    gitGate(projectRoot, { ok: false, error: 'unknown-project-root', isRepo: false, branch: null, counts: null, hasHistory: false, staged: false, conflicted: false },
-      () => gitFileStatus(projectRoot, relPath)));
-
-  ipcMain.handle(GIT_IPC.FILE_REVIEW, (_e, { projectRoot, relPath, ...opts }: { projectRoot: string; relPath: string; logSkip?: number }) =>
-    gitGate(projectRoot, { ok: false, error: 'unknown-project-root', isRepo: false, branch: null, uncommitted: null, log: [], hasMore: false, stagedCount: 0 },
-      () => gitFileReview(projectRoot, relPath, opts)));
-
-  ipcMain.handle(GIT_IPC.COMMIT_FILE_DIFF, (_e, { projectRoot, sha, relPath, prevPath }: { projectRoot: string; sha: string; relPath: string; prevPath?: string }) =>
-    gitGate(projectRoot, { ok: false, error: 'unknown-project-root', hunks: [], binary: false },
-      () => gitCommitFileDiff(projectRoot, sha, relPath, prevPath)));
-
-  const mutating = async (projectRoot: string, run: () => Promise<{ ok: boolean; error?: string }>) =>
-    gitGate(projectRoot, { ok: false, error: 'unknown-project-root' }, async () => {
-      const result = await run();
-      if (result.ok) {
-        const repoRoot = await resolveRepoRoot(projectRoot);
-        if (repoRoot) broadcastGitChanged(repoRoot);
-      }
-      return result;
-    });
-
-  ipcMain.handle(GIT_IPC.STAGE, (_e, { projectRoot, relPath }: { projectRoot: string; relPath: string }) =>
-    mutating(projectRoot, () => gitStage(projectRoot, relPath)));
-  ipcMain.handle(GIT_IPC.UNSTAGE, (_e, { projectRoot, relPath }: { projectRoot: string; relPath: string }) =>
-    mutating(projectRoot, () => gitUnstage(projectRoot, relPath)));
-  ipcMain.handle(GIT_IPC.COMMIT, (_e, { projectRoot, message }: { projectRoot: string; message: string }) =>
-    mutating(projectRoot, () => gitCommit(projectRoot, message)));
-  ipcMain.handle(GIT_IPC.DISCARD, (_e, { projectRoot, relPath }: { projectRoot: string; relPath: string }) =>
-    mutating(projectRoot, () => gitDiscard(projectRoot, relPath)));
-
-  const gitWatchedSenders = new Set<number>();
-  ipcMain.handle(GIT_IPC.WATCH, (e, { projectRoot }: { projectRoot: string }) =>
-    gitGate(projectRoot, { ok: false }, async () => {
-      const repoRoot = await resolveRepoRoot(projectRoot);
-      if (!repoRoot) return { ok: false };
-      const senderId = e.sender.id;
-      if (!gitWatchedSenders.has(senderId)) {
-        gitWatchedSenders.add(senderId);
-        e.sender.once('destroyed', () => { gitWatchedSenders.delete(senderId); dropGitSubscriber(senderId); });
-      }
-      return watchGit(repoRoot, senderId);
-    }));
-  // Gated like every other git channel — unwatch shells rev-parse, and the
-  // known-roots gate should be uniform even for read-only paths.
-  ipcMain.handle(GIT_IPC.UNWATCH, (e, { projectRoot }: { projectRoot: string }) =>
-    gitGate(projectRoot, { ok: false }, async () => {
-      const repoRoot = await resolveRepoRoot(projectRoot);
-      if (repoRoot) unwatchGit(repoRoot, e.sender.id);
-      return { ok: true };
-    }));
-
-  ipcMain.handle(ARTIFACT_IPC.SEARCH_CONTENT, (_e, { projectRoot, query }: { projectRoot: string; query: string }) =>
-    searchArtifactContent(projectRoot, query));
-
-  // Normalize an include/exclude entry to a canonical ABSOLUTE path. FilesTab
-  // passes a relative path for internal artifacts and an absolute one for
-  // externals; storing one uniform shape keeps trackedArtifacts' comparisons
-  // trivial.
-  const toCanonicalAbs = (projectRoot: string, p: string): string => {
-    const fwd = p.replace(/\\/g, '/');
-    const isAbs = /^[a-zA-Z]:\//.test(fwd) || fwd.startsWith('/');
-    return canonicalize(isAbs ? fwd : `${projectRoot.replace(/\\/g, '/')}/${fwd}`, null);
-  };
-
-  // IMPORT_FILE → copy/move a picked file into the project. All policy lives in
-  // artifacts/import-file.ts (traversal, self-import, collisions, temp+rename,
-  // verify-before-unlink). disclosedCollisions is the list of colliding
-  // basenames the renderer's dialog actually NAMED to the user — forwarded so
-  // 'replace' can only overwrite files the user was shown (see that module).
-  ipcMain.handle(ARTIFACT_IPC.IMPORT_FILE, async (
-    _e,
-    { projectRoot, sourcePath, destDir, opts }: { projectRoot: string; sourcePath: string; destDir: string; opts: {
-      mode: 'move' | 'copy';
-      onCollision: 'replace' | 'keep-both' | 'skip';
-      disclosedCollisions?: string[];
-    } },
-  ) => importFile({
-    projectRoot, sourcePath, destDir,
-    mode: opts.mode,
-    onCollision: opts.onCollision,
-    disclosedCollisions: opts.disclosedCollisions,
-  }));
-
-  // INCLUDE_EXTERNAL = PIN a file into the tracked set (any kind — a file
-  // outside the project folder, or an in-project file Claude never edited).
-  // Writes a manualIncludes entry, which trackedArtifacts treats as rule 1:
-  // visible regardless of whether the file has any Claude work on it.
-  //
-  // NOTHING IN THE APP CALLS THIS TODAY. It used to be "+ Add file", but on
-  // 2026-07-23 that button became a real Move/Copy import (ARTIFACT_IPC.
-  // IMPORT_FILE) and stopped writing pins — so this is no longer the recovery
-  // path for a mistaken Exclude, and Exclude currently has no in-app undo (the
-  // Exclude button says so). The handler and the manualIncludes rule stay
-  // because existing sidecars still carry pins written by the old flow, and
-  // dropping the channel would break the pinned IPC surface. Three steps:
-  //   1. Ensure an artifact RECORD exists (appendVersion dedups by path+kind and
-  //      creates the sidecar if missing) — a pin with no record would show
-  //      nothing, which was a real bug on fresh projects.
-  //   2. Add to manualIncludes (idempotent).
-  //   3. Remove from manualExcludes (includes also win over excludes in
-  //      trackedArtifacts, so this is belt-and-suspenders).
-  ipcMain.handle(ARTIFACT_IPC.INCLUDE_EXTERNAL, async (
-    _e, { projectRoot, absolutePath }: { projectRoot: string; absolutePath: string }
-  ) => {
-    const canonical = toCanonicalAbs(projectRoot, absolutePath);
-    const rootCanon = canonicalize(projectRoot, null);
-    const isInternal = canonical === rootCanon || canonical.startsWith(rootCanon + '/');
-
-    // 1. Ensure a record exists (author 'user', type 'read' — a pin, not an edit).
-    const { project } = await ensureProject(CLAUDE_DIR, projectRoot, 'manual-include');
-    invalidateSidecarIdCache(projectRoot); // watcher path-to-id map is stale
-    const appendResult = await appendVersion(projectRoot, project.id, project.name, {
-      path: isInternal ? canonical.slice(rootCanon.length + 1) : (canonical.split('/').pop() ?? canonical),
-      kind: isInternal ? 'internal' : 'external',
-      absolutePath: isInternal ? null : canonical,
-      sessionId: 'manual-include',
-      type: 'read',
-      author: 'user',
-    });
-
-    // 2 + 3. Pin it and clear any standing exclude (CAS-retried).
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const sidecar = await readSidecar(projectRoot);
-      if (!sidecar || 'corrupted' in sidecar) return { ok: false, error: 'sidecar-missing' };
-      const originalUpdatedAt = sidecar.updatedAt;
-      const alreadyIncluded = sidecar.manualIncludes.some((i) => i.path === canonical);
-      const hadExclude = sidecar.manualExcludes.includes(canonical);
-      if (alreadyIncluded && !hadExclude) break; // nothing to change
-      if (!alreadyIncluded) {
-        sidecar.manualIncludes.push({ path: canonical, addedAt: new Date().toISOString(), addedBy: 'user' });
-      }
-      sidecar.manualExcludes = sidecar.manualExcludes.filter((p) => p !== canonical);
-      sidecar.updatedAt = new Date().toISOString();
-      const w = await writeSidecar(projectRoot, originalUpdatedAt, sidecar);
-      if (w.committed) break;
-    }
-    webContents.getAllWebContents().forEach((wc) =>
-      wc.send(ARTIFACT_IPC.CHANGED, { projectRoot, artifactId: appendResult.artifactId, kind: 'include', by: 'user' })
-    );
-    return { ok: true };
-  });
-
-  // Exclude = un-pin an external artifact (remove from manualIncludes) AND add a
-  // sticky manualExcludes entry so trackedArtifacts() keeps hiding it even if
-  // Claude re-edits the file. Never touches the file on disk or the session
-  // drawer's activity log.
-  //
-  // NO RENDERER CALLER as of 2026-07-23. The Project View button that invoked
-  // this was removed when the External Artifacts section was reverted (~95%
-  // incidental noise against real sidecars). The handler stays because legacy
-  // sidecars carry manualExcludes entries that must keep round-tripping, and
-  // because manualExcludes is still load-bearing in trackedArtifacts() rule 2.
-  // If a future feature re-introduces a caller: it is one-way (nothing writes
-  // manualIncludes any more, so there is no in-app un-exclude), and it only ever
-  // made sense for externals — an in-folder file cannot be hidden from a live
-  // disk walk without lying about the folder's contents.
-  ipcMain.handle(ARTIFACT_IPC.EXCLUDE, async (
-    _e, { projectRoot, canonicalPath }: { projectRoot: string; canonicalPath: string }
-  ) => {
-    const canonical = toCanonicalAbs(projectRoot, canonicalPath);
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const sidecar = await readSidecar(projectRoot);
-      if (!sidecar || 'corrupted' in sidecar) return { ok: false, error: 'sidecar-missing' };
-      const originalUpdatedAt = sidecar.updatedAt;
-      sidecar.manualIncludes = sidecar.manualIncludes.filter((i) => i.path !== canonical);
-      if (!sidecar.manualExcludes.includes(canonical)) sidecar.manualExcludes.push(canonical);
-      sidecar.updatedAt = new Date().toISOString();
-      const w = await writeSidecar(projectRoot, originalUpdatedAt, sidecar);
-      if (w.committed) break;
-    }
-    webContents.getAllWebContents().forEach((wc) =>
-      wc.send(ARTIFACT_IPC.CHANGED, { projectRoot, artifactId: null, kind: 'exclude', by: 'user' })
-    );
-    return { ok: true };
-  });
-
-  // Returns the Project View project list — the user's SAVED FOLDERS (the same
-  // list the session-creation folder picker shows), reconciled with the central
-  // index for artifact ids + stats. WHY saved folders rather than the raw index:
-  // the index only gains an entry once Claude writes a tracked artifact in a
-  // folder, so folders the user works in (conversations / reads only, or
-  // pre-artifact-viewer) were invisible. The picker list is the user's own
-  // source of truth and needs no Claude Code ~/.claude/projects dependency.
-  // Thin wrapper — the computation lives in ./artifacts/projects-index so the
-  // remote WebSocket server returns byte-identical results (remote Project View
-  // was empty because that transport had no handler at all).
-  // artifacts:download is a REMOTE channel (batch 3): a phone asks the host for
-  // a short-lived link and the host's HTTP route streams the file. On the
-  // desktop's own transport there is nothing to download to, so it refuses
-  // with a code the renderer never shows (Download is only offered in remote
-  // mode). A literal, not an ARTIFACT_IPC constant: the artifact parity test
-  // requires every constant there to have an Android handler, and the phone's
-  // own bridge answers this one through its catch-all `else` by design.
-  ipcMain.handle('artifacts:download', async () => ({ ok: false, code: 'not-remote' }));
-
-  ipcMain.handle(ARTIFACT_IPC.LIST_PROJECTS_INDEX, async (_e, opts?: { withCounts?: boolean }) =>
-    listProjectsIndex(opts)
-  );
-
-  // Task 7.3: remove a project from the central index. The project folder and
-  // its files are NOT deleted — only the YouCoded tracking record is removed.
-  // When deleteSidecar is true, also removes .youcoded/artifacts.json from the
-  // project folder so artifact history starts fresh on next session.
-  ipcMain.handle(ARTIFACT_IPC.DELETE_PROJECT, async (
-    _e, { projectId, deleteSidecar }: { projectId: string; deleteSidecar: boolean }
-  ) => {
-    const projects = await listProjects(CLAUDE_DIR);
-    const p = projects.find((x) => x.id === projectId);
-    if (!p) return { ok: false, error: 'project-not-found' };
-    await removeProject(CLAUDE_DIR, projectId);
-    if (deleteSidecar) {
-      const sidecarPath = path.join(p.path, '.youcoded', 'artifacts.json');
-      try {
-        await fs.promises.unlink(sidecarPath);
-      } catch {
-        // Ignore ENOENT — sidecar may already be absent
-      }
-    }
-    return { ok: true };
-  });
-
-  // Batch-check whether each requested artifact's resolved path still exists on
-  // disk. Used by SessionDrawer + ProjectView to mark "file not on disk"
-  // artifacts as deleted in the UI without mutating the sidecar. Internal
-  // artifacts resolve to projectRoot/path; external artifacts resolve to
-  // absolutePath. Parallel fs.access keeps this cheap even for hundreds of IDs.
-  ipcMain.handle(ARTIFACT_IPC.CHECK_EXISTENCE, (_e, { projectRoot, artifactIds }: { projectRoot: string; artifactIds: string[] }) =>
-    checkArtifactExistence(projectRoot, artifactIds));
+  // ── Git surface: the change PUSH (spec docs/archive/specs/2026-07-22-git-surface.md) ──
+  // WHY (2026-09-30 one-core R3-7): the git:* request channels are table entries (main/ipc/git.ts). The watcher
+  // reports a repo change to every window (never a phone), exactly as before; the entries' own commits and
+  // stages announce through the same function.
+  initGitWatchers((evt) => broadcastGitChanged(sendToWindows, evt.repoRoot));
 
   // Return shape (Sign in with ChatGPT, backend design 2026-09-05 §5 / review
   // R3-2): `cleanup` for app shutdown — it returns the engine-stop promise so
@@ -3645,7 +3030,7 @@ export function registerIpcHandlers(
     // Every screen: the phones, then this computer's own windows (the same pair tagsChanged fires).
     remoteServer?.broadcast({ type: channel, payload });
     broadcastToAllWindows(channel, payload);
-  }, () => ({ sessionManager }));
+  }, () => ({ sessionManager, sendToWindows }));
   return {
     cleanup, hasUsableProvider, firstRunDeps, openRouterSignIn, handoffAttempts,
     outboxBroadcast: { sessionMeta: broadcastSessionMeta, tagsChanged: broadcastTagsChanged } satisfies OutboxBroadcast,

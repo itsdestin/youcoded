@@ -96,31 +96,55 @@ describe('remote channels — every channel is answered', () => {
     'project:write-context-file',
   ];
 
+  // WHY (2026-09-30 one-core R3-7): the artifacts: and project: channels are channel-table entries
+  // (main/ipc/artifacts.ts, project.ts), so "answered by the host" is now "has a table entry the phone is not
+  // refused from". The scan reads those two files as text (one `defineChannel({ name: IPC.X ...` per entry; a
+  // `remoteAllowed: false` on the entry is the refusal) and resolves each constant to its channel string through
+  // the contract, so an entry that loses its name or its refusal changes this answer.
+  const contract = read('../src/shared/backend-contract.ts');
+  const valueOf = (konst: string) => new RegExp(`\\b${konst}: '([^']+)'`).exec(contract)?.[1];
+  function tableEntries(file: string): Array<{ name: string; phone: boolean }> {
+    const src = readStripped(fileURLToPath(new URL(`../src/main/ipc/${file}.ts`, import.meta.url)));
+    return src.split('defineChannel({').slice(1).map((chunk) => {
+      const konst = /name: IPC\.([A-Z0-9_]+)/.exec(chunk)?.[1] ?? '';
+      const head = chunk.slice(0, 200);
+      return { name: valueOf(konst) ?? `?${konst}`, phone: !/remoteAllowed: false|desktopOnly: true/.test(head) };
+    });
+  }
+  const hostedFileChannels = (prefix: string) => [
+    ...unique(serverCode, CASE(prefix)),
+    ...[...tableEntries('artifacts'), ...tableEntries('project')].filter((e) => e.phone && e.name.startsWith(prefix)).map((e) => e.name),
+  ];
+  const refusedByTable = () => [...tableEntries('artifacts'), ...tableEntries('project')].filter((e) => !e.phone).map((e) => e.name);
+
   describe('every file channel a phone reads through is answered by the host', () => {
     it('the patterns can see real channels on both sides, so an empty diff is not vacuous', () => {
       assertPatternMatches(INVOKE('artifacts:'), "invoke('artifacts:get', { projectRoot, artifactId })", 'a shim invoke of an artifacts: channel');
-      assertPatternMatches(CASE('project:'), "case 'project:list-context': {", 'a host case for a project: channel');
       expect(unique(shimCode, INVOKE('artifacts:'))).toContain('artifacts:get');
-      expect(unique(serverCode, CASE('artifacts:'))).toContain('artifacts:get');
+      expect(hostedFileChannels('artifacts:')).toContain('artifacts:get');
       expect(unique(shimCode, INVOKE('project:'))).toContain('project:list-context');
-      expect(unique(serverCode, CASE('project:'))).toContain('project:list-context');
+      expect(hostedFileChannels('project:')).toContain('project:list-context');
+      // Every entry's constant resolved to a real channel string (a typo would read as "?KONST").
+      expect([...tableEntries('artifacts'), ...tableEntries('project')].filter((e) => e.name.startsWith('?'))).toEqual([]);
     });
 
     for (const prefix of ['artifacts:', 'project:']) {
       it(`leaves no ${prefix} read to the unsupported default`, () => {
         const invoked = unique(shimCode, INVOKE(prefix));
-        const hosted = unique(serverCode, CASE(prefix));
+        const hosted = hostedFileChannels(prefix);
         const missing = invoked.filter(c => !hosted.includes(c) && !FILE_WRITES_NOT_OVER_REMOTE.includes(c));
         expect(missing).toEqual([]);
       });
     }
 
-    it('the exemption list is honest: each entry is still invoked by the shim and still unhandled by the host', () => {
+    it('the exemption list is honest: each entry is still invoked by the shim and still refused to a phone', () => {
       const invoked = [...unique(shimCode, INVOKE('artifacts:')), ...unique(shimCode, INVOKE('project:'))];
-      const hosted = [...unique(serverCode, CASE('artifacts:')), ...unique(serverCode, CASE('project:'))];
+      const hosted = [...hostedFileChannels('artifacts:'), ...hostedFileChannels('project:')];
       expect(FILE_WRITES_NOT_OVER_REMOTE.filter(c => !invoked.includes(c))).toEqual([]);
-      // A write that gained a host case is bridged now; its row here would claim otherwise.
+      // A write that gained a phone-allowed entry is bridged now; its row here would claim otherwise.
       expect(FILE_WRITES_NOT_OVER_REMOTE.filter(c => hosted.includes(c))).toEqual([]);
+      // And the table really does refuse every one of them (the answer the phone has always been given).
+      expect(FILE_WRITES_NOT_OVER_REMOTE.filter(c => !refusedByTable().includes(c))).toEqual([]);
     });
   });
 

@@ -54,6 +54,10 @@ const testEntries: MainChannelDef[] = [
     handler: () => { throw new Error('boom from the handler'); },
   },
   {
+    name: 'test:throws-string', kind: 'handle',
+    handler: () => { throw 'a library threw a bare string'; },
+  },
+  {
     name: 'test:throws-soft', kind: 'handle',
     handler: () => { throw new Error('boom from the handler'); },
     remoteOnError: () => 'soft answer',
@@ -145,6 +149,12 @@ describe('a table entry is served by both doors', () => {
     // WHY the flag (2026-09-30 one-core R3-2): it is what lets the phone's page reject this reply
     // for ANY channel; without it the caller would receive a failure object as if it were data.
     expect(await overRemote('test:throws', {})).toEqual({ ok: false, error: 'boom from the handler', [TABLE_ERROR_FLAG]: true });
+  });
+
+  // WHY (2026-09-30 one-core R3-7, R3-6 review): the old phone cases answered String(err) for a thrown non-Error;
+  // the table had begun to say a generic sentence instead, hiding what a library threw.
+  it('a handler that throws a bare string still tells the phone what was thrown', async () => {
+    expect(await overRemote('test:throws-string', {})).toEqual({ ok: false, error: 'a library threw a bare string', [TABLE_ERROR_FLAG]: true });
   });
 
   it('a soft remoteOnError answer is sent unflagged, and the swallowed error is logged', async () => {

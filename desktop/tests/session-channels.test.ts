@@ -145,9 +145,10 @@ describe('a phone-side guard is table policy, not a check buried in a handler', 
 
   it('session:create declares the shell refusal on the entry itself, byte for byte', () => {
     const guard = findChannel('session:create')!.remoteGuard!;
-    expect(guard({ provider: 'shell', cwd: '/' })).toEqual({ ok: false, error: 'A terminal session can only be opened from the app itself.' });
-    expect(guard({ provider: 'claude' })).toBeUndefined();
-    expect(guard(undefined)).toBeUndefined();
+    const phoneCtx: any = { door: 'remote', runtime: null, broadcast: () => {} };
+    expect(guard({ provider: 'shell', cwd: '/' }, phoneCtx)).toEqual({ ok: false, error: 'A terminal session can only be opened from the app itself.' });
+    expect(guard({ provider: 'claude' }, phoneCtx)).toBeUndefined();
+    expect(guard(undefined, phoneCtx)).toBeUndefined();
   });
 });
 

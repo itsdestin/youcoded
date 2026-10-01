@@ -334,6 +334,7 @@ const IPC = {
   PAGES_DELETE_SAVED_KEY: 'pages:delete-saved-key',
   PAGES_FETCH: 'pages:fetch',
   FS_READ_HEAD: 'fs:read-head',
+  FILE_UPLOAD: 'file:upload',
   PERMISSIONS_LIST: 'permissions:list',
   PERMISSIONS_REMOVE: 'permissions:remove',
   PERMISSIONS_REMOVE_PROJECT: 'permissions:remove-project',

@@ -48,6 +48,12 @@ import { claudeCodeChannels } from './claude-code';
 import { searchChannels } from './search';
 import { engineChannels } from './engine';
 import { modelsChannels } from './models';
+import { artifactsChannels } from './artifacts';
+import { projectChannels } from './project';
+import { chatsearchChannels } from './chatsearch';
+import { gitChannels } from './git';
+import { pagesChannels } from './pages';
+import { filesChannels } from './files';
 
 export type { MainChannelCtx, MainChannelDef } from './channel-def';
 
@@ -82,6 +88,12 @@ export const CHANNEL_TABLE: MainChannelDef[] = [
   ...searchChannels,
   ...engineChannels,
   ...modelsChannels,
+  ...artifactsChannels,
+  ...projectChannels,
+  ...chatsearchChannels,
+  ...gitChannels,
+  ...pagesChannels,
+  ...filesChannels,
 ];
 
 let indexed: { size: number; byName: Map<string, MainChannelDef> } | null = null;
@@ -116,6 +128,8 @@ export function registerDesktopChannels(
   for (const def of CHANNEL_TABLE) {
     if (seen.has(def.name)) throw new Error(`channel table lists ${def.name} twice`);
     seen.add(def.name);
+    // WHY (2026-09-30 one-core R3-7): a phone-only entry (file:upload) is never registered on the computer.
+    if (def.remoteOnly) continue;
     const ctxFor = (event: any): MainChannelCtx => ({ door: 'desktop', runtime: getRuntime(), windowId: event?.sender?.id, sender: event?.sender, broadcast, desktop: getDesktop?.() });
     if (def.kind === 'handle') {
       ipc.handle(def.name, (event, payload) => def.handler(payload, ctxFor(event)));
@@ -160,23 +174,29 @@ export async function serveRemoteChannel(def: MainChannelDef, payload: unknown, 
     }
     return { reply: false };
   }
-  if (def.remoteGuard) {
-    const refused = def.remoteGuard(payload);
-    if (refused !== undefined) return { reply: true, payload: refused };
-  }
+  // WHY the guard runs inside the try (2026-09-30 one-core R3-7): the file gates look folders up on disk and
+  // can throw; that must answer like the handler throwing, never leave the phone's request hanging.
   try {
-    return { reply: true, payload: await def.handler(payload, ctx) };
+    if (def.remoteGuard) {
+      const refused = await def.remoteGuard(payload, ctx);
+      if (refused !== undefined) return { reply: true, payload: refused };
+    }
+    const phonePayload = def.remotePayload ? await def.remotePayload(payload, ctx) : payload;
+    return { reply: true, payload: await def.handler(phonePayload, ctx) };
   } catch (error) {
     // A phone has no rejected-invoke channel, so a throw becomes what the entry declares
     // (remoteOnError: the soft answer its caller expects), else {ok:false,error} carrying
     // TABLE_ERROR_FLAG, which the phone's page turns back into a rejection for ANY channel.
     // WHY log the soft path (2026-09-30 one-core R3-2): remoteOnError hides the failure from the
     // caller by design; without a line here a failing folder read was undiagnosable.
+    // WHY String(error) for a non-Error throw (2026-09-30 one-core R3-7, R3-6 review): the old phone cases
+    // sent String(err); the table's generic sentence hid a library's thrown string. Checked: no handler
+    // throws a string that carries a secret (non-Error throws here are codes or short sentences).
     const message = error instanceof Error ? error.message : String(error);
     if (def.remoteOnError) {
       console.warn(`[channel-table] ${def.name} failed (phone got its soft answer):`, message);
       return { reply: true, payload: def.remoteOnError(error, payload) };
     }
-    return { reply: true, payload: { ok: false, error: error instanceof Error ? error.message : 'That did not work. Try again.', [TABLE_ERROR_FLAG]: true } };
+    return { reply: true, payload: { ok: false, error: message, [TABLE_ERROR_FLAG]: true } };
   }
 }

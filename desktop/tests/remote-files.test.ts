@@ -543,3 +543,44 @@ describe('a ../ record through both transports', () => {
     expect(remote).toEqual({ ok: false, error: 'outside-projects' });
   });
 });
+
+// WHY (2026-09-30 one-core R3-7): the file channels are channel-table entries now; a name that climbs out of the
+// folder must be refused on BOTH doors, for a read and for a write, by the table's entries and not only by the
+// code underneath them.
+describe('a path that climbs out of the folder is refused on both doors', () => {
+  const secret = () => path.join(outside, 'climb-target.md');
+  const climbing = () => path.relative(root, secret());   // e.g. ../yc-remote-outside-abc/climb-target.md
+
+  it('read: artifacts:get of a ../ name returns no content on the computer\'s door, and none on the phone\'s', async () => {
+    fs.writeFileSync(secret(), 'private text\n');
+    expect(climbing().startsWith('..')).toBe(true);
+    const ipc = await overIpc('artifacts:get', { projectRoot: root, artifactId: climbing() });
+    const remote = await overRemote('artifacts:get', { projectRoot: root, artifactId: climbing() });
+    for (const answer of [ipc, remote]) {
+      expect(answer.ok).toBe(false);
+      expect(answer.content).toBeUndefined();
+    }
+  });
+
+  it('write: artifacts:save of a ../ name writes nothing outside on the computer\'s door; a phone is refused outright', async () => {
+    fs.writeFileSync(secret(), 'private text\n');
+    const ipc = await overIpc('artifacts:save', {
+      projectRoot: root, projectId: root, projectName: 'fixture', artifactId: climbing(), content: 'overwritten', sessionId: 's',
+    });
+    expect(ipc).toEqual({ ok: false, error: 'artifact-not-found' });
+    const remote = await overRemote('artifacts:save', {
+      projectRoot: root, projectId: root, projectName: 'fixture', artifactId: climbing(), content: 'overwritten', sessionId: 's',
+    });
+    expect(remote).toMatchObject({ ok: false, unsupported: true });
+    expect(fs.readFileSync(secret(), 'utf8')).toBe('private text\n');
+  });
+
+  it('write: a phone cannot save even a plain in-folder file', async () => {
+    const before = fs.readFileSync(path.join(root, 'notes.md'), 'utf8');
+    const remote = await overRemote('artifacts:save', {
+      projectRoot: root, projectId: root, projectName: 'fixture', artifactId: 'notes.md', content: 'from a phone', sessionId: 's',
+    });
+    expect(remote).toMatchObject({ ok: false, unsupported: true });
+    expect(fs.readFileSync(path.join(root, 'notes.md'), 'utf8')).toBe(before);
+  });
+});

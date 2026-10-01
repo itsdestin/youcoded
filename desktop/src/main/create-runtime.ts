@@ -74,7 +74,10 @@ export interface CreateRuntimeDeps {
 export type RemoteNativeRuntime = Pick<NativeRuntime,
   'nativeHost' | 'providerRegistry' | 'modelCatalog' | 'engineManager' | 'modelManager' | 'searchKeyStore'
   | 'searchService' | 'permissionStore' | 'stepGuardSettings' | 'contextSettings' | 'specialistCatalog'
-  | 'chatgptAuth' | 'claudeAccount' | 'openRouterSignIn' | 'resolvePortableModel'>;
+  | 'chatgptAuth' | 'claudeAccount' | 'openRouterSignIn' | 'resolvePortableModel'
+  // WHY sessionState (2026-09-30 one-core R3-7): the artifact channels match a session's files to its conversation
+  // through the ONE id map, for a window and for a phone.
+  | 'sessionState'>;
 
 type TitleAppliedListener = (desktopId: string, title: string) => void;
 

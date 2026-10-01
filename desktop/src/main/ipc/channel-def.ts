@@ -19,6 +19,10 @@ import type { CreateSessionDeps } from '../dev-tools';
  *  manager). Filled by the DESKTOP door only, so only a `desktopOnly` entry may lean on it; a phone
  *  never reaches such an entry, the table refuses it first. */
 export interface DesktopServices {
+  /** WHY (2026-09-30 one-core R3-7): tell every window of this computer (and NOT the phones) that a file
+   *  or repo changed. The artifact and git change pushes always went to windows only; `ctx.broadcast`
+   *  would also reach phones, a wider audience than they had. */
+  sendToWindows(channel: string, payload: unknown): void;
   /** WHY getSession too (2026-09-30 one-core R3-5): native:session-context-text reads a Claude Code
    *  session's project folder to find its instruction file. */
   sessionManager: CreateSessionDeps['sessionManager'] & { getSession(id: string): { cwd: string } | undefined };
@@ -27,8 +31,23 @@ export interface DesktopServices {
  *  desktop handlers must know whether the window is still there (session:create fails cleanly if
  *  the window closed while it started) or send straight back to it (transcript replay). A phone
  *  has none. */
-interface DesktopSender { id: number; isDestroyed?(): boolean; send?(channel: string, ...args: any[]): void }
-export type MainChannelCtx = ChannelCtx<RemoteNativeRuntime> & { desktop?: DesktopServices; sender?: DesktopSender };
+interface DesktopSender { id: number; isDestroyed?(): boolean; send?(channel: string, ...args: any[]): void; once?(event: string, listener: () => void): unknown }
+/** WHY (2026-09-30 one-core R3-7): what only the PHONE door holds, the mirror of DesktopServices. A file
+ *  channel needs to know which folders this phone may see (the ones the computer shows, plus the folder
+ *  of a chat that is running), to give the phone its own watch id, and to mint its download links. */
+export interface RemoteServices {
+  /** The folders of every open session: a folder known only this way answers only that session's own records. */
+  sessionRoots(): string[];
+  /** This phone's project-watcher id (negative, never a window id), dropped when its socket closes. */
+  watchSubscriberId(): number;
+  /** This phone's watcher id if it has one yet, without making one (an unwatch before any watch is a no-op). */
+  currentWatchId(): number | undefined;
+  /** The roots this phone is already watching (capped per socket). */
+  watchedRoots: Set<string>;
+  /** A short-lived download link bound to this phone and this socket. */
+  mintDownload(request: { absolutePath: unknown; projectRoot?: string; artifactId?: string }): Promise<unknown>;
+}
+export type MainChannelCtx = ChannelCtx<RemoteNativeRuntime> & { desktop?: DesktopServices; remote?: RemoteServices; sender?: DesktopSender };
 export type MainChannelDef<Payload = any, Result = any> = ChannelDef<MainChannelCtx, Payload, Result>;
 
 /** A table entry whose name pins its payload and answer types to ChannelTypes. */

@@ -1861,8 +1861,7 @@ void app.whenReady().then(async () => {
   ipcMain.handle('game:getIncognito', async () => getGameIncognito());
   ipcMain.handle('game:setIncognito', async (_event, incognito: boolean) => setGameIncognito(incognito));
 
-  // Expose the system home directory to the renderer (async to avoid blocking)
-  ipcMain.handle('get-home-path', () => os.homedir());
+  // get-home-path is a table entry (main/ipc/files.ts) since one-core R3-7.
 
   // Remove the default menu bar (File, Edit, View, Window, Help)
   Menu.setApplicationMenu(null);

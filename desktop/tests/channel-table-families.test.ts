@@ -115,12 +115,22 @@ describe('every table entry is served by both doors through its one handler', ()
   for (const def of CHANNEL_TABLE) {
     it(`${def.name}: desktop and phone run the same handler`, async () => {
       const original = def.handler;
+      const originalGuard = def.remoteGuard;
+      const originalPayload = def.remotePayload;
       const seen: string[] = [];
       def.handler = (_payload: any, ctx: any) => { seen.push(ctx.door); return { sentinel: def.name }; };
+      // WHY the phone-only policy is lifted HERE (2026-09-30 one-core R3-7): a file read's folder gate refuses this
+      // test's empty payload before any handler runs, and its size ceiling rewrites the payload. This test proves the
+      // two doors run ONE handler; files-channels.test.ts proves each gate still refuses.
+      def.remoteGuard = undefined;
+      def.remotePayload = undefined;
       try {
         // A fire-and-forget entry has no answer on either door: it is called, and only that is visible.
-        const desktop = def.kind === 'on' ? (onHandlers.get(def.name)!({ sender: { id: 7 } }, {}), undefined) : await overIpc(def.name, {});
+        // A phone-only entry (file:upload) is not registered on the computer at all.
+        if (def.remoteOnly) expect(handlers.has(def.name)).toBe(false);
+        const desktop = def.remoteOnly ? undefined : def.kind === 'on' ? (onHandlers.get(def.name)!({ sender: { id: 7 } }, {}), undefined) : await overIpc(def.name, {});
         const phone = await overRemote(def.name, {});
+        if (def.remoteOnly) { expect(seen).toEqual(['remote']); expect(phone.answer).toEqual({ sentinel: def.name }); return; }
         if (def.kind !== 'on') expect(desktop).toEqual({ sentinel: def.name });
         if (def.desktopOnly || def.remoteAllowed === false) {
           // Refused from the table: the handler never runs for a phone, and it gets the entry's declared refusal.
@@ -136,6 +146,8 @@ describe('every table entry is served by both doors through its one handler', ()
         }
       } finally {
         def.handler = original;
+        def.remoteGuard = originalGuard;
+        def.remotePayload = originalPayload;
       }
     });
   }
