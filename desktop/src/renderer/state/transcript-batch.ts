@@ -24,6 +24,8 @@
 // ordering it exists to guarantee.
 import type { ChatAction, ChatState, SerializedChatState } from './chat-types';
 import { keptByHydrate } from './chat-reducer';
+import { eventToAction } from './transcript-event-actions';
+import type { TranscriptEvent } from '../../shared/types';
 
 type Dispatch = (action: ChatAction) => void;
 // The whole frame's actions in one call, in arrival order. WHY an array
@@ -32,19 +34,42 @@ type Dispatch = (action: ChatAction) => void;
 // below still takes the single-action Dispatch: a hydrate is one action.
 type DispatchBatch = (actions: ChatAction[]) => void;
 
+/** What the main window's transcript listener needs from the outside. */
+export interface TranscriptRouteDeps {
+  /** The frame batcher every transcript action goes through. */
+  batcher: Pick<TranscriptBatcher, 'push'>;
+  /** Did THIS window just run /compact? Read only when a compaction arrives. */
+  compactionPending(sessionId: string): boolean;
+  /** Claude Code's statusline reading of the context window, or null. Same laziness. */
+  fallbackContextTokens(sessionId: string): number | null;
+}
+
 /**
- * The transcript actions the main window applies the instant they arrive instead of
- * queueing them with the frame's batch. That is how the window behaved before the
- * three translators were merged, and the merge deliberately kept it.
+ * One live transcript event, from the wire to the frame batch, in arrival order.
  *
- * Known quirk: because these skip the queue they can apply AHEAD of earlier actions
- * from the same frame (a /clear landing before the reply text that preceded it).
- * Moving them into the batch is a visible change with its own run (R4-3), so this
- * set is exported only so the tests and App.tsx read the same list. Do not grow it.
+ * WHY every action goes through the batcher (R4-3, Destin 2026-10-01): four types
+ * (skill card, /clear, history rewrite, compaction marker) used to be dispatched
+ * straight to the store while everything else waited for the next frame, so a
+ * message and a /clear that arrived in the same frame were applied clear-first:
+ * the message then drew BELOW the "Conversation cleared" line, as if sent after
+ * it. Nothing recorded a reason for the split; those cases were simply written
+ * as plain dispatches next to the batched ones. Read-after-write was checked: the
+ * only state the listener reads is `compactionPending`, via a render-lagged ref
+ * that a direct dispatch did not refresh any sooner than a batched one does.
+ *
+ * Extracted from App's listener so a test can pin it: App cannot be mounted in a
+ * test, and a loop left inline had nothing that would fail if the routing changed.
  */
-export const DIRECT_DISPATCH_TYPES: ReadonlySet<ChatAction['type']> = new Set<ChatAction['type']>([
-  'TRANSCRIPT_SKILL_INVOKED', 'CLEAR_TIMELINE', 'NATIVE_HISTORY_REWRITTEN', 'COMPACTION_COMPLETE',
-]);
+export function routeTranscriptEvent(event: TranscriptEvent, deps: TranscriptRouteDeps): void {
+  // Only a compaction reads window state, so only it pays for the lookups.
+  const compacting = event.type === 'compact-summary';
+  const actions = eventToAction(event, {
+    live: true,
+    compactionPending: compacting ? deps.compactionPending(event.sessionId) : undefined,
+    fallbackContextTokens: compacting ? deps.fallbackContextTokens(event.sessionId) : undefined,
+  });
+  for (const action of actions) deps.batcher.push(action);
+}
 
 export interface TranscriptBatcher {
   /** Queue an action for the next frame (or the next 16 ms while hidden). */

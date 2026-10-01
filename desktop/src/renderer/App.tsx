@@ -31,9 +31,7 @@ import { buildSessionCreateArgs } from '../shared/session-create-args';
 import GamePanel from './components/game/GamePanel';
 import TerminalRightSlot from './components/TerminalRightSlot';
 import { ChatProvider, useChatDispatch, useChatStore, useSessionIsThinking } from './state/chat-context';
-import type { ChatAction } from './state/chat-types';
-import { installTranscriptBatcher, applyChatHydrate, DIRECT_DISPATCH_TYPES } from './state/transcript-batch';
-import { eventToAction } from './state/transcript-event-actions';
+import { installTranscriptBatcher, applyChatHydrate, routeTranscriptEvent } from './state/transcript-batch';
 import {
   remotePlaceHost, remotePlaceStorages, readRemotePlace, writeRemotePlace,
   choosePlaceOnHydrate, chooseAfterDestroyed, shouldLoadFirstPage,
@@ -1444,36 +1442,25 @@ function AppInner() {
     // handler can flush it on demand — see that module's WHY.
     // dispatchMany, not dispatch: the frame's actions notify subscribers once (A4).
     const transcriptBatcher = installTranscriptBatcher(chatStore.dispatchMany);
-    const batchTranscriptDispatch = (action: ChatAction) => transcriptBatcher.push(action);
 
-    // WHY one translator: this window, the buddy feed and the history pages all turn a
-    // transcript event into reducer actions through `eventToAction`
-    // (state/transcript-event-actions.ts), so a payload field can no longer be
-    // forgotten in one of three hand-mirrored switches. Only what is genuinely
-    // this window's stays here: the batching, the direct-dispatch set, the
-    // first-page nudge and the two facts only this window can read.
-    //
-    // DIRECT_DISPATCH_TYPES (state/transcript-batch.ts) go straight to the store, not through
-    // the frame batcher, exactly as before the merge. See its comment: moving them into the
-    // batch is R4-3's visible change, not this one's.
+    // WHY one translator + one route: this window, the buddy feed and the history pages
+    // all turn a transcript event into reducer actions through `eventToAction`, and this
+    // window sends every resulting action through the frame batcher, in arrival order
+    // (`routeTranscriptEvent`, state/transcript-batch.ts). Four types used to skip the
+    // batcher and could land AHEAD of earlier same-frame actions (a /clear drawn above
+    // the message sent just before it); R4-3 removed that. Only what is genuinely this
+    // window's stays here: the first-page nudge and the two facts only it can read.
     const transcriptHandler = (window.claude.on as any).transcriptEvent?.((event: any) => {
       if (!event?.type || !event?.sessionId) return;
       // Live event = main can read this transcript: re-ask a failed first page (first-page-loader.ts).
       firstPages.noteLiveActivity(event.sessionId);
-
-      // Only a compaction reads window state, so only it pays for the lookups.
-      const compacting = event.type === 'compact-summary';
-      const actions = eventToAction(event, {
-        live: true,
+      routeTranscriptEvent(event, {
+        batcher: transcriptBatcher,
         // Did THIS window just run /compact? (A native automatic compaction needs no flag.)
-        compactionPending: compacting ? !!chatStateMapRef.current.get(event.sessionId)?.compactionPending : undefined,
+        compactionPending: (sid) => !!chatStateMapRef.current.get(sid)?.compactionPending,
         // Claude Code's statusline reading: the marker's "after" figure when the event has none.
-        fallbackContextTokens: compacting ? (statusData.sessionStatsMap[event.sessionId]?.contextTokens ?? null) : undefined,
+        fallbackContextTokens: (sid) => statusData.sessionStatsMap[sid]?.contextTokens ?? null,
       });
-      for (const action of actions) {
-        if (DIRECT_DISPATCH_TYPES.has(action.type)) dispatch(action);
-        else batchTranscriptDispatch(action);
-      }
     });
 
     // Backup completion path: file-shrink detection. Primary detection now
