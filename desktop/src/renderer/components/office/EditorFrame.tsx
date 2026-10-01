@@ -769,22 +769,35 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
     // eslint-disable-next-line react-hooks/exhaustive-deps -- post/save read refs; slim is fixed per frame
   }, [file.path, opened]);
 
+  const editorIframe = (
+    <iframe
+      ref={ref}
+      src={origin === null ? undefined : `${origin}/index.html`}
+      title={file.name}
+      // The editor needs scripts, workers and its own storage — on ITS origin,
+      // never the app's (no top navigation, no access to window.claude).
+      sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-modals"
+      className={`absolute border-0 ${slim ? '' : 'inset-0 w-full h-full'} ${phase === 'open' ? '' : 'invisible'}`}
+      style={slim ? SLIM_OVERSCAN : undefined}
+      // Fix round 5: inert while a copy is written, so no click, key or focus reaches the
+      // editor behind the overlay (the overlay alone left keyboard focus reachable by Tab).
+      inert={copying}
+    />
+  );
+
   return (
     <div className="absolute inset-0 overflow-hidden" hidden={hidden}>
       {phase === 'open' && !hidden && screen && (!wantsPanel || panelShown) && <ScreenMark name={screen} />}
-      <iframe
-        ref={ref}
-        src={origin === null ? undefined : `${origin}/index.html`}
-        title={file.name}
-        // The editor needs scripts, workers and its own storage — on ITS origin,
-        // never the app's (no top navigation, no access to window.claude).
-        sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-modals"
-        className={`absolute border-0 ${slim ? '' : 'inset-0 w-full h-full'} ${phase === 'open' ? '' : 'invisible'}`}
-        style={slim ? SLIM_OVERSCAN : undefined}
-        // Fix round 5: inert while a copy is written, so no click, key or focus reaches the
-        // editor behind the overlay (the overlay alone left keyboard focus reachable by Tab).
-        inert={copying}
-      />
+      {slim ? editorIframe : (
+        // WHY a card (finish plan Task 7, Destin: the editor's frame should "separate from the
+        // youcoded theme frame", and the full-width line under the document tabs had to go): the
+        // editor sits as one rounded card — the large radius, an edge border, 8px clear of the
+        // page's sides and bottom — on the Office page. The add-on cuts the document's desk into
+        // it with the same radius, so header, side strips and status bar read as one frame. The
+        // border only once the document shows: an empty outline around "Opening…" or an error
+        // would read as a broken editor.
+        <div className={`absolute inset-x-2 top-0 bottom-2 rounded-lg overflow-hidden ${phase === 'open' ? 'border border-edge' : ''}`}>{editorIframe}</div>
+      )}
       {copying && (
         <div ref={overlayRef} tabIndex={-1} className="absolute inset-0 bg-panel/70 flex items-center justify-center outline-none" aria-busy="true">
           <LoadingState what="a copy" verb="Saving" />

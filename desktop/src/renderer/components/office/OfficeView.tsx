@@ -142,7 +142,11 @@ export function OfficeView({ projectRoot = null, visible = true }: { projectRoot
     <div ref={rootRef} className="absolute inset-0 flex flex-col">
       {/* min-h, not h: a failed save's message and Retry (below) are taller than the strip's
           44px; every other state keeps exactly that height. */}
-      <div className="min-h-11 shrink-0 flex items-center gap-2 px-2 border-b border-edge-dim">
+      {/* WHY the line only on Home (finish plan Task 7): under a document, a full-width line in
+          the dim edge colour sat right on the editor card's own top edge — two lines in two
+          colours ("a line below the header … in a different color"). The card's rounded edge
+          separates the tabs from the document; Home's list still gets its line. */}
+      <div className={`min-h-11 shrink-0 flex items-center gap-2 px-2 ${active === HOME_TAB ? 'border-b border-edge-dim' : 'border-b border-transparent'}`}>
         <DocumentTabs label="Open documents" tabs={tabs} activeId={active} onSelect={selectTab} onClose={closeDoc} className="flex-1" />
         {front && (
           <div className="shrink-0 flex items-center gap-2 pl-2">
