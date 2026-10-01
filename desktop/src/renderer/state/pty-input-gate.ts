@@ -130,25 +130,13 @@ export function pendingCardRef(session: SessionChatState | undefined): { toolUse
 export type SendBlockKind = 'approval' | 'prompt' | 'screen';
 
 /** The one refusal sentence every send-refusal site reads, so they cannot drift.
- *  "answer the card" is true of every card shape that blocks (permission, plan,
- *  question, and a kept card with its Dismiss). */
-export function pendingInteractionRefusalCopy(kind: SendBlockKind | null, block?: ReturnType<typeof screenInputBlock>): string {
-  if (kind === 'screen') {
-    // The two other views say how to leave them.
-    if (block?.kind === 'other-view') {
-      return block.view === 'agents'
-        ? "Claude Code's terminal is showing its agents list — anything sent there would start a new session. Press Esc in terminal view first."
-        : "Claude Code's terminal is searching your past prompts — press Esc in terminal view first.";
-    }
-    // No quoted heading: what sits under a pop-up's top edge is often a tab
-    // row or a body line ("Settings Status Config Usage Stats" for /status,
-    // seen in a dev window 2026-09-30), which reads as nonsense in a sentence.
-    // The toast's "Open terminal" button shows the real thing.
-    return 'Claude Code has something open in the terminal — answer or close it first.';
-  }
-  return kind === 'approval'
-    ? 'Your assistant is waiting for your response — answer the card in the chat first.'
-    : 'Your assistant is waiting for your response — answer the prompt first.';
+ *  ONE sentence for every reason (Destin, 2026-09-30 review deck Q-1, "One
+ *  short sentence"): the toast's button says where to look — Show card when a
+ *  card waits in the chat, Open terminal when only Claude Code's screen is in
+ *  the way. The parameters stay so a reason-specific sentence can come back
+ *  without touching the call sites. */
+export function pendingInteractionRefusalCopy(_kind?: SendBlockKind | null, _block?: ReturnType<typeof screenInputBlock>): string {
+  return 'Claude Code is waiting on something — answer it first.';
 }
 
 /**

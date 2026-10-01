@@ -188,10 +188,10 @@ describe('pendingInteractionKind and its refusal copy', () => {
     }
   });
 
-  it('the copy points at the card for an approval, at the prompt otherwise', () => {
-    expect(pendingInteractionRefusalCopy('approval')).toMatch(/answer the card in the chat first/);
-    expect(pendingInteractionRefusalCopy('prompt')).toMatch(/answer the prompt first/);
-    expect(pendingInteractionRefusalCopy(null)).toMatch(/answer the prompt first/);
+  it('every reason reads the same one sentence (the button says where to look)', () => {
+    for (const kind of ['approval', 'prompt', 'screen', null] as const) {
+      expect(pendingInteractionRefusalCopy(kind)).toBe('Claude Code is waiting on something — answer it first.');
+    }
   });
 });
 
@@ -229,7 +229,7 @@ describe('sendBlock — the screen blocks what the chat state cannot see', () =>
     await withScreen('s-popup', ['history', RULE, '  Export conversation', '  ❯ 1. Copy to clipboard', '    2. Save to file', '  Esc to cancel'], () => {
       const block = sendBlock(createSessionChatState(), 's-popup');
       expect(block?.kind).toBe('screen');
-      expect(pendingInteractionRefusalCopy(block!.kind, block!.screen)).toMatch(/something open in the terminal/);
+      expect(block!.screen?.kind).toBe('popup');
     });
   });
 
@@ -246,10 +246,10 @@ describe('sendBlock — the screen blocks what the chat state cannot see', () =>
     });
   });
 
-  it('the agents list gets its own sentence: a send there starts a new session', async () => {
+  it('the agents list blocks too, though it draws a box (a send there would start a new session)', async () => {
     await withScreen('s-agents', ['Working', RULE, '❯ describe a task for a new session', RULE, '  ⏵⏵ auto mode · enter to return · space to reply · ctrl+x to delete'], () => {
       const block = sendBlock(createSessionChatState(), 's-agents');
-      expect(pendingInteractionRefusalCopy(block!.kind, block!.screen)).toMatch(/start a new session/);
+      expect(block?.screen).toEqual({ kind: 'other-view', view: 'agents' });
     });
   });
 

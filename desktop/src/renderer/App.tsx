@@ -622,11 +622,13 @@ function AppInner() {
   // ran 3s/4s/6s/8s depending on how much text there was to read. A single
   // primitive default would have silently cut the 8s handoff-failure messages to
   // 3s. Omit it for the common 3s case; the primitive supplies that default.
-  type ToastAction = { label: string; onClick: () => void };
+  // `primary`: the dark, leading button (a refused send's Show card / Open
+  // terminal), drawn LAST so it sits on the right; others keep the old style.
+  type ToastAction = { label: string; onClick: () => void; primary?: boolean };
   type ToastState =
     | string
-    // `actions`: up to two buttons, the first the way forward (a refused send
-    // offers "Show card" / "Open terminal", then "Send anyway").
+    // `actions`: up to two buttons, left to right (a refused send offers
+    // "Send anyway", then the way forward: "Show card" / "Open terminal").
     | { message: string; durationMs?: number; action?: ToastAction; actions?: ToastAction[] };
   const [toast, setToast] = useState<ToastState | null>(null);
   // Components with no prop path to this state (the file drawer's Download and
@@ -776,12 +778,15 @@ function AppInner() {
     const forward: ToastAction = card
       // Not in the visible chat (folded far up): the menu is live in the
       // terminal too, so go there instead of doing nothing.
-      ? { label: 'Show card', onClick: () => { setToast(null); if (!focusChatCard(card)) openTerminal(); } }
-      : { label: 'Open terminal', onClick: () => { setToast(null); openTerminal(); } };
+      ? { label: 'Show card', primary: true, onClick: () => { setToast(null); if (!focusChatCard(card)) openTerminal(); } }
+      : { label: 'Open terminal', primary: true, onClick: () => { setToast(null); openTerminal(); } };
+    // Order and weight per Destin's review (2026-09-30, deck S-1/S-2): the way
+    // forward is the dark button on the right; Send anyway keeps its original
+    // style, directly to its left.
     setToast({
       message: pendingInteractionRefusalCopy(block.kind, block.screen),
       durationMs: 8000,
-      actions: retry ? [forward, { label: 'Send anyway', onClick: () => { setToast(null); retry(); } }] : [forward],
+      actions: retry ? [{ label: 'Send anyway', onClick: () => { setToast(null); retry(); } }, forward] : [forward],
     });
   }, []);
 
@@ -4651,11 +4656,12 @@ function AppInner() {
             if (typeof toast === 'string') return undefined;
             const list = toast.actions ?? (toast.action ? [toast.action] : []);
             if (!list.length) return undefined;
-            // First button leads (secondary); any second one is quieter (ghost).
+            // A `primary` action is the dark button; the rest keep the toast
+            // action's original secondary style.
             return (
-              <span className="flex items-center gap-1">
-                {list.map((x, i) => (
-                  <Button key={x.label} variant={i === 0 ? 'secondary' : 'ghost'} size="sm" onClick={x.onClick}>
+              <span className="flex items-center gap-1.5">
+                {list.map((x) => (
+                  <Button key={x.label} variant={x.primary ? 'primary' : 'secondary'} size="sm" onClick={x.onClick}>
                     {x.label}
                   </Button>
                 ))}
