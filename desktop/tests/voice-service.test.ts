@@ -315,6 +315,21 @@ describe('voice-service: exactly one ending per start', () => {
     expect((h.endings()[0] as { message: string }).message).toContain('did not return your words');
   });
 
+  // WHY (2026-09-30 review): a cancel during the load cleared the load clock and
+  // nothing re-armed it, so tap → cancel → tap → stop on a load that hung waited
+  // on "Finishing…" forever, with no clock left to end it.
+  it('7e. a second tap during the same load gets the load clock back', async () => {
+    const h = harness();
+    await h.service.start(1);
+    h.service.cancel();
+    await h.service.start(1);
+    h.service.stop();
+    vi.advanceTimersByTime(60_000);          // the load never finishes
+    const ends = h.endings();
+    expect(ends).toHaveLength(1);
+    expect((ends[0] as { message: string }).message).toContain('did not finish loading');
+  });
+
   it('the heartbeat runs only while a pass is running', async () => {
     const h = harness();
     await h.service.start(1);

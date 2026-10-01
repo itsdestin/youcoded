@@ -331,7 +331,15 @@ export class VoiceService {
   // ── The worker ────────────────────────────────────────────────────────────
 
   private ensureWorker(): void {
-    if (this.worker) return;
+    if (this.worker) {
+      // Fix (2026-09-30 review): a cancel during the load clears the load clock
+      // (endSession), and nothing used to re-arm it. A second tap while that same
+      // load was still running, then a stop, waited on `ready` with NO clock at
+      // all — a load that hung meant "Finishing…" forever. Each start that finds
+      // the engine still loading now gets the load clock back.
+      if (!this.workerReady && !this.loadTimer) this.armLoadDeadline();
+      return;
+    }
     const w = this.deps.spawnWorker();
     this.worker = w;
     this.workerReady = false;
@@ -355,6 +363,11 @@ export class VoiceService {
     // Nothing is sent to load the engine: the worker is forked with the app's
     // data folder and finds the engine there itself, which keeps the on-disk
     // layout owned by one file (voice-pin.ts) instead of travelling in messages.
+    this.armLoadDeadline();
+  }
+
+  private armLoadDeadline(): void {
+    this.clearTimer('load');
     this.loadTimer = setTimeout(() => {
       this.killWedged('the speech engine did not finish loading within 60 seconds');
     }, LOAD_DEADLINE_MS);

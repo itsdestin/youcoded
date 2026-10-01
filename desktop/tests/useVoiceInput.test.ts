@@ -544,3 +544,31 @@ describe('voice keeps working after something goes wrong', () => {
     expect(result.current.error).toBe('Voice stopped because the microphone stopped sending sound.');
   });
 });
+
+// WHY (2026-09-30 review): the host knows sessions only by window, and a new
+// start now replaces a window's leftover session. A start unwinding late — its
+// composer taken off screen while the mic was opening — used to send a cancel
+// that ended the NEWER composer's live dictation instead of its own.
+describe('a late unwind never ends a newer dictation', () => {
+  it('an abandoned start does not cancel the start that replaced it', async () => {
+    const { bridge } = installBridge({ desktop: true });
+    let releaseFirst: () => void = () => {};
+    (bridge.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      () => new Promise<void>((r) => { releaseFirst = r; }),
+    );
+    const a = mount();
+    await settle();
+    let aStarting!: Promise<void>;
+    act(() => { aStarting = a.result.current.start(); });
+    a.unmount();                                   // composer A leaves mid-start
+
+    const b = mount();                             // composer B, same window
+    await settle();
+    await act(async () => { await b.result.current.start(); });
+    expect(b.result.current.phase).toBe('listening');
+
+    await act(async () => { releaseFirst(); await aStarting; });
+    expect(bridge.cancel).not.toHaveBeenCalled(); // B's dictation survives
+    expect(b.result.current.phase).toBe('listening');
+  });
+});

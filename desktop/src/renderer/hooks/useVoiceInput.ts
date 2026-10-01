@@ -51,6 +51,14 @@ const REASON_MIC_LOST = 'Voice stopped because the microphone stopped sending so
 // `bridge.start()`, before the microphone is opened.
 const OPEN_DEADLINE_MS = 10_000;
 
+// Counts every start made in this window (module state is per window).
+// WHY (2026-09-30 review): the host knows sessions only by WINDOW, and now lets a
+// window's new start replace its leftover one. So a start that is unwinding late
+// — its composer was taken off screen while the microphone was still opening —
+// must not send its cancel once a NEWER start has happened in this window, or it
+// would end the new dictation instead of its own long-replaced one.
+let latestStartInWindow = 0;
+
 // How long the composer waits for a sign of life from the speech engine before
 // it gives up. WHY it is not simply "how long a reply may take": one pass over a
 // long sentence honestly takes several seconds, so a fixed deadline from the
@@ -292,6 +300,13 @@ export function useVoiceInput({ onPartial, onFinal }: Options) {
     if (!bridge || phaseRef.current !== 'idle' || startingRef.current) return;
     startingRef.current = true;
     abortStartRef.current = false;
+    latestStartInWindow += 1;
+    const myStart = latestStartInWindow;
+    /** Undo the host's half of THIS start — unless a newer one owns it now. */
+    const undoHostStart = async () => {
+      if (latestStartInWindow !== myStart) return;
+      try { await bridge.cancel(); } catch { /* the host is already idle */ }
+    };
     setError(null);
     watchdogFiredRef.current = false;
     try {
@@ -319,7 +334,7 @@ export function useVoiceInput({ onPartial, onFinal }: Options) {
 
       // Released already? Then never open the microphone at all. On a phone the
       // host call above IS the microphone, so this undoes that too.
-      if (abortStartRef.current) { try { await bridge.cancel(); } catch { /* the host is already idle */ } return; }
+      if (abortStartRef.current) { await undoHostStart(); return; }
 
       // On a PHONE this is where it ends: the bridge call IS the microphone.
       // Nothing here opens one, and nothing here judges whether the phone has one.
@@ -365,7 +380,7 @@ export function useVoiceInput({ onPartial, onFinal }: Options) {
           // The microphone would not open. Undo the host's start (a cancel says
           // nothing back, by contract) and show the "check again" card — NOT the
           // "voice stopped" card, which is for a mic that worked and then died.
-          try { await bridge.cancel(); } catch { /* the host is already idle */ }
+          await undoHostStart();
           setMicBlock(captureFailureReadiness(err));
           return;
         } finally {
@@ -377,7 +392,7 @@ export function useVoiceInput({ onPartial, onFinal }: Options) {
       // opened rather than announcing it.
       if (abortStartRef.current) {
         closeCapture();
-        try { await bridge.cancel(); } catch { /* the host is already idle */ }
+        await undoHostStart();
         return;
       }
 
