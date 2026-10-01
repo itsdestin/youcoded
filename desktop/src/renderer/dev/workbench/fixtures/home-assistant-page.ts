@@ -119,9 +119,12 @@ export const HOME_ASSISTANT_PAGE_HTML = `<!doctype html>
   function load() {
     if (!base) { banner('This page has not been connected to Home Assistant yet.'); return; }
     call('/api/template', { template: TEMPLATE }).then(function (r) {
+      var first = rooms === null;
       rooms = JSON.parse(r.body);
       banner('');
       render();
+      // Pictures as soon as there are cameras to put them in, not on a delay.
+      if (first) refreshCameras();
     }).catch(function (e) { banner(e && e.message ? e.message : 'Home Assistant could not be reached.'); });
   }
 
@@ -260,7 +263,6 @@ export const HOME_ASSISTANT_PAGE_HTML = `<!doctype html>
     load();
     timer = setInterval(function () { if (!document.hidden && !Object.keys(busy).length) load(); }, POLL_MS);
     camTimer = setInterval(refreshCameras, CAMERA_MS);
-    setTimeout(refreshCameras, 600);
   }
   function stop() { clearInterval(timer); clearInterval(camTimer); }
   document.addEventListener('visibilitychange', function () { if (!document.hidden) { load(); refreshCameras(); } });

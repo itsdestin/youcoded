@@ -266,7 +266,10 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
   // A re-ask after an edit shows what was already allowed too, so the new line
   // is read in context; the first ask has nothing approved yet.
   const isChange = already.length > 0;
-  const [step, setStep] = useState<'what' | 'keys'>('what');
+  // `?pagesStep=keys` opens the key step directly in the workbench, so it is
+  // a screen of its own (shoot) rather than only reachable by clicking.
+  const [step, setStep] = useState<'what' | 'keys'>(() =>
+    isWorkbenchMode() && new URLSearchParams(location.search).get('pagesStep') === 'keys' ? 'keys' : 'what');
   const [keys, setKeys] = useState<Record<string, string>>({});
   const [differentKey, setDifferentKey] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);

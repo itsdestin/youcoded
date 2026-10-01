@@ -3686,6 +3686,11 @@ function createPagesMock(empty: boolean): PagesBridge {
   // `?pagesHome=connected` opens the Home page already allowed at the
   // Tailscale address, so its running state is a screen of its own rather
   // than something only a click-through reaches (home-device deck review).
+  // `?pagesHome=refused`: the address box already holds a website, so the
+  // refusal and its explanation are a screen too.
+  if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('pagesHome') === 'refused') {
+    pages = pages.map((p) => (p.id !== 'page-home' ? p : { ...p, connections: (p.connections ?? []).map((c) => (c.kind === 'device' ? { ...c, address: 'my-home.example.com' } : c)) }));
+  }
   if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('pagesHome') === 'connected') {
     pages = pages.map((p) => (p.id !== 'page-home' ? p : {
       ...p,
