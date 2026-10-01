@@ -15,7 +15,8 @@ import type { TagRecord } from '../../../shared/tags';
 import { DEFAULT_TAG_COLOR } from '../../../shared/tags';
 import { TagRegistryApi } from '../../hooks/useTagRegistry';
 import { TagChip } from './TagChip';
-import { Button, ErrorState, InputGroup } from '../ui';
+import { Button, ErrorState, FoldRow, InputGroup } from '../ui';
+import { TagEditRow } from './TagEditRow';
 
 /** A reserved flag rendered as a tag (see built-in-tags.ts). Not in the
  *  registry, so it carries its own applied state and setter, and never appears
@@ -27,7 +28,7 @@ export interface BuiltInTag {
   onToggle: (next: boolean) => void;
 }
 
-export function TagPicker({ appliedIds, onToggle, registry, onManageTags, builtIns = [], fieldClassName = '' }: {
+export function TagPicker({ appliedIds, onToggle, registry, onManageTags, manageInline = false, builtIns = [], fieldClassName = '' }: {
   appliedIds: Set<string>;
   onToggle: (tagId: string, next: boolean) => void;
   registry: TagRegistryApi;
@@ -35,6 +36,10 @@ export function TagPicker({ appliedIds, onToggle, registry, onManageTags, builtI
    *  the footer then simply isn't rendered (same optional-footer contract as
    *  ModelPicker's onManageModels / FolderSwitcher's onManageProjects). */
   onManageTags?: () => void;
+  /** Rename / recolour / archive / delete right in the list: a "…" on each tag opens
+   *  its editor under the row, and archived tags sit in a fold at the bottom
+   *  (pick-menus#PM-4). Replaces the "Manage tags…" footer where it is on. */
+  manageInline?: boolean;
   /** Reserved flags shown as tags, listed first. */
   builtIns?: BuiltInTag[];
   /** Extra classes for the search field's surface. Exists so a host whose own
@@ -43,6 +48,10 @@ export function TagPicker({ appliedIds, onToggle, registry, onManageTags, builtI
   fieldClassName?: string;
 }) {
   const [query, setQuery] = useState('');
+  // One tag's editor open at a time, like the quick chips editor's rows.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const archived = useMemo(() => registry.tags.filter((t) => t.archived), [registry.tags]);
+  const editToggle = (id: string) => setEditingId((cur) => (cur === id ? null : id));
 
   const q = query.trim().toLowerCase();
   const visible = useMemo(() => registry.tags
@@ -94,8 +103,12 @@ export function TagPicker({ appliedIds, onToggle, registry, onManageTags, builtI
             onToggle={() => b.onToggle(!b.applied)} />
         ))}
         {visible.map((t) => (
-          <TagRow key={t.id} tag={t} applied={appliedIds.has(t.id)}
-            onToggle={() => onToggle(t.id, !appliedIds.has(t.id))} />
+          <div key={t.id}>
+            <TagRow tag={t} applied={appliedIds.has(t.id)}
+              onToggle={() => onToggle(t.id, !appliedIds.has(t.id))}
+              onEdit={manageInline ? () => editToggle(t.id) : undefined} editing={editingId === t.id} />
+            {editingId === t.id && <div className="mt-0.5 mb-1"><TagEditRow tag={t} registry={registry} /></div>}
+          </div>
         ))}
         {/* WHY (code review 2026-09-11, F5): a failed read reaches here as no tags, and
             "No tags yet — type a name to create one." invited duplicates of tags the user
@@ -109,7 +122,21 @@ export function TagPicker({ appliedIds, onToggle, registry, onManageTags, builtI
       {/* Footer, not a list row: same shape as FolderSwitcher's "Manage
           projects…" and ModelPicker's "Manage models…" — a way OUT of the
           picker, kept visually separate from the things you can pick. */}
-      {onManageTags && (
+      {/* Archived tags stay on their conversations but leave the list above; this
+          fold is the one place to bring one back (its "…" → Unarchive). */}
+      {manageInline && archived.length > 0 && (
+        <FoldRow title={`Archived (${archived.length})`} description="Hidden from the list above">
+          <div className="flex flex-col gap-0.5">
+            {archived.map((t) => (
+              <div key={t.id}>
+                <TagRow tag={t} onEdit={() => editToggle(t.id)} editing={editingId === t.id} />
+                {editingId === t.id && <div className="mt-0.5 mb-1"><TagEditRow tag={t} registry={registry} /></div>}
+              </div>
+            ))}
+          </div>
+        </FoldRow>
+      )}
+      {onManageTags && !manageInline && (
         <button
           type="button"
           onClick={onManageTags}
@@ -122,18 +149,35 @@ export function TagPicker({ appliedIds, onToggle, registry, onManageTags, builtI
   );
 }
 
-// Apply/unapply only. The checkbox-style swatch fills when applied.
-function TagRow({ tag, applied, onToggle, hint }: {
-  tag: Pick<TagRecord, 'label' | 'color'>; applied: boolean; onToggle: () => void; hint?: string;
+// Apply/unapply. The checkbox-style swatch fills when applied. With `onEdit`, a "…"
+// at the right opens the tag's editor; without `onToggle` (an archived tag) the row
+// is the name and its "…" only.
+function TagRow({ tag, applied = false, onToggle, hint, onEdit, editing = false }: {
+  tag: Pick<TagRecord, 'label' | 'color'>; applied?: boolean; onToggle?: () => void; hint?: string;
+  onEdit?: () => void; editing?: boolean;
 }) {
   return (
-    <button onClick={onToggle} aria-pressed={applied}
-      className="flex items-center gap-2 px-1 py-1 rounded-sm hover:bg-inset text-left min-w-0">
-      <span className="w-3 h-3 shrink-0 rounded-sm border"
-        style={{ backgroundColor: applied ? `var(--${tag.color})` : 'transparent',
-                 borderColor: `var(--${tag.color})` }} />
-      <TagChip tag={tag} />
-      {hint && <span className="text-4xs text-fg-muted shrink-0 ml-auto">{hint}</span>}
-    </button>
+    <div className="flex items-center gap-1 min-w-0">
+      {onToggle ? (
+        <button onClick={onToggle} aria-pressed={applied}
+          className="flex-1 flex items-center gap-2 px-1 py-1 rounded-sm hover:bg-inset text-left min-w-0">
+          <span className="w-3 h-3 shrink-0 rounded-sm border"
+            style={{ backgroundColor: applied ? `var(--${tag.color})` : 'transparent',
+                     borderColor: `var(--${tag.color})` }} />
+          <TagChip tag={tag} />
+          {hint && <span className="text-4xs text-fg-muted shrink-0 ml-auto">{hint}</span>}
+        </button>
+      ) : (
+        <span className="flex-1 flex items-center gap-2 px-1 py-1 min-w-0"><TagChip tag={tag} /></span>
+      )}
+      {onEdit && (
+        <button type="button" onClick={onEdit} aria-expanded={editing} aria-label={`Edit ${tag.label}`}
+          className={`shrink-0 w-6 h-6 rounded-sm flex items-center justify-center transition-colors ${editing ? 'bg-inset text-fg' : 'text-fg-muted hover:bg-inset hover:text-fg'}`}>
+          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+            <circle cx="5" cy="12" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="19" cy="12" r="1.6" />
+          </svg>
+        </button>
+      )}
+    </div>
   );
 }

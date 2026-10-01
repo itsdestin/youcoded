@@ -18,12 +18,13 @@
 import { TagPicker, type BuiltInTag } from './TagPicker';
 import { NoteEditor } from './NoteEditor';
 import type { TagRegistryApi } from '../../hooks/useTagRegistry';
+import { Button, CARD_LEVEL_1, SectionLabel } from '../ui';
 
 const FIELD_LIFT = 'bg-well border-edge';
 
 export function TagNoteEditor({
   appliedIds, onToggleTag, registry, onManageTags, builtIns,
-  note, onNote, footer,
+  note, onNote, footer, split = false,
 }: {
   appliedIds: Set<string>;
   onToggleTag: (tagId: string, next: boolean) => void;
@@ -38,7 +39,32 @@ export function TagNoteEditor({
    *  has already persisted every keystroke must not claim there is something
    *  left to save. Omit for a surface with nothing to close. */
   footer?: { label: string; onClick: () => void };
+  /** The Tags & note popup's layout (pick-menus#PM-4): "Tags" and "Note" each a
+   *  labelled card (guide: a label first, nothing bare), tags managed in place under
+   *  each tag's "…" instead of a separate Manage tags popup. Off = the compact single
+   *  card the close prompt still uses. */
+  split?: boolean;
 }) {
+  if (split) {
+    return (
+      <div className="flex flex-col gap-4">
+        <section>
+          <SectionLabel className="mb-2">Tags</SectionLabel>
+          <div className={`${CARD_LEVEL_1} p-3`}>
+            <TagPicker appliedIds={appliedIds} onToggle={onToggleTag} registry={registry}
+              manageInline builtIns={builtIns} />
+          </div>
+        </section>
+        <section>
+          <SectionLabel className="mb-2">Note</SectionLabel>
+          <div className={`${CARD_LEVEL_1} p-3`}>
+            <NoteEditor value={note} onSave={onNote} />
+          </div>
+        </section>
+        {footer && <Button variant="secondary" className="w-full" onClick={footer.onClick}>{footer.label}</Button>}
+      </div>
+    );
+  }
   return (
     <div className="rounded-lg border border-edge-dim bg-inset px-3 py-2.5 flex flex-col gap-2">
       {/* No "TAGS" / "NOTE" headers — the two placeholders already say what

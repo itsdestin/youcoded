@@ -462,7 +462,6 @@ interface Props {
   nativeTotals?: SessionTotals | null;
 }
 
-
 const warnStyles = {
   danger: 'bg-red-400/15 text-red-400 border-red-400/25',
   warn: 'bg-amber-700/15 text-amber-700 border-amber-700/25',
@@ -477,8 +476,7 @@ interface WidgetDef {
   label: string;
   defaultVisible: boolean;
   locked?: boolean;     // core control — always on, non-toggleable in the config menu
-  description: string;  // Shown in (i) tooltip in config popup
-  bestFor: string;      // Who benefits most from this widget
+  description: string;  // Its first sentence is the row's hint in the config popup
 }
 
 interface WidgetCategory {
@@ -499,7 +497,6 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         defaultVisible: true,
         locked: true,
         description: 'Which model this session is using. Click it to switch models.',
-        bestFor: 'Everyone. Always know which model is answering.',
       },
       {
         id: 'permission-mode',
@@ -507,7 +504,6 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         defaultVisible: true,
         locked: true,
         description: 'How much Claude may do without asking first. Click it to change the mode.',
-        bestFor: 'Everyone. Always see whether Claude will ask before acting.',
       },
       {
         id: 'session-tags',
@@ -515,7 +511,6 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         defaultVisible: true,
         locked: true,
         description: 'Tag the current session and attach a freeform note. Always shown next to the model and permission controls.',
-        bestFor: 'Everyone. Organize and annotate sessions so they\'re easy to find and resume later.',
       },
       {
         id: 'announcement',
@@ -523,7 +518,6 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         defaultVisible: true,
         locked: true,
         description: 'Messages from the YouCoded team — new releases, outages, tips. Click the announcement in the bar to read the whole message.',
-        bestFor: 'Everyone. Only appears when there is something to say.',
       },
     ],
   },
@@ -535,14 +529,12 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         label: '5h usage',
         defaultVisible: true,
         description: 'Shows how much of your 5-hour rate limit you\'ve used. Resets on a rolling window.',
-        bestFor: 'Everyone. Helps you pace usage and avoid hitting rate limits during heavy sessions.',
       },
       {
         id: 'usage-7d',
         label: '7d usage',
         defaultVisible: true,
         description: 'Shows how much of your 7-day rate limit you\'ve used. Resets on a rolling window.',
-        bestFor: 'Everyone. Track your weekly usage pattern so you don\'t run out mid-week.',
       },
     ],
   },
@@ -554,28 +546,24 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         label: 'Context %',
         defaultVisible: true,
         description: 'How much of your assistant\'s conversation memory remains. Lower means it may forget earlier context.',
-        bestFor: 'Everyone. When this drops below 20%, consider starting a new session to avoid lost context.',
       },
       {
         id: 'session-cost',
         label: 'Session cost',
         defaultVisible: false,
         description: 'Estimated cost of this session in USD. For Pro/Max subscribers this is informational only (you\'re not billed per-token).',
-        bestFor: 'API users tracking spend. Also useful for Pro/Max users curious about what their session would cost on the API.',
       },
       {
         id: 'session-time',
         label: 'Session duration',
         defaultVisible: false,
         description: 'Total session time and how much of it your assistant spent thinking (API time). Helps you understand your workflow pace.',
-        bestFor: 'Power users who want to see how much of a session is active assistant work vs your own thinking/typing time.',
       },
       {
         id: 'active-ratio',
         label: 'Active ratio',
         defaultVisible: false,
         description: 'What percentage of the session your assistant was actively thinking (API time / wall time). Low means you\'re mostly reading; high means it is doing heavy lifting.',
-        bestFor: 'Understanding your workflow rhythm. A 5% ratio on a long session means you\'re mostly reviewing; 50%+ means it is working hard.',
       },
     ],
   },
@@ -587,21 +575,18 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         label: 'Input tokens',
         defaultVisible: false,
         description: 'Cumulative input tokens sent to your assistant this session. Includes your messages, files, and system context.',
-        bestFor: 'Power users monitoring how much context is being sent. Helpful for optimizing large-file workflows.',
       },
       {
         id: 'tokens-out',
         label: 'Output tokens',
         defaultVisible: false,
         description: 'Cumulative output tokens your assistant has generated this session. Higher means more verbose responses.',
-        bestFor: 'Users who want to understand how much your assistant is writing. Useful for gauging response verbosity.',
       },
       {
         id: 'cache-stats',
         label: 'Cache efficiency',
         defaultVisible: false,
         description: 'Tokens read from the prompt cache vs created. Higher cached reads mean faster, cheaper requests.',
-        bestFor: 'API users and power users. Shows how effectively prompt caching is working in your conversation.',
       },
       {
         // The id stays 'cache-hit-rate' on purpose — it is the persisted key for
@@ -611,14 +596,12 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         label: 'Context reuse',
         defaultVisible: false,
         description: 'How much of each prompt was reused from cache instead of re-read. Reused context is cheaper and much faster.',
-        bestFor: 'Long conversations. A sudden drop means the cache stopped working — usually an idle gap, or a change of model.',
       },
       {
         id: 'output-speed',
         label: 'Output speed',
         defaultVisible: false,
         description: 'Average output tokens per second across the session. Varies by model — Haiku is fastest, Opus is slowest.',
-        bestFor: 'Comparing model performance. Useful when deciding whether to switch models for faster iteration.',
       },
     ],
   },
@@ -630,14 +613,12 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         label: 'Code changes',
         defaultVisible: false,
         description: 'Lines of code added and removed this session. A quick productivity snapshot.',
-        bestFor: 'Developers using Claude for coding tasks. See at a glance how much code Claude has written.',
       },
       {
         id: 'git-branch',
         label: 'Git branch',
         defaultVisible: false,
         description: 'The current git repository and branch for your working directory.',
-        bestFor: 'Developers working across multiple branches or repos.',
       },
     ],
   },
@@ -649,7 +630,6 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         label: 'Open tasks',
         defaultVisible: true,
         description: 'Chip showing tasks Claude is tracking in the current session (running + pending counts). Hides when there are no open tasks. Click to see the full list.',
-        bestFor: 'Everyone who uses sessions where Claude juggles multiple tasks. Lets you see what\'s in flight without scrolling the chat.',
       },
     ],
   },
@@ -661,21 +641,18 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         label: 'Sync warnings',
         defaultVisible: true,
         description: 'Alerts when sync isn\'t working (no internet, stale data, unsynced skills).',
-        bestFor: 'YouCoded toolkit users. Keeps you aware of sync issues that could cause data loss.',
       },
       {
         id: 'theme',
         label: 'Theme',
         defaultVisible: true,
         description: 'Shows the active theme. Click to cycle through your configured themes.',
-        bestFor: 'Anyone who uses multiple themes or wants quick access to theme switching.',
       },
       {
         id: 'version',
         label: 'Version',
         defaultVisible: true,
         description: 'Current YouCoded version. Glows when an update is available.',
-        bestFor: 'Everyone. Stay up to date with the latest features and fixes.',
       },
     ],
   },
@@ -735,20 +712,6 @@ function PencilIcon() {
   );
 }
 
-// Info (i) icon for widget descriptions
-function InfoIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} width="12" height="12" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
-      <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/>
-      <path d="m8.93 6.588-2.29.287-.082.38.45.083c.294.07.352.176.288.469l-.738 3.468c-.194.897.105 1.319.808 1.319.545 0 1.178-.252 1.465-.598l.088-.416c-.2.176-.492.246-.686.246-.275 0-.375-.193-.304-.533L8.93 6.588zM9 4.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0z"/>
-    </svg>
-  );
-}
-
-
-// TRIAL: which row style the pick-menus deck shows.
-const PICK_STYLE = 'tick' as 'switch' | 'tick';
-
 /** A widget's hint: the first sentence of its description. */
 const firstSentence = (text: string) => { const m = text.match(/^.*?[.!?](\s|$)/); return (m ? m[0] : text).trim(); };
 
@@ -800,8 +763,14 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
             LB-9: "rethink these kinds of checkbox menus … this still doesn't look/feel
             right"): the rows sat bare on the popup (guide: a label first, nothing bare)
             and every explanation hid behind its own (i). The hint is the description's
-            first sentence; the rest was "Best for" advice nobody opened. */}
-        {WIDGET_CATEGORIES.map((cat) => (
+            first sentence; the "Best for" advice behind the (i) is dropped. Switches on
+            the right, like Settings (pick-menus#PM-1). */}
+        {/* WHY one line, not four locked rows (pick-menus#PM-2): the menu now opens on
+            things you can change. The names come from the locked rows themselves. */}
+        <p className="text-xs text-fg-muted">
+          {ALL_WIDGET_DEFS.filter((w) => w.locked).map((w, i) => (i ? w.label.toLowerCase() : w.label)).join(', ').replace(/, ([^,]*)$/, ' and $1')} are always shown.
+        </p>
+        {WIDGET_CATEGORIES.filter((cat) => cat.widgets.some((w) => !w.locked)).map((cat) => (
           <section key={cat.name}>
             <SectionLabel className="mb-2">{cat.name}</SectionLabel>
             <div className={`${CARD_LEVEL_1} px-3 divide-y divide-edge-dim`}>
@@ -812,31 +781,13 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
                 const canToggle = !w.locked && !reason;
                 return (
                   <div key={w.id} className="py-2">
-                    {PICK_STYLE === 'switch' ? (
                       <div className={`flex items-center gap-3 ${reason ? 'opacity-50' : ''}`}>
                         <div className="flex-1 min-w-0">
                           <div className="text-xs text-fg">{w.label}</div>
                           <div className="text-3xs text-fg-muted">{hint}</div>
                         </div>
-                        {w.locked
-                          ? <span className="shrink-0 text-3xs text-fg-muted">Always shown</span>
-                          : canToggle && <Toggle checked={on} onChange={() => toggle(w.id)} aria-label={w.label} />}
+                        {canToggle && <Toggle checked={on} onChange={() => toggle(w.id)} aria-label={w.label} />}
                       </div>
-                    ) : (
-                      <button
-                        type="button"
-                        disabled={!canToggle}
-                        onClick={() => toggle(w.id)}
-                        aria-pressed={on}
-                        className={`w-full flex items-start gap-2.5 text-left ${reason ? 'opacity-50' : ''} ${canToggle ? '' : 'cursor-default'}`}
-                      >
-                        <CheckboxMark checked={on} className={`mt-0.5 ${w.locked ? 'opacity-50' : ''}`} />
-                        <span className="flex-1 min-w-0">
-                          <span className="block text-xs text-fg">{w.label}</span>
-                          <span className="block text-3xs text-fg-muted">{w.locked ? `${hint} Always shown.` : hint}</span>
-                        </span>
-                      </button>
-                    )}
                     {/* The Theme pill's cycle: which themes a tap rotates through. A fold
                         under its own row instead of a pencil beside it. */}
                     {w.id === 'theme' && !reason && (

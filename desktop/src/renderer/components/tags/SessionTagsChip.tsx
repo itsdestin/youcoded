@@ -4,9 +4,6 @@
 // shared TagPicker + NoteEditor.
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Scrim, OverlayPanel, CONTENT_Z } from '../overlays/Overlay';
-import { useEscClose } from '../../hooks/use-esc-close';
-import { useScrollFade } from '../../hooks/useScrollFade';
 import './SessionTagsChip.css';
 import { useTagRegistry } from '../../hooks/useTagRegistry';
 import { useSessionMeta } from '../../hooks/useSessionMeta';
@@ -14,8 +11,8 @@ import type { TagRecord } from '../../../shared/tags';
 import { TagNoteEditor } from './TagNoteEditor';
 import { PRIORITY_TAG, PRIORITY_HINT } from './built-in-tags';
 import { TagManagerPopup } from './TagManagerPopup';
-import { Tooltip } from '../ui';
-import { useScreenOpen, ScreenMark } from '../../shoot-mode';
+import { Dialog, Tooltip } from '../ui';
+import { useScreenOpen } from '../../shoot-mode';
 
 export function SessionTagsChip({ sessionId }: { sessionId: string | null }) {
   const [open, setOpen] = useState(false);
@@ -27,10 +24,6 @@ export function SessionTagsChip({ sessionId }: { sessionId: string | null }) {
   useScreenOpen('chat/tags/manage', () => setManageOpen(true)); // photo-only build
   const registry = useTagRegistry();
   const meta = useSessionMeta(sessionId);
-  useEscClose(open, () => setOpen(false));
-  // WHY: the compact editor only needs its chosen fade when its real body
-  // overflows; a fitting list must not dim tag controls or the note field.
-  const scrollRef = useScrollFade<HTMLDivElement>();
 
   const appliedTags = [...meta.tags]
     .map((id) => registry.byId.get(id))
@@ -76,55 +69,30 @@ export function SessionTagsChip({ sessionId }: { sessionId: string | null }) {
         )}
       </button>
       </Tooltip>
-      {open && createPortal(
-        <>
-          <Scrim layer={2} onClick={() => setOpen(false)} />
-          <div className="fixed inset-0 flex items-center justify-center p-4 pointer-events-none" style={{ zIndex: CONTENT_Z[2] }}>
-            <OverlayPanel
-              layer={2}
-              className="w-full max-w-[360px] max-h-[80vh] flex flex-col pointer-events-auto"
-              style={{ position: 'relative', zIndex: 'auto' }}
-            >
-              <ScreenMark name="chat/tags" />
-              <div data-tag-note-header className="flex items-center justify-between px-4 py-3">
-                <h2 className="text-base font-medium text-fg">Tags &amp; note</h2>
-                <button onClick={() => setOpen(false)}
-                  className="text-fg-muted hover:text-fg-2 text-lg leading-none w-7 h-7 flex items-center justify-center rounded-sm hover:bg-inset">×</button>
-              </div>
-              <div ref={scrollRef} data-tag-note-scroll className="px-4 py-3 overflow-y-auto">
-                {/* The SAME editor the close prompt uses, not a copy of its
-                    styling — see TagNoteEditor's header for why that
-                    distinction earned its own component on this branch.
-                    Priority rides along as a built-in tag; Complete is
-                    deliberately NOT offered here, because a session you are
-                    sitting in is not finished and the close prompt owns that
-                    decision.
-                    Footer says "Done", not "Save": this surface persists every
-                    keystroke as you make it, so claiming there is something
-                    left to save would be a lie. The close prompt says "Save"
-                    because there, the writes really are still pending. */}
-                <TagNoteEditor
-                  appliedIds={meta.tags}
-                  onToggleTag={meta.setTag}
-                  registry={registry}
-                  onManageTags={() => setManageOpen(true)}
-                  note={meta.note}
-                  onNote={meta.setNote}
-                  footer={{ label: 'Done', onClick: () => setOpen(false) }}
-                  builtIns={[{
-                    tag: PRIORITY_TAG,
-                    hint: PRIORITY_HINT,
-                    applied: priority,
-                    onToggle: (next) => meta.setFlag('priority', next),
-                  }]}
-                />
-              </div>
-            </OverlayPanel>
-          </div>
-          <TagManagerPopup open={manageOpen} onClose={() => setManageOpen(false)} registry={registry} layer={3} />
-        </>,
-        document.body,
-      )}
+      {/* WHY the shared Dialog (pick-menus#PM-4): the popup hand-built its own header and
+          ×, so it matched no other popup; the Dialog brings the standard header, close
+          button and scrolling body. */}
+      <Dialog screen="chat/tags" open={open} onClose={() => setOpen(false)} title="Tags & note" size="panel">
+        {/* Footer says "Done", not "Save": this surface persists every keystroke as you
+            make it. Priority rides along as a built-in tag; Complete is deliberately NOT
+            offered here — the close prompt owns that decision. */}
+        <TagNoteEditor
+          split
+          appliedIds={meta.tags}
+          onToggleTag={meta.setTag}
+          registry={registry}
+          note={meta.note}
+          onNote={meta.setNote}
+          footer={{ label: 'Done', onClick: () => setOpen(false) }}
+          builtIns={[{
+            tag: PRIORITY_TAG,
+            hint: PRIORITY_HINT,
+            applied: priority,
+            onToggle: (next) => meta.setFlag('priority', next),
+          }]}
+        />
+      </Dialog>
+      {manageOpen && createPortal(<TagManagerPopup open onClose={() => setManageOpen(false)} registry={registry} layer={3} />, document.body)}
     </>
   );
 }

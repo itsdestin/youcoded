@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { isAndroid } from '../platform';
 import { useSkills } from '../state/skill-context';
 import type { ChipConfig } from '../../shared/types';
-import { Button, Dialog, TextInput, Textarea, Tooltip } from './ui';
+import { Button, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, SectionLabel, TextInput, Textarea, Tooltip } from './ui';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import { useScreenOpen } from '../shoot-mode';
@@ -300,8 +300,15 @@ function ChipEditorPopup({ open, chips, setChips, installed, onClose }: ChipEdit
             {/* Chip list — drag-to-reorder via pointer events (mirrors
                 SessionStrip dropdown). Grip icon appears on hover; drop
                 splices the row into the target position. */}
+            {/* WHY a labelled card of rows (pick-menus#PM-3, Destin picked "rows that open
+                to edit"): the rows were loose white boxes that showed a clipped bit of each
+                prompt, with the grip and pencil only on hover — so reordering and editing,
+                which already worked, were invisible. Now each row shows its whole prompt
+                (two lines) under the name and keeps its grip in view. */}
             {chips.length > 0 && (
-              <div ref={listRef} className="space-y-1 relative">
+              <section>
+              <SectionLabel className="mb-2">Your chips ({chips.length} of 10)</SectionLabel>
+              <div ref={listRef} className={`${CARD_LEVEL_1} px-1 py-1 space-y-0.5 relative`}>
                 {chips.map((chip, i) => {
                   const isBeingDragged = dragIdx === i && isDragging.current;
                   const isEditing = editIdx === i;
@@ -315,7 +322,7 @@ function ChipEditorPopup({ open, chips, setChips, installed, onClose }: ChipEdit
                       <div
                         key={i}
                         data-chip-idx={i}
-                        className="bg-inset border border-edge rounded-md p-2 space-y-1.5"
+                        className={`${CARD_LEVEL_2} p-2 space-y-1.5`}
                       >
                         <TextInput
                           size="sm"
@@ -368,7 +375,7 @@ function ChipEditorPopup({ open, chips, setChips, installed, onClose }: ChipEdit
                       role="button"
                       tabIndex={0}
                       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); beginEdit(i); } }}
-                      className={`group/row flex items-center gap-2 px-2 py-1.5 rounded-md bg-well border border-edge-dim text-2xs select-none touch-none hover:bg-inset hover:border-edge transition-colors ${
+                      className={`group/row flex items-center gap-2 px-2 py-1.5 rounded-md text-2xs select-none touch-none hover:bg-inset transition-colors ${
                         isBeingDragged ? 'opacity-30' : ''
                       }`}
                       style={{
@@ -376,16 +383,18 @@ function ChipEditorPopup({ open, chips, setChips, installed, onClose }: ChipEdit
                         cursor: isAndroid() ? 'pointer' : 'grab',
                       }}
                     >
-                      {/* Drag grip — visible on hover (desktop only) */}
-                      <span className={`shrink-0 flex items-center transition-opacity ${isAndroid() ? 'hidden' : 'opacity-0 group-hover/row:opacity-100'}`}>
+                      {/* Drag grip — always in view on desktop (it was hover-only, so
+                          nobody knew chips could be reordered); Android drags the row. */}
+                      <span className={`shrink-0 flex items-center text-fg-faint ${isAndroid() ? 'hidden' : ''}`}>
                         <DragGrip />
                       </span>
-                      <span className="font-medium text-fg truncate flex-1">{chip.label}</span>
-                      <span className="text-fg-muted truncate max-w-[100px]">{chip.prompt}</span>
-                      {/* Pencil affords the tap-to-edit the whole row carries —
-                          without it the row looks like a drag handle and a ✕. */}
-                      <span className="shrink-0 px-1 text-fg-faint opacity-0 group-hover/row:opacity-100 transition-opacity flex items-center">
-                        <PencilIcon size={9} />
+                      <span className="flex-1 min-w-0">
+                        <span className="block text-xs text-fg truncate">{chip.label}</span>
+                        <span className="block text-3xs text-fg-muted line-clamp-2">{chip.prompt}</span>
+                      </span>
+                      {/* Pencil affords the tap-to-edit the whole row carries. */}
+                      <span className="shrink-0 px-1 text-fg-faint group-hover/row:text-fg-muted transition-colors flex items-center">
+                        <PencilIcon size={10} />
                       </span>
                       <Tooltip text="Remove chip">
                       <button
@@ -411,20 +420,20 @@ function ChipEditorPopup({ open, chips, setChips, installed, onClose }: ChipEdit
                   );
                 })}
               </div>
+              </section>
             )}
 
             {/* Add chip button / form */}
             {chips.length < 10 && !showAddForm && (
-              <button
-                onClick={() => setShowAddForm(true)}
-                className="w-full py-1.5 text-2xs text-fg-muted border border-dashed border-edge-dim rounded-md hover:border-edge hover:text-fg transition-colors"
-              >
-                + Add Chip
-              </button>
+              // WHY an outlined Button (guide: secondary actions are outlined) and
+              // sentence case: was a hand-rolled dashed box reading "+ Add Chip".
+              <Button variant="secondary" size="sm" className="w-full" onClick={() => setShowAddForm(true)}>
+                + Add a chip
+              </Button>
             )}
 
             {showAddForm && (
-              <div className="bg-inset border border-edge-dim rounded-lg p-2.5 space-y-2">
+              <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
                 {/* Custom chip form */}
                 <div className="space-y-1.5">
                   {/* Shared field surface (change 20). The .slice() caps stay on the
