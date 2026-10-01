@@ -3119,7 +3119,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         : endedSess;
       next.set(action.sessionId, {
         ...session,
-        timeline: [...pageSess.timeline, ...session.timeline],
+        timeline: [...pageSess.timeline.filter((e) => !(e.kind === 'system-marker' && session.timeline.some((l) => l.kind === 'system-marker' && l.marker.id === e.marker.id))), ...session.timeline], // WHY the filter: dividers have no uuid, so seenUuids let the scratch replay draw a second copy of one the live replay drew (cleared chat reopened: each twice)
         // Union the maps page-first so a live entry always wins over a replayed
         // one for the same key (it is the fresher of the two).
         toolCalls: new Map([...pageSess.toolCalls, ...session.toolCalls]),
