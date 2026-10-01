@@ -8,7 +8,7 @@
 import type { PastSession } from '../../shared/types';
 import type { TagRecord } from '../../shared/tags';
 import { TagChip } from './tags/TagChip';
-import { PRIORITY_TAG } from './tags/built-in-tags';
+import { PinIcon } from './tags/PinIcon';
 import { ModelIcon } from './model/ModelPicker';
 import { resolveModelBrand } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
@@ -70,7 +70,8 @@ export function SessionCardTags({ session: s, tagsById, className = '' }: {
   if (!(s.flags?.priority || (s.tags && s.tags.length > 0) || s.note)) return null;
   return (
     <div className={`flex items-center gap-1 mt-0.5 flex-wrap ${className}`}>
-      {s.flags?.priority && <TagChip tag={PRIORITY_TAG} />}
+      {/* Pinned: a pin glyph, not an amber "Priority" chip (pick-menus-2#PM2-3). */}
+      {s.flags?.priority && <span className="flex items-center" title="Pinned to top"><PinIcon className="w-3 h-3 text-fg-2" /></span>}
       {(s.tags ?? []).map((id) => {
         const t = tagsById.get(id);
         return t ? <TagChip key={id} tag={t} /> : null;

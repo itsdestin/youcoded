@@ -22,7 +22,7 @@ import { useTheme } from '../state/theme-context';
 import { isTypingTarget } from '../utils/is-typing-target';
 import { useTagRegistry } from '../hooks/useTagRegistry';
 import { useSessionMeta } from '../hooks/useSessionMeta';
-import { PRIORITY_TAG } from './tags/built-in-tags';
+import { PinIcon } from './tags/PinIcon';
 import { NotePageGlyph } from './tags/glyphs';
 import { TagChip } from './tags/TagChip';
 import type { TagRecord } from '../../shared/tags';
@@ -265,17 +265,22 @@ function SessionTagMarks({ sessionId, byId }: { sessionId: string; byId: Map<str
   // when it is shut. A bulk read would need a new channel on all five surfaces.
   const meta = useSessionMeta(sessionId);
   const applied = [...meta.tags].map((id) => byId.get(id)).filter((t): t is TagRecord => !!t);
-  const marks: { label: string; color: string }[] = [
-    ...(meta.flags.priority ? [{ label: PRIORITY_TAG.label, color: PRIORITY_TAG.color as string }] : []),
-    ...applied.map((t) => ({ label: t.label, color: t.color as string })),
-  ];
-  if (marks.length === 0 && !meta.note) return null;
+  // Pinned is a pin glyph leading the row, no longer an amber "Priority" chip
+  // (pick-menus-2#PM2-3).
+  const pinned = !!meta.flags.priority;
+  const marks: { label: string; color: string }[] = applied.map((t) => ({ label: t.label, color: t.color as string }));
+  if (marks.length === 0 && !meta.note && !pinned) return null;
   // Names cost width, so past three the rest collapse into a count that names
   // them on hover — a row must never push the status pill off its own line.
   const shown = marks.slice(0, MAX_CHIPS);
   const rest = marks.slice(MAX_CHIPS);
   return (
     <span className="shrink-0 flex items-center gap-1">
+      {pinned && (
+        <Tooltip text="Pinned to top">
+        <span className="flex items-center"><PinIcon className="w-3 h-3 text-fg-2" /></span>
+        </Tooltip>
+      )}
       {shown.map((m, i) => (
         <TagChip key={i} tag={{ label: m.label, color: m.color as TagRecord['color'] }} />
       ))}

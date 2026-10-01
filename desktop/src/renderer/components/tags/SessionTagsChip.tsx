@@ -9,7 +9,7 @@ import { useTagRegistry } from '../../hooks/useTagRegistry';
 import { useSessionMeta } from '../../hooks/useSessionMeta';
 import type { TagRecord } from '../../../shared/tags';
 import { TagNoteEditor } from './TagNoteEditor';
-import { PRIORITY_TAG, PRIORITY_HINT } from './built-in-tags';
+import { PinIcon } from './PinIcon';
 import { TagManagerPopup } from './TagManagerPopup';
 import { Dialog, Tooltip } from '../ui';
 import { useScreenOpen } from '../../shoot-mode';
@@ -33,10 +33,11 @@ export function SessionTagsChip({ sessionId }: { sessionId: string | null }) {
   // It is stored as a reserved FLAG, which is why it rides meta.flags rather
   // than meta.tags.
   const priority = !!meta.flags.priority;
-  const dotColors = [...(priority ? [PRIORITY_TAG.color] : []), ...appliedTags.map((t) => t.color)];
-  const leadLabel = priority ? PRIORITY_TAG.label : appliedTags[0]?.label;
+  // Pinned shows as a pin glyph, not an amber "Priority" dot (pick-menus-2#PM2-3).
+  const dotColors = appliedTags.map((t) => t.color);
+  const leadLabel = appliedTags[0]?.label;
   const labelCount = dotColors.length;
-  const hasContent = labelCount > 0 || meta.note.length > 0;
+  const hasContent = labelCount > 0 || meta.note.length > 0 || priority;
 
   return (
     <>
@@ -54,6 +55,7 @@ export function SessionTagsChip({ sessionId }: { sessionId: string | null }) {
       >
         {hasContent ? (
           <span className="flex items-center gap-1 overflow-hidden">
+            {priority && <PinIcon className="w-3 h-3 text-fg-2 shrink-0" />}
             {dotColors.slice(0, 3).map((c, i) => (
               <span key={`${c}-${i}`} className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: `var(--${c})` }} />
             ))}
@@ -84,12 +86,7 @@ export function SessionTagsChip({ sessionId }: { sessionId: string | null }) {
           note={meta.note}
           onNote={meta.setNote}
           footer={{ label: 'Done', onClick: () => setOpen(false) }}
-          builtIns={[{
-            tag: PRIORITY_TAG,
-            hint: PRIORITY_HINT,
-            applied: priority,
-            onToggle: (next) => meta.setFlag('priority', next),
-          }]}
+          pin={{ pinned: priority, onPin: (next) => meta.setFlag('priority', next) }}
         />
       </Dialog>
       {manageOpen && createPortal(<TagManagerPopup open onClose={() => setManageOpen(false)} registry={registry} layer={3} />, document.body)}

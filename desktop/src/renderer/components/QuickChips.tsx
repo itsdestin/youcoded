@@ -110,6 +110,9 @@ export default function QuickChips({ onChipTap }: Props) {
   );
 }
 
+// TRIAL: which chip editor the pick-menus-3 deck shows.
+const QC_STYLE = 'rows' as 'rows' | 'pills' | 'fields';
+
 // ── Chip Editor Popup ──────────────────────────────────────────────────────
 
 interface ChipEditorProps {
@@ -305,7 +308,52 @@ function ChipEditorPopup({ open, chips, setChips, installed, onClose }: ChipEdit
                 prompt, with the grip and pencil only on hover — so reordering and editing,
                 which already worked, were invisible. Now each row shows its whole prompt
                 (two lines) under the name and keeps its grip in view. */}
-            {chips.length > 0 && (
+            {/* TRIAL sketches for the pick-menus-3 deck (Destin: "want to see some
+                alternatives"). Click-to-edit works in both; reordering is not wired. */}
+            {QC_STYLE === 'pills' && chips.length > 0 && (
+              <section>
+                <SectionLabel className="mb-2">Your chips ({chips.length} of 10)</SectionLabel>
+                <div className={`${CARD_LEVEL_1} p-3 flex flex-wrap gap-1.5`}>
+                  {chips.map((chip, i) => (
+                    <button key={i} type="button" onClick={() => beginEdit(i)}
+                      className={`h-6 px-2.5 rounded-md bg-panel border text-2xs text-fg-2 hover:bg-inset hover:text-fg transition-colors ${editIdx === i ? 'border-accent text-fg' : 'border-edge-dim'}`}>
+                      {chip.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-2 text-3xs text-fg-muted">Click a chip to change it; drag one to move it.</p>
+                {editIdx !== null && (
+                  <div className={`${CARD_LEVEL_1} mt-2 p-3 space-y-1.5`}>
+                    <TextInput size="sm" value={editLabel} onChange={(e) => setEditLabel(e.target.value.slice(0, 20))} aria-label="Chip label" className="w-full" />
+                    <Textarea size="sm" value={editPrompt} onChange={(e) => setEditPrompt(e.target.value.slice(0, 500))} rows={3} aria-label="Chip prompt" className="w-full" />
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={saveEdit} disabled={!editLabel.trim() || !editPrompt.trim()}>Save</Button>
+                      <Button variant="secondary" size="sm" onClick={cancelEdit}>Cancel</Button>
+                      <span className="flex-1" />
+                      <Button variant="secondary" size="sm" onClick={() => remove(editIdx)}>Remove</Button>
+                    </div>
+                  </div>
+                )}
+              </section>
+            )}
+            {QC_STYLE === 'fields' && chips.length > 0 && (
+              <section>
+                <SectionLabel className="mb-2">Your chips ({chips.length} of 10)</SectionLabel>
+                <div className="space-y-2">
+                  {chips.map((chip, i) => (
+                    <div key={i} className={`${CARD_LEVEL_1} p-2 flex gap-2 items-start`}>
+                      <span className="pt-1.5 text-fg-faint"><DragGrip /></span>
+                      <div className="flex-1 min-w-0 space-y-1">
+                        <TextInput size="sm" defaultValue={chip.label} aria-label="Chip label" className="w-full" />
+                        <Textarea size="sm" defaultValue={chip.prompt} rows={2} aria-label="Chip prompt" className="w-full" />
+                      </div>
+                      <button type="button" aria-label="Remove chip" onClick={() => remove(i)} className="shrink-0 px-1 pt-1 text-fg-muted hover:text-fg">&times;</button>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+            {QC_STYLE === 'rows' && chips.length > 0 && (
               <section>
               <SectionLabel className="mb-2">Your chips ({chips.length} of 10)</SectionLabel>
               <div ref={listRef} className={`${CARD_LEVEL_1} px-1 py-1 space-y-0.5 relative`}>

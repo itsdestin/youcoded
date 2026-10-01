@@ -16,7 +16,11 @@ export type MenuIconName =
   | 'open'
   | 'link'
   | 'folder'
-  | 'path';
+  | 'path'
+  // Tag actions in Tags & note's "…" menu (pick-menus-2#PM2-4).
+  | 'colour'
+  | 'archive'
+  | 'delete';
 
 const PATHS: Record<MenuIconName, React.ReactNode> = {
   // WHY: renaming needs its own pencil, not the unrelated move-window icon.
@@ -68,6 +72,19 @@ const PATHS: Record<MenuIconName, React.ReactNode> = {
       <path d="M12 9h4M12 13h4" />
     </>
   ),
+  colour: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <circle cx="8.5" cy="10" r="1" /><circle cx="12" cy="7.5" r="1" /><circle cx="15.5" cy="10" r="1" />
+    </>
+  ),
+  archive: (
+    <>
+      <rect x="3" y="4" width="18" height="4" rx="1" />
+      <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4" />
+    </>
+  ),
+  delete: <path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" />,
 };
 
 export function MenuIcon({ name }: { name: MenuIconName }) {

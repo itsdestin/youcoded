@@ -18,13 +18,17 @@
 import { TagPicker, type BuiltInTag } from './TagPicker';
 import { NoteEditor } from './NoteEditor';
 import type { TagRegistryApi } from '../../hooks/useTagRegistry';
-import { Button, CARD_LEVEL_1, SectionLabel } from '../ui';
+import { Button, CARD_LEVEL_1, SectionLabel, SettingRow, Toggle } from '../ui';
+import { PinIcon } from './PinIcon';
+
+// TRIAL: which tag row the pick-menus-3 deck shows.
+const TAG_ROW_STYLE = 'switch' as 'switch' | 'chip';
 
 const FIELD_LIFT = 'bg-well border-edge';
 
 export function TagNoteEditor({
   appliedIds, onToggleTag, registry, onManageTags, builtIns,
-  note, onNote, footer, split = false,
+  note, onNote, footer, split = false, pin,
 }: {
   appliedIds: Set<string>;
   onToggleTag: (tagId: string, next: boolean) => void;
@@ -44,21 +48,32 @@ export function TagNoteEditor({
    *  each tag's "…" instead of a separate Manage tags popup. Off = the compact single
    *  card the close prompt still uses. */
   split?: boolean;
+  /** Pin to top — Priority's new face (pick-menus-2#PM2-3: "priority should no longer
+   *  show as a tag, but should now just become a pin and be a separate thing"). Same
+   *  stored flag, so every session already marked Priority comes up pinned. */
+  pin?: { pinned: boolean; onPin: (next: boolean) => void };
 }) {
   if (split) {
     return (
       <div className="flex flex-col gap-4">
+        {pin && (
+          <div className={`${CARD_LEVEL_1} px-3 py-1`}>
+            <SettingRow header variant="item" title="Pin to top" icon={<PinIcon className="w-3.5 h-3.5 text-fg-muted" />}
+              description="Keeps this session first in your session lists"
+              control={<Toggle checked={pin.pinned} onChange={pin.onPin} aria-label="Pin to top" />} />
+          </div>
+        )}
         <section>
           <SectionLabel className="mb-2">Tags</SectionLabel>
           <div className={`${CARD_LEVEL_1} p-3`}>
             <TagPicker appliedIds={appliedIds} onToggle={onToggleTag} registry={registry}
-              manageInline builtIns={builtIns} />
+              manageInline rowStyle={TAG_ROW_STYLE} builtIns={pin ? [] : builtIns} />
           </div>
         </section>
         <section>
           <SectionLabel className="mb-2">Note</SectionLabel>
           <div className={`${CARD_LEVEL_1} p-3`}>
-            <NoteEditor value={note} onSave={onNote} />
+            <NoteEditor value={note} onSave={onNote} resizable={false} />
           </div>
         </section>
         {footer && <Button variant="secondary" className="w-full" onClick={footer.onClick}>{footer.label}</Button>}
