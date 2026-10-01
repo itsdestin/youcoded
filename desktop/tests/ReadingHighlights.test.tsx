@@ -187,6 +187,11 @@ describe('ReadingHighlights — render cost at a realistic high comment count', 
     mountWith('stress/warmup.md', 50);
     const small = bestOf('100-comments', 100);
     const large = bestOf('1000-comments', 1000);
-    expect(large / Math.max(small, 1)).toBeLessThan(70);
+    // WHY a platform floor on the denominator: Windows reports process CPU time
+    // in ~15.6 ms scheduler ticks, so the 100-comment best-of read 0 and the
+    // ratio became the 1,000-comment time in raw ms (75 on a Windows runner,
+    // with nothing wrong). Linux and macOS keep the full 1 ms sensitivity.
+    const cpuTickMs = process.platform === 'win32' ? 16 : 1;
+    expect(large / Math.max(small, cpuTickMs)).toBeLessThan(70);
   }, STRESS_TEST_BUDGET_MS);
 });
