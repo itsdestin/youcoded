@@ -13,7 +13,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { MockLanguageModelV4, simulateReadableStream } from 'ai/test';
 import { HarnessSession, type HarnessSessionOpts, StreamStallError } from '../src/main/harness/harness-session';
 import type { HarnessManifest } from '../src/shared/harness-manifest';
-import type { TranscriptEvent } from '../src/shared/types';
+import { looseData, type TranscriptEvent, type EventOf } from '../src/shared/types';
 import { textChunks, finishChunk, stream } from './helpers/scripted-model';
 
 // A raw V4 stream that emits the given chunks then DELIBERATELY never closes —
@@ -97,9 +97,9 @@ function collect(session: HarnessSession): TranscriptEvent[] {
 }
 const types = (events: TranscriptEvent[]) => events.map((e) => e.type);
 const stallWarnings = (events: TranscriptEvent[]) =>
-  events.filter((e) => e.type === 'assistant-thinking' && e.data.stallWarning);
+  events.filter((e): e is EventOf<'assistant-thinking'> => e.type === 'assistant-thinking' && !!e.data.stallWarning);
 const stalledCards = (events: TranscriptEvent[]) =>
-  events.filter((e) => e.type === 'assistant-thinking' && e.data.stalled === true);
+  events.filter((e): e is EventOf<'assistant-thinking'> => e.type === 'assistant-thinking' && e.data.stalled === true);
 
 // A parked turn's send() promise stays pending BY DESIGN — that is the whole
 // feature. Poll the collected events instead of awaiting send(), then end the
@@ -134,7 +134,7 @@ describe('HarnessSession — streaming inactivity watchdog', () => {
     expect(warns[0].data.stallWarning).toEqual({ retryInMs: STALL_MS, willRetry: true });
     // The retry produced the real answer and the turn completed normally.
     const text = events.find((e) => e.type === 'assistant-text');
-    expect(text?.data.text).toBe('recovered');
+    expect(text && looseData(text).text).toBe('recovered');
     expect(types(events)).toContain('turn-complete');
     expect(types(events)).not.toContain('session-error');
   });
@@ -215,7 +215,7 @@ describe('HarnessSession — streaming inactivity watchdog', () => {
     await waitForEvent(events, (e) => e.type === 'assistant-thinking' && e.data.stalled === true);
     // The partial text is still on screen, the warning did NOT promise a retry,
     // and NOTHING has ended the turn.
-    expect(events.find((e) => e.type === 'assistant-text')?.data.text).toBe('partial answer');
+    expect(events.find((e): e is EventOf<'assistant-text'> => e.type === 'assistant-text')?.data.text).toBe('partial answer');
     expect(stallWarnings(events)).toHaveLength(1);
     expect(stallWarnings(events)[0].data.stallWarning!.willRetry).toBe(false);
     expect(stalledCards(events)).toHaveLength(1);
@@ -339,7 +339,7 @@ describe('HarnessSession — streaming inactivity watchdog', () => {
     await sent;
 
     // The abandoned part was explicitly dropped before the re-run...
-    const drop = events.find((e) => e.type === 'assistant-thinking' && e.data.dropPart);
+    const drop = events.find((e): e is EventOf<'assistant-thinking'> => e.type === 'assistant-thinking' && !!e.data.dropPart);
     expect(drop).toBeDefined();
     expect(drop!.data.dropPart!.partIds).toContain('a');
     // ...and the drop came BEFORE the retry's first text, or the renderer would

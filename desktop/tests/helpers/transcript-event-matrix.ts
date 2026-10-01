@@ -5,7 +5,8 @@
 // WHY a matrix: `assistant-thinking` alone carries seven different payloads under
 // one event type, and a type-level check cannot see which of them a translator
 // forgot (the buddy forgot `promptProcessing` for exactly that reason).
-import type { TranscriptEvent, TranscriptEventType } from '../../src/shared/types';
+import type { TranscriptEvent, TranscriptUsage } from '../../src/shared/types';
+import { ev, malformedEv as bad } from './transcript-events';
 
 export interface MatrixCase {
   name: string;
@@ -15,16 +16,20 @@ export interface MatrixCase {
 }
 
 const SID = 's1';
-const ev = (type: TranscriptEventType, data: Record<string, unknown> = {}): TranscriptEvent =>
-  ({ type, sessionId: SID, uuid: `u-${type}`, timestamp: 1700, data }) as TranscriptEvent;
+// WHY two builders (M5): `ev` is the typed one — a payload with a field the event
+// type does not carry is a compile error. `bad` is for the cases that are malformed
+// ON PURPOSE (a missing field, a wrong type): they pin that a screen copes with a
+// damaged line, so they must not satisfy the types.
 
 const stamp = { parentAgentToolUseId: 'parent-1', agentId: 'agent-1' };
-const usage = { inputTokens: 10, outputTokens: 5 };
+// Partial ON PURPOSE (no cache fields): the golden pins that the translator forwards a
+// usage object untouched, and these values predate the typed union.
+const usage = { inputTokens: 10, outputTokens: 5 } as TranscriptUsage;
 
 export const MATRIX: MatrixCase[] = [
   { name: 'user-message plain', event: ev('user-message', { text: 'hi' }) },
   { name: 'user-message slash command', event: ev('user-message', { text: '/x', slashCommand: true }) },
-  { name: 'user-message injected', event: ev('user-message', { text: 'report', injected: true, injectedMeta: { from: 'helper' } }) },
+  { name: 'user-message injected', event: bad('user-message', { text: 'report', injected: true, injectedMeta: { from: 'helper' } }) },
   { name: 'user-message subagent-stamped', event: ev('user-message', { text: 'brief', ...stamp }) },
 
   { name: 'user-interrupt plain', event: ev('user-interrupt', { kind: 'plain' }) },
@@ -36,27 +41,27 @@ export const MATRIX: MatrixCase[] = [
   { name: 'assistant-text subagent-stamped', event: ev('assistant-text', { text: 'yo', ...stamp }) },
 
   { name: 'tool-use plain', event: ev('tool-use', { toolUseId: 't1', toolName: 'Read', toolInput: { path: 'a' } }) },
-  { name: 'tool-use without input', event: ev('tool-use', { toolUseId: 't1', toolName: 'Read' }) },
+  { name: 'tool-use without input', event: bad('tool-use', { toolUseId: 't1', toolName: 'Read' }) },
   { name: 'tool-use subagent-stamped', event: ev('tool-use', { toolUseId: 't1', toolName: 'Read', toolInput: {}, ...stamp }) },
 
   { name: 'tool-result plain', event: ev('tool-result', { toolUseId: 't1', toolResult: 'ok', isError: false }) },
-  { name: 'tool-result error with patch and task ids', event: ev('tool-result', { toolUseId: 't1', toolResult: 'bad', isError: true, structuredPatch: [{ oldStart: 1 }], backgroundTaskId: 'b1', resumedTaskId: 'r1' }) },
-  { name: 'tool-result without result', event: ev('tool-result', { toolUseId: 't1' }) },
-  { name: 'tool-result subagent-stamped', event: ev('tool-result', { toolUseId: 't1', toolResult: 'ok', ...stamp }) },
+  { name: 'tool-result error with patch and task ids', event: bad('tool-result', { toolUseId: 't1', toolResult: 'bad', isError: true, structuredPatch: [{ oldStart: 1 }], backgroundTaskId: 'b1', resumedTaskId: 'r1' }) },
+  { name: 'tool-result without result', event: bad('tool-result', { toolUseId: 't1' }) },
+  { name: 'tool-result subagent-stamped', event: bad('tool-result', { toolUseId: 't1', toolResult: 'ok', ...stamp }) },
 
   { name: 'background-task ended', event: ev('background-task', { toolUseId: 't1', backgroundTask: { taskIds: ['a'], status: 'completed', summary: 's', result: 'r' }, parentAgentToolUseId: 'parent-1' }) },
-  { name: 'background-task without payload', event: ev('background-task', {}) },
+  { name: 'background-task without payload', event: bad('background-task', {}) },
 
   { name: 'replay-complete idle', event: ev('replay-complete', { sessionIdle: true }) },
   { name: 'replay-complete not idle', event: ev('replay-complete', { sessionIdle: false }) },
-  { name: 'replay-complete without data', event: { ...ev('replay-complete'), data: undefined } as unknown as TranscriptEvent },
+  { name: 'replay-complete without data', event: bad('replay-complete', undefined) },
 
   { name: 'turn-complete full', event: ev('turn-complete', { stopReason: 'end_turn', model: 'm1', anthropicRequestId: 'req', usage }) },
   { name: 'turn-complete minimal', event: ev('turn-complete', {}) },
   { name: 'turn-complete subagent-stamped', event: ev('turn-complete', { stopReason: 'end_turn', ...stamp }) },
 
   { name: 'subagent-usage with usage', event: ev('subagent-usage', { usage, model: 'm1', ...stamp }) },
-  { name: 'subagent-usage without usage', event: ev('subagent-usage', { ...stamp }) },
+  { name: 'subagent-usage without usage', event: bad('subagent-usage', { ...stamp }) },
 
   // assistant-thinking: ONE event type, seven payloads (plus the text one).
   { name: 'assistant-thinking reasoning text', event: ev('assistant-thinking', { text: 'hmm', partId: 'p1', parentAgentToolUseId: 'parent-1' }) },
@@ -68,16 +73,16 @@ export const MATRIX: MatrixCase[] = [
   { name: 'assistant-thinking toolPreparing', event: ev('assistant-thinking', { toolPreparing: { toolCallId: 'c1', toolName: 'Write', chars: 12 } }) },
   { name: 'assistant-thinking toolPreparing cleared', event: ev('assistant-thinking', { toolPreparing: { toolCallId: 'c1', toolName: 'Write', chars: 0, cleared: true } }) },
   { name: 'assistant-thinking dropPart', event: ev('assistant-thinking', { dropPart: { partIds: ['p1', 'p2'] } }) },
-  { name: 'assistant-thinking usageProgress', event: ev('assistant-thinking', { usageProgress: { contextUsedTokens: 900 } }) },
+  { name: 'assistant-thinking usageProgress', event: bad('assistant-thinking', { usageProgress: { contextUsedTokens: 900 } }) },
   { name: 'assistant-thinking toolPreparing and dropPart together', event: ev('assistant-thinking', { toolPreparing: { toolCallId: 'c1', toolName: 'Write', chars: 3 }, dropPart: { partIds: ['p1'] } }) },
 
   { name: 'session-error message only', event: ev('session-error', { text: 'boom' }) },
   { name: 'session-error with code and usage', event: ev('session-error', { text: 'boom', errorCode: 'openrouter-key-rejected', usage }) },
-  { name: 'session-error without text', event: ev('session-error', {}) },
+  { name: 'session-error without text', event: bad('session-error', {}) },
 
   { name: 'skill-invoked full', event: ev('skill-invoked', { skillId: 'brainstorm', displayName: 'Brainstorm', args: 'x', body: 'BODY', skillPath: '/p/SKILL.md' }) },
-  { name: 'skill-invoked minimal', event: ev('skill-invoked', {}) },
-  { name: 'skill-invoked id only', event: ev('skill-invoked', { skillId: 'only-id' }) },
+  { name: 'skill-invoked minimal', event: bad('skill-invoked', {}) },
+  { name: 'skill-invoked id only', event: bad('skill-invoked', { skillId: 'only-id' }) },
 
   { name: 'context-clear old line', event: ev('context-clear', {}) },
   { name: 'context-clear with window after', event: ev('context-clear', { contextUsedAfter: 1234 }) },

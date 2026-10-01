@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { pageEventToAction } from '../src/renderer/state/transcript-page-actions';
 import type { TranscriptEvent } from '../src/shared/types';
+import { malformedEv } from './helpers/transcript-events';
 
+// WHY loose (M5): minimal fixtures on purpose (a tool-use with no input, an empty replay-complete).
 const ev = (type: string, data: Record<string, unknown> = {}): TranscriptEvent =>
-  ({ type, sessionId: 's', uuid: 'u', timestamp: 7, data }) as TranscriptEvent;
+  malformedEv(type, data, { sessionId: 's', uuid: 'u', timestamp: 7 });
 
 describe('pageEventToAction', () => {
   it('maps each renderable event type to its reducer action', () => {

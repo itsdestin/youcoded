@@ -189,7 +189,7 @@ describe('history paging reducer', () => {
     const turn = (uuid: string, out: number): TranscriptEvent => ({
       type: 'turn-complete', sessionId: 's', uuid, timestamp: 3,
       data: { stopReason: 'end_turn', usage: { inputTokens: 10, outputTokens: out, cacheReadTokens: 0, cacheCreationTokens: 0 } },
-    } as TranscriptEvent);
+    });
     st = chatReducer(st, {
       type: 'HISTORY_PAGE_LOADED', sessionId: 's',
       events: [userEvent('s', 'u1', 'hi'), asstEvent('s', 'a1', 'yo'), turn('t1', 40)],

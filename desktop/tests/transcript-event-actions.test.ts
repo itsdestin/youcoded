@@ -12,6 +12,7 @@ import { MATRIX } from './helpers/transcript-event-matrix';
 import { eventToAction } from '../src/renderer/state/transcript-event-actions';
 import { pageEventToAction } from '../src/renderer/state/transcript-page-actions';
 import type { TranscriptEvent } from '../src/shared/types';
+import { malformedEv } from './helpers/transcript-events';
 
 // JSON round trip: the golden file cannot hold `undefined`, and a reducer treats
 // a missing field and an undefined one the same.
@@ -94,7 +95,8 @@ describe('eventToAction with buddy options reproduces the old buddy switch', () 
 
 describe('eventToAction ignores what it does not know', () => {
   it('returns nothing, and does not throw, for an unknown type (Kotlin sends streaming-text)', () => {
-    const e = { type: 'streaming-text', sessionId: 's', uuid: 'u', timestamp: 1 } as unknown as TranscriptEvent;
+    // Kotlin's flat, data-less 'streaming-text' is not in the union at all.
+    const e = malformedEv('streaming-text', undefined, { sessionId: 's', uuid: 'u', timestamp: 1 });
     expect(eventToAction(e, { live: true })).toEqual([]);
     expect(eventToAction(e, { live: false })).toEqual([]);
   });
@@ -110,7 +112,7 @@ describe('eventToAction on events with a missing text or data bag', () => {
     ['history page', (e) => eventToAction(e, { live: false })],
   ];
   const bare = (type: string, data?: unknown) =>
-    ({ type, sessionId: 's', uuid: 'u', timestamp: 1, data }) as unknown as TranscriptEvent;
+    malformedEv(type, data, { sessionId: 's', uuid: 'u', timestamp: 1 });
 
   for (const [path, run] of PATHS) {
     it(`${path}: an assistant-text with no text becomes an empty text`, () => {
@@ -125,8 +127,8 @@ describe('eventToAction on events with a missing text or data bag', () => {
 
     it(`${path}: no event type throws when its data bag is missing`, () => {
       for (const c of MATRIX) {
-        expect(() => run({ ...c.event, data: undefined } as unknown as TranscriptEvent), `${c.event.type}`).not.toThrow();
-        expect(() => run({ ...c.event, data: {} } as unknown as TranscriptEvent), `${c.event.type} {}`).not.toThrow();
+        expect(() => run(malformedEv(c.event.type, undefined, { uuid: c.event.uuid })), `${c.event.type}`).not.toThrow();
+        expect(() => run(malformedEv(c.event.type, {}, { uuid: c.event.uuid })), `${c.event.type} {}`).not.toThrow();
       }
     });
   }

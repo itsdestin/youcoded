@@ -14,10 +14,14 @@ import type { ChatAction, ChatState } from '../src/renderer/state/chat-types';
 import { eventToAction } from '../src/renderer/state/transcript-event-actions';
 import { installTranscriptBatcher, routeTranscriptEvent, routeTranscriptShrink, type TranscriptBatcher } from '../src/renderer/state/transcript-batch';
 import type { TranscriptEvent } from '../src/shared/types';
+import { malformedEv } from './helpers/transcript-events';
 
 const SID = 's1';
+// WHY loose (M5): these fixtures are minimal ON PURPOSE (a skill-invoked with only an id,
+// no payload at all) — they pin how routing copes, so they must not have to satisfy the
+// typed union the way `ev<T>` in helpers/transcript-events.ts does.
 const ev = (type: string, uuid: string, data: Record<string, unknown> = {}, timestamp = 1000): TranscriptEvent =>
-  ({ type, sessionId: SID, uuid, timestamp, data }) as unknown as TranscriptEvent;
+  malformedEv(type, data, { sessionId: SID, uuid, timestamp });
 
 let frames: FrameRequestCallback[] = [];
 const realRaf = window.requestAnimationFrame;

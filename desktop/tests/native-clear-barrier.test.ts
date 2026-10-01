@@ -13,11 +13,13 @@ import { HarnessSession } from '../src/main/harness/harness-session';
 import { ASSISTANT_PRESET } from '../src/shared/harness-manifest';
 import { MockLanguageModelV4 } from 'ai/test';
 import type { TranscriptEvent } from '../src/shared/types';
+import { malformedEv } from './helpers/transcript-events';
 import { EMPTY_SKILL_CATALOG } from './helpers/harness-fakes';
 
 let seq = 0;
+// WHY loose (M5): minimal fixtures on purpose (`ev('context-clear')`, no payload) — see malformedEv.
 const ev = (type: string, data: any = {}): TranscriptEvent =>
-  ({ type, sessionId: 's-1', uuid: `u-${++seq}`, timestamp: 1000 + seq, data } as TranscriptEvent);
+  malformedEv(type, data, { sessionId: 's-1', uuid: `u-${++seq}`, timestamp: 1000 + seq });
 
 describe('rebuildHistory — context-clear barrier', () => {
   it('drops everything before the barrier and keeps everything after', () => {

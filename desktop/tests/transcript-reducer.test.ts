@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { chatReducer } from '../src/renderer/state/chat-reducer';
 import { ChatState, ChatAction, createSessionChatState } from '../src/renderer/state/chat-types';
 import { eventToAction } from '../src/renderer/state/transcript-event-actions';
-import type { TranscriptEvent } from '../src/shared/types';
+import type { TranscriptEvent, DataOf } from '../src/shared/types';
+import { ev as mkEv } from './helpers/transcript-events';
 
 const SESSION = 'test-session';
 
@@ -784,8 +785,8 @@ describe('Subagent threading', () => {
 // both. This pins that each watchdog field actually lands on the action, for the
 // two option sets the two windows use.
 describe('native heartbeat forwarding is shared by both windows', () => {
-  const ev = (data: Record<string, unknown>) =>
-    ({ type: 'assistant-thinking', sessionId: 's', uuid: 'u', timestamp: 1, data }) as TranscriptEvent;
+  const ev = (data: DataOf<'assistant-thinking'>) =>
+    mkEv('assistant-thinking', data, { sessionId: 's', uuid: 'u', timestamp: 1 });
   const WINDOWS = {
     'main window': { live: true, compactionPending: false, fallbackContextTokens: 5 },
     'buddy window': { live: true, compactionPending: false, fallbackContextTokens: null },

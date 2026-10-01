@@ -17,7 +17,8 @@ import { NativeHome } from '../src/main/native-home';
 import { SessionStore, type NativeSessionHeader } from '../src/main/harness/session-store';
 import type { HarnessManifest } from '../src/shared/harness-manifest';
 import type { NativeTool } from '../src/main/harness/tools/types';
-import type { TranscriptEvent } from '../src/shared/types';
+import type { TranscriptEvent, TranscriptEventType, DataOf, EventOf } from '../src/shared/types';
+import { ev } from './helpers/transcript-events';
 import type { PermissionDecision } from '../src/shared/permission-types';
 import type { AskDecision } from '../src/main/harness/permission-broker';
 import { MockLanguageModelV4 } from 'ai/test';
@@ -84,8 +85,8 @@ async function throughStore(events: TranscriptEvent[]): Promise<TranscriptEvent[
 }
 
 describe('portable compaction restore', () => {
-  const event = (uuid: string, type: TranscriptEvent['type'], data: any): TranscriptEvent =>
-    ({ uuid, sessionId: 's-1', timestamp: 0, type, data });
+  const event = <T extends TranscriptEventType>(uuid: string, type: T, data: DataOf<T>): EventOf<T> =>
+    ev(type, data, { uuid, sessionId: 's-1', timestamp: 0 });
   const user = (uuid: string, text: string) => event(uuid, 'user-message', { text });
   const ref = (e: TranscriptEvent) => ({ eventUuid: e.uuid, anchorUuid: e.uuid, type: e.type,
     start: 0, end: JSON.stringify(e.data).length });
@@ -177,7 +178,7 @@ describe('portable compaction restore', () => {
     expect(restorePortableHistory([old, ...suffix, summary('sum', ref(tail), ref(old), [old, ...suffix])])?.messages.map(m => m.content))
       .toEqual(['[Earlier conversation summary]\nmemory', 'retained', [{ type: 'text', text: 'replacement' }]]);
     const prior = event('prior', 'assistant-text', { text: 'completed step', partId: 'text-0' });
-    const result = event('tool-done', 'tool-result', { toolUseId: 'old', toolName: 'Read', toolResult: 'ok' });
+    const result = event('tool-done', 'tool-result', { toolUseId: 'old', toolName: 'Read', toolResult: 'ok', isError: false });
     const followed = rebuildHistory([tail, prior, result, ...suffix.slice(1)]);
     expect(JSON.stringify(followed)).toContain('completed step');
     expect(JSON.stringify(followed)).not.toContain('abandoned');
