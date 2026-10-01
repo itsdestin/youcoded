@@ -469,7 +469,7 @@ export async function previewOfficeTabs(front: number, withVersions = false): Pr
 let commentsPreview = false;
 export function officeCommentsPreview(): boolean { return commentsPreview; }
 export function previewOfficeComments(kind: 'document' | 'spreadsheet'): void {
-  const name = kind === 'document' ? 'Launch brief.docx' : 'Garden budget review.xlsx';
+  const name = kind === 'document' ? 'Launch brief.docx' : 'Q3 sales by rep.xlsx';
   const path = `/home/you/Projects/community-garden/${name}`;
   commentsPreview = true;
   setOfficeTabsForPreview([{ file: { path, name, kind, folder: 'community-garden', at: new Date().toISOString() }, asleep: false }], path);

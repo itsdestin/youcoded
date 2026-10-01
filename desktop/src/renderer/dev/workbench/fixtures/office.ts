@@ -19,9 +19,9 @@ export const OFFICE_FILES: readonly OfficeFile[] = [
 ];
 
 /** The fixtures on disk, by name. */
-// 'Launch brief.docx' / 'Garden budget review.xlsx' carry comments made through the live editor
-// (the office/*-comments screens): the Word one holds the reading view's launch-brief comments.
-const FIXTURE_NAMES = ['Garden plan.docx', 'Garden budget.xlsx', 'Garden talk.pptx', 'Volunteer rota.xlsx', 'Grant report.docx', 'Launch brief.docx', 'Garden budget review.xlsx'];
+// 'Launch brief.docx' / 'Q3 sales by rep.xlsx' carry comments made through the live editor
+// (the office/*-comments screens): the same comments the reading view's launch brief and Q3 workbook hold.
+const FIXTURE_NAMES = ['Garden plan.docx', 'Garden budget.xlsx', 'Garden talk.pptx', 'Volunteer rota.xlsx', 'Grant report.docx', 'Launch brief.docx', 'Q3 sales by rep.xlsx'];
 
 /** Which fixture a fake path opens: its own, or — for a file "created" in the workbench —
  *  the first fixture of its kind (there are no blank templates in the workbench). */
