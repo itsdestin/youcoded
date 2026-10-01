@@ -317,7 +317,49 @@ describe('quitting, closing or reloading with an Office document not saved yet',
     expect(win().postMessage).toHaveBeenCalledWith({ type: 'yc:office-journal' }, 'office://t1');
     expect(journalDone).not.toHaveBeenCalled();
     send({ type: 'yc:office-journaled' }); // the editor sent its edits (save_changes) and says so
+    // Its save was started too (below); main hears "done" once that save is with main.
+    send({ yc: 'rpc', id: 3, cmd: 'save_file', args: {} });
     await waitFor(() => expect(journalDone).toHaveBeenCalledWith('j1'));
+  });
+
+  // Final review fix 2, item 1: closing a window that is not the last one asks nothing, so the
+  // edits made inside the autosave delay must not stay only in the journal — the editor starts
+  // its normal save as the close begins, and main hears "done" only once that save's commands
+  // have gone to main (main then lets the save finish after the window is gone).
+  it('a closing window starts the save of unsaved edits, and answers main once the save is with main', async () => {
+    let request!: (id: string) => void;
+    const journalDone = vi.fn();
+    const order: string[] = [];
+    const invoke = vi.fn(async (_t: string, cmd: string) => { order.push(cmd); return null; });
+    const { win, send } = await changed({ invoke, onJournalRequest: vi.fn((cb: (id: string) => void) => { request = cb; return () => {}; }), journalDone: vi.fn((id: string) => { order.push('journal-done'); journalDone(id); }) } as Partial<OfficeBridge>);
+    await waitFor(() => expect(request).toBeDefined());
+    send({ type: 'yc:office-loaded' });
+    vi.mocked(win().postMessage).mockClear();
+    act(() => request('j1'));
+    // The save starts at once — not 3–20 s later — and without waiting for anything.
+    expect(win().postMessage).toHaveBeenCalledWith({ type: 'yc:office-save' }, 'office://t1');
+    expect(win().postMessage).toHaveBeenCalledWith({ type: 'yc:office-journal' }, 'office://t1');
+    send({ type: 'yc:office-journaled' });
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+    expect(journalDone).not.toHaveBeenCalled(); // the save's bytes have not reached main yet
+    send({ yc: 'rpc', id: 4, cmd: 'write_editor_bin', args: { data: 'UEs=' } });
+    send({ yc: 'rpc', id: 5, cmd: 'save_file', args: {} });
+    await waitFor(() => expect(journalDone).toHaveBeenCalledWith('j1'));
+    expect(order.indexOf('save_file')).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf('save_file')).toBeLessThan(order.indexOf('journal-done'));
+  });
+
+  it('a closing window with nothing unsaved starts no save', async () => {
+    let request!: (id: string) => void;
+    const journalDone = vi.fn();
+    const { win, send } = await changed({ onJournalRequest: vi.fn((cb: (id: string) => void) => { request = cb; return () => {}; }), journalDone } as Partial<OfficeBridge>);
+    send({ type: 'yc:office-loaded' });
+    send({ yc: 'rpc', id: 2, cmd: 'set_document_modified', args: { modified: false } }); // an undo back to saved
+    vi.mocked(win().postMessage).mockClear();
+    act(() => request('j1'));
+    send({ type: 'yc:office-journaled' });
+    await waitFor(() => expect(journalDone).toHaveBeenCalledWith('j1'));
+    expect(win().postMessage).not.toHaveBeenCalledWith({ type: 'yc:office-save' }, 'office://t1');
   });
 
   it('edits kept for a file that changed since are offered, and Recover reopens the editor with them', async () => {

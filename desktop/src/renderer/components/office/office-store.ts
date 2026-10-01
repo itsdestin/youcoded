@@ -155,7 +155,8 @@ export function watchUnsavedPrompt(): void {
     flushers.forEach((f) => void f().catch(() => null));
   });
   // The window is closing (main/office/office-journal-sync.ts, fix round 1): every editor sends its
-  // newest edits to the journal, then main hears that they went (main caps the wait at 1.5 s).
+  // newest edits to the journal and starts saving any unsaved changes (EditorFrame's journal), then
+  // main hears that they went (main caps the wait at 1.5 s).
   office.onJournalRequest?.((id) => {
     void Promise.all([...journalers.values()].map((j) => j().catch(() => {}))).then(() => office.journalDone?.(id));
   });

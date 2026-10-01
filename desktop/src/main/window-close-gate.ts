@@ -90,7 +90,8 @@ export function createCloseGate<Answer>(d: CloseGateDeps<Answer>) {
       // Unsaved edits in the last window: say so before anything else (fix round 11).
       // WHY only the last window: closing it ends the app, and a parked draft (no editor on
       // screen, so no unload veto) would go with it unasked. Another window's text editor still
-      // vetoes that window's unload; its Office documents are in their recovery journals.
+      // vetoes that window's unload; its Office documents start their save as it closes (below,
+      // syncJournals) and are in their recovery journals should that save not land.
       if (d.refuseForUnsaved?.()) {
         ev.preventDefault();
         // Even on the close re-issued after the sessions prompt: that answer must not be carried
@@ -98,7 +99,8 @@ export function createCloseGate<Answer>(d: CloseGateDeps<Answer>) {
         confirmed = null;
         return;
       }
-      // Office editors journal their last second of edits before the window goes (fix round 1).
+      // Office editors journal their last second of edits, and hand main the save of anything
+      // unsaved, before the window goes (fix round 1; final review fix 2).
       // WHY on every close that would go through, not once: a cancelled close lets typing go on.
       if (!journalsSynced) {
         const sync = d.syncJournals?.();

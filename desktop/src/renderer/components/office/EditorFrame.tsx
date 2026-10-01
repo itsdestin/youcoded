@@ -63,6 +63,9 @@ const CLOSE_SAVE_WAIT_MS = 5_000;
  *  anything this late means the editor gave up without telling the host (a failed
  *  get_current_path, an exception in its save path), and "Saving…" must not stay up forever. */
 const REQUESTED_SAVE_LIMIT_MS = 60_000;
+/** How long a closing window waits for a save it just started to reach main (see journal). Below
+ *  main's 1.5 s journal cap (office-journal-sync.ts), so the answer still counts. */
+const JOURNAL_SAVE_HANDOFF_MS = 1_400;
 /** How recently a "not modified" may have dropped unsaved changes and still count as the start of
  *  a Save As (measured: the editor sends it milliseconds before the Save As dialog is asked for). */
 const SAVE_AS_START_MS = 5_000;
@@ -357,15 +360,29 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
   };
   // Send the newest edits to the recovery journal now (the window is closing, fix round 1): the
   // editor answers yc:office-journaled once it has sent them, or 1 s passes.
+  //
+  // WHY the save too (final review fix 2): a window that is not the last one closes without the
+  // unsaved prompt, and autosave waits 3–20 s — edits made inside that delay reached only the
+  // journal, so the FILE lacked them until the next open recovered them. So unsaved changes start
+  // their normal save here, at once, and "done" waits (capped) until that save's save_file has
+  // gone to main: write_editor_bin and save_file then sit in main's per-document queue ahead of
+  // journal-done (same IPC pipe), and main's close drain lets the save finish after the window is
+  // gone (CLOSE_DRAIN_MS), then removes the journal. If the cap is hit (a big document still
+  // gathering its bytes), the journal stays the fallback, as before. A failed save is not retried
+  // here: it would only fail again, and the journal keeps its edits.
   const journalWaiters = useRef<Array<() => void>>([]);
   const journal = (): Promise<void> => {
     if (!originRef.current || phaseRef.current !== 'open' || replacedRef.current || keptRef.current) return Promise.resolve();
-    return new Promise<void>((resolve) => {
+    const s = save.current;
+    if (s.dirty && !s.failed && !s.saving && !s.requested) requestSave();
+    const journaled = new Promise<void>((resolve) => {
       const done = () => { clearTimeout(t); journalWaiters.current = journalWaiters.current.filter((w) => w !== done); resolve(); };
       const t = setTimeout(done, 1_000);
       journalWaiters.current.push(done);
       post({ type: 'yc:office-journal' });
     });
+    // WHY 1.4 s: inside main's 1.5 s journal cap, so "done" still arrives before main gives up.
+    return Promise.all([journaled, untilNotRequested(JOURNAL_SAVE_HANDOFF_MS)]).then(() => {});
   };
   const journalRef = useRef(journal);
   journalRef.current = journal;

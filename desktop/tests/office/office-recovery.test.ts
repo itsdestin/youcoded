@@ -82,6 +82,29 @@ describe('the recovery journal', () => {
     expect(await b.run(b.s.token, 'recovery_candidates', {})).toEqual([]);
   });
 
+  // Final review fix 2, item 1: a window that is not the last one closes without the unsaved
+  // prompt. Its editors start their save as the close begins; main gets the save's commands before
+  // the window goes, and the close still lets that save land in the FILE — then the journal goes.
+  it('a save started as its window closes lands in the file, and then the journal is removed', async () => {
+    const a = await editor();
+    const newer = Buffer.concat([Buffer.from(a.opened, 'base64'), Buffer.from('typed just before closing')]);
+    await a.run(a.s.token, 'save_changes', { changes: ['typed just before closing'], deleteIndex: null, count: 1 });
+    let release!: () => void;
+    convert.mockImplementationOnce(async (_root: string, src: string, dst: string) => {
+      await new Promise<void>((r) => (release = r)); // a translation still running as the window goes
+      await fsp.copyFile(src, dst);
+    });
+    void a.run(a.s.token, 'write_editor_bin', { data: newer.toString('base64') });
+    const saved = a.run(a.s.token, 'save_file', {});
+    const closed = sessions.closeAllFor(1); // the window is gone
+    await settle();
+    release();
+    await saved;
+    await closed;
+    expect(await fsp.readFile(file)).toEqual(newer);
+    expect(await fsp.readdir(journals())).toHaveLength(0);
+  });
+
   it('edits made after a save took its bytes are still offered (typing during a save)', async () => {
     const a = await editor();
     await a.run(a.s.token, 'save_changes', { changes: ['c1'], deleteIndex: null, count: 1 });
