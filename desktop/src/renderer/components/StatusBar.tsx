@@ -16,7 +16,7 @@ import OpenTasksChip from './OpenTasksChip';
 import { isAndroid } from '../platform';
 import { SessionTagsChip } from './tags/SessionTagsChip';
 import SpecialistsChip from './SpecialistsChip';
-import { Dialog, SectionLabel, Tooltip } from './ui';
+import { CARD_LEVEL_1, CARD_LEVEL_2, CheckboxMark, Dialog, FoldRow, SectionLabel, Toggle, Tooltip } from './ui';
 import { resolveModelBrand, type ProviderIconKey } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
 import type { SessionTotals } from '../state/session-totals';
@@ -746,6 +746,12 @@ function InfoIcon({ className }: { className?: string }) {
 }
 
 
+// TRIAL: which row style the pick-menus deck shows.
+const PICK_STYLE = 'tick' as 'switch' | 'tick';
+
+/** A widget's hint: the first sentence of its description. */
+const firstSentence = (text: string) => { const m = text.match(/^.*?[.!?](\s|$)/); return (m ? m[0] : text).trim(); };
+
 // --- Config Popup ---
 // Centered modal (matches SettingsPanel popup style) for customizing status bar widgets
 
@@ -759,8 +765,6 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
   relevance: RelevanceContext;
 }) {
   useEscClose(open, onClose);
-  // Track which widget's (i) tooltip is expanded
-  const [expandedInfo, setExpandedInfo] = useState<WidgetId | null>(null);
   // Track whether the Theme widget's cycle editor is expanded. Separate from
   // expandedInfo because the cycle editor is Theme-specific and collapses the
   // info panel when opened (and vice-versa) — they're mutually exclusive rows.
@@ -792,178 +796,77 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
           was a bare overflow-y-auto div with no min-height:0, which .scroll-fade
           supplies. */}
       <Dialog screen="chat/status-bar" open onClose={onClose} title="Status bar widgets" size="panel">
-            {WIDGET_CATEGORIES.map((cat) => (
-              <section key={cat.name}>
-                {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels
-                    batch, guide: no spaced capitals — decisions H-3/L-1…L-4). */}
-                <SectionLabel className="mb-2">
-                  {cat.name}
-                </SectionLabel>
-                <div className="space-y-0.5">
-                  {cat.widgets.map((w) => {
-                    const isExpanded = expandedInfo === w.id;
-                    const isThemeRow = w.id === 'theme';
-                    const showCycleEditor = isThemeRow && cycleEditorOpen;
-                    const reason = widgetUnavailableReason(w.id, relevance);
-                    return (
-                      <div key={w.id}>
-                        <div className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-inset transition-colors">
-                          {/* Toggle checkbox — locked widgets (fixed controls)
-                              render always-checked and non-interactive. When the
-                              widget doesn't apply to this session's runtime,
-                              swap the button for a plain, non-focusable row: it
-                              is not a control here, so it must not look or
-                              behave like one. The saved on/off choice is
-                              untouched and returns when the user switches to a
-                              session where the widget applies. */}
-                          {reason ? (
-                            /* Label on its own line, reason on the line beneath
-                               it. WHY not side by side (how this used to read):
-                               a long reason squeezed the label and wrapped
-                               "Session duration" onto two lines, so that one row
-                               stood taller than every other row in the menu.
-                               Stacked, each part gets a full line and every
-                               dimmed row is the same height. The empty spacer
-                               keeps the label's left edge on the same x as the
-                               enabled rows, whose labels sit after a checkbox. */
-                            <div className="flex items-start gap-2 flex-1 text-left opacity-50">
-                              <span className="w-3.5 h-3.5 flex-shrink-0" />
-                              <div className="flex-1 min-w-0">
-                                <div className="text-2xs text-fg">{w.label}</div>
-                                <div className="text-3xs text-fg-muted italic">{reason}</div>
-                              </div>
-                            </div>
-                          ) : (
-                          <button
-                            onClick={() => { if (!w.locked) toggle(w.id); }}
-                            disabled={w.locked}
-                            className={`flex items-center gap-2 flex-1 text-left rounded-md px-1 -mx-1 ${w.locked ? 'cursor-default' : 'state-layer stepped-hover'}`}
-                          >
-                            <span
-                              className={`w-3.5 h-3.5 rounded-sm border flex-shrink-0 flex items-center justify-center transition-colors ${
-                                (w.locked || visible.has(w.id))
-                                  ? 'bg-accent border-accent text-on-accent'
-                                  : 'border-edge-dim'
-                              }`}
-                            >
-                              {(w.locked || visible.has(w.id)) && (
-                                <svg width="9" height="9" viewBox="0 0 16 16" fill="currentColor">
-                                  <path d="M13.854 3.646a.5.5 0 0 1 0 .708l-7 7a.5.5 0 0 1-.708 0l-3.5-3.5a.5.5 0 1 1 .708-.708L6.5 10.293l6.646-6.647a.5.5 0 0 1 .708 0z" />
-                                </svg>
-                              )}
-                            </span>
-                            <span className="text-2xs text-fg">{w.label}</span>
-                          </button>
-                          )}
-
-                          {/* Pencil — Theme widget only. Opens the cycle editor
-                              (which themes the pill rotates through). Moved here
-                              from per-card checkmarks in the Appearance popup.
-                              Gated on !reason too (belt-and-braces: 'theme' never
-                              gets a reason today, but a dimmed row must never
-                              carry a focusable element, full stop). */}
-                          {isThemeRow && !reason && (
-                            <Tooltip text="Edit theme cycle">
-                            <button
-                              onClick={() => {
-                                setCycleEditorOpen(v => !v);
-                                setExpandedInfo(null);
-                              }}
-                              className={`flex-shrink-0 p-0.5 rounded-sm transition-colors ${
-                                showCycleEditor ? 'text-accent' : 'text-fg-faint hover:text-fg-muted'
-                              }`}
-                              aria-label="Edit theme cycle"
-                            >
-                              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                              </svg>
-                            </button>
-                            </Tooltip>
-                          )}
-
-                          {/* (i) info toggle — hidden for a dimmed row. The row
-                              already isn't a control (it's just explained why),
-                              and the reason line itself is the info; a second
-                              focusable element here would be the same defect as
-                              leaving the checkbox tabbable. */}
-                          {!reason && (
-                            <Tooltip text="More info">
-                            <button
-                              onClick={() => {
-                                setExpandedInfo(isExpanded ? null : w.id);
-                                if (isThemeRow) setCycleEditorOpen(false);
-                              }}
-                              className={`flex-shrink-0 p-0.5 rounded-sm transition-colors ${
-                                isExpanded ? 'text-accent' : 'text-fg-faint hover:text-fg-muted'
-                              }`}
-                            >
-                              <InfoIcon />
-                            </button>
-                            </Tooltip>
-                          )}
+        {/* WHY labelled cards with a hint under every name (pick-menus, 2026-10-01; Destin,
+            LB-9: "rethink these kinds of checkbox menus … this still doesn't look/feel
+            right"): the rows sat bare on the popup (guide: a label first, nothing bare)
+            and every explanation hid behind its own (i). The hint is the description's
+            first sentence; the rest was "Best for" advice nobody opened. */}
+        {WIDGET_CATEGORIES.map((cat) => (
+          <section key={cat.name}>
+            <SectionLabel className="mb-2">{cat.name}</SectionLabel>
+            <div className={`${CARD_LEVEL_1} px-3 divide-y divide-edge-dim`}>
+              {cat.widgets.map((w) => {
+                const reason = widgetUnavailableReason(w.id, relevance);
+                const on = !!w.locked || visible.has(w.id);
+                const hint = reason ?? firstSentence(w.description);
+                const canToggle = !w.locked && !reason;
+                return (
+                  <div key={w.id} className="py-2">
+                    {PICK_STYLE === 'switch' ? (
+                      <div className={`flex items-center gap-3 ${reason ? 'opacity-50' : ''}`}>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-xs text-fg">{w.label}</div>
+                          <div className="text-3xs text-fg-muted">{hint}</div>
                         </div>
-
-                        {/* Expanded info panel */}
-                        {isExpanded && (
-                          <div className="ml-7 mr-2 mb-1.5 px-2.5 py-2 rounded-md bg-inset border border-edge-dim text-3xs space-y-1.5">
-                            <p className="text-fg-dim leading-relaxed">{w.description}</p>
-                            <p className="text-fg-muted leading-relaxed">
-                              <span className="font-medium text-fg-muted">Best for:</span> {w.bestFor}
-                            </p>
-                          </div>
-                        )}
-
-                        {/* Theme cycle editor — inline, mirrors the info-panel layout.
-                            Tapping the theme pill in the status bar rotates through
-                            every theme checked here. Must keep ≥1 in the cycle. */}
-                        {showCycleEditor && (
-                          <div className="ml-7 mr-2 mb-1.5 px-2.5 py-2 rounded-md bg-inset border border-edge-dim text-3xs space-y-1.5">
-                            <ScreenMark name="chat/status-bar/themes" />
-                            <p className="text-fg-dim leading-relaxed">
-                              Pick which themes the pill rotates through when you tap it.
-                            </p>
-                            <div className="space-y-0.5 pt-1">
-                              {allThemes.map(t => {
-                                const inCycle = cycleList.includes(t.slug);
-                                const isOnly = inCycle && cycleList.length === 1;
-                                return (
-                                  <Tooltip key={t.slug} text={isOnly ? 'At least one theme must stay in the cycle' : ''}>
-                                  <button
-                                    onClick={() => toggleCycle(t.slug)}
-                                    disabled={isOnly}
-                                    className={`flex items-center gap-2 w-full px-1.5 py-1 rounded-sm text-left transition-colors ${
-                                      isOnly ? 'opacity-50 cursor-not-allowed' : 'hover:bg-panel'
-                                    }`}
-                                  >
-                                    <span
-                                      className={`w-3 h-3 rounded-sm border flex-shrink-0 flex items-center justify-center transition-colors ${
-                                        inCycle ? 'bg-accent border-accent text-on-accent' : 'border-edge-dim'
-                                      }`}
-                                    >
-                                      {inCycle && (
-                                        <svg width="8" height="8" viewBox="0 0 16 16" fill="currentColor">
-                                          <path d="M13.854 3.646a.5.5 0 0 1 0 .708l-7 7a.5.5 0 0 1-.708 0l-3.5-3.5a.5.5 0 1 1 .708-.708L6.5 10.293l6.646-6.647a.5.5 0 0 1 .708 0z" />
-                                        </svg>
-                                      )}
-                                    </span>
-                                    <span
-                                      className="w-2.5 h-2.5 rounded-full flex-shrink-0 border border-edge-dim"
-                                      style={{ background: `linear-gradient(135deg, ${t.tokens.canvas}, ${t.tokens.accent})` }}
-                                    />
-                                    <span className="text-fg truncate">{t.name}</span>
-                                  </button>
-                                  </Tooltip>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        )}
+                        {w.locked
+                          ? <span className="shrink-0 text-3xs text-fg-muted">Always shown</span>
+                          : canToggle && <Toggle checked={on} onChange={() => toggle(w.id)} aria-label={w.label} />}
                       </div>
-                    );
-                  })}
-                </div>
-              </section>
-            ))}
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={!canToggle}
+                        onClick={() => toggle(w.id)}
+                        aria-pressed={on}
+                        className={`w-full flex items-start gap-2.5 text-left ${reason ? 'opacity-50' : ''} ${canToggle ? '' : 'cursor-default'}`}
+                      >
+                        <CheckboxMark checked={on} className={`mt-0.5 ${w.locked ? 'opacity-50' : ''}`} />
+                        <span className="flex-1 min-w-0">
+                          <span className="block text-xs text-fg">{w.label}</span>
+                          <span className="block text-3xs text-fg-muted">{w.locked ? `${hint} Always shown.` : hint}</span>
+                        </span>
+                      </button>
+                    )}
+                    {/* The Theme pill's cycle: which themes a tap rotates through. A fold
+                        under its own row instead of a pencil beside it. */}
+                    {w.id === 'theme' && !reason && (
+                      <FoldRow className="mt-2" title="Theme cycle" description={`${cycleList.length} theme${cycleList.length === 1 ? '' : 's'} — tap the pill to rotate`}
+                        open={cycleEditorOpen} onToggle={setCycleEditorOpen}>
+                        <ScreenMark name="chat/status-bar/themes" />
+                        <div className={`${CARD_LEVEL_2} p-1`}>
+                          {allThemes.map(t => {
+                            const inCycle = cycleList.includes(t.slug);
+                            const isOnly = inCycle && cycleList.length === 1;
+                            return (
+                              <button key={t.slug} type="button" onClick={() => toggleCycle(t.slug)} disabled={isOnly}
+                                title={isOnly ? 'At least one theme must stay in the cycle' : undefined}
+                                className={`flex items-center gap-2 w-full px-2 py-1 rounded-sm text-left text-2xs transition-colors ${isOnly ? 'cursor-not-allowed' : 'hover:bg-inset'}`}>
+                                <CheckboxMark checked={inCycle} />
+                                <span className="w-2.5 h-2.5 rounded-full shrink-0 border border-edge-dim"
+                                  style={{ background: `linear-gradient(135deg, ${t.tokens.canvas}, ${t.tokens.accent})` }} />
+                                <span className="text-fg truncate">{t.name}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </FoldRow>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        ))}
       </Dialog>
     </>,
     document.body
