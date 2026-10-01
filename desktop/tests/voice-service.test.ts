@@ -282,6 +282,54 @@ describe('voice-service: exactly one ending per start', () => {
     expect(h.endings()).toEqual([{ type: 'final', text: 'still mine' }]);
   });
 
+  // WHY (2026-09-30): a window's composer only asks to start when it believes
+  // nothing is listening, so a session still held for that window is one it lost
+  // (composer taken off screen, page reloaded). No sound reaches it and nothing
+  // ended it, and refusing broke voice in that window until the app restarted.
+  it('8b. the SAME window asking again replaces its own leftover session', async () => {
+    const h = harness();
+    await h.service.start(1);
+    h.worker.say({ type: 'ready' });
+    await expect(h.service.start(1)).resolves.toBeUndefined();
+    // The old session was cancelled (silently — no ending for it), then a new one began.
+    expect(h.worker.types().slice(-2)).toEqual(['cancel', 'start']);
+    expect(h.endings()).toEqual([]);
+    h.service.stop();
+    h.worker.say({ type: 'final', text: 'the new one' });
+    expect(h.endings()).toEqual([{ type: 'final', text: 'the new one' }]);
+  });
+
+  // WHY (2026-09-30): the worker now holds a stop until its engine has loaded
+  // (it used to answer empty at once). The 20-second "return your words" clock
+  // must not count that load, or a slow first load would kill a healthy engine.
+  it('7d. a stop during the load waits on the load clock, then the words clock', async () => {
+    const h = harness();
+    await h.service.start(1);
+    h.service.stop();
+    vi.advanceTimersByTime(30_000);          // a slow load, still under a minute
+    expect(h.endings()).toEqual([]);
+    h.worker.say({ type: 'ready' });
+    vi.advanceTimersByTime(19_000);
+    expect(h.endings()).toEqual([]);
+    vi.advanceTimersByTime(1_000);           // now the 20 s clock has run out
+    expect((h.endings()[0] as { message: string }).message).toContain('did not return your words');
+  });
+
+  // WHY (2026-09-30 review): a cancel during the load cleared the load clock and
+  // nothing re-armed it, so tap → cancel → tap → stop on a load that hung waited
+  // on "Finishing…" forever, with no clock left to end it.
+  it('7e. a second tap during the same load gets the load clock back', async () => {
+    const h = harness();
+    await h.service.start(1);
+    h.service.cancel();
+    await h.service.start(1);
+    h.service.stop();
+    vi.advanceTimersByTime(60_000);          // the load never finishes
+    const ends = h.endings();
+    expect(ends).toHaveLength(1);
+    expect((ends[0] as { message: string }).message).toContain('did not finish loading');
+  });
+
   it('the heartbeat runs only while a pass is running', async () => {
     const h = harness();
     await h.service.start(1);

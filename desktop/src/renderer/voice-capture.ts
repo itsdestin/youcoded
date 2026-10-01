@@ -32,6 +32,16 @@ const RUN_OUT_MS = 200;
  *  giving up on it. It answers in one audio quantum (~3 ms) or never. */
 const FLUSH_REPLY_MS = 60;
 
+/** How long the microphone may go without delivering a single slice before we
+ *  call it gone. Slices arrive ten times a second, so four seconds of nothing is
+ *  not a quiet room (a quiet room still sends slices) — it is a microphone that
+ *  stopped. WHY this exists (2026-09-30): a headset switching off or the sound
+ *  system changing devices used to leave the strip saying "Listening" with a
+ *  flat meter forever. Measured against the wall clock, not by counting ticks,
+ *  so a throttled background timer cannot raise a false alarm. */
+const STALL_MS = 4_000;
+const STALL_CHECK_MS = 1_000;
+
 /** An open microphone. `close()` is safe to call twice. */
 export interface CaptureHandle {
   close: () => void;
@@ -42,6 +52,11 @@ export interface CaptureHandle {
 
 /** One 100 ms slice of sound: the raw samples, and how loud that slice was (0..1). */
 export type ChunkHandler = (chunk: ArrayBuffer, rms: number) => void;
+
+/** Called at most once, if the microphone stops on its own (unplugged, switched
+ *  off, or simply no sound arriving any more). The microphone is already closed
+ *  by the time this runs. Never called after `close()` or `finish()`. */
+export type LostHandler = () => void;
 
 // The audio worklet's source code, as text.
 //
@@ -169,7 +184,7 @@ export async function probe(micAccess: () => Promise<MicAccess>): Promise<MicPro
 /** Open the microphone. Resolves once sound is genuinely flowing; rejects with
  *  the browser's own error (its `name` is what tells "refused" from "none
  *  plugged in") if it is not. */
-export async function open(onChunk: ChunkHandler): Promise<CaptureHandle> {
+export async function open(onChunk: ChunkHandler, onLost?: LostHandler): Promise<CaptureHandle> {
   // echoCancellation/noiseSuppression/autoGainControl are the browser's own
   // clean-up: they stop the app's own speaker feeding back into the mic, damp
   // room hiss, and even out someone sitting far from a laptop.
@@ -189,10 +204,15 @@ export async function open(onChunk: ChunkHandler): Promise<CaptureHandle> {
   let sink: GainNode | undefined;
   let closed = false;
   let flushedResolve: (() => void) | undefined;
+  let lastSliceAt = Date.now();
+  let stallTimer: ReturnType<typeof setInterval> | undefined;
+  const track = stream.getAudioTracks()[0];
 
   const close = () => {
     if (closed) return;
     closed = true;
+    if (stallTimer !== undefined) clearInterval(stallTimer);
+    track?.removeEventListener('ended', lose);
     // Order matters only in that the microphone light must go off: stop the
     // hardware tracks first, then let go of everything else.
     try { stream.getTracks().forEach((t) => t.stop()); } catch { /* already gone */ }
@@ -202,6 +222,13 @@ export async function open(onChunk: ChunkHandler): Promise<CaptureHandle> {
     try { void ctx?.close(); } catch { /* already gone */ }
     if (url) { try { URL.revokeObjectURL(url); } catch { /* already gone */ } }
   };
+
+  /** The microphone went away by itself. Close everything, then say so once. */
+  function lose() {
+    if (closed) return;
+    close();
+    onLost?.();
+  }
 
   try {
     // 16 kHz is what the speech engine wants. Chromium accepts a 48 kHz
@@ -221,6 +248,7 @@ export async function open(onChunk: ChunkHandler): Promise<CaptureHandle> {
       if (!data) return;
       if (data.flushed) { flushedResolve?.(); return; }
       if (!data.chunk) return;
+      lastSliceAt = Date.now();
       onChunk(data.chunk, data.rms ?? 0);
     };
 
@@ -236,6 +264,15 @@ export async function open(onChunk: ChunkHandler): Promise<CaptureHandle> {
 
     // A context can start suspended (a page that has not been interacted with).
     if (ctx.state === 'suspended') await ctx.resume();
+
+    // Watch for the microphone going away on its own: the operating system ends
+    // the track when the device disappears, and the stall check catches every
+    // way the sound can stop without anything announcing it.
+    track?.addEventListener('ended', lose);
+    lastSliceAt = Date.now();
+    stallTimer = setInterval(() => {
+      if (Date.now() - lastSliceAt >= STALL_MS) lose();
+    }, STALL_CHECK_MS);
   } catch (err) {
     // Anything that went wrong AFTER the microphone opened still has to hand
     // the hardware back, or the recording light stays on with nothing behind it.
