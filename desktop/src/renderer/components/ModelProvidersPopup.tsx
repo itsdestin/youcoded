@@ -7,7 +7,7 @@ import { OPENROUTER_CREDITS_URL, type OpenRouterSignInStatus, type ProviderHealt
 import { chatGptPlanLabel, type ChatGptAccountStatus } from '../../shared/chatgpt-types';
 import { claudePlanLabel } from '../../shared/claude-account-types';
 import { useClaudeStatus } from './model/availability';
-import { AnchorTip, Button, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, FieldError, InputGroup, SectionLabel, TextInput } from './ui';
+import { AnchorTip, Button, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, FieldError, InputGroup, Pill, SectionLabel, TextInput, type PillTone } from './ui';
 import BrailleSpinner from './BrailleSpinner';
 import { PlanWindows, type PlanUsage } from './plan-windows';
 import { invalidateProviderTypeCache } from '../hooks/use-provider-type';
@@ -42,6 +42,24 @@ function SectionHeader({ title, info }: { title: string; info: { label: string; 
 // same muted grey · one action on the right · optional plan bars underneath.
 // No green "connected" text and no "Default engine" badge — the status line
 // says the state in words and the plan bars say how much is left.
+// WHY short states become a pill beside the name (status pills trial,
+// 2026-09-29; guide: "a status label is a small tinted pill … name and status on
+// the top line"): a one- or two-word state is a label, not a sentence. Tones
+// stay quiet — grey for the ordinary states (review 2026-09-05 P-1: "neutral
+// treatment", no green "connected"), amber for an unchecked key, the danger
+// tint only for a key that no longer works. Sentences ("Signed in as …") stay
+// lines. The words are grey in every tone.
+const STATE_PILL: Record<string, PillTone> = {
+  'Connected': 'neutral',
+  'Not connected': 'neutral',
+  'Not signed in': 'neutral',
+  'Key saved — not checked yet': 'warning',
+  'Key not accepted': 'danger',
+  'Key expired': 'danger',
+  'Wrong kind of key': 'danger',
+  'Key refused': 'danger',
+};
+
 function ProviderRow({ title, info, status, detail, action, account, children, screen }: {
   title: string;
   /** The `shoot` name of this card (photo-only build): marks it so a picture of the
@@ -73,8 +91,9 @@ function ProviderRow({ title, info, status, detail, action, account, children, s
           <p className="text-xs text-fg font-medium inline-flex items-center gap-1.5">
             {title}
             {info && <AnchorTip label={info.label} title={title}>{info.body}</AnchorTip>}
+            {typeof status === 'string' && STATE_PILL[status] && <Pill tone={STATE_PILL[status]}>{status}</Pill>}
           </p>
-          <p className="text-2xs mt-0.5 text-fg-muted">{status}</p>
+          {!(typeof status === 'string' && STATE_PILL[status]) && <p className="text-2xs mt-0.5 text-fg-muted">{status}</p>}
         </div>
         {(account || action) && (
           <div className="shrink-0 flex items-center gap-1.5">

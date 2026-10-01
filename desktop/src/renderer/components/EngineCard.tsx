@@ -16,7 +16,7 @@
 // the two speed switches, the context length, the optional engine builds and
 // the folder.
 import { useEffect, useState } from 'react';
-import { AnchorTip, Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, ErrorState, FieldError, SettingRow, TextInput, Toggle } from './ui';
+import { AnchorTip, Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, ErrorState, FieldError, Pill, SettingRow, TextInput, Toggle } from './ui';
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
 import type { BackendOption, EnginePrereqs, EngineSpeedSettings } from '../../shared/engine-types';
@@ -411,7 +411,9 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
         <div className="min-w-0">
           <p className="text-xs text-fg font-medium">
             Local engine
-            <span className="ml-2 text-3xs font-normal text-fg-muted">{stateWord}</span>
+            {/* WHY a pill (status pills trial, 2026-09-29): a live state — the
+                word stays, green tint while it runs, grey otherwise. */}
+            <Pill tone={status.state === 'running' ? 'ok' : 'neutral'} className="ml-2 font-normal">{stateWord}</Pill>
           </p>
           {factLine && <p className="text-3xs text-fg-muted" data-testid="engine-fact-line">{factLine}</p>}
         </div>

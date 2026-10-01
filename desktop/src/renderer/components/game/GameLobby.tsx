@@ -4,7 +4,7 @@ import { useAccount } from '../../state/account-context';
 import BrailleSpinner from '../BrailleSpinner';
 import { GameConnection } from '../../state/game-types';
 import { mergeFriends, statusLabel } from './friends-data';
-import { Badge, Button, CARD_LEVEL_1, CARD_LEVEL_2, Callout, FieldError, InputGroup, SectionLabel } from '../ui';
+import { Badge, Button, CARD_LEVEL_1, CARD_LEVEL_2, Callout, Pill, FieldError, InputGroup, SectionLabel } from '../ui';
 import type { FriendRow, HeadToHead, RequestsPayload } from '../../state/marketplace-api-client';
 import { recordAria, recordLabel, recordsByOpponent } from './head-to-head';
 // Task 7c, workbench-only auto-play — see the effect below and
@@ -372,7 +372,10 @@ function FriendsScreen({ connection, incognito, onToggleIncognito, gameId }: Pro
               green/faint dot was removed 2026-07-09). This screen only renders
               when connected or incognito (the parent gates the rest), so the
               two reachable states are exactly these words. */}
-          <span className="text-3xs text-fg-muted shrink-0">{incognito ? 'Incognito' : 'Online'}</span>
+          {/* WHY a pill (status pills trial, 2026-09-29; guide: "a status label
+              is a small tinted pill … normal case"): still the word, never a
+              glyph — the colour is a quiet tint behind it. */}
+          <Pill tone={incognito ? 'neutral' : 'ok'}>{incognito ? 'Incognito' : 'Online'}</Pill>
         </div>
         {onToggleIncognito && (
           // WHY outlined (guide: secondary actions are outlined, never bare
@@ -560,6 +563,11 @@ function FriendsScreen({ connection, incognito, onToggleIncognito, gameId }: Pro
                     {row.name}
                     {row.handle && <span className="text-fg-muted ml-1">@{row.handle}</span>}
                   </span>
+                  {/* Live state as a pill beside the name (same rule as Your
+                      profile above); "Last seen …" stays a line below. */}
+                  {(row.online || !row.lastSeenAt) && (
+                    <Pill tone={row.online ? 'ok' : 'neutral'}>{statusLabel(row, Date.now())}</Pill>
+                  )}
                   {/* Your record against this person AT THIS GAME — the fact
                       that decides who you want to play next. Absent for anyone
                       you have never finished a game against, which is most
@@ -595,8 +603,10 @@ function FriendsScreen({ connection, incognito, onToggleIncognito, gameId }: Pro
                     onBlock={() => runMutation(() => window.claude.social.block(row.id), row.id, "Couldn't block — try again")}
                   />
                 </div>
-                {/* Plain-word status — never glyphs (workspace rule). */}
-                <span className="text-3xs text-fg-muted">{statusLabel(row, Date.now())}</span>
+                {/* Plain-word status — never glyphs (workspace rule). Only the
+                    "Last seen …" sentence lives here now; a live state is the
+                    pill beside the name. */}
+                {!row.online && row.lastSeenAt && <span className="text-3xs text-fg-muted">{statusLabel(row, Date.now())}</span>}
                 {/* WHY FieldError (guide: no red/coloured body text for messages) */}
                 {rowError[row.id] && <FieldError as="p" size="2xs">{rowError[row.id]}</FieldError>}
               </li>
