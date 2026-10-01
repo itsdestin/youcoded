@@ -102,7 +102,8 @@ export function persistLastBinding(binding: Binding): void {
 // runtime there's nothing to select, so the whole selector hides.
 // WHY a capability read (one-core R4-1): this was `!isAndroid() && !isRemoteMode() && native.supported`, three
 // questions guessing at one fact. The computer's window answers it from the same kill switch `native.supported` reads;
-// a phone and the Android app are told false.
+// the Android app's own runtime is told false. A phone watching a current computer is told true since R6-1 (the session runs on the
+// computer, so the phone may start and drive it); an older computer says nothing, which reads as false.
 function isNativeSupported(): boolean {
   return getCapabilities().nativeSessions;
 }

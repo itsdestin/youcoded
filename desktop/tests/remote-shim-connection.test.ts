@@ -170,6 +170,23 @@ describe('remote-shim — saved-key sign-in', () => {
       expect(claude().capabilities).toMatchObject({ openInOs: true, terminalTransport: 'raw-bytes', liveHandoff: false, nativeWindows: false });
     });
 
+    it('native.supported follows the computer\'s nativeSessions answer: false before it and on an older computer, true from a current one', async () => {
+      const claude = () => (globalThis as any).claude;
+      expect(claude().native.supported).toBe(false);
+      store[KEY] = 'dev-1:secret';
+      start();
+      latest().open();
+      latest().receive({ type: 'auth:ok', deviceId: 'dev-1', platform: 'desktop', protocolVersion: 1, capabilities: { nativeSessions: true } });
+      await Promise.resolve();
+      expect(claude().native.supported).toBe(true);
+      latest().close(1006);
+      await vi.advanceTimersByTimeAsync(1000);
+      latest().open();
+      latest().receive({ type: 'auth:ok', deviceId: 'dev-1', platform: 'desktop' }); // an older computer
+      await Promise.resolve();
+      expect(claude().native.supported).toBe(false);
+    });
+
     it('an older computer that sends no capabilities leaves the screen on the conservative set', async () => {
       store[KEY] = 'dev-1:secret';
       start();

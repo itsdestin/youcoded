@@ -3125,7 +3125,7 @@ export function installShim(): void {
     // Native runtime — desktop Electron only. false on Android/remote-browser
     // so the renderer gates the runtime selector without platform branching.
     native: {
-      supported: false,
+      get supported(): boolean { return (window as any).claude?.capabilities?.nativeSessions === true; }, // WHY a getter (R6-1): the host's handshake says whether a phone may drive a native session; it arrives after this object is built
       // Object payloads match how remote-server.ts's WS cases read them
       // (payload.sessionId / payload.text / payload.binding).
       // M1: invoke — returns {status,reason} so remote UI matches desktop

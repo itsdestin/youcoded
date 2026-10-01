@@ -343,6 +343,9 @@ export default function ModelPicker({
   // engine runs only where the screen's `nativeSessions` capability says so. Over remote access (and on Android) the picker used
   // to list the computer's native models anyway; choosing one saved a default that quietly did nothing there, and "Add provider"
   // led to pages that screen hides. A screen that cannot run them is no longer offered them. The computer's own window is unchanged.
+  // R6-1 (2026-10-01): a phone watching a current computer now DOES have `nativeSessions` (the session runs on the computer and the
+  // phone drives it), so this same line lets the new-session and default-model pickers offer native models there; no per-screen
+  // exception is needed. Android's own runtime and an older computer still say false and still hide them.
   const includeNative = includeNativeWanted && (runsOn === 'host' || getCapabilities().nativeSessions);
   // Native models were asked for but this screen cannot run them: a picker with nothing else in it says so instead of looking broken.
   const nativeHiddenHere = includeNativeWanted && !includeNative;

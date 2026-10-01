@@ -37,8 +37,9 @@ export interface Capabilities {
   /** The terminal's screen text can be read on this device (the "is Claude stuck?" check). A screen watching a
    *  computer has no buffer of its own; the computer reports attention instead. */
   terminalScreenRead: boolean;
-  /** The app's own assistant engine (native sessions, local models, provider keys) can run on this screen. A model
-   *  picker offers native models only when this is true. */
+  /** The app's own assistant engine (native sessions, local models, provider keys) can be started and used from this screen.
+   *  A model picker offers native models only when this is true. A phone watching a computer gets true from a computer with the
+   *  engine on (one-core R6-1): the session runs on the computer, the phone only drives it. */
   nativeSessions: boolean;
   /** The floating buddy window exists. */
   buddy: boolean;
@@ -88,6 +89,8 @@ export const REMOTE_SCREEN_CAPABILITIES: Capabilities = {
   themeRigs: false,
   terminalTransport: 'text',
   terminalScreenRead: false,
+  // FALSE on purpose, like sessionRecord: a computer older than R6-1 says nothing and cannot run a native session for a phone. A
+  // current host says true in its handshake (remote-server.ts authOkMessage), never by this default.
   nativeSessions: false,
   buddy: false,
   projectWrites: false,

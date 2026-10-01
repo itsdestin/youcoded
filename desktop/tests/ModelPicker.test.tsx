@@ -800,6 +800,28 @@ describe('ModelPicker — offers only the models this screen can run', () => {
   });
 });
 
+/** One-core R6-1 (Destin, 2026-09-11: "remote access should be identical to the desktop"): a native session runs on the COMPUTER, so a phone
+ *  watching a current computer (which says `nativeSessions: true` in its handshake) is offered native models in the ordinary new-session
+ *  picker too, not only in the host-run ones. An older computer says nothing and the phone keeps hiding them (the test above). */
+describe('ModelPicker — a phone watching a current computer may start a native session', () => {
+  const LABEL = 'Nimbus Native One';
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); delete (window as any).claude; });
+  it('the ordinary new-session picker lists native models on a phone whose computer says nativeSessions', async () => {
+    (globalThis as any).window.claude = {
+      capabilities: { ...REMOTE_SCREEN_CAPABILITIES, nativeSessions: true },
+      providers: {
+        list: vi.fn().mockResolvedValue([{ id: 'cloud', type: 'openrouter', label: 'Cloud', ready: true }]),
+        catalog: vi.fn().mockResolvedValue([{ id: 'nimbus-1', providerId: 'cloud', label: LABEL }]),
+      },
+      models: { onDownloadProgress: () => () => {} },
+    };
+    render(<ModelPicker value={null} onSelect={() => {}} defaultOpen layout="inline" />);
+    fireEvent.change(await screen.findByLabelText('Search all models'), { target: { value: 'Nimbus' } });
+    expect(await screen.findByText(LABEL)).toBeInTheDocument();
+    expect(screen.queryByText('These models can only be chosen on your computer.')).toBeNull();
+  });
+});
+
 /** Review fix: a picker whose choice is saved or run by the COMPUTER (naming model, specialist tiers, switching or resuming a
  *  native conversation) must keep native models on a phone; only a picker choosing what THIS screen runs hides them. */
 describe('ModelPicker — pickers that choose for the computer keep native models on a phone', () => {
