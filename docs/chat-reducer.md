@@ -8,6 +8,24 @@ origin: youcoded-dev@1f60c2a:docs/chat-reducer.md
 
 Chat state lives in `youcoded/desktop/src/renderer/state/chat-reducer.ts` with types in `chat-types.ts`. A few non-obvious invariants govern how tool activity and turns are scoped.
 
+## One translator: `eventToAction`
+
+Three screens turn a `TranscriptEvent` into reducer actions, and all three call ONE pure function,
+`eventToAction(event, opts)` in `state/transcript-event-actions.ts`, which returns a `ChatAction[]`:
+
+| Screen | Caller | Options |
+|---|---|---|
+| Main window, live | `App.tsx` transcript listener | `{ live: true, compactionPending, fallbackContextTokens }` (the last two read only for `compact-summary`) |
+| Buddy window, live | `buddy/BubbleFeed.tsx` | `{ live: true, compactionPending, fallbackContextTokens: null }` (no CC statusline) |
+| A history page | `pageEventToAction` (`transcript-page-actions.ts`), used by `HISTORY_PAGE_LOADED` | `{ live: false }`, first action only |
+
+- **`live: false` is history.** It returns nothing for conditions that only mean something while a turn runs: a heartbeat/progress `assistant-thinking`, `session-error`, `replay-complete`, the compaction MARKER and the `/clear` gauge re-base. Its bookkeeping half (`NATIVE_HISTORY_REWRITTEN` for a compaction's bill and window) does replay.
+- **The switch is exhaustive over `TranscriptEventType`** with a `never` default: a new type without a case fails the build. At runtime an unknown type (Kotlin's flat `'streaming-text'`) returns `[]` and never throws.
+- **The buddy's differences live in one typed ledger**, `BUDDY_LIVE` (`buddy/buddy-live-events.ts`): `Record<TranscriptEventType, 'same' | { skip: reason }>`. Today exactly three skips (live only; its page path draws them): `user-interrupt`, `skill-invoked`, `context-clear`.
+- **The main window still applies four actions directly instead of in the frame batch** (`DIRECT_DISPATCH_TYPES` in `transcript-batch.ts`: skill card, clear, history rewrite, compaction marker), so they can land ahead of earlier same-frame actions. Known; its fix is a separate visible change.
+- **`timestamp` is a required field of `TRANSCRIPT_TOOL_USE`**, and its case is built without a cast, so forgetting it is a type error.
+- Guards: `tests/transcript-event-actions.test.ts` (golden file recorded from the three old translators), `tests/transcript-event-surface-parity.test.ts`, `tests/BubbleFeed.test.tsx` → "BubbleFeed live transcript events". Fixtures: `tests/helpers/transcript-event-matrix.ts` (every type x payload variant).
+
 ## Tool activity scoping
 
 `toolCalls` is a **session-lifetime Map** — never cleared. ToolCards need old results for display, so entries persist. Individual entries are updated in-place (status flipped to `failed`), but the Map never resets.
@@ -92,7 +110,7 @@ All four fields default to `null` on turn creation. The reducer's `TRANSCRIPT_TU
 - **`usePromptDetector` reads `getVisibleScreenText` (screen + margin), NOT the full scrollback; the classifier's IPC eval passes a 120-row tail.** Serializing the whole 1000+-row buffer per rAF flush was the top renderer CPU cost while streaming. The tail walk-back in `terminal-registry.getScreenText` never starts mid-wrapped-line — keep it. Load-bearing side effect: menus that scrolled into scrollback can no longer shadow a live Ink menu.
 - **SubagentWatcher polls are slow (5s) safety nets by design — the fast paths are event-driven.** `TranscriptWatcher` calls `kickScan()` when a parent Agent tool_use lands (instant discovery of the subagents dir/new files) and `settleByParent()` when the parent's tool-result lands (final read, then the per-file stat poll stops; fs.watch stays attached). Don't speed the polls up "for responsiveness" (regresses idle-CPU accumulation) and don't remove the kick/settle calls.
 - **`<local-command-stdout>`/`<local-command-stderr>` are STRIPPED ENTIRELY in `stripSystemTags` — DO NOT switch back to unwrapping.** CC writes these as dimmed status echoes. After every `/compact` it writes a follow-up user-type line `<local-command-stdout>[2mCompacted (ctrl+o to see full summary)[22m</local-command-stdout>`. Unwrapping let CC's echo reach `TRANSCRIPT_USER_MESSAGE`'s "no pending match" path, which BOTH appended a fake "Compacted…" user bubble AND set `isThinking:true` with no turn to ever clear it (chat permanently stuck thinking after compaction). Both TS and Kotlin parsers strip these entirely; `transcript-watcher.test.ts` pins the JSONL fixture line. Route any new slash-command output through a NEW event type — don't reintroduce the user-message path.
-- **The `compact-summary` transcript event carries the full summary text in `data.summary`.** `SystemMarker.tsx` renders click-to-expand on the thin "Compacted · freed X tokens" divider. Both `App.tsx` and `BubbleFeed.tsx` forward `event.data.summary` into `COMPACTION_COMPLETE`; the reducer stores it on `SystemMarker.summary`. Aborted/watchdog completions carry no summary — keep the `expandable = !!marker.summary` gate.
+- **The `compact-summary` transcript event carries the full summary text in `data.summary`.** `SystemMarker.tsx` renders click-to-expand on the thin "Compacted · freed X tokens" divider. `eventToAction` (see "One translator" below) forwards `event.data.summary` into `COMPACTION_COMPLETE` for the main window and the buddy alike; the reducer stores it on `SystemMarker.summary`. Aborted/watchdog completions carry no summary — keep the `expandable = !!marker.summary` gate.
 
 ### Rule-overflow additions (2026-08-12, migrated verbatim from the path-scoped rule)
 
@@ -198,9 +216,9 @@ beats deleted text. It needs a model that resumes prose after starting a tool ca
 then stalls. Guard: `attention-reducer.test.ts` → the `stalled turn` describe (four `NATIVE_PARTS_DROPPED` cases, including the reused-partId regression).
 
 Ordering is guaranteed end to end without any explicit sequencing: the harness emits
-`dropPart` BEFORE returning its retry sentinel, and `App.tsx` / `BubbleFeed.tsx` dispatch
-`NATIVE_PARTS_DROPPED` from a block placed above the heartbeat dispatch in the same
-handler, with both dispatch queues plain FIFO.
+`dropPart` BEFORE returning its retry sentinel, and `eventToAction` returns
+`NATIVE_PARTS_DROPPED` ahead of the heartbeat action in the same array (both windows
+apply that array in order), with both dispatch queues plain FIFO.
 
 ### The PTY classifier must not reset a state it never set
 
