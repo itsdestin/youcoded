@@ -1080,7 +1080,7 @@ describe('RemoteServer session meta + browse', () => {
 
       // Same frame shape both doors send: a second remote client viewing this session must refetch its meta.
       const payload = { sessionId: 'desktop-1', flag: 'tag:tag_abc', value: true };
-      expect(remoteBroadcast).toHaveBeenCalledWith({ type: 'session:meta-changed', payload, epoch: expect.any(String), seq: expect.any(Number) });
+      expect(remoteBroadcast).toHaveBeenCalledWith({ type: 'session:meta-changed', payload });
       expect(sendForSession).toHaveBeenCalledWith('desktop-1', 'session:meta-changed', 'desktop-1', { flag: 'tag:tag_abc', value: true });
     });
   });
@@ -1167,7 +1167,7 @@ describe('RemoteServer session meta + browse', () => {
 
       await sendAndCollect(server, msg());
 
-      expect(remoteBroadcast).toHaveBeenCalledWith({ type: 'session:meta-changed', payload: { sessionId: 'desktop-1', note: 'hello' }, epoch: expect.any(String), seq: expect.any(Number) });
+      expect(remoteBroadcast).toHaveBeenCalledWith({ type: 'session:meta-changed', payload: { sessionId: 'desktop-1', note: 'hello' } });
       expect(sendForSession).toHaveBeenCalledWith('desktop-1', 'session:meta-changed', 'desktop-1', { note: 'hello' });
     });
   });
