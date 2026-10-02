@@ -155,3 +155,37 @@ describe('"Switch model?" after a mid-conversation /model', () => {
     expect(screenInputBlock(S)).not.toBeNull();   // the keyboard is still held: sends are refused either way
   });
 });
+
+// THE REAL CAPTURE (2026-10-02): Claude Code 2.1.287 recorded by test-conpty/capture-popup-corpus.mjs (scenario switch-model-confirm, classic and fullscreen
+// renderers). It shows what the synthetic chunk above could only assume: the real "Switch model?" pop-up has NO "Enter to confirm · Esc to cancel" footer.
+// With the footer required, no card was ever drawn for it (Destin saw none).
+import fs from 'fs';
+import path from 'path';
+describe.each(['switch-model-confirm', 'fs-switch-model-confirm'])('"Switch model?" as Claude Code really draws it (%s)', (name) => {
+  const cap = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'popup-corpus', `${name}.json`), 'utf8'));
+  const chunks: string[] = cap.chunks.map((c: any) => Buffer.from(c.b64, 'base64').toString('utf8'));
+  const marks = cap.marks.filter((m: any) => m.label === 'truth');
+  // The driver pressed Enter ("Yes") at the last 'send' mark: everything before it is the pop-up being drawn, everything after is its answer.
+  const yesAt: number = cap.marks.filter((m: any) => m.label === 'send').slice(-1)[0].chunkIndex;
+  const answeredAt: number = marks.find((m: any) => m.data?.note === 'after answering').chunkIndex;
+
+  it('draws one card with both buttons, refuses sends meanwhile, and clears it all once the pop-up is answered', async () => {
+    const r = rig();
+    r.registry.subscribe(S, PHONE);
+    r.screens.noteResize(S, cap.cols, cap.rows);
+    r.records.note(S, 'hook:event', { type: 'SessionStart', sessionId: S, payload: {}, timestamp: 1 });   // Claude Code has started (its first hook ran): a mid-session pop-up
+    // Everything up to and including the pop-up's own drawing .
+    for (let i = 0; i < yesAt; i++) r.output(chunks[i]);
+    await r.advance(150);
+    expect(screenInputBlock(S)).toMatchObject({ kind: 'popup' });
+    await r.advance(1500);
+    expect(cards(r.phone.get())).toHaveLength(1);
+    expect(cards(r.phone.get())[0].prompt.title).toBe('Switch model?');
+    expect(cards(r.phone.get())[0].prompt.buttons.map((b: any) => b.label)).toEqual([expect.stringMatching(/^Yes, switch to/), 'No, go back']);
+    // Answered: the rest of the capture draws the result and the message box again.
+    for (let i = yesAt; i <= answeredAt + 1 && i < chunks.length; i++) r.output(chunks[i]);
+    await r.advance(2500);
+    expect(screenInputBlock(S)).toBeNull();
+    expect(r.records.openPrompts(S)).toEqual([]);
+  });
+});

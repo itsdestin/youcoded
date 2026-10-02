@@ -35,32 +35,13 @@ const CLEAR_COMMAND_RE = /^\/(?:clear|reset|new)[ \t]*\r$/;
 const CLEAR_HOOK_WAIT_MS = 3000;
 /** A hook `clear` this soon after the host drew its own is the same clear arriving late. */
 const CLEAR_DEDUPE_MS = 15_000;
-/** How long after a `/model` write a rejection printed in the terminal still counts as ITS answer. */
-const MODEL_REJECT_WINDOW_MS = 8000;
 /**
- * What Claude Code prints when it refuses a model. ASSUMED, not seen on a real capture (no refusal was captured; see docs/cc-dependencies.md
- * "Live facts read in main"): a line that names the model and says it is not found / invalid / unknown / not available. The reply's own model
- * (the next assistant message) is the backstop that does not depend on this wording.
+ * How long after a "Switch model?" pop-up closes the host waits for Claude Code to record the /model command in the transcript. Claude Code writes that
+ * line when it RUNS the command (answered "Yes"); a pop-up answered "No, go back" runs nothing, so no line ever comes and the announced switch is taken back.
  */
-const MODEL_REJECT_RE = /model[^\n]{0,80}(?:not found|invalid|unknown|not available|unavailable|isn't available|does not exist|can't be used)|(?:invalid|unknown|unsupported)[^\n]{0,24}model/i;
+const MODEL_CONFIRM_WAIT_MS = 3000;
 /** Assistant output, a tool or a finished turn means Claude Code is past any menu it was showing (a menu blocks its input). */
 const MOVED_ON_TYPES = new Set(['assistant-text', 'tool-use', 'turn-complete']);
-
-/**
- * Does this chunk of terminal output say Claude Code REFUSED a model?
- *
- * WHY the rows are split first (2026-10-01, one-core R6-4 fix): Claude Code's screen redraws separate rows with a carriage return and a cursor-down
- * escape, never "\n". Stripping the escapes alone therefore glued neighbouring rows into one "line", and MODEL_REJECT_RE's `model[^\n]{0,80}unavailable`
- * matched Claude Code's own SUCCESS line ("Set model to Haiku 4.5 and saved as your default") followed by the footer row "auto mode unavailable".
- * The host then "took back" a switch that had worked: the divider vanished and the label went back to the old model (Destin's missing divider).
- */
-function looksLikeModelRefusal(data: string): boolean {
-  const rows = data
-    .replace(/\x1b\[\d*(?:;\d*)?[HBEF]/g, '\n')   // cursor-home / down / next-line / previous-line: a new row starts here
-    .replace(/\r/g, '\n')
-    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');         // every other escape (colours, cursor-forward) just disappears
-  return MODEL_REJECT_RE.test(rows);
-}
 
 /** A compaction with no event of any kind for this long has stopped (the screens' own watchdog used this number). */
 export const COMPACT_IDLE_LIMIT_MS = 180_000;
@@ -84,8 +65,10 @@ export class SessionLiveFacts {
   /** A typed /clear waiting for the hook, and when a divider was last drawn (the hook arriving late must not draw a second). */
   private readonly clearTimers = new Map<string, unknown>();
   private readonly lastClearAt = new Map<string, number>();
+  /** The wait after a "Switch model?" pop-up closed (see inputBlock). */
+  private readonly popupTimers = new Map<string, unknown>();
   /** A /model the host announced and has not yet seen confirmed: what to put back if Claude Code refused it. */
-  private readonly pendingModel = new Map<string, { alias: string; prev: string | null; dividerId: string | null; at: number; turnStarted: boolean }>();
+  private readonly pendingModel = new Map<string, { alias: string; prev: string | null; dividerId: string | null; at: number; turnStarted: boolean; popup: boolean; confirmed: boolean }>();
   private ids = 0;
 
   constructor(private readonly deps: SessionLiveDeps) {
@@ -105,8 +88,6 @@ export class SessionLiveFacts {
    */
   noteOutput(sessionId: string, data: string): void {
     if (!this.deps.isClaude(sessionId)) return;
-    const pm = this.pendingModel.get(sessionId);
-    if (pm && !pm.turnStarted && this.now() - pm.at < MODEL_REJECT_WINDOW_MS && looksLikeModelRefusal(data)) this.rejectModel(sessionId);
     const mode = detectPermissionMode(data);
     if (!mode) return;
     const known = this.deps.records.facts(sessionId)?.permissionMode ?? null;
@@ -127,7 +108,11 @@ export class SessionLiveFacts {
       // Only a model we can NAME is announced: an unrecognised argument (a raw dated id, a typo) shows nothing honest.
       if (alias) {
         const dividerId = notice === 'model-switch' ? this.nextId('model-switch') : null;
-        this.pendingModel.set(sessionId, { alias, prev: this.deps.records.facts(sessionId)?.model ?? null, dividerId, at: this.now(), turnStarted: false });
+        // WHY `prev` comes from the unconfirmed switch before it (2026-10-02, sync-fix1): a second /model typed while the first still waits (a "Switch model?" pop-up, or
+        // a quick back-and-forth) must not take the FIRST announced label as "the model the session was on"; if the second is declined the label would revert
+        // to a model the session never ran.
+        const earlier = this.pendingModel.get(sessionId);
+        this.pendingModel.set(sessionId, { alias, prev: earlier && !earlier.confirmed ? earlier.prev : (this.deps.records.facts(sessionId)?.model ?? null), dividerId, at: this.now(), turnStarted: false, popup: false, confirmed: false });
         this.live(sessionId, { kind: 'model', model: alias });
         if (dividerId) this.live(sessionId, { kind: 'model-switch', id: dividerId, label: `Model switched to ${CLAUDE_ALIAS_LABELS[alias]}` });
       }
@@ -138,13 +123,14 @@ export class SessionLiveFacts {
   }
 
   /**
-   * Claude Code did not take the model switch (it said so in the terminal, or the next reply came from a different model): take back what the
+   * Claude Code did not take the model switch (a "Switch model?" pop-up was answered No, or the next reply came from a different model): take back what the
    * host announced, so no screen keeps claiming it. The divider is retracted and the label goes back to the model the session was on.
    */
   private rejectModel(sessionId: string): void {
     const pm = this.pendingModel.get(sessionId);
     if (!pm) return;
     this.pendingModel.delete(sessionId);
+    this.clearPopupTimer(sessionId);
     if (pm.dividerId) this.live(sessionId, { kind: 'model-switch-retract', id: pm.dividerId });
     if (pm.prev) this.live(sessionId, { kind: 'model', model: pm.prev });
   }
@@ -162,6 +148,8 @@ export class SessionLiveFacts {
     if (e.data?.parentAgentToolUseId) return;
     const pm = this.pendingModel.get(sessionId);
     if (pm) {
+      // Claude Code records a /model command when it RUNS it: that is the confirmation (also for one that waited behind a "Switch model?" pop-up).
+      if (e.type === 'user-message' && e.data?.slashCommand && typeof (e.data as { text?: unknown }).text === 'string' && /^\/model\b/.test((e.data as { text: string }).text)) { pm.confirmed = true; this.clearPopupTimer(sessionId); }
       if (e.type === 'user-message' && !e.data?.slashCommand) pm.turnStarted = true;
       else if (e.type === 'assistant-text' && pm.turnStarted && typeof e.data?.model === 'string' && !isPlaceholderModelId(e.data.model)) {
         const actual = claudeAliasForModelId(e.data.model);
@@ -254,7 +242,7 @@ export class SessionLiveFacts {
     this.disarm(sessionId);
     const w = this.clearTimers.get(sessionId);
     if (w !== undefined) (this.deps.clearTimer ?? ((h: unknown) => clearTimeout(h as NodeJS.Timeout)))(w);
-    this.clearTimers.delete(sessionId); this.lastClearAt.delete(sessionId); this.pendingModel.delete(sessionId);
+    this.clearTimers.delete(sessionId); this.lastClearAt.delete(sessionId); this.pendingModel.delete(sessionId); this.clearPopupTimer(sessionId);
     this.lastCompactStart.delete(sessionId);
   }
 
@@ -282,6 +270,28 @@ export class SessionLiveFacts {
    */
   inputBlock(sessionId: string, block: InputBlock | null): void {
     this.live(sessionId, { kind: 'input-block', block });
+    // WHY (2026-10-02, one-core sync-fix1): this is how a declined switch is noticed. The old reader scanned the WHOLE terminal screen for refusal words, and the
+    // screen holds the conversation too: a chat that merely said "the model was not found" made every /model lose its divider (Destin's missing divider, twice).
+    // Now only two anchored facts count: a "Switch model?" pop-up that came and went with no /model line in the transcript, and a reply from another model.
+    const pm = this.pendingModel.get(sessionId);
+    if (!pm || pm.confirmed) return;
+    if (block && block.kind === 'popup' && /^Switch model\?/i.test(block.heading)) { pm.popup = true; this.clearPopupTimer(sessionId); return; }
+    if (!block && pm.popup) {
+      this.clearPopupTimer(sessionId);
+      const set = this.deps.setTimer ?? ((fn: () => void, ms: number) => { const t = setTimeout(fn, ms); t.unref?.(); return t; });
+      this.popupTimers.set(sessionId, set(() => {
+        this.popupTimers.delete(sessionId);
+        const now = this.pendingModel.get(sessionId);
+        if (now && !now.confirmed) this.rejectModel(sessionId);
+      }, MODEL_CONFIRM_WAIT_MS));
+    }
+  }
+
+  private clearPopupTimer(sessionId: string): void {
+    const h = this.popupTimers.get(sessionId);
+    if (h === undefined) return;
+    (this.deps.clearTimer ?? ((x: unknown) => clearTimeout(x as NodeJS.Timeout)))(h);
+    this.popupTimers.delete(sessionId);
   }
 
   /** The computer's "may be stuck" reading changed for a Claude Code turn (the only writer of it; see session-screens.ts). */

@@ -62,10 +62,17 @@ const RESUME_MENU = `Resume Session
 press enter to confirm`;
 
 // A different menu the detector does NOT recognize as a setup prompt.
+// A numbered list in a REPLY: Claude Code's message box is still on screen under it (2026-10-02, one-core sync-fix1: without the box this shape is a pop-up that
+// holds the keyboard, and a mid-session pop-up gets a generic card even with no footer — the real "Switch model?" has none).
+const MESSAGE_BOX = `
+${'─'.repeat(40)}
+❯ 
+${'─'.repeat(40)}`;
 const UNRECOGNIZED_MENU = `Pick a flavor
 
  ❯ 1. Vanilla
-   2. Chocolate`;
+   2. Chocolate
+${MESSAGE_BOX}`;
 
 function fireBuffer(sid: string) {
   act(() => {
@@ -154,7 +161,8 @@ describe('usePromptDetector prompt lifecycle', () => {
     mocks.screen.text = `Pick a size
 
  ❯ 1. Small
-   2. Large`;
+   2. Large
+${MESSAGE_BOX}`;
     fireBuffer('s1');
     act(() => { vi.advanceTimersByTime(1000); });
 
