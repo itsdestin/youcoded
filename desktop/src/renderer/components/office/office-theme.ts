@@ -4,9 +4,8 @@
 // The editors run on their own sealed origin, so nothing here can style them
 // directly: the host reads the live tokens and posts them into the frame, and
 // the add-on's bridge (yc-bridge.js, on the editor side) maps them onto the
-// editor's own CSS variables. Same pattern as Pages' theme message, reusing its
-// watcher so a theme switch reaches an open document without a reload.
-import { watchThemeCss } from '../pages/page-theme';
+// editor's own CSS variables. Same pattern as Pages' theme message, with its own
+// watcher (watchOfficeTheme) so a theme switch reaches an open document without a reload.
 
 const TOKENS = [
   'canvas', 'panel', 'inset', 'well', 'accent', 'on-accent',
@@ -81,7 +80,21 @@ export function editorFontLinks(links: string[], origin: string): string[] {
     .map((l) => `${origin}/yc-fonts/css?u=${encodeURIComponent(l)}`);
 }
 
-/** Calls back with a fresh theme whenever the app's theme changes. */
+/** Calls back with a fresh theme whenever anything the editor wears changes.
+ *  WHY its own comparison (Destin, 2026-10-01: "scrollbars still aren't updating consistently"
+ *  after theme switches): it used to ride on Pages' watcher, which only notices a change of the
+ *  colours a Page uses — so a change of the scrollbar colours, the wallpaper or the glass
+ *  (opacity, blur) alone never reached the editor. Same trigger (the theme engine writes <html>'s
+ *  and <body>'s attributes and inline variables), but the whole OfficeTheme is compared. */
 export function watchOfficeTheme(onChange: (theme: OfficeTheme) => void): () => void {
-  return watchThemeCss(() => onChange(readOfficeTheme()));
+  let last = JSON.stringify(readOfficeTheme());
+  const check = () => {
+    const next = readOfficeTheme();
+    const key = JSON.stringify(next);
+    if (key !== last) { last = key; onChange(next); }
+  };
+  const mo = new MutationObserver(check);
+  mo.observe(document.documentElement, { attributes: true });
+  mo.observe(document.body, { attributes: true });
+  return () => mo.disconnect();
 }
