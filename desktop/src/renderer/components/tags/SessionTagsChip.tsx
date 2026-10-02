@@ -10,6 +10,11 @@ import { useSessionMeta } from '../../hooks/useSessionMeta';
 import type { TagRecord } from '../../../shared/tags';
 import { TagNoteEditor } from './TagNoteEditor';
 import { PinIcon } from './PinIcon';
+import { TagChip, MoreTagsChip } from './TagChip';
+import { TagGlyph } from './glyphs';
+
+// TRIAL: the status bar element's look for the pick-menus-6 deck.
+const SB_TAG = 'pills' as 'dots' | 'pills' | 'icon-count';
 import { TagManagerPopup } from './TagManagerPopup';
 import { Dialog, Tooltip } from '../ui';
 import { useScreenOpen } from '../../shoot-mode';
@@ -53,7 +58,24 @@ export function SessionTagsChip({ sessionId }: { sessionId: string | null }) {
         // is nested, so `.status-bar > button` alone never reached it.
         className="status-chip flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim enabled:hover:bg-inset transition-colors max-w-[220px] disabled:opacity-50 disabled:cursor-not-allowed"
       >
-        {hasContent ? (
+        {hasContent && SB_TAG !== 'dots' ? (
+          // TRIAL pick-menus-6: the status bar element in the new tag look.
+          <span className="flex items-center gap-1 overflow-hidden">
+            {priority && <PinIcon className="w-3 h-3 text-fg-2 shrink-0" />}
+            {SB_TAG === 'pills' ? (
+              <>
+                {appliedTags.slice(0, 1).map((t) => <TagChip key={t.id} tag={t} />)}
+                <MoreTagsChip names={appliedTags.slice(1).map((t) => t.label)} />
+              </>
+            ) : appliedTags.length > 0 && (
+              <span className="flex items-center gap-1 text-fg-2">
+                <TagGlyph className="w-3 h-3 text-fg-muted" />
+                {appliedTags.length === 1 ? appliedTags[0].label : `${appliedTags.length} tags`}
+              </span>
+            )}
+            {meta.note && <NotebookIcon className="w-3 h-3 text-fg-muted shrink-0" />}
+          </span>
+        ) : hasContent ? (
           <span className="flex items-center gap-1 overflow-hidden">
             {priority && <PinIcon className="w-3 h-3 text-fg-2 shrink-0" />}
             {dotColors.slice(0, 3).map((c, i) => (

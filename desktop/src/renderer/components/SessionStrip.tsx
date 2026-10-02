@@ -24,7 +24,7 @@ import { useTagRegistry } from '../hooks/useTagRegistry';
 import { useSessionMeta } from '../hooks/useSessionMeta';
 import { PinIcon } from './tags/PinIcon';
 import { NotePageGlyph } from './tags/glyphs';
-import { TagChip } from './tags/TagChip';
+import { TagChip, MoreTagsChip } from './tags/TagChip';
 import type { TagRecord } from '../../shared/tags';
 import {
   chooseTearOffModel, dragCarriesSession, readSessionDrag, writeSessionDrag,
@@ -257,7 +257,7 @@ function FolderMark({ className = '' }: { className?: string }) {
 // review 2, 2026-08-28: "tags should not be dots, but full chips with spelled
 // names"). Priority is a reserved flag rather than a tag and leads the row, the
 // way it leads the status-bar chip.
-const MAX_CHIPS = 3;
+const MAX_CHIPS = 2; // TRIAL pick-menus-6: collapse sooner
 
 /** The pin beside a pinned session's status pill (pick-menus-4#PM4-3: "by the status,
  *  but use the pinned icon from the pinned pill"). Pinned = the stored `priority` flag. */
@@ -285,13 +285,7 @@ function SessionTagMarks({ sessionId, byId }: { sessionId: string; byId: Map<str
       {shown.map((m, i) => (
         <TagChip key={i} tag={{ label: m.label, color: m.color as TagRecord['color'] }} />
       ))}
-      {rest.length > 0 && (
-        <Tooltip text={rest.map((m) => m.label).join(', ')}>
-        <span className="text-3xs text-fg-muted">
-          +{rest.length}
-        </span>
-        </Tooltip>
-      )}
+      <MoreTagsChip names={rest.map((m) => m.label)} />
       {meta.note && (
         <Tooltip text="This session has a note">
         <span className="flex items-center">

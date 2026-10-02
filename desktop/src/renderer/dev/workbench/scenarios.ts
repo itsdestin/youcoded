@@ -133,7 +133,7 @@ function defaultPast(): PastSession[] {
     }),
     past(3, 'menu internals tranche 3', { flags: { complete: true }, tags: ['tag_work'] }),
     past(4, 'ask-about-this reference UX', {
-      tags: ['tag_idea', 'tag_work'],
+      tags: ['tag_idea', 'tag_work', 'tag_bug'], // TRIAL pick-menus-6: 3 tags
       provider: 'native',
       lastUsedModel: { modelId: 'claude-sonnet-4-6', providerType: 'anthropic', providerLabel: 'Anthropic' },
     }),
@@ -261,7 +261,7 @@ export function seed(scenario: ScenarioId): MockState {
     // Enough variety for the All Sessions menu's tag marks to be reviewable:
     // a priority + tag row, a two-tag row, and a row whose only mark is a note.
     meta: {
-      'wb-1': { tags: ['tag_work'], note: '', flags: { priority: true } },
+      'wb-1': { tags: ['tag_work', 'tag_bug', 'tag_idea'], note: '', flags: { priority: true } }, // TRIAL pick-menus-6: 3 tags
       'wb-3': { tags: ['tag_bug', 'tag_idea'], note: '', flags: {} },
       'wb-5': { tags: [], note: 'check the openrouter key before resuming', flags: {} },
     },

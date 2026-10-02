@@ -1,5 +1,6 @@
 // src/renderer/components/tags/TagChip.tsx
 import type { TagRecord } from '../../../shared/tags';
+import { TagGlyph } from './glyphs';
 
 // A colored, plain-word tag chip (no status glyphs — per user preference). The
 // color is a slot key (e.g. 'tag-blue') → var(--tag-blue).
@@ -14,7 +15,7 @@ import type { TagRecord } from '../../../shared/tags';
 // they all set --fg) gets a fitted shade. Fill and border are a step stronger
 // than the status pill's, for contrast against the card behind.
 // TRIAL: which tag look the pick-menus-5 deck shows.
-const TAG_LOOK = 'box' as 'box' | 'dot' | 'pill' | 'outline';
+const TAG_LOOK = 'outline-icon-neutral' as 'box' | 'dot' | 'pill' | 'outline' | 'outline-icon' | 'outline-icon-neutral';
 
 export function TagChip({ tag, onRemove, className = '' }: {
   tag: Pick<TagRecord, 'label' | 'color'>;
@@ -35,12 +36,15 @@ export function TagChip({ tag, onRemove, className = '' }: {
       );
     }
     const pill = TAG_LOOK === 'pill';
+    const icon = TAG_LOOK === 'outline-icon' || TAG_LOOK === 'outline-icon-neutral';
+    const neutral = TAG_LOOK === 'outline-icon-neutral';
     return (
-      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-3xs leading-none border ${pill ? 'text-fg' : 'text-fg-2'} ${className}`}
+      <span className={`inline-flex items-center gap-1 ${icon ? 'pl-1.5 pr-2' : 'px-2'} py-0.5 rounded-full text-3xs leading-none border ${pill ? 'text-fg' : 'text-fg-2'} ${neutral ? 'border-edge' : ''} ${className}`}
         style={{
           backgroundColor: pill ? `color-mix(in srgb, ${c} 15%, transparent)` : 'transparent',
-          borderColor: `color-mix(in srgb, ${c} ${pill ? 35 : 70}%, transparent)`,
+          ...(neutral ? {} : { borderColor: `color-mix(in srgb, ${c} ${pill ? 35 : 70}%, transparent)` }),
         }}>
+        {icon && <span className="shrink-0 flex" style={{ color: c }}><TagGlyph className="w-2.5 h-2.5" /></span>}
         {tag.label}{remove}
       </span>
     );
@@ -61,6 +65,17 @@ export function TagChip({ tag, onRemove, className = '' }: {
           aria-label={`Remove ${tag.label}`}
         >×</button>
       )}
+    </span>
+  );
+}
+
+/** "+N" for the tags past the first few (pick-menus-5#PM5-1: "try collapsing if a lot
+ *  of tags"). A neutral outline pill so it reads as a count, not another tag. */
+export function MoreTagsChip({ names, className = '' }: { names: string[]; className?: string }) {
+  if (names.length === 0) return null;
+  return (
+    <span title={names.join(', ')} className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-3xs leading-none border border-edge text-fg-muted ${className}`}>
+      +{names.length}
     </span>
   );
 }
