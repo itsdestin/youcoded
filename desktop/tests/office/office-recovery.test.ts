@@ -90,14 +90,20 @@ describe('the recovery journal', () => {
     const newer = Buffer.concat([Buffer.from(a.opened, 'base64'), Buffer.from('typed just before closing')]);
     await a.run(a.s.token, 'save_changes', { changes: ['typed just before closing'], deleteIndex: null, count: 1 });
     let release!: () => void;
+    // WHY a signal, not settle() (desktop-test-build run 36992142223, windows-latest): a slow
+    // runner had not reached the translation 30 ms in, so `release` was still unset — and the
+    // unused one-off translation then hung the next test. Wait until it is really running.
+    let reached!: () => void;
+    const translating = new Promise<void>((r) => (reached = r));
     convert.mockImplementationOnce(async (_root: string, src: string, dst: string) => {
+      reached();
       await new Promise<void>((r) => (release = r)); // a translation still running as the window goes
       await fsp.copyFile(src, dst);
     });
     void a.run(a.s.token, 'write_editor_bin', { data: newer.toString('base64') });
     const saved = a.run(a.s.token, 'save_file', {});
     const closed = sessions.closeAllFor(1); // the window is gone
-    await settle();
+    await translating;
     release();
     await saved;
     await closed;
