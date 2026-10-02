@@ -28,6 +28,8 @@ export const CHAT: readonly ScreenEntry[] = [
   // A real, unexpired announcement — statusData otherwise always sends `null`.
   { ...chat('chat/announcement', 'dialog'), params: { announcement: '1' } },
   chat('chat/quick-chips', 'dialog'),
+  chat('chat/quick-chips/edit', 'dialog'),
+  chat('chat/quick-chips/add', 'dialog'),
   chat('chat/session-context', 'dialog'),
   chat('chat/quit-sessions', 'dialog'),
   // Each first-run warning, once per kind (localStorage is unwritten on a fresh

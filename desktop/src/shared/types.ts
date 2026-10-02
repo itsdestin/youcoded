@@ -1291,6 +1291,7 @@ export interface ChipConfig {
   skillId?: string;  // optional — chips can exist without a backing skill (e.g., "Git Status" is just a prompt)
   label: string;
   prompt: string;
+  hidden?: boolean; // "Set aside" in the chip editor, off the row (pick-menus-4); both stores keep raw JSON
 }
 
 export interface MetadataOverride {
