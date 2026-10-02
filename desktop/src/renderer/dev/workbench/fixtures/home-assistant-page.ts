@@ -91,6 +91,14 @@ function homeAssistantPageHtml(): string {
   .play .key { width: 36px; height: 36px; }
   .play .key.main { width: 44px; height: 44px; background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
   .tile .name .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mhead { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; position: relative; }
+  .mhead .kind { display: flex; align-items: center; gap: 5px; }
+  .mhead .kind svg { width: 12px; height: 12px; flex-shrink: 0; }
+  .mname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mhead .sub { font-size: 11px; color: var(--fg-muted); }
+  .pwr.mute[aria-pressed="true"] { background: var(--fg); border-color: var(--fg); color: var(--panel); }
+  .tile.muted .vlr { opacity: .5; }
+  .lights > .tile.all > .lr { margin-top: 2px; }
   .kind { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-muted); }
   /* Round 6 (S-kinds notes): a TV has an obvious power button on the right
      of its header; tapping the TV itself opens its remote. */
@@ -627,7 +635,7 @@ function homeAssistantPageHtml(): string {
       if (dragging === target.id) { var live = document.querySelector('[data-vol="' + target.id + '"]'); if (live) v = Number(live.value); }
       return '<div class="vrow"><button class="vbtn" data-mp="' + esc(target.id) + '" data-svc="volume_down" aria-label="Volume down' + esc(where) + '" title="Volume down">' + minus + '</button>' +
         '<span class="vwrap"><input class="lr vlr" type="range" min="0" max="100" value="' + v + '" style="--v:' + v + ';--c:var(--accent)" aria-label="Volume of ' + esc(it.name) + esc(where) + '" data-vol="' + esc(target.id) + '">' +
-        '<span class="vicon' + (v < 12 ? ' low' : '') + '" data-vicon="' + esc(target.id) + '">' + volIcon(v, target.muted) + '</span></span>' +
+        '<span class="vicon' + (v < 12 || target.muted ? ' low' : '') + '" data-vicon="' + esc(target.id) + '">' + volIcon(v, target.muted) + '</span></span>' +
         '<button class="vbtn" data-mp="' + esc(target.id) + '" data-svc="volume_up" aria-label="Volume up' + esc(where) + '" title="Volume up">' + plus + '</button></div>';
     }
     if (rc) {
@@ -677,7 +685,7 @@ function homeAssistantPageHtml(): string {
     // one (the TV's own volume is not what you hear).
     var sb = tv ? soundbarFor(it) : null;
     var volOf = sb || it;
-    var vol = media && on ? volRow(it, tv && !sb ? null : volOf, tv ? rc : null) : '';
+    var vol = media && (on || ((kind === 'soundbar' || kind === 'speaker') && !gone(it))) ? volRow(it, tv && !sb ? null : volOf, tv ? rc : null) : '';
     // Now playing, in a block of its own (S-kinds notes: "improve the now
     // playing ui styling"): the app's mark on a TV, a note on a speaker.
     var nowHtml = media && on && (playing && what || app)
@@ -698,14 +706,23 @@ function homeAssistantPageHtml(): string {
     var face = tv && rc
       ? '<button class="tile-face" data-remote="' + esc(rc.id) + '" aria-expanded="' + !!rOpen + '" aria-label="' + esc(it.name) + ', ' + (rOpen ? 'hide' : 'show') + ' remote">'
       : '<button class="tile-face" data-toggle="' + esc(power.id) + '" aria-pressed="' + on + '"' + (na ? ' disabled' : '') + ' aria-label="' + esc(it.name) + (on ? ', on' : ', off') + '">';
-    var right = tv
-      // A remote icon, lit while the remote is open (S-power: "replace
-      // chevron on tv with remote icon"). It is the same press as the tile.
-      ? '<button class="pwr" data-toggle="' + esc(power.id) + '" aria-pressed="' + on + '"' + (na ? ' disabled' : '') + ' aria-label="Turn ' + esc(it.name) + (on ? ' off' : ' on') + '" title="' + (on ? 'Turn off' : 'Turn on') + '">' + POWER + '</button>'
-      : media ? '' : colourBtn(it);
-    return '<div class="tile' + (media ? ' media' : '') + (on ? ' on' : '') + (na ? ' gone' : '') + (hidden.has(it.id) ? ' is-hidden' : '') + '" style="--c:' + c + '"><span class="glow"></span>' +
-      '<div class="line">' + face +
-      '<span class="bulb">' + icon + '</span><span class="name">' + (kind ? '<div class="kind">' + KIND_LABEL[kind] + '</div>' : '') + esc(it.name) + (nowHtml ? '' : '<div class="sub">' + esc(status) + '</div>') + '</span></button>' +
+    // Round 8 (testing notes): a media card's header is the small type icon
+    // beside its type label, then the name flush left, and the one control
+    // that matters most top right — power on a TV or display, mute on a
+    // soundbar or speaker. Soundbars and speakers have no on/off: "that just
+    // should be left to tv. just volume and mute/unmute".
+    var isSound = kind === 'soundbar' || kind === 'speaker';
+    var muted = !!it.muted;
+    var right = !media ? colourBtn(it)
+      : isSound ? (((it.features || 0) & 8) && !na
+        ? '<button class="pwr mute" data-mp="' + esc(it.id) + '" data-svc="volume_mute" data-mute="' + (muted ? 'false' : 'true') + '" aria-pressed="' + muted + '" aria-label="' + (muted ? 'Unmute ' : 'Mute ') + esc(it.name) + '" title="' + (muted ? 'Unmute' : 'Mute') + '">' + volIcon(muted ? 0 : 70, muted) + '</button>' : '')
+      : '<button class="pwr" data-toggle="' + esc(power.id) + '" aria-pressed="' + on + '"' + (na ? ' disabled' : '') + ' aria-label="Turn ' + esc(it.name) + (on ? ' off' : ' on') + '" title="' + (on ? 'Turn off' : 'Turn on') + '">' + POWER + '</button>';
+    var mSub = na ? 'Not responding' : isSound ? (muted ? 'Muted' : '') : status;
+    var header = media
+      ? '<div class="mhead"><div class="kind">' + icon + KIND_LABEL[kind] + '</div><div class="mname">' + esc(it.name) + '</div>' + (nowHtml || !mSub ? '' : '<div class="sub">' + esc(mSub) + '</div>') + '</div>'
+      : face + '<span class="bulb">' + icon + '</span><span class="name">' + esc(it.name) + '<div class="sub">' + esc(status) + '</div></span></button>';
+    return '<div class="tile' + (media ? ' media' : '') + (on && !isSound ? ' on' : '') + (na ? ' gone' : '') + (hidden.has(it.id) ? ' is-hidden' : '') + (muted ? ' muted' : '') + '" style="--c:' + c + '"><span class="glow"></span>' +
+      '<div class="line">' + header +
       right + '</div>' + nowHtml + bright + (nowHtml ? '' : vol) + playRow +
       // The remote opens from a full-width bar under what is playing, so the
       // TV's name keeps its room (a pill beside it cut the name short).
@@ -841,6 +858,19 @@ function homeAssistantPageHtml(): string {
   // tile as a single light, with "All" under its bulb (Q-all); it switches
   // only lights, never the TV or speaker (Q-card). While editing, every card
   // is open so every light's controls can be reached.
+  // One brightness bar for the whole room's lights (round 8: "grouped
+  // lights need a brightness slider to change all together"). It shows the
+  // lights that are on, averaged; dragging sets every working dimmable
+  // light in the room, turning on any that were off.
+  function groupBright(room, live, onList, c) {
+    var dim = live.filter(dimmable);
+    if (!dim.length) return '';
+    var lit = onList.filter(dimmable);
+    var pct = lit.length ? Math.max(1, Math.round(lit.reduce(function (a, it) { return a + (it.brightness || 0); }, 0) / lit.length / 2.55)) : 1;
+    var key = 'room:' + room.id;
+    if (dragging === key) { var liveEl = document.querySelector('[data-gbright="' + room.id + '"]'); if (liveEl) pct = Number(liveEl.value); }
+    return '<input class="lr" type="range" min="1" max="100" value="' + pct + '" style="--v:' + Math.round((pct - 1) / 99 * 100) + ';--c:' + c + '" aria-label="Brightness of every light in ' + esc(room.name) + '" data-gbright="' + esc(room.id) + '">';
+  }
   function lightsCard(room, lights, ctx) {
     var live = liveLights(lights), onList = live.filter(isOn), anyOn = onList.length > 0;
     var isOpen = editing || open.has(room.id);
@@ -852,7 +882,7 @@ function homeAssistantPageHtml(): string {
       '<span class="bulb-col"><span class="bulb">' + BULB + '</span><span class="all-lbl">All</span></span>' +
       '<span class="name">Lights<div class="sub">' + esc(status) + '</div></span></button>' +
       (editing ? '' : '<button class="fold" data-fold="' + esc(room.id) + '" aria-expanded="' + isOpen + '" aria-label="' + (isOpen ? 'Hide' : 'Show') + ' each light in ' + esc(room.name) + '" title="' + (isOpen ? 'Hide each light' : 'Show each light') + '">' + CHEVRON + '</button>') +
-      '</div></div>';
+      '</div>' + groupBright(room, live, onList, c) + '</div>';
     return '<div class="lights' + (anyOn ? ' on' : '') + '" style="--c:' + c + '"><span class="glow"></span>' + all + (isOpen ? '<div class="lights-body">' + lights.map(function (it) { return itemHtml(it, ctx); }).join('') + '</div>' : '') + '</div>';
   }
 
@@ -984,7 +1014,7 @@ function homeAssistantPageHtml(): string {
       var svc = t.getAttribute('data-svc');
       if (svc === 'media_play_pause') { var cur = thing(mp); if (cur) setLocal(mp, { state: cur.state === 'playing' ? 'paused' : 'playing' }); }
       var body = { entity_id: mp };
-      if (svc === 'volume_mute') body.is_volume_muted = t.getAttribute('data-mute') === 'true';
+      if (svc === 'volume_mute') { body.is_volume_muted = t.getAttribute('data-mute') === 'true'; setLocal(mp, { muted: body.is_volume_muted }); }
       service('media_player', svc, body, mp);
       return;
     }
@@ -1151,6 +1181,15 @@ function homeAssistantPageHtml(): string {
       var vi = t.parentNode && t.parentNode.querySelector('.vicon');
       if (vi) { vi.innerHTML = volIcon(Number(t.value), false); vi.classList.toggle('low', Number(t.value) < 12); }
       var lv = t.value / 100; holdVal(v, 'vol', lv); sendSoon(function () { quiet('/api/services/media_player/volume_set', { entity_id: v, volume_level: lv }); }); }
+    var gb = t.getAttribute('data-gbright');
+    if (gb) {
+      dragging = 'room:' + gb;
+      var gr = rooms.filter(function (r) { return r.id === gb; })[0];
+      var gids = gr ? liveLights(gr.items).filter(dimmable).map(function (x) { return x.id; }) : [];
+      var gp = Number(t.value);
+      gids.forEach(function (x) { holdVal(x, 'brightness', Math.round(gp * 2.55)); holdState(x, 'on'); });
+      if (gids.length) sendSoon(function () { quiet('/api/services/light/turn_on', { entity_id: gids, brightness_pct: gp }); });
+    }
     if (b && Number(t.value) > 0) { var bp = Number(t.value); holdVal(b, 'brightness', Math.round(bp * 2.55)); sendSoon(function () { quiet('/api/services/light/turn_on', { entity_id: b, brightness_pct: bp }); }); }
   });
   // A value you set holds until Home Assistant reports it (or 4 seconds),
@@ -1193,6 +1232,15 @@ function homeAssistantPageHtml(): string {
     if (mv) {
       if (t.value === '__new') { newRoomFor = mv; renaming = null; render(); return; }
       moveThing(mv, t.value);
+      return;
+    }
+    var gbc = t.getAttribute && t.getAttribute('data-gbright');
+    if (gbc) {
+      // Let go: show every light at the new brightness straight away.
+      dragging = null;
+      var grc = rooms.filter(function (r) { return r.id === gbc; })[0];
+      if (grc) liveLights(grc.items).filter(dimmable).forEach(function (x) { x.state = 'on'; x.brightness = Math.round(Number(t.value) * 2.55); });
+      render();
       return;
     }
     var v = t.getAttribute && t.getAttribute('data-vol');
