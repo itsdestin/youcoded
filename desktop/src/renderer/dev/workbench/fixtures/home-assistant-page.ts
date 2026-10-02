@@ -19,17 +19,32 @@
  *  null in the JSON, never a template error. */
 const ROOMS_TEMPLATE = `{%- set ns = namespace(rooms=[]) -%}
 {%- for a in areas() -%}
-{%- set ens = namespace(items=[]) -%}
+{%- set ens = namespace(items=[], scenes=[]) -%}
 {%- for e in area_entities(a) -%}
 {%- set d = e.split('.')[0] -%}
+{%- if d == 'scene' and states[e] is not none -%}
+{%- set ens.scenes = ens.scenes + [{'id': e, 'name': states[e].name, 'last': states[e].state}] -%}
+{%- endif -%}
 {%- if d in ['light','climate','media_player','camera','remote'] and states[e] is not none -%}
 {%- set s = states[e] -%}
-{%- set ens.items = ens.items + [{'id': e, 'name': s.name, 'state': s.state, 'brightness': s.attributes.get('brightness'), 'modes': s.attributes.get('supported_color_modes'), 'cur': s.attributes.get('current_temperature'), 'target': s.attributes.get('temperature'), 'min': s.attributes.get('min_temp'), 'max': s.attributes.get('max_temp'), 'step': s.attributes.get('target_temp_step'), 'vol': s.attributes.get('volume_level'), 'title': s.attributes.get('media_title'), 'features': s.attributes.get('supported_features', 0), 'rgb': s.attributes.get('rgb_color'), 'k': s.attributes.get('color_temp_kelvin'), 'modesHvac': s.attributes.get('hvac_modes'), 'action': s.attributes.get('hvac_action'), 'device': device_id(e), 'model': device_attr(device_id(e), 'model'), 'dc': s.attributes.get('device_class'), 'activity': s.attributes.get('current_activity'), 'app': s.attributes.get('app_name'), 'source': s.attributes.get('source'), 'cid': s.attributes.get('media_content_id'), 'muted': s.attributes.get('is_volume_muted')}] -%}
+{%- set ce = device_attr(device_id(e), 'config_entries') -%}
+{%- set ens.items = ens.items + [{'id': e, 'maker': device_attr(device_id(e), 'manufacturer'), 'entry': (ce | list | first) if ce else none, 'since': s.last_changed.isoformat(), 'name': s.name, 'state': s.state, 'brightness': s.attributes.get('brightness'), 'modes': s.attributes.get('supported_color_modes'), 'cur': s.attributes.get('current_temperature'), 'target': s.attributes.get('temperature'), 'min': s.attributes.get('min_temp'), 'max': s.attributes.get('max_temp'), 'step': s.attributes.get('target_temp_step'), 'vol': s.attributes.get('volume_level'), 'title': s.attributes.get('media_title'), 'features': s.attributes.get('supported_features', 0), 'rgb': s.attributes.get('rgb_color'), 'k': s.attributes.get('color_temp_kelvin'), 'modesHvac': s.attributes.get('hvac_modes'), 'action': s.attributes.get('hvac_action'), 'device': device_id(e), 'model': device_attr(device_id(e), 'model'), 'dc': s.attributes.get('device_class'), 'activity': s.attributes.get('current_activity'), 'app': s.attributes.get('app_name'), 'source': s.attributes.get('source'), 'cid': s.attributes.get('media_content_id'), 'muted': s.attributes.get('is_volume_muted')}] -%}
 {%- endif -%}
 {%- endfor -%}
-{%- if ens.items -%}{%- set ns.rooms = ns.rooms + [{'id': a, 'name': area_name(a), 'items': ens.items}] -%}{%- endif -%}
+{%- if ens.items -%}{%- set ns.rooms = ns.rooms + [{'id': a, 'name': area_name(a), 'items': ens.items, 'scenes': ens.scenes}] -%}{%- endif -%}
 {%- endfor -%}
 {{ ns.rooms | to_json }}`;
+
+/** Round 4 (home-page-v3 deck): what the chips need beyond the rooms — the
+ *  weather, and batteries running low. One small request per check. The
+ *  first line names it so the pretend Home Assistant can tell it apart. */
+const EXTRAS_TEMPLATE = `{#- EXTRAS -#}
+{%- set w = states.weather | first -%}
+{%- set low = namespace(list=[]) -%}
+{%- for s in states.sensor if s.attributes.get('device_class') == 'battery' and s.state | is_number and s.state | float(100) < 20 -%}
+{%- set low.list = low.list + [{'id': s.entity_id, 'name': s.name, 'level': s.state | float, 'device': device_id(s.entity_id), 'room': area_name(s.entity_id)}] -%}
+{%- endfor -%}
+{{ {'weather': ({'state': w.state, 'temp': w.attributes.get('temperature'), 'unit': w.attributes.get('temperature_unit'), 'humidity': w.attributes.get('humidity')} if w else none), 'low': low.list} | to_json }}`;
 
 export const HOME_ASSISTANT_PAGE_JSON = {
   name: 'Home',
@@ -86,6 +101,64 @@ function homeAssistantPageHtml(): string {
   .temp { font-family: var(--font-mono); font-size: 28px; font-weight: 500; line-height: 1; }
   .cam { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: var(--radius-md, 8px); background: var(--well); display: block; }
   .cam-empty { width: 100%; height: 56px; border-radius: var(--radius-md, 8px); background: var(--well); display: grid; place-items: center; color: var(--fg-muted); font-size: 12px; }
+  /* ── Round 4 (v3 deck): chips, chip pages, scenes, settings, problems ── */
+  .chips { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+  .chip { appearance: none; font: inherit; color: inherit; text-align: left; display: flex; align-items: flex-start; gap: 10px; padding: 12px; border-radius: var(--radius-lg, 12px); border: 1px solid var(--edge-dim); background: var(--panel); cursor: pointer; transition: border-color 120ms ease, background-color 120ms ease, transform 90ms ease; }
+  .chip:hover { border-color: var(--edge); }
+  .chip:active { transform: scale(.98); }
+  .chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .chip.sel { border-color: var(--accent); }
+  .chip-ic { width: 32px; height: 32px; flex-shrink: 0; border-radius: 10px; display: grid; place-items: center; background: var(--well); color: var(--fg-muted); }
+  .chip.on .chip-ic { background: var(--accent); color: var(--on-accent); }
+  .chip.warn .chip-ic { background: rgb(230, 80, 60); color: #fff; }
+  .chip-txt { display: flex; flex-direction: column; min-width: 0; }
+  .chip-lbl { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-muted); }
+  .chip-main { font-size: 14px; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .chip-sub { font-size: 11px; color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .vhead { display: flex; align-items: center; gap: 12px; }
+  .vhead .yc-button { display: inline-flex; align-items: center; gap: 4px; }
+  .vtitle { display: flex; flex-direction: column; }
+  .vtitle h2 { font-size: 18px; font-weight: 600; }
+  .wx { display: flex; align-items: center; gap: 16px; max-width: 360px; }
+  .wx-temp { font-family: var(--font-mono); font-size: 40px; line-height: 1; }
+  .wx-cond { font-size: 15px; text-transform: capitalize; }
+  .probs { display: flex; flex-direction: column; gap: 10px; max-width: 760px; }
+  .prob { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 12px 14px; border-radius: var(--radius-md, 8px); border: 1px solid var(--edge-dim); background: var(--panel); border-left-width: 1px; }
+  .prob.high { border-color: rgb(230, 80, 60); }
+  .prob.mid { border-color: rgb(235, 160, 40); }
+  .prob-main { flex: 1; min-width: 220px; }
+  .prob-title { font-weight: 600; }
+  .prob-detail { font-size: 12px; color: var(--fg-2); margin-top: 2px; }
+  .prob-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+  .prob-acts a { text-decoration: none; }
+  .scenes { position: relative; margin: 0 8px 8px; border-radius: var(--radius-md, 8px); border: 1px solid var(--edge-dim); background: var(--well); overflow: hidden; }
+  .sc-head { appearance: none; font: inherit; font-size: 12px; color: var(--fg-2); width: 100%; height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border: 0; background: transparent; cursor: pointer; }
+  .sc-head:hover { color: var(--fg); }
+  .sc-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .sc-lbl { flex: 0 0 auto; }
+  .sc-n { color: var(--fg-muted); }
+  .sc-last { flex: 1; text-align: right; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .scenes.open .rchev { transform: rotate(180deg); }
+  .scenes:not(.open) .sc-lbl { flex: 0 0 auto; }
+  .scenes.open .sc-head .rchev { margin-left: auto; }
+  .sc-list { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 10px 10px; }
+  .scene { appearance: none; font: inherit; font-size: 12px; padding: 5px 11px; border-radius: 9999px; border: 1px solid var(--edge); background: var(--inset); color: var(--fg); cursor: pointer; transition: border-color 120ms ease, transform 90ms ease; }
+  .scene:hover { border-color: var(--accent); }
+  .scene:active { transform: scale(.95); }
+  .scene.last { border-color: var(--accent); background: var(--panel); }
+  .settings { display: flex; flex-direction: column; gap: 2px; max-width: 420px; margin-left: auto; }
+  .set-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+  .set-head h2 { font-size: 15px; font-weight: 600; }
+  .set-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; font-size: 13px; }
+  .tog { width: 38px; height: 22px; border-radius: 9999px; border: 1px solid var(--edge); background: var(--well); padding: 2px; cursor: pointer; position: relative; flex-shrink: 0; transition: background-color 120ms ease; }
+  .tog span { display: block; width: 16px; height: 16px; border-radius: 50%; background: var(--fg-muted); transition: transform 120ms ease, background-color 120ms ease; }
+  .tog[aria-checked="true"] { background: var(--accent); border-color: var(--accent); }
+  .tog[aria-checked="true"] span { transform: translateX(16px); background: var(--on-accent); }
+  .tog:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .cam-empty.note { height: auto; padding: 12px; text-align: center; line-height: 1.4; }
+  .cam-empty.note a { color: var(--accent); }
+  @media (prefers-reduced-motion: reduce) { .chip, .scene, .tog, .tog span { transition: none; } }
+
   /* ── Round 5: the TV remote ────────────────────────────────────────── */
   .play { display: flex; align-items: center; justify-content: center; gap: 10px; position: relative; }
   .play .key { width: 36px; height: 36px; }
@@ -351,13 +424,17 @@ function homeAssistantPageHtml(): string {
     <div><div class="yc-eyebrow">Home Assistant</div><h1>Home</h1></div>
     <div class="bar" id="bar"></div>
   </div>
+  <div id="settings"></div>
+  <div id="chips"></div>
   <div id="banner" class="banner" hidden></div>
+  <div id="view"></div>
   <div id="favs"></div>
   <div class="rooms" id="rooms"><div class="yc-empty">Loading your rooms…</div></div>
 </div>
 <script>
 (function () {
   var TEMPLATE = ${JSON.stringify(ROOMS_TEMPLATE)};
+  var EXTRAS = ${JSON.stringify(EXTRAS_TEMPLATE)};
   var POLL_MS = 5000, CAMERA_MS = 10000;
   var base = (window.youcoded.devices || {}).ha;
   var rooms = null, editing = false, timer = null, camTimer = null, busy = {};
@@ -385,6 +462,19 @@ function homeAssistantPageHtml(): string {
   // The slider being dragged: its value is not replaced by a check landing
   // mid-drag, so it never jumps under your finger.
   var dragging = null;
+  // Round 4. view: which chip's page is open (null = the rooms). extras:
+  // weather and low batteries. health: what Home Assistant says about its
+  // own connections (needs sign-in, failed to start, repairs), checked
+  // once a minute. prefs: the gear's switches. scenesOpen: rooms whose
+  // Scenes section is unfolded. fixing: a Fix button that is working.
+  var view = null, extras = { weather: null, low: [] }, health = { entries: [], flows: [], issues: [] }, healthAt = 0;
+  var prefs = saved.prefs && typeof saved.prefs === 'object' ? saved.prefs : {};
+  var scenesOpen = new Set(Array.isArray(saved.scenesOpen) ? saved.scenesOpen : []);
+  var settingsOpen = false, fixing = {};
+  function pref(k) { return prefs[k] !== false; }
+  // A review screen can open on a chip's page or with settings showing.
+  if (typeof saved.view === 'string') view = saved.view;
+  if (saved.settingsOpen === true) settingsOpen = true;
   if (saved.editing) editing = true;
   var $ = function (id) { return document.getElementById(id); };
 
@@ -424,6 +514,25 @@ function homeAssistantPageHtml(): string {
       // Pictures as soon as there are cameras to put them in, not on a delay.
       if (first) refreshCameras();
     }).catch(function (e) { banner(e && e.message ? e.message : 'Home Assistant could not be reached.'); });
+    call('/api/template', { template: EXTRAS }).then(function (r) {
+      try { var x = JSON.parse(r.body); extras = { weather: x.weather || null, low: Array.isArray(x.low) ? x.low : [] }; } catch (e) { /* keep the last */ }
+      if (!dragging) render();
+    }, function () { /* the rooms request reports the problem */ });
+    if (Date.now() - healthAt > 60000) loadHealth();
+  }
+  // Home Assistant's own health, over the live connection, once a minute:
+  // integrations that failed to start, ones waiting for you to sign in
+  // again, and its Repairs list. A failure here just leaves it empty.
+  function loadHealth() {
+    healthAt = Date.now();
+    registry([{ type: 'config_entries/get' }, { type: 'config_entries/flow/progress' }, { type: 'repairs/list_issues' }]).then(function (res) {
+      health = {
+        entries: Array.isArray(res[0]) ? res[0] : [],
+        flows: Array.isArray(res[1]) ? res[1] : [],
+        issues: res[2] && Array.isArray(res[2].issues) ? res[2].issues : [],
+      };
+      render();
+    }, function () { /* not fatal */ });
   }
 
   function service(dom, svc, data, id) {
@@ -589,6 +698,11 @@ function homeAssistantPageHtml(): string {
     return !!(r && r.items.some(function (x) { return domain(x.id) === 'remote' && x.device === it.device; }));
   }
   var POWER = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v8"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/></svg>';
+  var SPARK = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg>';
+  var GEAR = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>';
+  var THERMO = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 14.8V4a2 2 0 0 0-4 0v10.8a4 4 0 1 0 4 0z"/></svg>';
+  var ALERT = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>';
+  var BACK = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>';
   var SOUNDBAR = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="9" width="20" height="6" rx="2"/><path d="M6 12h.01M10 12h.01M14 12h.01M18 12h.01"/></svg>';
   var DISPLAY = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>';
   var PREV = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 20 9 12l10-8z"/><path d="M5 19V5"/></svg>';
@@ -836,8 +950,15 @@ function homeAssistantPageHtml(): string {
     if (d === 'climate') return climateHtml(it, ctx);
     if (d === 'media_player') { var k = kindOf(it); return tileHtml(it, k === 'tv' ? TV : k === 'soundbar' ? SOUNDBAR : k === 'display' ? DISPLAY : SPEAKER, true, ctx); }
     if (d === 'camera') {
-      return '<div class="' + cls + ' col"><div class="line"><div class="name">' + esc(it.name) + sub + '</div></div>' +
-        (na ? '<div class="cam-empty">Camera not responding</div>' : '<img class="cam" alt="" role="img" aria-label="' + esc(it.name) + '" data-cam="' + esc(it.id) + '"' + (camCache[it.id] ? ' src="' + camCache[it.id] + '"' : '') + '>') + editRow(it, ctx) + '</div>';
+      if (!pref('cameras')) return '';
+      // Round 4 camera fix: a camera marked unavailable may still have a
+      // picture (the Pi Zero does), and a Nest camera gives Home Assistant no
+      // still picture at all — so always ask, and when no real picture comes
+      // back, say why instead of showing a black box.
+      var cm = camNote[it.id];
+      return '<div class="' + cls + ' col"><div class="line"><div class="name">' + esc(it.name) + (na && !camCache[it.id] ? '<div class="sub">Not responding</div>' : na ? '<div class="sub">Last picture · camera not responding</div>' : '') + '</div></div>' +
+        (cm ? '<div class="cam-empty note">' + esc(cm.text) + (cm.href ? ' <a href="' + esc(base + cm.href) + '" target="_blank" rel="noopener">' + esc(cm.link) + '</a>' : '') + '</div>'
+          : '<img class="cam" alt="" role="img" aria-label="' + esc(it.name) + '" data-cam="' + esc(it.id) + '"' + (camCache[it.id] ? ' src="' + camCache[it.id] + '"' : '') + '>') + editRow(it, ctx) + '</div>';
     }
     return '';
   }
@@ -871,9 +992,29 @@ function homeAssistantPageHtml(): string {
     if (dragging === key) { var liveEl = document.querySelector('[data-gbright="' + room.id + '"]'); if (liveEl) pct = Number(liveEl.value); }
     return '<input class="lr" type="range" min="1" max="100" value="' + pct + '" style="--v:' + Math.round((pct - 1) / 99 * 100) + ';--c:' + c + '" aria-label="Brightness of every light in ' + esc(room.name) + '" data-gbright="' + esc(room.id) + '">';
   }
-  function lightsCard(room, lights, ctx) {
+  // Hue scenes, folded into a Scenes section of the room's Lights card
+  // (round 4, Q-scenes: "collapse into a scenes expandable card in the
+  // lighting group per room"). Names drop the room's own name ("Destin's
+  // Room Tokyo" → "Tokyo"); the one used last is marked.
+  function sceneName(sc, room) {
+    var n = sc.name || sc.id;
+    return n.toLowerCase().indexOf(room.name.toLowerCase() + ' ') === 0 ? n.slice(room.name.length + 1) : n;
+  }
+  function scenesHtml(room) {
+    var list = Array.isArray(room.scenes) ? room.scenes : [];
+    if (!list.length || !pref('scenes')) return '';
+    var isOpen = scenesOpen.has(room.id);
+    var last = list.reduce(function (a, b) { return Date.parse(b.last) > Date.parse(a ? a.last : 0) ? b : a; }, null);
+    var sorted = list.slice().sort(function (a, b) { return sceneName(a, room).localeCompare(sceneName(b, room)); });
+    return '<div class="scenes' + (isOpen ? ' open' : '') + '"><button class="sc-head" data-scenes="' + esc(room.id) + '" aria-expanded="' + isOpen + '">' + SPARK +
+      '<span class="sc-lbl">Scenes <span class="sc-n">' + list.length + '</span></span>' + (last && !isOpen ? '<span class="sc-last">Last: ' + esc(sceneName(last, room)) + '</span>' : '') + '<span class="rchev">' + CHEVRON + '</span></button>' +
+      (isOpen ? '<div class="sc-list">' + sorted.map(function (sc) {
+        return '<button class="scene' + (last && sc.id === last.id ? ' last' : '') + '" data-scene="' + esc(sc.id) + '">' + esc(sceneName(sc, room)) + '</button>';
+      }).join('') + '</div>' : '') + '</div>';
+  }
+  function lightsCard(room, lights, ctx, forceOpen) {
     var live = liveLights(lights), onList = live.filter(isOn), anyOn = onList.length > 0;
-    var isOpen = editing || open.has(room.id);
+    var isOpen = editing || forceOpen || open.has(room.id);
     var c = anyOn ? colourOf(onList[0]) : 'rgb(255, 190, 110)';
     var status = !live.length ? 'Not responding' : anyOn ? onList.length + ' of ' + live.length + ' on' : 'All off';
     var all = '<div class="tile all' + (anyOn ? ' on' : '') + '" style="--c:' + c + '"><span class="glow"></span><div class="line">' +
@@ -883,18 +1024,151 @@ function homeAssistantPageHtml(): string {
       '<span class="name">Lights<div class="sub">' + esc(status) + '</div></span></button>' +
       (editing ? '' : '<button class="fold" data-fold="' + esc(room.id) + '" aria-expanded="' + isOpen + '" aria-label="' + (isOpen ? 'Hide' : 'Show') + ' each light in ' + esc(room.name) + '" title="' + (isOpen ? 'Hide each light' : 'Show each light') + '">' + CHEVRON + '</button>') +
       '</div>' + groupBright(room, live, onList, c) + '</div>';
-    return '<div class="lights' + (anyOn ? ' on' : '') + '" style="--c:' + c + '"><span class="glow"></span>' + all + (isOpen ? '<div class="lights-body">' + lights.map(function (it) { return itemHtml(it, ctx); }).join('') + '</div>' : '') + '</div>';
+    return '<div class="lights' + (anyOn ? ' on' : '') + '" style="--c:' + c + '"><span class="glow"></span>' + all + scenesHtml(room) + (isOpen ? '<div class="lights-body">' + lights.map(function (it) { return itemHtml(it, ctx); }).join('') + '</div>' : '') + '</div>';
   }
 
   var camCache = {};
+  var camNote = {};
   function refreshCameras() {
-    if (!base || document.hidden) return;
-    document.querySelectorAll('img[data-cam]').forEach(function (img) {
-      var id = img.getAttribute('data-cam');
+    if (!base || document.hidden || !rooms) return;
+    allItems().forEach(function (x) {
+      var it = x.it, id = it.id;
+      if (domain(id) !== 'camera') return;
       window.youcoded.fetch(base + '/api/camera_proxy/' + id, { as: 'picture' }).then(function (r) {
-        if (r.status === 200) { camCache[id] = r.body; img.src = r.body; }
+        // A tiny picture is Home Assistant's blank stand-in, not a real one.
+        if (r.status === 200 && String(r.body).length > 6000) { camCache[id] = r.body; delete camNote[id]; var img = document.querySelector('img[data-cam="' + id + '"]'); if (img) img.src = r.body; else render(); return; }
+        var nest = /nest|google/i.test((it.maker || '') + ' ' + (it.model || ''));
+        var auth = health.flows.some(function (f) { return f.handler === 'nest' && f.context && f.context.source === 'reauth'; });
+        camNote[id] = nest && auth ? { text: 'No picture: Google Nest needs you to sign in again.', link: 'Sign in', href: '/config/integrations/integration/nest' }
+          : nest ? { text: 'This Nest camera only streams live video, so there is no still picture between doorbell rings and motion.' }
+          : { text: 'This camera sent no picture.' };
+        render();
       }, function () { /* the next round tries again */ });
     });
+  }
+
+  // ── Problems (round 4: "actionable error states that help me fix issues")
+  // Each problem says what is wrong in plain words and offers the fix that
+  // works: sign in again, reconnect (reload the integration), or open the
+  // right screen in Home Assistant.
+  function entryById(id) { return health.entries.filter(function (e) { return e.entry_id === id; })[0] || null; }
+  function prettyDomain(d) { return ({ hue: 'Philips Hue', nest: 'Google Nest', cast: 'Google Cast', sonos: 'Sonos', androidtv_remote: 'Android TV Remote', dlna_dmr: 'DLNA', frigate: 'Frigate', mqtt: 'MQTT' })[d] || (d ? d.charAt(0).toUpperCase() + d.slice(1).replace(/_/g, ' ') : 'An integration'); }
+  function ago(iso) {
+    var t = Date.parse(iso); if (!t) return '';
+    var m = Math.round((Date.now() - t) / 60000);
+    return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : m < 1440 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' days ago';
+  }
+  // One cause, one problem: a connection that needs signing in, or that
+  // failed to start, also covers every device that comes through it, so
+  // those devices are named inside it rather than listed again.
+  function problems() {
+    var out = [];
+    var affected = {};
+    (rooms || []).forEach(function (r) { r.items.forEach(function (it) { if (it.entry && domain(it.id) !== 'remote') (affected[it.entry] = affected[it.entry] || []).push(it.name); }); });
+    var covered = {};
+    var authFlows = health.flows.filter(function (f) { return f.context && f.context.source === 'reauth'; });
+    authFlows.forEach(function (f) {
+      var name = (f.context.title_placeholders && f.context.title_placeholders.name) || prettyDomain(f.handler);
+      var hit = f.context.entry_id ? affected[f.context.entry_id] || [] : [];
+      if (f.context.entry_id) covered[f.context.entry_id] = 1;
+      out.push({ key: 'auth:' + f.flow_id, sev: 'high', icon: 'key', title: prettyDomain(f.handler) + ' needs you to sign in again',
+        detail: 'Its sign-in for ' + name + ' expired. Until you sign in, its devices cannot be controlled' + (f.handler === 'nest' ? ' and its cameras show no picture' : '') + '.' +
+          (hit.length ? ' Affects: ' + hit.join(', ') + '.' : ''),
+        actions: [{ label: 'Sign in again', href: '/config/integrations/integration/' + f.handler }] });
+    });
+    health.entries.filter(function (e) { return !e.disabled_by && !covered[e.entry_id] && /setup_error|setup_retry|migration_error|failed_unload/.test(e.state || ''); }).forEach(function (e) {
+      covered[e.entry_id] = 1;
+      var hit = affected[e.entry_id] || [];
+      out.push({ key: 'entry:' + e.entry_id, sev: 'high', icon: 'plug', title: prettyDomain(e.domain) + (e.title && e.title !== prettyDomain(e.domain) ? ' (' + e.title + ')' : '') + (e.state === 'setup_retry' ? ' cannot connect' : ' failed to start'),
+        detail: (e.reason ? 'Home Assistant says: ' + e.reason + '.' : 'Home Assistant could not start it.') + (hit.length ? ' Affects: ' + hit.join(', ') + '.' : ''),
+        actions: [{ label: 'Try again', reload: e.entry_id }, { label: 'Open', href: '/config/integrations/integration/' + e.domain }] });
+    });
+    // Devices on this page that stopped answering, grouped by the
+    // integration they come through, so one Reconnect fixes them all.
+    var gone = {};
+    (rooms || []).forEach(function (r) { r.items.forEach(function (it) {
+      if (!gone_(it) || hidden.has(it.id) || domain(it.id) === 'remote' || remoteDevice(it) || covered[it.entry]) return;
+      var k = it.entry || 'none';
+      (gone[k] = gone[k] || []).push({ it: it, room: r.name });
+    }); });
+    Object.keys(gone).forEach(function (k) {
+      var list = gone[k], e = entryById(k), dom = e ? e.domain : null;
+      var who = e ? prettyDomain(dom) : (list[0].it.maker || 'Some');
+      out.push({ key: 'gone:' + k, sev: 'mid', icon: 'off', title: list.length === 1 ? list[0].it.name + ' is not responding' : list.length + ' ' + who + ' devices are not responding',
+        detail: list.map(function (x) { return x.it.name + ' (' + x.room + (x.it.since ? ', ' + ago(x.it.since) : '') + ')'; }).join(' · ') + '. ' +
+          (dom === 'hue' ? 'Usually the bulb lost power (a wall switch is off), or the Hue bridge is overloaded; Reconnect fixes the second.' : 'Check it has power and is on the network; Reconnect asks Home Assistant to try again.'),
+        actions: (e ? [{ label: 'Reconnect ' + prettyDomain(dom), reload: e.entry_id }] : []).concat(list[0].it.device ? [{ label: 'Open', href: '/config/devices/device/' + list[0].it.device }] : []) });
+    });
+    extras.low.forEach(function (b) {
+      out.push({ key: 'bat:' + b.id, sev: b.level < 10 ? 'mid' : 'low', icon: 'battery', title: b.name.replace(/ ?battery( level)?$/i, '') + ' battery is at ' + Math.round(b.level) + '%',
+        detail: (b.room ? b.room + '. ' : '') + 'Replace or charge it before it stops working.',
+        actions: b.device ? [{ label: 'Open', href: '/config/devices/device/' + b.device }] : [] });
+    });
+    health.issues.filter(function (i) { return !i.ignored && !i.dismissed_version; }).forEach(function (i) {
+      out.push({ key: 'issue:' + i.domain + i.issue_id, sev: i.severity === 'error' || i.severity === 'critical' ? 'high' : 'low', icon: 'wrench',
+        title: prettyDomain(i.domain) + ': ' + String(i.translation_key || i.issue_id).replace(/_/g, ' '),
+        detail: 'Home Assistant has a repair waiting for this.', actions: [{ label: 'Open Repairs', href: '/config/repairs' }] });
+    });
+    var rank = { high: 0, mid: 1, low: 2 };
+    return out.sort(function (a, b) { return rank[a.sev] - rank[b.sev]; });
+  }
+  function gone_(it) { return gone(it); }
+
+  // ── The four chips (round 4: "only those chips, but they should all
+  // dynamically update to display different information").
+  function allItems() { var a = []; (rooms || []).forEach(function (r) { r.items.forEach(function (it) { if (!hidden.has(it.id)) a.push({ it: it, room: r }); }); }); return a; }
+  function chipData() {
+    var items = allItems();
+    var lights = items.filter(function (x) { return isLight(x.it); });
+    var lit = lights.filter(function (x) { return !gone(x.it) && isOn(x.it); });
+    var litRooms = {}; lit.forEach(function (x) { litRooms[x.room.id] = 1; });
+    var nr = lights.filter(function (x) { return gone(x.it); }).length;
+    var media = items.filter(function (x) { return domain(x.it.id) === 'media_player' && !remoteDevice(x.it); });
+    var playing = media.filter(function (x) { return x.it.state === 'playing'; });
+    var tvsOn = media.filter(function (x) { return isTv(x.it) && isOn(remoteFor(x.it, x.room) || x.it) && !gone(x.it); });
+    var clim = items.filter(function (x) { return domain(x.it.id) === 'climate'; });
+    var th = clim.filter(function (x) { return !gone(x.it); })[0];
+    var w = extras.weather;
+    var probs = problems();
+    var nLit = lit.length, nRooms = Object.keys(litRooms).length;
+    return [
+      { id: 'lights', label: 'Lights', icon: BULB, on: nLit > 0,
+        main: nLit ? nLit + ' on' + (nRooms > 1 ? ' in ' + nRooms + ' rooms' : '') : 'All off', sub: nr ? nr + ' not responding' : '' },
+      { id: 'media', label: 'Media', icon: TV, on: playing.length + tvsOn.length > 0,
+        main: playing.length ? playing.length + ' playing' : tvsOn.length ? tvsOn.length + ' TV' + (tvsOn.length > 1 ? 's' : '') + ' on' : 'All quiet',
+        sub: playing.length && tvsOn.length ? tvsOn.length + ' TV on' : '' },
+      { id: 'climate', label: 'Climate', icon: THERMO, on: !!(th && th.it.state !== 'off'),
+        main: w && w.temp != null ? Math.round(w.temp) + '° ' + condName(w.state) : th && th.it.cur != null ? th.it.cur + '° inside' : 'No climate',
+        sub: th ? (th.it.cur != null ? th.it.cur + '° inside' : '') + (th.it.state && th.it.state !== 'off' && th.it.target != null ? ' · ' + (MODE_NAMES[th.it.state] || th.it.state) + ' to ' + th.it.target + '°' : th.it.state === 'off' ? ' · off' : '') : '' },
+      { id: 'problems', label: 'Problems', icon: ALERT, on: probs.length > 0, warn: probs.some(function (p) { return p.sev === 'high'; }),
+        main: probs.length ? probs.length + ' to fix' : 'All good', sub: probs.length ? probs[0].title : '' },
+    ].filter(function (c) { return pref('chip-' + c.id); });
+  }
+  var CONDITIONS = { 'clear-night': 'clear', sunny: 'sunny', cloudy: 'cloudy', partlycloudy: 'partly cloudy', rainy: 'rain', pouring: 'heavy rain', snowy: 'snow', 'snowy-rainy': 'sleet', fog: 'fog', windy: 'windy', 'windy-variant': 'windy', lightning: 'storms', 'lightning-rainy': 'storms', hail: 'hail', exceptional: '' };
+  function condName(c) { return CONDITIONS[c] != null ? CONDITIONS[c] : String(c || '').replace(/-/g, ' '); }
+  function chipsHtml() {
+    if (!rooms) return '';
+    var cs = chipData();
+    if (!cs.length) return '';
+    return '<div class="chips" role="group" aria-label="Your home at a glance">' + cs.map(function (c) {
+      return '<button class="chip' + (c.on ? ' on' : '') + (c.warn ? ' warn' : '') + (view === c.id ? ' sel' : '') + '" data-view="' + c.id + '" aria-pressed="' + (view === c.id) + '">' +
+        '<span class="chip-ic">' + c.icon + '</span><span class="chip-txt"><span class="chip-lbl">' + c.label + '</span><span class="chip-main">' + esc(c.main) + '</span>' +
+        (c.sub ? '<span class="chip-sub">' + esc(c.sub) + '</span>' : '') + '</span></button>';
+    }).join('') + '</div>';
+  }
+
+  // ── The gear's settings (round 4, Q-settings: a gear next to Edit).
+  var PREF_ROWS = [
+    ['chip-lights', 'Lights chip'], ['chip-media', 'Media chip'], ['chip-climate', 'Climate chip'], ['chip-problems', 'Problems chip'],
+    ['scenes', 'Hue scenes in each room'], ['favourites', 'Favourites row'], ['cameras', 'Camera pictures'],
+  ];
+  function settingsHtml() {
+    if (!settingsOpen) return '';
+    return '<div class="settings yc-card" role="group" aria-label="Page settings"><div class="set-head"><h2>Page settings</h2><button class="yc-button yc-button--sm yc-button--ghost" data-act="settings">Close</button></div>' +
+      PREF_ROWS.map(function (r) {
+        var on = pref(r[0]);
+        return '<label class="set-row"><span>' + r[1] + '</span><button class="tog" role="switch" aria-checked="' + on + '" data-pref="' + r[0] + '"><span></span></button></label>';
+      }).join('') + '</div>';
   }
 
   function barHtml() {
@@ -908,17 +1182,18 @@ function homeAssistantPageHtml(): string {
         '<button class="yc-button yc-button--sm yc-button--ghost" data-act="house-off-no">Cancel</button></div>'
       : '<button class="yc-button yc-button--sm" data-act="house-off"' + (lit.length && !editing ? '' : ' disabled') + '>Everything off</button>';
     var count = hidden.size && !editing ? '<span class="yc-caption">' + hidden.size + ' hidden</span>' : '';
-    return count + off + '<button class="yc-button yc-button--sm' + (editing ? ' yc-button--primary' : '') + '" data-act="edit" aria-pressed="' + editing + '">' + (editing ? 'Done' : 'Edit') + '</button>';
+    return count + off + '<button class="yc-button yc-button--sm' + (editing ? ' yc-button--primary' : '') + '" data-act="edit" aria-pressed="' + editing + '">' + (editing ? 'Done' : 'Edit') + '</button>' +
+      '<button class="yc-button yc-button--sm yc-button--icon gear" data-act="settings" aria-pressed="' + settingsOpen + '" aria-label="Page settings" title="Page settings">' + GEAR + '</button>';
   }
 
-  function roomHtml(room, roomIds) {
+  function roomHtml(room, roomIds, forceOpen) {
     var key = 'r:' + room.id;
     var items = ordered(room.items.filter(function (it) { return (editing || !hidden.has(it.id)) && domain(it.id) !== 'remote' && !remoteDevice(it); }), key, function (x) { return x.id; });
     if (!items.length) return '';
     var ctx = { key: key, ids: items.map(function (x) { return x.id; }) };
     var lights = items.filter(isLight), rest = items.filter(function (it) { return !isLight(it); });
     // One light needs no card: its own tile already does what All would.
-    var lightsHtml = lights.length > 1 ? lightsCard(room, lights, ctx) : lights.map(function (it) { return itemHtml(it, ctx); }).join('');
+    var lightsHtml = lights.length > 1 ? lightsCard(room, lights, ctx, forceOpen) : lights.map(function (it) { return itemHtml(it, ctx); }).join('');
     var i = roomIds.indexOf(room.id);
     var tools = editing
       ? ib('up', room.id, UP, 'Move ' + room.name + ' up', ' data-key="rooms"' + (i <= 0 ? ' disabled' : '')) +
@@ -938,15 +1213,55 @@ function homeAssistantPageHtml(): string {
     drawn[id] = html;
     $(id).innerHTML = html;
   }
+  // A chip's page (round 4, Q-chip-tap: "an organized page dedicated to
+  // optimal ux for managing the selected item"). It replaces the rooms
+  // until you go back.
+  function viewHtml() {
+    var c = chipData().filter(function (x) { return x.id === view; })[0];
+    var head = '<div class="vhead"><button class="yc-button yc-button--sm yc-button--ghost" data-view="' + view + '">' + BACK + 'Home</button>' +
+      '<div class="vtitle"><h2>' + (c ? c.label : '') + '</h2>' + (c ? '<span class="yc-caption">' + esc(c.main + (c.sub ? ' · ' + c.sub : '')) + '</span>' : '') + '</div></div>';
+    var body = '';
+    if (view === 'problems') {
+      var ps = problems();
+      body = ps.length ? '<div class="probs">' + ps.map(function (p) {
+        return '<div class="prob ' + p.sev + '"><div class="prob-main"><div class="prob-title">' + esc(p.title) + '</div><div class="prob-detail">' + esc(p.detail) + '</div></div>' +
+          '<div class="prob-acts">' + p.actions.map(function (a) {
+            return a.reload ? '<button class="yc-button yc-button--sm' + (a === p.actions[0] ? ' yc-button--primary' : '') + '" data-reload="' + esc(a.reload) + '"' + (fixing[a.reload] ? ' disabled' : '') + '>' + (fixing[a.reload] ? 'Working\u2026' : esc(a.label)) + '</button>'
+              : '<a class="yc-button yc-button--sm' + (a === p.actions[0] ? ' yc-button--primary' : '') + '" href="' + esc(base + a.href) + '" target="_blank" rel="noopener">' + esc(a.label) + '</a>';
+          }).join('') + '</div></div>';
+      }).join('') + '</div>' : '<div class="yc-empty">Nothing to fix. Every device on this page is answering.</div>';
+    } else {
+      var keep = view === 'lights' ? isLight : view === 'media' ? function (it) { return domain(it.id) === 'media_player' || domain(it.id) === 'remote'; } : function (it) { return domain(it.id) === 'climate'; };
+      var list = ordered(rooms, 'rooms', function (r) { return r.id; }).map(function (r) {
+        return { id: r.id, name: r.name, scenes: view === 'lights' ? r.scenes : [], items: r.items.filter(keep) };
+      }).filter(function (r) { return r.items.some(function (it) { return !hidden.has(it.id) && domain(it.id) !== 'remote'; }); });
+      var ids = list.map(function (r) { return r.id; });
+      if (view === 'climate') body += weatherHtml();
+      body += '<div class="rooms">' + list.map(function (r) { return roomHtml(r, ids, view === 'lights'); }).join('') + '</div>';
+    }
+    return head + body;
+  }
+  function weatherHtml() {
+    var w = extras.weather;
+    if (!w) return '';
+    return '<div class="yc-card wx"><div class="wx-temp">' + (w.temp != null ? Math.round(w.temp) + '°' : '—') + '</div><div><div class="wx-cond">' + esc(condName(w.state) || w.state) + '</div>' +
+      '<div class="yc-caption">Outside' + (w.humidity != null ? ' · ' + Math.round(w.humidity) + '% humidity' : '') + '</div></div></div>';
+  }
+
   function render() {
     $('root').classList.toggle('editing', editing);
     put('bar', barHtml());
+    put('settings', settingsHtml());
+    put('chips', chipsHtml());
     if (!rooms) return;
+    $('root').classList.toggle('in-view', !!view);
+    if (view) { put('view', viewHtml()); put('favs', ''); put('rooms', ''); return; }
+    put('view', '');
     var favItems = [];
     rooms.forEach(function (r) { r.items.forEach(function (it) { if (fav.has(it.id) && (editing || !hidden.has(it.id))) favItems.push(it); }); });
     favItems = ordered(favItems, 'fav', function (x) { return x.id; });
     var favCtx = { key: 'fav', ids: favItems.map(function (x) { return x.id; }) };
-    put('favs', favItems.length
+    put('favs', favItems.length && pref('favourites')
       ? '<section class="yc-card room"><div class="room-head fav-head">' + STAR_ON + '<h2>Favourites</h2></div><div class="fav-grid">' + favItems.map(function (it) { return itemHtml(it, favCtx); }).join('') + '</div></section>'
       : '');
     var list = ordered(rooms.filter(function (r) { return r.items.some(function (it) { return editing || !hidden.has(it.id); }); }), 'rooms', function (r) { return r.id; });
@@ -1009,6 +1324,30 @@ function homeAssistantPageHtml(): string {
     if (!t) return;
     var act = t.getAttribute('data-act');
     if (act) { onAct(act, t.getAttribute('data-id'), t); return; }
+    var vw = t.getAttribute('data-view');
+    if (vw) { view = view === vw ? null : vw; settingsOpen = false; render(); window.scrollTo(0, 0); if (vw === 'problems') loadHealth(); return; }
+    var pf = t.getAttribute('data-pref');
+    if (pf) { prefs[pf] = !pref(pf); persist({ prefs: prefs }); render(); return; }
+    var scn = t.getAttribute('data-scenes');
+    if (scn) { if (scenesOpen.has(scn)) scenesOpen.delete(scn); else scenesOpen.add(scn); persist({ scenesOpen: Array.from(scenesOpen) }); render(); return; }
+    var sc = t.getAttribute('data-scene');
+    if (sc) {
+      // Mark it as the one used last straight away; the lights follow.
+      rooms.forEach(function (r) { (r.scenes || []).forEach(function (x) { if (x.id === sc) x.last = new Date().toISOString(); }); });
+      service('scene', 'turn_on', { entity_id: sc }, sc);
+      render();
+      return;
+    }
+    var rl = t.getAttribute('data-reload');
+    if (rl) {
+      // Reconnect: Home Assistant reloads that integration, which is what
+      // fixed the Hue bridge earlier.
+      fixing[rl] = true; render();
+      call('/api/config/config_entries/entry/' + encodeURIComponent(rl) + '/reload', {})
+        .catch(function (e) { banner(e && e.message ? e.message : 'Home Assistant could not reload it.'); })
+        .then(function () { setTimeout(function () { delete fixing[rl]; healthAt = 0; load(); }, 3000); });
+      return;
+    }
     var mp = t.getAttribute('data-mp');
     if (mp) {
       var svc = t.getAttribute('data-svc');
@@ -1101,6 +1440,7 @@ function homeAssistantPageHtml(): string {
       return;
     }
     if (act === 'house-off') { confirmOff = true; render(); return; }
+    if (act === 'settings') { settingsOpen = !settingsOpen; render(); return; }
     if (act === 'house-off-no') { confirmOff = false; render(); return; }
     if (act === 'house-off-yes') {
       confirmOff = false;
@@ -1266,6 +1606,8 @@ function homeAssistantPageHtml(): string {
     order = d.order && typeof d.order === 'object' ? d.order : {};
     remoteOpen = new Set(Array.isArray(d.remote) ? d.remote : []);
     sound = d.sound && typeof d.sound === 'object' ? d.sound : {};
+    prefs = d.prefs && typeof d.prefs === 'object' ? d.prefs : {};
+    scenesOpen = new Set(Array.isArray(d.scenesOpen) ? d.scenesOpen : []);
     render();
   });
   start();

@@ -13,6 +13,7 @@ interface Thing {
   rgb?: number[] | null; k?: number | null;
   modesHvac?: string[]; action?: string | null;
   model?: string; dc?: string; activity?: string; app?: string; source?: string; muted?: boolean;
+  maker?: string; entry?: string; since?: string;
 }
 
 function seed(): Array<{ id: string; name: string; items: Thing[] }> {
@@ -50,7 +51,20 @@ function seed(): Array<{ id: string; name: string; items: Thing[] }> {
   ];
 }
 
-const ROOMS = seed();
+const ROOMS: Array<{ id: string; name: string; items: Thing[]; scenes?: Array<{ id: string; name: string; last: string }> }> = seed();
+// Round 4: what the page shows about where each thing comes from, and Hue
+// scenes per room, so chips, Problems and Scenes have something to show.
+const MAKERS: Record<string, [string, string]> = { light: ['Signify Netherlands B.V.', 'entry_hue'], climate: ['Google Nest', 'entry_nest'], camera: ['Google Nest', 'entry_nest'], remote: ['Google', 'entry_atv'] };
+for (const r of ROOMS) for (const t of r.items) {
+  const d = t.id.split('.')[0];
+  const [maker, entry] = MAKERS[d] ?? (t.model?.startsWith('Sonos') ? ['Sonos', 'entry_sonos'] : ['Google Inc.', 'entry_cast']);
+  t.maker ??= maker; t.entry ??= entry;
+  t.since = new Date(Date.now() - 3 * 3600_000).toISOString();
+}
+const ago = (h: number) => new Date(Date.now() - h * 3600_000).toISOString();
+ROOMS[0].scenes = ['Tokyo', 'Relax', 'Read', 'Concentrate', 'Energize', 'Nightlight', 'TV Time', 'Sunset Glow', 'Galaxy', 'Malibu pink']
+  .map((n, i) => ({ id: `scene.destins_room_${n.toLowerCase().replace(/ /g, '_')}`, name: `Destin's Room ${n}`, last: ago(i === 6 ? 1 : 30 + i) }));
+ROOMS[1].scenes = ['Relax', 'Read', 'Bright'].map((n, i) => ({ id: `scene.living_room_${n.toLowerCase()}`, name: `Living Room ${n}`, last: ago(40 + i) }));
 
 function find(id: string): Thing | undefined {
   for (const r of ROOMS) for (const t of r.items) if (t.id === id) return t;
@@ -81,11 +95,22 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
   // item carries the id of the device it belongs to (`device_id(e)`), which
   // a room move needs (fakeHomeAssistantSocket).
   if (url.pathname === '/api/template') {
+    // The page's second template asks for the weather and low batteries.
+    if ((req.body ?? '').includes('EXTRAS')) {
+      return ok(JSON.stringify({
+        weather: { state: 'clear-night', temp: 77, unit: '°F', humidity: 58 },
+        low: [{ id: 'sensor.destin_s_light_switch_battery', name: "Destin's light switch battery", level: 1, device: 'dev_switch', room: "Destin's Room" },
+          { id: 'sensor.bathroom_button_battery', name: 'Bathroom button battery', level: 15, device: 'dev_button', room: "Grandma's Bathroom" }],
+      }));
+    }
     return ok(JSON.stringify(ROOMS.filter((r) => r.items.length).map((r) => ({ ...r, items: r.items.map((t) => ({ ...t, device: deviceOf(t.id) })) }))));
   }
   const cam = /^\/api\/camera_proxy\/(.+)$/.exec(url.pathname);
   if (cam) {
     const t = find(cam[1]);
+    // A Nest camera gives Home Assistant no still picture: it answers with
+    // its small blank stand-in, as the real house does.
+    if (t?.maker === 'Google Nest') return { ok: true, status: 200, headers: { 'content-type': 'image/jpeg' }, body: 'data:image/jpeg;base64,' + 'A'.repeat(3500) };
     return { ok: true, status: 200, headers: { 'content-type': 'image/svg+xml' }, body: snapshot(t?.name ?? cam[1]) };
   }
   const svc = /^\/api\/services\/([a-z_]+)\/([a-z_]+)$/.exec(url.pathname);
@@ -162,6 +187,17 @@ function answerOne(raw: string): string | null {
   const { id, type } = m;
   switch (type) {
     case 'config/area_registry/list': return reply(id, AREAS);
+    // Round 4: Home Assistant's own health, for the Problems chip.
+    case 'config_entries/get': return reply(id, [
+      { entry_id: 'entry_hue', domain: 'hue', title: 'Hue Bridge', state: 'loaded', disabled_by: null },
+      { entry_id: 'entry_nest', domain: 'nest', title: 'Gasparac Household', state: 'setup_error', reason: 'the sign-in expired', disabled_by: null },
+      { entry_id: 'entry_cast', domain: 'cast', title: 'Google Cast', state: 'loaded', disabled_by: null },
+      { entry_id: 'entry_sonos', domain: 'sonos', title: 'Sonos', state: 'loaded', disabled_by: null },
+    ]);
+    case 'config_entries/flow/progress': return reply(id, [
+      { flow_id: 'flow_nest', handler: 'nest', step_id: 'reauth_confirm', context: { source: 'reauth', entry_id: 'entry_nest', title_placeholders: { name: 'Gasparac Household' } } },
+    ]);
+    case 'repairs/list_issues': return reply(id, { issues: [] });
     case 'config/area_registry/create': {
       const name = String(m.name ?? '').trim();
       if (!name) return reply(id, null, 'A room needs a name.');
