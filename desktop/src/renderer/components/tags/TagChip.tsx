@@ -36,7 +36,8 @@ export function TagChip({ tag, onRemove, className = '' }: {
       return (
         <span className={`shrink-0 inline-flex items-center gap-1 pl-1 pr-1.5 py-[1px] rounded-full border text-4xs leading-none text-fg-2 ${className}`}
           style={{ backgroundColor: `color-mix(in srgb, ${c} 15%, transparent)`, borderColor: `color-mix(in srgb, ${c} 30%, transparent)` }}>
-          <span className="flex shrink-0" style={{ color: c }}><TagGlyph className="w-2.5 h-2.5" /></span>
+          {/* Filled icon (pick-menus-7#PM7-1: "want filled icons on the expanded cards"). */}
+          <span className="flex shrink-0" style={{ color: c }}><FilledTag className="w-3 h-3" /></span>
           {tag.label}{remove}
         </span>
       );
@@ -93,8 +94,6 @@ export function MoreTagsChip({ names, className = '' }: { names: string[]; class
   );
 }
 
-// TRIAL (pick-menus-7): outlined or filled icons in the stack.
-const STACK_FILLED = true as boolean;
 
 /** A solid tag with a ring in the panel colour, so overlapped tags stay apart. */
 function FilledTag({ className = '' }: { className?: string }) {
@@ -117,8 +116,8 @@ export function TagIconStack({ tags, className = '' }: { tags: Pick<TagRecord, '
   return (
     <span className={`inline-flex items-center ${className}`} aria-hidden>
       {tags.map((t, i) => (
-        <span key={i} className={`flex ${i ? '-ml-1.5' : ''}`} style={{ color: tagColour(t.color), zIndex: tags.length - i }}>
-          {STACK_FILLED ? <FilledTag className="w-3.5 h-3.5" /> : <TagGlyph className="w-3 h-3" />}
+        <span key={i} className={`flex ${i ? '-ml-2' : ''}`} style={{ color: tagColour(t.color), zIndex: tags.length - i }}>
+          <FilledTag className="w-3.5 h-3.5" />
         </span>
       ))}
     </span>
@@ -147,8 +146,8 @@ export function TagStack({ tags }: { tags: Pick<TagRecord, 'label' | 'color'>[] 
           {tags.map((t, i) => <TagChip key={i} tag={t} />)}
         </span>
       ) : (
-        <span className="inline-flex items-center gap-1 pl-1 pr-1.5 py-[1px] rounded-full border border-edge-dim bg-inset text-4xs leading-none text-fg-2">
-          <TagIconStack tags={tags} />{tags.length}
+        <span className="inline-flex items-center px-1 py-[1px] rounded-full border border-edge-dim bg-inset text-4xs leading-none text-fg-2">
+          <TagIconStack tags={tags} />
         </span>
       )}
     </span>

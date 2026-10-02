@@ -261,7 +261,7 @@ export function seed(scenario: ScenarioId): MockState {
     // Enough variety for the All Sessions menu's tag marks to be reviewable:
     // a priority + tag row, a two-tag row, and a row whose only mark is a note.
     meta: {
-      'wb-1': { tags: ['tag_work', 'tag_bug', 'tag_idea'], note: '', flags: { priority: true } }, // TRIAL pick-menus-6: 3 tags
+      'wb-1': { tags: ['tag_work', 'tag_bug'], note: '', flags: { priority: true } }, // TRIAL: two of three tags, so the picker shows both states
       'wb-3': { tags: ['tag_bug', 'tag_idea'], note: '', flags: {} },
       'wb-5': { tags: [], note: 'check the openrouter key before resuming', flags: {} },
     },
