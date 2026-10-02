@@ -178,8 +178,8 @@ function ChipEditorPopup({ open, chips, setChips, installed, screenSub, onClose 
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per request
   }, [screenSub, chips.length > 1]);
 
-  // Esc on a page goes back to the shelves before it closes the popup (LIFO stack).
-  useEscClose(open && view.kind !== 'list', toList);
+  // Esc closes the popup from any page, like every other popup with a back arrow
+  // (the Dialog owns it); the back arrow is the way to the shelves.
 
   const drag = useChipDrag(chips, setChips);
 
