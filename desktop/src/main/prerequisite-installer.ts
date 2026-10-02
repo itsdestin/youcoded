@@ -580,30 +580,65 @@ function isMuslLinux(): boolean {
   }
 }
 
+/**
+ * Windows: install `pkg` with winget, treating "it's already there" as success.
+ *
+ * WHY check before and after with a fresh PATH (clean Windows 11 VM, 2026-10-02): the running
+ * app's PATH dates from launch, so a tool installed since then (by an earlier step, another
+ * installer, or the user) looks missing. winget then refuses ("already installed", non-zero exit)
+ * and setup dead-ended on "Command failed: winget install Git.Git" although Git was on disk.
+ * Re-reading PATH and re-detecting first, and again when winget fails, turns both into success.
+ * Returns `done: false` when winget ran fine, so the caller's usual post-install check runs.
+ */
+// exported (with injectable deps) for the pinning test in prerequisite-installer-pins.test.ts
+export async function installWithWinget(
+  pkg: string,
+  detect: () => Promise<DetectionResult>,
+  deps: {
+    refresh: () => void;
+    winget: () => Promise<DetectionResult>;
+    run: (cmd: string, args: string[], opts: { timeout: number }) => Promise<unknown>;
+  } = { refresh: refreshPath, winget: detectWinget, run: runCommand },
+): Promise<{ done: true; result: { success: boolean; error?: string } } | { done: false }> {
+  deps.refresh();
+  const before = await detect();
+  if (before.installed) {
+    log('INFO', 'prereq', `${pkg} already installed: ${before.version}`);
+    return { done: true, result: { success: true } };
+  }
+  // WHY: winget is not guaranteed to exist on Windows Server, LTSC builds,
+  // or sandboxed machines. Run upfront detection to give a useful error
+  // instead of hardcoding a path or failing cryptically on spawn.
+  const wingetCheck = await deps.winget();
+  if (!wingetCheck.installed) {
+    return { done: true, result: { success: false, error: wingetCheck.error } };
+  }
+  try {
+    await deps.run(
+      'winget',
+      ['install', pkg, '--silent', '--accept-package-agreements', '--accept-source-agreements'],
+      { timeout: 300000 },
+    );
+  } catch (err) {
+    deps.refresh();
+    const after = await detect();
+    if (after.installed) {
+      log('INFO', 'prereq', `winget reported a failure but ${pkg} is installed: ${after.version}`);
+      return { done: true, result: { success: true } };
+    }
+    throw err;
+  }
+  return { done: false };
+}
+
 /** Install Node.js silently. */
 export async function installNode(): Promise<{ success: boolean; error?: string }> {
   try {
     log('INFO', 'prereq', 'Installing Node.js...');
 
     if (process.platform === 'win32') {
-      // WHY: winget is not guaranteed to exist on Windows Server, LTSC builds,
-      // or sandboxed machines. Run upfront detection to give a useful error
-      // instead of hardcoding a path or failing cryptically on spawn.
-      const wingetCheck = await detectWinget();
-      if (!wingetCheck.installed) {
-        return { success: false, error: wingetCheck.error };
-      }
-      await runCommand(
-        'winget',
-        [
-          'install',
-          'OpenJS.NodeJS.LTS',
-          '--silent',
-          '--accept-package-agreements',
-          '--accept-source-agreements',
-        ],
-        { timeout: 300000 },
-      );
+      const winget = await installWithWinget('OpenJS.NodeJS.LTS', detectNode);
+      if (winget.done) return winget.result;
     } else if (process.platform === 'darwin' || process.platform === 'linux') {
       // Fix (v1.2.4): the official nodejs.org prebuilt tarballs are glibc-linked
       // and will not exec on musl-libc distros (Alpine). Detect musl up front
@@ -676,24 +711,8 @@ export async function installGit(): Promise<{ success: boolean; error?: string }
     log('INFO', 'prereq', 'Installing Git...');
 
     if (process.platform === 'win32') {
-      // WHY: winget is not guaranteed to exist on Windows Server, LTSC builds,
-      // or sandboxed machines. Run upfront detection to give a useful error
-      // instead of hardcoding a path or failing cryptically on spawn.
-      const wingetCheck = await detectWinget();
-      if (!wingetCheck.installed) {
-        return { success: false, error: wingetCheck.error };
-      }
-      await runCommand(
-        'winget',
-        [
-          'install',
-          'Git.Git',
-          '--silent',
-          '--accept-package-agreements',
-          '--accept-source-agreements',
-        ],
-        { timeout: 300000 },
-      );
+      const winget = await installWithWinget('Git.Git', detectGit);
+      if (winget.done) return winget.result;
     } else if (process.platform === 'darwin') {
       // `xcode-select --install` pops a system GUI dialog asking the user to
       // Agree / Install. Installation is asynchronous and driven by the user

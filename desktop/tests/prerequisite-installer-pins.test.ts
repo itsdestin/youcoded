@@ -7,6 +7,7 @@ import {
   getRegPath,
   getPowerShellPath,
   buildRefreshedPath,
+  installWithWinget,
 } from '../src/main/prerequisite-installer';
 
 // Invariant 1: runCommand flips `shell: true` ONLY for Windows .cmd/.bat shims
@@ -90,5 +91,45 @@ describe('buildRefreshedPath (Windows PATH rebuilt from the registry)', () => {
       'C:\\Windows\\system32',
       'C:\\Users\\Ann\\.local\\bin',
     ]);
+  });
+});
+
+// Invariant 4: a winget install treats "already installed" as success. The app's PATH dates
+// from launch, so a tool installed since then looks missing; winget then exits non-zero
+// ("already installed") and setup dead-ended on "Command failed: winget install Git.Git"
+// although Git was on disk (clean Windows 11 VM, 2026-10-02).
+describe('installWithWinget (Windows prerequisite install)', () => {
+  const found = { installed: true, version: 'git version 2.56.0' };
+  const missing = { installed: false };
+  const deps = (run: () => Promise<unknown>) => ({
+    refresh: () => {},
+    winget: async () => ({ installed: true, version: 'v1.29' }),
+    run,
+  });
+
+  it('skips winget when a fresh PATH already finds the tool', async () => {
+    let ran = false;
+    const r = await installWithWinget('Git.Git', async () => found, deps(async () => { ran = true; }));
+    expect(r).toEqual({ done: true, result: { success: true } });
+    expect(ran).toBe(false);
+  });
+
+  it('counts a winget failure as success when the tool is there afterwards', async () => {
+    const seen = [missing, found];
+    const r = await installWithWinget('Git.Git', async () => seen.shift()!, deps(async () => {
+      throw new Error('Command failed: winget install Git.Git');
+    }));
+    expect(r).toEqual({ done: true, result: { success: true } });
+  });
+
+  it('still reports a real winget failure', async () => {
+    await expect(installWithWinget('Git.Git', async () => missing, deps(async () => {
+      throw new Error('Command failed: winget install Git.Git');
+    }))).rejects.toThrow('Command failed');
+  });
+
+  it('hands back to the caller after a clean winget run', async () => {
+    const r = await installWithWinget('Git.Git', async () => missing, deps(async () => undefined));
+    expect(r).toEqual({ done: false });
   });
 });
