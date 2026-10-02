@@ -119,6 +119,11 @@ function homeAssistantPageHtml(): string {
      and some other basic controls should be attached to the now playing"). */
   .np.has-ctl { flex-wrap: wrap; }
   .np-ctl { flex-direction: column; gap: 10px; }
+  /* Round 3 test (S-media-head note: "try moving the icon/card for now
+     playing cards to the right … just a test"): the app's mark sits after
+     the text. Delete these two lines to put it back on the left. */
+  .np .art { order: 2; }
+  .np .np-ctl { order: 3; }
   .np-keys { display: flex; align-items: center; justify-content: center; gap: 10px; }
   .vrow { display: flex; align-items: center; gap: 8px; width: 100%; position: relative; }
   .vrow.keys-only { justify-content: center; }
