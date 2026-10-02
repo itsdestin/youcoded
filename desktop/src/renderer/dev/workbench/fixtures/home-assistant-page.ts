@@ -24,7 +24,7 @@ const ROOMS_TEMPLATE = `{%- set ns = namespace(rooms=[]) -%}
 {%- set d = e.split('.')[0] -%}
 {%- if d in ['light','climate','media_player','camera','remote'] and states[e] is not none -%}
 {%- set s = states[e] -%}
-{%- set ens.items = ens.items + [{'id': e, 'name': s.name, 'state': s.state, 'brightness': s.attributes.get('brightness'), 'modes': s.attributes.get('supported_color_modes'), 'cur': s.attributes.get('current_temperature'), 'target': s.attributes.get('temperature'), 'min': s.attributes.get('min_temp'), 'max': s.attributes.get('max_temp'), 'step': s.attributes.get('target_temp_step'), 'vol': s.attributes.get('volume_level'), 'title': s.attributes.get('media_title'), 'features': s.attributes.get('supported_features', 0), 'rgb': s.attributes.get('rgb_color'), 'k': s.attributes.get('color_temp_kelvin'), 'modesHvac': s.attributes.get('hvac_modes'), 'action': s.attributes.get('hvac_action'), 'device': device_id(e), 'model': device_attr(device_id(e), 'model'), 'dc': s.attributes.get('device_class')}] -%}
+{%- set ens.items = ens.items + [{'id': e, 'name': s.name, 'state': s.state, 'brightness': s.attributes.get('brightness'), 'modes': s.attributes.get('supported_color_modes'), 'cur': s.attributes.get('current_temperature'), 'target': s.attributes.get('temperature'), 'min': s.attributes.get('min_temp'), 'max': s.attributes.get('max_temp'), 'step': s.attributes.get('target_temp_step'), 'vol': s.attributes.get('volume_level'), 'title': s.attributes.get('media_title'), 'features': s.attributes.get('supported_features', 0), 'rgb': s.attributes.get('rgb_color'), 'k': s.attributes.get('color_temp_kelvin'), 'modesHvac': s.attributes.get('hvac_modes'), 'action': s.attributes.get('hvac_action'), 'device': device_id(e), 'model': device_attr(device_id(e), 'model'), 'dc': s.attributes.get('device_class'), 'activity': s.attributes.get('current_activity'), 'app': s.attributes.get('app_name'), 'source': s.attributes.get('source'), 'cid': s.attributes.get('media_content_id'), 'muted': s.attributes.get('is_volume_muted')}] -%}
 {%- endif -%}
 {%- endfor -%}
 {%- if ens.items -%}{%- set ns.rooms = ns.rooms + [{'id': a, 'name': area_name(a), 'items': ens.items}] -%}{%- endif -%}
@@ -92,27 +92,66 @@ function homeAssistantPageHtml(): string {
   .play .key.main { width: 44px; height: 44px; background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
   .tile .name .sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .kind { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-muted); }
-  .rbtn { width: 32px; height: 32px; flex-shrink: 0; border-radius: 50%; border: 1px solid var(--edge); background: var(--well); color: var(--fg-2); cursor: pointer; display: grid; place-items: center; padding: 0; position: relative; }
+  /* Round 6 (S-kinds notes): a TV has an obvious power button on the right
+     of its header; tapping the TV itself opens its remote. */
+  .pwr { width: 36px; height: 36px; flex-shrink: 0; border-radius: 50%; border: 1px solid var(--edge); background: var(--well); color: var(--fg-muted); cursor: pointer; display: grid; place-items: center; padding: 0; position: relative; }
+  .pwr:hover { color: var(--fg); border-color: var(--fg-muted); }
+  .pwr[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .pwr:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* The remote button says what it is (fourth-look notes: the icon alone
+     and its outlined open state did not read). Open, it is filled. */
+  .rbtn { height: 36px; width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 0 12px; border-radius: var(--radius-md, 8px); border: 1px solid var(--edge); background: var(--well); color: var(--fg-2); font: inherit; font-size: 12px; cursor: pointer; position: relative; }
   .rbtn:hover { color: var(--fg); border-color: var(--fg-muted); }
-  .rbtn[aria-expanded="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .rbtn[aria-expanded="true"] { background: var(--panel); color: var(--fg); }
+  .rchev { display: grid; transition: transform 150ms ease; }
+  .rbtn[aria-expanded="true"] .rchev { transform: rotate(180deg); }
+  @media (prefers-reduced-motion: reduce) { .rchev { transition: none; } }
   .rbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .remote { position: relative; display: flex; flex-direction: column; gap: 12px; padding: 12px; border-radius: var(--radius-md, 8px); background: var(--panel); border: 1px solid var(--edge-dim); }
-  .apps { display: flex; flex-wrap: wrap; gap: 6px; }
-  .app { appearance: none; font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 9999px; border: 1px solid var(--edge); background: var(--well); color: var(--fg); cursor: pointer; }
-  .app:hover { border-color: var(--accent); }
-  .remote-main { display: flex; align-items: center; justify-content: center; gap: 18px; flex-wrap: wrap; }
-  /* The arrows: a round pad, OK in the middle — the shape of the real remote. */
-  .dpad { position: relative; width: 132px; height: 132px; border-radius: 50%; background: var(--well); border: 1px solid var(--edge-dim); flex-shrink: 0; }
+  /* Controls inside Now playing (fourth-look notes: "the play/pause button
+     and some other basic controls should be attached to the now playing"). */
+  .np.has-ctl { flex-wrap: wrap; }
+  .np-ctl { flex-basis: 100%; display: flex; align-items: center; justify-content: center; gap: 10px; padding-top: 6px; }
+  .np-ctl .key { width: 34px; height: 34px; }
+  .np-ctl .key.main { width: 42px; height: 42px; background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  /* Now playing: what is on, in a block of its own, with the app's mark.
+     (.np, not .now: the thermostat's scale already has a .now marker.) */
+  .np { position: relative; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius-md, 8px); background: var(--panel); border: 1px solid var(--edge-dim); }
+  .np .art { width: 36px; height: 36px; border-radius: 9px; flex-shrink: 0; display: grid; place-items: center; background: var(--app, var(--accent)); color: #fff; font-weight: 800; font-size: 13px; }
+  .np .txt { min-width: 0; flex: 1; }
+  .np .lbl { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-muted); }
+  .np .ttl { font-size: 13px; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .np .by { font-size: 11px; color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* The remote (S-kinds notes: "improve the youtube/netflix/prime/disney
+     buttons. and the polish of our remote ui"). */
+  .remote { position: relative; display: flex; flex-direction: column; align-items: stretch; gap: 16px; padding: 14px 12px; border-radius: var(--radius-md, 8px); background: var(--panel); border: 1px solid var(--edge-dim); }
+  .apps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+  .app { appearance: none; font: inherit; font-size: 11px; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 6px 2px; border-radius: var(--radius-md, 8px); border: 0; background: transparent; color: var(--fg-2); cursor: pointer; min-width: 0; }
+  .app:hover { background: var(--well); color: var(--fg); }
+  .app:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+  .app .logo { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: var(--app); color: #fff; font-weight: 800; font-size: 15px; letter-spacing: -.02em; }
+  .app .nm { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dpad { position: relative; align-self: center; width: 156px; height: 156px; border-radius: 50%; background: var(--well); border: 1px solid var(--edge-dim); flex-shrink: 0; }
   .dpad button { position: absolute; appearance: none; border: 0; background: transparent; color: var(--fg-2); cursor: pointer; display: grid; place-items: center; padding: 0; border-radius: 50%; }
   .dpad button:hover { color: var(--fg); background: var(--inset); }
   .dpad button:active { background: var(--edge-dim); }
   .dpad button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-  .dpad .up, .dpad .down { left: 46px; width: 40px; height: 40px; }
+  .dpad .up, .dpad .down { left: 56px; width: 44px; height: 44px; }
   .dpad .up { top: 4px; } .dpad .down { bottom: 4px; }
-  .dpad .left, .dpad .right { top: 46px; width: 40px; height: 40px; }
+  .dpad .left, .dpad .right { top: 56px; width: 44px; height: 44px; }
   .dpad .left { left: 4px; } .dpad .right { right: 4px; }
-  .dpad .ok { left: 41px; top: 41px; width: 50px; height: 50px; background: var(--inset); border: 1px solid var(--edge); color: var(--fg); font-size: 12px; font-weight: 600; }
-  .keys { display: grid; grid-template-columns: repeat(3, 40px); gap: 8px; }
+  .dpad .ok { left: 48px; top: 48px; width: 60px; height: 60px; background: var(--inset); border: 1px solid var(--edge); color: var(--fg); font-size: 13px; font-weight: 700; }
+  .dpad .ok:hover { border-color: var(--accent); }
+  .nav { display: flex; justify-content: center; gap: 22px; }
+  .nk { appearance: none; font: inherit; font-size: 10px; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 0; border: 0; background: none; color: var(--fg-muted); cursor: pointer; }
+  .nk .ic { width: 42px; height: 42px; border-radius: 50%; border: 1px solid var(--edge); background: var(--well); color: var(--fg-2); display: grid; place-items: center; }
+  .nk:hover .ic { color: var(--fg); border-color: var(--fg-muted); }
+  .nk:active .ic { background: var(--edge-dim); }
+  .nk:focus-visible .ic { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .volpill { align-self: center; display: flex; border: 1px solid var(--edge); border-radius: 9999px; overflow: hidden; background: var(--well); }
+  .volpill button { appearance: none; width: 56px; height: 36px; border: 0; background: transparent; color: var(--fg-2); cursor: pointer; display: grid; place-items: center; padding: 0; }
+  .volpill button + button { border-left: 1px solid var(--edge-dim); }
+  .volpill button:hover { background: var(--inset); color: var(--fg); }
+  .volpill button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   .key { width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--edge); background: var(--well); color: var(--fg-2); cursor: pointer; display: grid; place-items: center; padding: 0; }
   .key:hover { color: var(--fg); border-color: var(--fg-muted); }
   .key:active { background: var(--edge-dim); }
@@ -372,31 +411,68 @@ function homeAssistantPageHtml(): string {
   var EYE_OFF = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3l18 18"/><path d="M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6A17 17 0 0 0 2 12s3.5 7 10 7a9.9 9.9 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>';
   var OUT = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>';
   function ico(d, w) { return '<svg width="' + (w || 18) + '" height="' + (w || 18) + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + '</svg>'; }
-  var REMOTE = ico('<rect x="7" y="2" width="10" height="20" rx="3"/><circle cx="12" cy="8" r="2"/><path d="M10 14h.01M14 14h.01M10 17h.01M14 17h.01"/>', 16);
+  var REMOTE = ico('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="M12 4.5v1.5M12 18v1.5M4.5 12H6M18 12h1.5"/>', 15);
   // Apps open through the remote by their web address; the TV hands each to
   // its app. These are the ones Home Assistant's own docs list as working.
+  // Each app's mark is drawn here in its own colour, so the buttons read at
+  // a glance without loading anything from the internet.
   var APPS = [
-    { name: 'YouTube', url: 'https://www.youtube.com' },
-    { name: 'Netflix', url: 'https://www.netflix.com/title' },
-    { name: 'Prime Video', url: 'https://app.primevideo.com' },
-    { name: 'Disney+', url: 'https://www.disneyplus.com' },
+    { name: 'YouTube', url: 'https://www.youtube.com', pkg: 'youtube', bg: '#ff0033', mark: '<svg width="18" height="18" viewBox="0 0 24 24" fill="#fff" aria-hidden="true"><path d="M8 5.5v13l11-6.5z"/></svg>' },
+    { name: 'Netflix', url: 'https://www.netflix.com/title', pkg: 'netflix', bg: '#141414', mark: '<span style="color:#e50914;font-size:20px">N</span>' },
+    { name: 'Prime', url: 'https://app.primevideo.com', pkg: 'amazon', bg: '#1a98ff', mark: 'pv' },
+    { name: 'Disney+', url: 'https://www.disneyplus.com', pkg: 'disney', bg: '#0e2a8c', mark: 'D+' },
   ];
-  function remoteHtml(r) {
+  // Where a speaker's music comes from, when Home Assistant says (S-now:
+  // "if we can determine source, we should show spotify/etc icon").
+  var SOURCES = [
+    { name: 'Spotify', key: 'spotify', bg: '#1db954', mark: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 9.5c4-1.3 8.5-1 12 1M7 13c3.3-1 6.7-.7 9.5.9M8 16.3c2.6-.7 5-.5 7 .7"/></svg>' },
+    { name: 'YouTube Music', key: 'youtube music', bg: '#ff0033', mark: '<svg width="18" height="18" viewBox="0 0 24 24" fill="#fff" aria-hidden="true"><path d="M9 7v10l8-5z"/></svg>' },
+    { name: 'Apple Music', key: 'apple music', bg: '#fa243c', mark: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/></svg>' },
+    { name: 'Amazon Music', key: 'amazon', bg: '#25d1da', mark: '<span style="color:#000">a</span>' },
+    { name: 'Pandora', key: 'pandora', bg: '#224099', mark: 'P' },
+    { name: 'TV', key: 'tv', bg: 'var(--accent)', mark: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="13" rx="2"/><path d="M8 21h8"/></svg>' },
+  ];
+  function sourceOf(it) {
+    var hay = [it.app, it.source, it.cid && String(it.cid).split(':')[0], it.title === 'TV' ? 'tv' : ''].filter(Boolean).join(' ').toLowerCase();
+    if (!hay) return null;
+    return SOURCES.filter(function (x) { return x.key === 'tv' ? hay.split(' ').indexOf('tv') >= 0 : hay.indexOf(x.key) >= 0; })[0] || null;
+  }
+  function appOf(pkg) {
+    if (!pkg) return null;
+    return APPS.filter(function (a) { return String(pkg).toLowerCase().indexOf(a.pkg) >= 0; })[0] || null;
+  }
+  function remoteHtml(r, sb) {
     var id = esc(r.id);
-    var k = function (cmd, label, icon, cls) { return '<button class="' + (cls || 'key') + '" data-rc="' + id + '" data-cmd="' + cmd + '" aria-label="' + label + '" title="' + label + '">' + icon + '</button>'; };
+    var k = function (cmd, label, icon, cls) { return '<button class="' + cls + '" data-rc="' + id + '" data-cmd="' + cmd + '" aria-label="' + label + '" title="' + label + '">' + icon + '</button>'; };
+    var nk = function (cmd, label, icon) { return '<button class="nk" data-rc="' + id + '" data-cmd="' + cmd + '" aria-label="' + label + '"><span class="ic">' + icon + '</span>' + label + '</button>'; };
     return '<div class="remote" role="group" aria-label="Remote for ' + esc(r.name) + '">' +
-      '<div class="apps">' + APPS.map(function (a) { return '<button class="app" data-rc="' + id + '" data-app="' + esc(a.url) + '">' + esc(a.name) + '</button>'; }).join('') + '</div>' +
-      '<div class="remote-main"><div class="dpad">' +
+
+      '<div class="dpad">' +
         k('DPAD_UP', 'Up', ico('<path d="m18 15-6-6-6 6"/>'), 'up') + k('DPAD_LEFT', 'Left', ico('<path d="m15 18-6-6 6-6"/>'), 'left') +
         k('DPAD_CENTER', 'OK', 'OK', 'ok') + k('DPAD_RIGHT', 'Right', ico('<path d="m9 18 6-6-6-6"/>'), 'right') + k('DPAD_DOWN', 'Down', ico('<path d="m6 9 6 6 6-6"/>'), 'down') +
-      '</div><div class="keys">' +
-        k('BACK', 'Back', ico('<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>')) +
-        k('HOME', 'Home', ico('<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>')) +
-        k('MEDIA_PLAY_PAUSE', 'Play or pause', ico('<path d="m6 4 8 6-8 6z"/><path d="M17 5v10M21 5v10"/>')) +
-        k('VOLUME_DOWN', 'Volume down', ico('<path d="M11 5 6 9H2v6h4l5 4z"/><path d="M16 12h5"/>')) +
-        k('MUTE', 'Mute', ico('<path d="M11 5 6 9H2v6h4l5 4z"/><path d="m22 9-6 6M16 9l6 6"/>')) +
-        k('VOLUME_UP', 'Volume up', ico('<path d="M11 5 6 9H2v6h4l5 4z"/><path d="M16 12h5M18.5 9.5v5"/>')) +
-      '</div></div></div>';
+      '</div>' +
+      '<div class="nav">' +
+        nk('BACK', 'Back', ico('<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>')) +
+        nk('HOME', 'Home', ico('<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>')) +
+      '</div>' +
+      // The TV's sound comes out of the soundbar when one is playing it, so
+      // volume goes to the soundbar: the TV box's own volume keys never
+      // reached it (fourth-look notes: "volume up/down don't seem to work").
+      '<div class="volpill" role="group" aria-label="' + (sb ? 'Volume, on ' + esc(sb.name) : 'TV volume') + '">' +
+        (sb
+          ? '<button data-mp="' + esc(sb.id) + '" data-svc="volume_down" aria-label="Volume down" title="Volume down">' + ico('<path d="M5 12h14"/>', 16) + '</button>' +
+            '<button data-mp="' + esc(sb.id) + '" data-svc="volume_mute" data-mute="' + (sb.muted ? 'false' : 'true') + '" aria-label="' + (sb.muted ? 'Unmute' : 'Mute') + '" title="' + (sb.muted ? 'Unmute' : 'Mute') + '">' + ico('<path d="M11 5 6 9H2v6h4l5 4z"/><path d="m22 9-6 6M16 9l6 6"/>', 16) + '</button>' +
+            '<button data-mp="' + esc(sb.id) + '" data-svc="volume_up" aria-label="Volume up" title="Volume up">' + ico('<path d="M5 12h14M12 5v14"/>', 16) + '</button>'
+          : k('VOLUME_DOWN', 'Volume down', ico('<path d="M5 12h14"/>', 16), '') +
+            k('MUTE', 'Mute', ico('<path d="M11 5 6 9H2v6h4l5 4z"/><path d="m22 9-6 6M16 9l6 6"/>', 16), '') +
+            k('VOLUME_UP', 'Volume up', ico('<path d="M5 12h14M12 5v14"/>', 16), '')) +
+      '</div>' +
+      // Apps sit at the bottom, under the controls you press most (round 2
+      // third look, S-power: "put the youtube/etc buttons at the bottom").
+      '<div class="apps">' + APPS.map(function (a) {
+        return '<button class="app" data-rc="' + id + '" data-app="' + esc(a.url) + '" aria-label="Open ' + esc(a.name) + '"><span class="logo" style="--app:' + a.bg + '">' + a.mark + '</span><span class="nm">' + esc(a.name) + '</span></button>';
+      }).join('') + '</div>' +
+      '</div>';
   }
   // Which remote belongs to this TV tile: one in the same room named the
   // TV's name plus "remote" ("Destin's Room TV remote" → "Destin's Room
@@ -424,6 +500,12 @@ function homeAssistantPageHtml(): string {
   }
   var KIND_LABEL = { tv: 'TV', soundbar: 'Soundbar', display: 'Display', speaker: 'Speaker' };
   function isTv(it) { return kindOf(it) === 'tv'; }
+  // The soundbar in the TV's room that is playing the TV's sound.
+  function soundbarFor(it) {
+    var room = roomOf(it.id);
+    if (!room) return null;
+    return room.items.filter(function (x) { return domain(x.id) === 'media_player' && kindOf(x) === 'soundbar' && !gone(x) && (x.source === 'TV' || x.title === 'TV'); })[0] || null;
+  }
   // The pairing adds a media player on the remote's own device; it would be
   // a second tile for the same TV, so it is left off the page.
   function remoteDevice(it) {
@@ -431,6 +513,7 @@ function homeAssistantPageHtml(): string {
     var r = roomOf(it.id);
     return !!(r && r.items.some(function (x) { return domain(x.id) === 'remote' && x.device === it.device; }));
   }
+  var POWER = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v8"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/></svg>';
   var SOUNDBAR = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="9" width="20" height="6" rx="2"/><path d="M6 12h.01M10 12h.01M14 12h.01M18 12h.01"/></svg>';
   var DISPLAY = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>';
   var PREV = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 20 9 12l10-8z"/><path d="M5 19V5"/></svg>';
@@ -470,34 +553,70 @@ function homeAssistantPageHtml(): string {
     var off = !isOn(power), na = gone(power), on = !off && !na;
     var pct = it.brightness ? Math.round(it.brightness / 2.55) : 0;
     var kind = media ? kindOf(it) : null;
+    var tv = kind === 'tv';
+    var playing = it.state === 'playing' || it.state === 'paused';
     // A soundbar playing the TV's sound reports the title "TV".
     var what = it.title === 'TV' && kind === 'soundbar' ? 'TV sound' : it.title;
+    var app = tv && rc ? appOf(rc.activity) : media && !tv ? sourceOf(it) : null;
     var status = na ? 'Not responding'
-      : media ? (on ? (isOn(it) && what ? (it.state === 'paused' ? 'Paused · ' : '') + what : 'On') : 'Off')
+      : media ? (on ? (playing && it.state === 'paused' ? 'Paused' : playing ? 'Playing' : 'On') : 'Off')
       : on ? (dimmable(it) ? pct + '%' : 'On') : 'Off';
     // Speakers and soundbars get play/pause and skip while something is
     // playing; a TV gets its remote instead (round 5 testing: "soundbar
     // shouldn't have full tv controls").
-    var playing = it.state === 'playing' || it.state === 'paused';
     var f = it.features || 0;
-    var playRow = media && kind !== 'tv' && playing && (f & 1)
-      ? '<div class="play">' +
-        ((f & 16) ? '<button class="key" data-mp="' + esc(it.id) + '" data-svc="media_previous_track" aria-label="Previous" title="Previous">' + PREV + '</button>' : '') +
-        '<button class="key main" data-mp="' + esc(it.id) + '" data-svc="media_play_pause" aria-label="' + (it.state === 'playing' ? 'Pause' : 'Play') + '" title="' + (it.state === 'playing' ? 'Pause' : 'Play') + '">' + (it.state === 'playing' ? PAUSE : PLAY) + '</button>' +
-        ((f & 32) ? '<button class="key" data-mp="' + esc(it.id) + '" data-svc="media_next_track" aria-label="Next" title="Next">' + NEXT + '</button>' : '') +
-        '</div>'
+    // Controls live inside Now playing. A speaker uses its own play/pause
+    // and skip; a TV sends the same keys through its remote, which works for
+    // any app on it, not only ones that cast.
+    var isPlay = it.state === 'playing';
+    var pp = isPlay ? 'Pause' : 'Play';
+    var ctl = '';
+    if (media && tv && rc && on) {
+      var rk = function (cmd, label, icon, cls) { return '<button class="key' + (cls || '') + '" data-rc="' + esc(rc.id) + '" data-cmd="' + cmd + '" aria-label="' + label + '" title="' + label + '">' + icon + '</button>'; };
+      ctl = rk('MEDIA_PREVIOUS', 'Previous', PREV) + rk('MEDIA_PLAY_PAUSE', 'Play or pause', isPlay ? PAUSE : PLAY, ' main') + rk('MEDIA_NEXT', 'Next', NEXT);
+    // A soundbar playing the TV has nothing of its own to pause or skip.
+    } else if (media && !tv && playing && (f & 1) && !(kind === 'soundbar' && (it.source === 'TV' || it.title === 'TV'))) {
+      var mk = function (svc, label, icon, cls) { return '<button class="key' + (cls || '') + '" data-mp="' + esc(it.id) + '" data-svc="' + svc + '" aria-label="' + label + '" title="' + label + '">' + icon + '</button>'; };
+      ctl = ((f & 16) ? mk('media_previous_track', 'Previous', PREV) : '') + mk('media_play_pause', pp, isPlay ? PAUSE : PLAY, ' main') + ((f & 32) ? mk('media_next_track', 'Next', NEXT) : '');
+    }
+    var playRow = '';
+    // Now playing, in a block of its own (S-kinds notes: "improve the now
+    // playing ui styling"): the app's mark on a TV, a note on a speaker.
+    var nowHtml = media && on && (playing && what || app)
+      ? '<div class="np' + (ctl ? ' has-ctl' : '') + '"><span class="art" style="--app:' + (app ? app.bg : 'var(--accent)') + '">' +
+        (app ? app.mark : '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>') +
+        '</span><span class="txt"><div class="lbl">' + (it.state === 'paused' ? 'Paused' : 'Now playing') + '</div>' +
+        '<div class="ttl">' + esc(playing && what ? what : app.name) + '</div>' +
+        (app && playing && what && what !== app.name && app.name !== 'TV' ? '<div class="by">' + (tv ? 'in ' : 'on ') + esc(app.name) + '</div>' : '') + '</span>' +
+        (ctl ? '<div class="np-ctl">' + ctl + '</div>' : '') + '</div>'
       : '';
     var c = media ? 'var(--accent)' : colourOf(it);
-    var vol = media && on && (it.features & 4) && it.vol != null
-      ? '<div class="vol">' + SPEAKER + '<input class="lr" type="range" min="0" max="100" value="' + Math.round(it.vol * 100) + '" style="--pct:' + Math.round(it.vol * 100) + '%;--c:var(--accent)" aria-label="Volume of ' + esc(it.name) + '" data-vol="' + esc(it.id) + '"></div>'
+    // A TV's volume bar moves the soundbar playing its sound, when there is
+    // one (the TV's own volume is not what you hear).
+    var sb = tv ? soundbarFor(it) : null;
+    var volOf = sb || it;
+    var vol = media && on && ((volOf.features || 0) & 4) && volOf.vol != null
+      ? '<div class="vol">' + SPEAKER + '<input class="lr" type="range" min="0" max="100" value="' + Math.round(volOf.vol * 100) + '" style="--pct:' + Math.round(volOf.vol * 100) + '%;--c:var(--accent)" aria-label="Volume of ' + esc(it.name) + (sb ? ' (on ' + esc(sb.name) + ')' : '') + '" data-vol="' + esc(volOf.id) + '"></div>'
       : '';
     var bright = !media && on && dimmable(it) ? rangeHtml(it, pct) : '';
     var rOpen = rc && remoteOpen.has(rc.id);
-    var rBtn = rc ? '<button class="rbtn" data-remote="' + esc(rc.id) + '" aria-expanded="' + !!rOpen + '" aria-label="Remote for ' + esc(it.name) + '" title="Remote">' + REMOTE + '</button>' : '';
+    // A TV: the tile opens its remote, and power is its own button on the
+    // right, so opening the remote can never switch the TV off by accident.
+    var face = tv && rc
+      ? '<button class="tile-face" data-remote="' + esc(rc.id) + '" aria-expanded="' + !!rOpen + '" aria-label="' + esc(it.name) + ', ' + (rOpen ? 'hide' : 'show') + ' remote">'
+      : '<button class="tile-face" data-toggle="' + esc(power.id) + '" aria-pressed="' + on + '"' + (na ? ' disabled' : '') + ' aria-label="' + esc(it.name) + (on ? ', on' : ', off') + '">';
+    var right = tv
+      // A remote icon, lit while the remote is open (S-power: "replace
+      // chevron on tv with remote icon"). It is the same press as the tile.
+      ? '<button class="pwr" data-toggle="' + esc(power.id) + '" aria-pressed="' + on + '"' + (na ? ' disabled' : '') + ' aria-label="Turn ' + esc(it.name) + (on ? ' off' : ' on') + '" title="' + (on ? 'Turn off' : 'Turn on') + '">' + POWER + '</button>'
+      : media ? '' : colourBtn(it);
     return '<div class="tile' + (media ? ' media' : '') + (on ? ' on' : '') + (na ? ' gone' : '') + (hidden.has(it.id) ? ' is-hidden' : '') + '" style="--c:' + c + '"><span class="glow"></span>' +
-      '<div class="line"><button class="tile-face" data-toggle="' + esc(power.id) + '" aria-pressed="' + on + '"' + (na ? ' disabled' : '') + ' aria-label="' + esc(it.name) + (on ? ', on' : ', off') + '">' +
+      '<div class="line">' + face +
       '<span class="bulb">' + icon + '</span><span class="name">' + (kind ? '<div class="kind">' + KIND_LABEL[kind] + '</div>' : '') + esc(it.name) + '<div class="sub">' + esc(status) + '</div></span></button>' +
-      (media ? rBtn : colourBtn(it)) + '</div>' + bright + vol + playRow + (media ? '' : paletteHtml(it)) + (rOpen ? remoteHtml(rc) : '') + editRow(it, ctx) + '</div>';
+      right + '</div>' + nowHtml + bright + vol + playRow +
+      // The remote opens from a full-width bar under what is playing, so the
+      // TV's name keeps its room (a pill beside it cut the name short).
+      (rc ? '<button class="rbtn" data-remote="' + esc(rc.id) + '" aria-expanded="' + !!rOpen + '" aria-label="' + (rOpen ? 'Hide' : 'Show') + ' remote for ' + esc(it.name) + '">' + REMOTE + (rOpen ? 'Hide remote' : 'Remote') + '<span class="rchev">' + CHEVRON + '</span></button>' : '') + (media ? '' : paletteHtml(it)) + (rOpen ? remoteHtml(rc, sb) : '') + editRow(it, ctx) + '</div>';
   }
 
   var MODE_NAMES = { off: 'Off', cool: 'Cool', heat: 'Heat', heat_cool: 'Auto', auto: 'Auto', dry: 'Dry', fan_only: 'Fan' };
@@ -745,7 +864,9 @@ function homeAssistantPageHtml(): string {
     if (mp) {
       var svc = t.getAttribute('data-svc');
       if (svc === 'media_play_pause') { var cur = thing(mp); if (cur) setLocal(mp, { state: cur.state === 'playing' ? 'paused' : 'playing' }); }
-      service('media_player', svc, { entity_id: mp }, mp);
+      var body = { entity_id: mp };
+      if (svc === 'volume_mute') body.is_volume_muted = t.getAttribute('data-mute') === 'true';
+      service('media_player', svc, body, mp);
       return;
     }
     var ro = t.getAttribute('data-remote');

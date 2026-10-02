@@ -12,7 +12,7 @@ interface Thing {
   vol?: number | null; title?: string | null; features?: number;
   rgb?: number[] | null; k?: number | null;
   modesHvac?: string[]; action?: string | null;
-  model?: string; dc?: string;
+  model?: string; dc?: string; activity?: string; app?: string; source?: string; muted?: boolean;
 }
 
 function seed(): Array<{ id: string; name: string; items: Thing[] }> {
@@ -26,15 +26,15 @@ function seed(): Array<{ id: string; name: string; items: Thing[] }> {
       { id: 'media_player.destins_room_tv', name: "Destin's Samsung TV", state: 'off', features: 4, vol: 0.2, model: 'QN65Q80CAFXZA', dc: 'tv' },
       // Named like the room, as the real Sonos Beam is: it must never get the
       // TV's remote (round 5 testing).
-      { id: 'media_player.destins_room', name: "Destin's Room", state: 'playing', features: 4 | 1 | 16 | 32, vol: 0.35, title: 'TV', model: 'Sonos Beam' },
+      { id: 'media_player.destins_room', name: "Destin's Room", state: 'playing', features: 4 | 1 | 16 | 32, vol: 0.35, title: 'TV', model: 'Sonos Beam', source: 'TV' },
       // A Google TV paired for remote control: its Cast tile, and the remote.
-      { id: 'media_player.destins_room_google_tv', name: "Destin's Room TV", state: 'playing', features: 4, vol: 0.4, title: 'YouTube', model: 'Google TV Streamer', dc: 'tv' },
-      { id: 'remote.destins_room_tv_remote', name: "Destin's Room TV remote", state: 'on' },
+      { id: 'media_player.destins_room_google_tv', name: "Destin's Room TV", state: 'playing', features: 4, vol: 0.4, title: 'Lofi beats to relax to', model: 'Google TV Streamer', dc: 'tv' },
+      { id: 'remote.destins_room_tv_remote', name: "Destin's Room TV remote", state: 'on', activity: 'com.google.android.youtube.tv' },
     ] },
     { id: 'living_room', name: 'Living Room', items: [
       { id: 'light.living_room_lamp', name: 'Floor lamp', state: 'on', brightness: 180, modes: ['color_temp'], k: 2700 },
       { id: 'light.living_room_ceiling', name: 'Ceiling', state: 'off', brightness: null, modes: dim },
-      { id: 'media_player.living_room_speaker', name: 'Living Room speaker', state: 'paused', features: 4 | 1 | 16 | 32, vol: 0.3, title: 'Clair de Lune — Debussy', model: 'Google Nest Mini' },
+      { id: 'media_player.living_room_speaker', name: 'Living Room speaker', state: 'paused', features: 4 | 1 | 16 | 32, vol: 0.3, title: 'Clair de Lune — Debussy', model: 'Google Nest Mini', app: 'Spotify' },
       { id: 'camera.living_room_camera', name: 'Living room camera', state: 'idle' },
     ] },
     { id: 'kitchen', name: 'Kitchen', items: [
@@ -110,6 +110,9 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
         t.action = data.hvac_mode === 'off' ? 'off' : data.hvac_mode === 'heat' ? 'heating' : data.hvac_mode === 'cool' ? 'cooling' : 'idle';
       }
       if (action === 'volume_set' && typeof data.volume_level === 'number') t.vol = data.volume_level;
+      if (action === 'volume_up' && t.vol != null) t.vol = Math.min(1, t.vol + 0.02);
+      if (action === 'volume_down' && t.vol != null) t.vol = Math.max(0, t.vol - 0.02);
+      if (action === 'volume_mute') t.muted = data.is_volume_muted === true;
       if (action === 'set_temperature' && typeof data.temperature === 'number') t.target = data.temperature;
     }
     return ok('[]');
