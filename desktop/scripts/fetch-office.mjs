@@ -26,6 +26,16 @@ export function platformKey(platform = process.platform, arch = process.arch) {
   return ['linux', 'darwin', 'win32'].includes(platform) ? `${platform}-${arch}` : null;
 }
 
+/** The tar to unpack the add-on with.
+ *  WHY not plain `tar` on Windows: a GitHub Windows runner (and many PCs) puts Git's GNU tar
+ *  first on PATH, and GNU tar reads `C:\...` as host `C` and fails with "Cannot connect to C:
+ *  resolve failed" (desktop-test-build run 36956706441). Windows' own tar (bsdtar, shipped in
+ *  System32 since Windows 10 1803) takes drive-letter paths as files. */
+export function tarCommand(platform = process.platform, env = process.env) {
+  if (platform !== 'win32') return 'tar';
+  return path.win32.join(env.SystemRoot || env.windir || 'C:\\Windows', 'System32', 'tar.exe');
+}
+
 /** Where a release build puts `key`'s add-on (what electron-builder.yml's extraResources reads). */
 export function releaseDest(key, root = RELEASE_DIR) {
   return path.join(root, key);
@@ -169,7 +179,7 @@ async function install(pin, key, dest) {
     await stageAndReplace({
       dest,
       pin,
-      extract: (stagingDir) => promisify(execFile)('tar', ['-xzf', tgz, '-C', stagingDir]),
+      extract: (stagingDir) => promisify(execFile)(tarCommand(), ['-xzf', tgz, '-C', stagingDir]),
     });
   } finally {
     await rm(tgz, { force: true });

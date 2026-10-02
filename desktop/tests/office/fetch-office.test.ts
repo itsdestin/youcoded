@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, utimes, writeFile } from 'node:f
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import { exitCodeFor, planFetch, platformKey, releaseDest, releaseKeys, stageAndReplace, sweepStaleStaging } from '../../scripts/fetch-office.mjs';
+import { exitCodeFor, planFetch, platformKey, releaseDest, releaseKeys, stageAndReplace, sweepStaleStaging, tarCommand } from '../../scripts/fetch-office.mjs';
 import realPin from '../../office-pin.json';
 import pkg from '../../package.json';
 import { readSource } from '../helpers/guard-scope';
@@ -292,5 +292,16 @@ describe('macOS signing of the Office converter', () => {
   });
   it('leaves the rest of the app alone', () => {
     expect(ignore.some((r) => r.test('/x/YouCoded.app/Contents/MacOS/YouCoded'))).toBe(false);
+  });
+});
+
+describe('the tar that unpacks the add-on', () => {
+  // GNU tar (Git's, first on a Windows runner's PATH) reads `C:\...` as a remote host.
+  it('is Windows own tar on Windows, so drive-letter paths are files', () => {
+    expect(tarCommand('win32', { SystemRoot: 'C:\\Windows' })).toBe('C:\\Windows\\System32\\tar.exe');
+  });
+  it('is plain tar elsewhere', () => {
+    expect(tarCommand('linux', {})).toBe('tar');
+    expect(tarCommand('darwin', {})).toBe('tar');
   });
 });
