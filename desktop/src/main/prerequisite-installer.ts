@@ -463,6 +463,49 @@ function cleanStaleClaudeDownloads(): void {
 }
 
 /**
+ * Builds the PATH that refreshPath() installs, from the registry's raw User and System values.
+ *
+ * WHY expand %VARS%: both registry values are usually REG_EXPAND_SZ, holding entries like
+ * `%SystemRoot%\system32` and `%USERPROFILE%\AppData\Local\Microsoft\WindowsApps`. `reg query`
+ * prints them unexpanded, and Windows does not expand them when searching PATH, so copying them
+ * in as-is dropped System32 and WindowsApps (where winget lives) from the app's PATH. Seen in the
+ * clean Windows 11 VM on 2026-10-02: winget installed Node, refreshPath ran, and the very next
+ * step failed "spawn winget ENOENT", so setup dead-ended at Git with "winget is missing".
+ *
+ * WHY keep the current PATH's other entries after the registry's: the app's launch-time PATH
+ * can hold folders the registry doesn't list (added by the launcher or by us, e.g. Claude's
+ * bin dir); dropping them breaks tools that were working a moment ago. Registry entries come
+ * first so freshly installed tools win; duplicates are dropped case-insensitively (Windows paths).
+ */
+export function buildRefreshedPath(
+  userPath: string,
+  systemPath: string,
+  currentPath: string,
+  env: NodeJS.ProcessEnv,
+): string {
+  // Windows variable names are case-insensitive; Node's process.env already is on Windows,
+  // but a plain object (tests, or a copied env) is not, so look names up case-insensitively.
+  const lookup = (name: string): string | undefined => {
+    if (env[name] !== undefined) return env[name];
+    const key = Object.keys(env).find((k) => k.toLowerCase() === name.toLowerCase());
+    return key ? env[key] : undefined;
+  };
+  // An unknown %NAME% is left as written, which is what Windows itself does.
+  const expand = (entry: string) => entry.replace(/%([^%;]+)%/g, (m, name: string) => lookup(name) ?? m);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of [userPath, systemPath, currentPath].join(';').split(';')) {
+    const entry = expand(raw.trim());
+    if (!entry) continue;
+    const key = entry.replace(/[\\/]+$/, '').toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(entry);
+  }
+  return out.join(';');
+}
+
+/**
  * On Windows, re-reads User and System PATH from the registry so that
  * freshly-installed tools are visible without restarting the app.
  * On macOS/Linux this is a no-op — main.ts already prepends common paths.
@@ -494,7 +537,7 @@ function refreshPath(): void {
       ?.replace(/.*REG_(EXPAND_)?SZ\s+/i, '')
       .trim() ?? '';
 
-    process.env.PATH = `${userPath};${systemPath}`;
+    process.env.PATH = buildRefreshedPath(userPath, systemPath, process.env.PATH ?? '', process.env);
     // The Claude Code native installer does not always register its bin dir
     // (%USERPROFILE%\.local\bin) on the user PATH — verified 2026-05-30, a real
     // install printed "Native installation exists but ...\.local\bin is not in
