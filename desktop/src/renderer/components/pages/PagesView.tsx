@@ -22,6 +22,8 @@ import { EditGlyph, PageGlyph, PagesIcon, PinGlyph } from './page-icons';
 import { usePages, setPagePinned, refreshPages } from './use-pages';
 import { PageConnectionsDialog } from './page-connections';
 import { useScreenOpen, ScreenMark } from '../../shoot-mode';
+// WHY (Office fix round 5): Retry reloads the window, so any open Office document saves first.
+import { reloadAfterOfficeSave } from '../office/office-store';
 
 interface PagesViewProps {
   /** Starts the creator: a new conversation that builds a page. Owned by
@@ -37,7 +39,7 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
   const dispatch = useArtifactDispatch();
   const open = useArtifactSelector((s) => s.pagesViewOpen);
   useEscClose(open, () => dispatch({ type: 'PAGES_VIEW_CLOSED' }));
-  const { pages, loaded, failed } = usePages();
+  const { pages, loaded, failed, pinnedTotal } = usePages();
   // Fresh list on every open (see refreshPages).
   useEffect(() => { if (open) void refreshPages(); }, [open]);
   const [connectionsFor, setConnectionsFor] = useState<string | null>(null);
@@ -48,6 +50,7 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
 
   const close = () => dispatch({ type: 'PAGES_VIEW_CLOSED' });
   const openPage = (id: string) => dispatch({ type: 'PAGE_OPENED', pageId: id });
+  const builtin = pages.filter((p) => p.home.kind === 'builtin');
   const personal = pages.filter((p) => p.home.kind === 'personal');
   const byProject = new Map<string, PageSummary[]>();
   for (const p of pages) {
@@ -56,7 +59,7 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
     list.push(p);
     byProject.set(p.home.name, list);
   }
-  const pinnedCount = pages.filter((p) => p.pinned).length;
+  const pinnedCount = pinnedTotal ?? pages.filter((p) => p.pinned).length; // hidden Office pins count too (use-pages)
   // By id, so the dialog follows the live list when a connection is removed.
   const connectionsPage = pages.find((p) => p.id === connectionsFor) ?? null;
 
@@ -95,8 +98,15 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
           {loaded && failed && (
             <ErrorState
               message="The list of pages could not be read."
-              onRetry={() => window.location.reload()}
+              onRetry={() => reloadAfterOfficeSave()}
             />
+          )}
+          {loaded && !failed && builtin.length > 0 && (
+            <Section label="Built in">
+              {builtin.map((p) => (
+                <PageCard key={p.id} page={p} onOpen={() => openPage(p.id)} onEdit={() => onEditPage(p)} onConnections={() => setConnectionsFor(p.id)} pinFull={pinnedCount >= MAX_PINNED_PAGES} />
+              ))}
+            </Section>
           )}
           {loaded && !failed && personal.length > 0 && (
             <Section label="Personal">
@@ -150,7 +160,8 @@ function PageCard({ page, onOpen, onEdit, onConnections, pinFull }: { page: Page
           <div className="text-sm font-medium text-fg truncate" title={page.name}>{page.name}</div>
           <div className="text-xs text-fg-muted line-clamp-2">{page.description}</div>
         </div>
-        <Tooltip text="Edit in chat" placement="bottom">
+        {/* A built-in page is part of the app: nothing to edit in chat. */}
+        {page.home.kind !== 'builtin' && <Tooltip text="Edit in chat" placement="bottom">
           <Button
             size="icon-sm"
             variant="ghost"
@@ -160,7 +171,7 @@ function PageCard({ page, onOpen, onEdit, onConnections, pinFull }: { page: Page
             {/* Colour on the glyph, not the Button: the primitive owns its own text colour. */}
             <span className="text-fg-muted"><EditGlyph /></span>
           </Button>
-        </Tooltip>
+        </Tooltip>}
         <Tooltip text={cannotPin ? `Up to ${MAX_PINNED_PAGES} pinned pages` : page.pinned ? 'Unpin from the top bar' : 'Pin to the top bar'} placement="bottom">
           <Button
             size="icon-sm"
@@ -175,9 +186,11 @@ function PageCard({ page, onOpen, onEdit, onConnections, pinFull }: { page: Page
         </Tooltip>
       </div>
       <div className="flex items-center gap-2 text-2xs text-fg-muted">
-        <span>{page.home.kind === 'personal' ? 'Personal' : page.home.name}</span>
-        <span aria-hidden="true" className="text-fg-faint">·</span>
-        <span>Updated {relative(page.updatedAt)}</span>
+        <span>{page.home.kind === 'personal' ? 'Personal' : page.home.kind === 'builtin' ? 'Built in' : page.home.name}</span>
+        {page.home.kind !== 'builtin' && <>
+          <span aria-hidden="true" className="text-fg-faint">·</span>
+          <span>Updated {relative(page.updatedAt)}</span>
+        </>}
         {/* A quiet line, only on pages that reach outside (deck Q-manage: the
             library stays calm; no badge on every card — deck Q-levels). */}
         {connectionCount > 0 && (

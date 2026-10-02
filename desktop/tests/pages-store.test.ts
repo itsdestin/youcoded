@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PagesStore, isUnderPagesDir, slugFromId } from '../src/main/pages/pages-store';
-import { MAX_PAGE_DATA_BYTES, MAX_PINNED_PAGES } from '../src/shared/pages-types';
+import { MAX_PAGE_DATA_BYTES, MAX_PINNED_PAGES, OFFICE_PAGE_ID } from '../src/shared/pages-types';
 
 let root: string;
 let personal: string;
@@ -139,5 +139,37 @@ describe('helpers', () => {
     expect(isUnderPagesDir('/p', '/p/Pages/x/page.html')).toBe(true);
     expect(isUnderPagesDir('/p', 'Pages/x/data.json')).toBe(true);
     expect(isUnderPagesDir('/p', '/p/src/Pages.tsx')).toBe(false);
+  });
+});
+
+describe('the built-in Office page', () => {
+  const withOffice = (listed: boolean) => new PagesStore({
+    personalRoot: () => personal,
+    listProjects: async () => [{ name: 'demo', path: project }],
+    deviceId: () => 'dev-1',
+    localFallbackDir: () => path.join(root, 'local'),
+    officeListed: async () => listed,
+  });
+
+  it('is listed, unpinned, where the Office add-on is installed', async () => {
+    const pages = await withOffice(true).list();
+    expect(pages.find((p) => p.id === OFFICE_PAGE_ID)).toMatchObject({ name: 'Office', home: { kind: 'builtin' }, pinned: false });
+  });
+
+  it('is not listed where the add-on is missing', async () => {
+    expect((await withOffice(false).list()).map((p) => p.id)).not.toContain(OFFICE_PAGE_ID);
+    expect((await store.list()).map((p) => p.id)).not.toContain(OFFICE_PAGE_ID);
+  });
+
+  it('pins and unpins like any page, though it has no folder', async () => {
+    const s = withOffice(true);
+    expect((await s.setPinned(OFFICE_PAGE_ID, true)).find((p) => p.id === OFFICE_PAGE_ID)!.pinned).toBe(true);
+    expect((await s.list()).find((p) => p.id === OFFICE_PAGE_ID)!.pinned).toBe(true);
+    expect((await s.setPinned(OFFICE_PAGE_ID, false)).find((p) => p.id === OFFICE_PAGE_ID)!.pinned).toBe(false);
+  });
+
+  it('cannot be pinned where the add-on is missing', async () => {
+    await withOffice(false).setPinned(OFFICE_PAGE_ID, true);
+    expect((await withOffice(true).list()).find((p) => p.id === OFFICE_PAGE_ID)!.pinned).toBe(false);
   });
 });

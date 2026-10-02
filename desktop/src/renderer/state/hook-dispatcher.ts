@@ -2,6 +2,7 @@ import { HookEvent, type FloorStop } from '../../shared/types';
 
 const FLOOR_STOPS: FloorStop[] = ['removal', 'removal-if-empty', 'removal-unknown', 'secret-path', 'secret-maybe', 'admin'];
 import { ChatAction } from './chat-types';
+import { flushTranscriptActions } from './transcript-batch';
 
 /**
  * Maps a HookEvent into a ChatAction. Now only handles permission events —
@@ -128,4 +129,29 @@ export function hookEventToAction(event: HookEvent): ChatAction | null {
     default:
       return null;
   }
+}
+
+/**
+ * Computes the action for a hook event and applies it — shared by App.tsx (main
+ * window) and BubbleFeed.tsx (buddy window), both of which batch transcript
+ * deltas into animation frames but dispatch hook events immediately. WHY the
+ * flush (2026-09-28, journeys/permission-approve.json step 8 flake under
+ * load): a stalled frame can leave a chronologically earlier transcript delta
+ * queued while this synchronous dispatch applies first — flushing the queue
+ * first (same cut-line flush RemoteSnapshotExporter/chat:hydrate use)
+ * restores real order instead of racing it. `transform` lets a caller adjust
+ * the action (e.g. App.tsx's desktop-only "silent" resolve) before it applies.
+ */
+export function applyHookEvent(
+  event: HookEvent,
+  dispatch: (action: ChatAction) => void,
+  transform?: (action: ChatAction) => void,
+): ChatAction | null {
+  const action = hookEventToAction(event);
+  if (action) {
+    transform?.(action);
+    flushTranscriptActions();
+    dispatch(action);
+  }
+  return action;
 }

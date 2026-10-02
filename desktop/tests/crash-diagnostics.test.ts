@@ -143,6 +143,16 @@ describe('wireWindowHangDiagnostics', () => {
     expect(logged.at(-1)!.msg).toBe('window closed while still unresponsive');
   });
 
+  it('says whether the window is unresponsive right now (the close gate asks)', () => {
+    const win = new EventEmitter();
+    const hang = wireWindowHangDiagnostics(win as never, 'main');
+    expect(hang.unresponsive).toBe(false);
+    win.emit('unresponsive');
+    expect(hang.unresponsive).toBe(true);
+    win.emit('responsive');
+    expect(hang.unresponsive).toBe(false);
+  });
+
   it('stays quiet when a healthy window closes', () => {
     const win = new EventEmitter();
     wireWindowHangDiagnostics(win as never, 'main');

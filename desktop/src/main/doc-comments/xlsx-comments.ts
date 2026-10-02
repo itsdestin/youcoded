@@ -275,7 +275,7 @@ function parseCellRef(addr: string): { col: number; row: number } {
  *  directly in their own pinning tests. */
 const XLSX_THREAD_ID_RE = /^xt-(\d+)-([^-]+)-(.+)$/;
 
-function parseXlsxThreadId(id: string): { sheetId: number; cell: string; guid: string } | null {
+export function parseXlsxThreadId(id: string): { sheetId: number; cell: string; guid: string } | null {
   const m = XLSX_THREAD_ID_RE.exec(id);
   if (!m) return null;
   const sheetId = Number.parseInt(m[1], 10);
@@ -283,7 +283,7 @@ function parseXlsxThreadId(id: string): { sheetId: number; cell: string; guid: s
   return { sheetId, cell: m[2], guid: m[3] };
 }
 
-function buildXlsxThreadId(sheetId: number, cell: string, guidBraced: string): string {
+export function buildXlsxThreadId(sheetId: number, cell: string, guidBraced: string): string {
   return `xt-${sheetId}-${cell}-${guidBraced.replace(/[{}]/g, '')}`;
 }
 

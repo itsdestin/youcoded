@@ -33,6 +33,10 @@ function run(env: Record<string, string> = {}) {
   const codesign = writeStub(
     'codesign',
     `if [ "$1" = "--verify" ]; then
+       for a in "$@"; do case "$a" in */converter/*)
+         echo "stub converter verify output: $a"
+         case "$a" in *"\${UNSIGNED_CONVERTER_FILE:-<none>}") exit 1;; esac
+         exit 0;; esac; done
        echo "stub verify output"; exit "\${VERIFY_EXIT:-0}"
      fi
      if [ "$1" = "-d" ]; then
@@ -98,6 +102,38 @@ describe('verify-mac-signature.sh', () => {
     makeApp('mac', 'com.youcoded.desktop.beta');
     const r = run({ CODESIGN_IDENT: 'com.youcoded.desktop.beta' });
     expect(r.status).toBe(0);
+  });
+
+  // The Office converter sits in Contents/Resources/, where --deep does not look for code, and
+  // Apple silicon will not run it unsigned — so each of its files is verified on its own.
+  function withOffice(dir: string, files: string[]): void {
+    const conv = path.join(tmp, 'release', dir, 'YouCoded.app', 'Contents', 'Resources', 'office', 'converter');
+    fs.mkdirSync(conv, { recursive: true });
+    for (const f of files) fs.writeFileSync(path.join(conv, f), '');
+  }
+
+  it('passes when the Office converter and its libraries are signed', () => {
+    makeApp('mac-arm64');
+    withOffice('mac-arm64', ['x2t', 'libkernel.dylib', 'libicuuc.58.dylib', 'AllFonts.js']);
+    const r = run();
+    expect(r.status).toBe(0);
+    expect(r.out).toContain('Office converter signed (x2t and 2 dylib(s))');
+  });
+
+  it('fails naming the converter library that is not signed', () => {
+    makeApp('mac-arm64');
+    withOffice('mac-arm64', ['x2t', 'libkernel.dylib', 'libicuuc.58.dylib']);
+    const r = run({ UNSIGNED_CONVERTER_FILE: 'libicuuc.58.dylib' });
+    expect(r.status).toBe(1);
+    expect(r.out).toMatch(/::error::.*converter\/libicuuc\.58\.dylib failed codesign --verify/);
+  });
+
+  it('fails when the app carries Office without its converter', () => {
+    makeApp('mac');
+    fs.mkdirSync(path.join(tmp, 'release', 'mac', 'YouCoded.app', 'Contents', 'Resources', 'office', 'editors'), { recursive: true });
+    const r = run();
+    expect(r.status).toBe(1);
+    expect(r.out).toContain('carries Office but no converter/x2t');
   });
 
   it('fails loudly when no .app bundle exists (the mac build never ran)', () => {

@@ -4,6 +4,7 @@ import path from 'path';
 import os from 'os';
 import { resolveNoFolderCwd } from './no-folder';
 import { loadDefaultAppIcon, fitForMacDock } from './app-icon';
+import { requestRestart } from './app-restart';
 import { randomUUID } from 'crypto';
 import { CHATSEARCH_IPC } from './chatsearch-index/ipc-channels';
 import { buildClaudeCodeContext, readWholeContextFile } from './claude-code-context';
@@ -743,10 +744,9 @@ export function registerIpcHandlers(
   });
 
   ipcMain.handle(IPC.APP_RESTART, () => {
-    // Generic restart channel — reused by any future setting that needs a
-    // restart to apply. relaunch() schedules the restart for after exit().
-    app.relaunch();
-    app.exit(0);
+    // Generic restart channel. WHY quit, not exit (fix round 6, I-B): exit() skipped before-quit, so
+    // open Office documents were never saved or asked about. See app-restart.ts.
+    requestRestart(() => app.quit());
   });
 
   // --- Theme marketplace ---
@@ -5377,9 +5377,9 @@ export function registerIpcHandlers(
     deviceId: () => getMachineIdentity(app.getPath('userData'))?.id ?? null,
     localFallbackDir: () => app.getPath('userData'),
     noteOwnWrite,
-    // Phase 2: approvals and key POINTERS beside the model-provider keys in
-    // userData, never in a sync space — a key is machine-bound ciphertext.
-    connections: new PageConnectionsStore(app.getPath('userData'), secretsStore),
+    // Phase 2: approvals and key POINTERS beside the model-provider keys in userData, never a sync space (a key is machine-bound ciphertext).
+    // officeListed (WHY): the built-in Office page is listed, and pinnable, only where the add-on is installed (pages-store.ts).
+    connections: new PageConnectionsStore(app.getPath('userData'), secretsStore), officeListed: async () => (await import('./office/office-root')).officeAvailable(),
     // A FRESH reader per call, not a held instance: the fs-backed store caches
     // after its first load, so a long-lived one here would keep answering with
     // the token from before the person signed in or out.

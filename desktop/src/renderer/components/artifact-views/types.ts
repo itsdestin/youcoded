@@ -11,6 +11,8 @@ export interface ArtifactViewProps {
    *  Computed by ActiveArtifactView, which owns the routing decision. */
   sniffedBinaryTextFile?: boolean;
   path: string;
+  /** The artifact's id — for photo-only screen marks inside a viewer. */
+  artifactId?: string;
   content: string | null;
   absolutePath: string;
   isEditable: boolean;

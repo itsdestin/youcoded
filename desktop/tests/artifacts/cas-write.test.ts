@@ -252,6 +252,14 @@ describe('renameReplacing — a momentarily busy target on Windows', () => {
     expect(spy.mock.calls.length).toBeGreaterThan(1);
   });
 
+  it('on Windows, stops retrying once the caller asks it to abort', async () => {
+    const spy = vi.spyOn(fsp, 'rename').mockRejectedValue(busy('EPERM'));
+    await expect(renameReplacing(join(dir, 'x.tmp'), join(dir, 'x.json'), 'win32', () => true)).rejects.toMatchObject({
+      code: 'EPERM',
+    });
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
   it('elsewhere, a permission error is real and throws on the first attempt', async () => {
     const spy = vi.spyOn(fsp, 'rename').mockRejectedValue(busy('EACCES'));
     await expect(renameReplacing(join(dir, 'x.tmp'), join(dir, 'x.json'), 'linux')).rejects.toMatchObject({ code: 'EACCES' });

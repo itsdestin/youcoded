@@ -224,6 +224,10 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'pages.list', 'pages.get', 'pages.setPinned', 'pages.setData', 'pages.onChanged',
   // Pages Phase 2 (connections) — designed ahead of the backend; rows in mock-only.ts.
   'pages.approve', 'pages.removeConnection', 'pages.refresh', 'pages.savedKeys', 'pages.deleteSavedKey',
+  // Office — real channels since build plan Task 5 (main/office/office-ipc.ts). Faked so the
+  // workbench has files to list and versions to show without the add-on or a disk.
+  'office.status', 'office.create', 'office.pick', 'office.open', 'office.invoke', 'office.close',
+  'office.versions', 'office.restore', 'office.saveCopy',
   'appearance.set', 'appearance.broadcast', 'appearance.onSync',
   'skills.listMarketplace', 'skills.list', 'skills.getFavorites', 'skills.setFavorite', 'skills.getFeatured',
   'marketplace.getPackages', 'theme.marketplace',
@@ -495,6 +499,9 @@ const NAMESPACES = [
 
 import { createNamingPreview } from './naming-preview';
 import { seedPages } from './fixtures/pages';
+import { OFFICE_EDITOR_ORIGIN, OFFICE_FILES, officeFixtureName, officeSampleUrl } from './fixtures/office';
+import { OFFICE_PAGE_SUMMARY } from '../../../shared/pages-types';
+import type { OfficeBridge, OfficeVersion } from '../../../shared/office-types';
 import type { PagesBridge, PageDocument, PageSummary, SavedPageKey } from '../../../shared/pages-types';
 
 /** `?fail=<ns.method>[,…]` — those channels REJECT from the first call.
@@ -2910,9 +2917,20 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       }
       // Doc comments mockup: a real Word document with real Word comments
       // (fixtures/docs/make.mjs), for DocxView's highlights and comment pane.
-      if (ext === 'docx') {
+      if (absolutePath.endsWith('launch-brief.docx')) {
         return { ok: true, base64: DOC_LAUNCH_BRIEF,
                  mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
+      }
+      // Office (design stage): the fixture documents live on the editor add-on's
+      // origin, so the quick preview reads the same bytes the editor opens.
+      if (ext === 'docx' || ext === 'pptx') {
+        try {
+          const name = absolutePath.split('/').pop() ?? '';
+          const buf = new Uint8Array(await (await fetch(officeSampleUrl(OFFICE_EDITOR_ORIGIN, name))).arrayBuffer());
+          let bin = '';
+          for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+          return { ok: true, base64: btoa(bin), mime: 'application/octet-stream' };
+        } catch { return { ok: false, reason: 'not-an-image' }; }
       }
       if (ext === 'pdf') {
         const pdf = makeSamplePdfBase64();
@@ -3507,6 +3525,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     skills, marketplace, folders, fs, modes, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, search, performance: perfMock,
     update, dev: devMock, ...(remote ? { remote } : {}),
     pages: createPagesMock(activeScenario === 'empty'),
+    office: createOfficeMock(activeScenario === 'empty'),
     docComments: createDocCommentsMock(activeScenario === 'empty'),
   } as unknown as Record<string, Record<string, unknown>>;
 }
@@ -3681,7 +3700,11 @@ function createDocCommentsMock(empty: boolean) {
  *  gets the three fixture pages. Pin toggles publish through onChanged the way
  *  the real host will, so the header and the library never disagree. */
 function createPagesMock(empty: boolean): PagesBridge {
-  let pages: PageDocument[] = empty ? [] : seedPages();
+  // Office is built in, so it is listed in every scenario — even the empty one.
+  // Unpinned, as a new install has it: pinning it filled the header's fourth slot,
+  // and the resume journey's All Sessions click then raced the session strip
+  // re-packing under verify.sh's load (failed 2 of 4 runs, 2026-09-28).
+  let pages: PageDocument[] = [OFFICE_PAGE, ...(empty ? [] : seedPages())];
   // One key is saved from the start (Trip board uses it), so the Weather page
   // can show "Uses your saved OpenWeather key".
   const savedServices = new Map<string, string>(empty ? [] : [['OpenWeather', 'api.openweathermap.org']]);
@@ -3760,6 +3783,80 @@ function createPagesMock(empty: boolean): PagesBridge {
       usedBy: pages.filter((p) => p.connections?.some((c) => c.kind === 'key' && c.service === service && c.approved)).map((p) => ({ id: p.id, name: p.name })),
     }));
   }
+}
+
+/** The built-in Office page as the pages list carries it — the same row main lists. */
+const OFFICE_PAGE: PageDocument = { ...OFFICE_PAGE_SUMMARY, html: '', data: null };
+
+/** `window.claude.office` for the workbench — a fake HOST around the real editor (Task 6).
+ *  The editor add-on itself is served by scripts/office-workbench-server.mjs on
+ *  127.0.0.1:4717 (fixtures/office.ts); `open` hands out that origin, and `invoke` answers the
+ *  editor's requests the way main would: `open_file` returns the fixture translated by the
+ *  real x2t (the server runs main's own convert()), a save answers 'ok' and writes nothing.
+ *  WHY a fake host that still runs x2t: the Office screens then show the real editor with real
+ *  content, as Destin reviewed them. */
+function createOfficeMock(empty: boolean): OfficeBridge {
+  const HOUR = 3_600_000;
+  const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+  const recent = empty ? [] : OFFICE_FILES.map((f, i) => ({ ...f, at: ago([0.4, 5, 30][i] * HOUR) }));
+  let created = 0;
+  return {
+    status: async () => ({
+      available: true,
+      recent,
+      // Two files beyond Recent, so the "In <project>" list has something of its own to show
+      // (Recent's files are not repeated there). They open the fixture of their kind.
+      project: empty ? null : { name: 'community-garden', files: [
+        ...OFFICE_FILES.map((f, i) => ({ ...f, at: ago([26, 49, 75][i] * HOUR) })),
+        { ...OFFICE_FILES[1], path: '/home/you/Projects/community-garden/Volunteer rota.xlsx', name: 'Volunteer rota.xlsx', at: ago(52 * HOUR) },
+        { ...OFFICE_FILES[0], path: '/home/you/Projects/community-garden/Grant report.docx', name: 'Grant report.docx', at: ago(120 * HOUR) },
+      ] },
+    }),
+    create: async (kind) => {
+      created += 1;
+      const base = OFFICE_FILES.find((f) => f.kind === kind)!;
+      const name = `${{ document: 'Untitled document', spreadsheet: 'Untitled spreadsheet', presentation: 'Untitled presentation' }[kind]}${created > 1 ? ` ${created}` : ''}${base.name.slice(base.name.lastIndexOf('.'))}`;
+      return { ok: true, file: { ...base, path: `/home/you/Documents/${name}`, name, folder: 'Documents', at: new Date().toISOString() } };
+    },
+    pick: async () => OFFICE_FILES[0],
+    // One token per file (not one 'wb' for all): two documents can be open at once, and the
+    // token is how invoke knows which fixture the editor is asking for. The origin is the one
+    // local server, so the frames are told apart by their window, as EditorFrame already does.
+    open: async (path) => ({ ok: true, token: `wb:${path}`, origin: OFFICE_EDITOR_ORIGIN }),
+    invoke: async (token, cmd) => {
+      const path = token.slice('wb:'.length);
+      const base = path.slice(path.lastIndexOf('/') + 1);
+      switch (cmd) {
+        case 'open_file': {
+          const r = await fetch(`${OFFICE_EDITOR_ORIGIN}/fixtures/${encodeURIComponent(officeFixtureName(path))}`);
+          if (!r.ok) throw new Error("Office couldn't open this file.");
+          return r.text();
+        }
+        case 'write_editor_bin': case 'save_file': case 'save_changes': return 'ok';
+        // Save As / Export (finish plan Task 2): main's handle for the chosen name, then where it went.
+        case 'save_dialog': return `yc-save/${'0'.repeat(32)}/${base}`;
+        case 'save_file_as': return { name: base, folder: 'Documents' };
+        // Print (Task 3): the workbench has no print window; answer as a cancelled dialog does.
+        case 'print_document': return {};
+        // The rest answer as main's own defaults do (main/office/office-commands.ts).
+        case 'get_current_path': return base;
+        case 'recent_files_state': return { enabled: false, files: [] };
+        case 'get_system_fonts': return '';
+        case 'list_user_dictionaries': return { folders: [], refused: [] };
+        case 'recovery_candidates': return [];
+        default: return null;
+      }
+    },
+    close: async () => {},
+    // "Save a copy…" answers as main would for a failed save whose translation worked.
+    saveCopy: async (_token, mode) => (mode === 'check' ? { ok: true, possible: true } : { ok: true, folder: 'Documents', path: '/home/you/Documents/Garden plan (copy).docx', ...(mode === 'again' ? { unchanged: true } : {}) }),
+    versions: async () => {
+      if (empty) return [];
+      const v = (id: string, h: number, reason: OfficeVersion['reason']): OfficeVersion => ({ id, at: ago(h * HOUR), reason, bytes: 37_000 });
+      return [v('v4', 0.1, 'autosave'), v('v3', 0.4, 'opened'), v('v2', 3, 'autosave'), v('v1', 26, 'opened')];
+    },
+    restore: async () => ({ ok: true }),
+  };
 }
 
 const VOICE_SCRIPT = "Can you look at the budget spreadsheet I sent yesterday? Row 14 is wrong: it says $2,300 but Sarah's invoice was $2,030. Fix it and draft a short reply to her.".split(' ');
