@@ -125,7 +125,8 @@ function homeAssistantPageHtml(): string {
      outranks the shared \`.tile .lr\` height further down, which had kept
      the bar at its old height. */
   .tile .lr.vlr { height: 30px; flex: 1; border-radius: 10px; }
-  .tile .lr.vlr::-webkit-slider-thumb { width: 12px; height: 30px; border-radius: 6px; }
+  .tile .lr.vlr { --tw: 16px; }
+  .tile .lr.vlr::-webkit-slider-thumb { width: 16px; height: 30px; border-radius: 10px; background-size: 3px 40%; }
   .vicon { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); display: grid; color: var(--on-accent); opacity: .75; pointer-events: none; mix-blend-mode: normal; }
   .vicon.low { color: var(--fg); opacity: .55; }
   /* Playing: three bars that bounce beside Now playing, still when paused.
@@ -154,12 +155,9 @@ function homeAssistantPageHtml(): string {
   .tile:has(> .line > .tile-face:active) { transform: scale(.99); }
   .tile { transition: transform 90ms ease; }
   .lr { touch-action: pan-y; }
-  .lr::-webkit-slider-thumb { transition: transform 120ms ease, background-color 120ms ease, box-shadow 120ms ease; }
-  .tile .lr:hover::-webkit-slider-thumb, .tile .lr:focus-visible::-webkit-slider-thumb, .tile .lr:active::-webkit-slider-thumb { background: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .45); }
-  .tile .lr:active::-webkit-slider-thumb { transform: scale(1.25); }
   @media (prefers-reduced-motion: reduce) {
-    .tile, .tile-face, .key, .pwr, .vbtn, .nk .ic, .app, .rbtn, .fold, .cbtn, .sw, .mode, .step, .ib, .dpad button, .lr::-webkit-slider-thumb { transition: none; }
-    .key:active, .pwr:active, .vbtn:active, .nk:active .ic, .app:active, .fold:active, .cbtn:active, .sw:active, .mode:active, .step:active, .ib:active, .tile:has(> .line > .tile-face:active), .tile .lr:active::-webkit-slider-thumb { transform: none; }
+    .tile, .tile-face, .key, .pwr, .vbtn, .nk .ic, .app, .rbtn, .fold, .cbtn, .sw, .mode, .step, .ib, .dpad button { transition: none; }
+    .key:active, .pwr:active, .vbtn:active, .nk:active .ic, .app:active, .fold:active, .cbtn:active, .sw:active, .mode:active, .step:active, .ib:active, .tile:has(> .line > .tile-face:active) { transform: none; }
   }
   .np-ctl { flex-basis: 100%; display: flex; align-items: center; justify-content: center; gap: 10px; padding-top: 6px; }
   .np-ctl .key { width: 34px; height: 34px; }
@@ -257,9 +255,13 @@ function homeAssistantPageHtml(): string {
   @media (prefers-reduced-motion: reduce) { .tile .glow, .sw { transition: none; } }
 
   /* ── Light controls, shared ─────────────────────────────────────────── */
-  /* A range painted as a filled bar: --pct is the fill, --c the light's own
-     colour. Updated live while dragging, without redrawing the page. */
-  .lr { appearance: none; -webkit-appearance: none; width: 100%; margin: 0; cursor: pointer; background: linear-gradient(to right, var(--c, var(--accent)) var(--pct, 0%), var(--well) var(--pct, 0%)); border-radius: 9999px; }
+  /* A range painted as a filled bar: --v (0–100) is how far along it is, --c
+     the colour. The fill ends exactly where the browser puts the handle —
+     the handle travels from 0 to (width − handle width), so the fill is
+     handle width + that share of the rest (eighth-look testing: "the slider
+     fill seems to separate from the drag handle"). Updated live while
+     dragging, without redrawing the page. */
+  .lr { appearance: none; -webkit-appearance: none; width: 100%; margin: 0; cursor: pointer; background: linear-gradient(to right, var(--c, var(--accent)) calc(var(--tw, 14px) + (100% - var(--tw, 14px)) * var(--v, 0) / 100), var(--well) 0); border-radius: 9999px; }
   .lr:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .lr::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; }
   .palette { position: relative; display: flex; flex-wrap: wrap; gap: 8px; padding-top: 2px; }
@@ -278,7 +280,11 @@ function homeAssistantPageHtml(): string {
   .tile .bulb { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; background: var(--well); color: var(--fg-muted); flex-shrink: 0; position: relative; }
   .tile.on .bulb { background: var(--c); color: #1a1a1a; box-shadow: 0 0 14px var(--c); }
   .tile .lr { height: 14px; position: relative; }
-  .tile .lr::-webkit-slider-thumb { width: 14px; height: 14px; border-radius: 50%; background: transparent; }
+  /* The handle is a grip line inside the end of the fill, always shown, so
+     nothing pops in on hover (eighth-look testing). */
+  .tile .lr { --tw: 14px; }
+  .tile .lr::-webkit-slider-thumb { width: 14px; height: 14px; border-radius: 9999px; background: linear-gradient(rgba(0, 0, 0, .3), rgba(0, 0, 0, .3)) center / 3px 55% no-repeat; cursor: grab; }
+  .tile .lr:active::-webkit-slider-thumb { cursor: grabbing; }
 
   .tile.media .bulb { border-radius: var(--radius-md, 8px); }
   .tile.media.on .bulb { background: var(--accent); color: var(--on-accent); box-shadow: none; }
@@ -602,7 +608,7 @@ function homeAssistantPageHtml(): string {
     return '<button class="cbtn" style="--c:' + colourOf(it) + '" data-expand="' + esc(it.id) + '" aria-expanded="' + (expanded.has(it.id) ? 'true' : 'false') + '" aria-label="Colour of ' + esc(it.name) + '" title="Colour"></button>';
   }
   function rangeHtml(it, pct) {
-    return '<input class="lr" type="range" min="1" max="100" value="' + pct + '" style="--pct:' + pct + '%;--c:' + colourOf(it) + '" aria-label="Brightness of ' + esc(it.name) + '" data-bright="' + esc(it.id) + '">';
+    return '<input class="lr" type="range" min="1" max="100" value="' + pct + '" style="--v:' + Math.round((pct - 1) / 99 * 100) + ';--c:' + colourOf(it) + '" aria-label="Brightness of ' + esc(it.name) + '" data-bright="' + esc(it.id) + '">';
   }
 
   // Volume: − and + either side of a bar (round 7). \`target\` is the player
@@ -620,7 +626,7 @@ function homeAssistantPageHtml(): string {
       var v = Math.round(target.vol * 100);
       if (dragging === target.id) { var live = document.querySelector('[data-vol="' + target.id + '"]'); if (live) v = Number(live.value); }
       return '<div class="vrow"><button class="vbtn" data-mp="' + esc(target.id) + '" data-svc="volume_down" aria-label="Volume down' + esc(where) + '" title="Volume down">' + minus + '</button>' +
-        '<span class="vwrap"><input class="lr vlr" type="range" min="0" max="100" value="' + v + '" style="--pct:' + v + '%;--c:var(--accent)" aria-label="Volume of ' + esc(it.name) + esc(where) + '" data-vol="' + esc(target.id) + '">' +
+        '<span class="vwrap"><input class="lr vlr" type="range" min="0" max="100" value="' + v + '" style="--v:' + v + ';--c:var(--accent)" aria-label="Volume of ' + esc(it.name) + esc(where) + '" data-vol="' + esc(target.id) + '">' +
         '<span class="vicon' + (v < 12 ? ' low' : '') + '" data-vicon="' + esc(target.id) + '">' + volIcon(v, target.muted) + '</span></span>' +
         '<button class="vbtn" data-mp="' + esc(target.id) + '" data-svc="volume_up" aria-label="Volume up' + esc(where) + '" title="Volume up">' + plus + '</button></div>';
     }
@@ -1137,7 +1143,8 @@ function homeAssistantPageHtml(): string {
   document.addEventListener('input', function (e) {
     var t = e.target;
     if (!t.classList || !t.classList.contains('lr')) return;
-    t.style.setProperty('--pct', t.value + '%');
+    var lo = Number(t.min) || 0, hi = Number(t.max) || 100;
+    t.style.setProperty('--v', String((Number(t.value) - lo) / (hi - lo) * 100));
     var v = t.getAttribute('data-vol'), b = t.getAttribute('data-bright');
     dragging = v || b;
     if (v) {
