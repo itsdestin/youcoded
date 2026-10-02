@@ -258,6 +258,57 @@ describe('the instruction-file read for a phone (answer 9), under the R3-SEC pho
       fs.mkdirSync(path.join(sd, 'SKILL.md'));
       expect(JSON.stringify(await ask('skill', ctxFor({ s1: dir }), 's1', 'mine'))).not.toContain('text');
     });
+    it('a live assistant session: a SKILL.md that is a link to a private key is refused BEFORE the host is asked, and the host\'s own denied path is refused too', async () => {
+      const dir = tmp(); const sd = mkSkill(dir);
+      const key = path.join(tmp(), 'id_rsa');
+      fs.writeFileSync(key, '-----BEGIN PRIVATE KEY-----');
+      fs.rmSync(path.join(sd, 'SKILL.md'));
+      fs.symlinkSync(key, path.join(sd, 'SKILL.md'));
+      const liveHost = { sessionContextText: vi.fn(() => ({ path: key, text: '-----BEGIN PRIVATE KEY-----', full: '-----BEGIN PRIVATE KEY-----', truncated: false })) };
+      const out: any = await ask('skill', ctxFor({ s1: dir }, { nativeHost: liveHost }), 's1', 'mine');
+      expect(out.payload).toEqual({ error: 'kept-on-computer' });
+      expect(liveHost.sessionContextText).not.toHaveBeenCalled();
+      // A normal skill file, but the host names a denied path: the answer never reaches the phone.
+      const ok = tmp(); mkSkill(ok);
+      const lyingHost = { sessionContextText: vi.fn(() => ({ path: key, text: 'KEY TEXT', full: 'KEY TEXT', truncated: false })) };
+      const out2: any = await ask('skill', ctxFor({ s1: ok }, { nativeHost: lyingHost }), 's1', 'mine');
+      expect(JSON.stringify(out2)).not.toContain('KEY TEXT');
+      expect(out2.payload).toEqual({ error: 'kept-on-computer' });
+    });
+    it('a live assistant session: an ordinary skill file still answers from the host, and an oversize host answer is refused', async () => {
+      const dir = tmp(); const sd = mkSkill(dir);
+      const answer = { path: path.join(sd, 'SKILL.md'), text: 'cut', full: 'full skill', truncated: true };
+      expect(((await ask('skill', ctxFor({ s1: dir }, { nativeHost: { sessionContextText: vi.fn(() => answer) } }), 's1', 'mine')) as any).payload).toEqual(answer);
+      const huge = { ...answer, full: 'x'.repeat(1024 * 1024 + 1) };
+      expect(((await ask('skill', ctxFor({ s1: dir }, { nativeHost: { sessionContextText: vi.fn(() => huge) } }), 's1', 'mine')) as any).payload).toEqual({ error: 'too-large' });
+    });
+    it('a SKILL.md that links to an ordinary file outside every skills folder is refused; a link that stays inside the skills folder is read', async () => {
+      const dir = tmp(); const sd = mkSkill(dir);
+      const notes = path.join(tmp(), 'notes.txt');
+      fs.writeFileSync(notes, 'PRIVATE NOTES');
+      fs.rmSync(path.join(sd, 'SKILL.md'));
+      fs.symlinkSync(notes, path.join(sd, 'SKILL.md'));
+      const out: any = await ask('skill', ctxFor({ s1: dir }), 's1', 'mine');
+      expect(JSON.stringify(out)).not.toContain('PRIVATE NOTES');
+      expect(out.payload).toEqual({ error: 'kept-on-computer' });
+      // a link that stays inside the same skills folder
+      const dir2 = tmp(); const sd2 = mkSkill(dir2, 'mine', 'REAL INSIDE');
+      fs.mkdirSync(path.join(dir2, '.claude', 'skills', 'other'), { recursive: true });
+      fs.writeFileSync(path.join(dir2, '.claude', 'skills', 'other', 'real.md'), '---\nname: other\ndescription: d\n---\nVIA LINK');
+      fs.rmSync(path.join(sd2, 'SKILL.md'));
+      fs.symlinkSync(path.join(dir2, '.claude', 'skills', 'other', 'real.md'), path.join(sd2, 'SKILL.md'));
+      expect(((await ask('skill', ctxFor({ s1: dir2 }), 's1', 'mine')) as any).payload.text).toContain('VIA LINK');
+    });
+    it('asking again within a few seconds does not run the skill scan again (it is judged again each time)', async () => {
+      const dir = tmp(); mkSkill(dir);
+      const real = fs.readFileSync;
+      let scans = 0;
+      const spy = vi.spyOn(fs, 'readFileSync').mockImplementation(((p: any, ...rest: any[]) => { if (String(p).endsWith(path.join('mine', 'SKILL.md'))) scans++; return (real as any)(p, ...rest); }) as any);
+      try {
+        for (let i = 0; i < 3; i++) expect(((await ask('skill', ctxFor({ s1: dir }), 's1', 'mine')) as any).payload.text).toContain('SKILL BODY');
+      } finally { spy.mockRestore(); }
+      expect(scans).toBe(1);
+    });
     it('the text of the file is read once, after it was judged', async () => {
       const dir = tmp(); mkSkill(dir);
       // (The computer's skill scan reads each SKILL.md's heading while finding the skill; that is the lookup. The phone's own read is the async one.)

@@ -17,6 +17,8 @@
 //   R6-1 (2026-10-01; Destin, 2026-09-30, answers 8 and 9): clear and invoke-skill are open to a phone, and a phone now gets the
 //   instruction-file read too, through the phone's own deny list (see the session-context-text entry).
 import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { IPC } from '../../shared/backend-contract';
 import { findProjectInstructionsPath, locateContextFile, readWholeContextFile } from '../claude-code-context';
 import { isPhoneDeniedFile, KEPT_ON_COMPUTER } from '../phone-read-deny';
@@ -26,6 +28,32 @@ import { defineChannel, type MainChannelCtx, type MainChannelDef } from './chann
 /** The most a phone is sent of one instruction file (the computer's panel has no cap; instruction files are small). */
 const PHONE_CONTEXT_MAX_BYTES = 1024 * 1024;
 const NOT_LIVE_SEND = { status: 'failed', reason: 'not-live' } as const;
+
+/** WHY a short cache (R6-3 review): finding a skill's file runs the computer's skill scan (synchronous reads across every plugin), and a phone could
+ *  ask in a loop. A found path is kept for a few seconds; it is judged again on every read, so a stale entry can never skip a check. */
+const SKILL_PATH_TTL_MS = 5000;
+const skillPaths = new Map<string, { at: number; found: { path: string } | { error: string } }>();
+function locateSkillCached(sessions: Parameters<typeof locateContextFile>[0], sessionId: string, id: string | undefined): { path: string } | { error: string } {
+  const key = `${sessions.getSession(sessionId)?.cwd ?? ''}\u0000${id ?? ''}`;
+  const hit = skillPaths.get(key);
+  if (hit && Date.now() - hit.at < SKILL_PATH_TTL_MS) return hit.found;
+  const found = locateContextFile(sessions, sessionId, 'skill', id);
+  if (skillPaths.size >= 100) skillPaths.clear();
+  skillPaths.set(key, { at: Date.now(), found });
+  return found;
+}
+
+/** True when a skill file's REAL path sits inside a folder skills live in: the user's skills and plugins folders, or the session folder's own
+ *  `.claude/skills`. (A skill folder that is a link to a repository elsewhere is refused on a phone; the computer's own panel still shows it.) */
+async function insideSkillsRoot(realFile: string, cwd: string | undefined): Promise<boolean> {
+  const home = os.homedir();
+  const roots = [path.join(home, '.claude', 'skills'), path.join(home, '.claude', 'plugins'), ...(cwd ? [path.join(cwd, '.claude', 'skills')] : [])];
+  for (const r of roots) {
+    const rr = await fs.promises.realpath(r).catch(() => null);
+    if (rr && (realFile === rr || realFile.startsWith(rr + path.sep))) return true;
+  }
+  return false;
+}
 
 /** The one place the YOUCODED_NATIVE=0 kill switch is read in main (one-core R3-5, audit M6).
  *  WHY it still guards only the context-preference channels: that is all the switch has ever refused in
@@ -155,30 +183,62 @@ export const nativeChannels: MainChannelDef[] = [
     handler: async ({ sessionId, kind, id }, ctx) => {
       const host = ctx.runtime?.nativeHost;
       if (ctx.door === 'remote' || !ctx.desktop) {
-        if (kind !== 'user' && host) {
-          const fromHost = host.sessionContextText(sessionId, kind as 'project' | 'skill', id);
-          if (!('error' in fromHost) || fromHost.error !== 'not-live') return fromHost;
-        }
         // WHY these three and no others (R6-3; Destin, 2026-10-01: a skill's own file may show on a phone, under the same protections): a
         // phone may read the instruction files and a skill's SKILL.md, never any kind it invents (R6-1 review). Anything else gets the host's
         // own answer (which is what a phone always got), or not-live when there is no host. For a skill the phone sends only an id: the
         // skill's folder is looked up on the computer from its own skill scan, never taken from the phone.
-        if ((kind !== 'project' && kind !== 'user' && kind !== 'skill') || !ctx.remote) return host ? host.sessionContextText(sessionId, kind as 'project' | 'skill', id) : { error: 'not-live' };
+        if ((kind !== 'project' && kind !== 'user' && kind !== 'skill') || !ctx.remote) {
+          if (!host) return { error: 'not-live' };
+          return host.sessionContextText(sessionId, kind as 'project' | 'skill', id);
+        }
         const sessions = { getSession: (sid: string) => { const cwd = ctx.remote!.sessionCwd(sid); return cwd ? { cwd } : undefined; } };
-        const cwd = kind === 'project' ? sessions.getSession(sessionId)?.cwd : undefined;
-        if (kind === 'project' && !cwd) return { error: 'not-live' };
-        const found = kind === 'project' ? await findProjectInstructionsPath(cwd!) : locateContextFile(sessions, sessionId, kind, id);
+        const sessionCwd = sessions.getSession(sessionId)?.cwd;
+        // One judge for every phone read: the deny list on the real path, then a regular file of sane size, then (a skill only) a skills folder.
+        // It runs BEFORE any byte is read, and BEFORE the assistant host is asked: the host's own skill read (harness skill-catalog) has no
+        // deny list, size cap or file-type check, so a SKILL.md that is really a link to a key would otherwise reach the phone from a live
+        // native session.
+        const judge = async (file: string): Promise<{ real: string } | { error: string }> => {
+          if (await isPhoneDeniedFile(file)) return { error: KEPT_ON_COMPUTER };
+          try {
+            const real = await fs.promises.realpath(file);
+            const st = await fs.promises.stat(real);
+            if (!st.isFile()) return { error: 'unreadable' };
+            if (st.size > PHONE_CONTEXT_MAX_BYTES) return { error: 'too-large' };
+            if (kind === 'skill' && !(await insideSkillsRoot(real, sessionCwd))) return { error: KEPT_ON_COMPUTER };
+            return { real };
+          } catch { return { error: 'unreadable' }; }
+        };
+        // The assistant host answers for its own sessions (it knows the budget its text was cut to). A project file keeps its old order (host
+        // first); a skill is judged first. Either way the path the host says it read is judged too, so an answer can never skip the checks.
+        const askHost = async (): Promise<unknown | undefined> => {
+          if (kind === 'user' || !host) return undefined;
+          const fromHost = host.sessionContextText(sessionId, kind as 'project' | 'skill', id);
+          if ('error' in fromHost && fromHost.error === 'not-live') return undefined;
+          if (!('error' in fromHost)) {
+            // The host already read it (its own business); a phone is sent it only if the path passes the deny list and the text is of sane size.
+            if (typeof fromHost.path === 'string' && await isPhoneDeniedFile(fromHost.path)) return { error: KEPT_ON_COMPUTER };
+            if ((fromHost.full?.length ?? fromHost.text?.length ?? 0) > PHONE_CONTEXT_MAX_BYTES) return { error: 'too-large' };
+          }
+          return fromHost;
+        };
+        if (kind === 'project') {
+          const answered = await askHost();
+          if (answered !== undefined) return answered as never;
+        }
+        if (kind === 'project' && !sessionCwd) return { error: 'not-live' };
+        const found = kind === 'project' ? await findProjectInstructionsPath(sessionCwd!) : kind === 'skill' ? locateSkillCached(sessions, sessionId, id) : locateContextFile(sessions, sessionId, kind, id);
         const located = typeof found === 'string' ? { path: found } : found ?? { error: 'not-found' };
-        if ('error' in located) return located;
-        // The deny list judges the real path BEFORE the file is read, so a refused file is never opened.
-        if (await isPhoneDeniedFile(located.path)) return { error: KEPT_ON_COMPUTER };
-        // Read exactly the path that was judged (no second lookup), and only a regular file of sane size: a named pipe would hang the read.
+        if ('error' in located) {
+          // A skill the computer's scan cannot place may still be one the assistant host loaded: its answer is judged like any other.
+          if (kind === 'skill') { const answered = await askHost(); if (answered !== undefined) return answered as never; }
+          return located;
+        }
+        const judged = await judge(located.path);
+        if ('error' in judged) return judged;
+        if (kind === 'skill') { const answered = await askHost(); if (answered !== undefined) return answered as never; }
+        // Read exactly the path that was judged (no second lookup).
         try {
-          const real = await fs.promises.realpath(located.path);
-          const st = await fs.promises.stat(real);
-          if (!st.isFile()) return { error: 'unreadable' };
-          if (st.size > PHONE_CONTEXT_MAX_BYTES) return { error: 'too-large' };
-          const text = await fs.promises.readFile(real, 'utf8');
+          const text = await fs.promises.readFile(judged.real, 'utf8');
           return { path: located.path, text, full: text, truncated: false };
         } catch { return { error: 'unreadable' }; }
       }
