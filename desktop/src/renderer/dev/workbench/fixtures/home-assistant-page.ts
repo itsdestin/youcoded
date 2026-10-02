@@ -115,10 +115,24 @@ function homeAssistantPageHtml(): string {
   .vrow { display: flex; align-items: center; gap: 8px; width: 100%; position: relative; }
   .vrow.keys-only { justify-content: center; }
   .vlbl { font-size: 11px; color: var(--fg-muted); min-width: 64px; text-align: center; }
-  .vbtn { width: 30px; height: 30px; flex-shrink: 0; border-radius: 50%; border: 1px solid var(--edge); background: var(--well); color: var(--fg-2); cursor: pointer; display: grid; place-items: center; padding: 0; }
+  .vbtn { width: 26px; height: 26px; flex-shrink: 0; border-radius: 50%; border: 1px solid var(--edge); background: var(--well); color: var(--fg-2); cursor: pointer; display: grid; place-items: center; padding: 0; }
   .vbtn:hover { color: var(--fg); border-color: var(--fg-muted); }
   .vbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .tile .vlr { height: 10px; flex: 1; }
+  /* Sixth-look notes: a slightly bigger bar, smaller − and +, and a
+     see-through speaker on the bar's left that shows how loud it is. */
+  .vwrap { position: relative; flex: 1; display: flex; align-items: center; }
+  .tile .vlr { height: 20px; flex: 1; }
+  .vicon { position: absolute; left: 7px; top: 50%; transform: translateY(-50%); display: grid; color: var(--on-accent); opacity: .75; pointer-events: none; mix-blend-mode: normal; }
+  .vicon.low { color: var(--fg); opacity: .55; }
+  /* Playing: three bars that bounce beside Now playing, still when paused.
+     steps() keeps the animation cheap (performance rule 6). */
+  .eq { display: inline-flex; align-items: flex-end; gap: 2px; height: 9px; margin-left: 6px; vertical-align: -1px; }
+  .eq i { width: 2px; height: 3px; border-radius: 1px; background: var(--accent); }
+  .eq.on i { animation: eq 0.9s steps(6, end) infinite; }
+  .eq.on i:nth-child(2) { animation-delay: -0.3s; }
+  .eq.on i:nth-child(3) { animation-delay: -0.6s; }
+  @keyframes eq { 0% { height: 3px; } 50% { height: 9px; } 100% { height: 3px; } }
+  @media (prefers-reduced-motion: reduce) { .eq.on i { animation: none; height: 6px; } }
   /* The remote: one card. Its header is the button; open, the remote sits
      inside the same card. */
   .rcard { position: relative; border-radius: var(--radius-md, 8px); border: 1px solid var(--edge-dim); background: var(--well); overflow: hidden; }
@@ -590,6 +604,10 @@ function homeAssistantPageHtml(): string {
   // Volume: − and + either side of a bar (round 7). \`target\` is the player
   // whose volume it is — the TV's soundbar when its sound goes there. With
   // no level to show (a TV box with no soundbar), the keys alone.
+  function volIcon(pct, muted) {
+    var waves = muted || pct <= 0 ? '<path d="m16 9 5 6M21 9l-5 6"/>' : (pct < 34 ? '<path d="M15 9.5a3.5 3.5 0 0 1 0 5"/>' : pct < 67 ? '<path d="M15 9.5a3.5 3.5 0 0 1 0 5M18 7a7 7 0 0 1 0 10"/>' : '<path d="M15 9.5a3.5 3.5 0 0 1 0 5M18 7a7 7 0 0 1 0 10M21 4.5a10.5 10.5 0 0 1 0 15"/>');
+    return '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4z"/>' + waves + '</svg>';
+  }
   function volRow(it, target, rc) {
     var minus = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"/></svg>';
     var plus = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg>';
@@ -598,7 +616,8 @@ function homeAssistantPageHtml(): string {
       var v = Math.round(target.vol * 100);
       if (dragging === target.id) { var live = document.querySelector('[data-vol="' + target.id + '"]'); if (live) v = Number(live.value); }
       return '<div class="vrow"><button class="vbtn" data-mp="' + esc(target.id) + '" data-svc="volume_down" aria-label="Volume down' + esc(where) + '" title="Volume down">' + minus + '</button>' +
-        '<input class="lr vlr" type="range" min="0" max="100" value="' + v + '" style="--pct:' + v + '%;--c:var(--accent)" aria-label="Volume of ' + esc(it.name) + esc(where) + '" data-vol="' + esc(target.id) + '">' +
+        '<span class="vwrap"><input class="lr vlr" type="range" min="0" max="100" value="' + v + '" style="--pct:' + v + '%;--c:var(--accent)" aria-label="Volume of ' + esc(it.name) + esc(where) + '" data-vol="' + esc(target.id) + '">' +
+        '<span class="vicon' + (v < 12 ? ' low' : '') + '" data-vicon="' + esc(target.id) + '">' + volIcon(v, target.muted) + '</span></span>' +
         '<button class="vbtn" data-mp="' + esc(target.id) + '" data-svc="volume_up" aria-label="Volume up' + esc(where) + '" title="Volume up">' + plus + '</button></div>';
     }
     if (rc) {
@@ -654,7 +673,8 @@ function homeAssistantPageHtml(): string {
     var nowHtml = media && on && (playing && what || app)
       ? '<div class="np' + (ctl || vol ? ' has-ctl' : '') + '"><span class="art" style="--app:' + (app ? app.bg : 'var(--accent)') + '">' +
         (app ? app.mark : '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>') +
-        '</span><span class="txt"><div class="lbl">' + (it.state === 'paused' ? 'Paused' : 'Now playing') + '</div>' +
+        '</span><span class="txt"><div class="lbl">' + (it.state === 'paused' ? 'Paused' : 'Now playing') +
+        '<span class="eq' + (it.state === 'playing' ? ' on' : '') + '" aria-hidden="true"><i></i><i></i><i></i></span></div>' +
         '<div class="ttl">' + esc(playing && what ? what : app.name) + '</div>' +
         (app && playing && what && what !== app.name && app.name !== 'TV' ? '<div class="by">' + (tv ? 'in ' : 'on ') + esc(app.name) + '</div>' : '') + '</span>' +
         // Volume above previous/play/next (round 7).
@@ -1116,7 +1136,10 @@ function homeAssistantPageHtml(): string {
     t.style.setProperty('--pct', t.value + '%');
     var v = t.getAttribute('data-vol'), b = t.getAttribute('data-bright');
     dragging = v || b;
-    if (v) { var lv = t.value / 100; holdVal(v, 'vol', lv); sendSoon(function () { quiet('/api/services/media_player/volume_set', { entity_id: v, volume_level: lv }); }); }
+    if (v) {
+      var vi = t.parentNode && t.parentNode.querySelector('.vicon');
+      if (vi) { vi.innerHTML = volIcon(Number(t.value), false); vi.classList.toggle('low', Number(t.value) < 12); }
+      var lv = t.value / 100; holdVal(v, 'vol', lv); sendSoon(function () { quiet('/api/services/media_player/volume_set', { entity_id: v, volume_level: lv }); }); }
     if (b && Number(t.value) > 0) { var bp = Number(t.value); holdVal(b, 'brightness', Math.round(bp * 2.55)); sendSoon(function () { quiet('/api/services/light/turn_on', { entity_id: b, brightness_pct: bp }); }); }
   });
   // A value you set holds until Home Assistant reports it (or 4 seconds),
