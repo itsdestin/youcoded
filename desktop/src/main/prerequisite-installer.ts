@@ -832,6 +832,7 @@ async function waitForMacCommandLineTools(): Promise<void> {
 }
 
 let nodeInstallInFlight: Promise<{ success: boolean; error?: string }> | null = null;
+let nodeFound = false;
 
 /**
  * Node.js present, or installed now. One install at a time: a second caller
@@ -842,9 +843,14 @@ let nodeInstallInFlight: Promise<{ success: boolean; error?: string }> | null = 
  * sessions only, so setup no longer installs it for everyone — these moments do.
  */
 export async function ensureNode(): Promise<{ success: boolean; error?: string }> {
-  if ((await detectNode()).installed) return { success: true };
+  // WHY remember a found Node: this runs before EVERY Claude Code / Terminal
+  // session start, and detectNode spawns `node --version` each time.
+  if (nodeFound) return { success: true };
+  if ((await detectNode()).installed) { nodeFound = true; return { success: true }; }
   if (!nodeInstallInFlight) {
-    nodeInstallInFlight = installNode().finally(() => { nodeInstallInFlight = null; });
+    nodeInstallInFlight = installNode()
+      .then((r) => { if (r.success) nodeFound = true; return r; })
+      .finally(() => { nodeInstallInFlight = null; });
   }
   return nodeInstallInFlight;
 }
