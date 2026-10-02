@@ -4,6 +4,7 @@
 // computer now reads every Claude Code terminal itself (main/session-screens.ts) and publishes the card once, so the rules moved here where
 // main and the renderer's remaining startup-dialog check can both use them. Pure.
 import type { ParsedMenu } from './ink-select-parser';
+import { readInputFocus } from './cc-input-focus';
 
 /**
  * How long to wait before showing a menu-detected card, giving the hook system time to deliver a PermissionRequest through the named-pipe relay.
@@ -32,21 +33,38 @@ const SETUP_PROMPT_TITLES = new Set([
 ]);
 
 /**
- * The card title for a menu, or null to skip it.
+ * A mid-session dialog the app does not know by name waits longer: ordinary permission, question and plan menus look the same on screen, and their hook
+ * event can trail the menu by a few hundred ms under load. Only a dialog no hook claimed for a full second gets a generic card. (Master's popups work,
+ * 2026-09-29.)
+ */
+export const GENERIC_CARD_DEBOUNCE_MS = 1000;
+
+/**
+ * The card for a menu, or null to skip it.
  *
  * A known setup prompt keeps its canonical title. While the session is still STARTING (no hook event yet — Claude Code runs none until every startup
  * dialog is answered), any menu that is plainly a live Claude Code dialog (its "Enter to confirm · Esc to cancel" footer under the options) is shown
  * too, titled with the dialog's own heading: a dialog nobody has taught the app about must never again leave a new session on "Initializing
- * session…" (2026-09-24). Outside startup the known-titles gate stays strict — there, permission menus belong to the hook cards and numbered lists in
- * replies are not menus.
+ * session…" (2026-09-24).
+ *
+ * MID-SESSION the same holds for a dialog that has taken the keyboard — its footer under the options AND Claude Code's message box gone from the
+ * screen (shared/cc-input-focus.ts) — so a reply that merely QUOTES a menu never gets a card (2026-09-29: the auto-mode setup offer, a billing notice,
+ * compaction menus and the "Switch model?" confirmation opened mid-session with no card, and a chat send was swallowed by them). Those `generic` cards
+ * wait longer (GENERIC_CARD_DEBOUNCE_MS) and yield to any permission card, because ordinary permission, question and plan menus look the same on
+ * screen and belong to the hook system's cards.
  */
-export function cardTitleFor(menu: ParsedMenu, starting: boolean): string | null {
-  if (SETUP_PROMPT_TITLES.has(menu.title)) return menu.title;
-  if (starting && menu.dialog) {
-    const heading = (menu.heading ?? '').replace(/:\s*$/, '').trim();
-    return heading || menu.title;
-  }
-  return null;
+export function cardTitleFor(menu: ParsedMenu, starting: boolean, screen: string): { title: string; generic: boolean } | null {
+  if (SETUP_PROMPT_TITLES.has(menu.title)) return { title: menu.title, generic: false };
+  if (!menu.dialog) return null;
+  // Belt and braces: parseInkSelect already refuses a menu with the message box under it (its last ❯ is then the input row), so a quoted menu in a reply
+  // never parses today; this keeps that true if the parser ever loosens.
+  if (!starting && readInputFocus(screen).kind !== 'popup') return null;
+  const heading = (menu.heading ?? '').replace(/:\s*$/, '').trim();
+  // A pop-up taller than the screen loses its heading off the top; the "heading" read is then a body row (a diff line like "36 +ROW 35"), which is no
+  // title. Name it plainly instead.
+  const readable = (t: string) => /[A-Za-z]{3,}/.test(t) && !/^\d+\s*[+-]/.test(t);
+  const title = [heading, menu.title].find((t) => t && readable(t)) ?? 'Claude Code is asking';
+  return { title, generic: !starting };
 }
 
 /**

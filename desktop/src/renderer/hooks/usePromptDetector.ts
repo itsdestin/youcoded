@@ -6,8 +6,21 @@ import { getVisibleScreenText, onBufferReady } from './terminal-registry';
 import { parsePlanMenu } from '../parser/plan-menu-parser';
 import { expiredToolIds, nextAbsentCount } from '../state/expired-card-resolver';
 import { getCapabilities } from '../platform';
+import { readInputFocus, inputIsBlocked } from '../../shared/cc-input-focus';
+import type { SessionChatState } from '../state/chat-types';
 import { PromptCardReader } from '../../shared/prompt-card-reader';
 import { cardTitleFor, POST_PERMISSION_COOLDOWN_MS } from '../../shared/prompt-card-rules';
+
+/** Is ANY permission card up for this session — live, or kept after its ask expired? A generic card never shows beside one: the menu on screen is that
+ *  card's (hook permission menus carry the same footer). Live asks are current-turn only (toolCalls keeps stale awaiting entries from ended turns, which
+ *  must not silence generic cards forever); kept cards deliberately outlive their turn, so they are read from the whole map. */
+function hasPermissionCard(session: SessionChatState | undefined): boolean {
+  if (!session) return false;
+  for (const id of session.activeTurnToolIds) {
+    if (session.toolCalls.get(id)?.status === 'awaiting-approval') return true;
+  }
+  return expiredToolIds(session).length > 0;
+}
 
 export interface PromptDetectorOptions {
   /** True while this session has not started yet (App's init gate). */
@@ -35,6 +48,8 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
   optionsRef.current = options;
   // One reader per session, only on a host with no record (see above).
   const readersRef = useRef<Map<string, PromptCardReader>>(new Map());
+  // Last "a pop-up holds the keyboard" reading sent to the host per session, only on a host with no record (see the buffer listener below).
+  const reportedBlockedRef = useRef<Map<string, boolean>>(new Map());
 
   // Track when awaiting-approval was last cleared per session, so the reader can suppress re-detection during the post-permission cooldown window.
   const lastPermissionClearedRef = useRef<Map<string, number>>(new Map());
@@ -60,6 +75,9 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
           if (tool && tool.status === 'awaiting-approval') { hasAwaiting = true; break; }
         }
         const wasAwaiting = prevAwaitingRef.current.get(sid) ?? false;
+        // A hook ask arrived AFTER a generic card went up for the same menu (its event trailed the 1 s wait): the reader withdraws the card on its next
+        // look, so look now. (Only a host with no record has readers here; elsewhere the computer's reader sees the same ask in the record.)
+        if (!wasAwaiting && hasAwaiting) readersRef.current.get(sid)?.scan();
         if (wasAwaiting && !hasAwaiting) {
           lastPermissionClearedRef.current.set(sid, Date.now());
         }
@@ -80,8 +98,9 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
             const started = !(optionsRef.current.isStarting?.(sid) ?? false);
             const session = store.getState().get(sid);
             // A LIVE ask owns the menu (its permission card); a kept one (expired) does not. No chat state yet means nothing is asking.
-            if (session) for (const [, tool] of session.toolCalls) if (tool.status === 'awaiting-approval' && !tool.expired) return { asking: true, started };
-            return { asking: false, started };
+            const permissionCard = hasPermissionCard(session);
+            if (session) for (const [, tool] of session.toolCalls) if (tool.status === 'awaiting-approval' && !tool.expired) return { asking: true, started, permissionCard };
+            return { asking: false, started, permissionCard };
           },
           askClearedAt: () => lastPermissionClearedRef.current.get(sid) ?? 0,
           isAnswered: (promptId) => {
@@ -103,6 +122,18 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
     };
 
     const unsub = onBufferReady((sid: string) => {
+      // A host with no record of its own (the Android app's own runtime) tells ITS host whether a pop-up holds this session's keyboard (on change only):
+      // its automated writes (/reload-plugins) have no screen of their own to read. Wherever a record exists the computer reads the terminal itself and
+      // tells everyone (main/session-screens.ts), so nothing reports from here: one reader, not two that can disagree. Before the live-ask bail below,
+      // so the reading never goes stale.
+      if (!getCapabilities().sessionRecord) {
+        const blocked = inputIsBlocked(readInputFocus(getVisibleScreenText(sid)));
+        if (reportedBlockedRef.current.get(sid) !== blocked) {
+          reportedBlockedRef.current.set(sid, blocked);
+          window.claude?.session?.reportInputBlocked?.(sid, blocked);
+        }
+      }
+
       // Skip prompt detection when a PermissionRequest approval is active
       // (the hook-based UI is handling the permission flow)
       const sessionState = store.getState().get(sid);
@@ -163,7 +194,7 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
       let readable = true;
       if (starting) {
         const menu = parseInkSelect(screen);
-        readable = !!menu && cardTitleFor(menu, true) !== null;
+        readable = !!menu && cardTitleFor(menu, true, screen) !== null;
       }
       setUnreadableStartupDialog(sid, starting && !readable ? readStartupDialog(screen) : null);
 

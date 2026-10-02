@@ -133,9 +133,11 @@ export function useSubmitConfirmation(args: UseSubmitConfirmationArgs) {
     // isThinking is deliberately not consulted (it stays true forever in the
     // lost-message state this hook recovers from) — rationale lives in
     // canRetrySubmit's doc comment.
-    // WHY the screen too (restored, one-core R6-4 fix; master has it since 2026-09-29): canRetrySubmit only knows pop-ups the hook system or the
-    // prompt detector reported. With an unreported pop-up up (the "Switch model?" confirmation, auto-mode setup offer, compaction or billing notice),
-    // this bare `\r` would press its highlighted option. Recheck until the message box is back.
+    // The screen too (2026-09-29): canRetrySubmit only knows pop-ups the hook
+    // system or the known-title detector reported. With an unreported Claude
+    // Code pop-up up (auto-mode setup offer, compaction or billing notice),
+    // this bare `\r` pressed its highlighted option — "Yes" started an
+    // auto-mode scan nobody asked for. Recheck until the message box is back. (The verdict is the computer's reading of the terminal, published to every screen: pty-input-gate.ts.)
     if (!canRetrySubmit(session) || screenInputBlock(info.sessionId)) {
       // CC is observably busy (turn in flight, tool running, or a prompt is
       // awaiting the user). Don't retry yet; recheck shortly. By the time

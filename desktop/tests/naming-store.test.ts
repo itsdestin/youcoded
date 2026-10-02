@@ -233,6 +233,21 @@ describe('conflict-copy index', () => {
     await store.mutate('claude', 'c2', (cur) => ({ ...cur, manual: 'Other', manualAt: '2026-09-09T10:00:00.000Z' }));
     const readdir = vi.spyOn(fs.promises, 'readdir');
     const sync = [vi.spyOn(fs, 'readdirSync'), vi.spyOn(fs, 'readFileSync'), vi.spyOn(fs, 'statSync')];
+    // WHY hold both record reads until both have started: each get() reads its
+    // own record BEFORE asking for the listing, so on a busy runner c1 could
+    // finish its whole listing before c2 even asked — two honest, non-
+    // overlapping listings (macOS CI: "called 2 times"). Releasing the reads
+    // together makes the two listing requests genuinely overlap, which is the
+    // case this test is about.
+    const realReadFile = fs.promises.readFile.bind(fs.promises);
+    let release!: () => void;
+    const bothStarted = new Promise<void>((r) => { release = r; });
+    let started = 0;
+    vi.spyOn(fs.promises, 'readFile').mockImplementation((async (...args: Parameters<typeof fs.promises.readFile>) => {
+      if (++started === 2) release();
+      await bothStarted;
+      return realReadFile(...args);
+    }) as typeof fs.promises.readFile);
     const [a, b] = await Promise.all([store.get('claude', 'c1'), store.get('claude', 'c2')]);
     expect([a!.manual, b!.manual]).toEqual(['Mine', 'Other']);
     expect(readdir).toHaveBeenCalledTimes(1);

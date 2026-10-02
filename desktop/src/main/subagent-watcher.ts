@@ -75,6 +75,8 @@ export class SubagentWatcher {
   private dirWatcher: fs.FSWatcher | null = null;
   private dirPollTimer: ReturnType<typeof setInterval> | null = null;
   private pruneTimer: ReturnType<typeof setInterval> | null = null;
+  // macOS start-gap rescans (see attachDirWatcher); cleared by stop().
+  private gapRescanTimers: ReturnType<typeof setTimeout>[] = [];
   private started = false;
   // Directory-scan serialization (see scanDirectory). `generation` bumps on
   // stop() so a scan still in flight tracks nothing for a closed session.
@@ -108,6 +110,8 @@ export class SubagentWatcher {
     if (this.dirWatcher) { this.dirWatcher.close(); this.dirWatcher = null; }
     if (this.dirPollTimer) { clearInterval(this.dirPollTimer); this.dirPollTimer = null; }
     if (this.pruneTimer) { clearInterval(this.pruneTimer); this.pruneTimer = null; }
+    for (const t of this.gapRescanTimers) clearTimeout(t);
+    this.gapRescanTimers = [];
     // Fix 3: null each watcher/timer before clearing the map so a
     // one-more-firing callback finds state already cleaned up.
     for (const state of this.perFile.values()) {
@@ -364,8 +368,28 @@ export class SubagentWatcher {
       // directory notifications, which only Windows produces once a watch is
       // armed; elsewhere it was a readdir every 5 s for the session's life.
       if (process.platform === 'win32') this.startDirPoll();
+      if (process.platform === 'darwin') this.scheduleGapRescans();
     } catch {
       this.startDirPoll();
+    }
+  }
+
+  /** WHY (macOS CI, 2026-10-01): fs.watch on macOS is FSEvents, which starts
+   *  delivering a moment AFTER the watch is created. A helper's transcript
+   *  written in that moment produced no event, and with no poll off Windows it
+   *  sat unread until something else in the folder changed — its first steps
+   *  stayed missing from the chat. Two one-shot rescans across that window
+   *  (new files, plus any bytes already-tracked files gained) close it;
+   *  Linux and Windows deliver from the start and skip this. */
+  private scheduleGapRescans(): void {
+    for (const delay of [500, 2_000]) {
+      const t = setTimeout(() => {
+        if (!this.started) return;
+        void this.scanDirectory();
+        for (const state of this.perFile.values()) this.readNewLines(state).catch(() => undefined);
+      }, delay);
+      t.unref?.();
+      this.gapRescanTimers.push(t);
     }
   }
 

@@ -10,6 +10,10 @@
 // this reads the SHAPE instead: every pop-up replaces the message box, and a
 // reply that merely quotes a menu leaves the box in place.
 //
+// WHERE IT RUNS (one-core sync with master, 2026-10-01): in shared/ so the computer's main process (main/session-screens.ts, which reads every
+// Claude Code terminal and publishes this verdict to every screen: window and phone alike) and the Android app's own runtime (which has no such
+// host and reads its own terminal in the renderer) decide with the SAME code.
+//
 // Measured, not guessed: tests/popup-detector-bench.test.ts replays 104 real
 // captures (classic and fullscreen renderer, YouCoded's status line, the
 // stand-in API and real Sonnet turns) and requires this to call every moment
@@ -95,6 +99,9 @@ export function readInputFocus(screen: string | null | undefined): InputFocus {
   if (AGENTS_VIEW.test(tail)) return { kind: 'other-view', view: 'agents' };
   return { kind: 'message-box' };
 }
+
+/** The two verdicts that hold the keyboard — what the computer publishes to every screen while one is true (session-live-types `input-block`). */
+export type InputBlock = Exclude<InputFocus, { kind: 'message-box' } | { kind: 'unknown' }>;
 
 /** True when a keystroke typed now would NOT reach the message box. */
 export function inputIsBlocked(focus: InputFocus): boolean {

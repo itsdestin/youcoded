@@ -968,6 +968,8 @@ interface SessionBridge {
    *  `sendId` is the screen's id for a chat message (the write that submits it), so a phone that lost its connection mid-send can ask the host
    *  whether it was received (`sendOutcomes`, R5-4b). */
   sendInput(sessionId: string, text: string, notice?: 'model-switch', sendId?: string): void;
+  /** Android's own runtime only (it has no host screen reader): reports whether a Claude Code pop-up holds the keyboard. Elsewhere the computer reads the terminal (session-screens.ts). */
+  reportInputBlocked?(sessionId: string, blocked: boolean): void;
   /** What the computer's record noted for these send ids (one-core R5-4b). Resolves to undefined on a bridge with no host record (the Android
    *  app's own runtime), where nothing can be lost on a network. */
   sendOutcomes(sessionId: string, ids: string[]): Promise<import('./send-outcome-types').SendOutcomesReply | undefined>;

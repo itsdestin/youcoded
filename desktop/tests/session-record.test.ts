@@ -382,15 +382,15 @@ describe('what the computer reads a session\'s screen for', () => {
   it('working, a tool running, an ask waiting, started and cards open, as plain facts', () => {
     const r = new SessionRecords();
     r.begin(S);
-    expect(r.screenNeed(S)).toEqual({ working: false, toolRunning: false, asking: false, started: false, cards: 0 });
+    expect(r.screenNeed(S)).toEqual({ working: false, toolRunning: false, asking: false, started: false, cards: 0, permissionCard: false });
     r.note(S, 'transcript:event', user);
     r.note(S, 'transcript:event', toolUse('t1'));
     r.note(S, 'hook:event', ask('a1'));
-    expect(r.screenNeed(S)).toEqual({ working: true, toolRunning: true, asking: true, started: true, cards: 0 });
+    expect(r.screenNeed(S)).toEqual({ working: true, toolRunning: true, asking: true, started: true, cards: 0, permissionCard: true });
     r.note(S, 'hook:event', hook('PermissionResolved', 'a1'));
     r.note(S, 'transcript:event', toolResult('t1'));
     r.note(S, 'session:live', { sessionId: S, kind: 'prompt-show', promptId: 'p1', title: 'Usage Limit Reached', buttons: [] });
-    expect(r.screenNeed(S)).toEqual({ working: true, toolRunning: false, asking: false, started: true, cards: 1 });
+    expect(r.screenNeed(S)).toEqual({ working: true, toolRunning: false, asking: false, started: true, cards: 1, permissionCard: false });
     r.note(S, 'transcript:event', turnDone);
     expect(r.screenNeed(S)!.working).toBe(false);
     expect(r.screenNeed('nope')).toBeNull();

@@ -6,6 +6,8 @@
 // happened to notice it. The computer now says each of them ONCE, as a numbered event in the session's record, so every screen draws the
 // same line in the same place and a screen that opens later is handed the ones that are still true (main/session-open.ts).
 //
+import type { InputBlock } from './cc-input-focus';
+
 // Types only: nothing here runs. In shared/ because the renderer reads them and renderer code does not import from main/.
 
 /** One message waiting behind the running turn (native sessions): what the docked strip draws. */
@@ -35,7 +37,14 @@ export type SessionLiveBody =
    * The computer's own reading of a Claude Code turn: "may be stuck" (the spinner stopped moving, or nothing at all came from Claude Code),
    * or back to ok. Sent only when it changes; the computer is the ONLY writer of this reading (one-core R5-4b).
    */
-  | { kind: 'attention'; state: 'ok' | 'stuck' };
+  | { kind: 'attention'; state: 'ok' | 'stuck' }
+  /**
+   * What holds the keyboard of a Claude Code session's terminal, as the computer reads it off the screen (shared/cc-input-focus.ts): a pop-up or full-screen view,
+   * another mode that takes typing (history search, the agents view), or `null` = Claude Code's own message box is live. Sent only when it changes.
+   * WHY here (sync with master's popups work, 2026-10-01): master's chat-send gate read the window's own terminal, so a phone (which has no terminal) could never
+   * refuse a send typed into an open "Switch model?" confirmation. The computer is the ONLY reader (main/session-screens.ts); every screen's gate asks this.
+   */
+  | { kind: 'input-block'; block: InputBlock | null };
 
 export type SessionLive = { sessionId: string } & SessionLiveBody;
 

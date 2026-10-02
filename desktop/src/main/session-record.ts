@@ -28,6 +28,7 @@
 import { randomBytes } from 'crypto';
 import type { SessionSummary } from '../shared/session-summary-types';
 import type { SessionLive } from '../shared/session-live-types';
+import type { InputBlock } from '../shared/cc-input-focus';
 import { isSendId, type SendOutcome } from '../shared/send-outcome-types';
 
 export const RING_MAX_EVENTS = 2000;
@@ -181,6 +182,11 @@ interface Rec {
   started: boolean;
   /** The computer's own "may be stuck" reading for this turn (R5-4b), as last published; the summary and a late screen read it. */
   stuck: boolean;
+  /** What holds the keyboard of this session's terminal, as the computer last read it off the screen (null = Claude Code's message box). `inputBlockSeen`
+   *  is false until the first reading: a screen that opens later is told the current value either way once there has been one, so a stale "blocked"
+   *  on a screen that missed the "free" event is cleared. */
+  inputBlock: InputBlock | null;
+  inputBlockSeen: boolean;
   facts: Omit<SessionFacts, 'awaitingCount' | 'queued'>;
   /** Highest host timestamp a progress/terminal event has fenced (mirrors the reducer's usageProgressAt). */
   progressAt: number;
@@ -259,7 +265,7 @@ export class SessionRecords {
   }
 
   private screenNeedKey(rec: Rec): string {
-    return `${rec.facts.working ? 1 : 0}|${rec.runningTools.size > 0 ? 1 : 0}|${this.liveAskCount(rec)}|${rec.started ? 1 : 0}|${rec.prompts.size}`;
+    return `${rec.facts.working ? 1 : 0}|${rec.runningTools.size > 0 ? 1 : 0}|${this.liveAskCount(rec)}|${rec.started ? 1 : 0}|${rec.prompts.size}|${rec.asks.size > 0 ? 1 : 0}`;
   }
 
   /** Asks that are really waiting on the person: a kept ask (Claude Code closed its hook) is not, the card the screen draws is a separate matter. */
@@ -275,13 +281,15 @@ export class SessionRecords {
    *  - `toolRunning`: a tool call of this turn has started and not finished;
    *  - `asking`: an ask is waiting on the person (permission or password);
    *  - `started`: Claude Code has run a hook, so its startup dialogs are over;
-   *  - `cards`: prompt cards open.
+   *  - `cards`: prompt cards open;
+   *  - `permissionCard`: a permission/question/plan ask is open for this turn, LIVE OR KEPT (Claude Code closed its hook but its menu may still wait). A
+   *    pop-up nobody named gets a generic card only when this is false: the menu on screen belongs to the permission card (master's popups rule).
    * The stuck check runs only while `working && !toolRunning && !asking` — the same gate the renderer's hook used.
    */
-  screenNeed(sessionId: string): { working: boolean; toolRunning: boolean; asking: boolean; started: boolean; cards: number } | null {
+  screenNeed(sessionId: string): { working: boolean; toolRunning: boolean; asking: boolean; started: boolean; cards: number; permissionCard: boolean } | null {
     const rec = this.records.get(sessionId);
     if (!rec) return null;
-    return { working: rec.facts.working, toolRunning: rec.runningTools.size > 0, asking: this.liveAskCount(rec) > 0, started: rec.started, cards: rec.prompts.size };
+    return { working: rec.facts.working, toolRunning: rec.runningTools.size > 0, asking: this.liveAskCount(rec) > 0, started: rec.started, cards: rec.prompts.size, permissionCard: rec.asks.size > 0 };
   }
 
   /** Called whenever what `screenNeed` reports changes for a session (and once when the session is dropped). One listener: main/session-screens.ts. */
@@ -295,7 +303,7 @@ export class SessionRecords {
       epoch: randomBytes(8).toString('hex'),
       headSeq: 0, ring: [], ringBytes: 0, tail: [], tailBytes: 0, pty: { chunks: [], length: 0, base: 0 }, oversize: 0,
       asks: new Map(), passwordAsks: new Set(), prompts: new Map(), promptAt: new Map(), terminalMode: null, compacting: null,
-      runningTools: new Set(), started: false, stuck: false,
+      runningTools: new Set(), started: false, stuck: false, inputBlock: null, inputBlockSeen: false,
       facts: {
         working: false, attention: 'ok', reportedAttention: null, hasHistory: false,
         lastActivityAt: this.now(), permissionMode: null, model: null, modelState: null,
@@ -617,6 +625,8 @@ export class SessionRecords {
     if (rec.compacting) out.push({ type: 'session:live', payload: { sessionId, kind: 'compact-start', id: rec.compacting.id } });
     // A screen that opens while the computer thinks the turn may be stuck is told so (a phone opened after the banner would have shown none).
     if (rec.stuck) out.push({ type: 'session:live', payload: { sessionId, kind: 'attention', state: 'stuck' } });
+    // What holds the keyboard now (a phone opened while a "Switch model?" confirmation is up must refuse a send; one opened after it closed must not).
+    if (rec.inputBlockSeen) out.push({ type: 'session:live', payload: { sessionId, kind: 'input-block', block: rec.inputBlock } });
     return out;
   }
 
@@ -812,6 +822,10 @@ export class SessionRecords {
         // The computer's own reading wins over a window's last relayed value for this one state (a closed window can no longer clear it).
         rec.stuck = live.state === 'stuck';
         rec.facts.reportedAttention = live.state === 'stuck' ? 'stuck' : null;
+        return;
+      case 'input-block':
+        rec.inputBlock = live.block && typeof live.block === 'object' ? (live.block as InputBlock) : null;
+        rec.inputBlockSeen = true;
         return;
       default:
         return;

@@ -34,6 +34,7 @@ const ALLOWLIST: Record<string, string> = {
   'hooks/useAttentionClassifier.ts': '1s PTY buffer read only while Claude is thinking; stall detection must keep working when the window is hidden',
   'hooks/usePlanMenu.ts': "500ms plan-menu re-read only while a plan-approval card is on screen; its \"can't read the options\" fallback is time-based and a static terminal sends no updates",
   'hooks/useVoiceInput.ts': '500ms seconds counter only while the microphone is listening',
+  'voice-capture.ts': '1s "has the microphone stopped sending sound?" check, only while the microphone is open and no render work; it must keep running when the window is hidden, since dictation can continue there',
   'state/account-context.tsx': 'account refresh every 15 minutes — negligible',
   'dev/workbench/compare/registry.tsx': 'workbench-only, never in the shipped app',
   'dev/workbench/mock-shim.ts': 'workbench-only fake backend, never in the shipped app',

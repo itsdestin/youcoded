@@ -16,6 +16,8 @@ This README is the "how to write more of these" guide. Read it before adding a n
 | `harness.mjs` + `child.mjs` | Bracketed-paste viability probe on Windows ConPTY. Empirical disproof of the marker-based-submit path. Kept for reference; only re-run if someone proposes resurrecting bracketed paste. |
 | `snapshots/` | Versioned JSON snapshots from `cc-snapshot.mjs`. Diff to detect drift on each CC bump. |
 | `multiline-*.log`, `worker-*.log` | Per-scenario stdout traces from past runs. Inspectable evidence; safe to delete. |
+| `fake-anthropic.mjs` | A stand-in Messages API that streams SCRIPTED replies (text, thinking, tool calls, errors). Point `claude` at it with `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` to drive busy TUI states — streaming, permission menus, AskUserQuestion, plan approval — for free and identically every run. |
+| `capture-popup-corpus.mjs` + `popup-scenarios.mjs` | Records ~100 situations (classic and fullscreen renderer, with YouCoded's status line) WITH ground truth: is a Claude Code pop-up holding the keyboard, or is the message box live? Output: `tests/fixtures/popup-corpus/`, scored by `tests/popup-detector-bench.test.ts`. Re-run after a Claude Code update; `--with-auth` adds a few real Sonnet turns. |
 
 ## The testing model
 

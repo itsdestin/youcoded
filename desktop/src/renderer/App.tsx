@@ -55,7 +55,9 @@ import { GameProvider, useGameState, useGameDispatch } from './state/game-contex
 import { hookEventToAction } from './state/hook-dispatcher';
 import { buildUsageSnapshot, pruneExpiredUsage, type SubscriptionUsage } from './state/usage-snapshot';
 import { invalidateProviderTypeCache, resolveProviderType, useModelProviderType } from './hooks/use-provider-type';
-import { pendingInteractionKind, pendingInteractionRefusalCopy, canPtySend, sendRefusalCopy } from './state/pty-input-gate';
+import { sendBlock, canPtySend } from './state/pty-input-gate';
+import { useBlockedSend } from './hooks/useBlockedSend';
+import type { ToastAction } from './components/ui/Toast';
 import { buildOutgoingMessage } from './components/outgoing-message';
 import type { SyncWarning } from '../main/sync-state';
 import { latestUnresolvedError, type SyncStatusData } from './components/sync-dot-state';
@@ -625,7 +627,7 @@ function AppInner() {
   // 3s. Omit it for the common 3s case; the primitive supplies that default.
   type ToastState =
     | string
-    | { message: string; durationMs?: number; action?: { label: string; onClick: () => void } };
+    | { message: string; durationMs?: number; action?: ToastAction; actions?: ToastAction[] };
   const [toast, setToast] = useState<ToastState | null>(null);
   // Components with no prop path to this state (the file drawer's Download and
   // Copy path, the too-big card) announce through a window event — see
@@ -756,6 +758,10 @@ function AppInner() {
     return chatStore.subscribeAll(() => { chatStateMapRef.current = chatStore.getState(); });
   }, [chatStore]);
 
+  // Refused sends and their toast (pending cards, then the live screen).
+  const { showBlockedSend, notifyIfPtyBlocked } = useBlockedSend({ chatState: chatStateMapRef,
+    showToast: setToast, openTerminal: (sid) => setViewModes((prev) => new Map(prev).set(sid, 'terminal')) });
+
   // Guarded PTY send for command-shaped writes triggered by UI actions
   // (command drawer, skill runs, /sync, /config, /model, Settings sends).
   // While a permission/AskUserQuestion/plan request is pending, CC's native
@@ -765,13 +771,6 @@ function AppInner() {
   // InputBar.sendMessage applies to typed messages. Deliberate menu-driving
   // writes (ToolCard plan keys, TrustGate, prompt option clicks, terminal
   // view) must NOT use this helper. Returns false when the send was refused.
-  const notifyIfPtyBlocked = useCallback((sid: string): boolean => {
-    // Names the blocker (a card, or a terminal-only pop-up that no hook reports): see sendRefusalCopy.
-    const refusal = sendRefusalCopy(chatStateMapRef.current.get(sid), sid);
-    if (refusal) setToast(refusal);
-    return refusal !== null;
-  }, []);
-
   const guardedPtySend = useCallback((sid: string, text: string, notice?: 'model-switch'): boolean => {
     // Honest guard (M1): refuse before sending, so callers' `if (!guardedPtySend)`
     // bails actually fire for native/destroyed sessions and skip optimistic writes.
@@ -3047,6 +3046,11 @@ function AppInner() {
     // the guard that makes pty-input-gate's "exactly once, at creation, and
     // never again" true.
     if (sessionsRef.current.find((x) => x.id === sessionId)?.provider === 'shell') return;
+    // An unreported Claude Code pop-up has the keyboard (review F5): Shift+Tab
+    // would go to it, and the optimistic chip would show a mode never applied.
+    // Hook-reported cards keep today's behaviour, so only the screen verdict.
+    const block = sendBlock(chatStateMapRef.current.get(sessionId), sessionId);
+    if (block?.kind === 'screen') { showBlockedSend(sessionId, block); return; }
     const canAuto = currentModel === 'opus[1m]';
     const cycle: PermissionMode[] = [
       'normal',
@@ -3069,7 +3073,7 @@ function AppInner() {
     // same warning the form's toggle shows.
     if (next === 'bypass') { gateSkip(apply); return; }
     apply();
-  }, [sessionId, canBypass, currentPermissionMode, currentModel, gateSkip, cycleClaudeNow]);
+  }, [sessionId, canBypass, currentPermissionMode, currentModel, gateSkip, cycleClaudeNow, showBlockedSend]);
   cyclePermissionRef.current = cyclePermission;
 
   useEffect(() => {
@@ -3658,12 +3662,11 @@ function AppInner() {
                     ChatInputBar when minimal={isTerminalTouch}, slotted in
                     the QuickChips position so both modes share one container. */}
                 {!isShellSession && (<>
-                <ChatInputBar ref={inputBarRef} sendBlocked={isPendingTab} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={composerDisabled({ trustGate: trustGateActive, moved: !!movedGate, started: sessionInitialized, terminalTouch: isTerminalTouch })} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry) => {
+                <ChatInputBar ref={inputBarRef} sendBlocked={isPendingTab} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={composerDisabled({ trustGate: trustGateActive, moved: !!movedGate, started: sessionInitialized, terminalTouch: isTerminalTouch })} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry, block) => {
                   // Name the blocker so reaching for "Send anyway" is an informed
                   // choice (it presses Esc into Claude Code first — which on a
                   // live permission or plan menu DECLINES it).
-                  const blocked = chatStateMapRef.current.get(sessionId ?? '');
-                  setToast({ message: pendingInteractionRefusalCopy(blocked ? pendingInteractionKind(blocked) : null), durationMs: 8000, action: { label: 'Send anyway', onClick: () => { setToast(null); retry(); } } });
+                  if (sessionId) showBlockedSend(sessionId, block, retry);
                 }} getSessionState={(sid) => chatStateMapRef.current.get(sid)} onOpenModelPicker={() => setModelPickerOpen(true)} onModelSwitchCommand={handleModelSwitchCommand} initialInput={currentSession?.initialInput} initialAttachments={currentSession?.initialAttachments} provider={currentSession?.provider} />
                 <StatusBar
                   statusData={statusBarData}
@@ -4258,13 +4261,10 @@ function AppInner() {
           message={typeof toast === 'string' ? toast : toast.message}
           durationMs={typeof toast === 'string' ? undefined : toast.durationMs}
           onDismiss={() => setToast(null)}
-          action={
-            typeof toast !== 'string' && toast.action ? (
-              <Button variant="secondary" size="sm" onClick={toast.action.onClick}>
-                {toast.action.label}
-              </Button>
-            ) : undefined
-          }
+          action={typeof toast !== 'string' && toast.action ? (
+            <Button variant="secondary" size="sm" onClick={toast.action.onClick}>{toast.action.label}</Button>
+          ) : undefined}
+          actions={typeof toast === 'string' ? undefined : toast.actions}
         />
       )}
       {/* Plan 2b Task 9 — conversation-lease takeover dialog (3-state redesign,
@@ -4421,7 +4421,7 @@ function AppInner() {
 // getUsageSnapshot lets /cost and /usage snapshot live stats from App state.
 import type { UsageSnapshot } from './state/chat-types';
 import type { SessionChatState } from './state/chat-types';
-const ChatInputBar = React.forwardRef<InputBarHandle, { sessionId: string; view?: ViewMode; onOpenDrawer: (searchMode: boolean) => void; onCloseDrawer?: () => void; onDrawerSearch?: (query: string) => void; disabled?: boolean; sendBlocked?: boolean; minimal?: boolean; onResumeCommand?: () => void; getUsageSnapshot?: (sessionId: string) => UsageSnapshot | null; onOpenPreferences?: () => void; onToast?: (msg: string) => void; onSendBlocked?: (retry: () => void) => void; getSessionState?: (sessionId: string) => SessionChatState | undefined; onOpenModelPicker?: () => void; onModelSwitchCommand?: (alias: ModelAlias) => 'sent' | 'blocked' | 'ineligible'; initialInput?: string; initialAttachments?: string[]; provider?: 'claude' | 'native' }>(
+const ChatInputBar = React.forwardRef<InputBarHandle, { sessionId: string; view?: ViewMode; onOpenDrawer: (searchMode: boolean) => void; onCloseDrawer?: () => void; onDrawerSearch?: (query: string) => void; disabled?: boolean; sendBlocked?: boolean; minimal?: boolean; onResumeCommand?: () => void; getUsageSnapshot?: (sessionId: string) => UsageSnapshot | null; onOpenPreferences?: () => void; onToast?: (msg: string) => void; onSendBlocked?: React.ComponentProps<typeof InputBar>['onSendBlocked']; getSessionState?: (sessionId: string) => SessionChatState | undefined; onOpenModelPicker?: () => void; onModelSwitchCommand?: (alias: ModelAlias) => 'sent' | 'blocked' | 'ineligible'; initialInput?: string; initialAttachments?: string[]; provider?: 'claude' | 'native' }>(
   function ChatInputBar({ sessionId, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, disabled, sendBlocked, minimal, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, initialAttachments, provider }, ref) {
     return <InputBar ref={ref} sessionId={sessionId} view={view} onOpenDrawer={onOpenDrawer} onCloseDrawer={onCloseDrawer} onDrawerSearch={onDrawerSearch} disabled={disabled} sendBlocked={sendBlocked} minimal={minimal} onResumeCommand={onResumeCommand} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={onOpenPreferences} onToast={onToast} onSendBlocked={onSendBlocked} getSessionState={getSessionState} onOpenModelPicker={onOpenModelPicker} onModelSwitchCommand={onModelSwitchCommand} initialInput={initialInput} initialAttachments={initialAttachments} provider={provider} />;
   },

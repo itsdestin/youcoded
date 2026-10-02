@@ -3,6 +3,10 @@
 //   1. "MAY BE STUCK": while a turn runs with nothing else to explain the quiet (no tool running, nothing waiting on the person), the screen's
 //      spinner and seconds counter say whether Claude Code is alive (shared/stuck-tracker.ts). The computer is the ONLY writer of this reading.
 //   2. CARDS: a question Claude Code asks in its terminal (usage limit, trust folder, resume, ...) becomes a card (shared/prompt-card-rules.ts).
+//   3. WHAT HOLDS THE KEYBOARD (sync with master's popups work, 2026-10-01): whether a pop-up (or a mode like history search) has taken the keyboard from
+//      Claude Code's message box (shared/cc-input-focus.ts). Published to every screen, whose chat-send gates refuse a message typed into it ("Switch
+//      model?" after a mid-conversation /model is the case that lost Destin a send), and handed to the session manager, which holds back its own automated
+//      writes (/reload-plugins) while it is true. ONE reader: before, each window read its own terminal, so a phone had no gate at all.
 //
 // WHY here (2026-10-01, Destin approved "the computer runs it"): both used to be worked out by each WINDOW from its own xterm. A phone with no
 // computer window open (closed, hidden, reloading) got neither: no stuck banner, no setup card, a dot that never turned red. Main already
@@ -23,6 +27,7 @@ import type { SessionLiveFacts } from './session-live';
 import { screenTextOf, visibleScreenTextOf, type ScreenBuffer } from '../shared/terminal-screen-text';
 import { StuckTracker, STUCK_TICK_MS, STUCK_TAIL_ROWS } from '../shared/stuck-tracker';
 import { PromptCardReader } from '../shared/prompt-card-reader';
+import { readInputFocus, inputIsBlocked, type InputBlock } from '../shared/cc-input-focus';
 
 /** Rows of history the headless copy keeps. The check reads 40 rows and the card reader the visible screen, so 60 is plenty (1,000 cost 4x the memory). */
 const SCREEN_SCROLLBACK_ROWS = 60;
@@ -43,13 +48,15 @@ export interface ScreenTerminal {
 
 export interface SessionScreensDeps {
   records: Pick<SessionRecords, 'screenNeed'>;
-  live: Pick<SessionLiveFacts, 'attention' | 'showPrompt' | 'dismissPrompt'>;
+  live: Pick<SessionLiveFacts, 'attention' | 'showPrompt' | 'dismissPrompt' | 'inputBlock'>;
   /** A Claude Code session (not native, not a shell)? */
   isClaude(sessionId: string): boolean;
   /** The terminal's current size, when main knows it. */
   size?(sessionId: string): { cols: number; rows: number } | null;
   /** Told when the computer's reading of "stuck" changes (so the status relay and the tray follow). */
   onAttention?(sessionId: string, state: 'ok' | 'stuck'): void;
+  /** Told when a pop-up starts or stops holding the session's keyboard (the session manager gates its own automated writes on it). */
+  onInputBlocked?(sessionId: string, blocked: boolean): void;
   now?: () => number;
   /** Timers are injectable so a test does not wait seconds. */
   setTimer?(fn: () => void, ms: number): unknown;
@@ -78,11 +85,13 @@ interface PerSession {
   /** Live asks: when the last one closed (the post-permission cooldown) and whether one was open at the last look. */
   lastAskClearedAt: number;
   wasAsking: boolean;
+  /** What the computer last said holds this session's keyboard (null = the message box), as a key so a redraw of the same pop-up says nothing. */
+  inputKey: string;
 }
 
 const fresh = (): PerSession => ({
   term: null, pending: 0, scanTimer: null, tracker: null, tickTimer: null, tickWhenReady: false,
-  stuckShown: false, reader: null, answeredId: null, lastAskClearedAt: 0, wasAsking: false,
+  stuckShown: false, reader: null, answeredId: null, lastAskClearedAt: 0, wasAsking: false, inputKey: '',
 });
 
 export class SessionScreens {
@@ -186,7 +195,7 @@ export class SessionScreens {
     s.pending = 0;
     s.reader = new PromptCardReader({
       readScreen: () => { try { return s.term ? visibleScreenTextOf(s.term.buffer.active, s.term.rows) : null; } catch { return null; } },
-      need: () => { const n = this.deps.records.screenNeed(sessionId); return n ? { asking: n.asking, started: n.started } : null; },
+      need: () => { const n = this.deps.records.screenNeed(sessionId); return n ? { asking: n.asking, started: n.started, permissionCard: n.permissionCard } : null; },
       askClearedAt: () => s.lastAskClearedAt,
       isAnswered: (id) => s.answeredId === id,
       show: (card) => this.deps.live.showPrompt(sessionId, card),
@@ -286,7 +295,29 @@ export class SessionScreens {
   }
 
   private scan(sessionId: string): void {
-    this.per.get(sessionId)?.reader?.scan();
+    const s = this.per.get(sessionId);
+    if (!s) return;
+    s.reader?.scan();
+    this.scanInputFocus(sessionId, s);
+  }
+
+  /**
+   * Is Claude Code's message box live, or does something else hold the keyboard? Read on the same 10 Hz scan as the cards, from the same visible
+   * screen, and published only when the answer changes. No readable screen is no verdict (the box is assumed live: no new refusal), as in the window.
+   * Latency: a pop-up that opens is known to every screen within one scan (about 0.1 s) plus the round trip, where the window's own read was instant;
+   * a person cannot type and press Enter into it faster than that.
+   */
+  private scanInputFocus(sessionId: string, s: PerSession): void {
+    if (!s.term) return;
+    let screen: string | null = null;
+    try { screen = visibleScreenTextOf(s.term.buffer.active, s.term.rows); } catch { return; }
+    const focus = readInputFocus(screen);
+    const block: InputBlock | null = inputIsBlocked(focus) ? (focus as InputBlock) : null;
+    const key = block ? (block.kind === 'other-view' ? `other-view:${block.view}` : 'popup') : '';
+    if (key === s.inputKey) return;
+    s.inputKey = key;
+    this.deps.live.inputBlock(sessionId, block);
+    this.deps.onInputBlocked?.(sessionId, block !== null);
   }
 }
 

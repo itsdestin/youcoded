@@ -23,6 +23,7 @@ import { detectPermissionMode } from '../shared/permission-mode-detect';
 import { claudeAliasForModelId, CLAUDE_ALIAS_LABELS, isPlaceholderModelId } from '../shared/model-ids';
 import { IPC } from '../shared/backend-contract';
 import type { PromptCardButton, SessionLiveBody } from '../shared/session-live-types';
+import type { InputBlock } from '../shared/cc-input-focus';
 
 /** Typed into the terminal as a whole write: `/model opus[1m]` + Enter. A write that is only part of a line never matches. */
 const MODEL_COMMAND_RE = /^\/model[ \t]+(\S+)[ \t]*\r?$/;
@@ -273,6 +274,14 @@ export class SessionLiveFacts {
   dismissPrompt(sessionId: string, promptId: string): void {
     if (!this.deps.records.hasPrompt(sessionId, promptId)) return;
     this.live(sessionId, { kind: 'prompt-dismiss', promptId });
+  }
+
+  /**
+   * What holds a Claude Code session's keyboard changed (main/session-screens.ts is the only caller): a pop-up, another mode that takes typing, or
+   * `null` for Claude Code's own message box. Published as a numbered event so a phone's chat gate refuses the same sends the computer's window does.
+   */
+  inputBlock(sessionId: string, block: InputBlock | null): void {
+    this.live(sessionId, { kind: 'input-block', block });
   }
 
   /** The computer's "may be stuck" reading changed for a Claude Code turn (the only writer of it; see session-screens.ts). */

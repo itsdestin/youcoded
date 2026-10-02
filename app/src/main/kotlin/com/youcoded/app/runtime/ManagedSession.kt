@@ -88,6 +88,12 @@ class ManagedSession(
      *  See EventBridge.hasPendingPermission (stray-Enter fix, youcoded#110). */
     fun hasPendingPermission(): Boolean =
         ptyBridge?.getEventBridge()?.hasPendingPermission() ?: false
+    /** True while the renderer reads a Claude Code pop-up (one no hook reported)
+     *  or another view holding the keyboard in this session's terminal — sent as
+     *  `session:input-blocked` by the shared React detector, which reads the
+     *  screen (parser/cc-input-focus.ts). Automated writers must not type then
+     *  either: the text would land in the pop-up and its Enter could answer it. */
+    @Volatile var inputBlocked: Boolean = false
     val screenVersion: StateFlow<Int> get() =
         ptyBridge?.screenVersion ?: directShellBridge?.screenVersion ?: MutableStateFlow(0)
 

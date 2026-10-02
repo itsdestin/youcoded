@@ -142,7 +142,17 @@ function startFakeServer(
   return server;
 }
 
-describe('askpass helper: (i) delivers the password on {ok:true}', () => {
+// WHY these platform skips: the admin-password feature only ever starts on
+// Linux (admin-password-startup.ts — macOS stays off, Windows has no sudo).
+// The suites below drive a REAL Unix-socket server, the real /bin/sh wrapper
+// or POSIX exec bits; on Windows the socket listen is refused (EACCES) and the
+// helper waits out the 30 s timeout, and on macOS the kernel peer-pid self-test
+// and the OS-injected __CF_USER_TEXT_ENCODING variable make them fail for
+// reasons no user can reach. Suites that hold on every platform still run.
+const NOT_LINUX = process.platform !== 'linux';
+const IS_WINDOWS = process.platform === 'win32';
+
+describe.skipIf(IS_WINDOWS)('askpass helper: (i) delivers the password on {ok:true}', () => {
   it('prints exactly the password, nothing else, and exits 0', async () => {
     const { dir, socketPath } = makeSocketDir();
     cleanupDirs.push(dir);
@@ -166,7 +176,7 @@ describe('askpass helper: (i) delivers the password on {ok:true}', () => {
   });
 });
 
-describe('askpass helper: (ii) refuses silently on anything else', () => {
+describe.skipIf(IS_WINDOWS)('askpass helper: (ii) refuses silently on anything else', () => {
   it('prints nothing and exits 1 on {ok:false}', async () => {
     const { dir, socketPath } = makeSocketDir();
     cleanupDirs.push(dir);
@@ -210,7 +220,7 @@ describe('askpass helper: (ii) refuses silently on anything else', () => {
   });
 });
 
-describe('askpass helper: (iii) env -i blocks a caller-set loader hijack', () => {
+describe.skipIf(IS_WINDOWS)('askpass helper: (iii) env -i blocks a caller-set loader hijack', () => {
   it('does not run a NODE_OPTIONS --require hook set by the spawning command', async () => {
     const { dir, socketPath } = makeSocketDir();
     cleanupDirs.push(dir);
@@ -328,7 +338,7 @@ describe('askpass helper: (iv) makes itself non-dumpable before the password can
   );
 });
 
-describe('askpass wrapper: (T2-3) resulting environment is EXACTLY the two-variable allowlist', () => {
+describe.skipIf(NOT_LINUX)('askpass wrapper: (T2-3) resulting environment is EXACTLY the two-variable allowlist', () => {
   // Design §3 item 1 requires the helper's environment to be EXACTLY
   // {ELECTRON_RUN_AS_NODE, YOUCODED_ASKPASS_SOCKET} — no more, no less.
   // The obvious way to check this ("read /proc/<helper-pid>/environ from
@@ -390,7 +400,7 @@ describe('askpass wrapper: (T2-3) resulting environment is EXACTLY the two-varia
   });
 });
 
-describe('askpass helper: (T2-4) the password only arrives after hardening — never before', () => {
+describe.skipIf(IS_WINDOWS)('askpass helper: (T2-4) the password only arrives after hardening — never before', () => {
   // Protocol v2 (askpass.cjs's file-level comment has the full ordering
   // argument): the app verifies this process from the outside first, THEN
   // instructs it to harden (`{"harden":true}`), THEN — and only then —
@@ -444,7 +454,7 @@ describe('askpass helper: (T2-4) the password only arrives after hardening — n
   });
 });
 
-describe('askpass wrapper: (T2-5) ulimit -c 0 actually zeroes the core-dump limit', () => {
+describe.skipIf(NOT_LINUX)('askpass wrapper: (T2-5) ulimit -c 0 actually zeroes the core-dump limit', () => {
   // Review 2 (E1)'s primary fix: `ulimit -c 0` in the wrapper must
   // override even an inherited `ulimit -c unlimited` (the design's own
   // attack scenario — a command run earlier in the same shell/session).

@@ -27,11 +27,26 @@ vi.mock('../src/renderer/hooks/terminal-registry', async (orig) => ({
 }));
 
 import { screenInputBlock } from '../src/renderer/state/pty-input-gate';
+import { setScreenInputBlock, clearScreenInputBlocks } from '../src/renderer/state/screen-input-store';
 import InputBar from '../src/renderer/components/InputBar';
 import { ChatProvider } from '../src/renderer/state/chat-context';
+import { REMOTE_SCREEN_CAPABILITIES } from '../src/shared/capabilities';
 import { SkillProvider } from '../src/renderer/state/skill-context';
 
-describe('screenInputBlock', () => {
+describe('screenInputBlock on a host that has the computer record (a window, a phone)', () => {
+  it('asks the published reading of the computer, never its own terminal', () => {
+    (window as any).claude = { capabilities: { ...REMOTE_SCREEN_CAPABILITIES, sessionRecord: true } };
+    try {
+      clearScreenInputBlocks();
+      screenText = POPUP; expect(screenInputBlock('s')).toBeNull();   // the local terminal says pop-up, but the computer has said nothing: no second opinion
+      setScreenInputBlock('s', { kind: 'popup', heading: 'Switch model?' });
+      screenText = BOX; expect(screenInputBlock('s')).toEqual({ kind: 'popup', heading: 'Switch model?' });
+      setScreenInputBlock('s', null); expect(screenInputBlock('s')).toBeNull();
+    } finally { delete (window as any).claude; clearScreenInputBlocks(); }
+  });
+});
+
+describe('screenInputBlock on the Android own runtime (no record: reads its own terminal)', () => {
   it('reports a pop-up that holds the keyboard, and nothing when the message box is live or the screen is unreadable', () => {
     screenText = POPUP; expect(screenInputBlock('s')).not.toBeNull();
     screenText = BOX; expect(screenInputBlock('s')).toBeNull();
@@ -60,7 +75,7 @@ describe('InputBar while Claude Code shows a pop-up', () => {
     fireEvent.change(box, { target: { value: 'hi' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
     expect(sendInput).not.toHaveBeenCalled();
-    expect(onToast).toHaveBeenCalledWith(expect.stringMatching(/terminal/i));
+    expect(onToast).toHaveBeenCalledWith('Claude Code is waiting on something — answer it first.');
     expect(box.value).toBe('hi');
   });
   it('sends normally when the message box is live', async () => {

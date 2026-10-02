@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  WHY this file exists: Linux app catalogs (the AppImage catalog at appimage.github.io,
+  GNOME Software, KDE Discover) read it from inside the AppImage to show YouCoded's name,
+  description and, above all, OUR chosen screenshots. Without it the AppImage catalog
+  showed a robot's picture of the first-run sign-in screen, cropped.
+
+  Copied into the AppImage at usr/share/metainfo/ by `linux.extraFiles` in
+  ../electron-builder.yml. The screenshots are web addresses, not files in the AppImage:
+  they are served by the website (youcoded/docs/screenshots/, live at youcoded.ai once on
+  master), so replacing a picture there updates every catalog without a new release.
+
+  Check after editing with appstreamcli's validate command (offline mode) on this file.
+  (No double hyphens anywhere in a comment: XML rejects them and the file stops parsing.)
+-->
+<component type="desktop-application">
+  <!-- Reverse of the domain we own (youcoded.ai). Never change it: catalogs key on it. -->
+  <id>ai.youcoded.YouCoded</id>
+  <name>YouCoded</name>
+  <summary>Your AI assistant, on your terms</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <developer id="ai.youcoded">
+    <name>YouCoded</name>
+  </developer>
+  <description>
+    <p>
+      YouCoded is an open-source AI assistant that helps you work with files, projects,
+      research and everyday tasks. Choose the AI behind it: a plan you already pay for
+      (Claude or ChatGPT), a cloud provider key, or a local model on your own computer.
+    </p>
+    <p>
+      Install skills and themes from the community marketplace, keep projects and
+      conversations organized, play games with friends while your assistant works, and
+      reach your sessions from your phone or any web browser.
+    </p>
+  </description>
+  <!-- Must name the .desktop file electron-builder writes into the AppImage (the
+       package's executable name, "youcoded"). Checked by extracting a local build. -->
+  <launchable type="desktop-id">youcoded.desktop</launchable>
+  <url type="homepage">https://youcoded.ai</url>
+  <url type="vcs-browser">https://github.com/itsdestin/youcoded</url>
+  <url type="bugtracker">https://github.com/itsdestin/youcoded/issues</url>
+  <categories>
+    <category>Utility</category>
+  </categories>
+  <content_rating type="oars-1.1"/>
+  <!-- Destin approved this set and order (2026-10-01). To change a picture, swap the
+       file in youcoded/docs/screenshots/ and its caption here together. The catalog
+       shows type="default" first. -->
+  <screenshots>
+    <screenshot type="default">
+      <caption>A conversation, in the Meadow Mist theme</caption>
+      <image>https://youcoded.ai/screenshots/chat.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>The marketplace of community skills and themes</caption>
+      <image>https://youcoded.ai/screenshots/marketplace.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>A game of Connect Four beside the chat, in the Halftone Dimension theme</caption>
+      <image>https://youcoded.ai/screenshots/game.png</image>
+    </screenshot>
+  </screenshots>
+</component>

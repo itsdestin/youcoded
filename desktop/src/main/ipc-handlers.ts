@@ -436,6 +436,7 @@ export function registerIpcHandlers(
     // The tray, the badge and a status bar read the same cache a window's relay fills (attentionMap); the computer's reading goes in too, so
     // they are right with no window relaying.
     onAttention: (id, state) => { onMainAttention?.(id, state); },
+    onInputBlocked: (id, blocked) => { sessionManager.setInputBlocked(id, blocked); }, // WHY: main reads the terminal itself now (master's window reported this over a channel)
   });
   runtime.records.onScreenNeedChange((id) => screens.refresh(id));
   // The record keeps a session's terminal bytes (up to 4M units) for a phone's terminal view, and ONLY while phone access is on, exactly as the

@@ -1528,7 +1528,11 @@ describe('background execution + idle-boundary delivery', () => {
     // the same report — the fallback entry was consumed on delivery, not
     // left behind for a second pass to find again.
     (host as any).queueDelivery('root-1');
-    await new Promise((r) => setImmediate(r));
+    // WHY await the kicked pass itself (not one setImmediate): the idle pass
+    // runs runTurns, which still writes under .youcoded/sessions. Ending the
+    // test while it ran let that write land during teardown's rmSync —
+    // ENOTEMPTY on Linux CI. Its promise is the real "the pass is over" signal.
+    await (host as any).live.get('root-1')?.running;
     expect(events.filter((e) => e.data?.injected === 'specialist-report')).toHaveLength(1);
   });
 

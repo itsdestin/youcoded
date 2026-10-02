@@ -122,7 +122,9 @@ describe('every live Claude Code session has one terminal, from its start to its
   it('a session has its terminal from the moment it begins, an idle one costs no work, and its end disposes it', async () => {
     const rig = makeRig({ started: true });
     expect(rig.screens.terminalCount()).toBe(1);
-    for (let i = 0; i < 50; i++) rig.output(`\x1b[2K\x1b[G❯ \x1b[2mstatus ${i}\x1b[22m`);
+    // The message box as Claude Code draws it (a rule, the ❯ row, a rule): a screen with no box reads as a pop-up holding the keyboard, which is something to say.
+    const rule = '─'.repeat(40);
+    for (let i = 0; i < 50; i++) rig.output(`\x1b[2J\x1b[H${rule}\r\n❯ \x1b[2mstatus ${i}\x1b[22m\r\n${rule}`);
     await rig.advance(10_000);
     expect(rig.created()).toBe(1);                                 // never made again, never disposed while the session lives
     expect(rig.lives().length).toBe(0);                            // and says nothing while nothing is wrong
@@ -237,11 +239,13 @@ describe('cards: the computer reads the same menus the window did, from real cap
   const plans = listPlanFixtures();
 
   /** Replay a capture into the computer's terminal (in pieces of `split` bytes, 0 = as captured) and into the window's own, and collect what each decides. */
-  async function replay(dir: string | undefined, file: string, started: boolean, split: number) {
+  async function replay(dir: string | undefined, file: string, started: boolean, split: number, hookAsk = false) {
     const fx = (dir ? loadPlanFixture(file, dir) : loadPlanFixture(file)) as Startup;
     const ref = new FixtureTerminal(fx); open.push(ref);
     const rig = makeRig({ started });                       // started:false = Claude Code has run no hook yet; true = an idle, already-started session
     rig.screens.noteResize(S, fx.cols, fx.rows);
+    // hookAsk: the hook system reported a permission ask for the whole replay, so its card owns any menu and no generic card may appear beside it.
+    if (hookAsk) rig.note('hook:event', { type: 'PermissionRequest', sessionId: S, payload: { _requestId: 'ask1', tool_name: 'Bash' }, timestamp: 1 });
     const seen: Array<{ promptId: string; title: string; buttons: any[]; defaultIndex?: number }> = [];
     const expected: typeof seen = [];
     let lastExpectedId = '';
@@ -250,10 +254,11 @@ describe('cards: the computer reads the same menus the window did, from real cap
       if (split > 0) for (let k = 0; k < text.length; k += split) rig.output(text.slice(k, k + split)); else rig.output(text);
       await ref.advanceTo(i + 1);
       await rig.settle();
-      await rig.advance(700);                                   // past the show debounce
+      await rig.advance(1_200);                                 // past the show debounce (a generic card waits a full second)
       // What the window's own rule decides from the same screen.
       const menu = parseInkSelect(getVisibleScreenText(ref.id) ?? '');
-      const title = menu ? cardTitleFor(menu, !started) : null;
+      const card = menu ? cardTitleFor(menu, !started, getVisibleScreenText(ref.id) ?? '') : null;
+      const title = card && !(hookAsk && card.generic) ? card.title : null;
       if (menu && title && menu.id !== lastExpectedId) {
         const buttons = menuToButtons(menu);
         expected.push({ promptId: menu.id, title, buttons: buttons.map((b) => ({ label: b.label, input: b.input, ...(b.pick ? { pick: b.pick } : {}) })), ...(buttons.some((b) => b.pick) ? { defaultIndex: menu.selectedIndex } : {}) });
@@ -263,7 +268,7 @@ describe('cards: the computer reads the same menus the window did, from real cap
     }
     await rig.advance(2_000);
     const stillThere = parseInkSelect(getVisibleScreenText(ref.id) ?? '');
-    return { seen, expected, open: rig.records.openPrompts(S).length, shouldBeOpen: stillThere && cardTitleFor(stillThere, !started) ? 1 : 0 };
+    return { seen, expected, open: rig.records.openPrompts(S).length, shouldBeOpen: stillThere && (() => { const c = cardTitleFor(stillThere, !started, getVisibleScreenText(ref.id) ?? ''); return c && !(hookAsk && c.generic); })() ? 1 : 0 };
   }
 
   it.each(startups)('%s: while the session is starting, a card goes up for each dialog the window would have drawn one for, with the same buttons, and comes down when the dialog goes', async (file) => {
@@ -286,8 +291,8 @@ describe('cards: the computer reads the same menus the window did, from real cap
     expect(total, 'the window rule must find cards in these captures, or this proves nothing').toBeGreaterThanOrEqual(15);
   }, 120_000);
 
-  it.each(plans)('%s: replayed into an idle, started session, the same cards as the window rule (a permission menu is no setup card)', async (file) => {
-    const r = await replay(undefined, file, true, 0);
+  it.each(plans)('%s: replayed into an idle, started session with its hook ask up, the same cards as the window rule (a permission menu is no setup card)', async (file) => {
+    const r = await replay(undefined, file, true, 0, true);
     expect(r.seen).toEqual(r.expected);
   });
 

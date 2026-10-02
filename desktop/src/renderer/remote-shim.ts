@@ -479,6 +479,7 @@ export const MESSAGE_KIND: Readonly<Record<string, 'user-action' | 'read' | 'tra
   'handoff:retry': 'user-action', 'handoff:saved-copy': 'user-action', 'handoff:force': 'user-action',
   'handoff:cancel': 'user-action', 'handoff:create-params': 'user-action',
   'session:input': 'user-action',
+  'session:input-blocked': 'transport', // Android's own runtime only; true only while connected, never replayed
   'session:resize': 'read',
   'session:terminal-ready': 'transport',
   'native:interrupt': 'user-action',
@@ -2077,6 +2078,8 @@ export function installShim(): void {
       forgetReopen: (ids: string[]) => invoke('session:forget-reopen', { ids }),
       canSend: () => ws?.readyState === WebSocket.OPEN && connectionState === 'connected',
       sendInput: (sessionId: string, text: string, notice?: 'model-switch', sendId?: string) => (noteSendEpoch(sessionId, sendId), fire('session:input', { sessionId, text, notice, sendId })),
+      // Android's own runtime only: its host has no screen reader. A computer's windows and phones never call this (the computer reads the terminal itself).
+      reportInputBlocked: (sessionId: string, blocked: boolean) => { if (isAndroidLocal()) fire('session:input-blocked', { sessionId, blocked }); },
       // What the computer noted for these send ids (one-core R5-4b), asked about with the record epoch each message was SENT under (`sendEpochs`),
       // never the one the page holds now: after a computer restart and a refill the new epoch would say "not received" about a message the old
       // computer did receive. The Android app's own runtime has no host record and nothing to lose on a network: resolves to undefined.

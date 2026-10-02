@@ -448,3 +448,31 @@ describe('parseInkSelect with a wrapped option label', () => {
     expect(menu.selectedIndex).toBe(1);
   });
 });
+
+// The fullscreen renderer (Claude Code settings `tui: "fullscreen"`) indents
+// its menus one column further and tops them with a ▔ edge that can carry a
+// label. Captured from CC 2.1.285 (tests/fixtures/popup-corpus/fs-slash-export).
+describe('parseInkSelect — fullscreen renderer menus', () => {
+  const FULLSCREEN_EXPORT = [
+    '▎ Auto mode is now Claude Code\'s default permission mode.',
+    '▎ https://code.claude.com/docs/en/permission-modes',
+    '▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ ◐ medium · /effort ▔',
+    '   Export conversation',
+    '   Select export method',
+    '   ❯ 1. Copy to clipboard  Copy the conversation to your system clipboard',
+    '     2. Save to file       Save the conversation to a file in the current directory',
+    '   Esc to cancel',
+  ].join('\n');
+
+  it('finds every option of a menu indented three columns', () => {
+    const menu = parseInkSelect(FULLSCREEN_EXPORT)!;
+    expect(menu.options.map((o) => o.split('  ')[0])).toEqual(['Copy to clipboard', 'Save to file']);
+    expect(menu.dialog).toBe(true);
+  });
+
+  it('reads its heading from under the ▔ edge, never from the conversation above it', () => {
+    const menu = parseInkSelect(FULLSCREEN_EXPORT)!;
+    expect(menu.heading).toBe('Export conversation');
+    expect(menu.title).not.toMatch(/auto mode/i);
+  });
+});
