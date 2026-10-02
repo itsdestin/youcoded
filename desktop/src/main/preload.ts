@@ -346,6 +346,7 @@ const IPC = {
   BUDDY_ATTACH_FILE: 'buddy:attach-file',
   // ── Buddy upgrades (action bar, dismiss, dock/peek) ──
   BUDDY_DRAG_ENDED: 'buddy:drag-ended',
+  BUDDY_MASCOT_HIT: 'buddy:mascot-hit',
   BUDDY_OPEN_MAIN: 'buddy:open-main',
   BUDDY_DISMISS: 'buddy:dismiss',
   BUDDY_GET_STATUS: 'buddy:get-status',
@@ -1390,7 +1391,7 @@ contextBridge.exposeInMainWorld('claude', {
     get: (): Promise<number> => ipcRenderer.invoke(IPC.ZOOM_GET),
   },
   buddy: {
-    show: () => ipcRenderer.invoke(IPC.BUDDY_SHOW),
+    show: (style?: 'floating' | 'tray') => ipcRenderer.invoke(IPC.BUDDY_SHOW, style),
     hide: () => ipcRenderer.invoke(IPC.BUDDY_HIDE),
     toggleChat: () => ipcRenderer.invoke(IPC.BUDDY_TOGGLE_CHAT),
     setSession: (sessionId: string) => ipcRenderer.invoke(IPC.BUDDY_SET_SESSION, sessionId),
@@ -1423,6 +1424,7 @@ contextBridge.exposeInMainWorld('claude', {
     },
     // ── Buddy upgrades ──
     dragEnded: () => ipcRenderer.send(IPC.BUDDY_DRAG_ENDED),
+    mascotHit: (over: boolean) => ipcRenderer.send(IPC.BUDDY_MASCOT_HIT, over),
     openMain: (request?: { resume: string }): Promise<void> => ipcRenderer.invoke(IPC.BUDDY_OPEN_MAIN, request),
     dismiss: (): Promise<void> => ipcRenderer.invoke(IPC.BUDDY_DISMISS),
     getStatus: (): Promise<{ dismissed: boolean; visible: boolean }> =>

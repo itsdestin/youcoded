@@ -2936,6 +2936,7 @@ export function installShim(): void {
       // throwing would spam the console if a buddy surface ever loaded
       // remote-shim. The on* listeners return no-op unsubscribers.
       dragEnded: () => { /* desktop-only */ },
+      mascotHit: () => { /* desktop-only — fires from pointer moves, so never throws */ },
       openMain: () => { throw new Error('Buddy is desktop-only in this version'); },
       dismiss: () => { throw new Error('Buddy is desktop-only in this version'); },
       getStatus: () => { throw new Error('Buddy is desktop-only in this version'); },

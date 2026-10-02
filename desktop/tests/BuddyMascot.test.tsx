@@ -140,7 +140,9 @@ describe('a docked buddy that needs attention', () => {
     const view = render(<BuddyMascot />);
     dock('peeking', 'left');
     const wrap = view.container.querySelector('.mascot-wrap')!;
-    fireEvent.pointerEnter(wrap);
+    // Hover is driven by pointer MOVES over his body now (not window enter) —
+    // see "only his drawn body catches the pointer" below.
+    fireEvent.pointerMove(wrap);
     expect(sink(view.container).dataset.dockMode).toBe('free');
     expect(lastPose()).toBe('shocked');
     fireEvent.pointerLeave(wrap);
@@ -154,5 +156,67 @@ describe('a docked buddy that needs attention', () => {
     dock('free', null);
     expect(lastPose()).toBe('shocked');
     expect(bouncing(view.container)).toBe(true);
+  });
+});
+
+// ─── Hitbox ─────────────────────────────────────────────────────────────────
+
+// Destin 2026-10-02: "he sometimes catches clicks above/to the side that
+// should've passed through". Only his drawn body counts now: a press on the
+// empty part of his window does nothing, and main is told when the pointer is
+// on him so that part can be click-through (Windows/macOS).
+describe('only his drawn body catches the pointer', () => {
+  const realFromPoint = (document as { elementFromPoint?: unknown }).elementFromPoint;
+  const hits: boolean[] = [];
+  let toggleChat: ReturnType<typeof vi.fn>;
+  // What the browser's hit-test answers — the svg box (empty space) or a shape.
+  let target: 'empty' | 'body' = 'empty';
+  beforeAll(() => {
+    (document as { elementFromPoint: unknown }).elementFromPoint = () => {
+      const svg = document.querySelector('.mascot-lean svg');
+      if (!svg) return null;
+      return target === 'body' ? (svg.querySelector('path, rect, circle, ellipse') ?? svg) : svg;
+    };
+  });
+  afterAll(() => { (document as { elementFromPoint?: unknown }).elementFromPoint = realFromPoint; });
+  afterEach(() => { hits.length = 0; target = 'empty'; });
+  const withBridge = () => {
+    toggleChat = vi.fn();
+    const buddy = (win.claude as { buddy: Record<string, unknown> }).buddy;
+    buddy.mascotHit = (over: boolean) => hits.push(over);
+    buddy.toggleChat = toggleChat;
+  };
+
+  it('ignores a press on the empty part of his window', () => {
+    withBridge();
+    const view = render(<BuddyMascot />);
+    const wrap = view.container.querySelector('.mascot-wrap')!;
+    fireEvent.pointerDown(wrap, { pointerId: 1, clientX: 56, clientY: 4 });
+    fireEvent.pointerUp(wrap, { pointerId: 1, clientX: 56, clientY: 4 });
+    expect(toggleChat).not.toHaveBeenCalled();
+  });
+
+  it('a press on his body still opens the chat', () => {
+    withBridge();
+    target = 'body';
+    const view = render(<BuddyMascot />);
+    const wrap = view.container.querySelector('.mascot-wrap')!;
+    fireEvent.pointerDown(wrap, { pointerId: 1, clientX: 56, clientY: 60 });
+    fireEvent.pointerUp(wrap, { pointerId: 1, clientX: 56, clientY: 60 });
+    expect(toggleChat).toHaveBeenCalledTimes(1);
+  });
+
+  it('tells main when the pointer reaches and leaves his body', () => {
+    withBridge();
+    const view = render(<BuddyMascot />);
+    const wrap = view.container.querySelector('.mascot-wrap')!;
+    expect(hits).toEqual([false]); // mount re-asserts "not on him"
+    fireEvent.pointerMove(wrap, { clientX: 56, clientY: 4 });
+    expect(hits).toEqual([false]); // empty space: nothing new to say
+    target = 'body';
+    fireEvent.pointerMove(wrap, { clientX: 56, clientY: 60 });
+    target = 'empty';
+    fireEvent.pointerMove(wrap, { clientX: 56, clientY: 4 });
+    expect(hits).toEqual([false, true, false]);
   });
 });

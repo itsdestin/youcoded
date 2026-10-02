@@ -14,10 +14,14 @@ import {
 // them too (renderer code can never import from src/main/, which pulls in
 // electron). Imported here for this file's own use, and re-exported below so
 // every existing `from './buddy-window-manager'` import keeps working.
-import { clampToWorkArea, type Rect, type Point, type Size } from '../shared/buddy-geometry';
+import { clampToWorkArea, computeTrayLayout, type Rect, type Point, type Size } from '../shared/buddy-geometry';
 // The rename channel that moves buddy windows on native-Wayland Linux, where
 // the app is not allowed to move its own windows. buddy-caption.ts has the WHY.
 import { buildCaption, type BuddyRole } from '../shared/buddy-caption';
+import type { BuddyTrayHandle, BuddyTrayHandlers } from './buddy-tray';
+
+/** Mirrors BuddyStyle in shared/types.ts (this module doesn't import it — see below). */
+type BuddyStyle = 'floating' | 'tray';
 
 // Push-channel names (kept as local consts — this module deliberately doesn't
 // import shared/types; values must match IPC.* in src/shared/types.ts).
@@ -103,7 +107,7 @@ export interface BuddyWindowManagerDeps {
   registry: WindowRegistry;
   mainWindow: () => BrowserWindow | null;
   /** Broadcast { dismissed, visible } to all windows (buddy:status-changed). */
-  onStatusChanged(status: { dismissed: boolean; visible: boolean }): void;
+  onStatusChanged(status: { dismissed: boolean; visible: boolean; style: BuddyStyle }): void;
   /**
    * Supplied ONLY on native-Wayland Linux. Absent everywhere else — Windows,
    * macOS, Linux/X11, and a Wayland desktop running this app through XWayland
@@ -120,6 +124,12 @@ export interface BuddyWindowManagerDeps {
    * is what every other platform does and must keep doing.
    */
   captionChannelLive?: () => boolean;
+  /**
+   * Build the taskbar icon for the 'tray' buddy style (buddy-tray.ts). Injected
+   * so tests never touch Electron's Tray. Absent = the tray style falls back to
+   * the floating mascot.
+   */
+  createTray?: (handlers: BuddyTrayHandlers) => BuddyTrayHandle;
 }
 
 /**
@@ -158,6 +168,11 @@ export class BuddyWindowManager {
   private dockState: DockState = FREE_DOCK;
   private glideTimer: NodeJS.Timeout | null = null;
   private attentionNeeded = false;
+  // 'tray' = no mascot window at all; a taskbar icon opens the chat instead
+  // (Destin 2026-10-02). The chat and bar are the same windows either way —
+  // only where they're anchored differs (anchorLayout below).
+  private style: BuddyStyle = 'floating';
+  private tray: BuddyTrayHandle | null = null;
   /**
    * Where this app believes each of its three buddy windows is. The app owns
    * these numbers now — it does not ask the OS for them.
@@ -387,7 +402,32 @@ export class BuddyWindowManager {
   setAttentionNeeded(needed: boolean): void {
     if (needed === this.attentionNeeded) return;
     this.attentionNeeded = needed;
+    // Taskbar style: the icon's red dot is the tray's version of popping out.
+    this.tray?.setAttention(needed);
     this.syncEngagement();
+  }
+
+  /**
+   * buddy:mascot-hit — the renderer says whether the pointer is over the
+   * mascot's DRAWN body or the empty rest of his 112×112 window.
+   *
+   * WHY (Destin 2026-10-02: "he sometimes catches clicks above/to the side that
+   * should've passed through"): his art fills well under the whole window (5/30
+   * headroom above, slim sides), and the window ate every click on it. Over
+   * empty space the window now ignores the mouse but keeps FORWARDING moves to
+   * the renderer, so it can tell when the pointer reaches his body again.
+   *
+   * Windows and macOS only: `forward` doesn't exist on Linux — X11 would go
+   * permanently deaf to the mouse, and Wayland ignores the call outright
+   * (rules/buddy-floater.md). There the renderer still refuses to react to
+   * presses on empty space; the click just can't reach the window behind.
+   */
+  setMascotHit(over: boolean): void {
+    if (process.platform !== 'win32' && process.platform !== 'darwin') return;
+    const win = this.mascot;
+    if (!win || win.isDestroyed()) return;
+    if (over) win.setIgnoreMouseEvents(false);
+    else win.setIgnoreMouseEvents(true, { forward: true });
   }
 
   /** buddy:drag-ended — run snap detection against final window bounds, then
@@ -554,7 +594,16 @@ export class BuddyWindowManager {
    * window against an unresolved work area, because there is no readback to
    * correct it afterwards — but undocumented until now, and it reads as a hang.
    */
-  show(): void {
+  show(style: BuddyStyle = this.style): void {
+    // No tray factory (tests, or a host that can't make one) = floating.
+    if (style === 'tray' && !this.deps.createTray) style = 'floating';
+    // Switching style tears the current presentation down first, so a switch
+    // never leaves both a mascot and a taskbar icon on screen.
+    if (style !== this.style) {
+      if (this.mascot || this.tray || this.pendingShow) this.hide();
+      this.style = style;
+    }
+    if (this.style === 'tray' && this.tray) return;
     if (this.mascot && !this.mascot.isDestroyed()) {
       this.mascot.showInactive();
       return;
@@ -594,6 +643,19 @@ export class BuddyWindowManager {
       this.refreshWorkArea();
     }
     this.pendingShow = false;
+    // Taskbar-icon style: no mascot window. Placed AFTER the work-area wait on
+    // purpose — the chat this icon opens is positioned against that same area.
+    if (this.style === 'tray') {
+      this.tray = this.deps.createTray!({
+        onToggleChat: () => this.toggleChat(),
+        onSwitchToFloating: () => this.show('floating'),
+        onHide: () => this.dismiss(),
+      });
+      this.tray.setAttention(this.attentionNeeded);
+      this.dismissed = false;
+      this.deps.onStatusChanged(this.getStatus());
+      return;
+    }
     const saved = this.deps.getPersistedPosition('mascot');
     const primary = this.primaryWorkArea();
     const defaultPos = { x: primary.x + primary.width - MASCOT_SIZE.width - 24, y: primary.y + primary.height - MASCOT_SIZE.height - 24 };
@@ -604,6 +666,8 @@ export class BuddyWindowManager {
     const clamped = clampToWorkArea(raw, MASCOT_SIZE, this.workAreaFor(display));
     this.mascot = this.create('mascot', clamped);
     this.wireMascotLifecycle(this.mascot);
+    // Born click-through: only his drawn body catches clicks (setMascotHit).
+    this.setMascotHit(false);
     this.mascot.showInactive();
     // Restore a persisted dock: place flush on the saved edge and re-enter
     // docked state (spec §6.1 — a docked buddy survives restarts).
@@ -626,10 +690,14 @@ export class BuddyWindowManager {
     this.deps.onStatusChanged(this.getStatus());
   }
 
-  getStatus(): { dismissed: boolean; visible: boolean } {
+  getStatus(): { dismissed: boolean; visible: boolean; style: BuddyStyle } {
     return {
       dismissed: this.dismissed,
-      visible: !!(this.mascot && !this.mascot.isDestroyed()),
+      visible: !!(this.mascot && !this.mascot.isDestroyed()) || !!this.tray,
+      // WHY style rides along: the tray menu's "Switch to floating buddy" changes
+      // it from main, and the renderer owns the saved preference — Settings
+      // writes it back from this broadcast so the next launch agrees.
+      style: this.style,
     };
   }
 
@@ -655,6 +723,8 @@ export class BuddyWindowManager {
     if (this.bar && !this.bar.isDestroyed()) this.bar.destroy();
     if (this.chat && !this.chat.isDestroyed()) this.chat.destroy();
     if (this.mascot && !this.mascot.isDestroyed()) this.mascot.destroy();
+    this.tray?.destroy();
+    this.tray = null;
     this.bar = null;
     this.chat = null;
     this.mascot = null;
@@ -731,6 +801,11 @@ export class BuddyWindowManager {
    */
   private layoutFor(mascotRect?: Rect): GroupLayout {
     const mb = mascotRect ?? (this.mascot && !this.mascot.isDestroyed() ? this.rectOf(this.mascot) : null);
+    if (!mb && this.tray) {
+      // Taskbar style: no mascot to anchor to — the chat sits by the icon.
+      const { chat } = this.trayLayout();
+      return { mascot: chat, chat };
+    }
     if (!mb) {
       const primary = this.primaryWorkArea();
       const fallback = { x: primary.x + primary.width - CHAT_SIZE.width - 24, y: primary.y + primary.height - CHAT_SIZE.height - 24 };
@@ -738,6 +813,14 @@ export class BuddyWindowManager {
     }
     const display = screen.getDisplayMatching(mb) ?? screen.getPrimaryDisplay();
     return computeGroupLayout(mb, this.workAreaFor(display));
+  }
+
+  /** Chat + bar placement for the taskbar style, against the screen the icon
+   *  is on (the primary screen where the OS won't say where the icon is). */
+  private trayLayout(): { chat: Point; bar: Point } {
+    const icon = this.tray?.bounds() ?? null;
+    const display = icon ? (screen.getDisplayMatching(icon) ?? screen.getPrimaryDisplay()) : screen.getPrimaryDisplay();
+    return computeTrayLayout(icon, this.workAreaFor(display));
   }
 
   /** Move the chat's subscription from the previous session to the new one. */
@@ -959,6 +1042,7 @@ export class BuddyWindowManager {
    *  display when the mascot is gone (mirrors old behavior). */
   private currentBarPosition(mascotRect?: Rect): Point {
     const mb = mascotRect ?? (this.mascot && !this.mascot.isDestroyed() ? this.rectOf(this.mascot) : null);
+    if (!mb && this.tray) return this.trayLayout().bar;
     if (!mb) {
       const primary = this.primaryWorkArea();
       return {
