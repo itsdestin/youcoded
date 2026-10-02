@@ -259,29 +259,12 @@ function FolderMark({ className = '' }: { className?: string }) {
 // way it leads the status-bar chip.
 const MAX_CHIPS = 3;
 
-// TRIAL (pick-menus-4): where and how a pinned session shows its pin.
-const PIN_STYLE = 'pill' as 'before-name' | 'by-status' | 'pill';
-
-/** The pin on a pinned session's title line (pick-menus-3#PM3-4: "fine with pin, but
- *  want a few alternate renders and i don't like the current location"). */
-function PinMark({ sessionId, at }: { sessionId: string; at: 'before-name' | 'by-status' }) {
+/** The pin beside a pinned session's status pill (pick-menus-4#PM4-3: "by the status,
+ *  but use the pinned icon from the pinned pill"). Pinned = the stored `priority` flag. */
+function PinMark({ sessionId }: { sessionId: string }) {
   const meta = useSessionMeta(sessionId);
   if (!meta.flags.priority) return null;
-  if (at === 'before-name') {
-    if (PIN_STYLE !== 'before-name') return null;
-    return <Tooltip text="Pinned to top"><span className="shrink-0 flex items-center"><PinIcon className="w-3 h-3 text-fg-2" /></span></Tooltip>;
-  }
-  if (PIN_STYLE === 'by-status') {
-    return <Tooltip text="Pinned to top"><span className="shrink-0 flex items-center"><PinIcon filled className="w-3.5 h-3.5 text-accent" /></span></Tooltip>;
-  }
-  if (PIN_STYLE === 'pill') {
-    return (
-      <span className="shrink-0 inline-flex items-center gap-0.5 px-1.5 py-px rounded-full border border-edge text-4xs leading-none font-medium text-fg-2 bg-inset">
-        <PinIcon className="w-2.5 h-2.5" />Pinned
-      </span>
-    );
-  }
-  return null;
+  return <Tooltip text="Pinned to top"><span className="shrink-0 flex items-center"><PinIcon className="w-3 h-3 text-fg-2" /></span></Tooltip>;
 }
 
 function SessionTagMarks({ sessionId, byId }: { sessionId: string; byId: Map<string, TagRecord> }) {
@@ -290,11 +273,9 @@ function SessionTagMarks({ sessionId, byId }: { sessionId: string; byId: Map<str
   // when it is shut. A bulk read would need a new channel on all five surfaces.
   const meta = useSessionMeta(sessionId);
   const applied = [...meta.tags].map((id) => byId.get(id)).filter((t): t is TagRecord => !!t);
-  // Pinned is a pin glyph leading the row, no longer an amber "Priority" chip
-  // (pick-menus-2#PM2-3).
-  const pinned = false; // TRIAL: the pin moved to the title line (PinMark below)
+  // Pinned is not a tag any more (pick-menus-2#PM2-3): PinMark shows it by the status.
   const marks: { label: string; color: string }[] = applied.map((t) => ({ label: t.label, color: t.color as string }));
-  if (marks.length === 0 && !meta.note && !pinned) return null;
+  if (marks.length === 0 && !meta.note) return null;
   // Names cost width, so past three the rest collapse into a count that names
   // them on hover — a row must never push the status pill off its own line.
   const shown = marks.slice(0, MAX_CHIPS);
@@ -2455,7 +2436,6 @@ export default function SessionStrip({
                               switch-to-this-session target, which is the whole
                               reason the underline treatment was not chosen. */}
                           <span className="flex-1 min-w-0 flex items-center gap-1.5">
-                            <PinMark sessionId={s.id} at="before-name" />
                             <span className="min-w-0 truncate"><SessionName name={s.name} /></span>
                             {namingApi() && (
                               <button
@@ -2481,7 +2461,7 @@ export default function SessionStrip({
                               Danger
                             </span>
                           )}
-                          <PinMark sessionId={s.id} at="by-status" />
+                          <PinMark sessionId={s.id} />
                           <StatusPill color={color} isActive={s.id === activeSessionId} />
                         </span>
                         <span className="flex items-center gap-2 min-w-0">

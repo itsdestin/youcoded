@@ -1,9 +1,9 @@
-import React, { useState, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useRef, useMemo, useCallback, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { isAndroid } from '../platform';
 import { useSkills } from '../state/skill-context';
 import type { ChipConfig } from '../../shared/types';
-import { Button, CARD_LEVEL_1, CARD_LEVEL_2, Dialog, SectionLabel, SettingRow, TextInput, Textarea, Toggle, Tooltip } from './ui';
+import { Button, CARD_LEVEL_1, Dialog, SectionLabel, SettingRow, TextInput, Textarea, Toggle, Tooltip } from './ui';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import { useScreenOpen } from '../shoot-mode';
@@ -13,20 +13,6 @@ function PencilIcon({ size = 10 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
       <path d="M12.146.854a.5.5 0 0 1 .708 0l2.292 2.292a.5.5 0 0 1 0 .708l-9.5 9.5a.5.5 0 0 1-.168.11l-4 1.5a.5.5 0 0 1-.638-.638l1.5-4a.5.5 0 0 1 .11-.168l9.5-9.5zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207 11.207 2.5zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293l6.5-6.5z"/>
-    </svg>
-  );
-}
-
-// Drag grip (6-dot braille) — mirrors SessionStrip's DragGrip
-function DragGrip() {
-  return (
-    <svg className="w-3 h-3 text-fg-faint" viewBox="0 0 12 16" fill="currentColor">
-      <circle cx="3.5" cy="2" r="1.2" />
-      <circle cx="8.5" cy="2" r="1.2" />
-      <circle cx="3.5" cy="8" r="1.2" />
-      <circle cx="8.5" cy="8" r="1.2" />
-      <circle cx="3.5" cy="14" r="1.2" />
-      <circle cx="8.5" cy="14" r="1.2" />
     </svg>
   );
 }
@@ -43,7 +29,9 @@ interface Props {
 export default function QuickChips({ onChipTap }: Props) {
   const { chips, setChips, installed } = useSkills();
   const [editorOpen, setEditorOpen] = useState(false);
-  useScreenOpen('chat/quick-chips', () => setEditorOpen(true)); // photo-only build: `shoot` opens it by name
+  // photo-only build: `shoot` opens it by name, and its two pages as subpages.
+  const [screenSub, setScreenSub] = useState<string | undefined>();
+  useScreenOpen('chat/quick-chips', (sub) => { setEditorOpen(true); setScreenSub(sub); }, ['edit', 'add']);
 
   // The store is the only source. There is deliberately no hardcoded fallback
   // list here: one used to stand in whenever `chips` was empty, which conflated
@@ -51,7 +39,8 @@ export default function QuickChips({ onChipTap }: Props) {
   // built-in chips that the editor, which reads the real store list, could not
   // see or edit. Empty renders empty; the pencil holds the row's height, so
   // nothing shifts when the chips arrive.
-  const displayChips: QuickChip[] = chips.map(c => ({ label: c.label, prompt: c.prompt }));
+  // A chip "set aside" in the editor stays saved but off the row (pick-menus-4#PM4-1).
+  const displayChips: QuickChip[] = chips.filter(c => !c.hidden).map(c => ({ label: c.label, prompt: c.prompt }));
 
   // Outside-click dismissal now handled by the <Scrim> inside ChipEditorPopup.
 
@@ -104,510 +93,248 @@ export default function QuickChips({ onChipTap }: Props) {
         chips={chips}
         setChips={setChips}
         installed={installed}
+        screenSub={screenSub}
         onClose={() => setEditorOpen(false)}
       />
     </div>
   );
 }
 
-// TRIAL: which chip editor the pick-menus-3 deck shows.
-const QC_STYLE = 'rows' as 'rows' | 'shelves-card' | 'shelves-page' | 'shelves-pop';
-
 // ── Chip Editor Popup ──────────────────────────────────────────────────────
+//
+// WHY this shape (pick-menus-3#PM3-1 → pick-menus-4#PM4-1, Destin 2026-10-01): the
+// chips are drawn as chips, on two shelves — "Shown above the message box" and "Set
+// aside" (kept, not shown) — and you drag a chip between them or along a shelf.
+// Pointing at a chip shows its pencil (always shown on touch, .touch-reveal); the
+// pencil opens an edit page in the same popup, with the Dialog's own back arrow.
+// Page buttons: Remove (red) far left, Cancel then Save on the right.
 
 interface ChipEditorProps {
   open: boolean;
   chips: ChipConfig[];
   setChips: (chips: ChipConfig[]) => Promise<void>;
   installed: import('../../shared/types').SkillEntry[];
+  /** Photo-only build: which page `shoot` asked for ('edit' / 'add'). */
+  screenSub?: string;
   onClose: () => void;
 }
 
-// Centered L2 modal — matches StatusBar WidgetConfigPopup so popup styling
-// (scrim, surface, blur, shadow) stays theme-driven and consistent.
-function ChipEditorPopup({ open, chips, setChips, installed, onClose }: ChipEditorProps) {
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [customLabel, setCustomLabel] = useState('');
-  const [customPrompt, setCustomPrompt] = useState('');
+type View = { kind: 'list' } | { kind: 'edit'; idx: number } | { kind: 'add' };
 
-  // Tap-to-edit: the row at editIdx expands in place into label + prompt
-  // fields. Index (not a chip id) is the identity here because ChipConfig has
-  // no id — so every mutation that can shift indices closes the open row
-  // rather than risk writing the edit onto a different chip.
-  const [editIdx, setEditIdx] = useState<number | null>(null);
-  const [editLabel, setEditLabel] = useState('');
-  const [editPrompt, setEditPrompt] = useState('');
+const MAX_CHIPS = 10;
 
-  const beginEdit = useCallback((index: number) => {
-    const chip = chips[index];
+function ChipEditorPopup({ open, chips, setChips, installed, screenSub, onClose }: ChipEditorProps) {
+  const [view, setView] = useState<View>({ kind: 'list' });
+  const [label, setLabel] = useState('');
+  const [prompt, setPrompt] = useState('');
+  const [shown, setShown] = useState(true);
+  const toList = useCallback(() => setView({ kind: 'list' }), []);
+
+  const beginEdit = useCallback((idx: number) => {
+    const chip = chips[idx];
     if (!chip) return;
-    setShowAddForm(false);   // one form open at a time
-    setEditIdx(index);
-    setEditLabel(chip.label);
-    setEditPrompt(chip.prompt);
+    setLabel(chip.label); setPrompt(chip.prompt); setShown(!chip.hidden);
+    setView({ kind: 'edit', idx });
   }, [chips]);
+  const beginAdd = useCallback(() => {
+    setLabel(''); setPrompt(''); setShown(true);
+    setView({ kind: 'add' });
+  }, []);
 
-  const cancelEdit = useCallback(() => setEditIdx(null), []);
-
-  const saveEdit = useCallback(() => {
-    if (editIdx === null) return;
-    const label = editLabel.trim();
-    const prompt = editPrompt.trim();
-    if (!label || !prompt) return;
-    // Spread the existing chip so skillId survives — a skill-backed chip whose
-    // prompt gets tuned must stay bound to its skill, or the uninstall cascade
-    // stops finding it.
-    setChips(chips.map((c, i) => (i === editIdx ? { ...c, label, prompt } : c)));
-    setEditIdx(null);
-  }, [editIdx, editLabel, editPrompt, chips, setChips]);
-
-  // Skills not already assigned to a chip
-  const chipSkillIds = useMemo(() => new Set(chips.map(c => c.skillId).filter(Boolean)), [chips]);
-  const availableSkills = useMemo(
-    () => installed.filter(s => !chipSkillIds.has(s.id)),
-    [installed, chipSkillIds]
-  );
-
-  // Esc pops the open row before the dialog itself (useEscClose is a LIFO
-  // stack, and this hook registers below the dialog's own).
-  useEscClose(editIdx !== null, cancelEdit);
-
-  const remove = useCallback((index: number) => {
-    setEditIdx(null);   // indices shift; never carry an open edit across it
-    setChips(chips.filter((_, i) => i !== index));
-  }, [chips, setChips]);
-
-  // ── Pointer-event drag-to-reorder (mirrors SessionStrip pattern) ────────
-  // List is vertical, so hit-testing is Y-based and the insertion indicator
-  // is a horizontal bar drawn in the gap between rows.
-  const listRef = useRef<HTMLDivElement>(null);
-  const [dragIdx, setDragIdx] = useState<number | null>(null);
-  const [overIdx, setOverIdx] = useState<number | null>(null);
-  const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null);
-  const [dragLabel, setDragLabel] = useState<string>('');
-  const [ghostTarget, setGhostTarget] = useState<{ left: number; top: number; width: number } | null>(null);
-  const dragOrigin = useRef<{ x: number; y: number } | null>(null);
-  const isDragging = useRef(false);
-  const suppressClick = useRef(false);
-  // Scroll-fade: header stays outside scroll region; body mask shows fade edges.
-  const skillPickerRef = useScrollFade<HTMLDivElement>();
-
-  const handlePointerDown = useCallback((e: React.PointerEvent, idx: number) => {
-    if (e.button !== 0) return;
-    dragOrigin.current = { x: e.clientX, y: e.clientY };
-    isDragging.current = false;
-    setDragIdx(idx);
-    setDragLabel(chips[idx]?.label || '');
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-  }, [chips]);
-
-  const handlePointerMove = useCallback((e: React.PointerEvent) => {
-    if (dragIdx === null || !dragOrigin.current) return;
-
-    // 5px threshold so a plain click doesn't register as a drag
-    if (!isDragging.current) {
-      const dx = e.clientX - dragOrigin.current.x;
-      const dy = e.clientY - dragOrigin.current.y;
-      if (Math.abs(dx) < 5 && Math.abs(dy) < 5) return;
-      isDragging.current = true;
-      suppressClick.current = true;
+  const canSave = !!label.trim() && !!prompt.trim();
+  const save = useCallback(() => {
+    if (!canSave) return;
+    const fields = { label: label.trim(), prompt: prompt.trim(), hidden: shown ? undefined : true };
+    if (view.kind === 'edit') {
+      // Spread the existing chip so skillId survives — the uninstall cascade
+      // matches on it, so a tuned skill chip must stay bound to its skill.
+      setChips(chips.map((c, i) => (i === view.idx ? clean({ ...c, ...fields }) : c)));
+    } else if (view.kind === 'add' && chips.length < MAX_CHIPS) {
+      setChips([...chips, clean(fields)]);
     }
+    toList();
+  }, [canSave, label, prompt, shown, view, chips, setChips, toList]);
 
-    setDragPos({ x: e.clientX, y: e.clientY });
-
-    // Hit-test: nearest row by vertical distance (X-independent)
-    const list = listRef.current;
-    if (!list) return;
-    const els = list.querySelectorAll('[data-chip-idx]');
-
-    let closest: number | null = null;
-    let closestDist = Infinity;
-    const rowRects: { idx: number; rect: DOMRect }[] = [];
-    els.forEach(el => {
-      const idx = parseInt((el as HTMLElement).dataset.chipIdx!, 10);
-      const rect = el.getBoundingClientRect();
-      rowRects.push({ idx, rect });
-      const centerY = (rect.top + rect.bottom) / 2;
-      const dist = Math.abs(e.clientY - centerY);
-      if (idx !== dragIdx && dist < closestDist) {
-        closestDist = dist;
-        closest = idx;
-      }
-    });
-
-    setOverIdx(closest);
-
-    // Horizontal insertion bar in the gap above/below the target row
-    if (closest !== null) {
-      const targetIdx = closest;
-      rowRects.sort((a, b) => a.idx - b.idx);
-      const listRect = list.getBoundingClientRect();
-      const target = rowRects.find(r => r.idx === targetIdx)!;
-      let top: number;
-      if (targetIdx < dragIdx) {
-        const prev = rowRects.find(r => r.idx === targetIdx - 1);
-        top = prev ? (prev.rect.bottom + target.rect.top) / 2 : target.rect.top - 2;
-      } else {
-        const next = rowRects.find(r => r.idx === targetIdx + 1);
-        top = next ? (target.rect.bottom + next.rect.top) / 2 : target.rect.bottom + 2;
-      }
-      setGhostTarget({ left: listRect.left, top, width: listRect.width });
-    } else {
-      setGhostTarget(null);
-    }
-  }, [dragIdx]);
-
-  const handlePointerUp = useCallback(() => {
-    if (dragIdx !== null && isDragging.current && overIdx !== null && overIdx !== dragIdx) {
-      // Splice-move semantics (not swap) — matches the visual insertion indicator
-      const next = [...chips];
-      const [moved] = next.splice(dragIdx, 1);
-      next.splice(overIdx, 0, moved);
-      setEditIdx(null);   // indices shift; never carry an open edit across it
-      setChips(next);
-    }
-    setDragIdx(null);
-    setOverIdx(null);
-    setDragPos(null);
-    setGhostTarget(null);
-    dragOrigin.current = null;
-    isDragging.current = false;
-    setTimeout(() => { suppressClick.current = false; }, 0);
-  }, [dragIdx, overIdx, chips, setChips]);
-
-  const dragging = dragIdx !== null && isDragging.current && dragPos !== null;
+  const remove = useCallback((idx: number) => {
+    setChips(chips.filter((_, i) => i !== idx));
+    toList();
+  }, [chips, setChips, toList]);
 
   const addFromSkill = useCallback((skill: import('../../shared/types').SkillEntry) => {
-    if (chips.length >= 10) return;
-    setChips([...chips, {
-      skillId: skill.id,
-      label: skill.displayName || skill.id,
-      prompt: skill.prompt || `/${skill.id}`,
-    }]);
-    setShowAddForm(false);
-  }, [chips, setChips]);
+    if (chips.length >= MAX_CHIPS) return;
+    setChips([...chips, { skillId: skill.id, label: skill.displayName || skill.id, prompt: skill.prompt || `/${skill.id}` }]);
+    toList();
+  }, [chips, setChips, toList]);
 
-  const addCustom = useCallback(() => {
-    if (chips.length >= 10 || !customLabel.trim() || !customPrompt.trim()) return;
-    setChips([...chips, { label: customLabel.trim(), prompt: customPrompt.trim() }]);
-    setCustomLabel('');
-    setCustomPrompt('');
-    setShowAddForm(false);
-  }, [chips, setChips, customLabel, customPrompt]);
+  // Skills not already on a chip, for the add page's picker.
+  const chipSkillIds = useMemo(() => new Set(chips.map(c => c.skillId).filter(Boolean)), [chips]);
+  const availableSkills = useMemo(() => installed.filter(s => !chipSkillIds.has(s.id)), [installed, chipSkillIds]);
+  const skillPickerRef = useScrollFade<HTMLDivElement>();
+
+  // Photo-only build: open the page `shoot` named, once the chips have loaded.
+  useEffect(() => {
+    if (screenSub === 'edit' && chips.length > 1) beginEdit(1);
+    else if (screenSub === 'add') beginAdd();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run once per request
+  }, [screenSub, chips.length > 1]);
+
+  // Esc on a page goes back to the shelves before it closes the popup (LIFO stack).
+  useEscClose(open && view.kind !== 'list', toList);
+
+  const drag = useChipDrag(chips, setChips);
 
   if (!open) return null;
+
+  if (view.kind !== 'list') {
+    const editing = view.kind === 'edit' ? chips[view.idx] : null;
+    return createPortal(
+      <Dialog screen={view.kind === 'edit' ? 'chat/quick-chips/edit' : 'chat/quick-chips/add'} open onClose={onClose}
+        onBack={toList} title={editing ? `Edit “${editing.label}”` : 'Add a chip'} size="panel">
+        <div className={`${CARD_LEVEL_1} p-3 space-y-1.5`}>
+          <TextInput size="sm" value={label} onChange={(e) => setLabel(e.target.value.slice(0, 20))}
+            placeholder="Label (max 20 characters)" aria-label="Chip label" className="w-full" autoFocus />
+          <Textarea size="sm" value={prompt} onChange={(e) => setPrompt(e.target.value.slice(0, 500))}
+            placeholder="What the chip sends" rows={3} aria-label="Chip prompt" className="w-full" />
+        </div>
+        <div className={`${CARD_LEVEL_1} px-3 py-1`}>
+          <SettingRow header variant="item" title="Show above the message box" description="Off keeps it here, set aside"
+            control={<Toggle checked={shown} onChange={setShown} aria-label="Show above the message box" />} />
+        </div>
+        {view.kind === 'add' && availableSkills.length > 0 && (
+          <section>
+            <SectionLabel className="mb-2">Or use an installed skill</SectionLabel>
+            <div ref={skillPickerRef} className={`${CARD_LEVEL_1} scroll-fade max-h-40 p-1`}>
+              {availableSkills.map(skill => (
+                <button key={skill.id} type="button" onClick={() => addFromSkill(skill)}
+                  className="w-full text-left px-2 py-1.5 text-xs text-fg-2 hover:text-fg hover:bg-inset rounded-sm transition-colors">
+                  {skill.displayName || skill.id}
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
+        <div className="flex items-center gap-2">
+          {view.kind === 'edit' && <Button variant="danger" size="sm" onClick={() => remove(view.idx)}>Remove</Button>}
+          <span className="flex-1" />
+          <Button variant="secondary" size="sm" onClick={toList}>Cancel</Button>
+          <Button size="sm" onClick={save} disabled={!canSave}>{view.kind === 'edit' ? 'Save' : 'Add'}</Button>
+        </div>
+      </Dialog>,
+      document.body,
+    );
+  }
+
+  const shelf = (hidden: boolean) => chips.map((c, i) => ({ c, i })).filter(({ c }) => !!c.hidden === hidden);
+  const renderShelf = (hidden: boolean, title: string, empty: string) => {
+    const items = shelf(hidden);
+    return (
+      <section>
+        <SectionLabel className="mb-2">{title}</SectionLabel>
+        <div data-shelf={hidden ? 'aside' : 'shown'}
+          className={`${CARD_LEVEL_1} p-3 flex flex-wrap gap-1.5 min-h-12 transition-colors ${drag.overShelf === (hidden ? 'aside' : 'shown') ? 'border-accent' : ''}`}>
+          {items.length === 0 && <span className="text-3xs text-fg-muted self-center">{empty}</span>}
+          {items.map(({ c, i }) => (
+            <span key={i} data-chip-idx={i}
+              onPointerDown={(e) => drag.down(e, i)} onPointerMove={drag.move} onPointerUp={drag.up} onPointerCancel={drag.up}
+              className={`group/chip h-7 pl-2.5 pr-1 rounded-md bg-panel border inline-flex items-center gap-1 text-2xs select-none touch-none cursor-grab transition-opacity ${
+                hidden ? 'border-dashed border-edge-dim text-fg-muted' : 'border-edge-dim text-fg-2'} ${drag.dragIdx === i ? 'opacity-30' : ''}`}>
+              {c.label}
+              <button type="button" aria-label={`Edit ${c.label}`}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => { e.stopPropagation(); if (!drag.suppressClick.current) beginEdit(i); }}
+                className="touch-reveal w-5 h-5 rounded-sm flex items-center justify-center text-fg-faint opacity-0 group-hover/chip:opacity-100 focus-visible:opacity-100 hover:text-fg hover:bg-inset transition-opacity">
+                <PencilIcon size={9} />
+              </button>
+            </span>
+          ))}
+        </div>
+      </section>
+    );
+  };
 
   return createPortal(
     <>
       <Dialog screen="chat/quick-chips" open onClose={onClose} title="Edit quick chips" size="panel">
-            {/* Chip list — drag-to-reorder via pointer events (mirrors
-                SessionStrip dropdown). Grip icon appears on hover; drop
-                splices the row into the target position. */}
-            {/* WHY a labelled card of rows (pick-menus#PM-3, Destin picked "rows that open
-                to edit"): the rows were loose white boxes that showed a clipped bit of each
-                prompt, with the grip and pencil only on hover — so reordering and editing,
-                which already worked, were invisible. Now each row shows its whole prompt
-                (two lines) under the name and keeps its grip in view. */}
-            {/* TRIAL sketches for the pick-menus-4 deck (pick-menus-3#PM3-1: "a few more
-                alternatives with similar style. maybe two drag spots for active/inactive. edit
-                icon on each chip with hover. want to see the edit surface after clicking").
-                The "set aside" shelf is faked from the last two chips — chips have no hidden
-                state yet; dragging between shelves is not wired. */}
-            {QC_STYLE !== 'rows' && chips.length > 0 && (() => {
-              const shown = chips.slice(0, Math.max(0, chips.length - 2));
-              const aside = chips.slice(Math.max(0, chips.length - 2));
-              const editing = editIdx !== null ? chips[editIdx] : null;
-              const fields = (
-                <div className="space-y-1.5">
-                  <TextInput size="sm" value={editLabel} onChange={(e) => setEditLabel(e.target.value.slice(0, 20))} aria-label="Chip label" className="w-full" />
-                  <Textarea size="sm" value={editPrompt} onChange={(e) => setEditPrompt(e.target.value.slice(0, 500))} rows={3} aria-label="Chip prompt" className="w-full" />
-                </div>
-              );
-              const actions = (
-                <div className="flex gap-2">
-                  <Button size="sm" onClick={saveEdit} disabled={!editLabel.trim() || !editPrompt.trim()}>Save</Button>
-                  <Button variant="secondary" size="sm" onClick={cancelEdit}>Cancel</Button>
-                  <span className="flex-1" />
-                  <Button variant="secondary" size="sm" onClick={() => editIdx !== null && remove(editIdx)}>Remove</Button>
-                </div>
-              );
-              const pill = (chip: ChipConfig, i: number, dim: boolean) => (
-                <span key={i} className="relative group/chip inline-flex">
-                  <span className={`h-6 pl-2.5 pr-1 rounded-md bg-panel border inline-flex items-center gap-1 text-2xs cursor-grab ${editIdx === i ? 'border-accent text-fg' : 'border-edge-dim text-fg-2'} ${dim ? 'opacity-60 border-dashed' : ''}`}>
-                    {chip.label}
-                    <button type="button" aria-label={`Edit ${chip.label}`} onClick={() => beginEdit(i)}
-                      className={`w-4 h-4 rounded-sm flex items-center justify-center text-fg-faint ${i === 1 ? 'opacity-100' : 'opacity-0'} group-hover/chip:opacity-100 focus-visible:opacity-100 hover:text-fg transition-opacity`}>
-                      <PencilIcon size={9} />
-                    </button>
-                  </span>
-                  {QC_STYLE === 'shelves-pop' && editIdx === i && (
-                    <div className="absolute left-0 top-7 z-10 w-72 rounded-lg border border-edge bg-panel shadow-lg p-3 space-y-2">
-                      {fields}{actions}
-                    </div>
-                  )}
-                </span>
-              );
-              if (QC_STYLE === 'shelves-page' && editing) {
-                return (
-                  <section className="space-y-3">
-                    <button type="button" onClick={cancelEdit} className="text-xs text-fg-muted hover:text-fg">‹ All chips</button>
-                    <SectionLabel className="mb-2">Edit “{editing.label}”</SectionLabel>
-                    <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
-                      {fields}
-                    </div>
-                    <div className={`${CARD_LEVEL_1} px-3 py-1`}>
-                      <SettingRow header variant="item" title="Show above the message box" description="Off keeps it here, set aside"
-                        control={<Toggle checked={true} onChange={() => {}} aria-label="Show above the message box" />} />
-                    </div>
-                    {actions}
-                  </section>
-                );
-              }
-              return (
-                <section className="space-y-4">
-                  <div>
-                    <SectionLabel className="mb-2">Shown above the message box</SectionLabel>
-                    <div className={`${CARD_LEVEL_1} p-3 flex flex-wrap gap-1.5 min-h-12`}>{shown.map((c, i) => pill(c, i, false))}</div>
-                  </div>
-                  <div>
-                    <SectionLabel className="mb-2">Set aside</SectionLabel>
-                    <div className={`${CARD_LEVEL_1} p-3 flex flex-wrap gap-1.5 min-h-12`}>{aside.map((c, j) => pill(c, shown.length + j, true))}</div>
-                  </div>
-                  <p className="text-3xs text-fg-muted">Drag a chip between the two to show or hide it, or along a row to reorder.</p>
-                  {QC_STYLE === 'shelves-card' && editing && (
-                    <div>
-                      <SectionLabel className="mb-2">Edit “{editing.label}”</SectionLabel>
-                      <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>{fields}{actions}</div>
-                    </div>
-                  )}
-                </section>
-              );
-            })()}
-            {QC_STYLE === 'rows' && chips.length > 0 && (
-              <section>
-              <SectionLabel className="mb-2">Your chips ({chips.length} of 10)</SectionLabel>
-              <div ref={listRef} className={`${CARD_LEVEL_1} px-1 py-1 space-y-0.5 relative`}>
-                {chips.map((chip, i) => {
-                  const isBeingDragged = dragIdx === i && isDragging.current;
-                  const isEditing = editIdx === i;
-
-                  // Expanded row: the same two fields the add form uses, in
-                  // place. Drag handlers are deliberately NOT attached — a text
-                  // field must own its own pointer events (caret placement,
-                  // drag-select) and `touch-none` would eat them.
-                  if (isEditing) {
-                    return (
-                      <div
-                        key={i}
-                        data-chip-idx={i}
-                        className={`${CARD_LEVEL_2} p-2 space-y-1.5`}
-                      >
-                        <TextInput
-                          size="sm"
-                          value={editLabel}
-                          onChange={(e) => setEditLabel(e.target.value.slice(0, 20))}
-                          placeholder="Label (max 20 chars)"
-                          aria-label="Chip label"
-                          className="w-full"
-                          autoFocus
-                        />
-                        {/* rows={3} so a tuned prompt is readable as a whole —
-                            the collapsed row can only show a clipped preview. */}
-                        <Textarea
-                          size="sm"
-                          value={editPrompt}
-                          onChange={(e) => setEditPrompt(e.target.value.slice(0, 500))}
-                          placeholder="Prompt text"
-                          rows={3}
-                          aria-label="Chip prompt"
-                          className="w-full"
-                        />
-                        <div className="flex gap-2 items-center">
-                          <Button
-                            size="sm"
-                            onClick={saveEdit}
-                            disabled={!editLabel.trim() || !editPrompt.trim()}
-                          >
-                            Save
-                          </Button>
-                          {/* WHY outlined (guide: secondary actions are
-                              outlined, never bare text): was a hand-rolled
-                              text-fg-muted button. */}
-                          <Button variant="secondary" size="sm" onClick={cancelEdit}>Cancel</Button>
-                        </div>
-                      </div>
-                    );
-                  }
-
-                  return (
-                    <Tooltip key={i} text="Edit chip">
-                    <div
-                      data-chip-idx={i}
-                      onPointerDown={(e) => handlePointerDown(e, i)}
-                      onPointerMove={handlePointerMove}
-                      onPointerUp={handlePointerUp}
-                      // suppressClick is the same guard the ✕ uses: it is set
-                      // once a pointer run passes the 5px drag threshold, so a
-                      // reorder never also opens the row it just dropped.
-                      onClick={() => { if (!suppressClick.current) beginEdit(i); }}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); beginEdit(i); } }}
-                      className={`group/row flex items-center gap-2 px-2 py-1.5 rounded-md text-2xs select-none touch-none hover:bg-inset transition-colors ${
-                        isBeingDragged ? 'opacity-30' : ''
-                      }`}
-                      style={{
-                        transition: 'opacity 150ms, background 150ms',
-                        cursor: isAndroid() ? 'pointer' : 'grab',
-                      }}
-                    >
-                      {/* Drag grip — always in view on desktop (it was hover-only, so
-                          nobody knew chips could be reordered); Android drags the row. */}
-                      <span className={`shrink-0 flex items-center text-fg-faint ${isAndroid() ? 'hidden' : ''}`}>
-                        <DragGrip />
-                      </span>
-                      <span className="flex-1 min-w-0">
-                        <span className="block text-xs text-fg truncate">{chip.label}</span>
-                        <span className="block text-3xs text-fg-muted line-clamp-2">{chip.prompt}</span>
-                      </span>
-                      {/* Pencil affords the tap-to-edit the whole row carries. */}
-                      <span className="shrink-0 px-1 text-fg-faint group-hover/row:text-fg-muted transition-colors flex items-center">
-                        <PencilIcon size={10} />
-                      </span>
-                      <Tooltip text="Remove chip">
-                      <button
-                        onPointerDown={(e) => e.stopPropagation()}
-                        onClick={(e) => { e.stopPropagation(); if (!suppressClick.current) remove(i); }}
-                        // Deliberately NOT a ui/Button. Unlike InputBar's attachment ✕
-                        // (which is a 16px badge and did migrate), this is a bare glyph
-                        // with no background, radius or padding — routing it through the
-                        // primitive would ADD chrome it has never had. It sits below
-                        // spec §11.1's "real button chrome" bar.
-                        //
-                        // WHY the explicit name: `title` used to supply it, and a hover
-                        // hint no longer can — the only text inside this button is the
-                        // "×" glyph, so the accessible name would have become "×".
-                        aria-label="Remove chip"
-                        className="shrink-0 px-1 text-fg-muted hover:text-red-400"
-                      >
-                        &times;
-                      </button>
-                      </Tooltip>
-                    </div>
-                    </Tooltip>
-                  );
-                })}
-              </div>
-              </section>
-            )}
-
-            {/* Add chip button / form */}
-            {chips.length < 10 && !showAddForm && (
-              // WHY an outlined Button (guide: secondary actions are outlined) and
-              // sentence case: was a hand-rolled dashed box reading "+ Add Chip".
-              <Button variant="secondary" size="sm" className="w-full" onClick={() => setShowAddForm(true)}>
-                + Add a chip
-              </Button>
-            )}
-
-            {showAddForm && (
-              <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
-                {/* Custom chip form */}
-                <div className="space-y-1.5">
-                  {/* Shared field surface (change 20). The .slice() caps stay on the
-                      handlers — they are the real length limit, not decoration. */}
-                  <TextInput
-                    size="sm"
-                    value={customLabel}
-                    onChange={(e) => setCustomLabel(e.target.value.slice(0, 20))}
-                    placeholder="Label (max 20 chars)"
-                    aria-label="Chip label"
-                    className="w-full"
-                  />
-                  {/* Textarea primitive (change 42); resize-none is its default, so
-                      the old explicit class is no longer needed. */}
-                  <Textarea
-                    size="sm"
-                    value={customPrompt}
-                    onChange={(e) => setCustomPrompt(e.target.value.slice(0, 500))}
-                    placeholder="Prompt text"
-                    rows={2}
-                    aria-label="Chip prompt"
-                    className="w-full"
-                  />
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      onClick={addCustom}
-                      disabled={!customLabel.trim() || !customPrompt.trim()}
-                    >
-                      Add custom
-                    </Button>
-                    {/* WHY outlined (guide: secondary actions are outlined,
-                        never bare text): was a hand-rolled text-fg-muted button. */}
-                    <Button variant="secondary" size="sm" onClick={() => setShowAddForm(false)}>Cancel</Button>
-                  </div>
-                </div>
-
-                {/* Divider + installed-skills picker */}
-                {availableSkills.length > 0 && (
-                  <>
-                    <div className="border-t border-edge-dim" />
-                    <p className="text-3xs text-fg-muted font-medium">Or pick from installed skills:</p>
-                    <div ref={skillPickerRef} className="scroll-fade max-h-32 space-y-0.5">
-                      {availableSkills.map(skill => (
-                        <button
-                          key={skill.id}
-                          onClick={() => addFromSkill(skill)}
-                          className="w-full text-left px-2 py-1 text-2xs text-fg-muted hover:text-fg hover:bg-well rounded-sm transition-colors"
-                        >
-                          {skill.displayName || skill.id}
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
-
-            {chips.length >= 10 && (
-              <p className="text-3xs text-fg-muted text-center">Maximum 10 chips reached</p>
-            )}
+        {renderShelf(false, 'Shown above the message box', 'Drag a chip here to show it')}
+        {renderShelf(true, 'Set aside', 'Drag a chip here to keep it without showing it')}
+        <p className="text-3xs text-fg-muted">Drag a chip between the two to show or hide it, or along a shelf to reorder. The pencil on a chip edits it.</p>
+        {chips.length < MAX_CHIPS
+          ? <Button variant="secondary" size="sm" className="w-full" onClick={beginAdd}>+ Add a chip</Button>
+          : <p className="text-3xs text-fg-muted text-center">Maximum {MAX_CHIPS} chips reached</p>}
       </Dialog>
-
-      {/* Insertion indicator — horizontal accent bar in the row gap */}
-      {dragging && ghostTarget && (
-        <div
-          className="fixed z-[9998] pointer-events-none"
-          style={{
-            left: ghostTarget.left,
-            top: ghostTarget.top,
-            width: ghostTarget.width,
-            transform: 'translateY(-50%)',
-            transition: 'top 120ms cubic-bezier(0.34, 1.56, 0.64, 1)',
-          }}
-        >
-          <div className="h-0.5 w-full rounded-full bg-accent" style={{ opacity: 0.8 }} />
-        </div>
-      )}
-
-      {/* Floating drag ghost — follows cursor */}
-      {dragging && dragPos && (
-        <div
-          className="fixed z-[9999] pointer-events-none flex items-center gap-1.5 rounded-md px-2.5 py-1 bg-inset border border-edge shadow-lg shadow-black/40"
-          style={{
-            left: dragPos.x,
-            top: dragPos.y,
-            transform: 'translate(-50%, -50%) scale(1.05)',
-          }}
-        >
-          <DragGrip />
-          <span className="text-2xs font-medium text-fg whitespace-nowrap max-w-[180px] truncate">
-            {dragLabel}
-          </span>
+      {drag.ghost && (
+        <div className="fixed z-[9999] pointer-events-none rounded-md px-2.5 h-7 inline-flex items-center bg-inset border border-edge shadow-lg shadow-black/40 text-2xs font-medium text-fg"
+          style={{ left: drag.ghost.x, top: drag.ghost.y, transform: 'translate(-50%, -50%) scale(1.05)' }}>
+          {drag.ghost.label}
         </div>
       )}
     </>,
     document.body,
   );
+}
+
+/** Drop the `hidden` key when false so a shown chip stores exactly as before. */
+function clean(c: ChipConfig): ChipConfig {
+  const { hidden, ...rest } = c;
+  return hidden ? { ...rest, hidden: true } : rest;
+}
+
+/** Pointer drag across the two shelves. A press that moves under 5px is a click.
+ *  On drop: over a chip → land before it (or after it, right half), taking that
+ *  chip's shelf; over a shelf's empty space → the end of that shelf. */
+function useChipDrag(chips: ChipConfig[], setChips: (c: ChipConfig[]) => Promise<void>) {
+  const origin = useRef<{ x: number; y: number; idx: number } | null>(null);
+  const suppressClick = useRef(false);
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+  const [ghost, setGhost] = useState<{ x: number; y: number; label: string } | null>(null);
+  const [overShelf, setOverShelf] = useState<'shown' | 'aside' | null>(null);
+
+  const hit = (x: number, y: number) => {
+    const el = typeof document.elementFromPoint === 'function' ? document.elementFromPoint(x, y) : null;
+    const chipEl = el?.closest<HTMLElement>('[data-chip-idx]') ?? null;
+    const shelfEl = el?.closest<HTMLElement>('[data-shelf]') ?? null;
+    return { chipEl, shelf: (shelfEl?.dataset.shelf as 'shown' | 'aside' | undefined) ?? null };
+  };
+
+  const down = (e: React.PointerEvent, idx: number) => {
+    if (e.button !== 0) return;
+    origin.current = { x: e.clientX, y: e.clientY, idx };
+    suppressClick.current = false;
+    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+  };
+  const move = (e: React.PointerEvent) => {
+    const o = origin.current;
+    if (!o) return;
+    if (dragIdx === null) {
+      if (Math.abs(e.clientX - o.x) < 5 && Math.abs(e.clientY - o.y) < 5) return;
+      setDragIdx(o.idx);
+      suppressClick.current = true;
+    }
+    setGhost({ x: e.clientX, y: e.clientY, label: chips[o.idx]?.label ?? '' });
+    setOverShelf(hit(e.clientX, e.clientY).shelf);
+  };
+  const up = (e: React.PointerEvent) => {
+    const o = origin.current;
+    origin.current = null;
+    const wasDragging = dragIdx !== null;
+    setDragIdx(null); setGhost(null); setOverShelf(null);
+    if (!o || !wasDragging) return;
+    const { chipEl, shelf } = hit(e.clientX, e.clientY);
+    if (!shelf) return;
+    const moving = { ...chips[o.idx], hidden: shelf === 'aside' };
+    const rest = chips.filter((_, i) => i !== o.idx);
+    let at = rest.length;
+    if (chipEl) {
+      const target = parseInt(chipEl.dataset.chipIdx!, 10);
+      if (target !== o.idx) {
+        const r = chipEl.getBoundingClientRect();
+        const after = e.clientX > r.left + r.width / 2;
+        const t = rest.indexOf(chips[target]);
+        at = after ? t + 1 : t;
+      }
+    }
+    rest.splice(at, 0, clean(moving));
+    setChips(rest);
+  };
+  return { down, move, up, dragIdx, ghost, overShelf, suppressClick };
 }

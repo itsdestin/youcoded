@@ -1291,6 +1291,11 @@ export interface ChipConfig {
   skillId?: string;  // optional — chips can exist without a backing skill (e.g., "Git Status" is just a prompt)
   label: string;
   prompt: string;
+  /** Kept in the editor's "Set aside" shelf but not shown above the message box
+   *  (pick-menus-4#PM4-1). Absent = shown. Both stores save chips as plain JSON
+   *  objects (skill-config-store.ts, SkillConfigStore.kt), so the field round-trips
+   *  on desktop and Android with no store change; it counts toward the 10-chip cap. */
+  hidden?: boolean;
 }
 
 export interface MetadataOverride {

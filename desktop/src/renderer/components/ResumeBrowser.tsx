@@ -28,6 +28,7 @@ import { TagManagerPopup } from './tags/TagManagerPopup';
 import { TagChip } from './tags/TagChip';
 import { SessionCardTags, SessionCardMeta, CompleteToggle, SESSION_CARD_SURFACE_BASE } from './SessionCardDetails';
 import { PRIORITY_TAG, PRIORITY_HINT } from './tags/built-in-tags';
+import { PinIcon } from './tags/PinIcon';
 import { TagGlyph } from './tags/glyphs';
 import { NoteEditor } from './tags/NoteEditor';
 import { useResumeOptions, ResumeOptionsForm, type ResumeHandler } from './ResumeOptions';
@@ -1464,10 +1465,9 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               conversation title right on every native row. The model chip on
               the line below says the same thing in the user's terms — a model
               name — and says it for Claude Code rows too. */}
-          {/* Tag chips after the name. Priority is FIRST and rendered with the
-              same TagChip as everything else — it is a built-in tag, not a
-              separate species of label (built-in-tags.ts). Complete has no chip:
-              its state is the hide icon on the right of this row. */}
+          {/* Tag chips after the name. Pinned (the Priority flag) shows as the pin in
+              the corner icons, not a chip here. Complete has no chip: its state is
+              the hide icon on the right of this row. */}
           <SessionCardTags session={s} tagsById={registry.byId} className={ICON_GUTTER} />
           {/* Bottom line: one dotted trail of context on the left — project,
               model, size — then the timestamp on the right.
@@ -1499,6 +1499,11 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
           while the cluster's pr-2 puts the last icon's right edge 12px from the
           card edge, matching the trigger's p-3. */}
       <div className="absolute top-0 right-0 pt-1.5 pl-1.5 pr-2 flex items-start">
+      {/* Pinned: the pin sits with the card's corner icons, as it sits by the status
+          pill in the sessions menu (pick-menus-4#PM4-3) — no longer an amber tag. */}
+      {s.flags?.priority && (
+        <span className="px-1 py-2 flex items-center" title="Pinned to top"><PinIcon className="w-3 h-3 text-fg-2" /></span>
+      )}
       {/* Tags and note. Always visible rather than hover-revealed — a
           hover-only affordance is invisible on touch and undiscoverable on
           desktop, and this is the ONLY route to tagging. Rendered for inert

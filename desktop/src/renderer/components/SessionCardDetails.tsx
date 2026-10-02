@@ -8,7 +8,6 @@
 import type { PastSession } from '../../shared/types';
 import type { TagRecord } from '../../shared/tags';
 import { TagChip } from './tags/TagChip';
-import { PinIcon } from './tags/PinIcon';
 import { ModelIcon } from './model/ModelPicker';
 import { resolveModelBrand } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
@@ -56,10 +55,9 @@ function formatModelId(id: string): string {
   return id.replace(/-\d{8}$/, '');
 }
 
-/** Tag chips after the name. Priority is FIRST and rendered with the same
- *  TagChip as everything else — it is a built-in tag, not a separate species of
- *  label (built-in-tags.ts). Complete has no chip: its state is the hide icon
- *  on the Resume card. Renders nothing when there is nothing to show.
+/** Tag chips after the name. Pinned (the Priority flag) is not a chip any more —
+ *  it is the pin among the Resume card's corner icons (pick-menus-4#PM4-3).
+ *  Complete has no chip: its state is the hide icon on the Resume card. Renders nothing when there is nothing to show.
  *  `tagsById` is passed in, not read from useTagRegistry here: that hook loads
  *  the registry, and one load per card would be one per row. */
 export function SessionCardTags({ session: s, tagsById, className = '' }: {
@@ -67,11 +65,9 @@ export function SessionCardTags({ session: s, tagsById, className = '' }: {
   tagsById: ReadonlyMap<string, TagRecord>;
   className?: string;
 }) {
-  if (!(s.flags?.priority || (s.tags && s.tags.length > 0) || s.note)) return null;
+  if (!((s.tags && s.tags.length > 0) || s.note)) return null;
   return (
     <div className={`flex items-center gap-1 mt-0.5 flex-wrap ${className}`}>
-      {/* Pinned: a pin glyph, not an amber "Priority" chip (pick-menus-2#PM2-3). */}
-      {s.flags?.priority && <span className="flex items-center" title="Pinned to top"><PinIcon className="w-3 h-3 text-fg-2" /></span>}
       {(s.tags ?? []).map((id) => {
         const t = tagsById.get(id);
         return t ? <TagChip key={id} tag={t} /> : null;
