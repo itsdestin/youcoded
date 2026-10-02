@@ -2783,7 +2783,6 @@ export function installShim(): void {
       // Same widened type as preload's (FirstRunState['authMode']); still a no-op here.
       startAuth: (_mode: FirstRunState['authMode']) => Promise.resolve(),
       submitApiKey: (_key: string, _service?: string) => Promise.resolve(),
-      devModeDone: () => Promise.resolve(),
       skip: () => Promise.resolve(),
       // First-run local models (2026-09-14). First-run never shows here, and the
       // band above the message box describes the HOST's first download, which a

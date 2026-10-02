@@ -460,7 +460,6 @@
     {"file": "plugin-installer.ts", "fn": "upgradePluginFromLocal", "call": "fs.rmSync", "count": 3},
     {"file": "plugin-installer.ts", "fn": "upgradePluginFromLocal", "call": "fs.statSync", "count": 1},
     {"file": "prerequisite-installer.ts", "fn": "checkDiskSpace", "call": "fs.statfsSync", "count": 1},
-    {"file": "prerequisite-installer.ts", "fn": "checkWindowsDevMode", "call": "execSync", "count": 1},
     {"file": "prerequisite-installer.ts", "fn": "cleanStaleClaudeDownloads", "call": "fs.readdirSync", "count": 1},
     {"file": "prerequisite-installer.ts", "fn": "cleanStaleClaudeDownloads", "call": "fs.rmSync", "count": 1},
     {"file": "prerequisite-installer.ts", "fn": "detectClaude", "call": "fs.existsSync", "count": 1},

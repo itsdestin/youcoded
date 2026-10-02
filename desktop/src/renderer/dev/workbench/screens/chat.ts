@@ -70,7 +70,7 @@ export const CHAT: readonly ScreenEntry[] = [
   ...['handoff', 'reasoning-stop', 'skill-first', 'approval', 'skills-spread', 'skills-chain', 'deliverables', 'mix', 'silent-steps'].map((b) => ({ ...chat(`chat#bubbles-${b}`, 'view', 'conversation'), session: 'wb-2', params: { seed: `bubbles-${b}` } })),
   // First-run setup, one entry per step (?firstRun=<STEP>). LAUNCH_WIZARD is left out: it
   // hands over to the app after 1.5 s by design.
-  ...['DETECT_PREREQUISITES', 'INSTALL_PREREQUISITES', 'ENABLE_DEVELOPER_MODE', 'AUTHENTICATE'].map((st) => ({ name: `first-run#${st.toLowerCase().replace(/_/g, '-')}`, tags: ['first-run', 'view'], params: { firstRun: st } })),
+  ...['DETECT_PREREQUISITES', 'INSTALL_PREREQUISITES', 'AUTHENTICATE'].map((st) => ({ name: `first-run#${st.toLowerCase().replace(/_/g, '-')}`, tags: ['first-run', 'view'], params: { firstRun: st } })),
   { name: 'first-run#authenticate-chatgpt', tags: ['first-run', 'view', 'sign-in'], params: { firstRun: 'AUTHENTICATE', authMode: 'chatgpt' } },
   // The arcade signed in (a friend online), and its lonelier states.
   { ...chat('chat/games#signed-in', 'pane', 'games'), params: { signedIn: '1' } },

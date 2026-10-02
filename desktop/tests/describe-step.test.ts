@@ -15,7 +15,6 @@ function state(overrides: Partial<FirstRunState> = {}): FirstRunState {
     statusMessage: '',
     authMode: 'none',
     authComplete: false,
-    needsDevMode: false,
     ...overrides,
   };
 }
@@ -74,11 +73,6 @@ describe('describeStep', () => {
   it('describes the auth step', () => {
     expect(describeStep(state({ currentStep: 'AUTHENTICATE' })))
       .toBe('Sign in with an account, or run a model on this computer, to finish setup.');
-  });
-
-  it('describes the developer-mode step', () => {
-    expect(describeStep(state({ currentStep: 'ENABLE_DEVELOPER_MODE' })))
-      .toBe("One Windows setting to enable, then we're done.");
   });
 
   it('describes the completion step', () => {

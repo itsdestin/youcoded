@@ -2939,8 +2939,8 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // return a real shape; the catch-all can only ever be right about SHAPE, not
   // MEANING. Shape from shared/first-run-types.ts.
   // `?firstRun=<STEP>` renders the onboarding wizard at that step (e.g.
-  // DETECT_PREREQUISITES, INSTALL_PREREQUISITES, ENABLE_DEVELOPER_MODE,
-  // AUTHENTICATE, LAUNCH_WIZARD). WHY: the wizard is the first thing a new user
+  // DETECT_PREREQUISITES, INSTALL_PREREQUISITES, AUTHENTICATE,
+  // LAUNCH_WIZARD). WHY: the wizard is the first thing a new user
   // sees and, until 2026-08-25, the only surface no review rig could reach —
   // the mock always answered COMPLETE, so App routed straight past it.
   const firstRunStep = (typeof location !== 'undefined' && new URLSearchParams(location.search).get('firstRun')) || 'COMPLETE';
@@ -3001,7 +3001,6 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       // state (design 2026-09-04: the ChatGPT round-trip has its own waiting copy).
       authMode: (typeof location !== 'undefined' && new URLSearchParams(location.search).get('authMode')) || 'none',
       authComplete: true,
-      needsDevMode: false,
     }),
   };
 

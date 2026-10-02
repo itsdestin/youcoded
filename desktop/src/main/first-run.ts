@@ -20,8 +20,6 @@ import {
   pollAuthStatus,
   submitApiKey,
   checkDiskSpace,
-  checkWindowsDevMode,
-  enableWindowsDevMode,
 } from './prerequisite-installer';
 import type { ChatGptAuth } from './providers/chatgpt-auth';
 import type { CuratedModel, DownloadProgress } from '../shared/model-manager-types';
@@ -225,7 +223,11 @@ export class FirstRunManager extends EventEmitter {
       // LAUNCH_WIZARD is NOT re-detected — it means all prereqs already passed.
       // runStep('LAUNCH_WIZARD') emits the event and advances to COMPLETE.
       const step = this.state.currentStep;
-      if (step === 'AUTHENTICATE' || step === 'ENABLE_DEVELOPER_MODE') {
+      // WHY the string cast: the Windows Developer Mode step was removed
+      // (2026-10-02 — nothing in the app makes symbolic links since the toolkit
+      // download went away), but a state file saved by an older build can still
+      // be parked on it. Re-detecting moves that user straight on to sign-in.
+      if (step === 'AUTHENTICATE' || (step as string) === 'ENABLE_DEVELOPER_MODE') {
         this.state.authMode = 'none';
         this.state.lastError = undefined;
         await this.detectAll();
@@ -252,9 +254,6 @@ export class FirstRunManager extends EventEmitter {
         break;
       case 'INSTALL_PREREQUISITES':
         await this.installMissing();
-        break;
-      case 'ENABLE_DEVELOPER_MODE':
-        this.devModeStep();
         break;
       case 'AUTHENTICATE':
         this.updateState({ statusMessage: 'Sign in to continue' });
@@ -308,10 +307,6 @@ export class FirstRunManager extends EventEmitter {
       this.updatePrereq('auth', { status: 'installed' });
       this.updateState({ authComplete: true });
     }
-
-    // Windows Developer Mode
-    const devModeEnabled = checkWindowsDevMode();
-    this.updateState({ needsDevMode: !devModeEnabled });
 
     log('INFO', 'first-run', 'Detection complete');
 
@@ -396,10 +391,7 @@ export class FirstRunManager extends EventEmitter {
     // All installable prerequisites are now installed — advance to next step.
     // cloneToolkit() was removed: the app bundles write-guard via install-hooks.js;
     // legacy clones are cleaned up by legacy-cleanup.ts on first launch after upgrade.
-    if (this.state.needsDevMode) {
-      this.advanceTo('ENABLE_DEVELOPER_MODE');
-      this.devModeStep();
-    } else if (!this.state.authComplete) {
+    if (!this.state.authComplete) {
       this.advanceTo('AUTHENTICATE');
       this.updateState({ statusMessage: 'Sign in to continue' });
       this.updatePrereq('auth', { status: 'waiting' });
@@ -408,41 +400,6 @@ export class FirstRunManager extends EventEmitter {
       this.updateState({ statusMessage: 'Launching setup wizard...' });
       this.emit('launch-wizard');
       this.advanceTo('COMPLETE');
-    }
-  }
-
-  // -------------------------------------------------------------------------
-  // Developer Mode
-  // -------------------------------------------------------------------------
-
-  private devModeStep(): void {
-    this.updateState({
-      statusMessage: 'Enable Windows Developer Mode to continue',
-    });
-    // Waits for IPC call to handleDevModeDone()
-  }
-
-  /** Called from IPC when the user triggers dev mode enablement. */
-  async handleDevModeDone(): Promise<void> {
-    const result = await enableWindowsDevMode();
-    if (result.success) {
-      this.updateState({ needsDevMode: false });
-      log('INFO', 'first-run', 'Developer Mode enabled');
-
-      if (!this.state.authComplete) {
-        this.advanceTo('AUTHENTICATE');
-        this.updateState({ statusMessage: 'Sign in to continue' });
-        this.updatePrereq('auth', { status: 'waiting' });
-      } else {
-        this.advanceTo('LAUNCH_WIZARD');
-        this.updateState({ statusMessage: 'Launching setup wizard...' });
-        this.emit('launch-wizard');
-        this.advanceTo('COMPLETE');
-      }
-    } else {
-      this.updateState({
-        lastError: `Failed to enable Developer Mode: ${result.error}`,
-      });
     }
   }
 
@@ -864,7 +821,6 @@ export class FirstRunManager extends EventEmitter {
       statusMessage: 'Checking your system...',
       authMode: 'none',
       authComplete: false,
-      needsDevMode: false,
     };
   }
 }

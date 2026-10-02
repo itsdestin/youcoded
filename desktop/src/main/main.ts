@@ -544,11 +544,6 @@ function registerFirstRunIpc(
     catch (e) { log('ERROR', 'FirstRun', 'API key submit failed', { error: String(e) }); }
   });
 
-  ipcMain.handle(IPC.FIRST_RUN_DEV_MODE_DONE, async () => {
-    try { await firstRunManager.handleDevModeDone(); }
-    catch (e) { log('ERROR', 'FirstRun', 'Dev mode failed', { error: String(e) }); }
-  });
-
   ipcMain.handle(IPC.FIRST_RUN_SKIP, async () => {
     // One writer for the setup-completed flag (first-run.ts). WHY: it is the
     // only place that knows WHERE the wizard's files live, so a dev instance
@@ -1222,7 +1217,6 @@ function createWindow(firstRunManager?: FirstRunManager) {
                 else await lateFirstRunManager!.handleApiKeySubmit(key);
               } catch {}
             });
-            ipcMain.handle(IPC.FIRST_RUN_DEV_MODE_DONE, async () => { try { await lateFirstRunManager!.handleDevModeDone(); } catch {} });
             ipcMain.handle(IPC.FIRST_RUN_SKIP, async () => {
               markSetupCompleted(); // same one writer as above
               lateFirstRunManager?.skip();

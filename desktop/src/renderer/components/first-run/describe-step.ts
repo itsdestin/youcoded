@@ -67,9 +67,6 @@ export function describeStep(state: FirstRunState): string {
       // is a sign-in.
       return 'Sign in with an account, or run a model on this computer, to finish setup.';
 
-    case 'ENABLE_DEVELOPER_MODE':
-      return "One Windows setting to enable, then we're done.";
-
     case 'LAUNCH_WIZARD':
     case 'COMPLETE':
       return 'All set. Opening YouCoded…';
