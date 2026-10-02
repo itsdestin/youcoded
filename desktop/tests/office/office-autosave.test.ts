@@ -6,6 +6,7 @@ import {
   HOME_TAB, cancelClose, closeDoc, finishClose, flushOffice, holdInline, markChanged, markFailed, markSaved, markSaving,
   officeDocFor, officeTabsNow, openDoc, registerFlush, resetOfficeStoreForTests, saveStateFor, selectTab,
 } from '../../src/renderer/components/office/office-store';
+import { saveLabel } from '../../src/renderer/components/office/OfficeView';
 import type { OfficeFile } from '../../src/shared/office-types';
 
 const file = (name: string): OfficeFile => ({ path: `/docs/${name}`, name, kind: 'document', folder: 'docs', at: '2026-09-28T00:00:00Z' });
@@ -14,6 +15,18 @@ const B = file('b.docx');
 
 // The store is module state; each test starts from none.
 beforeEach(() => resetOfficeStoreForTests());
+
+describe('save label', () => {
+  // WHY: waiting-for-autosave must not claim "Saving…" (owner decision 2026-10-01).
+  it('says Edited while changes wait, Saving… only during a save, then Saved', () => {
+    markChanged(A.path);
+    expect(saveLabel(saveStateFor(A.path))).toBe('Edited');
+    markSaving(A.path);
+    expect(saveLabel(saveStateFor(A.path))).toBe('Saving…');
+    markSaved(A.path);
+    expect(saveLabel(saveStateFor(A.path))).toBe('Saved');
+  });
+});
 
 describe('save state per file', () => {
   it('reads as saved for a file nothing has happened to', () => {

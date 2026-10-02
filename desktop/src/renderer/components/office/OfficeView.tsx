@@ -241,7 +241,12 @@ export function OfficeView({ projectRoot = null, visible = true }: { projectRoot
   );
 }
 
-function saveLabel(s: OfficeSaveState): string {
+// WHY exported + three-way (owner decision, 2026-10-01): 'unsaved' (changes waiting for autosave,
+// up to 20 s on big files) used to read "Saving…", which looked stuck. Now it says "Edited";
+// "Saving…" is only while a save is really running. The store already keeps these phases apart,
+// so the label changes only when the phase does — no extra re-renders per keystroke.
+export function saveLabel(s: OfficeSaveState): string {
+  if (s.phase === 'unsaved') return 'Edited';
   if (s.phase !== 'saved') return 'Saving…';
   // After "Save a copy…", say where it went — the folder's name only, never a full path.
   return s.copiedTo ? `Saved a copy to ${s.copiedTo} — now editing the copy.` : 'Saved';
