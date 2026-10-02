@@ -1,5 +1,7 @@
 import type { SessionChatState } from './chat-types';
 import { HISTORY_EXPAND_PROMPT_ID } from './chat-types';
+import { getVisibleScreenText } from '../hooks/terminal-registry';
+import { readInputFocus, inputIsBlocked, type InputFocus } from '../parser/cc-input-focus';
 
 // Shared safety gate for programmatic PTY writes.
 //
@@ -72,13 +74,38 @@ export function pendingInteractionKind(session: SessionChatState): 'approval' | 
   return null;
 }
 
+/**
+ * The SCREEN's verdict, for what the chat state cannot see: is something other than Claude Code's message box holding the keyboard right now?
+ *
+ * WHY (2026-10-01, one-core R6-4 fix): origin/master gained this gate (popups work, 2026-09-29) AFTER the one-core series branched, so the series
+ * lost it. Without it a chat message typed while Claude Code shows a pop-up no hook reports — most visibly the "Switch model?" confirmation a typed
+ * /model opens mid-conversation — is swallowed (its Enter answers the pop-up with "Yes") while the bubble looks sent and "Simmering" never ends,
+ * and the lost-message retry's bare Enter answers it too. Returns null when the message box is live, or when there is no readable terminal (no
+ * verdict, so no new refusal). Detector: parser/cc-input-focus.ts (shape-based, replayed against 104 real captures on master).
+ */
+export function screenInputBlock(sessionId: string): Exclude<InputFocus, { kind: 'message-box' } | { kind: 'unknown' }> | null {
+  const focus = readInputFocus(getVisibleScreenText(sessionId));
+  return inputIsBlocked(focus) ? (focus as Exclude<InputFocus, { kind: 'message-box' } | { kind: 'unknown' }>) : null;
+}
+
 /** The one refusal sentence every send-refusal site reads, so they cannot drift.
  *  "answer the card" is true of every card shape that blocks (permission, plan,
  *  question, and a kept card with its Dismiss). */
-export function pendingInteractionRefusalCopy(kind: 'approval' | 'prompt' | null): string {
+export function pendingInteractionRefusalCopy(kind: 'approval' | 'prompt' | 'screen' | null): string {
+  // 'screen': only the terminal shows it (no card in the chat), so the sentence says where to look.
+  if (kind === 'screen') return 'Claude Code is waiting on something in the terminal — open the terminal view and answer it first.';
   return kind === 'approval'
     ? 'Your assistant is waiting for your response — answer the card in the chat first.'
     : 'Your assistant is waiting for your response — answer the prompt first.';
+}
+
+/**
+ * The refusal sentence for a programmatic write that must not go out right now, or null when it may: a pending card first (it names the card to
+ * answer), then the live screen's pop-up (one-core R6-4 fix; see screenInputBlock for why).
+ */
+export function sendRefusalCopy(session: SessionChatState | undefined, sessionId: string): string | null {
+  if (session && hasPendingInteraction(session)) return pendingInteractionRefusalCopy(pendingInteractionKind(session));
+  return screenInputBlock(sessionId) ? pendingInteractionRefusalCopy('screen') : null;
 }
 
 /**

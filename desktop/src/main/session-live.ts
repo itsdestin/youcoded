@@ -45,6 +45,22 @@ const MODEL_REJECT_RE = /model[^\n]{0,80}(?:not found|invalid|unknown|not availa
 /** Assistant output, a tool or a finished turn means Claude Code is past any menu it was showing (a menu blocks its input). */
 const MOVED_ON_TYPES = new Set(['assistant-text', 'tool-use', 'turn-complete']);
 
+/**
+ * Does this chunk of terminal output say Claude Code REFUSED a model?
+ *
+ * WHY the rows are split first (2026-10-01, one-core R6-4 fix): Claude Code's screen redraws separate rows with a carriage return and a cursor-down
+ * escape, never "\n". Stripping the escapes alone therefore glued neighbouring rows into one "line", and MODEL_REJECT_RE's `model[^\n]{0,80}unavailable`
+ * matched Claude Code's own SUCCESS line ("Set model to Haiku 4.5 and saved as your default") followed by the footer row "auto mode unavailable".
+ * The host then "took back" a switch that had worked: the divider vanished and the label went back to the old model (Destin's missing divider).
+ */
+function looksLikeModelRefusal(data: string): boolean {
+  const rows = data
+    .replace(/\x1b\[\d*(?:;\d*)?[HBEF]/g, '\n')   // cursor-home / down / next-line / previous-line: a new row starts here
+    .replace(/\r/g, '\n')
+    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');         // every other escape (colours, cursor-forward) just disappears
+  return MODEL_REJECT_RE.test(rows);
+}
+
 /** A compaction with no event of any kind for this long has stopped (the screens' own watchdog used this number). */
 export const COMPACT_IDLE_LIMIT_MS = 180_000;
 const COMPACT_CHECK_MS = 30_000;
@@ -89,7 +105,7 @@ export class SessionLiveFacts {
   noteOutput(sessionId: string, data: string): void {
     if (!this.deps.isClaude(sessionId)) return;
     const pm = this.pendingModel.get(sessionId);
-    if (pm && !pm.turnStarted && this.now() - pm.at < MODEL_REJECT_WINDOW_MS && MODEL_REJECT_RE.test(data.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, ''))) this.rejectModel(sessionId);
+    if (pm && !pm.turnStarted && this.now() - pm.at < MODEL_REJECT_WINDOW_MS && looksLikeModelRefusal(data)) this.rejectModel(sessionId);
     const mode = detectPermissionMode(data);
     if (!mode) return;
     const known = this.deps.records.facts(sessionId)?.permissionMode ?? null;

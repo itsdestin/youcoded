@@ -25,7 +25,7 @@ import { isTypingTarget } from '../utils/is-typing-target';
 import { dispatchSlashCommand, type ViewMode } from '../state/slash-command-dispatcher';
 import { runNativeSlashAction, routeSlashResult } from '../state/native-slash-actions';
 import type { UsageSnapshot } from '../state/chat-types';
-import { hasPendingInteraction, pendingInteractionKind, pendingInteractionRefusalCopy } from '../state/pty-input-gate';
+import { hasPendingInteraction, pendingInteractionKind, pendingInteractionRefusalCopy, screenInputBlock } from '../state/pty-input-gate';
 import { buildOutgoingMessage } from './outgoing-message';
 import { sendToClaudeCode, sendToNative, canDrawSendNow } from '../state/submit-outgoing';
 import { optimisticScreen, connected } from '../state/pending-action';
@@ -727,6 +727,14 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
           }
           return false;
         }
+      }
+
+      // WHY (one-core R6-4 fix): the screen's own verdict, for pop-ups no hook or card reports. A Claude Code pop-up (typically the "Switch model?"
+      // confirmation a typed /model opens) holds the keyboard: the message would be swallowed, its Enter would answer the pop-up, and the bubble would
+      // look sent with "Simmering" forever. Refuse and keep the draft, like the pending-card gate above. `force` ("Send anyway") skips it too.
+      if (!force && provider !== 'native' && screenInputBlock(sessionId)) {
+        onToast?.(pendingInteractionRefusalCopy('screen'));
+        return false;
       }
 
       // Contract row R2: while the connection is down what you typed stays a draft and

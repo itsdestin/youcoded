@@ -55,7 +55,7 @@ import { GameProvider, useGameState, useGameDispatch } from './state/game-contex
 import { hookEventToAction } from './state/hook-dispatcher';
 import { buildUsageSnapshot, pruneExpiredUsage, type SubscriptionUsage } from './state/usage-snapshot';
 import { invalidateProviderTypeCache, resolveProviderType, useModelProviderType } from './hooks/use-provider-type';
-import { hasPendingInteraction, pendingInteractionKind, pendingInteractionRefusalCopy, canPtySend } from './state/pty-input-gate';
+import { pendingInteractionKind, pendingInteractionRefusalCopy, canPtySend, sendRefusalCopy } from './state/pty-input-gate';
 import { buildOutgoingMessage } from './components/outgoing-message';
 import type { SyncWarning } from '../main/sync-state';
 import { latestUnresolvedError, type SyncStatusData } from './components/sync-dot-state';
@@ -766,13 +766,10 @@ function AppInner() {
   // writes (ToolCard plan keys, TrustGate, prompt option clicks, terminal
   // view) must NOT use this helper. Returns false when the send was refused.
   const notifyIfPtyBlocked = useCallback((sid: string): boolean => {
-    const session = chatStateMapRef.current.get(sid);
-    if (session && hasPendingInteraction(session)) {
-      // Name the blocker — see pendingInteractionRefusalCopy.
-      setToast(pendingInteractionRefusalCopy(pendingInteractionKind(session)));
-      return true;
-    }
-    return false;
+    // Names the blocker (a card, or a terminal-only pop-up that no hook reports): see sendRefusalCopy.
+    const refusal = sendRefusalCopy(chatStateMapRef.current.get(sid), sid);
+    if (refusal) setToast(refusal);
+    return refusal !== null;
   }, []);
 
   const guardedPtySend = useCallback((sid: string, text: string, notice?: 'model-switch'): boolean => {

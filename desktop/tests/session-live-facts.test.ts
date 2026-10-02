@@ -215,6 +215,20 @@ describe('a model switch Claude Code refuses', () => {
     expect(l[2]).toMatchObject({ kind: 'model-switch-retract', id: l[1].id });
     expect(l[3]).toEqual({ sessionId: S, kind: 'model', model: 'claude-opus-4-7' });
   });
+  // REAL SHAPE (captured 2026-10-01 from Claude Code 2.1.287 in a dev instance, one-core R6-4): Claude Code separates screen rows with "\r" + a cursor-down
+  // escape, never "\n", so after the escapes were stripped its success line and the footer row "auto mode unavailable" became one line and the refusal
+  // pattern matched. The divider was drawn and then wrongly taken back.
+  it("Claude Code's own success line plus the footer row 'auto mode unavailable' is NOT a refusal (the divider stays)", () => {
+    const h = host(); typed(h);
+    h.live.noteOutput(S, '\x1b[?25l\x1b[H\r\x1b[1B\x1b[38;5;246m  \u23bf  \x1b[39mSet\x1b[10Gmodel to \x1b[38;5;153mHaiku 4.5\x1b[39m and saved as your default for new sessions\r\x1b[3B\x1b[90m\u23f8 auto mode unavailable\x1b[39m');
+    expect(h.lives().some((l) => l.kind === 'model-switch-retract')).toBe(false);
+    expect(h.lives().map((l) => l.kind)).toEqual(['model', 'model-switch']);
+  });
+  it('a refusal on its own redrawn row is still caught', () => {
+    const h = host(); typed(h);
+    h.live.noteOutput(S, '\x1b[H\r\x1b[1B\x1b[31mModel haiku is not available\x1b[39m\r\x1b[2B> ');
+    expect(h.lives().some((l) => l.kind === 'model-switch-retract')).toBe(true);
+  });
   it('a reply from a different model after the next message retracts it; the turn already running does not', () => {
     const h = host(); typed(h);
     h.live.noteTranscript(S, { type: 'assistant-text', timestamp: 5, data: { model: 'claude-opus-4-7' } });   // the old turn, still streaming

@@ -1,7 +1,7 @@
 import type { SessionProvider } from '../../shared/types';
 import { useCallback, useEffect, useRef } from 'react';
 import { useChatStore } from '../state/chat-context';
-import { canRetrySubmit } from '../state/pty-input-gate';
+import { canRetrySubmit, screenInputBlock } from '../state/pty-input-gate';
 
 // First-attempt retry threshold. After this long with the optimistic bubble
 // still in pending state, if the session is observably idle, we send a
@@ -133,7 +133,10 @@ export function useSubmitConfirmation(args: UseSubmitConfirmationArgs) {
     // isThinking is deliberately not consulted (it stays true forever in the
     // lost-message state this hook recovers from) — rationale lives in
     // canRetrySubmit's doc comment.
-    if (!canRetrySubmit(session)) {
+    // WHY the screen too (restored, one-core R6-4 fix; master has it since 2026-09-29): canRetrySubmit only knows pop-ups the hook system or the
+    // prompt detector reported. With an unreported pop-up up (the "Switch model?" confirmation, auto-mode setup offer, compaction or billing notice),
+    // this bare `\r` would press its highlighted option. Recheck until the message box is back.
+    if (!canRetrySubmit(session) || screenInputBlock(info.sessionId)) {
       // CC is observably busy (turn in flight, tool running, or a prompt is
       // awaiting the user). Don't retry yet; recheck shortly. By the time
       // the session is idle, TRANSCRIPT_USER_MESSAGE will likely have
