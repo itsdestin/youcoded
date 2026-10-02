@@ -16,7 +16,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render } from '@testing-library/react';
 import { ReadingHighlights } from '../../src/renderer/components/comments/ReadingHighlights';
 import { addComment, __resetDocCommentsStoreForTest } from '../../src/renderer/state/doc-comments-store';
-import { bestOf, cpuMsOf, RENDER_COST_BUDGET_MS } from '../helpers/render-cost';
+import { costRatio, cpuMsOf, RENDER_COST_BUDGET_MS } from '../helpers/render-cost';
 
 describe('ReadingHighlights — render cost at a realistic high comment count', () => {
   it('mounts against 1,000 comments in one pass, with cost growing in line with the count', () => {
@@ -67,14 +67,19 @@ describe('ReadingHighlights — render cost at a realistic high comment count', 
     // Warm-up mount so one-time costs (module init, JIT) don't land on a
     // measured trial and make the ratio look better than it is.
     mountWith('stress/warmup.md', 50);
-    const small = bestOf((t) => mountWith(`stress/small-${t}.md`, 100));
-    const large = bestOf((t) => mountWith(`stress/large-${t}.md`, 1000));
-    // WHY 15 (was 17 for the parallel suite, where normal reached 13-14x
-    // with nothing wrong): isolated in the render-cost project, normal
-    // measured 7.3-8.0x alone, 6.7-7.6x in full verify.sh --full runs and at
-    // worst 10.22x across 48 runs of six full suites at once — 15 is 47% over
-    // that worst reading. A planted per-pair DOM change (every new mark
-    // touching every earlier one) reads 19.7-22.5x, at least 1.31x the bound.
-    expect(large / Math.max(small, 1)).toBeLessThan(15);
+    const { ratio } = costRatio(
+      (t) => mountWith(`stress/small-${t}.md`, 100),
+      (t) => mountWith(`stress/large-${t}.md`, 1000),
+    );
+    // WHY 7.5 (was 15; re-measured 2026-10-01): linear text highlighting
+    // made this component's own per-comment cost small next to its fixed
+    // cost, so normal fell to 2.6-2.8x in 6 runs alone and 2.2-3.2x in 24
+    // runs of six copies of this project at once. A planted per-pair DOM
+    // change (every new mark toggling a class on every earlier one) reads
+    // 19.4-21.8x — 15 still caught it, but by only 1.3x, while sitting 4.7x
+    // above normal. 7.5 is 2.3x the worst normal reading (more
+    // than the usual 50% headroom: the Windows and macOS runners' ratio is
+    // not measured here) and the planted change clears it by 2.6x.
+    expect(ratio).toBeLessThan(7.5);
   }, RENDER_COST_BUDGET_MS);
 });

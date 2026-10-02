@@ -16,7 +16,8 @@ export const RENDER_COST_TRIALS = 5;
 
 /** Wall-clock budget for one stress test (test-suite-hygiene.md: "budgets are
  *  measured, not guessed" — a named constant, not the 30s suite default). Each
- *  test mounts 11 times; alone that takes 5-10s. The CPU ratio is what the test
+ *  test mounts at least 11 times (more for the small size: see
+ *  MIN_TRIAL_CPU_MS); alone that takes 5-10s. The CPU ratio is what the test
  *  asserts; this only stops a genuinely hung mount from waiting forever. */
 export const RENDER_COST_BUDGET_MS = 90_000;
 
@@ -44,10 +45,41 @@ export function cpuMsOf(run: () => void): number {
   return (used.user + used.system) / 1000;
 }
 
-/** The smallest of RENDER_COST_TRIALS samples; `sample(trial)` must use its
- *  own fresh document path per trial so no trial inherits another's comments. */
-export function bestOf(sample: (trial: number) => number): number {
-  const samples: number[] = [];
-  for (let t = 0; t < RENDER_COST_TRIALS; t++) samples.push(sample(t));
-  return Math.min(...samples);
+/** CPU ms accumulated per trial before it is averaged into one sample.
+ *  WHY (master f7a9b4bba, 2026-10-01): Windows counts process CPU time in
+ *  ~15.6 ms ticks, so a small mount measured once read as 0, 15.6 or 31.2 ms
+ *  and a ratio could swing 2x with nothing changed (the 315-comment pin hit
+ *  12.3x on a Windows runner). Mounting repeatedly until ~10 ticks have
+ *  accumulated, then averaging per mount, keeps that rounding under ~10%. */
+export const MIN_TRIAL_CPU_MS = 150;
+
+/** One sample: the AVERAGE CPU ms per mount over as many mounts as it takes
+ *  to reach MIN_TRIAL_CPU_MS. */
+function trialMs(mount: (id: string) => number, trial: number): number {
+  let total = 0;
+  let n = 0;
+  do { total += mount(`${trial}-${n}`); n++; } while (total < MIN_TRIAL_CPU_MS);
+  return total / n;
+}
+
+/** How many times `large` costs `small`: the smallest of RENDER_COST_TRIALS
+ *  samples of each, then large / small. `mount(id)` must use its own fresh
+ *  document path per id (ids are unique per size) so no mount inherits
+ *  another's comments.
+ *
+ *  WHY the two sizes' trials alternate (small, large, small, large…) rather
+ *  than all-small-then-all-large: the machine's speed drifts during a run
+ *  (clock boost, JIT tiers, heap growth), and alternating puts both sizes in
+ *  the same stretch of it, so the drift cancels in the ratio. */
+export function costRatio(small: (id: string) => number, large: (id: string) => number): { small: number; large: number; ratio: number } {
+  const smalls: number[] = [];
+  const larges: number[] = [];
+  for (let t = 0; t < RENDER_COST_TRIALS; t++) {
+    smalls.push(trialMs(small, t));
+    larges.push(trialMs(large, t));
+  }
+  const s = Math.min(...smalls);
+  const l = Math.min(...larges);
+  // Math.max(…, 1): a sub-millisecond small size cannot divide by ~0.
+  return { small: s, large: l, ratio: l / Math.max(s, 1) };
 }

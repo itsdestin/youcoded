@@ -1,5 +1,7 @@
 import type { SessionChatState } from './chat-types';
 import { HISTORY_EXPAND_PROMPT_ID } from './chat-types';
+import { getVisibleScreenText } from '../hooks/terminal-registry';
+import { readInputFocus, inputIsBlocked, type InputFocus } from '../parser/cc-input-focus';
 
 // Shared safety gate for programmatic PTY writes.
 //
@@ -72,13 +74,82 @@ export function pendingInteractionKind(session: SessionChatState): 'approval' | 
   return null;
 }
 
+/**
+ * The SCREEN's verdict, for what the chat state cannot see: is something other
+ * than Claude Code's message box holding the keyboard right now?
+ *
+ * WHY (2026-09-29): hasPendingInteraction only knows what the hook system and
+ * the known-title prompt detector reported. Claude Code opens many pop-ups no
+ * hook reports — the auto-mode setup offer, its classifier-billing notice (seen
+ * opening MID-REPLY), a compaction menu — and a chat send typed into one was
+ * swallowed while its bubble looked sent; the lost-message Enter could then
+ * answer it ("Yes" started an auto-mode scan). This reads the live terminal
+ * (parser/cc-input-focus.ts). Returns null when the message box is live — or
+ * when there is no readable terminal (no verdict, so no new refusal).
+ */
+export function screenInputBlock(sessionId: string): Exclude<InputFocus, { kind: 'message-box' } | { kind: 'unknown' }> | null {
+  const focus = readInputFocus(getVisibleScreenText(sessionId));
+  return inputIsBlocked(focus) ? (focus as Exclude<InputFocus, { kind: 'message-box' } | { kind: 'unknown' }>) : null;
+}
+
+/**
+ * Wait (up to `timeoutMs`) for the message box to be live again — "Send anyway"
+ * presses Esc and must not type the message into a pop-up that is still
+ * closing. Resolves true once the screen shows the box (or has no verdict).
+ */
+export async function waitForMessageBox(sessionId: string, timeoutMs = 2000, stepMs = 50): Promise<boolean> {
+  const end = Date.now() + timeoutMs;
+  for (;;) {
+    if (!screenInputBlock(sessionId)) return true;
+    if (Date.now() >= end) return false;
+    await new Promise((r) => setTimeout(r, stepMs));
+  }
+}
+
+/**
+ * The card a refused send is waiting on, for the refusal's "Show card" button:
+ * the current turn's permission/question/plan card, else an unanswered prompt
+ * card. Same scan as pendingInteractionKind, so the two always agree.
+ */
+export function pendingCardRef(session: SessionChatState | undefined): { toolUseId: string } | { promptId: string } | null {
+  if (!session) return null;
+  for (const id of session.activeTurnToolIds) {
+    if (session.toolCalls.get(id)?.status === 'awaiting-approval') return { toolUseId: id };
+  }
+  for (const entry of session.timeline) {
+    if (entry.kind === 'prompt'
+        && entry.prompt.promptId !== HISTORY_EXPAND_PROMPT_ID
+        && !entry.prompt.completed) {
+      return { promptId: entry.prompt.promptId };
+    }
+  }
+  return null;
+}
+
+/** What blocks a send: a hook card, a detected prompt card, or the screen. */
+export type SendBlockKind = 'approval' | 'prompt' | 'screen';
+
 /** The one refusal sentence every send-refusal site reads, so they cannot drift.
- *  "answer the card" is true of every card shape that blocks (permission, plan,
- *  question, and a kept card with its Dismiss). */
-export function pendingInteractionRefusalCopy(kind: 'approval' | 'prompt' | null): string {
-  return kind === 'approval'
-    ? 'Your assistant is waiting for your response — answer the card in the chat first.'
-    : 'Your assistant is waiting for your response — answer the prompt first.';
+ *  ONE sentence for every reason (Destin, 2026-09-30 review deck Q-1, "One
+ *  short sentence"): the toast's button says where to look — Show card when a
+ *  card waits in the chat, Open terminal when only Claude Code's screen is in
+ *  the way. The parameters stay so a reason-specific sentence can come back
+ *  without touching the call sites. */
+export function pendingInteractionRefusalCopy(_kind?: SendBlockKind | null, _block?: ReturnType<typeof screenInputBlock>): string {
+  return 'Claude Code is waiting on something — answer it first.';
+}
+
+/**
+ * Every send gate in one call: the chat state's pending interactions first
+ * (they name the card to answer), then the live screen. null = free to send.
+ */
+export function sendBlock(session: SessionChatState | undefined, sessionId: string): { kind: SendBlockKind; screen?: ReturnType<typeof screenInputBlock> } | null {
+  if (session) {
+    const kind = pendingInteractionKind(session);
+    if (kind) return { kind };
+  }
+  const screen = screenInputBlock(sessionId);
+  return screen ? { kind: 'screen', screen } : null;
 }
 
 /**

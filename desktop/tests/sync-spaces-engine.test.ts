@@ -3,11 +3,59 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { execFileSync } from 'child_process';
-import { SpaceSyncEngine } from '../src/main/sync-spaces/engine';
+import { SpaceSyncEngine, isOutOfWatchScope } from '../src/main/sync-spaces/engine';
 import { ManagedRoots } from '../src/main/sync-spaces/managed-roots';
 import { GitTransport } from '../src/main/sync-spaces/git-transport';
 import type { PullResult, PushResult, SpaceVersion, SyncSpace, SyncTransport, SpaceSyncEvent } from '../src/main/sync-spaces/types';
 import { REPO_REPAIR_FAILED_ERROR_CODE } from '../src/main/sync-error-classifier';
+import type { FSWatcher } from 'chokidar';
+
+// Record every real chokidar watcher the engine creates, so a test can ask
+// exactly which paths are watched. A "wrote there, nothing synced after N ms"
+// check cannot prove a path is unwatched: awaitWriteFinish alone holds a file
+// event 500 ms, so a short settle passes whether or not the path is watched.
+const created = vi.hoisted(() => [] as FSWatcher[]);
+vi.mock('chokidar', async (importOriginal) => {
+  const mod: any = await importOriginal();
+  const watch = (...args: any[]) => { const w = mod.default.watch(...args); created.push(w); return w; };
+  return { ...mod, default: { ...mod.default, watch }, watch };
+});
+/** Every path the most recently created watcher holds, relative to `root`. */
+function watchedUnder(root: string): Set<string> {
+  const out = new Set<string>();
+  const w = created[created.length - 1];
+  for (const [dir, names] of Object.entries(w.getWatched())) {
+    for (const n of names) {
+      const rel = path.relative(root, path.join(dir, n)).split(path.sep).join('/');
+      if (rel && !rel.startsWith('..')) out.add(rel);
+    }
+  }
+  return out;
+}
+
+/** Resolve once `watcher` actually reports a write under `root`.
+ *  WHY: on macOS chokidar's 'ready' (which addSpace awaits) can fire before the
+ *  OS-level watch is armed (engine.ts's own NOTE), so a flood written straight
+ *  after addSpace() can be partly dropped and never push the count over the
+ *  budget — the macOS leg failed "goes back to live watching" that way. The
+ *  probe is rewritten until one lands (awaitWriteFinish holds each 500 ms). */
+async function untilWatcherLive(watcher: FSWatcher, root: string): Promise<void> {
+  const probe = path.join(root, '.yc-watch-probe');
+  let landed = false;
+  const onEvent = (_e: string, p: string) => { if (p === probe) landed = true; };
+  watcher.on('all', onEvent);
+  try {
+    const deadline = Date.now() + WAIT_MS;
+    for (let attempt = 0; !landed && Date.now() < deadline; attempt++) {
+      fs.writeFileSync(probe, String(attempt));
+      const rewriteAt = Date.now() + 2_500;
+      while (!landed && Date.now() < rewriteAt) await new Promise(r => setTimeout(r, 25));
+    }
+  } finally {
+    watcher.off('all', onEvent);
+  }
+  if (!landed) throw new Error(`watcher never reported a write under ${root}`);
+}
 
 function fakeTransport(): SyncTransport & { pushes: string[]; pulls: string[] } {
   const t: any = {
@@ -100,13 +148,16 @@ async function drainStartupSync(t: { pushes: unknown[] }): Promise<void> {
     const t = fakeTransport();
     const engine = new SpaceSyncEngine(t, { debounceMs: 100, pollMs: 0, onEvent: () => {} });
     await engine.addSpace({ id: 'project:x', kind: 'project', root: tmp });
-    await drainStartupSync(t);
     fs.mkdirSync(path.join(tmp, '.youcoded'), { recursive: true });
     fs.writeFileSync(path.join(tmp, '.youcoded', 'sync.log'), 'x');
     fs.mkdirSync(path.join(tmp, 'node_modules'), { recursive: true });
     fs.writeFileSync(path.join(tmp, 'node_modules', 'y.js'), 'x');
-    await new Promise(r => setTimeout(r, 500));
-    expect(t.pushes.length).toBe(0);
+    fs.writeFileSync(path.join(tmp, 'control.md'), 'x');
+    // Created last, so once it is watched the watcher has seen the rest.
+    await vi.waitFor(() => expect(watchedUnder(tmp).has('control.md')).toBe(true), { timeout: WAIT_MS });
+    const watched = watchedUnder(tmp);
+    expect(watched.has('.youcoded')).toBe(false);
+    expect(watched.has('node_modules')).toBe(false);
     await engine.stop();
   });
 
@@ -133,6 +184,117 @@ async function drainStartupSync(t: { pushes: unknown[] }): Promise<void> {
     // (Cargo.lock, Gemfile.lock, poetry.lock) keep triggering an instant sync.
     fs.writeFileSync(path.join(tmp, 'Cargo.lock'), 'x');
     await vi.waitFor(() => expect(t.pushes.length).toBe(1), { timeout: WAIT_MS });
+    await engine.stop();
+  });
+
+  it('does not watch folders the transport says never sync', async () => {
+    const t: any = fakeTransport();
+    t.ignoredDirs = vi.fn(async () => ['data/cache']);
+    fs.mkdirSync(path.join(tmp, 'data', 'cache'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'data', 'cache', 'chunk.bin'), 'x');
+    fs.writeFileSync(path.join(tmp, 'data', 'notes.md'), 'x');
+    const engine = new SpaceSyncEngine(t, { debounceMs: 100, pollMs: 0, onEvent: () => {} });
+    await engine.addSpace({ id: 'project:x', kind: 'project', root: tmp });
+    // After 'ready' the initial scan is complete — no waiting needed.
+    const watched = watchedUnder(tmp);
+    expect(watched.has('data/notes.md')).toBe(true);   // the sibling that syncs
+    expect(watched.has('data/cache')).toBe(false);
+    expect(watched.has('data/cache/chunk.bin')).toBe(false);
+    await engine.stop();
+  });
+
+  it('does not watch a default-ignored folder created after startup (a new .venv)', async () => {
+    const t = fakeTransport();
+    const engine = new SpaceSyncEngine(t, { debounceMs: 100, pollMs: 0, onEvent: () => {} });
+    await engine.addSpace({ id: 'project:x', kind: 'project', root: tmp });
+    fs.mkdirSync(path.join(tmp, '.venv', 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, '.venv', 'lib', 'site.py'), 'x');
+    fs.mkdirSync(path.join(tmp, 'control'));
+    await vi.waitFor(() => expect(watchedUnder(tmp).has('control')).toBe(true), { timeout: WAIT_MS });
+    expect(watchedUnder(tmp).has('.venv')).toBe(false);
+    await engine.stop();
+  });
+
+  it('re-asks the transport after a new folder appears and stops watching it once it is ignored', async () => {
+    const t: any = fakeTransport();
+    let ignored: string[] = [];
+    t.ignoredDirs = vi.fn(async () => ignored);
+    const engine = new SpaceSyncEngine(t, { debounceMs: 100, pollMs: 0, onEvent: () => {} });
+    await engine.addSpace({ id: 'project:x', kind: 'project', root: tmp });
+    await drainStartupSync(t);
+    // A custom-named venv: no default rule knows it, only the project's
+    // .gitignore does — which the transport reports on its next refresh.
+    ignored = ['.venv-rocm'];
+    const before = created.length;
+    fs.mkdirSync(path.join(tmp, '.venv-rocm'));
+    fs.writeFileSync(path.join(tmp, '.venv-rocm', 'torch.so'), 'x');
+    // The sync that folder triggered re-asks the transport and rebuilds the
+    // watcher without it.
+    await vi.waitFor(() => expect(created.length).toBe(before + 1), { timeout: WAIT_MS });
+    await vi.waitFor(() => expect(t.pushes.length).toBeGreaterThanOrEqual(2), { timeout: WAIT_MS }); // rebuild's catch-up sync
+    const watched = watchedUnder(tmp);
+    expect(watched.has('.venv-rocm')).toBe(false);
+    expect(watched.has('.venv-rocm/torch.so')).toBe(false);
+    expect(created[before - 1].closed).toBe(true);     // the old watcher's handles are released
+    await engine.stop();
+  });
+
+  it('a space over the watch budget syncs on the poll only and says so once', async () => {
+    const t = fakeTransport();
+    const events: SpaceSyncEvent[] = [];
+    for (let i = 0; i < 10; i++) fs.writeFileSync(path.join(tmp, `f${i}.md`), 'x');
+    const engine = new SpaceSyncEngine(t, { debounceMs: 100, pollMs: 0, watchBudget: 5, onEvent: e => events.push(e) });
+    const space: SyncSpace = { id: 'project:x', kind: 'project', root: tmp };
+    await engine.addSpace(space);
+    const notices = events.filter(e => e.type === 'notice');
+    expect(notices).toHaveLength(1);
+    expect((notices[0] as any).message).toContain(`${path.basename(tmp)} is very large`);
+    expect(created[created.length - 1].closed).toBe(true);  // no live watcher holds OS watches…
+    await drainStartupSync(t);
+    await engine.syncSpace(space);
+    expect(t.pushes.length).toBe(1);               // …but the poll path still syncs the space
+    await engine.stop();
+  });
+
+  it('a space that grows past the watch budget drops to the poll', async () => {
+    const t = fakeTransport();
+    const events: SpaceSyncEvent[] = [];
+    const engine = new SpaceSyncEngine(t, { debounceMs: 100, pollMs: 0, watchBudget: 5, onEvent: e => events.push(e) });
+    await engine.addSpace({ id: 'project:x', kind: 'project', root: tmp });
+    expect(events.some(e => e.type === 'notice')).toBe(false);
+    await untilWatcherLive(created[created.length - 1], tmp);
+    for (let i = 0; i < 10; i++) fs.writeFileSync(path.join(tmp, `f${i}.md`), 'x');
+    await vi.waitFor(() => expect(events.filter(e => e.type === 'notice')).toHaveLength(1), { timeout: WAIT_MS });
+    await vi.waitFor(() => expect(created[created.length - 1].closed).toBe(true), { timeout: WAIT_MS });
+    await engine.stop();
+  });
+
+  it('a space pushed over the budget by a folder that turns out to be ignored goes back to live watching', async () => {
+    const t: any = fakeTransport();
+    let ignored: string[] = [];
+    t.ignoredDirs = vi.fn(async () => ignored);
+    const events: SpaceSyncEvent[] = [];
+    // Debounce longer than awaitWriteFinish (500 ms): the file events must
+    // push the count over budget BEFORE the sync (and its refresh) runs, as a
+    // real flood does — otherwise the refresh rebuilds a live watcher and the
+    // poll-only re-arm path is never exercised.
+    const engine = new SpaceSyncEngine(t, { debounceMs: 2_000, pollMs: 0, watchBudget: 5, onEvent: e => events.push(e) });
+    await engine.addSpace({ id: 'project:x', kind: 'project', root: tmp });
+    const first = created[created.length - 1];
+    await untilWatcherLive(first, tmp);
+    // Only the project's .gitignore knows this folder, and its files arrive
+    // faster than the post-sync refresh can learn that.
+    ignored = ['.venv-rocm'];
+    fs.mkdirSync(path.join(tmp, '.venv-rocm'));
+    for (let i = 0; i < 10; i++) fs.writeFileSync(path.join(tmp, '.venv-rocm', `m${i}.py`), 'x');
+    await vi.waitFor(() => expect(events.some(e => e.type === 'notice')).toBe(true), { timeout: WAIT_MS }); // dropped to the poll…
+    expect(first.closed).toBe(true);
+    await vi.waitFor(() => {
+      const latest = created[created.length - 1];
+      expect(latest).not.toBe(first);
+      expect(latest.closed).toBe(false);                                                 // …then re-armed
+    }, { timeout: WAIT_MS });
+    expect(watchedUnder(tmp).has('.venv-rocm')).toBe(false);
     await engine.stop();
   });
 
@@ -570,6 +732,32 @@ describe('SpaceSyncEngine.removeSpace', () => {
     // instead of inserting a watcher nothing will ever close.
     await engine.addSpace(mkSpace('project:b'));
     expect(engine.liveSpaceIds()).toEqual([]); // not registered → no orphaned watcher
+  });
+});
+
+describe('isOutOfWatchScope', () => {
+  const root = path.join(os.tmpdir(), 'proj');
+  const at = (rel: string) => path.join(root, ...rel.split('/'));
+  const dir = { isDirectory: () => true } as fs.Stats;
+  const file = { isDirectory: () => false } as fs.Stats;
+
+  it('skips a transport-ignored folder and everything under it, not its siblings', () => {
+    const ignored = new Set(['data/cache']);
+    expect(isOutOfWatchScope(root, ignored, at('data/cache'), dir)).toBe(true);
+    expect(isOutOfWatchScope(root, ignored, at('data/cache/a/b.bin'))).toBe(true);
+    expect(isOutOfWatchScope(root, ignored, at('data/cache2/x'))).toBe(false);
+    expect(isOutOfWatchScope(root, ignored, at('data/notes.md'), file)).toBe(false);
+  });
+
+  it('skips default-ignored folder names at any depth, but not a FILE of that name', () => {
+    const none = new Set<string>();
+    expect(isOutOfWatchScope(root, none, at('.venv'), dir)).toBe(true);
+    expect(isOutOfWatchScope(root, none, at('app/build/out.js'))).toBe(true);
+    expect(isOutOfWatchScope(root, none, at('scripts/build'), file)).toBe(false);
+  });
+
+  it('never skips the root itself', () => {
+    expect(isOutOfWatchScope(root, new Set(['']), root, dir)).toBe(false);
   });
 });
 

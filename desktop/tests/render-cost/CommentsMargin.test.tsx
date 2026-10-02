@@ -25,7 +25,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
 import { CommentsMargin } from '../../src/renderer/components/comments/CommentsMargin';
 import { addComment, __resetDocCommentsStoreForTest } from '../../src/renderer/state/doc-comments-store';
-import { bestOf, cpuMsOf, RENDER_COST_BUDGET_MS } from '../helpers/render-cost';
+import { costRatio, cpuMsOf, RENDER_COST_BUDGET_MS } from '../helpers/render-cost';
 
 // The elden-ring golden fixture (a REAL captured file, not a seeded test
 // quote) has 315 comments on its single busiest sheet. `__dirname` (not
@@ -84,6 +84,11 @@ describe('CommentsMargin — render cost at a realistic high comment count', () 
       expect(mounted.container.querySelectorAll('[data-comments-list] > div')).toHaveLength(count);
       mounted.unmount();
       content.remove();
+      // WHY reset per mount: bestOf mounts the small size many times per trial
+      // (MIN_TRIAL_CPU_MS), each on its own path, and the store copies its
+      // whole path map on every write — resetting keeps that map one entry
+      // big for every mount instead of growing through the run.
+      __resetDocCommentsStoreForTest();
       return ms;
     };
 
@@ -93,25 +98,26 @@ describe('CommentsMargin — render cost at a realistic high comment count', () 
     // WHY 50 vs 1,000 (20x), not the old 200 vs 1,000 (5x): a per-pair cost
     // grows with the SQUARE of the step, so a wider step separates it from
     // normal. Measured 2026-09-29 against a planted per-pair DOM change (every
-    // new text mark touching every earlier one), normal / planted:
+    // new text mark toggling a class on every earlier one), normal / planted:
     //   200 vs 1,000:  4.9x /  8.0x  — no bound fits between
     //   100 vs 1,000:  7.7-8.1x / 15.0-16.0x
     //    50 vs 1,000: 11.7-12.0x / 24.5-28.6x
-    const small = bestOf((t) => mountWith(`stress/small-${t}.md`, 50));
-    const large = bestOf((t) => mountWith(`stress/large-${t}.md`, 1000));
-    // WHY 19.5: the planted change must clear the bound by 25% (its lowest
-    // reading, 24.5x, is 1.25x of 19.5), and that is the priority. Headroom
-    // over normal: 63% over the 12.0x measured alone; 27% over the WORST
-    // loaded reading, 15.35x, from 24 runs of six full suites at once (normal
-    // spread there 9.0-15.35x) — a load far past verify.sh or CI, which run
-    // this project with nothing else in the suite running.
-    expect(large / Math.max(small, 1)).toBeLessThan(19.5);
+    const { ratio } = costRatio(
+      (t) => mountWith(`stress/small-${t}.md`, 50),
+      (t) => mountWith(`stress/large-${t}.md`, 1000),
+    );
+    // WHY 17.5 (re-measured 2026-10-01, after linear text highlighting and
+    // the per-trial CPU floor in tests/helpers/render-cost.ts): normal read
+    // 9.6-12.0x in 6 runs alone and 7.5-10.9x in 24 runs of six copies of
+    // this project at once; the planted per-pair change read 22.0-24.6x
+    // alone and 22.8-25.7x loaded. 17.5 is 46% over the worst normal reading
+    // (12.0x) and the planted change's lowest reading clears it by 1.26x.
+    expect(ratio).toBeLessThan(17.5);
   }, RENDER_COST_BUDGET_MS);
 
   it('renders the elden-ring fixture\'s busiest real sheet (315 cell comments), with cost growing in line with the count', () => {
     // Same ratio design as the synthetic case above, on a real user's file:
-    // the first 60 of its 315 cell comments against the full sheet. (Tried
-    // 30 and 20 vs 315: the same no-separation result as below.)
+    // the first 60 of its 315 cell comments against the full sheet.
     const allCellComments = eldenBossListCellComments();
     expect(allCellComments.length).toBeGreaterThan(300); // the real number this test exists to cover
     const SMALL_COUNT = 60;
@@ -123,13 +129,20 @@ describe('CommentsMargin — render cost at a realistic high comment count', () 
       // A minimal stand-in for XlsxView's rendered grid: one <td data-cell>
       // per commented cell, all under one data-sheet container — the exact
       // shape use-quote-marks.ts's cellSelector/cellStatus query against.
+      // WHY the sheet sits INSIDE the measured root, not as the root itself:
+      // that is the app's shape (CommentableDocument's content div wraps
+      // XlsxView's data-sheet grid), and the cell pass indexes the sheets
+      // BELOW its root — with the sheet as the root, no cell was ever marked
+      // and this pin measured the card list alone.
       const grid = document.createElement('div');
-      grid.setAttribute('data-sheet', 'Boss List');
+      const sheet = document.createElement('div');
+      sheet.setAttribute('data-sheet', 'Boss List');
       for (const { cell } of cellComments) {
         const td = document.createElement('td');
         td.setAttribute('data-cell', cell);
-        grid.appendChild(td);
+        sheet.appendChild(td);
       }
+      grid.appendChild(sheet);
       document.body.appendChild(grid);
       for (const { cell, sheet } of cellComments) {
         addComment(path, '', 'label', { cell, sheet });
@@ -140,26 +153,36 @@ describe('CommentsMargin — render cost at a realistic high comment count', () 
         mounted = render(<CommentsMargin containerRef={containerRef} path={path} narrow={false} />);
       });
       expect(mounted.container.querySelectorAll('[data-comments-list] > div')).toHaveLength(cellComments.length);
+      // Every commented cell highlighted — proves the cell pass did the
+      // full-count work being measured, not an early bail-out.
+      expect(grid.querySelectorAll('[data-comment-cell]')).toHaveLength(new Set(cellComments.map((c) => c.cell)).size);
       mounted.unmount();
       grid.remove();
+      __resetDocCommentsStoreForTest(); // same reason as the synthetic case's reset
       return ms;
     };
 
     mountWith('warmup', allCellComments.slice(0, 20));
-    const small = bestOf((t) => mountWith(`small-${t}`, allCellComments.slice(0, SMALL_COUNT)));
-    const large = bestOf((t) => mountWith(`large-${t}`, allCellComments));
-    // WHY 14: 52% over the worst loaded reading, 9.23x (24 runs of six full
-    // suites at once, twice; 8.0-9.1x alone).
+    const { ratio } = costRatio(
+      (t) => mountWith(`small-${t}`, allCellComments.slice(0, SMALL_COUNT)),
+      (t) => mountWith(`large-${t}`, allCellComments),
+    );
+    // WHY 9.5 (re-measured 2026-10-01, after the cell pass became linear —
+    // it indexes the grid once instead of re-reading it per comment): 315/60
+    // is 5.25x the comments, and normal read 4.9-5.9x in 6 runs alone and
+    // 4.65-6.15x in 24 runs of six copies of this project at once. 9.5 is
+    // 54% over the worst (6.15x).
     //
-    // WHAT THIS PIN CANNOT CATCH (measured 2026-09-29): an added per-pair
-    // cost on the CELL path. The cell path is already per-pair today —
-    // cellStatus() (use-quote-marks.ts) re-reads every [data-cell] on the
-    // sheet for EACH comment — so a planted change making each cell mark
-    // touch every earlier one doubled both mounts' CPU time and left the
-    // ratio unchanged (8.0-8.2x). Widening the step cannot help: both terms
-    // grow with the square of the count. It still catches anything growing
-    // faster than per-pair; making cellStatus build its set once per pass
-    // would make the cell path linear and let this pin catch per-pair too.
-    expect(large / Math.max(small, 1)).toBeLessThan(14);
+    // WHAT THIS PIN CANNOT CATCH (measured 2026-10-01): an added per-pair
+    // cost on the CELL path. At 315 comments, rendering 315 cards outweighs
+    // any per-pair DOM work: a planted change making each cell mark toggle a
+    // class on every earlier one read 5.9-6.8x — inside normal's spread.
+    // A wider step does not fix it: at 30 vs 315, normal read 7.7-9.0x and
+    // the old per-comment grid re-read (the per-pair cost the linear pass
+    // removed) 11.6-14.1x — a 1.29x gap, too narrow for both 50% headroom
+    // over normal and a 1.25x catch margin. The synthetic 1,000-comment text
+    // pin above is the one that catches per-pair growth in the shared
+    // highlighting pass. This pin still catches anything growing much faster.
+    expect(ratio).toBeLessThan(9.5);
   }, RENDER_COST_BUDGET_MS);
 });

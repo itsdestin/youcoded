@@ -38,6 +38,8 @@ declare global {
         list: () => Promise<any[]>;
         canSend?: () => boolean;
         sendInput: (sessionId: string, text: string) => void;
+        /** The screen verdict for main's own automated writes (cc-input-focus.ts). */
+        reportInputBlocked?: (sessionId: string, blocked: boolean) => void;
         resize: (sessionId: string, cols: number, rows: number) => void;
         signalReady: (sessionId: string) => void;
         respondToPermission: (requestId: string, decision: object) => Promise<boolean>;

@@ -264,6 +264,47 @@ describe('changing your mind while the engine is still loading', () => {
     expect(decodeLengths).toEqual([1]);   // and the second turn actually hears something
   });
 
+  // WHY (2026-09-30): stopping while the engine loaded used to answer at once
+  // with NOTHING, because there was no engine yet to hear the sound. The first
+  // short dictation after launch, or after the ten-minute idle unload, silently
+  // came back empty.
+  it('a stop during the load waits for the engine and returns what was said', async () => {
+    const sent: VoiceWorkerOutbound[] = [];
+    let release: (r: RecognizerLike) => void = () => {};
+    const core = new VoiceWorkerCore({
+      create: () => new Promise<RecognizerLike>((r) => { release = r; }),
+      send: (m) => { sent.push(m); },
+      schedule: () => {},
+    });
+
+    core.start();
+    core.audio(sound(1, LOUD));
+    core.stop();
+    await flush();
+    expect(sent.filter((m) => m.type === 'final')).toEqual([]); // not answered empty
+
+    release({ async decode() { return 'hello world'; } });
+    await flush();
+    await flush();
+    expect(sent.filter((m) => m.type === 'final')).toEqual([{ type: 'final', text: 'hello world' }]);
+  });
+
+  it('a stop during the load with nothing said still answers exactly once', async () => {
+    const sent: VoiceWorkerOutbound[] = [];
+    let release: (r: RecognizerLike) => void = () => {};
+    const core = new VoiceWorkerCore({
+      create: () => new Promise<RecognizerLike>((r) => { release = r; }),
+      send: (m) => { sent.push(m); },
+      schedule: () => {},
+    });
+    core.start();
+    core.stop();
+    release({ async decode() { return 'never asked'; } });
+    await flush();
+    await flush();
+    expect(sent.filter((m) => m.type === 'final')).toEqual([{ type: 'final', text: '' }]);
+  });
+
   it('reports a load that failed to whoever is waiting now', async () => {
     const sent: VoiceWorkerOutbound[] = [];
     let reject: (e: Error) => void = () => {};
@@ -305,11 +346,31 @@ describe('the loop itself', () => {
     await flush();
     expect(h.scheduled.map((s) => s.ms)).toEqual([PASS_GAP_MS]);
 
+    // More sound arrives during the gap (as it does, ten times a second).
+    h.core.audio(sound(0.1, LOUD));
     h.runScheduled();
     await flush();
     expect(h.scheduled.map((s) => s.ms)).toEqual([PASS_GAP_MS]);
     // One delay asked for per completed pass — never a repeating alarm.
     expect(h.decodeLengths.length).toBe(2);
+  });
+
+  // WHY (2026-09-30): re-hearing an unchanged recording every 200 ms burned a
+  // core when the microphone died, and each pointless pass made the host say
+  // "still working" — which kept the composer's give-up clock from ever running.
+  it('does not re-hear the same sound when nothing new has arrived', async () => {
+    const h = makeHarness(() => 'words');
+    await ready(h);
+    h.core.audio(sound(1, LOUD));
+    await flush();
+    h.runScheduled();        // the gap ends, but the microphone sent nothing
+    await flush();
+    expect(h.decodeLengths).toEqual([1]);
+    expect(h.scheduled).toEqual([]);
+
+    h.core.audio(sound(0.1, LOUD)); // sound again: the loop picks straight back up
+    await flush();
+    expect(h.decodeLengths).toEqual([1, 1.1]);
   });
 
   it('accepts raw 16-bit sound from the microphone', async () => {
@@ -423,6 +484,33 @@ describe('stopping and cancelling', () => {
     h.core.stop();
     await flush();
     expect(h.finals()).toEqual([{ text: '' }]);
+  });
+
+  // WHY (2026-09-30): a pass still running from a cancelled session used to land
+  // and wake nobody. A new session that had started — and stopped — meanwhile was
+  // refused a pass by the one-at-a-time rule, so its stop never got a `final`:
+  // "Finishing…" for twenty seconds, then the host killed the engine as wedged.
+  it('a new session stopped while a cancelled pass is still running still answers', async () => {
+    const sent: VoiceWorkerOutbound[] = [];
+    const pending: Array<(t: string) => void> = [];
+    const core = new VoiceWorkerCore({
+      create: async () => ({ decode: () => new Promise<string>((r) => { pending.push(r); }) }),
+      send: (m) => { sent.push(m); },
+      schedule: () => {},
+    });
+    core.start();
+    await flush();
+    core.audio(sound(1, LOUD));      // pass A starts
+    core.cancel();                   // the user typed a key
+    core.start();                    // …then talked again, briefly
+    core.audio(sound(0.5, LOUD));
+    core.stop();
+    pending.shift()!('stale words'); // pass A finally lands
+    await flush();
+    expect(pending.length).toBe(1);  // the new session's last pass was started
+    pending.shift()!('fresh words');
+    await flush();
+    expect(sent.filter((m) => m.type === 'final')).toEqual([{ type: 'final', text: 'fresh words' }]);
   });
 
   it('cancel says nothing at all, even mid-sentence', async () => {

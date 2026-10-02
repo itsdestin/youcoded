@@ -12,7 +12,10 @@
 // (src/renderer/dev/workbench/fixtures/docs/make.mjs).
 import { describe, it, expect } from 'vitest';
 import { readFile, writeFile, mkdtemp, rm, stat } from 'fs/promises';
-import { join } from 'path';
+// WHY dirname/basename (not slicing at the last '/'): a Windows temp path uses
+// backslashes, so the slice built a nonsense sibling path and every
+// file-open-elsewhere test failed on Windows for that reason alone.
+import { basename, dirname, join } from 'path';
 import { tmpdir } from 'os';
 import JSZip from 'jszip';
 import {
@@ -856,8 +859,8 @@ describe('docx-comments write — delete-reply', () => {
 describe('docx-comments write — refuses a file open elsewhere in real Word/LibreOffice before backup', () => {
   it('refuses \'file-open-elsewhere\' before touching the backup or the target when a Word owner file (~$<name>.docx) sits beside it', async () => {
     await withScratchCopy('launch-brief.docx', async (target) => {
-      const dir = target.slice(0, target.lastIndexOf('/'));
-      const base = target.slice(target.lastIndexOf('/') + 1);
+      const dir = dirname(target);
+      const base = basename(target);
       const ownerFile = join(dir, `~$${base}`);
       await writeFile(ownerFile, 'destin');
       const before = await readFile(target);
@@ -875,8 +878,8 @@ describe('docx-comments write — refuses a file open elsewhere in real Word/Lib
 
   it('refuses \'file-open-elsewhere\' when a LibreOffice lock file (.~lock.<name>.docx#) sits beside it', async () => {
     await withScratchCopy('launch-brief.docx', async (target) => {
-      const dir = target.slice(0, target.lastIndexOf('/'));
-      const base = target.slice(target.lastIndexOf('/') + 1);
+      const dir = dirname(target);
+      const base = basename(target);
       const lockFile = join(dir, `.~lock.${base}#`);
       await writeFile(lockFile, ',destin,localhost,01-01-2026 00:00,file:///home/destin;');
       const result = await replyToDocxComment({ absolutePath: target, path: 'docs/launch-brief.docx', id: 'w-0', text: 'x', author: 'user' });
@@ -886,8 +889,8 @@ describe('docx-comments write — refuses a file open elsewhere in real Word/Lib
 
   it('proceeds normally once the owner file is gone (the common "since closed it" case)', async () => {
     await withScratchCopy('launch-brief.docx', async (target) => {
-      const dir = target.slice(0, target.lastIndexOf('/'));
-      const base = target.slice(target.lastIndexOf('/') + 1);
+      const dir = dirname(target);
+      const base = basename(target);
       const ownerFile = join(dir, `~$${base}`);
       await writeFile(ownerFile, 'destin');
       const first = await resolveDocxComment({ absolutePath: target, path: 'docs/launch-brief.docx', id: 'w-0' });

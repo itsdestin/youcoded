@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import { OverlayPanel } from '../overlays/Overlay';
+import { Button } from './Button';
 
 /**
  * Transient feedback (change 44, §1.8).
@@ -18,6 +19,10 @@ import { OverlayPanel } from '../overlays/Overlay';
 
 export type ToastTone = 'default' | 'error';
 
+/** A toast button. `primary` is the dark, leading one; the rest keep the
+ *  toast action's original secondary style. Drawn left to right. */
+export type ToastAction = { label: string; onClick: () => void; primary?: boolean };
+
 export type ToastProps = {
   message: React.ReactNode;
   /** Optional single affordance (e.g. "Send anyway"). Rendered in a
@@ -26,6 +31,8 @@ export type ToastProps = {
    *  meant to be clicked still is. Putting the action in `message` instead would
    *  inherit the body's pointer-events-none and render a dead button. */
   action?: React.ReactNode;
+  /** Buttons drawn in the same click-through-safe slot (used when `action` is absent). */
+  actions?: ToastAction[];
   onDismiss: () => void;
   tone?: ToastTone;
   /** global = centered above the input bar. anchored = pinned above its
@@ -38,6 +45,7 @@ export type ToastProps = {
 export function Toast({
   message,
   action,
+  actions,
   onDismiss,
   tone = 'default',
   variant = 'global',
@@ -75,6 +83,13 @@ export function Toast({
       )}
       {message}
       {action && <span className="pointer-events-auto shrink-0">{action}</span>}
+      {!action && actions && actions.length > 0 && (
+        <span className="pointer-events-auto shrink-0 flex items-center gap-1.5">
+          {actions.map((x) => (
+            <Button key={x.label} variant={x.primary ? 'primary' : 'secondary'} size="sm" onClick={x.onClick}>{x.label}</Button>
+          ))}
+        </span>
+      )}
     </OverlayPanel>
   );
 }

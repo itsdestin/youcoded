@@ -222,7 +222,16 @@ const OK_VERIFY_RESULT = (overrides?: Partial<Extract<VerifyResult, { ok: true }
   ...overrides,
 });
 
-describe('AskpassServer: happy path', () => {
+// WHY these platform skips: the admin-password feature only ever starts on
+// Linux (admin-password-startup.ts — macOS stays off, Windows has no sudo).
+// The suites below drive a REAL Unix-socket server, the real /bin/sh wrapper
+// or POSIX exec bits; on Windows the socket listen is refused (EACCES) and the
+// helper waits out the 30 s timeout, and on macOS the kernel peer-pid self-test
+// and the OS-injected __CF_USER_TEXT_ENCODING variable make them fail for
+// reasons no user can reach. Suites that hold on every platform still run.
+const NOT_LINUX = process.platform !== 'linux';
+
+describe.skipIf(NOT_LINUX)('AskpassServer: happy path', () => {
   it('delivers a password: writes {"ok":true,"password":…} exactly once and zeroes the caller Buffer', async () => {
     const { server, runningCalls, setVerifyResult } = await startTestServer();
     runningCalls.register(222, 1, { sessionId: 'sess-1', toolCallId: 'tool-1' });
@@ -324,7 +333,7 @@ describe('AskpassServer: happy path', () => {
   });
 });
 
-describe('AskpassServer: refusals before an ask is ever raised', () => {
+describe.skipIf(NOT_LINUX)('AskpassServer: refusals before an ask is ever raised', () => {
   it('refuses when verify() itself fails — no ask is emitted', async () => {
     const { server, setVerifyResult } = await startTestServer();
     setVerifyResult({ ok: false, reason: 'wrong-exe' });
@@ -405,7 +414,7 @@ describe('AskpassServer: refusals before an ask is ever raised', () => {
   });
 });
 
-describe('AskpassServer: the helper pin stays open through the harden round-trip', () => {
+describe.skipIf(NOT_LINUX)('AskpassServer: the helper pin stays open through the harden round-trip', () => {
   it('is still open right when the ask is raised, and closes on deliver', async () => {
     const { reader, pins } = withTrackablePins(makeHealthyReader());
     const { server, runningCalls, setVerifyResult } = await startTestServer({ reader });
@@ -472,7 +481,7 @@ describe('AskpassServer: the helper pin stays open through the harden round-trip
   });
 });
 
-describe('AskpassServer: attempt counting checks the sudo pid actually IS the same process', () => {
+describe.skipIf(NOT_LINUX)('AskpassServer: attempt counting checks the sudo pid actually IS the same process', () => {
   it('treats a reused sudo pid number under a different, still-alive call root as a brand-new attempt', async () => {
     // sudo pid 555 shows up twice with two DIFFERENT recorded start times —
     // the second occurrence is a genuinely different process that happens
@@ -508,7 +517,7 @@ describe('AskpassServer: attempt counting checks the sudo pid actually IS the sa
   });
 });
 
-describe('AskpassServer: protocol timeouts and the line-length cap', () => {
+describe.skipIf(NOT_LINUX)('AskpassServer: protocol timeouts and the line-length cap', () => {
   it('destroys the connection when the handshake line never arrives', async () => {
     const { server } = await startTestServer({ handshakeTimeoutMs: 30 });
     const client = new TestClient(server.socketPath!);
@@ -596,7 +605,7 @@ describe('AskpassServer: startup self-test (real, on Linux)', () => {
 // against `makeTempDir()`'s own temp dir (never the real default socket
 // dir), which is also what keeps it from ever touching a live dev
 // instance's real socket file.
-describe('AskpassServer: start() sweeps dead askpass-<pid>.sock files from its own directory', () => {
+describe.skipIf(NOT_LINUX)('AskpassServer: start() sweeps dead askpass-<pid>.sock files from its own directory', () => {
   it('removes a dead pid\'s socket file, keeps a live pid\'s and an unrelated file untouched', async () => {
     const dir = makeTempDir();
 

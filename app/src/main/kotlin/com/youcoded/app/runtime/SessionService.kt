@@ -411,7 +411,9 @@ class SessionService : Service() {
                 while (true) {
                     val session = sessionRegistry.getCurrentSession()
                     if (session == null || session.shellMode || !session.isRunning) return@launch
-                    if (!session.hasPendingPermission()) {
+                    // inputBlocked: a pop-up no hook reported (the renderer reads it off
+                    // the screen) — same deferral as a pending permission.
+                    if (!session.hasPendingPermission() && !session.inputBlocked) {
                         session.writeInput("/reload-plugins\r")
                         return@launch
                     }
@@ -1069,6 +1071,13 @@ class SessionService : Service() {
                 } else if (text.isNotEmpty() && text.length <= 1_048_576) {
                     sessionRegistry.sessions.value[sessionId]?.writeInput(text)
                 }
+            }
+            // Fire-and-forget: the shared React detector's verdict on whether this
+            // session's terminal has a pop-up holding the keyboard. Gates the
+            // /reload-plugins write above (desktop: SessionManager.setInputBlocked).
+            "session:input-blocked" -> {
+                val sessionId = msg.payload.optString("sessionId", "")
+                sessionRegistry.sessions.value[sessionId]?.inputBlocked = msg.payload.optBoolean("blocked", false)
             }
             "session:resize" -> {
                 val sessionId = msg.payload.optString("sessionId", "")

@@ -142,9 +142,9 @@ export function useStickToBottom(
       idleTimer = setTimeout(checkRearm, REARM_IDLE_MS);
     };
 
-    // Upward wheel intent. Separate (passive) listener from ChatView's momentum
-    // wheel handler on purpose — this one only reads the delta, so the two stay
-    // independent. Downward wheel deliberately does NOT unstick: when already
+    // Upward wheel intent. Passive on purpose — it only reads the delta; the
+    // scrolling itself is the browser's own (ChatView has no wheel handler, see
+    // its "left ENTIRELY to the browser engine" note). Downward wheel deliberately does NOT unstick: when already
     // pinned, scrolling down cannot move the container, so no scroll event would
     // fire to re-arm and we'd be left permanently unstuck at the bottom.
     const onWheel = (e: WheelEvent) => {

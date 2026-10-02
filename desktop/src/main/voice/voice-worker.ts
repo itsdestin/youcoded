@@ -375,6 +375,15 @@ export class VoiceWorkerCore {
   private stopping = false;
   private passRunning = false;
   private passScheduled = false;
+  /** Sound has arrived that no pass has heard yet.
+   *
+   *  WHY (2026-09-30): the loop used to re-hear the same recording every 200 ms
+   *  whether or not anything new had arrived. When the microphone died mid-
+   *  sentence that kept a processor core busy for nothing — and, worse, every one
+   *  of those pointless passes made the host send "still working", which kept the
+   *  composer's "voice stopped responding" clock from ever running out. A pass
+   *  now needs new sound, or a stop, to run. */
+  private unheard = false;
 
   /** Bumped by `start` and `cancel`. A pass that finishes after its generation
    *  has moved on says nothing — that is how `cancel` manages to emit nothing at
@@ -404,6 +413,9 @@ export class VoiceWorkerCore {
     this.reset();
     this.listening = true;
     this.stopping = false;
+    // Any pass still scheduled belongs to the session before; its timer checks
+    // the generation and stands down (scheduleNextPass).
+    this.passScheduled = false;
 
     if (this.recognizer || this.loading) {
       // Already have (or are building) an engine — sound simply starts piling up.
@@ -431,7 +443,9 @@ export class VoiceWorkerCore {
         // not once per turn. Staying quiet here would get a perfectly healthy
         // engine killed a minute later for "not finishing loading".
         this.deps.send({ type: 'ready' });
-        if (!this.listening) return; // stopped or cancelled meanwhile — engine kept, nothing to decode
+        // Cancelled meanwhile: engine kept, nothing to decode. But a STOP that
+        // arrived while loading is still waiting for its words — see stop().
+        if (!this.listening && !this.stopping) return;
         // Whatever the user said during that first second is already in the
         // buffer and goes into the very first pass. Nothing is dropped.
         this.maybeRunPass();
@@ -464,7 +478,13 @@ export class VoiceWorkerCore {
     this.stopping = true;
     // If a pass is running we cannot start another — the final pass happens the
     // moment that one lands (see `onPassComplete`).
-    if (!this.passRunning) this.runFinalPass();
+    //
+    // Fix (2026-09-30): the same goes for an engine still LOADING. Stopping then
+    // used to answer straight away with nothing, because there was no engine to
+    // hear the sound — so the first short dictation after launch, or after the
+    // ten-minute idle unload, silently came back empty. Now the stop waits; the
+    // load's own callback runs the final pass over everything that was said.
+    if (!this.passRunning && !this.loading) this.runFinalPass();
   }
 
   cancel(): void {
@@ -484,6 +504,7 @@ export class VoiceWorkerCore {
     this.frames = [];
     this.pending = [];
     this.segments = [];
+    this.unheard = false;
   }
 
   private append(samples: Float32Array): void {
@@ -494,6 +515,7 @@ export class VoiceWorkerCore {
     }
     this.buffer.set(samples, this.length);
     this.length += samples.length;
+    if (samples.length > 0) this.unheard = true;
 
     // Roll the loudness readings forward a tenth of a second at a time. The
     // renderer sends roughly that much per message, but nothing here depends on
@@ -524,6 +546,9 @@ export class VoiceWorkerCore {
     // "a word cut in half is heard as two wrong words" this cut exists to avoid.
     // Measured 2026-09-05: 14.7 s instead of 14.6 s after a non-aligned commit.
     this.pending = [];
+    // The sound left over after the break has never been heard on its own, so
+    // the next pass must still run even if the microphone sends nothing more.
+    this.unheard = this.length > 0;
   }
 
   private get openSeconds(): number {
@@ -535,8 +560,10 @@ export class VoiceWorkerCore {
     if (this.passRunning || this.passScheduled) return;
     if (!this.recognizer) return;          // still loading — the sound waits
     if (!this.listening && !this.stopping) return;
-    if (this.length === 0) return;
+    // A waiting stop goes first, even with no sound at all: it is owed exactly
+    // one `final`, and "nothing was heard" is still an answer (runFinalPass).
     if (this.stopping) { this.runFinalPass(); return; }
+    if (this.length === 0 || !this.unheard) return;
     this.runPass();
   }
 
@@ -561,6 +588,9 @@ export class VoiceWorkerCore {
     // The sound this pass hears is copied out now, so that sound still arriving
     // down the pipe cannot change what the engine is looking at mid-pass.
     const audio = this.buffer.slice(0, plan.samples);
+    // Everything up to here is now being heard; sound arriving mid-pass sets
+    // this again in append().
+    this.unheard = false;
 
     this.passRunning = true;
     // The acknowledgement the service holds us to. Sent BEFORE the work starts,
@@ -585,7 +615,14 @@ export class VoiceWorkerCore {
     this.passRunning = false;
     // Cancelled, or a new session started while this pass was in flight: say
     // nothing whatsoever. This is `cancel`'s "emit nothing" promise.
-    if (generation !== this.generation) return;
+    //
+    // Fix (2026-09-30): but DO hand the engine to whoever is waiting now. A new
+    // session that started (and maybe already stopped) while this stale pass was
+    // running was refused a pass by the "one at a time" rule, and nothing woke
+    // it once the stale pass landed — so its stop never got a `final`, the
+    // composer sat on "Finishing…" for twenty seconds, and the host then killed
+    // the engine as wedged.
+    if (generation !== this.generation) { this.maybeRunPass(); return; }
 
     this.deps.send({ type: 'pass-end', segmentSeconds, ms: this.deps.now() - started });
 
@@ -644,8 +681,10 @@ export class VoiceWorkerCore {
     this.passScheduled = true;
     const generation = this.generation;
     this.deps.schedule(() => {
-      this.passScheduled = false;
+      // A stale timer must not clear the flag: cancel/emitFinal already did, and
+      // by now it may belong to the NEXT session's own scheduled pass.
       if (generation !== this.generation) return;
+      this.passScheduled = false;
       this.maybeRunPass();
     }, PASS_GAP_MS);
   }
@@ -670,14 +709,16 @@ export class VoiceWorkerCore {
     this.recognizer.decode(audio).then(
       (text) => {
         this.passRunning = false;
-        if (generation !== this.generation) return;
+        // Stale (cancelled meanwhile): silent, but wake whoever waits now — the
+        // same fix, for the same reason, as in onPassComplete.
+        if (generation !== this.generation) { this.maybeRunPass(); return; }
         this.deps.send({ type: 'pass-end', segmentSeconds, ms: this.deps.now() - started });
         this.segments.push(text.trim());
         this.emitFinal();
       },
       (err: unknown) => {
         this.passRunning = false;
-        if (generation !== this.generation) return;
+        if (generation !== this.generation) { this.maybeRunPass(); return; }
         this.deps.send({ type: 'pass-end', segmentSeconds, ms: this.deps.now() - started });
         // Even a failed last pass still answers: the service is owed exactly one
         // terminal event, and the words heard before the failure are real.

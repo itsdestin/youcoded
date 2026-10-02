@@ -42,6 +42,7 @@ const IPC = {
   HANDOFF_CREATE_PARAMS: 'handoff:create-params',
   SESSION_DESTROY: 'session:destroy',
   SESSION_INPUT: 'session:input',
+  SESSION_INPUT_BLOCKED: 'session:input-blocked',
   SESSION_RESIZE: 'session:resize',
   SESSION_LIST: 'session:list',
   SESSION_CREATED: 'session:created',
@@ -581,6 +582,10 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke(IPC.SESSION_MENU_LOCK, sessionId, holder, action),
     sendInput: (sessionId: string, text: string) =>
       ipcRenderer.send(IPC.SESSION_INPUT, sessionId, text),
+    // The renderer's screen verdict (parser/cc-input-focus.ts) — main holds
+    // back its own automated writes (/reload-plugins) while it is true.
+    reportInputBlocked: (sessionId: string, blocked: boolean) =>
+      ipcRenderer.send(IPC.SESSION_INPUT_BLOCKED, sessionId, blocked),
     resize: (sessionId: string, cols: number, rows: number) =>
       ipcRenderer.send(IPC.SESSION_RESIZE, sessionId, cols, rows),
     signalReady: (sessionId: string) =>
