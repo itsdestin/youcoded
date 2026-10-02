@@ -150,4 +150,17 @@ describe('describeStep', () => {
     expect(describeStep(state({ currentStep: 'INSTALL_PREREQUISITES' })))
       .toBe('Getting the next piece ready…');
   });
+
+  it('shows a live note (macOS waiting on Apple) instead of the generic install line', () => {
+    const s = state({
+      currentStep: 'INSTALL_PREREQUISITES',
+      prerequisites: [
+        { name: 'node', displayName: 'Node.js', status: 'installed' },
+        { name: 'git', displayName: 'Git', status: 'installing', note: "Waiting for Apple's installer — click Install in the window Apple opened (it may be behind this one)." },
+        { name: 'claude', displayName: 'Claude Code', status: 'waiting' },
+        { name: 'auth', displayName: 'Sign in', status: 'waiting' },
+      ],
+    });
+    expect(describeStep(s)).toBe("Waiting for Apple's installer — click Install in the window Apple opened (it may be behind this one).");
+  });
 });

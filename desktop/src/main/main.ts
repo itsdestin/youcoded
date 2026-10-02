@@ -161,6 +161,18 @@ if (process.platform === 'win32') {
   if (!parts.includes(localBin)) {
     process.env.PATH = `${localBin}${path.delimiter}${process.env.PATH ?? ''}`;
   }
+  // Node and Git that first-run downloaded into %LOCALAPPDATA%\YouCoded (no winget, no admin).
+  // Prepended when present — like the macOS user-local Node line below — so later launches find
+  // them even if saving them to the user PATH failed. Git's bash lives beside cmd\ (bin\bash.exe).
+  const youcodedLocal = path.join(
+    process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
+    'YouCoded',
+  );
+  for (const dir of [path.join(youcodedLocal, 'git', 'cmd'), path.join(youcodedLocal, 'node')]) {
+    if (fs.existsSync(dir) && !(process.env.PATH ?? '').split(path.delimiter).includes(dir)) {
+      process.env.PATH = `${dir}${path.delimiter}${process.env.PATH ?? ''}`;
+    }
+  }
 } else if (process.platform === 'darwin' || process.platform === 'linux') {
   const home = os.homedir();
   const extraPaths = [

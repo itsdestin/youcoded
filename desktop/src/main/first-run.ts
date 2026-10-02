@@ -327,7 +327,7 @@ export class FirstRunManager extends EventEmitter {
   private async installMissing(): Promise<void> {
     const installable: Array<{
       name: string;
-      install: () => Promise<{ success: boolean; error?: string }>;
+      install: (onProgress?: (message: string) => void) => Promise<{ success: boolean; error?: string }>;
       detect: () => Promise<{ installed: boolean; version?: string }>;
       label: string;
     }> = [
@@ -363,7 +363,13 @@ export class FirstRunManager extends EventEmitter {
         statusMessage: `Installing ${label}...`,
       });
 
-      const result = await install();
+      // WHY the progress callback: macOS's Git install waits on a dialog the user must click, so
+      // the Git row stays "installing" and its note says what to do (instead of a red failure).
+      const result = await install((message) => {
+        this.updatePrereq(name, { note: message });
+        this.updateState({ statusMessage: message });
+      });
+      this.updatePrereq(name, { note: undefined });
 
       if (result.success) {
         // Re-detect to capture version
@@ -811,7 +817,7 @@ export class FirstRunManager extends EventEmitter {
 
   private updatePrereq(
     name: string,
-    updates: Partial<{ status: string; version?: string; error?: string }>,
+    updates: Partial<{ status: string; version?: string; error?: string; note?: string }>,
   ): void {
     const prereq = this.state.prerequisites.find((p) => p.name === name);
     if (!prereq) return;

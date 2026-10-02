@@ -14,6 +14,9 @@ export interface PrerequisiteState {
   status: PrerequisiteStatus;
   version?: string;
   error?: string;
+  /** Short live note while this step waits on the user (e.g. macOS's Command Line Tools dialog).
+   *  Shown as the setup headline instead of the generic "Installing ..." line. */
+  note?: string;
 }
 
 export interface FirstRunState {

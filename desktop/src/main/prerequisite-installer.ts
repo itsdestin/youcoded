@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import fs from 'fs';
 import https from 'https';
+import crypto from 'crypto';
 import { app } from 'electron';
 import { log } from './logger';
 
@@ -91,7 +92,8 @@ export interface DetectionResult {
 // admin prompt and no package manager is ever needed.
 // ---------------------------------------------------------------------------
 
-const NODE_VERSION = 'v20.19.0';
+// v24.21.0 is the current LTS; v20 reached end-of-life in April 2026 (bumped 2026-10-02, all platforms).
+const NODE_VERSION = 'v24.21.0';
 // Pinned, NOT "latest": the download URL interpolates the version into the
 // asset filename (gh_<ver>_macOS_arm64.zip), so there is no /latest/ URL that
 // yields a predictable name, and resolving it at runtime would make the
@@ -416,9 +418,10 @@ function downloadFile(url: string, dest: string): Promise<void> {
       https.get(targetUrl, (res) => {
         // Follow redirects
         if (
-          (res.statusCode === 301 || res.statusCode === 302) &&
+          [301, 302, 303, 307, 308].includes(res.statusCode ?? 0) &&
           res.headers.location
         ) {
+          res.resume(); // drop the redirect body so the socket is freed
           request(res.headers.location);
           return;
         }
@@ -580,56 +583,288 @@ function isMuslLinux(): boolean {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Direct-download installs (Node on every platform, Git on Windows)
+//
+// WHY no winget (Destin, 2026-10-02): winget is missing on Windows Server, LTSC and many
+// school/work PCs (Store blocked), which dead-ended setup. macOS/Linux already extract an
+// official archive into a user folder with no admin prompt; Windows now does the same. Every
+// archive is pinned to a sha256 and verified BEFORE it is extracted or run, so a tampered or
+// truncated download is rejected instead of executed.
+// ---------------------------------------------------------------------------
+
+export interface DownloadAsset {
+  url: string;
+  name: string;
+  sha256: string;
+}
+
+// Hashes copied from https://nodejs.org/dist/v24.21.0/SHASUMS256.txt (verified by Destin 2026-10-02).
+const NODE_SHA256: Record<string, string> = {
+  'darwin-arm64.tar.gz': 'bed7eea5325e1108f32ce5228ddd6a5f0f08a499ee42aa7442aea583702f6057',
+  'darwin-x64.tar.gz': '1462cb3b3046b815cf8ea436d3da450ec1a9f11dac7e5a46b0ada5305d7e8097',
+  'linux-arm64.tar.gz': '724282c3b43aec998aa9527380465b45d229e021b58035f5f4f63095eabfe5d5',
+  'linux-x64.tar.gz': '6e1db87ef58b8819e5d5402eff1536491b18edd8eb7bee5ef7897876e88dc5ff',
+  'win-arm64.zip': '8779b1bde1d39f8d420e3b57aa657b39891af434d3de44a919044cec06785921',
+  'win-x64.zip': '158f7685b44de51f6c0df1d153526cbcd3e1bc739a8dfc607721cef75de9e541',
+};
+
+const GIT_WIN_VERSION = 'v2.56.0.windows.1';
+const GIT_WIN_SHA256: Record<string, string> = {
+  '64-bit': 'eceb5e061aa90df2f69ddd3e90f0030e1b8037a7829934bc40e4be1caa1accc1',
+  arm64: 'edd9bd32aefa5d2bd4b938c38c18ceca306a7f6b29a6951cd6a4bb16d9d28d8f',
+};
+
+/** Node archive for a platform/arch, or null when we ship no pinned build for it. Pure. */
+export function nodeAsset(platform: NodeJS.Platform, arch: string): DownloadAsset | null {
+  const a = arch === 'arm64' ? 'arm64' : arch === 'x64' ? 'x64' : null;
+  if (!a) return null;
+  let key: string;
+  if (platform === 'win32') key = `win-${a}.zip`;
+  else if (platform === 'darwin' || platform === 'linux') key = `${platform}-${a}.tar.gz`;
+  else return null;
+  const sha256 = NODE_SHA256[key];
+  if (!sha256) return null;
+  const name = `node-${NODE_VERSION}-${key}`;
+  return { name, url: `https://nodejs.org/dist/${NODE_VERSION}/${name}`, sha256 };
+}
+
+/** Portable Git (7-Zip self-extractor with bash — NOT MinGit, which has no bash) for Windows. Pure. */
+export function gitWindowsAsset(arch: string): DownloadAsset | null {
+  const tag = arch === 'arm64' ? 'arm64' : arch === 'x64' ? '64-bit' : null;
+  if (!tag) return null;
+  const name = `PortableGit-${GIT_WIN_VERSION.replace(/^v/, '').replace(/\.windows\.\d+$/, '')}-${tag}.7z.exe`;
+  return {
+    name,
+    url: `https://github.com/git-for-windows/git/releases/download/${GIT_WIN_VERSION}/${name}`,
+    sha256: GIT_WIN_SHA256[tag],
+  };
+}
+
+/** Non-blocking existence check (this runs in the main process; no *Sync calls). */
+async function pathExists(p: string): Promise<boolean> {
+  try { await fs.promises.access(p); return true; } catch { return false; }
+}
+
+/** sha256 (hex) of a file, streamed so a 60 MB archive is not held in memory. */
+function sha256OfFile(file: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const h = crypto.createHash('sha256');
+    const s = fs.createReadStream(file);
+    s.on('data', (c) => h.update(c));
+    s.on('error', reject);
+    s.on('end', () => resolve(h.digest('hex')));
+  });
+}
+
+/** True when the file's sha256 equals `expected` (case-insensitive). */
+export async function fileMatchesSha256(file: string, expected: string): Promise<boolean> {
+  return (await sha256OfFile(file)).toLowerCase() === expected.toLowerCase();
+}
+
 /**
- * Windows: install `pkg` with winget, treating "it's already there" as success.
- *
- * WHY check before and after with a fresh PATH (clean Windows 11 VM, 2026-10-02): the running
- * app's PATH dates from launch, so a tool installed since then (by an earlier step, another
- * installer, or the user) looks missing. winget then refuses ("already installed", non-zero exit)
- * and setup dead-ended on "Command failed: winget install Git.Git" although Git was on disk.
- * Re-reading PATH and re-detecting first, and again when winget fails, turns both into success.
- * Returns `done: false` when winget ran fine, so the caller's usual post-install check runs.
+ * Download `asset` to `dest` and check its sha256. On mismatch (or a failed download) the file is
+ * deleted and an Error with a plain message is thrown, so nothing unverified is ever extracted/run.
  */
-// exported (with injectable deps) for the pinning test in prerequisite-installer-pins.test.ts
-export async function installWithWinget(
-  pkg: string,
-  detect: () => Promise<DetectionResult>,
-  deps: {
-    refresh: () => void;
-    winget: () => Promise<DetectionResult>;
-    run: (cmd: string, args: string[], opts: { timeout: number }) => Promise<unknown>;
-  } = { refresh: refreshPath, winget: detectWinget, run: runCommand },
-): Promise<{ done: true; result: { success: boolean; error?: string } } | { done: false }> {
-  deps.refresh();
-  const before = await detect();
-  if (before.installed) {
-    log('INFO', 'prereq', `${pkg} already installed: ${before.version}`);
-    return { done: true, result: { success: true } };
-  }
-  // WHY: winget is not guaranteed to exist on Windows Server, LTSC builds,
-  // or sandboxed machines. Run upfront detection to give a useful error
-  // instead of hardcoding a path or failing cryptically on spawn.
-  const wingetCheck = await deps.winget();
-  if (!wingetCheck.installed) {
-    return { done: true, result: { success: false, error: wingetCheck.error } };
-  }
+async function downloadVerified(asset: DownloadAsset, dest: string): Promise<void> {
   try {
-    await deps.run(
-      'winget',
-      ['install', pkg, '--silent', '--accept-package-agreements', '--accept-source-agreements'],
-      { timeout: 300000 },
-    );
+    await downloadFile(asset.url, dest);
   } catch (err) {
-    deps.refresh();
-    const after = await detect();
-    if (after.installed) {
-      log('INFO', 'prereq', `winget reported a failure but ${pkg} is installed: ${after.version}`);
-      return { done: true, result: { success: true } };
-    }
+    await fs.promises.rm(dest, { force: true });
     throw err;
   }
-  return { done: false };
+  if (!(await fileMatchesSha256(dest, asset.sha256))) {
+    await fs.promises.rm(dest, { force: true });
+    throw new Error(
+      `The downloaded ${asset.name} did not match its expected checksum, so it was discarded. ` +
+      'Check your connection (a school/work network can alter downloads), then click Try Again.',
+    );
+  }
 }
+
+/**
+ * New user-PATH value with `dir` prepended, or null when it is already listed
+ * (case-insensitive, trailing slash ignored). Pure so the registry write can be pinned in tests.
+ * Entries are kept verbatim — they may hold %VARS% that must stay unexpanded (REG_EXPAND_SZ).
+ */
+export function mergeUserPath(current: string, dir: string): string | null {
+  const norm = (p: string) => p.trim().replace(/[\\/]+$/, '').toLowerCase();
+  const entries = current.split(';').filter((e) => e.trim() !== '');
+  if (entries.some((e) => norm(e) === norm(dir))) return null;
+  return [dir, ...entries].join(';');
+}
+
+/** `%LOCALAPPDATA%\YouCoded` — where Windows Node and Git live (no admin needed). */
+export function windowsToolsRoot(env: NodeJS.ProcessEnv = process.env, home: string = os.homedir()): string {
+  const local = env.LOCALAPPDATA || path.win32.join(home, 'AppData', 'Local');
+  return path.win32.join(local, 'YouCoded');
+}
+
+/** Folders to put on PATH for the Windows installs. Pure. */
+export function windowsNodeDir(root: string): string { return path.win32.join(root, 'node'); }
+export function windowsGitCmdDir(root: string): string { return path.win32.join(root, 'git', 'cmd'); }
+
+/**
+ * Persist `dir` on the user's PATH (HKCU\Environment\Path) without flattening REG_EXPAND_SZ entries.
+ * WHY PowerShell + registry API instead of `setx`: setx expands %VARS% and truncates at 1024
+ * characters, silently corrupting a long PATH. The dir travels in an environment variable, never
+ * spliced into script text. Best-effort: a failure is logged, because this process's PATH is
+ * already updated and main.ts re-adds the dirs at every launch.
+ */
+async function persistUserPathWindows(dir: string): Promise<void> {
+  try {
+    const ps = getPowerShellPath();
+    const base = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command'];
+    const read =
+      "$k=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment',$false);" +
+      "$v=$k.GetValue('Path',$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames);" +
+      'if($v -ne $null){[Console]::Out.Write($v)}';
+    const { stdout } = await runCommand(ps, [...base, read], { timeout: 30000 });
+    const merged = mergeUserPath(stdout.trim(), dir);
+    if (merged === null) return; // already on the user PATH
+    // The SetEnvironmentVariable call below only exists to make Windows broadcast
+    // WM_SETTINGCHANGE so Explorer and newly opened terminals pick the new PATH up.
+    const write =
+      "$k=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment',$true);" +
+      "$k.SetValue('Path',$env:YOUCODED_NEW_PATH,[Microsoft.Win32.RegistryValueKind]::ExpandString);" +
+      "$k.Close();[Environment]::SetEnvironmentVariable('YOUCODED_PATH_REFRESH',$null,'User')";
+    await runCommand(ps, [...base, write], {
+      timeout: 30000,
+      env: { ...process.env, YOUCODED_NEW_PATH: merged },
+    });
+    log('INFO', 'prereq', `Added ${dir} to the user PATH`);
+  } catch (err) {
+    log('WARN', 'prereq', `Could not save ${dir} to the user PATH`, { error: String(err) });
+  }
+}
+
+/** Windows' own tar.exe (bsdtar reads .zip). A tar on PATH may be Git's GNU tar, which misreads `C:` paths. */
+async function windowsTarPath(): Promise<string> {
+  const systemRoot = process.env.SystemRoot || process.env.windir || 'C:\\Windows';
+  const p = path.join(systemRoot, 'System32', 'tar.exe');
+  return await pathExists(p) ? p : 'tar';
+}
+
+/**
+ * Move a fully-extracted staging folder into place. Retries because antivirus often holds the
+ * freshly written files for a moment (EPERM/EBUSY), and removes any previous copy first.
+ * WHY staging+rename: a half-extracted folder at the final path would look "installed".
+ */
+async function moveIntoPlace(staging: string, finalDir: string): Promise<void> {
+  let lastErr: unknown;
+  for (let i = 0; i < 6; i++) {
+    try {
+      await fs.promises.rm(finalDir, { recursive: true, force: true });
+      await fs.promises.rename(staging, finalDir);
+      return;
+    } catch (err) {
+      lastErr = err;
+      await delay(1000);
+    }
+  }
+  throw lastErr;
+}
+
+async function installNodeWindows(): Promise<{ success: boolean; error?: string } | null> {
+  // "Already there": a Node the user installed themselves (or an earlier run) is used as-is.
+  refreshPath();
+  const root = windowsToolsRoot();
+  const nodeDir = windowsNodeDir(root);
+  if (await pathExists(path.join(nodeDir, 'node.exe'))) prependToProcessPath(nodeDir);
+  const before = await detectNode();
+  if (before.installed) {
+    log('INFO', 'prereq', `Node.js already installed: ${before.version}`);
+    return { success: true };
+  }
+
+  const asset = nodeAsset('win32', process.arch);
+  if (!asset) return { success: false, error: `No Node.js download for Windows on ${process.arch}.` };
+  const zip = path.join(os.tmpdir(), asset.name);
+  const staging = `${nodeDir}.staging`;
+  await downloadVerified(asset, zip);
+  try {
+    await fs.promises.rm(staging, { recursive: true, force: true });
+    await fs.promises.mkdir(staging, { recursive: true });
+    // --strip-components=1 peels the top-level node-vX-win-<arch>/ folder.
+    await runCommand(await windowsTarPath(), ['-xf', zip, '-C', staging, '--strip-components=1'], { timeout: 300000 });
+    await moveIntoPlace(staging, nodeDir);
+  } finally {
+    await fs.promises.rm(zip, { force: true });
+    await fs.promises.rm(staging, { recursive: true, force: true });
+  }
+  prependToProcessPath(nodeDir);
+  await persistUserPathWindows(nodeDir);
+  return null; // caller runs the usual post-install detection
+}
+
+async function installGitWindows(): Promise<{ success: boolean; error?: string } | null> {
+  refreshPath();
+  const root = windowsToolsRoot();
+  const gitRoot = path.win32.join(root, 'git');
+  const cmdDir = windowsGitCmdDir(root);
+  if (await pathExists(path.join(cmdDir, 'git.exe'))) prependToProcessPath(cmdDir);
+  const before = await detectGit();
+  if (before.installed) {
+    log('INFO', 'prereq', `Git already installed: ${before.version}`);
+    return { success: true };
+  }
+
+  const asset = gitWindowsAsset(process.arch);
+  if (!asset) return { success: false, error: `No Git download for Windows on ${process.arch}.` };
+  const exe = path.join(os.tmpdir(), asset.name);
+  const staging = `${gitRoot}.staging`;
+  await downloadVerified(asset, exe);
+  try {
+    await fs.promises.rm(staging, { recursive: true, force: true });
+    await fs.promises.mkdir(path.dirname(staging), { recursive: true });
+    // The .7z.exe is a 7-Zip self-extractor: -o<dir> sets the target, -y answers every prompt.
+    await runCommand(exe, [`-o${staging}`, '-y'], { timeout: 600000 });
+    if (!await pathExists(path.join(staging, 'cmd', 'git.exe'))) {
+      throw new Error('Git unpacked without its programs (cmd\\git.exe is missing).');
+    }
+    await moveIntoPlace(staging, gitRoot);
+  } finally {
+    await fs.promises.rm(exe, { force: true });
+    await fs.promises.rm(staging, { recursive: true, force: true });
+  }
+  prependToProcessPath(cmdDir);
+  await persistUserPathWindows(cmdDir);
+  return null;
+}
+
+/**
+ * Poll `detect` until it reports installed or `timeoutMs` passes. Injectable clock/sleep so the
+ * test needs no real waiting. Returns the detection result, or null on timeout.
+ */
+export async function pollUntilInstalled(
+  detect: () => Promise<DetectionResult>,
+  opts: { intervalMs: number; timeoutMs: number; sleep?: (ms: number) => Promise<void>; now?: () => number },
+): Promise<DetectionResult | null> {
+  const sleep = opts.sleep ?? delay;
+  const now = opts.now ?? Date.now;
+  const deadline = now() + opts.timeoutMs;
+  for (;;) {
+    const r = await detect();
+    if (r.installed) return r;
+    if (now() >= deadline) return null;
+    await sleep(opts.intervalMs);
+  }
+}
+
+// WHY module-level: "Try Again" (or a second run) while Apple's installer is still pending must
+// join the one poll already running, never start another.
+let macGitWait: Promise<{ success: boolean; error?: string }> | null = null;
+const MAC_GIT_POLL_MS = 5000;
+const MAC_GIT_TIMEOUT_MS = 30 * 60 * 1000;
+
+/** Copy shown while Apple's Command Line Tools dialog is open (it can hide behind our window). */
+const MAC_GIT_WAIT_MESSAGE =
+  "Waiting for Apple's installer — click Install in the window Apple opened (it may be behind this one).";
+
+const MAC_GIT_TIMEOUT_ERROR =
+  'macOS is installing Command Line Tools. Accept the "Install" prompt ' +
+  'in the system dialog, wait for it to finish (a few minutes), then ' +
+  'click Try Again.';
 
 /** Install Node.js silently. */
 export async function installNode(): Promise<{ success: boolean; error?: string }> {
@@ -637,8 +872,8 @@ export async function installNode(): Promise<{ success: boolean; error?: string 
     log('INFO', 'prereq', 'Installing Node.js...');
 
     if (process.platform === 'win32') {
-      const winget = await installWithWinget('OpenJS.NodeJS.LTS', detectNode);
-      if (winget.done) return winget.result;
+      const early = await installNodeWindows();
+      if (early) return early;
     } else if (process.platform === 'darwin' || process.platform === 'linux') {
       // Fix (v1.2.4): the official nodejs.org prebuilt tarballs are glibc-linked
       // and will not exec on musl-libc distros (Alpine). Detect musl up front
@@ -661,16 +896,14 @@ export async function installNode(): Promise<{ success: boolean; error?: string 
       // `installer -target CurrentUserHomeDirectory` was rejected by the pkg
       // metadata). Linux: apt/dnf/pacman would each need sudo + distro
       // detection. The official prebuilt tarball sidesteps both.
-      //
-      // `process.platform` ('darwin' | 'linux') is also the exact token Node
-      // uses in its dist tarball names, so we interpolate it directly.
-      const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
-      const tarName = `node-${NODE_VERSION}-${process.platform}-${arch}.tar.gz`;
-      const tmpTar = path.join(os.tmpdir(), tarName);
-      await downloadFile(
-        `https://nodejs.org/dist/${NODE_VERSION}/${tarName}`,
-        tmpTar,
-      );
+      const asset = nodeAsset(process.platform, process.arch);
+      if (!asset) {
+        return { success: false, error: `No Node.js download for ${process.platform} on ${process.arch}.` };
+      }
+      const tmpTar = path.join(os.tmpdir(), asset.name);
+      // WHY verified (2026-10-02): the tarball is extracted into the user's PATH, so an altered
+      // download would run as the user. Checked against the pinned sha256 before extraction.
+      await downloadVerified(asset, tmpTar);
 
       const installDir = userLocalNodeDir();
       fs.mkdirSync(installDir, { recursive: true });
@@ -705,37 +938,44 @@ export async function installNode(): Promise<{ success: boolean; error?: string 
   }
 }
 
-/** Install Git silently. */
-export async function installGit(): Promise<{ success: boolean; error?: string }> {
+/**
+ * Install Git silently. `onProgress` lets the caller show a note while a slow, user-driven step
+ * (macOS's Command Line Tools dialog) is pending.
+ */
+export async function installGit(
+  onProgress?: (message: string) => void,
+): Promise<{ success: boolean; error?: string }> {
   try {
     log('INFO', 'prereq', 'Installing Git...');
 
     if (process.platform === 'win32') {
-      const winget = await installWithWinget('Git.Git', detectGit);
-      if (winget.done) return winget.result;
+      const early = await installGitWindows();
+      if (early) return early;
     } else if (process.platform === 'darwin') {
-      // `xcode-select --install` pops a system GUI dialog asking the user to
-      // Agree / Install. Installation is asynchronous and driven by the user
-      // clicking in that dialog — we cannot wait synchronously. If git is
-      // still missing after the call returns, surface an actionable message
-      // so the user knows to accept the dialog and click Try Again.
-      try {
-        await runCommand('xcode-select', ['--install']);
-      } catch {
-        log('INFO', 'prereq', 'xcode-select --install triggered dialog (or CLT already present)');
+      // `xcode-select --install` pops Apple's dialog, which can sit BEHIND our window, and the
+      // install is driven by the user clicking in it. WHY wait instead of failing (Destin,
+      // 2026-10-02): returning a failure showed a red "failed" + Try Again for a perfectly
+      // normal step. We trigger it once, tell the user what to look for, and poll for Git.
+      if (!macGitWait) {
+        macGitWait = (async () => {
+          try {
+            await runCommand('xcode-select', ['--install']);
+          } catch {
+            log('INFO', 'prereq', 'xcode-select --install triggered dialog (or CLT already present)');
+          }
+          const found = await pollUntilInstalled(detectGit, {
+            intervalMs: MAC_GIT_POLL_MS,
+            timeoutMs: MAC_GIT_TIMEOUT_MS,
+          });
+          return found
+            ? { success: true }
+            : { success: false, error: MAC_GIT_TIMEOUT_ERROR };
+        })().finally(() => { macGitWait = null; });
       }
-      const check = await detectGit();
-      if (!check.installed) {
-        return {
-          success: false,
-          error:
-            'macOS is installing Command Line Tools. Accept the "Install" prompt ' +
-            'in the system dialog, wait for it to finish (a few minutes), then ' +
-            'click Try Again.',
-        };
-      }
-      log('INFO', 'prereq', `Git installed: ${check.version}`);
-      return { success: true };
+      onProgress?.(MAC_GIT_WAIT_MESSAGE);
+      const result = await macGitWait;
+      if (result.success) log('INFO', 'prereq', 'Git installed');
+      return result;
     } else if (process.platform === 'linux') {
       // No portable Git tarball exists, and a real install needs root +
       // distro detection (apt/dnf/pacman) — not something to do silently.

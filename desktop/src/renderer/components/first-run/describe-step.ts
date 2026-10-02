@@ -54,6 +54,9 @@ export function describeStep(state: FirstRunState): string {
 
     case 'INSTALL_PREREQUISITES': {
       const active = activePrerequisite(state.prerequisites);
+      // A live note (e.g. "Waiting for Apple's installer ...") beats the generic line: it tells
+      // the user the one thing they must do, which the generic copy cannot.
+      if (active?.note) return active.note;
       if (active && PREREQ_COPY[active.name]) {
         return PREREQ_COPY[active.name];
       }
