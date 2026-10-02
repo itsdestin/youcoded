@@ -110,6 +110,39 @@ function homeAssistantPageHtml(): string {
   /* Controls inside Now playing (fourth-look notes: "the play/pause button
      and some other basic controls should be attached to the now playing"). */
   .np.has-ctl { flex-wrap: wrap; }
+  .np-ctl { flex-direction: column; gap: 10px; }
+  .np-keys { display: flex; align-items: center; justify-content: center; gap: 10px; }
+  .vrow { display: flex; align-items: center; gap: 8px; width: 100%; position: relative; }
+  .vrow.keys-only { justify-content: center; }
+  .vlbl { font-size: 11px; color: var(--fg-muted); min-width: 64px; text-align: center; }
+  .vbtn { width: 30px; height: 30px; flex-shrink: 0; border-radius: 50%; border: 1px solid var(--edge); background: var(--well); color: var(--fg-2); cursor: pointer; display: grid; place-items: center; padding: 0; }
+  .vbtn:hover { color: var(--fg); border-color: var(--fg-muted); }
+  .vbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .tile .vlr { height: 10px; flex: 1; }
+  /* The remote: one card. Its header is the button; open, the remote sits
+     inside the same card. */
+  .rcard { position: relative; border-radius: var(--radius-md, 8px); border: 1px solid var(--edge-dim); background: var(--well); overflow: hidden; }
+  .rcard.open { background: var(--panel); }
+  .rcard .rbtn { width: 100%; height: 40px; border: 0; border-radius: 0; background: transparent; justify-content: flex-start; padding: 0 12px; }
+  .rcard .rlbl { flex: 1; text-align: left; }
+  .rcard .remote { border: 0; border-radius: 0; background: transparent; padding-top: 4px; }
+  /* Interactions (round 7: "better hover/touch/drag"): every control eases
+     between states and gives a small press, sliders show a handle on hover
+     and while held, and touch targets stay at least 30px. */
+  .tile-face, .key, .pwr, .vbtn, .nk .ic, .app, .rbtn, .fold, .cbtn, .sw, .mode, .step, .ib, .dpad button, .volpill button {
+    transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, transform 90ms ease, box-shadow 120ms ease;
+  }
+  .key:active, .pwr:active, .vbtn:active, .nk:active .ic, .app:active, .fold:active, .cbtn:active, .sw:active, .mode:active, .step:active, .ib:active { transform: scale(.94); }
+  .tile:has(> .line > .tile-face:active) { transform: scale(.99); }
+  .tile { transition: transform 90ms ease; }
+  .lr { touch-action: pan-y; }
+  .lr::-webkit-slider-thumb { transition: transform 120ms ease, background-color 120ms ease, box-shadow 120ms ease; }
+  .tile .lr:hover::-webkit-slider-thumb, .tile .lr:focus-visible::-webkit-slider-thumb, .tile .lr:active::-webkit-slider-thumb { background: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .45); }
+  .tile .lr:active::-webkit-slider-thumb { transform: scale(1.25); }
+  @media (prefers-reduced-motion: reduce) {
+    .tile, .tile-face, .key, .pwr, .vbtn, .nk .ic, .app, .rbtn, .fold, .cbtn, .sw, .mode, .step, .ib, .dpad button, .lr::-webkit-slider-thumb { transition: none; }
+    .key:active, .pwr:active, .vbtn:active, .nk:active .ic, .app:active, .fold:active, .cbtn:active, .sw:active, .mode:active, .step:active, .ib:active, .tile:has(> .line > .tile-face:active), .tile .lr:active::-webkit-slider-thumb { transform: none; }
+  }
   .np-ctl { flex-basis: 100%; display: flex; align-items: center; justify-content: center; gap: 10px; padding-top: 6px; }
   .np-ctl .key { width: 34px; height: 34px; }
   .np-ctl .key.main { width: 42px; height: 42px; background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
@@ -313,6 +346,13 @@ function homeAssistantPageHtml(): string {
   var renaming = null, newRoomFor = null, confirmOff = false;
   // Round 5: which TVs have their remote open (kept like the colour palettes).
   var remoteOpen = new Set(Array.isArray(saved.remote) ? saved.remote : []);
+  // Round 7: which soundbar or speaker a TV's sound plays through, when you
+  // chose it in Edit ({ tvId: speakerId | 'none' }). A choice always wins
+  // over the automatic link.
+  var sound = saved.sound && typeof saved.sound === 'object' ? saved.sound : {};
+  // The slider being dragged: its value is not replaced by a check landing
+  // mid-drag, so it never jumps under your finger.
+  var dragging = null;
   if (saved.editing) editing = true;
   var $ = function (id) { return document.getElementById(id); };
 
@@ -344,6 +384,9 @@ function homeAssistantPageHtml(): string {
       if (!first && (renaming || newRoomFor)) return;
       rooms = JSON.parse(r.body);
       applyHeld();
+      applyHeldVals();
+      // Mid-drag, the page is not redrawn at all: the next check catches up.
+      if (dragging) return;
       banner('');
       render();
       // Pictures as soon as there are cameras to put them in, not on a delay.
@@ -411,7 +454,7 @@ function homeAssistantPageHtml(): string {
   var EYE_OFF = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3l18 18"/><path d="M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6A17 17 0 0 0 2 12s3.5 7 10 7a9.9 9.9 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>';
   var OUT = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>';
   function ico(d, w) { return '<svg width="' + (w || 18) + '" height="' + (w || 18) + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + '</svg>'; }
-  var REMOTE = ico('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="M12 4.5v1.5M12 18v1.5M4.5 12H6M18 12h1.5"/>', 15);
+  var REMOTE = ico('<rect x="7" y="2" width="10" height="20" rx="4"/><circle cx="12" cy="9" r="2.5"/><path d="M12 5.2v.1M10 15h.01M14 15h.01M10 18h.01M14 18h.01"/>', 16);
   // Apps open through the remote by their web address; the TV hands each to
   // its app. These are the ones Home Assistant's own docs list as working.
   // Each app's mark is drawn here in its own colour, so the buttons read at
@@ -441,7 +484,7 @@ function homeAssistantPageHtml(): string {
     if (!pkg) return null;
     return APPS.filter(function (a) { return String(pkg).toLowerCase().indexOf(a.pkg) >= 0; })[0] || null;
   }
-  function remoteHtml(r, sb) {
+  function remoteHtml(r) {
     var id = esc(r.id);
     var k = function (cmd, label, icon, cls) { return '<button class="' + cls + '" data-rc="' + id + '" data-cmd="' + cmd + '" aria-label="' + label + '" title="' + label + '">' + icon + '</button>'; };
     var nk = function (cmd, label, icon) { return '<button class="nk" data-rc="' + id + '" data-cmd="' + cmd + '" aria-label="' + label + '"><span class="ic">' + icon + '</span>' + label + '</button>'; };
@@ -454,18 +497,6 @@ function homeAssistantPageHtml(): string {
       '<div class="nav">' +
         nk('BACK', 'Back', ico('<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>')) +
         nk('HOME', 'Home', ico('<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>')) +
-      '</div>' +
-      // The TV's sound comes out of the soundbar when one is playing it, so
-      // volume goes to the soundbar: the TV box's own volume keys never
-      // reached it (fourth-look notes: "volume up/down don't seem to work").
-      '<div class="volpill" role="group" aria-label="' + (sb ? 'Volume, on ' + esc(sb.name) : 'TV volume') + '">' +
-        (sb
-          ? '<button data-mp="' + esc(sb.id) + '" data-svc="volume_down" aria-label="Volume down" title="Volume down">' + ico('<path d="M5 12h14"/>', 16) + '</button>' +
-            '<button data-mp="' + esc(sb.id) + '" data-svc="volume_mute" data-mute="' + (sb.muted ? 'false' : 'true') + '" aria-label="' + (sb.muted ? 'Unmute' : 'Mute') + '" title="' + (sb.muted ? 'Unmute' : 'Mute') + '">' + ico('<path d="M11 5 6 9H2v6h4l5 4z"/><path d="m22 9-6 6M16 9l6 6"/>', 16) + '</button>' +
-            '<button data-mp="' + esc(sb.id) + '" data-svc="volume_up" aria-label="Volume up" title="Volume up">' + ico('<path d="M5 12h14M12 5v14"/>', 16) + '</button>'
-          : k('VOLUME_DOWN', 'Volume down', ico('<path d="M5 12h14"/>', 16), '') +
-            k('MUTE', 'Mute', ico('<path d="M11 5 6 9H2v6h4l5 4z"/><path d="m22 9-6 6M16 9l6 6"/>', 16), '') +
-            k('VOLUME_UP', 'Volume up', ico('<path d="M5 12h14M12 5v14"/>', 16), '')) +
       '</div>' +
       // Apps sit at the bottom, under the controls you press most (round 2
       // third look, S-power: "put the youtube/etc buttons at the bottom").
@@ -486,7 +517,7 @@ function homeAssistantPageHtml(): string {
     var base = function (n) { return n.toLowerCase().replace(/\\s*remote\\s*$/, '').trim(); };
     var byName = remotes.filter(function (r) { return base(r.name) === it.name.toLowerCase().trim(); })[0];
     if (byName) return byName;
-    var tvs = room.items.filter(function (x) { return domain(x.id) === 'media_player' && isTv(x) && !gone(x) && !remoteDevice(x); });
+    var tvs = room.items.filter(function (x) { return domain(x.id) === 'media_player' && isTv(x) && !remoteDevice(x); });
     return remotes.length === 1 && tvs.length === 1 && tvs[0].id === it.id ? remotes[0] : null;
   }
   // What kind of player it is, from Home Assistant's device model and class
@@ -500,11 +531,23 @@ function homeAssistantPageHtml(): string {
   }
   var KIND_LABEL = { tv: 'TV', soundbar: 'Soundbar', display: 'Display', speaker: 'Speaker' };
   function isTv(it) { return kindOf(it) === 'tv'; }
-  // The soundbar in the TV's room that is playing the TV's sound.
+  // Where a TV's sound comes out (round 7: "ensure we don't accidentally
+  // link tvs and sound devices … the most smart/correct/simple/robust way").
+  // 1. Your choice in Edit, always. 2. Otherwise only when there is no doubt:
+  // the room has exactly one soundbar and exactly one TV with a paired
+  // remote, and this is that TV. Anything else links nothing — guessing
+  // wrong would turn the wrong thing up.
+  function soundCandidates(it) {
+    var room = roomOf(it.id);
+    return room ? room.items.filter(function (x) { return domain(x.id) === 'media_player' && (kindOf(x) === 'soundbar' || kindOf(x) === 'speaker') && !remoteDevice(x); }) : [];
+  }
   function soundbarFor(it) {
     var room = roomOf(it.id);
     if (!room) return null;
-    return room.items.filter(function (x) { return domain(x.id) === 'media_player' && kindOf(x) === 'soundbar' && !gone(x) && (x.source === 'TV' || x.title === 'TV'); })[0] || null;
+    if (Object.prototype.hasOwnProperty.call(sound, it.id)) return sound[it.id] === 'none' ? null : thing(sound[it.id]);
+    var bars = room.items.filter(function (x) { return domain(x.id) === 'media_player' && kindOf(x) === 'soundbar' && !remoteDevice(x); });
+    var paired = room.items.filter(function (x) { return domain(x.id) === 'media_player' && isTv(x) && !remoteDevice(x) && remoteFor(x, room); });
+    return bars.length === 1 && paired.length === 1 && paired[0].id === it.id ? bars[0] : null;
   }
   // The pairing adds a media player on the remote's own device; it would be
   // a second tile for the same TV, so it is left off the page.
@@ -544,6 +587,27 @@ function homeAssistantPageHtml(): string {
     return '<input class="lr" type="range" min="1" max="100" value="' + pct + '" style="--pct:' + pct + '%;--c:' + colourOf(it) + '" aria-label="Brightness of ' + esc(it.name) + '" data-bright="' + esc(it.id) + '">';
   }
 
+  // Volume: − and + either side of a bar (round 7). \`target\` is the player
+  // whose volume it is — the TV's soundbar when its sound goes there. With
+  // no level to show (a TV box with no soundbar), the keys alone.
+  function volRow(it, target, rc) {
+    var minus = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"/></svg>';
+    var plus = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg>';
+    var where = target && target.id !== it.id ? ' on ' + target.name : '';
+    if (target && ((target.features || 0) & 4) && target.vol != null) {
+      var v = Math.round(target.vol * 100);
+      if (dragging === target.id) { var live = document.querySelector('[data-vol="' + target.id + '"]'); if (live) v = Number(live.value); }
+      return '<div class="vrow"><button class="vbtn" data-mp="' + esc(target.id) + '" data-svc="volume_down" aria-label="Volume down' + esc(where) + '" title="Volume down">' + minus + '</button>' +
+        '<input class="lr vlr" type="range" min="0" max="100" value="' + v + '" style="--pct:' + v + '%;--c:var(--accent)" aria-label="Volume of ' + esc(it.name) + esc(where) + '" data-vol="' + esc(target.id) + '">' +
+        '<button class="vbtn" data-mp="' + esc(target.id) + '" data-svc="volume_up" aria-label="Volume up' + esc(where) + '" title="Volume up">' + plus + '</button></div>';
+    }
+    if (rc) {
+      return '<div class="vrow keys-only"><button class="vbtn" data-rc="' + esc(rc.id) + '" data-cmd="VOLUME_DOWN" aria-label="Volume down" title="Volume down">' + minus + '</button>' +
+        '<span class="vlbl">Volume</span>' +
+        '<button class="vbtn" data-rc="' + esc(rc.id) + '" data-cmd="VOLUME_UP" aria-label="Volume up" title="Volume up">' + plus + '</button></div>';
+    }
+    return '';
+  }
   function tileHtml(it, icon, media, ctx) {
     // A TV with a paired remote is switched by the remote, which works the
     // TV's real power; its Cast side only knows whether something is
@@ -580,24 +644,23 @@ function homeAssistantPageHtml(): string {
       ctl = ((f & 16) ? mk('media_previous_track', 'Previous', PREV) : '') + mk('media_play_pause', pp, isPlay ? PAUSE : PLAY, ' main') + ((f & 32) ? mk('media_next_track', 'Next', NEXT) : '');
     }
     var playRow = '';
-    // Now playing, in a block of its own (S-kinds notes: "improve the now
-    // playing ui styling"): the app's mark on a TV, a note on a speaker.
-    var nowHtml = media && on && (playing && what || app)
-      ? '<div class="np' + (ctl ? ' has-ctl' : '') + '"><span class="art" style="--app:' + (app ? app.bg : 'var(--accent)') + '">' +
-        (app ? app.mark : '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>') +
-        '</span><span class="txt"><div class="lbl">' + (it.state === 'paused' ? 'Paused' : 'Now playing') + '</div>' +
-        '<div class="ttl">' + esc(playing && what ? what : app.name) + '</div>' +
-        (app && playing && what && what !== app.name && app.name !== 'TV' ? '<div class="by">' + (tv ? 'in ' : 'on ') + esc(app.name) + '</div>' : '') + '</span>' +
-        (ctl ? '<div class="np-ctl">' + ctl + '</div>' : '') + '</div>'
-      : '';
-    var c = media ? 'var(--accent)' : colourOf(it);
     // A TV's volume bar moves the soundbar playing its sound, when there is
     // one (the TV's own volume is not what you hear).
     var sb = tv ? soundbarFor(it) : null;
     var volOf = sb || it;
-    var vol = media && on && ((volOf.features || 0) & 4) && volOf.vol != null
-      ? '<div class="vol">' + SPEAKER + '<input class="lr" type="range" min="0" max="100" value="' + Math.round(volOf.vol * 100) + '" style="--pct:' + Math.round(volOf.vol * 100) + '%;--c:var(--accent)" aria-label="Volume of ' + esc(it.name) + (sb ? ' (on ' + esc(sb.name) + ')' : '') + '" data-vol="' + esc(volOf.id) + '"></div>'
+    var vol = media && on ? volRow(it, tv && !sb ? null : volOf, tv ? rc : null) : '';
+    // Now playing, in a block of its own (S-kinds notes: "improve the now
+    // playing ui styling"): the app's mark on a TV, a note on a speaker.
+    var nowHtml = media && on && (playing && what || app)
+      ? '<div class="np' + (ctl || vol ? ' has-ctl' : '') + '"><span class="art" style="--app:' + (app ? app.bg : 'var(--accent)') + '">' +
+        (app ? app.mark : '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>') +
+        '</span><span class="txt"><div class="lbl">' + (it.state === 'paused' ? 'Paused' : 'Now playing') + '</div>' +
+        '<div class="ttl">' + esc(playing && what ? what : app.name) + '</div>' +
+        (app && playing && what && what !== app.name && app.name !== 'TV' ? '<div class="by">' + (tv ? 'in ' : 'on ') + esc(app.name) + '</div>' : '') + '</span>' +
+        // Volume above previous/play/next (round 7).
+        (vol || ctl ? '<div class="np-ctl">' + vol + (ctl ? '<div class="np-keys">' + ctl + '</div>' : '') + '</div>' : '') + '</div>'
       : '';
+    var c = media ? 'var(--accent)' : colourOf(it);
     var bright = !media && on && dimmable(it) ? rangeHtml(it, pct) : '';
     var rOpen = rc && remoteOpen.has(rc.id);
     // A TV: the tile opens its remote, and power is its own button on the
@@ -612,11 +675,14 @@ function homeAssistantPageHtml(): string {
       : media ? '' : colourBtn(it);
     return '<div class="tile' + (media ? ' media' : '') + (on ? ' on' : '') + (na ? ' gone' : '') + (hidden.has(it.id) ? ' is-hidden' : '') + '" style="--c:' + c + '"><span class="glow"></span>' +
       '<div class="line">' + face +
-      '<span class="bulb">' + icon + '</span><span class="name">' + (kind ? '<div class="kind">' + KIND_LABEL[kind] + '</div>' : '') + esc(it.name) + '<div class="sub">' + esc(status) + '</div></span></button>' +
-      right + '</div>' + nowHtml + bright + vol + playRow +
+      '<span class="bulb">' + icon + '</span><span class="name">' + (kind ? '<div class="kind">' + KIND_LABEL[kind] + '</div>' : '') + esc(it.name) + (nowHtml ? '' : '<div class="sub">' + esc(status) + '</div>') + '</span></button>' +
+      right + '</div>' + nowHtml + bright + (nowHtml ? '' : vol) + playRow +
       // The remote opens from a full-width bar under what is playing, so the
       // TV's name keeps its room (a pill beside it cut the name short).
-      (rc ? '<button class="rbtn" data-remote="' + esc(rc.id) + '" aria-expanded="' + !!rOpen + '" aria-label="' + (rOpen ? 'Hide' : 'Show') + ' remote for ' + esc(it.name) + '">' + REMOTE + (rOpen ? 'Hide remote' : 'Remote') + '<span class="rchev">' + CHEVRON + '</span></button>' : '') + (media ? '' : paletteHtml(it)) + (rOpen ? remoteHtml(rc, sb) : '') + editRow(it, ctx) + '</div>';
+      // The remote is one card: its header opens it, the remote sits inside
+      // the same card below (round 7: "the same container as the remote").
+      (rc ? '<div class="rcard' + (rOpen ? ' open' : '') + '"><button class="rbtn" data-remote="' + esc(rc.id) + '" aria-expanded="' + !!rOpen + '" aria-label="' + (rOpen ? 'Hide' : 'Show') + ' remote for ' + esc(it.name) + '">' + REMOTE + '<span class="rlbl">Remote</span><span class="rchev">' + CHEVRON + '</span></button>' + (rOpen ? remoteHtml(rc) : '') + '</div>' : '') +
+      (media ? '' : paletteHtml(it)) + editRow(it, ctx) + '</div>';
   }
 
   var MODE_NAMES = { off: 'Off', cool: 'Cool', heat: 'Heat', heat_cool: 'Auto', auto: 'Auto', dry: 'Dry', fan_only: 'Fan' };
@@ -672,6 +738,19 @@ function homeAssistantPageHtml(): string {
   function haLink(path, label) {
     return '<a class="ib" href="' + esc(base + path) + '" target="_blank" rel="noopener" aria-label="' + esc(label) + '" title="' + esc(label) + '">' + OUT + '</a>';
   }
+  // Edit: where a TV's sound plays (round 7). Automatic shows what it found.
+  function soundPick(it) {
+    if (domain(it.id) !== 'media_player' || !isTv(it)) return '';
+    var cands = soundCandidates(it);
+    if (!cands.length) return '';
+    var chosen = Object.prototype.hasOwnProperty.call(sound, it.id) ? sound[it.id] : '';
+    var auto = !chosen ? soundbarFor(it) : null;
+    return '<select class="yc-select" data-sound="' + esc(it.id) + '" aria-label="Where ' + esc(it.name) + '\u2019s sound plays">' +
+      '<option value=""' + (!chosen ? ' selected' : '') + '>Sound: automatic' + (auto ? ' (' + esc(auto.name) + ')' : ' (none)') + '</option>' +
+      '<option value="none"' + (chosen === 'none' ? ' selected' : '') + '>Sound: the TV itself</option>' +
+      cands.map(function (x) { return '<option value="' + esc(x.id) + '"' + (chosen === x.id ? ' selected' : '') + '>Sound: ' + esc(x.name) + '</option>'; }).join('') +
+      '</select>';
+  }
   function editRow(it, ctx) {
     if (!editing || !ctx) return '';
     var id = it.id;
@@ -696,6 +775,7 @@ function homeAssistantPageHtml(): string {
       ib('down', id, DOWN, 'Move down', ' data-key="' + esc(ctx.key) + '"' + (i >= ctx.ids.length - 1 ? ' disabled' : '')) +
       ib('rename', id, PENCIL, 'Rename') +
       (ctx.key === 'fav' ? '<span class="grow"></span>' : pick) +
+      soundPick(it) +
       ib('hide', id, h ? EYE_OFF : EYE, h ? 'Show on this page' : 'Hide from this page', ' aria-pressed="false"') +
       (it.device ? haLink('/config/devices/device/' + encodeURIComponent(it.device), 'Open ' + it.name + ' in Home Assistant') : '') +
       '</div>';
@@ -789,21 +869,30 @@ function homeAssistantPageHtml(): string {
       lightsHtml + rest.map(function (it) { return itemHtml(it, ctx); }).join('') + '</section>';
   }
 
+  // Redraw a part only when its drawing changed (round 7: "optimize"): an
+  // unchanged check leaves the page alone, so a hovered button stays
+  // hovered, focus stays put, and camera pictures do not reload.
+  var drawn = {};
+  function put(id, html) {
+    if (drawn[id] === html) return;
+    drawn[id] = html;
+    $(id).innerHTML = html;
+  }
   function render() {
     $('root').classList.toggle('editing', editing);
-    $('bar').innerHTML = barHtml();
+    put('bar', barHtml());
     if (!rooms) return;
     var favItems = [];
     rooms.forEach(function (r) { r.items.forEach(function (it) { if (fav.has(it.id) && (editing || !hidden.has(it.id))) favItems.push(it); }); });
     favItems = ordered(favItems, 'fav', function (x) { return x.id; });
     var favCtx = { key: 'fav', ids: favItems.map(function (x) { return x.id; }) };
-    $('favs').innerHTML = favItems.length
+    put('favs', favItems.length
       ? '<section class="yc-card room"><div class="room-head fav-head">' + STAR_ON + '<h2>Favourites</h2></div><div class="fav-grid">' + favItems.map(function (it) { return itemHtml(it, favCtx); }).join('') + '</div></section>'
-      : '';
+      : '');
     var list = ordered(rooms.filter(function (r) { return r.items.some(function (it) { return editing || !hidden.has(it.id); }); }), 'rooms', function (r) { return r.id; });
     var roomIds = list.map(function (r) { return r.id; });
     var html = list.map(function (r) { return roomHtml(r, roomIds); }).join('');
-    $('rooms').innerHTML = html || '<div class="yc-empty">Nothing to show. Put devices in rooms in Home Assistant, or press Edit to bring hidden ones back.</div>';
+    put('rooms', html || '<div class="yc-empty">Nothing to show. Put devices in rooms in Home Assistant, or press Edit to bring hidden ones back.</div>');
     var box = document.querySelector('[data-rn],[data-nr]');
     if (box && document.activeElement !== box) { box.focus(); if (box.select) box.select(); }
   }
@@ -1009,24 +1098,61 @@ function homeAssistantPageHtml(): string {
     if (e.key === 'Enter') { e.preventDefault(); onAct(t.hasAttribute('data-rn') ? 'rename-save' : 'room-create', rid, t); }
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onAct('cancel', rid, t); }
   }, true);
-  // While dragging: move the fill only (no redraw, no request).
+  // While dragging (round 7: "make the volume sliders feel much smoother"):
+  // the fill follows the finger every frame, and the light or speaker
+  // follows too — at most every 250 ms, so a long drag is a few requests,
+  // not hundreds — and the last value is always sent.
+  var sendTimer = null, sendNext = null;
+  function sendSoon(fn) {
+    sendNext = fn;
+    if (sendTimer) return;
+    sendNext(); sendNext = null;
+    sendTimer = setTimeout(function () { sendTimer = null; if (sendNext) { var f = sendNext; sendNext = null; sendSoon(f); } }, 250);
+  }
+  function quiet(path, body) { call(path, body).catch(function (e) { banner(e && e.message ? e.message : 'That did not go through.'); }); }
   document.addEventListener('input', function (e) {
     var t = e.target;
-    if (t.classList && t.classList.contains('lr')) t.style.setProperty('--pct', t.value + '%');
+    if (!t.classList || !t.classList.contains('lr')) return;
+    t.style.setProperty('--pct', t.value + '%');
+    var v = t.getAttribute('data-vol'), b = t.getAttribute('data-bright');
+    dragging = v || b;
+    if (v) { var lv = t.value / 100; holdVal(v, 'vol', lv); sendSoon(function () { quiet('/api/services/media_player/volume_set', { entity_id: v, volume_level: lv }); }); }
+    if (b && Number(t.value) > 0) { var bp = Number(t.value); holdVal(b, 'brightness', Math.round(bp * 2.55)); sendSoon(function () { quiet('/api/services/light/turn_on', { entity_id: b, brightness_pct: bp }); }); }
   });
+  // A value you set holds until Home Assistant reports it (or 4 seconds),
+  // so a check that lands just after you let go cannot snap the bar back.
+  var heldVal = {};
+  function holdVal(id, key, value) { heldVal[id + '|' + key] = { id: id, key: key, value: value, until: Date.now() + 4000 }; }
+  function applyHeldVals() {
+    var now = Date.now();
+    Object.keys(heldVal).forEach(function (k) {
+      var h = heldVal[k], it = thing(h.id);
+      if (!it || now > h.until || Math.abs((it[h.key] || 0) - h.value) < 0.015 * (h.key === 'brightness' ? 255 : 1)) { delete heldVal[k]; return; }
+      it[h.key] = h.value;
+    });
+  }
+  document.addEventListener('pointerup', function () { if (dragging) setTimeout(function () { dragging = null; }, 300); });
   document.addEventListener('change', function (e) {
     var t = e.target;
     var b = t.getAttribute && t.getAttribute('data-bright');
     if (b) {
       // The big slider reaches 0: dragging all the way down turns the light off.
       if (Number(t.value) === 0) { setLocal(b, { state: 'off' }); service('light', 'turn_off', { entity_id: b }, b); return; }
-      setLocal(b, { state: 'on', brightness: Math.round(t.value * 2.55) }); service('light', 'turn_on', { entity_id: b, brightness_pct: Number(t.value) }, b); return;
+      dragging = null; holdVal(b, 'brightness', Math.round(t.value * 2.55));
+      var fb = Number(t.value); sendSoon(function () { quiet('/api/services/light/turn_on', { entity_id: b, brightness_pct: fb }); }); return;
     }
     // Any colour, from the rainbow swatch's colour picker.
     var any = t.getAttribute && t.getAttribute('data-any');
     if (any) {
       var m = /^#(..)(..)(..)$/.exec(t.value);
       if (m) { var c3 = [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)]; setLocal(any, { rgb: c3 }); service('light', 'turn_on', { entity_id: any, rgb_color: c3 }, any); }
+      return;
+    }
+    var snd = t.getAttribute && t.getAttribute('data-sound');
+    if (snd) {
+      if (t.value) sound[snd] = t.value; else delete sound[snd];
+      persist({ sound: sound });
+      render();
       return;
     }
     var mv = t.getAttribute && t.getAttribute('data-move');
@@ -1036,7 +1162,7 @@ function homeAssistantPageHtml(): string {
       return;
     }
     var v = t.getAttribute && t.getAttribute('data-vol');
-    if (v) { setLocal(v, { vol: t.value / 100 }); service('media_player', 'volume_set', { entity_id: v, volume_level: t.value / 100 }, v); }
+    if (v) { dragging = null; holdVal(v, 'vol', t.value / 100); sendSoon(function () { quiet('/api/services/media_player/volume_set', { entity_id: v, volume_level: t.value / 100 }); }); }
   });
 
   // Checking every 5 seconds only while the page is on screen (deck Q-live):
@@ -1057,6 +1183,7 @@ function homeAssistantPageHtml(): string {
     fav = new Set(Array.isArray(d.fav) ? d.fav : []);
     order = d.order && typeof d.order === 'object' ? d.order : {};
     remoteOpen = new Set(Array.isArray(d.remote) ? d.remote : []);
+    sound = d.sound && typeof d.sound === 'object' ? d.sound : {};
     render();
   });
   start();
