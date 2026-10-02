@@ -829,6 +829,13 @@ export const EditorFrame = forwardRef<EditorFrameHandle, EditorFrameProps>(funct
       if (d?.yc === 'rpc' && typeof (d as RpcMessage).cmd === 'string') relay(d as RpcMessage);
       // The bridge says when the document is really drawn — "opened" only means accepted.
       if (d?.type === 'yc:office-loaded') setPhase('open');
+      // WHY (add-on v0.1.41, clean Windows 11 VM 2026-10-02): when the converter can't open the
+      // file, the editor's own error box sits in the still-hidden frame and the person saw
+      // "Opening…" forever. Show our error with Retry instead — only while still opening.
+      if (d?.type === 'yc:office-failed' && phaseRef.current === 'starting') {
+        setFailure("Office couldn't open this file.");
+        setPhase('failed');
+      }
       if (d?.type === 'yc:office-state' && d.state) stateCb.current?.(d.state);
       if (d?.type === 'yc:office-esc') dismissRef.current();
       if (d?.type === 'yc:office-journaled') journalWaiters.current.slice().forEach((w) => w());

@@ -170,6 +170,26 @@ describe('EditorFrame hosting the editor', () => {
     expect(alerts.result.current.closeFailed).toBeNull();
   });
 
+  // WHY (clean Windows 11 VM, 2026-10-02): a converter that couldn't start left the person on
+  // "Opening…" forever; the editor now says the open failed and the frame shows its error.
+  it("shows the error with Retry when the editor says the file couldn't be opened", async () => {
+    fakeBridge();
+    const r = await mountFrame();
+    expect(r.getByText(/Opening/)).toBeTruthy();
+    r.fromEditor({ type: 'yc:office-failed' });
+    expect(r.getByText("Office couldn't open this file.")).toBeTruthy();
+    expect(r.getByRole('button', { name: /retry/i })).toBeTruthy();
+    expect(r.queryByText(/Opening/)).toBeNull();
+  });
+
+  it('ignores a late failure once the document is showing', async () => {
+    fakeBridge();
+    const r = await mountFrame();
+    r.fromEditor({ type: 'yc:office-loaded' });
+    r.fromEditor({ type: 'yc:office-failed' });
+    expect(r.queryByText("Office couldn't open this file.")).toBeNull();
+  });
+
   it('hands the document back to main when the frame goes away', async () => {
     const bridge = fakeBridge();
     const { unmount } = await mountFrame();
