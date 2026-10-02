@@ -898,7 +898,9 @@ describe('Save As writes a separate file and leaves the document on its own', ()
   it("hands x2t the editor's checked export choices, and nothing for a format that takes none", async () => {
     const seen: unknown[] = [];
     const csvOut = async (_r: string, _f: string, to: string, _fmt: number, _t: string, _s?: AbortSignal, extra?: unknown) => { seen.push(extra); await writeFile(to, to.endsWith('.csv') ? 'a;b\n' : 'PK\x03\x04zip'); };
-    const s = await sessionFor(path.join(ROOT, 'templates', 'blank.xlsx'), 'docs/sheet.xlsx');
+    // WHY the test's own spreadsheet: CI's desktop job never downloads the add-on (office-addon/), so
+    // its templates are missing there; this test fakes x2t and needs no add-on at all.
+    const s = await sessionFor(fileURLToPath(new URL('./fixtures/ledger.xlsx', import.meta.url)), 'docs/sheet.xlsx');
     const run = createOfficeCommands({ root: ROOT, sessions, convert: csvOut as never });
     await run(s.token, 'write_editor_bin', { data: Buffer.from('edited').toString('base64') });
     await run.saveAs(s.token, path.join(dir, 'sheet.csv'), { text: { codePage: 44, delimiter: [2], delimiterChar: null } });
