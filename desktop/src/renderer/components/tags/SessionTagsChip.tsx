@@ -17,17 +17,21 @@ import { TagGlyph } from './glyphs';
 const SB_TAG = 'stack' as 'dots' | 'pills' | 'icon-count' | 'stack';
 import { TagManagerPopup } from './TagManagerPopup';
 import { Dialog, Tooltip } from '../ui';
+import { TagShelvesPage, TagEditPage } from './TagCloud';
 import { useScreenOpen } from '../../shoot-mode';
 
 export function SessionTagsChip({ sessionId }: { sessionId: string | null }) {
   const [open, setOpen] = useState(false);
-  useScreenOpen('chat/tags', () => setOpen(true)); // photo-only build: `shoot` opens it by name
+  // photo-only build: `shoot` opens it by name, and its edit pages as subpages.
+  useScreenOpen('chat/tags', (sub) => { setOpen(true); setView(sub === 'edit' ? 'tags' : sub === 'tag' ? { tagId: 'tag_work' } : 'main'); }, ['edit', 'tag']);
   // Tag registry editing moved out of TagPicker into its own surface; this is
   // the route to it from the in-session chip. Layer 3 because this popup is
   // itself layer 2.
   const [manageOpen, setManageOpen] = useState(false);
   useScreenOpen('chat/tags/manage', () => setManageOpen(true)); // photo-only build
   const registry = useTagRegistry();
+  const [view, setView] = useState<'main' | 'tags' | { tagId: string }>('main');
+  const editingTag = typeof view === 'object' ? registry.byId.get(view.tagId) ?? null : null;
   const meta = useSessionMeta(sessionId);
 
   const appliedTags = [...meta.tags]
@@ -100,10 +104,20 @@ export function SessionTagsChip({ sessionId }: { sessionId: string | null }) {
       {/* WHY the shared Dialog (pick-menus#PM-4): the popup hand-built its own header and
           ×, so it matched no other popup; the Dialog brings the standard header, close
           button and scrolling body. */}
-      <Dialog screen="chat/tags" open={open} onClose={() => setOpen(false)} title="Tags & note" size="panel">
+      {/* Pages (pick-menus-8): the popup itself, "Edit tags" (shelves), and one tag's page —
+          the Dialog's back arrow steps up a page, as in the quick chips editor. */}
+      <Dialog screen={view === 'main' ? 'chat/tags' : view === 'tags' ? 'chat/tags/edit' : 'chat/tags/tag'} open={open}
+        onClose={() => { setOpen(false); setView('main'); }}
+        title={view === 'main' ? 'Tags & note' : view === 'tags' ? 'Edit tags' : `Edit “${editingTag?.label ?? ''}”`}
+        onBack={view === 'main' ? undefined : () => setView(view === 'tags' ? 'main' : 'tags')}
+        size="panel">
+        {view === 'tags' && <TagShelvesPage registry={registry} onPick={(id) => setView({ tagId: id })} />}
+        {view !== 'main' && view !== 'tags' && editingTag && (
+          <TagEditPage key={editingTag.id} tag={editingTag} registry={registry} onDone={() => setView('tags')} />
+        )}
         {/* Footer says "Done", not "Save": this surface persists every keystroke as you
-            make it. Priority rides along as a built-in tag; Complete is deliberately NOT
-            offered here — the close prompt owns that decision. */}
+            make it. Complete is deliberately NOT offered here — the close prompt owns it. */}
+        {view === 'main' && (
         <TagNoteEditor
           split
           appliedIds={meta.tags}
@@ -113,7 +127,9 @@ export function SessionTagsChip({ sessionId }: { sessionId: string | null }) {
           onNote={meta.setNote}
           footer={{ label: 'Done', onClick: () => setOpen(false) }}
           pin={{ pinned: priority, onPin: (next) => meta.setFlag('priority', next) }}
+          onEditTags={() => setView('tags')}
         />
+        )}
       </Dialog>
       {manageOpen && createPortal(<TagManagerPopup open onClose={() => setManageOpen(false)} registry={registry} layer={3} />, document.body)}
     </>

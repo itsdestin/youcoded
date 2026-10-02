@@ -22,6 +22,8 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat/resume#stress', 'dialog'), scenario: 'stress' },
   chat('chat/open-tasks', 'dialog'),
   chat('chat/tags', 'dialog'),
+  chat('chat/tags/edit', 'dialog'),
+  chat('chat/tags/tag', 'dialog'),
   chat('chat/status-bar', 'dialog'),
   chat('chat/status-bar/themes', 'dialog'),
   chat('chat/context', 'dialog'),

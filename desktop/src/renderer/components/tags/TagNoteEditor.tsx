@@ -20,16 +20,14 @@ import { NoteEditor } from './NoteEditor';
 import type { TagRegistryApi } from '../../hooks/useTagRegistry';
 import { Button, CARD_LEVEL_1, SectionLabel, SettingRow, Toggle } from '../ui';
 import { PinIcon } from './PinIcon';
-import { TagCloudSketch, TagOnOffSketch } from './TagSketches';
+import { TagCloud } from './TagCloud';
 
-// TRIAL: which tag row the pick-menus-3 deck shows.
-const TAG_ROW_STYLE = 'switch' as 'switch' | 'chip' | 'cloud' | 'onoff';
 
 const FIELD_LIFT = 'bg-well border-edge';
 
 export function TagNoteEditor({
   appliedIds, onToggleTag, registry, onManageTags, builtIns,
-  note, onNote, footer, split = false, pin,
+  note, onNote, footer, split = false, pin, onEditTags,
 }: {
   appliedIds: Set<string>;
   onToggleTag: (tagId: string, next: boolean) => void;
@@ -53,6 +51,8 @@ export function TagNoteEditor({
    *  show as a tag, but should now just become a pin and be a separate thing"). Same
    *  stored flag, so every session already marked Priority comes up pinned. */
   pin?: { pinned: boolean; onPin: (next: boolean) => void };
+  /** Opens the "Edit tags" page; with it, the Tags card is the tag cloud (pick-menus-8). */
+  onEditTags?: () => void;
 }) {
   if (split) {
     return (
@@ -64,19 +64,16 @@ export function TagNoteEditor({
               control={<Toggle checked={pin.pinned} onChange={pin.onPin} aria-label="Pin to top" />} />
           </div>
         )}
-        {TAG_ROW_STYLE === 'onoff' ? (
-          <TagOnOffSketch registry={registry} appliedIds={appliedIds} onToggle={onToggleTag} />
-        ) : (
-        <section>
-          <SectionLabel className="mb-2">Tags</SectionLabel>
-          <div className={`${CARD_LEVEL_1} p-3`}>
-            {TAG_ROW_STYLE === 'cloud'
-              ? <TagCloudSketch registry={registry} appliedIds={appliedIds} onToggle={onToggleTag} />
-              : <TagPicker appliedIds={appliedIds} onToggle={onToggleTag} registry={registry}
-                  manageInline rowStyle={TAG_ROW_STYLE} builtIns={pin ? [] : builtIns} />}
-          </div>
-        </section>
-        )}
+        {onEditTags
+          ? <TagCloud registry={registry} appliedIds={appliedIds} onToggle={onToggleTag} onEditTags={onEditTags} />
+          : (
+            <section>
+              <SectionLabel className="mb-2">Tags</SectionLabel>
+              <div className={`${CARD_LEVEL_1} p-3`}>
+                <TagPicker appliedIds={appliedIds} onToggle={onToggleTag} registry={registry} builtIns={pin ? [] : builtIns} />
+              </div>
+            </section>
+          )}
         <section>
           <SectionLabel className="mb-2">Note</SectionLabel>
           <div className={`${CARD_LEVEL_1} p-3`}>

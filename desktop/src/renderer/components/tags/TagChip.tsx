@@ -18,9 +18,14 @@ import { TagGlyph } from './glyphs';
 // TRIAL: which tag look the pick-menus-5 deck shows.
 const TAG_LOOK = 'status' as 'box' | 'dot' | 'pill' | 'outline' | 'outline-icon' | 'outline-icon-neutral' | 'status';
 
-export function TagChip({ tag, onRemove, className = '' }: {
+export function TagChip({ tag, onRemove, onAdd, dim = false, className = '' }: {
   tag: Pick<TagRecord, 'label' | 'color'>;
   onRemove?: () => void;
+  /** A "+" at the right instead of "×" — the tag isn't on this session yet
+   *  (pick-menus-8#PM8-1: "keep x/+ on the right side of each tag pill"). */
+  onAdd?: () => void;
+  /** Faint: a tag that is not on this session. */
+  dim?: boolean;
   className?: string;
 }) {
   const c = `color-mix(in srgb, var(--${tag.color}) 75%, var(--fg))`;
@@ -28,14 +33,16 @@ export function TagChip({ tag, onRemove, className = '' }: {
   if (TAG_LOOK !== 'box') {
     const remove = onRemove && (
       <button onClick={(e) => { e.stopPropagation(); onRemove(); }} className="opacity-60 hover:opacity-100 leading-none" aria-label={`Remove ${tag.label}`}>×</button>
+    ) || onAdd && (
+      <button onClick={(e) => { e.stopPropagation(); onAdd(); }} className="opacity-60 hover:opacity-100 leading-none" aria-label={`Add ${tag.label}`}>+</button>
     );
     if (TAG_LOOK === 'status') {
       // The session status pill's shape (SessionStrip StatusPill: rounded, light tint,
       // 4xs text), with a tag icon in the tag's colour where the status dot sits
       // (pick-menus-6#PM6-1: "tag icon in something more like the working chip").
       return (
-        <span className={`shrink-0 inline-flex items-center gap-1 pl-1 pr-1.5 py-[1px] rounded-full border text-4xs leading-none text-fg-2 ${className}`}
-          style={{ backgroundColor: `color-mix(in srgb, ${c} 15%, transparent)`, borderColor: `color-mix(in srgb, ${c} 30%, transparent)` }}>
+        <span className={`shrink-0 inline-flex items-center gap-1 pl-1 pr-1.5 py-[1px] rounded-full border text-4xs leading-none ${dim ? 'text-fg-muted border-dashed' : 'text-fg-2'} ${className}`}
+          style={{ backgroundColor: dim ? 'transparent' : `color-mix(in srgb, ${c} 15%, transparent)`, borderColor: `color-mix(in srgb, ${c} ${dim ? 40 : 30}%, transparent)` }}>
           {/* Filled icon (pick-menus-7#PM7-1: "want filled icons on the expanded cards"). */}
           <span className="flex shrink-0" style={{ color: c }}><FilledTag className="w-3 h-3" /></span>
           {tag.label}{remove}
