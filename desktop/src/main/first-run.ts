@@ -20,6 +20,7 @@ import {
   pollAuthStatus,
   submitApiKey,
   checkDiskSpace,
+  ensureNode,
 } from './prerequisite-installer';
 import type { ChatGptAuth } from './providers/chatgpt-auth';
 import type { CuratedModel, DownloadProgress } from '../shared/model-manager-types';
@@ -326,13 +327,21 @@ export class FirstRunManager extends EventEmitter {
       detect: () => Promise<{ installed: boolean; version?: string }>;
       label: string;
     }> = [
-      { name: 'node', install: installNode, detect: detectNode, label: 'Node.js' },
+      // WHY Node only for an already-signed-in Claude Code user (Destin,
+      // 2026-10-02): Node runs Claude Code and Terminal sessions and nothing
+      // else, so everyone else gets it on demand — at "Log in with Claude"
+      // (handleOAuthLogin), Install Claude Code in Settings, or the first
+      // Claude Code / Terminal session (ensureNode). A machine already signed in
+      // to Claude Code skips the sign-in step, so it gets Node here instead.
+      ...(this.state.authComplete
+        ? [{ name: 'node', install: installNode, detect: detectNode, label: 'Node.js' }]
+        : []),
       { name: 'git', install: installGit, detect: detectGit, label: 'Git' },
       // WHY no Claude Code here (first-run local models, Q-5/F-4, Destin
       // 2026-09-14): it installs only when someone presses "Log in with Claude"
       // (handleOAuthLogin) or Install Claude Code in Settings. A local, ChatGPT or
-      // API-key user never waits for it. Node and Git stay: Terminal view, the
-      // bundled plugins, syncing and the Git panel need them for everyone.
+      // API-key user never waits for it. Git stays for everyone (Destin,
+      // 2026-10-02): built-in skills, syncing and the Git panel need it.
     ];
 
     for (const { name, install, detect, label } of installable) {
@@ -383,10 +392,13 @@ export class FirstRunManager extends EventEmitter {
       }
     }
 
-    // Claude Code was not installed above; mark it so progress can reach the end
-    // and the checklist does not wait on it (FirstRunView hides the row).
-    const claude = this.state.prerequisites.find((p) => p.name === 'claude');
-    if (claude && claude.status !== 'installed') this.updatePrereq('claude', { status: 'skipped' });
+    // Claude Code (and, for most people, Node) was not installed above; mark
+    // them so progress can reach the end and the checklist does not wait on
+    // them (FirstRunView hides skipped rows).
+    for (const name of ['claude', 'node']) {
+      const p = this.state.prerequisites.find((q) => q.name === name);
+      if (p && p.status !== 'installed') this.updatePrereq(name, { status: 'skipped' });
+    }
 
     // All installable prerequisites are now installed — advance to next step.
     // cloneToolkit() was removed: the app bundles write-guard via install-hooks.js;
@@ -412,10 +424,33 @@ export class FirstRunManager extends EventEmitter {
     this.updateState({ authMode: 'oauth', statusMessage: 'Waiting for you to log in...', lastError: undefined });
     this.updatePrereq('auth', { status: 'installing' });
 
+    // Node first (2026-10-02): Claude Code sessions run through it, and this
+    // click is the moment a person has chosen Claude Code. The card's
+    // "Installing Claude Code…" covers both — the 'claude' row is what it reads.
+    const node = await detectNode();
+    if (!node.installed) {
+      this.updatePrereq('claude', { status: 'installing' });
+      this.updatePrereq('node', { status: 'installing' });
+      this.updateState({ statusMessage: 'Installing Node.js...' });
+      const nodeResult = await ensureNode();
+      if (!nodeResult.success) {
+        this.updatePrereq('node', { status: 'failed', error: nodeResult.error });
+        this.updatePrereq('claude', { status: 'skipped' });
+        this.updatePrereq('auth', { status: 'waiting' });
+        this.updateState({ authMode: 'none', lastError: `Failed to install Node.js, which Claude Code needs: ${nodeResult.error}` });
+        log('ERROR', 'first-run', 'Node.js install failed', { error: nodeResult.error });
+        return { url: null };
+      }
+      const nodeNow = await detectNode();
+      this.updatePrereq('node', { status: 'installed', version: nodeNow.version });
+    }
+
     // First-run local models (S-1): Claude Code installs HERE, after the click,
     // not for everyone before the sign-in screen. The card shows this install
     // while the 'claude' row is installing.
     const present = await detectClaude();
+    // The Node step above may have set this row to installing for the card.
+    if (present.installed) this.updatePrereq('claude', { status: 'installed', version: present.version });
     if (!present.installed) {
       this.updatePrereq('claude', { status: 'installing' });
       this.updateState({ statusMessage: 'Installing Claude Code...' });
@@ -775,8 +810,11 @@ export class FirstRunManager extends EventEmitter {
 
     Object.assign(prereq, updates);
 
-    // Recalculate overall progress: (installed count / total) * 90, capped at 90
-    const total = this.state.prerequisites.length;
+    // Recalculate overall progress: (installed count / total) * 90, capped at 90.
+    // WHY skipped rows don't count (2026-10-02): Claude Code and Node are now
+    // skipped for most people, and counting them capped the bar near half
+    // full on a setup that had finished everything it needed to.
+    const total = this.state.prerequisites.filter((p) => p.status !== 'skipped').length || 1;
     const installed = this.state.prerequisites.filter(
       (p) => p.status === 'installed',
     ).length;

@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import fs from 'fs';
 import https from 'https';
+import crypto from 'crypto';
 import { app } from 'electron';
 import { log } from './logger';
 
@@ -92,6 +93,11 @@ export interface DetectionResult {
 // ---------------------------------------------------------------------------
 
 const NODE_VERSION = 'v20.19.0';
+// From https://nodejs.org/dist/<NODE_VERSION>/SHASUMS256.txt — bump together.
+const NODE_WIN_SHA256 = {
+  x64: 'be72284c7bc62de07d5a9fd0ae196879842c085f11f7f2b60bf8864c0c9d6a4f',
+  arm64: '773325a26ad51a5ba857963825dee3a871eacef653c31d62e5492574c965accb',
+} as const;
 // Pinned, NOT "latest": the download URL interpolates the version into the
 // asset filename (gh_<ver>_macOS_arm64.zip), so there is no /latest/ URL that
 // yields a predictable name, and resolving it at runtime would make the
@@ -122,6 +128,157 @@ function userLocalNodeDir(): string {
  */
 function userLocalToolsBinDir(): string {
   return path.join(youcodedDataDir(), 'bin');
+}
+
+// ---------------------------------------------------------------------------
+// Portable Git (Windows)
+//
+// WHY (2026-10-02): Git used to come from `winget install Git.Git` — a
+// system-wide install that can raise admin (UAC) prompts and dead-ends on any
+// PC without Microsoft's App Installer (our own clean Windows 11 VM has none).
+// Git for Windows publishes a "portable" build that unpacks into any folder
+// with no admin rights, so setup downloads that instead. The full PortableGit,
+// not the smaller MinGit: MinGit has no bin\bash.exe, and both Claude Code and
+// the built-in assistant's command tool run commands through Git Bash.
+// Bump deliberately: version, tag and both SHA-256s come from the same
+// GitHub release (`gh api repos/git-for-windows/git/releases/latest`).
+// ---------------------------------------------------------------------------
+
+const PORTABLE_GIT = {
+  version: '2.56.0',
+  tag: 'v2.56.0.windows.1',
+  sha256: {
+    x64: 'eceb5e061aa90df2f69ddd3e90f0030e1b8037a7829934bc40e4be1caa1accc1',
+    arm64: 'edd9bd32aefa5d2bd4b938c38c18ceca306a7f6b29a6951cd6a4bb16d9d28d8f',
+  },
+} as const;
+
+/** Where portable Git is unpacked on Windows. Deliberately NOT under
+ *  %LOCALAPPDATA%\youcoded — that is the app's own install folder, which an
+ *  app uninstall or reinstall wipes. */
+function portableGitDir(): string {
+  return path.join(os.homedir(), '.youcoded', 'git');
+}
+
+/**
+ * Put the portable Git and Node.js that setup unpacked on this process's PATH
+ * (inherited by every session the app starts), and point Claude Code at Git's
+ * bash.exe. Each is a no-op unless it is on disk. Called at launch (main.ts)
+ * and after every registry PATH rebuild (refreshPath), which would drop them.
+ */
+export function applyWindowsUserToolsToEnv(): void {
+  if (process.platform !== 'win32') return;
+  if (fs.existsSync(path.join(userLocalNodeDir(), 'node.exe'))) {
+    prependToProcessPath(userLocalNodeDir());
+  }
+  const dir = portableGitDir();
+  if (!fs.existsSync(path.join(dir, 'cmd', 'git.exe'))) return;
+  prependToProcessPath(path.join(dir, 'cmd'));
+  const bash = path.join(dir, 'bin', 'bash.exe');
+  // Claude Code's documented setting for "where is Git Bash". Never override a
+  // value the user set themselves.
+  if (!process.env.CLAUDE_CODE_GIT_BASH_PATH && fs.existsSync(bash)) {
+    process.env.CLAUDE_CODE_GIT_BASH_PATH = bash;
+  }
+}
+
+/** Async existence check — the install paths run while the app is in use. */
+async function pathExists(p: string): Promise<boolean> {
+  try { await fs.promises.access(p); return true; } catch { return false; }
+}
+
+/** SHA-256 of a file, as lowercase hex, without reading it all into memory. */
+function sha256File(file: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash('sha256');
+    fs.createReadStream(file)
+      .on('data', (chunk) => hash.update(chunk))
+      .on('end', () => resolve(hash.digest('hex')))
+      .on('error', reject);
+  });
+}
+
+/** Download, verify and unpack portable Git. Windows only. */
+async function installPortableGit(): Promise<void> {
+  const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
+  const assetArch = arch === 'arm64' ? 'arm64' : '64-bit';
+  const name = `PortableGit-${PORTABLE_GIT.version}-${assetArch}.7z.exe`;
+  const tmp = path.join(os.tmpdir(), name);
+  await downloadFile(
+    `https://github.com/git-for-windows/git/releases/download/${PORTABLE_GIT.tag}/${name}`,
+    tmp,
+  );
+  try {
+    // WHY verify: we are about to RUN this file. A pinned hash means a swapped
+    // or corrupted download is refused instead of executed.
+    const actual = await sha256File(tmp);
+    if (actual !== PORTABLE_GIT.sha256[arch]) {
+      throw new Error('The Git download did not match its expected fingerprint. Check your connection and try again.');
+    }
+    const dir = portableGitDir();
+    const parent = path.dirname(dir);
+    await fs.promises.mkdir(parent, { recursive: true });
+    // The file is a 7-Zip self-extractor: -o<dir> -y unpacks silently. WHY a
+    // relative "-ogit" with cwd = the parent: a home folder with a space in it
+    // ("C:\Users\Jane Doe") would otherwise need quoting inside the switch,
+    // which the self-extractor's own argument parser may not honour.
+    await runCommand(tmp, [`-o${path.basename(dir)}`, '-y'], { cwd: parent, timeout: 600_000 });
+    // The self-extractor normally runs Git's first-time setup script, which
+    // deletes itself when done. If it is still there, run it ourselves.
+    // Best-effort: git itself works without it.
+    if (await pathExists(path.join(dir, 'post-install.bat'))) {
+      try {
+        await runCommand('cmd.exe', ['/d', '/c', 'post-install.bat'], { cwd: dir, timeout: 300_000 });
+      } catch (err) {
+        log('WARN', 'prereq', 'Portable Git post-install script failed', { error: String(err) });
+      }
+    }
+  } finally {
+    fs.unlink(tmp, () => {});
+  }
+  applyWindowsUserToolsToEnv();
+}
+
+/** Linux package managers that can install Git, first match wins. `test` is
+ *  the binary whose presence picks the row. */
+const LINUX_GIT_INSTALLERS: ReadonlyArray<{ test: string; args: string[]; manual: string }> = [
+  { test: '/usr/bin/apt-get', args: ['apt-get', 'install', '-y', 'git'], manual: 'sudo apt install git' },
+  { test: '/usr/bin/dnf', args: ['dnf', 'install', '-y', 'git'], manual: 'sudo dnf install git' },
+  { test: '/usr/bin/pacman', args: ['pacman', '-S', '--noconfirm', '--needed', 'git'], manual: 'sudo pacman -S git' },
+  { test: '/usr/bin/zypper', args: ['zypper', '--non-interactive', 'install', 'git'], manual: 'sudo zypper install git' },
+];
+
+/**
+ * Install Git on Linux through the desktop's own password dialog (pkexec — the
+ * same route the app's Linux updates use). Returns null on success, or the
+ * message to show when it could not: no known package manager, no pkexec, the
+ * user dismissed the dialog, or the install failed.
+ */
+async function installGitLinux(): Promise<string | null> {
+  const manualAll =
+    'Install Git with your distribution\'s package manager, then click Try Again:\n' +
+    '  Debian / Ubuntu:  sudo apt install git\n' +
+    '  Fedora / RHEL:    sudo dnf install git\n' +
+    '  Arch:             sudo pacman -S git';
+  let spec: (typeof LINUX_GIT_INSTALLERS)[number] | undefined;
+  for (const s of LINUX_GIT_INSTALLERS) {
+    if (await pathExists(s.test)) { spec = s; break; }
+  }
+  const pkexec = '/usr/bin/pkexec';
+  if (!spec || !(await pathExists(pkexec))) return manualAll;
+  try {
+    // Ten minutes: the password dialog in front of the install is a person.
+    await runCommand(pkexec, spec.args, { timeout: 600_000 });
+    return null;
+  } catch (err) {
+    // 126 = the dialog was dismissed or refused; anything else = the install
+    // itself failed. Either way the person can still do it by hand.
+    const code = (err as { code?: unknown }).code;
+    log('WARN', 'prereq', 'pkexec Git install did not complete', { code, error: String(err) });
+    return code === 126
+      ? `Git wasn't installed because the password window was closed. Click Try Again, or run:\n  ${spec.manual}`
+      : `Git couldn't be installed automatically. Run this in a terminal, then click Try Again:\n  ${spec.manual}`;
+  }
 }
 
 /** Node's bin dir (contains node, npm, npx — and later, claude from `npm i -g`). */
@@ -345,6 +502,8 @@ function refreshPath(): void {
     // claude unresolvable. Re-prepend the bin dir so which.sync() (detection)
     // and forked pty-worker spawns (session launch) both find claude.exe.
     prependToProcessPath(path.dirname(claudeInstallPath()));
+    // Same for portable Git: it lives on no registry PATH by design.
+    applyWindowsUserToolsToEnv();
     log('INFO', 'prereq', 'PATH refreshed from registry');
   } catch (err) {
     log('WARN', 'prereq', 'Failed to refresh PATH from registry', {
@@ -543,24 +702,31 @@ export async function installNode(): Promise<{ success: boolean; error?: string 
     log('INFO', 'prereq', 'Installing Node.js...');
 
     if (process.platform === 'win32') {
-      // WHY: winget is not guaranteed to exist on Windows Server, LTSC builds,
-      // or sandboxed machines. Run upfront detection to give a useful error
-      // instead of hardcoding a path or failing cryptically on spawn.
-      const wingetCheck = await detectWinget();
-      if (!wingetCheck.installed) {
-        return { success: false, error: wingetCheck.error };
+      // WHY the official zip, not winget (2026-10-02): winget's install is
+      // system-wide (admin prompts) and dead-ends on PCs without Microsoft's
+      // App Installer. The zip unpacks into the user's own folder, like the
+      // macOS/Linux tarball below and portable Git.
+      const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
+      const zipName = `node-${NODE_VERSION}-win-${arch}.zip`;
+      const tmpZip = path.join(os.tmpdir(), zipName);
+      await downloadFile(`https://nodejs.org/dist/${NODE_VERSION}/${zipName}`, tmpZip);
+      try {
+        if ((await sha256File(tmpZip)) !== NODE_WIN_SHA256[arch]) {
+          throw new Error('The Node.js download did not match its expected fingerprint. Check your connection and try again.');
+        }
+        const installDir = userLocalNodeDir();
+        await fs.promises.mkdir(installDir, { recursive: true });
+        // Windows 10+ ships bsdtar as System32\tar.exe, which reads zips.
+        // --strip-components=1 drops the node-vX-win-<arch>\ top folder so
+        // node.exe lands directly in installDir.
+        const systemRoot = process.env.SystemRoot || process.env.windir || 'C:\\Windows';
+        await runCommand(path.join(systemRoot, 'System32', 'tar.exe'), [
+          '-xf', tmpZip, '-C', installDir, '--strip-components=1',
+        ], { timeout: 300000 });
+      } finally {
+        fs.unlink(tmpZip, () => {});
       }
-      await runCommand(
-        'winget',
-        [
-          'install',
-          'OpenJS.NodeJS.LTS',
-          '--silent',
-          '--accept-package-agreements',
-          '--accept-source-agreements',
-        ],
-        { timeout: 300000 },
-      );
+      applyWindowsUserToolsToEnv();
     } else if (process.platform === 'darwin' || process.platform === 'linux') {
       // Fix (v1.2.4): the official nodejs.org prebuilt tarballs are glibc-linked
       // and will not exec on musl-libc distros (Alpine). Detect musl up front
@@ -665,30 +831,33 @@ async function waitForMacCommandLineTools(): Promise<void> {
   }
 }
 
+let nodeInstallInFlight: Promise<{ success: boolean; error?: string }> | null = null;
+
+/**
+ * Node.js present, or installed now. One install at a time: a second caller
+ * (two sessions opened at once) waits on the same attempt instead of starting
+ * another download into the same folder.
+ *
+ * WHY on demand (Destin, 2026-10-02): Node runs Claude Code and Terminal
+ * sessions only, so setup no longer installs it for everyone — these moments do.
+ */
+export async function ensureNode(): Promise<{ success: boolean; error?: string }> {
+  if ((await detectNode()).installed) return { success: true };
+  if (!nodeInstallInFlight) {
+    nodeInstallInFlight = installNode().finally(() => { nodeInstallInFlight = null; });
+  }
+  return nodeInstallInFlight;
+}
+
 /** Install Git silently. */
 export async function installGit(): Promise<{ success: boolean; error?: string }> {
   try {
     log('INFO', 'prereq', 'Installing Git...');
 
     if (process.platform === 'win32') {
-      // WHY: winget is not guaranteed to exist on Windows Server, LTSC builds,
-      // or sandboxed machines. Run upfront detection to give a useful error
-      // instead of hardcoding a path or failing cryptically on spawn.
-      const wingetCheck = await detectWinget();
-      if (!wingetCheck.installed) {
-        return { success: false, error: wingetCheck.error };
-      }
-      await runCommand(
-        'winget',
-        [
-          'install',
-          'Git.Git',
-          '--silent',
-          '--accept-package-agreements',
-          '--accept-source-agreements',
-        ],
-        { timeout: 300000 },
-      );
+      // Portable Git into the user's own folder — no admin prompt, no winget
+      // (see PORTABLE_GIT above for why).
+      await installPortableGit();
     } else if (process.platform === 'darwin') {
       // `xcode-select --install` pops a system GUI dialog asking the user to
       // Agree / Install. Installation is asynchronous and driven by the user
@@ -718,20 +887,12 @@ export async function installGit(): Promise<{ success: boolean; error?: string }
       log('INFO', 'prereq', `Git installed: ${check.version}`);
       return { success: true };
     } else if (process.platform === 'linux') {
-      // No portable Git tarball exists, and a real install needs root +
-      // distro detection (apt/dnf/pacman) — not something to do silently.
-      // Git ships preinstalled on most Linux distros, and installMissing()
-      // re-detects before calling this, so reaching here means Git is
-      // genuinely absent. Surface actionable per-distro guidance instead of
-      // a dead-end "unsupported platform" error.
-      return {
-        success: false,
-        error:
-          'Install Git with your distribution\'s package manager, then click Try Again:\n' +
-          '  Debian / Ubuntu:  sudo apt install git\n' +
-          '  Fedora / RHEL:    sudo dnf install git\n' +
-          '  Arch:             sudo pacman -S git',
-      };
+      // No portable Git exists for Linux, and installing it needs root. WHY
+      // pkexec (2026-10-02): it raises the desktop's own password window, so
+      // the user types a password instead of being sent to a terminal (stock
+      // Ubuntu 24.04 ships without git). The typed command stays as fallback.
+      const failure = await installGitLinux();
+      if (failure) return { success: false, error: failure };
     } else {
       return { success: false, error: `Unsupported platform for Git install: ${process.platform}` };
     }

@@ -38,6 +38,7 @@ import { VITE_DEV_PORT } from '../shared/ports';
 import { validateHandoffDraft, type DetachedHandoffDraft } from '../shared/handoff-draft';
 import { MOUNT_PROBE_JS } from './dev-mount-probe';
 import { log, rotateLog } from './logger';
+import { applyWindowsUserToolsToEnv } from './prerequisite-installer';
 import { isSmokeTest, reportWhenRendered } from './smoke-probe';
 import { installCrashDiagnostics, reportPreviousCrashes, wireWindowHangDiagnostics } from './crash-diagnostics';
 import { registerThemeProtocol } from './theme-protocol';
@@ -161,6 +162,10 @@ if (process.platform === 'win32') {
   if (!parts.includes(localBin)) {
     process.env.PATH = `${localBin}${path.delimiter}${process.env.PATH ?? ''}`;
   }
+  // WHY (2026-10-02): setup now unpacks Git and Node.js into the user's own
+  // folder instead of installing them system-wide, so no registry PATH names
+  // them. Put them back on PATH every launch, or sessions lose them.
+  applyWindowsUserToolsToEnv();
 } else if (process.platform === 'darwin' || process.platform === 'linux') {
   const home = os.homedir();
   const extraPaths = [
