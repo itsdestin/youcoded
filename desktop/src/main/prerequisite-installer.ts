@@ -857,6 +857,22 @@ let macGitWait: Promise<{ success: boolean; error?: string }> | null = null;
 const MAC_GIT_POLL_MS = 5000;
 const MAC_GIT_TIMEOUT_MS = 30 * 60 * 1000;
 
+/**
+ * macOS Git check that never pops Apple's dialog. WHY: without the Command Line Tools,
+ * /usr/bin/git is Apple's stub, and running it can open the "install developer tools" prompt —
+ * every 5 s while we wait. `xcode-select -p` only answers whether the tools are there (it fails
+ * with "Unable to get active developer directory" until they are, seen in the macOS VM
+ * 2026-10-02), so Git itself is run only once they are.
+ */
+async function detectGitQuietlyOnMac(): Promise<DetectionResult> {
+  try {
+    await runCommand('xcode-select', ['-p']);
+  } catch {
+    return { installed: false };
+  }
+  return detectGit();
+}
+
 /** Copy shown while Apple's Command Line Tools dialog is open (it can hide behind our window). */
 const MAC_GIT_WAIT_MESSAGE =
   "Waiting for Apple's installer — click Install in the window Apple opened (it may be behind this one).";
@@ -963,7 +979,7 @@ export async function installGit(
           } catch {
             log('INFO', 'prereq', 'xcode-select --install triggered dialog (or CLT already present)');
           }
-          const found = await pollUntilInstalled(detectGit, {
+          const found = await pollUntilInstalled(detectGitQuietlyOnMac, {
             intervalMs: MAC_GIT_POLL_MS,
             timeoutMs: MAC_GIT_TIMEOUT_MS,
           });
