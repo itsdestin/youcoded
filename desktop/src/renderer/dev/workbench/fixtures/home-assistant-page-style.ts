@@ -23,28 +23,87 @@ export const HOME_ASSISTANT_PAGE_CSS = `
   .chip:active { transform: scale(.98); }
   .chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .chip.sel { border-color: var(--accent); }
+  .chip { position: relative; overflow: hidden; min-height: 74px; }
+  .chip > * { position: relative; }
   .chip-ic { width: 32px; height: 32px; flex-shrink: 0; border-radius: 10px; display: grid; place-items: center; background: var(--well); color: var(--fg-muted); }
-  .chip.on .chip-ic { background: var(--accent); color: var(--on-accent); }
-  .chip.warn .chip-ic { background: rgb(230, 80, 60); color: #fff; }
+  /* Aura: a soft glow made of the chip's own colours (the colours of the
+     lights that are on, the app playing, the temperature, the problems). */
+  .st-aura .chip > .aura-bg { position: absolute; inset: 0; opacity: 0; transition: opacity 300ms ease;
+    background: radial-gradient(circle at 12% 18%, var(--a1, transparent), transparent 62%), radial-gradient(circle at 92% 90%, var(--a2, transparent), transparent 60%), radial-gradient(circle at 55% 130%, var(--a3, transparent), transparent 60%); }
+  .st-aura .chip > .aura-bg.lit { opacity: .32; }
+  .st-aura .chip-ic { background: transparent; border: 1px solid var(--edge); }
+  .st-aura .chip.on .chip-ic, .st-aura .chip.k-climate .chip-ic { color: var(--fg); border-color: var(--fg-muted); }
+  .st-aura .chip .eq { position: absolute; top: 12px; right: 12px; margin: 0; }
+  .pulse { position: absolute; top: 14px; right: 14px; width: 8px; height: 8px; border-radius: 50%; background: rgb(235, 70, 55); }
+  .pulse::after { content: ''; position: absolute; inset: -6px; border-radius: 50%; border: 2px solid rgb(235, 70, 55); opacity: 0; animation: pulse 1.6s steps(8, end) infinite; }
+  @keyframes pulse { 0% { transform: scale(.4); opacity: .9; } 100% { transform: scale(1.3); opacity: 0; } }
+  /* Meter: a big number, and a bar of segments under it. */
+  .st-meter .chip { flex-direction: column; align-items: stretch; gap: 10px; }
+  .m-top { display: flex; align-items: center; gap: 10px; }
+  .m-big { font-family: var(--font-mono); font-size: 26px; line-height: 1; color: var(--fg); }
+  .m-side { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+  .m-ic { color: var(--fg-muted); display: grid; }
+  .m-bar { display: flex; gap: 3px; height: 6px; }
+  .m-bar i { flex: 1; border-radius: 3px; background: var(--well); }
+  .m-bar i.sev-high { background: rgb(235, 70, 55); } .m-bar i.sev-mid { background: rgb(240, 165, 40); } .m-bar i.sev-low { background: rgb(200, 190, 120); } .m-bar i.sev-ok { background: rgb(60, 190, 110); }
+  .m-scale { position: relative; height: 6px; border-radius: 3px; background: linear-gradient(to right, hsl(215, 80%, 55%), hsl(160, 70%, 50%), hsl(55, 85%, 55%), hsl(15, 85%, 55%)); opacity: .9; }
+  .m-scale b { position: absolute; top: 50%; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; }
+  .m-scale b.out { background: var(--fg); border: 2px solid var(--panel); }
+  .m-scale b.in { background: transparent; border: 2px solid var(--fg); }
+  /* Live: a bigger icon that shows the state itself. */
+  .live-ic { width: 44px; height: 44px; flex-shrink: 0; border-radius: 12px; display: grid; place-items: center; background: var(--well); color: var(--fg-muted); position: relative; }
+  .live-ic.bulbs svg { width: 22px; height: 22px; }
+  .live-ic.bulbs.on { color: var(--c); box-shadow: inset 0 0 18px color-mix(in srgb, var(--c) 45%, transparent); }
+  .live-ic.bulbs.on .rays { position: absolute; inset: 4px; border-radius: 50%; border: 2px dotted color-mix(in srgb, var(--c) 70%, transparent); animation: spin 12s steps(24, end) infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .live-ic.waves.on { color: var(--c); }
+  .live-ic.waves .w1, .live-ic.waves .w2, .live-ic.waves .w3 { opacity: .25; }
+  .live-ic.waves.on .w1 { animation: wv 1.2s steps(3, end) infinite; }
+  .live-ic.waves.on .w2 { animation: wv 1.2s steps(3, end) infinite .4s; }
+  .live-ic.waves.on .w3 { animation: wv 1.2s steps(3, end) infinite .8s; }
+  @keyframes wv { 0% { opacity: .25; } 33% { opacity: 1; } 100% { opacity: .25; } }
+  .live-ic.thermo .tube { position: absolute; left: 19px; top: 7px; width: 6px; height: 22px; border-radius: 3px; background: var(--edge-dim); overflow: hidden; }
+  .live-ic.thermo .fill { position: absolute; left: 0; right: 0; bottom: 0; height: calc(var(--f) * 100%); background: var(--c); }
+  .live-ic.thermo .ball { position: absolute; left: 16px; top: 27px; width: 12px; height: 12px; border-radius: 50%; background: var(--c); }
+  .live-ic.warn.hot { color: #fff; background: rgb(235, 70, 55); }
+  .live-ic.warn.hot::after { content: ''; position: absolute; inset: -4px; border-radius: 15px; border: 2px solid rgb(235, 70, 55); opacity: 0; animation: pulse 1.6s steps(8, end) infinite; }
+  .live-ic.warn.mild { color: rgb(240, 165, 40); }
+  .live-ic.warn.ok { color: rgb(60, 190, 110); }
+  @media (prefers-reduced-motion: reduce) { .pulse::after, .live-ic.warn.hot::after, .live-ic.bulbs.on .rays, .live-ic.waves.on .w1, .live-ic.waves.on .w2, .live-ic.waves.on .w3 { animation: none; } .live-ic.waves.on path { opacity: 1; } }
   .chip-txt { display: flex; flex-direction: column; min-width: 0; }
   .chip-lbl { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-muted); }
   .chip-main { font-size: 14px; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .chip-sub { font-size: 11px; color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* A chip's page: its parts spaced like the main page's. */
+  #view:not(:empty) { display: flex; flex-direction: column; gap: 14px; }
   .vhead { display: flex; align-items: center; gap: 12px; }
   .vhead .yc-button { display: inline-flex; align-items: center; gap: 4px; }
   .vtitle { display: flex; flex-direction: column; }
   .vtitle h2 { font-size: 18px; font-weight: 600; }
-  .wx { display: flex; align-items: center; gap: 16px; max-width: 360px; }
-  .wx-temp { font-family: var(--font-mono); font-size: 40px; line-height: 1; }
-  .wx-cond { font-size: 15px; text-transform: capitalize; }
-  .probs { display: flex; flex-direction: column; gap: 10px; max-width: 760px; }
-  .prob { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 12px 14px; border-radius: var(--radius-md, 8px); border: 1px solid var(--edge-dim); background: var(--panel); border-left-width: 1px; }
-  .prob.high { border-color: rgb(230, 80, 60); }
-  .prob.mid { border-color: rgb(235, 160, 40); }
-  .prob-main { flex: 1; min-width: 220px; }
-  .prob-title { font-weight: 600; }
-  .prob-detail { font-size: 12px; color: var(--fg-2); margin-top: 2px; }
-  .prob-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+  /* The weather: a wide card painted like the sky outside. Its colours are
+     always deep enough for white text. */
+  .wx { position: relative; overflow: hidden; display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap; padding: 22px 26px; border-radius: var(--radius-lg, 12px); color: #fff; background: linear-gradient(120deg, var(--s1), var(--s2)); }
+  .wx::after { content: ''; position: absolute; inset: 0; background: radial-gradient(circle at 85% -20%, rgba(255, 255, 255, .22), transparent 55%); pointer-events: none; }
+  .wx-main { display: flex; align-items: center; gap: 18px; position: relative; }
+  .wx-ic { opacity: .9; display: grid; }
+  .wx-temp { font-family: var(--font-mono); font-size: 52px; line-height: 1; font-weight: 500; }
+  .wx-cond { font-size: 15px; opacity: .9; margin-top: 4px; }
+  .wx-cond::first-letter { text-transform: uppercase; }
+  .wx-facts { display: flex; gap: 24px; position: relative; }
+  .wx-facts div { display: flex; flex-direction: column; align-items: flex-end; }
+  .wx-facts span { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; opacity: .75; }
+  .wx-facts b { font-family: var(--font-mono); font-size: 22px; font-weight: 500; }
+  /* Problems: cards in a grid that fills the page, the kind of problem as a
+     coloured icon. */
+  .probs { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; align-items: stretch; }
+  .prob { display: flex; flex-direction: column; gap: 8px; padding: 14px; border-radius: var(--radius-lg, 12px); border: 1px solid var(--edge-dim); background: var(--panel); }
+  .prob-top { display: flex; align-items: center; gap: 10px; }
+  .prob-ic { width: 30px; height: 30px; flex-shrink: 0; border-radius: 9px; display: grid; place-items: center; background: var(--well); color: var(--fg-muted); }
+  .prob.high .prob-ic { background: rgb(235, 70, 55); color: #fff; }
+  .prob.mid .prob-ic { background: rgb(240, 165, 40); color: #1a1a1a; }
+  .prob-title { font-weight: 600; line-height: 1.3; }
+  .prob-detail { font-size: 12px; color: var(--fg-2); line-height: 1.45; flex: 1; }
+  .prob-acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
   .prob-acts a { text-decoration: none; }
   .scenes { position: relative; margin: 0 8px 8px; border-radius: var(--radius-md, 8px); border: 1px solid var(--edge-dim); background: var(--well); overflow: hidden; }
   .sc-head { appearance: none; font: inherit; font-size: 12px; color: var(--fg-2); width: 100%; height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border: 0; background: transparent; cursor: pointer; }
@@ -61,9 +120,11 @@ export const HOME_ASSISTANT_PAGE_CSS = `
   .scene:hover { border-color: var(--accent); }
   .scene:active { transform: scale(.95); }
   .scene.last { border-color: var(--accent); background: var(--panel); }
-  .settings { display: flex; flex-direction: column; gap: 2px; max-width: 420px; margin-left: auto; }
-  .set-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
-  .set-head h2 { font-size: 15px; font-weight: 600; }
+  /* Settings: a page of sections, side by side when there is room. */
+  .set-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; align-items: start; }
+  .set-sec { display: flex; flex-direction: column; gap: 2px; }
+  .set-sec h3 { font-size: 15px; font-weight: 600; }
+  .set-sec .yc-caption { margin-bottom: 8px; }
   .set-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; font-size: 13px; }
   .tog { width: 38px; height: 22px; border-radius: 9999px; border: 1px solid var(--edge); background: var(--well); padding: 2px; cursor: pointer; position: relative; flex-shrink: 0; transition: background-color 120ms ease; }
   .tog span { display: block; width: 16px; height: 16px; border-radius: 50%; background: var(--fg-muted); transition: transform 120ms ease, background-color 120ms ease; }

@@ -3699,12 +3699,14 @@ function createPagesMock(empty: boolean): PagesBridge {
   // Round 4: `?pagesHome=view-lights|view-media|view-climate|view-problems`
   // opens on that chip's page; `settings` opens the gear's panel.
   const chipView = homeView && homeView.startsWith('view-') ? homeView.slice(5) : null;
-  if (homeView === 'connected' || homeView === 'edit' || homeView === 'remote' || chipView || homeView === 'settings') {
+  // `chips-aura|chips-meter|chips-live`: the main page in that chip style.
+  const chipStyle = homeView && homeView.startsWith('chips-') ? homeView.slice(6) : null;
+  if (homeView === 'connected' || homeView === 'edit' || homeView === 'remote' || chipView || homeView === 'settings' || chipStyle) {
     pages = pages.map((p) => (p.id !== 'page-home' ? p : {
       ...p,
       connections: (p.connections ?? []).map((c) => (c.kind === 'device' ? { ...c, address: '100.99.234.114:8123', approved: true, savedKey: true } : c)),
       refresh: { at: new Date().toISOString(), failed: false },
-      data: chipView ? { view: chipView, scenesOpen: ['destins_room'] } : homeView === 'settings' ? { settingsOpen: true } : homeView === 'remote' ? { remote: ['remote.destins_room_tv_remote'] } : {
+      data: chipStyle ? { chipStyle, open: ['destins_room'] } : chipView ? { view: chipView, scenesOpen: ['destins_room'] } : homeView === 'settings' ? { settingsOpen: true } : homeView === 'remote' ? { remote: ['remote.destins_room_tv_remote'] } : {
         open: ['destins_room'], expanded: ['light.desk_backlight'],
         fav: ['light.living_room_lamp', 'climate.thermostat'],
         ...(homeView === 'edit' ? { editing: true } : {}),

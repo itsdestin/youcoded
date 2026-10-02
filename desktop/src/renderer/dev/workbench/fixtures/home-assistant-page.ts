@@ -95,7 +95,6 @@ function homeAssistantPageHtml(): string {
     <div><div class="yc-eyebrow">Home Assistant</div><h1>Home</h1></div>
     <div class="bar" id="bar"></div>
   </div>
-  <div id="settings"></div>
   <div id="chips"></div>
   <div id="banner" class="banner" hidden></div>
   <div id="view"></div>
@@ -141,11 +140,12 @@ function homeAssistantPageHtml(): string {
   var view = null, extras = { weather: null, low: [] }, health = { entries: [], flows: [], issues: [] }, healthAt = 0;
   var prefs = saved.prefs && typeof saved.prefs === 'object' ? saved.prefs : {};
   var scenesOpen = new Set(Array.isArray(saved.scenesOpen) ? saved.scenesOpen : []);
-  var settingsOpen = false, fixing = {};
+  var fixing = {};
   function pref(k) { return prefs[k] !== false; }
   // A review screen can open on a chip's page or with settings showing.
   if (typeof saved.view === 'string') view = saved.view;
-  if (saved.settingsOpen === true) settingsOpen = true;
+  if (saved.settingsOpen === true) view = 'settings';
+  if (typeof saved.chipStyle === 'string') prefs.chipStyle = saved.chipStyle;
   if (saved.editing) editing = true;
   var $ = function (id) { return document.getElementById(id); };
 
@@ -369,6 +369,13 @@ function homeAssistantPageHtml(): string {
     return !!(r && r.items.some(function (x) { return domain(x.id) === 'remote' && x.device === it.device; }));
   }
   var POWER = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v8"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/></svg>';
+  var PROB_ICON = {
+    key: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.3-9.3M17 6l3 3M14 9l2 2"/></svg>',
+    plug: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4"/></svg>',
+    off: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 2l20 20M8.5 16.5a5 5 0 0 1 7 0M2 8.8a15 15 0 0 1 4.2-2.6M10.7 5.1A15 15 0 0 1 22 8.8M5 12.9a10 10 0 0 1 5.2-2.7M16.8 12.9c.7.4 1.3.9 1.9 1.4M12 20h.01"/></svg>',
+    battery: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="7" width="17" height="10" rx="2"/><path d="M22 11v2M6 11v2"/></svg>',
+    wrench: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a4 4 0 0 0 5 5L22 14l-8 8-2.3-2.3a4 4 0 0 0-5-5L4 12l8-8z"/></svg>',
+  };
   var SPARK = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg>';
   var GEAR = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>';
   var THERMO = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 14.8V4a2 2 0 0 0-4 0v10.8a4 4 0 1 0 4 0z"/></svg>';
@@ -802,6 +809,21 @@ function homeAssistantPageHtml(): string {
     var w = extras.weather;
     var probs = problems();
     var nLit = lit.length, nRooms = Object.keys(litRooms).length;
+    // What the chip styles draw with (round 4 chip notes: "visual effects
+    // or status animations based on colors/playing status/temp").
+    var litCols = lit.map(function (x) { return colourOf(x.it); });
+    var liveL = lights.filter(function (x) { return !gone(x.it); });
+    var firstPlay = playing[0] ? playing[0].it : null;
+    var playApp = firstPlay ? (isTv(firstPlay) ? appOf((remoteFor(firstPlay, playing[0].room) || {}).activity) : sourceOf(firstPlay)) : null;
+    var temp = w && w.temp != null ? w.temp : th && th.it.cur != null ? th.it.cur : null;
+    var sevs = { high: 0, mid: 0, low: 0 }; probs.forEach(function (p) { sevs[p.sev]++; });
+    var extra = {
+      lights: { big: nLit ? String(nLit) : 'Off', unit: nLit ? 'on' : '', cols: litCols, segs: liveL.map(function (x) { return isOn(x.it) ? colourOf(x.it) : null; }) },
+      media: { big: playing.length + tvsOn.length ? String(playing.length + tvsOn.length) : 'Quiet', unit: playing.length + tvsOn.length ? 'on' : '', playing: playing.length > 0, appBg: playApp ? playApp.bg : null,
+        segs: media.filter(function (x) { return !gone(x.it); }).map(function (x) { return x.it.state === 'playing' ? 'var(--accent)' : (isTv(x.it) && isOn(remoteFor(x.it, x.room) || x.it)) ? 'color-mix(in srgb, var(--accent) 55%, transparent)' : null; }) },
+      climate: { big: temp != null ? Math.round(temp) + '°' : '—', unit: w ? 'outside' : 'inside', temp: temp, inside: th && th.it.cur != null ? th.it.cur : null, mode: th ? th.it.state : null },
+      problems: { big: probs.length ? String(probs.length) : '✓', unit: probs.length ? 'to fix' : 'all good', sevs: sevs },
+    };
     return [
       { id: 'lights', label: 'Lights', icon: BULB, on: nLit > 0,
         main: nLit ? nLit + ' on' + (nRooms > 1 ? ' in ' + nRooms + ' rooms' : '') : 'All off', sub: nr ? nr + ' not responding' : '' },
@@ -813,18 +835,81 @@ function homeAssistantPageHtml(): string {
         sub: th ? (th.it.cur != null ? th.it.cur + '° inside' : '') + (th.it.state && th.it.state !== 'off' && th.it.target != null ? ' · ' + (MODE_NAMES[th.it.state] || th.it.state) + ' to ' + th.it.target + '°' : th.it.state === 'off' ? ' · off' : '') : '' },
       { id: 'problems', label: 'Problems', icon: ALERT, on: probs.length > 0, warn: probs.some(function (p) { return p.sev === 'high'; }),
         main: probs.length ? probs.length + ' to fix' : 'All good', sub: probs.length ? probs[0].title : '' },
-    ].filter(function (c) { return pref('chip-' + c.id); });
+    ].map(function (c) { c.x = extra[c.id]; return c; }).filter(function (c) { return pref('chip-' + c.id); });
+  }
+  // A temperature as a colour: deep blue when cold, through teal and
+  // yellow, to orange-red when hot (°F; °C is converted first).
+  function tempColour(t) {
+    if (t == null) return 'var(--fg-muted)';
+    var f = extras.weather && /C/.test(extras.weather.unit || '') ? t * 9 / 5 + 32 : t;
+    var x = Math.max(0, Math.min(1, (f - 30) / 70));
+    return 'hsl(' + Math.round(215 - x * 200) + ', 80%, ' + Math.round(55 + Math.sin(x * Math.PI) * 5) + '%)';
   }
   var CONDITIONS = { 'clear-night': 'clear', sunny: 'sunny', cloudy: 'cloudy', partlycloudy: 'partly cloudy', rainy: 'rain', pouring: 'heavy rain', snowy: 'snow', 'snowy-rainy': 'sleet', fog: 'fog', windy: 'windy', 'windy-variant': 'windy', lightning: 'storms', 'lightning-rainy': 'storms', hail: 'hail', exceptional: '' };
   function condName(c) { return CONDITIONS[c] != null ? CONDITIONS[c] : String(c || '').replace(/-/g, ' '); }
+  // Three chip styles to choose between (round 4 chip notes: "give me a
+  // few more interesting variants"). Aura: a soft glow in the colours of
+  // what the chip stands for. Meter: a big number over a bar of segments.
+  // Live: a larger icon that moves with the state.
+  function chipStyle() { return prefs.chipStyle === 'meter' || prefs.chipStyle === 'live' ? prefs.chipStyle : 'aura'; }
+  function chipText(c) {
+    return '<span class="chip-txt"><span class="chip-lbl">' + c.label + '</span><span class="chip-main">' + esc(c.main) + '</span>' + (c.sub ? '<span class="chip-sub">' + esc(c.sub) + '</span>' : '') + '</span>';
+  }
+  function auraVars(c) {
+    var x = c.x || {}, a = [];
+    if (c.id === 'lights') a = x.cols.slice(0, 3);
+    if (c.id === 'media' && c.on) a = [x.appBg || 'var(--accent)', 'var(--accent)'];
+    if (c.id === 'climate') a = [tempColour(x.temp), tempColour(x.inside != null ? x.inside : x.temp)];
+    if (c.id === 'problems') a = x.sevs.high ? ['rgb(235, 70, 55)', 'rgb(235, 110, 60)'] : (x.sevs.mid || x.sevs.low) ? ['rgb(240, 165, 40)'] : ['rgb(60, 190, 110)'];
+    while (a.length && a.length < 3) a.push(a[a.length - 1]);
+    return a.length ? '--a1:' + a[0] + ';--a2:' + a[1] + ';--a3:' + a[2] : '';
+  }
+  function eqBars(on) { return '<span class="eq' + (on ? ' on' : '') + '" aria-hidden="true"><i></i><i></i><i></i></span>'; }
+  function chipAura(c) {
+    var v = auraVars(c);
+    var lit = !!v && (c.on || c.id === 'climate' || c.id === 'problems');
+    var badge = c.id === 'media' && c.x.playing ? eqBars(true) : c.id === 'problems' && c.x.sevs.high ? '<span class="pulse" aria-hidden="true"></span>' : '';
+    return '<span class="aura-bg' + (lit ? ' lit' : '') + '" style="' + v + '"></span><span class="chip-ic">' + c.icon + '</span>' + chipText(c) + badge;
+  }
+  function chipMeter(c) {
+    var x = c.x || {}, bar = '';
+    if (c.id === 'lights' || c.id === 'media') {
+      var segs = x.segs.length ? x.segs : [null];
+      bar = '<span class="m-bar">' + segs.map(function (col) { return '<i' + (col ? ' style="background:' + col + '"' : '') + '></i>'; }).join('') + '</span>';
+    } else if (c.id === 'climate') {
+      var at = function (t) { var f = extras.weather && /C/.test(extras.weather.unit || '') ? t * 9 / 5 + 32 : t; return Math.max(0, Math.min(100, (f - 30) / 70 * 100)); };
+      bar = '<span class="m-scale">' + (x.temp != null ? '<b class="out" style="left:' + at(x.temp) + '%"></b>' : '') + (x.inside != null ? '<b class="in" style="left:' + at(x.inside) + '%"></b>' : '') + '</span>';
+    } else {
+      var list = [];
+      ['high', 'mid', 'low'].forEach(function (k) { for (var i = 0; i < x.sevs[k]; i++) list.push(k); });
+      bar = '<span class="m-bar">' + (list.length ? list.map(function (k) { return '<i class="sev-' + k + '"></i>'; }).join('') : '<i class="sev-ok"></i>') + '</span>';
+    }
+    return '<span class="m-top"><span class="m-big">' + esc(x.big) + '</span><span class="m-side"><span class="chip-lbl">' + c.label + (x.unit ? ' ' + esc(x.unit) : '') + '</span>' +
+      '<span class="chip-sub">' + esc(c.id === 'lights' || c.id === 'problems' ? (c.sub || c.main) : c.id === 'climate' ? (c.sub || c.main) : c.main) + '</span></span><span class="m-ic">' + c.icon + '</span></span>' + bar;
+  }
+  function chipLive(c) {
+    var x = c.x || {}, ic = '';
+    if (c.id === 'lights') {
+      var col = x.cols[0] || 'var(--fg-muted)';
+      ic = '<span class="live-ic bulbs' + (c.on ? ' on' : '') + '" style="--c:' + col + '">' + BULB + '<span class="rays"></span></span>';
+    } else if (c.id === 'media') {
+      ic = '<span class="live-ic waves' + (x.playing ? ' on' : '') + '" style="--c:' + (x.appBg || 'var(--accent)') + '"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4z"/><path class="w1" d="M15.5 9.5a3.5 3.5 0 0 1 0 5"/><path class="w2" d="M18.5 7a7 7 0 0 1 0 10"/><path class="w3" d="M21.5 4.5a10.5 10.5 0 0 1 0 15"/></svg></span>';
+    } else if (c.id === 'climate') {
+      var f = x.temp == null ? 0 : Math.max(0.08, Math.min(1, ((extras.weather && /C/.test(extras.weather.unit || '') ? x.temp * 9 / 5 + 32 : x.temp) - 30) / 70));
+      ic = '<span class="live-ic thermo" style="--c:' + tempColour(x.temp) + ';--f:' + f.toFixed(2) + '"><span class="tube"><span class="fill"></span></span><span class="ball"></span></span>';
+    } else {
+      ic = '<span class="live-ic warn' + (x.sevs.high ? ' hot' : (x.sevs.mid || x.sevs.low) ? ' mild' : ' ok') + '">' + (c.on ? ALERT : '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>') + '</span>';
+    }
+    return ic + chipText(c);
+  }
   function chipsHtml() {
     if (!rooms) return '';
     var cs = chipData();
     if (!cs.length) return '';
-    return '<div class="chips" role="group" aria-label="Your home at a glance">' + cs.map(function (c) {
-      return '<button class="chip' + (c.on ? ' on' : '') + (c.warn ? ' warn' : '') + (view === c.id ? ' sel' : '') + '" data-view="' + c.id + '" aria-pressed="' + (view === c.id) + '">' +
-        '<span class="chip-ic">' + c.icon + '</span><span class="chip-txt"><span class="chip-lbl">' + c.label + '</span><span class="chip-main">' + esc(c.main) + '</span>' +
-        (c.sub ? '<span class="chip-sub">' + esc(c.sub) + '</span>' : '') + '</span></button>';
+    var st = chipStyle();
+    return '<div class="chips st-' + st + '" role="group" aria-label="Your home at a glance">' + cs.map(function (c) {
+      return '<button class="chip k-' + c.id + (c.on ? ' on' : '') + (c.warn ? ' warn' : '') + (view === c.id ? ' sel' : '') + '" data-view="' + c.id + '" aria-pressed="' + (view === c.id) + '" aria-label="' + esc(c.label + ': ' + c.main + (c.sub ? ', ' + c.sub : '')) + '">' +
+        (st === 'meter' ? chipMeter(c) : st === 'live' ? chipLive(c) : chipAura(c)) + '</button>';
     }).join('') + '</div>';
   }
 
@@ -833,13 +918,20 @@ function homeAssistantPageHtml(): string {
     ['chip-lights', 'Lights chip'], ['chip-media', 'Media chip'], ['chip-climate', 'Climate chip'], ['chip-problems', 'Problems chip'],
     ['scenes', 'Hue scenes in each room'], ['favourites', 'Favourites row'], ['cameras', 'Camera pictures'],
   ];
-  function settingsHtml() {
-    if (!settingsOpen) return '';
-    return '<div class="settings yc-card" role="group" aria-label="Page settings"><div class="set-head"><h2>Page settings</h2><button class="yc-button yc-button--sm yc-button--ghost" data-act="settings">Close</button></div>' +
-      PREF_ROWS.map(function (r) {
-        var on = pref(r[0]);
-        return '<label class="set-row"><span>' + r[1] + '</span><button class="tog" role="switch" aria-checked="' + on + '" data-pref="' + r[0] + '"><span></span></button></label>';
-      }).join('') + '</div>';
+  // Settings are a page of their own (round 4 settings note: "should
+  // probably be a full page menu"), grouped into sections.
+  var PREF_SECTIONS = [
+    { title: 'At a glance', note: 'The chips across the top of the page.', rows: PREF_ROWS.slice(0, 4) },
+    { title: 'In each room', note: 'What each room card shows.', rows: PREF_ROWS.slice(4) },
+  ];
+  function settingsPageHtml() {
+    return '<div class="set-grid">' + PREF_SECTIONS.map(function (sec) {
+      return '<section class="yc-card set-sec"><h3>' + sec.title + '</h3><p class="yc-caption">' + sec.note + '</p>' +
+        sec.rows.map(function (r) {
+          var on = pref(r[0]);
+          return '<label class="set-row"><span>' + r[1] + '</span><button class="tog" role="switch" aria-checked="' + on + '" data-pref="' + r[0] + '"><span></span></button></label>';
+        }).join('') + '</section>';
+    }).join('') + '</div>';
   }
 
   function barHtml() {
@@ -854,7 +946,7 @@ function homeAssistantPageHtml(): string {
       : '<button class="yc-button yc-button--sm" data-act="house-off"' + (lit.length && !editing ? '' : ' disabled') + '>Everything off</button>';
     var count = hidden.size && !editing ? '<span class="yc-caption">' + hidden.size + ' hidden</span>' : '';
     return count + off + '<button class="yc-button yc-button--sm' + (editing ? ' yc-button--primary' : '') + '" data-act="edit" aria-pressed="' + editing + '">' + (editing ? 'Done' : 'Edit') + '</button>' +
-      '<button class="yc-button yc-button--sm yc-button--icon gear" data-act="settings" aria-pressed="' + settingsOpen + '" aria-label="Page settings" title="Page settings">' + GEAR + '</button>';
+      '<button class="yc-button yc-button--sm yc-button--icon gear" data-view="settings" aria-pressed="' + (view === 'settings') + '" aria-label="Page settings" title="Page settings">' + GEAR + '</button>';
   }
 
   function roomHtml(room, roomIds, forceOpen) {
@@ -889,13 +981,17 @@ function homeAssistantPageHtml(): string {
   // until you go back.
   function viewHtml() {
     var c = chipData().filter(function (x) { return x.id === view; })[0];
+    if (view === 'settings') c = { label: 'Page settings', main: 'What this page shows' };
     var head = '<div class="vhead"><button class="yc-button yc-button--sm yc-button--ghost" data-view="' + view + '">' + BACK + 'Home</button>' +
       '<div class="vtitle"><h2>' + (c ? c.label : '') + '</h2>' + (c ? '<span class="yc-caption">' + esc(c.main + (c.sub ? ' · ' + c.sub : '')) + '</span>' : '') + '</div></div>';
     var body = '';
+    if (view === 'settings') return head + settingsPageHtml();
     if (view === 'problems') {
       var ps = problems();
+      // Problems are cards in a grid that fills the page (round 4 note:
+      // the narrow left-hand list "looks proportionally weird").
       body = ps.length ? '<div class="probs">' + ps.map(function (p) {
-        return '<div class="prob ' + p.sev + '"><div class="prob-main"><div class="prob-title">' + esc(p.title) + '</div><div class="prob-detail">' + esc(p.detail) + '</div></div>' +
+        return '<div class="prob ' + p.sev + '"><div class="prob-top"><span class="prob-ic">' + (PROB_ICON[p.icon] || ALERT) + '</span><div class="prob-title">' + esc(p.title) + '</div></div><div class="prob-detail">' + esc(p.detail) + '</div>' +
           '<div class="prob-acts">' + p.actions.map(function (a) {
             return a.reload ? '<button class="yc-button yc-button--sm' + (a === p.actions[0] ? ' yc-button--primary' : '') + '" data-reload="' + esc(a.reload) + '"' + (fixing[a.reload] ? ' disabled' : '') + '>' + (fixing[a.reload] ? 'Working\u2026' : esc(a.label)) + '</button>'
               : '<a class="yc-button yc-button--sm' + (a === p.actions[0] ? ' yc-button--primary' : '') + '" href="' + esc(base + a.href) + '" target="_blank" rel="noopener">' + esc(a.label) + '</a>';
@@ -912,17 +1008,36 @@ function homeAssistantPageHtml(): string {
     }
     return head + body;
   }
+  // Outside, as a wide card coloured like the sky it describes (round 4
+  // note: the weather card "looks a bit odd … we can make it prettier").
+  var SKY = {
+    'clear-night': ['#0b1433', '#23306b'], sunny: ['#1f6fd1', '#f2a33a'], partlycloudy: ['#3a6ea8', '#9db4cc'], cloudy: ['#4a5563', '#7b8794'],
+    rainy: ['#24324a', '#4b6584'], pouring: ['#1c2638', '#3d5170'], snowy: ['#5b7493', '#c9d6e3'], 'snowy-rainy': ['#3f5570', '#93a8bf'], fog: ['#5c6470', '#a2a9b2'],
+    windy: ['#2f5d7c', '#8fb2c9'], 'windy-variant': ['#2f5d7c', '#8fb2c9'], lightning: ['#1d1a33', '#5a4a8a'], 'lightning-rainy': ['#1d1a33', '#4a4f7a'], hail: ['#33435a', '#8a9bb0'],
+  };
+  function skyIcon(c) {
+    var p = c === 'clear-night' ? '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>'
+      : c === 'sunny' ? '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>'
+      : /rain|pouring|lightning/.test(c) ? '<path d="M20 15.5A4.5 4.5 0 0 0 17.5 7a6 6 0 0 0-11.4 1.6A4 4 0 0 0 6 16.5h13"/><path d="M8 19l-1 2M12 19l-1 2M16 19l-1 2"/>'
+      : /snow/.test(c) ? '<path d="M20 15.5A4.5 4.5 0 0 0 17.5 7a6 6 0 0 0-11.4 1.6A4 4 0 0 0 6 16.5h13"/><path d="M8 20h.01M12 21h.01M16 20h.01"/>'
+      : '<path d="M20 16.5A4.5 4.5 0 0 0 17.5 8a6 6 0 0 0-11.4 1.6A4 4 0 0 0 6 17.5h13.5"/>';
+    return '<svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + p + '</svg>';
+  }
   function weatherHtml() {
     var w = extras.weather;
     if (!w) return '';
-    return '<div class="yc-card wx"><div class="wx-temp">' + (w.temp != null ? Math.round(w.temp) + '°' : '—') + '</div><div><div class="wx-cond">' + esc(condName(w.state) || w.state) + '</div>' +
-      '<div class="yc-caption">Outside' + (w.humidity != null ? ' · ' + Math.round(w.humidity) + '% humidity' : '') + '</div></div></div>';
+    var sky = SKY[w.state] || ['#2b3a52', '#5a6f8c'];
+    var th = allItems().filter(function (x) { return domain(x.it.id) === 'climate' && !gone(x.it) && x.it.cur != null; })[0];
+    return '<div class="wx" style="--s1:' + sky[0] + ';--s2:' + sky[1] + '"><div class="wx-main"><span class="wx-ic">' + skyIcon(w.state) + '</span>' +
+      '<div><div class="wx-temp">' + (w.temp != null ? Math.round(w.temp) + '°' : '—') + '</div><div class="wx-cond">' + esc(condName(w.state) || w.state) + ' outside</div></div></div>' +
+      '<div class="wx-facts">' + (w.humidity != null ? '<div><span>Humidity</span><b>' + Math.round(w.humidity) + '%</b></div>' : '') +
+      (th ? '<div><span>Inside</span><b>' + esc(th.it.cur) + '°</b></div>' : '') + '</div></div>';
   }
 
   function render() {
     $('root').classList.toggle('editing', editing);
     put('bar', barHtml());
-    put('settings', settingsHtml());
+
     put('chips', chipsHtml());
     if (!rooms) return;
     $('root').classList.toggle('in-view', !!view);
@@ -996,7 +1111,7 @@ function homeAssistantPageHtml(): string {
     var act = t.getAttribute('data-act');
     if (act) { onAct(act, t.getAttribute('data-id'), t); return; }
     var vw = t.getAttribute('data-view');
-    if (vw) { view = view === vw ? null : vw; settingsOpen = false; render(); window.scrollTo(0, 0); if (vw === 'problems') loadHealth(); return; }
+    if (vw) { view = view === vw ? null : vw; render(); window.scrollTo(0, 0); if (vw === 'problems') loadHealth(); return; }
     var pf = t.getAttribute('data-pref');
     if (pf) { prefs[pf] = !pref(pf); persist({ prefs: prefs }); render(); return; }
     var scn = t.getAttribute('data-scenes');
@@ -1111,7 +1226,6 @@ function homeAssistantPageHtml(): string {
       return;
     }
     if (act === 'house-off') { confirmOff = true; render(); return; }
-    if (act === 'settings') { settingsOpen = !settingsOpen; render(); return; }
     if (act === 'house-off-no') { confirmOff = false; render(); return; }
     if (act === 'house-off-yes') {
       confirmOff = false;
