@@ -1,7 +1,7 @@
 # Neutral fixture documents for the workbench's Office screens (no personal content).
 # Usage: <venv with python-docx, openpyxl, python-pptx>/python make-office-fixtures.py <out dir>
 # Writes the five files src/renderer/dev/workbench/fixtures/office/ holds. The first three are
-# the design stage's samples (docs/active/prototypes/2026-09-27-office-trial/make-samples.py in
+# the design stage's samples (docs/archive/prototypes/2026-09-27-office-trial/make-samples.py in
 # the workspace), unchanged, so the screens show what Destin reviewed.
 import sys
 from docx import Document

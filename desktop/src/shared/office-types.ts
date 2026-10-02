@@ -1,7 +1,7 @@
 // Office — shared shapes (v2, Task 5 of the build plan, 2026-09-28).
-// Investigation: youcoded-dev/docs/active/investigations/2026-09-24-office-suite.md
-// Decisions: youcoded-dev/docs/active/design/2026-09-27-office/*.answers.json
-// Build design: youcoded-dev/docs/active/specs/2026-09-28-office-build-design.md
+// Investigation: youcoded-dev/docs/archive/investigations/2026-09-24-office-suite.md
+// Decisions: youcoded-dev/docs/archive/design/2026-09-27-office/*.answers.json
+// Build design: youcoded-dev/docs/archive/specs/2026-09-28-office-build-design.md
 //
 // Office is the Euro-Office editors (an AGPL add-on) inside a built-in page. Each open
 // document gets its own sealed origin, office://<token>, and the editor's requests reach
