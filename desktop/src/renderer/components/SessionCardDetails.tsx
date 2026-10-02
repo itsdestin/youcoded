@@ -7,7 +7,7 @@
 // cards that agree today and drift the first time one is touched.
 import type { PastSession } from '../../shared/types';
 import type { TagRecord } from '../../shared/tags';
-import { TagChip, MoreTagsChip } from './tags/TagChip';
+import { TagChip, TagStack } from './tags/TagChip';
 import { ModelIcon } from './model/ModelPicker';
 import { resolveModelBrand } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
@@ -69,9 +69,9 @@ export function SessionCardTags({ session: s, tagsById, className = '' }: {
   return (
     <div className={`flex items-center gap-1 mt-0.5 flex-wrap ${className}`}>
       {(() => {
-        // TRIAL pick-menus-6: two tags, then "+N".
+        // Three or more tags: one stacked-icons button that rolls out on hover (pick-menus-6#PM6-1).
         const ts = (s.tags ?? []).map((id) => tagsById.get(id)).filter((t): t is TagRecord => !!t);
-        return <>{ts.slice(0, 2).map((t) => <TagChip key={t.id} tag={t} />)}<MoreTagsChip names={ts.slice(2).map((t) => t.label)} /></>;
+        return ts.length >= 3 ? <TagStack tags={ts} /> : <>{ts.map((t) => <TagChip key={t.id} tag={t} />)}</>;
       })()}
       {s.note && <span className="text-4xs text-fg-muted" title={s.note}>📝 note</span>}
     </div>

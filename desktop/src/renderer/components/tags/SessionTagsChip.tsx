@@ -10,11 +10,11 @@ import { useSessionMeta } from '../../hooks/useSessionMeta';
 import type { TagRecord } from '../../../shared/tags';
 import { TagNoteEditor } from './TagNoteEditor';
 import { PinIcon } from './PinIcon';
-import { TagChip, MoreTagsChip } from './TagChip';
+import { TagChip, MoreTagsChip, TagIconStack } from './TagChip';
 import { TagGlyph } from './glyphs';
 
 // TRIAL: the status bar element's look for the pick-menus-6 deck.
-const SB_TAG = 'pills' as 'dots' | 'pills' | 'icon-count';
+const SB_TAG = 'stack' as 'dots' | 'pills' | 'icon-count' | 'stack';
 import { TagManagerPopup } from './TagManagerPopup';
 import { Dialog, Tooltip } from '../ui';
 import { useScreenOpen } from '../../shoot-mode';
@@ -62,7 +62,11 @@ export function SessionTagsChip({ sessionId }: { sessionId: string | null }) {
           // TRIAL pick-menus-6: the status bar element in the new tag look.
           <span className="flex items-center gap-1 overflow-hidden">
             {priority && <PinIcon className="w-3 h-3 text-fg-2 shrink-0" />}
-            {SB_TAG === 'pills' ? (
+            {SB_TAG === 'stack' ? (
+              // pick-menus-6#PM6-2: "pin icon, tag icon, note icon, if applicable. tags
+              // should look like stacked tags of the relevant colors for that session".
+              appliedTags.length > 0 && <TagIconStack tags={appliedTags} />
+            ) : SB_TAG === 'pills' ? (
               <>
                 {appliedTags.slice(0, 1).map((t) => <TagChip key={t.id} tag={t} />)}
                 <MoreTagsChip names={appliedTags.slice(1).map((t) => t.label)} />

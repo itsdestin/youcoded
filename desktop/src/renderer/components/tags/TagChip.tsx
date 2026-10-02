@@ -1,4 +1,5 @@
 // src/renderer/components/tags/TagChip.tsx
+import { useState } from 'react';
 import type { TagRecord } from '../../../shared/tags';
 import { TagGlyph } from './glyphs';
 
@@ -15,7 +16,7 @@ import { TagGlyph } from './glyphs';
 // they all set --fg) gets a fitted shade. Fill and border are a step stronger
 // than the status pill's, for contrast against the card behind.
 // TRIAL: which tag look the pick-menus-5 deck shows.
-const TAG_LOOK = 'outline-icon-neutral' as 'box' | 'dot' | 'pill' | 'outline' | 'outline-icon' | 'outline-icon-neutral';
+const TAG_LOOK = 'status' as 'box' | 'dot' | 'pill' | 'outline' | 'outline-icon' | 'outline-icon-neutral' | 'status';
 
 export function TagChip({ tag, onRemove, className = '' }: {
   tag: Pick<TagRecord, 'label' | 'color'>;
@@ -28,6 +29,18 @@ export function TagChip({ tag, onRemove, className = '' }: {
     const remove = onRemove && (
       <button onClick={(e) => { e.stopPropagation(); onRemove(); }} className="opacity-60 hover:opacity-100 leading-none" aria-label={`Remove ${tag.label}`}>×</button>
     );
+    if (TAG_LOOK === 'status') {
+      // The session status pill's shape (SessionStrip StatusPill: rounded, light tint,
+      // 4xs text), with a tag icon in the tag's colour where the status dot sits
+      // (pick-menus-6#PM6-1: "tag icon in something more like the working chip").
+      return (
+        <span className={`shrink-0 inline-flex items-center gap-1 pl-1 pr-1.5 py-[1px] rounded-full border text-4xs leading-none text-fg-2 ${className}`}
+          style={{ backgroundColor: `color-mix(in srgb, ${c} 15%, transparent)`, borderColor: `color-mix(in srgb, ${c} 30%, transparent)` }}>
+          <span className="flex shrink-0" style={{ color: c }}><TagGlyph className="w-2.5 h-2.5" /></span>
+          {tag.label}{remove}
+        </span>
+      );
+    }
     if (TAG_LOOK === 'dot') {
       return (
         <span className={`inline-flex items-center gap-1 text-3xs leading-none text-fg-2 ${className}`}>
@@ -76,6 +89,68 @@ export function MoreTagsChip({ names, className = '' }: { names: string[]; class
   return (
     <span title={names.join(', ')} className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-3xs leading-none border border-edge text-fg-muted ${className}`}>
       +{names.length}
+    </span>
+  );
+}
+
+// TRIAL (pick-menus-7): outlined or filled icons in the stack.
+const STACK_FILLED = true as boolean;
+
+/** A solid tag with a ring in the panel colour, so overlapped tags stay apart. */
+function FilledTag({ className = '' }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" aria-hidden>
+      <g transform="translate(24,0) scale(-1,1)">
+        <path d="M3 12.5V4.5A1.5 1.5 0 014.5 3h8l8.5 8.5a1.5 1.5 0 010 2.1l-6.9 6.9a1.5 1.5 0 01-2.1 0L3 12.5z"
+          fill="currentColor" stroke="var(--panel)" strokeWidth={2.5} strokeLinejoin="round" />
+        <circle cx="7.75" cy="7.75" r="1.6" fill="var(--panel)" />
+      </g>
+    </svg>
+  );
+}
+
+const tagColour = (color: string) => `color-mix(in srgb, var(--${color}) 75%, var(--fg))`;
+
+/** The session's tag icons, stacked and overlapping, each in its tag's colour
+ *  (pick-menus-6#PM6-2: "stacked tags of the relevant colors for that session"). */
+export function TagIconStack({ tags, className = '' }: { tags: Pick<TagRecord, 'label' | 'color'>[]; className?: string }) {
+  return (
+    <span className={`inline-flex items-center ${className}`} aria-hidden>
+      {tags.map((t, i) => (
+        <span key={i} className={`flex ${i ? '-ml-1.5' : ''}`} style={{ color: tagColour(t.color), zIndex: tags.length - i }}>
+          {STACK_FILLED ? <FilledTag className="w-3.5 h-3.5" /> : <TagGlyph className="w-3 h-3" />}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/** Three or more tags: one small button of stacked tag icons that rolls out into the
+ *  full tag pills while pointed at (or focused, or tapped on touch). WHY (pick-menus-6
+ *  #PM6-1): "3+ tags should collapse into a single hover sensitive button that has the
+ *  different colored tags visible stacked together, then rolled out on hover." */
+export function TagStack({ tags }: { tags: Pick<TagRecord, 'label' | 'color'>[] }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      aria-label={`${tags.length} tags: ${tags.map((t) => t.label).join(', ')}`}
+      aria-expanded={open}
+      onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)} onBlur={() => setOpen(false)}
+      onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
+      className="shrink-0 inline-flex items-center rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+    >
+      {open ? (
+        <span className="inline-flex items-center gap-1">
+          {tags.map((t, i) => <TagChip key={i} tag={t} />)}
+        </span>
+      ) : (
+        <span className="inline-flex items-center gap-1 pl-1 pr-1.5 py-[1px] rounded-full border border-edge-dim bg-inset text-4xs leading-none text-fg-2">
+          <TagIconStack tags={tags} />{tags.length}
+        </span>
+      )}
     </span>
   );
 }

@@ -24,7 +24,7 @@ import { useTagRegistry } from '../hooks/useTagRegistry';
 import { useSessionMeta } from '../hooks/useSessionMeta';
 import { PinIcon } from './tags/PinIcon';
 import { NotePageGlyph } from './tags/glyphs';
-import { TagChip, MoreTagsChip } from './tags/TagChip';
+import { TagChip, TagStack } from './tags/TagChip';
 import type { TagRecord } from '../../shared/tags';
 import {
   chooseTearOffModel, dragCarriesSession, readSessionDrag, writeSessionDrag,
@@ -257,7 +257,6 @@ function FolderMark({ className = '' }: { className?: string }) {
 // review 2, 2026-08-28: "tags should not be dots, but full chips with spelled
 // names"). Priority is a reserved flag rather than a tag and leads the row, the
 // way it leads the status-bar chip.
-const MAX_CHIPS = 2; // TRIAL pick-menus-6: collapse sooner
 
 /** The pin beside a pinned session's status pill (pick-menus-4#PM4-3: "by the status,
  *  but use the pinned icon from the pinned pill"). Pinned = the stored `priority` flag. */
@@ -276,16 +275,13 @@ function SessionTagMarks({ sessionId, byId }: { sessionId: string; byId: Map<str
   // Pinned is not a tag any more (pick-menus-2#PM2-3): PinMark shows it by the status.
   const marks: { label: string; color: string }[] = applied.map((t) => ({ label: t.label, color: t.color as string }));
   if (marks.length === 0 && !meta.note) return null;
-  // Names cost width, so past three the rest collapse into a count that names
-  // them on hover — a row must never push the status pill off its own line.
-  const shown = marks.slice(0, MAX_CHIPS);
-  const rest = marks.slice(MAX_CHIPS);
   return (
     <span className="shrink-0 flex items-center gap-1">
-      {shown.map((m, i) => (
-        <TagChip key={i} tag={{ label: m.label, color: m.color as TagRecord['color'] }} />
-      ))}
-      <MoreTagsChip names={rest.map((m) => m.label)} />
+      {/* Three or more tags fold into one stacked-icons button that rolls out on
+          hover (pick-menus-6#PM6-1); one or two show as they are. */}
+      {marks.length >= 3
+        ? <TagStack tags={marks.map((m) => ({ label: m.label, color: m.color as TagRecord['color'] }))} />
+        : marks.map((m, i) => <TagChip key={i} tag={{ label: m.label, color: m.color as TagRecord['color'] }} />)}
       {meta.note && (
         <Tooltip text="This session has a note">
         <span className="flex items-center">
