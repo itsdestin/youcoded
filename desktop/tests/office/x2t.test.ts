@@ -5,12 +5,17 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { inflateSync } from 'node:zlib';
-import { convert, exportFormatFor, exportParams, FORMAT, formatFor, killRunningConverters, pdfFontData, printParams, X2tError } from '../../src/main/office/x2t';
+import http from 'node:http';
+import { type AddressInfo } from 'node:net';
+import JSZip from 'jszip';
+import { convert, exportFormatFor, exportParams, FORMAT, formatFor, killRunningConverters, networkContainmentAvailable, pdfFontData, printParams, X2tError } from '../../src/main/office/x2t';
 
 const ROOT = fileURLToPath(new URL('../../office-addon/', import.meta.url));
 const MEMO = fileURLToPath(new URL('./fixtures/memo.docx', import.meta.url));
 // 201 rows (a city with an umlaut on every other row), made with LibreOffice so its strings are shared.
 const LEDGER = fileURLToPath(new URL('./fixtures/ledger.xlsx', import.meta.url));
+// A one-paragraph docx with a single embedded PNG (word/media/image1.png).
+const PICTURE = fileURLToPath(new URL('./fixtures/picture.docx', import.meta.url));
 const HAS_ADDON = existsSync(path.join(ROOT, 'manifest.json'));
 if (!HAS_ADDON) console.warn('[x2t.test] skipping real-x2t tests: office-addon/manifest.json is missing (run scripts/fetch-office.mjs)');
 
@@ -211,6 +216,123 @@ describe.skipIf(!HAS_ADDON)('convert with the bundled x2t', () => {
     await convert(ROOT, MEMO, bin, FORMAT.bin, dir);
     expect((await stat(bin)).size).toBeGreaterThan(0);
   });
+
+  // ── Defensive hardening (2026-10-01): x2t must not read outside its job, nor reach the network ──
+
+  // A normal picture still round-trips: the containment copies the session's media into the job and
+  // the embedded picture back out. WHY this guards the new code: the folder nesting relocates the
+  // media x2t reads/writes, so a regression there would silently drop every picture.
+  it('keeps a normal embedded picture through a save', async () => {
+    const bin = path.join(dir, 'Editor.bin');
+    await convert(ROOT, PICTURE, bin, FORMAT.bin, dir);
+    const back = path.join(dir, 'back.docx');
+    await convert(ROOT, bin, back, FORMAT.docx, dir);
+    const zip = await JSZip.loadAsync(await readFile(back));
+    const media = Object.keys(zip.files).filter((n) => n.startsWith('word/media/'));
+    expect(media.length).toBeGreaterThan(0);
+  }, X2T_WARMUP_BUDGET_MS);
+
+  // (a) A "../" picture name in the save data must not pull a file from outside the job into the
+  // saved document. The editor form stores the picture name as length-prefixed UTF-16LE, so a
+  // same-length swap ("image1.png" → "../big.png", both 10 chars) plants a traversal without
+  // disturbing any length field. Under the old code x2t resolved <session>/media/../big.png = the
+  // planted file and embedded it; the nesting now resolves it inside an empty private folder.
+  it('does not embed a file a "../" picture name points outside the job at', async () => {
+    const seed = path.join(dir, 'Editor.bin');
+    await convert(ROOT, PICTURE, seed, FORMAT.bin, dir);
+    let buf = await readFile(seed);
+    const fromName = Buffer.from('image1.png', 'utf16le');
+    const toName = Buffer.from('../big.png', 'utf16le'); // same 10 UTF-16LE chars
+    expect(toName.length).toBe(fromName.length);
+    const at = buf.indexOf(fromName);
+    expect(at).toBeGreaterThan(-1);
+    toName.copy(buf, at);
+    // A session folder whose media/ is empty; the traversal "../big.png" would reach `s/big.png`
+    // one level up — a VALID png (so without containment x2t really embeds it; an invalid file it
+    // would drop for unrelated reasons and hide the escape).
+    const s = await mkdtemp(path.join(dir, 'session-'));
+    await mkdir(path.join(s, 'media'));
+    const secretPng = await (await JSZip.loadAsync(await readFile(PICTURE))).file('word/media/image1.png')!.async('nodebuffer');
+    await writeFile(path.join(s, 'big.png'), secretPng);
+    await writeFile(path.join(s, 'Editor.bin'), buf);
+    const out = path.join(dir, 'escaped.docx');
+    await convert(ROOT, path.join(s, 'Editor.bin'), out, FORMAT.docx, dir);
+    // The save succeeds, and because the only picture pointed OUTSIDE the job it is dropped: the
+    // saved document embeds no media at all (uncontained, x2t would have embedded s/big.png here).
+    expect((await stat(out)).size).toBeGreaterThan(1024);
+    const zip = await JSZip.loadAsync(await readFile(out));
+    const media = Object.keys(zip.files).filter((n) => n.startsWith('word/media/') && !zip.files[n].dir);
+    expect(media).toEqual([]);
+    buf = Buffer.alloc(0);
+  }, X2T_WARMUP_BUDGET_MS);
+
+  // (b) A picture that is a web address must not be fetched during a translation; the test server
+  // sees no request and the document still opens. x2t ignores proxy vars, so the real block is the
+  // network namespace — only asserted where this platform provides it.
+  it('does not fetch a web-address picture, and still produces output', async () => {
+    const hits: string[] = [];
+    const server = http.createServer((req, res) => {
+      hits.push(req.url ?? '');
+      res.writeHead(200, { 'content-type': 'image/png' });
+      res.end(Buffer.from('\x89PNG\r\n\x1a\n', 'latin1'));
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const port = (server.address() as AddressInfo).port;
+    try {
+      // A docx whose single picture is an EXTERNAL relationship to the loopback URL (a legitimate
+      // docx feature; x2t resolves it by downloading during translation).
+      const url = `http://127.0.0.1:${port}/remote-pic.png`;
+      const z = await JSZip.loadAsync(await readFile(PICTURE));
+      const rels = await z.file('word/_rels/document.xml.rels')!.async('string');
+      z.file('word/_rels/document.xml.rels', rels.replace('Target="media/image1.png"/>', `Target="${url}" TargetMode="External"/>`));
+      const doc = await z.file('word/document.xml')!.async('string');
+      z.file('word/document.xml', doc.replace('<a:blip r:embed="rId9"/>', '<a:blip r:link="rId9"/>'));
+      const ext = path.join(dir, 'external.docx');
+      await writeFile(ext, await z.generateAsync({ type: 'nodebuffer' }));
+      const bin = path.join(dir, 'Editor.bin');
+      await convert(ROOT, ext, bin, FORMAT.bin, dir);
+      // The translation always succeeds, with or without a network block.
+      expect((await stat(bin)).size).toBeGreaterThan(0);
+      // Where the platform can contain the network, the server must have seen nothing.
+      if (await networkContainmentAvailable()) {
+        expect(hits).toEqual([]);
+      }
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  }, X2T_WARMUP_BUDGET_MS);
+});
+
+describe('convert folder-containment guard', () => {
+  // The guard runs before x2t, so it needs no bundled converter: a "../" chain deeper than the
+  // nest absorbs is refused outright. WHY it exists on top of the nest: the nest is a fixed depth,
+  // and a long enough chain could still climb out of it.
+  it('refuses save data whose "../" depth exceeds the contained nest', async () => {
+    const base = await mkdtemp(path.join(tmpdir(), 'x2t-guard-'));
+    try {
+      const from = path.join(base, 'Editor.bin');
+      // 60 "../" sequences, in the editor form's UTF-16LE encoding — far deeper than the nest.
+      await writeFile(from, Buffer.from('../'.repeat(60), 'utf16le'));
+      const err = await convert('/no/such/addon', from, path.join(base, 'out.docx'), FORMAT.docx, base).catch((e) => e);
+      expect(err).toBeInstanceOf(X2tError);
+      expect((err as X2tError).code).toBe('escape');
+    } finally {
+      await rm(base, { recursive: true, force: true, maxRetries: 3 });
+    }
+  });
+
+  it('allows save data with no traversal at all (the ordinary case)', async () => {
+    const base = await mkdtemp(path.join(tmpdir(), 'x2t-guard-'));
+    try {
+      const from = path.join(base, 'Editor.bin');
+      await writeFile(from, Buffer.from('image1.png', 'utf16le'));
+      // No bundled x2t here, so it fails later than the guard — but NOT with the guard's 'escape'.
+      const err = await convert('/no/such/addon', from, path.join(base, 'out.docx'), FORMAT.docx, base).catch((e) => e);
+      expect((err as X2tError | undefined)?.code).not.toBe('escape');
+    } finally {
+      await rm(base, { recursive: true, force: true, maxRetries: 3 });
+    }
+  });
 });
 
 describe('convert when its temp base is gone', () => {
@@ -230,9 +352,12 @@ describe('convert when its temp base is gone', () => {
 // shell script); it lets the failure shapes be tested without the real x2t.
 describe.skipIf(process.platform === 'win32')('convert failure shapes with a stand-in converter', () => {
   let root: string;
+  let input: string; // a real input file: convert copies the input into its contained job folder
   beforeEach(async () => {
     root = await mkdtemp(path.join(tmpdir(), 'x2t-fake-'));
     await mkdir(path.join(root, 'converter'));
+    input = path.join(root, 'in.docx');
+    await writeFile(input, 'x');
   });
   afterEach(async () => {
     await rm(root, { recursive: true, force: true, maxRetries: 3 });
@@ -245,7 +370,7 @@ describe.skipIf(process.platform === 'win32')('convert failure shapes with a sta
 
   it('reports output overflowing its buffer as its own failure, not a timeout', async () => {
     await fakeX2t('head -c 70000000 /dev/zero');
-    const err = await convert(root, '/in.docx', path.join(root, 'out.bin'), FORMAT.bin, root).catch((e) => e);
+    const err = await convert(root, input, path.join(root, 'out.bin'), FORMAT.bin, root).catch((e) => e);
     expect(err).toBeInstanceOf(X2tError);
     expect((err as X2tError).code).toBe('ERR_CHILD_PROCESS_STDIO_MAXBUFFER');
   });
@@ -254,7 +379,7 @@ describe.skipIf(process.platform === 'win32')('convert failure shapes with a sta
     const started = path.join(root, 'started');
     await fakeX2t(`touch '${started}'; exec sleep 30`);
     const stop = new AbortController();
-    const pending = convert(root, '/in.docx', path.join(root, 'out.bin'), FORMAT.bin, root, stop.signal).catch((e) => e);
+    const pending = convert(root, input, path.join(root, 'out.bin'), FORMAT.bin, root, stop.signal).catch((e) => e);
     // Wait until it is really running (positive signal) before stopping it.
     await vi.waitFor(() => expect(existsSync(started)).toBe(true));
     stop.abort();
@@ -275,20 +400,31 @@ describe.skipIf(process.platform === 'win32')('convert failure shapes with a sta
   });
 
   // Add-on v0.1.37: a presentation that took one of PowerPoint's standard themes points at the
-  // theme's pictures as "theme<N>/media/…", which x2t finds only under the task's theme folder.
-  // Measured 2026-10-01: without it a saved presentation lost every theme background picture.
-  it("names the add-on's slide theme folder in every task, so a standard theme's pictures are saved", async () => {
+  // theme's pictures as "theme<N>/media/…", which x2t finds under the task's theme folder.
+  // Folder containment (2026-10-01): that folder is now a hardlinked copy INSIDE the job (under the
+  // instance temp base), never the add-on in place, so a crafted theme-relative "../" name cannot
+  // escape it. The fake x2t writes to the m_sFileTo the task names, proving the job's own paths are
+  // what x2t is handed.
+  it('hands x2t a theme folder contained inside the job, and writes the output x2t is told to', async () => {
     const task = path.join(root, 'task.xml');
     const out = path.join(root, 'out.pptx');
-    await fakeX2t(`cp "$1" '${task}'; printf x > '${out}'`);
-    await convert(root, path.join(root, 'Editor.bin'), out, FORMAT.pptx, root);
+    // Parse m_sFileTo out of the task file and write there, as the real x2t would.
+    await fakeX2t(`cp "$1" '${task}'; to=$(sed -n 's:.*<m_sFileTo>\\(.*\\)</m_sFileTo>.*:\\1:p' "$1"); printf x > "$to"`);
+    await convert(root, input, out, FORMAT.pptx, root);
     const xml = await readFile(task, 'utf8');
-    expect(xml).toContain(`<m_sThemeDir>${path.join(root, 'editors', 'sdkjs', 'slide', 'themes')}</m_sThemeDir>`);
+    const theme = xml.match(/<m_sThemeDir>(.*)<\/m_sThemeDir>/)?.[1] ?? '';
+    // Contained: under a job- folder inside the instance temp base, ending in the nested work dir —
+    // never the add-on's theme folder in place.
+    expect(theme.startsWith(path.join(root, 'job-'))).toBe(true);
+    expect(theme.endsWith(`${path.sep}w${path.sep}themes`)).toBe(true);
+    expect(theme).not.toBe(path.join(root, 'editors', 'sdkjs', 'slide', 'themes'));
+    // The delivered file is the one the caller asked for, copied out of the nest.
+    expect((await stat(out)).size).toBeGreaterThan(0);
   });
 
   it('stops a running converter at quit and reports it as stopped', async () => {
     await fakeX2t('echo started; exec sleep 30');
-    const pending = convert(root, '/in.docx', path.join(root, 'out.bin'), FORMAT.bin, root).catch((e) => e);
+    const pending = convert(root, input, path.join(root, 'out.bin'), FORMAT.bin, root).catch((e) => e);
     // Wait for the child to exist (positive signal) before stopping it.
     await vi.waitFor(() => expect(killRunningConverters()).toBeGreaterThan(0));
     const err = await pending;

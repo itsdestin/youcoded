@@ -60,7 +60,12 @@
     // machine already have the AMD libraries the ROCm engine build loads?
     // Part of glibc itself on every Linux distribution, and its ABSENCE is a
     // handled case there (the check falls back to /opt/rocm/lib).
-    "ldconfig"
+    "ldconfig",
+    // util-linux's namespace tool, office/x2t.ts: runs the bundled document converter
+    // in an empty network namespace so it cannot fetch a web-address picture during a
+    // save. A POSIX/Linux utility, never an npm package, and its ABSENCE is a handled
+    // case (netnsSupported() probes it once and falls back when the kernel forbids it).
+    "unshare"
   ],
 
   "ignoreDependencies": [
