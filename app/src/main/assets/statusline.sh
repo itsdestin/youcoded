@@ -267,7 +267,12 @@ if [[ -n "$USAGE_LINE" ]]; then
     printf '%s\n' "$USAGE_LINE"
 fi
 
-# --- Line 5: Toolkit version + announcement ---
+# --- Line 5: Announcement ---
+# WHY announcement-only (2026-10-02): this line used to lead with the toolkit's
+# version from toolkit-state/update-status.json. Only the archived youcoded-core
+# toolkit ever wrote that file, so on old installs it froze on "Update Available
+# | Run /update" — a command that no longer exists — and on new installs the
+# announcement never showed at all, because it was printed inside that branch.
 CACHE_FILE="$HOME/.claude/.announcement-cache.json"
 ANNOUNCEMENT_FRAGMENT=""
 if [[ -f "$CACHE_FILE" ]] && command -v node &>/dev/null; then
@@ -281,30 +286,13 @@ try {
     const d = new Date();
     const today = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
     if (cache.expires && cache.expires < today) process.exit(0);
-    process.stdout.write('| \x1b[1;33m\u2605 ' + cache.message + '\x1b[0m');
+    process.stdout.write('\x1b[1;33m\u2605 ' + cache.message + '\x1b[0m');
 } catch (_) {}
 " "$CACHE_FILE" 2>/dev/null) || ANNOUNCEMENT_FRAGMENT=""
 fi
 
-UPDATE_FILE="$HOME/.claude/toolkit-state/update-status.json"
-if [[ -f "$UPDATE_FILE" ]] && command -v node &>/dev/null; then
-    TOOLKIT_INFO=$(node -e "
-        const fs = require('fs');
-        try {
-            const s = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
-            const ver = s.current || 'unknown';
-            console.log(ver + '\t' + (s.update_available ? '1' : '0'));
-        } catch { console.log('unknown\t0'); }
-    " "$UPDATE_FILE" 2>/dev/null) || TOOLKIT_INFO=""
-    if [[ -n "$TOOLKIT_INFO" ]]; then
-        IFS=$'\t' read -r TK_VER TK_UPD <<< "$TOOLKIT_INFO"
-        if [[ "$TK_UPD" == "1" ]]; then
-            printf '%b' "${YELLOW}YouCoded v${TK_VER} (Update Available)${RESET}  | ${DIM}Run /update${RESET}  "
-        else
-            printf '%b' "${DIM}YouCoded v${TK_VER}${RESET}  "
-        fi
-        # Announcement fragment contains raw ANSI bytes from node — use %s
-        # (literal string) not %b (escape-interpreting) to avoid reinterpretation
-        printf '%s\n' "$ANNOUNCEMENT_FRAGMENT"
-    fi
+if [[ -n "$ANNOUNCEMENT_FRAGMENT" ]]; then
+    # Announcement fragment contains raw ANSI bytes from node — use %s
+    # (literal string) not %b (escape-interpreting) to avoid reinterpretation
+    printf '%s\n' "$ANNOUNCEMENT_FRAGMENT"
 fi

@@ -2957,8 +2957,8 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // return a real shape; the catch-all can only ever be right about SHAPE, not
   // MEANING. Shape from shared/first-run-types.ts.
   // `?firstRun=<STEP>` renders the onboarding wizard at that step (e.g.
-  // DETECT_PREREQUISITES, INSTALL_PREREQUISITES, ENABLE_DEVELOPER_MODE,
-  // AUTHENTICATE, LAUNCH_WIZARD). WHY: the wizard is the first thing a new user
+  // DETECT_PREREQUISITES, INSTALL_PREREQUISITES, AUTHENTICATE,
+  // LAUNCH_WIZARD). WHY: the wizard is the first thing a new user
   // sees and, until 2026-08-25, the only surface no review rig could reach —
   // the mock always answered COMPLETE, so App routed straight past it.
   const firstRunStep = (typeof location !== 'undefined' && new URLSearchParams(location.search).get('firstRun')) || 'COMPLETE';
@@ -2992,6 +2992,25 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   const firstRunParams = typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams();
   const localFitTight = firstRunParams.get('localFit') === 'tight';
   const localDownloadPin = firstRunParams.get('localDownload');
+  // `?prereqs=installing|done` puts a new user's setup checklist on screen —
+  // Git installing, or Git done at the sign-in step. Node.js and Claude Code
+  // are skipped rows, as the real setup leaves them for anyone not already
+  // signed in to Claude Code (Destin, 2026-10-02). Without it the checklist is
+  // empty, so no review shot showed what setup installs.
+  const prereqsPin = firstRunParams.get('prereqs');
+  const setupChecklist = prereqsPin === 'installing' || prereqsPin === 'done'
+    ? {
+        prerequisites: [
+          { name: 'node', displayName: 'Node.js', status: 'skipped' },
+          prereqsPin === 'installing'
+            ? { name: 'git', displayName: 'Git', status: 'installing' }
+            : { name: 'git', displayName: 'Git', status: 'installed', version: 'git version 2.56.0' },
+          { name: 'claude', displayName: 'Claude Code', status: 'skipped' },
+          { name: 'auth', displayName: 'Sign in', status: 'waiting' },
+        ],
+        overallProgress: prereqsPin === 'installing' ? 0 : 45,
+      }
+    : null;
   const firstRun = {
     // The suggestion is one of the curated cards (the same two `models.curated`
     // serves), so setup can show it with the Local models row — round 3 review
@@ -3010,16 +3029,15 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     resumeLocalDownload: async () => true,
     getState: async () => ({
       currentStep: firstRunStep,
-      prerequisites: firstRunParams.get('claudeInstall') === 'installing'
+      prerequisites: setupChecklist?.prerequisites ?? (firstRunParams.get('claudeInstall') === 'installing'
         ? [{ name: 'claude', displayName: 'Claude Code', status: 'installing' }]
-        : [],
-      overallProgress: 100,
+        : []),
+      overallProgress: setupChecklist?.overallProgress ?? 100,
       statusMessage: '',
       // `?authMode=chatgpt|oauth|apikey` pins the sign-in screen's in-flight
       // state (design 2026-09-04: the ChatGPT round-trip has its own waiting copy).
       authMode: (typeof location !== 'undefined' && new URLSearchParams(location.search).get('authMode')) || 'none',
       authComplete: true,
-      needsDevMode: false,
     }),
   };
 

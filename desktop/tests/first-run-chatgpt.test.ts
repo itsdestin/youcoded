@@ -52,7 +52,7 @@ vi.mock('../src/main/prerequisite-installer', () => ({
   detectNode: vi.fn(), detectGit: vi.fn(), detectClaude: vi.fn(), detectAuth: vi.fn(),
   installNode: vi.fn(), installGit: vi.fn(), installClaude: vi.fn(),
   startOAuthLogin: vi.fn(), pollAuthStatus: vi.fn(), submitApiKey: vi.fn(),
-  checkDiskSpace: vi.fn(), checkWindowsDevMode: vi.fn(), enableWindowsDevMode: vi.fn(),
+  checkDiskSpace: vi.fn(),
 }));
 
 import {
@@ -386,7 +386,6 @@ function viewState(overrides: Partial<FirstRunState>): FirstRunState {
     statusMessage: 'Sign in to continue',
     authMode: 'none',
     authComplete: false,
-    needsDevMode: false,
     ...overrides,
   };
 }
@@ -400,7 +399,7 @@ function stubClaude(opts: {
   const firstRun = {
     getState: vi.fn(async () => opts.state),
     onStateChanged: vi.fn(() => () => {}),
-    startAuth: vi.fn(), submitApiKey: vi.fn(), retry: vi.fn(), devModeDone: vi.fn(),
+    startAuth: vi.fn(), submitApiKey: vi.fn(), retry: vi.fn(),
   };
   const catalog = vi.fn(opts.catalog ?? (async () => []));
   (window as any).claude = {
