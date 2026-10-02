@@ -236,7 +236,7 @@ export class SessionRecords {
     // queue length and the HOST's permission mode are read through the live source (they are not events), so a change to them is only
     // seen when something asks; they are in the key so that when a push IS built they count, and R5-4 can read them from the summary.
     const live = this.safeLive(sessionId);
-    return `${f.working ? 1 : 0}|${rec.asks.size + rec.passwordAsks.size}|${reported ?? this.attentionOf(rec)}|${f.hasHistory ? 1 : 0}|${live?.permissionMode ?? f.permissionMode ?? ''}|${f.model ?? ''}|${live?.queued?.length ?? 0}`;
+    return `${f.working ? 1 : 0}|${rec.asks.size + rec.passwordAsks.size}|${reported ?? this.attentionOf(rec)}|${f.hasHistory ? 1 : 0}|${rec.started ? 1 : 0}|${live?.permissionMode ?? f.permissionMode ?? ''}|${f.model ?? ''}|${live?.queued?.length ?? 0}`;
   }
 
   /** What the summary shows for attention: another writer's state wins; the computer's "stuck" shows when nothing else is wrong. */
@@ -650,7 +650,7 @@ export class SessionRecords {
     const rec = this.records.get(sessionId)!;
     return {
       working: f.working, awaitingCount: f.awaitingCount, attention: reported ?? this.attentionOf(rec),
-      hasHistory: f.hasHistory, queuedCount: f.queued.length, permissionMode: f.permissionMode, model: f.model,
+      hasHistory: f.hasHistory, queuedCount: f.queued.length, started: rec.started, permissionMode: f.permissionMode, model: f.model,
     };
   }
 

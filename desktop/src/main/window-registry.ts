@@ -129,6 +129,7 @@ export class WindowRegistry extends EventEmitter {
    */
   endSession(sessionId: string): void {
     this.subscriptions.delete(sessionId);
+    this.ptySubscriptions.delete(sessionId);
     this.releaseSession(sessionId);
   }
 
@@ -159,6 +160,8 @@ export class WindowRegistry extends EventEmitter {
 
   /** Remove a subscription. Idempotent. Emits 'changed' on mutation. */
   unsubscribe(sessionId: string, windowId: number): void {
+    const ptySet = this.ptySubscriptions.get(sessionId);
+    if (ptySet) { ptySet.delete(windowId); if (ptySet.size === 0) this.ptySubscriptions.delete(sessionId); }
     const set = this.subscriptions.get(sessionId);
     if (!set) return;
     const removed = set.delete(windowId);
@@ -174,6 +177,29 @@ export class WindowRegistry extends EventEmitter {
     const out = new Set<number>();
     if (set) for (const id of set) if (!this.sockets.has(id)) out.add(id);
     return out;
+  }
+
+  /**
+   * Phones that asked for this session's TERMINAL only (`session:open` with `ptyOnly`, one-core sync-fix2). WHY separate: a phone's terminal used to wait for the
+   * whole open (chat page read, long reply) before any byte could reach it, so after a reconnect or a switch the terminal view stayed dead until "loading" finished.
+   * Terminal frames carry their own epoch and offset, so a phone can take them before its chat is filled; chat events cannot, so this set never widens
+   * `getSocketWatchers` (the delivery filter for everything else).
+   */
+  private readonly ptySubscriptions = new Map<string, Set<number>>();
+
+  subscribePty(sessionId: string, socketId: number): void {
+    if (!this.sockets.has(socketId)) return;
+    let set = this.ptySubscriptions.get(sessionId);
+    if (!set) { set = new Set(); this.ptySubscriptions.set(sessionId, set); }
+    set.add(socketId);
+  }
+
+  /** Phones to send a session's terminal frames to: those watching it, plus those that asked for the terminal alone. */
+  getPtyWatchers(sessionId: string): number[] {
+    const out = new Set<number>(this.getSocketWatchers(sessionId));
+    const only = this.ptySubscriptions.get(sessionId);
+    if (only) for (const id of only) if (this.sockets.has(id)) out.add(id);
+    return [...out];
   }
 
   /** Phones watching this session: the delivery filter for every session-scoped push and for terminal output (R5-3). */
@@ -221,6 +247,7 @@ export class WindowRegistry extends EventEmitter {
       set.delete(id);
       if (set.size === 0) this.subscriptions.delete(sid);
     }
+    for (const [sid, set] of this.ptySubscriptions) { set.delete(id); if (set.size === 0) this.ptySubscriptions.delete(sid); }
   }
 
   isSocket(id: number): boolean { return this.sockets.has(id); }

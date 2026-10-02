@@ -632,6 +632,42 @@ describe('remote-shim — terminal backlog', () => {
       expect(seen).toEqual(['<RESET>', 'screen so far', ' + live']);
     });
 
+    // THE TERMINAL BEFORE THE CHAT (one-core sync-fix2). Destin: "terminal view doesn't work until loading finishes". The terminal used to ride the same answer as the
+    // chat page and every live frame was dropped until that answer landed. Now a small `ptyOnly` ask is answered first.
+    it('draws the terminal from the early ptyOnly answer and lets live frames through BEFORE the chat open has answered; the open then does not redraw it', async () => {
+      const seen: string[] = [];
+      (window as any).claude.on.ptyResetForSession('s1', () => seen.push('<RESET>'));
+      (window as any).claude.on.ptyOutputForSession('s1', (d: string) => seen.push(d));
+      const opening = (window as any).claude.session.open({ sessionId: 's1' });
+      const asks = ws.sentOf('session:open');
+      const early = asks.find((m: any) => m.payload.ptyOnly === true);
+      const full = asks.find((m: any) => !m.payload.ptyOnly);
+      expect(early).toBeTruthy(); expect(full).toBeTruthy();
+      // The small answer arrives first: the screen draws, and the frames after it are accepted although the chat has not been filled.
+      ws.receive({ type: 'session:open:response', id: early.id, payload: { ok: true, ptyOnly: true, epoch: 'E', pty: { epoch: 'E', offset: 0, data: 'screen so far', reset: true } } });
+      await Promise.resolve(); await Promise.resolve();
+      expect(seen).toEqual(['<RESET>', 'screen so far']);
+      output('s1', ' + live', 13, 'E');
+      expect(seen).toEqual(['<RESET>', 'screen so far', ' + live']);
+      // The chat open answers later with its own copy of the terminal (cut from where this page was when it asked): drawn only past what is already there, never as a reset.
+      ws.receive({ type: 'session:open:response', id: full.id, payload: { ok: true, epoch: 'E', headSeq: 0, resume: 'page', before: [], page: null, after: [], facts: { working: false, attention: 'ok' }, pty: { epoch: 'E', offset: 0, data: 'screen so far + live', reset: true } } });
+      await opening;
+      expect(seen).toEqual(['<RESET>', 'screen so far', ' + live']);
+    });
+    it('without the early answer (lost, late or an older host) the open still draws the terminal, as before', async () => {
+      const seen: string[] = [];
+      (window as any).claude.on.ptyOutputForSession('s1', (d: string) => seen.push(d));
+      const opening = (window as any).claude.session.open({ sessionId: 's1' });
+      const full = ws.sentOf('session:open').find((m: any) => !m.payload.ptyOnly);
+      ws.receive({ type: 'session:open:response', id: full.id, payload: { ok: true, epoch: 'E', headSeq: 0, resume: 'page', before: [], page: null, after: [], facts: { working: false, attention: 'ok' }, pty: { epoch: 'E', offset: 0, data: 'from the open', reset: false } } });
+      await opening;
+      expect(seen).toEqual(['from the open']);
+      // A late early answer after that changes nothing.
+      const early = ws.sentOf('session:open').find((m: any) => m.payload.ptyOnly === true);
+      ws.receive({ type: 'session:open:response', id: early.id, payload: { ok: true, ptyOnly: true, epoch: 'E', pty: { epoch: 'E', offset: 0, data: 'from the open', reset: false } } });
+      await Promise.resolve();
+      expect(seen).toEqual(['from the open']);
+    });
     it('a frame that overlaps what an answer already carried is drawn only past it (no doubled text)', async () => {
       const seen: string[] = [];
       (window as any).claude.on.ptyOutputForSession('s1', (d: string) => seen.push(d));

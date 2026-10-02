@@ -18,6 +18,12 @@ export interface OpenRequest {
   projectSlug?: string;
   /** Refresh: ignore `have` and send a fresh page. */
   fresh?: boolean;
+  /**
+   * Phone only (one-core sync-fix2): answer with the terminal alone, at once. No page is read, nothing is held, and the chat is NOT subscribed; the phone
+   * is only added to this session's terminal stream (frames carry epoch + offset, so they can be drawn before the chat is filled). The ordinary open
+   * follows and fills the chat.
+   */
+  ptyOnly?: boolean;
 }
 
 interface OpenFacts {
@@ -40,3 +46,8 @@ export type OpenReply =
   }
   | { ok: false; error: string; gone?: boolean };
 
+
+/** The answer to a `ptyOnly` ask: the terminal's cut and nothing else (it rides the same channel, so a caller that asked for it reads it as this). */
+export type PtyOnlyReply =
+  | { ok: true; ptyOnly: true; epoch: string; pty?: { epoch: string; offset: number; data: string; reset: boolean } }
+  | { ok: false; error: string; gone?: boolean };

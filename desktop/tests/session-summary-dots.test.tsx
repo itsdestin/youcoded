@@ -129,7 +129,7 @@ describe('the dot a phone draws from the summary equals the dot the computer dra
 });
 
 describe('a conversation that starts working is no longer viewed (so it turns blue when it finishes elsewhere)', () => {
-  const base = { awaitingCount: 0, attention: 'ok', hasHistory: true, queuedCount: 0, permissionMode: null, model: null };
+  const base = { awaitingCount: 0, attention: 'ok', hasHistory: true, queuedCount: 0, started: true, permissionMode: null, model: null };
   it('drops only the working ones from the viewed set', () => {
     const viewed = new Set(['a', 'b']);
     expect([...viewedAfterSummaries(viewed, { a: { ...base, working: true }, b: { ...base, working: false } })]).toEqual(['b']);

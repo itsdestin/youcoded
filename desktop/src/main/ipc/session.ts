@@ -31,7 +31,7 @@ import { readTranscriptMeta } from '../transcript-utils';
 import type { Publish } from '../publish';
 import type { SessionLiveFacts } from '../session-live';
 import type { SessionScreens } from '../session-screens';
-import { openSession, type NativeLive } from '../session-open';
+import { openSession, openPtyOnly, type NativeLive } from '../session-open';
 import { isSendId, SEND_OUTCOMES_MAX_IDS } from '../../shared/send-outcome-types';
 import { readTranscriptPage } from '../transcript-page';
 import { menuAnswerLock } from '../menu-answer-lock';
@@ -336,6 +336,13 @@ const sessionEntries: MainChannelDef[] = [
         ? (ctx.windowId !== undefined ? { key: `w${ctx.windowId}`, id: ctx.windowId, socket: false } : null)
         : (ctx.audienceId !== undefined ? { key: `s${ctx.audienceId}`, id: ctx.audienceId, socket: true } : null);
       const sessionId = typeof req?.sessionId === 'string' ? req.sessionId : '';
+      // The terminal alone (one-core sync-fix2): a phone's terminal no longer waits for the chat page. Joined to the terminal stream and cut in the same synchronous step,
+      // so the frames that follow continue exactly from the answer. No hold, no chat subscription: the ordinary open still follows and fills the chat.
+      if (req?.ptyOnly === true && audience?.socket && sessionId) {
+        const reply = openPtyOnly({ knows: (id) => !!o.sessionManager.getSession(id), records: rt.records }, req);
+        if (reply.ok) o.windowRegistry?.subscribePty(sessionId, audience.id);
+        return reply as unknown as Awaited<ReturnType<typeof openSession>>;   // same channel, its own small shape (PtyOnlyReply)
+      }
       if (audience && sessionId) {
         rt.fills.begin(audience.key, sessionId, { reset: true });
         // A phone gets a session's pushes once it has opened it: the same "this audience member wants this session" fact a

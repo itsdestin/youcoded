@@ -22,6 +22,10 @@ export interface SessionSummary {
   /** The conversation has at least one message (the blue "unseen" dot needs something to have been unseen). */
   hasHistory: boolean;
   queuedCount: number;
+  /** Claude Code has run its first hook, so its startup dialogs are over (record `started`). WHY here (one-core sync-fix2): a phone that missed the moment it
+   *  started (it was away, or not watching that conversation) used to read "initializing" forever, with a "check terminal view" button, for a session that is
+   *  fine on the computer. The summary reaches every phone for every session, on connect and on every change. */
+  started: boolean;
   permissionMode: string | null;
   model: string | null;
 }

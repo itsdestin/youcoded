@@ -261,6 +261,9 @@ const ptyOffsets = new Map<string, { epoch: string; units: number }>();
  *  page holds a position that is older than the frame (a reconnect) or none at all (a first connect), and drawing the frame
  *  would leave a hole. The answer carries the bytes up to the instant it was cut, and every frame after it is contiguous. */
 const openedHere = new Set<string>();
+/** Sessions whose terminal was drawn from a `ptyOnly` answer on THIS connection (one-core sync-fix2). Their live terminal frames are drawn too: the answer's
+ *  cut and the frames after it are contiguous (the host joins the stream and cuts in one synchronous step), so the terminal works before the chat fill ends. */
+const ptyEarly = new Set<string>();
 /** The host's latest per-session summary (`session:summary`), for a screen that subscribes late. Forgotten on a first connect to a host. */
 let lastSessionSummaries: { summaries?: Record<string, unknown> } | null = null;
 
@@ -323,6 +326,7 @@ function forgetPtySession(sessionId: string): void {
   ptyBacklog.delete(sessionId);
   fillCursors.delete(sessionId);
   openedHere.delete(sessionId);
+  ptyEarly.delete(sessionId);
 }
 
 function maybeSendClientReady(): void {
@@ -608,9 +612,33 @@ function rehydrate(): void {
 }
 
 /** Fill one conversation from the computer's record: the ask is built from what THIS page holds (see fillCursors). */
+/** Draw a terminal cut the host sent (a reset when it could not continue where this page was, then the bytes). */
+function applyPtyCut(sid: string, pty: any): void {
+  if (!pty || typeof pty.epoch !== 'string') return;
+  if (pty.reset) routePush('pty:reset', { sessionId: sid, epoch: pty.epoch });
+  if (typeof pty.data === 'string' && pty.data.length > 0) routePush('pty:output', { sessionId: sid, data: pty.data, epoch: pty.epoch, offset: pty.offset });
+}
+
+/**
+ * The terminal first, on its own (one-core sync-fix2). WHY: the terminal used to ride the same answer as the chat page, so after a reconnect or a switch the terminal
+ * view stayed dead until the whole open ("loading") finished — Destin, 2026-10-02. This small ask is answered at once with the terminal's cut and joins the phone to the
+ * terminal stream; the ordinary open below still fills the chat. If this answer is lost, late, or from an older host, nothing changes: the ordinary open carries the
+ * terminal too, as before, and whichever answer comes first draws it (the other is ignored).
+ */
+async function openPtyEarly(sid: string): Promise<void> {
+  try {
+    const reply = await invoke('session:open', { sessionId: sid, ptyOnly: true, pty: ptyOffsets.has(sid) ? { ...ptyOffsets.get(sid)! } : {} });
+    // Only this small answer qualifies (an older host answers a full open); and not once the ordinary answer has drawn the terminal.
+    if (!reply?.ok || reply.ptyOnly !== true || openedHere.has(sid) || ptyEarly.has(sid)) return;
+    ptyEarly.add(sid);
+    applyPtyCut(sid, reply.pty);
+  } catch { /* the ordinary open carries the terminal too */ }
+}
+
 async function openSessionRemote(req: { sessionId: string; claudeSessionId?: string; projectSlug?: string; fresh?: boolean }): Promise<any> {
   const sid = req.sessionId;
   const have = req.fresh ? undefined : fillCursors.get(sid);
+  void openPtyEarly(sid);
   const reply = await invoke('session:open', {
     sessionId: sid,
     ...(req.claudeSessionId ? { claudeSessionId: req.claudeSessionId } : {}),
@@ -624,12 +652,8 @@ async function openSessionRemote(req: { sessionId: string; claudeSessionId?: str
     // Set BEFORE anything else runs: the host sends this session's held pushes right after this answer, and each one moves the cursor on.
     fillCursors.set(sid, { epoch: reply.epoch, seq: reply.headSeq });
     openedHere.add(sid);
-    const pty = reply.pty;
-    if (pty && typeof pty.epoch === 'string') {
-      // The terminal first, exactly as the old restore did: a reset when the host could not continue where this page was, then the bytes.
-      if (pty.reset) routePush('pty:reset', { sessionId: sid, epoch: pty.epoch });
-      if (typeof pty.data === 'string' && pty.data.length > 0) routePush('pty:output', { sessionId: sid, data: pty.data, epoch: pty.epoch, offset: pty.offset });
-    }
+    // The terminal first, exactly as the old restore did. Skipped when the early answer already drew it (this answer was cut from the same position, so it would only redraw it).
+    if (!ptyEarly.has(sid)) applyPtyCut(sid, reply.pty);
   }
   return reply;
 }
@@ -987,7 +1011,7 @@ function handleMessage(data: string, generation: number): void {
 
   // Push events: note where this session stands (the host numbers every session-scoped push), then hand it to the listeners.
   // A live terminal frame for a session this connection has not opened yet is dropped (see openedHere).
-  if (type === 'pty:output' && !openedHere.has(payload?.sessionId)) return;
+  if (type === 'pty:output' && !openedHere.has(payload?.sessionId) && !ptyEarly.has(payload?.sessionId)) return;
   noteCursor(msg);
   routePush(type, payload);
 }
@@ -1349,6 +1373,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           // nothing, so a first connect to it forgets the terminal's and every conversation's, BEFORE anything asks for a fill.
           readyReconnect = hasConnectedBefore && lastReadyHost === getWsUrl();
           openedHere.clear(); // every conversation is opened again on this connection
+          ptyEarly.clear();
           if (!readyReconnect) { ptyOffsets.clear(); ptyBacklog.clear(); fillCursors.clear(); lastSessionSummaries = null; }
           lastReadyHost = getWsUrl();
           // A new round of fills starts with this connection (a connect or a reconnect): the strip says "restoring" until App has filled
@@ -2033,6 +2058,7 @@ export function installShim(): void {
         if (isAndroidLocal()) return refuseQuietlyOnPhone('session:unwatch');
         // The terminal frames of an unwatched session are dropped from this moment, even one already on the wire.
         openedHere.delete(sessionId);
+        ptyEarly.delete(sessionId);
         return invoke('session:unwatch', { sessionId });
       },
       // Hand a list of pushes (an open's `before` / `after`) to the same listeners a live push reaches.

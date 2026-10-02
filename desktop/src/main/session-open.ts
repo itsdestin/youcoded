@@ -29,7 +29,7 @@
 // record and no window or socket.
 import type { SessionRecords } from './session-record';
 import type { HookEvent, SpecialistRunView, ShellRunView, TranscriptEvent, TranscriptPageResult } from '../shared/types';
-import type { Push, OpenRequest, OpenReply } from '../shared/session-open-types';
+import type { Push, OpenRequest, OpenReply, PtyOnlyReply } from '../shared/session-open-types';
 
 export type { Push, OpenRequest, OpenReply } from '../shared/session-open-types';
 
@@ -79,6 +79,18 @@ function withoutAsksClosedLater(events: Push[]): Push[] {
     const id = idOf(p.payload);
     return !(id && (closedAt.get(id) ?? -1) > i);
   });
+}
+
+/**
+ * The terminal alone (a phone's `ptyOnly` ask, one-core sync-fix2): the cut is taken NOW, synchronously, with nothing awaited, so the frames the phone is
+ * subscribed to right after this answer continue exactly where it ends. Nothing about the chat is read or held.
+ */
+export function openPtyOnly(deps: Pick<OpenDeps, 'knows' | 'records'>, req: OpenRequest): PtyOnlyReply {
+  const sessionId = req?.sessionId;
+  if (typeof sessionId !== 'string' || !sessionId) return { ok: false, error: 'No conversation was named.' };
+  if (!deps.knows(sessionId) || !deps.records.open(sessionId)) return { ok: false, error: 'That conversation is not open on this computer.', gone: true };
+  const pty = deps.records.ptyFrom(sessionId, req.pty ?? {}) ?? undefined;
+  return { ok: true, ptyOnly: true, epoch: pty?.epoch ?? '', ...(pty ? { pty } : {}) };
 }
 
 export async function openSession(deps: OpenDeps, req: OpenRequest, opts: { remote?: boolean } = {}): Promise<OpenReply> {

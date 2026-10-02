@@ -84,7 +84,7 @@ import CommandDrawer from './components/CommandDrawer';
 import { TerminalScrollButtons } from './components/TerminalToolbar';
 import TrustGate, { useTrustGateActive, usePendingPromptActive } from './components/TrustGate';
 import { InitializingCover } from './components/InitializingCover';
-import { promptShowMeansStarted, composerDisabled, startedIds } from './state/startup-dialog-store';
+import { promptShowMeansStarted, composerDisabled, startedIds, announcedAsStarted, startedFromSummaries } from './state/startup-dialog-store';
 import MovedGate from './components/MovedGate';
 import SettingsPanel from './components/SettingsPanel';
 import ResumeBrowser from './components/ResumeBrowser';
@@ -968,6 +968,13 @@ function AppInner() {
   // conversation's dot (and the attention sound, which reads the dots) comes from the computer's per-session summary, not from events
   // this screen no longer receives. Null on the computer's own windows, which keep deriving theirs from the events they get.
   const sessionSummaries = useSessionSummaries(isRemoteMode(), setViewedSessions);
+  // A phone learns a session has STARTED from the computer's summary too (one-core sync-fix2): the first-hook event and the "initialized" broadcast reach only a phone that was
+  // connected and watching at that moment, and the list/created announcements carry the flag only as of when they were sent.
+  useEffect(() => {
+    if (!sessionSummaries) return;
+    const started = startedFromSummaries(sessionSummaries, initializedRef.current);
+    if (started.length) setInitializedSessions((prev) => { const n = new Set(prev); for (const id of started) n.add(id); return n; });
+  }, [sessionSummaries]);
   const sessionStatuses = useMemo(() => {
     const m = new Map<string, SessionStatusColor>();
     for (const [id, info] of sessionAttention) m.set(id, info.status);
@@ -1261,6 +1268,12 @@ function AppInner() {
       // never trigger the "first hook = initialized" gate. Mark them ready
       // immediately. A shell session has no hook relay either (it is spawned with
       // no pipe), so this already covers it.
+      // A Claude Code session announced as already STARTED (no `awaitingStart`) is initialized too (one-core sync-fix2): a reconnecting phone is sent every live session
+      // as `session:created`, and one it had never seen — started while it was away — used to sit on "Initializing session…" with a "check terminal view" button,
+      // because the only other way in (the first hook event) had already happened. A brand-new session still carries `awaitingStart` until its first hook.
+      if (announcedAsStarted(info)) {
+        setInitializedSessions((prev) => (prev.has(info.id) ? prev : new Set(prev).add(info.id)));
+      }
       if (info.provider && info.provider !== 'claude') {
         setInitializedSessions((prev) => {
           if (prev.has(info.id)) return prev;
