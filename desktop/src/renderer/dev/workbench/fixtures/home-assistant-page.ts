@@ -121,8 +121,12 @@ function homeAssistantPageHtml(): string {
   /* Sixth-look notes: a slightly bigger bar, smaller − and +, and a
      see-through speaker on the bar's left that shows how loud it is. */
   .vwrap { position: relative; flex: 1; display: flex; align-items: center; }
-  .tile .vlr { height: 20px; flex: 1; }
-  .vicon { position: absolute; left: 7px; top: 50%; transform: translateY(-50%); display: grid; color: var(--on-accent); opacity: .75; pointer-events: none; mix-blend-mode: normal; }
+  /* Seventh-look notes: "i wanted volume bar to be taller". \`.lr.vlr\`
+     outranks the shared \`.tile .lr\` height further down, which had kept
+     the bar at its old height. */
+  .tile .lr.vlr { height: 30px; flex: 1; border-radius: 10px; }
+  .tile .lr.vlr::-webkit-slider-thumb { width: 12px; height: 30px; border-radius: 6px; }
+  .vicon { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); display: grid; color: var(--on-accent); opacity: .75; pointer-events: none; mix-blend-mode: normal; }
   .vicon.low { color: var(--fg); opacity: .55; }
   /* Playing: three bars that bounce beside Now playing, still when paused.
      steps() keeps the animation cheap (performance rule 6). */
@@ -606,7 +610,7 @@ function homeAssistantPageHtml(): string {
   // no level to show (a TV box with no soundbar), the keys alone.
   function volIcon(pct, muted) {
     var waves = muted || pct <= 0 ? '<path d="m16 9 5 6M21 9l-5 6"/>' : (pct < 34 ? '<path d="M15 9.5a3.5 3.5 0 0 1 0 5"/>' : pct < 67 ? '<path d="M15 9.5a3.5 3.5 0 0 1 0 5M18 7a7 7 0 0 1 0 10"/>' : '<path d="M15 9.5a3.5 3.5 0 0 1 0 5M18 7a7 7 0 0 1 0 10M21 4.5a10.5 10.5 0 0 1 0 15"/>');
-    return '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4z"/>' + waves + '</svg>';
+    return '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4z"/>' + waves + '</svg>';
   }
   function volRow(it, target, rc) {
     var minus = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"/></svg>';
