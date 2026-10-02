@@ -14,11 +14,7 @@
     {"file": "migrate-permission-overrides.ts", "fn": "migratePermissionOverrides", "call": "fs.mkdirSync", "count": 1, "reason": "startup only: one-time settings migration run during launch (packaged builds)"},
     {"file": "migrate-permission-overrides.ts", "fn": "migratePermissionOverrides", "call": "fs.readFileSync", "count": 1, "reason": "startup only: one-time settings migration run during launch (packaged builds)"},
     {"file": "migrate-permission-overrides.ts", "fn": "migratePermissionOverrides", "call": "fs.writeFileSync", "count": 1, "reason": "startup only: one-time settings migration run during launch (packaged builds)"},
-    {"file": "symlink-cleanup.ts", "fn": "sweepDir", "call": "fs.existsSync", "count": 1, "reason": "startup only: main.ts sweeps orphaned plugin symlinks once during launch"},
-    {"file": "symlink-cleanup.ts", "fn": "sweepDir", "call": "fs.readdirSync", "count": 1, "reason": "startup only: main.ts sweeps orphaned plugin symlinks once during launch"},
-    {"file": "sync-spaces/space-manager.ts", "fn": "SpaceManager.loadInitial", "call": "fs.readFileSync", "count": 1, "reason": "startup only: the FIRST read of the small sync-spaces.json state file, made once when startSyncSpaces constructs the manager and asks isEnabled(); every later read is served from memory and every write is async"},
-    {"file": "symlink-cleanup.ts", "fn": "sweepDir", "call": "fs.readlinkSync", "count": 1, "reason": "startup only: main.ts sweeps orphaned plugin symlinks once during launch"},
-    {"file": "symlink-cleanup.ts", "fn": "sweepDir", "call": "fs.unlinkSync", "count": 1, "reason": "startup only: main.ts sweeps orphaned plugin symlinks once during launch"}
+    {"file": "sync-spaces/space-manager.ts", "fn": "SpaceManager.loadInitial", "call": "fs.readFileSync", "count": 1, "reason": "startup only: the FIRST read of the small sync-spaces.json state file, made once when startSyncSpaces constructs the manager and asks isEnabled(); every later read is served from memory and every write is async"}
   ],
   "user-rare": [
     {"file": "claude-code-doc-comments-mcp.ts", "fn": "deployClaudeCodeDocCommentsMcp", "call": "fs.mkdirSync", "count": 1, "reason": "once per Claude Code session create, same rarity/shape as the sibling deployClaudeCodeLinkMcp (session-manager.ts calls both inline, synchronously, from the same non-async createSession)"},

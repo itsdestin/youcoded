@@ -178,6 +178,12 @@ if (process.platform === 'win32') {
     extraPaths.unshift(
       `${home}/Library/Application Support/YouCoded/node/bin`,
     );
+  } else {
+    // WHY (2026-10-02): first-run installs Node on Linux into ~/.youcoded/node
+    // (prerequisite-installer.ts userLocalNodeDir). Only macOS had its folder
+    // here, so after the first relaunch from a menu launcher — which never
+    // reads .bashrc — Claude Code and Terminal sessions could not find node.
+    extraPaths.unshift(`${home}/.youcoded/node/bin`);
   }
   process.env.PATH = `${extraPaths.join(path.delimiter)}${path.delimiter}${process.env.PATH}`;
 }
@@ -1857,22 +1863,6 @@ void app.whenReady().then(async () => {
   perfMark('main:chore:hook-reconcile:done');
   perfMark('main:chore:prompt-suggestion:done');
   perfMark('main:chore:retention-default:done');
-
-  // Clean up orphan symlinks left by pre-decomposition post-update.sh —
-  // entries under ~/.claude/{hooks,commands,skills}/ that point into now-deleted
-  // core/life/productivity subtrees of the toolkit. No replacement mechanism
-  // rebuilds them; Claude Code v2.1+ discovers plugin commands/skills via
-  // plugin.json, so the symlinks are pure tombstones once the target is gone.
-  try {
-    const { cleanupOrphanSymlinks } = require('./symlink-cleanup');
-    const cleanupSummary = cleanupOrphanSymlinks();
-    if (cleanupSummary.removed > 0) {
-      log('INFO', 'Main', 'Orphan symlinks cleaned up', cleanupSummary);
-    }
-  } catch (e) {
-    log('ERROR', 'Main', 'Failed to clean up orphan symlinks', { error: String(e) });
-  }
-  perfMark('main:chore:symlink-cleanup:done');
 
   // Sweep abandoned .partial files and downloads older than 24h from the
   // in-app update cache. Runs at every startup so stale downloads (e.g. from

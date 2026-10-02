@@ -627,6 +627,44 @@ export async function installNode(): Promise<{ success: boolean; error?: string 
   }
 }
 
+/** Where Apple's Command Line Tools put git once they finish installing. */
+const MAC_CLT_GIT = '/Library/Developer/CommandLineTools/usr/bin/git';
+/** The app macOS opens for `xcode-select --install`. */
+const MAC_CLT_INSTALLER = 'Install Command Line Developer Tools';
+
+/**
+ * Wait while macOS's Command Line Tools installer runs, up to 20 minutes.
+ * Returns early once git exists, or once the installer window has been gone
+ * for three checks in a row (the user pressed Cancel or closed it). Watches
+ * the file rather than running `git`, because /usr/bin/git is a stub that
+ * opens the install dialog again while the tools are missing. If the
+ * installer's process name ever differs from MAC_CLT_INSTALLER, this stops
+ * after ~35 seconds — the same outcome as before this wait existed.
+ */
+async function waitForMacCommandLineTools(): Promise<void> {
+  const deadline = Date.now() + 20 * 60_000;
+  let missingChecks = 0;
+  const startedAt = Date.now();
+  while (Date.now() < deadline) {
+    try {
+      await fs.promises.access(MAC_CLT_GIT, fs.constants.X_OK);
+      return;
+    } catch { /* not installed yet */ }
+    let installerRunning = false;
+    try {
+      await runCommand('pgrep', ['-x', MAC_CLT_INSTALLER]);
+      installerRunning = true;
+    } catch { /* pgrep exits 1 when nothing matches */ }
+    // Give the dialog a moment to open before counting its absence.
+    if (!installerRunning && Date.now() - startedAt > 20_000) {
+      if (++missingChecks >= 3) return;
+    } else {
+      missingChecks = 0;
+    }
+    await new Promise((r) => setTimeout(r, 5_000));
+  }
+}
+
 /** Install Git silently. */
 export async function installGit(): Promise<{ success: boolean; error?: string }> {
   try {
@@ -662,14 +700,19 @@ export async function installGit(): Promise<{ success: boolean; error?: string }
       } catch {
         log('INFO', 'prereq', 'xcode-select --install triggered dialog (or CLT already present)');
       }
+      // WHY wait here (2026-10-02): setup used to fail straight away with "click
+      // Try Again", even when the user had just pressed Install and the download
+      // was running. Now setup waits for the tools and carries on by itself;
+      // the message below is only for a cancelled or very slow install.
+      await waitForMacCommandLineTools();
       const check = await detectGit();
       if (!check.installed) {
         return {
           success: false,
           error:
-            'macOS is installing Command Line Tools. Accept the "Install" prompt ' +
-            'in the system dialog, wait for it to finish (a few minutes), then ' +
-            'click Try Again.',
+            'Git comes with Apple\'s developer tools, which didn\'t finish ' +
+            'installing. Click Try Again to bring back the macOS window, then ' +
+            'click Install in it.',
         };
       }
       log('INFO', 'prereq', `Git installed: ${check.version}`);

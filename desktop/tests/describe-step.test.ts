@@ -36,7 +36,7 @@ describe('describeStep', () => {
       ],
     });
     expect(describeStep(s)).toBe(
-      'Installing Node.js — this runs the AI engine under the hood.',
+      'Installing Node.js — used by Terminal and Claude Code sessions.',
     );
   });
 
@@ -50,9 +50,11 @@ describe('describeStep', () => {
         { name: 'auth', displayName: 'Sign in', status: 'waiting' },
       ],
     });
-    expect(describeStep(s)).toBe(
-      'Installing Git — used to keep YouCoded and your skills up to date.',
+    expect(describeStep(s, false)).toBe(
+      'Installing Git — used for skills, syncing and project history.',
     );
+    // On a Mac the line tells the user to answer Apple's developer-tools window.
+    expect(describeStep(s, true)).toMatch(/click Install/);
   });
 
   it('names Claude Code when Claude is installing', () => {

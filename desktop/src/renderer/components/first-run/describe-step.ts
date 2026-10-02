@@ -1,11 +1,24 @@
 import type { FirstRunState, PrerequisiteState } from '../../../shared/first-run-types';
 
 // Per-prerequisite copy. Keys match PrerequisiteState.name.
+// WHY these words (2026-10-02): the old lines claimed Node "runs the AI engine"
+// and Git keeps "YouCoded" up to date — neither is true. Node runs Terminal and
+// Claude Code sessions; Git fetches the built-in skills and powers sync and the
+// Git panel. App updates never use either.
 const PREREQ_COPY: Record<string, string> = {
-  node: 'Installing Node.js — this runs the AI engine under the hood.',
-  git: 'Installing Git — used to keep YouCoded and your skills up to date.',
+  node: 'Installing Node.js — used by Terminal and Claude Code sessions.',
+  git: 'Installing Git — used for skills, syncing and project history.',
   claude: 'Installing Claude Code — the AI that powers YouCoded.',
 };
+
+// WHY: on a Mac, Git arrives with Apple's developer tools, which open their own
+// window that must be answered; setup waits for it (installGit, 2026-10-02).
+const MAC_GIT_COPY =
+  'Installing Git — if macOS asks to install developer tools, click Install. It can take a few minutes.';
+
+function onMac(): boolean {
+  return typeof navigator !== 'undefined' && /^Mac/.test(navigator.platform);
+}
 
 function activePrerequisite(prereqs: PrerequisiteState[]): PrerequisiteState | undefined {
   return prereqs.find(
@@ -41,7 +54,7 @@ export function canRetry(state: FirstRunState): boolean {
   return state.currentStep !== 'AUTHENTICATE';
 }
 
-export function describeStep(state: FirstRunState): string {
+export function describeStep(state: FirstRunState, isMac: boolean = onMac()): string {
   // The error's own words are always shown below the buttons; this headline
   // only claims "something went wrong" where a retry is actually offered.
   if (state.lastError && canRetry(state)) {
@@ -54,6 +67,7 @@ export function describeStep(state: FirstRunState): string {
 
     case 'INSTALL_PREREQUISITES': {
       const active = activePrerequisite(state.prerequisites);
+      if (active?.name === 'git' && isMac) return MAC_GIT_COPY;
       if (active && PREREQ_COPY[active.name]) {
         return PREREQ_COPY[active.name];
       }
