@@ -108,4 +108,11 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/files/open/a-sent-chart', 'pane', 'viewer'),
   chat('chat/files/open/a-sent-diagram', 'pane', 'viewer'),
   chat('chat/files/open/a-sent-pdf', 'pane', 'viewer'),
+  // Office (design stage): a Word file's quick preview, then Edit in place.
+  chat('chat/files/open/a-sent-plan', 'pane', 'viewer', 'office'),
+  chat('chat/files/edit/a-sent-plan', 'pane', 'viewer', 'office'),
+  // The reading view of the Word and Excel files whose comments office/*-comments shows in
+  // Office's own panel — the two are compared side by side (finish plan Task 6).
+  chat('chat/files/open/a-launch-brief', 'pane', 'viewer'),
+  chat('chat/files/open/a-q3-sales-comments', 'pane', 'viewer'),
 ];

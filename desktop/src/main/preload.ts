@@ -501,6 +501,15 @@ const IPC = {
 // `chatgpt` namespace for why), keeping the handler's own sentence. Anything
 // that is not that exact shape is rethrown untouched.
 const INVOKE_ERROR_PREFIX = /^Error invoking remote method '[^']*': (?:Error: )?/;
+/** Subscribe to one of main's office:* pushes; returns the unsubscribe. WHY a helper (final
+ *  review, finding 7): the five office pushes were each a hand-written listener crammed onto one
+ *  line; one shape keeps them readable and identical. */
+function officePush<A extends unknown[]>(channel: string, cb: (...args: A) => void): () => void {
+  const h = (_e: IpcRendererEvent, ...args: unknown[]) => cb(...(args as A));
+  ipcRenderer.on(channel, h);
+  return () => { ipcRenderer.off(channel, h); };
+}
+
 function unwrapInvokeError<T>(p: Promise<T>): Promise<T> {
   return p.catch((e: unknown) => {
     if (e instanceof Error && INVOKE_ERROR_PREFIX.test(e.message)) {
@@ -1994,6 +2003,32 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.on('git:changed', handler);
       return () => ipcRenderer.removeListener('git:changed', handler);
     },
+  },
+  // Office (§3a): editor requests reach main only via invoke (main re-checks). Shape: shared/office-types.ts; handlers: main/office/office-ipc.ts, main/unsaved-quit.ts.
+  office: {
+    status: (projectRoot: string | null) => ipcRenderer.invoke('office:status', projectRoot),
+    create: (kind: string, projectRoot: string | null) => ipcRenderer.invoke('office:create', kind, projectRoot),
+    pick: () => ipcRenderer.invoke('office:pick'),
+    open: (p: string) => ipcRenderer.invoke('office:open', p),
+    invoke: (token: string, cmd: string, args: unknown) => ipcRenderer.invoke('office:invoke', token, cmd, args),
+    close: (token: string) => ipcRenderer.invoke('office:close', token),
+    versions: (p: string) => ipcRenderer.invoke('office:versions', p),
+    restore: (p: string, id: string) => ipcRenderer.invoke('office:restore', p, id),
+    // After a restore, the editor holding the token reopens its file (EditorFrame).
+    onChanged: (cb: (p: { path: string; token: string }) => void) => officePush('office:changed', cb),
+    saveCopy: (token: string, mode: string, data?: string) => ipcRenderer.invoke('office:save-copy', token, mode, data),
+    // Before its window closes, its editors journal their newest edits (main/office/office-journal-sync.ts) — desktop only.
+    onJournalRequest: (cb: (id: string) => void) => officePush('office:journal-request', cb),
+    journalDone: (id: string) => ipcRenderer.send('office:journal-done', id),
+    // A quit refused for unsaved files (main/unsaved-quit.ts) — desktop only.
+    onUnsavedPrompt: (cb: (p: unknown) => void) => officePush('office:unsaved-prompt', cb),
+    proceedClose: () => ipcRenderer.send('office:proceed'),
+    dismissPrompt: () => ipcRenderer.send('office:dismiss'),
+    setOtherUnsaved: (names: string[]) => ipcRenderer.send('office:other-unsaved', names),
+    // Comments on an open document go through its editor (main/office/office-comments.ts) — desktop only.
+    onCommentsRequest: (cb: (req: { token: string; id: string; op: unknown }) => void) => officePush('office:comments-request', cb),
+    commentsAnswer: (id: string, result: unknown, token: string) => ipcRenderer.send('office:comments-answer', id, result, token),
+    commentsChanged: (token: string) => ipcRenderer.send('office:comments-changed', token),
   },
   // Project View IPC — sibling to artifacts. Backs the project overlay's
   // conversations / repo / context tabs.

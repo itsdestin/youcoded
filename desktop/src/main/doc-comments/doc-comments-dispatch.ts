@@ -48,6 +48,9 @@ import {
 import { resolveSourceFilePath, resolveNativeFormat, type Refusal } from './doc-comments-store';
 import { authorizeBytesRead } from '../artifacts/read-service';
 import type { CommentAuthor, CommentReply, CommentSelector } from '../../shared/doc-comments-types';
+// Finish plan Task 6: while Office has the file open, comments go through its editor (see
+// live-comments.ts) — a write to the file itself would be erased by the editor's next autosave.
+import { liveAdd, liveDeleteReply, liveEdit, liveEditReply, liveList, liveMove, liveReply, liveSimple } from './live-comments';
 // T3 follow-up (design §1.5's new per-document watcher): `nativeFormatFor`
 // moved to its own module so `doc-comments-store.ts` can reuse it without a
 // circular import (this file already imports FROM doc-comments-store.ts).
@@ -63,6 +66,11 @@ import type { CommentAuthor, CommentReply, CommentSelector } from '../../shared/
 import type { NativeFormat } from './native-format';
 export { nativeFormatFor, type NativeFormat } from './native-format';
 export { resolveNativeFormat };
+
+/** The live-comments target for a resolved native file (live-comments.ts). */
+const native = (format: NativeFormat, absolutePath: string, path: string) => ({ format, absolutePath, path });
+/** A change kept for an Office editor that could not take it yet (live-comments.ts). */
+type Queued = { ok: true; queued: true };
 
 /** F1 fix (post-T3 build review, blocker): the no-`projectRoot` fallback in
  *  `resolveSourceFilePath` resolves and returns ANY absolute path the caller
@@ -109,10 +117,11 @@ export async function addNativeDocxComment(args: {
   selector: CommentSelector;
   text: string;
   author: CommentAuthor;
-}): Promise<{ ok: true; id: string; text: string } | Refusal | UntrackedSourceRefusal | { ok: false; error: string }> {
+}): Promise<{ ok: true; id: string; text: string } | Refusal | UntrackedSourceRefusal | { ok: false; error: string } | Queued> {
   const resolved = await resolveDocxTarget(args);
   if (!resolved.ok) return resolved;
-  return addDocxComment({ absolutePath: resolved.absolutePath, path: args.path, selector: args.selector, text: args.text, author: args.author });
+  const file = () => addDocxComment({ absolutePath: resolved.absolutePath, path: args.path, selector: args.selector, text: args.text, author: args.author });
+  return (await liveAdd(native('docx', resolved.absolutePath, args.path), args, file)) ?? file();
 }
 
 export async function replyToNativeDocxComment(args: {
@@ -121,10 +130,11 @@ export async function replyToNativeDocxComment(args: {
   id: string;
   text: string;
   author: CommentAuthor;
-}): Promise<{ ok: true; reply: CommentReply } | Refusal | UntrackedSourceRefusal | { ok: false; error: string }> {
+}): Promise<{ ok: true; reply: CommentReply } | Refusal | UntrackedSourceRefusal | { ok: false; error: string } | Queued> {
   const resolved = await resolveDocxTarget(args);
   if (!resolved.ok) return resolved;
-  return replyToDocxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, text: args.text, author: args.author });
+  const file = () => replyToDocxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, text: args.text, author: args.author });
+  return (await liveReply(native('docx', resolved.absolutePath, args.path), args, file)) ?? file();
 }
 
 /** `by` is accepted for call-site symmetry with the generic `{path, id, by}`
@@ -136,10 +146,11 @@ export async function resolveNativeDocxComment(args: {
   projectRoot?: string;
   id: string;
   by: CommentAuthor;
-}): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string }> {
+}): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string } | Queued> {
   const resolved = await resolveDocxTarget(args);
   if (!resolved.ok) return resolved;
-  return resolveDocxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id });
+  const file = () => resolveDocxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id });
+  return (await liveSimple(native('docx', resolved.absolutePath, args.path), 'resolve', args.id, file)) ?? file();
 }
 
 export async function reopenNativeDocxComment(args: {
@@ -147,10 +158,11 @@ export async function reopenNativeDocxComment(args: {
   projectRoot?: string;
   id: string;
   by: CommentAuthor;
-}): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string }> {
+}): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string } | Queued> {
   const resolved = await resolveDocxTarget(args);
   if (!resolved.ok) return resolved;
-  return reopenDocxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id });
+  const file = () => reopenDocxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id });
+  return (await liveSimple(native('docx', resolved.absolutePath, args.path), 'reopen', args.id, file)) ?? file();
 }
 
 export async function moveNativeDocxComment(args: {
@@ -158,10 +170,11 @@ export async function moveNativeDocxComment(args: {
   projectRoot?: string;
   id: string;
   newSelector: CommentSelector;
-}): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string }> {
+}): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string } | Queued> {
   const resolved = await resolveDocxTarget(args);
   if (!resolved.ok) return resolved;
-  return moveDocxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, newSelector: args.newSelector });
+  const file = () => moveDocxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, newSelector: args.newSelector });
+  return (await liveMove(native('docx', resolved.absolutePath, args.path), args, file)) ?? file();
 }
 
 // Edit/delete build (2026-09-28, design doc §"Edit and delete") — same
@@ -171,10 +184,11 @@ export async function editNativeDocxComment(args: {
   projectRoot?: string;
   id: string;
   text: string;
-}): Promise<{ ok: true; text: string } | Refusal | UntrackedSourceRefusal | { ok: false; error: string }> {
+}): Promise<{ ok: true; text: string } | Refusal | UntrackedSourceRefusal | { ok: false; error: string } | Queued> {
   const resolved = await resolveDocxTarget(args);
   if (!resolved.ok) return resolved;
-  return editDocxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, text: args.text });
+  const file = () => editDocxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, text: args.text });
+  return (await liveEdit(native('docx', resolved.absolutePath, args.path), args, file)) ?? file();
 }
 
 export async function editNativeDocxReply(args: {
@@ -183,20 +197,22 @@ export async function editNativeDocxReply(args: {
   id: string;
   replyId: string;
   text: string;
-}): Promise<{ ok: true; reply: CommentReply } | Refusal | UntrackedSourceRefusal | { ok: false; error: string }> {
+}): Promise<{ ok: true; reply: CommentReply } | Refusal | UntrackedSourceRefusal | { ok: false; error: string } | Queued> {
   const resolved = await resolveDocxTarget(args);
   if (!resolved.ok) return resolved;
-  return editDocxReply({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, replyId: args.replyId, text: args.text });
+  const file = () => editDocxReply({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, replyId: args.replyId, text: args.text });
+  return (await liveEditReply(native('docx', resolved.absolutePath, args.path), args, file)) ?? file();
 }
 
 export async function deleteNativeDocxComment(args: {
   path: string;
   projectRoot?: string;
   id: string;
-}): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string }> {
+}): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string } | Queued> {
   const resolved = await resolveDocxTarget(args);
   if (!resolved.ok) return resolved;
-  return deleteDocxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id });
+  const file = () => deleteDocxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id });
+  return (await liveSimple(native('docx', resolved.absolutePath, args.path), 'delete', args.id, file)) ?? file();
 }
 
 export async function deleteNativeDocxReply(args: {
@@ -204,10 +220,11 @@ export async function deleteNativeDocxReply(args: {
   projectRoot?: string;
   id: string;
   replyId: string;
-}): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string }> {
+}): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string } | Queued> {
   const resolved = await resolveDocxTarget(args);
   if (!resolved.ok) return resolved;
-  return deleteDocxReply({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, replyId: args.replyId });
+  const file = () => deleteDocxReply({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, replyId: args.replyId });
+  return (await liveDeleteReply(native('docx', resolved.absolutePath, args.path), args, file)) ?? file();
 }
 
 /** T13's own `.xlsx` equivalent of `resolveDocxTarget` — same containment/
@@ -231,10 +248,11 @@ export async function addNativeXlsxComment(args: {
   selector: CommentSelector;
   text: string;
   author: CommentAuthor;
-}): Promise<{ ok: true; id: string; text: string } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] }> {
+}): Promise<{ ok: true; id: string; text: string } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] } | Queued> {
   const resolved = await resolveXlsxTarget(args);
   if (!resolved.ok) return resolved;
-  return addXlsxComment({ absolutePath: resolved.absolutePath, path: args.path, selector: args.selector, text: args.text, author: args.author });
+  const file = () => addXlsxComment({ absolutePath: resolved.absolutePath, path: args.path, selector: args.selector, text: args.text, author: args.author });
+  return (await liveAdd(native('xlsx', resolved.absolutePath, args.path), args, file)) ?? file();
 }
 
 /** Review leftover (a): now enriched with the persisted `CommentReply`,
@@ -251,10 +269,11 @@ export async function replyToNativeXlsxComment(args: {
   id: string;
   text: string;
   author: CommentAuthor;
-}): Promise<{ ok: true; reply: CommentReply } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] }> {
+}): Promise<{ ok: true; reply: CommentReply } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] } | Queued> {
   const resolved = await resolveXlsxTarget(args);
   if (!resolved.ok) return resolved;
-  return replyToXlsxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, text: args.text, author: args.author });
+  const file = () => replyToXlsxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, text: args.text, author: args.author });
+  return (await liveReply(native('xlsx', resolved.absolutePath, args.path), args, file)) ?? file();
 }
 
 /** `by` is accepted for call-site symmetry with the generic `{path, id, by}`
@@ -266,10 +285,11 @@ export async function resolveNativeXlsxComment(args: {
   projectRoot?: string;
   id: string;
   by: CommentAuthor;
-}): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] }> {
+}): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] } | Queued> {
   const resolved = await resolveXlsxTarget(args);
   if (!resolved.ok) return resolved;
-  return resolveXlsxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id });
+  const file = () => resolveXlsxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id });
+  return (await liveSimple(native('xlsx', resolved.absolutePath, args.path), 'resolve', args.id, file)) ?? file();
 }
 
 export async function reopenNativeXlsxComment(args: {
@@ -277,10 +297,11 @@ export async function reopenNativeXlsxComment(args: {
   projectRoot?: string;
   id: string;
   by: CommentAuthor;
-}): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] }> {
+}): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] } | Queued> {
   const resolved = await resolveXlsxTarget(args);
   if (!resolved.ok) return resolved;
-  return reopenXlsxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id });
+  const file = () => reopenXlsxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id });
+  return (await liveSimple(native('xlsx', resolved.absolutePath, args.path), 'reopen', args.id, file)) ?? file();
 }
 
 /** Review F3 (Medium) partial fix: now returns the moved thread's FRESH id
@@ -293,10 +314,11 @@ export async function moveNativeXlsxComment(args: {
   projectRoot?: string;
   id: string;
   newSelector: CommentSelector;
-}): Promise<{ ok: true; id: string } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] }> {
+}): Promise<{ ok: true; id: string } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] } | Queued> {
   const resolved = await resolveXlsxTarget(args);
   if (!resolved.ok) return resolved;
-  return moveXlsxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, newSelector: args.newSelector });
+  const file = () => moveXlsxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, newSelector: args.newSelector });
+  return (await liveMove(native('xlsx', resolved.absolutePath, args.path), args, file)) ?? file();
 }
 
 // Edit/delete build (2026-09-28, design doc §"Edit and delete") — same
@@ -306,10 +328,11 @@ export async function editNativeXlsxComment(args: {
   projectRoot?: string;
   id: string;
   text: string;
-}): Promise<{ ok: true; text: string } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] }> {
+}): Promise<{ ok: true; text: string } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] } | Queued> {
   const resolved = await resolveXlsxTarget(args);
   if (!resolved.ok) return resolved;
-  return editXlsxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, text: args.text });
+  const file = () => editXlsxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, text: args.text });
+  return (await liveEdit(native('xlsx', resolved.absolutePath, args.path), args, file)) ?? file();
 }
 
 export async function editNativeXlsxReply(args: {
@@ -318,20 +341,22 @@ export async function editNativeXlsxReply(args: {
   id: string;
   replyId: string;
   text: string;
-}): Promise<{ ok: true; reply: CommentReply } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] }> {
+}): Promise<{ ok: true; reply: CommentReply } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] } | Queued> {
   const resolved = await resolveXlsxTarget(args);
   if (!resolved.ok) return resolved;
-  return editXlsxReply({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, replyId: args.replyId, text: args.text });
+  const file = () => editXlsxReply({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, replyId: args.replyId, text: args.text });
+  return (await liveEditReply(native('xlsx', resolved.absolutePath, args.path), args, file)) ?? file();
 }
 
 export async function deleteNativeXlsxComment(args: {
   path: string;
   projectRoot?: string;
   id: string;
-}): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] }> {
+}): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] } | Queued> {
   const resolved = await resolveXlsxTarget(args);
   if (!resolved.ok) return resolved;
-  return deleteXlsxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id });
+  const file = () => deleteXlsxComment({ absolutePath: resolved.absolutePath, path: args.path, id: args.id });
+  return (await liveSimple(native('xlsx', resolved.absolutePath, args.path), 'delete', args.id, file)) ?? file();
 }
 
 export async function deleteNativeXlsxReply(args: {
@@ -339,10 +364,11 @@ export async function deleteNativeXlsxReply(args: {
   projectRoot?: string;
   id: string;
   replyId: string;
-}): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] }> {
+}): Promise<{ ok: true } | Refusal | UntrackedSourceRefusal | { ok: false; error: string; features?: string[] } | Queued> {
   const resolved = await resolveXlsxTarget(args);
   if (!resolved.ok) return resolved;
-  return deleteXlsxReply({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, replyId: args.replyId });
+  const file = () => deleteXlsxReply({ absolutePath: resolved.absolutePath, path: args.path, id: args.id, replyId: args.replyId });
+  return (await liveDeleteReply(native('xlsx', resolved.absolutePath, args.path), args, file)) ?? file();
 }
 
 /** `docComments:list` for a `.docx`/`.xlsx` target: resolve the SOURCE file's
@@ -374,6 +400,9 @@ export async function listNativeComments(
     const auth = await authorizeBytesRead(resolved.absolutePath);
     if (!auth.ok) return { ok: false, error: 'path-not-tracked' };
   }
+  // Open in Office: its editor's comments, including those not saved yet (live-comments.ts).
+  const live = await liveList(native(format, resolved.absolutePath, args.path), async () => null);
+  if (live && !('queued' in live)) return live;
   let bytes: Buffer;
   try {
     bytes = await fs.readFile(resolved.absolutePath);

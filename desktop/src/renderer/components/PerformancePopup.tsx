@@ -86,9 +86,11 @@ export default function PerformancePopup({
     try {
       await restart();
     } catch {
-      // On Electron the process exits before this resolves — we never reach
-      // here. On remote browsers the WebSocket disconnect rejects the call,
-      // which lands here and we clear the spinner.
+      // On remote browsers the WebSocket disconnect rejects the call.
+    } finally {
+      // WHY always (Task 6 fix round 7): a restart is an ordinary quit now, answered at once —
+      // an unsaved Office document may hold it (Review cancels it), and the button must come
+      // back rather than read "Restarting…" forever. If the app does go, this page goes with it.
       setRestarting(false);
     }
   };

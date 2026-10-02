@@ -1,4 +1,8 @@
-import { EDIT_MAX_BYTES, type EditTier } from '../../../shared/artifacts/editable-path-policy';
+import { EDIT_MAX_BYTES, editTier, type EditTier } from '../../../shared/artifacts/editable-path-policy';
+import { canonicalize } from '../../../shared/artifacts/canonicalize';
+import type { ArtifactRecord } from '../../../shared/artifacts/types';
+import { rendersFromBytesOnly } from './RendererRegistry';
+import { describeReadError } from './read-error-copy';
 import type { ArtifactContentInfo } from './ActiveArtifactView';
 
 /**
@@ -29,4 +33,35 @@ export function canEditArtifact(
   if (content === null || tier === 'denied' || info?.binary) return false;
   // Unknown size (legacy callers, workbench fixtures) keeps today's behaviour.
   return (info?.sizeBytes ?? 0) <= EDIT_MAX_BYTES;
+}
+
+/**
+ * Whether a parked draft's file could take the draft RIGHT NOW (Task 6 fix rounds 12–14): the
+ * same rules the editor applies — it exists, it is text (not a file drawn from its bytes, not
+ * binary), it is within the size limit, and the write policy allows it. Only "not there" or "not
+ * editable" is 'gone'; a read that failed for another reason says why (the prompt offers Retry),
+ * so a passing hiccup never reads as "no longer available".
+ */
+/** What a parked draft's row says when checking its file failed for a reason we don't know. */
+export const DRAFT_READ_FAILED = "YouCoded couldn't read this file.";
+
+export async function draftFileStatus(projectRoot: string, artifact: ArtifactRecord): Promise<'editable' | 'gone' | 'protected' | { error: string }> {
+  if (rendersFromBytesOnly(artifact.path)) return 'gone';
+  let res: any;
+  try { res = await (window.claude as any)?.artifacts?.get(projectRoot, artifact.id); } catch (e) {
+    // WHY general (final review, finding 5): the request itself failed, so its message is an IPC
+    // or bridge error — a raw string that can name folders and asserts nothing a person can act
+    // on. The detail goes to the log; the row offers Retry.
+    console.error('[draftFileStatus] reading the file failed', e);
+    return { error: DRAFT_READ_FAILED };
+  }
+  if (res && res.ok === true && res.orphan) return 'gone';
+  // A protected location can't take the draft whatever happens next (fix round 15).
+  if (res?.error === 'protected-path') return 'protected';
+  if (!res || res.ok !== true) return { error: describeReadError(res?.error, res?.code) };
+  const absolutePath = typeof res.resolvedPath === 'string' ? res.resolvedPath : artifact.kind === 'internal'
+    ? `${projectRoot.replace(/\\/g, '/').replace(/\/+$/, '')}/${artifact.path.replace(/\\/g, '/')}`
+    : (artifact.absolutePath ?? artifact.path);
+  const info = { binary: res.binary, truncated: res.truncated, sizeBytes: res.sizeBytes };
+  return canEditArtifact(info, typeof res.content === 'string' ? res.content : null, editTier(canonicalize(absolutePath, null))) ? 'editable' : 'gone';
 }
