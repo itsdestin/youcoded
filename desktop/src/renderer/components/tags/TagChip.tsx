@@ -13,12 +13,38 @@ import type { TagRecord } from '../../../shared/tags';
 // themes and deepens them on pale ones, so every theme (community ones too —
 // they all set --fg) gets a fitted shade. Fill and border are a step stronger
 // than the status pill's, for contrast against the card behind.
+// TRIAL: which tag look the pick-menus-5 deck shows.
+const TAG_LOOK = 'box' as 'box' | 'dot' | 'pill' | 'outline';
+
 export function TagChip({ tag, onRemove, className = '' }: {
   tag: Pick<TagRecord, 'label' | 'color'>;
   onRemove?: () => void;
   className?: string;
 }) {
   const c = `color-mix(in srgb, var(--${tag.color}) 75%, var(--fg))`;
+  // TRIAL (pick-menus-5): three other looks for a tag, everywhere tags show.
+  if (TAG_LOOK !== 'box') {
+    const remove = onRemove && (
+      <button onClick={(e) => { e.stopPropagation(); onRemove(); }} className="opacity-60 hover:opacity-100 leading-none" aria-label={`Remove ${tag.label}`}>×</button>
+    );
+    if (TAG_LOOK === 'dot') {
+      return (
+        <span className={`inline-flex items-center gap-1 text-3xs leading-none text-fg-2 ${className}`}>
+          <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: c }} />{tag.label}{remove}
+        </span>
+      );
+    }
+    const pill = TAG_LOOK === 'pill';
+    return (
+      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-3xs leading-none border ${pill ? 'text-fg' : 'text-fg-2'} ${className}`}
+        style={{
+          backgroundColor: pill ? `color-mix(in srgb, ${c} 15%, transparent)` : 'transparent',
+          borderColor: `color-mix(in srgb, ${c} ${pill ? 35 : 70}%, transparent)`,
+        }}>
+        {tag.label}{remove}
+      </span>
+    );
+  }
   return (
     <span
       className={`inline-flex items-center gap-1 px-1.5 py-[1px] rounded-sm text-3xs leading-none text-fg border ${className}`}
