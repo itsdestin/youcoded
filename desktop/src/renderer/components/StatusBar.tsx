@@ -434,6 +434,8 @@ interface Props {
   onOpenModelPicker?: () => void;
   // Context popup: session and a dispatcher wrapper threaded from App.tsx.
   sessionId?: string | null;
+  /** The session's name, for the Session details popup's title card. */
+  sessionName?: string;
   onDispatch?: (input: string) => void;
   /** Open-tasks counts for the chip — derived at App root from a single
    *  useSessionTasks instance so the chip and popup share inactiveMap state. */
@@ -848,7 +850,7 @@ const INPUT_NOTE = 'Input is counted per request — a long turn re-sends its hi
 export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App hands this bar a memoised projection + stable handlers (hooks/useStatusBarProps.ts), so unrelated shell state no longer re-renders it
   statusData, onRunSync, onOpenSync, model, modelProviderType, provider, usagePlan,
   permissionMode, onCyclePermission, fast, effort, onOpenModelPicker,
-  sessionId, onDispatch,
+  sessionId, sessionName, onDispatch,
   openTasksCounts, onOpenOpenTasks,
   nativeUsage, nativeContextLength, nativeContextOverride, turnsWithUsage, nativeTotals,
 }: Props) {
@@ -1069,7 +1071,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
           it is the everyday way to tag a session or leave it a note. */}
       {!isAndroid() && (
         <span data-guide-anchor="tags-notes" className="inline-flex">
-          <SessionTagsChip sessionId={sessionId ?? null} />
+          <SessionTagsChip sessionId={sessionId ?? null} sessionName={sessionName} />
         </span>
       )}
 

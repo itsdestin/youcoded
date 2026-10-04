@@ -9,15 +9,17 @@ import { useState } from 'react';
 import { useTagRegistry } from '../../hooks/useTagRegistry';
 import { useSessionMeta } from '../../hooks/useSessionMeta';
 import type { TagRecord } from '../../../shared/tags';
-import { TagNoteEditor } from './TagNoteEditor';
+import { SessionDetails } from './SessionDetails';
+import SessionRenameDialog from '../SessionRenameDialog';
 import { TagIconStack } from './TagChip';
 import { PinIcon } from './PinIcon';
 import { NotePageGlyph } from './glyphs';
 import { Dialog, Tooltip } from '../ui';
 import { useScreenOpen } from '../../shoot-mode';
 
-export function SessionTagsChip({ sessionId }: { sessionId: string | null }) {
+export function SessionTagsChip({ sessionId, sessionName }: { sessionId: string | null; sessionName?: string }) {
   const [open, setOpen] = useState(false);
+  const [renaming, setRenaming] = useState(false);
   useScreenOpen('chat/tags', () => setOpen(true)); // photo-only build: `shoot` opens it by name
   const registry = useTagRegistry();
   const meta = useSessionMeta(sessionId);
@@ -59,8 +61,10 @@ export function SessionTagsChip({ sessionId }: { sessionId: string | null }) {
           button — every change saves as you make it (pick-menus-11#PM11-1). Complete is
           deliberately NOT offered here: a session you are sitting in is not finished,
           and the close prompt owns that decision. */}
-      <Dialog screen="chat/tags" open={open} onClose={() => setOpen(false)} title="Tags & note" size="panel">
-        <TagNoteEditor
+      <Dialog screen="chat/tags" open={open} onClose={() => setOpen(false)} title="Session details" size="panel">
+        <SessionDetails
+          name={sessionName || 'Untitled session'}
+          onRename={sessionId ? () => setRenaming(true) : undefined}
           appliedIds={meta.tags}
           onToggleTag={meta.setTag}
           registry={registry}
@@ -69,6 +73,7 @@ export function SessionTagsChip({ sessionId }: { sessionId: string | null }) {
           pin={{ pinned, onPin: (next) => meta.setFlag('priority', next) }}
         />
       </Dialog>
+      {renaming && sessionId && <SessionRenameDialog id={sessionId} name={sessionName || 'Untitled session'} onClose={() => setRenaming(false)} />}
     </>
   );
 }

@@ -15,7 +15,7 @@ import { tagColorCss } from '../../../shared/tags';
 // picked) are one value for every theme; a quarter of the theme's text colour lifts them
 // on dark themes and deepens them on pale ones.
 
-const mix = (color: string) => `color-mix(in srgb, ${tagColorCss(color)} 75%, var(--fg))`;
+export const mix = (color: string) => `color-mix(in srgb, ${tagColorCss(color)} 75%, var(--fg))`;
 
 export function TagChip({ tag, onRemove, onAdd, dim = false, archivedLook = false, className = '' }: {
   tag: Pick<TagRecord, 'label' | 'color'>;
@@ -55,7 +55,7 @@ export function TagChip({ tag, onRemove, onAdd, dim = false, archivedLook = fals
 
 /** A solid tag with a ring in the panel colour, so stacked tags stay apart. Mirrored like
  *  glyphs.tsx's TagGlyph, so the point aims back into the content. */
-function FilledTag({ className = '' }: { className?: string }) {
+export function FilledTag({ className = '' }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" aria-hidden>
       <g transform="translate(24,0) scale(-1,1)">

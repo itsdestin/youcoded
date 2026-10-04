@@ -103,7 +103,7 @@ export function TagCloud({ registry, appliedIds, onToggle }: {
 }
 
 /** The ten theme-tuned colours, then a picker for any colour (PM12-2, approved PM13-2). */
-function ColourRow({ value, onChange, label }: { value: TagColor; onChange: (c: TagColor) => void; label: string }) {
+export function ColourRow({ value, onChange, label }: { value: TagColor; onChange: (c: TagColor) => void; label: string }) {
   const custom = value.startsWith('#');
   return (
     <div className="space-y-1.5">
@@ -130,7 +130,7 @@ function ColourRow({ value, onChange, label }: { value: TagColor; onChange: (c: 
 
 /** One tag's settings: a draft until Save (PM12-2: "a clearer save/confirm button");
  *  red Delete tag far left, asking first (PM13-4). */
-function TagFields({ tag, registry, onClose }: { tag: TagRecord; registry: TagRegistryApi; onClose: () => void }) {
+export function TagFields({ tag, registry, onClose }: { tag: TagRecord; registry: TagRegistryApi; onClose: () => void }) {
   const [label, setLabel] = useState(tag.label);
   const [color, setColor] = useState<TagColor>(tag.color);
   const [archived, setArchived] = useState(!!tag.archived);
@@ -178,7 +178,7 @@ function TagFields({ tag, registry, onClose }: { tag: TagRecord; registry: TagRe
 
 /** A new tag: name and colour; red Cancel left, Create right (PM12-3). Create never greys
  *  out — an empty name answers with the guide's short error line (PM13-3). */
-function NewTagFields({ registry, onDone, onCancel }: { registry: TagRegistryApi; onDone: (id: string | null) => void; onCancel: () => void }) {
+export function NewTagFields({ registry, onDone, onCancel }: { registry: TagRegistryApi; onDone: (id: string | null) => void; onCancel: () => void }) {
   const [name, setName] = useState('');
   const [color, setColor] = useState<TagColor>(DEFAULT_TAG_COLOR);
   const [tried, setTried] = useState(false);

@@ -4019,6 +4019,7 @@ function AppInner() {
                   effort={effortLevel}
                   onOpenModelPicker={openModelPicker}
                   sessionId={sessionId}
+                  sessionName={currentSession?.name}
                   onDispatch={handleStatusDispatch}
                   openTasksCounts={openTasksCounts}
                   onOpenOpenTasks={openOpenTasksPopup}
