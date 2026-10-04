@@ -114,7 +114,7 @@ function world() {
   const sm: any = new EventEmitter();
   sm.createSession = vi.fn(); sm.destroySession = vi.fn(); sm.listSessions = vi.fn(() => []); sm.getSession = vi.fn();
   sm.sendInput = vi.fn(); sm.resizeSession = vi.fn();
-  sm.ackOutput = vi.fn(); sm.resetOutputCredit = vi.fn();
+  sm.ackOutput = vi.fn(); sm.resetOutputCredit = vi.fn(); sm.bounceSize = vi.fn();
   const registry = new WindowRegistry();
   for (const id of [1, 2, 3]) registry.registerWindow(id, Date.now(), 'main');
   const mainWindow: any = { isDestroyed: () => false, webContents: w1 };
@@ -364,5 +364,29 @@ describe('terminal flow wiring: nothing can brake a session no desktop terminal 
     t.ready(t.w2);                                         // the closing window's terminal reports ready after the exit
     t.out('ghost');                                        // and nothing is delivered or tracked for the dead session
     expect(t.w2.sent.filter((s: any) => s.channel.startsWith('pty:output')).map((s: any) => s.data)).toEqual(['x']);
+  });
+
+  it('a page that said ready and then reloaded before routing included it does not get its dead ready promoted', () => {
+    const t = world();
+    t.ready(t.w3);                                          // old page of window 3 says ready; routing does not include it yet
+    t.w3.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });   // the page reloads: that ready died with it
+    t.registry.subscribe(SID, 3);                           // routing now includes window 3
+    t.out('interim');                                       // goes to the buffer, NOT into a page that has no terminal yet
+    expect(t.w3.sent.filter((s: any) => s.channel.startsWith('pty:output'))).toEqual([]);
+    t.ready(t.w3);                                          // the NEW page's own ready
+    expect(t.w3.sent.map((s: any) => s.data)).toEqual(['interim']);
+  });
+
+  it('after a pre-mount cut the program is asked to repaint once, when the terminal mounts (and not when nothing was cut)', () => {
+    const t = world();
+    t.registry.assignSession(SID, 2);
+    t.out('plain\n'); t.ready(t.w2);
+    expect(t.sm.bounceSize).not.toHaveBeenCalled();         // nothing cut: no repaint
+    const t2 = world();
+    t2.registry.assignSession(SID, 2);
+    for (let i = 0; i < 6; i++) t2.out(('r' + i).repeat(511) + '\n'.repeat(1) + ('x'.repeat(1023) + '\n').repeat(1023));
+    t2.ready(t2.w2);
+    expect(t2.sm.bounceSize).toHaveBeenCalledTimes(1);
+    expect(t2.sm.bounceSize).toHaveBeenCalledWith(SID);
   });
 });

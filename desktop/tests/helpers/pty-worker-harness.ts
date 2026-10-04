@@ -24,7 +24,7 @@ const WORKER_SRC = fs
   .replace(/^#![^\n]*\n/, '');
 
 /** Load the real pty-worker with a fake node-pty, and spawn its PTY. */
-export function loadWorker(subagentModel?: string, extraEnv: Record<string, string> = {}) {
+export function loadWorker(subagentModel?: string, extraEnv: Record<string, string> = {}, platform: string = process.platform) {
   const writes: string[] = [];
   let spawnedEnv: Record<string, string | undefined> = {};
   let onExit: ((result: { exitCode: number }) => void) | undefined;
@@ -34,17 +34,19 @@ export function loadWorker(subagentModel?: string, extraEnv: Record<string, stri
   const fakePty = {
     pid: 1234,
     write: (d: string) => { writes.push(d); },
-    resize: vi.fn(),
+    resize: vi.fn(function (this: any, c: number, r: number) { fakePty.cols = c; fakePty.rows = r; }),
     kill: vi.fn(),
     onData: (cb: (d: string) => void) => { dataListeners.push(cb); return { dispose() { const i = dataListeners.indexOf(cb); if (i >= 0) dataListeners.splice(i, 1); } }; },
     pause: vi.fn(),
     resume: vi.fn(),
+    cols: 80,
+    rows: 24,
     onExit: (cb: (result: { exitCode: number }) => void) => { onExit = cb; },
   };
   const fakeProcess: any = new EventEmitter();
   Object.assign(fakeProcess, {
     env: { ...process.env, CLAUDE_CODE_SUBAGENT_MODEL: subagentModel, ...extraEnv },
-    platform: process.platform,
+    platform,
     pid: 4242,
     hrtime: process.hrtime,
     send: vi.fn(),

@@ -8,6 +8,8 @@ import { createTerminalFeeder, HIDDEN_BURST, HIDDEN_RATE, HIDDEN_QUEUE_MAX, DOC_
 
 function rig(opts: { hidden?: boolean; throttleHidden?: boolean } = {}) {
   let t = 0;
+  let alive = true;
+  const repaints: number[] = [];
   let hidden = opts.hidden ?? false;
   let docHidden = false;
   const timers: { at: number; fn: () => void; id: number }[] = [];
@@ -20,13 +22,16 @@ function rig(opts: { hidden?: boolean; throttleHidden?: boolean } = {}) {
     ack: (n) => acks.push(n),
     isHidden: () => hidden,
     isDocHidden: () => docHidden,
+    isAlive: () => alive,
+    onRepaintNeeded: () => repaints.push(t),
     throttleHidden: opts.throttleHidden ?? true,
     now: () => t,
     setTimer: (fn, ms) => { const id = nextId++; timers.push({ at: t + ms, fn, id }); return id; },
     clearTimer: (h) => { const i = timers.findIndex(x => x.id === h); if (i >= 0) timers.splice(i, 1); },
   });
   return {
-    feeder, written, acks,
+    feeder, written, acks, repaints,
+    kill: () => { alive = false; },
     setHidden: (h: boolean) => { hidden = h; },
     setDocHidden: (h: boolean) => { docHidden = h; feeder.docVisibilityChanged(); },
     parseAll: () => { while (pendingDone.length) pendingDone.shift()!(); },
@@ -220,6 +225,37 @@ describe('terminal feeder', () => {
       for (let i = 0; i < 40; i++) { r.advanceClockOnly(2000); r.feeder.push(chunk); }   // plenty of allowance, xterm never answers
       expect(sum(r.written.map((w) => w.length))).toBeLessThanOrEqual(2 * 1024 * 1024 + 256 * 1024 + 200);
       expect(r.feeder.queued()).toBeLessThanOrEqual(DOC_HIDDEN_CAP);
+    });
+  });
+
+  describe('lifetime and repaint', () => {
+    it('a terminal that is gone stops the pump for good: no retry loop, and what was owed is released', () => {
+      const r = rig({ hidden: true });
+      r.feeder.push('a'.repeat(HIDDEN_BURST));              // written, its callback will never fire
+      r.feeder.push('b'.repeat(3 * 1024 * 1024));            // keeps a hidden backlog and a retry timer alive
+      expect(r.timerCount()).toBeGreaterThan(0);
+      r.kill();                                              // xterm disposed without the feeder being told
+      r.advance(100);
+      expect(r.timerCount()).toBe(0);
+      expect(sum(r.acks)).toBe(HIDDEN_BURST + 3 * 1024 * 1024);   // everything owed was released once
+      r.advance(10_000);
+      expect(r.timerCount()).toBe(0);
+    });
+
+    it('asks for ONE repaint after a cut, once the window is back and the backlog is written — none without a cut', () => {
+      const r = rig();
+      r.setDocHidden(true);
+      r.feeder.push('s'.repeat(HIDDEN_BURST));
+      const lines = ('c'.repeat(1023) + '\n').repeat(512);
+      for (let i = 0; i < 20; i++) r.feeder.push(lines);     // 10 M of lines: a cut happens
+      expect(r.repaints).toEqual([]);                         // not while the window is hidden
+      r.setDocHidden(false);
+      expect(r.repaints.length).toBe(1);
+      r.feeder.wake(); r.setDocHidden(true); r.setDocHidden(false);
+      expect(r.repaints.length).toBe(1);                      // once per cut episode
+      const q = rig();
+      q.setDocHidden(true); q.feeder.push('small\n'); q.setDocHidden(false);
+      expect(q.repaints).toEqual([]);
     });
   });
 });

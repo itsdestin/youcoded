@@ -33,7 +33,7 @@
 // This only applies where the brake actually exists: the desktop's own window. A remote browser / the
 // phone app has no brake (and a hidden queue there would just grow), so it writes straight through.
 
-import { trimOldest } from '../../shared/pty-trim';
+import { trimOldest, type TrimMemo } from '../../shared/pty-trim';
 
 export const HIDDEN_RATE = 512 * 1024;      // characters per second, sustained, while hidden
 export const HIDDEN_BURST = 1024 * 1024;    // characters that pass instantly after a quiet spell
@@ -56,6 +56,13 @@ export interface TerminalFeederOptions {
   isHidden(): boolean;
   /** The whole window is hidden/minimised (timers throttled). Default: document.visibilityState. */
   isDocHidden?(): boolean;
+  /** Is the terminal this feeder writes to still alive? A pump whose terminal is gone stops and releases what it owes. */
+  isAlive?(): boolean;
+  /**
+   * Text was cut from a hidden window's backlog and the window is visible again with the backlog written: a program
+   * that redraws with relative cursor moves (Claude Code) needs one full repaint (the caller nudges the PTY size).
+   */
+  onRepaintNeeded?(): void;
   /** False where there is no upstream brake (remote browser, phone app): never hold anything back. */
   throttleHidden: boolean;
   now?(): number;
@@ -106,7 +113,9 @@ export function createTerminalFeeder(opts: TerminalFeederOptions): TerminalFeede
   let disposed = false;
   let inXterm = 0;            // written to xterm, callback not yet fired (paid or not): xterm's own backlog
   let docWasHidden = false;
-  let paidEpoch = 0;          // bumped by payAll(): writes issued earlier were already confirmed upstream
+  let paidEpoch = 0;
+  const trimMemo: TrimMemo = { skipUntil: 0, scans: 0 };
+  let trimmedSinceShown = false;   // a cut happened: ask for one repaint once the window is back and the backlog is written          // bumped by payAll(): writes issued earlier were already confirmed upstream
 
   const writeNow = (data: string, paid: boolean) => {
     if (data.length === 0) return;
@@ -137,6 +146,10 @@ export function createTerminalFeeder(opts: TerminalFeederOptions): TerminalFeede
     queuedChars = 0; queuedUnpaid = 0;
     tokens = HIDDEN_BURST;
     lastRefill = now();
+    maybeRepaint();
+  };
+  const maybeRepaint = () => {
+    if (trimmedSinceShown && !queue.length && !docHidden() && !opts.isHidden()) { trimmedSinceShown = false; opts.onRepaintNeeded?.(); }
   };
 
   // Confirm upstream everything not yet confirmed (the window just went out of sight).
@@ -152,6 +165,8 @@ export function createTerminalFeeder(opts: TerminalFeederOptions): TerminalFeede
   // callbacks as well as from the timer: a hidden window's timers can be stretched to once a minute, IPC events are not.
   const pump = () => {
     if (disposed) return;
+    // The terminal is gone (disposed without us being told): stop for good — no 50 ms retry loop, nothing left owed.
+    if (opts.isAlive && !opts.isAlive()) { api.dispose(); return; }
     if (!opts.isHidden() && !docHidden()) { drainAll(); return; }
     refill();
     while (queue.length && tokens >= 1 && inXterm < XTERM_PENDING_MAX) {
@@ -188,11 +203,11 @@ export function createTerminalFeeder(opts: TerminalFeederOptions): TerminalFeede
     if (h === docWasHidden) return;
     docWasHidden = h;
     if (h && opts.throttleHidden) payAll();
-    if (!h) { if (!opts.isHidden() && queue.length) drainAll(); else if (queue.length && timer === null) timer = setTimer(drainSome, HIDDEN_TICK_MS); }
+    if (!h) { if (!opts.isHidden() && queue.length) drainAll(); else if (queue.length && timer === null) timer = setTimer(drainSome, HIDDEN_TICK_MS); maybeRepaint(); }
   };
   const unwatch = opts.throttleHidden ? watchDocument(onDocChange) : () => {};
 
-  return {
+  const api: TerminalFeeder = {
     push(data: string) {
       if (disposed || data.length === 0) return;
       if (opts.throttleHidden && docHidden()) {
@@ -202,8 +217,9 @@ export function createTerminalFeeder(opts: TerminalFeederOptions): TerminalFeede
         enqueue(data, true);
         if (queuedChars > DOC_HIDDEN_CAP) {
           // Keep the newest: cut at a line start outside any escape sequence and restore the terminal's sticky modes.
-          const r = trimOldest(queue, DOC_HIDDEN_CAP, Math.floor(DOC_HIDDEN_CAP * 0.75));
+          const r = trimOldest(queue, DOC_HIDDEN_CAP, Math.floor(DOC_HIDDEN_CAP * 0.75), trimMemo);
           queuedChars += r.added - r.removed;
+          if (r.removed > 0) trimmedSinceShown = true;
         }
         pump();
         return;
@@ -223,7 +239,7 @@ export function createTerminalFeeder(opts: TerminalFeederOptions): TerminalFeede
     docVisibilityChanged: onDocChange,
     wake() {
       if (disposed) return;
-      if (queue.length) drainAll();
+      if (queue.length) drainAll(); else maybeRepaint();
     },
     dispose() {
       if (disposed) return;
@@ -238,4 +254,5 @@ export function createTerminalFeeder(opts: TerminalFeederOptions): TerminalFeede
     },
     queued: () => queuedChars,
   };
+  return api;
 }

@@ -535,6 +535,20 @@ process.on('message', (msg) => {
       onAck(msg);
       break;
     }
+    case 'bounce': {
+      // Repaint request after output was cut from the front of a backlog (the cursor position is unknown, and
+      // programs like Claude Code's Ink UI redraw with relative cursor moves): one column narrower, then back.
+      // The restore only happens if nobody resized in between (a real resize wins), and never on Windows, where
+      // ConPTY reflows and re-emits its whole buffer on every resize (duplicated chrome in scrollback).
+      if (!ptyProcess || process.platform === 'win32') break;
+      const c = ptyProcess.cols, r = ptyProcess.rows;
+      if (!(c > 2)) break;
+      ptyProcess.resize(c - 1, r);
+      setTimeout(() => {
+        if (ptyProcess && ptyProcess.cols === c - 1 && ptyProcess.rows === r) ptyProcess.resize(c, r);
+      }, 120);
+      break;
+    }
     case 'resize': {
       if (ptyProcess) ptyProcess.resize(msg.cols, msg.rows);
       break;

@@ -1,7 +1,7 @@
 // PTY output routing to desktop terminals, with buffering until a terminal mounts and flow control
 // (extracted from ipc-handlers.ts, 2026-10-04 review round). See terminal-flow.ts for the brake rules.
 import { TerminalFlow, watchWebContents } from './terminal-flow';
-import { trimOldest, type Chunk } from '../shared/pty-trim';
+import { trimOldest, type Chunk, type TrimMemo } from '../shared/pty-trim';
 
 // Output waiting for a terminal to mount is capped at the newest this-many characters — the same
 // "keep the tail" rule as the remote ring buffer — instead of growing without bound.
@@ -16,6 +16,8 @@ export interface RouterDeps {
   sessionManager: {
     on(event: string, fn: (...args: any[]) => void): unknown;
     ackOutput(sessionId: string, chars: number): unknown;
+    /** Make the program repaint (PTY size nudge in the worker). Optional: absent in minimal test doubles. */
+    bounceSize?(sessionId: string): unknown;
   };
   windowRegistry?: { on(event: string, fn: () => void): unknown; getOwner(sessionId: string): number | undefined };
   routeTargets(sessionId: string): number[];
@@ -34,6 +36,9 @@ export function createTerminalOutputRouter(d: RouterDeps): (sessionId: string) =
   // renderer says ready once per mount and never retries, so dropping it would leave a blank terminal.
   const awaitingReady = new Map<string, Set<number>>();
   const ended = new Set<string>();
+  // Per session: scan memo for the pre-mount cut, and whether a cut happened (then the program must repaint once the terminal mounts).
+  const trimMemos = new Map<string, TrimMemo>();
+  const trimmed = new Set<string>();
   const pendingChars = new Map<string, number>();
   const readySessions = new Set<string>();
 
@@ -74,8 +79,11 @@ export function createTerminalOutputRouter(d: RouterDeps): (sessionId: string) =
       let held = (pendingChars.get(sessionId) ?? 0) + data.length;
       if (held > PENDING_CAP) {
         // Keep the newest text, cut at a line start outside any escape sequence, with the terminal's sticky modes restored.
-        const r = trimOldest(buf, PENDING_CAP, PENDING_TARGET);
+        let memo = trimMemos.get(sessionId);
+        if (!memo) { memo = { skipUntil: 0, scans: 0 }; trimMemos.set(sessionId, memo); }
+        const r = trimOldest(buf, PENDING_CAP, PENDING_TARGET, memo);
         held += r.added - r.removed;
+        if (r.removed > 0) trimmed.add(sessionId);
       }
       pendingChars.set(sessionId, held);
     }
@@ -94,6 +102,9 @@ export function createTerminalOutputRouter(d: RouterDeps): (sessionId: string) =
     pendingOutput.delete(sessionId);
     pendingChars.delete(sessionId);
     for (const c of buffered ?? []) d.sendForSession(sessionId, `pty:output:${sessionId}`, c.s);
+    trimMemos.delete(sessionId);
+    // Text was cut from the front: the cursor position is unknown, so the program repaints once (size nudge, in the worker).
+    if (trimmed.delete(sessionId)) d.sessionManager.bounceSize?.(sessionId);
   };
 
   // A terminal mounted in the sending window.
@@ -104,7 +115,13 @@ export function createTerminalOutputRouter(d: RouterDeps): (sessionId: string) =
       // Not routed to yet (see awaitingReady): remember it instead of losing it.
       let set = awaitingReady.get(sessionId);
       if (!set) { set = new Set(); awaitingReady.set(sessionId, set); }
-      set.add(wid);
+      if (!set.has(wid)) {
+        set.add(wid);
+        // The page that said ready may reload or navigate before routing includes it: its ready died with it
+        // (the new page sends its own), so forget this one — otherwise it is promoted later into a page with no terminal.
+        const wc = d.fromId(wid);
+        if (wc) watchWebContents(wc, () => { awaitingReady.get(sessionId)?.delete(wid); });
+      }
       return;
     }
     handleReady(sessionId, wid);
@@ -120,6 +137,7 @@ export function createTerminalOutputRouter(d: RouterDeps): (sessionId: string) =
   return (sessionId: string) => {
     pendingOutput.delete(sessionId); pendingChars.delete(sessionId); flow.end(sessionId); readySessions.delete(sessionId);
     awaitingReady.delete(sessionId);
+    trimMemos.delete(sessionId); trimmed.delete(sessionId);
     ended.add(sessionId);
     if (ended.size > ENDED_MEMORY) ended.delete(ended.values().next().value as string);
   };

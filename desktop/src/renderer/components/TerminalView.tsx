@@ -20,6 +20,25 @@ import { ScreenMark } from '../shoot-mode';
 // Photo-only build flag (vite.config.ts `define`); see shoot-mode.tsx.
 declare const __SHOOT__: boolean;
 
+/**
+ * Make the program redraw its whole screen: shrink the PTY by one column, then put the real size back (SIGWINCH twice).
+ * WHY: after text was cut from a hidden window's backlog the terminal's cursor position is unknown, and a program that
+ * redraws with RELATIVE cursor moves (Claude Code's Ink UI: "up N lines, erase") would erase from the wrong row and
+ * leave pieces of an old frame. The restore uses the terminal's CURRENT size (the fit result), so a real resize in
+ * the 120 ms between cannot be undone by a stale value; the fit's own dedup state is untouched. Skipped on Windows,
+ * where ConPTY reflows and re-emits its buffer on every resize (duplicated chrome in scrollback — see
+ * PTY resize in .claude/rules/pty-io.md); plain shells just redraw their prompt in place, harmless.
+ */
+function nudgePtySize(sessionId: string, termRef: React.MutableRefObject<Terminal | null>): void {
+  const t = termRef.current;
+  if (!t || t.cols < 2 || /Windows/i.test(navigator.userAgent)) return;
+  window.claude.session.resize(sessionId, t.cols - 1, t.rows);
+  setTimeout(() => {
+    const now = termRef.current;
+    if (now) window.claude.session.resize(sessionId, now.cols, now.rows);
+  }, 120);
+}
+
 /** Terminal always uses Cascadia Code — user font selection applies to the
  *  chat UI only. Proportional or display fonts break xterm's character grid. */
 const TERMINAL_FONT = "'Cascadia Code', 'Cascadia Mono', Consolas, monospace";
@@ -536,6 +555,7 @@ function TerminalView({ sessionId, visible }: Props) {
       renderPause?.dispose();
       renderPauseRef.current = null;
       disposed = true;
+      terminalRef.current = null;   // a feeder still holding this terminal sees it is gone (isAlive)
       terminal.dispose();
     };
     // WHY only sessionId: see xtermBackgroundRef — a backing change recolours
@@ -653,6 +673,10 @@ function TerminalView({ sessionId, visible }: Props) {
           },
           ack: (chars) => window.claude.session.ackOutput?.(sessionId, chars),
           isHidden: () => !visibleRef.current,
+          // The terminal this feeder writes to is gone: its pump must stop (see terminal-feeder.ts).
+          isAlive: () => terminalRef.current !== null,
+          // Text was cut from a hidden window's backlog: one full repaint, by nudging the PTY size (below).
+          onRepaintNeeded: () => nudgePtySize(sessionId, terminalRef),
           // Only where main has a brake to pull: not for a remote browser or the phone app.
           throttleHidden: !isRemoteMode() && !isAndroid(),
         }),

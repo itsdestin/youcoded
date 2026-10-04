@@ -58,6 +58,34 @@ describe('pty-worker output batching', () => {
   });
 });
 
+describe('pty-worker repaint nudge (after output was cut from a backlog)', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  it('shrinks the PTY by one column and puts the real size back', () => {
+    vi.useFakeTimers();
+    const w = loadWorker();
+    w.deliver({ type: 'bounce' });
+    expect(w.fakePty.resize).toHaveBeenLastCalledWith(79, 24);
+    vi.advanceTimersByTime(130);
+    expect(w.fakePty.resize).toHaveBeenLastCalledWith(80, 24);
+  });
+  it('does not fight a real resize that lands in between', () => {
+    vi.useFakeTimers();
+    const w = loadWorker();
+    w.deliver({ type: 'bounce' });
+    w.deliver({ type: 'resize', cols: 100, rows: 30 });
+    vi.advanceTimersByTime(130);
+    expect(w.fakePty.cols).toBe(100);                       // the user's size stands, the stale restore never ran
+    expect(w.fakePty.resize).not.toHaveBeenCalledWith(80, 24);
+  });
+  it('never on Windows (ConPTY re-emits its buffer on every resize)', () => {
+    vi.useFakeTimers();
+    const w = loadWorker(undefined, {}, 'win32');
+    w.deliver({ type: 'bounce' });
+    vi.advanceTimersByTime(130);
+    expect(w.fakePty.resize).not.toHaveBeenCalled();
+  });
+});
+
 describe('pty-worker flow control', () => {
   afterEach(() => { vi.useRealTimers(); });
 
