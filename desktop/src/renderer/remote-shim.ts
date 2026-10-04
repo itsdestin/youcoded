@@ -797,9 +797,9 @@ export const REJECT_ON_NOT_OK: ReadonlySet<string> = new Set([
   'theme:list',
   'commands:list',
   'appearance:get-favorite-themes',
-  // Installing Claude Code (first-run local models, F-5): the phone refuses with
-  // { ok:false }. Resolved as a value, the Settings card would read it as an
-  // install that finished.
+  // Installing Claude Code (first-run local models, F-5): open to a phone — the computer
+  // runs the installer (table entry main/ipc/claude-code.ts, Node first). Listed here so a
+  // refusal or failure `{ ok:false }` rejects instead of resolving as an install that finished.
   'claude-code:install',
   // Host administration is refused over the remote socket (desktop IPC only). Without
   // these the refusal `{ ok:false }` resolves as an ordinary value, so a phone that
@@ -3269,8 +3269,8 @@ export function installShim(): void {
     // locally would be meaningless.
     claudeCode: {
       status: (opts?: { refresh?: boolean }) => invoke('claude-code:status', opts),
-      // Installs on the DESKTOP (remote-server runs the installer). A phone has
-      // no installer and refuses with {ok:false}, which REJECT_ON_NOT_OK turns
+      // Installs on the DESKTOP: the table entry (main/ipc/claude-code.ts) runs the installer
+      // for a phone too. A failure or refusal answers {ok:false}, which REJECT_ON_NOT_OK turns
       // into an error the Settings card shows.
       install: () => invoke('claude-code:install'),
     },

@@ -309,7 +309,7 @@ describe('the buddy keeps its consent gate', () => {
     expect(m.show).not.toHaveBeenCalled();
   });
 
-  it('buddy:show passes only the two known styles on (the taskbar-icon buddy, 2026-10-02), and buddy:mascot-hit tells the window manager whether the pointer is on him', async () => {
+  it('buddy:show passes only the two known styles on, and buddy:mascot-hit tells the window manager whether the pointer is on him', async () => {
     const m = manager();
     bindBuddy({ buddyManager: m as any, helper: helper(null) as any });
     const show = findChannel('buddy:show')!;
