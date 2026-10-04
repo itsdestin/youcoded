@@ -6,6 +6,7 @@ import {
   shouldUseShell,
   getRegPath,
   getPowerShellPath,
+  buildRefreshedPath,
 } from '../src/main/prerequisite-installer';
 
 // Invariant 1: runCommand flips `shell: true` ONLY for Windows .cmd/.bat shims
@@ -49,5 +50,45 @@ describe.runIf(process.platform === 'win32')('reg/powershell path quoting asymme
     const ps = getPowerShellPath();
     expect(ps.includes('"')).toBe(false);
     expect(ps.endsWith('powershell.exe')).toBe(true);
+  });
+});
+
+// Invariant 3: refreshPath() expands the registry's %VARS% and keeps the app's other PATH
+// entries. Unexpanded `%SystemRoot%\system32` / `%USERPROFILE%\...\WindowsApps` entries are
+// invisible to Windows' PATH search, which made winget vanish right after it installed Node
+// (clean Windows 11 VM, 2026-10-02: setup then dead-ended at Git with "winget is missing").
+describe('buildRefreshedPath (Windows PATH rebuilt from the registry)', () => {
+  const env = { SystemRoot: 'C:\\Windows', USERPROFILE: 'C:\\Users\\Ann' };
+
+  it('expands %VARS% so System32 and WindowsApps (winget) stay findable', () => {
+    const out = buildRefreshedPath(
+      '%USERPROFILE%\\AppData\\Local\\Microsoft\\WindowsApps',
+      '%SystemRoot%\\system32;C:\\Program Files\\nodejs\\',
+      '',
+      env,
+    ).split(';');
+    expect(out).toEqual([
+      'C:\\Users\\Ann\\AppData\\Local\\Microsoft\\WindowsApps',
+      'C:\\Windows\\system32',
+      'C:\\Program Files\\nodejs\\',
+    ]);
+  });
+
+  it('looks names up case-insensitively and leaves unknown names as written', () => {
+    expect(buildRefreshedPath('%systemroot%\\x;%NOPE%\\y', '', '', env)).toBe('C:\\Windows\\x;%NOPE%\\y');
+  });
+
+  it('keeps launch-time entries the registry lacks, after the registry ones, without duplicates', () => {
+    const out = buildRefreshedPath(
+      'C:\\Program Files\\Git\\cmd',
+      '%SystemRoot%\\system32',
+      'C:\\WINDOWS\\System32\\;C:\\Users\\Ann\\.local\\bin;;',
+      env,
+    ).split(';');
+    expect(out).toEqual([
+      'C:\\Program Files\\Git\\cmd',
+      'C:\\Windows\\system32',
+      'C:\\Users\\Ann\\.local\\bin',
+    ]);
   });
 });
