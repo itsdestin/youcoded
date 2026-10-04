@@ -3,7 +3,8 @@ import React from 'react';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 
-const state = vi.hoisted(() => ({ attention: false, reducedEffects: false, poses: [] as string[] }));
+const state = vi.hoisted(() => ({ attention: false, reducedEffects: false, poses: [] as string[], platform: 'win32' as string | null }));
+vi.mock('../src/renderer/state/platform', () => ({ useCurrentPlatform: () => state.platform }));
 vi.mock('../src/renderer/state/theme-context', () => ({
   useTheme: () => ({ theme: 'light', activeTheme: null, reducedEffects: state.reducedEffects }),
 }));
@@ -41,7 +42,7 @@ beforeAll(() => {
   };
 });
 afterAll(() => { win.claude = realClaude; });
-afterEach(() => { cleanup(); state.attention = false; state.reducedEffects = false; state.poses = []; });
+afterEach(() => { cleanup(); state.attention = false; state.reducedEffects = false; state.poses = []; state.platform = 'win32'; });
 
 // ─── Animation continuity ────────────────────────────────────────────────────
 
@@ -162,7 +163,7 @@ describe('a docked buddy that needs attention', () => {
 // ─── Hitbox ─────────────────────────────────────────────────────────────────
 
 // Destin 2026-10-02: "he sometimes catches clicks above/to the side that
-// should've passed through". Only his drawn body counts now: a press on the
+// should've passed through". On Windows/macOS only his drawn body counts: a press on the
 // empty part of his window does nothing, and main is told when the pointer is
 // on him so that part can be click-through (Windows/macOS).
 describe('only his drawn body catches the pointer', () => {
@@ -194,6 +195,18 @@ describe('only his drawn body catches the pointer', () => {
     fireEvent.pointerDown(wrap, { pointerId: 1, clientX: 56, clientY: 4 });
     fireEvent.pointerUp(wrap, { pointerId: 1, clientX: 56, clientY: 4 });
     expect(toggleChat).not.toHaveBeenCalled();
+  });
+
+  // Destin 2026-10-03: Linux can't pass clicks through, so a body-only check
+  // there made clicks beside him vanish. The whole square stays him on Linux.
+  it.each(['linux', null])('keeps the whole window as his hit area on %s', (platform) => {
+    state.platform = platform;
+    withBridge();
+    const view = render(<BuddyMascot />);
+    const wrap = view.container.querySelector('.mascot-wrap')!;
+    fireEvent.pointerDown(wrap, { pointerId: 1, clientX: 56, clientY: 4 });
+    fireEvent.pointerUp(wrap, { pointerId: 1, clientX: 56, clientY: 4 });
+    expect(toggleChat).toHaveBeenCalledTimes(1);
   });
 
   it('a press on his body still opens the chat', () => {

@@ -419,8 +419,9 @@ export class BuddyWindowManager {
    *
    * Windows and macOS only: `forward` doesn't exist on Linux — X11 would go
    * permanently deaf to the mouse, and Wayland ignores the call outright
-   * (rules/buddy-floater.md). There the renderer still refuses to react to
-   * presses on empty space; the click just can't reach the window behind.
+   * (rules/buddy-floater.md). There the renderer keeps the WHOLE window as his
+   * hit area (Destin 2026-10-03): a press that can't pass through must still do
+   * something, not vanish.
    */
   setMascotHit(over: boolean): void {
     if (process.platform !== 'win32' && process.platform !== 'darwin') return;

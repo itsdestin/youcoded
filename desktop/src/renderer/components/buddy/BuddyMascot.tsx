@@ -6,6 +6,7 @@ import { MascotRig, type RigMotion } from '../mascot/MascotRig';
 import { purifySvgMarkup } from '../mascot/sanitize-rig-svg';
 import type { PoseName } from '../mascot/mascot-poses';
 import { defaultMascotPaint } from '../mascot/default-mascot-paint';
+import { useCurrentPlatform } from '../../state/platform';
 
 const DRAG_THRESHOLD_PX = 4;
 // Slack around his drawn outline that still counts as "on him", so thin arms
@@ -149,6 +150,17 @@ export function BuddyMascot() {
   // the whole window (see pointOnBody). Main is told so it can make the empty
   // rest of the window click-through on Windows/macOS.
   const onBodyRef = useRef(false);
+  // Body-only hits on Windows/macOS ONLY. WHY (Destin 2026-10-03): there the
+  // empty part of the window is click-through, so a miss reaches the window
+  // behind him. Linux can't pass clicks through (Wayland ignores the request),
+  // so a body-only check there just made those clicks vanish — "inexplicably
+  // lost". On Linux, and until the platform is known, the whole square is him,
+  // as before. Click-through on Windows/macOS is the bonus; this is the floor.
+  const platform = useCurrentPlatform();
+  const bodyOnlyRef = useRef(false);
+  bodyOnlyRef.current = platform === 'win32' || platform === 'darwin';
+  const isOnBody = useCallback((x: number, y: number) =>
+    !bodyOnlyRef.current || pointOnBody(x, y, rigHostRef.current, MASCOT_PX), []);
   const enterBody = useCallback(() => {
     if (dock.mode !== 'peeking') return;
     if (!hoverArmedRef.current) return; // still holding the post-drag/press state
@@ -266,10 +278,10 @@ export function BuddyMascot() {
   }, []);
 
   const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    // A press on the empty part of his window is not a press on him — no
-    // drag, no chat. (On Windows/macOS it never even arrives: that part of the
-    // window is click-through. Linux can't pass it through, so it stops here.)
-    if (!pointOnBody(e.clientX, e.clientY, rigHostRef.current, MASCOT_PX)) return;
+    // A press on the empty part of his window is not a press on him — no drag,
+    // no chat. Windows/macOS only (see bodyOnlyRef); it rarely even arrives
+    // there, since that part of the window is click-through.
+    if (!isOnBody(e.clientX, e.clientY)) return;
     // Disarm hover-swing-out for the duration of this press and until the
     // cursor next leaves (see hoverArmedRef): a drag that ends in peek must not
     // immediately pop back out just because the cursor is still on him.
@@ -292,7 +304,7 @@ export function BuddyMascot() {
       pointerId: e.pointerId,
     };
     setGrabbed(true);
-  }, []);
+  }, [isOnBody]);
 
   const onPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const st = dragRef.current;
@@ -300,7 +312,7 @@ export function BuddyMascot() {
       // Hovering. While he's hopped out of a peek, the whole window holds him
       // out — otherwise standing up moves his body off a still cursor, he sinks
       // back under it, and pops out again, forever.
-      setOnBody(hoppingRef.current || pointOnBody(e.clientX, e.clientY, rigHostRef.current, MASCOT_PX));
+      setOnBody(hoppingRef.current || isOnBody(e.clientX, e.clientY));
       return;
     }
     // Cursor position reconstructed in a frame that does not move with the
@@ -339,7 +351,7 @@ export function BuddyMascot() {
         rafIdRef.current = requestAnimationFrame(flushPendingMove);
       }
     }
-  }, [flushPendingMove, setOnBody]);
+  }, [flushPendingMove, setOnBody, isOnBody]);
 
   const onPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     // Flush any unsent move synchronously before release — otherwise the
