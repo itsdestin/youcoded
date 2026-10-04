@@ -21,6 +21,8 @@ import { tagColorCss } from '../../../shared/tags';
 // Disc sizes leave 2-4 px of the pill showing above and below it (session-details-final
 // #SF-1: "the outer container of the + button is a bit too big. overlaps almost with edge
 // of the tag pill"): xs for the 15 px list pill, sm for the 18 px one, md for the 26 px one.
+// The pill's right padding drops to 4 px beside a button (resume-sheet-1#RS-1: "slightly
+// to the right within the pill for the plus/unselected pills").
 const DISC = { xs: 'w-2.5 h-2.5', sm: 'w-3 h-3', md: 'w-4 h-4' } as const;
 export function ChipAction({ kind, label, onClick, size = 'sm' }: { kind: 'remove' | 'add'; label: string; onClick: () => void; size?: keyof typeof DISC }) {
   return (
@@ -73,13 +75,13 @@ export function TagChip({ tag, onRemove, onAdd, dim = false, archivedLook = fals
 
   if (archivedLook) {
     return (
-      <span className={`shrink-0 inline-flex items-center gap-1 pl-1 pr-1.5 h-3.75 rounded-full border border-edge-dim bg-inset text-4xs leading-none text-fg-muted opacity-70 ${className}`}>
+      <span className={`shrink-0 inline-flex items-center gap-1 pl-1 ${action ? 'pr-1' : 'pr-1.5'} h-3.75 rounded-full border border-edge-dim bg-inset text-4xs leading-none text-fg-muted opacity-70 ${className}`}>
         <TagWord label={tag.label} size={12} iconClass="text-fg-faint" />{action}
       </span>
     );
   }
   return (
-    <span className={`shrink-0 inline-flex items-center gap-1 pl-1 pr-1.5 h-3.75 rounded-full border text-4xs leading-none ${dim ? 'text-fg-muted border-dashed' : 'text-fg-2'} ${className}`}
+    <span className={`shrink-0 inline-flex items-center gap-1 pl-1 ${action ? 'pr-1' : 'pr-1.5'} h-3.75 rounded-full border text-4xs leading-none ${dim ? 'text-fg-muted border-dashed' : 'text-fg-2'} ${className}`}
       style={{ backgroundColor: dim ? 'transparent' : `color-mix(in srgb, ${c} 15%, transparent)`, borderColor: `color-mix(in srgb, ${c} ${dim ? 40 : 30}%, transparent)` }}>
       <TagWord label={tag.label} size={12} iconStyle={{ color: c }} />{action}
     </span>
