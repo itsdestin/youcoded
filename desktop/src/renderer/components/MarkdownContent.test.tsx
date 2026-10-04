@@ -977,11 +977,46 @@ describe('MarkdownContent while a reply streams in', () => {
       const rule = /\.yc-fence-chunk\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
       expect(rule).toMatch(/display:\s*block/);
       expect(rule).toMatch(/contain:\s*layout/);
+      // Without this a long line in a frozen chunk is unreachable by scrolling (measured, real Chromium).
+      expect(rule).toMatch(/width:\s*max-content/);
       expect(rule).not.toMatch(/paint|content-visibility|overflow/);
       const live = render(<Bubble md="Here" incremental />);
       live.rerender(<Bubble md={fenceMd(130)} incremental />);
       expect(live.container.querySelectorAll('pre code > .yc-fence-chunk').length).toBeGreaterThan(3);
       live.unmount();
+    });
+
+    // Review 3: the turn ENDING flips `live` for the whole bubble. Only a group that holds an open
+    // fence may redraw for that; every finished block must be skipped by its memo, or each reply
+    // ends with a hitch proportional to its length (re-parse + re-colour of everything).
+    describe('when the turn ends', () => {
+      const groupsMd = (n: number, tail = '') =>
+        Array.from({ length: n }, (_, i) => `Paragraph ${i} with \`code\` and **bold**.\n\n\`\`\`js\nconst x${i} = ${i};\n\`\`\``).join('\n\n') + tail;
+      const grow = (md: string, live: boolean) => {
+        const view = render(<Bubble md="Para" incremental live={live} />);
+        view.rerender(<Bubble md={md} incremental live={live} />);
+        view.rerender(<Bubble md={`${md} more`} incremental live={live} />);
+        return view;
+      };
+      it('redraws nothing in a reply of 30 finished groups', () => {
+        const md = groupsMd(30);
+        const view = grow(md, true);
+        markdownRenders.length = 0;
+        splitterParsed.chars = 0;
+        view.rerender(<Bubble md={`${md} more`} incremental live={false} />);
+        expect(markdownRenders).toEqual([]);
+        expect(splitterParsed.chars).toBe(0);
+        view.unmount();
+      });
+      it('redraws only the group holding the open fence', () => {
+        const md = groupsMd(30, `\n\n\`\`\`js\n${lines(60, (i) => `const y${i} = ${i};`)}\n`);
+        const view = grow(md, true);
+        markdownRenders.length = 0;
+        view.rerender(<Bubble md={`${md} more`} incremental live={false} />);
+        expect(markdownRenders).toHaveLength(1);
+        expect(markdownRenders[0].startsWith('```js')).toBe(true);
+        view.unmount();
+      });
     });
 
     it('copies the whole fence, frozen lines included', async () => {

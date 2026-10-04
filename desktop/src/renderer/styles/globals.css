@@ -1552,14 +1552,11 @@ pre.yc-code code {
   contain-intrinsic-size: auto 8rem;
 }
 
-/* Frozen chunk of a code fence still being written (FrozenFenceChunk). WHY: its lines
-   never change, and without containment each new word re-ran layout over the whole
-   block (70 -> 520 ms per 2 s at 500 lines, perf-lab 2026-10-04). NOT paint
-   containment / content-visibility: they clip sideways and a long line must scroll the <pre>. */
-.yc-fence-chunk {
-  display: block;
-  contain: layout style;
-}
+/* Frozen chunk of a still-open code fence (FrozenFenceChunk): layout containment stops each
+   new word re-laying-out the whole block (70 -> 520 ms/2 s at 500 lines). No paint containment
+   (clips sideways). max-content is REQUIRED: containment alone dropped its overflow from the
+   scroll range (Chromium scrollWidth 3360 -> 294), so a long line could not be reached. */
+.yc-fence-chunk { display: block; contain: layout style; width: max-content; min-width: 100%; }
 
 /* Command-drawer tiles opt OUT of glassmorphism.
    theme-engine.ts injects `[data-wallpaper] .layer-surface { backdrop-filter:

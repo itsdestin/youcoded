@@ -794,7 +794,10 @@ export default React.memo(function MarkdownContent({ content, sessionId, preview
                 <MarkdownChunk
                   source={g.draw}
                   defs={g.defs}
-                  live={live}
+                  // WHY live only for the group holding an open fence: the turn ending flips `live` for the
+                  // whole bubble, and every other group would miss its memo and be re-parsed and
+                  // re-coloured in one commit — a hitch at the end of every reply.
+                  live={live && g.fenceAt !== undefined}
                   fenceAt={g.fenceAt}
                   rehypePlugins={rehypePlugins}
                   components={components}
