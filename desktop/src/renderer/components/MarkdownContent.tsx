@@ -698,13 +698,15 @@ const FrozenFenceChunk = React.memo(function FrozenFenceChunk({ source, rehypePl
   components: React.ComponentProps<typeof ReactMarkdown>['components'];
 }) {
   return (
-    <ReactMarkdown
-      remarkPlugins={remarkPluginsStable}
-      rehypePlugins={rehypePlugins}
-      components={components ? chunkComponents(components) : undefined}
-    >
-      {source}
-    </ReactMarkdown>
+    <span className="yc-fence-chunk">
+      <ReactMarkdown
+        remarkPlugins={remarkPluginsStable}
+        rehypePlugins={rehypePlugins}
+        components={components ? chunkComponents(components) : undefined}
+      >
+        {source}
+      </ReactMarkdown>
+    </span>
   );
 });
 

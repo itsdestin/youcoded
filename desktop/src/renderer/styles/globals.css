@@ -1552,6 +1552,15 @@ pre.yc-code code {
   contain-intrinsic-size: auto 8rem;
 }
 
+/* Frozen chunk of a code fence still being written (FrozenFenceChunk). WHY: its lines
+   never change, and without containment each new word re-ran layout over the whole
+   block (70 -> 520 ms per 2 s at 500 lines, perf-lab 2026-10-04). NOT paint
+   containment / content-visibility: they clip sideways and a long line must scroll the <pre>. */
+.yc-fence-chunk {
+  display: block;
+  contain: layout style;
+}
+
 /* Command-drawer tiles opt OUT of glassmorphism.
    theme-engine.ts injects `[data-wallpaper] .layer-surface { backdrop-filter:
    blur(<panels-blur>px) ... }`, and change 22 moved every drawer tile (skill

@@ -445,7 +445,10 @@ describe('MarkdownContent while a reply streams in', () => {
     const parts: string[] = [];
     let text = '';
     const flush = () => { if (text) parts.push(JSON.stringify(text)); text = ''; };
-    for (const n of Array.from(root.childNodes)) {
+    // A frozen chunk of a still-open fence sits in a plain wrapper span (CSS containment only);
+    // it is looked through, since it adds no text and no visible structure.
+    const flat = (nodes: Node[]): Node[] => nodes.flatMap((n) => (n.nodeType === 1 && (n as Element).classList.contains('yc-fence-chunk') ? flat(Array.from(n.childNodes)) : [n]));
+    for (const n of flat(Array.from(root.childNodes))) {
       if (n.nodeType === 3) { text += n.textContent ?? ''; continue; }
       if (n.nodeType !== 1) continue;
       flush();
@@ -963,6 +966,22 @@ describe('MarkdownContent while a reply streams in', () => {
         expect(copied).not.toContain('echo other');
         live.unmount();
       });
+    });
+
+    // perf-lab 2026-10-04: without containment, layout of the newest line re-ran over the whole
+    // block (70 -> 520 ms per 2 s on 500 lines). It must NOT be paint containment: that clips
+    // sideways and a long code line would stop scrolling the <pre>.
+    it('wraps each frozen chunk in a layout-contained block that does not clip', async () => {
+      const { readFileSync } = await import('node:fs');
+      const css = readFileSync(`${process.cwd()}/src/renderer/styles/globals.css`, 'utf8');
+      const rule = /\.yc-fence-chunk\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+      expect(rule).toMatch(/display:\s*block/);
+      expect(rule).toMatch(/contain:\s*layout/);
+      expect(rule).not.toMatch(/paint|content-visibility|overflow/);
+      const live = render(<Bubble md="Here" incremental />);
+      live.rerender(<Bubble md={fenceMd(130)} incremental />);
+      expect(live.container.querySelectorAll('pre code > .yc-fence-chunk').length).toBeGreaterThan(3);
+      live.unmount();
     });
 
     it('copies the whole fence, frozen lines included', async () => {
