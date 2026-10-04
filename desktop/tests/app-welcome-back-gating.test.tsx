@@ -143,8 +143,14 @@ afterEach(() => {
 describe('App — the Welcome back screen only ever opens once, in the leader window, never remote or Android', () => {
   it('asks once when the strip is empty and this window is the leader', async () => {
     await mountApp();
+    // WHY wait for boot separately (2026-10-03): this is the file's first test,
+    // so it pays the cold mount of the whole App (~5.5s alone, ~15s under the
+    // full suite's parallel load). The 4s budget below used to cover boot AND the
+    // screen, and timed out under load. Boot gets its own generous wait; the 4s
+    // stays for what this test is about — the screen appearing once booted.
+    await screen.findByLabelText('Settings', {}, { timeout: 25000 });
     expect(await screen.findByText('Welcome back', {}, { timeout: 4000 })).toBeInTheDocument();
-  });
+  }, 40000);
 
   it('skips when this window is not the directory leader', async () => {
     // Workbench default: getDirectory() answers leaderWindowId 1. Naming a

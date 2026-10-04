@@ -1,8 +1,8 @@
-// The buddy's "Show as" choice in Settings → Buddy Floater: the floating mascot
-// or an icon in the taskbar / menu bar that opens the same chat (Destin
-// 2026-10-02). Its own file so SettingsPanel stays inside its line budget.
+// The buddy's "Minimize to tray" switch in Settings → Buddy Floater: the
+// floating mascot, or an icon in the taskbar / menu bar that opens the same chat
+// (Destin 2026-10-02). Its own file so SettingsPanel stays inside its line budget.
 import React from 'react';
-import { SegmentedTabs, SettingRow } from './ui';
+import { SettingRow, Toggle } from './ui';
 import type { BuddyStyle } from '../../shared/types';
 
 // Renderer-owned preference, like 'youcoded-buddy-enabled'. Read by Settings and
@@ -21,29 +21,24 @@ export function trayPlaceName(platform: string | null): string {
   return platform === 'darwin' ? 'menu bar' : 'taskbar';
 }
 
+// WHY a switch, not a Floating / Taskbar picker (Destin 2026-10-03: "just make
+// it a 'minimize to tray' toggle"): there are only two states and one of them is
+// the default, so a single on/off reads faster and matches the popup's other row.
 export function BuddyStyleRow({ style, platform, onChange }: {
   style: BuddyStyle;
   platform: string | null;
   onChange: (next: BuddyStyle) => void;
 }) {
-  const place = trayPlaceName(platform);
   return (
     <SettingRow
       variant="item"
-      title="Show as"
-      description={style === 'tray'
-        ? `An icon in your ${place}. Click it to open the chat.`
-        : 'The mascot floats on your desktop. Click him to open the chat.'}
+      title="Minimize to tray"
+      description={`Show the buddy as an icon in your ${trayPlaceName(platform)} instead of floating on your desktop. Click it to open the chat.`}
       control={
-        <SegmentedTabs
-          variant="contained"
-          aria-label="Buddy style"
-          value={style}
-          onChange={(id) => onChange(id as BuddyStyle)}
-          tabs={[
-            { id: 'floating', label: 'Floating' },
-            { id: 'tray', label: platform === 'darwin' ? 'Menu bar' : 'Taskbar' },
-          ]}
+        <Toggle
+          checked={style === 'tray'}
+          onChange={(on) => onChange(on ? 'tray' : 'floating')}
+          aria-label="Minimize to tray"
         />
       }
     />
