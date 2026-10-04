@@ -82,6 +82,7 @@ import { InitializingCover } from './components/InitializingCover';
 import { promptShowMeansStarted, composerDisabled, startedIds } from './state/startup-dialog-store';
 import MovedGate from './components/MovedGate';
 import SettingsPanel from './components/SettingsPanel';
+import { readBuddyStyle } from './components/BuddyStyleRow';
 import ResumeBrowser from './components/ResumeBrowser';
 import QuitSessionsPrompt from './components/QuitSessionsPrompt';
 import { fetchReopenList, forgetReopenList, resolveNativeBinding, claudeModelFor } from './state/welcome-back';
@@ -4920,7 +4921,8 @@ export async function bootBuddyOnLaunch(): Promise<void> {
   // desktop. The refusal itself is main's to explain; the launch path stays
   // silent (R13: no dialog interrupts you).
   try {
-    const res = await window.claude.buddy?.show?.();
+    // Floating mascot or taskbar icon — whichever Settings last saved.
+    const res = await window.claude.buddy?.show?.(readBuddyStyle());
     if (res && res.ok === false) localStorage.setItem('youcoded-buddy-enabled', '0');
   } catch { /* a throwing bridge is not a refusal — leave the preference alone */ }
 }

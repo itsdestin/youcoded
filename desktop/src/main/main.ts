@@ -107,6 +107,7 @@ import { registerArcadeHandlers } from './arcade-handlers';
 import { registerVoiceHandlers, shutdownVoiceHandlers } from './voice/voice-handlers';
 import { requestMergedChatSnapshot } from './chat-snapshot';
 import { BuddyWindowManager } from './buddy-window-manager';
+import { createBuddyTray } from './buddy-tray';
 import { BAR_SIZE, MASCOT_SIZE, CHAT_SIZE } from './buddy-bar-geometry';
 // The KDE script that lets the buddy move itself on a Wayland desktop, and
 // the lookup that asks KDE how much of the screen the taskbar has taken.
@@ -2151,6 +2152,9 @@ void app.whenReady().then(async () => {
           const s = cachedBuddyHelperStatus();
           return s?.needed === true && s.installed === true;
         },
+        // The taskbar-icon buddy style (buddy-tray.ts). Same assets dir the
+        // window icon loads from.
+        createTray: (handlers) => createBuddyTray(path.join(__dirname, '../../assets'), handlers),
       });
   // Publish to module scope so createAppWindow's 'closed' handler can see it.
   buddyManagerRef = buddyManager;
@@ -2180,10 +2184,12 @@ void app.whenReady().then(async () => {
   // The status is re-read on every show rather than trusted from launch,
   // because the user can switch the script off in KDE's own System Settings
   // while YouCoded is running (design §4).
-  ipcMain.handle(IPC.BUDDY_SHOW, async () => {
+  ipcMain.handle(IPC.BUDDY_SHOW, async (_evt, style?: unknown) => {
     const refusal = buddyShowRefusal(await refreshBuddyHelperStatus());
     if (refusal) return { ok: false, reason: refusal };
-    buddyManager.show();
+    // Renderer input — only the two known styles get through; anything else
+    // keeps the current style.
+    buddyManager.show(style === 'tray' || style === 'floating' ? style : undefined);
     return { ok: true };
   });
   ipcMain.handle(IPC.BUDDY_HIDE, () => buddyManager.hide());
@@ -2220,6 +2226,7 @@ void app.whenReady().then(async () => {
   });
   // Drag release → edge-snap detection against the window's final bounds.
   ipcMain.on(IPC.BUDDY_DRAG_ENDED, () => buddyManager.dragEnded());
+  ipcMain.on(IPC.BUDDY_MASCOT_HIT, (_evt, over: unknown) => buddyManager.setMascotHit(over === true));
   ipcMain.handle(IPC.BUDDY_DISMISS, () => buddyManager.dismiss());
   // WHY no `keepAbove` on the status any more (2026-09-16): it rode along here
   // for the deleted overlay's KDE "pin above" toggle, whose Settings row went

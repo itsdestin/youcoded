@@ -1551,6 +1551,14 @@ export interface BuddyHelperStatus {
  * screen — see design §5: the refusal is enforced in the main process, because
  * the settings screen is not the only thing that switches the buddy on.
  */
+/**
+ * How the buddy appears on the desktop: the floating mascot window, or an icon
+ * in the OS's taskbar / menu bar / system tray that opens the same chat.
+ * Renderer-owned preference (localStorage['youcoded-buddy-style']), passed to
+ * show() so main never has to read renderer storage.
+ */
+export type BuddyStyle = 'floating' | 'tray';
+
 export interface BuddyShowResult {
   ok: boolean;
   /** Main's own words for the refusal. Surfaced as-is; never re-worded. */
@@ -1581,7 +1589,9 @@ export interface BuddyApi {
    * helper is REFUSED, and the settings switch must not sit in the "on"
    * position after a refusal — that would be a switch that lies.
    */
-  show(): Promise<BuddyShowResult | void>;
+  // `style` added 2026-10-02 (taskbar-icon buddy). Omitted = keep whatever
+  // style the buddy already has (floating by default).
+  show(style?: BuddyStyle): Promise<BuddyShowResult | void>;
   hide(): Promise<void>;
   toggleChat(): Promise<void>;
   setSession(sessionId: string): Promise<void>;
@@ -1605,6 +1615,10 @@ export interface BuddyApi {
   // preload, remote-shim, and renderer callers all agree on one contract.
   /** Fire-and-forget: mascot renderer signals drag release (edge-snap check). */
   dragEnded(): void;
+  /** Fire-and-forget: mascot renderer reports whether the pointer is over his
+   *  drawn body, so main can let clicks on the empty rest of his window pass
+   *  through to whatever is behind (Windows/macOS). */
+  mascotHit(over: boolean): void;
   /** Restore + focus main; a buddy resume is re-resolved through main's admission flow. */
   openMain(request?: { resume: string }): Promise<void>;
   /** Hide the buddy for this app run only (preference stays enabled). */
@@ -2096,6 +2110,9 @@ export const IPC = {
   // Fire-and-forget: mascot renderer signals drag release so main can run
   // edge-snap detection against the window's final bounds.
   BUDDY_DRAG_ENDED: 'buddy:drag-ended',
+  // Fire-and-forget: is the pointer over the mascot's drawn body (vs. the empty
+  // rest of his window)? Main toggles click-through on it.
+  BUDDY_MASCOT_HIT: 'buddy:mascot-hit',
   // Restore + focus the main window and switch it to the buddy's viewed session.
   BUDDY_OPEN_MAIN: 'buddy:open-main',
   // Hide the buddy for this app run only (preference stays enabled).
