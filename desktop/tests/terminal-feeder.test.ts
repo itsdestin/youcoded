@@ -4,11 +4,12 @@
 // only HIDDEN_RATE per second, and loses nothing; becoming visible writes the backlog at once; dispose
 // releases whatever is still owed; where there is no upstream brake nothing is held back.
 import { describe, it, expect } from 'vitest';
-import { createTerminalFeeder, HIDDEN_BURST, HIDDEN_RATE, HIDDEN_QUEUE_MAX } from '../src/renderer/hooks/terminal-feeder';
+import { createTerminalFeeder, HIDDEN_BURST, HIDDEN_RATE, HIDDEN_QUEUE_MAX, DOC_HIDDEN_CAP } from '../src/renderer/hooks/terminal-feeder';
 
 function rig(opts: { hidden?: boolean; throttleHidden?: boolean } = {}) {
   let t = 0;
   let hidden = opts.hidden ?? false;
+  let docHidden = false;
   const timers: { at: number; fn: () => void; id: number }[] = [];
   let nextId = 1;
   const written: string[] = [];
@@ -18,6 +19,7 @@ function rig(opts: { hidden?: boolean; throttleHidden?: boolean } = {}) {
     write: (d, done) => { written.push(d); pendingDone.push(done); },
     ack: (n) => acks.push(n),
     isHidden: () => hidden,
+    isDocHidden: () => docHidden,
     throttleHidden: opts.throttleHidden ?? true,
     now: () => t,
     setTimer: (fn, ms) => { const id = nextId++; timers.push({ at: t + ms, fn, id }); return id; },
@@ -26,6 +28,7 @@ function rig(opts: { hidden?: boolean; throttleHidden?: boolean } = {}) {
   return {
     feeder, written, acks,
     setHidden: (h: boolean) => { hidden = h; },
+    setDocHidden: (h: boolean) => { docHidden = h; feeder.docVisibilityChanged(); },
     parseAll: () => { while (pendingDone.length) pendingDone.shift()!(); },
     advance: (ms: number) => {
       const end = t + ms;
@@ -139,5 +142,53 @@ describe('terminal feeder', () => {
     expect(r.acks).toEqual([HIDDEN_BURST + 500]);
     r.feeder.push('more');                     // and a disposed feeder takes nothing
     expect(r.written.join('').length).toBe(HIDDEN_BURST);
+  });
+
+  // A minimised / hidden WINDOW: the browser stretches timers to ~1 s, so xterm's "drawn" confirmations cannot
+  // pace anything. Confirm on receipt, keep memory bounded, lose nothing that matters, catch up on return.
+  describe('window hidden or minimised', () => {
+    it('confirms on receipt (the program is not slowed by throttled timers) and never confirms twice', () => {
+      const r = rig();
+      r.feeder.push('a'.repeat(100));                    // visible: written, not yet drawn
+      r.setDocHidden(true);                              // window minimised: what is in flight is confirmed now
+      expect(sum(r.acks)).toBe(100);
+      r.feeder.push('b'.repeat(200));
+      expect(sum(r.acks)).toBe(300);                     // confirmed on receipt
+      r.parseAll();                                      // xterm's late callbacks must not confirm again
+      expect(sum(r.acks)).toBe(300);
+    });
+
+    it('keeps only the newest DOC_HIDDEN_CAP un-drawn characters, resets colours after a cut, and confirms what it cut once', () => {
+      const r = rig();
+      r.setDocHidden(true);
+      r.feeder.push('s'.repeat(HIDDEN_BURST));           // spends the burst allowance
+      const chunk = 'c'.repeat(512 * 1024);
+      const pushes = Math.ceil((DOC_HIDDEN_CAP * 2) / chunk.length);
+      for (let i = 0; i < pushes; i++) r.feeder.push(chunk);
+      expect(r.feeder.queued()).toBeLessThanOrEqual(DOC_HIDDEN_CAP);
+      expect(sum(r.acks)).toBe(HIDDEN_BURST + pushes * chunk.length);   // every character confirmed exactly once on receipt
+      r.advance(60_000);
+      expect(r.written.some((w) => w.startsWith('\x1b[0m'))).toBe(true);
+      expect(r.feeder.queued()).toBe(0);
+    });
+
+    it('returning to the window writes everything still held, at once, in order', () => {
+      const r = rig();
+      r.setDocHidden(true);
+      r.feeder.push('1'.repeat(HIDDEN_BURST)); r.feeder.push('2'.repeat(1000)); r.feeder.push('3'.repeat(1000));
+      expect(r.feeder.queued()).toBe(2000);
+      r.setDocHidden(false);
+      expect(r.feeder.queued()).toBe(0);
+      expect(r.written.join('')).toBe('1'.repeat(HIDDEN_BURST) + '2'.repeat(1000) + '3'.repeat(1000));
+    });
+
+    it('does nothing special where there is no upstream brake (remote browser)', () => {
+      const r = rig({ throttleHidden: false });
+      r.setDocHidden(true);
+      r.feeder.push('x'.repeat(1000));
+      expect(r.acks).toEqual([]);                        // acks come only from xterm's callbacks
+      r.parseAll();
+      expect(sum(r.acks)).toBe(1000);
+    });
   });
 });

@@ -2593,3 +2593,36 @@ describe('pages:* Phase 2 channel parity', () => {
     expect(read('src', 'main', 'ipc-handlers.ts')).toMatch(/pagesService\.approve\([\s\S]{0,200}?remote: false/);
   });
 });
+
+// Terminal flow control's acknowledgement channel (2026-10-04). It is DESKTOP-WINDOW-ONLY by design: only a
+// desktop window's own terminal may release the brake on a flooding program, so a slow phone can never stall
+// the desktop. Each surface therefore handles it differently — pinned here so a future "parity fix" does not
+// quietly give phones the brake.
+describe('session:terminal-ack (terminal flow control)', () => {
+  const preload = readSource('src', 'main', 'preload.ts');
+  const types = readSource('src', 'shared', 'types.ts');
+  const handlers = readSource('src', 'main', 'ipc-handlers.ts');
+  const server = readSource('src', 'main', 'remote-server.ts');
+  const shim = readSource('src', 'renderer', 'remote-shim.ts');
+  const kotlin = fs.readFileSync(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'), 'utf8');
+
+  it('desktop: the same channel string in preload and shared types, sent by ackOutput, handled in main', () => {
+    expect(preload).toContain("TERMINAL_ACK: 'session:terminal-ack'");
+    expect(types).toContain("TERMINAL_ACK: 'session:terminal-ack'");
+    expect(preload).toMatch(/ackOutput:[^\n]*\n[^\n]*ipcRenderer\.send\(IPC\.TERMINAL_ACK/);
+    expect(handlers).toContain('ipcMain.on(IPC.TERMINAL_ACK');
+  });
+
+  it('remote clients: the shim sends nothing, and the host treats a stray one as a no-op that never reaches the PTY worker', () => {
+    expect(shim).toMatch(/ackOutput: \(_sessionId: string, _chars: number\) => \{\}/);
+    expect(shim).not.toMatch(/fire\('session:terminal-ack'/);
+    const arm = server.slice(server.indexOf("case 'session:terminal-ack'"), server.indexOf("case 'session:terminal-ready'"));
+    expect(arm.length).toBeGreaterThan(0);
+    expect(arm).not.toMatch(/ackOutput|sessionManager/);
+  });
+
+  it('Android deliberately omits it: its own PTY runtime has no worker credit loop, and the shim never sends it', () => {
+    expect(kotlin).not.toContain('session:terminal-ack');
+    expect(kotlin).toContain('session:terminal-ready');   // the sibling it was modelled on IS handled there
+  });
+});

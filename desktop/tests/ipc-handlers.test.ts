@@ -364,7 +364,7 @@ describe('session:create resumed admission', () => {
       listSessions: vi.fn(() => []), destroySession: vi.fn(() => true),
       on: vi.fn(), sendInput: vi.fn(), resizeSession: vi.fn(),
     };
-    const registry = { assignSession: vi.fn(), getOwner: vi.fn(() => 1), getKind: vi.fn(() => kind), getLeaderId: vi.fn(() => 1) };
+    const registry = { on: vi.fn(), assignSession: vi.fn(), getOwner: vi.fn(() => 1), getKind: vi.fn(() => kind), getLeaderId: vi.fn(() => 1) };
     registerIpcHandlers(ipc as any, manager as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
       { configStore: { getPackages: vi.fn(() => ({})) } } as any,
@@ -430,7 +430,7 @@ describe('session:create resumed admission', () => {
       listSessions: vi.fn(() => []), destroySession: vi.fn(() => true),
       on: vi.fn(), sendInput: vi.fn(), resizeSession: vi.fn(),
     };
-    const registry = { assignSession: vi.fn(), getOwner: vi.fn(() => undefined), getKind: vi.fn(() => 'main'), getLeaderId: vi.fn(() => 7) };
+    const registry = { on: vi.fn(), assignSession: vi.fn(), getOwner: vi.fn(() => undefined), getKind: vi.fn(() => 'main'), getLeaderId: vi.fn(() => 7) };
     let fromPhone: ((opts: any) => Promise<any>) | null = null;
     const remoteServer = {
       broadcast: vi.fn(), setNativeRuntime: vi.fn(), setSessionMetaWiring: vi.fn(), setSessionNamingWiring: vi.fn(), setLastTopic: vi.fn(),

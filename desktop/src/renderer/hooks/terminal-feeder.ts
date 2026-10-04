@@ -21,6 +21,15 @@
 // slowed instead of eating the window. The moment the terminal becomes visible everything queued is
 // written. Nothing is ever dropped.
 //
+// A WINDOW THAT IS HIDDEN OR MINIMISED (document.hidden) is different from a hidden terminal: the browser
+// stretches every timer to ~1 s there, and xterm's parse loop is timer-driven, so its "drawn" confirmations
+// would arrive a few per second and the braked program (and a phone watching it) would crawl. Nobody can see
+// that window, so the confirmations cannot be trusted to pace anything: the feeder confirms on RECEIPT
+// instead (the program runs at full speed, as before the brake existed), keeps the newest DOC_HIDDEN_CAP
+// characters it has not yet handed to xterm (older ones are dropped — scrollback eviction, a flood past that
+// size would have scrolled them off anyway) and writes them as time allows. Coming back to the window
+// writes the rest at once. Memory stays bounded either way.
+//
 // This only applies where the brake actually exists: the desktop's own window. A remote browser / the
 // phone app has no brake (and a hidden queue there would just grow), so it writes straight through.
 
@@ -31,6 +40,8 @@ const HIDDEN_TICK_MS = 50;           // how often a backlog is topped up
 // ever stops being true (a non-owner window that is never braked). Past it, write everything through
 // rather than let a queue grow without bound.
 export const HIDDEN_QUEUE_MAX = 4 * 1024 * 1024;
+// Window hidden/minimised: newest characters kept un-drawn (~50-100k lines, well past xterm's scrollback).
+export const DOC_HIDDEN_CAP = 4 * 1024 * 1024;
 
 export interface TerminalFeederOptions {
   /** Hand text to the terminal; call `done` once it has been PARSED (xterm's write callback). */
@@ -38,6 +49,8 @@ export interface TerminalFeederOptions {
   /** Tell main this many characters were parsed. */
   ack(chars: number): void;
   isHidden(): boolean;
+  /** The whole window is hidden/minimised (timers throttled). Default: document.visibilityState. */
+  isDocHidden?(): boolean;
   /** False where there is no upstream brake (remote browser, phone app): never hold anything back. */
   throttleHidden: boolean;
   now?(): number;
@@ -48,6 +61,8 @@ export interface TerminalFeederOptions {
 export interface TerminalFeeder {
   /** New output from the PTY. */
   push(data: string): void;
+  /** The window was hidden/shown: re-read isDocHidden() now (the module listener calls this). */
+  docVisibilityChanged(): void;
   /** The terminal became visible (or must catch up now): write everything queued. */
   wake(): void;
   /** The terminal is going away: release everything still owed so the program is not left braked. */
@@ -56,26 +71,47 @@ export interface TerminalFeeder {
   queued(): number;
 }
 
+interface Item { s: string; paid: boolean; }
+
+const feeders = new Set<() => void>();
+let docListener = false;
+function watchDocument(onChange: () => void): () => void {
+  feeders.add(onChange);
+  if (!docListener && typeof document !== 'undefined') {
+    docListener = true;
+    // One listener for every terminal: not one per hidden terminal.
+    document.addEventListener('visibilitychange', () => feeders.forEach((f) => f()));
+  }
+  return () => feeders.delete(onChange);
+}
+
 export function createTerminalFeeder(opts: TerminalFeederOptions): TerminalFeeder {
   const now = opts.now ?? (() => performance.now());
   const setTimer = opts.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
   const clearTimer = opts.clearTimer ?? ((h) => clearTimeout(h as ReturnType<typeof setTimeout>));
+  const docHidden = opts.isDocHidden ?? (() => typeof document !== 'undefined' && document.visibilityState === 'hidden');
 
-  const queue: string[] = [];
+  const queue: Item[] = [];
   let queuedChars = 0;
-  let outstanding = 0;        // written to xterm, callback not yet fired
+  let queuedUnpaid = 0;
+  let outstanding = 0;        // written to xterm, callback not yet fired, NOT yet confirmed upstream
   let tokens = HIDDEN_BURST;
   let lastRefill = now();
   let timer: unknown = null;
   let disposed = false;
+  let dropped = false;        // text was cut from the queue: reset colours before the next write
+  let docWasHidden = false;
+  let paidEpoch = 0;          // bumped by payAll(): writes issued earlier were already confirmed upstream
 
-  const writeNow = (data: string) => {
+  const writeNow = (data: string, paid: boolean) => {
     if (data.length === 0) return;
+    if (dropped) { dropped = false; data = '\x1b[0m' + data; }
     const n = data.length;
-    outstanding += n;
+    const epoch = paidEpoch;
+    if (!paid) outstanding += n;
     opts.write(data, () => {
-      // After dispose() everything owed was already released in one go; do not release it twice.
-      if (disposed) return;
+      // After dispose() or payAll() everything owed was already released in one go; do not release it twice.
+      if (disposed || paid || epoch !== paidEpoch) return;
       outstanding -= n;
       opts.ack(n);
     });
@@ -89,54 +125,99 @@ export function createTerminalFeeder(opts: TerminalFeederOptions): TerminalFeede
 
   const drainAll = () => {
     if (timer !== null) { clearTimer(timer); timer = null; }
-    while (queue.length) writeNow(queue.shift()!);
-    queuedChars = 0;
+    while (queue.length) { const it = queue.shift()!; writeNow(it.s, it.paid); }
+    queuedChars = 0; queuedUnpaid = 0;
     tokens = HIDDEN_BURST;
     lastRefill = now();
+  };
+
+  // Confirm upstream everything not yet confirmed (the window just went out of sight).
+  const payAll = () => {
+    const owed = outstanding + queuedUnpaid;
+    for (const it of queue) it.paid = true;
+    outstanding = 0; queuedUnpaid = 0;
+    paidEpoch++;   // writes already in xterm must not be confirmed again when their callbacks fire
+    if (owed > 0) opts.ack(owed);
   };
 
   const drainSome = () => {
     timer = null;
     if (disposed) return;
-    if (!opts.isHidden()) { drainAll(); return; }
+    if (!opts.isHidden() && !docHidden()) { drainAll(); return; }
     refill();
     while (queue.length && tokens >= 1) {
-      const head = queue[0];
+      const it = queue[0];
+      const head = it.s;
       let take = Math.min(head.length, Math.floor(tokens));
       // Never cut between the two halves of a surrogate pair (xterm would draw two broken halves).
       if (take < head.length) {
         const c = head.charCodeAt(take - 1);
         if (c >= 0xd800 && c <= 0xdbff) take += 1;
       }
-      if (take >= head.length) queue.shift(); else queue[0] = head.slice(take);
-      queuedChars -= Math.min(take, head.length);
+      const whole = take >= head.length;
+      const piece = whole ? head : head.slice(0, take);
+      if (whole) queue.shift(); else it.s = head.slice(take);
+      queuedChars -= piece.length;
+      if (!it.paid) queuedUnpaid -= piece.length;
       tokens -= take;
-      writeNow(take >= head.length ? head : head.slice(0, take));
+      writeNow(piece, it.paid);
     }
     if (queue.length) timer = setTimer(drainSome, HIDDEN_TICK_MS);
   };
 
+  const enqueue = (data: string, paid: boolean) => {
+    queue.push({ s: data, paid });
+    queuedChars += data.length;
+    if (!paid) queuedUnpaid += data.length;
+    if (timer === null) timer = setTimer(drainSome, HIDDEN_TICK_MS);
+  };
+
+  const onDocChange = () => {
+    if (disposed) return;
+    const h = docHidden();
+    if (h === docWasHidden) return;
+    docWasHidden = h;
+    if (h && opts.throttleHidden) payAll();
+    if (!h) { if (!opts.isHidden() && queue.length) drainAll(); else if (queue.length && timer === null) timer = setTimer(drainSome, HIDDEN_TICK_MS); }
+  };
+  const unwatch = opts.throttleHidden ? watchDocument(onDocChange) : () => {};
+
   return {
     push(data: string) {
       if (disposed || data.length === 0) return;
+      if (opts.throttleHidden && docHidden()) {
+        // Window out of sight: confirm on receipt (see the header), keep only the newest DOC_HIDDEN_CAP.
+        if (!docWasHidden) { docWasHidden = true; payAll(); }
+        opts.ack(data.length);
+        refill();
+        if (queue.length === 0 && tokens >= data.length) { tokens -= data.length; writeNow(data, true); return; }
+        enqueue(data, true);
+        while (queuedChars > DOC_HIDDEN_CAP && queue.length > 1) {
+          const cut = queue.shift()!;
+          queuedChars -= cut.s.length;
+          if (!cut.paid) { queuedUnpaid -= cut.s.length; opts.ack(cut.s.length); }
+          dropped = true;
+        }
+        return;
+      }
+      if (docWasHidden) { docWasHidden = false; }
       if (!opts.throttleHidden || !opts.isHidden()) {
         // Visible: straight through, exactly as before (no added latency). Anything left over from a
         // hidden spell goes first so the text stays in order.
         if (queue.length) drainAll();
-        writeNow(data);
+        writeNow(data, false);
         return;
       }
       refill();
       if (queue.length === 0 && tokens >= data.length) {
         tokens -= data.length;
-        writeNow(data);
+        writeNow(data, false);
         return;
       }
-      queue.push(data);
-      queuedChars += data.length;
-      if (queuedChars > HIDDEN_QUEUE_MAX) { drainAll(); return; }
-      if (timer === null) timer = setTimer(drainSome, HIDDEN_TICK_MS);
+      enqueue(data, false);
+      if (queuedChars > HIDDEN_QUEUE_MAX) drainAll();
     },
+    docVisibilityChanged: onDocChange,
     wake() {
       if (disposed) return;
       if (queue.length) drainAll();
@@ -144,10 +225,11 @@ export function createTerminalFeeder(opts: TerminalFeederOptions): TerminalFeede
     dispose() {
       if (disposed) return;
       disposed = true;
+      unwatch();
       if (timer !== null) { clearTimer(timer); timer = null; }
-      const owed = outstanding + queuedChars;
+      const owed = outstanding + queuedUnpaid;
       queue.length = 0;
-      queuedChars = 0;
+      queuedChars = 0; queuedUnpaid = 0;
       outstanding = 0;
       if (owed > 0) opts.ack(owed);
     },

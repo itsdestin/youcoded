@@ -223,6 +223,7 @@ import type { RequesterTakeoverType } from './conversations/takeover';
 import { getTagRegistry, listTagsForHost } from './conversations/tag-registry-service';
 import { tagFlagKey, isTagColor, TagColor } from '../shared/tags';
 import { writeContextFile } from './project-context';
+import { createTerminalOutputRouter } from './terminal-output-router';
 
 // WHY: the chatsearch outbox drainer lives outside registerIpcHandlers but must
 // fire the SAME renderer + remote broadcast the IPC tag/flag/note handlers fire,
@@ -483,6 +484,18 @@ export function registerIpcHandlers(
   // back to the primary mainWindow when neither owner nor subscribers
   // exist (preserves the existing pre-buddy fallback behavior for
   // remote-created sessions during Phase 1).
+  // WHY a separate function: terminal flow control must agree EXACTLY with where output is routed
+  // (which windows get a session's PTY text), so both read this one rule.
+  const routeTargets = (sessionId: string): number[] => {
+    const ids = new Set<number>();
+    const ownerId = windowRegistry?.getOwner(sessionId);
+    if (ownerId != null) ids.add(ownerId);
+    if (windowRegistry) {
+      for (const subId of windowRegistry.getSubscribers(sessionId)) ids.add(subId);
+    }
+    if (ids.size === 0 && !mainWindow.isDestroyed()) ids.add(mainWindow.webContents.id);
+    return [...ids];
+  };
   const sendForSession = (sessionId: string, channel: string, ...args: any[]) => {
     const ids = new Set<number>();
     const ownerId = windowRegistry?.getOwner(sessionId);
@@ -1999,65 +2012,11 @@ export function registerIpcHandlers(
     sessionManager.resizeSession(sessionId, cols, rows);
   });
 
-  // --- PTY output buffering ---
-  // Buffer output per-session until the renderer signals its terminal is mounted.
-  // This prevents losing the initial trust prompt on slow systems where
-  // PTY output arrives before TerminalView mounts and registers its listener.
-  const pendingOutput = new Map<string, string[]>();
-  const readySessions = new Set<string>();
-
-  // Perf: previously we dual-sent every PTY chunk to BOTH the per-session
-  // channel AND the global IPC.PTY_OUTPUT channel. The global channel existed
-  // solely so App.tsx could watch permission-mode strings ("bypass permissions
-  // on" etc.) across all sessions with one listener. With many sessions
-  // streaming that doubled IPC traffic and forced every BrowserWindow to
-  // deserialize output for sessions it may not own. App.tsx now subscribes
-  // per-session in sync with session:created / session:destroyed events, so
-  // the global broadcast is no longer needed.
-  // WHY pendingChars: terminal flow control. The PTY worker counts every character it hands to main as
-  // "owed" until the terminal acknowledges it. Output waiting here for a terminal that has not mounted
-  // yet is still owed, so it is tracked, and the worker's own brake (it stops reading the PTY at ~1 M
-  // owed characters) is what keeps THIS buffer bounded — there is no separate cap to lose output to.
-  const pendingChars = new Map<string, number>();
-  sessionManager.on('pty-output', (sessionId: string, data: string) => {
-    if (readySessions.has(sessionId)) {
-      sendForSession(sessionId, `pty:output:${sessionId}`, data);
-    } else {
-      let buf = pendingOutput.get(sessionId);
-      if (!buf) {
-        buf = [];
-        pendingOutput.set(sessionId, buf);
-      }
-      buf.push(data);
-      pendingChars.set(sessionId, (pendingChars.get(sessionId) ?? 0) + data.length);
-    }
-  });
-
-  // Renderer signals terminal is mounted and listening
-  ipcMain.on(IPC.TERMINAL_READY, (_event, sessionId: string) => {
-    readySessions.add(sessionId);
-    // A terminal (re)attached: anything in flight to a previous one is gone for good, so forgive it —
-    // except what is still held here, which is about to be sent and will be acknowledged normally.
-    sessionManager.resetOutputCredit(sessionId, pendingChars.get(sessionId) ?? 0);
-    const buffered = pendingOutput.get(sessionId);
-    if (buffered) {
-      for (const data of buffered) {
-        sendForSession(sessionId, `pty:output:${sessionId}`, data);
-      }
-      pendingOutput.delete(sessionId);
-      pendingChars.delete(sessionId);
-    }
-  });
-
-  // Terminal flow control: the terminal finished parsing `chars` characters. Only the window that OWNS
-  // the session is believed: a buddy/subscriber window sees the same text but must not release the brake
-  // for a terminal that is still behind, and phones never reach this handler at all.
-  ipcMain.on(IPC.TERMINAL_ACK, (event, sessionId: string, chars: number) => {
-    if (typeof sessionId !== 'string' || typeof chars !== 'number' || !Number.isFinite(chars) || chars <= 0) return;
-    const ownerId = windowRegistry?.getOwner(sessionId);
-    const senderOk = ownerId != null ? event.sender.id === ownerId : event.sender === mainWindow.webContents;
-    if (!senderOk) return;
-    sessionManager.ackOutput(sessionId, Math.min(chars, 1e9));
+  // --- PTY output: buffering until a terminal mounts, routing, and flow control (terminal-output-router.ts) ---
+  const releaseSessionOutput = createTerminalOutputRouter({
+    ipcMain, sessionManager, windowRegistry, routeTargets, sendForSession,
+    fromId: (id) => webContents.fromId(id) as any,
+    channels: { ready: IPC.TERMINAL_READY, ack: IPC.TERMINAL_ACK },
   });
 
   // No-op: Electron has no hardware back button. Registered for shape
@@ -2071,9 +2030,7 @@ export function registerIpcHandlers(
   // so the reducer can distinguish clean shutdowns from 'session-died' cases.
   sessionManager.on('session-exit', (sessionId: string, exitCode: number) => {
     sendForSession(sessionId, IPC.SESSION_DESTROYED, sessionId, exitCode);
-    pendingOutput.delete(sessionId);
-    pendingChars.delete(sessionId);
-    readySessions.delete(sessionId);
+    releaseSessionOutput(sessionId);
     windowRegistry?.releaseSession(sessionId);
   });
 
