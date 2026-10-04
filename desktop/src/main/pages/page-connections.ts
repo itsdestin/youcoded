@@ -119,16 +119,22 @@ const MAX_SOCKET_DENY = 16;
 function cleanReplyType(raw: unknown): string | undefined {
   return typeof raw === 'string' && /^[A-Za-z0-9_./-]{1,64}$/.test(raw) ? raw : undefined;
 }
-/** A lower-case message-type prefix, e.g. `config/`. Sorted and de-duplicated
- *  so order never changes the fingerprint. */
-function cleanSocketDeny(raw: unknown): string[] | undefined {
-  if (!Array.isArray(raw)) return undefined;
+/** The manifest's extra denied message-type prefixes (e.g. `config/`), lower-
+ *  cased, sorted and de-duplicated so order never changes the fingerprint.
+ *  WHY strict: the approval card lists exactly this list and main enforces
+ *  exactly this list, so a list that is not wholly valid (wrong type, an
+ *  odd entry, more than MAX_SOCKET_DENY) must never be half-kept. Returns
+ *  `undefined` when the manifest has none, `null` when it is invalid, and the
+ *  caller then drops the WHOLE connection (nothing runs on a profile the
+ *  person was not shown accurately). */
+function cleanSocketDeny(raw: unknown): string[] | undefined | null {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw) || raw.length > MAX_SOCKET_DENY) return null;
   const out = new Set<string>();
   for (const p of raw) {
-    if (typeof p !== 'string') continue;
-    const v = p.trim();
-    if (/^[a-z0-9_./-]{1,64}$/.test(v)) out.add(v);
-    if (out.size >= MAX_SOCKET_DENY) break;
+    const v = typeof p === 'string' ? p.trim().toLowerCase() : '';
+    if (!/^[a-z0-9_./-]{1,64}$/.test(v)) return null;
+    out.add(v);
   }
   return out.size ? [...out].sort() : undefined;
 }
@@ -239,6 +245,7 @@ export function parseConnections(raw: unknown): PageConnection[] {
           const authFailed = cleanReplyType(o.socketAuthFailed);
           if (authFailed) c.socketAuthFailed = authFailed;
           const deny = cleanSocketDeny(o.socketDeny);
+          if (deny === null) { c = null; break; }
           if (deny) c.socketDeny = deny;
           const video = cleanVideoProfile(o.videoProfile);
           if (video) c.videoProfile = video;

@@ -13,7 +13,8 @@ import { applyScheme, fingerprint, keyPlacement, withApprovedAddress } from './p
 import { cleanDeviceAddress } from '../../shared/page-device-address';
 import { hashHtml, savedKeyId, splitSavedKeyId, type PageApproval } from './connections-store';
 import { PageRateGate, performPageFetch, type PageCredential } from './page-fetch';
-import { performPageSocket, type PageSocketContext } from './page-socket';
+import { checkDeviceSocketAccess, performPageSocket, type DeviceSocketAccess, type PageSocketContext } from './page-socket';
+import { PageLiveSockets, type LiveWsLike } from './page-live-socket';
 import type { ExternalChangeEvent } from '../artifacts/project-watcher';
 import type {
   PageApproveResult, PageConnection, PageFetchRequest, PageFetchResult,
@@ -41,6 +42,8 @@ export interface PagesServiceDeps extends PagesStoreDeps {
   lookup?: (hostname: string) => Promise<Array<{ address: string; family: number }>>;
   /** Test injection for a page's socket exchange (page-socket.ts). */
   socketConnect?: PageSocketContext['connect'];
+  /** Test injection for a page's LIVE socket (page-live-socket.ts). */
+  liveSocketConnect?: (url: string, headers: Record<string, string>) => LiveWsLike;
 }
 
 class PagesService {
@@ -53,9 +56,21 @@ class PagesService {
    *  path. It rides the `pages:changed` broadcast instead. */
   private readonly freshness = new Map<string, PageRefreshState>();
   private readonly gate = new PageRateGate();
+  /** Live connections to home devices (page-live-socket.ts). Every connect and
+   *  reconnect asks `socketAccess`, so the approval chain is the same one the
+   *  one-shot exchange uses and is re-run each time. */
+  readonly sockets: PageLiveSockets;
+  /** What each page looked like last listing (code stamp + connections), so a
+   *  change to either closes that page's live sockets. */
+  private readonly seenSignature = new Map<string, string>();
 
   constructor(private readonly deps: PagesServiceDeps) {
     this.store = new PagesStore({ ...deps, refreshState: (id) => this.freshness.get(id) });
+    this.sockets = new PageLiveSockets({
+      access: (pageId, url, signal) => this.socketAccess(pageId, url, signal),
+      gate: this.gate,
+      connect: deps.liveSocketConnect,
+    });
   }
 
   /** Start (or re-point) the Personal watcher. Safe to call again: the
@@ -128,10 +143,35 @@ class PagesService {
    *  that have a Pages/ folder right now. */
   async listAndWatch(): Promise<PageSummary[]> {
     const pages = await this.store.list();
+    this.closeSocketsOfChangedPages(pages);
     const roots = new Set<string>();
     for (const p of pages) if (p.home.kind === 'project') roots.add(p.home.path);
     this.ensureProjectPagesWatched([...roots]);
     return pages;
+  }
+
+  /** WHY: a live socket was approved for one version of a page. When its code
+   *  or its connections change underneath it (an edit through chat, a sync
+   *  arrival), the socket closes; the page's frame reloads on a code change
+   *  anyway, and a connection change must not keep running on the old yes.
+   *  A page that disappeared closes too. The first time a page is seen only
+   *  records it. */
+  private closeSocketsOfChangedPages(pages: PageSummary[]): void {
+    const now = new Set<string>();
+    for (const p of pages) {
+      now.add(p.id);
+      // Only what the MANIFEST says: whether a line is approved or has a saved
+      // key moves on every Allow/Remove and is closed for separately (with the
+      // right connection), so it must not close the page's other sockets here.
+      const manifest = (p.connections ?? []).map(({ approved: _a, savedKey: _k, ...rest }) => rest);
+      const sig = `${p.htmlStamp}|${JSON.stringify(manifest)}`;
+      const before = this.seenSignature.get(p.id);
+      this.seenSignature.set(p.id, sig);
+      if (before !== undefined && before !== sig) this.sockets.closeFor(p.id, undefined, 'This page was changed, so its live connection stopped.');
+    }
+    for (const id of [...this.seenSignature.keys()]) {
+      if (!now.has(id)) { this.seenSignature.delete(id); this.sockets.closeFor(id, undefined, 'This page is no longer in your library.'); }
+    }
   }
 
   // ── Phase 2: connections, keys and the one door ──────────────────────────
@@ -208,6 +248,9 @@ class PagesService {
     }
     try { await store.recordApprovals(pageKey, fresh); }
     catch (e) { return { ok: false, message: messageOf(e) }; }
+    // A new approval (maybe a new address or key) is a new yes: sockets opened
+    // on the old one close and are asked for again under the new rules.
+    this.sockets.closeFor(id);
     const pages = await this.listAndWatch();
     await this.pruneAgainst(pages);
     return { ok: true, pages };
@@ -221,6 +264,8 @@ class PagesService {
       await this.deps.connections.removeApproval(pageKey, connectionId).catch(() => { /* already gone */ });
     }
     this.freshness.delete(id);
+    // The person withdrew this connection: its live sockets stop at once.
+    this.sockets.closeFor(id, connectionId, 'This connection was removed, so its live connection stopped.');
     return this.listAndWatch();
   }
 
@@ -266,8 +311,13 @@ class PagesService {
     const affected = before
       .filter((p) => (p.connections ?? []).some((c) => (c.kind === 'key' || c.kind === 'device') && c.service === service && c.address === address))
       .map((p) => p.id);
+    // Which connection of each page stood on this key, for the live sockets.
+    const connectionsOn = before.flatMap((p) => (p.connections ?? [])
+      .filter((c) => (c.kind === 'key' || c.kind === 'device') && c.service === service && c.address === address)
+      .map((c) => ({ page: p.id, connection: c.id })));
     await this.deps.connections?.deleteSavedKey(service, address).catch(() => { /* nothing saved under that name */ });
     for (const id of affected) this.freshness.delete(id);
+    for (const c of connectionsOn) this.sockets.closeFor(c.page, c.connection, 'The saved key was deleted, so the live connection stopped.');
     const keys = await this.savedKeys();
     this.broadcastNow();
     return keys;
@@ -280,38 +330,9 @@ class PagesService {
       return { ok: false, reason: 'too-many-requests', message: 'This page is asking for information faster than the app will allow. It will be able to try again shortly.' };
     }
     try {
-      const store = this.deps.connections;
-      const info = await this.store.connectionsOf(id);
-      const pageKey = await this.store.approvalKeyFor(id);
-      if (!store || !info || !pageKey) {
-        return { ok: false, reason: 'not-approved', message: 'This page is no longer in your library.' };
-      }
-      let approved: Record<string, string> = {};
-      let records: Record<string, PageApproval> = {};
-      try {
-        records = await store.approvalsFor(pageKey);
-        approved = Object.fromEntries(Object.entries(records).map(([k, v]) => [k, v.fingerprint]));
-      } catch (e) { return { ok: false, reason: 'not-approved', message: messageOf(e) }; }
-
-      // A device is reached ONLY at the address the person allowed. One with
-      // no recorded address (an approval from before addresses were kept, or a
-      // hand-edited file) is dropped from the list, so nothing matches it and
-      // the request is refused as not allowed — never sent to the suggestion.
-      const connections = info.connections.flatMap((c) => {
-        if (c.kind !== 'device') return [c];
-        const address = records[c.id]?.address;
-        return address ? [withApprovedAddress(c, address)] : [];
-      });
-
-      const doorCtx = {
-        connections,
-        approved,
-        credential: (c: PageConnection) => this.credentialFor(c),
-        // guardedFetch owns the 30s deadline; this is only the handle it needs.
-        signal: new AbortController().signal,
-        fetchImpl: this.deps.fetchImpl,
-        lookup: this.deps.lookup,
-      };
+      const door = await this.doorContext(id, new AbortController().signal);
+      if (!door.ok) return door.refusal;
+      const doorCtx = door.ctx;
       // A socket exchange (renames and room moves on a home device) is the
       // same door with a different transport: same approvals, same rate gate,
       // its own caps and timeout (page-socket.ts).
@@ -326,6 +347,54 @@ class PagesService {
     } finally {
       this.gate.release(id);
     }
+  }
+
+  /** What the one door and the live socket both need to judge a request for
+   *  this page: its connections, the fingerprints the person approved, and the
+   *  credential lookup. A device is reached ONLY at the address the person
+   *  allowed. One with no recorded address (an approval from before addresses
+   *  were kept, or a hand-edited file) is dropped from the list, so nothing
+   *  matches it and the request is refused as not allowed — never sent to the
+   *  suggestion. Extracted unchanged from fetch() so a live socket re-runs the
+   *  very same chain on every reconnect. */
+  private async doorContext(id: string, signal: AbortSignal): Promise<
+    { ok: true; ctx: { connections: PageConnection[]; approved: Record<string, string>; credential: (c: PageConnection) => Promise<PageCredential | null>; signal: AbortSignal; fetchImpl?: typeof fetch; lookup?: PagesServiceDeps['lookup'] } }
+    | { ok: false; refusal: PageFetchResult }
+  > {
+    const store = this.deps.connections;
+    const info = await this.store.connectionsOf(id);
+    const pageKey = await this.store.approvalKeyFor(id);
+    if (!store || !info || !pageKey) {
+      return { ok: false, refusal: { ok: false, reason: 'not-approved', message: 'This page is no longer in your library.' } };
+    }
+    let approved: Record<string, string> = {};
+    let records: Record<string, PageApproval> = {};
+    try {
+      records = await store.approvalsFor(pageKey);
+      approved = Object.fromEntries(Object.entries(records).map(([k, v]) => [k, v.fingerprint]));
+    } catch (e) { return { ok: false, refusal: { ok: false, reason: 'not-approved', message: messageOf(e) } }; }
+    const connections = info.connections.flatMap((c) => {
+      if (c.kind !== 'device') return [c];
+      const address = records[c.id]?.address;
+      return address ? [withApprovedAddress(c, address)] : [];
+    });
+    return {
+      ok: true,
+      ctx: {
+        connections,
+        approved,
+        credential: (c: PageConnection) => this.credentialFor(c),
+        signal,
+        fetchImpl: this.deps.fetchImpl,
+        lookup: this.deps.lookup,
+      },
+    };
+  }
+
+  /** The live socket's access check: the shared chain, run fresh. */
+  private async socketAccess(pageId: string, url: string, signal: AbortSignal): Promise<DeviceSocketAccess> {
+    const door = await this.doorContext(pageId, signal);
+    return door.ok ? checkDeviceSocketAccess(url, door.ctx) : { ok: false, refusal: door.refusal };
   }
 
   private noteFreshness(id: string, succeeded: boolean): void {
@@ -394,6 +463,7 @@ class PagesService {
   }
 
   stop(): void {
+    this.sockets.closeAll();
     if (this.timer !== null) { clearTimeout(this.timer); this.timer = null; }
     void this.watcher?.close().catch(() => {});
     this.watcher = null;

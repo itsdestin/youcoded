@@ -53,6 +53,7 @@ import { OfficeAlerts } from '../office/OfficeAlerts';
 import { PageGlyph, PagesIcon, PinGlyph } from './page-icons';
 import { PagesEmptyCard } from './PagesEmptyCard';
 import { usePages, setPagePinned, refreshPages } from './use-pages';
+import { usePageSockets } from './use-page-sockets';
 import { PAGE_KIT_CSS } from './page-kit';
 import { PageApproval, needsApproval } from './page-connections';
 import { PageFreshness } from './PageFreshness';
@@ -327,6 +328,9 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // arrived" flag (first-run landing, merged from master 2026-09-23).
   const loadedPage = load.state === 'ready' ? load.page : null;
   const awaitingApproval = needsApproval(loadedPage ?? summary);
+  // The page's live sockets live only as long as ITS frame: not while the view is
+  // closed, awaiting approval or loading, and a new document is a new frame.
+  usePageSockets(frameRef, pageId, open && load.state === 'ready' && !awaitingApproval, load.state === 'ready' ? load.doc : null, pagesBridge);
   /** The band's refresh button is how a person asks the page for fresh
    *  information; the page hears it through `youcoded.onRefresh` (§5). */
   const askPageToRefresh = () => {

@@ -2553,6 +2553,12 @@ describe('pages:* Phase 2 channel parity', () => {
     'pages:approve', 'pages:remove-connection', 'pages:refresh',
     'pages:saved-keys', 'pages:delete-saved-key', 'pages:fetch',
   ];
+  // The live socket (spec 2026-10-04). Its handlers moved with the rest of the
+  // pages:* ones into pages/pages-ipc.ts and pages/pages-remote.ts (ipc-handlers.ts
+  // and remote-server.ts are at their line budgets). Channel strings are inlined in
+  // preload and handed to main through shared/pages-types.ts PAGE_SOCKET_CHANNELS.
+  const SOCKET = ['pages:socket-open', 'pages:socket-send', 'pages:socket-close', 'pages:socket-ping'];
+  const SOCKET_EVENT = 'pages:socket-event';
   const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
 
   it('every type is declared in shared/types.ts and preload.ts, which cannot import it', () => {
@@ -2565,7 +2571,7 @@ describe('pages:* Phase 2 channel parity', () => {
   });
 
   it('every type is handled by the desktop IPC handlers', () => {
-    const handlers = read('src', 'main', 'ipc-handlers.ts');
+    const handlers = read('src', 'main', 'pages', 'pages-ipc.ts');
     const preload = read('src', 'main', 'preload.ts');
     for (const t of PHASE_2) {
       // ipc-handlers registers through the IPC.* constant, so the constant NAME
@@ -2577,8 +2583,8 @@ describe('pages:* Phase 2 channel parity', () => {
   });
 
   it('every type is invoked by the remote shim AND answered by the remote host', () => {
-    const shim = read('src', 'renderer', 'remote-shim.ts');
-    const server = read('src', 'main', 'remote-server.ts');
+    const shim = read('src', 'renderer', 'remote-pages-bridge.ts');
+    const server = read('src', 'main', 'pages', 'pages-remote.ts');
     for (const t of PHASE_2) {
       expect(shim, t).toContain(`invoke('${t}'`);
       expect(server, t).toContain(`case '${t}':`);
@@ -2589,7 +2595,37 @@ describe('pages:* Phase 2 channel parity', () => {
     // "No keys on the phone" was a renderer rule until design review 1 finding
     // 13. The remote host must mark its caller remote, and the desktop handler
     // must not — otherwise either every phone can paste a key, or no desktop can.
-    expect(read('src', 'main', 'remote-server.ts')).toMatch(/\.approve\([\s\S]{0,200}?remote: true/);
-    expect(read('src', 'main', 'ipc-handlers.ts')).toMatch(/pagesService\.approve\([\s\S]{0,200}?remote: false/);
+    expect(read('src', 'main', 'pages', 'pages-remote.ts')).toMatch(/\.approve\([\s\S]{0,200}?remote: true/);
+    expect(read('src', 'main', 'pages', 'pages-ipc.ts')).toMatch(/pagesService\.approve\([\s\S]{0,200}?remote: false/);
+  });
+
+  it('the live socket channels exist on every surface, with the same strings', () => {
+    const types = read('src', 'shared', 'pages-types.ts');
+    const preload = read('src', 'main', 'preload.ts');
+    const handlers = read('src', 'main', 'pages', 'pages-ipc.ts');
+    const server = read('src', 'main', 'pages', 'pages-remote.ts');
+    const shim = read('src', 'renderer', 'remote-pages-bridge.ts');
+    const kotlin = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
+    for (const t of SOCKET) {
+      expect(types, t).toContain(`'${t}'`);
+      expect(preload, t).toContain(`'${t}'`);
+      expect(shim, t).toContain(`invoke('${t}'`);
+      expect(server, t).toContain(`case '${t}':`);
+      // Android answers requests with not-implemented (a push needs no entry).
+      expect(kotlin, t).toContain(`"${t}"`);
+    }
+    // The desktop handlers go through PAGE_SOCKET_CHANNELS, so each key is used.
+    for (const key of ['open', 'send', 'close', 'ping']) expect(handlers, key).toContain(`ch.${key}`);
+    // The push event: declared, subscribed in preload, handled by the shim, sent by the host.
+    expect(types).toContain(`'${SOCKET_EVENT}'`);
+    expect(preload).toContain(`'${SOCKET_EVENT}'`);
+    expect(readSourceFile(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'))).toContain(`case '${SOCKET_EVENT}':`);
+    expect(server).toContain('PAGE_SOCKET_CHANNELS.event');
+  });
+
+  it('a remote client\'s socket events go to that client only, never broadcast or queued for a restore', () => {
+    const server = read('src', 'main', 'pages', 'pages-remote.ts');
+    expect(server).not.toMatch(/\.broadcast\(|enqueueForRestoring/);
+    expect(read('src', 'main', 'remote-server.ts')).toContain('sockets.closeOwner(clientOwnerKey(client.id))');
   });
 });

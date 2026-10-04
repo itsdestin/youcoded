@@ -24,18 +24,27 @@ describe('profile cleaning', () => {
     const c = device({ socketReady: 'auth_ok', socketAuthFailed: 'auth_invalid', socketDeny: ['Config/', 'zzz/', 'config/'], videoProfile: VIDEO });
     expect(c.socketReady).toBe('auth_ok');
     expect(c.socketAuthFailed).toBe('auth_invalid');
-    // Bad (upper-case) entry dropped; the rest sorted.
+    // Upper-case is lower-cased (not dropped), duplicates collapse, the rest sorted.
     expect(c.socketDeny).toEqual(['config/', 'zzz/']);
     expect(c.videoProfile).toEqual(VIDEO);
   });
 
   it('drops wrong types and over-long values', () => {
-    const c = device({ socketReady: 5, socketAuthFailed: 'x'.repeat(65), socketDeny: 'config/', videoProfile: 'camera.' });
+    const c = device({ socketReady: 5, socketAuthFailed: 'x'.repeat(65), videoProfile: 'camera.' });
     expect(c.socketReady).toBeUndefined();
     expect(c.socketAuthFailed).toBeUndefined();
-    expect(c.socketDeny).toBeUndefined();
     expect(c.videoProfile).toBeUndefined();
-    expect(device({ socketDeny: [1, 'has space', 'a'.repeat(65)] }).socketDeny).toBeUndefined();
+  });
+
+  it('refuses the whole connection when the deny list is not wholly valid', () => {
+    // The card lists exactly what main enforces, so a half-kept list is never allowed.
+    const bad = (socketDeny: unknown) => parseConnections([{ id: 'ha', kind: 'device', service: 'Home Assistant', address: '192.168.4.54:8123', access: 'full', socketDeny }]);
+    expect(bad([1, 'has space'])).toEqual([]);
+    expect(bad(['ok/', 'has space'])).toEqual([]);
+    expect(bad(['a'.repeat(65)])).toEqual([]);
+    expect(bad(Array.from({ length: 17 }, (_, i) => `p${i}/`))).toEqual([]);
+    expect(bad('config/')).toEqual([]);
+    expect(bad(Array.from({ length: 16 }, (_, i) => `p${i}/`))).toHaveLength(1);
   });
 
   it('drops a video profile with a {{key}}, a too-big send, a bad path or a missing part', () => {
@@ -72,28 +81,44 @@ describe('fingerprint', () => {
 
 describe('checkOutgoingSocketMessage', () => {
   const m = (type: unknown, extra: Record<string, unknown> = {}) => JSON.stringify({ id: 1, type, ...extra });
+  const refused = (text: string, deny: string[] = []) => !checkOutgoingSocketMessage(text, deny).ok;
 
-  it('refuses anything it cannot read as one JSON object with one string type', () => {
-    for (const bad of ['not json', '[{"type":"ping"}]', '"ping"', '42', 'null', m(7), JSON.stringify({ id: 1 }),
-      '{"type":"ping","type":"auth/long_lived_access_token"}', '{"type" : "ping", "x":{"type":"y"}}']) {
-      expect(checkOutgoingSocketMessage(bad), bad).not.toBeNull();
+  it('refuses anything it cannot read as one JSON object with a string type', () => {
+    for (const bad of ['not json', '[{"type":"ping"}]', '"ping"', '42', 'null', m(7), JSON.stringify({ id: 1 })]) {
+      expect(refused(bad), bad).toBe(true);
     }
+  });
+
+  it('checks the value that is actually SENT when "type" appears twice, even written with escapes', () => {
+    // JSON.parse keeps the last; the result's text is the re-serialised object, so the device
+    // can never see a first key the check did not.
+    const dup = checkOutgoingSocketMessage('{"type":"auth/long_lived_access_token","type":"ping"}');
+    expect(dup).toEqual({ ok: true, text: '{"type":"ping"}' });
+    expect(refused('{"type":"ping","type":"auth/long_lived_access_token"}')).toBe(true);
+    expect(refused('{"type":"ping","\\u0074ype":"auth/long_lived_access_token"}')).toBe(true);
+    const escaped = checkOutgoingSocketMessage('{"\\u0074ype":"auth/x","type":"ping"}');
+    expect(escaped).toEqual({ ok: true, text: '{"type":"ping"}' });
+  });
+
+  it('lets a message with a nested "type" through', () => {
+    const text = '{"type":"lovelace/config/save","config":{"views":[{"type":"entities"}]}}';
+    expect(checkOutgoingSocketMessage(text)).toEqual({ ok: true, text });
   });
 
   it('refuses each built-in prefix, ignoring case and spaces', () => {
     for (const t of ['auth/long_lived_access_token', 'config/auth/create', 'config/auth_provider/x', 'person/create', '  AUTH/Login ', 'Config/Auth']) {
-      expect(checkOutgoingSocketMessage(m(t)), t).not.toBeNull();
+      expect(refused(m(t)), t).toBe(true);
     }
   });
 
   it('refuses a manifest addition and allows what is not listed', () => {
-    expect(checkOutgoingSocketMessage(m('config/core/update'), ['config/'])).not.toBeNull();
-    expect(checkOutgoingSocketMessage(m('config/core/update'))).toBeNull();
+    expect(refused(m('config/core/update'), ['config/'])).toBe(true);
+    expect(refused(m('config/core/update'))).toBe(false);
   });
 
   it('lets the Home page registry messages through the built-in floor', () => {
     for (const t of ['config/entity_registry/update', 'config/device_registry/update', 'config/area_registry/list', 'subscribe_entities', 'ping']) {
-      expect(checkOutgoingSocketMessage(m(t)), t).toBeNull();
+      expect(refused(m(t)), t).toBe(false);
     }
   });
 
@@ -112,7 +137,8 @@ describe('the one-shot exchange refuses a denied message', () => {
     await new Promise<void>((r) => wss.once('listening', () => r()));
     const port = (wss.address() as AddressInfo).port;
     let connections = 0;
-    wss.on('connection', (ws) => { connections++; ws.send('{"type":"auth_ok"}'); });
+    const got: string[] = [];
+    wss.on('connection', (ws) => { connections++; ws.send('{"type":"auth_ok"}'); ws.on('message', (d) => { got.push(d.toString()); ws.send('{"type":"ack"}'); }); });
     const conn = device({ socketDeny: ['config/core'] });
     const ctx: PageSocketContext = {
       connections: [conn], approved: { ha: fingerprint(conn) },
@@ -121,10 +147,10 @@ describe('the one-shot exchange refuses a denied message', () => {
       lookup: async () => { throw new Error('no DNS'); },
       connect: (url, headers) => new WebSocket(`ws://127.0.0.1:${port}`, { headers }),
     };
-    const req: PageFetchRequest = { url: 'http://192.168.4.54:8123/api/websocket', socket: { send, until: 1 } };
+    const req: PageFetchRequest = { url: 'http://192.168.4.54:8123/api/websocket', socket: { send, until: send.length + 2 } };
     const result = await performPageSocket(req, ctx);
     await new Promise<void>((r) => wss.close(() => r()));
-    return { result, connections };
+    return { result, connections, got };
   }
 
   it('refuses the whole exchange and never opens the socket', async () => {
@@ -140,8 +166,11 @@ describe('the one-shot exchange refuses a denied message', () => {
   });
 
   it('still allows a registry rename', async () => {
-    const { result, connections } = await run([JSON.stringify({ id: 1, type: 'config/entity_registry/update', entity_id: 'light.a', name: 'B' })]);
+    const rename = { id: 1, type: 'config/entity_registry/update', entity_id: 'light.a', name: 'B' };
+    const { result, connections, got } = await run([JSON.stringify(rename)]);
     expect(result.ok).toBe(true);
     expect(connections).toBe(1);
+    // The allowed message really reached the device (greeting first, JSON-equal).
+    expect(got.map((g) => JSON.parse(g)).slice(-1)).toEqual([rename]);
   });
 });

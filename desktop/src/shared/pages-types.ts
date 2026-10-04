@@ -112,9 +112,10 @@ export type PageConnection =
        *  a message of its own, so it cannot write it somewhere it could read
        *  back. Part of the approval fingerprint. */
       socketHello?: string;
-      /** The device profile (spec 2026-10-04): what main must know about the
-       *  device, read from the approved manifest and never chosen by a page.
-       *  All of it rides the approval fingerprint (one `|profile:` segment). */
+      // The device profile (spec 2026-10-04) is the four fields below: what main
+      // must know about the device, read from the approved manifest and never
+      // chosen by a page. All of it rides the approval fingerprint (one
+      // `|profile:` segment).
       /** The reply TYPE that means "logged in" (Home Assistant: `auth_ok`). */
       socketReady?: string;
       /** The reply TYPE that means "wrong key" (`auth_invalid`). */
@@ -256,6 +257,27 @@ export type PageLoadFailure =
   | { kind: 'missing'; message: string }
   | { kind: 'unreadable'; message: string };
 
+// ── The live socket (spec 2026-10-04, Part 1) ────────────────────────────
+/** What a page sees of its live connection. `paused` is made by the host (the
+ *  window is hidden), never by main. */
+export type PageSocketState = 'connecting' | 'open' | 'reconnecting' | 'paused' | 'closed';
+/** Every call names the page and the FRAME INSTANCE it came from; main also
+ *  knows the caller (window or remote client) itself, so a socket is usable
+ *  only by the frame that opened it. */
+export interface PageSocketCall { page: string; frame: string; }
+export type PageSocketOpenResult = { ok: true; socket: string } | { ok: false; message: string };
+export type PageSocketCallResult = { ok: true } | { ok: false; message: string };
+/** Pushed by main to the owner only. `socket` is main's id for it. */
+export type PageSocketEvent =
+  | { socket: string; kind: 'state'; state: PageSocketState; why?: string }
+  | { socket: string; kind: 'messages'; texts: string[] };
+/** The channels, written out here because preload cannot import this file
+ *  (pinned equal by tests/ipc-channels.test.ts). */
+export const PAGE_SOCKET_CHANNELS = {
+  open: 'pages:socket-open', send: 'pages:socket-send', close: 'pages:socket-close',
+  ping: 'pages:socket-ping', event: 'pages:socket-event',
+} as const;
+
 export interface PagesBridge {
   list: () => Promise<PageSummary[]>;
   get: (id: string) => Promise<{ ok: true; page: PageDocument } | { ok: false; failure: PageLoadFailure }>;
@@ -282,6 +304,13 @@ export interface PagesBridge {
   deleteSavedKey?: (service: string, address: string) => Promise<SavedPageKey[]>;
   /** The one door out of a page. Main checks it against the approvals on disk. */
   fetch?: (id: string, req: PageFetchRequest) => Promise<PageFetchResult>;
+  /** The live socket (platform tooling). Absent where a window cannot hold one. */
+  socketOpen?: (req: PageSocketCall & { url: string }) => Promise<PageSocketOpenResult>;
+  socketSend?: (req: PageSocketCall & { socket: string; text: string }) => Promise<PageSocketCallResult>;
+  socketClose?: (req: PageSocketCall & { socket: string }) => Promise<PageSocketCallResult>;
+  /** The lease: main closes a socket that has not been pinged for 60 s. */
+  socketPing?: (req: PageSocketCall & { socket: string }) => Promise<PageSocketCallResult>;
+  onSocketEvent?: (cb: (e: PageSocketEvent) => void) => () => void;
 }
 
 /** How many pinned pages the header shows before the rest stay in the

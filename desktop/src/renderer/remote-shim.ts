@@ -14,6 +14,7 @@ import { REMOTE_RECONNECTED_EVENT } from './remote-events';
 // The phone's own runtime while paired: localBridgeUrl + invokeLocalBridge (WHY there).
 import { localBridgeUrl, invokeLocalBridge } from './android-local-bridge';
 import type { FirstRunState } from '../shared/first-run-types';
+import { createRemotePagesBridge } from './remote-pages-bridge';
 // boundary). These interfaces mirror marketplace-auth-store.ts and
 // marketplace-api-handlers.ts exactly — keep in sync if those change.
 interface MarketplaceUser {
@@ -378,7 +379,7 @@ function setConnectionState(state: RemoteConnectionState) {
   // Batch 2 (§6): leaving `connected` after a first successful connect is a drop —
   // the strip says "reconnecting" and the phone keeps what it shows.
   if (was === 'connected' && state !== 'connected' && hasConnectedBefore && !suppressReconnectingPhase) setConversationPhase('reconnecting');
-  if (was === 'connected' && state !== 'connected') failRequestsCutOffByDrop();
+  if (was === 'connected' && state !== 'connected') { failRequestsCutOffByDrop(); remotePages.connectionLost(); }
   // The watch runs only while there is something to watch.
   if (state === 'connected') startHeartbeat(); else stopHeartbeat();
   stateChangeCallback?.(state);
@@ -844,6 +845,9 @@ function fire(type: string, payload: any): boolean {
   return send({ type, payload });
 }
 
+// `function` declarations below hoist, so this can sit above them.
+const remotePages = createRemotePagesBridge(invoke, addListener, removeListener);
+
 function addListener(channel: string, cb: Callback): Callback {
   let set = listeners.get(channel);
   if (!set) {
@@ -1102,6 +1106,10 @@ function handleMessage(data: string, generation: number): void {
       // window.claude.system.onBack subscriber registered in App.tsx. No
       // payload is used — the event itself is the signal.
       dispatchEvent('system:back', payload);
+      break;
+    case 'pages:socket-event':
+      // A live page socket's push, for the one client that owns it (remote-pages-bridge.ts).
+      remotePages.push(payload);
       break;
     case 'pages:changed':
       // YouCoded Pages: the host's fresh page list after any change in a home.
@@ -2561,28 +2569,7 @@ export function installShim(): void {
         return () => removeListener('artifacts:changed', handler);
       },
     },
-    pages: {
-      list: () => invoke('pages:list'),
-      get: (id: string) => invoke('pages:get', { id }),
-      setPinned: (id: string, pinned: boolean) => invoke('pages:set-pinned', { id, pinned }),
-      setData: (id: string, data: unknown) => invoke('pages:set-data', { id, data }),
-      onChanged: (cb: (pages: any[]) => void) => {
-        const handler: Callback = (pages: any) => cb(pages);
-        addListener('pages:changed', handler);
-        return () => removeListener('pages:changed', handler);
-      },
-      // Phase 2. Approving from here may only REUSE a key already saved on the
-      // desktop; the host refuses pasted key material from a remote caller, so
-      // the rule holds even if this file is bypassed entirely.
-      approve: (id: string, keys: Record<string, string>, addresses?: Record<string, string>) => invoke('pages:approve', { id, keys, addresses }),
-      removeConnection: (id: string, connectionId: string) => invoke('pages:remove-connection', { id, connectionId }),
-      refresh: (id: string) => invoke('pages:refresh', { id }),
-      savedKeys: () => invoke('pages:saved-keys'),
-      deleteSavedKey: (service: string, address: string) => invoke('pages:delete-saved-key', { service, address }),
-      // The request runs on the desktop, with the desktop's credential; only
-      // the redacted answer crosses the socket.
-      fetch: (id: string, request: unknown) => invoke('pages:fetch', { id, request }),
-    },
+    pages: remotePages.bridge,
     // Document comments (T3, design docs/active/specs/2026-09-26-doc-comments-
     // build-design.md §1.6) — mirrors preload.ts's docComments namespace
     // exactly (core parity invariant: SAME shared window.claude shape).

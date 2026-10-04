@@ -28,7 +28,7 @@ import type { PageConnection, PageFetchRequest, PageFetchResult } from '../../sh
 /** Caps. Sized for a settings page: a rename is three messages out, three
  *  back; a room list is one large answer. */
 export const MAX_SOCKET_SENDS = 20;
-const MAX_SOCKET_MESSAGE_BYTES = 64_000;
+export const MAX_SOCKET_MESSAGE_BYTES = 64_000;
 export const MAX_SOCKET_REPLIES = 50;
 const MAX_SOCKET_TOTAL_BYTES = 1_000_000;
 const DEFAULT_SOCKET_TIMEOUT_MS = 10_000;
@@ -88,25 +88,31 @@ function cleanPlan(socket: PageFetchRequest['socket']): { send: string[]; until:
  *  the floor says `config/auth`, not `config/`. */
 const SOCKET_DENY_FLOOR = ['auth/', 'config/auth', 'person/'] as const;
 
-/** Check ONE page-written outgoing socket message. Returns null when allowed,
- *  else a plain reason. Main reads the message's `type` itself (a page is never
- *  trusted to say what it is sending): it must be a JSON object with exactly
- *  one string `type`, and that type, trimmed and lower-cased, must not start
- *  with any floor or manifest-denied prefix. */
-export function checkOutgoingSocketMessage(text: string, extraDeny: readonly string[] = []): string | null {
-  const unreadable = 'That page tried to send a message the app could not read, so nothing was sent.';
+/** Check ONE page-written outgoing socket message and return the text that
+ *  may be SENT. Main reads the message's `type` itself (a page is never
+ *  trusted to say what it is sending): it must be a JSON object with a string
+ *  `type`, and that type, trimmed and lower-cased, must not start with any
+ *  floor or manifest-denied prefix.
+ *
+ *  WHY the caller sends `text` from the result and never the page's own string:
+ *  JSON.parse keeps only the LAST of two `"type"` keys (even when one is
+ *  written with escapes, which no text search can see), while a device may act
+ *  on the first. Re-serialising the parsed object means what was checked is
+ *  exactly what is sent; a duplicate collapses to the checked value. A nested
+ *  `"type"` (a dashboard save) is ordinary and passes. */
+export type OutgoingCheck = { ok: true; text: string } | { ok: false; reason: string };
+export function checkOutgoingSocketMessage(text: string, extraDeny: readonly string[] = []): OutgoingCheck {
+  const unreadable: OutgoingCheck = { ok: false, reason: 'That page tried to send a message the app could not read, so nothing was sent.' };
   let parsed: unknown;
   try { parsed = JSON.parse(text); } catch { return unreadable; }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return unreadable;
   const type = (parsed as { type?: unknown }).type;
   if (typeof type !== 'string') return unreadable;
-  // WHY count in the raw text: JSON.parse keeps only the LAST of two "type"
-  // keys, while a device may act on the first, so a duplicate could hide a
-  // denied type behind an allowed one.
-  if ((text.match(/"type"\s*:/g) ?? []).length > 1) return unreadable;
   const t = type.trim().toLowerCase();
   const hit = [...SOCKET_DENY_FLOOR, ...extraDeny].find((p) => t.startsWith(p.toLowerCase()));
-  return hit ? `That page tried to send "${t}", which the app never allows on a home device, so nothing was sent.` : null;
+  return hit
+    ? { ok: false, reason: `That page tried to send "${t}", which the app never allows on a home device, so nothing was sent.` }
+    : { ok: true, text: JSON.stringify(parsed) };
 }
 
 /** Everything a socket to a home device must pass, in one place so the
@@ -115,13 +121,12 @@ export function checkOutgoingSocketMessage(text: string, extraDeny: readonly str
  *  address, a `device` connection that covers host AND port, approved at the
  *  current fingerprint, full access, a saved key when the greeting needs one,
  *  and the home-address check (re-resolved every call). */
-type DeviceSocketAccess =
+export type DeviceSocketAccess =
   | { ok: false; refusal: PageFetchResult }
   | { ok: true; connection: DeviceConnection; httpUrl: URL; credential: PageCredential | null; secrets: string[]; hello: string | undefined };
 type DeviceConnection = Extract<PageConnection, { kind: 'device' }>;
 
-// WHY not exported yet: the live socket and video (later steps) will export it; knip refuses unused exports until then.
-async function checkDeviceSocketAccess(
+export async function checkDeviceSocketAccess(
   url: unknown,
   ctx: Pick<PageFetchContext, 'connections' | 'approved' | 'credential' | 'lookup' | 'signal'>,
 ): Promise<DeviceSocketAccess> {
@@ -168,22 +173,11 @@ async function checkDeviceSocketAccess(
   return { ok: true, connection, httpUrl, credential, secrets, hello };
 }
 
-export async function performPageSocket(request: PageFetchRequest, ctx: PageSocketContext): Promise<PageFetchResult> {
-  const plan = cleanPlan(request.socket);
-  if (typeof plan === 'string') return refuse('bad-url', plan);
-
-  const checked = await checkDeviceSocketAccess(request.url, ctx);
-  if (!checked.ok) return checked.refusal;
-  const { connection, httpUrl, credential, secrets, hello } = checked;
-
-  // WHY here: a denied message (a new login key, a changed login list) must be
-  // refused before anything is sent, so the whole exchange is refused, not
-  // half-run. Applies to every page message, never to the app's own greeting.
-  for (const m of plan.send) {
-    const denied = checkOutgoingSocketMessage(m, connection.socketDeny);
-    if (denied) return refuse('method-not-allowed', denied);
-  }
-
+/** Where and how to open the wire for an approved device: the ws address, the
+ *  upgrade headers, and the greeting with the key substituted. Shared by the
+ *  one-shot exchange and the live socket so the two cannot drift. */
+export function socketTarget(checked: Extract<DeviceSocketAccess, { ok: true }>): { wsUrl: URL; headers: Record<string, string>; helloText: string | undefined } {
+  const { httpUrl, credential, hello } = checked;
   // The upgrade request carries the key the same way a fetch would, for a
   // device that signs sockets in by header or address rather than a greeting.
   const wsUrl = new URL(httpUrl.toString().replace(/^http/, 'ws'));
@@ -197,6 +191,29 @@ export async function performPageSocket(request: PageFetchRequest, ctx: PageSock
   const helloText = hello && credential
     ? hello.split(SOCKET_KEY_TOKEN).join(JSON.stringify(credential.secret ?? credential.value).slice(1, -1))
     : hello;
+  return { wsUrl, headers, helloText };
+}
+
+export async function performPageSocket(request: PageFetchRequest, ctx: PageSocketContext): Promise<PageFetchResult> {
+  const plan = cleanPlan(request.socket);
+  if (typeof plan === 'string') return refuse('bad-url', plan);
+
+  const checked = await checkDeviceSocketAccess(request.url, ctx);
+  if (!checked.ok) return checked.refusal;
+  const { connection, httpUrl, secrets } = checked;
+
+  // WHY here: a denied message (a new login key, a changed login list) must be
+  // refused before anything is sent, so the whole exchange is refused, not
+  // half-run. Applies to every page message, never to the app's own greeting.
+  // The checked, re-serialised text is what gets sent (see checkOutgoingSocketMessage).
+  const toSend: string[] = [];
+  for (const m of plan.send) {
+    const vetted = checkOutgoingSocketMessage(m, connection.socketDeny);
+    if (!vetted.ok) return refuse('method-not-allowed', vetted.reason);
+    toSend.push(vetted.text);
+  }
+
+  const { wsUrl, headers, helloText } = socketTarget(checked);
 
   const connect = ctx.connect ?? defaultConnect;
   return new Promise<PageFetchResult>((resolve) => {
@@ -233,7 +250,7 @@ export async function performPageSocket(request: PageFetchRequest, ctx: PageSock
     ws.on('open', () => {
       try {
         if (helloText) ws.send(helloText);
-        for (const m of plan.send) ws.send(m);
+        for (const m of toSend) ws.send(m);
       } catch (e) {
         finish(refuse('network', redact(e instanceof Error ? e.message : String(e), secrets)));
       }

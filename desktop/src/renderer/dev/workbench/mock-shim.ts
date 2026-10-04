@@ -499,12 +499,12 @@ const NAMESPACES = [
 
 import { createNamingPreview } from './naming-preview';
 import { seedPages } from './fixtures/pages';
-import { fakeHomeAssistantFetch, fakeHomeAssistantSocket } from './fixtures/fake-home-assistant';
+import { fakeHomeAssistantFetch, fakeHomeAssistantLive, fakeHomeAssistantSocket } from './fixtures/fake-home-assistant';
 import { withHomeMockup } from './fixtures/home-assistant-mockups';
 import { OFFICE_EDITOR_ORIGIN, OFFICE_FILES, officeFixtureName, officeSampleUrl } from './fixtures/office';
 import { OFFICE_PAGE_SUMMARY } from '../../../shared/pages-types';
 import type { OfficeBridge, OfficeVersion } from '../../../shared/office-types';
-import type { PagesBridge, PageDocument, PageSummary, SavedPageKey } from '../../../shared/pages-types';
+import type { PagesBridge, PageDocument, PageSocketEvent, PageSummary, SavedPageKey } from '../../../shared/pages-types';
 
 /** `?fail=<ns.method>[,…]` — those channels REJECT from the first call.
  *
@@ -3720,6 +3720,11 @@ function createDocCommentsMock(empty: boolean) {
  *  gets the three fixture pages. Pin toggles publish through onChanged the way
  *  the real host will, so the header and the library never disagree. */
 function createPagesMock(empty: boolean): PagesBridge {
+  // Live sockets (page-live-socket.ts's twin): who holds which, and who listens.
+  const liveSockets = new Map<string, { page: string; frame: string; live: ReturnType<typeof fakeHomeAssistantLive> }>();
+  const socketSubs = new Set<(e: PageSocketEvent) => void>();
+  let liveSeq = 0;
+  const emitSocket = (e: PageSocketEvent) => { for (const cb of [...socketSubs]) cb(e); };
   // Office is built in, so it is listed in every scenario — even the empty one.
   // Unpinned, as a new install has it: pinning it filled the header's fourth slot,
   // and the resume journey's All Sessions click then raced the session strip
@@ -3831,6 +3836,34 @@ function createPagesMock(empty: boolean): PagesBridge {
       }
       return { ok: false as const, reason: 'network' as const, message: 'The workbench has no network; this page shows saved numbers.' };
     },
+    // The live socket, answered by the pretend Home Assistant (never the network).
+    // Events arrive a moment AFTER the open's answer, as the real ones do, so the
+    // host has the socket's id before anything is said on it.
+    socketOpen: async (req) => {
+      const device = pages.find((p) => p.id === req.page)?.connections?.find((c) => c.kind === 'device' && c.approved);
+      if (!device || device.kind !== 'device' || !/^(https?|wss?):\/\/[^/]+\/api\/websocket/.test(req.url) || new URL(req.url.replace(/^ws/, 'http')).host !== device.address) {
+        return { ok: false as const, message: 'The workbench has no network; this page shows saved numbers.' };
+      }
+      const socket = `ls_mock_${++liveSeq}`;
+      const live = fakeHomeAssistantLive();
+      liveSockets.set(socket, { page: req.page, frame: req.frame, live });
+      setTimeout(() => {
+        if (!liveSockets.has(socket)) return;
+        emitSocket({ socket, kind: 'state', state: 'open' });
+        emitSocket({ socket, kind: 'messages', texts: live.opened() });
+      }, 30);
+      return { ok: true as const, socket };
+    },
+    socketSend: async (req) => {
+      const s = liveSockets.get(req.socket);
+      if (!s || s.page !== req.page || s.frame !== req.frame) return { ok: false as const, message: 'That live connection is not open any more.' };
+      const texts = s.live.message(req.text);
+      if (texts.length) setTimeout(() => { if (liveSockets.has(req.socket)) emitSocket({ socket: req.socket, kind: 'messages', texts }); }, 30);
+      return { ok: true as const };
+    },
+    socketClose: async (req) => { liveSockets.delete(req.socket); return { ok: true as const }; },
+    socketPing: async (req) => (liveSockets.has(req.socket) ? { ok: true as const } : { ok: false as const, message: 'That live connection is not open any more.' }),
+    onSocketEvent: (cb) => { socketSubs.add(cb); return () => { socketSubs.delete(cb); }; },
     onChanged: (cb) => { subs.add(cb); return () => { subs.delete(cb); }; },
     // ── Phase 2 (connections) — no backend yet; mock-only.ts carries the rows ──
     // Allow: every waiting line becomes approved, a pasted key becomes a saved

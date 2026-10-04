@@ -18,7 +18,7 @@ import { readFileHead } from './fs-read-head';
 // its stale-board cache (main/arcade-handlers.ts).
 import { getArcadeOps } from './arcade-handlers';
 import { getPagesService } from './pages/pages-service';
-import type { PageFetchRequest } from '../shared/pages-types';
+import { handlePagesMessage, clientOwnerKey } from './pages/pages-remote';
 import {
   listComments, addComment, replyToComment, resolveComment, reopenComment, moveComment, resolveWatchTarget,
   editComment, editReply, deleteComment, deleteReply,
@@ -818,6 +818,8 @@ export class RemoteServer {
     for (const client of this.clients) {
       // WHY: stop clears clients before close events run; invalidate pending starts now.
       this.handoffRoute?.cancelOwner(`remote:${client.id}`);
+    // A dropped client's live page sockets must not outlive it.
+    getPagesService()?.sockets.closeOwner(clientOwnerKey(client.id));
       client.ws.close(1001, 'Server shutting down');
     }
     this.clients.clear();
@@ -1777,6 +1779,9 @@ export class RemoteServer {
 
     const { type, id, payload } = msg;
 
+    // YouCoded Pages (incl. the live socket): pages/pages-remote.ts.
+    if (typeof type === 'string' && type.startsWith('pages:') && await handlePagesMessage(client, type, payload, (answer) => this.respond(client.ws, type, id, answer))) return;
+
     switch (type) {
       // --- Readiness (design §1 A) ---
       case 'client:ready': {
@@ -2242,67 +2247,6 @@ export class RemoteServer {
       // search:test is never-throws — { ok, message } is the result.
       case 'search:list': {
         this.respond(client.ws, type, id, this.nativeRuntime ? await this.nativeRuntime.searchKeyStore.list() : []);
-        break;
-      }
-      // YouCoded Pages (Phase 1). The service is the same one the desktop
-      // windows use; a phone over remote access sees the same library.
-      case 'pages:list': {
-        try { this.respond(client.ws, type, id, await getPagesService()?.store.list() ?? []); }
-        catch (err: any) { this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) }); }
-        break;
-      }
-      case 'pages:get': {
-        try {
-          const svc = getPagesService();
-          this.respond(client.ws, type, id, svc ? await svc.store.get(String(payload?.id ?? '')) : { ok: false, failure: { kind: 'unreadable', message: 'Pages are not available on this host.' } });
-        } catch (err: any) { this.respond(client.ws, type, id, { ok: false, failure: { kind: 'unreadable', message: err?.message ?? String(err) } }); }
-        break;
-      }
-      case 'pages:set-pinned': {
-        try { this.respond(client.ws, type, id, await getPagesService()?.store.setPinned(String(payload?.id ?? ''), !!payload?.pinned) ?? []); }
-        catch (err: any) { this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) }); }
-        break;
-      }
-      case 'pages:set-data': {
-        try {
-          const svc = getPagesService();
-          this.respond(client.ws, type, id, svc ? await svc.store.setData(String(payload?.id ?? ''), payload?.data) : { ok: false, message: 'Pages are not available on this host.' });
-        } catch (err: any) { this.respond(client.ws, type, id, { ok: false, message: err?.message ?? String(err) }); }
-        break;
-      }
-      // Pages Phase 2. `remote: true` below is the enforcement point for "no
-      // keys on the phone" (design review 1, finding 13): it was a renderer
-      // rule, and a crafted socket message walked straight past it. Reusing a
-      // key already saved on this computer is still allowed. pages:fetch runs
-      // HERE, with this computer's credential; only the redacted answer travels.
-      case 'pages:approve': {
-        try { this.respond(client.ws, type, id, await getPagesService()?.approve(String(payload?.id ?? ''), (payload?.keys ?? {}) as Record<string, string>, { remote: true, addresses: (payload?.addresses ?? {}) as Record<string, string> }) ?? { ok: false, message: 'Pages are not available on this host.' }); }
-        catch (err: any) { this.respond(client.ws, type, id, { ok: false, message: err?.message ?? String(err) }); }
-        break;
-      }
-      case 'pages:remove-connection': {
-        try { this.respond(client.ws, type, id, await getPagesService()?.removeConnection(String(payload?.id ?? ''), String(payload?.connectionId ?? '')) ?? []); }
-        catch (err: any) { this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) }); }
-        break;
-      }
-      case 'pages:refresh': {
-        try { this.respond(client.ws, type, id, await getPagesService()?.refresh(String(payload?.id ?? '')) ?? []); }
-        catch (err: any) { this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) }); }
-        break;
-      }
-      case 'pages:saved-keys': {
-        try { this.respond(client.ws, type, id, await getPagesService()?.savedKeys() ?? []); }
-        catch (err: any) { this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) }); }
-        break;
-      }
-      case 'pages:delete-saved-key': {
-        try { this.respond(client.ws, type, id, await getPagesService()?.deleteSavedKey(String(payload?.service ?? ''), String(payload?.address ?? '')) ?? []); }
-        catch (err: any) { this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) }); }
-        break;
-      }
-      case 'pages:fetch': {
-        try { this.respond(client.ws, type, id, await getPagesService()?.fetch(String(payload?.id ?? ''), (payload?.request ?? { url: '' }) as PageFetchRequest) ?? { ok: false, reason: 'network', message: 'Pages are not available on this host.' }); }
-        catch (err: any) { this.respond(client.ws, type, id, { ok: false, reason: 'network', message: err?.message ?? String(err) }); }
         break;
       }
       // Document comments (T3, design docs/active/specs/2026-09-26-doc-comments-

@@ -42,6 +42,13 @@ export const PAGE_REFRESH_MESSAGE = 'youcoded:refresh';
 export const PAGE_FETCH_MESSAGE = 'youcoded:fetch';
 /** Host → page: the answer to one `youcoded:fetch`, matched by request id. */
 export const PAGE_FETCH_RESULT_MESSAGE = 'youcoded:fetch:result';
+/** The live socket (spec 2026-10-04). Page → host: open / send / close, each
+ *  carrying the page's OWN socket id; host → page: one event kind for both a
+ *  state change and a batch of messages, matched by that same id. */
+export const PAGE_SOCKET_OPEN_MESSAGE = 'youcoded:socket:open';
+export const PAGE_SOCKET_SEND_MESSAGE = 'youcoded:socket:send';
+export const PAGE_SOCKET_CLOSE_MESSAGE = 'youcoded:socket:close';
+export const PAGE_SOCKET_EVENT_MESSAGE = 'youcoded:socket:event';
 const PAGE_THEME_STYLE_ID = 'youcoded-theme';
 
 /** Snapshot of the current theme as one `:root { … }` rule. Reads computed
@@ -86,6 +93,12 @@ function bootstrap(dataJson: string, devicesJson = '{}'): string {
   var REFRESH = ${JSON.stringify(PAGE_REFRESH_MESSAGE)};
   var FETCH = ${JSON.stringify(PAGE_FETCH_MESSAGE)};
   var RESULT = ${JSON.stringify(PAGE_FETCH_RESULT_MESSAGE)};
+  var S_OPEN = ${JSON.stringify(PAGE_SOCKET_OPEN_MESSAGE)};
+  var S_SEND = ${JSON.stringify(PAGE_SOCKET_SEND_MESSAGE)};
+  var S_CLOSE = ${JSON.stringify(PAGE_SOCKET_CLOSE_MESSAGE)};
+  var S_EVENT = ${JSON.stringify(PAGE_SOCKET_EVENT_MESSAGE)};
+  var sockets = {};
+  var socketSeq = 0;
   var subs = [];
   var refreshSubs = [];
   var waiting = {};
@@ -105,6 +118,30 @@ function bootstrap(dataJson: string, devicesJson = '{}'): string {
     save: function (data) { window.youcoded.data = data; try { parent.postMessage({ type: SET, data: data }, '*'); } catch (e) {} },
     onData: function (cb) { if (typeof cb === 'function') subs.push(cb); },
     onRefresh: function (cb) { if (typeof cb === 'function') refreshSubs.push(cb); },
+    // A live connection to the page's approved home device. The host owns the
+    // real one; this is a handle. Every 'open' is a fresh connection: wait for
+    // the device's own "logged in" reply in onMessages before subscribing, and
+    // subscribe again after every 'open'. send() is refused unless 'open'.
+    socket: function (url, opts) {
+      var o = opts || {};
+      var id = 's' + (++socketSeq);
+      var rec = { state: 'connecting', onState: o.onState, onMessages: o.onMessages };
+      sockets[id] = rec;
+      try { parent.postMessage({ type: S_OPEN, id: id, url: String(url) }, '*'); }
+      catch (e) { rec.state = 'closed'; delete sockets[id]; }
+      return {
+        send: function (text) {
+          if (rec.state !== 'open' || typeof text !== 'string') return false;
+          try { parent.postMessage({ type: S_SEND, id: id, text: text }, '*'); return true; } catch (e) { return false; }
+        },
+        close: function () {
+          if (!sockets[id]) return;
+          delete sockets[id];
+          rec.state = 'closed';
+          try { parent.postMessage({ type: S_CLOSE, id: id }, '*'); } catch (e) {}
+        }
+      };
+    },
     fetch: function (url, opts) {
       return new Promise(function (resolve, reject) {
         var o = opts || {};
@@ -130,6 +167,19 @@ function bootstrap(dataJson: string, devicesJson = '{}'): string {
       var el = document.getElementById(ID);
       if (!el) { el = document.createElement('style'); el.id = ID; document.head.appendChild(el); }
       el.textContent = d.css;
+      return;
+    }
+    if (d.type === S_EVENT && typeof d.id === 'string') {
+      // Matched by this page's own id: a forged event for an id it never made resolves nothing.
+      var sr = sockets[d.id];
+      if (!sr) return;
+      if (d.kind === 'state' && typeof d.state === 'string') {
+        sr.state = d.state;
+        if (d.state === 'closed') delete sockets[d.id];
+        if (typeof sr.onState === 'function') { try { sr.onState(d.state, typeof d.why === 'string' ? d.why : undefined); } catch (err) {} }
+      } else if (d.kind === 'messages' && Array.isArray(d.texts) && typeof sr.onMessages === 'function') {
+        try { sr.onMessages(d.texts.filter(function (t) { return typeof t === 'string'; })); } catch (err) {}
+      }
       return;
     }
     if (d.type === DATA) { window.youcoded.data = d.data; call(subs, d.data); return; }

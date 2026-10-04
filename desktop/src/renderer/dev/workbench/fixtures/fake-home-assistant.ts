@@ -322,3 +322,22 @@ export function fakeHomeAssistantSocket(req: PageFetchRequest): PageFetchResult 
   }
   return { ok: true, status: 101, headers: {}, body: JSON.stringify(frames.slice(0, req.socket.until)) };
 }
+
+/** A LIVE session with the pretend Home Assistant (the page's live socket in
+ *  the workbench). Same conversation as the real one: it says `auth_required`
+ *  when the socket opens, answers the greeting with `auth_ok`, then answers
+ *  each message through the same table the one-shot exchange uses. Events the
+ *  house pushes on its own (subscribe_entities, step 5) are just more texts
+ *  the caller delivers: this stays plumbing, not behaviour. */
+export function fakeHomeAssistantLive(): { opened: () => string[]; message: (text: string) => string[] } {
+  return {
+    opened: () => [JSON.stringify({ type: 'auth_required', ha_version: '2026.9.0' })],
+    message: (text) => {
+      let type: unknown;
+      try { type = (JSON.parse(text) as { type?: unknown }).type; } catch { return []; }
+      if (type === 'auth') return [JSON.stringify({ type: 'auth_ok', ha_version: '2026.9.0' })];
+      const a = answerOne(text);
+      return a ? [a] : [];
+    },
+  };
+}

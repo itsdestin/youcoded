@@ -435,13 +435,12 @@ const IPC = {
   OPENROUTER_SIGN_IN_STATUS: 'openrouter:sign-in-status',
   OPENROUTER_SIGN_IN: 'openrouter:sign-in',
   OPENROUTER_CANCEL_SIGN_IN: 'openrouter:cancel-sign-in',
-  // YouCoded Pages (Phase 1) — mirrors shared/types.ts; pinned equal by ipc-channels.test.ts.
+  // YouCoded Pages (Phase 1; Phase 2 = approvals, keys, the one door) — mirrors shared/types.ts; pinned equal by ipc-channels.test.ts.
   PAGES_LIST: 'pages:list',
   PAGES_GET: 'pages:get',
   PAGES_SET_PINNED: 'pages:set-pinned',
   PAGES_SET_DATA: 'pages:set-data',
   PAGES_CHANGED: 'pages:changed',
-  // Pages Phase 2 — connections, keys and the one door out of a page.
   PAGES_APPROVE: 'pages:approve',
   PAGES_REMOVE_CONNECTION: 'pages:remove-connection',
   PAGES_REFRESH: 'pages:refresh',
@@ -1905,8 +1904,7 @@ contextBridge.exposeInMainWorld('claude', {
       return () => ipcRenderer.removeListener('artifacts:changed', handler);
     },
   },
-  // YouCoded Pages (Phase 1): the library, pins, a page's document + data,
-  // and the change push. Shape: shared/pages-types.ts PagesBridge.
+  // YouCoded Pages: library, pins, document + data, change push. Shape: shared/pages-types.ts PagesBridge.
   pages: {
     list: () => ipcRenderer.invoke(IPC.PAGES_LIST),
     get: (id: string) => ipcRenderer.invoke(IPC.PAGES_GET, id),
@@ -1917,16 +1915,18 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.on(IPC.PAGES_CHANGED, handler);
       return () => ipcRenderer.removeListener(IPC.PAGES_CHANGED, handler);
     },
-    // Phase 2. `keys` carries a pasted key per key-connection id, or 'saved' to
-    // reuse the one already kept; main is the side that decides, so a pasted
-    // key from a phone is refused there rather than here.
+    // Phase 2. `keys`: a pasted key per connection id, or 'saved'; main decides (a phone's pasted key is refused there).
     approve: (id: string, keys: Record<string, string>, addresses?: Record<string, string>) => ipcRenderer.invoke(IPC.PAGES_APPROVE, id, keys, addresses),
     removeConnection: (id: string, connectionId: string) => ipcRenderer.invoke(IPC.PAGES_REMOVE_CONNECTION, id, connectionId),
     refresh: (id: string) => ipcRenderer.invoke(IPC.PAGES_REFRESH, id),
     savedKeys: () => ipcRenderer.invoke(IPC.PAGES_SAVED_KEYS),
-    // Both parts: a key is identified by service AND address.
-    deleteSavedKey: (service: string, address: string) => ipcRenderer.invoke(IPC.PAGES_DELETE_SAVED_KEY, service, address),
+    deleteSavedKey: (service: string, address: string) => ipcRenderer.invoke(IPC.PAGES_DELETE_SAVED_KEY, service, address), // service AND address
     fetch: (id: string, req: unknown) => ipcRenderer.invoke(IPC.PAGES_FETCH, id, req),
+    socketOpen: (req: unknown) => ipcRenderer.invoke('pages:socket-open', req), // live socket: inlined strings, pinned to PAGE_SOCKET_CHANNELS by ipc-channels.test.ts
+    socketSend: (req: unknown) => ipcRenderer.invoke('pages:socket-send', req),
+    socketClose: (req: unknown) => ipcRenderer.invoke('pages:socket-close', req),
+    socketPing: (req: unknown) => ipcRenderer.invoke('pages:socket-ping', req),
+    onSocketEvent: (cb: (e: unknown) => void) => { const h = (_e: unknown, ev: unknown) => cb(ev); ipcRenderer.on('pages:socket-event', h); return () => ipcRenderer.removeListener('pages:socket-event', h); },
   },
   // Document comments (T3, design docs/active/specs/2026-09-26-doc-comments-
   // build-design.md §1.6). Channel strings are inlined (preload cannot import

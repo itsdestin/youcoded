@@ -162,6 +162,36 @@ describe('what a page can call', () => {
     await expect(p).resolves.toMatchObject({ body: 'real' });
   });
 
+  it('hands the page a live socket handle and hears only events for its own ids', () => {
+    const { yc, posted, deliver } = runBootstrap();
+    const states: unknown[][] = [];
+    const messages: string[][] = [];
+    const sock = (yc.socket as (u: string, o: unknown) => { send(t: unknown): boolean; close(): void })('http://ha.local:8123/api/websocket', {
+      onState: (...a: unknown[]) => states.push(a), onMessages: (t: string[]) => messages.push(t),
+    });
+    expect(posted[0]).toMatchObject({ type: 'youcoded:socket:open', id: 's1', url: 'http://ha.local:8123/api/websocket' });
+    // Refused unless 'open': nothing is posted.
+    expect(sock.send('{"type":"ping"}')).toBe(false);
+    expect(posted).toHaveLength(1);
+    deliver({ type: 'youcoded:socket:event', id: 's1', kind: 'state', state: 'open' });
+    expect(sock.send('{"type":"ping"}')).toBe(true);
+    expect(sock.send(42)).toBe(false); // strings only
+    expect(posted[1]).toMatchObject({ type: 'youcoded:socket:send', id: 's1', text: '{"type":"ping"}' });
+    deliver({ type: 'youcoded:socket:event', id: 's1', kind: 'messages', texts: ['a', 7, 'b'] });
+    expect(messages).toEqual([['a', 'b']]);
+    // A forged event: from another window, or for an id this page never made.
+    deliver({ type: 'youcoded:socket:event', id: 's1', kind: 'messages', texts: ['forged'] }, { name: 'popup' });
+    deliver({ type: 'youcoded:socket:event', id: 's99', kind: 'messages', texts: ['wrong id'] });
+    deliver({ type: 'youcoded:socket:event', id: 's99', kind: 'state', state: 'open' });
+    expect(messages).toEqual([['a', 'b']]);
+    expect(states).toEqual([['open', undefined]]);
+    // Closing tells the host once, and later events resolve nothing.
+    sock.close();
+    expect(posted.at(-1)).toMatchObject({ type: 'youcoded:socket:close', id: 's1' });
+    deliver({ type: 'youcoded:socket:event', id: 's1', kind: 'messages', texts: ['late'] });
+    expect(messages).toHaveLength(1);
+  });
+
   it('hears the refresh button and a data change, from the host only', () => {
     const { yc, deliver } = runBootstrap();
     let refreshes = 0;

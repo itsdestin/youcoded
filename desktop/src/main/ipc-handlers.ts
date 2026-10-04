@@ -159,9 +159,9 @@ import { appendVersion, readSidecar, readSidecarShared, writeSidecar, renameArti
 import { listProjects, removeProject } from './artifacts/central-index';
 import { initPagesService, getPagesService } from './pages/pages-service';
 import { PageConnectionsStore } from './pages/connections-store';
+import { registerPagesIpc } from './pages/pages-ipc';
 import { registerDocCommentsHandlers } from './doc-comments/ipc-handlers';
 import { createAuthStore } from './marketplace-auth-store';
-import type { PageFetchRequest } from '../shared/pages-types';
 import { getMachineIdentity } from './device-identity';
 // Shared with remote-server.ts — see that module's header for why these left
 // this file (they were closures, so the remote transport could not reach them).
@@ -5410,23 +5410,7 @@ export function registerIpcHandlers(
       remoteServer?.broadcast({ type: IPC.PAGES_CHANGED, payload: pages });
     },
   });
-  ipcMain.handle(IPC.PAGES_LIST, async () => { pagesService.ensureWatching(); return pagesService.listAndWatch(); });
-  ipcMain.handle(IPC.PAGES_GET, async (_e, id: string) => pagesService.store.get(String(id ?? '')));
-  ipcMain.handle(IPC.PAGES_SET_PINNED, async (_e, id: string, pinned: boolean) => pagesService.store.setPinned(String(id ?? ''), !!pinned));
-  ipcMain.handle(IPC.PAGES_SET_DATA, async (_e, id: string, data: unknown) => pagesService.store.setData(String(id ?? ''), data));
-  // Phase 2. `remote: false` here and `true` in remote-server.ts is the whole
-  // of "no keys on the phone" (design review 1, finding 13): a desktop window
-  // may paste a key, a remote caller may only reuse one already saved. `addresses`: per device line (re-checked in main).
-  ipcMain.handle(IPC.PAGES_APPROVE, async (_e, id: string, keys: Record<string, string>, addresses?: Record<string, string>) =>
-    pagesService.approve(String(id ?? ''), keys ?? {}, { remote: false, addresses: addresses ?? {} }));
-  ipcMain.handle(IPC.PAGES_REMOVE_CONNECTION, async (_e, id: string, connectionId: string) =>
-    pagesService.removeConnection(String(id ?? ''), String(connectionId ?? '')));
-  ipcMain.handle(IPC.PAGES_REFRESH, async (_e, id: string) => pagesService.refresh(String(id ?? '')));
-  ipcMain.handle(IPC.PAGES_SAVED_KEYS, async () => pagesService.savedKeys());
-  ipcMain.handle(IPC.PAGES_DELETE_SAVED_KEY, async (_e, service: string, address: string) =>
-    pagesService.deleteSavedKey(String(service ?? ''), String(address ?? '')));
-  ipcMain.handle(IPC.PAGES_FETCH, async (_e, id: string, req: PageFetchRequest) =>
-    pagesService.fetch(String(id ?? ''), req ?? { url: '' }));
+  registerPagesIpc(ipcMain, pagesService); // the pages:* handlers, incl. the live socket (pages/pages-ipc.ts)
 
   // ── Document comments (T3, design docs/active/specs/2026-09-26-doc-comments-
   // build-design.md §1.5/§1.6) — list/add/reply/resolve/reopen/move plus the
