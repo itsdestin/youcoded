@@ -16,6 +16,7 @@ interface Thing {
   maker?: string; entry?: string; since?: string;
   /** Sonos `group_members`: the speakers playing together, leader first. */
   group?: string[];
+  sw?: string;
 }
 
 /** Home Assistant's "can play in a group" flag on a media player. */
@@ -38,7 +39,7 @@ function seed(): Array<{ id: string; name: string; items: Thing[] }> {
       { id: 'remote.destins_room_tv_remote', name: "Destin's Room TV remote", state: 'on', activity: 'com.google.android.youtube.tv' },
     ] },
     { id: 'living_room', name: 'Living Room', items: [
-      { id: 'light.living_room_lamp', name: 'Floor lamp', state: 'on', brightness: 180, modes: ['color_temp'], k: 2700 },
+      { id: 'light.living_room_lamp', name: 'Floor lamp', state: 'on', brightness: 180, modes: ['color_temp'], k: 2700, maker: 'Signify Netherlands B.V.', model: 'Hue go (LLC020)', entry: 'entry_hue', sw: '1.108.7' },
       { id: 'light.living_room_ceiling', name: 'Ceiling', state: 'off', brightness: null, modes: dim },
       { id: 'media_player.living_room_speaker', name: 'Living Room speaker', state: 'paused', features: 4 | 8 | 1 | 16 | 32, vol: 0.3, title: 'Clair de Lune — Debussy', model: 'Google Nest Mini', app: 'Spotify' },
       { id: 'camera.living_room_camera', name: 'Living room camera', state: 'idle' },
@@ -100,6 +101,33 @@ const ok = (body: string): PageFetchResult => ({ ok: true, status: 200, headers:
 
 /** Answers a request to the pretend Home Assistant, or null when the request
  *  is not for it (the workbench's usual "no network" answer then applies). */
+const USER_DESTIN = 'user_destin';
+type LogEntry = { entity_id: string; name: string; state: string; when: string; context_user_id?: string; context_entity_id?: string; context_entity_id_name?: string; context_event_type?: string };
+function logbook(): LogEntry[] {
+  const at = (minAgo: number) => new Date(Date.now() - minAgo * 60000).toISOString();
+  const you = { context_user_id: USER_DESTIN, context_event_type: 'call_service' };
+  const auto = { context_entity_id: 'automation.lights_out', context_entity_id_name: 'Lights out at 8', context_event_type: 'automation_triggered' };
+  const rows: Array<[number, string, string, string, object?]> = [
+    [1500, 'light.living_room_lamp', 'Floor lamp', 'on'],
+    [1440, 'media_player.living_room_speaker', 'Living Room speaker', 'playing', you],
+    [1380, 'media_player.living_room_speaker', 'Living Room speaker', 'paused', you],
+    [720, 'light.living_room_lamp', 'Floor lamp', 'off', auto],
+    [720, 'light.overhead_light', 'Overhead light', 'off', auto],
+    [260, 'climate.thermostat', 'Thermostat', 'cool', you],
+    [230, 'light.tv_backlight', 'TV backlight', 'unavailable'],
+    [130, 'scene.living_room_relax', 'Living Room Relax', at(130), you],
+    [120, 'light.living_room_lamp', 'Floor lamp', 'on', you],
+    [60, 'light.living_room_lamp', 'Floor lamp', 'off'],
+    [70, 'remote.destins_room_tv_remote', "Destin's Room TV remote", 'on', you],
+    [69, 'media_player.destins_room_google_tv', "Destin's Room TV", 'idle'],
+    [69, 'media_player.destins_room_google_tv', "Destin's Room TV", 'playing'],
+    [68, 'media_player.destins_room_google_tv', "Destin's Room TV", 'playing'],
+    [45, 'light.overhead_light', 'Overhead light', 'on'],
+    [12, 'light.living_room_lamp', 'Floor lamp', 'on'],
+  ];
+  return rows.map(([m, entity_id, name, state, ctx]) => ({ entity_id, name, state, when: at(m), ...(ctx ?? {}) }));
+}
+
 function leaveGroup(id: string): void {
   const t = find(id);
   if (!t?.group || t.group.length < 2) return;
@@ -116,6 +144,16 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
   // Rooms with nothing in them are left out, as the real template does; each
   // item carries the id of the device it belongs to (`device_id(e)`), which
   // a room move needs (fakeHomeAssistantSocket).
+  // The logbook (round 5: Activity tab, a device's pop-up): a day of made-up
+  // changes to the page's own devices, newest last as Home Assistant sends
+  // them. Who did it follows the real shapes: a person's id, an automation,
+  // or nothing at all when the change came from the device or another app.
+  const lb = /^\/api\/logbook\/(.+)$/.exec(url.pathname);
+  if (lb) {
+    const from = Date.parse(decodeURIComponent(lb[1])) || Date.now() - 86400000;
+    const only = url.searchParams.get('entity');
+    return ok(JSON.stringify(logbook().filter((e) => Date.parse(e.when) >= from && (!only || e.entity_id === only))));
+  }
   if (url.pathname === '/api/template') {
     // The page's second template asks for the weather and low batteries.
     if ((req.body ?? '').includes('EXTRAS')) {
@@ -123,6 +161,7 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
         weather: { state: 'clear-night', temp: 77, unit: '°F', humidity: 58 },
         low: [{ id: 'sensor.destin_s_light_switch_battery', name: "Destin's light switch battery", level: 1, device: 'dev_switch', room: "Destin's Room" },
           { id: 'sensor.bathroom_button_battery', name: 'Bathroom button battery', level: 15, device: 'dev_button', room: "Grandma's Bathroom" }],
+        people: [{ user: USER_DESTIN, name: 'Destin' }],
       }));
     }
     return ok(JSON.stringify(ROOMS.filter((r) => r.items.length).map((r) => ({ ...r, items: r.items.map((t) => ({ ...t, device: deviceOf(t.id) })) }))));

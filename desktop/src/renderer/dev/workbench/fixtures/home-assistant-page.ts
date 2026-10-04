@@ -15,38 +15,9 @@
 // through `youcoded.fetch`; the page never holds the key.
 
 import { HOME_ASSISTANT_PAGE_CSS } from './home-assistant-page-style';
+import { HOME_HISTORY_CSS, HOME_HISTORY_JS } from './home-assistant-page-history';
+import { ROOMS_TEMPLATE, EXTRAS_TEMPLATE } from './home-assistant-page-templates';
 
-/** One request that answers "every room, and the lights, thermostats, players
- *  and cameras in it". `.get()` rather than `.attr` so a missing attribute is
- *  null in the JSON, never a template error. */
-const ROOMS_TEMPLATE = `{%- set ns = namespace(rooms=[]) -%}
-{%- for a in areas() -%}
-{%- set ens = namespace(items=[], scenes=[]) -%}
-{%- for e in area_entities(a) -%}
-{%- set d = e.split('.')[0] -%}
-{%- if d == 'scene' and states[e] is not none -%}
-{%- set ens.scenes = ens.scenes + [{'id': e, 'name': states[e].name, 'last': states[e].state}] -%}
-{%- endif -%}
-{%- if d in ['light','climate','media_player','camera','remote'] and states[e] is not none -%}
-{%- set s = states[e] -%}
-{%- set ce = device_attr(device_id(e), 'config_entries') -%}
-{%- set ens.items = ens.items + [{'id': e, 'maker': device_attr(device_id(e), 'manufacturer'), 'entry': (ce | list | first) if ce else none, 'since': s.last_changed.isoformat(), 'name': s.name, 'state': s.state, 'brightness': s.attributes.get('brightness'), 'modes': s.attributes.get('supported_color_modes'), 'cur': s.attributes.get('current_temperature'), 'target': s.attributes.get('temperature'), 'min': s.attributes.get('min_temp'), 'max': s.attributes.get('max_temp'), 'step': s.attributes.get('target_temp_step'), 'vol': s.attributes.get('volume_level'), 'title': s.attributes.get('media_title'), 'features': s.attributes.get('supported_features', 0), 'rgb': s.attributes.get('rgb_color'), 'k': s.attributes.get('color_temp_kelvin'), 'modesHvac': s.attributes.get('hvac_modes'), 'action': s.attributes.get('hvac_action'), 'device': device_id(e), 'model': device_attr(device_id(e), 'model'), 'dc': s.attributes.get('device_class'), 'activity': s.attributes.get('current_activity'), 'app': s.attributes.get('app_name'), 'source': s.attributes.get('source'), 'cid': s.attributes.get('media_content_id'), 'muted': s.attributes.get('is_volume_muted'), 'group': s.attributes.get('group_members')}] -%}
-{%- endif -%}
-{%- endfor -%}
-{%- if ens.items -%}{%- set ns.rooms = ns.rooms + [{'id': a, 'name': area_name(a), 'items': ens.items, 'scenes': ens.scenes}] -%}{%- endif -%}
-{%- endfor -%}
-{{ ns.rooms | to_json }}`;
-
-/** Round 4 (home-page-v3 deck): what the chips need beyond the rooms — the
- *  weather, and batteries running low. One small request per check. The
- *  first line names it so the pretend Home Assistant can tell it apart. */
-const EXTRAS_TEMPLATE = `{#- EXTRAS -#}
-{%- set w = states.weather | first -%}
-{%- set low = namespace(list=[]) -%}
-{%- for s in states.sensor if s.attributes.get('device_class') == 'battery' and s.state | is_number and s.state | float(100) < 20 -%}
-{%- set low.list = low.list + [{'id': s.entity_id, 'name': s.name, 'level': s.state | float, 'device': device_id(s.entity_id), 'room': area_name(s.entity_id)}] -%}
-{%- endfor -%}
-{{ {'weather': ({'state': w.state, 'temp': w.attributes.get('temperature'), 'unit': w.attributes.get('temperature_unit'), 'humidity': w.attributes.get('humidity')} if w else none), 'low': low.list} | to_json }}`;
 
 export const HOME_ASSISTANT_PAGE_JSON = {
   name: 'Home',
@@ -88,7 +59,7 @@ export const HOME_ASSISTANT_PAGE_JSON = {
 function homeAssistantPageHtml(): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>Home</title>
-<style>${HOME_ASSISTANT_PAGE_CSS}</style></head>
+<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}</style></head>
 <body>
 <div class="yc-page yc-stack" id="root">
   <!-- No page title: the app's own bar already names the page, so the
@@ -99,6 +70,7 @@ function homeAssistantPageHtml(): string {
   <div id="view"></div>
   <div id="favs"></div>
   <div class="rooms" id="rooms"><div class="yc-empty">Loading your rooms…</div></div>
+  <div id="dlg"></div>
 </div>
 <script>
 (function () {
@@ -185,10 +157,14 @@ function homeAssistantPageHtml(): string {
       if (first) refreshCameras();
     }).catch(function (e) { banner(e && e.message ? e.message : 'Home Assistant could not be reached.'); });
     call('/api/template', { template: EXTRAS }).then(function (r) {
-      try { var x = JSON.parse(r.body); extras = { weather: x.weather || null, low: Array.isArray(x.low) ? x.low : [] }; } catch (e) { /* keep the last */ }
+      try { var x = JSON.parse(r.body); extras = { weather: x.weather || null, low: Array.isArray(x.low) ? x.low : [], people: Array.isArray(x.people) ? x.people : [] }; } catch (e) { /* keep the last */ }
       if (!dragging) render();
     }, function () { /* the rooms request reports the problem */ });
     if (Date.now() - healthAt > 60000) loadHealth();
+    // History only while someone is looking at it (round 5: Activity tab,
+    // a device's pop-up).
+    if (view === 'activity') refreshHistory();
+    if (dlgId) refreshDevice();
   }
   // Home Assistant's own health, over the live connection, once a minute:
   // integrations that failed to start, ones waiting for you to sign in
@@ -263,6 +239,7 @@ function homeAssistantPageHtml(): string {
   var PENCIL = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>';
   var EYE = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
   var EYE_OFF = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3l18 18"/><path d="M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6A17 17 0 0 0 2 12s3.5 7 10 7a9.9 9.9 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>';
+  var INFO = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>';
   var OUT = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>';
   function ico(d, w) { return '<svg width="' + (w || 18) + '" height="' + (w || 18) + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + '</svg>'; }
   var REMOTE = ico('<rect x="7" y="2" width="10" height="20" rx="4"/><circle cx="12" cy="9" r="2.5"/><path d="M12 5.2v.1M10 15h.01M14 15h.01M10 18h.01M14 18h.01"/>', 16);
@@ -651,6 +628,7 @@ function homeAssistantPageHtml(): string {
       ib('up', id, UP, 'Move up', ' data-key="' + esc(ctx.key) + '"' + (i <= 0 ? ' disabled' : '')) +
       ib('down', id, DOWN, 'Move down', ' data-key="' + esc(ctx.key) + '"' + (i >= ctx.ids.length - 1 ? ' disabled' : '')) +
       ib('rename', id, PENCIL, 'Rename') +
+      '<button class="ib" data-dev="' + esc(id) + '" aria-label="Details of ' + esc(it.name) + '" title="Details">' + INFO + '</button>' +
       (ctx.key === 'fav' ? '<span class="grow"></span>' : pick) +
       soundPick(it) +
       ib('hide', id, h ? EYE_OFF : EYE, h ? 'Show on this page' : 'Hide from this page', ' aria-pressed="false"') +
@@ -658,7 +636,13 @@ function homeAssistantPageHtml(): string {
       '</div>';
   }
 
+  // Every card carries its device's id, which is how a long press, a
+  // right-click or its name opens the device's pop-up (round 5, C-device).
   function itemHtml(it, ctx) {
+    var html = cardHtml(it, ctx);
+    return html.replace(/^<div /, '<div data-eid="' + esc(it.id) + '" ');
+  }
+  function cardHtml(it, ctx) {
     var d = domain(it.id), off = !isOn(it), na = gone(it);
     var cls = 'thing' + (off ? ' off' : '') + (na ? ' gone' : '') + (hidden.has(it.id) ? ' is-hidden' : '');
     var sub = na ? '<div class="sub">Not responding</div>' : '';
@@ -862,6 +846,7 @@ function homeAssistantPageHtml(): string {
         segs: media.filter(function (x) { return !gone(x.it); }).map(function (x) { return x.it.state === 'playing' ? 'var(--accent)' : (isTv(x.it) && isOn(remoteFor(x.it, x.room) || x.it)) ? 'color-mix(in srgb, var(--accent) 55%, transparent)' : null; }) },
       climate: { big: temp != null ? Math.round(temp) + '°' : '—', unit: w ? 'outside' : 'inside', temp: temp, inside: th && th.it.cur != null ? th.it.cur : null, mode: th ? th.it.state : null },
       problems: { big: probs.length ? String(probs.length) : '✓', unit: probs.length ? 'to fix' : 'all good', sevs: sevs },
+      activity: { big: '', unit: '' },
     };
     return [
       { id: 'lights', label: 'Lights', icon: BULB, on: nLit > 0,
@@ -875,6 +860,8 @@ function homeAssistantPageHtml(): string {
         sub: th ? (th.it.cur != null ? th.it.cur + '° inside' : '') + (th.it.state && th.it.state !== 'off' && th.it.target != null ? ' · ' + (MODE_NAMES[th.it.state] || th.it.state) + ' to ' + th.it.target + '°' : th.it.state === 'off' ? ' · off' : '') : '' },
       { id: 'problems', label: 'Problems', icon: ALERT, on: probs.length > 0, warn: probs.some(function (p) { return p.sev === 'high'; }),
         main: probs.length ? probs.length + ' to fix' : 'All good', sub: probs.length ? probs[0].title : '' },
+      // Round 5 (C-activity "tab"): the house's history is a tab of its own.
+      { id: 'activity', label: 'Activity', icon: ACTIVITY, on: false, main: activityCount() || 'Activity', sub: '' },
     ].map(function (c) { c.x = extra[c.id]; return c; }).filter(function (c) { return pref('chip-' + c.id); });
   }
   // A temperature as a colour: deep blue when cold, through teal and
@@ -897,6 +884,7 @@ function homeAssistantPageHtml(): string {
     if (c.id === 'lights') return c.on ? (x.cols[0] || 'rgb(255, 190, 110)') : null;
     if (c.id === 'media') return c.on ? (x.appBg || 'var(--accent)') : null;
     if (c.id === 'climate') return tempColour(x.temp);
+    if (c.id === 'activity') return null;
     return x.sevs.high ? 'rgb(235, 70, 55)' : (x.sevs.mid || x.sevs.low) ? 'rgb(240, 165, 40)' : 'rgb(60, 190, 110)';
   }
   function chipShort(c) {
@@ -904,6 +892,7 @@ function homeAssistantPageHtml(): string {
     if (c.id === 'lights') return c.on ? x.big + ' on' : 'Lights off';
     if (c.id === 'media') return x.playing ? (c.main) : c.on ? c.main : 'Quiet';
     if (c.id === 'climate') return x.big + (x.inside != null ? ' · ' + x.inside + '° in' : '');
+    if (c.id === 'activity') return 'Activity';
     return c.x.sevs.high + c.x.sevs.mid + c.x.sevs.low ? c.main : 'All good';
   }
   function chipPill(c) {
@@ -1017,6 +1006,7 @@ function homeAssistantPageHtml(): string {
     var head = '<div class="vhead"><span class="vicon2">' + vIcon + '</span><div class="vtitle"><h2>' + (c ? c.label : '') + '</h2>' + (c ? '<span class="vsub">' + esc(c.main + (c.sub ? ' · ' + c.sub : '')) + '</span>' : '') + '</div></div>';
     var body = '';
     if (view === 'settings') return head + settingsPageHtml();
+    if (view === 'activity') return head + activityHtml();
     if (view === 'problems') {
       var ps = problems();
       // Problems are cards in a grid that fills the page (round 4 note:
@@ -1105,6 +1095,7 @@ function homeAssistantPageHtml(): string {
 
     put('chips', chipsHtml());
     if (!rooms) return;
+    put('dlg', dialogHtml());
     $('root').classList.toggle('in-view', !!view);
     if (view) { put('view', viewHtml()); put('favs', ''); put('rooms', ''); return; }
     put('view', '');
@@ -1179,7 +1170,7 @@ function homeAssistantPageHtml(): string {
     if (t.getAttribute('data-home')) { view = null; render(); window.scrollTo(0, 0); return; }
     // A pill is a tab: pressing the open one keeps it open; the gear still
     // toggles settings.
-    if (vw) { view = vw === 'settings' && view === 'settings' ? null : vw; render(); window.scrollTo(0, 0); if (vw === 'problems') loadHealth(); return; }
+    if (vw) { view = vw === 'settings' && view === 'settings' ? null : vw; render(); window.scrollTo(0, 0); if (vw === 'problems') loadHealth(); if (vw === 'activity') refreshHistory(true); return; }
     var pf = t.getAttribute('data-pref');
     if (pf) { prefs[pf] = !pref(pf); persist({ prefs: prefs }); render(); return; }
     var scn = t.getAttribute('data-scenes');
@@ -1479,6 +1470,7 @@ function homeAssistantPageHtml(): string {
     scenesOpen = new Set(Array.isArray(d.scenesOpen) ? d.scenesOpen : []);
     render();
   });
+${HOME_HISTORY_JS}
   start();
 })();
 </script>
