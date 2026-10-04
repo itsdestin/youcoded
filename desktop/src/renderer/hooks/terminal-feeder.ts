@@ -219,7 +219,7 @@ export function createTerminalFeeder(opts: TerminalFeederOptions): TerminalFeede
           // Keep the newest: cut at a line start outside any escape sequence and restore the terminal's sticky modes.
           const r = trimOldest(queue, DOC_HIDDEN_CAP, Math.floor(DOC_HIDDEN_CAP * 0.75), trimMemo);
           queuedChars += r.added - r.removed;
-          if (r.removed > 0) trimmedSinceShown = true;
+          if (r.repaint) trimmedSinceShown = true;
         }
         pump();
         return;

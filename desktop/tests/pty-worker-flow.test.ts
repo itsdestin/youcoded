@@ -77,6 +77,36 @@ describe('pty-worker repaint nudge (after output was cut from a backlog)', () =>
     expect(w.fakePty.cols).toBe(100);                       // the user's size stands, the stale restore never ran
     expect(w.fakePty.resize).not.toHaveBeenCalledWith(80, 24);
   });
+  it('overlapping requests narrow only once and the restore goes back to the ORIGINAL size (never stuck one column narrow)', () => {
+    vi.useFakeTimers();
+    const w = loadWorker();
+    w.deliver({ type: 'bounce' });
+    vi.advanceTimersByTime(50);
+    w.deliver({ type: 'bounce' });                           // a second request inside the window: ignored
+    vi.advanceTimersByTime(200);
+    expect(w.fakePty.resize.mock.calls).toEqual([[79, 24], [80, 24]]);
+    expect(w.fakePty.cols).toBe(80);
+    w.deliver({ type: 'bounce' });                           // and a later one works again
+    vi.advanceTimersByTime(200);
+    expect(w.fakePty.cols).toBe(80);
+  });
+  it('a viewer on another device resizing between the two halves keeps its size (the nudge never overrides it)', () => {
+    vi.useFakeTimers();
+    const w = loadWorker();
+    w.deliver({ type: 'bounce' });
+    w.deliver({ type: 'resize', cols: 50, rows: 20 });        // what a phone's session:resize becomes in the worker
+    vi.advanceTimersByTime(200);
+    expect(w.fakePty.cols).toBe(50);
+    expect(w.fakePty.rows).toBe(20);
+  });
+  it('even a real resize to the nudged width itself wins (flagged, not guessed from the size)', () => {
+    vi.useFakeTimers();
+    const w = loadWorker();
+    w.deliver({ type: 'bounce' });
+    w.deliver({ type: 'resize', cols: 79, rows: 24 });
+    vi.advanceTimersByTime(200);
+    expect(w.fakePty.cols).toBe(79);
+  });
   it('never on Windows (ConPTY re-emits its buffer on every resize)', () => {
     vi.useFakeTimers();
     const w = loadWorker(undefined, {}, 'win32');

@@ -110,6 +110,7 @@ const IPC = {
   OPEN_PATH: 'shell:open-path',
   TERMINAL_READY: 'session:terminal-ready',
   TERMINAL_ACK: 'session:terminal-ack',
+  TERMINAL_REPAINT: 'session:terminal-repaint',
   PERMISSION_RESPOND: 'permission:respond',
   REMOTE_GET_CONFIG: 'remote:get-config',
   REMOTE_SET_PASSWORD: 'remote:set-password',
@@ -596,6 +597,9 @@ contextBridge.exposeInMainWorld('claude', {
     // flooding program. Fire-and-forget; only the window that owns the session is believed (ipc-handlers.ts).
     ackOutput: (sessionId: string, chars: number) =>
       ipcRenderer.send(IPC.TERMINAL_ACK, sessionId, chars),
+    // A hidden window's backlog was cut: ask the program to repaint once (main arbitrates the size nudge).
+    requestRepaint: (sessionId: string) =>
+      ipcRenderer.send(IPC.TERMINAL_REPAINT, sessionId),
     respondToPermission: (requestId: string, decision: object) =>
       ipcRenderer.invoke(IPC.PERMISSION_RESPOND, requestId, decision),
     browse: (): Promise<any[]> =>

@@ -2016,7 +2016,7 @@ export function registerIpcHandlers(
   const releaseSessionOutput = createTerminalOutputRouter({
     ipcMain, sessionManager, windowRegistry, routeTargets, sendForSession,
     fromId: (id) => webContents.fromId(id) as any,
-    channels: { ready: IPC.TERMINAL_READY, ack: IPC.TERMINAL_ACK },
+    channels: { ready: IPC.TERMINAL_READY, ack: IPC.TERMINAL_ACK, repaint: IPC.TERMINAL_REPAINT },
   });
 
   // No-op: Electron has no hardware back button. Registered for shape

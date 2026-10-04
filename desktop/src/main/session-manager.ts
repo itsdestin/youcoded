@@ -609,14 +609,15 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
-   * A terminal (re)attached: whatever was in flight to the previous one will never be acknowledged.
-   * `keep` = characters main is still holding for the new terminal (the pre-mount buffer), which
-   * must stay on the books so they are acknowledged when drawn.
+   * Ask the program to repaint its whole screen: the PTY worker nudges the PTY size (one column narrower, then back).
+   * The single owner of that nudge — main's router (a cut pre-mount buffer) and the renderer (a cut hidden-window
+   * backlog, via session:terminal-repaint) both come here, so overlapping requests and real resizes (a phone's
+   * included) are arbitrated in one place. Not on Windows (the worker skips it: ConPTY re-emits its buffer).
    */
-  resetOutputCredit(id: string, keep: number): boolean {
+  bounceSize(id: string): boolean {
     const session = this.sessions.get(id);
     if (!session || !session.worker) return false;
-    try { session.worker.send({ type: 'ack', reset: true, keep }); } catch { return false; }
+    try { session.worker.send({ type: 'bounce' }); } catch { return false; }
     return true;
   }
 

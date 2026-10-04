@@ -113,3 +113,12 @@ describe('TerminalView acknowledges what xterm drew', () => {
     expect(ackSpy).not.toHaveBeenCalled();
   });
 });
+
+describe('TerminalView wiring the feeder to the repaint request', () => {
+  it('passes onRepaintNeeded through the real window API (an optional hook the component forgot to supply would do nothing)', async () => {
+    const fs = await import('node:fs'), path = await import('node:path');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'components', 'TerminalView.tsx'), 'utf8');
+    expect(src).toMatch(/onRepaintNeeded:\s*\(\)\s*=>\s*window\.claude\.session\.requestRepaint\?\.\(sessionId\)/);
+    expect(src).toMatch(/isAlive:\s*\(\)\s*=>\s*terminalRef\.current !== null/);
+  });
+});

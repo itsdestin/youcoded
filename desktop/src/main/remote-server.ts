@@ -4175,6 +4175,10 @@ export class RemoteServer {
         this.sessionManager.resizeSession(payload.sessionId, payload.cols, payload.rows);
         break;
       }
+      case 'session:terminal-repaint': {
+        // Desktop-window-only (see session:terminal-ack): a remote client must never nudge the PTY size.
+        break;
+      }
       case 'session:terminal-ack': {
         // Terminal flow control is driven by the desktop's own window only (ipc-handlers.ts TERMINAL_ACK):
         // a phone's acknowledgement must never reach the PTY worker, or a slow phone would stall the

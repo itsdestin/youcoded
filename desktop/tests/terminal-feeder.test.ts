@@ -242,17 +242,27 @@ describe('terminal feeder', () => {
       expect(r.timerCount()).toBe(0);
     });
 
-    it('asks for ONE repaint after a cut, once the window is back and the backlog is written — none without a cut', () => {
+    it('asks for ONE repaint after a cut of repainting output, once the window is back and the backlog is written', () => {
       const r = rig();
       r.setDocHidden(true);
       r.feeder.push('s'.repeat(HIDDEN_BURST));
-      const lines = ('c'.repeat(1023) + '\n').repeat(512);
-      for (let i = 0; i < 20; i++) r.feeder.push(lines);     // 10 M of lines: a cut happens
+      const lines = ('\x1b[2K\x1b[1A' + 'c'.repeat(1021) + '\n').repeat(512);   // Ink-style: cursor up + erase line
+      for (let i = 0; i < 20; i++) r.feeder.push(lines);     // 10 M: a cut happens
       expect(r.repaints).toEqual([]);                         // not while the window is hidden
       r.setDocHidden(false);
       expect(r.repaints.length).toBe(1);
       r.feeder.wake(); r.setDocHidden(true); r.setDocHidden(false);
       expect(r.repaints.length).toBe(1);                      // once per cut episode
+    });
+
+    it('a plain line-oriented flood is cut without any repaint request, and so is an uncut backlog', () => {
+      const r = rig();
+      r.setDocHidden(true);
+      r.feeder.push('s'.repeat(HIDDEN_BURST));
+      const lines = ('c'.repeat(1023) + '\n').repeat(512);
+      for (let i = 0; i < 20; i++) r.feeder.push(lines);
+      r.setDocHidden(false);
+      expect(r.repaints).toEqual([]);
       const q = rig();
       q.setDocHidden(true); q.feeder.push('small\n'); q.setDocHidden(false);
       expect(q.repaints).toEqual([]);

@@ -1847,6 +1847,8 @@ export const IPC = {
   TERMINAL_READY: 'session:terminal-ready',
   // Fire-and-forget, renderer -> main: this terminal finished parsing N characters of output. Drives PTY flow control (pty-worker.js).
   TERMINAL_ACK: 'session:terminal-ack',
+  // Fire-and-forget, renderer -> main: a hidden window's backlog was cut; ask the program to repaint (worker size nudge).
+  TERMINAL_REPAINT: 'session:terminal-repaint',
   // Main -> Renderer
   SESSION_CREATED: 'session:created',
   SESSION_DESTROYED: 'session:destroyed',

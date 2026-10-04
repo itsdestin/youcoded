@@ -37,12 +37,15 @@ export interface StickyModes {
   region: string | null;
   kittyDepth: number;
   kittyLast: string | null;
+  /** The text repainted with relative cursor moves / line erases (Ink-style), so a cut leaves the cursor row unknown. */
+  relativeRepaint: boolean;
 }
-export const newModes = (): StickyModes => ({ priv: new Map(), alt: null, region: null, kittyDepth: 0, kittyLast: null });
+export const newModes = (): StickyModes => ({ priv: new Map(), alt: null, region: null, kittyDepth: 0, kittyLast: null, relativeRepaint: false });
 
 /** Fold the sticky-mode changes in `text` into `m` (later values win). */
 export function scanModes(m: StickyModes, text: string): void {
   if (text.indexOf('\x1b[') < 0) return;
+  if (!m.relativeRepaint && /\x1b\[\d*[AF]|\x1b\[2K/.test(text)) m.relativeRepaint = true;
   const priv = /\x1b\[\?([0-9;]+)([hl])/g;
   let r: RegExpExecArray | null;
   while ((r = priv.exec(text)) !== null) {
@@ -67,7 +70,8 @@ export function restoreString(m: StickyModes): string {
   let s = '\x1b[0m';
   if (m.alt) s += m.alt.on ? `\x1b[?${m.alt.kind}h` : '\x1b[?1047l';
   for (const [n, on] of m.priv) s += `\x1b[?${n}${on ? 'h' : 'l'}`;
-  if (m.region) s += m.region;
+  // Only on the alternate screen: DECSTBM homes the cursor, so on the normal screen the kept text would start on row 1.
+  if (m.region && m.alt?.on) s += m.region;
   if (m.kittyDepth > 0 && m.kittyLast) s += m.kittyLast;
   return s;
 }
@@ -117,11 +121,11 @@ const RESCAN_AFTER = 256 * 1024;
  * the cap) when the stream has neither; past that falls back to a cut that backs off before an unfinished
  * sequence and never starts the kept text on a lone low surrogate.
  */
-export function trimOldest(queue: Chunk[], cap: number, target: number, memo?: TrimMemo): { removed: number; added: number } {
+export function trimOldest(queue: Chunk[], cap: number, target: number, memo?: TrimMemo): { removed: number; added: number; repaint: boolean } {
   let total = 0;
   for (const c of queue) total += c.s.length;
-  if (total <= cap) return { removed: 0, added: 0 };
-  if (memo && total < memo.skipUntil) return { removed: 0, added: 0 };
+  if (total <= cap) return { removed: 0, added: 0, repaint: false };
+  if (memo && total < memo.skipUntil) return { removed: 0, added: 0, repaint: false };
   if (memo) memo.scans++;
   const need = total - target;
   let idx = 0, before = 0;
@@ -146,7 +150,7 @@ export function trimOldest(queue: Chunk[], cap: number, target: number, memo?: T
   };
   let cut = find('\n') ?? find('\r');
   if (!cut) {
-    if (total <= cap * 2) { if (memo) memo.skipUntil = total + RESCAN_AFTER; return { removed: 0, added: 0 }; }
+    if (total <= cap * 2) { if (memo) memo.skipUntil = total + RESCAN_AFTER; return { removed: 0, added: 0, repaint: false }; }
     // Over twice the cap with no boundary at all (binary output): cut at the target point, but never inside a sequence
     // and never leaving a lone low surrogate at the start of what is kept.
     let ci = idx, cl = local;
@@ -161,7 +165,7 @@ export function trimOldest(queue: Chunk[], cap: number, target: number, memo?: T
   let dropped = '';
   for (let i = 0; i < cutIdx; i++) dropped += queue[i].s;
   dropped += queue[cutIdx].s.slice(0, cutLocal);
-  if (dropped.length === 0) return { removed: 0, added: 0 };
+  if (dropped.length === 0) return { removed: 0, added: 0, repaint: false };
   const modes = newModes();
   scanModes(modes, dropped);
   const restore = restoreString(modes);
@@ -169,5 +173,5 @@ export function trimOldest(queue: Chunk[], cap: number, target: number, memo?: T
   queue.splice(0, cutIdx);
   queue[0].s = restore + rest;
   if (memo) memo.skipUntil = 0;
-  return { removed: dropped.length, added: restore.length };
+  return { removed: dropped.length, added: restore.length, repaint: modes.relativeRepaint || !!modes.alt?.on };
 }

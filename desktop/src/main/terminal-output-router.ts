@@ -16,14 +16,14 @@ export interface RouterDeps {
   sessionManager: {
     on(event: string, fn: (...args: any[]) => void): unknown;
     ackOutput(sessionId: string, chars: number): unknown;
-    /** Make the program repaint (PTY size nudge in the worker). Optional: absent in minimal test doubles. */
-    bounceSize?(sessionId: string): unknown;
+    /** Make the program repaint (PTY size nudge in the worker). REQUIRED: an optional call here once silently did nothing. */
+    bounceSize(sessionId: string): unknown;
   };
   windowRegistry?: { on(event: string, fn: () => void): unknown; getOwner(sessionId: string): number | undefined };
   routeTargets(sessionId: string): number[];
   sendForSession(sessionId: string, channel: string, ...args: any[]): void;
   fromId(id: number): { isDestroyed(): boolean; on(e: string, f: (...a: any[]) => void): unknown; removeListener(e: string, f: (...a: any[]) => void): unknown } | undefined;
-  channels: { ready: string; ack: string };
+  channels: { ready: string; ack: string; repaint: string };
 }
 
 /** Wire pty-output -> windows, terminal ready/ack handling and flow control. Returns the session-exit cleanup. */
@@ -83,7 +83,7 @@ export function createTerminalOutputRouter(d: RouterDeps): (sessionId: string) =
         if (!memo) { memo = { skipUntil: 0, scans: 0 }; trimMemos.set(sessionId, memo); }
         const r = trimOldest(buf, PENDING_CAP, PENDING_TARGET, memo);
         held += r.added - r.removed;
-        if (r.removed > 0) trimmed.add(sessionId);
+        if (r.repaint) trimmed.add(sessionId);   // only text that repainted with relative moves / the alt screen needs a repaint
       }
       pendingChars.set(sessionId, held);
     }
@@ -104,7 +104,7 @@ export function createTerminalOutputRouter(d: RouterDeps): (sessionId: string) =
     for (const c of buffered ?? []) d.sendForSession(sessionId, `pty:output:${sessionId}`, c.s);
     trimMemos.delete(sessionId);
     // Text was cut from the front: the cursor position is unknown, so the program repaints once (size nudge, in the worker).
-    if (trimmed.delete(sessionId)) d.sessionManager.bounceSize?.(sessionId);
+    if (trimmed.delete(sessionId)) d.sessionManager.bounceSize(sessionId);
   };
 
   // A terminal mounted in the sending window.
@@ -132,6 +132,13 @@ export function createTerminalOutputRouter(d: RouterDeps): (sessionId: string) =
   d.ipcMain.on(d.channels.ack, (event, sessionId: string, chars: number) => {
     if (typeof sessionId !== 'string' || typeof chars !== 'number' || !Number.isFinite(chars) || chars <= 0) return;
     flow.ack(sessionId, event.sender.id, Math.min(chars, 1e9));
+  });
+
+  // The window cut its hidden-window backlog and is showing again: ask the program to repaint. Believed only from a window
+  // this session's output is routed to; the nudge itself is arbitrated in the worker (one owner, real resizes win).
+  d.ipcMain.on(d.channels.repaint, (event, sessionId: string) => {
+    if (typeof sessionId !== 'string' || !d.routeTargets(sessionId).includes(event.sender.id)) return;
+    d.sessionManager.bounceSize(sessionId);
   });
 
   return (sessionId: string) => {

@@ -95,6 +95,7 @@ vi.mock('../src/main/harness/native-session-host', () => {
 import { registerIpcHandlers } from '../src/main/ipc-handlers';
 import { WindowRegistry } from '../src/main/window-registry';
 import { IPC } from '../src/shared/types';
+import { SessionManager } from '../src/main/session-manager';
 
 function makeWc(id: number) {
   const wc: any = new EventEmitter();
@@ -114,7 +115,7 @@ function world() {
   const sm: any = new EventEmitter();
   sm.createSession = vi.fn(); sm.destroySession = vi.fn(); sm.listSessions = vi.fn(() => []); sm.getSession = vi.fn();
   sm.sendInput = vi.fn(); sm.resizeSession = vi.fn();
-  sm.ackOutput = vi.fn(); sm.resetOutputCredit = vi.fn(); sm.bounceSize = vi.fn();
+  sm.ackOutput = vi.fn(); sm.bounceSize = vi.fn();
   const registry = new WindowRegistry();
   for (const id of [1, 2, 3]) registry.registerWindow(id, Date.now(), 'main');
   const mainWindow: any = { isDestroyed: () => false, webContents: w1 };
@@ -122,10 +123,11 @@ function world() {
     undefined as any, undefined, undefined, undefined, registry as any);
   const ready = (from: any) => handlers.get(IPC.TERMINAL_READY)!({ sender: from }, SID);
   const ack = (from: any, n: number) => handlers.get(IPC.TERMINAL_ACK)!({ sender: from }, SID, n);
+  const repaint = (from: any) => handlers.get(IPC.TERMINAL_REPAINT)!({ sender: from }, SID);
   const out = (data: string) => sm.emit('pty-output', SID, data);
   /** Total credit passed back to the PTY worker so far. */
   const released = () => sm.ackOutput.mock.calls.reduce((n: number, c: any[]) => n + c[1], 0);
-  return { w1, w2, w3, registry, sm, ready, ack, out, released };
+  return { w1, w2, w3, registry, sm, ready, ack, out, released, repaint };
 }
 
 describe('terminal flow wiring: nothing can brake a session no desktop terminal will answer', () => {
@@ -193,7 +195,6 @@ describe('terminal flow wiring: nothing can brake a session no desktop terminal 
     t.out('x'.repeat(1000));
     t.ready(t.w3);                                         // a buddy/subscriber terminal mounts now
     expect(t.released()).toBe(0);                          // the owner still owes everything
-    expect(t.sm.resetOutputCredit).not.toHaveBeenCalled();
     t.ack(t.w2, 1000);
     expect(t.released()).toBe(1000);                       // the subscriber joined later and owes nothing of that
     t.out('y'.repeat(500));                                // from now on BOTH draw the stream: the slower one paces it
@@ -377,16 +378,42 @@ describe('terminal flow wiring: nothing can brake a session no desktop terminal 
     expect(t.w3.sent.map((s: any) => s.data)).toEqual(['interim']);
   });
 
-  it('after a pre-mount cut the program is asked to repaint once, when the terminal mounts (and not when nothing was cut)', () => {
+  it('after a pre-mount cut of a screen-repainting program the program is asked to repaint ONCE, when the terminal mounts', () => {
     const t = world();
     t.registry.assignSession(SID, 2);
-    t.out('plain\n'); t.ready(t.w2);
-    expect(t.sm.bounceSize).not.toHaveBeenCalled();         // nothing cut: no repaint
-    const t2 = world();
-    t2.registry.assignSession(SID, 2);
-    for (let i = 0; i < 6; i++) t2.out(('r' + i).repeat(511) + '\n'.repeat(1) + ('x'.repeat(1023) + '\n').repeat(1023));
-    t2.ready(t2.w2);
-    expect(t2.sm.bounceSize).toHaveBeenCalledTimes(1);
-    expect(t2.sm.bounceSize).toHaveBeenCalledWith(SID);
+    const ink = '\x1b[2K\x1b[1A\x1b[2K\x1b[Gframe ' + 'x'.repeat(1000) + '\n';
+    for (let i = 0; i < 6; i++) t.out(ink.repeat(1000));
+    t.ready(t.w2);
+    expect(t.sm.bounceSize).toHaveBeenCalledTimes(1);
+    expect(t.sm.bounceSize).toHaveBeenCalledWith(SID);
+  });
+
+  it('a plain line-oriented flood (or nothing cut at all) never gets a repaint nudge', () => {
+    const t = world();
+    t.registry.assignSession(SID, 2);
+    for (let i = 0; i < 6; i++) t.out(('plain line ' + 'x'.repeat(1000) + '\n').repeat(1000));
+    t.ready(t.w2);
+    expect(t.sm.bounceSize).not.toHaveBeenCalled();
+    const u = world();
+    u.registry.assignSession(SID, 2);
+    u.out('short\n'); u.ready(u.w2);
+    expect(u.sm.bounceSize).not.toHaveBeenCalled();
+  });
+
+  it("the window's own repaint request reaches the real nudge owner — from a window the session is routed to, not from a stranger", () => {
+    const t = world();
+    t.registry.assignSession(SID, 2); t.ready(t.w2);
+    t.repaint(t.w3);
+    expect(t.sm.bounceSize).not.toHaveBeenCalled();
+    t.repaint(t.w2);
+    expect(t.sm.bounceSize).toHaveBeenCalledWith(SID);
+  });
+});
+
+// The router calls these on the session manager. Every test above supplies a hand-made double, so a method the real
+// class lacks would pass them all (that is exactly how the repaint nudge once shipped as a silent no-op). Pin the real surface.
+describe('the real SessionManager provides everything the terminal router calls', () => {
+  it.each(['on', 'ackOutput', 'bounceSize'])('SessionManager.prototype.%s is a function', (name) => {
+    expect(typeof (SessionManager.prototype as any)[name]).toBe('function');
   });
 });

@@ -1977,6 +1977,8 @@ export function installShim(): void {
       // desktop), and the phone app's own PTY runtime has no worker to brake. The host also ignores the
       // message, so this sends nothing at all.
       ackOutput: (_sessionId: string, _chars: number) => {},
+      // Same reason: only the desktop's own window may nudge the PTY size (a phone must not resize the desktop's terminal).
+      requestRepaint: (_sessionId: string) => {},
       // Tracked while in flight so the host's resolution of THIS answer is not shown as
       // "answered elsewhere" (see the hook:event case). Cleared when the reply settles.
       respondToPermission: (requestId: string, decision: object) => {

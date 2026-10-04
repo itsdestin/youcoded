@@ -60,6 +60,8 @@ interface SessionBridge {
    *  Fire-and-forget. A desktop window sends it to main; a remote client / the phone app drops it (only the
    *  desktop's own window may brake a program, so a slow phone can never stall it). */
   ackOutput(sessionId: string, chars: number): void;
+  /** Ask the program to repaint once after a hidden window's backlog was cut. Desktop window only; a no-op for remote clients. */
+  requestRepaint(sessionId: string): void;
   respondToPermission(requestId: string, decision: object): Promise<unknown>;
   browse(): Promise<unknown[]>;
   /** Order is (sessionId, projectSlug, count, all) on every bridge and caller. */

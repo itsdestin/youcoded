@@ -9,7 +9,7 @@ const text = (q: Chunk[]) => q.map((c) => c.s).join('');
 describe('trimOldest', () => {
   it('does nothing at or under the cap', () => {
     const q = chunks('a\n'.repeat(10));
-    expect(trimOldest(q, 100, 50)).toEqual({ removed: 0, added: 0 });
+    expect(trimOldest(q, 100, 50)).toEqual({ removed: 0, added: 0, repaint: false });
     expect(text(q)).toBe('a\n'.repeat(10));
   });
 
@@ -116,11 +116,14 @@ describe('alternate screen across a cut', () => {
     expect(kept(q)).not.toContain('\x1b[?1049l');
     expect(kept(q)).toContain('\x1b[?1047l');
   });
-  it('the last scroll region set in the dropped text is restored', () => {
-    const q = chunks('\x1b[3;20r' + 'x\n'.repeat(40) + '\x1b[5;18r' + 'y\n'.repeat(40), 'newest\n');
+  it('the last scroll region set in the dropped text is restored — on the alternate screen only (it homes the cursor)', () => {
+    const q = chunks('\x1b[?1049h\x1b[3;20r' + 'x\n'.repeat(40) + '\x1b[5;18r' + 'y\n'.repeat(40), 'newest\n');
     trimOldest(q, 60, 20);
     expect(kept(q)).toContain('\x1b[5;18r');
     expect(kept(q)).not.toContain('\x1b[3;20r');
+    const normal = chunks('\x1b[3;20r' + 'x\n'.repeat(80), 'newest\n');
+    trimOldest(normal, 60, 20);
+    expect(kept(normal)).not.toContain('\x1b[3;20r');          // normal screen: replaying it would put the next text on row 1
   });
 });
 
@@ -177,5 +180,24 @@ describe('openEscapeStart', () => {
     expect(openEscapeStart(osc, osc.length)).toBe(0);
     const huge = '\x1b]1337;File=' + 'A'.repeat(70_000);
     expect(openEscapeStart(huge, huge.length)).toBe(-1);
+  });
+});
+
+describe('does the cut need a repaint?', () => {
+  it('a plain line-oriented flood does not (no relative cursor moves, no alt screen)', () => {
+    const q = chunks('\x1b[32mbuild:\x1b[0m compiling\n'.repeat(500), 'newest\n');
+    expect(trimOldest(q, 2000, 1000).repaint).toBe(false);
+  });
+  it('Ink-style frames (cursor up + erase line) do', () => {
+    const frame = '\x1b[2K\x1b[1A\x1b[2K\x1b[1A\x1b[2K\x1b[Gline\n';
+    const q = chunks(frame.repeat(500), 'newest\n');
+    expect(trimOldest(q, 2000, 1000).repaint).toBe(true);
+  });
+  it('an alternate-screen program does', () => {
+    const q = chunks('\x1b[?1049h' + 'frame\n'.repeat(500), 'newest\n');
+    expect(trimOldest(q, 2000, 1000).repaint).toBe(true);
+  });
+  it('nothing dropped, nothing to repaint', () => {
+    expect(trimOldest(chunks('small\n'), 2000, 1000).repaint).toBe(false);
   });
 });

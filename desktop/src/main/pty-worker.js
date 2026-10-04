@@ -197,6 +197,7 @@ function onAck(msg) {
 }
 
 let ptyProcess = null;
+let bounceState = null;   // repaint nudge in progress: { c, r, superseded }
 let handoffStopping = false;
 let exitReported = false;
 let handoffExitTimer = null;
@@ -538,18 +539,23 @@ process.on('message', (msg) => {
     case 'bounce': {
       // Repaint request after output was cut from the front of a backlog (the cursor position is unknown, and
       // programs like Claude Code's Ink UI redraw with relative cursor moves): one column narrower, then back.
-      // The restore only happens if nobody resized in between (a real resize wins), and never on Windows, where
-      // ConPTY reflows and re-emits its whole buffer on every resize (duplicated chrome in scrollback).
-      if (!ptyProcess || process.platform === 'win32') break;
+      // ONE owner: a request during the 120 ms window is ignored (never narrows twice), and the restore returns to
+      // the ORIGINAL size unless a real resize (desktop fit or a phone's) arrived meanwhile — then that size stands.
+      // Never on Windows, where ConPTY reflows and re-emits its whole buffer on every resize.
+      if (!ptyProcess || process.platform === 'win32' || bounceState) break;
       const c = ptyProcess.cols, r = ptyProcess.rows;
       if (!(c > 2)) break;
+      const st = { c, r, superseded: false };
+      bounceState = st;
       ptyProcess.resize(c - 1, r);
       setTimeout(() => {
-        if (ptyProcess && ptyProcess.cols === c - 1 && ptyProcess.rows === r) ptyProcess.resize(c, r);
+        bounceState = null;
+        if (ptyProcess && !st.superseded) ptyProcess.resize(st.c, st.r);
       }, 120);
       break;
     }
     case 'resize': {
+      if (bounceState) bounceState.superseded = true;   // a real resize wins over a repaint nudge in flight
       if (ptyProcess) ptyProcess.resize(msg.cols, msg.rows);
       break;
     }

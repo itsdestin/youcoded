@@ -2622,6 +2622,17 @@ describe('session:terminal-ack (terminal flow control)', () => {
     expect(arm).not.toMatch(/ackOutput|sessionManager/);
   });
 
+  it('the repaint request is desktop-window-only the same way: shim no-op, host ignores it, Android has no branch', () => {
+    expect(preload).toContain("TERMINAL_REPAINT: 'session:terminal-repaint'");
+    expect(types).toContain("TERMINAL_REPAINT: 'session:terminal-repaint'");
+    expect(handlers).toMatch(/repaint: IPC\.TERMINAL_REPAINT/);
+    expect(shim).toMatch(/requestRepaint: \(_sessionId: string\) => \{\}/);
+    const arm = server.slice(server.indexOf("case 'session:terminal-repaint'"), server.indexOf("case 'session:terminal-ack'"));
+    expect(arm.length).toBeGreaterThan(0);
+    expect(arm).not.toMatch(/bounceSize|sessionManager/);
+    expect(kotlin).not.toContain('session:terminal-repaint');
+  });
+
   it('Android deliberately omits it: its own PTY runtime has no worker credit loop, and the shim never sends it', () => {
     expect(kotlin).not.toContain('session:terminal-ack');
     expect(kotlin).toContain('session:terminal-ready');   // the sibling it was modelled on IS handled there
