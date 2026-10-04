@@ -437,6 +437,12 @@ function homeAssistantPageHtml(): string {
     }
     return '';
   }
+  function castStale(it, rc) {
+    var castAt = Date.parse(it.since || ''), powerAt = Date.parse(rc.since || '');
+    var nowApp = appOf(rc.activity), castApp = appOf(it.app);
+    return !!((castAt && powerAt && castAt < powerAt && rc.state === 'on') ||
+      (rc.activity && !/mediashell/.test(rc.activity) && nowApp && castApp && nowApp !== castApp));
+  }
   function tileHtml(it, icon, media, ctx) {
     // A TV with a paired remote is switched by the remote, which works the
     // TV's real power; its Cast side only knows whether something is
@@ -448,6 +454,12 @@ function homeAssistantPageHtml(): string {
     var kind = media ? kindOf(it) : null;
     var tv = kind === 'tv';
     var playing = it.state === 'playing' || it.state === 'paused';
+    // A TV's Cast side keeps reporting what WAS playing until it reconnects
+    // after a restart, while the remote side knows the real power at once
+    // (testing note: "keep the old now playing info after a tv … restarts").
+    // So the Cast side's title is ignored when the TV came on after it last
+    // changed, or when the TV is now in a different app than the one casting.
+    if (tv && rc && playing && castStale(it, rc)) playing = false;
     // A soundbar playing the TV's sound reports the title "TV".
     var what = it.title === 'TV' && kind === 'soundbar' ? 'TV sound' : it.title;
     var app = tv && rc ? appOf(rc.activity) : media && !tv ? sourceOf(it) : null;
@@ -802,7 +814,8 @@ function homeAssistantPageHtml(): string {
     var litRooms = {}; lit.forEach(function (x) { litRooms[x.room.id] = 1; });
     var nr = lights.filter(function (x) { return gone(x.it); }).length;
     var media = items.filter(function (x) { return domain(x.it.id) === 'media_player' && !remoteDevice(x.it); });
-    var playing = media.filter(function (x) { return x.it.state === 'playing'; });
+    // Same rule as the cards: a TV's stale Cast title is not "playing".
+    var playing = media.filter(function (x) { var rc = isTv(x.it) ? remoteFor(x.it, x.room) : null; return x.it.state === 'playing' && !(rc && castStale(x.it, rc)); });
     var tvsOn = media.filter(function (x) { return isTv(x.it) && isOn(remoteFor(x.it, x.room) || x.it) && !gone(x.it); });
     var clim = items.filter(function (x) { return domain(x.it.id) === 'climate'; });
     var th = clim.filter(function (x) { return !gone(x.it); })[0];
