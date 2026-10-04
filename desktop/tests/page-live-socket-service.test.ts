@@ -30,6 +30,7 @@ let root: string;
 let personal: string;
 let service: ReturnType<typeof initPagesService>;
 let wss: FakeWs[];
+let urls: string[];
 let events: PageSocketEvent[];
 
 async function writePage(connections: unknown[], html = '<!doctype html><html><body>hi</body></html>') {
@@ -55,7 +56,7 @@ const closedReason = () => events.filter((e) => e.kind === 'state' && e.state ==
 beforeEach(async () => {
   root = mkdtempSync(path.join(tmpdir(), 'pages-live-'));
   personal = path.join(root, 'Personal');
-  wss = []; events = []; stamp = 0;
+  wss = []; urls = []; events = []; stamp = 0;
   const userData = path.join(root, 'userData');
   service = initPagesService({
     personalRoot: () => personal,
@@ -65,7 +66,7 @@ beforeEach(async () => {
     connections: new PageConnectionsStore(userData, new SecretsStore(userData)),
     broadcast: () => {},
     lookup: async () => { throw new Error('no DNS in this test'); },
-    liveSocketConnect: () => { const w = new FakeWs(); wss.push(w); return w as unknown as LiveWsLike; },
+    liveSocketConnect: (url) => { urls.push(url); const w = new FakeWs(); wss.push(w); return w as unknown as LiveWsLike; },
   });
   await writePage([HOME, WEATHER]);
 });
@@ -152,5 +153,53 @@ describe('a live socket and the approvals it stands on', () => {
     await openLive();
     service.stop();
     expect(service.sockets.count).toBe(0);
+  });
+});
+
+// Camera video: the same approval chain, run fresh for the connection a page names by id.
+describe('camera video and the approvals it stands on', () => {
+  const CAMERA = { ...HOME, videoProfile: { targetPrefix: 'camera.', socketPath: '/api/websocket', send: '{"id":1,"type":"camera/webrtc/offer","entity_id":{{target}},"offer":{{offer}}}', answer: 'event.answer', candidate: 'event.candidate', failed: 'event.message' } };
+  const ask = (over: Record<string, unknown> = {}) => service.videos.start(owner, { page: PAGE, frame: 'f1', connection: 'ha', target: 'camera.living_room', offer: 'v=0', ...over });
+
+  it('is refused until the page is allowed, for a name it does not have, and for a plain lookup-only approval', async () => {
+    await writePage([CAMERA, WEATHER]);
+    expect((await ask()).ok).toBe(false);
+    expect(wss).toHaveLength(0);
+    await service.approve(PAGE, { ha: KEY, weather: 'w-key-12345' }, { remote: false });
+    expect((await ask({ connection: 'nope' })).ok).toBe(false);
+    expect((await ask({ connection: 'weather' })).ok).toBe(false);
+    expect(wss).toHaveLength(0);
+  });
+
+  it('opens its own socket at the approved address and the profile\'s path, and greets with the saved key', async () => {
+    await writePage([CAMERA, WEATHER]);
+    await service.approve(PAGE, { ha: KEY, weather: 'w-key-12345' }, { remote: false });
+    const r = await ask();
+    expect(r.ok).toBe(true);
+    expect(urls).toEqual(['ws://192.168.4.54:8123/api/websocket']);
+    wss[0].emit('open');
+    expect(JSON.parse(wss[0].sent[0])).toEqual({ type: 'auth', access_token: KEY });
+  });
+
+  it('every way a page\'s approval can change stops its videos, and a window going away stops them too', async () => {
+    await writePage([CAMERA, WEATHER]);
+    await service.approve(PAGE, { ha: KEY, weather: 'w-key-12345' }, { remote: false });
+    await ask();
+    await service.removeConnection(PAGE, 'weather');
+    expect(service.videos.count).toBe(1);
+    await service.removeConnection(PAGE, 'ha');
+    expect(service.videos.count).toBe(0);
+    expect(wss[0].terminated).toBe(true);
+    await service.approve(PAGE, { ha: KEY }, { remote: false });
+    await ask();
+    await service.deleteSavedKey('Home Assistant', '192.168.4.54:8123');
+    expect(service.videos.count).toBe(0);
+    await service.approve(PAGE, { ha: KEY }, { remote: false });
+    await ask();
+    service.closeOwner('window:1');
+    expect(service.videos.count).toBe(0);
+    await ask();
+    service.stop();
+    expect(service.videos.count).toBe(0);
   });
 });

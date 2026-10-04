@@ -594,7 +594,7 @@ describe('races in the state machine', () => {
     r.wss[0].accept();
     r.wss[0].say('last words');
     r.sockets.closeFor('personal:home');
-    expect(r.events.map((e) => (e.kind === 'messages' ? 'messages' : e.state))).toEqual(['open', 'messages', 'closed']);
+    expect(r.events.map((e) => (e.kind === 'messages' ? 'messages' : e.kind === 'state' ? e.state : e.kind))).toEqual(['open', 'messages', 'closed']);
   });
 });
 

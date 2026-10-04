@@ -1923,9 +1923,8 @@ contextBridge.exposeInMainWorld('claude', {
     deleteSavedKey: (service: string, address: string) => ipcRenderer.invoke(IPC.PAGES_DELETE_SAVED_KEY, service, address), // service AND address
     fetch: (id: string, req: unknown) => ipcRenderer.invoke(IPC.PAGES_FETCH, id, req),
     socketOpen: (req: unknown) => ipcRenderer.invoke('pages:socket-open', req), // live socket: inlined strings, pinned to PAGE_SOCKET_CHANNELS by ipc-channels.test.ts
-    socketSend: (req: unknown) => ipcRenderer.invoke('pages:socket-send', req),
-    socketClose: (req: unknown) => ipcRenderer.invoke('pages:socket-close', req),
-    socketPing: (req: unknown) => ipcRenderer.invoke('pages:socket-ping', req),
+    socketSend: (req: unknown) => ipcRenderer.invoke('pages:socket-send', req), socketClose: (req: unknown) => ipcRenderer.invoke('pages:socket-close', req), socketPing: (req: unknown) => ipcRenderer.invoke('pages:socket-ping', req),
+    videoStart: (req: unknown) => ipcRenderer.invoke('pages:video-start', req), videoStop: (req: unknown) => ipcRenderer.invoke('pages:video-stop', req), videoPing: (req: unknown) => ipcRenderer.invoke('pages:video-ping', req), // camera video: inlined strings, pinned to PAGE_VIDEO_CHANNELS
     onSocketEvent: (cb: (e: unknown) => void) => { const h = (_e: unknown, ev: unknown) => cb(ev); ipcRenderer.on('pages:socket-event', h); return () => ipcRenderer.removeListener('pages:socket-event', h); },
   },
   // Document comments (T3, design docs/active/specs/2026-09-26-doc-comments-

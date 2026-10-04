@@ -54,6 +54,18 @@ describe('profile cleaning', () => {
     expect(device({ videoProfile: { ...VIDEO, failed: undefined } }).videoProfile).toBeUndefined();
     expect(device({ videoProfile: { ...VIDEO, targetPrefix: 'Camera.' } }).videoProfile).toBeUndefined();
   });
+
+  it('requires the target prefix to end with a dot (step-1 review, item 5): a bare word would widen "a camera" to anything', () => {
+    for (const targetPrefix of ['camera', 'c', 'a', '.x']) expect(device({ videoProfile: { ...VIDEO, targetPrefix } }).videoProfile, targetPrefix).toBeUndefined();
+    expect(device({ videoProfile: { ...VIDEO, targetPrefix: '.' } }).videoProfile?.targetPrefix).toBe('.');
+    expect(device({ videoProfile: VIDEO }).videoProfile?.targetPrefix).toBe('camera.');
+  });
+
+  it('keeps a sound socket path for video, drops an odd one, and asks again when it changes', () => {
+    expect(device({ videoProfile: { ...VIDEO, socketPath: '/api/websocket' } }).videoProfile?.socketPath).toBe('/api/websocket');
+    for (const socketPath of ['api/websocket', '/a/../b', '/a?b=1', '/a b', 'http://evil/x']) expect(device({ videoProfile: { ...VIDEO, socketPath } }).videoProfile?.socketPath, socketPath).toBeUndefined();
+    expect(fingerprint(device({ videoProfile: { ...VIDEO, socketPath: '/other' } }))).not.toBe(fingerprint(device({ videoProfile: VIDEO })));
+  });
 });
 
 describe('fingerprint', () => {

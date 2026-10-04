@@ -4431,6 +4431,10 @@ class SessionService : Service() {
             "pages:socket-send",
             "pages:socket-close",
             "pages:socket-ping",
+            // Camera video (also main-process only; its events ride pages:socket-event).
+            "pages:video-start",
+            "pages:video-stop",
+            "pages:video-ping",
             // Remembered "Always allow" rules (M5 2a — permissions management UI).
             // These read/revoke the DESKTOP native harness's ~/.youcoded/permissions.json;
             // Android has no native harness to hold those grants until M8, which is

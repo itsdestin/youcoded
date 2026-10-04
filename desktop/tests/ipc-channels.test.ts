@@ -2559,6 +2559,8 @@ describe('pages:* Phase 2 channel parity', () => {
   // preload and handed to main through shared/pages-types.ts PAGE_SOCKET_CHANNELS.
   const SOCKET = ['pages:socket-open', 'pages:socket-send', 'pages:socket-close', 'pages:socket-ping'];
   const SOCKET_EVENT = 'pages:socket-event';
+  // Camera video (step 3): its three calls are listed beside the socket's everywhere; its events ride SOCKET_EVENT.
+  const VIDEO = ['pages:video-start', 'pages:video-stop', 'pages:video-ping'];
   const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
 
   it('every type is declared in shared/types.ts and preload.ts, which cannot import it', () => {
@@ -2623,9 +2625,32 @@ describe('pages:* Phase 2 channel parity', () => {
     expect(server).toContain('PAGE_SOCKET_CHANNELS.event');
   });
 
+  it('the camera video channels exist on every surface, with the same strings', () => {
+    const types = read('src', 'shared', 'pages-types.ts');
+    const preload = read('src', 'main', 'preload.ts');
+    const handlers = read('src', 'main', 'pages', 'pages-ipc.ts');
+    const server = read('src', 'main', 'pages', 'pages-remote.ts');
+    const shim = read('src', 'renderer', 'remote-pages-bridge.ts');
+    const kotlin = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
+    for (const t of VIDEO) {
+      expect(types, t).toContain(`'${t}'`);
+      expect(preload, t).toContain(`'${t}'`);
+      expect(shim, t).toContain(`invoke('${t}'`);
+      expect(server, t).toContain(`case '${t}':`);
+      expect(kotlin, t).toContain(`"${t}"`);
+    }
+    for (const key of ['start', 'stop', 'ping']) expect(handlers, key).toContain(`vid.${key}`);
+    // The pictures never travel over IPC: only offer, answer and candidates do, and the remote shim
+    // turns a lost connection into a stopped video, not a silent hang.
+    expect(shim).toContain("kind: 'video-stopped'");
+    // A window or client going away stops its videos with its sockets (one call covers both).
+    expect(read('src', 'main', 'pages', 'pages-ipc.ts')).toContain('svc.closeOwner(key)');
+    expect(read('src', 'main', 'remote-server.ts')).toContain('getPagesService()?.closeOwner(clientOwnerKey(client.id))');
+  });
+
   it('a remote client\'s socket events go to that client only, never broadcast or queued for a restore', () => {
     const server = read('src', 'main', 'pages', 'pages-remote.ts');
     expect(server).not.toMatch(/\.broadcast\(|enqueueForRestoring/);
-    expect(read('src', 'main', 'remote-server.ts')).toContain('sockets.closeOwner(clientOwnerKey(client.id))');
+    expect(read('src', 'main', 'remote-server.ts')).toContain('closeOwner(clientOwnerKey(client.id))');
   });
 });

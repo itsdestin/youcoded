@@ -145,7 +145,11 @@ function cleanDotted(raw: unknown): string | undefined {
 function cleanVideoProfile(raw: unknown): VideoProfile | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const o = raw as Record<string, unknown>;
-  const targetPrefix = typeof o.targetPrefix === 'string' && /^[a-z0-9_.]{1,64}$/.test(o.targetPrefix) ? o.targetPrefix : undefined;
+  // WHY must end with ".": the device's form is `domain.`; a bare letter or word
+  // would widen "a camera" to "anything the device has" (step-1 code review, item 5).
+  const targetPrefix = typeof o.targetPrefix === 'string' && /^[a-z0-9_.]{1,64}$/.test(o.targetPrefix) && o.targetPrefix.endsWith('.') ? o.targetPrefix : undefined;
+  // Where main opens ITS OWN socket for a video; absent means the Home Assistant path.
+  const socketPath = typeof o.socketPath === 'string' && /^\/[A-Za-z0-9_./-]{0,127}$/.test(o.socketPath) && !o.socketPath.includes('..') ? o.socketPath : undefined;
   // WHY no {{key}}: the key may enter a socket only through the greeting.
   const send = typeof o.send === 'string' && o.send.length > 0 && Buffer.byteLength(o.send) <= MAX_VIDEO_SEND
     && !o.send.includes(SOCKET_KEY_TOKEN) ? o.send : undefined;
@@ -153,7 +157,7 @@ function cleanVideoProfile(raw: unknown): VideoProfile | undefined {
   const candidate = cleanDotted(o.candidate);
   const failed = cleanDotted(o.failed);
   if (!targetPrefix || !send || !answer || !candidate || !failed) return undefined;
-  return { targetPrefix, send, answer, candidate, failed };
+  return { targetPrefix, ...(socketPath ? { socketPath } : {}), send, answer, candidate, failed };
 }
 
 function cleanSteps(raw: unknown): { steps: string[] } | undefined {

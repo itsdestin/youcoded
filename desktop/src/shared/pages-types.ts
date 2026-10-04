@@ -131,7 +131,13 @@ export type PageConnection =
  *  may hold `{{offer}}` and `{{target}}` but never `{{key}}`; the other three
  *  are dotted paths into the device's replies. */
 export interface VideoProfile {
+  /** What a page may ask to watch. Must end with "." (the device's
+   *  `domain.` form, e.g. `camera.`): one character or a bare word would
+   *  widen "a camera" to "anything on the device". */
   targetPrefix: string;
+  /** The path of the device's socket (default `/api/websocket`). Main opens
+   *  its own connection there for a video, never one the page names. */
+  socketPath?: string;
   send: string;
   answer: string;
   candidate: string;
@@ -270,13 +276,26 @@ export type PageSocketCallResult = { ok: true } | { ok: false; message: string }
 /** Pushed by main to the owner only. `socket` is main's id for it. */
 export type PageSocketEvent =
   | { socket: string; kind: 'state'; state: PageSocketState; why?: string }
-  | { socket: string; kind: 'messages'; texts: string[] };
+  | { socket: string; kind: 'messages'; texts: string[] }
+  // Camera video (spec 2026-10-04, Part 2). `socket` is main's id for the VIDEO.
+  // Main hands the host only what the device answered, already filtered and
+  // redacted; the host never sees a network address it was not meant to dial.
+  | { socket: string; kind: 'video-answer'; answer: string }
+  | { socket: string; kind: 'video-candidate'; candidate: string }
+  | { socket: string; kind: 'video-stopped'; why: string };
 /** The channels, written out here because preload cannot import this file
  *  (pinned equal by tests/ipc-channels.test.ts). */
 export const PAGE_SOCKET_CHANNELS = {
   open: 'pages:socket-open', send: 'pages:socket-send', close: 'pages:socket-close',
   ping: 'pages:socket-ping', event: 'pages:socket-event',
 } as const;
+
+/** Camera video: the host asks main to start / stop / keep alive one video.
+ *  Events come back on the same push channel as the live socket. */
+export type PageVideoStartRequest = PageSocketCall & { connection: string; target: string; offer: string };
+export type PageVideoCall = PageSocketCall & { video: string };
+export type PageVideoStartResult = { ok: true; video: string } | { ok: false; message: string };
+export const PAGE_VIDEO_CHANNELS = { start: 'pages:video-start', stop: 'pages:video-stop', ping: 'pages:video-ping' } as const;
 
 export interface PagesBridge {
   list: () => Promise<PageSummary[]>;
@@ -311,6 +330,13 @@ export interface PagesBridge {
   /** The lease: main closes a socket that has not been pinged for 60 s. */
   socketPing?: (req: PageSocketCall & { socket: string }) => Promise<PageSocketCallResult>;
   onSocketEvent?: (cb: (e: PageSocketEvent) => void) => () => void;
+  /** Camera video played by the app (platform tooling). */
+  videoStart?: (req: PageVideoStartRequest) => Promise<PageVideoStartResult>;
+  videoStop?: (req: PageVideoCall) => Promise<PageSocketCallResult>;
+  videoPing?: (req: PageVideoCall) => Promise<PageSocketCallResult>;
+  /** Workbench only: a pretend peer connection and picture source for the host
+   *  code to run against (no camera exists there). Real bridges never set it. */
+  videoPlayback?: object;
 }
 
 /** How many pinned pages the header shows before the rest stay in the

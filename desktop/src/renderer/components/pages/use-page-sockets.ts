@@ -1,6 +1,7 @@
 import { useEffect, type RefObject } from 'react';
 import type { PagesBridge } from '../../../shared/pages-types';
 import { createPageSocketHub } from './page-socket-host';
+import { createPageVideoHub, type VideoHostDeps } from './page-video-host';
 
 /** Listens for a page's live-socket messages while its frame is running.
  *  `docKey` is the document the frame was built from: a new document (or the
@@ -21,13 +22,22 @@ export function usePageSockets(
       pageId, bridge,
       post: (message) => { try { frameRef.current?.contentWindow?.postMessage(message, '*'); } catch { /* the frame went away */ } },
     });
+    // Camera video for the same frame instance (page-video-host.ts): it ends with
+    // the hub, so a frame going away stops its videos exactly as it closes its sockets.
+    const video = createPageVideoHub({
+      pageId, frame: hub.frame, bridge,
+      // The workbench's fake backend may bring a pretend peer and frame source (no real camera there);
+      // the real bridges never set this.
+      deps: bridge()?.videoPlayback as Partial<VideoHostDeps> | undefined,
+      post: (message, transfer) => { try { frameRef.current?.contentWindow?.postMessage(message, '*', transfer); } catch { /* the frame went away */ } },
+    });
     const onMessage = (e: MessageEvent) => {
       if (!e.source || e.source !== frameRef.current?.contentWindow) return;
       const d = e.data as { type?: unknown } | null;
-      if (d && typeof d === 'object') hub.handleFrameMessage(d);
+      if (d && typeof d === 'object' && !hub.handleFrameMessage(d)) video.handleFrameMessage(d);
     };
     window.addEventListener('message', onMessage);
-    return () => { window.removeEventListener('message', onMessage); hub.dispose(); };
+    return () => { window.removeEventListener('message', onMessage); hub.dispose(); video.dispose(); };
     // `bridge` and `frameRef` are stable for the life of the host.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, pageId, docKey]);

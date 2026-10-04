@@ -35,6 +35,8 @@ interface Entry {
 }
 
 export interface PageSocketHub {
+  /** This frame instance's id (the video hub of the same frame uses it too). */
+  readonly frame: string;
   /** Returns true when the message was a socket message (consumed). */
   handleFrameMessage(data: { type?: unknown; [k: string]: unknown }): boolean;
   dispose(): void;
@@ -145,6 +147,7 @@ export function createPageSocketHub(opts: {
   if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibility);
 
   return {
+    frame,
     handleFrameMessage(d) {
       const type = d.type;
       if (type !== PAGE_SOCKET_OPEN_MESSAGE && type !== PAGE_SOCKET_SEND_MESSAGE && type !== PAGE_SOCKET_CLOSE_MESSAGE) return false;

@@ -15,6 +15,7 @@ import { hashHtml, savedKeyId, splitSavedKeyId, type PageApproval } from './conn
 import { PageRateGate, performPageFetch, type PageCredential } from './page-fetch';
 import { checkDeviceSocketAccess, performPageSocket, type DeviceSocketAccess, type PageSocketContext } from './page-socket';
 import { PageLiveSockets, type LiveWsLike } from './page-live-socket';
+import { PageLiveVideos } from './page-live-video';
 import type { ExternalChangeEvent } from '../artifacts/project-watcher';
 import type {
   PageApproveResult, PageConnection, PageFetchRequest, PageFetchResult,
@@ -60,6 +61,9 @@ class PagesService {
    *  reconnect asks `socketAccess`, so the approval chain is the same one the
    *  one-shot exchange uses and is re-run each time. */
   readonly sockets: PageLiveSockets;
+  /** Camera video played by the app (page-live-video.ts): main's own socket per
+   *  video, same owners, same access chain, counted apart from `sockets`. */
+  readonly videos: PageLiveVideos;
   /** What each page looked like last listing (code stamp + connections), so a
    *  change to either closes that page's live sockets. */
   private readonly seenSignature = new Map<string, string>();
@@ -71,6 +75,25 @@ class PagesService {
       gate: this.gate,
       connect: deps.liveSocketConnect,
     });
+    this.videos = new PageLiveVideos({
+      access: (pageId, connectionId, signal) => this.videoAccess(pageId, connectionId, signal),
+      gate: this.gate,
+      connect: deps.liveSocketConnect,
+    });
+  }
+
+  /** WHY one place: every site that must stop a page's live connections (an
+   *  approval change, a removed connection, a deleted key, a changed page)
+   *  stops its videos too, so the two cannot drift. */
+  private closeLiveFor(pageId: string, connectionId?: string, why?: string): void {
+    this.sockets.closeFor(pageId, connectionId, why);
+    this.videos.closeFor(pageId, connectionId, why);
+  }
+
+  /** A window or remote client went away: its sockets and videos go with it. */
+  closeOwner(ownerKey: string): void {
+    this.sockets.closeOwner(ownerKey);
+    this.videos.closeOwner(ownerKey);
   }
 
   /** Start (or re-point) the Personal watcher. Safe to call again: the
@@ -167,10 +190,10 @@ class PagesService {
       const sig = `${p.htmlStamp}|${JSON.stringify(manifest)}`;
       const before = this.seenSignature.get(p.id);
       this.seenSignature.set(p.id, sig);
-      if (before !== undefined && before !== sig) this.sockets.closeFor(p.id, undefined, 'This page was changed, so its live connection stopped.');
+      if (before !== undefined && before !== sig) this.closeLiveFor(p.id, undefined, 'This page was changed, so its live connection stopped.');
     }
     for (const id of [...this.seenSignature.keys()]) {
-      if (!now.has(id)) { this.seenSignature.delete(id); this.sockets.closeFor(id, undefined, 'This page is no longer in your library.'); }
+      if (!now.has(id)) { this.seenSignature.delete(id); this.closeLiveFor(id, undefined, 'This page is no longer in your library.'); }
     }
   }
 
@@ -250,7 +273,7 @@ class PagesService {
     catch (e) { return { ok: false, message: messageOf(e) }; }
     // A new approval (maybe a new address or key) is a new yes: sockets opened
     // on the old one close and are asked for again under the new rules.
-    this.sockets.closeFor(id);
+    this.closeLiveFor(id);
     const pages = await this.listAndWatch();
     await this.pruneAgainst(pages);
     return { ok: true, pages };
@@ -265,7 +288,7 @@ class PagesService {
     }
     this.freshness.delete(id);
     // The person withdrew this connection: its live sockets stop at once.
-    this.sockets.closeFor(id, connectionId, 'This connection was removed, so its live connection stopped.');
+    this.closeLiveFor(id, connectionId, 'This connection was removed, so its live connection stopped.');
     return this.listAndWatch();
   }
 
@@ -317,7 +340,7 @@ class PagesService {
       .map((c) => ({ page: p.id, connection: c.id })));
     await this.deps.connections?.deleteSavedKey(service, address).catch(() => { /* nothing saved under that name */ });
     for (const id of affected) this.freshness.delete(id);
-    for (const c of connectionsOn) this.sockets.closeFor(c.page, c.connection, 'The saved key was deleted, so the live connection stopped.');
+    for (const c of connectionsOn) this.closeLiveFor(c.page, c.connection, 'The saved key was deleted, so the live connection stopped.');
     const keys = await this.savedKeys();
     this.broadcastNow();
     return keys;
@@ -397,6 +420,18 @@ class PagesService {
     return door.ok ? checkDeviceSocketAccess(url, door.ctx) : { ok: false, refusal: door.refusal };
   }
 
+  /** The video's access check: the same shared chain, run fresh, for the
+   *  device connection the page NAMED BY ID. The address is the one the person
+   *  approved (doorContext already swapped it in) and the socket path is the
+   *  profile's own, so a page chooses neither. */
+  private async videoAccess(pageId: string, connectionId: string, signal: AbortSignal): Promise<DeviceSocketAccess> {
+    const door = await this.doorContext(pageId, signal);
+    if (!door.ok) return { ok: false, refusal: door.refusal };
+    const c = door.ctx.connections.find((x) => x.id === connectionId);
+    if (!c || c.kind !== 'device') return { ok: false, refusal: { ok: false, reason: 'not-approved', message: 'This page has no home device connection by that name.' } };
+    return checkDeviceSocketAccess(`http://${c.address}${c.videoProfile?.socketPath ?? '/api/websocket'}`, door.ctx);
+  }
+
   private noteFreshness(id: string, succeeded: boolean): void {
     const prev = this.freshness.get(id) ?? { at: null, failed: false };
     const next: PageRefreshState = succeeded ? { at: new Date().toISOString(), failed: false } : { at: prev.at, failed: true };
@@ -464,6 +499,7 @@ class PagesService {
 
   stop(): void {
     this.sockets.closeAll();
+    this.videos.closeAll();
     if (this.timer !== null) { clearTimeout(this.timer); this.timer = null; }
     void this.watcher?.close().catch(() => {});
     this.watcher = null;

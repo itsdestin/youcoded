@@ -66,7 +66,7 @@ export interface LiveSocketDeps {
   connect?: (url: string, headers: Record<string, string>) => LiveWsLike;
 }
 
-function defaultConnect(url: string, headers: Record<string, string>): LiveWsLike {
+export function defaultConnect(url: string, headers: Record<string, string>): LiveWsLike {
   return new WebSocket(url, {
     headers: { 'User-Agent': 'YouCoded', ...headers },
     // A redirect would be a second address nobody approved.

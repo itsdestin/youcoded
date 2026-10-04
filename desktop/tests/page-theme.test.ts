@@ -192,6 +192,36 @@ describe('what a page can call', () => {
     expect(messages).toHaveLength(1);
   });
 
+  it('hands the page a video handle: pictures arrive with an ack, only for its own ids, and a picture nobody wants is closed', () => {
+    const { yc, posted, deliver } = runBootstrap();
+    const states: unknown[][] = [];
+    const frames: Array<{ bitmap: unknown; ack: () => void }> = [];
+    const v = (yc.video as (c: string, t: string, o: unknown) => { stop(): void })('ha', 'camera.living_room', {
+      onState: (...a: unknown[]) => states.push(a), onFrame: (bitmap: unknown, ack: () => void) => frames.push({ bitmap, ack }),
+    });
+    expect(posted[0]).toEqual({ type: 'youcoded:video:start', id: 'v1', connection: 'ha', target: 'camera.living_room' });
+    deliver({ type: 'youcoded:video:event', id: 'v1', kind: 'state', state: 'playing' });
+    const bitmap = { close: () => {} };
+    deliver({ type: 'youcoded:video:event', id: 'v1', kind: 'frame', n: 7, bitmap });
+    expect(frames[0].bitmap).toBe(bitmap);
+    frames[0].ack(); frames[0].ack(); // acking twice asks once
+    expect(posted.filter((m) => (m as { type: string }).type === 'youcoded:video:ack')).toEqual([{ type: 'youcoded:video:ack', id: 'v1', n: 7 }]);
+    // A forged event (another window, an id never made) resolves nothing; its picture is closed.
+    let closed = 0;
+    deliver({ type: 'youcoded:video:event', id: 'v1', kind: 'frame', n: 8, bitmap }, { name: 'popup' });
+    deliver({ type: 'youcoded:video:event', id: 'v9', kind: 'frame', n: 1, bitmap: { close: () => { closed++; } } });
+    deliver({ type: 'youcoded:video:event', id: 'v9', kind: 'state', state: 'playing' });
+    expect(frames).toHaveLength(1);
+    expect(closed).toBe(1);
+    expect(states).toEqual([['playing', undefined]]);
+    v.stop();
+    expect(posted.at(-1)).toEqual({ type: 'youcoded:video:stop', id: 'v1' });
+    let late = 0;
+    deliver({ type: 'youcoded:video:event', id: 'v1', kind: 'frame', n: 9, bitmap: { close: () => { late++; } } });
+    expect(frames).toHaveLength(1);
+    expect(late).toBe(1);
+  });
+
   it('hears the refresh button and a data change, from the host only', () => {
     const { yc, deliver } = runBootstrap();
     let refreshes = 0;

@@ -819,7 +819,7 @@ export class RemoteServer {
       // WHY: stop clears clients before close events run; invalidate pending starts now.
       this.handoffRoute?.cancelOwner(`remote:${client.id}`);
     // A dropped client's live page sockets must not outlive it.
-    getPagesService()?.sockets.closeOwner(clientOwnerKey(client.id));
+    getPagesService()?.closeOwner(clientOwnerKey(client.id));
       client.ws.close(1001, 'Server shutting down');
     }
     this.clients.clear();

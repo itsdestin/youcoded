@@ -45,6 +45,14 @@ export function createRemotePagesBridge(invoke: Invoke, addListener: Listen, rem
     socketSend: (req) => invoke('pages:socket-send', req),
     socketClose: (req) => { live.delete(req.socket); return invoke('pages:socket-close', req); },
     socketPing: (req) => invoke('pages:socket-ping', req),
+    // Camera video: the same route; its events arrive on the socket-event push.
+    videoStart: async (req) => {
+      const r = await invoke('pages:video-start', req);
+      if (r?.ok) live.add(r.video);
+      return r;
+    },
+    videoStop: (req) => { live.delete(req.video); return invoke('pages:video-stop', req); },
+    videoPing: (req) => invoke('pages:video-ping', req),
     onSocketEvent: (cb) => { socketSubs.add(cb); return () => { socketSubs.delete(cb); }; },
   };
 
@@ -52,12 +60,13 @@ export function createRemotePagesBridge(invoke: Invoke, addListener: Listen, rem
     bridge,
     /** A `pages:socket-event` push from the computer. */
     push(event: PageSocketEvent): void {
-      if (event?.kind === 'state' && event.state === 'closed') live.delete(event.socket);
+      if ((event?.kind === 'state' && event.state === 'closed') || event?.kind === 'video-stopped') live.delete(event.socket);
       tell(event);
     },
     /** This browser's connection to the computer dropped. */
     connectionLost(): void {
-      for (const socket of [...live]) tell({ socket, kind: 'state', state: 'closed', why: 'Lost the connection to your computer.' });
+      // Sockets and videos share this set; a video id starts with "lv_" (page-live-video.ts).
+      for (const socket of [...live]) tell(socket.startsWith('lv_') ? { socket, kind: 'video-stopped', why: 'Lost the connection to your computer.' } : { socket, kind: 'state', state: 'closed', why: 'Lost the connection to your computer.' });
       live.clear();
     },
   };

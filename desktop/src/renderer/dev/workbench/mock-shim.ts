@@ -499,6 +499,7 @@ const NAMESPACES = [
 
 import { createNamingPreview } from './naming-preview';
 import { seedPages } from './fixtures/pages';
+import { fakeCameraDeps } from './fixtures/fake-camera';
 import { fakeHomeAssistantFetch, fakeHomeAssistantLive, fakeHomeAssistantSocket } from './fixtures/fake-home-assistant';
 import { withHomeMockup } from './fixtures/home-assistant-mockups';
 import { OFFICE_EDITOR_ORIGIN, OFFICE_FILES, officeFixtureName, officeSampleUrl } from './fixtures/office';
@@ -3724,6 +3725,7 @@ function createPagesMock(empty: boolean): PagesBridge {
   const liveSockets = new Map<string, { page: string; frame: string; live: ReturnType<typeof fakeHomeAssistantLive> }>();
   const socketSubs = new Set<(e: PageSocketEvent) => void>();
   let liveSeq = 0;
+  const liveVideos = new Set<string>();
   const emitSocket = (e: PageSocketEvent) => { for (const cb of [...socketSubs]) cb(e); };
   // Office is built in, so it is listed in every scenario — even the empty one.
   // Unpinned, as a new install has it: pinning it filled the header's fourth slot,
@@ -3862,6 +3864,21 @@ function createPagesMock(empty: boolean): PagesBridge {
       return { ok: true as const };
     },
     socketClose: async (req) => { liveSockets.delete(req.socket); return { ok: true as const }; },
+    // Camera video: the pretend peer lives in fake-camera.ts and is handed to the real
+    // host code through `videoPlayback`; the mock's own part is only main's: answer, then stay quiet.
+    videoPlayback: fakeCameraDeps(),
+    videoStart: async (req) => {
+      const device = pages.find((p) => p.id === req.page)?.connections?.find((c) => c.kind === 'device' && c.id === req.connection && c.approved);
+      if (!device || device.kind !== 'device' || !device.videoProfile || !req.target.startsWith(device.videoProfile.targetPrefix)) {
+        return { ok: false as const, message: 'The workbench has no camera for that.' };
+      }
+      const video = `lv_mock_${++liveSeq}`;
+      liveVideos.add(video);
+      setTimeout(() => { if (liveVideos.has(video)) emitSocket({ socket: video, kind: 'video-answer', answer: 'v=0\r\n(workbench answer)' }); }, 30);
+      return { ok: true as const, video };
+    },
+    videoStop: async (req) => { liveVideos.delete(req.video); return { ok: true as const }; },
+    videoPing: async (req) => (liveVideos.has(req.video) ? { ok: true as const } : { ok: false as const, message: 'That video is not playing any more.' }),
     socketPing: async (req) => (liveSockets.has(req.socket) ? { ok: true as const } : { ok: false as const, message: 'That live connection is not open any more.' }),
     onSocketEvent: (cb) => { socketSubs.add(cb); return () => { socketSubs.delete(cb); }; },
     onChanged: (cb) => { subs.add(cb); return () => { subs.delete(cb); }; },

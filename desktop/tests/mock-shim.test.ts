@@ -51,6 +51,30 @@ describe('channels', () => {
       } finally { vi.useRealTimers(); }
     });
 
+    it('plays a pretend camera: the host asks, the mock answers, and a stranger or an unapproved line is refused', async () => {
+      vi.useFakeTimers();
+      try {
+        const c = shim();
+        const call = { page: 'page-home', frame: 'f1', connection: 'ha', target: 'camera.living_room', offer: 'v=0' };
+        expect((await c.pages.videoStart(call)).ok).toBe(false); // not approved yet
+        const approval = c.pages.approve('page-home', { ha: 'k' });
+        await vi.advanceTimersByTimeAsync(400);
+        await approval;
+        const heard: any[] = [];
+        c.pages.onSocketEvent((e: any) => heard.push(e));
+        expect((await c.pages.videoStart({ ...call, target: 'light.kitchen' })).ok).toBe(false);
+        const started = await c.pages.videoStart(call);
+        expect(started.ok).toBe(true);
+        await vi.advanceTimersByTimeAsync(40);
+        expect(heard).toEqual([{ socket: started.video, kind: 'video-answer', answer: expect.stringContaining('workbench answer') }]);
+        // The pretend peer and picture source are handed to the real host code, never the network.
+        expect(c.pages.videoPlayback).toBeTruthy();
+        expect((await c.pages.videoPing({ page: 'page-home', frame: 'f1', video: started.video })).ok).toBe(true);
+        await c.pages.videoStop({ page: 'page-home', frame: 'f1', video: started.video });
+        expect((await c.pages.videoPing({ page: 'page-home', frame: 'f1', video: started.video })).ok).toBe(false);
+      } finally { vi.useRealTimers(); }
+    });
+
     it('answers the seeded native question request once and emits its distinct tool result', async () => {
       vi.stubGlobal('location', { search: '?seed=bubbles-questions-native' });
       try {

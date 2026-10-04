@@ -52,6 +52,32 @@ export function isPrivateIp(ip: string): boolean {
   return false;
 }
 
+/** Addresses a camera's WebRTC answer may NEVER make the app dial, whatever
+ *  else is allowed: this computer itself, the link-local range (which holds the
+ *  cloud-metadata address 169.254.169.254), the unspecified address and the
+ *  AWS IPv6 metadata block. Home-network addresses (192.168/16, 10/8, ...) are
+ *  fine: that is where a camera lives. Uses the same ranges as PRIVATE_V4
+ *  above, narrowed to the ones that are never a camera. */
+export function isNeverDialIp(ip: string): boolean {
+  if (isIP(ip) === 4) return /^(0|127)\./.test(ip) || /^169\.254\./.test(ip);
+  const lower = ip.toLowerCase();
+  if (lower === '::' || lower === '::1') return true;
+  if (/^fe[89ab]/.test(lower)) return true;      // fe80::/10 link-local
+  if (lower.startsWith('fd00:ec2:')) return true; // AWS metadata over IPv6
+  if (lower.startsWith('::ffff:')) {
+    // v4-mapped: dotted, or two hex groups that ARE the v4 (see isPrivateIp).
+    const rest = lower.slice('::ffff:'.length);
+    if (/^\d+\.\d+\.\d+\.\d+$/.test(rest)) return isNeverDialIp(rest);
+    const groups = rest.split(':').filter(Boolean);
+    if (groups.length >= 1 && groups.every((g) => /^[0-9a-f]{1,4}$/.test(g))) {
+      const low = parseInt(groups[groups.length - 1], 16);
+      const high = groups.length >= 2 ? parseInt(groups[groups.length - 2], 16) : 0;
+      return isNeverDialIp(`${(high >> 8) & 0xff}.${high & 0xff}.${(low >> 8) & 0xff}.${low & 0xff}`);
+    }
+  }
+  return false;
+}
+
 /** Scheme + address validation for ONE URL. Throws NetGuardError with an honest,
  *  specific message (docs/error-message-standards.md). Returns the parsed URL. */
 export async function assertPublicHttpUrl(raw: string, lookup: LookupFn = defaultLookup, signal?: AbortSignal): Promise<URL> {

@@ -22,7 +22,7 @@
     "renderer/components/SyncPanel.tsx": 2060,
     "main/engine/engine-manager.ts": 2035,
     "renderer/components/ResumeBrowser.tsx": 2069,
-    "main/preload.ts": 2061,
+    "main/preload.ts": 2060,
     "renderer/components/StatusBar.tsx": 1809,
     "renderer/components/ToolCard.tsx": 1636,
     "renderer/components/SessionDrawer.tsx": 1614,

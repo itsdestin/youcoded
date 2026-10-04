@@ -6,7 +6,7 @@
 // a channel must exist are listed in .claude/rules/ipc-bridge.md.
 import type { IpcMain, IpcMainInvokeEvent } from 'electron';
 import { IPC } from '../../shared/types';
-import { PAGE_SOCKET_CHANNELS, type PageFetchRequest, type PageSocketEvent } from '../../shared/pages-types';
+import { PAGE_SOCKET_CHANNELS, PAGE_VIDEO_CHANNELS, type PageFetchRequest, type PageSocketEvent } from '../../shared/pages-types';
 import type { getPagesService } from './pages-service';
 import type { PushResult } from './page-live-socket';
 
@@ -33,7 +33,7 @@ function watchSender(svc: Service, sender: SenderLike): void {
   if (watched.has(sender.id)) return;
   watched.add(sender.id);
   const key = windowOwnerKey(sender.id);
-  const gone = () => svc.sockets.closeOwner(key);
+  const gone = () => svc.closeOwner(key); // sockets AND videos
   sender.once('destroyed', () => { gone(); watched.delete(sender.id); });
   sender.on('did-start-navigation', (d) => { if (d?.isMainFrame && !d.isSameDocument) gone(); });
   sender.on('render-process-gone', gone);
@@ -79,4 +79,9 @@ export function registerPagesIpc(ipcMain: IpcMain, pagesService: Service): void 
   ipcMain.handle(ch.send, (e, req) => pagesService.sockets.send(ownerOf(e).key, req ?? {}));
   ipcMain.handle(ch.close, (e, req) => pagesService.sockets.close(ownerOf(e).key, req ?? {}));
   ipcMain.handle(ch.ping, (e, req) => pagesService.sockets.ping(ownerOf(e).key, req ?? {}));
+  // Camera video: same owner rule; its events ride the same push channel (pages:socket-event).
+  const vid = PAGE_VIDEO_CHANNELS;
+  ipcMain.handle(vid.start, (e, req) => pagesService.videos.start(ownerOf(e), req ?? {}));
+  ipcMain.handle(vid.stop, (e, req) => pagesService.videos.stop(ownerOf(e).key, req ?? {}));
+  ipcMain.handle(vid.ping, (e, req) => pagesService.videos.ping(ownerOf(e).key, req ?? {}));
 }

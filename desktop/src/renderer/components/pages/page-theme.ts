@@ -49,6 +49,13 @@ export const PAGE_SOCKET_OPEN_MESSAGE = 'youcoded:socket:open';
 export const PAGE_SOCKET_SEND_MESSAGE = 'youcoded:socket:send';
 export const PAGE_SOCKET_CLOSE_MESSAGE = 'youcoded:socket:close';
 export const PAGE_SOCKET_EVENT_MESSAGE = 'youcoded:socket:event';
+/** Camera video (spec 2026-10-04, Part 2). Page → host: start / stop / ack (the
+ *  page is done with the picture numbered `n`); host → page: one event kind for a
+ *  state change and for a picture (an ImageBitmap, transferred). */
+export const PAGE_VIDEO_START_MESSAGE = 'youcoded:video:start';
+export const PAGE_VIDEO_STOP_MESSAGE = 'youcoded:video:stop';
+export const PAGE_VIDEO_ACK_MESSAGE = 'youcoded:video:ack';
+export const PAGE_VIDEO_EVENT_MESSAGE = 'youcoded:video:event';
 const PAGE_THEME_STYLE_ID = 'youcoded-theme';
 
 /** Snapshot of the current theme as one `:root { … }` rule. Reads computed
@@ -97,6 +104,12 @@ function bootstrap(dataJson: string, devicesJson = '{}'): string {
   var S_SEND = ${JSON.stringify(PAGE_SOCKET_SEND_MESSAGE)};
   var S_CLOSE = ${JSON.stringify(PAGE_SOCKET_CLOSE_MESSAGE)};
   var S_EVENT = ${JSON.stringify(PAGE_SOCKET_EVENT_MESSAGE)};
+  var V_START = ${JSON.stringify(PAGE_VIDEO_START_MESSAGE)};
+  var V_STOP = ${JSON.stringify(PAGE_VIDEO_STOP_MESSAGE)};
+  var V_ACK = ${JSON.stringify(PAGE_VIDEO_ACK_MESSAGE)};
+  var V_EVENT = ${JSON.stringify(PAGE_VIDEO_EVENT_MESSAGE)};
+  var videos = {};
+  var videoSeq = 0;
   var sockets = {};
   var socketSeq = 0;
   var subs = [];
@@ -142,6 +155,26 @@ function bootstrap(dataJson: string, devicesJson = '{}'): string {
         }
       };
     },
+    // Live camera video, played by the app: the page names a device connection and
+    // a camera, and gets PICTURES (ImageBitmaps) — never an address or a stream.
+    // onFrame(bitmap, ack): draw it on a canvas, then call ack() to ask for the next.
+    // onState('starting' | 'playing' | 'stopped', why). stop() ends it.
+    video: function (connection, target, opts) {
+      var o = opts || {};
+      var id = 'v' + (++videoSeq);
+      var rec = { state: 'starting', onFrame: o.onFrame, onState: o.onState };
+      videos[id] = rec;
+      try { parent.postMessage({ type: V_START, id: id, connection: String(connection), target: String(target) }, '*'); }
+      catch (e) { rec.state = 'stopped'; delete videos[id]; }
+      return {
+        stop: function () {
+          if (!videos[id]) return;
+          delete videos[id];
+          rec.state = 'stopped';
+          try { parent.postMessage({ type: V_STOP, id: id }, '*'); } catch (e) {}
+        }
+      };
+    },
     fetch: function (url, opts) {
       return new Promise(function (resolve, reject) {
         var o = opts || {};
@@ -179,6 +212,22 @@ function bootstrap(dataJson: string, devicesJson = '{}'): string {
         if (typeof sr.onState === 'function') { try { sr.onState(d.state, typeof d.why === 'string' ? d.why : undefined); } catch (err) {} }
       } else if (d.kind === 'messages' && Array.isArray(d.texts) && typeof sr.onMessages === 'function') {
         try { sr.onMessages(d.texts.filter(function (t) { return typeof t === 'string'; })); } catch (err) {}
+      }
+      return;
+    }
+    if (d.type === V_EVENT && typeof d.id === 'string') {
+      // Matched by this page's own id: a forged event for an id it never made resolves nothing.
+      var vr = videos[d.id];
+      if (!vr) { if (d.bitmap && typeof d.bitmap.close === 'function') { try { d.bitmap.close(); } catch (err) {} } return; }
+      if (d.kind === 'state' && typeof d.state === 'string') {
+        vr.state = d.state;
+        if (d.state === 'stopped') delete videos[d.id];
+        if (typeof vr.onState === 'function') { try { vr.onState(d.state, typeof d.why === 'string' ? d.why : undefined); } catch (err) {} }
+      } else if (d.kind === 'frame' && d.bitmap) {
+        var vn = d.n, finished = false;
+        var release = function () { if (finished) return; finished = true; try { parent.postMessage({ type: V_ACK, id: d.id, n: vn }, '*'); } catch (err) {} };
+        if (typeof vr.onFrame === 'function') { try { vr.onFrame(d.bitmap, release); } catch (err) { release(); } }
+        else { try { d.bitmap.close(); } catch (err) {} release(); }
       }
       return;
     }

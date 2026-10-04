@@ -65,6 +65,10 @@ export async function handlePagesMessage(
       case 'pages:socket-send': respond(svc ? svc.sockets.send(clientOwnerKey(client.id), payload ?? {}) : none); break;
       case 'pages:socket-close': respond(svc ? svc.sockets.close(clientOwnerKey(client.id), payload ?? {}) : none); break;
       case 'pages:socket-ping': respond(svc ? svc.sockets.ping(clientOwnerKey(client.id), payload ?? {}) : none); break;
+      // Camera video: same owner rule (this client only); events come back on pages:socket-event.
+      case 'pages:video-start': respond(svc ? await svc.videos.start(owner(), payload ?? {}) : none); break;
+      case 'pages:video-stop': respond(svc ? svc.videos.stop(clientOwnerKey(client.id), payload ?? {}) : none); break;
+      case 'pages:video-ping': respond(svc ? svc.videos.ping(clientOwnerKey(client.id), payload ?? {}) : none); break;
       default: return false;
     }
   } catch (err: any) {
