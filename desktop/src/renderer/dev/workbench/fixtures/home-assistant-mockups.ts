@@ -5,11 +5,8 @@
 // pretend Home Assistant; the mockup is then laid over it. The history,
 // activity and video here are drawn, not fetched: they show a shape for Destin
 // to pick, and the chosen one is built properly afterwards. Never shipped.
-export const HOME_MOCKUP_NAMES = [
-  'device-inplace', 'device-popup', 'device-panel',
-  'activity-tab', 'activity-feed', 'activity-timeline',
-  'camera-tap', 'camera-always', 'camera-events',
-] as const;
+// Names: device-inplace|popup|panel, activity-tab|feed|timeline,
+// camera-tap|always|events (screens/pages.ts lists them).
 
 const MOCK_CSS = `
   .mk-seg { display: inline-flex; border: 1px solid var(--edge); border-radius: 9999px; overflow: hidden; background: var(--well); }
@@ -262,7 +259,7 @@ const MOCK_JS = String.raw`
   var want = 0;
   setInterval(function () {
     var f = MOCKS[NAME];
-    if (!f) return;
+    if (!f || document.hidden) return;
     var have = document.querySelectorAll('[data-mk]').length;
     if (want && have === want) return;
     document.querySelectorAll('[data-mk]').forEach(function (el) { el.remove(); });

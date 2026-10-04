@@ -30,7 +30,7 @@ const ROOMS_TEMPLATE = `{%- set ns = namespace(rooms=[]) -%}
 {%- if d in ['light','climate','media_player','camera','remote'] and states[e] is not none -%}
 {%- set s = states[e] -%}
 {%- set ce = device_attr(device_id(e), 'config_entries') -%}
-{%- set ens.items = ens.items + [{'id': e, 'maker': device_attr(device_id(e), 'manufacturer'), 'entry': (ce | list | first) if ce else none, 'since': s.last_changed.isoformat(), 'name': s.name, 'state': s.state, 'brightness': s.attributes.get('brightness'), 'modes': s.attributes.get('supported_color_modes'), 'cur': s.attributes.get('current_temperature'), 'target': s.attributes.get('temperature'), 'min': s.attributes.get('min_temp'), 'max': s.attributes.get('max_temp'), 'step': s.attributes.get('target_temp_step'), 'vol': s.attributes.get('volume_level'), 'title': s.attributes.get('media_title'), 'features': s.attributes.get('supported_features', 0), 'rgb': s.attributes.get('rgb_color'), 'k': s.attributes.get('color_temp_kelvin'), 'modesHvac': s.attributes.get('hvac_modes'), 'action': s.attributes.get('hvac_action'), 'device': device_id(e), 'model': device_attr(device_id(e), 'model'), 'dc': s.attributes.get('device_class'), 'activity': s.attributes.get('current_activity'), 'app': s.attributes.get('app_name'), 'source': s.attributes.get('source'), 'cid': s.attributes.get('media_content_id'), 'muted': s.attributes.get('is_volume_muted')}] -%}
+{%- set ens.items = ens.items + [{'id': e, 'maker': device_attr(device_id(e), 'manufacturer'), 'entry': (ce | list | first) if ce else none, 'since': s.last_changed.isoformat(), 'name': s.name, 'state': s.state, 'brightness': s.attributes.get('brightness'), 'modes': s.attributes.get('supported_color_modes'), 'cur': s.attributes.get('current_temperature'), 'target': s.attributes.get('temperature'), 'min': s.attributes.get('min_temp'), 'max': s.attributes.get('max_temp'), 'step': s.attributes.get('target_temp_step'), 'vol': s.attributes.get('volume_level'), 'title': s.attributes.get('media_title'), 'features': s.attributes.get('supported_features', 0), 'rgb': s.attributes.get('rgb_color'), 'k': s.attributes.get('color_temp_kelvin'), 'modesHvac': s.attributes.get('hvac_modes'), 'action': s.attributes.get('hvac_action'), 'device': device_id(e), 'model': device_attr(device_id(e), 'model'), 'dc': s.attributes.get('device_class'), 'activity': s.attributes.get('current_activity'), 'app': s.attributes.get('app_name'), 'source': s.attributes.get('source'), 'cid': s.attributes.get('media_content_id'), 'muted': s.attributes.get('is_volume_muted'), 'group': s.attributes.get('group_members')}] -%}
 {%- endif -%}
 {%- endfor -%}
 {%- if ens.items -%}{%- set ns.rooms = ns.rooms + [{'id': a, 'name': area_name(a), 'items': ens.items, 'scenes': ens.scenes}] -%}{%- endif -%}
@@ -527,7 +527,7 @@ function homeAssistantPageHtml(): string {
       : face + '<span class="bulb">' + icon + '</span><span class="name">' + esc(it.name) + '<div class="sub">' + esc(status) + '</div></span></button>';
     return '<div class="tile' + (media ? ' media' : '') + (on && !isSound ? ' on' : '') + (na ? ' gone' : '') + (hidden.has(it.id) ? ' is-hidden' : '') + (muted ? ' muted' : '') + '" style="--c:' + c + '"><span class="glow"></span>' +
       '<div class="line">' + header +
-      right + '</div>' + nowHtml + bright + (nowHtml ? '' : vol) + playRow +
+      right + '</div>' + nowHtml + bright + (nowHtml ? '' : vol) + playRow + (isSound ? groupHtml(it) : '') +
       // The remote opens from a full-width bar under what is playing, so the
       // TV's name keeps its room (a pill beside it cut the name short).
       // The remote is one card: its header opens it, the remote sits inside
@@ -590,6 +590,32 @@ function homeAssistantPageHtml(): string {
     return '<a class="ib" href="' + esc(base + path) + '" target="_blank" rel="noopener" aria-label="' + esc(label) + '" title="' + esc(label) + '">' + OUT + '</a>';
   }
   // Edit: where a TV's sound plays (round 7). Automatic shows what it found.
+  // Sonos grouping (home-page-v3 Q-sonos: "tick-list"): a speaker that can
+  // play in a group gets a Group bar; open, it lists every other speaker that
+  // can, ticked when it is playing along. Ticking one joins it to this
+  // speaker's group; unticking takes it out. Asleep speakers are listed but
+  // cannot be ticked, so the list never looks shorter than the house.
+  var GROUPING = 524288;
+  // Not kept between visits; groupOpen in the saved data opens one for a
+  // workbench screen.
+  var groupOpen = new Set(Array.isArray(saved.groupOpen) ? saved.groupOpen : []);
+  function canGroup(it) { return domain(it.id) === 'media_player' && ((it.features || 0) & GROUPING) !== 0; }
+  function groupOf(it) { return Array.isArray(it.group) && it.group.length ? it.group : [it.id]; }
+  function groupHtml(it) {
+    if (!canGroup(it) || gone(it)) return '';
+    var others = allItems().filter(function (x) { return x.it.id !== it.id && canGroup(x.it); });
+    if (!others.length) return '';
+    var members = groupOf(it), open = groupOpen.has(it.id);
+    var withNames = members.filter(function (m) { return m !== it.id; }).map(function (m) { var x = thing(m); return x ? x.name : m; });
+    var label = withNames.length ? 'Playing with ' + withNames.join(', ') : 'Group';
+    var list = open ? '<div class="glist" role="group" aria-label="Speakers playing with ' + esc(it.name) + '">' + others.map(function (x) {
+      var on = members.indexOf(x.it.id) >= 0, asleep = gone(x.it);
+      return '<button class="gitem" data-join="' + esc(it.id) + '" data-member="' + esc(x.it.id) + '" aria-pressed="' + on + '"' + (asleep ? ' disabled' : '') + '>' +
+        '<span class="gtick" aria-hidden="true">' + (on ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 7"/></svg>' : '') + '</span>' +
+        '<span class="gname">' + esc(x.it.name) + '<span class="sub">' + esc(asleep ? 'Asleep or off' : x.room.name) + '</span></span></button>';
+    }).join('') + '</div>' : '';
+    return '<div class="rcard gcard' + (open ? ' open' : '') + '"><button class="rbtn" data-group="' + esc(it.id) + '" aria-expanded="' + open + '">' + SPEAKER + '<span class="rlbl">' + esc(label) + '</span><span class="rchev">' + CHEVRON + '</span></button>' + list + '</div>';
+  }
   function soundPick(it) {
     if (domain(it.id) !== 'media_player' || !isTv(it)) return '';
     var cands = soundCandidates(it);
@@ -1183,6 +1209,22 @@ function homeAssistantPageHtml(): string {
       var body = { entity_id: mp };
       if (svc === 'volume_mute') { body.is_volume_muted = t.getAttribute('data-mute') === 'true'; setLocal(mp, { muted: body.is_volume_muted }); }
       service('media_player', svc, body, mp);
+      return;
+    }
+    var gp = t.getAttribute('data-group');
+    if (gp) { if (groupOpen.has(gp)) groupOpen.delete(gp); else groupOpen.add(gp); render(); return; }
+    var jn = t.getAttribute('data-join');
+    if (jn) {
+      var lead = thing(jn), mem = t.getAttribute('data-member'), x = thing(mem);
+      if (!lead || !x) return;
+      var g = groupOf(lead), inIt = g.indexOf(mem) >= 0;
+      // Show the tick straight away; the next check confirms it.
+      var next = inIt ? g.filter(function (m) { return m !== mem; }) : g.concat([mem]);
+      next.forEach(function (m) { var y = thing(m); if (y) y.group = next; });
+      x.group = inIt ? [mem] : next;
+      if (inIt) service('media_player', 'unjoin', { entity_id: mem }, mem);
+      else service('media_player', 'join', { entity_id: g[0], group_members: [mem] }, jn);
+      render();
       return;
     }
     var ro = t.getAttribute('data-remote');

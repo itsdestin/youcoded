@@ -14,7 +14,12 @@ interface Thing {
   modesHvac?: string[]; action?: string | null;
   model?: string; dc?: string; activity?: string; app?: string; source?: string; muted?: boolean;
   maker?: string; entry?: string; since?: string;
+  /** Sonos `group_members`: the speakers playing together, leader first. */
+  group?: string[];
 }
+
+/** Home Assistant's "can play in a group" flag on a media player. */
+const GROUPING = 524288;
 
 function seed(): Array<{ id: string; name: string; items: Thing[] }> {
   const dim = ['brightness'];
@@ -27,7 +32,7 @@ function seed(): Array<{ id: string; name: string; items: Thing[] }> {
       { id: 'media_player.destins_room_tv', name: "Destin's Samsung TV", state: 'off', features: 4, vol: 0.2, model: 'QN65Q80CAFXZA', dc: 'tv' },
       // Named like the room, as the real Sonos Beam is: it must never get the
       // TV's remote (round 5 testing).
-      { id: 'media_player.destins_room', name: "Destin's Room", state: 'playing', vol: 0.35, title: 'TV', model: 'Sonos Beam', source: 'TV', features: 4 | 8 | 1 | 16 | 32 },
+      { id: 'media_player.destins_room', name: "Destin's Room", state: 'playing', vol: 0.35, title: 'TV', model: 'Sonos Beam', source: 'TV', features: 4 | 8 | 1 | 16 | 32 | GROUPING, group: ['media_player.destins_room'] },
       // A Google TV paired for remote control: its Cast tile, and the remote.
       { id: 'media_player.destins_room_google_tv', name: "Destin's Room TV", state: 'playing', features: 4, vol: 0.4, title: 'Lofi beats to relax to', model: 'Google TV Streamer', dc: 'tv' },
       { id: 'remote.destins_room_tv_remote', name: "Destin's Room TV remote", state: 'on', activity: 'com.google.android.youtube.tv' },
@@ -41,6 +46,14 @@ function seed(): Array<{ id: string; name: string; items: Thing[] }> {
     { id: 'kitchen', name: 'Kitchen', items: [
       { id: 'light.kitchen_pendants', name: 'Pendants', state: 'off', brightness: null, modes: dim },
       { id: 'light.under_cabinet', name: 'Under cabinet', state: 'on', brightness: 255, modes: ['onoff'] },
+    ] },
+    // Two more Sonos speakers to group with (round 5, Sonos grouping): the
+    // Roam 2 awake, the Move 2 asleep, as battery speakers often are.
+    { id: 'destins_bathroom', name: "Destin's Bathroom", items: [
+      { id: 'media_player.roam_2', name: 'Roam 2', state: 'idle', vol: 0.25, model: 'Roam 2', features: 4 | 8 | 1 | 16 | 32 | GROUPING, group: ['media_player.roam_2'] },
+    ] },
+    { id: 'patio', name: 'Patio', items: [
+      { id: 'media_player.move_2', name: 'Move 2', state: 'unavailable', model: 'Move 2', features: 4 | 8 | 1 | 16 | 32 | GROUPING },
     ] },
     { id: 'upstairs', name: 'Upstairs', items: [
       { id: 'climate.thermostat', name: 'Thermostat', state: 'cool', cur: 74, target: 72, min: 50, max: 90, step: 1, modesHvac: ['off', 'cool', 'heat', 'heat_cool'], action: 'cooling' },
@@ -87,6 +100,15 @@ const ok = (body: string): PageFetchResult => ({ ok: true, status: 200, headers:
 
 /** Answers a request to the pretend Home Assistant, or null when the request
  *  is not for it (the workbench's usual "no network" answer then applies). */
+function leaveGroup(id: string): void {
+  const t = find(id);
+  if (!t?.group || t.group.length < 2) return;
+  const rest = t.group.filter((m) => m !== id);
+  rest.forEach((m) => { const x = find(m); if (x) x.group = rest; });
+  t.group = [id];
+  t.state = 'idle'; t.title = null; t.source = undefined;
+}
+
 export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult | null {
   let url: URL;
   try { url = new URL(req.url); } catch { return null; }
@@ -139,6 +161,18 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
       if (action === 'volume_down' && t.vol != null) t.vol = Math.max(0, t.vol - 0.02);
       if (action === 'volume_mute') t.muted = data.is_volume_muted === true;
       if (action === 'set_temperature' && typeof data.temperature === 'number') t.target = data.temperature;
+      // Sonos grouping, as Home Assistant does it: `join` adds speakers to
+      // this one's group (leaving any group they were in), `unjoin` takes
+      // this one out of its group. Every member lists the whole group.
+      if (action === 'join' && Array.isArray(data.group_members)) {
+        const add = (data.group_members as unknown[]).map(String).filter((m) => m !== id && find(m)?.state !== 'unavailable');
+        add.forEach((m) => leaveGroup(m));
+        const members = [...new Set([...(t.group ?? [id]), ...add])];
+        members.forEach((m) => { const x = find(m); if (x) x.group = members; });
+        // A speaker joining picks up what the group plays.
+        add.forEach((m) => { const x = find(m); if (x) { x.state = t.state; x.title = t.title; x.source = t.source; } });
+      }
+      if (action === 'unjoin') leaveGroup(id);
     }
     return ok('[]');
   }

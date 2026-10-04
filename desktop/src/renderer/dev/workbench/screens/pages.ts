@@ -24,6 +24,7 @@ export const PAGES: readonly ScreenEntry[] = [
   { ...pg('pages/page/page-home#connected', 'view'), params: { pagesHome: 'connected' } },
   { ...pg('pages/page/page-home#edit', 'view'), params: { pagesHome: 'edit' } },
   { ...pg('pages/page/page-home#remote', 'view'), params: { pagesHome: 'remote' } },
+  { ...pg('pages/page/page-home#group', 'view'), params: { pagesHome: 'group' } },
   { ...pg('pages/page/page-home#lights', 'view'), params: { pagesHome: 'view-lights' } },
   { ...pg('pages/page/page-home#media', 'view'), params: { pagesHome: 'view-media' } },
   { ...pg('pages/page/page-home#climate', 'view'), params: { pagesHome: 'view-climate' } },

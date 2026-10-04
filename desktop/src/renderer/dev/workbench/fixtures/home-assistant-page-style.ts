@@ -196,6 +196,17 @@ export const HOME_ASSISTANT_PAGE_CSS = `
   .rbtn[aria-expanded="true"] .rchev { transform: rotate(180deg); }
   @media (prefers-reduced-motion: reduce) { .rchev { transition: none; } }
   .rbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* Sonos grouping: the tick list opens under the Group bar, inside the same
+     card, the way the TV's remote does. */
+  .glist { display: flex; flex-direction: column; gap: 4px; padding: 6px 0 2px; }
+  .gitem { appearance: none; display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: var(--radius-md, 8px); border: 1px solid var(--edge-dim); background: var(--well); color: var(--fg); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+  .gitem:hover:not(:disabled) { border-color: var(--fg-muted); }
+  .gitem:disabled { opacity: .5; cursor: default; }
+  .gitem:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .gtick { width: 18px; height: 18px; flex-shrink: 0; border-radius: 5px; border: 1.5px solid var(--edge); display: grid; place-items: center; }
+  .gitem[aria-pressed="true"] .gtick { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .gname { display: flex; flex-direction: column; }
+  .gname .sub { font-size: 11px; color: var(--fg-muted); }
   /* Controls inside Now playing (fourth-look notes: "the play/pause button
      and some other basic controls should be attached to the now playing"). */
   .np.has-ctl { flex-wrap: wrap; }
