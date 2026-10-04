@@ -909,6 +909,62 @@ describe('MarkdownContent while a reply streams in', () => {
       });
     });
 
+    // A bubble that MOUNTS part-way through a reply (switching back to the chat, a torn-off window,
+    // a chat that was hidden while the reply began) draws what it was given as one group, with text
+    // before the fence in it. The rest of the reply must still be cheap per word, keep the same
+    // code block, and draw as one piece when the turn ends.
+    describe('a bubble that mounts in the middle of an open fence', () => {
+      const row = (i: number) => (i % 10 === 9 ? '' : `  const value${i} = compute(${i}); // step ${i}`);
+      const mount = (n: number) => `Intro paragraph.\n\n- a list before it\n\n\`\`\`ts\n${lines(n, row)}\n`;
+      const more = tokenDeltas(lines(120, (i) => row(i + 1000)) + '\n');
+
+      it('keeps per-word work bounded and the page equal to the whole message', () => {
+        const live = render(<Bubble md={mount(100)} incremental />);
+        const pre = live.container.querySelector('pre')!;
+        let md = mount(100);
+        const costs: number[] = [];
+        more.forEach((d, i) => {
+          md += d;
+          splitterParsed.chars = 0;
+          markdownRenders.length = 0;
+          live.rerender(<Bubble md={md} incremental />);
+          costs.push(splitterParsed.chars + markdownRenders.reduce((n, x) => n + x.length, 0));
+          expect(live.container.querySelector('pre')).toBe(pre);
+          if (i % 25 === 0 || i === more.length - 1) expect(canonical(live.container), `after word ${i}`).toBe(wholeHtml(md));
+        });
+        // After the first update (which may split the message once), a word costs the prefix
+        // plus a tail of under two chunks — not the fence, which by now is 220 lines.
+        const lineLen = row(1).length + 1;
+        const bound = mount(0).length + 2 * OPEN_FENCE_CHUNK_LINES * lineLen + 400;
+        for (const c of costs.slice(1)) expect(c).toBeLessThanOrEqual(2 * bound);
+        expect(Math.max(...costs.slice(1))).toBeLessThan(md.length / 2);
+        // The reply ends: one piece again, same block.
+        live.rerender(<Bubble md={md} incremental live={false} />);
+        expect(live.container.querySelector('pre')).toBe(pre);
+        const whole = render(<MarkdownContent content={md} sessionId="s1" />);
+        expect(canonical(live.container)).toBe(canonical(whole.container));
+        whole.unmount();
+        live.unmount();
+      });
+
+      it('Copy still takes the whole fence, and only that fence', async () => {
+        const writeText = vi.fn();
+        Object.assign(navigator, { clipboard: { writeText } });
+        const md = `Intro\n\n\`\`\`sh\necho other\n\`\`\`\n\n${mount(90).split('Intro paragraph.\n\n')[1]}${lines(40, row)}\n`;
+        const live = render(<Bubble md={md} incremental />);
+        live.rerender(<Bubble md={`${md}  tail();`} incremental />);
+        const buttons = screen.getAllByRole('button', { name: 'Copy' });
+        fireEvent.click(buttons[0]);
+        expect(writeText.mock.calls[0][0]).toBe('echo other\n');
+        fireEvent.click(buttons[1]);
+        const copied = writeText.mock.calls[1][0] as string;
+        expect(copied).toContain('const value0 =');
+        expect(copied).toContain('tail();');
+        expect(copied).not.toContain('echo other');
+        live.unmount();
+      });
+    });
+
     it('copies the whole fence, frozen lines included', async () => {
       const writeText = vi.fn();
       Object.assign(navigator, { clipboard: { writeText } });

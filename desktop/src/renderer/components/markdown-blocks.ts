@@ -479,6 +479,13 @@ interface DrawnGroup {
   labels: string[];
   /** The winning definitions of those labels that live OUTSIDE it, to put in front (withDefinitions). */
   defs: string;
+  /**
+   * Set on the LAST group when it ends in a top-level code fence that is still open:
+   * where in `source` that fence's opening line starts. Lets a bubble that mounted
+   * mid-reply (switching back to a chat, a torn-off window, a chat that was hidden)
+   * still draw a long fence in chunks, though text came before it in the same group.
+   */
+  fenceAt?: number;
 }
 
 /** Link definitions that won (first of each label), indexed by labelKey. */
@@ -709,7 +716,17 @@ function trimTrailingBlank(text: string): string {
 
 const groupOf = (pieces: Piece[], last: boolean): DrawnGroup => {
   const source = pieces.length === 1 ? pieces[0].text : pieces.map((p) => p.text).join('');
+  // WHY only the last group, and from the splitter's own `fenceBody`: it is the one place that
+  // has already decided (by parsing) that the message ends in a TOP-LEVEL open fence — scanning
+  // the text for a backtick line cannot tell that from one inside a quote, a list or another fence.
+  const tail = pieces[pieces.length - 1];
+  let fenceAt: number | undefined;
+  if (last && tail.fenceBody !== undefined) {
+    const before = source.length - tail.text.length;
+    fenceAt = before + lineStart(tail.text, tail.fenceBody - 1);
+  }
   return {
+    ...(fenceAt !== undefined ? { fenceAt } : {}),
     key: pieces[0].start,
     source,
     draw: last ? source : trimTrailingBlank(source),
@@ -801,6 +818,8 @@ function planStream(blocks: MarkdownBlocks, floor: number, settledPiecesIn: numb
 export const OPEN_FENCE_CHUNK_LINES = 20;
 
 export interface OpenFenceSplit {
+  /** Everything before the fence in the same piece of text (empty when the fence starts it). */
+  prefix: string;
   /** The fence's opening line, with its line ending — hand it to every chunk so each reads as the same language. */
   opening: string;
   /** The code lines that are final, in whole chunks of OPEN_FENCE_CHUNK_LINES; each line ends with "\n". */
@@ -826,9 +845,10 @@ export interface OpenFenceSplit {
  * is always at least one chunk long (20-39 lines) so a line is coloured with plenty
  * of context before it is frozen.
  */
-export function splitOpenFence(source: string): OpenFenceSplit | null {
+export function splitOpenFence(whole: string, fenceAt = 0): OpenFenceSplit | null {
+  const source = whole.slice(fenceAt);
   const open = /^(`{3,}|~{3,})([^\n]*)\n/.exec(source);
-  if (!open || source.includes('\r')) return null;
+  if (!open || whole.includes('\r')) return null;
   // A backtick fence's info string may not hold a backtick (then it is not a fence).
   if (open[1][0] === '`' && open[2].includes('`')) return null;
   // The reference block is drawn by its own component from the whole body.
@@ -843,7 +863,7 @@ export function splitOpenFence(source: string): OpenFenceSplit | null {
   if (frozenLines === 0) return null;
   let end = openingLen;
   for (let i = 0; i < frozenLines; i++) end = source.indexOf('\n', end) + 1;
-  return { opening: open[0], frozen: source.slice(openingLen, end), tail: source.slice(end) };
+  return { prefix: whole.slice(0, fenceAt), opening: open[0], frozen: source.slice(openingLen, end), tail: source.slice(end) };
 }
 
 /** The frozen head cut into its chunks of OPEN_FENCE_CHUNK_LINES lines (each line ends with "\n"). */

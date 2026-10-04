@@ -448,7 +448,7 @@ const mdComponents = {
         </pre>
         {/* A fence still being typed draws its finished head separately (FrozenFence),
             so Copy takes the head plus the tail drawn here. */}
-        <FenceCopyButton tailText={codeText} />
+        <FenceCopyButton tailText={codeText} line={node?.position?.start.line} />
       </div>
     );
   },
@@ -465,7 +465,7 @@ const mdComponents = {
     }
     return (
       <code className={className} {...props}>
-        <FrozenFenceHead />
+        <FrozenFenceHead line={node?.position?.start.line} />
         {children}
       </code>
     );
@@ -520,6 +520,8 @@ const mdComponents = {
  * normal block draws exactly as before.
  */
 interface FrozenFence {
+  /** Line (1-based) of the document react-markdown is drawing where the open fence starts: the head belongs to THAT code block only. */
+  line: number;
   /** Every frozen line, for the Copy button. */
   text: string;
   /** The same lines drawn once each, as the children that come first inside <code>. */
@@ -528,13 +530,15 @@ interface FrozenFence {
 const FrozenFenceContext = createContext<FrozenFence | null>(null);
 
 /** The finished lines that come first inside a still-open fence's <code> (nothing elsewhere). */
-function FrozenFenceHead() {
-  return <>{useContext(FrozenFenceContext)?.node}</>;
+function FrozenFenceHead({ line }: { line: number | undefined }) {
+  const frozen = useContext(FrozenFenceContext);
+  return <>{frozen && frozen.line === line ? frozen.node : null}</>;
 }
 
 /** Copy for a code block: any finished head plus the text react-markdown drew. Nothing when the block is empty. */
-function FenceCopyButton({ tailText }: { tailText: string }) {
-  const text = (useContext(FrozenFenceContext)?.text ?? '') + tailText;
+function FenceCopyButton({ tailText, line }: { tailText: string; line: number | undefined }) {
+  const frozen = useContext(FrozenFenceContext);
+  const text = (frozen && frozen.line === line ? frozen.text : '') + tailText;
   return text ? <CopyButton text={text} /> : null;
 }
 
@@ -616,10 +620,12 @@ interface Props {
  * highlighted and reconciled exactly once instead of once per streamed word.
  * Every prop is a string or module-level/memoised, so the comparison holds.
  */
-const MarkdownChunk = React.memo(function MarkdownChunk({ source, defs, live, rehypePlugins, components }: {
+const MarkdownChunk = React.memo(function MarkdownChunk({ source, defs, live, fenceAt, rehypePlugins, components }: {
   source: string;
   /** The reply is still streaming — the only time a long open fence may be drawn in chunks. */
   live: boolean;
+  /** Where an open top-level fence starts in `source` when text comes before it (see DrawnGroup.fenceAt). */
+  fenceAt?: number;
   /** The message's link definitions, when this piece could use them (see withDefinitions). */
   defs: string;
   rehypePlugins: PluggableList;
@@ -631,20 +637,24 @@ const MarkdownChunk = React.memo(function MarkdownChunk({ source, defs, live, re
   // WHY gated on `live`: chunks are coloured one at a time, which is only right
   // until the reply ends. A reply that stops with its fence still open (Stop, an
   // error, a truncated or old message) must draw as one block, like any other.
-  const split = defs || !live ? null : splitOpenFence(source);
+  const split = defs || !live ? null : splitOpenFence(source, fenceAt);
   const frozenText = split?.frozen ?? '';
   const opening = split?.opening ?? '';
+  const prefix = split?.prefix ?? '';
+  // The fence's line in the document drawn below (1-based): how its code block is told apart from any other.
+  const line = prefix.split('\n').length;
   // WHY memoised on the head's TEXT: the head only ever grows by whole chunks, so
   // between those moments this is the same value and every chunk below is skipped.
   const frozen = useMemo<FrozenFence | null>(() => {
     if (!frozenText) return null;
     return {
+      line,
       text: frozenText,
       node: fenceChunks(frozenText).map((chunk, i) => (
         <FrozenFenceChunk key={i} source={opening + chunk} rehypePlugins={rehypePlugins} components={components} />
       )),
     };
-  }, [frozenText, opening, rehypePlugins, components]);
+  }, [frozenText, opening, line, rehypePlugins, components]);
 
   const markdown = (
     <ReactMarkdown
@@ -652,7 +662,7 @@ const MarkdownChunk = React.memo(function MarkdownChunk({ source, defs, live, re
       rehypePlugins={rehypePlugins}
       components={components}
     >
-      {split ? opening + split.tail : withDefinitions(source, defs)}
+      {split ? prefix + opening + split.tail : withDefinitions(source, defs)}
     </ReactMarkdown>
   );
   // WHY the Provider is ALWAYS the root (null when there is no head): swapping the
@@ -783,6 +793,7 @@ export default React.memo(function MarkdownContent({ content, sessionId, preview
                   source={g.draw}
                   defs={g.defs}
                   live={live}
+                  fenceAt={g.fenceAt}
                   rehypePlugins={rehypePlugins}
                   components={components}
                 />
