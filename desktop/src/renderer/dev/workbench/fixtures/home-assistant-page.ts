@@ -91,11 +91,10 @@ function homeAssistantPageHtml(): string {
 <style>${HOME_ASSISTANT_PAGE_CSS}</style></head>
 <body>
 <div class="yc-page yc-stack" id="root">
-  <div class="yc-row yc-row--between">
-    <div><div class="yc-eyebrow">Home Assistant</div><h1>Home</h1></div>
-    <div class="bar" id="bar"></div>
-  </div>
-  <div id="chips"></div>
+  <!-- No page title: the app's own bar already names the page, so the
+       pills sit at the very top with Edit and the gear on their right
+       (round 4 note: "could we remove and push the pills up?"). -->
+  <div class="toprow"><div id="chips"></div><div class="bar" id="bar"></div></div>
   <div id="banner" class="banner" hidden></div>
   <div id="view"></div>
   <div id="favs"></div>

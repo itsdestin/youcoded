@@ -296,6 +296,8 @@ export const HOME_ASSISTANT_PAGE_CSS = `
   .key:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
   /* ── Round 4: folding lights, Edit mode, Everything off ─────────────── */
+  .toprow { display: flex; align-items: center; gap: 12px; }
+  .toprow > #chips { flex: 1; min-width: 0; }
   .bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
   .confirm { display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 12px; border-radius: 9999px; border: 1px solid var(--edge); background: var(--inset); font-size: 13px; }
   /* A room's lights: one card whose header IS the All row, with each light
