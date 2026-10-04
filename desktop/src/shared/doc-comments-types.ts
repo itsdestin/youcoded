@@ -163,5 +163,7 @@ export type PendingMutationResult =
   // T9b only needs to be ready to forward whatever it gets, never invent the
   // shape itself). Optional and additive: today those functions still return
   // a bare `{ok:true}`, so this field is simply absent until that lands.
-  | { ok: true; comments?: PersistedComment[]; id?: string; reply?: CommentReply }
+  // `queued` (finish plan Task 6): the file is open in Office and its editor could not take the
+  // change yet; it is kept and made as soon as the editor can (desktop live-comments.ts).
+  | { ok: true; comments?: PersistedComment[]; id?: string; reply?: CommentReply; queued?: true }
   | { ok: false; error: string; features?: string[] };

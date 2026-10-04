@@ -535,6 +535,28 @@ describe('docx/xlsx target — the pending-mutation queue client', () => {
     expect(res.result.content[0].text).toContain('Reply w-1-r2 added');
   }, 15000);
 
+  it('a change the app kept for an Office editor that is not ready yet is told to the assistant as queued', async () => {
+    const client = start(root, { [DOC_COMMENTS_MCP_POLL_TIMEOUT_ENV]: '5000' });
+    await fs.promises.writeFile(path.join(root, 'report.docx'), 'stands in for an open document');
+    const callPromise = client.callTool('ResolveComment', { path: 'report.docx', commentId: 'w-1' }, 8000);
+    const pendingDir = path.join(root, '.youcoded', 'comments', '.pending');
+    let requestFile: string | null = null;
+    for (let i = 0; i < 200 && !requestFile; i++) {
+      if (fs.existsSync(pendingDir)) {
+        const files = fs.readdirSync(pendingDir).filter((f) => f.endsWith('.json') && !f.endsWith('.result.json'));
+        if (files.length) requestFile = path.join(pendingDir, files[0]);
+      }
+      if (!requestFile) await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(requestFile).not.toBeNull();
+    const id = path.basename(requestFile!, '.json');
+    fs.renameSync(requestFile!, path.join(pendingDir, `${id}.claimed`));
+    fs.writeFileSync(path.join(pendingDir, `${id}.result.json`), JSON.stringify({ ok: true, queued: true }));
+    const res = await callPromise;
+    expect(res.result.isError).toBe(false);
+    expect(res.result.content[0].text).toBe("report.docx is open in Office and its editor isn't ready yet. The change is queued and will be made as soon as it is.");
+  }, 15000);
+
   it('a Word/Excel mutation request carries `path`, `format` and the operation-specific fields', async () => {
     const client = start(root, { [DOC_COMMENTS_MCP_POLL_TIMEOUT_ENV]: '5000' });
     const docPath = 'report.docx';

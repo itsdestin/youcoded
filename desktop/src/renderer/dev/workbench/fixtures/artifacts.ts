@@ -70,6 +70,18 @@ const BY_PROJECT: Record<string, ArtifactRecord[]> = {
       tags: [],
     },
     {
+      // Office (design stage): a Word file to preview and then edit in place.
+      id: 'a-sent-plan',
+      path: 'Garden plan.docx',
+      kind: 'external',
+      absolutePath: '/home/you/Projects/community-garden/Garden plan.docx',
+      lastModified: T,
+      status: 'active',
+      versions: [version('wb-1', 'read', T)],
+      comments: [],
+      tags: [],
+    },
+    {
       // No preview for this type — exercises the letter-glyph fallback tile.
       id: 'a-sent-pdf',
       path: 'scroll-perf-report.pdf',

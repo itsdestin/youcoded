@@ -1,0 +1,827 @@
+import { constants as fsc, promises as fsp } from 'node:fs';
+import { createHash } from 'node:crypto';
+import path from 'node:path';
+import { EDITOR_BIN_MAX_BYTES, OFFICE_MAX_BYTES } from '../../shared/office-types';
+import { renameReplacing } from '../artifacts/cas-write';
+import { noteOwnWrite } from '../artifacts/project-watcher';
+import { authorizeArtifactWrite } from '../artifacts/write-authorization';
+import { log } from '../logger';
+import { acceptHeldRecovery, beforeBinReplaced, beginRecovery, closeRecovery, discardHeldRecovery, discardRecovery, loadRecovery, markRecoverySaved, recordChanges, recoveryCandidates, recoveryRev } from './office-recovery';
+import type { createSessions, OfficeSession } from './office-sessions';
+import { convert as realConvert, exportFormatFor, exportParams, FORMAT, formatFor, pdfFontData as realPdfFontData, printParams, X2T_TIMEOUT_MS, X2tError } from './x2t';
+
+// The editor (Euro-Office's desktop bridge) asks its host for these by name. Exactly the set
+// the spike answered (main2.cjs); anything else is refused before it reaches a handler.
+export const OFFICE_COMMANDS: ReadonlySet<string> = new Set([
+  'js_log', 'get_current_path', 'set_window_title', 'set_document_modified', 'recent_files_state',
+  'set_recent_files_enabled', 'clear_recent_files', 'get_system_fonts', 'list_user_dictionaries', 'recovery_begin',
+  'recovery_end', 'recovery_mark_saved', 'recovery_candidates', 'recovery_load', 'recovery_discard', 'open_file',
+  'write_editor_bin', 'save_file', 'save_changes', 'convert_for_insert', 'force_close',
+  // WHY (finish plan Task 1): the add-on's relay turns the editor's dialog.open (Insert → Picture
+  // → From file) into this. office-ipc.ts answers it itself — it needs the asking window for the
+  // dialog — so it never reaches dispatch below; the answer is handles, never paths.
+  'open_dialog',
+  // WHY (finish plan Task 2): Save As, Download as and Export to PDF. The relay turns the editor's
+  // dialog.save into save_dialog; office-ipc.ts answers both itself (the dialog needs the asking
+  // window, and save_file_as names a handle only that dialog granted), then calls saveAs below.
+  'save_dialog', 'save_file_as',
+  // WHY (finish plan Task 3): File → Print, the toolbar's print, Ctrl+P. office-ipc.ts answers it
+  // itself (the print window and its fallback need the asking window); printPdf below makes the PDF.
+  'print_document',
+  // WHY (finish plan Task 8 fix round 1): the strip's answer to edits kept for a file that changed
+  // outside Office (office-recovery.ts offerRecovery). Sent by YouCoded's own page, never needed
+  // by the editor; main re-checks the session like any command, and both only touch its own file.
+  'recovery_accept_held', 'recovery_discard_held',
+  // WHY (finish plan Task 4): the add-on's bridge reports the editor's own settings as they change
+  // (Advanced settings, view toggles), so the next document starts with them. office-ipc.ts
+  // answers it itself (editor-settings.ts keeps only allowed settings keys; nothing else is kept).
+  'save_editor_settings',
+]);
+
+const MSG = {
+  tooLarge: "This file is larger than 200 MB, which Office can't open.",
+  protected: "Office can't open files in this protected folder.",
+  needsConfirm: "Office can't open settings files like this one yet.",
+  notFound: "Office can't find this file.",
+  unsupportedOpen: "Office can't open this kind of file.",
+  unsupportedSave: "Office can't save this kind of file.",
+  notADocument: "Office couldn't save this file.",
+  binTooLarge: 'This document has grown too large for Office to save.',
+  closing: 'Office is closing.',
+  restored: 'This file was restored from a kept version, so Office is reloading it.',
+  copyRefused: "Office can't save a copy there. Choose another folder.",
+  copyNothing: 'There are no changes to save a copy of yet.',
+  copyOpen: 'That file is open in Office. Close it or choose another name.',
+  // Save As onto the document itself (Task 2 fix round 1): the name is the problem, not the folder.
+  saveAsSelf: "That's the file you're editing. Choose another name.",
+  // Print (Task 3): x2t prints from the saved document, which carries no selection.
+  printSelection: "Office can't print only the selected part. Print the whole document, or choose its pages.",
+  refused: 'refused',
+} as const;
+
+// WHY a marker class (fix round 1): only messages written here, for a person to read, may
+// cross to the editor. Anything else — an fs error naming a path, x2t's stderr — is logged and
+// replaced at the command boundary (toEditorError below).
+class OfficeUserError extends Error {
+  /** A quiet error is expected (quit in progress) and not logged as a failure. */
+  quiet: boolean;
+  constructor(message: string, quiet = false) {
+    super(message);
+    this.quiet = quiet;
+  }
+}
+const userError = (m: string, quiet = false) => new OfficeUserError(m, quiet);
+
+// ── Quit (fix round 1) ──
+// WHY: once quit starts removing the session temp folders, a command must not start work
+// against them, and a save still translating when quit stops waiting must not replace the
+// user's file with whatever it manages to finish — it abandons its copy instead.
+let closing = false;
+
+/** Called by quitOfficeSessions() just before the temp folders are removed. */
+export function stopOfficeCommands(): void {
+  closing = true;
+}
+
+// ── Closing one document (fix round 1, Task 5 review) ──
+// WHY the same rule as quit, per document: closing a tab removes that document's temp folder,
+// and with it the Editor.bin a queued save still has to translate. So a close waits for the
+// document's queue first (capped, like quit), and a save still running past the cap gives up
+// before its rename instead of landing late.
+const closedSessions = new WeakSet<OfficeSession>();
+// One abort switch per document for its running translator (fix round 2): a close that stops
+// waiting kills that document's x2t, the way quit kills them all.
+const aborts = new WeakMap<OfficeSession, AbortController>();
+function abortOf(s: OfficeSession): AbortController {
+  let a = aborts.get(s);
+  if (!a) aborts.set(s, (a = new AbortController()));
+  return a;
+}
+const isClosing = (s: OfficeSession) => closing || closedSessions.has(s);
+
+// ── A restore replaced the file under an open editor (Task 7) ──
+// WHY: after a restore, the editor still holds the OLD document. Until it has reloaded the file
+// (its next open_file), any save it sends would translate that old content straight back over
+// the restored file. So a replaced session refuses write_editor_bin and save_file — quietly: the
+// renderer is already remounting the editor on office:changed — and open_file lifts it.
+const replaced = new WeakSet<OfficeSession>();
+
+/** WHY as long as x2t's own limit, plus a moment for the rename (final review, finding 4): a
+ *  document closed with its window (or its tab) used to stop waiting after 5 s and kill a slow
+ *  save that would have finished — losing the edits the renderer had already counted as saved.
+ *  Nothing on screen waits for this (the window or tab is already gone), so the save gets the
+ *  whole time x2t allows it. Quit does not wait this long: quitOfficeSessions stops every
+ *  translator after 5 s, which ends this wait too; a save it stopped leaves the file as it was,
+ *  and its edits stay in the document's recovery journal for the next open (Task 8). */
+export const CLOSE_DRAIN_MS = X2T_TIMEOUT_MS + 5_000;
+
+/**
+ * Wait (at most `capMs`) until every command already queued for this document has finished,
+ * then mark it closed: anything of it still queued or running is refused or abandoned from
+ * here on. office-sessions.ts calls this after taking the session out of get(), so nothing
+ * new can join the queue meanwhile, and before it removes the temp folder.
+ */
+export async function drainSession(s: OfficeSession, capMs = CLOSE_DRAIN_MS): Promise<void> {
+  const q = queues.get(s);
+  if (q) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([q.tail, new Promise<void>((r) => (timer = setTimeout(r, capMs)))]);
+    clearTimeout(timer);
+  }
+  closedSessions.add(s);
+  // Past the cap a translation may still be running: stop it, so it neither keeps writing
+  // into the folder about to be removed nor lingers. Harmless when nothing is running.
+  abortOf(s).abort();
+  // WHY after the drain (Task 8): its last save has landed (or not) by now, so the recovery
+  // journal knows whether the file holds every edit — then it goes; otherwise it stays for the
+  // next open of the file to offer back (a window closed before its last save).
+  await closeRecovery(s);
+}
+
+// ── One command at a time per document (review P1-2; design §3 "one save in flight") ──
+// WHY a queue: without it, write_editor_bin from a second save could replace Editor.bin while
+// x2t is still reading it for the first — the saved file would be a mix of two versions, or
+// unreadable. Every command for a session runs through its own promise chain.
+//
+// WHY a WeakMap here and not fields on OfficeSession: the queue is this module's private
+// bookkeeping; no other module should read or reset it, and a closed session's entry is
+// garbage-collected with the session itself.
+interface SessionQueue {
+  tail: Promise<unknown>;
+  /** A save that is queued but has not started yet — later saves join it (see save below). */
+  pendingSave: Promise<unknown> | null;
+}
+const queues = new WeakMap<OfficeSession, SessionQueue>();
+// Which of the editor's edits the session's Editor.bin holds (the recovery journal's revision when
+// its bytes arrived, Task 8): a save of that Editor.bin makes them no longer anything to recover.
+const binRev = new WeakMap<OfficeSession, number>();
+// Every queued command, across all sessions, until it settles — what awaitIdle() waits for.
+const inflight = new Set<Promise<unknown>>();
+
+function queueOf(s: OfficeSession): SessionQueue {
+  let q = queues.get(s);
+  if (!q) {
+    q = { tail: Promise.resolve(), pendingSave: null };
+    queues.set(s, q);
+  }
+  return q;
+}
+
+function enqueue<T>(s: OfficeSession, run: () => Promise<T>): Promise<T> {
+  const q = queueOf(s);
+  // WHY re-check closing when the command's turn comes: it may have been queued before quit
+  // started and would otherwise run against a temp folder that is being removed.
+  const guarded = () => (isClosing(s) ? Promise.reject(userError(MSG.closing, true)) : run());
+  // WHY run on both fulfil and reject: one failed command must not wedge the document's queue.
+  const p = q.tail.then(guarded, guarded);
+  q.tail = p.catch(() => undefined);
+  inflight.add(p);
+  const done = () => void inflight.delete(p);
+  p.then(done, done);
+  return p;
+}
+
+/**
+ * Resolves once every document's queued commands have finished. WHY (Task 3 review
+ * carry-over): at quit, cleanupOfficeSessions() removes every session's temp folder — and with
+ * it the Editor.bin a save in flight is still translating. Quit waits on this (capped) first.
+ */
+export async function awaitIdle(): Promise<void> {
+  // WHY a loop: a command that finishes can have been followed by another already queued.
+  while (inflight.size > 0) await Promise.allSettled([...inflight]);
+}
+
+// WHY map at the boundary (fix round 1; docs/error-message-standards.md): a specific message
+// only where the cause is known for certain, otherwise a general one that guesses nothing. The
+// raw error (with its paths and x2t's stderr) goes to the log, never to the editor frame.
+function toEditorError(e: unknown, cmd: string, filePath: string): Error {
+  if (e instanceof OfficeUserError) {
+    if (!e.quiet) log('WARN', 'Office', `${cmd} refused: ${e.message}`);
+    return new Error(e.message);
+  }
+  const err = e as NodeJS.ErrnoException;
+  log('ERROR', 'Office', `${cmd} failed`, {
+    error: String(e),
+    code: err?.code ?? null,
+    stderr: e instanceof X2tError ? e.stderr.slice(0, 4000) : undefined,
+  });
+  const verb = cmd === 'open_file' ? 'open' : cmd === 'save_file' || cmd === 'save_copy' || cmd === 'save_file_as' ? 'save' : null;
+  if (e instanceof X2tError) {
+    if (e.code === 'timeout') return new Error('This file took too long to convert, so Office stopped.');
+  } else if (verb) {
+    if (err?.code === 'EACCES' || err?.code === 'EPERM') return new Error(`Office doesn't have permission to ${verb} this file.`);
+    if (err?.code === 'ENOSPC') return new Error(`The disk is full, so Office couldn't ${verb} this file.`);
+    if (verb === 'save' && err?.code === 'EROFS') return new Error("This file is on a read-only disk, so Office couldn't save it.");
+    // WHY only when the error names the document itself (fix round 2): the file vanished
+    // between the checks and the work. An ENOENT about anything else (a temp folder) is not
+    // "can't find this file", and saying so would send the user looking for the wrong thing.
+    if (err?.code === 'ENOENT' && err.path === filePath) return new Error(MSG.notFound);
+  } else if (cmd === 'write_editor_bin') {
+    // Storing the edited document is the first half of a save, so the save wording fits.
+    if (err?.code === 'ENOSPC') return new Error("The disk is full, so Office couldn't save this file.");
+    // WHY general, not "no permission" (fix round 2): the failing write is Office's own working
+    // copy, not the person's file — a permission sentence would send them to the wrong place.
+    return new Error("Office couldn't save this file.");
+  }
+  // Print (Task 3): the PDF for the print window could not be made; the cause is in the log.
+  if (cmd === 'print_document') return new Error("Office couldn't get this document ready to print.");
+  return new Error(verb ? `Office couldn't ${verb} this file.` : "Office couldn't finish that.");
+}
+
+/** What "Save a copy…" can do for a document whose save failed (Task 6 fix round 1). */
+export interface OfficeCopyRunner {
+  /** Whether a copy can succeed: an edited Editor.bin exists and the last save did not fail
+   *  in the translation itself (a copy would go through that same translation). */
+  canCopy(token: string): boolean;
+  /** Translate the document's current Editor.bin into `target`. Never touches the original.
+   *  `bin` (base64): translate these editor bytes instead, never stored as the session's
+   *  Editor.bin — an editor kept after a restore (EditorFrame) must not feed any save. */
+  saveCopy(token: string, target: string, bin?: string): Promise<void>;
+  /** Re-translate into the last copy's target if Editor.bin (or `bin`) changed since. null: no copy yet. */
+  saveCopyAgain(token: string, bin?: string): Promise<{ target: string; unchanged: boolean } | null>;
+  /** Save As / Download as / Export to PDF (finish plan Task 2): translate the document's current
+   *  Editor.bin into `target`, in the format its name ends in. The document stays on its file. */
+  saveAs(token: string, target: string, options?: SaveAsOptions): Promise<void>;
+  /** Print (finish plan Task 3): translate the document's current Editor.bin into a PDF in a
+   *  private temp folder — never beside the person's file — for the print window. `json`: the
+   *  editor's print options (x2t.ts printParams). Call `dispose` when printing is over. */
+  printPdf(token: string, json?: unknown): Promise<{ file: string; dispose(): Promise<void> }>;
+}
+/** The editor's export choices for a Save As (bridge.js): its TXT/CSV dialog's `text`, and its
+ *  save options `json` (a spreadsheet PDF's print range). Checked by x2t.ts exportParams. */
+export interface SaveAsOptions { text?: unknown; json?: unknown }
+/** Work that must not interleave with the document's saves (a restore, Task 7). */
+export interface OfficeExclusiveRunner {
+  /** Put the document's current pictures aside for an editor that keeps its typing after a
+   *  restore (fix round 3). Call inside `exclusive` work, before any reload rebuilds them. */
+  keepMedia(token: string): Promise<void>;
+  /** That editor was let go (Close without saving, or its copy was saved): drop the set. */
+  releaseKeptMedia(token: string): Promise<void>;
+  /** Run `work` in the document's queue — after every save already asked for, before any asked
+   *  for later. When `replacesFile(result)` is true, the editor's saves are refused until it has
+   *  reloaded the file (open_file). */
+  exclusive<T>(token: string, work: () => Promise<T>, replacesFile: (result: T) => boolean): Promise<T>;
+}
+type OfficeRunner = ((token: string, cmd: string, args: Record<string, unknown>) => Promise<unknown>) & OfficeCopyRunner & OfficeExclusiveRunner;
+
+// Per document: whether the editor has handed over an edited Editor.bin, and whether the last
+// save failed while translating. WHY a WeakMap: the same private-bookkeeping reason as queues.
+// lastCopy: where the last copy went and a hash of the Editor.bin it was made from, so 'again'
+// can tell whether the editor's bytes changed since (fix round 3).
+const copyState = new WeakMap<OfficeSession, { edited: boolean; translateFailed: boolean; lastCopy?: { target: string; hash: string } }>();
+const copyStateOf = (s: OfficeSession) => {
+  let c = copyState.get(s);
+  if (!c) copyState.set(s, (c = { edited: false, translateFailed: false }));
+  return c;
+};
+// The pictures of the document an editor kept after a restore (fix round 3), per session: a copy
+// of <temp>/media taken at the restore, before a reloading editor replaces it. Inside the session
+// temp, so closing the document removes it too.
+const keptMedia = new WeakMap<OfficeSession, string>();
+let keptMediaSeq = 0;
+const hashFile = async (file: string) => createHash('sha256').update(await fsp.readFile(file)).digest('hex');
+
+export function createOfficeCommands(deps: {
+  root: string;
+  sessions: ReturnType<typeof createSessions>;
+  onSaved?(s: OfficeSession, beforeBytes: Buffer | null): Promise<void>;
+  onOpened?(s: OfficeSession): Promise<void>;
+  /** Whether onSaved will keep a version this time; the file as it was is read only then. */
+  wantsBefore?(s: OfficeSession): boolean;
+  /** Test seam: swap the translator (a slow or failing fake). Production uses x2t. */
+  convert?: typeof realConvert;
+  /** Test seam: where a PDF's font list comes from. Production has x2t make it (x2t.ts). */
+  pdfFontData?: typeof realPdfFontData;
+  /** Test seam: a small limit, so the size refusal is testable without a 1 GB string. */
+  editorBinMaxBytes?: number;
+}): OfficeRunner {
+  const convert = deps.convert ?? realConvert;
+  // WHY a fake font list alongside a fake translator: a test's stand-in x2t must never cause the
+  // real one to run just to make PDF font data it would ignore.
+  const pdfFontData = deps.pdfFontData ?? (deps.convert ? async () => '' : realPdfFontData);
+  const binMax = deps.editorBinMaxBytes ?? EDITOR_BIN_MAX_BYTES;
+  const editorBin = (s: OfficeSession) => path.join(s.temp, 'Editor.bin');
+  // WHY x2t's job folders go in the instance temp base and not the session's own temp: the
+  // session temp is served to the editor as office://<token>/asc/docmedia/, and the unpacked
+  // document has no business being reachable there.
+  const jobsBase = (s: OfficeSession) => path.dirname(s.temp);
+
+  // WHY re-check on every open and save (and again just before a save's rename), not only when
+  // the tab opened: the file's folder can have changed since (a symlink swapped in), and the
+  // protected-folder rule is the boundary that keeps Office out of .git or credential files.
+  async function authorize(s: OfficeSession): Promise<void> {
+    const r = await authorizeArtifactWrite({ projectRoot: path.dirname(s.path), fullPath: s.path, mustStayInRoot: false });
+    if (r.ok) return;
+    if (r.error === 'protected-path') throw userError(MSG.protected);
+    // Settings-like files would need a confirm step first, which Office doesn't have yet; refuse.
+    if (r.error === 'needs-confirm') throw userError(MSG.needsConfirm);
+    throw userError(MSG.notFound);
+  }
+
+  async function openFile(s: OfficeSession): Promise<string> {
+    await authorize(s);
+    if (formatFor(s.path) === null) throw userError(MSG.unsupportedOpen);
+    const info = await fsp.stat(s.path).catch((e: NodeJS.ErrnoException) => {
+      if (e.code === 'ENOENT') throw userError(MSG.notFound);
+      throw e;
+    });
+    if (info.size > OFFICE_MAX_BYTES) throw userError(MSG.tooLarge);
+    // WHY check readability here: x2t reports an unreadable file only as a bare exit code;
+    // checking first gives a real EACCES, which the boundary turns into a permission message.
+    await fsp.access(s.path, fsc.R_OK);
+    // WHY clear first: x2t writes the document's pictures to a media/ folder beside its output
+    // (verified 2026-09-28), which is <session temp>/media — exactly what office:// serves as
+    // asc/docmedia/media/. A re-open must not keep a previous translation's pictures there.
+    await fsp.rm(path.join(s.temp, 'media'), { recursive: true, force: true });
+    await fsp.rm(editorBin(s), { force: true });
+    await convert(deps.root, s.path, editorBin(s), FORMAT.bin, jobsBase(s), abortOf(s).signal);
+    const b64 = (await fsp.readFile(editorBin(s))).toString('base64');
+    // The editor now holds the file as it is on disk (a restored one included): saves may resume.
+    replaced.delete(s);
+    if (deps.onOpened) {
+      // WHY caught: the file opened fine; a failure to keep its "opened" version (Task 7) must
+      // not stop the user from seeing it.
+      // WHY awaited here, inside the document's queue and before the reply (accepted cost): the
+      // "opened" copy must be written (whole, fsync'd) before any save of this document can run,
+      // or the first save could replace the file before its opened state was kept. So a first
+      // open waits for one full copy write.
+      await deps.onOpened(s).catch((e) => log('WARN', 'Office', 'onOpened failed', { error: String(e) }));
+    }
+    return b64;
+  }
+
+  async function writeEditorBin(s: OfficeSession, data: string, rev: number): Promise<string> {
+    // WHY write-then-rename even inside our own temp: a write cut off half-way must never leave
+    // a half Editor.bin that the next save would translate over the user's real file.
+    const tmp = `${editorBin(s)}.part`;
+    try {
+      await fsp.writeFile(tmp, Buffer.from(data, 'base64'));
+      // The Editor.bin about to be replaced is the recovery journal's starting point (Task 8).
+      await beforeBinReplaced(s);
+      await fsp.rename(tmp, editorBin(s));
+      binRev.set(s, rev);
+      copyStateOf(s).edited = true;
+    } catch (e) {
+      // The Editor.bin left behind is older than the editor's content now, so a copy of it
+      // would silently miss the latest edits — "Save a copy…" is not offered until one lands.
+      copyStateOf(s).edited = false;
+      // WHY (fix round 1): a leftover .part is up to 1 GB of the temp disk, for nothing.
+      await fsp.rm(tmp, { force: true }).catch(() => {});
+      throw e;
+    }
+    return 'ok';
+  }
+
+  // A crash-recovery open (recovery_load): what openFile does, but from the journal's starting
+  // point instead of the file — the editor then replays the edits the file never got.
+  async function recover(s: OfficeSession, id: unknown): Promise<unknown> {
+    await authorize(s);
+    const r = await loadRecovery(s, id, binMax);
+    // Nothing to recover after all (discarded meanwhile, or unreadable): bridge.js opens the file.
+    if (!r) throw userError(MSG.refused, true);
+    replaced.delete(s);
+    // The file as it is now is kept as "When you opened it" (Versions), as on any open — so when
+    // it changed outside Office since, the recovered edits never cost that version.
+    if (deps.onOpened) await deps.onOpened(s).catch((e) => log('WARN', 'Office', 'onOpened failed', { error: String(e) }));
+    return r;
+  }
+
+  // WHY tmp + rename (same as artifacts:save): the user's file is replaced in one step, so a
+  // crash, a full disk or a failed translation mid-save never leaves half a file. The tmp sits
+  // beside the user's file — not in the temp base — so it is on the same disk (rename is atomic
+  // only within one) and quit's temp cleanup cannot touch it.
+  async function saveFile(s: OfficeSession): Promise<string> {
+    await authorize(s);
+    const fmt = formatFor(s.path);
+    if (fmt === null) throw userError(MSG.unsupportedSave);
+    const dir = path.dirname(s.path);
+    // WHY stat first (fix round 1): the saved file must keep the original's permissions — a
+    // private 0600 file must not come back world-readable from the tmp's default mode.
+    const orig = await fsp.stat(s.path).catch((e: NodeJS.ErrnoException) => {
+      if (e.code === 'ENOENT') return null;
+      throw e;
+    });
+    // WHY: a read-only file stays read-only — Office reports it instead of replacing it anyway.
+    if (orig) await fsp.access(s.path, fsc.W_OK);
+    const base = path.basename(s.path);
+    await sweepStaleSaveDirs(dir, base);
+    // WHY only when someone will use it: the previous bytes are for Task 7's version history;
+    // reading up to 200 MB on every autosave for nobody would be pure waste.
+    let before: Buffer | null = null;
+    if (deps.onSaved && (deps.wantsBefore?.(s) ?? true)) {
+      before = await fsp.readFile(s.path).catch((e: NodeJS.ErrnoException) => {
+        if (e.code === 'ENOENT') return null;
+        throw e;
+      });
+    }
+    // WHY a private folder (fix round 2): x2t creates its output with default permissions, so
+    // while it translates a 0600 file, a plain tmp beside it would be readable by other
+    // accounts. mkdtemp makes the folder 0700 — nobody else can enter it — and it sits beside
+    // the file, on the same disk, so the final rename stays one atomic step. The leading dot
+    // keeps it out of file lists and the project watcher.
+    const priv = await fsp.mkdtemp(path.join(dir, `.${base}${SAVE_DIR_MARK}`));
+    const tmp = path.join(priv, base);
+    try {
+      try {
+        await convert(deps.root, editorBin(s), tmp, fmt, jobsBase(s), abortOf(s).signal);
+        copyStateOf(s).translateFailed = false;
+      } catch (e) {
+        // Remembered for "Save a copy…": a copy goes through this same translation, so after
+        // a translation failure it cannot succeed and is not offered.
+        copyStateOf(s).translateFailed = true;
+        throw e;
+      }
+      await finishCopy(tmp, orig);
+      // WHY again, right before the rename (fix round 1): the translation can take many seconds,
+      // and the folder may have become protected, or a link swapped in, meanwhile.
+      await authorize(s);
+      // WHY here (fix round 1): quit stopped waiting while this save translated — its temp
+      // folder is going away, so the only safe move is to keep the user's file as it was.
+      // ...and the same when this one document was closed and its close stopped waiting.
+      if (isClosing(s)) throw userError(MSG.closing, true);
+      noteOwnWrite(s.path);
+      // WHY the abort check (fix round 2): on Windows a busy rename is retried for a moment;
+      // if quit gives up on this save meanwhile, it must stop rather than land late.
+      await renameReplacing(tmp, s.path, process.platform, () => isClosing(s));
+      // The file now holds every edit the translated Editor.bin did: nothing of them to recover.
+      markRecoverySaved(s, binRev.get(s) ?? 0);
+    } catch (e) {
+      if (isClosing(s)) throw userError(MSG.closing, true);
+      throw e;
+    } finally {
+      // Every path — success (the folder is then empty), failure, or abandoned at quit.
+      await fsp.rm(priv, { recursive: true, force: true }).catch(() => {});
+    }
+    if (deps.onSaved) {
+      // WHY caught: the file IS saved at this point; failing to keep a version must not make
+      // the editor report the save itself as failed (it would retry and save again).
+      // WHY awaited inside the queue, before the reply (accepted cost): the kept copy of the
+      // previous state must land before the next save replaces the file again. So a save on
+      // which a version is due (at most one per 10 minutes) waits for one full copy write.
+      await deps.onSaved(s, before).catch((e) => log('WARN', 'Office', 'onSaved failed', { error: String(e) }));
+    }
+    return 'ok';
+  }
+
+  // WHY collapse: autosave fires every few seconds, and a slow translation (a big workbook
+  // takes seconds) lets several save_file calls pile up behind it. They would all translate
+  // the same newest Editor.bin, so every save queued back to back joins the one not yet
+  // started. A save that is already RUNNING is never joined — it may have read an older
+  // Editor.bin. A write_editor_bin in between ends the run (enqueueOther below), so a newer
+  // Editor.bin always gets its own save after it.
+  function save(s: OfficeSession): Promise<unknown> {
+    const q = queueOf(s);
+    if (q.pendingSave) return q.pendingSave;
+    const p: Promise<unknown> = enqueue(s, () => {
+      if (q.pendingSave === p) q.pendingSave = null;
+      // Checked when its turn comes, not when asked: a save queued BEFORE a restore ran before it
+      // (the restore keeps its result as 'before-restore'); one queued after must not land.
+      if (replaced.has(s)) return Promise.reject(userError(MSG.restored, true));
+      return saveFile(s);
+    });
+    q.pendingSave = p;
+    return p;
+  }
+
+  function enqueueOther<T>(s: OfficeSession, run: () => Promise<T>): Promise<T> {
+    queueOf(s).pendingSave = null;
+    return enqueue(s, run);
+  }
+
+  function dispatch(s: OfficeSession, cmd: string, args: Record<string, unknown>): Promise<unknown> {
+    switch (cmd) {
+      case 'open_file':
+        return enqueueOther(s, () => openFile(s));
+      case 'write_editor_bin': {
+        const data = args.data;
+        if (typeof data !== 'string') throw userError(MSG.refused);
+        // WHY checked on the string's length, before decoding (review P1-3): decoding a huge
+        // string would allocate the whole buffer first. base64 decodes to 3/4 of its length.
+        if ((data.length * 3) / 4 > binMax) throw userError(MSG.binTooLarge);
+        // Which edits these bytes hold: every batch received before them (Task 8). Taken now, not
+        // when the queue reaches it, because the editor keeps sending batches meanwhile.
+        const rev = recoveryRev(s);
+        // Refused while replaced too: the old document's bytes must not become the Editor.bin a
+        // reloaded editor of this session would later save. (An editor that keeps typing after a
+        // restore hands its bytes to "Save a copy…" directly — saveCopy's `bin` — never here.)
+        return enqueueOther(s, () => (replaced.has(s) ? Promise.reject(userError(MSG.restored, true)) : writeEditorBin(s, data, rev)));
+      }
+      case 'save_file':
+        return save(s);
+      // ── Crash recovery (Task 8; office-recovery.ts) ──
+      // WHY not a save (Task 6 fix round 1): save_changes is sdkjs's change log — a batch of edits,
+      // no document bytes — sent as the person types and again at the start of every save. It is
+      // kept in the document's recovery journal, outside the save queue: a journal entry must never
+      // wait behind a slow translation, or a crash meanwhile would lose it.
+      case 'save_changes': {
+        const changes = args.changes;
+        const d = args.deleteIndex ?? null;
+        if (!Array.isArray(changes) || !changes.every((c) => typeof c === 'string') || (d !== null && !Number.isInteger(d))) throw userError(MSG.refused);
+        if (changes.reduce((n: number, c: string) => n + c.length, 0) > binMax) throw userError(MSG.refused);
+        recordChanges(s, changes, d as number | null);
+        return Promise.resolve('ok');
+      }
+      case 'recovery_begin':
+        beginRecovery(s, args.docType);
+        return Promise.resolve(null);
+      case 'recovery_candidates':
+        return recoveryCandidates(s);
+      case 'recovery_discard':
+        return discardRecovery(s).then(() => null);
+      case 'recovery_accept_held':
+        return acceptHeldRecovery(s);
+      case 'recovery_discard_held':
+        return discardHeldRecovery(s.path).then(() => null);
+      // In the queue, like open_file: it puts the recovered starting point into the session's temp.
+      case 'recovery_load':
+        return enqueueOther(s, () => recover(s, args.id));
+    }
+    return enqueueOther(s, async () => {
+      switch (cmd) {
+        case 'js_log': {
+          const msg = String(args.msg ?? '');
+          if (/error|fail/i.test(msg)) log('WARN', 'Office', `editor: ${msg.slice(0, 300)}`);
+          return null;
+        }
+        case 'get_current_path':
+          // WHY only the name (fix round 1): the editor never needs the folder — bridge.js uses
+          // this as "the document has a name" (not a Save As), for its extension in the Save As
+          // filters, and as the file to reopen, which open_file ignores anyway (it always opens
+          // the session's own file). A full path would tell the frame where the file lives.
+          return path.basename(s.path);
+        // WHY only acknowledged: the renderer tracks "changed since the last save" itself
+        // (EditorFrame's relay sees this same command); main never needed its own copy.
+        case 'set_document_modified':
+          return null;
+        case 'recent_files_state':
+          return { enabled: false, files: [] };
+        case 'get_system_fonts':
+          return '';
+        case 'list_user_dictionaries':
+          return { folders: [], refused: [] };
+        // The host owns closing the tab and titling the window, and inserting another file
+        // (convert_for_insert) is a follow-up outside this plan. recovery_mark_saved and
+        // recovery_end: main marks saves itself (saveFile), from the bytes each one translated.
+        default:
+          return null;
+      }
+    });
+  }
+
+  // "Save a copy…" (fix round 1, the owner's decision on a save that keeps failing): the same
+  // safe path as a save — a private folder beside the target, a check that the output is a real
+  // document, one rename — but into a new file the person chose. The original is never touched.
+  // WHY a private file for handed-in bytes (fix round 2): an editor kept after a restore shares
+  // this session (and its Editor.bin) with any other editor of the same file in the window; its
+  // old content must reach only the copy, never the Editor.bin the other editor's save translates.
+  async function withBin<T>(s: OfficeSession, bin: string | undefined, work: (file: string) => Promise<T>): Promise<T> {
+    if (bin === undefined) return work(editorBin(s));
+    if ((bin.length * 3) / 4 > binMax) throw userError(MSG.binTooLarge);
+    const dir = await fsp.mkdtemp(path.join(jobsBase(s), 'copy-'));
+    try {
+      const file = path.join(dir, 'Editor.bin');
+      await fsp.writeFile(file, Buffer.from(bin, 'base64'));
+      // WHY media beside it (fix round 3): x2t finds a document's pictures in media/ next to the
+      // Editor.bin it translates. The kept editor's pictures are the set put aside at the restore
+      // (keepMedia) — the reloaded editor has rebuilt <temp>/media for the restored file since.
+      const media = keptMedia.get(s) ?? path.join(s.temp, 'media');
+      await fsp.cp(media, path.join(dir, 'media'), { recursive: true }).catch((e: NodeJS.ErrnoException) => {
+        if (e.code !== 'ENOENT') throw e; // a document without pictures has no media folder
+      });
+      return await work(file);
+    } finally {
+      await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+
+  // `exporting` (finish plan Task 2): Save As / Download as / Export to PDF — any format the
+  // document's kind may be written as (x2t.ts exportFormatFor), not only its own, and no record
+  // for "Save a copy again": that one keeps writing to the copy the failed-save flow made.
+  async function saveCopyFile(s: OfficeSession, target: string, bin: string = editorBin(s), exporting: SaveAsOptions | false = false): Promise<void> {
+    const fmt = exporting ? exportFormatFor(s.path, target) : formatFor(target);
+    if (fmt === null || (!exporting && fmt !== formatFor(s.path))) throw userError(MSG.unsupportedSave);
+    const auth = await authorizeArtifactWrite({ projectRoot: path.dirname(target), fullPath: target, mustStayInRoot: false });
+    if (!auth.ok) throw userError(MSG.copyRefused);
+    // WHY refuse the original itself: this path exists precisely because saving there failed,
+    // and a copy must never be a back door around that file's read-only state.
+    const real = await fsp.realpath(s.path).catch(() => s.path);
+    if (auth.realPath === real) throw userError(exporting ? MSG.saveAsSelf : MSG.copyRefused);
+    // C2 (fix round 4): never write over a file open in Office — in any tab, in any window. Its
+    // own editor would later save over the copy (or the copy would pull the file from under it).
+    // inUse (fix round 5) also counts a file still draining its close, or about to open.
+    if (deps.sessions.inUse(auth.realPath)) throw userError(MSG.copyOpen);
+    const dir = path.dirname(target);
+    const base = path.basename(target);
+    const priv = await fsp.mkdtemp(path.join(dir, `.${base}${SAVE_DIR_MARK}`));
+    const tmp = path.join(priv, base);
+    try {
+      const hash = exporting ? '' : await hashFile(bin);
+      // WHY a font list for PDF only: x2t draws a PDF from real font files, which the bundled list
+      // does not name (a blank page — see pdfFontData); every other format keeps the bundled list.
+      const fonts = fmt === FORMAT.pdf ? await pdfFontData(deps.root, jobsBase(s)) : undefined;
+      // The editor's choices (a CSV's encoding and delimiter, a spreadsheet PDF's range), checked.
+      const params = exporting ? exportParams(fmt, path.extname(s.path).slice(1).toLowerCase(), exporting.text, exporting.json) : undefined;
+      await convert(deps.root, bin, tmp, fmt, jobsBase(s), abortOf(s).signal, { allFontsPath: fonts, params });
+      await finishCopy(tmp, null, path.extname(target).slice(1).toLowerCase());
+      if (!exporting) copyStateOf(s).lastCopy = { target, hash };
+      if (isClosing(s)) throw userError(MSG.closing, true);
+      // Again right before the rename (fix round 2), as a save does: the translation takes time,
+      // and the folder may have become protected, or a link swapped in, meanwhile.
+      const again = await authorizeArtifactWrite({ projectRoot: path.dirname(target), fullPath: target, mustStayInRoot: false });
+      if (!again.ok) throw userError(MSG.copyRefused);
+      if (again.realPath === real) throw userError(exporting ? MSG.saveAsSelf : MSG.copyRefused);
+      if (deps.sessions.inUse(again.realPath)) throw userError(MSG.copyOpen);
+      noteOwnWrite(target);
+      await renameReplacing(tmp, target, process.platform, () => isClosing(s));
+    } finally {
+      await fsp.rm(priv, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+
+  const run = async (token: string, cmd: string, args: Record<string, unknown>) => {
+    if (!OFFICE_COMMANDS.has(cmd)) throw new Error(MSG.refused);
+    // WHY the session comes only from the token: the frame is sealed to its own document, and
+    // an editor naming some other path (args.path) must never reach any file but its own.
+    const s = deps.sessions.get(token);
+    if (!s) throw new Error(MSG.refused);
+    if (closing) throw new Error(MSG.closing);
+    try {
+      return await dispatch(s, cmd, args);
+    } catch (e) {
+      throw toEditorError(e, cmd, s.path);
+    }
+  };
+  return Object.assign(run, {
+    async keepMedia(token: string): Promise<void> {
+      const s = deps.sessions.get(token);
+      if (!s) return;
+      const prior = keptMedia.get(s);
+      const dest = path.join(s.temp, `media-kept-${++keptMediaSeq}`);
+      await fsp.cp(path.join(s.temp, 'media'), dest, { recursive: true }).catch(async (e: NodeJS.ErrnoException) => {
+        if (e.code !== 'ENOENT') throw e;
+        await fsp.mkdir(dest, { recursive: true }); // no pictures: an empty set, never the reloaded one's
+      });
+      keptMedia.set(s, dest);
+      if (prior) await fsp.rm(prior, { recursive: true, force: true }).catch(() => {});
+    },
+    async releaseKeptMedia(token: string): Promise<void> {
+      const s = deps.sessions.get(token);
+      const dir = s && keptMedia.get(s);
+      if (!s || !dir) return;
+      keptMedia.delete(s);
+      await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+    },
+    async exclusive<T>(token: string, work: () => Promise<T>, replacesFile: (result: T) => boolean): Promise<T> {
+      const s = deps.sessions.get(token);
+      if (!s) throw new Error(MSG.refused);
+      return enqueueOther(s, async () => {
+        const r = await work();
+        if (replacesFile(r)) replaced.add(s);
+        return r;
+      });
+    },
+    canCopy(token: string): boolean {
+      const s = deps.sessions.get(token);
+      if (!s) return false;
+      const c = copyStateOf(s);
+      return c.edited && !c.translateFailed;
+    },
+    async saveCopyAgain(token: string, bin?: string): Promise<{ target: string; unchanged: boolean } | null> {
+      const s = deps.sessions.get(token);
+      if (!s) throw new Error(MSG.refused);
+      const last = copyStateOf(s).lastCopy;
+      if (!last) return null;
+      // I3 (fix round 4): after a failed hand-over (or none at all) Editor.bin is stale — writing
+      // it into the copy again would present old content as current.
+      if (bin === undefined && !copyStateOf(s).edited) throw userError(MSG.copyNothing);
+      try {
+        return await enqueueOther(s, () => withBin(s, bin, async (file) => {
+          if ((await hashFile(file)) === last.hash) return { target: last.target, unchanged: true };
+          await saveCopyFile(s, last.target, file);
+          return { target: last.target, unchanged: false };
+        }));
+      } catch (e) {
+        throw toEditorError(e, 'save_copy', last.target);
+      }
+    },
+    async saveAs(token: string, target: string, options: SaveAsOptions = {}): Promise<void> {
+      const s = deps.sessions.get(token);
+      if (!s) throw new Error(MSG.refused);
+      if (closing) throw new Error(MSG.closing);
+      try {
+        // In the document's queue, right behind the write_editor_bin bridge.js sends first, so the
+        // copy holds exactly the edits the editor handed over. Refused while a restore replaced
+        // the file: the editor still holds the old document (see `replaced`).
+        await enqueueOther(s, () => (replaced.has(s) ? Promise.reject(userError(MSG.restored, true)) : saveCopyFile(s, target, editorBin(s), options)));
+      } catch (e) {
+        throw toEditorError(e, 'save_file_as', target);
+      }
+    },
+    async printPdf(token: string, json?: unknown): Promise<{ file: string; dispose(): Promise<void> }> {
+      const s = deps.sessions.get(token);
+      if (!s) throw new Error(MSG.refused);
+      if (closing) throw new Error(MSG.closing);
+      const params = printParams(path.extname(s.path).slice(1).toLowerCase(), json);
+      if (params === 'selection') throw new Error(MSG.printSelection);
+      try {
+        // WHY in the document's queue: right behind the write_editor_bin bridge.js's Print sends
+        // first, so the PDF holds exactly what is on screen. WHY only the translation: the print
+        // dialog can stay open for minutes, and the document's saves must not wait behind it.
+        return await enqueueOther(s, async () => {
+          if (replaced.has(s)) throw userError(MSG.restored, true);
+          // WHY the instance temp base (removed at quit), a private folder, and the document's name:
+          // the PDF is only for the print window, and its name is what the print job is called.
+          const dir = await fsp.mkdtemp(path.join(jobsBase(s), 'print-'));
+          const dispose = () => fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
+          try {
+            const file = path.join(dir, `${path.basename(s.path, path.extname(s.path))}.pdf`);
+            const fonts = await pdfFontData(deps.root, jobsBase(s));
+            await convert(deps.root, editorBin(s), file, FORMAT.pdf, jobsBase(s), abortOf(s).signal, { allFontsPath: fonts, params });
+            await finishCopy(file, null, 'pdf');
+            return { file, dispose };
+          } catch (e) {
+            await dispose();
+            throw e;
+          }
+        });
+      } catch (e) {
+        throw toEditorError(e, 'print_document', s.path);
+      }
+    },
+    async saveCopy(token: string, target: string, bin?: string): Promise<void> {
+      const s = deps.sessions.get(token);
+      if (!s) throw new Error(MSG.refused);
+      if (closing) throw new Error(MSG.closing);
+      if (bin === undefined && !copyStateOf(s).edited) throw new Error(MSG.copyNothing);
+      try {
+        // In the document's queue, so the copy reads an Editor.bin no write is replacing.
+        await enqueueOther(s, () => withBin(s, bin, (file) => saveCopyFile(s, target, file)));
+      } catch (e) {
+        throw toEditorError(e, 'save_copy', target);
+      }
+    },
+  });
+}
+
+// Private save folders are named `.<file><SAVE_DIR_MARK><random>` beside the file.
+// Exported for versions.ts (Task 7): a restore writes the file back through the same kind of folder.
+export const SAVE_DIR_MARK = '.office-save-';
+// Same rule as cas-write's stale-tmp sweep: an hour is far longer than any real save, so a
+// folder that old was left by a crash and a live save's folder is never touched.
+const STALE_SAVE_DIR_MS = 60 * 60 * 1000;
+
+// WHY (fix round 2): a crash mid-save leaves its private folder, holding a copy of the
+// document, beside the user's file. Best-effort, like sweepStaleTmp: it must never fail a save.
+async function sweepStaleSaveDirs(dir: string, base: string): Promise<void> {
+  const prefix = `.${base}${SAVE_DIR_MARK}`;
+  try {
+    const now = Date.now();
+    for (const name of await fsp.readdir(dir)) {
+      if (!name.startsWith(prefix)) continue;
+      const full = path.join(dir, name);
+      try {
+        const st = await fsp.lstat(full);
+        if (st.isDirectory() && now - st.mtimeMs > STALE_SAVE_DIR_MS) await fsp.rm(full, { recursive: true, force: true });
+      } catch { /* vanished or unreadable — nothing to sweep */ }
+    }
+  } catch { /* folder unreadable — skip the sweep */ }
+}
+
+// WHY: docx, xlsx and pptx are all zip files, which start with "PK\x03\x04". A translation
+// that wrote something else must not replace the user's working document. The same handle
+// then carries the original's permissions over and flushes the copy to disk.
+// Exported for versions.ts (Task 7): a restore must keep the file's mode and group exactly as a save does.
+// `ext` (finish plan Task 2): what Save As wrote. The OpenDocument formats are zips too; a PDF
+// starts "%PDF", an RTF "{\rtf". Text and CSV have no signature and may be in any encoding the
+// person chose (windows-1252, UTF-16 — Task 2 fix round 1), so they must only be non-empty and
+// not some other kind of file under a .txt/.csv name (a zip or a PDF).
+const SIGNATURE: Record<string, string> = { pdf: '%PDF', rtf: '{\\rt' };
+export async function finishCopy(file: string, orig: { mode: number; uid: number; gid: number } | null, ext = 'zip'): Promise<void> {
+  const fh = await fsp.open(file, 'r+');
+  try {
+    if (ext === 'txt' || ext === 'csv') {
+      const head = Buffer.alloc(4);
+      const { bytesRead } = await fh.read(head, 0, 4, 0);
+      const sig = head.subarray(0, bytesRead).toString('latin1');
+      if (bytesRead === 0 || sig === 'PK\x03\x04' || sig === '%PDF') throw userError(MSG.notADocument);
+    } else {
+      const want = SIGNATURE[ext] ?? 'PK\x03\x04';
+      const head = Buffer.alloc(4);
+      const { bytesRead } = await fh.read(head, 0, 4, 0);
+      if (bytesRead < 4 || head.toString('latin1') !== want) throw userError(MSG.notADocument);
+    }
+    if (orig) {
+      await fh.chmod(orig.mode & 0o7777);
+      // WHY: the new copy belongs to us with our default group. Root can restore the original
+      // owner too; anyone else can at least restore the group when they belong to it (a shared
+      // group folder). Best-effort: failing here must not fail a save that is otherwise good.
+      const uid = process.getuid?.();
+      if (uid !== undefined) await fh.chown(uid === 0 ? orig.uid : uid, orig.gid).catch(() => {});
+    }
+    // WHY fsync before the rename: without it, a power cut just after the rename can leave the
+    // new name pointing at an empty file on some filesystems.
+    await fh.sync();
+  } finally {
+    await fh.close();
+  }
+}

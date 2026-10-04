@@ -133,7 +133,7 @@ describe('createUpdateInstaller download engine', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'update-installer-test-'));
   });
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3 });
   });
 
   it('downloads a file to update-cache, renaming .partial on completion', async () => {
@@ -255,7 +255,7 @@ describe('cleanupStaleDownloads', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'update-installer-cleanup-'));
   });
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3 });
   });
 
   it('creates the cacheDir if missing', () => {
@@ -293,7 +293,7 @@ describe('findCachedDownload', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'update-installer-cache-'));
   });
   afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3 });
   });
 
   it('returns null when no file matches the version', () => {
@@ -373,7 +373,7 @@ describe('findCachedDownload', () => {
 describe('launchInstaller', () => {
   let tmpDir: string;
   beforeEach(() => { tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'update-launch-test-')); });
-  afterEach(() => { fs.rmSync(tmpDir, { recursive: true, force: true }); });
+  afterEach(() => { fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3 }); });
 
   function fakeChild(overrides: Partial<{ exitCode: number | null; exitDelay: number; errorOnSpawn: boolean }> = {}) {
     const emitter: any = new EventEmitter();

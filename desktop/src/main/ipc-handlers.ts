@@ -4,6 +4,7 @@ import path from 'path';
 import os from 'os';
 import { resolveNoFolderCwd } from './no-folder';
 import { loadDefaultAppIcon, fitForMacDock } from './app-icon';
+import { requestRestart } from './app-restart';
 import { randomUUID } from 'crypto';
 import { CHATSEARCH_IPC } from './chatsearch-index/ipc-channels';
 import { buildClaudeCodeContext, readWholeContextFile } from './claude-code-context';
@@ -60,7 +61,7 @@ import { enginePrereqs } from './engine/rocm-prereqs';
 import type { EngineModel as EngineModelType } from '../shared/engine-types';
 import { ModelManager } from './models/model-manager';
 import type { DownloadProgress, ModelSettingsWrite } from '../shared/model-manager-types';
-import { installClaude } from './prerequisite-installer';
+import { installClaude, ensureNode } from './prerequisite-installer';
 import { firstRunStateDir, type FirstRunNativeDeps } from './first-run';
 import { clearSetupDownload, computeSetupDownloadStatus, readSetupDownload } from './first-run-local';
 import { detectEndpoints } from './models/endpoint-detectors';
@@ -743,10 +744,9 @@ export function registerIpcHandlers(
   });
 
   ipcMain.handle(IPC.APP_RESTART, () => {
-    // Generic restart channel — reused by any future setting that needs a
-    // restart to apply. relaunch() schedules the restart for after exit().
-    app.relaunch();
-    app.exit(0);
+    // Generic restart channel. WHY quit, not exit (fix round 6, I-B): exit() skipped before-quit, so
+    // open Office documents were never saved or asked about. See app-restart.ts.
+    requestRestart(() => app.quit());
   });
 
   // --- Theme marketplace ---
@@ -910,6 +910,17 @@ export function registerIpcHandlers(
     await adminCapabilityReady();
     checkWindow();
     const opts = resolveNoFolderCwd(rawOpts, app.getPath('userData'));
+    // WHY (2026-10-02): setup no longer installs Node for everyone, and Claude
+    // Code and Terminal sessions run through it (the PTY worker). Usually the
+    // Claude sign-in already installed it; this is the safety net for anyone
+    // who reaches one of these sessions another way. Native chats skip it.
+    if (opts.provider !== 'native') {
+      const node = await ensureNode();
+      if (!node.success) {
+        throw new Error(`Node.js is needed for this kind of session and couldn't be installed: ${node.error}`);
+      }
+      checkWindow();
+    }
     // Snapshot BEFORE spawn: a fallback page can otherwise include new Claude Code turns.
     const resumeBoundary = opts.provider === 'claude' && opts.resumeSessionId
       ? snapshotResumeBoundary(opts.cwd, opts.resumeSessionId) : null;
@@ -3788,6 +3799,10 @@ export function registerIpcHandlers(
   // own { success, error } is the answer; the cached "not-installed" is dropped
   // so the card's refresh reads the new state.
   ipcMain.handle(IPC.CLAUDE_CODE_INSTALL, async () => {
+    // WHY Node first (2026-10-02): setup no longer installs it for everyone,
+    // and Claude Code sessions cannot start without it.
+    const node = await ensureNode();
+    if (!node.success) return { success: false, error: `Node.js, which Claude Code needs, couldn't be installed: ${node.error}` };
     const result = await installClaude();
     claudeAccount.invalidate();
     return result;
@@ -3951,6 +3966,11 @@ export function registerIpcHandlers(
     // is not installed. Throws with the real reason, which reaches EngineCard's
     // FieldError beside the button — see session-manager.ts.
     const checked = prepareRunInTerminal(command);
+    // A Terminal session runs through Node (the PTY worker), which setup no
+    // longer installs for everyone (2026-10-02). A failure throws to the same
+    // FieldError beside the button.
+    const node = await ensureNode();
+    if (!node.success) throw new Error(`Node.js is needed to open a terminal and couldn't be installed: ${node.error}`);
     // WHY the folder comes from the calling window's own sessions: the button
     // lives in Settings, which has no folder of its own, and the project the
     // user is working in is whatever their live sessions are open on. The
@@ -5377,9 +5397,9 @@ export function registerIpcHandlers(
     deviceId: () => getMachineIdentity(app.getPath('userData'))?.id ?? null,
     localFallbackDir: () => app.getPath('userData'),
     noteOwnWrite,
-    // Phase 2: approvals and key POINTERS beside the model-provider keys in
-    // userData, never in a sync space — a key is machine-bound ciphertext.
-    connections: new PageConnectionsStore(app.getPath('userData'), secretsStore),
+    // Phase 2: approvals and key POINTERS beside the model-provider keys in userData, never a sync space (a key is machine-bound ciphertext).
+    // officeListed (WHY): the built-in Office page is listed, and pinnable, only where the add-on is installed (pages-store.ts).
+    connections: new PageConnectionsStore(app.getPath('userData'), secretsStore), officeListed: async () => (await import('./office/office-root')).officeAvailable(),
     // A FRESH reader per call, not a held instance: the fs-backed store caches
     // after its first load, so a long-lived one here would keep answering with
     // the token from before the person signed in or out.
