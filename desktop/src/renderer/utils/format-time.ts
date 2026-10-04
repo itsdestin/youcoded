@@ -8,10 +8,18 @@ export function formatBubbleTime(timestamp: number): string {
   // returns "Invalid Date".
   const d = new Date(timestamp);
   if (Number.isNaN(d.getTime())) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  bubbleTimeFormat ??= new Intl.DateTimeFormat([], { hour: 'numeric', minute: '2-digit' });
+  // WHY the offset check: an Intl formatter fixes the time zone when it is built, while toLocaleTimeString re-read it
+  // on every call, so a system zone change (travel, daylight-saving rule update, a laptop waking elsewhere) would
+  // otherwise keep the old zone until restart. getTimezoneOffset() is cheap; any change rebuilds the formatter.
+  const offset = d.getTimezoneOffset();
+  if (!bubbleTimeFormat || offset !== bubbleTimeOffset) {
+    bubbleTimeFormat = new Intl.DateTimeFormat([], { hour: 'numeric', minute: '2-digit' });
+    bubbleTimeOffset = offset;
+  }
   return bubbleTimeFormat.format(d);
 }
 let bubbleTimeFormat: Intl.DateTimeFormat | null = null;
+let bubbleTimeOffset = NaN;
 
 /**
  * Compact relative-time label ("just now", "5m ago", "3h ago", "2d ago", then

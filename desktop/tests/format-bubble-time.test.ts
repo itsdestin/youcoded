@@ -18,6 +18,21 @@ describe('formatBubbleTime', () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
+  it('follows a system time-zone change made while the app is running', () => {
+    const before = process.env.TZ;
+    const ms = 1_700_000_000_000;
+    try {
+      process.env.TZ = 'UTC';
+      const utc = formatBubbleTime(ms);
+      process.env.TZ = 'Asia/Tokyo';
+      const tokyo = formatBubbleTime(ms);
+      expect(tokyo).toBe(new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
+      expect(tokyo).not.toBe(utc);
+    } finally {
+      if (before === undefined) delete process.env.TZ; else process.env.TZ = before;
+    }
+  });
+
   it('does not throw on a bad timestamp', () => {
     expect(() => formatBubbleTime(NaN)).not.toThrow();
   });
