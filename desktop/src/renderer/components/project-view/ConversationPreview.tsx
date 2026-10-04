@@ -22,7 +22,6 @@ import SessionRenameDialog from '../SessionRenameDialog';
 import { Button, ErrorState } from '../ui';
 import { TagGlyph } from '../tags/glyphs';
 import { TagNoteEditor } from '../tags/TagNoteEditor';
-import { PRIORITY_TAG, PRIORITY_HINT } from '../tags/built-in-tags';
 import { SessionCardTags, SessionCardMeta, CompleteToggle } from '../SessionCardDetails';
 import { useResumeOptions, ResumeOptionsForm, type ResumeHandler } from '../ResumeOptions';
 import { usePreviewMeta } from '../../hooks/usePreviewMeta';
@@ -141,12 +140,8 @@ export function ConversationPreview({ session, onClose, onResume, defaultModel, 
               registry={registry}
               note={meta.note}
               onNote={(text) => void meta.saveNote(text)}
-              builtIns={[{
-                tag: PRIORITY_TAG,
-                hint: PRIORITY_HINT,
-                applied: !!row.flags?.priority,
-                onToggle: (next) => void meta.toggleFlag('priority', next),
-              }]}
+              // Pin to top — the Priority flag's face since pick-menus-2#PM2-3.
+              pin={{ pinned: !!row.flags?.priority, onPin: (next) => void meta.toggleFlag('priority', next) }}
             />
           )}
         </div>

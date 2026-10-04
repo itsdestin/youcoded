@@ -42,15 +42,12 @@ describe('approved custom popup shells', () => {
     expect(css).toContain('mask-composite: add;');
   });
 
-  it('keeps the compact Tags editor in its own shell and fades only while scrolling', () => {
+  // The Tags & note popup gave up its own shell (pick-menus-15, 2026-10-04): it is the
+  // shared Dialog now, so its header, ✕ and scroll come from there, not a private copy.
+  it('draws the Tags & note popup in the shared Dialog, not a custom shell', () => {
     const source = readSource(join(components, 'tags', 'SessionTagsChip.tsx'));
-    const css = readSource(join(components, 'tags', 'SessionTagsChip.css'));
-    expect(source).toContain('useScrollFade<HTMLDivElement>()');
-    expect(source).toContain('ref={scrollRef} data-tag-note-scroll className="px-4 py-3 overflow-y-auto"');
-    expect(source).toContain('data-tag-note-header className="flex items-center justify-between px-4 py-3"');
-    expect(source).toContain('text-base font-medium text-fg');
-    expect(css).toMatch(/\[data-tag-note-header\]::after\s*\{[^}]*left:\s*16px;[^}]*right:\s*16px;[^}]*var\(--edge\) 8%, var\(--edge\) 92%/);
-    expect(css).toMatch(/\[data-tag-note-scroll\]\[data-fade-bottom="true"\]\s*\{\s*--tag-fade-bottom:\s*42px;/);
-    expect(css).toContain('transparent 4%, transparent 96%');
+    expect(source).toContain('<Dialog screen="chat/tags"');
+    expect(source).not.toContain('SessionTagsChip.css');
+    expect(source).not.toContain('data-tag-note-scroll');
   });
 });

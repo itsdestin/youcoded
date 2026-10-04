@@ -3,11 +3,10 @@ import { useEscClose } from '../hooks/use-esc-close';
 import { triggerTip } from './guide/tips';
 import { useTagRegistry } from '../hooks/useTagRegistry';
 import { TagNoteEditor } from './tags/TagNoteEditor';
-import { PRIORITY_TAG, PRIORITY_HINT } from './tags/built-in-tags';
+import { PinIcon } from './tags/PinIcon';
 import { TagChip } from './tags/TagChip';
 import { TagGlyph, NotePageGlyph, PencilGlyph } from './tags/glyphs';
 import type { TagRecord } from '../../shared/tags';
-import { TagManagerPopup } from './tags/TagManagerPopup';
 import { Button, Dialog, SettingRow, Toggle } from './ui';
 import { META_UNSUPPORTED_FALLBACK, type SessionMetaResult } from '../../shared/types';
 import { plainMessage } from '../utils/ipc-error';
@@ -108,9 +107,6 @@ export default function CloseSessionPrompt({ open, sessionName, sessionId, onCan
   const [dontShowAgain, setDontShowAgain] = useState(false);
   const registry = useTagRegistry();
   const [tagIds, setTagIds] = useState<Set<string>>(new Set());
-  // Tag registry editing lives in its own surface now (it used to be a ✎ on
-  // each TagPicker row). Layer 3 because this prompt is itself a layer-2 Dialog.
-  const [manageOpen, setManageOpen] = useState(false);
   // The notes tip's moment: the first time this prompt shows (guide/tips.ts).
   useEffect(() => { if (open) triggerTip('notes'); }, [open]);
   // The tag/note EDITOR is collapsed by default (see the summary block below).
@@ -263,11 +259,13 @@ export default function CloseSessionPrompt({ open, sessionName, sessionId, onCan
                   the note quoted and clamped to two lines, and the editor as a
                   single well closed by a Save pill. */}
               {editing ? (
-                  // Priority as a built-in, as in the Resume Browser's tag sheet
-                  // and the in-session chip. Unlike those two this one is
-                  // DEFERRED: the dialog collects a result and the caller writes
-                  // it on confirm, so this toggles local state instead of
-                  // calling setFlag. Cancel must leave nothing behind.
+                  // Pin to top (the Priority flag), as in the in-session popup and
+                  // the Resume Browser's sheet. Unlike those this one is DEFERRED:
+                  // the dialog collects a result and the caller writes it on
+                  // confirm, so the pin toggles local state instead of calling
+                  // setFlag. Cancel must leave nothing behind. (Editing a tag
+                  // itself — rename, colour, delete — writes at once, as the
+                  // Manage tags popup it replaced did.)
                   //
                   // "Save" collapses back to the summary and writes NOTHING —
                   // the dialog's own button is what commits. Pinned in a test,
@@ -276,16 +274,10 @@ export default function CloseSessionPrompt({ open, sessionName, sessionId, onCan
                     appliedIds={tagIds}
                     onToggleTag={(id, next) => setTagIds((prev) => { const s = new Set(prev); if (next) s.add(id); else s.delete(id); return s; })}
                     registry={registry}
-                    onManageTags={() => setManageOpen(true)}
                     note={note}
                     onNote={setNote}
                     footer={{ label: 'Save', onClick: () => setEditing(false) }}
-                    builtIns={[{
-                      tag: PRIORITY_TAG,
-                      hint: PRIORITY_HINT,
-                      applied: sel.priority,
-                      onToggle: (next) => setSel((prev) => ({ ...prev, priority: next })),
-                    }]}
+                    pin={{ pinned: sel.priority, onPin: (next) => setSel((prev) => ({ ...prev, priority: next })) }}
                   />
                 ) : (
                   <button
@@ -306,7 +298,7 @@ export default function CloseSessionPrompt({ open, sessionName, sessionId, onCan
                     <span className="grid grid-cols-[16px_1fr] items-start gap-x-1.5 gap-y-1.5 pr-6">
                       <TagGlyph className="w-3 h-3 text-fg-muted mt-0.5" />
                       <span className="flex flex-wrap items-center gap-1 min-w-0">
-                        {sel.priority && <TagChip tag={PRIORITY_TAG} />}
+                        {sel.priority && <span className="flex items-center" role="img" aria-label="Pinned to top" title="Pinned to top"><PinIcon className="w-3 h-3 text-fg-2" /></span>}
                         {appliedTags.map((t) => <TagChip key={t.id} tag={t} />)}
                         {!sel.priority && appliedTags.length === 0 && (
                           <span className="text-2xs text-fg-muted">No tags</span>
@@ -367,7 +359,6 @@ export default function CloseSessionPrompt({ open, sessionName, sessionId, onCan
             </Button>
           </div>
       </Dialog>
-      <TagManagerPopup open={manageOpen} onClose={() => setManageOpen(false)} registry={registry} layer={3} />
     </>
   );
 }

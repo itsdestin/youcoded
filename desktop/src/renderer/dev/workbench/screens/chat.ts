@@ -91,8 +91,6 @@ export const CHAT: readonly ScreenEntry[] = [
   // The pre-resume model picker: a fixture claudeSessionId, no real resume behind it.
   chat('chat/resume/pick-model', 'dialog'),
   { ...chat('chat/specialists', 'dialog'), session: 'wb-11' },
-  chat('chat/tags/manage', 'dialog'),
-  { ...chat('chat/tags/manage#load-failed', 'dialog', 'error-state'), params: { fail: 'tags.list' } },
   { ...chat('chat/update', 'dialog'), params: { update: 'available' } },
   // Files in the viewer: a chart image, a diagram, a PDF (fixture files).
   chat('chat/files/open/a-sent-chart', 'pane', 'viewer'),

@@ -65,8 +65,8 @@ describe('CloseSessionPrompt', () => {
   it('summarises what is already applied, and opens the editor on click', async () => {
     mockWindowClaude({ tags: ['tag_work'], note: 'blocked on the gh dead-end', supported: true, flags: { priority: true } });
     mount();
-    // Priority is a flag, not a tag id — it still has to appear as a chip.
-    expect(await screen.findByText('Priority')).toBeInTheDocument();
+    // Priority is a flag, not a tag id — it shows as the pin (pick-menus-2#PM2-3).
+    expect(await screen.findByRole('img', { name: 'Pinned to top' })).toBeInTheDocument();
     expect(screen.getByText('work')).toBeInTheDocument();
     // Rendered in typographic quotes, so match on substring rather than equality.
     expect(screen.getByText(/blocked on the gh dead-end/)).toBeInTheDocument();
@@ -95,7 +95,7 @@ describe('CloseSessionPrompt', () => {
     mockWindowClaude({ tags: [], note: '', supported: true, flags: { priority: true } });
     const onConfirm = mount();
     fireEvent.click(await screen.findByRole('button', { name: 'Edit tags and note' }));
-    fireEvent.click(await screen.findByRole('button', { name: /^Priority/ }));
+    fireEvent.click(await screen.findByRole('switch', { name: 'Pin to top' }));
     fireEvent.click(screen.getByRole('button', { name: 'Close session' }));
 
     await waitFor(() => expect(onConfirm).toHaveBeenCalled());
@@ -105,7 +105,7 @@ describe('CloseSessionPrompt', () => {
   it('sends nothing for a flag the user never touched', async () => {
     mockWindowClaude({ tags: [], note: '', supported: true, flags: { priority: true } });
     const onConfirm = mount();
-    await screen.findByText('Priority');
+    await screen.findByRole('img', { name: 'Pinned to top' });
     fireEvent.click(screen.getByRole('button', { name: 'Close session' }));
 
     await waitFor(() => expect(onConfirm).toHaveBeenCalled());

@@ -11,13 +11,15 @@ const NOTE_MAX = 8000;
 // Default placeholder (first-run guide, empty screens): says what a note is FOR
 // and where it turns up again, instead of the bare "Add a note…" — a new user
 // had no way to know the note surfaces in Resume. Callers may still override.
-export function NoteEditor({ value, onSave, placeholder = 'A note for later — shows under All sessions', fieldClassName = '' }: {
+export function NoteEditor({ value, onSave, placeholder = 'A note for later — shows under All sessions', fieldClassName = '', resizable = true }: {
   value: string;
   onSave: (text: string) => void;
   placeholder?: string;
-  /** Extra classes for the textarea's surface — same reason as TagPicker's:
-   *  a host that is itself `bg-inset` needs the field one step deeper. */
+  /** Extra classes for the textarea's surface — a host that is itself `bg-inset` needs the field one step deeper. */
   fieldClassName?: string;
+  /** false = a fixed-size box with no drag corner (Tags & note, pick-menus-2#PM2-4:
+   *  "why is it resizable"). */
+  resizable?: boolean;
 }) {
   const [draft, setDraft] = useState(value);
   useEffect(() => { setDraft(value); }, [value]);
@@ -41,7 +43,7 @@ export function NoteEditor({ value, onSave, placeholder = 'A note for later — 
       <Textarea
         size="sm"
         resizable
-        className={`w-full resize-y ${fieldClassName}`.trim()}
+        className={`w-full ${resizable ? 'resize-y' : 'resize-none'} ${fieldClassName}`.trim()}
         aria-label={placeholder}
         value={draft}
         maxLength={NOTE_MAX}

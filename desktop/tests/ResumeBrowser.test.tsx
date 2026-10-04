@@ -728,28 +728,21 @@ describe('organizing', () => {
       expect((window as any).claude.session.setFlag).toHaveBeenCalledWith('cc-1', 'complete', false);
     });
 
-    it('applies Priority through the tag picker but writes a flag, not a tag', async () => {
+    // Priority is now the Pin to top switch (pick-menus-2#PM2-3) — the same stored flag.
+    it('pins through the Pin to top switch, writing the priority flag, not a tag', async () => {
       mount();
       fireEvent.click(await screen.findByRole('button', { name: /Organize CC Chat/ }));
-      // Listed among the tags, ahead of the registry ones.
-      fireEvent.click(await screen.findByRole('button', { name: /^Priority/ }));
+      fireEvent.click(await screen.findByRole('switch', { name: 'Pin to top' }));
       expect((window as any).claude.session.setFlag).toHaveBeenCalledWith('cc-1', 'priority', true);
       expect((window as any).claude.session.setTag).not.toHaveBeenCalled();
     });
 
-    it('keeps the "pins to top" explanation next to Priority', async () => {
+    it('offers no Priority tag — pinning is not a tag any more', async () => {
       mount();
       fireEvent.click(await screen.findByRole('button', { name: /Organize CC Chat/ }));
-      expect(await screen.findByText('pins to top')).toBeInTheDocument();
-    });
-
-    it('does not offer Priority for renaming or deletion in the tag manager', async () => {
-      mount();
-      fireEvent.click(await screen.findByRole('button', { name: /Organize CC Chat/ }));
-      fireEvent.click(await screen.findByText('Manage tags…'));
-      // The registry tag is editable there; the built-in has no row at all.
-      expect(await screen.findByRole('textbox', { name: 'Rename Research' })).toBeInTheDocument();
-      expect(screen.queryByRole('textbox', { name: 'Rename Priority' })).not.toBeInTheDocument();
+      // The registry tag is offered (and editable on click); there is no Priority pill.
+      expect(await screen.findByRole('button', { name: 'Edit Research' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Priority/ })).not.toBeInTheDocument();
     });
 
     it('shows the resume pane OR the tag sheet, never both', async () => {

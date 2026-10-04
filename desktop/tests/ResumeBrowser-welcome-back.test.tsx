@@ -245,7 +245,7 @@ describe('ResumeBrowser — Welcome back mode', () => {
     const organizeBtn = screen.getByRole('button', { name: 'Organize Session B' });
     fireEvent.click(organizeBtn);
 
-    // TagPicker only renders once the sheet is open — its presence confirms
+    // The Tags card only renders once the sheet is open — its presence confirms
     // the click actually opened Session B's sheet before we check the scroll.
     await screen.findByPlaceholderText('Search or create a tag…');
     await waitFor(() => expect(scrollSpy).toHaveBeenCalledWith({ block: 'nearest', behavior: 'smooth' }));

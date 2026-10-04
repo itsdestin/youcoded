@@ -22,9 +22,9 @@ import { useTheme } from '../state/theme-context';
 import { isTypingTarget } from '../utils/is-typing-target';
 import { useTagRegistry } from '../hooks/useTagRegistry';
 import { useSessionMeta } from '../hooks/useSessionMeta';
-import { PRIORITY_TAG } from './tags/built-in-tags';
+import { PinIcon } from './tags/PinIcon';
 import { NotePageGlyph } from './tags/glyphs';
-import { TagChip } from './tags/TagChip';
+import { TagChip, TagStack } from './tags/TagChip';
 import type { TagRecord } from '../../shared/tags';
 import {
   chooseTearOffModel, dragCarriesSession, readSessionDrag, writeSessionDrag,
@@ -255,9 +255,16 @@ function FolderMark({ className = '' }: { className?: string }) {
 // The tags a session carries, as the same named chips the tag picker and the
 // Resume Browser card use — spelled out, not colour-coded dots (Destin, P-8
 // review 2, 2026-08-28: "tags should not be dots, but full chips with spelled
-// names"). Priority is a reserved flag rather than a tag and leads the row, the
-// way it leads the status-bar chip.
-const MAX_CHIPS = 3;
+// names"). Pinned (the Priority flag) is not a tag: it shows as PinMark by the
+// status pill.
+
+/** The pin beside a pinned session's status pill (pick-menus-4#PM4-3: "by the status,
+ *  but use the pinned icon from the pinned pill"). Pinned = the stored `priority` flag. */
+function PinMark({ sessionId }: { sessionId: string }) {
+  const meta = useSessionMeta(sessionId);
+  if (!meta.flags.priority) return null;
+  return <Tooltip text="Pinned to top"><span className="shrink-0 flex items-center"><PinIcon className="w-3 h-3 text-fg-2" /></span></Tooltip>;
+}
 
 function SessionTagMarks({ sessionId, byId }: { sessionId: string; byId: Map<string, TagRecord> }) {
   // One getMeta per open row. The menu holds the live sessions of ONE window,
@@ -265,27 +272,15 @@ function SessionTagMarks({ sessionId, byId }: { sessionId: string; byId: Map<str
   // when it is shut. A bulk read would need a new channel on all five surfaces.
   const meta = useSessionMeta(sessionId);
   const applied = [...meta.tags].map((id) => byId.get(id)).filter((t): t is TagRecord => !!t);
-  const marks: { label: string; color: string }[] = [
-    ...(meta.flags.priority ? [{ label: PRIORITY_TAG.label, color: PRIORITY_TAG.color as string }] : []),
-    ...applied.map((t) => ({ label: t.label, color: t.color as string })),
-  ];
-  if (marks.length === 0 && !meta.note) return null;
-  // Names cost width, so past three the rest collapse into a count that names
-  // them on hover — a row must never push the status pill off its own line.
-  const shown = marks.slice(0, MAX_CHIPS);
-  const rest = marks.slice(MAX_CHIPS);
+  // Pinned is not a tag any more (pick-menus-2#PM2-3): PinMark shows it by the status.
+  if (applied.length === 0 && !meta.note) return null;
   return (
     <span className="shrink-0 flex items-center gap-1">
-      {shown.map((m, i) => (
-        <TagChip key={i} tag={{ label: m.label, color: m.color as TagRecord['color'] }} />
-      ))}
-      {rest.length > 0 && (
-        <Tooltip text={rest.map((m) => m.label).join(', ')}>
-        <span className="text-3xs text-fg-muted">
-          +{rest.length}
-        </span>
-        </Tooltip>
-      )}
+      {/* Three or more tags fold into one stacked-icons button that rolls out on hover
+          (pick-menus-6#PM6-1), so a row never pushes the status pill off its line. */}
+      {applied.length >= 3
+        ? <TagStack tags={applied} />
+        : applied.map((t) => <TagChip key={t.id} tag={t} />)}
       {meta.note && (
         <Tooltip text="This session has a note">
         <span className="flex items-center">
@@ -2455,6 +2450,7 @@ export default function SessionStrip({
                               Danger
                             </span>
                           )}
+                          <PinMark sessionId={s.id} />
                           <StatusPill color={color} isActive={s.id === activeSessionId} />
                         </span>
                         <span className="flex items-center gap-2 min-w-0">
@@ -2593,6 +2589,7 @@ export default function SessionStrip({
                                     Danger
                                   </span>
                                 )}
+                                <PinMark sessionId={s.id} />
                                 <StatusPill color={color} isActive={false} />
                               </span>
                               <span className="flex items-center gap-2 min-w-0">

@@ -42,7 +42,6 @@ import { usePreviewMeta } from '../hooks/usePreviewMeta';
 import { useNarrowViewport } from '../hooks/use-narrow-viewport';
 import { resumeBlockedReason, requestResume } from './tool-views/SessionRefActions';
 import { TagGlyph } from './tags/glyphs';
-import { PRIORITY_TAG, PRIORITY_HINT } from './tags/built-in-tags';
 import { SessionCardTags, SessionCardMeta, CompleteToggle } from './SessionCardDetails';
 import { useResumeOptions, ResumeOptionsForm } from './ResumeOptions';
 import type { PastSession } from '../../shared/types';
@@ -1086,7 +1085,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                 // uses, and TagNoteEditor already lifts its OWN fields to
                 // bg-well against that bg-inset card, so no fieldClassName
                 // override is needed here (unlike the Resume Browser, whose
-                // sheet drops the TagPicker/NoteEditor straight onto its
+                // sheet drops the tags and note straight onto its
                 // bg-inset card with no layer-surface between it and the
                 // panel below).
                 <div
@@ -1110,14 +1109,9 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                       registry={previewTagRegistry}
                       note={previewMeta.note}
                       onNote={previewMeta.saveNote}
-                      // Priority as a built-in tag, as in the Resume browser
+                      // Pin to top (the Priority flag), as in the Resume browser
                       // and the Projects preview.
-                      builtIns={[{
-                        tag: PRIORITY_TAG,
-                        hint: PRIORITY_HINT,
-                        applied: !!previewMeta.flags.priority,
-                        onToggle: (next) => void previewMeta.toggleFlag('priority', next),
-                      }]}
+                      pin={{ pinned: !!previewMeta.flags.priority, onPin: (next) => void previewMeta.toggleFlag('priority', next) }}
                     />
                   )}
                 </div>

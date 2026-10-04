@@ -140,10 +140,15 @@ afterEach(() => {
   expect(crashes).toEqual([]);
 });
 
+// WHY 15 s, not 4: the first mount pays App's whole cold start (≈10 s in isolation on
+// 2026-10-03) and a busy machine stretches it; 4 s timed out in a full run. The test's
+// own 30 s limit still catches a screen that never comes.
+const APPEAR_MS = 15_000;
+
 describe('App — the Welcome back screen only ever opens once, in the leader window, never remote or Android', () => {
   it('asks once when the strip is empty and this window is the leader', async () => {
     await mountApp();
-    expect(await screen.findByText('Welcome back', {}, { timeout: 4000 })).toBeInTheDocument();
+    expect(await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS })).toBeInTheDocument();
   });
 
   it('skips when this window is not the directory leader', async () => {
@@ -190,7 +195,7 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
 
   it('onDone (Start fresh) forgets exactly the ids the screen showed', async () => {
     await mountApp();
-    await screen.findByText('Welcome back', {}, { timeout: 4000 });
+    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
     const store = (window as any).__workbenchStore;
     // The fixture's full offer, per scenarios.ts's 'welcome-back' case.
     expect(store.getState().reopen).toEqual(['wb-past-0', 'wb-past-1', 'wb-past-2', 'wb-past-4']);
@@ -208,7 +213,7 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
   it('Resume all reopens sessions with approvals on even when the default is to skip them', async () => {
     await mountApp({ overrideDefaults: { skipPermissions: true } });
     const store = (window as any).__workbenchStore;
-    await screen.findByText('Welcome back', {}, { timeout: 4000 });
+    await screen.findByText('Welcome back', {}, { timeout: APPEAR_MS });
     const before = store.getState().sessions.length;
 
     fireEvent.click(await screen.findByRole('button', { name: /^Resume all/ }));

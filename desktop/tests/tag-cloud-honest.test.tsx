@@ -10,14 +10,15 @@
  * REFRESH wiped tags that were already on screen.
  *
  * The hosts now answer `{ ok: false, error }`; this drives the real hook and the real
- * popup against both that answer and a rejected call.
+ * Tags card (TagCloud — the Manage tags popup and the tag picker were folded into it,
+ * pick-menus-14, 2026-10-04) against both that answer and a rejected call.
  */
 import React from 'react';
 import '@testing-library/jest-dom/vitest';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, cleanup, screen, act, fireEvent } from '@testing-library/react';
 import { useTagRegistry } from '../src/renderer/hooks/useTagRegistry';
-import { TagManagerPopup } from '../src/renderer/components/tags/TagManagerPopup';
+import { TagCloud } from '../src/renderer/components/tags/TagCloud';
 
 const TAG = { id: 't1', label: 'Research', color: 'tag-gray', archived: false, createdAt: '2026-09-01T00:00:00.000Z' };
 
@@ -37,13 +38,12 @@ function stub(list: ReturnType<typeof vi.fn>) {
 
 function Harness() {
   const registry = useTagRegistry();
-  return <TagManagerPopup open onClose={() => {}} registry={registry} />;
+  return <TagCloud registry={registry} appliedIds={new Set()} onToggle={() => {}} />;
 }
 
-// A tag row may render its label as text or inside its rename field.
-const tagShown = () => !!screen.queryByText('Research') || !!screen.queryByDisplayValue('Research');
+const tagShown = () => !!screen.queryByText('Research');
 
-describe('Tag manager — a read that failed is not "No tags yet"', () => {
+describe('Tags card — a read that failed is not "No tags yet"', () => {
   afterEach(() => { cleanup(); delete (window as any).claude; });
 
   it('a host that could not read the tags says so, with Retry', async () => {
@@ -65,13 +65,14 @@ describe('Tag manager — a read that failed is not "No tags yet"', () => {
     expect(screen.queryByText(/No tags yet/)).toBeNull();
   });
 
-  it('Retry reloads, and a real empty registry is then allowed to say "No tags yet"', async () => {
+  it('Retry reloads, and a real empty registry then shows the empty card with "+ New tag"', async () => {
     const list = vi.fn().mockResolvedValueOnce({ ok: false, error: 'not readable' }).mockResolvedValue([]);
     stub(list);
     render(<Harness />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
-    expect(await screen.findByText(/No tags yet/)).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: '+ New tag' })).toBeInTheDocument();
+    expect(screen.queryByText(/couldn.t load your tags/i)).toBeNull();
     expect(list).toHaveBeenCalledTimes(2);
   });
 

@@ -1,49 +1,33 @@
 // src/renderer/components/tags/SessionTagsChip.tsx
-// The fixed in-session StatusBar element: colored tag dots + a notebook icon,
-// or an "Add tags" button when the session has none. Opens a popup with the
-// shared TagPicker + NoteEditor.
+// The fixed in-session StatusBar element and its Tags & note popup.
+//
+// The element shows, each only when it applies (pick-menus-6#PM6-2: "pin icon, tag icon,
+// note icon, if applicable. tags should look like stacked tags of the relevant colors"):
+// the pin, the session's tags as stacked coloured tag icons, and the note's page icon —
+// or "Add tags" when the session has none.
 import { useState } from 'react';
-import { createPortal } from 'react-dom';
-import { Scrim, OverlayPanel, CONTENT_Z } from '../overlays/Overlay';
-import { useEscClose } from '../../hooks/use-esc-close';
-import { useScrollFade } from '../../hooks/useScrollFade';
-import './SessionTagsChip.css';
 import { useTagRegistry } from '../../hooks/useTagRegistry';
 import { useSessionMeta } from '../../hooks/useSessionMeta';
 import type { TagRecord } from '../../../shared/tags';
 import { TagNoteEditor } from './TagNoteEditor';
-import { PRIORITY_TAG, PRIORITY_HINT } from './built-in-tags';
-import { TagManagerPopup } from './TagManagerPopup';
-import { Tooltip } from '../ui';
-import { useScreenOpen, ScreenMark } from '../../shoot-mode';
+import { TagIconStack } from './TagChip';
+import { PinIcon } from './PinIcon';
+import { NotePageGlyph } from './glyphs';
+import { Dialog, Tooltip } from '../ui';
+import { useScreenOpen } from '../../shoot-mode';
 
 export function SessionTagsChip({ sessionId }: { sessionId: string | null }) {
   const [open, setOpen] = useState(false);
   useScreenOpen('chat/tags', () => setOpen(true)); // photo-only build: `shoot` opens it by name
-  // Tag registry editing moved out of TagPicker into its own surface; this is
-  // the route to it from the in-session chip. Layer 3 because this popup is
-  // itself layer 2.
-  const [manageOpen, setManageOpen] = useState(false);
-  useScreenOpen('chat/tags/manage', () => setManageOpen(true)); // photo-only build
   const registry = useTagRegistry();
   const meta = useSessionMeta(sessionId);
-  useEscClose(open, () => setOpen(false));
-  // WHY: the compact editor only needs its chosen fade when its real body
-  // overflows; a fitting list must not dim tag controls or the note field.
-  const scrollRef = useScrollFade<HTMLDivElement>();
 
   const appliedTags = [...meta.tags]
     .map((id) => registry.byId.get(id))
     .filter((t): t is TagRecord => !!t);
-  // Priority reads as an ordinary tag everywhere else (built-in-tags.ts), so it
-  // leads the chip's dots and its label the same way it leads the picker list.
-  // It is stored as a reserved FLAG, which is why it rides meta.flags rather
-  // than meta.tags.
-  const priority = !!meta.flags.priority;
-  const dotColors = [...(priority ? [PRIORITY_TAG.color] : []), ...appliedTags.map((t) => t.color)];
-  const leadLabel = priority ? PRIORITY_TAG.label : appliedTags[0]?.label;
-  const labelCount = dotColors.length;
-  const hasContent = labelCount > 0 || meta.note.length > 0;
+  // Pinned is the stored `priority` flag (it drives the sort); it shows as a pin.
+  const pinned = !!meta.flags.priority;
+  const hasContent = appliedTags.length > 0 || meta.note.length > 0 || pinned;
 
   return (
     <>
@@ -55,85 +39,36 @@ export function SessionTagsChip({ sessionId }: { sessionId: string | null }) {
         // the popup never accepts an edit that would be refused. See
         // META_UNSUPPORTED_FALLBACK.
         disabled={!sessionId || !meta.supported}
+        aria-label={hasContent ? `Tags & note: ${[pinned ? 'pinned' : '', ...appliedTags.map((t) => t.label), meta.note ? 'a note' : ''].filter(Boolean).join(', ')}` : undefined}
         // `status-chip`: float chrome styles every status chip alike; this one
         // is nested, so `.status-bar > button` alone never reached it.
         className="status-chip flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim enabled:hover:bg-inset transition-colors max-w-[220px] disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {hasContent ? (
-          <span className="flex items-center gap-1 overflow-hidden">
-            {dotColors.slice(0, 3).map((c, i) => (
-              <span key={`${c}-${i}`} className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: `var(--${c})` }} />
-            ))}
-            {meta.note && <NotebookIcon className="w-3 h-3 text-fg-muted shrink-0" />}
-            {leadLabel && (
-              <span className="truncate text-fg-2">
-                {leadLabel}{labelCount > 1 ? ` +${labelCount - 1}` : ''}
-              </span>
-            )}
+          <span className="flex items-center gap-1.5">
+            {pinned && <PinIcon className="w-3 h-3 text-fg-2 shrink-0" />}
+            {appliedTags.length > 0 && <TagIconStack tags={appliedTags} />}
+            {meta.note && <NotePageGlyph className="w-3 h-3 text-fg-muted shrink-0" />}
           </span>
         ) : (
           <span className="text-fg-muted">Add tags</span>
         )}
       </button>
       </Tooltip>
-      {open && createPortal(
-        <>
-          <Scrim layer={2} onClick={() => setOpen(false)} />
-          <div className="fixed inset-0 flex items-center justify-center p-4 pointer-events-none" style={{ zIndex: CONTENT_Z[2] }}>
-            <OverlayPanel
-              layer={2}
-              className="w-full max-w-[360px] max-h-[80vh] flex flex-col pointer-events-auto"
-              style={{ position: 'relative', zIndex: 'auto' }}
-            >
-              <ScreenMark name="chat/tags" />
-              <div data-tag-note-header className="flex items-center justify-between px-4 py-3">
-                <h2 className="text-base font-medium text-fg">Tags &amp; note</h2>
-                <button onClick={() => setOpen(false)}
-                  className="text-fg-muted hover:text-fg-2 text-lg leading-none w-7 h-7 flex items-center justify-center rounded-sm hover:bg-inset">×</button>
-              </div>
-              <div ref={scrollRef} data-tag-note-scroll className="px-4 py-3 overflow-y-auto">
-                {/* The SAME editor the close prompt uses, not a copy of its
-                    styling — see TagNoteEditor's header for why that
-                    distinction earned its own component on this branch.
-                    Priority rides along as a built-in tag; Complete is
-                    deliberately NOT offered here, because a session you are
-                    sitting in is not finished and the close prompt owns that
-                    decision.
-                    Footer says "Done", not "Save": this surface persists every
-                    keystroke as you make it, so claiming there is something
-                    left to save would be a lie. The close prompt says "Save"
-                    because there, the writes really are still pending. */}
-                <TagNoteEditor
-                  appliedIds={meta.tags}
-                  onToggleTag={meta.setTag}
-                  registry={registry}
-                  onManageTags={() => setManageOpen(true)}
-                  note={meta.note}
-                  onNote={meta.setNote}
-                  footer={{ label: 'Done', onClick: () => setOpen(false) }}
-                  builtIns={[{
-                    tag: PRIORITY_TAG,
-                    hint: PRIORITY_HINT,
-                    applied: priority,
-                    onToggle: (next) => meta.setFlag('priority', next),
-                  }]}
-                />
-              </div>
-            </OverlayPanel>
-          </div>
-          <TagManagerPopup open={manageOpen} onClose={() => setManageOpen(false)} registry={registry} layer={3} />
-        </>,
-        document.body,
-      )}
+      {/* The shared popup (Dialog): standard header, ✕ and scrolling body. No Done
+          button — every change saves as you make it (pick-menus-11#PM11-1). Complete is
+          deliberately NOT offered here: a session you are sitting in is not finished,
+          and the close prompt owns that decision. */}
+      <Dialog screen="chat/tags" open={open} onClose={() => setOpen(false)} title="Tags & note" size="panel">
+        <TagNoteEditor
+          appliedIds={meta.tags}
+          onToggleTag={meta.setTag}
+          registry={registry}
+          note={meta.note}
+          onNote={meta.setNote}
+          pin={{ pinned, onPin: (next) => meta.setFlag('priority', next) }}
+        />
+      </Dialog>
     </>
-  );
-}
-
-function NotebookIcon({ className = '' }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round"
-        d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-    </svg>
   );
 }

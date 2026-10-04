@@ -588,7 +588,8 @@ describe('SessionDrawer previewing a past conversation', () => {
       fireEvent.click(screen.getByRole('button', { name: `Organize ${PREVIEW.title}` }));
 
       expect(await screen.findByPlaceholderText('Search or create a tag…')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'work' })).toHaveAttribute('aria-pressed', 'true');
+      // An applied tag's pill carries ×, an unapplied one + (the Tags card, pick-menus-15).
+      expect(screen.getByRole('button', { name: 'Remove work' })).toBeInTheDocument();
       expect(screen.getByPlaceholderText('A note for later — shows under All sessions')).toHaveValue('a note');
     });
 
@@ -598,13 +599,10 @@ describe('SessionDrawer previewing a past conversation', () => {
       renderDrawerWithPreview();
       await screen.findByText(PREVIEW.title);
       fireEvent.click(screen.getByRole('button', { name: `Organize ${PREVIEW.title}` }));
-      const tagBtn = await screen.findByRole('button', { name: 'work' });
-      expect(tagBtn).toHaveAttribute('aria-pressed', 'false');
-
-      fireEvent.click(tagBtn);
-      expect(tagBtn).toHaveAttribute('aria-pressed', 'true'); // optimistic, before the write resolves
+      fireEvent.click(await screen.findByRole('button', { name: 'Add work' }));
+      expect(screen.getByRole('button', { name: 'Remove work' })).toBeInTheDocument(); // optimistic, before the write resolves
       await waitFor(() => expect(setTag).toHaveBeenCalledWith(PREVIEW.id, 'tag_work', true));
-      expect(tagBtn).toHaveAttribute('aria-pressed', 'true'); // still applied — the write succeeded
+      expect(screen.getByRole('button', { name: 'Remove work' })).toBeInTheDocument(); // still applied — the write succeeded
     });
 
     it('rolls back an optimistic tag apply when session:set-tag reports {ok:false} — negative case for the test above', async () => {
@@ -613,13 +611,11 @@ describe('SessionDrawer previewing a past conversation', () => {
       renderDrawerWithPreview();
       await screen.findByText(PREVIEW.title);
       fireEvent.click(screen.getByRole('button', { name: `Organize ${PREVIEW.title}` }));
-      const tagBtn = await screen.findByRole('button', { name: 'work' });
-
-      fireEvent.click(tagBtn);
-      expect(tagBtn).toHaveAttribute('aria-pressed', 'true'); // optimistic
+      fireEvent.click(await screen.findByRole('button', { name: 'Add work' }));
+      expect(screen.getByRole('button', { name: 'Remove work' })).toBeInTheDocument(); // optimistic
       // A failed write must not look like it succeeded (spec risk note) — the
       // chip un-applies once the refusal comes back.
-      await waitFor(() => expect(tagBtn).toHaveAttribute('aria-pressed', 'false'));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Add work' })).toBeInTheDocument());
     });
 
     it('rolls back a note edit when session:set-note reports {ok:false}', async () => {

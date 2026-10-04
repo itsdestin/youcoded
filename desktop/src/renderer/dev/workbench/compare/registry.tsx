@@ -31,7 +31,9 @@ import {
   Toggle,
   fieldClasses, CloseButton } from '../../../components/ui';
 import { TagChip } from '../../../components/tags/TagChip';
-import { TagPicker } from '../../../components/tags/TagPicker';
+// Old rounds drew the retired tag picker; they now run its successor, TagCloud, so the
+// breadcrumb still renders (pick-menus-14, 2026-10-04 retired TagPicker).
+import { TagCloud } from '../../../components/tags/TagCloud';
 import { NoteEditor } from '../../../components/tags/NoteEditor';
 import { useTagRegistry } from '../../../hooks/useTagRegistry';
 // chatsearch-present Round 4: the same responsive/collapse-state hooks
@@ -40,7 +42,9 @@ import { useTagRegistry } from '../../../hooks/useTagRegistry';
 // from THIS branch, not redrawn.
 import { useNarrowViewport } from '../../../hooks/use-narrow-viewport';
 import { useExpandAllToggle, getInitialExpanded } from '../../../hooks/useExpandAllToggle';
-import { PRIORITY_TAG, PRIORITY_HINT } from '../../../components/tags/built-in-tags';
+// Priority as a tag — how the old rounds drew it, before it became Pin to top
+// (pick-menus-2#PM2-3). Kept here because only these historical candidates use it.
+const PRIORITY_TAG = { id: 'flag:priority', label: 'Priority', color: 'tag-amber' } as const;
 // Shared with the shipping surfaces — a candidate must draw the SAME mark the
 // app does, or the comparison is against something that doesn't exist.
 import { TagGlyph, NotePageGlyph, PencilGlyph } from '../../../components/tags/glyphs';
@@ -823,7 +827,7 @@ function GutterCard({ children, onClick }: { children: React.ReactNode; onClick?
 // happens when you act on it — how you get into editing, whether you can still
 // see what is applied while you do, and how you get out.
 //
-// These candidates run the REAL TagPicker and NoteEditor against the mock
+// These candidates run the REAL tag editor (TagCloud since 2026-10-04) and NoteEditor against the mock
 // backend, not stand-ins: an edit flow can only be judged by using it, and a
 // fake picker would hide exactly the friction being compared.
 
@@ -869,12 +873,10 @@ function SummaryBody({ chips, priority, note }: {
 function EditorBody({ d }: { d: ReturnType<typeof useDraft> }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <TagPicker
+      <TagCloud
         appliedIds={d.tagIds}
         onToggle={d.toggleTag}
         registry={d.registry}
-        onManageTags={() => {}}
-        builtIns={[{ tag: PRIORITY_TAG, hint: PRIORITY_HINT, applied: d.priority, onToggle: d.setPriority }]}
       />
       <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase mt-1">Note</label>
       <NoteEditor value={d.note} onSave={d.setNote} />
@@ -977,12 +979,10 @@ function FlowInline() {
         </div>
         {picking && (
           <div className="border-t border-edge-dim pt-2">
-            <TagPicker
+            <TagCloud
               appliedIds={d.tagIds}
               onToggle={d.toggleTag}
               registry={d.registry}
-              onManageTags={() => {}}
-              builtIns={[{ tag: PRIORITY_TAG, hint: PRIORITY_HINT, applied: d.priority, onToggle: d.setPriority }]}
             />
           </div>
         )}
@@ -1137,11 +1137,10 @@ function EditTightHeaders({ d, onSave }: { d: ReturnType<typeof useDraft>; onSav
         <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Tags</label>
         <button type="button" className="text-3xs text-fg-muted hover:text-fg transition-colors">Manage tags…</button>
       </div>
-      <TagPicker
+      <TagCloud
         appliedIds={d.tagIds}
         onToggle={d.toggleTag}
         registry={d.registry}
-        builtIns={[{ tag: PRIORITY_TAG, hint: PRIORITY_HINT, applied: d.priority, onToggle: d.setPriority }]}
       />
       <NoteEditor value={d.note} onSave={d.setNote} placeholder="Add a note…" />
       <SaveButton onClick={onSave} />
@@ -1194,11 +1193,10 @@ function EditOneWell({ d, onSave }: { d: ReturnType<typeof useDraft>; onSave: ()
     <div className="flex flex-col gap-2">
       <div className="rounded-md bg-well border border-edge-dim divide-y divide-edge-dim">
         <div className="p-2">
-          <TagPicker
+          <TagCloud
             appliedIds={d.tagIds}
             onToggle={d.toggleTag}
             registry={d.registry}
-            builtIns={[{ tag: PRIORITY_TAG, hint: PRIORITY_HINT, applied: d.priority, onToggle: d.setPriority }]}
           />
         </div>
         <div className="p-2">

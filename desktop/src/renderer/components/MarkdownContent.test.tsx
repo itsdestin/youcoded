@@ -605,7 +605,9 @@ describe('MarkdownContent while a reply streams in', () => {
       live.unmount();
       today.unmount();
     }
-  });
+  // WHY 90 s: ~3 s alone, but it timed out at 30 s in a full run on a machine at load
+  // 70 (2026-10-03). A fixed amount of work, so more time tests no less.
+  }, 90_000);
 
   // What each streamed update costs, in characters: everything the splitter
   // parsed plus everything handed to react-markdown. Today's whole-message
