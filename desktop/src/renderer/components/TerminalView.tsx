@@ -89,6 +89,7 @@ function TerminalView({ sessionId, visible }: Props) {
   // parsed write back to main so a flooding program is braked instead of overrunning xterm's input
   // limit, and it spends a hidden terminal's parsing sparingly. Rebuilt per session id.
   const feederRef = useRef<{ id: string; feeder: TerminalFeeder } | null>(null);
+  const updateThumbRef = useRef<(() => void) | null>(null);
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
   // Previous `visible`, updated only inside the visibility effect (NOT on every
@@ -225,7 +226,18 @@ function TerminalView({ sessionId, visible }: Props) {
       thumb.style.top = `${top}px`;
       thumb.style.opacity = '0.55';
     };
-    terminal.onScroll(updateThumb);
+    // WHY coalesced to one animation frame (2026-10-04, found by a CPU profile of a flood's first 1.5 s): xterm
+    // scrolls on EVERY line, and each call here writes the thumb's style and then reads layout (clientHeight,
+    // offsetTop) — a forced layout per line, ~40% of the window's time (668 of 1,700 ms) and the ~230 ms long
+    // task at the start of every flood. One update per frame shows the same thumb. A hidden terminal skips it
+    // (nothing to see); the visibility effect below redraws the thumb when it is shown.
+    let thumbRaf: number | null = null;
+    const scheduleThumb = () => {
+      if (thumbRaf !== null || !visibleRef.current) return;
+      thumbRaf = requestAnimationFrame(() => { thumbRaf = null; updateThumb(); });
+    };
+    updateThumbRef.current = updateThumb;
+    terminal.onScroll(scheduleThumb);
     // Initial paint after layout settles (matches the existing fit timer).
     const thumbInitTimer = setTimeout(updateThumb, 120);
 
@@ -509,6 +521,8 @@ function TerminalView({ sessionId, visible }: Props) {
       feederRef.current = null;
       clearTimeout(timer);
       clearTimeout(thumbInitTimer);
+      if (thumbRaf !== null) cancelAnimationFrame(thumbRaf);
+      updateThumbRef.current = null;
       if (debounceTimer !== null) clearTimeout(debounceTimer);
       if (resizeRafId !== null) cancelAnimationFrame(resizeRafId);
       offWindowResize();
@@ -536,7 +550,7 @@ function TerminalView({ sessionId, visible }: Props) {
   useLayoutEffect(() => {
     renderPauseRef.current?.setHidden(!visible);
     // Shown again: write whatever the hidden-terminal allowance held back, so it is current at once.
-    if (visible) feederRef.current?.feeder.wake();
+    if (visible) { feederRef.current?.feeder.wake(); updateThumbRef.current?.(); }
   }, [visible]);
 
   // Visibility toggle side effects.
