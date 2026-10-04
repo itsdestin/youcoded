@@ -500,6 +500,7 @@ const NAMESPACES = [
 import { createNamingPreview } from './naming-preview';
 import { seedPages } from './fixtures/pages';
 import { fakeHomeAssistantFetch, fakeHomeAssistantSocket } from './fixtures/fake-home-assistant';
+import { withHomeMockup } from './fixtures/home-assistant-mockups';
 import { OFFICE_EDITOR_ORIGIN, OFFICE_FILES, officeFixtureName, officeSampleUrl } from './fixtures/office';
 import { OFFICE_PAGE_SUMMARY } from '../../../shared/pages-types';
 import type { OfficeBridge, OfficeVersion } from '../../../shared/office-types';
@@ -3742,12 +3743,16 @@ function createPagesMock(empty: boolean): PagesBridge {
   const chipView = homeView && homeView.startsWith('view-') ? homeView.slice(5) : null;
   // `chips-pills|chips-sentence|chips-tiles`: the main page in that chip style.
   const chipStyle = homeView && homeView.startsWith('chips-') ? homeView.slice(6) : null;
-  if (homeView === 'connected' || homeView === 'edit' || homeView === 'remote' || chipView || homeView === 'settings' || chipStyle) {
+  // `mock-<name>`: the connected page with one of the 2026-10-04 design
+  // mockups laid over it (device page, activity, cameras — fixtures/home-assistant-mockups.ts).
+  const mockup = homeView && homeView.startsWith('mock-') ? homeView.slice(5) : null;
+  if (homeView === 'connected' || homeView === 'edit' || homeView === 'remote' || chipView || homeView === 'settings' || chipStyle || mockup) {
     pages = pages.map((p) => (p.id !== 'page-home' ? p : {
       ...p,
+      ...(mockup ? { html: withHomeMockup(p.html, mockup) } : {}),
       connections: (p.connections ?? []).map((c) => (c.kind === 'device' ? { ...c, address: '100.99.234.114:8123', approved: true, savedKey: true } : c)),
       refresh: { at: new Date().toISOString(), failed: false },
-      data: chipStyle ? { chipStyle, open: ['destins_room'] } : chipView ? { view: chipView, scenesOpen: ['destins_room'] } : homeView === 'settings' ? { settingsOpen: true } : homeView === 'remote' ? { remote: ['remote.destins_room_tv_remote'] } : {
+      data: mockup ? { open: mockup.startsWith('device') ? ['living_room'] : [] } : chipStyle ? { chipStyle, open: ['destins_room'] } : chipView ? { view: chipView, scenesOpen: ['destins_room'] } : homeView === 'settings' ? { settingsOpen: true } : homeView === 'remote' ? { remote: ['remote.destins_room_tv_remote'] } : {
         open: ['destins_room'], expanded: ['light.desk_backlight'],
         fav: ['light.living_room_lamp', 'climate.thermostat'],
         ...(homeView === 'edit' ? { editing: true } : {}),
@@ -3764,6 +3769,21 @@ function createPagesMock(empty: boolean): PagesBridge {
     list: async () => summaries(),
     get: async (id) => {
       const page = pages.find((p) => p.id === id);
+      // A mockup is laid over the page only after the page has drawn its
+      // rooms, which the screenshot tool cannot see from out here: count it as
+      // one more thing in flight until the page says the mockup is drawn
+      // (capped at 8 s, so a broken mockup still gets photographed).
+      if (mockup && id === 'page-home') {
+        const w = window as unknown as { __shootInflight?: number };
+        if (typeof w.__shootInflight === 'number') {
+          w.__shootInflight += 1;
+          let done = false;
+          const finish = () => { if (done) return; done = true; w.__shootInflight = (w.__shootInflight ?? 1) - 1; window.removeEventListener('message', onMsg); };
+          const onMsg = (e: MessageEvent) => { if (e.data && e.data.homeMockupReady) finish(); };
+          window.addEventListener('message', onMsg);
+          setTimeout(finish, 8000);
+        }
+      }
       return page
         ? { ok: true, page }
         : { ok: false, failure: { kind: 'missing', message: 'This page is no longer in your library.' } };
