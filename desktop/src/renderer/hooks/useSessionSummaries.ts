@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { playSound } from '../utils/sounds';
+import { playSoundOncePerBurst } from '../utils/sound-burst';
 import { viewedAfterSummaries } from './useSessionAttention';
 import type { SessionSummary } from '../../shared/session-summary-types';
 
@@ -45,7 +45,7 @@ export function useSessionSummaries(
     const next = new Map<string, boolean>();
     for (const [id, summary] of Object.entries(summaries)) {
       next.set(id, summary.working);
-      if (prevWorking.current.get(id) === true && !summary.working) playSound('ready');
+      if (prevWorking.current.get(id) === true && !summary.working) playSoundOncePerBurst('ready'); // WHY once per burst: a reconnect can report several finished turns in one push; one chime, not a volley.
     }
     prevWorking.current = next;
   }, [enabled, summaries]);

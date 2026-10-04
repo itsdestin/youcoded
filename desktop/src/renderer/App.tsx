@@ -72,6 +72,7 @@ import { useSubmitConfirmation } from './hooks/useSubmitConfirmation';
 import { useSessionAttention, mergePeerSessionStatuses, mergeSummaryStatuses } from './hooks/useSessionAttention';
 import { useAttentionSummary } from './hooks/useAttentionSummary';
 import { useSessionSummaries } from './hooks/useSessionSummaries';
+import { useAttentionSound } from './hooks/useAttentionSound';
 import { useRemoteWatch } from './hooks/useRemoteWatch';
 import { useActiveSessionModel } from './hooks/useActiveSessionModel';
 import { useCompactionWatchdog } from './hooks/useCompactionWatchdog';
@@ -1006,9 +1007,9 @@ function AppInner() {
     return mergeSummaryStatuses({ base: merged, sessionIds: sessions.map((s: any) => s.id), summaries: sessionSummaries, viewedSessions, activeSessionId: sessionId });
   }, [sessionAttention, attentionSummary, sessions, windowDirectory, statusData.attentionMap, sessionSummaries, viewedSessions, sessionId]);
 
-  // Play the 'attention' sound when any session transitions to red (awaiting
-  // approval). Red is a visible state, so color-driven dedup is correct here.
-  const prevStatusSoundRef = useRef<Map<string, SessionStatusColor>>(new Map());
+  // Play the 'attention' sound when any session transitions to red (awaiting approval). WHY once per burst on a phone: a reconnect
+  // can report many already-waiting sessions at once; see useAttentionSound. The computer's windows are unchanged.
+  useAttentionSound(sessions, sessionStatuses, !!sessionSummaries);
   // Remote attention diffing: tracks the last-seen attentionMap from status:data
   // so we only dispatch ATTENTION_STATE_CHANGED when a session's state actually flips.
   // On desktop, useAttentionClassifier already handles this locally (no-op here because
@@ -1030,25 +1031,6 @@ function AppInner() {
   // was restarted. For anyone who never signs in with ChatGPT this value is
   // `false` on every push forever and nothing below ever runs.
   const hadChatGptUsageRef = useRef(false);
-  // WHY (2026-09-07) this walks `sessions` rather than the whole map: since the
-  // switcher started colouring peer-window rows, sessionStatuses also contains
-  // sessions OTHER windows own. Chiming on those would play the same alert once
-  // per open window, all at once, on top of the owning window's own chime — and
-  // the owner is already chiming, so no alert is lost by staying owner-only.
-  useEffect(() => {
-    const prev = prevStatusSoundRef.current;
-    const next = new Map<string, SessionStatusColor>();
-    for (const s of sessions) {
-      const color = sessionStatuses.get(s.id);
-      if (!color) continue;
-      next.set(s.id, color);
-      const was = prev.get(s.id);
-      if (was === color) continue;
-      if (color === 'red' && was !== 'red') playSound('attention');
-    }
-    prevStatusSoundRef.current = next;
-  }, [sessionStatuses, sessions]);
-
   // Play the 'ready' sound when any session's isThinking transitions true → false.
   // Replaces the prior blue-color-transition trigger, which never fired for the
   // currently-viewed session (blue requires "unseen, not active"). Thinking-false
