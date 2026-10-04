@@ -34,7 +34,7 @@ import CopyPicker from './CopyPicker';
 import { TimelineEntryHint } from './TimelineEntryHint';
 import { archivedTooltip } from '../state/archive-boundary';
 import type { PromptAnswerResult } from '../state/prompt-input';
-import { sendAgain } from '../state/submit-outgoing';
+import { sendAgain, discardUnsent } from '../state/submit-outgoing';
 
 /** What a row may call back into ChatView. Read through a ref at call time so
  *  a row that skipped rendering never holds a stale handler. */
@@ -94,6 +94,14 @@ function renderContent(p: Props): React.ReactNode {
           onSendAgain={entry.sendNote && entry.sendId ? (() => {
             const act = p.actionsRef.current;
             if (act) sendAgain({ sessionId, sendId: entry.sendId!, provider: p.provider === 'shell' ? undefined : p.provider, content: entry.message.content, attachments: entry.message.attachments, dispatch: act.dispatch });
+          }) : undefined}
+          // Discard only for a message the computer provably never got; Dismiss only for "not sure". Both are the person's own press, neither sends.
+          onDiscard={entry.sendNote === 'not-sent' && entry.sendId ? (() => {
+            const act = p.actionsRef.current;
+            if (act) discardUnsent({ sessionId, sendId: entry.sendId!, content: entry.message.content, attachments: entry.message.attachments, dispatch: act.dispatch });
+          }) : undefined}
+          onDismiss={entry.sendNote === 'unsure' && entry.sendId ? (() => {
+            p.actionsRef.current?.dispatch({ type: 'SEND_NOTE', sessionId, sendId: entry.sendId!, note: null, dismissed: true });
           }) : undefined}
         />
       );

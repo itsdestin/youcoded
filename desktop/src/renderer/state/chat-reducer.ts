@@ -1031,10 +1031,10 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       const idx = session.timeline.findIndex((e) => e.kind === 'user' && e.pending === true && e.sendId === action.sendId);
       if (idx < 0) return state;
       const entry = session.timeline[idx] as Extract<TimelineEntry, { kind: 'user' }>;
-      if ((entry.sendNote ?? null) === action.note) return state;
+      if ((entry.sendNote ?? null) === action.note || (entry.sendNoteDismissed && action.note === 'unsure')) return state; // WHY: after Dismiss a later "unsure" must not bring the note back
       const timeline = session.timeline.slice();
       const { sendNote: _old, ...rest } = entry;
-      timeline[idx] = action.note ? { ...rest, sendNote: action.note } : rest;
+      timeline[idx] = action.note ? { ...rest, sendNote: action.note } : action.dismissed ? { ...rest, sendNoteDismissed: true } : rest;
       // A message the computer never got starts no turn: the spinner USER_PROMPT put up has nothing behind it (review fix, R5-4b).
       next.set(action.sessionId, { ...session, timeline, ...(action.note === 'not-sent' ? spinnerWithNoTurn(session) : {}) });
       return next;

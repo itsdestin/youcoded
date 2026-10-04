@@ -25,6 +25,10 @@ interface Props {
   sendNote?: 'unsure' | 'not-sent';
   /** "Send again": the person's own decision, never automatic (a duplicate is worse than a wait). */
   onSendAgain?: () => void;
+  /** "Discard" (only on `not-sent`): the unsent bubble goes from this screen; its words return to an empty composer. Never sends. */
+  onDiscard?: () => void;
+  /** "Dismiss" (only on `unsure`): hides the note and keeps the bubble, since the message may well have arrived. Never sends. */
+  onDismiss?: () => void;
 }
 
 // Render a plain-text run with the existing treatment: flowing-keyword spans +
@@ -39,7 +43,7 @@ function renderTextRun(text: string, keyPrefix: string): React.ReactNode[] {
   );
 }
 
-export default React.memo(function UserMessage({ message, sessionId, showTimestamps, sendNote, onSendAgain }: Props) {
+export default React.memo(function UserMessage({ message, sessionId, showTimestamps, sendNote, onSendAgain, onDiscard, onDismiss }: Props) {
   // A chip click opens its file when it isn't already open, then jumps to
   // the source text (compose-ref.ts "Chip ↔ source text").
   const openFile = useOpenFilepath(sessionId);
@@ -112,13 +116,19 @@ export default React.memo(function UserMessage({ message, sessionId, showTimesta
 
   // The wording says what is KNOWN and how (error-message-standards.md): "not-sent" is the computer's record showing it never arrived; "unsure" is
   // the record unable to tell (it restarted, or the question could not be asked), so it claims nothing about a cause.
+  // WHY flex-wrap + nowrap buttons: with a second button the row no longer fits a phone, and the buttons were splitting ("Send / again") and running off the
+  // screen edge; now the sentence takes its own line and the buttons sit together under it.
   const noteText = sendNote === 'not-sent' ? "This didn't send — your computer never received it." : 'Not sure this was sent.';
   return (
     <div className="px-4 py-2">
       <div className="flex justify-end">{bubble}</div>
-      <div className="mt-1 flex items-center justify-end gap-2 text-xs text-fg-dim select-text" role="status" data-send-note={sendNote}>
-        <span>{noteText}</span>
-        {onSendAgain && <Button variant="ghost" size="sm" onClick={onSendAgain}>Send again</Button>}
+      <div className="mt-1 flex flex-wrap items-center justify-end gap-x-2 gap-y-1 text-xs text-fg-dim select-text" role="status" data-send-note={sendNote}>
+        <span className="min-w-0 max-w-full">{noteText}</span>
+        {onSendAgain && <Button variant="ghost" size="sm" className="whitespace-nowrap" onClick={onSendAgain}>Send again</Button>}
+        {/* WHY: before this, a message that did not send could only be sent again. Same ghost style as Send again (Button's sm size already gets the 44px
+            touch area on phones); the label says what happens to the bubble, which is the whole difference between the two. */}
+        {onDiscard && <Button variant="ghost" size="sm" className="whitespace-nowrap" onClick={onDiscard} aria-label="Discard unsent message">Discard</Button>}
+        {onDismiss && <Button variant="ghost" size="sm" className="whitespace-nowrap" onClick={onDismiss} aria-label="Dismiss this note">Dismiss</Button>}
       </div>
     </div>
   );

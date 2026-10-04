@@ -1338,3 +1338,39 @@ describe('InputBar — instant send on a phone', () => {
     expect(bubbles()).toHaveLength(1);
   });
 });
+
+// Discard on an unsent message (sync-fix4): the words come back, but only into an empty box, and only for this session. Nothing is sent.
+describe('InputBar — words restored by Discard', () => {
+  beforeEach(() => {
+    (global as any).ResizeObserver = NoopResizeObserver;
+    (window as any).claude = {
+      native: { supported: true, send: vi.fn() },
+      session: { sendInput: vi.fn() },
+      skills: { list: vi.fn().mockResolvedValue([]), getFavorites: vi.fn().mockResolvedValue([]), getChips: vi.fn().mockResolvedValue([]), getCuratedDefaults: vi.fn().mockResolvedValue([]) },
+    };
+  });
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+  const mount = () => {
+    render(<ChatProvider><SkillProvider><InputBar sessionId="sess-1" provider="native" /></SkillProvider></ChatProvider>);
+    return screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
+  };
+  const restore = (sessionId: string, text: string) => act(() => { window.dispatchEvent(new CustomEvent('youcoded:restore-unsent-text', { detail: { sessionId, text } })); });
+
+  it('puts the words into an empty box and sends nothing', () => {
+    const box = mount();
+    restore('sess-1', 'my lost words');
+    expect(box.value).toBe('my lost words');
+    expect((window as any).claude.native.send).not.toHaveBeenCalled();
+  });
+  it('leaves a draft the person already typed alone', () => {
+    const box = mount();
+    fireEvent.change(box, { target: { value: 'newer draft' } });
+    restore('sess-1', 'my lost words');
+    expect(box.value).toBe('newer draft');
+  });
+  it('ignores words from another session', () => {
+    const box = mount();
+    restore('other', 'not mine');
+    expect(box.value).toBe('');
+  });
+});

@@ -256,7 +256,7 @@ export type TimelineEntry =
   // `sendId` / `sendNote` (one-core R5-4b): the screen's id for a message it sent, and what it knows about whether the computer got it while no echo has
   // arrived (`unsure` = could not tell, `not-sent` = the computer's record shows it never arrived). Both are dropped when the transcript confirms the
   // bubble, so a note can never outlive the doubt it describes.
-  | { kind: 'user'; message: ChatMessage; pending?: boolean; injected?: string; injectedMeta?: InjectedMeta; uuid?: string; sendId?: string; sendNote?: 'unsure' | 'not-sent' }
+  | { kind: 'user'; message: ChatMessage; pending?: boolean; injected?: string; injectedMeta?: InjectedMeta; uuid?: string; sendId?: string; sendNote?: 'unsure' | 'not-sent'; sendNoteDismissed?: boolean }
   | { kind: 'assistant-turn'; turnId: string }
   | { kind: 'prompt'; prompt: InteractivePrompt }
   // /cost and /usage render a snapshot card inline. Permanent (not dismissible).
@@ -549,6 +549,8 @@ export type ChatAction =
       sessionId: string;
       sendId: string;
       note: 'unsure' | 'not-sent' | null;
+      /** With note null: the person pressed Dismiss — hide the note, keep the bubble, and never re-add an "unsure" one. */
+      dismissed?: true;
     }
   | {
       // "Send again": the unconfirmed bubble goes, and the same words go out as a new send with its own bubble (one-core R5-4b).

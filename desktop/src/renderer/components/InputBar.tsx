@@ -27,7 +27,7 @@ import { runNativeSlashAction, routeSlashResult } from '../state/native-slash-ac
 import type { UsageSnapshot } from '../state/chat-types';
 import { sendBlock, pendingInteractionRefusalCopy, waitForMessageBox } from '../state/pty-input-gate';
 import { buildOutgoingMessage } from './outgoing-message';
-import { sendToClaudeCode, sendToNative, canDrawSendNow } from '../state/submit-outgoing';
+import { sendToClaudeCode, sendToNative, canDrawSendNow, RESTORE_UNSENT_EVENT } from '../state/submit-outgoing';
 import { optimisticScreen, connected } from '../state/pending-action';
 import type { NativeSendResult } from '../../shared/types';
 import type { ClaudeAlias } from '../../shared/model-ids';
@@ -560,6 +560,19 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     window.addEventListener('buddy:attach-file', listener);
     return () => window.removeEventListener('buddy:attach-file', listener);
   }, [addFiles]);
+
+  // "Discard" on an unsent message puts its words back here, but ONLY into an empty box: a draft the person has since typed is never overwritten.
+  // No focus() on purpose: on a phone that would pop the keyboard up over a button press that was meant to get rid of something.
+  useEffect(() => {
+    const listener = (e: Event) => {
+      const d = (e as CustomEvent<{ sessionId?: string; text?: string }>).detail;
+      if (!d?.text || d.sessionId !== sessionId) return;
+      if ((inputRef.current?.value ?? '').trim().length > 0) return;
+      setText(d.text);
+    };
+    window.addEventListener(RESTORE_UNSENT_EVENT, listener);
+    return () => window.removeEventListener(RESTORE_UNSENT_EVENT, listener);
+  }, [sessionId]);
 
   useEffect(() => {
     const listener = () => {

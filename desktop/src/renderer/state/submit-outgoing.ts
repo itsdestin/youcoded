@@ -151,6 +151,28 @@ export function splitSentContent(content: string, attachments: readonly string[]
   return { ptyText: text, paths: used };
 }
 
+/** Fired by Discard so the composer can take the words back (InputBar listens). Never carries anything that sends. */
+export const RESTORE_UNSENT_EVENT = 'youcoded:restore-unsent-text';
+
+/**
+ * "Discard" on a message the computer provably never got: the words go back into the composer if it is empty (InputBar decides; it never overwrites a
+ * draft), then the bubble goes. Sends nothing. Only ever called by the person pressing the button.
+ */
+export function discardUnsent(args: {
+  sessionId: string;
+  sendId: string;
+  content: string;
+  attachments: readonly string[] | undefined;
+  dispatch: (action: ChatAction) => void;
+}): void {
+  const { ptyText } = splitSentContent(args.content, args.attachments);
+  // WHY before the dispatch: nothing the person typed may vanish without a trace; the composer keeps it unless it already holds a draft.
+  if (typeof window !== 'undefined' && ptyText.trim()) {
+    window.dispatchEvent(new CustomEvent(RESTORE_UNSENT_EVENT, { detail: { sessionId: args.sessionId, text: ptyText } }));
+  }
+  args.dispatch({ type: 'SEND_DISCARD', sessionId: args.sessionId, sendId: args.sendId });
+}
+
 /**
  * "Send again" on a message that did not (or may not have) arrive: the old bubble goes and the same words go out as a NEW send. Only ever called
  * by the person pressing the button.
