@@ -355,6 +355,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
   useEffect(() => () => { selectionGeneration.current++; }, []);
+  // True while a reconnect refresh is in flight (and a moment after): nothing it does may be written back as the user's choice.
+  const reconnectRefreshing = useRef(false);
 
   // The theme as the user sees it: its own choices, with any global override on top.
   // WHY every source (user themes too): the override is the user's, not the theme's —
@@ -377,7 +379,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     if (!allThemesInternal.find(t => t.slug === activeSlug)) {
       setActiveSlug(DEFAULT_THEME);
       try { localStorage.setItem(STORAGE_KEY, DEFAULT_THEME); } catch {}
-      persistAppearance({ theme: DEFAULT_THEME });
+      // A refresh after a reconnect is never a choice: it must not overwrite the saved theme for every screen (sync-fix3 review).
+      if (!reconnectRefreshing.current) persistAppearance({ theme: DEFAULT_THEME });
     }
   }, [allThemesInternal, activeSlug, userThemesLoaded]);
 
@@ -390,12 +393,13 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   // surfaced as an unhandled error in a full-suite run (app-welcome-back-gating.test.tsx).
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
-  const reloadUserThemes = useCallback(async () => {
+  const reloadUserThemes = useCallback(async (opts?: { keepOnFailure?: boolean }) => {
     try {
       const claude = (window as any).claude;
       if (!claude?.theme?.list) { if (alive.current) setUserThemesLoaded(true); return; }
       const slugs: string[] = await claude.theme.list();
       const loaded: LoadedTheme[] = [];
+      const failed: string[] = [];
       for (const slug of slugs) {
         try {
           const raw = await claude.theme.readFile(slug);
@@ -404,10 +408,15 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
           loaded.push(resolveAllAssetPaths({ ...theme, source }));
         } catch (e) {
           console.warn(`[ThemeProvider] Failed to load user theme "${slug}":`, e);
+          failed.push(slug);
         }
       }
       if (!alive.current) return;
-      setUserThemes(loaded);
+      // WHY (sync-fix3 review): a reconnect is exactly when a file read is likely to fail, and replacing the list without the active theme
+      // would send it to the "uninstalled" fallback. On a refresh, a theme whose read failed keeps its old definition, and a builder preview stays.
+      if (opts?.keepOnFailure) {
+        setUserThemes((prev) => [...loaded, ...prev.filter((t) => failed.includes(t.slug) || t.slug === '_preview')]);
+      } else setUserThemes(loaded);
       setUserThemesLoaded(true);
     } catch {
       if (alive.current) setUserThemesLoaded(true); // Mark loaded even on error so fallback can run
@@ -420,8 +429,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   // Load appearance preferences from disk (source of truth) on mount, and again after a remote reconnect.
   // WHY a callback that reads the generation when it RUNS (sync-fix3): the same body now serves the mount and a reconnect, and a choice the
   // user makes while the read is in flight must still win over what the read brings back.
-  const loadAppearance = useCallback(async () => {
-    const generation = selectionGeneration.current;
+  const loadAppearance = useCallback(async (startedAt?: number) => {
+    const generation = startedAt ?? selectionGeneration.current;
     {
       try {
         const claude = (window as any).claude;
@@ -472,7 +481,12 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   // WHY (sync-fix3): `appearance:sync` and `theme:reload` are one-shot pushes, so a phone that was asleep when another screen changed the theme (or
   // when a theme was installed on the computer) kept the old look until a full page reload. After a reconnect: re-read the installed themes
   // first (a newly installed one must exist before the chosen slug is looked up), then the saved appearance.
-  useOnRemoteReconnect(() => { void reloadUserThemes().then(() => loadAppearance()); });
+  useOnRemoteReconnect(() => {
+    // The generation is taken BEFORE the theme reload, so a theme picked while it runs wins over the saved one read afterwards.
+    const startedAt = selectionGeneration.current;
+    reconnectRefreshing.current = true;
+    void reloadUserThemes({ keepOnFailure: true }).then(() => loadAppearance(startedAt)).finally(() => { setTimeout(() => { reconnectRefreshing.current = false; }, 100); });
+  });
 
   // Listen for cross-window appearance broadcasts from peer windows. The
   // source window already persisted to disk, so we only update in-memory
