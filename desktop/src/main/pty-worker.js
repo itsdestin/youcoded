@@ -185,19 +185,21 @@ function disableFlow(why) {
 
 function onAck(msg) {
   lastAckAt = nowMs();
-  if (msg.reset) {
-    // main re-attached a terminal (mount, window change): whatever was in flight to the old one is
-    // gone for good. `keep` is what main is still holding for the new terminal.
-    unacked = Math.min(unacked, Math.max(0, Number(msg.keep) || 0));
-  } else {
-    const n = Number(msg.n);
-    if (Number.isFinite(n) && n > 0) unacked = Math.max(0, unacked - n);
-  }
+  const n = Number(msg.n);
+  if (Number.isFinite(n) && n > 0) unacked = Math.max(0, unacked - n);
   if (flowPaused && unacked <= FLOW_LOW) resumeFlow();
 }
 
 let ptyProcess = null;
 let bounceState = null;   // repaint nudge in progress: { c, r, superseded }
+let bounceTimer = null;
+// node-pty's resize throws once the PTY fd is closed (child exited, kill, hand-off) and nothing here catches it.
+const ptyUsable = () => !!ptyProcess && !exitReported && !handoffStopping;
+function safeResize(cols, rows) {
+  try { ptyProcess.resize(cols, rows); return true; }
+  catch (e) { trace('RESIZE_ERROR', e && e.message ? e.message : String(e)); return false; }
+}
+function cancelBounce() { if (bounceTimer !== null) { clearTimeout(bounceTimer); bounceTimer = null; } bounceState = null; }
 let handoffStopping = false;
 let exitReported = false;
 let handoffExitTimer = null;
@@ -450,6 +452,7 @@ process.on('message', (msg) => {
       ptyProcess.onExit(({ exitCode }) => {
         if (exitReported) return;
         exitReported = true;
+        cancelBounce();
         trace('EXIT', `code=${exitCode}`);
         // WHY: the batch still waiting for its timer must reach main BEFORE the exit message,
         // or the last bytes of output (the final lines) would arrive after the session is gone.
@@ -541,22 +544,24 @@ process.on('message', (msg) => {
       // programs like Claude Code's Ink UI redraw with relative cursor moves): one column narrower, then back.
       // ONE owner: a request during the 120 ms window is ignored (never narrows twice), and the restore returns to
       // the ORIGINAL size unless a real resize (desktop fit or a phone's) arrived meanwhile — then that size stands.
-      // Never on Windows, where ConPTY reflows and re-emits its whole buffer on every resize.
-      if (!ptyProcess || process.platform === 'win32' || bounceState) break;
+      // Never on Windows (ConPTY re-emits its whole buffer on every resize) and never once the PTY is going away:
+      // node-pty's resize THROWS on a closed fd and this worker has no uncaught-exception handler, so a throw here
+      // would kill the worker (the session would read as crashed; a hand-off would race its receipt handshake).
+      if (!ptyUsable() || flowDisabled || process.platform === 'win32' || bounceState) break;
       const c = ptyProcess.cols, r = ptyProcess.rows;
       if (!(c > 2)) break;
+      if (!safeResize(c - 1, r)) break;          // bounceState is set only once the first half succeeded
       const st = { c, r, superseded: false };
       bounceState = st;
-      ptyProcess.resize(c - 1, r);
-      setTimeout(() => {
-        bounceState = null;
-        if (ptyProcess && !st.superseded) ptyProcess.resize(st.c, st.r);
+      bounceTimer = setTimeout(() => {
+        bounceState = null; bounceTimer = null;
+        if (ptyUsable() && !st.superseded) safeResize(st.c, st.r);
       }, 120);
       break;
     }
     case 'resize': {
       if (bounceState) bounceState.superseded = true;   // a real resize wins over a repaint nudge in flight
-      if (ptyProcess) ptyProcess.resize(msg.cols, msg.rows);
+      if (ptyUsable()) safeResize(msg.cols, msg.rows);
       break;
     }
     case 'stop-for-handoff': {
@@ -564,6 +569,7 @@ process.on('message', (msg) => {
       // only node-pty's onExit callback may acknowledge this shutdown.
       if (handoffStopping) break;
       handoffStopping = true;
+      cancelBounce();
       disableFlow('handoff');
       if (ptyProcess) ptyProcess.kill();
       break;
@@ -586,6 +592,7 @@ process.on('message', (msg) => {
 
 process.on('disconnect', () => {
   clearTimeout(handoffExitTimer);
+  cancelBounce();
   flowDisabled = true;
   if (ptyProcess) ptyProcess.kill();
   process.exit(0);

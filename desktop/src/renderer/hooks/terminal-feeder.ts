@@ -113,9 +113,9 @@ export function createTerminalFeeder(opts: TerminalFeederOptions): TerminalFeede
   let disposed = false;
   let inXterm = 0;            // written to xterm, callback not yet fired (paid or not): xterm's own backlog
   let docWasHidden = false;
-  let paidEpoch = 0;
+  let paidEpoch = 0;          // bumped by payAll(): writes issued earlier were already confirmed upstream
   const trimMemo: TrimMemo = { skipUntil: 0, scans: 0 };
-  let trimmedSinceShown = false;   // a cut happened: ask for one repaint once the window is back and the backlog is written          // bumped by payAll(): writes issued earlier were already confirmed upstream
+  let trimmedSinceShown = false;   // a cut happened: ask for one repaint once the window is back and the backlog is written
 
   const writeNow = (data: string, paid: boolean) => {
     if (data.length === 0) return;
@@ -219,7 +219,7 @@ export function createTerminalFeeder(opts: TerminalFeederOptions): TerminalFeede
           // Keep the newest: cut at a line start outside any escape sequence and restore the terminal's sticky modes.
           const r = trimOldest(queue, DOC_HIDDEN_CAP, Math.floor(DOC_HIDDEN_CAP * 0.75), trimMemo);
           queuedChars += r.added - r.removed;
-          if (r.repaint) trimmedSinceShown = true;
+          if (r.repaint) trimmedSinceShown = true;   // only repainting output (relative moves / alt screen) needs the program to repaint
         }
         pump();
         return;

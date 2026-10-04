@@ -107,6 +107,44 @@ describe('pty-worker repaint nudge (after output was cut from a backlog)', () =>
     vi.advanceTimersByTime(200);
     expect(w.fakePty.cols).toBe(79);
   });
+  it('the child exiting inside the nudge window: no restore is attempted, nothing throws', () => {
+    vi.useFakeTimers();
+    const w = loadWorker();
+    w.deliver({ type: 'bounce' });
+    w.fakePty.resize.mockImplementation(() => { throw new Error('ioctl(2) failed, EBADF'); });   // the fd is closed now
+    w.exitPty();
+    expect(() => vi.advanceTimersByTime(200)).not.toThrow();
+    expect(w.fakePty.resize).toHaveBeenCalledTimes(1);        // only the narrowing; the restore never ran
+  });
+  it('a first half that throws leaves the nudge usable afterwards (state is set only after it succeeds)', () => {
+    vi.useFakeTimers();
+    const w = loadWorker();
+    w.fakePty.resize.mockImplementationOnce(() => { throw new Error('EBADF'); });
+    expect(() => w.deliver({ type: 'bounce' })).not.toThrow();
+    w.deliver({ type: 'bounce' });                             // not blocked by a stale in-progress flag
+    vi.advanceTimersByTime(200);
+    expect(w.fakePty.cols).toBe(80);
+  });
+  it('a failing restore is swallowed (no worker crash)', () => {
+    vi.useFakeTimers();
+    const w = loadWorker();
+    w.deliver({ type: 'bounce' });
+    w.fakePty.resize.mockImplementation(() => { throw new Error('EBADF'); });
+    expect(() => vi.advanceTimersByTime(200)).not.toThrow();
+  });
+  it('no nudge during a hand-off stop or after the PTY exited; and a plain resize after exit does not throw', () => {
+    vi.useFakeTimers();
+    const h = loadWorker();
+    h.deliver({ type: 'stop-for-handoff' });
+    h.deliver({ type: 'bounce' });
+    expect(h.fakePty.resize).not.toHaveBeenCalled();
+    const e = loadWorker();
+    e.exitPty();
+    e.deliver({ type: 'bounce' });
+    e.fakePty.resize.mockImplementation(() => { throw new Error('EBADF'); });
+    expect(() => e.deliver({ type: 'resize', cols: 90, rows: 30 })).not.toThrow();
+    expect(e.fakePty.resize).not.toHaveBeenCalled();
+  });
   it('never on Windows (ConPTY re-emits its buffer on every resize)', () => {
     vi.useFakeTimers();
     const w = loadWorker(undefined, {}, 'win32');
@@ -163,17 +201,6 @@ describe('pty-worker flow control', () => {
     w.emitData('a'.repeat(2000)); vi.advanceTimersByTime(10);
     for (let i = 0; i < 4; i++) { vi.advanceTimersByTime(4000); w.deliver({ type: 'ack', n: 10 }); }
     expect(w.fakePty.resume).not.toHaveBeenCalled();
-  });
-
-  it('a terminal re-attaching resets what was in flight to the old one, keeping what main still holds', () => {
-    vi.useFakeTimers();
-    const w = loadWorker(undefined, SMALL);
-    w.emitData('a'.repeat(1500)); vi.advanceTimersByTime(10);
-    expect(w.fakePty.pause).toHaveBeenCalledTimes(1);
-    w.deliver({ type: 'ack', reset: true, keep: 800 });            // 800 still owed: above LOW, stay paused
-    expect(w.fakePty.resume).not.toHaveBeenCalled();
-    w.deliver({ type: 'ack', reset: true, keep: 0 });
-    expect(w.fakePty.resume).toHaveBeenCalledTimes(1);
   });
 
   it('keystrokes and Ctrl+C reach the PTY while output is braked (input never waits behind output)', async () => {

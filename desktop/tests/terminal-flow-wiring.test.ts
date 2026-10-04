@@ -408,6 +408,19 @@ describe('terminal flow wiring: nothing can brake a session no desktop terminal 
     t.repaint(t.w2);
     expect(t.sm.bounceSize).toHaveBeenCalledWith(SID);
   });
+
+  it('a buggy renderer cannot bounce a PTY in a loop: at most one repaint a second per session', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const t = world();
+      t.registry.assignSession(SID, 2); t.ready(t.w2);
+      t.repaint(t.w2); t.repaint(t.w2); t.repaint(t.w2);
+      expect(t.sm.bounceSize).toHaveBeenCalledTimes(1);
+      vi.setSystemTime(Date.now() + 1100);
+      t.repaint(t.w2);
+      expect(t.sm.bounceSize).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
+  });
 });
 
 // The router calls these on the session manager. Every test above supplies a hand-made double, so a method the real

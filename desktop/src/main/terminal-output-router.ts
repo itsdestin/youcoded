@@ -134,16 +134,21 @@ export function createTerminalOutputRouter(d: RouterDeps): (sessionId: string) =
     flow.ack(sessionId, event.sender.id, Math.min(chars, 1e9));
   });
 
-  // The window cut its hidden-window backlog and is showing again: ask the program to repaint. Believed only from a window
-  // this session's output is routed to; the nudge itself is arbitrated in the worker (one owner, real resizes win).
+  // The window cut its hidden-window backlog and is showing again: ask the program to repaint. Accepted only from a window
+  // this session's output is ROUTED to (its routing targets — not necessarily a consumer or the owner), and at most once a
+  // second per session so a misbehaving renderer cannot bounce a PTY in a loop; the nudge itself is arbitrated in the worker.
+  const lastRepaintAt = new Map<string, number>();
   d.ipcMain.on(d.channels.repaint, (event, sessionId: string) => {
     if (typeof sessionId !== 'string' || !d.routeTargets(sessionId).includes(event.sender.id)) return;
+    const t = Date.now();
+    if (t - (lastRepaintAt.get(sessionId) ?? 0) < 1000) return;
+    lastRepaintAt.set(sessionId, t);
     d.sessionManager.bounceSize(sessionId);
   });
 
   return (sessionId: string) => {
     pendingOutput.delete(sessionId); pendingChars.delete(sessionId); flow.end(sessionId); readySessions.delete(sessionId);
-    awaitingReady.delete(sessionId);
+    awaitingReady.delete(sessionId); lastRepaintAt.delete(sessionId);
     trimMemos.delete(sessionId); trimmed.delete(sessionId);
     ended.add(sessionId);
     if (ended.size > ENDED_MEMORY) ended.delete(ended.values().next().value as string);
