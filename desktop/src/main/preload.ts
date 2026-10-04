@@ -109,6 +109,7 @@ const IPC = {
   SHOW_ITEM_IN_FOLDER: 'shell:show-item-in-folder',
   OPEN_PATH: 'shell:open-path',
   TERMINAL_READY: 'session:terminal-ready',
+  TERMINAL_ACK: 'session:terminal-ack',
   PERMISSION_RESPOND: 'permission:respond',
   REMOTE_GET_CONFIG: 'remote:get-config',
   REMOTE_SET_PASSWORD: 'remote:set-password',
@@ -591,6 +592,10 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.send(IPC.SESSION_RESIZE, sessionId, cols, rows),
     signalReady: (sessionId: string) =>
       ipcRenderer.send(IPC.TERMINAL_READY, sessionId),
+    // Flow control: "this terminal finished drawing `chars` characters" — lets main lift the brake on a
+    // flooding program. Fire-and-forget; only the window that owns the session is believed (ipc-handlers.ts).
+    ackOutput: (sessionId: string, chars: number) =>
+      ipcRenderer.send(IPC.TERMINAL_ACK, sessionId, chars),
     respondToPermission: (requestId: string, decision: object) =>
       ipcRenderer.invoke(IPC.PERMISSION_RESPOND, requestId, decision),
     browse: (): Promise<any[]> =>

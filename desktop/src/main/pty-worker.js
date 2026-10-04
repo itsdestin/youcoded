@@ -62,6 +62,140 @@ function resolveCommand(cmd) {
   return cmd; // fallback to bare name (works on macOS/Linux via execvp)
 }
 
+// ── Output batching + flow control (2026-10-04, terminal flow control) ─────────────────────────
+// Before this, every read from the PTY became its own process.send(), and nothing ever slowed the
+// producer: a 200 MB `cat` was forwarded whole at 10-20k messages a second, the window's terminal
+// (xterm) silently THREW AWAY everything past ~50 M pending characters (the last lines and the
+// prompt never appeared), the main process stalled 150-580 ms, and this worker grew ~80 MB per flood.
+//
+// Two mechanisms, both here because this is the only place that can slow the program that is writing:
+//
+//  1. BATCHING. The first chunk after a quiet moment goes out IMMEDIATELY (a typed character's echo
+//     and a Claude Code redraw pay nothing); chunks that follow within COALESCE_MS are merged and sent
+//     together, or sooner once COALESCE_MAX characters pile up. A flood is therefore at most ~250
+//     messages/s instead of ~10-20k. Chunks are only ever concatenated, never cut, so a multi-byte
+//     character or escape sequence is never split by us.
+//  2. CREDIT. `unacked` counts characters handed to main that the terminal has not yet finished
+//     parsing (main relays the renderer's acknowledgements as {type:'ack'}). Above FLOW_HIGH we
+//     pause() the PTY's read side, so the kernel's pty buffer fills and the PRODUCER blocks in
+//     write() exactly as it would on a slow real terminal; at or below FLOW_LOW we resume().
+//     Input (keystrokes, Ctrl+C) travels the other way, on the write side, and is never queued
+//     behind output.
+// Units are JS string length (UTF-16 units) end to end: the renderer acks `data.length` of what it
+// wrote, so the two sides agree without counting bytes.
+const COALESCE_MS = 4;
+const COALESCE_MAX = 256 * 1024;
+// Env overrides exist ONLY so tests can shrink the numbers (tests/pty-worker-flow.test.ts); the app never sets them.
+const envNum = (k, d) => { const v = Number(process.env[k]); return Number.isFinite(v) && v > 0 ? v : d; };
+const FLOW_HIGH = envNum('YOUCODED_PTY_FLOW_HIGH', 1024 * 1024);
+const FLOW_LOW = envNum('YOUCODED_PTY_FLOW_LOW', 256 * 1024);
+// A paused PTY with NO acknowledgement for this long means the other end is gone or wedged (renderer
+// reloading, window closed mid-flood, a lost message), not slow: let one more FLOW_HIGH through and
+// re-arm, so a lost ack degrades to a slow trickle instead of freezing the session for good.
+const FLOW_STALL_MS = envNum('YOUCODED_PTY_FLOW_STALL_MS', 15000);
+const FLOW_POLL_MS = 25;
+
+let outBuf = '';
+let outTimer = null;
+let lastSendAt = 0;
+let unacked = 0;
+let flowPaused = false;
+let flowDisabled = false;   // set once the PTY is exiting/killed: never pause again
+let lastAckAt = 0;
+let flowPoll = null;
+
+// Date.now(), not hrtime: millisecond resolution is all the 4 ms window and the stall rule need, and it keeps
+// the logic drivable with fake timers in tests/pty-worker-flow.test.ts.
+function nowMs() { return Date.now(); }
+
+function sendBatch(data) {
+  unacked += data.length;
+  lastSendAt = nowMs();
+  process.send({ type: 'data', data });
+  if (!flowPaused && !flowDisabled && unacked >= FLOW_HIGH) pauseFlow();
+}
+
+function flushOut() {
+  if (outTimer !== null) { clearTimeout(outTimer); outTimer = null; }
+  if (outBuf === '') return;
+  const data = outBuf;
+  outBuf = '';
+  sendBatch(data);
+}
+
+function onPtyData(data) {
+  if (typeof data !== 'string') data = String(data);
+  if (outBuf === '' && outTimer === null) {
+    const since = nowMs() - lastSendAt;
+    if (since >= COALESCE_MS) { sendBatch(data); return; }   // idle: no added latency
+    outBuf = data;
+    outTimer = setTimeout(flushOut, COALESCE_MS - since);
+    return;
+  }
+  outBuf += data;
+  if (outBuf.length >= COALESCE_MAX) flushOut();
+}
+
+// WHY the poll: on Unix node-pty only reports a child's exit after the output socket has been read
+// to its end — and gives up and DESTROYS the socket (dropping unread bytes, i.e. the final lines)
+// 200 ms after the child exits. A paused socket never reads, so a pause that was still in force when
+// the child exited would lose the tail. We therefore watch for the exit and resume at once. The
+// fields are node-pty internals (Unix `_boundClose`/`_emittedClose`; Windows ConPTY
+// `_agent._exitCode`); every read is guarded, and if they ever vanish the FLOW_STALL_MS rule below
+// still releases a stuck pause.
+function ptyHasExited() {
+  try {
+    if (!ptyProcess) return false;
+    if (ptyProcess._boundClose || ptyProcess._emittedClose) return true;
+    if (ptyProcess._agent && ptyProcess._agent._exitCode !== undefined) return true;
+  } catch { /* internals changed — rely on the stall rule */ }
+  return false;
+}
+
+function pauseFlow() {
+  if (!ptyProcess || flowPaused) return;
+  flowPaused = true;
+  lastAckAt = nowMs();
+  try { ptyProcess.pause(); } catch { flowPaused = false; return; }
+  trace('FLOW_PAUSE', `unacked=${unacked}`);
+  flowPoll = setInterval(() => {
+    if (ptyHasExited()) { disableFlow('exited'); return; }
+    if (nowMs() - lastAckAt >= FLOW_STALL_MS) {
+      trace('FLOW_STALL', `unacked=${unacked}`);
+      unacked = 0;   // forget what was lost; the next FLOW_HIGH re-arms the brake
+      resumeFlow();
+    }
+  }, FLOW_POLL_MS);
+}
+
+function resumeFlow() {
+  if (!flowPaused) return;
+  flowPaused = false;
+  if (flowPoll !== null) { clearInterval(flowPoll); flowPoll = null; }
+  try { if (ptyProcess) ptyProcess.resume(); } catch { /* socket already gone */ }
+  trace('FLOW_RESUME', `unacked=${unacked}`);
+}
+
+// Permanently stop applying backpressure (child exiting, kill, handoff, parent gone).
+function disableFlow(why) {
+  flowDisabled = true;
+  trace('FLOW_OFF', why);
+  resumeFlow();
+}
+
+function onAck(msg) {
+  lastAckAt = nowMs();
+  if (msg.reset) {
+    // main re-attached a terminal (mount, window change): whatever was in flight to the old one is
+    // gone for good. `keep` is what main is still holding for the new terminal.
+    unacked = Math.min(unacked, Math.max(0, Number(msg.keep) || 0));
+  } else {
+    const n = Number(msg.n);
+    if (Number.isFinite(n) && n > 0) unacked = Math.max(0, unacked - n);
+  }
+  if (flowPaused && unacked <= FLOW_LOW) resumeFlow();
+}
+
 let ptyProcess = null;
 let handoffStopping = false;
 let exitReported = false;
@@ -309,13 +443,17 @@ process.on('message', (msg) => {
         // for the same submit (means the child wasn't draining the pipe until
         // body+CR were both queued).
         trace('OUT', `len=${typeof data === 'string' ? data.length : 0} head=${tracePreview(data, 60)}`);
-        process.send({ type: 'data', data });
+        onPtyData(data);
       });
 
       ptyProcess.onExit(({ exitCode }) => {
         if (exitReported) return;
         exitReported = true;
         trace('EXIT', `code=${exitCode}`);
+        // WHY: the batch still waiting for its timer must reach main BEFORE the exit message,
+        // or the last bytes of output (the final lines) would arrive after the session is gone.
+        disableFlow('exit');
+        flushOut();
         // WHY: send's callback means the frame was flushed, not that main
         // handled it. On handoff, wait for main's explicit receipt before exit
         // so a worker 'exit' event cannot overtake the PTY exit message there.
@@ -392,6 +530,11 @@ process.on('message', (msg) => {
       });
       break;
     }
+    case 'ack': {
+      // The terminal finished parsing `n` characters (relayed by main). See the flow-control block.
+      onAck(msg);
+      break;
+    }
     case 'resize': {
       if (ptyProcess) ptyProcess.resize(msg.cols, msg.rows);
       break;
@@ -401,6 +544,7 @@ process.on('message', (msg) => {
       // only node-pty's onExit callback may acknowledge this shutdown.
       if (handoffStopping) break;
       handoffStopping = true;
+      disableFlow('handoff');
       if (ptyProcess) ptyProcess.kill();
       break;
     }
@@ -413,6 +557,7 @@ process.on('message', (msg) => {
       break;
     }
     case 'kill': {
+      disableFlow('kill');   // a paused read side would hold the exit open
       if (ptyProcess) ptyProcess.kill();
       break;
     }
@@ -421,6 +566,7 @@ process.on('message', (msg) => {
 
 process.on('disconnect', () => {
   clearTimeout(handoffExitTimer);
+  flowDisabled = true;
   if (ptyProcess) ptyProcess.kill();
   process.exit(0);
 });

@@ -1972,6 +1972,11 @@ export function installShim(): void {
       reportInputBlocked: (sessionId: string, blocked: boolean) => fire('session:input-blocked', { sessionId, blocked }),
       resize: (sessionId: string, cols: number, rows: number) => fire('session:resize', { sessionId, cols, rows }),
       signalReady: (sessionId: string) => fire('session:terminal-ready', { sessionId }),
+      // WHY a no-op and not fire('session:terminal-ack'): flow control belongs to the desktop's OWN window.
+      // A phone or browser paired to the desktop must never brake the program (a slow phone would stall the
+      // desktop), and the phone app's own PTY runtime has no worker to brake. The host also ignores the
+      // message, so this sends nothing at all.
+      ackOutput: (_sessionId: string, _chars: number) => {},
       // Tracked while in flight so the host's resolution of THIS answer is not shown as
       // "answered elsewhere" (see the hook:event case). Cleared when the reply settles.
       respondToPermission: (requestId: string, decision: object) => {

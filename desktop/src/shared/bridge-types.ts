@@ -56,6 +56,10 @@ interface SessionBridge {
   reportInputBlocked(sessionId: string, blocked: boolean): void;
   resize(sessionId: string, cols: number, rows: number): void;
   signalReady(sessionId: string): void;
+  /** Terminal flow control: the terminal finished parsing `chars` characters of this session's output.
+   *  Fire-and-forget. A desktop window sends it to main; a remote client / the phone app drops it (only the
+   *  desktop's own window may brake a program, so a slow phone can never stall it). */
+  ackOutput(sessionId: string, chars: number): void;
   respondToPermission(requestId: string, decision: object): Promise<unknown>;
   browse(): Promise<unknown[]>;
   /** Order is (sessionId, projectSlug, count, all) on every bridge and caller. */

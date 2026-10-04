@@ -4175,6 +4175,12 @@ export class RemoteServer {
         this.sessionManager.resizeSession(payload.sessionId, payload.cols, payload.rows);
         break;
       }
+      case 'session:terminal-ack': {
+        // Terminal flow control is driven by the desktop's own window only (ipc-handlers.ts TERMINAL_ACK):
+        // a phone's acknowledgement must never reach the PTY worker, or a slow phone would stall the
+        // desktop. The shim does not send this; the case exists so a future/older client gets a no-op.
+        break;
+      }
       case 'session:terminal-ready': {
         // Remote clients don't need the buffering gate that ipc-handlers uses,
         // because we replay the PTY buffer on connect instead.

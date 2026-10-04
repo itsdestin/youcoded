@@ -7,6 +7,7 @@ import '@xterm/xterm/css/xterm.css';
 import { usePtyOutput } from '../hooks/useIpc';
 import { usePtyRawBytes } from '../hooks/usePtyRawBytes';
 import { usePtyReset } from '../hooks/usePtyReset';
+import { createTerminalFeeder, type TerminalFeeder } from '../hooks/terminal-feeder';
 import { registerTerminal, unregisterTerminal, notifyBufferReady, noteAtlasClear } from '../hooks/terminal-registry';
 import { createTerminalKeyHandler } from './terminal-key-handler';
 import { attachRenderPause, type RenderPause } from './xterm-render-pause';
@@ -84,6 +85,10 @@ function TerminalView({ sessionId, visible }: Props) {
   // WHY: pauses this terminal's DRAWING (never its buffer) while hidden — see
   // xterm-render-pause.ts. Null when the installed xterm lacks the hook.
   const renderPauseRef = useRef<RenderPause | null>(null);
+  // WHY: the one place PTY text enters xterm — flow control (terminal-feeder.ts). It reports each
+  // parsed write back to main so a flooding program is braked instead of overrunning xterm's input
+  // limit, and it spends a hidden terminal's parsing sparingly. Rebuilt per session id.
+  const feederRef = useRef<{ id: string; feeder: TerminalFeeder } | null>(null);
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
   // Previous `visible`, updated only inside the visibility effect (NOT on every
@@ -498,6 +503,10 @@ function TerminalView({ sessionId, visible }: Props) {
     resizeObserver.observe(containerRef.current);
 
     return () => {
+      // Release whatever this terminal still owed the program, so it is not left braked behind a
+      // terminal that no longer exists (the next terminal's signalReady also resets the books).
+      feederRef.current?.feeder.dispose();
+      feederRef.current = null;
       clearTimeout(timer);
       clearTimeout(thumbInitTimer);
       if (debounceTimer !== null) clearTimeout(debounceTimer);
@@ -526,6 +535,8 @@ function TerminalView({ sessionId, visible }: Props) {
   // paused — writes below keep landing in it, which the prompt detector reads.
   useLayoutEffect(() => {
     renderPauseRef.current?.setHidden(!visible);
+    // Shown again: write whatever the hidden-terminal allowance held back, so it is current at once.
+    if (visible) feederRef.current?.feeder.wake();
   }, [visible]);
 
   // Visibility toggle side effects.
@@ -614,7 +625,27 @@ function TerminalView({ sessionId, visible }: Props) {
     terminalRef.current?.scrollToBottom();
   });
   usePtyOutput(useRawBytes ? null : sessionId, (data) => {
-    terminalRef.current?.write(data, () => notifyBufferReady(sessionId));
+    let held = feederRef.current;
+    if (!held || held.id !== sessionId) {
+      held?.feeder.dispose();
+      held = {
+        id: sessionId,
+        feeder: createTerminalFeeder({
+          write: (chunk, done) => {
+            const t = terminalRef.current;
+            // No terminal (not built yet / already disposed): there is nothing to wait for.
+            if (!t) { done(); return; }
+            t.write(chunk, () => { notifyBufferReady(sessionId); done(); });
+          },
+          ack: (chars) => window.claude.session.ackOutput?.(sessionId, chars),
+          isHidden: () => !visibleRef.current,
+          // Only where main has a brake to pull: not for a remote browser or the phone app.
+          throttleHidden: !isRemoteMode() && !isAndroid(),
+        }),
+      };
+      feederRef.current = held;
+    }
+    held.feeder.push(data);
   });
   usePtyRawBytes(useRawBytes ? sessionId : null, (data) => {
     terminalRef.current?.write(data, () => notifyBufferReady(sessionId));

@@ -1845,6 +1845,8 @@ export const IPC = {
   SKILLS_INSTALL_MANY: 'skills:install-many',
   SKILLS_APPLY_OUTPUT_STYLE: 'skills:apply-output-style',
   TERMINAL_READY: 'session:terminal-ready',
+  // Fire-and-forget, renderer -> main: this terminal finished parsing N characters of output. Drives PTY flow control (pty-worker.js).
+  TERMINAL_ACK: 'session:terminal-ack',
   // Main -> Renderer
   SESSION_CREATED: 'session:created',
   SESSION_DESTROYED: 'session:destroyed',

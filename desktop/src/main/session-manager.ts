@@ -594,6 +594,32 @@ export class SessionManager extends EventEmitter {
     return true;
   }
 
+  /**
+   * The terminal finished parsing `chars` characters of this session's output: tell the PTY worker so
+   * it can lift its brake. WHY here and not in the worker's own bookkeeping: only the renderer knows
+   * when xterm has actually consumed the text — that is the whole point of flow control (the old
+   * pipeline forwarded everything instantly and xterm silently discarded the overflow).
+   * Fire-and-forget; a session with no worker (native) or a closed channel is simply a no-op.
+   */
+  ackOutput(id: string, chars: number): boolean {
+    const session = this.sessions.get(id);
+    if (!session || !session.worker) return false;
+    try { session.worker.send({ type: 'ack', n: chars }); } catch { return false; }
+    return true;
+  }
+
+  /**
+   * A terminal (re)attached: whatever was in flight to the previous one will never be acknowledged.
+   * `keep` = characters main is still holding for the new terminal (the pre-mount buffer), which
+   * must stay on the books so they are acknowledged when drawn.
+   */
+  resetOutputCredit(id: string, keep: number): boolean {
+    const session = this.sessions.get(id);
+    if (!session || !session.worker) return false;
+    try { session.worker.send({ type: 'ack', reset: true, keep }); } catch { return false; }
+    return true;
+  }
+
   /** Claude Code ran its first hook for this session: its startup dialogs are behind it. */
   markStarted(id: string): void {
     const s = this.sessions.get(id);

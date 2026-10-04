@@ -2014,6 +2014,11 @@ export function registerIpcHandlers(
   // deserialize output for sessions it may not own. App.tsx now subscribes
   // per-session in sync with session:created / session:destroyed events, so
   // the global broadcast is no longer needed.
+  // WHY pendingChars: terminal flow control. The PTY worker counts every character it hands to main as
+  // "owed" until the terminal acknowledges it. Output waiting here for a terminal that has not mounted
+  // yet is still owed, so it is tracked, and the worker's own brake (it stops reading the PTY at ~1 M
+  // owed characters) is what keeps THIS buffer bounded — there is no separate cap to lose output to.
+  const pendingChars = new Map<string, number>();
   sessionManager.on('pty-output', (sessionId: string, data: string) => {
     if (readySessions.has(sessionId)) {
       sendForSession(sessionId, `pty:output:${sessionId}`, data);
@@ -2024,19 +2029,35 @@ export function registerIpcHandlers(
         pendingOutput.set(sessionId, buf);
       }
       buf.push(data);
+      pendingChars.set(sessionId, (pendingChars.get(sessionId) ?? 0) + data.length);
     }
   });
 
   // Renderer signals terminal is mounted and listening
   ipcMain.on(IPC.TERMINAL_READY, (_event, sessionId: string) => {
     readySessions.add(sessionId);
+    // A terminal (re)attached: anything in flight to a previous one is gone for good, so forgive it —
+    // except what is still held here, which is about to be sent and will be acknowledged normally.
+    sessionManager.resetOutputCredit(sessionId, pendingChars.get(sessionId) ?? 0);
     const buffered = pendingOutput.get(sessionId);
     if (buffered) {
       for (const data of buffered) {
         sendForSession(sessionId, `pty:output:${sessionId}`, data);
       }
       pendingOutput.delete(sessionId);
+      pendingChars.delete(sessionId);
     }
+  });
+
+  // Terminal flow control: the terminal finished parsing `chars` characters. Only the window that OWNS
+  // the session is believed: a buddy/subscriber window sees the same text but must not release the brake
+  // for a terminal that is still behind, and phones never reach this handler at all.
+  ipcMain.on(IPC.TERMINAL_ACK, (event, sessionId: string, chars: number) => {
+    if (typeof sessionId !== 'string' || typeof chars !== 'number' || !Number.isFinite(chars) || chars <= 0) return;
+    const ownerId = windowRegistry?.getOwner(sessionId);
+    const senderOk = ownerId != null ? event.sender.id === ownerId : event.sender === mainWindow.webContents;
+    if (!senderOk) return;
+    sessionManager.ackOutput(sessionId, Math.min(chars, 1e9));
   });
 
   // No-op: Electron has no hardware back button. Registered for shape
@@ -2051,6 +2072,7 @@ export function registerIpcHandlers(
   sessionManager.on('session-exit', (sessionId: string, exitCode: number) => {
     sendForSession(sessionId, IPC.SESSION_DESTROYED, sessionId, exitCode);
     pendingOutput.delete(sessionId);
+    pendingChars.delete(sessionId);
     readySessions.delete(sessionId);
     windowRegistry?.releaseSession(sessionId);
   });
