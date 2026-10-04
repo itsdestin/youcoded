@@ -13,7 +13,7 @@
 // reopen: [...] — built for exactly this) for the empty-strip cases, and
 // overrides the store's `sessions` directly for the non-empty case.
 import React from 'react';
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { beforeAll, describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 
@@ -140,10 +140,12 @@ afterEach(() => {
   expect(crashes).toEqual([]);
 });
 
-// WHY 15 s, not 4: the first mount pays App's whole cold start (≈10 s in isolation on
-// 2026-10-03) and a busy machine stretches it; 4 s timed out in a full run. The test's
-// own 30 s limit still catches a screen that never comes.
-const APPEAR_MS = 15_000;
+// The app's one-time cost — importing the whole App — is warmed before the tests under its
+// own budget (test-suite-hygiene: "warmed in beforeAll ... never inside the first test"):
+// ≈10 s alone on 2026-10-04, and a full run on a busy machine timed the first test out.
+const APP_IMPORT_MS = 60_000;
+beforeAll(async () => { await import('../src/renderer/App'); }, APP_IMPORT_MS);
+const APPEAR_MS = 4000;
 
 describe('App — the Welcome back screen only ever opens once, in the leader window, never remote or Android', () => {
   it('asks once when the strip is empty and this window is the leader', async () => {

@@ -555,6 +555,9 @@ describe('MarkdownContent while a reply streams in', () => {
     live.unmount();
   });
 
+  // A fixed amount of work (30 documents), measured ~3 s alone; it timed out at the 30 s
+  // default in a full run at load 70 (2026-10-03). More time tests no less.
+  const RANDOM_REPLIES_MS = 90_000;
   // Review F4: seeded random replies, streamed word by word into a bubble that
   // sometimes mounts mid-reply, compared as DRAWN PAGES (not parse trees) with
   // the whole-message render after every word. Mixes in the constructs that act
@@ -605,9 +608,7 @@ describe('MarkdownContent while a reply streams in', () => {
       live.unmount();
       today.unmount();
     }
-  // WHY 90 s: ~3 s alone, but it timed out at 30 s in a full run on a machine at load
-  // 70 (2026-10-03). A fixed amount of work, so more time tests no less.
-  }, 90_000);
+  }, RANDOM_REPLIES_MS);
 
   // What each streamed update costs, in characters: everything the splitter
   // parsed plus everything handed to react-markdown. Today's whole-message
