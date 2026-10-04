@@ -23,7 +23,7 @@ import {
   type FlagName,
 } from './resume-browser-filters';
 import { useTagRegistry, refreshTagRegistry } from '../hooks/useTagRegistry';
-import { SessionDetails } from './tags/SessionDetails';
+import { SessionSheet } from './tags/SessionDetails';
 import { PinIcon } from './tags/PinIcon';
 import { TagChip } from './tags/TagChip';
 import { SessionCardTags, SessionCardMeta, CompleteToggle, SESSION_CARD_SURFACE_BASE } from './SessionCardDetails';
@@ -1235,12 +1235,11 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // Tags and note. There is no separate "Flags" section: Priority is the Pin to
   // top switch, and Complete lives on the card's hide icon, since marking something
   // done is a one-click action that shouldn't cost opening a menu.
-  // Session details (session-details-5) — the in-session popup's note card, Tags card and
-  // Pin to top, without the name: the card right above already shows it. Tag editing
-  // (rename, colour, archive, delete, new) happens inside its Tags card.
+  // The Resume sheet: Session details' note, tags and Pin to top, arranged to fit this
+  // narrow panel (session-details-final#SF-2). Tag editing happens inside it.
   const renderOrganizeControls = (s: PastSession) => (
     <div onClick={(e) => e.stopPropagation()}>
-      <SessionDetails
+      <SessionSheet
         appliedIds={new Set(s.tags ?? [])}
         onToggleTag={(tagId, next) => toggleTag(s.sessionId, tagId, next)}
         registry={registry}

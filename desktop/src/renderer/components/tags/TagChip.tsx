@@ -18,12 +18,16 @@ import { tagColorCss } from '../../../shared/tags';
 
 /** A tag's × / + as a small round button (session-details-1#SD1-1: "make the plus/x
  *  buttons a bit more prominent/button-y"): a disc in the border colour, stronger on hover. */
-export function ChipAction({ kind, label, onClick, size = 'sm' }: { kind: 'remove' | 'add'; label: string; onClick: () => void; size?: 'sm' | 'md' }) {
+// Disc sizes leave 2-4 px of the pill showing above and below it (session-details-final
+// #SF-1: "the outer container of the + button is a bit too big. overlaps almost with edge
+// of the tag pill"): xs for the 15 px list pill, sm for the 18 px one, md for the 26 px one.
+const DISC = { xs: 'w-2.5 h-2.5', sm: 'w-3 h-3', md: 'w-4 h-4' } as const;
+export function ChipAction({ kind, label, onClick, size = 'sm' }: { kind: 'remove' | 'add'; label: string; onClick: () => void; size?: keyof typeof DISC }) {
   return (
     <button type="button" aria-label={`${kind === 'remove' ? 'Remove' : 'Add'} ${label}`}
       onClick={(e) => { e.stopPropagation(); onClick(); }}
-      className={`${size === 'md' ? 'w-4 h-4' : 'w-3.5 h-3.5'} -mr-0.5 shrink-0 inline-flex items-center justify-center rounded-full text-fg-2 hover:text-fg bg-edge-dim hover:bg-edge transition-colors`}>
-      <svg viewBox="0 0 12 12" className="w-2 h-2" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" aria-hidden>
+      className={`${DISC[size]} shrink-0 inline-flex items-center justify-center rounded-full text-fg-2 hover:text-fg bg-edge-dim hover:bg-edge transition-colors`}>
+      <svg viewBox="0 0 12 12" className={size === 'md' ? 'w-2 h-2' : 'w-1.5 h-1.5'} fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" aria-hidden>
         {kind === 'remove' ? <path d="M3 3l6 6M9 3l-6 6" /> : <path d="M6 2.5v7M2.5 6h7" />}
       </svg>
     </button>
@@ -64,8 +68,8 @@ export function TagChip({ tag, onRemove, onAdd, dim = false, archivedLook = fals
   className?: string;
 }) {
   const c = mix(tag.color);
-  const action = onRemove ? <ChipAction kind="remove" label={tag.label} onClick={onRemove} />
-    : onAdd ? <ChipAction kind="add" label={tag.label} onClick={onAdd} /> : null;
+  const action = onRemove ? <ChipAction kind="remove" label={tag.label} onClick={onRemove} size="xs" />
+    : onAdd ? <ChipAction kind="add" label={tag.label} onClick={onAdd} size="xs" /> : null;
 
   if (archivedLook) {
     return (

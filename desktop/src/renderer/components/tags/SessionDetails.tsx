@@ -49,6 +49,18 @@ export function SessionDetails(p: Props) {
 /** The project card's title + description recipe (ProjectHero): a small label, the name
  *  large, then the note as plain words you click to edit — or "+ Add a note". */
 function HeaderCard({ name, onRename, note, onNote }: { name?: string; onRename?: () => void; note: string; onNote: (t: string) => void }) {
+  return (
+    <div className={`${CARD_LEVEL_1} p-4`}>
+      <NoteBlock name={name} onRename={onRename} note={note} onNote={onNote} />
+    </div>
+  );
+}
+
+/** The name (when given) and the note — no card of its own, so a sheet can place it. */
+function NoteBlock({ name, onRename, note, onNote, hang = true }: { name?: string; onRename?: () => void; note: string; onNote: (t: string) => void; hang?: boolean }) {
+  // The project card hangs the note's box into the card's margin so its WORDS line up with
+  // the name; in the narrow Resume sheet that left the box touching the card's edge.
+  const ml = hang ? '-ml-2.5' : '', mlAdd = hang ? '-ml-2' : '';
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(note);
   const fit = (el: HTMLTextAreaElement | null) => { if (el) { el.style.height = 'auto'; el.style.height = `${el.scrollHeight}px`; } };
@@ -56,7 +68,7 @@ function HeaderCard({ name, onRename, note, onNote }: { name?: string; onRename?
   const top = name !== undefined ? 'mt-1.5' : '';
   const commit = () => { setEditing(false); if (draft.trim() !== note.trim()) onNote(draft.trim()); };
   return (
-    <div className={`${CARD_LEVEL_1} p-4`}>
+    <div>
       {/* The Resume card's title control: dotted underline and a pencil, click to rename. */}
       {name !== undefined && <div><button type="button" onClick={onRename} disabled={!onRename} aria-label={`Rename ${name}`}
         className="group inline-flex max-w-full items-start gap-1.5 -ml-1 px-1 py-0.5 rounded-md text-left hover:bg-inset transition-colors">
@@ -68,19 +80,19 @@ function HeaderCard({ name, onRename, note, onNote }: { name?: string; onRename?
       {editing ? (
         <Textarea size="sm" ref={fit} rows={1} autoFocus value={draft} aria-label="Note"
           placeholder="A note for later — shows under All sessions"
-          className={`${top} -ml-2.5 w-full text-sm italic overflow-hidden`}
+          className={`${top} ${ml} w-full text-sm italic overflow-hidden`}
           onChange={(e) => { setDraft(e.target.value); fit(e.currentTarget); }}
           onKeyDown={(e) => { if (e.key === 'Escape') { setDraft(note); setEditing(false); } }}
           onBlur={commit} />
       ) : note ? (
         <button type="button" onClick={() => { setDraft(note); setEditing(true); }} title="Edit note"
-          className={`${top} block w-full text-left rounded-lg border border-transparent -ml-2.5 px-2.5 py-1.5 hover:bg-inset transition-colors`}>
+          className={`${top} block w-full text-left rounded-lg border border-transparent ${ml} px-2.5 py-1.5 hover:bg-inset transition-colors`}>
           <span className="text-sm italic text-fg-dim whitespace-pre-wrap break-words">“{note}”</span>
         </button>
       ) : (
         // Its own line under the name (a bare inline button sat beside it).
         <div><button type="button" onClick={() => { setDraft(''); setEditing(true); }}
-          className={`${top} -ml-2 inline-flex items-center gap-1 rounded-md border border-dashed border-edge-dim px-2 py-1 text-xs text-fg-muted hover:text-fg hover:border-edge hover:bg-inset transition-colors`}>
+          className={`${top} ${mlAdd} inline-flex items-center gap-1 rounded-md border border-dashed border-edge-dim px-2 py-1 text-xs text-fg-muted hover:text-fg hover:border-edge hover:bg-inset transition-colors`}>
           <span aria-hidden className="text-sm leading-none">+</span>
           Add a note
         </button></div>
@@ -117,7 +129,8 @@ function OtherPill({ t, onEdit, onAdd, picked }: { t: TagRecord; onEdit: () => v
   );
 }
 
-function Tags({ registry, appliedIds, onToggleTag }: Props) {
+/** The tag editor's pieces, for each layout to arrange. */
+function useTagEditor({ registry, appliedIds, onToggleTag }: Pick<Props, 'registry' | 'appliedIds' | 'onToggleTag'>) {
   const [query, setQuery] = useState('');
   const [picked, setPicked] = useState<string | 'new' | null>(null);
   const q = query.trim().toLowerCase();
@@ -131,9 +144,12 @@ function Tags({ registry, appliedIds, onToggleTag }: Props) {
   const toggle = (id: string) => setPicked((p) => (p === id ? null : id));
   const editing = picked && picked !== 'new' ? registry.byId.get(picked) ?? null : null;
 
-  if (registry.error && registry.tags.length === 0) {
-    return <ErrorState variant="inline" message={`Couldn't load your tags: ${registry.error}`} onRetry={registry.reload} />;
-  }
+  // Nothing loaded at all: the whole editor is this error (error inventory #16).
+  const failed = registry.error && registry.tags.length === 0
+    ? <ErrorState variant="inline" message={`Couldn't load your tags: ${registry.error}`} onRetry={registry.reload} />
+    : null;
+  // A failed refresh keeps the tags already shown and says so.
+  const stale = registry.error ? <FieldError>Couldn't refresh your tags — showing the last ones loaded.</FieldError> : null;
 
   const search = (
     <InputGroup size="sm">
@@ -175,20 +191,84 @@ function Tags({ registry, appliedIds, onToggleTag }: Props) {
     </div>
   );
 
+  return { failed, stale, applied, appliedPills, search, otherCloud, editBox, openNew: () => setPicked('new') };
+}
+
+function Tags(p: Props) {
+  const t = useTagEditor(p);
+  if (t.failed) return t.failed;
   return (
     <section>
       <SectionLabel className="mb-2">Tags</SectionLabel>
       <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
-        {/* A failed refresh keeps the tags already shown and says so (error inventory #16). */}
-        {registry.error && <FieldError>Couldn't refresh your tags — showing the last ones loaded.</FieldError>}
-        {appliedPills}
+        {t.stale}
+        {t.appliedPills}
         <div className="space-y-2">
           <div className="text-xs font-medium text-fg-2">Add a tag</div>
-          {search}
-          {otherCloud}
+          {t.search}
+          {t.otherCloud}
         </div>
-        {editBox}
+        {t.editBox}
       </div>
     </section>
+  );
+}
+
+// ── The Resume sheet (TRIAL, session-details-final#SF-2: "this needs to be a different
+// surface than the session details page. we need to tune it to fit this panel.") ──────
+//   A — flat: no cards inside the Resume card; small labels, then Note, Tags, Pin
+//   B — add on demand: the note, this session's tags and a "+ Add tag" pill that opens the
+//       search and the other tags; Pin
+//   C — one card: note, tags and Pin together in a single inset card
+export const TRIAL_SHEET = 'C' as 'A' | 'B' | 'C';
+
+export function SessionSheet(p: Props) {
+  const t = useTagEditor(p);
+  const [adding, setAdding] = useState(false);
+  const pinRow = (
+    <SettingRow header variant="item" title="Pin to top" icon={<PinIcon className="w-3.5 h-3.5 text-fg-muted" />}
+      control={<Toggle checked={p.pin.pinned} onChange={p.pin.onPin} aria-label="Pin to top" />} />
+  );
+  const note = <NoteBlock note={p.note} onNote={p.onNote} hang={false} />;
+  if (TRIAL_SHEET === 'A') {
+    return (
+      <div className="space-y-3">
+        <div><SectionLabel className="mb-1">Note</SectionLabel>{note}</div>
+        <div className="space-y-2">
+          <SectionLabel>Tags</SectionLabel>
+          {t.failed ?? <>{t.stale}{t.appliedPills}{t.search}{t.otherCloud}{t.editBox}</>}
+        </div>
+        {pinRow}
+      </div>
+    );
+  }
+  if (TRIAL_SHEET === 'B') {
+    return (
+      <div className="space-y-3">
+        {note}
+        {t.failed ?? (
+          <div className="space-y-2">
+            {t.stale}
+            <div className="flex flex-wrap items-center gap-1.5">
+              {t.applied.length > 0 && t.appliedPills}
+              <button type="button" onClick={() => setAdding((v) => !v)} aria-expanded={adding}
+                className="shrink-0 inline-flex items-center px-2 h-6.5 rounded-full border border-dashed border-edge text-xs text-fg-2 hover:text-fg hover:bg-inset transition-colors">
+                <span className="tag-line tag-line--caps">{adding ? 'Done adding' : '+ Add tag'}</span>
+              </button>
+            </div>
+            {adding && <div className="space-y-2">{t.search}{t.otherCloud}</div>}
+            {t.editBox}
+          </div>
+        )}
+        {pinRow}
+      </div>
+    );
+  }
+  return (
+    <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
+      {note}
+      {t.failed ?? <div className="space-y-2">{t.stale}{t.appliedPills}{t.search}{t.otherCloud}{t.editBox}</div>}
+      {pinRow}
+    </div>
   );
 }
