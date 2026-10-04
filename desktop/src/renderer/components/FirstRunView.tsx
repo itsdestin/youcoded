@@ -95,6 +95,7 @@ function AuthScreen({
   onChatGpt,
   onOpenRouter,
   onApiKey,
+  onCancel,
 }: {
   authMode: FirstRunState['authMode'];
   onOAuth: () => void;
@@ -109,6 +110,9 @@ function AuthScreen({
   onApiKey: (key: string, service: KeyService) => void;
   // S-1: Claude Code installs after "Log in with Claude", not before the screen.
   claudeInstalling: boolean;
+  // The wait screen's way back (Destin, 2026-10-03): without it, changing your mind after
+  // pressing a sign-in button meant restarting the app.
+  onCancel: () => void;
 }) {
   const [localOpen, setLocalOpen] = useState(authMode === 'local');
   // Round 3 review (A-7): the API key opens its own page, like Use a local model.
@@ -152,6 +156,7 @@ function AuthScreen({
           <BrailleSpinner size="sm" />
           <span>A browser window should have opened. Finish signing in to {where} there…</span>
         </div>
+        <Button variant="ghost" onClick={onCancel}>Cancel</Button>
       </div>
     );
   }
@@ -335,6 +340,10 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
     (window as any).claude.firstRun.startAuth('chatgpt');
   }, []);
 
+  const handleCancelAuth = useCallback(() => {
+    (window as any).claude.firstRun.cancelAuth?.();
+  }, []);
+
   const handleOpenRouter = useCallback(() => {
     (window as any).claude.firstRun.startAuth('openrouter');
   }, []);
@@ -410,6 +419,7 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
               onChatGpt={handleChatGpt}
               onOpenRouter={handleOpenRouter}
               onApiKey={handleApiKey}
+              onCancel={handleCancelAuth}
               claudeInstalling={state.prerequisites.some((p) => p.name === 'claude' && p.status === 'installing')}
             />
           )}

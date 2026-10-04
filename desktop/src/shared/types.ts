@@ -1974,6 +1974,7 @@ export const IPC = {
   FIRST_RUN_RETRY: 'first-run:retry',
   FIRST_RUN_START_AUTH: 'first-run:start-auth',
   FIRST_RUN_SUBMIT_API_KEY: 'first-run:submit-api-key',
+  FIRST_RUN_CANCEL_AUTH: 'first-run:cancel-auth',
   FIRST_RUN_SKIP: 'first-run:skip',
   // First-run local models (2026-09-14): local setup's suggestion, finishing setup
   // on a model app already running, and the first download's band above the
