@@ -29,7 +29,13 @@ export function usePageSockets(
       // The workbench's fake backend may bring a pretend peer and frame source (no real camera there);
       // the real bridges never set this.
       deps: bridge()?.videoPlayback as Partial<VideoHostDeps> | undefined,
-      post: (message, transfer) => { try { frameRef.current?.contentWindow?.postMessage(message, '*', transfer); } catch { /* the frame went away */ } },
+      // WHY a boolean: postMessage to a frame that is gone does nothing and does not throw; the video
+      // hub needs to know, to close the picture it was about to hand over.
+      post: (message, transfer) => {
+        const w = frameRef.current?.contentWindow;
+        if (!w) return false;
+        try { w.postMessage(message, '*', transfer); return true; } catch { return false; }
+      },
     });
     const onMessage = (e: MessageEvent) => {
       if (!e.source || e.source !== frameRef.current?.contentWindow) return;

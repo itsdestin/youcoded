@@ -9,6 +9,7 @@
 import { isIP } from 'net';
 import { lookup as dnsLookup } from 'dns/promises';
 import { isHomeIpv4 } from '../../../shared/page-device-address';
+import { embeddedIpv4, parseIpBytes } from './ip-bytes';
 
 export class NetGuardError extends Error {}
 
@@ -27,28 +28,17 @@ export function isPrivateIp(ip: string): boolean {
     const second = Number(ip.split('.')[1]);
     return ip.startsWith('172.') && second >= 16 && second <= 31;
   }
-  const lower = ip.toLowerCase();
-  if (lower === '::' || lower === '::1') return true;
-  if (lower.startsWith('fc') || lower.startsWith('fd')) return true;    // fc00::/7 ULA
-  if (/^fe[89ab]/.test(lower)) return true;                             // fe80::/10 link-local
-  // v4-mapped IPv6 (::ffff:0:0/96) — CRITICAL: `new URL` NORMALIZES the embedded
-  // v4 to HEX groups, so http://[::ffff:127.0.0.1]/ arrives as `::ffff:7f00:1`,
-  // NOT the dotted form. The old dotted-only regex missed every real request and
-  // let ::ffff:169.254.169.254 (cloud metadata) through — the classic bypass.
-  // Decode BOTH encodings: a dotted remainder is used as-is; otherwise the
-  // trailing hex group(s) ARE the embedded v4 (its low 32 bits), which we rebuild
-  // into a dotted-quad (each ≤4-digit hex group is 2 octets) and re-check.
-  if (lower.startsWith('::ffff:')) {
-    const rest = lower.slice('::ffff:'.length);                        // e.g. '7f00:1' or '127.0.0.1'
-    if (/^\d+\.\d+\.\d+\.\d+$/.test(rest)) return isPrivateIp(rest);
-    const groups = rest.split(':').filter(Boolean);                    // '::ffff:0:7f00:1' → ['0','7f00','1']
-    if (groups.length >= 1 && groups.every((g) => /^[0-9a-f]{1,4}$/.test(g))) {
-      const low = parseInt(groups[groups.length - 1], 16);             // low 16 bits → last two octets
-      const high = groups.length >= 2 ? parseInt(groups[groups.length - 2], 16) : 0; // high 16 bits → first two
-      const v4 = `${(high >> 8) & 0xff}.${high & 0xff}.${(low >> 8) & 0xff}.${low & 0xff}`;
-      return isPrivateIp(v4);
-    }
-  }
+  // WHY bytes, not text (live-socket step 3 review, finding 1): `new URL` writes
+  // an IPv6 literal in one canonical spelling, but a DNS answer or another caller
+  // may not, and the v4-compatible form (::127.0.0.1 -> ::7f00:1) was never
+  // matched. Parse to bytes so every spelling of an address is the same address.
+  // (`new URL` also turns hex/octal/shorthand IPv4 into dotted before it gets here.)
+  const bytes = parseIpBytes(ip);
+  if (!bytes) return false;
+  const v4 = embeddedIpv4(bytes);
+  if (v4) return isPrivateIp(Array.from(v4).join('.'));  // mapped / compatible / NAT64 forms of a v4
+  if ((bytes[0] & 0xfe) === 0xfc) return true;           // fc00::/7 ULA
+  if (bytes[0] === 0xfe && (bytes[1] & 0xc0) === 0x80) return true; // fe80::/10 link-local
   return false;
 }
 
@@ -59,23 +49,24 @@ export function isPrivateIp(ip: string): boolean {
  *  fine: that is where a camera lives. Uses the same ranges as PRIVATE_V4
  *  above, narrowed to the ones that are never a camera. */
 export function isNeverDialIp(ip: string): boolean {
-  if (isIP(ip) === 4) return /^(0|127)\./.test(ip) || /^169\.254\./.test(ip);
-  const lower = ip.toLowerCase();
-  if (lower === '::' || lower === '::1') return true;
-  if (/^fe[89ab]/.test(lower)) return true;      // fe80::/10 link-local
-  if (lower.startsWith('fd00:ec2:')) return true; // AWS metadata over IPv6
-  if (lower.startsWith('::ffff:')) {
-    // v4-mapped: dotted, or two hex groups that ARE the v4 (see isPrivateIp).
-    const rest = lower.slice('::ffff:'.length);
-    if (/^\d+\.\d+\.\d+\.\d+$/.test(rest)) return isNeverDialIp(rest);
-    const groups = rest.split(':').filter(Boolean);
-    if (groups.length >= 1 && groups.every((g) => /^[0-9a-f]{1,4}$/.test(g))) {
-      const low = parseInt(groups[groups.length - 1], 16);
-      const high = groups.length >= 2 ? parseInt(groups[groups.length - 2], 16) : 0;
-      return isNeverDialIp(`${(high >> 8) & 0xff}.${high & 0xff}.${(low >> 8) & 0xff}.${low & 0xff}`);
-    }
-  }
-  return false;
+  // WHY bytes (step 3 review, finding 1): the old text comparison missed
+  // "0:0:0:0:0:0:0:1", "::127.0.0.1", "fd00:0ec2::254" and every other spelling
+  // of the same address. Test the parsed bytes instead.
+  const b = parseIpBytes(ip);
+  if (!b) return false;
+  if (b.length === 4) return neverDialV4(b);
+  const v4 = embeddedIpv4(b);
+  if (v4) return neverDialV4(v4);                       // also covers :: and ::1 (as 0.0.0.0 / 0.0.0.1)
+  if (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) return true; // fe80::/10 link-local
+  if (b[0] === 0xff) return true;                          // ff00::/8 multicast
+  return b[0] === 0xfd && b[1] === 0x00 && b[2] === 0x0e && b[3] === 0xc2; // fd00:ec2::/32 AWS metadata
+}
+
+/** 0/8, loopback, link-local (holds 169.254.169.254), multicast and reserved
+ *  (224+, incl. broadcast), and Alibaba's metadata address: never a camera. */
+function neverDialV4(b: Uint8Array): boolean {
+  const [a, x, y, z] = b;
+  return a === 0 || a === 127 || a >= 224 || (a === 169 && x === 254) || (a === 100 && x === 100 && y === 100 && z === 200);
 }
 
 /** Scheme + address validation for ONE URL. Throws NetGuardError with an honest,

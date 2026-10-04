@@ -182,12 +182,14 @@ export class PageLiveVideos {
   /** One reply after the template was sent: the answer, a candidate, a failure — anything else is ignored. */
   private negotiate(v: Video, msg: unknown, type: string, profile: NonNullable<Extract<DeviceSocketAccess, { ok: true }>['connection']['videoProfile']>): void {
     const failed = at(msg, profile.failed);
-    if (typeof failed === 'string' && failed) { this.finish(v, failed.slice(0, 300), true); return; }
+    // WHY redacted AGAIN after parsing: the first pass ran on the raw text, where a key written with JSON
+    // escapes (\\u0061bc, \\/) does not match; JSON.parse then turns it back into the plain key.
+    if (typeof failed === 'string' && failed) { this.finish(v, redact(failed, v.secrets).slice(0, 300), true); return; }
     // A plain "no" to the request itself (the device's result message).
     if (type === 'result' && (msg as { success?: unknown }).success === false) { this.finish(v, 'The device did not start the video.', true); return; }
     const answer = at(msg, profile.answer);
     if (typeof answer === 'string' && answer && !v.answered) {
-      const f = filterAnswerSdp(answer);
+      const f = filterAnswerSdp(redact(answer, v.secrets));
       v.answered = true;
       v.usable += f.usable;
       if (v.usable > 0) this.emitAnswer(v, f.sdp);
@@ -200,8 +202,9 @@ export class PageLiveVideos {
     }
     const cand = at(msg, profile.candidate);
     if (cand !== undefined) {
-      const json = filterCandidate(cand);
-      if (json === null) return;
+      const found = filterCandidate(cand);
+      if (found === null) return;
+      const json = redact(found, v.secrets);
       v.usable++;
       if (v.heldAnswer !== null) { clearTimeout(v.timers.cand); v.timers.cand = undefined; const held = v.heldAnswer; v.heldAnswer = null; this.emitAnswer(v, held); }
       this.push(v, { socket: v.id, kind: 'video-candidate', candidate: json });

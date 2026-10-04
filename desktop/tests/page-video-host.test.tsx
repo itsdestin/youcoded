@@ -6,7 +6,7 @@
 // arrives" calls drive every step).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
-import { createPageVideoHub, ICE_GATHER_CAP_MS, VIDEO_MAX_MS, VIDEO_PING_MS, type PeerLike, type VideoElLike, type VideoHostDeps } from '../src/renderer/components/pages/page-video-host';
+import { createPageVideoHub, DISCONNECT_MS, ICE_GATHER_CAP_MS, QUIET_MS, VIDEO_MAX_MS, VIDEO_PING_MS, type PeerLike, type VideoElLike, type VideoHostDeps } from '../src/renderer/components/pages/page-video-host';
 import { usePageSockets } from '../src/renderer/components/pages/use-page-sockets';
 import type { PageSocketEvent } from '../src/shared/pages-types';
 
@@ -35,7 +35,7 @@ class FakePeer implements PeerLike {
   emit(t: string, e: any = {}) { (this.listeners.get(t) ?? []).forEach((cb) => cb(e)); }
 }
 class FakeEl implements VideoElLike {
-  srcObject: unknown = null; muted = true; readyState = 4; removed = false; plays = 0;
+  srcObject: unknown = null; videoWidth = 640; muted = true; readyState = 4; removed = false; plays = 0;
   cb: (() => void) | null = null; cancelled = 0;
   play() { this.plays++; }
   remove() { this.removed = true; }
@@ -58,6 +58,7 @@ function rig(extra: Partial<VideoHostDeps> = {}) {
   const peers: FakePeer[] = [];
   const els: FakeEl[] = [];
   const bitmaps: Bitmap[] = [];
+  const bitmapOpts: unknown[] = [];
   const posted: any[] = [];
   const transfers: unknown[][] = [];
   const deferred: Array<() => void> = [];
@@ -65,7 +66,8 @@ function rig(extra: Partial<VideoHostDeps> = {}) {
   const deps: Partial<VideoHostDeps> = {
     createPeer: () => { const p = new FakePeer(); peers.push(p); return p; },
     createVideoEl: () => { const e = new FakeEl(); els.push(e); return e; },
-    createBitmap: () => new Promise((resolve) => {
+    createBitmap: (_src, o) => new Promise((resolve) => {
+      bitmapOpts.push(o);
       const b: Bitmap = { id: bitmaps.length + 1, closed: false, close() { this.closed = true; } };
       bitmaps.push(b);
       if (hold) deferred.push(() => resolve(b as unknown as ImageBitmap)); else resolve(b as unknown as ImageBitmap);
@@ -77,7 +79,7 @@ function rig(extra: Partial<VideoHostDeps> = {}) {
     post: (m, t) => { posted.push(m); transfers.push(t ?? []); },
   });
   return {
-    hub, bridge, peers, els, bitmaps, posted, transfers,
+    hub, bridge, peers, els, bitmaps, bitmapOpts, posted, transfers,
     push: (e: PageSocketEvent) => listeners.forEach((l) => l(e)),
     holdBitmaps: (on: boolean) => { hold = on; },
     releaseBitmaps: () => deferred.splice(0).forEach((f) => f()),
@@ -100,7 +102,14 @@ async function playing(r: ReturnType<typeof rig>) {
 
 let visibility: 'visible' | 'hidden' = 'visible';
 function setVisibility(v: 'visible' | 'hidden') { visibility = v; document.dispatchEvent(new Event('visibilitychange')); }
+/** Time moves only when a test says so (the pump spaces pictures by the clock). */
+const tick = (ms = 100) => vi.setSystemTime(Date.now() + ms);
+/** Let `ms` pass with the camera sending a picture every 5 seconds (a camera that is alive). */
+async function alive(r: ReturnType<typeof rig>, ms: number) {
+  for (let t = 0; t < ms; t += 5_000) { await vi.advanceTimersByTimeAsync(5_000); r.els[0].frame(); }
+}
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
   visibility = 'visible';
   Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility });
 });
@@ -245,6 +254,7 @@ describe('the frame pump: one picture at a time, and none left open', () => {
     expect(r.bitmaps).toHaveLength(1);
     r.hub.handleFrameMessage({ type: 'youcoded:video:ack', id: 'v1', n: 1 });
     r.hub.handleFrameMessage({ type: 'youcoded:video:ack', id: 'v1', n: 1 });
+    tick();
     el.frame(); await flush();
     expect(r.bitmaps).toHaveLength(2);
     expect(r.frames().map((f) => f.n)).toEqual([1, 2]);
@@ -275,7 +285,7 @@ describe('the frame pump: one picture at a time, and none left open', () => {
     const hub = createPageVideoHub({
       pageId: 'personal:home', frame: 'f1', bridge: () => r.bridge as any,
       deps: { createPeer: () => { const p = new FakePeer(); r.peers.push(p); return p; }, createVideoEl: () => { const e = new FakeEl(); r.els.push(e); return e; }, createBitmap: async () => { const b: Bitmap = { id: 1, closed: false, close() { this.closed = true; } }; r.bitmaps.push(b); return b as unknown as ImageBitmap; } },
-      post: (m) => { if ((m as any).kind === 'frame') throw new Error('gone'); posts.push(m); },
+      post: (m) => { if ((m as any).kind === 'frame') return false; posts.push(m); return true; }, // the real post does nothing, and does not throw, when the frame is gone
     });
     hub.handleFrameMessage(START);
     await flush();
@@ -284,7 +294,38 @@ describe('the frame pump: one picture at a time, and none left open', () => {
     r.els[0].frame();
     await flush();
     expect(r.bitmaps[0].closed).toBe(true);
+    // And the pump is not left waiting for an ack that can never come: the next picture is made.
+    tick();
+    r.els[0].frame();
+    await flush();
+    expect(r.bitmaps).toHaveLength(2);
     hub.dispose();
+  });
+
+  it('makes at most about 15 pictures a second, however fast the camera sends and however fast the page acks', async () => {
+    const r = rig();
+    const { el } = await playing(r);
+    for (let i = 1; i <= 30; i++) {
+      el.frame(); await flush();
+      r.hub.handleFrameMessage({ type: 'youcoded:video:ack', id: 'v1', n: r.frames().at(-1)?.n });
+      tick(33); // a 30 fps camera
+    }
+    // 30 frames over about one second: no more than 15 pictures (+1 for the edge).
+    expect(r.bitmaps.length).toBeGreaterThanOrEqual(10);
+    expect(r.bitmaps.length).toBeLessThanOrEqual(16);
+    r.hub.dispose();
+  });
+
+  it('asks for a smaller picture when the camera is wider than 1280 pixels, and leaves a smaller one alone', async () => {
+    const r = rig();
+    const { el } = await playing(r);
+    el.frame(); await flush();
+    expect(r.bitmapOpts).toEqual([undefined]);
+    r.hub.handleFrameMessage({ type: 'youcoded:video:ack', id: 'v1', n: 1 });
+    el.videoWidth = 1920;
+    tick(); el.frame(); await flush();
+    expect(r.bitmapOpts[1]).toEqual({ resizeWidth: 1280, resizeQuality: 'low' });
+    r.hub.dispose();
   });
 
   it('reads the track directly when the element\'s frame callback is missing, and drops (closes) a frame while one is out', async () => {
@@ -296,7 +337,7 @@ describe('the frame pump: one picture at a time, and none left open', () => {
       createProcessor: () => ({ read: () => new Promise((res) => queue.push(res)), cancel: () => { /* reader cancelled */ } }),
     });
     await playing(r);
-    const feed = async () => { const n = ++frameNo; queue.shift()!({ done: false, value: { close: () => closes.push(n) } }); await flush(); };
+    const feed = async () => { tick(); const n = ++frameNo; queue.shift()!({ done: false, value: { close: () => closes.push(n) } }); await flush(); };
     await feed();           // picture 1 goes out
     expect(r.frames()).toHaveLength(1);
     await feed();           // arrives while picture 1 is out: closed, not kept
@@ -411,7 +452,7 @@ describe('when a video must stop', () => {
     r.peers[0].emit('track', { track: { kind: 'video' }, streams: [{}] });
     r.els[0].frame();
     await vi.advanceTimersByTimeAsync(10);
-    await vi.advanceTimersByTimeAsync(VIDEO_MAX_MS);
+    await alive(r, VIDEO_MAX_MS);
     expect(r.states().at(-1)).toEqual(['stopped', 'The video reached its 5-minute limit. Play again to keep watching.']);
     expect(r.bridge.videoStop).toHaveBeenCalledTimes(1);
     r.hub.dispose();
@@ -427,6 +468,49 @@ describe('when a video must stop', () => {
     r.hub.dispose();
   });
 
+  it('stops, with a reason, when main answers a ping with "not playing any more" (main ended it silently)', async () => {
+    vi.useFakeTimers();
+    const r = rig();
+    const { el } = await playing(r);
+    el.frame();
+    r.bridge.videoPing.mockResolvedValueOnce({ ok: false, message: 'That video is not playing any more.' } as any);
+    await alive(r, VIDEO_PING_MS); // the camera is alive; only the ping tells
+    expect(r.states().at(-1)).toEqual(['stopped', 'The video stopped.']);
+    expect(r.peers[0].closed).toBe(true);
+    expect(r.bridge.videoStop).not.toHaveBeenCalled(); // main already ended it
+    r.hub.dispose();
+  });
+
+  it('stops when the connection stays "disconnected" for 10 seconds, but not when it comes back', async () => {
+    vi.useFakeTimers();
+    const r = rig();
+    const { pc, el } = await playing(r);
+    el.frame();
+    pc.connectionState = 'disconnected'; pc.emit('connectionstatechange');
+    await vi.advanceTimersByTimeAsync(DISCONNECT_MS - 1_000);
+    pc.connectionState = 'connected'; pc.emit('connectionstatechange');
+    await alive(r, DISCONNECT_MS * 2);
+    expect(r.states().at(-1)).toEqual(['playing']);
+    pc.connectionState = 'disconnected'; pc.emit('connectionstatechange');
+    await vi.advanceTimersByTimeAsync(DISCONNECT_MS + 1);
+    expect(r.states().at(-1)).toEqual(['stopped', 'The connection to the camera was lost.']);
+    expect(r.bridge.videoStop).toHaveBeenCalledTimes(1);
+    r.hub.dispose();
+  });
+
+  it('stops when no picture has come for 15 seconds while playing', async () => {
+    vi.useFakeTimers();
+    const r = rig();
+    const { el } = await playing(r);
+    el.frame(); await vi.advanceTimersByTimeAsync(10);
+    await alive(r, 10_000);
+    expect(r.states().at(-1)).toEqual(['playing']);
+    await vi.advanceTimersByTimeAsync(QUIET_MS + 1_000); // the camera goes quiet
+    expect(r.states().at(-1)).toEqual(['stopped', 'The camera stopped sending pictures.']);
+    expect(r.bridge.videoStop).toHaveBeenCalledTimes(1);
+    r.hub.dispose();
+  });
+
   it('pings main every 20 seconds while visible, and not at all while hidden', async () => {
     vi.useFakeTimers();
     const r = rig();
@@ -435,7 +519,7 @@ describe('when a video must stop', () => {
     r.push({ socket: 'lv1', kind: 'video-answer', answer: 'a' });
     r.peers[0].emit('track', { track: { kind: 'video' }, streams: [{}] });
     r.els[0].frame(); // a picture, so the "no picture" limit does not end it first
-    await vi.advanceTimersByTimeAsync(VIDEO_PING_MS * 2);
+    await alive(r, VIDEO_PING_MS * 2);
     expect(r.bridge.videoPing).toHaveBeenCalledTimes(2);
     expect(r.bridge.videoPing).toHaveBeenCalledWith({ page: 'personal:home', frame: 'f1', video: 'lv1' });
     setVisibility('hidden');

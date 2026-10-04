@@ -259,6 +259,30 @@ describe('the conversation with the device', () => {
   });
 });
 
+describe('a key the device writes with JSON escapes', () => {
+  /** The key as a device would write it inside a JSON string: every character as a \uXXXX escape. */
+  const ESCAPED = KEY.split('').map((c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0')).join('');
+
+  it('is redacted from a failure text after it is decoded', async () => {
+    const r = rig();
+    const { ws } = await playing(r);
+    // Sent as written: the key only appears once JSON.parse has decoded the escapes.
+    ws.say(`{"id":1,"type":"event","event":{"type":"error","message":"token ${ESCAPED} rejected"}}`);
+    const why = stopped(r)!.why;
+    expect(why).not.toContain(KEY);
+    expect(why).toContain(REDACTED);
+  });
+
+  it('is redacted from an answer and a candidate after they are decoded', async () => {
+    const r = rig();
+    const { ws } = await playing(r);
+    ws.say(`{"type":"event","event":{"type":"answer","answer":${JSON.stringify(SDP(GOOD, 'a=ice-ufrag:@@')).replace('@@', ESCAPED)}}}`);
+    ws.say(`{"type":"event","event":{"type":"candidate","candidate":{"candidate":"candidate:2 1 udp 1 192.168.4.10 50001 typ host","usernameFragment":"${ESCAPED}"}}}`);
+    expect(kinds(r)).toEqual(['video-answer', 'video-candidate']);
+    expect(JSON.stringify(r.events)).not.toContain(KEY);
+  });
+});
+
 describe('what is let through from the device\'s answer', () => {
   const bad = [
     ['a hostname', 'a=candidate:1 1 udp 1 camera.local 50000 typ host'],
@@ -269,6 +293,27 @@ describe('what is let through from the device\'s answer', () => {
     ['v6 link-local', 'a=candidate:1 1 udp 1 fe80::1 50000 typ host'],
     ['v4-mapped metadata', 'a=candidate:1 1 udp 1 ::ffff:169.254.169.254 50000 typ host'],
     ['v4-mapped metadata in hex', 'a=candidate:1 1 udp 1 ::ffff:a9fe:a9fe 50000 typ host'],
+    // Other spellings of the same addresses (step 3 review, finding 1): a text compare missed all of these.
+    ['v6 loopback, fully written out', 'a=candidate:1 1 udp 1 0:0:0:0:0:0:0:1 50000 typ host'],
+    ['v6 loopback with leading zeros', 'a=candidate:1 1 udp 1 ::0001 50000 typ host'],
+    ['v6 loopback with a zero group', 'a=candidate:1 1 udp 1 0::1 50000 typ host'],
+    ['v6 unspecified, fully written out', 'a=candidate:1 1 udp 1 0:0:0:0:0:0:0:0 50000 typ host'],
+    ['v4-compatible loopback', 'a=candidate:1 1 udp 1 ::127.0.0.1 50000 typ host'],
+    ['v4-mapped loopback, fully written out', 'a=candidate:1 1 udp 1 0:0:0:0:0:ffff:127.0.0.1 50000 typ host'],
+    ['v4-mapped loopback in hex, fully written out', 'a=candidate:1 1 udp 1 0:0:0:0:0:ffff:7f00:1 50000 typ host'],
+    ['v4-mapped loopback in capitals', 'a=candidate:1 1 udp 1 ::FFFF:7F00:1 50000 typ host'],
+    ['v4-compatible metadata in hex', 'a=candidate:1 1 udp 1 ::a9fe:a9fe 50000 typ host'],
+    ['AWS v6 metadata with a leading zero', 'a=candidate:1 1 udp 1 fd00:0ec2::254 50000 typ host'],
+    ['AWS v6 metadata in capitals', 'a=candidate:1 1 udp 1 FD00:EC2:0:0:0:0:0:254 50000 typ host'],
+    ['v6 link-local with a zone', 'a=candidate:1 1 udp 1 fe80::1%eth0 50000 typ host'],
+    ['v6 link-local, upper end of its range', 'a=candidate:1 1 udp 1 febf::1 50000 typ host'],
+    ['v4-mapped link-local with a zone-free expanded spelling', 'a=candidate:1 1 udp 1 0:0:0:0:0:ffff:a9fe:1 50000 typ host'],
+    ['Alibaba metadata address', 'a=candidate:1 1 udp 1 100.100.100.200 50000 typ host'],
+    ['a multicast address', 'a=candidate:1 1 udp 1 224.0.0.251 50000 typ host'],
+    ['v6 multicast', 'a=candidate:1 1 udp 1 ff02::fb 50000 typ host'],
+    ['the broadcast address', 'a=candidate:1 1 udp 1 255.255.255.255 50000 typ host'],
+    ['a NAT64 form of loopback', 'a=candidate:1 1 udp 1 64:ff9b::7f00:1 50000 typ host'],
+    ['an upper-case type word on a metadata address', 'A=CANDIDATE:1 1 udp 1 169.254.169.254 50000 TYP host'],
     ['a malformed line', 'a=candidate:bad'],
   ];
 
@@ -281,7 +326,7 @@ describe('what is let through from the device\'s answer', () => {
     expect(sdp).not.toContain(line);
   });
 
-  it.each(bad.slice(0, 8))('drops a trickled candidate naming %s', async (_n, line) => {
+  it.each(bad.slice(0, -1))('drops a trickled candidate naming %s', async (_n, line) => {
     const r = rig();
     const { ws } = await playing(r);
     ws.say(answerMsg(SDP(GOOD)));
@@ -296,6 +341,78 @@ describe('what is let through from the device\'s answer', () => {
     ws.say(answerMsg(['v=0', 'c=IN IP4 127.0.0.1', 'm=video 9 RTP/AVP 96', 'c=IN IP4 camera.local', 'a=rtcp:9 IN IP4 169.254.169.254', 'c=IN IP4 192.168.4.9', GOOD, 'a=remote-candidates:1 127.0.0.1 9'].join('\r\n')));
     const sdp = answers(r)[0].answer.split('\r\n');
     expect(sdp).toEqual(['v=0', 'c=IN IP4 0.0.0.0', 'm=video 9 RTP/AVP 96', 'c=IN IP4 0.0.0.0', 'c=IN IP4 192.168.4.9', GOOD]);
+  });
+
+  it('keeps home-network and public-looking addresses that merely look similar to blocked ones', async () => {
+    const r = rig();
+    const { ws } = await playing(r);
+    const fine = ['a=candidate:1 1 udp 1 192.168.4.9 50000 typ host', 'a=candidate:2 1 udp 1 fd12:3456::9 50000 typ host', 'a=candidate:3 1 udp 1 ::ffff:c0a8:409 50000 typ host', 'a=candidate:4 1 udp 1 100.100.100.201 50000 typ host', 'a=candidate:5 1 udp 1 2001:db8::1 50000 typ host'];
+    ws.say(answerMsg(SDP(...fine)));
+    for (const l of fine) expect(answers(r)[0].answer).toContain(l);
+  });
+
+  it.each([
+    ['two spaces', 'c=IN  IP4 127.0.0.1'],
+    ['lower case', 'c=in ip4 127.0.0.1'],
+    ['a tab', 'c=IN\tIP4\t169.254.169.254'],
+    ['a trailing space', 'c=IN IP4 127.0.0.1 '],
+    ['an extra word', 'c=IN IP4 127.0.0.1 extra'],
+    ['a fully written-out v6 loopback', 'c=IN IP6 0:0:0:0:0:0:0:1'],
+  ])('rewrites a c= line with %s so it cannot carry a blocked address', async (_n, line) => {
+    const r = rig();
+    const { ws } = await playing(r);
+    ws.say(answerMsg(['v=0', line, GOOD].join('\r\n')));
+    const out = answers(r)[0].answer;
+    expect(out).not.toContain('127.0.0.1');
+    expect(out).not.toContain('169.254');
+    expect(out).not.toContain('0:0:0:0:0:0:0:1');
+    expect(out.split('\r\n')[1]).toMatch(/^c=IN IP[46] (0\.0\.0\.0|::)$/);
+  });
+
+  it.each([
+    ['two spaces', 'a=rtcp:9 IN  IP4 127.0.0.1'],
+    ['lower case', 'a=rtcp:9 in ip4 169.254.169.254'],
+    ['junk after the port', 'a=rtcp:9 whatever 127.0.0.1'],
+  ])('drops an rtcp line with %s', async (_n, line) => {
+    const r = rig();
+    const { ws } = await playing(r);
+    ws.say(answerMsg(['v=0', line, GOOD].join('\r\n')));
+    expect(answers(r)[0].answer).not.toMatch(/rtcp|127\.0\.0\.1|169\.254/);
+  });
+
+  it('keeps a plain rtcp line and a c= line that is exactly right', async () => {
+    const r = rig();
+    const { ws } = await playing(r);
+    ws.say(answerMsg(['v=0', 'c=IN IP4 192.168.4.9', 'a=rtcp:9', 'a=rtcp:9 IN IP4 192.168.4.9', 'a=rtcp-mux', GOOD].join('\r\n')));
+    expect(answers(r)[0].answer.split('\r\n')).toEqual(['v=0', 'c=IN IP4 192.168.4.9', 'a=rtcp:9', 'a=rtcp:9 IN IP4 192.168.4.9', 'a=rtcp-mux', GOOD]);
+  });
+
+  it('checks text after a bare carriage return as its own line', async () => {
+    const r = rig();
+    const { ws } = await playing(r);
+    ws.say(answerMsg(`v=0\rc=IN IP4 127.0.0.1\r\n${GOOD}`));
+    expect(answers(r)[0].answer).not.toContain('127.0.0.1');
+  });
+
+  it.each([
+    ['a line break', 'candidate:1 1 udp 1 192.168.1.2 5 typ host\r\na=candidate:2 1 udp 1 127.0.0.1 5 typ host'],
+    ['a bare line feed', 'candidate:1 1 udp 1 192.168.1.2 5 typ host\na=candidate:2 1 udp 1 127.0.0.1 5 typ host'],
+    ['a control character', 'candidate:1 1 udp 1 192.168.1.2 5 typ host\u0000'],
+  ])('drops a trickled candidate containing %s, passing nothing on', async (_n, text) => {
+    const r = rig();
+    const { ws } = await playing(r);
+    ws.say(answerMsg(SDP(GOOD)));
+    ws.say(candMsg(text));
+    ws.say(candMsg({ candidate: text }));
+    expect(candidates(r)).toEqual([]);
+  });
+
+  it('hands the host a trickled candidate rebuilt from its fields, with single spaces', async () => {
+    const r = rig();
+    const { ws } = await playing(r);
+    ws.say(answerMsg(SDP(GOOD)));
+    ws.say(candMsg('candidate:2   1 udp 1  192.168.4.12 50000 typ   host'));
+    expect(JSON.stringify(candidates(r))).toContain('candidate:2 1 udp 1 192.168.4.12 50000 typ host');
   });
 
   it('refuses an answer left with no usable address, once nothing usable arrives in 10 seconds', async () => {

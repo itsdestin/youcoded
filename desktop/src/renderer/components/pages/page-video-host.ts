@@ -24,6 +24,14 @@ export const VIDEO_MAX_MS = 5 * 60_000;
 const NO_PICTURE_MS = 15_000;
 /** The watchdog: no frame callback for this long while the track is live → switch to the track processor. */
 const STALL_MS = 3_000;
+/** At most ~15 pictures a second go to the page (a gap just under 1/15 s), and never wider than this:
+ *  a 1080p/30 camera must not cost a full-size copy 30 times a second per video. */
+const MIN_FRAME_GAP_MS = 66;
+const MAX_FRAME_WIDTH = 1280;
+/** A camera that stays 'disconnected' this long is stopped with a plain reason (it may reconnect sooner). */
+export const DISCONNECT_MS = 10_000;
+/** Playing, but the camera has produced no picture for this long: stopped with a plain reason. */
+export const QUIET_MS = 15_000;
 const HIDDEN_WHY = 'paused while the page was hidden';
 const MAX_LOCAL = 4;
 
@@ -57,7 +65,7 @@ export interface VideoElLike {
 export interface VideoHostDeps {
   createPeer: () => PeerLike;
   createVideoEl: () => VideoElLike;
-  createBitmap: (source: unknown) => Promise<ImageBitmap>;
+  createBitmap: (source: unknown, opts?: { resizeWidth: number; resizeQuality: 'low' }) => Promise<ImageBitmap>;
   /** Present where the browser can read a track's frames without a <video> (Chromium): the fallback if the callback stalls. */
   createProcessor?: (track: unknown) => { read: () => Promise<{ done: boolean; value?: { close(): void } }>; cancel: () => void } | null;
 }
@@ -75,7 +83,7 @@ function defaultDeps(): VideoHostDeps {
       document.body.appendChild(el);
       return el as unknown as VideoElLike;
     },
-    createBitmap: (source) => createImageBitmap(source as ImageBitmapSource),
+    createBitmap: (source, o) => (o ? createImageBitmap(source as ImageBitmapSource, o) : createImageBitmap(source as ImageBitmapSource)),
     createProcessor: (track) => {
       const P = (globalThis as any).MediaStreamTrackProcessor;
       if (!P) return null;
@@ -97,8 +105,11 @@ interface Entry {
   /** Frame pump: the number of the frame the page still owes an ack for (0 = none). */
   outstanding: number;
   seq: number;
+  /** When a picture last came from the camera (any frame, sent or not) and when a bitmap was last made. */
+  lastFrameAt: number;
+  lastBitmapAt: number;
   stopPump: (() => void) | null;
-  timers: { max?: ReturnType<typeof setTimeout>; nopic?: ReturnType<typeof setTimeout>; stall?: ReturnType<typeof setInterval> };
+  timers: { max?: ReturnType<typeof setTimeout>; nopic?: ReturnType<typeof setTimeout>; stall?: ReturnType<typeof setInterval>; disc?: ReturnType<typeof setTimeout>; quiet?: ReturnType<typeof setInterval> };
 }
 
 export interface PageVideoHub {
@@ -112,7 +123,8 @@ export function createPageVideoHub(opts: {
   /** The frame instance's id: shared with the socket hub's, so main sees one frame. */
   frame: string;
   bridge: () => PagesBridge | undefined;
-  post: (message: unknown, transfer?: Transferable[]) => void;
+  /** Returns false when the message went nowhere (the frame is gone): the caller then closes what it was sending. */
+  post: (message: unknown, transfer?: Transferable[]) => boolean | void;
   isHidden?: () => boolean;
   deps?: Partial<VideoHostDeps>;
 }): PageVideoHub {
@@ -140,7 +152,14 @@ export function createPageVideoHub(opts: {
     if (pinger !== null) return;
     pinger = setInterval(() => {
       const b = opts.bridge();
-      for (const e of local.values()) if (e.mainId !== null) void b?.videoPing?.(call(e.mainId))?.catch(() => { /* the next ping tries again */ });
+      for (const [id, e] of [...local]) {
+        if (e.mainId === null) continue;
+        // WHY the answer is read: main answers {ok:false} for a video it has already ended without
+        // telling us (it can finish silently), and ignoring that left a frozen picture for up to 5 minutes.
+        void b?.videoPing?.(call(e.mainId))?.then((r) => {
+          if (r && r.ok === false && local.get(id) === e) end(id, 'The video stopped.', { tellMain: false, tellPage: true });
+        }).catch(() => { /* the next ping tries again */ });
+      }
     }, VIDEO_PING_MS);
   };
 
@@ -171,18 +190,36 @@ export function createPageVideoHub(opts: {
   // its ack, and one that cannot be sent (the video ended while it was being
   // made, the frame went away) is closed, never leaked.
   const send = async (id: string, e: Entry, source: unknown, release?: () => void) => {
+    // A picture arrived from the camera, whether or not one is made from it (the quiet watchdog reads this).
+    e.lastFrameAt = Date.now();
     if (e.outstanding !== 0 || disposed || local.get(id) !== e) { release?.(); return; }
+    // WHY a minimum gap and a width cap, checked BEFORE a bitmap is made: a page that acks at once
+    // and draws nothing must not cost the user a full-size copy of every frame of a fast camera.
+    if (e.lastFrameAt - e.lastBitmapAt < MIN_FRAME_GAP_MS) { release?.(); return; }
+    e.lastBitmapAt = e.lastFrameAt;
     const n = ++e.seq;
     e.outstanding = n;
     let bitmap: ImageBitmap;
-    try { bitmap = await deps.createBitmap(source); }
+    const s = source as { videoWidth?: number; displayWidth?: number; codedWidth?: number };
+    const width = s.videoWidth || s.displayWidth || s.codedWidth || 0;
+    try { bitmap = await deps.createBitmap(source, width > MAX_FRAME_WIDTH ? { resizeWidth: MAX_FRAME_WIDTH, resizeQuality: 'low' } : undefined); }
     catch { e.outstanding = 0; release?.(); return; }
     release?.();
     if (disposed || local.get(id) !== e || e.outstanding !== n) { bitmap.close(); if (e.outstanding === n) e.outstanding = 0; return; }
-    if (e.state !== 'playing') tell(id, 'playing');
+    if (e.state !== 'playing') {
+      tell(id, 'playing');
+      // WHY: after the first picture the no-picture timer is gone, so a camera that goes quiet would
+      // otherwise show its last frame as 'playing' until the 5-minute limit.
+      e.timers.quiet = setInterval(() => {
+        if (Date.now() - e.lastFrameAt >= QUIET_MS) end(id, 'The camera stopped sending pictures.', { tellMain: true, tellPage: true });
+      }, 1000);
+    }
     if (e.timers.nopic) { clearTimeout(e.timers.nopic); e.timers.nopic = undefined; }
-    try { opts.post({ type: PAGE_VIDEO_EVENT_MESSAGE, id, kind: 'frame', n, bitmap }, [bitmap]); }
-    catch { bitmap.close(); e.outstanding = 0; }
+    // WHY the return value: posting to a frame that is gone does not throw, it does nothing, so the
+    // bitmap would never be closed and the pump would wait for an ack that cannot come.
+    let posted = false;
+    try { posted = opts.post({ type: PAGE_VIDEO_EVENT_MESSAGE, id, kind: 'frame', n, bitmap }, [bitmap]) !== false; } catch { /* treated as not posted */ }
+    if (!posted) { bitmap.close(); e.outstanding = 0; }
   };
 
   const startPump = (id: string, e: Entry, track: unknown) => {
@@ -208,6 +245,7 @@ export function createPageVideoHub(opts: {
           let r;
           try { r = await proc.read(); } catch { break; }
           if (r.done || !r.value) break;
+          if (stopped) { try { r.value.close(); } catch { /* already closed */ } break; } // read just as we stopped: do not leave it open
           // A frame is closed (dropped) when one picture is already out.
           const frame = r.value;
           void send(id, e, frame, () => frame.close());
@@ -300,7 +338,13 @@ export function createPageVideoHub(opts: {
           startPump(id, e, ev.track);
         });
         pc.addEventListener('connectionstatechange', () => {
-          if (e.attempt === attempt && pc.connectionState === 'failed') end(id, 'The video connection to the camera failed.', { tellMain: true, tellPage: true });
+          if (e.attempt !== attempt) return;
+          if (pc.connectionState === 'failed') { end(id, 'The video connection to the camera failed.', { tellMain: true, tellPage: true }); return; }
+          // WHY a grace period: 'disconnected' often heals by itself within seconds, but a camera that
+          // went away stays so, and only 'failed' used to end the video (the last frame stayed up).
+          if (pc.connectionState === 'disconnected') {
+            if (e.timers.disc === undefined) e.timers.disc = setTimeout(() => end(id, 'The connection to the camera was lost.', { tellMain: true, tellPage: true }), DISCONNECT_MS);
+          } else if (e.timers.disc !== undefined) { clearTimeout(e.timers.disc); e.timers.disc = undefined; }
         });
         e.el = deps.createVideoEl();
         const created = await pc.createOffer();
@@ -357,7 +401,7 @@ export function createPageVideoHub(opts: {
           opts.post({ type: PAGE_VIDEO_EVENT_MESSAGE, id, kind: 'state', state: 'stopped', why: 'That page asked for a video the app could not read.' });
           return true;
         }
-        local.set(id, { mainId: null, attempt: 0, pc: null, el: null, state: 'starting', remoteSet: false, queued: [], outstanding: 0, seq: 0, stopPump: null, timers: {} });
+        local.set(id, { mainId: null, attempt: 0, pc: null, el: null, state: 'starting', remoteSet: false, queued: [], outstanding: 0, seq: 0, lastFrameAt: 0, lastBitmapAt: -Infinity, stopPump: null, timers: {} });
         if (hidden()) { end(id, HIDDEN_WHY, { tellMain: false, tellPage: true }); return true; }
         void begin(id, d.connection, d.target);
         return true;
