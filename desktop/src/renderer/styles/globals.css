@@ -988,14 +988,24 @@ body[data-mode="buddy-chat"] #theme-bg {
 [data-reduced-effects] .preview-header-slide { transition: none; }
 
 /* ── Tag label (2026-10-04) ──────────────────────────────────────────────────
-   A tag's word is centred on its lowercase letters, not its line. WHY: this font
-   centres CAPITALS in the line, so lowercase words — most tags — sat about a pixel
-   below the tag icon and the round ×/+ (measured at 1.5× scale, session-details-3:
-   "the alignment between the text and various icons has just been off"). Trimming
-   the text box to x-height and baseline lets the pill's items-center line them up;
-   a word with any capital centres on its capitals instead (tagLabelClass picks). */
-.tag-label { text-box: trim-both ex alphabetic; }
-.tag-label-caps { text-box: trim-both cap alphabetic; }
+   A tag's icon and word are one line of text (TagWord), trimmed to the word's
+   lowercase letters — or its capitals when it has any — so the pill's
+   items-center centres the letters you see. WHY: this font centres CAPITALS in
+   the line, so lowercase words sat low; and an icon laid out beside the word
+   rounded to Destin's 1.5× screen separately from it, a pixel apart on some rows
+   (session-details-3/-4). The icon's middle sits on the letters' middle:
+   vertical-align raises its bottom edge to half the x-height (or cap height)
+   minus half its own size. */
+.tag-line { display: inline-block; white-space: nowrap; text-box: trim-both ex alphabetic; }
+.tag-line--caps { text-box: trim-both cap alphabetic; }
+.tag-ico {
+  display: inline-block; flex-shrink: 0;
+  width: var(--tag-ico); height: var(--tag-ico); margin-right: 0.25rem;
+  vertical-align: calc(0.5ex - 0.5 * var(--tag-ico));
+  /* Review-only knob (compare surface tag-pill-align): moves the icon against the word. */
+  translate: 0 var(--tag-ico-shift, 0px);
+}
+.tag-line--caps .tag-ico { vertical-align: calc(0.5cap - 0.5 * var(--tag-ico)); }
 
 /* ── Session pill label (2026-09-01) ─────────────────────────────────────────
    The label is a clipping box whose max-width animates (pill-label-style.ts);

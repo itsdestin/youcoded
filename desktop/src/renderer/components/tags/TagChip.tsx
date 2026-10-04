@@ -1,5 +1,5 @@
 // src/renderer/components/tags/TagChip.tsx
-import { useState } from 'react';
+import React, { useState } from 'react';
 import type { TagRecord } from '../../../shared/tags';
 import { tagColorCss } from '../../../shared/tags';
 
@@ -29,16 +29,27 @@ export function ChipAction({ kind, label, onClick, size = 'sm' }: { kind: 'remov
   );
 }
 
-/** Centre an all-lowercase word on its lowercase letters; any word with a capital on its
- *  capitals — a capital poking above the centred lowercase looked high ("Follow-Up
- *  Needed", checked at 1.5×). globals.css → Tag label. */
-export const tagLabelClass = (label: string) => (/\p{Lu}/u.test(label) ? 'tag-label-caps' : 'tag-label');
-
-// The icon slot in every tag pill (centred; the word beside it is trimmed — .tag-label).
-export const TAG_ICON = 'flex shrink-0';
+/** A tag's icon and word as ONE line of text. WHY one line (session-details-4#SD4-2: "the
+ *  text still appears visibly lower than the tag in the work chip, despite seeming fine on
+ *  the bug and idea chips"): at Destin's 1.5× scale, an icon and a word laid out side by side
+ *  are each rounded to the screen's pixels on their own, so some rows came out a pixel apart.
+ *  Inside one line they round together. The line is trimmed to the word's lowercase letters
+ *  (or its capitals, when it has any) and the icon sits on that same middle — globals.css
+ *  → Tag label. */
+export function TagWord({ label, size, iconClass = '', iconStyle }: { label: string; size: 12 | 14 | 16; iconClass?: string; iconStyle?: React.CSSProperties }) {
+  const caps = /\p{Lu}/u.test(label);
+  return (
+    <span className={`tag-line ${caps ? 'tag-line--caps' : ''}`} style={{ '--tag-ico': `${size}px` } as React.CSSProperties}>
+      <span className={`tag-ico ${iconClass}`} style={iconStyle}><FilledTag className="block w-full h-full" /></span>
+      {label}
+    </span>
+  );
+}
 
 export const mix = (color: string) => `color-mix(in srgb, ${tagColorCss(color)} 75%, var(--fg))`;
 
+// WHY a fixed height (h-3.75, the 15 px these pills always measured): the word's line is
+// trimmed to its letters (TagWord), so it no longer props the pill open by itself.
 export function TagChip({ tag, onRemove, onAdd, dim = false, archivedLook = false, className = '' }: {
   tag: Pick<TagRecord, 'label' | 'color'>;
   /** A "×" at the right: take this tag off the session. */
@@ -57,31 +68,28 @@ export function TagChip({ tag, onRemove, onAdd, dim = false, archivedLook = fals
 
   if (archivedLook) {
     return (
-      <span className={`shrink-0 inline-flex items-center gap-1 pl-1 pr-1.5 py-0.25 rounded-full border border-edge-dim bg-inset text-4xs leading-none text-fg-muted opacity-70 ${className}`}>
-        <span className={`${TAG_ICON} text-fg-faint`}><FilledTag className="w-3 h-3" /></span>
-        <span className={tagLabelClass(tag.label)}>{tag.label}</span>{action}
+      <span className={`shrink-0 inline-flex items-center gap-1 pl-1 pr-1.5 h-3.75 rounded-full border border-edge-dim bg-inset text-4xs leading-none text-fg-muted opacity-70 ${className}`}>
+        <TagWord label={tag.label} size={12} iconClass="text-fg-faint" />{action}
       </span>
     );
   }
   return (
-    <span className={`shrink-0 inline-flex items-center gap-1 pl-1 pr-1.5 py-0.25 rounded-full border text-4xs leading-none ${dim ? 'text-fg-muted border-dashed' : 'text-fg-2'} ${className}`}
+    <span className={`shrink-0 inline-flex items-center gap-1 pl-1 pr-1.5 h-3.75 rounded-full border text-4xs leading-none ${dim ? 'text-fg-muted border-dashed' : 'text-fg-2'} ${className}`}
       style={{ backgroundColor: dim ? 'transparent' : `color-mix(in srgb, ${c} 15%, transparent)`, borderColor: `color-mix(in srgb, ${c} ${dim ? 40 : 30}%, transparent)` }}>
-      <span className={TAG_ICON} style={{ color: c }}><FilledTag className="w-3 h-3" /></span>
-      <span className={tagLabelClass(tag.label)}>{tag.label}</span>{action}
+      <TagWord label={tag.label} size={12} iconStyle={{ color: c }} />{action}
     </span>
   );
 }
 
-/** A solid tag on its corner, mirrored like glyphs.tsx's TagGlyph so the point aims back
- *  into the content (the level tag tried in session-details-3 was rejected: "the old tag
- *  icon was better"), with its outline in the panel colour, as before. */
-export function FilledTag({ className = '', ring = true }: { className?: string; ring?: boolean }) {
+/** A solid tag with a ring in the panel colour, so stacked tags stay apart. Mirrored like
+ *  glyphs.tsx's TagGlyph, so the point aims back into the content. */
+export function FilledTag({ className = '' }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" aria-hidden>
       <g transform="translate(24,0) scale(-1,1)">
-        <path fillRule="evenodd"
-          d="M3 12.5V4.5A1.5 1.5 0 014.5 3h8l8.5 8.5a1.5 1.5 0 010 2.1l-6.9 6.9a1.5 1.5 0 01-2.1 0L3 12.5z M6.15 7.75a1.6 1.6 0 103.2 0a1.6 1.6 0 10-3.2 0z"
-          fill="currentColor" stroke={ring ? 'var(--panel)' : 'none'} strokeWidth={ring ? 2.5 : 0} strokeLinejoin="round" />
+        <path d="M3 12.5V4.5A1.5 1.5 0 014.5 3h8l8.5 8.5a1.5 1.5 0 010 2.1l-6.9 6.9a1.5 1.5 0 01-2.1 0L3 12.5z"
+          fill="currentColor" stroke="var(--panel)" strokeWidth={2.5} strokeLinejoin="round" />
+        <circle cx="7.75" cy="7.75" r="1.6" fill="var(--panel)" />
       </g>
     </svg>
   );
