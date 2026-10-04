@@ -33,7 +33,7 @@ import TerminalRightSlot from './components/TerminalRightSlot';
 import { ChatProvider, useChatDispatch, useChatStore, useSessionIsThinking } from './state/chat-context';
 import { installTranscriptBatcher, flushTranscriptActions, routeTranscriptEvent, routeTranscriptShrink } from './state/transcript-batch';
 import { applySessionLive } from './state/apply-session-live';
-import { endedSessionIds, withAnnouncedName } from './state/session-list-sync';
+import { useDropEndedSessionsOnReconnect, withAnnouncedName } from './state/session-list-sync';
 import {
   remotePlaceHost, remotePlaceStorages, readRemotePlace, writeRemotePlace,
   choosePlaceOnHydrate, chooseAfterDestroyed,
@@ -1085,7 +1085,6 @@ function AppInner() {
     prevThinkingRef.current = next;
   }, [sessionAttention, sessionSummaries]);
 
-
   // Attention reporter effect: pushes per-session attention state + the
   // derived dot color to main whenever sessionAttention changes. Main
   // aggregates across all windows and broadcasts
@@ -1240,8 +1239,6 @@ function AppInner() {
         dispatch({ type: 'SESSION_INIT', sessionId: info.id });
         setSessions((prev) => {
         // Deduplicate — replay buffers resend session:created for existing sessions
-        // WHY the name is taken from the replay (sync-fix3): a rename made while remote access was off (or while this screen was away and the
-        // computer's topic memory had been cleared) never reached a pill this screen already had; the announcement carries the current name.
         if (prev.some((s) => s.id === info.id)) return withAnnouncedName(prev, info);
         // Only auto-focus genuinely new sessions (not replayed ones) — and on a remote
         // client not before its place is decided: the restore sends every session as
@@ -1780,16 +1777,7 @@ function AppInner() {
     // R6-2: changes whose answer was lost are settled against what the fills just put on the screen.
     void Promise.all(ids.map((id: string) => firstPages.refill(id, { fresh }))).then((outcomes) => { reportFillRound(outcomes); void reconcilePending(); });
   }, [firstPages, reportFillRound, remoteWatch]);
-  useOnRemoteReconnect(() => fillAgain(false));
-  // WHY (sync-fix3): the computer's hello after a reconnect only ADDS sessions, and a conversation that ended (or was handed to another device) while
-  // this phone was away left its pill behind, since only the watched few are asked about again. Ask the computer which ones still exist and drop the rest.
-  // The reply and any later `session:created` arrive in order on the one connection, so a conversation started after the list was built cannot be dropped here.
-  useOnRemoteReconnect(() => {
-    void window.claude.session.list().then((list: any[]) => {
-      const keep = (id: string) => String(id).startsWith('pending-handoff:') || movedSessionsRef.current.has(id);
-      for (const id of endedSessionIds(sessionsRef.current, list, keep)) goneRef.current(id);
-    }).catch(() => { /* the next reconnect asks again; a pill that lingers is the old behaviour */ });
-  });
+  useOnRemoteReconnect(() => fillAgain(false)); useDropEndedSessionsOnReconnect(sessionsRef, movedSessionsRef, (id) => goneRef.current(id)); // sync-fix3
   useSendReconcile(); // what became of a message sent as the connection dropped (one-core R5-4b)
   // The computer says this window's fill of a conversation never completed (its hold expired): fill it again from a fresh page.
   useEffect(() => (window.claude.session as any).onRefill?.((sid: string) => { void firstPages.refill(sid, { fresh: true }); }), [firstPages]);

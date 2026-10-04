@@ -14,7 +14,7 @@ const unresolved: TranscriptPageResult = { events: [], cursor: null, hasMore: fa
 const LOC = { claudeSessionId: 'cc-1', projectSlug: '-home-x' };
 
 const pageReply = (page: TranscriptPageResult, extra: Partial<Extract<OpenReply, { ok: true }>> = {}): OpenReply =>
-  ({ ok: true, epoch: 'e', headSeq: 3, resume: 'page', before: [{ type: 'transcript:event', payload: { b: 1 } }], page, after: [{ type: 'hook:replay-complete', payload: {} }], facts: { working: false, attention: 'ok' }, ...extract(extra) });
+  ({ ok: true, epoch: 'e', headSeq: 3, resume: 'page', before: [{ type: 'transcript:event', payload: { b: 1 } }], page, after: [{ type: 'hook:replay-complete', payload: {} }], facts: { working: false }, ...extract(extra) });
 const extract = <T,>(x: T) => x;
 
 /** `answer(n)` is the page for the nth request of ANY kind: the open first, then page retries. */
@@ -187,7 +187,7 @@ describe('refill (a reconnect, or Refresh)', () => {
     const actions: ChatAction[] = [];
     const played: Push[][] = [];
     const open = vi.fn(async () => ({ ok: true, epoch: 'e', headSeq: 9, resume: 'events', before: [], page: null,
-      after: [{ type: 'transcript:event', payload: { missed: 1 } }], facts: { working: true, attention: 'ok' } } as OpenReply));
+      after: [{ type: 'transcript:event', payload: { missed: 1 } }], facts: { working: true } } as OpenReply));
     const loader = createFirstPageLoader({ open, requestPage: vi.fn(), dispatch: (a) => actions.push(a), flush: () => {}, play: (p) => played.push(p), sleep: async () => {} });
     await loader.load('s');            // (the first load's answer is the same stub; irrelevant here)
     actions.length = 0; played.length = 0;

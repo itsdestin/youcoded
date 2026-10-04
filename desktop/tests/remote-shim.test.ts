@@ -542,7 +542,7 @@ describe('remote-shim — terminal backlog', () => {
     async function openIt(sock: FakeWebSocket, sessionId: string, answer: Record<string, unknown> = {}) {
       const pending = (window as any).claude.session.open({ sessionId, ...(answer.__req as object ?? {}) });
       const req = sock.sentOf('session:open').at(-1);
-      sock.receive({ type: 'session:open:response', id: req.id, payload: { ok: true, epoch: 'E', headSeq: 0, resume: 'page', before: [], page: null, after: [], facts: { working: false, attention: 'ok' }, ...answer } });
+      sock.receive({ type: 'session:open:response', id: req.id, payload: { ok: true, epoch: 'E', headSeq: 0, resume: 'page', before: [], page: null, after: [], facts: { working: false }, ...answer } });
       await pending;
       return req;
     }
@@ -650,7 +650,7 @@ describe('remote-shim — terminal backlog', () => {
       output('s1', ' + live', 13, 'E');
       expect(seen).toEqual(['<RESET>', 'screen so far', ' + live']);
       // The chat open answers later with its own copy of the terminal (cut from where this page was when it asked): drawn only past what is already there, never as a reset.
-      ws.receive({ type: 'session:open:response', id: full.id, payload: { ok: true, epoch: 'E', headSeq: 0, resume: 'page', before: [], page: null, after: [], facts: { working: false, attention: 'ok' }, pty: { epoch: 'E', offset: 0, data: 'screen so far + live', reset: true } } });
+      ws.receive({ type: 'session:open:response', id: full.id, payload: { ok: true, epoch: 'E', headSeq: 0, resume: 'page', before: [], page: null, after: [], facts: { working: false }, pty: { epoch: 'E', offset: 0, data: 'screen so far + live', reset: true } } });
       await opening;
       expect(seen).toEqual(['<RESET>', 'screen so far', ' + live']);
     });
@@ -659,7 +659,7 @@ describe('remote-shim — terminal backlog', () => {
       (window as any).claude.on.ptyOutputForSession('s1', (d: string) => seen.push(d));
       const opening = (window as any).claude.session.open({ sessionId: 's1' });
       const full = ws.sentOf('session:open').find((m: any) => !m.payload.ptyOnly);
-      ws.receive({ type: 'session:open:response', id: full.id, payload: { ok: true, epoch: 'E', headSeq: 0, resume: 'page', before: [], page: null, after: [], facts: { working: false, attention: 'ok' }, pty: { epoch: 'E', offset: 0, data: 'from the open', reset: false } } });
+      ws.receive({ type: 'session:open:response', id: full.id, payload: { ok: true, epoch: 'E', headSeq: 0, resume: 'page', before: [], page: null, after: [], facts: { working: false }, pty: { epoch: 'E', offset: 0, data: 'from the open', reset: false } } });
       await opening;
       expect(seen).toEqual(['from the open']);
       // A late early answer after that changes nothing.
