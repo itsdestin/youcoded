@@ -3,6 +3,7 @@
 // header renders on every keystroke and must not each hold its own copy.
 import { useSyncExternalStore } from 'react';
 import type { PageSummary, PagesBridge } from '../../../shared/pages-types';
+import { REMOTE_RECONNECTED_EVENT } from '../../remote-events';
 
 type Snapshot = { pages: PageSummary[]; loaded: boolean; failed: boolean };
 
@@ -29,6 +30,12 @@ function start() {
     () => publish({ pages: [], loaded: true, failed: true }),
   );
   b.onChanged((pages) => publish({ pages, loaded: true, failed: false }));
+  // WHY (sync-fix3): `pages:changed` is a one-shot push, and a phone that was asleep or out of range misses it, so after a reconnect the header's
+  // pinned-page buttons stayed as they were. Ask again once the connection is back. A failed ask keeps what is on screen: the connection just
+  // came back, and replacing a good list with an error banner would be worse than a stale one.
+  window.addEventListener(REMOTE_RECONNECTED_EVENT, () => {
+    void b.list().then((pages) => publish({ pages, loaded: true, failed: false }), () => {});
+  });
 }
 
 function subscribe(l: () => void) {

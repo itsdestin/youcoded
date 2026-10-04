@@ -14,6 +14,7 @@ import lightJson from '../themes/builtin/light.json';
 import darkJson from '../themes/builtin/dark.json';
 import midnightJson from '../themes/builtin/midnight.json';
 import cremeJson from '../themes/builtin/creme.json';
+import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';
 
 const BUILTIN_THEMES: LoadedTheme[] = [
   { ...(lightJson as unknown as ThemeDefinition), source: 'youcoded-core' },
@@ -416,10 +417,12 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   // Initial load on mount
   useEffect(() => { reloadUserThemes(); }, [reloadUserThemes]);
 
-  // Load appearance preferences from disk (source of truth) on mount
-  useEffect(() => {
+  // Load appearance preferences from disk (source of truth) on mount, and again after a remote reconnect.
+  // WHY a callback that reads the generation when it RUNS (sync-fix3): the same body now serves the mount and a reconnect, and a choice the
+  // user makes while the read is in flight must still win over what the read brings back.
+  const loadAppearance = useCallback(async () => {
     const generation = selectionGeneration.current;
-    const loadAppearance = async () => {
+    {
       try {
         const claude = (window as any).claude;
         if (!claude?.appearance?.get) return;
@@ -462,9 +465,14 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
           try { localStorage.setItem(LOOK_OVERRIDES_KEY, JSON.stringify(look)); } catch {}
         }
       } catch {}
-    };
-    loadAppearance();
+    }
   }, [applyIncomingTheme]);
+  useEffect(() => { void loadAppearance(); }, [loadAppearance]);
+
+  // WHY (sync-fix3): `appearance:sync` and `theme:reload` are one-shot pushes, so a phone that was asleep when another screen changed the theme (or
+  // when a theme was installed on the computer) kept the old look until a full page reload. After a reconnect: re-read the installed themes
+  // first (a newly installed one must exist before the chosen slug is looked up), then the saved appearance.
+  useOnRemoteReconnect(() => { void reloadUserThemes().then(() => loadAppearance()); });
 
   // Listen for cross-window appearance broadcasts from peer windows. The
   // source window already persisted to disk, so we only update in-memory
