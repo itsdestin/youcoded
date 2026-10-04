@@ -296,7 +296,11 @@ function linkMenu(a: HTMLAnchorElement, target: HTMLElement): MenuEntry[] {
 }
 
 function codeMenu(pre: HTMLElement, target: HTMLElement): MenuEntry[] {
-  const code = pre.innerText.replace(/\n+$/, '');
+  // WHY textContent, not innerText: while a long fence is still streaming its finished lines sit in
+  // block-level chunk spans (MarkdownContent FrozenFenceChunk), and innerText adds a blank line at each
+  // chunk edge (measured in Chromium) — the copied/quoted code would no longer be the fence's source.
+  // textContent is the code's exact characters, whether chunked, closed or never streamed.
+  const code = (pre.textContent ?? '').replace(/\n+$/, '');
   const firstLine = code.split('\n', 1)[0] ?? '';
   // quote + entryKey let the chip find and light up this block again
   // (chat-ref-highlight.ts); curly quotes match the file chips' labels.
