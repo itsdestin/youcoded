@@ -52,6 +52,8 @@ function HeaderCard({ name, onRename, note, onNote }: { name?: string; onRename?
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(note);
   const fit = (el: HTMLTextAreaElement | null) => { if (el) { el.style.height = 'auto'; el.style.height = `${el.scrollHeight}px`; } };
+  // No name above (Resume, side panel, Projects): the note leads the card, no gap over it.
+  const top = name !== undefined ? 'mt-1.5' : '';
   const commit = () => { setEditing(false); if (draft.trim() !== note.trim()) onNote(draft.trim()); };
   return (
     <div className={`${CARD_LEVEL_1} p-4`}>
@@ -66,19 +68,19 @@ function HeaderCard({ name, onRename, note, onNote }: { name?: string; onRename?
       {editing ? (
         <Textarea size="sm" ref={fit} rows={1} autoFocus value={draft} aria-label="Note"
           placeholder="A note for later — shows under All sessions"
-          className="mt-1.5 -ml-2.5 w-full text-sm italic overflow-hidden"
+          className={`${top} -ml-2.5 w-full text-sm italic overflow-hidden`}
           onChange={(e) => { setDraft(e.target.value); fit(e.currentTarget); }}
           onKeyDown={(e) => { if (e.key === 'Escape') { setDraft(note); setEditing(false); } }}
           onBlur={commit} />
       ) : note ? (
         <button type="button" onClick={() => { setDraft(note); setEditing(true); }} title="Edit note"
-          className="mt-1.5 block w-full text-left rounded-lg border border-transparent -ml-2.5 px-2.5 py-1.5 hover:bg-inset transition-colors">
+          className={`${top} block w-full text-left rounded-lg border border-transparent -ml-2.5 px-2.5 py-1.5 hover:bg-inset transition-colors`}>
           <span className="text-sm italic text-fg-dim whitespace-pre-wrap break-words">“{note}”</span>
         </button>
       ) : (
         // Its own line under the name (a bare inline button sat beside it).
         <div><button type="button" onClick={() => { setDraft(''); setEditing(true); }}
-          className="mt-1.5 -ml-2 inline-flex items-center gap-1 rounded-md border border-dashed border-edge-dim px-2 py-1 text-xs text-fg-muted hover:text-fg hover:border-edge hover:bg-inset transition-colors">
+          className={`${top} -ml-2 inline-flex items-center gap-1 rounded-md border border-dashed border-edge-dim px-2 py-1 text-xs text-fg-muted hover:text-fg hover:border-edge hover:bg-inset transition-colors`}>
           <span aria-hidden className="text-sm leading-none">+</span>
           Add a note
         </button></div>
