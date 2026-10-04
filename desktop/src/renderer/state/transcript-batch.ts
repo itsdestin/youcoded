@@ -47,18 +47,26 @@ export interface TranscriptBatcher {
 let active: TranscriptBatcher | null = null;
 
 /**
- * The least time between two animation-frame flushes, in ms.
+ * How many times a second streamed text may redraw the chat, at most. PRODUCT TRADE-OFF — the owner may tune this.
  *
- * WHY (2026-10-04, perf fix 5): "one flush per frame" means a different amount of work on every display. A 60 Hz
- * screen flushes (and so redraws the chat, re-reads the live paragraph, lays out and repaints) ~60 times a second;
- * a 180 Hz screen up to 180, though text arrives at ~150 words/s at most and nobody can tell the difference past
- * ~60 text updates a second. Measured on the perf rig with the frame-rate limit lifted (a stand-in for a fast
- * screen): 146 redraws/s and the window's main thread 86% busy, against 60/s and ~45% at 60 Hz.
- * 12 ms (not 16.7) so a 60 Hz screen, whose frames are 16.7 ms apart, flushes on EVERY frame even when a frame
- * time jitters, while 120/144/180 Hz screens flush every 2nd/2nd/3rd frame (16.7/13.9/16.7 ms): never coarser
- * than one 60 Hz frame, so text still appears as smoothly as on the slowest common screen.
+ * WHY (2026-10-04, perf fix 5): "one redraw per screen frame" means a different amount of work on every display.
+ * A 60 Hz screen redraws (re-reads the live paragraph, lays out, repaints) ~60 times a second; a 180 Hz screen up
+ * to 180, though text arrives at ~150 words/s at most and nobody can tell the difference past ~60 text updates a
+ * second. Measured on the perf rig with the frame-rate limit lifted (a stand-in for a fast screen): 146 redraws/s
+ * and the window's main thread 86% busy, against 60/s and ~45% at 60 Hz.
+ * 60 means "no coarser than a 60 Hz screen already shows". Raise it (120) for smoother text on fast screens at
+ * proportionally more work; `Infinity` restores one redraw per frame. Screens at or below 75 Hz are never throttled.
  */
-const MIN_FLUSH_GAP_MS = 12;
+const STREAM_REDRAW_TARGET_HZ = 60;
+// Frame-period estimate: from the last FRAME_SAMPLES+1 consecutive frames this batcher saw (a gap of 40 ms or more,
+// a pause between replies, starts the window over). Fewer than MIN_SAMPLES gaps, or any gap far from the median
+// (variable-refresh displays, a rate change, a stalled frame, skipped frames), means "do not throttle".
+const FRAME_SAMPLES = 8;
+const MIN_SAMPLES = 5;
+const QUIET_GAP_MS = 40;
+// Keep watching frames for this long after the last words, so the estimate sees CONSECUTIVE frames (words arrive between
+// frames at 150/s, so a callback armed only by a word would see every 2nd-3rd frame and learn a multiple of the period).
+const WATCH_AFTER_WORDS_MS = 100;
 
 export function installTranscriptBatcher(dispatch: DispatchBatch): TranscriptBatcher {
   const pending: ChatAction[] = [];
@@ -68,6 +76,34 @@ export function installTranscriptBatcher(dispatch: DispatchBatch): TranscriptBat
   // The frame time of the last frame-driven flush; null until the first (the first update after any quiet
   // spell is therefore never delayed).
   let lastFrameFlushAt: number | null = null;
+  let stamps: number[] = [];
+  let lastWordsFrameAt = -Infinity;
+
+  /** Learn the display's frame period from the frames this batcher is called on. */
+  function observeFrame(frameTime: number) {
+    const prev = stamps[stamps.length - 1];
+    if (prev !== undefined && (frameTime - prev <= 0 || frameTime - prev >= QUIET_GAP_MS)) stamps = [];
+    stamps.push(frameTime);
+    if (stamps.length > FRAME_SAMPLES + 1) stamps.shift();
+  }
+
+  /**
+   * Flush on every k-th frame, k = floor(frames per target interval): <= 75 Hz -> 1, 90/100 -> 1, 120/144/165 -> 2,
+   * 180 -> 3, 240 -> 4, 360 -> 6, so the step is never above one target interval (16.7 ms at 60) plus jitter.
+   * Returns null when there is no trustworthy estimate (then every frame flushes).
+   */
+  function throttle(): { k: number; period: number } | null {
+    if (stamps.length < MIN_SAMPLES + 1) return null;
+    const gaps = stamps.slice(1).map((t, i) => t - stamps[i]);
+    const median = [...gaps].sort((a, b) => a - b)[gaps.length >> 1];
+    // Every gap must be near the median: jitter is tolerated, a mix of rates or a skipped frame is not.
+    if (gaps.some((g) => Math.abs(g - median) > Math.max(0.35 * median, 3.2))) return null;
+    // WHY first-to-last, not the median or mean of the gaps: timestamp jitter cancels at the two ends, so the
+    // estimate is stable even where 1000/(target*period) sits exactly on a whole number (120, 180, 240, 360 Hz).
+    const period = (stamps[stamps.length - 1] - stamps[0]) / gaps.length;
+    const k = Math.max(1, Math.floor(1000 / (STREAM_REDRAW_TARGET_HZ * period) + 0.05));
+    return k > 1 ? { k, period } : null;
+  }
 
   function clearScheduled() {
     if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
@@ -104,19 +140,34 @@ export function installTranscriptBatcher(dispatch: DispatchBatch): TranscriptBat
 
   // The frame-driven flush. WHY the frame's own timestamp (not performance.now()): it is the vsync time the browser
   // hands every callback of the frame, so on a fast screen consecutive frames differ by exactly the display's
-  // period and the skip pattern is regular. A caller that passes no timestamp (a test firing frames by hand) is
-  // never throttled.
+  // period. A caller that passes no timestamp (a test firing frames by hand) is never throttled.
   function onFrame(frameTime?: number) {
     rafId = null;
     if (disposed) return;
-    if (typeof frameTime === 'number' && lastFrameFlushAt !== null && frameTime >= lastFrameFlushAt
-        && frameTime - lastFrameFlushAt < MIN_FLUSH_GAP_MS) {
-      // Too soon after the last redraw: keep the queue, look again next frame. Actions are only delayed, never
-      // reordered or dropped, and flush() (hook events, snapshots) still applies them at once.
-      rafId = requestAnimationFrame(onFrame);
+    if (typeof frameTime === 'number') {
+      observeFrame(frameTime);
+      if (pending.length === 0) {
+        // Nothing to draw: only keep watching, for a short while after the last words, then stop (no idle frame loop).
+        if (frameTime - lastWordsFrameAt < WATCH_AFTER_WORDS_MS) rafId = requestAnimationFrame(onFrame);
+        return;
+      }
+      lastWordsFrameAt = frameTime;
+      const t = throttle();
+      // Wait until (k - 0.5) periods have passed since the last redraw: the half period absorbs timestamp jitter, so
+      // a frame a hair early is not skipped (which would double the step).
+      if (t && lastFrameFlushAt !== null && frameTime >= lastFrameFlushAt
+          && frameTime - lastFrameFlushAt < (t.k - 0.5) * t.period) {
+        // Too soon after the last redraw: keep the queue, look again next frame. Actions are only delayed, never
+        // reordered or dropped, and flush() (hook events, snapshots) still applies them at once.
+        rafId = requestAnimationFrame(onFrame);
+        return;
+      }
+      lastFrameFlushAt = frameTime;
+      flush();
+      // Keep watching the next frames (see WATCH_AFTER_WORDS_MS); a word pushed meanwhile finds this already armed.
+      if (!disposed && rafId === null && timerId === null) rafId = requestAnimationFrame(onFrame);
       return;
     }
-    if (typeof frameTime === 'number') lastFrameFlushAt = frameTime;
     flush();
   }
 
