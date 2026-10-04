@@ -35,12 +35,15 @@ export const HOME_ASSISTANT_PAGE_CSS = `
   .pill:hover { border-color: var(--edge); }
   .pill:active { transform: scale(.97); }
   /* The open tab is unmistakable: filled with the text colour. */
-  .pill.sel, .pill.lit.sel { background: var(--fg); border-color: var(--fg); color: var(--panel); }
+  .pill.sel, .pill.lit.sel { background: var(--fg); border-color: var(--fg); color: var(--panel); font-weight: 700; }
   .pill.sel .pill-ic { background: var(--panel); color: var(--fg); }
+  .pill.sel.lit .pill-ic { background: var(--k); color: #111; }
   .pill.sel .eq i { background: var(--panel); }
   .pill-ic { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: var(--well); color: var(--fg-muted); }
   .pill-ic svg { width: 14px; height: 14px; }
-  .pill.lit { background: color-mix(in srgb, var(--k) 14%, var(--panel)); border-color: color-mix(in srgb, var(--k) 40%, var(--edge-dim)); }
+  /* Status colour lives only in the round icon; the pill itself stays
+     plain, so the one filled pill is always the open tab (round 4 note:
+     "hard to tell selected state from the regular status colors"). */
   .pill.lit .pill-ic { background: var(--k); color: #111; }
   .pill .eq { margin-left: 2px; }
   /* Sentence: the house in one line; each part opens its page. */
