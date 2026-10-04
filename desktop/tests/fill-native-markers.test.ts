@@ -63,7 +63,10 @@ describe('the buddy and the preview run the same page case', () => {
   it('both dispatch HISTORY_PAGE_LOADED into chatReducer itself (a source pin: there is no second reducer to fix)', async () => {
     const fs = await import('node:fs');
     const read = (p: string) => fs.readFileSync(new URL(`../src/renderer/${p}`, import.meta.url), 'utf8');
-    expect(read('components/buddy/BubbleFeed.tsx')).toContain("type: 'HISTORY_PAGE_LOADED'");
+    // The buddy fills through the shared fill (sync-fix3), so its page lands through the same function the main window's does.
+    expect(read('components/buddy/BubbleFeed.tsx')).toContain('createFirstPageLoader');
+    expect(read('state/first-page-loader.ts')).toContain("applyOpenReply");
+    expect(read('state/session-fill.ts')).toContain("type: 'HISTORY_PAGE_LOADED'");
     expect(read('state/chat-context.ts')).toContain('chatReducer');
     expect(read('components/SessionPreviewPane.tsx')).toContain("type: 'HISTORY_PAGE_LOADED'");
     expect(read('components/SessionPreviewPane.tsx')).toContain('chatReducer(state, action as ChatAction)');

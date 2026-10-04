@@ -22,6 +22,9 @@ import { eventToAction } from '../src/renderer/state/transcript-event-actions';
 import { BUDDY_LIVE } from '../src/renderer/components/buddy/buddy-live-events';
 
 const mocks = vi.hoisted(() => ({ state: {} as any, dispatch: vi.fn() }));
+// A page with a message in it: an EMPTY page is ambiguous ("no history" or "not found yet") and the loader would retry it (first-page-retry.ts).
+const aPage = (over: object = {}) => ({ events: [{ type: 'user-message', sessionId: 's1', uuid: 'p1', timestamp: 1, data: { text: 'hi' } }], cursor: null, hasMore: false, ...over });
+const bridge = { listeners: {} as Record<string, Array<(...a: any[]) => void>>, open: vi.fn() as any };
 
 vi.mock('../src/renderer/state/chat-context', () => ({
   useChatState: () => mocks.state,
@@ -58,14 +61,25 @@ beforeEach(() => {
   // BubbleFeed owns its own IPC subscriptions (separate renderer from
   // App.tsx). No event is ever delivered here — tests drive state through
   // the mocked useChatState instead. Mirrors bubblefeed-scroll-pin-deps.test.tsx.
+  // sync-fix3: the feed is filled by `session:open` (as the main window is), and what the answer carries is played back through the same listeners a
+  // live push reaches. `bridge.play` below is the preload's `session.play`: it hands each push to the listeners registered for its channel.
+  bridge.listeners = {};
+  bridge.open = vi.fn().mockResolvedValue({ ok: true, resume: 'page', epoch: 'e', headSeq: 0, before: [], page: aPage(), after: [], facts: { working: false } });
+  const on = (channel: string) => (h: (...a: any[]) => void) => { (bridge.listeners[channel] ??= []).push(h); return () => { bridge.listeners[channel] = bridge.listeners[channel].filter((x) => x !== h); }; };
   (window as any).claude = {
     on: {
-      transcriptEvent: (h: unknown) => h,
-      hookEvent: (h: unknown) => h,
-      specialistEvent: () => () => {},
-      shellEvent: () => () => {},
+      transcriptEvent: (h: any) => { on('transcript:event')(h); return h; },
+      hookEvent: (h: any) => { on('hook:event')(h); return h; },
+      specialistEvent: on('specialists:event'),
+      shellEvent: on('native:shell-event'),
+      sessionLive: on('session:live'),
+      hookReplayComplete: on('hook:replay-complete'),
     },
     off: () => {},
+    session: {
+      open: (req: unknown) => bridge.open(req),
+      play: (pushes: Array<{ type: string; payload: unknown }>) => { for (const p of pushes) for (const h of bridge.listeners[p.type] ?? []) h(p.payload); },
+    },
     detach: { requestTranscriptPage: () => Promise.resolve(null) },
   };
 });
@@ -122,15 +136,73 @@ function twoTurnState() {
 describe('BubbleFeed paging', () => {
   it('passes the first page’s interrupted tools to its own chat reducer', async () => {
     mocks.state = sessionState({ history: { cursor: null, hasMore: false, loading: false } });
-    (window as any).claude.detach.requestTranscriptPage = vi.fn().mockResolvedValue({
-      events: [], cursor: null, hasMore: false, reconcileInterrupted: true,
-      reconcileInterruptedToolIds: ['pre-resume-tool'],
-    });
+    bridge.open.mockResolvedValue({ ok: true, resume: 'page', epoch: 'e', headSeq: 0, before: [], after: [], facts: { working: false },
+      page: aPage({ reconcileInterrupted: true, reconcileInterruptedToolIds: ['pre-resume-tool'] }) });
     render(<BubbleFeed sessionId="s1" />);
     await vi.waitFor(() => expect(mocks.dispatch).toHaveBeenCalledWith(expect.objectContaining({
       type: 'HISTORY_PAGE_LOADED', sessionId: 's1', reconcileInterrupted: true,
       reconcileInterruptedToolIds: ['pre-resume-tool'],
     })));
+  });
+});
+
+// One-core sync-fix3 (audit item 1): the buddy used to fill from a page alone and listen to no `session:live`, so a conversation's compaction spinner,
+// cards, queue strip and dividers, and an ask raised before the buddy looked at it, never appeared in it.
+describe('BubbleFeed is filled the way the main window is', () => {
+  const live = (over: object) => ({ sessionId: 's1', ...over });
+  const reply = (after: Array<{ type: string; payload: unknown }>, before: Array<{ type: string; payload: unknown }> = []) =>
+    ({ ok: true, resume: 'page', epoch: 'e', headSeq: 3, before, page: aPage(), after, facts: { working: true } });
+  const types = () => mocks.dispatch.mock.calls.map((c) => c[0].type);
+
+  it('asks `session:open` for its conversation (not a bare page) and starts from a fresh page', async () => {
+    mocks.state = sessionState({});
+    render(<BubbleFeed sessionId="s1" />);
+    await vi.waitFor(() => expect(bridge.open).toHaveBeenCalled());
+    expect(bridge.open).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's1', fresh: true }));
+  });
+
+  it('draws the compaction spinner, an open prompt card, the dividers and an ask that were all raised BEFORE the buddy looked', async () => {
+    mocks.state = sessionState({});
+    const ask = { type: 'PermissionRequest', sessionId: 's1', payload: { _requestId: 'r1', tool_name: 'Bash', tool_input: { command: 'ls' } }, timestamp: 1 };
+    bridge.open.mockResolvedValue(reply([
+      { type: 'hook:event', payload: ask },
+      { type: 'session:live', payload: live({ kind: 'prompt-show', promptId: 'p1', title: 'Usage limit', buttons: [] }) },
+      { type: 'session:live', payload: live({ kind: 'compact-start', id: 'c1' }) },
+      { type: 'hook:replay-complete', payload: { sessionId: 's1', pendingRequestIds: ['r1'] } },
+    ], [
+      { type: 'session:live', payload: live({ kind: 'model-switch', id: 'ms1', label: 'Model switched to Opus' }) },
+      { type: 'session:live', payload: live({ kind: 'clear', id: 'cl1' }) },
+    ]));
+    render(<BubbleFeed sessionId="s1" />);
+    await vi.waitFor(() => expect(types()).toEqual(expect.arrayContaining([
+      'MODEL_SWITCH_MARKER', 'CLEAR_TIMELINE', 'SESSION_FILL_RESET', 'HISTORY_PAGE_LOADED', 'PERMISSION_REQUEST', 'SHOW_PROMPT', 'COMPACTION_PENDING', 'PERMISSION_REPLAY_COMPLETE',
+    ])));
+    expect(mocks.dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: 'COMPACTION_PENDING', hostOwned: true }));
+    expect(mocks.dispatch).toHaveBeenCalledWith({ type: 'PERMISSION_REPLAY_COMPLETE', sessionId: 's1', pendingRequestIds: ['r1'] });
+    // the divider that was in the record's past lands BEFORE the page, which prepends below it (the fill's order)
+    expect(types().indexOf('MODEL_SWITCH_MARKER')).toBeLessThan(types().indexOf('HISTORY_PAGE_LOADED'));
+  });
+
+  it('keeps listening: a live `session:live` for this conversation is drawn, one for another conversation is not', async () => {
+    mocks.state = sessionState({});
+    render(<BubbleFeed sessionId="s1" />);
+    await vi.waitFor(() => expect(bridge.listeners['session:live']?.length).toBeGreaterThan(0));
+    mocks.dispatch.mockClear();
+    act(() => { for (const h of bridge.listeners['session:live']) { h(live({ kind: 'compact-start', id: 'live1' })); h({ sessionId: 'other', kind: 'compact-start', id: 'x' }); } });
+    await vi.waitFor(() => expect(types()).toContain('COMPACTION_PENDING'));
+    expect(mocks.dispatch.mock.calls.filter((c) => c[0].type === 'COMPACTION_PENDING')).toHaveLength(1);
+  });
+
+  it('leaves its three known transcript gaps as they were (a replayed skill card or /clear is still not drawn live)', async () => {
+    mocks.state = sessionState({});
+    bridge.open.mockResolvedValue(reply([], [
+      { type: 'transcript:event', payload: { type: 'skill-invoked', sessionId: 's1', uuid: 'k1', timestamp: 1, data: { skillId: 'x', displayName: 'X', body: 'b' } } },
+      { type: 'transcript:event', payload: { type: 'context-clear', sessionId: 's1', uuid: 'k2', timestamp: 2, data: {} } },
+    ]));
+    render(<BubbleFeed sessionId="s1" />);
+    await vi.waitFor(() => expect(types()).toContain('HISTORY_PAGE_LOADED'));
+    expect(types()).not.toContain('TRANSCRIPT_SKILL_INVOKED');
+    expect(types()).not.toContain('CLEAR_TIMELINE');
   });
 });
 

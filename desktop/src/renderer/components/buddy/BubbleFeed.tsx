@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useCallback, useMemo } from 'react';
 import { useChatState, useChatDispatch } from '../../state/chat-context';
 import { hookEventToAction } from '../../state/hook-dispatcher';
-import { decideFirstPage, FIRST_PAGE_RETRY_MS } from '../../state/first-page-retry';
+import { createFirstPageLoader } from '../../state/first-page-loader';
+import { applySessionLive } from '../../state/apply-session-live';
 import UserMessage from '../UserMessage';
 import SpecialistReportCard from '../SpecialistReportCard';
 import AssistantTurnBubble from '../AssistantTurnBubble';
@@ -104,14 +105,35 @@ export function BubbleFeed({ sessionId }: Props) {
       for (const action of batch) dispatch(action);
     }
 
+    // Apply everything queued RIGHT NOW. WHY (sync-fix3): a fill plays the record's recent past as live events and the page must land
+    // BELOW them, so the queued frame cannot wait for its animation frame (state/session-fill.ts calls this between the two).
+    function flushNow() {
+      if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
+      flush();
+    }
+
     function batchDispatch(action: any) {
       pending.push(action);
       if (rafId === null) rafId = requestAnimationFrame(flush);
     }
 
+    // The fill: the SAME `session:open` the main window uses, asked for as this window (sync-fix3). WHY not a page request: a page holds only
+    // what is on disk, so this feed missed everything the computer keeps in memory about the conversation: an ask raised before it looked
+    // (the question never appeared here), the compaction spinner, a usage-limit or trust card, the queued-messages strip, the model and
+    // "Conversation cleared" lines. The answer carries all of them, and is played back through the listeners below.
+    const loader = createFirstPageLoader({
+      open: async (req) => (window as any).claude.session.open(req),
+      requestPage: async (req) => (window as any).claude?.detach?.requestTranscriptPage?.(req),
+      dispatch: (action) => { if (!cancelled) dispatch(action); },
+      flush: flushNow,
+      play: (pushes) => { if (!cancelled) (window as any).claude?.session?.play?.(pushes); },
+    });
+
     const unsubTranscript = window.claude.on.transcriptEvent((event) => {
       // Only process events for the session this feed is watching
       if (!event?.type || event?.sessionId !== sessionId) return;
+      // A fill that could not finish asks again when the conversation shows proof the transcript can now be found (first-page-loader.ts).
+      loader.noteLiveActivity(sessionId);
       // The buddy's three known live gaps (see the ledger). An unknown type has no
       // ledger row; eventToAction ignores it.
       // Own-property lookup: a wire type named `constructor` or `toString` must read as
@@ -131,48 +153,42 @@ export function BubbleFeed({ sessionId }: Props) {
       })) batchDispatch(action);
     });
 
-    // Request the most recent PAGE of history AFTER the listener is wired so no
-    // live event can race past us. Perf cycle 2: this used to be
-    // requestTranscriptReplay, which streamed the WHOLE transcript into the
-    // buddy's own reducer — the same cost the main window just stopped paying,
-    // duplicated in a second BrowserWindow.
+    // The shared lines and live facts (compaction spinner, prompt cards, queue, model and clear dividers): the main window's `session:live`
+    // listener, with the pieces that only exist there (the status bar's context reading, the model chip, the send gates) left out. The
+    // buddy's three known live gaps in the ledger above are about TRANSCRIPT events and stay exactly as they were.
+    const unsubLive = (window.claude.on as any).sessionLive?.((live: any) => {
+      if (live?.sessionId !== sessionId) return;
+      applySessionLive(live, {
+        batcher: { push: batchDispatch },
+        contextTokens: () => null,
+        isNative: () => false,
+        setChipModel: () => {},
+        setSessionModel: () => {},
+      });
+    });
+    // The end of a fill lists the asks still open: any card not named was answered while this feed could not see it.
+    const unsubReplayComplete = (window.claude.on as any).hookReplayComplete?.((p: { sessionId: string; pendingRequestIds: string[] }) => {
+      if (p?.sessionId !== sessionId) return;
+      dispatch({ type: 'PERMISSION_REPLAY_COMPLETE', sessionId, pendingRequestIds: Array.isArray(p.pendingRequestIds) ? p.pendingRequestIds : [] });
+    });
+
+    // Fill AFTER every listener is wired, so no live event can race past us (the answer is played through them). Perf cycle 2: this used
+    // to be requestTranscriptReplay, which streamed the WHOLE transcript into the buddy's own reducer. The loader retries a page the
+    // computer could not resolve yet (a just-resumed session) on the same terms as the main window (first-page-loader.ts).
     //
     // The buddy has no scroll-up sentinel this cycle: it is a glanceable recent
     // view, not a place to read back through a conversation.
-    void (async () => {
-      dispatch({ type: 'HISTORY_PAGE_REQUESTED', sessionId });
-      // Retried, and on the same terms as the main window's first page
-      // (first-page-retry.ts). The floater has no scroll-up sentinel, so a
-      // single attempt that main could not resolve — a just-resumed session
-      // whose transcript path CC has not reported yet — silently showed a feed
-      // starting mid-conversation, with nothing to nudge it.
-      for (let attempt = 0; ; attempt++) {
-        try {
-          const page = await (window as any).claude?.detach?.requestTranscriptPage?.({ sessionId, beforeCursor: null });
-          if (cancelled) return;
-          if (!page) { dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId }); return; }
-          const decision = decideFirstPage(page, attempt);
-          if (decision === 'accept') {
-            // WHY: the buddy has its own reducer, so it must apply the same recovery verdict as App.
-            dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId, events: page.events, cursor: page.cursor, hasMore: page.hasMore,
-              reconcileInterrupted: page.reconcileInterrupted === true, reconcileInterruptedToolIds: page.reconcileInterruptedToolIds });
-            return;
-          }
-          if (decision === 'give-up') { dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId }); return; }
-        } catch {
-          if (!cancelled) dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId });
-          return;
-        }
-        await new Promise((r) => setTimeout(r, FIRST_PAGE_RETRY_MS));
-        if (cancelled) return;
-      }
-    })();
+    void loader.load(sessionId);
 
     return () => {
       cancelled = true;
       if (rafId !== null) cancelAnimationFrame(rafId);
       // Unregister: preload returns the raw handler for removeListener
       window.claude.off('transcript:event', unsubTranscript);
+      if (typeof unsubLive === 'function') unsubLive();
+      if (typeof unsubReplayComplete === 'function') unsubReplayComplete();
+      // A fill still in flight is for a feed that is gone: forget it, so its answer is applied to nothing.
+      loader.retainOnly(new Set());
     };
   }, [sessionId, dispatch]);
 
