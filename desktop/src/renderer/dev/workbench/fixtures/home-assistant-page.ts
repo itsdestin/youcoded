@@ -30,6 +30,18 @@ export const HOME_ASSISTANT_PAGE_JSON = {
       // Renames and room moves go over Home Assistant's websocket (Q-where):
       // the app sends this greeting first, with the key filled in by the app.
       socketHello: '{"type":"auth","access_token":"{{key}}"}',
+      // The device's profile (spec 2026-10-04), approved with the page: what
+      // "logged in" and "wrong key" look like, and how the app asks for camera
+      // video on the page's behalf. No socketDeny: this page needs
+      // config/*_registry, and the app's built-in floor (auth/, config/auth,
+      // person/) already blocks new keys and login changes.
+      socketReady: 'auth_ok',
+      socketAuthFailed: 'auth_invalid',
+      videoProfile: {
+        targetPrefix: 'camera.',
+        send: '{"id":1,"type":"camera/webrtc/offer","entity_id":{{target}},"offer":{{offer}}}',
+        answer: 'event.answer', candidate: 'event.candidate', failed: 'event.message',
+      },
       keyHelp: { steps: [
         'Press Open Home Assistant below and sign in.',
         'Scroll to the bottom, to "Long-lived access tokens", and press Create token.',

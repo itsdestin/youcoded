@@ -22,8 +22,8 @@
 import WebSocket from 'ws';
 import { assertHomeHttpUrl } from '../harness/tools/net-guard';
 import { covers, fingerprint, SOCKET_KEY_TOKEN } from './page-connections';
-import { redact, type PageFetchContext } from './page-fetch';
-import type { PageFetchRequest, PageFetchResult } from '../../shared/pages-types';
+import { redact, type PageCredential, type PageFetchContext } from './page-fetch';
+import type { PageConnection, PageFetchRequest, PageFetchResult } from '../../shared/pages-types';
 
 /** Caps. Sized for a settings page: a rename is three messages out, three
  *  back; a room list is one large answer. */
@@ -80,31 +80,73 @@ function cleanPlan(socket: PageFetchRequest['socket']): { send: string[]; until:
   return { send, until, timeoutMs };
 }
 
-export async function performPageSocket(request: PageFetchRequest, ctx: PageSocketContext): Promise<PageFetchResult> {
-  const plan = cleanPlan(request.socket);
-  if (typeof plan === 'string') return refuse('bad-url', plan);
+/** Message types refused on EVERY device socket whatever the manifest says; a
+ *  manifest can only add to this (`socketDeny`). Threat: a page (or a later
+ *  edit of it) minting a new login key for itself or changing who may log in.
+ *  Home Assistant's `config/entity_registry/*`, `config/device_registry/*` and
+ *  `config/area_registry/*` (renames, room moves) must NOT match: that is why
+ *  the floor says `config/auth`, not `config/`. */
+const SOCKET_DENY_FLOOR = ['auth/', 'config/auth', 'person/'] as const;
 
+/** Check ONE page-written outgoing socket message. Returns null when allowed,
+ *  else a plain reason. Main reads the message's `type` itself (a page is never
+ *  trusted to say what it is sending): it must be a JSON object with exactly
+ *  one string `type`, and that type, trimmed and lower-cased, must not start
+ *  with any floor or manifest-denied prefix. */
+export function checkOutgoingSocketMessage(text: string, extraDeny: readonly string[] = []): string | null {
+  const unreadable = 'That page tried to send a message the app could not read, so nothing was sent.';
+  let parsed: unknown;
+  try { parsed = JSON.parse(text); } catch { return unreadable; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return unreadable;
+  const type = (parsed as { type?: unknown }).type;
+  if (typeof type !== 'string') return unreadable;
+  // WHY count in the raw text: JSON.parse keeps only the LAST of two "type"
+  // keys, while a device may act on the first, so a duplicate could hide a
+  // denied type behind an allowed one.
+  if ((text.match(/"type"\s*:/g) ?? []).length > 1) return unreadable;
+  const t = type.trim().toLowerCase();
+  const hit = [...SOCKET_DENY_FLOOR, ...extraDeny].find((p) => t.startsWith(p.toLowerCase()));
+  return hit ? `That page tried to send "${t}", which the app never allows on a home device, so nothing was sent.` : null;
+}
+
+/** Everything a socket to a home device must pass, in one place so the
+ *  one-shot exchange here and the live socket and video later cannot drift
+ *  apart (spec 2026-10-04, "One shared check function"). Order: the page's
+ *  address, a `device` connection that covers host AND port, approved at the
+ *  current fingerprint, full access, a saved key when the greeting needs one,
+ *  and the home-address check (re-resolved every call). */
+type DeviceSocketAccess =
+  | { ok: false; refusal: PageFetchResult }
+  | { ok: true; connection: DeviceConnection; httpUrl: URL; credential: PageCredential | null; secrets: string[]; hello: string | undefined };
+type DeviceConnection = Extract<PageConnection, { kind: 'device' }>;
+
+// WHY not exported yet: the live socket and video (later steps) will export it; knip refuses unused exports until then.
+async function checkDeviceSocketAccess(
+  url: unknown,
+  ctx: Pick<PageFetchContext, 'connections' | 'approved' | 'credential' | 'lookup' | 'signal'>,
+): Promise<DeviceSocketAccess> {
+  const no = (refusal: PageFetchResult): DeviceSocketAccess => ({ ok: false, refusal });
   // The page names its device the way it names it for a fetch — its http(s)
   // address — or as ws(s). Either way the match and the home check run on the
   // http form, so the rule is the SAME one the fetch door applies.
   let httpUrl: URL;
-  try { httpUrl = new URL(String(request.url ?? '')); }
-  catch { return refuse('bad-url', 'That page asked for an address the app could not read.'); }
+  try { httpUrl = new URL(String(url ?? '')); }
+  catch { return no(refuse('bad-url', 'That page asked for an address the app could not read.')); }
   const scheme = httpUrl.protocol;
   if (scheme === 'ws:' || scheme === 'wss:') httpUrl = new URL(httpUrl.toString().replace(/^ws/, 'http'));
-  else if (scheme !== 'http:' && scheme !== 'https:') return refuse('bad-url', 'A socket exchange needs a ws:// or http:// address.');
+  else if (scheme !== 'http:' && scheme !== 'https:') return no(refuse('bad-url', 'A socket exchange needs a ws:// or http:// address.'));
 
   const connection = ctx.connections.find((c) => covers(c, httpUrl));
   if (!connection || connection.kind !== 'device') {
-    return refuse('not-approved', `This page may not open a socket to ${httpUrl.hostname}. Only an allowed home device can be reached that way.`);
+    return no(refuse('not-approved', `This page may not open a socket to ${httpUrl.hostname}. Only an allowed home device can be reached that way.`));
   }
   if (!ctx.approved[connection.id] || ctx.approved[connection.id] !== fingerprint(connection)) {
-    return refuse('not-approved', `This page has not been allowed to reach ${httpUrl.hostname} yet.`);
+    return no(refuse('not-approved', `This page has not been allowed to reach ${httpUrl.hostname} yet.`));
   }
   // A socket can change anything the device offers, so a look-up-only
   // approval never opens one.
   if (connection.access !== 'full') {
-    return refuse('method-not-allowed', `This page may only look things up at ${httpUrl.hostname}; it cannot send changes there.`);
+    return no(refuse('method-not-allowed', `This page may only look things up at ${httpUrl.hostname}; it cannot send changes there.`));
   }
 
   const credential = await ctx.credential(connection);
@@ -115,13 +157,31 @@ export async function performPageSocket(request: PageFetchRequest, ctx: PageSock
   }
   const hello = connection.socketHello;
   if (hello?.includes(SOCKET_KEY_TOKEN) && !credential) {
-    return refuse('not-approved', `There is no saved key for ${connection.service}. Remove this connection and add the key again.`);
+    return no(refuse('not-approved', `There is no saved key for ${connection.service}. Remove this connection and add the key again.`));
   }
 
   try {
     await assertHomeHttpUrl(httpUrl.toString(), ctx.lookup, ctx.signal);
   } catch (error) {
-    return refuse('network', redact(error instanceof Error ? error.message : String(error), secrets));
+    return no(refuse('network', redact(error instanceof Error ? error.message : String(error), secrets)));
+  }
+  return { ok: true, connection, httpUrl, credential, secrets, hello };
+}
+
+export async function performPageSocket(request: PageFetchRequest, ctx: PageSocketContext): Promise<PageFetchResult> {
+  const plan = cleanPlan(request.socket);
+  if (typeof plan === 'string') return refuse('bad-url', plan);
+
+  const checked = await checkDeviceSocketAccess(request.url, ctx);
+  if (!checked.ok) return checked.refusal;
+  const { connection, httpUrl, credential, secrets, hello } = checked;
+
+  // WHY here: a denied message (a new login key, a changed login list) must be
+  // refused before anything is sent, so the whole exchange is refused, not
+  // half-run. Applies to every page message, never to the app's own greeting.
+  for (const m of plan.send) {
+    const denied = checkOutgoingSocketMessage(m, connection.socketDeny);
+    if (denied) return refuse('method-not-allowed', denied);
   }
 
   // The upgrade request carries the key the same way a fetch would, for a

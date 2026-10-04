@@ -15,7 +15,7 @@
 // An approval is recorded against a FINGERPRINT, not an id: widen the access or
 // change the address and the old approval no longer matches, so the page asks
 // again (deck S-change). Renaming the id alone does not re-ask.
-import type { KeyScheme, PageAccess, PageConnection } from '../../shared/pages-types';
+import type { KeyScheme, PageAccess, PageConnection, VideoProfile } from '../../shared/pages-types';
 import { cleanDeviceAddress, urlMatchesDevice } from '../../shared/page-device-address';
 
 /** Where a key connection's key is attached when the manifest does not say.
@@ -109,6 +109,47 @@ function cleanSocketHello(raw: unknown): string | undefined {
   return raw.split(SOCKET_KEY_TOKEN).length <= 2 ? raw : undefined;
 }
 
+/** Device-profile cleaning (spec 2026-10-04). Every string is short and plain
+ *  so nothing a manifest writes can become a pattern main would run. Anything
+ *  that breaks a rule is DROPPED, never trimmed into something else. */
+const MAX_PROFILE_WORD = 64;
+const MAX_VIDEO_SEND = 2048;
+const MAX_SOCKET_DENY = 16;
+/** A reply type, e.g. `auth_ok`. */
+function cleanReplyType(raw: unknown): string | undefined {
+  return typeof raw === 'string' && /^[A-Za-z0-9_./-]{1,64}$/.test(raw) ? raw : undefined;
+}
+/** A lower-case message-type prefix, e.g. `config/`. Sorted and de-duplicated
+ *  so order never changes the fingerprint. */
+function cleanSocketDeny(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out = new Set<string>();
+  for (const p of raw) {
+    if (typeof p !== 'string') continue;
+    const v = p.trim();
+    if (/^[a-z0-9_./-]{1,64}$/.test(v)) out.add(v);
+    if (out.size >= MAX_SOCKET_DENY) break;
+  }
+  return out.size ? [...out].sort() : undefined;
+}
+/** A dotted path into a reply (`event.answer`). */
+function cleanDotted(raw: unknown): string | undefined {
+  return typeof raw === 'string' && raw.length <= MAX_PROFILE_WORD && /^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*$/.test(raw) ? raw : undefined;
+}
+function cleanVideoProfile(raw: unknown): VideoProfile | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const targetPrefix = typeof o.targetPrefix === 'string' && /^[a-z0-9_.]{1,64}$/.test(o.targetPrefix) ? o.targetPrefix : undefined;
+  // WHY no {{key}}: the key may enter a socket only through the greeting.
+  const send = typeof o.send === 'string' && o.send.length > 0 && Buffer.byteLength(o.send) <= MAX_VIDEO_SEND
+    && !o.send.includes(SOCKET_KEY_TOKEN) ? o.send : undefined;
+  const answer = cleanDotted(o.answer);
+  const candidate = cleanDotted(o.candidate);
+  const failed = cleanDotted(o.failed);
+  if (!targetPrefix || !send || !answer || !candidate || !failed) return undefined;
+  return { targetPrefix, send, answer, candidate, failed };
+}
+
 function cleanSteps(raw: unknown): { steps: string[] } | undefined {
   const list = (raw as { steps?: unknown } | null)?.steps;
   if (!Array.isArray(list)) return undefined;
@@ -193,6 +234,14 @@ export function parseConnections(raw: unknown): PageConnection[] {
           if (o.keyScheme === 'bearer' || o.keyScheme === 'token' || o.keyScheme === 'none') c.keyScheme = o.keyScheme;
           const hello = cleanSocketHello(o.socketHello);
           if (hello) c.socketHello = hello;
+          const ready = cleanReplyType(o.socketReady);
+          if (ready) c.socketReady = ready;
+          const authFailed = cleanReplyType(o.socketAuthFailed);
+          if (authFailed) c.socketAuthFailed = authFailed;
+          const deny = cleanSocketDeny(o.socketDeny);
+          if (deny) c.socketDeny = deny;
+          const video = cleanVideoProfile(o.videoProfile);
+          if (video) c.videoProfile = video;
         }
         break;
       }
@@ -209,6 +258,21 @@ export function parseConnections(raw: unknown): PageConnection[] {
   const hasCredential = out.some((c) => c.kind === 'key' || c.kind === 'youcoded' || c.kind === 'github' || c.kind === 'device');
   if (hasOpen && hasCredential) return [];
   return out;
+}
+
+/** The cleaned device profile as JSON with sorted keys (so key order in the
+ *  manifest never matters), or '' when the connection has none. */
+function profileSegment(c: Extract<PageConnection, { kind: 'device' }>): string {
+  const profile: Record<string, unknown> = {};
+  if (c.socketHello) profile.socketHello = c.socketHello;
+  if (c.socketReady) profile.socketReady = c.socketReady;
+  if (c.socketAuthFailed) profile.socketAuthFailed = c.socketAuthFailed;
+  if (c.socketDeny?.length) profile.socketDeny = c.socketDeny;
+  if (c.videoProfile) profile.videoProfile = c.videoProfile;
+  if (!Object.keys(profile).length) return '';
+  const sorted = (v: unknown): unknown => Array.isArray(v) ? v.map(sorted)
+    : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sorted((v as Record<string, unknown>)[k])])) : v;
+  return `|profile:${JSON.stringify(sorted(profile))}`;
 }
 
 /** What an approval is recorded against. Access and address are in it because
@@ -240,11 +304,12 @@ export function fingerprint(c: PageConnection): string {
     case 'device': {
       const p = keyPlacement(c);
       const moved = p.in === DEFAULT_KEY_PLACEMENT.in && p.param === DEFAULT_KEY_PLACEMENT.param ? '' : `|${p.in}:${p.param}`;
-      // The greeting rides only when present, so every approval made before it
-      // existed keeps its fingerprint. Adding or changing it asks again: it
-      // decides where the key goes.
-      const hello = c.socketHello ? `|hello:${c.socketHello}` : '';
-      return `device|${c.service}|${c.access}|${c.needsKey ? 'key' : 'nokey'}${moved}${hello}`;
+      // WHY one `|profile:` segment: the greeting and every other device-profile
+      // field (what "logged in" looks like, what is refused, how video is
+      // asked for) decide what the page can do through the socket, so changing
+      // any of them asks again. It rides only when something is present, so a
+      // device page without any keeps the fingerprint it always had.
+      return `device|${c.service}|${c.access}|${c.needsKey ? 'key' : 'nokey'}${moved}${profileSegment(c)}`;
     }
   }
 }

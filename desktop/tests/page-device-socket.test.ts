@@ -205,6 +205,7 @@ describe('the greeting in the manifest', () => {
 
   it('leaves the fingerprint of a device without one unchanged', () => {
     expect(fingerprint(device({ socketHello: undefined }))).toBe('device|Home Assistant|full|key');
-    expect(fingerprint(device())).toBe(`device|Home Assistant|full|key|hello:${HELLO}`);
+    // The greeting now rides inside the single |profile: segment (JSON, sorted keys).
+    expect(fingerprint(device())).toBe(`device|Home Assistant|full|key|profile:${JSON.stringify({ socketHello: HELLO })}`);
   });
 });

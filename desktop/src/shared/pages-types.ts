@@ -112,7 +112,30 @@ export type PageConnection =
        *  a message of its own, so it cannot write it somewhere it could read
        *  back. Part of the approval fingerprint. */
       socketHello?: string;
+      /** The device profile (spec 2026-10-04): what main must know about the
+       *  device, read from the approved manifest and never chosen by a page.
+       *  All of it rides the approval fingerprint (one `|profile:` segment). */
+      /** The reply TYPE that means "logged in" (Home Assistant: `auth_ok`). */
+      socketReady?: string;
+      /** The reply TYPE that means "wrong key" (`auth_invalid`). */
+      socketAuthFailed?: string;
+      /** Extra lower-case type prefixes refused on this device's socket, added
+       *  to main's built-in floor. */
+      socketDeny?: string[];
+      /** How main plays a camera on the page's behalf. */
+      videoProfile?: VideoProfile;
     };
+
+/** How main asks a device for camera video. `send` is a JSON template that
+ *  may hold `{{offer}}` and `{{target}}` but never `{{key}}`; the other three
+ *  are dotted paths into the device's replies. */
+export interface VideoProfile {
+  targetPrefix: string;
+  send: string;
+  answer: string;
+  candidate: string;
+  failed: string;
+}
 
 /** A connection as the person sees it on one page. */
 export type PageConnectionStatus = PageConnection & {
