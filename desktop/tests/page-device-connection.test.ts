@@ -221,6 +221,57 @@ describe('reaching the device', () => {
     expect(JSON.stringify(sneaky)).not.toContain(KEY);
   });
 
+  // Recorded clips (spec 2026-10-04, Part 3): as:'video' answers a data: link
+  // for a <video>, and refuses anything that is not a real, small mp4.
+  describe('a recorded clip', () => {
+    const URL_ = 'http://192.168.4.54:8123/api/nest/event_media/abc?authSig=x';
+    /** A tiny valid-looking mp4: 4 size bytes, then 'ftyp'. */
+    const mp4 = (extra = 8) => { const b = new Uint8Array(12 + extra); b.set([0, 0, 0, 12, 0x66, 0x74, 0x79, 0x70], 0); return b; };
+    const clip = (body: Uint8Array, headers: Record<string, string> = { 'content-type': 'video/mp4' }) => new Response(body as unknown as BodyInit, { status: 200, headers });
+
+    it('answers a real mp4 as a data link', async () => {
+      await allowed();
+      fetchMock.mockResolvedValueOnce(clip(mp4()));
+      const r = await service.fetch('personal:home', { url: URL_, as: 'video' });
+      expect(r).toMatchObject({ ok: true });
+      if (r.ok) expect(r.body.startsWith('data:video/mp4;base64,AAAADGZ0eXA')).toBe(true);
+    });
+
+    it('refuses a non-mp4 type, and an mp4 type with no ftyp box', async () => {
+      await allowed();
+      fetchMock.mockResolvedValueOnce(clip(mp4(), { 'content-type': 'application/json' }));
+      expect(await service.fetch('personal:home', { url: URL_, as: 'video' })).toMatchObject({ ok: false });
+      fetchMock.mockResolvedValueOnce(clip(new TextEncoder().encode(`{"token":"${KEY}"}`)));
+      const sneaky = await service.fetch('personal:home', { url: URL_, as: 'video' });
+      expect(sneaky).toMatchObject({ ok: false });
+      expect(JSON.stringify(sneaky)).not.toContain(KEY);
+    });
+
+    it('refuses a clip that is too big, by its header and by its body', async () => {
+      await allowed();
+      fetchMock.mockResolvedValueOnce(new Response(mp4() as unknown as BodyInit, { status: 200, headers: { 'content-type': 'video/mp4', 'content-length': '5000000' } }));
+      expect(await service.fetch('personal:home', { url: URL_, as: 'video' })).toMatchObject({ ok: false, message: expect.stringContaining('too large') });
+      // No content-length at all: the body itself is counted.
+      const big = new Uint8Array(4_000_001); big.set([0, 0, 0, 12, 0x66, 0x74, 0x79, 0x70], 0);
+      fetchMock.mockResolvedValueOnce(clip(big));
+      expect(await service.fetch('personal:home', { url: URL_, as: 'video' })).toMatchObject({ ok: false, message: expect.stringContaining('too large') });
+    });
+
+    it('allows one clip download at a time per page', async () => {
+      await allowed();
+      let release: (r: Response) => void = () => {};
+      fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => { release = resolve; }));
+      const first = service.fetch('personal:home', { url: URL_, as: 'video' });
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+      expect(await service.fetch('personal:home', { url: URL_, as: 'video' })).toMatchObject({ ok: false, reason: 'too-many-requests' });
+      release(clip(mp4()));
+      expect(await first).toMatchObject({ ok: true });
+      // The slot is free again afterwards.
+      fetchMock.mockResolvedValueOnce(clip(mp4()));
+      expect(await service.fetch('personal:home', { url: URL_, as: 'video' })).toMatchObject({ ok: true });
+    });
+  });
+
   it('stops working when the saved key is deleted', async () => {
     await allowed();
     await service.deleteSavedKey('Home Assistant', '192.168.4.54:8123');

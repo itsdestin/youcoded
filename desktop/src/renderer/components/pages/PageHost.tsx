@@ -264,7 +264,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
           ...(isStringMap(d.headers) ? { headers: d.headers } : {}),
           ...(typeof d.body === 'string' ? { body: d.body } : {}),
           // A camera snapshot comes back as a data: link (home-device deck).
-          ...(d.as === 'picture' ? { as: 'picture' as const } : {}),
+          ...(d.as === 'picture' ? { as: 'picture' as const } : d.as === 'video' ? { as: 'video' as const } : {}),
           // A one-shot socket exchange with a home device (renames, room
           // moves). Shape-checked here; main checks everything that matters.
           ...(isSocketPlan(d.socket) ? { socket: d.socket } : {}),

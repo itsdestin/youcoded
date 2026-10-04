@@ -38,7 +38,16 @@ const MAX_BODY_BYTES = 1_000_000;
  *  because a 1080p JPEG is routinely 300–900 KB; still bounded, because the
  *  answer crosses IPC as a base64 string a third bigger again. */
 const MAX_PICTURE_BYTES = 3_000_000;
+/** A recorded camera clip (spec 2026-10-04, Part 3). Nest clips are a few
+ *  seconds long; 4 MB leaves room while the base64 answer (a third bigger) stays
+ *  a sane thing to push across IPC. */
+const MAX_VIDEO_BYTES = 4_000_000;
 const REQUEST_TIMEOUT_MS = 30_000;
+/** Pages with a clip download in flight. WHY one at a time: a clip is up to
+ *  4 MB and a page that asks for twelve at once would hold twelve of them in
+ *  memory; the card only ever plays one. Module-level because the cap is per
+ *  page, and performPageFetch is otherwise stateless. */
+const videoFetching = new Set<string>();
 export const MAX_CONCURRENT_PER_PAGE = 4;
 export const MAX_PER_PAGE_PER_MINUTE = 120;
 /** How many requests may wait for a slot before the rest are refused. */
@@ -74,6 +83,8 @@ export interface PageFetchContext {
    *  or blocked request never decrypts anything. */
   credential: (c: PageConnection) => Promise<PageCredential | null>;
   signal: AbortSignal;
+  /** Which page is asking; only the one-clip-at-a-time rule needs it. */
+  pageId?: string;
   /** Test injection; both are handed straight to guardedFetch. */
   fetchImpl?: GuardedFetchOpts['fetchImpl'];
   lookup?: GuardedFetchOpts['lookup'];
@@ -156,6 +167,27 @@ export async function performPageFetch(request: PageFetchRequest, ctx: PageFetch
     return { ok: false, reason: 'not-approved', message: `This page has not been allowed to reach ${url.hostname} yet.` };
   }
 
+  // Clips (spec Part 3): a device connection only, and one download at a time
+  // per page. Checked before any request goes out.
+  let videoSlot: string | null = null;
+  if (request.as === 'video') {
+    if (connection.kind !== 'device') {
+      return { ok: false, reason: 'method-not-allowed', message: 'This page may only play video clips from a home device it has been allowed to reach.' };
+    }
+    videoSlot = ctx.pageId ?? '';
+    if (videoFetching.has(videoSlot)) {
+      return { ok: false, reason: 'too-many-requests', message: 'This page is already loading a clip. It can ask for the next one when that one finishes.' };
+    }
+    videoFetching.add(videoSlot);
+  }
+  try {
+    return await performApprovedFetch(request, ctx, url, connection);
+  } finally {
+    if (videoSlot !== null) videoFetching.delete(videoSlot);
+  }
+}
+
+async function performApprovedFetch(request: PageFetchRequest, ctx: PageFetchContext, url: URL, connection: PageConnection): Promise<PageFetchResult> {
   // Step 3.
   const method = (typeof request.method === 'string' && request.method.trim() ? request.method.trim() : 'GET').toUpperCase();
   if (!methodAllowed(connection, method, url.pathname)) {
@@ -234,6 +266,34 @@ export async function performPageFetch(request: PageFetchRequest, ctx: PageFetch
       if (truncated) return { ok: false, reason: 'network', message: `That picture from ${url.hostname} is too large to show.` };
       const body = res.status >= 200 && res.status < 300 ? `data:${type};base64,${bytes.toString('base64')}` : redact(bytes.toString('utf8'), secrets);
       return { ok: true, status: res.status, headers: out, body };
+    }
+    if (request.as === 'video') {
+      // A recorded clip, only from a device (spec Part 3). Refused unless it is
+      // an mp4 that really starts like one: base64 would carry any other bytes
+      // past the text redaction, so "video" must never become a way to read the
+      // page's own key back, any more than "picture" may.
+      const ok2xx = res.status >= 200 && res.status < 300;
+      if (ok2xx) {
+        const type = (res.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
+        if (type !== 'video/mp4') {
+          await res.body?.cancel().catch(() => { /* already closed */ });
+          return { ok: false, reason: 'network', message: `${url.hostname} did not answer with a video clip.` };
+        }
+        // WHY the header first: refuse a huge clip before reading a byte of it.
+        const declared = Number(res.headers.get('content-length'));
+        if (Number.isFinite(declared) && declared > MAX_VIDEO_BYTES) {
+          await res.body?.cancel().catch(() => { /* already closed */ });
+          return { ok: false, reason: 'network', message: `That clip from ${url.hostname} is too large to play.` };
+        }
+      }
+      const { bytes, truncated } = await readBytesCapped(res, MAX_VIDEO_BYTES);
+      if (truncated) return { ok: false, reason: 'network', message: `That clip from ${url.hostname} is too large to play.` };
+      if (!ok2xx) return { ok: true, status: res.status, headers: out, body: redact(bytes.toString('utf8'), secrets) };
+      // An mp4 begins with a box: 4 bytes of size, then its name, 'ftyp' first.
+      if (bytes.length < 12 || bytes.toString('latin1', 4, 8) !== 'ftyp') {
+        return { ok: false, reason: 'network', message: `${url.hostname} did not answer with a video clip.` };
+      }
+      return { ok: true, status: res.status, headers: out, body: `data:video/mp4;base64,${bytes.toString('base64')}` };
     }
     const { text } = await readBodyCapped(res, MAX_BODY_BYTES);
     return { ok: true, status: res.status, headers: out, body: redact(text, secrets) };

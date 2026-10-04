@@ -104,6 +104,14 @@ describe('the policy the document carries', () => {
     expect(csp).not.toContain('https:');
   });
 
+  it('lets only a page with a device connection play a data: video clip', () => {
+    expect(cspOf(doc('<p>hi</p>', [{ kind: 'device' }]))).toContain('media-src data:');
+    expect(cspOf(doc('<p>hi</p>', [{ kind: 'device' }]))).not.toContain('media-src data: https:');
+    for (const none of [[], [{ kind: 'key' }], [{ kind: 'public' }]]) expect(cspOf(doc('<p>hi</p>', none))).not.toContain('media-src');
+    // An open page keeps https video; adding a device adds data: beside it.
+    expect(cspOf(doc('<p>hi</p>', [{ kind: 'open' }, { kind: 'device' }]))).toContain('media-src data: https:');
+  });
+
   it('lets a whole-internet page show pictures, video and webfonts, but not open a socket', () => {
     const csp = cspOf(doc('<p>hi</p>', [{ kind: 'open' }]));
     expect(csp).toContain('img-src data: blob: https:');

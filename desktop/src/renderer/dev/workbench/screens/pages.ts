@@ -23,6 +23,8 @@ export const PAGES: readonly ScreenEntry[] = [
   { ...pg('pages/page/page-home#refused', 'view', 'approval', 'error-state'), params: { pagesHome: 'refused' } },
   { ...pg('pages/page/page-home#connected', 'view'), params: { pagesHome: 'connected' } },
   { ...pg('pages/page/page-home#edit', 'view'), params: { pagesHome: 'edit' } },
+  // The camera card (spec 2026-10-04): recent events with thumbnails, Watch live; the other camera has none yet.
+  { ...pg('pages/page/page-home#camera', 'view'), params: { pagesHome: 'camera' } },
   { ...pg('pages/page/page-home#remote', 'view'), params: { pagesHome: 'remote' } },
   { ...pg('pages/page/page-home#group', 'view'), params: { pagesHome: 'group' } },
   { ...pg('pages/page/page-home#device', 'view'), params: { pagesHome: 'device' } },

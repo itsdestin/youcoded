@@ -37,7 +37,7 @@ describe('channels', () => {
         expect(opened.ok).toBe(true);
         await vi.advanceTimersByTimeAsync(40);
         expect(heard.map((e) => e.kind === 'state' ? e.state : JSON.parse(e.texts[0]).type)).toEqual(['open', 'auth_required']);
-        await c.pages.socketSend({ ...call, socket: opened.socket, text: '{"type":"auth","access_token":"k"}' });
+        // The app logs in for the page, so "logged in" arrives with the greeting; the page sends only its own calls.
         await c.pages.socketSend({ ...call, socket: opened.socket, text: '{"id":7,"type":"config/area_registry/list"}' });
         await vi.advanceTimersByTimeAsync(40);
         const texts = heard.flatMap((e) => (e.kind === 'messages' ? e.texts : [])).map((t: string) => JSON.parse(t));

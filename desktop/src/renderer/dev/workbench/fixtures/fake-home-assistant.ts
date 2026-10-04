@@ -4,6 +4,7 @@
 // calls, and camera snapshots. State lives for the tab, so a switch pressed
 // stays pressed and the page's 5-second check agrees with it.
 import type { PageFetchRequest, PageFetchResult } from '../../../../shared/pages-types';
+import { FAKE_NEST_CLIP_BASE64 } from './fake-nest-clip';
 
 interface Thing {
   id: string; name: string; state: string;
@@ -42,7 +43,7 @@ function seed(): Array<{ id: string; name: string; items: Thing[] }> {
       { id: 'light.living_room_lamp', name: 'Floor lamp', state: 'on', brightness: 180, modes: ['color_temp'], k: 2700, maker: 'Signify Netherlands B.V.', model: 'Hue go (LLC020)', entry: 'entry_hue', sw: '1.108.7' },
       { id: 'light.living_room_ceiling', name: 'Ceiling', state: 'off', brightness: null, modes: dim },
       { id: 'media_player.living_room_speaker', name: 'Living Room speaker', state: 'paused', features: 4 | 8 | 1 | 16 | 32, vol: 0.3, title: 'Clair de Lune — Debussy', model: 'Google Nest Mini', app: 'Spotify' },
-      { id: 'camera.living_room_camera', name: 'Living room camera', state: 'idle' },
+      { id: 'camera.living_room_camera', name: 'Living room camera', state: 'idle', model: 'Nest Cam' },
     ] },
     { id: 'kitchen', name: 'Kitchen', items: [
       { id: 'light.kitchen_pendants', name: 'Pendants', state: 'off', brightness: null, modes: dim },
@@ -60,7 +61,7 @@ function seed(): Array<{ id: string; name: string; items: Thing[] }> {
       { id: 'climate.thermostat', name: 'Thermostat', state: 'cool', cur: 74, target: 72, min: 50, max: 90, step: 1, modesHvac: ['off', 'cool', 'heat', 'heat_cool'], action: 'cooling' },
     ] },
     { id: 'front_door', name: 'Front door', items: [
-      { id: 'camera.doorbell', name: 'Doorbell', state: 'unavailable' },
+      { id: 'camera.doorbell', name: 'Doorbell', state: 'unavailable', model: 'Nest Doorbell' },
     ] },
   ];
 }
@@ -166,6 +167,13 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
     }
     return ok(JSON.stringify(ROOMS.filter((r) => r.items.length).map((r) => ({ ...r, items: r.items.map((t) => ({ ...t, device: deviceOf(t.id) })) }))));
   }
+  // A Nest event's recorded clip and thumbnail (spec 2026-10-04, Part 3). The
+  // clip is answered the way the app answers `as: 'video'`: a data: link.
+  const media = /^\/api\/nest\/event_media\/([^/]+)\/([^/]+)\/(clip\.mp4|thumbnail)$/.exec(url.pathname);
+  if (media) {
+    if (media[3] === 'thumbnail') return { ok: true, status: 200, headers: { 'content-type': 'image/svg+xml' }, body: snapshot(decodeURIComponent(media[2]).replace(/^e/, 'Event ')) };
+    return { ok: true, status: 200, headers: { 'content-type': 'video/mp4' }, body: `data:video/mp4;base64,${FAKE_NEST_CLIP_BASE64}` };
+  }
   const cam = /^\/api\/camera_proxy\/(.+)$/.exec(url.pathname);
   if (cam) {
     const t = find(cam[1]);
@@ -183,6 +191,7 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
       const t = find(id);
       if (!t || t.state === 'unavailable') continue;
       const [, action] = svc.slice(1);
+      const stateBefore = t.state;
       if (action === 'turn_off') t.state = 'off';
       if (action === 'turn_on') {
         t.state = id.startsWith('media_player.') ? 'idle' : 'on';
@@ -212,7 +221,12 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
         add.forEach((m) => { const x = find(m); if (x) { x.state = t.state; x.title = t.title; x.source = t.source; } });
       }
       if (action === 'unjoin') leaveGroup(id);
+      // Home Assistant stamps "last changed" when the STATE moves (not for a
+      // brightness or volume change), and the live push carries it.
+      if (t.state !== stateBefore) t.since = new Date().toISOString();
     }
+    // Whoever is listening live hears about it now, as with the real one.
+    notifyLive();
     return ok('[]');
   }
   return null;
@@ -226,6 +240,74 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
 // so a room created empty still exists before anything is moved into it.
 
 const AREAS = ROOMS.map((r) => ({ area_id: r.id, name: r.name }));
+
+/** Recorded events per camera device, newest first. The Living Room camera has
+ *  a few; the Doorbell has none (its Nest account is not sending events), so
+ *  both the list and the "No recordings yet" wording can be seen. Titles follow
+ *  Home Assistant's own: the local time, then what it saw. */
+const nestEvents: Record<string, Array<{ id: string; title: () => string }>> = {};
+{
+  const stamp = (minAgo: number, what: string) => () => {
+    const d = new Date(Date.now() - minAgo * 60000);
+    const p = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())} ${what}`;
+  };
+  nestEvents.dev_camera_living_room_camera = [
+    { id: 'e1', title: stamp(55, 'Person') }, { id: 'e2', title: stamp(300, 'Motion') }, { id: 'e3', title: stamp(480, 'Doorbell') },
+  ];
+  nestEvents.dev_camera_doorbell = [];
+}
+
+// ── Instant updates (spec 2026-10-04, Part 1) ─────────────────────────────
+// Home Assistant's `subscribe_entities`: the first answer is every state in
+// full (`a`), later ones are compressed changes (`c`, with '+' for what is new
+// or changed and '-' for attributes that went away) and removals (`r`). This
+// pretends to be that, driven by the same ROOMS the template answers from, so
+// the page's instant updates can be seen with no house.
+type Squashed = { s: string; a: Record<string, unknown>; lc: number; lu: number };
+const ATTRS: Array<[keyof Thing, string]> = [
+  ['name', 'friendly_name'], ['brightness', 'brightness'], ['modes', 'supported_color_modes'], ['cur', 'current_temperature'], ['target', 'temperature'],
+  ['min', 'min_temp'], ['max', 'max_temp'], ['step', 'target_temp_step'], ['vol', 'volume_level'], ['title', 'media_title'], ['rgb', 'rgb_color'],
+  ['k', 'color_temp_kelvin'], ['modesHvac', 'hvac_modes'], ['action', 'hvac_action'], ['dc', 'device_class'], ['activity', 'current_activity'],
+  ['app', 'app_name'], ['source', 'source'], ['muted', 'is_volume_muted'], ['group', 'group_members'], ['features', 'supported_features'],
+];
+function squash(t: Thing): Squashed {
+  const a: Record<string, unknown> = {};
+  for (const [field, attr] of ATTRS) if (t[field] !== undefined) a[attr] = t[field];
+  const lc = Date.parse(t.since ?? '') / 1000 || 0;
+  return { s: t.state, a, lc, lu: lc };
+}
+interface LiveSub { id: number; ids: Set<string>; last: Map<string, Squashed> }
+interface LiveSession { push?: (texts: string[]) => void; subs: LiveSub[] }
+const liveSessions = new Set<LiveSession>();
+
+/** Tell every live listener what changed since it last heard, as one compressed
+ *  event per subscription. Nothing is sent when nothing differs. */
+function notifyLive(): void {
+  for (const session of liveSessions) for (const sub of session.subs) {
+    const added: Record<string, Squashed> = {};
+    const changed: Record<string, { '+'?: Record<string, unknown>; '-'?: { a: string[] } }> = {};
+    for (const id of sub.ids) {
+      const t = find(id);
+      if (!t) continue;
+      const now = squash(t), was = sub.last.get(id);
+      sub.last.set(id, now);
+      if (!was) { added[id] = now; continue; }
+      const plus: Record<string, unknown> = {};
+      if (now.s !== was.s) { plus.s = now.s; plus.lc = now.lc; plus.lu = now.lu; }
+      const aPlus: Record<string, unknown> = {};
+      for (const k of Object.keys(now.a)) if (JSON.stringify(now.a[k]) !== JSON.stringify(was.a[k])) aPlus[k] = now.a[k];
+      if (Object.keys(aPlus).length) { plus.a = aPlus; plus.lu = Date.now() / 1000; }
+      const gone = Object.keys(was.a).filter((k) => !(k in now.a));
+      if (!Object.keys(plus).length && !gone.length) continue;
+      changed[id] = { ...(Object.keys(plus).length ? { '+': plus } : {}), ...(gone.length ? { '-': { a: gone } } : {}) };
+    }
+    const event: Record<string, unknown> = {};
+    if (Object.keys(added).length) event.a = added;
+    if (Object.keys(changed).length) event.c = changed;
+    if (Object.keys(event).length) session.push?.([JSON.stringify({ id: sub.id, type: 'event', event })]);
+  }
+}
 
 /** The pretend device behind an entity: one device per entity, which is
  *  how most single-light bulbs and speakers appear in Home Assistant. */
@@ -248,6 +330,12 @@ function moveTo(entityId: string, areaId: string): boolean {
   return true;
 }
 
+/** By default the pretend Nest account needs signing in again (that is what the
+ *  Problems screen shows). The camera screen and tests turn it on, so the Nest
+ *  cameras show their events instead of the sign-in note. */
+let nestSignedIn = false;
+export function fakeHomeAssistantNestSignedIn(signedIn: boolean): void { nestSignedIn = signedIn; }
+
 function reply(id: unknown, result: unknown, error?: string): string {
   return JSON.stringify(error
     ? { id, type: 'result', success: false, error: { code: 'not_found', message: error } }
@@ -263,14 +351,29 @@ function answerOne(raw: string): string | null {
     // Round 4: Home Assistant's own health, for the Problems chip.
     case 'config_entries/get': return reply(id, [
       { entry_id: 'entry_hue', domain: 'hue', title: 'Hue Bridge', state: 'loaded', disabled_by: null },
-      { entry_id: 'entry_nest', domain: 'nest', title: 'Gasparac Household', state: 'setup_error', reason: 'the sign-in expired', disabled_by: null },
+      nestSignedIn
+        ? { entry_id: 'entry_nest', domain: 'nest', title: 'Gasparac Household', state: 'loaded', disabled_by: null }
+        : { entry_id: 'entry_nest', domain: 'nest', title: 'Gasparac Household', state: 'setup_error', reason: 'the sign-in expired', disabled_by: null },
       { entry_id: 'entry_cast', domain: 'cast', title: 'Google Cast', state: 'loaded', disabled_by: null },
       { entry_id: 'entry_sonos', domain: 'sonos', title: 'Sonos', state: 'loaded', disabled_by: null },
     ]);
-    case 'config_entries/flow/progress': return reply(id, [
+    case 'config_entries/flow/progress': return reply(id, nestSignedIn ? [] : [
       { flow_id: 'flow_nest', handler: 'nest', step_id: 'reauth_confirm', context: { source: 'reauth', entry_id: 'entry_nest', title_placeholders: { name: 'Gasparac Household' } } },
     ]);
     case 'repairs/list_issues': return reply(id, { issues: [] });
+    // Recorded Nest events (spec 2026-10-04, Part 3), the way Home Assistant's
+    // media browser lists and then resolves them.
+    case 'media_source/browse_media': {
+      const dev = /^media-source:\/\/nest\/([^/]+)$/.exec(String(m.media_content_id ?? ''))?.[1];
+      if (!dev) return reply(id, null, 'Unknown media source.');
+      return reply(id, { title: 'Events', media_class: 'directory', media_content_id: `media-source://nest/${dev}`, can_play: false, can_expand: true,
+        children: (nestEvents[dev] ?? []).map((e) => ({ title: e.title(), media_class: 'video', media_content_type: 'video/mp4', media_content_id: `media-source://nest/${dev}/${e.id}`, can_play: true, can_expand: false, thumbnail: `/api/nest/event_media/${dev}/${e.id}/thumbnail` })) });
+    }
+    case 'media_source/resolve_media': {
+      const mm = /^media-source:\/\/nest\/([^/]+)\/([^/]+)$/.exec(String(m.media_content_id ?? ''));
+      if (!mm) return reply(id, null, 'Unknown media.');
+      return reply(id, { url: `/api/nest/event_media/${mm[1]}/${mm[2]}/clip.mp4?authSig=pretend`, mime_type: 'video/mp4' });
+    }
     case 'config/area_registry/create': {
       const name = String(m.name ?? '').trim();
       if (!name) return reply(id, null, 'A room needs a name.');
@@ -296,6 +399,7 @@ function answerOne(raw: string): string | null {
       // `name: null` puts the device's own name back, as in Home Assistant.
       if (typeof m.name === 'string' && m.name.trim()) t.name = m.name.trim();
       if (typeof m.area_id === 'string' && !moveTo(t.id, m.area_id)) return reply(id, null, 'No such room.');
+      notifyLive();
       return reply(id, { entity_entry: { entity_id: t.id, name: t.name } });
     }
     case 'config/device_registry/update': {
@@ -324,20 +428,42 @@ export function fakeHomeAssistantSocket(req: PageFetchRequest): PageFetchResult 
 }
 
 /** A LIVE session with the pretend Home Assistant (the page's live socket in
- *  the workbench). Same conversation as the real one: it says `auth_required`
- *  when the socket opens, answers the greeting with `auth_ok`, then answers
- *  each message through the same table the one-shot exchange uses. Events the
- *  house pushes on its own (subscribe_entities, step 5) are just more texts
- *  the caller delivers: this stays plumbing, not behaviour. */
-export function fakeHomeAssistantLive(): { opened: () => string[]; message: (text: string) => string[] } {
+ *  the workbench). Same conversation as the real one: `opened()` is what the
+ *  app's own greeting produces (the app sends the key, so the page sees
+ *  `auth_required` then `auth_ok` and sends nothing itself), then each message
+ *  is answered through the same table the one-shot exchange uses. A
+ *  `subscribe_entities` is answered with the first full snapshot, and changes
+ *  made later (a service call, a rename) arrive through `push`, which the
+ *  caller delivers like any other message. */
+export function fakeHomeAssistantLive(push?: (texts: string[]) => void): { opened: () => string[]; message: (text: string) => string[]; close: () => void } {
+  const session: LiveSession = { push, subs: [] };
+  liveSessions.add(session);
   return {
-    opened: () => [JSON.stringify({ type: 'auth_required', ha_version: '2026.9.0' })],
+    opened: () => [JSON.stringify({ type: 'auth_required', ha_version: '2026.9.0' }), JSON.stringify({ type: 'auth_ok', ha_version: '2026.9.0' })],
+    close: () => { liveSessions.delete(session); },
     message: (text) => {
-      let type: unknown;
-      try { type = (JSON.parse(text) as { type?: unknown }).type; } catch { return []; }
-      if (type === 'auth') return [JSON.stringify({ type: 'auth_ok', ha_version: '2026.9.0' })];
+      let m: { type?: unknown; id?: unknown; entity_ids?: unknown; subscription?: unknown };
+      try { m = JSON.parse(text); } catch { return []; }
+      if (m.type === 'auth') return [JSON.stringify({ type: 'auth_ok', ha_version: '2026.9.0' })];
+      if (m.type === 'subscribe_entities' && typeof m.id === 'number') {
+        const sub: LiveSub = { id: m.id, ids: new Set(Array.isArray(m.entity_ids) ? m.entity_ids.map(String) : []), last: new Map() };
+        session.subs.push(sub);
+        const a: Record<string, Squashed> = {};
+        for (const id of sub.ids) { const t = find(id); if (t) { a[id] = squash(t); sub.last.set(id, a[id]); } }
+        return [reply(m.id, null), JSON.stringify({ id: m.id, type: 'event', event: { a } })];
+      }
+      if (m.type === 'unsubscribe_events') {
+        session.subs = session.subs.filter((x) => x.id !== m.subscription);
+        return [reply(m.id, null)];
+      }
       const a = answerOne(text);
       return a ? [a] : [];
     },
   };
+}
+
+/** Entity ids in the pretend house, for a workbench screen that wants only some
+ *  of them (`?pagesHome=camera` hides everything that is not a camera). */
+export function fakeHomeAssistantIds(): string[] {
+  return ROOMS.flatMap((r) => r.items.map((t) => t.id));
 }

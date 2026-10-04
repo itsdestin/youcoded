@@ -17,6 +17,8 @@
 import { HOME_ASSISTANT_PAGE_CSS } from './home-assistant-page-style';
 import { HOME_HISTORY_CSS, HOME_HISTORY_JS } from './home-assistant-page-history';
 import { ROOMS_TEMPLATE, EXTRAS_TEMPLATE } from './home-assistant-page-templates';
+import { HOME_LIVE_JS } from './home-assistant-page-live';
+import { HOME_CAMERA_CSS, HOME_CAMERA_JS } from './home-assistant-page-camera';
 
 
 export const HOME_ASSISTANT_PAGE_JSON = {
@@ -71,7 +73,7 @@ export const HOME_ASSISTANT_PAGE_JSON = {
 function homeAssistantPageHtml(): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>Home</title>
-<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}</style></head>
+<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}${HOME_CAMERA_CSS}</style></head>
 <body>
 <div class="yc-page yc-stack" id="root">
   <!-- No page title: the app's own bar already names the page, so the
@@ -161,6 +163,7 @@ function homeAssistantPageHtml(): string {
       rooms = JSON.parse(r.body);
       applyHeld();
       applyHeldVals();
+      liveSubscribe(); // the first check tells the live connection which devices to follow
       // Mid-drag, the page is not redrawn at all: the next check catches up.
       if (dragging) return;
       banner('');
@@ -661,17 +664,10 @@ function homeAssistantPageHtml(): string {
     if (d === 'light') return tileHtml(it, BULB, false, ctx);
     if (d === 'climate') return climateHtml(it, ctx);
     if (d === 'media_player') { var k = kindOf(it); return tileHtml(it, k === 'tv' ? TV : k === 'soundbar' ? SOUNDBAR : k === 'display' ? DISPLAY : SPEAKER, true, ctx); }
-    if (d === 'camera') {
-      if (!pref('cameras')) return '';
-      // Round 4 camera fix: a camera marked unavailable may still have a
-      // picture (the Pi Zero does), and a Nest camera gives Home Assistant no
-      // still picture at all — so always ask, and when no real picture comes
-      // back, say why instead of showing a black box.
-      var cm = camNote[it.id];
-      return '<div class="' + cls + ' col"><div class="line"><div class="name">' + esc(it.name) + (na && !camCache[it.id] ? '<div class="sub">Not responding</div>' : na ? '<div class="sub">Last picture · camera not responding</div>' : '') + '</div></div>' +
-        (cm ? '<div class="cam-empty note">' + esc(cm.text) + (cm.href ? ' <a href="' + esc(base + cm.href) + '" target="_blank" rel="noopener">' + esc(cm.link) + '</a>' : '') + '</div>'
-          : '<img class="cam" alt="" role="img" aria-label="' + esc(it.name) + '" data-cam="' + esc(it.id) + '"' + (camCache[it.id] ? ' src="' + camCache[it.id] + '"' : '') + '>') + editRow(it, ctx) + '</div>';
-    }
+    // Round 4 camera fix + the C-camera "events" card (spec 2026-10-04): a
+    // camera with a picture keeps it; a Nest camera gets its recent events and
+    // Watch live (home-assistant-page-camera.ts).
+    if (d === 'camera') return pref('cameras') ? cameraCardHtml(it, cls, na, ctx) : '';
     return '';
   }
 
@@ -752,12 +748,11 @@ function homeAssistantPageHtml(): string {
         var nest = /nest|google/i.test((it.maker || '') + ' ' + (it.model || ''));
         var auth = health.flows.some(function (f) { return f.handler === 'nest' && f.context && f.context.source === 'reauth'; });
         camNote[id] = nest && auth ? { text: 'No picture: Google Nest needs you to sign in again.', link: 'Sign in', href: '/config/integrations/integration/nest' }
-          // Until live video plays on this page, the way to watch is Home
-          // Assistant's own view (testing: "can't view or do anything with
-          // cameras" — the note alone left nothing to press).
-          : nest ? { text: 'Nest cameras send live video only, no still pictures.', link: 'Watch live in Home Assistant', href: it.device ? '/config/devices/device/' + encodeURIComponent(it.device) : '/config/integrations/integration/nest' }
+          // A Nest camera is shown as its events card (camera.ts), not a note.
+          : nest ? { nest: true }
           : { text: 'This camera sent no picture.' };
         render();
+        if (camNote[id] && camNote[id].nest) camEvents(it);
       }, function () { /* the next round tries again */ });
     });
   }
@@ -1006,7 +1001,7 @@ function homeAssistantPageHtml(): string {
   function put(id, html) {
     if (drawn[id] === html) return;
     drawn[id] = html;
-    $(id).innerHTML = html;
+    mediaHold(); $(id).innerHTML = html; mediaBack(); // a playing clip / live canvas survives the redraw
   }
   // A chip's page (round 4, Q-chip-tap: "an organized page dedicated to
   // optimal ux for managing the selected item"). It replaces the rooms
@@ -1467,12 +1462,13 @@ function homeAssistantPageHtml(): string {
   function start() {
     stop();
     load();
-    timer = setInterval(function () { if (!document.hidden && !Object.keys(busy).length) load(); }, POLL_MS);
+    repoll(live.on ? LIVE_POLL_MS : POLL_MS); // quick checks, until the live connection says it is delivering
+    liveStart();
     camTimer = setInterval(refreshCameras, CAMERA_MS);
   }
   function stop() { clearInterval(timer); clearInterval(camTimer); }
   document.addEventListener('visibilitychange', function () { if (!document.hidden) { load(); refreshCameras(); } });
-  window.youcoded.onRefresh(function () { load(); refreshCameras(); });
+  window.youcoded.onRefresh(function () { load(); refreshCameras(); liveStart(); });
   window.youcoded.onData(function (d) {
     d = d || {};
     hidden = new Set(Array.isArray(d.hidden) ? d.hidden : []);
@@ -1486,6 +1482,8 @@ function homeAssistantPageHtml(): string {
     render();
   });
 ${HOME_HISTORY_JS}
+${HOME_LIVE_JS}
+${HOME_CAMERA_JS}
   start();
 })();
 </script>

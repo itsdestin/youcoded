@@ -185,8 +185,11 @@ export interface PageFetchRequest {
   /** `picture`: answer an image as a `data:` link the page can put straight
    *  into an <img> (camera snapshots — home-device deck, Q-scope). Refused for
    *  anything that is not an image, so it cannot become a way to carry other
-   *  bytes past the text redaction. Default: text. */
-  as?: 'text' | 'picture';
+   *  bytes past the text redaction. Default: text.
+   *  `video`: the same for a recorded clip (spec 2026-10-04, Part 3) — a
+   *  `data:video/mp4;base64,…` link for a <video>. Only a device connection;
+   *  `video/mp4` with an `ftyp` box, at most 4 MB, one at a time per page. */
+  as?: 'text' | 'picture' | 'video';
   /** A one-shot socket exchange with an approved `device` that may make
    *  changes (home-page-v2 deck, Q-where: renames and room moves happen in
    *  the device itself, which some devices only offer over a socket). The

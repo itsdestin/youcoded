@@ -371,7 +371,7 @@ class PagesService {
       // its own caps and timeout (page-socket.ts).
       const result = request.socket
         ? await performPageSocket(request, { ...doorCtx, connect: this.deps.socketConnect })
-        : await performPageFetch(request, doorCtx);
+        : await performPageFetch(request, { ...doorCtx, pageId: id });
       // Step 7: freshness is recorded per page AND per connection, and ONLY on
       // a 2xx (finding 12) — otherwise a page pinging an approved URL on a
       // timer could keep the band green over week-old numbers.

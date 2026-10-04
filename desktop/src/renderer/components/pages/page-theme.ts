@@ -260,6 +260,10 @@ function pageCsp(connections: readonly { kind: string }[]): string {
   // (deck Q-open: a reader page is useless without them). It still cannot
   // open a socket of its own.
   const open = connections.some((c) => c.kind === 'open');
+  // A recorded clip arrives as a data: link from youcoded.fetch(url, {as:'video'})
+  // (spec 2026-10-04, Part 3). WHY only with a device connection: that is the only
+  // kind main will fetch a clip for, so no other page needs to play a data: video.
+  const device = connections.some((c) => c.kind === 'device');
   return [
     "default-src 'none'",
     "connect-src 'none'",
@@ -267,7 +271,7 @@ function pageCsp(connections: readonly { kind: string }[]): string {
     "style-src 'unsafe-inline'",
     `img-src data: blob:${open ? ' https:' : ''}`,
     `font-src data:${open ? ' https:' : ''}`,
-    ...(open ? ['media-src https:'] : []),
+    ...(open || device ? [`media-src ${[device ? 'data:' : '', open ? 'https:' : ''].filter(Boolean).join(' ')}`] : []),
     "form-action 'none'",
     "base-uri 'none'",
     "frame-src 'none'",
