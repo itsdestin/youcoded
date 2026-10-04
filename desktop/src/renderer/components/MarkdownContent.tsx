@@ -602,6 +602,12 @@ interface Props {
    * Same page either way — see markdown-blocks.ts.
    */
   incremental?: boolean;
+  /**
+   * The text is still being written by the model (only meaningful with `incremental`).
+   * Lets a very long unclosed code fence be drawn in chunks; false/absent for finished,
+   * stopped and history messages, which draw as one piece.
+   */
+  live?: boolean;
 }
 
 /**
@@ -610,8 +616,10 @@ interface Props {
  * highlighted and reconciled exactly once instead of once per streamed word.
  * Every prop is a string or module-level/memoised, so the comparison holds.
  */
-const MarkdownChunk = React.memo(function MarkdownChunk({ source, defs, rehypePlugins, components }: {
+const MarkdownChunk = React.memo(function MarkdownChunk({ source, defs, live, rehypePlugins, components }: {
   source: string;
+  /** The reply is still streaming — the only time a long open fence may be drawn in chunks. */
+  live: boolean;
   /** The message's link definitions, when this piece could use them (see withDefinitions). */
   defs: string;
   rehypePlugins: PluggableList;
@@ -620,7 +628,10 @@ const MarkdownChunk = React.memo(function MarkdownChunk({ source, defs, rehypePl
   // A long code fence still being typed: finished lines are drawn once, in
   // chunks, and react-markdown re-reads only the newest lines (splitOpenFence).
   // Not with definitions in front — they would sit before the fence's opening.
-  const split = defs ? null : splitOpenFence(source);
+  // WHY gated on `live`: chunks are coloured one at a time, which is only right
+  // until the reply ends. A reply that stops with its fence still open (Stop, an
+  // error, a truncated or old message) must draw as one block, like any other.
+  const split = defs || !live ? null : splitOpenFence(source);
   const frozenText = split?.frozen ?? '';
   const opening = split?.opening ?? '';
   // WHY memoised on the head's TEXT: the head only ever grows by whole chunks, so
@@ -644,7 +655,10 @@ const MarkdownChunk = React.memo(function MarkdownChunk({ source, defs, rehypePl
       {split ? opening + split.tail : withDefinitions(source, defs)}
     </ReactMarkdown>
   );
-  return frozen ? <FrozenFenceContext.Provider value={frozen}>{markdown}</FrozenFenceContext.Provider> : markdown;
+  // WHY the Provider is ALWAYS the root (null when there is no head): swapping the
+  // root element's type when the fence reaches 40 lines, or closes, would make React
+  // rebuild the whole block (flash, scroll jump, lost selection, Copy reset).
+  return <FrozenFenceContext.Provider value={frozen}>{markdown}</FrozenFenceContext.Provider>;
 });
 
 /** react-markdown's components with the block wrapper removed: a chunk draws only its coloured lines. */
@@ -684,7 +698,7 @@ const FrozenFenceChunk = React.memo(function FrozenFenceChunk({ source, rehypePl
   );
 });
 
-export default React.memo(function MarkdownContent({ content, sessionId, preview, incremental }: Props) {
+export default React.memo(function MarkdownContent({ content, sessionId, preview, incremental, live = false }: Props) {
   // Memoize the rehype plugin array and the component map by sessionId so that:
   // (a) When sessionId is absent, we use the stable module-scope arrays (no allocation).
   // (b) When sessionId is present, the filepath-token component is added once and
@@ -768,6 +782,7 @@ export default React.memo(function MarkdownContent({ content, sessionId, preview
                 <MarkdownChunk
                   source={g.draw}
                   defs={g.defs}
+                  live={live}
                   rehypePlugins={rehypePlugins}
                   components={components}
                 />

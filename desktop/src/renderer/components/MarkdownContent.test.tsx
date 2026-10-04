@@ -424,9 +424,11 @@ describe('remote images wait for a tap; local images render inline', () => {
 // Streaming (smoothness sweep A5): a growing reply is drawn piece by piece, and
 // the page must be byte-for-byte what drawing the whole text at once gives.
 describe('MarkdownContent while a reply streams in', () => {
-  const Bubble = ({ md, incremental }: { md: string; incremental?: boolean }) => (
+  // `live` = the reply is still streaming (only then may a long open fence be drawn in chunks).
+  // Defaults to `incremental`, i.e. a streaming bubble; pass live={false} for a finished one.
+  const Bubble = ({ md, incremental, live = incremental }: { md: string; incremental?: boolean; live?: boolean }) => (
     <SessionRefsEnabled.Provider value={true}>
-      <MarkdownContent content={md} sessionId="s1" incremental={incremental} />
+      <MarkdownContent content={md} sessionId="s1" incremental={incremental} live={live} />
     </SessionRefsEnabled.Provider>
   );
   // The page as markup with each element's attributes in name order. WHY sorted:
@@ -737,7 +739,8 @@ describe('MarkdownContent while a reply streams in', () => {
     it('draws the same page as the whole message, tail words and Copy included', () => {
       const md = fenceMd(260);
       const deltas = tokenDeltas('  more(1);\n\n  after_blank();\n\t tabbed(2);\n  const a = 1;\n');
-      const live = render(<Bubble md={md} incremental />);
+      const live = render(<Bubble md="Here" incremental />);
+      live.rerender(<Bubble md={md} incremental />);
       const codeEl = () => live.container.querySelector('pre code');
       let full = md;
       for (const d of deltas) {
@@ -769,7 +772,8 @@ describe('MarkdownContent while a reply streams in', () => {
       // A block comment straddling a chunk edge is only coloured right once the fence closes.
       const body = lines(160, (i) => (i === 49 ? '/* start of a long' : i === 51 ? 'comment ends */' : `const a${i} = ${i};`));
       const closed = `\`\`\`js\n${body}\n\`\`\`\n`;
-      const live = render(<Bubble md={`\`\`\`js\n${body}\n`} incremental />);
+      const live = render(<Bubble md="Here" incremental />);
+      live.rerender(<Bubble md={`\`\`\`js\n${body}\n`} incremental />);
       live.rerender(<Bubble md={closed} incremental />);
       const whole = render(<Bubble md={closed} />);
       expect(canonical(live.container)).toBe(canonical(whole.container));
@@ -777,11 +781,140 @@ describe('MarkdownContent while a reply streams in', () => {
       live.unmount();
     });
 
+    // Review 2026-10-04 item 1: the head used to be wrapped in a Provider only once it existed,
+    // so crossing 40 lines (and closing) changed the root element type and rebuilt the block.
+    it('keeps the SAME code block from under 40 lines, across the threshold, and across close', () => {
+      // Mounted on its first words and grown, as a reply is: text drawn at mount stays one group.
+      const live = render(<Bubble md="Here" incremental />);
+      live.rerender(<Bubble md={fenceMd(10)} incremental />);
+      const pre = live.container.querySelector('pre')!;
+      const code = pre.querySelector('code')!;
+      const copy = live.container.querySelector('button')!;
+      for (const n of [30, 37, 38, 39, 40, 41, 60, 100]) {
+        live.rerender(<Bubble md={fenceMd(n)} incremental />);
+        expect(live.container.querySelector('pre'), `at ${n} lines`).toBe(pre);
+        expect(pre.querySelector('code')).toBe(code);
+        expect(live.container.querySelector('button')).toBe(copy);
+      }
+      live.rerender(<Bubble md={`${fenceMd(100)}\`\`\`\n\nDone.`} incremental />);
+      expect(live.container.querySelector('pre')).toBe(pre);
+      expect(pre.querySelector('code')).toBe(code);
+      expect(live.container.querySelector('button')).toBe(copy);
+      live.unmount();
+    });
+
+    // Review item 2: a reply that STOPS with its fence open (Stop, error, truncation, an old
+    // message) must draw as one block, exactly like a message that was never streamed.
+    describe('a fence that never closes', () => {
+      // A block comment that straddles the 20-line chunk edge: coloured wrongly if chunked.
+      const body = lines(60, (i) => (i === 18 ? '/* a long comment' : i === 22 ? 'that ends here */' : `const a${i} = ${i}; // note`));
+      const md = `\`\`\`js\n${body}\n`;
+      const words = tokenDeltas(md);
+
+      it('draws as one piece, with the SAME block, once the reply stops', () => {
+        const live = render(<Bubble md="Here" incremental />);
+        let text = 'Here\n\n';
+        for (const d of words) { text += d; live.rerender(<Bubble md={text} incremental />); }
+        const pre = live.container.querySelector('pre')!;
+        live.rerender(<Bubble md={text} incremental live={false} />); // the turn ended
+        expect(live.container.querySelector('pre')).toBe(pre);
+        const whole = render(<MarkdownContent content={text} sessionId="s1" />);
+        // Without gating, the lines after the chunk edge stay coloured as code, not comment.
+        expect(canonical(live.container)).toBe(canonical(whole.container));
+        whole.unmount();
+        live.unmount();
+      });
+
+      it('never takes the chunked path when the message is not streaming (history, finished)', () => {
+        markdownRenders.length = 0;
+        const view = render(<Bubble md="Here" incremental live={false} />);
+        let text = 'Here\n\n';
+        for (const d of words) { text += d; view.rerender(<Bubble md={text} incremental live={false} />); }
+        // One piece: the biggest thing drawn is the whole fence, never a short tail.
+        const fenceDraws = markdownRenders.filter((x) => x.startsWith('```js'));
+        expect(fenceDraws.at(-1)).toBe(md);
+        const whole = render(<MarkdownContent content={text} sessionId="s1" />);
+        expect(canonical(view.container)).toBe(canonical(whole.container));
+        whole.unmount();
+        view.unmount();
+      });
+    });
+
+    // Review item 3: a chunk is drawn as `opening + chunk` with no closer; blank lines at the
+    // edge must come out exactly as in the whole block. NO text-node joining is applied that
+    // could hide a blank-line difference except merging adjacent text nodes, which cannot.
+    describe('blank lines at chunk edges', () => {
+      const mdWithBlanks = (blanks: number[], total = 90) => {
+        const rows = Array.from({ length: total }, (_, i) => (blanks.includes(i + 1) ? '' : `const v${i} = ${i};`));
+        return `\`\`\`js\n${rows.join('\n')}\n`;
+      };
+      for (const [name, blanks] of [
+        ['blank last line of the first chunk (20)', [20]],
+        ['blank at 20, 40 and 60', [20, 40, 60]],
+        ['two blanks across an edge (20, 21)', [20, 21]],
+        ['two blanks ending a chunk (39, 40)', [39, 40]],
+        ['blank first line of a chunk (21)', [21]],
+        ['three blanks (60, 61, 62)', [60, 61, 62]],
+      ] as [string, number[]][]) {
+        it(`draws "${name}" like the whole message after every line`, () => {
+          const md = mdWithBlanks(blanks);
+          const rows = md.split('\n');
+          markdownRenders.length = 0;
+          const live = render(<Bubble md="Here" incremental />);
+          let text = '';
+          for (let n = 1; n <= rows.length; n++) {
+            text = rows.slice(0, n).join('\n') + (n < rows.length ? '\n' : '');
+            live.rerender(<Bubble md={`Here\n\n${text}`} incremental />);
+            expect(canonical(live.container), `after ${n} lines`).toBe(wholeHtml(`Here\n\n${text}`));
+          }
+          // Not vacuous: frozen 20-line chunks (opening + 20 lines + the empty tail of the split) really were drawn.
+          expect(markdownRenders.some((x) => x.startsWith('```js\n') && x.split('\n').length === 22)).toBe(true);
+          live.unmount();
+        });
+      }
+    });
+
+    // Review item 4: shapes that must stay correct (some fall back to the whole block).
+    describe('other fence shapes', () => {
+      const code = lines(70, (i) => `  call(${i}); // line ${i}`);
+      for (const [name, md] of [
+        ['an info string with attributes', `\`\`\`ts title="x.ts"\n${code}\n`],
+        ['a ~~~ fence', `~~~ts\n${code}\n`],
+        ['a 4-backtick fence containing a ``` line', `\`\`\`\`ts\n${code}\n\`\`\`\n${code}\n`],
+        ['no language', `\`\`\`\n${code}\n`],
+        ['CRLF line endings', `\`\`\`ts\r\n${code.replace(/\n/g, '\r\n')}\r\n`],
+      ] as [string, string][]) {
+        it(`draws ${name} like the whole message, token by token`, () => {
+          const deltas = tokenDeltas(md);
+          const live = render(<Bubble md="Here" incremental />);
+          let text = 'Here\n\n';
+          live.rerender(<Bubble md={text} incremental />);
+          deltas.forEach((d, i) => {
+            text += d;
+            live.rerender(<Bubble md={text} incremental />);
+            // Every 7th step keeps the run short; the last step is always checked.
+            if (i % 7 === 0 || i === deltas.length - 1) expect(canonical(live.container), `after ${i}`).toBe(wholeHtml(text));
+          });
+          live.unmount();
+        });
+      }
+
+      it('falls back to the whole block for a ~~~ / 4-backtick fence holding a closing-looking line', () => {
+        const md = `Here\n\n\`\`\`\`ts\n${code}\n\`\`\`\n${code}\n`;
+        markdownRenders.length = 0;
+        const live = render(<Bubble md="Here" incremental />);
+        live.rerender(<Bubble md={md} incremental />);
+        expect(markdownRenders.some((x) => x.startsWith('````ts') && x.endsWith(`${code}\n`))).toBe(true);
+        live.unmount();
+      });
+    });
+
     it('copies the whole fence, frozen lines included', async () => {
       const writeText = vi.fn();
       Object.assign(navigator, { clipboard: { writeText } });
       const md = fenceMd(220);
-      const live = render(<Bubble md={md} incremental />);
+      const live = render(<Bubble md="Here" incremental />);
+      live.rerender(<Bubble md={md} incremental />);
       live.rerender(<Bubble md={`${md}  last();`} incremental />);
       fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
       const copied = writeText.mock.calls[0][0] as string;

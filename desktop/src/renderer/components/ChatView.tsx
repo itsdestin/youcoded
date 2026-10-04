@@ -1092,6 +1092,11 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
                     sessionId={sessionId}
                     provider={provider}
                     showTimestamps={showTimestamps}
+                    // WHY currentTurnId: the reducer clears it when a turn ends for ANY reason
+                    // (complete, Stop, error), and history replay never sets it — so it is exactly
+                    // "the model is writing this turn now". Lets a long open code fence be drawn in
+                    // chunks only while that is true (MarkdownContent `live`).
+                    streaming={isAssistant && !!turn && state.currentTurnId === turn.id}
                     archived={lastArchiveIdx >= 0 && idx < lastArchiveIdx}
                     archiveKind={archiveKind}
                     foldHeight={foldHeight}
