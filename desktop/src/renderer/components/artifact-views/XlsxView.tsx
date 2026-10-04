@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, CSSProperties } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, CSSProperties } from 'react';
 import { Workbook } from 'exceljs';
 import type { ArtifactViewProps } from './types';
 import { BinaryContent } from './BinaryContent';
@@ -12,7 +12,11 @@ import { evalFormula, type CellValue } from './xlsx-formula';
 // address in data-cell so the comment's cell can be found and marked.
 import { onSheetReveal } from '../comments/sheet-reveal';
 import { CommentableDocument } from '../comments/CommentableDocument';
-import { PAPER, GUTTER_BG, FBAR_BG, TAB_BG, GRID, GUTTER_FG, SEL, NOTE_FG, NOTE_BG, largeSheetNote } from './sheet-theme';
+import { PAPER, FBAR_BG, TAB_BG, GRID, SEL, NOTE_FG, NOTE_BG, largeSheetNote } from './sheet-theme';
+import { SheetGrid, type GridCell, type Selection, type SheetGridModel } from './SheetGrid';
+import { ROW_H, type MergeBox } from './sheet-window';
+import { useDocComments } from '../../state/doc-comments-store';
+import { MAX_FIND_CELLS, requestFindRewalk, useArtifactFindQuery } from './artifact-find-bridge';
 
 // Safety caps — agent sheets are small, but guard against a pathological file
 // producing a million-cell DOM. Truncation is surfaced to the user.
@@ -35,16 +39,38 @@ interface CellVM {
 }
 interface SheetVM {
   name: string;
-  colCount: number;
-  colWidths: number[];      // px, index 0 unused (columns are 1-based)
-  rows: { rowNum: number; cells: CellVM[] }[];
-  byKey: Map<string, CellVM>;
+  /** What SheetGrid draws: sizes, merges, and a per-visible-cell builder. */
+  model: SheetGridModel;
+  /** One cell, 1-based (the formula bar reads it). Built on first ask and kept. */
+  cellAt: (r: number, c: number) => CellVM;
   truncated: boolean;
   rowsTruncated: boolean;
   colsTruncated: boolean;
 }
 
-function buildSheet(ws: any): SheetVM {
+// Sizing without drawing. WHY (Fix 2, 2026-10-04): the grid draws only the visible cells, so every column's width
+// and every row's height has to be known up front. The old table let a column grow to fit its widest cell and a
+// wrapped cell grow its row; both are reproduced here from the text length (about 7.2 px a character at 13 px).
+const CHAR_PX = 7.2;
+const CELL_PAD_PX = 18;
+const MAX_FIT_COL_W = 400;   // a column never grows past this to fit text (the old table had no limit)
+const LINE_H = 16;
+
+/** The text a cell will roughly show, for sizing only (exact formatting happens per visible cell). */
+function sizingText(v: any): string {
+  if (v == null) return '';
+  if (v instanceof Date) return '0000-00-00';
+  if (typeof v === 'object') {
+    if ('result' in v && v.result != null && typeof v.result !== 'object') return String(v.result);
+    if ('richText' in v) return v.richText.map((t: any) => t.text).join('');
+    if ('text' in v) return String(v.text);
+    return '00000000'; // an unevaluated formula: about a number's width
+  }
+  return String(v);
+}
+
+// Exported only so tests can build a sheet from an in-memory workbook without parsing a file.
+export function buildSheet(ws: any): SheetVM {
   // usedRows/usedCols = the populated range; rowCount/colCount = what we RENDER
   // (padded out to the minimums so empty grid fills the panel).
   const usedRows = Math.min(ws.rowCount || 0, MAX_ROWS);
@@ -56,8 +82,30 @@ function buildSheet(ws: any): SheetVM {
   const truncated = rowsTruncated || colsTruncated;
   const merges = parseMerges(ws.model?.merges);
 
-  const colWidths: number[] = [0];
-  for (let c = 1; c <= colCount; c++) colWidths[c] = c <= usedCols ? colWidthToPx(ws.getColumn(c)?.width) : 80;
+  // Column widths: the file's own width, widened to fit the text in the column (as the old table did by itself),
+  // from ONE pass over the stored cells — and a note of the wrapped cells met on the way, for the row heights.
+  const colWidths: number[] = [];
+  for (let c = 1; c <= colCount; c++) colWidths.push(c <= usedCols ? colWidthToPx(ws.getColumn(c)?.width) : 80);
+  const wrapped: Array<{ r: number; c: number; text: string }> = [];
+  for (let r = 1; r <= usedRows; r++) {
+    const row = ws.findRow(r);
+    if (!row) continue;
+    row.eachCell({ includeEmpty: false }, (cell: any, c: number) => {
+      if (c > usedCols) return;
+      const text = sizingText(cell.value);
+      if (cell.alignment?.wrapText) { wrapped.push({ r, c, text }); return; } // wrapped text grows the ROW, not the column
+      const w = Math.min(MAX_FIT_COL_W, Math.ceil(text.length * CHAR_PX + CELL_PAD_PX));
+      if (w > colWidths[c - 1]) colWidths[c - 1] = w;
+    });
+  }
+  // Row heights: a normal row is ROW_H; a row holding a wrapped cell is as tall as its most-wrapped cell needs.
+  const rowHeights = new Array<number>(rowCount).fill(ROW_H);
+  for (const { r, c, text } of wrapped) {
+    const room = Math.max(20, colWidths[c - 1] - CELL_PAD_PX);
+    let lines = 0;
+    for (const part of text.split('\n')) lines += Math.max(1, Math.ceil((part.length * CHAR_PX) / room));
+    if (lines > 1) rowHeights[r - 1] = Math.max(rowHeights[r - 1], lines * LINE_H + 8);
+  }
 
   // Formula resolution. Agent-generated files (openpyxl/pandas) store formulas
   // WITHOUT cached results, so we compute them ourselves to match what Excel
@@ -99,19 +147,21 @@ function buildSheet(ws: any): SheetVM {
     return out;
   }
 
-  const rows: SheetVM['rows'] = [];
-  const byKey = new Map<string, CellVM>();
-  for (let r = 1; r <= rowCount; r++) {
-    const cells: CellVM[] = [];
-    for (let c = 1; c <= colCount; c++) {
-      const key = `${r}:${c}`;
-      if (merges.covered.has(key)) continue; // covered by a merge → skip
-      // Padding cell (past the used range): render an empty, gridlined, still-
-      // selectable cell — no ExcelJS getCell (avoids bloating its model).
-      if (r > usedRows || c > usedCols) {
-        cells.push({ r, c, display: '', css: {}, align: 'left', colSpan: 1, rowSpan: 1, formula: null });
-        continue;
-      }
+  // WHY lazy (Fix 2): the old build made a view-model for EVERY cell up front — number formatting, style
+  // conversion — which was most of the open time of a big sheet. Now a cell is made the first time it is drawn
+  // (or asked for by the formula bar) and kept.
+  const made = new Map<number, CellVM>();
+  const blank = (r: number, c: number): CellVM => ({ r, c, display: '', css: {}, align: 'left', colSpan: 1, rowSpan: 1, formula: null });
+  const cellAt = (r: number, c: number): CellVM => {
+    const key = r * 4096 + c;
+    const hit = made.get(key);
+    if (hit) return hit;
+    let vm: CellVM;
+    // Padding cell (past the used range): an empty, gridlined, still-selectable cell — no ExcelJS getCell
+    // (avoids bloating its model).
+    if (r > usedRows || c > usedCols) {
+      vm = blank(r, c);
+    } else {
       const cell = ws.getCell(r, c);
       const isFormula = !!cell.formula;
       // Formula cells: display the computed value (cached or evaluated), not the
@@ -122,20 +172,56 @@ function buildSheet(ws: any): SheetVM {
         : formatCellNumber(cell.value, cell.numFmt);
       const css = cellStyleToCss(cell);
       const isNumber = isFormula ? typeof resolved === 'number' : cellRawValue(cell.value).isNumber;
-      const align: CellVM['align'] =
-        (css.textAlign as any) || (isNumber ? 'right' : 'left');
-      const span = merges.masters.get(key);
-      const formula = cell.formula ? `=${cell.formula}` : null;
-      const vm: CellVM = {
+      const align: CellVM['align'] = (css.textAlign as any) || (isNumber ? 'right' : 'left');
+      const span = merges.masters.get(`${r}:${c}`);
+      vm = {
         r, c, display, css, align,
-        colSpan: span?.colSpan ?? 1, rowSpan: span?.rowSpan ?? 1, formula,
+        colSpan: span?.colSpan ?? 1, rowSpan: span?.rowSpan ?? 1, formula: cell.formula ? `=${cell.formula}` : null,
       };
-      cells.push(vm);
-      byKey.set(key, vm);
     }
-    rows.push({ rowNum: r, cells });
+    made.set(key, vm);
+    return vm;
+  };
+
+  // Merge ranges as 0-based boxes for the grid (masters carry spans; the box is top-left plus its spans).
+  const boxes: MergeBox[] = [];
+  for (const [key, span] of merges.masters) {
+    const [r, c] = key.split(':').map(Number);
+    boxes.push({ r0: r - 1, c0: c - 1, r1: r - 1 + span.rowSpan - 1, c1: c - 1 + span.colSpan - 1 });
   }
-  return { name: ws.name || 'Sheet', colCount, colWidths, rows, byKey, truncated, rowsTruncated, colsTruncated };
+
+  const model: SheetGridModel = {
+    rowCount, colCount, colWidths, rowHeights, merges: boxes,
+    // Find-in-document. Searches the shown text of cells already built and the stored value of the rest (building
+    // all 200,000 cells' number formats on the first keystroke would freeze the app the windowing just saved), so
+    // a number shown with a format ("50%", "1,234") is found when it is on screen but may be missed far away.
+    findCells: (q, cap) => {
+      const out: Array<[number, number]> = [];
+      for (let r = 1; r <= usedRows && out.length < cap; r++) {
+        const row = ws.findRow(r);
+        if (!row) continue;
+        row.eachCell({ includeEmpty: false }, (cell: any, c: number) => {
+          if (out.length >= cap || c > usedCols || merges.covered.has(`${r}:${c}`)) return;
+          const text = made.get(r * 4096 + c)?.display ?? sizingText(cell.value);
+          if (text.toLowerCase().includes(q)) out.push([r - 1, c - 1]);
+        });
+      }
+      return out;
+    },
+    cell: (r0, c0): GridCell => {
+      const cell = cellAt(r0 + 1, c0 + 1);
+      const style: CSSProperties = {
+        borderTop: `1px solid ${GRID}`, borderRight: `1px solid ${GRID}`,
+        borderBottom: `1px solid ${GRID}`, borderLeft: `1px solid ${GRID}`,
+        padding: '2px 8px', lineHeight: `${LINE_H}px`, whiteSpace: 'nowrap', cursor: 'cell',
+        overflow: 'hidden', textOverflow: 'ellipsis',
+        textAlign: cell.align, fontVariantNumeric: cell.align === 'right' ? 'tabular-nums' : undefined,
+        ...cell.css,
+      };
+      return { text: cell.display, style, addr: `${colLetter(c0 + 1)}${r0 + 1}` };
+    },
+  };
+  return { name: ws.name || 'Sheet', model, cellAt, truncated, rowsTruncated, colsTruncated };
 }
 
 export function XlsxView({ absolutePath, path, commentsMode, onOpenComments, focusThreadId, projectRoot }: ArtifactViewProps) {
@@ -153,17 +239,28 @@ export function XlsxView({ absolutePath, path, commentsMode, onOpenComments, foc
           source="sheet"
           fill
         >
-          <XlsxSheets bytes={bytes} path={path} />
+          <XlsxSheets bytes={bytes} path={path} projectRoot={projectRoot} />
         </CommentableDocument>
       )}
     </BinaryContent>
   );
 }
 
-function XlsxSheets({ bytes, path }: { bytes: Uint8Array; path: string }) {
-  const [sheets, setSheets] = useState<SheetVM[] | null>(null);
+// Cell address "C4" -> 0-based [row, col]; null for anything else.
+function parseAddr(addr: string | undefined): [number, number] | null {
+  const m = addr?.match(/^([A-Z]+)(\d+)$/);
+  if (!m) return null;
+  let col = 0;
+  for (const ch of m[1]) col = col * 26 + (ch.charCodeAt(0) - 64);
+  return [parseInt(m[2], 10) - 1, col - 1];
+}
+
+function XlsxSheets({ bytes, path, projectRoot }: { bytes: Uint8Array; path: string; projectRoot?: string }) {
+  // The workbook's visible sheets as raw ExcelJS worksheets; each is turned into a SheetVM only when its tab is
+  // shown (below) — building one means sizing its columns and rows, which is wasted on a tab nobody opens.
+  const [sheets, setSheets] = useState<Array<{ name: string; ws: any }> | null>(null);
   const [active, setActive] = useState(0);
-  const [sel, setSel] = useState<{ r: number; c: number } | null>(null);
+  const [sel, setSel] = useState<Selection | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -177,7 +274,7 @@ function XlsxSheets({ bytes, path }: { bytes: Uint8Array; path: string }) {
         // scratch sheets etc.). If EVERY sheet is hidden, fall back to showing
         // them all rather than an empty viewer.
         const visible = wb.worksheets.filter((ws: any) => ws.state !== 'hidden' && ws.state !== 'veryHidden');
-        const built = (visible.length ? visible : wb.worksheets).map(buildSheet);
+        const built = (visible.length ? visible : wb.worksheets).map((ws: any) => ({ name: ws.name || 'Sheet', ws }));
         setSheets(built.length ? built : null);
         setActive(0);
         setSel(null);
@@ -196,17 +293,43 @@ function XlsxSheets({ bytes, path }: { bytes: Uint8Array; path: string }) {
     if (i >= 0) { setActive(i); setSel(null); }
   }), [path, sheets]);
 
-  const sheet = sheets?.[active];
+  const vmCache = useRef(new WeakMap<object, SheetVM>());
+  const sheet = useMemo(() => {
+    const entry = sheets?.[active];
+    if (!entry) return undefined;
+    let vm = vmCache.current.get(entry.ws);
+    if (!vm) { vm = buildSheet(entry.ws); vmCache.current.set(entry.ws, vm); }
+    return vm;
+  }, [sheets, active]);
   // Formula bar contents for the selected cell: its formula if any, else value.
   const selInfo = useMemo(() => {
     if (!sheet || !sel) return { addr: '', content: '', isFormula: false };
-    const vm = sheet.byKey.get(`${sel.r}:${sel.c}`);
+    const vm = sheet.cellAt(sel.r + 1, sel.c + 1);
     return {
-      addr: `${colLetter(sel.c)}${sel.r}`,
-      content: vm?.formula ?? vm?.display ?? '',
-      isFormula: !!vm?.formula,
+      addr: `${colLetter(sel.c + 1)}${sel.r + 1}`,
+      content: vm.formula ?? vm.display ?? '',
+      isFormula: !!vm.formula,
     };
   }, [sheet, sel]);
+
+  // Cells that carry a comment stay in the page even when scrolled far from view: the comment highlighter finds
+  // a cell by looking in the page, so a cell that was not drawn would read as "detached" and its card could not
+  // scroll to it. A comment with no sheet name matches any tab (as the highlighter does).
+  const { comments } = useDocComments(path, projectRoot);
+  const pinKey = (comments ?? [])
+    .filter((c) => c.cell && (!c.sheet || c.sheet === sheet?.name))
+    .map((c) => c.cell).sort().join(',');
+  const commentPins = useMemo(
+    () => (pinKey ? pinKey.split(',').map(parseAddr).filter((p): p is [number, number] => !!p) : []),
+    [pinKey],
+  );
+  // Ctrl+F: the cells matching what is typed stay in the page too (artifact-find-bridge.ts).
+  // deferred so typing stays responsive while a big sheet is searched
+  const findQuery = useDeferredValue(useArtifactFindQuery());
+  const findPins = useMemo(() => (sheet && findQuery ? sheet.model.findCells(findQuery.toLowerCase(), MAX_FIND_CELLS) : []), [sheet, findQuery]);
+  const pins = useMemo(() => (findPins.length ? [...commentPins, ...findPins] : commentPins), [commentPins, findPins]);
+  useEffect(() => { if (findQuery) requestFindRewalk(); }, [findPins, findQuery]);
+  const select = useCallback((r: number, c: number) => setSel({ r, c }), []);
 
   if (parseError || (sheets && !sheet)) return <Center>Couldn’t open this spreadsheet.</Center>;
   if (!sheets || !sheet) return <Center>Loading spreadsheet…</Center>;
@@ -228,63 +351,20 @@ function XlsxSheets({ bytes, path }: { bytes: Uint8Array; path: string }) {
           so a cell comment on another tab never lands on this tab's C4
           (use-quote-marks.ts cellSelector), and the right-click menu can name
           the tab when there is more than one (build-menu.ts cellEntries). */}
-      <div className="flex-1 overflow-auto" style={{ position: 'relative' }} data-sheet={sheet.name} data-sheet-count={sheets.length}>
-        <table style={{ borderCollapse: 'collapse', fontSize: 13, width: 'max-content' }}>
-          <colgroup>
-            <col style={{ width: 38 }} />
-            {Array.from({ length: sheet.colCount }, (_, i) => (
-              <col key={i} style={{ width: sheet.colWidths[i + 1] }} />
-            ))}
-          </colgroup>
-          <thead>
-            <tr>
-              <th style={gutterCornerStyle} />
-              {Array.from({ length: sheet.colCount }, (_, i) => (
-                <th key={i} style={gutterTopStyle}>{colLetter(i + 1)}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {sheet.rows.map((row) => (
-              <tr key={row.rowNum}>
-                <th style={gutterLeftStyle}>{row.rowNum}</th>
-                {row.cells.map((cell) => {
-                  const selected = sel?.r === cell.r && sel?.c === cell.c;
-                  const style: CSSProperties = {
-                    borderTop: `1px solid ${GRID}`, borderRight: `1px solid ${GRID}`,
-                    borderBottom: `1px solid ${GRID}`, borderLeft: `1px solid ${GRID}`,
-                    padding: '2px 8px', height: 24, whiteSpace: 'nowrap', cursor: 'cell',
-                    textAlign: cell.align, fontVariantNumeric: cell.align === 'right' ? 'tabular-nums' : undefined,
-                    ...cell.css,
-                    ...(selected ? { outline: `2px solid ${SEL}`, outlineOffset: -2 } : null),
-                  };
-                  return (
-                    <td
-                      key={cell.c}
-                      colSpan={cell.colSpan > 1 ? cell.colSpan : undefined}
-                      rowSpan={cell.rowSpan > 1 ? cell.rowSpan : undefined}
-                      style={style}
-                      data-cell={`${colLetter(cell.c)}${cell.r}`}
-                      onClick={() => setSel({ r: cell.r, c: cell.c })}
-                      // Right-click selects the cell too, so the formula bar
-                      // shows which cell "Add comment" is about to attach to.
-                      onContextMenu={() => setSel({ r: cell.r, c: cell.c })}
-                    >
-                      {cell.display}
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {sheet.truncated && (
+      <SheetGrid
+        model={sheet.model}
+        sel={sel}
+        onSelect={select}
+        pins={pins}
+        selectOnContextMenu
+        scrollerProps={{ 'data-sheet': sheet.name, 'data-sheet-count': sheets.length }}
+        footer={sheet.truncated && (
           // Wording shared with CsvView — see largeSheetNote in sheet-theme.ts.
           <div style={{ padding: '8px 12px', fontSize: 12, color: NOTE_FG, background: NOTE_BG }}>
             {largeSheetNote(sheet.rowsTruncated, sheet.colsTruncated, MAX_ROWS, MAX_COLS)}
           </div>
         )}
-      </div>
+      />
 
       {/* Sheet tabs (bottom, like Excel) */}
       {sheets.length > 1 && (
@@ -312,12 +392,3 @@ function XlsxSheets({ bytes, path }: { bytes: Uint8Array; path: string }) {
 function Center({ children }: { children: React.ReactNode }) {
   return <div className="flex items-center justify-center h-full text-fg-muted text-sm p-4">{children}</div>;
 }
-
-// Sticky gutter styles (column letters across the top, row numbers down the left).
-const gutterBase: CSSProperties = {
-  background: GUTTER_BG, color: GUTTER_FG, fontWeight: 500, textAlign: 'center',
-  border: `1px solid ${GRID}`, userSelect: 'none', height: 24,
-};
-const gutterTopStyle: CSSProperties = { ...gutterBase, position: 'sticky', top: 0, zIndex: 3 };
-const gutterLeftStyle: CSSProperties = { ...gutterBase, position: 'sticky', left: 0, zIndex: 2, minWidth: 38, width: 38 };
-const gutterCornerStyle: CSSProperties = { ...gutterBase, position: 'sticky', top: 0, left: 0, zIndex: 4, minWidth: 38, width: 38 };

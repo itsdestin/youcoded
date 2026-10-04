@@ -11,6 +11,7 @@ import { flushSync } from 'react-dom';
 import { ChevronDown, TextInput, Tooltip } from './ui';
 import { ScreenMark } from '../shoot-mode';
 import { resolveBodyRanges, type MessageFindHit } from './chat-message-find';
+import { onFindRewalk, publishFindQuery } from './artifact-views/artifact-find-bridge';
 
 /** Chat-only source search. Artifact documents keep the unmodified live DOM path. */
 export interface ChatFindAdapter {
@@ -122,6 +123,13 @@ export function ContentFindBar({ containerRef, onClose, resetKey, highlightName 
   useEffect(() => () => { if (recoveryTimerRef.current != null) clearTimeout(recoveryTimerRef.current); }, []);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
+  // Spreadsheets draw only their visible cells (Fix 2, 2026-10-04), so they need to know what is being searched to
+  // keep the matching cells in the page; and they ask for a second look once those cells are there. Only the
+  // artifact viewer's bar takes part (the chat timeline's bar has its own source search).
+  useEffect(() => { if (HL === 'artifact-find') publishFindQuery(query); }, [HL, query]);
+  // separate from the line above so typing publishes once per keystroke, not "" then the query
+  useEffect(() => () => { if (HL === 'artifact-find') publishFindQuery(''); }, [HL]);
+  useEffect(() => (HL === 'artifact-find' ? onFindRewalk(() => setWalkKey((k) => k + 1)) : undefined), [HL]);
   // New artifact → clear the search.
   useEffect(() => { setQuery(''); setCurrent(0); }, [resetKey]);
   // New query → jump back to the first match.
