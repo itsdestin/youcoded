@@ -34,7 +34,10 @@ export const HOME_ASSISTANT_PAGE_CSS = `
   .pill { appearance: none; font: inherit; font-size: 13px; display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px 0 6px; border-radius: 9999px; border: 1px solid var(--edge-dim); background: var(--panel); color: var(--fg); cursor: pointer; transition: border-color 120ms ease, background-color 120ms ease, transform 90ms ease; }
   .pill:hover { border-color: var(--edge); }
   .pill:active { transform: scale(.97); }
-  .pill.sel { border-color: var(--fg-muted); }
+  /* The open tab is unmistakable: filled with the text colour. */
+  .pill.sel, .pill.lit.sel { background: var(--fg); border-color: var(--fg); color: var(--panel); }
+  .pill.sel .pill-ic { background: var(--panel); color: var(--fg); }
+  .pill.sel .eq i { background: var(--panel); }
   .pill-ic { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: var(--well); color: var(--fg-muted); }
   .pill-ic svg { width: 14px; height: 14px; }
   .pill.lit { background: color-mix(in srgb, var(--k) 14%, var(--panel)); border-color: color-mix(in srgb, var(--k) 40%, var(--edge-dim)); }
@@ -78,7 +81,7 @@ export const HOME_ASSISTANT_PAGE_CSS = `
   .vtitle h2 { font-size: 22px; font-weight: 600; line-height: 1.15; }
   .vsub { font-size: 12px; color: var(--fg-muted); }
   /* Climate page: the thermostat large, the weather beside it. */
-  .clim-hero-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 12px; align-items: stretch; }
+  .clim-hero-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 12px; align-items: stretch; }
   @media (max-width: 760px) { .clim-hero-row { grid-template-columns: 1fr; } }
   .clim-hero-row .wx { flex-direction: column; align-items: flex-start; justify-content: space-between; }
   .clim-hero-row .wx-facts div { align-items: flex-start; }

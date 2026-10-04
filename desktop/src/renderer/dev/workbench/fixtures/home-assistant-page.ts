@@ -377,6 +377,7 @@ function homeAssistantPageHtml(): string {
     wrench: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a4 4 0 0 0 5 5L22 14l-8 8-2.3-2.3a4 4 0 0 0-5-5L4 12l8-8z"/></svg>',
   };
   var SPARK = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></svg>';
+  var HOUSE = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>';
   var GEAR = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>';
   var THERMO = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 14.8V4a2 2 0 0 0-4 0v10.8a4 4 0 1 0 4 0z"/></svg>';
   var ALERT = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>';
@@ -830,7 +831,8 @@ function homeAssistantPageHtml(): string {
       { id: 'media', label: 'Media', icon: TV, on: playing.length + tvsOn.length > 0,
         main: playing.length ? playing.length + ' playing' : tvsOn.length ? tvsOn.length + ' TV' + (tvsOn.length > 1 ? 's' : '') + ' on' : 'All quiet',
         sub: playing.length && tvsOn.length ? tvsOn.length + ' TV on' : '' },
-      { id: 'climate', label: 'Climate', icon: THERMO, on: !!(th && th.it.state !== 'off'),
+      // The real sky outside, not a thermometer (round 4 choice note).
+      { id: 'climate', label: 'Climate', icon: w ? skyIcon(w.state, 16) : THERMO, on: !!(th && th.it.state !== 'off'),
         main: w && w.temp != null ? Math.round(w.temp) + '° ' + condName(w.state) : th && th.it.cur != null ? th.it.cur + '° inside' : 'No climate',
         sub: th ? (th.it.cur != null ? th.it.cur + '° inside' : '') + (th.it.state && th.it.state !== 'off' && th.it.target != null ? ' · ' + (MODE_NAMES[th.it.state] || th.it.state) + ' to ' + th.it.target + '°' : th.it.state === 'off' ? ' · off' : '') : '' },
       { id: 'problems', label: 'Problems', icon: ALERT, on: probs.length > 0, warn: probs.some(function (p) { return p.sev === 'high'; }),
@@ -892,7 +894,11 @@ function homeAssistantPageHtml(): string {
     if (!cs.length) return '';
     var st = chipStyle();
     if (st === 'sentence') return '<p class="glance" role="group" aria-label="Your home at a glance">' + cs.map(sentencePart).join('<span class="sep" aria-hidden="true"> · </span>') + '</p>';
-    return '<div class="' + (st === 'tiles' ? 'tiles2' : 'pills') + '" role="group" aria-label="Your home at a glance">' + cs.map(st === 'tiles' ? chipTile : chipPill).join('') + '</div>';
+    // Pills are the page's tabs (round 4 headers note: "remove the back
+    // button, add a home button/tab thing first in the row of pills, then
+    // give all the pills a clear selected state so they serve as pages").
+    var home = st === 'pills' ? '<button class="pill k-home' + (view ? '' : ' sel') + '" data-home="1" aria-pressed="' + !view + '" aria-label="Home: every room"><span class="pill-ic">' + HOUSE + '</span>Home</button>' : '';
+    return '<div class="' + (st === 'tiles' ? 'tiles2' : 'pills') + '" role="tablist" aria-label="Your home at a glance">' + home + cs.map(st === 'tiles' ? chipTile : chipPill).join('') + '</div>';
   }
 
   // ── The gear's settings (round 4, Q-settings: a gear next to Edit).
@@ -970,8 +976,7 @@ function homeAssistantPageHtml(): string {
     // A round back button, then the page's icon, its title large, and what
     // is happening under it.
     var vIcon = view === 'settings' ? GEAR : c ? c.icon : '';
-    var head = '<div class="vhead"><button class="vback" data-view="' + view + '" aria-label="Back to Home" title="Back to Home">' + BACK + '</button>' +
-      '<span class="vicon2">' + vIcon + '</span><div class="vtitle"><h2>' + (c ? c.label : '') + '</h2>' + (c ? '<span class="vsub">' + esc(c.main + (c.sub ? ' · ' + c.sub : '')) + '</span>' : '') + '</div></div>';
+    var head = '<div class="vhead"><span class="vicon2">' + vIcon + '</span><div class="vtitle"><h2>' + (c ? c.label : '') + '</h2>' + (c ? '<span class="vsub">' + esc(c.main + (c.sub ? ' · ' + c.sub : '')) + '</span>' : '') + '</div></div>';
     var body = '';
     if (view === 'settings') return head + settingsPageHtml();
     if (view === 'problems') {
@@ -996,7 +1001,8 @@ function homeAssistantPageHtml(): string {
         // 4 note: "that card should be much more prominent/restyled"); the
         // weather sits beside it, and any other thermostats follow.
         var ths = allItems().filter(function (x) { return domain(x.it.id) === 'climate'; });
-        body += '<div class="clim-hero-row">' + (ths.length ? thermoHero(ths[0].it, ths[0].room) : '') + weatherHtml() + '</div>';
+        // Weather first, thermostat beside it (round 4: "swap positions").
+        body += '<div class="clim-hero-row">' + weatherHtml() + (ths.length ? thermoHero(ths[0].it, ths[0].room) : '') + '</div>';
         list = list.map(function (r) { return { id: r.id, name: r.name, scenes: [], items: r.items.filter(function (it) { return !ths.length || it.id !== ths[0].it.id; }) }; }).filter(function (r) { return r.items.length; });
       }
       body += '<div class="rooms">' + list.map(function (r) { return roomHtml(r, ids, view === 'lights'); }).join('') + '</div>';
@@ -1036,13 +1042,13 @@ function homeAssistantPageHtml(): string {
     rainy: ['#24324a', '#4b6584'], pouring: ['#1c2638', '#3d5170'], snowy: ['#5b7493', '#c9d6e3'], 'snowy-rainy': ['#3f5570', '#93a8bf'], fog: ['#5c6470', '#a2a9b2'],
     windy: ['#2f5d7c', '#8fb2c9'], 'windy-variant': ['#2f5d7c', '#8fb2c9'], lightning: ['#1d1a33', '#5a4a8a'], 'lightning-rainy': ['#1d1a33', '#4a4f7a'], hail: ['#33435a', '#8a9bb0'],
   };
-  function skyIcon(c) {
+  function skyIcon(c, size) {
     var p = c === 'clear-night' ? '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/>'
       : c === 'sunny' ? '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>'
       : /rain|pouring|lightning/.test(c) ? '<path d="M20 15.5A4.5 4.5 0 0 0 17.5 7a6 6 0 0 0-11.4 1.6A4 4 0 0 0 6 16.5h13"/><path d="M8 19l-1 2M12 19l-1 2M16 19l-1 2"/>'
       : /snow/.test(c) ? '<path d="M20 15.5A4.5 4.5 0 0 0 17.5 7a6 6 0 0 0-11.4 1.6A4 4 0 0 0 6 16.5h13"/><path d="M8 20h.01M12 21h.01M16 20h.01"/>'
       : '<path d="M20 16.5A4.5 4.5 0 0 0 17.5 8a6 6 0 0 0-11.4 1.6A4 4 0 0 0 6 17.5h13.5"/>';
-    return '<svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + p + '</svg>';
+    return '<svg width="' + (size || 44) + '" height="' + (size || 44) + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="' + (size ? 2 : 1.6) + '" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + p + '</svg>';
   }
   function weatherHtml() {
     var w = extras.weather;
@@ -1132,7 +1138,10 @@ function homeAssistantPageHtml(): string {
     var act = t.getAttribute('data-act');
     if (act) { onAct(act, t.getAttribute('data-id'), t); return; }
     var vw = t.getAttribute('data-view');
-    if (vw) { view = view === vw ? null : vw; render(); window.scrollTo(0, 0); if (vw === 'problems') loadHealth(); return; }
+    if (t.getAttribute('data-home')) { view = null; render(); window.scrollTo(0, 0); return; }
+    // A pill is a tab: pressing the open one keeps it open; the gear still
+    // toggles settings.
+    if (vw) { view = vw === 'settings' && view === 'settings' ? null : vw; render(); window.scrollTo(0, 0); if (vw === 'problems') loadHealth(); return; }
     var pf = t.getAttribute('data-pref');
     if (pf) { prefs[pf] = !pref(pf); persist({ prefs: prefs }); render(); return; }
     var scn = t.getAttribute('data-scenes');

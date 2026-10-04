@@ -151,6 +151,14 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // The data the page in the frame is known to hold, so an outside change can
   // be told apart from the echo of the page's own save (see the onData effect).
   const frameDataRef = useRef<string>('null');
+  // True while the page's own save is waiting to be written (the 500 ms
+  // debounce, then the write itself). WHY: any pages broadcast in that window
+  // — a page's request updating its "Updated now" stamp is enough — re-read
+  // the file from disk, found the OLD data, saw it differ from the frame's,
+  // and posted it in: the Home page's remote flickered closed and open again
+  // (round 4 testing). Disk is stale until the save lands, so nothing is
+  // posted in until then.
+  const savingRef = useRef(false);
 
   // Fetch the working version when the open page changes or its document was
   // rewritten. The document is prepared ONCE here, with the theme and the
@@ -200,7 +208,11 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
       timer = null;
       if (pending === undefined) return;
       const data = pending; pending = undefined;
-      void pagesBridge()?.setData(pageId, data);
+      const write = pagesBridge()?.setData(pageId, data);
+      if (!write) { savingRef.current = false; return; }
+      // A newer save arriving while this one is written keeps the flag up.
+      write.then(() => { if (timer === null && pending === undefined) savingRef.current = false; },
+        () => { if (timer === null && pending === undefined) savingRef.current = false; });
     };
     const onMessage = (e: MessageEvent) => {
       if (e.source !== frameRef.current?.contentWindow) return;
@@ -244,6 +256,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
       try { json = JSON.stringify(d.data ?? null); } catch { return; }
       if (json.length > MAX_PAGE_DATA_BYTES) return; // main refuses it too; no point posting
       frameDataRef.current = json;
+      savingRef.current = true;
       pending = d.data ?? null;
       if (timer === null) timer = setTimeout(flush, 500);
     };
@@ -259,11 +272,13 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // nothing and cannot loop.
   useEffect(() => {
     if (load.state !== 'ready' || pageId === null) return;
+    // The page's own save has not landed: disk is older than the frame.
+    if (savingRef.current) return;
     const bridge = pagesBridge();
     if (!bridge) return;
     let cancelled = false;
     bridge.get(pageId).then((r) => {
-      if (cancelled || !r.ok) return;
+      if (cancelled || !r.ok || savingRef.current) return;
       let json = '';
       try { json = JSON.stringify(r.page.data ?? null); } catch { return; }
       if (json === frameDataRef.current) return;
