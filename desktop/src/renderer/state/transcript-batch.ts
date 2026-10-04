@@ -58,7 +58,7 @@ let active: TranscriptBatcher | null = null;
  * time jitters, while 120/144/180 Hz screens flush every 2nd/2nd/3rd frame (16.7/13.9/16.7 ms): never coarser
  * than one 60 Hz frame, so text still appears as smoothly as on the slowest common screen.
  */
-export const MIN_FLUSH_GAP_MS = 12;
+const MIN_FLUSH_GAP_MS = 12;
 
 export function installTranscriptBatcher(dispatch: DispatchBatch): TranscriptBatcher {
   const pending: ChatAction[] = [];
