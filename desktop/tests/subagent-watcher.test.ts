@@ -257,9 +257,13 @@ describe('SubagentWatcher', () => {
     const readdir = vi.spyOn(fs.promises, 'readdir');
     try {
       for (let i = 0; i < 20; i++) watcher.kickScan(); // e.g. 20 appended lines → 20 dir events
-      await vi.waitFor(() => expect((watcher as any).scanInFlight).toBeNull(), { timeout: SETTLE_MS });
-      expect(readdir.mock.calls.length).toBeLessThanOrEqual(2);
-      expect(readdir.mock.calls.length).toBeGreaterThanOrEqual(1);
+      // WHY count the moment the scan promise settles, not after a poll (macOS CI flake: 3 > 2): the real directory watch can deliver a
+      // late event of its own (FSEvents batches) between the burst's scans finishing and the next poll, and that is a new burst,
+      // not a failure to coalesce this one. The count is read in the microtask right after the last scan, before any such event.
+      await (watcher as any).scanInFlight;
+      const scans = readdir.mock.calls.length;
+      expect(scans).toBeLessThanOrEqual(2);
+      expect(scans).toBeGreaterThanOrEqual(1);
     } finally {
       readdir.mockRestore();
     }
