@@ -11,6 +11,9 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/rename-session', 'dialog'),
   chat('chat/close-session', 'dialog'),
   chat('chat/find', 'bar'),
+  // Developer X-ray (design 2026-10-04): the fixture session, then ~3,000 lines.
+  chat('chat/xray', 'view'),
+  { ...chat('chat/xray#stress', 'view'), scenario: 'stress' },
   chat('chat/skills', 'drawer'),
   // App.tsx's own editorSkillId — no live trigger reaches it yet; a fixture id
   // opens the real editor, a bogus one its "not found" branch.

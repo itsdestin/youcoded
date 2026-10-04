@@ -17,6 +17,7 @@ import { Tooltip } from './ui';
 import { ON_INSET_CONTROL, HEADER_ICON_BUTTON } from './header/control-states';
 import { FOCUS_RING } from './ui/Button';
 import { PagesButton, PinnedPageButtons } from './pages/PagesButton';
+import { setXray, useDeveloperToolsEnabled, useXray } from '../state/dev-tools-store';
 
 const isMac = typeof navigator !== 'undefined' && navigator.platform.startsWith('Mac');
 
@@ -276,6 +277,38 @@ export function ProjectsButton({ active = false }: { active?: boolean } = {}) {
       </svg>
     </button>
     </Tooltip>
+  );
+}
+
+/** Developer X-ray toggle (design 2026-10-04, Q-xray-switch): appears only once
+ *  Settings → Development → Developer tools is on, and flips just the session on
+ *  screen between normal chat and X-ray. Same pill as the Session Files and Games
+ *  toggles beside it, so a lit button reads as "this view is on". Its own small
+ *  component so the two store reads redraw this button and nothing else. */
+function XrayButton({ activeSessionId }: { activeSessionId: string | null }) {
+  const enabled = useDeveloperToolsEnabled();
+  const on = useXray(activeSessionId);
+  if (!enabled || !activeSessionId) return null;
+  return (
+    <div className="bg-inset rounded-md p-0.5">
+      <Tooltip text={on ? 'Back to chat' : 'X-ray: every saved line'} placement="bottom">
+        <button
+          type="button"
+          onClick={() => setXray(activeSessionId, !on)}
+          className={`px-2 py-1 rounded-[var(--radius-toggle)] transition-colors flex items-center gap-1 ${
+            on ? 'bg-accent text-on-accent' : ON_INSET_CONTROL
+          }`}
+          aria-label="X-ray"
+          aria-pressed={on}
+        >
+          {/* Stacked lines with one picked out — "every line, in order". */}
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2} strokeLinecap="round">
+            <path d="M4 6h16M4 10h10M4 14h16M4 18h7" />
+            <circle cx="18" cy="17" r="2.5" />
+          </svg>
+        </button>
+      </Tooltip>
+    </div>
   );
 }
 
@@ -614,6 +647,9 @@ export default React.memo(function HeaderBar({
             since both are panel toggles sharing identical pill styling. */}
         {/* Session Files is a ||| menu row on narrow, so the button would
             be a duplicate entry point. */}
+        {/* Developer tools only, wide only: on the phone and remote web X-ray is
+            not offered yet (Q-xray-where "desktop first"). */}
+        {!narrow && !isRemoteMode() && !isAndroid() && <XrayButton activeSessionId={activeSessionId} />}
         {!narrow && (
           <ArtifactDrawerButton
             activeSessionId={activeSessionId}

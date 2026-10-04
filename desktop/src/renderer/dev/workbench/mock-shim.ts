@@ -172,6 +172,8 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // Chatsearch session references — real backend too, same reason for the fake:
   // the tool gallery needs an index that shows every row state on demand.
   'chatsearch.resolve', 'chatsearch.read',
+  // Developer X-ray (design 2026-10-04) — no real backend yet, registered in mock-only.ts.
+  'xray.read', 'xray.onLines',
   'defaults.get', 'defaults.set', 'detach.openDetached',
   'tags.list', 'tags.create', 'tags.update', 'tags.delete',
   'on.sessionCreated', 'on.sessionDestroyed', 'on.sessionRenamed',
@@ -495,9 +497,13 @@ const NAMESPACES = [
   // here so the workbench shows every seeded comment state (open/replied/
   // resolved/Word/Excel) without a main process.
   'docComments',
+  // Developer X-ray (design 2026-10-04) — no real backend yet, registered in mock-only.ts.
+  'xray',
 ];
 
 import { createNamingPreview } from './naming-preview';
+import { xrayFixtureLines, XRAY_FILE } from './fixtures/xray';
+import type { XrayBridge } from '../../../shared/xray-types';
 import { seedPages } from './fixtures/pages';
 import { OFFICE_EDITOR_ORIGIN, OFFICE_FILES, officeFixtureName, officeSampleUrl } from './fixtures/office';
 import { OFFICE_PAGE_SUMMARY } from '../../../shared/pages-types';
@@ -3545,6 +3551,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     pages: createPagesMock(activeScenario === 'empty'),
     office: createOfficeMock(activeScenario === 'empty'),
     docComments: createDocCommentsMock(activeScenario === 'empty'),
+    xray: createXrayMock(activeScenario),
   } as unknown as Record<string, Record<string, unknown>>;
 }
 
@@ -3980,5 +3987,23 @@ export function createVoiceMock(initial: string | null, opts: { loopReset?: bool
     // works; the denied wording is reviewed through the `unavailable` fake above.
     micAccess: async () => 'granted' as const,
     onEvent: (cb) => { subs.add(cb); return () => { subs.delete(cb); }; },
+  };
+}
+
+/** `window.claude.xray` for the workbench (design 2026-10-04): every session reads
+ *  the same fixture file — a session stuck re-running a failing command. `empty`
+ *  answers "no saved file yet", `stress` a ~3,000-line file, and `?fail=xray.read`
+ *  the general read failure. Nothing is ever appended: the workbench has no
+ *  transcript being written. */
+function createXrayMock(scenario: string): XrayBridge {
+  return {
+    read: async (_sessionId, opts) => {
+      if (scenario === 'empty') return { ok: false, error: 'no-file' };
+      const all = xrayFixtureLines(scenario === 'stress');
+      const end = opts?.before ? Math.min(opts.before - 1, all.length) : all.length;
+      const limit = opts?.limit ?? 5000;
+      return { ok: true, file: XRAY_FILE, format: 'claude-code', total: all.length, lines: all.slice(Math.max(0, end - limit), end) };
+    },
+    onLines: () => () => {},
   };
 }

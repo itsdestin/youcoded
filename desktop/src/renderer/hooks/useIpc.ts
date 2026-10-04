@@ -1,5 +1,6 @@
 import type { VoiceBridge } from '../../shared/voice-types';
 import type { PagesBridge } from '../../shared/pages-types';
+import type { XrayBridge } from '../../shared/xray-types';
 import type { OfficeBridge } from '../../shared/office-types';
 import { useEffect, useRef } from 'react';
 // M1 Task 3: native.send's declared return type below was stale (`void`) from
@@ -484,6 +485,10 @@ declare global {
       // the phone carry it, but their hosts refuse every call (desktop only).
       // Shape: shared/office-types.ts.
       office?: OfficeBridge;
+      // Developer X-ray (design 2026-10-04): reads a session's saved file line by line.
+      // Optional: absent where no host reads files (the view then shows its error).
+      // Shape: shared/xray-types.ts.
+      xray?: XrayBridge;
       // Model manager (Plan C) — curated catalog, HF search, downloads, endpoint
       // detectors, engine backend switch. Task 9's Local Models panel consumes
       // these. onDownloadProgress returns an unsubscribe.

@@ -3,7 +3,9 @@
 // Uses the shared <Dialog> shell so the popup
 // picks up theme tokens automatically — no hardcoded colors, blur, or z-indexes
 // (PITFALLS overlay invariant).
-import { Dialog, SettingRow } from '../ui';
+import { Dialog, SettingRow, Toggle } from '../ui';
+import { setDeveloperToolsEnabled, useDeveloperToolsEnabled } from '../../state/dev-tools-store';
+import { isAndroid, isRemoteMode } from '../../platform';
 import { BetaChannelRow } from '../BetaChannelToggle';
 
 import { useEscClose } from '../../hooks/use-esc-close';
@@ -24,6 +26,7 @@ const KNOWN_ISSUES_URL = 'https://github.com/itsdestin/youcoded/issues';
  */
 export function DevelopmentPopup({ open, onClose, onOpenBug, onOpenContribute }: Props) {
   useEscClose(open, onClose);
+  const devTools = useDeveloperToolsEnabled();
   if (!open) return null;
   // WHY the workbench gate is gone (2026-09-10, grader): this list kept TWO copies
   // of itself, and users only ever saw the older one — different sub-labels, a
@@ -72,6 +75,18 @@ export function DevelopmentPopup({ open, onClose, onOpenBug, onOpenContribute }:
               thing") — it carries an icon because the four above it do, and a
               card with an empty icon column reads as a broken one. */}
           <BetaChannelRow variant="nav" icon={<FlaskIcon />} />
+          {/* Developer tools (design 2026-10-04, Q-xray-switch "unlock once"): turns
+              on the X-ray button in the top bar. Desktop only for now
+              (Q-xray-where), so the row is not offered where the button can't appear. */}
+          {!isRemoteMode() && !isAndroid() && (
+            <SettingRow
+              variant="nav"
+              icon={<XrayIcon />}
+              title="Developer tools"
+              description="Adds an X-ray button to the top bar"
+              control={<Toggle checked={devTools} onChange={setDeveloperToolsEnabled} aria-label="Developer tools" />}
+            />
+          )}
         </div>
       </div>
     </Dialog>
@@ -107,6 +122,16 @@ function CodeBracketsIcon() {
       <path d="M9 7 L4 12 L9 17" />
       <path d="M15 7 L20 12 L15 17" />
       <path d="M14 5 L10 19" />
+    </svg>
+  );
+}
+
+function XrayIcon() {
+  // The same stacked-lines glyph as the header's X-ray button.
+  return (
+    <svg className="w-4 h-4 text-fg-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 6h16M4 10h10M4 14h16M4 18h7" />
+      <circle cx="18" cy="17" r="2.5" />
     </svg>
   );
 }

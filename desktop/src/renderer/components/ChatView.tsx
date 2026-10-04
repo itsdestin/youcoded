@@ -24,6 +24,8 @@ import { SessionDrawer } from './SessionDrawer';
 import { useActiveProject } from '../hooks/useActiveProject';
 import { assistantName } from '../utils/assistant-name';
 import { ChatFindBar } from './ChatFindBar';
+import { XrayView } from './xray/XrayView';
+import { setDeveloperToolsEnabled, setXray, useXray } from '../state/dev-tools-store';
 import { isTypingTarget } from '../utils/is-typing-target';
 import { CardKeysLiveContext } from '../state/card-keys-context';
 import { OnScreenContext } from '../state/on-screen-context';
@@ -105,6 +107,10 @@ interface Props {
 // Memoised at the bottom of the file — see the WHY there.
 function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onAddCredit, onCancelQueued, onEditQueued, onSendQueuedNow, conversationStatus, onRefreshConversation, modelLoadingDemo }: Props) {
   const state = useChatState(sessionId, { paused: !visible }); // WHY paused: hidden, it redrew per streamed word; live again on show (see useChatState)
+  // Developer X-ray (design 2026-10-04): while on, the message list is swapped for
+  // the saved-file view. Only for the chat on screen — a hidden session never
+  // mounts an X-ray, so it costs nothing in the background.
+  const xray = useXray(sessionId) && visible;
   const dispatch = useChatDispatch();
 
   // What the conversation strip shows: the live status, plus a 2.5 s "Up to
@@ -207,6 +213,8 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   const [findOpen, setFindOpen] = useState(false);
   // Photo-only build: only the chat on screen answers to `shoot` (one ChatView per session).
   useScreenOpen('chat/find', () => setFindOpen(true), undefined, visible);
+  // X-ray screens for shoot: turning developer tools on is what a person does first.
+  useScreenOpen('chat/xray', () => { setDeveloperToolsEnabled(true); setXray(sessionId, true); }, undefined, visible);
 
   // "What the assistant was given" — opened ONLY from the strip above the
   // conversation. It used to open itself once per session; Destin chose "never"
@@ -954,7 +962,8 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               container below take the remaining height, so the messages shift
               down while the bar is open and back when it closes. `.find-row`'s
               top margin clears the overlaid header (globals.css). */}
-          {findOpen && (
+          {xray && <XrayView sessionId={sessionId} />}
+          {findOpen && !xray && (
             <ChatFindBar
               state={state}
               sessionId={sessionId}
@@ -974,7 +983,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               top of the scroll content was never on screen (measured 2026-09-10).
               `.find-row` clears the overlaid header the same way. Desktop never
               sets the prop, so nothing changes there. */}
-          {stripStatus && (
+          {stripStatus && !xray && (
             <div className={`find-row px-3 pb-2 shrink-0${findOpen ? ' !mt-0' : ''}`} data-conversation-status={stripStatus}>
               {stripStatus === 'incomplete' ? (
                 // Wording per the first phone tester (U11, 2026-09-10): "behind
@@ -1008,7 +1017,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               drops the header-clearing padding-top while the row is open —
               the content no longer starts under the header, it starts under
               the row. */}
-          <div ref={scrollContainerRef} className={`chat-scroll flex-1 min-h-0 overflow-y-auto${findOpen || stripStatus ? ' chat-scroll--below-find-row' : ''}`}>
+          {/* hidden, not unmounted, under X-ray: the scroller's observers and folding
+              stay attached, so switching back to chat is instant and keeps its place. */}
+          <div ref={scrollContainerRef} hidden={xray} className={`chat-scroll flex-1 min-h-0 overflow-y-auto${findOpen || stripStatus ? ' chat-scroll--below-find-row' : ''}`}>
            {/* The arrival class is on the CONTENT wrapper, not the scroller:
                animating transform on the scroll container would make it a
                containing block and disturb useStickToBottom's measurements. */}

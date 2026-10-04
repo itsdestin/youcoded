@@ -105,6 +105,10 @@ export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   // Browser encryption is an approved design with no backend: the Advanced section and its
   // screen render only under the workbench preview. Delete this row when it ships.
   { channel: 'remote.preview', feature: 'Remote access secure setup — UI mockup only' },
+  // Developer X-ray: the view was designed against a fixture file first. Delete these rows
+  // when main's reader lands on every surface the button appears on.
+  { channel: 'xray.read', feature: 'Developer X-ray — saved-file reader' },
+  { channel: 'xray.onLines', feature: 'Developer X-ray — live appended lines' },
   // Welcome back's session.reopenList/session.forgetReopen rows are GONE
   // (T2, 2026-09-24): main + preload + remote-shim now carry the real
   // channels; the mock implementations in mock-shim.ts stay (the workbench
