@@ -214,64 +214,28 @@ function Tags(p: Props) {
   );
 }
 
-// ── The Resume sheet (TRIAL, session-details-final#SF-2: "this needs to be a different
-// surface than the session details page. we need to tune it to fit this panel.") ──────
-//   A — flat: no cards inside the Resume card; small labels, then Note, Tags, Pin
-//   B — add on demand: the note, this session's tags and a "+ Add tag" pill that opens the
-//       search and the other tags; Pin
-//   C — one card: note, tags and Pin together in a single inset card
-// (Round 2 — D like the Resume panel, E fold-out rows, F tabs — was "worse again"; round 3
-// shows A/B/C again with the line across the Resume card removed: "note the horizontal
-// line. immediately bad.")
-export const TRIAL_SHEET = 'C' as 'A' | 'B' | 'C';
-
+// ── The Resume sheet ─────────────────────────────────────────────────────────────────
+// Resume's organize sheet, and the side panel's and a project preview's (resume-sheet-1…4,
+// Destin 2026-10-04): the same note, tags and Pin to top as Session details, as ONE card —
+// he picked "one card" (C), then "reorganize it internally ... fits design guidelines".
+// So it follows the guide's Settings recipe: each part is a setting row with its title (and
+// hint) first; wide controls (the note, the tag editor) go full width below the title, the
+// switch beside its title. It sits inside a card, so it takes the nested look (Card
+// levels); 8 px between rows, 12 px inside its edge, no lines.
 export function SessionSheet(p: Props) {
   const t = useTagEditor(p);
-  const [adding, setAdding] = useState(false);
-  const pinRow = (
-    <SettingRow header variant="item" title="Pin to top" icon={<PinIcon className="w-3.5 h-3.5 text-fg-muted" />}
-      control={<Toggle checked={p.pin.pinned} onChange={p.pin.onPin} aria-label="Pin to top" />} />
-  );
-  const note = <NoteBlock note={p.note} onNote={p.onNote} hang={false} />;
-  if (TRIAL_SHEET === 'A') {
-    return (
-      <div className="space-y-3">
-        <div><SectionLabel className="mb-1">Note</SectionLabel>{note}</div>
-        <div className="space-y-2">
-          <SectionLabel>Tags</SectionLabel>
-          {t.failed ?? <>{t.stale}{t.appliedPills}{t.search}{t.otherCloud}{t.editBox}</>}
-        </div>
-        {pinRow}
-      </div>
-    );
-  }
-  if (TRIAL_SHEET === 'B') {
-    return (
-      <div className="space-y-3">
-        {note}
-        {t.failed ?? (
-          <div className="space-y-2">
-            {t.stale}
-            <div className="flex flex-wrap items-center gap-1.5">
-              {t.applied.length > 0 && t.appliedPills}
-              <button type="button" onClick={() => setAdding((v) => !v)} aria-expanded={adding}
-                className="shrink-0 inline-flex items-center px-2 h-6.5 rounded-full border border-dashed border-edge text-xs text-fg-2 hover:text-fg hover:bg-inset transition-colors">
-                <span className="tag-line tag-line--caps">{adding ? 'Done adding' : '+ Add tag'}</span>
-              </button>
-            </div>
-            {adding && <div className="space-y-2">{t.search}{t.otherCloud}</div>}
-            {t.editBox}
-          </div>
-        )}
-        {pinRow}
-      </div>
-    );
-  }
   return (
-    <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
-      {note}
-      {t.failed ?? <div className="space-y-2">{t.stale}{t.appliedPills}{t.search}{t.otherCloud}{t.editBox}</div>}
-      {pinRow}
+    <div className={`${CARD_LEVEL_2} p-3 flex flex-col gap-3`}>
+      <div className="space-y-1.5">
+        <SettingRow header variant="item" title="Note" description="Shows under All sessions" />
+        <NoteBlock note={p.note} onNote={p.onNote} hang={false} />
+      </div>
+      <div className="space-y-1.5">
+        <SettingRow header variant="item" title="Tags" />
+        {t.failed ?? <div className="space-y-2">{t.stale}{t.appliedPills}{t.search}{t.otherCloud}{t.editBox}</div>}
+      </div>
+      <SettingRow header variant="item" title="Pin to top" description="Keeps it first in your session lists"
+        control={<Toggle checked={p.pin.pinned} onChange={p.pin.onPin} aria-label="Pin to top" />} />
     </div>
   );
 }
