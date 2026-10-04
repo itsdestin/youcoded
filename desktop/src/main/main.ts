@@ -46,13 +46,10 @@ import { applyWindowsUserToolsToEnv } from './prerequisite-installer';
 import { isSmokeTest, reportWhenRendered } from './smoke-probe';
 import { hangDeps, installCrashDiagnostics, reportPreviousCrashes, wireWindowHangDiagnostics } from './crash-diagnostics';
 import { registerThemeProtocol } from './theme-protocol';
-import { officeEditorSettings, officeThemeFonts, registerOfficeProtocol } from './office/office-protocol';
 import { sealOfficeFrames } from './office/office-frame-guard';
-import { registerOfficeIpc } from './office/office-ipc';
 import { officeIpc } from './ipc/office'; // the table's Office channels reach the modules below through this (ipc/office.ts)
-import { registerOfficeComments } from './office/office-comments';
-import { officeAvailable, officeRoot } from './office/office-root';
-import { getOfficeSessions, initOfficeSessionsSafely, quitOfficeSessions } from './office/office-session-registry';
+import { startOffice } from './office/office-boot';
+import { getOfficeSessions, quitOfficeSessions } from './office/office-session-registry';
 import { refuseCloseForUnsaved, refuseQuitForUnsaved, watchUnsavedEdits } from './unsaved-quit';
 import { syncJournals } from './office/office-journal-sync';
 import { createCloseGate } from './window-close-gate';
@@ -1538,18 +1535,7 @@ void app.whenReady().then(async () => {
   registerThemeProtocol();
   perfMark('main:chore:theme-protocol:done');
 
-  // Office editors (design §3a): each open document gets its own sealed office://<token>
-  // origin. initOfficeSessionsSafely() makes this instance's own random-suffixed temp base
-  // (office-session-registry.ts, never shared with the live app); the protocol and the IPC
-  // below reach the same registry through getOfficeSessions(). WHY guarded, not awaited bare (fix round 2): a failed
-  // mkdtemp (full/unwritable/policy-blocked temp dir) must degrade Office to unavailable, not
-  // abort the rest of startup and leave the app with no window.
-  const officeSessions = await initOfficeSessionsSafely();
-  if (officeSessions) registerOfficeProtocol({ root: officeRoot(), sessions: officeSessions, fonts: officeThemeFonts(app.getPath('userData'), path.join(os.homedir(), '.claude')), editorSettings: officeEditorSettings(app.getPath('userData')) });
-  // office:* (Task 5). WHY even without sessions: the renderer gets "unavailable", not a missing
-  // handler. WHY the getter: the registry goes away at quit, and each request must see that.
-  registerOfficeIpc(officeIpc, { getSessions: getOfficeSessions, available: () => officeAvailable(), root: officeRoot(), userData: app.getPath('userData'), documents: app.getPath('documents'), pruneVersionsAfterMs: 30_000 });
-  registerOfficeComments(officeIpc); // comments on an open document go through its editor (office-comments.ts)
+  await startOffice(app); // sealed office:// origins, the office:* handlers and live comments (office/office-boot.ts)
   perfMark('main:chore:office-protocol:done');
 
   // Marketplace auth store — instantiated once at startup, passed to IPC handlers.

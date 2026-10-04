@@ -924,6 +924,17 @@ export async function ensureNode(): Promise<{ success: boolean; error?: string }
   return nodeInstallInFlight;
 }
 
+/**
+ * ensureNode for a moment that must stop if it fails: null when Node is there, else the sentence to show.
+ * `purpose` finishes "Node.js is needed ...", e.g. "to open a terminal".
+ * WHY one helper (one-core merge, 2026-10-04): starting a session, installing Claude Code and opening a terminal
+ * each had their own copy of "ensure Node, else build the sentence", on both doors.
+ */
+export async function nodeRefusal(purpose: string): Promise<string | null> {
+  const node = await ensureNode();
+  return node.success ? null : `Node.js is needed ${purpose} and couldn't be installed: ${node.error}`;
+}
+
 /** Install Git silently. */
 export async function installGit(): Promise<{ success: boolean; error?: string }> {
   try {

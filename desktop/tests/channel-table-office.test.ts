@@ -15,7 +15,7 @@ describe('the office:* channels', () => {
       'office:save-copy', 'office:status', 'office:versions',
     ]);
     expect(office.every((d) => d.desktopOnly)).toBe(true);
-    const handler = vi.fn(); officeIpc.handle('office:open', handler);
+    const handler = vi.fn(); officeIpc.removeHandler('office:open'); officeIpc.handle('office:open', handler);
     expect(await serveRemoteChannel(findChannel('office:open')!, { path: '/x.docx' }, { door: 'remote', runtime: null, broadcast: vi.fn() } as any))
       .toEqual({ reply: true, payload: { ok: false, error: "This feature isn't available over remote access yet (office:open).", unsupported: true } });
     expect(handler).not.toHaveBeenCalled();
@@ -23,9 +23,9 @@ describe('the office:* channels', () => {
 
   it('a request reaches the module that registered it with the calling window and the old positional arguments', async () => {
     const seen: unknown[][] = [];
-    officeIpc.handle('office:restore', (e, ...args) => { seen.push([e.sender.id, ...args]); return { ok: true }; });
+    officeIpc.removeHandler('office:restore'); officeIpc.handle('office:restore', (e, ...args) => { seen.push([e.sender.id, ...args]); return { ok: true }; });
     expect(await findChannel('office:restore')!.handler({ path: '/a.docx', versionId: 'v1' }, ctx())).toEqual({ ok: true });
-    officeIpc.handle('office:save-copy', (e, ...args) => { seen.push([e.sender.id, ...args]); return { ok: true, possible: true }; });
+    officeIpc.removeHandler('office:save-copy'); officeIpc.handle('office:save-copy', (e, ...args) => { seen.push([e.sender.id, ...args]); return { ok: true, possible: true }; });
     await findChannel('office:save-copy')!.handler({ token: 't', mode: 'check', data: undefined }, ctx());
     expect(seen).toEqual([[7, '/a.docx', 'v1'], [7, 't', 'check', undefined]]);
   });
@@ -44,5 +44,15 @@ describe('the office:* channels', () => {
     expect(a.mock.calls.map((c) => [c[0].sender.id, ...c.slice(1)])).toEqual([[7, 'i', { ok: true }, 't'], [7, 'j', 1, 't']]);
     expect(b).toHaveBeenCalledTimes(1);
     officeIpc.off('office:comments-answer', a);
+  });
+
+  it('refuses a channel the table does not declare, one declared as the other kind, and a second handler for the same channel', () => {
+    expect(() => officeIpc.handle('office:nope', vi.fn())).toThrow(/not an Office 'handle' channel/);
+    expect(() => officeIpc.on('office:nope', vi.fn())).toThrow(/not an Office 'on' channel/);
+    expect(() => officeIpc.on('office:open', vi.fn())).toThrow(/not an Office 'on' channel/);
+    expect(() => officeIpc.handle('office:proceed', vi.fn())).toThrow(/not an Office 'handle' channel/);
+    officeIpc.removeHandler('office:close'); officeIpc.handle('office:close', vi.fn());
+    expect(() => officeIpc.handle('office:close', vi.fn())).toThrow(/second handler/);
+    officeIpc.removeHandler('office:close');
   });
 });

@@ -6,7 +6,7 @@
 // before -> now: the same, including that a paired phone's page can already start the install on the
 // computer (a question for Destin in the R3-6 report). Android's own app refuses it; that is not this door.
 import { IPC } from '../../shared/backend-contract';
-import { installClaude, ensureNode } from '../prerequisite-installer';
+import { installClaude, nodeRefusal } from '../prerequisite-installer';
 import { defineChannel, type MainChannelDef } from './channel-def';
 
 export const claudeCodeChannels: MainChannelDef[] = [
@@ -24,8 +24,8 @@ export const claudeCodeChannels: MainChannelDef[] = [
     handler: async (_p, ctx) => {
       // WHY Node first (2026-10-02): setup no longer installs it for everyone, and Claude Code sessions cannot start
       // without it. Both doors, as before (the computer's handler and the phone's case each had this).
-      const node = await ensureNode();
-      if (!node.success) return { success: false, error: `Node.js, which Claude Code needs, couldn't be installed: ${node.error}` };
+      const refusal = await nodeRefusal('to install Claude Code');
+      if (refusal) return { success: false, error: refusal };
       const result = await installClaude();
       ctx.runtime?.claudeAccount?.invalidate();
       return result;

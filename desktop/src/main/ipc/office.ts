@@ -20,11 +20,23 @@ type Listener = (event: { sender: any }, ...args: any[]) => unknown;
 const handlers = new Map<string, Listener>();
 const listeners = new Map<string, Set<Listener>>();
 
+/** WHY the checks (merge review, 2026-10-04): this object stands in for ipcMain, so without them a module could register a
+ *  channel the table never declared (no types, no phone refusal, no preload entry) and the guard test could not see it, or
+ *  register one twice, as ipcMain.handle refuses. A channel must be a table entry of the matching kind. */
+function declared(channel: string, kind: 'handle' | 'on'): void {
+  const def = officeChannels.find((d) => d.name === channel);
+  if (!def || def.kind !== kind) throw new Error(`${channel} is not an Office '${kind}' channel in the table (main/ipc/office.ts).`);
+}
+
 /** The slice of ipcMain the Office modules were written against (handle / removeHandler / on / off), kept in-process. */
 export const officeIpc = {
-  handle(channel: string, fn: Listener): void { handlers.set(channel, fn); },
+  handle(channel: string, fn: Listener): void {
+    declared(channel, 'handle');
+    if (handlers.has(channel)) throw new Error(`Attempted to register a second handler for '${channel}'`);
+    handlers.set(channel, fn);
+  },
   removeHandler(channel: string): void { handlers.delete(channel); },
-  on(channel: string, fn: Listener): void { (listeners.get(channel) ?? listeners.set(channel, new Set()).get(channel)!).add(fn); },
+  on(channel: string, fn: Listener): void { declared(channel, 'on'); (listeners.get(channel) ?? listeners.set(channel, new Set()).get(channel)!).add(fn); },
   off(channel: string, fn: Listener): void { listeners.get(channel)?.delete(fn); },
 };
 

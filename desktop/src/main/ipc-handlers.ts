@@ -62,7 +62,7 @@ import { EngineManager } from './engine/engine-manager';
 import type { EngineModel as EngineModelType } from '../shared/engine-types';
 import { ModelManager } from './models/model-manager';
 // WHY (2026-10-02): startSession makes sure Node is there before a Claude Code or Terminal session (setup no longer installs it for everyone).
-import { ensureNode } from './prerequisite-installer';
+import { nodeRefusal } from './prerequisite-installer';
 import { firstRunStateDir, type FirstRunNativeDeps } from './first-run';
 import { clearSetupDownload, computeSetupDownloadStatus, readSetupDownload } from './first-run-local';
 import { SessionStore } from './harness/session-store';
@@ -612,10 +612,8 @@ export function registerIpcHandlers(
     // Claude sign-in already installed it; this is the safety net for anyone
     // who reaches one of these sessions another way. Native chats skip it.
     if (opts.provider !== 'native') {
-      const node = await ensureNode();
-      if (!node.success) {
-        throw new Error(`Node.js is needed for this kind of session and couldn't be installed: ${node.error}`);
-      }
+      const refusal = await nodeRefusal('for this kind of session');
+      if (refusal) throw new Error(refusal);
       checkWindow();
     }
     // Snapshot BEFORE spawn: a fallback page can otherwise include new Claude Code turns.

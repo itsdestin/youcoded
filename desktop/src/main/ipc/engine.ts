@@ -18,7 +18,7 @@
 //     phone's page always sends the wrapped object, as the computer does.
 import { IPC } from '../../shared/backend-contract';
 import { prepareRunInTerminal, shellDisplayName } from '../session-manager';
-import { ensureNode } from '../prerequisite-installer';
+import { nodeRefusal } from '../prerequisite-installer';
 import { enginePrereqs } from '../engine/rocm-prereqs';
 import { log } from '../logger';
 import { defineChannel, type MainChannelCtx, type MainChannelDef } from './channel-def';
@@ -48,8 +48,8 @@ export const engineChannels: MainChannelDef[] = [
       // (2026-10-02). A failure throws to the same FieldError beside the button. WHY both doors: the computer's
       // handler had this check and the phone's case did not; the terminal opens on the computer either way, so
       // the one entry asks for Node for both.
-      const node = await ensureNode();
-      if (!node.success) throw new Error(`Node.js is needed to open a terminal and couldn't be installed: ${node.error}`);
+      const refusal = await nodeRefusal('to open a terminal');
+      if (refusal) throw new Error(refusal);
       const ops = await sessionOpsWhenReady(ctx);
       // The folder: the newest live session of THIS window; a phone has no window, so the newest on the computer.
       // With none at all, createSession falls back to the home folder.

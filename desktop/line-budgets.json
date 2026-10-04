@@ -8,7 +8,7 @@
   },
   "budgets": {
     "shared/backend-contract.ts": 1564,
-    "main/ipc-handlers.ts": 2497,
+    "main/ipc-handlers.ts": 2495,
     "main/harness/native-session-host.ts": 5367,
     "renderer/App.tsx": 4633,
     "main/remote-server.ts": 1320,
@@ -18,7 +18,7 @@
     "renderer/state/chat-reducer.ts": 3396,
     "renderer/styles/globals.css": 2994,
     "renderer/components/SessionStrip.tsx": 2820,
-    "main/main.ts": 2059,
+    "main/main.ts": 2045,
     "shared/types.ts": 1547,
     "renderer/components/SyncPanel.tsx": 2060,
     "main/engine/engine-manager.ts": 2035,
