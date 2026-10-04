@@ -3789,10 +3789,22 @@ function createPagesMock(empty: boolean): PagesBridge {
       const page = pages.find((p) => p.id === id);
       const device = page?.connections?.find((c) => c.kind === 'device' && c.approved);
       if (device && device.kind === 'device' && req.url.startsWith(`http://${device.address}/`)) {
-        await delay(120);
-        // A socket exchange (renames, room moves) gets the pretend socket.
-        const answer = req.socket ? fakeHomeAssistantSocket(req) : fakeHomeAssistantFetch(req);
-        if (answer) return answer;
+        // WHY: the screenshot tool waits for requests in flight before it
+        // takes a picture, but it only counts window.fetch — these pretend
+        // answers never touch it, so under load a Home page screen was shot
+        // still "Loading your rooms…" and two different screens came out as
+        // the same picture (shoot --check LOOK-ALIKE, 2026-10-03). Counting
+        // them makes the tool wait for the page's data like any other.
+        const w = window as unknown as { __shootInflight?: number };
+        const counted = typeof w.__shootInflight === 'number';
+        if (counted) w.__shootInflight = (w.__shootInflight ?? 0) + 1;
+        try {
+          await delay(120);
+          const answer = req.socket ? fakeHomeAssistantSocket(req) : fakeHomeAssistantFetch(req);
+          if (answer) return answer;
+        } finally {
+          if (counted) w.__shootInflight = (w.__shootInflight ?? 1) - 1;
+        }
       }
       return { ok: false as const, reason: 'network' as const, message: 'The workbench has no network; this page shows saved numbers.' };
     },
