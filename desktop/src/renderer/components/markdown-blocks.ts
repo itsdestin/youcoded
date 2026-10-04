@@ -272,18 +272,21 @@ function mayHoldDefinitionOrHtml(text: string): boolean {
 }
 
 /**
- * Whether appending `text` (the whole last piece after growing) completes a code fence's OPENING line that
- * `last` ended inside of: its final line began like one (a backtick or tilde after up to three spaces, maybe
- * only the first of three yet) and the appended text both finishes it as a fence opener and ends that line.
- * WHY (2026-10-04, perf fix 5): the fence's start is only recorded by a parse of a text whose opening line is
- * complete (openFenceBody). Extending the piece without parsing at this moment would keep "no fence start"
- * for the whole fence.
+ * Whether the text appended to the last piece COMPLETES a code fence's opening line: some line of the grown
+ * piece (from the line the old text ended in, onward) is a fence opener and its line ending lies in the
+ * appended part. WHY (2026-10-04, perf fix 5): the fence's start is only recorded by a parse of a text whose
+ * opening line is complete (openFenceBody). Extending the piece without parsing at that moment keeps "no fence
+ * start" for the whole fence, so it is never drawn in chunks and every word re-reads it all (the original
+ * O(n^2)). Deliberately NOT conditional on how the old text looked: the opener can arrive whole in one update
+ * after "Here is the file:\n", after a line of spaces, as "``" then "`ts\n", or as a second fence after a
+ * closed one — the only reliable signal is "an opener line just got its line ending".
  */
 function completesFenceOpener(last: string, text: string): boolean {
   const from = Math.max(last.lastIndexOf('\n'), last.lastIndexOf('\r')) + 1;
-  if (!/^ {0,3}[`~]/.test(last.slice(from))) return false;
-  const grown = text.slice(from);
-  return /^ {0,3}(?:`{3,}[^`\r\n]*|~{3,}[^\r\n]*)[\r\n]/.test(grown) && /[\r\n]/.test(text.slice(last.length));
+  for (const m of text.slice(from).matchAll(/(?:^|[\r\n]) {0,3}(?:`{3,}[^`\r\n]*|~{3,}[^\r\n]*)(?:\r\n?|\n)/g)) {
+    if (from + m.index! + m[0].length > last.length) return true;
+  }
+  return false;
 }
 
 /**
