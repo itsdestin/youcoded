@@ -1513,18 +1513,22 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         className="px-1 py-1.5"
       />
       </div>
-      {/* 'sheet' variant: the organize controls drop INTO the card rather than
+      {/* No line across the card above it (guide: no full-width line in a card; resume-sheet-2:
+          "note the horizontal line. immediately bad").
+          'sheet' variant: the organize controls drop INTO the card rather than
           floating. No positioning maths and nothing to clamp — the trade is
           that the card grows and pushes the rest of the list down.
           It shares organizePopRef with the floating variants: only one of the
           two is ever mounted, and the outside-click handler checks that ref to
           know "the click landed inside the open organize UI". */}
       {orgId === s.sessionId && (
-        <div ref={clone ? undefined : organizePopRef} className="border-t border-edge-dim p-2.5 flex flex-col gap-2" onClick={(e) => e.stopPropagation()}>
+        <div ref={clone ? undefined : organizePopRef} className="px-2.5 pb-2.5 flex flex-col gap-2" onClick={(e) => e.stopPropagation()}>
           {renderOrganizeControls(s)}
         </div>
       )}
-      {isExpanded && renderExpandedOptions(s)}
+      {/* flush: no line across the card above the Model / Resume panel either (guide: no
+          full-width line in a card; resume-sheet-2). */}
+      {isExpanded && renderExpandedOptions(s, { flush: true })}
       </div>
     </div>
     );

@@ -14,7 +14,7 @@ import { useMemo, useState } from 'react';
 import type { TagRecord } from '../../../shared/tags';
 import { DEFAULT_TAG_COLOR } from '../../../shared/tags';
 import type { TagRegistryApi } from '../../hooks/useTagRegistry';
-import { Button, CARD_LEVEL_1, CARD_LEVEL_2, ErrorState, FieldError, FoldRow, InputGroup, SegmentedTabs, SectionLabel, SettingRow, Textarea, Toggle } from '../ui';
+import { Button, CARD_LEVEL_1, CARD_LEVEL_2, ErrorState, FieldError, InputGroup, SectionLabel, SettingRow, Textarea, Toggle } from '../ui';
 import { ChipAction, TagWord, mix } from './TagChip';
 import { NewTagFields, TagFields } from './TagCloud';
 import { PinIcon } from './PinIcon';
@@ -214,52 +214,63 @@ function Tags(p: Props) {
   );
 }
 
-// ── The Resume sheet (TRIAL, round 2 — resume-sheet-1#RS-2: A/B/C were "none of these. try
-// again"). These borrow Resume's OWN expanded panel (ResumeOptionsForm), not the popup:
-//   D — like the Resume panel: grey captions over each control, a plain switch row, no boxes
-//   E — fold-out rows: "Note" and "Tags" as the Settings fold-out (FoldRow), each opening in
-//       place, and Pin to top as a switch row
-//   F — tabs: a "Tags | Note" switch (SegmentedTabs) over one of the two, Pin to top under
-export const TRIAL_SHEET = 'D' as 'D' | 'E' | 'F';
+// ── The Resume sheet (TRIAL, session-details-final#SF-2: "this needs to be a different
+// surface than the session details page. we need to tune it to fit this panel.") ──────
+//   A — flat: no cards inside the Resume card; small labels, then Note, Tags, Pin
+//   B — add on demand: the note, this session's tags and a "+ Add tag" pill that opens the
+//       search and the other tags; Pin
+//   C — one card: note, tags and Pin together in a single inset card
+// (Round 2 — D like the Resume panel, E fold-out rows, F tabs — was "worse again"; round 3
+// shows A/B/C again with the line across the Resume card removed: "note the horizontal
+// line. immediately bad.")
+export const TRIAL_SHEET = 'C' as 'A' | 'B' | 'C';
 
 export function SessionSheet(p: Props) {
   const t = useTagEditor(p);
-  const [tab, setTab] = useState<'tags' | 'note'>('tags');
-  const caption = 'text-xs font-medium text-fg-muted mb-1 block';
-  const tags = t.failed ?? <div className="space-y-2">{t.stale}{t.appliedPills}{t.search}{t.otherCloud}{t.editBox}</div>;
-  const note = <NoteBlock note={p.note} onNote={p.onNote} hang={false} />;
-  // The Resume panel's own switch row: label left, switch right, no box.
+  const [adding, setAdding] = useState(false);
   const pinRow = (
-    <div className="flex items-center justify-between">
-      <span className="text-xs font-medium text-fg-muted">Pin to top</span>
-      <Toggle checked={p.pin.pinned} onChange={p.pin.onPin} aria-label="Pin to top" />
-    </div>
+    <SettingRow header variant="item" title="Pin to top" icon={<PinIcon className="w-3.5 h-3.5 text-fg-muted" />}
+      control={<Toggle checked={p.pin.pinned} onChange={p.pin.onPin} aria-label="Pin to top" />} />
   );
-  if (TRIAL_SHEET === 'D') {
+  const note = <NoteBlock note={p.note} onNote={p.onNote} hang={false} />;
+  if (TRIAL_SHEET === 'A') {
     return (
-      <div className="flex flex-col gap-3">
-        <div><span className={caption}>Note</span>{note}</div>
-        <div><span className={caption}>Tags</span>{tags}</div>
+      <div className="space-y-3">
+        <div><SectionLabel className="mb-1">Note</SectionLabel>{note}</div>
+        <div className="space-y-2">
+          <SectionLabel>Tags</SectionLabel>
+          {t.failed ?? <>{t.stale}{t.appliedPills}{t.search}{t.otherCloud}{t.editBox}</>}
+        </div>
         {pinRow}
       </div>
     );
   }
-  if (TRIAL_SHEET === 'E') {
-    const applied = t.applied.map((x) => x.label).join(', ');
+  if (TRIAL_SHEET === 'B') {
     return (
-      <div className="flex flex-col gap-2">
-        <FoldRow title="Note" description={p.note ? `“${p.note}”` : 'None yet'}>{note}</FoldRow>
-        <FoldRow title="Tags" description={applied || 'None yet'}>{tags}</FoldRow>
-        <SettingRow variant="item" title="Pin to top" icon={<PinIcon className="w-3.5 h-3.5 text-fg-muted" />}
-          control={<Toggle checked={p.pin.pinned} onChange={p.pin.onPin} aria-label="Pin to top" />} />
+      <div className="space-y-3">
+        {note}
+        {t.failed ?? (
+          <div className="space-y-2">
+            {t.stale}
+            <div className="flex flex-wrap items-center gap-1.5">
+              {t.applied.length > 0 && t.appliedPills}
+              <button type="button" onClick={() => setAdding((v) => !v)} aria-expanded={adding}
+                className="shrink-0 inline-flex items-center px-2 h-6.5 rounded-full border border-dashed border-edge text-xs text-fg-2 hover:text-fg hover:bg-inset transition-colors">
+                <span className="tag-line tag-line--caps">{adding ? 'Done adding' : '+ Add tag'}</span>
+              </button>
+            </div>
+            {adding && <div className="space-y-2">{t.search}{t.otherCloud}</div>}
+            {t.editBox}
+          </div>
+        )}
+        {pinRow}
       </div>
     );
   }
   return (
-    <div className="flex flex-col gap-3">
-      <SegmentedTabs variant="contained" aria-label="Tags or note" value={tab} onChange={(id) => setTab(id as 'tags' | 'note')}
-        tabs={[{ id: 'tags', label: t.applied.length ? `Tags (${t.applied.length})` : 'Tags' }, { id: 'note', label: p.note ? 'Note ✓' : 'Note' }]} />
-      {tab === 'tags' ? tags : note}
+    <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
+      {note}
+      {t.failed ?? <div className="space-y-2">{t.stale}{t.appliedPills}{t.search}{t.otherCloud}{t.editBox}</div>}
       {pinRow}
     </div>
   );
