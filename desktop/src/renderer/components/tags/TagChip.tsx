@@ -21,7 +21,7 @@ export function ChipAction({ kind, label, onClick, size = 'sm' }: { kind: 'remov
   return (
     <button type="button" aria-label={`${kind === 'remove' ? 'Remove' : 'Add'} ${label}`}
       onClick={(e) => { e.stopPropagation(); onClick(); }}
-      className={`${size === 'md' ? 'w-4 h-4' : 'w-3.5 h-3.5'} -mr-0.5 shrink-0 translate-y-px inline-flex items-center justify-center rounded-full text-fg-2 hover:text-fg bg-edge-dim hover:bg-edge transition-colors`}>
+      className={`${size === 'md' ? 'w-4 h-4' : 'w-3.5 h-3.5'} -mr-0.5 shrink-0 inline-flex items-center justify-center rounded-full text-fg-2 hover:text-fg bg-edge-dim hover:bg-edge transition-colors`}>
       <svg viewBox="0 0 12 12" className="w-2 h-2" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" aria-hidden>
         {kind === 'remove' ? <path d="M3 3l6 6M9 3l-6 6" /> : <path d="M6 2.5v7M2.5 6h7" />}
       </svg>
@@ -29,9 +29,11 @@ export function ChipAction({ kind, label, onClick, size = 'sm' }: { kind: 'remov
   );
 }
 
-// WHY translate-y-px on every tag icon: in the app's monospace font the words sit a pixel
-// below the line's middle, so a centred icon read as riding high (SD1-1: "fix the
-// text/icon alignment within the tag chips").
+// WHY 1px down: measured 2026-10-04 at 8× zoom, the app's monospace font sets lowercase
+// words about a pixel below the middle of their line, so a truly centred icon sat that
+// much above "work". Measured centres after: icon 31.9, word 32.0, pill 31.9 (px).
+export const TAG_ICON = 'flex shrink-0 translate-y-px';
+
 export const mix = (color: string) => `color-mix(in srgb, ${tagColorCss(color)} 75%, var(--fg))`;
 
 export function TagChip({ tag, onRemove, onAdd, dim = false, archivedLook = false, className = '' }: {
@@ -53,7 +55,7 @@ export function TagChip({ tag, onRemove, onAdd, dim = false, archivedLook = fals
   if (archivedLook) {
     return (
       <span className={`shrink-0 inline-flex items-center gap-1 pl-1 pr-1.5 py-0.25 rounded-full border border-edge-dim bg-inset text-4xs leading-none text-fg-muted opacity-70 ${className}`}>
-        <span className="flex shrink-0 translate-y-px text-fg-faint"><FilledTag className="w-3 h-3" /></span>
+        <span className={`${TAG_ICON} text-fg-faint`}><FilledTag className="w-3 h-3" /></span>
         {tag.label}{action}
       </span>
     );
@@ -61,22 +63,23 @@ export function TagChip({ tag, onRemove, onAdd, dim = false, archivedLook = fals
   return (
     <span className={`shrink-0 inline-flex items-center gap-1 pl-1 pr-1.5 py-0.25 rounded-full border text-4xs leading-none ${dim ? 'text-fg-muted border-dashed' : 'text-fg-2'} ${className}`}
       style={{ backgroundColor: dim ? 'transparent' : `color-mix(in srgb, ${c} 15%, transparent)`, borderColor: `color-mix(in srgb, ${c} ${dim ? 40 : 30}%, transparent)` }}>
-      <span className="flex shrink-0 translate-y-px" style={{ color: c }}><FilledTag className="w-3 h-3" /></span>
+      <span className={TAG_ICON} style={{ color: c }}><FilledTag className="w-3 h-3" /></span>
       {tag.label}{action}
     </span>
   );
 }
 
-/** A solid tag with a ring in the panel colour, so stacked tags stay apart. Mirrored like
- *  glyphs.tsx's TagGlyph, so the point aims back into the content. */
-export function FilledTag({ className = '' }: { className?: string }) {
+/** A solid tag lying level, point to the left, hole cut through (it shows whatever is
+ *  behind). WHY level (session-details-2#SD2-1, -3: "text/icon centering ... still weird"):
+ *  the earlier tag stood on its corner, its weight in the top-left, so even centred it read
+ *  as riding above the word; a level tag is symmetric top to bottom, like the status dot.
+ *  `ring` adds an outline in the panel colour — only for stacks, where tags overlap. */
+export function FilledTag({ className = '', ring = false }: { className?: string; ring?: boolean }) {
   return (
     <svg className={className} viewBox="0 0 24 24" aria-hidden>
-      <g transform="translate(24,0) scale(-1,1)">
-        <path d="M3 12.5V4.5A1.5 1.5 0 014.5 3h8l8.5 8.5a1.5 1.5 0 010 2.1l-6.9 6.9a1.5 1.5 0 01-2.1 0L3 12.5z"
-          fill="currentColor" stroke="var(--panel)" strokeWidth={2.5} strokeLinejoin="round" />
-        <circle cx="7.75" cy="7.75" r="1.6" fill="var(--panel)" />
-      </g>
+      <path fillRule="evenodd"
+        d="M2.5 12L7.6 6.4A1.5 1.5 0 018.7 5.9H20A1.5 1.5 0 0121.5 7.4V16.6A1.5 1.5 0 0120 18.1H8.7A1.5 1.5 0 017.6 17.6Z M9.2 12a1.5 1.5 0 103 0a1.5 1.5 0 10-3 0Z"
+        fill="currentColor" stroke={ring ? 'var(--panel)' : 'none'} strokeWidth={ring ? 2.5 : 0} strokeLinejoin="round" />
     </svg>
   );
 }
@@ -89,7 +92,7 @@ export function TagIconStack({ tags, className = '' }: { tags: Pick<TagRecord, '
     <span className={`inline-flex items-center ${className}`} aria-hidden>
       {tags.map((t, i) => (
         <span key={i} className={`flex ${i ? '-ml-2' : ''}`} style={{ color: mix(t.color), zIndex: tags.length - i }}>
-          <FilledTag className="w-3.5 h-3.5" />
+          <FilledTag className="w-3.5 h-3.5" ring />
         </span>
       ))}
     </span>

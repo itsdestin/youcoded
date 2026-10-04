@@ -15,7 +15,7 @@ import type { TagRecord } from '../../../shared/tags';
 import { DEFAULT_TAG_COLOR } from '../../../shared/tags';
 import type { TagRegistryApi } from '../../hooks/useTagRegistry';
 import { Button, CARD_LEVEL_1, CARD_LEVEL_2, ErrorState, InputGroup, SectionLabel, SettingRow, Textarea, Toggle } from '../ui';
-import { ChipAction, FilledTag, mix } from './TagChip';
+import { ChipAction, FilledTag, TAG_ICON, mix } from './TagChip';
 import { NewTagFields, TagFields } from './TagCloud';
 import { PinIcon } from './PinIcon';
 
@@ -91,14 +91,14 @@ function HeaderCard({ name, onRename, note, onNote }: { name: string; onRename?:
 // On this session: larger, a stronger tint and a full-colour edge, words in the main text
 // colour. Not on it: no fill, a plain grey edge, the colour only in the icon. Archived: no
 // edge at all, a sunk background and faint words (unlike "+ New tag", which is dashed).
-const ICON = 'flex shrink-0 translate-y-px';
+const ICON = TAG_ICON;
 function AppliedPill({ t, onEdit, onRemove, picked }: { t: TagRecord; onEdit: () => void; onRemove: () => void; picked: boolean }) {
   const c = mix(t.color);
   return (
     <span role="button" tabIndex={0} onClick={onEdit} aria-label={`Edit ${t.label}`} aria-pressed={picked}
       className={`shrink-0 inline-flex items-center gap-1.5 pl-1.5 pr-2 py-1 rounded-full border text-xs leading-none text-fg cursor-pointer ${picked ? 'ring-2 ring-accent ring-offset-1 ring-offset-inset' : ''}`}
       style={{ backgroundColor: `color-mix(in srgb, ${c} 25%, transparent)`, borderColor: `color-mix(in srgb, ${c} 60%, transparent)` }}>
-      <span className={ICON} style={{ color: c }}><FilledTag className="w-3.5 h-3.5" /></span>
+      <span className={ICON} style={{ color: c }}><FilledTag className="w-4 h-4" /></span>
       {t.label}
       <ChipAction kind="remove" label={t.label} onClick={onRemove} size="md" />
     </span>
