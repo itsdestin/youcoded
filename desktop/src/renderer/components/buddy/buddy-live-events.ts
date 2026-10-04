@@ -26,7 +26,7 @@ export const BUDDY_LIVE: Record<TranscriptEventType, 'same' | { skip: string }> 
   'assistant-thinking': 'same',
   'session-error': 'same',
   'skill-invoked': { skip: 'The buddy has no skill card today (PR #287 review, 2026-08-10).' },
-  'context-clear': { skip: 'The buddy timeline does not clear live on /clear (PR #287 review, 2026-08-10); it picks the barrier up the next time it loads history.' },
+  'context-clear': { skip: 'The buddy timeline does not clear its TRANSCRIPT live on /clear (PR #287 review, 2026-08-10); it picks the barrier up the next time it loads history. (Since sync-fix3 the buddy does draw the "Conversation cleared" LINE live, but from the computer\'s separate `session:live` clear divider, which is its own event, not this one. The ledger gap is unchanged.)' },
   'compact-summary': 'same',
   'subagent-usage': 'same',
   'background-task': 'same',

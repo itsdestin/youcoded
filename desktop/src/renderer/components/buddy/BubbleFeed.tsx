@@ -179,6 +179,8 @@ export function BubbleFeed({ sessionId }: Props) {
     // The buddy has no scroll-up sentinel this cycle: it is a glanceable recent
     // view, not a place to read back through a conversation.
     void loader.load(sessionId);
+    // The computer says this window's fill never completed (its 30 s hold expired and the held pushes were dropped): fill again from a fresh page.
+    const unsubRefill = (window as any).claude?.session?.onRefill?.((sid: string) => { if (sid === sessionId) void loader.refill(sessionId, { fresh: true }); });
 
     return () => {
       cancelled = true;
@@ -187,6 +189,7 @@ export function BubbleFeed({ sessionId }: Props) {
       window.claude.off('transcript:event', unsubTranscript);
       if (typeof unsubLive === 'function') unsubLive();
       if (typeof unsubReplayComplete === 'function') unsubReplayComplete();
+      if (typeof unsubRefill === 'function') unsubRefill();
       // A fill still in flight is for a feed that is gone: forget it, so its answer is applied to nothing.
       loader.retainOnly(new Set());
     };

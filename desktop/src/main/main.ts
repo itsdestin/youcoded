@@ -23,6 +23,7 @@ import os from 'os';
 import fs from 'fs';
 import { SessionManager } from './session-manager';
 import { HookRelay } from './hook-relay';
+import { hookWindowTargets } from './hook-window-route';
 import { WindowRegistry } from './window-registry';
 import { PendingAcquireQueue } from './pending-acquire';
 import { bindApp } from './ipc/app';
@@ -1151,19 +1152,18 @@ function createWindow(firstRunManager?: FirstRunManager): OutboxBroadcast {
     docCommentsServerIdsBySession.delete(sessionId);
   });
 
-  // The windows' leg of a Claude Code hook event: the window that owns the session, else the main window. Never a buddy
-  // subscriber (a hook event has always been owner-only, which is why this is not sendForSession). WHY here and not in
-  // publish (one-core R5-2): publish delivers the phones' leg and the record; this is only the route the windows take.
+  // The windows' leg of a Claude Code hook event: the window that owns the session, else the main window; an event that ENDS an ask also reaches the
+  // watching buddy chat (hook-window-route.ts). WHY here and not in publish (one-core R5-2): publish delivers the phones' leg and the record.
   const sendHookToOwner = (skip: boolean) => (sessionId: string, channel: string, args: unknown[], hold?: (windowId: number, deliver: () => void) => boolean) => {
     if (skip) return; // an auto-approved ask never reached any window
     const ownerId = windowRegistry.getOwner(sessionId);
     const win = ownerId != null ? windowFromWcId(ownerId) : null;
     const target = win && !win.isDestroyed() ? win : (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null);
-    if (!target) return;
-    const wid = target.webContents.id;
-    const deliver = () => { if (!target.isDestroyed()) target.webContents.send(channel, ...args); };
-    if (hold?.(wid, deliver)) return;
-    deliver();
+    for (const wid of hookWindowTargets(args[0] as { type?: string }, target ? target.webContents.id : null, windowRegistry.getSubscribers(sessionId))) {
+      const w = windowFromWcId(wid);
+      const deliver = () => { if (w && !w.isDestroyed()) w.webContents.send(channel, ...args); };
+      if (!hold?.(wid, deliver)) deliver();
+    }
   };
 
   // Forward hook events to renderer

@@ -78,6 +78,7 @@ beforeEach(() => {
     off: () => {},
     session: {
       open: (req: unknown) => bridge.open(req),
+      onRefill: (cb: (sid: string) => void) => { (bridge.listeners['refill'] ??= []).push(cb as any); return () => {}; },
       play: (pushes: Array<{ type: string; payload: unknown }>) => { for (const p of pushes) for (const h of bridge.listeners[p.type] ?? []) h(p.payload); },
     },
     detach: { requestTranscriptPage: () => Promise.resolve(null) },
@@ -191,6 +192,25 @@ describe('BubbleFeed is filled the way the main window is', () => {
     act(() => { for (const h of bridge.listeners['session:live']) { h(live({ kind: 'compact-start', id: 'live1' })); h({ sessionId: 'other', kind: 'compact-start', id: 'x' }); } });
     await vi.waitFor(() => expect(types()).toContain('COMPACTION_PENDING'));
     expect(mocks.dispatch.mock.calls.filter((c) => c[0].type === 'COMPACTION_PENDING')).toHaveLength(1);
+  });
+
+  it('clears an ask card when the ask ends elsewhere (the computer now tells the watching buddy)', async () => {
+    mocks.state = sessionState({});
+    render(<BubbleFeed sessionId="s1" />);
+    await vi.waitFor(() => expect(bridge.listeners['hook:event']?.length).toBeGreaterThan(0));
+    mocks.dispatch.mockClear();
+    act(() => { for (const h of bridge.listeners['hook:event']) h({ type: 'PermissionResolved', sessionId: 's1', payload: { _requestId: 'r1' }, timestamp: 2 }); });
+    expect(mocks.dispatch).toHaveBeenCalledWith({ type: 'PERMISSION_RESOLVED_ELSEWHERE', sessionId: 's1', requestId: 'r1' });
+  });
+
+  it('fills again from a fresh page when the computer says its hold expired (session:refill), for its own conversation only', async () => {
+    mocks.state = sessionState({});
+    render(<BubbleFeed sessionId="s1" />);
+    await vi.waitFor(() => expect(types()).toContain('HISTORY_PAGE_LOADED'));   // the first fill has finished
+    await vi.waitFor(() => expect(bridge.listeners['refill']?.length).toBeGreaterThan(0));
+    await act(async () => { bridge.listeners['refill'].forEach((h) => { h('other' as any); h('s1' as any); }); });
+    await vi.waitFor(() => expect(bridge.open).toHaveBeenCalledTimes(2));
+    expect(bridge.open).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: 's1', fresh: true }));
   });
 
   it('leaves its three known transcript gaps as they were (a replayed skill card or /clear is still not drawn live)', async () => {
