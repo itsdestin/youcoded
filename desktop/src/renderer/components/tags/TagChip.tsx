@@ -1,5 +1,6 @@
 // src/renderer/components/tags/TagChip.tsx
 import React, { useState } from 'react';
+import './TagChip.css';
 import type { TagRecord } from '../../../shared/tags';
 import { tagColorCss } from '../../../shared/tags';
 
@@ -34,8 +35,8 @@ export function ChipAction({ kind, label, onClick, size = 'sm' }: { kind: 'remov
  *  the bug and idea chips"): at Destin's 1.5× scale, an icon and a word laid out side by side
  *  are each rounded to the screen's pixels on their own, so some rows came out a pixel apart.
  *  Inside one line they round together. The line is trimmed to the word's lowercase letters
- *  (or its capitals, when it has any) and the icon sits on that same middle — globals.css
- *  → Tag label. */
+ *  (or its capitals, when it has any) and the icon sits on that same middle —
+ *  TagChip.css. */
 export function TagWord({ label, size, iconClass = '', iconStyle }: { label: string; size: 12 | 14 | 16; iconClass?: string; iconStyle?: React.CSSProperties }) {
   const caps = /\p{Lu}/u.test(label);
   return (
@@ -83,7 +84,7 @@ export function TagChip({ tag, onRemove, onAdd, dim = false, archivedLook = fals
 
 /** A solid tag with a ring in the panel colour, so stacked tags stay apart. Mirrored like
  *  glyphs.tsx's TagGlyph, so the point aims back into the content. */
-export function FilledTag({ className = '' }: { className?: string }) {
+function FilledTag({ className = '' }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" aria-hidden>
       <g transform="translate(24,0) scale(-1,1)">

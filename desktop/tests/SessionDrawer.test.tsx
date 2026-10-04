@@ -590,7 +590,8 @@ describe('SessionDrawer previewing a past conversation', () => {
       expect(await screen.findByPlaceholderText('Search or create a tag…')).toBeInTheDocument();
       // An applied tag's pill carries ×, an unapplied one + (the Tags card, pick-menus-15).
       expect(screen.getByRole('button', { name: 'Remove work' })).toBeInTheDocument();
-      expect(screen.getByPlaceholderText('A note for later — shows under All sessions')).toHaveValue('a note');
+      // Session details shows the note as quoted words; clicking them edits it (session-details-2).
+      expect(screen.getByText('“a note”')).toBeInTheDocument();
     });
 
     it('applies a tag optimistically and keeps it applied once session:set-tag confirms', async () => {
@@ -627,14 +628,15 @@ describe('SessionDrawer previewing a past conversation', () => {
       renderDrawerWithPreview();
       await screen.findByText(PREVIEW.title);
       fireEvent.click(screen.getByRole('button', { name: `Organize ${PREVIEW.title}` }));
-      const noteField = await screen.findByPlaceholderText('A note for later — shows under All sessions');
+      fireEvent.click(await screen.findByTitle('Edit note'));
+      const noteField = screen.getByRole('textbox', { name: 'Note' });
       expect(noteField).toHaveValue('original');
 
       fireEvent.change(noteField, { target: { value: 'edited' } });
       fireEvent.blur(noteField);
       await waitFor(() => expect(setNote).toHaveBeenCalledWith(PREVIEW.id, 'edited'));
       // The UI must not keep a change the backend rejected.
-      await waitFor(() => expect(screen.getByPlaceholderText('A note for later — shows under All sessions')).toHaveValue('original'));
+      await waitFor(() => expect(screen.getByText('“original”')).toBeInTheDocument());
     });
 
     it('keeps a note edit once session:set-note confirms it — positive control for the rollback test above', async () => {
@@ -646,12 +648,13 @@ describe('SessionDrawer previewing a past conversation', () => {
       renderDrawerWithPreview();
       await screen.findByText(PREVIEW.title);
       fireEvent.click(screen.getByRole('button', { name: `Organize ${PREVIEW.title}` }));
-      const noteField = await screen.findByPlaceholderText('A note for later — shows under All sessions');
+      fireEvent.click(await screen.findByTitle('Edit note'));
+      const noteField = screen.getByRole('textbox', { name: 'Note' });
 
       fireEvent.change(noteField, { target: { value: 'edited' } });
       fireEvent.blur(noteField);
       await waitFor(() => expect(setNote).toHaveBeenCalledWith(PREVIEW.id, 'edited'));
-      expect(screen.getByPlaceholderText('A note for later — shows under All sessions')).toHaveValue('edited');
+      await waitFor(() => expect(screen.getByText('“edited”')).toBeInTheDocument());
     });
   });
 });

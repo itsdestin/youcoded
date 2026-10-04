@@ -23,7 +23,7 @@ import {
   type FlagName,
 } from './resume-browser-filters';
 import { useTagRegistry, refreshTagRegistry } from '../hooks/useTagRegistry';
-import { TagNoteEditor } from './tags/TagNoteEditor';
+import { SessionDetails } from './tags/SessionDetails';
 import { PinIcon } from './tags/PinIcon';
 import { TagChip } from './tags/TagChip';
 import { SessionCardTags, SessionCardMeta, CompleteToggle, SESSION_CARD_SURFACE_BASE } from './SessionCardDetails';
@@ -1235,13 +1235,12 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // Tags and note. There is no separate "Flags" section: Priority is the Pin to
   // top switch, and Complete lives on the card's hide icon, since marking something
   // done is a one-click action that shouldn't cost opening a menu.
-  // The shared tags-and-note editor (TagNoteEditor) — the same Tags card, Note card and
-  // Pin to top as the in-session popup (pick-menus-15). Tag editing (rename, colour,
-  // archive, delete, new) happens inside its Tags card; the separate Manage tags popup
-  // that used to open from here is gone.
+  // Session details (session-details-5) — the in-session popup's note card, Tags card and
+  // Pin to top, without the name: the card right above already shows it. Tag editing
+  // (rename, colour, archive, delete, new) happens inside its Tags card.
   const renderOrganizeControls = (s: PastSession) => (
     <div onClick={(e) => e.stopPropagation()}>
-      <TagNoteEditor
+      <SessionDetails
         appliedIds={new Set(s.tags ?? [])}
         onToggleTag={(tagId, next) => toggleTag(s.sessionId, tagId, next)}
         registry={registry}

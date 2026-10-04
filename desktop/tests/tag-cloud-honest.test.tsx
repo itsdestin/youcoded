@@ -15,10 +15,11 @@
  */
 import React from 'react';
 import '@testing-library/jest-dom/vitest';
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, cleanup, screen, act, fireEvent } from '@testing-library/react';
 import { useTagRegistry } from '../src/renderer/hooks/useTagRegistry';
 import { TagCloud } from '../src/renderer/components/tags/TagCloud';
+import { SessionDetails } from '../src/renderer/components/tags/SessionDetails';
 
 const TAG = { id: 't1', label: 'Research', color: 'tag-gray', archived: false, createdAt: '2026-09-01T00:00:00.000Z' };
 
@@ -36,14 +37,20 @@ function stub(list: ReturnType<typeof vi.fn>) {
   return { pushTagsChanged: () => act(() => { changed?.(); }) };
 }
 
+// Both tag editors read the same registry: the close prompt's Tags card (TagCloud) and
+// Session details everywhere else. Each must tell a failed read from an empty one.
+let editor: 'cloud' | 'details' = 'cloud';
 function Harness() {
   const registry = useTagRegistry();
-  return <TagCloud registry={registry} appliedIds={new Set()} onToggle={() => {}} />;
+  return editor === 'cloud'
+    ? <TagCloud registry={registry} appliedIds={new Set()} onToggle={() => {}} />
+    : <SessionDetails registry={registry} appliedIds={new Set()} onToggleTag={() => {}} note="" onNote={() => {}} pin={{ pinned: false, onPin: () => {} }} />;
 }
 
 const tagShown = () => !!screen.queryByText('Research');
 
-describe('Tags card — a read that failed is not "No tags yet"', () => {
+describe.each(['cloud', 'details'] as const)('%s — a read that failed is not "No tags yet"', (which) => {
+  beforeEach(() => { editor = which; });
   afterEach(() => { cleanup(); delete (window as any).claude; });
 
   it('a host that could not read the tags says so, with Retry', async () => {

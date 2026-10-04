@@ -31,7 +31,6 @@ import {
   Toggle,
   fieldClasses, CloseButton } from '../../../components/ui';
 import { TagChip } from '../../../components/tags/TagChip';
-import { StatusPill as StripStatusPill } from '../../../components/SessionStrip';
 // Old rounds drew the retired tag picker; they now run its successor, TagCloud, so the
 // breadcrumb still renders (pick-menus-14, 2026-10-04 retired TagPicker).
 import { TagCloud } from '../../../components/tags/TagCloud';
@@ -52,7 +51,7 @@ import { TagGlyph, NotePageGlyph, PencilGlyph } from '../../../components/tags/g
 import { FilepathToken } from '../../../components/FilepathToken';
 import { UnifiedDiff } from '../../../components/diff/UnifiedDiff';
 import MarkdownContent from '../../../components/MarkdownContent';
-import type { TagColor, TagRecord } from '../../../../shared/tags';
+import type { TagRecord } from '../../../../shared/tags';
 // voice-mic: the REAL composer against a per-pane fake of window.claude.voice.
 import InputBar from '../../../components/InputBar';
 import { ChatProvider, useChatDispatch } from '../../../state/chat-context';
@@ -4562,50 +4561,7 @@ function PresentRefTable() {
   );
 }
 
-// tag-pill-align (session-details-4#SD4-2, 2026-10-04): the real tag pills, the icon moved a
-// pixel either way against the word, so Destin judges "level" on his own 1.5× screen.
-function TagAlignDemo({ shift }: { shift: number }) {
-  const T = (label: string, color: TagColor) => ({ label, color });
-  return (
-    <div className="p-5 space-y-5" style={{ ['--tag-ico-shift' as string]: `${shift}px` }}>
-      <div className="space-y-1">
-        <div className="text-xs text-fg-muted">Session list</div>
-        <div className="rounded-lg bg-panel border border-edge-dim p-3 space-y-2 w-[360px]">
-          {[['fix chat scroll stick', [T('work', 'tag-blue')]], ['gpt-5.6 debug session', [T('bug', 'tag-red'), T('idea', 'tag-green')]]].map(([name, tags]) => (
-            <div key={name as string} className="space-y-1">
-              <div className="flex items-center justify-between"><span className="text-sm text-fg">{name as string}</span><StripStatusPill color="green" isActive={false} /></div>
-              <div className="flex justify-end gap-1">{(tags as { label: string; color: TagColor }[]).map((t) => <TagChip key={t.label} tag={t} />)}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-      <div className="space-y-1">
-        <div className="text-xs text-fg-muted">Session details</div>
-        <div className="rounded-lg bg-inset border border-edge-dim p-3 flex flex-wrap gap-1.5 w-[360px]">
-          <TagChip tag={T('work', 'tag-blue')} onRemove={() => {}} />
-          <TagChip tag={T('bug', 'tag-red')} dim onAdd={() => {}} />
-          <TagChip tag={T('idea', 'tag-green')} dim onAdd={() => {}} />
-          <TagChip tag={T('Follow-Up Needed', 'tag-amber')} />
-          <TagChip tag={T('UI', 'tag-purple')} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
 const ALL_SURFACES: CompareSurface[] = [
-  {
-    id: 'tag-pill-align',
-    label: 'Tag pills — word against icon',
-    question: 'In which pane do the word and the tag icon look level?',
-    frame: 'canvas',
-    paneWidth: { min: 420, max: 460 },
-    rounds: [{ n: 1, basis: 'Real TagChip pills; only the icon moves, one pixel each way.', candidates: [
-      { id: 'now', label: 'As now', note: 'No nudge.', render: () => <TagAlignDemo shift={0} /> },
-      { id: 'word-up', label: 'Word 1 px higher', note: 'Icon moved down a pixel, so the word sits higher against it.', render: () => <TagAlignDemo shift={1} /> },
-      { id: 'word-down', label: 'Word 1 px lower', note: 'Icon moved up a pixel, so the word sits lower against it.', render: () => <TagAlignDemo shift={-1} /> },
-    ] }],
-  },
   {
     id: 'resume-shell',
     label: 'Resume Session — popup header and list edge',

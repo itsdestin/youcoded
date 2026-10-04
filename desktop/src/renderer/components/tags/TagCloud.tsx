@@ -103,7 +103,7 @@ export function TagCloud({ registry, appliedIds, onToggle }: {
 }
 
 /** The ten theme-tuned colours, then a picker for any colour (PM12-2, approved PM13-2). */
-export function ColourRow({ value, onChange, label }: { value: TagColor; onChange: (c: TagColor) => void; label: string }) {
+function ColourRow({ value, onChange, label }: { value: TagColor; onChange: (c: TagColor) => void; label: string }) {
   const custom = value.startsWith('#');
   return (
     <div className="space-y-1.5">

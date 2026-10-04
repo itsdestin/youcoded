@@ -21,7 +21,7 @@ import SessionPreviewPane from '../SessionPreviewPane';
 import SessionRenameDialog from '../SessionRenameDialog';
 import { Button, ErrorState } from '../ui';
 import { TagGlyph } from '../tags/glyphs';
-import { TagNoteEditor } from '../tags/TagNoteEditor';
+import { SessionDetails } from '../tags/SessionDetails';
 import { SessionCardTags, SessionCardMeta, CompleteToggle } from '../SessionCardDetails';
 import { useResumeOptions, ResumeOptionsForm, type ResumeHandler } from '../ResumeOptions';
 import { usePreviewMeta } from '../../hooks/usePreviewMeta';
@@ -134,7 +134,7 @@ export function ConversationPreview({ session, onClose, onResume, defaultModel, 
               onRetry={meta.reload}
             />
           ) : (
-            <TagNoteEditor
+            <SessionDetails
               appliedIds={new Set(meta.tags)}
               onToggleTag={(id, next) => void meta.toggleTag(id, next)}
               registry={registry}

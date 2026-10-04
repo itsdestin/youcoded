@@ -1,0 +1,10 @@
+/* Tag label: a tag's icon and word as one line, trimmed to the word's lowercase letters
+   (or its capitals, when it has any), the icon's middle on the letters' middle.
+   WHY: TagWord in TagChip.tsx. Its own file, beside the component, rather than globals.css. */
+.tag-line { display: inline-block; white-space: nowrap; text-box: trim-both ex alphabetic; }
+.tag-line--caps { text-box: trim-both cap alphabetic; }
+.tag-ico {
+  display: inline-block; flex-shrink: 0; width: var(--tag-ico); height: var(--tag-ico);
+  margin-right: 0.25rem; vertical-align: calc(0.5ex - 0.5 * var(--tag-ico));
+}
+.tag-line--caps .tag-ico { vertical-align: calc(0.5cap - 0.5 * var(--tag-ico)); }

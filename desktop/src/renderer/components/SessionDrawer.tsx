@@ -46,7 +46,7 @@ import { SessionCardTags, SessionCardMeta, CompleteToggle } from './SessionCardD
 import { useResumeOptions, ResumeOptionsForm } from './ResumeOptions';
 import type { PastSession } from '../../shared/types';
 import { triggerTip } from './guide/tips';
-import { TagNoteEditor } from './tags/TagNoteEditor';
+import { SessionDetails } from './tags/SessionDetails';
 import { ArtifactThumbnail } from './ArtifactThumbnail';
 import { useScrollFade } from '../hooks/useScrollFade';
 import './ui/Dialog.css';
@@ -1080,9 +1080,9 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                 <TagGlyph className="w-4 h-4" />
               </button>
               {previewSheetOpen && (
-                // layer-surface (panel) hosting TagNoteEditor's own bg-inset
+                // layer-surface (panel) hosting SessionDetails' own bg-inset
                 // card — the same nesting CloseSessionPrompt's OverlayPanel
-                // uses, and TagNoteEditor already lifts its OWN fields to
+                // uses, and SessionDetails already lifts its OWN fields to
                 // bg-well against that bg-inset card, so no fieldClassName
                 // override is needed here (unlike the Resume Browser, whose
                 // sheet drops the tags and note straight onto its
@@ -1103,7 +1103,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                       onRetry={previewMeta.reload}
                     />
                   ) : (
-                    <TagNoteEditor
+                    <SessionDetails
                       appliedIds={new Set(previewMeta.tags)}
                       onToggleTag={previewMeta.toggleTag}
                       registry={previewTagRegistry}
