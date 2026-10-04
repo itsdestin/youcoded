@@ -26,7 +26,7 @@
 
 export const HIDDEN_RATE = 512 * 1024;      // characters per second, sustained, while hidden
 export const HIDDEN_BURST = 1024 * 1024;    // characters that pass instantly after a quiet spell
-export const HIDDEN_TICK_MS = 50;           // how often a backlog is topped up
+const HIDDEN_TICK_MS = 50;           // how often a backlog is topped up
 // Safety valve: the brake upstream already bounds the backlog to ~1 M, so this only trips if that
 // ever stops being true (a non-owner window that is never braked). Past it, write everything through
 // rather than let a queue grow without bound.

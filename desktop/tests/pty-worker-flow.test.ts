@@ -242,11 +242,12 @@ describe.skipIf(!canRun)('pty-worker flow control over a real PTY', () => {
   }, 90000);
 
   it('a program that exits while the brake is on still delivers its last lines (no acknowledgements at all)', async () => {
-    // ~94 KB in all: more than HIGH (so the brake goes on) but small enough that the program can finish
-    // writing into the kernel's buffer and EXIT while the worker is still paused with bytes unread.
-    // (A larger flood could not exit: it would be blocked in write(), which is the brake working.)
-    const lines = 2000;
-    const r = startReal(lines, { YOUCODED_PTY_FLOW_HIGH: '30000', YOUCODED_PTY_FLOW_LOW: '10000', YOUCODED_PTY_FLOW_STALL_MS: '600000' });
+    // ~23 KB in all: more than HIGH (so the brake goes on) but small enough that whatever the worker has
+    // not read yet fits in the kernel's pty buffer, so the program can finish writing and EXIT while the
+    // worker is still paused. (A larger flood could not exit: it would be blocked in write(), which is the
+    // brake working. The first version used ~94 KB and hung under machine load: the unread part no longer fit.)
+    const lines = 500;
+    const r = startReal(lines, { YOUCODED_PTY_FLOW_HIGH: '6000', YOUCODED_PTY_FLOW_LOW: '2000', YOUCODED_PTY_FLOW_STALL_MS: '600000' });
     kids.push(r.child);
     r.state.auto = false;
     expect(await r.until(() => r.state.exited, 30000)).toBe(true);
