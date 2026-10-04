@@ -28,8 +28,10 @@ export function withAnnouncedName<T extends { id: string; name?: string }>(prev:
 
 /**
  * After a remote reconnect, ask the computer which conversations still exist and drop the pills for the rest. WHY a hook here and not inline in App
- * (sync-fix3): App.tsx is held to a line budget, and this carries its own reasoning. The reply and any later `session:created` arrive in order on the one
- * connection, so a conversation started after the list was built cannot be dropped by it. A failed ask changes nothing: the next reconnect asks again.
+ * (sync-fix3): App.tsx is held to a line budget, and this carries its own reasoning.
+ * WHY the ids are taken when the reconnect FIRES, and only those can be dropped (review): the computer builds its list and then awaits a read of its
+ * provider registry before it answers, so a `session:created` pushed in that gap reaches this screen BEFORE the reply and is not in it. Reading the
+ * pills when the reply arrives would drop a conversation that is alive. A failed ask changes nothing: the next reconnect asks again.
  */
 export function useDropEndedSessionsOnReconnect(
   sessionsRef: { current: ReadonlyArray<{ id: string }> },
@@ -38,6 +40,7 @@ export function useDropEndedSessionsOnReconnect(
 ): void {
   useOnRemoteReconnect(() => {
     const keep = (id: string) => String(id).startsWith('pending-handoff:') || movedRef.current.has(id);
-    void (window.claude.session.list() as Promise<unknown>).then((list) => { for (const id of endedSessionIds(sessionsRef.current, list, keep)) remove(id); }).catch(() => {});
+    const heldThen = sessionsRef.current.map((s) => ({ id: s.id }));
+    void (window.claude.session.list() as Promise<unknown>).then((list) => { for (const id of endedSessionIds(heldThen, list, keep)) remove(id); }).catch(() => {});
   });
 }
