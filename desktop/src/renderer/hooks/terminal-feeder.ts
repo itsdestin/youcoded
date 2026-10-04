@@ -33,6 +33,8 @@
 // This only applies where the brake actually exists: the desktop's own window. A remote browser / the
 // phone app has no brake (and a hidden queue there would just grow), so it writes straight through.
 
+import { trimOldest } from '../../shared/pty-trim';
+
 export const HIDDEN_RATE = 512 * 1024;      // characters per second, sustained, while hidden
 export const HIDDEN_BURST = 1024 * 1024;    // characters that pass instantly after a quiet spell
 const HIDDEN_TICK_MS = 50;           // how often a backlog is topped up
@@ -42,6 +44,9 @@ const HIDDEN_TICK_MS = 50;           // how often a backlog is topped up
 export const HIDDEN_QUEUE_MAX = 4 * 1024 * 1024;
 // Window hidden/minimised: newest characters kept un-drawn (~50-100k lines, well past xterm's scrollback).
 export const DOC_HIDDEN_CAP = 4 * 1024 * 1024;
+// Most text handed to xterm and not yet parsed while we throttle: xterm's own parse loop is timer-driven (slow in a
+// hidden window), and it discards input past ~50 M pending, so never feed it more than this ahead of its callbacks.
+const XTERM_PENDING_MAX = 2 * 1024 * 1024;
 
 export interface TerminalFeederOptions {
   /** Hand text to the terminal; call `done` once it has been PARSED (xterm's write callback). */
@@ -99,17 +104,20 @@ export function createTerminalFeeder(opts: TerminalFeederOptions): TerminalFeede
   let lastRefill = now();
   let timer: unknown = null;
   let disposed = false;
-  let dropped = false;        // text was cut from the queue: reset colours before the next write
+  let inXterm = 0;            // written to xterm, callback not yet fired (paid or not): xterm's own backlog
   let docWasHidden = false;
   let paidEpoch = 0;          // bumped by payAll(): writes issued earlier were already confirmed upstream
 
   const writeNow = (data: string, paid: boolean) => {
     if (data.length === 0) return;
-    if (dropped) { dropped = false; data = '\x1b[0m' + data; }
     const n = data.length;
     const epoch = paidEpoch;
     if (!paid) outstanding += n;
+    inXterm += n;
     opts.write(data, () => {
+      inXterm = Math.max(0, inXterm - n);
+      // xterm caught up: more of a throttled backlog may go in (its callbacks, unlike our timers, are not ours to rely on).
+      if (!disposed && queue.length && (docHidden() || opts.isHidden())) pump();
       // After dispose() or payAll() everything owed was already released in one go; do not release it twice.
       if (disposed || paid || epoch !== paidEpoch) return;
       outstanding -= n;
@@ -140,12 +148,13 @@ export function createTerminalFeeder(opts: TerminalFeederOptions): TerminalFeede
     if (owed > 0) opts.ack(owed);
   };
 
-  const drainSome = () => {
-    timer = null;
+  // Feed as much of the backlog as the allowance (and xterm's own backlog) permits. Runs from push() and from xterm's
+  // callbacks as well as from the timer: a hidden window's timers can be stretched to once a minute, IPC events are not.
+  const pump = () => {
     if (disposed) return;
     if (!opts.isHidden() && !docHidden()) { drainAll(); return; }
     refill();
-    while (queue.length && tokens >= 1) {
+    while (queue.length && tokens >= 1 && inXterm < XTERM_PENDING_MAX) {
       const it = queue[0];
       const head = it.s;
       let take = Math.min(head.length, Math.floor(tokens));
@@ -162,8 +171,9 @@ export function createTerminalFeeder(opts: TerminalFeederOptions): TerminalFeede
       tokens -= take;
       writeNow(piece, it.paid);
     }
-    if (queue.length) timer = setTimer(drainSome, HIDDEN_TICK_MS);
+    if (queue.length && timer === null) timer = setTimer(drainSome, HIDDEN_TICK_MS);
   };
+  const drainSome = () => { timer = null; pump(); };
 
   const enqueue = (data: string, paid: boolean) => {
     queue.push({ s: data, paid });
@@ -189,15 +199,13 @@ export function createTerminalFeeder(opts: TerminalFeederOptions): TerminalFeede
         // Window out of sight: confirm on receipt (see the header), keep only the newest DOC_HIDDEN_CAP.
         if (!docWasHidden) { docWasHidden = true; payAll(); }
         opts.ack(data.length);
-        refill();
-        if (queue.length === 0 && tokens >= data.length) { tokens -= data.length; writeNow(data, true); return; }
         enqueue(data, true);
-        while (queuedChars > DOC_HIDDEN_CAP && queue.length > 1) {
-          const cut = queue.shift()!;
-          queuedChars -= cut.s.length;
-          if (!cut.paid) { queuedUnpaid -= cut.s.length; opts.ack(cut.s.length); }
-          dropped = true;
+        if (queuedChars > DOC_HIDDEN_CAP) {
+          // Keep the newest: cut at a line start outside any escape sequence and restore the terminal's sticky modes.
+          const r = trimOldest(queue, DOC_HIDDEN_CAP, Math.floor(DOC_HIDDEN_CAP * 0.75));
+          queuedChars += r.added - r.removed;
         }
+        pump();
         return;
       }
       if (docWasHidden) { docWasHidden = false; }
@@ -208,14 +216,9 @@ export function createTerminalFeeder(opts: TerminalFeederOptions): TerminalFeede
         writeNow(data, false);
         return;
       }
-      refill();
-      if (queue.length === 0 && tokens >= data.length) {
-        tokens -= data.length;
-        writeNow(data, false);
-        return;
-      }
       enqueue(data, false);
-      if (queuedChars > HIDDEN_QUEUE_MAX) drainAll();
+      if (queuedChars > HIDDEN_QUEUE_MAX) { drainAll(); return; }
+      pump();
     },
     docVisibilityChanged: onDocChange,
     wake() {

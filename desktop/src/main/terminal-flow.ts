@@ -51,12 +51,21 @@ export class TerminalFlow {
   private desired(sid: string, f: Flow): number {
     const targets = new Set(this.d.targets(sid));
     const t = this.d.now();
-    let max = 0;
+    const live: Array<[number, Consumer]> = [];
     for (const [wid, c] of f.consumers) {
-      if (!targets.has(wid) || !this.d.alive(wid)) continue;
-      if (c.owed > 0 && !this.d.isOwner(sid, wid) && t - c.lastAckAt > NON_OWNER_QUIET_MS) continue;
-      if (c.owed > max) max = c.owed;
+      // A consumer that is not receiving the session right now owes nothing: what it was owed went elsewhere,
+      // and it must not bring a stale count back if it is routed to again.
+      if (!targets.has(wid) || !this.d.alive(wid)) { c.owed = 0; continue; }
+      live.push([wid, c]);
     }
+    // Who may be ignored for going quiet: a non-owner that owes and has not answered for NON_OWNER_QUIET_MS —
+    // but never the only consumer (a sole target is owner-equivalent: with no owner, or a main-window fallback,
+    // a long task must not take the brake off the very flood it is handling), and at least one is always kept.
+    const quiet = (wid: number, c: Consumer) => c.owed > 0 && !this.d.isOwner(sid, wid) && t - c.lastAckAt > NON_OWNER_QUIET_MS;
+    let keep = live.filter(([w, c]) => !quiet(w, c));
+    if (keep.length === 0 && live.length > 0) keep = [live.reduce((a, b) => (b[1].lastAckAt > a[1].lastAckAt ? b : a))];
+    let max = 0;
+    for (const [, c] of keep) if (c.owed > max) max = c.owed;
     return max;
   }
 
@@ -125,6 +134,8 @@ export class TerminalFlow {
   recompute(): void { for (const [sid, f] of this.flows) this.settle(sid, f); }
 
   end(sid: string): void { this.flows.delete(sid); }
+  /** Sessions currently tracked (tests: nothing must linger for a finished session). */
+  tracked(): number { return this.flows.size; }
 }
 
 /**

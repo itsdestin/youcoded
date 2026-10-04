@@ -41,6 +41,7 @@ function rig(opts: { hidden?: boolean; throttleHidden?: boolean } = {}) {
       t = end;
     },
     timerCount: () => timers.length,
+    advanceClockOnly: (ms: number) => { t += ms; },
   };
 }
 const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
@@ -77,7 +78,7 @@ describe('terminal feeder', () => {
     const fedInOneSecond = after - before;
     expect(fedInOneSecond).toBeGreaterThan(HIDDEN_RATE * 0.8);
     expect(fedInOneSecond).toBeLessThan(HIDDEN_RATE * 1.3);
-    r.advance(60_000);
+    for (let i = 0; i < 1200; i++) { r.advance(50); r.parseAll(); }   // xterm keeps confirming as it parses
     expect(r.written.join('')).toBe(big);        // everything, exactly, eventually
     expect(r.feeder.queued()).toBe(0);
     r.parseAll();
@@ -162,12 +163,12 @@ describe('terminal feeder', () => {
       const r = rig();
       r.setDocHidden(true);
       r.feeder.push('s'.repeat(HIDDEN_BURST));           // spends the burst allowance
-      const chunk = 'c'.repeat(512 * 1024);
+      const chunk = ('c'.repeat(1023) + '\n').repeat(512);   // 512 K of whole lines
       const pushes = Math.ceil((DOC_HIDDEN_CAP * 2) / chunk.length);
       for (let i = 0; i < pushes; i++) r.feeder.push(chunk);
       expect(r.feeder.queued()).toBeLessThanOrEqual(DOC_HIDDEN_CAP);
       expect(sum(r.acks)).toBe(HIDDEN_BURST + pushes * chunk.length);   // every character confirmed exactly once on receipt
-      r.advance(60_000);
+      for (let i = 0; i < 2000; i++) { r.advance(50); r.parseAll(); }
       expect(r.written.some((w) => w.startsWith('\x1b[0m'))).toBe(true);
       expect(r.feeder.queued()).toBe(0);
     });
@@ -189,6 +190,36 @@ describe('terminal feeder', () => {
       expect(r.acks).toEqual([]);                        // acks come only from xterm's callbacks
       r.parseAll();
       expect(sum(r.acks)).toBe(1000);
+    });
+  });
+
+  // Chromium stretches chained timers in a long-hidden window to about once a minute; IPC events are not
+  // stretched. The backlog must drain from push() alone, and xterm must never be fed far ahead of its own
+  // (equally throttled) parsing.
+  describe('hidden window with timers that never fire', () => {
+    it('drains the backlog from pushes alone at about the allowed rate (the queue does not grow past the cap)', () => {
+      const r = rig();
+      r.setDocHidden(true);
+      const chunk = ('l'.repeat(1023) + '\n').repeat(64);       // 64 K of lines, arriving at ~1 MB/s for 20 simulated seconds
+      let maxQueued = 0;
+      for (let ms = 0; ms < 20_000; ms += 64) {
+        r.advanceClockOnly(64);                                  // time passes; NO timer callback ever runs
+        r.feeder.push(chunk);
+        r.parseAll();
+        maxQueued = Math.max(maxQueued, r.feeder.queued());
+      }
+      const written = sum(r.written.map((w) => w.length));
+      expect(written).toBeGreaterThan(HIDDEN_BURST + 15 * HIDDEN_RATE * 0.8);   // it kept draining by itself
+      expect(maxQueued).toBeLessThanOrEqual(DOC_HIDDEN_CAP);
+    });
+
+    it('does not hand xterm more than ~2 M un-parsed characters, however much arrives', () => {
+      const r = rig();
+      r.setDocHidden(true);
+      const chunk = ('m'.repeat(1023) + '\n').repeat(256);       // 256 K
+      for (let i = 0; i < 40; i++) { r.advanceClockOnly(2000); r.feeder.push(chunk); }   // plenty of allowance, xterm never answers
+      expect(sum(r.written.map((w) => w.length))).toBeLessThanOrEqual(2 * 1024 * 1024 + 256 * 1024 + 200);
+      expect(r.feeder.queued()).toBeLessThanOrEqual(DOC_HIDDEN_CAP);
     });
   });
 });

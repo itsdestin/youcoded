@@ -139,16 +139,31 @@ describe('terminal flow wiring: nothing can brake a session no desktop terminal 
     expect(t.w2.sent).toEqual([]);                         // and nothing was sent to a window with no terminal
   });
 
-  it('what waits for a terminal to mount is capped to the newest ~4 M characters, and arrives in order', () => {
+  it('what waits for a terminal to mount is capped to the newest ~4 M characters, cut at a line start, in order', () => {
     const t = world();
     t.registry.assignSession(SID, 2);
-    for (let i = 0; i < 6; i++) t.out(String(i).repeat(1024 * 1024));    // 6 M in 1 M chunks
+    const line = (n: number) => (String(n).repeat(1023) + '\n');
+    for (let i = 0; i < 6; i++) t.out(line(i).repeat(1024));            // 6 M in 1 M chunks, every line ends in \n
     t.ready(t.w2);
     const got = t.w2.sent.map((s: any) => s.data);
     const chars = got.reduce((n: number, d: string) => n + d.length, 0);
     expect(chars).toBeLessThanOrEqual(4 * 1024 * 1024);
-    expect(got[got.length - 1][0]).toBe('5');             // the newest text is what is kept
-    expect(got[0][0] >= '2').toBe(true);                   // the oldest was dropped
+    expect(got[got.length - 1][0]).toBe('5');                           // the newest text is what is kept
+    const first = got[0].replace(/^\x1b\[0m/, '');
+    expect(first[0] >= '2').toBe(true);                                 // the oldest was dropped
+    expect(first.startsWith(first[0].repeat(1023) + '\n')).toBe(true);   // and the kept text starts at a whole line
+  });
+
+  it('the pre-mount cut leaves no lone oversized chunk and keeps the terminal modes the dropped text set', () => {
+    const t = world();
+    t.registry.assignSession(SID, 2);
+    t.out('\x1b[?2004h\x1b[?25l' + 'row\n'.repeat(1_500_000));          // ONE 6 M chunk
+    t.out('last line\n');
+    t.ready(t.w2);
+    const got = t.w2.sent.map((s: any) => s.data).join('');
+    expect(got.length).toBeLessThanOrEqual(4 * 1024 * 1024);
+    expect(got.startsWith('\x1b[0m\x1b[?2004h\x1b[?25l')).toBe(true);   // paste mode and cursor state survived the cut
+    expect(got.endsWith('last line\n')).toBe(true);
   });
 
   it('a mounted terminal brakes the program until it confirms, then releases exactly what it confirmed', () => {
@@ -189,7 +204,7 @@ describe('terminal flow wiring: nothing can brake a session no desktop terminal 
   });
 
   it('a second window that stops answering cannot hold the owner hostage (dropped after 5 s of silence)', () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['Date'] });
     try {
       const t = world();
       t.registry.assignSession(SID, 2); t.registry.subscribe(SID, 3);
@@ -197,7 +212,7 @@ describe('terminal flow wiring: nothing can brake a session no desktop terminal 
       t.out('x'.repeat(1000));
       t.ack(t.w2, 1000);
       expect(t.released()).toBe(0);                        // waiting for the subscriber too
-      vi.advanceTimersByTime(5100);
+      vi.setSystemTime(Date.now() + 5100);
       t.out('y'.repeat(10)); t.ack(t.w2, 10);              // the owner keeps going; the quiet subscriber no longer counts
       expect(t.released()).toBe(1010);
     } finally { vi.useRealTimers(); }
@@ -254,5 +269,100 @@ describe('terminal flow wiring: nothing can brake a session no desktop terminal 
     expect(t.released()).toBe(1050);
     t.ready(t.w3);
     expect(t.w3.sent.map((s: any) => s.data)).toEqual(['y'.repeat(50)]);
+  });
+
+  it('a terminal that says ready BEFORE it is made the owner is not lost: output buffers, then flows the moment routing includes it', () => {
+    const t = world();
+    t.ready(t.w2);                                         // window 2 mounted its terminal; main has not assigned it yet
+    t.out('early');                                        // goes to the main-window fallback and is held for ... window 1's terminal
+    t.registry.assignSession(SID, 2);                      // ownership lands a moment later
+    expect(t.w2.sent.map((s: any) => s.data)).toContain('early');
+    t.out('later');
+    expect(t.w2.sent.map((s: any) => s.data)).toContain('later');
+    expect(t.released()).toBe(5);                          // 'early' was released while nobody could draw it; 'later' is owed
+    t.ack(t.w2, 10);                                       // it owes the replayed 'early' (5) and 'later' (5)
+    expect(t.released()).toBe(10);
+  });
+
+  it('a buddy terminal that says ready BEFORE its subscription lands is not lost', () => {
+    const t = world();
+    t.ready(t.w3);
+    t.out('hello');
+    t.registry.subscribe(SID, 3);
+    expect(t.w3.sent.map((s: any) => s.data)).toEqual(['hello']);
+    expect(t.released()).toBe(5);                          // the pre-routing 'hello' was released at arrival
+    t.out('x'.repeat(100));
+    t.ack(t.w3, 40);                                       // owes 105 (5 replayed + 100): 65 left, so 35 of the 100 are free
+    expect(t.released()).toBe(40);
+    t.ack(t.w3, 65);
+    expect(t.released()).toBe(105);
+  });
+
+  it('a window that said ready and then vanished before routing never leaves a stuck "waiting" entry that blocks the next', () => {
+    const t = world();
+    t.ready(t.w3); t.w3.dead = true;
+    t.registry.assignSession(SID, 2);                      // reconcile drops the dead waiter
+    t.ready(t.w2);
+    t.out('ok');
+    expect(t.w2.sent.map((s: any) => s.data)).toEqual(['ok']);
+  });
+
+  it('a session sole consumer (no owner) is never dropped for a 5 s ack gap: the brake stays on', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const t = world();
+      t.registry.subscribe(SID, 3); t.ready(t.w3);          // buddy-only: no owner
+      t.out('x'.repeat(1000));
+      vi.setSystemTime(Date.now() + 30_000);                      // a long task: no ack for 30 s
+      t.out('y'.repeat(10));
+      expect(t.released()).toBe(0);                        // still braked
+      t.ack(t.w3, 1010);
+      expect(t.released()).toBe(1010);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('a dropped quiet second window counts again as soon as it answers (rejoins on its next ack)', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const t = world();
+      t.registry.assignSession(SID, 2); t.registry.subscribe(SID, 3);
+      t.ready(t.w2); t.ready(t.w3);
+      t.out('x'.repeat(1000));
+      t.ack(t.w2, 1000);
+      vi.setSystemTime(Date.now() + 5100);
+      t.out('y'.repeat(10)); t.ack(t.w2, 10);              // w3 is quiet and ignored
+      expect(t.released()).toBe(1010);
+      t.out('z'.repeat(100));                              // w3 now owes 1110 and answers a little
+      t.ack(t.w3, 1000);                                   // its ack revives it: it counts again with 110 still owed
+      t.ack(t.w2, 100);
+      expect(t.released()).toBe(1010);                     // held by w3's remaining 110 of z... not released yet
+      t.ack(t.w3, 110);
+      expect(t.released()).toBe(1110);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('a window that leaves the routing and returns without remounting does not bring a stale debt back', () => {
+    const t = world();
+    t.registry.assignSession(SID, 2); t.registry.subscribe(SID, 3);
+    t.ready(t.w2); t.ready(t.w3);
+    t.out('x'.repeat(1000));
+    t.ack(t.w2, 1000);
+    expect(t.released()).toBe(0);                          // w3 owes 1000
+    t.registry.unsubscribe(SID, 3);                        // w3 leaves: nothing waits for it
+    expect(t.released()).toBe(1000);
+    t.registry.subscribe(SID, 3);                          // and returns: its old 1000 must not be owed again
+    t.out('y'.repeat(10));
+    t.ack(t.w2, 10); t.ack(t.w3, 10);
+    expect(t.released()).toBe(1010);
+  });
+
+  it('a late ready from a window of a finished session does not recreate its books (no per-dead-session leak)', () => {
+    const t = world();
+    t.registry.assignSession(SID, 2); t.ready(t.w2);
+    t.out('x');
+    t.sm.emit('session-exit', SID, 0);
+    t.ready(t.w2);                                         // the closing window's terminal reports ready after the exit
+    t.out('ghost');                                        // and nothing is delivered or tracked for the dead session
+    expect(t.w2.sent.filter((s: any) => s.channel.startsWith('pty:output')).map((s: any) => s.data)).toEqual(['x']);
   });
 });
