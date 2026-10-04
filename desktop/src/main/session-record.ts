@@ -190,6 +190,8 @@ interface Rec {
    *  on a screen that missed the "free" event is cleared. */
   inputBlock: InputBlock | null;
   inputBlockSeen: boolean;
+  /** A native model reached 'loaded' at some point. WHY (sync-fix3 review): the screen's Reload button needs it, and a screen that opens late never saw that state. */
+  modelEverLoaded: boolean;
   facts: Omit<SessionFacts, 'awaitingCount' | 'queued'>;
   /** Highest host timestamp a progress/terminal event has fenced (mirrors the reducer's usageProgressAt). */
   progressAt: number;
@@ -306,7 +308,7 @@ export class SessionRecords {
       epoch: randomBytes(8).toString('hex'),
       headSeq: 0, ring: [], ringBytes: 0, tail: [], tailBytes: 0, pty: { chunks: [], length: 0, base: 0 }, oversize: 0,
       asks: new Map(), passwordAsks: new Set(), prompts: new Map(), promptAt: new Map(), terminalMode: null, compacting: null,
-      runningTools: new Set(), started: false, stuck: false, inputBlock: null, inputBlockSeen: false,
+      runningTools: new Set(), started: false, stuck: false, inputBlock: null, inputBlockSeen: false, modelEverLoaded: false,
       facts: {
         working: false, attention: 'ok', reportedAttention: null, hasHistory: false,
         lastActivityAt: this.now(), permissionMode: null, model: null, modelState: null,
@@ -635,7 +637,13 @@ export class SessionRecords {
     if (rec.terminalMode) out.push({ type: 'session:permission-mode', payload: { sessionId, mode: rec.terminalMode } });
     // A native session's local-model state (sync-fix3): the host pushes it only when it CHANGES, so a screen that opens later (a phone, a second
     // window, a reload) would never see a sleeping or loading model and so no Reload / loading bar. Same payload shape as the live push.
-    if (rec.facts.modelState) out.push({ type: 'native:model-state', payload: { sessionId, ...rec.facts.modelState } });
+    // A model that was loaded and has since gone to sleep must still read as "was loaded" on the late screen: that is what turns the bar from a permanent
+    // "loading" into the Reload button. The screen latches it the first time it sees 'loaded', so a 'loaded' push comes first (sync-fix3 review).
+    if (rec.facts.modelState) {
+      const ms = rec.facts.modelState;
+      if (rec.modelEverLoaded && ms.state !== 'loaded') out.push({ type: 'native:model-state', payload: { sessionId, ...ms, state: 'loaded', loadedBytes: null } });
+      out.push({ type: 'native:model-state', payload: { sessionId, ...ms } });
+    }
     for (const p of rec.prompts.values()) out.push({ type: 'session:live', payload: p });
     if (rec.compacting) out.push({ type: 'session:live', payload: { sessionId, kind: 'compact-start', id: rec.compacting.id } });
     // A screen that opens while the computer thinks the turn may be stuck is told so (a phone opened after the banner would have shown none).
@@ -732,6 +740,7 @@ export class SessionRecords {
         state: String(p.state ?? ''), modelId: typeof p.modelId === 'string' ? p.modelId : null,
         sizeBytes: typeof p.sizeBytes === 'number' ? p.sizeBytes : null, loadedBytes: typeof p.loadedBytes === 'number' ? p.loadedBytes : null,
       };
+      if (f.modelState.state === 'loaded') rec.modelEverLoaded = true;
       return;
     }
     if (type === 'hook:event') { rec.started = true; this.foldHook(rec, asObject(payload)); return; }
