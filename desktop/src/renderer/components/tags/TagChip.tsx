@@ -15,6 +15,23 @@ import { tagColorCss } from '../../../shared/tags';
 // picked) are one value for every theme; a quarter of the theme's text colour lifts them
 // on dark themes and deepens them on pale ones.
 
+/** A tag's × / + as a small round button (session-details-1#SD1-1: "make the plus/x
+ *  buttons a bit more prominent/button-y"): a disc in the border colour, stronger on hover. */
+export function ChipAction({ kind, label, onClick, size = 'sm' }: { kind: 'remove' | 'add'; label: string; onClick: () => void; size?: 'sm' | 'md' }) {
+  return (
+    <button type="button" aria-label={`${kind === 'remove' ? 'Remove' : 'Add'} ${label}`}
+      onClick={(e) => { e.stopPropagation(); onClick(); }}
+      className={`${size === 'md' ? 'w-4 h-4' : 'w-3.5 h-3.5'} -mr-0.5 shrink-0 translate-y-px inline-flex items-center justify-center rounded-full text-fg-2 hover:text-fg bg-edge-dim hover:bg-edge transition-colors`}>
+      <svg viewBox="0 0 12 12" className="w-2 h-2" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" aria-hidden>
+        {kind === 'remove' ? <path d="M3 3l6 6M9 3l-6 6" /> : <path d="M6 2.5v7M2.5 6h7" />}
+      </svg>
+    </button>
+  );
+}
+
+// WHY translate-y-px on every tag icon: in the app's monospace font the words sit a pixel
+// below the line's middle, so a centred icon read as riding high (SD1-1: "fix the
+// text/icon alignment within the tag chips").
 export const mix = (color: string) => `color-mix(in srgb, ${tagColorCss(color)} 75%, var(--fg))`;
 
 export function TagChip({ tag, onRemove, onAdd, dim = false, archivedLook = false, className = '' }: {
@@ -30,24 +47,21 @@ export function TagChip({ tag, onRemove, onAdd, dim = false, archivedLook = fals
   className?: string;
 }) {
   const c = mix(tag.color);
-  const action = onRemove ? (
-    <button onClick={(e) => { e.stopPropagation(); onRemove(); }} className="opacity-60 hover:opacity-100 leading-none" aria-label={`Remove ${tag.label}`}>×</button>
-  ) : onAdd ? (
-    <button onClick={(e) => { e.stopPropagation(); onAdd(); }} className="opacity-60 hover:opacity-100 leading-none" aria-label={`Add ${tag.label}`}>+</button>
-  ) : null;
+  const action = onRemove ? <ChipAction kind="remove" label={tag.label} onClick={onRemove} />
+    : onAdd ? <ChipAction kind="add" label={tag.label} onClick={onAdd} /> : null;
 
   if (archivedLook) {
     return (
-      <span className={`shrink-0 inline-flex items-center gap-1 pl-1 pr-1.5 py-[1px] rounded-full border border-edge-dim bg-inset text-4xs leading-none text-fg-muted opacity-70 ${className}`}>
-        <span className="flex shrink-0 text-fg-faint"><FilledTag className="w-3 h-3" /></span>
+      <span className={`shrink-0 inline-flex items-center gap-1 pl-1 pr-1.5 py-0.25 rounded-full border border-edge-dim bg-inset text-4xs leading-none text-fg-muted opacity-70 ${className}`}>
+        <span className="flex shrink-0 translate-y-px text-fg-faint"><FilledTag className="w-3 h-3" /></span>
         {tag.label}{action}
       </span>
     );
   }
   return (
-    <span className={`shrink-0 inline-flex items-center gap-1 pl-1 pr-1.5 py-[1px] rounded-full border text-4xs leading-none ${dim ? 'text-fg-muted border-dashed' : 'text-fg-2'} ${className}`}
+    <span className={`shrink-0 inline-flex items-center gap-1 pl-1 pr-1.5 py-0.25 rounded-full border text-4xs leading-none ${dim ? 'text-fg-muted border-dashed' : 'text-fg-2'} ${className}`}
       style={{ backgroundColor: dim ? 'transparent' : `color-mix(in srgb, ${c} 15%, transparent)`, borderColor: `color-mix(in srgb, ${c} ${dim ? 40 : 30}%, transparent)` }}>
-      <span className="flex shrink-0" style={{ color: c }}><FilledTag className="w-3 h-3" /></span>
+      <span className="flex shrink-0 translate-y-px" style={{ color: c }}><FilledTag className="w-3 h-3" /></span>
       {tag.label}{action}
     </span>
   );
@@ -103,7 +117,7 @@ export function TagStack({ tags }: { tags: Pick<TagRecord, 'label' | 'color'>[] 
           {tags.map((t, i) => <TagChip key={i} tag={t} />)}
         </span>
       ) : (
-        <span className="inline-flex items-center px-1 py-[1px] rounded-full border border-edge-dim bg-inset">
+        <span className="inline-flex items-center px-1 py-0.25 rounded-full border border-edge-dim bg-inset">
           <TagIconStack tags={tags} />
         </span>
       )}

@@ -1,6 +1,6 @@
 // src/renderer/components/tags/SessionDetails.tsx
 //
-// TRIAL (tags-final#TF-1, Destin 2026-10-04): the Tags & note popup becomes a "Session
+// TRIAL (tags-final#TF-1; round 2 session-details-1: no "Session" label, note in quotes and italics, rounder ×/+, icons aligned, Destin 2026-10-04): the Tags & note popup becomes a "Session
 // details" page. "the first card [should] mirror the project card title/description, with
 // the session name first and then ... the current note [not] in quote styling or the 'add
 // note' button ... change how the applied/not applied/archived styles look, ... make
@@ -15,7 +15,7 @@ import type { TagRecord } from '../../../shared/tags';
 import { DEFAULT_TAG_COLOR } from '../../../shared/tags';
 import type { TagRegistryApi } from '../../hooks/useTagRegistry';
 import { Button, CARD_LEVEL_1, CARD_LEVEL_2, ErrorState, InputGroup, SectionLabel, SettingRow, Textarea, Toggle } from '../ui';
-import { FilledTag, mix } from './TagChip';
+import { ChipAction, FilledTag, mix } from './TagChip';
 import { NewTagFields, TagFields } from './TagCloud';
 import { PinIcon } from './PinIcon';
 
@@ -55,7 +55,6 @@ function HeaderCard({ name, onRename, note, onNote }: { name: string; onRename?:
   const commit = () => { setEditing(false); if (draft.trim() !== note.trim()) onNote(draft.trim()); };
   return (
     <div className={`${CARD_LEVEL_1} p-4`}>
-      <SectionLabel className="mb-1.5">Session</SectionLabel>
       {/* The Resume card's title control: dotted underline and a pencil, click to rename. */}
       <div><button type="button" onClick={onRename} aria-label={`Rename ${name}`}
         className="group inline-flex max-w-full items-start gap-1.5 -ml-1 px-1 py-0.5 rounded-md text-left hover:bg-inset transition-colors">
@@ -67,14 +66,14 @@ function HeaderCard({ name, onRename, note, onNote }: { name: string; onRename?:
       {editing ? (
         <Textarea size="sm" ref={fit} rows={1} autoFocus value={draft} aria-label="Note"
           placeholder="A note for later — shows under All sessions"
-          className="mt-1.5 -ml-2.5 w-full text-sm overflow-hidden"
+          className="mt-1.5 -ml-2.5 w-full text-sm italic overflow-hidden"
           onChange={(e) => { setDraft(e.target.value); fit(e.currentTarget); }}
           onKeyDown={(e) => { if (e.key === 'Escape') { setDraft(note); setEditing(false); } }}
           onBlur={commit} />
       ) : note ? (
         <button type="button" onClick={() => { setDraft(note); setEditing(true); }} title="Edit note"
           className="mt-1.5 block w-full text-left rounded-lg border border-transparent -ml-2.5 px-2.5 py-1.5 hover:bg-inset transition-colors">
-          <span className="text-sm text-fg-dim whitespace-pre-wrap break-words">{note}</span>
+          <span className="text-sm italic text-fg-dim whitespace-pre-wrap break-words">“{note}”</span>
         </button>
       ) : (
         // Its own line under the name (a bare inline button sat beside it).
@@ -92,7 +91,7 @@ function HeaderCard({ name, onRename, note, onNote }: { name: string; onRename?:
 // On this session: larger, a stronger tint and a full-colour edge, words in the main text
 // colour. Not on it: no fill, a plain grey edge, the colour only in the icon. Archived: no
 // edge at all, a sunk background and faint words (unlike "+ New tag", which is dashed).
-const ICON = 'flex shrink-0';
+const ICON = 'flex shrink-0 translate-y-px';
 function AppliedPill({ t, onEdit, onRemove, picked }: { t: TagRecord; onEdit: () => void; onRemove: () => void; picked: boolean }) {
   const c = mix(t.color);
   return (
@@ -101,7 +100,7 @@ function AppliedPill({ t, onEdit, onRemove, picked }: { t: TagRecord; onEdit: ()
       style={{ backgroundColor: `color-mix(in srgb, ${c} 25%, transparent)`, borderColor: `color-mix(in srgb, ${c} 60%, transparent)` }}>
       <span className={ICON} style={{ color: c }}><FilledTag className="w-3.5 h-3.5" /></span>
       {t.label}
-      <button type="button" onClick={(e) => { e.stopPropagation(); onRemove(); }} aria-label={`Remove ${t.label}`} className="text-fg-muted hover:text-fg leading-none">×</button>
+      <ChipAction kind="remove" label={t.label} onClick={onRemove} size="md" />
     </span>
   );
 }
@@ -114,7 +113,7 @@ function OtherPill({ t, onEdit, onAdd, picked }: { t: TagRecord; onEdit: () => v
       } ${picked ? 'ring-2 ring-accent ring-offset-1 ring-offset-inset' : ''}`}>
       <span className={`${ICON} ${archived ? 'text-fg-faint' : ''}`} style={archived ? undefined : { color: mix(t.color) }}><FilledTag className="w-3 h-3" /></span>
       {t.label}
-      {onAdd && <button type="button" onClick={(e) => { e.stopPropagation(); onAdd(); }} aria-label={`Add ${t.label}`} className="text-fg-muted hover:text-fg leading-none">+</button>}
+      {onAdd && <ChipAction kind="add" label={t.label} onClick={onAdd} />}
     </span>
   );
 }
