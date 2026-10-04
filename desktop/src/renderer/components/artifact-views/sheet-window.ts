@@ -98,7 +98,8 @@ const MAX_CLOSURE_AREA = 4000;
 /** One piece of a drawn row, left to right: blank space for `span` columns, or a real cell. */
 export type RowItem =
   | { kind: 'gap'; span: number }
-  | { kind: 'cell'; c: number; colSpan: number; rowSpan: number };
+  // `from`: this cell stands for a merged cell whose top-left is not drawn — it shows THAT cell's text and look
+  | { kind: 'cell'; c: number; colSpan: number; rowSpan: number; from?: readonly [number, number] };
 /** One piece of the grid, top to bottom: blank space `height` px tall, or a drawn row. */
 export type GridPiece =
   | { kind: 'gap'; height: number }
@@ -109,6 +110,8 @@ export interface MergeIndex {
   masters: Map<number, MergeBox>;
   /** every other cell inside a box (they are drawn by the master), keyed r * KEY + c */
   covered: Set<number>;
+  /** the box a covered cell belongs to, keyed r * KEY + c */
+  boxOf: Map<number, MergeBox>;
 }
 const KEY = 4096; // > any column count (the viewers cap at 100)
 export const keyOf = (r: number, c: number) => r * KEY + c;
@@ -116,17 +119,18 @@ export const keyOf = (r: number, c: number) => r * KEY + c;
 export function indexMerges(merges: MergeBox[]): MergeIndex {
   const masters = new Map<number, MergeBox>();
   const covered = new Set<number>();
+  const boxOf = new Map<number, MergeBox>();
   for (const m of merges) {
     masters.set(keyOf(m.r0, m.c0), m);
     for (let r = m.r0; r <= m.r1; r++) {
-      for (let c = m.c0; c <= m.c1; c++) if (r !== m.r0 || c !== m.c0) covered.add(keyOf(r, c));
+      for (let c = m.c0; c <= m.c1; c++) if (r !== m.r0 || c !== m.c0) { covered.add(keyOf(r, c)); boxOf.set(keyOf(r, c), m); }
     }
   }
-  return { masters, covered };
+  return { masters, covered, boxOf };
 }
 
 /** The spans a merged cell is actually drawn with, and the slots (key r*KEY+c) it reserves besides its own. */
-interface Reserved { spans: Map<number, { rs: number; cs: number }>; covered: Set<number> }
+interface Reserved { spans: Map<number, { rs: number; cs: number; from?: readonly [number, number] }>; covered: Set<number> }
 
 /**
  * Decide, for every merged cell whose top-left is drawn, how much of it is drawn: as many consecutive drawn
@@ -137,15 +141,24 @@ interface Reserved { spans: Map<number, { rs: number; cs: number }>; covered: Se
  * under the wrong letter. Now a slot is skipped only when a DRAWN merged cell really reserves it.
  */
 function reserveMerges(rowCols: Map<number, number[]>, idx: MergeIndex): Reserved {
-  const spans = new Map<number, { rs: number; cs: number }>();
+  const spans = new Map<number, { rs: number; cs: number; from?: readonly [number, number] }>();
   const covered = new Set<number>();
   if (!idx.masters.size) return { spans, covered };
   const colSets = new Map<number, Set<number>>();
   const setOf = (r: number) => colSets.get(r) ?? colSets.set(r, new Set(rowCols.get(r))).get(r)!;
+  const anchored = new Set<MergeBox>(); // merges whose top-left is NOT drawn but that have a drawn stand-in
   for (const [r, cols] of rowCols) {
     for (const c of cols) {
-      const box = idx.masters.get(keyOf(r, c));
-      if (!box) continue;
+      let box = idx.masters.get(keyOf(r, c));
+      let from: readonly [number, number] | undefined;
+      if (!box) {
+        // A cell under a merge whose top-left is not drawn (a merge too big to draw whole, scrolled so only its
+        // middle shows): the first drawn cell of it stands in for the merged cell and shows ITS text — otherwise
+        // the merge's value would be visible nowhere (review round 2, item 1).
+        const b = idx.boxOf.get(keyOf(r, c));
+        if (!b || anchored.has(b) || setOf(b.r0).has(b.c0) && rowCols.has(b.r0)) continue;
+        box = b; from = [b.r0, b.c0]; anchored.add(b);
+      }
       const here = setOf(r);
       let cs = 1;
       while (c + cs <= box.c1 && here.has(c + cs)) cs++;
@@ -155,7 +168,7 @@ function reserveMerges(rowCols: Map<number, number[]>, idx: MergeIndex): Reserve
         for (let k = 0; k < cs; k++) if (!below.has(c + k)) break outer;
         rs++;
       }
-      spans.set(keyOf(r, c), { rs, cs });
+      spans.set(keyOf(r, c), { rs, cs, from });
       for (let i = 0; i < rs; i++) for (let j = 0; j < cs; j++) if (i || j) covered.add(keyOf(r + i, c + j));
     }
   }
@@ -173,7 +186,7 @@ function rowItems(r: number, cols: number[], colCount: number, res: Reserved): R
     // Held by a drawn merged cell (reaching down from a row above): the browser reserves the slot.
     if (res.covered.has(keyOf(r, c))) { cursor = c + 1; continue; }
     const span = res.spans.get(keyOf(r, c));
-    items.push({ kind: 'cell', c, colSpan: span?.cs ?? 1, rowSpan: span?.rs ?? 1 });
+    items.push({ kind: 'cell', c, colSpan: span?.cs ?? 1, rowSpan: span?.rs ?? 1, ...(span?.from ? { from: span.from } : null) });
     cursor = c + (span?.cs ?? 1);
   }
   if (cursor < colCount) items.push({ kind: 'gap', span: colCount - cursor });

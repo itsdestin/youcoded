@@ -1,4 +1,5 @@
 import { isAndroid, isRemoteMode } from '../../platform';
+import { getSheetSelectionText } from '../artifact-views/artifact-find-bridge';
 import { copyText, readText } from './clipboard';
 import { editorViewFor } from '../artifact-views/cm/editor-registry';
 import type { MenuIconName } from './menu-icons';
@@ -494,7 +495,12 @@ function artifactMenu(container: HTMLElement, target?: HTMLElement): MenuEntry[]
       run: () => { addDocComment(path, sel, sourceLabel, { ...lineOpts, ...quoteCtx, projectRoot }); },
     });
   }
-  entries.push(...textBasics(container));
+  const basics = textBasics(container);
+  // A spreadsheet's green selection is not text in the page (the viewer draws only the visible cells), so Copy
+  // takes it from the viewer — only when no ordinary text is selected.
+  const sheetText = !sel ? getSheetSelectionText() : null;
+  if (sheetText !== null) basics[0] = { ...basics[0], run: () => void copyText(sheetText) } as MenuEntry;
+  entries.push(...basics);
   return entries;
 }
 

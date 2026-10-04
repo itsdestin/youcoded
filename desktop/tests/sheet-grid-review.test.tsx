@@ -53,7 +53,7 @@ describe('copy returns the whole selection, from the data', () => {
     const { container } = render(<CsvView {...csvProps(bigCsv(2000, 100))} />);
     const el = scroller(container);
     fireEvent.mouseDown(container.querySelector('td[data-r="10"][data-c="3"]')!, { button: 0, clientX: 300, clientY: 24 + 10 * 24 + 5 });
-    fireEvent.mouseMove(window, { clientX: colX(container, 6), clientY: 24 + 509 * 24 + 5 });
+    fireEvent.mouseMove(window, { buttons: 1, clientX: colX(container, 6), clientY: 24 + 509 * 24 + 5 });
     fireEvent.mouseUp(window);
     const lines = copyText(el)!.split('\n');
     expect(lines).toHaveLength(500);
@@ -67,7 +67,7 @@ describe('copy returns the whole selection, from the data', () => {
     fireEvent.mouseDown(container.querySelector('td[data-r="10"][data-c="0"]')!, { button: 0, clientX: 60, clientY: 24 + 10 * 24 + 5 });
     scrollTo(el, 24 * 1400);                 // the anchor row is no longer in the page
     expect(container.querySelector('td[data-r="10"]')).toBeNull();
-    fireEvent.mouseMove(window, { clientX: colX(container, 1), clientY: 200 });
+    fireEvent.mouseMove(window, { buttons: 1, clientX: colX(container, 1), clientY: 200 });
     fireEvent.mouseUp(window);
     const lines = copyText(el)!.split('\n');
     expect(lines[0]).toBe('r10c0\tr10c1');
@@ -173,7 +173,7 @@ describe('columns are sized from what is shown', () => {
     ws.getCell('F1').value = 'x'.repeat(200);
     const { model } = buildSheet(ws);
     const w = model.colWidths;
-    expect(w[0]).toBeGreaterThanOrEqual(Math.ceil('1,234,567,890.12'.length * 7.4 + 18));
+    expect(w[0]).toBeGreaterThanOrEqual(110); // 16 shown characters, not the 8 of the stored number
     expect(w[1]).toBeGreaterThan(w[3] * 1.5);           // wide glyphs count double
     expect(w[2]).toBeGreaterThan(w[3]);                 // capitals are wider
     expect(w[4]).toBeGreaterThan(400);                  // a number is never held to the text cap

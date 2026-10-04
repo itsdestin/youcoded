@@ -38,3 +38,18 @@ export function onFindRewalk(l: () => void): () => void {
   rewalkListeners.add(l);
   return () => { rewalkListeners.delete(l); };
 }
+
+// ── Re-marking after the drawn cells change (scrolling mounts new rows): the sheet says "drawn cells changed" and
+// the bar re-marks its matches. Listeners coalesce on their side (one animation frame).
+const drawnListeners = new Set<() => void>();
+export function notifySheetDrawn(): void { drawnListeners.forEach((l) => l()); }
+export function onSheetDrawn(l: () => void): () => void { drawnListeners.add(l); return () => { drawnListeners.delete(l); }; }
+
+// ── The sheet's green selection, for the right-click menu's Copy (it cannot read a selection that is not in the
+// page). Registered only while a range exists.
+let selectionText: (() => string) | null = null;
+export function registerSheetSelection(f: () => string): () => void {
+  selectionText = f;
+  return () => { if (selectionText === f) selectionText = null; };
+}
+export const getSheetSelectionText = (): string | null => (selectionText ? selectionText() : null);

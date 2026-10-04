@@ -5,7 +5,8 @@
 // from the sheet's DATA instead. Format = what the old fully drawn table gave for the same selection: the shown
 // text of each cell, tab between cells, newline between rows (no trailing newline). One deliberate difference:
 // a cell hidden under a merged cell yields an empty field, so the columns still line up when pasted (the old DOM
-// copy simply had fewer fields in that row).
+// copy simply had fewer fields in that row). A cell whose text holds a tab, a line break or a double quote is
+// wrapped in double quotes (quotes doubled), as spreadsheets expect, so a multi-line cell pastes as ONE cell.
 
 export interface CopyModel {
   /** Rows / columns that hold data; the blank padding the viewers draw past them is not copied. */
@@ -14,6 +15,8 @@ export interface CopyModel {
   /** The shown text of a cell, 0-based. */
   text: (r: number, c: number) => string;
 }
+
+const quote = (t: string) => (/[\t\n\r"]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t);
 
 export function rangeToTsv(
   model: CopyModel, isCovered: (r: number, c: number) => boolean,
@@ -24,7 +27,7 @@ export function rangeToTsv(
   const lines: string[] = [];
   for (let r = r0; r <= lastR; r++) {
     const fields: string[] = [];
-    for (let c = c0; c <= lastC; c++) fields.push(isCovered(r, c) ? '' : model.text(r, c));
+    for (let c = c0; c <= lastC; c++) fields.push(isCovered(r, c) ? '' : quote(model.text(r, c)));
     lines.push(fields.join('\t'));
   }
   return lines.join('\n');

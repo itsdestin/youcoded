@@ -10,7 +10,7 @@ import { detectDelimiter, parseDelimited } from './csv-parse';
 import { PAPER, GRID, NOTE_FG, NOTE_BG, largeSheetNote } from './sheet-theme';
 import { SheetGrid, type GridCell, type Selection, type SheetGridHandle, type SheetGridModel } from './SheetGrid';
 import { ROW_H } from './sheet-window';
-import { ColumnFitter } from './sheet-measure';
+import { ColumnFitter, useFontEpoch } from './sheet-measure';
 import { registerSheetFind, requestFindRewalk } from './artifact-find-bridge';
 
 const MAX_ROWS = 2000;
@@ -40,6 +40,7 @@ const isNumeric = (v: string) => v !== '' && !Number.isNaN(Number(v));
 
 export function CsvView({ path, content }: ArtifactViewProps) {
   const [sel, setSel] = useState<Selection | null>(null);
+  const fontEpoch = useFontEpoch(); // a font/theme change re-measures the columns
 
   const grid = useMemo(() => {
     if (content == null) return null;
@@ -93,7 +94,7 @@ export function CsvView({ path, content }: ArtifactViewProps) {
       rowsTruncated,
       colsTruncated,
     };
-  }, [content, path]);
+  }, [content, path, fontEpoch]);
 
   const select = useCallback((r: number, c: number) => setSel({ r, c }), []);
 

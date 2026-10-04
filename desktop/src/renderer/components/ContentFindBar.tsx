@@ -11,7 +11,7 @@ import { flushSync } from 'react-dom';
 import { ChevronDown, TextInput, Tooltip } from './ui';
 import { ScreenMark } from '../shoot-mode';
 import { resolveBodyRanges, type MessageFindHit } from './chat-message-find';
-import { getSheetFind, onFindRewalk, onSheetFindChange } from './artifact-views/artifact-find-bridge';
+import { getSheetFind, onFindRewalk, onSheetDrawn, onSheetFindChange } from './artifact-views/artifact-find-bridge';
 
 /** Chat-only source search. Artifact documents keep the unmodified live DOM path. */
 export interface ChatFindAdapter {
@@ -58,6 +58,14 @@ function computeRanges(root: HTMLElement, query: string): Range[] {
     }
   }
   return ranges;
+}
+
+// A spreadsheet's matches live in its data cells only: the row numbers and column letters around them are not
+// searched (and are not counted), so they are not marked either.
+function computeSheetRanges(root: HTMLElement, query: string): Range[] {
+  const out: Range[] = [];
+  root.querySelectorAll<HTMLElement>('td[data-r]').forEach((td) => out.push(...computeRanges(td, query)));
+  return out;
 }
 
 export function ContentFindBar({ containerRef, onClose, resetKey, highlightName = 'artifact-find', placeholder = 'Find in document', positionClassName = 'top-2 right-2', scrollRef, layout = 'floating', chatFind }: {
@@ -221,7 +229,7 @@ export function ContentFindBar({ containerRef, onClose, resetKey, highlightName 
     const sheetCount = sheet && query ? sheet.search(query) : 0;
     const root = containerRef.current;
     if (!root || !highlightsSupported()) { rangesRef.current = []; setCount(sheet ? sheetCount : 0); return; }
-    const ranges = computeRanges(root, query);
+    const ranges = sheet ? computeSheetRanges(root, query) : computeRanges(root, query);
     rangesRef.current = ranges;
     walkedAtRef.current = mutationsRef.current;
     setCount(sheet ? sheetCount : ranges.length);
@@ -346,20 +354,52 @@ export function ContentFindBar({ containerRef, onClose, resetKey, highlightName 
 
   // Spreadsheet: go to match number `current` (the sheet scrolls there), mark it, and re-mark everything drawn now.
   // Depends on the count, not on the walked ranges, so re-marking after the scroll cannot loop back here.
+  // Works without the CSS Highlight API (older Android WebViews) too: the current cell then carries an outline.
+  const currentCellRef = useRef<[number, number] | null>(null);
+  const outlinedRef = useRef<HTMLElement | null>(null);
+  const markCurrent = useCallback((td: HTMLElement | null) => {
+    if (outlinedRef.current && outlinedRef.current !== td) outlinedRef.current.style.boxShadow = '';
+    outlinedRef.current = td;
+    if (td && !highlightsSupported()) td.style.boxShadow = 'inset 0 0 0 2px #e8a317';
+    if (td) currentCellRef.current = [Number(td.getAttribute('data-r')), Number(td.getAttribute('data-c'))];
+  }, []);
+  useEffect(() => () => { if (outlinedRef.current) outlinedRef.current.style.boxShadow = ''; }, []);
+  useEffect(() => { if (!query) { markCurrent(null); currentCellRef.current = null; } }, [query, markCurrent]);
+  const paintSheet = useCallback((td: HTMLElement | null) => {
+    markCurrent(td);
+    if (!highlightsSupported()) return;
+    const Ctor = (window as any).Highlight;
+    const root = containerRef.current;
+    if (root) (CSS as any).highlights.set(HL, new Ctor(...computeSheetRanges(root, queryRef.current)));
+    const mine = td ? computeRanges(td, queryRef.current) : [];
+    if (mine.length) (CSS as any).highlights.set(HL_CURRENT, new Ctor(mine[0])); else (CSS as any).highlights.delete(HL_CURRENT);
+  }, [HL, HL_CURRENT, containerRef, markCurrent]);
   useEffect(() => {
     const sheet = HL === 'artifact-find' ? getSheetFind() : null;
-    if (!sheet || !query || count === 0 || !highlightsSupported()) return undefined;
+    if (!sheet || !query || count === 0) return undefined;
     let live = true;
     void sheet.reveal(((current % count) + count) % count).then((td) => {
       if (!live || !td) return;
-      const Ctor = (window as any).Highlight;
-      const root = containerRef.current;
-      const mine = computeRanges(td, query);
-      if (root) (CSS as any).highlights.set(HL, new Ctor(...computeRanges(root, query)));
-      if (mine.length) (CSS as any).highlights.set(HL_CURRENT, new Ctor(mine[0]));
+      paintSheet(td);
     });
     return () => { live = false; };
-  }, [current, query, count, adapterVersion, HL, HL_CURRENT, containerRef]);
+  }, [current, query, count, adapterVersion, HL, paintSheet]);
+  // Scrolling mounts new rows: re-mark once per frame (the highlights are on text nodes that come and go).
+  useEffect(() => {
+    if (HL !== 'artifact-find') return undefined;
+    let frame: number | null = null;
+    const off = onSheetDrawn(() => {
+      if (frame !== null || !getSheetFind() || !queryRef.current) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        const root = containerRef.current;
+        const at = currentCellRef.current;
+        const td = root && at ? root.querySelector<HTMLElement>(`td[data-r="${at[0]}"][data-c="${at[1]}"]`) : null;
+        paintSheet(td);
+      });
+    });
+    return () => { off(); if (frame !== null) cancelAnimationFrame(frame); };
+  }, [HL, containerRef, paintSheet]);
 
   // Paint the current match and scroll it into view if it's off-screen.
   useEffect(() => {

@@ -14,7 +14,7 @@ import { onSheetReveal } from '../comments/sheet-reveal';
 import { CommentableDocument } from '../comments/CommentableDocument';
 import { PAPER, FBAR_BG, TAB_BG, GRID, SEL, NOTE_FG, NOTE_BG, largeSheetNote } from './sheet-theme';
 import { SheetGrid, type GridCell, type Selection, type SheetGridHandle, type SheetGridModel } from './SheetGrid';
-import { ColumnFitter } from './sheet-measure';
+import { ColumnFitter, fontsReady, useFontEpoch } from './sheet-measure';
 import { ROW_H, type MergeBox } from './sheet-window';
 import { useDocComments } from '../../state/doc-comments-store';
 import { registerSheetFind, requestFindRewalk } from './artifact-find-bridge';
@@ -210,6 +210,7 @@ function* buildSheetSteps(ws: any): Generator<void, SheetVM, void> {
   const model: SheetGridModel = {
     rowCount, colCount, colWidths, rowHeights, merges: boxes,
     usedRows, usedCols,
+    wrapRows: new Set(wrapped.map((w) => w.r - 1)),
     text: (r0, c0) => textOf(r0 + 1, c0 + 1),
     // Find-in-document: every cell's SHOWN text (dates, "50%", "1,234", formula results), lower-cased during the
     // build — so the answer never depends on what has been drawn or scrolled past.
@@ -245,14 +246,63 @@ export function buildSheet(ws: any): SheetVM {
   for (;;) { const r = it.next(); if (r.done) return r.value; }
 }
 
+/** Thrown inside a build that was cancelled (the viewer closed, another file or tab opened). */
+class BuildCancelled extends Error { constructor() { super('cancelled'); } }
+
+/**
+ * Hand the thread back to the page for one task. WHY not setTimeout(0): Chromium holds a nested zero-delay timer
+ * to at least 4 ms, so ~25 slices cost 100+ ms of pure waiting. A scheduler task (or a message-channel hop) comes
+ * straight back, and input events still run in between.
+ */
+let channel: MessageChannel | null = null;
+export function yieldToPage(): Promise<void> {
+  const sched = (globalThis as any).scheduler;
+  if (sched?.postTask) return sched.postTask(() => undefined, { priority: 'user-visible' });
+  if (typeof MessageChannel !== 'undefined') {
+    channel ??= new MessageChannel();
+    const ch = channel;
+    return new Promise((res) => { ch.port1.onmessage = () => res(); ch.port2.postMessage(0); });
+  }
+  return new Promise((res) => setTimeout(res, 0));
+}
+
 /** The same build in ~20 ms slices, so a big sheet never freezes the page (it is shown as "Loading" meanwhile). */
-async function buildSheetAsync(ws: any): Promise<SheetVM> {
+export async function buildSheetAsync(ws: any, token: { cancelled: boolean } = { cancelled: false }): Promise<SheetVM> {
+  // The widths are measured in the page's font: give a theme's web font a moment (bounded) to arrive first. A
+  // font that arrives later re-sizes the sheet anyway (useFontEpoch).
+  await fontsReady(1500);
   const it = buildSheetSteps(ws);
   for (;;) {
+    if (token.cancelled) throw new BuildCancelled();
     const r = it.next();
     if (r.done) return r.value;
-    await new Promise<void>((res) => setTimeout(res, 0));
+    await yieldToPage();
   }
+}
+
+/**
+ * One build per worksheet at a time (asking again while one runs returns the same promise), and every build can be
+ * stopped: cancelling flips a flag the loop checks each slice, so closing the viewer or opening another file stops
+ * the work instead of letting it finish unseen.
+ */
+export function createSheetBuilder() {
+  const jobs = new Map<object, { promise: Promise<SheetVM>; token: { cancelled: boolean } }>();
+  return {
+    get(ws: object): Promise<SheetVM> {
+      let job = jobs.get(ws);
+      if (!job) {
+        const token = { cancelled: false };
+        const made = { promise: buildSheetAsync(ws, token), token };
+        job = made;
+        jobs.set(ws, made);
+        made.promise.then(() => { if (jobs.get(ws) === made) jobs.delete(ws); }, () => { if (jobs.get(ws) === made) jobs.delete(ws); });
+      }
+      return job.promise;
+    },
+    cancel(ws: object) { const j = jobs.get(ws); if (j) { j.token.cancelled = true; jobs.delete(ws); } },
+    cancelAll() { for (const j of jobs.values()) j.token.cancelled = true; jobs.clear(); },
+    inFlight: () => jobs.size,
+  };
 }
 
 export function XlsxView({ absolutePath, path, commentsMode, onOpenComments, focusThreadId, projectRoot }: ArtifactViewProps) {
@@ -324,20 +374,28 @@ function XlsxSheets({ bytes, path, projectRoot }: { bytes: Uint8Array; path: str
     if (i >= 0) { setActive(i); setSel(null); }
   }), [path, sheets]);
 
-  // Built sheets, kept per worksheet. A tab is built (in slices) the first time it is shown.
-  const vmCache = useRef(new WeakMap<object, SheetVM>());
+  // Built sheets, kept per worksheet (and per font epoch: a font or theme change re-sizes them). A tab is built (in
+  // slices) the first time it is shown; one build at a time per sheet, stopped when the tab or file goes away.
+  const epoch = useFontEpoch();
+  const vmCache = useRef<{ epoch: number; map: WeakMap<object, SheetVM> }>({ epoch, map: new WeakMap() });
+  if (vmCache.current.epoch !== epoch) vmCache.current = { epoch, map: new WeakMap() };
+  const builder = useRef<ReturnType<typeof createSheetBuilder> | undefined>(undefined);
+  builder.current ??= createSheetBuilder();
   const [, setBuiltTick] = useState(0);
   const entry = sheets?.[active];
-  const sheet = entry ? vmCache.current.get(entry.ws) : undefined;
+  const sheet = entry ? vmCache.current.map.get(entry.ws) : undefined;
   useEffect(() => {
-    if (!entry || vmCache.current.has(entry.ws)) return undefined;
+    if (!entry || vmCache.current.map.has(entry.ws)) return undefined;
     let live = true;
-    void buildSheetAsync(entry.ws).then((vm) => {
-      vmCache.current.set(entry.ws, vm);
+    const b = builder.current!;
+    const map = vmCache.current.map;
+    b.get(entry.ws).then((vm) => {
+      map.set(entry.ws, vm);
       if (live) setBuiltTick((t) => t + 1);
-    }).catch((e) => { if (live) setParseError(String(e?.message ?? e)); });
-    return () => { live = false; };
-  }, [entry]);
+    }).catch((e) => { if (live && !(e instanceof BuildCancelled)) setParseError(String(e?.message ?? e)); });
+    return () => { live = false; b.cancel(entry.ws); };
+  }, [entry, epoch]);
+  useEffect(() => () => { builder.current?.cancelAll(); }, []);
   // Formula bar contents for the selected cell: its formula if any, else value.
   const selInfo = useMemo(() => {
     if (!sheet || !sel) return { addr: '', content: '', isFormula: false };
