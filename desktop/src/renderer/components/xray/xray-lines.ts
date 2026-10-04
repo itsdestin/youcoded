@@ -94,7 +94,7 @@ function toTime(v: unknown): number | null {
 function inputGist(input: unknown): string {
   if (!input || typeof input !== 'object') return typeof input === 'string' ? input : '';
   const o = input as Record<string, unknown>;
-  for (const k of ['command', 'file_path', 'path', 'pattern', 'query', 'url', 'skill', 'description', 'prompt']) {
+  for (const k of ['command', 'pattern', 'query', 'file_path', 'path', 'url', 'skill', 'description', 'prompt']) {
     if (typeof o[k] === 'string' && o[k]) return String(o[k]);
   }
   try { return JSON.stringify(input); } catch { return ''; }
@@ -153,6 +153,7 @@ function classifyClaudeCode(d: Record<string, unknown>): Classified | null {
         summary: oneLine((result.is_error ? 'Error: ' : '') + textOfContent(result.content ?? '')) };
     }
     const text = textOfContent(content);
+    if (d.isCompactSummary) return { ...base, kind: 'summary', summary: oneLine(text) };
     if (d.isMeta) return { ...base, kind: REMINDER_ONLY_RE.test(text) ? 'reminder' : 'injected', summary: oneLine(stripTags(text)) };
     if (/^\s*\[Request interrupted/.test(text)) return { ...base, kind: 'interrupt', summary: oneLine(text) };
     if (REMINDER_ONLY_RE.test(text)) return { ...base, kind: 'reminder', summary: oneLine(stripTags(text)) };
@@ -161,6 +162,10 @@ function classifyClaudeCode(d: Record<string, unknown>): Classified | null {
 
   if (type === 'system') {
     const sub = String(d.subtype ?? '');
+    // Claude Code's own notes, said in words (review 1: raw names read as jargon).
+    if (sub === 'turn_duration' && typeof d.durationMs === 'number') return { ...base, kind: 'turn-end', summary: `This turn took ${formatGap(d.durationMs)}` };
+    if (sub === 'compact_boundary') return { ...base, kind: 'system', summary: 'The conversation was compacted here' };
+    if (sub === 'local_command') return { ...base, kind: 'system', summary: oneLine(`Ran a command: ${String(d.content ?? '').replace(/<[^>]+>/g, ' ')}`) };
     const kind: XrayKind = /hook/i.test(sub) ? 'hook' : 'system';
     return { ...base, kind, summary: oneLine([sub, String(d.content ?? '')].filter(Boolean).join(' — ')) };
   }
@@ -169,10 +174,19 @@ function classifyClaudeCode(d: Record<string, unknown>): Classified | null {
     const kind: XrayKind = /hook/i.test(String(att.type ?? '')) ? 'hook' : 'injected';
     return { ...base, kind, summary: oneLine(`${String(att.type ?? 'attachment')} ${String(att.content ?? att.hookName ?? '')}`) };
   }
-  if (type === 'summary') return { ...base, kind: 'summary', summary: oneLine(String(d.summary ?? '')) };
-  if (typeof type === 'string') return { ...base, kind: 'bookkeeping', summary: oneLine(type) };
+  // Claude Code's `summary` lines are titles for the resume list, not the model's
+  // memory; a compaction summary is a user line marked isCompactSummary (below).
+  if (type === 'summary') return { ...base, kind: 'bookkeeping', summary: oneLine(`Session title: ${String(d.summary ?? '')}`) };
+  if (typeof type === 'string') return { ...base, kind: 'bookkeeping', summary: BOOKKEEPING_TEXT[type] ?? oneLine(type) };
   return null;
 }
+
+/** What Claude Code's housekeeping lines are for, in words. Unknown ones keep their name. */
+const BOOKKEEPING_TEXT: Record<string, string> = {
+  'file-history-snapshot': 'Saved a checkpoint of edited files, for undo',
+  'queue-operation': 'A message was queued while the assistant was busy',
+  'custom-title': 'The session was renamed',
+};
 
 function classifyNative(d: Record<string, unknown>): Classified | null {
   const data = (d.data ?? {}) as Record<string, unknown>;
@@ -255,6 +269,7 @@ export const GAP_MS = 60_000;
 
 export function formatGap(ms: number): string {
   const s = Math.round(ms / 1000);
+  if (s < 60) return `${s} s`;
   if (s < 3600) return `${Math.floor(s / 60)} min ${s % 60 ? `${s % 60} s` : ''}`.trim();
   return `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min`;
 }
