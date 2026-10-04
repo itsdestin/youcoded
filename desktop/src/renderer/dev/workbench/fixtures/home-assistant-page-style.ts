@@ -26,60 +26,86 @@ export const HOME_ASSISTANT_PAGE_CSS = `
   .chip { position: relative; overflow: hidden; min-height: 74px; }
   .chip > * { position: relative; }
   .chip-ic { width: 32px; height: 32px; flex-shrink: 0; border-radius: 10px; display: grid; place-items: center; background: var(--well); color: var(--fg-muted); }
-  /* Aura: a soft glow made of the chip's own colours (the colours of the
-     lights that are on, the app playing, the temperature, the problems). */
-  .st-aura .chip > .aura-bg { position: absolute; inset: 0; opacity: 0; transition: opacity 300ms ease;
-    background: radial-gradient(circle at 12% 18%, var(--a1, transparent), transparent 62%), radial-gradient(circle at 92% 90%, var(--a2, transparent), transparent 60%), radial-gradient(circle at 55% 130%, var(--a3, transparent), transparent 60%); }
-  .st-aura .chip > .aura-bg.lit { opacity: .32; }
-  .st-aura .chip-ic { background: transparent; border: 1px solid var(--edge); }
-  .st-aura .chip.on .chip-ic, .st-aura .chip.k-climate .chip-ic { color: var(--fg); border-color: var(--fg-muted); }
-  .st-aura .chip .eq { position: absolute; top: 12px; right: 12px; margin: 0; }
   .pulse { position: absolute; top: 14px; right: 14px; width: 8px; height: 8px; border-radius: 50%; background: rgb(235, 70, 55); }
   .pulse::after { content: ''; position: absolute; inset: -6px; border-radius: 50%; border: 2px solid rgb(235, 70, 55); opacity: 0; animation: pulse 1.6s steps(8, end) infinite; }
   @keyframes pulse { 0% { transform: scale(.4); opacity: .9; } 100% { transform: scale(1.3); opacity: 0; } }
-  /* Meter: a big number, and a bar of segments under it. */
-  .st-meter .chip { flex-direction: column; align-items: stretch; gap: 10px; }
-  .m-top { display: flex; align-items: center; gap: 10px; }
-  .m-big { font-family: var(--font-mono); font-size: 26px; line-height: 1; color: var(--fg); }
-  .m-side { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-  .m-ic { color: var(--fg-muted); display: grid; }
-  .m-bar { display: flex; gap: 3px; height: 6px; }
-  .m-bar i { flex: 1; border-radius: 3px; background: var(--well); }
-  .m-bar i.sev-high { background: rgb(235, 70, 55); } .m-bar i.sev-mid { background: rgb(240, 165, 40); } .m-bar i.sev-low { background: rgb(200, 190, 120); } .m-bar i.sev-ok { background: rgb(60, 190, 110); }
-  .m-scale { position: relative; height: 6px; border-radius: 3px; background: linear-gradient(to right, hsl(215, 80%, 55%), hsl(160, 70%, 50%), hsl(55, 85%, 55%), hsl(15, 85%, 55%)); opacity: .9; }
-  .m-scale b { position: absolute; top: 50%; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 50%; }
-  .m-scale b.out { background: var(--fg); border: 2px solid var(--panel); }
-  .m-scale b.in { background: transparent; border: 2px solid var(--fg); }
-  /* Live: a bigger icon that shows the state itself. */
-  .live-ic { width: 44px; height: 44px; flex-shrink: 0; border-radius: 12px; display: grid; place-items: center; background: var(--well); color: var(--fg-muted); position: relative; }
-  .live-ic.bulbs svg { width: 22px; height: 22px; }
-  .live-ic.bulbs.on { color: var(--c); box-shadow: inset 0 0 18px color-mix(in srgb, var(--c) 45%, transparent); }
-  .live-ic.bulbs.on .rays { position: absolute; inset: 4px; border-radius: 50%; border: 2px dotted color-mix(in srgb, var(--c) 70%, transparent); animation: spin 12s steps(24, end) infinite; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .live-ic.waves.on { color: var(--c); }
-  .live-ic.waves .w1, .live-ic.waves .w2, .live-ic.waves .w3 { opacity: .25; }
-  .live-ic.waves.on .w1 { animation: wv 1.2s steps(3, end) infinite; }
-  .live-ic.waves.on .w2 { animation: wv 1.2s steps(3, end) infinite .4s; }
-  .live-ic.waves.on .w3 { animation: wv 1.2s steps(3, end) infinite .8s; }
-  @keyframes wv { 0% { opacity: .25; } 33% { opacity: 1; } 100% { opacity: .25; } }
-  .live-ic.thermo .tube { position: absolute; left: 19px; top: 7px; width: 6px; height: 22px; border-radius: 3px; background: var(--edge-dim); overflow: hidden; }
-  .live-ic.thermo .fill { position: absolute; left: 0; right: 0; bottom: 0; height: calc(var(--f) * 100%); background: var(--c); }
-  .live-ic.thermo .ball { position: absolute; left: 16px; top: 27px; width: 12px; height: 12px; border-radius: 50%; background: var(--c); }
-  .live-ic.warn.hot { color: #fff; background: rgb(235, 70, 55); }
-  .live-ic.warn.hot::after { content: ''; position: absolute; inset: -4px; border-radius: 15px; border: 2px solid rgb(235, 70, 55); opacity: 0; animation: pulse 1.6s steps(8, end) infinite; }
-  .live-ic.warn.mild { color: rgb(240, 165, 40); }
-  .live-ic.warn.ok { color: rgb(60, 190, 110); }
-  @media (prefers-reduced-motion: reduce) { .pulse::after, .live-ic.warn.hot::after, .live-ic.bulbs.on .rays, .live-ic.waves.on .w1, .live-ic.waves.on .w2, .live-ic.waves.on .w3 { animation: none; } .live-ic.waves.on path { opacity: 1; } }
+  /* Pills: one quiet row; a pill takes its state's colour when lit. */
+  .pills { display: flex; flex-wrap: wrap; gap: 8px; }
+  .pill { appearance: none; font: inherit; font-size: 13px; display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px 0 6px; border-radius: 9999px; border: 1px solid var(--edge-dim); background: var(--panel); color: var(--fg); cursor: pointer; transition: border-color 120ms ease, background-color 120ms ease, transform 90ms ease; }
+  .pill:hover { border-color: var(--edge); }
+  .pill:active { transform: scale(.97); }
+  .pill.sel { border-color: var(--fg-muted); }
+  .pill-ic { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: var(--well); color: var(--fg-muted); }
+  .pill-ic svg { width: 14px; height: 14px; }
+  .pill.lit { background: color-mix(in srgb, var(--k) 14%, var(--panel)); border-color: color-mix(in srgb, var(--k) 40%, var(--edge-dim)); }
+  .pill.lit .pill-ic { background: var(--k); color: #111; }
+  .pill .eq { margin-left: 2px; }
+  /* Sentence: the house in one line; each part opens its page. */
+  .glance { font-size: 19px; line-height: 1.5; color: var(--fg-2); margin: 0; }
+  .glance .part { appearance: none; font: inherit; color: inherit; background: none; border: 0; padding: 0 2px; cursor: pointer; border-radius: 6px; text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--k) 45%, transparent); text-decoration-thickness: 2px; text-underline-offset: 5px; }
+  .glance .part b { color: var(--k); font-weight: 600; }
+  .glance .part:hover { background: var(--inset); }
+  .glance .part.sel { background: var(--inset); }
+  .glance .sep { color: var(--fg-muted); }
+  /* Tiles: big squares, the number first, a colour blob in the corner. */
+  .tiles2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .tile2 { appearance: none; font: inherit; color: inherit; text-align: left; position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; min-height: 132px; padding: 14px; border-radius: var(--radius-lg, 12px); border: 1px solid var(--edge-dim); background: var(--panel); cursor: pointer; transition: border-color 120ms ease, transform 90ms ease; }
+  .tile2 > * { position: relative; }
+  .tile2:hover { border-color: var(--edge); } .tile2:active { transform: scale(.98); } .tile2.sel { border-color: var(--fg-muted); }
+  .tile2 .t2-blob { position: absolute; top: -50px; right: -50px; width: 160px; height: 160px; border-radius: 50%; background: radial-gradient(circle, var(--k, transparent), transparent 70%); opacity: 0; }
+  .tile2.lit .t2-blob { opacity: .5; }
+  .t2-ic { position: absolute; top: 14px; left: 14px; color: var(--fg-muted); }
+  .t2-ic svg { width: 22px; height: 22px; }
+  .tile2.lit .t2-ic { color: var(--k); }
+  .tile2 .eq { position: absolute; top: 18px; right: 16px; }
+  .tile2 .pulse { position: absolute; top: 18px; right: 18px; }
+  .t2-big { font-family: var(--font-mono); font-size: 34px; line-height: 1; color: var(--fg); }
+  .t2-lbl { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-muted); margin-top: 6px; }
+  .t2-sub { font-size: 12px; color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  @media (prefers-reduced-motion: reduce) { .pulse::after { animation: none; } .pill, .tile2 { transition: none; } }
   .chip-txt { display: flex; flex-direction: column; min-width: 0; }
   .chip-lbl { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-muted); }
   .chip-main { font-size: 14px; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .chip-sub { font-size: 11px; color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   /* A chip's page: its parts spaced like the main page's. */
   #view:not(:empty) { display: flex; flex-direction: column; gap: 14px; }
-  .vhead { display: flex; align-items: center; gap: 12px; }
-  .vhead .yc-button { display: inline-flex; align-items: center; gap: 4px; }
-  .vtitle { display: flex; flex-direction: column; }
-  .vtitle h2 { font-size: 18px; font-weight: 600; }
+  .vhead { display: flex; align-items: center; gap: 12px; padding: 4px 0; }
+  .vback { width: 38px; height: 38px; flex-shrink: 0; border-radius: 50%; border: 1px solid var(--edge); background: var(--panel); color: var(--fg); cursor: pointer; display: grid; place-items: center; padding: 0; transition: border-color 120ms ease, transform 90ms ease; }
+  .vback:hover { border-color: var(--fg-muted); } .vback:active { transform: scale(.94); }
+  .vback:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .vicon2 { width: 38px; height: 38px; flex-shrink: 0; border-radius: 12px; display: grid; place-items: center; background: var(--inset); color: var(--fg-2); }
+  .vtitle { display: flex; flex-direction: column; min-width: 0; }
+  .vtitle h2 { font-size: 22px; font-weight: 600; line-height: 1.15; }
+  .vsub { font-size: 12px; color: var(--fg-muted); }
+  /* Climate page: the thermostat large, the weather beside it. */
+  .clim-hero-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 12px; align-items: stretch; }
+  @media (max-width: 760px) { .clim-hero-row { grid-template-columns: 1fr; } }
+  .clim-hero-row .wx { flex-direction: column; align-items: flex-start; justify-content: space-between; }
+  .clim-hero-row .wx-facts div { align-items: flex-start; }
+  .th-hero { position: relative; overflow: hidden; display: flex; align-items: center; gap: 28px; flex-wrap: wrap; padding: 20px 24px; border-radius: var(--radius-lg, 12px); border: 1px solid var(--edge-dim); background: var(--inset); }
+  /* .clim gives the mode colours; its column layout is not wanted here. */
+  .th-hero.clim { flex-direction: row; flex-wrap: wrap; gap: 28px; padding: 20px 24px; }
+  .th-hero .glow { opacity: .22; }
+  .th-dial { position: relative; width: 210px; height: 210px; flex-shrink: 0; }
+  .th-dial svg { width: 100%; height: 100%; }
+  .th-track, .th-fill { fill: none; stroke-width: 14; stroke-linecap: round; }
+  .th-track { stroke: var(--well); }
+  .th-fill { stroke: var(--m); transition: stroke-dasharray 300ms ease; }
+  .th-now { fill: var(--fg); stroke: var(--inset); stroke-width: 4; }
+  .th-mid { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .th-lbl { font-size: 12px; color: var(--fg-2); }
+  .th-set { font-family: var(--font-mono); font-size: 54px; line-height: 1.05; color: var(--fg); }
+  .th-cur { font-size: 12px; color: var(--fg-muted); }
+  .th-side { flex: 1; min-width: 200px; display: flex; flex-direction: column; gap: 16px; position: relative; }
+  .th-name { font-size: 18px; font-weight: 600; }
+  .th-steps { display: flex; gap: 12px; }
+  .th-step { width: 58px; height: 58px; border-radius: 50%; border: 1px solid var(--edge); background: var(--well); color: var(--fg); font-size: 26px; line-height: 1; cursor: pointer; display: grid; place-items: center; padding: 0; transition: border-color 120ms ease, transform 90ms ease; }
+  .th-step:hover { border-color: var(--m); } .th-step:active { transform: scale(.94); } .th-step:disabled { opacity: .4; cursor: default; }
+  .th-modes { display: flex; padding: 3px; gap: 3px; border-radius: 9999px; background: var(--well); width: fit-content; flex-wrap: wrap; }
+  .th-mode { appearance: none; font: inherit; font-size: 12px; padding: 7px 14px; border-radius: 9999px; border: 0; background: transparent; color: var(--fg-2); cursor: pointer; }
+  .th-mode[aria-pressed="true"] { background: var(--m); color: #111; }
+  .th-hero.gone { opacity: .7; }
+  @media (prefers-reduced-motion: reduce) { .th-fill, .th-step { transition: none; } }
   /* The weather: a wide card painted like the sky outside. Its colours are
      always deep enough for white text. */
   .wx { position: relative; overflow: hidden; display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap; padding: 22px 26px; border-radius: var(--radius-lg, 12px); color: #fff; background: linear-gradient(120deg, var(--s1), var(--s2)); }

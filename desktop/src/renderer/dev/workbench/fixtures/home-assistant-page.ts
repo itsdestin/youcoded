@@ -847,70 +847,52 @@ function homeAssistantPageHtml(): string {
   }
   var CONDITIONS = { 'clear-night': 'clear', sunny: 'sunny', cloudy: 'cloudy', partlycloudy: 'partly cloudy', rainy: 'rain', pouring: 'heavy rain', snowy: 'snow', 'snowy-rainy': 'sleet', fog: 'fog', windy: 'windy', 'windy-variant': 'windy', lightning: 'storms', 'lightning-rainy': 'storms', hail: 'hail', exceptional: '' };
   function condName(c) { return CONDITIONS[c] != null ? CONDITIONS[c] : String(c || '').replace(/-/g, ' '); }
-  // Three chip styles to choose between (round 4 chip notes: "give me a
-  // few more interesting variants"). Aura: a soft glow in the colours of
-  // what the chip stands for. Meter: a big number over a bar of segments.
-  // Live: a larger icon that moves with the state.
-  function chipStyle() { return prefs.chipStyle === 'meter' || prefs.chipStyle === 'live' ? prefs.chipStyle : 'aura'; }
-  function chipText(c) {
-    return '<span class="chip-txt"><span class="chip-lbl">' + c.label + '</span><span class="chip-main">' + esc(c.main) + '</span>' + (c.sub ? '<span class="chip-sub">' + esc(c.sub) + '</span>' : '') + '</span>';
+  // Three new directions (round 4 again: "still don't love any of the
+  // proposed designs" — the last three were all the same card dressed
+  // differently). Pills: small and quiet, one row. Sentence: the house in
+  // one line of words, each part a link. Tiles: big squares, number first.
+  function chipStyle() { return prefs.chipStyle === 'sentence' || prefs.chipStyle === 'tiles' ? prefs.chipStyle : 'pills'; }
+  function stateColour(c) {
+    var x = c.x || {};
+    if (c.id === 'lights') return c.on ? (x.cols[0] || 'rgb(255, 190, 110)') : null;
+    if (c.id === 'media') return c.on ? (x.appBg || 'var(--accent)') : null;
+    if (c.id === 'climate') return tempColour(x.temp);
+    return x.sevs.high ? 'rgb(235, 70, 55)' : (x.sevs.mid || x.sevs.low) ? 'rgb(240, 165, 40)' : 'rgb(60, 190, 110)';
   }
-  function auraVars(c) {
-    var x = c.x || {}, a = [];
-    if (c.id === 'lights') a = x.cols.slice(0, 3);
-    if (c.id === 'media' && c.on) a = [x.appBg || 'var(--accent)', 'var(--accent)'];
-    if (c.id === 'climate') a = [tempColour(x.temp), tempColour(x.inside != null ? x.inside : x.temp)];
-    if (c.id === 'problems') a = x.sevs.high ? ['rgb(235, 70, 55)', 'rgb(235, 110, 60)'] : (x.sevs.mid || x.sevs.low) ? ['rgb(240, 165, 40)'] : ['rgb(60, 190, 110)'];
-    while (a.length && a.length < 3) a.push(a[a.length - 1]);
-    return a.length ? '--a1:' + a[0] + ';--a2:' + a[1] + ';--a3:' + a[2] : '';
+  function chipShort(c) {
+    var x = c.x || {};
+    if (c.id === 'lights') return c.on ? x.big + ' on' : 'Lights off';
+    if (c.id === 'media') return x.playing ? (c.main) : c.on ? c.main : 'Quiet';
+    if (c.id === 'climate') return x.big + (x.inside != null ? ' · ' + x.inside + '° in' : '');
+    return c.x.sevs.high + c.x.sevs.mid + c.x.sevs.low ? c.main : 'All good';
+  }
+  function chipPill(c) {
+    var col = stateColour(c);
+    return '<button class="pill k-' + c.id + (col ? ' lit' : '') + (view === c.id ? ' sel' : '') + '" style="' + (col ? '--k:' + col : '') + '" data-view="' + c.id + '" aria-pressed="' + (view === c.id) + '" aria-label="' + esc(c.label + ': ' + c.main + (c.sub ? ', ' + c.sub : '')) + '" title="' + esc(c.label + (c.sub ? ' · ' + c.sub : '')) + '">' +
+      '<span class="pill-ic">' + c.icon + '</span>' + esc(chipShort(c)) + (c.id === 'media' && c.x.playing ? eqBars(true) : '') + '</button>';
+  }
+  function sentencePart(c) {
+    var x = c.x || {}, b;
+    if (c.id === 'lights') b = c.on ? '<b>' + x.big + ' light' + (x.big === '1' ? '' : 's') + '</b> on' + (c.main.indexOf(' in ') > 0 ? c.main.slice(c.main.indexOf(' in ')) : '') : '<b>All lights</b> off';
+    else if (c.id === 'media') b = x.playing ? '<b>' + c.main + '</b>' : c.on ? '<b>' + c.main + '</b>' : '<b>Nothing</b> playing';
+    else if (c.id === 'climate') b = '<b>' + x.big + '</b> ' + esc(c.main.replace(/^[^ ]+ /, '')) + ' outside';
+    else b = c.on ? '<b>' + c.main.replace(' to fix', '') + ' problem' + (c.main.indexOf('1 ') === 0 ? '' : 's') + '</b> to fix' : '<b>No problems</b>';
+    return '<button class="part k-' + c.id + (view === c.id ? ' sel' : '') + '" style="--k:' + (stateColour(c) || 'var(--fg)') + '" data-view="' + c.id + '" aria-pressed="' + (view === c.id) + '">' + b + '</button>';
+  }
+  function chipTile(c) {
+    var col = stateColour(c);
+    return '<button class="tile2 k-' + c.id + (col ? ' lit' : '') + (view === c.id ? ' sel' : '') + '" style="' + (col ? '--k:' + col : '') + '" data-view="' + c.id + '" aria-pressed="' + (view === c.id) + '" aria-label="' + esc(c.label + ': ' + c.main + (c.sub ? ', ' + c.sub : '')) + '">' +
+      '<span class="t2-blob"></span><span class="t2-ic">' + c.icon + '</span>' + (c.id === 'media' && c.x.playing ? eqBars(true) : c.id === 'problems' && c.x.sevs.high ? '<span class="pulse" aria-hidden="true"></span>' : '') +
+      '<span class="t2-big">' + esc(c.x.big) + '</span><span class="t2-lbl">' + c.label + (c.x.unit ? ' ' + esc(c.x.unit) : '') + '</span><span class="t2-sub">' + esc(c.sub || c.main) + '</span></button>';
   }
   function eqBars(on) { return '<span class="eq' + (on ? ' on' : '') + '" aria-hidden="true"><i></i><i></i><i></i></span>'; }
-  function chipAura(c) {
-    var v = auraVars(c);
-    var lit = !!v && (c.on || c.id === 'climate' || c.id === 'problems');
-    var badge = c.id === 'media' && c.x.playing ? eqBars(true) : c.id === 'problems' && c.x.sevs.high ? '<span class="pulse" aria-hidden="true"></span>' : '';
-    return '<span class="aura-bg' + (lit ? ' lit' : '') + '" style="' + v + '"></span><span class="chip-ic">' + c.icon + '</span>' + chipText(c) + badge;
-  }
-  function chipMeter(c) {
-    var x = c.x || {}, bar = '';
-    if (c.id === 'lights' || c.id === 'media') {
-      var segs = x.segs.length ? x.segs : [null];
-      bar = '<span class="m-bar">' + segs.map(function (col) { return '<i' + (col ? ' style="background:' + col + '"' : '') + '></i>'; }).join('') + '</span>';
-    } else if (c.id === 'climate') {
-      var at = function (t) { var f = extras.weather && /C/.test(extras.weather.unit || '') ? t * 9 / 5 + 32 : t; return Math.max(0, Math.min(100, (f - 30) / 70 * 100)); };
-      bar = '<span class="m-scale">' + (x.temp != null ? '<b class="out" style="left:' + at(x.temp) + '%"></b>' : '') + (x.inside != null ? '<b class="in" style="left:' + at(x.inside) + '%"></b>' : '') + '</span>';
-    } else {
-      var list = [];
-      ['high', 'mid', 'low'].forEach(function (k) { for (var i = 0; i < x.sevs[k]; i++) list.push(k); });
-      bar = '<span class="m-bar">' + (list.length ? list.map(function (k) { return '<i class="sev-' + k + '"></i>'; }).join('') : '<i class="sev-ok"></i>') + '</span>';
-    }
-    return '<span class="m-top"><span class="m-big">' + esc(x.big) + '</span><span class="m-side"><span class="chip-lbl">' + c.label + (x.unit ? ' ' + esc(x.unit) : '') + '</span>' +
-      '<span class="chip-sub">' + esc(c.id === 'lights' || c.id === 'problems' ? (c.sub || c.main) : c.id === 'climate' ? (c.sub || c.main) : c.main) + '</span></span><span class="m-ic">' + c.icon + '</span></span>' + bar;
-  }
-  function chipLive(c) {
-    var x = c.x || {}, ic = '';
-    if (c.id === 'lights') {
-      var col = x.cols[0] || 'var(--fg-muted)';
-      ic = '<span class="live-ic bulbs' + (c.on ? ' on' : '') + '" style="--c:' + col + '">' + BULB + '<span class="rays"></span></span>';
-    } else if (c.id === 'media') {
-      ic = '<span class="live-ic waves' + (x.playing ? ' on' : '') + '" style="--c:' + (x.appBg || 'var(--accent)') + '"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4z"/><path class="w1" d="M15.5 9.5a3.5 3.5 0 0 1 0 5"/><path class="w2" d="M18.5 7a7 7 0 0 1 0 10"/><path class="w3" d="M21.5 4.5a10.5 10.5 0 0 1 0 15"/></svg></span>';
-    } else if (c.id === 'climate') {
-      var f = x.temp == null ? 0 : Math.max(0.08, Math.min(1, ((extras.weather && /C/.test(extras.weather.unit || '') ? x.temp * 9 / 5 + 32 : x.temp) - 30) / 70));
-      ic = '<span class="live-ic thermo" style="--c:' + tempColour(x.temp) + ';--f:' + f.toFixed(2) + '"><span class="tube"><span class="fill"></span></span><span class="ball"></span></span>';
-    } else {
-      ic = '<span class="live-ic warn' + (x.sevs.high ? ' hot' : (x.sevs.mid || x.sevs.low) ? ' mild' : ' ok') + '">' + (c.on ? ALERT : '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>') + '</span>';
-    }
-    return ic + chipText(c);
-  }
   function chipsHtml() {
     if (!rooms) return '';
     var cs = chipData();
     if (!cs.length) return '';
     var st = chipStyle();
-    return '<div class="chips st-' + st + '" role="group" aria-label="Your home at a glance">' + cs.map(function (c) {
-      return '<button class="chip k-' + c.id + (c.on ? ' on' : '') + (c.warn ? ' warn' : '') + (view === c.id ? ' sel' : '') + '" data-view="' + c.id + '" aria-pressed="' + (view === c.id) + '" aria-label="' + esc(c.label + ': ' + c.main + (c.sub ? ', ' + c.sub : '')) + '">' +
-        (st === 'meter' ? chipMeter(c) : st === 'live' ? chipLive(c) : chipAura(c)) + '</button>';
-    }).join('') + '</div>';
+    if (st === 'sentence') return '<p class="glance" role="group" aria-label="Your home at a glance">' + cs.map(sentencePart).join('<span class="sep" aria-hidden="true"> · </span>') + '</p>';
+    return '<div class="' + (st === 'tiles' ? 'tiles2' : 'pills') + '" role="group" aria-label="Your home at a glance">' + cs.map(st === 'tiles' ? chipTile : chipPill).join('') + '</div>';
   }
 
   // ── The gear's settings (round 4, Q-settings: a gear next to Edit).
@@ -943,7 +925,9 @@ function homeAssistantPageHtml(): string {
       ? '<div class="confirm" role="group" aria-label="Confirm"><span>Turn off ' + lit.length + ' light' + (lit.length === 1 ? '' : 's') + '?</span>' +
         '<button class="yc-button yc-button--sm yc-button--danger" data-act="house-off-yes">Turn off</button>' +
         '<button class="yc-button yc-button--sm yc-button--ghost" data-act="house-off-no">Cancel</button></div>'
-      : '<button class="yc-button yc-button--sm" data-act="house-off"' + (lit.length && !editing ? '' : ' disabled') + '>Everything off</button>';
+      // Removed for now (round 4 settings note: "remove the everything off
+      // button at the top of the page for now"); its confirm stays wired.
+      : '';
     var count = hidden.size && !editing ? '<span class="yc-caption">' + hidden.size + ' hidden</span>' : '';
     return count + off + '<button class="yc-button yc-button--sm' + (editing ? ' yc-button--primary' : '') + '" data-act="edit" aria-pressed="' + editing + '">' + (editing ? 'Done' : 'Edit') + '</button>' +
       '<button class="yc-button yc-button--sm yc-button--icon gear" data-view="settings" aria-pressed="' + (view === 'settings') + '" aria-label="Page settings" title="Page settings">' + GEAR + '</button>';
@@ -982,8 +966,12 @@ function homeAssistantPageHtml(): string {
   function viewHtml() {
     var c = chipData().filter(function (x) { return x.id === view; })[0];
     if (view === 'settings') c = { label: 'Page settings', main: 'What this page shows' };
-    var head = '<div class="vhead"><button class="yc-button yc-button--sm yc-button--ghost" data-view="' + view + '">' + BACK + 'Home</button>' +
-      '<div class="vtitle"><h2>' + (c ? c.label : '') + '</h2>' + (c ? '<span class="yc-caption">' + esc(c.main + (c.sub ? ' · ' + c.sub : '')) + '</span>' : '') + '</div></div>';
+    // Round 4 note: "change the back/home button styling and the headers".
+    // A round back button, then the page's icon, its title large, and what
+    // is happening under it.
+    var vIcon = view === 'settings' ? GEAR : c ? c.icon : '';
+    var head = '<div class="vhead"><button class="vback" data-view="' + view + '" aria-label="Back to Home" title="Back to Home">' + BACK + '</button>' +
+      '<span class="vicon2">' + vIcon + '</span><div class="vtitle"><h2>' + (c ? c.label : '') + '</h2>' + (c ? '<span class="vsub">' + esc(c.main + (c.sub ? ' · ' + c.sub : '')) + '</span>' : '') + '</div></div>';
     var body = '';
     if (view === 'settings') return head + settingsPageHtml();
     if (view === 'problems') {
@@ -1003,10 +991,43 @@ function homeAssistantPageHtml(): string {
         return { id: r.id, name: r.name, scenes: view === 'lights' ? r.scenes : [], items: r.items.filter(keep) };
       }).filter(function (r) { return r.items.some(function (it) { return !hidden.has(it.id) && domain(it.id) !== 'remote'; }); });
       var ids = list.map(function (r) { return r.id; });
-      if (view === 'climate') body += weatherHtml();
+      if (view === 'climate') {
+        // Most homes have one thermostat, so it leads the page, large (round
+        // 4 note: "that card should be much more prominent/restyled"); the
+        // weather sits beside it, and any other thermostats follow.
+        var ths = allItems().filter(function (x) { return domain(x.it.id) === 'climate'; });
+        body += '<div class="clim-hero-row">' + (ths.length ? thermoHero(ths[0].it, ths[0].room) : '') + weatherHtml() + '</div>';
+        list = list.map(function (r) { return { id: r.id, name: r.name, scenes: [], items: r.items.filter(function (it) { return !ths.length || it.id !== ths[0].it.id; }) }; }).filter(function (r) { return r.items.length; });
+      }
       body += '<div class="rooms">' + list.map(function (r) { return roomHtml(r, ids, view === 'lights'); }).join('') + '</div>';
     }
     return head + body;
+  }
+  // The thermostat, large: a dial whose arc fills to the setting in the
+  // mode's colour, a dot where the room is now, the setting in the middle,
+  // big − and + either side, and the modes under it.
+  function thermoHero(it, room) {
+    if (gone(it)) return '<div class="th-hero gone"><div class="th-side"><div class="th-name">' + esc(it.name) + '</div><div class="vsub">Not responding' + (it.maker && /nest/i.test(it.maker) ? ' — Google Nest needs you to sign in again (see Problems).' : '.') + '</div></div></div>';
+    var mode = it.state, lo = it.min != null ? it.min : 50, hi = it.max != null ? it.max : 90;
+    var f = function (v) { return Math.max(0, Math.min(1, (v - lo) / (hi - lo))); };
+    var hasSet = it.target != null && mode !== 'off';
+    var R = 80, L = 2 * Math.PI * R * 0.75, C = 2 * Math.PI * R;
+    var fill = hasSet ? f(it.target) * L : 0;
+    var nowA = it.cur != null ? (135 + 270 * f(it.cur)) * Math.PI / 180 : null;
+    var dot = nowA == null ? '' : '<circle class="th-now" cx="' + (100 + R * Math.cos(nowA)).toFixed(1) + '" cy="' + (100 + R * Math.sin(nowA)).toFixed(1) + '" r="7"/>';
+    var doing = it.action ? (DOING[it.action] || it.action) : (MODE_NAMES[mode] || mode);
+    var step = it.step || 1;
+    var modes = Array.isArray(it.modesHvac) && it.modesHvac.length ? '<div class="th-modes" role="group" aria-label="Mode">' + it.modesHvac.map(function (m) {
+      return '<button class="th-mode" aria-pressed="' + (m === mode) + '" data-mode="' + esc(it.id) + '" data-hvac="' + esc(m) + '">' + esc(MODE_NAMES[m] || m) + '</button>';
+    }).join('') + '</div>' : '';
+    return '<div class="th-hero clim ' + esc(mode) + '"><span class="glow"></span>' +
+      '<div class="th-dial"><svg viewBox="0 0 200 200" aria-hidden="true"><circle class="th-track" cx="100" cy="100" r="' + R + '" stroke-dasharray="' + L.toFixed(1) + ' ' + C.toFixed(1) + '" transform="rotate(135 100 100)"/>' +
+      (hasSet ? '<circle class="th-fill" cx="100" cy="100" r="' + R + '" stroke-dasharray="' + fill.toFixed(1) + ' ' + C.toFixed(1) + '" transform="rotate(135 100 100)"/>' : '') + dot + '</svg>' +
+      '<div class="th-mid"><span class="th-lbl">' + (hasSet ? esc(doing) + ' to' : 'Off') + '</span><span class="th-set">' + (hasSet ? esc(it.target) + '°' : '—') + '</span><span class="th-cur">' + (it.cur != null ? 'Now ' + esc(it.cur) + '°' : '') + '</span></div></div>' +
+      '<div class="th-side"><div class="th-name">' + esc(it.name) + '<span class="vsub"> · ' + esc(room.name) + '</span></div>' +
+      (hasSet ? '<div class="th-steps"><button class="th-step" aria-label="Cooler" data-temp="' + esc(it.id) + '" data-delta="' + (-step) + '"' + (it.target <= lo ? ' disabled' : '') + '>−</button>' +
+        '<button class="th-step" aria-label="Warmer" data-temp="' + esc(it.id) + '" data-delta="' + step + '"' + (it.target >= hi ? ' disabled' : '') + '>+</button></div>' : '') +
+      modes + '</div></div>';
   }
   // Outside, as a wide card coloured like the sky it describes (round 4
   // note: the weather card "looks a bit odd … we can make it prettier").
