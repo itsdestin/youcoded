@@ -207,6 +207,7 @@ const IPC = {
   FIRST_RUN_RETRY: 'first-run:retry',
   FIRST_RUN_START_AUTH: 'first-run:start-auth',
   FIRST_RUN_SUBMIT_API_KEY: 'first-run:submit-api-key',
+  FIRST_RUN_CANCEL_AUTH: 'first-run:cancel-auth',
   FIRST_RUN_SKIP: 'first-run:skip',
   // First-run local models (2026-09-14) — mirrors shared/types.ts.
   FIRST_RUN_LOCAL_SETUP: 'first-run:local-setup',
@@ -1377,6 +1378,8 @@ contextBridge.exposeInMainWorld('claude', {
     // is for. Without it main keeps the old Claude Code path.
     submitApiKey: (key: string, service?: string): Promise<void> =>
       ipcRenderer.invoke(IPC.FIRST_RUN_SUBMIT_API_KEY, key, service),
+    // The sign-in wait screen's Cancel (2026-10-03).
+    cancelAuth: (): Promise<void> => ipcRenderer.invoke(IPC.FIRST_RUN_CANCEL_AUTH),
     skip: (): Promise<void> => ipcRenderer.invoke(IPC.FIRST_RUN_SKIP),
     // First-run local models (2026-09-14).
     localSetup: (): Promise<any> => ipcRenderer.invoke(IPC.FIRST_RUN_LOCAL_SETUP),

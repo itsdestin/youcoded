@@ -58,11 +58,12 @@ export interface FirstRunNativeDeps {
 // The slice of ChatGptAuth the wizard drives. Narrowed on purpose: the wizard
 // only starts a sign-in and waits for it, so a test can hand in a two-method
 // fake instead of the whole account machine (main.ts passes the real one).
-export type ChatGptSignInAuth = Pick<ChatGptAuth, 'signIn' | 'waitForSignIn'>;
+export type ChatGptSignInAuth = Pick<ChatGptAuth, 'signIn' | 'waitForSignIn' | 'cancelSignIn'>;
 /** The same two verbs of Sign in with OpenRouter (providers/openrouter-oauth.ts). */
 export interface OpenRouterSignInAuth {
   signIn(opts?: { timeoutMs?: number }): Promise<boolean>;
   waitForSignIn(): Promise<'signed-in' | 'cancelled' | 'timed-out' | { error: string }>;
+  cancelSignIn(): Promise<boolean>;
 }
 
 // The wizard's ChatGPT sign-in window (design §9.1, review R2-11): a first
@@ -154,6 +155,13 @@ export async function setupIsUsable(io: {
 export class FirstRunManager extends EventEmitter {
   private state: FirstRunState;
   private running = false;
+  // WHY (Destin, 2026-10-03 VM test): once a sign-in button was pressed there was no way back —
+  // the wait screen had no Cancel, so changing your mind meant restarting the app. cancelAuth()
+  // bumps authRound so a sign-in that finishes, fails or times out after being cancelled is
+  // ignored, and stops whatever is still waiting (the browser round, or Claude's login process).
+  private authRound = 0;
+  private activeSignIn: { cancelSignIn(): Promise<boolean> } | null = null;
+  private stopOAuth: (() => void) | null = null;
 
   /**
    * Returns true if this is the first run (setup not yet completed).
@@ -421,6 +429,7 @@ export class FirstRunManager extends EventEmitter {
 
   /** Called from IPC when the user chooses OAuth login. */
   async handleOAuthLogin(): Promise<{ url: string | null }> {
+    const round = ++this.authRound;
     this.updateState({ authMode: 'oauth', statusMessage: 'Waiting for you to log in...', lastError: undefined });
     this.updatePrereq('auth', { status: 'installing' });
 
@@ -465,9 +474,12 @@ export class FirstRunManager extends EventEmitter {
       const detection = await detectClaude();
       this.updatePrereq('claude', { status: 'installed', version: detection.version });
     }
+    // Cancelled while Claude Code was installing: keep the install, skip the login.
+    if (round !== this.authRound) return { url: null };
 
     // Spawn the login process — it outputs the auth URL then waits for callback
     const oauth = startOAuthLogin();
+    this.stopOAuth = () => oauth.kill();
 
     // Wait briefly for the URL to be captured from stdout
     await new Promise(r => setTimeout(r, 1500));
@@ -486,6 +498,8 @@ export class FirstRunManager extends EventEmitter {
     // Then poll in the background for auth completion
     void pollAuthStatus(120000, 2000).then((success) => {
       oauth.kill();
+      if (round !== this.authRound) return; // cancelled meanwhile — the buttons are already back
+      this.stopOAuth = null;
       if (success) {
         this.updateState({ authComplete: true });
         this.updatePrereq('auth', { status: 'installed' });
@@ -503,6 +517,7 @@ export class FirstRunManager extends EventEmitter {
       // reason rather than leaving the user on a spinner — and never let it
       // escape as an unhandled rejection during first-run.
       oauth.kill();
+      if (round !== this.authRound) return;
       const detail = err instanceof Error ? err.message : String(err);
       log('ERROR', 'first-run', 'OAuth poll failed', { detail });
       this.updateState({ authMode: 'none', lastError: `Login check failed: ${detail}` });
@@ -653,6 +668,7 @@ export class FirstRunManager extends EventEmitter {
    *  a timeout or an error. Never sees a token: the account machine stores it,
    *  this only learns the outcome word. */
   async handleChatGptLogin(auth: ChatGptSignInAuth): Promise<void> {
+    const round = ++this.authRound;
     this.updateState({ authMode: 'chatgpt', statusMessage: 'Waiting for you to sign in…' });
     this.updatePrereq('auth', { status: 'installing' });
 
@@ -672,7 +688,10 @@ export class FirstRunManager extends EventEmitter {
     }
 
     log('INFO', 'first-run', 'ChatGPT sign-in page opened, waiting for the callback');
+    this.activeSignIn = auth;
     const outcome = await auth.waitForSignIn();
+    if (round !== this.authRound) return; // the person pressed Cancel; the buttons are already back
+    this.activeSignIn = null;
 
     if (outcome === 'signed-in') {
       // Same closing moves as handleOAuthLogin's success path. authMode stays
@@ -712,6 +731,7 @@ export class FirstRunManager extends EventEmitter {
    *  checks and saves itself — then finishes setup on OpenRouter. Never sees
    *  the key. Replaced the "coming in a later update" line (2026-09-18). */
   async handleOpenRouterLogin(auth: OpenRouterSignInAuth): Promise<void> {
+    const round = ++this.authRound;
     this.updateState({ authMode: 'openrouter', statusMessage: 'Waiting for you to sign in…', lastError: undefined });
     try {
       await auth.signIn({ timeoutMs: CHATGPT_FIRST_RUN_TIMEOUT_MS });
@@ -721,7 +741,10 @@ export class FirstRunManager extends EventEmitter {
       this.updateState({ authMode: 'none', lastError: detail });
       return;
     }
+    this.activeSignIn = auth;
     const outcome = await auth.waitForSignIn();
+    if (round !== this.authRound) return; // the person pressed Cancel; the buttons are already back
+    this.activeSignIn = null;
     if (outcome === 'signed-in') {
       log('INFO', 'first-run', 'OpenRouter sign-in succeeded');
       // setupProvider makes OpenRouter the default for new sessions
@@ -738,6 +761,22 @@ export class FirstRunManager extends EventEmitter {
       : outcome.error;
     log('WARN', 'first-run', 'OpenRouter sign-in did not complete', { reason: lastError });
     this.updateState({ authMode: 'none', lastError });
+  }
+
+  /** The wait screen's Cancel: back to the sign-in choices, with no error line. */
+  async cancelAuth(): Promise<void> {
+    const mode = this.state.authMode;
+    if (mode !== 'oauth' && mode !== 'chatgpt' && mode !== 'openrouter') return;
+    this.authRound++;
+    const signIn = this.activeSignIn;
+    this.activeSignIn = null;
+    this.stopOAuth?.();
+    this.stopOAuth = null;
+    this.updateState({ authMode: 'none', lastError: undefined, statusMessage: 'Sign in to continue' });
+    this.updatePrereq('auth', { status: 'waiting' });
+    log('INFO', 'first-run', 'Sign-in cancelled by the user', { mode });
+    // Frees the browser round's callback port so the next sign-in can start straight away.
+    if (signIn) await signIn.cancelSignIn().catch(() => false);
   }
 
   // -------------------------------------------------------------------------
