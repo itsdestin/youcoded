@@ -2645,12 +2645,11 @@ describe('pages:* Phase 2 channel parity', () => {
     expect(shim).toContain("kind: 'video-stopped'");
     // A window or client going away stops its videos with its sockets (one call covers both).
     expect(read('src', 'main', 'pages', 'pages-ipc.ts')).toContain('svc.closeOwner(key)');
-    expect(read('src', 'main', 'remote-server.ts')).toContain('getPagesService()?.closeOwner(clientOwnerKey(client.id))');
   });
 
   it('a remote client\'s socket events go to that client only, never broadcast or queued for a restore', () => {
     const server = read('src', 'main', 'pages', 'pages-remote.ts');
     expect(server).not.toMatch(/\.broadcast\(|enqueueForRestoring/);
-    expect(read('src', 'main', 'remote-server.ts')).toContain('closeOwner(clientOwnerKey(client.id))');
+    // That a dropped client's sockets close is a behaviour test now: remote-server-connections.test.ts (the real removeClient path).
   });
 });

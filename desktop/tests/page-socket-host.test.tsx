@@ -10,7 +10,7 @@ import { render, act, waitFor } from '@testing-library/react';
 import { ArtifactProvider } from '../src/renderer/state/ArtifactContext';
 import { initialArtifactState } from '../src/renderer/state/artifact-tracker';
 import { PageHost } from '../src/renderer/components/pages/PageHost';
-import { createPageSocketHub, SOCKET_PING_MS } from '../src/renderer/components/pages/page-socket-host';
+import { createPageSocketHub, RESUME_RETRY_MS, SOCKET_PING_MS } from '../src/renderer/components/pages/page-socket-host';
 import type { PageSocketEvent } from '../src/shared/pages-types';
 
 const snapshot = vi.hoisted(() => ({ current: { pages: [] as any[], loaded: true, failed: false } }));
@@ -86,13 +86,72 @@ describe('the hub between a page and main', () => {
     hub.handleFrameMessage({ type: 'youcoded:socket:send', id: 's1', text: 'x'.repeat(64_001) });
     hub.handleFrameMessage({ type: 'youcoded:socket:close', id: 'sNope' });
     hub.handleFrameMessage({ ...OPEN, id: 42 });
-    hub.handleFrameMessage({ ...OPEN, id: 's2', url: 7 });
-    hub.handleFrameMessage({ ...OPEN, id: 's3', url: 'x'.repeat(3000) });
+    hub.handleFrameMessage({ ...OPEN, id: 's1' }); // the page repeating an id it already opened
     expect(posted).toHaveLength(before);
     expect(m.bridge.socketSend).not.toHaveBeenCalled();
     expect(m.bridge.socketClose).not.toHaveBeenCalled();
     expect(m.bridge.socketOpen).toHaveBeenCalledTimes(1);
     expect(hub.handleFrameMessage({ type: 'youcoded:data:set' })).toBe(false); // not a socket message
+    hub.dispose();
+  });
+
+  it('answers every open it will not make with "closed" and a plain reason, so the page never waits forever', async () => {
+    const { m, posted, hub } = hubRig();
+    hub.handleFrameMessage({ ...OPEN, id: 's2', url: 7 });
+    expect(posted.at(-1)).toMatchObject({ id: 's2', kind: 'state', state: 'closed', why: expect.stringContaining('could not read') });
+    hub.handleFrameMessage({ ...OPEN, id: 's3', url: 'x'.repeat(3000) });
+    expect(posted.at(-1)).toMatchObject({ id: 's3', state: 'closed' });
+    for (let i = 0; i < 8; i++) hub.handleFrameMessage({ ...OPEN, id: `k${i}` });
+    hub.handleFrameMessage({ ...OPEN, id: 'ninth' });
+    expect(posted.at(-1)).toMatchObject({ id: 'ninth', state: 'closed', why: expect.stringContaining('at most 8') });
+    expect(m.bridge.socketOpen).toHaveBeenCalledTimes(8);
+    hub.dispose();
+  });
+
+  it('tells the page every live socket is closed when the hub ends, so no handle is left "open"', async () => {
+    const { m, posted, hub } = hubRig();
+    hub.handleFrameMessage(OPEN);
+    hub.handleFrameMessage({ ...OPEN, id: 's2' });
+    await flush();
+    m.push({ socket: 'm1', kind: 'state', state: 'open' });
+    posted.length = 0;
+    hub.dispose();
+    expect(posted.map((p) => [p.id, p.state])).toEqual([['s1', 'closed'], ['s2', 'closed']]);
+    expect(posted[0].why).toContain('not on screen');
+  });
+
+  it('stays paused, and asks again later, when main refuses the reopen after the window is shown again', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { m, posted, hub } = hubRig();
+    hub.handleFrameMessage(OPEN);
+    await flush();
+    m.push({ socket: 'm1', kind: 'state', state: 'open' });
+    setVisibility('hidden');
+    m.bridge.socketOpen.mockResolvedValueOnce({ ok: false, message: 'This page is opening live connections faster than the app allows.' } as any);
+    setVisibility('visible');
+    await flush();
+    // Not 'closed': the page's socket worked before the hide, and the limit is momentary.
+    expect(posted.at(-1)).toMatchObject({ id: 's1', state: 'paused', why: expect.stringContaining('faster than the app allows') });
+    await vi.advanceTimersByTimeAsync(RESUME_RETRY_MS);
+    await flush();
+    expect(m.bridge.socketOpen).toHaveBeenCalledTimes(3);
+    m.push({ socket: 'm2', kind: 'state', state: 'open' });
+    expect(posted.at(-1)).toMatchObject({ id: 's1', state: 'open' });
+    hub.dispose();
+  });
+
+  it('gives up with "closed" after repeated refusals when reopening, and a refused FIRST open is closed at once', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { m, posted, hub } = hubRig();
+    hub.handleFrameMessage(OPEN);
+    await flush();
+    setVisibility('hidden');
+    m.bridge.socketOpen.mockResolvedValue({ ok: false, message: 'No.' } as any);
+    setVisibility('visible');
+    for (let i = 0; i < 6; i++) { await flush(); await vi.advanceTimersByTimeAsync(RESUME_RETRY_MS); }
+    await flush();
+    expect(posted.at(-1)).toMatchObject({ id: 's1', state: 'closed', why: 'No.' });
+    expect(vi.getTimerCount()).toBe(0);
     hub.dispose();
   });
 

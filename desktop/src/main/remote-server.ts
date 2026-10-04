@@ -818,8 +818,7 @@ export class RemoteServer {
     for (const client of this.clients) {
       // WHY: stop clears clients before close events run; invalidate pending starts now.
       this.handoffRoute?.cancelOwner(`remote:${client.id}`);
-    // A dropped client's live page sockets must not outlive it.
-    getPagesService()?.closeOwner(clientOwnerKey(client.id));
+      getPagesService()?.closeOwner(clientOwnerKey(client.id)); // shutdown clears `clients` without removeClient
       client.ws.close(1001, 'Server shutting down');
     }
     this.clients.clear();
@@ -905,6 +904,7 @@ export class RemoteServer {
     if (!this.clients.delete(client)) return;
     // WHY: close/error/liveness drops must invalidate in-flight starts for this connection only.
     this.handoffRoute?.cancelOwner(`remote:${client.id}`);
+    getPagesService()?.closeOwner(clientOwnerKey(client.id)); // WHY here: every real drop (close, error, ping timeout, unpair) ends here; without it a phone's live sockets lived on for the 60 s lease and counted against its reconnect
     if (this.clients.size === 0 && this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null; }
     this.emitStatus(); // clientCount changed — see RemoteStatus.clientCount
   }

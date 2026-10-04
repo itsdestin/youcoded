@@ -131,6 +131,27 @@ describe('a live socket and the approvals it stands on', () => {
     expect(service.sockets.count).toBe(0);
   });
 
+  it('a manifest change is noticed even when the page was never listed before its socket opened', async () => {
+    // A remote client lists through the store, so the app can start with a socket open on a page that
+    // listAndWatch has never seen. That first sighting used to only record, so the edit below closed nothing.
+    await service.approve(PAGE, { ha: KEY, weather: 'w-key-12345' }, { remote: false });
+    service.stop();
+    const userData = path.join(root, 'userData');
+    const fresh = initPagesService({
+      personalRoot: () => personal, listProjects: async () => [], deviceId: () => 'dev-1', localFallbackDir: () => path.join(root, 'local'),
+      connections: new PageConnectionsStore(userData, new SecretsStore(userData)), broadcast: () => {},
+      lookup: async () => { throw new Error('no DNS in this test'); },
+      liveSocketConnect: () => { const w = new FakeWs(); wss.push(w); return w as unknown as LiveWsLike; },
+    });
+    try {
+      const r = await fresh.sockets.open(owner, { page: PAGE, frame: 'f1', url: URL_HA });
+      expect(r.ok).toBe(true);
+      await writePage([{ ...HOME, socketDeny: ['config/core'] }, WEATHER]); // the manifest loses nothing the person approved, but it changed
+      await fresh.listAndWatch();
+      expect(fresh.sockets.count).toBe(0);
+    } finally { fresh.stop(); }
+  });
+
   it('the page being deleted closes its sockets', async () => {
     await service.approve(PAGE, { ha: KEY, weather: 'w-key-12345' }, { remote: false });
     await openLive();

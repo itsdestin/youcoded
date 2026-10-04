@@ -25,6 +25,10 @@ const MAX_ID_CHARS = 64;
 /** Main caps a page at 2; a few more here is only so the page gets a plain
  *  refusal from main rather than the hub silently ignoring it. */
 const MAX_LOCAL = 8;
+/** A refusal when a hidden window shows again (the rate gate may be full after quick hide/show
+ *  cycles) is not the end: stay 'paused' and ask again after this wait, a few times. */
+export const RESUME_RETRY_MS = 15_000;
+const RESUME_RETRIES = 4;
 
 interface Entry {
   url: string;
@@ -32,6 +36,9 @@ interface Entry {
   state: PageSocketState;
   /** Bumped on every open and close, so an answer for an older attempt is dropped. */
   attempt: number;
+  /** Reopen-after-hidden refusals so far, and the timer for the next try. */
+  retries: number;
+  retryTimer: ReturnType<typeof setTimeout> | null;
 }
 
 export interface PageSocketHub {
@@ -96,10 +103,11 @@ export function createPageSocketHub(opts: {
     }) ?? null;
   };
 
-  /** Ask main for the connection. Used on the page's open and after a hidden pause. */
-  const connect = async (id: string) => {
+  /** Ask main for the connection. Used on the page's open and after a hidden pause (`resume`). */
+  const connect = async (id: string, resume = false) => {
     const e = local.get(id);
     if (!e) return;
+    if (e.retryTimer !== null) { clearTimeout(e.retryTimer); e.retryTimer = null; }
     const b = opts.bridge();
     if (!b?.socketOpen) { tell(id, 'closed', 'This window cannot open live connections.'); local.delete(id); return; }
     ensureSubscribed();
@@ -115,7 +123,18 @@ export function createPageSocketHub(opts: {
       if (result.ok) void b.socketClose?.({ ...call(), socket: result.socket })?.catch(() => { /* gone */ });
       return;
     }
-    if (!result.ok) { tell(id, 'closed', result.message); local.delete(id); return; }
+    if (!result.ok) {
+      // WHY not closed on a resume: this socket worked before the window was hidden, and a refusal now
+      // (the opening-rate limit after a few quick hide/show cycles) is usually momentary. Stay paused and
+      // try again; only a first open, or several refusals in a row, is the end.
+      if (resume && ++now.retries <= RESUME_RETRIES) {
+        tell(id, 'paused', result.message);
+        now.retryTimer = setTimeout(() => { now.retryTimer = null; if (!disposed && local.get(id) === now && now.state === 'paused' && !hidden()) void connect(id, true); }, RESUME_RETRY_MS);
+        return;
+      }
+      tell(id, 'closed', result.message); local.delete(id); return;
+    }
+    now.retries = 0;
     now.mainId = result.socket;
     byMain.set(result.socket, id);
     syncPinger();
@@ -125,6 +144,7 @@ export function createPageSocketHub(opts: {
     const main = e.mainId;
     e.mainId = null;
     e.attempt++;
+    if (e.retryTimer !== null) { clearTimeout(e.retryTimer); e.retryTimer = null; }
     if (main === null) return;
     byMain.delete(main);
     void opts.bridge()?.socketClose?.({ ...call(), socket: main })?.catch(() => { /* gone */ });
@@ -140,7 +160,7 @@ export function createPageSocketHub(opts: {
         tell(id, 'paused', 'The window is hidden.');
       }
     } else {
-      for (const [id, e] of local) if (e.state === 'paused') void connect(id);
+      for (const [id, e] of local) if (e.state === 'paused') void connect(id, true);
     }
     syncPinger();
   };
@@ -156,8 +176,13 @@ export function createPageSocketHub(opts: {
       // Shape checks: the page's own script wrote these, so nothing is assumed.
       if (typeof id !== 'string' || !id || id.length > MAX_ID_CHARS) return true;
       if (type === PAGE_SOCKET_OPEN_MESSAGE) {
-        if (local.has(id) || local.size >= MAX_LOCAL || typeof d.url !== 'string' || d.url.length > MAX_URL_CHARS) return true;
-        local.set(id, { url: d.url, mainId: null, state: 'connecting', attempt: 0 });
+        // A reused id is the page repeating itself: its live handle already hears the answer, so it is ignored.
+        if (local.has(id)) return true;
+        // WHY answered: ignoring these left the page's handle 'connecting' for good, waiting on an event
+        // that would never come. Every other refused open is answered the same way (as 'closed', with why).
+        if (local.size >= MAX_LOCAL) { tell(id, 'closed', `A page may keep at most ${MAX_LOCAL} live connections open.`); return true; }
+        if (typeof d.url !== 'string' || d.url.length > MAX_URL_CHARS) { tell(id, 'closed', 'That page asked for a live connection the app could not read.'); return true; }
+        local.set(id, { url: d.url, mainId: null, state: 'connecting', attempt: 0, retries: 0, retryTimer: null });
         if (hidden()) tell(id, 'paused', 'The window is hidden.'); else void connect(id);
         return true;
       }
@@ -177,6 +202,10 @@ export function createPageSocketHub(opts: {
     dispose() {
       if (disposed) return;
       disposed = true;
+      // WHY the page is told: the hub can end while the page's document lives on (a hidden-but-mounted
+      // frame, a view that closes and reopens), and a handle left 'open' sends into nothing for good.
+      // Posting into a frame that is already gone does nothing.
+      for (const [id, e] of local) if (e.state !== 'closed') opts.post({ type: PAGE_SOCKET_EVENT_MESSAGE, id, kind: 'state', state: 'closed', why: 'This page is not on screen any more, so its live connection was closed.' });
       stopPinger();
       if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibility);
       unsubscribe?.(); unsubscribe = null;

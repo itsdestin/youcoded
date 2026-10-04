@@ -29,10 +29,19 @@ describe('profile cleaning', () => {
     expect(c.videoProfile).toEqual(VIDEO);
   });
 
-  it('drops wrong types and over-long values', () => {
-    const c = device({ socketReady: 5, socketAuthFailed: 'x'.repeat(65), videoProfile: 'camera.' });
-    expect(c.socketReady).toBeUndefined();
-    expect(c.socketAuthFailed).toBeUndefined();
+  it('refuses the whole connection when a login reply type is present but not valid', () => {
+    // A dropped socketAuthFailed meant a wrong key was never recognised and logins were retried for ten minutes.
+    const raw = { id: 'ha', kind: 'device', service: 'Home Assistant', address: '192.168.4.54:8123', access: 'full', socketHello: HELLO };
+    for (const bad of [5, 'x'.repeat(65), '', 'has space', null]) {
+      expect(parseConnections([{ ...raw, socketReady: bad }]), `socketReady ${String(bad).slice(0, 8)}`).toEqual([]);
+      expect(parseConnections([{ ...raw, socketAuthFailed: bad }]), `socketAuthFailed ${String(bad).slice(0, 8)}`).toEqual([]);
+    }
+    expect(parseConnections([{ ...raw, socketReady: 'auth_ok', socketAuthFailed: 'auth_invalid' }])).toHaveLength(1);
+    expect(parseConnections([raw])).toHaveLength(1);
+  });
+
+  it('drops a video profile of the wrong type, keeping the connection', () => {
+    const c = device({ videoProfile: 'camera.' });
     expect(c.videoProfile).toBeUndefined();
   });
 

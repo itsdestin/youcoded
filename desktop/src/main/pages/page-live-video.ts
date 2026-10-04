@@ -211,9 +211,11 @@ export class PageLiveVideos {
   private emitAnswer(v: Video, sdp: string): void { this.push(v, { socket: v.id, kind: 'video-answer', answer: sdp }); }
 
   private push(v: Video, event: Parameters<SocketOwner['push']>[0]): void {
+    if (v.closed) return;
     const r = v.owner.push(event);
     // A remote client that is not reading loses THIS video, never its connection.
-    if (r === 'backed-up') this.finish(v, 'Your phone is not keeping up with this video, so it was stopped.', false);
+    // WHY told: a silent stop left the card showing a frozen picture; the one small 'stopped' frame goes through a backlog.
+    if (r === 'backed-up') this.finish(v, 'Your phone is not keeping up with this video, so it was stopped.', true);
     else if (r === 'gone') this.finish(v, '', false);
   }
 

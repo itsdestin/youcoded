@@ -442,6 +442,16 @@ describe('limits, ownership and when a video must end', () => {
     c.ws.say(answerMsg(SDP(GOOD)));
     expect(slow.videos.count).toBe(0);
     expect(c.ws.terminated).toBe(true);
+    // The card is told, or it would keep showing a frozen picture as if it were playing.
+    expect(events.at(-1)).toMatchObject({ kind: 'video-stopped', why: expect.stringContaining('not keeping up') });
+  });
+
+  it('stops, without a push to a window that is gone, and a failed push closes only that video', async () => {
+    const r = rig();
+    const { ws } = await playing(r, {}, { key: 'window:1', push: () => 'gone' });
+    ws.say(answerMsg(SDP(GOOD)));
+    expect(r.videos.count).toBe(0);
+    expect(ws.terminated).toBe(true);
   });
 });
 

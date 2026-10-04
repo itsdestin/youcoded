@@ -92,6 +92,15 @@ describe('the remote host\'s live sockets', () => {
     await vi.advanceTimersByTimeAsync(LIVE_LIMITS.batchMs);
     vi.useRealTimers();
     expect(service.sockets.count).toBe(0);
+    // The slow client is still told, by one small closing frame that goes through the backlog.
+    const heard = JSON.parse(c.sent.at(-1)!);
+    expect(heard).toMatchObject({ type: 'pages:socket-event', payload: { kind: 'state', state: 'closed', why: expect.stringContaining('not keeping up') } });
+    expect(c.sent.filter((s) => JSON.parse(s).payload.kind === 'messages')).toHaveLength(0);
+  });
+
+  it('treats a client that cannot be written to as gone, instead of throwing into a timer', () => {
+    const broken = fakeClient('A', { send: () => { throw new Error('socket is closing'); } });
+    expect(sendToClient(broken.client, { socket: 's', kind: 'messages', texts: ['x'] })).toBe('gone');
   });
 
   it('closeOwner on the client key (the host\'s drop path) closes everything it held', async () => {

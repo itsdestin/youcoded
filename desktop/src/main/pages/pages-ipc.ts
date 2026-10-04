@@ -69,9 +69,14 @@ export function registerPagesIpc(ipcMain: IpcMain, pagesService: Service): void 
     return {
       key: windowOwnerKey(sender.id),
       push: (event: PageSocketEvent): PushResult => {
-        if (sender.isDestroyed()) return 'gone';
-        sender.send(ch.event, event);
-        return 'sent';
+        // WHY try/catch: webContents.send can throw for a frame being torn down even after the
+        // isDestroyed check, and this runs in timers and socket callbacks (an uncaught throw there
+        // is a main-process crash). A failed push closes that one socket.
+        try {
+          if (sender.isDestroyed()) return 'gone';
+          sender.send(ch.event, event);
+          return 'sent';
+        } catch { return 'gone'; }
       },
     };
   };

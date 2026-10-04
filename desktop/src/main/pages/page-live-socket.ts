@@ -27,8 +27,9 @@ export const LIVE_LIMITS = {
   inMessageBytes: 1_000_000,
   /** In: batching — one push every 100 ms, at most 256 KB each. */
   batchMs: 100, pushBytes: 256_000,
-  /** In: more than this in the window closes the socket. */
-  floodBytes: 2_000_000, floodWindowMs: 10_000,
+  /** In: more than this in the window closes the socket. The window is counted in
+   *  one-second buckets (floodBuckets of them), so each message costs a constant. */
+  floodBytes: 2_000_000, floodWindowMs: 10_000, floodBuckets: 10,
   binaryFrames: 20,
   openWaitMs: 10_000,
   /** Reconnect: 1, 2, 4 … 30 s, give up after 10 minutes down. */
@@ -37,6 +38,8 @@ export const LIVE_LIMITS = {
   leaseMs: 60_000,
   /** A connection with no "logged in" reply to wait for counts as sound once it has stayed open this long. */
   stableMs: 10_000,
+  /** After the "logged in" reply: the connection must stay open this long before the backoff starts over. */
+  readyStableMs: 30_000,
   /** A remote client holding more than this unread is too slow for a live feed. */
   remoteBacklogBytes: 4 * 1024 * 1024,
 } as const;
@@ -73,7 +76,9 @@ export function defaultConnect(url: string, headers: Record<string, string>): Li
     followRedirects: false,
     // ws closes the connection (code 1009) on anything bigger.
     maxPayload: LIVE_LIMITS.inMessageBytes,
-    handshakeTimeout: LIVE_LIMITS.openWaitMs,
+    // WHY no handshakeTimeout: the module's own open timer (openWaitMs) is the one owner of
+    // "10 s to open". A second, equal timer inside ws fired first and turned a first attempt
+    // that should end with a plain reason into a ten-minute reconnect loop.
   });
 }
 
@@ -99,7 +104,10 @@ interface Live {
   lastPing: number;
   abort: AbortController;
   sentAt: number[];
-  flow: Array<{ t: number; bytes: number }>;
+  /** Bytes received per one-second bucket (a ring), the slot of the newest, and the running total. */
+  flow: number[]; flowSlot: number; flowTotal: number;
+  /** True while the device's login reply is still being waited for (only then is a message parsed). */
+  watching: boolean;
   binary: number;
   sawReady: boolean;
   batch: string[];
@@ -134,7 +142,7 @@ export class PageLiveSockets {
       owner, page: req.page, frame: req.frame, url: req.url,
       state: 'connecting', gen: 0, tries: 0, ws: null, connectionId: null, deny: [], secrets: [],
       attempt: 0, downSince: null, lastPing: Date.now(), abort: new AbortController(),
-      sentAt: [], flow: [], binary: 0, sawReady: false, batch: [], closed: false, timers: {},
+      sentAt: [], flow: new Array(LIVE_LIMITS.floodBuckets).fill(0), flowSlot: 0, flowTotal: 0, watching: false, binary: 0, sawReady: false, batch: [], closed: false, timers: {},
     };
     this.sockets.set(s.id, s);
     this.armLease(s);
@@ -155,11 +163,13 @@ export class PageLiveSockets {
     const now = Date.now();
     s.sentAt = s.sentAt.filter((t) => now - t < 1000);
     if (s.sentAt.length >= LIVE_LIMITS.sendsPerSecond) return refusal('That page is sending faster than the app allows. Slow down and try again.');
+    // WHY counted before the check: a refused message still costs main a parse and a
+    // string, so a page cannot spam bad messages past the 20-a-second rule.
+    s.sentAt.push(now);
     // The checked, re-serialised text is what is sent (see checkOutgoingSocketMessage).
     const vetted = checkOutgoingSocketMessage(req.text, s.deny);
     if (!vetted.ok) return refusal(vetted.reason);
     try { s.ws.send(vetted.text); } catch { return refusal('The live connection could not send that.'); }
-    s.sentAt.push(now);
     return { ok: true };
   }
 
@@ -228,7 +238,7 @@ export class PageLiveSockets {
     s.secrets = access.secrets;
     s.readyType = access.connection.socketReady;
     s.authFailedType = access.connection.socketAuthFailed;
-    s.sawReady = false; s.binary = 0; s.flow = []; s.batch = [];
+    s.sawReady = false; s.watching = !!(s.readyType || s.authFailedType); s.binary = 0; s.flow.fill(0); s.flowTotal = 0; s.batch = [];
     const { wsUrl, headers, helloText } = socketTarget(access);
     const host = access.httpUrl.hostname;
 
@@ -245,22 +255,36 @@ export class PageLiveSockets {
       if (s.tries <= 1) this.finish(s, why, true); else this.dropped(s, why);
     }, LIVE_LIMITS.openWaitMs);
 
+    // Whether THIS attempt reached 'open': an error before it, on the very first attempt, is final.
+    let opened = false;
     ws.on('open', () => {
       if (s.closed || gen !== s.gen) { try { ws.terminate(); } catch { /* gone */ } return; }
+      opened = true;
       clearTimeout(s.timers.open); s.timers.open = undefined;
       try { if (helloText) ws.send(helloText); }
       catch (e) { this.dropped(s, redact(e instanceof Error ? e.message : String(e), s.secrets)); return; }
       this.setState(s, 'open');
       // With no "logged in" reply to wait for, staying open is the only proof.
-      if (!s.readyType) s.timers.stable = setTimeout(() => { if (!s.closed && gen === s.gen) this.markStable(s); }, LIVE_LIMITS.stableMs);
+      if (!s.readyType) s.timers.stable = setTimeout(() => { if (!s.closed && gen === s.gen) { s.watching = false; this.markStable(s); } }, LIVE_LIMITS.stableMs);
     });
-    ws.on('message', (data, isBinary) => { if (!s.closed && gen === s.gen) this.received(s, data, isBinary); });
+    ws.on('message', (data, isBinary) => { if (!s.closed && gen === s.gen) this.received(s, data, isBinary, gen); });
     ws.on('unexpected-response', (_req, res) => { if (!s.closed && gen === s.gen) this.dropped(s, `${host} answered ${res?.statusCode ?? 'without a socket'} instead of opening a socket.`); });
-    ws.on('error', (e) => { if (!s.closed && gen === s.gen) this.dropped(s, `Lost the connection to ${host}. ${redact(e?.message ?? '', s.secrets)}`.trim()); });
+    const tooBig = `${host} sent a message larger than the app will pass to a page, so the live connection was closed.`;
+    ws.on('error', (e) => {
+      if (s.closed || gen !== s.gen) return;
+      // WHY here and not only in 'close': for a message over the limit, ws closes with 1009 AND emits this
+      // error first. Treating the error as an ordinary drop made the later close "stale", so the socket
+      // reconnected for ten minutes, re-downloading the same oversized message each time.
+      if ((e as { code?: string })?.code === 'WS_ERR_UNSUPPORTED_MESSAGE_LENGTH') { this.finish(s, tooBig, true); return; }
+      const why = `Lost the connection to ${host}. ${redact(e?.message ?? '', s.secrets)}`.trim();
+      // The first attempt that fails before opening (refused, unreachable, handshake cut off) ends with a
+      // plain reason, the same as one that never answers; only a socket that has worked is retried.
+      if (!opened && s.tries <= 1) this.finish(s, why, true); else this.dropped(s, why);
+    });
     ws.on('close', (code) => {
       if (s.closed || gen !== s.gen) return;
-      // ws answers a message over the 1 MB limit by closing with 1009: retrying would only fetch the same message again.
-      if (code === 1009) this.finish(s, `${host} sent a message larger than the app will pass to a page, so the live connection was closed.`, true);
+      // The same, when only the 1009 close reaches us: retrying would only fetch the same message again.
+      if (code === 1009) this.finish(s, tooBig, true);
       else this.dropped(s, `Lost the connection to ${host}.`);
     });
     return { kind: 'started' };
@@ -272,6 +296,8 @@ export class PageLiveSockets {
     // Bumping the generation makes everything the old connection says from now on stale.
     s.gen++;
     this.flush(s);
+    // flush can end the socket (an owner that is gone or too slow): do not arm a backoff for a closed record.
+    if (s.closed) return;
     this.stopWire(s);
     const now = Date.now();
     s.downSince ??= now;
@@ -294,13 +320,14 @@ export class PageLiveSockets {
     }
   }
 
-  /** A logged-in (or long-open) connection: the backoff starts over. A close
-   *  right after opening is NOT this, so a flapping device keeps backing off. */
+  /** A connection that stayed open (readyStableMs after the login reply, or stableMs
+   *  when there is none): the backoff starts over. A close before that is NOT this,
+   *  so a device that logs in and then drops straight away keeps backing off. */
   private markStable(s: Live): void { s.attempt = 0; s.downSince = null; }
 
   // ── What the device says ───────────────────────────────────────────────
 
-  private received(s: Live, data: WebSocket.RawData, isBinary: boolean): void {
+  private received(s: Live, data: WebSocket.RawData, isBinary: boolean, gen: number): void {
     // Text only: bytes would carry the key past the text redaction.
     if (isBinary) {
       if (++s.binary >= LIVE_LIMITS.binaryFrames) this.finish(s, 'The device sent data the app does not pass on, so the live connection was closed.', true);
@@ -308,23 +335,35 @@ export class PageLiveSockets {
     }
     const raw = data.toString();
     const bytes = Buffer.byteLength(raw);
-    const now = Date.now();
-    s.flow = s.flow.filter((f) => now - f.t < LIVE_LIMITS.floodWindowMs);
-    s.flow.push({ t: now, bytes });
-    if (s.flow.reduce((n, f) => n + f.bytes, 0) > LIVE_LIMITS.floodBytes) {
+    // Flood accounting: one-second buckets in a ring, plus a running total, so a message
+    // costs the same however many arrived before it (a device sending thousands of tiny
+    // messages must not make each one slower). The window is the last floodBuckets seconds.
+    const slot = Math.floor(Date.now() / 1000);
+    const gap = Math.min(slot - s.flowSlot, LIVE_LIMITS.floodBuckets);
+    for (let i = 1; i <= gap; i++) { const k = (s.flowSlot + i) % LIVE_LIMITS.floodBuckets; s.flowTotal -= s.flow[k]; s.flow[k] = 0; }
+    s.flowSlot = slot;
+    s.flow[slot % LIVE_LIMITS.floodBuckets] += bytes;
+    s.flowTotal += bytes;
+    if (s.flowTotal > LIVE_LIMITS.floodBytes) {
       this.finish(s, 'The device sent more than the app will pass to a page, so the live connection was closed.', true);
       return;
     }
-    // Reply-type detection: the exact `type` of a login reply, after JSON.parse
-    // of THAT reply. Only small messages are read (a login reply is tiny; the
-    // big first answer to a subscription is not worth parsing).
+    // Reply-type detection: the exact `type` of a login reply, after JSON.parse of
+    // THAT reply. WHY only while `watching`: the login reply comes before any event, so
+    // once it was seen, parsing every later (mostly tiny) push could never matter and
+    // only cost main time per state change. Big messages are never parsed.
     let authFailed = false;
-    if ((s.readyType || s.authFailedType) && raw.length <= 4096) {
+    if (s.watching && raw.length <= 4096) {
       let type: unknown;
       try { type = (JSON.parse(raw) as { type?: unknown } | null)?.type; } catch { /* not JSON: not a login reply */ }
       if (typeof type === 'string') {
         if (s.authFailedType && type === s.authFailedType) authFailed = true;
-        else if (s.readyType && type === s.readyType && !s.sawReady) { s.sawReady = true; this.markStable(s); }
+        else if (s.readyType && type === s.readyType && !s.sawReady) {
+          s.sawReady = true; s.watching = false;
+          // Logged in is not proof of a sound connection: the backoff starts over only after it stays up.
+          clearTimeout(s.timers.stable);
+          s.timers.stable = setTimeout(() => { if (!s.closed && gen === s.gen) this.markStable(s); }, LIVE_LIMITS.readyStableMs);
+        }
       }
     }
     // Redacted per message BEFORE batching, so a key can never ride a batch.
@@ -361,9 +400,12 @@ export class PageLiveSockets {
   // ── Reporting, and stopping ────────────────────────────────────────────
 
   private deliver(s: Live, event: PageSocketEvent): void {
+    if (s.closed) return;
     const r = s.owner.push(event);
     // A remote client that is not reading fast enough loses THIS socket, never its connection to the computer.
-    if (r === 'backed-up') this.finish(s, 'Your phone is not keeping up with this live connection, so it was closed.', false);
+    // WHY told ('closed' with the reason): the page's handle would otherwise stay 'open' for good, sending
+    // into nothing. The one small closing frame still goes through a backlog (see sendToClient).
+    if (r === 'backed-up') this.finish(s, 'Your phone is not keeping up with this live connection, so it was closed.', true);
     else if (r === 'gone') this.finish(s, 'The window that held this connection went away.', false);
   }
 
@@ -387,6 +429,8 @@ export class PageLiveSockets {
     if (s.closed) return;
     s.gen++;
     if (tell) this.flush(s);
+    // The flush can end the socket itself (an owner that is gone or too slow): nothing more to do then.
+    if (s.closed) return;
     s.closed = true;
     this.stopWire(s);
     clearTimeout(s.timers.backoff); clearTimeout(s.timers.lease);

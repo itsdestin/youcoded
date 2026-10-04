@@ -1354,3 +1354,67 @@ describe('RemoteServer — appearance relay', () => {
   // is the ast-grep rule appearance-broadcast-relays-to-remote in youcoded-dev
   // scripts/ast-grep/ (Plan B, 2026-09-16), which reads the code rather than its text.
 });
+
+// A phone that drops must take its page sockets with it: the live-socket caps count them, so one left
+// behind for its 60 s lease made the reconnecting phone's reopen fail with "at most 2 live connections".
+describe('RemoteServer — a phone\'s live page sockets', () => {
+  class FakeSocket extends EventEmitter {
+    frames: any[] = [];
+    readyState = 1;
+    bufferedAmount = 0;
+    send(raw: string) { this.frames.push(JSON.parse(raw)); }
+    close() { this.readyState = 3; this.emit('close'); }
+    ping() {}
+  }
+  const HOME = { id: 'ha', kind: 'device', service: 'Home Assistant', address: '192.168.4.54:8123', access: 'full', socketHello: '{"type":"auth","access_token":"{{key}}"}' };
+  let root: string;
+  let service: ReturnType<typeof import('../src/main/pages/pages-service').initPagesService>;
+
+  beforeEach(async () => {
+    root = mkdtempSync(join(tmpdir(), 'remote-live-'));
+    const { promises: fs } = await import('node:fs');
+    const { SecretsStore } = await import('../src/main/providers/secrets-store');
+    const { PageConnectionsStore } = await import('../src/main/pages/connections-store');
+    const { initPagesService } = await import('../src/main/pages/pages-service');
+    const personal = join(root, 'Personal');
+    const userData = join(root, 'userData');
+    service = initPagesService({
+      personalRoot: () => personal, listProjects: async () => [], deviceId: () => 'dev-1', localFallbackDir: () => join(root, 'local'),
+      connections: new PageConnectionsStore(userData, new SecretsStore(userData)), broadcast: () => {},
+      lookup: async () => { throw new Error('no DNS'); },
+      liveSocketConnect: () => Object.assign(new EventEmitter(), { send: () => {}, terminate: () => {} }) as never,
+    });
+    const dir = join(personal, 'Pages', 'home');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(join(dir, 'page.json'), JSON.stringify({ name: 'Home', description: 'd', icon: 'page', connections: [HOME] }));
+    await fs.writeFile(join(dir, 'page.html'), '<p>hi</p>');
+    await service.approve('personal:home', { ha: 'ha-long-lived-token-value' }, { remote: false });
+  });
+  afterEach(() => { service.stop(); rmSync(root, { recursive: true, force: true, maxRetries: 3 }); vi.resetModules(); });
+
+  async function phoneWithSocket() {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const sm = Object.assign(new EventEmitter(), { listSessions: vi.fn(() => []) });
+    const server: any = new RemoteServer(sm as never, new EventEmitter() as never, { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) } as never);
+    const ws = new FakeSocket();
+    server.addClient(ws, 'phone-a', '100.64.0.2');
+    const client = [...server.clients].find((c: any) => c.ws === ws);
+    client.phase = 'live';
+    await server.handleMessage(client, JSON.stringify({ type: 'pages:socket-open', id: 'r1', payload: { page: 'personal:home', frame: 'f', url: 'http://192.168.4.54:8123/api/websocket' } }));
+    expect(ws.frames.find((f) => f.id === 'r1')?.payload).toMatchObject({ ok: true });
+    return { server, ws };
+  }
+
+  it('closes them when the phone\'s connection closes', async () => {
+    const { ws } = await phoneWithSocket();
+    expect(service.sockets.count).toBe(1);
+    ws.emit('close', 1006, Buffer.alloc(0));
+    expect(service.sockets.count).toBe(0);
+  });
+
+  it('closes them when the phone\'s connection errors', async () => {
+    const { ws } = await phoneWithSocket();
+    ws.emit('error', new Error('read ECONNRESET'));
+    expect(service.sockets.count).toBe(0);
+  });
+});

@@ -24,8 +24,13 @@ export const clientOwnerKey = (clientId: string): string => `client:${clientId}`
  *  reading loses this socket — the caller closes it — never its connection. */
 export function sendToClient(client: RemotePagesClient, event: PageSocketEvent): PushResult {
   if (client.ws.readyState !== WebSocket.OPEN) return 'gone';
-  if (client.ws.bufferedAmount > LIVE_LIMITS.remoteBacklogBytes) return 'backed-up';
-  client.ws.send(JSON.stringify({ type: PAGE_SOCKET_CHANNELS.event, payload: event }));
+  // WHY the closing frame is let through a backlog: a socket closed because the phone is slow must still be able
+  // to say so (one tiny frame), or the page never learns it is closed.
+  const closing = (event.kind === 'state' && event.state === 'closed') || event.kind === 'video-stopped';
+  if (!closing && client.ws.bufferedAmount > LIVE_LIMITS.remoteBacklogBytes) return 'backed-up';
+  // WHY try/catch: this runs inside timers and socket callbacks, where a throw is an uncaught exception
+  // in the main process. A client that cannot be written to is gone as far as this socket is concerned.
+  try { client.ws.send(JSON.stringify({ type: PAGE_SOCKET_CHANNELS.event, payload: event })); } catch { return 'gone'; }
   return 'sent';
 }
 

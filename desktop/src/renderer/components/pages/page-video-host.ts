@@ -350,7 +350,13 @@ export function createPageVideoHub(opts: {
       // Shape checks: the page's own script wrote these, so nothing is assumed.
       if (typeof id !== 'string' || !id || id.length > 64) return true;
       if (type === PAGE_VIDEO_START_MESSAGE) {
-        if (local.has(id) || local.size >= MAX_LOCAL || typeof d.connection !== 'string' || !d.connection || d.connection.length > 64 || typeof d.target !== 'string' || !d.target || d.target.length > 128) return true;
+        if (local.has(id)) return true; // the page repeating itself: its handle already hears the answer
+        // WHY answered: a silent ignore left the page's video 'starting' for good.
+        if (local.size >= MAX_LOCAL) { opts.post({ type: PAGE_VIDEO_EVENT_MESSAGE, id, kind: 'state', state: 'stopped', why: `A page may play at most ${MAX_LOCAL} videos at once.` }); return true; }
+        if (typeof d.connection !== 'string' || !d.connection || d.connection.length > 64 || typeof d.target !== 'string' || !d.target || d.target.length > 128) {
+          opts.post({ type: PAGE_VIDEO_EVENT_MESSAGE, id, kind: 'state', state: 'stopped', why: 'That page asked for a video the app could not read.' });
+          return true;
+        }
         local.set(id, { mainId: null, attempt: 0, pc: null, el: null, state: 'starting', remoteSet: false, queued: [], outstanding: 0, seq: 0, stopPump: null, timers: {} });
         if (hidden()) { end(id, HIDDEN_WHY, { tellMain: false, tellPage: true }); return true; }
         void begin(id, d.connection, d.target);
@@ -364,7 +370,8 @@ export function createPageVideoHub(opts: {
     },
     dispose() {
       if (disposed) return;
-      for (const id of [...local.keys()]) end(id, null, { tellMain: true, tellPage: false });
+      // WHY the page is told: the hub can end while the page's document lives on, and a card left 'playing' shows a frozen picture for good.
+      for (const id of [...local.keys()]) end(id, 'This page is not on screen any more, so its video stopped.', { tellMain: true, tellPage: true });
       disposed = true;
       if (pinger !== null) { clearInterval(pinger); pinger = null; }
       if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibility);

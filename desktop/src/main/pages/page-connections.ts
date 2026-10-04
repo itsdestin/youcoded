@@ -244,9 +244,14 @@ export function parseConnections(raw: unknown): PageConnection[] {
           if (o.keyScheme === 'bearer' || o.keyScheme === 'token' || o.keyScheme === 'none') c.keyScheme = o.keyScheme;
           const hello = cleanSocketHello(o.socketHello);
           if (hello) c.socketHello = hello;
+          // WHY strict, like socketDeny: a bad socketAuthFailed silently dropped meant a wrong key was never
+          // recognised, so the socket retried logins for ten minutes (Home Assistant bans an address after a
+          // few failed logins). A reply type that is present but invalid drops the whole connection.
           const ready = cleanReplyType(o.socketReady);
+          if (o.socketReady !== undefined && !ready) { c = null; break; }
           if (ready) c.socketReady = ready;
           const authFailed = cleanReplyType(o.socketAuthFailed);
+          if (o.socketAuthFailed !== undefined && !authFailed) { c = null; break; }
           if (authFailed) c.socketAuthFailed = authFailed;
           const deny = cleanSocketDeny(o.socketDeny);
           if (deny === null) { c = null; break; }

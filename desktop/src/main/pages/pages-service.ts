@@ -179,6 +179,16 @@ class PagesService {
    *  anyway, and a connection change must not keep running on the old yes.
    *  A page that disappeared closes too. The first time a page is seen only
    *  records it. */
+  /** WHY: the change signature used to be recorded only when a page was listed
+   *  through listAndWatch. A page whose first live connection opened before that
+   *  (a remote client lists through the store directly) was then only "recorded"
+   *  at its first sighting, so an edit made in between never closed the socket.
+   *  Recording at the first open makes the connection's own start the baseline. */
+  private async seedSignature(pageId: string): Promise<void> {
+    if (this.seenSignature.has(pageId)) return;
+    try { this.closeSocketsOfChangedPages(await this.store.list()); } catch { /* the connection check that follows reports a real failure */ }
+  }
+
   private closeSocketsOfChangedPages(pages: PageSummary[]): void {
     const now = new Set<string>();
     for (const p of pages) {
@@ -416,6 +426,7 @@ class PagesService {
 
   /** The live socket's access check: the shared chain, run fresh. */
   private async socketAccess(pageId: string, url: string, signal: AbortSignal): Promise<DeviceSocketAccess> {
+    await this.seedSignature(pageId);
     const door = await this.doorContext(pageId, signal);
     return door.ok ? checkDeviceSocketAccess(url, door.ctx) : { ok: false, refusal: door.refusal };
   }
@@ -425,6 +436,7 @@ class PagesService {
    *  approved (doorContext already swapped it in) and the socket path is the
    *  profile's own, so a page chooses neither. */
   private async videoAccess(pageId: string, connectionId: string, signal: AbortSignal): Promise<DeviceSocketAccess> {
+    await this.seedSignature(pageId);
     const door = await this.doorContext(pageId, signal);
     if (!door.ok) return { ok: false, refusal: door.refusal };
     const c = door.ctx.connections.find((x) => x.id === connectionId);

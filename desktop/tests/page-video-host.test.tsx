@@ -144,6 +144,27 @@ describe('starting a video', () => {
     r.hub.dispose();
   });
 
+  it('answers a start it will not make with "stopped" and a reason, so the page never waits forever', async () => {
+    const r = rig();
+    r.hub.handleFrameMessage({ ...START, id: 'bad1', connection: 3 });
+    expect(r.posted.at(-1)).toMatchObject({ id: 'bad1', kind: 'state', state: 'stopped', why: expect.stringContaining('could not read') });
+    r.hub.handleFrameMessage({ ...START, id: 'bad2', target: 'c'.repeat(129) });
+    expect(r.posted.at(-1)).toMatchObject({ id: 'bad2', state: 'stopped' });
+    for (let i = 0; i < 4; i++) r.hub.handleFrameMessage({ ...START, id: `k${i}` });
+    r.hub.handleFrameMessage({ ...START, id: 'fifth' });
+    expect(r.posted.at(-1)).toMatchObject({ id: 'fifth', state: 'stopped', why: expect.stringContaining('at most 4') });
+    r.hub.dispose();
+  });
+
+  it('tells the page each live video has stopped when the hub ends', async () => {
+    const r = rig();
+    r.hub.handleFrameMessage(START);
+    await flush();
+    r.posted.length = 0;
+    r.hub.dispose();
+    expect(r.posted).toEqual([expect.objectContaining({ id: 'v1', kind: 'state', state: 'stopped', why: expect.stringContaining('not on screen') })]);
+  });
+
   it('tells the page plainly when main refuses, and cleans up', async () => {
     const r = rig();
     r.bridge.videoStart.mockResolvedValueOnce({ ok: false as any, message: 'No camera by that name.' } as any);
