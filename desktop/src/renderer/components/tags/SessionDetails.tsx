@@ -15,7 +15,7 @@ import type { TagRecord } from '../../../shared/tags';
 import { DEFAULT_TAG_COLOR } from '../../../shared/tags';
 import type { TagRegistryApi } from '../../hooks/useTagRegistry';
 import { Button, CARD_LEVEL_1, CARD_LEVEL_2, ErrorState, InputGroup, SectionLabel, SettingRow, Textarea, Toggle } from '../ui';
-import { ChipAction, FilledTag, TAG_ICON, mix } from './TagChip';
+import { ChipAction, FilledTag, TAG_ICON, mix, tagLabelClass } from './TagChip';
 import { NewTagFields, TagFields } from './TagCloud';
 import { PinIcon } from './PinIcon';
 
@@ -99,7 +99,7 @@ function AppliedPill({ t, onEdit, onRemove, picked }: { t: TagRecord; onEdit: ()
       className={`shrink-0 inline-flex items-center gap-1.5 pl-1.5 pr-2 py-1 rounded-full border text-xs leading-none text-fg cursor-pointer ${picked ? 'ring-2 ring-accent ring-offset-1 ring-offset-inset' : ''}`}
       style={{ backgroundColor: `color-mix(in srgb, ${c} 25%, transparent)`, borderColor: `color-mix(in srgb, ${c} 60%, transparent)` }}>
       <span className={ICON} style={{ color: c }}><FilledTag className="w-4 h-4" /></span>
-      {t.label}
+      <span className={tagLabelClass(t.label)}>{t.label}</span>
       <ChipAction kind="remove" label={t.label} onClick={onRemove} size="md" />
     </span>
   );
@@ -112,7 +112,7 @@ function OtherPill({ t, onEdit, onAdd, picked }: { t: TagRecord; onEdit: () => v
         archived ? 'border-transparent bg-inset text-fg-faint' : 'border-edge-dim text-fg-2 hover:bg-inset'
       } ${picked ? 'ring-2 ring-accent ring-offset-1 ring-offset-inset' : ''}`}>
       <span className={`${ICON} ${archived ? 'text-fg-faint' : ''}`} style={archived ? undefined : { color: mix(t.color) }}><FilledTag className="w-3 h-3" /></span>
-      {t.label}
+      <span className={tagLabelClass(t.label)}>{t.label}</span>
       {onAdd && <ChipAction kind="add" label={t.label} onClick={onAdd} />}
     </span>
   );
@@ -149,7 +149,7 @@ function Tags({ registry, appliedIds, onToggleTag }: Props) {
       {others.map((t) => <OtherPill key={t.id} t={t} picked={picked === t.id} onEdit={() => toggle(t.id)} onAdd={t.archived ? undefined : () => onToggleTag(t.id, true)} />)}
       <button type="button" onClick={() => setPicked((p) => (p === 'new' ? null : 'new'))} aria-pressed={picked === 'new'}
         className={`shrink-0 inline-flex items-center px-2 py-0.5 rounded-full border border-dashed text-2xs leading-none transition-colors ${picked === 'new' ? 'border-accent text-fg' : 'border-edge text-fg-2 hover:text-fg hover:bg-inset'}`}>
-        + New tag
+        <span className="tag-label">+ New tag</span>
       </button>
     </div>
   );

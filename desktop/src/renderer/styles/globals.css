@@ -987,6 +987,16 @@ body[data-mode="buddy-chat"] #theme-bg {
 }
 [data-reduced-effects] .preview-header-slide { transition: none; }
 
+/* ── Tag label (2026-10-04) ──────────────────────────────────────────────────
+   A tag's word is centred on its lowercase letters, not its line. WHY: this font
+   centres CAPITALS in the line, so lowercase words — most tags — sat about a pixel
+   below the tag icon and the round ×/+ (measured at 1.5× scale, session-details-3:
+   "the alignment between the text and various icons has just been off"). Trimming
+   the text box to x-height and baseline lets the pill's items-center line them up;
+   a word with any capital centres on its capitals instead (tagLabelClass picks). */
+.tag-label { text-box: trim-both ex alphabetic; }
+.tag-label-caps { text-box: trim-both cap alphabetic; }
+
 /* ── Session pill label (2026-09-01) ─────────────────────────────────────────
    The label is a clipping box whose max-width animates (pill-label-style.ts);
    the name inside is laid out ONCE at its full width so it never re-wraps or

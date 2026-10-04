@@ -29,10 +29,13 @@ export function ChipAction({ kind, label, onClick, size = 'sm' }: { kind: 'remov
   );
 }
 
-// WHY 1px down: measured 2026-10-04 at 8× zoom, the app's monospace font sets lowercase
-// words about a pixel below the middle of their line, so a truly centred icon sat that
-// much above "work". Measured centres after: icon 31.9, word 32.0, pill 31.9 (px).
-export const TAG_ICON = 'flex shrink-0 translate-y-px';
+/** Centre an all-lowercase word on its lowercase letters; any word with a capital on its
+ *  capitals — a capital poking above the centred lowercase looked high ("Follow-Up
+ *  Needed", checked at 1.5×). globals.css → Tag label. */
+export const tagLabelClass = (label: string) => (/\p{Lu}/u.test(label) ? 'tag-label-caps' : 'tag-label');
+
+// The icon slot in every tag pill (centred; the word beside it is trimmed — .tag-label).
+export const TAG_ICON = 'flex shrink-0';
 
 export const mix = (color: string) => `color-mix(in srgb, ${tagColorCss(color)} 75%, var(--fg))`;
 
@@ -56,7 +59,7 @@ export function TagChip({ tag, onRemove, onAdd, dim = false, archivedLook = fals
     return (
       <span className={`shrink-0 inline-flex items-center gap-1 pl-1 pr-1.5 py-0.25 rounded-full border border-edge-dim bg-inset text-4xs leading-none text-fg-muted opacity-70 ${className}`}>
         <span className={`${TAG_ICON} text-fg-faint`}><FilledTag className="w-3 h-3" /></span>
-        {tag.label}{action}
+        <span className={tagLabelClass(tag.label)}>{tag.label}</span>{action}
       </span>
     );
   }
@@ -64,22 +67,22 @@ export function TagChip({ tag, onRemove, onAdd, dim = false, archivedLook = fals
     <span className={`shrink-0 inline-flex items-center gap-1 pl-1 pr-1.5 py-0.25 rounded-full border text-4xs leading-none ${dim ? 'text-fg-muted border-dashed' : 'text-fg-2'} ${className}`}
       style={{ backgroundColor: dim ? 'transparent' : `color-mix(in srgb, ${c} 15%, transparent)`, borderColor: `color-mix(in srgb, ${c} ${dim ? 40 : 30}%, transparent)` }}>
       <span className={TAG_ICON} style={{ color: c }}><FilledTag className="w-3 h-3" /></span>
-      {tag.label}{action}
+      <span className={tagLabelClass(tag.label)}>{tag.label}</span>{action}
     </span>
   );
 }
 
-/** A solid tag lying level, point to the left, hole cut through (it shows whatever is
- *  behind). WHY level (session-details-2#SD2-1, -3: "text/icon centering ... still weird"):
- *  the earlier tag stood on its corner, its weight in the top-left, so even centred it read
- *  as riding above the word; a level tag is symmetric top to bottom, like the status dot.
- *  `ring` adds an outline in the panel colour — only for stacks, where tags overlap. */
-export function FilledTag({ className = '', ring = false }: { className?: string; ring?: boolean }) {
+/** A solid tag on its corner, mirrored like glyphs.tsx's TagGlyph so the point aims back
+ *  into the content (the level tag tried in session-details-3 was rejected: "the old tag
+ *  icon was better"), with its outline in the panel colour, as before. */
+export function FilledTag({ className = '', ring = true }: { className?: string; ring?: boolean }) {
   return (
     <svg className={className} viewBox="0 0 24 24" aria-hidden>
-      <path fillRule="evenodd"
-        d="M2.5 12L7.6 6.4A1.5 1.5 0 018.7 5.9H20A1.5 1.5 0 0121.5 7.4V16.6A1.5 1.5 0 0120 18.1H8.7A1.5 1.5 0 017.6 17.6Z M9.2 12a1.5 1.5 0 103 0a1.5 1.5 0 10-3 0Z"
-        fill="currentColor" stroke={ring ? 'var(--panel)' : 'none'} strokeWidth={ring ? 2.5 : 0} strokeLinejoin="round" />
+      <g transform="translate(24,0) scale(-1,1)">
+        <path fillRule="evenodd"
+          d="M3 12.5V4.5A1.5 1.5 0 014.5 3h8l8.5 8.5a1.5 1.5 0 010 2.1l-6.9 6.9a1.5 1.5 0 01-2.1 0L3 12.5z M6.15 7.75a1.6 1.6 0 103.2 0a1.6 1.6 0 10-3.2 0z"
+          fill="currentColor" stroke={ring ? 'var(--panel)' : 'none'} strokeWidth={ring ? 2.5 : 0} strokeLinejoin="round" />
+      </g>
     </svg>
   );
 }
@@ -92,7 +95,7 @@ export function TagIconStack({ tags, className = '' }: { tags: Pick<TagRecord, '
     <span className={`inline-flex items-center ${className}`} aria-hidden>
       {tags.map((t, i) => (
         <span key={i} className={`flex ${i ? '-ml-2' : ''}`} style={{ color: mix(t.color), zIndex: tags.length - i }}>
-          <FilledTag className="w-3.5 h-3.5" ring />
+          <FilledTag className="w-3.5 h-3.5" />
         </span>
       ))}
     </span>
