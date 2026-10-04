@@ -53,11 +53,8 @@
     },
     {
       "do": "expect",
-      "text": "for your review."
-    },
-    {
-      "do": "expect",
-      "text": "Now the invites."
+      "text": "for your review. Now the invites.",
+      "why": "One sentence, checked whole, on purpose: it is ONE streamed reply and must draw as ONE bubble. A permission ask that jumped ahead of still-queued words split it in two (fixed in 1dbadd18c, 2026-09-28: a hook flushes the transcript batch first). Checking each half separately hid that bug, so keep it whole."
     },
     {
       "do": "expect",
