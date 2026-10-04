@@ -87,6 +87,7 @@ export const CHAT: readonly ScreenEntry[] = [
   // Another computer holds this conversation: each phase of "open it here instead?".
   ...['confirm', 'force', 'undeliverable', 'claim-denied'].map((ph) => chat(`chat/takeover/${ph}`, 'dialog', 'handoff')),
   chat('chat/resume/preview', 'dialog'),
+  chat('chat/resume/organize', 'dialog'),
   { ...chat('chat/resume/preview#stress', 'dialog'), scenario: 'stress' },
   // The pre-resume model picker: a fixture claudeSessionId, no real resume behind it.
   chat('chat/resume/pick-model', 'dialog'),

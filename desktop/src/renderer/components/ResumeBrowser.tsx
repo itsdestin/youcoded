@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Scrim, OverlayPanel, CONTENT_Z } from './overlays/Overlay';
-import { Button, Toggle, LoadingState, EmptyState, ErrorState, FilterChip, FilterMenuChip, Checkbox, CheckboxMark, SearchFilterPill, SectionLabel, SettingRow } from './ui';
+import { Button, Dialog, Toggle, LoadingState, EmptyState, ErrorState, FilterChip, FilterMenuChip, Checkbox, CheckboxMark, SearchFilterPill, SectionLabel, SettingRow } from './ui';
 import SessionRenameDialog from './SessionRenameDialog';
 import { namingApi } from './assistant-settings/naming-api';
 import { useRenamedSessions } from './assistant-settings/use-renamed-sessions';
@@ -23,7 +23,7 @@ import {
   type FlagName,
 } from './resume-browser-filters';
 import { useTagRegistry, refreshTagRegistry } from '../hooks/useTagRegistry';
-import { SessionSheet } from './tags/SessionDetails';
+import { SessionDetails } from './tags/SessionDetails';
 import { PinIcon } from './tags/PinIcon';
 import { TagChip } from './tags/TagChip';
 import { SessionCardTags, SessionCardMeta, CompleteToggle, SESSION_CARD_SURFACE_BASE } from './SessionCardDetails';
@@ -644,8 +644,6 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // conversation WITHOUT expanding it, including rows that can't be resumed on
   // this device at all.
   const [organizeId, setOrganizeId] = useState<string | null>(null);
-  const organizeTriggerRef = useRef<HTMLButtonElement | null>(null);
-  const organizePopRef = useRef<HTMLDivElement>(null);
 
   // U1: whichever row just opened its Organize sheet or its resume-options
   // panel scrolls into view — see the rowElRefs comment above. Only Welcome
@@ -784,27 +782,10 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     };
   }, [filtersOpen]);
 
-  // Same outside-click close for the Organize popover. It is portaled to
-  // document.body, so the card's own subtree can't see it — the popover ref is
-  // checked explicitly (the portal trap that already bit the model picker and
-  // the folder switcher). The trigger is checked too so a second click on the
-  // "⋯" toggles rather than close-then-reopen.
-  useEffect(() => {
-    if (!organizeId) return;
-    const handler = (e: Event) => {
-      const target = e.target as Node;
-      if (organizePopRef.current?.contains(target)) return;
-      if (organizeTriggerRef.current?.contains(target)) return;
-      setOrganizeId(null);
-    };
-    document.addEventListener('mousedown', handler);
-    document.addEventListener('touchstart', handler);
-    return () => {
-      document.removeEventListener('mousedown', handler);
-      document.removeEventListener('touchstart', handler);
-    };
-  }, [organizeId]);
 
+
+  const organizeTarget = (organizeId ?? cloneOrganizeId) ? sessions.find((x) => x.sessionId === (organizeId ?? cloneOrganizeId)) ?? null : null;
+  useScreenOpen('chat/resume/organize', () => { const first = filteredRef.current[0]; if (first) setOrganizeId(first.sessionId); }, undefined, !welcomeBack);
 
   const filtered = useMemo(() => {
     // Welcome back shows exactly the conversations that were open — completed
@@ -1235,22 +1216,6 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // Tags and note. There is no separate "Flags" section: Priority is the Pin to
   // top switch, and Complete lives on the card's hide icon, since marking something
   // done is a one-click action that shouldn't cost opening a menu.
-  // The Resume sheet: Session details' note, tags and Pin to top, arranged to fit this
-  // narrow panel (session-details-final#SF-2). Tag editing happens inside it.
-  const renderOrganizeControls = (s: PastSession) => (
-    <div onClick={(e) => e.stopPropagation()}>
-      <SessionSheet
-        appliedIds={new Set(s.tags ?? [])}
-        onToggleTag={(tagId, next) => toggleTag(s.sessionId, tagId, next)}
-        registry={registry}
-        note={s.note ?? ''}
-        onNote={(text) => saveNote(s.sessionId, text)}
-        // Stored as the `priority` flag, not a registry tag — the sort reads one known key.
-        pin={{ pinned: !!s.flags?.priority, onPin: (next) => toggleFlag(s.sessionId, 'priority', next) }}
-      />
-    </div>
-  );
-
   // The expanded panel answers ONE question: how do I relaunch this? Model,
   // the two launch toggles, Resume. Flags/tags/note used to be stacked in here
   // too, which is what made an open card a seven-field form with its primary
@@ -1480,13 +1445,8 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         type="button"
         onClick={(e) => {
           e.stopPropagation();
-          if (orgId === s.sessionId) { setOrg(null); return; }
-          organizeTriggerRef.current = e.currentTarget;
-          // The two panes are mutually exclusive: a card shows EITHER how to
-          // relaunch it or how to organize it, never both stacked. Without this
-          // an open card could grow two panels deep and the Resume button would
-          // slide down the screen as you tagged.
-          setExpandedId(null);
+          // Opens Session details as a popup over Resume (resume-sheet-4, Destin
+          // 2026-10-04: an inline sheet never fit the narrow card — "lets try 1").
           setOrg(s.sessionId);
         }}
         aria-label={`Organize ${s.name}`}
@@ -1513,19 +1473,6 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         className="px-1 py-1.5"
       />
       </div>
-      {/* No line across the card above it (guide: no full-width line in a card; resume-sheet-2:
-          "note the horizontal line. immediately bad").
-          'sheet' variant: the organize controls drop INTO the card rather than
-          floating. No positioning maths and nothing to clamp — the trade is
-          that the card grows and pushes the rest of the list down.
-          It shares organizePopRef with the floating variants: only one of the
-          two is ever mounted, and the outside-click handler checks that ref to
-          know "the click landed inside the open organize UI". */}
-      {orgId === s.sessionId && (
-        <div ref={clone ? undefined : organizePopRef} className="px-2.5 pb-2.5 flex flex-col gap-2" onClick={(e) => e.stopPropagation()}>
-          {renderOrganizeControls(s)}
-        </div>
-      )}
       {/* flush: no line across the card above the Model / Resume panel either (guide: no
           full-width line in a card; resume-sheet-2). */}
       {isExpanded && renderExpandedOptions(s, { flush: true })}
@@ -1737,6 +1684,23 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
 
   return (
     <>
+      {/* Session details for the conversation whose tag icon was pressed — the same popup as
+          the status bar's, over Resume (L2 over its L1). */}
+      {organizeTarget && (
+        <Dialog screen="chat/resume/organize" open onClose={() => { setOrganizeId(null); setCloneOrganizeId(null); }} title="Session details" size="panel">
+          <SessionDetails
+            name={organizeTarget.name || 'Untitled'}
+            onRename={() => setRenameSession(organizeTarget)}
+            appliedIds={new Set(organizeTarget.tags ?? [])}
+            onToggleTag={(tagId, next) => toggleTag(organizeTarget.sessionId, tagId, next)}
+            registry={registry}
+            note={organizeTarget.note ?? ''}
+            onNote={(text) => saveNote(organizeTarget.sessionId, text)}
+            // Stored as the `priority` flag, not a registry tag — the sort reads one known key.
+            pin={{ pinned: !!organizeTarget.flags?.priority, onPin: (next) => toggleFlag(organizeTarget.sessionId, 'priority', next) }}
+          />
+        </Dialog>
+      )}
       {renameSession && <SessionRenameDialog id={renameSession.sessionId} name={renameSession.name} onClose={() => setRenameSession(null)} />}
       {resumeOptions.dialog}
       {/* L1 drawer-style modal — theme-driven via Scrim/OverlayPanel. */}

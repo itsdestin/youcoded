@@ -221,5 +221,8 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
     await waitFor(() => expect(store.getState().sessions.length).toBeGreaterThan(before), { timeout: 8000 });
     const opened = store.getState().sessions.slice(before);
     expect(opened.every((s: any) => s.skipPermissions === false)).toBe(true);
+    // Let Resume all finish before the test ends: its last state change landed after the
+    // page was torn down and was reported as a stray error (2026-10-04).
+    await waitFor(() => expect(screen.queryByRole('button', { name: /^Resume all/ })).toBeNull(), { timeout: 8000 });
   });
 });

@@ -60,3 +60,24 @@ describe('usePreviewMeta (the drawer preview sheet) — an unreadable note is re
     expect((result.current as any).unreadable).toMatch(/store unavailable/);
   });
 });
+
+// 2026-10-04: only the newest read may land. A slow answer for the conversation you just
+// left used to overwrite the tags of the one now on screen.
+describe('useSessionMeta — a late answer for the previous session is ignored', () => {
+  it('switching sessions keeps the new session\'s tags when the old read finishes last', async () => {
+    let finishOld!: (v: unknown) => void;
+    const getMeta = vi.fn((id: string) => id === 'old'
+      ? new Promise((r) => { finishOld = r; })
+      : Promise.resolve({ tags: ['tag_new'], note: '', supported: true }));
+    (window as any).claude = { session: { getMeta }, on: {} };
+    const { result, rerender } = renderHook(({ id }) => useSessionMeta(id), { initialProps: { id: 'old' } });
+
+    rerender({ id: 'new' });
+    await waitFor(() => expect([...result.current.tags]).toEqual(['tag_new']));
+    finishOld({ tags: ['tag_old'], note: 'old note', supported: true });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect([...result.current.tags]).toEqual(['tag_new']);
+    expect(result.current.note).toBe('');
+  });
+});

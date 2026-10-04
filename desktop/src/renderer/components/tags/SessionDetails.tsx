@@ -70,7 +70,8 @@ function NoteBlock({ name, onRename, note, onNote, hang = true }: { name?: strin
   return (
     <div>
       {/* The Resume card's title control: dotted underline and a pencil, click to rename. */}
-      {name !== undefined && <div><button type="button" onClick={onRename} disabled={!onRename} aria-label={`Rename ${name}`}
+      {name !== undefined && !onRename && <div className="text-lg font-semibold text-fg leading-tight break-words">{name}</div>}
+      {name !== undefined && onRename && <div><button type="button" onClick={onRename} aria-label={`Rename ${name}`}
         className="group inline-flex max-w-full items-start gap-1.5 -ml-1 px-1 py-0.5 rounded-md text-left hover:bg-inset transition-colors">
         <span className="text-lg font-semibold text-fg leading-tight break-words underline decoration-dotted decoration-fg-muted underline-offset-[3px]">{name}</span>
         <svg className="w-3.5 h-3.5 mt-1 shrink-0 text-fg-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -211,31 +212,5 @@ function Tags(p: Props) {
         {t.editBox}
       </div>
     </section>
-  );
-}
-
-// ── The Resume sheet ─────────────────────────────────────────────────────────────────
-// Resume's organize sheet, and the side panel's and a project preview's (resume-sheet-1…4,
-// Destin 2026-10-04): the same note, tags and Pin to top as Session details, as ONE card —
-// he picked "one card" (C), then "reorganize it internally ... fits design guidelines".
-// So it follows the guide's Settings recipe: each part is a setting row with its title (and
-// hint) first; wide controls (the note, the tag editor) go full width below the title, the
-// switch beside its title. It sits inside a card, so it takes the nested look (Card
-// levels); 8 px between rows, 12 px inside its edge, no lines.
-export function SessionSheet(p: Props) {
-  const t = useTagEditor(p);
-  return (
-    <div className={`${CARD_LEVEL_2} p-3 flex flex-col gap-3`}>
-      <div className="space-y-1.5">
-        <SettingRow header variant="item" title="Note" description="Shows under All sessions" />
-        <NoteBlock note={p.note} onNote={p.onNote} hang={false} />
-      </div>
-      <div className="space-y-1.5">
-        <SettingRow header variant="item" title="Tags" />
-        {t.failed ?? <div className="space-y-2">{t.stale}{t.appliedPills}{t.search}{t.otherCloud}{t.editBox}</div>}
-      </div>
-      <SettingRow header variant="item" title="Pin to top" description="Keeps it first in your session lists"
-        control={<Toggle checked={p.pin.pinned} onChange={p.pin.onPin} aria-label="Pin to top" />} />
-    </div>
   );
 }

@@ -38,6 +38,10 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
   // reconnect's, or the change event after a save) snapped letters back (review of the
   // 2026-09-11 reliability fixes, finding 5).
   const noteEdits = useRef(0);
+  // WHY: only the newest read may land (2026-10-04). Without it, a slow answer for the
+  // conversation you just left overwrote the one now on screen, and an answer arriving
+  // after the view closed set state on nothing (seen as stray errors after a test ended).
+  const readSeq = useRef(0);
   const [unsupportedReason, setUnsupportedReason] = useState(META_UNSUPPORTED_FALLBACK);
 
   // Only a refusal that explicitly says `unsupported` may flip `supported`.
@@ -55,6 +59,7 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
   const refetch = useCallback((opts?: { keepOnFailure?: boolean }) => {
     if (!sessionId) { setTags(new Set()); setFlags({}); setNoteState(''); savedNote.current = ''; setSupported(true); return; }
     const editsAtStart = noteEdits.current;
+    const mine = ++readSeq.current;
     // WHY a failed read locks the editor (code review 2026-09-11, F1, on error inventory
     // false message 12): this used to load a failed read as an empty note with writes
     // still enabled — and setNote saves the WHOLE text, so typing replaced the stored note
@@ -67,6 +72,7 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
     };
     Promise.resolve((window as any).claude.session.getMeta(sessionId))
       .then((m: SessionMetaResult) => {
+        if (mine !== readSeq.current) return;
         if (m?.unreadable) { markUnreadable(m.unreadable); return; }
         setTags(new Set(m?.tags ?? []));
         // Missing is "none set" — an older peer omits the field entirely.
@@ -83,6 +89,7 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
         setUnsupportedReason(m?.unsupportedReason || META_UNSUPPORTED_FALLBACK);
       })
       .catch((err: unknown) => {
+        if (mine !== readSeq.current) return;
         // A re-read of the session already on screen keeps what it shows when it fails
         // (2026-09-11 phone pass: a lost request must not blank a conversation's tags).
         // A read that had nothing on screen says it is unreadable, with the reason, which
@@ -108,7 +115,7 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
     // correct and inexpensive. The user's own edits are already covered optimistically
     // by setTag/setNote below.
     const off = (window as any).claude.on?.sessionMetaChanged?.(() => refetch());
-    return () => { if (typeof off === 'function') off(); };
+    return () => { readSeq.current++; if (typeof off === 'function') off(); };
   }, [sessionId, refetch]);
 
   const setTag = useCallback((tagId: string, next: boolean) => {

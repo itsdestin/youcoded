@@ -5,7 +5,7 @@
 // the real hook through window.matchMedia; a vi.mock cannot be scoped to part of
 // a file.
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, waitFor, act, within } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 
 // Counts card renders: every list card with a recorded model resolves its brand
@@ -745,22 +745,17 @@ describe('organizing', () => {
       expect(screen.queryByRole('button', { name: /Priority/ })).not.toBeInTheDocument();
     });
 
-    it('shows the resume pane OR the tag sheet, never both', async () => {
+    // resume-sheet-4 (2026-10-04): the tag icon opens Session details as a popup over
+    // Resume — named for the conversation — instead of a sheet inside the card.
+    it('opens Session details as a popup named for the conversation, and closes it again', async () => {
       mount();
-      // Expand to resume…
-      fireEvent.click(await screen.findByText('CC Chat'));
-      expect(await screen.findByRole('button', { name: 'Resume session' })).toBeInTheDocument();
-
-      // …opening tags replaces it rather than stacking a second panel under it,
-      // which is what would push the Resume button down the screen as you typed.
       fireEvent.click(await screen.findByRole('button', { name: /Organize CC Chat/ }));
-      expect(await screen.findByPlaceholderText('Search or create a tag…')).toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: 'Resume session' })).not.toBeInTheDocument();
+      const dialog = await screen.findByRole('dialog', { name: 'Session details' });
+      expect(within(dialog).getByRole('button', { name: 'Rename CC Chat' })).toBeInTheDocument();
+      expect(within(dialog).getByPlaceholderText('Search or create a tag…')).toBeInTheDocument();
 
-      // …and back the other way.
-      fireEvent.click(await screen.findByText('CC Chat'));
-      expect(await screen.findByRole('button', { name: 'Resume session' })).toBeInTheDocument();
-      expect(screen.queryByPlaceholderText('Search or create a tag…')).not.toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Close Session details' }));
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Session details' })).toBeNull());
     });
 
     it('organizes a row that cannot be resumed on this device', async () => {

@@ -14,12 +14,12 @@
 //
 // IMPORTANT: This component NEVER spawns a Claude process by itself. Only the
 // Resume button leads to a live session, through the parent's `onResume`.
-import { useMemo, useRef, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import type { PastSession } from '../../../shared/types';
 import { ProjectDetailOverlay } from './ProjectDetailOverlay';
 import SessionPreviewPane from '../SessionPreviewPane';
 import SessionRenameDialog from '../SessionRenameDialog';
-import { Button, ErrorState } from '../ui';
+import { Button, Dialog, ErrorState } from '../ui';
 import { TagGlyph } from '../tags/glyphs';
 import { SessionDetails } from '../tags/SessionDetails';
 import { SessionCardTags, SessionCardMeta, CompleteToggle } from '../SessionCardDetails';
@@ -48,7 +48,6 @@ export function ConversationPreview({ session, onClose, onResume, defaultModel, 
   const options = useResumeOptions(defaultModel, defaultSkipPermissions);
   const [renaming, setRenaming] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
-  const sheetRef = useRef<HTMLDivElement>(null);
 
   const sources = useMemo(() => ({ [session.sessionId]: session.name }), [session.sessionId, session.name]);
   const renamed = useRenamedSessions(sources);
@@ -70,15 +69,6 @@ export function ConversationPreview({ session, onClose, onResume, defaultModel, 
     // eslint-disable-next-line react-hooks/exhaustive-deps -- resetFor is redefined every render; the row is what changes.
   }, [session.sessionId]);
 
-  // Click-away closes the tags/note sheet, as the side panel's does.
-  useEffect(() => {
-    if (!sheetOpen) return;
-    const onDown = (e: MouseEvent) => {
-      if (sheetRef.current && !sheetRef.current.contains(e.target as Node)) setSheetOpen(false);
-    };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [sheetOpen]);
 
   // The name renames on click, dotted-underlined with a pencil — the Resume
   // card's own title control. Without the naming service it is plain text.
@@ -104,7 +94,7 @@ export function ConversationPreview({ session, onClose, onResume, defaultModel, 
   // Tag and Complete, in the Resume card's order: Complete — the one that
   // changes what the Resume list shows — outermost.
   const tools = (
-    <div ref={sheetRef} className="relative flex items-center">
+    <div className="relative flex items-center">
       <button
         type="button"
         onClick={() => setSheetOpen((o) => !o)}
@@ -123,29 +113,29 @@ export function ConversationPreview({ session, onClose, onResume, defaultModel, 
         onToggle={(next) => void meta.toggleFlag('complete', next)}
         className="px-1 py-1.5"
       />
-      {sheetOpen && (
-        <div className="layer-surface absolute right-0 top-full mt-2 w-[280px] p-2 z-30" role="dialog" aria-label={COPY.tagsAndNoteLabel}>
-          {/* An unreadable note is reported, never opened as an empty editor —
-              a save writes the whole note (code review 2026-09-11, F1). */}
-          {meta.unreadable ? (
-            <ErrorState
-              variant="inline"
-              message={`Couldn't load this conversation's tags and note: ${meta.unreadable}`}
-              onRetry={meta.reload}
-            />
-          ) : (
-            <SessionDetails
-              appliedIds={new Set(meta.tags)}
-              onToggleTag={(id, next) => void meta.toggleTag(id, next)}
-              registry={registry}
-              note={meta.note}
-              onNote={(text) => void meta.saveNote(text)}
-              // Pin to top — the Priority flag's face since pick-menus-2#PM2-3.
-              pin={{ pinned: !!row.flags?.priority, onPin: (next) => void meta.toggleFlag('priority', next) }}
-            />
-          )}
-        </div>
-      )}
+      {/* Session details as a popup, the same as everywhere else (resume-sheet-4). */}
+      <Dialog noScreen="Session details again, from a project preview; photographed as chat/resume/organize" open={sheetOpen} onClose={() => setSheetOpen(false)} title="Session details" size="panel">
+        {/* An unreadable note is reported, never opened as an empty editor —
+            a save writes the whole note (code review 2026-09-11, F1). */}
+        {meta.unreadable ? (
+          <ErrorState
+            variant="inline"
+            message={`Couldn't load this conversation's tags and note: ${meta.unreadable}`}
+            onRetry={meta.reload}
+          />
+        ) : (
+          <SessionDetails
+            name={name || COPY.untitled}
+            onRename={namingApi() ? () => { setSheetOpen(false); setRenaming(true); } : undefined}
+            appliedIds={new Set(meta.tags)}
+            onToggleTag={(id, next) => void meta.toggleTag(id, next)}
+            registry={registry}
+            note={meta.note}
+            onNote={(text) => void meta.saveNote(text)}
+            pin={{ pinned: !!row.flags?.priority, onPin: (next) => void meta.toggleFlag('priority', next) }}
+          />
+        )}
+      </Dialog>
     </div>
   );
 

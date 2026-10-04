@@ -34,7 +34,7 @@ import type { FileTypeGroup } from '../../shared/artifacts/categorization';
 import { getPlatform, isRemoteMode } from '../platform';
 import { downloadFile } from './artifact-views/download-file';
 import { formatRelativeTime } from '../utils/format-time';
-import { Button, CloseButton, EmptyState, ErrorState, FieldError, SearchFilterPill, SectionLabel, Tooltip } from './ui';
+import { Button, CloseButton, Dialog, EmptyState, ErrorState, FieldError, SearchFilterPill, SectionLabel, Tooltip } from './ui';
 import { FileFilterPopover } from './project-view/FileFilterPopover';
 import { useResolvedConversations } from '../hooks/useResolvedConversations';
 import { useTagRegistry } from '../hooks/useTagRegistry';
@@ -202,7 +202,6 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   const previewMeta = usePreviewMeta(activePreview ? activePreview.id : null);
   const narrowViewport = useNarrowViewport();
   const [previewSheetOpen, setPreviewSheetOpen] = useState(false);
-  const previewSheetWrapRef = useRef<HTMLDivElement>(null);
   // The tags tip's moment: the first time the drawer is on screen with the
   // Organize button that opens the tag editor (guide/tips.ts).
   useEffect(() => { if (activePreview) triggerTip('tags'); }, [activePreview]);
@@ -217,17 +216,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
       .then((d) => { if (d) setSessionDefaults({ model: d.model ?? 'sonnet', skipPermissions: !!d.skipPermissions }); })
       .catch(() => {});
   }, []);
-  useEscClose(previewSheetOpen, () => setPreviewSheetOpen(false));
-  useEffect(() => {
-    if (!previewSheetOpen) return;
-    const onDown = (e: MouseEvent) => {
-      if (previewSheetWrapRef.current && !previewSheetWrapRef.current.contains(e.target as Node)) {
-        setPreviewSheetOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [previewSheetOpen]);
+  // Session details is a Dialog now: it closes itself on Esc and on a click outside.
   // Sheet must not survive a preview swap/close — reopening on a DIFFERENT
   // conversation's Preview click must not silently show the outgoing one's
   // still-open tag sheet.
@@ -1064,7 +1053,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
             `active &&`-gated exactly as before. */}
         {activePreview && (
           <>
-            <div ref={previewSheetWrapRef} className="relative">
+            <div className="relative">
               <button
                 type="button"
                 onClick={() => setPreviewSheetOpen((v) => !v)}
@@ -1079,43 +1068,30 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                     shared so it can't drift between the two surfaces. */}
                 <TagGlyph className="w-4 h-4" />
               </button>
-              {previewSheetOpen && (
-                // layer-surface (panel) hosting SessionDetails' own bg-inset
-                // card — the same nesting CloseSessionPrompt's OverlayPanel
-                // uses, and SessionDetails already lifts its OWN fields to
-                // bg-well against that bg-inset card, so no fieldClassName
-                // override is needed here (unlike the Resume Browser, whose
-                // sheet drops the tags and note straight onto its
-                // bg-inset card with no layer-surface between it and the
-                // panel below).
-                <div
-                  className="layer-surface absolute right-0 top-full mt-2 w-[280px] p-2 z-30"
-                  role="dialog"
-                  aria-label={COPY.tagsAndNoteLabel}
-                >
-                  {/* An unreadable note is reported, never opened as an empty editor — a
-                      save writes the whole note, so typing would replace the one nobody
-                      was shown (code review 2026-09-11, F1). */}
-                  {previewMeta.unreadable ? (
-                    <ErrorState
-                      variant="inline"
-                      message={`Couldn't load this conversation's tags and note: ${previewMeta.unreadable}`}
-                      onRetry={previewMeta.reload}
-                    />
-                  ) : (
-                    <SessionDetails
-                      appliedIds={new Set(previewMeta.tags)}
-                      onToggleTag={previewMeta.toggleTag}
-                      registry={previewTagRegistry}
-                      note={previewMeta.note}
-                      onNote={previewMeta.saveNote}
-                      // Pin to top (the Priority flag), as in the Resume browser
-                      // and the Projects preview.
-                      pin={{ pinned: !!previewMeta.flags.priority, onPin: (next) => void previewMeta.toggleFlag('priority', next) }}
-                    />
-                  )}
-                </div>
-              )}
+              {/* Session details as a popup, the same as the status bar's and Resume's
+                  (resume-sheet-4, Destin 2026-10-04). */}
+              <Dialog noScreen="Session details again, from a preview header; photographed as chat/resume/organize" open={previewSheetOpen} onClose={() => setPreviewSheetOpen(false)} title="Session details" size="panel">
+                {/* An unreadable note is reported, never opened as an empty editor — a
+                    save writes the whole note, so typing would replace the one nobody
+                    was shown (code review 2026-09-11, F1). */}
+                {previewMeta.unreadable ? (
+                  <ErrorState
+                    variant="inline"
+                    message={`Couldn't load this conversation's tags and note: ${previewMeta.unreadable}`}
+                    onRetry={previewMeta.reload}
+                  />
+                ) : (
+                  <SessionDetails
+                    name={activePreview.title || COPY.untitled}
+                    appliedIds={new Set(previewMeta.tags)}
+                    onToggleTag={previewMeta.toggleTag}
+                    registry={previewTagRegistry}
+                    note={previewMeta.note}
+                    onNote={previewMeta.saveNote}
+                    pin={{ pinned: !!previewMeta.flags.priority, onPin: (next) => void previewMeta.toggleFlag('priority', next) }}
+                  />
+                )}
+              </Dialog>
             </div>
             {/* Complete, beside the tag button — the Resume browser's pair. */}
             <CompleteToggle
