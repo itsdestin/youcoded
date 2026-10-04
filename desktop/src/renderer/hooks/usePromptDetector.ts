@@ -5,11 +5,19 @@ import { useChatDispatch, useChatStore } from '../state/chat-context';
 import { getVisibleScreenText, onBufferReady } from './terminal-registry';
 import { parsePlanMenu } from '../parser/plan-menu-parser';
 import { expiredToolIds, nextAbsentCount } from '../state/expired-card-resolver';
+import { readInputFocus, inputIsBlocked } from '../parser/cc-input-focus';
+import type { SessionChatState } from '../state/chat-types';
 
 // How long to wait before showing a parser-detected prompt, giving the hook
 // system time to deliver a PermissionRequest via the named pipe relay.
 // Hook events typically arrive 100-200ms after the Ink menu renders.
 const PROMPT_DEBOUNCE_MS = 350;
+
+// A mid-session dialog the app does not know by name waits longer: ordinary
+// permission, question and plan menus look the same on screen, and their hook
+// event can trail the menu by a few hundred ms under load. Only a dialog no
+// hook claimed for a full second gets a generic card.
+const GENERIC_CARD_DEBOUNCE_MS = 1000;
 
 // Only show parser-detected PromptCards for these known setup prompts.
 // Permission prompts (Yes/No/Always Allow) are handled exclusively by the
@@ -42,17 +50,46 @@ const SETUP_PROMPT_TITLES = new Set([
  * "Enter to confirm · Esc to cancel" footer under the options) is shown too,
  * titled with the dialog's own heading: a dialog nobody has taught the app
  * about must never again leave a new session on "Initializing session…"
- * (2026-09-24). Outside startup the known-titles gate stays strict — there,
- * permission menus belong to the hook cards and numbered lists in replies are
- * not menus.
+ * (2026-09-24).
+ *
+ * MID-SESSION the same holds for a dialog that has taken the keyboard — its
+ * footer under the options AND Claude Code's message box gone from the screen
+ * (parser/cc-input-focus.ts) — so a reply that merely QUOTES a menu never gets
+ * a card (2026-09-29: the auto-mode setup offer, a billing notice and
+ * compaction menus opened mid-session with no card, and a chat send was
+ * swallowed by them). Those `generic` cards wait longer and yield to any
+ * permission card, because ordinary permission, question and plan menus look
+ * the same on screen and belong to the hook system's cards.
  */
-function cardTitleFor(menu: ParsedMenu, starting: boolean): string | null {
-  if (SETUP_PROMPT_TITLES.has(menu.title)) return menu.title;
-  if (starting && menu.dialog) {
-    const heading = (menu.heading ?? '').replace(/:\s*$/, '').trim();
-    return heading || menu.title;
+function cardTitleFor(menu: ParsedMenu, starting: boolean, screen: string): { title: string; generic: boolean } | null {
+  if (SETUP_PROMPT_TITLES.has(menu.title)) return { title: menu.title, generic: false };
+  if (!menu.dialog) return null;
+  // Belt and braces: parseInkSelect already refuses a menu with the message
+  // box under it (its last ❯ is then the input row), so a quoted menu in a
+  // reply never parses today — tests/popup-corpus-replay.test.tsx stays green
+  // with this line removed. It keeps that true if the parser ever loosens.
+  if (!starting && readInputFocus(screen).kind !== 'popup') return null;
+  const heading = (menu.heading ?? '').replace(/:\s*$/, '').trim();
+  // A pop-up taller than the screen loses its heading off the top; the
+  // "heading" read is then a body row (a diff line like "36 +ROW 35"), which
+  // is no title. Name it plainly instead.
+  const readable = (t: string) => /[A-Za-z]{3,}/.test(t) && !/^\d+\s*[+-]/.test(t);
+  const title = [heading, menu.title].find((t) => t && readable(t)) ?? 'Claude Code is asking';
+  return { title, generic: !starting };
+}
+
+/** Is ANY permission card up for this session — live, or kept after its ask
+ *  expired? A generic card never shows beside one: the menu on screen is
+ *  that card's (hook permission menus carry the same footer). */
+function hasPermissionCard(session: SessionChatState | undefined): boolean {
+  if (!session) return false;
+  // Live asks are current-turn only (toolCalls keeps stale awaiting entries
+  // from ended turns, which must not silence generic cards forever); kept
+  // cards deliberately outlive their turn, so they are read from the whole map.
+  for (const id of session.activeTurnToolIds) {
+    if (session.toolCalls.get(id)?.status === 'awaiting-approval') return true;
   }
-  return null;
+  return expiredToolIds(session).length > 0;
 }
 
 export interface PromptDetectorOptions {
@@ -105,6 +142,11 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
   // re-issued when an identical dialog followed an answered one (review F5).
   const shownPromptIdRef = useRef<Map<string, string>>(new Map());
   const reissueTimerRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  // Last screen verdict sent to main per session (reportInputBlocked).
+  const reportedBlockedRef = useRef<Map<string, boolean>>(new Map());
+  // The GENERIC card on show per session (its promptId) — withdrawn if a hook
+  // ask arrives after it (see the awaiting-approval effect below).
+  const genericShownRef = useRef<Map<string, string>>(new Map());
 
   // Track when awaiting-approval was last cleared per session, so the parser
   // can suppress re-detection during the post-permission cooldown window.
@@ -132,6 +174,17 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
           if (tool && tool.status === 'awaiting-approval') { hasAwaiting = true; break; }
         }
         const wasAwaiting = prevAwaitingRef.current.get(sid) ?? false;
+        // A hook ask arrived AFTER a generic card went up for the same menu
+        // (its event trailed the 1 s wait — review F2, 2026-09-30): the hook's
+        // card owns the menu, so withdraw the generic one. Two cards for one
+        // question, both typing into it, is the duplicate this guards against.
+        if (!wasAwaiting && hasAwaiting) {
+          const generic = genericShownRef.current.get(sid);
+          if (generic) {
+            genericShownRef.current.delete(sid);
+            dispatch({ type: 'DISMISS_PROMPT', sessionId: sid, promptId: generic });
+          }
+        }
         if (wasAwaiting && !hasAwaiting) {
           lastPermissionClearedRef.current.set(sid, Date.now());
         }
@@ -140,11 +193,11 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
     };
     check();
     return store.subscribeAll(check);
-  }, [store]);
+  }, [store, dispatch]);
 
   useEffect(() => {
     // Show a card for `menu` after the debounce, re-checking everything first.
-    const scheduleShow = (sid: string, menu: ParsedMenu, title: string, promptId: string = menu.id) => {
+    const scheduleShow = (sid: string, menu: ParsedMenu, title: string, promptId: string = menu.id, generic = false) => {
       // Debounce: wait before showing, giving hook system time to arrive
       const timer = setTimeout(() => {
         pendingTimerRef.current.delete(sid);
@@ -176,11 +229,15 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
         const nowScreen = getVisibleScreenText(sid);
         const nowMenu = nowScreen ? parseInkSelect(nowScreen) : null;
         if (!nowMenu || nowMenu.id !== menu.id) return;
+        // A generic card re-checks what made it one: no permission card (live
+        // OR kept) has claimed the menu, and the dialog still holds the keyboard.
+        if (generic && (hasPermissionCard(store.getState().get(sid)) || readInputFocus(nowScreen).kind !== 'popup')) return;
 
         const buttons = menuToButtons(menu);
         const verified = buttons.some((b) => b.pick);
         shownPromptRef.current.set(sid, menu.id);
         shownPromptIdRef.current.set(sid, promptId);
+        if (generic) genericShownRef.current.set(sid, promptId); else genericShownRef.current.delete(sid);
         dispatch({
           type: 'SHOW_PROMPT',
           sessionId: sid,
@@ -197,7 +254,7 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
           // cursor, so the card starts where that cursor is ("No, exit").
           ...(verified ? { defaultIndex: nowMenu.selectedIndex } : {}),
         });
-      }, PROMPT_DEBOUNCE_MS);
+      }, generic ? GENERIC_CARD_DEBOUNCE_MS : PROMPT_DEBOUNCE_MS);
       pendingTimerRef.current.set(sid, timer);
     };
 
@@ -221,7 +278,7 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
       const e = store.getState().get(sid)?.timeline.find((x) => x.kind === 'prompt' && x.prompt.promptId === promptId);
       return e && e.kind === 'prompt' && e.prompt.completed ? e.prompt : null;
     };
-    const checkReissue = (sid: string, menu: ParsedMenu, title: string) => {
+    const checkReissue = (sid: string, menu: ParsedMenu, title: string, generic: boolean) => {
       if (reissueTimerRef.current.has(sid)) return;
       const promptId = shownPromptIdRef.current.get(sid) ?? menu.id;
       if (promptId === reissueIdFor(menu.id)) return; // already re-issued once
@@ -234,11 +291,20 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
         const nowMenu = nowScreen ? parseInkSelect(nowScreen) : null;
         if (!nowMenu || nowMenu.id !== menu.id) return;
         if (!answeredCard(sid, promptId)) return;
-        scheduleShow(sid, nowMenu, title, reissueIdFor(menu.id));
+        scheduleShow(sid, nowMenu, title, reissueIdFor(menu.id), generic);
       }, REISSUE_MS));
     };
 
     const unsub = onBufferReady((sid: string) => {
+      // Tell main whether a pop-up holds this session's keyboard (on change
+      // only): main types /reload-plugins on its own and has no screen to read.
+      // Before the live-ask bail below, so the verdict never goes stale.
+      const blocked = inputIsBlocked(readInputFocus(getVisibleScreenText(sid)));
+      if (reportedBlockedRef.current.get(sid) !== blocked) {
+        reportedBlockedRef.current.set(sid, blocked);
+        window.claude?.session?.reportInputBlocked?.(sid, blocked);
+      }
+
       // Skip prompt detection when a PermissionRequest approval is active
       // (the hook-based UI is handling the permission flow)
       const sessionState = store.getState().get(sid);
@@ -299,7 +365,8 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
       // seen) is reported at once, so the Initializing screen can say "Claude
       // Code is asking something — answer it in terminal view" instead of
       // hanging silently. Cleared as soon as it is gone or readable.
-      const readable = !!menu && cardTitleFor(menu, starting) !== null;
+      const card = menu ? cardTitleFor(menu, starting, screen) : null;
+      const readable = card !== null;
       setUnreadableStartupDialog(sid, starting && !readable ? readStartupDialog(screen) : null);
 
       if (menu) {
@@ -328,6 +395,7 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
           }
           if (lastMenuId && shownPromptRef.current.get(sid) === lastMenuId) {
             shownPromptRef.current.delete(sid);
+            genericShownRef.current.delete(sid);
             dispatch({ type: 'DISMISS_PROMPT', sessionId: sid, promptId: shownPromptIdRef.current.get(sid) ?? lastMenuId });
           }
           clearTimeout(reissueTimerRef.current.get(sid));
@@ -337,23 +405,25 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
           // Only show PromptCards for known setup prompts. Permission prompts
           // and false positives (numbered lists) are skipped — hooks handle
           // permissions, and numbered lists aren't real menus.
-          const title = cardTitleFor(menu, starting);
-          if (title === null) return;
-          scheduleShow(sid, menu, title);
+          if (card === null) return;
+          // A generic card never shows beside a permission card — a KEPT one
+          // (expired ask) does not stop this detector, so check here too.
+          if (card.generic && hasPermissionCard(sessionState)) return;
+          scheduleShow(sid, menu, card.title, menu.id, card.generic);
         } else {
           // SAME menu still (or again) on screen. Review F2 (2026-09-24): an
           // unreadable frame inside the debounce cancelled the show timer, the
           // menu came back under the same id, and nothing ever re-scheduled it —
           // no card, and no safety net either (the menu reads fine). So: a
           // readable menu with no card showing and none scheduled gets one now.
-          const title = cardTitleFor(menu, starting);
-          if (title !== null && shownPromptRef.current.get(sid) !== menu.id && !pendingTimerRef.current.has(sid)) {
-            scheduleShow(sid, menu, title);
+          const blockedByCard = card !== null && card.generic && hasPermissionCard(sessionState);
+          if (card !== null && !blockedByCard && shownPromptRef.current.get(sid) !== menu.id && !pendingTimerRef.current.has(sid)) {
+            scheduleShow(sid, menu, card.title, menu.id, card.generic);
           }
           // Review F5: its card was ANSWERED and an identical dialog is (still)
           // there — Claude Code asked the same question again. Give it a fresh
           // card rather than leaving the answered one in its place.
-          if (title !== null && shownPromptRef.current.get(sid) === menu.id) checkReissue(sid, menu, title);
+          if (card !== null && !blockedByCard && shownPromptRef.current.get(sid) === menu.id) checkReissue(sid, menu, card.title, card.generic);
         }
       } else if (lastMenuId) {
         // Menu disappeared — debounce the dismissal to avoid clearing
@@ -373,6 +443,7 @@ export function usePromptDetector(options: PromptDetectorOptions = {}) {
             if (shownPromptRef.current.get(sid) === lastMenuId) {
               shownPromptRef.current.delete(sid);
             }
+            genericShownRef.current.delete(sid);
             dispatch({
               type: 'DISMISS_PROMPT',
               sessionId: sid,

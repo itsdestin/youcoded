@@ -208,31 +208,6 @@ function AuthScreen({
 }
 
 /* ------------------------------------------------------------------ */
-/*  DevModeScreen                                                     */
-/* ------------------------------------------------------------------ */
-
-function DevModeScreen({ onEnable }: { onEnable: () => void }) {
-  return (
-    <div className="mt-6 w-full max-w-md rounded-2xl bg-panel border border-edge p-6 flex flex-col items-center gap-4 text-center">
-      <p className="text-sm text-fg leading-relaxed">
-        Windows Developer Mode allows YouCoded to create symbolic links, which
-        the toolkit uses for configuration files. This is a one-time system setting.
-      </p>
-      <Button onClick={onEnable} className="px-5 py-2.5 rounded-full">
-        Enable Developer Mode
-      </Button>
-      <p className="text-xs text-fg-muted leading-relaxed">
-        If the button doesn't work, open{' '}
-        <span className="font-mono text-fg-dim">
-          Settings &gt; Update &amp; Security &gt; For Developers
-        </span>{' '}
-        and enable Developer Mode manually, then click retry.
-      </p>
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
 /*  CompletionCard                                                    */
 /* ------------------------------------------------------------------ */
 
@@ -369,9 +344,6 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
   const handleApiKey = useCallback((key: string, service: KeyService) => {
     (window as any).claude.firstRun.submitApiKey(key, service);
   }, []);
-  const handleDevMode = useCallback(() => {
-    (window as any).claude.firstRun.devModeDone();
-  }, []);
 
   const launching =
     state?.currentStep === 'LAUNCH_WIZARD' || state?.currentStep === 'COMPLETE';
@@ -400,7 +372,10 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
                 // this checklist no longer lists it on the sign-in step.
                 // Nor while it waits or was skipped: setup no longer installs it
                 // for everyone (Q-5), so a "waiting" Claude Code row would never move.
-                .filter((p) => !(p.name === 'claude' && (state.currentStep === 'AUTHENTICATE' || p.status === 'waiting' || p.status === 'skipped')))
+                // Node.js joined it (Destin, 2026-10-02): it installs with Claude
+                // Code now, so it is shown only on a machine that already has it
+                // (or is installing it for an already-signed-in Claude user).
+                .filter((p) => !((p.name === 'claude' || p.name === 'node') && (state.currentStep === 'AUTHENTICATE' || p.status === 'waiting' || p.status === 'skipped')))
                 .map((p) => {
                 const active = p.status === 'installing' || p.status === 'checking';
                 return (
@@ -437,11 +412,6 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
               onApiKey={handleApiKey}
               claudeInstalling={state.prerequisites.some((p) => p.name === 'claude' && p.status === 'installing')}
             />
-          )}
-
-          {/* Developer mode screen */}
-          {state?.currentStep === 'ENABLE_DEVELOPER_MODE' && (
-            <DevModeScreen onEnable={handleDevMode} />
           )}
 
           {/* Error display. The message is always shown; the Try Again button

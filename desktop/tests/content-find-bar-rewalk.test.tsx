@@ -93,6 +93,108 @@ describe('ContentFindBar and the text-node walk', () => {
     view.unmount(); globalThis.ResizeObserver = original;
   });
 
+  it('settles an RO-displaced match when expiry beats its queued animation frame', async () => {
+    const nativeRO = globalThis.ResizeObserver;
+    const nativeRaf = globalThis.requestAnimationFrame;
+    const nativeCancel = globalThis.cancelAnimationFrame;
+    const deliveries: Array<{ callback: () => void; target?: Element; disconnected?: boolean }> = [];
+    const frames = new Map<number, FrameRequestCallback>();
+    const cancelled: number[] = [];
+    let frameId = 0, disconnected = 0;
+    (globalThis as any).ResizeObserver = class {
+      private delivery: { callback: () => void; target?: Element; disconnected?: boolean };
+      constructor(cb: () => void) { this.delivery = { callback: cb }; deliveries.push(this.delivery); }
+      observe(target: Element) { this.delivery.target = target; }
+      unobserve() {} disconnect() { this.delivery.disconnected = true; disconnected++; }
+    };
+    globalThis.requestAnimationFrame = (cb) => { const id = ++frameId; frames.set(id, cb); return id; };
+    globalThis.cancelAnimationFrame = (id) => { cancelled.push(id); frames.delete(id); };
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const ref = React.createRef<HTMLDivElement>();
+      let top = 2000;
+      const scroll = vi.fn(() => { top = 450; });
+      Range.prototype.getBoundingClientRect = () => ({ top, bottom: top + 20, left: 0, right: 100 } as DOMRect);
+      const view = render(<><div ref={ref}><span data-message-find-body="0">needle</span></div>
+        <ContentFindBar containerRef={ref} onClose={() => {}} resetKey="chat" chatFind={{
+          search: () => ({ hits: [{ id: 'a', body: 0, ordinal: 0 }], pending: false }),
+          pin: () => () => {},
+          resolve: async (_hit, query) => resolveBodyRanges(ref.current!.firstElementChild as HTMLElement, query)[0],
+        }} /></>);
+      ref.current!.getBoundingClientRect = () => ({ top: 100, bottom: 1000 } as DOMRect);
+      ref.current!.firstElementChild!.scrollIntoView = scroll;
+      await act(async () => { fireEvent.change(screen.getByLabelText('Find in document'), { target: { value: 'needle' } }); await Promise.resolve(); });
+      const findDelivery = deliveries.find((delivery) => delivery.target === ref.current && !delivery.disconnected);
+      expect(findDelivery).toBeDefined();
+      expect(scroll).toHaveBeenCalledTimes(2);
+      top = 950; // layout moved the Range below the visible band's midpoint
+      act(() => { findDelivery!.callback(); });
+      expect(frames.size).toBe(1);
+      act(() => { vi.advanceTimersByTime(800); }); // held rAF never runs
+      expect(cancelled).toEqual([1]);
+      expect(scroll).toHaveBeenCalledTimes(3);
+      expect(top).toBe(450);
+      expect(findDelivery!.disconnected).toBe(true);
+      top = 950;
+      act(() => { findDelivery!.callback(); vi.advanceTimersByTime(800); });
+      expect(scroll).toHaveBeenCalledTimes(3); // expiry cannot restart tracking
+      view.unmount();
+    } finally {
+      vi.useRealTimers();
+      globalThis.ResizeObserver = nativeRO;
+      globalThis.requestAnimationFrame = nativeRaf;
+      globalThis.cancelAnimationFrame = nativeCancel;
+    }
+  });
+
+  it('cancels a queued Find correction on wheel intent rather than flushing it at expiry', async () => {
+    const nativeRO = globalThis.ResizeObserver;
+    const nativeRaf = globalThis.requestAnimationFrame;
+    const nativeCancel = globalThis.cancelAnimationFrame;
+    let findDelivery: (() => void) | undefined;
+    const frames = new Map<number, FrameRequestCallback>();
+    const cancelled: number[] = [];
+    (globalThis as any).ResizeObserver = class {
+      constructor(private cb: () => void) {}
+      observe(target: Element) { if (target === ref.current) findDelivery = this.cb; }
+      unobserve() {} disconnect() {}
+    };
+    globalThis.requestAnimationFrame = (cb) => { frames.set(1, cb); return 1; };
+    globalThis.cancelAnimationFrame = (id) => { cancelled.push(id); frames.delete(id); };
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const ref = React.createRef<HTMLDivElement>();
+    try {
+      let top = 2000;
+      const scroll = vi.fn(() => { top = 450; });
+      Range.prototype.getBoundingClientRect = () => ({ top, bottom: top + 20, left: 0, right: 100 } as DOMRect);
+      const view = render(<><div ref={ref}><span data-message-find-body="0">needle</span></div>
+        <ContentFindBar containerRef={ref} onClose={() => {}} resetKey="chat" chatFind={{
+          search: () => ({ hits: [{ id: 'a', body: 0, ordinal: 0 }], pending: false }),
+          pin: () => () => {},
+          resolve: async (_hit, query) => resolveBodyRanges(ref.current!.firstElementChild as HTMLElement, query)[0],
+        }} /></>);
+      ref.current!.getBoundingClientRect = () => ({ top: 100, bottom: 1000 } as DOMRect);
+      ref.current!.firstElementChild!.scrollIntoView = scroll;
+      await act(async () => { fireEvent.change(screen.getByLabelText('Find in document'), { target: { value: 'needle' } }); await Promise.resolve(); });
+      expect(findDelivery).toBeDefined();
+      expect(scroll).toHaveBeenCalledTimes(2);
+      top = 950;
+      act(() => { findDelivery!(); });
+      expect(frames.size).toBe(1);
+      fireEvent.wheel(ref.current!, { deltaY: -100 });
+      act(() => { vi.advanceTimersByTime(800); });
+      expect(cancelled).toEqual([1]);
+      expect(scroll).toHaveBeenCalledTimes(2);
+      expect(top).toBe(950);
+      view.unmount();
+    } finally {
+      vi.useRealTimers();
+      globalThis.ResizeObserver = nativeRO;
+      globalThis.requestAnimationFrame = nativeRaf;
+      globalThis.cancelAnimationFrame = nativeCancel;
+    }
+  });
+
   it('chat adapter leaves other folded rows alone, pins only the chosen row and releases on close', async () => {
     const releases = vi.fn();
     const revealNearby = vi.fn();

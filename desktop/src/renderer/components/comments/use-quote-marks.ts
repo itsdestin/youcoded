@@ -162,12 +162,20 @@ function unwrapAll(root: HTMLElement): void {
 function wrapSegments(root: HTMLElement, start: TextPoint, end: TextPoint, make: () => HTMLElement, record: WrapRecord): HTMLElement[] {
   // Collect the text nodes first — splitting them while a TreeWalker is
   // mid-walk would make it skip or revisit nodes.
+  //
+  // WHY the walk STARTS at start.node (not at the top of root): markAll calls
+  // this once per comment, and walking from the top every time made a file's
+  // highlight pass grow with comments × document length — 1,000 comments cost
+  // ~8x what 200 did instead of ~5x, and macOS CI measured past the 12x
+  // render-cost bound. Starting where the quote starts makes each call cost
+  // only the quote's own span. A start node no longer inside root yields no
+  // marks, exactly as the old top-down walk (which never found it) did.
   const nodes: Text[] = [];
+  if (!root.contains(start.node)) return [];
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  let inside = false;
-  for (let n = walker.nextNode() as Text | null; n; n = walker.nextNode() as Text | null) {
-    if (n === start.node) inside = true;
-    if (inside) nodes.push(n);
+  walker.currentNode = start.node;
+  for (let n: Text | null = start.node; n; n = walker.nextNode() as Text | null) {
+    nodes.push(n);
     if (n === end.node) break;
   }
   const out: HTMLElement[] = [];
@@ -326,16 +334,65 @@ function textRootFor(root: HTMLElement): HTMLElement | null {
  *  way right now. Returning `undefined` there leaves the comment's
  *  last-known status alone instead of wrongly flipping it to 'detached'
  *  every time another tab happens to be showing. */
-function cellStatus(root: HTMLElement, sel: CellSelector): 'anchored' | 'detached' | undefined {
-  const sheetEl = root.querySelector<HTMLElement>('[data-sheet]');
-  if (!sheetEl) return undefined;
-  const activeSheet = sheetEl.getAttribute('data-sheet') ?? undefined;
-  if (sel.sheet && sel.sheet !== activeSheet) return undefined;
-  const present = new Set<string>();
-  sheetEl.querySelectorAll<HTMLElement>('[data-cell]').forEach((el) => {
+/** Everything the cell pass needs from the rendered grid, read ONCE per
+ *  pass. WHY (2026-10-01): it used to be re-read per comment — a full
+ *  `[data-cell]` sweep for the status check plus a `querySelector` per
+ *  comment — so a sheet's highlight pass grew with comments × cells (the
+ *  315-comment real-file stress pin measured past its 12x bound on Windows).
+ *  The lookups below return exactly what those per-comment queries did. */
+interface GridIndex {
+  /** The first `[data-sheet]` container's name and cell addresses — what the
+   *  status check (`cellStatus`) has always looked at. */
+  activeSheet: string | undefined;
+  activeCells: Set<string> | null;
+  /** First `[data-cell]` per address anywhere in root (`cellSelector` with
+   *  no sheet), and per sheet name under that sheet's containers. */
+  anyCell: Map<string, HTMLElement>;
+  bySheet: Map<string, Map<string, HTMLElement>>;
+}
+
+function indexGrid(root: HTMLElement): GridIndex {
+  const anyCell = new Map<string, HTMLElement>();
+  root.querySelectorAll<HTMLElement>('[data-cell]').forEach((el) => {
     const addr = el.getAttribute('data-cell');
-    if (addr) present.add(cellSelectorKey({ type: 'CellSelector', cell: addr, sheet: sel.sheet }));
+    if (addr !== null && !anyCell.has(addr)) anyCell.set(addr, el);
   });
+  const bySheet = new Map<string, Map<string, HTMLElement>>();
+  let activeSheet: string | undefined;
+  let activeCells: Set<string> | null = null;
+  root.querySelectorAll<HTMLElement>('[data-sheet]').forEach((sheetEl, i) => {
+    const name = sheetEl.getAttribute('data-sheet') ?? '';
+    const cells = bySheet.get(name) ?? new Map<string, HTMLElement>();
+    bySheet.set(name, cells);
+    const addrs = i === 0 ? new Set<string>() : null;
+    sheetEl.querySelectorAll<HTMLElement>('[data-cell]').forEach((el) => {
+      const addr = el.getAttribute('data-cell');
+      if (addr === null) return;
+      if (!cells.has(addr)) cells.set(addr, el);
+      addrs?.add(addr);
+    });
+    if (i === 0) { activeSheet = name || undefined; activeCells = addrs; }
+  });
+  return { activeSheet, activeCells, anyCell, bySheet };
+}
+
+/** The element `root.querySelector(cellSelector(c))` would return. */
+function cellElement(grid: GridIndex, c: { cell?: string; sheet?: string }): HTMLElement | undefined {
+  const addr = c.cell ?? '';
+  return c.sheet ? grid.bySheet.get(c.sheet)?.get(addr) : grid.anyCell.get(addr);
+}
+
+/** §2.2: "a cell either is or isn't in the current sheet" — but XlsxView only
+ *  ever renders the ACTIVE sheet tab's cells into the DOM (`XlsxView.tsx`'s
+ *  `XlsxSheets`), so a comment on a DIFFERENT tab has no DOM evidence either
+ *  way right now. Returning `undefined` there leaves the comment's
+ *  last-known status alone instead of wrongly flipping it to 'detached'
+ *  every time another tab happens to be showing. */
+function cellStatus(grid: GridIndex, sel: CellSelector): 'anchored' | 'detached' | undefined {
+  if (!grid.activeCells) return undefined;
+  if (sel.sheet && sel.sheet !== grid.activeSheet) return undefined;
+  const present = new Set<string>();
+  if (grid.activeCells.has(sel.cell)) present.add(cellSelectorKey(sel));
   return resolveCellSelector(sel, present);
 }
 
@@ -353,11 +410,12 @@ function markAll(root: HTMLElement, comments: DocComment[]): Map<string, HTMLEle
   const found = new Map<string, HTMLElement[]>();
 
   // Cell comments (spreadsheets): §2.2's trivial presence check.
+  const grid = comments.some((c) => c.cell) ? indexGrid(root) : null;
   for (const c of comments) {
-    if (!c.cell) continue;
-    const status = cellStatus(root, { type: 'CellSelector', cell: c.cell, sheet: c.sheet });
+    if (!c.cell || !grid) continue;
+    const status = cellStatus(grid, { type: 'CellSelector', cell: c.cell, sheet: c.sheet });
     if (status) setCommentStatus(c.id, status);
-    const td = root.querySelector<HTMLElement>(cellSelector(c));
+    const td = cellElement(grid, c);
     if (!td) continue;
     td.setAttribute(CELL_ATTR, '');
     td.setAttribute('data-comment-id', c.id);

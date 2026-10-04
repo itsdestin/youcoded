@@ -70,6 +70,14 @@ mac:
   # we ship unsigned. Safe on Linux/Windows runners: signing is skipped before this is
   # consulted. Complements the CI check, which additionally proves the seal is valid.
   forceCodeSigning: true
+  # WHY (Task 9): the signer signs every non-text file in the app one by one, and the Office
+  # add-on has ~600 (editor images, fonts, templates). Only its converter is code: x2t and its
+  # dylibs, which DO get signed (ad hoc, like the app) — macOS refuses to run unsigned code on
+  # Apple silicon, and upstream's own signature does not survive into our bundle's seal. Every
+  # other add-on file is still covered by the app's seal as a plain resource, so
+  # verify-mac-signature.sh's --deep --strict check sees any change to any of them.
+  signIgnore:
+    - "/Contents/Resources/office/(?!converter/(x2t|[^/]+\\.dylib)$)"
   # WHY: macOS does not ask the user for microphone permission unless the app has
   # already declared, in its Info.plist, WHY it wants the microphone. With this
   # string missing, the first touch of the mic does not produce a denied prompt -
@@ -92,6 +100,16 @@ linux:
   # maintainer is required by the deb/rpm packagers.
   maintainer: itsdestin <itsdestin@users.noreply.github.com>
   synopsis: Desktop GUI for Claude Code with the YouCoded toolkit
+  # WHY: the AppImage catalog (and other Linux app stores) read this file from
+  # usr/share/metainfo/ inside the AppImage for our description and OUR chosen
+  # screenshots; without it they show a robot's picture of the sign-in screen.
+  # electron-builder copies the app folder into the AppImage's root, so this path
+  # lands exactly there. extraFiles is per platform, not per target, so the deb /
+  # rpm / pacman packages also carry a copy under /opt/YouCoded/usr/share/metainfo/,
+  # where nothing reads it: harmless, just unused.
+  extraFiles:
+    - from: linux/ai.youcoded.YouCoded.metainfo.xml
+      to: usr/share/metainfo/ai.youcoded.YouCoded.metainfo.xml
 pacman:
   # electron-builder auto-generates Debian-style dependency names for the
   # pacman target, and `libappindicator-gtk3` is AUR-only — not in Arch's
@@ -154,3 +172,20 @@ files:
   - hook-scripts/**/*
   - assets/**/*
   - package.json
+  # WHY: office-root.ts imports the pin (compiled to require('../../../office-pin.json'), which
+  # resolves to app.asar's root). Without it a packaged app could not start at all — the main
+  # process died on that require (first seen in the Linux CI smoke test, Task 9).
+  - office-pin.json
+# WHY a resource, not inside app.asar: x2t is a native program that must run from a real
+# folder, and the AGPL add-on stays a separate program beside the MIT app (contract R2).
+# WHY ${platform}-${arch} (Task 9): each installer needs its own platform's converter, and the
+# Mac runner cuts the Intel and Apple-silicon dmgs in one run. `npm run build` fills
+# office-build/<platform>-<arch>/ for every arch pinned for this OS (fetch-office.mjs --release).
+# ${platform} is the BUILD machine's OS — every installer is built on its own OS (both release
+# workflows). A platform with no pinned bundle (ARM Linux) has no folder; electron-builder then
+# warns "file source doesn't exist" and packs no Office, and the app opens Office files with the
+# computer's default app. Pinned by tests/office/fetch-office.test.ts.
+extraResources:
+  - from: office-build/${platform}-${arch}
+    to: office
+    filter: ["**/*"]

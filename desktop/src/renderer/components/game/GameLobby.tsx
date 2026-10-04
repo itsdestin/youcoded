@@ -7,6 +7,8 @@ import { mergeFriends, statusLabel } from './friends-data';
 import { Badge, Button, InputGroup } from '../ui';
 import type { FriendRow, HeadToHead, RequestsPayload } from '../../state/marketplace-api-client';
 import { recordAria, recordLabel, recordsByOpponent } from './head-to-head';
+// WHY (Office fix round 5): the reload button reloads the window, so open Office documents save first.
+import { reloadAfterOfficeSave } from '../office/office-store';
 // Task 7c, workbench-only auto-play — see the effect below and
 // dev/workbench/fake-party.ts. isWorkbenchAutoplay() is false in every
 // shipped build (it checks for a global only install-mock.ts ever sets).
@@ -93,7 +95,7 @@ function ErrorScreen({ connection }: { connection: GameConnection }) {
         </button>
         {retryCount >= 2 && (
           <button
-            onClick={() => window.location.reload()}
+            onClick={() => reloadAfterOfficeSave()}
             // G-2: `amber` is not in the app's token set, and this is not a
             // status indicator (the one documented exception) — it is a
             // secondary action inside an error screen, so it uses the same

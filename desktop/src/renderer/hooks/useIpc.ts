@@ -1,5 +1,6 @@
 import type { VoiceBridge } from '../../shared/voice-types';
 import type { PagesBridge } from '../../shared/pages-types';
+import type { OfficeBridge } from '../../shared/office-types';
 import { useEffect, useRef } from 'react';
 // M1 Task 3: native.send's declared return type below was stale (`void`) from
 // before Task 2 switched the IPC channel to invoke/ack. shared/types.ts (not
@@ -37,6 +38,8 @@ declare global {
         list: () => Promise<any[]>;
         canSend?: () => boolean;
         sendInput: (sessionId: string, text: string) => void;
+        /** The screen verdict for main's own automated writes (cc-input-focus.ts). */
+        reportInputBlocked?: (sessionId: string, blocked: boolean) => void;
         resize: (sessionId: string, cols: number, rows: number) => void;
         signalReady: (sessionId: string) => void;
         respondToPermission: (requestId: string, decision: object) => Promise<boolean>;
@@ -476,6 +479,11 @@ declare global {
       // lands; the header hides the pinned buttons and the library shows an
       // error when it is undefined. Shape: shared/pages-types.ts.
       pages?: PagesBridge;
+      // Office (build plan Task 5). Optional: absent in any host that has no Office
+      // channels, and the file panels then keep their usual buttons. The remote client and
+      // the phone carry it, but their hosts refuse every call (desktop only).
+      // Shape: shared/office-types.ts.
+      office?: OfficeBridge;
       // Model manager (Plan C) — curated catalog, HF search, downloads, endpoint
       // detectors, engine backend switch. Task 9's Local Models panel consumes
       // these. onDownloadProgress returns an unsubscribe.

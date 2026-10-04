@@ -216,5 +216,10 @@ describe('App — the Welcome back screen only ever opens once, in the leader wi
     await waitFor(() => expect(store.getState().sessions.length).toBeGreaterThan(before), { timeout: 8000 });
     const opened = store.getState().sessions.slice(before);
     expect(opened.every((s: any) => s.skipPermissions === false)).toBe(true);
+    // WHY wait for the button to leave "Reopening…" (2026-10-02): the sessions appear
+    // before Resume all's own finally-block runs, so the test used to end mid-resume and
+    // its last state updates landed after the file's jsdom was torn down — two
+    // "window is not defined" unhandled errors that failed verify.sh at random.
+    await waitFor(() => expect(screen.queryByText('Reopening…')).not.toBeInTheDocument(), { timeout: 8000 });
   });
 });

@@ -9,7 +9,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { readFile, writeFile, mkdtemp, rm, stat } from 'fs/promises';
 import { promises as fsp } from 'fs';
-import { join } from 'path';
+// WHY dirname/basename (not slicing at the last '/'): a Windows temp path uses
+// backslashes, so the slice built a nonsense sibling path and every
+// file-open-elsewhere test failed on Windows for that reason alone.
+import { basename, dirname, join } from 'path';
 import { tmpdir } from 'os';
 import { writeFileMutation, backupPathFor } from '../src/main/doc-comments/write-pipeline';
 
@@ -226,8 +229,8 @@ describe('write-pipeline — verify-after-write with automatic rollback', () => 
 describe('write-pipeline — step 0: refuses a file open elsewhere before backup', () => {
   it('refuses \'file-open-elsewhere\' when a Word/Excel owner file (~$<name>) sits beside the target, before touching the backup or the target', async () => {
     await withScratchFile('original bytes', async (target) => {
-      const dir = target.slice(0, target.lastIndexOf('/'));
-      const name = target.slice(target.lastIndexOf('/') + 1);
+      const dir = dirname(target);
+      const name = basename(target);
       const ownerFile = join(dir, `~$${name}`);
       await writeFile(ownerFile, 'winword');
       const before = await readFile(target);
@@ -248,8 +251,8 @@ describe('write-pipeline — step 0: refuses a file open elsewhere before backup
 
   it('refuses \'file-open-elsewhere\' when a LibreOffice lock file (.~lock.<name>#) sits beside the target', async () => {
     await withScratchFile('original bytes', async (target) => {
-      const dir = target.slice(0, target.lastIndexOf('/'));
-      const name = target.slice(target.lastIndexOf('/') + 1);
+      const dir = dirname(target);
+      const name = basename(target);
       const lockFile = join(dir, `.~lock.${name}#`);
       await writeFile(lockFile, ',destin,localhost,01-01-2026 00:00,file:///home/destin;');
       const backupPath = backupPathFor(target, '.xlsx.bak');
@@ -266,8 +269,8 @@ describe('write-pipeline — step 0: refuses a file open elsewhere before backup
 
   it('proceeds normally once the lock file is gone (the common "since closed it" case)', async () => {
     await withScratchFile('original bytes', async (target) => {
-      const dir = target.slice(0, target.lastIndexOf('/'));
-      const name = target.slice(target.lastIndexOf('/') + 1);
+      const dir = dirname(target);
+      const name = basename(target);
       const ownerFile = join(dir, `~$${name}`);
       await writeFile(ownerFile, 'winword');
       const firstAttempt = await writeFileMutation<{}, { ok: false; error: string }>(
@@ -284,7 +287,7 @@ describe('write-pipeline — step 0: refuses a file open elsewhere before backup
 
   it('a sibling file that merely SHARES a prefix (not the exact lock-file shape) does not refuse', async () => {
     await withScratchFile('original bytes', async (target) => {
-      const dir = target.slice(0, target.lastIndexOf('/'));
+      const dir = dirname(target);
       // "target.xlsx.bak" and "~$other.xlsx" (a DIFFERENT file's owner marker)
       // must never false-positive against "target.xlsx".
       await writeFile(join(dir, 'target.xlsx.bak'), 'unrelated');

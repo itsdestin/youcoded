@@ -186,6 +186,10 @@ function formatComment(c: PersistedComment): string {
 // posture as Read/Grep/Glob — no permission subject at all, §5.2a only
 // specifies a gate for the five MUTATION tools below).
 // ---------------------------------------------------------------------------
+/** Finish plan Task 6: the file is open in Office and its editor could not take the change yet
+ *  (still opening or busy) — it is kept and made as soon as the editor can (live-comments.ts). */
+const queuedText = (path: string) => `${path} is open in Office and its editor isn't ready yet. The change is queued and will be made as soon as it is.`;
+
 export const ReadFileCommentsTool = defineTool({
   name: 'ReadFileComments',
   description: READ_FILE_COMMENTS_DESCRIPTION,
@@ -243,6 +247,7 @@ export const ReplyToCommentTool = defineTool({
         ? await replyToNativeXlsxComment({ path: args.path, projectRoot: ctx.cwd, id: args.commentId, text: args.text, author: 'assistant' })
         : await replyToComment({ path: args.path, projectRoot: ctx.cwd, id: args.commentId, text: args.text, author: 'assistant' });
     if (!result.ok) return { text: `ReplyToComment failed: ${describeError(result)}`, isError: true };
+    if ('queued' in result) return { text: queuedText(args.path) };
     return { text: `Reply added to comment ${args.commentId} on ${args.path}.` };
   },
 });
@@ -267,6 +272,7 @@ export const ResolveCommentTool = defineTool({
         ? await resolveNativeXlsxComment({ path: args.path, projectRoot: ctx.cwd, id: args.commentId, by: 'assistant' })
         : await resolveComment({ path: args.path, projectRoot: ctx.cwd, id: args.commentId, by: 'assistant' });
     if (!result.ok) return { text: `ResolveComment failed: ${describeError(result)}`, isError: true };
+    if ('queued' in result) return { text: queuedText(args.path) };
     return { text: `Comment ${args.commentId} on ${args.path} marked resolved.` };
   },
 });
@@ -291,6 +297,7 @@ export const ReopenCommentTool = defineTool({
         ? await reopenNativeXlsxComment({ path: args.path, projectRoot: ctx.cwd, id: args.commentId, by: 'assistant' })
         : await reopenComment({ path: args.path, projectRoot: ctx.cwd, id: args.commentId, by: 'assistant' });
     if (!result.ok) return { text: `ReopenComment failed: ${describeError(result)}`, isError: true };
+    if ('queued' in result) return { text: queuedText(args.path) };
     return { text: `Comment ${args.commentId} on ${args.path} reopened.` };
   },
 });
@@ -319,6 +326,7 @@ export const AddCommentTool = defineTool({
         ? await addNativeXlsxComment({ path: args.path, projectRoot: ctx.cwd, selector, text: args.text, author: 'assistant' })
         : await addComment({ path: args.path, projectRoot: ctx.cwd, selector, text: args.text, author: 'assistant' });
     if (!result.ok) return { text: `AddComment failed: ${describeError(result)}`, isError: true };
+    if ('queued' in result) return { text: queuedText(args.path) };
     return { text: `Comment added to ${args.path} (id: ${result.id}).` };
   },
 });
@@ -345,6 +353,7 @@ export const MoveCommentTool = defineTool({
         ? await moveNativeXlsxComment({ path: args.path, projectRoot: ctx.cwd, id: args.commentId, newSelector })
         : await moveComment({ path: args.path, projectRoot: ctx.cwd, id: args.commentId, newSelector });
     if (!result.ok) return { text: `MoveComment failed: ${describeError(result)}`, isError: true };
+    if ('queued' in result) return { text: queuedText(args.path) };
     // Code review 2026-09-27, desktop F1: an xlsx move mints a FRESH id (its
     // old id's embedded-cell hint goes stale the instant the comment moves —
     // xlsx-comments.ts's own WHY on `moveNativeXlsxComment`), and this tool is

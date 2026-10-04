@@ -25,7 +25,7 @@ import { isTypingTarget } from '../utils/is-typing-target';
 import { dispatchSlashCommand, type ViewMode } from '../state/slash-command-dispatcher';
 import { runNativeSlashAction, routeSlashResult } from '../state/native-slash-actions';
 import type { UsageSnapshot } from '../state/chat-types';
-import { hasPendingInteraction, pendingInteractionKind, pendingInteractionRefusalCopy } from '../state/pty-input-gate';
+import { sendBlock, pendingInteractionRefusalCopy, waitForMessageBox } from '../state/pty-input-gate';
 import { buildOutgoingMessage } from './outgoing-message';
 import { sendChatMessage } from './native-send';
 import type { NativeSendResult } from '../../shared/types';
@@ -88,7 +88,8 @@ interface Props {
   // Pending-prompt send was refused. App surfaces a "Send anyway" affordance
   // wired to `retry`, which presses ESC (to neutralize any genuinely-live Ink
   // menu) then re-sends bypassing the gate. See sendMessage's gate branch.
-  onSendBlocked?: (retry: () => void) => void;
+  // `block` says what refused it, for the refusal sentence.
+  onSendBlocked?: (retry: () => void, block: NonNullable<ReturnType<typeof sendBlock>>) => void;
   // /copy needs to read assistant turns from session state to extract blocks
   getSessionState?: (sessionId: string) => import('../state/chat-types').SessionChatState | undefined;
   // Bare /model, /fast, /effort open the unified ModelPickerPopup
@@ -707,8 +708,13 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       // `force` is the "Send anyway" override (below): the gate already refused
       // once and the user chose to push through, so skip the re-check.
       if (!force && provider !== 'native') {
-        const session = getSessionState?.(sessionId);
-        if (session && hasPendingInteraction(session)) {
+        // WHY the screen too (2026-09-29): the chat state only knows what the
+        // hook system and the known-title detector reported. A Claude Code
+        // pop-up nobody reports (auto-mode setup, compaction and billing
+        // notices, the agents view) swallowed the message while its bubble
+        // looked sent. sendBlock also reads the live terminal.
+        const block = sendBlock(getSessionState?.(sessionId), sessionId);
+        if (block) {
           // Offer an ESC-first escape hatch instead of a dead-end toast: press
           // ESC (closes any genuinely-live Ink menu; a no-op on an idle input
           // bar, so it can NEVER answer a real menu), then re-send with the
@@ -717,12 +723,17 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
           if (onSendBlocked) {
             onSendBlocked(() => {
               window.claude.session.sendInput(sessionId, '\x1b');
-              sendRef.current(true);
-            });
+              // Wait for the pop-up to actually close before typing: text sent
+              // while it is still closing would land in it.
+              void waitForMessageBox(sessionId).then((cleared) => {
+                if (cleared) sendRef.current(true);
+                else onToast?.("Claude Code didn't close it — switch to terminal view to answer it. Your message is still here.");
+              });
+            }, block);
           } else {
             // Names the blocker (a card in the chat vs a terminal prompt) — one
             // shared sentence with App.tsx's refusals (pty-input-gate.ts).
-            onToast?.(pendingInteractionRefusalCopy(pendingInteractionKind(session)));
+            onToast?.(pendingInteractionRefusalCopy(block.kind, block.screen));
           }
           return false;
         }

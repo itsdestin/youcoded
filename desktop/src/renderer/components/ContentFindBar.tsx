@@ -315,7 +315,17 @@ export function ContentFindBar({ containerRef, onClose, resetKey, highlightName 
         if (!stopped && frame === null) frame = requestAnimationFrame(settle);
       });
       observer.observe(root);
-      const expiry = setTimeout(stop, 800);
+      const expiry = setTimeout(() => {
+        // WHY: an RO can report the displaced match while rAF is throttled past
+        // expiry. Drain only that already-queued correction before disconnecting;
+        // intent/abort still cancel it, and settle keeps the existing four-pin cap.
+        if (frame !== null && !stopped && !abort.signal.aborted) {
+          cancelAnimationFrame(frame);
+          frame = null;
+          settle();
+        }
+        stop();
+      }, 800);
       const stopIntent = () => stop();
       for (const event of events) vpEl.addEventListener(event, stopIntent, { once: true, passive: true });
       settleCleanup = stop;

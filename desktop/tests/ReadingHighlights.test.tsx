@@ -14,7 +14,7 @@ import { createRef } from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render } from '@testing-library/react';
 import { ReadingHighlights } from '../src/renderer/components/comments/ReadingHighlights';
-import { addComment, resolveComment, __resetDocCommentsStoreForTest } from '../src/renderer/state/doc-comments-store';
+import { addComment, resolveComment } from '../src/renderer/state/doc-comments-store';
 import { genRefId, type ComposeRef } from '../src/renderer/components/context-menu/compose-ref';
 
 function summaryChipRef(path: string, fileName: string, count: number): ComposeRef {
@@ -83,110 +83,6 @@ describe('a decoded summary-chip reference opens the comment panel on click', ()
   });
 });
 
-// Code review 2026-09-27, desktop F3 (renderer-lists.md): CommentsMargin.tsx's
-// own header comment claimed comment counts are "small (a handful per file)"
-// to justify skipping renderer-lists.md's 1,000-item stress pin, and
-// ReadingHighlights shares the exact same anchoring hook (useQuoteMarks) and
-// therefore the same per-mark listener-attachment cost — this is that pin's
-// twin for THIS component. See CommentsMargin.tsx's header for the measured
-// numbers (this hook's cost, not this component's own render, dominates
-// either way) and `CommentsMargin.test.tsx`'s matching describe block for the
-// real-fixture (elden-ring, 315 cell comments) case.
-// This test's own wall-clock budget (test-suite-hygiene.md's "budgets are
-// measured, not guessed" — a named constant, not the 30s suite default). It
-// does real work seven times over (1 warm-up + 3 trials each of 100 and
-// 1,000 comments), so under `verify.sh --full`'s own heavy concurrent load
-// (every other check running at once — 2026-09-28) the file's default 30s
-// vitest timeout was hit even though every individual mount stayed well
-// under its own CPU budget: wall clock under contention can inflate far
-// past CPU time alone (the CPU-usage ratio assertion below already accounts
-// for that; this is the SEPARATE wall-clock budget for the whole test).
-const STRESS_TEST_BUDGET_MS = 90_000;
-
-describe('ReadingHighlights — render cost at a realistic high comment count', () => {
-  it('mounts against 1,000 comments in one pass, with cost growing in line with the count', () => {
-    // WHY a ratio, not a fixed ceiling: matches CommentsMargin.test.tsx's own
-    // fix (fdd3db1b9) — a fixed 5s CPU ceiling measured ~1.6s alone but 5.07s
-    // in a full-suite run on a loaded machine (2026-09-28), because CPU time
-    // itself inflates under contention. Measuring 200 and 1,000 in the SAME
-    // run cancels out machine load.
-    //
-    // WHY best-of-3, not one sample each: a single ratio still flaked on a
-    // heavily loaded machine (2026-09-28: measured 16x, one of the two mounts
-    // landing on a scheduling/GC hiccup the other didn't). Contention can
-    // only ADD overhead to a mount, never remove it, so the MINIMUM across
-    // repeated trials of the same size is the closest any sample gets to the
-    // uncontended cost.
-    //
-    // WHY the store is reset after every mount: doc-comments-store's
-    // `publishKey`/`addComment` shallow-copy the WHOLE `commentsByKey` object
-    // per write (one entry per distinct path ever touched — a deliberate
-    // O(open files) cost the store accepts for O(1) per-file reads; see its
-    // own `pruneKeyIfUnused` comment). Each best-of-3 trial uses its own
-    // path, so this keeps that object's size constant across trials instead
-    // of growing it — measured to make no difference to the ratio below, but
-    // left in on principle so a future higher TRIALS count doesn't quietly
-    // reintroduce it.
-    //
-    // WHY 100 vs 1,000 (10x), not CommentsMargin's 200 vs 1,000 (5x), and WHY
-    // 70x: this component's OWN near-linear cost is NOT the same SHAPE as
-    // CommentsMargin's (their algorithms differ even though both anchor
-    // through useQuoteMarks) — at 200-vs-1,000 (5x count) it measured
-    // 10.5x-14.3x on an idle machine and up to 21.9x under `verify.sh --full`
-    // (2026-09-28), squeezing right up against a quadratic blow-up's ~25x
-    // prediction with no room left to tell a real regression from noise.
-    // Widening the gap to 10x moves this component's OWN measured "working as
-    // intended" cost to ~32x-35x idle (vs. a 10x prediction if it were
-    // linear) while a quadratic-shaped blow-up here would be ~100x — 70x
-    // keeps generous headroom above the idle measurement (including this
-    // file's own ~1.5x-2x observed load inflation) while staying well clear
-    // of the quadratic catch line.
-    const mountWith = (path: string, count: number) => {
-      // One <p> per quote — see CommentsMargin.test.tsx's own note on why a
-      // rendered document is many block elements, not one flat text blob.
-      const content = document.createElement('div');
-      for (let i = 0; i < count; i++) {
-        const p = document.createElement('p');
-        p.textContent = `filler filler Q${i}filler filler`;
-        content.appendChild(p);
-      }
-      document.body.appendChild(content);
-      for (let i = 0; i < count; i++) {
-        addComment(path, `Q${i}filler`, 'label', { prefix: '', suffix: '', occurrence: 0 });
-      }
-
-      const containerRef = createRef<HTMLDivElement>();
-      (containerRef as { current: HTMLElement | null }).current = content;
-      const startedCpu = process.cpuUsage();
-      const { unmount } = render(<ReadingHighlights containerRef={containerRef} path={path} onOpenComments={vi.fn()} />);
-      const usedCpu = process.cpuUsage(startedCpu);
-      // Every comment anchored — proves the full pass actually ran, not an
-      // early bail-out.
-      expect(content.querySelectorAll('mark')).toHaveLength(count);
-      unmount();
-      content.remove();
-      __resetDocCommentsStoreForTest();
-      return (usedCpu.user + usedCpu.system) / 1000;
-    };
-    // 5, not 3 (2026-09-28): best-of-3 still hit 13x once during a full
-    // 15,000-test run while the same code measured 6.3-7.2x across 18
-    // isolated and parallel-loaded reruns — one more outlier-prone sample
-    // per size, not a looser bound, is what keeps a quadratic regression
-    // (~25x) clearly separated from normal linear cost (~5-7x).
-    const TRIALS = 5;
-    /** The best (minimum) of TRIALS same-size mounts, each its own path so
-     *  the store never carries duplicate comments across trials. */
-    const bestOf = (label: string, count: number) => {
-      const samples: number[] = [];
-      for (let t = 0; t < TRIALS; t++) samples.push(mountWith(`stress/${label}-${t}.md`, count));
-      return Math.min(...samples);
-    };
-
-    // Warm-up mount so one-time costs (module init, JIT) don't land on a
-    // measured trial and make the ratio look better than it is.
-    mountWith('stress/warmup.md', 50);
-    const small = bestOf('100-comments', 100);
-    const large = bestOf('1000-comments', 1000);
-    expect(large / Math.max(small, 1)).toBeLessThan(70);
-  }, STRESS_TEST_BUDGET_MS);
-});
+// This component's 1,000-comment render-cost pin is in
+// tests/render-cost/ReadingHighlights.test.tsx — WHY a separate folder: it runs in its own
+// vitest project after the parallel suite (vitest.config.ts → 'render-cost').

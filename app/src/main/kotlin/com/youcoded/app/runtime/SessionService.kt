@@ -411,7 +411,9 @@ class SessionService : Service() {
                 while (true) {
                     val session = sessionRegistry.getCurrentSession()
                     if (session == null || session.shellMode || !session.isRunning) return@launch
-                    if (!session.hasPendingPermission()) {
+                    // inputBlocked: a pop-up no hook reported (the renderer reads it off
+                    // the screen) — same deferral as a pending permission.
+                    if (!session.hasPendingPermission() && !session.inputBlocked) {
                         session.writeInput("/reload-plugins\r")
                         return@launch
                     }
@@ -1069,6 +1071,13 @@ class SessionService : Service() {
                 } else if (text.isNotEmpty() && text.length <= 1_048_576) {
                     sessionRegistry.sessions.value[sessionId]?.writeInput(text)
                 }
+            }
+            // Fire-and-forget: the shared React detector's verdict on whether this
+            // session's terminal has a pop-up holding the keyboard. Gates the
+            // /reload-plugins write above (desktop: SessionManager.setInputBlocked).
+            "session:input-blocked" -> {
+                val sessionId = msg.payload.optString("sessionId", "")
+                sessionRegistry.sessions.value[sessionId]?.inputBlocked = msg.payload.optBoolean("blocked", false)
             }
             "session:resize" -> {
                 val sessionId = msg.payload.optString("sessionId", "")
@@ -4181,6 +4190,20 @@ class SessionService : Service() {
                     org.json.JSONObject().put("ok", true)) }
             }
 
+            "office:status", "office:create", "office:pick", "office:open",
+            "office:invoke", "office:close", "office:versions", "office:restore", "office:save-copy",
+            "office:changed" -> {
+                // Office editing is desktop only for now (R28, build plan Task 5): the phone
+                // keeps the quick preview. unsupported=true makes the shared renderer reject
+                // the call and name the feature ("Office isn't available on the phone yet.")
+                // instead of treating the refusal as an answer. office:changed is desktop main's
+                // push after a restore; the phone never sends it, and a request for it is refused alike.
+                val payload = org.json.JSONObject()
+                    .put("ok", false)
+                    .put("unsupported", true)
+                    .put("error", "not-implemented-on-mobile")
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, payload) }
+            }
             "git:file-status", "git:file-review", "git:commit-file-diff", "git:stage",
             "git:unstage", "git:commit", "git:discard", "git:watch", "git:unwatch" -> {
                 // Git surface is desktop-only for now (spec 2026-07-22); the shared

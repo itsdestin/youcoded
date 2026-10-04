@@ -92,7 +92,7 @@ import type { SpecialistCatalog } from './harness/specialists/catalog';
 import type { ChatGptAuth } from './providers/chatgpt-auth';
 import type { OpenRouterSignIn } from './providers/openrouter-oauth';
 import type { ClaudeAccount } from './providers/claude-account';
-import { installClaude } from './prerequisite-installer';
+import { installClaude, ensureNode } from './prerequisite-installer';
 import { toListResult } from './harness/specialists/catalog';
 import { detectEndpoints } from './models/endpoint-detectors';
 import { BrowserWindow, app } from 'electron';
@@ -2223,7 +2223,11 @@ export class RemoteServer {
       // cached "not-installed" is dropped so the card re-reads it.
       case 'claude-code:install': {
         try {
-          const result = await installClaude();
+          // Same Node-first order as the desktop IPC handler (2026-10-02).
+          const node = await ensureNode();
+          const result = node.success
+            ? await installClaude()
+            : { success: false, error: `Node.js, which Claude Code needs, couldn't be installed: ${node.error}` };
           this.nativeRuntime?.claudeAccount?.invalidate();
           this.respond(client.ws, type, id, result);
         } catch (err: any) {
@@ -4151,6 +4155,11 @@ export class RemoteServer {
         this.sessionManager.sendInput(payload.sessionId, payload.text);
         break;
       }
+      // A remote browser's screen verdict is ignored: the desktop window's own
+      // detector reports for every session and is the authority (same rule as
+      // attentionState). Android's WebView reports to SessionService instead.
+      case 'session:input-blocked':
+        break;
       // Native runtime interrupt — fire-and-forget (no response). The host no-ops unknown ids.
       case 'native:interrupt': {
         this.nativeRuntime?.nativeHost.interrupt(payload.sessionId);
