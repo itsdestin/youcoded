@@ -92,12 +92,22 @@ export interface DetectionResult {
 // admin prompt and no package manager is ever needed.
 // ---------------------------------------------------------------------------
 
-const NODE_VERSION = 'v20.19.0';
+// WHY 22 (2026-10-03): Node 20 stopped getting security fixes in April 2026. 22 is supported to
+// April 2027 and still runs on macOS 11+ — Node 24 needs macOS 13.5, which would strand older Macs.
+const NODE_VERSION = 'v22.23.3';
 // From https://nodejs.org/dist/<NODE_VERSION>/SHASUMS256.txt — bump together.
 const NODE_WIN_SHA256 = {
-  x64: 'be72284c7bc62de07d5a9fd0ae196879842c085f11f7f2b60bf8864c0c9d6a4f',
-  arm64: '773325a26ad51a5ba857963825dee3a871eacef653c31d62e5492574c965accb',
+  x64: '2b0ff57b049cda1bbcea2240eec20467018713c1efe1f7360c2681859b90ed71',
+  arm64: '33dad22e4cef5ee8f9fbb1b0d037fdacd0e56d12a4580f0d63f68b894deab535',
 } as const;
+// WHY checked on macOS/Linux too: the tarball used to be unpacked without any check, so a
+// corrupted or tampered download became the Node every Claude Code session runs.
+const NODE_TARBALL_SHA256: Record<string, string> = {
+  'darwin-arm64': '23b25245dcfb9af7262f8ff142e9e2e0af025368117329e7a7458a51e5922f53',
+  'darwin-x64': '8a677b0219178efd6eb0e475457c4afb452b521a92f6e67845a73bd85727f2a8',
+  'linux-arm64': '5ced2d48d1d7198739b7f86804de0171aefb6823b684b12341d3321afc3cb0b2',
+  'linux-x64': '1084aa36196bba4c3a5e69a1ee388a6e4ff729dad09445fbcd434b28fe3c24af',
+};
 // Pinned, NOT "latest": the download URL interpolates the version into the
 // asset filename (gh_<ver>_macOS_arm64.zip), so there is no /latest/ URL that
 // yields a predictable name, and resolving it at runtime would make the
@@ -802,6 +812,10 @@ export async function installNode(): Promise<{ success: boolean; error?: string 
         `https://nodejs.org/dist/${NODE_VERSION}/${tarName}`,
         tmpTar,
       );
+      if ((await sha256File(tmpTar)) !== NODE_TARBALL_SHA256[`${process.platform}-${arch}`]) {
+        fs.unlink(tmpTar, () => {});
+        return { success: false, error: 'The Node.js download did not match its expected fingerprint. Check your connection and try again.' };
+      }
 
       const installDir = userLocalNodeDir();
       fs.mkdirSync(installDir, { recursive: true });
@@ -840,6 +854,7 @@ export async function installNode(): Promise<{ success: boolean; error?: string 
 const MAC_CLT_GIT = '/Library/Developer/CommandLineTools/usr/bin/git';
 /** The app macOS opens for `xcode-select --install`. */
 const MAC_CLT_INSTALLER = 'Install Command Line Developer Tools';
+const MAC_CLT_INSTALLER_APP = `/System/Library/CoreServices/${MAC_CLT_INSTALLER}.app`;
 
 /**
  * Wait while macOS's Command Line Tools installer runs, up to 20 minutes.
@@ -853,6 +868,7 @@ const MAC_CLT_INSTALLER = 'Install Command Line Developer Tools';
 async function waitForMacCommandLineTools(): Promise<void> {
   const deadline = Date.now() + 20 * 60_000;
   let missingChecks = 0;
+  let raised = false;
   const startedAt = Date.now();
   while (Date.now() < deadline) {
     try {
@@ -864,13 +880,24 @@ async function waitForMacCommandLineTools(): Promise<void> {
       await runCommand('pgrep', ['-x', MAC_CLT_INSTALLER]);
       installerRunning = true;
     } catch { /* pgrep exits 1 when nothing matches */ }
+    // WHY (Destin, macOS VM 2026-10-03): Apple's window opened behind YouCoded, so it wasn't
+    // obvious setup was waiting for a click. Raise it once, the first time it is seen. `open -a`
+    // on the running installer only activates it (LaunchServices — no automation permission
+    // prompt, unlike AppleScript), and it runs only after pgrep found it, so it never launches it.
+    if (installerRunning && !raised) {
+      raised = true;
+      await runCommand('open', ['-a', MAC_CLT_INSTALLER_APP]).catch((err: unknown) =>
+        log('WARN', 'prereq', "could not bring Apple's installer to the front", { error: String(err) }));
+    }
     // Give the dialog a moment to open before counting its absence.
     if (!installerRunning && Date.now() - startedAt > 20_000) {
       if (++missingChecks >= 3) return;
     } else {
       missingChecks = 0;
     }
-    await new Promise((r) => setTimeout(r, 5_000));
+    // Every second while the window may still be opening (so it is raised promptly), then every
+    // 5 s — the "gone for three checks" rule above still counts 5-second checks.
+    await new Promise((r) => setTimeout(r, raised || Date.now() - startedAt > 20_000 ? 5_000 : 1_000));
   }
 }
 
