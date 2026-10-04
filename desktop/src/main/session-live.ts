@@ -76,7 +76,10 @@ export class SessionLiveFacts {
   }
 
   private live(sessionId: string, body: SessionLiveBody): void {
-    this.deps.publish(sessionId, IPC.SESSION_LIVE, { sessionId, ...body });
+    // WHY `at` on the dividers (sync-fix3 review): a screen that is filled later replays them from the record, and without the time they happened it
+    // would stamp them with the moment of the fill.
+    const stamped = body.kind === 'model-switch' || body.kind === 'clear' ? { ...body, at: this.now() } : body;
+    this.deps.publish(sessionId, IPC.SESSION_LIVE, { sessionId, ...stamped });
   }
 
   /** A deterministic-enough id: unique per session within a run, so a replay of the same event cannot draw a divider twice. */

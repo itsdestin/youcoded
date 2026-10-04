@@ -21,11 +21,11 @@ export type SessionLiveBody =
   /** The session's model changed: the raw model id or alias the chip is drawn from. */
   | { kind: 'model'; model: string }
   /** The thin "Model switched to Opus" divider. `id` is deterministic, so a replay cannot draw it twice. */
-  | { kind: 'model-switch'; id: string; label: string }
+  | { kind: 'model-switch'; id: string; label: string; /** when the host drew it (ms), so a replay shows the time it happened, not the time of the fill */ at?: number }
   /** Claude Code refused the model switch the host announced: take that divider back. */
   | { kind: 'model-switch-retract'; id: string }
   /** The thin "Conversation cleared" divider (Claude Code; a native clear is already a transcript event). */
-  | { kind: 'clear'; id: string }
+  | { kind: 'clear'; id: string; /** when it happened (ms); see model-switch */ at?: number }
   /** A compaction began: draw the spinner. The "Compacted" note itself comes from the transcript's own compaction line. */
   | { kind: 'compact-start'; id: string }
   /** A compaction ended WITHOUT a summary line (stopped or refused): take the spinner away. */

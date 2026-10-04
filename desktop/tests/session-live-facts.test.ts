@@ -116,7 +116,7 @@ describe('/model, /compact and /clear', () => {
     for (const src of ['startup', 'resume', 'compact', undefined]) h.live.noteSessionStart(S, src, 'c1');
     expect(h.sent).toEqual([]);
     h.live.noteSessionStart(S, 'clear', 'c2');
-    expect(h.lives()).toEqual([{ sessionId: S, kind: 'clear', id: 'clear-c2' }]);
+    expect(h.lives()).toEqual([{ sessionId: S, kind: 'clear', id: 'clear-c2', at: expect.any(Number) }]);
   });
   it('a compaction that goes quiet for three minutes is ended; activity keeps it alive', () => {
     let t = 1_000_000;
@@ -188,7 +188,7 @@ describe('a typed /clear when the hook is slow or absent', () => {
     h.live.noteInput(S, '/clear\r');
     h.live.noteSessionStart(S, 'clear', 'c9');
     timers[0]();
-    expect(h.lives()).toEqual([{ sessionId: S, kind: 'clear', id: 'clear-c9' }]);
+    expect(h.lives()).toEqual([{ sessionId: S, kind: 'clear', id: 'clear-c9', at: expect.any(Number) }]);
   });
   it('hook late (after the host drew it): still one divider', () => {
     const { h, timers, advance } = rig();

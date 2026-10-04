@@ -96,13 +96,13 @@ export function routeSessionLive(live: SessionLive, deps: { batcher: Pick<Transc
       deps.batcher.push({ type: 'MODEL_ANNOUNCED', sessionId, model: live.model });
       return;
     case 'model-switch':
-      deps.batcher.push({ type: 'MODEL_SWITCH_MARKER', sessionId, markerId: live.id, timestamp: now(), label: live.label });
+      deps.batcher.push({ type: 'MODEL_SWITCH_MARKER', sessionId, markerId: live.id, timestamp: live.at ?? now(), label: live.label });
       return;
     case 'model-switch-retract':
       deps.batcher.push({ type: 'MODEL_SWITCH_RETRACT', sessionId, markerId: live.id });
       return;
     case 'clear':
-      deps.batcher.push({ type: 'CLEAR_TIMELINE', sessionId, markerId: live.id, timestamp: now() });
+      deps.batcher.push({ type: 'CLEAR_TIMELINE', sessionId, markerId: live.id, timestamp: live.at ?? now() });
       return;
     case 'compact-start':
       deps.batcher.push({ type: 'COMPACTION_PENDING', sessionId, cardId: live.id, beforeContextTokens: deps.contextTokens(sessionId), hostOwned: true });
