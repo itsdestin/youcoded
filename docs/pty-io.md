@@ -94,6 +94,12 @@ Protocol facts live in `docs/cc-dependencies.md` → "Ink menu option selection"
 - **Never write to the PTY during a pending interaction** — CC's Ink select menu is LIVE while a hook permission card is up. Every automated writer consults `hasPendingInteraction`/`canRetrySubmit` or main-side `HookRelay.hasPendingPermission(sessionId)` (Android: `EventBridge.hasPendingPermission`). Deliberate menu-drivers (`state/prompt-input.ts` for PromptCard/TrustGate, `plan-menu-driver.ts` for the plan card, kept-card buttons, terminal-view xterm keystrokes) intentionally bypass; ToolCard itself no longer writes to the PTY. Fixed youcoded#110.
 - **One sanitized string** — the optimistic bubble + PTY send both derive from `components/outgoing-message.ts`; the transcript confirms by content match (PTY send replaces newlines AND tabs with spaces — CC takes a typed tab as the Tab key and drops it, 2026-09-23). A newline-bearing bubble stayed `pending` forever + armed a stray retry `\r`.
 
+## Output flow control (2026-10-04)
+
+- PTY output is batched and braked end to end — see `.claude/rules/pty-io.md` → "Output flow control" for the rules. Chain: `pty-worker.js` (batch ≤4 ms/256 K chars, `pause()` above 1 M owed chars, resume below 256 K) → main → renderer `hooks/terminal-feeder.ts` (`terminal.write` callback → `session.ackOutput` → `session:terminal-ack`, owner window only) → worker `{type:'ack'}`. Without it xterm silently discards input past ~50 M pending characters.
+- Don't forward PTY output without the brake, don't let a remote client or buddy window ack, and don't hold a paused PTY through the child's exit (Unix node-pty drops unread bytes 200 ms after exit).
+- Android's own PTY runtime is NOT braked (`PtyBridge.kt`, `SessionService.kt` `tryEmit` can drop output and the tail may go unflushed); the phone app, remote browsers and `session:terminal-ack` are no-ops there by design.
+
 ## Diagnostics
 
 - `YOUCODED_PTY_TRACE=1` → per-event trace at `~/.claude/youcoded-pty-trace-<pid>.log` (`IN`, `ATOMIC`, `CHUNK k=X/Y`, `ECHO_WAIT`, `ECHO_OK`, `ECHO_TIMEOUT … suppressing CR`, `CR after-echo`, `PASSTHROUGH`, `INPUT_ERROR`). Zero overhead when unset.
