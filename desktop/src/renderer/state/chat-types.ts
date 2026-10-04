@@ -1040,7 +1040,9 @@ export type ChatAction =
   | {
       type: 'CLEAR_TIMELINE';
       sessionId: string;
-      markerId: string;       // Stable id so the divider survives re-renders
+      /** Stable id so the divider survives re-renders. ABSENT = reset the turn only and draw NO divider: a live native `context-clear` event
+       *  (the record's own `session:live` clear draws the line, once, for both runtimes; sync-fix6). */
+      markerId?: string;
       timestamp: number;
     }
   // Typed `/model <alias>` in chat: replaces the raw "/model opus" bubble with

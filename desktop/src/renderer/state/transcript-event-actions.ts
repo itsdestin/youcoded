@@ -1,5 +1,6 @@
 import type { TranscriptEvent } from '../../shared/types';
 import type { ChatAction } from './chat-types';
+import { clearDividerId } from '../../shared/divider-ids';
 
 /**
  * ONE transcript event -> the reducer actions that draw it.
@@ -8,7 +9,8 @@ import type { ChatAction } from './chat-types';
  * hand-mirrored copy (and drifted: the buddy once missed `replay-complete`, and
  * once the tool timestamp):
  *  - the main window's live stream (App.tsx), `live: true`;
- *  - the buddy window's live stream (BubbleFeed.tsx), `live: true`;
+ *  - the buddy window's live stream (BubbleFeed.tsx), `live: true`, through the SAME
+ *    listener (state/screen-feed.ts); it skips no event type;
  *  - a history page read off disk (`pageEventToAction`), `live: false`.
  *
  * Pure on purpose: no store, no refs, no batching. The callers keep those
@@ -316,7 +318,11 @@ export function eventToAction(event: TranscriptEvent, opts: EventToActionOptions
       // The durable /clear barrier (native runtime). It also fires during history
       // replay, which is what makes a resumed session show the post-clear view the
       // user left behind instead of resurrecting the old conversation.
-      const out: ChatAction[] = [{ type: 'CLEAR_TIMELINE', sessionId, markerId: `clear-${uuid}`, timestamp }];
+      // WHY the divider is drawn here only on a PAGE (sync-fix6): live, the computer's record says "Conversation cleared" itself (a `session:live` clear
+      // with this same id, main/session-live.ts nativeCleared), so one line comes from ONE source on every screen and reaches a screen that opens later.
+      // This live action only resets the turn. A history page has no record behind it, so it still draws the line; the shared id makes a page and a
+      // live line for the same clear one line.
+      const out: ChatAction[] = [{ type: 'CLEAR_TIMELINE', sessionId, markerId: opts.live ? undefined : clearDividerId(uuid), timestamp }];
       // The barrier drops the whole conversation from the model's window, so the
       // gauge moves with it: no turn runs to re-measure. LIVE only; a page's
       // gauge is the live session's own value.

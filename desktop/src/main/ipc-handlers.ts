@@ -1596,12 +1596,11 @@ export function registerIpcHandlers(
   // consumes an identical event shape regardless of runtime.
   nativeHost.on('transcript-event', (event: TranscriptEvent) => {
     publish(event.sessionId, IPC.TRANSCRIPT_EVENT, event);
-    // WHY: this is the single line that makes native conversations exist in
-    // the store (design §5); Task 3 made it correct rather than mislabeling.
-    // Native ids are identity-mapped (sessionIdMap.set(info.id, info.id) in
-    // the SESSION_CREATE native branch above), so — unlike the CC listener
-    // below, which resolves through sessionIdMap — event.sessionId IS already
-    // the store's record id; no lookup needed.
+    // WHY (sync-fix6): the barrier resets the turn on every screen; the record's own `clear` line follows, numbered after it, so the divider has ONE source.
+    if (event.type === 'context-clear') liveFacts.nativeCleared(event.sessionId, event.uuid, event.timestamp);
+    // WHY: this is the single line that makes native conversations exist in the store (design §5); Task 3 made it correct rather than mislabeling.
+    // Native ids are identity-mapped (sessionIdMap.set(info.id, info.id) in the SESSION_CREATE native branch above), so — unlike the CC listener
+    // below, which resolves through sessionIdMap — event.sessionId IS already the store's record id; no lookup needed.
     noteTranscriptEvent(event.sessionId, event, 'native');
     // Welcome back (design §2): same first-message rule as the Claude feed
     // above. Native ids are identity-mapped (see the comment above this

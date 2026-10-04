@@ -9,18 +9,29 @@
 // ONE deliberate departure (R5-pre, 2026-10-01): the two dropPart entries' `page` was
 // `null` (a bug: reopened history showed discarded retry text), and now holds the
 // NATIVE_PARTS_DROPPED action the live path already produced.
+// ONE MORE (sync-fix6, Destin 2026-10-04): a LIVE `context-clear` no longer carries the divider's markerId (the record's `session:live` clear draws
+// the line, once, for both runtimes; the event only resets the turn), and the buddy now translates user-interrupt, skill-invoked and context-clear
+// exactly like the main window, so its golden `[]` for those three is replaced by the main window's own actions. Both are asserted below.
 import { describe, it, expect } from 'vitest';
 import golden from './fixtures/transcript-event-actions.golden.json';
 import { MATRIX } from './helpers/transcript-event-matrix';
 import { eventToAction } from '../src/renderer/state/transcript-event-actions';
 import { pageEventToAction } from '../src/renderer/state/transcript-page-actions';
 import type { TranscriptEvent } from '../src/shared/types';
+import { clearDividerId } from '../src/shared/divider-ids';
 import { malformedEv } from './helpers/transcript-events';
 
 // JSON round trip: the golden file cannot hold `undefined`, and a reducer treats
 // a missing field and an undefined one the same.
 const plain = (v: unknown) => JSON.parse(JSON.stringify(v ?? null));
 
+
+// The one departure from the recorded main-window output (see the header): a live clear carries no divider id.
+const withoutLiveClearMarker = (type: string, action: any) => {
+  if (type !== 'context-clear' || action?.type !== 'CLEAR_TIMELINE') return action;
+  const { markerId: _m, ...rest } = action;
+  return rest;
+};
 
 describe('eventToAction reproduces the old main-window switch', () => {
   for (const c of MATRIX) {
@@ -31,7 +42,7 @@ describe('eventToAction reproduces the old main-window switch', () => {
         fallbackContextTokens: c.ctx?.statuslineContextTokens ?? null,
       });
       const old = (golden as any)[c.name].app as { via: string; action: unknown }[];
-      expect(plain(actions)).toEqual(old.map((o) => o.action));
+      expect(plain(actions)).toEqual(old.map((o) => withoutLiveClearMarker(c.event.type, o.action)));
       // The golden's `via` (direct vs batched) recorded the old route. R4-3 sends every action
       // through the batcher, so only the actions and their order are compared; the route is
       // pinned in tests/transcript-routing.test.ts.
@@ -56,9 +67,10 @@ describe('eventToAction with live:false reproduces pageEventToAction', () => {
 // The buddy's old live output, minus the differences Destin approved on 2026-10-01
 // (or that are invisible in the buddy window). Everything else must be identical.
 describe('eventToAction with buddy options reproduces the old buddy switch', () => {
-  const BUDDY_SKIPPED = new Set(['user-interrupt', 'skill-invoked', 'context-clear']);
+  // The three types the old buddy never translated live: now closed (sync-fix6), pinned in the next block.
+  const BUDDY_WAS_SKIPPING = new Set(['user-interrupt', 'skill-invoked', 'context-clear']);
   for (const c of MATRIX) {
-    if (BUDDY_SKIPPED.has(c.event.type)) continue; // the buddy never ran these live; see the ledger test
+    if (BUDDY_WAS_SKIPPING.has(c.event.type)) continue;
     it(c.name, () => {
       const actions = eventToAction(c.event, {
         live: true,
@@ -94,6 +106,29 @@ describe('eventToAction with buddy options reproduces the old buddy switch', () 
       expect(plain(actions.map(stripInvisible))).toEqual(old.map((o) => plain(stripInvisible(o.action))));
     });
   }
+});
+
+describe('the buddy now translates the three events it used to skip, as the main window does', () => {
+  for (const c of MATRIX.filter((m) => ['user-interrupt', 'skill-invoked', 'context-clear'].includes(m.event.type))) {
+    it(c.name, () => {
+      const actions = eventToAction(c.event, { live: true, compactionPending: false, fallbackContextTokens: null });
+      const main = (golden as any)[c.name].app as { action: unknown }[];
+      expect(actions.length).toBeGreaterThan(0);
+      expect(plain(actions)).toEqual(main.map((o) => withoutLiveClearMarker(c.event.type, o.action)));
+    });
+  }
+});
+
+describe('a clear\'s divider: a page draws it, a live event does not (the record draws it live)', () => {
+  const clear = MATRIX.find((m) => m.event.type === 'context-clear')!.event;
+  it('live: resets the turn with no divider id', () => {
+    const [a] = eventToAction(clear, { live: true });
+    expect(a).toMatchObject({ type: 'CLEAR_TIMELINE' });
+    expect((a as { markerId?: string }).markerId).toBeUndefined();
+  });
+  it('page: draws it, with the id the computer\'s record uses for the same clear', () => {
+    expect(eventToAction(clear, { live: false })[0]).toMatchObject({ type: 'CLEAR_TIMELINE', markerId: clearDividerId(clear.uuid) });
+  });
 });
 
 describe('eventToAction ignores what it does not know', () => {

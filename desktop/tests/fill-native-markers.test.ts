@@ -10,13 +10,19 @@ import { newState, screenOf, SID } from './helpers/fill-scenarios';
 import { ev } from './helpers/transcript-events';
 import { eventToAction } from '../src/renderer/state/transcript-event-actions';
 import type { TranscriptEvent } from '../src/shared/types';
+import { clearDividerId } from '../src/shared/divider-ids';
+import { routeSessionLive } from '../src/renderer/state/transcript-batch';
 
 let t = 1_700_000_000_000;
 const e = <T extends TranscriptEvent>(x: T): T => ({ ...x, sessionId: SID, timestamp: (t += 1000) });
 
 async function reopen(events: TranscriptEvent[], opts: { recordHas?: TranscriptEvent[] } = {}) {
   const records = new SessionRecords(); records.begin(SID);
-  for (const x of opts.recordHas ?? events) records.note(SID, 'transcript:event', x);
+  for (const x of opts.recordHas ?? events) {
+    records.note(SID, 'transcript:event', x);
+    // The computer says "Conversation cleared" itself, right after the barrier event (main/session-live.ts nativeCleared; sync-fix6).
+    if (x.type === 'context-clear') records.note(SID, 'session:live', { sessionId: SID, kind: 'clear', id: clearDividerId(x.uuid), at: x.timestamp });
+  }
   const reply = await openSession({ records, knows: () => true, native: () => null, page: async () => ({ events, cursor: null, hasMore: false }) }, { sessionId: SID, fresh: true });
   const st = { value: newState() };
   applyOpenReply({ dispatch: (a) => { st.value = chatReducer(st.value, a); }, flush: () => {}, play: (p) => playInto(st, p) }, SID, reply as OpenOk, { acceptPage: true });
@@ -77,6 +83,8 @@ describe('the buddy and the preview run the same page case', () => {
     const hello = e(ev('user-message', { text: 'hi' }, { uuid: 'bu1' }));
     let st = chatReducer(new Map(), { type: 'SESSION_INIT', sessionId: SID });
     for (const x of [hello, clear]) for (const a of eventToAction(x, { live: true })) st = chatReducer(st, a);
+    // The record's own line for that clear (a live clear event only resets the turn).
+    routeSessionLive({ sessionId: SID, kind: 'clear', id: clearDividerId('bc1'), at: clear.timestamp }, { batcher: { push: (a) => { st = chatReducer(st, a); } }, contextTokens: () => null });
     st = chatReducer(st, { type: 'HISTORY_PAGE_LOADED', sessionId: SID, events: [hello, clear], cursor: null, hasMore: false });
     expect(screenOf(st)!.timeline).toEqual(['user: hi', 'marker: Conversation cleared']);
   });

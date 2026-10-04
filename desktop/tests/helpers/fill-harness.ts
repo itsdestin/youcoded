@@ -8,6 +8,8 @@ import type { ChatAction, ChatState } from '../../src/renderer/state/chat-types'
 import { eventToAction } from '../../src/renderer/state/transcript-event-actions';
 import { hookEventToAction } from '../../src/renderer/state/hook-dispatcher';
 import { applyOpenReply, type OpenOk } from '../../src/renderer/state/session-fill';
+import { routeSessionLive } from '../../src/renderer/state/transcript-batch';
+import type { SessionLive } from '../../src/shared/session-live-types';
 import { SessionRecords } from '../../src/main/session-record';
 import { openSession, type NativeLive, type OpenDeps, type OpenReply, type Push } from '../../src/main/session-open';
 import { readTranscriptPage } from '../../src/main/transcript-page';
@@ -53,6 +55,8 @@ export function depsFor(sc: Scenario, run: Run, records: SessionRecords): OpenDe
 export function playInto(state: { value: ChatState }, pushes: Push[]): void {
   for (const p of pushes) {
     if (p.type === 'transcript:event') for (const a of eventToAction(p.payload as TranscriptEvent, { live: true })) state.value = chatReducer(state.value, a);
+    // The record's shared lines (a "Conversation cleared" divider, ...) reach the reducer through the same router the windows use (sync-fix6).
+    else if (p.type === 'session:live') routeSessionLive(p.payload as SessionLive, { batcher: { push: (a) => { state.value = chatReducer(state.value, a); } }, contextTokens: () => null });
     else if (p.type === 'hook:event') { const a = hookEventToAction(p.payload as HookEvent); if (a) state.value = chatReducer(state.value, a); }
     else if (p.type === 'hook:replay-complete') {
       const pl = p.payload as { sessionId: string; pendingRequestIds: string[] };

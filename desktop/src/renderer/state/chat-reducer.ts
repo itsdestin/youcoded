@@ -407,6 +407,11 @@ function injectPlanSegment(
   return updated;
 }
 
+// Is a divider with this id already drawn? One helper (sync-fix6) for the compaction, clear and model-switch dividers: every divider draws once because of it.
+function hasMarker(timeline: readonly TimelineEntry[], markerId: string): boolean {
+  return timeline.some((e) => e.kind === 'system-marker' && e.marker.id === markerId);
+}
+
 /**
  * Shared cleanup for turn endings (both normal completion and timeout).
  * Marks orphaned running/awaiting tools as failed and clears turn tracking.
@@ -3225,7 +3230,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       if (!session.compactionPending && !action.auto) return state; // Stale event — ignore
       // WHY: live replay can deliver the same automatic summary again while the
       // turn is still running. The marker's event ID is the dedupe authority.
-      if (session.timeline.some(e => e.kind === 'system-marker' && e.marker.id === action.markerId)) return state;
+      if (hasMarker(session.timeline, action.markerId)) return state;
       // The harness's own figure wins where it exists: it is the only source a
       // NATIVE session has, and it measures the same window the chip does. The
       // compactionPending fallback is Claude Code's statusline reading, captured
@@ -3333,7 +3338,8 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       const session = next.get(action.sessionId);
       if (!session) return state;
       // The same divider delivered twice (a replay of the host's numbered event) is drawn once (one-core R5-4a).
-      if (session.timeline.some((e) => e.kind === 'system-marker' && e.marker.id === action.markerId)) return state;
+      const id = action.markerId;
+      if (id !== undefined && hasMarker(session.timeline, id)) return state;
       next.set(action.sessionId, {
         ...session,
         ...endTurn(session),
@@ -3349,17 +3355,10 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         // This also de-fangs the reason CLEAR_TIMELINE was called irreversible:
         // nothing is destroyed, so a clear the runtime later refuses costs a
         // stray marker rather than a conversation.
-        timeline: [
+        // WHY no marker without an id (sync-fix6): a live native `context-clear` only resets the turn here; the record's `clear` line draws the divider.
+        timeline: id === undefined ? session.timeline : [
           ...session.timeline,
-          {
-            kind: 'system-marker',
-            marker: {
-              id: action.markerId,
-              timestamp: action.timestamp,
-              label: 'Conversation cleared',
-              variant: 'clear',
-            },
-          },
+          { kind: 'system-marker', marker: { id, timestamp: action.timestamp, label: 'Conversation cleared', variant: 'clear' } },
         ],
       });
       return next;
@@ -3372,7 +3371,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
     case 'MODEL_SWITCH_MARKER': {
       const session = next.get(action.sessionId);
       if (!session) return state;
-      if (session.timeline.some((e) => e.kind === 'system-marker' && e.marker.id === action.markerId)) return state; // see CLEAR_TIMELINE
+      if (hasMarker(session.timeline, action.markerId)) return state; // see CLEAR_TIMELINE
       next.set(action.sessionId, {
         ...session,
         timeline: [

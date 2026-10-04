@@ -12,7 +12,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { chatReducer } from '../src/renderer/state/chat-reducer';
 import type { ChatAction, ChatState } from '../src/renderer/state/chat-types';
 import { eventToAction } from '../src/renderer/state/transcript-event-actions';
-import { installTranscriptBatcher, routeTranscriptEvent, routeTranscriptShrink, type TranscriptBatcher } from '../src/renderer/state/transcript-batch';
+import { installTranscriptBatcher, routeTranscriptEvent, routeTranscriptShrink, routeSessionLive, type TranscriptBatcher } from '../src/renderer/state/transcript-batch';
 import type { TranscriptEvent, TranscriptEventType, DataOf, EventOf } from '../src/shared/types';
 import { ev as mkEv } from './helpers/transcript-events';
 
@@ -58,10 +58,22 @@ const route = (event: TranscriptEvent) => {
 const shown = () => state.get(SID)!.timeline.map((t) =>
   t.kind === 'user' ? `user:${t.message.content}` : t.kind === 'system-marker' ? `marker:${t.marker.id}` : t.kind);
 
+// The computer's own "Conversation cleared" line (the record's `session:live` clear), sent through the SAME batcher as the transcript events
+// (sync-fix6: a native clear's divider has one source, this one; the `context-clear` event itself only resets the turn).
+const routeLiveClear = (uuid: string) => routeSessionLive({ sessionId: SID, kind: 'clear', id: `clear-${uuid}`, at: 1 }, { batcher, contextTokens: () => null });
+
 describe('transcript actions keep arrival order', () => {
+  it('a live clear EVENT alone draws no divider (the record\'s line does), so a clear can never be drawn twice', () => {
+    route(ev('user-message', 'u1', { text: 'hello' }));
+    route(ev('context-clear', 'c1', { contextUsedAfter: 0 }));
+    runFrame();
+    expect(shown()).toEqual(['user:hello']);
+  });
+
   it('a message followed by /clear in one frame draws the message ABOVE the clear line', () => {
     route(ev('user-message', 'u1', { text: 'hello' }));
     route(ev('context-clear', 'c1', { contextUsedAfter: 0 }));
+    routeLiveClear('c1');
     runFrame();
     expect(shown()).toEqual(['user:hello', 'marker:clear-c1']);
   });
@@ -76,6 +88,7 @@ describe('transcript actions keep arrival order', () => {
   it('a message followed by /clear then another message keeps all three in order', () => {
     route(ev('user-message', 'u1', { text: 'before' }));
     route(ev('context-clear', 'c1', {}));
+    routeLiveClear('c1');
     route(ev('user-message', 'u2', { text: 'after' }));
     runFrame();
     expect(shown()).toEqual(['user:before', 'marker:clear-c1', 'user:after']);

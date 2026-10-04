@@ -22,6 +22,7 @@ import type { SessionRecords } from './session-record';
 import { detectPermissionMode } from '../shared/permission-mode-detect';
 import { claudeAliasForModelId, CLAUDE_ALIAS_LABELS, isPlaceholderModelId } from '../shared/model-ids';
 import { IPC } from '../shared/backend-contract';
+import { clearDividerId } from '../shared/divider-ids';
 import type { PromptCardButton, SessionLiveBody } from '../shared/session-live-types';
 import type { InputBlock } from '../shared/cc-input-focus';
 
@@ -78,7 +79,8 @@ export class SessionLiveFacts {
   private live(sessionId: string, body: SessionLiveBody): void {
     // WHY `at` on the dividers (sync-fix3 review): a screen that is filled later replays them from the record, and without the time they happened it
     // would stamp them with the moment of the fill.
-    const stamped = body.kind === 'model-switch' || body.kind === 'clear' ? { ...body, at: this.now() } : body;
+    // `body.at` wins when the caller knows the real moment (a native clear carries its transcript event's own time, so a replayed one is not stamped "now").
+    const stamped = body.kind === 'model-switch' || body.kind === 'clear' ? { ...body, at: body.at ?? this.now() } : body;
     this.deps.publish(sessionId, IPC.SESSION_LIVE, { sessionId, ...stamped });
   }
 
@@ -180,6 +182,18 @@ export class SessionLiveFacts {
     }, CLEAR_HOOK_WAIT_MS));
   }
 
+  /**
+   * A NATIVE session's durable /clear barrier (the `context-clear` transcript event) was just published. WHY the host says it too (sync-fix6): the
+   * "Conversation cleared" line used to come from TWO places depending on the runtime (this record for Claude Code, the transcript event for
+   * native), so the buddy, which skipped the event, never showed a native clear live. Now the line is ALWAYS this record's `clear` event; the
+   * transcript event only resets the turn. The id is the event's uuid, the same id a history page builds for the same event, so a page read off
+   * disk and this live line can never both draw.
+   */
+  nativeCleared(sessionId: string, uuid: string, at: number): void {
+    if (this.deps.isClaude(sessionId) || !uuid) return;
+    this.live(sessionId, { kind: 'clear', id: clearDividerId(uuid), at });
+  }
+
   private drawClear(sessionId: string, id: string): void {
     this.lastClearAt.set(sessionId, this.now());
     this.live(sessionId, { kind: 'clear', id });
@@ -196,7 +210,7 @@ export class SessionLiveFacts {
     // The host already drew this clear itself (the hook was late): nothing more to say.
     const last = this.lastClearAt.get(sessionId);
     if (waiting === undefined && last !== undefined && this.now() - last < CLEAR_DEDUPE_MS) return;
-    this.drawClear(sessionId, `clear-${typeof claudeSessionId === 'string' && claudeSessionId ? claudeSessionId : this.nextId('clear')}`);
+    this.drawClear(sessionId, clearDividerId(typeof claudeSessionId === 'string' && claudeSessionId ? claudeSessionId : this.nextId('clear')));
   }
 
   /** The host (native) or this file (Claude Code) began a compaction: draw the spinner everywhere, and watch that it ends. */

@@ -24,7 +24,7 @@ export type SessionLiveBody =
   | { kind: 'model-switch'; id: string; label: string; /** when the host drew it (ms), so a replay shows the time it happened, not the time of the fill */ at?: number }
   /** Claude Code refused the model switch the host announced: take that divider back. */
   | { kind: 'model-switch-retract'; id: string }
-  /** The thin "Conversation cleared" divider (Claude Code; a native clear is already a transcript event). */
+  /** The thin "Conversation cleared" divider (both runtimes: the record says it for Claude Code from the SessionStart hook and for native from the `context-clear` event; the transcript event itself only resets the turn). */
   | { kind: 'clear'; id: string; /** when it happened (ms); see model-switch */ at?: number }
   /** A compaction began: draw the spinner. The "Compacted" note itself comes from the transcript's own compaction line. */
   | { kind: 'compact-start'; id: string }
