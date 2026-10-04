@@ -740,7 +740,10 @@ function homeAssistantPageHtml(): string {
         var nest = /nest|google/i.test((it.maker || '') + ' ' + (it.model || ''));
         var auth = health.flows.some(function (f) { return f.handler === 'nest' && f.context && f.context.source === 'reauth'; });
         camNote[id] = nest && auth ? { text: 'No picture: Google Nest needs you to sign in again.', link: 'Sign in', href: '/config/integrations/integration/nest' }
-          : nest ? { text: 'This Nest camera only streams live video, so there is no still picture between doorbell rings and motion.' }
+          // Until live video plays on this page, the way to watch is Home
+          // Assistant's own view (testing: "can't view or do anything with
+          // cameras" — the note alone left nothing to press).
+          : nest ? { text: 'Nest cameras send live video only, no still pictures.', link: 'Watch live in Home Assistant', href: it.device ? '/config/devices/device/' + encodeURIComponent(it.device) : '/config/integrations/integration/nest' }
           : { text: 'This camera sent no picture.' };
         render();
       }, function () { /* the next round tries again */ });
