@@ -1212,10 +1212,10 @@ contextBridge.exposeInMainWorld('claude', {
     minimize: () => ipcRenderer.invoke(IPC.WINDOW_MINIMIZE),
     maximize: () => ipcRenderer.invoke(IPC.WINDOW_MAXIMIZE),
     close: () => ipcRenderer.invoke(IPC.WINDOW_CLOSE),
-    // Hot-swaps the window + dock icon. Accepts a theme-asset:// URL or null
-    // (null resets to the bundled default). Main validates the URL and silently
-    // ignores anything outside the theme's own asset dir.
-    setIcon: (url: string | null) => ipcRenderer.invoke(IPC.WINDOW_SET_ICON, url),
+    // Hot-swaps the window, taskbar, Dock and tray icons: the theme's icon bundle (shared/theme-icons.ts)
+    // or null for the app's own. Main ignores any URL outside the theme's own asset dir.
+    setIcon: (set: { app: string; windows?: string; macGlass?: string; tray?: string; trayAlert?: string } | null) =>
+      ipcRenderer.invoke(IPC.WINDOW_SET_ICON, set),
     // macOS-only: reposition the traffic lights so they sit inside the floating
     // header chrome. Pass null to restore the OS default. No-ops on Win/Linux.
     setTrafficLightPosition: (pos: { x: number; y: number } | null) =>

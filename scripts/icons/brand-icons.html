@@ -1,0 +1,114 @@
+<!doctype html>
+<!-- brand-icons.html?i=<icon>&t=<theme>&px=<size>[&small=1] — draws one YouCoded icon for
+     scripts/build-icons.mjs, which screenshots it in headless Chrome on a transparent background.
+
+     WHY HTML and not SVG: the approved icon is glass — the theme's picture heavily blurred inside the
+     face, with soft light and shadows. CSS blur and shadows draw that exactly as it was approved
+     (design rounds 11–31, docs/active/design/2026-10-01-brand-identity-v2 in the workspace);
+     an SVG redraw would only approximate it.
+
+     Icons (i=):
+       app        the app icon: white frosted tile, the face panel with the theme picture, rim, eyes, smile
+       glass      the Mac Dock's Dark/Clear version: same face on see-through glass (round 28)
+       installer  the face rising out of an open box, download symbol, streaks (round 22)
+       panel      Liquid Glass layer: the face panel alone (round 27)
+       features   Liquid Glass layer: the eyes and smile alone
+       face       the face alone, no tile (Android's launcher draws its own tile)
+     small=1 draws the eyes ~20% larger, for the 16–48px sizes, where normal eyes blur away. -->
+<meta charset="utf-8">
+<style>
+  html, body { margin:0; background:transparent; }
+  .ic { position:relative; width:var(--S); height:var(--S); }
+  .ic * { position:absolute; box-sizing:border-box; }
+  .tile { inset:0; border-radius:22.5%; overflow:hidden; box-shadow: 0 calc(var(--S)*.03) calc(var(--S)*.06) rgba(60,20,90,.28); }
+  .tile .edge { inset:0; border-radius:inherit; box-shadow: inset 0 calc(var(--S)*.004) 0 rgba(255,255,255,.75), inset 0 0 0 calc(var(--S)*.003) rgba(255,255,255,.45); }
+  .tile.glass .edge { box-shadow: inset 0 calc(var(--S)*.004) 0 #fff, inset 0 0 0 calc(var(--S)*.006) rgba(150,100,190,.32); }
+  .glass::after { content:''; position:absolute; inset:0; border-radius:inherit; background:radial-gradient(90% 55% at 28% 8%, rgba(255,255,255,.55), rgba(255,255,255,0) 60%); pointer-events:none; }
+  .glass { background:linear-gradient(165deg, rgba(255,255,255,.62), rgba(255,255,255,.18) 48%, rgba(255,255,255,.30));
+           box-shadow: inset 0 calc(var(--S)*.004) 0 rgba(255,255,255,.95), inset 0 0 0 calc(var(--S)*.0025) rgba(255,255,255,.55),
+                       inset 0 calc(var(--S)*-.03) calc(var(--S)*.05) rgba(120,50,170,.16), 0 calc(var(--S)*.025) calc(var(--S)*.05) rgba(70,20,110,.22); }
+</style>
+<body><div id="r"></div>
+<script>
+const P = new URLSearchParams(location.search), I = P.get('i') || 'app', S = +(P.get('px') || 512), u = S / 100;
+const T = P.get('t') || 'default', SMALL = P.get('small') === '1';
+// Per theme, from its own buddy (rounds 13, 20, 27):
+// [eye colour, sparkle colour, tile tint top, tile tint bottom, rim colour]
+const EYE = {
+  'default': ['#2A1046', '#FFFFFF', '#F6ECFB', '#E2CDF0', '#7A3FA8'],
+  'golden-sunbreak': ['#4A2805', '#FFF1CF', '#FFF4DF', '#F3D9A6', '#A86A12'],
+  'meadow-mist': ['#0E3A24', '#EAFFF2', '#EEF7EF', '#CDE5D2', '#2F7D55'],
+  'strawberry-kitty': ['#5A1428', '#FFEFF4', '#FFF0F3', '#F7CCD7', '#B8385A'],
+  'kuromi-dreamer': ['#2A1748', '#F4EAFF', '#F2ECFA', '#D9CCEC', '#5E4390'],
+  'devils-garden': ['#3E0C06', '#FFE6CF', '#FFF0E6', '#F2C9B0', '#B2421C'],
+  'halftone-dimension': ['#1A0F33', '#BFF1FF', '#F3EEFA', '#DCD3EE', '#E51F48'],
+  'morning-rounds': ['#47372D', '#FFF8E9', '#FBF6EF', '#EBDDC9', '#A7122D'],
+}[T];
+if (!EYE) throw new Error(`unknown theme ${T}`);
+const WALL = `walls/${T}.jpg`;
+document.documentElement.style.setProperty('--S', S + 'px');
+
+// The face: the buddy's body (14×12, corner 4, on the rig's 24-unit grid) as a panel showing the theme's
+// picture at heavy blur with a white lift, a thin rim in the theme's colour, a shadow all round, the rig's
+// two eyes and the soft smile. `w` is the panel's width in icon units (the canvas is 100), centred on (50, cy).
+//   only: 'panel' | 'features' — the Liquid Glass layers; both drop the outer shadow (macOS draws its own).
+function face({ cy = 50, w = 76, around = true, only = 'all' }) {
+  const cx = 50, h = w * 12 / 14, r = w * 4 / 14, k = w / 14, L = (cx - w / 2) * u, Tp = (cy - h / 2) * u;
+  const rim = `0 0 0 ${1.1 * u}px ${EYE[4]}`;
+  // WHY all round: Destin, round 11 — "darker shadow on all sides", so the face lifts off the pale tile.
+  const shadow = only === 'panel' ? rim
+    : around ? `${rim}, 0 0 ${7 * u}px ${1 * u}px rgba(40,5,80,.42), 0 ${3 * u}px ${6 * u}px rgba(40,5,80,.4)`
+    : `${rim}, 0 ${1.2 * u}px ${2.2 * u}px rgba(40,5,80,.32)`;
+  const lift = .2;
+  const inside = `<div style="inset:-25%;background:url(${WALL}) 62% 30%/cover;filter:blur(${.06 * S}px) saturate(1.35)"></div>` +
+    // WHY the white lift: on darker pictures the blur went murky and the dark eyes vanished (round 12).
+    `<div style="inset:0;background:rgba(255,255,255,${lift})"></div><div style="inset:0;background:radial-gradient(62% 48% at 50% 46%, rgba(255,255,255,${lift * 3}), rgba(255,255,255,0) 100%)"></div>` +
+    `<div style="inset:0;background:radial-gradient(90% 55% at 28% 6%, rgba(255,255,255,.5), rgba(255,255,255,0) 60%)"></div>`;
+  let feats = '';
+  [[9.3, 9.55], [14.7, 9.25]].forEach(([ex, ey]) => {
+    const es = SMALL ? 1.34 : 1.12, ew = 1.6 * es * k * u, eh = 2.2 * es * k * u, x = (cx + (ex - 12) * k) * u - L, y = (cy + (ey - 10) * k) * u - Tp;
+    feats += `<div style="left:${x - ew}px;top:${y - eh}px;width:${2 * ew}px;height:${2 * eh}px;border-radius:50%;background:radial-gradient(55% 38% at 62% 30%, ${EYE[1]} 0 30%, rgba(255,255,255,0) 32%), ${EYE[0]}"></div>`;
+  });
+  // The soft smile (round 18, "soft2"): rounded corners, no sharp mouth corners.
+  const mw = 3.3 * k * u, mh = mw * .6, mx = cx * u - mw / 2 - L, my = (cy + 3.1 * k) * u - mh / 2 - Tp;
+  feats += `<svg style="left:${mx}px;top:${my}px;width:${mw}px;height:${mh}px;overflow:visible" viewBox="0 0 10 6"><path d="M2.6 1.6 Q5 1.0 7.4 1.6 Q8.2 1.8 7.9 2.7 Q6.8 5.0 5 5.0 Q3.2 5.0 2.1 2.7 Q1.8 1.8 2.6 1.6 Z" fill="${EYE[0]}" stroke="${EYE[0]}" stroke-width=".4" stroke-linejoin="round"/></svg>`;
+  return `<div style="left:${L}px;top:${Tp}px;width:${w * u}px;height:${h * u}px">` +
+    (only === 'features' ? '' : `<div style="inset:0;border-radius:${r * u}px;overflow:hidden;box-shadow:${shadow}">${inside}</div>`) +
+    (only === 'panel' ? '' : feats) + `</div>`;
+}
+// The white frosted tile (round 11).
+const frost = (inner) => `<div class="tile glass" style="background:linear-gradient(165deg,#FBF6FD,#E9DCF2)">${inner}<div class="edge"></div></div>`;
+// Speed streaks for the installer, in the theme's rim colour (round 16).
+const streaks = (pts) => pts.map(([x, y, len]) => `<div style="left:${(x - .55) * u}px;top:${y * u}px;width:${1.1 * u}px;height:${len * u}px;border-radius:${u}px;background:linear-gradient(${EYE[4]},rgba(255,255,255,0));opacity:.8;transform:rotate(-6deg)"></div>`).join('');
+// The installer box as ONE drawing: front, back rim and both flaps share one fill, outline and shadow (round 21).
+function box() {
+  const c = EYE[4];
+  return `<svg style="left:0;top:0;width:${100 * u}px;height:${100 * u}px;overflow:visible;filter:drop-shadow(0 ${2 * u}px ${2.6 * u}px rgba(50,15,90,.45))" viewBox="0 0 100 100">
+    <defs><linearGradient id="bx" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#EEE5F7"/></linearGradient>
+      <linearGradient id="bxf" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#F3ECFA"/></linearGradient></defs>
+    <g stroke="${c}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round">
+      <path d="M23.5 61.5 L76.5 61.5 L76.5 64.5 L23.5 64.5 Z" fill="${c}" fill-opacity=".55"/>
+      <path d="M22 62 L12.5 45.5 Q11.8 44.2 13.2 43.8 L16.6 43.1 Q17.8 42.9 18.4 44 L27 61" fill="url(#bxf)"/>
+      <path d="M78 62 L87.5 45.5 Q88.2 44.2 86.8 43.8 L83.4 43.1 Q82.2 42.9 81.6 44 L73 61" fill="url(#bxf)"/>
+      <path d="M22 62 H78 V88 Q78 92 74 92 H26 Q22 92 22 88 Z" fill="url(#bx)"/>
+    </g>
+    <path d="M24 64.5 H76" stroke="#fff" stroke-width="1" opacity=".9"/>
+    <path d="M50 70 V80 M45.5 75.8 L50 80.3 L54.5 75.8 M42.5 81.5 V85 H57.5 V81.5" fill="none" stroke="${c}" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>`;
+}
+const ICONS = {
+  app: () => frost(face({})),
+  // WHY see-through: a Dock icon swapped in while the app runs is a flat picture — macOS can't add its own
+  // glass — so in the Mac's Dark and Clear looks we draw the glass ourselves, half see-through (round 28).
+  glass: () => `<div class="tile" style="background:linear-gradient(165deg,rgba(255,255,255,.42),rgba(255,255,255,.14));box-shadow:none">` + face({}) +
+    `<div class="edge" style="box-shadow:inset 0 calc(var(--S)*.006) 0 rgba(255,255,255,.9), inset 0 0 0 calc(var(--S)*.005) rgba(255,255,255,.5)"></div></div>`,
+  installer: () => frost(`<div style="left:0;right:0;bottom:0;height:${40 * u}px;background:linear-gradient(rgba(255,255,255,0),${EYE[3]})"></div>` +
+    streaks([[39, 51, 4.6], [50, 52, 5.4], [61, 51, 4.6]]) + face({ cy: 31, w: 42 }) + box()),
+  panel: () => face({ only: 'panel' }),
+  features: () => face({ only: 'features' }),
+  face: () => face({ w: 94, around: false }),
+};
+if (!ICONS[I]) throw new Error(`unknown icon ${I}`);
+document.getElementById('r').innerHTML = `<div class="ic">${ICONS[I]()}</div>`;
+</script>
+</body>

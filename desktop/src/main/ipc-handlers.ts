@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { resolveNoFolderCwd } from './no-folder';
-import { loadDefaultAppIcon, fitForMacDock } from './app-icon';
+import { registerThemeIconSwap } from './theme-icon-swap';
 import { requestRestart } from './app-restart';
 import { randomUUID } from 'crypto';
 import { CHATSEARCH_IPC } from './chatsearch-index/ipc-channels';
@@ -614,45 +614,8 @@ export function registerIpcHandlers(
     anyWin.setWindowButtonPosition(pos ?? null);
   });
 
-  // Theme-driven window + dock icon hot-swap. Called from theme-context whenever
-  // the active theme changes. Two URL forms are accepted:
-  //   1. theme-asset://<slug>/<relative-path>  — a file in a community/user theme's
-  //      asset dir (server resolves the path and confines reads to that dir, so
-  //      renderer cannot read arbitrary files).
-  //   2. data:image/png;base64,<...> — an icon the renderer draws (unused since the
-  //      tint was retired 2026-09-10; kept for theme-matched icons). Size-capped.
-  // null or failure resets to the platform's bundled default (app-icon.ts — it was
-  // icon.png, whose edge-to-edge tile looked oversized in the Mac Dock).
-  const ASSETS_DIR = path.join(__dirname, '../../assets');
-  const THEMES_DIR_FOR_ICON = path.join(os.homedir(), '.claude', 'wecoded-themes');
-  const MAX_DATA_ICON_BYTES = 1024 * 1024; // 1 MB — a 256px PNG is typically <100KB
-  ipcMain.handle(IPC.WINDOW_SET_ICON, (_e, url: string | null) => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
-    let iconImg = loadDefaultAppIcon(ASSETS_DIR);
-    if (url && typeof url === 'string') {
-      try {
-        if (url.startsWith('theme-asset://')) {
-          const parsed = new URL(url);
-          const slug = parsed.hostname;
-          if (SAFE_SLUG_RE.test(slug)) {
-            const rel = decodeURIComponent(parsed.pathname.replace(/^\//, ''));
-            const themeDir = path.join(THEMES_DIR_FOR_ICON, slug);
-            const resolved = path.resolve(themeDir, rel);
-            if (resolved.startsWith(themeDir + path.sep)) {
-              const img = nativeImage.createFromPath(resolved);
-              if (!img.isEmpty()) iconImg = img;
-            }
-          }
-        } else if (url.startsWith('data:image/png;base64,') && url.length <= MAX_DATA_ICON_BYTES) {
-          const img = nativeImage.createFromDataURL(url);
-          if (!img.isEmpty()) iconImg = img;
-        }
-      } catch { /* fall through to default */ }
-    }
-    mainWindow.setIcon(iconImg);
-    // WHY fitForMacDock: edge-to-edge theme art is shrunk onto Apple's grid, as shipped.
-    if (process.platform === 'darwin' && app.dock) app.dock.setIcon(fitForMacDock(iconImg));
-  });
+  // Theme-driven window, taskbar, Dock and tray icon hot-swap (theme-icon-swap.ts).
+  registerThemeIconSwap(ipcMain, IPC.WINDOW_SET_ICON, mainWindow, SAFE_SLUG_RE);
 
   // Zoom controls — each returns the new zoom percentage for the overlay UI
   const ZOOM_STEP = 0.5; // ~12% per step (Electron uses logarithmic scale)

@@ -11,7 +11,7 @@ import { readSource } from './helpers/guard-scope';
 // runtime default matches what electron-builder.yml ships per platform, and that the Mac
 // default really leaves Apple's margin while the Windows tile does not.
 
-vi.mock('electron', () => ({ nativeImage: {} }));
+vi.mock('electron', () => ({ nativeImage: {}, app: { on: () => {} }, systemPreferences: {} }));
 import { defaultAppIconFile, reachesEdge, centerOnCanvas, MAC_ICON_SCALE } from '../src/main/app-icon';
 
 const DESKTOP = path.join(__dirname, '..');
@@ -48,8 +48,10 @@ function readRgbaPng(file: string): { width: number; height: number; data: Buffe
 describe('runtime app icon (app-icon.ts)', () => {
   it('uses the same file per platform that electron-builder.yml ships', () => {
     expect(defaultAppIconFile('win32')).toBe(CONFIG.win.icon);
-    // The Mac default is the PNG twin of the .icns (nativeImage cannot be relied on for .icns).
-    expect(defaultAppIconFile('darwin')).toBe(String(CONFIG.mac.icon).replace(/\.icns$/, '.png'));
+    // The Mac ships the layered Liquid Glass icon (icon.icon), which nativeImage cannot read; the
+    // running app's Mac default is the flat PNG of the same design on Apple's grid.
+    expect(CONFIG.mac.icon).toBe('icon.icon');
+    expect(defaultAppIconFile('darwin')).toBe('icon-mac.png');
     expect(defaultAppIconFile('linux')).toBe('icon.png');
     for (const p of ['win32', 'darwin', 'linux'] as const) {
       expect(fs.existsSync(path.join(ASSETS, defaultAppIconFile(p))), `${defaultAppIconFile(p)} missing — run scripts/build-icons.mjs`).toBe(true);
@@ -79,12 +81,15 @@ describe('runtime app icon (app-icon.ts)', () => {
   });
 
   it('the theme icon swap and window creation never hard-code the Windows tile', () => {
-    for (const file of ['src/main/ipc-handlers.ts', 'src/main/main.ts']) {
+    for (const file of ['src/main/theme-icon-swap.ts', 'src/main/main.ts']) {
       const src = readSource(path.join(DESKTOP, file));
       expect(src, `${file} must load its icon through app-icon.ts`).not.toMatch(/assets\/icon\.png/);
       expect(src).toContain('loadDefaultAppIcon(');
     }
-    expect(readSource(path.join(DESKTOP, 'src/main/ipc-handlers.ts'))).toContain('app.dock.setIcon(fitForMacDock(');
+    // A theme icon is shrunk onto Apple's grid; no theme hands the Dock back to the bundled
+    // (Liquid Glass) icon with null, never with a flat file that would replace it.
+    const handlers = readSource(path.join(DESKTOP, 'src/main/theme-icon-swap.ts'));
+    expect(handlers).toMatch(/app\.dock\.setIcon\(img \? fitForMacDock\(img\) : \(null/);
   });
 
   it('a single faint pixel on the border does not count as art reaching the edge', () => {
@@ -93,5 +98,33 @@ describe('runtime app icon (app-icon.ts)', () => {
     expect(reachesEdge(bmp, size, size)).toBe(false);
     bmp[3] = 200;
     expect(reachesEdge(bmp, size, size)).toBe(true);
+  });
+});
+
+// Brand round 28: which icon the Mac Dock shows while a theme is on, per the user's icon look.
+import { chooseDockIcon, hasLiquidGlass } from '../src/main/app-icon';
+import { parseMacIconLook } from '../src/main/mac-icon-look';
+describe('Mac Dock rule (chooseDockIcon)', () => {
+  it('no theme icon → the bundled icon, in every look', () => {
+    for (const look of ['default', 'dark', 'clear', 'tinted', 'unknown'] as const) expect(chooseDockIcon(look, false, false)).toBe('bundle');
+  });
+  it('Default → the theme icon; Dark and Clear → the glass version; Tinted and unknown → no swap', () => {
+    expect(chooseDockIcon('default', true, true)).toBe('app');
+    expect(chooseDockIcon('dark', true, true)).toBe('glass');
+    expect(chooseDockIcon('clear', true, true)).toBe('glass');
+    expect(chooseDockIcon('tinted', true, true)).toBe('bundle');
+    expect(chooseDockIcon('unknown', true, true)).toBe('bundle');
+  });
+  it('reads the Mac icon-look setting, and anything unrecognised as unknown', () => {
+    expect(parseMacIconLook(undefined)).toBe('unknown');
+    expect(parseMacIconLook('')).toBe('unknown');
+    expect(parseMacIconLook('somethingNew')).toBe('unknown');
+  });
+  it('a theme without a glass version uses its normal icon in Dark and Clear', () => {
+    expect(chooseDockIcon('dark', true, false)).toBe('app');
+  });
+  it('Liquid Glass starts at macOS 26 (Darwin 25)', () => {
+    expect(hasLiquidGlass('24.6.0')).toBe(false);
+    expect(hasLiquidGlass('25.0.0')).toBe(true);
   });
 });

@@ -29,7 +29,7 @@ const bytes = (file: string) => fs.readFileSync(path.join(ASSETS, file));
 describe('desktop icons (electron-builder.yml)', () => {
   it.each([
     ['win', 'icon', 'icon.ico'],
-    ['mac', 'icon', 'icon-mac.icns'],
+    ['mac', 'icon', 'icon.icon'],
     ['nsis', 'installerIcon', 'installer-icon.ico'],
     ['nsis', 'installerHeaderIcon', 'installer-icon.ico'],
     ['dmg', 'icon', 'installer-icon.icns'],
@@ -52,6 +52,23 @@ describe('desktop icons (electron-builder.yml)', () => {
   it('the .icns files are real Apple icons', () => {
     for (const file of ['icon-mac.icns', 'installer-icon.icns']) {
       expect(bytes(file).subarray(0, 4).toString('latin1')).toBe('icns');
+    }
+  });
+
+  it('the Liquid Glass icon names layer pictures that exist', () => {
+    // WHY: actool compiles icon.icon on the Mac build machine only; a layer the JSON names but the
+    // folder lacks would fail there, long after every Linux check passed.
+    const dir = path.join(ASSETS, 'icon.icon');
+    const json = JSON.parse(fs.readFileSync(path.join(dir, 'icon.json'), 'utf8'));
+    const images: string[] = json.groups.flatMap((g: any) => g.layers.map((l: any) => l['image-name']));
+    expect(images.length).toBeGreaterThanOrEqual(2);
+    for (const name of images) expect(fs.existsSync(path.join(dir, 'Assets', name)), `icon.icon/Assets/${name} missing`).toBe(true);
+  });
+
+  it('the tray icons exist for every platform, with their @2x twins', () => {
+    // buddy-tray.ts: tray / tray-alert on Windows and Linux, the one-colour "-macTemplate" pair on macOS.
+    for (const base of ['tray', 'tray-alert', 'tray-macTemplate', 'tray-alert-macTemplate']) {
+      for (const f of [`${base}.png`, `${base}@2x.png`]) expect(fs.existsSync(path.join(ASSETS, f)), `${f} missing — run scripts/build-icons.mjs`).toBe(true);
     }
   });
 
