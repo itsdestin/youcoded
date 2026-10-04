@@ -89,6 +89,29 @@ function fakeWin(role: BuddyRole, x: number, y: number) {
   };
 }
 
+/** A stand-in for buddy-tray.ts: records what the manager asked of the icon. */
+interface TrayFake {
+  create: NonNullable<BuddyWindowManagerDeps['createTray']>;
+  handlers: Parameters<NonNullable<BuddyWindowManagerDeps['createTray']>>[0] | null;
+  attention: boolean[];
+  destroyed: number;
+  iconAt: { x: number; y: number; width: number; height: number } | null;
+}
+function trayFake(iconAt: TrayFake['iconAt'] = null): TrayFake {
+  const t: TrayFake = {
+    handlers: null, attention: [], destroyed: 0, iconAt,
+    create: (handlers) => {
+      t.handlers = handlers;
+      return {
+        setAttention: (n) => { t.attention.push(n); },
+        bounds: () => t.iconAt,
+        destroy: () => { t.destroyed++; },
+      };
+    },
+  };
+  return t;
+}
+
 interface Harness {
   manager: BuddyWindowManager;
   created: Array<{ variant: BuddyRole; x: number; y: number; title?: string }>;
@@ -106,6 +129,7 @@ function harness(opts: {
   workArea?: BuddyWorkAreaSource;
   dock?: 'left' | 'right' | 'top' | 'bottom' | null;
   savedPos?: { x: number; y: number } | null;
+  tray?: TrayFake;
 } = {}): Harness {
   const created: Harness['created'] = [];
   const wins: Partial<Record<BuddyRole, FakeWin>> = {};
@@ -128,6 +152,7 @@ function harness(opts: {
     onStatusChanged: vi.fn(),
     workArea: opts.workArea,
     captionChannelLive: opts.caption ? () => true : undefined,
+    createTray: opts.tray ? opts.tray.create : undefined,
   };
 
   const all = () => Object.values(wins) as FakeWin[];
@@ -727,4 +752,50 @@ describe('where the buddy’s position comes from', () => {
   // exempt from this scan because it was written, kept and never chosen. It has
   // been deleted, so buddy-window-manager.ts is the ONLY file that positions a
   // buddy and this scan's scope is the whole story.
+});
+
+// ─── Taskbar-icon style ──────────────────────────────────────────────────────
+
+// Destin 2026-10-02: the buddy can live as a taskbar / menu-bar icon instead of
+// the floating mascot. Same chat and button row; no mascot window at all.
+describe('taskbar-icon style', () => {
+  it('shows an icon and no mascot, and the icon opens the chat by it', () => {
+    const tray = trayFake({ x: 1800, y: 1050, width: 24, height: 24 });
+    const h = harness({ tray });
+    h.manager.show('tray');
+    expect(h.wins.mascot).toBeUndefined();
+    expect(h.manager.getStatus()).toMatchObject({ visible: true, style: 'tray' });
+    tray.handlers!.onToggleChat();
+    const chat = h.created.find((c) => c.variant === 'chat')!;
+    // Centred on the icon (clamped on-screen), sitting against the bottom bar.
+    expect(chat.x).toBe(1920 - CHAT_SIZE.width);
+    expect(chat.y + CHAT_SIZE.height + BAR_SIZE.height).toBeLessThanOrEqual(1080);
+    expect(chat.y + CHAT_SIZE.height + BAR_SIZE.height).toBeGreaterThan(1080 - 20);
+  });
+
+  it('puts a red dot on the icon while something needs you', () => {
+    const tray = trayFake();
+    const h = harness({ tray });
+    h.manager.show('tray');
+    h.manager.setAttentionNeeded(true);
+    h.manager.setAttentionNeeded(false);
+    expect(tray.attention).toEqual([false, true, false]);
+  });
+
+  it('switching style swaps the icon for the mascot — never both', () => {
+    const tray = trayFake();
+    const h = harness({ tray });
+    h.manager.show('tray');
+    tray.handlers!.onSwitchToFloating();
+    expect(tray.destroyed).toBe(1);
+    expect(h.wins.mascot).toBeDefined();
+    expect(h.manager.getStatus()).toMatchObject({ visible: true, style: 'floating' });
+  });
+
+  it('falls back to the floating mascot where no icon can be made', () => {
+    const h = harness();
+    h.manager.show('tray');
+    expect(h.wins.mascot).toBeDefined();
+    expect(h.manager.getStatus().style).toBe('floating');
+  });
 });

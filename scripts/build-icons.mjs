@@ -76,6 +76,34 @@ function icns(svgPath, out) {
     + 'imgs[0].save(sys.argv[1], format="ICNS", append_images=imgs[1:])', out, ...pngs]);
 }
 
+// ── Taskbar (tray) icon for the buddy's "taskbar icon" style ──
+// WHY no tile: a notification-area / menu-bar icon sits on the OS's own bar, so the bare
+// mascot reads as the buddy; the lavender tile would read as "another app icon".
+// The alert twin adds a red dot top-right — the tray's version of the buddy's "something
+// needs you" pop-out. @2x files are picked up by Electron's nativeImage automatically.
+// macOS menu-bar icons are ~18pt, everywhere else gets 32px (the OS downsizes for its bar).
+function trayIcons() {
+  const ALERT = '#E5484D';
+  const trayArt = mascotAt(1.75, 24, 24.5);
+  const dot = `<circle cx="39" cy="9" r="7.5" fill="${ALERT}" stroke="${WHITE}" stroke-width="2"/>`;
+  for (const [name, body] of [['tray', trayArt], ['tray-alert', trayArt + dot]]) {
+    const svgPath = path.join(TMP, `${name}.svg`);
+    fs.writeFileSync(svgPath, svg(48, body));
+    for (const [suffix, px] of [['', 32], ['@2x', 64], ['-mac', 18], ['-mac@2x', 36]]) {
+      const base = suffix.startsWith('-mac') ? `${name}-mac${suffix.slice(4)}` : `${name}${suffix}`;
+      render(svgPath, px, path.join(ASSETS, `${base}.png`));
+    }
+  }
+}
+// `--tray-only` regenerates just the tray PNGs, so adding them didn't rewrite every other icon.
+if (process.argv.includes('--tray-only')) {
+  trayIcons();
+  fs.rmSync(TMP, { recursive: true, force: true });
+  console.log('tray icons written: desktop/assets/tray*.png');
+  process.exit(0);
+}
+trayIcons();
+
 for (const [name, body] of Object.entries(sources)) fs.writeFileSync(path.join(ASSETS, name), body);
 render(path.join(ASSETS, 'icon.svg'), 1024, path.join(ASSETS, 'icon.png'));
 ico(path.join(ASSETS, 'icon.svg'), path.join(ASSETS, 'icon.ico'));
