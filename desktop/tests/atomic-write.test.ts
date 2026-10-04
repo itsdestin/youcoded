@@ -34,3 +34,24 @@ describe('atomicWrite', () => {
     expect(fs.readdirSync(dir)).toEqual(['file.json']);
   });
 });
+
+describe('atomicWrite when the rename is briefly refused (Windows)', () => {
+  it('retries a refused rename until it goes through, and rethrows a refusal that never clears', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-atomic-retry-'));
+    const target = path.join(dir, 'file.json');
+    const real = fs.promises.rename;
+    let refusals = 2;
+    const spy = vi.spyOn(fs.promises, 'rename').mockImplementation(async (a, b) => {
+      if (refusals-- > 0) throw Object.assign(new Error('EPERM: busy'), { code: 'EPERM' });
+      return real(a, b);
+    });
+    try {
+      await atomicWrite(target, 'one');
+      expect(fs.readFileSync(target, 'utf8')).toBe('one');
+      expect(spy).toHaveBeenCalledTimes(3);
+      spy.mockImplementation(async () => { throw Object.assign(new Error('EPERM: busy'), { code: 'EPERM' }); });
+      await expect(atomicWrite(target, 'two')).rejects.toThrow(/EPERM/);
+      expect(fs.readdirSync(dir)).toEqual(['file.json']); // no temp file left behind
+    } finally { spy.mockRestore(); fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+});

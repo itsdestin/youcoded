@@ -13,6 +13,21 @@ import path from 'path';
 // the dev instance and the built app apart; the counter keeps calls apart.
 let atomicWriteSeq = 0;
 
+// WHY a retry (Windows CI flake, 2026-10-04): on Windows a rename onto a file that another rename (or a scanner) has open at
+// that instant fails with EPERM/EACCES/EBUSY and succeeds a few milliseconds later. Two overlapping writes to one target hit it
+// ("two overlapping writes ... both succeed"); the same race can hit a real save. Retrying briefly is what graceful-fs does.
+const RENAME_RETRY_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
+async function renameOverTarget(from: string, to: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try { await fs.promises.rename(from, to); return; }
+    catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (attempt >= 8 || !code || !RENAME_RETRY_CODES.has(code)) throw err;
+      await new Promise((r) => setTimeout(r, 15 * (attempt + 1)));
+    }
+  }
+}
+
 /** Atomic write via temp file + rename (same directory, so the same filesystem). Creates the folder.
  *  A failed write removes its temp file and rethrows. */
 export async function atomicWrite(target: string, content: string): Promise<void> {
@@ -20,7 +35,7 @@ export async function atomicWrite(target: string, content: string): Promise<void
   await fs.promises.mkdir(path.dirname(target), { recursive: true });
   try {
     await fs.promises.writeFile(tmpPath, content, 'utf8');
-    await fs.promises.rename(tmpPath, target);
+    await renameOverTarget(tmpPath, target);
   } catch (err) {
     await fs.promises.rm(tmpPath, { force: true }).catch(() => {});
     throw err;
