@@ -10,15 +10,18 @@
 //                                            in a `never` check, and ALL_TYPES below is a
 //                                            Record over the union (this file is type-checked
 //                                            by `npm run typecheck`, which verify.sh runs);
-//  - the buddy drifting from the main window -> BUDDY_LIVE is a typed ledger of every
-//                                            difference, and the behavioural comparison below
-//                                            runs every payload variant through both option sets;
+//  - the buddy drifting from the main window -> there is no ledger of skips any more (sync-fix6, Destin
+//                                            2026-10-04: the buddy shows the same lines as the main window):
+//                                            the comparison below runs EVERY payload variant of EVERY type
+//                                            through both option sets, and the source pins check that both
+//                                            screens attach through the one shared listener;
 //  - a forgotten tool-use timestamp       -> the action's own type makes `timestamp` required.
 import { describe, it, expect } from 'vitest';
 import type { TranscriptEventType } from '../src/shared/types';
 import type { ChatAction } from '../src/renderer/state/chat-types';
 import { eventToAction } from '../src/renderer/state/transcript-event-actions';
-import { BUDDY_LIVE } from '../src/renderer/components/buddy/buddy-live-events';
+import { readFileSync, existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { MATRIX, MATRIX_TYPES } from './helpers/transcript-event-matrix';
 
 // A Record over the union: adding a TranscriptEventType without a row here is a
@@ -40,21 +43,16 @@ describe('transcript event surface parity', () => {
     expect([...MATRIX_TYPES].sort()).toEqual(Object.keys(ALL_TYPES).sort());
   });
 
-  it('the buddy ledger lists exactly three skips, each with a reason, and nothing else is skipped', () => {
-    const skips = Object.entries(BUDDY_LIVE).filter(([, rule]) => rule !== 'same');
-    expect(skips.map(([type]) => type).sort()).toEqual(['context-clear', 'skill-invoked', 'user-interrupt']);
-    for (const [type, rule] of skips) {
-      expect((rule as { skip: string }).skip.length, `${type} needs a reason`).toBeGreaterThan(20);
+  it('every event type draws something on the buddy (no type is skipped)', () => {
+    for (const type of Object.keys(ALL_TYPES)) {
+      const cases = MATRIX.filter((m) => m.event.type === type);
+      const draws = cases.some((c) => eventToAction(c.event, buddyWindow(c.ctx?.compactionPending)).length > 0);
+      expect(draws, `${type} yields no action for the buddy`).toBe(true);
     }
   });
 
-  it('the buddy ledger names every event type (no row silently missing)', () => {
-    expect(Object.keys(BUDDY_LIVE).sort()).toEqual(Object.keys(ALL_TYPES).sort());
-  });
-
-  describe('main window and buddy window translate every handled payload identically', () => {
+  describe('main window and buddy window translate every payload of every type identically', () => {
     for (const c of MATRIX) {
-      if (BUDDY_LIVE[c.event.type] !== 'same') continue; // a ledgered skip: the buddy never translates it live
       it(c.name, () => {
         const pending = c.ctx?.compactionPending;
         const main = eventToAction(c.event, mainWindow(pending));
@@ -78,6 +76,22 @@ describe('transcript event surface parity', () => {
       expect(main.afterContextTokens).toBe(777);
       expect(buddy.afterContextTokens).toBeNull();
       expect(buddy.markerId).toBe(main.markerId); // the same dedupe key either way
+    });
+  });
+
+  describe('the two screens share ONE listener, with no ledger of skipped types', () => {
+    const src = (p: string) => readFileSync(fileURLToPath(new URL(`../src/renderer/${p}`, import.meta.url)), 'utf8');
+    it('App and the buddy both attach through state/screen-feed, and neither translates events itself', () => {
+      for (const file of ['App.tsx', 'components/buddy/BubbleFeed.tsx']) {
+        const code = src(file);
+        expect(code, file).toContain('attachTranscriptFeed(');
+        expect(code, file).toContain('attachSessionLiveFeed(');
+        expect(code, file).not.toMatch(/\beventToAction\(/);
+        expect(code, file).not.toMatch(/\bapplySessionLive\(/);
+      }
+    });
+    it('the old BUDDY_LIVE ledger file is gone', () => {
+      expect(existsSync(fileURLToPath(new URL('../src/renderer/components/buddy/buddy-live-events.ts', import.meta.url)))).toBe(false);
     });
   });
 

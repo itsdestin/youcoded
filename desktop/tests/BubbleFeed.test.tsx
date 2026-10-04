@@ -19,7 +19,6 @@ import { render, act } from '@testing-library/react';
 import { FOLD_IDLE_MS } from '../src/renderer/hooks/use-entry-folding';
 import { MATRIX } from './helpers/transcript-event-matrix';
 import { eventToAction } from '../src/renderer/state/transcript-event-actions';
-import { BUDDY_LIVE } from '../src/renderer/components/buddy/buddy-live-events';
 
 const mocks = vi.hoisted(() => ({ state: {} as any, dispatch: vi.fn() }));
 // A page with a message in it: an EMPTY page is ambiguous ("no history" or "not found yet") and the loader would retry it (first-page-retry.ts).
@@ -29,6 +28,8 @@ const bridge = { listeners: {} as Record<string, Array<(...a: any[]) => void>>, 
 vi.mock('../src/renderer/state/chat-context', () => ({
   useChatState: () => mocks.state,
   useChatDispatch: () => mocks.dispatch,
+  // The feed applies each frame through the store's one-notification path (the main window's batcher); here it lands on the same spy.
+  useChatStore: () => ({ dispatchMany: (actions: unknown[]) => { for (const a of actions) mocks.dispatch(a); } }),
 }));
 
 vi.mock('../src/renderer/state/theme-context', () => ({
@@ -213,16 +214,18 @@ describe('BubbleFeed is filled the way the main window is', () => {
     expect(bridge.open).toHaveBeenLastCalledWith(expect.objectContaining({ sessionId: 's1', fresh: true }));
   });
 
-  it('leaves its three known transcript gaps as they were (a replayed skill card or /clear is still not drawn live)', async () => {
+  it('a filled conversation\'s replayed skill card and /clear are drawn now (the three gaps are closed), the clear line once from the record', async () => {
     mocks.state = sessionState({});
     bridge.open.mockResolvedValue(reply([], [
       { type: 'transcript:event', payload: { type: 'skill-invoked', sessionId: 's1', uuid: 'k1', timestamp: 1, data: { skillId: 'x', displayName: 'X', body: 'b' } } },
       { type: 'transcript:event', payload: { type: 'context-clear', sessionId: 's1', uuid: 'k2', timestamp: 2, data: {} } },
+      { type: 'session:live', payload: { sessionId: 's1', kind: 'clear', id: 'clear-k2', at: 2 } },
     ]));
     render(<BubbleFeed sessionId="s1" />);
     await vi.waitFor(() => expect(types()).toContain('HISTORY_PAGE_LOADED'));
-    expect(types()).not.toContain('TRANSCRIPT_SKILL_INVOKED');
-    expect(types()).not.toContain('CLEAR_TIMELINE');
+    expect(types()).toContain('TRANSCRIPT_SKILL_INVOKED');
+    const clears = mocks.dispatch.mock.calls.map((c) => c[0]).filter((a) => a.type === 'CLEAR_TIMELINE');
+    expect(clears.map((a) => a.markerId)).toEqual([undefined, 'clear-k2']); // the event resets, the record's line draws
   });
 });
 
@@ -307,6 +310,18 @@ describe('BubbleFeed live transcript events', () => {
     return mocks.dispatch.mock.calls.map((c) => c[0] as { type: string });
   }
 
+  // Delivers one `session:live` push the way the computer would, through the registered listener.
+  function deliverLive(live: Record<string, unknown>) {
+    mocks.state = sessionState({});
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { frames.push(cb); return frames.length; });
+    render(<BubbleFeed sessionId="s1" />);
+    mocks.dispatch.mockClear();
+    for (const h of bridge.listeners['session:live'] ?? []) h({ sessionId: 's1', ...live });
+    act(() => { for (const f of frames.splice(0)) f(0); });
+    return mocks.dispatch.mock.calls.map((c) => c[0] as { type: string });
+  }
+
   it('shows the same compaction marker as the main window: event id, freed-token counts, summary', () => {
     const calls = deliver(
       { type: 'compact-summary', data: { summary: 'S', autoCompaction: true, contextUsedBefore: 900, contextUsedAfter: 100 } },
@@ -322,27 +337,40 @@ describe('BubbleFeed live transcript events', () => {
     expect(calls.map((c) => c.type)).not.toContain('COMPACTION_COMPLETE');
   });
 
-  it('draws every other event type and payload exactly as the shared translator says', () => {
-    // The buddy listener must route through eventToAction for everything its ledger
-    // does not skip, so it can never again forget a type (replay-complete, PR #287).
+  it('draws EVERY event type and payload exactly as the shared translator says (no skipped types)', () => {
+    // The buddy listener routes through the same translator as the main window for everything, so it can never again forget a type
+    // (replay-complete, PR #287) or skip one by choice (the three gaps closed in sync-fix6).
     for (const c of MATRIX) {
-      if (BUDDY_LIVE[c.event.type] !== 'same') continue;
       const expected = eventToAction(c.event, { live: true, compactionPending: c.ctx?.compactionPending, fallbackContextTokens: null });
       expect(deliver({ ...c.event }, { compactionPending: c.ctx?.compactionPending ?? false }), c.name).toEqual(expected);
     }
   });
 
-  it('still skips its three known live gaps', () => {
-    for (const type of ['user-interrupt', 'skill-invoked', 'context-clear']) {
-      expect(deliver({ type, data: { skillId: 'x', contextUsedAfter: 1 } }), type).toEqual([]);
-    }
+  // The three gaps Destin closed (2026-10-04): the buddy's chat shows the same lines as the main window. Each is red on the old ledger, which dropped them.
+  it('shows "Interrupted": an interrupt reaches the buddy\'s chat', () => {
+    expect(deliver({ type: 'user-interrupt', data: { kind: 'plain' } }))
+      .toContainEqual(expect.objectContaining({ type: 'TRANSCRIPT_INTERRUPT', kind: 'plain' }));
+  });
+
+  it('shows the skill-used card', () => {
+    expect(deliver({ type: 'skill-invoked', data: { skillId: 'brainstorm', displayName: 'Brainstorm', body: 'long instructions' } }))
+      .toContainEqual(expect.objectContaining({ type: 'TRANSCRIPT_SKILL_INVOKED', skillId: 'brainstorm', displayName: 'Brainstorm' }));
+  });
+
+  it('resets the turn on a clear, and the divider comes from the computer\'s record, once', () => {
+    const calls = deliver({ type: 'context-clear', data: { contextUsedAfter: 1 } });
+    expect(calls).toContainEqual(expect.objectContaining({ type: 'CLEAR_TIMELINE' }));
+    expect((calls.find((c) => c.type === 'CLEAR_TIMELINE') as { markerId?: string }).markerId).toBeUndefined();
+    // The record's own line (session:live) is what draws "Conversation cleared": it reaches the buddy through the shared feed.
+    const live = deliverLive({ kind: 'clear', id: 'clear-u1', at: 700 });
+    expect(live).toContainEqual(expect.objectContaining({ type: 'CLEAR_TIMELINE', markerId: 'clear-u1', timestamp: 700 }));
   });
 
   it('ignores an event type nobody has heard of without throwing', () => {
     expect(deliver({ type: 'streaming-text' })).toEqual([]);
   });
 
-  it('treats a wire type named after an inherited object property as unknown, not as a ledger row', () => {
+  it('treats a wire type named after an inherited object property as unknown', () => {
     for (const type of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
       expect(deliver({ type }), type).toEqual([]);
     }

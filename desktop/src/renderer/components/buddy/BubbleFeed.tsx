@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useCallback, useMemo } from 'react';
-import { useChatState, useChatDispatch } from '../../state/chat-context';
+import { useChatState, useChatDispatch, useChatStore } from '../../state/chat-context';
 import { hookEventToAction } from '../../state/hook-dispatcher';
 import { createFirstPageLoader } from '../../state/first-page-loader';
-import { applySessionLive } from '../../state/apply-session-live';
+import { attachTranscriptFeed, attachSessionLiveFeed } from '../../state/screen-feed';
+import { installTranscriptBatcher } from '../../state/transcript-batch';
 import UserMessage from '../UserMessage';
 import SpecialistReportCard from '../SpecialistReportCard';
 import AssistantTurnBubble from '../AssistantTurnBubble';
@@ -18,8 +19,6 @@ import ThinkingIndicator from '../ThinkingIndicator';
 import { useTheme } from '../../state/theme-context';
 import { useEntryFolding } from '../../hooks/use-entry-folding';
 import { findArchiveBoundary, archivedTooltip } from '../../state/archive-boundary';
-import { eventToAction } from '../../state/transcript-event-actions';
-import { BUDDY_LIVE } from './buddy-live-events';
 
 interface Props {
   sessionId: string | null;
@@ -46,6 +45,7 @@ interface Props {
  */
 export function BubbleFeed({ sessionId }: Props) {
   const dispatch = useChatDispatch();
+  const store = useChatStore();
   const state = useChatState(sessionId ?? '');
   const { showTimestamps } = useTheme();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -92,30 +92,11 @@ export function BubbleFeed({ sessionId }: Props) {
     // SESSION_INIT is idempotent (no-op if already initialized).
     dispatch({ type: 'SESSION_INIT', sessionId });
 
-    // Batch dispatches into animation frames — mirrors App.tsx batching pattern
-    // to avoid N re-renders per PTY flush.
-    const pending: any[] = [];
-    let rafId: number | null = null;
+    // The SAME frame batcher the main window uses (state/transcript-batch.ts), applied through the store's one-notification-per-frame path.
+    // WHY not a local copy (sync-fix6): this file kept its own rAF queue, which had no hidden-window timer fallback and no way to flush from a
+    // fill; the main window's batcher has both, and a second batcher is a second place for the ordering rule to rot.
+    const batcher = installTranscriptBatcher(store.dispatchMany);
     let cancelled = false;
-
-    function flush() {
-      rafId = null;
-      if (cancelled) return;
-      const batch = pending.splice(0);
-      for (const action of batch) dispatch(action);
-    }
-
-    // Apply everything queued RIGHT NOW. WHY (sync-fix3): a fill plays the record's recent past as live events and the page must land
-    // BELOW them, so the queued frame cannot wait for its animation frame (state/session-fill.ts calls this between the two).
-    function flushNow() {
-      if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
-      flush();
-    }
-
-    function batchDispatch(action: any) {
-      pending.push(action);
-      if (rafId === null) rafId = requestAnimationFrame(flush);
-    }
 
     // The fill: the SAME `session:open` the main window uses, asked for as this window (sync-fix3). WHY not a page request: a page holds only
     // what is on disk, so this feed missed everything the computer keeps in memory about the conversation: an ask raised before it looked
@@ -125,46 +106,33 @@ export function BubbleFeed({ sessionId }: Props) {
       open: async (req) => (window as any).claude.session.open(req),
       requestPage: async (req) => (window as any).claude?.detach?.requestTranscriptPage?.(req),
       dispatch: (action) => { if (!cancelled) dispatch(action); },
-      flush: flushNow,
+      flush: () => batcher.flush(),
       play: (pushes) => { if (!cancelled) (window as any).claude?.session?.play?.(pushes); },
     });
 
-    const unsubTranscript = window.claude.on.transcriptEvent((event) => {
-      // Only process events for the session this feed is watching
-      if (!event?.type || event?.sessionId !== sessionId) return;
-      // A fill that could not finish asks again when the conversation shows proof the transcript can now be found (first-page-loader.ts).
-      loader.noteLiveActivity(sessionId);
-      // The buddy's three known live gaps (see the ledger). An unknown type has no
-      // ledger row; eventToAction ignores it.
-      // Own-property lookup: a wire type named `constructor` or `toString` must read as
-      // "no ledger row", not as the function every object inherits.
-      const rule = Object.prototype.hasOwnProperty.call(BUDDY_LIVE, event.type)
-        ? BUDDY_LIVE[event.type]
-        : undefined;
-      if (rule && rule !== 'same') return;
-
-      // WHY one translator: this feed shares `eventToAction` with the main window
-      // instead of keeping its own copy of every case. The buddy has no CC statusline,
-      // so there is no fallback figure for a compaction marker's "after" number.
-      for (const action of eventToAction(event, {
-        live: true,
-        compactionPending: !!stateRef.current.compactionPending,
-        fallbackContextTokens: null,
-      })) batchDispatch(action);
+    // The same listener, translation and batching as the main window (state/screen-feed.ts); the buddy skips NO event type, so it draws the lines
+    // the main window does for every chat (/clear, an interrupt, the skill card; Destin 2026-10-04). Its genuine differences, each its own reason:
+    //  - `only`: this window watches ONE conversation;
+    //  - no statusline fallback (`fallbackContextTokens: null`): a compaction marker's "after" figure comes from the event or is left out, because
+    //    the buddy has no Claude Code statusline to read;
+    //  - `compactionPending` reads this feed's own state (the ref), the same fact the main window reads from its chat map.
+    const unsubTranscript = attachTranscriptFeed({
+      batcher,
+      only: sessionId,
+      compactionPending: () => !!stateRef.current.compactionPending,
+      fallbackContextTokens: () => null,
+      onLiveActivity: (sid) => loader.noteLiveActivity(sid),
     });
 
-    // The shared lines and live facts (compaction spinner, prompt cards, queue, model and clear dividers): the main window's `session:live`
-    // listener, with the pieces that only exist there (the status bar's context reading, the model chip, the send gates) left out. The
-    // buddy's three known live gaps in the ledger above are about TRANSCRIPT events and stay exactly as they were.
-    const unsubLive = (window.claude.on as any).sessionLive?.((live: any) => {
-      if (live?.sessionId !== sessionId) return;
-      applySessionLive(live, {
-        batcher: { push: batchDispatch },
-        contextTokens: () => null,
-        isNative: () => false,
-        setChipModel: () => {},
-        setSessionModel: () => {},
-      });
+    // The shared lines and live facts (compaction spinner, prompt cards, queue, model and clear dividers) through the SAME `session:live` feed as the
+    // main window, with the pieces that only exist there (the status bar's context reading, the model chip, the send gates) left out.
+    const unsubLive = attachSessionLiveFeed({
+      only: sessionId,
+      batcher,
+      contextTokens: () => null,
+      isNative: () => false,
+      setChipModel: () => {},
+      setSessionModel: () => {},
     });
     // The end of a fill lists the asks still open: any card not named was answered while this feed could not see it.
     const unsubReplayComplete = (window.claude.on as any).hookReplayComplete?.((p: { sessionId: string; pendingRequestIds: string[] }) => {
@@ -184,16 +152,15 @@ export function BubbleFeed({ sessionId }: Props) {
 
     return () => {
       cancelled = true;
-      if (rafId !== null) cancelAnimationFrame(rafId);
-      // Unregister: preload returns the raw handler for removeListener
-      window.claude.off('transcript:event', unsubTranscript);
-      if (typeof unsubLive === 'function') unsubLive();
+      batcher.dispose();
+      unsubTranscript();
+      unsubLive();
       if (typeof unsubReplayComplete === 'function') unsubReplayComplete();
       if (typeof unsubRefill === 'function') unsubRefill();
       // A fill still in flight is for a feed that is gone: forget it, so its answer is applied to nothing.
       loader.retainOnly(new Set());
     };
-  }, [sessionId, dispatch]);
+  }, [sessionId, dispatch, store]);
 
   // ── Hook event subscription (permissions only) ────────────────────────────
   // Permission requests from hook:event transitions tool cards to approval

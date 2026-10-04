@@ -31,8 +31,8 @@ import { buildSessionCreateArgs } from '../shared/session-create-args';
 import GamePanel from './components/game/GamePanel';
 import TerminalRightSlot from './components/TerminalRightSlot';
 import { ChatProvider, useChatDispatch, useChatStore, useSessionIsThinking } from './state/chat-context';
-import { installTranscriptBatcher, flushTranscriptActions, routeTranscriptEvent, routeTranscriptShrink } from './state/transcript-batch';
-import { applySessionLive } from './state/apply-session-live';
+import { installTranscriptBatcher, flushTranscriptActions, routeTranscriptShrink } from './state/transcript-batch';
+import { attachTranscriptFeed, attachSessionLiveFeed } from './state/screen-feed';
 import { useDropEndedSessionsOnReconnect, withAnnouncedName } from './state/session-list-sync';
 import {
   remotePlaceHost, remotePlaceStorages, readRemotePlace, writeRemotePlace,
@@ -1408,11 +1408,10 @@ function AppInner() {
       // Claude Code's statusline reading: the marker's "after" figure when the event has none.
       fallbackContextTokens: (sid: string) => statusData.sessionStatsMap[sid]?.contextTokens ?? null,
     };
-    const transcriptHandler = window.claude.on.transcriptEvent?.((event) => {
-      if (!event?.type || !event?.sessionId) return;
-      // Live event = main can read this transcript: re-ask a failed first page (first-page-loader.ts).
-      firstPages.noteLiveActivity(event.sessionId);
-      routeTranscriptEvent(event, transcriptRouteDeps);
+    // The listener itself is shared with the buddy (state/screen-feed.ts); `onLiveActivity` is the main window's first-page nudge.
+    const transcriptOff = attachTranscriptFeed({
+      ...transcriptRouteDeps,
+      onLiveActivity: (sid) => firstPages.noteLiveActivity(sid),
     });
 
     // Backup completion path: file-shrink detection. Primary detection now
@@ -1427,13 +1426,13 @@ function AppInner() {
     // One-core R5-4a: the shared lines and live facts from the computer's record: the queue of waiting messages, the model label, the
     // model-switch and "Conversation cleared" dividers, the compaction spinner and prompt cards. Every screen draws them from here and none
     // infers them (a host with no record, the Android app's own runtime, keeps inferring: capabilities.sessionRecord).
-    const liveOff = window.claude.on.sessionLive?.((live) => applySessionLive(live, {
+    const liveOff = attachSessionLiveFeed({
       batcher: transcriptBatcher,
       contextTokens: (sid) => statusData.sessionStatsMap[sid]?.contextTokens ?? null,
       isNative: (sid) => sessionsRef.current.find((x) => x.id === sid)?.provider === 'native',
       setChipModel: (sid, alias) => setSessionModels((prev) => (prev.get(sid) === alias ? prev : new Map(prev).set(sid, alias as ModelAlias))),
       setSessionModel: (sid, model) => setSessions((prev) => prev.map((x) => (x.id === sid && x.model !== model ? { ...x, model } : x))),
-    }));
+    });
 
     const renamedHandler = window.claude.on.sessionRenamed((sid, name) => {
       setSessions((prev) =>
@@ -1688,9 +1687,9 @@ function AppInner() {
       window.claude.off('session:renamed', renamedHandler);
       if (movedHandler) window.claude.off('session:moved', movedHandler);
       window.claude.off('status:data', statusHandler);
-      if (transcriptHandler) window.claude.off('transcript:event', transcriptHandler);
+      transcriptOff();
       if (shrinkHandler) window.claude.off('transcript:shrink', shrinkHandler);
-      liveOff?.();
+      liveOff();
       if (uiActionHandler) window.claude.off('ui:action:received', uiActionHandler);
       if (promptShowHandler) window.claude.off('prompt:show', promptShowHandler);
       if (promptDismissHandler) window.claude.off('prompt:dismiss', promptDismissHandler);
