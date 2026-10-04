@@ -260,3 +260,31 @@ describe('advanceStream: the groups a growing message is drawn as', () => {
     }
   });
 });
+
+// An open code fence must be recognised however the streamed words happen to line up.
+// WHY (2026-10-04, perf fix 5): the splitter records where an open fence's code starts, but only once the
+// opening line has its line ending. When that line ending arrived in an update that was then ADDED to the
+// previous piece without parsing, the record stayed "unknown" for the rest of the fence, so the fence was
+// never drawn in chunks and every word re-read and re-coloured all of it (the app sat at 85-100% busy
+// writing a 500-line file). Which arrival patterns hit this depended on how many words each frame carried:
+// 2, 3, 6 and 7 per update did; 4, 5 and 8 happened not to. The rig's 150 words/s at 60 frames/s is 2-3.
+describe('an open code fence is found however the words arrive', () => {
+  const body = Array.from({ length: 120 }, (_, i) => `  const value${i} = compute(${i}, "row-${i}") ?? fallback[${i % 7}];`).join('\n');
+  const message = `Here is the whole file:\n\n\`\`\`ts\nexport function generated() {\n${body}\n}\n\`\`\`\n`;
+  const opener = message.indexOf('```ts\n') + 6; // the first character after the opening line's line ending
+  const closer = message.lastIndexOf('```');
+
+  for (let step = 1; step <= 9; step++) {
+    it(`${step} character(s) per update: every update inside the fence knows where the fence starts`, () => {
+      let view: StreamView = startStream('');
+      const missing: number[] = [];
+      for (let end = step; end < message.length + step; end += step) {
+        const content = message.slice(0, Math.min(end, message.length));
+        view = advanceStream(view, content);
+        // Between "the opening line is complete" and "a line that could close it", the live group is an open fence.
+        if (content.length >= opener && content.length < closer && view.groups.at(-1)!.fenceAt === undefined) missing.push(content.length);
+      }
+      expect(missing.slice(0, 3).map((n) => JSON.stringify(message.slice(Math.max(0, n - 14), n)))).toEqual([]);
+    });
+  }
+});

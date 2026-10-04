@@ -272,6 +272,21 @@ function mayHoldDefinitionOrHtml(text: string): boolean {
 }
 
 /**
+ * Whether appending `text` (the whole last piece after growing) completes a code fence's OPENING line that
+ * `last` ended inside of: its final line began like one (a backtick or tilde after up to three spaces, maybe
+ * only the first of three yet) and the appended text both finishes it as a fence opener and ends that line.
+ * WHY (2026-10-04, perf fix 5): the fence's start is only recorded by a parse of a text whose opening line is
+ * complete (openFenceBody). Extending the piece without parsing at this moment would keep "no fence start"
+ * for the whole fence.
+ */
+function completesFenceOpener(last: string, text: string): boolean {
+  const from = Math.max(last.lastIndexOf('\n'), last.lastIndexOf('\r')) + 1;
+  if (!/^ {0,3}[`~]/.test(last.slice(from))) return false;
+  const grown = text.slice(from);
+  return /^ {0,3}(?:`{3,}[^`\r\n]*|~{3,}[^\r\n]*)[\r\n]/.test(grown) && /[\r\n]/.test(text.slice(last.length));
+}
+
+/**
  * The previous pieces with only the LAST one grown by the appended text — or
  * null when that is not certain, and the tail must be parsed.
  *
@@ -302,6 +317,9 @@ function extendLastPiece(prev: MarkdownBlocks, content: string): MarkdownBlocks 
     const from = Math.max(last.fenceBody, lineStart(text, Math.max(0, last.text.length - 1)));
     if (FENCE_CLOSE_LINE.test(text.slice(from))) return null;
   } else if (hasBlankLine(text) || mayHoldDefinitionOrHtml(text)) {
+    return null;
+  } else if (completesFenceOpener(last.text, text)) {
+    // One parse of the tail, once per fence, so the piece records where the fence's code starts.
     return null;
   }
   const live = prev.live.slice();

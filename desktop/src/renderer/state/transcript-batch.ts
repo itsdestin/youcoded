@@ -46,11 +46,28 @@ export interface TranscriptBatcher {
 // so the module always points at the batcher whose dispatch is current.
 let active: TranscriptBatcher | null = null;
 
+/**
+ * The least time between two animation-frame flushes, in ms.
+ *
+ * WHY (2026-10-04, perf fix 5): "one flush per frame" means a different amount of work on every display. A 60 Hz
+ * screen flushes (and so redraws the chat, re-reads the live paragraph, lays out and repaints) ~60 times a second;
+ * a 180 Hz screen up to 180, though text arrives at ~150 words/s at most and nobody can tell the difference past
+ * ~60 text updates a second. Measured on the perf rig with the frame-rate limit lifted (a stand-in for a fast
+ * screen): 146 redraws/s and the window's main thread 86% busy, against 60/s and ~45% at 60 Hz.
+ * 12 ms (not 16.7) so a 60 Hz screen, whose frames are 16.7 ms apart, flushes on EVERY frame even when a frame
+ * time jitters, while 120/144/180 Hz screens flush every 2nd/2nd/3rd frame (16.7/13.9/16.7 ms): never coarser
+ * than one 60 Hz frame, so text still appears as smoothly as on the slowest common screen.
+ */
+export const MIN_FLUSH_GAP_MS = 12;
+
 export function installTranscriptBatcher(dispatch: DispatchBatch): TranscriptBatcher {
   const pending: ChatAction[] = [];
   let rafId: number | null = null;
   let timerId: ReturnType<typeof setTimeout> | null = null;
   let disposed = false;
+  // The frame time of the last frame-driven flush; null until the first (the first update after any quiet
+  // spell is therefore never delayed).
+  let lastFrameFlushAt: number | null = null;
 
   function clearScheduled() {
     if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
@@ -81,8 +98,26 @@ export function installTranscriptBatcher(dispatch: DispatchBatch): TranscriptBat
     if (document.visibilityState === 'hidden') {
       timerId = setTimeout(flush, 16);
     } else {
-      rafId = requestAnimationFrame(flush);
+      rafId = requestAnimationFrame(onFrame);
     }
+  }
+
+  // The frame-driven flush. WHY the frame's own timestamp (not performance.now()): it is the vsync time the browser
+  // hands every callback of the frame, so on a fast screen consecutive frames differ by exactly the display's
+  // period and the skip pattern is regular. A caller that passes no timestamp (a test firing frames by hand) is
+  // never throttled.
+  function onFrame(frameTime?: number) {
+    rafId = null;
+    if (disposed) return;
+    if (typeof frameTime === 'number' && lastFrameFlushAt !== null && frameTime >= lastFrameFlushAt
+        && frameTime - lastFrameFlushAt < MIN_FLUSH_GAP_MS) {
+      // Too soon after the last redraw: keep the queue, look again next frame. Actions are only delayed, never
+      // reordered or dropped, and flush() (hook events, snapshots) still applies them at once.
+      rafId = requestAnimationFrame(onFrame);
+      return;
+    }
+    if (typeof frameTime === 'number') lastFrameFlushAt = frameTime;
+    flush();
   }
 
   // If the window hides while an rAF flush is pending, that rAF may never

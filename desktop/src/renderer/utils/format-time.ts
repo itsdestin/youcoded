@@ -1,8 +1,17 @@
 /** Format an epoch-ms timestamp as a short time string for chat bubbles (e.g. "2:34 PM"). */
 export function formatBubbleTime(timestamp: number): string {
+  // WHY a cached formatter (2026-10-04, perf fix 5): toLocaleTimeString builds a brand-new Intl formatter on
+  // EVERY call, and the streaming bubble calls this on every redraw (60+ a second while a reply streams). The
+  // CPU profile put it at ~1.5% of the whole window's time. Same output as
+  // toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }): same locale list, same options.
+  // A bad timestamp keeps the old path: Intl's format() throws on an invalid date where toLocaleTimeString
+  // returns "Invalid Date".
   const d = new Date(timestamp);
-  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (Number.isNaN(d.getTime())) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  bubbleTimeFormat ??= new Intl.DateTimeFormat([], { hour: 'numeric', minute: '2-digit' });
+  return bubbleTimeFormat.format(d);
 }
+let bubbleTimeFormat: Intl.DateTimeFormat | null = null;
 
 /**
  * Compact relative-time label ("just now", "5m ago", "3h ago", "2d ago", then
