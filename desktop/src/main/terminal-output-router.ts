@@ -4,7 +4,7 @@ import { TerminalFlow, watchWebContents } from './terminal-flow';
 
 // Output waiting for a terminal to mount is capped at the newest this-many characters — the same
 // "keep the tail" rule as the remote ring buffer — instead of growing without bound.
-export const PENDING_CAP = 4 * 1024 * 1024;
+const PENDING_CAP = 4 * 1024 * 1024;
 
 export interface RouterDeps {
   ipcMain: { on(channel: string, fn: (event: any, ...args: any[]) => void): unknown };

@@ -2610,7 +2610,8 @@ describe('session:terminal-ack (terminal flow control)', () => {
     expect(preload).toContain("TERMINAL_ACK: 'session:terminal-ack'");
     expect(types).toContain("TERMINAL_ACK: 'session:terminal-ack'");
     expect(preload).toMatch(/ackOutput:[^\n]*\n[^\n]*ipcRenderer\.send\(IPC\.TERMINAL_ACK/);
-    expect(handlers).toContain('ipcMain.on(IPC.TERMINAL_ACK');
+    expect(handlers).toMatch(/ack: IPC\.TERMINAL_ACK/);   // registered by terminal-output-router.ts
+    expect(readSource('src', 'main', 'terminal-output-router.ts')).toContain('d.ipcMain.on(d.channels.ack');
   });
 
   it('remote clients: the shim sends nothing, and the host treats a stray one as a no-op that never reaches the PTY worker', () => {

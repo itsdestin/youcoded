@@ -17,7 +17,7 @@
 //    hold the owner's terminal hostage, and re-joins on its next ack.
 //  * Everything is recomputed when ownership changes or a window goes, so a brake can never outlive the
 //    terminal it was waiting for.
-export const NON_OWNER_QUIET_MS = 5000;
+const NON_OWNER_QUIET_MS = 5000;
 
 export interface TerminalFlowDeps {
   /** Windows (webContents ids) this session's output is routed to right now. */
