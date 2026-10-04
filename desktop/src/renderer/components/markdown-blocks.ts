@@ -567,7 +567,10 @@ export function advanceStream(view: StreamView, content: string): StreamView {
   // exactly today's render, no parse — until new text could start a piece of
   // its own. Splitting earlier parsed the whole message and then redrew all of
   // it anyway as group 0, on top of today's cost, every word.
-  if (!view.blocks && !mayStartPiece(content, view.drawn.length)) return oneDocument(content);
+  // WHY also split when the text ends in an open code fence: a bubble that mounted after the fence
+  // began has no blank line to wait for (code often has none for hundreds of lines), so it stayed one
+  // document and redrew the whole fence per word. One parse here, then the cheap extend path.
+  if (!view.blocks && !mayStartPiece(content, view.drawn.length) && !mayEndInOpenFence(content)) return oneDocument(content);
   const floor = view.blocks ? view.floor : view.drawn.length;
   const blocks = splitMarkdownBlocks(content, view.blocks);
   if (blocks.whole) {
@@ -678,6 +681,13 @@ function defsFor(g: DrawnGroup, labels: string[], lookup: (key: string) => DefIn
   if (!found.length) return '';
   found.sort((a, b) => a.at - b.at);
   return found.map((d) => d.text).join('\n\n');
+}
+
+/** Whether `content` may end inside a code fence: an odd number of lines that could open or close one. */
+function mayEndInOpenFence(content: string): boolean {
+  let n = 0;
+  for (const _ of content.matchAll(/(?:^|\n) {0,3}(?:`{3,}|~{3,})/g)) n++;
+  return n % 2 === 1;
 }
 
 /**

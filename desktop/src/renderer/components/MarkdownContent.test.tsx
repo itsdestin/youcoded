@@ -950,6 +950,32 @@ describe('MarkdownContent while a reply streams in', () => {
         live.unmount();
       });
 
+      // The perf rig's own fence has NO blank line, and a bubble that mounted after the fence began
+      // (slow machine, hidden chat) never got a blank line to split on — so it stayed O(n^2).
+      it('stays bounded when the open fence holds no blank line at all', () => {
+        const rowNb = (i: number) => `  const value${i} = compute(${i}); // step ${i}`;
+        const base = `Intro paragraph.\n\n\`\`\`ts\n${lines(100, rowNb)}\n`;
+        const live = render(<Bubble md={base} incremental />);
+        const pre = live.container.querySelector('pre')!;
+        let md = base;
+        const costs: number[] = [];
+        tokenDeltas(lines(120, (i) => rowNb(i + 1000)) + '\n').forEach((d, i, all) => {
+          md += d;
+          markdownRenders.length = 0;
+          splitterParsed.chars = 0;
+          live.rerender(<Bubble md={md} incremental />);
+          costs.push(splitterParsed.chars + markdownRenders.reduce((n, x) => n + x.length, 0));
+          expect(live.container.querySelector('pre')).toBe(pre);
+          if (i === all.length - 1) expect(canonical(live.container)).toBe(wholeHtml(md));
+        });
+        const lineLen = rowNb(1).length + 1;
+        expect(Math.max(...costs.slice(1))).toBeLessThanOrEqual(4 * (2 * OPEN_FENCE_CHUNK_LINES * lineLen + 400));
+        expect(Math.max(...costs.slice(1))).toBeLessThan(md.length / 3);
+        live.rerender(<Bubble md={md} incremental live={false} />);
+        expect(live.container.querySelector('pre')).toBe(pre);
+        live.unmount();
+      });
+
       it('Copy still takes the whole fence, and only that fence', async () => {
         const writeText = vi.fn();
         Object.assign(navigator, { clipboard: { writeText } });
