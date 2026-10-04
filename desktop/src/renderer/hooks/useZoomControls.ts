@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { getPlatform } from '../platform';
 
 // Zoom subsystem (Ctrl+/-/0, trackpad pinch, transient overlay state).
 // Extracted from AppInner (tranche 1) — logic unchanged. The handler refs are
@@ -75,9 +74,11 @@ export function useZoomControls() {
   const pinchFlushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    // True only in the desktop (Electron) app — see the long WHY where the wheel listener is registered.
-    // Read here, not at import, so a test can set the platform first.
-    const SCROLL_NEVER_WAITS = getPlatform() === 'electron';
+    // True only when the page has POSITIVELY identified itself as the desktop app — see the long WHY where the
+    // wheel listener is registered. WHY not getPlatform(): that falls back to 'electron' when nothing is set yet,
+    // and a remote browser that mounted before its platform was known would get a passive listener for good and
+    // zoom the page twice (review fix 6). Here "unknown" means cancelable. Read at registration, not at import.
+    const SCROLL_NEVER_WAITS = (window as any).__PLATFORM__ === 'electron';
     const handler = (e: WheelEvent) => {
       if (!e.ctrlKey) return; // Only intercept pinch (ctrlKey) wheel events
       // The artifact viewer owns pinch/ctrl+wheel over a picture. This listener

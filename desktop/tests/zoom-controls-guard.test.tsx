@@ -60,6 +60,7 @@ describe('useZoomControls scroll never waits (desktop) / stays cancelable (elsew
   afterEach(() => { delete (window as any).__PLATFORM__; vi.restoreAllMocks(); });
 
   it('desktop: the wheel listener is passive, still zooms, and never tries to cancel', () => {
+    (window as any).__PLATFORM__ = 'electron'; // what platform-bootstrap.ts sets when the preload bridge exists
     const spy = vi.spyOn(window, 'addEventListener');
     const { getByTestId } = render(<Host />);
     const opts = wheelRegistrations(spy);
@@ -69,6 +70,25 @@ describe('useZoomControls scroll never waits (desktop) / stays cancelable (elsew
     act(() => { getByTestId('outside').dispatchEvent(ev); vi.advanceTimersByTime(100); });
     expect(zoomIn).toHaveBeenCalled();
     expect(ev.defaultPrevented).toBe(false);
+  });
+
+  it('platform not known yet (a remote browser mounting before it connects): cancelable, never passive', () => {
+    delete (window as any).__PLATFORM__;
+    const spy = vi.spyOn(window, 'addEventListener');
+    const { getByTestId } = render(<Host />);
+    expect(wheelRegistrations(spy)[0].passive).toBe(false);
+    const ev = new WheelEvent('wheel', { ctrlKey: true, deltaY: -120, bubbles: true, cancelable: true });
+    act(() => { getByTestId('outside').dispatchEvent(ev); vi.advanceTimersByTime(100); });
+    expect(ev.defaultPrevented).toBe(true);
+  });
+
+  it('platform arrives after mount (remote auth:ok): a later desktop-style value cannot flip an already-cancelable listener', () => {
+    delete (window as any).__PLATFORM__;
+    const spy = vi.spyOn(window, 'addEventListener');
+    render(<Host />);
+    (window as any).__PLATFORM__ = 'electron';   // too late: registration already happened cancelable
+    expect(wheelRegistrations(spy)).toHaveLength(1);
+    expect(wheelRegistrations(spy)[0].passive).toBe(false);
   });
 
   it('remote browser / Android: the listener stays cancelable and cancels the browser zoom', () => {

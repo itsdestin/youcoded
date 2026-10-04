@@ -8,13 +8,14 @@
 //
 // Still a real <table>: dragging across cells and copying still pastes as tab-separated rows, and the viewers'
 // existing hooks (comment highlighting finds `[data-cell]`, the right-click menu reads the <td>) are unchanged.
-import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { colLetter } from './exceljs-cell';
 import { GRID, GUTTER_BG, GUTTER_FG, SEL } from './sheet-theme';
 import {
-  FALLBACK_VIEW, GUTTER_W, HEADER_H, expandForMerges, headerItems, indexMerges, planGrid, prefixSums, sameWin,
+  FALLBACK_VIEW, GUTTER_W, HEADER_H, ROW_H, expandForMerges, headerItems, indexAt, indexMerges, keyOf, planGrid, prefixSums, sameWin,
   windowFor, type GridPiece, type MergeBox, type MergeIndex, type RowItem, type Win,
 } from './sheet-window';
+import { rangeToTsv } from './sheet-copy';
 
 /** What one cell shows. `style` is the cell's complete look (border, padding, alignment...) except the selection ring. */
 export interface GridCell {
@@ -34,9 +35,22 @@ export interface SheetGridModel {
   merges: MergeBox[];
   /** The cell at (r, c), 0-based. Called only for cells actually drawn. */
   cell: (r: number, c: number) => GridCell;
-  /** Cells whose text contains `qLower` (lower-case), in reading order, at most `cap` — for find-in-document. */
-  findCells: (qLower: string, cap: number) => Array<[number, number]>;
+  /** The shown text of a cell, 0-based (copy and find read this, never the page). */
+  text: (r: number, c: number) => string;
+  /** Rows / columns that hold data (the viewers pad the drawn grid past them with blank cells). */
+  usedRows: number;
+  usedCols: number;
+  /** Cells whose shown text contains `qLower` (lower-case), in reading order — for find-in-document. */
+  findCells: (qLower: string) => Array<[number, number]>;
 }
+
+/** What the viewers can ask of the grid: scroll to a cell and get its drawn <td>. */
+export interface SheetGridHandle {
+  reveal: (r: number, c: number) => Promise<HTMLElement | null>;
+}
+
+interface CellRange { r0: number; c0: number; r1: number; c1: number }
+const RANGE_BG = 'rgba(33, 115, 70, 0.16)'; // the selection ring's green, as a wash
 
 export interface Selection { r: number; c: number }
 
@@ -73,20 +87,26 @@ interface RowProps {
   items: RowItem[];
   /** The selected column when this row holds the selection, else -1 — so only that row redraws on a click. */
   selCol: number;
+  /** The selected rectangle's columns when this row is inside it, else -1 / -1. */
+  rc0: number;
+  rc1: number;
   model: SheetGridModel;
 }
 
 // One drawn row. Memoised: scrolling adds rows at the edge but leaves the others alone, and a click redraws only
 // the row losing the ring and the row gaining it (renderer-lists.md: a memoised row gets stable props).
-const Row = memo(function Row({ r, height, items, selCol, model }: RowProps) {
+const Row = memo(function Row({ r, height, items, selCol, rc0, rc1, model }: RowProps) {
   return (
-    <tr style={{ height }}>
-      <th style={{ ...gutterLeftStyle, height }}>{r + 1}</th>
+    // data-tall: a taller-than-normal (wrapped) row, whose real height is measured after drawing
+    <tr style={{ height }} aria-rowindex={r + 2} data-r={r} data-tall={model.rowHeights[r] > ROW_H ? '' : undefined}>
+      <th style={{ ...gutterLeftStyle, height }} aria-colindex={1}>{r + 1}</th>
       {items.map((it, i) => {
         // keyed by position for a gap (two gaps in a row can be the same width), by column for a cell
-        if (it.kind === 'gap') return <td key={`g${i}`} colSpan={it.span} style={gapCell} />;
+        if (it.kind === 'gap') return <td key={`g${i}`} colSpan={it.span} style={gapCell} aria-hidden />;
         const cell = model.cell(r, it.c);
-        const style: CSSProperties = it.c === selCol ? { ...cell.style, outline: `2px solid ${SEL}`, outlineOffset: -2 } : cell.style;
+        let style: CSSProperties = cell.style;
+        if (it.c >= rc0 && it.c <= rc1) style = { ...style, backgroundColor: RANGE_BG };
+        if (it.c === selCol) style = { ...style, outline: `2px solid ${SEL}`, outlineOffset: -2 };
         return (
           <td
             key={it.c}
@@ -97,6 +117,7 @@ const Row = memo(function Row({ r, height, items, selCol, model }: RowProps) {
             data-r={r}
             data-c={it.c}
             data-cell={cell.addr}
+            aria-colindex={it.c + 2}
           >
             {cell.text}
           </td>
@@ -104,7 +125,7 @@ const Row = memo(function Row({ r, height, items, selCol, model }: RowProps) {
       })}
     </tr>
   );
-}, (a, b) => a.r === b.r && a.height === b.height && a.selCol === b.selCol && a.model === b.model
+}, (a, b) => a.r === b.r && a.height === b.height && a.selCol === b.selCol && a.rc0 === b.rc0 && a.rc1 === b.rc1 && a.model === b.model
   && a.items.length === b.items.length
   && a.items.every((x, i) => {
     const y = b.items[i];
@@ -112,9 +133,25 @@ const Row = memo(function Row({ r, height, items, selCol, model }: RowProps) {
       : x.c === (y as typeof x).c && x.colSpan === (y as typeof x).colSpan && x.rowSpan === (y as typeof x).rowSpan);
   }));
 
-export function SheetGrid({ model, sel, onSelect, pins = NO_PINS, scrollerProps, footer, selectOnContextMenu = false }: Props) {
+const NO_FIX: ReadonlyMap<number, number> = new Map();
+
+export const SheetGrid = forwardRef<SheetGridHandle, Props>(function SheetGrid(
+  { model, sel, onSelect, pins = NO_PINS, scrollerProps, footer, selectOnContextMenu = false }, handleRef,
+) {
   const scrollerRef = useRef<HTMLDivElement>(null);
-  const { rowCount, colCount, colWidths, rowHeights, merges } = model;
+  const { rowCount, colCount, colWidths, merges } = model;
+
+  // Wrapped rows: the height the sheet's text estimate gave is only a minimum. After drawing, a row that came out
+  // taller is measured and the measured height is used for the offsets too, so blank space and drawn rows can
+  // never disagree (review fix 5: no scroll jump from a wrong estimate).
+  // Kept WITH the model it was measured for, so a different sheet starts clean without an effect to reset it.
+  const [fixed, setFixed] = useState<{ model: SheetGridModel; map: ReadonlyMap<number, number> }>({ model, map: NO_FIX });
+  const fix = fixed.model === model ? fixed.map : NO_FIX;
+  const setFix = useCallback((map: ReadonlyMap<number, number>) => setFixed({ model, map }), [model]);
+  const rowHeights = useMemo(
+    () => (fix.size ? model.rowHeights.map((h, r) => Math.max(h, fix.get(r) ?? 0)) : model.rowHeights),
+    [model, fix],
+  );
 
   // Heavy but only when the sheet itself changes (a different file or tab): positions and merge lookups.
   const geo = useMemo(() => ({
@@ -163,10 +200,144 @@ export function SheetGrid({ model, sel, onSelect, pins = NO_PINS, scrollerProps,
   );
   const header = useMemo(() => headerItems(drawn, colCount), [drawn, colCount]);
 
-  // One click handler for the whole table instead of one closure per cell: stable props keep the memoised rows
-  // memoised, and a 200,000-cell sheet does not carry 200,000 handlers.
+  // Measure the wrapped rows that are on screen (only those carry data-tall, so this is a handful of reads).
+  useLayoutEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    let next: Map<number, number> | null = null;
+    el.querySelectorAll<HTMLElement>('tr[data-tall]').forEach((tr) => {
+      const r = Number(tr.getAttribute('data-r'));
+      const h = tr.getBoundingClientRect().height;
+      if (h > rowHeights[r] + 1) (next ??= new Map(fix)).set(r, Math.ceil(h));
+    });
+    if (next) setFix(next);
+  }, [pieces, rowHeights, fix, setFix]);
+
+  // ── Selection: a clicked cell (owned by the viewer, drawn as a ring) and a dragged / shift-clicked / select-all
+  // rectangle (owned here). WHY by cell index and not the browser's own text selection: the cells a drag started
+  // from can scroll out of the page and be removed, which would collapse a browser selection (review fix 2).
+  const [range, setRange] = useState<CellRange | null>(null);
+  useEffect(() => { setRange(null); }, [model]);
+  const rangeRef = useRef(range); rangeRef.current = range;
+  const selRef = useRef(sel); selRef.current = sel;
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
+
+  const cellAtPoint = useCallback((clientX: number, clientY: number): { r: number; c: number } | null => {
+    const el = scrollerRef.current;
+    if (!el) return null;
+    const box = el.getBoundingClientRect();
+    const x = clientX - box.left + el.scrollLeft - GUTTER_W;
+    const y = clientY - box.top + el.scrollTop - HEADER_H;
+    return { r: indexAt(geo.rowOffsets, Math.max(0, y)), c: indexAt(geo.colOffsets, Math.max(0, x)) };
+  }, [geo]);
+
+  const drag = useRef<{ anchor: { r: number; c: number }; moved: boolean; x: number; y: number; raf: number | null } | null>(null);
+  useEffect(() => () => {
+    if (drag.current?.raf != null) cancelAnimationFrame(drag.current.raf);
+  }, []);
+
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    const td = (e.target as Element).closest?.('td[data-r]');
+    if (!td) return;
+    const cell = { r: Number(td.getAttribute('data-r')), c: Number(td.getAttribute('data-c')) };
+    scrollerRef.current?.focus({ preventScroll: true });
+    // Shift+click: the rectangle from the selected cell to this one.
+    if (e.shiftKey && selRef.current) {
+      e.preventDefault();
+      const a = selRef.current;
+      setRange({ r0: Math.min(a.r, cell.r), c0: Math.min(a.c, cell.c), r1: Math.max(a.r, cell.r), c1: Math.max(a.c, cell.c) });
+      return;
+    }
+    setRange(null);
+    const d = { anchor: cell, moved: false, x: e.clientX, y: e.clientY, raf: null as number | null };
+    drag.current = d;
+    const el = scrollerRef.current;
+    const extend = () => {
+      const at = cellAtPoint(d.x, d.y);
+      if (!at) return;
+      if (!d.moved && at.r === d.anchor.r && at.c === d.anchor.c) return;
+      if (!d.moved) {
+        // the pointer left the first cell: this is a rectangle drag now, not text selection inside one cell
+        d.moved = true;
+        onSelectRef.current(d.anchor.r, d.anchor.c);
+        window.getSelection()?.removeAllRanges();
+        if (el) el.style.userSelect = 'none';
+      }
+      setRange({ r0: Math.min(d.anchor.r, at.r), c0: Math.min(d.anchor.c, at.c), r1: Math.max(d.anchor.r, at.r), c1: Math.max(d.anchor.c, at.c) });
+    };
+    // Scrolling while the pointer is held near or past an edge (the browser's own drag-scroll stops once the
+    // text selection is cancelled above, and cells it started from may be gone anyway).
+    const tick = () => {
+      d.raf = null;
+      if (!drag.current || !el) return;
+      const box = el.getBoundingClientRect();
+      const edge = 36;
+      const dy = d.y < box.top + HEADER_H + edge ? d.y - (box.top + HEADER_H + edge) : d.y > box.bottom - edge ? d.y - (box.bottom - edge) : 0;
+      const dx = d.x < box.left + GUTTER_W + edge ? d.x - (box.left + GUTTER_W + edge) : d.x > box.right - edge ? d.x - (box.right - edge) : 0;
+      if (d.moved && (dx || dy)) {
+        el.scrollTop += Math.max(-60, Math.min(60, dy / 2));
+        el.scrollLeft += Math.max(-60, Math.min(60, dx / 2));
+        extend();
+      }
+      d.raf = requestAnimationFrame(tick);
+    };
+    const move = (ev: MouseEvent) => { d.x = ev.clientX; d.y = ev.clientY; extend(); };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      if (d.raf != null) cancelAnimationFrame(d.raf);
+      if (el) el.style.userSelect = '';
+      drag.current = null;
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+    d.raf = requestAnimationFrame(tick);
+  }, [cellAtPoint]);
+
+  const copy = useCallback((e: React.ClipboardEvent) => {
+    const isCovered = (r: number, c: number) => geo.mergeIndex.covered.has(keyOf(r, c));
+    const rg = rangeRef.current;
+    let text: string | null = null;
+    if (rg) text = rangeToTsv(model, isCovered, rg.r0, rg.c0, rg.r1, rg.c1);
+    else if (selRef.current && !window.getSelection()?.toString()) text = rangeToTsv(model, isCovered, selRef.current.r, selRef.current.c, selRef.current.r, selRef.current.c);
+    if (text == null) return; // text selected inside one cell: the browser's own copy is right
+    e.clipboardData.setData('text/plain', text);
+    e.preventDefault();
+  }, [model, geo]);
+
+  const onKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'a') {
+      e.preventDefault();
+      setRange({ r0: 0, c0: 0, r1: model.rowCount - 1, c1: model.colCount - 1 });
+    } else if (e.key === 'Escape' && rangeRef.current) {
+      setRange(null);
+    }
+  }, [model]);
+
+  // ── Find: scroll to a cell and hand back its drawn <td> (artifact-find-bridge.ts).
+  useImperativeHandle(handleRef, () => ({
+    reveal: (r, c) => {
+      const el = scrollerRef.current;
+      if (!el) return Promise.resolve(null);
+      const top = geo.rowOffsets[r] + HEADER_H, left = geo.colOffsets[c] + GUTTER_W;
+      const h = rowHeights[r], w = colWidths[c];
+      const { h: vh, w: vw } = view.current;
+      const seen = top - el.scrollTop >= HEADER_H && top + h - el.scrollTop <= vh && left - el.scrollLeft >= GUTTER_W && left + w - el.scrollLeft <= vw;
+      if (!seen) {
+        el.scrollTop = Math.max(0, top - vh / 2);
+        el.scrollLeft = Math.max(0, left - vw / 2);
+      }
+      recompute();
+      return new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(() => {
+        res(el.querySelector<HTMLElement>(`td[data-r="${r}"][data-c="${c}"]`));
+      })));
+    },
+  }), [geo, rowHeights, colWidths, recompute]);
+
+  // One click handler for the whole table instead of one closure per cell: stable props keep the memoised rows
+  // memoised, and a 200,000-cell sheet does not carry 200,000 handlers.
   const pick = useCallback((e: React.MouseEvent) => {
     const td = (e.target as Element).closest?.('td[data-r]');
     if (!td) return;
@@ -176,27 +347,40 @@ export function SheetGrid({ model, sel, onSelect, pins = NO_PINS, scrollerProps,
   const totalW = GUTTER_W + geo.colOffsets[colCount];
 
   return (
-    <div className="flex-1 overflow-auto" ref={scrollerRef} onScroll={recompute} style={{ position: 'relative' }} {...scrollerProps}>
-      <table style={{ borderCollapse: 'collapse', tableLayout: 'fixed', fontSize: 13, width: totalW }}>
+    <div
+      className="flex-1 overflow-auto" ref={scrollerRef} onScroll={recompute} tabIndex={0}
+      onKeyDown={onKeyDown} onCopy={copy} style={{ position: 'relative', outline: 'none' }} {...scrollerProps}
+    >
+      <table
+        style={{ borderCollapse: 'collapse', tableLayout: 'fixed', fontSize: 13, width: totalW }}
+        aria-rowcount={rowCount + 1} aria-colcount={colCount + 1}
+      >
         <colgroup>
           <col style={{ width: GUTTER_W }} />
           {colWidths.map((w, i) => <col key={i} style={{ width: w }} />)}
         </colgroup>
         <thead>
-          <tr style={{ height: HEADER_H }}>
-            <th style={gutterCornerStyle} />
+          <tr style={{ height: HEADER_H }} aria-rowindex={1}>
+            <th style={gutterCornerStyle} aria-colindex={1} />
             {header.map((it, i) => it.kind === 'gap'
-              ? <th key={`g${i}`} colSpan={it.span} style={{ ...gapCell, background: GUTTER_BG, position: 'sticky', top: 0, zIndex: 3 }} />
-              : <th key={it.c} style={gutterTopStyle}>{colLetter(it.c + 1)}</th>)}
+              ? <th key={`g${i}`} colSpan={it.span} style={{ ...gapCell, background: GUTTER_BG, position: 'sticky', top: 0, zIndex: 3 }} aria-hidden />
+              : <th key={it.c} style={gutterTopStyle} aria-colindex={it.c + 2}>{colLetter(it.c + 1)}</th>)}
           </tr>
         </thead>
-        <tbody onClick={pick} onContextMenu={selectOnContextMenu ? pick : undefined}>
-          {pieces.map((p: GridPiece, i) => p.kind === 'gap'
-            ? <tr key={`gap${i}`} aria-hidden style={{ height: p.height }}><td colSpan={colCount + 1} style={{ ...gapCell, height: p.height }} /></tr>
-            : <Row key={p.r} r={p.r} height={rowHeights[p.r]} items={p.items} selCol={sel?.r === p.r ? sel.c : -1} model={model} />)}
+        <tbody onClick={pick} onMouseDown={onMouseDown} onContextMenu={selectOnContextMenu ? pick : undefined}>
+          {pieces.map((p: GridPiece, i) => {
+            if (p.kind === 'gap') return <tr key={`gap${i}`} aria-hidden style={{ height: p.height }}><td colSpan={colCount + 1} style={{ ...gapCell, height: p.height }} /></tr>;
+            const inRange = range && p.r >= range.r0 && p.r <= range.r1;
+            return (
+              <Row
+                key={p.r} r={p.r} height={rowHeights[p.r]} items={p.items} selCol={sel?.r === p.r ? sel.c : -1}
+                rc0={inRange ? range.c0 : -1} rc1={inRange ? range.c1 : -1} model={model}
+              />
+            );
+          })}
         </tbody>
       </table>
       {footer}
     </div>
   );
-}
+});

@@ -11,7 +11,7 @@ import { flushSync } from 'react-dom';
 import { ChevronDown, TextInput, Tooltip } from './ui';
 import { ScreenMark } from '../shoot-mode';
 import { resolveBodyRanges, type MessageFindHit } from './chat-message-find';
-import { onFindRewalk, publishFindQuery } from './artifact-views/artifact-find-bridge';
+import { getSheetFind, onFindRewalk, onSheetFindChange } from './artifact-views/artifact-find-bridge';
 
 /** Chat-only source search. Artifact documents keep the unmodified live DOM path. */
 export interface ChatFindAdapter {
@@ -123,12 +123,12 @@ export function ContentFindBar({ containerRef, onClose, resetKey, highlightName 
   useEffect(() => () => { if (recoveryTimerRef.current != null) clearTimeout(recoveryTimerRef.current); }, []);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
-  // Spreadsheets draw only their visible cells (Fix 2, 2026-10-04), so they need to know what is being searched to
-  // keep the matching cells in the page; and they ask for a second look once those cells are there. Only the
-  // artifact viewer's bar takes part (the chat timeline's bar has its own source search).
-  useEffect(() => { if (HL === 'artifact-find') publishFindQuery(query); }, [HL, query]);
-  // separate from the line above so typing publishes once per keystroke, not "" then the query
-  useEffect(() => () => { if (HL === 'artifact-find') publishFindQuery(''); }, [HL]);
+  // Spreadsheets draw only their visible cells, so their viewer registers a find adapter (artifact-find-bridge.ts)
+  // that counts matches in the sheet's data and scrolls to match N. Only the artifact viewer's bar takes part (the
+  // chat timeline's bar has its own source search). `adapterVersion` makes the bar re-read it when a viewer
+  // registers or leaves (another tab, another file).
+  const [adapterVersion, setAdapterVersion] = useState(0);
+  useEffect(() => (HL === 'artifact-find' ? onSheetFindChange(() => setAdapterVersion((v) => v + 1)) : undefined), [HL]);
   useEffect(() => (HL === 'artifact-find' ? onFindRewalk(() => setWalkKey((k) => k + 1)) : undefined), [HL]);
   // New artifact → clear the search.
   useEffect(() => { setQuery(''); setCurrent(0); }, [resetKey]);
@@ -216,17 +216,20 @@ export function ContentFindBar({ containerRef, onClose, resetKey, highlightName 
       else apply(result);
       return () => { abort.abort(); if (searchAbortRef.current === abort) searchAbortRef.current = null; };
     }
+    // A spreadsheet counts its own data (every cell, drawn or not); everything else counts what is in the page.
+    const sheet = HL === 'artifact-find' ? getSheetFind() : null;
+    const sheetCount = sheet && query ? sheet.search(query) : 0;
     const root = containerRef.current;
-    if (!root || !highlightsSupported()) { rangesRef.current = []; setCount(0); return; }
+    if (!root || !highlightsSupported()) { rangesRef.current = []; setCount(sheet ? sheetCount : 0); return; }
     const ranges = computeRanges(root, query);
     rangesRef.current = ranges;
     walkedAtRef.current = mutationsRef.current;
-    setCount(ranges.length);
+    setCount(sheet ? sheetCount : ranges.length);
     setRangesVersion((v) => v + 1);
     if (ranges.length === 0) { clearHighlights(HL, HL_CURRENT); return; }
     const HighlightCtor = (window as any).Highlight;
     (CSS as any).highlights.set(HL, new HighlightCtor(...ranges));
-  }, [query, resetKey, walkKey, containerRef, HL, HL_CURRENT]);
+  }, [query, resetKey, walkKey, adapterVersion, containerRef, HL, HL_CURRENT]);
 
   // WHY: the source hit may be folded. Hold exactly one pin until navigation or
   // unmount, then validate the committed body before painting a real DOM Range.
@@ -341,9 +344,27 @@ export function ContentFindBar({ containerRef, onClose, resetKey, highlightName 
     return () => { abort.abort(); settleCleanup?.(); release(); clearHighlights(HL, HL_CURRENT); };
   }, [current, query, rangesVersion, pending, HL, HL_CURRENT, containerRef, scrollRef]);
 
+  // Spreadsheet: go to match number `current` (the sheet scrolls there), mark it, and re-mark everything drawn now.
+  // Depends on the count, not on the walked ranges, so re-marking after the scroll cannot loop back here.
+  useEffect(() => {
+    const sheet = HL === 'artifact-find' ? getSheetFind() : null;
+    if (!sheet || !query || count === 0 || !highlightsSupported()) return undefined;
+    let live = true;
+    void sheet.reveal(((current % count) + count) % count).then((td) => {
+      if (!live || !td) return;
+      const Ctor = (window as any).Highlight;
+      const root = containerRef.current;
+      const mine = computeRanges(td, query);
+      if (root) (CSS as any).highlights.set(HL, new Ctor(...computeRanges(root, query)));
+      if (mine.length) (CSS as any).highlights.set(HL_CURRENT, new Ctor(mine[0]));
+    });
+    return () => { live = false; };
+  }, [current, query, count, adapterVersion, HL, HL_CURRENT, containerRef]);
+
   // Paint the current match and scroll it into view if it's off-screen.
   useEffect(() => {
     if (chatFindRef.current) return;
+    if (HL === 'artifact-find' && getSheetFind()) return; // the effect above does this for sheets
     const ranges = rangesRef.current;
     if (ranges.length === 0 || !highlightsSupported()) return;
     // Never paint from ranges the content has outgrown. In practice the walk

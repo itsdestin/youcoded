@@ -35,7 +35,7 @@ export function prefixSums(sizes: number[]): number[] {
 }
 
 /** The index of the item that contains `pos` (clamped to the first / last item). */
-function indexAt(offsets: number[], pos: number): number {
+export function indexAt(offsets: number[], pos: number): number {
   const n = offsets.length - 1;
   if (n <= 0) return 0;
   let lo = 0, hi = n - 1;
@@ -79,6 +79,9 @@ export function expandForMerges(win: Win, merges: MergeBox[]): Win {
   for (let changed = true; changed;) {
     changed = false;
     for (const m of merges) {
+      // A merge too big to draw whole (a sheet-wide one) is not grown to: its cell is drawn clipped to what is
+      // drawn (see planGrid) instead of forcing the whole sheet into the page.
+      if ((m.r1 - m.r0 + 1) * (m.c1 - m.c0 + 1) > MAX_CLOSURE_AREA) continue;
       if (m.r1 < r0 || m.r0 > r1 || m.c1 < c0 || m.c0 > c1) continue; // does not touch the window
       if (m.r0 < r0) { r0 = m.r0; changed = true; }
       if (m.r1 > r1) { r1 = m.r1; changed = true; }
@@ -88,6 +91,9 @@ export function expandForMerges(win: Win, merges: MergeBox[]): Win {
   }
   return { r0, r1, c0, c1 };
 }
+
+/** Merges larger than this many cells are never drawn whole just because the window touches them. */
+const MAX_CLOSURE_AREA = 4000;
 
 /** One piece of a drawn row, left to right: blank space for `span` columns, or a real cell. */
 export type RowItem =
@@ -105,7 +111,7 @@ export interface MergeIndex {
   covered: Set<number>;
 }
 const KEY = 4096; // > any column count (the viewers cap at 100)
-const keyOf = (r: number, c: number) => r * KEY + c;
+export const keyOf = (r: number, c: number) => r * KEY + c;
 
 export function indexMerges(merges: MergeBox[]): MergeIndex {
   const masters = new Map<number, MergeBox>();
@@ -119,21 +125,56 @@ export function indexMerges(merges: MergeBox[]): MergeIndex {
   return { masters, covered };
 }
 
+/** The spans a merged cell is actually drawn with, and the slots (key r*KEY+c) it reserves besides its own. */
+interface Reserved { spans: Map<number, { rs: number; cs: number }>; covered: Set<number> }
+
+/**
+ * Decide, for every merged cell whose top-left is drawn, how much of it is drawn: as many consecutive drawn
+ * rows and columns as are really there (all of it when the window holds the whole merge, which is the usual
+ * case; a clipped part for a pinned row far from the window or a sheet-wide merge). WHY (review fix 1,
+ * 2026-10-04): a covered cell used to be skipped whenever its merge existed, so when the merge's top-left was
+ * NOT drawn (a pinned row below it) nothing held its slot and every later cell in the row slid one column left
+ * under the wrong letter. Now a slot is skipped only when a DRAWN merged cell really reserves it.
+ */
+function reserveMerges(rowCols: Map<number, number[]>, idx: MergeIndex): Reserved {
+  const spans = new Map<number, { rs: number; cs: number }>();
+  const covered = new Set<number>();
+  if (!idx.masters.size) return { spans, covered };
+  const colSets = new Map<number, Set<number>>();
+  const setOf = (r: number) => colSets.get(r) ?? colSets.set(r, new Set(rowCols.get(r))).get(r)!;
+  for (const [r, cols] of rowCols) {
+    for (const c of cols) {
+      const box = idx.masters.get(keyOf(r, c));
+      if (!box) continue;
+      const here = setOf(r);
+      let cs = 1;
+      while (c + cs <= box.c1 && here.has(c + cs)) cs++;
+      let rs = 1;
+      outer: while (r + rs <= box.r1 && rowCols.has(r + rs)) {
+        const below = setOf(r + rs);
+        for (let k = 0; k < cs; k++) if (!below.has(c + k)) break outer;
+        rs++;
+      }
+      spans.set(keyOf(r, c), { rs, cs });
+      for (let i = 0; i < rs; i++) for (let j = 0; j < cs; j++) if (i || j) covered.add(keyOf(r + i, c + j));
+    }
+  }
+  return { spans, covered };
+}
+
 /** Walk one row's included columns left to right, filling skipped stretches with gaps. */
-function rowItems(r: number, cols: number[], colCount: number, idx: MergeIndex): RowItem[] {
+function rowItems(r: number, cols: number[], colCount: number, res: Reserved): RowItem[] {
   const items: RowItem[] = [];
   let cursor = 0; // the next column slot not yet accounted for
   for (const c of cols) {
     if (c < cursor) continue; // already inside a wide merged cell drawn earlier in this row
     if (c > cursor) items.push({ kind: 'gap', span: c - cursor });
     cursor = c;
-    // Covered by a merged cell: the browser reserves its slot (a tall merge reaching down from a row above) or
-    // we already drew it (a wide merge reaching right), so nothing is drawn for this slot.
-    if (idx.covered.has(keyOf(r, c))) { cursor = c + 1; continue; }
-    const box = idx.masters.get(keyOf(r, c));
-    const colSpan = box ? box.c1 - box.c0 + 1 : 1;
-    items.push({ kind: 'cell', c, colSpan, rowSpan: box ? box.r1 - box.r0 + 1 : 1 });
-    cursor = c + colSpan;
+    // Held by a drawn merged cell (reaching down from a row above): the browser reserves the slot.
+    if (res.covered.has(keyOf(r, c))) { cursor = c + 1; continue; }
+    const span = res.spans.get(keyOf(r, c));
+    items.push({ kind: 'cell', c, colSpan: span?.cs ?? 1, rowSpan: span?.rs ?? 1 });
+    cursor = c + (span?.cs ?? 1);
   }
   if (cursor < colCount) items.push({ kind: 'gap', span: colCount - cursor });
   return items;
@@ -141,32 +182,22 @@ function rowItems(r: number, cols: number[], colCount: number, idx: MergeIndex):
 
 /**
  * What to draw: the window's rows and columns, PLUS any `pins` (cells that must exist in the page even when
- * scrolled far away — a spreadsheet cell with a comment, because the comment highlighter finds its cell by
- * looking in the page). Everything else is blank space of the right size, so the scrollbar and every drawn
+ * scrolled far away — a spreadsheet cell with a comment or a Find match, because the highlighter finds its cell
+ * by looking in the page). Everything else is blank space of the right size, so the scrollbar and every drawn
  * cell stay exactly where a fully drawn sheet would have put them.
  */
 export function planGrid(args: {
   win: Win; rowCount: number; colCount: number; rowOffsets: number[];
   merges: MergeBox[]; mergeIndex: MergeIndex; pins: ReadonlyArray<readonly [number, number]>;
 }): GridPiece[] {
-  const { win, rowCount, colCount, rowOffsets, merges, mergeIndex, pins } = args;
-  // Pinned cells outside the window: remember, per row, which extra columns to draw. A pinned merged cell brings
-  // its whole box (same reason as expandForMerges); an absurdly large box is skipped rather than drawn.
+  const { win, rowCount, colCount, rowOffsets, mergeIndex, pins } = args;
   const extra = new Map<number, Set<number>>();
-  const addExtra = (r: number, c: number) => {
-    if (r < 0 || r >= rowCount || c < 0 || c >= colCount) return;
-    if (r >= win.r0 && r <= win.r1 && c >= win.c0 && c <= win.c1) return;
-    (extra.get(r) ?? extra.set(r, new Set()).get(r)!).add(c);
-  };
   for (const [r, c] of pins) {
     if (r < 0 || r >= rowCount || c < 0 || c >= colCount) continue;
-    if (mergeIndex.covered.has(keyOf(r, c))) continue; // a covered cell is not drawn at all, as before
-    const box = mergeIndex.masters.get(keyOf(r, c));
-    if (box && (box.r1 - box.r0 + 1) * (box.c1 - box.c0 + 1) > 2000) continue;
-    if (!box) { addExtra(r, c); continue; }
-    for (let rr = box.r0; rr <= box.r1; rr++) for (let cc = box.c0; cc <= box.c1; cc++) addExtra(rr, cc);
+    if (r >= win.r0 && r <= win.r1 && c >= win.c0 && c <= win.c1) continue;
+    if (mergeIndex.covered.has(keyOf(r, c))) continue; // a covered cell holds no text of its own
+    (extra.get(r) ?? extra.set(r, new Set()).get(r)!).add(c);
   }
-  void merges;
 
   const winCols: number[] = [];
   for (let c = win.c0; c <= win.c1; c++) winCols.push(c);
@@ -174,14 +205,18 @@ export function planGrid(args: {
   const rows = new Set<number>(extra.keys());
   for (let r = win.r0; r <= win.r1; r++) rows.add(r);
   const sorted = [...rows].sort((a, b) => a - b);
+  const rowCols = new Map<number, number[]>();
+  for (const r of sorted) {
+    const ex = extra.get(r);
+    rowCols.set(r, ex ? [...new Set([...winCols, ...ex])].sort((a, b) => a - b) : winCols);
+  }
+  const res = reserveMerges(rowCols, mergeIndex);
 
   const pieces: GridPiece[] = [];
   let next = 0; // the next row index not yet accounted for (drawn or blank)
   for (const r of sorted) {
     if (r > next) pieces.push({ kind: 'gap', height: rowOffsets[r] - rowOffsets[next] });
-    const ex = extra.get(r);
-    const cols = ex ? [...new Set([...winCols, ...ex])].sort((a, b) => a - b) : winCols;
-    pieces.push({ kind: 'row', r, items: rowItems(r, cols, colCount, mergeIndex) });
+    pieces.push({ kind: 'row', r, items: rowItems(r, rowCols.get(r)!, colCount, res) });
     next = r + 1;
   }
   if (next < rowCount) pieces.push({ kind: 'gap', height: rowOffsets[rowCount] - rowOffsets[next] });

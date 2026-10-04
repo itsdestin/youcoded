@@ -9,7 +9,8 @@ import { render, cleanup, fireEvent, act } from '@testing-library/react';
 import { Workbook } from 'exceljs';
 import { CsvView, csvColumnWidths } from '../src/renderer/components/artifact-views/CsvView';
 import { ContentFindBar } from '../src/renderer/components/ContentFindBar';
-import { MAX_FIND_CELLS, getFindQueryForTest, publishFindQuery } from '../src/renderer/components/artifact-views/artifact-find-bridge';
+import { getSheetFind } from '../src/renderer/components/artifact-views/artifact-find-bridge';
+import { formatCellNumber } from '../src/renderer/components/artifact-views/exceljs-cell';
 import { SheetGrid } from '../src/renderer/components/artifact-views/SheetGrid';
 import { buildSheet } from '../src/renderer/components/artifact-views/XlsxView';
 import {
@@ -204,52 +205,3 @@ describe('XLSX viewer model', () => {
 });
 
 
-// Ctrl+F searches the page's text. A sheet draws only what is visible, so matches far away must be kept in the
-// page for the find bar to count and reach them.
-describe('find-in-document still reaches every part of a big sheet', () => {
-  afterEach(() => act(() => publishFindQuery('')));
-
-  it('a match far below the visible rows is put in the page, and leaves again when the search is cleared', () => {
-    const { container } = render(<CsvView {...csvProps(bigCsv(2000, 100))} />);
-    expect(container.querySelector('td[data-r="1500"][data-c="60"]')).toBeNull();
-    act(() => publishFindQuery('R1500C60'));            // case does not matter
-    expect(container.querySelector('td[data-r="1500"][data-c="60"]')?.textContent).toBe('r1500c60');
-    expect(cellCount(container)).toBeLessThan(DRAWN_BOUND);
-    act(() => publishFindQuery(''));
-    expect(container.querySelector('td[data-r="1500"][data-c="60"]')).toBeNull();
-  });
-
-  it('a search matching thousands of cells keeps only the first batch, in reading order, in the page', () => {
-    const { container } = render(<CsvView {...csvProps(bigCsv(2000, 100))} />);
-    act(() => publishFindQuery('r1'));   // matches ~half the sheet
-    expect(cellCount(container)).toBeLessThan(DRAWN_BOUND + 300 * 30);
-    // the reachable matches are the first ones (top of the sheet), not an arbitrary spread
-    const rows = [...drawnRows(container)].map(Number);
-    expect(Math.max(...rows)).toBeLessThan(400);
-  });
-
-  it('XLSX: finds cells by their text anywhere in the workbook', async () => {
-    const wb = new Workbook(); const ws = wb.addWorksheet('Data');
-    for (let r = 1; r <= 2000; r++) ws.addRow(Array.from({ length: 30 }, (_, c) => `v${r}-${c}`));
-    const sheet = buildSheet(ws);
-    expect(sheet.model.findCells('v1500-7', MAX_FIND_CELLS)).toEqual([[1499, 7]]);
-    expect(sheet.model.findCells('v1-', 5)).toHaveLength(5); // capped
-    expect(sheet.model.findCells('no such text', 5)).toEqual([]);
-  });
-
-  it('the find bar publishes what is typed, and "" when it closes', () => {
-    const ref = { current: document.createElement('div') };
-    const { getByLabelText, unmount } = render(<ContentFindBar containerRef={ref} onClose={() => {}} resetKey="a" />);
-    fireEvent.change(getByLabelText('Find in document'), { target: { value: 'abc' } });
-    expect(getFindQueryForTest()).toBe('abc');
-    unmount();
-    expect(getFindQueryForTest()).toBe('');
-  });
-
-  it('the chat timeline\'s find bar does not publish (its search is its own)', () => {
-    const ref = { current: document.createElement('div') };
-    const { getByLabelText } = render(<ContentFindBar containerRef={ref} onClose={() => {}} resetKey="a" highlightName="chat-find" placeholder="Find in chat" />);
-    fireEvent.change(getByLabelText('Find in chat'), { target: { value: 'zzz' } });
-    expect(getFindQueryForTest()).toBe('');
-  });
-});

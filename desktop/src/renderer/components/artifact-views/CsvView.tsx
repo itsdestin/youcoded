@@ -4,13 +4,14 @@
 // grid so it reads like a sheet rather than a table floating in whitespace.
 // CSV is TEXT — content arrives via the host's artifacts.get read (the same
 // `content` prop MarkdownView/CodeView use); no binary IPC involved.
-import { useCallback, useDeferredValue, useEffect, useMemo, useState, CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, CSSProperties } from 'react';
 import type { ArtifactViewProps } from './types';
 import { detectDelimiter, parseDelimited } from './csv-parse';
 import { PAPER, GRID, NOTE_FG, NOTE_BG, largeSheetNote } from './sheet-theme';
-import { SheetGrid, type GridCell, type Selection, type SheetGridModel } from './SheetGrid';
+import { SheetGrid, type GridCell, type Selection, type SheetGridHandle, type SheetGridModel } from './SheetGrid';
 import { ROW_H } from './sheet-window';
-import { MAX_FIND_CELLS, requestFindRewalk, useArtifactFindQuery } from './artifact-find-bridge';
+import { ColumnFitter } from './sheet-measure';
+import { registerSheetFind, requestFindRewalk } from './artifact-find-bridge';
 
 const MAX_ROWS = 2000;
 // Safety cap — matches XlsxView (XlsxView.tsx:14-15). CSV rows have no upper
@@ -24,18 +25,14 @@ const MIN_COLS = 26; // A … Z
 
 // Column widths. WHY computed up front (Fix 2, 2026-10-04): the grid draws only the visible columns, so every
 // column's width has to be known without drawing it. The old table let each column grow to fit its widest cell
-// (between 110 and 300 px); this reproduces that from the text length (about 7.2 px a character at 13 px, plus
-// the cell's padding), so columns come out as wide as before to within a few pixels.
+// (between 110 and 300 px); this measures the widest-looking text of each column (sheet-measure.ts) to match,
+// and a right-aligned number is never cut short.
 const MIN_COL_W = 110;
 const MAX_COL_W = 300;
-const CHAR_PX = 7.2;
-const CELL_PAD_PX = 18;
 export function csvColumnWidths(rows: string[][], colCount: number): number[] {
-  const longest = new Array<number>(colCount).fill(0);
-  for (const row of rows) {
-    for (let c = 0; c < row.length; c++) if (row[c].length > longest[c]) longest[c] = row[c].length;
-  }
-  return longest.map((len) => Math.max(MIN_COL_W, Math.min(MAX_COL_W, Math.ceil(len * CHAR_PX + CELL_PAD_PX))));
+  const fit = new ColumnFitter(colCount);
+  for (const row of rows) for (let c = 0; c < row.length; c++) fit.observe(c, row[c], isNumeric(row[c]));
+  return Array.from({ length: colCount }, (_, c) => fit.width(c, MIN_COL_W, MAX_COL_W));
 }
 
 // Right-align numeric cells like a real sheet.
@@ -61,12 +58,14 @@ export function CsvView({ path, content }: ArtifactViewProps) {
     // Lower-cased once, on the first search (not on open): 200,000 short strings.
     let lower: string[][] | null = null;
     const model: SheetGridModel = {
-      findCells: (q, cap) => {
+      usedRows: used.length, usedCols,
+      text: (r, c) => used[r]?.[c] ?? '',
+      findCells: (q) => {
         lower ??= used.map((row) => row.map((v) => v.toLowerCase()));
         const out: Array<[number, number]> = [];
-        for (let r = 0; r < lower.length && out.length < cap; r++) {
+        for (let r = 0; r < lower.length; r++) {
           const row = lower[r];
-          for (let c = 0; c < row.length && out.length < cap; c++) if (row[c].includes(q)) out.push([r, c]);
+          for (let c = 0; c < row.length; c++) if (row[c].includes(q)) out.push([r, c]);
         }
         return out;
       },
@@ -98,12 +97,19 @@ export function CsvView({ path, content }: ArtifactViewProps) {
 
   const select = useCallback((r: number, c: number) => setSel({ r, c }), []);
 
-  // Ctrl+F: keep the cells that match what is typed in the page, so the find bar can count and reach them even
-  // when they are far from what is on screen (artifact-find-bridge.ts), then ask it to look again.
-  // deferred so typing stays responsive while a big sheet is searched
-  const findQuery = useDeferredValue(useArtifactFindQuery());
-  const pins = useMemo(() => (grid && findQuery ? grid.model.findCells(findQuery.toLowerCase(), MAX_FIND_CELLS) : []), [grid, findQuery]);
-  useEffect(() => { if (findQuery) requestFindRewalk(); }, [pins, findQuery]);
+  // Ctrl+F: the find bar counts matches in the DATA (so the total is true wherever you are scrolled) and asks the
+  // grid to scroll to match N (artifact-find-bridge.ts).
+  const gridRef = useRef<SheetGridHandle>(null);
+  useEffect(() => {
+    if (!grid) return undefined;
+    let q = '', matches: Array<[number, number]> = [];
+    const off = registerSheetFind({
+      search: (query) => { const lq = query.toLowerCase(); if (lq !== q) { q = lq; matches = grid.model.findCells(lq); } return matches.length; },
+      reveal: (i) => { const m = matches[i]; return m && gridRef.current ? gridRef.current.reveal(m[0], m[1]) : Promise.resolve(null); },
+    });
+    requestFindRewalk();
+    return off;
+  }, [grid]);
 
   if (!grid) return <div className="flex items-center justify-center h-full text-fg-muted text-sm p-4">Loading…</div>;
 
@@ -113,7 +119,7 @@ export function CsvView({ path, content }: ArtifactViewProps) {
         model={grid.model}
         sel={sel}
         onSelect={select}
-        pins={pins}
+        ref={gridRef}
         footer={grid.truncated && (
           // Same wording XlsxView shows for its own row/column cap (one shared
           // function), so the two spreadsheet-style viewers read as one behavior.

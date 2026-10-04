@@ -1,44 +1,40 @@
 // artifact-find-bridge — lets the spreadsheet viewers take part in Ctrl+F find-in-document.
 //
-// WHY (Fix 2, 2026-10-04): the find bar (ContentFindBar) searches the page's own text, which was every cell of a
-// sheet. Sheets now draw only the visible cells, so a match far down would not be in the page at all. The bar
-// publishes what is typed; a sheet viewer reads it, keeps the matching cells in the page (SheetGrid `pins`), and
-// asks the bar to look again once they are there. The bar needs no other change and every other viewer is
-// untouched: if nothing reads the query, nothing happens.
-import { useSyncExternalStore } from 'react';
+// WHY (Fix 2 + review fix 3, 2026-10-04): the find bar (ContentFindBar) searches the page's own text, which was
+// every cell of a sheet. Sheets now draw only the visible cells, so a match far down is not in the page. A sheet
+// viewer registers a FIND ADAPTER here: the bar asks it for the TRUE number of matching cells (searched in the
+// sheet's data, never in what happens to be drawn, so the answer does not depend on scrolling), and for
+// "match number N" the sheet scrolls there and hands back the drawn cell. Every other viewer registers nothing and
+// the bar behaves exactly as before.
 
-let query = '';
-const queryListeners = new Set<() => void>();
+export interface SheetFindAdapter {
+  /** How many cells contain `query` (case-insensitive), in reading order. Same query, same answer, always. */
+  search(query: string): number;
+  /** Scroll to match number `index` (0-based, < the count last returned) and resolve with its drawn <td>. */
+  reveal(index: number): Promise<HTMLElement | null>;
+}
+
+let adapter: SheetFindAdapter | null = null;
 const rewalkListeners = new Set<() => void>();
+const adapterListeners = new Set<() => void>();
 
-/** The bar says what is typed ('' when it closes). Only the artifact viewer's bar publishes — not the chat's. */
-export function publishFindQuery(q: string): void {
-  if (q === query) return;
-  query = q;
-  queryListeners.forEach((l) => l());
+export function registerSheetFind(a: SheetFindAdapter): () => void {
+  adapter = a;
+  adapterListeners.forEach((l) => l());
+  return () => { if (adapter === a) { adapter = null; adapterListeners.forEach((l) => l()); } };
+}
+export const getSheetFind = (): SheetFindAdapter | null => adapter;
+/** The bar re-reads the adapter when a viewer registers or leaves (another tab, another file). */
+export function onSheetFindChange(l: () => void): () => void {
+  adapterListeners.add(l);
+  return () => { adapterListeners.delete(l); };
 }
 
-export function useArtifactFindQuery(): string {
-  return useSyncExternalStore(
-    (l) => { queryListeners.add(l); return () => { queryListeners.delete(l); }; },
-    () => query,
-    () => '',
-  );
-}
-
-/** A sheet put its matching cells in the page: the bar should count and highlight again. */
+/** The sheet changed under an open search (a tab switch): the bar should count and highlight again. */
 export function requestFindRewalk(): void {
   rewalkListeners.forEach((l) => l());
 }
-
 export function onFindRewalk(l: () => void): () => void {
   rewalkListeners.add(l);
   return () => { rewalkListeners.delete(l); };
 }
-
-/** Most matching cells a sheet keeps in the page for one search. A search can match thousands of cells; each one
- *  kept costs a cell (and its row) in the page, so the first this many in reading order are reachable. */
-export const MAX_FIND_CELLS = 300;
-
-/** Tests only: read the published query without a React hook. */
-export const getFindQueryForTest = () => query;
