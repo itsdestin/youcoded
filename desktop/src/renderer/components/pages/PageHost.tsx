@@ -42,7 +42,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useArtifactSelector, useArtifactDispatch } from '../../state/ArtifactContext';
 import { useDismissTop, useEscClose } from '../../hooks/use-esc-close';
-import { workbenchScreenFrame } from '../../workbench-mode';
+import { isWorkbenchDocument, workbenchScreenFrame } from '../../workbench-mode';
 import { Button, LoadingState, ErrorState, Tooltip } from '../ui';
 import { ScreenBand } from '../ScreenBand';
 import type { PageDocument, PageFetchRequest, PageFetchResult, PageLoadFailure, PageSummary, PagesBridge } from '../../../shared/pages-types';
@@ -118,6 +118,14 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // closed by Esc with the page focused — Destin, 2026-09-17.)
   const dismissTop = useDismissTop();
   const { pages, loaded, failed, pinnedTotal } = usePages();
+  // Practice app only (workbench / landing demo, never the real app): `?openPage=<id>` opens that
+  // page at start. WHY: a review deck's live pane must land straight on a page's design option
+  // (`pagesHome=v-…`) for Destin to operate, not on the chat two clicks away.
+  useEffect(() => {
+    if (!isWorkbenchDocument()) return;
+    const id = new URLSearchParams(location.search).get('openPage');
+    if (id) dispatch({ type: 'PAGE_OPENED', pageId: id });
+  }, [dispatch]);
   // Photo-only build: `shoot` opens a page by id, in the panel or focused (the pinned-button view).
   const pageIds = pages.map((p) => p.id);
   useScreenOpen('pages/page', (id) => { if (id) dispatch({ type: 'PAGE_OPENED', pageId: id }); }, pageIds);

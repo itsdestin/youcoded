@@ -502,6 +502,7 @@ import { seedPages } from './fixtures/pages';
 import { fakeCameraDeps } from './fixtures/fake-camera';
 import { fakeHomeAssistantFetch, fakeHomeAssistantIds, fakeHomeAssistantLive, fakeHomeAssistantNestSignedIn, fakeHomeAssistantSocket } from './fixtures/fake-home-assistant';
 import { withHomeMockup } from './fixtures/home-assistant-mockups';
+import { findHomeVariant, withHomeVariant } from './fixtures/home-variants/registry';
 import { OFFICE_EDITOR_ORIGIN, OFFICE_FILES, officeFixtureName, officeSampleUrl } from './fixtures/office';
 import { OFFICE_PAGE_SUMMARY } from '../../../shared/pages-types';
 import type { OfficeBridge, OfficeVersion } from '../../../shared/office-types';
@@ -3759,14 +3760,17 @@ function createPagesMock(empty: boolean): PagesBridge {
   // `camera`: only the cameras, so the camera card (recent events, Watch live)
   // is the whole picture instead of something far down a long page.
   const onlyCameras = homeView === 'camera';
+  // `v-<task>-<key>`: one redesign option (fixtures/home-variants/), on the
+  // connected page, starting from the option's own saved data if it has any.
+  const variant = homeView && homeView.startsWith('v-') ? findHomeVariant(homeView.slice(2)) : null;
   if (onlyCameras) fakeHomeAssistantNestSignedIn(true); // events need the Nest account working
-  if (onlyCameras || homeView === 'connected' || homeView === 'edit' || homeView === 'remote' || homeView === 'group' || homeView === 'device' || chipView || homeView === 'settings' || chipStyle || mockup) {
+  if (onlyCameras || homeView === 'connected' || homeView === 'edit' || homeView === 'remote' || homeView === 'group' || homeView === 'device' || chipView || homeView === 'settings' || chipStyle || mockup || variant) {
     pages = pages.map((p) => (p.id !== 'page-home' ? p : {
       ...p,
-      ...(mockup ? { html: withHomeMockup(p.html, mockup) } : {}),
+      ...(mockup ? { html: withHomeMockup(p.html, mockup) } : variant ? { html: withHomeVariant(p.html, variant) } : {}),
       connections: (p.connections ?? []).map((c) => (c.kind === 'device' ? { ...c, address: '100.99.234.114:8123', approved: true, savedKey: true } : c)),
       refresh: { at: new Date().toISOString(), failed: false },
-      data: onlyCameras ? { hidden: fakeHomeAssistantIds().filter((id) => !id.startsWith('camera.')), open: [] } : homeView === 'group' ? { groupOpen: ['media_player.destins_room'] } : homeView === 'device' ? { dlg: 'light.living_room_lamp' } : mockup ? { open: mockup.startsWith('device') ? ['living_room'] : [] } : chipStyle ? { chipStyle, open: ['destins_room'] } : chipView ? { view: chipView, scenesOpen: ['destins_room'] } : homeView === 'settings' ? { settingsOpen: true } : homeView === 'remote' ? { remote: ['remote.destins_room_tv_remote'] } : {
+      data: variant?.data ? variant.data : onlyCameras ? { hidden: fakeHomeAssistantIds().filter((id) => !id.startsWith('camera.')), open: [] } : homeView === 'group' ? { groupOpen: ['media_player.destins_room'] } : homeView === 'device' ? { dlg: 'light.living_room_lamp' } : mockup ? { open: mockup.startsWith('device') ? ['living_room'] : [] } : chipStyle ? { chipStyle, open: ['destins_room'] } : chipView ? { view: chipView, scenesOpen: ['destins_room'] } : homeView === 'settings' ? { settingsOpen: true } : homeView === 'remote' ? { remote: ['remote.destins_room_tv_remote'] } : {
         open: ['destins_room'], expanded: ['light.desk_backlight'],
         fav: ['light.living_room_lamp', 'climate.thermostat'],
         ...(homeView === 'edit' ? { editing: true } : {}),

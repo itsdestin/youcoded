@@ -1002,6 +1002,8 @@ function homeAssistantPageHtml(): string {
     if (drawn[id] === html) return;
     drawn[id] = html;
     mediaHold(); $(id).innerHTML = html; mediaBack(); // a playing clip / live canvas survives the redraw
+    // Redesign options in the practice app hook each redraw (fixtures/home-variants/).
+    if (window.__homeAfterPut) window.__homeAfterPut(id);
   }
   // A chip's page (round 4, Q-chip-tap: "an organized page dedicated to
   // optimal ux for managing the selected item"). It replaces the rooms

@@ -2,6 +2,7 @@
 // focused view a pinned button opens, the library over it, and its dialogs. The
 // connection pages open on their approval step — nothing in a page runs before a yes.
 import type { ScreenEntry } from './types';
+import { homeVariantKeys } from '../fixtures/home-variants/registry';
 
 const pg = (name: string, ...tags: string[]): ScreenEntry => ({ name, tags: ['pages', ...tags] });
 const PHONE = { width: 390, height: 844 };
@@ -37,6 +38,9 @@ export const PAGES: readonly ScreenEntry[] = [
   { ...pg('pages/page/page-home#chips-pills', 'view'), params: { pagesHome: 'chips-pills' } },
   { ...pg('pages/page/page-home#chips-sentence', 'view'), params: { pagesHome: 'chips-sentence' } },
   { ...pg('pages/page/page-home#chips-tiles', 'view'), params: { pagesHome: 'chips-tiles' } },
+  // Redesign options, one screen each (fixtures/home-variants/), listed from the registry so
+  // a helper adding an option never edits this file.
+  ...homeVariantKeys().map((k) => ({ ...pg(`pages/page/page-home#v-${k}`, 'view', 'redesign'), params: { pagesHome: `v-${k}` } })),
   { ...pg('pages/page/page-home#mock-device-inplace', 'view'), params: { pagesHome: 'mock-device-inplace' } },
   { ...pg('pages/page/page-home#mock-device-popup', 'view'), params: { pagesHome: 'mock-device-popup' } },
   { ...pg('pages/page/page-home#mock-device-panel', 'view'), params: { pagesHome: 'mock-device-panel' } },
