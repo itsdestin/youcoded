@@ -271,7 +271,7 @@ describe('addNativeXlsxComment / replyToNativeXlsxComment / etc. — gated the s
       author: 'user',
     });
     expect(added.ok).toBe(true);
-    if (!added.ok) return;
+    if (!added.ok || !('id' in added)) return;
     const id = added.id;
 
     // Review leftover (a): reply is now enriched with the persisted

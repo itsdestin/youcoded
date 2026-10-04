@@ -1391,6 +1391,79 @@ describe('git:* IPC parity (git surface)', () => {
   });
 });
 
+// Office (build plan Task 5): real on desktop, refused on the remote client and the phone.
+// Each surface must carry every channel — preload so the desktop can call it, remote-shim so
+// a remote call is refused rather than being "not a function", office-ipc so main answers,
+// and SessionService.kt so the phone answers unsupported at once instead of hanging.
+describe('office:* channel parity', () => {
+  const preload = readSourceFile(path.join(__dirname, '../src/main/preload.ts'));
+  const shim = readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts'));
+  const handlers = readSourceFile(path.join(__dirname, '../src/main/office/office-ipc.ts'));
+  const unsupported = readSourceFile(path.join(__dirname, '../src/renderer/remote-unsupported.ts'));
+  const kotlinPath = path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt');
+  const kotlin = fs.existsSync(kotlinPath) ? readSourceFile(kotlinPath) : null;
+
+  const channels = [
+    'office:status', 'office:create', 'office:pick', 'office:open',
+    'office:invoke', 'office:close', 'office:versions', 'office:restore', 'office:save-copy',
+    // main → renderer push after a restore (desktop sends it; the other hosts never do).
+    'office:changed',
+  ];
+
+  for (const ch of channels) {
+    it(`${ch} is carried by preload, remote-shim and the main-process handlers`, () => {
+      expect(preload).toContain(`'${ch}'`);
+      expect(shim).toContain(`'${ch}'`);
+      expect(handlers).toContain(`'${ch}'`);
+    });
+    it(`${ch} has an Android not-implemented-on-mobile stub`, () => {
+      if (kotlin) expect(kotlin).toContain(`"${ch}"`);
+    });
+  }
+
+  it('a refused office call is named Office, not by its channel id', () => {
+    expect(unsupported).toContain(`'office:'`);
+  });
+
+  // The quit prompt for unsaved files (main/unsaved-quit.ts): a main→renderer push and its
+  // replies, desktop only. The remote client and the phone have no quit of their own to hold.
+  it('the unsaved-files quit prompt is carried by preload and main, and by no other host', () => {
+    const gate = readSourceFile(path.join(__dirname, '../src/main/unsaved-quit.ts'));
+    for (const ch of ['office:unsaved-prompt', 'office:proceed', 'office:other-unsaved', 'office:dismiss']) {
+      expect(preload).toContain(`'${ch}'`);
+      expect(gate).toContain(`'${ch}'`);
+      expect(shim).not.toContain(`'${ch}'`);
+      if (kotlin) expect(kotlin).not.toContain(`"${ch}"`);
+    }
+  });
+
+  // A closing window asks its editors to journal their newest edits (and start saving any unsaved
+  // ones) before it goes: main asks, the window answers. Desktop only, like the quit prompt.
+  it('the journal-before-close handshake is carried by preload and main, and by no other host', () => {
+    const sync = readSourceFile(path.join(__dirname, '../src/main/office/office-journal-sync.ts'));
+    for (const ch of ['office:journal-request', 'office:journal-done']) {
+      expect(preload).toContain(`'${ch}'`);
+      expect(sync).toContain(`'${ch}'`);
+      expect(shim).not.toContain(`'${ch}'`);
+      if (kotlin) expect(kotlin).not.toContain(`"${ch}"`);
+    }
+  });
+
+  // Comments on an open document go through its editor: main asks the window, the window answers
+  // and says when a comment changed. Like the quit prompt, desktop only — the remote
+  // client and the phone have no Office editors to ask.
+  it('the live-comments handshake is carried by preload and main, and by no other host', () => {
+    const comments = readSourceFile(path.join(__dirname, '../src/main/office/office-comments.ts'));
+    for (const ch of ['office:comments-request', 'office:comments-answer', 'office:comments-changed']) {
+      expect(preload).toContain(`'${ch}'`);
+      expect(comments).toContain(`'${ch}'`);
+      expect(shim).not.toContain(`'${ch}'`);
+      if (kotlin) expect(kotlin).not.toContain(`"${ch}"`);
+    }
+  });
+
+});
+
 // docComments:* IPC parity — T3/T4 of the doc-comments build (design
 // docs/active/specs/2026-09-26-doc-comments-build-design.md §1.6). T4 adds
 // the Android arm this block's own header used to say was deliberately

@@ -647,6 +647,12 @@ function textResult(text, isError) {
   return { content: [{ type: 'text', text: text }], isError: !!isError };
 }
 
+// Finish plan Task 6: the file is open in Office and its editor could not take the change yet
+// (still opening, or busy). The app keeps the change and makes it as soon as it can.
+function queuedText(path) {
+  return path + " is open in Office and its editor isn't ready yet. The change is queued and will be made as soon as it is.";
+}
+
 function formatOpError(name, result) {
   var detail = typeof result.error === 'string' ? result.error : 'unknown error';
   return textResult(name + ' failed: ' + detail, true);
@@ -678,6 +684,7 @@ function callTool(id, params) {
   } else if (name === 'ReplyToComment') {
     handler = (requireString(args, 'path') && requireString(args, 'commentId') && requireString(args, 'text'))
       ? replyToComment(args).then(function (r) {
+          if (r.ok && r.queued) return textResult(queuedText(args.path));
           if (!r.ok) return formatOpError('ReplyToComment', r);
           // A docx/xlsx reply's queue result MAY carry the persisted
           // CommentReply once docx-comments.ts's/xlsx-comments.ts's own reply
@@ -690,24 +697,28 @@ function callTool(id, params) {
   } else if (name === 'ResolveComment') {
     handler = (requireString(args, 'path') && requireString(args, 'commentId'))
       ? resolveComment(args).then(function (r) {
+          if (r.ok && r.queued) return textResult(queuedText(args.path));
           return r.ok ? textResult('Comment ' + args.commentId + ' on ' + args.path + ' marked resolved.') : formatOpError('ResolveComment', r);
         })
       : Promise.resolve(textResult('ResolveComment failed: path and commentId are required.', true));
   } else if (name === 'ReopenComment') {
     handler = (requireString(args, 'path') && requireString(args, 'commentId'))
       ? reopenComment(args).then(function (r) {
+          if (r.ok && r.queued) return textResult(queuedText(args.path));
           return r.ok ? textResult('Comment ' + args.commentId + ' on ' + args.path + ' reopened.') : formatOpError('ReopenComment', r);
         })
       : Promise.resolve(textResult('ReopenComment failed: path and commentId are required.', true));
   } else if (name === 'AddComment') {
     handler = (requireString(args, 'path') && args.selector && typeof args.selector === 'object' && requireString(args, 'text'))
       ? addComment(args).then(function (r) {
+          if (r.ok && r.queued) return textResult(queuedText(args.path));
           return r.ok ? textResult('Comment added to ' + args.path + ' (id: ' + r.id + ').') : formatOpError('AddComment', r);
         })
       : Promise.resolve(textResult('AddComment failed: path, selector and text are required.', true));
   } else if (name === 'MoveComment') {
     handler = (requireString(args, 'path') && requireString(args, 'commentId') && args.newSelector && typeof args.newSelector === 'object')
       ? moveComment(args).then(function (r) {
+          if (r.ok && r.queued) return textResult(queuedText(args.path));
           if (!r.ok) return formatOpError('MoveComment', r);
           // Code review 2026-09-27, desktop F1: an xlsx move's queue result
           // carries the FRESH id (its old id's embedded-cell hint goes stale

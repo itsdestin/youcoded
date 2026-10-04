@@ -61,6 +61,8 @@ import { EngineManager } from './engine/engine-manager';
 // machine, so it needs no manager instance.
 import type { EngineModel as EngineModelType } from '../shared/engine-types';
 import { ModelManager } from './models/model-manager';
+// WHY (2026-10-02): startSession makes sure Node is there before a Claude Code or Terminal session (setup no longer installs it for everyone).
+import { ensureNode } from './prerequisite-installer';
 import { firstRunStateDir, type FirstRunNativeDeps } from './first-run';
 import { clearSetupDownload, computeSetupDownloadStatus, readSetupDownload } from './first-run-local';
 import { SessionStore } from './harness/session-store';
@@ -605,6 +607,17 @@ export function registerIpcHandlers(
     await adminCapabilityReady();
     checkWindow();
     const opts = resolveNoFolderCwd(rawOpts, app.getPath('userData'));
+    // WHY (2026-10-02): setup no longer installs Node for everyone, and Claude
+    // Code and Terminal sessions run through it (the PTY worker). Usually the
+    // Claude sign-in already installed it; this is the safety net for anyone
+    // who reaches one of these sessions another way. Native chats skip it.
+    if (opts.provider !== 'native') {
+      const node = await ensureNode();
+      if (!node.success) {
+        throw new Error(`Node.js is needed for this kind of session and couldn't be installed: ${node.error}`);
+      }
+      checkWindow();
+    }
     // Snapshot BEFORE spawn: a fallback page can otherwise include new Claude Code turns.
     const resumeBoundary = opts.provider === 'claude' && opts.resumeSessionId
       ? snapshotResumeBoundary(opts.cwd, opts.resumeSessionId) : null;
@@ -2385,9 +2398,9 @@ export function registerIpcHandlers(
     deviceId: () => getMachineIdentity(app.getPath('userData'))?.id ?? null,
     localFallbackDir: () => app.getPath('userData'),
     noteOwnWrite,
-    // Phase 2: approvals and key POINTERS beside the model-provider keys in
-    // userData, never in a sync space — a key is machine-bound ciphertext.
-    connections: new PageConnectionsStore(app.getPath('userData'), secretsStore),
+    // Phase 2: approvals and key POINTERS beside the model-provider keys in userData, never a sync space (a key is machine-bound ciphertext).
+    // officeListed (WHY): the built-in Office page is listed, and pinnable, only where the add-on is installed (pages-store.ts).
+    connections: new PageConnectionsStore(app.getPath('userData'), secretsStore), officeListed: async () => (await import('./office/office-root')).officeAvailable(),
     // A FRESH reader per call, not a held instance: the fs-backed store caches
     // after its first load, so a long-lived one here would keep answering with
     // the token from before the person signed in or out.

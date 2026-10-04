@@ -31,7 +31,8 @@ import type { AssistantDefaults } from './assistant-settings/pages';
 import { formatVersionLine } from '../../shared/version-line';
 // The Linux/KDE buddy helper's three-state answer. Typed centrally so the popup
 // and the launch path in App.tsx cannot drift apart on what `needed` means.
-import type { BuddyHelperStatus } from '../../shared/types';
+import type { BuddyHelperStatus, BuddyStyle } from '../../shared/types';
+import { BuddyStyleRow, readBuddyStyle, saveBuddyStyle, trayPlaceName } from './BuddyStyleRow';
 // UiToggle is aliased because this file still exports its own `Toggle` (the
 // compat wrapper below) that AboutPopup imports by that name.
 import { Button, CloseButton, Toggle as UiToggle, TextInput, InputGroup, LoadingState, RadioGroup, SegmentedTabs, Dialog, SettingRow, RowStatus, Callout, StatusStrip, ErrorState, FieldError } from './ui';
@@ -881,6 +882,12 @@ export function BuddyButton() {
   const syncEnabledToPreference = useCallback(() => {
     setEnabled(localStorage.getItem('youcoded-buddy-enabled') === '1');
   }, []);
+  // How the buddy appears: the floating mascot, or an icon in the taskbar /
+  // menu bar that opens the same chat (Destin 2026-10-02). Renderer-owned like
+  // the on/off preference; passed to show() every time. The ref lets
+  // applyEnabled (a stable callback) always send the latest choice.
+  const [style, setStyle] = useState<BuddyStyle>(readBuddyStyle);
+  const styleRef = useRef(style);
   // "Hidden until restart": the bar's hide button dismisses the buddy for
   // this run only (localStorage preference untouched). Main broadcasts
   // buddy:status-changed so this row updates live, with an inline Show-now
@@ -945,8 +952,16 @@ export function BuddyButton() {
       })
       .catch(() => {});
     const off = window.claude.buddy?.onStatusChanged?.(
-      (s: { dismissed: boolean; visible?: boolean }) => {
+      (s: { dismissed: boolean; visible?: boolean; style?: BuddyStyle }) => {
         setDismissed(!!s?.dismissed);
+        // WHY: the taskbar icon's own menu can switch back to floating from
+        // main. Save it here so Settings and the next launch agree with what's
+        // on screen. Only while visible — a hidden buddy's style isn't a choice.
+        if (s?.visible && (s.style === 'floating' || s.style === 'tray')) {
+          styleRef.current = s.style;
+          setStyle(s.style);
+          saveBuddyStyle(s.style);
+        }
         // WHY re-read the preference on every broadcast (B5 review, F1): this
         // row is mounted for the whole session and seeded its switch ONCE, from
         // localStorage, during the first render — before three other things can
@@ -1010,7 +1025,7 @@ export function BuddyButton() {
     // is on screen is a switch that lies.
     let refusal: { ok: boolean; reason?: string } | void;
     try {
-      refusal = await window.claude.buddy?.show?.();
+      refusal = await window.claude.buddy?.show?.(styleRef.current);
       if (generation !== applyGeneration.current) return; // the user changed their mind
     } catch {
       // A throwing bridge (remote/Android stubs) is not a refusal, and this
@@ -1111,6 +1126,15 @@ export function BuddyButton() {
     setRemoveError("Couldn't remove the helper from your KDE settings.");
   }, [applyEnabled, helper]);
 
+  // Switching style while the buddy is on swaps it live (main tears the old
+  // presentation down first); while off it's just remembered for next time.
+  const changeStyle = useCallback((next: BuddyStyle) => {
+    styleRef.current = next;
+    setStyle(next);
+    saveBuddyStyle(next);
+    if (enabled) void applyEnabled(true);
+  }, [enabled, applyEnabled]);
+
   const showNow = useCallback(() => {
     // Routed through applyEnabled so a refusal is handled the same way here as
     // it is at the switch: show() clears the dismissed flag main-side, but it
@@ -1146,6 +1170,8 @@ export function BuddyButton() {
     ? 'Off'
     : dismissed
     ? 'Hidden until restart'
+    : style === 'tray'
+    ? `On — in your ${trayPlaceName(platform)}`
     : 'On — floating on your desktop';
 
   // Desktop-only control: hidden on remote/Android, where every buddy method
@@ -1246,6 +1272,8 @@ export function BuddyButton() {
                   control={<Toggle enabled={enabled} onToggle={toggle} label="Show buddy floater" />}
                 />
               )}
+
+              {!helperUnsupported && <BuddyStyleRow style={style} platform={platform} onChange={changeStyle} />}
 
               {/* The switch bounced back because the app refused to put the buddy
                   on screen (design §5). The sentence is the desktop's own — this

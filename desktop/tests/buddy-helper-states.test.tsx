@@ -274,9 +274,10 @@ describe('the two gates that would otherwise survive deletion', () => {
     const calls = fakeClaude(XWAYLAND);
     render(<BuddyButton />);
     fireEvent.click(screen.getByRole('button', { name: /buddy floater/i }));
-    await waitFor(() => expect(screen.getByRole('switch')).toBeTruthy());
+    // By name: the popup also carries the "Minimize to tray" switch.
+    await waitFor(() => expect(toggleSwitch()).toBeTruthy());
     expect(screen.queryByText(/Let the buddy be moved/i)).toBeNull();
-    fireEvent.click(screen.getByRole('switch'));
+    fireEvent.click(toggleSwitch()!);
     expect(screen.queryByText(/Let the buddy be moved/i)).toBeNull();
     await waitFor(() => expect(calls.show).toBe(1));
     expect(calls.install).toBe(0);

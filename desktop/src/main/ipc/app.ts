@@ -7,6 +7,7 @@
 import { app } from 'electron';
 import { IPC } from '../../shared/backend-contract';
 import type { AttentionReport, AttentionSummary } from '../../shared/types';
+import { requestRestart } from '../app-restart';
 import { loadConfigSync, writeConfig, getAppliedAtLaunch, getCachedGpu } from '../performance-config';
 import { defineChannel, type MainChannelDef } from './channel-def';
 
@@ -25,9 +26,10 @@ export function bindApp(next: Partial<AppDeps>): void { Object.assign(deps, next
 const need = <K extends keyof AppDeps>(key: K): AppDeps[K] => { const fn = deps[key]; if (!fn) throw new Error('app signals are not ready'); return fn; };
 
 export const appChannels: MainChannelDef[] = [
-  // Generic restart channel — reused by any setting that needs a restart to apply. relaunch() schedules the restart for
-  // after exit().
-  defineChannel({ name: IPC.APP_RESTART, kind: 'handle', desktopOnly: true, handler: () => { app.relaunch(); app.exit(0); } }),
+  // Generic restart channel — reused by any setting that needs a restart to apply.
+  // WHY quit, not exit (Office fix round 6, I-B): exit() skipped before-quit, so open Office documents were never saved
+  // or asked about. See app-restart.ts.
+  defineChannel({ name: IPC.APP_RESTART, kind: 'handle', desktopOnly: true, handler: () => { requestRestart(() => app.quit()); } }),
 
   // Settings → Performance reads/writes ~/.claude/youcoded-performance.json. The Chromium force-{high,low}-power-gpu
   // switch is applied at module load in main.ts (it cannot change at runtime), so set-config only persists the value —

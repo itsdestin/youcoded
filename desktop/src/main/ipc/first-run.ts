@@ -120,10 +120,11 @@ export const firstRunChannels: MainChannelDef[] = [
     },
   }),
   defineChannel({
-    name: IPC.FIRST_RUN_DEV_MODE_DONE, kind: 'handle', desktopOnly: true,
+    // The sign-in wait screen's Cancel (2026-10-03). Replaced the Developer Mode entry: setup has no such step now.
+    name: IPC.FIRST_RUN_CANCEL_AUTH, kind: 'handle', desktopOnly: true,
     handler: async () => {
-      try { await manager()?.handleDevModeDone(); }
-      catch (e) { log('ERROR', 'FirstRun', 'Dev mode failed', { error: String(e) }); }
+      try { await manager()?.cancelAuth(); }
+      catch (e) { log('ERROR', 'FirstRun', 'Cancel sign-in failed', { error: String(e) }); }
     },
   }),
   defineChannel({

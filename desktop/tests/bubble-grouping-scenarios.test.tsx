@@ -122,7 +122,10 @@ function signature(events: Ev[]): string[] {
       const tokens: string[] = [];
       for (const child of b.children) {
         if (child.matches('.mb-2') && /(Show|Hide) reasoning/.test(child.textContent ?? '')) { tokens.push('R'); continue; }
-        if (child.matches('[data-md]')) { tokens.push((child.textContent ?? '').trim() ? 'T' : 'T∅'); continue; }
+        // Message-only Find's display:contents marker wraps markdown without changing its visual place.
+        if (child.matches('[data-md]') || child.matches('[data-message-find-body]') && child.querySelector('[data-md]')) {
+          tokens.push((child.textContent ?? '').trim() ? 'T' : 'T∅'); continue;
+        }
         // ToolGroupInline's root is `.my-0\.5`; the trailing skill row is `.mt-1.space-y-0.5`.
         if (child.matches('.my-0\\.5')) {
           const names = [...child.querySelectorAll('[data-tool]')].map((el) => el.getAttribute('data-tool'));

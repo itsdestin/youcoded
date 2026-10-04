@@ -4190,6 +4190,20 @@ class SessionService : Service() {
                     org.json.JSONObject().put("ok", true)) }
             }
 
+            "office:status", "office:create", "office:pick", "office:open",
+            "office:invoke", "office:close", "office:versions", "office:restore", "office:save-copy",
+            "office:changed" -> {
+                // Office editing is desktop only for now (R28, build plan Task 5): the phone
+                // keeps the quick preview. unsupported=true makes the shared renderer reject
+                // the call and name the feature ("Office isn't available on the phone yet.")
+                // instead of treating the refusal as an answer. office:changed is desktop main's
+                // push after a restore; the phone never sends it, and a request for it is refused alike.
+                val payload = org.json.JSONObject()
+                    .put("ok", false)
+                    .put("unsupported", true)
+                    .put("error", "not-implemented-on-mobile")
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, payload) }
+            }
             "git:file-status", "git:file-review", "git:commit-file-diff", "git:stage",
             "git:unstage", "git:commit", "git:discard", "git:watch", "git:unwatch" -> {
                 // Git surface is desktop-only for now (spec 2026-07-22); the shared

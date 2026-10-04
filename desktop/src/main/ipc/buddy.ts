@@ -19,7 +19,7 @@ import { defineChannel, type MainChannelDef } from './channel-def';
 
 /** The floater's window manager (BuddyWindowManager) as these channels use it. */
 interface BuddyManagerLike {
-  show(): void; hide(): void; toggleChat(): void; dismiss(): void; dragEnded(): void;
+  show(style?: 'floating' | 'tray'): void; hide(): void; toggleChat(): void; dismiss(): void; dragEnded(): void; setMascotHit(over: boolean): void;
   setViewedSession(sessionId: string): void;
   getViewedSession(): string | null;
   moveMascotFromPointer(localDx: number, localDy: number): void;
@@ -160,10 +160,13 @@ export const buddyChannels: MainChannelDef[] = [
   // because the user can switch the script off in KDE's own System Settings while YouCoded is running (design §4).
   defineChannel({
     name: IPC.BUDDY_SHOW, kind: 'handle', desktopOnly: true,
-    handler: async () => {
+    handler: async (request) => {
       const refusal = helper().showRefusal(await helper().refresh());
       if (refusal) return { ok: false, reason: refusal };
-      manager().show();
+      // WHY (2026-10-02 taskbar-icon buddy): the style is renderer input, so only the two known styles get through;
+      // anything else keeps the current style.
+      const style = request?.style;
+      manager().show(style === 'tray' || style === 'floating' ? style : undefined);
       return { ok: true };
     },
   }),
@@ -188,6 +191,8 @@ export const buddyChannels: MainChannelDef[] = [
   defineChannel({ name: IPC.BUDDY_MOVE_MASCOT, kind: 'on', desktopOnly: true, handler: (target) => manager().moveMascotFromPointer(target.localDx, target.localDy) }),
   // Drag release: edge-snap detection against the window's final bounds.
   defineChannel({ name: IPC.BUDDY_DRAG_ENDED, kind: 'on', desktopOnly: true, handler: () => manager().dragEnded() }),
+  // Is the pointer over the mascot's drawn body? Main toggles click-through on it (2026-10-02).
+  defineChannel({ name: IPC.BUDDY_MASCOT_HIT, kind: 'on', desktopOnly: true, handler: ({ over }) => manager().setMascotHit(over === true) }),
   defineChannel({ name: IPC.BUDDY_DISMISS, kind: 'handle', desktopOnly: true, handler: () => manager().dismiss() }),
   // WHY no `keepAbove` on the status any more (2026-09-16): it rode along for the deleted overlay's KDE "pin above"
   // toggle, whose Settings row went 2026-09-04; the three-window buddy is pinned by the KWin helper, not a saved preference.

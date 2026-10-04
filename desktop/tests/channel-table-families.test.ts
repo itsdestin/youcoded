@@ -399,7 +399,7 @@ describe('skills: install and uninstall keep working from a phone, and a bundled
 describe('first-run: the wizard channels reach whichever manager main.ts bound', () => {
   const ctx: any = { door: 'desktop', runtime: null, broadcast: () => {} };
   const run = (name: string, payload?: unknown) => CHANNEL_TABLE.find((d) => d.name === name)!.handler(payload, ctx);
-  const manager = () => ({ retry: vi.fn(async () => {}), handleOAuthLogin: vi.fn(async () => {}), handleChatGptLogin: vi.fn(async () => {}), handleApiKeySubmit: vi.fn(async () => {}), handleDevModeDone: vi.fn(async () => {}), getState: vi.fn(() => ({ currentStep: 'AUTHENTICATE' })) });
+  const manager = () => ({ retry: vi.fn(async () => {}), handleOAuthLogin: vi.fn(async () => {}), handleChatGptLogin: vi.fn(async () => {}), handleApiKeySubmit: vi.fn(async () => {}), cancelAuth: vi.fn(async () => {}), getState: vi.fn(() => ({ currentStep: 'AUTHENTICATE' })) });
   it('with no manager bound, state says COMPLETE and connect-local-app says setup is not running', async () => {
     bindFirstRunManager({ getManager: () => null, getState: () => ({ currentStep: 'COMPLETE' }), chatgptAuth: null });
     expect(await run('first-run:state')).toEqual({ currentStep: 'COMPLETE' });
@@ -421,8 +421,8 @@ describe('first-run: the wizard channels reach whichever manager main.ts bound',
   });
   it('a failing step is logged and swallowed, never thrown into the window', async () => {
     const m = manager();
-    m.handleDevModeDone.mockRejectedValue(new Error('nope'));
+    m.cancelAuth.mockRejectedValue(new Error('nope'));
     bindFirstRunManager({ getManager: () => m as any, getState: () => m.getState(), chatgptAuth: null });
-    await expect(run('first-run:dev-mode-done')).resolves.toBeUndefined();
+    await expect(run('first-run:cancel-auth')).resolves.toBeUndefined();
   });
 });

@@ -12,7 +12,7 @@
 import type { RemoteConfig } from '../main/remote-config';
 import type { listWithState, IntegrationInstaller } from '../main/integration-installer';
 import type { ArcadeOps } from '../main/arcade-handlers';
-import type { AttentionReport, AttentionSummary, BuddyHelperStatus, BuddyShowResult, PerformanceConfigSnapshot } from './types';
+import type { AttentionReport, AttentionSummary, BuddyHelperStatus, BuddyShowResult, BuddyStyle, PerformanceConfigSnapshot } from './types';
 import type { CommentAuthor, CommentSelector } from './doc-comments-types';
 import type { ApiResult } from './account-types';
 import type { SocialUserCard, RequestsPayload, FriendRow, BlockRow } from '../renderer/state/marketplace-api-client';
@@ -114,7 +114,8 @@ export interface AppChannelTypes {
   'session:drop-resolve': { request: void; response: { targetWindowId: number | null } };
 
   // ── The buddy ──
-  'buddy:show': { request: void; response: BuddyShowResult };
+  // `style` (2026-10-02, taskbar-icon buddy): omitted = keep whatever style the buddy has. Renderer input, validated in main.
+  'buddy:show': { request: { style?: BuddyStyle } | undefined; response: BuddyShowResult };
   'buddy:hide': { request: void; response: Nothing };
   'buddy:toggle-chat': { request: void; response: Nothing };
   'buddy:set-session': { request: { sessionId: string }; response: Nothing };
@@ -123,6 +124,8 @@ export interface AppChannelTypes {
   'buddy:get-viewed-session': { request: void; response: string | null };
   'buddy:move-mascot': { request: { localDx: number; localDy: number }; response: Nothing };
   'buddy:drag-ended': { request: void; response: Nothing };
+  // Is the pointer over the mascot's drawn body? Main lets clicks on the empty rest of his window pass through.
+  'buddy:mascot-hit': { request: { over: boolean }; response: Nothing };
   'buddy:dismiss': { request: void; response: Nothing };
   'buddy:get-status': { request: void; response: { dismissed: boolean; visible: boolean } };
   'buddy:open-main': { request: { resume?: string } | undefined; response: Nothing };

@@ -104,7 +104,8 @@ export default React.memo(function UserMessage({ message, sessionId, showTimesta
 
   const bubble = (
     <div className="user-bubble max-w-[80%] break-words rounded-2xl rounded-br-sm bg-accent px-5 py-3 text-sm text-on-accent whitespace-pre-wrap">
-      {body}
+      {/* WHY: Find indexes authored text, not the optional timestamp beside it. */}
+      <span data-message-find-body="0" data-message-find-plain>{body}</span>
       {showTimestamps && (
         <div className="bubble-timestamp text-4xs text-on-accent/50 text-right mt-1 -mb-0.5 select-none leading-none">
           {formatBubbleTime(message.timestamp)}

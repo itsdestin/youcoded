@@ -231,23 +231,26 @@ describe('conflict-copy index', () => {
     const store = createNamingStore(root);
     await store.mutate('claude', 'c1', (cur) => ({ ...cur, manual: 'Mine', manualAt: '2026-09-09T10:00:00.000Z' }));
     await store.mutate('claude', 'c2', (cur) => ({ ...cur, manual: 'Other', manualAt: '2026-09-09T10:00:00.000Z' }));
-    const readdir = vi.spyOn(fs.promises, 'readdir');
-    const sync = [vi.spyOn(fs, 'readdirSync'), vi.spyOn(fs, 'readFileSync'), vi.spyOn(fs, 'statSync')];
-    // WHY hold both record reads until both have started: each get() reads its
-    // own record BEFORE asking for the listing, so on a busy runner c1 could
-    // finish its whole listing before c2 even asked — two honest, non-
-    // overlapping listings (macOS CI: "called 2 times"). Releasing the reads
-    // together makes the two listing requests genuinely overlap, which is the
-    // case this test is about.
-    const realReadFile = fs.promises.readFile.bind(fs.promises);
-    let release!: () => void;
-    const bothStarted = new Promise<void>((r) => { release = r; });
-    let started = 0;
-    vi.spyOn(fs.promises, 'readFile').mockImplementation((async (...args: Parameters<typeof fs.promises.readFile>) => {
-      if (++started === 2) release();
-      await bothStarted;
-      return realReadFile(...args);
+    // WHY the gate (fixed 2026-09-28, failed once under full-suite load): each get() reads its
+    // own record BEFORE it asks for the listing, so on a busy machine the first get's whole
+    // stat+listing could finish before the second get's read did — the two never overlapped,
+    // and the second listing was correct behaviour, not a lost single-flight. Holding the
+    // listing until both records have been read makes the overlap this test is about certain.
+    const origReadFile = fs.promises.readFile.bind(fs.promises);
+    const origReaddir = fs.promises.readdir.bind(fs.promises);
+    let recordsRead = 0;
+    let bothRead!: () => void;
+    const gate = new Promise<void>((r) => { bothRead = r; });
+    vi.spyOn(fs.promises, 'readFile').mockImplementation(((...args: Parameters<typeof origReadFile>) => {
+      const p = origReadFile(...args);
+      if (/c[12]\.json$/.test(String(args[0]))) p.finally(() => { if (++recordsRead === 2) bothRead(); }).catch(() => {});
+      return p;
     }) as typeof fs.promises.readFile);
+    const readdir = vi.spyOn(fs.promises, 'readdir').mockImplementation((async (...args: Parameters<typeof origReaddir>) => {
+      await gate;
+      return origReaddir(...args);
+    }) as typeof fs.promises.readdir);
+    const sync = [vi.spyOn(fs, 'readdirSync'), vi.spyOn(fs, 'readFileSync'), vi.spyOn(fs, 'statSync')];
     const [a, b] = await Promise.all([store.get('claude', 'c1'), store.get('claude', 'c2')]);
     expect([a!.manual, b!.manual]).toEqual(['Mine', 'Other']);
     expect(readdir).toHaveBeenCalledTimes(1);

@@ -18,14 +18,8 @@ import {
   __resetDocCommentsStoreForTest,
 } from '../src/renderer/state/doc-comments-store';
 
-// Code review 2026-09-27, desktop F3: the elden-ring golden fixture (a REAL
-// captured file, not a seeded test quote) has 315 comments on its single
-// busiest sheet — the "a handful per file" exemption this component's own
-// comment (`CommentsMargin.tsx` header) used to claim was a guess, not a
-// measured bound. Reusing the fixture here (rather than a synthetic cell
-// count) is what makes the "measured bound" WHY comment a real-world number.
-// `__dirname` (not `import.meta.url`/`.pathname` — test-suite-hygiene.md's
-// Windows-path rule), matching xlsx-comments.test.ts's own fixture-path idiom.
+// The elden-ring golden fixture (a REAL captured file, not a seeded test quote) has 315 comments on its single busiest
+// sheet. `__dirname` (not `import.meta.url`/`.pathname` — test-suite-hygiene.md's Windows-path rule).
 const ELDEN_FIXTURE_PATH = join(__dirname, 'fixtures', 'doc-comments', 'golden', 'elden-ring-completionist-checklist.json');
 function eldenBossListCellComments(): Array<{ cell: string; sheet: string }> {
   const raw = JSON.parse(readFileSync(ELDEN_FIXTURE_PATH, 'utf8')) as {

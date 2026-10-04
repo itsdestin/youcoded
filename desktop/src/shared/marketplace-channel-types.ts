@@ -74,7 +74,7 @@ export interface MarketplaceChannelTypes {
   'first-run:retry': { request: void; response: void };
   'first-run:start-auth': { request: { mode: FirstRunState['authMode'] }; response: void };
   'first-run:submit-api-key': { request: { key: string; service?: NativeKeyService }; response: void };
-  'first-run:dev-mode-done': { request: void; response: void };
+  'first-run:cancel-auth': { request: void; response: void };
   'first-run:skip': { request: void; response: void };
   'first-run:local-setup': { request: void; response: { suggested: CuratedModel | null } | null };
   'first-run:connect-local-app': { request: { baseUrl: string; name: string }; response: { ok: boolean; message?: string } };
@@ -125,7 +125,7 @@ export interface FirstRunBridge {
   retry: () => Promise<void>;
   startAuth: (mode: FirstRunState['authMode']) => Promise<void>;
   submitApiKey: (key: string, service?: string) => Promise<void>;
-  devModeDone: () => Promise<void>;
+  cancelAuth: () => Promise<void>;
   skip: () => Promise<void>;
   localSetup: () => Promise<C['first-run:local-setup']['response']>;
   connectLocalApp: (baseUrl: string, name: string) => Promise<C['first-run:connect-local-app']['response']>;

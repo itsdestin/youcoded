@@ -51,6 +51,7 @@ import type { PastSession } from '../../shared/types';
 import { triggerTip } from './guide/tips';
 import { TagNoteEditor } from './tags/TagNoteEditor';
 import { ScreenMark, useScreenOpen } from '../shoot-mode';
+import { officeHeaderAction, useOfficeEditScreen } from './office/use-office-edit-screen';
 
 // 'type' removed 2026-07-23 — the Type FILTER supersedes sorting by type.
 type SortKey = 'recent' | 'name';
@@ -179,6 +180,14 @@ function IconBtn({ name, title, onClick, active, glyph }: { name?: string; title
     </button>
     </Tooltip>
   );
+}
+
+/** The header's "open elsewhere" button: Open in Office for a file Office edits, otherwise
+ *  Open with the default app. WHY a component (final review, finding 7): the choice used to be
+ *  an inline IIFE crammed onto one line of the header. */
+function OpenElsewhereBtn({ office, onOpenExternal }: { office: ReturnType<typeof officeHeaderAction>; onOpenExternal: () => void }) {
+  if (office) return <IconBtn title={office.title} glyph={office.glyph} onClick={office.onClick} />;
+  return <IconBtn name="external" title="Open with the default app" onClick={onOpenExternal} />;
 }
 
 // React.memo, and the reason it is worth the wrapper: this component lives
@@ -427,7 +436,8 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // Edit control is owned by ActiveArtifactView; the header drives it through
   // this ref + mirrors its state so the toolbar can swap pencil ↔ save/cancel.
   const editRef = useRef<ActiveArtifactHandle>(null);
-  const [editState, setEditState] = useState<{ isEditable: boolean; editing: boolean }>({ isEditable: false, editing: false });
+  useOfficeEditScreen(editRef, (id) => dispatch({ type: 'ACTIVE_ARTIFACT_SET', sessionId, artifactId: id }), allArtifacts.map((a) => a.id));
+  const [editState, setEditState] = useState<{ isEditable: boolean; editing: boolean; autosaves?: boolean }>({ isEditable: false, editing: false });
   const [commentsState, setCommentsState] = useState<CommentsHeaderState>({ available: false, active: false, count: 0, paneVisible: false, actionsRight: 8, actionsWidth: 240, paneLeft: 256, actionsBottom: 36 });
   // Entering Comments mode folds the file list away however it was entered
   // (the Comments button, clicking a highlight, a sent pill) — the floating
@@ -1153,7 +1163,12 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
         )}
         {/* Edit/Save moved to the floating button at the bottom-right of the
             doc pane (Destin, 2026-07-22) — see the cluster below the content div. */}
-        {active && canOpenInOs && <IconBtn name="external" title="Open with the default app" onClick={handleOpenExternal} />}
+        {active && canOpenInOs && (
+          <OpenElsewhereBtn
+            office={officeHeaderAction(absolutePath, dispatch, () => editRef.current?.cancelEdit())}
+            onOpenExternal={handleOpenExternal}
+          />
+        )}
         {active && isRemoteMode() && <IconBtn name="download" title="Download" onClick={handleDownload} />}
         {active && <IconBtn name={copiedPath ? 'check' : 'copypath'} title={copiedPath ? 'Copied' : 'Copy path'} onClick={handleCopyPath} />}
         {active && canOpenInOs && <IconBtn title="Reveal in folder" glyph={<RevealFolderIc />} onClick={handleReveal} />}
@@ -1353,21 +1368,21 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                 <div className="flex items-center gap-2 pointer-events-auto">
                   {editState.editing ? (
                     <>
-                      <button
+                      {!editState.autosaves && <button
                         type="button"
                         onClick={() => editRef.current?.cancelEdit()}
                         className="flex items-center gap-2 px-4 py-2.5 rounded-full text-sm font-semibold bg-panel text-fg-2 border border-edge shadow-lg hover:text-fg hover:bg-well transition-colors"
                       >
                         <Ic name="close" size={15} />
                         Cancel
-                      </button>
+                      </button>}
                       <button
                         type="button"
                         onClick={() => editRef.current?.saveEdit()}
                         className="solid-accent flex items-center gap-2 px-4 py-2.5 rounded-full text-sm font-semibold bg-accent text-on-accent shadow-lg hover:opacity-90 transition-opacity"
                       >
                         <Ic name="check" size={15} />
-                        Save
+                        {editState.autosaves ? 'Done' : 'Save'}
                       </button>
                     </>
                   ) : (

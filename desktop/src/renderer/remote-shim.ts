@@ -10,7 +10,7 @@ import { TABLE_ERROR_FLAG } from '../shared/table-error-flag';
 
 // ── Marketplace types re-declared locally ─────────────────────────────────────
 // WHY: remote-shim.ts lives in renderer/ and cannot import from main/ (Node.js
-import { REMOTE_UNSUPPORTED_EVENT, hasFeatureName, remoteFeatureName, remoteUnsupportedMessage } from './remote-unsupported';
+import { REMOTE_UNSUPPORTED_EVENT, hasFeatureName, remoteFeatureName, remoteUnsupportedMessage, saidInPlace } from './remote-unsupported';
 import { REMOTE_RECONNECTED_EVENT, REMOTE_REFRESH_EVENT, OUTCOME_UNKNOWN_EVENT } from './remote-events';
 import { FILL_PROTOCOL_VERSION } from '../shared/fill-protocol';
 import { announce } from './utils/announce';
@@ -867,6 +867,8 @@ function noteUnsupported(channel: string): void {
     console.warn(`[remote-shim] not available over remote access (unnamed): ${channel}`);
     return;
   }
+  // WHY: Office says this very sentence in its own pane (Task 5 fix round 2), so no toast.
+  if (saidInPlace(channel)) { console.warn(`[remote-shim] not available here (said in place): ${channel}`); return; }
   const feature = remoteFeatureName(channel);
   if (announced.has(feature)) return;
   announced.add(feature);
@@ -2802,6 +2804,21 @@ export function installShim(): void {
         return () => removeListener('git:changed', handler);
       },
     },
+    // Office is desktop only (R28). WHY every member routes through invoke(): the host has no handler, so the
+    // call is refused ("Office isn't available via remote access yet.") — not a "not a function" crash.
+    // No onUnsavedPrompt: the quit gate is the desktop window's own (unsaved-quit.ts). onChanged never fires (restore is refused).
+    office: {
+      status: (projectRoot: string | null) => invoke('office:status', { projectRoot }),
+      create: (kind: string, projectRoot: string | null) => invoke('office:create', { kind, projectRoot }),
+      pick: () => invoke('office:pick'),
+      open: (filePath: string) => invoke('office:open', { path: filePath }),
+      invoke: (token: string, cmd: string, args: unknown) => invoke('office:invoke', { token, cmd, args }),
+      close: (token: string) => invoke('office:close', { token }),
+      versions: (filePath: string) => invoke('office:versions', { path: filePath }),
+      restore: (filePath: string, versionId: string) => invoke('office:restore', { path: filePath, versionId }),
+      onChanged: (cb: (p: { path: string; token: string }) => void) => { const h: Callback = (p: any) => cb(p); addListener('office:changed', h); return () => removeListener('office:changed', h); },
+      saveCopy: (token: string, mode: string, data?: string) => invoke('office:save-copy', { token, mode, data }),
+    },
     // Project View IPC — sibling to artifacts. Object-payload invoke style
     // mirrors the artifacts namespace above; the literal 'project:*' channel
     // strings are required by the IPC parity test.
@@ -2943,7 +2960,7 @@ export function installShim(): void {
       // Same widened type as preload's (FirstRunState['authMode']); still a no-op here.
       startAuth: (_mode: FirstRunState['authMode']) => Promise.resolve(),
       submitApiKey: (_key: string, _service?: string) => Promise.resolve(),
-      devModeDone: () => Promise.resolve(),
+      cancelAuth: () => Promise.resolve(),
       skip: () => Promise.resolve(),
       // First-run local models (2026-09-14): never shown here, and the band describes the HOST's
       // first download, which a phone cannot read — so every one answers "nothing".
@@ -3089,6 +3106,7 @@ export function installShim(): void {
       // throwing would spam the console if a buddy surface ever loaded
       // remote-shim. The on* listeners return no-op unsubscribers.
       dragEnded: () => { /* desktop-only */ },
+      mascotHit: () => { /* desktop-only — fires from pointer moves, so never throws */ },
       openMain: () => { throw new Error('Buddy is desktop-only in this version'); },
       dismiss: () => { throw new Error('Buddy is desktop-only in this version'); },
       getStatus: () => { throw new Error('Buddy is desktop-only in this version'); },

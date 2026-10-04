@@ -81,7 +81,13 @@ export function useUnsavedGuard(
   pendingRef.current = pending;
 
   const guard = useCallback((action: () => void) => {
-    if (handleRef.current?.dirty) setPending(() => action);
+    const h = handleRef.current;
+    // Office edits in place save themselves (office-questions#Q-save), so there is nothing to
+    // ask — but closing the panel, switching file or session unmounts the editor, and inside
+    // autosave's 3 s window that dropped the last changes (C2, Task 6 fix round 1). Leave only
+    // once they are saved; a failed save keeps the editor open with its reason and actions.
+    if (h?.autosaves && h.editing) { void h.saveEdit().then((ok) => { if (ok) action(); }); return; }
+    if (h?.dirty) setPending(() => action);
     else action();
   }, [handleRef]);
 

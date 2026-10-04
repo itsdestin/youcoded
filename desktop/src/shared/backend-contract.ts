@@ -28,6 +28,7 @@
 
 import type { VoiceBridge } from './voice-types';
 import type { PagesBridge } from './pages-types';
+import type { OfficeBridge } from './office-types';
 import type { SavedFolder, PickerFolder, SessionDefaults, ModelModes } from './prefs-types';
 import type { TagListResult, TagMutationResult, TagDeleteResult, TagPatch } from './tags';
 import type {
@@ -48,6 +49,7 @@ import type { NativeChannelTypes } from './native-channel-types';
 import type { ModelsChannelTypes } from './models-channel-types';
 import type { FilesChannelTypes } from './files-channel-types';
 import type { AppChannelTypes } from './app-channel-types';
+import type { OfficeChannelTypes } from './office-channel-types';
 export type { MarketplaceThumbs } from './marketplace-channel-types';
 import type {
   NativeSendResult, SessionContext, SessionContextText,
@@ -263,7 +265,8 @@ export const IPC = {
   FIRST_RUN_RETRY: 'first-run:retry',
   FIRST_RUN_START_AUTH: 'first-run:start-auth',
   FIRST_RUN_SUBMIT_API_KEY: 'first-run:submit-api-key',
-  FIRST_RUN_DEV_MODE_DONE: 'first-run:dev-mode-done',
+  // The sign-in wait screen's Cancel (2026-10-03). Replaced FIRST_RUN_DEV_MODE_DONE: setup has no Developer Mode step now.
+  FIRST_RUN_CANCEL_AUTH: 'first-run:cancel-auth',
   FIRST_RUN_SKIP: 'first-run:skip',
   // First-run local models (2026-09-14): local setup's suggestion, finishing setup
   // on a model app already running, and the first download's band above the
@@ -399,6 +402,9 @@ export const IPC = {
   // Fire-and-forget: mascot renderer signals drag release so main can run
   // edge-snap detection against the window's final bounds.
   BUDDY_DRAG_ENDED: 'buddy:drag-ended',
+  // Fire-and-forget: is the pointer over the mascot's drawn body (vs. the empty rest of his window)? Main toggles
+  // click-through on it.
+  BUDDY_MASCOT_HIT: 'buddy:mascot-hit',
   // Restore + focus the main window and switch it to the buddy's viewed session.
   BUDDY_OPEN_MAIN: 'buddy:open-main',
   // Hide the buddy for this app run only (preference stays enabled).
@@ -644,6 +650,28 @@ export const IPC = {
   VOICE_MIC_ACCESS: 'voice:mic-access',
   VOICE_AUDIO: 'voice:audio',
   VOICE_EVENT: 'voice:event',   // push
+  // Office (main/ipc/office.ts). Requests the editor page makes, and the window's answers to main's pushes.
+  OFFICE_STATUS: 'office:status',
+  OFFICE_CREATE: 'office:create',
+  OFFICE_PICK: 'office:pick',
+  OFFICE_OPEN: 'office:open',
+  OFFICE_INVOKE: 'office:invoke',
+  OFFICE_CLOSE: 'office:close',
+  OFFICE_VERSIONS: 'office:versions',
+  OFFICE_RESTORE: 'office:restore',
+  OFFICE_SAVE_COPY: 'office:save-copy',
+  OFFICE_JOURNAL_DONE: 'office:journal-done',
+  OFFICE_OTHER_UNSAVED: 'office:other-unsaved',
+  OFFICE_PROCEED: 'office:proceed',
+  OFFICE_DISMISS: 'office:dismiss',
+  OFFICE_COMMENTS_ANSWER: 'office:comments-answer',
+  OFFICE_COMMENTS_CHANGED: 'office:comments-changed',
+  // Pushes from main (no request): a restore replaced the open file; close-time journal request; a refused quit's
+  // list; a comment request for the editor.
+  OFFICE_CHANGED: 'office:changed',
+  OFFICE_JOURNAL_REQUEST: 'office:journal-request',
+  OFFICE_UNSAVED_PROMPT: 'office:unsaved-prompt',
+  OFFICE_COMMENTS_REQUEST: 'office:comments-request',
   // ---- Preload-only names, folded in by one-core R2 (2026-09-29) ----
   // Before R2 preload.ts kept its own hand-typed copy of this list, and 52 constants existed
   // only there (account:, social:, marketplace:, settings:, ...). Generating preload's list from
@@ -868,7 +896,7 @@ export interface ChannelDef<Ctx = ChannelCtx, Payload = any, Result = any> {
  *  so a handler, the desktop bridge and the phone shim cannot disagree about a channel's shape.
  *  `request` is the ONE object the caller sends (void = no payload). A family adds its rows here
  *  when it moves into the table. */
-export interface ChannelTypes extends MarketplaceChannelTypes, SyncChannelTypes, SessionChannelTypes, NativeChannelTypes, ModelsChannelTypes, FilesChannelTypes, AppChannelTypes {
+export interface ChannelTypes extends MarketplaceChannelTypes, SyncChannelTypes, SessionChannelTypes, NativeChannelTypes, ModelsChannelTypes, FilesChannelTypes, AppChannelTypes, OfficeChannelTypes {
   'tags:list': { request: void; response: TagListResult };
   'tags:create': { request: { label: string; color: string }; response: TagMutationResult };
   'tags:update': { request: { id: string; patch: TagPatch }; response: TagMutationResult };
@@ -1441,6 +1469,10 @@ interface ClaudeApi {
   // lands; the header hides the pinned buttons and the library shows an
   // error when it is undefined. Shape: shared/pages-types.ts.
   pages?: PagesBridge;
+  // Office (build plan Task 5). Optional: absent in any host with no Office channels, and the file panels then keep their
+  // usual buttons. The remote client and the phone carry it, but their hosts refuse every call (desktop only).
+  // Shape: shared/office-types.ts.
+  office?: OfficeBridge;
   // Model manager (Plan C) — curated catalog, HF search, downloads, endpoint
   // detectors, engine backend switch. Task 9's Local Models panel consumes
   // these. onDownloadProgress returns an unsubscribe.

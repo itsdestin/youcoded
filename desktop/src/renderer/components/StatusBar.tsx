@@ -663,7 +663,7 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         label: 'Sync Warnings',
         defaultVisible: true,
         description: 'Alerts when sync isn\'t working (no internet, stale data, unsynced skills).',
-        bestFor: 'YouCoded toolkit users. Keeps you aware of sync issues that could cause data loss.',
+        bestFor: 'Anyone who backs up or syncs with YouCoded. Keeps you aware of sync issues that could cause data loss.',
       },
       {
         id: 'theme',

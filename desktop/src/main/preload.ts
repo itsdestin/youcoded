@@ -182,7 +182,7 @@ const IPC = {
   FIRST_RUN_RETRY: 'first-run:retry',
   FIRST_RUN_START_AUTH: 'first-run:start-auth',
   FIRST_RUN_SUBMIT_API_KEY: 'first-run:submit-api-key',
-  FIRST_RUN_DEV_MODE_DONE: 'first-run:dev-mode-done',
+  FIRST_RUN_CANCEL_AUTH: 'first-run:cancel-auth',
   FIRST_RUN_SKIP: 'first-run:skip',
   FIRST_RUN_LOCAL_SETUP: 'first-run:local-setup',
   FIRST_RUN_CONNECT_LOCAL_APP: 'first-run:connect-local-app',
@@ -257,6 +257,7 @@ const IPC = {
   BUDDY_CAPTURE_DESKTOP: 'buddy:capture-desktop',
   BUDDY_ATTACH_FILE: 'buddy:attach-file',
   BUDDY_DRAG_ENDED: 'buddy:drag-ended',
+  BUDDY_MASCOT_HIT: 'buddy:mascot-hit',
   BUDDY_OPEN_MAIN: 'buddy:open-main',
   BUDDY_DISMISS: 'buddy:dismiss',
   BUDDY_GET_STATUS: 'buddy:get-status',
@@ -387,6 +388,25 @@ const IPC = {
   VOICE_MIC_ACCESS: 'voice:mic-access',
   VOICE_AUDIO: 'voice:audio',
   VOICE_EVENT: 'voice:event',
+  OFFICE_STATUS: 'office:status',
+  OFFICE_CREATE: 'office:create',
+  OFFICE_PICK: 'office:pick',
+  OFFICE_OPEN: 'office:open',
+  OFFICE_INVOKE: 'office:invoke',
+  OFFICE_CLOSE: 'office:close',
+  OFFICE_VERSIONS: 'office:versions',
+  OFFICE_RESTORE: 'office:restore',
+  OFFICE_SAVE_COPY: 'office:save-copy',
+  OFFICE_JOURNAL_DONE: 'office:journal-done',
+  OFFICE_OTHER_UNSAVED: 'office:other-unsaved',
+  OFFICE_PROCEED: 'office:proceed',
+  OFFICE_DISMISS: 'office:dismiss',
+  OFFICE_COMMENTS_ANSWER: 'office:comments-answer',
+  OFFICE_COMMENTS_CHANGED: 'office:comments-changed',
+  OFFICE_CHANGED: 'office:changed',
+  OFFICE_JOURNAL_REQUEST: 'office:journal-request',
+  OFFICE_UNSAVED_PROMPT: 'office:unsaved-prompt',
+  OFFICE_COMMENTS_REQUEST: 'office:comments-request',
   PTY_RAW_BYTES: 'pty:raw-bytes',
   MODEL_GET_PREFERENCE: 'model:get-preference',
   MODEL_SET_PREFERENCE: 'model:set-preference',
@@ -545,6 +565,15 @@ const PLAYABLE_PUSHES = new Set<string>([
 // `chatgpt` namespace for why), keeping the handler's own sentence. Anything
 // that is not that exact shape is rethrown untouched.
 const INVOKE_ERROR_PREFIX = /^Error invoking remote method '[^']*': (?:Error: )?/;
+/** Subscribe to one of main's office:* pushes; returns the unsubscribe. WHY a helper (final
+ *  review, finding 7): the five office pushes were each a hand-written listener crammed onto one
+ *  line; one shape keeps them readable and identical. */
+function officePush<A extends unknown[]>(channel: string, cb: (...args: A) => void): () => void {
+  const h = (_e: IpcRendererEvent, ...args: unknown[]) => cb(...(args as A));
+  ipcRenderer.on(channel, h);
+  return () => { ipcRenderer.off(channel, h); };
+}
+
 function unwrapInvokeError<T>(p: Promise<T>): Promise<T> {
   return p.catch((e: unknown) => {
     if (e instanceof Error && INVOKE_ERROR_PREFIX.test(e.message)) {
@@ -1433,7 +1462,8 @@ contextBridge.exposeInMainWorld('claude', {
     // is for. Without it main keeps the old Claude Code path.
     submitApiKey: (key: string, service?: string): Promise<void> =>
       ipcRenderer.invoke(IPC.FIRST_RUN_SUBMIT_API_KEY, { key, service }),
-    devModeDone: (): Promise<void> => ipcRenderer.invoke(IPC.FIRST_RUN_DEV_MODE_DONE),
+    // The sign-in wait screen's Cancel (2026-10-03).
+    cancelAuth: (): Promise<void> => ipcRenderer.invoke(IPC.FIRST_RUN_CANCEL_AUTH),
     skip: (): Promise<void> => ipcRenderer.invoke(IPC.FIRST_RUN_SKIP),
     // First-run local models (2026-09-14).
     localSetup: (): Promise<any> => ipcRenderer.invoke(IPC.FIRST_RUN_LOCAL_SETUP),
@@ -1457,7 +1487,7 @@ contextBridge.exposeInMainWorld('claude', {
     get: (): Promise<number> => ipcRenderer.invoke(IPC.ZOOM_GET),
   },
   buddy: {
-    show: () => ipcRenderer.invoke(IPC.BUDDY_SHOW),
+    show: (style?: 'floating' | 'tray') => ipcRenderer.invoke(IPC.BUDDY_SHOW, { style }),
     hide: () => ipcRenderer.invoke(IPC.BUDDY_HIDE),
     toggleChat: () => ipcRenderer.invoke(IPC.BUDDY_TOGGLE_CHAT),
     setSession: (sessionId: string) => ipcRenderer.invoke(IPC.BUDDY_SET_SESSION, { sessionId }),
@@ -1490,6 +1520,7 @@ contextBridge.exposeInMainWorld('claude', {
     },
     // ── Buddy upgrades ──
     dragEnded: () => ipcRenderer.send(IPC.BUDDY_DRAG_ENDED),
+    mascotHit: (over: boolean) => ipcRenderer.send(IPC.BUDDY_MASCOT_HIT, { over }),
     openMain: (request?: { resume: string }): Promise<void> => ipcRenderer.invoke(IPC.BUDDY_OPEN_MAIN, request),
     dismiss: (): Promise<void> => ipcRenderer.invoke(IPC.BUDDY_DISMISS),
     getStatus: (): Promise<{ dismissed: boolean; visible: boolean }> =>
@@ -2063,6 +2094,33 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.on('git:changed', handler);
       return () => ipcRenderer.removeListener('git:changed', handler);
     },
+  },
+  // Office (§3a): editor requests reach main only via invoke (main re-checks). Shape: shared/office-types.ts; handlers: main/office/office-ipc.ts, main/unsaved-quit.ts.
+  office: {
+    // One object per request, like every other table channel (main/ipc/office.ts).
+    status: (projectRoot: string | null) => ipcRenderer.invoke(IPC.OFFICE_STATUS, { projectRoot }),
+    create: (kind: string, projectRoot: string | null) => ipcRenderer.invoke(IPC.OFFICE_CREATE, { kind, projectRoot }),
+    pick: () => ipcRenderer.invoke(IPC.OFFICE_PICK),
+    open: (p: string) => ipcRenderer.invoke(IPC.OFFICE_OPEN, { path: p }),
+    invoke: (token: string, cmd: string, args: unknown) => ipcRenderer.invoke(IPC.OFFICE_INVOKE, { token, cmd, args }),
+    close: (token: string) => ipcRenderer.invoke(IPC.OFFICE_CLOSE, { token }),
+    versions: (p: string) => ipcRenderer.invoke(IPC.OFFICE_VERSIONS, { path: p }),
+    restore: (p: string, versionId: string) => ipcRenderer.invoke(IPC.OFFICE_RESTORE, { path: p, versionId }),
+    // After a restore, the editor holding the token reopens its file (EditorFrame).
+    onChanged: (cb: (p: { path: string; token: string }) => void) => officePush(IPC.OFFICE_CHANGED, cb),
+    saveCopy: (token: string, mode: string, data?: string) => ipcRenderer.invoke(IPC.OFFICE_SAVE_COPY, { token, mode, data }),
+    // Before its window closes, its editors journal their newest edits (main/office/office-journal-sync.ts) — desktop only.
+    onJournalRequest: (cb: (id: string) => void) => officePush(IPC.OFFICE_JOURNAL_REQUEST, cb),
+    journalDone: (id: string) => ipcRenderer.send(IPC.OFFICE_JOURNAL_DONE, { id }),
+    // A quit refused for unsaved files (main/unsaved-quit.ts) — desktop only.
+    onUnsavedPrompt: (cb: (p: unknown) => void) => officePush(IPC.OFFICE_UNSAVED_PROMPT, cb),
+    proceedClose: () => ipcRenderer.send(IPC.OFFICE_PROCEED),
+    dismissPrompt: () => ipcRenderer.send(IPC.OFFICE_DISMISS),
+    setOtherUnsaved: (names: string[]) => ipcRenderer.send(IPC.OFFICE_OTHER_UNSAVED, { names }),
+    // Comments on an open document go through its editor (main/office/office-comments.ts) — desktop only.
+    onCommentsRequest: (cb: (req: { token: string; id: string; op: unknown }) => void) => officePush(IPC.OFFICE_COMMENTS_REQUEST, cb),
+    commentsAnswer: (id: string, result: unknown, token: string) => ipcRenderer.send(IPC.OFFICE_COMMENTS_ANSWER, { id, result, token }),
+    commentsChanged: (token: string) => ipcRenderer.send(IPC.OFFICE_COMMENTS_CHANGED, { token }),
   },
   // Project View IPC — sibling to artifacts. Backs the project overlay's
   // conversations / repo / context tabs.

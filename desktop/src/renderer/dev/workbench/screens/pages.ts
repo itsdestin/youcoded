@@ -19,6 +19,17 @@ export const PAGES: readonly ScreenEntry[] = [
   pg('pages/page/page-link-reader', 'view', 'approval'),
   pg('pages/page/page-analytics', 'view', 'approval'),
   pg('pages/page/page-trip-board', 'view', 'approval', 'error-state'),
+  // Office (built in, design stage). Documents need the editor add-on served on
+  // 127.0.0.1:4717 — fixtures/office.ts says how.
+  pg('office/home', 'view', 'office'),
+  { ...pg('office/first-run', 'view', 'office', 'empty-state'), scenario: 'empty' },
+  pg('office/document', 'view', 'office'),
+  pg('office/spreadsheet', 'view', 'office'),
+  pg('office/presentation', 'view', 'office'),
+  // Office's comments panel, restyled like the app's comment cards (finish plan Task 6).
+  pg('office/document-comments', 'view', 'office'),
+  pg('office/spreadsheet-comments', 'view', 'office'),
+  pg('office/versions', 'dialog', 'office'),
   pg('pages/library', 'view'),
   pg('pages/library/connections', 'dialog'),
   pg('pages/library/edit', 'dialog'),

@@ -54,8 +54,8 @@ describe('which of the last channels a phone may call: exactly what it could bef
     // 12 docComments + 3 theme + 5 appearance + 2 favorites + 2 game + 4 arcade + 4 zoom + platform + commands + 2 ui action + system +
     // terminal + app:restart + 2 performance + 3 attention + 4 shell + 3 dialog + clipboard + 10 window (minimize maximize close
     // traffic-light icon get-id get-directory answer-close open-detached focus-and-switch) + detach:claim-pending + 8 detach/drag
-    // + 16 buddy + 6 integrations + 12 remote admin + 7 voice + 14 social
-    expect(entries.length).toBe(126);
+    // + 17 buddy (buddy:mascot-hit joined with the taskbar-icon buddy, 2026-10-02) + 6 integrations + 12 remote admin + 7 voice + 14 social
+    expect(entries.length).toBe(127);
   });
 
   it('exactly these are open to a phone; everything else is refused from the table', () => {
@@ -148,7 +148,7 @@ describe('window, detach, buddy, voice, social and the rest are the computer\'s 
 
   it('the on/handle shape of the hot drag and pointer channels is unchanged', () => {
     for (const name of ['session:drag-window-move', 'session:drag-started', 'session:drag-ended', 'session:drag-dropped', 'session:drag-adopt',
-      'buddy:move-mascot', 'buddy:drag-ended', 'voice:audio', 'attention:report', 'window:open-detached', 'window:focus-and-switch', 'appearance:broadcast']) {
+      'buddy:move-mascot', 'buddy:drag-ended', 'buddy:mascot-hit', 'voice:audio', 'attention:report', 'window:open-detached', 'window:focus-and-switch', 'appearance:broadcast']) {
       expect(findChannel(name)?.kind, name).toBe('on');
     }
     for (const name of ['session:detach-live', 'session:drop-resolve', 'buddy:show', 'detach:claim-pending']) expect(findChannel(name)?.kind, name).toBe('handle');
@@ -298,7 +298,7 @@ describe('the buddy keeps its consent gate', () => {
     refresh: vi.fn(async () => status), showRefusal: vi.fn(() => refusal), install: vi.fn(), remove: vi.fn(),
   });
   const manager = () => ({ show: vi.fn(), hide: vi.fn(), toggleChat: vi.fn(), dismiss: vi.fn(), dragEnded: vi.fn(), setViewedSession: vi.fn(),
-    getViewedSession: vi.fn(() => 's1'), moveMascotFromPointer: vi.fn(), getStatus: vi.fn(() => ({ dismissed: false, visible: true })), captureWindows: vi.fn(() => []), chatWebContents: vi.fn() });
+    getViewedSession: vi.fn(() => 's1'), moveMascotFromPointer: vi.fn(), setMascotHit: vi.fn(), getStatus: vi.fn(() => ({ dismissed: false, visible: true })), captureWindows: vi.fn(() => []), chatWebContents: vi.fn() });
 
   it('buddy:show re-reads the helper status and refuses with the gate\'s words, never showing the buddy', async () => {
     const m = manager(); const h = helper('The buddy needs its KDE helper on this desktop, and the helper is not running.');
@@ -307,6 +307,22 @@ describe('the buddy keeps its consent gate', () => {
     expect(h.refresh).toHaveBeenCalledTimes(1);
     expect(h.showRefusal).toHaveBeenCalledWith(status);
     expect(m.show).not.toHaveBeenCalled();
+  });
+
+  it('buddy:show passes only the two known styles on (the taskbar-icon buddy, 2026-10-02), and buddy:mascot-hit tells the window manager whether the pointer is on him', async () => {
+    const m = manager();
+    bindBuddy({ buddyManager: m as any, helper: helper(null) as any });
+    const show = findChannel('buddy:show')!;
+    await show.handler({ style: 'tray' }, desktopCtx());
+    await show.handler({ style: 'floating' }, desktopCtx());
+    await show.handler({ style: 'sideways' }, desktopCtx());
+    await show.handler(undefined, desktopCtx());
+    expect(m.show.mock.calls.map((c: unknown[]) => c[0])).toEqual(['tray', 'floating', undefined, undefined]);
+    const hit = findChannel('buddy:mascot-hit')!;
+    expect(hit.kind).toBe('on');
+    hit.handler({ over: true }, desktopCtx());
+    hit.handler({ over: 'yes' }, desktopCtx());
+    expect(m.setMascotHit.mock.calls).toEqual([[true], [false]]);
   });
 
   it('buddy:show shows the buddy when the gate lets it through, and the install/remove calls re-read the status after a change', async () => {

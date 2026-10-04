@@ -129,6 +129,7 @@ function folderErrorMessage(error: string, detail: string | undefined, atRoot: b
 import { FolderIcon as FolderCardIcon, DocIcon, ImageIcon, SheetIcon, CodeGlyphIcon, GridViewIcon, ListViewIcon } from '../icons';
 import { ChevronIcon, ChatIcon } from '../../Icons';
 import { EmptyState, ErrorState } from '../../ui';
+import { useOfficeHeaderAction } from '../../office/use-office-edit-screen';
 import { useScreenOpen, ScreenMark } from '../../../shoot-mode';
 
 // The rounded box the list-view rows sit in — the same container language the
@@ -1196,7 +1197,7 @@ function ArtifactDetail({ artifact, project, artifactDispatch: dispatch, initial
   // ActiveArtifactView still owns the edit/save/conflict logic; we only call into
   // it and mirror its edit state so the header can swap Edit ↔ Save/Cancel.
   const viewRef = useRef<ActiveArtifactHandle>(null);
-  const [editState, setEditState] = useState({ isEditable: false, editing: false });
+  const [editState, setEditState] = useState<{ isEditable: boolean; editing: boolean; autosaves?: boolean }>({ isEditable: false, editing: false });
   // Comments button state (doc comments polish pass): this screen puts its
   // actions in the header tool row, so Comments sits there too, just left of
   // Edit — the file drawer's "Comments next to Edit", in this screen's style.
@@ -1244,6 +1245,7 @@ function ArtifactDetail({ artifact, project, artifactDispatch: dispatch, initial
   // the right action for formats the in-app viewer can't render (html) or only
   // renders partially (docx/xlsx). Desktop-only (shell.openPath); no-op on remote.
   const handleOpenExternal = () => (window.claude as any).shell?.openPath?.(absPath);
+  const office = useOfficeHeaderAction(absPath, dispatch, () => viewRef.current?.cancelEdit());
   // Project and record along with the path (T7 review, finding 9).
   const handleDownload = () => { void downloadFile(absPath, { projectRoot: project.path, artifactId: artifact.id }); };
   const narrowViewport = useNarrowViewport();
@@ -1273,7 +1275,13 @@ function ArtifactDetail({ artifact, project, artifactDispatch: dispatch, initial
           {commentsState.count > 0 && <span className="text-fg-muted">{commentsState.count}</span>}
         </button>
       )}
-      {editState.isEditable && (editState.editing ? (
+      {editState.isEditable && (editState.editing && editState.autosaves ? (
+        // Office files save as you edit (office-questions#Q-save): one Done.
+        <button type="button" className={TOOL_BTN_ACCENT} onClick={() => viewRef.current?.saveEdit()}>
+          <CheckIcon size={13} />
+          Done
+        </button>
+      ) : editState.editing ? (
         <>
           <button type="button" className={TOOL_BTN_ACCENT} onClick={() => viewRef.current?.saveEdit()}>
             <CheckIcon size={13} />
@@ -1294,10 +1302,18 @@ function ArtifactDetail({ artifact, project, artifactDispatch: dispatch, initial
           buttons can't render dead, matching SessionDrawer's toolbar. */}
       {canOpenInOs && (
         <>
-          <button type="button" className={TOOL_BTN_NEUTRAL} onClick={handleOpenExternal} title="Open with the default app">
-            <ExternalLinkIcon size={13} />
-            Open
-          </button>
+          {/* Office files open in Office instead of the default app (office-review#B-inline). */}
+          {office ? (
+            <button type="button" className={TOOL_BTN_NEUTRAL} onClick={office.onClick} title={office.title}>
+              {office.glyph}
+              Office
+            </button>
+          ) : (
+            <button type="button" className={TOOL_BTN_NEUTRAL} onClick={handleOpenExternal} title="Open with the default app">
+              <ExternalLinkIcon size={13} />
+              Open
+            </button>
+          )}
           <button type="button" className={TOOL_BTN_NEUTRAL} onClick={handleReveal}>
             <FolderIcon size={13} />
             Reveal

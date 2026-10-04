@@ -6,8 +6,40 @@ import { MascotRig, type RigMotion } from '../mascot/MascotRig';
 import { purifySvgMarkup } from '../mascot/sanitize-rig-svg';
 import type { PoseName } from '../mascot/mascot-poses';
 import { defaultMascotPaint } from '../mascot/default-mascot-paint';
+import { useCurrentPlatform } from '../../platform';
 
 const DRAG_THRESHOLD_PX = 4;
+// Slack around his drawn outline that still counts as "on him", so thin arms
+// and feet aren't fiddly to grab.
+const HIT_SLOP_PX = 4;
+// 112px window (main.ts buddyDimensions / MASCOT_SIZE).
+const MASCOT_PX = 112;
+
+/**
+ * Is this point (mascot-window coordinates) on the mascot's DRAWN body, rather
+ * than the empty rest of his 112×112 window?
+ *
+ * WHY (Destin 2026-10-02: "he sometimes catches clicks above/to the side that
+ * should've passed through"): the whole window used to count. A rig is hit-tested
+ * by the browser against its painted shapes — the outer <svg> box itself does not
+ * count — sampled at the point and HIT_SLOP_PX around it. Flat art is one opaque
+ * <img>, so it falls back to the artwork's known box inside the window (the rig
+ * contract's 5/30 headroom above, 2/30 below, ~3/30 each side).
+ */
+function pointOnBody(x: number, y: number, rigHost: HTMLElement | null, size: number): boolean {
+  if (!rigHost) {
+    return x >= size * 3 / 30 && x <= size * 27 / 30 && y >= size * 5 / 30 && y <= size * 28 / 30;
+  }
+  // No hit-testing available (jsdom in tests) — fall back to the whole window,
+  // which is how he behaved before this check existed.
+  if (typeof document.elementFromPoint !== 'function') return true;
+  const S = HIT_SLOP_PX;
+  for (const [dx, dy] of [[0, 0], [S, 0], [-S, 0], [0, S], [0, -S]]) {
+    const el = document.elementFromPoint(x + dx, y + dy);
+    if (el instanceof SVGElement && !(el instanceof SVGSVGElement) && rigHost.contains(el)) return true;
+  }
+  return false;
+}
 // Drag velocity is normalized to the 80px buddy-window scale before feeding
 // the limb springs (spec §5: k = 80/size × 2.4) so trailing feels identical
 // at any render size (the buddy renders at 112px since the 2026-07-16 bump).
@@ -111,17 +143,44 @@ export function BuddyMascot() {
   // drag→peek → (release, cursor still there) → swing-out → (move away) → re-peek
   // (Destin 2026-07-17). He has to leave and come back before hovering pops him.
   const hoverArmedRef = useRef(true);
-  const onPointerEnter = useCallback(() => {
+  // Mirror of `hopping` for the pointer handlers (no re-subscribe per hop).
+  const hoppingRef = useRef(false);
+  hoppingRef.current = hopping;
+  // "Pointer is on his drawn body" — what hover and presses key off now, not
+  // the whole window (see pointOnBody). Main is told so it can make the empty
+  // rest of the window click-through on Windows/macOS.
+  const onBodyRef = useRef(false);
+  // Body-only hits on Windows/macOS ONLY. WHY (Destin 2026-10-03): there the
+  // empty part of the window is click-through, so a miss reaches the window
+  // behind him. Linux can't pass clicks through (Wayland ignores the request),
+  // so a body-only check there just made those clicks vanish — "inexplicably
+  // lost". On Linux, and until the platform is known, the whole square is him,
+  // as before. Click-through on Windows/macOS is the bonus; this is the floor.
+  const platform = useCurrentPlatform();
+  const bodyOnlyRef = useRef(false);
+  bodyOnlyRef.current = platform === 'win32' || platform === 'darwin';
+  const isOnBody = useCallback((x: number, y: number) =>
+    !bodyOnlyRef.current || pointOnBody(x, y, rigHostRef.current, MASCOT_PX), []);
+  const enterBody = useCallback(() => {
     if (dock.mode !== 'peeking') return;
     if (!hoverArmedRef.current) return; // still holding the post-drag/press state
     // Side peeks whip upright through the lean on the way out; top/bottom slide.
     if (dock.edge === 'left' || dock.edge === 'right') triggerSwing(dock.edge);
     setHopping(true);
   }, [dock.mode, dock.edge, triggerSwing]);
-  const onPointerLeave = useCallback(() => {
+  const leaveBody = useCallback(() => {
     hoverArmedRef.current = true; // a real leave — the next enter is a genuine hover
     setHopping(false);
   }, []);
+  const setOnBody = useCallback((over: boolean) => {
+    if (over === onBodyRef.current) return;
+    onBodyRef.current = over;
+    window.claude?.buddy?.mascotHit?.(over);
+    if (over) enterBody(); else leaveBody();
+  }, [enterBody, leaveBody]);
+  // Main makes the window click-through when it's created; re-assert on mount
+  // so a reloaded renderer and main agree that nothing is hovered yet.
+  useEffect(() => { window.claude?.buddy?.mascotHit?.(false); }, []);
   // Any dock change ends a hop — he's somewhere else now.
   useEffect(() => { setHopping(false); }, [dock.mode, dock.edge]);
   useEffect(() => () => {
@@ -219,6 +278,10 @@ export function BuddyMascot() {
   }, []);
 
   const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    // A press on the empty part of his window is not a press on him — no drag,
+    // no chat. Windows/macOS only (see bodyOnlyRef); it rarely even arrives
+    // there, since that part of the window is click-through.
+    if (!isOnBody(e.clientX, e.clientY)) return;
     // Disarm hover-swing-out for the duration of this press and until the
     // cursor next leaves (see hoverArmedRef): a drag that ends in peek must not
     // immediately pop back out just because the cursor is still on him.
@@ -241,11 +304,17 @@ export function BuddyMascot() {
       pointerId: e.pointerId,
     };
     setGrabbed(true);
-  }, []);
+  }, [isOnBody]);
 
   const onPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const st = dragRef.current;
-    if (!st) return;
+    if (!st) {
+      // Hovering. While he's hopped out of a peek, the whole window holds him
+      // out — otherwise standing up moves his body off a still cursor, he sinks
+      // back under it, and pops out again, forever.
+      setOnBody(hoppingRef.current || isOnBody(e.clientX, e.clientY));
+      return;
+    }
     // Cursor position reconstructed in a frame that does not move with the
     // window (see DragState) — the only thing here that may be differenced.
     const virtualX = st.windowTravelX + e.clientX;
@@ -282,7 +351,7 @@ export function BuddyMascot() {
         rafIdRef.current = requestAnimationFrame(flushPendingMove);
       }
     }
-  }, [flushPendingMove]);
+  }, [flushPendingMove, setOnBody, isOnBody]);
 
   const onPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     // Flush any unsent move synchronously before release — otherwise the
@@ -308,6 +377,10 @@ export function BuddyMascot() {
   // was already released.
   const onLostPointerCapture = useCallback(() => { cancelPendingMove(); endDrag(true); }, [cancelPendingMove, endDrag]);
   const onPointerCancel = useCallback(() => { cancelPendingMove(); endDrag(true); }, [cancelPendingMove, endDrag]);
+  const onPointerLeave = useCallback(() => {
+    if (dragRef.current) return; // a captured drag owns the pointer
+    setOnBody(false);
+  }, [setOnBody]);
 
   return (
     <div
@@ -321,8 +394,8 @@ export function BuddyMascot() {
       ].filter(Boolean).join(' ')}
       style={{
         // 112px window (main.ts buddyDimensions) — sized up 40% per Destin.
-        width: 112,
-        height: 112,
+        width: MASCOT_PX,
+        height: MASCOT_PX,
         // NOTE: we deliberately do NOT set -webkit-app-region: drag here.
         // On Windows, Electron implements drag regions via WM_NCHITTEST →
         // HTCAPTION, which makes the OS consume ALL pointer events for
@@ -353,7 +426,6 @@ export function BuddyMascot() {
       onPointerUp={onPointerUp}
       onLostPointerCapture={onLostPointerCapture}
       onPointerCancel={onPointerCancel}
-      onPointerEnter={onPointerEnter}
       onPointerLeave={onPointerLeave}
     >
       {/* Sink layer: dock/peek transforms + the side-peek lean (independent

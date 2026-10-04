@@ -14,13 +14,10 @@
     {"file": "migrate-permission-overrides.ts", "fn": "migratePermissionOverrides", "call": "fs.mkdirSync", "count": 1, "reason": "startup only: one-time settings migration run during launch (packaged builds)"},
     {"file": "migrate-permission-overrides.ts", "fn": "migratePermissionOverrides", "call": "fs.readFileSync", "count": 1, "reason": "startup only: one-time settings migration run during launch (packaged builds)"},
     {"file": "migrate-permission-overrides.ts", "fn": "migratePermissionOverrides", "call": "fs.writeFileSync", "count": 1, "reason": "startup only: one-time settings migration run during launch (packaged builds)"},
-    {"file": "symlink-cleanup.ts", "fn": "sweepDir", "call": "fs.existsSync", "count": 1, "reason": "startup only: main.ts sweeps orphaned plugin symlinks once during launch"},
-    {"file": "symlink-cleanup.ts", "fn": "sweepDir", "call": "fs.readdirSync", "count": 1, "reason": "startup only: main.ts sweeps orphaned plugin symlinks once during launch"},
-    {"file": "sync-spaces/space-manager.ts", "fn": "SpaceManager.loadInitial", "call": "fs.readFileSync", "count": 1, "reason": "startup only: the FIRST read of the small sync-spaces.json state file, made once when startSyncSpaces constructs the manager and asks isEnabled(); every later read is served from memory and every write is async"},
-    {"file": "symlink-cleanup.ts", "fn": "sweepDir", "call": "fs.readlinkSync", "count": 1, "reason": "startup only: main.ts sweeps orphaned plugin symlinks once during launch"},
-    {"file": "symlink-cleanup.ts", "fn": "sweepDir", "call": "fs.unlinkSync", "count": 1, "reason": "startup only: main.ts sweeps orphaned plugin symlinks once during launch"}
+    {"file": "sync-spaces/space-manager.ts", "fn": "SpaceManager.loadInitial", "call": "fs.readFileSync", "count": 1, "reason": "startup only: the FIRST read of the small sync-spaces.json state file, made once when startSyncSpaces constructs the manager and asks isEnabled(); every later read is served from memory and every write is async"}
   ],
   "user-rare": [
+    {"file": "prerequisite-installer.ts", "fn": "applyWindowsUserToolsToEnv", "call": "fs.existsSync", "count": 3, "reason": "three stat calls, Windows only: once at launch and once after each setup install's PATH rebuild (refreshPath)"},
     {"file": "claude-code-doc-comments-mcp.ts", "fn": "deployClaudeCodeDocCommentsMcp", "call": "fs.mkdirSync", "count": 1, "reason": "once per Claude Code session create, same rarity/shape as the sibling deployClaudeCodeLinkMcp (session-manager.ts calls both inline, synchronously, from the same non-async createSession)"},
     {"file": "claude-code-doc-comments-mcp.ts", "fn": "deployClaudeCodeDocCommentsMcp", "call": "fs.chmodSync", "count": 2, "reason": "T9c/T20 adversarial review, finding #1 (cheap hardening): owner-only permissions on the per-session deploy directory and its config file, once per Claude Code session create, same rarity/shape as the sibling deployClaudeCodeLinkMcp"},
     {"file": "claude-code-doc-comments-mcp.ts", "fn": "deployClaudeCodeDocCommentsMcp", "call": "fs.writeFileSync", "count": 2, "reason": "once per Claude Code session create, same rarity/shape as the sibling deployClaudeCodeLinkMcp (session-manager.ts calls both inline, synchronously, from the same non-async createSession)"},
@@ -443,7 +440,6 @@
     {"file": "plugin-installer.ts", "fn": "upgradePluginFromLocal", "call": "fs.rmSync", "count": 3},
     {"file": "plugin-installer.ts", "fn": "upgradePluginFromLocal", "call": "fs.statSync", "count": 1},
     {"file": "prerequisite-installer.ts", "fn": "checkDiskSpace", "call": "fs.statfsSync", "count": 1},
-    {"file": "prerequisite-installer.ts", "fn": "checkWindowsDevMode", "call": "execSync", "count": 1},
     {"file": "prerequisite-installer.ts", "fn": "cleanStaleClaudeDownloads", "call": "fs.readdirSync", "count": 1},
     {"file": "prerequisite-installer.ts", "fn": "cleanStaleClaudeDownloads", "call": "fs.rmSync", "count": 1},
     {"file": "prerequisite-installer.ts", "fn": "detectClaude", "call": "fs.existsSync", "count": 1},

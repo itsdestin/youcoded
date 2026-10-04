@@ -67,6 +67,7 @@ import { integrationsChannels } from './integrations';
 import { remoteAdminChannels } from './remote-admin';
 import { voiceChannels } from './voice';
 import { socialChannels } from './social';
+import { officeChannels } from './office';
 
 export type { MainChannelCtx, MainChannelDef } from './channel-def';
 
@@ -120,6 +121,7 @@ export const CHANNEL_TABLE: MainChannelDef[] = [
   ...remoteAdminChannels,
   ...voiceChannels,
   ...socialChannels,
+  ...officeChannels,
 ];
 
 let indexed: { size: number; byName: Map<string, MainChannelDef> } | null = null;
