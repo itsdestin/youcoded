@@ -49,7 +49,7 @@ describe('openSession: a first open (page)', () => {
     expect(reply.page.events).toHaveLength(1);
     expect(reply.after.map((p: any) => p.type)).toEqual(['hook:event', 'transcript:event', 'hook:replay-complete']);
     expect(reply.after[2].payload).toEqual({ sessionId: S, pendingRequestIds: ['a1'] });
-    expect(reply.facts).toEqual({ working: true, attention: 'ok' });
+    expect(reply.facts).toEqual({ working: true });   // sync-fix3: attention was sent and never applied, so it is no longer sent
   });
 
   it('samples the head BEFORE the page is read, so anything that happens during the read is above it', async () => {
@@ -195,5 +195,59 @@ describe('openSession: a resumed conversation', () => {
     r.begin(S);
     ok(await openSession(deps(r, { page: async () => page(0) }), { sessionId: S }));
     expect(r.summary(S)!.hasHistory).toBe(false);
+  });
+});
+
+// One-core sync-fix3: state that was only ever PUSHED once must also be in the answer a late screen is filled from.
+describe('openSession: a screen that opens late is handed one-shot state (sync-fix3)', () => {
+  const kinds = (r: any) => [...r.before, ...r.after].map((p: any) => p.type + (p.payload?.kind ? `:${p.payload.kind}` : ''));
+
+  it('hands over a native local model that is asleep or loading, with its size and progress, so the Reload / loading bar shows', async () => {
+    const r = new SessionRecords();
+    r.begin(S);
+    r.note(S, 'native:model-state', { sessionId: S, modelId: 'm1', state: 'loading', sizeBytes: 900, loadedBytes: 300 });
+    const reply = ok(await openSession(deps(r), { sessionId: S, fresh: true }));
+    const p = [...reply.before, ...reply.after].find((x: any) => x.type === 'native:model-state') as any;
+    expect(p?.payload).toEqual({ sessionId: S, state: 'loading', modelId: 'm1', sizeBytes: 900, loadedBytes: 300 });
+  });
+  it('sends no model state for a session that never had one', async () => {
+    const r = new SessionRecords();
+    r.begin(S);
+    expect(kinds(ok(await openSession(deps(r), { sessionId: S, fresh: true })))).not.toContain('native:model-state');
+  });
+
+  it('keeps the "Model switched" and "Conversation cleared" dividers in a page fill, in order with the messages around them', async () => {
+    const r = new SessionRecords();
+    r.begin(S);
+    r.note(S, 'transcript:event', user(1));
+    r.note(S, 'session:live', { sessionId: S, kind: 'model-switch', id: 'ms1', label: 'Model switched to Opus' });
+    r.note(S, 'session:live', { sessionId: S, kind: 'model-switch', id: 'ms2', label: 'Model switched to Sonnet' });
+    r.note(S, 'session:live', { sessionId: S, kind: 'model-switch-retract', id: 'ms2' });
+    r.note(S, 'transcript:event', user(2));
+    r.note(S, 'session:live', { sessionId: S, kind: 'clear', id: 'c1' });
+    const reply = ok(await openSession(deps(r), { sessionId: S, fresh: true }));
+    expect(reply.before.map((p: any) => p.payload.uuid ?? p.payload.id)).toEqual(['m1', 'ms1', 'ms2', 'ms2', 'm2', 'c1']);
+  });
+  it('does not put other live kinds (a card, a queue) in the tail: those have their own place in the answer', async () => {
+    const r = new SessionRecords();
+    r.begin(S);
+    r.note(S, 'session:live', { sessionId: S, kind: 'queue', queue: [] });
+    r.note(S, 'session:live', { sessionId: S, kind: 'compact-start', id: 'k' });
+    expect(r.fillTail(S)).toEqual([]);
+  });
+  it('a divider drawn the moment the transcript file rotates (a Claude Code /clear) survives, in either order, but older ones do not', async () => {
+    const a = new SessionRecords();
+    a.begin(S);
+    a.note(S, 'transcript:event', user(1));
+    a.note(S, 'session:live', { sessionId: S, kind: 'model-switch', id: 'old', label: 'x' });
+    a.note(S, 'session:live', { sessionId: S, kind: 'clear', id: 'c1' });
+    a.startNewTranscript(S);                       // the hook's divider came first, then the file rotated
+    expect(a.fillTail(S).map((t: any) => t.payload.id)).toEqual(['c1']);
+    const b = new SessionRecords();
+    b.begin(S);
+    b.note(S, 'transcript:event', user(1));
+    b.startNewTranscript(S);                       // the file rotated first, then the divider
+    b.note(S, 'session:live', { sessionId: S, kind: 'clear', id: 'c2' });
+    expect(b.fillTail(S).map((t: any) => t.payload.id)).toEqual(['c2']);
   });
 });

@@ -29,7 +29,8 @@ export interface OpenRequest {
 interface OpenFacts {
   /** A turn is in flight, as the record folded it. A page read from disk cannot say. */
   working: boolean;
-  attention: string;
+  // WHY no `attention` (sync-fix3): it was sent and applied nowhere. A late screen gets stalled / error / stuck from the fill's own events (the tail, the
+  // `attention` live fact), which is where the reducer reads them, so a second copy here could only disagree.
 }
 
 export type OpenReply =

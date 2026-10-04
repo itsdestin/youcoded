@@ -200,7 +200,9 @@ describe('live facts and the summary', () => {
     let queue = ['q1', 'q2'];
     r.setLiveSource((id) => (id === S ? { queued: queue, permissionMode: 'auto-edit' } : null));
     r.begin(S);
-    expect(r.summary(S)).toMatchObject({ queuedCount: 2, permissionMode: 'auto-edit' });
+    expect(r.summary(S)).toMatchObject({ queuedCount: 2 });
+    // sync-fix3: no screen read the summary's mode or model, so it carries neither (the fill hands a late screen the chips).
+    expect(Object.keys(r.summary(S)!).sort()).toEqual(['attention', 'awaitingCount', 'hasHistory', 'queuedCount', 'started', 'working']);
     queue = [];
     expect(r.summary(S)!.queuedCount).toBe(0);
   });
@@ -210,7 +212,7 @@ describe('live facts and the summary', () => {
     r.note(S, 'native:permission-mode', { sessionId: S, mode: 'full-auto' });
     r.note(S, 'native:model-state', { sessionId: S, modelId: 'm1', state: 'loading' });
     r.note(S, 'transcript:event', { sessionId: S, type: 'assistant-text', uuid: 'a', timestamp: 1, data: { text: 'x', model: 'claude-opus' } });
-    expect(r.facts(S)).toMatchObject({ permissionMode: 'full-auto', modelState: { state: 'loading', modelId: 'm1' }, model: 'claude-opus' });
+    expect(r.facts(S)).toMatchObject({ permissionMode: 'full-auto', modelState: { state: 'loading', modelId: 'm1', sizeBytes: null, loadedBytes: null }, model: 'claude-opus' });
   });
 
   it('prefer a relayed attention that says something is wrong, else what the events say', () => {
@@ -343,8 +345,8 @@ describe('the summary change announcement (what a phone\'s dots wait for)', () =
   });
 });
 
-describe('the summary announcement also covers the queue length and the host\'s permission mode', () => {
-  it('announces when a native session\'s queue grows or the host\'s mode changes, though no event carried them', () => {
+describe('the summary announcement also covers the queue length', () => {
+  it('announces when a native session\'s queue grows though no event carried it, and stays quiet when only the mode changes (no screen reads it from the summary)', () => {
     const r = new SessionRecords();
     let queued: string[] = [];
     let mode: string | null = 'ask';
@@ -359,7 +361,7 @@ describe('the summary announcement also covers the queue length and the host\'s 
     expect(heard).toHaveLength(1);
     mode = 'auto-edit';
     r.note(S, 'transcript:event', { sessionId: S, type: 'assistant-text', uuid: 'c', timestamp: 3, data: { text: 'z', partId: 'p' } });
-    expect(heard).toHaveLength(2);
+    expect(heard).toHaveLength(1);
   });
 
   it('noteHistory says a resumed conversation has history, once', () => {

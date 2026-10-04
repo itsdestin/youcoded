@@ -103,7 +103,7 @@ export async function openSession(deps: OpenDeps, req: OpenRequest, opts: { remo
   // 1. SAMPLE: the rule and the head are read in one synchronous step, before anything is awaited.
   const decision = records.resume(sessionId, req.fresh ? null : req.have)!;
   const facts = records.facts(sessionId)!;
-  const base = { epoch: decision.epoch, headSeq: decision.headSeq, facts: { working: facts.working, attention: facts.attention } };
+  const base = { epoch: decision.epoch, headSeq: decision.headSeq, facts: { working: facts.working } };
   // The terminal rides the same answer (a phone only). WHY its cut is NOT taken here (review fix): the phone drops live terminal frames until
   // this answer arrives, so a frame published while the page is being read would be in neither the answer nor the live stream. The cut is
   // taken right before the answer is built, after the page read, with nothing awaited between the cut and the return.

@@ -36,6 +36,8 @@ export const RING_MAX_BYTES = 2 * 1024 * 1024;
 /** The fill tail's bounds: merged entries are few, so the byte bound is what matters. */
 export const TAIL_MAX_ENTRIES = 4000;
 const TAIL_MAX_BYTES = 2 * 1024 * 1024;
+/** The `session:live` kinds the fill tail keeps (sync-fix3): the dividers, which exist nowhere on disk. */
+const TAIL_LIVE_KINDS = new Set(['model-switch', 'model-switch-retract', 'clear']);
 /** The terminal stream, in UTF-16 units (JavaScript string length): the same 4M the old per-session buffer held. */
 export const PTY_STREAM_UNITS = 4 * 1024 * 1024;
 /** While the newest terminal chunk is this small, append INTO it instead of pushing another entry (one-keystroke chunks). */
@@ -127,8 +129,9 @@ export interface SessionFacts {
   permissionMode: string | null;
   /** The model of the last assistant message. */
   model: string | null;
-  /** Native sessions: the bound model's residency, from the last model-state push. */
-  modelState: { state: string; modelId: string | null } | null;
+  /** Native sessions: the bound model's residency, from the last model-state push. WHY the whole payload (sync-fix3): a screen that opens later
+   *  is handed it by liveFill, and the Reload / loading bar needs the size and load progress as well as the state. */
+  modelState: { state: string; modelId: string | null; sizeBytes: number | null; loadedBytes: number | null } | null;
   /** Native sessions: ids of messages waiting behind the running turn (text is never copied here). */
   queued: string[];
 }
@@ -233,10 +236,10 @@ export class SessionRecords {
   private summaryKeyOf(sessionId: string, rec: Rec): string {
     const f = rec.facts;
     const reported = f.reportedAttention && f.reportedAttention !== 'ok' ? f.reportedAttention : null;
-    // queue length and the HOST's permission mode are read through the live source (they are not events), so a change to them is only
-    // seen when something asks; they are in the key so that when a push IS built they count, and R5-4 can read them from the summary.
+    // The queue length is read through the live source (it is not an event), so a change to it is only seen when something asks; it is in the key
+    // so that when a push IS built it counts. (The permission mode and model left the summary in sync-fix3: no screen read them.)
     const live = this.safeLive(sessionId);
-    return `${f.working ? 1 : 0}|${rec.asks.size + rec.passwordAsks.size}|${reported ?? this.attentionOf(rec)}|${f.hasHistory ? 1 : 0}|${rec.started ? 1 : 0}|${live?.permissionMode ?? f.permissionMode ?? ''}|${f.model ?? ''}|${live?.queued?.length ?? 0}`;
+    return `${f.working ? 1 : 0}|${rec.asks.size + rec.passwordAsks.size}|${reported ?? this.attentionOf(rec)}|${f.hasHistory ? 1 : 0}|${rec.started ? 1 : 0}|${live?.queued?.length ?? 0}`;
   }
 
   /** What the summary shows for attention: another writer's state wins; the computer's "stuck" shows when nothing else is wrong. */
@@ -380,7 +383,11 @@ export class SessionRecords {
    * tail already holds is skipped by the reducer's uuid check instead of drawn twice.
    */
   private noteTail(rec: Rec, type: string, payload: unknown, bytes: number): void {
-    if (type !== 'transcript:event' && type !== 'transcript:shrink') return;
+    // WHY the three divider kinds ride the tail too (sync-fix3): "Model switched to Opus" and "Conversation cleared" are not on disk, so a page
+    // fill (a late phone, a reload, a second window) would never draw them; they sit in the tail in order with the messages they fell between.
+    // The screen draws them once: their ids are deterministic and the reducer drops a marker whose id it already holds (HISTORY_PAGE_LOADED too).
+    const dividerLive = type === 'session:live' && TAIL_LIVE_KINDS.has(String(asObject(payload).kind));
+    if (type !== 'transcript:event' && type !== 'transcript:shrink' && !dividerLive) return;
     const e = asObject(payload);
     const d = asObject(e.data);
     const last = rec.tail[rec.tail.length - 1];
@@ -428,8 +435,13 @@ export class SessionRecords {
   startNewTranscript(sessionId: string): void {
     const rec = this.records.get(sessionId);
     if (!rec) return;
-    rec.tail = [];
-    rec.tailBytes = 0;
+    // WHY the exception (sync-fix3): the "Conversation cleared" divider is drawn at the moment of the clear, and the transcript file rotates
+    // around the same moment in either order. A divider that is the very last thing in the tail IS this clear's: keep it, so a screen that
+    // opens later still sees where the conversation was cleared. (Anything older belonged to the conversation being dropped.)
+    const lastEntry = rec.tail[rec.tail.length - 1];
+    const keep = lastEntry && lastEntry.type === 'session:live' && asObject(lastEntry.payload).kind === 'clear' ? [lastEntry] : [];
+    rec.tail = keep;
+    rec.tailBytes = keep.reduce((n, t) => n + t.bytes, 0);
   }
 
   /** The recent transcript, merged, in order: what a screen that opens now applies first, as live events (R5-2). */
@@ -621,6 +633,9 @@ export class SessionRecords {
     const out: Array<{ type: string; payload: unknown }> = [];
     if (rec.facts.model) out.push({ type: 'session:live', payload: { sessionId, kind: 'model', model: rec.facts.model } });
     if (rec.terminalMode) out.push({ type: 'session:permission-mode', payload: { sessionId, mode: rec.terminalMode } });
+    // A native session's local-model state (sync-fix3): the host pushes it only when it CHANGES, so a screen that opens later (a phone, a second
+    // window, a reload) would never see a sleeping or loading model and so no Reload / loading bar. Same payload shape as the live push.
+    if (rec.facts.modelState) out.push({ type: 'native:model-state', payload: { sessionId, ...rec.facts.modelState } });
     for (const p of rec.prompts.values()) out.push({ type: 'session:live', payload: p });
     if (rec.compacting) out.push({ type: 'session:live', payload: { sessionId, kind: 'compact-start', id: rec.compacting.id } });
     // A screen that opens while the computer thinks the turn may be stuck is told so (a phone opened after the banner would have shown none).
@@ -650,7 +665,7 @@ export class SessionRecords {
     const rec = this.records.get(sessionId)!;
     return {
       working: f.working, awaitingCount: f.awaitingCount, attention: reported ?? this.attentionOf(rec),
-      hasHistory: f.hasHistory, queuedCount: f.queued.length, started: rec.started, permissionMode: f.permissionMode, model: f.model,
+      hasHistory: f.hasHistory, queuedCount: f.queued.length, started: rec.started,
     };
   }
 
@@ -713,7 +728,10 @@ export class SessionRecords {
     }
     if (type === 'native:model-state') {
       const p = asObject(payload);
-      f.modelState = { state: String(p.state ?? ''), modelId: typeof p.modelId === 'string' ? p.modelId : null };
+      f.modelState = {
+        state: String(p.state ?? ''), modelId: typeof p.modelId === 'string' ? p.modelId : null,
+        sizeBytes: typeof p.sizeBytes === 'number' ? p.sizeBytes : null, loadedBytes: typeof p.loadedBytes === 'number' ? p.loadedBytes : null,
+      };
       return;
     }
     if (type === 'hook:event') { rec.started = true; this.foldHook(rec, asObject(payload)); return; }

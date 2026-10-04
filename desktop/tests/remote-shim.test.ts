@@ -727,7 +727,7 @@ describe('remote-shim — terminal backlog', () => {
     it('hands the computer\'s per-session summary to subscribers, and to one that subscribes after the push', async () => {
       const first: any[] = [];
       (window as any).claude.on.sessionSummary((p: any) => first.push(p));
-      ws.receive({ type: 'session:summary', payload: { summaries: { s1: { working: true, awaitingCount: 0, attention: 'ok', hasHistory: true, queuedCount: 0, permissionMode: null, model: null } } } });
+      ws.receive({ type: 'session:summary', payload: { summaries: { s1: { working: true, awaitingCount: 0, attention: 'ok', hasHistory: true, queuedCount: 0 } } } });
       expect(first).toHaveLength(1);
       expect(first[0].summaries.s1.working).toBe(true);
       const late: any[] = [];

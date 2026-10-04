@@ -26,8 +26,8 @@ export interface SessionSummary {
    *  started (it was away, or not watching that conversation) used to read "initializing" forever, with a "check terminal view" button, for a session that is
    *  fine on the computer. The summary reaches every phone for every session, on connect and on every change. */
   started: boolean;
-  permissionMode: string | null;
-  model: string | null;
+  // WHY no permissionMode / model here (sync-fix3): they were sent and read by no screen. A late-joining screen gets the mode and the model chip from the fill
+  // (`session:open`: liveFill / the native host's facts), which is where the chips are drawn from. Carrying them also made every mode or model change push a summary nobody uses.
 }
 
 /** The push: every session the computer has a record of. */
