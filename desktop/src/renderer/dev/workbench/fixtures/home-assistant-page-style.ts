@@ -210,12 +210,9 @@ export const HOME_ASSISTANT_PAGE_CSS = `
   /* Sixth-look notes: a slightly bigger bar, smaller − and +, and a
      see-through speaker on the bar's left that shows how loud it is. */
   .vwrap { position: relative; flex: 1; display: flex; align-items: center; }
-  /* Seventh-look notes: "i wanted volume bar to be taller". \`.lr.vlr\`
-     outranks the shared \`.tile .lr\` height further down, which had kept
-     the bar at its old height. */
-  .tile .lr.vlr { height: 30px; flex: 1; border-radius: 10px; }
-  .tile .lr.vlr { --tw: 16px; }
-  .tile .lr.vlr::-webkit-slider-thumb { width: 16px; height: 30px; border-radius: 10px; background-size: 3px 40%; }
+  /* The volume bar shares every bar's height (\`.tile .lr\` below); it only
+     stretches to fill the row beside − and +. */
+  .tile .lr.vlr { flex: 1; }
   .vicon { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); display: grid; color: var(--on-accent); opacity: .75; pointer-events: none; mix-blend-mode: normal; }
   .vicon.low { color: var(--fg); opacity: .55; }
   /* Playing: three bars that bounce beside Now playing, still when paused.
@@ -370,11 +367,14 @@ export const HOME_ASSISTANT_PAGE_CSS = `
   .tile.on .glow { opacity: .16; }
   .tile .bulb { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; background: var(--well); color: var(--fg-muted); flex-shrink: 0; position: relative; }
   .tile.on .bulb { background: var(--c); color: #1a1a1a; box-shadow: 0 0 14px var(--c); }
-  .tile .lr { height: 14px; position: relative; }
+  /* Every bar is as tall as the volume bar ("light brightness bars as tall
+     as the volume bar?" — yes, 2026-10-04): one slider look on the page,
+     and an easier target to grab on a touchscreen. */
+  .tile .lr { height: 30px; position: relative; border-radius: 10px; }
   /* The handle is a grip line inside the end of the fill, always shown, so
      nothing pops in on hover (eighth-look testing). */
-  .tile .lr { --tw: 14px; }
-  .tile .lr::-webkit-slider-thumb { width: 14px; height: 14px; border-radius: 9999px; background: linear-gradient(rgba(0, 0, 0, .3), rgba(0, 0, 0, .3)) center / 3px 55% no-repeat; cursor: grab; }
+  .tile .lr { --tw: 16px; }
+  .tile .lr::-webkit-slider-thumb { width: 16px; height: 30px; border-radius: 10px; background: linear-gradient(rgba(0, 0, 0, .3), rgba(0, 0, 0, .3)) center / 3px 40% no-repeat; cursor: grab; }
   .tile .lr:active::-webkit-slider-thumb { cursor: grabbing; }
 
   .tile.media .bulb { border-radius: var(--radius-md, 8px); }
