@@ -119,6 +119,7 @@ interface Entry {
   inFlight: Set<string>; // request ids currently being applied — guards a duplicate chokidar 'add'
   startedAt: number;
   stopped: boolean;
+  gapRescanTimers: ReturnType<typeof setTimeout>[];
 }
 
 const entries = new Map<string, Entry>(); // realpathed project root -> entry
@@ -158,6 +159,11 @@ function hasValidToken(entry: Entry, req: PendingMutationRequest): boolean {
  *  watcher's own verified `entry.realRoot` — see this file's own header,
  *  finding #1: `req.projectRoot` (self-reported, unauthenticated) is never
  *  used for authorization, and is not even read here. */
+/** Finish plan Task 6: the file is open in Office and its editor could not take the change yet
+ *  (still opening, or busy); the change is kept and made as soon as it can be (live-comments.ts).
+ *  The assistant is told so (claude-code-doc-comments-mcp.ts) rather than told it failed. */
+const isQueued = (r: object): boolean => 'queued' in r && (r as { queued?: unknown }).queued === true;
+
 async function applyRequest(req: PendingMutationRequest, trustedProjectRoot: string): Promise<PendingMutationResult> {
   const format: NativeFormat = req.format;
   const base = { path: req.path, projectRoot: trustedProjectRoot };
@@ -168,11 +174,13 @@ async function applyRequest(req: PendingMutationRequest, trustedProjectRoot: str
   if (req.kind === 'add') {
     const args = { ...base, selector: req.selector!, text: req.text ?? '', author: req.author ?? 'assistant' };
     const result = format === 'docx' ? await addNativeDocxComment(args) : await addNativeXlsxComment(args);
-    return result.ok ? { ok: true, id: result.id } : { ok: false, error: result.error };
+    if (isQueued(result)) return { ok: true, queued: true };
+    return result.ok ? { ok: true, id: (result as { id: string }).id } : { ok: false, error: result.error };
   }
   if (req.kind === 'reply') {
     const args = { ...base, id: req.commentId!, text: req.text ?? '', author: req.author ?? 'assistant' };
     const result = format === 'docx' ? await replyToNativeDocxComment(args) : await replyToNativeXlsxComment(args);
+    if (isQueued(result)) return { ok: true, queued: true };
     if (!result.ok) return { ok: false, error: result.error };
     // Design commit 6c612cb9 (§1.5/§1.6/§7): a reply's ordinal id can't be
     // pre-computed client-side, so the persisted CommentReply is meant to
@@ -190,16 +198,19 @@ async function applyRequest(req: PendingMutationRequest, trustedProjectRoot: str
   if (req.kind === 'resolve') {
     const args = { ...base, id: req.commentId!, by: req.author ?? 'assistant' };
     const result = format === 'docx' ? await resolveNativeDocxComment(args) : await resolveNativeXlsxComment(args);
+    if (isQueued(result)) return { ok: true, queued: true };
     return result.ok ? { ok: true } : { ok: false, error: result.error };
   }
   if (req.kind === 'reopen') {
     const args = { ...base, id: req.commentId!, by: req.author ?? 'assistant' };
     const result = format === 'docx' ? await reopenNativeDocxComment(args) : await reopenNativeXlsxComment(args);
+    if (isQueued(result)) return { ok: true, queued: true };
     return result.ok ? { ok: true } : { ok: false, error: result.error };
   }
   if (req.kind === 'move') {
     const args = { ...base, id: req.commentId!, newSelector: req.newSelector! };
     const result = format === 'docx' ? await moveNativeDocxComment(args) : await moveNativeXlsxComment(args);
+    if (isQueued(result)) return { ok: true, queued: true };
     if (!result.ok) return { ok: false, error: result.error };
     // Code review 2026-09-27, desktop F1: an xlsx move's OWN id changes (its
     // old id's embedded-cell hint goes stale the instant the comment moves —
@@ -399,6 +410,7 @@ export async function startPendingMutationQueue(sessionId: string, projectRoot: 
     inFlight: new Set(),
     startedAt: Date.now(),
     stopped: false,
+    gapRescanTimers: [],
   };
   entries.set(realRoot, entry);
   try { await fs.mkdir(pendingDir, { recursive: true }); } catch { /* best-effort, mirrors doc-comments-watcher.ts */ }
@@ -433,6 +445,7 @@ export async function startPendingMutationQueue(sessionId: string, projectRoot: 
     });
     if (entry.stopped) { await watcher.close(); return; }
     entry.watcher = watcher;
+    if (process.platform === 'darwin') scheduleGapRescans(entry);
   } catch {
     // No live processing — an MCP script's own poll will time out honestly
     // (claude-code-doc-comments-mcp.ts) rather than this throwing into
@@ -440,8 +453,45 @@ export async function startPendingMutationQueue(sessionId: string, projectRoot: 
   }
 }
 
+// WHY (macOS CI, 2026-10-01): on macOS chokidar's watch is FSEvents-backed and
+// starts delivering a moment AFTER 'ready'. A request the assistant's tool
+// wrote in that moment produced no 'add', so it was never applied and the
+// tool timed out — the session's first Word/Excel comment failed. A few
+// one-shot directory rescans across that window pick such requests up.
+// A file is only taken once it has been still for longer than chokidar's own
+// write-settle window, so a half-written request is never read; a later pass
+// (or chokidar itself) gets it once it settles. handleNewRequest's in-flight
+// set and its atomic claim already make a double pickup harmless.
+const GAP_RESCAN_DELAYS_MS = [300, 1_000, 2_500, 5_000];
+const GAP_RESCAN_SETTLED_MS = STABILITY_THRESHOLD_MS * 2;
+
+function scheduleGapRescans(entry: Entry): void {
+  for (const delay of GAP_RESCAN_DELAYS_MS) {
+    const t = setTimeout(() => { void rescanPending(entry); }, delay);
+    t.unref?.();
+    entry.gapRescanTimers.push(t);
+  }
+}
+
+async function rescanPending(entry: Entry): Promise<void> {
+  if (entry.stopped) return;
+  let names: string[];
+  try { names = await fs.readdir(entry.pendingDir); } catch { return; }
+  for (const name of names) {
+    const absPath = path.join(entry.pendingDir, name);
+    if (!isRequestFile(absPath)) continue;
+    try {
+      if (Date.now() - (await fs.stat(absPath)).mtimeMs < GAP_RESCAN_SETTLED_MS) continue;
+    } catch { continue; }
+    if (entry.stopped) return;
+    void handleNewRequest(entry, absPath);
+  }
+}
+
 function closeEntry(realRoot: string, entry: Entry): void {
   entry.stopped = true;
+  for (const t of entry.gapRescanTimers) clearTimeout(t);
+  entry.gapRescanTimers = [];
   entries.delete(realRoot);
   void entry.watcher?.close().catch(() => { /* already dead */ });
 }

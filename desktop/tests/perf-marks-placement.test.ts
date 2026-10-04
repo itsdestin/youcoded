@@ -14,7 +14,7 @@ const REQUIRED = [
   'main:chore:rotate-log:done', 'main:chore:prelude:done',
   'main:chore:install-hooks:done', 'main:chore:hook-relay:done',
   'main:chore:legacy-cleanup:done', 'main:chore:hook-reconcile:done', 'main:chore:prompt-suggestion:done',
-  'main:chore:retention-default:done', 'main:chore:symlink-cleanup:done', 'main:chore:stale-downloads:done',
+  'main:chore:retention-default:done', 'main:chore:stale-downloads:done',
   'main:chore:reconcile-mcp:done', 'main:chore:announcements:done', 'main:chore:remote-server:done',
   'main:chore:ipc-prefs:done', 'main:chore:theme-protocol:done', 'main:chore:accounts:done',
   'main:create-window:start', 'main:create-window:done', 'main:post-window:done',

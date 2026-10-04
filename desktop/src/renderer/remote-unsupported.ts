@@ -50,7 +50,20 @@ const FEATURE_NAMES: Array<[string, string]> = [
   // phone; the names are for the remaining, user-initiated calls in each family.
   ['syncspaces:', 'Syncing across your devices'],
   ['transcript:', 'Older messages'],
+  // Desktop only (R28). The remote client and the phone carry the office namespace so a
+  // call is refused rather than crashing, and this is the name that refusal reads.
+  ['office:', 'Office'],
 ];
+
+// Features whose own screen says the refusal where the person is looking (Office's editor
+// shows "Office isn't available ... yet." in its pane, with nothing to retry). The one-time
+// toast would repeat that same sentence, so for these the shim only logs it.
+const SAID_IN_PLACE = ['office:'];
+
+/** Whether this channel's screen states the refusal itself, so no toast is needed. */
+export function saidInPlace(channel: string): boolean {
+  return SAID_IN_PLACE.some((prefix) => channel.startsWith(prefix));
+}
 
 /** Which host refused: a desktop reached over remote access, or the phone's
  *  own bridge. The sentence has to say which, because "via remote access"

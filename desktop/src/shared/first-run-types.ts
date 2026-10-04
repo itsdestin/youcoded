@@ -1,7 +1,6 @@
 export type FirstRunStep =
   | 'DETECT_PREREQUISITES'
   | 'INSTALL_PREREQUISITES'
-  | 'ENABLE_DEVELOPER_MODE'
   | 'AUTHENTICATE'
   | 'LAUNCH_WIZARD'
   | 'COMPLETE';
@@ -36,8 +35,6 @@ export interface FirstRunState {
   setupProvider?: string;
   /** Error from the most recent failed step */
   lastError?: string;
-  /** Whether Windows Developer Mode needs enabling */
-  needsDevMode: boolean;
 }
 
 export const INITIAL_PREREQUISITES: PrerequisiteState[] = [

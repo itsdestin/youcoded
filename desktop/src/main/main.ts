@@ -38,9 +38,20 @@ import { VITE_DEV_PORT } from '../shared/ports';
 import { validateHandoffDraft, type DetachedHandoffDraft } from '../shared/handoff-draft';
 import { MOUNT_PROBE_JS } from './dev-mount-probe';
 import { log, rotateLog } from './logger';
+import { applyWindowsUserToolsToEnv } from './prerequisite-installer';
 import { isSmokeTest, reportWhenRendered } from './smoke-probe';
-import { installCrashDiagnostics, reportPreviousCrashes, wireWindowHangDiagnostics } from './crash-diagnostics';
+import { hangDeps, installCrashDiagnostics, reportPreviousCrashes, wireWindowHangDiagnostics } from './crash-diagnostics';
 import { registerThemeProtocol } from './theme-protocol';
+import { officeEditorSettings, officeThemeFonts, registerOfficeProtocol } from './office/office-protocol';
+import { sealOfficeFrames } from './office/office-frame-guard';
+import { registerOfficeIpc } from './office/office-ipc';
+import { registerOfficeComments } from './office/office-comments';
+import { officeAvailable, officeRoot } from './office/office-root';
+import { getOfficeSessions, initOfficeSessionsSafely, quitOfficeSessions } from './office/office-session-registry';
+import { refuseCloseForUnsaved, refuseQuitForUnsaved, watchUnsavedEdits } from './unsaved-quit';
+import { syncJournals } from './office/office-journal-sync';
+import { createCloseGate } from './window-close-gate';
+import { gatedQuit, onWillQuit, quitAfterTeardown } from './app-restart';
 import { isAppPageUrl } from './app-navigation';
 import { FirstRunManager, markSetupCompleted, setupIsUsable, type FirstRunNativeDeps, type NativeKeyService, type OpenRouterSignInAuth } from './first-run';
 import { pickSuggestedModel } from './first-run-local';
@@ -96,6 +107,7 @@ import { registerArcadeHandlers } from './arcade-handlers';
 import { registerVoiceHandlers, shutdownVoiceHandlers } from './voice/voice-handlers';
 import { requestMergedChatSnapshot } from './chat-snapshot';
 import { BuddyWindowManager } from './buddy-window-manager';
+import { createBuddyTray } from './buddy-tray';
 import { BAR_SIZE, MASCOT_SIZE, CHAT_SIZE } from './buddy-bar-geometry';
 // The KDE script that lets the buddy move itself on a Wayland desktop, and
 // the lookup that asks KDE how much of the screen the taskbar has taken.
@@ -161,6 +173,10 @@ if (process.platform === 'win32') {
   if (!parts.includes(localBin)) {
     process.env.PATH = `${localBin}${path.delimiter}${process.env.PATH ?? ''}`;
   }
+  // WHY (2026-10-02): setup now unpacks Git and Node.js into the user's own
+  // folder instead of installing them system-wide, so no registry PATH names
+  // them. Put them back on PATH every launch, or sessions lose them.
+  applyWindowsUserToolsToEnv();
 } else if (process.platform === 'darwin' || process.platform === 'linux') {
   const home = os.homedir();
   const extraPaths = [
@@ -178,6 +194,12 @@ if (process.platform === 'win32') {
     extraPaths.unshift(
       `${home}/Library/Application Support/YouCoded/node/bin`,
     );
+  } else {
+    // WHY (2026-10-02): first-run installs Node on Linux into ~/.youcoded/node
+    // (prerequisite-installer.ts userLocalNodeDir). Only macOS had its folder
+    // here, so after the first relaunch from a menu launcher — which never
+    // reads .bashrc — Claude Code and Terminal sessions could not find node.
+    extraPaths.unshift(`${home}/.youcoded/node/bin`);
   }
   process.env.PATH = `${extraPaths.join(path.delimiter)}${path.delimiter}${process.env.PATH}`;
 }
@@ -436,6 +458,10 @@ protocol.registerSchemesAsPrivileged([
   // WHY: supportFetchAPI alone does not allow cross-origin fetch from the
   // renderer. Inline mascot rigs need the scheme in Chromium's CORS allowlist.
   { scheme: 'theme-asset', privileges: { bypassCSP: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
+  // Office (design §3): a standard secure origin per document (workers, fetch, storage); no bypassCSP or service workers.
+  // WHY no corsEnabled/stream (spike had both): a Task 6 dev run without them opened docx/xlsx/pptx and a pictured docx, loaded fonts,
+  // saved typing, and a pptx's video clip played and seeked from asc/docmedia — the editor only fetches its own origin (no CORS).
+  { scheme: 'office', privileges: { standard: true, secure: true, supportFetchAPI: true } },
 ]);
 
 // In-memory cache of user's permission overrides, loaded from defaults file
@@ -544,9 +570,9 @@ function registerFirstRunIpc(
     catch (e) { log('ERROR', 'FirstRun', 'API key submit failed', { error: String(e) }); }
   });
 
-  ipcMain.handle(IPC.FIRST_RUN_DEV_MODE_DONE, async () => {
-    try { await firstRunManager.handleDevModeDone(); }
-    catch (e) { log('ERROR', 'FirstRun', 'Dev mode failed', { error: String(e) }); }
+  ipcMain.handle(IPC.FIRST_RUN_CANCEL_AUTH, async () => {
+    try { await firstRunManager.cancelAuth(); }
+    catch (e) { log('ERROR', 'FirstRun', 'Cancel sign-in failed', { error: String(e) }); }
   });
 
   ipcMain.handle(IPC.FIRST_RUN_SKIP, async () => {
@@ -865,15 +891,14 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
     });
   }
 
-  // Security: allow navigation only to the app's own page (prevents preload API
-  // exposure). Any file:// used to pass — see isAppPageUrl for why that was not enough.
+  // Security: only the app's own page may load here (preload exposure) — isAppPageUrl says why.
   win.webContents.on('will-navigate', (event, url) => {
     if (!isAppPageUrl(url, path.join(__dirname, '../renderer/index.html'), DEV_SERVER_URL)) event.preventDefault();
   });
+  sealOfficeFrames(win.webContents); // WHY: subframes skip will-navigate; Office frames never leave office: (office-frame-guard.ts)
   // Security: deny window.open() but route safe http(s)/mailto to the OS browser
   win.webContents.setWindowOpenHandler(({ url }) => {
-    // Rejects when the OS has no handler for the scheme — nothing to recover,
-    // but it must not escape as an unhandled rejection.
+    // Rejects when the OS has no handler for the scheme — must not escape as an unhandled rejection.
     if (/^(https?:|mailto:)/i.test(url)) void shell.openExternal(url).catch(() => {});
     return { action: 'deny' as const };
   });
@@ -975,7 +1000,6 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   // native dialog can't render the app's own switch. Main now ASKS the
   // renderer (window:close-request) and awaits its answer
   // (window:answer-close) instead of blocking on the OS dialog itself.
-  let confirmedClose = false;
   // The screen reloading or crashing takes an open quit prompt with it, and
   // with no timeout nothing else would ever settle that request — every later
   // X press would reuse it and the window could not be closed. Forget it, so
@@ -986,45 +1010,36 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
     if (details?.isMainFrame && !details.isSameDocument) closeRequests.dropFor(wid);
   });
   win.webContents.on('render-process-gone', () => closeRequests.dropFor(wid));
-  win.on('close', async (ev) => {
-    // Buddy windows never own sessions (they only subscribe). Skip the
-    // close-confirmation entirely so a floating widget never gets blocked
-    // by a "kill sessions?" dialog that wouldn't make sense in that UI.
-    if (opts?.buddy) return;
-    if (confirmedClose) return;
+  // The close: the last window's unsaved files, then the sessions prompt (window-close-gate.ts).
+  const closeGate = createCloseGate({
+    buddy: !!opts?.buddy,
     // Whole-app quit wins over a pending prompt (design §4 step 5):
     // settlePendingCloseRequests() (called at the top of shutdownApp(), which
     // both before-quit and SIGTERM/SIGINT pass through) already resolved any
     // request THIS window had pending, and runShutdown()'s destroyAll() is
     // about to tear down every session anyway — a close event reaching here
     // once shuttingDown is set must ask nothing and let the window close.
-    if (shuttingDown) return;
-    const ownedSessions = windowRegistry.sessionsForWindow(wid);
-    if (ownedSessions.length === 0) return; // no sessions — close freely
-    ev.preventDefault();
-    const answer = await closeRequests.request(wid, ownedSessions.length, (push) => {
+    shuttingDown: () => !!shuttingDown,
+    refuseForUnsaved: () => refuseCloseForUnsaved(win, (w) => !!buddyManagerRef?.isBuddyWindow(w as never)),
+    syncJournals: () => (getOfficeSessions()?.hasFor(win.webContents.id) ? syncJournals(win.webContents) : null), // Office edits to the recovery journal first (≤1.5 s, Task 8 fix round 1)
+    sessionIds: () => windowRegistry.sessionsForWindow(wid),
+    ask: (count) => closeRequests.request(wid, count, (push) => {
       if (!win.isDestroyed()) win.webContents.send(IPC.WINDOW_CLOSE_REQUEST, push);
-    });
-    // A second close press while this was pending resolved the SAME promise
-    // for every concurrent invocation of this handler (design §4 step 4) — the
-    // first one through already ran the block below and set confirmedClose.
-    if (confirmedClose) return;
-    // Re-read ownership rather than reusing `ownedSessions`: the in-app prompt
-    // does not block the strip the way the old modal OS dialog did, so a
-    // session can be dragged into another window (or closed with its own X)
-    // while this one waits on an answer. Passing a STALE list into
-    // applyCloseAnswer would destroy/untrack a session that no longer belongs
-    // to this window — review finding, T3 (pinned by
-    // close-request-manager.test.ts's applyCloseAnswer suite).
-    const shouldClose = applyCloseAnswer(answer, windowRegistry.sessionsForWindow(wid), {
+    }),
+    // The gate passes the sessions owned when the person confirmed AND still owned now: one
+    // dragged away meanwhile (review T3) or started later (fix round 8) is never ended.
+    apply: (answer, ids) => applyCloseAnswer(answer, ids, {
       untrack: (sid) => welcomeBackStore?.untrack(sid),
       destroySession: (sid) => sessionManager.destroySession(sid),
       releaseSession: (sid) => windowRegistry.releaseSession(sid),
-    });
-    if (!shouldClose) return; // Cancel — leave the window open, ask again next press
-    confirmedClose = true;
-    if (!win.isDestroyed()) win.close();
+    }),
+    isDestroyed: () => win.isDestroyed(),
+    close: () => win.close(),
+    ...hangDeps(win),
   });
+  // A page's beforeunload veto cancelled the close. Observed only: preventDefault would override it.
+  win.webContents.on('will-prevent-unload', () => closeGate.onUnloadPrevented());
+  win.on('close', (ev) => { void closeGate.onClose(ev); });
 
   return win;
 }
@@ -1134,6 +1149,7 @@ function createWindow(firstRunManager?: FirstRunManager) {
       deviceId: deviceIdentity.id, machineId: machineIdentity?.id ?? '' },
     chatgptAuth, welcomeBackStore);
   cleanupIpcHandlers = ipcWiring.cleanup;
+  watchUnsavedEdits(); // unsaved files refuse a quit before teardown (unsaved-quit.ts, fix rounds 9–10)
   cancelWindowHandoffs = (id) => ipcWiring.handoffAttempts?.cancelOwner(`window:${id}`);
   const hasUsableProvider = ipcWiring.hasUsableProvider;
 
@@ -1222,7 +1238,7 @@ function createWindow(firstRunManager?: FirstRunManager) {
                 else await lateFirstRunManager!.handleApiKeySubmit(key);
               } catch {}
             });
-            ipcMain.handle(IPC.FIRST_RUN_DEV_MODE_DONE, async () => { try { await lateFirstRunManager!.handleDevModeDone(); } catch {} });
+            ipcMain.handle(IPC.FIRST_RUN_CANCEL_AUTH, async () => { try { await lateFirstRunManager!.cancelAuth(); } catch {} });
             ipcMain.handle(IPC.FIRST_RUN_SKIP, async () => {
               markSetupCompleted(); // same one writer as above
               lateFirstRunManager?.skip();
@@ -1864,22 +1880,6 @@ void app.whenReady().then(async () => {
   perfMark('main:chore:prompt-suggestion:done');
   perfMark('main:chore:retention-default:done');
 
-  // Clean up orphan symlinks left by pre-decomposition post-update.sh —
-  // entries under ~/.claude/{hooks,commands,skills}/ that point into now-deleted
-  // core/life/productivity subtrees of the toolkit. No replacement mechanism
-  // rebuilds them; Claude Code v2.1+ discovers plugin commands/skills via
-  // plugin.json, so the symlinks are pure tombstones once the target is gone.
-  try {
-    const { cleanupOrphanSymlinks } = require('./symlink-cleanup');
-    const cleanupSummary = cleanupOrphanSymlinks();
-    if (cleanupSummary.removed > 0) {
-      log('INFO', 'Main', 'Orphan symlinks cleaned up', cleanupSummary);
-    }
-  } catch (e) {
-    log('ERROR', 'Main', 'Failed to clean up orphan symlinks', { error: String(e) });
-  }
-  perfMark('main:chore:symlink-cleanup:done');
-
   // Sweep abandoned .partial files and downloads older than 24h from the
   // in-app update cache. Runs at every startup so stale downloads (e.g. from
   // a cancelled update on a prior session) don't accumulate on disk.
@@ -1961,6 +1961,20 @@ void app.whenReady().then(async () => {
 
   registerThemeProtocol();
   perfMark('main:chore:theme-protocol:done');
+
+  // Office editors (design §3a): each open document gets its own sealed office://<token>
+  // origin. initOfficeSessionsSafely() makes this instance's own random-suffixed temp base
+  // (office-session-registry.ts, never shared with the live app); the protocol and the IPC
+  // below reach the same registry through getOfficeSessions(). WHY guarded, not awaited bare (fix round 2): a failed
+  // mkdtemp (full/unwritable/policy-blocked temp dir) must degrade Office to unavailable, not
+  // abort the rest of startup and leave the app with no window.
+  const officeSessions = await initOfficeSessionsSafely();
+  if (officeSessions) registerOfficeProtocol({ root: officeRoot(), sessions: officeSessions, fonts: officeThemeFonts(app.getPath('userData'), path.join(os.homedir(), '.claude')), editorSettings: officeEditorSettings(app.getPath('userData')) });
+  // office:* (Task 5). WHY even without sessions: the renderer gets "unavailable", not a missing
+  // handler. WHY the getter: the registry goes away at quit, and each request must see that.
+  registerOfficeIpc(ipcMain, { getSessions: getOfficeSessions, available: () => officeAvailable(), root: officeRoot(), userData: app.getPath('userData'), documents: app.getPath('documents'), pruneVersionsAfterMs: 30_000 });
+  registerOfficeComments(); // comments on an open document go through its editor (office-comments.ts)
+  perfMark('main:chore:office-protocol:done');
 
   // Marketplace auth store — instantiated once at startup, passed to IPC handlers.
   // The auth store holds the bearer token in the main process only; the token
@@ -2144,6 +2158,9 @@ void app.whenReady().then(async () => {
           const s = cachedBuddyHelperStatus();
           return s?.needed === true && s.installed === true;
         },
+        // The taskbar-icon buddy style (buddy-tray.ts). Same assets dir the
+        // window icon loads from.
+        createTray: (handlers) => createBuddyTray(path.join(__dirname, '../../assets'), handlers),
       });
   // Publish to module scope so createAppWindow's 'closed' handler can see it.
   buddyManagerRef = buddyManager;
@@ -2173,10 +2190,12 @@ void app.whenReady().then(async () => {
   // The status is re-read on every show rather than trusted from launch,
   // because the user can switch the script off in KDE's own System Settings
   // while YouCoded is running (design §4).
-  ipcMain.handle(IPC.BUDDY_SHOW, async () => {
+  ipcMain.handle(IPC.BUDDY_SHOW, async (_evt, style?: unknown) => {
     const refusal = buddyShowRefusal(await refreshBuddyHelperStatus());
     if (refusal) return { ok: false, reason: refusal };
-    buddyManager.show();
+    // Renderer input — only the two known styles get through; anything else
+    // keeps the current style.
+    buddyManager.show(style === 'tray' || style === 'floating' ? style : undefined);
     return { ok: true };
   });
   ipcMain.handle(IPC.BUDDY_HIDE, () => buddyManager.hide());
@@ -2213,6 +2232,7 @@ void app.whenReady().then(async () => {
   });
   // Drag release → edge-snap detection against the window's final bounds.
   ipcMain.on(IPC.BUDDY_DRAG_ENDED, () => buddyManager.dragEnded());
+  ipcMain.on(IPC.BUDDY_MASCOT_HIT, (_evt, over: unknown) => buddyManager.setMascotHit(over === true));
   ipcMain.handle(IPC.BUDDY_DISMISS, () => buddyManager.dismiss());
   // WHY no `keepAbove` on the status any more (2026-09-16): it rode along here
   // for the deleted overlay's KDE "pin above" toggle, whose Settings row went
@@ -2564,6 +2584,8 @@ async function runShutdown(): Promise<void> {
     welcomeBackStore?.flush() ?? Promise.resolve(),
     new Promise<void>((r) => setTimeout(r, 1_000)),
   ]).catch(() => {});
+  // Office: a save mid-translation finishes (≤5 s), then the temp base goes; unsaved edits stay in their recovery journals (Task 8). Awaited last.
+  const officeQuit = quitOfficeSessions();
   // Capture the engine-stop promise: cleanup() starts llama-server teardown and we
   // must let it finish before app.quit(), else the engine outlives the app and keeps
   // the fixed port bound for the next instance to wrongly adopt (2026-07-20 fix).
@@ -2614,6 +2636,7 @@ async function runShutdown(): Promise<void> {
     Promise.all([engineStopped, chatgptDisposed, syncStopped]),
     new Promise<void>((r) => setTimeout(r, 4_000)),
   ]).catch(() => {});
+  await officeQuit;
 }
 
 // Route 1: last window closed. Delegate to app.quit() rather than tearing down
@@ -2628,12 +2651,16 @@ app.on('window-all-closed', () => {
 // async teardown finish before the process goes away; `quit`/`will-quit` are
 // not reliably awaitable.
 app.on('before-quit', (e) => {
-  // Second pass: shutdownApp() already ran (or is running) and re-issued the
-  // quit below — let it proceed rather than cancelling forever.
-  if (shuttingDown) return;
-  e.preventDefault();
-  void shutdownApp().finally(() => app.quit());
+  // Second pass: shutdownApp() already ran (or is running) and re-issued the quit below — let it
+  // proceed (watchdog armed), unless a window has unsaved text edits (app-restart.ts, fix round 11).
+  if (shuttingDown) { if (!quitAfterTeardown()) e.preventDefault(); return; }
+  e.preventDefault(); // Unsaved files first: their list shows before any teardown (unsaved-quit.ts).
+  void gatedQuit({ // app-restart.ts: also carries a pending restart through the gate (fix round 6, I-B)
+    gate: () => !refuseQuitForUnsaved(),
+    shutdown: () => shutdownApp(),
+  }).catch(() => {});
 });
+app.on('will-quit', () => onWillQuit(() => app.relaunch())); // a restart relaunches only now (app-restart.ts)
 
 // Route 3: OS shutdown, logout, `kill`, or Ctrl+C in a dev terminal. These
 // never reach Electron's quit events at all, so they need their own hook.

@@ -33,6 +33,30 @@ function watchedUnder(root: string): Set<string> {
   return out;
 }
 
+/** Resolve once `watcher` actually reports a write under `root`.
+ *  WHY: on macOS chokidar's 'ready' (which addSpace awaits) can fire before the
+ *  OS-level watch is armed (engine.ts's own NOTE), so a flood written straight
+ *  after addSpace() can be partly dropped and never push the count over the
+ *  budget — the macOS leg failed "goes back to live watching" that way. The
+ *  probe is rewritten until one lands (awaitWriteFinish holds each 500 ms). */
+async function untilWatcherLive(watcher: FSWatcher, root: string): Promise<void> {
+  const probe = path.join(root, '.yc-watch-probe');
+  let landed = false;
+  const onEvent = (_e: string, p: string) => { if (p === probe) landed = true; };
+  watcher.on('all', onEvent);
+  try {
+    const deadline = Date.now() + WAIT_MS;
+    for (let attempt = 0; !landed && Date.now() < deadline; attempt++) {
+      fs.writeFileSync(probe, String(attempt));
+      const rewriteAt = Date.now() + 2_500;
+      while (!landed && Date.now() < rewriteAt) await new Promise(r => setTimeout(r, 25));
+    }
+  } finally {
+    watcher.off('all', onEvent);
+  }
+  if (!landed) throw new Error(`watcher never reported a write under ${root}`);
+}
+
 function fakeTransport(): SyncTransport & { pushes: string[]; pulls: string[] } {
   const t: any = {
     pushes: [] as string[], pulls: [] as string[],
@@ -238,6 +262,7 @@ async function drainStartupSync(t: { pushes: unknown[] }): Promise<void> {
     const engine = new SpaceSyncEngine(t, { debounceMs: 100, pollMs: 0, watchBudget: 5, onEvent: e => events.push(e) });
     await engine.addSpace({ id: 'project:x', kind: 'project', root: tmp });
     expect(events.some(e => e.type === 'notice')).toBe(false);
+    await untilWatcherLive(created[created.length - 1], tmp);
     for (let i = 0; i < 10; i++) fs.writeFileSync(path.join(tmp, `f${i}.md`), 'x');
     await vi.waitFor(() => expect(events.filter(e => e.type === 'notice')).toHaveLength(1), { timeout: WAIT_MS });
     await vi.waitFor(() => expect(created[created.length - 1].closed).toBe(true), { timeout: WAIT_MS });
@@ -256,6 +281,7 @@ async function drainStartupSync(t: { pushes: unknown[] }): Promise<void> {
     const engine = new SpaceSyncEngine(t, { debounceMs: 2_000, pollMs: 0, watchBudget: 5, onEvent: e => events.push(e) });
     await engine.addSpace({ id: 'project:x', kind: 'project', root: tmp });
     const first = created[created.length - 1];
+    await untilWatcherLive(first, tmp);
     // Only the project's .gitignore knows this folder, and its files arrive
     // faster than the post-sync refresh can learn that.
     ignored = ['.venv-rocm'];

@@ -140,15 +140,24 @@ export async function sweepStaleTmp(dir: string, targetBase: string): Promise<vo
 // permission error and is thrown at once.
 const RENAME_RETRY_DELAYS_MS = [20, 50, 100, 200, 400];
 
-export async function renameReplacing(tmp: string, target: string, platform: NodeJS.Platform = process.platform): Promise<void> {
+// `shouldAbort` (optional): checked before each retry; when it returns true the last error is
+// thrown instead of retrying. WHY: Office's save must not land after quit has given up on it
+// (its caller removes the copy instead), and a retry loop could otherwise outlast that moment.
+export async function renameReplacing(
+  tmp: string,
+  target: string,
+  platform: NodeJS.Platform = process.platform,
+  shouldAbort?: () => boolean,
+): Promise<void> {
   for (let attempt = 0; ; attempt++) {
     try {
       await fs.rename(tmp, target);
       return;
     } catch (e: any) {
       const transient = platform === 'win32' && (e.code === 'EPERM' || e.code === 'EACCES' || e.code === 'EBUSY');
-      if (!transient || attempt >= RENAME_RETRY_DELAYS_MS.length) throw e;
+      if (!transient || attempt >= RENAME_RETRY_DELAYS_MS.length || shouldAbort?.()) throw e;
       await new Promise((r) => setTimeout(r, RENAME_RETRY_DELAYS_MS[attempt]));
+      if (shouldAbort?.()) throw e;
     }
   }
 }

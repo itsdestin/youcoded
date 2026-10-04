@@ -821,6 +821,19 @@ class Bootstrap(internal val context: Context) {
         }
     }
 
+    /**
+     * Delete the unpacked runtime (usr/: programs and Claude Code) so the next
+     * setup() unpacks and installs everything again. Leaves home/ — the user's
+     * conversations and settings — alone.
+     *
+     * WHY (2026-10-02): the self-test failure screen's button used to only
+     * re-run setup(), which skips unpacking whenever usr/bin/bash still exists,
+     * so pressing it changed nothing. Call off the main thread.
+     */
+    fun clearRuntime() {
+        usrDir.deleteRecursively()
+    }
+
     fun selfTest(): SelfTestResult {
         val prefix = usrDir.absolutePath
         val env = mapOf(

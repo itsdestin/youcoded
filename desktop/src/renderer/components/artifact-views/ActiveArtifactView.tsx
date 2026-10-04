@@ -1,10 +1,10 @@
 // ActiveArtifactView — shared component for viewing and editing a single artifact.
 // Extracted from SessionDrawer.tsx (Task 7.2) so both SessionDrawer and ProjectView
 // can use it identically without duplicating the edit state + conflict-detection logic.
-import { useCallback, useEffect, useRef, useState, forwardRef, useImperativeHandle, Suspense } from 'react';
+import { lazy, useCallback, useEffect, useRef, useState, forwardRef, useImperativeHandle, Suspense } from 'react';
 import { getViewer, getEditViewer, rendersFromBytesOnly, isTextContentViewer, isCodeEditorViewer, isCommentableBinaryViewer } from './RendererRegistry';
 import { PartialFileBanner } from './PartialFileBanner';
-import { canEditArtifact } from './edit-permission';
+import { canEditArtifact, draftFileStatus } from './edit-permission';
 import { ViewerErrorBoundary } from './ViewerErrorBoundary';
 import type { ArtifactRecord } from '../../../shared/artifacts/types';
 import { editTier, EDIT_MAX_BYTES } from '../../../shared/artifacts/editable-path-policy';
@@ -41,8 +41,15 @@ function absoluteArtifactPath(projectRoot: string, a: ArtifactRecord): string {
     : (a.absolutePath ?? a.path);
 }
 import { openEditorSearch, revealLineIn } from './cm/editor-registry';
-import { draftKey, stashDraft, takeDraft, clearDraft } from './draft-store';
+import { draftKey, stashDraft, takeDraft, clearDraft, settleDraft } from './draft-store';
 import { ScreenMark } from '../../shoot-mode';
+import { isOfficeEditable } from '../office/office-files';
+import { useOfficeAvailable } from '../office/office-availability';
+import { flushOffice } from '../office/office-store';
+import { holdUnsavedEditor } from '../../state/unsaved-editors';
+// Office files edit in the Euro-Office editor (design stage, 2026-09-28) — lazy,
+// so the editor code loads only when someone presses Edit on one.
+const OfficeInlineEditor = lazy(() => import('../office/OfficeInlineEditor').then((m) => ({ default: m.OfficeInlineEditor })));
 
 // Confirm-tier wording (D5): name the actual consequence, per path family.
 // Never a vague "are you sure" — the user should know what the file DOES.
@@ -72,6 +79,43 @@ function saveErrorMessage(res: any): string {
   return `Save failed: ${String(err ?? 'unknown error')}`;
 }
 
+/**
+ * Save a parked draft from the refused-quit prompt (Task 6 fix round 13) — the editor's own save
+ * path (artifacts:save: the same write authorization, temp file + rename and changed-on-disk
+ * check in main), with the draft's own base token. Without a token nothing can tell whether the
+ * file changed since, so that is reported as a possible conflict, never saved blind; `force`
+ * (Save anyway, confirmed) overwrites. On success the draft is cleared (its mark with it).
+ */
+export async function saveParkedDraft(p: {
+  projectRoot: string; projectId: string; projectName: string; artifact: ArtifactRecord; sessionId: string;
+  draft: string; baseMtimeMs: number | null; resolvedPath?: string | null; force?: boolean; confirmed?: boolean;
+}): Promise<import('../../state/unsaved-editors').ParkedSaveResult> {
+  // The write tier is judged on the RESOLVED path, as the editor does (a link may lead into a
+  // settings folder); a settings file asks first, inline (fix round 14) — never a dead-end message.
+  const abs = p.resolvedPath ?? (p.artifact.kind === 'internal'
+    ? `${p.projectRoot.replace(/\\/g, '/').replace(/\/+$/, '')}/${p.artifact.path.replace(/\\/g, '/')}`
+    : (p.artifact.absolutePath ?? p.artifact.path));
+  const needsConfirm = editTier(canonicalize(abs, null)) === 'needs-confirm';
+  if (needsConfirm && !p.confirmed) return { needsConfirm: true };
+  if (!p.force && p.baseMtimeMs === null) return { conflict: true, unknown: true };
+  const opts: { baseMtimeMs?: number; confirmed?: boolean } = {};
+  if (!p.force && p.baseMtimeMs !== null) opts.baseMtimeMs = p.baseMtimeMs;
+  if (needsConfirm) opts.confirmed = true;
+  let res: any;
+  try {
+    res = await (window.claude as any).artifacts.save(p.projectRoot, p.projectId, p.projectName, p.artifact.id, p.draft, p.sessionId, opts);
+  } catch (e) {
+    return { error: `Save failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+  if (res && res.ok) { clearDraft(draftKey(p.projectRoot, p.artifact.id)); return { ok: true }; }
+  if (res && res.error === 'conflict') return { conflict: true };
+  // Main's own answers the prompt can act on (fix round 15): a settings file → the inline
+  // question (never the editor's "re-enter edit mode" advice); a protected path → Discard only.
+  if (res && res.error === 'needs-confirm') return { needsConfirm: true };
+  if (res && res.error === 'protected-path') return { protected: true };
+  return { error: saveErrorMessage(res) };
+}
+
 // Imperative handle so an external chrome (the SessionDrawer header toolbar) can
 // drive edit mode while ActiveArtifactView keeps owning the edit/save/conflict
 // logic. Paired with onEditStateChange so the header re-renders on state change.
@@ -81,6 +125,9 @@ export interface ActiveArtifactHandle {
   /** True when edit mode holds changes not yet on disk — hosts must gate
    * selection/close behind the unsaved-changes prompt when set (D3). */
   dirty: boolean;
+  /** Office files save themselves as you edit: hosts show one "Done" instead of
+   *  Save + Cancel, and saveEdit/cancelEdit both just leave edit mode. */
+  autosaves: boolean;
   startEdit(): void;
   /** Resolves true when the save landed — false means the pane is showing a
    * conflict or error and the caller should NOT proceed with navigation. */
@@ -183,7 +230,7 @@ export interface ActiveArtifactViewProps {
   // (SessionDrawer) renders them in its header instead. ProjectView omits this.
   controlsInHeader?: boolean;
   // Fires whenever editability / edit-mode changes so the host header can update.
-  onEditStateChange?: (s: { isEditable: boolean; editing: boolean }) => void;
+  onEditStateChange?: (s: { isEditable: boolean; editing: boolean; autosaves?: boolean }) => void;
   /** Fires when the Comments button's state changes; the host draws the
    *  button (and the floating actions, unless commentsActionsInPane). */
   onCommentsStateChange?: (s: CommentsHeaderState) => void;
@@ -221,7 +268,14 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // The four conditions (resolved content, policy, binary sniff, SIZE) live in
   // one predicate so the affordance, entering edit mode, restoring a stashed
   // draft, and the save call cannot disagree — see edit-permission.ts.
-  const isEditable = canEditArtifact(contentInfo, content, tier);
+  // Office files are not text: they edit in the Office editor, which saves them
+  // itself (office-questions#Q-open-mode, #Q-save), so none of the text-draft
+  // machinery below applies. Only where the app can run the editors: a desktop whose
+  // Office add-on is installed (Task 6 — the namespace itself exists on remote and the phone
+  // too, where Office stays off until phones get it, #Q-phones).
+  const officeAvailable = useOfficeAvailable();
+  const office = isOfficeEditable(artifact.path) && officeAvailable;
+  const isEditable = office ? tier !== 'denied' : canEditArtifact(contentInfo, content, tier);
 
   // ── Task 6.4: controlled edit state (lifted from MarkdownView) ──
   // Owning edit state here lets the conflict banner read/reset it without
@@ -268,6 +322,11 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
       setDraft(pending.draft);
       mtimeRef.current = pending.mtimeMs;
       setEditing(true);
+      settleDraft(draftKey(projectRoot, artifact.id), true); // back in the editor (fix round 11)
+    } else if (pending && content !== null) {
+      // Can't be edited any more: the draft stays parked (and listed), never dropped.
+      pendingRestoreRef.current = undefined;
+      settleDraft(draftKey(projectRoot, artifact.id), false);
     }
   }, [content, artifact.id]);
 
@@ -297,16 +356,27 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
         setDraft(pending.draft);
         mtimeRef.current = pending.mtimeMs;
         setEditing(true);
+        settleDraft(key, true);
       }
     }
     return () => {
+      // Switched away (or unmounted) before a taken draft could be applied: it stays parked.
+      if (pendingRestoreRef.current) { pendingRestoreRef.current = undefined; settleDraft(key, false); }
       // THE SAFETY NET: unmounting (or switching away) while dirty stashes
       // the draft instead of discarding it. Guarded paths never reach here
       // dirty — Discard runs cancelEdit first; unguarded paths (any layout
       // change that unmounts the drawer) degrade to draft-survives.
       const cur = stateRef.current;
       if (cur.editing && cur.content !== null && cur.draft !== cur.content) {
-        stashDraft(key, { draft: cur.draft, mtimeMs: mtimeRef.current });
+        // Named and savable from the refused-quit prompt (fix rounds 11–13): the file name only.
+        const draftText = cur.draft;
+        const baseMtimeMs = mtimeRef.current;
+        const resolvedPath = cur.contentInfo?.resolvedPath ?? null;
+        stashDraft(key, {
+          draft: draftText, mtimeMs: baseMtimeMs, name: artifact.path.split(/[\\/]/).pop() || artifact.path,
+          available: () => draftFileStatus(projectRoot, artifact),
+          save: (o) => saveParkedDraft({ projectRoot, projectId, projectName, artifact, sessionId, draft: draftText, baseMtimeMs, resolvedPath, ...o }),
+        });
       }
     };
   }, [artifact.id, projectRoot]);
@@ -360,6 +430,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
 
   // ── Edit lifecycle callbacks (passed down to MarkdownView as controlled props) ──
   const handleStartEdit = useCallback(() => {
+    if (office) { setEditing(true); return; }
     // Confirm-tier paths get one deliberate click BEFORE editing starts, not a
     // surprise refusal at save time (D5 — mistake-prevention, not security; the
     // hard boundary is main's).
@@ -385,12 +456,16 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     setEditing(true);
     setConflict(null);
     setSaveError(null);
-  }, [tier, absolutePath, projectRoot, artifact.id, content, contentInfo, onContentChange, onDiskRead]);
+  }, [office, tier, absolutePath, projectRoot, artifact.id, content, contentInfo, onContentChange, onDiskRead]);
 
   // opts.force: skip the concurrency token — the deliberate "Keep mine"
   // overwrite. Shaped as an options object so accidental event-object args
   // (onClick={handleSave}) can never read as force=true.
   const handleSave = useCallback(async (opts?: { force?: boolean }): Promise<boolean> => {
+    // The Office editor saves as you type (3 s after the last change); Done waits for that
+    // last save, at most 5 s, so leaving never drops the final few seconds of typing. A save
+    // that failed keeps the editor open, where its reason and the save-failed actions show (I1).
+    if (office) { const r = await flushOffice(absolutePath); if (!r.ok) return false; setEditing(false); return true; }
     // The §2.2 empty-file guarantee: while content is null (the fetch
     // transient, an orphan, a binary file) there is NOTHING valid to save — a
     // write here would truncate the file to the placeholder draft. This is the
@@ -468,7 +543,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     }
     setSaveError(saveErrorMessage(res));
     return false;
-  }, [projectRoot, projectId, projectName, artifact.id, draft, sessionId, onContentChange, onDiskRead, tier, content, contentInfo]);
+  }, [office, absolutePath, projectRoot, projectId, projectName, artifact.id, draft, sessionId, onContentChange, onDiskRead, tier, content, contentInfo]);
 
   const handleCancel = useCallback(() => {
     clearDraft(draftKey(projectRoot, artifact.id));
@@ -477,6 +552,9 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     setConflict(null);
     setSaveError(null);
   }, [content, projectRoot, artifact.id]);
+  // The refused-quit prompt's discard reaches the latest cancel (the effect below holds it).
+  const cancelRef = useRef(handleCancel);
+  cancelRef.current = handleCancel;
 
   // ── Conflict resolution actions ──
   const resolveKeepMine = useCallback(() => {
@@ -523,6 +601,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     isEditable,
     editing,
     dirty,
+    autosaves: office,
     startEdit: handleStartEdit,
     saveEdit: () => handleSave(),
     cancelEdit: handleCancel,
@@ -539,23 +618,27 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
       tryReveal();
     },
     toggleComments: () => setCommentsMode((m) => (m === 'comments' ? 'reading' : 'comments')),
-  }), [isEditable, editing, dirty, handleStartEdit, handleSave, handleCancel]);
+  }), [isEditable, editing, dirty, office, handleStartEdit, handleSave, handleCancel]);
 
   // Desktop app-quit / window-close guard while dirty (D3). Android never
   // fires beforeunload usefully — its back navigation goes through the
   // useEscClose stack in the hosts instead.
+  // Also held in unsaved-editors so a quit refuses BEFORE teardown rather than meeting this
+  // veto after every session was stopped (Task 6 fix round 9).
   useEffect(() => {
     if (!dirty) return;
     const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
     window.addEventListener('beforeunload', handler);
-    return () => window.removeEventListener('beforeunload', handler);
+    // Named (file name only) and discardable from the refused-quit prompt (fix round 11).
+    const release = holdUnsavedEditor({ name: artifact.path.split(/[\\/]/).pop() || artifact.path, discard: () => cancelRef.current() });
+    return () => { window.removeEventListener('beforeunload', handler); release(); };
   }, [dirty]);
 
   // Notify the host whenever editability / edit-mode changes so its header
   // can swap the pencil ↔ save/cancel icons.
   useEffect(() => {
-    onEditStateChange?.({ isEditable, editing });
-  }, [isEditable, editing, onEditStateChange]);
+    onEditStateChange?.({ isEditable, editing, autosaves: office });
+  }, [isEditable, editing, office, onEditStateChange]);
 
   // The Registry returns a real component for every type (heavy viewers —
   // pdf/docx/xlsx — are React.lazy, so they're code-split but still rendered
@@ -564,7 +647,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // editor component — most read viewers (HtmlView iframe, CsvView grid) have
   // no edit UI, so "Edit" on those files used to render nothing.
   const ViewerComponent = editing
-    ? getEditViewer(artifact.path)
+    ? (office ? OfficeInlineEditor : getEditViewer(artifact.path))
     : getViewer(artifact.path, {
         // Only assert text when a get response actually sniffed the bytes —
         // absent info keeps the registry's conservative extension routing.
@@ -849,6 +932,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
             <ScreenMark name={`chat/files/open/${artifact.id}`} />
             <ViewerComponent
               path={artifact.path}
+              artifactId={artifact.id}
               content={content}
               contentInfo={contentInfo}
               sniffedBinaryTextFile={sniffedBinaryTextFile}

@@ -24,7 +24,7 @@ import type {
   PageConnection, PageConnectionStatus, PageDocument, PageHome, PageIcon,
   PageLoadFailure, PageRefreshState, PageSummary,
 } from '../../shared/pages-types';
-import { MAX_PAGE_DATA_BYTES, MAX_PINNED_PAGES } from '../../shared/pages-types';
+import { MAX_PAGE_DATA_BYTES, MAX_PINNED_PAGES, OFFICE_PAGE_ID, OFFICE_PAGE_SUMMARY } from '../../shared/pages-types';
 
 export const PAGES_DIR = 'Pages';
 const PINS_DIR = '.pins';
@@ -51,6 +51,12 @@ export interface PagesStoreDeps {
   /** Per-page freshness, kept in memory by the service and never on disk
    *  (design §3: approvals must not share a 60-a-minute write path). */
   refreshState?: (pageId: string) => PageRefreshState | undefined;
+  /** Whether the built-in Office page is listed: the add-on is installed (officeAvailable).
+   *  WHY here (Task 6): the Office page opens and pins like any page, and PageHost closes a
+   *  page the list does not carry — so without this row the Office page could not be opened
+   *  outside the workbench. Remote clients get the row too; their renderer hides it, because
+   *  they cannot run Office (office-availability.ts). Absent: never listed. */
+  officeListed?: () => Promise<boolean>;
 }
 
 interface Located { id: string; dir: string; slug: string; home: PageHome }
@@ -80,12 +86,15 @@ export class PagesStore {
       homes.push({ root: path.join(p.path, PAGES_DIR), home: { kind: 'project', path: p.path, name: p.name }, prefix: `project:${p.name}` });
     }
     const pinned = new Set(await this.readPins());
+    const builtins: PageSummary[] = (await this.deps.officeListed?.().catch(() => false))
+      ? [{ ...OFFICE_PAGE_SUMMARY, pinned: pinned.has(OFFICE_PAGE_ID) }]
+      : [];
     // ONE read of the approvals file per listing, not one per page. An
     // unreadable one (a newer version's file) reads as "nothing is approved",
     // which pauses every connected page rather than guessing at a grant.
     let saved: ConnectionsSnapshot = { pages: {}, keys: {} };
     try { saved = (await this.deps.connections?.read()) ?? saved; } catch { saved = { pages: {}, keys: {} }; }
-    const out: PageSummary[] = [];
+    const out: PageSummary[] = [...builtins];
     const next = new Map<string, Located>();
     for (const h of homes) {
       let entries: import('node:fs').Dirent[] = [];
@@ -270,8 +279,10 @@ export class PagesStore {
   }
 
   async setPinned(id: string, pinned: boolean): Promise<PageSummary[]> {
-    const loc = await this.locate(id);
-    if (loc) {
+    // The built-in Office page has no folder, but pins like any page when it is listed.
+    const pinnable = (await this.locate(id)) !== null
+      || (id === OFFICE_PAGE_ID && !!(await this.deps.officeListed?.().catch(() => false)));
+    if (pinnable) {
       const target = this.pinsPath();
       this.deps.noteOwnWrite?.(target);
       await mutateFileUnderLock(target, (onDisk) => {

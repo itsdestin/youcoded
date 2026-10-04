@@ -1511,9 +1511,9 @@ globalThis.fetch = async (url) => {
   /** Ask the CLI itself where it would write, so the test never re-implements
    *  resolveRunsDir's workspace walk. --dry-run spends nothing and needs no key. */
   function runsDirOf(stub: string, planFile: string): string {
-    const { stdout } = runCliStubbed(stub, ['--plan', planFile, '--dry-run']);
+    const { status, stdout, stderr } = runCliStubbed(stub, ['--plan', planFile, '--dry-run']);
     const line = stdout.split('\n').find((l) => l.trim().startsWith('Results: '));
-    if (!line) throw new Error(`the CLI printed no "Results:" line:\n${stdout}`);
+    if (!line) throw new Error(`the CLI printed no "Results:" line (exit ${status}):\n${stdout}\n--- stderr ---\n${stderr}`);
     return line.trim().slice('Results: '.length);
   }
 

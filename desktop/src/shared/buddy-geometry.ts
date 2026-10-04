@@ -241,3 +241,45 @@ export function computeGroupLayout(mascotBounds: Rect, workArea: Rect): GroupLay
     chat: { x, y: chatY },
   };
 }
+
+/** Breathing room between the taskbar-style chat and the screen edge. */
+const TRAY_EDGE_GAP_PX = 8;
+
+/**
+ * Where the chat and its button row go when the buddy is a TASKBAR ICON
+ * instead of a floating mascot (the "taskbar icon" buddy style).
+ *
+ * WHY its own layout and not computeGroupLayout with a pretend mascot: that
+ * layout reserves a 112px hole for the mascot and hangs the button row off his
+ * hands, so with no mascot drawn the buttons would float beside empty space.
+ * Here the chat sits against the bar the icon lives in, horizontally centred
+ * on the icon, with the button row tucked directly under the chat.
+ *
+ * `icon` is where the OS says the icon is — null where it won't say (Linux),
+ * which falls back to the bottom-right corner, where most Linux panels keep
+ * their tray. An icon in the top half of the screen (the macOS menu bar, a
+ * top panel) puts the chat at the top; anything else at the bottom.
+ *
+ * Pure — unit-tested.
+ */
+export function computeTrayLayout(icon: Rect | null, workArea: Rect): { chat: Point; bar: Point } {
+  const groupHeight = CHAT_SIZE.height + BAR_SIZE.height;
+  const atTop = !!icon && icon.y + icon.height / 2 < workArea.y + workArea.height / 2;
+  const centreX = icon
+    ? icon.x + icon.width / 2
+    : workArea.x + workArea.width - TRAY_EDGE_GAP_PX - CHAT_SIZE.width / 2;
+  const chatY = atTop
+    ? workArea.y + TRAY_EDGE_GAP_PX
+    : workArea.y + workArea.height - TRAY_EDGE_GAP_PX - groupHeight;
+  const chat = clampToWorkArea(
+    { x: Math.round(centreX - CHAT_SIZE.width / 2), y: Math.round(chatY) },
+    CHAT_SIZE,
+    workArea,
+  );
+  const bar = clampToWorkArea(
+    { x: chat.x + Math.round((CHAT_SIZE.width - BAR_SIZE.width) / 2), y: chat.y + CHAT_SIZE.height },
+    BAR_SIZE,
+    workArea,
+  );
+  return { chat, bar };
+}
