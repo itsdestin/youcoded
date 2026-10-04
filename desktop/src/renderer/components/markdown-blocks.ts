@@ -793,3 +793,68 @@ function planStream(blocks: MarkdownBlocks, floor: number, settledPiecesIn: numb
     pending: groups.slice(s),
   };
 }
+
+// ---------------------------------------------------------------------------
+// A long code fence that is still being typed.
+
+/** Lines per frozen chunk of an open code fence (see splitOpenFence). */
+export const OPEN_FENCE_CHUNK_LINES = 20;
+
+export interface OpenFenceSplit {
+  /** The fence's opening line, with its line ending — hand it to every chunk so each reads as the same language. */
+  opening: string;
+  /** The code lines that are final, in whole chunks of OPEN_FENCE_CHUNK_LINES; each line ends with "\n". */
+  frozen: string;
+  /** Everything after them: the few dozen newest lines plus the line still being typed. */
+  tail: string;
+}
+
+/**
+ * Cut a message piece that is ONE still-open code fence into a frozen head and a
+ * small live tail, or null when it is not that (or is still too short to bother).
+ *
+ * WHY (perf-lab 2026-10-04, "D7"): a reply writing one 500-line fence redrew the
+ * whole fence — parse, syntax-colour, element tree — on every streamed word, so
+ * the cost per word grew with the fence and the screen's thread sat at 100%.
+ * Lines of an open fence are final the moment their line ending arrives (nothing
+ * typed later can change them: only a closing fence line ends the block, and we
+ * refuse to split when any line could be one), so the head is drawn once, in
+ * chunks, and only the tail is redrawn per word.
+ *
+ * Only the plain, common shape is split — a fence at column 0, LF line endings,
+ * nothing before it — everything else keeps today's whole-block drawing. The tail
+ * is always at least one chunk long (20-39 lines) so a line is coloured with plenty
+ * of context before it is frozen.
+ */
+export function splitOpenFence(source: string): OpenFenceSplit | null {
+  const open = /^(`{3,}|~{3,})([^\n]*)\n/.exec(source);
+  if (!open || source.includes('\r')) return null;
+  // A backtick fence's info string may not hold a backtick (then it is not a fence).
+  if (open[1][0] === '`' && open[2].includes('`')) return null;
+  // The reference block is drawn by its own component from the whole body.
+  if (/^\s*conversations(?:\s|$)/.test(open[2])) return null;
+  const openingLen = open[0].length;
+  // Any line that could close the fence means the block may already be finished.
+  if (FENCE_CLOSE_LINE.test(source.slice(openingLen - 1))) return null;
+  // Complete lines in the code; the line still being typed is not counted.
+  let lines = 0;
+  for (let at = source.indexOf('\n', openingLen); at !== -1; at = source.indexOf('\n', at + 1)) lines++;
+  const frozenLines = lines < 2 * OPEN_FENCE_CHUNK_LINES ? 0 : Math.floor((lines - OPEN_FENCE_CHUNK_LINES) / OPEN_FENCE_CHUNK_LINES) * OPEN_FENCE_CHUNK_LINES;
+  if (frozenLines === 0) return null;
+  let end = openingLen;
+  for (let i = 0; i < frozenLines; i++) end = source.indexOf('\n', end) + 1;
+  return { opening: open[0], frozen: source.slice(openingLen, end), tail: source.slice(end) };
+}
+
+/** The frozen head cut into its chunks of OPEN_FENCE_CHUNK_LINES lines (each line ends with "\n"). */
+export function fenceChunks(frozen: string): string[] {
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < frozen.length) {
+    let end = start;
+    for (let i = 0; i < OPEN_FENCE_CHUNK_LINES; i++) end = frozen.indexOf('\n', end) + 1;
+    chunks.push(frozen.slice(start, end));
+    start = end;
+  }
+  return chunks;
+}

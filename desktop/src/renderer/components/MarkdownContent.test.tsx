@@ -4,6 +4,7 @@ import React from 'react';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import MarkdownContent from './MarkdownContent';
+import { OPEN_FENCE_CHUNK_LINES } from './markdown-blocks';
 import { SessionRefsEnabled } from './session-refs-context';
 import { MARKDOWN_STREAM_CORPUS, tokenDeltas, prefixesOf } from '../../../tests/helpers/markdown-stream-corpus';
 
@@ -38,6 +39,13 @@ vi.mock('remark-parse', async (importOriginal) => {
       };
     },
   };
+});
+// How many highlighters were built. rehype-highlight builds one (and registers ~37
+// languages) each time it is called; the app must call it once, not once per render.
+const highlighterBuilds = vi.hoisted(() => ({ n: 0 }));
+vi.mock('rehype-highlight', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('rehype-highlight')>();
+  return { default: (...args: any[]) => { highlighterBuilds.n++; return (actual.default as any)(...args); } };
 });
 // The reference block resolves ids asynchronously; a fixed stand-in keeps the
 // streaming comparisons below about markdown, not about a network answer.
@@ -84,6 +92,20 @@ const FENCES: { name: string; md: string; code: string }[] = [
     code: 'abc\n',
   },
 ];
+
+describe('syntax highlighter', () => {
+  // perf-lab 2026-10-04: a fresh highlighter per render was ~1.8 s of a 34 s reply stream.
+  it('is built once, not once per render', () => {
+    const before = highlighterBuilds.n;
+    for (let i = 0; i < 5; i++) {
+      const r = render(<MarkdownContent content={'```ts\nconst a = 1;\n```'} />);
+      expect(r.container.querySelector('.hljs-keyword')).not.toBeNull();
+      r.unmount();
+    }
+    expect(highlighterBuilds.n - before).toBe(0);
+    expect(highlighterBuilds.n).toBeLessThanOrEqual(1);
+  });
+});
 
 describe('MarkdownContent fenced code blocks', () => {
   for (const f of FENCES) {
@@ -414,12 +436,24 @@ describe('MarkdownContent while a reply streams in', () => {
   // one. Order carries no meaning to the browser, and today's whole-message
   // render updates in place too; everything else — text nodes included — is
   // compared exactly.
-  const canonical = (root: Element): string => Array.from(root.childNodes).map((n) => {
-    if (n.nodeType !== 1) return n.nodeType === 3 ? JSON.stringify(n.textContent) : '';
-    const el = n as Element;
-    const attrs = Array.from(el.attributes).map((a) => `${a.name}=${JSON.stringify(a.value)}`).sort().join(' ');
-    return `<${el.tagName.toLowerCase()} ${attrs}>${canonical(el)}</${el.tagName.toLowerCase()}>`;
-  }).join('');
+  // WHY adjacent text nodes are joined (without touching the page): a long open code
+  // fence is drawn in chunks, so one run of plain text can arrive as two text nodes
+  // where the whole-message render has one. The browser shows them identically.
+  const canonical = (root: Element): string => {
+    const parts: string[] = [];
+    let text = '';
+    const flush = () => { if (text) parts.push(JSON.stringify(text)); text = ''; };
+    for (const n of Array.from(root.childNodes)) {
+      if (n.nodeType === 3) { text += n.textContent ?? ''; continue; }
+      if (n.nodeType !== 1) continue;
+      flush();
+      const el = n as Element;
+      const attrs = Array.from(el.attributes).map((a) => `${a.name}=${JSON.stringify(a.value)}`).sort().join(' ');
+      parts.push(`<${el.tagName.toLowerCase()} ${attrs}>${canonical(el)}</${el.tagName.toLowerCase()}>`);
+    }
+    flush();
+    return parts.join('');
+  };
   const wholeHtml = (md: string) => {
     const r = render(<Bubble md={md} />);
     const html = canonical(r.container);
@@ -673,6 +707,89 @@ describe('MarkdownContent while a reply streams in', () => {
     const code = lines(150, (i) => `  const value${i} = compute(${i}, "string ${i}") + other[${i}];`);
     const costs = streamCosts('Here', `Here:\n\n\`\`\`ts\n${code}\n`, tokenDeltas('  more(1);\n\n  <div>[x]: y</div>\n  after_blank();\n'));
     expectNoMoreThanToday(costs);
+  });
+
+  // The perf-lab "D7" class (2026-10-04): one long code fence redrew from its first
+  // line on every word, so per-word cost grew with the fence and the thread sat at
+  // 100%. Pinned by COUNTING the characters handed to the parser/colourer per word
+  // (not milliseconds): once the fence is long, a word must cost the same whether
+  // the fence is 200 lines or 800.
+  describe('one very long code fence that is still being typed', () => {
+    const codeLine = (i: number) => `  const value${i} = compute(${i}, "row-${i}") ?? fallback[${i % 7}]; // step ${i}`;
+    const fenceMd = (n: number) => `Here is the file:\n\n\`\`\`ts\nexport function generated() {\n${lines(n, codeLine)}\n`;
+    const perWordCost = (n: number) => {
+      const deltas = tokenDeltas('  more(1);\n\n  after_blank();\n  const a = 1; // tail words\n');
+      return streamCosts('Here', fenceMd(n), deltas).map((c) => c.drawn.reduce((t, x) => t + x.length, 0));
+    };
+
+    it('does work per word that does not grow with the fence', () => {
+      const short = perWordCost(200);
+      const long = perWordCost(800);
+      const lineLen = codeLine(500).length + 1;
+      // Never more than the live tail (under two chunks of lines) plus the opening.
+      const bound = 2 * OPEN_FENCE_CHUNK_LINES * lineLen + 200;
+      expect(Math.max(...short)).toBeLessThanOrEqual(bound);
+      expect(Math.max(...long)).toBeLessThanOrEqual(bound);
+      // ...and the cost of the 800-line fence is not a bigger multiple of the 200-line one's.
+      expect(Math.max(...long)).toBeLessThanOrEqual(Math.max(...short) + 2 * lineLen);
+    });
+
+    it('draws the same page as the whole message, tail words and Copy included', () => {
+      const md = fenceMd(260);
+      const deltas = tokenDeltas('  more(1);\n\n  after_blank();\n\t tabbed(2);\n  const a = 1;\n');
+      const live = render(<Bubble md={md} incremental />);
+      const codeEl = () => live.container.querySelector('pre code');
+      let full = md;
+      for (const d of deltas) {
+        full += d;
+        live.rerender(<Bubble md={full} incremental />);
+        const whole = render(<Bubble md={full} />);
+        expect(canonical(live.container), `after ${JSON.stringify(d)}`).toBe(canonical(whole.container));
+        whole.unmount();
+      }
+      expect(codeEl()).not.toBeNull();
+      live.unmount();
+    });
+
+    it('keeps the same code block (no remount) as the fence grows past a chunk, and when it closes', () => {
+      const live = render(<Bubble md={fenceMd(38)} incremental />);
+      live.rerender(<Bubble md={fenceMd(39)} incremental />);
+      const pre = live.container.querySelector('pre')!;
+      for (const n of [50, 90, 220]) {
+        live.rerender(<Bubble md={fenceMd(n)} incremental />);
+        expect(live.container.querySelector('pre')).toBe(pre);
+      }
+      live.rerender(<Bubble md={`${fenceMd(220)}\`\`\`\n\nDone.`} incremental />);
+      expect(live.container.querySelector('pre')).toBe(pre);
+      expect(live.container.textContent).toContain('Done.');
+      live.unmount();
+    });
+
+    it('colours the whole block as one piece once the fence closes', () => {
+      // A block comment straddling a chunk edge is only coloured right once the fence closes.
+      const body = lines(160, (i) => (i === 49 ? '/* start of a long' : i === 51 ? 'comment ends */' : `const a${i} = ${i};`));
+      const closed = `\`\`\`js\n${body}\n\`\`\`\n`;
+      const live = render(<Bubble md={`\`\`\`js\n${body}\n`} incremental />);
+      live.rerender(<Bubble md={closed} incremental />);
+      const whole = render(<Bubble md={closed} />);
+      expect(canonical(live.container)).toBe(canonical(whole.container));
+      whole.unmount();
+      live.unmount();
+    });
+
+    it('copies the whole fence, frozen lines included', async () => {
+      const writeText = vi.fn();
+      Object.assign(navigator, { clipboard: { writeText } });
+      const md = fenceMd(220);
+      const live = render(<Bubble md={md} incremental />);
+      live.rerender(<Bubble md={`${md}  last();`} incremental />);
+      fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+      const copied = writeText.mock.calls[0][0] as string;
+      expect(copied).toContain('const value0 =');
+      expect(copied).toContain('const value219 =');
+      expect(copied).toContain('last();');
+      live.unmount();
+    });
   });
 
   // Switching back to a session mid-reply mounts the bubble on a long prefix

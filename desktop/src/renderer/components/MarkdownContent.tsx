@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
@@ -13,7 +13,7 @@ import ChatsearchRefBlock from './tool-views/ChatsearchRefBlock';
 import { SessionRefsEnabled } from './session-refs-context';
 import { ANCHOR_SKIP_ATTR } from './comments/anchor-skip';
 import {
-  startStream, advanceStream, withDefinitions, type StreamView,
+  startStream, advanceStream, withDefinitions, splitOpenFence, fenceChunks, type StreamView,
   DETAILS_OPEN_WITH_SUMMARY, DETAILS_OPEN, DETAILS_SUMMARY, DETAILS_CLOSE, DETAILS_OPEN_ANY,
 } from './markdown-blocks';
 
@@ -243,6 +243,19 @@ const rehypeLinkTokens: Plugin<[{ filepaths: boolean }], Root> =
   });
 };
 
+/**
+ * rehype-highlight, but with ONE highlighter shared by every render.
+ *
+ * WHY (perf-lab 2026-10-04): rehype-highlight builds a new highlighter and
+ * registers its ~37 languages every time react-markdown builds its processor —
+ * which is once per render, so once per streamed word. Measured: ~1.8 s of a
+ * 34 s reply stream, in ordinary prose as well as in code. Calling the plugin once
+ * and handing react-markdown the same transform each time gives byte-identical
+ * output (same library, same languages, same options) without the rebuild.
+ */
+const sharedHighlight = (rehypeHighlight as unknown as () => (tree: Root, file: unknown) => void)();
+const rehypeHighlightShared: Plugin<[], Root> = () => sharedHighlight as any;
+
 // Stable plugin arrays — avoids re-creating on every render. URL linkification
 // runs in EVERY context (it needs no session), so it lives in the stable array;
 // only the filepath half, which needs a sessionId to resolve a click, is
@@ -250,19 +263,19 @@ const rehypeLinkTokens: Plugin<[{ filepaths: boolean }], Root> =
 const remarkPluginsStable = [remarkGfm];
 const rehypePluginsStable: PluggableList = [
   rehypeSafeDisclosures,
-  rehypeHighlight,
+  rehypeHighlightShared,
   rehypeMarkBlockCode,
   [rehypeLinkTokens, { filepaths: false }],
 ];
 const rehypePluginsWithFilepaths: PluggableList = [
   rehypeSafeDisclosures,
-  rehypeHighlight,
+  rehypeHighlightShared,
   rehypeMarkBlockCode,
   [rehypeLinkTokens, { filepaths: true }],
 ];
 const rehypePluginsPreview: PluggableList = [
   [rehypeSafeDisclosures, { disclosures: false }],
-  rehypeHighlight,
+  rehypeHighlightShared,
   rehypeMarkBlockCode,
   [rehypeLinkTokens, { filepaths: false }],
 ];
@@ -433,7 +446,9 @@ const mdComponents = {
         <pre className="yc-code rounded-md bg-canvas border border-edge p-3 overflow-x-auto text-sm text-fg" {...props}>
           {children}
         </pre>
-        {codeText && <CopyButton text={codeText} />}
+        {/* A fence still being typed draws its finished head separately (FrozenFence),
+            so Copy takes the head plus the tail drawn here. */}
+        <FenceCopyButton tailText={codeText} />
       </div>
     );
   },
@@ -450,6 +465,7 @@ const mdComponents = {
     }
     return (
       <code className={className} {...props}>
+        <FrozenFenceHead />
         {children}
       </code>
     );
@@ -495,6 +511,32 @@ const mdComponents = {
     );
   },
 };
+
+/**
+ * The finished head of a code fence that is still being typed (see
+ * splitOpenFence). WHY a context and not props: the <code> element the head
+ * belongs INSIDE is built by react-markdown, deep in its output; the context is
+ * how the `code` and `pre` overrides below reach it. null everywhere else, so a
+ * normal block draws exactly as before.
+ */
+interface FrozenFence {
+  /** Every frozen line, for the Copy button. */
+  text: string;
+  /** The same lines drawn once each, as the children that come first inside <code>. */
+  node: React.ReactNode;
+}
+const FrozenFenceContext = createContext<FrozenFence | null>(null);
+
+/** The finished lines that come first inside a still-open fence's <code> (nothing elsewhere). */
+function FrozenFenceHead() {
+  return <>{useContext(FrozenFenceContext)?.node}</>;
+}
+
+/** Copy for a code block: any finished head plus the text react-markdown drew. Nothing when the block is empty. */
+function FenceCopyButton({ tailText }: { tailText: string }) {
+  const text = (useContext(FrozenFenceContext)?.text ?? '') + tailText;
+  return text ? <CopyButton text={text} /> : null;
+}
 
 /** Does this <pre> hold a fenced block whose language is `conversations`? */
 function isConversationsFence(node: any): boolean {
@@ -575,13 +617,69 @@ const MarkdownChunk = React.memo(function MarkdownChunk({ source, defs, rehypePl
   rehypePlugins: PluggableList;
   components: React.ComponentProps<typeof ReactMarkdown>['components'];
 }) {
-  return (
+  // A long code fence still being typed: finished lines are drawn once, in
+  // chunks, and react-markdown re-reads only the newest lines (splitOpenFence).
+  // Not with definitions in front — they would sit before the fence's opening.
+  const split = defs ? null : splitOpenFence(source);
+  const frozenText = split?.frozen ?? '';
+  const opening = split?.opening ?? '';
+  // WHY memoised on the head's TEXT: the head only ever grows by whole chunks, so
+  // between those moments this is the same value and every chunk below is skipped.
+  const frozen = useMemo<FrozenFence | null>(() => {
+    if (!frozenText) return null;
+    return {
+      text: frozenText,
+      node: fenceChunks(frozenText).map((chunk, i) => (
+        <FrozenFenceChunk key={i} source={opening + chunk} rehypePlugins={rehypePlugins} components={components} />
+      )),
+    };
+  }, [frozenText, opening, rehypePlugins, components]);
+
+  const markdown = (
     <ReactMarkdown
       remarkPlugins={remarkPluginsStable}
       rehypePlugins={rehypePlugins}
       components={components}
     >
-      {withDefinitions(source, defs)}
+      {split ? opening + split.tail : withDefinitions(source, defs)}
+    </ReactMarkdown>
+  );
+  return frozen ? <FrozenFenceContext.Provider value={frozen}>{markdown}</FrozenFenceContext.Provider> : markdown;
+});
+
+/** react-markdown's components with the block wrapper removed: a chunk draws only its coloured lines. */
+const chunkComponentsCache = new WeakMap<object, React.ComponentProps<typeof ReactMarkdown>['components']>();
+const Bare = ({ children }: { children?: React.ReactNode }) => <>{children}</>;
+function chunkComponents(components: NonNullable<React.ComponentProps<typeof ReactMarkdown>['components']>) {
+  let c = chunkComponentsCache.get(components);
+  if (!c) {
+    c = { ...components, pre: Bare, code: Bare };
+    chunkComponentsCache.set(components, c);
+  }
+  return c;
+}
+
+/**
+ * One finished chunk of a still-open code fence: the same pipeline as any code
+ * block (colouring, URL and path links), drawn once, minus the <pre>/<code> the
+ * live block already supplies. WHY memo: `source` is final, so it is never
+ * parsed or coloured again however long the fence grows.
+ * Colouring is per chunk, so a multi-line comment or string that straddles a
+ * chunk edge is coloured as if it began there until the fence closes, when the
+ * whole block is coloured as one piece again.
+ */
+const FrozenFenceChunk = React.memo(function FrozenFenceChunk({ source, rehypePlugins, components }: {
+  source: string;
+  rehypePlugins: PluggableList;
+  components: React.ComponentProps<typeof ReactMarkdown>['components'];
+}) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={remarkPluginsStable}
+      rehypePlugins={rehypePlugins}
+      components={components ? chunkComponents(components) : undefined}
+    >
+      {source}
     </ReactMarkdown>
   );
 });
