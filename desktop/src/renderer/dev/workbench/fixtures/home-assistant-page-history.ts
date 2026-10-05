@@ -85,7 +85,7 @@ export const HOME_HISTORY_JS = String.raw`
     hist.loading = true;
     logbook(hist.days).then(function (list) { hist.events = list; hist.failed = false; })
       .catch(function () { hist.failed = true; })
-      .then(function () { hist.loading = false; hist.at = Date.now(); render(); });
+      .then(function () { hist.loading = false; hist.at = Date.now(); renderSoon(); });
   }
   function refreshDevice(force) {
     var id = dlgId;
@@ -94,7 +94,7 @@ export const HOME_HISTORY_JS = String.raw`
     devHist.loading = true;
     logbook(3, id).then(function (list) { if (dlgId === id) { devHist.events = list; devHist.failed = false; } })
       .catch(function () { if (dlgId === id) devHist.failed = true; })
-      .then(function () { devHist.loading = false; devHist.id = id; devHist.at = Date.now(); render(); });
+      .then(function () { devHist.loading = false; devHist.id = id; devHist.at = Date.now(); renderSoon(); });
   }
 
   // One logbook line in words. Only what the page knows how to say.
@@ -216,7 +216,7 @@ export const HOME_HISTORY_JS = String.raw`
       '<div class="dlg-head"><div class="t"><h2 id="dlg-title">' + esc(it.name) + '</h2><span class="vsub">' + esc([room ? room.name : '', since].filter(Boolean).join(' · ')) + '</span></div>' +
       '<button class="dlg-x" data-dlg-close="1" aria-label="Close">' + CLOSE + '</button></div>' +
       itemHtml(it, null) +
-      '<div class="dlg-cols"><section><div class="dlg-sec">History</div>' + histHtml + '</section>' +
+      '<div class="dlg-cols"><section><div class="dlg-sec">History</div><div class="dlg-hist">' + histHtml + '</div></section>' +
       '<section><div class="dlg-sec">About this device</div>' + (about.length ? '<dl class="about">' + about.map(function (a) { return '<dt>' + esc(a[0]) + '</dt><dd>' + esc(a[1]) + '</dd>'; }).join('') + '</dl>' : '<div class="muted">Home Assistant has no details for it.</div>') +
       (it.device ? '<a class="yc-button yc-button--sm" href="' + esc(base + '/config/devices/device/' + encodeURIComponent(it.device)) + '" target="_blank" rel="noopener">Open in Home Assistant ' + OUT + '</a>' : '') + '</section></div></div></div>';
   }

@@ -18,6 +18,8 @@ import { HOME_ASSISTANT_PAGE_CSS } from './home-assistant-page-style';
 import { HOME_HISTORY_CSS, HOME_HISTORY_JS } from './home-assistant-page-history';
 import { ROOMS_TEMPLATE, EXTRAS_TEMPLATE } from './home-assistant-page-templates';
 import { HOME_LIVE_JS } from './home-assistant-page-live';
+import { HOME_ICONS_JS } from './home-assistant-page-icons';
+import { HOME_REDRAW_CSS, HOME_REDRAW_JS } from './home-assistant-page-redraw';
 import { HOME_CAMERA_CSS, HOME_CAMERA_JS } from './home-assistant-page-camera';
 
 
@@ -73,7 +75,7 @@ export const HOME_ASSISTANT_PAGE_JSON = {
 function homeAssistantPageHtml(): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>Home</title>
-<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}${HOME_CAMERA_CSS}</style></head>
+<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}${HOME_CAMERA_CSS}${HOME_REDRAW_CSS}</style></head>
 <body>
 <div class="yc-page yc-stack" id="root">
   <!-- No page title: the app's own bar already names the page, so the
@@ -141,7 +143,16 @@ function homeAssistantPageHtml(): string {
   function dimmable(it) { return Array.isArray(it.modes) && it.modes.some(function (m) { return m !== 'onoff'; }); }
 
   function persist(patch) { window.youcoded.save(Object.assign({}, window.youcoded.data || {}, patch)); }
-  function banner(text) { var b = $('banner'); b.textContent = text || ''; b.hidden = !text; }
+  // WHY sticky (redesign audit F5): a refusal used to vanish at the next successful
+  // check (about half a second later). A sticky one stays until dismissed or replaced.
+  var bannerSticky = false;
+  function banner(text, sticky) {
+    var b = $('banner');
+    if (!text && bannerSticky) return;
+    bannerSticky = !!(text && sticky);
+    b.textContent = text || ''; b.hidden = !text;
+    if (bannerSticky) b.insertAdjacentHTML('beforeend', '<button class="yc-button yc-button--sm yc-button--ghost" data-banner-dismiss="1">Dismiss</button>');
+  }
 
   function call(path, body) {
     return window.youcoded.fetch(base + path, {
@@ -155,25 +166,27 @@ function homeAssistantPageHtml(): string {
 
   function load() {
     if (!base) { banner('This page has not been connected to Home Assistant yet.'); return; }
+    var sentAt = Date.now();
     call('/api/template', { template: TEMPLATE }).then(function (r) {
       var first = rooms === null;
-      // A redraw would throw away a half-typed name, so a check that lands
-      // while a text box is open waits for the next one.
-      if (!first && (renaming || newRoomFor)) return;
       rooms = JSON.parse(r.body);
+      // WHY (redesign audit F4, "the newest one wins"): this answer was taken when
+      // the check was asked; any live change that arrived since is newer, so it goes
+      // back on top instead of being overwritten by an older picture.
+      liveReplay(sentAt);
       applyHeld();
       applyHeldVals();
       liveSubscribe(); // the first check tells the live connection which devices to follow
-      // Mid-drag, the page is not redrawn at all: the next check catches up.
-      if (dragging) return;
+      // WHY no guards for a held slider or an open name box (audit F1): drawing is
+      // now in place and leaves what you are working in alone, so nothing waits.
       banner('');
-      render();
+      renderSoon();
       // Pictures as soon as there are cameras to put them in, not on a delay.
       if (first) refreshCameras();
     }).catch(function (e) { banner(e && e.message ? e.message : 'Home Assistant could not be reached.'); });
     call('/api/template', { template: EXTRAS }).then(function (r) {
       try { var x = JSON.parse(r.body); extras = { weather: x.weather || null, low: Array.isArray(x.low) ? x.low : [], people: Array.isArray(x.people) ? x.people : [] }; } catch (e) { /* keep the last */ }
-      if (!dragging) render();
+      renderSoon();
     }, function () { /* the rooms request reports the problem */ });
     if (Date.now() - healthAt > 60000) loadHealth();
     // History only while someone is looking at it (round 5: Activity tab,
@@ -192,14 +205,17 @@ function homeAssistantPageHtml(): string {
         flows: Array.isArray(res[1]) ? res[1] : [],
         issues: res[2] && Array.isArray(res[2].issues) ? res[2].issues : [],
       };
-      render();
+      renderSoon();
     }, function () { /* not fatal */ });
   }
 
+  // WHY pendBegin/pendEnd (redesign audit F5, A-4/A-6): the press shows at once; if
+  // the house refuses, the old value comes back and the card says so until dismissed.
   function service(dom, svc, data, id) {
     busy[id] = true;
+    var tok = pendBegin(id, function () { service(dom, svc, data, id); });
     return call('/api/services/' + dom + '/' + svc, data)
-      .catch(function (e) { banner(e && e.message ? e.message : 'That did not go through.'); })
+      .then(function () { pendEnd(id, tok, null); }, function (e) { pendEnd(id, tok, e && e.message ? e.message : 'That did not go through.'); })
       .then(function () { delete busy[id]; setTimeout(load, 400); });
   }
 
@@ -220,9 +236,14 @@ function homeAssistantPageHtml(): string {
       it.state = h.state;
     }); });
   }
+  // WHY every field is held and remembered (redesign audit F5/F7, A-6): a guess shown
+  // before the house agrees keeps what it replaced (to undo on a refusal) and holds
+  // against a push that has not caught up, whatever the field (state, name, group …).
   function setLocal(id, patch) {
     if (patch && typeof patch.state === 'string') holdState(id, patch.state);
-    (rooms || []).forEach(function (room) { room.items.forEach(function (it) { if (it.id === id) Object.assign(it, patch); }); });
+    var it = thing(id), before = {};
+    if (it) { Object.keys(patch).forEach(function (k) { before[k] = it[k]; if (k !== 'state') holdVal(id, k, patch[k], HOLD_MS); }); undoBuf.push({ id: id, before: before }); }
+    if (it) Object.assign(it, patch);
     render();
   }
 
@@ -244,40 +265,7 @@ function homeAssistantPageHtml(): string {
   }
   function canColour(it) { return Array.isArray(it.modes) && it.modes.some(function (m) { return m === 'xy' || m === 'hs' || m === 'rgb' || m === 'rgbw' || m === 'rgbww'; }); }
   function canWhite(it) { return Array.isArray(it.modes) && it.modes.some(function (m) { return m === 'color_temp' || m === 'xy' || m === 'hs' || m === 'rgb' || m === 'rgbw' || m === 'rgbww'; }); }
-  var BULB = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1 2V17h6v-.3c0-.8.4-1.5 1-2A7 7 0 0 0 12 2z"/></svg>';
-  var SPEAKER = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg>';
-  var CHEVRON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
-  var STAR = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9z"/></svg>';
-  var STAR_ON = STAR.replace('fill="none"', 'fill="currentColor"');
-  var UP = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18 15-6-6-6 6"/></svg>';
-  var DOWN = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
-  var PENCIL = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>';
-  var EYE = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
-  var EYE_OFF = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3l18 18"/><path d="M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6A17 17 0 0 0 2 12s3.5 7 10 7a9.9 9.9 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>';
-  var INFO = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>';
-  var OUT = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>';
-  function ico(d, w) { return '<svg width="' + (w || 18) + '" height="' + (w || 18) + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + '</svg>'; }
-  var REMOTE = ico('<rect x="7" y="2" width="10" height="20" rx="4"/><circle cx="12" cy="9" r="2.5"/><path d="M12 5.2v.1M10 15h.01M14 15h.01M10 18h.01M14 18h.01"/>', 16);
-  // Apps open through the remote by their web address; the TV hands each to
-  // its app. These are the ones Home Assistant's own docs list as working.
-  // Each app's mark is drawn here in its own colour, so the buttons read at
-  // a glance without loading anything from the internet.
-  var APPS = [
-    { name: 'YouTube', url: 'https://www.youtube.com', pkg: 'youtube', bg: '#ff0033', mark: '<svg width="18" height="18" viewBox="0 0 24 24" fill="#fff" aria-hidden="true"><path d="M8 5.5v13l11-6.5z"/></svg>' },
-    { name: 'Netflix', url: 'https://www.netflix.com/title', pkg: 'netflix', bg: '#141414', mark: '<span style="color:#e50914;font-size:20px">N</span>' },
-    { name: 'Prime', url: 'https://app.primevideo.com', pkg: 'amazon', bg: '#1a98ff', mark: 'pv' },
-    { name: 'Disney+', url: 'https://www.disneyplus.com', pkg: 'disney', bg: '#0e2a8c', mark: 'D+' },
-  ];
-  // Where a speaker's music comes from, when Home Assistant says (S-now:
-  // "if we can determine source, we should show spotify/etc icon").
-  var SOURCES = [
-    { name: 'Spotify', key: 'spotify', bg: '#1db954', mark: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 9.5c4-1.3 8.5-1 12 1M7 13c3.3-1 6.7-.7 9.5.9M8 16.3c2.6-.7 5-.5 7 .7"/></svg>' },
-    { name: 'YouTube Music', key: 'youtube music', bg: '#ff0033', mark: '<svg width="18" height="18" viewBox="0 0 24 24" fill="#fff" aria-hidden="true"><path d="M9 7v10l8-5z"/></svg>' },
-    { name: 'Apple Music', key: 'apple music', bg: '#fa243c', mark: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/></svg>' },
-    { name: 'Amazon Music', key: 'amazon', bg: '#25d1da', mark: '<span style="color:#000">a</span>' },
-    { name: 'Pandora', key: 'pandora', bg: '#224099', mark: 'P' },
-    { name: 'TV', key: 'tv', bg: 'var(--accent)', mark: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="13" rx="2"/><path d="M8 21h8"/></svg>' },
-  ];
+${HOME_ICONS_JS}
   function sourceOf(it) {
     var hay = [it.app, it.source, it.cid && String(it.cid).split(':')[0], it.title === 'TV' ? 'tv' : ''].filter(Boolean).join(' ').toLowerCase();
     if (!hay) return null;
@@ -525,7 +513,7 @@ function homeAssistantPageHtml(): string {
       // The remote is one card: its header opens it, the remote sits inside
       // the same card below (round 7: "the same container as the remote").
       (rc ? '<div class="rcard' + (rOpen ? ' open' : '') + '"><button class="rbtn" data-remote="' + esc(rc.id) + '" aria-expanded="' + !!rOpen + '" aria-label="' + (rOpen ? 'Hide' : 'Show') + ' remote for ' + esc(it.name) + '">' + REMOTE + '<span class="rlbl">Remote</span><span class="rchev">' + CHEVRON + '</span></button>' + (rOpen ? remoteHtml(rc) : '') + '</div>' : '') +
-      (media ? '' : paletteHtml(it)) + editRow(it, ctx) + '</div>';
+      (media ? '' : paletteHtml(it)) + editRow(it, ctx) + pendHtml(it.id, rc && rc.id) + '</div>';
   }
 
   var MODE_NAMES = { off: 'Off', cool: 'Cool', heat: 'Heat', heat_cool: 'Auto', auto: 'Auto', dry: 'Dry', fan_only: 'Fan' };
@@ -550,7 +538,7 @@ function homeAssistantPageHtml(): string {
       (hasSet ? '<div class="clim-set"><button class="step" aria-label="Cooler" data-temp="' + esc(it.id) + '" data-delta="' + (-(it.step || 1)) + '"' + (it.target <= lo ? ' disabled' : '') + '>−</button>' +
         '<div class="val"><b>' + esc(it.target) + '°</b><span class="sub">Set to</span></div>' +
         '<button class="step" aria-label="Warmer" data-temp="' + esc(it.id) + '" data-delta="' + (it.step || 1) + '"' + (it.target >= hi ? ' disabled' : '') + '>+</button></div>' : '<div class="clim-set sub">Off</div>') +
-      '</div>' + scale + modes + editRow(it, ctx) + '</div>';
+      '</div>' + scale + modes + editRow(it, ctx) + pendHtml(it.id) + '</div>';
   }
 
   // ── Order ───────────────────────────────────────────────────────────────
@@ -731,7 +719,7 @@ function homeAssistantPageHtml(): string {
       '<span class="bulb-col"><span class="bulb">' + BULB + '</span><span class="all-lbl">All</span></span>' +
       '<span class="name">Lights<div class="sub">' + esc(status) + '</div></span></button>' +
       (editing ? '' : '<button class="fold" data-fold="' + esc(room.id) + '" aria-expanded="' + isOpen + '" aria-label="' + (isOpen ? 'Hide' : 'Show') + ' each light in ' + esc(room.name) + '" title="' + (isOpen ? 'Hide each light' : 'Show each light') + '">' + CHEVRON + '</button>') +
-      '</div>' + groupBright(room, live, onList, c) + '</div>';
+      '</div>' + groupBright(room, live, onList, c) + pendHtml('room:' + room.id) + '</div>';
     return '<div class="lights' + (anyOn ? ' on' : '') + '" style="--c:' + c + '"><span class="glow"></span>' + all + scenesHtml(room) + (isOpen ? '<div class="lights-body">' + lights.map(function (it) { return itemHtml(it, ctx); }).join('') + '</div>' : '') + '</div>';
   }
 
@@ -744,14 +732,14 @@ function homeAssistantPageHtml(): string {
       if (domain(id) !== 'camera') return;
       window.youcoded.fetch(base + '/api/camera_proxy/' + id, { as: 'picture' }).then(function (r) {
         // A tiny picture is Home Assistant's blank stand-in, not a real one.
-        if (r.status === 200 && String(r.body).length > 6000) { camCache[id] = r.body; delete camNote[id]; var img = document.querySelector('img[data-cam="' + id + '"]'); if (img) img.src = r.body; else render(); return; }
+        if (r.status === 200 && String(r.body).length > 6000) { camCache[id] = r.body; delete camNote[id]; var img = document.querySelector('img[data-cam="' + id + '"]'); if (img) img.src = r.body; else renderSoon(); return; }
         var nest = /nest|google/i.test((it.maker || '') + ' ' + (it.model || ''));
         var auth = health.flows.some(function (f) { return f.handler === 'nest' && f.context && f.context.source === 'reauth'; });
         camNote[id] = nest && auth ? { text: 'No picture: Google Nest needs you to sign in again.', link: 'Sign in', href: '/config/integrations/integration/nest' }
           // A Nest camera is shown as its events card (camera.ts), not a note.
           : nest ? { nest: true }
           : { text: 'This camera sent no picture.' };
-        render();
+        renderSoon();
         if (camNote[id] && camNote[id].nest) camEvents(it);
       }, function () { /* the next round tries again */ });
     });
@@ -1001,7 +989,9 @@ function homeAssistantPageHtml(): string {
   function put(id, html) {
     if (drawn[id] === html) return;
     drawn[id] = html;
-    mediaHold(); $(id).innerHTML = html; mediaBack(); // a playing clip / live canvas survives the redraw
+    // WHY morphInto, not innerHTML (redesign audit F1/F2/F9): only what differs changes, so
+    // focus, held sliders, typed names, hover, transitions and a playing clip survive.
+    mediaHold(); morphInto($(id), html); mediaBack();
     // Redesign options in the practice app hook each redraw (fixtures/home-variants/).
     if (window.__homeAfterPut) window.__homeAfterPut(id);
   }
@@ -1073,7 +1063,7 @@ function homeAssistantPageHtml(): string {
       '<div class="th-side"><div class="th-name">' + esc(it.name) + '<span class="vsub"> · ' + esc(room.name) + '</span></div>' +
       (hasSet ? '<div class="th-steps"><button class="th-step" aria-label="Cooler" data-temp="' + esc(it.id) + '" data-delta="' + (-step) + '"' + (it.target <= lo ? ' disabled' : '') + '>−</button>' +
         '<button class="th-step" aria-label="Warmer" data-temp="' + esc(it.id) + '" data-delta="' + step + '"' + (it.target >= hi ? ' disabled' : '') + '>+</button></div>' : '') +
-      modes + '</div></div>';
+      modes + pendHtml(it.id) + '</div></div>';
   }
   // Outside, as a wide card coloured like the sky it describes (round 4
   // note: the weather card "looks a bit odd … we can make it prettier").
@@ -1101,7 +1091,8 @@ function homeAssistantPageHtml(): string {
       (th ? '<div><span>Inside</span><b>' + esc(th.it.cur) + '°</b></div>' : '') + '</div></div>';
   }
 
-  function render() {
+  function render() { if (batching) { batchDirty = true; return; } draw(); }
+  function draw() {
     $('root').classList.toggle('editing', editing);
     put('bar', barHtml());
 
@@ -1123,7 +1114,8 @@ function homeAssistantPageHtml(): string {
     var html = list.map(function (r) { return roomHtml(r, roomIds); }).join('');
     put('rooms', html || '<div class="yc-empty">Nothing to show. Put devices in rooms in Home Assistant, or press Edit to bring hidden ones back.</div>');
     var box = document.querySelector('[data-rn],[data-nr]');
-    if (box && document.activeElement !== box) { box.focus(); if (box.select) box.select(); }
+    // Only the first time the box appears (audit F1): it used to grab focus and select all on every redraw.
+    if (box && !box.__fx) { box.__fx = 1; box.focus(); if (box.select) box.select(); }
   }
 
   // ── Changes made in Home Assistant itself (Q-where: names and rooms) ─────
@@ -1147,9 +1139,10 @@ function homeAssistantPageHtml(): string {
   function renameThing(id, name) {
     var it = thing(id);
     if (!it || !name || name === it.name) return;
-    setLocal(id, { name: name });
+    var old = it.name;
+    setLocal(id, { name: name }); // held like a switch (audit F7): a push still carrying the old name cannot flip it back
     registry([{ type: 'config/entity_registry/update', entity_id: id, name: name }])
-      .catch(function (e) { banner(e && e.message ? e.message : 'Home Assistant did not take the new name.'); })
+      .catch(function (e) { unhold(id, 'name', old); banner(e && e.message ? e.message : 'Home Assistant did not take the new name.', true); })
       .then(afterChange);
   }
   function moveThing(id, roomId, roomName) {
@@ -1168,7 +1161,7 @@ function homeAssistantPageHtml(): string {
     (roomName
       ? registry([{ type: 'config/area_registry/create', name: roomName }]).then(function (res) { return moveTo(res[0] && res[0].area_id ? res[0].area_id : roomId); })
       : moveTo(roomId))
-      .catch(function (e) { banner(e && e.message ? e.message : 'Home Assistant did not move it.'); })
+      .catch(function (e) { banner(e && e.message ? e.message : 'Home Assistant did not move it.', true); })
       .then(afterChange);
   }
   function slug(name) { return String(name).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'room'; }
@@ -1201,7 +1194,7 @@ function homeAssistantPageHtml(): string {
       // fixed the Hue bridge earlier.
       fixing[rl] = true; render();
       call('/api/config/config_entries/entry/' + encodeURIComponent(rl) + '/reload', {})
-        .catch(function (e) { banner(e && e.message ? e.message : 'Home Assistant could not reload it.'); })
+        .catch(function (e) { banner(e && e.message ? e.message : 'Home Assistant could not reload it.', true); })
         .then(function () { setTimeout(function () { delete fixing[rl]; healthAt = 0; load(); }, 3000); });
       return;
     }
@@ -1223,8 +1216,8 @@ function homeAssistantPageHtml(): string {
       var g = groupOf(lead), inIt = g.indexOf(mem) >= 0;
       // Show the tick straight away; the next check confirms it.
       var next = inIt ? g.filter(function (m) { return m !== mem; }) : g.concat([mem]);
-      next.forEach(function (m) { var y = thing(m); if (y) y.group = next; });
-      x.group = inIt ? [mem] : next;
+      // WHY setLocal + batch (audit F7, A-6): the tick is held and undoable like a switch.
+      batch(function () { next.forEach(function (m) { setLocal(m, { group: next }); }); setLocal(mem, { group: inIt ? [mem] : next }); });
       if (inIt) service('media_player', 'unjoin', { entity_id: mem }, mem);
       else service('media_player', 'join', { entity_id: g[0], group_members: [mem] }, jn);
       render();
@@ -1244,7 +1237,7 @@ function homeAssistantPageHtml(): string {
       var cmd = t.getAttribute('data-cmd'), app = t.getAttribute('data-app');
       (cmd ? call('/api/services/remote/send_command', { entity_id: rcId, command: cmd })
         : call('/api/services/remote/turn_on', { entity_id: rcId, activity: app }))
-        .catch(function (e) { banner(e && e.message ? e.message : 'The TV did not get that.'); });
+        .catch(function (e) { banner(e && e.message ? e.message : 'The TV did not get that.', true); });
       return;
     }
     var fd = t.getAttribute('data-fold');
@@ -1281,7 +1274,7 @@ function homeAssistantPageHtml(): string {
       var turnOn = t.getAttribute('data-room-to') === 'on';
       var room = rooms.find(function (r) { return r.id === roomId; });
       var ids = liveLights(room.items).map(function (it) { return it.id; });
-      ids.forEach(function (x) { setLocal(x, { state: turnOn ? 'on' : 'off' }); });
+      batch(function () { ids.forEach(function (x) { setLocal(x, { state: turnOn ? 'on' : 'off' }); }); }); // one drawing, not one per light (audit F3)
       service('light', turnOn ? 'turn_on' : 'turn_off', { entity_id: ids }, 'room:' + room.id);
       return;
     }
@@ -1318,7 +1311,7 @@ function homeAssistantPageHtml(): string {
       confirmOff = false;
       var ids = [];
       rooms.forEach(function (r) { liveLights(r.items).forEach(function (it) { if (isOn(it)) ids.push(it.id); }); });
-      ids.forEach(function (x) { setLocal(x, { state: 'off' }); });
+      batch(function () { ids.forEach(function (x) { setLocal(x, { state: 'off' }); }); });
       if (ids.length) service('light', 'turn_off', { entity_id: ids }, 'house');
       render();
       return;
@@ -1381,18 +1374,19 @@ function homeAssistantPageHtml(): string {
     sendNext(); sendNext = null;
     sendTimer = setTimeout(function () { sendTimer = null; if (sendNext) { var f = sendNext; sendNext = null; sendSoon(f); } }, 250);
   }
-  function quiet(path, body) { call(path, body).catch(function (e) { banner(e && e.message ? e.message : 'That did not go through.'); }); }
+  function quiet(path, body, key) { call(path, body).catch(function (e) { var m = e && e.message ? e.message : 'That did not go through.'; if (key) sliderFailed(key, m); else banner(m, true); }); }
   document.addEventListener('input', function (e) {
     var t = e.target;
     if (!t.classList || !t.classList.contains('lr')) return;
     var lo = Number(t.min) || 0, hi = Number(t.max) || 100;
     t.style.setProperty('--v', String((Number(t.value) - lo) / (hi - lo) * 100));
     var v = t.getAttribute('data-vol'), b = t.getAttribute('data-bright');
+    if (!dragging) dragSnap(t); // what it was before this drag, to put back if the house says no (audit F6)
     dragging = v || b;
     if (v) {
       var vi = t.parentNode && t.parentNode.querySelector('.vicon');
       if (vi) { vi.innerHTML = volIcon(Number(t.value), false); vi.classList.toggle('low', Number(t.value) < 12); }
-      var lv = t.value / 100; holdVal(v, 'vol', lv); sendSoon(function () { quiet('/api/services/media_player/volume_set', { entity_id: v, volume_level: lv }); }); }
+      var lv = t.value / 100; holdVal(v, 'vol', lv); sendSoon(function () { quiet('/api/services/media_player/volume_set', { entity_id: v, volume_level: lv }, v); }); }
     var gb = t.getAttribute('data-gbright');
     if (gb) {
       dragging = 'room:' + gb;
@@ -1400,19 +1394,22 @@ function homeAssistantPageHtml(): string {
       var gids = gr ? liveLights(gr.items).filter(dimmable).map(function (x) { return x.id; }) : [];
       var gp = Number(t.value);
       gids.forEach(function (x) { holdVal(x, 'brightness', Math.round(gp * 2.55)); holdState(x, 'on'); });
-      if (gids.length) sendSoon(function () { quiet('/api/services/light/turn_on', { entity_id: gids, brightness_pct: gp }); });
+      if (gids.length) sendSoon(function () { quiet('/api/services/light/turn_on', { entity_id: gids, brightness_pct: gp }, 'room:' + gb); });
     }
-    if (b && Number(t.value) > 0) { var bp = Number(t.value); holdVal(b, 'brightness', Math.round(bp * 2.55)); sendSoon(function () { quiet('/api/services/light/turn_on', { entity_id: b, brightness_pct: bp }); }); }
+    if (b && Number(t.value) > 0) { var bp = Number(t.value); holdVal(b, 'brightness', Math.round(bp * 2.55)); sendSoon(function () { quiet('/api/services/light/turn_on', { entity_id: b, brightness_pct: bp }, b); }); }
   });
   // A value you set holds until Home Assistant reports it (or 4 seconds),
   // so a check that lands just after you let go cannot snap the bar back.
   var heldVal = {};
-  function holdVal(id, key, value) { heldVal[id + '|' + key] = { id: id, key: key, value: value, until: Date.now() + 4000 }; }
+  function holdVal(id, key, value, ms) { heldVal[id + '|' + key] = { id: id, key: key, value: value, until: Date.now() + (ms || 4000) }; }
+  // Numbers agree when close (a bar's rounding); anything else (names, groups, colours) when equal.
+  function heldSame(a, b, key) { return typeof b === 'number' ? Math.abs((a || 0) - b) < 0.015 * (key === 'brightness' ? 255 : 1) : JSON.stringify(a) === JSON.stringify(b); }
+  function unhold(id, key, old) { delete heldVal[id + '|' + key]; var it = thing(id); if (it) it[key] = old; renderSoon(); }
   function applyHeldVals() {
     var now = Date.now();
     Object.keys(heldVal).forEach(function (k) {
       var h = heldVal[k], it = thing(h.id);
-      if (!it || now > h.until || Math.abs((it[h.key] || 0) - h.value) < 0.015 * (h.key === 'brightness' ? 255 : 1)) { delete heldVal[k]; return; }
+      if (!it || now > h.until || heldSame(it[h.key], h.value, h.key)) { delete heldVal[k]; return; }
       it[h.key] = h.value;
     });
   }
@@ -1424,7 +1421,7 @@ function homeAssistantPageHtml(): string {
       // The big slider reaches 0: dragging all the way down turns the light off.
       if (Number(t.value) === 0) { setLocal(b, { state: 'off' }); service('light', 'turn_off', { entity_id: b }, b); return; }
       dragging = null; holdVal(b, 'brightness', Math.round(t.value * 2.55));
-      var fb = Number(t.value); sendSoon(function () { quiet('/api/services/light/turn_on', { entity_id: b, brightness_pct: fb }); }); return;
+      var fb = Number(t.value); sendSoon(function () { quiet('/api/services/light/turn_on', { entity_id: b, brightness_pct: fb }, b); }); return;
     }
     // Any colour, from the rainbow swatch's colour picker.
     var any = t.getAttribute && t.getAttribute('data-any');
@@ -1456,7 +1453,7 @@ function homeAssistantPageHtml(): string {
       return;
     }
     var v = t.getAttribute && t.getAttribute('data-vol');
-    if (v) { dragging = null; holdVal(v, 'vol', t.value / 100); sendSoon(function () { quiet('/api/services/media_player/volume_set', { entity_id: v, volume_level: t.value / 100 }); }); }
+    if (v) { dragging = null; holdVal(v, 'vol', t.value / 100); sendSoon(function () { quiet('/api/services/media_player/volume_set', { entity_id: v, volume_level: t.value / 100 }, v); }); }
   });
 
   // Checking every 5 seconds only while the page is on screen (deck Q-live):
@@ -1481,11 +1478,12 @@ function homeAssistantPageHtml(): string {
     sound = d.sound && typeof d.sound === 'object' ? d.sound : {};
     prefs = d.prefs && typeof d.prefs === 'object' ? d.prefs : {};
     scenesOpen = new Set(Array.isArray(d.scenesOpen) ? d.scenesOpen : []);
-    render();
+    renderSoon();
   });
 ${HOME_HISTORY_JS}
 ${HOME_LIVE_JS}
 ${HOME_CAMERA_JS}
+${HOME_REDRAW_JS}
   start();
 })();
 </script>

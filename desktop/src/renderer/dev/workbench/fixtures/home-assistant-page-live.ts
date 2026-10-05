@@ -24,9 +24,9 @@ export const HOME_LIVE_JS = `
   // live.on is true only while the subscription is really delivering: the
   // socket is open AND Home Assistant said yes to the subscription. Only then
   // does the template check slow to once a minute.
-  var live = { sock: null, state: 'none', authed: false, on: false, msg: 0, subId: 0, sig: '', raw: {} };
+  var live = { sock: null, state: 'none', authed: false, on: false, msg: 0, subId: 0, sig: '', raw: {}, at: {} };
   var LIVE_POLL_MS = 60000, RECONNECT_NOTE_MS = 5000;
-  var liveDirty = false, liveFrame = null, noteTimer = null;
+  var liveDirty = false, noteTimer = null;
   // Home Assistant's attribute names → the fields the rooms template produces.
   var LIVE_ATTRS = [
     ['friendly_name', 'name'], ['brightness', 'brightness'], ['supported_color_modes', 'modes'], ['current_temperature', 'cur'],
@@ -92,7 +92,7 @@ export const HOME_LIVE_JS = `
     else liveNote(false);
     // Every 'open' is a brand-new connection: nothing is subscribed on it yet,
     // and the greeting must be answered again before anything is sent.
-    live.authed = false; live.subId = 0; live.sig = ''; live.msg = 0; live.raw = {};
+    live.authed = false; live.subId = 0; live.sig = ''; live.msg = 0; live.raw = {}; live.at = {};
     if (state !== 'open') liveRate(false);
     if (state === 'closed') live.sock = null;
   }
@@ -111,7 +111,10 @@ export const HOME_LIVE_JS = `
 
   // One entity's compressed state → the item's fields. Fields that are not
   // state attributes (maker, model, device, …) are left as the template gave them.
-  function liveApply(id, raw) {
+  // WHY the arrival time (redesign audit F4, "the newest one wins"): a check that was
+  // asked before this arrived must not overwrite it (see liveReplay).
+  function liveApply(id, raw, replay) {
+    if (!replay) live.at[id] = Date.now();
     var it = thing(id);
     if (!it) return;
     var before = JSON.stringify(it);
@@ -121,6 +124,12 @@ export const HOME_LIVE_JS = `
     it.features = a.supported_features == null ? 0 : a.supported_features;
     if (typeof raw.lc === 'number') it.since = new Date(raw.lc * 1000).toISOString();
     if (JSON.stringify(it) !== before) liveDirty = true;
+  }
+  // After a check's answer is laid in: every pushed state that arrived since the check
+  // was ASKED is at least as new as the answer (it either predates the answer's picture,
+  // and then agrees with it, or follows it), so it goes back on top.
+  function liveReplay(since) {
+    Object.keys(live.raw).forEach(function (id) { if ((live.at[id] || 0) >= since) liveApply(id, live.raw[id], true); });
   }
   function liveEvent(ev) {
     var added = ev.a || {}, changed = ev.c || {};
@@ -145,16 +154,13 @@ export const HOME_LIVE_JS = `
     // not caught up with it (the same holds the checks use).
     applyHeld(); applyHeldVals();
   }
-  // Redraw once per animation frame however many changes arrived, and not at
-  // all while a slider is held or a name is being typed (a redraw would
-  // throw those away): the next push or check catches up.
+  // Redraw once per animation frame however many changes arrived (renderSoon). WHY no
+  // pause while a slider is held or a name typed (redesign audit F1/F6): drawing is now
+  // in place and leaves those alone, so a change made while you drag shows the moment
+  // it arrives instead of waiting for the next push or check.
   function liveSchedule() {
-    if (liveFrame !== null) return;
-    liveFrame = (window.requestAnimationFrame || function (f) { return setTimeout(f, 16); })(function () {
-      liveFrame = null;
-      if (!liveDirty || dragging || renaming || newRoomFor) return;
-      liveDirty = false;
-      render();
-    });
+    if (!liveDirty) return;
+    liveDirty = false;
+    renderSoon();
   }
 `;

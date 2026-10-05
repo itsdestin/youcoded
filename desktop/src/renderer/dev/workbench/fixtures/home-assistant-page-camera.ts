@@ -90,11 +90,11 @@ export const HOME_CAMERA_JS = `
       var old = st.events.list || [];
       list.forEach(function (e) { old.forEach(function (o) { if (o.id === e.id) e.thumb = o.thumb; }); });
       st.events = { state: 'ready', list: list, at: Date.now() };
-      render();
+      renderSoon();
       list.forEach(function (e) { if (!e.thumb && e.thumbUrl) camThumb(e); });
     }, function () {
       st.events = { state: 'failed', list: [], at: Date.now() };
-      render();
+      renderSoon();
     });
   }
   function camThumb(e) {
