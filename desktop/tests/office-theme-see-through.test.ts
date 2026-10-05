@@ -13,3 +13,12 @@ it('reports a wallpaper only while the global switch is on', () => {
   document.documentElement.setAttribute('data-pages-solid', '');
   expect(readOfficeTheme().wallpaper).toBe(false);
 });
+
+it('makes the frame behind a page or Office solid while the switch is off, in both glass layouts', async () => {
+  // WHY (2026-10-05: "office is still transparent with the switch off"): an older rule makes every screen pane glass in
+  // wallpaper themes, so the switch must also override it on the frame pane, or Office keeps showing the wallpaper.
+  const { readFileSync } = await import('node:fs');
+  const css = (f: string) => readFileSync(new URL(`../src/renderer/styles/${f}`, import.meta.url), 'utf8').replace(/\s+/g, ' ');
+  expect(css('globals.css')).toContain("[data-wallpaper][data-pages-solid] [data-chrome-style='floating'] .screen-pane--frame { background-color: var(--canvas); }");
+  expect(css('float-chrome.css')).toContain("[data-pages-solid] [data-chrome-style='float'] .screen-pane--frame { background-color: var(--canvas) !important; }");
+});

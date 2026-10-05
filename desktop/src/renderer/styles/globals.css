@@ -2930,6 +2930,11 @@ html[data-platform="electron"][data-view-mode="terminal"] .chrome-glass {
 [data-wallpaper] [data-chrome-style='floating'] .screen-pane {
   background-color: color-mix(in srgb, var(--panel) calc(var(--panels-opacity, 1) * 100%), transparent);
 }
+/* WHY (Destin, 2026-10-05: "office is still transparent with the switch off"): with "Show theme background behind
+   pages" off the frame behind a page or Office is solid again; the panel beside it keeps the theme's glass. */
+[data-wallpaper][data-pages-solid] [data-chrome-style='floating'] .screen-pane--frame {
+  background-color: var(--canvas);
+}
 /* A page's own document paints --canvas inside the frame, so the frame's
    glass only shows around it while a page loads or none is picked. */
 
