@@ -10,9 +10,9 @@ const HOME_VARIANT_TASKS: Record<string, HomeVariants> = {
   look, 'motion-nav': motionNav, 'motion-state': motionState, edit, audit,
 };
 
-/** All screen keys, "<task>-<key>". */
-export function homeVariantKeys(): string[] {
-  return Object.entries(HOME_VARIANT_TASKS).flatMap(([t, vs]) => Object.keys(vs).map((k) => `${t}-${k}`));
+/** Every option with its screen key "<task>-<key>". */
+export function homeVariantEntries(): Array<[string, HomeVariant]> {
+  return Object.entries(HOME_VARIANT_TASKS).flatMap(([t, vs]) => Object.entries(vs).map(([k, v]) => [`${t}-${k}`, v] as [string, HomeVariant]));
 }
 
 export function findHomeVariant(id: string): HomeVariant | null {

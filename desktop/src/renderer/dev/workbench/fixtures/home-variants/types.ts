@@ -15,5 +15,7 @@ export interface HomeVariant {
   transform?: (html: string) => string;
   /** The page's saved data to start from (open cards, edit mode, a view…). */
   data?: Record<string, unknown>;
+  /** Looks the same at rest as another screen (motion-only options), and why. */
+  sameAs?: { name: string; why: string };
 }
 export type HomeVariants = Record<string, HomeVariant>;
