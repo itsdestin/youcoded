@@ -2,7 +2,7 @@
 // the moment the device does"). Kept apart from home-assistant-page.ts so
 // neither file outgrows the line budget; HOME_LIVE_JS is pasted INSIDE the
 // page's script, so it shares its helpers (rooms, render, banner, applyHeld,
-// applyHeldVals, dragging, renaming, load, …).
+// applyHeldVals, dragging, load, …).
 //
 // How it works: the app keeps ONE live connection to Home Assistant for this
 // page (`youcoded.socket`). After Home Assistant says it accepted the key

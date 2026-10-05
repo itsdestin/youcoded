@@ -57,7 +57,7 @@ describe('Home page draws changes in place', () => {
 
   it('keeps a name being typed in Edit, and does not re-select it, when anything redraws', async () => {
     await mount({ data: { open: ['living_room'], editing: true }, fetchHook: noCameraPicture });
-    q('[data-eid="light.living_room_lamp"] [data-act="rename"]').click();
+    q('[data-eid="light.living_room_lamp"] [data-act="edopen"]').click();
     const box = () => document.querySelector<HTMLInputElement>('[data-rn]')!;
     box().value = 'Reading lamp'; box().setSelectionRange(12, 12);
     flip('light.kitchen_pendants');

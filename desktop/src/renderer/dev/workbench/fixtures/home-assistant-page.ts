@@ -20,6 +20,7 @@ import { ROOMS_TEMPLATE, EXTRAS_TEMPLATE } from './home-assistant-page-templates
 import { HOME_LIVE_JS } from './home-assistant-page-live';
 import { HOME_ICONS_JS } from './home-assistant-page-icons';
 import { HOME_REDRAW_CSS, HOME_REDRAW_JS } from './home-assistant-page-redraw';
+import { HOME_EDIT_CSS, HOME_EDIT_JS } from './home-assistant-page-edit';
 import { HOME_CAMERA_CSS, HOME_CAMERA_JS } from './home-assistant-page-camera';
 
 
@@ -75,7 +76,7 @@ export const HOME_ASSISTANT_PAGE_JSON = {
 function homeAssistantPageHtml(): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>Home</title>
-<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}${HOME_CAMERA_CSS}${HOME_REDRAW_CSS}</style></head>
+<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}${HOME_CAMERA_CSS}${HOME_REDRAW_CSS}${HOME_EDIT_CSS}</style></head>
 <body>
 <div class="yc-page yc-stack" id="root">
   <!-- No page title: the app's own bar already names the page, so the
@@ -108,8 +109,8 @@ function homeAssistantPageHtml(): string {
   var open = new Set(Array.isArray(saved.open) ? saved.open : []);
   var fav = new Set(Array.isArray(saved.fav) ? saved.fav : []);
   var order = saved.order && typeof saved.order === 'object' ? saved.order : {};
-  // One text box at a time: renaming a thing, or naming a new room for it.
-  var renaming = null, newRoomFor = null, confirmOff = false;
+  // One text box at a time: a row's name box, or the new room's name.
+  var newRoomFor = null, confirmOff = false;
   // Round 5: which TVs have their remote open (kept like the colour palettes).
   var remoteOpen = new Set(Array.isArray(saved.remote) ? saved.remote : []);
   // Round 7: which soundbar or speaker a TV's sound plays through, when you
@@ -513,14 +514,14 @@ ${HOME_ICONS_JS}
       // The remote is one card: its header opens it, the remote sits inside
       // the same card below (round 7: "the same container as the remote").
       (rc ? '<div class="rcard' + (rOpen ? ' open' : '') + '"><button class="rbtn" data-remote="' + esc(rc.id) + '" aria-expanded="' + !!rOpen + '" aria-label="' + (rOpen ? 'Hide' : 'Show') + ' remote for ' + esc(it.name) + '">' + REMOTE + '<span class="rlbl">Remote</span><span class="rchev">' + CHEVRON + '</span></button>' + (rOpen ? remoteHtml(rc) : '') + '</div>' : '') +
-      (media ? '' : paletteHtml(it)) + editRow(it, ctx) + pendHtml(it.id, rc && rc.id) + '</div>';
+      (media ? '' : paletteHtml(it)) + pendHtml(it.id, rc && rc.id) + '</div>';
   }
 
   var MODE_NAMES = { off: 'Off', cool: 'Cool', heat: 'Heat', heat_cool: 'Auto', auto: 'Auto', dry: 'Dry', fan_only: 'Fan' };
   var DOING = { cooling: 'Cooling', heating: 'Heating', idle: 'Holding', off: 'Off', drying: 'Drying', fan: 'Fan only' };
   function climateHtml(it, ctx) {
     var na = gone(it), mode = it.state;
-    if (na) return '<div class="clim gone"><div class="line"><div class="name">' + esc(it.name) + '<div class="sub">Not responding</div></div></div>' + editRow(it, ctx) + '</div>';
+    if (na) return '<div class="clim gone"><div class="line"><div class="name">' + esc(it.name) + '<div class="sub">Not responding</div></div></div></div>';
     var lo = it.min != null ? it.min : 50, hi = it.max != null ? it.max : 90;
     var at = function (v) { return Math.max(0, Math.min(100, (v - lo) / (hi - lo) * 100)); };
     var hasSet = it.target != null && mode !== 'off';
@@ -538,7 +539,7 @@ ${HOME_ICONS_JS}
       (hasSet ? '<div class="clim-set"><button class="step" aria-label="Cooler" data-temp="' + esc(it.id) + '" data-delta="' + (-(it.step || 1)) + '"' + (it.target <= lo ? ' disabled' : '') + '>−</button>' +
         '<div class="val"><b>' + esc(it.target) + '°</b><span class="sub">Set to</span></div>' +
         '<button class="step" aria-label="Warmer" data-temp="' + esc(it.id) + '" data-delta="' + (it.step || 1) + '"' + (it.target >= hi ? ' disabled' : '') + '>+</button></div>' : '<div class="clim-set sub">Off</div>') +
-      '</div>' + scale + modes + editRow(it, ctx) + pendHtml(it.id) + '</div>';
+      '</div>' + scale + modes + pendHtml(it.id) + '</div>';
   }
 
   // ── Order ───────────────────────────────────────────────────────────────
@@ -561,14 +562,6 @@ ${HOME_ICONS_JS}
     render();
   }
 
-  // ── Edit mode: one row of small controls under each thing ────────────────
-  // ctx = { key, ids }: which list this thing sits in, for the up/down arrows.
-  function ib(act, id, icon, label, extra) {
-    return '<button class="ib" data-act="' + act + '" data-id="' + esc(id) + '" aria-label="' + esc(label) + '" title="' + esc(label) + '"' + (extra || '') + '>' + icon + '</button>';
-  }
-  function haLink(path, label) {
-    return '<a class="ib" href="' + esc(base + path) + '" target="_blank" rel="noopener" aria-label="' + esc(label) + '" title="' + esc(label) + '">' + OUT + '</a>';
-  }
   // Edit: where a TV's sound plays (round 7). Automatic shows what it found.
   // Sonos grouping (home-page-v3 Q-sonos: "tick-list"): a speaker that can
   // play in a group gets a Group bar; open, it lists every other speaker that
@@ -608,40 +601,10 @@ ${HOME_ICONS_JS}
       cands.map(function (x) { return '<option value="' + esc(x.id) + '"' + (chosen === x.id ? ' selected' : '') + '>Sound: ' + esc(x.name) + '</option>'; }).join('') +
       '</select>';
   }
-  function editRow(it, ctx) {
-    if (!editing || !ctx) return '';
-    var id = it.id;
-    if (renaming === id) {
-      return '<div class="edit-row"><input class="yc-input" data-rn="' + esc(id) + '" value="' + esc(it.name) + '" aria-label="New name for ' + esc(it.name) + '">' +
-        '<button class="yc-button yc-button--sm yc-button--primary" data-act="rename-save" data-id="' + esc(id) + '">Save</button>' +
-        '<button class="yc-button yc-button--sm yc-button--ghost" data-act="cancel">Cancel</button></div>';
-    }
-    if (newRoomFor === id) {
-      return '<div class="edit-row"><input class="yc-input" data-nr="' + esc(id) + '" placeholder="New room’s name" aria-label="Name of the new room for ' + esc(it.name) + '">' +
-        '<button class="yc-button yc-button--sm yc-button--primary" data-act="room-create" data-id="' + esc(id) + '">Create and move</button>' +
-        '<button class="yc-button yc-button--sm yc-button--ghost" data-act="cancel">Cancel</button></div>';
-    }
-    var i = ctx.ids.indexOf(id), f = fav.has(id), h = hidden.has(id);
-    var here = roomOf(id);
-    var pick = '<select class="yc-select" data-move="' + esc(id) + '" aria-label="Room for ' + esc(it.name) + '">' +
-      (rooms || []).map(function (r) { return '<option value="' + esc(r.id) + '"' + (here && r.id === here.id ? ' selected' : '') + '>' + esc(r.name) + '</option>'; }).join('') +
-      '<option value="__new">New room…</option></select>';
-    return '<div class="edit-row">' +
-      ib('fav', id, f ? STAR_ON : STAR, f ? 'Remove from favourites' : 'Add to favourites', ' aria-pressed="' + f + '"') +
-      ib('up', id, UP, 'Move up', ' data-key="' + esc(ctx.key) + '"' + (i <= 0 ? ' disabled' : '')) +
-      ib('down', id, DOWN, 'Move down', ' data-key="' + esc(ctx.key) + '"' + (i >= ctx.ids.length - 1 ? ' disabled' : '')) +
-      ib('rename', id, PENCIL, 'Rename') +
-      '<button class="ib" data-dev="' + esc(id) + '" aria-label="Details of ' + esc(it.name) + '" title="Details">' + INFO + '</button>' +
-      (ctx.key === 'fav' ? '<span class="grow"></span>' : pick) +
-      soundPick(it) +
-      ib('hide', id, h ? EYE_OFF : EYE, h ? 'Show on this page' : 'Hide from this page', ' aria-pressed="false"') +
-      (it.device ? haLink('/config/devices/device/' + encodeURIComponent(it.device), 'Open ' + it.name + ' in Home Assistant') : '') +
-      '</div>';
-  }
-
   // Every card carries its device's id, which is how a long press, a
   // right-click or its name opens the device's pop-up (round 5, C-device).
   function itemHtml(it, ctx) {
+    if (editing && ctx) return edRowHtml(it, ctx); // redesign round 1, Edit c: Edit shows slim rows, not cards (the pop-up passes no ctx)
     var html = cardHtml(it, ctx);
     return html.replace(/^<div /, '<div data-eid="' + esc(it.id) + '" ');
   }
@@ -965,20 +928,15 @@ ${HOME_ICONS_JS}
   }
 
   function roomHtml(room, roomIds, forceOpen) {
+    if (editing) return edRoomHtml(room, roomIds); // redesign round 1, Edit c
     var key = 'r:' + room.id;
-    var items = ordered(room.items.filter(function (it) { return (editing || !hidden.has(it.id)) && domain(it.id) !== 'remote' && !remoteDevice(it); }), key, function (x) { return x.id; });
+    var items = ordered(room.items.filter(function (it) { return !hidden.has(it.id) && domain(it.id) !== 'remote' && !remoteDevice(it); }), key, function (x) { return x.id; });
     if (!items.length) return '';
     var ctx = { key: key, ids: items.map(function (x) { return x.id; }) };
     var lights = items.filter(isLight), rest = items.filter(function (it) { return !isLight(it); });
     // One light needs no card: its own tile already does what All would.
     var lightsHtml = lights.length > 1 ? lightsCard(room, lights, ctx, forceOpen) : lights.map(function (it) { return itemHtml(it, ctx); }).join('');
-    var i = roomIds.indexOf(room.id);
-    var tools = editing
-      ? ib('up', room.id, UP, 'Move ' + room.name + ' up', ' data-key="rooms"' + (i <= 0 ? ' disabled' : '')) +
-        ib('down', room.id, DOWN, 'Move ' + room.name + ' down', ' data-key="rooms"' + (i >= roomIds.length - 1 ? ' disabled' : '')) +
-        haLink('/config/areas/area/' + encodeURIComponent(room.id), 'Open ' + room.name + ' in Home Assistant')
-      : '';
-    return '<section class="yc-card room"><div class="room-head"><h2>' + esc(room.name) + '</h2>' + tools + '</div>' +
+    return '<section class="yc-card room"><div class="room-head"><h2>' + esc(room.name) + '</h2></div>' +
       lightsHtml + rest.map(function (it) { return itemHtml(it, ctx); }).join('') + '</section>';
   }
 
@@ -1093,6 +1051,7 @@ ${HOME_ICONS_JS}
 
   function render() { if (batching) { batchDirty = true; return; } draw(); }
   function draw() {
+    if (edDrag) return; // a row is being dragged: nothing may redraw under the finger (redesign round 1, Edit c)
     $('root').classList.toggle('editing', editing);
     put('bar', barHtml());
 
@@ -1111,11 +1070,9 @@ ${HOME_ICONS_JS}
       : '');
     var list = ordered(rooms.filter(function (r) { return r.items.some(function (it) { return editing || !hidden.has(it.id); }); }), 'rooms', function (r) { return r.id; });
     var roomIds = list.map(function (r) { return r.id; });
-    var html = list.map(function (r) { return roomHtml(r, roomIds); }).join('');
+    var html = list.map(function (r) { return roomHtml(r, roomIds); }).join('') + edNewZone();
     put('rooms', html || '<div class="yc-empty">Nothing to show. Put devices in rooms in Home Assistant, or press Edit to bring hidden ones back.</div>');
-    var box = document.querySelector('[data-rn],[data-nr]');
-    // Only the first time the box appears (audit F1): it used to grab focus and select all on every redraw.
-    if (box && !box.__fx) { box.__fx = 1; box.focus(); if (box.select) box.select(); }
+    edFocusBox();
   }
 
   // ── Changes made in Home Assistant itself (Q-where: names and rooms) ─────
@@ -1136,22 +1093,33 @@ ${HOME_ICONS_JS}
     });
   }
   function afterChange() { setTimeout(load, 400); }
+  // WHY pendBegin/pendEnd here too (redesign round 1, Edit c): a rename or move the house
+  // refuses is undone and says "Didn't work" on its own row, with Try again, like a switch.
   function renameThing(id, name) {
     var it = thing(id);
     if (!it || !name || name === it.name) return;
-    var old = it.name;
+    undoBuf = [];
     setLocal(id, { name: name }); // held like a switch (audit F7): a push still carrying the old name cannot flip it back
+    var tok = pendBegin(id, function () { renameThing(id, name); });
     registry([{ type: 'config/entity_registry/update', entity_id: id, name: name }])
-      .catch(function (e) { unhold(id, 'name', old); banner(e && e.message ? e.message : 'Home Assistant did not take the new name.', true); })
+      .then(function () { pendEnd(id, tok, null); }, function (e) { pendEnd(id, tok, e && e.message ? e.message : 'Home Assistant did not take the new name.'); })
       .then(afterChange);
   }
-  function moveThing(id, roomId, roomName) {
-    var from = roomOf(id), it = thing(id);
-    if (!from || !it || from.id === roomId) return;
+  function relocate(id, roomId, roomName) {
+    var it = thing(id), from = roomOf(id);
+    if (!it || !from) return;
     from.items = from.items.filter(function (x) { return x.id !== id; });
     var to = rooms.filter(function (r) { return r.id === roomId; })[0];
     if (!to) { to = { id: roomId, name: roomName || roomId, items: [] }; rooms.push(to); }
     to.items.push(it);
+  }
+  function moveThing(id, roomId, roomName) {
+    var from = roomOf(id), it = thing(id);
+    if (!from || !it || from.id === roomId) return;
+    var fromId = from.id;
+    undoBuf = [];
+    var tok = pendBegin(id, function () { moveThing(id, roomId, roomName); });
+    relocate(id, roomId, roomName);
     render();
     var moveTo = function (areaId) {
       return registry([it.device ? { type: 'config/device_registry/update', device_id: it.device, area_id: areaId } : { type: 'config/entity_registry/update', entity_id: id, area_id: areaId }]);
@@ -1161,7 +1129,11 @@ ${HOME_ICONS_JS}
     (roomName
       ? registry([{ type: 'config/area_registry/create', name: roomName }]).then(function (res) { return moveTo(res[0] && res[0].area_id ? res[0].area_id : roomId); })
       : moveTo(roomId))
-      .catch(function (e) { banner(e && e.message ? e.message : 'Home Assistant did not move it.', true); })
+      .then(function () { pendEnd(id, tok, null); }, function (e) {
+        relocate(id, fromId); // not moved: back in its old room, with the reason on its row
+        rooms = rooms.filter(function (r) { return r.items.length || r.id !== roomId || !roomName; });
+        pendEnd(id, tok, e && e.message ? e.message : 'Home Assistant did not move it.');
+      })
       .then(afterChange);
   }
   function slug(name) { return String(name).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'room'; }
@@ -1299,7 +1271,7 @@ ${HOME_ICONS_JS}
   });
   function onAct(act, id, t) {
     if (act === 'edit') {
-      editing = !editing; renaming = null; newRoomFor = null; confirmOff = false;
+      editing = !editing; edReset(); confirmOff = false;
       persist({ editing: editing });
       render();
       if (!editing) load();
@@ -1330,17 +1302,16 @@ ${HOME_ICONS_JS}
     }
     if (act === 'up' || act === 'down') {
       var key = t.getAttribute('data-key');
-      var ids2 = key === 'rooms' ? Array.from(document.querySelectorAll('[data-act="up"][data-key="rooms"]')).map(function (b) { return b.getAttribute('data-id'); })
-        : Array.from(document.querySelectorAll('[data-act="up"][data-key="' + key + '"]')).map(function (b) { return b.getAttribute('data-id'); });
+      // WHY data-edkey (redesign round 1, Edit c): every row and room names its list, so the order is read from the page itself.
+      var ids2 = Array.from(document.querySelectorAll('[data-edkey="' + key + '"]')).map(function (b) { return b.getAttribute('data-edid'); });
       shift(key, ids2, id, act === 'up' ? -1 : 1);
       return;
     }
-    if (act === 'rename') { renaming = id; newRoomFor = null; render(); return; }
-    if (act === 'cancel') { renaming = null; newRoomFor = null; render(); return; }
+    if (act === 'edopen') { edOpen(t.getAttribute('data-tok')); return; }
+    if (act === 'cancel') { edCancel(); return; }
     if (act === 'rename-save') {
       var box = document.querySelector('[data-rn]');
       var name = box ? box.value.trim() : '';
-      renaming = null;
       renameThing(id, name);
       render();
       return;
@@ -1404,7 +1375,6 @@ ${HOME_ICONS_JS}
   function holdVal(id, key, value, ms) { heldVal[id + '|' + key] = { id: id, key: key, value: value, until: Date.now() + (ms || 4000) }; }
   // Numbers agree when close (a bar's rounding); anything else (names, groups, colours) when equal.
   function heldSame(a, b, key) { return typeof b === 'number' ? Math.abs((a || 0) - b) < 0.015 * (key === 'brightness' ? 255 : 1) : JSON.stringify(a) === JSON.stringify(b); }
-  function unhold(id, key, old) { delete heldVal[id + '|' + key]; var it = thing(id); if (it) it[key] = old; renderSoon(); }
   function applyHeldVals() {
     var now = Date.now();
     Object.keys(heldVal).forEach(function (k) {
@@ -1439,7 +1409,7 @@ ${HOME_ICONS_JS}
     }
     var mv = t.getAttribute && t.getAttribute('data-move');
     if (mv) {
-      if (t.value === '__new') { newRoomFor = mv; renaming = null; render(); return; }
+      if (t.value === '__new') { newRoomFor = mv; render(); return; }
       moveThing(mv, t.value);
       return;
     }
@@ -1484,6 +1454,7 @@ ${HOME_HISTORY_JS}
 ${HOME_LIVE_JS}
 ${HOME_CAMERA_JS}
 ${HOME_REDRAW_JS}
+${HOME_EDIT_JS}
   start();
 })();
 </script>

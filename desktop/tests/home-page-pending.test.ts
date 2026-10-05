@@ -90,7 +90,7 @@ describe('guesses held until the house agrees', () => {
     let release!: () => void; const gate = new Promise<void>((r) => { release = r; });
     const m = await mount({ data: { open: ['living_room'], editing: true }, fetchHook: async (req) => { noCameraPicture(req); if (req.url.endsWith('/api/websocket') && String((req as any).socket?.send).includes('entity_registry/update')) await gate; return undefined; } });
     const id = 'light.living_room_lamp';
-    card(id).querySelector<HTMLElement>('[data-act="rename"]')!.click();
+    card(id).querySelector<HTMLElement>('[data-act="edopen"]')!.click();
     const box = document.querySelector<HTMLInputElement>('[data-rn]')!; box.value = 'Reading lamp';
     document.querySelector<HTMLElement>('[data-act="rename-save"]')!.click();
     expect(card(id).textContent).toContain('Reading lamp');

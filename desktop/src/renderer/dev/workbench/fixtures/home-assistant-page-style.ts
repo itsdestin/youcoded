@@ -334,16 +334,12 @@ export const HOME_ASSISTANT_PAGE_CSS = `
   .fold svg { transition: transform 150ms ease; }
   .fold[aria-expanded="true"] svg { transform: rotate(180deg); }
   @media (prefers-reduced-motion: reduce) { .fold svg { transition: none; } }
-  /* Edit mode: each thing gets one row of small controls under it. */
-  .edit-row { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; position: relative; padding-top: 6px; border-top: 1px dashed var(--edge-dim); }
+  /* Edit mode's own styles are in home-assistant-page-edit.ts. */
   .ib { width: 30px; height: 30px; border-radius: var(--radius-md, 8px); border: 1px solid var(--edge-dim); background: var(--well); color: var(--fg-2); cursor: pointer; display: inline-grid; place-items: center; padding: 0; text-decoration: none; flex-shrink: 0; }
   .ib:hover:not(:disabled) { color: var(--fg); border-color: var(--edge); }
   .ib:disabled { opacity: .35; cursor: default; }
   .ib[aria-pressed="true"] { color: rgb(240, 180, 40); border-color: rgb(240, 180, 40); }
   .ib:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .edit-row .yc-select { height: 30px; flex: 1; min-width: 110px; font-size: 12px; }
-  .edit-row .yc-input { height: 30px; flex: 1; min-width: 120px; font-size: 13px; }
-  .edit-row .grow { flex: 1; }
   .room-head .ib { width: 28px; height: 28px; }
   .tile.is-hidden, .clim.is-hidden, .thing.is-hidden { opacity: .5; }
   .fav-head { display: flex; align-items: center; gap: 6px; }

@@ -2,7 +2,7 @@
 // 2026-10-03; spec 2026-10-04 Parts 2 and 3). Kept apart from
 // home-assistant-page.ts so neither file outgrows the line budget; HOME_CAMERA_JS
 // is pasted INSIDE the page's script, so it shares its helpers (esc, base,
-// camNote, camCache, registry, render, haLink, editRow, …).
+// camNote, camCache, registry, render, …).
 //
 // Two kinds of camera:
 //  - one that gives Home Assistant a still picture (the Pi Zero) keeps its
@@ -188,7 +188,7 @@ export const HOME_CAMERA_JS = `
     if (!cm || !cm.nest) {
       return '<div class="' + cls + ' col"><div class="line"><div class="name">' + esc(it.name) + (na && !camCache[it.id] ? '<div class="sub">Not responding</div>' : na ? '<div class="sub">Last picture · camera not responding</div>' : '') + '</div></div>' +
         (cm ? '<div class="cam-empty note">' + esc(cm.text) + (cm.href ? ' <a href="' + esc(base + cm.href) + '" target="_blank" rel="noopener">' + esc(cm.link) + '</a>' : '') + '</div>'
-          : '<img class="cam" alt="" role="img" aria-label="' + esc(it.name) + '" data-cam="' + esc(it.id) + '"' + (camCache[it.id] ? ' src="' + camCache[it.id] + '"' : '') + '>') + editRow(it, ctx) + '</div>';
+          : '<img class="cam" alt="" role="img" aria-label="' + esc(it.name) + '" data-cam="' + esc(it.id) + '"' + (camCache[it.id] ? ' src="' + camCache[it.id] + '"' : '') + '>') + '</div>';
     }
     var st = camState(it.id), ev = st.events, live = st.live, clip = st.clip, eid = esc(it.id);
     var html = '<div class="' + cls + ' col cam-card"><div class="line"><div class="name">' + esc(it.name) + '<div class="sub">' + (na ? 'Not responding' : esc(it.model || 'Camera')) + '</div></div></div>';
@@ -216,7 +216,7 @@ export const HOME_CAMERA_JS = `
     html += '<div class="cam-actions">' +
       (canVideo() && !(live && !stopped) ? '<button class="yc-button yc-button--sm yc-button--primary" data-cam-act="live" data-id="' + eid + '"' + (na ? ' disabled' : '') + '>' + PLAYG + ' ' + (stopped ? 'Play again' : 'Watch live') + '</button>' : '') +
       (!canVideo() || stopped ? nestFallback(it) : '') + '</div>';
-    return html + editRow(it, ctx) + '</div>';
+    return html + '</div>';
   }
 
   // Players and the live canvas are made in JS, so a redraw of the page (which
