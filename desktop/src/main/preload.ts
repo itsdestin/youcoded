@@ -512,7 +512,7 @@ const IPC = {
 // nothing is added to window.claude, so the shared bridge shape is untouched.
 interface HitchEnv {
   PerformanceObserver: any;
-  performance: { timeOrigin: number; getEntriesByType(t: string): any[]; getEntriesByName(n: string): any[] };
+  perf: { timeOrigin: number; getEntriesByType(t: string): any[]; getEntriesByName(n: string): any[] }; // not `performance:` — mock-shim-window.test.ts finds the bridge's namespace by that name
   document: any;
   window: any;
   now: () => number;
@@ -580,7 +580,7 @@ export function installHitchRecorder(env: HitchEnv): { mode: string } | null {
     buf.push(e);
     arm();
   };
-  const t0 = (e: any) => r(env.performance.timeOrigin + e.startTime);
+  const t0 = (e: any) => r(env.perf.timeOrigin + e.startTime);
   const onFrames = (list: any) => {
     for (const e of list.getEntries()) {
       if (e.duration < 100) { tally.f++; tally.fms += r(e.duration); arm(); continue; }
@@ -622,8 +622,8 @@ export function installHitchRecorder(env: HitchEnv): { mode: string } | null {
     startupSent = true;
     try {
       const marks: Record<string, number> = {};
-      for (const m of env.performance.getEntriesByType('mark')) if (typeof m.name === 'string' && m.name.startsWith('yc:')) marks[m.name] = r(m.startTime);
-      const fcp = env.performance.getEntriesByName('first-contentful-paint')[0];
+      for (const m of env.perf.getEntriesByType('mark')) if (typeof m.name === 'string' && m.name.startsWith('yc:')) marks[m.name] = r(m.startTime);
+      const fcp = env.perf.getEntriesByName('first-contentful-paint')[0];
       env.send({ v: 1, mode, kind: env.mode, entries: [], tally: { f: 0, fms: 0, over: 0, oms: 0 }, dropped: 0, startup: { marks, fcp: fcp ? r(fcp.startTime) : null } });
     } catch { /* ignore */ }
   }, 10_000);
@@ -633,7 +633,7 @@ export function installHitchRecorder(env: HitchEnv): { mode: string } | null {
 if (process.env.YOUCODED_HITCH_LOG !== '0') {
   try {
     installHitchRecorder({
-      PerformanceObserver, performance, document, window, now: () => Date.now(),
+      PerformanceObserver, perf: performance, document, window, now: () => Date.now(),
       setTimeout: (f, ms) => setTimeout(f, ms),
       send: (batch) => ipcRenderer.send(IPC.PERF_HITCH_BATCH, batch),
       mode: new URLSearchParams(location.search).get('mode'),

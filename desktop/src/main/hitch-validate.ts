@@ -5,16 +5,16 @@
 // numbers are range-checked, strings are cut to 120 printable-ASCII characters and anything
 // unexpected is dropped on the floor.
 
-export const MAX_STR = 120;
+const MAX_STR = 120;
 export const MAX_ENTRIES_PER_BATCH = 100;
 /** Every kind the recorder knows how to write; anything else in a batch is rejected. */
 const EVENT_TYPES = new Set(['keydown', 'pointerdown', 'pointerup', 'click', 'input']);
 const TARGETS = new Set(['composer', 'terminal', 'chat', 'text-input', 'other']);
 const WINDOW_KINDS = new Set(['buddy-mascot', 'buddy-chat', 'buddy-bar']);
 
-export interface CleanScript { it: string; iv: string; fn: string; src: string; pos: number; d: number; fl: number }
-export interface CleanCtx { vis?: string; foc?: boolean; vm?: string; dlg?: boolean; scr?: boolean; dpr?: number; els?: number }
-export type CleanEntry =
+interface CleanScript { it: string; iv: string; fn: string; src: string; pos: number; d: number; fl: number }
+interface CleanCtx { vis?: string; foc?: boolean; vm?: string; dlg?: boolean; scr?: boolean; dpr?: number; els?: number }
+type CleanEntry =
   | { k: 'frame'; t: number; d: number; b: number; sl: number; rd: number; inp: boolean; sc: CleanScript[]; ctx: CleanCtx }
   | { k: 'task'; t: number; d: number; ctx: CleanCtx }
   | { k: 'event'; t: number; type: string; d: number; delay: number; proc: number; pres: number; tgt: string; ctx: CleanCtx };

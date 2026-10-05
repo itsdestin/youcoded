@@ -45,12 +45,12 @@ import { validateBatch, cleanString, type CleanBatch } from './hitch-validate';
 
 export const HITCH_CHANNEL = 'perf:hitch-batch';
 /** A main-process stall is written at or above this many ms. */
-export const STALL_MS = 100;
+const STALL_MS = 100;
 /** Event-loop sampling interval. WHY 100 and tunable: each sample is a timer wake-up of the main process, and in Electron a
  *  wake-up is far dearer than in plain Node. Measured idle on the rig (2026-10-05, main process, % of one core, recorder
  *  off 0.25-0.32): 20 ms -> 1.4-1.7, 50 ms -> 0.9, 100 ms -> 0.6, 250 ms -> 0.37. 100 ms keeps a stall's length accurate to
  *  about +/-50 ms (see onSecond) for ~0.3 of a core-percent; env YOUCODED_HITCH_LOOP_MS (10-1000) overrides. */
-export const DEFAULT_RESOLUTION_MS = 100;
+const DEFAULT_RESOLUTION_MS = 100;
 export function loopResolution(env: NodeJS.ProcessEnv = process.env): number {
   const n = Number(env.YOUCODED_HITCH_LOOP_MS);
   return Number.isFinite(n) && n >= 10 && n <= 1000 ? Math.round(n) : DEFAULT_RESOLUTION_MS;
@@ -88,7 +88,7 @@ export function traceIpc(ipcMain: { handle: (...a: any[]) => any; on: (...a: any
 }
 
 // --- the recorder --------------------------------------------------------------------------
-export interface ProcessMetric { type: string; memory?: { workingSetSize?: number }; cpu?: { percentCPUUsage?: number } }
+interface ProcessMetric { type: string; memory?: { workingSetSize?: number }; cpu?: { percentCPUUsage?: number } }
 export interface RecorderDeps {
   userDataDir: string;
   appVersion: string;
