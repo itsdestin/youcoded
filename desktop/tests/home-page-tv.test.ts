@@ -16,7 +16,7 @@ describe('a TV app that gives no play/pause information', () => {
     await mount({ data: { startOpen: ['destins_room'] } });
     expect(card().querySelector('.lbl')!.textContent).toContain('Now playing');
     expect(card().querySelector('.eq.on')).toBeTruthy();
-    expect(keyLabels()).toEqual(['Previous', 'Play or pause', 'Next']);
+    expect(keyLabels()).toEqual(['Back', 'Previous', 'Back 10 seconds', 'Play or pause', 'Forward 10 seconds', 'Next', 'Home']); // the seven keys; opening the remote shows five of them
     expect(card().querySelector('.key.main')!.innerHTML).toContain('<rect'); // the pause bars
   });
 

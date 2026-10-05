@@ -20,11 +20,13 @@ export const HOME_REDRAW_JS = `
   // thrown away. morphInto() instead walks the new drawing against what is on the
   // page and changes only what differs. Cards are matched by their device id.
   var gripping = null; // the slider a finger or mouse is holding right now
+  // WHY data-slot / data-app: a TV card's pad, key row and app buttons are matched to themselves (never to a neighbour that is
+  // merely another div), so a redraw mid-animation keeps the same elements and the CSS transition carries on.
   // WHY every control and media slot has a key (code review 1, 2, 11): a thing is matched to
   // the SAME thing by its key, never to a neighbour that merely has the same tag, so an input
   // is never reused as another input, a video slot never keeps another slot's player, and a
   // typed name belongs to its own device.
-  var KEYS = ['data-eid', 'id', 'data-rn', 'data-nr', 'data-vol', 'data-bright', 'data-gbright', 'data-move', 'data-sound', 'data-any', 'data-clip-slot', 'data-live-slot', 'data-k'];
+  var KEYS = ['data-eid', 'id', 'data-rn', 'data-nr', 'data-vol', 'data-bright', 'data-gbright', 'data-move', 'data-sound', 'data-any', 'data-clip-slot', 'data-live-slot', 'data-k', 'data-slot', 'data-app'];
   function keyOf(n) {
     if (n.nodeType !== 1) return null;
     for (var i = 0; i < KEYS.length; i++) { var v = n.getAttribute(KEYS[i]); if (v != null && v !== '') return KEYS[i] + ':' + v; }

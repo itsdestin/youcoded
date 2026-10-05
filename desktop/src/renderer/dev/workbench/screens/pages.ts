@@ -29,6 +29,9 @@ export const PAGES: readonly ScreenEntry[] = [
   // The Cameras tab: every camera in a grid, all live at once (pretend video).
   { ...pg('pages/page/page-home#cameras', 'view'), params: { pagesHome: 'view-cameras' } },
   { ...pg('pages/page/page-home#remote', 'view'), params: { pagesHome: 'remote' } },
+  // The Media tab with the remote open (the pad, the Back/Home row and the app buttons inside the now-playing box).
+  { ...pg('pages/page/page-home#remote-media', 'view'), params: { pagesHome: 'remote-media' } },
+  { ...pg('pages/page/page-home#media-group', 'view'), params: { pagesHome: 'media-group' } },
   { ...pg('pages/page/page-home#group', 'view'), params: { pagesHome: 'group' } },
   { ...pg('pages/page/page-home#device', 'view'), params: { pagesHome: 'device' } },
   { ...pg('pages/page/page-home#activity', 'view'), params: { pagesHome: 'view-activity' } },

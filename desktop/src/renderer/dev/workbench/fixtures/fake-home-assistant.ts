@@ -18,6 +18,8 @@ interface Thing {
   /** Sonos `group_members`: the speakers playing together, leader first. */
   group?: string[];
   sw?: string;
+  /** `media_position` (seconds) and `media_position_updated_at` (when that was true): what the media_seek +/-10s buttons work from. */
+  pos?: number; posAt?: string;
 }
 
 /** Home Assistant's "can play in a group" flag on a media player. */
@@ -98,7 +100,15 @@ export function fakeHomeAssistantReset(): void {
   ROOMS.splice(0, ROOMS.length, ...structuredClone(SEED));
   nestSignedIn = false;
   liveSessions.clear();
+  calls.length = 0;
 }
+
+/** Every service call the page made since the last reset, in order: lets a test see WHICH service a button used
+ *  (media_seek, or remote.send_command with a key name) without reading the page's code. */
+const calls: Array<{ domain: string; service: string; data: Record<string, unknown> }> = [];
+export function fakeHomeAssistantCalls(): typeof calls { return calls; }
+/** Test set-up: change what the pretend house reports for one device (e.g. make a TV able to seek). */
+export function fakeHomeAssistantSet(id: string, patch: Partial<Thing>): void { const t = find(id); if (t) Object.assign(t, patch); notifyLive(); }
 
 function find(id: string): Thing | undefined {
   for (const r of ROOMS) for (const t of r.items) if (t.id === id) return t;
@@ -206,6 +216,7 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
     let data: Record<string, unknown> = {};
     try { data = JSON.parse(req.body ?? '{}'); } catch { /* empty body */ }
     const ids = ([] as unknown[]).concat(data.entity_id ?? []).map(String);
+    calls.push({ domain: svc[1], service: svc[2], data });
     for (const id of ids) {
       const t = find(id);
       if (!t || t.state === 'unavailable') continue;
@@ -226,6 +237,7 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
       if (action === 'volume_set' && typeof data.volume_level === 'number') t.vol = data.volume_level;
       if (action === 'volume_up' && t.vol != null) t.vol = Math.min(1, t.vol + 0.02);
       if (action === 'volume_down' && t.vol != null) t.vol = Math.max(0, t.vol - 0.02);
+      if (action === 'media_seek' && typeof data.seek_position === 'number') { t.pos = data.seek_position; t.posAt = new Date().toISOString(); }
       if (action === 'volume_mute') t.muted = data.is_volume_muted === true;
       if (action === 'set_temperature' && typeof data.temperature === 'number') t.target = data.temperature;
       // Sonos grouping, as Home Assistant does it: `join` adds speakers to
@@ -290,7 +302,7 @@ const ATTRS: Array<[keyof Thing, string]> = [
   ['name', 'friendly_name'], ['brightness', 'brightness'], ['modes', 'supported_color_modes'], ['cur', 'current_temperature'], ['target', 'temperature'],
   ['min', 'min_temp'], ['max', 'max_temp'], ['step', 'target_temp_step'], ['vol', 'volume_level'], ['title', 'media_title'], ['rgb', 'rgb_color'],
   ['k', 'color_temp_kelvin'], ['modesHvac', 'hvac_modes'], ['action', 'hvac_action'], ['dc', 'device_class'], ['activity', 'current_activity'],
-  ['app', 'app_name'], ['source', 'source'], ['muted', 'is_volume_muted'], ['group', 'group_members'], ['features', 'supported_features'],
+  ['app', 'app_name'], ['source', 'source'], ['muted', 'is_volume_muted'], ['group', 'group_members'], ['features', 'supported_features'], ['pos', 'media_position'], ['posAt', 'media_position_updated_at'],
 ];
 function squash(t: Thing): Squashed {
   const a: Record<string, unknown> = {};

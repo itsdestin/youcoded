@@ -56,7 +56,7 @@ export const HOME_FEEL_JS = `
   function fxRecent(map, id) { return !!id && !!map[id] && Date.now() - map[id] < 2500; }
   // What a card looks like, so the next drawing can say what changed.
   function fxSample(el) {
-    var lights = fxLights(el), np = lights ? null : el.querySelector('.np'), key = el.querySelector('.np-ctl .key.main');
+    var lights = fxLights(el), np = lights ? null : el.querySelector('.np'), key = el.querySelector('.np .key.main');
     var rl = el.querySelector('.gcard .rlbl'), tmp = el.querySelector('.clim-set .val b, .th-set'), ttl = np && np.querySelector('.ttl');
     return {
       on: el.classList.contains('on'), mute: el.classList.contains('muted'), np: !!np, ttl: ttl ? ttl.textContent : '',
@@ -87,7 +87,7 @@ export const HOME_FEEL_JS = `
     if (has('np-in')) fxAnim(el.querySelector('.np'), [{ opacity: .35, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], 240);
     if (has('track')) fxAnim(el.querySelector('.np .txt'), [{ opacity: .3, transform: 'translateX(8px)' }, { opacity: 1, transform: 'none' }], 200);
     // Play / pause: a quiet dip and return (no spin, Destin's note).
-    if (has('pp')) fxAnim(el.querySelector('.np-ctl .key.main'), [{ transform: 'scale(.92)' }, { transform: 'none' }], 160);
+    if (has('pp')) fxAnim(el.querySelector('.np .key.main'), [{ transform: 'scale(.92)' }, { transform: 'none' }], 160);
     if (has('group')) {
       Array.prototype.forEach.call(el.querySelectorAll('.gitem[aria-pressed="true"] .gtick'), function (t) { fxAnim(t, [{ transform: 'scale(.8)' }, { transform: 'none' }], 160); });
       fxAnim(el.querySelector('.gcard .rlbl'), [{ opacity: .3, transform: 'translateX(6px)' }, { opacity: 1, transform: 'none' }], 200);
@@ -112,7 +112,7 @@ export const HOME_FEEL_JS = `
   }
   // Buttons acknowledge at once, even for a tap shorter than a frame (and for ones whose
   // result comes later: next track, a remote key).
-  var FX_ACK = '.vbtn, .key, .pwr, .step, .th-step, .mode, .th-mode, .gitem, .sw, .cam-x, .cam-play';
+  var FX_ACK = '.vbtn, .key, .pk, .pwr, .step, .th-step, .mode, .th-mode, .gitem, .sw, .cam-x, .cam-play';
   document.addEventListener('click', function (e) {
     var t = e.target.closest ? e.target.closest('button') : null; if (!t) return;
     fxPress(t);

@@ -32,7 +32,7 @@ export const HOME_LIVE_JS = `
     ['friendly_name', 'name'], ['brightness', 'brightness'], ['supported_color_modes', 'modes'], ['current_temperature', 'cur'],
     ['temperature', 'target'], ['min_temp', 'min'], ['max_temp', 'max'], ['target_temp_step', 'step'], ['volume_level', 'vol'],
     ['media_title', 'title'], ['rgb_color', 'rgb'], ['color_temp_kelvin', 'k'], ['hvac_modes', 'modesHvac'], ['hvac_action', 'action'],
-    ['device_class', 'dc'], ['current_activity', 'activity'], ['app_name', 'app'], ['source', 'source'], ['media_content_id', 'cid'],
+    ['device_class', 'dc'], ['current_activity', 'activity'], ['app_name', 'app'], ['source', 'source'], ['media_content_id', 'cid'], ['media_position', 'pos'], ['media_position_updated_at', 'posAt'],
     ['is_volume_muted', 'muted'], ['group_members', 'group']
   ];
 

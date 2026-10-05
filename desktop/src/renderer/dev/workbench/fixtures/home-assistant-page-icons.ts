@@ -26,7 +26,11 @@ export const HOME_ICONS_JS = `
   var APPS = [
     { name: 'YouTube', url: 'https://www.youtube.com', pkg: 'youtube', bg: '#ff0033', mark: '<svg width="18" height="18" viewBox="0 0 24 24" fill="#fff" aria-hidden="true"><path d="M8 5.5v13l11-6.5z"/></svg>' },
     { name: 'Netflix', url: 'https://www.netflix.com/title', pkg: 'netflix', bg: '#141414', mark: '<span style="color:#e50914;font-size:20px">N</span>' },
-    { name: 'Prime', url: 'https://app.primevideo.com', pkg: 'amazon', bg: '#1a98ff', mark: 'pv' },
+    // WHY the name is "Prime Video" (Destin, 2026-10-05): it is the app that takes the place of whichever one is already on the TV.
+    { name: 'Prime Video', url: 'https://app.primevideo.com', pkg: 'amazon', bg: '#1a98ff', mark: 'pv' },
+    // UNVERIFIED: https://play.hbomax.com is the address I expect the TV to hand to the HBO Max app, but it has not been tried on the
+    // real TV (the other four are the ones Home Assistant's docs list). If the button opens nothing, this address is the first suspect.
+    { name: 'HBO Max', url: 'https://play.hbomax.com', pkg: 'wbd', bg: 'linear-gradient(145deg,#0a0614 0%,#3a1a8a 55%,#8a3ffc 100%)', mark: '<span style="font-size:15px;font-weight:900;letter-spacing:-.05em;text-transform:lowercase">max</span>' },
     { name: 'Disney+', url: 'https://www.disneyplus.com', pkg: 'disney', bg: '#0e2a8c', mark: 'D+' },
   ];
   // Where a speaker's music comes from, when Home Assistant says (S-now:

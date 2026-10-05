@@ -505,7 +505,7 @@ const NAMESPACES = [
 import { createNamingPreview } from './naming-preview';
 import { seedPages } from './fixtures/pages';
 import { fakeCameraDeps } from './fixtures/fake-camera';
-import { fakeHomeAssistantFetch, fakeHomeAssistantIds, fakeHomeAssistantLive, fakeHomeAssistantNestSignedIn, fakeHomeAssistantSocket } from './fixtures/fake-home-assistant';
+import { fakeHomeAssistantFetch, fakeHomeAssistantIds, fakeHomeAssistantLive, fakeHomeAssistantNestSignedIn, fakeHomeAssistantSet, fakeHomeAssistantSocket } from './fixtures/fake-home-assistant';
 import { withHomeMockup } from './fixtures/home-assistant-mockups';
 import { findHomeVariant, withHomeVariant } from './fixtures/home-variants/registry';
 import { OFFICE_EDITOR_ORIGIN, OFFICE_FILES, officeFixtureName, officeSampleUrl } from './fixtures/office';
@@ -3765,18 +3765,26 @@ function createPagesMock(empty: boolean): PagesBridge {
   // `camera`: only the cameras, so the camera card (recent events, Watch live)
   // is the whole picture instead of something far down a long page.
   const onlyCameras = homeView === 'camera';
+  // `remote`: the Home page with the TV's remote open and nothing else in the way (every other device hidden), so the card is the whole picture.
+  const tvOnly = fakeHomeAssistantIds().filter((id) => id !== 'media_player.destins_room_google_tv' && id !== 'remote.destins_room_tv_remote');
   // `v-<task>-<key>`: one redesign option (fixtures/home-variants/), on the
   // connected page, starting from the option's own saved data if it has any.
   const variant = homeView && homeView.startsWith('v-') ? findHomeVariant(homeView.slice(2)) : null;
+  // `media-group`: the Media tab with two speakers playing one song together, so the Playing together box can be seen (the pretend house has
+  // none by default). WHY the speakers are changed here and not in the pretend house's own list: other screens and tests rely on it as it is.
+  if (homeView === 'media-group') {
+    const song = { state: 'playing', title: 'Weightless \u2014 Marconi Union', app: 'Spotify', group: ['media_player.living_room_speaker', 'media_player.roam_2'] };
+    fakeHomeAssistantSet('media_player.living_room_speaker', song); fakeHomeAssistantSet('media_player.roam_2', song);
+  }
   if (variant?.nestSignedIn) fakeHomeAssistantNestSignedIn(true);
   if (onlyCameras || homeView === 'view-cameras') fakeHomeAssistantNestSignedIn(true); // events need the Nest account working
-  if (onlyCameras || homeView === 'connected' || homeView === 'edit' || homeView === 'remote' || homeView === 'group' || homeView === 'device' || chipView || homeView === 'settings' || chipStyle || mockup || variant) {
+  if (onlyCameras || homeView === 'connected' || homeView === 'edit' || homeView === 'remote' || homeView === 'remote-media' || homeView === 'media-group' || homeView === 'group' || homeView === 'device' || chipView || homeView === 'settings' || chipStyle || mockup || variant) {
     pages = pages.map((p) => (p.id !== 'page-home' ? p : {
       ...p,
       ...(mockup ? { html: withHomeMockup(p.html, mockup) } : variant ? { html: withHomeVariant(p.html, variant) } : {}),
       connections: (p.connections ?? []).map((c) => (c.kind === 'device' ? { ...c, address: '100.99.234.114:8123', approved: true, savedKey: true } : c)),
       refresh: { at: new Date().toISOString(), failed: false },
-      data: variant?.data ? variant.data : onlyCameras ? { hidden: fakeHomeAssistantIds().filter((id) => !id.startsWith('camera.')), startOpen: [] } : homeView === 'group' ? { groupOpen: ['media_player.destins_room'] } : homeView === 'device' ? { dlg: 'light.living_room_lamp' } : mockup ? { startOpen: mockup.startsWith('device') ? ['living_room'] : [] } : chipStyle ? { chipStyle, startOpen: ['destins_room'] } : chipView ? { view: chipView, startScenes: ['destins_room'] } : homeView === 'settings' ? { settingsOpen: true } : homeView === 'remote' ? { remote: ['remote.destins_room_tv_remote'] } : {
+      data: variant?.data ? variant.data : onlyCameras ? { hidden: fakeHomeAssistantIds().filter((id) => !id.startsWith('camera.')), startOpen: [] } : homeView === 'group' ? { groupOpen: ['media_player.destins_room'] } : homeView === 'device' ? { dlg: 'light.living_room_lamp' } : mockup ? { startOpen: mockup.startsWith('device') ? ['living_room'] : [] } : chipStyle ? { chipStyle, startOpen: ['destins_room'] } : chipView ? { view: chipView, startScenes: ['destins_room'] } : homeView === 'settings' ? { settingsOpen: true } : homeView === 'remote' ? { remote: ['remote.destins_room_tv_remote'], startOpen: ['destins_room'], hidden: tvOnly } : homeView === 'remote-media' ? { view: 'media', remote: ['remote.destins_room_tv_remote'] } : homeView === 'media-group' ? { view: 'media' } : {
         startOpen: ['destins_room'], startPalettes: ['light.desk_backlight'],
         fav: ['light.living_room_lamp', 'climate.thermostat'],
         ...(homeView === 'edit' ? { editing: true } : {}),

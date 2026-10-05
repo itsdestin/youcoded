@@ -23,7 +23,8 @@ import { HOME_REDRAW_CSS, HOME_REDRAW_JS } from './home-assistant-page-redraw';
 import { HOME_PENDING_CSS, HOME_PENDING_JS } from './home-assistant-page-pending';
 import { HOME_EDIT_CSS, HOME_EDIT_JS } from './home-assistant-page-edit';
 import { HOME_CAMERA_CSS, HOME_CAMERA_JS } from './home-assistant-page-camera';
-import { HOME_TV_JS } from './home-assistant-page-tv';
+import { HOME_TV_JS, HOME_TV_CSS } from './home-assistant-page-tv';
+import { HOME_MEDIA_JS, HOME_MEDIA_CSS } from './home-assistant-page-media';
 import { HOME_LOOK_CSS } from './home-assistant-page-look';
 import { HOME_MOTION_JS } from './home-assistant-page-motion';
 import { HOME_FEEL_CSS, HOME_FEEL_JS } from './home-assistant-page-feel';
@@ -81,7 +82,7 @@ export const HOME_ASSISTANT_PAGE_JSON = {
 function homeAssistantPageHtml(): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>Home</title>
-<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}${HOME_CAMERA_CSS}${HOME_REDRAW_CSS}${HOME_PENDING_CSS}${HOME_EDIT_CSS}${HOME_LOOK_CSS}${HOME_FEEL_CSS}</style></head>
+<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}${HOME_CAMERA_CSS}${HOME_REDRAW_CSS}${HOME_PENDING_CSS}${HOME_EDIT_CSS}${HOME_LOOK_CSS}${HOME_FEEL_CSS}${HOME_TV_CSS}${HOME_MEDIA_CSS}</style></head>
 <body>
 <div class="yc-page yc-stack" id="root">
   <!-- No page title: the app's own bar already names the page, so the
@@ -273,27 +274,6 @@ ${HOME_ICONS_JS}
     if (!pkg) return null;
     return APPS.filter(function (a) { return String(pkg).toLowerCase().indexOf(a.pkg) >= 0; })[0] || null;
   }
-  function remoteHtml(r) {
-    var id = esc(r.id);
-    var k = function (cmd, label, icon, cls) { return '<button class="' + cls + '" data-rc="' + id + '" data-cmd="' + cmd + '" aria-label="' + label + '" title="' + label + '">' + icon + '</button>'; };
-    var nk = function (cmd, label, icon) { return '<button class="nk" data-rc="' + id + '" data-cmd="' + cmd + '" aria-label="' + label + '"><span class="ic">' + icon + '</span>' + label + '</button>'; };
-    return '<div class="remote" role="group" aria-label="Remote for ' + esc(r.name) + '">' +
-
-      '<div class="dpad">' +
-        k('DPAD_UP', 'Up', ico('<path d="m18 15-6-6-6 6"/>'), 'up') + k('DPAD_LEFT', 'Left', ico('<path d="m15 18-6-6 6-6"/>'), 'left') +
-        k('DPAD_CENTER', 'OK', 'OK', 'ok') + k('DPAD_RIGHT', 'Right', ico('<path d="m9 18 6-6-6-6"/>'), 'right') + k('DPAD_DOWN', 'Down', ico('<path d="m6 9 6 6 6-6"/>'), 'down') +
-      '</div>' +
-      '<div class="nav">' +
-        nk('BACK', 'Back', ico('<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>')) +
-        nk('HOME', 'Home', ico('<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>')) +
-      '</div>' +
-      // Apps sit at the bottom, under the controls you press most (round 2
-      // third look, S-power: "put the youtube/etc buttons at the bottom").
-      '<div class="apps">' + APPS.map(function (a) {
-        return '<button class="app" data-rc="' + id + '" data-app="' + esc(a.url) + '" aria-label="Open ' + esc(a.name) + '"><span class="logo" style="--app:' + a.bg + '">' + a.mark + '</span><span class="nm">' + esc(a.name) + '</span></button>';
-      }).join('') + '</div>' +
-      '</div>';
-  }
   // Which remote belongs to this TV tile: one in the same room named the
   // TV's name plus "remote" ("Destin's Room TV remote" → "Destin's Room
   // TV"), else the room's only remote when the room has one working TV.
@@ -456,11 +436,10 @@ ${HOME_ICONS_JS}
     var isPlay = it.state === 'playing';
     var pp = isPlay ? 'Pause' : 'Play';
     var ctl = '';
-    if (media && tv && rc && on) {
-      var rk = function (cmd, label, icon, cls) { return '<button class="key' + (cls || '') + '" data-rc="' + esc(rc.id) + '" data-cmd="' + cmd + '" aria-label="' + label + '" title="' + label + '">' + icon + '</button>'; };
-      ctl = rk('MEDIA_PREVIOUS', 'Previous', PREV) + rk('MEDIA_PLAY_PAUSE', 'Play or pause', neutral ? PLAYPAUSE : isPlay ? PAUSE : PLAY, ' main') + rk('MEDIA_NEXT', 'Next', NEXT);
+    // WHY tvKeysHtml (Destin, 2026-10-05): the TV's keys are one row of seven that the remote button re-arranges (home-assistant-page-tv.ts).
+    if (media && tv && rc && on) ctl = tvKeysHtml(it, rc, neutral, isPlay);
     // A soundbar playing the TV has nothing of its own to pause or skip.
-    } else if (media && !tv && playing && (f & 1) && !(kind === 'soundbar' && (it.source === 'TV' || it.title === 'TV'))) {
+    else if (media && !tv && playing && (f & 1) && !(kind === 'soundbar' && (it.source === 'TV' || it.title === 'TV'))) {
       var mk = function (svc, label, icon, cls) { return '<button class="key' + (cls || '') + '" data-mp="' + esc(it.id) + '" data-svc="' + svc + '" aria-label="' + label + '" title="' + label + '">' + icon + '</button>'; };
       ctl = ((f & 16) ? mk('media_previous_track', 'Previous', PREV) : '') + mk('media_play_pause', pp, isPlay ? PAUSE : PLAY, ' main') + ((f & 32) ? mk('media_next_track', 'Next', NEXT) : '');
     }
@@ -472,15 +451,15 @@ ${HOME_ICONS_JS}
     var vol = media && (on || ((kind === 'soundbar' || kind === 'speaker') && !gone(it))) ? volRow(it, tv && !sb ? null : volOf, tv ? rc : null) : '';
     // Now playing, in a block of its own (S-kinds notes: "improve the now
     // playing ui styling"): the app's mark on a TV, a note on a speaker.
-    var nowHtml = media && on && (playing && what || app)
+    var nowHtml = media && on && (playing && what || app || (tv && rc)) // a TV with a remote always has its panel, so the pad has a place
       ? '<div class="np' + (ctl || vol ? ' has-ctl' : '') + '"><span class="art" style="--app:' + (app ? app.bg : 'var(--accent)') + '">' +
         (app ? app.mark : '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>') +
         '</span><span class="txt">' + (neutral ? '' : '<div class="lbl">' + (it.state === 'paused' ? 'Paused' : 'Now playing') +
         '<span class="eq' + (it.state === 'playing' ? ' on' : '') + '" aria-hidden="true"><i></i><i></i><i></i></span></div>') +
-        '<div class="ttl">' + esc(playing && what ? what : app.name) + '</div>' +
+        '<div class="ttl">' + esc(playing && what ? what : app ? app.name : 'TV') + '</div>' +
         (app && playing && what && what !== app.name && app.name !== 'TV' ? '<div class="by">' + (tv ? 'in ' : 'on ') + esc(app.name) + '</div>' : '') + '</span>' +
         // Volume above previous/play/next (round 7).
-        (vol || ctl ? '<div class="np-ctl">' + vol + (ctl ? '<div class="np-keys">' + ctl + '</div>' : '') + '</div>' : '') + '</div>'
+        (vol || ctl ? '<div class="np-ctl' + (tv && rc ? ' tv' : '') + '">' + (tv && rc ? tvPadHtml(rc, remoteOpen.has(rc.id)) : '') + vol + (ctl ? (tv && rc ? ctl : '<div class="np-keys">' + ctl + '</div>') : '') + (tv && rc ? tvChipsHtml(rc, app) : '') + '</div>' : '') + '</div>'
       : '';
     var c = media ? 'var(--accent)' : colourOf(it);
     var bright = !media && on && dimmable(it) ? rangeHtml(it, pct) : '';
@@ -507,12 +486,8 @@ ${HOME_ICONS_JS}
       : face + '<span class="bulb">' + icon + '</span><span class="name">' + esc(it.name) + '<div class="sub">' + esc(status) + '</div></span></button>';
     return '<div class="tile' + (media ? ' media' : '') + (on && !isSound ? ' on' : '') + (na ? ' gone' : '') + (hidden.has(it.id) ? ' is-hidden' : '') + (muted ? ' muted' : '') + '" style="--c:' + c + '"><span class="glow"></span>' +
       '<div class="line">' + header +
-      right + '</div>' + nowHtml + bright + (nowHtml ? '' : vol) + playRow + (isSound ? groupHtml(it) : '') +
-      // The remote opens from a full-width bar under what is playing, so the
-      // TV's name keeps its room (a pill beside it cut the name short).
-      // The remote is one card: its header opens it, the remote sits inside
-      // the same card below (round 7: "the same container as the remote").
-      (rc ? '<div class="rcard' + (rOpen ? ' open' : '') + '"><button class="rbtn" data-remote="' + esc(rc.id) + '" aria-expanded="' + !!rOpen + '" aria-label="' + (rOpen ? 'Hide' : 'Show') + ' remote for ' + esc(it.name) + '">' + REMOTE + '<span class="rlbl">Remote</span><span class="rchev">' + CHEVRON + '</span></button>' + (rOpen ? remoteHtml(rc) : '') + '</div>' : '') +
+      (tv && rc && on ? tvToggleHtml(rc, it, right) : right) + '</div>' + nowHtml + bright + (nowHtml ? '' : vol) + playRow + (isSound ? groupHtml(it) : '') +
+      // The old separate Remote row is gone (Destin, 2026-10-05): the remote is an icon in the header that opens inside the now-playing panel.
       (media ? '' : paletteHtml(it)) + pendHtml(it.id, rc && rc.id) + '</div>';
   }
 
@@ -565,7 +540,8 @@ ${HOME_ICONS_JS}
   var groupOpen = new Set(Array.isArray(saved.groupOpen) ? saved.groupOpen : []);
   function canGroup(it) { return domain(it.id) === 'media_player' && ((it.features || 0) & GROUPING) !== 0; }
   function groupOf(it) { return Array.isArray(it.group) && it.group.length ? it.group : [it.id]; }
-  function groupHtml(it) {
+  // bare (the Media tab's Playing together box, home-assistant-page-media.ts): only the tick list, when open; the box has its own header button.
+  function groupHtml(it, bare) {
     if (!canGroup(it) || gone(it)) return '';
     var others = allItems().filter(function (x) { return x.it.id !== it.id && canGroup(x.it); });
     if (!others.length) return '';
@@ -578,6 +554,7 @@ ${HOME_ICONS_JS}
         '<span class="gtick" aria-hidden="true">' + (on ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5 5L20 7"/></svg>' : '') + '</span>' +
         '<span class="gname">' + esc(x.it.name) + '<span class="sub">' + esc(asleep ? 'Asleep or off' : x.room.name) + '</span></span></button>';
     }).join('') + '</div>' : '';
+    if (bare) return list;
     return '<div class="rcard gcard' + (open ? ' open' : '') + '"><button class="rbtn" data-group="' + esc(it.id) + '" aria-expanded="' + open + '">' + SPEAKER + '<span class="rlbl">' + esc(label) + '</span><span class="rchev">' + CHEVRON + '</span></button>' + list + '</div>';
   }
   function soundPick(it) {
@@ -956,7 +933,7 @@ ${HOME_ICONS_JS}
     // focus, held sliders, typed names, hover, transitions and a playing clip survive.
     // WHY motionBefore/After (redesign round 1, motion-nav c): the pop-up's grow and shrink need to see it appear and disappear.
     motionBefore(id, html); mediaHold(); morphInto($(id), html); mediaBack(); motionAfter(id);
-    feelAfter(id); // redesign round 1, motion-state c: the press-and-change feel (home-assistant-page-feel.ts)
+    feelAfter(id); tvAfter(id); // feel = redesign round 1, motion-state c (home-assistant-page-feel.ts); tvAfter = the TV's app buttons swapping (home-assistant-page-tv.ts)
     // Redesign options in the practice app hook each redraw (fixtures/home-variants/).
     if (window.__homeAfterPut) window.__homeAfterPut(id);
   }
@@ -1001,7 +978,8 @@ ${HOME_ICONS_JS}
         body += '<div class="clim-hero-row">' + weatherHtml() + (ths.length ? thermoHero(ths[0].it, ths[0].room) : '') + '</div>';
         list = list.map(function (r) { return { id: r.id, name: r.name, scenes: [], items: r.items.filter(function (it) { return !ths.length || it.id !== ths[0].it.id; }) }; }).filter(function (r) { return r.items.length; });
       }
-      body += '<div class="rooms">' + list.map(function (r) { return roomHtml(r, ids, view === 'lights'); }).join('') + '</div>';
+      // The Media tab is one list of devices, not rooms (Destin, 2026-10-05: home-assistant-page-media.ts); Edit keeps the room board.
+      body += view === 'media' && !editing ? mediaTabHtml(list) : '<div class="rooms">' + list.map(function (r) { return roomHtml(r, ids, view === 'lights'); }).join('') + '</div>';
     }
     return head + body;
   }
@@ -1234,16 +1212,10 @@ ${HOME_ICONS_JS}
       render();
       return;
     }
-    // A remote press goes straight to the TV: no redraw, no re-check, so
-    // pressing Down five times is five quick presses.
+    // A remote press goes straight to the TV: no redraw, no re-check (home-assistant-page-tv.ts).
     var rcId = t.getAttribute('data-rc');
-    if (rcId) {
-      var cmd = t.getAttribute('data-cmd'), app = t.getAttribute('data-app');
-      (cmd ? call('/api/services/remote/send_command', { entity_id: rcId, command: cmd })
-        : call('/api/services/remote/turn_on', { entity_id: rcId, activity: app }))
-        .catch(function (e) { banner(e && e.message ? e.message : 'The TV did not get that.', true); });
-      return;
-    }
+    if (rcId) { tvPress(t, rcId); return; }
+    if (t.getAttribute('data-seek')) { tvSeek(t); return; }
     var fd = t.getAttribute('data-fold');
     if (fd) {
       if (open.has(fd)) open.delete(fd); else open.add(fd);
@@ -1470,6 +1442,7 @@ ${HOME_HISTORY_JS}
 ${HOME_LIVE_JS}
 ${HOME_CAMERA_JS}
 ${HOME_TV_JS}
+${HOME_MEDIA_JS}
 ${HOME_REDRAW_JS}
 ${HOME_PENDING_JS}
 ${HOME_EDIT_JS}
