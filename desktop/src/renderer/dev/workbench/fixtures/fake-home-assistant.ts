@@ -46,6 +46,10 @@ function seed(): Array<{ id: string; name: string; items: Thing[] }> {
       // A Google TV paired for remote control: its Cast tile, and the remote.
       { id: 'media_player.destins_room_google_tv', name: "Destin's Room TV", state: 'playing', features: 4, vol: 0.4, title: 'Lofi beats to relax to', model: 'Google TV Streamer', dc: 'tv' },
       { id: 'remote.destins_room_tv_remote', name: "Destin's Room TV remote", state: 'on', activity: 'com.google.android.youtube.tv' },
+      // His desktop PC, as the real house has it: TWO unlinked things from two integrations. A ping sensor (on = it answers) and a
+      // wake-on-LAN button (its state is when it was last pressed). The page folds them into one Computer card.
+      { id: 'binary_sensor.desktop_pc', name: 'Desktop PC', state: 'off', dc: 'connectivity' },
+      { id: 'button.wake_desktop_pc', name: 'Wake Desktop PC', state: '2026-10-03T08:15:00+00:00' },
     ] },
     { id: 'living_room', name: 'Living Room', items: [
       { id: 'light.living_room_lamp', name: 'Floor lamp', state: 'on', brightness: 180, modes: ['color_temp'], k: 2700, maker: 'Signify Netherlands B.V.', model: 'Hue go (LLC020)', entry: 'entry_hue', sw: '1.108.7' },
@@ -107,7 +111,7 @@ function seed(): Array<{ id: string; name: string; items: Thing[] }> {
 const ROOMS: Array<{ id: string; name: string; items: Thing[]; scenes?: Array<{ id: string; name: string; last: string }> }> = seed();
 // Round 4: what the page shows about where each thing comes from, and Hue
 // scenes per room, so chips, Problems and Scenes have something to show.
-const MAKERS: Record<string, [string, string]> = { light: ['Signify Netherlands B.V.', 'entry_hue'], climate: ['Google Nest', 'entry_nest'], camera: ['Google Nest', 'entry_nest'], remote: ['Google', 'entry_atv'] };
+const MAKERS: Record<string, [string, string]> = { binary_sensor: ['', 'entry_ping'], button: ['', 'entry_wol'], light: ['Signify Netherlands B.V.', 'entry_hue'], climate: ['Google Nest', 'entry_nest'], camera: ['Google Nest', 'entry_nest'], remote: ['Google', 'entry_atv'] };
 for (const r of ROOMS) for (const t of r.items) {
   const d = t.id.split('.')[0];
   const [maker, entry] = MAKERS[d] ?? (t.model?.startsWith('Sonos') ? ['Sonos', 'entry_sonos'] : ['Google Inc.', 'entry_cast']);
@@ -125,6 +129,8 @@ export function fakeHomeAssistantReset(): void {
   ROOMS.splice(0, ROOMS.length, ...structuredClone(SEED));
   nestSignedIn = false;
   cameraEventsOn = false;
+  pcNeverWakes = false;
+  for (const t of pcTimers.splice(0)) clearTimeout(t);
   liveSessions.clear();
   // WHY (review F3): AREAS is mutated by area_registry/create and /update; without this a room made or renamed in one test
   // outlived the reset ROOMS and disagreed with them in the next.
@@ -140,6 +146,16 @@ const lastBrightness = new Map<string, number>();
  *  (media_seek, or remote.send_command with a key name) without reading the page's code. */
 const calls: Array<{ domain: string; service: string; data: Record<string, unknown> }> = [];
 export function fakeHomeAssistantCalls(): typeof calls { return calls; }
+/** The desktop PC after a Wake press: how long it takes to answer ping, and whether it ever does (a PC that is off at the wall never does). */
+const PC_WAKE_MS = 4000;
+let pcNeverWakes = false;
+const pcTimers: Array<ReturnType<typeof setTimeout>> = [];
+export function fakeHomeAssistantPcNeverWakes(on: boolean): void { pcNeverWakes = on; }
+/** Test set-up: take one thing out of the pretend house (restored by the next reset), e.g. the wake button, so the ping sensor stands alone. */
+export function fakeHomeAssistantRemove(id: string): void {
+  for (const r of ROOMS) r.items = r.items.filter((t) => t.id !== id);
+  notifyLive();
+}
 /** Test set-up: change what the pretend house reports for one device (e.g. make a TV able to seek). */
 export function fakeHomeAssistantSet(id: string, patch: Partial<Thing>): void { const t = find(id); if (t) Object.assign(t, patch); notifyLive(); }
 
@@ -281,6 +297,11 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
       const stateBefore = t.state;
       if (action === 'turn_off' && id.startsWith('light.') && t.brightness) lastBrightness.set(id, t.brightness);
       if (action === 'turn_off') t.state = 'off';
+      // A wake-on-LAN button: its state becomes the press time; the PC's ping sensor goes on a little later (unless it never wakes).
+      if (svc[1] === 'button' && action === 'press') {
+        t.state = new Date().toISOString();
+        if (id === 'button.wake_desktop_pc' && !pcNeverWakes) pcTimers.push(setTimeout(() => { const pc = find('binary_sensor.desktop_pc'); if (pc && pc.state === 'off') { pc.state = 'on'; notifyLive(); } }, PC_WAKE_MS));
+      }
       // WHY (review F6): real Home Assistant treats brightness_pct 0 as "turn off" (the light is NOT left on at 0), and a
       // turn_on with no brightness brings back what the light had before, not always full.
       if (action === 'turn_on' && id.startsWith('light.') && data.brightness_pct === 0) {

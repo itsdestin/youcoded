@@ -27,6 +27,7 @@ import { HOME_EDIT_CSS, HOME_EDIT_JS } from './home-assistant-page-edit';
 import { HOME_CAMERA_CSS, HOME_CAMERA_JS } from './home-assistant-page-camera';
 import { HOME_TV_JS, HOME_TV_CSS } from './home-assistant-page-tv';
 import { HOME_BASIC_JS, HOME_BASIC_CSS } from './home-assistant-page-basic';
+import { HOME_COMPUTER_JS, HOME_COMPUTER_CSS } from './home-assistant-page-computer';
 import { HOME_GLASS_CSS } from './home-assistant-page-glass';
 import { HOME_MEDIA_JS, HOME_MEDIA_CSS } from './home-assistant-page-media';
 import { HOME_LIGHTS_JS, HOME_LIGHTS_CSS } from './home-assistant-page-lights';
@@ -87,7 +88,7 @@ export const HOME_ASSISTANT_PAGE_JSON = {
 function homeAssistantPageHtml(): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>Home</title>
-<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}${HOME_CAMERA_CSS}${HOME_REDRAW_CSS}${HOME_PENDING_CSS}${HOME_EDIT_CSS}${HOME_LOOK_CSS}${HOME_FEEL_CSS}${HOME_TV_CSS}${HOME_BASIC_CSS}${HOME_MEDIA_CSS}${HOME_LIGHTS_CSS}${HOME_GLASS_CSS}${HOME_CLIMATE_CSS}</style></head>
+<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}${HOME_CAMERA_CSS}${HOME_REDRAW_CSS}${HOME_PENDING_CSS}${HOME_EDIT_CSS}${HOME_LOOK_CSS}${HOME_FEEL_CSS}${HOME_TV_CSS}${HOME_BASIC_CSS}${HOME_COMPUTER_CSS}${HOME_MEDIA_CSS}${HOME_LIGHTS_CSS}${HOME_GLASS_CSS}${HOME_CLIMATE_CSS}</style></head>
 <body>
 <div class="yc-page yc-stack" id="root">
   <!-- No page title: the app's own bar already names the page, so the
@@ -157,7 +158,8 @@ function homeAssistantPageHtml(): string {
   function esc(t) { return String(t == null ? '' : t).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   function domain(id) { return id.split('.')[0]; }
   function isOn(it) { return it.state === 'on' || it.state === 'playing' || it.state === 'paused' || it.state === 'idle' || (domain(it.id) === 'climate' && it.state !== 'off'); }
-  function gone(it) { return it.state === 'unavailable' || it.state === 'unknown'; }
+  // WHY a button is only gone when 'unavailable': a button's state is when it was last pressed, so a never-pressed Wake button says 'unknown' and is fine.
+  function gone(it) { return it.state === 'unavailable' || (it.state === 'unknown' && domain(it.id) !== 'button'); }
   function dimmable(it) { return Array.isArray(it.modes) && it.modes.some(function (m) { return m !== 'onoff'; }); }
 
   function persist(patch) { window.youcoded.save(Object.assign({}, window.youcoded.data || {}, patch)); }
@@ -622,6 +624,7 @@ ${HOME_ICONS_JS}
     // camera with a picture keeps it; a Nest camera gets its recent events and
     // Watch live (home-assistant-page-camera.ts).
     if (d === 'camera') return pref('cameras') ? cameraCardHtml(it, cls, na, ctx) : '';
+    if (d === 'binary_sensor' || d === 'button') return pcCardHtml(it); // the Computer card (home-assistant-page-computer.ts)
     return '';
   }
 
@@ -768,7 +771,7 @@ ${HOME_ICONS_JS}
     // integration they come through, so one Reconnect fixes them all.
     var gone = {};
     (rooms || []).forEach(function (r) { r.items.forEach(function (it) {
-      if (!gone_(it) || hidden.has(it.id) || domain(it.id) === 'remote' || remoteDevice(it) || covered[it.entry]) return;
+      if (!gone_(it) || hidden.has(it.id) || domain(it.id) === 'remote' || remoteDevice(it) || pcHidden(it) || covered[it.entry]) return;
       var k = it.entry || 'none';
       (gone[k] = gone[k] || []).push({ it: it, room: r.name });
     }); });
@@ -926,7 +929,7 @@ ${HOME_ICONS_JS}
   function roomHtml(room, roomIds) {
     if (editing) return edRoomHtml(room, roomIds); // redesign round 1, Edit c
     var key = 'r:' + room.id;
-    var items = ordered(room.items.filter(function (it) { return !hidden.has(it.id) && domain(it.id) !== 'remote' && !remoteDevice(it); }), key, function (x) { return x.id; });
+    var items = ordered(room.items.filter(function (it) { return !hidden.has(it.id) && domain(it.id) !== 'remote' && !remoteDevice(it) && !pcHidden(it); }), key, function (x) { return x.id; });
     if (!items.length) return '';
     var ctx = { key: key, ids: items.map(function (x) { return x.id; }) };
     // The Lights tab draws ONE card per room, "<Room> Lights", with tall light cards inside (home-assistant-page-lights.ts); the Home tab keeps lightsCard.
@@ -1465,6 +1468,7 @@ ${HOME_LIVE_JS}
 ${HOME_CAMERA_JS}
 ${HOME_TV_JS}
 ${HOME_BASIC_JS}
+${HOME_COMPUTER_JS}
 ${HOME_MEDIA_JS}
 ${HOME_LIGHTS_JS}
 ${HOME_REDRAW_JS}

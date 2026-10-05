@@ -12,10 +12,13 @@
 // state); `members` is normally a list but a plain string would be split into letters by "| list".
 // WHY 'sources' (basic controls, 2026-10-05): a player's source_list is the inputs the Input picker offers; guarded like 'members' (a plain
 // string would be split into letters by "| list", a missing one is none), and it is JSON-safe (a list of names).
+// WHY computers (2026-10-05): a ping sensor and a wake-on-LAN button are the two halves of one "Computer" card. Only entities of those two
+// integrations are taken (integration_entities is a list of entity-id strings, JSON-safe), never every button or binary sensor in the house.
 // WHY the camera's 'evs': Nest publishes a camera's motion / person / chime events as separate event.* entities on the SAME
 // device, and the camera card reads their history so an event with no recording still shows. `[.]` rather than an escaped dot
 // because a backslash here would need doubling through two template strings.
 export const ROOMS_TEMPLATE = `{%- set ns = namespace(rooms=[]) -%}
+{%- set pcs = integration_entities('ping') + integration_entities('wake_on_lan') -%}
 {%- for a in areas() -%}
 {%- set ens = namespace(items=[], scenes=[]) -%}
 {%- for e in area_entities(a) -%}
@@ -30,6 +33,11 @@ export const ROOMS_TEMPLATE = `{%- set ns = namespace(rooms=[]) -%}
 {%- set sl = s.attributes.get('source_list') -%}
 {%- set ce = device_attr(device_id(e), 'config_entries') -%}
 {%- set ens.items = ens.items + [{'id': e, 'maker': device_attr(device_id(e), 'manufacturer'), 'entry': (ce | list | first) if ce else none, 'since': s.last_changed.isoformat(), 'upd': s.last_updated.isoformat(), 'name': s.name, 'state': s.state, 'brightness': s.attributes.get('brightness'), 'modes': s.attributes.get('supported_color_modes'), 'cur': s.attributes.get('current_temperature'), 'target': s.attributes.get('temperature'), 'tlo': s.attributes.get('target_temp_low'), 'thi': s.attributes.get('target_temp_high'), 'min': s.attributes.get('min_temp'), 'max': s.attributes.get('max_temp'), 'step': s.attributes.get('target_temp_step'), 'vol': s.attributes.get('volume_level'), 'title': s.attributes.get('media_title'), 'features': s.attributes.get('supported_features', 0), 'rgb': s.attributes.get('rgb_color'), 'k': s.attributes.get('color_temp_kelvin'), 'modesHvac': s.attributes.get('hvac_modes'), 'action': s.attributes.get('hvac_action'), 'device': device_id(e), 'evs': ((device_entities(device_id(e)) | select('match', 'event[.]') | list) if d == 'camera' and device_id(e) else none), 'model': device_attr(device_id(e), 'model'), 'dc': s.attributes.get('device_class'), 'activity': s.attributes.get('current_activity'), 'app': s.attributes.get('app_name'), 'source': s.attributes.get('source'), 'sources': ((sl | list) if sl is iterable and sl is not string else none), 'cid': s.attributes.get('media_content_id'), 'pos': s.attributes.get('media_position'), 'posAt': ((pa.isoformat() if pa is not string and pa.isoformat is defined else pa) if pa else none), 'muted': s.attributes.get('is_volume_muted'), 'group': s.attributes.get('group_members'), 'members': (([eid] if eid is string else (eid | list)) if d == 'light' and eid else none), 'sw': device_attr(device_id(e), 'sw_version')}] -%}
+{%- endif -%}
+{%- if d in ['button','binary_sensor'] and e in pcs and states[e] is not none -%}
+{%- set s = states[e] -%}
+{%- set ce = device_attr(device_id(e), 'config_entries') -%}
+{%- set ens.items = ens.items + [{'id': e, 'maker': device_attr(device_id(e), 'manufacturer'), 'entry': (ce | list | first) if ce else none, 'since': s.last_changed.isoformat(), 'upd': s.last_updated.isoformat(), 'name': s.name, 'state': s.state, 'device': device_id(e), 'model': device_attr(device_id(e), 'model'), 'dc': s.attributes.get('device_class')}] -%}
 {%- endif -%}
 {%- endfor -%}
 {%- if ens.items -%}{%- set ns.rooms = ns.rooms + [{'id': a, 'name': area_name(a), 'items': ens.items, 'scenes': ens.scenes}] -%}{%- endif -%}

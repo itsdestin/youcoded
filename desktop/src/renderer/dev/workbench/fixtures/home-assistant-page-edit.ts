@@ -93,6 +93,7 @@ export const HOME_EDIT_JS = `
     if (d === 'light') return 'Light';
     if (d === 'climate') return 'Thermostat';
     if (d === 'camera') return 'Camera';
+    if (d === 'binary_sensor' || d === 'button') return 'Computer';
     var k = kindOf(it);
     return k === 'tv' ? 'TV' : k === 'soundbar' ? 'Soundbar' : k === 'display' ? 'Display' : 'Speaker';
   }
@@ -138,7 +139,7 @@ export const HOME_EDIT_JS = `
   }
   function edRoomHtml(room, roomIds) {
     var key = 'r:' + room.id;
-    var items = ordered(room.items.filter(function (it) { return domain(it.id) !== 'remote' && !remoteDevice(it); }), key, function (x) { return x.id; });
+    var items = ordered(room.items.filter(function (it) { return domain(it.id) !== 'remote' && !remoteDevice(it) && !pcHidden(it); }), key, function (x) { return x.id; });
     if (!items.length) return '';
     var ctx = { key: key, ids: items.map(function (x) { return x.id; }) }, i = roomIds.indexOf(room.id);
     return '<section class="yc-card room edc-room" id="edroom-' + esc(room.id) + '" data-edkey="rooms" data-edid="' + esc(room.id) + '"><div class="room-head"><span class="edc-grip" data-edgrip="1" data-edroomgrip="1" title="Drag to reorder rooms" aria-hidden="true">' + GRIP + '</span><h2>' + esc(room.name) + '</h2>' +

@@ -19,6 +19,8 @@ export const HOME_ICONS_JS = `
   var OUT = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>';
   function ico(d, w) { return '<svg width="' + (w || 18) + '" height="' + (w || 18) + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + '</svg>'; }
   var REMOTE = ico('<rect x="7" y="2" width="10" height="20" rx="4"/><circle cx="12" cy="9" r="2.5"/><path d="M12 5.2v.1M10 15h.01M14 15h.01M10 18h.01M14 18h.01"/>', 16);
+  // A computer: a monitor with its tower (the Computer card, home-assistant-page-computer.ts).
+  var COMPUTER = ico('<rect x="2" y="4" width="13" height="10" rx="1.5"/><path d="M8.5 14v4M6 18h5"/><rect x="17.5" y="6" width="4.5" height="12" rx="1.5"/>', 16);
   // Apps open through the remote by their web address; the TV hands each to
   // its app. These are the ones Home Assistant's own docs list as working.
   // Each app's mark is drawn here in its own colour, so the buttons read at
