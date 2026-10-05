@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react';
+import { ChevronDown } from './ChevronDown';
+import type { MouseEvent, ReactNode } from 'react';
 
 /**
  * The small tinted pill — a short label about a thing ("Read-only",
@@ -59,5 +60,34 @@ export function Pill({ tone = 'neutral', dot = false, children, className = '' }
       {dot && <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full shrink-0 ${DOT[tone]}`} />}
       {children}
     </span>
+  );
+}
+
+/**
+ * A pill you can click — the same tinted pill (and dot), plus the app's dropdown chevron,
+ * turned up while its menu is open. The menu is the caller's.
+ *
+ * WHY (games-social round 3, deck games-social-2 G2-2 — Destin: "i wanted to keep the
+ * styling of the online pill, but make it clickable"): your own status in the friends card
+ * was a dropdown field, which read as a form control in a row of pills. Guide "Buttons": an
+ * edit control is shaped like the things it edits — a pill among pills.
+ */
+export function PillButton({ tone = 'neutral', dot = false, open, onClick, children, className = '', 'aria-label': ariaLabel }: {
+  tone?: PillTone; dot?: boolean; open: boolean; onClick: (e: MouseEvent<HTMLButtonElement>) => void;
+  children: ReactNode; className?: string; 'aria-label'?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-haspopup="menu"
+      aria-expanded={open}
+      aria-label={ariaLabel}
+      className={`inline-flex items-center shrink-0 gap-1 rounded-full border ${dot ? 'pl-1.5' : 'pl-2'} pr-1.5 py-px text-3xs leading-tight text-fg-2 whitespace-nowrap transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${TONE[tone]} ${className}`.trim()}
+    >
+      {dot && <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full shrink-0 ${DOT[tone]}`} />}
+      {children}
+      <ChevronDown className={`w-2.5 h-2.5 shrink-0 text-fg-muted transition-transform ${open ? 'rotate-180' : ''}`} strokeWidth={2.5} />
+    </button>
   );
 }

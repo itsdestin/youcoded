@@ -94,7 +94,7 @@ export type { CalloutProps, CalloutTone } from './Callout';
 // settings-pieces deck (fold-out P-1, consent P-6) and the guide's tinted pill.
 export { FoldRow } from './FoldRow';
 export { ConsentRow } from './ConsentRow';
-export { Pill } from './Pill';
+export { Pill, PillButton } from './Pill';
 
 export { ZoomPill } from './ZoomPill';
 export type { ZoomPillProps } from './ZoomPill';

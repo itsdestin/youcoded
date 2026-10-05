@@ -15,6 +15,7 @@ import { render, act, cleanup, fireEvent, waitFor } from '@testing-library/react
 // Hoisted shared handles the mock factories close over.
 const h = vi.hoisted(() => ({
   dispatch: vi.fn(),
+  toggleIncognito: vi.fn(),
   state: {
     connected: true,
     partyError: null as string | null,
@@ -44,8 +45,8 @@ const ok = <T,>(value: T) => ({ ok: true as const, value });
 // The friends card starts folded (games-social round 2, GS-2): open it, and when asked
 // open the add box too — the steps a person takes.
 async function openPanel(opts: { add?: boolean } = {}) {
-  const u = render(<FriendsPanel social="online" onRetry={vi.fn()} />);
-  fireEvent.click(await u.findByRole('button', { name: /^Friends/ }));
+  const u = render(<FriendsPanel social="online" onRetry={vi.fn()} onToggleIncognito={h.toggleIncognito} />);
+  fireEvent.click(await u.findByRole('button', { name: /^Show all/ }));
   if (opts.add) fireEvent.click(u.getByRole('button', { name: 'Add a friend' }));
   return u;
 }
@@ -293,9 +294,9 @@ describe('Friends panel — folded summary and request order', () => {
       listFriends: vi.fn().mockResolvedValue(ok([friend({ id: 'github:1', display_name: 'Alice' }), friend({ id: 'github:2', display_name: 'Bob', handle: 'bob' })])),
     });
     const u = render(<FriendsPanel social="online" onRetry={vi.fn()} />);
-    await u.findByText('1 of 2 online');
+    await u.findByText('1 of 2 friends online');
     expect(u.queryByText('Alice')).toBeNull();
-    fireEvent.click(u.getByRole('button', { name: /^Friends/ }));
+    fireEvent.click(u.getByRole('button', { name: /^Show all/ }));
     expect(await u.findByText('Alice')).toBeTruthy();
   });
 
@@ -313,15 +314,37 @@ describe('Friends panel — folded summary and request order', () => {
     expect(decline.compareDocumentPosition(accept) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it('says which problem it is: offline and an unreachable server read differently', async () => {
+  it('no internet and an unreachable server replace the whole card with the error card', async () => {
     const off = render(<FriendsPanel social="offline" onRetry={vi.fn()} />);
-    expect(await off.findByText(/This computer is offline/)).toBeTruthy();
+    expect(await off.findByText('No internet connection')).toBeTruthy();
+    expect(off.queryByRole('button', { name: /^Show all/ })).toBeNull();
     off.unmount();
     const onRetry = vi.fn();
     const srv = render(<FriendsPanel social="server" onRetry={onRetry} />);
-    expect(await srv.findByText(/Can't reach the game server\. Flappy and 2048 still play/)).toBeTruthy();
-    expect(srv.queryByText(/This computer is offline/)).toBeNull();
+    expect(await srv.findByText("Can't reach the game server")).toBeTruthy();
+    expect(srv.queryByText('No internet connection')).toBeNull();
     fireEvent.click(srv.getByRole('button', { name: 'Try again' }));
     expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Friends panel — your status pill and the handle', () => {
+  it('your status is a pill you click; its menu switches to Incognito', async () => {
+    h.toggleIncognito.mockClear();
+    const u = render(<FriendsPanel social="online" onRetry={vi.fn()} onToggleIncognito={h.toggleIncognito} />);
+    fireEvent.click(await u.findByRole('button', { name: 'Your status: Online' }));
+    fireEvent.click(u.getByRole('menuitemradio', { name: /Incognito/ }));
+    expect(h.toggleIncognito).toHaveBeenCalledTimes(1);
+  });
+
+  it('rows show the name only; the @handle is inside the friend menu', async () => {
+    (window as any).claude.social = makeSocial({
+      listFriends: vi.fn().mockResolvedValue(ok([friend({ id: 'github:1', display_name: 'Alice', handle: 'alice' })])),
+    });
+    const u = await openPanel();
+    await u.findByText('Alice');
+    expect(u.queryByText('@alice')).toBeNull();
+    fireEvent.click(u.getByLabelText('Friend options'));
+    expect(u.getByText('@alice')).toBeTruthy();
   });
 });

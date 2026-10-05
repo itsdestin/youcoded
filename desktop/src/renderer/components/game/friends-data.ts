@@ -86,12 +86,12 @@ export function socialState(s: { networkOnline: boolean; incognito?: boolean; co
   return s.connected ? 'online' : 'connecting';
 }
 
-/** What each state says, in one place: the friends card's one line (short — it shares the
- *  row with the status dropdown in a 420px pane), and the game tiles' line
- *  for Connect 4 / Chess. `greysVersus` — whether those two tiles are disabled. */
-export const SOCIAL_STATE_COPY: Record<Exclude<SocialState, 'online'>, { line: string; tile: string; greysVersus: boolean }> = {
-  offline: { line: 'No internet connection', tile: 'No internet connection', greysVersus: true },
-  incognito: { line: 'Hidden from friends', tile: "You're incognito", greysVersus: false },
-  server: { line: 'Game server unreachable', tile: "Can't reach the game server", greysVersus: true },
-  connecting: { line: 'Connecting…', tile: 'Connecting…', greysVersus: false },
+/** What each state puts on the Connect 4 / Chess tiles, and whether it greys them. The
+ *  friends card says the rest itself (round 3: an error card for offline / server down, the
+ *  status pill for incognito). */
+export const SOCIAL_STATE_COPY: Record<Exclude<SocialState, 'online'>, { tile: string; greysVersus: boolean }> = {
+  offline: { tile: 'No internet connection', greysVersus: true },
+  incognito: { tile: "You're incognito", greysVersus: false },
+  server: { tile: "Can't reach the game server", greysVersus: true },
+  connecting: { tile: 'Connecting…', greysVersus: false },
 };

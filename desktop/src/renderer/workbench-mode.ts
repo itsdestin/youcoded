@@ -174,32 +174,32 @@ export function workbenchThemeLiked(): boolean {
   return new URLSearchParams(location.search).get('liked') === '1';
 }
 
-/** Games-social redesign (redesign backlog row 11). Round 1 (deck games-social-1) settled
- *  add-a-friend (a button), the Sign in width (full) and the lobby record (a sentence); those
- *  switches are gone. Round 2 (deck games-social-2) asks two more, each a workbench-only switch
+/** Games-social redesign (redesign backlog row 11). Rounds 1–2 settled add-a-friend, the Sign
+ *  in width, the lobby record (a sentence) and the lobby rows (boxed, like Settings); those
+ *  switches are gone. Round 3 (deck games-social-3) asks one question, a workbench-only switch
  *  that returns the SHIPPED value everywhere else (the `workbenchScreenFrame` pattern). Delete
- *  each switch and its losing branch once Destin picks.
+ *  it and the losing branches once Destin picks.
  *
- *  `?friendsSummary=` — the collapsed friends card's one line: `count` (shipped) "2 of 4
- *  online · 1 request" under "Friends"; `names` a green "2 online" pill beside "Friends" and the
- *  online friends' names under it. */
-export const FRIENDS_SUMMARY_LOOKS = ['count', 'names'] as const;
-export type FriendsSummaryLook = typeof FRIENDS_SUMMARY_LOOKS[number];
-export function workbenchFriendsSummary(): FriendsSummaryLook {
-  if (!isWorkbenchMode()) return 'count';
-  const raw = new URLSearchParams(location.search).get('friendsSummary') ?? 'count';
-  return (FRIENDS_SUMMARY_LOOKS as readonly string[]).includes(raw) ? (raw as FriendsSummaryLook) : 'count';
+ *  `?statusLook=` — how your own status and your friends' show together in the friends card
+ *  (G2C-1: "want to reimagine a bit how we display self status and friend status"):
+ *  `account` (shipped) your name with your clickable status pill, like Settings → Account's
+ *  profile row, and a count of friends online under it; `roster` you as the first row of the
+ *  list and the friends who are online under you, like the sessions menu; `strip` one line —
+ *  your pill, then the online friends as pills in a row that scrolls sideways, like a detail
+ *  page's chip row. */
+export const STATUS_LOOKS = ['account', 'roster', 'strip'] as const;
+export type StatusLook = typeof STATUS_LOOKS[number];
+export function workbenchStatusLook(): StatusLook {
+  if (!isWorkbenchMode()) return 'account';
+  const raw = new URLSearchParams(location.search).get('statusLook') ?? 'account';
+  return (STATUS_LOOKS as readonly string[]).includes(raw) ? (raw as StatusLook) : 'account';
 }
 
-/** `?lobbyRows=` — how a game's page lays out each friend: `switcher` (shipped) plain rows like
- *  the sessions menu — name with its status pill beside it, the record under, Challenge at the
- *  right; `settings` boxed rows like the Settings list — one box per friend. */
-export const LOBBY_ROW_LOOKS = ['switcher', 'settings'] as const;
-export type LobbyRowLook = typeof LOBBY_ROW_LOOKS[number];
-export function workbenchLobbyRows(): LobbyRowLook {
-  if (!isWorkbenchMode()) return 'switcher';
-  const raw = new URLSearchParams(location.search).get('lobbyRows') ?? 'switcher';
-  return (LOBBY_ROW_LOOKS as readonly string[]).includes(raw) ? (raw as LobbyRowLook) : 'switcher';
+/** `?statusMenu=1` — the friends card opens with your status pill's menu already open, so the
+ *  menu can be photographed. False outside the workbench and the photo-only build. */
+export function workbenchStatusMenuOpen(): boolean {
+  if (!isWorkbenchMode()) return false;
+  return new URLSearchParams(location.search).get('statusMenu') === '1';
 }
 
 /** Practice states, not choices. `?friendsOpen=1` opens the friends card (it starts folded, so

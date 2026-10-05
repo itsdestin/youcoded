@@ -7,8 +7,7 @@ import { Button, CARD_LEVEL_1, Callout, FieldError, LoadingState, SectionLabel, 
 import type { HeadToHead } from '../../state/marketplace-api-client';
 import { recordSentence, recordsByOpponent } from './head-to-head';
 import { useFriends, type ApiResult } from './useFriends';
-import { PresencePill } from './FriendsPanel';
-import { workbenchLobbyRows } from '../../workbench-mode';
+import { NameWithPill, PresencePill } from './FriendsPanel';
 // WHY (Office fix round 5): the reload button reloads the window, so open Office documents save first.
 import { reloadAfterOfficeSave } from '../office/office-store';
 // Task 7c, workbench-only auto-play — see the effect below and
@@ -122,7 +121,6 @@ function LobbyScreen({ connection, incognito, onToggleIncognito, gameId, onAddFr
   const state = useGameState();
   const dispatch = useGameDispatch();
   const f = useFriends();
-  const look = workbenchLobbyRows();
   /** Head-to-head records for THIS game, keyed by opponent (§6.2). Empty until
    *  the fetch lands, and empty forever if it fails — a row simply shows no
    *  number, which is the honest state. */
@@ -202,55 +200,24 @@ function LobbyScreen({ connection, incognito, onToggleIncognito, gameId, onAddFr
       <section>
         <SectionLabel className="mb-2">Friends</SectionLabel>
         {f.merged.length > 0 ? (
-          // Two arrangements on deck games-social-2 (Destin, GS-5: "we should rearrange
-          // these tiles to match other app ui"). Both put your record at this game as a
-          // sentence under the name (GC-3 picked "line": recordSentence, the end-of-game
-          // card's own wording).
-          look === 'settings' ? (
-            // The Settings list: each friend its own boxed row, 8px apart (guide "Lists and
-            // menus" → settings-style lists are boxed rows; SettingRow, as in Settings).
-            <div className="flex flex-col gap-2">
-              {f.merged.map((row) => {
-                const rec = records.get(row.id);
-                return (
-                  <SettingRow
-                    key={row.id}
-                    variant="nav"
-                    title={<>{row.name}{row.handle && <span className="text-fg-muted font-normal ml-1">@{row.handle}</span>}</>}
-                    description={rec ? recordSentence(rec, row.name) : 'Not played yet'}
-                    accessory={!incognito ? <PresencePill row={row} /> : undefined}
-                    control={row.online ? <ChallengeButton onClick={() => connection.challengePlayer(row.id, gameId)} /> : undefined}
-                  />
-                );
-              })}
-            </div>
-          ) : (
-            // The sessions menu (SessionStrip's session rows): plain rows in one card,
-            // the status pill right after the name, the detail line under it, the action
-            // at the right edge (guide "Lists of short names are plain rows inside one
-            // shared box").
-            <ul className={`${CARD_LEVEL_1} p-1 flex flex-col gap-0.5`}>
-              {f.merged.map((row) => {
-                const rec = records.get(row.id);
-                return (
-                  <li key={row.id} className="flex items-center gap-2 px-2 py-1.5 min-h-11">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="text-sm text-fg truncate min-w-0">
-                          {row.name}
-                          {row.handle && <span className="text-fg-muted ml-1">@{row.handle}</span>}
-                        </span>
-                        {/* Unknown while incognito (presence is off) — no pill rather than a guessed "Offline". */}
-                        {!incognito && <PresencePill row={row} />}
-                      </div>
-                      <div className="text-2xs text-fg-muted truncate">{rec ? recordSentence(rec, row.name) : 'Not played yet'}</div>
-                    </div>
-                    {row.online && <ChallengeButton onClick={() => connection.challengePlayer(row.id, gameId)} />}
-                  </li>
-                );
-              })}
-            </ul>
-          )
+          // The Settings list (Destin picked it, G2C-2): each friend its own boxed row, 8px
+          // apart (guide "Lists and menus" → settings-style lists are boxed rows; SettingRow).
+          // Name with its status pill beside it, no @handle (G2-7); your record at this game as
+          // a sentence under it (GC-3); Challenge at the right.
+          <div className="flex flex-col gap-2">
+            {f.merged.map((row) => {
+              const rec = records.get(row.id);
+              return (
+                <SettingRow
+                  key={row.id}
+                  variant="nav"
+                  title={<NameWithPill name={row.name} pill={!incognito ? <PresencePill row={row} /> : undefined} />}
+                  description={rec ? recordSentence(rec, row.name) : 'Not played yet'}
+                  control={row.online ? <ChallengeButton onClick={() => connection.challengePlayer(row.id, gameId)} /> : undefined}
+                />
+              );
+            })}
+          </div>
         ) : f.loaded ? (
           // Guide "Empty states": first time → a card, a short explanation and one
           // full-width filled button. Adding friends happens on the Games list now,
@@ -267,11 +234,12 @@ function LobbyScreen({ connection, incognito, onToggleIncognito, gameId, onAddFr
   );
 }
 
-/** Challenge only when the friend has a live presence entry. Outlined, not filled: it
- *  repeats on every online row, and a filled accent button per row reads as a list of
- *  alerts (change 47). */
+/** Challenge only when the friend has a live presence entry. FILLED (Destin, G2-8: "challenge
+ *  button should be dark probably") — it is the action this page exists for. This overrides
+ *  change 47's "outlined, so a row of them doesn't read as alerts" and the guide's "one filled
+ *  button per view" whenever two friends are online; recorded in the friction log. */
 function ChallengeButton({ onClick }: { onClick: () => void }) {
-  return <Button variant="secondary" size="sm" onClick={onClick} className="shrink-0">Challenge</Button>;
+  return <Button size="sm" onClick={onClick} className="shrink-0">Challenge</Button>;
 }
 
 function JoiningScreen({ connection }: { connection: GameConnection }) {

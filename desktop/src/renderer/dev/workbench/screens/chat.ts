@@ -109,14 +109,20 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat/games/chess/lobby#friends', 'pane', 'games'), params: { signedIn: '1', autoplay: '0', friends: 'many' } },
   { ...chat('chat/games/chess/lobby#no-friends', 'pane', 'games'), params: { signedIn: '1', autoplay: '0', friends: 'none' } },
   { ...chat('chat/games/chess/lobby#phone', 'pane', 'games', 'narrow'), viewport: { width: 390, height: 844 }, params: { signedIn: '1', autoplay: '0', friends: 'many' } },
-  // Round 2 (deck games-social-2): a friends list long enough
-  // to scroll, the three not-connected states, and the two open choices (workbench-mode.ts
-  // switches; delete the losers once picked). The plain names show the shipped choice.
+  // Round 2 (deck games-social-2): a friends list long enough to scroll and the three
+  // not-connected states.
   { ...chat('chat/games#long', 'pane', 'games'), params: { signedIn: '1', friends: 'lots', friendsOpen: '1' } },
   { ...chat('chat/games#incognito', 'pane', 'games'), params: { signedIn: '1', friends: 'many', incognito: '1' } },
   { ...chat('chat/games#offline', 'pane', 'games'), params: { signedIn: '1', friends: 'many', network: 'offline' } },
-  { ...chat('chat/games#summary-names', 'pane', 'games'), params: { signedIn: '1', friends: 'many', friendsSummary: 'names' } },
-  { ...chat('chat/games/chess/lobby#rows-settings', 'pane', 'games'), params: { signedIn: '1', autoplay: '0', friends: 'many', lobbyRows: 'settings' } },
+  // Round 3 (deck games-social-3): your status pill's menu open, and the three ways of showing
+  // your status beside your friends' (workbench-mode.ts `?statusLook=`), folded and opened, on
+  // the same practice data (a request waiting). Delete the losers once Destin picks.
+  { ...chat('chat/games#status-menu', 'pane', 'games'), params: { signedIn: '1', friends: 'many', statusMenu: '1' } },
+  ...(['account', 'roster', 'strip'] as const).flatMap((v): ScreenEntry[] => [
+    { ...chat(`chat/games#look-${v}`, 'pane', 'games'), params: { signedIn: '1', friends: 'requests', statusLook: v } },
+    { ...chat(`chat/games#look-${v}-open`, 'pane', 'games'), params: { signedIn: '1', friends: 'requests', statusLook: v, friendsOpen: '1' },
+      ...(v === 'account' ? { sameAs: { name: 'chat/games#requests', why: 'account is the shipped look, and #requests is it opened on the same data' } } : {}) },
+  ]),
   // Another computer holds this conversation: each phase of "open it here instead?".
   ...['confirm', 'force', 'undeliverable', 'claim-denied'].map((ph) => chat(`chat/takeover/${ph}`, 'dialog', 'handoff')),
   chat('chat/resume/preview', 'dialog'),
