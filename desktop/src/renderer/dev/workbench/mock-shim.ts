@@ -221,7 +221,7 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // YouCoded Pages (Phase 1 shell) — designed ahead of the backend; mock-only.ts
   // carries the four rows. The fake keeps pin state for the tab's lifetime so the
   // header's pinned buttons follow the library's pin toggles.
-  'pages.list', 'pages.get', 'pages.setPinned', 'pages.setSeeThrough', 'pages.setData', 'pages.onChanged',
+  'pages.list', 'pages.get', 'pages.setPinned', 'pages.setData', 'pages.onChanged',
   // Pages Phase 2 (connections) — designed ahead of the backend; rows in mock-only.ts.
   'pages.approve', 'pages.removeConnection', 'pages.refresh', 'pages.savedKeys', 'pages.deleteSavedKey',
   // Office — real channels since build plan Task 5 (main/office/office-ipc.ts). Faked so the
@@ -3849,12 +3849,6 @@ function createPagesMock(empty: boolean): PagesBridge {
     },
     setPinned: async (id, pinned) => {
       pages = pages.map((p) => (p.id === id ? { ...p, pinned } : p));
-      publish();
-      return summaries();
-    },
-    // The per-page "Show theme background" switch; the fake keeps it for the tab's lifetime.
-    setSeeThrough: async (id, on) => {
-      pages = pages.map((p) => (p.id === id ? { ...p, seeThrough: on } : p));
       publish();
       return summaries();
     },

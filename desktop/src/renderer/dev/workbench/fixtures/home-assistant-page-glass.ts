@@ -18,4 +18,11 @@ export const HOME_GLASS_CSS = `
   :root[data-yc-see-through] .yc-card.room, :root[data-yc-see-through] .yc-card.set-sec {
     background: linear-gradient(180deg, color-mix(in srgb, var(--fg) 6%, transparent), transparent 55%),
       color-mix(in srgb, var(--panel) calc(var(--panels-opacity, 1) * 60%), transparent); }
+  /* The thermostat card (a room card / Favourites, and the big one on the Climate tab) was drawn in --inset, which is a solid pale slab
+     on light wallpaper themes (owner: it "stays opaque white while the other cards are glass"). Same light glass as the cards, at the
+     same 60%; the dial's track and buttons keep their own fills (they lift off the glass like the other tiles' controls). */
+  :root[data-yc-see-through] .th-hero {
+    background: linear-gradient(180deg, color-mix(in srgb, var(--fg) 6%, transparent), transparent 55%),
+      color-mix(in srgb, var(--panel) calc(var(--panels-opacity, 1) * 60%), transparent); }
+  :root[data-yc-see-through] .th-now { stroke: color-mix(in srgb, var(--panel) 80%, transparent); }
 `;

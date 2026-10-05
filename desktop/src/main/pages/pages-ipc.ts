@@ -45,7 +45,6 @@ export function registerPagesIpc(ipcMain: IpcMain, pagesService: Service): void 
   ipcMain.handle(IPC.PAGES_LIST, async () => { pagesService.ensureWatching(); return pagesService.listAndWatch(); });
   ipcMain.handle(IPC.PAGES_GET, async (_e, id: string) => pagesService.store.get(String(id ?? '')));
   ipcMain.handle(IPC.PAGES_SET_PINNED, async (_e, id: string, pinned: boolean) => pagesService.store.setPinned(String(id ?? ''), !!pinned));
-  ipcMain.handle(IPC.PAGES_SET_SEE_THROUGH, async (_e, id: string, on: boolean) => pagesService.store.setSeeThrough(String(id ?? ''), !!on));
   ipcMain.handle(IPC.PAGES_SET_DATA, async (_e, id: string, data: unknown) => pagesService.store.setData(String(id ?? ''), data));
   // Phase 2. `remote: false` here and `true` in pages-remote.ts is the whole
   // of "no keys on the phone" (design review 1, finding 13): a desktop window

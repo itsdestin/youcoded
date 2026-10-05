@@ -19,7 +19,7 @@ import {
   type GlassField, type GlassPreset, type GlassValues, type LookOverrides,
 } from '../../themes/look-overrides';
 import { TERMINAL_WALLPAPER_OPACITY_FLOOR } from '../../themes/theme-engine';
-import { Button, RadioGroup, SegmentedTabs, SettingRow, FOCUS_RING } from '../ui';
+import { Button, RadioGroup, SegmentedTabs, SettingRow, Toggle, FOCUS_RING } from '../ui';
 
 export const SECTION_LABEL = 'text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2';
 
@@ -234,8 +234,11 @@ function StackedRow({ title, hint, children }: { title: string; hint?: ReactNode
 function GlassSettings({ active, raw, look, set, reducedEffects }: {
   active: LoadedTheme; raw: LoadedTheme; look: LookOverrides; set: (next: LookOverrides) => void; reducedEffects: boolean;
 }) {
+  const { pagesSeeThrough, setPagesSeeThrough } = useTheme();
   const [fineTune, setFineTune] = useState(look.glass === 'custom');
   const seeThrough = hasSeeThroughBackground(raw);
+  // The layout actually painted (the user's pick laid over the theme's own): Framed has an opaque pane, so nothing shows through.
+  const framed = (active.layout?.['chrome-style'] ?? 'default') === 'default';
   const bakedTerminal = raw.background?.type === 'image' && !!raw.background?.['terminal-value'];
   const tabs = [
     // "Auto", not Destin's "Auto (Theme)": in a four-way strip the longer label wrapped
@@ -275,6 +278,19 @@ function GlassSettings({ active, raw, look, set, reducedEffects }: {
       <StackedRow title="Glass" hint={hint}>
         <SegmentedTabs tabs={tabs} value={look.glass ?? THEME} onChange={pick} variant="contained" aria-label="Glass" />
       </StackedRow>
+      {/* WHY here (owner, 2026-10-05): the ONE global switch for pages and Office showing the wallpaper through their frosted
+          pane — it belongs with the glass choices, and replaces the per-page switch that sat in each page's top bar. It does
+          nothing without a wallpaper or in the Framed layout, so it greys out with a plain reason, the same way the Glass
+          row says "No effect on this theme" (never a control that silently does nothing). */}
+      <SettingRow
+        variant="item"
+        title="Show theme background behind pages"
+        description={!seeThrough ? 'No effect on this theme — it has no wallpaper'
+          : framed ? 'Works in the Floating bars and Minimalist layouts'
+          : 'Pages and Office frost over your wallpaper'}
+        disabled={!seeThrough || framed}
+        control={<Toggle checked={pagesSeeThrough} onChange={setPagesSeeThrough} disabled={!seeThrough || framed} aria-label="Show theme background behind pages" />}
+      />
       <SettingRow
         variant="item"
         title="Fine-tune glass"

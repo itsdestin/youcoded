@@ -254,6 +254,7 @@ describe('what a page can call', () => {
 // switch on. These pin the three places that decide it: the pane test, the first-paint document,
 // and the live message the page's own bootstrap obeys.
 import { paneIsGlass, readThemeCss, watchThemeCss, PAGE_SEE_THROUGH_ATTR } from '../src/renderer/components/pages/page-theme';
+import { PAGES_SOLID_ATTR } from '../src/renderer/themes/look-overrides';
 import { PAGE_KIT_CSS } from '../src/renderer/components/pages/page-kit';
 
 function setPane(wallpaper: boolean, chrome: string | null) {
@@ -271,6 +272,12 @@ describe('when the page pane is glass', () => {
     setPane(true, null); expect(paneIsGlass()).toBe(false);
     setPane(false, 'floating'); expect(paneIsGlass()).toBe(false); // a plain theme has nothing behind to show
     setPane(false, 'float'); expect(paneIsGlass()).toBe(false);
+  });
+  it('is never glass while the global Appearance switch is OFF (<html data-pages-solid>), and is again when it comes back on', () => {
+    setPane(true, 'floating');
+    document.documentElement.setAttribute(PAGES_SOLID_ATTR, '');
+    try { expect(paneIsGlass()).toBe(false); } finally { document.documentElement.removeAttribute(PAGES_SOLID_ATTR); }
+    expect(paneIsGlass()).toBe(true);
   });
 });
 
@@ -323,21 +330,23 @@ describe('the page obeys the host\'s live message', () => {
 });
 
 describe('the watcher', () => {
-  afterEach(() => setPane(false, null));
-  it('reports a wallpaper or chrome-style change live, and never see-through when the switch is off', async () => {
+  afterEach(() => { setPane(false, null); document.documentElement.removeAttribute(PAGES_SOLID_ATTR); });
+  it('reports a wallpaper, chrome-style or Appearance-switch change live', async () => {
     setPane(false, 'floating');
-    let want = true;
     const seen: boolean[] = [];
-    const w = watchThemeCss((_css, see) => seen.push(see), () => want);
+    const stop = watchThemeCss((_css, see) => seen.push(see));
     setPane(true, 'floating');
     await new Promise((r) => setTimeout(r, 0));
     expect(seen.at(-1)).toBe(true);
-    want = false; w.refresh();
+    document.documentElement.setAttribute(PAGES_SOLID_ATTR, ''); // the switch turned OFF
+    await new Promise((r) => setTimeout(r, 0));
     expect(seen.at(-1)).toBe(false);
-    want = true; w.refresh();
+    document.documentElement.removeAttribute(PAGES_SOLID_ATTR); // and back ON
+    await new Promise((r) => setTimeout(r, 0));
+    expect(seen.at(-1)).toBe(true);
     setPane(true, 'default');
     await new Promise((r) => setTimeout(r, 0));
     expect(seen.at(-1)).toBe(false);
-    w.stop();
+    stop();
   });
 });

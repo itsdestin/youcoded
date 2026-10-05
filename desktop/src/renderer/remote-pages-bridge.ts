@@ -21,7 +21,6 @@ export function createRemotePagesBridge(invoke: Invoke, addListener: Listen, rem
     list: () => invoke('pages:list'),
     get: (id: string) => invoke('pages:get', { id }),
     setPinned: (id: string, pinned: boolean) => invoke('pages:set-pinned', { id, pinned }),
-    setSeeThrough: (id: string, on: boolean) => invoke('pages:set-see-through', { id, on }),
     setData: (id: string, data: unknown) => invoke('pages:set-data', { id, data }),
     onChanged: (cb: (pages: any[]) => void) => {
       const handler = addListener('pages:changed', (pages: any) => cb(pages));

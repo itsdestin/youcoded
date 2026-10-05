@@ -171,3 +171,28 @@ it('a newer Look edit from a peer window cancels our older pending write', async
     expect(main.result.current.lookOverrides.chromeStyle).toBe('float');
   } finally { vi.useRealTimers(); }
 });
+// "Show theme background behind pages" (owner, 2026-10-05): ONE global switch, default ON, kept in the appearance file like
+// Reduced effects, and mirrored on <html> (data-pages-solid = OFF) so open pages and Office follow it live.
+it('pages see-through: default on, persisted to appearance, mirrored on <html>, and a peer window\'s change applies live', async () => {
+  const main = mount(); await flush();
+  expect(main.result.current.pagesSeeThrough).toBe(true);
+  expect(document.documentElement.hasAttribute('data-pages-solid')).toBe(false);
+  act(() => main.result.current.setPagesSeeThrough(false));
+  expect(persist).toHaveBeenLastCalledWith({ pagesSeeThrough: false });
+  expect(document.documentElement.hasAttribute('data-pages-solid')).toBe(true);
+  act(() => main.result.current.setPagesSeeThrough(true));
+  expect(persist).toHaveBeenLastCalledWith({ pagesSeeThrough: true });
+  expect(document.documentElement.hasAttribute('data-pages-solid')).toBe(false);
+  act(() => sync[0]({ pagesSeeThrough: false } as any));
+  expect(main.result.current.pagesSeeThrough).toBe(false);
+  expect(document.documentElement.hasAttribute('data-pages-solid')).toBe(true);
+  main.unmount();
+  document.documentElement.removeAttribute('data-pages-solid');
+});
+it('pages see-through: a saved OFF is read back from the appearance file on launch', async () => {
+  (window as any).claude.appearance.get = vi.fn(async () => ({ pagesSeeThrough: false }));
+  const main = mount(); await flush();
+  await waitFor(() => expect(main.result.current.pagesSeeThrough).toBe(false));
+  main.unmount();
+  document.documentElement.removeAttribute('data-pages-solid');
+});

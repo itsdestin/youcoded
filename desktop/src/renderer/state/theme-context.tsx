@@ -5,7 +5,7 @@ import { applyThemeToDom, applyThemeFont, buildBackgroundStyle, buildPatternStyl
 import { isRemoteMode } from '../platform';
 import type { ThemeDefinition, LoadedTheme } from '../themes/theme-types';
 import { resolveAllAssetPaths } from '../themes/theme-asset-resolver';
-import { applyLookOverrides, parseLookOverrides, type LookOverrides } from '../themes/look-overrides';
+import { applyLookOverrides, parseLookOverrides, PAGES_SOLID_ATTR, type LookOverrides } from '../themes/look-overrides';
 import { clampDrawerWidth, applyDrawerWidthVar, DRAWER_WIDTH_KEY, DEFAULT_DRAWER_WIDTH,
          applyGameWidthVar, GAME_WIDTH_KEY, DEFAULT_GAME_WIDTH, gameWidthForOpen } from './drawer-width';
 
@@ -27,6 +27,8 @@ const DEFAULT_FONT_FAMILY = "'Cascadia Mono', 'Cascadia Code', 'Fira Code', mono
 const STORAGE_KEY = 'youcoded-theme';
 const CYCLE_KEY = 'youcoded-theme-cycle';
 const REDUCED_EFFECTS_KEY = 'youcoded-reduced-effects';
+// "Show theme background behind pages" — stored as '0' only when OFF; absent = ON (the default).
+const PAGES_SEE_THROUGH_KEY = 'youcoded-pages-see-through';
 const SHOW_TIMESTAMPS_KEY = 'youcoded-show-timestamps';
 const SHOW_TURN_METADATA_KEY = 'youcoded-show-turn-metadata';
 // Artifact viewer: filter Session Drawer / Project View to "Documents and
@@ -69,6 +71,10 @@ interface ThemeContextValue {
   font: string;
   reducedEffects: boolean;
   setReducedEffects: (v: boolean) => void;
+  /** Settings → Appearance → "Show theme background behind pages". One global switch (default ON): pages and Office let the
+   *  theme's wallpaper show through their frosted pane. Only has a visible effect on wallpaper themes in a floating style. */
+  pagesSeeThrough: boolean;
+  setPagesSeeThrough: (v: boolean) => void;
   /** Bumped one render after the theme (or Reduced Effects) has been written
    *  to the DOM. Key on THIS to read the theme back out of the DOM. */
   themeApplied: number;
@@ -122,6 +128,7 @@ const ThemeContext = createContext<ThemeContextValue>({
   cycleList: DEFAULT_CYCLE, setCycleList: () => {},
   font: DEFAULT_FONT_FAMILY,
   reducedEffects: false, setReducedEffects: () => {},
+  pagesSeeThrough: true, setPagesSeeThrough: () => {},
   themeApplied: 0,
   showTimestamps: true, setShowTimestamps: () => {},
   showTurnMetadata: false, setShowTurnMetadata: () => {},
@@ -218,6 +225,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [cycleList, setCycleListState] = useState<string[]>(() => getStoredJSON(CYCLE_KEY, DEFAULT_CYCLE));
   const [font, setFontState] = useState(DEFAULT_FONT_FAMILY);
   const [reducedEffects, setReducedEffectsState] = useState(() => getStored(REDUCED_EFFECTS_KEY, '') === '1');
+  const [pagesSeeThrough, setPagesSeeThroughState] = useState(() => getStored(PAGES_SEE_THROUGH_KEY, '1') !== '0');
   // See the interface: a counter for consumers that read the theme back out of the DOM.
   const [themeApplied, setThemeApplied] = useState(0);
   const [showTimestamps, setShowTimestampsState] = useState(() => getStored(SHOW_TIMESTAMPS_KEY, '1') !== '0');
@@ -431,6 +439,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
           setReducedEffectsState(prefs.reducedEffects);
           try { localStorage.setItem(REDUCED_EFFECTS_KEY, prefs.reducedEffects ? '1' : ''); } catch {}
         }
+        if (typeof prefs.pagesSeeThrough === 'boolean') {
+          setPagesSeeThroughState(prefs.pagesSeeThrough);
+          try { localStorage.setItem(PAGES_SEE_THROUGH_KEY, prefs.pagesSeeThrough ? '1' : '0'); } catch {}
+        }
         if (typeof prefs.showTimestamps === 'boolean') {
           setShowTimestampsState(prefs.showTimestamps);
           try { localStorage.setItem(SHOW_TIMESTAMPS_KEY, prefs.showTimestamps ? '1' : '0'); } catch {}
@@ -478,6 +490,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       if (typeof prefs.reducedEffects === 'boolean') {
         setReducedEffectsState(prefs.reducedEffects);
         try { localStorage.setItem(REDUCED_EFFECTS_KEY, prefs.reducedEffects ? '1' : ''); } catch {}
+      }
+      if (typeof prefs.pagesSeeThrough === 'boolean') {
+        setPagesSeeThroughState(prefs.pagesSeeThrough);
+        try { localStorage.setItem(PAGES_SEE_THROUGH_KEY, prefs.pagesSeeThrough ? '1' : '0'); } catch {}
       }
       if (typeof prefs.showTimestamps === 'boolean') {
         setShowTimestampsState(prefs.showTimestamps);
@@ -662,6 +678,18 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     persistAppearance({ reducedEffects: v });
   }, []);
 
+  // WHY an <html> attribute (present = OFF): pages, the page pane and Office all already watch <html>'s attributes, so the
+  // switch reaches every open page live with no new prop, IPC or per-page storage (page-theme.ts → paneIsGlass).
+  useEffect(() => {
+    document.documentElement.toggleAttribute(PAGES_SOLID_ATTR, !pagesSeeThrough);
+  }, [pagesSeeThrough]);
+
+  const setPagesSeeThrough = useCallback((v: boolean) => {
+    setPagesSeeThroughState(v);
+    try { localStorage.setItem(PAGES_SEE_THROUGH_KEY, v ? '1' : '0'); } catch {}
+    persistAppearance({ pagesSeeThrough: v });
+  }, []);
+
   const setShowTimestamps = useCallback((v: boolean) => {
     setShowTimestampsState(v);
     try { localStorage.setItem(SHOW_TIMESTAMPS_KEY, v ? '1' : '0'); } catch {}
@@ -769,7 +797,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo(() => ({
     theme: activeSlug, setTheme, cycleTheme,
     cycleList, setCycleList, font,
-    reducedEffects, setReducedEffects, themeApplied,
+    reducedEffects, setReducedEffects, pagesSeeThrough, setPagesSeeThrough, themeApplied,
     showTimestamps, setShowTimestamps,
     showTurnMetadata, setShowTurnMetadata,
     showDeletedArtifacts, setShowDeletedArtifacts,
@@ -779,7 +807,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     allThemes, activeTheme, bgStyle, patternStyle,
     lookOverrides, setLookOverrides, reloadUserThemes,
   }), [activeSlug, setTheme, cycleTheme, cycleList, setCycleList, font,
-       reducedEffects, setReducedEffects, themeApplied, showTimestamps, setShowTimestamps,
+       reducedEffects, setReducedEffects, pagesSeeThrough, setPagesSeeThrough, themeApplied, showTimestamps, setShowTimestamps,
        showTurnMetadata, setShowTurnMetadata,
        showDeletedArtifacts, setShowDeletedArtifacts,
        contextDisplay, setContextDisplay,

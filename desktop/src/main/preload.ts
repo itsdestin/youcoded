@@ -439,7 +439,6 @@ const IPC = {
   PAGES_LIST: 'pages:list',
   PAGES_GET: 'pages:get',
   PAGES_SET_PINNED: 'pages:set-pinned',
-  PAGES_SET_SEE_THROUGH: 'pages:set-see-through',
   PAGES_SET_DATA: 'pages:set-data',
   PAGES_CHANGED: 'pages:changed',
   PAGES_APPROVE: 'pages:approve',
@@ -1910,7 +1909,6 @@ contextBridge.exposeInMainWorld('claude', {
     list: () => ipcRenderer.invoke(IPC.PAGES_LIST),
     get: (id: string) => ipcRenderer.invoke(IPC.PAGES_GET, id),
     setPinned: (id: string, pinned: boolean) => ipcRenderer.invoke(IPC.PAGES_SET_PINNED, id, pinned),
-    setSeeThrough: (id: string, on: boolean) => ipcRenderer.invoke(IPC.PAGES_SET_SEE_THROUGH, id, on),
     setData: (id: string, data: unknown) => ipcRenderer.invoke(IPC.PAGES_SET_DATA, id, data),
     onChanged: (cb: (pages: any[]) => void) => {
       const handler = (_e: any, pages: any[]) => cb(pages);

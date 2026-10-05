@@ -14,6 +14,8 @@
 // host internals. The list below is the design guide's token vocabulary (§2)
 // plus the radius and font scale, i.e. what the style kit is written against.
 
+import { PAGES_SOLID_ATTR } from '../../themes/look-overrides';
+
 const PAGE_THEME_TOKENS: readonly string[] = [
   'canvas', 'panel', 'inset', 'well',
   'accent', 'on-accent',
@@ -67,8 +69,13 @@ const PAGE_THEME_STYLE_ID = 'youcoded-theme';
  *  attributes, so the host reads them and tells it. */
 export function paneIsGlass(root: HTMLElement = document.documentElement, body: HTMLElement = document.body): boolean {
   const style = body.getAttribute('data-chrome-style');
-  return root.hasAttribute('data-wallpaper') && (style === 'floating' || style === 'float');
+  // WHY the switch is read here, off <html>: Settings → Appearance → "Show theme background behind pages" is ONE global
+  // switch (owner, 2026-10-05). ThemeProvider mirrors it onto <html> as PAGES_SOLID_ATTR (present = OFF, so the default
+  // needs no attribute). Reading the DOM lets every consumer (page pane, page document, Office) follow it live through
+  // the observers they already have, with no new prop, IPC or per-page storage.
+  return root.hasAttribute('data-wallpaper') && !root.hasAttribute(PAGES_SOLID_ATTR) && (style === 'floating' || style === 'float');
 }
+
 
 /** The attribute the page's own CSS keys on (`:root[data-yc-see-through]`). */
 export const PAGE_SEE_THROUGH_ATTR = 'data-yc-see-through';
@@ -472,18 +479,13 @@ export function prepareHostedDocument(
 
 /** Watches the host document for anything the theme engine touches — the
  *  inline style and data attributes on <html> and <body> — and reports the
- *  fresh CSS plus whether the page should be see-through. Attribute-level, not
- *  a React subscription, so a theme-pack reload or the appearance sliders count
- *  too, not only a theme switch. `wantsSeeThrough` is the person's per-page
- *  switch; the pane being glass is read here, live (wallpaper, chrome style and
- *  Reduced effects all arrive as attribute changes). Returns the unsubscribe
- *  and a `refresh` for when the switch itself flips. */
-export function watchThemeCss(
-  onChange: (css: string, seeThrough: boolean) => void,
-  wantsSeeThrough: () => boolean = () => false,
-): { stop: () => void; refresh: () => void } {
+ *  fresh CSS plus whether the page should be see-through (the pane is glass,
+ *  which already includes the global Appearance switch). Attribute-level, not
+ *  a React subscription, so a theme-pack reload, the appearance sliders and the
+ *  switch itself all count, not only a theme switch. */
+export function watchThemeCss(onChange: (css: string, seeThrough: boolean) => void): () => void {
   const read = () => {
-    const see = wantsSeeThrough() && paneIsGlass();
+    const see = paneIsGlass();
     return { css: readThemeCss(document.documentElement, see), see };
   };
   let last = read();
@@ -494,5 +496,5 @@ export function watchThemeCss(
   const mo = new MutationObserver(check);
   mo.observe(document.documentElement, { attributes: true });
   mo.observe(document.body, { attributes: true });
-  return { stop: () => mo.disconnect(), refresh: check };
+  return () => mo.disconnect();
 }

@@ -4,6 +4,7 @@
 // (performance.md, "hidden means idle").
 import { useEffect, useState } from 'react';
 import { paneIsGlass } from './page-theme';
+import { PAGES_SOLID_ATTR } from '../../themes/look-overrides';
 
 export function usePaneGlass(active: boolean): boolean {
   const [glass, setGlass] = useState(() => paneIsGlass());
@@ -12,7 +13,7 @@ export function usePaneGlass(active: boolean): boolean {
     const check = () => setGlass(paneIsGlass()); // bails out when unchanged
     check();
     const mo = new MutationObserver(check);
-    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-wallpaper'] });
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-wallpaper', PAGES_SOLID_ATTR] });
     mo.observe(document.body, { attributes: true, attributeFilter: ['data-chrome-style'] });
     return () => mo.disconnect();
   }, [active]);

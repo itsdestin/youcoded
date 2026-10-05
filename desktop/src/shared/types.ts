@@ -2254,7 +2254,6 @@ export const IPC = {
   PAGES_LIST: 'pages:list',
   PAGES_GET: 'pages:get',
   PAGES_SET_PINNED: 'pages:set-pinned',
-  PAGES_SET_SEE_THROUGH: 'pages:set-see-through',
   PAGES_SET_DATA: 'pages:set-data',
   PAGES_CHANGED: 'pages:changed',
   // ---- Phase 2: connections, keys and the one door out of a page ----

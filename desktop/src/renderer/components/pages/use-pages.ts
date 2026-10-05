@@ -83,13 +83,3 @@ export async function setPagePinned(id: string, pinned: boolean): Promise<void> 
   const pages = await b.setPinned(id, pinned);
   publish({ pages, loaded: true, failed: false });
 }
-
-/** The per-page "Show theme background" switch. Same shape as pinning: the
- *  bridge answers with the fresh list. A host without the channel (older build)
- *  simply leaves the page as it was. */
-export async function setPageSeeThrough(id: string, on: boolean): Promise<void> {
-  const b = bridge();
-  if (!b?.setSeeThrough) return;
-  const pages = await b.setSeeThrough(id, on);
-  publish({ pages, loaded: true, failed: false });
-}

@@ -232,10 +232,6 @@ export interface PageSummary {
   home: PageHome;
   /** Pinned pages get their own icon beside Projects. Per device. */
   pinned: boolean;
-  /** "Show theme background": when the app's page pane is see-through (a theme
-   *  with a wallpaper in a floating style), let it show through this page.
-   *  On unless the person turned it off for this page. Per device. */
-  seeThrough?: boolean;
   /** ISO timestamp of the last change to the page's manifest or document. */
   updatedAt: string;
   /** Changes only when `page.html` is rewritten — never on a data save — so
@@ -308,8 +304,6 @@ export interface PagesBridge {
   list: () => Promise<PageSummary[]>;
   get: (id: string) => Promise<{ ok: true; page: PageDocument } | { ok: false; failure: PageLoadFailure }>;
   setPinned: (id: string, pinned: boolean) => Promise<PageSummary[]>;
-  /** The per-page "Show theme background" switch. Optional: an older host lacks it. */
-  setSeeThrough?: (id: string, on: boolean) => Promise<PageSummary[]>;
   /** Writes the page's own data beside it (`data.json`, later save wins).
    *  Refused over MAX_PAGE_DATA_BYTES or for an unknown page. */
   setData: (id: string, data: unknown) => Promise<{ ok: true } | { ok: false; message: string }>;

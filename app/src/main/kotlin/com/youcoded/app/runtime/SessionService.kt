@@ -4415,7 +4415,6 @@ class SessionService : Service() {
             "pages:list",
             "pages:get",
             "pages:set-pinned",
-            "pages:set-see-through",
             "pages:set-data",
             // Phase 2 (connections) joins them by name rather than falling to the
             // catch-all, so both halves of Pages answer the phone the same way.

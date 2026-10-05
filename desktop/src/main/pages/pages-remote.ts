@@ -48,7 +48,6 @@ export async function handlePagesMessage(
         respond(svc ? await svc.store.get(String(payload?.id ?? '')) : { ok: false, failure: { kind: 'unreadable', message: none.message } });
         break;
       case 'pages:set-pinned': respond(await svc?.store.setPinned(String(payload?.id ?? ''), !!payload?.pinned) ?? []); break;
-      case 'pages:set-see-through': respond(await svc?.store.setSeeThrough(String(payload?.id ?? ''), !!payload?.on) ?? []); break;
       case 'pages:set-data': respond(svc ? await svc.store.setData(String(payload?.id ?? ''), payload?.data) : none); break;
       // Pages Phase 2. `remote: true` below is the enforcement point for "no
       // keys on the phone" (design review 1, finding 13): it was a renderer
@@ -82,7 +81,7 @@ export async function handlePagesMessage(
     const message = err?.message ?? String(err);
     if (type === 'pages:fetch') respond({ ok: false, reason: 'network', message });
     else if (type === 'pages:get') respond({ ok: false, failure: { kind: 'unreadable', message } });
-    else if (type === 'pages:list' || type === 'pages:set-pinned' || type === 'pages:set-see-through' || type === 'pages:remove-connection' || type === 'pages:refresh' || type === 'pages:saved-keys' || type === 'pages:delete-saved-key') respond({ ok: false, error: message });
+    else if (type === 'pages:list' || type === 'pages:set-pinned' || type === 'pages:remove-connection' || type === 'pages:refresh' || type === 'pages:saved-keys' || type === 'pages:delete-saved-key') respond({ ok: false, error: message });
     else respond({ ok: false, message });
   }
   return true;

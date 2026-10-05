@@ -10,7 +10,7 @@ afterEach(() => { unmount(); });
 
 describe('Home page glass', () => {
   it('every rule sits behind the see-through flag (so plain themes and the switch-off are unchanged)', () => {
-    const rules = [...HOME_GLASS_CSS.matchAll(/([^{}]+)\{/g)].map((m) => m[1].trim());
+    const rules = [...HOME_GLASS_CSS.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{/g)].map((m) => m[1].trim());
     expect(rules.length).toBeGreaterThan(0);
     for (const sel of rules) for (const part of sel.split(',')) expect(part, part).toContain('data-yc-see-through');
   });
@@ -19,6 +19,10 @@ describe('Home page glass', () => {
     expect(HOME_GLASS_CSS).toContain('var(--panel)');
     expect(HOME_GLASS_CSS).toContain('--panels-opacity');
     expect(HOME_GLASS_CSS).not.toMatch(/backdrop-filter/);
+  });
+
+  it('the thermostat card is the same light glass, not a solid slab (it was drawn in --inset)', () => {
+    expect(HOME_GLASS_CSS).toMatch(/:root\[data-yc-see-through\] \.th-hero \{[^}]*var\(--panel\) calc\(var\(--panels-opacity, 1\) \* 60%\)/);
   });
 
   it('has no Background setting any more', async () => {
