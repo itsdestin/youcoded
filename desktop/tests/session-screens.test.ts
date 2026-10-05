@@ -189,6 +189,57 @@ describe('every live Claude Code session has one terminal, from its start to its
     expect(made[1].reads).toBeGreaterThan(readsBefore);
     screens.stop();
   });
+
+  it('a scan reads the screen once for both the cards and the keyboard, reuses it until the screen can have changed, and still sees every change', async () => {
+    // A fake terminal whose screen is whatever was last written, whose write callbacks the test fires by hand, and which counts screen reads.
+    const t = { lines: [] as string[], callbacks: [] as Array<() => void>, reads: 0 };
+    const records = new SessionRecords(); records.begin(S);
+    records.note(S, 'hook:event', { type: 'SessionStart', sessionId: S, payload: {} });
+    const scans: Array<() => void> = [];
+    const blocks: Array<unknown> = [];
+    const screens = new SessionScreens({
+      records, live: { attention() {}, showPrompt() {}, dismissPrompt() {}, inputBlock: (_id: string, b: unknown) => { blocks.push(b); } } as any,
+      isClaude: () => true,
+      setTimer: (fn) => { scans.push(fn); return {}; }, clearTimer: () => {}, setRepeat: () => ({}), clearRepeat: () => {},
+      createTerminal: () => ({
+        rows: 24, resize() {}, dispose() {},
+        write: (d: string, cb?: () => void) => { t.lines = d.split('\n'); if (cb) t.callbacks.push(cb); },
+        // One screen read takes `buffer.active` once, so that is what is counted.
+        buffer: { get active() {
+          t.reads++;
+          return { length: t.lines.length, getLine: (y: number) => (y < t.lines.length ? { isWrapped: false, translateToString: () => t.lines[y] } : undefined) };
+        } },
+      }) as any,
+    });
+    const scan = () => { const due = scans.splice(0); due.forEach((fn) => fn()); };
+    const parsed = () => { const cbs = t.callbacks.splice(0); cbs.forEach((cb) => cb()); };
+    const rule = '─'.repeat(40);
+    const box = `${rule}\n❯ \n${rule}`;
+
+    screens.refresh(S);
+    screens.noteOutput(S, box); parsed();
+    scan();
+    expect(t.reads, 'cards and keyboard share one read').toBe(1);
+    screens.refresh(S); scan();                                     // the record changed, the screen did not
+    expect(t.reads, 'no new bytes: the last read is reused').toBe(1);
+
+    screens.noteOutput(S, 'Switch model?\n❯ 1. Opus\n  2. Sonnet'); parsed();   // a pop-up takes the keyboard
+    scan();
+    expect(t.reads).toBe(2);
+    expect(blocks.at(-1), 'the change is still seen').toMatchObject({ kind: 'popup' });
+
+    screens.noteResize(S, 100, 30); scan();                         // a resize can re-lay the screen out
+    expect(t.reads).toBe(3);
+
+    screens.noteOutput(S, box);                                     // still parsing: a read is good only for the task it was made in
+    scan(); const during = t.reads;
+    await Promise.resolve();
+    screens.refresh(S); scan();
+    expect(t.reads, 'a read taken mid-parse is not reused in a later task').toBe(during + 1);
+    parsed(); scan();
+    expect(blocks.at(-1), 'the box is back: the keyboard is the message box again').toBeNull();
+    screens.stop();
+  });
 });
 
 describe('what the turn is doing decides whether the check runs', () => {

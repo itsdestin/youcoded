@@ -13,7 +13,9 @@
 // relays every terminal byte, so it keeps a headless xterm (the same engine the window uses) and reads the same screen the same way
 // (shared/terminal-screen-text.ts). Everything it finds leaves through SessionLiveFacts, as numbered events every screen draws.
 //
-// COST (measured, scratchpad r54b-bench): every live Claude Code session keeps ONE terminal from its start to its end, with a small scrollback. It
+// COST (measured 2026-10-04 with the real class and @xterm/headless, replaying the 108 tests/fixtures/popup-corpus captures at recorded and 4x
+// speed plus a synthetic 21 KB/s stream, 1-8 sessions at once): 8 sessions streaming cost about 2-4% of one core in this process, with no
+// event-loop stall over ~14 ms; one screen read is 5-60 us, the card and keyboard parses a few us each. Every live Claude Code session keeps ONE terminal from its start to its end, with a small scrollback. It
 // does work only when bytes arrive (a write is parsed when it is written), so an idle session costs memory and no CPU. (Review fix, R5-4b: the first
 // version made a terminal only while a turn ran or a chunk "looked like a dialog"; Claude Code positions words with cursor moves, so no real chunk
 // ever looked like one and a dialog in an idle session was missed. Nothing is guessed from bytes any more.) The terminal sees the session's output
@@ -87,11 +89,18 @@ interface PerSession {
   wasAsking: boolean;
   /** What the computer last said holds this session's keyboard (null = the message box), as a key so a redraw of the same pop-up says nothing. */
   inputKey: string;
+  /** Bumped whenever the screen MAY have changed (a write handed over, a write parsed, a resize, a new terminal). */
+  screenGen: number;
+  /** The last visible-screen read, valid while `screenGen` still matches it. */
+  screenCache: { gen: number; text: string } | null;
+  /** The screen text the keyboard verdict was last worked out from (the same text gives the same verdict). */
+  focusScreen: string | null;
 }
 
 const fresh = (): PerSession => ({
   term: null, pending: 0, scanTimer: null, tracker: null, tickTimer: null, tickWhenReady: false,
   stuckShown: false, reader: null, answeredId: null, lastAskClearedAt: 0, wasAsking: false, inputKey: '',
+  screenGen: 0, screenCache: null, focusScreen: null,
 });
 
 export class SessionScreens {
@@ -158,9 +167,11 @@ export class SessionScreens {
     const term = s.term;
     if (!term) return;
     s.pending++;
+    s.screenGen++;
     term.write(data, () => {
       // A callback from a terminal that has since been disposed (the session record was recreated) must not touch the one that replaced it.
       if (s.term !== term) return;
+      s.screenGen++;
       s.pending--;
       if (s.pending > 0) return;
       if (s.tickWhenReady) { s.tickWhenReady = false; this.tick(sessionId); }
@@ -173,7 +184,7 @@ export class SessionScreens {
     if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 2 || rows < 1 || cols > 1000 || rows > 1000) return;
     this.sizes.set(sessionId, { cols, rows });
     const s = this.per.get(sessionId);
-    if (s?.term) { try { s.term.resize(cols, rows); } catch { /* disposed */ } }
+    if (s?.term) { s.screenGen++; try { s.term.resize(cols, rows); } catch { /* disposed */ } }
   }
 
   /** Something was typed into the session's terminal. An Enter while a navigated card is up is its answer (see the reissue rule). */
@@ -193,8 +204,9 @@ export class SessionScreens {
     const size = this.deps.size?.(sessionId) ?? this.sizes.get(sessionId) ?? { cols: DEFAULT_COLS, rows: DEFAULT_ROWS };
     s.term = this.deps.createTerminal ? this.deps.createTerminal(size.cols, size.rows) : realTerminal(size.cols, size.rows);
     s.pending = 0;
+    s.screenGen++; s.screenCache = null; s.focusScreen = null;
     s.reader = new PromptCardReader({
-      readScreen: () => { try { return s.term ? visibleScreenTextOf(s.term.buffer.active, s.term.rows) : null; } catch { return null; } },
+      readScreen: () => this.readScreen(s),
       need: () => { const n = this.deps.records.screenNeed(sessionId); return n ? { asking: n.asking, started: n.started, permissionCard: n.permissionCard } : null; },
       askClearedAt: () => s.lastAskClearedAt,
       isAnswered: (id) => s.answeredId === id,
@@ -212,6 +224,7 @@ export class SessionScreens {
     this.stopTicks(sessionId, s);
     const t = s.term;
     s.term = null; s.tracker = null; s.pending = 0; s.tickWhenReady = false;
+    s.screenGen++; s.screenCache = null; s.focusScreen = null;
     try { t?.dispose(); } catch { /* already gone */ }
   }
 
@@ -302,6 +315,25 @@ export class SessionScreens {
   }
 
   /**
+   * The visible screen as text, read at most once per screen state. WHY (Destin approved, 2026-10-04 merge review): the card reader and the keyboard
+   * check each read the same screen on every scan; this hands the second one the first one's text, and a scan with no new bytes (a turn began, an
+   * ask closed) reuses the last read. Safe because `screenGen` moves on every event that can change the buffer: a write handed over, a write
+   * finished parsing, a resize, a new terminal. One gap: while a write is still parsing (`pending > 0`) xterm may advance the buffer between those
+   * events, so such a read is kept only until the current task ends (a microtask clears it); xterm parses in later tasks, never inside this one.
+   */
+  private readScreen(s: PerSession): string | null {
+    if (!s.term) return null;
+    const gen = s.screenGen;
+    if (s.screenCache && s.screenCache.gen === gen) return s.screenCache.text;
+    let text: string;
+    try { text = visibleScreenTextOf(s.term.buffer.active, s.term.rows); } catch { return null; }
+    const entry = { gen, text };
+    s.screenCache = entry;
+    if (s.pending > 0) queueMicrotask(() => { if (s.screenCache === entry) s.screenCache = null; });
+    return text;
+  }
+
+  /**
    * Is Claude Code's message box live, or does something else hold the keyboard? Read on the same 10 Hz scan as the cards, from the same visible
    * screen, and published only when the answer changes. No readable screen is no verdict (the box is assumed live: no new refusal), as in the window.
    * Latency: a pop-up that opens is known to every screen within one scan (about 0.1 s) plus the round trip, where the window's own read was instant;
@@ -309,8 +341,12 @@ export class SessionScreens {
    */
   private scanInputFocus(sessionId: string, s: PerSession): void {
     if (!s.term) return;
-    let screen: string | null = null;
-    try { screen = visibleScreenTextOf(s.term.buffer.active, s.term.rows); } catch { return; }
+    const screen = this.readScreen(s);
+    if (screen === null) return;
+    // WHY (Destin approved, 2026-10-04 merge review): the verdict is worked out from the screen text alone, so identical text gives the identical
+    // verdict and the parse is skipped. A spinner-only redraw changes the text, so it is still read.
+    if (screen === s.focusScreen) return;
+    s.focusScreen = screen;
     const focus = readInputFocus(screen);
     const block: InputBlock | null = inputIsBlocked(focus) ? (focus as InputBlock) : null;
     const key = block ? (block.kind === 'other-view' ? `other-view:${block.view}` : 'popup') : '';
