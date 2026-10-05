@@ -189,7 +189,8 @@ function themeIcons(themesDir) {
 // small drawing (a browser tab); 128 is the header/footer at 2x; 180 is the iPhone home-screen icon.
 function siteIcons(dir) {
   fs.mkdirSync(dir, { recursive: true });
-  for (const slug of ['default', ...THEMES]) {
+  // Morning Rounds is not one of the site's themes (docs/index.html THEMES), so it gets no files.
+  for (const slug of ['default', ...THEMES.filter((t) => t !== 'morning-rounds')]) {
     const s = sizes('app', slug, [32, 128, 180]);
     for (const px of [32, 128]) fs.copyFileSync(s[px], path.join(dir, `${slug}-${px}.png`));
     if (slug === 'default') fs.copyFileSync(s[180], path.join(dir, 'apple-touch-icon.png'));
