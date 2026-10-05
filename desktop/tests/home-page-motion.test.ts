@@ -125,3 +125,23 @@ it('opens an Edit row’s settings the same way: contents drop in one after anot
   const menu = q('.edx-menu');
   expect(calls.filter((c) => c.el.parentElement === menu && c.opts.delay !== undefined).length).toBeGreaterThan(1);
 });
+
+// Destin, 2026-10-04: "the tab switchers at the top bounce around when I change pages". Two causes:
+// a glide on the filled pill, and bold text on the chosen pill that made it wider and pushed its
+// neighbours. The row must stay still: no animation on it, and no style that changes a pill's size.
+it('leaves the pill row perfectly still when the page changes', async () => {
+  recordAnimations();
+  await mount({ data: collapsed(), fetchHook: noCameraPicture });
+  const boxes = () => qa('#chips .pill').map((p) => p.outerHTML.replace(/ (sel|aria-pressed="\w+")/g, '').length);
+  const before = boxes();
+  await press(q('#chips [data-view="media"]'));
+  await press(q('#chips [data-home]'));
+  expect(calls.filter((c) => q('#chips').contains(c.el) || c.el.closest('.toprow'))).toEqual([]);
+  expect(boxes()).toEqual(before);
+});
+
+it('gives the selected pill no size-changing style (no bolder text, no scale)', async () => {
+  const { HOME_ASSISTANT_PAGE_HTML } = await import('../src/renderer/dev/workbench/fixtures/home-assistant-page');
+  const rules = (HOME_ASSISTANT_PAGE_HTML.match(/\.pill\.sel[^{]*\{[^}]*\}/g) || []).join(' ');
+  expect(rules).not.toMatch(/font-weight|font-size|padding|width|transform|scale/);
+});

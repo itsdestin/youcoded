@@ -1,6 +1,6 @@
 // Motion when moving around the Home page (redesign round 1, motion-nav c, "Glide and grow",
-// picked by Destin 2026-10-04): pages slide in from the side their tab sits on and the filled
-// pill glides along the row; the device pop-up grows out of the card you pressed and shrinks
+// picked by Destin 2026-10-04): pages slide in from the side their tab sits on (the pill row itself
+// never moves); the device pop-up grows out of the card you pressed and shrinks
 // back into it; a card's contents drop in one after another and everything below it glides to
 // its new place; the Edit board's settings under a row open the same way.
 //
@@ -71,9 +71,9 @@ export const HOME_MOTION_JS = `
   function moPlay(o) {
     if (!moCan()) return;
     if (o.k === 'nav') {
-      // Pages slide in from the side the tab sits on; the filled pill glides along the row.
-      var sel = document.querySelector('#chips .sel');
-      if (sel && o.pill) { var dx = o.pill.left - sel.getBoundingClientRect().left; if (Math.abs(dx) > 2) moAnim(sel, [{ transform: 'translateX(' + dx + 'px)' }, { transform: 'none' }], { duration: 260, easing: MO_EASE }); }
+      // Pages slide in from the side their tab sits on. WHY nothing touches the pill row (Destin,
+      // 2026-10-04: "the tab switchers bounce around when I change pages"): the row stays perfectly
+      // still; the selected fill changes in place through the pills' own colour fade.
       ['view', 'favs', 'rooms'].forEach(function (id) {
         var el = document.getElementById(id);
         if (el && el.firstElementChild) moAnim(el, [{ opacity: 0, transform: 'translateX(' + (o.to > o.from ? 32 : -32) + 'px)' }, { opacity: 1, transform: 'none' }], { duration: 260, easing: MO_EASE });
@@ -96,7 +96,7 @@ export const HOME_MOTION_JS = `
     else if (b.getAttribute('data-act') === 'edopen') o = { k: 'panel', v: b.getAttribute('data-tok'), was: b.getAttribute('aria-expanded') === 'true', before: moRects() };
     else if (b.hasAttribute('data-view') || b.hasAttribute('data-home')) {
       var s = document.querySelector('#chips .sel');
-      o = { k: 'nav', from: s ? moIdx(s) : 99, to: moIdx(b), pill: s ? s.getBoundingClientRect() : null };
+      o = { k: 'nav', from: s ? moIdx(s) : 99, to: moIdx(b) };
     }
     if (o) (window.requestAnimationFrame || setTimeout)(function () { moPlay(o); });
   }, true);

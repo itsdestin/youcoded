@@ -35,7 +35,8 @@ export const HOME_ASSISTANT_PAGE_CSS = `
   .pill:hover { border-color: var(--edge); }
   .pill:active { transform: scale(.97); }
   /* The open tab is unmistakable: filled with the text colour. */
-  .pill.sel, .pill.lit.sel { background: var(--fg); border-color: var(--fg); color: var(--panel); font-weight: 700; }
+  .pill.sel, .pill.lit.sel { background: var(--fg); border-color: var(--fg); color: var(--panel); }
+  /* WHY no bolder text when selected (Destin, 2026-10-04, tabs "bounce around"): bold is wider, so the chosen pill grew and pushed its neighbours (and could wrap the row) on every page change. The fill alone marks it. */
   .pill.sel .pill-ic { background: var(--panel); color: var(--fg); }
   .pill.sel.lit .pill-ic { background: var(--k); color: #111; }
   .pill.sel .eq i { background: var(--panel); }
