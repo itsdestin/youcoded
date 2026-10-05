@@ -8,7 +8,7 @@
 // never contains any git artifact of ours; their own repo is untouched.
 import fs from 'fs';
 import path from 'path';
-import { execFile } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import { promisify } from 'util';
 import { DEFAULT_IGNORES, MAX_SYNC_FILE_BYTES, conflictCopyName, isNeverSyncPath } from './guards';
 import { nextGcCounter } from './gc-policy';
@@ -103,6 +103,30 @@ function throwRepoCorrupt(spaceId: string, op: string, detail: string): never {
 }
 
 const GIT_TIMEOUT = 5 * 60 * 1000; // mirrors sync-service.ts GIT_TIMEOUT
+
+// WHY (2026-10-05 Z13 power loss): git does NOT flush loose objects to disk by
+// default, so a power cut seconds after a sync left empty object files — the
+// poison repair() exists for (third such crash on this machine). `committed`
+// makes git fsync every object and ref it writes; `batch` does it with one
+// flush per operation, so a big `add -A` stays fast. Passed per call, so every
+// existing repo gets it without a config migration; git older than 2.36
+// ignores unknown core.* keys.
+const DURABLE_WRITES = ['-c', 'core.fsync=committed', '-c', 'core.fsyncMethod=batch'];
+
+// WHY a fetch has no fixed time limit (2026-10-05): the 5-minute exec timeout
+// killed a 2.6 GB first download 49 times in a row — every attempt restarts
+// from zero, so it could never finish, and each left a dead partial pack. A
+// fetch now runs as long as data keeps arriving and is stopped only after this
+// long with NO output (git --progress reports at least once a second while
+// receiving).
+const FETCH_IDLE_MS = 2 * 60 * 1000;
+// A dead fetch's partial download (objects/pack/tmp_*) older than this is
+// removed. An hour, not lockStaleMs: a live fetch in a SECOND app copy can sit
+// quietly resolving deltas for minutes after its last write.
+const TMP_PACK_STALE_MS = 60 * 60 * 1000;
+// git --progress lines ("Receiving objects: 40% …") — noise in an error message.
+const PROGRESS_LINE = /^(remote: )?(Enumerating|Counting|Compressing|Receiving|Resolving|Unpacking|Total|Checking)\b/;
+const FETCH_STDERR_KEEP = 64 * 1024;
 const DEFAULT_GC_INTERVAL = 50;    // run a local git gc every 50th successful sync (spec §7)
 // Bound the recursive size walk so a pathological repo can never hang the probe.
 // Both a total-entry cap AND a depth cap (belt-and-suspenders, matching
@@ -160,6 +184,9 @@ const isCommitBenign = (r: ExecResult) => isLockContended(r) || isNothingToCommi
 // already-handled ahead-count===0 case (which requires origin/main to exist).
 const NOTHING_TO_PUSH_YET = /src refspec .* does not match any/i;
 
+// A push refused because the remote moved on ("fetch first" / "non-fast-forward").
+const NON_FAST_FORWARD = /\[rejected\].*\((fetch first|non-fast-forward)\)|remote contains work that you do not/i;
+
 // info/exclude lines for over-cap files, anchored with a leading "/". Glob and
 // comment characters are escaped so a file named "a[1].jsonl" or "#notes"
 // matches only itself; pathFromExcludeLine reverses it.
@@ -171,10 +198,16 @@ export class GitTransport implements SyncTransport {
   private maxFileBytes: number;
   private gcInterval: number;
   private lockStaleMs: number;
+  private fetchIdleMs: number;
+  private tmpPackStaleMs: number;
   private getAuthToken?: () => Promise<string | null>;
   private log: (m: string) => void;
 
-  constructor(opts: { deviceName: string; maxFileBytes?: number; gcInterval?: number; lockStaleMs?: number; getAuthToken?: () => Promise<string | null>; log?: (m: string) => void }) {
+  constructor(opts: { deviceName: string; maxFileBytes?: number; gcInterval?: number; lockStaleMs?: number; fetchIdleMs?: number; tmpPackStaleMs?: number; getAuthToken?: () => Promise<string | null>; log?: (m: string) => void }) {
+    // Injectable so tests can prove the quiet-fetch stop and the partial-pack
+    // sweep without waiting minutes.
+    this.fetchIdleMs = opts.fetchIdleMs ?? FETCH_IDLE_MS;
+    this.tmpPackStaleMs = opts.tmpPackStaleMs ?? TMP_PACK_STALE_MS;
     this.deviceName = opts.deviceName;
     // Injected logger (service.ts threads its logFn through makeTransport), the
     // subsystem's existing pattern — default console.log mirrors service.ts's
@@ -260,7 +293,7 @@ export class GitTransport implements SyncTransport {
     // no-op passthrough on null). getToken is cached upstream, so this does
     // not re-read disk / re-exec gh per git call.
     const token = this.getAuthToken ? await this.getAuthToken().catch(() => null) : null;
-    const inv = credentialedGitInvocation(args, baseEnv, token);
+    const inv = credentialedGitInvocation([...DURABLE_WRITES, ...args], baseEnv, token);
     try {
       // Why maxBuffer 64MB: Node's default is only 1MB and it KILLS the child
       // when output exceeds it — on a big space that silently breaks history()
@@ -270,6 +303,58 @@ export class GitTransport implements SyncTransport {
       return { code: 0, stdout, stderr, tokenUsed: token != null };
     } catch (e: any) {
       return { code: typeof e.code === 'number' ? e.code : 1, stdout: e.stdout || '', stderr: e.stderr || String(e), tokenUsed: token != null };
+    }
+  }
+
+  /** `git fetch origin main`, stopped only when it goes quiet — never on a
+   *  fixed clock (see FETCH_IDLE_MS). A stopped fetch reads like any other
+   *  failed fetch: offline, silent, retried next cycle. */
+  private async fetchOrigin(space: SyncSpace): Promise<ExecResult> {
+    const baseEnv = { ...process.env, GIT_DIR: this.gitDir(space), GIT_WORK_TREE: space.root, GIT_LITERAL_PATHSPECS: '1' };
+    const token = this.getAuthToken ? await this.getAuthToken().catch(() => null) : null;
+    const inv = credentialedGitInvocation([...DURABLE_WRITES, 'fetch', '--progress', 'origin', 'main'], baseEnv, token);
+    const tokenUsed = token != null;
+    return new Promise((resolve) => {
+      let stdout = '';
+      let stderr = '';
+      let stalled = false;
+      let idle: NodeJS.Timeout | undefined;
+      const child = spawn('git', inv.args, { cwd: space.root, env: inv.env, stdio: ['ignore', 'pipe', 'pipe'] });
+      const arm = () => {
+        if (idle) clearTimeout(idle);
+        idle = setTimeout(() => { stalled = true; child.kill('SIGTERM'); }, this.fetchIdleMs);
+      };
+      arm();
+      child.stdout.on('data', (d) => { stdout = (stdout + d).slice(-FETCH_STDERR_KEEP); arm(); });
+      child.stderr.on('data', (d) => { stderr = (stderr + d).slice(-FETCH_STDERR_KEEP); arm(); });
+      const finish = (code: number, extra?: string) => {
+        if (idle) clearTimeout(idle);
+        // Progress lines are rewritten in place with \r; keep only real messages
+        // so classifiers and any surfaced error see what git actually said.
+        const said = stderr.split(/[\r\n]+/).filter((l) => l.trim() && !PROGRESS_LINE.test(l.trim())).join('\n');
+        const note = stalled ? `fetch stopped: no data for ${Math.round(this.fetchIdleMs / 1000)}s` : extra;
+        resolve({ code, stdout, stderr: note ? `${said}\n${note}`.trim() : said, tokenUsed });
+      };
+      child.on('error', (e) => finish(1, String(e)));
+      child.on('close', (code) => finish(stalled ? 1 : (code ?? 1)));
+    });
+  }
+
+  /** Delete partial downloads a dead fetch left behind (objects/pack/tmp_*).
+   *  WHY: git leaves them when it is stopped mid-download; 49 stopped fetches
+   *  left 6.7 GB of them on the Z13 (2026-10-05). Age-gated so a live fetch in
+   *  another app copy is never touched. Best-effort, async. */
+  private async reapStaleTmpPacks(space: SyncSpace): Promise<void> {
+    const dir = path.join(this.gitDir(space), 'objects', 'pack');
+    let names: string[];
+    try { names = await fs.promises.readdir(dir); } catch { return; }
+    const now = Date.now();
+    for (const n of names) {
+      if (!n.startsWith('tmp_')) continue;
+      const p = path.join(dir, n);
+      try {
+        if (now - (await fs.promises.stat(p)).mtimeMs > this.tmpPackStaleMs) await fs.promises.rm(p, { force: true });
+      } catch { /* raced away — nothing to do */ }
     }
   }
 
@@ -449,7 +534,13 @@ export class GitTransport implements SyncTransport {
         // push because local `main` doesn't exist as a ref at all). Every
         // OTHER push refusal (deleted repo, server-side hook, …) surfaces with
         // the real stderr.
-        if (!isNetworkFailureStderr(retry.stderr) && !NOTHING_TO_PUSH_YET.test(retry.stderr)) {
+        // WHY the third case (2026-10-05): "the remote has work you do not have"
+        // right after a recovery pull that never finished downloading is not a
+        // new problem — it is that same unfinished download, and the next cycle
+        // retries it. Surfacing it showed a red "Couldn't sync" with git's
+        // "use git pull" advice, which nobody using this app can act on.
+        const behindAfterFailedFetch = recovery.contacted !== true && NON_FAST_FORWARD.test(retry.stderr);
+        if (!isNetworkFailureStderr(retry.stderr) && !NOTHING_TO_PUSH_YET.test(retry.stderr) && !behindAfterFailedFetch) {
           throw new Error(`Sync push failed for ${space.id}: ${stderrTail(retry.stderr)}`);
         }
       }
@@ -632,7 +723,8 @@ export class GitTransport implements SyncTransport {
     }
 
     if (!(await this.hasRemote(space))) return { updated: false, conflictCopies: [], contacted: false };
-    const fetch = await this.git(space, ['fetch', 'origin', 'main']);
+    await this.reapStaleTmpPacks(space);
+    const fetch = await this.fetchOrigin(space);
     if (fetch.code !== 0) {
       // Auth refusals must NOT masquerade as offline: "offline" is silent by
       // design (spec §13), so an expired/revoked credential would read as a
@@ -959,6 +1051,78 @@ export class GitTransport implements SyncTransport {
     } catch { /* best-effort; retries in another N syncs */ }
   }
 
+  /** True when `sha` is a commit whose whole file tree is present locally.
+   *  (`--missing=print` marks every absent object with "?"; one tree, not
+   *  history, so it stays fast on large spaces.) */
+  private async isCompleteTip(space: SyncSpace, sha: string): Promise<boolean> {
+    const r = await this.git(space, ['rev-list', '--objects', '--missing=print', '--no-walk', sha]);
+    return r.code === 0 && !r.stdout.split('\n').some((l) => l.startsWith('?'));
+  }
+
+  /** Newest entry in `ref`'s reflog (other than `skip`) whose tree is complete,
+   *  or null. Read straight from the log file: git refuses to list a reflog
+   *  whose current value is a missing object, which is the case here. */
+  private async newestCompleteReflogEntry(space: SyncSpace, ref: string, skip: string): Promise<string | null> {
+    let text: string;
+    try { text = await fs.promises.readFile(path.join(this.gitDir(space), 'logs', ref), 'utf8'); } catch { return null; }
+    const seen = new Set([skip]);
+    let tried = 0;
+    // "<old> <new> <who> <when>\t<message>", oldest first.
+    for (const line of text.split('\n').reverse()) {
+      const sha = line.split(' ')[1];
+      if (!sha || !/^[0-9a-f]{40,64}$/.test(sha) || seen.has(sha)) continue;
+      seen.add(sha);
+      if (await this.isCompleteTip(space, sha)) return sha;
+      if (++tried >= 20) break; // bounded: damage is recent; deep reflogs are not walked
+    }
+    return null;
+  }
+
+  /** Step damaged branch tips back to their last complete save point, then
+   *  download only what is missing since then. Returns what it did (for the log).
+   *
+   *  WHY (2026-10-05 Z13): a power cut emptied the newest commit, which was
+   *  both `main` and `origin/main`. Tier 1 needed `origin/main` readable, so
+   *  repair fell to Tier 2 and re-downloaded all 2.6 GB of history — although
+   *  every older object was intact and the lost commit was already on GitHub.
+   *  Stepping back one save point and fetching took 43 objects and seconds.
+   *
+   *  `main` is restored to its exact pre-crash commit when that commit comes
+   *  back from GitHub (it was pushed): the worktree matches it best, so the
+   *  next sync merges without spurious conflict copies. Never touches the
+   *  worktree; offline, it just leaves the rewound refs for the next sync. */
+  private async rewindDamagedTips(space: SyncSpace): Promise<string[]> {
+    const did: string[] = [];
+    let lostMain: string | undefined;
+    for (const ref of ['refs/remotes/origin/main', 'refs/heads/main']) {
+      const cur = await this.git(space, ['rev-parse', '--verify', '--quiet', ref]);
+      if (cur.code !== 0 || !cur.stdout.trim()) continue;
+      const sha = cur.stdout.trim();
+      if (await this.isCompleteTip(space, sha)) continue;
+      const good = await this.newestCompleteReflogEntry(space, ref, sha);
+      if (ref === 'refs/heads/main') {
+        // No complete save point for main: leave it to Tier 1's adopt path.
+        if (!good) continue;
+        lostMain = sha;
+      }
+      // origin/main with no complete save point is simply dropped — the fetch
+      // below recreates it, downloading only what local main lacks.
+      const r = await this.git(space, good ? ['update-ref', ref, good] : ['update-ref', '-d', ref]);
+      if (r.code === 0) did.push(`${ref} ${sha.slice(0, 8)} → ${good ? good.slice(0, 8) : 'removed'}`);
+    }
+    if (!did.length) return did;
+    if ((await this.git(space, ['remote', 'get-url', 'origin'])).code !== 0) return did;
+    const fetch = await this.fetchOrigin(space);
+    if (fetch.code !== 0) { did.push('refetch failed (offline?) — next sync retries'); return did; }
+    did.push('refetched missing history');
+    if (lostMain && await this.isCompleteTip(space, lostMain)) {
+      if ((await this.git(space, ['update-ref', 'refs/heads/main', lostMain])).code === 0) {
+        did.push(`main restored to ${lostMain.slice(0, 8)}`);
+      }
+    }
+    return did;
+  }
+
   /** Two-tier corruption repair (2026-07-30 spec §2). Resolves when healed;
    *  throws when even Tier 2 failed. NEVER touches the user's files — every
    *  write is under <root>/.youcoded/. The engine gates calls to once per
@@ -988,18 +1152,20 @@ export class GitTransport implements SyncTransport {
       // sends a Tier-1-fixable repo down the more destructive Tier 2 path.
       this.reapStaleLocks(space);
       zeroByteObjectsDeleted = deleteZeroByteObjects(gd);
+      const rewound = await this.rewindDamagedTips(space);
       const tip = await this.git(space, ['rev-parse', '--verify', '--quiet', 'origin/main']);
       if (tip.code === 0) {
         const sha = tip.stdout.trim();
-        // Light closure check: commit + root tree readable. NOT a full fsck —
-        // that times out on real repos (>2 min on the Z13's Personal space).
-        // Residual damage this misses fails the next push, but the engine's
-        // launch-scoped healedSpaces guard means that failure does NOT re-enter
-        // repair() this run — it forwards a plain repo-corrupt error instead.
-        // Escalation to Tier 2 happens on the NEXT app launch, when the guard
-        // resets and a fresh corruption is seen for the first time.
+        // Closure check of the tip's commit and its WHOLE file tree (not just
+        // the root tree, which let a missing file slip through to the next
+        // push). NOT a full-history fsck — that times out on real repos (>2 min
+        // on the Z13's Personal space); one tree lists in milliseconds.
+        // Residual damage deeper in history fails the next push, but the
+        // engine's launch-scoped healedSpaces guard means that failure does NOT
+        // re-enter repair() this run — it forwards a plain repo-corrupt error.
+        // Escalation to Tier 2 happens on the NEXT app launch.
         const commitOk = (await this.git(space, ['cat-file', 'commit', sha])).code === 0;
-        const treeOk = (await this.git(space, ['cat-file', '-p', `${sha}^{tree}`])).code === 0;
+        const treeOk = commitOk && await this.isCompleteTip(space, sha);
         if (commitOk && treeOk) {
           // WHY (sync-safety 2026-09-23): the worktree matches THIS device's
           // last commit, not origin/main — a crash after a fetch but before
@@ -1010,16 +1176,14 @@ export class GitTransport implements SyncTransport {
           // unreadable one is replaced, and then adoptTreeKeepingLocal below.
           const local = await this.git(space, ['rev-parse', '--verify', '--quiet', 'refs/heads/main']);
           const localSha = local.code === 0 ? local.stdout.trim() : '';
-          const localOk = !!localSha
-            && (await this.git(space, ['cat-file', 'commit', localSha])).code === 0
-            && (await this.git(space, ['cat-file', '-p', `${localSha}^{tree}`])).code === 0;
+          const localOk = !!localSha && await this.isCompleteTip(space, localSha);
           const upd = localOk ? local : await this.git(space, ['update-ref', 'refs/heads/main', sha]);
           // Delete the index: it may reference the just-deleted poison hashes.
           try { fs.rmSync(path.join(gd, 'index'), { force: true }); } catch { /* rebuilt anyway */ }
           const probe = await this.git(space, ['rev-parse', '--verify', 'HEAD']);
           if (upd.code === 0 && probe.code === 0) {
             const copies = localOk ? [] : await this.adoptTreeKeepingLocal(space);
-            this.log(`sync-spaces: repair(${space.id}) tier=1 healed — ${localOk ? `kept local main ${localSha.slice(0, 8)}` : `main reset to origin/main ${sha.slice(0, 8)}, ${copies.length} differing file(s) kept as copies`}, ${zeroByteObjectsDeleted} zero-byte object(s) deleted`);
+            this.log(`sync-spaces: repair(${space.id}) tier=1 healed — ${localOk ? `kept local main ${localSha.slice(0, 8)}` : `main reset to origin/main ${sha.slice(0, 8)}, ${copies.length} differing file(s) kept as copies`}, ${zeroByteObjectsDeleted} zero-byte object(s) deleted${rewound.length ? `, ${rewound.join('; ')}` : ''}`);
             return { tier: 1, zeroByteObjectsDeleted };
           }
           tier1Failure = `update-ref/HEAD probe failed (update-ref exit ${upd.code}, probe exit ${probe.code})`;
