@@ -24,6 +24,7 @@ import { HOME_PENDING_CSS, HOME_PENDING_JS } from './home-assistant-page-pending
 import { HOME_EDIT_CSS, HOME_EDIT_JS } from './home-assistant-page-edit';
 import { HOME_CAMERA_CSS, HOME_CAMERA_JS } from './home-assistant-page-camera';
 import { HOME_LOOK_CSS } from './home-assistant-page-look';
+import { HOME_MOTION_JS } from './home-assistant-page-motion';
 
 
 export const HOME_ASSISTANT_PAGE_JSON = {
@@ -937,7 +938,8 @@ ${HOME_ICONS_JS}
     drawn[id] = html;
     // WHY morphInto, not innerHTML (redesign audit F1/F2/F9): only what differs changes, so
     // focus, held sliders, typed names, hover, transitions and a playing clip survive.
-    mediaHold(); morphInto($(id), html); mediaBack();
+    // WHY motionBefore/After (redesign round 1, motion-nav c): the pop-up's grow and shrink need to see it appear and disappear.
+    motionBefore(id, html); mediaHold(); morphInto($(id), html); mediaBack(); motionAfter(id);
     // Redesign options in the practice app hook each redraw (fixtures/home-variants/).
     if (window.__homeAfterPut) window.__homeAfterPut(id);
   }
@@ -1436,6 +1438,7 @@ ${HOME_CAMERA_JS}
 ${HOME_REDRAW_JS}
 ${HOME_PENDING_JS}
 ${HOME_EDIT_JS}
+${HOME_MOTION_JS}
   start();
 })();
 </script>
