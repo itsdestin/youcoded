@@ -11,13 +11,10 @@
 // the main window handed over at startup, a phone's door zooms "the first open window" (the main window in every normal
 // case, and a surviving window if the main one has been closed, as happens after its last session is torn off). Every call
 // answers the new percentage, or 100 when there is no such window.
-import path from 'path';
-import { app, BrowserWindow, nativeImage } from 'electron';
+import { BrowserWindow } from 'electron';
 import { IPC } from '../../shared/backend-contract';
-import { loadDefaultAppIcon, fitForMacDock } from '../app-icon';
-import { SAFE_SLUG_RE } from './appearance';
+import { applyThemeIcons } from '../theme-icon-swap';
 import { defineChannel, type MainChannelDef } from './channel-def';
-import os from 'os';
 
 /** What main hands over: the main window, the window list, and the close-request queue (the "welcome back" prompt). */
 interface WindowDeps {
@@ -32,16 +29,6 @@ export function bindWindow(next: Partial<WindowDeps>): void { Object.assign(deps
 const mainWindow = (): BrowserWindow | null => deps.getMainWindow?.() ?? null;
 /** The window that SENT a call (not the primary one), so window 2's caption buttons act on window 2. */
 const senderWindow = (sender: unknown): BrowserWindow | null => BrowserWindow.fromWebContents(sender as Electron.WebContents);
-
-// Theme-driven window + dock icon hot-swap. Two URL forms are accepted:
-//   1. theme-asset://<slug>/<relative-path> — a file in a community/user theme's asset dir (the path is resolved and
-//      confined to that dir, so the renderer cannot read arbitrary files).
-//   2. data:image/png;base64,<...> — an icon the renderer draws (unused since the tint was retired 2026-09-10; kept for
-//      theme-matched icons). Size-capped.
-// null or failure resets to the platform's bundled default (app-icon.ts).
-const ASSETS_DIR = path.join(__dirname, '../../../assets');
-const THEMES_DIR_FOR_ICON = path.join(os.homedir(), '.claude', 'wecoded-themes');
-const MAX_DATA_ICON_BYTES = 1024 * 1024; // 1 MB — a 256px PNG is typically <100KB
 
 // Zoom: each call returns the new zoom percentage for the overlay UI (Electron's zoom is a logarithmic scale).
 const ZOOM_STEP = 0.5; // ~12% per step
@@ -85,36 +72,11 @@ export const windowChannels: MainChannelDef[] = [
       (win as unknown as { setWindowButtonPosition: (p: Electron.Point | null) => void }).setWindowButtonPosition(pos ?? null);
     },
   }),
+  // WHY a one-line hand-off (brand rounds 27–31): the theme's icon now goes to the window, the
+  // Windows taskbar shortcuts, the Mac Dock (by the user's icon look) and the tray — theme-icon-swap.ts.
   defineChannel({
     name: IPC.WINDOW_SET_ICON, kind: 'handle', desktopOnly: true,
-    handler: ({ url }) => {
-      const main = mainWindow();
-      if (!main || main.isDestroyed()) return;
-      let iconImg = loadDefaultAppIcon(ASSETS_DIR);
-      if (url && typeof url === 'string') {
-        try {
-          if (url.startsWith('theme-asset://')) {
-            const parsed = new URL(url);
-            const slug = parsed.hostname;
-            if (SAFE_SLUG_RE.test(slug)) {
-              const rel = decodeURIComponent(parsed.pathname.replace(/^\//, ''));
-              const themeDir = path.join(THEMES_DIR_FOR_ICON, slug);
-              const resolved = path.resolve(themeDir, rel);
-              if (resolved.startsWith(themeDir + path.sep)) {
-                const img = nativeImage.createFromPath(resolved);
-                if (!img.isEmpty()) iconImg = img;
-              }
-            }
-          } else if (url.startsWith('data:image/png;base64,') && url.length <= MAX_DATA_ICON_BYTES) {
-            const img = nativeImage.createFromDataURL(url);
-            if (!img.isEmpty()) iconImg = img;
-          }
-        } catch { /* fall through to default */ }
-      }
-      main.setIcon(iconImg);
-      // WHY fitForMacDock: edge-to-edge theme art is shrunk onto Apple's grid, as shipped.
-      if (process.platform === 'darwin' && app.dock) app.dock.setIcon(fitForMacDock(iconImg));
-    },
+    handler: ({ icons }) => applyThemeIcons(mainWindow(), icons),
   }),
 
   // "Which window am I?" — used by SessionStrip to avoid treating its own directory entry as a remote session.

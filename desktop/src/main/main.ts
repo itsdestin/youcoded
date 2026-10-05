@@ -419,13 +419,13 @@ const DEV_WINDOW_TITLE =
 const BUDDY_WINDOW_TITLE = 'YouCoded';
 
 // Windows AUMID alignment: electron-builder's NSIS installer stamps the Start
-// Menu shortcut with an AppUserModelID derived from `appId`. If the runtime
-// process's AUMID doesn't match, Windows resolves the taskbar button's icon
-// via the shortcut's AUMID (i.e. the embedded exe .ico) and silently ignores
-// BrowserWindow.setIcon() updates. That's why theme-driven icon hot-swap
-// worked in dev (no installer shortcut, so setIcon wins) but not in packaged
-// builds. Must be called before any BrowserWindow is created.
-// See: electron-builder NSIS docs + electron/electron#28581.
+// Menu shortcut with an AppUserModelID derived from `appId`; matching it keeps the
+// running app on the same taskbar button as a pin. Consequence (tested on Windows 11,
+// 2026-10-04): with matching IDs the taskbar button wears the SHORTCUT's icon and
+// BrowserWindow.setIcon() reaches only Alt+Tab and the title bar — the theme icon
+// reaches the button through windows-taskbar-icon.ts instead. (An earlier version of
+// this comment said matching made setIcon work on the taskbar; it does not.)
+// Must be called before any BrowserWindow is created.
 if (process.platform === 'win32') {
   app.setAppUserModelId('com.youcoded.desktop');
 }

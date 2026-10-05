@@ -14,6 +14,7 @@ import lightJson from '../themes/builtin/light.json';
 import darkJson from '../themes/builtin/dark.json';
 import midnightJson from '../themes/builtin/midnight.json';
 import cremeJson from '../themes/builtin/creme.json';
+import { themeIconSet, type ThemeIconSet } from '../../shared/theme-icons';
 import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';
 
 const BUILTIN_THEMES: LoadedTheme[] = [
@@ -636,16 +637,17 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     // Hot-swap the Electron window + dock icon. Guarded via optional chaining —
     // the Android WebView shim deliberately omits window.* (launcher icons can't
     // be swapped at runtime), so this is a no-op there.
-    // A theme that declares its own appIcon gets it; every other theme sends null,
-    // which main resets to the bundled assets/icon.png.
+    // A theme that declares its own appIcon sends its whole icon bundle (app icon, Windows .ico,
+    // Mac glass version, tray icons — shared/theme-icons.ts); every other theme sends null, which
+    // main resets to the app's own icons.
     // WHY no theme tint (2026-09-10): the tint redrew the retired "YC" terminal
     // square, so once the mascot icon shipped the taskbar would swap from the new
     // icon back to the old one the moment the app opened. Theme-matched icons drawn
     // from the mascot are a parked item in the workspace's themes roadmap.
-    const anyWin = window as unknown as { claude?: { window?: { setIcon?: (u: string | null) => Promise<void> } } };
+    const anyWin = window as unknown as { claude?: { window?: { setIcon?: (set: ThemeIconSet | null) => Promise<void> } } };
     const setIconFn = anyWin.claude?.window?.setIcon;
     if (setIconFn) {
-      setIconFn(activeTheme.appIcon ?? null).catch(() => {});
+      setIconFn(themeIconSet(activeTheme)).catch(() => {});
     }
 
     // Sync font state: use theme's declared font, or fall back to default.

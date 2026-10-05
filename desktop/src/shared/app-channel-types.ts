@@ -15,6 +15,7 @@ import type { ArcadeOps } from '../main/arcade-handlers';
 import type { AttentionReport, AttentionSummary, BuddyHelperStatus, BuddyShowResult, BuddyStyle, PerformanceConfigSnapshot } from './types';
 import type { CommentAuthor, CommentSelector } from './doc-comments-types';
 import type { ApiResult } from './account-types';
+import type { ThemeIconSet } from './theme-icons';
 import type { SocialUserCard, RequestsPayload, FriendRow, BlockRow } from '../renderer/state/marketplace-api-client';
 
 type Answer<F extends (...a: any[]) => any> = Awaited<ReturnType<F>>;
@@ -97,7 +98,8 @@ export interface AppChannelTypes {
   'window:maximize': { request: void; response: Nothing };
   'window:close': { request: void; response: Nothing };
   'window:set-traffic-light-pos': { request: { pos: { x: number; y: number } | null }; response: Nothing };
-  'window:set-icon': { request: { url: string | null }; response: Nothing };
+  // The active theme's icon bundle, or null for the app's own (brand rounds 27–31; main/theme-icon-swap.ts).
+  'window:set-icon': { request: { icons: ThemeIconSet | null }; response: Nothing };
   'window:get-id': { request: void; response: number };
   'window:get-directory': { request: void; response: unknown };
   'window:answer-close': { request: { requestId: string; close: boolean; reopen?: boolean }; response: Nothing };
