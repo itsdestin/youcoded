@@ -96,6 +96,7 @@ import { registerIpcHandlers } from '../src/main/ipc-handlers';
 import { WindowRegistry } from '../src/main/window-registry';
 import { IPC } from '../src/shared/types';
 import { SessionManager } from '../src/main/session-manager';
+import { SessionScreens } from '../src/main/session-screens';
 import { registerWithRuntime } from './helpers/register-ipc';
 
 function makeWc(id: number) {
@@ -463,11 +464,62 @@ describe('terminal flow wiring: a re-mounted terminal is given a picture', () =>
     expect(t.sm.bounceSize).toHaveBeenCalledWith(SID);
   });
 
-  it('ready reported twice in a row repaints once (rate limit shared with the renderer request)', () => {
+  it('a repaint request inside the 1 s window is NOT dropped: exactly one trailing request fires when the window ends', () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    try {
+      const t = world();
+      t.registry.assignSession(SID, 2); t.ready(t.w2); t.out('x');
+      reload(t.w2); t.ready(t.w2);                           // first re-mount: repaint now
+      expect(t.sm.bounceSize).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(200);
+      reload(t.w2); t.ready(t.w2);                           // second reload 200 ms later: rate-limited, must still happen
+      t.ready(t.w2);                                         // and a third request in the window adds nothing (one timer)
+      expect(t.sm.bounceSize).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(900);                           // window (1000 ms from the first) ends
+      expect(t.sm.bounceSize).toHaveBeenCalledTimes(2);
+      vi.advanceTimersByTime(5000);
+      expect(t.sm.bounceSize).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('a renderer repaint request right after a re-mount repaint is also deferred, not lost; the trailing timer dies with the session', () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    try {
+      const t = world();
+      t.registry.assignSession(SID, 2); t.ready(t.w2); t.out('x');
+      reload(t.w2); t.ready(t.w2);
+      vi.advanceTimersByTime(100);
+      t.repaint(t.w2);
+      vi.advanceTimersByTime(950);
+      expect(t.sm.bounceSize).toHaveBeenCalledTimes(2);
+      vi.advanceTimersByTime(10);
+      t.repaint(t.w2);                                       // limited again (window restarted by the trailing bounce)
+      t.sm.emit('session-exit', SID, 0);
+      vi.advanceTimersByTime(5000);
+      expect(t.sm.bounceSize).toHaveBeenCalledTimes(2);      // ended session: no stray bounce
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('the replay is queued BEFORE the repaint request (the repaint lands on top of the replayed text)', () => {
     const t = world();
-    t.registry.assignSession(SID, 2); t.ready(t.w2); t.out('x');
-    reload(t.w2); t.ready(t.w2); t.ready(t.w2);
-    expect(t.sm.bounceSize).toHaveBeenCalledTimes(1);
+    t.registry.assignSession(SID, 2); t.ready(t.w2); t.out('screen'); reload(t.w2);
+    t.out('held');
+    let sentAtBounce = -1;
+    t.sm.bounceSize.mockImplementation(() => { sentAtBounce = t.w2.sent.filter((s: any) => s.data === 'held').length; });
+    t.ready(t.w2);
+    expect(sentAtBounce).toBe(1);
+  });
+
+  it("the worker's size reports reach the computer's own screen copy (the repaint nudge must not leave it at the wrong width)", () => {
+    // session-screens.ts lays the terminal out at the size it is told; the nudge changes the PTY size without session:resize, so the
+    // session manager's 'pty-size' event (from the worker, in stream order) is what keeps that copy right.
+    const spy = vi.spyOn(SessionScreens.prototype, 'noteResize');
+    try {
+      const t = world();
+      t.sm.emit('pty-size', SID, 79, 24);
+      t.sm.emit('pty-size', SID, 80, 24);
+      expect(spy.mock.calls.map((c) => c.join('x'))).toEqual([`${SID}x79x24`, `${SID}x80x24`]);
+    } finally { spy.mockRestore(); }
   });
 
   it('ownership moving to a new window (tear-off / re-dock): the new empty terminal gets a repaint, once', () => {

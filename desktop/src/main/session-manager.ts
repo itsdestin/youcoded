@@ -454,6 +454,12 @@ export class SessionManager extends EventEmitter {
 
     worker.on('message', (msg: any) => {
       switch (msg.type) {
+        case 'size':
+          // The worker changed the PTY size (a real resize or the repaint nudge) — in stream order with the data around it.
+          // Keep our record of it and tell the computer's screen copy, so output made at that size is laid out at that size.
+          this.ptySizes.set(id, { cols: msg.cols, rows: msg.rows });
+          this.emit('pty-size', id, msg.cols, msg.rows);
+          break;
         case 'data':
           this.emit('pty-output', id, msg.data, this.chunkNoter?.(id, msg.data) ?? null);
           // Type the command onto the prompt, exactly once.

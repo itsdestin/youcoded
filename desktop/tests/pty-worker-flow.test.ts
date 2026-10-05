@@ -68,6 +68,28 @@ describe('pty-worker repaint nudge (after output was cut from a backlog)', () =>
     vi.advanceTimersByTime(130);
     expect(w.fakePty.resize).toHaveBeenLastCalledWith(80, 24);
   });
+  it('reports each size change to main IN STREAM ORDER: output made at the old size goes ahead of the size message', () => {
+    // WHY: main's headless copy of the terminal (session-screens.ts) lays text out at the size it is told; the nudge must not leave it at the
+    // wrong width while the program redraws (the send gate reads that copy).
+    vi.useFakeTimers();
+    const w = loadWorker();
+    w.emitData('x'); vi.advanceTimersByTime(10);
+    w.emitData('old-size-text');                              // held in the 4 ms batch when the request lands
+    w.deliver({ type: 'bounce' });
+    vi.advanceTimersByTime(130);
+    const seq = w.fakeProcess.send.mock.calls.map((c: any[]) => c[0]).filter((m: any) => m?.type === 'data' || m?.type === 'size')
+      .map((m: any) => (m.type === 'size' ? `size ${m.cols}x${m.rows}` : `data ${m.data}`));
+    expect(seq).toEqual(['data x', 'data old-size-text', 'size 79x24', 'size 80x24']);
+  });
+  it('a real resize is reported too, and a superseded restore reports nothing', () => {
+    vi.useFakeTimers();
+    const w = loadWorker();
+    w.deliver({ type: 'bounce' });
+    w.deliver({ type: 'resize', cols: 100, rows: 30 });
+    vi.advanceTimersByTime(200);
+    const sizes = w.fakeProcess.send.mock.calls.map((c: any[]) => c[0]).filter((m: any) => m?.type === 'size').map((m: any) => `${m.cols}x${m.rows}`);
+    expect(sizes).toEqual(['79x24', '100x30']);
+  });
   it('does not fight a real resize that lands in between', () => {
     vi.useFakeTimers();
     const w = loadWorker();

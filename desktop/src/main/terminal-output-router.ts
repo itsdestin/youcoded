@@ -59,9 +59,23 @@ export function createTerminalOutputRouter(d: RouterDeps): TerminalOutputRouter 
   // Shared 1 s per-session limit for every repaint request (renderer-initiated and re-mount), so a misbehaving
   // renderer or a double ready cannot bounce a PTY in a loop; the nudge itself is arbitrated in the worker.
   const lastRepaintAt = new Map<string, number>();
+  // WHY a trailing request: a request inside the window used to be DROPPED, and the one that mattered (two reloads
+  // within a second, a re-mount repaint followed by the hidden-window request) left a live terminal blank with nothing
+  // to retry it. Now exactly one request per session waits for the window to end (single timer, cleared at session end).
+  const trailing = new Map<string, ReturnType<typeof setTimeout>>();
   const requestRepaint = (sessionId: string) => {
     const t = Date.now();
-    if (t - (lastRepaintAt.get(sessionId) ?? 0) < 1000) return;
+    const last = lastRepaintAt.get(sessionId) ?? 0;
+    if (t - last < 1000) {
+      if (trailing.has(sessionId)) return;
+      trailing.set(sessionId, setTimeout(() => {
+        trailing.delete(sessionId);
+        if (ended.has(sessionId)) return;
+        lastRepaintAt.set(sessionId, Date.now());
+        d.sessionManager.bounceSize(sessionId);
+      }, 1000 - (t - last)));
+      return;
+    }
     lastRepaintAt.set(sessionId, t);
     d.sessionManager.bounceSize(sessionId);
   };
@@ -180,6 +194,7 @@ export function createTerminalOutputRouter(d: RouterDeps): TerminalOutputRouter 
   const end = (sessionId: string) => {
     pendingOutput.delete(sessionId); pendingChars.delete(sessionId); flow.end(sessionId); readySessions.delete(sessionId);
     awaitingReady.delete(sessionId); lastRepaintAt.delete(sessionId); drew.delete(sessionId);
+    const tt = trailing.get(sessionId); if (tt) { clearTimeout(tt); trailing.delete(sessionId); }
     trimMemos.delete(sessionId); trimmed.delete(sessionId);
     ended.add(sessionId);
     if (ended.size > ENDED_MEMORY) ended.delete(ended.values().next().value as string);

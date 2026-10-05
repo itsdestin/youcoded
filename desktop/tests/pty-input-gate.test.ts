@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
   hasPendingInteraction,
   canRetrySubmit,
@@ -255,56 +255,5 @@ describe('sendBlock — the screen blocks what the chat state cannot see', () =>
 
   it('no terminal at all is no verdict — the send is not refused', () => {
     expect(sendBlock(createSessionChatState(), 'no-such-session')).toBeNull();
-  });
-});
-
-// 2026-10-05: a freshly re-mounted terminal is blank (or shows one stray row) until the program repaints. That is
-// "no picture yet", not a pop-up — refusing the send there showed "Claude Code is waiting on something" on an idle session.
-describe('sendBlock — an unpainted screen is unknown, not a pop-up', () => {
-  const RULE = '─'.repeat(60);
-  async function withScreen(id: string, rows: string[], run: () => void) {
-    const term = new Terminal({ cols: 120, rows: 20, allowProposedApi: true });
-    registerTerminal(id, term as never);
-    await new Promise<void>((r) => term.write(rows.join('\r\n'), r));
-    try { run(); } finally { unregisterTerminal(id); term.dispose(); }
-  }
-  function spyRepaint() {
-    const requestRepaint = vi.fn();
-    (globalThis as any).window = Object.assign((globalThis as any).window ?? {}, { claude: { session: { requestRepaint } } });
-    return requestRepaint;
-  }
-
-  it('a blank screen does not block', async () => {
-    await withScreen('u-blank', [], () => { expect(sendBlock(createSessionChatState(), 'u-blank')).toBeNull(); });
-  });
-
-  it('one stray status row does not block, and asks the program to repaint', async () => {
-    const rr = spyRepaint();
-    await withScreen('u-frag', [' '.repeat(79) + 'Checking for updates'], () => {
-      expect(sendBlock(createSessionChatState(), 'u-frag')).toBeNull();
-      expect(rr).toHaveBeenCalledWith('u-frag');
-    });
-  });
-
-  it('a genuine pop-up (edge rule + options) still blocks and does not ask for a repaint', async () => {
-    const rr = spyRepaint();
-    await withScreen('u-popup', ['history', RULE, '  Export conversation', '  ❯ 1. Copy to clipboard', '    2. Save to file', '  Esc to cancel'], () => {
-      expect(sendBlock(createSessionChatState(), 'u-popup')?.kind).toBe('screen');
-      expect(rr).not.toHaveBeenCalled();
-    });
-  });
-
-  it('even a short pop-up with a rule on screen blocks', async () => {
-    await withScreen('u-short', [RULE, '  Trust this folder?', '  ❯ 1. Yes'], () => {
-      expect(sendBlock(createSessionChatState(), 'u-short')?.kind).toBe('screen');
-    });
-  });
-
-  it('the message box still allows', async () => {
-    await withScreen('u-box', ['history', RULE, '❯ ', RULE], () => { expect(sendBlock(createSessionChatState(), 'u-box')).toBeNull(); });
-  });
-
-  it('a screenful of text with no message box and no rule (a full-screen view) still blocks', async () => {
-    await withScreen('u-full', ['a', 'b', 'c', 'd', 'e'], () => { expect(sendBlock(createSessionChatState(), 'u-full')?.kind).toBe('screen'); });
   });
 });

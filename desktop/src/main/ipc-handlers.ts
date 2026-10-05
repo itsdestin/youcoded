@@ -1031,6 +1031,9 @@ export function registerIpcHandlers(
     liveFacts.noteOutput(sessionId, data);
     screens.noteOutput(sessionId, data); // the computer's own copy of the terminal (one-core R5-4b)
   });
+  // WHY (repaint nudge): the worker narrows the PTY by one column for ~120 ms without going through session:resize; its size reports keep the
+  // computer's own copy of the terminal (what the send gate reads) at the width the program is really drawing at.
+  sessionManager.on('pty-size', (sessionId: string, cols: number, rows: number) => screens.noteResize(sessionId, cols, rows));
   const terminalOutput = createTerminalOutputRouter({
     sessionManager, windowRegistry, routeTargets,
     sendForSession: (sessionId, channel, args) => sendForSession(sessionId, channel, args),

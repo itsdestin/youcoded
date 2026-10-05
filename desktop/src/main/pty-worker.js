@@ -199,6 +199,17 @@ function safeResize(cols, rows) {
   try { ptyProcess.resize(cols, rows); return true; }
   catch (e) { trace('RESIZE_ERROR', e && e.message ? e.message : String(e)); return false; }
 }
+// WHY report every size change to main IN STREAM ORDER (merge with one-core, 2026-10-05): main keeps a headless copy of each terminal
+// (session-screens.ts) that reads the screen for the send gate and the prompt cards, and it lays text out at the size it is TOLD. The repaint
+// nudge changes the PTY size here without main's resize path ever running, so the program's redraw at the narrower width was parsed at the old
+// width (a wrapped or shortened row an input box could be misread from). Flushing the held batch first puts everything produced at the OLD
+// size ahead of the size message; the program's redraw at the NEW size follows it.
+function resizeAndReport(cols, rows) {
+  flushOut();
+  if (!safeResize(cols, rows)) return false;
+  try { process.send({ type: 'size', cols, rows }); } catch { /* parent gone */ }
+  return true;
+}
 function cancelBounce() { if (bounceTimer !== null) { clearTimeout(bounceTimer); bounceTimer = null; } bounceState = null; }
 let handoffStopping = false;
 let exitReported = false;
@@ -550,18 +561,18 @@ process.on('message', (msg) => {
       if (!ptyUsable() || flowDisabled || process.platform === 'win32' || bounceState) break;
       const c = ptyProcess.cols, r = ptyProcess.rows;
       if (!(c > 2)) break;
-      if (!safeResize(c - 1, r)) break;          // bounceState is set only once the first half succeeded
+      if (!resizeAndReport(c - 1, r)) break;          // bounceState is set only once the first half succeeded
       const st = { c, r, superseded: false };
       bounceState = st;
       bounceTimer = setTimeout(() => {
         bounceState = null; bounceTimer = null;
-        if (ptyUsable() && !st.superseded) safeResize(st.c, st.r);
+        if (ptyUsable() && !st.superseded) resizeAndReport(st.c, st.r);
       }, 120);
       break;
     }
     case 'resize': {
       if (bounceState) bounceState.superseded = true;   // a real resize wins over a repaint nudge in flight
-      if (ptyUsable()) safeResize(msg.cols, msg.rows);
+      if (ptyUsable()) resizeAndReport(msg.cols, msg.rows);
       break;
     }
     case 'stop-for-handoff': {
