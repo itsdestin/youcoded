@@ -46,6 +46,12 @@ vi.mock('../src/renderer/state/chat-context', () => ({
 }));
 
 import { usePromptDetector } from '../src/renderer/hooks/usePromptDetector';
+import { DESKTOP_WINDOW_CAPABILITIES, REMOTE_SCREEN_CAPABILITIES, ANDROID_LOCAL_CAPABILITIES } from '../src/shared/capabilities';
+
+// The lifecycle tests below pin WHEN the detector decides to show or dismiss a card. That reading runs in the renderer only on a host with no record of
+// its own (the Android app's own runtime); everywhere else the computer's main process reads the terminal (tests/session-screens.test.ts runs the SAME
+// decisions there). So these run as that host, where the detector draws what it finds directly.
+beforeEach(() => { (window as any).claude = { capabilities: ANDROID_LOCAL_CAPABILITIES }; });
 
 // A recognized setup prompt (title in SETUP_PROMPT_TITLES).
 const RESUME_MENU = `Resume Session
@@ -56,10 +62,17 @@ const RESUME_MENU = `Resume Session
 press enter to confirm`;
 
 // A different menu the detector does NOT recognize as a setup prompt.
+// A numbered list in a REPLY: Claude Code's message box is still on screen under it (2026-10-02, one-core sync-fix1: without the box this shape is a pop-up that
+// holds the keyboard, and a mid-session pop-up gets a generic card even with no footer — the real "Switch model?" has none).
+const MESSAGE_BOX = `
+${'─'.repeat(40)}
+❯ 
+${'─'.repeat(40)}`;
 const UNRECOGNIZED_MENU = `Pick a flavor
 
  ❯ 1. Vanilla
-   2. Chocolate`;
+   2. Chocolate
+${MESSAGE_BOX}`;
 
 function fireBuffer(sid: string) {
   act(() => {
@@ -148,7 +161,8 @@ describe('usePromptDetector prompt lifecycle', () => {
     mocks.screen.text = `Pick a size
 
  ❯ 1. Small
-   2. Large`;
+   2. Large
+${MESSAGE_BOX}`;
     fireBuffer('s1');
     act(() => { vi.advanceTimersByTime(1000); });
 
@@ -581,5 +595,36 @@ describe('usePromptDetector — re-issuing a card for an identical follow-up, gu
     mocks.screen.text = NEW_DIALOG;
     fireBuffer('s1');
     expect(dismissed()).toContain(`${first.promptId}~1`);
+  });
+});
+
+
+describe('usePromptDetector — where a card is drawn from (one-core R5-4b)', () => {
+  beforeEach(() => { vi.useFakeTimers(); mocks.dispatch.mockClear(); mocks.callbacks.length = 0; mocks.screen.text = RESUME_MENU; mocks.sessions.clear(); });
+  afterEach(() => { vi.useRealTimers(); });
+  const seeMenu = () => { renderHook(() => usePromptDetector()); fireBuffer('s1'); act(() => { vi.advanceTimersByTime(400); }); };
+
+  it('a computer window reads no card: the computer does, and a window draws the one it publishes', () => {
+    (window as any).claude = { capabilities: DESKTOP_WINDOW_CAPABILITIES };
+    seeMenu();
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+  });
+  it('a phone reads no card either, so it can put none in front of the person at the computer, and needs no computer window open to get one', () => {
+    const send = vi.fn();
+    (window as any).claude = { capabilities: { ...REMOTE_SCREEN_CAPABILITIES, sessionRecord: true }, session: { sendInput: send } };
+    seeMenu();
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+  it('a screen no longer has any way to tell the computer about a card', () => {
+    const report = vi.fn();
+    (window as any).claude = { capabilities: DESKTOP_WINDOW_CAPABILITIES, session: { reportPrompt: report } };
+    seeMenu();
+    expect(report).not.toHaveBeenCalled();
+  });
+  it('the Android app\'s own runtime, which has no host record, still draws the card itself', () => {
+    (window as any).claude = { capabilities: ANDROID_LOCAL_CAPABILITIES };
+    seeMenu();
+    expect(mocks.dispatch.mock.calls.some((c) => c[0].type === 'SHOW_PROMPT')).toBe(true);
   });
 });

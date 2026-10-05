@@ -94,7 +94,7 @@ function ModelSelection({ value, update }: { value: NamingPreferences; update: (
   // The control now reads as the setting it is.
   return <div className="space-y-1.5">
     <p className="text-xs font-medium text-fg">Naming model</p>
-    <ModelPicker value={value.model} includeClaude={false}
+    <ModelPicker value={value.model} includeClaude={false} runsOn="host" /* the computer names the conversations */
       emptyLabel="Same as Conversation (default)"
       onSelect={(model) => update({ model })} />
     {value.model && <Button size="sm" variant="ghost" onClick={() => update({ model: null })}>Use conversation model instead</Button>}

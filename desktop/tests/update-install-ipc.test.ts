@@ -24,7 +24,10 @@ function read(relPath: string): string {
 describe('in-app update installer IPC parity', () => {
   const preload = read('src/main/preload.ts');
   const shim    = read('src/renderer/remote-shim.ts');
-  const handler = read('src/main/ipc-handlers.ts');
+  // WHY (2026-09-30 one-core R3-2): the handlers are channel-table entries (main/ipc/update.ts,
+  // by IPC constant); the progress push is sent by update-service.ts.
+  const handler = read('src/main/ipc/update.ts') + read('src/main/update-service.ts');
+  const constFor = (ch: string) => 'IPC.' + ch.toUpperCase().replace(/[:-]/g, '_');
   const android = read('../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt');
 
   for (const channel of CHANNELS) {
@@ -34,8 +37,8 @@ describe('in-app update installer IPC parity', () => {
     it(`remote-shim.ts references "${channel}"`, () => {
       expect(shim).toContain(channel);
     });
-    it(`ipc-handlers.ts references "${channel}"`, () => {
-      expect(handler).toContain(channel);
+    it(`the host references "${channel}"`, () => {
+      expect(handler).toContain(channel === 'update:progress' ? channel : constFor(channel));
     });
     it(`SessionService.kt references "${channel}"`, () => {
       expect(android).toContain(channel);

@@ -8,6 +8,25 @@ origin: youcoded-dev@1f60c2a:docs/chat-reducer.md
 
 Chat state lives in `youcoded/desktop/src/renderer/state/chat-reducer.ts` with types in `chat-types.ts`. A few non-obvious invariants govern how tool activity and turns are scoped.
 
+## One translator: `eventToAction`
+
+Three screens turn a `TranscriptEvent` into reducer actions, and all three call ONE pure function,
+`eventToAction(event, opts)` in `state/transcript-event-actions.ts`, which returns a `ChatAction[]`:
+
+| Screen | Caller | Options |
+|---|---|---|
+| Main window, live | `App.tsx` transcript listener, through `routeTranscriptEvent` (`transcript-batch.ts`) | `{ live: true, compactionPending, fallbackContextTokens }` (the last two read only for `compact-summary`) |
+| Buddy window, live | `buddy/BubbleFeed.tsx` | `{ live: true, compactionPending, fallbackContextTokens: null }` (no CC statusline) |
+| A history page | `pageEventToAction` (`transcript-page-actions.ts`), used by `HISTORY_PAGE_LOADED` | `{ live: false }`, first action only |
+
+- **`live: false` is history.** It returns nothing for conditions that only mean something while a turn runs: a heartbeat/progress `assistant-thinking`, `session-error`, `replay-complete`, the compaction MARKER and the `/clear` gauge re-base (a saved `dropPart` retry marker is the exception: it replays). Its bookkeeping half (`NATIVE_HISTORY_REWRITTEN` for a compaction's bill and window) does replay.
+- **The switch is exhaustive over `TranscriptEventType`** with a `never` default: a new type without a case fails the build. At runtime an unknown type (Kotlin's flat `'streaming-text'`) returns `[]` and never throws.
+- **The buddy has NO list of skipped events.** It attaches through the same two listeners as the main window (`state/screen-feed.ts`: `attachTranscriptFeed`, `attachSessionLiveFeed`), so it draws every event type the main window does (sync-fix6: "Conversation cleared", "Interrupted" and the skill card were its last gaps). Its only differences are dependencies passed in with a WHY at the call site: one watched session, no statusline fallback. A live native `context-clear` only resets the turn; "Conversation cleared" is drawn once, by the record's `session:live` `clear` (id `clearDividerId(uuid)`), and by a history page for an old clear.
+- **Every main-window action goes through the frame batcher, in arrival order** (`routeTranscriptEvent`; the file-shrink backup goes through `routeTranscriptShrink`). Four types (skill card, `/clear`, history rewrite, compaction marker) once skipped it and could land ABOVE a message sent just before them in the same frame; nothing recorded a reason, and none reads state straight after its dispatch. Do not add a direct-dispatch route. A message with no text draws no bubble on any path; an assistant text with none becomes `''`.
+- **`TranscriptEvent` is a union keyed on `type`** (defined in `shared/transcript-event-types.ts` and re-exported by `shared/types.ts`; the payload map `TranscriptDataMap` there is not exported, use `DataOf<T>` / `EventOf<T>`): each event type carries exactly its own `data` fields, so `switch (event.type)` narrows `event.data`. Producers use `emitEvent<T>(type, data: DataOf<T>)`; a field on the wrong type, or a field no variant has, fails the build. Fields only some producers send stay optional (`user-interrupt.kind` is absent from native; `tool-result.toolName`/`recordedAt`/`images`); `assistant-thinking` is ONE variant with optional payload fields (`stallWarning`, `stalled`, `dropPart`, `promptProcessing`, `toolPreparing`, `usageProgress`). A specialist's events get the `SubagentStamp` through the one `stampSubagent` helper, typed to the `StampableEvent` subset. **Readers of events off disk** (`session-store`, `accepted-history-store`, `transcript-page`, `history-rebuild`) and the deliberately type-blind ones (chat-search indexer, session namer) treat the payload as untrusted and read it through `looseData(event)` (`LooseTranscriptData`: every field of every type, all optional; a line with no `data` at all reads as `{}`, never throws) with their old defaults kept. Tests build events with `ev<T>(type, data)` from `tests/helpers/transcript-events.ts`; a deliberately damaged fixture uses `malformedEv`.
+- **`timestamp` is a required field of `TRANSCRIPT_TOOL_USE`**, and its case is built without a cast, so forgetting it is a type error.
+- Guards: `tests/transcript-event-actions.test.ts` (golden file recorded from the three old translators; missing text/data), `tests/transcript-routing.test.ts` (arrival order, including a same-frame file shrink), ast-grep `app-transcript-listeners-batched` (App's two transcript listeners never dispatch themselves), `tests/transcript-event-surface-parity.test.ts`, `tests/BubbleFeed.test.tsx` → "BubbleFeed live transcript events". Fixtures: `tests/helpers/transcript-event-matrix.ts` (every type x payload variant).
+
 ## Tool activity scoping
 
 `toolCalls` is a **session-lifetime Map** — never cleared. ToolCards need old results for display, so entries persist. Individual entries are updated in-place (status flipped to `failed`), but the Map never resets.
@@ -20,7 +39,7 @@ To prevent stale `running` / `awaiting-approval` entries from old turns affectin
 
 - Iterates `activeTurnToolIds` and marks any `running` or `awaiting-approval` tool as `failed` with error `'Turn ended'` — **except** a native `preparing` card, which is **deleted** instead (`removePreparingTool`). The model was still composing that call's arguments, so no tool was ever invoked and "failed" would name an event that did not happen. Deleting also prunes the group it emptied and that group's turn segment, or an empty group renders as a stray bar.
 - Returns a fresh empty `activeTurnToolIds: new Set()`
-- Clears `isThinking`, `streamingText`, `currentGroupId`, `currentTurnId`, and resets `attentionState: 'ok'`
+- Clears `isThinking`, `currentGroupId`, `currentTurnId`, and resets `attentionState: 'ok'`
 - Returns `toolGroups` and `assistantTurns` too, because of that pruning — see the trap below
 
 **Always use this helper when adding a new turn-ending code path.** Don't manually clear these fields.
@@ -34,7 +53,7 @@ To prevent stale `running` / `awaiting-approval` entries from old turns affectin
 The old 30-second `thinkingTimedOut` watchdog was replaced by a per-session `attentionState` enum driven by three independent signals:
 
 1. **Process liveness** — main-process `session-exit` forwards `exitCode` via IPC; App.tsx dispatches `SESSION_PROCESS_EXITED`. If a turn was in flight OR the exit was nonzero, the reducer calls `endTurn()` and sets `attentionState: 'session-died'`. Clean exits during idle are no-ops.
-2. **PTY buffer classifier** — `useAttentionClassifier` ticks every 1s while `isThinking && !hasRunningTools && !hasAwaitingApproval && visible`. It reads the xterm buffer via `getScreenText`, passes the last 40 lines to the pure `classifyBuffer` function (`src/renderer/state/attention-classifier.ts`), and dispatches `ATTENTION_STATE_CHANGED` only when the mapped state differs from the current one. Reset to `'ok'` on unmount.
+2. **PTY buffer classifier** — since one-core R5-4b it runs in the computer's main process (`main/session-screens.ts`): a headless xterm copy of the session's terminal (one per live session, from its first byte to its end, 60 rows of scrollback), ticks every 1s while the record says `working && !toolRunning && !asking`. It reads the last 40 rows with the shared reader (`shared/terminal-screen-text.ts`), runs `shared/stuck-tracker.ts` (the pure `classifyBuffer` of `src/shared/attention-classifier.ts` plus the 30 s / 20 s / five-reading rules) and publishes `session:live` `{kind:'attention', state:'ok'|'stuck'}` only on a change, which every screen applies as `ATTENTION_STATE_CHANGED` (back-to-ok clears only a `'stuck'`: `onlyFrom`). The renderer's `useAttentionClassifier` is inert wherever `capabilities.sessionRecord` is true and runs the same tracker only on the Android app's own runtime. Taken back (`ok`) when the turn ends or something explains the quiet.
 3. **Transcript corroboration** — `TRANSCRIPT_USER_MESSAGE`, `TRANSCRIPT_ASSISTANT_TEXT`, `TRANSCRIPT_TOOL_USE`, `TRANSCRIPT_TOOL_RESULT`, `PERMISSION_REQUEST`, `TRANSCRIPT_THINKING_HEARTBEAT` (payload-less `assistant-thinking` events — CC's watcher always emits these with `data: {}`), and `TRANSCRIPT_ASSISTANT_REASONING` (added 2026-07-10, PR #115: `assistant-thinking` events WITH `data.text` — per-token reasoning deltas merged into one `reasoning` segment by `partId`, rendered as a collapsed "Show reasoning" disclosure by AssistantTurnBubble; dormant for CC sessions, fires for the Phase 2 native harness) clear `attentionState` back to `'ok'`.
 
 `ChatView` renders `<ThinkingIndicator />` when `attentionState === 'ok' && isThinking`, and shows `<AttentionBanner state={attentionState} />` when `attentionState !== 'ok'`. The banner gate is NOT purely `isThinking`-scoped: the mid-turn state `'stuck'` renders while thinking, but the two **terminal** states (`'session-died'`, `'error'`) render *after* `endTurn()` has cleared `isThinking` — the gate explicitly allows terminal attention through regardless of `isThinking`, else the banner for a turn-ending failure could never appear. The reachable states are `'ok' | 'stuck' | 'session-died' | 'error'` — `'stuck'` covers spinner-glyph-flat-for-30s with no counter advancement, and no-liveness-signal-for-20s (no glyph and no advancing counter); `'session-died'` is set by `SESSION_PROCESS_EXITED` only; `'error'` is set by `NATIVE_SESSION_ERROR` only (native-runtime provider/stream failures — CC sessions never enter it), and its human-readable message rides `SessionChatState.errorMessage`, rendered in preference to the generic banner copy.
@@ -89,10 +108,10 @@ All four fields default to `null` on turn creation. The reducer's `TRANSCRIPT_TU
 - **`readNewLines` is SERIALIZED per session (`reading` flag + coalesced rerun)** (2026-07-10, both watchers). The read is async (stat → open → read) and triggered concurrently by fs.watch bursts, the global poll, and manual calls. Un-serialized, two overlapping reads consumed the same byte range (duplicate user bubbles, tool cards flapping back to `running`) and — because the read POSITION was re-evaluated after the first read advanced the offset while `bytesRead` was ignored — a short/empty second read decoded its zero-filled buffer into the partial-line carry, wedging NUL bytes in and dropping the next message at `JSON.parse`. The other root cause of "rare missing Claude message." Pinned in `transcript-watcher.test.ts → read integrity`.
 - **The incomplete-line carry is BYTES (`partialBytes: Buffer`), not a decoded string.** A string carry decodes each half of a multi-byte UTF-8 char to U+FFFD independently — emoji/CJK split across a read boundary garbled permanently. Stitch bytes before decoding. Don't "simplify" back to `partialLine: string`.
 - **`getHistory` replay dedups by uuid with the SAME semantics as the live path** (skip repeated `assistant-text`, first write wins; tool-use/result/turn-complete still emit). The reducer absorbs the re-emitted tool events structurally, not by uuid — see "Deduplication" below. If replay semantics change, change the live path in the same commit.
-- **`usePromptDetector` reads `getVisibleScreenText` (screen + margin), NOT the full scrollback; the classifier's IPC eval passes a 120-row tail.** Serializing the whole 1000+-row buffer per rAF flush was the top renderer CPU cost while streaming. The tail walk-back in `terminal-registry.getScreenText` never starts mid-wrapped-line — keep it. Load-bearing side effect: menus that scrolled into scrollback can no longer shadow a live Ink menu.
+- **The card reader (`shared/prompt-card-reader.ts`, driven by `main/session-screens.ts` and, on a host with no record, by `usePromptDetector`) reads the VISIBLE screen (screen + margin), NOT the full scrollback; the classifier reads a 40-row tail.** Serializing the whole 1000+-row buffer per rAF flush was the top renderer CPU cost while streaming. The tail walk-back in `terminal-registry.getScreenText` never starts mid-wrapped-line — keep it. Load-bearing side effect: menus that scrolled into scrollback can no longer shadow a live Ink menu.
 - **SubagentWatcher polls are slow (5s) safety nets by design — the fast paths are event-driven.** `TranscriptWatcher` calls `kickScan()` when a parent Agent tool_use lands (instant discovery of the subagents dir/new files) and `settleByParent()` when the parent's tool-result lands (final read, then the per-file stat poll stops; fs.watch stays attached). Don't speed the polls up "for responsiveness" (regresses idle-CPU accumulation) and don't remove the kick/settle calls.
 - **`<local-command-stdout>`/`<local-command-stderr>` are STRIPPED ENTIRELY in `stripSystemTags` — DO NOT switch back to unwrapping.** CC writes these as dimmed status echoes. After every `/compact` it writes a follow-up user-type line `<local-command-stdout>[2mCompacted (ctrl+o to see full summary)[22m</local-command-stdout>`. Unwrapping let CC's echo reach `TRANSCRIPT_USER_MESSAGE`'s "no pending match" path, which BOTH appended a fake "Compacted…" user bubble AND set `isThinking:true` with no turn to ever clear it (chat permanently stuck thinking after compaction). Both TS and Kotlin parsers strip these entirely; `transcript-watcher.test.ts` pins the JSONL fixture line. Route any new slash-command output through a NEW event type — don't reintroduce the user-message path.
-- **The `compact-summary` transcript event carries the full summary text in `data.summary`.** `SystemMarker.tsx` renders click-to-expand on the thin "Compacted · freed X tokens" divider. Both `App.tsx` and `BubbleFeed.tsx` forward `event.data.summary` into `COMPACTION_COMPLETE`; the reducer stores it on `SystemMarker.summary`. Aborted/watchdog completions carry no summary — keep the `expandable = !!marker.summary` gate.
+- **The `compact-summary` transcript event carries the full summary text in `data.summary`.** `SystemMarker.tsx` renders click-to-expand on the thin "Compacted · freed X tokens" divider. `eventToAction` (see "One translator" above) forwards `event.data.summary` into `COMPACTION_COMPLETE` for the main window and the buddy alike; the reducer stores it on `SystemMarker.summary`. Aborted/watchdog completions carry no summary — keep the `expandable = !!marker.summary` gate.
 
 ### Rule-overflow additions (2026-08-12, migrated verbatim from the path-scoped rule)
 
@@ -198,9 +217,18 @@ beats deleted text. It needs a model that resumes prose after starting a tool ca
 then stalls. Guard: `attention-reducer.test.ts` → the `stalled turn` describe (four `NATIVE_PARTS_DROPPED` cases, including the reused-partId regression).
 
 Ordering is guaranteed end to end without any explicit sequencing: the harness emits
-`dropPart` BEFORE returning its retry sentinel, and `App.tsx` / `BubbleFeed.tsx` dispatch
-`NATIVE_PARTS_DROPPED` from a block placed above the heartbeat dispatch in the same
-handler, with both dispatch queues plain FIFO.
+`dropPart` BEFORE returning its retry sentinel, and `eventToAction` returns
+`NATIVE_PARTS_DROPPED` ahead of the heartbeat action in the same array (both windows
+apply that array in order), with both dispatch queues plain FIFO.
+
+A saved `dropPart` marker also replays on a HISTORY page (`live: false` returns just
+`NATIVE_PARTS_DROPPED`, no heartbeat): before 2026-10-01 pages skipped it, so a reopened
+conversation showed the discarded half-answer glued before the real one. The marker is
+stored AFTER the parts it drops, and a page replays in order on scratch state, so the
+drop finds them. Pages cut only at a user message and a retry stays inside one turn, so
+the target is on the same page; the one exception (a single turn over the page byte cap,
+so the newer page starts mid-turn) finds no open turn and is a no-op. Guard:
+`history-paging-reducer.test.ts` → `history page honours saved dropPart markers`.
 
 ### The PTY classifier must not reset a state it never set
 
@@ -211,10 +239,9 @@ there. Both `'ok'` dispatch sites are now gated on `hasBuffer` (`provider === un
 provider === 'claude'`), and `hasBuffer` is a real dependency rather than a stale closure
 read; the currently-unreachable teardown site is guarded too so the pair cannot drift.
 
-Blast radius before the fix was narrow but real: `chat:hydrate` is REMOTE-ONLY (the
-desktop path deliberately does not serve it), so ordinary desktop mounts with `'ok'` long
+Blast radius before the fix was narrow but real: a screen filled from a remote copy (then `chat:hydrate`, now `session:open`) is the only one that starts on an already-parked session, so ordinary desktop mounts with `'ok'` long
 before any park. What broke was **a phone reconnecting to an already-parked desktop
-session** — hydrate carried `attentionState: 'stalled'` correctly and the classifier
+session** — the copy carried `attentionState: 'stalled'` correctly and the classifier
 discarded it, so the user saw a spinner instead of the card with the buttons. Claude Code
 behaviour is byte-identical, because `hasBuffer` is true for every CC session. Guard:
 `useAttentionClassifier.test.tsx` (a `renderHook` probe), plus a live CDP probe against

@@ -31,17 +31,20 @@ import { buildSessionCreateArgs } from '../shared/session-create-args';
 import GamePanel from './components/game/GamePanel';
 import TerminalRightSlot from './components/TerminalRightSlot';
 import { ChatProvider, useChatDispatch, useChatStore, useSessionIsThinking } from './state/chat-context';
-import type { ChatAction } from './state/chat-types';
-import { installTranscriptBatcher, applyChatHydrate, flushTranscriptActions } from './state/transcript-batch';
+import { installTranscriptBatcher, flushTranscriptActions, routeTranscriptShrink } from './state/transcript-batch';
+import { attachTranscriptFeed, attachSessionLiveFeed } from './state/screen-feed';
+import { useDropEndedSessionsOnReconnect, withAnnouncedName } from './state/session-list-sync';
 import {
   remotePlaceHost, remotePlaceStorages, readRemotePlace, writeRemotePlace,
-  choosePlaceOnHydrate, chooseAfterDestroyed, shouldLoadFirstPage,
+  choosePlaceOnHydrate, chooseAfterDestroyed,
 } from './state/remote-place';
 import { ArtifactProvider, createArtifactStore } from './state/ArtifactContext';
 import { createArtifactToolUseTracker } from './state/artifact-tool-use-tracker';
 import { createDeliverableAutoOpen } from './state/deliverable-auto-open';
 import { openFilepath } from './hooks/useOpenFilepath';
 import { useOnRemoteReconnect } from './hooks/useOnRemoteReconnect';
+import { useSendReconcile } from './hooks/useSendReconcile';
+import { REMOTE_REFRESH_EVENT } from './remote-events';
 import { useSessionDefaults } from './hooks/useSessionDefaults';
 import { showFirstRunWelcome } from './first-run-screen';
 // Central slash-command router — also used by the drawer so drawer-initiated
@@ -66,9 +69,13 @@ import { usePartyGame } from './hooks/usePartyGame';
 import { useChessGame } from './hooks/useChessGame';
 import { useRemoteAttentionSync } from './hooks/useRemoteAttentionSync';
 import { useSubmitConfirmation } from './hooks/useSubmitConfirmation';
-import { useSessionAttention, mergePeerSessionStatuses } from './hooks/useSessionAttention';
+import { useSessionAttention, mergePeerSessionStatuses, mergeSummaryStatuses } from './hooks/useSessionAttention';
 import { useAttentionSummary } from './hooks/useAttentionSummary';
+import { useSessionSummaries } from './hooks/useSessionSummaries';
+import { useAttentionSound } from './hooks/useAttentionSound';
+import { useRemoteWatch } from './hooks/useRemoteWatch';
 import { useActiveSessionModel } from './hooks/useActiveSessionModel';
+import { useCompactionWatchdog } from './hooks/useCompactionWatchdog';
 import { useNativeSessionUsage, useNativeContextOverride, useNativeContextWindow, useTurnsWithUsage } from './hooks/useNativeSessionUsage';
 import { useNativeSessionTotals } from './hooks/useNativeSessionTotals';
 import { useZoomControls } from './hooks/useZoomControls';
@@ -79,7 +86,7 @@ import CommandDrawer from './components/CommandDrawer';
 import { TerminalScrollButtons } from './components/TerminalToolbar';
 import TrustGate, { useTrustGateActive, usePendingPromptActive } from './components/TrustGate';
 import { InitializingCover } from './components/InitializingCover';
-import { promptShowMeansStarted, composerDisabled, startedIds } from './state/startup-dialog-store';
+import { promptShowMeansStarted, composerDisabled, startedIds, announcedAsStarted, startedFromSummaries } from './state/startup-dialog-store';
 import MovedGate from './components/MovedGate';
 import SettingsPanel from './components/SettingsPanel';
 import { readBuddyStyle } from './components/BuddyStyleRow';
@@ -109,13 +116,14 @@ import { setGlobalShortcutsBlocked } from './utils/shortcut-gate';
 
 import type { SkillEntry, PermissionMode, AttentionState, CommandEntry, SessionProvider, PastSession } from '../shared/types';
 import type { NativePermissionMode } from '../shared/permission-types';
-import { detectPermissionMode, syncKeyedSubscriptions, clearKeyedSubscriptions } from './state/permission-mode-scan';
 import { RESUMING_NATIVE, RESUMING_CLAUDE } from '../shared/session-title';
 import { createFirstPageLoader, type FirstPageLoader, type PageHint } from './state/first-page-loader';
 
 import FirstRunView from './components/FirstRunView';
-import { getPlatform, isAndroid, isRemoteMode, onConnectionModeChange } from './platform';
+import { getCapabilities, getPlatform, isRemoteMode, onConnectionModeChange } from './platform';
 import { APP_NOTICE_EVENT, type AppNoticeDetail } from './utils/announce';
+import { reconcilePending, confirmPending } from './state/pending-action';
+import { usePhoneSessionActions } from './hooks/usePhoneSessionActions';
 
 /** Remote access batch 2: where a phone's copy of the conversation stands. */
 type ConversationStatus = 'reconnecting' | 'restoring' | 'incomplete' | 'complete';
@@ -130,7 +138,6 @@ import { StatsWithHealthBridge } from './components/StatsWithHealthBridge';
 import { RootErrorBoundary } from './components/RootErrorBoundary';
 import ThemeEffects from './components/ThemeEffects';
 import { ZoomOverlay } from './components/ZoomOverlay';
-import { RemoteSnapshotExporter } from './components/RemoteSnapshotExporter';
 import RemoteUnsupportedNotice from './components/RemoteUnsupportedNotice';
 import { SessionDropZone } from './components/SessionDropZone';
 import { ContextMenuHost } from './components/context-menu/ContextMenuHost';
@@ -371,15 +378,12 @@ function AppInner() {
   // Remote access batch 2: the phone's copy of the conversation (see the
   // remoteConversationStatus subscription below). Undefined on the desktop.
   const [conversationStatus, setConversationStatus] = useState<ConversationStatus | undefined>(undefined);
-  // Remote access batch 2 (§3): on a remote client nothing picks a conversation until the
-  // computer's copy has arrived — the hydrate handler (or a destroyed conversation's
-  // focus) decides the place. Every automatic selection asks mayAutoSelect() first; the
-  // desktop is unaffected. Reset whenever a restore starts (the strip's "restoring").
+  // Remote access batch 2 (§3): on a remote client nothing picks a conversation until the computer's session list has arrived — the list
+  // reply (or a destroyed conversation's focus) decides the place (decideRemotePlace). Every automatic selection asks mayAutoSelect()
+  // first; the desktop is unaffected. Reset when this page starts talking to a different computer.
   const placeDecidedRef = useRef(false);
   const mayAutoSelect = () => !isRemoteMode() || placeDecidedRef.current;
-  // Bumped when a hydrate lands, so sessions waiting on it load their first page.
-  const [hydrateTick, setHydrateTick] = useState(0);
-  // Batch 2 (§3): before the computer's copy arrives, the no-conversation screen says it is
+  // Batch 2 (§3): before the computer's list arrives, the no-conversation screen says it is
   // catching up instead of offering New Session — a tap there created a stray conversation.
   const remoteCatchingUp = isRemoteMode() && (conversationStatus === 'restoring' || conversationStatus === 'reconnecting');
   const handleRefreshConversation = useCallback(() => {
@@ -699,14 +703,18 @@ function AppInner() {
   // old one-shot guard left a live conversation blank ("Start a conversation")
   // whenever its only load lost the resume race or hit a Windows file lock.
   // See first-page-loader.ts.
+  const goneRef = useRef<(sid: string) => void>(() => {});
   const firstPagesRef = useRef<FirstPageLoader | null>(null);
   if (!firstPagesRef.current) firstPagesRef.current = createFirstPageLoader({
-    request: async (req) => (window as any).claude?.detach?.requestTranscriptPage?.(req),
+    // WHY open, not a page request (one-core R5-2): a window, a torn-off window and a phone all fill a conversation the same way — the
+    // computer's answer carries the newest page AND what only memory holds (state/session-fill.ts). The page request is only the
+    // retry while the transcript is not found yet.
+    open: async (req) => (window.claude.session as any).open(req),
+    requestPage: async (req) => (window as any).claude?.detach?.requestTranscriptPage?.(req),
     dispatch,
-    // Batch 2 (§4): the computer's copy is the only source on a remote client — wait for
-    // it, and never load a page on top of a session it delivered. Not recorded as asked,
-    // so the sessions effect retries when the hydrate lands (hydrateTick).
-    mayLoad: (sid) => shouldLoadFirstPage({ remote: isRemoteMode(), placeDecided: placeDecidedRef.current, hydrated: !!chatStore.getState().get(sid)?.history.hydrated }),
+    gone: (sid) => goneRef.current(sid),
+    flush: flushTranscriptActions,
+    play: (pushes) => (window.claude.session as any).play?.(pushes),
   });
   const firstPages = firstPagesRef.current;
   // Artifact tracker — global reducer for session/project artifact state.
@@ -766,12 +774,12 @@ function AppInner() {
   // InputBar.sendMessage applies to typed messages. Deliberate menu-driving
   // writes (ToolCard plan keys, TrustGate, prompt option clicks, terminal
   // view) must NOT use this helper. Returns false when the send was refused.
-  const guardedPtySend = useCallback((sid: string, text: string): boolean => {
+  const guardedPtySend = useCallback((sid: string, text: string, notice?: 'model-switch'): boolean => {
     // Honest guard (M1): refuse before sending, so callers' `if (!guardedPtySend)`
     // bails actually fire for native/destroyed sessions and skip optimistic writes.
     if (!canPtySend(sessionsRef.current.find((x) => x.id === sid), chatStateMapRef.current.get(sid))) return false;
     if (notifyIfPtyBlocked(sid)) return false;
-    window.claude.session.sendInput(sid, text);
+    window.claude.session.sendInput(sid, text, notice);
     return true;
   }, [notifyIfPtyBlocked]);
 
@@ -879,65 +887,8 @@ function AppInner() {
     }
   }, [dispatch]);
 
-  // Compaction watchdog: activity-aware — resets on any reducer update for a
-  // session with compactionPending set. Any transcript event bumps the timer
-  // forward, so long compactions (large sessions) don't trigger a false "may
-  // have failed" message as long as events keep flowing. Only fires if nothing
-  // happens for 180s straight, which genuinely means something's stuck.
-  //
-  // Prior bug: fixed 60s timer. Big sessions took longer than 60s legitimately,
-  // hit the watchdog, dispatched aborted=true, cleared pending flag — then the
-  // real shrink event arrived but had no pending flag to key off of, so the
-  // user saw "may have failed" even though compaction succeeded.
-  const compactWatchdogs = useRef(new Map<string, ReturnType<typeof setTimeout>>());
-  // Tranche 1: store subscription instead of a [chatStateMap] effect. Same
-  // activity-aware body (the timer still resets on every dispatch while a
-  // compaction is pending); AppInner no longer re-renders per dispatch to run
-  // it. The pre-existing no-clear-timers-on-unmount behavior is preserved.
-  useEffect(() => {
-    const check = () => {
-      const map = chatStore.getState();
-      // Perf: this runs on every reducer dispatch. Steady state (no compaction
-      // in flight, no live watchdogs) short-circuits without walking the
-      // session map. When a compaction is live we still iterate — preserving
-      // the activity-awareness described above (timer resets on every dispatch).
-      if (compactWatchdogs.current.size === 0) {
-        let anyPending = false;
-        for (const session of map.values()) {
-          if (session.compactionPending && !session.compactionPending.awaitsResult) { anyPending = true; break; }
-        }
-        if (!anyPending) return;
-      }
-      for (const [sid, session] of map) {
-        const existing = compactWatchdogs.current.get(sid);
-        // A native compaction's IPC call reports its own end (awaitsResult).
-        if (session.compactionPending && !session.compactionPending.awaitsResult) {
-          // Reset on every reducer tick while pending — if transcript events are
-          // flowing for this session, the timer keeps bumping and never fires.
-          if (existing) clearTimeout(existing);
-          const timer = setTimeout(() => {
-            const current = chatStateMapRef.current.get(sid);
-            if (current?.compactionPending) {
-              dispatch({
-                type: 'COMPACTION_COMPLETE',
-                sessionId: sid,
-                markerId: `compact-timeout-${Date.now()}`,
-                afterContextTokens: null,
-                aborted: true,
-              });
-            }
-            compactWatchdogs.current.delete(sid);
-          }, 180_000);
-          compactWatchdogs.current.set(sid, timer);
-        } else if (existing) {
-          clearTimeout(existing);
-          compactWatchdogs.current.delete(sid);
-        }
-      }
-    };
-    check();
-    return chatStore.subscribeAll(check);
-  }, [chatStore, dispatch]);
+  // Ends a compaction spinner this screen raised itself (hooks/useCompactionWatchdog.ts); the computer ends the ones it raised.
+  useCompactionWatchdog(chatStore, dispatch);
 
   // Attention-reporter ref declared up here so hooks-order stays deterministic;
   // the useEffect that writes to it lives AFTER sessionStatuses is computed
@@ -1016,6 +967,17 @@ function AppInner() {
   // useSessionAttention). sessionStatuses keeps its old shape for HeaderBar.
   const sessionAttention = useSessionAttention(sessions, viewedSessions, sessionId);
   const attentionSummary = useAttentionSummary();
+  // WHY (one-core R5-3): a phone watches only the conversation on its screen and a few it looked at lately, so every other
+  // conversation's dot (and the attention sound, which reads the dots) comes from the computer's per-session summary, not from events
+  // this screen no longer receives. Null on the computer's own windows, which keep deriving theirs from the events they get.
+  const sessionSummaries = useSessionSummaries(isRemoteMode(), setViewedSessions);
+  // A phone learns a session has STARTED from the computer's summary too (one-core sync-fix2): the first-hook event and the "initialized" broadcast reach only a phone that was
+  // connected and watching at that moment, and the list/created announcements carry the flag only as of when they were sent.
+  useEffect(() => {
+    if (!sessionSummaries) return;
+    const started = startedFromSummaries(sessionSummaries, initializedRef.current);
+    if (started.length) setInitializedSessions((prev) => { const n = new Set(prev); for (const id of started) n.add(id); return n; });
+  }, [sessionSummaries]);
   const sessionStatuses = useMemo(() => {
     const m = new Map<string, SessionStatusColor>();
     for (const [id, info] of sessionAttention) m.set(id, info.status);
@@ -1036,18 +998,19 @@ function AppInner() {
     // owns always keeps its local derivation — blue depends on what *you* have
     // looked at, which only this window knows. Precedence lives in the pure
     // mergePeerSessionStatuses so it can be pinned by tests.
-    return mergePeerSessionStatuses({
+    const merged = mergePeerSessionStatuses({
       base: m,
       localSessionIds: new Set<string>(sessions.map((s: any) => s.id)),
       windowDirectory,
       summaryPerSession: attentionSummary.perSession,
       attentionMap: statusData.attentionMap,
     });
-  }, [sessionAttention, attentionSummary, sessions, windowDirectory, statusData.attentionMap]);
+    return mergeSummaryStatuses({ base: merged, sessionIds: sessions.map((s: any) => s.id), summaries: sessionSummaries, viewedSessions, activeSessionId: sessionId });
+  }, [sessionAttention, attentionSummary, sessions, windowDirectory, statusData.attentionMap, sessionSummaries, viewedSessions, sessionId]);
 
-  // Play the 'attention' sound when any session transitions to red (awaiting
-  // approval). Red is a visible state, so color-driven dedup is correct here.
-  const prevStatusSoundRef = useRef<Map<string, SessionStatusColor>>(new Map());
+  // Play the 'attention' sound when any session transitions to red (awaiting approval). WHY once per burst on a phone: a reconnect
+  // can report many already-waiting sessions at once; see useAttentionSound. The computer's windows are unchanged.
+  useAttentionSound(sessions, sessionStatuses, !!sessionSummaries);
   // Remote attention diffing: tracks the last-seen attentionMap from status:data
   // so we only dispatch ATTENTION_STATE_CHANGED when a session's state actually flips.
   // On desktop, useAttentionClassifier already handles this locally (no-op here because
@@ -1069,25 +1032,6 @@ function AppInner() {
   // was restarted. For anyone who never signs in with ChatGPT this value is
   // `false` on every push forever and nothing below ever runs.
   const hadChatGptUsageRef = useRef(false);
-  // WHY (2026-09-07) this walks `sessions` rather than the whole map: since the
-  // switcher started colouring peer-window rows, sessionStatuses also contains
-  // sessions OTHER windows own. Chiming on those would play the same alert once
-  // per open window, all at once, on top of the owning window's own chime — and
-  // the owner is already chiming, so no alert is lost by staying owner-only.
-  useEffect(() => {
-    const prev = prevStatusSoundRef.current;
-    const next = new Map<string, SessionStatusColor>();
-    for (const s of sessions) {
-      const color = sessionStatuses.get(s.id);
-      if (!color) continue;
-      next.set(s.id, color);
-      const was = prev.get(s.id);
-      if (was === color) continue;
-      if (color === 'red' && was !== 'red') playSound('attention');
-    }
-    prevStatusSoundRef.current = next;
-  }, [sessionStatuses, sessions]);
-
   // Play the 'ready' sound when any session's isThinking transitions true → false.
   // Replaces the prior blue-color-transition trigger, which never fired for the
   // currently-viewed session (blue requires "unseen, not active"). Thinking-false
@@ -1107,6 +1051,9 @@ function AppInner() {
   // endTurn / process-exit / native-error, each of which also flips the status
   // triple → sessionAttention identity changes → this effect runs.
   useEffect(() => {
+    // WHY skipped on a phone with summaries (one-core R5-3): it watches only a few conversations, so this loop would miss the others'
+    // turns ending, and would chime twice for a watched one (this loop AND the summary effect below). One source per screen.
+    if (sessionSummaries) return;
     const prev = prevThinkingRef.current;
     const next = new Map<string, boolean>();
     for (const [id, state] of chatStore.getState()) {
@@ -1119,7 +1066,7 @@ function AppInner() {
       if (was === true && !isThinking) playSound('ready');
     }
     prevThinkingRef.current = next;
-  }, [sessionAttention]);
+  }, [sessionAttention, sessionSummaries]);
 
   // Attention reporter effect: pushes per-session attention state + the
   // derived dot color to main whenever sessionAttention changes. Main
@@ -1275,7 +1222,7 @@ function AppInner() {
         dispatch({ type: 'SESSION_INIT', sessionId: info.id });
         setSessions((prev) => {
         // Deduplicate — replay buffers resend session:created for existing sessions
-        if (prev.some((s) => s.id === info.id)) return prev;
+        if (prev.some((s) => s.id === info.id)) return withAnnouncedName(prev, info);
         // Only auto-focus genuinely new sessions (not replayed ones) — and on a remote
         // client not before its place is decided: the restore sends every session as
         // session:created ahead of the hydrate.
@@ -1304,6 +1251,12 @@ function AppInner() {
       // never trigger the "first hook = initialized" gate. Mark them ready
       // immediately. A shell session has no hook relay either (it is spawned with
       // no pipe), so this already covers it.
+      // A Claude Code session announced as already STARTED (no `awaitingStart`) is initialized too (one-core sync-fix2): a reconnecting phone is sent every live session
+      // as `session:created`, and one it had never seen — started while it was away — used to sit on "Initializing session…" with a "check terminal view" button,
+      // because the only other way in (the first hook event) had already happened. A brand-new session still carries `awaitingStart` until its first hook.
+      if (announcedAsStarted(info)) {
+        setInitializedSessions((prev) => (prev.has(info.id) ? prev : new Set(prev).add(info.id)));
+      }
       if (info.provider && info.provider !== 'claude') {
         setInitializedSessions((prev) => {
           if (prev.has(info.id)) return prev;
@@ -1389,6 +1342,7 @@ function AppInner() {
         next.delete(id);
         return next;
       });
+      confirmPending(`close:${id}`);
     });
 
     // Specialists 1c: the host's delegation feed — a hire's ledger record
@@ -1440,342 +1394,25 @@ function AppInner() {
     // handler can flush it on demand — see that module's WHY.
     // dispatchMany, not dispatch: the frame's actions notify subscribers once (A4).
     const transcriptBatcher = installTranscriptBatcher(chatStore.dispatchMany);
-    const batchTranscriptDispatch = (action: ChatAction) => transcriptBatcher.push(action);
 
-    const transcriptHandler = (window.claude.on as any).transcriptEvent?.((event: any) => {
-      if (!event?.type || !event?.sessionId) return;
-      // Live event = main can read this transcript: re-ask a failed first page (first-page-loader.ts).
-      firstPages.noteLiveActivity(event.sessionId);
-
-      switch (event.type) {
-        case 'user-message':
-          batchTranscriptDispatch({
-            type: 'TRANSCRIPT_USER_MESSAGE',
-            sessionId: event.sessionId,
-            uuid: event.uuid,
-            text: event.data.text,
-            timestamp: event.timestamp,
-            // A slash command read from its command tags — MUST mirror BubbleFeed.tsx and
-            // transcript-page-actions.ts. It starts no turn (chat-reducer).
-            slashCommand: event.data.slashCommand,
-            // Host-injected turn marker (a delivered specialist report) + its
-            // structured header — MUST mirror BubbleFeed.tsx. See TimelineEntry.injected.
-            injected: event.data.injected,
-            injectedMeta: event.data.injectedMeta,
-            // Forward the subagent stamp so the reducer can tell "briefing
-            // written into a subagent's JSONL" apart from a real user prompt
-            // and drop the former (it's already shown on the Agent card).
-            parentAgentToolUseId: event.data.parentAgentToolUseId,
-            agentId: event.data.agentId,
-          });
-          break;
-        case 'user-interrupt':
-          // ESC-passthrough: transcript-watcher detected a user-initiated
-          // interrupt (ESC sent to the PTY). Reducer records it so we can
-          // tag the next assistant turn as interrupted.
-          batchTranscriptDispatch({
-            type: 'TRANSCRIPT_INTERRUPT',
-            sessionId: event.sessionId,
-            uuid: event.uuid,
-            timestamp: event.timestamp,
-            kind: event.data.kind,
-            // Native only: what the abandoned turn already spent. No
-            // turn-complete follows an interrupt, so this event is the only
-            // place those tokens can be counted from.
-            usage: event.data.usage,
-          });
-          break;
-        case 'assistant-text':
-          batchTranscriptDispatch({
-            type: 'TRANSCRIPT_ASSISTANT_TEXT',
-            sessionId: event.sessionId,
-            uuid: event.uuid,
-            text: event.data.text,
-            timestamp: event.timestamp,
-            // Task 2.4: forward the per-message model from the transcript so the
-            // reducer can stamp turn.model on the first text of each turn.
-            model: event.data.model,
-            // Native runtime: per-token delta id — same partId merges into the
-            // last text segment (mirror BubbleFeed.tsx, must stay identical).
-            partId: event.data.partId,
-            parentAgentToolUseId: event.data.parentAgentToolUseId,
-            agentId: event.data.agentId,
-          });
-          break;
-        case 'tool-use':
-          batchTranscriptDispatch({
-            type: 'TRANSCRIPT_TOOL_USE',
-            sessionId: event.sessionId,
-            uuid: event.uuid,
-            toolUseId: event.data.toolUseId,
-            toolName: event.data.toolName,
-            toolInput: event.data.toolInput || {},
-            // Carried so a specialist's mid-run note can be placed among its
-            // tool rows by time (reconcileNoteSegments); the top-level card
-            // ignores it. Three mirrors must stay identical: this switch,
-            // BubbleFeed.tsx (buddy window) and transcript-page-actions.ts
-            // (replayed page) — pinned by transcript-event-surface-parity.test.ts.
-            timestamp: event.timestamp,
-            parentAgentToolUseId: event.data.parentAgentToolUseId,
-            agentId: event.data.agentId,
-          });
-          break;
-        case 'tool-result':
-          batchTranscriptDispatch({
-            type: 'TRANSCRIPT_TOOL_RESULT',
-            sessionId: event.sessionId,
-            uuid: event.uuid,
-            toolUseId: event.data.toolUseId,
-            result: event.data.toolResult || '',
-            isError: event.data.isError || false,
-            structuredPatch: event.data.structuredPatch,
-            backgroundTaskId: event.data.backgroundTaskId,
-            resumedTaskId: event.data.resumedTaskId,
-            parentAgentToolUseId: event.data.parentAgentToolUseId,
-            agentId: event.data.agentId,
-          });
-          break;
-        case 'background-task':
-          // Claude Code: background work a card launched has ended — the only
-          // signal that it did (its tool result was just the launch receipt).
-          // Three mirrors: App.tsx, BubbleFeed.tsx, transcript-page-actions.ts.
-          if (event.data.backgroundTask) {
-            batchTranscriptDispatch({
-              type: 'TRANSCRIPT_BACKGROUND_TASK',
-              sessionId: event.sessionId,
-              uuid: event.uuid,
-              toolUseId: event.data.toolUseId,
-              taskIds: event.data.backgroundTask.taskIds,
-              status: event.data.backgroundTask.status,
-              summary: event.data.backgroundTask.summary,
-              result: event.data.backgroundTask.result,
-              parentAgentToolUseId: event.data.parentAgentToolUseId,
-            });
-          }
-          break;
-        case 'replay-complete':
-          // End of a transcript replay — reap cards the history left 'running'.
-          // Synthesized by the replay handler in main, never parsed from a
-          // transcript. sessionIdle false means main could not affirm the
-          // session is idle (live re-dock, or a CC session), so the reducer
-          // leaves everything alone.
-          batchTranscriptDispatch({
-            type: 'TRANSCRIPT_REPLAY_COMPLETE',
-            sessionId: event.sessionId,
-            sessionIdle: event.data?.sessionIdle === true,
-          });
-          break;
-        case 'turn-complete':
-          // Task 2.2: forward the full metadata payload. transcript-watcher emits these as
-          // optional fields on event.data (shared/types.ts); coalesce undefined → null so
-          // the action type (string | null, not optional) stays well-typed.
-          batchTranscriptDispatch({
-            type: 'TRANSCRIPT_TURN_COMPLETE',
-            sessionId: event.sessionId,
-            uuid: event.uuid,
-            timestamp: event.timestamp,
-            stopReason: event.data.stopReason ?? null,
-            model: event.data.model ?? null,
-            anthropicRequestId: event.data.anthropicRequestId ?? null,
-            usage: event.data.usage ?? null,
-            // Forward the subagent stamp so the reducer can drop a sub-agent's
-            // end_turn instead of overwriting parent turn.model and tearing down
-            // the parent's in-flight state via endTurn(). Mirrors assistant-text /
-            // tool-use / tool-result dispatches above.
-            parentAgentToolUseId: event.data.parentAgentToolUseId,
-            agentId: event.data.agentId,
-          });
-          // Native StatusBar chips (context/tokens/speed) are sourced from THIS
-          // turn-complete usage via the reducer (App.tsx `nativeStatusUsage` memo →
-          // selectNativeStatusChips), which serves both desktop and remote. The old
-          // reportUsage → native:usage-report → status:data cache path was dead
-          // (nothing read its nativeUsageMap) and was removed in the whole-branch review.
-          break;
-        case 'subagent-usage':
-          // Bookkeeping only — never touches the timeline, the turn state, or
-          // the subagent card's segments. It exists so the parent's totals can
-          // include the work it delegated (spec §2). Arrives on the PARENT's
-          // stream (native-session-host emits it there), and replays from the
-          // parent's record on resume like any other persisted event.
-          batchTranscriptDispatch({
-            type: 'TRANSCRIPT_SUBAGENT_USAGE',
-            sessionId: event.sessionId,
-            uuid: event.uuid,
-            timestamp: event.timestamp,
-            usage: event.data.usage ?? null,
-            parentAgentToolUseId: event.data.parentAgentToolUseId,
-            agentId: event.data.agentId,
-          });
-          break;
-        case 'assistant-thinking': {
-          // Text payload → real reasoning content (collapsible in chat).
-          // No payload → lifecycle heartbeat only (existing behavior:
-          // bumps lastActivityAt and clears any stale attention banner).
-          if (event.data?.text) {
-            batchTranscriptDispatch({
-              type: 'TRANSCRIPT_ASSISTANT_REASONING',
-              sessionId: event.sessionId,
-              uuid: event.uuid,
-              text: event.data.text,
-              timestamp: event.timestamp,
-              partId: event.data.partId,
-              // Specialists 1c: a child's stamped reasoning routes into its
-              // Task card, not the parent's bubble. MUST mirror BubbleFeed.tsx.
-              parentAgentToolUseId: event.data.parentAgentToolUseId,
-            });
-          } else {
-            // Argument-generation progress: draw/update the preparing tool card.
-            // Dispatched IN ADDITION to the heartbeat, not instead of it — the
-            // heartbeat's promptProcessing:null is the right outcome here (prefill
-            // is over once arguments are streaming), and suppressing it would
-            // strand the previous phase's progress line on screen.
-            // MUST mirror BubbleFeed.tsx.
-            if (event.data?.toolPreparing) {
-              batchTranscriptDispatch({
-                type: 'NATIVE_TOOL_PREPARING',
-                sessionId: event.sessionId,
-                toolCallId: event.data.toolPreparing.toolCallId,
-                toolName: event.data.toolPreparing.toolName,
-                chars: event.data.toolPreparing.chars,
-                cleared: event.data.toolPreparing.cleared,
-              });
-            }
-            // Fix: erase an abandoned half-written sentence BEFORE the heartbeat
-            // below parks/clears the turn — if this ran after a retry's new text
-            // landed, it would erase the wrong (retried) content instead of the
-            // stale one. MUST mirror BubbleFeed.tsx, and must stay in this order.
-            if (event.data?.dropPart) {
-              batchTranscriptDispatch({
-                type: 'NATIVE_PARTS_DROPPED',
-                sessionId: event.sessionId,
-                partIds: event.data.dropPart.partIds,
-              });
-            }
-            batchTranscriptDispatch({
-              type: 'TRANSCRIPT_THINKING_HEARTBEAT',
-              sessionId: event.sessionId,
-              // WHY: use the source stamp/UUID so a late attach cannot undo
-              // a newer live measurement; this remains display-only.
-              usageProgress: event.data?.usageProgress,
-              uuid: event.uuid,
-              timestamp: event.timestamp,
-              // Native watchdog: a stall-warning payload drives the countdown,
-              // `stalled` parks the turn, a plain heartbeat clears both.
-              // MUST mirror BubbleFeed.tsx.
-              stallWarning: event.data?.stallWarning,
-              stalled: event.data?.stalled,
-              promptProcessing: event.data?.promptProcessing,
-            });
-          }
-          break;
-        }
-        case 'session-error':
-          // Native runtime only: a provider/stream failure. End the turn and
-          // surface the 'error' AttentionBanner (mirror BubbleFeed.tsx).
-          batchTranscriptDispatch({
-            type: 'NATIVE_SESSION_ERROR',
-            sessionId: event.sessionId,
-            timestamp: event.timestamp,
-            message: event.data.text ?? 'The model request failed.',
-            errorCode: event.data.errorCode,
-            // Same reasoning as the interrupt above: a turn that died mid-flight
-            // still spent what its completed steps spent.
-            uuid: event.uuid,
-            usage: event.data.usage,
-          });
-          break;
-        case 'skill-invoked':
-          // /skill-name (M3 item 1). The instructions live in event.data.body and
-          // are deliberately NOT dispatched — they belong to the model's history,
-          // not the timeline. Rendering them as a user bubble put 26k characters
-          // of SKILL.md on screen (Destin, 2026-07-28).
-          dispatch({
-            type: 'TRANSCRIPT_SKILL_INVOKED',
-            sessionId: event.sessionId,
-            uuid: event.uuid,
-            timestamp: event.timestamp,
-            skillId: event.data.skillId ?? 'skill',
-            displayName: event.data.displayName ?? event.data.skillId ?? 'Skill',
-            args: event.data.args,
-            skillPath: event.data.skillPath,
-          });
-          break;
-        case 'context-clear':
-          // The durable /clear barrier (native runtime). This is the ONLY thing
-          // that clears a native session's timeline — the dispatcher defers to
-          // it rather than clearing optimistically, so a refused clear leaves
-          // the conversation untouched. It also fires during transcript REPLAY,
-          // which is what makes a resumed session show the same post-clear view
-          // the user left behind instead of resurrecting the old conversation.
-          dispatch({
-            type: 'CLEAR_TIMELINE',
-            sessionId: event.sessionId,
-            markerId: `clear-${event.uuid}`,
-            timestamp: event.timestamp,
-          });
-          // The barrier drops the whole conversation from the model's window, so
-          // the gauge has to move with it — no turn runs to re-measure, and the
-          // pre-clear reading would otherwise stand over an empty conversation.
-          if (event.data.contextUsedAfter !== undefined) {
-            dispatch({
-              type: 'NATIVE_HISTORY_REWRITTEN',
-              sessionId: event.sessionId,
-              uuid: event.uuid,
-              contextUsedTokens: event.data.contextUsedAfter,
-            });
-          }
-          break;
-        case 'compact-summary': {
-          // Bookkeeping first, and OUTSIDE the marker guard below: the window
-          // this rewrite left behind and the summarize call's own bill are true
-          // whether or not this window draws a marker for it. Folding them into
-          // COMPACTION_COMPLETE would lose both whenever that guard didn't fire.
-          if (event.data.contextUsedAfter !== undefined || event.data.usage) {
-            dispatch({
-              type: 'NATIVE_HISTORY_REWRITTEN',
-              sessionId: event.sessionId,
-              uuid: event.uuid,
-              contextUsedTokens: event.data.contextUsedAfter ?? null,
-              usage: event.data.usage,
-            });
-          }
-          // Canonical compaction-complete signal — fired by the transcript
-          // watcher when Claude Code writes an isCompactSummary entry. Works
-          // for both in-session /compact (appends to same JSONL, so shrink
-          // never fires) and resume-from-summary (first entry of new JSONL).
-          const sessionState = chatStateMapRef.current.get(event.sessionId);
-          // event.data.autoCompaction marks a SPONTANEOUS native compaction —
-          // it has no compactionPending flag (that's only set by /compact), yet
-          // the user must still see a marker since ~all their history was just
-          // summarized away. Render it in that case too, bypassing the guard.
-          if (sessionState?.compactionPending || event.data.autoCompaction) {
-            // The harness's own pair wins where it exists. `sessionStatsMap` is
-            // Claude Code's statusline, which a NATIVE session never writes — so
-            // before these two fields a native compaction could only ever say
-            // "Conversation compacted", never how much it freed, and a
-            // spontaneous one could not even fall back (no COMPACTION_PENDING
-            // ran to record a "before").
-            const contextTokens = statusData.sessionStatsMap[event.sessionId]?.contextTokens ?? null;
-            dispatch({
-              type: 'COMPACTION_COMPLETE',
-              sessionId: event.sessionId,
-              // WHY: re-docking replays the same event. A stable event UUID lets
-              // the reducer discard its duplicate marker while keeping the turn.
-              markerId: `compact-done-${event.uuid}`,
-              afterContextTokens: event.data.contextUsedAfter ?? contextTokens,
-              beforeContextTokens: event.data.contextUsedBefore,
-              // Forward the summary text so the SystemMarker can offer
-              // click-to-expand (replaces the dead "ctrl+o to see full summary"
-              // affordance from CC's TUI, which never worked inside YouCoded).
-              ...(event.data.summary ? { summary: event.data.summary } : {}),
-              ...(event.data.autoCompaction ? { auto: true } : {}),
-              // Native only: where the kept tail starts, so only older messages dim.
-              ...(event.data.retainedFromUuid !== undefined ? { retainedFromUuid: event.data.retainedFromUuid } : {}),
-            });
-          }
-          break;
-        }
-      }
+    // WHY one translator + one route: this window, the buddy feed and the history pages
+    // all turn a transcript event into reducer actions through `eventToAction`, and this
+    // window sends every resulting action through the frame batcher, in arrival order
+    // (`routeTranscriptEvent`, state/transcript-batch.ts). Four types used to skip the
+    // batcher and could land AHEAD of earlier same-frame actions (a /clear drawn above
+    // the message sent just before it); R4-3 removed that. Only what is genuinely this
+    // window's stays here: the first-page nudge and the two facts only it can read.
+    const transcriptRouteDeps = {
+      batcher: transcriptBatcher,
+      // Did THIS window just run /compact? (A native automatic compaction needs no flag.)
+      compactionPending: (sid: string) => !!chatStateMapRef.current.get(sid)?.compactionPending,
+      // Claude Code's statusline reading: the marker's "after" figure when the event has none.
+      fallbackContextTokens: (sid: string) => statusData.sessionStatsMap[sid]?.contextTokens ?? null,
+    };
+    // The listener itself is shared with the buddy (state/screen-feed.ts); `onLiveActivity` is the main window's first-page nudge.
+    const transcriptOff = attachTranscriptFeed({
+      ...transcriptRouteDeps,
+      onLiveActivity: (sid) => firstPages.noteLiveActivity(sid),
     });
 
     // Backup completion path: file-shrink detection. Primary detection now
@@ -1783,16 +1420,19 @@ function AppInner() {
     // isCompactSummary field). Shrink is still wired so we recover correctly
     // if Claude Code's future behavior changes to rewrite/truncate the JSONL.
     const shrinkHandler = (window.claude.on as any).transcriptShrink?.((payload: { sessionId: string }) => {
-      if (!payload?.sessionId) return;
-      const sessionState = chatStateMapRef.current.get(payload.sessionId);
-      if (!sessionState?.compactionPending) return; // /clear or unrelated shrink — ignore
-      const contextTokens = statusData.sessionStatsMap[payload.sessionId]?.contextTokens ?? null;
-      dispatch({
-        type: 'COMPACTION_COMPLETE',
-        sessionId: payload.sessionId,
-        markerId: `compact-done-${Date.now()}`,
-        afterContextTokens: contextTokens,
-      });
+      // Batched like every other transcript action (see routeTranscriptShrink).
+      routeTranscriptShrink(payload, transcriptRouteDeps);
+    });
+
+    // One-core R5-4a: the shared lines and live facts from the computer's record: the queue of waiting messages, the model label, the
+    // model-switch and "Conversation cleared" dividers, the compaction spinner and prompt cards. Every screen draws them from here and none
+    // infers them (a host with no record, the Android app's own runtime, keeps inferring: capabilities.sessionRecord).
+    const liveOff = attachSessionLiveFeed({
+      batcher: transcriptBatcher,
+      contextTokens: (sid) => statusData.sessionStatsMap[sid]?.contextTokens ?? null,
+      isNative: (sid) => sessionsRef.current.find((x) => x.id === sid)?.provider === 'native',
+      setChipModel: (sid, alias) => setSessionModels((prev) => (prev.get(sid) === alias ? prev : new Map(prev).set(sid, alias as ModelAlias))),
+      setSessionModel: (sid, model) => setSessions((prev) => prev.map((x) => (x.id === sid && x.model !== model ? { ...x, model } : x))),
     });
 
     const renamedHandler = window.claude.on.sessionRenamed((sid, name) => {
@@ -1947,69 +1587,29 @@ function AppInner() {
     // raw PTY bytes — ManagedSession.detectPermissionMode broadcasts this
     // event from its 1Hz screen poll instead.
     const sessionPermissionModeHandler = (window.claude.on as any).sessionPermissionMode?.((sid: string, mode: string) => {
-      const valid: PermissionMode[] = ['normal', 'auto-accept', 'plan', 'bypass'];
+      const valid: PermissionMode[] = ['normal', 'auto-accept', 'plan', 'auto', 'bypass'];
       if (!valid.includes(mode as PermissionMode)) return;
       setPermissionModes((prev) => {
         if (prev.get(sid) === mode) return prev;
         return new Map(prev).set(sid, mode as PermissionMode);
       });
+      confirmPending(`mode:${sid}`);
     });
 
-    // Remote-only: host sends a full chat state snapshot immediately after the
-    // remote client connects. Dispatches HYDRATE_CHAT_STATE so the reducer
-    // pre-populates all session timelines without waiting for transcript replay.
-    // Typed-optional on the shared surface — present only on remote-shim.
-    // Remote access batch 2 (§7): after a reconnect the host replays only the asks
-    // still open and then names them; every awaiting card not named was answered
-    // while this phone was away. Remote-only (preload's stub never fires).
+    // The list of permission asks still open in a session, sent at the end of every fill (`session.open`, one-core R5-2): every awaiting
+    // card not named was answered while this screen could not see it, and goes back to "answered elsewhere" with a neutral note, never
+    // a failure. (A Claude Code session's asks come from the computer's record, so this now also covers a torn-off window.)
     const hookReplayCompleteOff = (window.claude.on as any).hookReplayComplete?.((p: { sessionId: string; pendingRequestIds: string[] }) => {
       if (!p?.sessionId) return;
       dispatch({ type: 'PERMISSION_REPLAY_COMPLETE', sessionId: p.sessionId, pendingRequestIds: Array.isArray(p.pendingRequestIds) ? p.pendingRequestIds : [] });
     });
-
-    // applyChatHydrate flushes this client's pending transcript batch FIRST —
-    // the phone's half of the cut line (state/transcript-batch.ts).
-    const chatHydrateHandler = window.claude.on.chatHydrate?.((payload: any) => {
-      const kept = applyChatHydrate(dispatch, payload, chatStore.getState);
-      // Batch 2 (§3): the place is decided here — the stored place if that conversation
-      // still exists, else what the desktop is showing, else the first.
-      if (isRemoteMode()) {
-        const choice = choosePlaceOnHydrate({
-          // The conversation on screen first (T4 review, 6): one picked while catching up, or
-          // any place in a browser that blocks storage, must not be undone by the hydrate.
-          stored: focusedSessionIdRef.current ?? readRemotePlace(remotePlaceStorages(), remotePlaceHost()),
-          existingSessionIds: [...chatStore.getState().keys()],
-          focusSessionId: payload?.focus?.sessionId ?? null,
-        });
-        placeDecidedRef.current = true;
-        setHydrateTick((t) => t + 1);
-        if (choice) setSessionId(choice);
-      }
-      // §6: the shim shows "may be out of date" while any session was kept.
-      (window.claude as any).remote?.reportHydrate?.({ seq: payload?.seq, kept });
-    });
-    // Remote access batch 2 (2026-09-10): where the phone's copy of the
-    // conversation stands — reconnecting, restoring, incomplete, complete. Only
-    // a remote client ever receives it; ChatView renders the strip (preload
-    // declares it and never fires).
+    // The dev workbench only (workbench/seed-chat.ts): fixture timelines built through the real reducer, handed in whole. No real bridge
+    // declares it.
+    const seedChatOff = (window.claude.on as any).seedChat?.((payload: any) => { dispatch({ type: 'CHAT_STATE_SEEDED', sessions: payload }); });
+    // Where the phone's copy of the conversation stands — reconnecting, restoring, incomplete, complete. Only a remote client ever
+    // receives it; ChatView renders the strip (preload declares it and never fires).
     const conversationStatusOff = (window.claude as any).on.remoteConversationStatus?.((s: { phase: ConversationStatus }) => {
       setConversationStatus(s?.phase);
-      // A restore is starting (connect, reconnect or Refresh): the place is decided again
-      // when its hydrate lands, so nothing jumps the phone meanwhile.
-      if (s?.phase === 'restoring') placeDecidedRef.current = false;
-      // A restore that ended WITHOUT a hydrate — a refused Refresh, a host restore that
-      // failed, a copy that never came (T4 review, 1): decide the place with what the phone
-      // has, so it is never left with nothing selected and no history loading.
-      if ((s?.phase === 'incomplete' || s?.phase === 'complete') && isRemoteMode() && !placeDecidedRef.current) {
-        placeDecidedRef.current = true;
-        setHydrateTick((t) => t + 1);
-        const choice = choosePlaceOnHydrate({
-          stored: focusedSessionIdRef.current ?? readRemotePlace(remotePlaceStorages(), remotePlaceHost()),
-          existingSessionIds: [...chatStore.getState().keys()],
-          focusSessionId: null,
-        });
-        if (choice) setSessionId((prev) => prev ?? choice);
-      }
     });
 
     // Artifact tracker: when Claude writes/edits a file inside the active project
@@ -2038,7 +1638,7 @@ function AppInner() {
       onSessionArtifacts: (sessionId, artifacts) =>
         dispatchArtifact({ type: 'SESSION_ARTIFACTS_LOADED', sessionId, artifacts: artifacts as any }),
     });
-    const artifactToolUseHandler = (window.claude.on as any).transcriptEvent?.((event: any) => {
+    const artifactToolUseHandler = window.claude.on.transcriptEvent?.((event) => {
       artifactTracker.handle(event);
     });
 
@@ -2064,7 +1664,7 @@ function AppInner() {
         );
       },
     });
-    const deliverableAutoOpenHandler = (window.claude.on as any).transcriptEvent?.((event: any) => {
+    const deliverableAutoOpenHandler = window.claude.on.transcriptEvent?.((event) => {
       deliverableAutoOpen.handle(event);
     });
 
@@ -2088,14 +1688,15 @@ function AppInner() {
       window.claude.off('session:renamed', renamedHandler);
       if (movedHandler) window.claude.off('session:moved', movedHandler);
       window.claude.off('status:data', statusHandler);
-      if (transcriptHandler) window.claude.off('transcript:event', transcriptHandler);
+      transcriptOff();
       if (shrinkHandler) window.claude.off('transcript:shrink', shrinkHandler);
+      liveOff();
       if (uiActionHandler) window.claude.off('ui:action:received', uiActionHandler);
       if (promptShowHandler) window.claude.off('prompt:show', promptShowHandler);
       if (promptDismissHandler) window.claude.off('prompt:dismiss', promptDismissHandler);
       if (promptCompleteHandler) window.claude.off('prompt:complete', promptCompleteHandler);
       if (sessionPermissionModeHandler) window.claude.off('session:permission-mode', sessionPermissionModeHandler);
-      if (chatHydrateHandler) window.claude.off('chat:hydrate', chatHydrateHandler);
+      if (typeof seedChatOff === 'function') seedChatOff();
       if (typeof hookReplayCompleteOff === 'function') hookReplayCompleteOff();
       if (typeof conversationStatusOff === 'function') conversationStatusOff();
       if (artifactToolUseHandler) window.claude.off('transcript:event', artifactToolUseHandler);
@@ -2105,42 +1706,8 @@ function AppInner() {
     };
   }, [dispatch]);
 
-  // Desktop permission-mode detection, scoped per-session. Watches for Claude
-  // Code's in-terminal mode indicator strings ("bypass permissions on", etc.)
-  // and updates the HeaderBar badge. Previously a single global pty:output
-  // listener handled this, forcing every PTY chunk to be dual-broadcast.
-  // Subscribing per-session halves steady-state IPC traffic.
-  //
-  // Android doesn't forward raw PTY bytes — it emits 'session:permission-mode'
-  // instead (handled in the big effect above), so this effect is effectively
-  // desktop-only. On Android the ptyOutputForSession call is still safe but
-  // will never deliver data matching the mode strings.
-  //
-  // Perf (2026-09-23): subscriptions are kept per session id in a ref and
-  // DIFFED when the list changes (only added/removed sessions touch IPC), and
-  // each chunk is ruled out by one case-insensitive regex before any
-  // lower-cased copy is made — see state/permission-mode-scan.ts.
-  const permissionModeSubsRef = useRef<Map<string, () => void>>(new Map());
-  useEffect(() => {
-    const claudeOn = (window.claude.on as any);
-    if (typeof claudeOn.ptyOutputForSession !== 'function') return;
-    syncKeyedSubscriptions(permissionModeSubsRef.current, sessions.map((s) => s.id), (sid) =>
-      claudeOn.ptyOutputForSession(sid, (data: string) => {
-        const mode = detectPermissionMode(data);
-        if (mode) {
-          setPermissionModes((prev) => {
-            if (prev.get(sid) === mode) return prev;
-            return new Map(prev).set(sid, mode);
-          });
-        }
-      }));
-  }, [sessions]);
-  // Unmount only: drop every remaining per-session listener. Kept separate so
-  // a session-list change never tears down the listeners of sessions that stay.
-  useEffect(() => {
-    const subs = permissionModeSubsRef.current;
-    return () => clearKeyedSubscriptions(subs);
-  }, []);
+  // The permission mode of a Claude Code session is read off its terminal ONCE, in the computer's main process, and pushed to every screen
+  // (`session:permission-mode`, handled above); each screen used to scan its own copy of every session's terminal bytes here (one-core R5-4a).
 
   // Fetch session list on mount — catches sessions that existed before event handlers were registered
   // (e.g., remote browser reconnecting after the replay buffer events already fired, or a renderer
@@ -2152,7 +1719,55 @@ function AppInner() {
   // claudeSessionId/projectSlug are the fallback locator for a session the
   // transcript watcher does not know yet (a just-resumed CC session) — see
   // TranscriptPageRequest.
+  // Remote access batch 2 (§3): where a remote client opens — its stored place if that conversation still exists, else what the computer is
+  // showing, else the first. Decided once, when the computer's session list arrives (it used to wait for the snapshot).
+  const decideRemotePlace = (ids: string[]): string | null => {
+    const choice = choosePlaceOnHydrate({
+      // The conversation on screen first (T4 review, 6): one picked while the list was loading, or any place in a browser that blocks
+      // storage, must not be undone by this decision.
+      stored: focusedSessionIdRef.current ?? readRemotePlace(remotePlaceStorages(), remotePlaceHost()),
+      existingSessionIds: ids,
+      focusSessionId: (window.claude as any).remote?.focus?.() ?? null,
+    });
+    placeDecidedRef.current = true;
+    return choice;
+  };
+
+  // A round of fills ended (a connect, a reconnect or a Refresh): tell the shim how many conversations could not be filled, so the strip
+  // can say they may be behind (and offer Refresh). A no-op on the desktop.
+  const reportFillRound = useCallback((outcomes: string[]) => {
+    (window.claude as any).remote?.reportFill?.({ failed: outcomes.filter((o) => o !== 'ok').length });
+  }, []);
+
   const loadFirstPage = useCallback((sid: string, hint?: PageHint) => firstPages.load(sid, hint), [firstPages]);
+
+  // Which conversations a phone watches (one-core R5-3): the one on screen plus a few it looked at lately. Inert on the computer's own
+  // windows, which own what they show. Placed here (not with the other phone state) because it needs the first-page loader.
+  const remoteWatch = useRemoteWatch({ enabled: isRemoteMode(), activeId: sessionId, sessionIds: useMemo(() => sessions.map((x: any) => x.id), [sessions]), loader: firstPages });
+  // Read through a ref by the handlers below that must not re-register every time the watch set changes.
+  const remoteWatchRef = useRef(remoteWatch);
+  remoteWatchRef.current = remoteWatch;
+
+  // Fill every conversation this screen holds AGAIN (one-core R5-2). After a reconnect it sends where it got to, and the computer answers with
+  // exactly the events it missed — or a fresh page when the record changed or the gap is older than it keeps; Refresh always takes a fresh
+  // page. Either way the shim is told how it went, so the strip says "up to date" or "may be behind".
+  const fillAgain = useCallback((fresh: boolean) => {
+    // WHY only what is watched on a phone (one-core R5-3): refilling opens (watches) the conversation, and a phone must not start
+    // receiving all of them again just because the connection came back. The rest keep their position and catch up when next opened.
+    const watched = remoteWatch.watchedIds();
+    const ids = (watched ?? sessionsRef.current.map((x: any) => x.id)).filter((id: string) => !String(id).startsWith('pending-handoff:'));
+    // R6-2: changes whose answer was lost are settled against what the fills just put on the screen.
+    void Promise.all(ids.map((id: string) => firstPages.refill(id, { fresh }))).then((outcomes) => { reportFillRound(outcomes); void reconcilePending(); });
+  }, [firstPages, reportFillRound, remoteWatch]);
+  useOnRemoteReconnect(() => fillAgain(false)); useDropEndedSessionsOnReconnect(sessionsRef, movedSessionsRef, (id) => goneRef.current(id)); // sync-fix3
+  useSendReconcile(); // what became of a message sent as the connection dropped (one-core R5-4b)
+  // The computer says this window's fill of a conversation never completed (its hold expired): fill it again from a fresh page.
+  useEffect(() => (window.claude.session as any).onRefill?.((sid: string) => { void firstPages.refill(sid, { fresh: true }); }), [firstPages]);
+  useEffect(() => {
+    const onRefresh = () => fillAgain(true);
+    window.addEventListener(REMOTE_REFRESH_EVENT, onRefresh);
+    return () => window.removeEventListener(REMOTE_REFRESH_EVENT, onRefresh);
+  }, [fillAgain]);
 
   // Every session this window knows about gets its most recent page — not just
   // the paths that happen to create one. History used to arrive as a side effect
@@ -2168,8 +1783,9 @@ function AppInner() {
     firstPages.retainOnly(new Set(sessions.map((s) => s.id)));
     // WHY: session:created may precede the attempt's admitted reply. Its
     // unlocated first page must not consume the receiver's one locator read.
-    if (!pendingRef.current?.active) for (const s of sessions) if (!String(s.id).startsWith('pending-handoff:')) void loadFirstPage(s.id);
-  }, [sessions, loadFirstPage, firstPages, hydrateTick]);
+    // A phone fills only what it watches (useRemoteWatch fills the one on screen when it is chosen); every other conversation is not sent to it.
+    if (!pendingRef.current?.active && !isRemoteMode()) for (const s of sessions) if (!String(s.id).startsWith('pending-handoff:')) void loadFirstPage(s.id);
+  }, [sessions, loadFirstPage, firstPages]);
 
   useEffect(() => {
     window.claude.session.list().then((list: any[]) => {
@@ -2178,7 +1794,11 @@ function AppInner() {
       performance.mark('yc:sessions-listed');
       // Even an empty list is an answer: it is what tells the welcome screen it may decide.
       setSessionListLoaded(true);
-      if (!list || list.length === 0) return;
+      if (!list || list.length === 0) {
+        // A remote client with nothing to fill is done filling (and decides its place: there is none).
+        if (isRemoteMode()) { decideRemotePlace([]); reportFillRound([]); }
+        return;
+      }
 
       // Fix: this per-session seeding used to run INSIDE the setSessions updater
       // below. Updaters must be PURE — React re-invokes them (concurrent
@@ -2189,10 +1809,12 @@ function AppInner() {
       // after a reload. Every setter here is has()-guarded, so running it across
       // the whole list (rather than only the not-yet-known ones) is idempotent
       // and never clobbers what session:created already seeded.
+      const fills: Promise<string>[] = [];
       for (const s of list) {
         dispatch({ type: 'SESSION_INIT', sessionId: s.id });
-        // WHY toEnd: it streamed while no chat listened (reload/remount) — read to EOF or recent messages vanish.
-        void loadFirstPage(s.id, { toEnd: true });
+        // Fill it from the computer's record. (The old `toEnd` here — a renderer rebuilt while its sessions kept running must read to the
+        // end of the file — is what every fill does now.) A phone fills only the conversation it opens on, below (one-core R5-3).
+        if (!isRemoteMode()) fills.push(loadFirstPage(s.id));
         setViewModes((vm) => vm.has(s.id) ? vm : new Map(vm).set(s.id, 'chat'));
         setPermissionModes((pm) => pm.has(s.id) ? pm : new Map(pm).set(s.id, matchPermissionMode(s.permissionMode)));
         // These sessions were already running before this window's event
@@ -2211,7 +1833,15 @@ function AppInner() {
         if (newSessions.length === 0) return prev;
         return [...prev, ...newSessions];
       });
-      setSessionId((prev) => prev ?? (mayAutoSelect() ? list[0].id : null));
+      if (isRemoteMode()) {
+        const choice = decideRemotePlace(list.map((s: any) => s.id));
+        setSessionId((prev) => prev ?? choice);
+        // The place is decided: watch (= fill) that one conversation, and tell the strip how the round went when it is done. The rest are
+        // not sent to this phone until it opens them (one-core R5-3); their dots come from the computer's summary.
+        void Promise.all(choice ? [remoteWatchRef.current.watch(choice)] : []).then(reportFillRound);
+      } else {
+        setSessionId((prev) => prev ?? (mayAutoSelect() ? list[0].id : null));
+      }
       // Existing sessions that have STARTED skip the "Initializing" cover; one
       // still on its startup dialogs does not (SessionInfo.awaitingStart).
       setInitializedSessions((prev) => {
@@ -2220,21 +1850,9 @@ function AppInner() {
         return next;
       });
 
-      // Rehydrate each session's chat from disk. Fix: without this, a renderer
-      // reload (crash, Ctrl+R) left every pre-existing session with an EMPTY
-      // timeline — SESSION_INIT only allocates a blank slot, and no live
-      // transcript event ever re-sends history, so the conversation looked
-      // deleted. Every OTHER entry into an already-running session already
-      // replays (ownership handoff, native resume, buddy feed); the mount path
-      // was the one that didn't.
-      //
-      // Ordering: the transcript:event listener is registered by an effect
-      // declared ABOVE this one, so it is already attached when these replayed
-      // events stream back; uuid dedup absorbs any overlap with live events.
-      // History: requested in the loop above; the session-list effect covers every
-      // other entry point. Remote/Android hydrate via chat:hydrate on connect instead.
+      // History: filled above (and by the session-list effect for every other entry point) from the computer's record.
     }).catch(() => {});
-  }, [dispatch, loadFirstPage]);
+  }, [dispatch, loadFirstPage, reportFillRound]);
 
   // Multi-window ownership wiring (Phase 2 of detach feature).
   // Subscribes to directory/leader/ownership pushes from main and mutates
@@ -2306,18 +1924,14 @@ function AppInner() {
       // "Initializing" overlay, it would flash briefly before replay completes.
       if (!sessionInfo.awaitingStart) setInitializedSessions((prev) => (prev.has(sid) ? prev : new Set(prev).add(sid)));
       if (freshWindow) setSessionId(sid);
-      // Hydrate from ONE page, not a whole-transcript replay. Main knows this
-      // window INHERITED the session and serves its first page read to EOF
-      // (WindowRegistry.markInheritedByTransfer) — so the page is complete
-      // through the newest message, which the stop-at-startOffset page was not.
-      //
-      // Called here rather than left to the sessions effect below so the order
-      // is deterministic: this claims the first-page load first, and replayLiveState
-      // is chained AFTER the page resolves. That ordering is load-bearing —
-      // replayLiveState ends with the replay-complete marker, which reaps tool
-      // cards the history left 'running', and it must not run before the page
-      // that creates those cards has been applied.
-      void loadFirstPage(sid).then(() => det.replayLiveState?.(sid));
+      // Fill from the computer's record (one-core R5-2): the newest page read to the end of the file, the record's recent past (a native
+      // answer still streaming exists only in memory) and what only memory holds (an ask still waiting, a helper's run, the idle
+      // marker). This used to be a page read here plus a separate replayLiveState call chained after it, and a Claude Code session's
+      // open ask was not part of it at all. Main holds this window's pushes for the session until the answer is out, so the answer
+      // and the live stream never overlap or leave a gap.
+      // Always fill (never `load`, which does nothing for an id this window already loaded or gave up on): the host holds this window's
+      // pushes for the conversation from the transfer until the answer is out, so a window that does not ask would sit frozen.
+      void firstPages.refill(sid, { fresh: true });
     };
 
     const cleanupAcquired = det.onOwnershipAcquired?.(applyAcquired);
@@ -2374,7 +1988,7 @@ function AppInner() {
   useEffect(() => {
     const unsub = onConnectionModeChange((mode) => {
       // Flush all session state
-      // Batch 2 (§3): a new host means a new place, decided by its hydrate.
+      // Batch 2 (§3): a new host means a new place, decided when its session list arrives.
       placeDecidedRef.current = false;
       // Back on this device's own runtime there is no computer's copy to describe; a strip
       // left saying "reconnecting" would never clear (T4 review, 3).
@@ -2403,9 +2017,13 @@ function AppInner() {
           // A new computer's sessions: ask each native one for its real mode.
           if (s.provider === 'native') seedNativeMode(s.id, setNativePermissionModes);
         }
-        // Never over a place already on screen: this reply can land after the hydrate chose
-        // one (T4 review, 7).
-        setSessionId((prev) => prev ?? (mayAutoSelect() ? list[0].id : null));
+        // Never over a place already on screen: this reply can land after another decision chose one (T4 review, 7).
+        if (isRemoteMode()) {
+          const choice = decideRemotePlace(list.map((s: any) => s.id));
+          setSessionId((prev) => prev ?? choice);
+        } else {
+          setSessionId((prev) => prev ?? (mayAutoSelect() ? list[0].id : null));
+        }
         // Existing sessions that have started (not those still on startup dialogs)
         setInitializedSessions(new Set(startedIds(list)));
       }).catch(() => {});
@@ -2546,7 +2164,7 @@ function AppInner() {
   // cycling and the typed `/model <alias>` chat command both route through
   // this so the guarded PTY send, the optimistic pill update, and the
   // drift-verification handshake below stay in exactly ONE place.
-  const switchSessionModel = useCallback((sid: string, target: ModelAlias): 'sent' | 'blocked' | 'ineligible' => {
+  const switchSessionModel = useCallback((sid: string, target: ModelAlias, typed = false): 'sent' | 'blocked' | 'ineligible' => {
     // Native/shell sessions can't cycle CC aliases — see supportsAliasCycling
     // for the failure this prevents (a chip relabeled to a model the session
     // isn't running, plus a stray write to the global model preference).
@@ -2554,7 +2172,9 @@ function AppInner() {
     // Send first, guarded: while a prompt is pending, "/model …\r" would land
     // on CC's live Ink menu and answer it. Refusing BEFORE the optimistic
     // state writes also keeps the model pill truthful when nothing was sent.
-    if (!guardedPtySend(sid, `/model ${target}\r`)) return 'blocked';
+    // `typed`: a /model command typed in the chat (not the picker or Shift+Space, which write the same bytes) tells the computer so, and the
+    // computer draws its "Model switched to ..." divider on every screen (one-core R5-4a).
+    if (!guardedPtySend(sid, `/model ${target}\r`, typed ? 'model-switch' : undefined)) return 'blocked';
     rememberSessionModel(sid, target);
     setPendingModel(target);
     // Fix: don't verify against in-flight events from the current turn —
@@ -2584,7 +2204,7 @@ function AppInner() {
   // is Claude-Code-local and produces no turn to end the "thinking" spinner).
   const handleModelSwitchCommand = useCallback((alias: ModelAlias): 'sent' | 'blocked' | 'ineligible' => {
     if (!sessionId) return 'ineligible';
-    return switchSessionModel(sessionId, alias);
+    return switchSessionModel(sessionId, alias, true);
   }, [sessionId, switchSessionModel]);
 
   useEffect(() => {
@@ -2610,7 +2230,7 @@ function AppInner() {
   useEffect(() => {
     if (!pendingModel) return;
 
-    const handler = (window.claude.on as any).transcriptEvent?.((event: any) => {
+    const handler = window.claude.on.transcriptEvent?.((event) => {
       if (!event || event.sessionId !== sessionId) return;
 
       // A user-message after the switch means the next assistant response
@@ -2624,7 +2244,7 @@ function AppInner() {
       // Skip events from the turn that was already in-flight when we switched
       if (!postSwitchTurnReady.current) return;
 
-      const actualModel = event.data.model as string;
+      const actualModel = event.data.model;
       // Fix: a `<synthetic>` turn is CC talking, not a model — "You've hit your
       // session limit", "You're out of usage credits", "Please run /login". It
       // carries no evidence about which model the switch landed on, so
@@ -3004,6 +2624,14 @@ function AppInner() {
     dispatchArtifact({ type: 'SESSION_REMOVED', sessionId: id });
     clearMoved(id);
   }, [dispatch, dispatchArtifact, clearMoved]);
+  // A conversation that ended while this screen was away: shown the way an ended one is (its pill goes away), never as "may be behind".
+  useEffect(() => { goneRef.current = removeSessionLocally; }, [removeSessionLocally]);
+  // R6-2: a phone's instant Close and mode chip; the computer's own window takes the old direct paths.
+  const refillQuiet = useCallback((sid: string) => firstPages.refill(sid, { fresh: false }), [firstPages]);
+  const { stripSessions, modePending, closeNow, cycleNativeNow, cycleClaudeNow } = usePhoneSessionActions({
+    sessionId, sessions, setSessionId, removeSessionLocally, permissionModes, nativePermissionModes, setPermissionModes, setNativePermissionModes,
+    validNativeModes: VALID_NATIVE_MODES, refill: refillQuiet,
+  });
   useEffect(() => {
     // WHY: a remote reconnect has a NEW owner; the server already canceled
     // the old connection's attempt. Do not offer a retry with its stale ID.
@@ -3034,7 +2662,7 @@ function AppInner() {
       claudeSessionId,
       askTakeover,
       onHandoff: async () => {
-        if (getPlatform() === 'android' && !isRemoteMode()) {
+        if (!getCapabilities().liveHandoff) { // R4-1: capability (false only on the Android app's own runtime), was a two-flag guess
           setToast('Live handoff is available from a computer or a remote connection to one.');
           return;
         }
@@ -3369,6 +2997,7 @@ function AppInner() {
     const idx = cycle.indexOf(currentNativeMode as NativePermissionMode);
     const next = cycle[(idx + 1) % cycle.length];
     const apply = async () => {
+    if (cycleNativeNow(sessionId, currentNativeMode, next)) return;   // R6-2: a phone draws the new mode at once (hooks/usePhoneSessionActions.ts)
     try {
       const applied = await window.claude.native.setPermissionMode(sessionId, next);
       // Validate before storing: the normal path returns a bare mode string, but
@@ -3390,7 +3019,7 @@ function AppInner() {
     // Cycling INTO Full auto is switching it on: the first time, the warning.
     if (next === 'full-auto') { gateFullAuto(() => { void apply(); }); return; }
     await apply();
-  }, [sessionId, currentNativeMode, gateFullAuto]);
+  }, [sessionId, currentNativeMode, gateFullAuto, cycleNativeNow]);
 
   // Shift+Tab cycles permission mode in chat view
   // (In terminal view, the raw escape code reaches the PTY directly)
@@ -3430,6 +3059,7 @@ function AppInner() {
     const idx = cycle.indexOf(currentPermissionMode as PermissionMode);
     const next = cycle[(idx + 1) % cycle.length];
     const apply = () => {
+      if (cycleClaudeNow(sessionId, currentPermissionMode, next)) return;
       setPermissionModes((prev) => new Map(prev).set(sessionId, next));
       // Send Shift+Tab to the PTY to cycle Claude Code's permission mode
       window.claude.session.sendInput(sessionId, '\x1b[Z');
@@ -3438,7 +3068,7 @@ function AppInner() {
     // same warning the form's toggle shows.
     if (next === 'bypass') { gateSkip(apply); return; }
     apply();
-  }, [sessionId, canBypass, currentPermissionMode, currentModel, gateSkip, showBlockedSend]);
+  }, [sessionId, canBypass, currentPermissionMode, currentModel, gateSkip, cycleClaudeNow, showBlockedSend]);
   cyclePermissionRef.current = cyclePermission;
 
   useEffect(() => {
@@ -3518,8 +3148,8 @@ function AppInner() {
   const welcomeBackAsked = useRef(false);
   useEffect(() => {
     if (welcomeBackAsked.current || isFirstRun !== false || !sessionListLoaded || remoteCatchingUp) return;
-    if (!(myWindowId != null && leaderWindowId !== -1) && !isRemoteMode() && !isAndroid()) return; // leader not yet known
-    if (isRemoteMode() || isAndroid() || !isLeader) { welcomeBackAsked.current = true; return; }
+    if (!(myWindowId != null && leaderWindowId !== -1) && getCapabilities().nativeWindows) return; // leader not yet known
+    if (!getCapabilities().nativeWindows || !isLeader) { welcomeBackAsked.current = true; return; } // R4-1: only a screen with its own windows has a leader window
     welcomeBackAsked.current = true;
     if (sessions.length > 0) return;
     let alive = true;
@@ -3648,7 +3278,7 @@ function AppInner() {
   }, [isFirstRun, tourOpen, sessions.length, hasResumable]);
   useEffect(() => {
     if (isFirstRun !== false) return;
-    if (bumpCounter('launches') === 3 && getPlatform() === 'electron') triggerTip('floater');
+    if (bumpCounter('launches') === 3 && getCapabilities().buddy) triggerTip('floater'); // R4-1: the tip is about the buddy, so it asks `buddy`
   }, [isFirstRun]);
   useEffect(() => {
     if (!settingsOpen || tourOpen) return;
@@ -3710,6 +3340,9 @@ function AppInner() {
     // discard a dirty editor draft — route the user-initiated switch through
     // the D3 guard. Programmatic switches (session died/closed) stay unguarded.
     guardDirtyEditor(() => {
+      // A phone starts watching the conversation BEFORE it is drawn (one-core R5-3): the loading state is up in the same frame as the
+      // switch, so a conversation it has never opened never shows as empty. A no-op for one it already watches, and on the computer.
+      void remoteWatchRef.current.watch(id);
       setSessionId(id);
       // Notify Android/remote bridge so the native terminal view switches too
       (window as any).claude?.session?.switch?.(id);
@@ -3725,12 +3358,12 @@ function AppInner() {
     // command keyed only by session id — it works the same for a peer window's
     // session as it does for a local one, no ownership check.
     if (localStorage.getItem(CLOSE_PROMPT_SUPPRESS_KEY) === '1') {
-      try { window.claude.session.destroy(id); } catch {}
+      closeNow(id, name);
     } else {
       setClosePromptName(name);
       setClosePromptFor(id);
     }
-  }, [removeSessionLocally]);
+  }, [removeSessionLocally, closeNow]);
   const handleReorderSessions = useCallback((fromIndex: number, toIndex: number) => {
     setSessions(prev => {
       const next = [...prev];
@@ -3781,7 +3414,6 @@ function AppInner() {
     <div className={`app-shell flex w-screen h-full text-fg ${getPlatform() === 'android' && currentViewMode === 'terminal' ? '' : 'bg-canvas'}`}>
       {/* Mount-only: listens for chat:export-snapshot from main, serializes
           ChatState, and sends the snapshot back for remote-browser hydration. */}
-      <RemoteSnapshotExporter />
       {/* Mount-only: announces channels the remote WS server doesn't bridge
           yet, so a remote browser gets "X isn't available via remote access
           yet" instead of a silently empty panel. No-op on desktop. */}
@@ -3839,7 +3471,7 @@ function AppInner() {
             <div className={`chrome-glass${(activeDrawerOpen || gameState.panelOpen) ? ' chrome-glass--drawer-open' : ''}`} />
             <div ref={headerRef} className="chrome-wrapper bg-canvas">
               <HeaderBar
-                sessions={sessions}
+                sessions={stripSessions}
                 activeSessionId={sessionId}
                 onSelectSession={handleSelectSession}
                 onCreateSession={createSession}
@@ -3923,6 +3555,7 @@ function AppInner() {
                       onSendQueuedNow={handleSendQueuedNow}
                       conversationStatus={conversationStatus}
                       onRefreshConversation={handleRefreshConversation}
+                      filling={remoteWatch.isFilling(s.id)}
                       modelLoadingDemo={s.id === sessionId && new URLSearchParams(location.search).get('mode') === 'workbench' && new URLSearchParams(location.search).get('modelLoading') === '1'}
                     />
                   </ErrorBoundary>}
@@ -4042,6 +3675,7 @@ function AppInner() {
                   provider={isNativeSession ? 'native' : 'claude'}
                   permissionMode={isPendingTab ? undefined : isNativeSession ? currentNativeMode : currentPermissionMode}
                   onCyclePermission={isNativeSession ? cycleNativePermission : cyclePermission}
+                  permissionPending={!!sessionId && modePending.has(`mode:${sessionId}`)}
                   fast={fastMode}
                   effort={effortLevel}
                   onOpenModelPicker={openModelPicker}
@@ -4498,7 +4132,7 @@ function AppInner() {
             try { Promise.resolve((window as any).claude.session.setTag(id, tagId, false)).catch(() => {}); } catch {}
           }
           if (result.noteChanged) { try { Promise.resolve((window as any).claude.session.setNote(id, result.note)).catch(() => {}); } catch {} }
-          try { window.claude.session.destroy(id); } catch {}
+          closeNow(id, closePromptName ?? sessions.find((s) => s.id === id)?.name);
           setClosePromptFor(null);
           setClosePromptName(undefined);
         }}

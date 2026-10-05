@@ -11,7 +11,7 @@ import { registerTerminal, unregisterTerminal, notifyBufferReady, noteAtlasClear
 import { createTerminalKeyHandler } from './terminal-key-handler';
 import { attachRenderPause, type RenderPause } from './xterm-render-pause';
 import { useTheme } from '../state/theme-context';
-import { isAndroid, isRemoteMode, isTouchDevice } from '../platform';
+import { getCapabilities, isTouchDevice } from '../platform';
 import { isWorkbenchMode, workbenchTerminalBacking, TERMINAL_BACKING_STYLE } from '../workbench-mode';
 import { computeTerminalSurface } from '../themes/theme-engine';
 import { ScreenMark } from '../shoot-mode';
@@ -601,7 +601,9 @@ function TerminalView({ sessionId, visible }: Props) {
   // a desktop host, which never emits raw bytes, so keying on either would wait for
   // a stream that never comes and draw a blank terminal.
   // Both hooks are called every render; only their argument depends on this.
-  const useRawBytes = isAndroid() && !isRemoteMode();
+  // WHY a capability read (one-core R4-1): the host says which stream it sends this screen (shared/capabilities.ts), so
+  // the old two-flag guess ("Android and not paired") is gone. Android's own runtime says 'raw-bytes'; a computer says 'text'.
+  const useRawBytes = getCapabilities().terminalTransport === 'raw-bytes';
   // Remote access batch 2 (§7): the host could not continue this terminal from
   // where the phone left off (a host restart, or a session destroyed and
   // recreated), so it says "start over" and then sends the whole buffer. Clear

@@ -26,7 +26,7 @@ export interface BuddyTrayHandle {
 }
 
 // The active theme's tray pictures (file paths), or null for the app's own. Set by the theme icon
-// swap (ipc-handlers WINDOW_SET_ICON) and read by every tray, including one created later — the
+// swap (theme-icon-swap.ts, via the window:set-icon entry in ipc/window.ts) and read by every tray, including one created later — the
 // buddy can switch to its taskbar style long after the theme was applied.
 let themeTray: { idle: string; alert?: string } | null = null;
 const liveTrays = new Set<() => void>();

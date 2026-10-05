@@ -49,7 +49,7 @@ const PLAN: EvalPlan = {
 const META: ReportMeta = { startedISO: '2026-08-12T14:03:22.941Z', buildSha: 'abc1234' };
 
 function toolUse(name: string): TranscriptEvent {
-  return { type: 'tool-use', sessionId: 's', uuid: `u-${name}`, timestamp: 0, data: { toolName: name, toolInput: {} } };
+  return { type: 'tool-use', sessionId: 's', uuid: `u-${name}`, timestamp: 0, data: { toolUseId: `t-${name}`, toolName: name, toolInput: {} } };
 }
 
 function makeRun(over: Partial<CaseRun> = {}): CaseRun {

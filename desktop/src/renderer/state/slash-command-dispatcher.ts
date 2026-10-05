@@ -19,6 +19,10 @@ import type { ChatAction, TimelineEntry, UsageSnapshot, SessionChatState } from 
 import { buildCopyPayload } from '../utils/extract-copy-blocks';
 import { copyText } from '../components/context-menu/clipboard';
 import { claudeAliasForModelId, CLAUDE_ALIAS_LABELS, type ClaudeAlias } from '../../shared/model-ids';
+import { getCapabilities } from '../platform';
+
+/** The host keeps a record and draws the shared lines itself (one-core R5-4a): this screen must not draw them as well. */
+const hostDraws = (): boolean => getCapabilities().sessionRecord;
 
 export type ViewMode = 'chat' | 'terminal';
 
@@ -155,7 +159,10 @@ export function dispatchSlashCommand(input: DispatcherInput): DispatcherResult {
       // Snapshot current context tokens so COMPACTION_COMPLETE can show a diff.
       // null is fine — marker falls back to "Conversation compacted" with no number.
       const snapshot = input.callbacks.getUsageSnapshot?.(input.sessionId) ?? null;
-      input.dispatch({
+      // WHY not here when the host keeps a record (one-core R5-4a): the computer says a compaction began (it sees the /compact written to the terminal,
+      // or the native host starts one) and EVERY screen draws the spinner from that, so the screen you did not type it on shows it too and nothing is drawn twice.
+      // Only the Android app's own runtime, which has no such record, still draws it from here.
+      if (!hostDraws()) input.dispatch({
         type: 'COMPACTION_PENDING',
         sessionId: input.sessionId,
         cardId: `compact-${Date.now()}`,
@@ -186,7 +193,8 @@ export function dispatchSlashCommand(input: DispatcherInput): DispatcherResult {
       }
       // See deferUiEffectsToRuntime: for a runtime-driven session the clear is
       // applied when the durable barrier echoes back, not before.
-      if (!input.deferUiEffectsToRuntime) {
+      // A Claude Code /clear is drawn from the computer's record too (its SessionStart hook says `clear`), for the same reason as /compact above.
+      if (!input.deferUiEffectsToRuntime && !hostDraws()) {
         input.dispatch({
           type: 'CLEAR_TIMELINE',
           sessionId: input.sessionId,
@@ -230,7 +238,8 @@ export function dispatchSlashCommand(input: DispatcherInput): DispatcherResult {
         if (alias && input.callbacks.onModelSwitchCommand) {
           const result = input.callbacks.onModelSwitchCommand(alias);
           if (result === 'sent') {
-            if (input.sessionId) {
+            // The divider is drawn from the computer's record (the typed command carries `notice`), so it shows on every screen exactly once.
+            if (input.sessionId && !hostDraws()) {
               input.dispatch({
                 type: 'MODEL_SWITCH_MARKER',
                 sessionId: input.sessionId,

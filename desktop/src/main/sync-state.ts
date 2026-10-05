@@ -31,6 +31,7 @@ import { getLastSyncByDevice, getSelfLastSyncEpochMs, isSyncSpacesSyncing } from
 // two read paths can't drift on the ms→wire-seconds conversion or the
 // sync-spaces-vs-legacy-marker precedence rule.
 import { deriveSelfLastSyncEpochSec } from './sync-spaces/self-sync-status';
+import { atomicWrite } from './atomic-write';
 
 // --- SyncService delegation ---
 // When the SyncService is running, forceSync() delegates to it instead
@@ -228,22 +229,7 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
-// WHY a per-call counter on top of the pid: `.tmp.<pid>` alone is the SAME name
-// for every write in this process, so two overlapping atomicWrites to one target
-// (the 60s health check's writeWarnings racing a push-failure warning write, or
-// an in-flight check leaking across tests) both write the same tmp path — the
-// first rename moves it away and the second rename throws ENOENT. This was the
-// cross-OS CI flake in sync-service.test.ts (self-clear section). pid keeps the dev
-// instance and the built app apart; the counter keeps calls apart.
-let atomicWriteSeq = 0;
-
-/** Atomic write via temp file + rename (same directory to ensure same filesystem). */
-async function atomicWrite(target: string, content: string): Promise<void> {
-  const tmpPath = `${target}.tmp.${process.pid}.${atomicWriteSeq++}`;
-  await fs.promises.mkdir(path.dirname(target), { recursive: true });
-  await fs.promises.writeFile(tmpPath, content, 'utf8');
-  await fs.promises.rename(tmpPath, target);
-}
+// WHY (2026-09-30 one-core R3-7): atomicWrite moved to main/atomic-write.ts so the model preference reuses it.
 
 // --- Config Migration: V1 (flat keys) → V2 (storage_backends array) ---
 

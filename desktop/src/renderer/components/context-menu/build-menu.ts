@@ -1,4 +1,4 @@
-import { isAndroid, isRemoteMode } from '../../platform';
+import { getCapabilities } from '../../platform';
 import { copyText, readText } from './clipboard';
 import { editorViewFor } from '../artifact-views/cm/editor-registry';
 import type { MenuIconName } from './menu-icons';
@@ -41,9 +41,8 @@ export type MenuEntry =
 
 const isMac = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform);
 const mod = (key: string) => (isMac ? `⌘${key}` : `Ctrl+${key}`);
-// Reveal-in-folder / open-in-OS only do anything on the Electron desktop; on
-// Android and remote-browser the shell IPC is a no-op, so we hide those items.
-const isDesktop = () => !isAndroid() && !isRemoteMode();
+// Reveal-in-folder / open-in-OS only do anything where the screen says `openInOs` (the computer's own window); on
+// Android and a remote screen the shell IPC is a no-op, so those items stay hidden. (R4-1: was a local `isDesktop`.)
 
 // window.claude is the shared IPC surface (preload on desktop, remote-shim on
 // Android/remote). Typed loosely here to avoid coupling to the ambient global.
@@ -271,7 +270,7 @@ function filePillMenu(el: HTMLElement): MenuEntry[] {
   const abs = el.getAttribute('data-file-path') || '';
   const name = baseName(abs);
   const entries: MenuEntry[] = [];
-  if (isDesktop()) {
+  if (getCapabilities().openInOs) {
     entries.push(
       { type: 'item', id: 'open-file', label: 'Open file', icon: 'open', primary: true, run: () => shell()?.openPath(abs) },
       { type: 'item', id: 'reveal', label: 'View in folder', icon: 'folder', run: () => shell()?.showItemInFolder(abs) },

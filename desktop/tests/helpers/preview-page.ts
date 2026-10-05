@@ -3,12 +3,12 @@
 // becomes a user message, so a test can find it on screen.
 import { previewSessionKey } from '../../src/shared/chatsearch-refs';
 import type { TranscriptEvent } from '../../src/shared/types';
+import { ev } from './transcript-events';
 
 export function previewPage(id: string, texts: string[], hasMore = false) {
   const sessionId = previewSessionKey(id);
-  const events = texts.map((text, i) => ({
-    type: 'user-message', sessionId, uuid: `${id}-u${i}`, timestamp: i + 1, data: { text },
-  })) as TranscriptEvent[];
+  const events: TranscriptEvent[] = texts.map((text, i) =>
+    ev('user-message', { text }, { sessionId, uuid: `${id}-u${i}`, timestamp: i + 1 }));
   return {
     ok: true as const,
     events,

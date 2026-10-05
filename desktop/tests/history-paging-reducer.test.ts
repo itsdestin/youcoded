@@ -1,4 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { NativeHome } from '../src/main/native-home';
+import { SessionStore, type NativeSessionHeader } from '../src/main/harness/session-store';
+import { readTranscriptPage } from '../src/main/transcript-page';
 import { chatReducer } from '../src/renderer/state/chat-reducer';
 import { createSessionChatState, serializeChatState, deserializeChatState } from '../src/renderer/state/chat-types';
 import type { ChatState } from '../src/renderer/state/chat-types';
@@ -47,7 +53,7 @@ describe('history paging reducer', () => {
     };
     let st = withSession('s');
     st = chatReducer(st, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: 's', uuid: 'live-use',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: 's', uuid: 'live-use',
       toolUseId: 'live', toolName: 'Bash', toolInput: { command: 'sleep 10' },
     });
     st = chatReducer(st, {
@@ -72,7 +78,7 @@ describe('history paging reducer', () => {
     let st = withSession('s');
     st = chatReducer(st, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: 's', uuid: 'u1', text: 'run it', timestamp: 1 } as any);
     st = chatReducer(st, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: 's', uuid: 'use-1',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: 's', uuid: 'use-1',
       toolUseId: 't1', toolName: 'Bash', toolInput: { command: 'sleep 10' },
     });
     st = chatReducer(st, {
@@ -189,7 +195,7 @@ describe('history paging reducer', () => {
     const turn = (uuid: string, out: number): TranscriptEvent => ({
       type: 'turn-complete', sessionId: 's', uuid, timestamp: 3,
       data: { stopReason: 'end_turn', usage: { inputTokens: 10, outputTokens: out, cacheReadTokens: 0, cacheCreationTokens: 0 } },
-    } as TranscriptEvent);
+    });
     st = chatReducer(st, {
       type: 'HISTORY_PAGE_LOADED', sessionId: 's',
       events: [userEvent('s', 'u1', 'hi'), asstEvent('s', 'a1', 'yo'), turn('t1', 40)],
@@ -250,5 +256,90 @@ describe('history paging reducer', () => {
     });
     expect(out.has('early')).toBe(true);
     expect(out.get('s')).toBe(st.get('s'));
+  });
+});
+
+// A retry's discarded part (`assistant-thinking` carrying `dropPart`) is a saved
+// marker. The live stream honours it; history pages used to skip it, so a reopened
+// conversation showed the discarded half-answer glued in front of the real one
+// (found 2026-10-01, one-core R5-0). These pin the page path to the live one.
+describe('history page honours saved dropPart markers', () => {
+  const text = (uuid: string, t: string, partId: string): TranscriptEvent =>
+    ({ type: 'assistant-text', sessionId: 's', uuid, timestamp: 2, data: { text: t, partId } });
+  const drop = (uuid: string, partIds: string[]): TranscriptEvent =>
+    ({ type: 'assistant-thinking', sessionId: 's', uuid, timestamp: 3, data: { dropPart: { partIds } } });
+  const done = (uuid: string): TranscriptEvent =>
+    ({ type: 'turn-complete', sessionId: 's', uuid, timestamp: 4, data: { stopReason: 'end_turn' } });
+  const load = (events: TranscriptEvent[], base: ChatState = withSession('s')) =>
+    chatReducer(base, { type: 'HISTORY_PAGE_LOADED', sessionId: 's', events, cursor: null, hasMore: false });
+  const texts = (st: ChatState) => [...st.get('s')!.assistantTurns.values()]
+    .flatMap((t) => t.segments.map((g) => (g.type === 'text' ? g.content : `<${g.type}>`)));
+
+  it('removes a part the same page already drew (marker follows the part it drops)', () => {
+    const st = load([userEvent('s', 'u1', 'hi'), text('a1', 'HALF-ANSWER', 'text-0'),
+      drop('d1', ['text-0']), text('a2', 'REPLACEMENT', 'text-0'), done('t1')]);
+    expect(texts(st)).toEqual(['REPLACEMENT']);
+  });
+
+  it('drops only the trailing run: an earlier finished step with the same part id survives', () => {
+    const tool: TranscriptEvent = { type: 'tool-use', sessionId: 's', uuid: 'tu', timestamp: 2,
+      data: { toolUseId: 't', toolName: 'Bash', toolInput: { command: 'ls' } } };
+    const st = load([userEvent('s', 'u1', 'hi'), text('a1', 'FINISHED', 'text-0'), tool,
+      text('a2', 'HALF-ANSWER', 'text-0'), drop('d1', ['text-0']), text('a3', 'REPLACEMENT', 'text-0'), done('t1')]);
+    expect(texts(st)).toEqual(['FINISHED', '<tool-group>', 'REPLACEMENT']);
+  });
+
+  it('a marker whose target is on an OLDER page (page cut mid-turn) is a harmless no-op', () => {
+    // Pages cut only at a user message, and a retry marker lives inside one turn, so
+    // this should not happen; the one exception is a single turn over the 2 MB page
+    // cap. The newer page then starts mid-turn with no open turn: the marker finds
+    // nothing to drop and must not throw or erase anything.
+    const st = load([drop('d1', ['text-0']), text('a2', 'REPLACEMENT', 'text-0'), done('t1')]);
+    expect(texts(st)).toEqual(['REPLACEMENT']);
+  });
+
+  it('replaying the same marker twice changes nothing the second time', () => {
+    const page = [userEvent('s', 'u1', 'hi'), text('a1', 'HALF-ANSWER', 'text-0'),
+      drop('d1', ['text-0']), text('a2', 'REPLACEMENT', 'text-0'), done('t1')];
+    const once = load(page);
+    // The same page again (uuids already seen) and a second raw drop must both leave it alone.
+    const twice = chatReducer(load(page, once), { type: 'NATIVE_PARTS_DROPPED', sessionId: 's', partIds: ['text-0'] });
+    expect(texts(once)).toEqual(['REPLACEMENT']);
+    expect(texts(twice)).toContain('REPLACEMENT');
+    expect(JSON.stringify(texts(twice))).not.toContain('HALF-ANSWER');
+  });
+
+  it('an older page carrying a marker leaves a live open turn untouched', () => {
+    let live = withSession('s');
+    live = chatReducer(live, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: 's', uuid: 'lu', text: 'now', timestamp: 9 } as any);
+    live = chatReducer(live, { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: 's', uuid: 'la', text: 'LIVE-PARTIAL', timestamp: 9, partId: 'text-0' } as any);
+    const st = load([userEvent('s', 'u1', 'hi'), text('a1', 'HALF-ANSWER', 'text-0'),
+      drop('d1', ['text-0']), text('a2', 'REPLACEMENT', 'text-0'), done('t1')], live);
+    expect(texts(st)).toContain('LIVE-PARTIAL');
+    expect(texts(st)).toContain('REPLACEMENT');
+    expect(JSON.stringify(texts(st))).not.toContain('HALF-ANSWER');
+  });
+
+  describe('end to end from the saved file', () => {
+    let root = '';
+    afterEach(() => { if (root) fs.rmSync(root, { recursive: true, force: true }); });
+
+    it('a reopened conversation does not show the discarded half-answer', async () => {
+      root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-dropdisk-'));
+      const store = new SessionStore(new NativeHome(root));
+      const header: NativeSessionHeader = { v: 1, sessionId: 's', harnessId: 'chat',
+        binding: { providerId: 'openrouter', modelId: 'm' }, cwd: root, createdAt: 1 };
+      await store.create(header);
+      for (const e of [userEvent('s', 'u1', 'hi'), text('a1', 'HALF-ANSWER-TO-BE-DISCARDED', 'text-0'),
+        // a reasoning part forces the half-answer onto disk before the marker arrives
+        { type: 'assistant-thinking', sessionId: 's', uuid: 'r1', timestamp: 2, data: { text: 'hmm', partId: 'reasoning-0' } } as TranscriptEvent,
+        drop('d1', ['text-0', 'reasoning-0']), text('a2', 'REPLACEMENT', 'text-0'), done('t1')]) {
+        await store.append(root, e);
+      }
+      const page = await readTranscriptPage({ jsonlPath: store.transcriptPath('s', root), sessionId: 's', endOffset: null, format: 'native' });
+      const st = load(page.events);
+      expect(JSON.stringify(texts(st))).not.toContain('HALF-ANSWER');
+      expect(texts(st)).toEqual(['REPLACEMENT']);
+    });
   });
 });

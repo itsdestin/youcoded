@@ -50,13 +50,15 @@ export interface ResolvedPageSource extends RememberedPageSource {
   startOffset: number;
 }
 
-/** Reconcile native history only when idle and not inherited. Older pages may
+/** Reconcile native history only when the session is idle. Older pages may
  * also contain newly inserted specialist events, so a cursor alone cannot prove
- * their unfinished tools have stopped. */
+ * their unfinished tools have stopped. (The "not inherited" half of this rule went with the
+ * inherited-by-transfer mark, one-core R5-2: a screen that opens a session now always
+ * reads to the end of the file and is told by the replay-complete marker as well.) */
 export function shouldReconcileNativePage(opts: {
-  nativeIdle: boolean; inherited: boolean; olderPage: boolean;
+  nativeIdle: boolean; olderPage: boolean;
 }): boolean {
-  return !opts.inherited && opts.nativeIdle;
+  return opts.nativeIdle;
 }
 
 /** Capture the file boundary BEFORE spawning `claude --resume`. A later page

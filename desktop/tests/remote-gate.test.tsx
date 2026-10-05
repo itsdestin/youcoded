@@ -132,6 +132,23 @@ describe('RemoteGate', () => {
     expect(screen.getByText('This computer no longer accepts this device. Enter the password to connect again.')).toBeTruthy();
   });
 
+  it('a page older than its computer says so and offers Refresh, which reloads', async () => {
+    const f = fakeShim({ savedKey: true });
+    await mount(f);
+    f.setState('connected');
+    const reload = vi.fn();
+    const orig = window.location;
+    Object.defineProperty(window, 'location', { configurable: true, value: { ...orig, reload } });
+    try {
+      f.refuseCredential('unsupported-version');
+      expect(screen.getByText("This page is older than your computer's YouCoded. Refresh to update.")).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+      expect(reload).toHaveBeenCalledTimes(1);
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: orig });
+    }
+  });
+
   it('"Try now" shows it is trying, and the password stays one tap away', async () => {
     const f = fakeShim({ savedKey: true });
     await mount(f);

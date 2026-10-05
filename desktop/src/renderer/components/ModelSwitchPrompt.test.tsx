@@ -11,6 +11,7 @@ import { render, cleanup, fireEvent, screen, waitFor, act } from '@testing-libra
 import ModelPickerPopup from './ModelPickerPopup';
 import { EscCloseProvider } from '../hooks/use-esc-close';
 import { switchFailureMessage } from './ModelSwitchPrompt';
+import { DESKTOP_WINDOW_CAPABILITIES, REMOTE_SCREEN_CAPABILITIES } from '../../shared/capabilities';
 
 const CATALOG = [
   { id: 'big-model', providerId: 'cloud', label: 'Big Model' },
@@ -20,6 +21,7 @@ const CATALOG = [
 function bridge(switchModel: ReturnType<typeof vi.fn>) {
   const interrupt = vi.fn();
   (window as any).claude = {
+    capabilities: DESKTOP_WINDOW_CAPABILITIES, // the computer's window: native models can run here
     providers: {
       list: vi.fn().mockResolvedValue([{ id: 'cloud', type: 'openrouter', label: 'Cloud', ready: true }]),
       catalog: vi.fn().mockResolvedValue(CATALOG),
@@ -168,5 +170,16 @@ describe('switchFailureMessage', () => {
     for (const reason of ['turn-in-flight', 'summary-failed', 'cannot-fit', 'too-small', 'nothing-to-compact', 'error', 'mystery']) {
       expect(switchFailureMessage(reason, 'Big', 'Small')).toContain('Still using Big.');
     }
+  });
+});
+
+describe('model switch popup on a phone watching a native conversation', () => {
+  afterEach(() => { cleanup(); delete (window as any).claude; });
+  it('still lists the native models: the computer runs the conversation and does the switch', async () => {
+    bridge(vi.fn());
+    (window as any).claude.capabilities = REMOTE_SCREEN_CAPABILITIES;
+    renderPicker();
+    fireEvent.change(await screen.findByPlaceholderText(/Search/i), { target: { value: 'Small' } });
+    expect(await screen.findByText(/Small Model/)).toBeTruthy();
   });
 });

@@ -190,10 +190,10 @@ const SAVE_HANDLE = /^yc-save\/[0-9a-f]{32}\/[^/\\]+$/;
 // Per document; a WeakMap so a closed document's grants go with it.
 const saveTargets = new WeakMap<OfficeSession, Map<string, string>>();
 
-export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): void {
+export function registerOfficeIpc(ipc: OfficeIpcMain, deps: OfficeIpcDeps): void {
   // WHY: ipcMain.handle throws on re-registration. Clearing first keeps hot-reload dev
   // sessions (scripts/run-dev.sh) from crashing on reload.
-  for (const ch of CHANNELS) ipcMain.removeHandler(ch);
+  for (const ch of CHANNELS) ipc.removeHandler(ch);
   keepRecoveryIn(deps.userData); // where each open document's crash-recovery journal lives (Task 8)
   // Journals of files that are gone, or untouched for 30 days, go — off the startup path (fix round 1).
   void pruneRecovery().catch((e) => log('WARN', 'Office', 'tidying recovery journals failed', errorKind(e)));
@@ -610,12 +610,12 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     return r;
   }
 
-  ipcMain.handle('office:open', (e, filePath) => open(e.sender, filePath));
-  ipcMain.handle('office:versions', (_e, filePath) => listVersions(filePath));
-  ipcMain.handle('office:restore', (e, filePath, id) => restoreVersion(e.sender, filePath, id));
-  ipcMain.handle('office:save-copy', (e, token, mode, data) => saveCopy(e.sender, token, mode, data));
-  ipcMain.handle('office:invoke', (e, token, cmd, args) => invoke(e.sender, token, cmd, args));
-  ipcMain.handle('office:close', (e, token) => close(e.sender, token));
+  ipc.handle('office:open', (e, filePath) => open(e.sender, filePath));
+  ipc.handle('office:versions', (_e, filePath) => listVersions(filePath));
+  ipc.handle('office:restore', (e, filePath, id) => restoreVersion(e.sender, filePath, id));
+  ipc.handle('office:save-copy', (e, token, mode, data) => saveCopy(e.sender, token, mode, data));
+  ipc.handle('office:invoke', (e, token, cmd, args) => invoke(e.sender, token, cmd, args));
+  ipc.handle('office:close', (e, token) => close(e.sender, token));
 
   // ── The start screen (Task 8): Recent, the focused project's files, New, Open ──
 
@@ -735,7 +735,7 @@ export function registerOfficeIpc(ipcMain: OfficeIpcMain, deps: OfficeIpcDeps): 
     return choose(sender);
   }
 
-  ipcMain.handle('office:status', (_e, projectRoot) => status(projectRoot));
-  ipcMain.handle('office:create', (_e, kind, projectRoot) => create(kind, projectRoot));
-  ipcMain.handle('office:pick', (e) => pick(e.sender));
+  ipc.handle('office:status', (_e, projectRoot) => status(projectRoot));
+  ipc.handle('office:create', (_e, kind, projectRoot) => create(kind, projectRoot));
+  ipc.handle('office:pick', (e) => pick(e.sender));
 }

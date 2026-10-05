@@ -4,7 +4,7 @@
 // every call needs the bearer token, so all logic lives in the main process —
 // the token never crosses the contextBridge into the renderer bundle.
 
-import { app, ipcMain, webContents, powerMonitor, type WebContents } from "electron";
+import { app, webContents, powerMonitor, type WebContents } from "electron";
 import type { MarketplaceAuthStore } from "./marketplace-auth-store";
 import { createMarketplaceApiClient, MARKETPLACE_API_HOST } from "../renderer/state/marketplace-api-client";
 import type {
@@ -68,30 +68,8 @@ const IDLE_DISCONNECT_MS = 10 * 60 * 1000;
 // returns (friends see them come back online within ~15s of first input).
 const IDLE_POLL_MS = 15_000;
 
-// ── Channel list for double-registration guard ───────────────────────────────
-// Byte-identical to the strings in preload.ts (IPC.SOCIAL_*), remote-shim.ts,
-// and SessionService.kt. Pinned by the social:* parity describe in
-// tests/ipc-channels.test.ts — drift silently breaks one platform.
-const CHANNELS = [
-  "social:lookup-handle",
-  "social:send-request",
-  "social:list-requests",
-  "social:accept-request",
-  "social:decline-request",
-  "social:cancel-request",
-  "social:list-friends",
-  "social:unfriend",
-  "social:block",
-  "social:unblock",
-  "social:list-blocks",
-  // Presence socket (Task 6) — invoke channels the renderer uses to express
-  // desired connection state and to send one protocol message.
-  "social:presence-connect",
-  "social:presence-disconnect",
-  "social:presence-send",
-] as const;
-
-export function registerSocialHandlers(
+// WHY (2026-09-29 one-core R2): every request from a window is now ONE object ({ sessionId, text }, not (sessionId, text)) — the same object the phone sends, so one handler can serve both doors and two same-typed arguments can no longer be swapped unnoticed. tests/wire-shape-parity.test.ts checks these keys against preload's.
+export function startSocial(
   store: MarketplaceAuthStore,
   // Optional broadcast targets. windowRegistry mirrors ipc-handlers.ts's global
   // send() (every renderer window); remoteServer forwards the push to connected
@@ -101,10 +79,6 @@ export function registerSocialHandlers(
   windowRegistry?: WindowRegistry,
   remoteServer?: RemoteServer,
 ): void {
-  // WHY: ipcMain.handle throws on re-registration. Clear prior handlers so
-  // hot-reload dev sessions (scripts/run-dev.sh) don't crash on reload.
-  for (const ch of CHANNELS) ipcMain.removeHandler(ch);
-
   // Relay one presence event to every renderer window AND every remote browser.
   // The event objects are opaque here (server protocol frames + synthetic
   // connection-state events) — the renderer (Task 7) interprets them.
@@ -237,77 +211,66 @@ export function registerSocialHandlers(
   // preload.ts (which passes them positionally); remote-shim.ts object-wraps them
   // for the Android SessionService, which reads them via optString.
 
-  ipcMain.handle("social:lookup-handle", (_e, handle: string): Promise<ApiResult<SocialUserCard>> =>
-    wrap(() => client.lookupHandle(handle)).then(clearSessionOn401)
-  );
+  // WHY (2026-10-01 one-core R3-8): the fourteen social:* channels are table entries (main/ipc/social.ts); they reach these
+  // operations through getSocialOps(). Nothing is registered with Electron here any more, so a dev hot reload simply
+  // replaces the operations (no removeHandler dance). All return ApiResult<T> so the renderer preserves HTTP status across the
+  // contextBridge (structuredClone drops MarketplaceApiError.status): the friends UI needs .status to tell 404 (unknown or
+  // blocked handle), 429 (caps) and 400 (self-request) apart.
+  socialOps = {
+    lookupHandle: (handle) => wrap(() => client.lookupHandle(handle)).then(clearSessionOn401),
+    sendRequest: (handle) => wrap(() => client.sendRequest(handle)).then(clearSessionOn401),
+    listRequests: () => wrap(() => client.listRequests()).then(clearSessionOn401),
+    acceptRequest: (id) => wrap(() => client.acceptRequest(id)).then(clearSessionOn401),
+    declineRequest: (id) => wrap(() => client.declineRequest(id)).then(clearSessionOn401),
+    cancelRequest: (id) => wrap(() => client.cancelRequest(id)).then(clearSessionOn401),
+    listFriends: () => wrap(() => client.listFriends()).then(clearSessionOn401),
+    unfriend: (userId) => wrap(() => client.unfriend(userId)).then(clearSessionOn401),
+    block: (userId) => wrap(() => client.block(userId)).then(clearSessionOn401),
+    unblock: (userId) => wrap(() => client.unblock(userId)).then(clearSessionOn401),
+    listBlocks: () => wrap(() => client.listBlocks()).then(clearSessionOn401),
 
-  ipcMain.handle("social:send-request", (_e, handle: string): Promise<ApiResult<{ status: "pending" | "friends" }>> =>
-    wrap(() => client.sendRequest(handle)).then(clearSessionOn401)
-  );
-
-  ipcMain.handle("social:list-requests", (): Promise<ApiResult<RequestsPayload>> =>
-    wrap(() => client.listRequests()).then(clearSessionOn401)
-  );
-
-  ipcMain.handle("social:accept-request", (_e, id: string): Promise<ApiResult<void>> =>
-    wrap(() => client.acceptRequest(id)).then(clearSessionOn401)
-  );
-
-  ipcMain.handle("social:decline-request", (_e, id: string): Promise<ApiResult<void>> =>
-    wrap(() => client.declineRequest(id)).then(clearSessionOn401)
-  );
-
-  ipcMain.handle("social:cancel-request", (_e, id: string): Promise<ApiResult<void>> =>
-    wrap(() => client.cancelRequest(id)).then(clearSessionOn401)
-  );
-
-  ipcMain.handle("social:list-friends", (): Promise<ApiResult<FriendRow[]>> =>
-    wrap(() => client.listFriends()).then(clearSessionOn401)
-  );
-
-  ipcMain.handle("social:unfriend", (_e, userId: string): Promise<ApiResult<void>> =>
-    wrap(() => client.unfriend(userId)).then(clearSessionOn401)
-  );
-
-  ipcMain.handle("social:block", (_e, userId: string): Promise<ApiResult<void>> =>
-    wrap(() => client.block(userId)).then(clearSessionOn401)
-  );
-
-  ipcMain.handle("social:unblock", (_e, userId: string): Promise<ApiResult<void>> =>
-    wrap(() => client.unblock(userId)).then(clearSessionOn401)
-  );
-
-  ipcMain.handle("social:list-blocks", (): Promise<ApiResult<BlockRow[]>> =>
-    wrap(() => client.listBlocks()).then(clearSessionOn401)
-  );
-
-  // ── Presence socket (Task 6) ────────────────────────────────────────────────
-  // These express desired state / send one message; they never return data — the
-  // socket relays everything back asynchronously via social:presence-event.
-
-  ipcMain.handle("social:presence-connect", (): { ok: true } => {
-    presence.setDesired(true);
-    startIdlePoller(); // see the poller's WHY: it lives with the renderer's intent
-    return { ok: true };
-  });
-
-  ipcMain.handle("social:presence-disconnect", (): { ok: true } => {
-    presence.setDesired(false);
-    stopIdlePoller();
-    return { ok: true };
-  });
-
-  // Positional `message` arg (preload passes it positionally; remote-shim wraps
-  // it as { message } and the Android SessionService reads message.message).
-  // Honest receipt: sending with no OPEN socket would silently drop the frame,
-  // so report a failure (ApiResult-style error shape, status:0 = local/non-API)
-  // instead of returning a success the renderer would trust.
-  ipcMain.handle("social:presence-send", (_e, message: Record<string, unknown>): { ok: true } | { ok: false; status: number; message: string } => {
-    if (!presence.isConnected()) return { ok: false, status: 0, message: "not connected" };
-    presence.send(message);
-    return { ok: true };
-  });
+    // ── Presence socket (Task 6) ──
+    // These express desired state / send one message; they never return data — the socket relays everything back
+    // asynchronously via social:presence-event.
+    presenceConnect: () => {
+      presence.setDesired(true);
+      startIdlePoller(); // see the poller's WHY: it lives with the renderer's intent
+      return { ok: true };
+    },
+    presenceDisconnect: () => {
+      presence.setDesired(false);
+      stopIdlePoller();
+      return { ok: true };
+    },
+    // Honest receipt: sending with no OPEN socket would silently drop the frame, so report a failure (ApiResult-style error
+    // shape, status:0 = local/non-API) instead of returning a success the renderer would trust.
+    presenceSend: (message) => {
+      if (!presence.isConnected()) return { ok: false, status: 0, message: "not connected" };
+      presence.send(message);
+      return { ok: true };
+    },
+  };
 }
+
+/** The social operations, for the social:* table entries (main/ipc/social.ts); null before main registers them (a minimal boot). */
+export interface SocialOps {
+  lookupHandle(handle: string): Promise<ApiResult<SocialUserCard>>;
+  sendRequest(handle: string): Promise<ApiResult<{ status: "pending" | "friends" }>>;
+  listRequests(): Promise<ApiResult<RequestsPayload>>;
+  acceptRequest(id: string): Promise<ApiResult<void>>;
+  declineRequest(id: string): Promise<ApiResult<void>>;
+  cancelRequest(id: string): Promise<ApiResult<void>>;
+  listFriends(): Promise<ApiResult<FriendRow[]>>;
+  unfriend(userId: string): Promise<ApiResult<void>>;
+  block(userId: string): Promise<ApiResult<void>>;
+  unblock(userId: string): Promise<ApiResult<void>>;
+  listBlocks(): Promise<ApiResult<BlockRow[]>>;
+  presenceConnect(): { ok: true };
+  presenceDisconnect(): { ok: true };
+  presenceSend(message: Record<string, unknown>): { ok: true } | { ok: false; status: number; message: string };
+}
+let socialOps: SocialOps | null = null;
+export function getSocialOps(): SocialOps | null { return socialOps; }
 
 // Called by the account sign-out + delete handlers (marketplace-api-handlers.ts)
 // so signing out drops presence immediately. Without this the socket would

@@ -27,7 +27,7 @@ import {
   type AcceptedHistoryTransformation,
   type AttemptId,
 } from './accepted-history-capture';
-import type { TranscriptEvent, InjectedMeta, FloorStop } from '../../shared/types';
+import type { TranscriptEvent, TranscriptEventType, DataOf, EventOf, TranscriptUsage, InjectedMeta, FloorStop } from '../../shared/types';
 import type { ModelBinding } from '../../shared/provider-types';
 import type { HarnessManifest } from '../../shared/harness-manifest';
 import type { PermissionDecision, PermissionRule } from '../../shared/permission-types';
@@ -211,9 +211,9 @@ export interface HarnessSessionOpts {
   /** Host-only durable commit. Its resolved event has already been appended;
    *  a rejection must leave this history unchanged and emit no summary marker. */
   commitCompaction?: (proposal: {
-    event: TranscriptEvent; resumeFromEventUuid: string; coveredThroughEventUuid: string;
+    event: EventOf<'compact-summary'>; resumeFromEventUuid: string; coveredThroughEventUuid: string;
     sourceRevision: number; eventUuids: string[];
-  }) => Promise<TranscriptEvent>;
+  }) => Promise<EventOf<'compact-summary'>>;
   /** Resolved price for the bound model, or null when none is published.
    *  Re-resolved on setBinding, so a mid-session model swap prices only the
    *  turns that run AFTER it — a turn is never repriced retroactively. */
@@ -1318,9 +1318,9 @@ export class HarnessSession extends EventEmitter {
   /** Prepare a summary event without announcing a rewrite that is not durable.
    *  A host callback resolves only after the referenced tail and record append;
    *  standalone harness tests keep the original in-memory path. */
-  private async commitSummaryCandidate(data: TranscriptEvent['data'], cut: number,
-                                       sourceRevision: number): Promise<TranscriptEvent | null> {
-    const event: TranscriptEvent = { type: 'compact-summary', sessionId: this.opts.sessionId,
+  private async commitSummaryCandidate(data: DataOf<'compact-summary'>, cut: number,
+                                       sourceRevision: number): Promise<EventOf<'compact-summary'> | null> {
+    const event: EventOf<'compact-summary'> = { type: 'compact-summary', sessionId: this.opts.sessionId,
       uuid: randomUUID(), timestamp: Date.now(), data };
     if (!this.opts.commitCompaction) return event;
     if (this.abort?.signal.aborted || this.capture.revision !== sourceRevision) return null;
@@ -1340,20 +1340,24 @@ export class HarnessSession extends EventEmitter {
   /** Returns the uuid it minted so a caller that ALSO changes history can record
    *  where that history came from (cache Stage 4). The public event shape is
    *  unchanged — this is a return value, not a new field. */
-  private emitEvent(type: TranscriptEvent['type'], data: TranscriptEvent['data']): string {
+  // WHY generic: `data` must belong to `type`, so a wrong field is a compile error (M5).
+  private emitEvent<T extends TranscriptEventType>(type: T, data: DataOf<T>): string {
     // WHY: two measured requests can finish in the same millisecond. Stamp
     // progress strictly forward so a delayed attach cannot overwrite the newer
     // reading; leave all other transcript timestamps on their usual clock.
-    const timestamp = type === 'assistant-thinking' && data.usageProgress
+    // WHY the cast: TS cannot narrow generic `data` from generic `type`; safe, call sites tie them.
+    const progress = type === 'assistant-thinking' ? (data as DataOf<'assistant-thinking'>).usageProgress : undefined;
+    const timestamp = progress
       ? (this.lastUsageProgressTimestamp = Math.max(Date.now(), this.lastUsageProgressTimestamp + 1))
       : Date.now();
     if (type === 'turn-complete' || type === 'user-interrupt' || type === 'session-error') {
       this.lastUsageProgressTimestamp = Math.max(this.lastUsageProgressTimestamp, timestamp);
     }
-    const event: TranscriptEvent = { type, sessionId: this.opts.sessionId, uuid: randomUUID(), timestamp, data };
+    // WHY the cast: TS cannot prove a generic type/data pair is one union member.
+    const event = { type, sessionId: this.opts.sessionId, uuid: randomUUID(), timestamp, data } as EventOf<T>;
     // WHY the accessor holds the exact event: late attach needs its timestamp and
     // uuid as well as the payload, and must never replay a finished turn's state.
-    if (type === 'assistant-thinking' && data.usageProgress) this._currentUsageProgress = event;
+    if (progress) this._currentUsageProgress = event;
     if (type === 'turn-complete' || type === 'user-interrupt' || type === 'session-error') this._currentUsageProgress = null;
     this.emit('transcript-event', event);
     return event.uuid;
@@ -2607,7 +2611,7 @@ export class HarnessSession extends EventEmitter {
      *
      *  Returns NO key at all when nothing was measured: a fabricated zero would
      *  read as "we checked and this turn was free" (docs/error-message-standards). */
-    const abandonedTurnUsage = (): Pick<TranscriptEvent['data'], 'usage'> => {
+    const abandonedTurnUsage = (): { usage?: TranscriptUsage } => {
       if (usageReported) return {};
       usageReported = true;
       const anyTokens = turnUsage.inputTokens > 0 || turnUsage.outputTokens > 0

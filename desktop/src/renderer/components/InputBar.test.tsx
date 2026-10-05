@@ -492,7 +492,7 @@ describe('InputBar — stop button (Task 10 placement)', () => {
     act(() => {
       capturedDispatch!({ type: 'SESSION_INIT', sessionId: 'sess-1' });
       capturedDispatch!({ type: 'USER_PROMPT', sessionId: 'sess-1', content: 'first action', timestamp: 1 });
-      capturedDispatch!({ type: 'QUEUED_MESSAGE_ADDED', sessionId: 'sess-1', queueId: 'q-1', content: 'follow up', timestamp: 2 });
+      capturedDispatch!({ type: 'QUEUE_SYNCED', sessionId: 'sess-1', queue: [{ queueId: 'q-1', content: 'follow up', timestamp: 2 }] });
     });
     const stop = screen.getByRole('button', { name: 'Stop generating' });
     expect(stop).toBeEnabled();
@@ -610,11 +610,8 @@ describe('InputBar — InputBarHandle hasDraft/fillDraft (Task 11)', () => {
   });
 });
 
-// Task 12: a 'queued' native ack dispatches QUEUED_MESSAGE_ADDED (list entry,
-// no timeline write) instead of a queued-flavored USER_PROMPT — see
-// chat-reducer.ts and the Task 12 brief for why the old timeline bubble froze
-// above content from the still-streaming prior turn.
-describe('InputBar native send — queued ack dispatches QUEUED_MESSAGE_ADDED, not a timeline entry (Task 12)', () => {
+// A 'queued' native ack writes neither a timeline bubble nor a strip row from this screen: the computer announces its queue (QUEUE_SYNCED).
+describe('InputBar native send — a queued ack draws nothing itself: the computer\'s queue does (one-core R5-4a)', () => {
   beforeEach(() => {
     (global as any).ResizeObserver = NoopResizeObserver;
     capturedDispatch = null;
@@ -635,7 +632,7 @@ describe('InputBar native send — queued ack dispatches QUEUED_MESSAGE_ADDED, n
     vi.restoreAllMocks();
   });
 
-  it('dispatches QUEUED_MESSAGE_ADDED with the ack queueId, and writes NO timeline entry', async () => {
+  it('writes no strip row and no timeline entry for a queued ack (the host announces the queue to every screen)', async () => {
     (window as any).claude.native.send.mockResolvedValue({ status: 'queued', queueId: 'q-99' });
 
     let capturedStore: ReturnType<typeof useChatStore> | null = null;
@@ -659,15 +656,11 @@ describe('InputBar native send — queued ack dispatches QUEUED_MESSAGE_ADDED, n
     fireEvent.change(textarea, { target: { value: 'queue me' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
 
-    await waitFor(() => {
-      const queued = capturedStore!.getState().get('sess-1')?.queuedMessages ?? [];
-      expect(queued.length).toBe(1);
-    });
+    await waitFor(() => expect((window as any).claude.native.send).toHaveBeenCalled());
+    await act(async () => { await Promise.resolve(); });
     const session = capturedStore!.getState().get('sess-1')!;
     expect(session.timeline).toHaveLength(0);
-    expect(session.queuedMessages).toEqual([
-      { queueId: 'q-99', content: 'queue me', timestamp: expect.any(Number) },
-    ]);
+    expect(session.queuedMessages).toEqual([]);
   });
 });
 
@@ -905,7 +898,8 @@ describe('InputBar — voice prompting (T9)', () => {
     // (The Claude Code path writes the text on a timer, so wait for it.)
     expect(sendInput).toHaveBeenCalledWith('sess-1', '\x1b');
     await waitFor(() => {
-      expect(sendInput).toHaveBeenCalledWith('sess-1', expect.stringContaining('push it through'));
+      // The message's write carries the send's id, so a phone that loses the connection right after can ask whether it arrived.
+      expect(sendInput).toHaveBeenCalledWith('sess-1', expect.stringContaining('push it through'), undefined, expect.stringMatching(/^s[a-z0-9]+-[0-9a-f]{12}-[a-z0-9]+$/));
     });
     expect(voiceBridge.stop).not.toHaveBeenCalled();
   });
@@ -1285,5 +1279,98 @@ describe('InputBar — idle unfocus vs the on-screen keyboard', () => {
     fireEvent.keyDown(textarea, { key: 'i' });
     await pause(800);
     expect(document.activeElement).not.toBe(textarea);
+  });
+});
+
+// Instant send on a phone: the box clears and the bubble goes up before the computer has answered. The computer's own window keeps drawing the bubble
+// only after the answer (a send that finds a turn running is queued by the host and drawn from its queue, never as a bubble here).
+describe('InputBar — instant send on a phone', () => {
+  let reply: (r: unknown) => void = () => {};
+  let store: ReturnType<typeof useChatStore>;
+  function Probe() { store = useChatStore(); return null; }
+  const bubbles = () => store.getSession('sess-1').timeline.filter((e: any) => e.kind === 'user');
+
+  async function mount(mode: 'remote' | 'local', onToast = vi.fn()) {
+    const { setConnectionMode } = await import('../platform');
+    setConnectionMode(mode);
+    (global as any).ResizeObserver = NoopResizeObserver;
+    (window as any).claude = {
+      native: { supported: true, send: vi.fn(() => new Promise((res) => { reply = res; })) },
+      session: { sendInput: vi.fn(), canSend: () => true },
+      skills: { list: vi.fn().mockResolvedValue([]), getFavorites: vi.fn().mockResolvedValue([]), getChips: vi.fn().mockResolvedValue([]), getCuratedDefaults: vi.fn().mockResolvedValue([]) },
+    };
+    render(<ChatProvider><SkillProvider><Probe />
+      <InputBar sessionId="sess-1" provider="native" onToast={onToast} getSessionState={(id) => store.getSession(id)} />
+    </SkillProvider></ChatProvider>);
+    act(() => store.dispatch({ type: 'SESSION_INIT', sessionId: 'sess-1' }));
+    const input = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: 'hello there' } });
+    return input;
+  }
+  afterEach(async () => { cleanup(); (await import('../platform')).setConnectionMode('local'); });
+
+  it('clears the box and shows the bubble at once, before the computer answers', async () => {
+    const input = await mount('remote');
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(input.value).toBe('');
+    expect(bubbles()).toHaveLength(1);
+    expect((bubbles()[0] as any).message.content).toBe('hello there');
+    await act(async () => { reply({ status: 'sent' }); await Promise.resolve(); });
+    expect(bubbles()).toHaveLength(1);
+  });
+
+  it('takes the bubble down and gives the words back when the computer refuses', async () => {
+    const onToast = vi.fn();
+    const input = await mount('remote', onToast);
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    await act(async () => { reply({ status: 'failed', reason: 'not-live' }); await Promise.resolve(); await Promise.resolve(); });
+    expect(bubbles()).toHaveLength(0);
+    expect(input.value).toBe('hello there');
+    expect(onToast).toHaveBeenCalledTimes(1);
+  });
+
+  it('the computer\'s own window still waits for the answer before drawing the bubble', async () => {
+    const input = await mount('local');
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(input.value).toBe('');
+    expect(bubbles()).toHaveLength(0);
+    await act(async () => { reply({ status: 'sent' }); await Promise.resolve(); await Promise.resolve(); });
+    expect(bubbles()).toHaveLength(1);
+  });
+});
+
+// Discard on an unsent message (sync-fix4): the words come back, but only into an empty box, and only for this session. Nothing is sent.
+describe('InputBar — words restored by Discard', () => {
+  beforeEach(() => {
+    (global as any).ResizeObserver = NoopResizeObserver;
+    (window as any).claude = {
+      native: { supported: true, send: vi.fn() },
+      session: { sendInput: vi.fn() },
+      skills: { list: vi.fn().mockResolvedValue([]), getFavorites: vi.fn().mockResolvedValue([]), getChips: vi.fn().mockResolvedValue([]), getCuratedDefaults: vi.fn().mockResolvedValue([]) },
+    };
+  });
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+  const mount = () => {
+    render(<ChatProvider><SkillProvider><InputBar sessionId="sess-1" provider="native" /></SkillProvider></ChatProvider>);
+    return screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
+  };
+  const restore = (sessionId: string, text: string) => act(() => { window.dispatchEvent(new CustomEvent('youcoded:restore-unsent-text', { detail: { sessionId, text } })); });
+
+  it('puts the words into an empty box and sends nothing', () => {
+    const box = mount();
+    restore('sess-1', 'my lost words');
+    expect(box.value).toBe('my lost words');
+    expect((window as any).claude.native.send).not.toHaveBeenCalled();
+  });
+  it('leaves a draft the person already typed alone', () => {
+    const box = mount();
+    fireEvent.change(box, { target: { value: 'newer draft' } });
+    restore('sess-1', 'my lost words');
+    expect(box.value).toBe('newer draft');
+  });
+  it('ignores words from another session', () => {
+    const box = mount();
+    restore('other', 'not mine');
+    expect(box.value).toBe('');
   });
 });

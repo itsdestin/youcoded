@@ -41,7 +41,8 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
   useEscClose(open, onClose);
   // WHY: closing or going back must not discard a draft. Persistence beyond this mounted
   // component and real originating context remain unbuilt.
-  const [kind, setKind] = useState('bug');
+  // WHY typed (2026-09-30 one-core R3-2): the dev:* request types now say the kind is bug or feature.
+  const [kind, setKind] = useState<'bug' | 'feature'>('bug');
   const [phase, setPhase] = useState<Phase>(context?.diagnose ? 'review' : 'draft');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState(
@@ -226,7 +227,7 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
           onRetry={send}
         />}
         <p className="text-sm text-fg-2">Tickets are public on GitHub. Review details before sharing.</p>
-        {!review && <SegmentedTabs aria-label="Report type" variant="contained" value={kind} onChange={setKind} tabs={[{ id: 'bug', label: 'Bug' }, { id: 'feature', label: 'Feature' }]} />}
+        {!review && <SegmentedTabs aria-label="Report type" variant="contained" value={kind} onChange={(id) => setKind(id === 'feature' ? 'feature' : 'bug')} tabs={[{ id: 'bug', label: 'Bug' }, { id: 'feature', label: 'Feature' }]} />}
         {/* WHY: one noun for one object. The flow previously said ticket, report, bug report and
             issue for the same thing across four controls, which reads as four different actions. */}
         {review && <h3 className="text-2xs uppercase tracking-wide text-fg-muted">Review your ticket</h3>}

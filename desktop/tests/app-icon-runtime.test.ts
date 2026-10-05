@@ -81,6 +81,7 @@ describe('runtime app icon (app-icon.ts)', () => {
   });
 
   it('the theme icon swap and window creation never hard-code the Windows tile', () => {
+    // WHY theme-icon-swap.ts: window:set-icon (ipc/window.ts, one-core R3-8) hands the swap there.
     for (const file of ['src/main/theme-icon-swap.ts', 'src/main/main.ts']) {
       const src = readSource(path.join(DESKTOP, file));
       expect(src, `${file} must load its icon through app-icon.ts`).not.toMatch(/assets\/icon\.png/);

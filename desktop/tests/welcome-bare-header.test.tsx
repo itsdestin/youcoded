@@ -15,6 +15,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import { BareHeaderBar } from '../src/renderer/components/HeaderBar';
 import { ArtifactContext } from '../src/renderer/state/ArtifactContext';
+import { DESKTOP_WINDOW_CAPABILITIES } from '../src/shared/capabilities';
 
 // jsdom has no matchMedia; useNarrowViewport (via the header's children) reads
 // it. `matches` is the narrow/wide switch for the tests below.
@@ -106,7 +107,7 @@ describe('BareHeaderBar (welcome screen frame)', () => {
     // is not Mac and __PLATFORM__ is unset (electron), so the gate is open; the
     // buttons themselves only render when window.claude.window is present.
     const win = { minimize: vi.fn(), maximize: vi.fn(), close: vi.fn() };
-    (window as any).claude = { window: win };
+    (window as any).claude = { window: win, capabilities: DESKTOP_WINDOW_CAPABILITIES };
     renderBare();
     fireEvent.click(screen.getByLabelText('Minimize'));
     fireEvent.click(screen.getByLabelText('Maximize'));

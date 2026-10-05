@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs'; import * as path from 'path'; import * as os from 'os';
 import { NativeHome } from '../src/main/native-home';
 import { SecretsStore } from '../src/main/providers/secrets-store';
+import { getSecretStorage } from '../src/main/providers/secret-storage';
 import { ProviderRegistry } from '../src/main/providers/provider-registry';
 import { ModelCatalog } from '../src/main/providers/model-catalog';
 import { openRouterCostExtractor } from '../src/main/harness/pricing';
@@ -20,7 +21,7 @@ describe('ProviderRegistry', () => {
   let root: string; let reg: ProviderRegistry; let secrets: SecretsStore;
   beforeEach(async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-provreg-'));
-    secrets = new SecretsStore(root);
+    secrets = new SecretsStore(root, getSecretStorage());
     reg = new ProviderRegistry(new NativeHome(root), secrets);
     await reg.init();
   });

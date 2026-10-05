@@ -14,7 +14,7 @@
 // the New Conversation primary button.
 import React, { useEffect, useState } from 'react';
 import type { CentralIndexProject } from '../../../shared/artifacts/types';
-import { getPlatform } from '../../platform';
+import { getCapabilities } from '../../platform';
 import { type SyncDot } from '../sync-dot-state';
 
 // Live, computed-in-ProjectView stats (NOT the stale stats.artifactCount).
@@ -129,7 +129,8 @@ export function ProjectHero({
   onRemove,
 }: ProjectHeroProps) {
   const showRepoSlug = !!(repo?.webUrl && repo.owner && repo.name);
-  const isElectron = getPlatform() === 'electron';
+  // R4-1: `openInOs` capability, not a platform-name guess.
+  const canOpenInOs = getCapabilities().openInOs;
 
   // The visible name prefers the synced display name over the folder name.
   const shownName = displayName || project.name;
@@ -353,14 +354,14 @@ export function ProjectHero({
         <div className="flex items-center gap-2 mt-1.5 min-w-0">
           <button
             type="button"
-            onClick={isElectron ? () => void (window.claude as any).shell.openPath(project.path) : undefined}
-            disabled={!isElectron}
+            onClick={canOpenInOs ? () => void (window.claude as any).shell.openPath(project.path) : undefined}
+            disabled={!canOpenInOs}
             className="inline-flex items-center gap-1 min-w-0 text-fg-muted hover:text-fg-2 transition-colors disabled:cursor-default"
-            title={isElectron ? 'Open in File Explorer' : project.path}
+            title={canOpenInOs ? 'Open in File Explorer' : project.path}
           >
             <FolderIcon size={13} />
             <span
-              className={`font-mono text-xs truncate ${isElectron ? 'underline decoration-dotted underline-offset-2 decoration-fg-faint hover:decoration-fg-muted' : ''}`}
+              className={`font-mono text-xs truncate ${canOpenInOs ? 'underline decoration-dotted underline-offset-2 decoration-fg-faint hover:decoration-fg-muted' : ''}`}
             >
               {project.path}
             </span>

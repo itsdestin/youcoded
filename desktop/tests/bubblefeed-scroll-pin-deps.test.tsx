@@ -31,10 +31,7 @@ const mocks = vi.hoisted(() => ({ state: {} as any }));
 vi.mock('../src/renderer/state/chat-context', () => ({
   useChatState: () => mocks.state,
   useChatDispatch: () => vi.fn(),
-  // BubbleFeed installs its own transcriptBatcher (installTranscriptBatcher,
-  // mirrors App.tsx) on chatStore.dispatchMany — never fired here, since
-  // nothing in these tests advances an animation frame.
-  useChatStore: () => ({ dispatchMany: vi.fn() }),
+  useChatStore: () => ({ dispatchMany: () => {} }),
 }));
 
 vi.mock('../src/renderer/state/theme-context', () => ({

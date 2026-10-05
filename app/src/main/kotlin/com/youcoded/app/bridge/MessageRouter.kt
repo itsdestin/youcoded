@@ -24,11 +24,39 @@ object MessageRouter {
         }
     }
 
+    // WHY (one-core R4-1, seam S7): the version of the handshake and what this screen can do, so the shared UI asks
+    // `capabilities.x` instead of guessing from "am I Android". The VALUES mirror ANDROID_LOCAL_CAPABILITIES in
+    // desktop/src/shared/capabilities.ts (tests/capabilities.test.ts reads this file to keep them equal): the
+    // WebView here talks to this device's own runtime, which has the terminal buffer and sends raw terminal bytes, and
+    // has no windows, no git, no engine for the app's own assistant. Minimal on purpose: A3 deletes this file's role.
+    const val PROTOCOL_VERSION = 1
+
+    fun buildCapabilities(): JSONObject {
+        return JSONObject().apply {
+            put("nativeWindows", false)
+            put("openInOs", false)
+            put("openExternal", false)
+            put("git", false)
+            put("themePictures", true)
+            put("themeRigs", false)
+            put("terminalTransport", "raw-bytes")
+            put("terminalScreenRead", true)
+            put("nativeSessions", false)
+            put("buddy", false)
+            put("projectWrites", true)
+            put("contentSearch", false)
+            put("liveHandoff", false)
+            put("sessionRecord", false)
+        }
+    }
+
     fun buildAuthOkResponse(platform: String): JSONObject {
         return JSONObject().apply {
             put("type", "auth:ok")
             put("token", java.util.UUID.randomUUID().toString())
             put("platform", platform)
+            put("protocolVersion", PROTOCOL_VERSION)
+            put("capabilities", buildCapabilities())
         }
     }
 

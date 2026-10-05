@@ -3,14 +3,18 @@
  * Provides the same API surface as the Electron preload bridge.
  */
 
-// Type-only, so nothing is added to the bundle the Android WebView loads.
+// Type-only, plus table-error-flag (one tiny value; imported from backend-contract it would pull the whole contract into the Android bundle — WHY 2026-09-30 one-core R3-3).
 import type { VoiceReadiness } from '../shared/voice-types';
-import type { RemoteBridge } from '../shared/bridge-types';
+import type { RemoteBridge } from '../shared/backend-contract';
+import { TABLE_ERROR_FLAG } from '../shared/table-error-flag';
 
 // ── Marketplace types re-declared locally ─────────────────────────────────────
 // WHY: remote-shim.ts lives in renderer/ and cannot import from main/ (Node.js
 import { REMOTE_UNSUPPORTED_EVENT, hasFeatureName, remoteFeatureName, remoteUnsupportedMessage, saidInPlace } from './remote-unsupported';
-import { REMOTE_RECONNECTED_EVENT } from './remote-events';
+import { REMOTE_RECONNECTED_EVENT, REMOTE_REFRESH_EVENT, OUTCOME_UNKNOWN_EVENT } from './remote-events';
+import { FILL_PROTOCOL_VERSION } from '../shared/fill-protocol';
+import { announce } from './utils/announce';
+import { REMOTE_SCREEN_CAPABILITIES, normalizeCapabilities, normalizeProtocolVersion } from '../shared/capabilities';
 // The phone's own runtime while paired: localBridgeUrl + invokeLocalBridge (WHY there).
 import { localBridgeUrl, invokeLocalBridge } from './android-local-bridge';
 import type { FirstRunState } from '../shared/first-run-types';
@@ -33,18 +37,19 @@ interface PendingRequest {
   type: string;
   /** Sent, no reply, timed out: it MAY have run. Asked about on reconnect, never retried. */
   outcomeUnknown?: boolean;
+  /** The screen's id for a chat message this request carries (`native:send`), so the outcome event can name the message (one-core R5-4b). */
+  sendId?: string;
 }
 
 /**
- * Ids whose fate the host could not tell us, announced as a window event.
+ * Ids whose fate the host could not tell us, announced as a window event: `{id, type, outcome, sendId?}` (the constant lives in remote-events.ts, which a renderer hook may import without pulling this file in).
  *
- * NOTHING LISTENS TO THIS YET. The sentence here used to read "The UI reads this to say so
- * plainly", which was not true: the reconciliation runs and the event fires, and the person
- * is told nothing either way. Sending is still safe — a request is never re-run — but the
- * "we don't know whether that happened" state has no screen. Filed as an open item in
- * docs/roadmap/remote-access.md rather than invented at review time.
+ * One-core R5-4b: a request that was a chat message (`native:send`) names it by `sendId`, and `hooks/useSendReconcile.ts` listens: it asks the
+ * computer's record whether the message arrived and says so on the message ("Not sure this was sent", "Not sent", or nothing once it is confirmed).
+ * A request is still never re-run: "Send again" is the person's decision. Every other request type has no screen for this yet and the event is ignored
+ * for them (a permission answer keeps its own "couldn't confirm" note on its card).
  */
-export const OUTCOME_UNKNOWN_EVENT = 'youcoded:outcome-unknown';
+export { OUTCOME_UNKNOWN_EVENT };
 
 export type RemoteConnectionState = 'disconnected' | 'connecting' | 'authenticating' | 'connected';
 
@@ -145,46 +150,34 @@ function signInFailureOf(err: unknown): SignInFailure | null {
 /** Override WebSocket target — set by connectToHost(), cleared by disconnectFromHost() */
 let targetUrl: string | null = null;
 
-// Remote access batch 2 (design §1 A, §6): the readiness handshake.
+// The readiness handshake (remote access batch 2, design §1 A; trimmed by one-core R5-2).
 //
-// The host queues every broadcast for this client until it hears `client:ready`, then
-// restores in order (session list, snapshot, replays, the queue) and goes live. The shim
-// sends it the FIRST time App's chat:hydrate listener exists after auth:ok — that is the
-// moment the page can apply what the host sends — and never twice per connection: App
-// re-adds the listener on an effect re-run or a StrictMode double mount, and a second
-// client:ready must not restart the sequence.
-//
-// `clientReadySeq` is monotonic for the shim's LIFETIME, never per connection: the host
-// echoes it in chat:hydrate and the shim applies only the hydrate it last asked for, so a
-// slow answer to an earlier request (or an earlier connection) can never land on top of a
-// newer one. Refresh (remote:rehydrate, §6) draws from the same counter.
-let clientReadySeq = 0;
+// The shim sends `client:ready` the FIRST time App's session listeners exist after auth:ok — that is the moment the page can apply
+// what the host sends — and never twice per connection: App re-adds the listener on an effect re-run or a StrictMode double mount.
+// The host answers with the global state (session list, topic names, last status). A session's CONTENT does not come from here:
+// App fills each session with `session.open` (below).
 let readySentThisGeneration = false;
-/** Whether this client held state from THIS host before the current connection. The host
- *  uses it to decide what its restore may skip. Keyed on the host, not the shim's lifetime
- *  (review of T1, finding 1): an Android page connects to its local bridge first, and a
- *  later pairing to a desktop is a FIRST connect to that desktop, however many times the
- *  bridge was reached before — and the same in reverse on the fallback to local. */
+/** Whether this client held state from THIS host before the current connection. Keyed on the host, not the shim's lifetime
+ *  (review of T1, finding 1): an Android page connects to its local bridge first, and a later pairing to a desktop is a FIRST
+ *  connect to that desktop, however many times the bridge was reached before — and the same in reverse on the fallback to local. */
 let readyReconnect = false;
 let lastReadyHost: string | null = null;
 
-// Remote access batch 2 (design §6, contract R13–R15): where this page's copy of the
-// conversation stands. The shim alone knows it — the connection state, which hydrate it
-// asked for last, whether that hydrate was degraded, and (from App's report) whether the
-// apply kept any session of the phone's own. App only renders the strip.
+// Where this page's copy of the conversation stands (remote access batch 2 design §6, contract R13–R15). The shim alone knows the
+// connection state; App says how its fills went (`remote.reportFill`) and only renders the strip.
 type ConversationPhase = 'reconnecting' | 'restoring' | 'incomplete' | 'complete';
 let conversationPhase: ConversationPhase | null = null;
 /** Set around a close that is not a drop: leaving a paired computer, or a host that refused
  *  this device for good. Neither is "reconnecting" (T4 review, 3 and 13). */
 let suppressReconnectingPhase = false;
-/** The hydrate most recently handed to the page, waiting for App's report. */
-let lastHydrate: { seq: number | undefined; degraded: boolean } | null = null;
-let noHydrateTimer: ReturnType<typeof setTimeout> | null = null;
-/** A restore that never answers must not leave the strip busy forever. */
-const NO_HYDRATE_MS = 10_000;
+let noFillTimer: ReturnType<typeof setTimeout> | null = null;
+/** A fill that never reports must not leave the strip busy forever. */
+const NO_FILL_MS = 10_000;
+/** Bumped by each fill round (a connect, a reconnect, a Refresh); a report from an older round is ignored. */
+let fillRound = 0;
 
 function setConversationPhase(phase: ConversationPhase): void {
-  // The Android app on its own local bridge never hydrates from a computer: a phase there
+  // The Android app on its own local bridge never fills from a computer: a phase there
   // would end as "may be out of date" with a Refresh that has nothing to refresh.
   if (isAndroidLocal()) return;
   conversationPhase = phase;
@@ -195,46 +188,65 @@ function setConversationPhase(phase: ConversationPhase): void {
  *  late subscriber is not told a stale one. */
 function forgetConversationPhase(): void {
   conversationPhase = null;
-  lastHydrate = null;
-  if (noHydrateTimer) { clearTimeout(noHydrateTimer); noHydrateTimer = null; }
+  if (noFillTimer) { clearTimeout(noFillTimer); noFillTimer = null; }
 }
 
-function armNoHydrateTimer(): void {
-  if (noHydrateTimer) clearTimeout(noHydrateTimer);
-  const seqAtArm = clientReadySeq;
-  noHydrateTimer = setTimeout(() => {
-    noHydrateTimer = null;
-    if (conversationPhase === 'restoring' && clientReadySeq === seqAtArm) setConversationPhase('incomplete');
-  }, NO_HYDRATE_MS);
+function armNoFillTimer(): void {
+  if (noFillTimer) clearTimeout(noFillTimer);
+  const roundAtArm = fillRound;
+  noFillTimer = setTimeout(() => {
+    noFillTimer = null;
+    if (conversationPhase === 'restoring' && fillRound === roundAtArm) setConversationPhase('incomplete');
+  }, NO_FILL_MS);
 }
 
-/** App's report after it applied a hydrate: which sessions the apply kept. */
-function reportHydrate(report: { seq?: number; kept?: string[] } | undefined): void {
-  if (!lastHydrate || report?.seq !== lastHydrate.seq) return;
-  if (report?.seq !== undefined && report.seq !== clientReadySeq) return;   // an older ask
-  if (noHydrateTimer) { clearTimeout(noHydrateTimer); noHydrateTimer = null; }
-  const kept = Array.isArray(report?.kept) ? report!.kept : [];
-  setConversationPhase(lastHydrate.degraded || kept.length > 0 ? 'incomplete' : 'complete');
-}
-
-/** Refresh (§6): ask the host for a fresh copy under the next seq. */
-function requestRehydrate(): Promise<{ ok: boolean }> {
-  // Not while the socket is down: the reconnect's own restore brings a fresh copy, and a
-  // queued Refresh would run a second one right behind it.
-  if (connectionState !== 'connected') return Promise.resolve({ ok: false });
-  const seq = ++clientReadySeq;
+/** A new round of fills starts (a connect or reconnect, or Refresh): the strip says "restoring" until App reports. */
+function beginFillRound(): number {
+  const round = ++fillRound;
   setConversationPhase('restoring');
-  armNoHydrateTimer();
-  return invoke('remote:rehydrate', { seq }).then((r: { ok?: boolean } | undefined) => {
-    // A host that answers without refreshing (T4 review, 1): the strip must not stay busy.
-    if (!r?.ok && clientReadySeq === seq) setConversationPhase('incomplete');
-    return { ok: !!r?.ok };
-  }).catch(() => {
-    // A host that cannot refresh (an older desktop, the Android runtime): say the copy
-    // may still be behind, which is true, rather than stay busy.
-    if (clientReadySeq === seq) setConversationPhase('incomplete');
-    return { ok: false };
-  });
+  armNoFillTimer();
+  return round;
+}
+
+/** App's report after a round of `session.open` calls: how many failed. A failed fill leaves that conversation as the phone had it,
+ *  so the strip says it may be behind (and offers Refresh), which is true. */
+function reportFill(report: { round?: number; failed?: number } | undefined): void {
+  if (report?.round !== undefined && report.round !== fillRound) return;   // an older round
+  if (noFillTimer) { clearTimeout(noFillTimer); noFillTimer = null; }
+  setConversationPhase((report?.failed ?? 0) > 0 ? 'incomplete' : 'complete');
+}
+
+// Where each session stands on this page, as the host's own numbers: the epoch (which record) and the last event number applied.
+// Every session-scoped push from the host carries them; `session.open` sends them back as `have`, and the host answers with exactly
+// the events missed, or a fresh page when the epoch changed or the number is older than its ring holds (session-open.ts).
+const fillCursors = new Map<string, { epoch: string; seq: number }>();
+/** The session the computer was showing at sign-in (null from a host that does not say). */
+let hostFocusSessionId: string | null = null;
+
+/** Track the number on a live push, so a reconnect can say where it got to. */
+function noteCursor(msg: { epoch?: unknown; seq?: unknown; payload?: { sessionId?: unknown } }): void {
+  if (typeof msg.epoch !== 'string' || typeof msg.seq !== 'number') return;
+  const sid = msg.payload?.sessionId;
+  if (typeof sid !== 'string') return;
+  const have = fillCursors.get(sid);
+  if (!have) return; // not opened on this page yet: the host does not send it, and the open's answer will set the cursor
+  // A different epoch means the host's record of this session is a new one (it was recreated): what this page holds is stale.
+  // Forget the cursor so the next open asks for a fresh page.
+  if (have.epoch !== msg.epoch) { fillCursors.delete(sid); return; }
+  if (msg.seq > have.seq) have.seq = msg.seq;
+}
+
+/** Refresh (§6): every conversation is filled again from a fresh page. Done by App (it owns the chat state); the shim only
+ *  starts the round and tells App. */
+function requestRehydrate(): Promise<{ ok: boolean }> {
+  // Not while the socket is down: the reconnect's own fill brings a fresh copy, and a queued Refresh would run a second one right behind it.
+  if (connectionState !== 'connected') return Promise.resolve({ ok: false });
+  const round = beginFillRound();
+  // Refresh means "a fresh page for every conversation". The ones this page is watching are filled right now by App; the ones it is NOT
+  // watching are not (nothing is sent for them), so forget where they got to: the next time one is opened it takes a fresh page too.
+  for (const sid of [...fillCursors.keys()]) if (!openedHere.has(sid)) { fillCursors.delete(sid); ptyOffsets.delete(sid); }
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') window.dispatchEvent(new CustomEvent(REMOTE_REFRESH_EVENT, { detail: { round } }));
+  return Promise.resolve({ ok: true });
 }
 
 // Remote access batch 2 (design §7): how much of each session's terminal this page has
@@ -245,10 +257,15 @@ function requestRehydrate(): Promise<{ ok: boolean }> {
 // pty:reset followed by the whole buffer. An older host sends neither field; nothing is
 // reported for it and a reconnect replays in full, as before.
 const ptyOffsets = new Map<string, { epoch: string; units: number }>();
-
-function collectPtyOffsets(): Record<string, { epoch: string; units: number }> {
-  return Object.fromEntries(ptyOffsets);
-}
+/** Sessions opened on THIS connection. A live terminal frame for any other session is dropped: until the open's answer lands, this
+ *  page holds a position that is older than the frame (a reconnect) or none at all (a first connect), and drawing the frame
+ *  would leave a hole. The answer carries the bytes up to the instant it was cut, and every frame after it is contiguous. */
+const openedHere = new Set<string>();
+/** Sessions whose terminal was drawn from a `ptyOnly` answer on THIS connection (one-core sync-fix2). Their live terminal frames are drawn too: the answer's
+ *  cut and the frames after it are contiguous (the host joins the stream and cuts in one synchronous step), so the terminal works before the chat fill ends. */
+const ptyEarly = new Set<string>();
+/** The host's latest per-session summary (`session:summary`), for a screen that subscribes late. Forgotten on a first connect to a host. */
+let lastSessionSummaries: { summaries?: Record<string, unknown> } | null = null;
 
 // Remote access batch 2 (design §1 C): terminal frames that arrive before the terminal
 // for that session has a listener. The restore sends the terminal replay the moment the
@@ -307,14 +324,16 @@ function drainPtyBacklog(sessionId: string): void {
 function forgetPtySession(sessionId: string): void {
   ptyOffsets.delete(sessionId);
   ptyBacklog.delete(sessionId);
+  fillCursors.delete(sessionId);
+  openedHere.delete(sessionId);
+  ptyEarly.delete(sessionId);
 }
 
 function maybeSendClientReady(): void {
   if (connectionState !== 'connected' || readySentThisGeneration) return;
-  if (!listeners.get('chat:hydrate')?.size) return;   // App has not mounted its handler yet
+  if (!listeners.get('session:created')?.size) return;   // App has not mounted its session listeners yet
   readySentThisGeneration = true;
-  fire('client:ready', { seq: ++clientReadySeq, reconnect: readyReconnect, ptyOffsets: collectPtyOffsets() });
-  armNoHydrateTimer();
+  fire('client:ready', { reconnect: readyReconnect, protocolVersion: FILL_PROTOCOL_VERSION });
 }
 /** Whether to preserve __PLATFORM__ on next auth:ok (prevents desktop overwriting 'android') */
 let preservePlatform = false;
@@ -398,8 +417,17 @@ function failRequestsCutOffByDrop(): void {
     clearTimeout(entry.timeout);
     if (isAndroidLocal()) pending.delete(id);
     else entry.outcomeUnknown = true;
-    entry.reject(new Error('Lost the connection before the computer answered.'));
+    entry.reject(unknownOutcomeError('Lost the connection before the computer answered.'));
   }
+}
+
+/**
+ * An error for a request that was SENT and never answered. `outcomeUnknown` lets a caller tell "the computer may have it" from "it was refused
+ * before it left" (a send while disconnected), so a chat message in this state is shown with "Not sure this was sent" rather than as a failure
+ * (one-core R5-4b).
+ */
+function unknownOutcomeError(message: string): Error & { outcomeUnknown: true } {
+  return Object.assign(new Error(message), { outcomeUnknown: true as const });
 }
 
 export function onConnectionStateChange(cb: (state: RemoteConnectionState) => void) {
@@ -455,8 +483,7 @@ export const MESSAGE_KIND: Readonly<Record<string, 'user-action' | 'read' | 'tra
   'handoff:retry': 'user-action', 'handoff:saved-copy': 'user-action', 'handoff:force': 'user-action',
   'handoff:cancel': 'user-action', 'handoff:create-params': 'user-action',
   'session:input': 'user-action',
-  // A screen verdict, true only while connected — never replayed later.
-  'session:input-blocked': 'transport',
+  'session:input-blocked': 'transport', // Android's own runtime only; true only while connected, never replayed
   'session:resize': 'read',
   'session:terminal-ready': 'transport',
   'native:interrupt': 'user-action',
@@ -530,7 +557,7 @@ function reconcileUnknownOutcomes(): void {
       if (!entry) continue;
       pending.delete(id);
       window.dispatchEvent(new CustomEvent(OUTCOME_UNKNOWN_EVENT, {
-        detail: { id, type: entry.type, outcome: outcomes[id] === 'completed' ? 'completed' : 'unknown' },
+        detail: { id, type: entry.type, outcome: outcomes[id] === 'completed' ? 'completed' : 'unknown', ...(entry.sendId ? { sendId: entry.sendId } : {}) },
       }));
     }
   }).catch(() => { /* still unknown; the entries stay marked */ });
@@ -584,6 +611,67 @@ function rehydrate(): void {
   }
 }
 
+/** Fill one conversation from the computer's record: the ask is built from what THIS page holds (see fillCursors). */
+/** Draw a terminal cut the host sent (a reset when it could not continue where this page was, then the bytes). */
+function applyPtyCut(sid: string, pty: any): void {
+  if (!pty || typeof pty.epoch !== 'string') return;
+  if (pty.reset) routePush('pty:reset', { sessionId: sid, epoch: pty.epoch });
+  if (typeof pty.data === 'string' && pty.data.length > 0) routePush('pty:output', { sessionId: sid, data: pty.data, epoch: pty.epoch, offset: pty.offset });
+}
+
+/**
+ * The terminal first, on its own (one-core sync-fix2). WHY: the terminal used to ride the same answer as the chat page, so after a reconnect or a switch the terminal
+ * view stayed dead until the whole open ("loading") finished — Destin, 2026-10-02. This small ask is answered at once with the terminal's cut and joins the phone to the
+ * terminal stream; the ordinary open below still fills the chat. If this answer is lost, late, or from an older host, nothing changes: the ordinary open carries the
+ * terminal too, as before, and whichever answer comes first draws it (the other is ignored).
+ */
+async function openPtyEarly(sid: string): Promise<void> {
+  try {
+    const reply = await invoke('session:open', { sessionId: sid, ptyOnly: true, pty: ptyOffsets.has(sid) ? { ...ptyOffsets.get(sid)! } : {} });
+    // Only this small answer qualifies (an older host answers a full open); and not once the ordinary answer has drawn the terminal.
+    if (!reply?.ok || reply.ptyOnly !== true || openedHere.has(sid) || ptyEarly.has(sid)) return;
+    ptyEarly.add(sid);
+    applyPtyCut(sid, reply.pty);
+  } catch { /* the ordinary open carries the terminal too */ }
+}
+
+async function openSessionRemote(req: { sessionId: string; claudeSessionId?: string; projectSlug?: string; fresh?: boolean }): Promise<any> {
+  const sid = req.sessionId;
+  const have = req.fresh ? undefined : fillCursors.get(sid);
+  void openPtyEarly(sid);
+  const reply = await invoke('session:open', {
+    sessionId: sid,
+    ...(req.claudeSessionId ? { claudeSessionId: req.claudeSessionId } : {}),
+    ...(req.projectSlug ? { projectSlug: req.projectSlug } : {}),
+    ...(req.fresh ? { fresh: true } : {}),
+    ...(have ? { have: { epoch: have.epoch, seq: have.seq } } : {}),
+    // The terminal rides the same answer: how far this page has drawn (empty = send all of it).
+    pty: ptyOffsets.has(sid) ? { ...ptyOffsets.get(sid)! } : {},
+  });
+  if (reply?.ok) {
+    // Set BEFORE anything else runs: the host sends this session's held pushes right after this answer, and each one moves the cursor on.
+    fillCursors.set(sid, { epoch: reply.epoch, seq: reply.headSeq });
+    openedHere.add(sid);
+    // The terminal first, exactly as the old restore did. Skipped when the early answer already drew it (this answer was cut from the same position, so it would only redraw it).
+    if (!ptyEarly.has(sid)) applyPtyCut(sid, reply.pty);
+  }
+  return reply;
+}
+
+/** The record epoch a page held when it sent each message (bounded): the lost-send check must ask under THAT epoch (one-core R5-4b review). */
+const sendEpochs = new Map<string, string | undefined>();
+function noteSendEpoch(sessionId: string, sendId: string | undefined): void {
+  if (!sendId) return;
+  sendEpochs.set(sendId, fillCursors.get(sessionId)?.epoch);
+  if (sendEpochs.size > 200) sendEpochs.delete(sendEpochs.keys().next().value as string);
+}
+
+function playPushes(pushes: Array<{ type: string; payload: unknown }>): void {
+  for (const p of pushes ?? []) {
+    try { routePush(p.type, p.payload); } catch (e) { console.error(`[remote-shim] replayed push ${p.type} failed:`, e); }
+  }
+}
+
 // Flush queued application messages once auth:ok has resolved.
 // Called ONLY from inside the auth:ok branch — never from ws.onopen, since
 // the bridge rejects application traffic before auth completes.
@@ -624,9 +712,9 @@ function invoke(type: string, payload?: any, opts?: { timeoutMs?: number }): Pro
       // what let the app tell you an action failed when it had actually succeeded and only
       // the reply was lost. It is now marked, asked about on reconnect, and never retried.
       entry.outcomeUnknown = true;
-      reject(new Error(`Request ${type} timed out`));
+      reject(unknownOutcomeError(`Request ${type} timed out`));
     }, timeoutMs);
-    pending.set(id, { resolve, reject, timeout, type });
+    pending.set(id, { resolve, reject, timeout, type, ...(typeof payload?.sendId === 'string' ? { sendId: payload.sendId } : {}) });
     // (Combined branch: bugfix-remote removed the reconnect replay list, so only
     // master's handoff send-failure path remains here.)
     // WHY: user actions are never queued; reject immediately and forget their
@@ -709,9 +797,9 @@ export const REJECT_ON_NOT_OK: ReadonlySet<string> = new Set([
   'theme:list',
   'commands:list',
   'appearance:get-favorite-themes',
-  // Installing Claude Code (first-run local models, F-5): the phone refuses with
-  // { ok:false }. Resolved as a value, the Settings card would read it as an
-  // install that finished.
+  // Installing Claude Code (first-run local models, F-5): open to a phone — the computer
+  // runs the installer (table entry main/ipc/claude-code.ts, Node first). Listed here so a
+  // refusal or failure `{ ok:false }` rejects instead of resolving as an install that finished.
   'claude-code:install',
   // Host administration is refused over the remote socket (desktop IPC only). Without
   // these the refusal `{ ok:false }` resolves as an ordinary value, so a phone that
@@ -766,7 +854,7 @@ export const REJECT_ON_NOT_OK: ReadonlySet<string> = new Set([
 export function responseOutcome(channel: string, payload: unknown): 'unsupported' | 'failure' | 'value' {
   if (!payload || typeof payload !== 'object') return 'value';
   if ((payload as { unsupported?: unknown }).unsupported === true) return 'unsupported';
-  if ((payload as { ok?: unknown }).ok === false && REJECT_ON_NOT_OK.has(channel)) return 'failure';
+  if (((payload as { ok?: unknown }).ok === false && REJECT_ON_NOT_OK.has(channel)) || (payload as Record<string, unknown>)[TABLE_ERROR_FLAG] === true) return 'failure'; // WHY (2026-09-30 one-core R3-2): TABLE_ERROR_FLAG marks a thrown table handler on ANY moved channel
   return 'value';
 }
 
@@ -851,8 +939,8 @@ function addListener(channel: string, cb: Callback): Callback {
     listeners.set(channel, set);
   }
   set.add(cb);
-  // The hydrate handler is the last thing App mounts before it can apply a restore.
-  if (channel === 'chat:hydrate') maybeSendClientReady();
+  // App's session listeners are what the host's hello (session list, topics, status) needs to land on.
+  if (channel === 'session:created') maybeSendClientReady();
   // The terminal's first listener takes everything that arrived before it existed.
   if (channel.startsWith('pty:output:') && set.size === 1) drainPtyBacklog(channel.slice('pty:output:'.length));
   return cb;
@@ -923,7 +1011,16 @@ function handleMessage(data: string, generation: number): void {
     return;
   }
 
-  // Push events — dispatch to registered listeners
+  // Push events: note where this session stands (the host numbers every session-scoped push), then hand it to the listeners.
+  // A live terminal frame for a session this connection has not opened yet is dropped (see openedHere).
+  if (type === 'pty:output' && !openedHere.has(payload?.sessionId) && !ptyEarly.has(payload?.sessionId)) return;
+  noteCursor(msg);
+  routePush(type, payload);
+}
+
+/** One push, handed to the listeners that registered for it. Used for a live message and for every push a `session.open` answer
+ *  replays, so a filled screen is drawn by the SAME handlers as a live one (one-core R5-2). */
+function routePush(type: string, payload: any): void {
   switch (type) {
     case 'pty:output': {
       const sid: string = payload.sessionId;
@@ -936,12 +1033,22 @@ function handleMessage(data: string, generation: number): void {
         if (listeners.get(`pty:output:${sid}`)?.size) dispatchEvent(`pty:reset:${sid}`);
         else backlogPty(sid, { kind: 'reset' });
       }
-      if (typeof payload.epoch === 'string' && typeof payload.offset === 'number') {
-        ptyOffsets.set(sid, { epoch: payload.epoch, units: payload.offset + String(payload.data ?? '').length });
+      let data: string = payload.data;
+      const stillDrawn = ptyOffsets.get(sid);
+      // WHY trim an overlap (one-core R5-2): an open's answer is cut at the moment the host finished reading the page, so a frame
+      // that arrived live while the page was being read can also be inside it. Draw only the part past what this page holds.
+      if (stillDrawn && typeof payload.epoch === 'string' && stillDrawn.epoch === payload.epoch && typeof payload.offset === 'number' && payload.offset < stillDrawn.units) {
+        const skip = stillDrawn.units - payload.offset;
+        if (skip >= String(data ?? '').length) break;   // every unit of it is already drawn
+        data = String(data).slice(skip);
+        payload = { ...payload, data, offset: stillDrawn.units };
       }
-      dispatchEvent('pty:output', sid, payload.data);                            // global (App.tsx mode detection)
-      if (listeners.get(`pty:output:${sid}`)?.size) dispatchEvent(`pty:output:${sid}`, payload.data);   // per-session (TerminalView)
-      else backlogPty(sid, { kind: 'output', data: String(payload.data ?? '') });
+      if (typeof payload.epoch === 'string' && typeof payload.offset === 'number') {
+        ptyOffsets.set(sid, { epoch: payload.epoch, units: payload.offset + String(data ?? '').length });
+      }
+      dispatchEvent('pty:output', sid, data);                            // global (App.tsx mode detection)
+      if (listeners.get(`pty:output:${sid}`)?.size) dispatchEvent(`pty:output:${sid}`, data);   // per-session (TerminalView)
+      else backlogPty(sid, { kind: 'output', data: String(data ?? '') });
       break;
     }
     case 'pty:reset': {
@@ -1008,13 +1115,22 @@ function handleMessage(data: string, generation: number): void {
       dispatchEvent('tags:changed', undefined, payload || {});
       break;
     case 'session:permission-mode':
-      // Android-only: corrects React's optimistic Shift+Tab cycling state.
-      // Desktop uses pty:output text detection in App.tsx, but Android doesn't
-      // forward raw PTY bytes to the renderer (terminal is rendered natively).
+      // Corrects React's optimistic Shift+Tab cycling state. From the Android app's own runtime (it has no raw terminal bytes in the
+      // renderer) AND, since one-core R5-4a, from the computer's host, which reads the mode footer off the terminal once for every screen.
       dispatchEvent('session:permission-mode', payload.sessionId, payload.mode);
+      break;
+    case 'session:live':
+      // The shared lines and live facts the host's record publishes (one-core R5-4a): queue, model label, dividers, the compaction
+      // spinner and prompt cards. An older computer never sends it.
+      if (payload && typeof payload === 'object') dispatchEvent('session:live', payload);
       break;
     case 'status:data':
       dispatchEvent('status:data', payload);
+      break;
+    case 'session:summary':
+      // The small per-session facts every session's dot is drawn from (one-core R5-3). Kept so a screen that subscribes AFTER the
+      // host's push (App mounts after auth:ok; the host pushes at connect) is handed the latest at once instead of waiting for a change.
+      if (payload && typeof payload === 'object') { lastSessionSummaries = payload; dispatchEvent('session:summary', payload); }
       break;
     case 'ui:action':
       dispatchEvent('ui:action:received', payload);
@@ -1045,19 +1161,6 @@ function handleMessage(data: string, generation: number): void {
       // {ok, login?, error?} — the token NEVER travels over the WS. Flows to
       // window.claude.github.onConnectDone(). Broadcast (no sessionId).
       dispatchEvent('github:connect-done', payload);
-      break;
-    case 'chat:hydrate':
-      // Only the hydrate this client last asked for (see clientReadySeq). A host from
-      // before the handshake sends none — apply that as it always was.
-      if (payload?.seq !== undefined && payload.seq !== clientReadySeq) {
-        console.warn('[remote-shim] ignoring stale chat:hydrate seq', payload.seq, 'latest', clientReadySeq);
-        return;
-      }
-      // Remembered BEFORE the page applies it: App's handler reports synchronously.
-      lastHydrate = { seq: payload?.seq, degraded: payload?.degraded === true };
-      // Full chat state snapshot sent by the host when a remote client connects.
-      // Dispatched into the chat reducer via window.claude.on.chatHydrate in App.tsx.
-      dispatchEvent('chat:hydrate', payload);
       break;
     case 'appearance:sync':
       dispatchEvent('appearance:sync', payload);
@@ -1135,8 +1238,7 @@ function handleMessage(data: string, generation: number): void {
       break;
     case 'native:session-context':
       // "What the assistant was given" — push-only (ipc-handlers.ts's
-      // nativeHost.on('session-context', …) forwarder). A client that connects
-      // LATER does not need this case: the record travels inside chat:hydrate.
+      // nativeHost.on('session-context', …) forwarder). A client that connects LATER is handed it by session.open.
       dispatchEvent('native:session-context', payload);
       break;
     case 'voice:event':
@@ -1228,6 +1330,16 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           myDeviceId = msg.deviceId ?? myDeviceId;
           if (typeof msg.deviceId === 'string' && msg.deviceId) rememberDeviceRow(getWsUrl(), msg.deviceId);
           authResolved = true;
+          // WHY here (one-core R4-1, S7): the host says what this screen can do, before anything announces the connection. An
+          // older computer sends nothing and gets the conservative defaults. Replaced on EVERY auth:ok: a reconnect or a
+          // switch between the Android app's own runtime and a paired computer takes the new host's answer.
+          const bridge = (window as any).claude;
+          if (bridge) {
+            bridge.capabilities = normalizeCapabilities(msg.capabilities);
+            bridge.protocolVersion = normalizeProtocolVersion(msg.protocolVersion);
+          }
+          // What the computer is showing, for a phone with no place of its own (batch 2 §3; read by App through `remote.focus`).
+          hostFocusSessionId = typeof msg.focus?.sessionId === 'string' ? msg.focus.sessionId : null;
           reconnectDelay = 1000; // Reset backoff on success
           reconnectAttempts = 0;
           // Signed in: the sign-in screen is gone, and a later drop is the strip's to report.
@@ -1259,18 +1371,22 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           // (mount-time fetches that fired before auth completed). Must be
           // here, not in ws.onopen — the bridge rejects pre-auth traffic.
           flushSendQueue();
+          // Whether this connection continues the same host's session (a reconnect) or starts one: a different host's positions mean
+          // nothing, so a first connect to it forgets the terminal's and every conversation's, BEFORE anything asks for a fill.
+          readyReconnect = hasConnectedBefore && lastReadyHost === getWsUrl();
+          openedHere.clear(); // every conversation is opened again on this connection
+          ptyEarly.clear();
+          if (!readyReconnect) { ptyOffsets.clear(); ptyBacklog.clear(); fillCursors.clear(); lastSessionSummaries = null; }
+          lastReadyHost = getWsUrl();
+          // A new round of fills starts with this connection (a connect or a reconnect): the strip says "restoring" until App has filled
+          // every conversation it holds and reports how it went. WHY before the reconnect event: App's listener starts filling at once.
+          beginFillRound();
+          // A reconnect: screens that load data ask again for themselves, and App fills each conversation again from where it left off.
           if (hasConnectedBefore) rehydrate();
           // Readiness (batch 2): a new connection generation may send client:ready once.
           // On a reconnect App's listener is still registered, so it goes out right here;
           // on a first connect App mounts after this, and addListener sends it.
           readySentThisGeneration = false;
-          // Batch 2 (§6): until the hydrate this connection asks for is applied.
-          setConversationPhase('restoring');
-          readyReconnect = hasConnectedBefore && lastReadyHost === getWsUrl();
-          // Terminal positions are the OLD host's stream positions — meaningless to a
-          // different host, which would only answer them with a reset anyway.
-          if (!readyReconnect) { ptyOffsets.clear(); ptyBacklog.clear(); }
-          lastReadyHost = getWsUrl();
           maybeSendClientReady();
           hasConnectedBefore = true;
           reconcileUnknownOutcomes();
@@ -1422,8 +1538,8 @@ function scheduleReconnect(token: string): void {
     localStorage.removeItem('youcoded-remote-token');
     // Reconnect to local bridge
     forgetConversationPhase();
-    connect('android-local', false).catch(() => {});
-    import('./platform').then(({ setConnectionMode }) => setConnectionMode('local'));
+    // WHY the mode flips in the .then (R4-1): capabilities change on the local runtime's auth:ok, so the mode changes WITH them, as in disconnectFromHost.
+    connect('android-local', false).then(() => import('./platform')).then(({ setConnectionMode }) => setConnectionMode('local')).catch(() => {});
     return;
   }
 
@@ -1845,19 +1961,17 @@ async function pickAndUploadFiles(): Promise<string[]> {
   // Read each file as base64 and upload to the desktop
   for (const file of Array.from(files)) {
     try {
-      const buffer = await file.arrayBuffer();
-      const bytes = new Uint8Array(buffer);
+      const bytes = new Uint8Array(await file.arrayBuffer());
       let binary = '';
-      for (let i = 0; i < bytes.length; i++) {
-        binary += String.fromCharCode(bytes[i]);
-      }
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
       const base64 = btoa(binary);
       const result = await invoke('file:upload', {
         name: file.name,
         data: base64,
         size: file.size,
       });
-      if (result?.path) paths.push(result.path);
+      // WHY (2026-10-01 one-core R3-SEC): a refusal (file over the size cap) now comes back as a sentence; show it instead of dropping the file silently.
+      if (result?.path) paths.push(result.path); else if (typeof result?.error === 'string') announce(result.error, 5000);
     } catch (err) {
       console.error('Failed to upload file:', file.name, err);
     }
@@ -1897,6 +2011,9 @@ export function installShim(): void {
   }
 
   (window as any).claude = {
+    // Conservative until the host's auth:ok says more (see the auth:ok branch).
+    capabilities: { ...REMOTE_SCREEN_CAPABILITIES },
+    protocolVersion: 0,
     // Parity with preload's devLabel. Always null here: a remote/Android client
     // has no process env, and the label describes the DEV INSTANCE you're sitting
     // in front of, not the host it happens to be talking to.
@@ -1930,6 +2047,26 @@ export function installShim(): void {
         setCreateParams: (id: string, create: import('../shared/types').HandoffCreateParams) => invoke('handoff:create-params', { id, create }),
       },
       create: (opts: any) => invoke('session:create', opts),
+      // The ONE way a conversation is filled (one-core R5-2; the host half is main/session-open.ts). Sends where this page got to (`have`,
+      // and how far the terminal drew) and answers with a page or just the events it missed; the caller applies the answer and then
+      // calls `play` for the pushes in it. On the phone's OWN bridge there is no host record to fill from: refused quietly, as
+      // `transcript:page` is, and the caller reads that as "nothing to load".
+      open: (req: { sessionId: string; claudeSessionId?: string; projectSlug?: string; fresh?: boolean }) =>
+        isAndroidLocal() ? refuseQuietlyOnPhone('session:open') : openSessionRemote(req),
+      // Stop being sent ONE conversation (one-core R5-3). `open` starts a watch, this ends it. What the page has drawn stays, and so does
+      // its position (`fillCursors`), so opening it again resumes with just what happened meanwhile. On the phone's OWN bridge there is
+      // no host record and no watch: refused quietly, exactly like `open`, so nothing is ever sent to the on-device runtime.
+      unwatch: (sessionId: string) => {
+        if (isAndroidLocal()) return refuseQuietlyOnPhone('session:unwatch');
+        // The terminal frames of an unwatched session are dropped from this moment, even one already on the wire.
+        openedHere.delete(sessionId);
+        ptyEarly.delete(sessionId);
+        return invoke('session:unwatch', { sessionId });
+      },
+      // Hand a list of pushes (an open's `before` / `after`) to the same listeners a live push reaches.
+      play: (pushes: Array<{ type: string; payload: unknown }>) => playPushes(pushes),
+      // The host asks a PHONE to fill again by closing its connection (the reconnect fills everything), so this never fires here.
+      onRefill: (_cb: (sessionId: string) => void) => () => {},
       destroy: (sessionId: string) => invoke('session:destroy', { sessionId }),
       list: () => invoke('session:list'),
       browse: () => invoke('session:browse'),
@@ -1940,7 +2077,7 @@ export function installShim(): void {
       // initial history load (tens of MB over the WS for large conversations).
       // `count || 10` / `all || false` mirror preload so the wire always carries
       // real number/boolean types (Android's optInt/optBoolean and the server's
-      // slice(-count) both need them). Guard: SessionBridge.loadHistory (shared/bridge-types.ts,
+      // slice(-count) both need them). Guard: SessionBridge.loadHistory (shared/backend-contract.ts,
       // parameter types) + remote-shim.test.ts (the order on the wire).
       loadHistory: (sessionId: string, projectSlug: string, count?: number, all?: boolean) =>
         invoke('session:history', { sessionId, projectSlug, count: count || 10, all: all || false }),
@@ -1968,8 +2105,22 @@ export function installShim(): void {
       reopenList: () => invoke('session:reopen-list'),
       forgetReopen: (ids: string[]) => invoke('session:forget-reopen', { ids }),
       canSend: () => ws?.readyState === WebSocket.OPEN && connectionState === 'connected',
-      sendInput: (sessionId: string, text: string) => fire('session:input', { sessionId, text }),
-      reportInputBlocked: (sessionId: string, blocked: boolean) => fire('session:input-blocked', { sessionId, blocked }),
+      sendInput: (sessionId: string, text: string, notice?: 'model-switch', sendId?: string) => (noteSendEpoch(sessionId, sendId), fire('session:input', { sessionId, text, notice, sendId })),
+      // Android's own runtime only: its host has no screen reader. A computer's windows and phones never call this (the computer reads the terminal itself).
+      reportInputBlocked: (sessionId: string, blocked: boolean) => { if (isAndroidLocal()) fire('session:input-blocked', { sessionId, blocked }); },
+      // What the computer noted for these send ids (one-core R5-4b), asked about with the record epoch each message was SENT under (`sendEpochs`),
+      // never the one the page holds now: after a computer restart and a refill the new epoch would say "not received" about a message the old
+      // computer did receive. The Android app's own runtime has no host record and nothing to lose on a network: resolves to undefined.
+      sendOutcomes: async (sessionId: string, ids: string[]) => {
+        if (isAndroidLocal()) return undefined;
+        // Group by the epoch each message was sent under; an id this page never sent (or lost on reload) has none, and the computer answers "unknown".
+        const groups = new Map<string | undefined, string[]>();
+        for (const id of ids) { const e = sendEpochs.get(id); groups.set(e, [...(groups.get(e) ?? []), id]); }
+        let epoch: string | null = null; const outcomes: Record<string, 'received' | 'not-received' | 'unknown'> = {};
+        const replies = await Promise.all([...groups].map(([e, group]) => invoke('session:send-outcomes', { sessionId, ids: group, ...(e ? { epoch: e } : {}) })));
+        for (const r of replies) { epoch = r?.epoch ?? epoch; Object.assign(outcomes, r?.outcomes ?? {}); }
+        return { epoch, outcomes };
+      },
       resize: (sessionId: string, cols: number, rows: number) => fire('session:resize', { sessionId, cols, rows }),
       signalReady: (sessionId: string) => fire('session:terminal-ready', { sessionId }),
       // Tracked while in flight so the host's resolution of THIS answer is not shown as
@@ -2023,6 +2174,13 @@ export function installShim(): void {
       },
       hookEvent: (cb: Callback) => addListener('hook:event', cb),
       statusData: (cb: Callback) => addListener('status:data', cb),
+      // Per-session summaries (one-core R5-3): a phone draws its dots and attention sound from these, because it no longer receives the
+      // events of conversations it is not watching. A late subscriber is told the latest at once (it missed the push).
+      sessionSummary: (cb: Callback) => {
+        const handler = addListener('session:summary', cb);
+        if (lastSessionSummaries) cb(lastSessionSummaries);
+        return () => removeListener('session:summary', handler);
+      },
       sessionRenamed: (cb: Callback) => addListener('session:renamed', cb),
       // Plan 2b Task 10 — "this conversation moved to <device>" push (parity
       // with preload's sessionMoved). Returns the cb so off() can remove it.
@@ -2038,16 +2196,17 @@ export function installShim(): void {
       specialistEvent: (cb: Callback) => { addListener('specialists:event', cb); return () => removeListener('specialists:event', cb); },
       // G-1: background command run records — mirrors preload's on.shellEvent.
       shellEvent: (cb: Callback) => { addListener('native:shell-event', cb); return () => removeListener('native:shell-event', cb); },
-      // Android-only push event — see remote-shim handleMessage above for rationale.
+      // See remote-shim handleMessage above: the Android app's own runtime and the computer's host both push it.
       sessionPermissionMode: (cb: Callback) => addListener('session:permission-mode', cb),
+      // The shared lines and live facts the host's record publishes (one-core R5-4a).
+      sessionLive: (cb: Callback) => { addListener('session:live', cb); return () => removeListener('session:live', cb); },
       uiAction: (cb: Callback) => addListener('ui:action:received', cb),
-      transcriptEvent: (cb: Callback) => addListener('transcript:event', cb),
+      transcriptEvent: (cb: (event: import('../shared/types').TranscriptEvent) => void) => addListener('transcript:event', cb),
       transcriptShrink: (cb: Callback) => addListener('transcript:shrink', cb),
       promptShow: (cb: Callback) => addListener('prompt:show', cb),
       promptDismiss: (cb: Callback) => addListener('prompt:dismiss', cb),
       promptComplete: (cb: Callback) => addListener('prompt:complete', cb),
       // Full chat state snapshot received from host on connect (remote browsers only).
-      chatHydrate: (cb: Callback) => addListener('chat:hydrate', cb),
     },
     skills: {
       list: () => invoke('skills:list'),
@@ -2321,10 +2480,11 @@ export function installShim(): void {
         unpair: (deviceId: string) => invoke('remote:devices:unpair', { deviceId }),
       },
       broadcastAction: (action: any) => fire('ui:action', action),
-      // Batch 2 (§6): Refresh on the may-be-behind strip, and App's report of what its
-      // hydrate kept (the shim derives incomplete/complete from it).
+      // Batch 2 (§6): Refresh on the may-be-behind strip, and App's report of how a round of fills went (the shim
+      // derives incomplete/complete from it; one-core R5-2).
       rehydrate: () => requestRehydrate(),
-      reportHydrate: (report: { seq?: number; kept?: string[] }) => reportHydrate(report),
+      focus: () => hostFocusSessionId,
+      reportFill: (report: { round?: number; failed?: number }) => reportFill(report),
     },
     model: {
       getPreference: () => invoke('model:get-preference'),
@@ -2802,13 +2962,12 @@ export function installShim(): void {
       submitApiKey: (_key: string, _service?: string) => Promise.resolve(),
       cancelAuth: () => Promise.resolve(),
       skip: () => Promise.resolve(),
-      // First-run local models (2026-09-14). First-run never shows here, and the
-      // band above the message box describes the HOST's first download, which a
-      // phone has no way to read — so every one answers "nothing".
+      // First-run local models (2026-09-14): never shown here, and the band describes the HOST's
+      // first download, which a phone cannot read — so every one answers "nothing".
       localSetup: () => Promise.resolve(null),
       connectLocalApp: (_baseUrl: string, _name: string) => Promise.resolve({ ok: false, message: 'Setup runs on the computer itself.' }),
-      localDownload: (_sessionId?: string | null) => Promise.resolve(null),
-      resumeLocalDownload: (_sessionId?: string | null) => Promise.resolve(),
+      localDownload: () => Promise.resolve(null),
+      resumeLocalDownload: () => Promise.resolve(),
       onStateChanged: (_cb: Callback) => (() => {}),
     },
     // Android-only bridge methods — when connected to a remote desktop, these
@@ -2899,27 +3058,21 @@ export function installShim(): void {
       dragAdopt: (_p: any) => {},
       focusAndSwitch: (_p: any) => {},
       openDetached: (_p: any) => {},
-      requestTranscriptReplay: (_sid: string) => {},
-      // Stubs: multi-window ownership is desktop-only. There is no second
-      // window on the phone or in a remote browser, so nothing is ever queued
-      // and there is no memory-only state to re-send — the page fetched by
-      // requestTranscriptPage below is the whole story. Both must EXIST though:
-      // App.tsx calls them unconditionally on mount, and a missing key is a
-      // TypeError, not a no-op.
+      // Stub: multi-window ownership is desktop-only. There is no second window on the phone or in a remote browser, so nothing is
+      // ever queued — a conversation's content is `session.open`'s job. It must EXIST though: App.tsx calls it unconditionally on
+      // mount, and a missing key is a TypeError, not a no-op.
       claimPending: () => Promise.resolve([] as any[]),
-      replayLiveState: (_sid: string) => Promise.resolve(),
-      // A REAL call, not a stub, when a desktop is on the other end.
-      // requestTranscriptReplay above shipped as a no-op and silently gave the
-      // phone no history for months; paging is the only way back through a long
-      // conversation, so it must reach the desktop.
+      // A REAL call, not a stub, when a desktop is on the other end: paging is the only way back through a long
+      // conversation, so it must reach the desktop. (A conversation's NEWEST page arrives with its fill, `session.open`.)
       // On the phone's OWN bridge there is no pager (deliberately absent since
       // 2026-08-27, see tests/transcript-page-channel-parity.test.ts): App.tsx
       // asks for the first page of every session on launch, so the refusal is
       // quiet — the callers already treat it as "no older messages".
-      requestTranscriptPage: (req: { sessionId: string; beforeCursor?: unknown; claudeSessionId?: string; projectSlug?: string }) =>
+      requestTranscriptPage: (req: { sessionId: string; beforeCursor?: unknown; claudeSessionId?: string; projectSlug?: string; toEnd?: boolean }) =>
         isAndroidLocal() ? refuseQuietlyOnPhone('transcript:page') : invoke('transcript:page', {
           sessionId: req.sessionId,
           beforeCursor: req.beforeCursor ?? null,
+          ...(req.toEnd ? { toEnd: true } : {}),
           claudeSessionId: req.claudeSessionId,
           projectSlug: req.projectSlug,
         }),
@@ -3019,11 +3172,11 @@ export function installShim(): void {
     // Native runtime — desktop Electron only. false on Android/remote-browser
     // so the renderer gates the runtime selector without platform branching.
     native: {
-      supported: false,
+      get supported(): boolean { return (window as any).claude?.capabilities?.nativeSessions === true; }, // WHY a getter (R6-1): the host's handshake says whether a phone may drive a native session; it arrives after this object is built
       // Object payloads match how remote-server.ts's WS cases read them
       // (payload.sessionId / payload.text / payload.binding).
       // M1: invoke — returns {status,reason} so remote UI matches desktop
-      send: (sessionId: string, text: string, attachments?: string[]) => invoke('native:send', { sessionId, text, attachments }),
+      send: (sessionId: string, text: string, attachments?: string[], sendId?: string) => (noteSendEpoch(sessionId, sendId), invoke('native:send', { sessionId, text, attachments, sendId })),
       // Task 11: cancel/edit a queued message — request/response (mirrors preload.ts).
       queueRemove: (sessionId: string, queueId: string) => invoke('native:queue-remove', { sessionId, queueId }),
       queueSendNow: (sessionId: string, queueId: string) => invoke('native:queue-send-now', { sessionId, queueId }),
@@ -3116,8 +3269,8 @@ export function installShim(): void {
     // locally would be meaningless.
     claudeCode: {
       status: (opts?: { refresh?: boolean }) => invoke('claude-code:status', opts),
-      // Installs on the DESKTOP (remote-server runs the installer). A phone has
-      // no installer and refuses with {ok:false}, which REJECT_ON_NOT_OK turns
+      // Installs on the DESKTOP: the table entry (main/ipc/claude-code.ts) runs the installer
+      // for a phone too. A failure or refusal answers {ok:false}, which REJECT_ON_NOT_OK turns
       // into an error the Settings card shows.
       install: () => invoke('claude-code:install'),
     },
@@ -3236,7 +3389,7 @@ export function installShim(): void {
     },
     // WHY `satisfies`: a compile-time-only check (no runtime effect) that this
     // object implements every `session`, `on` and favorites member preload.ts
-    // does — see SharedBridge in shared/bridge-types.ts.
+    // does — see SharedBridge in shared/backend-contract.ts.
   } satisfies RemoteBridge;
 
   // The one intentional gap in the shared shape: voice typing exists on the

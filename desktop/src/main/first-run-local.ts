@@ -57,12 +57,9 @@ export function clearSetupDownload(dir: string): void {
 }
 
 /** What the band above the message box shows — shape shared with the renderer's strip. */
-export interface SetupDownloadStatus {
-  state: 'downloading' | 'stopped' | 'done';
-  modelLabel: string;
-  percent: number;
-  minutesLeft: number | null;
-}
+// WHY (2026-09-30 one-core R3-3): declared once in shared/first-run-types.ts (also read by the strip).
+import type { SetupDownloadStatus } from '../shared/first-run-types';
+export type { SetupDownloadStatus };
 
 const pct = (received: number, total: number | null | undefined) =>
   total && total > 0 ? Math.min(100, Math.round((received / total) * 100)) : 0;

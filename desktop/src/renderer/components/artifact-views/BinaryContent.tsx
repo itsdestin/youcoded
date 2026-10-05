@@ -1,6 +1,6 @@
 import React from 'react';
 import { useArtifactBytes } from './useArtifactBytes';
-import { getPlatform, isRemoteMode } from '../../platform';
+import { getCapabilities, isRemoteMode } from '../../platform';
 import { Button } from '../ui';
 import { RemoteFileCard } from './RemoteFileCard';
 
@@ -24,6 +24,9 @@ export function describeBytesError(error: string, noun: string): string {
       // Was: "…use “Open externally”" — a control this component never rendered.
       // The button below is that control, finally present.
       return `This ${noun} is larger than YouCoded can display.`;
+    case 'kept-on-computer':
+      // WHY (2026-10-01 one-core R3-SEC): the phone deny list (keys, saved logins, .git…).
+      return `This ${noun} is kept on the computer and isn’t available over remote access.`;
     case 'not-allowed':
       return `This ${noun} is outside your project folders and can’t be previewed.`;
     case 'unavailable':
@@ -55,12 +58,13 @@ export function BinaryContent({ absolutePath, noun, children }: {
     // The action the old copy pointed at but never rendered. Desktop-only for
     // the same reason BinaryFallback gates it: shell.openPath is a no-op on
     // remote and absent on Android, so the button would silently do nothing.
-    const isElectron = getPlatform() === 'electron';
+    // R4-1: `openInOs` capability, not a platform-name guess.
+    const canOpenInOs = getCapabilities().openInOs;
     return (
       <CenterNote>
         <div className="flex flex-col items-center gap-3">
           <span>{describeBytesError(error ?? 'read-failed', noun)}</span>
-          {isElectron && (
+          {canOpenInOs && (
             <Button size="sm" onClick={() => (window.claude as any).shell?.openPath?.(absolutePath)}>
               Open in default app
             </Button>
