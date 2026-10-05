@@ -454,6 +454,12 @@ export class SessionManager extends EventEmitter {
 
     worker.on('message', (msg: any) => {
       switch (msg.type) {
+        case 'size':
+          // The worker changed the PTY size (a real resize or the repaint nudge) — in stream order with the data around it.
+          // Keep our record of it and tell the computer's screen copy, so output made at that size is laid out at that size.
+          this.ptySizes.set(id, { cols: msg.cols, rows: msg.rows });
+          this.emit('pty-size', id, msg.cols, msg.rows);
+          break;
         case 'data':
           this.emit('pty-output', id, msg.data, this.chunkNoter?.(id, msg.data) ?? null);
           // Type the command onto the prompt, exactly once.
@@ -601,7 +607,36 @@ export class SessionManager extends EventEmitter {
     const session = this.sessions.get(id);
     if (!session || !session.worker) return false; // native sessions have no PTY
     try { session.worker.send({ type: 'resize', cols, rows }); } catch { return false; }
-    this.ptySizes.set(id, { cols, rows });
+    // WHY no ptySizes.set here: the worker reports every size change in stream order ('size' below) and is the ONE authority. Setting it at
+    // request time ran before the PTY had resized and before old-size output had drained, and made the screen copy wobble when a request
+    // landed mid repaint-nudge. A session with no worker (native) has no PTY and no screen copy, so there is nothing to keep in step.
+    return true;
+  }
+
+  /**
+   * The terminal finished parsing `chars` characters of this session's output: tell the PTY worker so
+   * it can lift its brake. WHY here and not in the worker's own bookkeeping: only the renderer knows
+   * when xterm has actually consumed the text — that is the whole point of flow control (the old
+   * pipeline forwarded everything instantly and xterm silently discarded the overflow).
+   * Fire-and-forget; a session with no worker (native) or a closed channel is simply a no-op.
+   */
+  ackOutput(id: string, chars: number): boolean {
+    const session = this.sessions.get(id);
+    if (!session || !session.worker) return false;
+    try { session.worker.send({ type: 'ack', n: chars }); } catch { return false; }
+    return true;
+  }
+
+  /**
+   * Ask the program to repaint its whole screen: the PTY worker nudges the PTY size (one column narrower, then back).
+   * The single owner of that nudge — main's router (a cut pre-mount buffer) and the renderer (a cut hidden-window
+   * backlog, via session:terminal-repaint) both come here, so overlapping requests and real resizes (a phone's
+   * included) are arbitrated in one place. Not on Windows (the worker skips it: ConPTY re-emits its buffer).
+   */
+  bounceSize(id: string): boolean {
+    const session = this.sessions.get(id);
+    if (!session || !session.worker) return false;
+    try { session.worker.send({ type: 'bounce' }); } catch { return false; }
     return true;
   }
 

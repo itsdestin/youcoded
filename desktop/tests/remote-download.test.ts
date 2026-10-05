@@ -506,7 +506,9 @@ describe('download hardening', () => {
         expect(opened.every((h) => h.fd === -1)).toBe(true);
         expect(dl.liveStreams(who.socketId)).toBe(0);
       });
-      expect(waiting[1].status).toBe(200);
+      // WHY waitFor (flaky under load, 2026-10-05): the server frees its slot as soon as the stream finishes, which can be
+      // a moment BEFORE this client's response callback has set `status`; a bare read then saw null.
+      await vi.waitFor(() => expect(waiting[1].status).toBe(200));
     } finally {
       releaseOpen();
       for (const r of reqs) r.req.destroy();

@@ -32,16 +32,16 @@ describe('session channels: what is in the table and who may call it', () => {
   it('every session, naming and transcript request name in the contract has an entry, except the desktop window plumbing left for its own group', () => {
     const inTable = new Set(CHANNEL_TABLE.map((d) => d.name));
     const names = Object.values(IPC).filter((v) => FAMILY.test(v) && !PUSHES.has(v) && !NOT_YET.has(v));
-    // 23 = create destroy list selected switch input resize terminal-ready menu-lock browse history read-meta
+    // 24 = create destroy list selected switch input resize terminal-ready terminal-ack terminal-repaint menu-lock browse history read-meta
     //      page open unwatch prompt-report set-flag set-tag set-note get-meta reopen-list forget-reopen + 4 naming; a new one must be decided here.
-    expect(names.length).toBe(26);
+    expect(names.length).toBe(28);
     expect(names.filter((n) => !inTable.has(n))).toEqual([]);
   });
 
   it('a phone may use exactly what it could before plus set-flag; the window-only ones stay computer-only', () => {
     const entries = CHANNEL_TABLE.filter((d) => FAMILY.test(d.name) && !NOT_YET.has(d.name));
     const refused = entries.filter((d) => d.desktopOnly || d.remoteAllowed === false).map((d) => d.name).sort();
-    expect(refused).toEqual(['session:forget-reopen', 'session:reopen-list', 'session:selected', 'session:terminal-ready']);
+    expect(refused).toEqual(['session:forget-reopen', 'session:reopen-list', 'session:selected', 'session:terminal-ack', 'session:terminal-ready', 'session:terminal-repaint']);
   });
 
   it('a phone asking for the refused ones gets what it always got: an empty answer, silence, or the standard refusal', async () => {
@@ -50,6 +50,9 @@ describe('session channels: what is in the table and who may call it', () => {
     expect(await answer('session:forget-reopen')).toEqual({ reply: true, payload: { ok: true } });
     expect(await answer('session:selected')).toEqual({ reply: false });
     expect(await answer('session:terminal-ready')).toEqual({ reply: false });
+    // Flow control is the desktop window's alone: a phone's copy is dropped before any handler runs, so a slow phone can never brake the desktop's program.
+    expect(await answer('session:terminal-ack')).toEqual({ reply: false });
+    expect(await answer('session:terminal-repaint')).toEqual({ reply: false });
   });
 
   it('a phone may set a session flag: the old refusal is gone and the handler runs', async () => {

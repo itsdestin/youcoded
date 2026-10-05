@@ -81,6 +81,8 @@ const IPC = {
   SKILLS_INSTALL_MANY: 'skills:install-many',
   SKILLS_APPLY_OUTPUT_STYLE: 'skills:apply-output-style',
   TERMINAL_READY: 'session:terminal-ready',
+  TERMINAL_ACK: 'session:terminal-ack',
+  TERMINAL_REPAINT: 'session:terminal-repaint',
   SESSION_CREATED: 'session:created',
   SESSION_DESTROYED: 'session:destroyed',
   SESSION_MOVED: 'session:moved',
@@ -681,6 +683,13 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.send(IPC.SESSION_RESIZE, { sessionId, cols, rows }),
     signalReady: (sessionId: string) =>
       ipcRenderer.send(IPC.TERMINAL_READY, { sessionId }),
+    // Flow control: "this terminal finished drawing `chars` characters" — lets main lift the brake on a
+    // flooding program. Fire-and-forget; only a window the session routes to is believed (terminal-output-router.ts).
+    ackOutput: (sessionId: string, chars: number) =>
+      ipcRenderer.send(IPC.TERMINAL_ACK, { sessionId, chars }),
+    // A hidden window's backlog was cut: ask the program to repaint once (main arbitrates the size nudge).
+    requestRepaint: (sessionId: string) =>
+      ipcRenderer.send(IPC.TERMINAL_REPAINT, { sessionId }),
     respondToPermission: (requestId: string, decision: object) =>
       ipcRenderer.invoke(IPC.PERMISSION_RESPOND, { requestId, decision }),
     browse: (): Promise<any[]> =>

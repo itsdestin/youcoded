@@ -26,6 +26,8 @@ interface Props {
   /** Session provider — drives provider-aware stop-reason copy (native vs Claude). */
   provider?: SessionProvider;
   showTimestamps: boolean;
+  /** This turn is the one the model is writing right now (the chat's currentTurnId). False/absent for finished and history turns. */
+  streaming?: boolean;
 }
 
 // Non-end_turn stop reasons rendered inline under the affected turn.
@@ -432,6 +434,8 @@ function assistantTurnPropsAreEqual(prev: Props, next: Props): boolean {
   if (prev.sessionId !== next.sessionId) return false;
   if (prev.provider !== next.provider) return false;
   if (prev.showTimestamps !== next.showTimestamps) return false;
+  // The turn ending flips this with no change to the turn object; the text must redraw once as one piece.
+  if (prev.streaming !== next.streaming) return false;
 
   // Same turn object (checked above) ⇒ same segments ⇒ same group IDs. We only
   // need to walk one side's IDs.
@@ -448,7 +452,7 @@ function assistantTurnPropsAreEqual(prev: Props, next: Props): boolean {
   return true;
 }
 
-export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolCalls, sessionId, provider, showTimestamps }: Props) {
+export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolCalls, sessionId, provider, showTimestamps, streaming }: Props) {
   // Read opt-in metadata preference here so the strip below only renders when
   // the user has explicitly turned it on in PreferencesPopup (default false).
   const { showTurnMetadata } = useTheme();
@@ -547,7 +551,7 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
                       blocks are drawn once instead of re-parsed per word (sweep A5). */}
                   {/* WHY: message-only Find must never walk adjacent reasoning, tool controls or plan cards. */}
                   <span data-message-find-body={bubble.text.findIndex} className="contents">
-                    <MarkdownContent content={bubble.text.content} sessionId={sessionId} incremental />
+                    <MarkdownContent content={bubble.text.content} sessionId={sessionId} incremental live={streaming} />
                   </span>
                 </SessionRefsEnabled.Provider>
               )}
