@@ -9,7 +9,8 @@ import { app, systemPreferences } from 'electron';
 import type { MacIconLook } from './app-icon';
 
 // Read off macOS 26.7.1 (Tahoe VM, 2026-10-04): System Settings → Appearance → Icon & widget style
-// writes this global default — "ClearLight" for Clear in light mode — and REMOVES it for Default.
+// writes this global default — "RegularDark" (Dark), "ClearLight" (Clear), "TintedLight" (Tinted) —
+// and REMOVES it for Default.
 const LOOK_KEY = 'AppleIconAppearanceTheme';
 
 /** Map the raw setting to a look. Exported for tests. */
