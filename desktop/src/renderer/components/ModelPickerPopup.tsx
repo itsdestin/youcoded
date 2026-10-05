@@ -123,7 +123,7 @@ export function ModelInfoTooltip({ model }: { model: ModelAlias }) {
 }
 
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'max', 'auto'] as const;
-export type EffortLevel = typeof EFFORT_LEVELS[number];
+type EffortLevel = typeof EFFORT_LEVELS[number];
 
 // `max` effort is only accepted by the top-tier models (Opus 1M + Fable);
 // Claude Code rejects it elsewhere. Keep this list in sync with the disable
