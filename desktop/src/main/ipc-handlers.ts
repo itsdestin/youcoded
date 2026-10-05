@@ -2017,6 +2017,7 @@ export function registerIpcHandlers(
     ipcMain, sessionManager, windowRegistry, routeTargets, sendForSession,
     fromId: (id) => webContents.fromId(id) as any,
     channels: { ready: IPC.TERMINAL_READY, ack: IPC.TERMINAL_ACK, repaint: IPC.TERMINAL_REPAINT },
+    log: (level, component, message, data) => log(level, component, message, data),
   });
 
   // No-op: Electron has no hardware back button. Registered for shape

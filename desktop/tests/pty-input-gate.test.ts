@@ -7,6 +7,9 @@ import {
   pendingInteractionRefusalCopy,
   pendingCardRef,
   sendBlock,
+  screenInputBlock,
+  screenPaint,
+  waitForPaintedScreen,
 } from '../src/renderer/state/pty-input-gate';
 import { Terminal } from '@xterm/headless';
 import { registerTerminal, unregisterTerminal } from '../src/renderer/hooks/terminal-registry';
@@ -258,15 +261,18 @@ describe('sendBlock — the screen blocks what the chat state cannot see', () =>
   });
 });
 
-// 2026-10-05: a freshly re-mounted terminal is blank (or shows one stray row) until the program repaints. That is
-// "no picture yet", not a pop-up — refusing the send there showed "Claude Code is waiting on something" on an idle session.
-describe('sendBlock — an unpainted screen is unknown, not a pop-up', () => {
+// 2026-10-05: a freshly re-mounted terminal is blank (or shows one stray row) until the program repaints. The SYNC gate
+// stays strict (an unpainted screen may be a hook-less pop-up mid-draw); only the composer waits for a picture.
+describe('unpainted screens — strict for sync callers, waited on by the composer', () => {
   const RULE = '─'.repeat(60);
-  async function withScreen(id: string, rows: string[], run: () => void) {
+  const FRAME_BOX = ['history', RULE, '❯ ', RULE, '  ⏵⏵ auto mode on'];
+  const FRAME_POPUP = ['history', RULE, '  Select model', '  ❯ 1. Default', '    2. Opus', '  Esc to cancel'];
+  function mount(id: string) {
     const term = new Terminal({ cols: 120, rows: 20, allowProposedApi: true });
     registerTerminal(id, term as never);
-    await new Promise<void>((r) => term.write(rows.join('\r\n'), r));
-    try { run(); } finally { unregisterTerminal(id); term.dispose(); }
+    const set = async (rows: string[]) => { await new Promise<void>((r) => term.write('\x1b[2J\x1b[H' + rows.join('\r\n'), r)); };
+    const done = () => { unregisterTerminal(id); term.dispose(); };
+    return { set, done };
   }
   function spyRepaint() {
     const requestRepaint = vi.fn();
@@ -274,37 +280,73 @@ describe('sendBlock — an unpainted screen is unknown, not a pop-up', () => {
     return requestRepaint;
   }
 
-  it('a blank screen does not block', async () => {
-    await withScreen('u-blank', [], () => { expect(sendBlock(createSessionChatState(), 'u-blank')).toBeNull(); });
+  it('a stray fragment blocks the sync gate (bare-Enter retry, Shift+Tab) and asks for a repaint', async () => {
+    const rr = spyRepaint(); const m = mount('p-frag');
+    await m.set([' '.repeat(79) + 'Checking for updates']);
+    expect(screenInputBlock('p-frag')).not.toBeNull();
+    expect(sendBlock(createSessionChatState(), 'p-frag')?.kind).toBe('screen');
+    expect(rr).toHaveBeenCalledWith('p-frag', undefined);
+    m.done();
   });
 
-  it('one stray status row does not block, and asks the program to repaint', async () => {
-    const rr = spyRepaint();
-    await withScreen('u-frag', [' '.repeat(79) + 'Checking for updates'], () => {
-      expect(sendBlock(createSessionChatState(), 'u-frag')).toBeNull();
-      expect(rr).toHaveBeenCalledWith('u-frag');
-    });
+  it('a 2-3 row rule-less prompt blocks the sync gate and is "unpainted" for the composer', async () => {
+    const m = mount('p-short');
+    await m.set(['  Do you trust this folder?', '  ❯ 1. Yes']);
+    expect(screenInputBlock('p-short')).not.toBeNull();
+    expect(screenPaint('p-short')).toBe('unpainted');
+    m.done();
   });
 
-  it('a genuine pop-up (edge rule + options) still blocks and does not ask for a repaint', async () => {
-    const rr = spyRepaint();
-    await withScreen('u-popup', ['history', RULE, '  Export conversation', '  ❯ 1. Copy to clipboard', '    2. Save to file', '  Esc to cancel'], () => {
-      expect(sendBlock(createSessionChatState(), 'u-popup')?.kind).toBe('screen');
-      expect(rr).not.toHaveBeenCalled();
-    });
+  it('any box-drawing run of 10+ on a tiny screen is not "unpainted" (rounded, double and titled rules)', async () => {
+    const m = mount('p-box');
+    await m.set(['╭' + '─'.repeat(30) + '╮', '│ Select │']);
+    expect(screenPaint('p-box')).toBe('painted');
+    await m.set(['── Title ' + '─'.repeat(8) + ' ──', 'x']);
+    expect(screenPaint('p-box')).toBe('painted');
+    m.done();
   });
 
-  it('even a short pop-up with a rule on screen blocks', async () => {
-    await withScreen('u-short', [RULE, '  Trust this folder?', '  ❯ 1. Yes'], () => {
-      expect(sendBlock(createSessionChatState(), 'u-short')?.kind).toBe('screen');
-    });
+  it('a genuine pop-up still blocks; the message box does not; no terminal is no verdict', async () => {
+    const m = mount('p-real');
+    await m.set(FRAME_POPUP); expect(sendBlock(createSessionChatState(), 'p-real')?.kind).toBe('screen');
+    await m.set(FRAME_BOX); expect(sendBlock(createSessionChatState(), 'p-real')).toBeNull();
+    m.done();
+    expect(sendBlock(createSessionChatState(), 'p-none')).toBeNull();
+    expect(screenPaint('p-none')).toBe('none');
   });
 
-  it('the message box still allows', async () => {
-    await withScreen('u-box', ['history', RULE, '❯ ', RULE], () => { expect(sendBlock(createSessionChatState(), 'u-box')).toBeNull(); });
+  it('waitForPaintedScreen: fragment, then the full frame -> resolves "box" only once the box is there', async () => {
+    const m = mount('w-seq');
+    await m.set(['Checking for updates']);
+    let resolved: string | null = null;
+    const p = waitForPaintedScreen('w-seq', { timeoutMs: 1000, stepMs: 10 }).then((v) => { resolved = v; return v; });
+    await new Promise((r) => setTimeout(r, 80));
+    expect(resolved).toBeNull();                       // still waiting while only the fragment is there
+    await m.set(FRAME_BOX);
+    expect(await p).toBe('box');
+    m.done();
   });
 
-  it('a screenful of text with no message box and no rule (a full-screen view) still blocks', async () => {
-    await withScreen('u-full', ['a', 'b', 'c', 'd', 'e'], () => { expect(sendBlock(createSessionChatState(), 'u-full')?.kind).toBe('screen'); });
+  it('waitForPaintedScreen: a pop-up that draws progressively is "blocked", never "box"', async () => {
+    const m = mount('w-pop');
+    await m.set([RULE.slice(0, 5)]);                   // fragment of an edge
+    const p = waitForPaintedScreen('w-pop', { timeoutMs: 1000, stepMs: 10 });
+    await new Promise((r) => setTimeout(r, 30));
+    await m.set(FRAME_POPUP);
+    expect(await p).toBe('blocked');
+    m.done();
+  });
+
+  it('waitForPaintedScreen: still nothing at the deadline -> "unpainted" (after waiting), and a cancel writes nothing', async () => {
+    const m = mount('w-dead');
+    await m.set(['Checking for updates']);
+    const t0 = Date.now();
+    expect(await waitForPaintedScreen('w-dead', { timeoutMs: 120, stepMs: 10 })).toBe('unpainted');
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(110);
+    const sig = { aborted: false };
+    const p = waitForPaintedScreen('w-dead', { timeoutMs: 1000, stepMs: 10, signal: sig });
+    sig.aborted = true;
+    expect(await p).toBe('cancelled');
+    m.done();
   });
 });

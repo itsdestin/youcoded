@@ -9,6 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 
 const wcs = vi.hoisted(() => new Map<number, any>());
+const handlersLog = vi.hoisted(() => [] as string[]);
 
 vi.mock('electron', () => {
   const BrowserWindowMock: any = vi.fn(() => ({ loadURL: vi.fn(), on: vi.fn(), webContents: { send: vi.fn() } }));
@@ -92,6 +93,8 @@ vi.mock('../src/main/harness/native-session-host', () => {
 });
 
 
+vi.mock('../src/main/logger', async (orig) => ({ ...(await orig<any>()), log: (level: string, component: string, msg: string) => { handlersLog.push(`${level} ${component} ${msg}`); } }));
+
 import { registerIpcHandlers } from '../src/main/ipc-handlers';
 import { WindowRegistry } from '../src/main/window-registry';
 import { IPC } from '../src/shared/types';
@@ -124,10 +127,11 @@ function world() {
   const ready = (from: any) => handlers.get(IPC.TERMINAL_READY)!({ sender: from }, SID);
   const ack = (from: any, n: number) => handlers.get(IPC.TERMINAL_ACK)!({ sender: from }, SID, n);
   const repaint = (from: any) => handlers.get(IPC.TERMINAL_REPAINT)!({ sender: from }, SID);
+  const repaintWhy = (from: any, why: string) => handlers.get(IPC.TERMINAL_REPAINT)!({ sender: from }, SID, why);
   const out = (data: string) => sm.emit('pty-output', SID, data);
   /** Total credit passed back to the PTY worker so far. */
   const released = () => sm.ackOutput.mock.calls.reduce((n: number, c: any[]) => n + c[1], 0);
-  return { w1, w2, w3, registry, sm, ready, ack, out, released, repaint };
+  return { w1, w2, w3, registry, sm, ready, ack, out, released, repaint, repaintWhy };
 }
 
 describe('terminal flow wiring: nothing can brake a session no desktop terminal will answer', () => {
@@ -460,11 +464,58 @@ describe('terminal flow wiring: a re-mounted terminal is given a picture', () =>
     expect(t.sm.bounceSize).toHaveBeenCalledWith(SID);
   });
 
-  it('ready reported twice in a row repaints once (rate limit shared with the renderer request)', () => {
+  it('a repaint request inside the 1 s window is NOT dropped: exactly one trailing request fires when the window ends', () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    try {
+      const t = world();
+      t.registry.assignSession(SID, 2); t.ready(t.w2); t.out('x');
+      reload(t.w2); t.ready(t.w2);                           // first re-mount: repaint now
+      expect(t.sm.bounceSize).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(200);
+      reload(t.w2); t.ready(t.w2);                           // second reload 200 ms later: rate-limited, must still happen
+      t.ready(t.w2);                                         // and a third request in the window adds nothing (one timer)
+      expect(t.sm.bounceSize).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(900);                           // window (1000 ms from the first) ends
+      expect(t.sm.bounceSize).toHaveBeenCalledTimes(2);
+      vi.advanceTimersByTime(5000);
+      expect(t.sm.bounceSize).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('a renderer repaint request right after a re-mount repaint is also deferred, not lost; the trailing timer dies with the session', () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    try {
+      const t = world();
+      t.registry.assignSession(SID, 2); t.ready(t.w2); t.out('x');
+      reload(t.w2); t.ready(t.w2);
+      vi.advanceTimersByTime(100);
+      t.repaint(t.w2);
+      vi.advanceTimersByTime(950);
+      expect(t.sm.bounceSize).toHaveBeenCalledTimes(2);
+      vi.advanceTimersByTime(10);
+      t.repaint(t.w2);                                       // limited again (window restarted by the trailing bounce)
+      t.sm.emit('session-exit', SID, 0);
+      vi.advanceTimersByTime(5000);
+      expect(t.sm.bounceSize).toHaveBeenCalledTimes(2);      // ended session: no stray bounce
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('the replay is queued BEFORE the repaint request (the repaint lands on top of the replayed text)', () => {
     const t = world();
-    t.registry.assignSession(SID, 2); t.ready(t.w2); t.out('x');
-    reload(t.w2); t.ready(t.w2); t.ready(t.w2);
-    expect(t.sm.bounceSize).toHaveBeenCalledTimes(1);
+    t.registry.assignSession(SID, 2); t.ready(t.w2); t.out('screen'); reload(t.w2);
+    t.out('held');
+    let sentAtBounce = -1;
+    t.sm.bounceSize.mockImplementation(() => { sentAtBounce = t.w2.sent.filter((s: any) => s.data === 'held').length; });
+    t.ready(t.w2);
+    expect(sentAtBounce).toBe(1);
+  });
+
+  it('a deadline-send report from the renderer is logged once, with no message content', () => {
+    const t = world();
+    t.registry.assignSession(SID, 2); t.ready(t.w2);
+    handlersLog.length = 0;
+    t.repaintWhy(t.w2, 'gate-deadline');
+    expect(handlersLog.filter((l) => l.includes('pty-gate')).length).toBe(1);
   });
 
   it('ownership moving to a new window (tear-off / re-dock): the new empty terminal gets a repaint, once', () => {

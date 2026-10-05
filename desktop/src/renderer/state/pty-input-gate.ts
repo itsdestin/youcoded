@@ -89,17 +89,54 @@ export function pendingInteractionKind(session: SessionChatState): 'approval' | 
  */
 export function screenInputBlock(sessionId: string): Exclude<InputFocus, { kind: 'message-box' } | { kind: 'unknown' }> | null {
   const screen = getVisibleScreenText(sessionId);
-  // UNKNOWN is not a pop-up (2026-10-05): a terminal re-mounted after a reload/crash/tear-off is blank or holds one stray
-  // row until the program repaints; refusing the send there told users an idle session "is waiting on something". Ask for the
-  // repaint (main rate-limits it) and let the send through — real prompts are still caught by the chat-state checks, and a
-  // genuine pop-up always has an edge rule and body, so it never counts as unpainted. (Waiting for the frame is not done:
-  // every caller is synchronous and the repaint lands a moment after the send.)
-  if (screen != null && screenIsUnpainted(screen)) {
-    try { (globalThis as any).window?.claude?.session?.requestRepaint?.(sessionId); } catch { /* no bridge: nothing to ask */ }
-    return null;
-  }
+  // STRICT on purpose (2026-10-05 review): an unpainted screen (blank, or a few stray rows without an edge rule) is
+  // NOT proof the keyboard is free — it may be a hook-less pop-up mid-draw — so every synchronous caller (bare-Enter
+  // retry, Shift+Tab cycling, toasts) treats it as blocked, and the repaint is requested so the next look is better.
+  // The one caller that may WAIT for a picture instead of refusing is the chat composer (waitForPaintedScreen).
+  if (screen != null && screenIsUnpainted(screen)) requestScreenRepaint(sessionId);
   const focus = readInputFocus(screen);
+  // Blank/unreadable-but-present screens are blocked here too (heading unknown).
+  if (screen != null && screenIsUnpainted(screen)) return { kind: 'popup', heading: '' };
   return inputIsBlocked(focus) ? (focus as Exclude<InputFocus, { kind: 'message-box' } | { kind: 'unknown' }>) : null;
+}
+
+/** Ask main for one repaint (it rate-limits and retries the last request); never throws. */
+function requestScreenRepaint(sessionId: string, why?: 'gate-deadline'): void {
+  try { (globalThis as any).window?.claude?.session?.requestRepaint?.(sessionId, why); } catch { /* no bridge: nothing to ask */ }
+}
+/** Tell main (one log line, no content) that a send went out against a screen that never painted. */
+export function reportDeadlineSend(sessionId: string): void { requestScreenRepaint(sessionId, 'gate-deadline'); }
+
+/** 'none' = no terminal to read (no verdict); 'unpainted' = blank or a stray fragment; 'painted' = a real frame. */
+export function screenPaint(sessionId: string): 'none' | 'unpainted' | 'painted' {
+  const screen = getVisibleScreenText(sessionId);
+  if (screen == null) return 'none';
+  return screenIsUnpainted(screen) ? 'unpainted' : 'painted';
+}
+
+export const PAINT_WAIT_MS = 1500;
+
+/**
+ * The composer's alternative to refusing on an unpainted screen: request a repaint, then look every `stepMs` for up to
+ * `timeoutMs`. 'box' = the message box is live (send now); 'blocked' = a real pop-up/other view appeared (show the normal
+ * refusal); 'unpainted' = still no picture at the deadline (caller sends, chat-state checks permitting, and reports it);
+ * 'cancelled' = `signal` fired (session switch / unmount) — write nothing.
+ */
+export async function waitForPaintedScreen(
+  sessionId: string,
+  opts: { timeoutMs?: number; stepMs?: number; signal?: { aborted: boolean } } = {},
+): Promise<'box' | 'blocked' | 'unpainted' | 'cancelled'> {
+  const { timeoutMs = PAINT_WAIT_MS, stepMs = 50, signal } = opts;
+  const end = Date.now() + timeoutMs;
+  requestScreenRepaint(sessionId);
+  for (;;) {
+    if (signal?.aborted) return 'cancelled';
+    const paint = screenPaint(sessionId);
+    if (paint === 'none') return 'box';          // terminal gone: no verdict, same as before
+    if (paint === 'painted') return inputIsBlocked(readInputFocus(getVisibleScreenText(sessionId))) ? 'blocked' : 'box';
+    if (Date.now() >= end) return 'unpainted';
+    await new Promise((r) => setTimeout(r, stepMs));
+  }
 }
 
 /**

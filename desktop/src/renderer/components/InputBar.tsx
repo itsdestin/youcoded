@@ -25,7 +25,8 @@ import { isTypingTarget } from '../utils/is-typing-target';
 import { dispatchSlashCommand, type ViewMode } from '../state/slash-command-dispatcher';
 import { runNativeSlashAction, routeSlashResult } from '../state/native-slash-actions';
 import type { UsageSnapshot } from '../state/chat-types';
-import { sendBlock, pendingInteractionRefusalCopy, waitForMessageBox } from '../state/pty-input-gate';
+import { sendBlock, pendingInteractionRefusalCopy, waitForMessageBox, screenPaint, waitForPaintedScreen, reportDeadlineSend } from '../state/pty-input-gate';
+import { pendingInteractionKind } from '../state/pty-input-gate';
 import { buildOutgoingMessage } from './outgoing-message';
 import { sendChatMessage } from './native-send';
 import type { NativeSendResult } from '../../shared/types';
@@ -386,6 +387,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   // Ref to always-current send function so the global keydown handler
   // (which only depends on [disabled]) can call it without stale closures
   const sendRef = useRef<(force?: boolean) => void>(() => {});
+  // The screen-paint wait in flight (see sendMessage). A token so unmount / session switch can cancel it.
+  const paintWaitRef = useRef<{ aborted: boolean } | null>(null);
+  const [paintWaiting, setPaintWaiting] = useState(false);
+  useEffect(() => () => { if (paintWaitRef.current) { paintWaitRef.current.aborted = true; paintWaitRef.current = null; } setPaintWaiting(false); }, [sessionId]);
 
   useImperativeHandle(ref, () => ({
     clear: () => {
@@ -713,7 +718,33 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
         // pop-up nobody reports (auto-mode setup, compaction and billing
         // notices, the agents view) swallowed the message while its bubble
         // looked sent. sendBlock also reads the live terminal.
-        const block = sendBlock(getSessionState?.(sessionId), sessionId);
+        // WAIT, do not guess, on an unpainted screen (2026-10-05): after a reload/crash/tear-off the terminal is blank or
+        // shows a stray row until the program repaints, and that can equally be a hook-less pop-up mid-draw. Nothing is
+        // written yet: the repaint is requested and the screen re-read for up to ~1.5 s (gate: waitForPaintedScreen);
+        // the draft stays in the box with the send button dimmed. A card the chat state already knows about wins
+        // (normal refusal below, which names it).
+        const chatState = getSessionState?.(sessionId);
+        if (!(chatState && pendingInteractionKind(chatState)) && screenPaint(sessionId) === 'unpainted') {
+          if (paintWaitRef.current) return false;           // one wait at a time: a second Enter cannot double-send
+          const token = { aborted: false };
+          paintWaitRef.current = token;
+          setPaintWaiting(true);
+          void waitForPaintedScreen(sessionId, { signal: token }).then((verdict) => {
+            if (paintWaitRef.current === token) { paintWaitRef.current = null; setPaintWaiting(false); }
+            if (token.aborted) return;
+            const st = getSessionState?.(sessionId);
+            if (verdict === 'unpainted' && !(st && pendingInteractionKind(st))) {
+              // Still no picture: send anyway (chat-state checks passed); one log line in main so real occurrences
+              // — notably the unverified Windows case — show up in desktop.log. force skips only the screen check.
+              reportDeadlineSend(sessionId);
+              sendRef.current(true);
+            } else {
+              sendRef.current(false);   // 'box' sends; 'blocked' / a card that appeared meanwhile gets the normal refusal
+            }
+          });
+          return false;
+        }
+        const block = sendBlock(chatState, sessionId);
         if (block) {
           // Offer an ESC-first escape hatch instead of a dead-end toast: press
           // ESC (closes any genuinely-live Ink menu; a no-op on an idle input
@@ -967,7 +998,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     // anyway" override, which re-enters here past the gate (see sendMessage).
     // WHY guard here, not only on the button: Enter, form submit, global keys,
     // and the pending-prompt retry all reach this path. No override grants freshness.
-    if (sendBlocked || !sendMessage(currentText, attachments, force)) return;
+    if (sendBlocked || paintWaitRef.current || !sendMessage(currentText, attachments, force)) return;
     // The message has gone, so the dictation behind it goes too. Without this,
     // sending mid-sentence sent the unsettled GREY words along with it AND left
     // them in the box, and the next thing the engine said re-typed the whole
@@ -1419,7 +1450,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
             type="submit"
             size="icon"
             aria-label="Send message"
-            disabled={disabled || sendBlocked || (!minimal && !text.trim() && attachments.length === 0)}
+            disabled={disabled || sendBlocked || paintWaiting || (!minimal && !text.trim() && attachments.length === 0)}
             className="shrink-0 disabled:opacity-30"
           >
             <svg className="w-4 h-4 text-on-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

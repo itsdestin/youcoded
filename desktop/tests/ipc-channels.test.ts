@@ -2626,7 +2626,7 @@ describe('session:terminal-ack (terminal flow control)', () => {
     expect(preload).toContain("TERMINAL_REPAINT: 'session:terminal-repaint'");
     expect(types).toContain("TERMINAL_REPAINT: 'session:terminal-repaint'");
     expect(handlers).toMatch(/repaint: IPC\.TERMINAL_REPAINT/);
-    expect(shim).toMatch(/requestRepaint: \(_sessionId: string\) => \{\}/);
+    expect(shim).toMatch(/requestRepaint: \(_sessionId: string, _why\?: 'gate-deadline'\) => \{\}/);
     const arm = server.slice(server.indexOf("case 'session:terminal-repaint'"), server.indexOf("case 'session:terminal-ack'"));
     expect(arm.length).toBeGreaterThan(0);
     expect(arm).not.toMatch(/bounceSize|sessionManager/);

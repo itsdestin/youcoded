@@ -114,5 +114,7 @@ export function screenIsUnpainted(screen: string | null | undefined): boolean {
   const rows = rowsOf(screen);
   if (rows.length === 0) return true;
   if (rows.length > 3) return false;
-  return !rows.some((r) => EDGE.test(r) || /^▔{20,}\s*$/.test(r));
+  // ANY row with 10+ box-drawing characters counts as a drawn edge (rounded corners, double rules and titled rules
+  // do not match EDGE, but they are still a frame being drawn): conservative, so such a screen is never "unpainted".
+  return !rows.some((r) => EDGE.test(r) || /^▔{20,}\s*$/.test(r) || (r.match(/[\u2500-\u257F\u2594\u2581]/g)?.length ?? 0) >= 10);
 }

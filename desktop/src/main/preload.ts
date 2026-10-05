@@ -598,8 +598,8 @@ contextBridge.exposeInMainWorld('claude', {
     ackOutput: (sessionId: string, chars: number) =>
       ipcRenderer.send(IPC.TERMINAL_ACK, sessionId, chars),
     // A hidden window's backlog was cut: ask the program to repaint once (main arbitrates the size nudge).
-    requestRepaint: (sessionId: string) =>
-      ipcRenderer.send(IPC.TERMINAL_REPAINT, sessionId),
+    requestRepaint: (sessionId: string, why?: 'gate-deadline') =>
+      ipcRenderer.send(IPC.TERMINAL_REPAINT, sessionId, why),
     respondToPermission: (requestId: string, decision: object) =>
       ipcRenderer.invoke(IPC.PERMISSION_RESPOND, requestId, decision),
     browse: (): Promise<any[]> =>

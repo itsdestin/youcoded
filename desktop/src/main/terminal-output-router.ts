@@ -24,6 +24,8 @@ export interface RouterDeps {
   sendForSession(sessionId: string, channel: string, ...args: any[]): void;
   fromId(id: number): { isDestroyed(): boolean; on(e: string, f: (...a: any[]) => void): unknown; removeListener(e: string, f: (...a: any[]) => void): unknown } | undefined;
   channels: { ready: string; ack: string; repaint: string };
+  /** Main logger (desktop.log). Optional so tests without one still wire. */
+  log?: (level: 'INFO' | 'WARN', component: string, message: string, data?: Record<string, unknown>) => void;
 }
 
 /** Wire pty-output -> windows, terminal ready/ack handling and flow control. Returns the session-exit cleanup. */
@@ -48,9 +50,23 @@ export function createTerminalOutputRouter(d: RouterDeps): (sessionId: string) =
   // Shared 1 s per-session limit for every repaint request (renderer-initiated and re-mount), so a misbehaving
   // renderer or a double ready cannot bounce a PTY in a loop; the nudge itself is arbitrated in the worker.
   const lastRepaintAt = new Map<string, number>();
+  // WHY a trailing request: a request inside the window used to be DROPPED, and the one that mattered (two reloads
+  // within a second, a re-mount repaint followed by the hidden-window request) left a live terminal blank with nothing
+  // to retry it. Now exactly one request per session waits for the window to end (single timer, cleared at session end).
+  const trailing = new Map<string, ReturnType<typeof setTimeout>>();
   const requestRepaint = (sessionId: string) => {
     const t = Date.now();
-    if (t - (lastRepaintAt.get(sessionId) ?? 0) < 1000) return;
+    const last = lastRepaintAt.get(sessionId) ?? 0;
+    if (t - last < 1000) {
+      if (trailing.has(sessionId)) return;
+      trailing.set(sessionId, setTimeout(() => {
+        trailing.delete(sessionId);
+        if (ended.has(sessionId)) return;
+        lastRepaintAt.set(sessionId, Date.now());
+        d.sessionManager.bounceSize(sessionId);
+      }, 1000 - (t - last)));
+      return;
+    }
     lastRepaintAt.set(sessionId, t);
     d.sessionManager.bounceSize(sessionId);
   };
@@ -161,14 +177,18 @@ export function createTerminalOutputRouter(d: RouterDeps): (sessionId: string) =
   // The window cut its hidden-window backlog and is showing again: ask the program to repaint. Accepted only from a window
   // this session's output is ROUTED to (its routing targets — not necessarily a consumer or the owner), and at most once a
   // second per session so a misbehaving renderer cannot bounce a PTY in a loop; the nudge itself is arbitrated in the worker.
-  d.ipcMain.on(d.channels.repaint, (event, sessionId: string) => {
+  d.ipcMain.on(d.channels.repaint, (event, sessionId: string, why?: unknown) => {
     if (typeof sessionId !== 'string' || !d.routeTargets(sessionId).includes(event.sender.id)) return;
+    // The send gate waited for a frame that never came and sent anyway (see InputBar). One line, no content, so real
+    // occurrences — notably the unverified Windows case — are visible in desktop.log.
+    if (why === 'gate-deadline') d.log?.('WARN', 'pty-gate', 'send went out against an unpainted screen after the wait', { sessionId, platform: process.platform });
     requestRepaint(sessionId);
   });
 
   return (sessionId: string) => {
     pendingOutput.delete(sessionId); pendingChars.delete(sessionId); flow.end(sessionId); readySessions.delete(sessionId);
     awaitingReady.delete(sessionId); lastRepaintAt.delete(sessionId); drew.delete(sessionId);
+    const tt = trailing.get(sessionId); if (tt) { clearTimeout(tt); trailing.delete(sessionId); }
     trimMemos.delete(sessionId); trimmed.delete(sessionId);
     ended.add(sessionId);
     if (ended.size > ENDED_MEMORY) ended.delete(ended.values().next().value as string);

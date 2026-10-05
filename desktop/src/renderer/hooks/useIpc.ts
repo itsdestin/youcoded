@@ -43,7 +43,7 @@ declare global {
         resize: (sessionId: string, cols: number, rows: number) => void;
         signalReady: (sessionId: string) => void;
         ackOutput?: (sessionId: string, chars: number) => void;
-        requestRepaint?: (sessionId: string) => void;
+        requestRepaint?: (sessionId: string, why?: 'gate-deadline') => void;
         respondToPermission: (requestId: string, decision: object) => Promise<boolean>;
         browse: () => Promise<any[]>;
         loadHistory: (sessionId: string, projectSlug: string, count?: number, all?: boolean) => Promise<any>;
