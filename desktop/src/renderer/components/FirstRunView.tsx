@@ -5,7 +5,7 @@ import BrailleSpinner from './BrailleSpinner';
 import { canRetry, describeStep } from './first-run/describe-step';
 import { persistLastBinding, persistRuntimeDefault } from './RuntimeBinding';
 import { Button, CARD_LEVEL_1, ErrorState, FieldError, FoldRow } from './ui';
-import { BrandLockupRow, BrandWordmark } from './brand/BrandLockup';
+import { BrandWordmark } from './brand/BrandLockup';
 import { SignInChoices, type WayIn } from './first-run/SignInChoices';
 import { StatusStrip } from './ui/StatusStrip';
 import { ApiKeySetup } from './first-run/ApiKeySetup';
@@ -134,18 +134,6 @@ function AuthScreen({
       <p className="text-sm text-fg-muted text-center">You can change this at any time.</p>
     </div>
   );
-}
-
-/** TRIAL (deck first-run-4 P4-3: "can we try a few where we drop the icon and just use
- *  the brand name/tagline?"): `?logo=stack|tuck|name` in the workbench; removed once
- *  one is picked. */
-function SetupLogo() {
-  const v = new URLSearchParams(location.search).get('logo');
-  if (v === 'stack') return <BrandWordmark size={72} tagline="stack" />;
-  if (v === 'tuck') return <BrandWordmark size={72} tagline="tuck" />;
-  if (v === 'name') return <BrandWordmark size={80} tagline="none" />;
-  // P5-3 "bigger": the icon lockup (the answer picked no other version), 112 → 144px.
-  return <BrandLockupRow icon={144} />;
 }
 
 /* ------------------------------------------------------------------ */
@@ -374,7 +362,9 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
           a step's content changed height. It now holds one place above the middle on every
           step, and each step's content starts a fixed distance below it. */}
       <div className="brand-stage">
-        <SetupLogo />
+        {/* The name with the tagline stacked under it, no icon (deck first-run-5 P5-3 "bigger",
+            first-run-6 P6-2: "drop the icon. i thought i picked the stacked option"). */}
+        <BrandWordmark size={88} tagline="stack" />
 
         {launching ? (
           <CompletionCard />
@@ -390,18 +380,13 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
                     {heading}
                   </h1>
                 )}
-                {line && !installing && <p className="mt-1 text-sm text-fg-dim">{line}</p>}
+                {line && <p className="mt-1 text-sm text-fg-dim">{line}</p>}
               </div>
             )}
 
             {/* L-2: while setup is stopped the bar goes away, so nothing on screen
-                still looks busy. P5-1: the heading above the bar, the grey line below it. */}
-            {state && installing && !stopped && (
-              <div className="w-full flex flex-col items-center gap-3">
-                <ProgressBar percent={state.overallProgress} />
-                {line && <p className="text-sm text-fg-dim text-center">{line}</p>}
-              </div>
-            )}
+                still looks busy. (P6-1: the grey line stays above the bar, under the heading.) */}
+            {state && installing && !stopped && <ProgressBar percent={state.overallProgress} />}
 
             {state?.currentStep === 'AUTHENTICATE' && (
               <AuthScreen

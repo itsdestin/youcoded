@@ -73,8 +73,6 @@ export const CHAT: readonly ScreenEntry[] = [
   ...['DETECT_PREREQUISITES', 'INSTALL_PREREQUISITES', 'AUTHENTICATE'].map((st) => ({ name: `first-run#${st.toLowerCase().replace(/_/g, '-')}`, tags: ['first-run', 'view'], params: { firstRun: st } })),
   // The sign-in step's second page, one kind opened (deck first-run-2 P2-3).
   { name: 'first-run#signin-payg', tags: ['first-run', 'view'], params: { firstRun: 'AUTHENTICATE', signInPick: 'payg' } },
-  // TRIAL (deck first-run-4 P4-3): the logo without its icon, removed once one is picked.
-  ...['stack', 'tuck', 'name'].map((l) => ({ name: `first-run#logo-${l}`, tags: ['first-run', 'view'], params: { firstRun: 'AUTHENTICATE', logo: l } })),
   { name: 'first-run#installing', tags: ['first-run', 'view'], params: { firstRun: 'INSTALL_PREREQUISITES', prereqs: 'installing' } },
   { name: 'first-run#install-failed', tags: ['first-run', 'view'], params: { firstRun: 'INSTALL_PREREQUISITES', prereqs: 'failed' } },
   { name: 'first-run#authenticate-chatgpt', tags: ['first-run', 'view', 'sign-in'], params: { firstRun: 'AUTHENTICATE', authMode: 'chatgpt' } },

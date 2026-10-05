@@ -97,8 +97,14 @@ export function BrandWordmark({ size, tagline }: { size: number; tagline: 'stack
       <span className="brand-name" style={{ fontSize: size }}>
         <span className="brand-name__you">you</span>coded
       </span>
+      {/* WHY the wrapper with its own 16px-at-36 line: the approved board (v26 STACK sc) set
+          the tagline in a block whose line box came from the page's 16px text, and its −6px
+          pull is measured from that box. Without it the tagline sat on the "y" (rejected,
+          deck first-run-6). Scaled with the name so the proportions hold at any size. */}
       {tagline === 'stack' && (
-        <span className="brand-tagline" style={{ fontSize: size * 0.34, marginTop: -6 * k }}>agents for everyone</span>
+        <div style={{ marginTop: -6 * k, fontSize: 16 * k, lineHeight: 'normal' }}>
+          <span className="brand-tagline inline-block" style={{ fontSize: size * 0.34 }}>agents for everyone</span>
+        </div>
       )}
     </div>
   );
