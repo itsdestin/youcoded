@@ -11,7 +11,7 @@
   font-style: normal;
   font-weight: 400 600;
   font-display: block;
-  src: url('./outfit-latin.woff2') format('woff2');
+  src: url('../components/brand/outfit-latin.woff2') format('woff2');
 }
 
 .brand-name {
@@ -99,3 +99,55 @@
 .brand-bar-fill {
   background: linear-gradient(90deg, #9D5BD0, #D25AA0);
 }
+
+/* ---- The polished setup look (first-run deck first-run-1: "much more polished/premium"). ---- */
+/* Q-2 "Outfit for all setup text": the whole surface reads in the logo's font. */
+.brand-surface { font-family: 'Outfit', var(--font-sans); }
+/* A soft white card lifted off the lavender by a purple-tinted shadow. WHY not the app's
+   CARD_LEVEL_1: setup is a brand surface (no theme yet); its cards are drawn to sit on the
+   lavender the way the logo boards were approved, not on a theme's canvas. */
+.brand-card {
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  border-radius: 18px;
+  box-shadow: 0 1px 2px rgba(60, 20, 100, 0.06), 0 12px 32px -8px rgba(60, 20, 100, 0.16);
+}
+.brand-card--press { transition: transform 120ms ease, box-shadow 120ms ease; }
+.brand-card--press:hover { transform: translateY(-1px); box-shadow: 0 1px 2px rgba(60, 20, 100, 0.06), 0 16px 36px -8px rgba(60, 20, 100, 0.22); }
+/* The sign-in button: white, a company logo first, a hairline brand outline. */
+.brand-surface .brand-way {
+  height: 44px;
+  justify-content: flex-start;
+  gap: 12px;
+  border-radius: 12px;
+  background: #FFFFFF;
+  border: 1px solid #E3D5EE;
+  color: var(--fg);
+  font-weight: 500;
+  padding-left: 14px;
+}
+.brand-surface .brand-way:hover { border-color: #B596CC; background: #FDFAFF; }
+/* A small rounded label on a card's top right ("No extra cost"). */
+.brand-badge {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 9px;
+  border-radius: 999px;
+  color: #7A3FA8;
+  background: #F3E8FA;
+}
+/* The overlapping logo discs on option B's rows. */
+.brand-way-chip {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 999px;
+  background: #FFFFFF; border: 1px solid #E3D5EE;
+}
+.brand-way-chip svg { width: 15px; height: 15px; }
+/* The progress bar, thicker and glowing faintly in the name's colours. */
+.brand-track { height: 8px; border-radius: 999px; background: rgba(255, 255, 255, 0.9); box-shadow: inset 0 0 0 1px #E3D5EE; overflow: hidden; }
+.brand-track .brand-bar-fill { height: 100%; border-radius: 999px; box-shadow: 0 0 12px rgba(210, 90, 160, 0.45); }
+/* The failure card's mark: a soft red disc. Status colours stay fixed across themes. */
+.brand-stop { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 999px; color: #C2410C; background: #FDEDE4; box-shadow: inset 0 0 0 1px #F8D4C2; }
+/* The one filled button on a setup screen: the name's gradient. */
+.brand-surface .brand-primary { height: 44px; border-radius: 12px; border: 0; color: #FFFFFF; font-weight: 600; background: linear-gradient(100deg, #9D5BD0, #D25AA0); box-shadow: 0 6px 16px -6px rgba(157, 91, 208, 0.6); }
+.brand-surface .brand-primary:hover { filter: brightness(1.05); }

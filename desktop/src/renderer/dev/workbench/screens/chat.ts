@@ -74,7 +74,7 @@ export const CHAT: readonly ScreenEntry[] = [
   // TRIAL (first-run deck L-3): the sign-in layouts B and C, removed once one is picked.
   { name: 'first-run#signin-b', tags: ['first-run', 'view'], params: { firstRun: 'AUTHENTICATE', signIn: 'B' } },
   { name: 'first-run#signin-b-payg', tags: ['first-run', 'view'], params: { firstRun: 'AUTHENTICATE', signIn: 'B', signInPick: 'payg' } },
-  { name: 'first-run#signin-c', tags: ['first-run', 'view'], params: { firstRun: 'AUTHENTICATE', signIn: 'C' } },
+  { name: 'first-run#installing', tags: ['first-run', 'view'], params: { firstRun: 'INSTALL_PREREQUISITES', prereqs: 'installing' } },
   { name: 'first-run#install-failed', tags: ['first-run', 'view'], params: { firstRun: 'INSTALL_PREREQUISITES', prereqs: 'failed' } },
   { name: 'first-run#authenticate-chatgpt', tags: ['first-run', 'view', 'sign-in'], params: { firstRun: 'AUTHENTICATE', authMode: 'chatgpt' } },
   // A new user's checklist: Git installing, then Git done at sign-in (?prereqs, mock-shim).

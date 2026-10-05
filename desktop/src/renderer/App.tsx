@@ -4,7 +4,6 @@
 import { guardDirtyEditor } from './components/artifact-views/dirty-editor-guard';
 // TRIAL (first-run deck C-2): the first-time welcome screen's brand versions, picked by
 // `?welcome=W1|W2|W3` in the workbench until Destin chooses; removed then.
-import './components/brand/brand.css';
 import brandAppIcon from './components/brand/app-icon-192.png';
 const WELCOME_TRIAL = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('welcome') : null;
 import './bootstrap/terminal-bridge';

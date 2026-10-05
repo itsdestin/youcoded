@@ -1,22 +1,27 @@
 import { useState } from 'react';
-import { Button, CARD_LEVEL_1, SectionLabel } from '../ui';
+import { Button } from '../ui';
+import { ProviderIcon } from '../ProviderIcon';
 
 /**
  * The sign-in step, explained (first-run deck L-3, Destin 2026-10-04: "walk the users
  * quickly through the differences between a plan, an api key, and local models in terms
- * of cost/privacy … assume many app users have never messed with api or local llms").
+ * of cost/privacy … assume many app users have never messed with api or local llms"),
+ * polished per deck first-run-1 R-3: "add brand icons for claude/gpt/openrouter … make
+ * this feel much more polished/premium".
  *
- * TRIAL: three layouts of the same three groups, picked by `?signIn=A|B|C` in the
- * workbench until Destin chooses one; the losers are deleted then.
+ * TRIAL: two layouts of the same three groups, picked by `?signIn=A|B` in the workbench
+ * until Destin chooses one; the other is deleted then.
  */
 
 export type WayIn = 'claude' | 'chatgpt' | 'openrouter' | 'local' | 'apikey';
 
+type FactKind = 'cost' | 'privacy' | 'good';
 interface Group {
   id: 'plan' | 'payg' | 'local';
   title: string;
+  badge: string;
   summary: string;
-  facts: { label: string; text: string }[];
+  facts: { kind: FactKind; text: string }[];
   ways: { id: WayIn; label: string }[];
 }
 
@@ -28,60 +33,106 @@ function groups(chatGpt: boolean): Group[] {
     {
       id: 'plan',
       title: 'A plan you already pay for',
+      badge: 'No extra cost',
       summary: 'Use your Claude or ChatGPT subscription.',
       facts: [
-        { label: 'Cost', text: 'Nothing extra. Your plan’s usage limits apply.' },
-        { label: 'Privacy', text: 'Messages go to Anthropic or OpenAI, as in their own apps.' },
-        { label: 'Good for', text: 'The strongest models, if you already subscribe.' },
+        { kind: 'cost', text: 'Included in your plan. Its usage limits apply.' },
+        { kind: 'privacy', text: 'Messages go to Anthropic or OpenAI, as in their own apps.' },
+        { kind: 'good', text: 'The strongest models.' },
       ],
       ways: [{ id: 'claude', label: 'Log in with Claude' }, ...(chatGpt ? [{ id: 'chatgpt' as const, label: 'Log in with ChatGPT' }] : [])],
     },
     {
       id: 'payg',
       title: 'Pay as you go',
-      summary: 'Add credit and pay for each message.',
+      badge: 'Pay per message',
+      summary: 'Add credit, then pay only for what you use.',
       facts: [
-        { label: 'Cost', text: 'Charged per message. You add credit first, so you never owe more.' },
-        { label: 'Privacy', text: 'Messages go to the company that runs the model you pick.' },
-        { label: 'Good for', text: 'Trying many models without a subscription.' },
+        { kind: 'cost', text: 'Charged per message from credit you add first.' },
+        { kind: 'privacy', text: 'Messages go to the company running the model you pick.' },
+        { kind: 'good', text: 'Trying many models without a subscription.' },
       ],
       ways: [{ id: 'openrouter', label: 'Log in with OpenRouter' }, { id: 'apikey', label: 'Use an API key' }],
     },
     {
       id: 'local',
       title: 'Free, on this computer',
+      badge: 'Private',
       summary: 'Download a model and run it yourself.',
       facts: [
-        { label: 'Cost', text: 'Free. Needs a few GB of space.' },
-        { label: 'Privacy', text: 'Nothing leaves your computer.' },
-        { label: 'Good for', text: 'Privacy and working offline. Slower and simpler than the big models.' },
+        { kind: 'cost', text: 'Free. Needs a few GB of space.' },
+        { kind: 'privacy', text: 'Nothing leaves your computer.' },
+        { kind: 'good', text: 'Working offline. Slower and simpler than the big models.' },
       ],
       ways: [{ id: 'local', label: 'Use a local model' }],
     },
   ];
 }
 
-function Facts({ facts }: { facts: Group['facts'] }) {
+/* Small line icons for the facts and the two ways in that have no company logo. */
+const stroke = { fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
+function FactIcon({ kind }: { kind: FactKind }) {
   return (
-    <dl className="grid grid-cols-[4.5rem_1fr] gap-x-3 gap-y-1 text-xs">
-      {facts.map((f) => (
-        <div key={f.label} className="contents">
-          <dt className="text-fg-muted">{f.label}</dt>
-          <dd className="text-fg-2 leading-snug">{f.text}</dd>
-        </div>
-      ))}
-    </dl>
+    <svg viewBox="0 0 24 24" width={14} height={14} aria-hidden {...stroke} className="shrink-0 mt-0.5 text-accent">
+      {kind === 'cost' && <><circle cx="12" cy="12" r="9" /><path d="M14.8 9.2a3 2.4 0 0 0-2.8-1.4c-1.7 0-3 .9-3 2.1 0 2.8 6 1.4 6 4.2 0 1.2-1.3 2.1-3 2.1a3 2.4 0 0 1-2.8-1.4M12 6.2v1.6m0 8.4v1.6" /></>}
+      {kind === 'privacy' && <><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></>}
+      {kind === 'good' && <path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.8l-5.2 2.8 1-5.8L3.5 9.7l5.9-.9z" />}
+    </svg>
+  );
+}
+function WayIcon({ id }: { id: WayIn }) {
+  // Company marks in their own colours where the mark is coloured (Claude's terracotta);
+  // the single-colour marks (OpenAI, OpenRouter) in the page's ink.
+  if (id === 'claude') return <span style={{ color: '#D97757' }}><ProviderIcon icon="claude" size={18} /></span>;
+  if (id === 'chatgpt') return <ProviderIcon icon="openai" size={18} />;
+  if (id === 'openrouter') return <ProviderIcon icon="openrouter" size={18} />;
+  if (id === 'apikey') {
+    return (
+      <svg viewBox="0 0 24 24" width={18} height={18} aria-hidden {...stroke}>
+        <circle cx="8" cy="15" r="4" /><path d="M11 12l8-8m-3 3l2 2m-4 0l1.5 1.5" />
+      </svg>
+    );
+  }
+  return (
+    <svg viewBox="0 0 24 24" width={18} height={18} aria-hidden {...stroke}>
+      <rect x="4" y="5" width="16" height="11" rx="1.5" /><path d="M2.5 19h19" />
+    </svg>
   );
 }
 
-function Ways({ ways, onPick, row = true }: { ways: Group['ways']; onPick: (w: WayIn) => void; row?: boolean }) {
+function Facts({ facts }: { facts: Group['facts'] }) {
   return (
-    <div className={row ? 'flex gap-2' : 'flex flex-col gap-2'}>
+    <ul className="flex flex-col gap-1.5 text-sm text-fg-2">
+      {facts.map((f) => (
+        <li key={f.kind} className="flex gap-2.5 leading-snug"><FactIcon kind={f.kind} />{f.text}</li>
+      ))}
+    </ul>
+  );
+}
+
+// WHY the Button primitive with brand classes: every control goes through its primitive;
+// `brand-way` (brand.css) gives the white, logo-led sign-in button its look.
+function Ways({ ways, onPick }: { ways: Group['ways']; onPick: (w: WayIn) => void }) {
+  return (
+    <div className="flex flex-col gap-2">
       {ways.map((w) => (
-        <Button key={w.id} variant="secondary" size="md" className="flex-1" onClick={() => onPick(w.id)}>
-          {w.label}
+        <Button key={w.id} variant="secondary" size="lg" className="brand-way w-full" onClick={() => onPick(w.id)}>
+          <WayIcon id={w.id} />
+          <span className="flex-1 text-left">{w.label}</span>
         </Button>
       ))}
+    </div>
+  );
+}
+
+function Head({ g, big = false }: { g: Group; big?: boolean }) {
+  return (
+    <div className="flex items-start gap-3">
+      <div className="flex-1 min-w-0">
+        <h3 className={`brand-heading text-fg ${big ? 'text-xl' : 'text-lg'}`}>{g.title}</h3>
+        <p className="text-sm text-fg-dim">{g.summary}</p>
+      </div>
+      <span className="brand-badge shrink-0">{g.badge}</span>
     </div>
   );
 }
@@ -89,10 +140,10 @@ function Ways({ ways, onPick, row = true }: { ways: Group['ways']; onPick: (w: W
 /** A — three cards, each with its facts and its own buttons. */
 function Cards({ list, onPick }: { list: Group[]; onPick: (w: WayIn) => void }) {
   return (
-    <div className="w-full flex flex-col gap-2">
+    <div className="w-full flex flex-col gap-3">
       {list.map((g) => (
-        <section key={g.id} className={`${CARD_LEVEL_1} p-3 flex flex-col gap-2.5`}>
-          <h3 className="brand-heading text-base text-fg">{g.title}</h3>
+        <section key={g.id} className="brand-card p-5 flex flex-col gap-4">
+          <Head g={g} />
           <Facts facts={g.facts} />
           <Ways ways={g.ways} onPick={onPick} />
         </section>
@@ -101,68 +152,42 @@ function Cards({ list, onPick }: { list: Group[]; onPick: (w: WayIn) => void }) 
   );
 }
 
-/** B — pick a kind first, then see its facts and buttons on a second page. */
+/** B — pick a kind first, then its facts and buttons on a second page. */
 function Guided({ list, onPick, initial }: { list: Group[]; onPick: (w: WayIn) => void; initial: Group['id'] | null }) {
   const [open, setOpen] = useState<Group['id'] | null>(initial);
   const g = list.find((x) => x.id === open);
   if (g) {
     return (
-      <div className={`${CARD_LEVEL_1} w-full p-4 flex flex-col gap-3`}>
-        <div>
-          <h3 className="brand-heading text-lg text-fg">{g.title}</h3>
-          <p className="text-sm text-fg-dim">{g.summary}</p>
-        </div>
+      <section className="brand-card w-full p-6 flex flex-col gap-5">
+        <button type="button" onClick={() => setOpen(null)} className="self-start text-sm text-fg-dim hover:text-fg transition-colors">‹ All options</button>
+        <Head g={g} big />
         <Facts facts={g.facts} />
-        <Ways ways={g.ways} onPick={onPick} row={false} />
-        <Button variant="ghost" size="sm" className="self-center" onClick={() => setOpen(null)}>Back</Button>
-      </div>
+        <Ways ways={g.ways} onPick={onPick} />
+      </section>
     );
   }
   return (
-    <div className="w-full flex flex-col gap-2">
+    <div className="w-full flex flex-col gap-3">
       {list.map((x) => (
-        <button
-          key={x.id}
-          type="button"
-          onClick={() => setOpen(x.id)}
-          className={`${CARD_LEVEL_1} w-full p-3 text-left flex items-center gap-3 hover:border-accent transition-colors`}
-        >
-          <span className="flex-1 min-w-0">
-            <span className="block brand-heading text-base text-fg">{x.title}</span>
-            <span className="block text-xs text-fg-dim">{x.summary}</span>
+        <button key={x.id} type="button" onClick={() => setOpen(x.id)} className="brand-card brand-card--press w-full p-5 text-left flex items-center gap-4">
+          <span className="flex -space-x-1 shrink-0 w-12 justify-center text-fg">
+            {x.ways.map((w) => <span key={w.id} className="brand-way-chip"><WayIcon id={w.id} /></span>)}
           </span>
-          <span aria-hidden className="text-fg-muted">›</span>
+          <span className="flex-1 min-w-0">
+            <span className="block brand-heading text-lg text-fg">{x.title}</span>
+            <span className="block text-sm text-fg-dim">{x.summary}</span>
+          </span>
+          <span className="brand-badge shrink-0">{x.badge}</span>
+          <span aria-hidden className="text-fg-muted text-lg">›</span>
         </button>
       ))}
     </div>
   );
 }
 
-/** C — one comparison table, a column per kind, buttons at the foot of each column. */
-function Compare({ list, onPick }: { list: Group[]; onPick: (w: WayIn) => void }) {
-  return (
-    <div className={`${CARD_LEVEL_1} w-full p-3`}>
-      <div className="grid grid-cols-[4.5rem_1fr_1fr_1fr] items-start gap-x-3 gap-y-2 text-xs">
-        <span />
-        {list.map((g) => <h3 key={g.id} className="brand-heading text-sm text-fg leading-tight">{g.title}</h3>)}
-        {list[0].facts.map((_, i) => (
-          <div key={i} className="contents">
-            <SectionLabel className="pt-px">{list[0].facts[i].label}</SectionLabel>
-            {list.map((g) => <p key={g.id} className="text-fg-2 leading-snug">{g.facts[i].text}</p>)}
-          </div>
-        ))}
-        <span />
-        {list.map((g) => <Ways key={g.id} ways={g.ways} onPick={onPick} row={false} />)}
-      </div>
-    </div>
-  );
-}
-
 export function SignInChoices({ chatGpt, onPick }: { chatGpt: boolean; onPick: (w: WayIn) => void }) {
   const params = new URLSearchParams(location.search);
-  const layout = params.get('signIn') ?? 'A';
   const list = groups(chatGpt);
-  if (layout === 'B') return <Guided list={list} onPick={onPick} initial={(params.get('signInPick') as Group['id'] | null) ?? null} />;
-  if (layout === 'C') return <Compare list={list} onPick={onPick} />;
+  if (params.get('signIn') === 'B') return <Guided list={list} onPick={onPick} initial={(params.get('signInPick') as Group['id'] | null) ?? null} />;
   return <Cards list={list} onPick={onPick} />;
 }

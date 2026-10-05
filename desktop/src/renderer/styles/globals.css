@@ -5,6 +5,7 @@
 @import "./float-chrome.css";
 @import "./scroll-mask.css"; /* WHY here, once: every screen using .scroll-mask gets it, and the design lint knows the class. */
 @import "./frame-outline.css";
+@import "./brand.css"; /* WHY here: the logo and setup's brand surface (first-run rebuild), known to the design lint like every other class. */
 
 @source "../../";
 

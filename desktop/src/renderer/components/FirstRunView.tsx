@@ -5,7 +5,7 @@ import BrailleSpinner from './BrailleSpinner';
 import { canRetry, describeStep } from './first-run/describe-step';
 import { persistLastBinding, persistRuntimeDefault } from './RuntimeBinding';
 import { Button, CARD_LEVEL_1, ErrorState, FieldError, FoldRow } from './ui';
-import { BrandLockup } from './brand/BrandLockup';
+import { BrandLockupRow } from './brand/BrandLockup';
 import { SignInChoices, type WayIn } from './first-run/SignInChoices';
 import { StatusStrip } from './ui/StatusStrip';
 import { ApiKeySetup } from './first-run/ApiKeySetup';
@@ -31,8 +31,10 @@ function ProgressBar({ percent }: { percent: number }) {
   // WHY no percentage (first-run deck L-1, "one line and a bar"): the step line says
   // where setup is; a number beside it only invited reading 23% as "stuck".
   return (
-    <div className="w-full h-1.5 rounded-full bg-inset border border-edge-dim overflow-hidden" role="progressbar" aria-valuenow={Math.round(clamped)} aria-valuemin={0} aria-valuemax={100}>
-      <div className="h-full rounded-full brand-bar-fill transition-all duration-500" style={{ width: `${clamped}%` }} />
+    <div className="brand-track w-full" role="progressbar" aria-valuenow={Math.round(clamped)} aria-valuemin={0} aria-valuemax={100}>
+      {/* WHY a 4% floor: setup reports 0 while its first download starts, and an empty
+          track read as "nothing is happening". */}
+      <div className="brand-bar-fill transition-all duration-500" style={{ width: `${Math.max(4, clamped)}%` }} />
     </div>
   );
 }
@@ -75,7 +77,7 @@ function AuthScreen({
   // change shape between pressing a button and coming back from the browser.
   // Brand rebuild (2026-10-04): the app's first-level card, so setup's boxes are the same
   // boxes the app opens onto.
-  const card = `${CARD_LEVEL_1} w-full p-5 flex flex-col items-center gap-4`;
+  const card = 'brand-card w-full p-6 flex flex-col items-center gap-4';
 
   if (authMode === 'oauth' && claudeInstalling) {
     return (
@@ -135,6 +137,38 @@ function AuthScreen({
         Create backups for anything you cannot replace.
       </p>
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  SetupStopped                                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A failed step (deck first-run-1 R-2, "we can make this feel more polished"): one card
+ * with the stop sign, a plain sentence, Retry, and the raw message folded under
+ * "Show details" (E-2). The raw text is never the headline — it names URLs and tools a
+ * new user can't act on — but it stays one click away for support.
+ */
+function SetupStopped({ sentence, detail, busy, onRetry }: { sentence: string; detail: string; busy: boolean; onRetry: () => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <section className="brand-card w-full p-6 flex flex-col items-center gap-4 text-center" role="alert">
+      <span className="brand-stop" aria-hidden>
+        <svg viewBox="0 0 24 24" width={24} height={24} fill="none" stroke="currentColor" strokeWidth={2.6} strokeLinecap="round"><path d="M12 5.5v8M12 18.5h.01" /></svg>
+      </span>
+      <div>
+        <h2 className="brand-heading text-xl text-fg">Setup stopped</h2>
+        <p className="mt-1 text-sm text-fg-dim">{sentence}</p>
+      </div>
+      <Button variant="primary" size="lg" className="brand-primary w-full" onClick={onRetry} disabled={busy}>
+        {busy ? 'Retrying…' : 'Retry'}
+      </Button>
+      <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="text-sm text-fg-muted hover:text-fg transition-colors">
+        {open ? 'Hide details' : 'Show details'}
+      </button>
+      {open && <p className="w-full text-left text-xs text-fg-dim leading-relaxed select-text break-words bg-well rounded-lg p-3">{detail}</p>}
+    </section>
   );
 }
 
@@ -299,7 +333,7 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
   let heading = 'Getting things ready';
   let line: string | null = null;
   if (stopped) {
-    heading = 'Setup stopped';
+    heading = '';
   } else if (state?.currentStep === 'DETECT_PREREQUISITES') {
     line = "Checking what's already on this computer…";
   } else if (state?.currentStep === 'INSTALL_PREREQUISITES') {
@@ -322,7 +356,7 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
       {state && <ScreenMark name="first-run" />}
       <div className="min-h-full flex flex-col items-center justify-center gap-6 px-4 py-10">
         {/* B-1: the stacked logo replaces the plain "YouCoded" title. */}
-        <BrandLockup size={36} />
+        <BrandLockupRow icon={80} />
 
         {launching ? (
           <CompletionCard />
@@ -330,7 +364,7 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
           <div className={`flex flex-col items-center gap-4 w-full ${state?.currentStep === 'AUTHENTICATE' && new URLSearchParams(location.search).get('signIn') === 'C' ? 'max-w-2xl' : 'max-w-md'}`}>
             {state && (
               <div className="text-center">
-                <h1 className="brand-heading text-2xl text-fg">{heading}</h1>
+                {heading && <h1 className="brand-heading text-3xl text-fg">{heading}</h1>}
                 {line && <p className="mt-1 text-sm text-fg-dim">{line}</p>}
               </div>
             )}
@@ -355,17 +389,12 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
                 Retry — with the raw text behind "Show details". Retry appears only when
                 re-running the install pass is the right answer (canRetry: a refused key
                 or a sign-in message must not offer to reinstall the app's plumbing). */}
-            {stopped && state?.lastError && (
-              <div className="w-full flex flex-col gap-2">
-                <ErrorState
-                  message={failed && failed.name !== 'auth' ? `${failed.displayName} couldn't be installed.` : "This step didn't finish."}
-                  onRetry={handleRetry}
-                />
-                <FoldRow title="Show details">
-                  <p className="text-xs text-fg-dim leading-relaxed select-text break-words">{state.lastError}</p>
-                </FoldRow>
-              </div>
-            )}
+            {stopped && state?.lastError && <SetupStopped
+              sentence={failed && failed.name !== 'auth' ? `${failed.displayName} couldn't be installed.` : "This step didn't finish."}
+              detail={state.lastError}
+              busy={busy}
+              onRetry={handleRetry}
+            />}
             {state?.lastError && !stopped && (
               <FieldError as="p" size="2xs" className="text-center max-w-md">
                 {state.lastError}
