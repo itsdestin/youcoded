@@ -140,17 +140,19 @@ export const HOME_DRAWER_CSS = `
        the volume row and the key row are each sized to it; the drawer takes everything else. The keys keep their slot grid (the
        open/close swap animates by slot), only the gap is worked out so five keys span the column. The soundbar's name and icon
        are dropped here: "remove the destins room soundbar line/icon". */
-    .mv-wide .np.mv-np:has(.rpad[data-open="1"]) { --rc: 260px; grid-template-columns: minmax(0, 1fr) var(--rc); }
+    /* WHY 252 and the closed gap (Destin, 2026-10-05: "smaller circle. buttons in expanded view should match spacing from closed
+       view"): the Media tab's closed row is five 40 px keys with 4 px gaps (home-assistant-page-media.ts), 216 px; the expanded keys
+       keep exactly that, the volume matches its width, and the circle is smaller and centred. */
+    .mv-wide .np.mv-np:has(.rpad[data-open="1"]) { --rc: 216px; grid-template-columns: minmax(0, 1fr) var(--rc); }
     .mv-wide .np.mv-np:has(.rpad[data-open="1"]) > .rpad { justify-self: stretch; }
-    .mv-wide .np.mv-np:has(.rpad[data-open="1"]) .rdial { width: var(--rc); height: var(--rc); margin: 0 0 16px; }
+    .mv-wide .np.mv-np:has(.rpad[data-open="1"]) .rdial { width: 196px; height: 196px; margin: 0 0 16px; }
     .mv-wide .np.mv-np:has(.rpad[data-open="1"]) > .mv-vol .mv-vlbl { display: none; }
     /* the tray runs the column's full height; .rchips stays a grid (its 0fr → 1fr row is the reveal), the inner layer stretches */
     .mv-wide .np.mv-np:has(.rpad[data-open="1"]) > .rchips { align-self: stretch; }
     .mv-wide .np.mv-np:has(.rpad[data-open="1"]) > .rchips .rchips-in { display: flex; flex-direction: column; }
     .mv-wide .np.mv-np:has(.rpad[data-open="1"]) > .rchips .rapps { flex: 1 1 auto; margin-top: 0; }
-    .mv-wide .np.mv-np:has(.rpad[data-open="1"]) .mv-nprow > .np-keys { --g: calc((var(--rc) - 5 * var(--k)) / 4); width: var(--rc); }
+    .mv-wide .np.mv-np:has(.rpad[data-open="1"]) .mv-nprow > .np-keys { width: var(--rc); }
   }
-  @container tvc (min-width: 1500px) { .mv-wide .np.mv-np:has(.rpad[data-open="1"]) { --rc: 300px; } }
   @container tvc (min-width: 1200px) { .rchips .rapps { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); } .rapp .logo { zoom: 1.55; } .rchips .rapp { font-size: 13px; } }
   @container tvc (min-width: 1500px) { .rchips .rapps { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); } .rapp .logo { zoom: 1.8; } .rchips .rapp { font-size: 14px; } }
   @container tvc (min-width: 1800px) { .rchips .rapps { grid-template-columns: repeat(auto-fill, minmax(138px, 1fr)); } .rapp .logo { zoom: 2.1; } .rchips .rapp { font-size: 15px; } }
