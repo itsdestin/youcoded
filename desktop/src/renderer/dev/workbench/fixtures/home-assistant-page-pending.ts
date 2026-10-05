@@ -76,9 +76,9 @@ export const HOME_PENDING_JS = `
   // ── Status of each press (audit A-4) ─────────────────────────────────────
   // A slow one says "Sending…" (after half a second, so quick presses stay quiet), then "Done".
   // A refused one is undone at once and says "Didn't work" until dismissed or replaced.
-  var pend = {}, pendSeq = 0, quietSeq = {};
+  var pend = {}, pendSeq = 0, quietSeq = {}, toks = {};
   // own: the retry function shows its own guess (a rename, a move); otherwise Try again puts the guess back first (code review 7).
-  function pendBegin(id, again, own) {
+  function pendBegin(id, again, own, undo) {
     var taken = fresh; fresh = [];
     var keys = taken.map(function (g) { g.src = id; return g.id + '|' + g.field; });
     var redo = taken.map(function (g) { return { id: g.id, field: g.field, value: g.value }; });
@@ -87,15 +87,28 @@ export const HOME_PENDING_JS = `
       batch(function () { redo.forEach(function (r) { var p = {}; p[r.field] = r.value; setLocal(r.id, p); }); });
       again();
     } };
+    // Each press keeps its own undo, so a refusal that comes back after a newer press on the same thing still undoes ITS change (edit-board review 6).
+    toks[tok] = { keys: keys, undo: undo || null, again: e.again };
     e.timer = setTimeout(function () { if (pend[id] === e && e.state === 'quiet') { e.state = 'sending'; renderSoon(); } }, 500);
     return tok;
   }
   function pendEnd(id, tok, err) {
-    var e = pend[id];
-    if (!e || e.tok !== tok) return; // a newer press on the same thing took over
+    var e = pend[id], t = toks[tok] || { keys: [], undo: null, again: null };
+    delete toks[tok];
+    if (!e || e.tok !== tok) { // a newer press on the same thing took over
+      if (err) {
+        undoGuesses(t.keys); if (t.undo) t.undo();
+        // The older refusal still says so on the same row, even if the newer press has long finished.
+        if (e) clearTimeout(e.timer);
+        pend[id] = { tok: e ? e.tok : ++pendSeq, state: 'failed', keys: e ? e.keys : [], msg: err, again: t.again };
+        render();
+      }
+      return;
+    }
     clearTimeout(e.timer);
-    if (err) return pendFail(id, e, err);
+    if (err) { if (t.undo) t.undo(); return pendFail(id, e, err); }
     settle(e.keys);
+    if (e.state === 'failed') { renderSoon(); return; } // an older refusal on this row stays until dismissed
     if (e.state === 'sending') {
       e.state = 'done';
       e.timer = setTimeout(function () { if (pend[id] === e) { delete pend[id]; renderSoon(); } }, 1500);

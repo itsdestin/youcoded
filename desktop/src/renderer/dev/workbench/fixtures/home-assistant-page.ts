@@ -1038,7 +1038,7 @@ ${HOME_ICONS_JS}
 
   function render() { if (batching) { batchDirty = true; return; } draw(); }
   function draw() {
-    if (edDrag) return; // a row is being dragged: nothing may redraw under the finger (redesign round 1, Edit c)
+    if (edDrag) { edDirty = true; return; } // a row is being dragged: nothing redraws under the finger, and it all draws when it ends (redesign round 1, Edit c)
     $('root').classList.toggle('editing', editing);
     put('bar', barHtml());
 
@@ -1057,7 +1057,8 @@ ${HOME_ICONS_JS}
       : '');
     var list = ordered(rooms.filter(function (r) { return r.items.some(function (it) { return editing || !hidden.has(it.id); }); }), 'rooms', function (r) { return r.id; });
     var roomIds = list.map(function (r) { return r.id; });
-    var html = list.map(function (r) { return roomHtml(r, roomIds); }).join('') + edNewZone();
+    var html = list.map(function (r) { return roomHtml(r, roomIds); }).join('');
+    if (html) html += edNewZone(); // no dashed box when there is nothing to drag
     put('rooms', html || '<div class="yc-empty">Nothing to show. Put devices in rooms in Home Assistant, or press Edit to bring hidden ones back.</div>');
     edFocusBox();
   }
@@ -1092,20 +1093,29 @@ ${HOME_ICONS_JS}
       .then(function () { pendEnd(id, tok, null); }, function (e) { pendEnd(id, tok, e && e.message ? e.message : 'Home Assistant did not take the new name.'); })
       .then(afterChange);
   }
-  function relocate(id, roomId, roomName) {
+  // index: put it back at this place in its room (code review 7).
+  function relocate(id, roomId, roomName, index) {
     var it = thing(id), from = roomOf(id);
     if (!it || !from) return;
     from.items = from.items.filter(function (x) { return x.id !== id; });
     var to = rooms.filter(function (r) { return r.id === roomId; })[0];
     if (!to) { to = { id: roomId, name: roomName || roomId, items: [] }; rooms.push(to); }
-    to.items.push(it);
+    if (index == null || index > to.items.length) to.items.push(it); else to.items.splice(index, 0, it);
   }
-  function moveThing(id, roomId, roomName) {
+  // extraUndo: whatever else the caller changed for the move (a saved order) and must put back if it is refused.
+  function moveThing(id, roomId, roomName, extraUndo) {
     var from = roomOf(id), it = thing(id);
     if (!from || !it || from.id === roomId) return;
-    var fromId = from.id;
+    var fromId = from.id, at = from.items.indexOf(it), madeArea = null;
     fresh = [];
-    var tok = pendBegin(id, function () { moveThing(id, roomId, roomName); }, true);
+    // WHY undo is handed to the ledger: a refusal puts it back even when a newer press on the same device has taken over (code review 6).
+    var tok = pendBegin(id, function () { moveThing(id, roomId, roomName, extraUndo); }, true, function () {
+      relocate(id, fromId, null, at); // not moved: back in its old room, at its old place
+      rooms = rooms.filter(function (r) { return r.items.length || r.id !== roomId || !roomName; });
+      if (extraUndo) extraUndo();
+      // The room was made in Home Assistant before the move was refused: do not leave it empty there.
+      if (madeArea) registry([{ type: 'config/area_registry/delete', area_id: madeArea }]).catch(function () { /* it stays; a retry makes a new one */ });
+    });
     relocate(id, roomId, roomName);
     render();
     var moveTo = function (areaId) {
@@ -1114,13 +1124,9 @@ ${HOME_ICONS_JS}
     // A new room is made first: Home Assistant picks its id, and the move
     // needs that id, so it is two exchanges.
     (roomName
-      ? registry([{ type: 'config/area_registry/create', name: roomName }]).then(function (res) { return moveTo(res[0] && res[0].area_id ? res[0].area_id : roomId); })
+      ? registry([{ type: 'config/area_registry/create', name: roomName }]).then(function (res) { madeArea = res[0] && res[0].area_id ? res[0].area_id : roomId; return moveTo(madeArea); })
       : moveTo(roomId))
-      .then(function () { pendEnd(id, tok, null); }, function (e) {
-        relocate(id, fromId); // not moved: back in its old room, with the reason on its row
-        rooms = rooms.filter(function (r) { return r.items.length || r.id !== roomId || !roomName; });
-        pendEnd(id, tok, e && e.message ? e.message : 'Home Assistant did not move it.');
-      })
+      .then(function () { pendEnd(id, tok, null); }, function (e) { pendEnd(id, tok, e && e.message ? e.message : 'Home Assistant did not move it.'); })
       .then(afterChange);
   }
   function slug(name) { return String(name).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'room'; }
@@ -1309,6 +1315,7 @@ ${HOME_ICONS_JS}
       if (!rn) { if (nb) nb.focus(); return; }
       newRoomFor = null;
       moveThing(id, slug(rn), rn);
+      edAfterMove(id, slug(rn));
       return;
     }
   }
@@ -1382,6 +1389,7 @@ ${HOME_ICONS_JS}
     if (mv) {
       if (t.value === '__new') { newRoomFor = mv; render(); return; }
       moveThing(mv, t.value);
+      edAfterMove(mv, t.value);
       return;
     }
     var gbc = t.getAttribute && t.getAttribute('data-gbright');

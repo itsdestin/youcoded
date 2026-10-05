@@ -19,14 +19,16 @@ export const HOME_EDIT_CSS = `
   .edc-row.open { border-color: var(--edge); }
   .edc-row.is-hidden .edc-main { opacity: .5; }
   .edc-main { display: flex; align-items: center; gap: 6px; }
-  .edc-grip { width: 28px; height: 36px; display: inline-grid; place-items: center; color: var(--fg-muted); cursor: grab; touch-action: none; flex-shrink: 0; border-radius: 6px; user-select: none; }
+  .edc-grip { width: 40px; height: 40px; display: inline-grid; place-items: center; color: var(--fg-muted); cursor: grab; touch-action: none; flex-shrink: 0; border-radius: 6px; user-select: none; }
   .edc-grip:hover { color: var(--fg); background: var(--inset); }
   .edc-name { flex: 1; min-width: 0; min-height: 36px; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 1px; text-align: left; background: none; border: 0; color: var(--fg); padding: 2px 4px; cursor: pointer; border-radius: 6px; user-select: none; -webkit-touch-callout: none; }
   .edc-name:hover { background: var(--inset); }
   .edc-name:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   .edc-n { font-size: 13px; font-weight: 500; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .edc-k { font-size: 11px; color: var(--fg-muted); }
-  .edc-row .ib { width: 34px; height: 34px; }
+  .edc-row .ib { width: 36px; height: 36px; }
+  /* A finger needs 44px (code review 14). */
+  @media (pointer: coarse) { .edc-grip { width: 44px; height: 44px; } .edc-row .ib { width: 44px; height: 44px; } .edc-name { min-height: 44px; } }
   .edc-lift { z-index: 20; opacity: .92; box-shadow: 0 8px 24px rgba(0, 0, 0, .35); pointer-events: none; background: var(--panel); }
   .edc-before { box-shadow: 0 -3px 0 0 var(--accent); }
   .edc-after { box-shadow: 0 3px 0 0 var(--accent); }
@@ -50,24 +52,38 @@ export const HOME_EDIT_JS = `
   // ── Edit: the organise board (redesign round 1, Edit c) ───────────────────
   // ED.open is which row's settings are showing ("<id>|<list>": a device that is
   // also a favourite has two rows, and only the one you pressed opens).
-  var ED = { open: saved.editOpen || null }, edDrag = false, edSuppress = false;
+  var ED = { open: null }, edDrag = false, edDirty = false, edSuppress = false;
   var GRIP = '<svg width="14" height="18" viewBox="0 0 14 18" fill="currentColor" aria-hidden="true"><circle cx="4" cy="3" r="1.6"/><circle cx="10" cy="3" r="1.6"/><circle cx="4" cy="9" r="1.6"/><circle cx="10" cy="9" r="1.6"/><circle cx="4" cy="15" r="1.6"/><circle cx="10" cy="15" r="1.6"/></svg>';
   function edReset() { ED.open = null; newRoomFor = null; }
   function edOpen(tok) { ED.open = ED.open === tok ? null : tok; newRoomFor = null; render(); }
-  // Escape / Cancel: first the new-room box, then the settings, and the keyboard goes back to the row's name.
+  // The row's name button: where the keyboard goes back to whenever its settings change or close (code review 5, 10).
+  function edFocusName(id, tok) {
+    var n = (tok && document.querySelector('[data-ed-name="' + tok + '"]')) || document.querySelector('.edc-row[data-edid="' + id + '"] [data-ed-name]');
+    if (n) n.focus();
+  }
+  // Escape / Cancel: first the new-room box, then the settings; either way the keyboard goes back to the row's name.
   function edCancel() {
-    var tok = ED.open;
+    var tok = ED.open, id = newRoomFor !== null ? newRoomFor : tok ? tok.split('|')[0] : null;
     if (newRoomFor !== null) newRoomFor = null; else ED.open = null;
     render();
-    var n = tok && !ED.open ? document.querySelector('[data-ed-name="' + tok + '"]') : null;
-    if (n) n.focus();
+    if (id) edFocusName(id, ED.open || tok);
+  }
+  // A device moved from its settings keeps its settings open in the new room, with the keyboard on its name (code review 5).
+  function edAfterMove(id, roomId) {
+    if (ED.open && ED.open.split('|')[0] === id && ED.open.indexOf('|r:') > 0) ED.open = id + '|r:' + roomId;
+    render();
+    edFocusName(id, ED.open);
   }
   // WHY not for the name box on a phone: opening the settings should not throw the
   // keyboard up over the row; the new room's box (typing is its whole point) always takes focus.
+  // The box is reused when a second device is dropped on the zone, so it starts empty and focused again (code review 11).
   function edFocusBox() {
     var box = document.querySelector('[data-nr],[data-rn]');
-    if (!box || box.__fx) return;
-    box.__fx = 1;
+    if (!box) return;
+    var who = box.getAttribute('data-nr') || box.getAttribute('data-rn');
+    if (box.__for === who) return;
+    box.__for = who;
+    if (box.hasAttribute('data-nr')) box.value = '';
     if (box.hasAttribute('data-rn') && window.matchMedia && window.matchMedia('(pointer: coarse)').matches) return;
     box.focus(); if (box.select) box.select();
   }
@@ -82,7 +98,7 @@ export const HOME_EDIT_JS = `
   function edIb(act, id, icon, label, extra) {
     return '<button class="ib" data-act="' + act + '" data-id="' + esc(id) + '" aria-label="' + esc(label) + '" title="' + esc(label) + '"' + (extra || '') + '>' + icon + '</button>';
   }
-  function edPanel(it, ctx, tok) {
+  function edPanel(it, ctx) {
     var id = it.id, i = ctx.ids.indexOf(id), here = roomOf(id);
     var roomBox = newRoomFor === id
       ? '<div class="edx-in"><input class="yc-input" data-nr="' + esc(id) + '" placeholder="New room’s name" aria-label="Name of the new room for ' + esc(it.name) + '">' +
@@ -112,7 +128,7 @@ export const HOME_EDIT_JS = `
       '<button class="edc-name" data-act="edopen" data-tok="' + esc(tok) + '" data-ed-name="' + esc(tok) + '" aria-expanded="' + o + '" aria-label="Settings for ' + esc(it.name) + '"><span class="edc-n">' + esc(it.name) + '</span><span class="edc-k">' + edKind(it) + '</span></button>' +
       edIb('fav', id, f ? STAR_ON : STAR, f ? 'Remove from favourites' : 'Add to favourites', ' aria-pressed="' + f + '"') +
       edIb('hide', id, h ? EYE_OFF : EYE, h ? 'Show on this page' : 'Hide from this page') + '</div>' +
-      (o ? edPanel(it, ctx, tok) : '') + pendHtml(id) + '</div>';
+      (o ? edPanel(it, ctx) : '') + pendHtml(id) + '</div>';
   }
   function edRoomHtml(room, roomIds) {
     var key = 'r:' + room.id;
@@ -139,20 +155,36 @@ export const HOME_EDIT_JS = `
 
   // Dragging. A mouse drags by the dots; a finger drags by the dots too, or by
   // pressing and holding a row (or a room's title) for a moment — a quick swipe
-  // still scrolls the page. While a drag is on, the page does not redraw
-  // (see draw), so a check landing mid-drag cannot undo it.
-  var DR = null, edHold = null;
+  // still scrolls the page. While a drag is on, the page does not redraw (see
+  // draw), and whatever arrived meanwhile draws the moment it ends (code review 1).
+  // Only the pointer that started the drag steers or ends it, and anything that
+  // takes the pointer away (focus lost, capture lost, tab hidden) ends it too (review 2).
+  var DR = null, edHold = null, edLoop = 0;
   function edClear() { Array.prototype.forEach.call(document.querySelectorAll('.edc-before, .edc-after, .edc-hot'), function (n) { n.classList.remove('edc-before', 'edc-after', 'edc-hot'); }); }
-  function edIdsOf(key, skip) {
-    return Array.prototype.map.call(document.querySelectorAll('.edc-row[data-edkey="' + key + '"]'), function (n) { return n.getAttribute('data-edid'); }).filter(function (x) { return x !== skip; });
+  // Every id of a list in its full order (drawn or not), so a drop never forgets a row that is not on screen (review 9).
+  function edFullIds(key) {
+    if (key === 'rooms') return ordered(rooms, 'rooms', function (r) { return r.id; }).map(function (r) { return r.id; });
+    if (key === 'fav') return Array.prototype.map.call(document.querySelectorAll('.edc-row[data-edkey="fav"]'), function (n) { return n.getAttribute('data-edid'); });
+    var room = rooms.filter(function (r) { return 'r:' + r.id === key; })[0];
+    return room ? ordered(room.items, key, function (x) { return x.id; }).map(function (x) { return x.id; }) : [];
   }
+  function edPlace(list, id, targetId, after) {
+    var out = list.filter(function (x) { return x !== id; }), at = targetId ? out.indexOf(targetId) : -1;
+    if (at < 0) out.push(id); else out.splice(at + (after ? 1 : 0), 0, id);
+    return out;
+  }
+  function edTouchMove(e) { if (e.cancelable) e.preventDefault(); } // a held finger that has started a drag must not also scroll the page
   function edStart(src, room, e, body) {
-    DR = { room: room, src: src, x: e.clientX, y: e.clientY, moved: false, tgt: null, body: body };
+    DR = { room: room, src: src, x: e.clientX, y: e.clientY, cx: e.clientX, cy: e.clientY, sy: window.scrollY || 0, aimedY: window.scrollY || 0, pid: e.pointerId, moved: false, tgt: null, body: body };
     edDrag = true;
+    // Added only while a drag is on, so ordinary scrolling never waits on it (review 4).
+    document.addEventListener('touchmove', edTouchMove, { passive: false });
     try { if (e.target.setPointerCapture && e.pointerId != null) e.target.setPointerCapture(e.pointerId); } catch (x) { /* a drag still works without capture */ }
+    edLoop = (window.requestAnimationFrame || function (f) { return setTimeout(f, 16); })(edFrame);
   }
+  function edMine(e) { return !DR || e.pointerId == null || DR.pid == null || e.pointerId === DR.pid; }
   document.addEventListener('pointerdown', function (e) {
-    if (!editing || e.button !== 0 || DR) return;
+    if (!editing || e.button !== 0 || DR || e.isPrimary === false) return;
     var g = e.target.closest && e.target.closest('[data-edgrip]');
     if (g) {
       var room = g.hasAttribute('data-edroomgrip'), src = room ? g.closest('.edc-room') : g.closest('.edc-row');
@@ -162,59 +194,83 @@ export const HOME_EDIT_JS = `
     if (e.pointerType !== 'touch') return;
     var h = e.target.closest && e.target.closest('.edc-main, .edc-room > .room-head');
     if (!h || (e.target.closest('.ib') && !e.target.closest('.edc-room > .room-head h2'))) return;
-    var isRoom = h.classList.contains('room-head'), s2 = h.parentNode;
-    edHold = { x: e.clientX, y: e.clientY, t: setTimeout(function () { var ev = { clientX: edHold.x, clientY: edHold.y, target: h, pointerId: e.pointerId }; edHold = null; edStart(s2, isRoom, ev, true); }, 380) };
+    var isRoom = h.classList.contains('room-head'), s2 = h.parentNode, x0 = e.clientX, y0 = e.clientY, pid = e.pointerId;
+    if (edHold) clearTimeout(edHold.t); // a second finger never leaves the first timer behind (review 8)
+    edHold = { x: x0, y: y0, t: setTimeout(function () { edHold = null; edStart(s2, isRoom, { clientX: x0, clientY: y0, target: h, pointerId: pid }, true); }, 380) };
   }, true);
-  document.addEventListener('pointermove', function (e) {
-    if (edHold && Math.abs(e.clientX - edHold.x) + Math.abs(e.clientY - edHold.y) > 8) { clearTimeout(edHold.t); edHold = null; }
-    if (!DR) return;
-    var dx = e.clientX - DR.x, dy = e.clientY - DR.y;
-    if (!DR.moved && Math.abs(dx) + Math.abs(dy) < 5) return;
-    if (!DR.moved) { DR.moved = true; DR.src.classList.add('edc-lift'); }
-    DR.src.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
-    if (window.scrollBy) { try { if (e.clientY < 60) window.scrollBy(0, -14); else if (e.clientY > window.innerHeight - 60) window.scrollBy(0, 14); } catch (x) { /* no scrolling here */ } }
-    edClear(); DR.tgt = null;
-    var el = document.elementFromPoint(e.clientX, e.clientY);
+  // Where the lifted row sits and what is under it. Called on every move and while the page scrolls under a still finger.
+  function edAim() {
+    var d = DR, dy = d.cy - d.y + ((window.scrollY || 0) - d.sy);
+    d.aimedY = window.scrollY || 0;
+    d.src.style.transform = 'translate(' + (d.cx - d.x) + 'px,' + dy + 'px)'; // the page's own scrolling is added, so the row stays under the finger (review 3)
+    edClear(); d.tgt = null;
+    var el = document.elementFromPoint(d.cx, d.cy);
     if (!el) return;
-    var row = DR.room ? null : el.closest('.edc-row'), sec = el.closest('.edc-room'), skey = DR.src.getAttribute('data-edkey');
-    if (DR.room) {
-      if (sec && sec !== DR.src) { var r = sec.getBoundingClientRect(), after = e.clientY > r.top + r.height / 2; sec.classList.add(after ? 'edc-after' : 'edc-before'); DR.tgt = { el: sec, after: after }; }
+    var row = d.room ? null : el.closest('.edc-row'), sec = el.closest('.edc-room'), skey = d.src.getAttribute('data-edkey');
+    if (d.room) {
+      if (sec && sec !== d.src) { var r = sec.getBoundingClientRect(), after = d.cy > r.top + r.height / 2; sec.classList.add(after ? 'edc-after' : 'edc-before'); d.tgt = { el: sec, after: after }; }
       return;
     }
-    if (row && row !== DR.src) {
+    if (row && row !== d.src) {
       var tk = row.getAttribute('data-edkey');
       if (skey !== tk && (skey === 'fav' || tk === 'fav')) return; // a favourite stays in Favourites; a room's device stays in rooms
-      var rr = row.getBoundingClientRect(), aft = e.clientY > rr.top + rr.height / 2;
-      row.classList.add(aft ? 'edc-after' : 'edc-before'); DR.tgt = { el: row, after: aft };
-    } else if (sec && skey !== 'fav') { sec.classList.add('edc-hot'); DR.tgt = { el: sec, end: true }; }
-    else if (el.closest('#edc-new') && skey !== 'fav') { el.closest('#edc-new').classList.add('edc-hot'); DR.tgt = { el: el.closest('#edc-new'), fresh: true }; }
+      var rr = row.getBoundingClientRect(), aft = d.cy > rr.top + rr.height / 2;
+      row.classList.add(aft ? 'edc-after' : 'edc-before'); d.tgt = { el: row, after: aft };
+    } else if (sec && skey !== 'fav') { sec.classList.add('edc-hot'); d.tgt = { el: sec, end: true }; }
+    else if (el.closest('#edc-new') && skey !== 'fav') { el.closest('#edc-new').classList.add('edc-hot'); d.tgt = { el: el.closest('#edc-new'), fresh: true }; }
+  }
+  // Near the top or bottom edge the page scrolls by itself, even with the finger held still (review 3).
+  function edFrame() {
+    if (!DR) return;
+    if (DR.moved) {
+      if (window.scrollBy) { try { if (DR.cy < 60) window.scrollBy(0, -14); else if (DR.cy > window.innerHeight - 60) window.scrollBy(0, 14); } catch (x) { /* no scrolling here */ } }
+      if ((window.scrollY || 0) !== DR.aimedY) edAim();
+    }
+    edLoop = (window.requestAnimationFrame || function (f) { return setTimeout(f, 16); })(edFrame);
+  }
+  document.addEventListener('pointermove', function (e) {
+    if (edHold && Math.abs(e.clientX - edHold.x) + Math.abs(e.clientY - edHold.y) > 8) { clearTimeout(edHold.t); edHold = null; }
+    if (!DR || !edMine(e)) return;
+    DR.cx = e.clientX; DR.cy = e.clientY;
+    if (!DR.moved && Math.abs(DR.cx - DR.x) + Math.abs(DR.cy - DR.y) < 5) return;
+    if (!DR.moved) { DR.moved = true; DR.src.classList.add('edc-lift'); }
+    edAim();
   }, true);
   function edDrop(cancel) {
     if (edHold) { clearTimeout(edHold.t); edHold = null; }
     if (!DR) return;
     var d = DR, t = d.tgt; DR = null;
+    (window.cancelAnimationFrame || clearTimeout)(edLoop);
+    document.removeEventListener('touchmove', edTouchMove, { passive: false });
     d.src.style.transform = ''; d.src.classList.remove('edc-lift'); edClear();
     edDrag = false;
     if (d.moved && d.body) { edSuppress = true; setTimeout(function () { edSuppress = false; }, 80); } // the press that ended a held drag is not a tap
-    if (cancel || !d.moved || !t) { if (d.moved) render(); return; }
+    // Whatever arrived while the drag was on (a refusal, a rename, a push) draws now, moved or not (review 1).
+    var late = edDirty; edDirty = false;
+    if (cancel || !d.moved || !t) { if (d.moved || late) render(); return; }
     if (d.room) {
-      var secs = Array.prototype.map.call(document.querySelectorAll('.edc-room'), function (n) { return n.getAttribute('data-edid'); });
-      var mine = d.src.getAttribute('data-edid'); secs = secs.filter(function (x) { return x !== mine; });
-      secs.splice(secs.indexOf(t.el.getAttribute('data-edid')) + (t.after ? 1 : 0), 0, mine);
-      order.rooms = secs; persist({ order: order }); render(); return;
+      var mine = d.src.getAttribute('data-edid');
+      order.rooms = edPlace(edFullIds('rooms'), mine, t.el.getAttribute('data-edid'), t.after); persist({ order: order }); render(); return;
     }
     var id = d.src.getAttribute('data-edid'), sk = d.src.getAttribute('data-edkey');
     if (t.fresh) { ED.open = null; newRoomFor = id; render(); return; }
     var tk = t.end ? 'r:' + t.el.getAttribute('data-edid') : t.el.getAttribute('data-edkey');
-    var ids = edIdsOf(tk, id);
-    if (t.end) ids.push(id); else ids.splice(ids.indexOf(t.el.getAttribute('data-edid')) + (t.after ? 1 : 0), 0, id);
-    if (tk !== sk) moveThing(id, tk.slice(2));
+    var ids = edPlace(edFullIds(tk), id, t.end ? null : t.el.getAttribute('data-edid'), t.after), prev = order[tk];
+    if (ED.open && ED.open.split('|')[0] === id && tk !== sk) ED.open = null; // moved by hand: its settings close
+    if (tk !== sk) moveThing(id, tk.slice(2), null, function () { if (prev === undefined) delete order[tk]; else order[tk] = prev; persist({ order: order }); });
     order[tk] = ids; persist({ order: order }); render();
   }
-  document.addEventListener('pointerup', function () { edDrop(false); }, true);
-  document.addEventListener('pointercancel', function () { edDrop(true); }, true);
-  // A held finger that has started a drag must not also scroll the page.
-  document.addEventListener('touchmove', function (e) { if (DR && e.cancelable) e.preventDefault(); }, { passive: false });
+  document.addEventListener('pointerup', function (e) { if (edMine(e)) edDrop(false); }, true);
+  document.addEventListener('pointercancel', function (e) { if (edMine(e)) edDrop(true); }, true);
+  document.addEventListener('lostpointercapture', function (e) { if (DR && edMine(e)) edDrop(true); }, true);
+  window.addEventListener('blur', function () { edDrop(true); });
+  document.addEventListener('visibilitychange', function () { if (document.hidden) edDrop(true); });
   document.addEventListener('click', function (e) { if (edSuppress) { edSuppress = false; e.stopPropagation(); e.preventDefault(); } }, true);
-  document.addEventListener('keydown', function (e) { if (DR && e.key === 'Escape') { e.preventDefault(); edDrop(true); } }, true);
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    if (DR) { e.preventDefault(); edDrop(true); return; }
+    // Escape from anywhere in a row's settings closes them (the two text boxes are handled by the page's own handler).
+    var t = e.target;
+    if (t && t.closest && t.closest('.edx-menu') && !t.hasAttribute('data-rn') && !t.hasAttribute('data-nr')) { e.preventDefault(); edCancel(); }
+  }, true);
 `;
