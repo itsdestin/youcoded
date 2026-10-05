@@ -5,6 +5,7 @@
 //   node scripts/build-icons.mjs                       (from the youcoded repo root)
 //   node scripts/build-icons.mjs --themes <dir>        also write each theme's icons into a
 //                                                      wecoded-themes checkout's themes/<slug>/assets/app-icon/
+//   node scripts/build-icons.mjs --site docs/brand     only the website's icons (skips the app's)
 //
 // WHY a script: an icon ships in a dozen files across four platforms. Edited by hand they drift —
 // the Android launcher kept the old "YC" square for months after desktop art moved on.
@@ -181,8 +182,25 @@ function themeIcons(themesDir) {
   console.log();
 }
 
+// ── The website's icons (youcoded.ai, served from docs/) ──
+// WHY: the site switches between the marketplace themes, and its header, footer and browser-tab
+// icon wear the matching theme icon (brand round 23, L4). One file per theme and size, named
+// <slug>-<px>.png; "default" also covers Cotton Candy Sky and the built-in themes. 32px uses the
+// small drawing (a browser tab); 128 is the header/footer at 2x; 180 is the iPhone home-screen icon.
+function siteIcons(dir) {
+  fs.mkdirSync(dir, { recursive: true });
+  for (const slug of ['default', ...THEMES]) {
+    const s = sizes('app', slug, [32, 128, 180]);
+    for (const px of [32, 128]) fs.copyFileSync(s[px], path.join(dir, `${slug}-${px}.png`));
+    if (slug === 'default') fs.copyFileSync(s[180], path.join(dir, 'apple-touch-icon.png'));
+    process.stdout.write(`${slug} `);
+  }
+  console.log();
+}
+
 const themesArg = process.argv.indexOf('--themes');
-const themesOnly = process.argv.includes('--themes-only');
+const siteArg = process.argv.indexOf('--site');
+const themesOnly = process.argv.includes('--themes-only') || siteArg > 0;
 if (!themesOnly) {
   const app = sizes('app', 'default', [16, 20, 24, 32, 40, 48, 64, 128, 256, 512, 1024]);
   fs.copyFileSync(app[1024], path.join(ASSETS, 'icon.png'));
@@ -201,4 +219,5 @@ if (!themesOnly) {
   console.log('icons written: desktop/assets + app/src/main/res/mipmap-*');
 }
 if (themesArg > 0) themeIcons(path.resolve(process.argv[themesArg + 1]));
+if (siteArg > 0) siteIcons(path.resolve(process.argv[siteArg + 1]));
 fs.rmSync(TMP, { recursive: true, force: true });
