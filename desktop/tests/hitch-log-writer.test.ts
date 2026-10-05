@@ -57,6 +57,19 @@ describe('RotatingJsonlWriter', () => {
     expect(last.at(-1).round).toBe(7);
   });
 
+  it('at the real 5 MiB cap, 60 MB of lines leave exactly two files totalling <= 10 MiB', async () => {
+    const w = new RotatingJsonlWriter({ dir });
+    // a realistic mix: minute-line-sized (~510 B) and frame-line-sized (~280 B) rows
+    for (let i = 0; i < 100_000; i++) { w.append({ pad: 'x'.repeat(i % 3 ? 250 : 480) }); if (i % 500 === 499) await w.flush(); }
+    await w.flush();
+    expect(w.lost).toBe(0);
+    expect(w.rotations).toBeGreaterThanOrEqual(5);
+    const sizes = readdirSync(dir).sort().map((f) => statSync(join(dir, f)).size);
+    expect(readdirSync(dir).sort()).toEqual(['hitches.1.jsonl', 'hitches.jsonl']);
+    expect(sizes.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(10 * 1024 * 1024);
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(5 * 1024 * 1024);
+  });
+
   it('writes a private file in a private folder', async () => {
     const w = new RotatingJsonlWriter({ dir: join(dir, 'perf') });
     w.append({ a: 1 }); await w.flush();
