@@ -101,19 +101,22 @@ export const CHAT: readonly ScreenEntry[] = [
   // the same four friends shows a winning, a losing, an even and a never-played record.
   { ...chat('chat/games#friends', 'pane', 'games'), params: { signedIn: '1', friends: 'many' } },
   { ...chat('chat/games#no-friends', 'pane', 'games'), params: { signedIn: '1', friends: 'none' } },
-  { ...chat('chat/games#requests', 'pane', 'games'), params: { signedIn: '1', friends: 'requests' } },
+  // Opened (it starts folded) so its rows compare with round 1's always-open card.
+  { ...chat('chat/games#requests', 'pane', 'games'), params: { signedIn: '1', friends: 'requests', friendsOpen: '1' } },
   { ...chat('chat/games#phone', 'pane', 'games', 'narrow'), viewport: { width: 390, height: 844 }, params: { signedIn: '1', friends: 'many' } },
   { ...chat('chat/games#signed-out-phone', 'pane', 'games', 'narrow'), viewport: { width: 390, height: 844 } },
   { ...chat('chat/games#small', 'pane', 'games'), viewport: { width: 640, height: 480 }, params: { signedIn: '1', friends: 'many' } },
   { ...chat('chat/games/chess/lobby#friends', 'pane', 'games'), params: { signedIn: '1', autoplay: '0', friends: 'many' } },
   { ...chat('chat/games/chess/lobby#no-friends', 'pane', 'games'), params: { signedIn: '1', autoplay: '0', friends: 'none' } },
   { ...chat('chat/games/chess/lobby#phone', 'pane', 'games', 'narrow'), viewport: { width: 390, height: 844 }, params: { signedIn: '1', autoplay: '0', friends: 'many' } },
-  // The open choices on deck games-social-1 (workbench-mode.ts switches; delete the losers once picked):
-  // how "add a friend" folds into the friends card, the signed-out Sign in's width, and how a
-  // lobby shows your record against each friend. The plain names show the shipped choice.
-  ...(['button', 'fold'] as const).map((v) => ({ ...chat(`chat/games#add-${v}`, 'pane', 'games'), params: { signedIn: '1', friends: 'requests', friendsAdd: v } })),
-  { ...chat('chat/games#sign-in-full', 'pane', 'games'), params: { signInButton: 'full' } },
-  ...(['chip', 'line'] as const).map((v) => ({ ...chat(`chat/games/chess/lobby#scores-${v}`, 'pane', 'games'), params: { signedIn: '1', autoplay: '0', friends: 'many', lobbyScores: v } })),
+  // Round 2 (deck games-social-2): a friends list long enough
+  // to scroll, the three not-connected states, and the two open choices (workbench-mode.ts
+  // switches; delete the losers once picked). The plain names show the shipped choice.
+  { ...chat('chat/games#long', 'pane', 'games'), params: { signedIn: '1', friends: 'lots', friendsOpen: '1' } },
+  { ...chat('chat/games#incognito', 'pane', 'games'), params: { signedIn: '1', friends: 'many', incognito: '1' } },
+  { ...chat('chat/games#offline', 'pane', 'games'), params: { signedIn: '1', friends: 'many', network: 'offline' } },
+  { ...chat('chat/games#summary-names', 'pane', 'games'), params: { signedIn: '1', friends: 'many', friendsSummary: 'names' } },
+  { ...chat('chat/games/chess/lobby#rows-settings', 'pane', 'games'), params: { signedIn: '1', autoplay: '0', friends: 'many', lobbyRows: 'settings' } },
   // Another computer holds this conversation: each phase of "open it here instead?".
   ...['confirm', 'force', 'undeliverable', 'claim-denied'].map((ph) => chat(`chat/takeover/${ph}`, 'dialog', 'handoff')),
   chat('chat/resume/preview', 'dialog'),

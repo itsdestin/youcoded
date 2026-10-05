@@ -62,3 +62,36 @@ export function statusLabel(row: FriendRowData, nowMs: number): string {
   if (days < 7) return `Last seen ${days}d ago`;
   return `Last seen ${new Date(row.lastSeenAt * 1000).toLocaleDateString()}`;
 }
+
+/**
+ * Which of the panel's connection states is showing (games-social round 2, GS-12:
+ * "a clear difference between the incognito state, pc internet off state, and game
+ * server broken/unreachable state"). One answer, read by the friends card AND the game
+ * tiles, so the two can never disagree.
+ *
+ *  - `offline`    the computer reports no network connection (useNetworkOnline). Wins
+ *                 over everything: going online or retrying cannot help until it returns.
+ *  - `incognito`  your own choice — hidden from friends, presence off on purpose.
+ *  - `server`     the presence connection reported an error while the computer is online.
+ *                 Said as "Can't reach the game server" — WHERE it failed, not why.
+ *  - `connecting` the second before the socket opens.
+ *  - `online`     connected.
+ */
+export type SocialState = 'offline' | 'incognito' | 'server' | 'connecting' | 'online';
+
+export function socialState(s: { networkOnline: boolean; incognito?: boolean; connected: boolean; partyError: string | null }): SocialState {
+  if (!s.networkOnline) return 'offline';
+  if (s.incognito) return 'incognito';
+  if (s.partyError) return 'server';
+  return s.connected ? 'online' : 'connecting';
+}
+
+/** What each state says, in one place: the friends card's one line (short — it shares the
+ *  row with the status dropdown in a 420px pane), and the game tiles' line
+ *  for Connect 4 / Chess. `greysVersus` — whether those two tiles are disabled. */
+export const SOCIAL_STATE_COPY: Record<Exclude<SocialState, 'online'>, { line: string; tile: string; greysVersus: boolean }> = {
+  offline: { line: 'No internet connection', tile: 'No internet connection', greysVersus: true },
+  incognito: { line: 'Hidden from friends', tile: "You're incognito", greysVersus: false },
+  server: { line: 'Game server unreachable', tile: "Can't reach the game server", greysVersus: true },
+  connecting: { line: 'Connecting…', tile: 'Connecting…', greysVersus: false },
+};

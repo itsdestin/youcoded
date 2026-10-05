@@ -19,6 +19,8 @@ import { readAllBests, recordRun } from './local-best';
 import { useMatchReport } from '../../hooks/useMatchReport';
 import ArcadePicker from './ArcadePicker';
 import FriendsPanel from './FriendsPanel';
+import { socialState, SOCIAL_STATE_COPY } from './friends-data';
+import { useNetworkOnline } from '../../hooks/useNetworkOnline';
 import Leaderboard, { type LeaderboardRow } from './Leaderboard';
 import { arcadeApi, buildStatuses, mergeBests, serverBests, staleNote, toRows } from './arcade-api';
 import ChessBoard, { type PieceTreatment } from './ChessBoard';
@@ -205,19 +207,24 @@ export default function ArcadeShell({ connection, chessConnection, incognito, on
    *  an HTTP call: it is a socket fact, and an endpoint's answer would be stale
    *  within seconds. You are filtered out of your own list — "You are online"
    *  is not a reason to start a game. */
+  const networkOnline = useNetworkOnline();
+  const social = socialState({ networkOnline, incognito, connected: state.connected, partyError: state.partyError });
   const statuses = useMemo(() => {
     if (server === null) return null;
+    const copy = social === 'online' ? null : SOCIAL_STATE_COPY[social];
     return buildStatuses({
       bests,
       onlineNames: state.onlineUsers
         .filter((u) => u.name !== state.username)
         .map((u) => u.name),
-      // Only a REPORTED failure marks versus unavailable. Using "not connected
-      // yet" would flash "Can't reach the game server" on every launch during
-      // the second before the lobby socket opens.
-      versusUnavailable: state.partyError ? "Can't reach the game server" : undefined,
+      // Only a REPORTED failure marks versus unavailable (never "not connected
+      // yet", which would flash on every launch). WHY one state for tiles and the
+      // friends card (games-social round 2, GS-12): offline, incognito and an
+      // unreachable server each read differently, and the two must agree.
+      versusUnavailable: signedIn && copy?.greysVersus ? copy.tile : undefined,
+      versusNote: signedIn && copy && !copy.greysVersus ? copy.tile : undefined,
     });
-  }, [server, bests, state.onlineUsers, state.username, state.partyError]);
+  }, [server, bests, state.onlineUsers, state.username, social, signedIn]);
 
   const leave = () => {
     if (state.screen !== 'lobby' && state.screen !== 'setup') {
@@ -255,7 +262,7 @@ export default function ArcadeShell({ connection, chessConnection, incognito, on
           // friends panel/menu when signed in with games below"). 16px between the
           // two groups (guide "Spacing": 16 between groups).
           <div className="flex flex-col gap-4 p-3">
-            <FriendsPanel incognito={incognito} onToggleIncognito={onToggleIncognito} />
+            <FriendsPanel incognito={incognito} onToggleIncognito={onToggleIncognito} social={social} onRetry={() => connection.reconnectLobby()} />
             {statuses === null
               ? <LoadingState what="games" />
               : <ArcadePicker statuses={statuses} onPick={setOpenGame} signedIn={!!signedIn} />}

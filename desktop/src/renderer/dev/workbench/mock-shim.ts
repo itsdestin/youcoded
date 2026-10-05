@@ -603,7 +603,8 @@ export function createMockShim(store: MockStore): Window['claude'] {
     getHomePath: async () => '/home/destin',
     getFavorites: async () => [],
     setFavorites: async () => undefined,
-    getIncognito: async () => false,
+    // `?incognito=1` (games-social round 2): start hidden from friends, for the incognito state.
+    getIncognito: async () => typeof location !== 'undefined' && new URLSearchParams(location.search).get('incognito') === '1',
     setIncognito: async () => undefined,
     // Desktop's chat-snapshot export path. The workbench hydrates via
     // on.chatHydrate instead (seed-chat.ts), so these are inert by design:
@@ -2592,12 +2593,16 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     id, display_name: name, handle: name.toLowerCase(), avatar_url: null,
     last_seen_at: lastSeen, created_at: jakeNowSec - 86_400,
   });
+  // `lots` (round 2, GQ-1): twelve friends, so the capped list has to scroll.
+  const LOTS = ['Ana', 'Ben', 'Cleo', 'Dev', 'Eli', 'Fay', 'Gus', 'Hana'].map((n, i) => friendCard(n.toLowerCase(), n, jakeNowSec - (i + 1) * 86_400));
   const friendList = !signedInSwitch || friendsSwitch === 'none' ? []
+    : friendsSwitch === 'lots'
+      ? [JAKE_FRIEND, friendCard(MIRA_ID, 'Mira', jakeNowSec), friendCard('sam', 'Sam', jakeNowSec - 3 * 3600), friendCard('ada', 'Ada', null), ...LOTS]
     : friendsSwitch === 'many' || friendsSwitch === 'requests'
       ? [JAKE_FRIEND, friendCard(MIRA_ID, 'Mira', jakeNowSec), friendCard('sam', 'Sam', jakeNowSec - 3 * 3600), friendCard('ada', 'Ada', null)]
       : [JAKE_FRIEND];
   const presenceUsers = friendsSwitch === 'none' ? []
-    : friendsSwitch === 'many' || friendsSwitch === 'requests'
+    : friendsSwitch === 'many' || friendsSwitch === 'requests' || friendsSwitch === 'lots'
       ? [
         { id: JAKE_FRIEND.id, display_name: JAKE_FRIEND.display_name, handle: JAKE_FRIEND.handle, status: 'idle' },
         { id: MIRA_ID, display_name: 'Mira', handle: 'mira', status: 'in-game' },
@@ -2630,6 +2635,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     unblock: async () => ({ ok: true, value: undefined }),
     listBlocks: async () => ({ ok: true, value: [] }),
     presenceConnect: async () => {
+      // `?network=offline`: a computer with no network never connects (the app's own
+      // offline flag comes from workbench-mode.ts; the socket simply stays down).
+      if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('network') === 'offline') return { ok: true };
       presenceLive = true;
       // Fire on a tick, not synchronously — usePresence.ts's onPresenceEvent
       // subscription and its presenceConnect() call happen in the same effect

@@ -174,43 +174,43 @@ export function workbenchThemeLiked(): boolean {
   return new URLSearchParams(location.search).get('liked') === '1';
 }
 
-/** Games-social redesign (redesign backlog row 11, deck games-social-1): three
- *  open choices Destin picks between on the deck, each a workbench-only switch
- *  that returns the SHIPPED value everywhere else (the `workbenchScreenFrame`
- *  pattern — a typo shows the real screen). Delete each switch and its losing
- *  branches once he picks.
+/** Games-social redesign (redesign backlog row 11). Round 1 (deck games-social-1) settled
+ *  add-a-friend (a button), the Sign in width (full) and the lobby record (a sentence); those
+ *  switches are gone. Round 2 (deck games-social-2) asks two more, each a workbench-only switch
+ *  that returns the SHIPPED value everywhere else (the `workbenchScreenFrame` pattern). Delete
+ *  each switch and its losing branch once Destin picks.
  *
- *  `?friendsAdd=` — how "add a friend" folds into the friends card:
- *  `field` (shipped) the handle box near the top of the card, like Session
- *  details' "Add a tag"; `button` a full-width outlined "Add a friend" under the
- *  list that opens the box (guide: follow-up actions); `fold` a fold-out row. */
-export const FRIENDS_ADD_LOOKS = ['field', 'button', 'fold'] as const;
-export type FriendsAddLook = typeof FRIENDS_ADD_LOOKS[number];
-export function workbenchFriendsAdd(): FriendsAddLook {
-  if (!isWorkbenchMode()) return 'field';
-  const raw = new URLSearchParams(location.search).get('friendsAdd') ?? 'field';
-  return (FRIENDS_ADD_LOOKS as readonly string[]).includes(raw) ? (raw as FriendsAddLook) : 'field';
+ *  `?friendsSummary=` — the collapsed friends card's one line: `count` (shipped) "2 of 4
+ *  online · 1 request" under "Friends"; `names` a green "2 online" pill beside "Friends" and the
+ *  online friends' names under it. */
+export const FRIENDS_SUMMARY_LOOKS = ['count', 'names'] as const;
+export type FriendsSummaryLook = typeof FRIENDS_SUMMARY_LOOKS[number];
+export function workbenchFriendsSummary(): FriendsSummaryLook {
+  if (!isWorkbenchMode()) return 'count';
+  const raw = new URLSearchParams(location.search).get('friendsSummary') ?? 'count';
+  return (FRIENDS_SUMMARY_LOOKS as readonly string[]).includes(raw) ? (raw as FriendsSummaryLook) : 'count';
 }
 
-/** `?signInButton=` — the signed-out card's Sign in: `centred` (shipped; Destin's
- *  words, "centered filled sign in") or `full` (the guide's "a lone button is full
- *  width"). */
-export const SIGN_IN_BUTTON_LOOKS = ['centred', 'full'] as const;
-export type SignInButtonLook = typeof SIGN_IN_BUTTON_LOOKS[number];
-export function workbenchSignInButton(): SignInButtonLook {
-  if (!isWorkbenchMode()) return 'centred';
-  const raw = new URLSearchParams(location.search).get('signInButton') ?? 'centred';
-  return (SIGN_IN_BUTTON_LOOKS as readonly string[]).includes(raw) ? (raw as SignInButtonLook) : 'centred';
+/** `?lobbyRows=` — how a game's page lays out each friend: `switcher` (shipped) plain rows like
+ *  the sessions menu — name with its status pill beside it, the record under, Challenge at the
+ *  right; `settings` boxed rows like the Settings list — one box per friend. */
+export const LOBBY_ROW_LOOKS = ['switcher', 'settings'] as const;
+export type LobbyRowLook = typeof LOBBY_ROW_LOOKS[number];
+export function workbenchLobbyRows(): LobbyRowLook {
+  if (!isWorkbenchMode()) return 'switcher';
+  const raw = new URLSearchParams(location.search).get('lobbyRows') ?? 'switcher';
+  return (LOBBY_ROW_LOOKS as readonly string[]).includes(raw) ? (raw as LobbyRowLook) : 'switcher';
 }
 
-/** `?lobbyScores=` — how a game lobby shows your record against each friend:
- *  `column` (shipped) a right-hand score column like the solo leaderboards;
- *  `chip` today's "4W - 2L" chip beside the name; `line` a sentence under the
- *  name ("You lead 4–2"). */
-export const LOBBY_SCORE_LOOKS = ['column', 'chip', 'line'] as const;
-export type LobbyScoreLook = typeof LOBBY_SCORE_LOOKS[number];
-export function workbenchLobbyScores(): LobbyScoreLook {
-  if (!isWorkbenchMode()) return 'column';
-  const raw = new URLSearchParams(location.search).get('lobbyScores') ?? 'column';
-  return (LOBBY_SCORE_LOOKS as readonly string[]).includes(raw) ? (raw as LobbyScoreLook) : 'column';
+/** Practice states, not choices. `?friendsOpen=1` opens the friends card (it starts folded, so
+ *  its rows could not be photographed). `?network=offline` makes the app believe the computer has
+ *  no network connection (the browser's own online flag), for the offline state. Both false
+ *  outside the workbench and the photo-only build. */
+export function workbenchFriendsOpen(): boolean {
+  if (!isWorkbenchMode()) return false;
+  return new URLSearchParams(location.search).get('friendsOpen') === '1';
+}
+export function workbenchNetworkOffline(): boolean {
+  if (!isWorkbenchMode()) return false;
+  return new URLSearchParams(location.search).get('network') === 'offline';
 }

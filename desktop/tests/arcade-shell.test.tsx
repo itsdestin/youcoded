@@ -156,3 +156,20 @@ describe('picking a game', () => {
     expect(onPick).toHaveBeenCalledWith(CHESS);
   });
 });
+
+describe('offline, incognito and an unreachable server are three different states', () => {
+  it('ranks them: no network first, then your own choice, then a server failure', async () => {
+    const { socialState } = await import('../src/renderer/components/game/friends-data');
+    expect(socialState({ networkOnline: false, incognito: true, connected: false, partyError: 'x' })).toBe('offline');
+    expect(socialState({ networkOnline: true, incognito: true, connected: false, partyError: null })).toBe('incognito');
+    expect(socialState({ networkOnline: true, incognito: false, connected: false, partyError: 'lost' })).toBe('server');
+    expect(socialState({ networkOnline: true, incognito: false, connected: false, partyError: null })).toBe('connecting');
+    expect(socialState({ networkOnline: true, incognito: false, connected: true, partyError: null })).toBe('online');
+  });
+
+  it('an incognito note leaves the versus tile playable; a failure greys it', () => {
+    picker({ chess: { note: "You're incognito", friendsOnline: [] }, 'connect-four': { unavailable: 'No internet connection' } });
+    expect(screen.getByText("You're incognito").closest('button')!).not.toBeDisabled();
+    expect(screen.getByText('No internet connection').closest('button')!).toBeDisabled();
+  });
+});

@@ -27,6 +27,9 @@ export interface ArcadeStatus {
    *  user's words. Renders in place of the online list — never as an error dot,
    *  because a service being down is not the player's problem to fix. */
   unavailable?: string;
+  /** Versus: a state that is NOT a failure but still beats the online list — "You're
+   *  incognito", "Connecting…" (games-social round 2, GS-12). The tile stays clickable. */
+  note?: string;
 }
 
 interface Props {
@@ -52,6 +55,7 @@ function decidingFact(
   }
   if (!signedIn) return { text: 'Sign in to play', tone: 'quiet' };
   if (status.unavailable) return { text: status.unavailable, tone: 'quiet' };
+  if (status.note) return { text: status.note, tone: 'quiet' };
   const online = status.friendsOnline ?? [];
   if (online.length === 0) return { text: 'No friends online', tone: 'quiet' };
   if (online.length === 1) return { text: `${online[0]} is online`, tone: 'ready' };

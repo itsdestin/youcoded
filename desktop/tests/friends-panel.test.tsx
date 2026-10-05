@@ -21,12 +21,14 @@ import FriendsPanel from '../src/renderer/components/game/FriendsPanel';
 afterEach(() => { cleanup(); h.startSignIn.mockClear(); h.signInPending = false; h.signInError = null; });
 
 describe('friends panel, signed out', () => {
-  it("says Destin's sentence and signs in with a filled button", () => {
-    render(<FriendsPanel />);
+  it("says Destin's sentence and signs in with a full-width filled button", () => {
+    render(<FriendsPanel social="online" onRetry={vi.fn()} />);
     expect(screen.getByText('Sign in to play with friends and put your scores on the board.')).toBeInTheDocument();
     const button = screen.getByRole('button', { name: 'Sign in' });
     // Filled = the primary button (guide "Buttons": the main action is filled).
     expect(button.className).toContain('bg-accent');
+    // GC-2 picked full width — the Account popup's sign-in card.
+    expect(button.className).toContain('w-full');
     fireEvent.click(button);
     expect(h.startSignIn).toHaveBeenCalledTimes(1);
     expect(screen.queryByText(/play without an account/i)).toBeNull();
@@ -34,7 +36,7 @@ describe('friends panel, signed out', () => {
 
   it('shows a failed sign-in instead of swallowing it', () => {
     h.signInError = 'the browser was closed';
-    render(<FriendsPanel />);
+    render(<FriendsPanel social="online" onRetry={vi.fn()} />);
     expect(screen.getByText(/Sign-in failed: the browser was closed/)).toBeInTheDocument();
   });
 });

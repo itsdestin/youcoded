@@ -88,6 +88,8 @@ export function buildStatuses(input: {
   bests: Record<string, number>;
   onlineNames: string[];
   versusUnavailable?: string;
+  /** A versus line that is not a failure ("You're incognito") — the tile stays playable. */
+  versusNote?: string;
 }): Record<string, ArcadeStatus> {
   const out: Record<string, ArcadeStatus> = {};
   for (const game of GAMES) {
@@ -99,7 +101,9 @@ export function buildStatuses(input: {
     } else {
       out[game.id] = input.versusUnavailable
         ? { unavailable: input.versusUnavailable }
-        : { friendsOnline: input.onlineNames };
+        : input.versusNote
+          ? { note: input.versusNote, friendsOnline: input.onlineNames }
+          : { friendsOnline: input.onlineNames };
     }
   }
   return out;

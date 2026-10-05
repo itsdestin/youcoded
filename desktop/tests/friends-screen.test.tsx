@@ -40,6 +40,15 @@ import GameLobby from '../src/renderer/components/game/GameLobby';
 import FriendsPanel from '../src/renderer/components/game/FriendsPanel';
 
 const ok = <T,>(value: T) => ({ ok: true as const, value });
+
+// The friends card starts folded (games-social round 2, GS-2): open it, and when asked
+// open the add box too — the steps a person takes.
+async function openPanel(opts: { add?: boolean } = {}) {
+  const u = render(<FriendsPanel social="online" onRetry={vi.fn()} />);
+  fireEvent.click(await u.findByRole('button', { name: /^Friends/ }));
+  if (opts.add) fireEvent.click(u.getByRole('button', { name: 'Add a friend' }));
+  return u;
+}
 const err = (status: number, message = 'nope') => ({ ok: false as const, status, message });
 
 // A no-op connection; challengePlayer is spied where a test needs it.
@@ -176,7 +185,7 @@ describe('Friends panel — add a friend', () => {
     const sendRequest = vi.fn().mockResolvedValue(err(404));
     (window as any).claude.social = makeSocial({ sendRequest });
 
-    const { findByLabelText, getByRole, getByText } = render(<FriendsPanel />);
+    const { findByLabelText, getByRole, getByText } = await openPanel({ add: true });
     const input = (await findByLabelText("Friend's handle")) as HTMLInputElement;
 
     fireEvent.change(input, { target: { value: 'ghost' } });
@@ -187,7 +196,7 @@ describe('Friends panel — add a friend', () => {
   });
 
   it('lowercases the handle as the user types', async () => {
-    const { findByLabelText } = render(<FriendsPanel />);
+    const { findByLabelText } = await openPanel({ add: true });
     const input = (await findByLabelText("Friend's handle")) as HTMLInputElement;
     fireEvent.change(input, { target: { value: 'AlIcE' } });
     expect(input.value).toBe('alice');
@@ -210,7 +219,7 @@ describe('Friends panel — in-flight mutation guards', () => {
       acceptRequest,
     });
 
-    const { findByText } = render(<FriendsPanel />);
+    const { findByText } = await openPanel();
     const accept = await findByText('Accept');
 
     fireEvent.click(accept);
@@ -232,7 +241,7 @@ describe('Friends panel — in-flight mutation guards', () => {
     );
     (window as any).claude.social = makeSocial({ sendRequest });
 
-    const { findByLabelText, getByRole, getByText } = render(<FriendsPanel />);
+    const { findByLabelText, getByRole, getByText } = await openPanel({ add: true });
     const input = (await findByLabelText("Friend's handle")) as HTMLInputElement;
     fireEvent.change(input, { target: { value: 'zed' } });
 
@@ -256,7 +265,7 @@ describe('Friends panel — block is consequence-gated', () => {
       block: blockFn,
     });
 
-    const { findByLabelText, getByRole, getByText, queryByText } = render(<FriendsPanel />);
+    const { findByLabelText, getByRole, getByText, queryByText } = await openPanel();
 
     // Open the row menu.
     const menuBtn = await findByLabelText('Friend options');
@@ -274,5 +283,45 @@ describe('Friends panel — block is consequence-gated', () => {
     // Confirm — now block() fires with the account id.
     fireEvent.click(getByRole('button', { name: 'Block' }));
     await waitFor(() => expect(blockFn).toHaveBeenCalledWith('github:1'));
+  });
+});
+
+describe('Friends panel — folded summary and request order', () => {
+  it('starts folded to one line that counts who is online, and opens on click', async () => {
+    h.state.onlineUsers = [{ id: 'github:2', name: 'Bob', handle: 'bob', status: 'idle' }];
+    (window as any).claude.social = makeSocial({
+      listFriends: vi.fn().mockResolvedValue(ok([friend({ id: 'github:1', display_name: 'Alice' }), friend({ id: 'github:2', display_name: 'Bob', handle: 'bob' })])),
+    });
+    const u = render(<FriendsPanel social="online" onRetry={vi.fn()} />);
+    await u.findByText('1 of 2 online');
+    expect(u.queryByText('Alice')).toBeNull();
+    fireEvent.click(u.getByRole('button', { name: /^Friends/ }));
+    expect(await u.findByText('Alice')).toBeTruthy();
+  });
+
+  it('puts the filled Accept to the RIGHT of Decline', async () => {
+    (window as any).claude.social = makeSocial({
+      listRequests: vi.fn().mockResolvedValue(ok({
+        incoming: [{ id: 'req-1', from: { id: 'github:9', display_name: 'Zed', handle: 'zed', avatar_url: null }, created_at: 0 }],
+        outgoing: [],
+      })),
+    });
+    const u = await openPanel();
+    const accept = await u.findByRole('button', { name: 'Accept' });
+    const decline = u.getByRole('button', { name: 'Decline' });
+    // Guide "Buttons": two side by side, the filled one on the right.
+    expect(decline.compareDocumentPosition(accept) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('says which problem it is: offline and an unreachable server read differently', async () => {
+    const off = render(<FriendsPanel social="offline" onRetry={vi.fn()} />);
+    expect(await off.findByText(/This computer is offline/)).toBeTruthy();
+    off.unmount();
+    const onRetry = vi.fn();
+    const srv = render(<FriendsPanel social="server" onRetry={onRetry} />);
+    expect(await srv.findByText(/Can't reach the game server\. Flappy and 2048 still play/)).toBeTruthy();
+    expect(srv.queryByText(/This computer is offline/)).toBeNull();
+    fireEvent.click(srv.getByRole('button', { name: 'Try again' }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 });
