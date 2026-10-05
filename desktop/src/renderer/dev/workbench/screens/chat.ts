@@ -46,6 +46,8 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/menu/file', 'menu'),
   // No session at all: the first screen a new user sees.
   { name: 'welcome', tags: ['view'], scenario: 'empty' },
+  // TRIAL (first-run deck C-2): the first-time welcome in brand versions, removed once one is picked.
+  ...['W1', 'W2', 'W3'].map((w) => ({ name: `welcome#${w.toLowerCase()}`, tags: ['view'], scenario: 'empty' as const, params: { welcome: w } })),
   { name: 'welcome/new-session', tags: ['view'], scenario: 'empty', sameAs: { name: 'welcome', why: 'a first-ever launch opens the form already' } },
   { name: 'projects', tags: ['view', 'projects'] },
   { name: 'marketplace', tags: ['view', 'marketplace'] },
@@ -64,6 +66,12 @@ export const CHAT: readonly ScreenEntry[] = [
   // First-run setup, one entry per step (?firstRun=<STEP>). LAUNCH_WIZARD is left out: it
   // hands over to the app after 1.5 s by design.
   ...['DETECT_PREREQUISITES', 'INSTALL_PREREQUISITES', 'ENABLE_DEVELOPER_MODE', 'AUTHENTICATE'].map((st) => ({ name: `first-run#${st.toLowerCase().replace(/_/g, '-')}`, tags: ['first-run', 'view'], params: { firstRun: st } })),
+  // TRIAL (first-run deck L-3): the sign-in layouts B and C, removed once one is picked.
+  { name: 'first-run#signin-b', tags: ['first-run', 'view'], params: { firstRun: 'AUTHENTICATE', signIn: 'B' } },
+  { name: 'first-run#signin-b-payg', tags: ['first-run', 'view'], params: { firstRun: 'AUTHENTICATE', signIn: 'B', signInPick: 'payg' } },
+  { name: 'first-run#signin-c', tags: ['first-run', 'view'], params: { firstRun: 'AUTHENTICATE', signIn: 'C' } },
+  { name: 'first-run#installing', tags: ['first-run', 'view'], params: { firstRun: 'INSTALL_PREREQUISITES', prereqs: 'installing' } },
+  { name: 'first-run#install-failed', tags: ['first-run', 'view'], params: { firstRun: 'INSTALL_PREREQUISITES', prereqs: 'failed' } },
   { name: 'first-run#authenticate-chatgpt', tags: ['first-run', 'view', 'sign-in'], params: { firstRun: 'AUTHENTICATE', authMode: 'chatgpt' } },
   // The arcade signed in (a friend online), and its lonelier states.
   { ...chat('chat/games#signed-in', 'pane', 'games'), params: { signedIn: '1' } },

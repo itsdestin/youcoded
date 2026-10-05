@@ -2914,10 +2914,18 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     resumeLocalDownload: async () => true,
     getState: async () => ({
       currentStep: firstRunStep,
+      // `?prereqs=installing|failed` stages the 'getting things ready' step mid-way and
+      // stopped on a failure (first-run deck L-1/L-2/E-2) — the failure text is the real
+      // winget message from Destin's Windows screenshot, so the details fold shows it.
       prerequisites: firstRunParams.get('claudeInstall') === 'installing'
         ? [{ name: 'claude', displayName: 'Claude Code', status: 'installing' }]
-        : [],
-      overallProgress: 100,
+        : firstRunParams.get('prereqs') === 'installing'
+          ? [{ name: 'node', displayName: 'Node.js', status: 'installed', version: 'v22.20.0' }, { name: 'git', displayName: 'Git', status: 'installing' }]
+          : firstRunParams.get('prereqs') === 'failed'
+            ? [{ name: 'node', displayName: 'Node.js', status: 'installed', version: 'v22.20.0' }, { name: 'git', displayName: 'Git', status: 'failed' }]
+            : [],
+      overallProgress: firstRunParams.get('prereqs') ? 50 : 100,
+      ...(firstRunParams.get('prereqs') === 'failed' ? { lastError: 'winget (App Installer) is missing, disabled, or not on your system PATH. Please install App Installer from the Microsoft Store (https://aka.ms/getwinget) or enable it in Windows Settings / Policy, then try again.' } : {}),
       statusMessage: '',
       // `?authMode=chatgpt|oauth|apikey` pins the sign-in screen's in-flight
       // state (design 2026-09-04: the ChatGPT round-trip has its own waiting copy).

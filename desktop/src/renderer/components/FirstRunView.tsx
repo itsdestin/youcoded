@@ -4,7 +4,9 @@ import type { CatalogModel } from '../../shared/provider-types';
 import BrailleSpinner from './BrailleSpinner';
 import { canRetry, describeStep } from './first-run/describe-step';
 import { persistLastBinding, persistRuntimeDefault } from './RuntimeBinding';
-import { Button, FieldError } from './ui';
+import { Button, CARD_LEVEL_1, ErrorState, FieldError, FoldRow } from './ui';
+import { BrandLockup } from './brand/BrandLockup';
+import { SignInChoices, type WayIn } from './first-run/SignInChoices';
 import { StatusStrip } from './ui/StatusStrip';
 import { ApiKeySetup } from './first-run/ApiKeySetup';
 import { LocalModelSetup } from './first-run/LocalModelSetup';
@@ -21,65 +23,16 @@ function isChatGptSupported(): boolean {
 }
 
 /* ------------------------------------------------------------------ */
-/*  StatusIcon                                                        */
-/* ------------------------------------------------------------------ */
-
-function StatusIcon({ status }: { status: PrerequisiteState['status'] }) {
-  switch (status) {
-    case 'installed':
-      return <span className="text-accent">&#10003;</span>;
-    case 'installing':
-    case 'checking':
-      return <BrailleSpinner size="sm" />;
-    case 'failed':
-      // Status colors stay theme-independent per CLAUDE.md.
-      return <span className="text-red-500">&#10007;</span>;
-    case 'skipped':
-      return <span className="text-fg-faint">&#8212;</span>;
-    case 'waiting':
-    default:
-      return <span className="text-fg-faint">&#9675;</span>;
-  }
-}
-
-/* ------------------------------------------------------------------ */
-/*  statusLabel                                                       */
-/* ------------------------------------------------------------------ */
-
-function statusLabel(status: PrerequisiteState['status'], version?: string): string {
-  switch (status) {
-    case 'installed':
-      return version ? `installed (${version})` : 'installed';
-    case 'installing':
-      return 'installing...';
-    case 'checking':
-      return 'checking...';
-    case 'failed':
-      return 'failed';
-    case 'skipped':
-      return 'skipped';
-    default:
-      return 'waiting';
-  }
-}
-
-/* ------------------------------------------------------------------ */
 /*  ProgressBar                                                       */
 /* ------------------------------------------------------------------ */
 
 function ProgressBar({ percent }: { percent: number }) {
   const clamped = Math.min(100, Math.max(0, percent));
+  // WHY no percentage (first-run deck L-1, "one line and a bar"): the step line says
+  // where setup is; a number beside it only invited reading 23% as "stuck".
   return (
-    <div className="w-full flex items-center gap-3">
-      <div className="flex-1 h-1.5 rounded-full bg-inset overflow-hidden">
-        <div
-          className="h-full rounded-full bg-accent transition-all duration-500"
-          style={{ width: `${clamped}%` }}
-        />
-      </div>
-      <span className="text-xs text-fg-muted tabular-nums w-10 text-right">
-        {Math.round(clamped)}%
-      </span>
+    <div className="w-full h-1.5 rounded-full bg-inset border border-edge-dim overflow-hidden" role="progressbar" aria-valuenow={Math.round(clamped)} aria-valuemin={0} aria-valuemax={100}>
+      <div className="h-full rounded-full brand-bar-fill transition-all duration-500" style={{ width: `${clamped}%` }} />
     </div>
   );
 }
@@ -116,7 +69,9 @@ function AuthScreen({
 
   // The waiting line keeps the card around it (P-6): the screen does not
   // change shape between pressing a button and coming back from the browser.
-  const card = 'mt-6 w-full max-w-md rounded-2xl bg-panel border border-edge p-6 flex flex-col items-center gap-4';
+  // Brand rebuild (2026-10-04): the app's first-level card, so setup's boxes are the same
+  // boxes the app opens onto.
+  const card = `${CARD_LEVEL_1} w-full p-5 flex flex-col items-center gap-4`;
 
   if (authMode === 'oauth' && claudeInstalling) {
     return (
@@ -156,53 +111,24 @@ function AuthScreen({
     );
   }
 
+  const pick = (w: WayIn) => {
+    if (w === 'claude') onOAuth();
+    else if (w === 'chatgpt') onChatGpt();
+    else if (w === 'openrouter') onOpenRouter();
+    else if (w === 'local') setLocalOpen(true);
+    else setKeyOpen(true);
+  };
   return (
-    <div className={card}>
-      <p className="text-sm text-fg-dim text-center leading-relaxed">
-        Sign in with the plan you already pay for — no API key or credit card needed.
-      </p>
+    <div className="w-full flex flex-col gap-3">
+      <SignInChoices chatGpt={isChatGptSupported()} onPick={pick} />
       {/* First-run guide design 2026-09-10 §1.1: the one warning nobody can
           skip. It lives on the sign-in step because every install passes
           through here; the app's own dialogs only warn the first time a
-          permission switch flips. */}
-      {/* Wording is Destin's (review deck 2026-09-10, Z-1). */}
-      <p className="text-sm text-fg-dim text-center leading-relaxed">
+          permission switch flips. Wording is Destin's (review deck 2026-09-10, Z-1). */}
+      <p className="text-xs text-fg-muted text-center leading-relaxed">
         With your permission, the assistant may create, change, or delete files on your device.
         Create backups for anything you cannot replace.
       </p>
-
-      {/* Documented pill exception: first-run hero CTAs are the Button's xl size
-          (rounded-full, larger padding, semibold) — a shared size since 2026-09-16
-          instead of the same five hand-set className overrides. Only the hover and
-          the focus ring normalize — hover:opacity-90 faded the label along with the fill.
-          WHY every way in is the same outlined button (Destin, review of the
-          first-run local models mockups, 2026-09-14): "log in with claude should
-          not be a unique button" — no way in is presented as the default, and
-          G-4 allows a view with no filled button at all. */}
-      {/* Full-width pills, one per way in. Side by side the outlined labels
-          wrapped onto two lines at the card's width. */}
-      <div className="flex flex-col items-stretch gap-3 w-full">
-        <Button variant="secondary" onClick={onOAuth} size="xl" className="w-full">
-          Log in with Claude
-        </Button>
-        {isChatGptSupported() && (
-          <Button variant="secondary" onClick={onChatGpt} size="xl" className="w-full">
-            Log in with ChatGPT
-          </Button>
-        )}
-        <Button variant="secondary" onClick={onOpenRouter} size="xl" className="w-full">
-          Log in with OpenRouter
-        </Button>
-        <Button variant="secondary" onClick={() => setLocalOpen(true)} size="xl" className="w-full">
-          Use a local model
-        </Button>
-        {/* WHY a button, not an underlined link (Destin, 2026-09-14): "use an api
-            key should be the same as the other buttons, not a link thing". It
-            opens its own page (ApiKeySetup), like Use a local model (A-7). */}
-        <Button variant="secondary" onClick={() => setKeyOpen(true)} size="xl" className="w-full">
-          Use an API key
-        </Button>
-      </div>
     </div>
   );
 }
@@ -213,7 +139,7 @@ function AuthScreen({
 
 function DevModeScreen({ onEnable }: { onEnable: () => void }) {
   return (
-    <div className="mt-6 w-full max-w-md rounded-2xl bg-panel border border-edge p-6 flex flex-col items-center gap-4 text-center">
+    <div className={`${CARD_LEVEL_1} w-full p-5 flex flex-col items-center gap-4 text-center`}>
       <p className="text-sm text-fg leading-relaxed">
         Windows Developer Mode allows YouCoded to create symbolic links, which
         the toolkit uses for configuration files. This is a one-time system setting.
@@ -238,12 +164,12 @@ function DevModeScreen({ onEnable }: { onEnable: () => void }) {
 
 function CompletionCard() {
   return (
-    <div className="w-full max-w-md rounded-2xl bg-panel border border-edge p-6 flex flex-col gap-4">
-      <h2 className="text-lg font-semibold text-fg text-center">You're all set.</h2>
+    <div className="flex flex-col items-center gap-2 text-center">
+      <h2 className="brand-heading text-2xl text-fg">You're all set</h2>
       {/* First-run guide design 2026-09-10 §1.2: the three "try this first"
           bullets are gone — the buddy's tour covers them once the app opens,
           so listing them here would say everything twice. */}
-      <p className="text-sm text-fg-dim text-center">Your assistant will show you around once the app opens.</p>
+      <p className="text-sm text-fg-dim">Your assistant will show you around once the app opens.</p>
       <div className="flex items-center justify-center gap-2 text-xs text-fg-muted pt-1">
         <BrailleSpinner size="sm" />
         <span>Opening YouCoded…</span>
@@ -265,13 +191,14 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
   useScreenOpen('first-run', () => {});
   const [state, setState] = useState<FirstRunState | null>(null);
 
-  // First launch has no user theme — lock the screen to Creme so the app's
-  // theme tokens resolve to a designed onboarding palette. ThemeProvider
+  // First launch has no user theme. The screen itself paints the brand palette
+  // (.brand-surface); the page underneath is held on Light so nothing outside it
+  // (scrollbars, the window's own colour scheme) shows a different theme. ThemeProvider
   // overrides this once the main app mounts after completion.
   useEffect(() => {
     const root = document.documentElement;
     const prev = root.getAttribute('data-theme');
-    root.setAttribute('data-theme', 'creme');
+    root.setAttribute('data-theme', 'light');
     return () => {
       if (prev) root.setAttribute('data-theme', prev);
       else root.removeAttribute('data-theme');
@@ -376,102 +303,95 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
   const launching =
     state?.currentStep === 'LAUNCH_WIZARD' || state?.currentStep === 'COMPLETE';
 
+  // The prerequisites this install actually works through. Round 3 review (B-9): Claude
+  // Code's on-demand install is shown on the sign-in card, never counted here, and a
+  // waiting/skipped Claude Code would never move (Q-5).
+  const steps = (state?.prerequisites ?? []).filter((p) => !(p.name === 'claude' && (state?.currentStep === 'AUTHENTICATE' || p.status === 'waiting' || p.status === 'skipped')));
+  const activeAt = steps.findIndex((p) => p.status === 'installing' || p.status === 'checking');
+  const failed = steps.find((p) => p.status === 'failed');
+  const stopped = !!state?.lastError && retryable;
+
+  // One heading and one line per step (first-run deck L-1, "one line and a bar"): tool
+  // names stay out of sight unless one of them fails.
+  let heading = 'Getting things ready';
+  let line: string | null = null;
+  if (stopped) {
+    heading = 'Setup stopped';
+  } else if (state?.currentStep === 'DETECT_PREREQUISITES') {
+    line = "Checking what's already on this computer…";
+  } else if (state?.currentStep === 'INSTALL_PREREQUISITES') {
+    line = activeAt >= 0 ? `Step ${activeAt + 1} of ${steps.length}` : 'Getting the next piece ready…';
+  } else if (state?.currentStep === 'AUTHENTICATE') {
+    heading = 'Choose how your assistant runs';
+    line = 'You can add the others later in Settings.';
+  } else if (state?.currentStep === 'ENABLE_DEVELOPER_MODE') {
+    heading = 'One Windows setting';
+  }
+  const installing = state?.currentStep === 'DETECT_PREREQUISITES' || state?.currentStep === 'INSTALL_PREREQUISITES';
+
   return (
-    <div className="absolute inset-0 flex flex-col items-center justify-center bg-canvas text-fg">
+    // WHY brand-surface (first-run deck B-2, "brand lavender, always"): setup has no
+    // theme yet, so it wears the brand's own palette; the app's primitives inside it
+    // read the brand colours through the same tokens they use everywhere else.
+    <div className="brand-surface absolute inset-0 overflow-y-auto">
       {state && <ScreenMark name="first-run" />}
-      <h1 className="text-4xl font-semibold tracking-tight mb-6 text-fg">YouCoded</h1>
+      <div className="min-h-full flex flex-col items-center justify-center gap-6 px-4 py-10">
+        {/* B-1: the stacked logo replaces the plain "YouCoded" title. */}
+        <BrandLockup size={36} />
 
-      {launching ? (
-        <CompletionCard />
-      ) : (
-        <div className="flex flex-col items-center gap-5 w-full max-w-md px-4">
-          {state && (
-            <p className="text-sm text-fg-dim text-center max-w-md leading-relaxed">
-              {describeStep(state)}
-            </p>
-          )}
+        {launching ? (
+          <CompletionCard />
+        ) : (
+          <div className={`flex flex-col items-center gap-4 w-full ${state?.currentStep === 'AUTHENTICATE' && new URLSearchParams(location.search).get('signIn') === 'C' ? 'max-w-2xl' : 'max-w-md'}`}>
+            {state && (
+              <div className="text-center">
+                <h1 className="brand-heading text-2xl text-fg">{heading}</h1>
+                {line && <p className="mt-1 text-sm text-fg-dim">{line}</p>}
+              </div>
+            )}
 
-          {/* Prerequisite checklist — rounded pills */}
-          {state && (
-            <ul className="w-full space-y-2">
-              {state.prerequisites
-                // Round 3 review (B-9, "two separate installing cards?"): Claude
-                // Code's on-demand install is shown once, on the sign-in card —
-                // this checklist no longer lists it on the sign-in step.
-                // Nor while it waits or was skipped: setup no longer installs it
-                // for everyone (Q-5), so a "waiting" Claude Code row would never move.
-                .filter((p) => !(p.name === 'claude' && (state.currentStep === 'AUTHENTICATE' || p.status === 'waiting' || p.status === 'skipped')))
-                .map((p) => {
-                const active = p.status === 'installing' || p.status === 'checking';
-                return (
-                  <li
-                    key={p.name}
-                    className={[
-                      'flex items-center gap-3 rounded-full px-4 py-2.5 border transition-colors',
-                      active
-                        ? 'bg-inset border-edge'
-                        : 'bg-panel border-edge-dim',
-                    ].join(' ')}
-                  >
-                    <StatusIcon status={p.status} />
-                    <span className="text-sm text-fg">{p.displayName}</span>
-                    <span className="ml-auto text-xs text-fg-muted">
-                      {statusLabel(p.status, p.version)}
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
+            {/* L-2: while setup is stopped the bar goes away, so nothing on screen
+                still looks busy. */}
+            {state && installing && !stopped && <ProgressBar percent={state.overallProgress} />}
 
-          {/* Progress bar (percent rendered inline) */}
-          {state && <ProgressBar percent={state.overallProgress} />}
+            {state?.currentStep === 'AUTHENTICATE' && (
+              <AuthScreen
+                authMode={state.authMode}
+                onOAuth={handleOAuth}
+                onChatGpt={handleChatGpt}
+                onOpenRouter={handleOpenRouter}
+                onApiKey={handleApiKey}
+                claudeInstalling={state.prerequisites.some((p) => p.name === 'claude' && p.status === 'installing')}
+              />
+            )}
 
-          {/* Auth screen */}
-          {state?.currentStep === 'AUTHENTICATE' && (
-            <AuthScreen
-              authMode={state.authMode}
-              onOAuth={handleOAuth}
-              onChatGpt={handleChatGpt}
-              onOpenRouter={handleOpenRouter}
-              onApiKey={handleApiKey}
-              claudeInstalling={state.prerequisites.some((p) => p.name === 'claude' && p.status === 'installing')}
-            />
-          )}
+            {state?.currentStep === 'ENABLE_DEVELOPER_MODE' && (
+              <DevModeScreen onEnable={handleDevMode} />
+            )}
 
-          {/* Developer mode screen */}
-          {state?.currentStep === 'ENABLE_DEVELOPER_MODE' && (
-            <DevModeScreen onEnable={handleDevMode} />
-          )}
-
-          {/* Error display. The message is always shown; the Try again button
-              only when a PREREQUISITE actually failed. WHY: "Try again" here
-              re-runs the whole Node/Git/Claude install pass, and a refused
-              OpenRouter key or sign-in sets an error message without any
-              prerequisite having failed — offering to reinstall
-              the app's plumbing in answer to that is both confusing and slow.
-              The sign-in failures (ChatGPT timed out, Claude login timed out)
-              DO mark the 'auth' prerequisite failed, so they keep their
-              button — and the three sign-in buttons are back on screen too. */}
-          {state?.lastError && (
-            <div className="flex flex-col items-center gap-2 mt-2">
-              {/* WHY FieldError (guide: no red/coloured body text for messages) */}
+            {/* E-2: a failure is the app's standard error card — one plain sentence and
+                Retry — with the raw text behind "Show details". Retry appears only when
+                re-running the install pass is the right answer (canRetry: a refused key
+                or a sign-in message must not offer to reinstall the app's plumbing). */}
+            {stopped && state?.lastError && (
+              <div className="w-full flex flex-col gap-2">
+                <ErrorState
+                  message={failed && failed.name !== 'auth' ? `${failed.displayName} couldn't be installed.` : "This step didn't finish."}
+                  onRetry={handleRetry}
+                />
+                <FoldRow title="Show details">
+                  <p className="text-xs text-fg-dim leading-relaxed select-text break-words">{state.lastError}</p>
+                </FoldRow>
+              </div>
+            )}
+            {state?.lastError && !stopped && (
               <FieldError as="p" size="2xs" className="text-center max-w-md">
                 {state.lastError}
               </FieldError>
-              {retryable && (
-              <button
-                onClick={handleRetry}
-                disabled={busy}
-                className="px-3 py-1.5 rounded-full bg-well border border-edge hover:bg-inset text-fg text-xs font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                {busy ? 'Working…' : 'Try again'}
-              </button>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+            )}
+          </div>
+        )}
+      </div>
 
       {/* The "Skip setup (I installed via terminal)" link is gone — review
           2026-09-05 P-6. Three sign-ins and a key/local route cover every way

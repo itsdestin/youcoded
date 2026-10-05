@@ -2,6 +2,11 @@
 // can call getScreenText for the attention classifier's ~1s buffer reads.
 // Must run before any TerminalView mounts (which call registerTerminal).
 import { guardDirtyEditor } from './components/artifact-views/dirty-editor-guard';
+// TRIAL (first-run deck C-2): the first-time welcome screen's brand versions, picked by
+// `?welcome=W1|W2|W3` in the workbench until Destin chooses; removed then.
+import './components/brand/brand.css';
+import brandAppIcon from './components/brand/app-icon-192.png';
+const WELCOME_TRIAL = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('welcome') : null;
 import './bootstrap/terminal-bridge';
 import React, { useState, useEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { SessionTerminal } from './components/SessionTerminal';
@@ -4058,7 +4063,7 @@ function AppInner() {
           <div
             // invisible under Welcome back: that screen takes this one's place
             // until you choose (Q-where), rather than sitting on top of it.
-            className={`flex-1 flex flex-col items-center justify-center gap-3${welcomeBackMode ? ' invisible' : ''}`}
+            className={`flex-1 flex flex-col items-center justify-center gap-3${welcomeBackMode ? ' invisible' : ''}${firstTimeWelcome && WELCOME_TRIAL === 'W2' ? ' brand-surface' : ''}`}
             // The header is position:absolute over the top of this area, so
             // center the welcome content in the space BELOW it (and above the
             // bare frame's bottom strip) rather than behind it. --top-chrome-
@@ -4096,7 +4101,7 @@ function AppInner() {
               />
             ) : firstTimeWelcome ? (
               <div className="flex flex-col items-center gap-1 text-center max-w-sm select-none">
-                <p className="text-xl text-fg">Start your first session</p>
+                <p className={WELCOME_TRIAL ? 'brand-heading text-2xl text-fg' : 'text-xl text-fg'}>Start your first session</p>
                 <p className="text-sm text-fg-muted">A session is one conversation with the assistant, working in one folder.</p>
               </div>
             ) : (
@@ -4106,7 +4111,9 @@ function AppInner() {
                 motes, sparkles) orbiting the mascot — big canvas, no clipping.
                 data-guide-anchor: the tour's first stop rings the buddy. */}
             <div data-guide-anchor="welcome-mascot" className="flex">
-              <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-36 h-36 text-fg-dim" scene />
+              {firstTimeWelcome && (WELCOME_TRIAL === 'W2' || WELCOME_TRIAL === 'W3')
+                ? <img src={brandAppIcon} alt="" width={120} height={120} className="brand-icon my-3" draggable={false} />
+                : <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-36 h-36 text-fg-dim" scene />}
             </div>
             {/* Welcome screen: New session (expandable) + Resume session */}
             <div className={`flex flex-col items-center gap-2 mt-1 w-64${remoteCatchingUp || startingSession ? ' hidden' : ''}`}>
