@@ -414,6 +414,11 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       const active = document.activeElement;
       if (active && active !== document.body && active !== el && !active.closest('[data-session-strip]')) return;
       el.focus({ preventScroll: true });
+      // WHY the idle blur is armed (same rule as after typing): the Shift-hold switcher and the other
+      // bare-key shortcuts refuse to start while a text box has focus, so a box that kept focus
+      // forever after a switch would lock the keyboard switcher. Typing still works after the blur
+      // (the type-anywhere handler above takes focus on the first key).
+      armIdleBlurRef.current?.();
     },
     readDraft: (id = sessionId) => id === sessionId ? (inputRef.current?.value ?? text) : (draftsRef.current.get(id)?.text ?? ''),
     readDraftPayload: (id = sessionId) => {
@@ -518,6 +523,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   // on-screen keyboard), a touchpad/mouse click or physical typing restores
   // the unfocus (see lastPointerWasTouch in the auto-focus handler above).
   const idleBlurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const armIdleBlurRef = useRef<(() => void) | null>(null);
   useEffect(() => {
     const el = inputRef.current;
     const hasSoftKeyboard = isAndroid()
@@ -542,10 +548,12 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
         if (document.activeElement === el) el.blur();
       }, 750);
     };
+    armIdleBlurRef.current = resetTimer;
     el.addEventListener('keydown', resetTimer);
     el.addEventListener('input', resetTimer);
     el.addEventListener('paste', resetTimer);
     return () => {
+      armIdleBlurRef.current = null;
       window.removeEventListener('pointerdown', notePointer, true);
       el.removeEventListener('keydown', resetTimer);
       el.removeEventListener('input', resetTimer);

@@ -44,6 +44,15 @@ describe('the composer after a user switch (whole app)', () => {
     expect(document.activeElement).toBe(composer());
   });
 
+  // The Shift-hold switcher refuses to start while a text box has focus, so the box must not
+  // keep it forever: the same 3/4-second idle blur as after typing applies.
+  it('lets go again after the usual idle pause, so the keyboard switcher keeps working', async () => {
+    await app.switchTo(app.sessionIds[1]);
+    expect(document.activeElement).toBe(composer());
+    await app.wait(1000);
+    expect(document.activeElement).not.toBe(composer());
+  });
+
   it('does nothing after a finger or pen press (it would raise the on-screen keyboard)', async () => {
     const down = new Event('pointerdown', { bubbles: true }); Object.defineProperty(down, 'pointerType', { value: 'touch' });
     await act(async () => { document.body.dispatchEvent(down); });
