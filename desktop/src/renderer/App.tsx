@@ -4127,7 +4127,10 @@ function AppInner() {
               // YT-1 (Destin): header, mascot and text "proportionally a bit bigger compared
               // to the menu box below, and maybe just slightly higher above" it; then "just a bit smaller" (YT2-1); then a bigger buddy, slightly smaller text (GB-2).
               <div className="flex items-center gap-5 mb-5 select-none">
-                <div data-guide-anchor="welcome-mascot" className="flex shrink-0">
+                {/* WHY -translate-y-3 (deck glass-buddy-3 GB3-2, "fix alignment between mascot
+                    and text"): the rig box centres the BODY, but the feet hang below it, so the
+                    whole figure sat ~13px lower than the text block. Lifting it centres head-to-feet. */}
+                <div data-guide-anchor="welcome-mascot" className="flex shrink-0 -translate-y-3">
                   <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-40 h-40 -my-6 text-fg-dim" scene />
                 </div>
                 <div className="flex flex-col gap-1.5 min-w-0 max-w-xs">
