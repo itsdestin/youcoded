@@ -3808,6 +3808,8 @@ function createPagesMock(empty: boolean): PagesBridge {
   // can show "Uses your saved OpenWeather key".
   const savedServices = new Map<string, string>(empty ? [] : [['OpenWeather', 'api.openweathermap.org']]);
   const subs = new Set<(p: PageSummary[]) => void>();
+  // Set while a Home page screen waits for its first answer from the pretend house (see get).
+  let homeFirstAnswer: (() => void) | null = null;
   const summaries = () => pages.map(({ html: _html, data: _data, ...rest }) => rest);
   const publish = () => subs.forEach((cb) => cb(summaries()));
   return {
@@ -3818,6 +3820,19 @@ function createPagesMock(empty: boolean): PagesBridge {
       // rooms, which the screenshot tool cannot see from out here: count it as
       // one more thing in flight until the page says the mockup is drawn
       // (capped at 8 s, so a broken mockup still gets photographed).
+      // WHY (2026-10-05): a Home page screen was still shot "Loading your rooms…" (creme, twice in a day) — between the
+      // frame starting and its first request to the pretend house nothing is in flight, so the tool saw a quiet page.
+      // Count the page as in flight from here until its first answer has come back and had a moment to draw (cap 8 s).
+      if (id === 'page-home') {
+        const w = window as unknown as { __shootInflight?: number };
+        if (typeof w.__shootInflight === 'number' && !homeFirstAnswer) {
+          w.__shootInflight += 1;
+          let held = true;
+          const release = () => { if (!held) return; held = false; homeFirstAnswer = null; w.__shootInflight = (w.__shootInflight ?? 1) - 1; };
+          homeFirstAnswer = () => { setTimeout(release, 250); };
+          setTimeout(release, 8000);
+        }
+      }
       if (mockup && id === 'page-home') {
         const w = window as unknown as { __shootInflight?: number };
         if (typeof w.__shootInflight === 'number') {
@@ -3869,6 +3884,7 @@ function createPagesMock(empty: boolean): PagesBridge {
           if (answer) return answer;
         } finally {
           if (counted) w.__shootInflight = (w.__shootInflight ?? 1) - 1;
+          if (id === 'page-home' && homeFirstAnswer) homeFirstAnswer();
         }
       }
       return { ok: false as const, reason: 'network' as const, message: 'The workbench has no network; this page shows saved numbers.' };
