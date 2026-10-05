@@ -12,6 +12,8 @@ export const PAGES: readonly ScreenEntry[] = [
   { ...pg('pages#empty', 'view', 'empty-state'), scenario: 'empty' },
   pg('pages/page/page-week-planner', 'view'),
   pg('pages/focus/page-focus-timer', 'view'),
+  // The theme's wallpaper through a page in the newer 'float' chrome style (shoot with a wallpaper theme: --themes halftone-dimension).
+  { ...pg('pages/page/page-week-planner#float', 'view'), params: { chrome: 'float' } },
   // Approval states, one fixture page each.
   pg('pages/page/page-weather', 'view', 'approval'),
   pg('pages/page/page-task-board', 'view', 'approval'),
@@ -38,9 +40,10 @@ export const PAGES: readonly ScreenEntry[] = [
   { ...pg('pages/page/page-home#media-group', 'view'), params: { pagesHome: 'media-group' } },
   // The Media tab with the remote open on a very wide card (the page's width cap lifted): the app drawer takes the left two thirds with big tiles.
   { ...pg('pages/page/page-home#remote-wide', 'view'), params: { pagesHome: 'remote-wide' } },
-  // The background choices on the connected Home tab (gear > Background).
-  { ...pg('pages/page/page-home#bg-frosted', 'view'), params: { pagesHome: 'bg-frosted' } },
-  { ...pg('pages/page/page-home#bg-house', 'view'), params: { pagesHome: 'bg-house' } },
+  // The connected Home tab with the theme's background showing through (Show theme background, on by
+  // default). Only wallpaper themes in a floating style are glass, so shoot it with
+  // `--themes halftone-dimension,kuromi-dreamer`; elsewhere it matches #connected by design.
+  { ...pg('pages/page/page-home#see-through', 'view'), params: { pagesHome: 'connected' }, sameAs: { name: 'pages/page/page-home#connected', why: 'see-through is on by default, so the connected view already shows it; this name exists to be shot in a wallpaper theme' } },
   { ...pg('pages/page/page-home#group', 'view'), params: { pagesHome: 'group' } },
   { ...pg('pages/page/page-home#device', 'view'), params: { pagesHome: 'device' } },
   { ...pg('pages/page/page-home#activity', 'view'), params: { pagesHome: 'view-activity' } },

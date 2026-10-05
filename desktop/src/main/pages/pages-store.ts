@@ -86,6 +86,9 @@ export class PagesStore {
       homes.push({ root: path.join(p.path, PAGES_DIR), home: { kind: 'project', path: p.path, name: p.name }, prefix: `project:${p.name}` });
     }
     const pinned = new Set(await this.readPins());
+    // Pages whose "Show theme background" switch the person turned OFF. Default
+    // is on, so only the exceptions are stored (per device, beside the pins).
+    const solid = new Set(await this.readSolid());
     const builtins: PageSummary[] = (await this.deps.officeListed?.().catch(() => false))
       ? [{ ...OFFICE_PAGE_SUMMARY, pinned: pinned.has(OFFICE_PAGE_ID) }]
       : [];
@@ -137,6 +140,7 @@ export class PagesStore {
           icon: manifest.icon,
           home: h.home,
           pinned: pinned.has(id),
+          seeThrough: !solid.has(id),
           updatedAt: new Date(updated).toISOString(),
           htmlStamp: Math.round(htmlStat.mtimeMs),
           ...(connections.length ? { connections } : {}),
@@ -272,9 +276,20 @@ export class PagesStore {
   }
 
   private async readPins(): Promise<string[]> {
+    return this.readPinsField('pinned');
+  }
+
+  /** Pages whose theme-background switch is OFF (stored as exceptions so a new
+   *  page is on without anyone writing anything). Same per-device file as pins. */
+  private async readSolid(): Promise<string[]> {
+    return this.readPinsField('solid');
+  }
+
+  private async readPinsField(field: 'pinned' | 'solid'): Promise<string[]> {
     try {
-      const j = JSON.parse(await fs.readFile(this.pinsPath(), 'utf8')) as { pinned?: unknown };
-      return Array.isArray(j.pinned) ? j.pinned.filter((x): x is string => typeof x === 'string') : [];
+      const j = JSON.parse(await fs.readFile(this.pinsPath(), 'utf8')) as Record<string, unknown>;
+      const v = j[field];
+      return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
     } catch { return []; }
   }
 
@@ -287,7 +302,12 @@ export class PagesStore {
       this.deps.noteOwnWrite?.(target);
       await mutateFileUnderLock(target, (onDisk) => {
         let cur: string[] = [];
-        try { const j = onDisk ? JSON.parse(onDisk) as { pinned?: unknown } : {}; cur = Array.isArray(j.pinned) ? j.pinned.filter((x): x is string => typeof x === 'string') : []; } catch { cur = []; }
+        let solid: string[] = [];
+        try {
+          const j = onDisk ? JSON.parse(onDisk) as { pinned?: unknown; solid?: unknown } : {};
+          cur = Array.isArray(j.pinned) ? j.pinned.filter((x): x is string => typeof x === 'string') : [];
+          solid = Array.isArray(j.solid) ? j.solid.filter((x): x is string => typeof x === 'string') : [];
+        } catch { cur = []; }
         const set = new Set(cur);
         if (pinned) {
           if (set.has(id)) return null;
@@ -297,7 +317,33 @@ export class PagesStore {
           if (!set.has(id)) return null;
           set.delete(id);
         }
-        return JSON.stringify({ pinned: [...set], updatedAt: new Date().toISOString() });
+        // WHY solid is carried through: this file now holds two lists, and a pin
+        // must not silently turn every page's theme background back on.
+        return JSON.stringify({ pinned: [...set], ...(solid.length ? { solid } : {}), updatedAt: new Date().toISOString() });
+      });
+    }
+    return this.list();
+  }
+
+  /** Per-page "Show theme background" switch (per device, like pins). Stores
+   *  only pages switched OFF; on is the default. Office has no frame, so it has
+   *  no switch. */
+  async setSeeThrough(id: string, on: boolean): Promise<PageSummary[]> {
+    if ((await this.locate(id)) !== null) {
+      const target = this.pinsPath();
+      this.deps.noteOwnWrite?.(target);
+      await mutateFileUnderLock(target, (onDisk) => {
+        let pinned: string[] = [];
+        let solid: string[] = [];
+        try {
+          const j = onDisk ? JSON.parse(onDisk) as { pinned?: unknown; solid?: unknown } : {};
+          pinned = Array.isArray(j.pinned) ? j.pinned.filter((x): x is string => typeof x === 'string') : [];
+          solid = Array.isArray(j.solid) ? j.solid.filter((x): x is string => typeof x === 'string') : [];
+        } catch { /* an unreadable file reads as empty */ }
+        const set = new Set(solid);
+        if (on) { if (!set.has(id)) return null; set.delete(id); }
+        else { if (set.has(id)) return null; set.add(id); }
+        return JSON.stringify({ pinned, solid: [...set], updatedAt: new Date().toISOString() });
       });
     }
     return this.list();

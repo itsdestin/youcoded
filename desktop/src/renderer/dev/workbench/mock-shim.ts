@@ -221,7 +221,7 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // YouCoded Pages (Phase 1 shell) — designed ahead of the backend; mock-only.ts
   // carries the four rows. The fake keeps pin state for the tab's lifetime so the
   // header's pinned buttons follow the library's pin toggles.
-  'pages.list', 'pages.get', 'pages.setPinned', 'pages.setData', 'pages.onChanged',
+  'pages.list', 'pages.get', 'pages.setPinned', 'pages.setSeeThrough', 'pages.setData', 'pages.onChanged',
   // Pages Phase 2 (connections) — designed ahead of the backend; rows in mock-only.ts.
   'pages.approve', 'pages.removeConnection', 'pages.refresh', 'pages.savedKeys', 'pages.deleteSavedKey',
   // Office — real channels since build plan Task 5 (main/office/office-ipc.ts). Faked so the
@@ -3782,7 +3782,7 @@ function createPagesMock(empty: boolean): PagesBridge {
   if (onlyCameras || homeView === 'view-cameras' || homeView === 'camera-limited') fakeHomeAssistantNestSignedIn(true); // events need the Nest account working
   if (homeView === 'camera-events') fakeHomeAssistantCameraEvents(true);
   fakeCameraRefuse(homeView === 'camera-limited' ? FAKE_RATE_LIMIT_WHY : null);
-  if (onlyCameras || homeView === 'connected' || homeView === 'edit' || homeView === 'remote' || homeView === 'remote-media' || homeView === 'remote-wide' || homeView === 'bg-frosted' || homeView === 'bg-house' || homeView === 'media-group' || homeView === 'group' || homeView === 'device' || chipView || homeView === 'settings' || chipStyle || mockup || variant) {
+  if (onlyCameras || homeView === 'connected' || homeView === 'edit' || homeView === 'remote' || homeView === 'remote-media' || homeView === 'remote-wide' || homeView === 'media-group' || homeView === 'group' || homeView === 'device' || chipView || homeView === 'settings' || chipStyle || mockup || variant) {
     pages = pages.map((p) => (p.id !== 'page-home' ? p : {
       ...p,
       // WHY (screenshots only): the page's first-load rise of room cards runs for about a second, and a picture taken during it misses room cards
@@ -3800,7 +3800,6 @@ function createPagesMock(empty: boolean): PagesBridge {
         startOpen: ['destins_room'], startPalettes: ['light.desk_backlight'],
         fav: ['light.living_room_lamp', 'climate.thermostat'],
         ...(homeView === 'edit' ? { editing: true } : {}),
-        ...(homeView === 'bg-frosted' ? { prefs: { bg: 'frosted' } } : homeView === 'bg-house' ? { prefs: { bg: 'house' } } : {}),
       },
     }));
   }
@@ -3850,6 +3849,12 @@ function createPagesMock(empty: boolean): PagesBridge {
     },
     setPinned: async (id, pinned) => {
       pages = pages.map((p) => (p.id === id ? { ...p, pinned } : p));
+      publish();
+      return summaries();
+    },
+    // The per-page "Show theme background" switch; the fake keeps it for the tab's lifetime.
+    setSeeThrough: async (id, on) => {
+      pages = pages.map((p) => (p.id === id ? { ...p, seeThrough: on } : p));
       publish();
       return summaries();
     },

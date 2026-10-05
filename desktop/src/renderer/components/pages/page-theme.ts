@@ -58,16 +58,39 @@ export const PAGE_VIDEO_ACK_MESSAGE = 'youcoded:video:ack';
 export const PAGE_VIDEO_EVENT_MESSAGE = 'youcoded:video:event';
 const PAGE_THEME_STYLE_ID = 'youcoded-theme';
 
+/** True when the app's page pane is glass: the theme has a wallpaper/gradient
+ *  AND the chrome style is floating or float. This is EXACTLY the condition
+ *  under which styles/globals.css ("Screens in floating chrome") and
+ *  styles/float-chrome.css make `.screen-pane` see-through, so a page that goes
+ *  transparent here is always sitting on glass and never on a hole. WHY here and
+ *  not in CSS: the page lives in a sandboxed frame and cannot see the host's
+ *  attributes, so the host reads them and tells it. */
+export function paneIsGlass(root: HTMLElement = document.documentElement, body: HTMLElement = document.body): boolean {
+  const style = body.getAttribute('data-chrome-style');
+  return root.hasAttribute('data-wallpaper') && (style === 'floating' || style === 'float');
+}
+
+/** The attribute the page's own CSS keys on (`:root[data-yc-see-through]`). */
+export const PAGE_SEE_THROUGH_ATTR = 'data-yc-see-through';
+
 /** Snapshot of the current theme as one `:root { … }` rule. Reads computed
  *  values, so it works whether a token came from a stylesheet or from the
  *  engine's inline setProperty. Unset tokens are skipped rather than emitted
  *  empty, so a page's own fallback (`var(--x, …)`) still applies. */
-export function readThemeCss(root: HTMLElement = document.documentElement): string {
+export function readThemeCss(root: HTMLElement = document.documentElement, seeThrough = false): string {
   const cs = getComputedStyle(root);
   const lines: string[] = [];
   for (const t of PAGE_THEME_TOKENS) {
     const v = cs.getPropertyValue(`--${t}`).trim();
     if (v) lines.push(`--${t}: ${v};`);
+  }
+  // The theme's glass density, only while the page is see-through: a page that
+  // lets the wallpaper show draws its own cards with the same recipe the app's
+  // panes use (--panel at --panels-opacity). Not in the token list: it means
+  // nothing to a page that is not see-through.
+  if (seeThrough) {
+    const op = Number.parseFloat(cs.getPropertyValue('--panels-opacity'));
+    lines.push(`--panels-opacity: ${Number.isFinite(op) ? op : 1};`);
   }
   // color-scheme steers native controls (scrollbars, date pickers) inside the
   // frame the same way the host's <html> steers its own.
@@ -200,6 +223,9 @@ function bootstrap(dataJson: string, devicesJson = '{}'): string {
       var el = document.getElementById(ID);
       if (!el) { el = document.createElement('style'); el.id = ID; document.head.appendChild(el); }
       el.textContent = d.css;
+      // The host says whether the app's pane behind this page is glass (and the
+      // person has not switched it off): the page turns see-through with it, live.
+      document.documentElement.toggleAttribute(${JSON.stringify(PAGE_SEE_THROUGH_ATTR)}, d.seeThrough === true);
       return;
     }
     if (d.type === S_EVENT && typeof d.id === 'string') {
@@ -421,6 +447,7 @@ export function prepareHostedDocument(
   kitCss: string,
   data: unknown = null,
   connections: readonly { kind: string; id?: string; address?: string; approved?: boolean }[] = [],
+  seeThrough = false,
 ): string {
   // `</script>` inside the data would end the script early; escape the one
   // sequence that matters in a JSON literal placed in a script.
@@ -437,21 +464,35 @@ export function prepareHostedDocument(
     `<style id="youcoded-kit">${kitCss}</style>` +
     `<script>${bootstrap(dataJson, devicesJson)}</script>`;
   const a = splitAuthorDocument(html);
-  return `<!doctype html><html${a.htmlAttrs}><head>${ours}${a.head}</head><body${a.bodyAttrs}>${a.body}</body></html>`;
+  // WHY the attribute is baked in: set from first paint, the page never flashes
+  // an opaque canvas before the host's first message arrives.
+  const see = seeThrough ? ` ${PAGE_SEE_THROUGH_ATTR}` : '';
+  return `<!doctype html><html${a.htmlAttrs}${see}><head>${ours}${a.head}</head><body${a.bodyAttrs}>${a.body}</body></html>`;
 }
 
 /** Watches the host document for anything the theme engine touches — the
  *  inline style and data attributes on <html> and <body> — and reports the
- *  fresh CSS. Attribute-level, not a React subscription, so a theme-pack
- *  reload or the appearance sliders count too, not only a theme switch. */
-export function watchThemeCss(onChange: (css: string) => void): () => void {
-  let last = readThemeCss();
+ *  fresh CSS plus whether the page should be see-through. Attribute-level, not
+ *  a React subscription, so a theme-pack reload or the appearance sliders count
+ *  too, not only a theme switch. `wantsSeeThrough` is the person's per-page
+ *  switch; the pane being glass is read here, live (wallpaper, chrome style and
+ *  Reduced effects all arrive as attribute changes). Returns the unsubscribe
+ *  and a `refresh` for when the switch itself flips. */
+export function watchThemeCss(
+  onChange: (css: string, seeThrough: boolean) => void,
+  wantsSeeThrough: () => boolean = () => false,
+): { stop: () => void; refresh: () => void } {
+  const read = () => {
+    const see = wantsSeeThrough() && paneIsGlass();
+    return { css: readThemeCss(document.documentElement, see), see };
+  };
+  let last = read();
   const check = () => {
-    const next = readThemeCss();
-    if (next !== last) { last = next; onChange(next); }
+    const next = read();
+    if (next.css !== last.css || next.see !== last.see) { last = next; onChange(next.css, next.see); }
   };
   const mo = new MutationObserver(check);
   mo.observe(document.documentElement, { attributes: true });
   mo.observe(document.body, { attributes: true });
-  return () => mo.disconnect();
+  return { stop: () => mo.disconnect(), refresh: check };
 }

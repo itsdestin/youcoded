@@ -173,3 +173,35 @@ describe('the built-in Office page', () => {
     expect((await withOffice(true).list()).find((p) => p.id === OFFICE_PAGE_ID)!.pinned).toBe(false);
   });
 });
+
+// "Show theme background" (owner, 2026-10-05): on for every page by default; the switch is per
+// page and per device, stored beside the pins as the pages switched OFF.
+describe('the per-page theme-background switch', () => {
+  it('is on by default, and off survives a fresh listing', async () => {
+    await writePage(personal, 'a');
+    await writePage(personal, 'b');
+    expect((await store.list()).map((p) => p.seeThrough)).toEqual([true, true]);
+    const after = await store.setSeeThrough('personal:a', false);
+    expect(after.find((p) => p.id === 'personal:a')!.seeThrough).toBe(false);
+    expect(after.find((p) => p.id === 'personal:b')!.seeThrough).toBe(true);
+    expect((await store.list()).find((p) => p.id === 'personal:a')!.seeThrough).toBe(false);
+    expect((await store.setSeeThrough('personal:a', true)).find((p) => p.id === 'personal:a')!.seeThrough).toBe(true);
+  });
+
+  it('does not disturb pins, and a pin does not turn the switch back on', async () => {
+    await writePage(personal, 'a');
+    await store.setPinned('personal:a', true);
+    await store.setSeeThrough('personal:a', false);
+    let a = (await store.list()).find((p) => p.id === 'personal:a')!;
+    expect(a).toMatchObject({ pinned: true, seeThrough: false });
+    await store.setPinned('personal:a', false);
+    await store.setPinned('personal:a', true);
+    a = (await store.list()).find((p) => p.id === 'personal:a')!;
+    expect(a).toMatchObject({ pinned: true, seeThrough: false });
+  });
+
+  it('ignores a page that is not in the library', async () => {
+    await store.setSeeThrough('personal:ghost', false);
+    await expect(fs.readFile(path.join(root, 'local', 'pages-pins.json'), 'utf8')).rejects.toThrow();
+  });
+});

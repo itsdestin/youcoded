@@ -1,9 +1,10 @@
+// @vitest-environment jsdom
 // The document a page is framed in is the first of the two things that keep
 // Phase 2's promise ("a page reaches exactly what its approval lists"), so what
 // is pinned here is that OUR shell always wins: the policy, the theme and the
 // bootstrap cannot be moved, commented out or faked by anything the page's
 // author writes, and the bootstrap only believes the host.
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { prepareHostedDocument } from '../src/renderer/components/pages/page-theme';
 
 const THEME = ':root { --canvas: #fff; }';
@@ -245,5 +246,98 @@ describe('what a page can call', () => {
     deliver({ type: 'youcoded:data', data: { seed: 2 } });
     expect(seen).toEqual([{ seed: 2 }]);
     expect((yc as unknown as { data: unknown }).data).toEqual({ seed: 2 });
+  });
+});
+
+// ── See-through (owner, 2026-10-05: "peek through to the real theme background") ──────────────
+// A page turns see-through ONLY when the app's page pane is glass AND the person has the page's
+// switch on. These pin the three places that decide it: the pane test, the first-paint document,
+// and the live message the page's own bootstrap obeys.
+import { paneIsGlass, readThemeCss, watchThemeCss, PAGE_SEE_THROUGH_ATTR } from '../src/renderer/components/pages/page-theme';
+import { PAGE_KIT_CSS } from '../src/renderer/components/pages/page-kit';
+
+function setPane(wallpaper: boolean, chrome: string | null) {
+  const root = document.documentElement;
+  if (wallpaper) root.setAttribute('data-wallpaper', ''); else root.removeAttribute('data-wallpaper');
+  if (chrome) document.body.setAttribute('data-chrome-style', chrome); else document.body.removeAttribute('data-chrome-style');
+}
+
+describe('when the page pane is glass', () => {
+  afterEach(() => setPane(false, null));
+  it('needs a wallpaper AND a floating or float chrome style (the same condition globals.css and float-chrome.css use)', () => {
+    setPane(true, 'floating'); expect(paneIsGlass()).toBe(true);
+    setPane(true, 'float'); expect(paneIsGlass()).toBe(true);
+    setPane(true, 'default'); expect(paneIsGlass()).toBe(false); // framed: the pane is an opaque canvas card
+    setPane(true, null); expect(paneIsGlass()).toBe(false);
+    setPane(false, 'floating'); expect(paneIsGlass()).toBe(false); // a plain theme has nothing behind to show
+    setPane(false, 'float'); expect(paneIsGlass()).toBe(false);
+  });
+});
+
+describe('the framed document carries the see-through flag', () => {
+  it('is baked into <html> from first paint only when asked', () => {
+    expect(prepareHostedDocument('<p>x</p>', THEME, KIT, null, [], true).startsWith(`<!doctype html><html ${PAGE_SEE_THROUGH_ATTR}><head>`)).toBe(true);
+    expect(prepareHostedDocument('<p>x</p>', THEME, KIT, null, [], false)).not.toContain(PAGE_SEE_THROUGH_ATTR + '>');
+    expect(prepareHostedDocument('<p>x</p>', THEME, KIT)).not.toContain(`<html ${PAGE_SEE_THROUGH_ATTR}`);
+  });
+  it('hands over the glass density only while see-through', () => {
+    document.documentElement.style.setProperty('--panels-opacity', '0.72');
+    try {
+      expect(readThemeCss(document.documentElement, true)).toContain('--panels-opacity: 0.72;');
+      expect(readThemeCss(document.documentElement, false)).not.toContain('panels-opacity');
+      expect(readThemeCss()).not.toContain('panels-opacity');
+    } finally { document.documentElement.style.removeProperty('--panels-opacity'); }
+  });
+  it('the kit paints no backdrop of its own behind that flag, and a plain page still paints the canvas', () => {
+    expect(PAGE_KIT_CSS).toMatch(/body \{[^}]*background: var\(--canvas\)/);
+    expect(PAGE_KIT_CSS).toMatch(/:root\[data-yc-see-through\] body \{ background: transparent; \}/);
+  });
+});
+
+describe('the page obeys the host\'s live message', () => {
+  function run() {
+    const src = /<script>([\s\S]*?)<\/script>/.exec(prepareHostedDocument('<p>hi</p>', THEME, KIT))?.[1] ?? '';
+    const listeners: ((e: unknown) => void)[] = [];
+    const attrs = new Set<string>();
+    const el = { textContent: '' };
+    const documentStub = {
+      getElementById: () => el, createElement: () => ({}), head: { appendChild: () => {} },
+      documentElement: { toggleAttribute: (n: string, on: boolean) => { if (on) attrs.add(n); else attrs.delete(n); } },
+    };
+    const parent = { postMessage: () => {} };
+    new Function('window', 'document', 'parent', src)({ addEventListener: (_t: string, fn: (e: unknown) => void) => listeners.push(fn) }, documentStub, parent);
+    return { attrs, el, deliver: (data: unknown, source: unknown = parent) => listeners.forEach((fn) => fn({ data, source })) };
+  }
+  it('turns see-through on and off with the message, and ignores anything not from the host', () => {
+    const { attrs, el, deliver } = run();
+    deliver({ type: 'youcoded:theme', css: ':root{--a:1}', seeThrough: true });
+    expect(attrs.has(PAGE_SEE_THROUGH_ATTR)).toBe(true);
+    expect(el.textContent).toBe(':root{--a:1}');
+    deliver({ type: 'youcoded:theme', css: ':root{--a:2}', seeThrough: false });
+    expect(attrs.has(PAGE_SEE_THROUGH_ATTR)).toBe(false);
+    deliver({ type: 'youcoded:theme', css: 'x', seeThrough: true }, { name: 'popup' });
+    expect(attrs.has(PAGE_SEE_THROUGH_ATTR)).toBe(false);
+    deliver({ type: 'youcoded:theme', css: ':root{--a:3}' }); // an older host sends no flag: solid, as before
+    expect(attrs.has(PAGE_SEE_THROUGH_ATTR)).toBe(false);
+  });
+});
+
+describe('the watcher', () => {
+  afterEach(() => setPane(false, null));
+  it('reports a wallpaper or chrome-style change live, and never see-through when the switch is off', async () => {
+    setPane(false, 'floating');
+    let want = true;
+    const seen: boolean[] = [];
+    const w = watchThemeCss((_css, see) => seen.push(see), () => want);
+    setPane(true, 'floating');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(seen.at(-1)).toBe(true);
+    want = false; w.refresh();
+    expect(seen.at(-1)).toBe(false);
+    want = true; w.refresh();
+    setPane(true, 'default');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(seen.at(-1)).toBe(false);
+    w.stop();
   });
 });

@@ -58,9 +58,11 @@ import { PAGE_KIT_CSS } from './page-kit';
 import { PageApproval, needsApproval } from './page-connections';
 import { PageFreshness } from './PageFreshness';
 import { PageCodeChanged } from './PageCodeChanged';
+import { PageSeeThrough } from './PageSeeThrough';
+import { usePaneGlass } from './use-pane-glass';
 import {
   PAGE_DATA_MESSAGE, PAGE_DATA_SET_MESSAGE, PAGE_ESC_MESSAGE, PAGE_FETCH_MESSAGE, PAGE_FETCH_RESULT_MESSAGE,
-  PAGE_REFRESH_MESSAGE, PAGE_THEME_MESSAGE, prepareHostedDocument, readThemeCss, watchThemeCss,
+  PAGE_REFRESH_MESSAGE, PAGE_THEME_MESSAGE, paneIsGlass, prepareHostedDocument, readThemeCss, watchThemeCss,
 } from './page-theme';
 import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 
@@ -190,6 +192,15 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // (round 4 testing). Disk is stale until the save lands, so nothing is
   // posted in until then.
   const savingRef = useRef(false);
+  // See-through: the pane is glass AND this page's "Theme background" switch is
+  // on (default on). A ref too, so the document build and the live watcher read
+  // the current answer without becoming dependencies — a dependency would reload
+  // the frame and lose the page's working state on every theme change.
+  const glass = usePaneGlass(open);
+  const seeThrough = glass && summary?.seeThrough !== false && !isOffice;
+  const seeThroughRef = useRef(seeThrough);
+  seeThroughRef.current = seeThrough;
+  const themeWatchRef = useRef<{ refresh: () => void } | null>(null);
 
   // Fetch the working version when the open page changes or its document was
   // rewritten. The document is prepared ONCE here, with the theme and the
@@ -211,9 +222,11 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
       if (cancelled) return;
       if (r.ok) {
         try { frameDataRef.current = JSON.stringify(r.page.data ?? null); } catch { frameDataRef.current = 'null'; }
+        // Read at this moment (not a dependency): the page is born see-through or not.
+        const seeNow = seeThroughRef.current && paneIsGlass();
         // The policy the document carries is built from THIS page's connections
         // (design §6), so a page that reaches nothing gets the tightest one.
-        setLoad({ state: 'ready', page: r.page, doc: prepareHostedDocument(r.page.html, readThemeCss(), PAGE_KIT_CSS, r.page.data, r.page.connections ?? []) });
+        setLoad({ state: 'ready', page: r.page, doc: prepareHostedDocument(r.page.html, readThemeCss(document.documentElement, seeNow), PAGE_KIT_CSS, r.page.data, r.page.connections ?? [], seeNow) });
       } else setLoad({ state: 'failed', failure: r.failure });
     }, () => {
       if (!cancelled) setLoad({ state: 'failed', failure: { kind: 'unreadable', message: 'The page could not be read.' } });
@@ -322,10 +335,14 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // Live theme: watch the host document and post the fresh tokens in.
   useEffect(() => {
     if (load.state !== 'ready') return;
-    return watchThemeCss((css) => {
-      frameRef.current?.contentWindow?.postMessage({ type: PAGE_THEME_MESSAGE, css }, '*');
-    });
+    const w = watchThemeCss((css, see) => {
+      frameRef.current?.contentWindow?.postMessage({ type: PAGE_THEME_MESSAGE, css, seeThrough: see }, '*');
+    }, () => seeThroughRef.current);
+    themeWatchRef.current = w;
+    return () => { themeWatchRef.current = null; w.stop(); };
   }, [load.state]);
+  // The switch (or the pane turning glass) changed: tell the page now.
+  useEffect(() => { themeWatchRef.current?.refresh(); }, [seeThrough]);
 
   const title = useMemo(() => summary?.name ?? (load.state === 'ready' ? load.page.name : ''), [summary, load]);
   // The gate reads the LOADED document, never the list summary (design review
@@ -400,6 +417,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
               the request. Hidden until the page is approved. */}
           {summary && !awaitingApproval && <PageFreshness page={summary} onRefresh={askPageToRefresh} />}
           {summary && !awaitingApproval && <PageCodeChanged page={summary} />}
+          {summary && !isOffice && !awaitingApproval && <PageSeeThrough page={summary} glass={glass} />}
         </>}
       />}
 
@@ -450,7 +468,12 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
           </div>
         </aside>
         )}
-        <div className="screen-pane screen-pane--frame relative flex-1 min-w-0 rounded-xl overflow-hidden bg-canvas">
+        {/* WHY panel-glass while see-through (owner, 2026-10-05: "a glass effect kinda like marketplace or terminal"): it is the
+            app's own opt-in for theme-engine's ONE glass rule (blur at the theme's --panels-blur, written only while a wallpaper is
+            on and Reduced effects is off), so the page pane frosts exactly like Marketplace's surfaces and "Reduced effects" removes
+            it the same way. One element — never a blur per card inside the page. In 'float' chrome the pane already has its own
+            heavier frost (!important), which simply wins. Solid / switched-off pages do not get the class: unchanged. */}
+        <div className={`screen-pane screen-pane--frame relative flex-1 min-w-0 rounded-xl overflow-hidden bg-canvas${seeThrough ? ' panel-glass' : ''}`}>
           {/* First, so its place in the tree never changes whatever else shows (see officeKept). */}
           {(isOffice || officeKept) && (
             <div className={`absolute inset-0 ${open && isOffice ? '' : 'invisible pointer-events-none'}`} aria-hidden={open && isOffice ? undefined : true} inert={!(open && isOffice)}>
@@ -493,7 +516,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
               ref={frameRef}
               srcDoc={load.doc}
               sandbox="allow-scripts allow-popups allow-forms"
-              className="absolute inset-0 w-full h-full border-0 bg-canvas"
+              className={`absolute inset-0 w-full h-full border-0 ${seeThrough ? '' : 'bg-canvas'}`}
               title={title}
             />
           )}
