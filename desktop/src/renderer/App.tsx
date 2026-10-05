@@ -4128,7 +4128,7 @@ function AppInner() {
               // to the menu box below, and maybe just slightly higher above" it; then "just a bit smaller" (YT2-1).
               <div className="flex items-center gap-5 mb-5 select-none">
                 <div data-guide-anchor="welcome-mascot" className="flex shrink-0">
-                  <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-24 h-24 text-fg-dim" scene />
+                  <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-32 h-32 -my-4 text-fg-dim" scene />
                 </div>
                 <div className="flex flex-col gap-1.5 min-w-0 max-w-sm">
                   <p className="brand-heading text-3xl text-fg leading-tight whitespace-nowrap">Start your first session</p>

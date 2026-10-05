@@ -8,3 +8,8 @@ declare module '*.webp' {
   const src: string;
   export default src;
 }
+// The glass buddy drawings, read as text and handed to the mascot as data: URLs.
+declare module '*.svg?raw' {
+  const src: string;
+  export default src;
+}

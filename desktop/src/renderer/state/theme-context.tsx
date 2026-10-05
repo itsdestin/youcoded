@@ -21,11 +21,36 @@ import youcodedWallTerminal from '../themes/builtin/assets/youcoded-wallpaper-te
 import youcodedNightWall from '../themes/builtin/assets/youcoded-night-wallpaper.jpg';
 import youcodedNightWallTerminal from '../themes/builtin/assets/youcoded-night-wallpaper-terminal.webp';
 
-/** A built-in theme with a picture: the asset resolver leaves built-ins alone (it only
- *  rewrites community `assets/...` paths), so the bundled files' URLs go in here. */
-function withWallpaper(json: unknown, value: string, terminal: string): LoadedTheme {
+import ycRig from '../themes/builtin/assets/youcoded-mascot-rig.svg?raw';
+import ycIdle from '../themes/builtin/assets/youcoded-mascot-idle.svg?raw';
+import ycWelcome from '../themes/builtin/assets/youcoded-mascot-welcome.svg?raw';
+import ycCurious from '../themes/builtin/assets/youcoded-mascot-inquisitive.svg?raw';
+import ycShocked from '../themes/builtin/assets/youcoded-mascot-shocked.svg?raw';
+import ycnRig from '../themes/builtin/assets/youcoded-night-mascot-rig.svg?raw';
+import ycnIdle from '../themes/builtin/assets/youcoded-night-mascot-idle.svg?raw';
+import ycnWelcome from '../themes/builtin/assets/youcoded-night-mascot-welcome.svg?raw';
+import ycnCurious from '../themes/builtin/assets/youcoded-night-mascot-inquisitive.svg?raw';
+import ycnShocked from '../themes/builtin/assets/youcoded-night-mascot-shocked.svg?raw';
+
+// WHY data: URLs for the buddy, not file URLs: MascotRig fetch()es the rig, and a bundled
+// file:// URL is not fetchable in every build (the packaged app, Android); a data: URL is,
+// everywhere. Each drawing is ~20-27KB (its blurred glass is an embedded PNG).
+const svgData = (raw: string) => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(raw)}`;
+
+/** A built-in theme with a picture and the glass buddy: the asset resolver leaves
+ *  built-ins alone (it only rewrites community `assets/...` paths), so the bundled files'
+ *  URLs go in here. */
+function withWallpaper(json: unknown, value: string, terminal: string, buddy: [string, string, string, string, string]): LoadedTheme {
   const t = json as ThemeDefinition;
-  return { ...t, background: { ...t.background!, value, 'terminal-value': terminal }, source: 'youcoded-core' };
+  const [rig, idle, welcome, inquisitive, shocked] = buddy.map(svgData);
+  return {
+    ...t,
+    background: { ...t.background!, value, 'terminal-value': terminal },
+    // The glass buddy (theme questions deck T-4): drawn by scripts/brand/glass-buddy.py in
+    // the workspace from the default rig's skeleton, so every pose still works.
+    mascot: { rig, idle, welcome, inquisitive, shocked },
+    source: 'youcoded-core',
+  };
 }
 
 const BUILTIN_THEMES: LoadedTheme[] = [
@@ -36,8 +61,8 @@ const BUILTIN_THEMES: LoadedTheme[] = [
   // The YouCoded pair (theme questions deck, Destin 2026-10-04): brand purple, the
   // glow-and-silk picture (deck yc-walls-2, "Richer"), Outfit for text. Drawn by
   // scripts in the workspace (scratch/decks/yc-walls/walls.html), so the app owns them.
-  withWallpaper(youcodedJson, youcodedWall, youcodedWallTerminal),
-  withWallpaper(youcodedNightJson, youcodedNightWall, youcodedNightWallTerminal),
+  withWallpaper(youcodedJson, youcodedWall, youcodedWallTerminal, [ycRig, ycIdle, ycWelcome, ycCurious, ycShocked]),
+  withWallpaper(youcodedNightJson, youcodedNightWall, youcodedNightWallTerminal, [ycnRig, ycnIdle, ycnWelcome, ycnCurious, ycnShocked]),
 ];
 
 const DEFAULT_FONT_FAMILY = "'Cascadia Mono', 'Cascadia Code', 'Fira Code', monospace";

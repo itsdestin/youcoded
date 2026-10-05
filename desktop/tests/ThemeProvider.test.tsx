@@ -107,8 +107,10 @@ it('explicit refresh still resets an uninstalled active theme', async () => {
   act(() => main.result.current.setTheme(slug)); await flush(); persist.mockClear();
   installed = [];
   await act(async () => { await main.result.current.reloadUserThemes(); });
-  expect(main.result.current.theme).toBe('midnight');
-  expect(persist).toHaveBeenCalledWith({ theme: 'midnight' });
+  // Falls back to the new-install default: the YouCoded pair by the computer's light/dark
+  // setting (jsdom has no dark preference, so YouCoded).
+  expect(main.result.current.theme).toBe('youcoded');
+  expect(persist).toHaveBeenCalledWith({ theme: 'youcoded' });
 });
 
 // Perf B11 (2026-09-24): a Look-slider drag (Fine-tune glass, roundness) calls
