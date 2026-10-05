@@ -1,6 +1,6 @@
 // The trust boundary of the hitch recorder: whatever a renderer sends is rebuilt field by field.
 import { describe, it, expect } from 'vitest';
-import { validateBatch, cleanString, MAX_ENTRIES_PER_BATCH } from '../src/main/hitch-validate';
+import { validateBatch, appName, MAX_ENTRIES_PER_BATCH } from '../src/main/hitch-validate';
 
 const NOW = 1_800_000_000_000;
 const frame = (over: Record<string, unknown> = {}) => ({
@@ -93,6 +93,36 @@ describe('validateBatch', () => {
   });
 });
 
-describe('cleanString', () => {
-  it('handles non-strings', () => { expect(cleanString(5)).toBe(''); expect(cleanString(undefined)).toBe(''); });
+describe('appName', () => {
+  it('passes app constants, masks ids, and replaces everything else with ?', () => {
+    expect(appName('session:create')).toBe('session:create');
+    expect(appName('out:12345678-aaaa-bbbb-cccc-1234567890ab')).toBe('out:*');
+    for (const bad of ['/home/u/x', 'two words', 'a\nb', '', 5, undefined, 'x'.repeat(200)]) expect(appName(bad)).toBe('?');
+  });
+});
+
+describe('fuzz: nothing free-form reaches the written line', () => {
+  const TEXT = ['MY SECRET DRAFT', '/home/u/Clients/Acme/report.js', 'https://host/x?token=abc', 'C:\\Users\\me\\f.js', '\u4e2d\u6587\u00e9', 'line1\nline2', '\u0000\u202e', 'file:///etc/passwd', 'user@example.com'];
+  const junk = (): any[] => [...TEXT, ...TEXT.map((t) => t.repeat(30)), 5, null, {}, [], true];
+  it('a batch with free text in EVERY string slot writes none of it', () => {
+    const entries: any[] = [];
+    for (const t of junk()) {
+      entries.push(
+        { k: 'frame', t: NOW, d: 200, b: 1, sl: 1, rd: 1, inp: t, sc: [{ it: t, iv: t, fn: t, src: t, pos: 1, d: 5, fl: 0 }, { it: 'event-listener', iv: t, fn: t, src: 'index-1.js', pos: 1, d: 5, fl: 0 }], ctx: { vis: t, foc: t, vm: t, dlg: t, scr: t, dpr: t, els: t }, extra: t },
+        { k: 'event', t: NOW, type: t, d: 200, delay: 1, proc: 1, pres: 1, tgt: t, ctx: {} },
+        { k: t, t: NOW, d: 200 },
+      );
+    }
+    const marks: Record<string, unknown> = {};
+    for (const [i, t] of junk().entries()) marks[typeof t === 'string' ? t : 'k' + i] = t;
+    const out = JSON.stringify(validateBatch({ v: 1, mode: TEXT[0], kind: TEXT[1], entries, tally: { f: TEXT[2] }, dropped: TEXT[3], startup: { marks, fcp: TEXT[4] } }, NOW));
+    for (const t of TEXT) {
+      expect(out, t).not.toContain(t.slice(0, 10).replace(/\\/g, '\\\\'));
+    }
+    expect(out).not.toMatch(/secret|Acme|token|passwd|example\.com|\\u202e|\\\\n|[\u4e2d\u00e9]/i);
+  });
+  it('legitimate shapes survive', () => {
+    const b = validateBatch(batch({ entries: [frame({ sc: [{ it: 'event-listener', iv: 'BUTTON.onclick', fn: 'renderThing', src: 'index-abc.js', pos: 5, d: 9, fl: 0 }] })] }), NOW)!;
+    expect((b.entries[0] as any).sc[0]).toMatchObject({ it: 'event-listener', iv: 'BUTTON.onclick', fn: 'renderThing', src: 'index-abc.js' });
+  });
 });

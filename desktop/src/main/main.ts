@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, protocol, safeStorage, screen, shell, webContents } from 'electron';
+import { app, BrowserWindow, ipcMain, powerMonitor, Menu, protocol, safeStorage, screen, shell, webContents } from 'electron';
 import path from 'path';
 // A write to a closed stdout/stderr throws EPIPE, and with no listener that is
 // an uncaught exception that kills the whole main process — the app dies with
@@ -1753,6 +1753,9 @@ void app.whenReady().then(async () => {
     processStartMs: () => process.getCreationTime?.() ?? Date.now() - process.uptime() * 1000,
     trace: hitchIpcTrace,
   });
+  // A sleep or lock makes the event-loop monitor's numbers span hours: tell the recorder to discard them.
+  const slept = () => hitchRecorder?.noteSleep();
+  powerMonitor.on('suspend', slept); powerMonitor.on('resume', slept); powerMonitor.on('lock-screen', slept); powerMonitor.on('unlock-screen', slept);
   await rotateLog();
   perfMark('main:chore:rotate-log:done');
 

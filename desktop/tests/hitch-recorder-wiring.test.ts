@@ -23,6 +23,11 @@ describe('hitch recorder wiring', () => {
     expect(main).toContain('hitchLogDisabled()');
     expect(main).toContain('hitchRecorder?.noteMainWindowLoaded()');
   });
+  it('main tells the recorder about suspend, resume and screen lock', () => {
+    const main = src('src', 'main', 'main.ts');
+    for (const ev of ['suspend', 'resume', 'lock-screen', 'unlock-screen']) expect(main).toContain(`'${ev}'`);
+    expect(main).toContain('hitchRecorder?.noteSleep()');
+  });
   it('the recorder module writes only through the async writer (no sync fs)', () => {
     for (const f of ['hitch-recorder.ts', 'hitch-log-writer.ts', 'hitch-validate.ts']) {
       expect(src('src', 'main', f)).not.toMatch(/\b(readFileSync|writeFileSync|appendFileSync|existsSync|statSync|mkdirSync|renameSync|openSync)\b/);

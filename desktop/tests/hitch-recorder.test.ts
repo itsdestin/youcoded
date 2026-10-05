@@ -267,3 +267,71 @@ describe('traceIpc', () => {
     expect(await registered({}, 1)).toBe(2);
   });
 });
+
+describe('suspend / resume', () => {
+  it('a 6-hour sleep is not a stall and does not pollute the minute line', () => {
+    const { lines, hist, rec, advance } = setup();
+    hist.set(25); rec.onSecond();
+    advance(6 * 3600_000);              // wall clock jumped across a suspend
+    hist.set(6 * 3600_000);             // Windows: the monotonic clock includes sleep
+    rec.onSecond();
+    expect(lines.filter((l) => l.kind === 'main-stall')).toEqual([]);
+    for (let i = 0; i < 60; i++) { advance(1000); hist.set(25); rec.onSecond(); }
+    const m = lines.find((l) => l.kind === 'minute');
+    expect(m.loop.max).toBeLessThan(1000);
+  });
+  it('the OS suspend/resume signal resets the monitor and skips the next tick', () => {
+    const { lines, hist, rec } = setup();
+    hist.set(500);                      // measured stall already sitting in the histogram
+    rec.noteSleep();
+    hist.set(900); rec.onSecond();      // first tick after resume is late: skipped
+    expect(lines.filter((l) => l.kind === 'main-stall')).toEqual([]);
+    hist.set(900); rec.onSecond();      // a later real stall is recorded again
+    expect(lines.filter((l) => l.kind === 'main-stall')).toHaveLength(1);
+  });
+  it('a stall longer than a minute is never real', () => {
+    const { lines, hist, rec } = setup();
+    hist.set(90_000); rec.onSecond();
+    expect(lines).toHaveLength(0);
+  });
+});
+
+describe('window bookkeeping', () => {
+  it('prunes a window when its webContents is destroyed, so ids never run out; overflow is counted', () => {
+    const { lines, rec, ipc } = setup();
+    const senders: any[] = [];
+    for (let i = 0; i < 200; i++) {
+      const listeners: Array<() => void> = [];
+      const sender = { id: i, once: (_: string, f: () => void) => listeners.push(f) };
+      senders.push({ sender, listeners });
+      ipc.emit(HITCH_CHANNEL, { sender }, batch([frame()]));
+      listeners.forEach((f) => f()); // window closed
+    }
+    expect(lines).toHaveLength(200);
+    // 70 windows alive at once: the extra ones are dropped AND counted
+    const alive = Array.from({ length: 70 }, (_, i) => ({ id: 1000 + i, once: () => {} }));
+    const before = lines.length;
+    for (const s of alive) ipc.emit(HITCH_CHANNEL, { sender: s }, batch([frame()]));
+    expect(lines.length - before).toBe(64);
+    rec.onMinute();
+    expect(lines.at(-1).rend.rejected).toBeGreaterThanOrEqual(6);
+  });
+});
+
+describe('traceIpc with once/off', () => {
+  it('ipcMain.once fires once and ipcMain.off(ch, original) removes a pending one', () => {
+    const ipcMain: any = new EventEmitter();
+    ipcMain.handle = vi.fn();
+    traceIpc(ipcMain, () => 1);
+    const a = vi.fn();
+    ipcMain.once('x:y', a);
+    ipcMain.emit('x:y', {}); ipcMain.emit('x:y', {});
+    expect(a).toHaveBeenCalledTimes(1);
+    const b = vi.fn();
+    ipcMain.once('x:z', b);
+    ipcMain.off('x:z', b);
+    ipcMain.emit('x:z', {});
+    expect(b).not.toHaveBeenCalled();
+    expect(ipcMain.listenerCount('x:z')).toBe(0);
+  });
+});

@@ -5,9 +5,14 @@
 // numbers are range-checked, strings are cut to 120 printable-ASCII characters and anything
 // unexpected is dropped on the floor.
 
-const MAX_STR = 120;
+/** No frame or interaction lasts longer than this: a longer one spans a suspend/resume and is rejected, not recorded. */
+const MAX_MS = 120_000;
 export const MAX_ENTRIES_PER_BATCH = 100;
 /** Every kind the recorder knows how to write; anything else in a batch is rejected. */
+const INVOKER_TYPES = new Set(['classic-script', 'module-script', 'event-listener', 'user-callback', 'resolve-promise', 'reject-promise']);
+const FN_RE = /^[A-Za-z_$][\w$.]{0,59}$/;
+const SRC_RE = /^[\w.-]{1,60}\.(js|mjs)$/;
+const IV_RE = /^[A-Za-z0-9_.:-]{1,60}$/;
 const EVENT_TYPES = new Set(['keydown', 'pointerdown', 'pointerup', 'click', 'input']);
 const TARGETS = new Set(['composer', 'terminal', 'chat', 'text-input', 'other']);
 const WINDOW_KINDS = new Set(['buddy-mascot', 'buddy-chat', 'buddy-bar']);
@@ -36,11 +41,11 @@ function int(x: unknown, lo: number, hi: number): number | undefined {
   const n = Math.round(x);
   return n >= lo && n <= hi ? n : undefined;
 }
-/** Printable ASCII only, at most MAX_STR characters: no control characters, no newlines, no
- *  non-ASCII text. App function names and bundle file names are ASCII; anything else is noise. */
-export function cleanString(x: unknown, max = MAX_STR): string {
-  if (typeof x !== 'string') return '';
-  return x.slice(0, max).replace(/[^\x20-\x7e]/g, '?');
+/** An IPC channel or boot-mark name: app constants only. Id-like runs are masked; anything else is "?" (never copied). */
+export function appName(x: unknown): string {
+  if (typeof x !== 'string') return '?';
+  const v = x.slice(0, 80).replace(/[0-9a-f]{8}[0-9a-f-]{4,}/gi, '*');
+  return /^[A-Za-z0-9_:.*-]{1,60}$/.test(v) ? v : '?';
 }
 
 function cleanCtx(x: unknown): CleanCtx {
@@ -57,20 +62,23 @@ function cleanCtx(x: unknown): CleanCtx {
   return out;
 }
 
+/** Every string field is an allow-list, not a length cap: free text of any length is dropped, not trimmed. */
 function cleanScript(x: unknown): CleanScript | null {
   if (!isObj(x)) return null;
-  const d = int(x.d, 0, 600_000);
+  const d = int(x.d, 0, MAX_MS);
   if (d === undefined) return null;
-  return {
-    it: cleanString(x.it, 40), iv: cleanString(x.iv), fn: cleanString(x.fn), src: cleanString(x.src, 80),
-    pos: int(x.pos, 0, 1e9) ?? 0, d, fl: int(x.fl, 0, 600_000) ?? 0,
-  };
+  const it = typeof x.it === 'string' && INVOKER_TYPES.has(x.it) ? x.it : 'other';
+  // Script starts carry no invoker (it would be the script URL); an invoker that fails the pattern becomes "other".
+  const iv = it === 'classic-script' || it === 'module-script' ? '' : typeof x.iv === 'string' && IV_RE.test(x.iv) ? x.iv : x.iv === '' ? '' : 'other';
+  const src = typeof x.src === 'string' && (x.src === 'inline' || x.src === 'other' || SRC_RE.test(x.src)) ? x.src : 'other';
+  const fn = src !== 'other' && typeof x.fn === 'string' && FN_RE.test(x.fn) ? x.fn : '';
+  return { it, iv, fn, src, pos: int(x.pos, 0, 1e9) ?? 0, d, fl: int(x.fl, 0, MAX_MS) ?? 0 };
 }
 
 /** One entry, or null when it is malformed. `now` clamps a lying timestamp. */
 function cleanEntry(x: unknown, now: number): CleanEntry | null {
   if (!isObj(x)) return null;
-  const d = int(x.d, 0, 600_000);
+  const d = int(x.d, 0, MAX_MS);
   if (d === undefined) return null;
   // A timestamp outside [-15 min, +1 min] of receipt is replaced, not trusted.
   let t = int(x.t, 0, 8.64e15) ?? now;
@@ -79,13 +87,13 @@ function cleanEntry(x: unknown, now: number): CleanEntry | null {
   if (x.k === 'frame') {
     const sc: CleanScript[] = [];
     if (Array.isArray(x.sc)) for (const s of x.sc.slice(0, 3)) { const c = cleanScript(s); if (c) sc.push(c); }
-    return { k: 'frame', t, d, b: int(x.b, 0, 600_000) ?? 0, sl: int(x.sl, 0, 600_000) ?? 0, rd: int(x.rd, 0, 600_000) ?? 0, inp: x.inp === true, sc, ctx };
+    return { k: 'frame', t, d, b: int(x.b, 0, MAX_MS) ?? 0, sl: int(x.sl, 0, MAX_MS) ?? 0, rd: int(x.rd, 0, MAX_MS) ?? 0, inp: x.inp === true, sc, ctx };
   }
   if (x.k === 'task') return { k: 'task', t, d, ctx };
   if (x.k === 'event') {
     if (typeof x.type !== 'string' || !EVENT_TYPES.has(x.type)) return null;
     const tgt = typeof x.tgt === 'string' && TARGETS.has(x.tgt) ? x.tgt : 'other';
-    return { k: 'event', t, type: x.type, d, delay: int(x.delay, 0, 600_000) ?? 0, proc: int(x.proc, 0, 600_000) ?? 0, pres: int(x.pres, 0, 600_000) ?? 0, tgt, ctx };
+    return { k: 'event', t, type: x.type, d, delay: int(x.delay, 0, MAX_MS) ?? 0, proc: int(x.proc, 0, MAX_MS) ?? 0, pres: int(x.pres, 0, MAX_MS) ?? 0, tgt, ctx };
   }
   return null;
 }

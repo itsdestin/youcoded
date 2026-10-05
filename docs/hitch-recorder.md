@@ -29,7 +29,14 @@ open, `dpr`, `els` DOM element count (cached 10 s). (`[data-screen]` dialog name
 name is not available in a normal build.)
 
 **Never recorded:** message text, prompts, file names or paths, keys typed, element text/ids/classes, session names (only the
-COUNT), URLs, tokens. Inline (`data:`/`blob:`) script sources are written as `inline`.
+COUNT), URLs, tokens. Every string is an allow-list enforced in main (`hitch-validate.ts`), not just a length cap:
+`it` one of 6 invoker types; `iv` empty for script starts, `url` for anything path-like, `TAG.onevent` for element
+listeners (ids and classes dropped), else `^[A-Za-z0-9_.:-]{1,60}$` or `other`; `fn` `^[A-Za-z_$][\w$.]{0,59}$` else
+dropped; `src` `^[\w.-]{1,60}\.(js|mjs)$`, `inline`, or `other`; event type, target, mode, window kind, visibility: fixed lists;
+`vm` `^[a-z][a-z0-9-]{0,19}$`; marks `yc:*`; IPC channels `^[A-Za-z0-9_:.*-]{1,60}$` else `?`. Only scripts under the window's
+own app directory are named (anything else is `other`, no function name). User HTML (HtmlView/Pages: sandboxed `srcDoc`,
+opaque origin) and Office (sealed `office://<token>` origin) are cross-origin, so their scripts are not reported to this window.
+A suspend/resume (OS power events, or a gap/stall over a minute) is discarded, never recorded as a stall.
 
 **Limits (two independent layers):** window side <= 30 detailed entries per minute, flush every 5 s; main re-validates every
 field (strings <= 120 printable ASCII, numbers range-checked, unknown keys dropped, <= 100 entries/batch, <= 40 batches/min

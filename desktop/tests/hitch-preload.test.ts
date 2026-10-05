@@ -32,7 +32,7 @@ function boot(opts: { types?: string[]; env?: Record<string, string>; search?: s
   const listeners: Record<string, () => void> = {};
   let nowMs = 1_800_000_000_000;
   const sandbox: any = {
-    exports: {}, process: { env: opts.env ?? {}, platform: 'linux' }, location: { search: opts.search ?? '' }, URLSearchParams,
+    exports: {}, process: { env: opts.env ?? {}, platform: 'linux' }, location: { search: opts.search ?? '', href: 'file:///opt/app/dist/renderer/index.html' + (opts.search ?? '') }, URLSearchParams,
     PerformanceObserver: po.PO,
     performance: { timeOrigin: 1_800_000_000_000 - 5000, getEntriesByType: () => [{ name: 'yc:app-mounted', startTime: 2100.6 }, { name: 'other', startTime: 1 }], getEntriesByName: () => [{ startTime: 640.2 }] },
     document: {
@@ -55,11 +55,61 @@ function boot(opts: { types?: string[]; env?: Record<string, string>; search?: s
 const loaf = (over: Record<string, unknown> = {}) => ({
   startTime: 5000, duration: 300, blockingDuration: 250, renderStart: 5200, styleAndLayoutStart: 5260, firstUIEventTimestamp: 4990,
   scripts: [
-    { invokerType: 'event-listener', invoker: 'BUTTON#send-btn.onclick', sourceFunctionName: 'small', sourceURL: 'app://x/assets/index-abc123.js?v=3#frag', sourceCharPosition: 10, duration: 5, forcedStyleAndLayoutDuration: 0 },
+    { invokerType: 'event-listener', invoker: 'BUTTON#send-btn.onclick', sourceFunctionName: 'small', sourceURL: 'file:///opt/app/dist/renderer/assets/index-abc123.js?v=3#frag', sourceCharPosition: 10, duration: 5, forcedStyleAndLayoutDuration: 0 },
     { invokerType: 'user-callback', invoker: 'TimerHandler:setTimeout', sourceFunctionName: 'big', sourceURL: 'blob:app://secret-id', sourceCharPosition: 99, duration: 200, forcedStyleAndLayoutDuration: 30 },
     { invokerType: 'resolve-promise', invoker: 'Promise.resolve', sourceFunctionName: 'mid', sourceURL: '', sourceCharPosition: 1, duration: 50, forcedStyleAndLayoutDuration: 0 },
     { invokerType: 'x', invoker: 'y', sourceFunctionName: 'fourth', sourceURL: 'a.js', sourceCharPosition: 1, duration: 1, forcedStyleAndLayoutDuration: 0 },
   ], ...over,
+});
+
+const script = (over: Record<string, unknown>) => ({ invokerType: 'event-listener', invoker: 'X.onclick', sourceFunctionName: 'f', sourceURL: 'file:///opt/app/dist/renderer/assets/index-1.js', sourceCharPosition: 1, duration: 120, forcedStyleAndLayoutDuration: 0, ...over });
+function recordScripts(scripts: any[]) {
+  const t = boot();
+  t.emit('long-animation-frame', [loaf({ scripts })]);
+  t.fire(5000);
+  return t.sent[0].b.entries[0].sc as any[];
+}
+
+describe('privacy of the script invoker and source (renderer half)', () => {
+  it('records no invoker at all for script-start entries (the invoker is the script URL)', () => {
+    const [s] = recordScripts([script({ invokerType: 'classic-script', invoker: 'file:///home/u/Clients/Acme/report.js' }), ]);
+    expect(s.iv).toBe('');
+    const [m] = recordScripts([script({ invokerType: 'module-script', invoker: 'https://host/x?token=abc' })]);
+    expect(m.iv).toBe('');
+    expect(JSON.stringify([s, m])).not.toMatch(/Acme|token|host/);
+  });
+  it('turns anything URL- or path-like into the literal "url"', () => {
+    for (const bad of ['https://host/x?token=abc', 'a/b', 'x?y', 'two words', 'C:\\Users\\me\\f.js']) {
+      expect(recordScripts([script({ invoker: bad })])[0].iv, bad).toMatch(/^(url|other)$/);
+    }
+    expect(recordScripts([script({ invoker: 'https://host/x?token=abc' })])[0].iv).toBe('url');
+  });
+  it('strips ids with anything attached, and drops class names from element invokers', () => {
+    const iv = (x: string) => recordScripts([script({ invoker: x })])[0].iv;
+    expect(iv('DIV#msg.hello.onclick')).toBe('DIV.onclick');
+    expect(iv('DIV.some-class.onclick')).toBe('DIV.onclick');
+    expect(iv('BUTTON#send-btn.onclick')).toBe('BUTTON.onclick');
+    expect(iv('Promise.resolve')).toBe('Promise.resolve');
+    expect(iv('TimerHandler:setTimeout')).toBe('TimerHandler:setTimeout');
+    expect(iv('DIV.client-acme-report')).toBe('other'); // class-only: not a known shape
+  });
+  it('attributes only scripts of the app\'s own bundle: anything else is "other" with no function name', () => {
+    const [a, b, c] = recordScripts([
+      script({ sourceURL: 'file:///opt/app/dist/renderer/assets/index-1.js', sourceFunctionName: 'appFn' }),
+      script({ sourceURL: 'file:///home/u/Clients/Acme/report.js', sourceFunctionName: 'userSecretFn' }),
+      script({ sourceURL: 'https://evil.example/x.js', sourceFunctionName: 'otherFn' }),
+    ]);
+    expect(a).toMatchObject({ src: 'index-1.js', fn: 'appFn' });
+    expect(b).toMatchObject({ src: 'other', fn: '' });
+    expect(c).toMatchObject({ src: 'other', fn: '' });
+  });
+  it('ignores a frame or event that "lasted" hours (a suspend), counting nothing', () => {
+    const t = boot();
+    t.emit('long-animation-frame', [loaf({ duration: 6 * 3600_000 })]);
+    t.emit('event', [{ name: 'click', startTime: 1, duration: 3600_000, processingStart: 2, processingEnd: 3, target: null }]);
+    t.fire(5000);
+    expect(t.sent).toHaveLength(0);
+  });
 });
 
 describe('renderer hitch recorder (inlined in preload)', () => {
@@ -90,7 +140,7 @@ describe('renderer hitch recorder (inlined in preload)', () => {
     expect(e.sc.map((s: any) => s.fn)).toEqual(['big', 'mid', 'small']);
     expect(e.sc[0]).toMatchObject({ src: 'inline', fl: 30, d: 200 });
     expect(e.sc[2].src).toBe('index-abc123.js');
-    expect(e.sc[2].iv).toBe('BUTTON#.onclick'); // element id removed
+    expect(e.sc[2].iv).toBe('BUTTON.onclick'); // element id removed, reduced to TAG.onevent
     expect(e.ctx).toMatchObject({ vis: 'visible', foc: true, vm: 'chat', dlg: true, scr: false, dpr: 2, els: 1234 });
   });
 

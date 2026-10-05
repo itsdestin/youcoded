@@ -519,7 +519,10 @@ interface HitchEnv {
   setTimeout: (f: () => void, ms: number) => unknown;
   send: (batch: unknown) => void;
   mode: string | null;
+  /** This page's own directory URL: only scripts under it are named. */
+  base: string;
 }
+const MAX_PLAUSIBLE = 120_000; // ms: a 'frame' longer than 2 min means the computer slept, not that the page hitched
 const HITCH_EVENTS = ['keydown', 'pointerdown', 'pointerup', 'click', 'input'];
 export function installHitchRecorder(env: HitchEnv): { mode: string } | null {
   const PO = env.PerformanceObserver;
@@ -546,9 +549,24 @@ export function installHitchRecorder(env: HitchEnv): { mode: string } | null {
     } catch { /* detached node */ }
     return 'other';
   };
+  // Only scripts of the app's own bundle may be named: Chromium reports a script's URL/function even when it is a user file
+  // (e.g. a file:// path), so anything outside this window's own base is "other" with no function name.
+  const own = (u: unknown): boolean => typeof u === 'string' && (u === '' || /^(data|blob):/.test(u) || u.startsWith(env.base));
   const base = (u: unknown): string => {
     if (typeof u !== 'string' || !u || /^(data|blob):/.test(u)) return 'inline'; // never carry inline/blob content
-    return u.split(/[?#]/)[0].split('/').pop()!.slice(0, 80);
+    if (!u.startsWith(env.base)) return 'other';
+    return u.split(/[?#]/)[0].split('/').pop()!.slice(0, 60);
+  };
+  // Invoker -> a shape that cannot carry user data: '' for script starts (the invoker IS the script URL), 'url' for anything
+  // path/URL-like, TAG.onevent for element listeners (ids and classes dropped), a plain dotted name otherwise.
+  const invoker = (type: unknown, raw: unknown): string => {
+    if (type === 'classic-script' || type === 'module-script') return '';
+    const v = String(raw || '').slice(0, 200);
+    if (/[/?\s\\]|:\/\//.test(v)) return 'url';
+    const el = /^([A-Za-z][A-Za-z0-9-]*)[#.].*\.(on[a-z]+)$/.exec(v);
+    if (el) return `${el[1]}.${el[2]}`;
+    const plain = v.replace(/#.*$/, '');
+    return /^[A-Za-z0-9_.:-]{1,60}$/.test(plain) && /^[A-Za-z]+(?:[.:][A-Za-z]+)?$/.test(plain) && !/^[A-Z]+\.[a-z-]+$/.test(plain) ? plain : plain ? 'other' : '';
   };
   // Hitch-time context only: no layout reads. The element count walks the tree, so it is
   // cached for 10 s — a burst of hitches pays for it once.
@@ -583,14 +601,13 @@ export function installHitchRecorder(env: HitchEnv): { mode: string } | null {
   const t0 = (e: any) => r(env.perf.timeOrigin + e.startTime);
   const onFrames = (list: any) => {
     for (const e of list.getEntries()) {
+      if (e.duration > MAX_PLAUSIBLE) continue; // spans a suspend/resume: not a hitch
       if (e.duration < 100) { tally.f++; tally.fms += r(e.duration); arm(); continue; }
       const sl = e.styleAndLayoutStart > 0 ? e.startTime + e.duration - e.styleAndLayoutStart : 0;
       const rd = e.renderStart > 0 && e.styleAndLayoutStart > e.renderStart ? e.styleAndLayoutStart - e.renderStart : 0;
       const sc = (e.scripts ? Array.from(e.scripts as any[]) : []).sort((a: any, b: any) => b.duration - a.duration).slice(0, 3).map((s: any) => ({
-        it: String(s.invokerType || '').slice(0, 40),
-        // '#id' parts of an invoker can name page elements; keep only the kind of thing that ran.
-        iv: String(s.invoker || '').replace(/#[^.\s]*/g, '#').slice(0, 120),
-        fn: String(s.sourceFunctionName || '').slice(0, 120), src: base(s.sourceURL), pos: r(s.sourceCharPosition),
+        it: String(s.invokerType || '').slice(0, 40), iv: invoker(s.invokerType, s.invoker),
+        fn: own(s.sourceURL) ? String(s.sourceFunctionName || '').slice(0, 60) : '', src: base(s.sourceURL), pos: r(s.sourceCharPosition),
         d: r(s.duration), fl: r(s.forcedStyleAndLayoutDuration),
       }));
       keep({ k: 'frame', t: t0(e), d: r(e.duration), b: r(e.blockingDuration), sl: r(sl), rd: r(rd), inp: e.firstUIEventTimestamp > 0, sc });
@@ -598,12 +615,13 @@ export function installHitchRecorder(env: HitchEnv): { mode: string } | null {
   };
   const onTasks = (list: any) => {
     for (const e of list.getEntries()) {
+      if (e.duration > MAX_PLAUSIBLE) continue;
       if (e.duration < 100) { tally.f++; tally.fms += r(e.duration); arm(); } else keep({ k: 'task', t: t0(e), d: r(e.duration) });
     }
   };
   const onEvents = (list: any) => {
     for (const e of list.getEntries()) {
-      if (!HITCH_EVENTS.includes(e.name)) continue; // interactions only: no mouseover/pointermove noise
+      if (!HITCH_EVENTS.includes(e.name) || e.duration > MAX_PLAUSIBLE) continue; // interactions only: no mouseover/pointermove noise
       keep({
         k: 'event', t: t0(e), type: e.name, d: r(e.duration), delay: r(e.processingStart - e.startTime),
         proc: r(e.processingEnd - e.processingStart), pres: r(e.startTime + e.duration - e.processingEnd), tgt: kindOf(e.target),
@@ -637,6 +655,7 @@ if (process.env.YOUCODED_HITCH_LOG !== '0') {
       setTimeout: (f, ms) => setTimeout(f, ms),
       send: (batch) => ipcRenderer.send(IPC.PERF_HITCH_BATCH, batch),
       mode: new URLSearchParams(location.search).get('mode'),
+      base: location.href.split(/[?#]/)[0].replace(/[^/]*$/, ''),
     });
   } catch { /* a missing browser API must never break the preload */ }
 }
