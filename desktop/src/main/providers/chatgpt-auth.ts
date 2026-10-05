@@ -35,6 +35,7 @@
  * an error or log line.
  */
 
+import { callbackPage } from './callback-page';
 import { currentChatGptRequest } from './chatgpt-request-diagnostics';
 import * as fs from 'fs';
 import * as http from 'http';
@@ -247,14 +248,11 @@ const defaultLog: LogFn = (level, message, meta) => {
 // Small pure helpers
 // ---------------------------------------------------------------------------
 
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
-}
-
+/** The brand page (callback-page.ts) for each of the three fixed texts above. */
 function htmlPage(text: string): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><title>YouCoded</title>` +
-    `<style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;color:#222;background:#fafafa}p{font-size:18px;max-width:32em;text-align:center;padding:0 1em}</style>` +
-    `</head><body><p>${escapeHtml(text)}</p></body></html>`;
+  if (text === CALLBACK_PAGE_DONE) return callbackPage('done', "You're signed in to ChatGPT", text);
+  if (text === CALLBACK_PAGE_TIMED_OUT) return callbackPage('failed', 'Sign-in timed out', text);
+  return callbackPage('failed', "Sign-in didn't finish", text);
 }
 
 /** Every response the listener sends closes its connection — a keep-alive

@@ -153,18 +153,22 @@ function AuthScreen({
 function SetupStopped({ sentence, detail, busy, onRetry }: { sentence: string; detail: string; busy: boolean; onRetry: () => void }) {
   const [open, setOpen] = useState(false);
   return (
-    <section className="brand-card w-full p-6 flex flex-col items-center gap-4 text-center" role="alert">
-      <span className="brand-stop" aria-hidden>
-        <svg viewBox="0 0 24 24" width={24} height={24} fill="none" stroke="currentColor" strokeWidth={2.6} strokeLinecap="round"><path d="M12 5.5v8M12 18.5h.01" /></svg>
-      </span>
-      <div>
-        <h2 className="brand-heading text-xl text-fg">Setup stopped</h2>
-        <p className="mt-1 text-sm text-fg-dim">{sentence}</p>
+    <section className="brand-card w-full p-6 flex flex-col gap-5" role="alert">
+      {/* P2-2 (Destin, deck first-run-2): "square exclamation/error icon, directly to the
+          left of the setup stopped / git couldn't be installed message". */}
+      <div className="flex items-center gap-4">
+        <span className="brand-stop" aria-hidden>
+          <svg viewBox="0 0 24 24" width={22} height={22} fill="none" stroke="currentColor" strokeWidth={2.6} strokeLinecap="round"><path d="M12 6v7.5M12 18h.01" /></svg>
+        </span>
+        <div className="min-w-0">
+          <h2 className="brand-heading text-xl text-fg">Setup stopped</h2>
+          <p className="text-sm text-fg-dim">{sentence}</p>
+        </div>
       </div>
       <Button variant="primary" size="lg" className="brand-primary w-full" onClick={onRetry} disabled={busy}>
         {busy ? 'Retrying…' : 'Retry'}
       </Button>
-      <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="text-sm text-fg-muted hover:text-fg transition-colors">
+      <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="self-center text-sm text-fg-muted hover:text-fg transition-colors">
         {open ? 'Hide details' : 'Show details'}
       </button>
       {open && <p className="w-full text-left text-xs text-fg-dim leading-relaxed select-text break-words bg-well rounded-lg p-3">{detail}</p>}
@@ -361,7 +365,7 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
         {launching ? (
           <CompletionCard />
         ) : (
-          <div className={`flex flex-col items-center gap-4 w-full ${state?.currentStep === 'AUTHENTICATE' && new URLSearchParams(location.search).get('signIn') === 'C' ? 'max-w-2xl' : 'max-w-md'}`}>
+          <div className="flex flex-col items-center gap-4 w-full max-w-md">
             {state && (
               <div className="text-center">
                 {heading && <h1 className="brand-heading text-3xl text-fg">{heading}</h1>}

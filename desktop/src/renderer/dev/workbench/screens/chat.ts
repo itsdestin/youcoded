@@ -71,9 +71,8 @@ export const CHAT: readonly ScreenEntry[] = [
   // First-run setup, one entry per step (?firstRun=<STEP>). LAUNCH_WIZARD is left out: it
   // hands over to the app after 1.5 s by design.
   ...['DETECT_PREREQUISITES', 'INSTALL_PREREQUISITES', 'AUTHENTICATE'].map((st) => ({ name: `first-run#${st.toLowerCase().replace(/_/g, '-')}`, tags: ['first-run', 'view'], params: { firstRun: st } })),
-  // TRIAL (first-run deck L-3): the sign-in layouts B and C, removed once one is picked.
-  { name: 'first-run#signin-b', tags: ['first-run', 'view'], params: { firstRun: 'AUTHENTICATE', signIn: 'B' } },
-  { name: 'first-run#signin-b-payg', tags: ['first-run', 'view'], params: { firstRun: 'AUTHENTICATE', signIn: 'B', signInPick: 'payg' } },
+  // The sign-in step's second page, one kind opened (deck first-run-2 P2-3).
+  { name: 'first-run#signin-payg', tags: ['first-run', 'view'], params: { firstRun: 'AUTHENTICATE', signInPick: 'payg' } },
   { name: 'first-run#installing', tags: ['first-run', 'view'], params: { firstRun: 'INSTALL_PREREQUISITES', prereqs: 'installing' } },
   { name: 'first-run#install-failed', tags: ['first-run', 'view'], params: { firstRun: 'INSTALL_PREREQUISITES', prereqs: 'failed' } },
   { name: 'first-run#authenticate-chatgpt', tags: ['first-run', 'view', 'sign-in'], params: { firstRun: 'AUTHENTICATE', authMode: 'chatgpt' } },

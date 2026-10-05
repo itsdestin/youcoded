@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef, useState } from 'react';
 import appIcon from './app-icon-192.png';
 
 /**
@@ -33,29 +34,51 @@ export function BrandLockup({ size = 36, tagline = true }: { size?: number; tagl
  * 2px lower at a 64px icon, net of the name's 3.5% raise. `icon` is the icon's height in px;
  * the name is 42/64 of it, as on the approved board.
  */
-// The height of Outfit's text box (ascent + descent) as a share of its size. The board
-// measured the tagline's place from the bottom of that box, not from the line's height.
-const OUTFIT_CONTENT = 1.26;
-
+/**
+ * The side-by-side logo with the tagline tucked beside the "y"'s tail (first-run deck R-1,
+ * Destin 2026-10-04: "maybe try horizontal icon/brand/tagline, all a bit bigger").
+ *
+ * WHY it is laid out exactly as the approved board drew it (src22/boards.html round26(),
+ * v26 HORIZ hc), measurements and all: an approximation with fixed ratios was rejected on
+ * sight (deck first-run-2 P2-1: "tagline is far too close to brand name"). The board stacks
+ * name and tagline, then lifts the tagline to `nameBox − 0.42 × size` from the block's top,
+ * `0.8 × "y" width` in, keeping the stacked height; the block sits 2px lower at a 64px
+ * icon, the gap is a quarter of the icon. One measurement on mount, after the bundled font
+ * has loaded — not per frame.
+ */
 export function BrandLockupRow({ icon = 80 }: { icon?: number }) {
   const k = icon / 64;
-  const name = 42 * k;
-  // WHY a fixed 0.53em and not a measurement: Outfit SemiBold's "y" is 0.53em wide less the
-  // −3.5% tracking; measuring it at runtime would mean a layout read on mount for a number
-  // the bundled font never changes.
-  const yWidth = name * (0.53 - 0.035);
+  const size = 42 * k;
+  const blockRef = useRef<HTMLDivElement>(null);
+  const nameRef = useRef<HTMLSpanElement>(null);
+  const tagRef = useRef<HTMLDivElement>(null);
+  const [place, setPlace] = useState<{ top: number; left: number; height: number } | null>(null);
+  useLayoutEffect(() => {
+    let live = true;
+    const measure = () => {
+      const b = blockRef.current, n = nameRef.current;
+      if (!live || !b || !n) return;
+      const height = b.getBoundingClientRect().height;
+      const nh = n.getBoundingClientRect().height;
+      const cv = document.createElement('canvas').getContext('2d');
+      let yw = size * 0.5;
+      if (cv) { cv.font = `600 ${size}px Outfit`; yw = cv.measureText('y').width; }
+      setPlace({ top: nh - size * 0.42, left: yw * 0.8, height });
+    };
+    // The font must be in before measuring, or the fallback's metrics place the tagline.
+    void (document.fonts?.load(`600 ${size}px Outfit`) ?? Promise.resolve()).then(measure, measure);
+    return () => { live = false; };
+  }, [size]);
   return (
     <div className="flex items-center select-none" style={{ gap: icon / 4 }} aria-label="YouCoded — agents for everyone" role="img">
       <img src={appIcon} alt="" width={icon} height={icon} className="brand-icon" draggable={false} />
-      {/* paddingBottom keeps the block as tall as name + tagline stacked, as on the board,
-          so the icon centres against the same height after the tagline tucks up. */}
-      <div className="relative" style={{ transform: `translateY(${(2 - 0.035 * 64) * k}px)`, paddingBottom: name * (OUTFIT_CONTENT - 1) + name * 0.33 + 1 }}>
-        <span className="brand-name block" style={{ fontSize: name }}>
+      <div ref={blockRef} className="relative inline-block" style={{ transform: `translateY(${2 * k}px)`, height: place?.height, lineHeight: 'normal' }}>
+        <span ref={nameRef} className="brand-name" style={{ fontSize: size }}>
           <span className="brand-name__you">you</span>coded
         </span>
-        <span className="brand-tagline absolute" style={{ fontSize: name * 0.33, lineHeight: 1, left: yWidth * 0.8, top: name * (OUTFIT_CONTENT - 0.42) }}>
-          agents for everyone
-        </span>
+        <div ref={tagRef} style={place ? { position: 'absolute', left: place.left, top: place.top, margin: 0 } : { marginTop: 1 }}>
+          <span className="brand-tagline inline-block" style={{ fontSize: size * 0.33 }}>agents for everyone</span>
+        </div>
       </div>
     </div>
   );

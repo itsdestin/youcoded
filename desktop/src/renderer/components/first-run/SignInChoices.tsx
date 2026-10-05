@@ -9,8 +9,8 @@ import { ProviderIcon } from '../ProviderIcon';
  * polished per deck first-run-1 R-3: "add brand icons for claude/gpt/openrouter … make
  * this feel much more polished/premium".
  *
- * TRIAL: two layouts of the same three groups, picked by `?signIn=A|B` in the workbench
- * until Destin chooses one; the other is deleted then.
+ * Layout B, "pick a kind first" (deck first-run-2 P2-3): three rows, then one kind's facts
+ * and buttons on a second page. The all-open cards (A) and the table (C) were not picked.
  */
 
 export type WayIn = 'claude' | 'chatgpt' | 'openrouter' | 'local' | 'apikey';
@@ -137,22 +137,7 @@ function Head({ g, big = false }: { g: Group; big?: boolean }) {
   );
 }
 
-/** A — three cards, each with its facts and its own buttons. */
-function Cards({ list, onPick }: { list: Group[]; onPick: (w: WayIn) => void }) {
-  return (
-    <div className="w-full flex flex-col gap-3">
-      {list.map((g) => (
-        <section key={g.id} className="brand-card p-5 flex flex-col gap-4">
-          <Head g={g} />
-          <Facts facts={g.facts} />
-          <Ways ways={g.ways} onPick={onPick} />
-        </section>
-      ))}
-    </div>
-  );
-}
-
-/** B — pick a kind first, then its facts and buttons on a second page. */
+/** Pick a kind first, then its facts and buttons on a second page. */
 function Guided({ list, onPick, initial }: { list: Group[]; onPick: (w: WayIn) => void; initial: Group['id'] | null }) {
   const [open, setOpen] = useState<Group['id'] | null>(initial);
   const g = list.find((x) => x.id === open);
@@ -186,8 +171,8 @@ function Guided({ list, onPick, initial }: { list: Group[]; onPick: (w: WayIn) =
 }
 
 export function SignInChoices({ chatGpt, onPick }: { chatGpt: boolean; onPick: (w: WayIn) => void }) {
-  const params = new URLSearchParams(location.search);
-  const list = groups(chatGpt);
-  if (params.get('signIn') === 'B') return <Guided list={list} onPick={onPick} initial={(params.get('signInPick') as Group['id'] | null) ?? null} />;
-  return <Cards list={list} onPick={onPick} />;
+  // `?signInPick=<kind>` is the workbench's photo switch for the second page; the real
+  // app's address never carries it, so it always opens on the three rows.
+  const pick = new URLSearchParams(location.search).get('signInPick') as Group['id'] | null;
+  return <Guided list={groups(chatGpt)} onPick={onPick} initial={pick} />;
 }

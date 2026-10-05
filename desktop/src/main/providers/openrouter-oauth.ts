@@ -14,6 +14,7 @@
 // Reusing only the PKCE maths keeps the shipped ChatGPT sign-in untouched.
 //
 // Free of Electron: the caller passes openExternal, fetch and the key handler.
+import { callbackPage, type CallbackTone } from './callback-page';
 import http from 'node:http';
 import { randomBytes as nodeRandomBytes } from 'node:crypto';
 import { generatePkce, type RandomBytesFn } from './chatgpt-oauth';
@@ -73,17 +74,12 @@ const defaultListen: ListenFn = (handler) => new Promise((resolve, reject) => {
   });
 });
 
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
-}
-
-/** The page the browser shows after coming back. Every response closes its
- *  connection so a keep-alive socket can't hold the listener open. */
-function reply(res: CallbackResponse, status: number, text: string): void {
+/** The page the browser shows after coming back (brand page, callback-page.ts). Every
+ *  response closes its connection so a keep-alive socket can't hold the listener open.
+ *  A failure keeps its full sentence as the line under "Sign-in didn't finish". */
+function reply(res: CallbackResponse, status: number, text: string, tone: CallbackTone = 'failed', title = "Sign-in didn't finish"): void {
   res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', connection: 'close' });
-  res.end(`<!doctype html><html><head><meta charset="utf-8"><title>YouCoded</title>`
-    + `<style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;color:#222;background:#fafafa}p{font-size:18px;max-width:32em;text-align:center;padding:0 1em}</style>`
-    + `</head><body><p>${escapeHtml(text)}</p></body></html>`);
+  res.end(callbackPage(tone, title, text));
 }
 
 interface Round {
@@ -196,7 +192,7 @@ export class OpenRouterSignIn {
     }
     const outcome = await this.exchange(round, code);
     if (outcome === 'signed-in') {
-      reply(res, 200, "You're signed in to OpenRouter. You can close this tab and go back to YouCoded.");
+      reply(res, 200, 'You can close this tab and go back to YouCoded.', 'done', "You're signed in to OpenRouter");
     } else {
       reply(res, 200, `${typeof outcome === 'object' ? outcome.error : 'The sign-in did not finish.'} You can close this tab.`);
     }

@@ -32,7 +32,10 @@
 }
 .brand-tagline {
   font-family: 'Outfit', var(--font-sans);
-  font-weight: 400;
+  /* WHY 600, not the 400 written in DECISIONS: the brand boards loaded Outfit at 600 only,
+     so every tagline Destin approved was drawn semibold (found 2026-10-04 comparing the
+     board with setup's lighter one, which he rejected as cramped). Match what was seen. */
+  font-weight: 600;
   letter-spacing: -0.005em;
   white-space: nowrap;
   color: #8A7B96;
@@ -146,8 +149,8 @@
 /* The progress bar, thicker and glowing faintly in the name's colours. */
 .brand-track { height: 8px; border-radius: 999px; background: rgba(255, 255, 255, 0.9); box-shadow: inset 0 0 0 1px #E3D5EE; overflow: hidden; }
 .brand-track .brand-bar-fill { height: 100%; border-radius: 999px; box-shadow: 0 0 12px rgba(210, 90, 160, 0.45); }
-/* The failure card's mark: a soft red disc. Status colours stay fixed across themes. */
-.brand-stop { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 999px; color: #C2410C; background: #FDEDE4; box-shadow: inset 0 0 0 1px #F8D4C2; }
+/* The failure card's mark: a soft red rounded square (deck first-run-2 P2-2). Status colours stay fixed across themes. */
+.brand-stop { flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 12px; color: #C2410C; background: #FDEDE4; box-shadow: inset 0 0 0 1px #F8D4C2; }
 /* The one filled button on a setup screen: the name's gradient. */
 .brand-surface .brand-primary { height: 44px; border-radius: 12px; border: 0; color: #FFFFFF; font-weight: 600; background: linear-gradient(100deg, #9D5BD0, #D25AA0); box-shadow: 0 6px 16px -6px rgba(157, 91, 208, 0.6); }
 .brand-surface .brand-primary:hover { filter: brightness(1.05); }
