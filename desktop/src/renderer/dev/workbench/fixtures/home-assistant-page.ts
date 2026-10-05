@@ -640,13 +640,14 @@ ${HOME_ICONS_JS}
   }
   function scenesList(room) { var l = Array.isArray(room.scenes) ? room.scenes : []; return pref('scenes') ? l : []; }
   // Redesign round 1 (Destin: "an easel type icon to the left of the main lights dropdown button"): the
-  // Scenes row is now a round easel button in the Lights card's header, left of the chevron. It opens the
+  // Scenes row is now a round palette button in the Lights card's header, left of the chevron. It opens the
   // scene chips under the header on their own, whether or not the lights list below is unfolded.
-  var EASEL = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="3" width="16" height="11" rx="1.5"/><path d="M12 14v3M8 21l4-4 4 4M2 3h2M20 3h2"/></svg>';
+  // A painter's palette, not an easel (Destin: "i want like the paint board thing").
+  var SCENE_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22a10 10 0 1 1 10-10c0 2.2-1.8 3.5-3.6 3.5h-1.8a2 2 0 0 0-1.4 3.4c.4.4.6.9.6 1.4A1.7 1.7 0 0 1 12 22z"/><circle cx="7.5" cy="10.5" r="1" fill="currentColor"/><circle cx="10.5" cy="7" r="1" fill="currentColor"/><circle cx="15" cy="7.5" r="1" fill="currentColor"/><circle cx="17" cy="11" r="1" fill="currentColor"/></svg>';
   function scenesBtn(room) {
     var l = scenesList(room); if (!l.length) return '';
     var isOpen = scenesOpen.has(room.id);
-    return '<button class="scn" data-scenes="' + esc(room.id) + '" aria-expanded="' + isOpen + '" aria-label="Scenes in ' + esc(room.name) + ', ' + l.length + '" title="Scenes (' + l.length + ')">' + EASEL + '</button>';
+    return '<button class="scn" data-scenes="' + esc(room.id) + '" aria-expanded="' + isOpen + '" aria-label="Scenes in ' + esc(room.name) + ', ' + l.length + '" title="Scenes (' + l.length + ')">' + SCENE_ICON + '</button>';
   }
   function scenesHtml(room) {
     var list = scenesList(room);
