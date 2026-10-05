@@ -1,0 +1,40 @@
+{
+  "name": "YouCoded Night",
+  "slug": "youcoded-night",
+  "dark": true,
+  "source": "youcoded-core",
+  "tokens": {
+    "canvas": "#140B1E",
+    "panel": "#1F1329",
+    "inset": "#2B1B39",
+    "well": "#1A1024",
+    "accent": "#C99BF0",
+    "on-accent": "#1A0F24",
+    "fg": "#F3EAF9",
+    "fg-2": "#B3A8BC",
+    "fg-dim": "#A397AC",
+    "fg-muted": "#95899F",
+    "fg-faint": "#6B5D76",
+    "edge": "#45305A",
+    "edge-dim": "#5A3F75A0",
+    "scrollbar-thumb": "#5A3F75",
+    "scrollbar-hover": "#7A5A9A",
+    "link": "#CDA8FF",
+    "link-hover": "#E2CCFF"
+  },
+  "font": {
+    "family": "'Outfit', system-ui, sans-serif",
+    "mono": "'Cascadia Mono', 'Cascadia Code', 'Fira Code', monospace"
+  },
+  "background": {
+    "average-color": "#542571",
+    "type": "image",
+    "value": "wallpaper",
+    "terminal-value": "wallpaper-terminal",
+    "opacity": 1,
+    "panels-blur": 16,
+    "panels-opacity": 0.7,
+    "bubble-blur": 10,
+    "bubble-opacity": 0.8
+  }
+}

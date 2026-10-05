@@ -293,7 +293,7 @@ class SkillConfigStore(private val homeDir: File) {
     // ── Theme Favorites ───────────────────────────────────────────
 
     /** Seed matches Node desktop's DEFAULT_THEME_FAVORITES in skill-config-store.ts. */
-    private val defaultThemeFavorites = listOf("light", "dark", "midnight", "creme")
+    private val defaultThemeFavorites = listOf("youcoded", "youcoded-night", "light", "dark", "midnight", "creme")
 
     /**
      * Returns the current theme favorites list. Seeds with defaults only when

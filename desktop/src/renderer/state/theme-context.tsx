@@ -14,12 +14,30 @@ import lightJson from '../themes/builtin/light.json';
 import darkJson from '../themes/builtin/dark.json';
 import midnightJson from '../themes/builtin/midnight.json';
 import cremeJson from '../themes/builtin/creme.json';
+import youcodedJson from '../themes/builtin/youcoded.json';
+import youcodedNightJson from '../themes/builtin/youcoded-night.json';
+import youcodedWall from '../themes/builtin/assets/youcoded-wallpaper.jpg';
+import youcodedWallTerminal from '../themes/builtin/assets/youcoded-wallpaper-terminal.webp';
+import youcodedNightWall from '../themes/builtin/assets/youcoded-night-wallpaper.jpg';
+import youcodedNightWallTerminal from '../themes/builtin/assets/youcoded-night-wallpaper-terminal.webp';
+
+/** A built-in theme with a picture: the asset resolver leaves built-ins alone (it only
+ *  rewrites community `assets/...` paths), so the bundled files' URLs go in here. */
+function withWallpaper(json: unknown, value: string, terminal: string): LoadedTheme {
+  const t = json as ThemeDefinition;
+  return { ...t, background: { ...t.background!, value, 'terminal-value': terminal }, source: 'youcoded-core' };
+}
 
 const BUILTIN_THEMES: LoadedTheme[] = [
   { ...(lightJson as unknown as ThemeDefinition), source: 'youcoded-core' },
   { ...(darkJson as unknown as ThemeDefinition), source: 'youcoded-core' },
   { ...(midnightJson as unknown as ThemeDefinition), source: 'youcoded-core' },
   { ...(cremeJson as unknown as ThemeDefinition), source: 'youcoded-core' },
+  // The YouCoded pair (theme questions deck, Destin 2026-10-04): brand purple, the
+  // glow-and-silk picture (deck yc-walls-2, "Richer"), Outfit for text. Drawn by
+  // scripts in the workspace (scratch/decks/yc-walls/walls.html), so the app owns them.
+  withWallpaper(youcodedJson, youcodedWall, youcodedWallTerminal),
+  withWallpaper(youcodedNightJson, youcodedNightWall, youcodedNightWallTerminal),
 ];
 
 const DEFAULT_FONT_FAMILY = "'Cascadia Mono', 'Cascadia Code', 'Fira Code', monospace";
@@ -45,8 +63,16 @@ const CONTEXT_DISPLAY_KEY = 'youcoded-context-display';
 // migrated. The old key and the old `glassOverrides` field in youcoded-appearance.json are
 // simply never read again.
 const LOOK_OVERRIDES_KEY = 'youcoded-look-overrides';
-const DEFAULT_THEME = 'midnight';
-const DEFAULT_CYCLE = ['midnight', 'dark'];
+// WHY the YouCoded pair, chosen by the computer's own light/dark setting (theme questions
+// deck T-1/T-5, Destin 2026-10-04): setup is brand lavender, and opening a new install in
+// near-black Midnight was the sharpest jump of the first run. Only a NEW install reads
+// this — anyone with a stored theme keeps it.
+export function defaultThemeSlug(): string {
+  const dark = typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)').matches;
+  return dark ? 'youcoded-night' : 'youcoded';
+}
+const DEFAULT_THEME = defaultThemeSlug();
+const DEFAULT_CYCLE = ['youcoded', 'youcoded-night'];
 
 /** How the StatusBar context pill renders the window: '45% Remaining' vs
  *  '35.2k / 64k'. Both are colored by the same percentage. */

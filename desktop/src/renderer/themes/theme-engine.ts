@@ -125,7 +125,7 @@ export function applyThemeFont(font: ThemeFont | undefined): string | null {
   // Apply font-family to CSS variables
   if (font.family) {
     document.documentElement.style.setProperty('--font-sans', font.family);
-    document.documentElement.style.setProperty('--font-mono', font.family);
+    document.documentElement.style.setProperty('--font-mono', font.mono ?? font.family);
     return font.family;
   }
 

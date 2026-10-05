@@ -176,6 +176,56 @@
   --status-bypass: #FA8072;
 }
 
+/* ─── YouCoded / YouCoded Night ─── the default pair for new installs (theme questions
+   deck, Destin 2026-10-04). The picture, glass and font come from their JSON; this block
+   is the first paint and must match the JSON tokens (theme-builtin-sources.test.ts). */
+[data-theme="youcoded"] {
+  --canvas: #F7F0FB;
+  --panel: #EFE3F6;
+  --inset: #DCC5EB;
+  --well: #FAF5FD;
+  --accent: #8B47B8;
+  --on-accent: #FFFFFF;
+  --fg: #21152C;
+  --fg-2: #43354E;
+  --fg-dim: #50415C;
+  --fg-muted: #5D4D69;
+  --fg-faint: #887695;
+  --edge: #C9B0DB;
+  --edge-dim: #B597CCA0;
+  --scrollbar-thumb: #B596CC;
+  --scrollbar-hover: #8B47B8;
+  --link: #6A2FB0;
+  --link-hover: #4F1F8A;
+  --hl-theme: light;
+  color-scheme: light;
+  --status-auto:   #B45309;
+  --status-bypass: #BE123C;
+}
+[data-theme="youcoded-night"] {
+  --canvas: #140B1E;
+  --panel: #1F1329;
+  --inset: #2B1B39;
+  --well: #1A1024;
+  --accent: #C99BF0;
+  --on-accent: #1A0F24;
+  --fg: #F3EAF9;
+  --fg-2: #B3A8BC;
+  --fg-dim: #A397AC;
+  --fg-muted: #95899F;
+  --fg-faint: #6B5D76;
+  --edge: #45305A;
+  --edge-dim: #5A3F75A0;
+  --scrollbar-thumb: #5A3F75;
+  --scrollbar-hover: #7A5A9A;
+  --link: #CDA8FF;
+  --link-hover: #E2CCFF;
+  --hl-theme: dark;
+  color-scheme: dark;
+  --status-auto:   #F2B33D;
+  --status-bypass: #FA8072;
+}
+
 /* ─── Crème ─── */
 [data-theme="creme"] {
   /* Lightened from #F0E6D6. Chrome (--panel) has to separate from content

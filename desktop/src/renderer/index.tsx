@@ -43,7 +43,10 @@ if (__liveTheme && __liveQuery.get('mode') === 'workbench' && __liveQuery.get('c
 }
 
 // Apply theme before React mounts to prevent FOUC (flash of unstyled content)
-const storedTheme = localStorage.getItem('youcoded-theme') || 'midnight';
+// A new install's first paint matches what ThemeProvider will pick (defaultThemeSlug in
+// theme-context.tsx): the YouCoded pair, by the computer's light/dark setting.
+const storedTheme = localStorage.getItem('youcoded-theme')
+  || (window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'youcoded-night' : 'youcoded');
 document.documentElement.setAttribute('data-theme', storedTheme);
 
 // Mark buddy windows on <html> SYNCHRONOUSLY (before first paint) so the

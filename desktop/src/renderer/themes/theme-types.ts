@@ -39,6 +39,10 @@ export interface ThemeFont {
   family: string;
   /** Google Fonts @import URL. Injected as a <link> at theme load time. */
   'google-font-url'?: string;
+  /** Optional separate code font. Without it `family` sets both the text and the code font;
+   *  the YouCoded themes set Outfit for text and keep a monospaced font for code (theme
+   *  questions deck T-3, Destin 2026-10-04: code stays in the code font). */
+  mono?: string;
 }
 
 export interface ThemeBackground {
