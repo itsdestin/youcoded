@@ -143,9 +143,11 @@ describe('Google limiting live video', () => {
     await frame();
     expect(q(`[data-eid="${LIVING}"]`).textContent).toContain('Google is limiting live video right now');
     expect(q(`[data-eid="${LIVING}"] .cam-play`)).toBeTruthy(); // Play again is still there: a person may try
-    await tick(10 * 60_000);
+    // WHY 70 s, not longer: just past the first 60 s pause is enough to prove the card never retries on its own; ten
+    // pretend minutes ran ~120 of the page's 5 s checks and took 2.3 s of real time, timing out on a busy machine.
+    await tick(70_000);
     expect(asked(m, LIVING).length).toBe(before); // the card never asks again on its own
-    // Now the Cameras tab, still inside the pause (it was 10 minutes... so it is over): refuse again to start a fresh pause.
+    // Now the Cameras tab, after that pause is over: refuse again to start a fresh pause.
     q(`[data-eid="${LIVING}"] .cam-play`).click();
     refuse(m, LIVING);
     await frame();
