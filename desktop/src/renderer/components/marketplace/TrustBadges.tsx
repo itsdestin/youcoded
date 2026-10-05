@@ -12,7 +12,7 @@
 import React from 'react';
 import type { CatalogMeta, OriginTier, ScanStatus } from '../../../shared/catalog-types';
 import { OriginIcon } from './type-icons';
-import { CHIP } from '../ui';
+import { Chip, CHIP } from '../ui';
 
 // WHY THIS REPLACED THE "Verified / Community" TIER (2026-08-31).
 //
@@ -105,12 +105,17 @@ export function ScanBadge({ scan, size = 'sm', responsiveLabel = false }: { scan
   const n = scan.findings?.length ?? 0;
   const label = scan.status === 'caution' && n > 0 ? `${SCAN_LABEL.caution} ${n}` : SCAN_LABEL[scan.status];
   return (
-    <span className={size === 'md' ? `${BADGE} text-xs px-2` : BADGE} title={scanExplainer(scan)} aria-label={label} data-scan={scan.status}>
+    // The shared fact chip (components/ui/Chip.tsx).
+    <Chip className={size === 'md' ? 'text-xs px-2' : ''} title={scanExplainer(scan)} aria-label={label} data-scan={scan.status}>
       <span className={`inline-flex ${SHIELD_TONE[scan.status]}`}><ShieldIcon status={scan.status} size={size === 'md' ? 14 : 12} /></span>
       {/* `responsiveLabel`: below the sm breakpoint show only the shield (the
-          text wrapped the badge row onto two lines inside a phone-width card). */}
-      <span className={responsiveLabel ? 'hidden sm:inline' : undefined}>{label}</span>
-    </span>
+          text wrapped the badge row onto two lines inside a phone-width card).
+          WHY zero-width, not `hidden` (2026-10-05): a hidden label left the chip with no line
+          of text, so it was only the icon's height — 18px beside 22.5px chips (shoot's
+          "parts agree" check). Squeezed to no width, the words still give the chip its line
+          height; -ml-1 takes back the gap they would leave. */}
+      <span className={responsiveLabel ? 'max-sm:w-0 max-sm:-ml-1 max-sm:overflow-hidden' : undefined}>{label}</span>
+    </Chip>
   );
 }
 

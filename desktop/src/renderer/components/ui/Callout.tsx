@@ -90,6 +90,9 @@ export type CalloutProps = {
   children?: React.ReactNode;
 };
 
+// WHY `data-parts-agree` on the action rows (2026-10-05): shoot's "parts agree" check reads
+// marked rows and fails when the buttons in one differ in height — a notice's buttons sit
+// side by side, so they must match.
 export function Callout({ tone = 'info', title, className = '', collapsible = false, actions, actionsPlacement = 'right', compact = false, children }: CalloutProps) {
   const t = TONE[tone];
   if (collapsible && title) {
@@ -102,7 +105,7 @@ export function Callout({ tone = 'info', title, className = '', collapsible = fa
           <ChevronDown className="w-3 h-3 shrink-0 text-fg-muted transition-transform group-open:rotate-180" strokeWidth={2.5} />
         </summary>
         {children && <div className={`text-xs mt-1.5 ${t.body}`}>{children}</div>}
-        {actions && <div className="mt-2 flex flex-wrap items-center justify-end gap-2">{actions}</div>}
+        {actions && <div data-parts-agree="notice buttons" className="mt-2 flex flex-wrap items-center justify-end gap-2">{actions}</div>}
       </details>
     );
   }
@@ -127,7 +130,7 @@ export function Callout({ tone = 'info', title, className = '', collapsible = fa
     return (
       <div className={`rounded-lg px-2.5 py-1.5 border flex flex-wrap items-center gap-x-3 gap-y-1.5 ${t.surface} ${className}`.trim()}>
         <div className="flex-1 min-w-40">{text}</div>
-        {actions && <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">{actions}</div>}
+        {actions && <div data-parts-agree="notice buttons" className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">{actions}</div>}
       </div>
     );
   }
@@ -138,7 +141,7 @@ export function Callout({ tone = 'info', title, className = '', collapsible = fa
     return (
       <div className={`rounded-lg p-3 border ${t.surface} ${className}`.trim()}>
         {text}
-        <div className="mt-2 flex flex-wrap items-center justify-end gap-2">{actions}</div>
+        <div data-parts-agree="notice buttons" className="mt-2 flex flex-wrap items-center justify-end gap-2">{actions}</div>
       </div>
     );
   }
@@ -156,7 +159,7 @@ export function Callout({ tone = 'info', title, className = '', collapsible = fa
           body, items-start still keeps the buttons level with the title. */}
       <div className={`flex flex-wrap ${children ? 'items-start' : 'items-center'} gap-x-3 gap-y-2`}>
         <div className="flex-1 min-w-48">{text}</div>
-        <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">{actions}</div>
+        <div data-parts-agree="notice buttons" className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">{actions}</div>
       </div>
     </div>
   );

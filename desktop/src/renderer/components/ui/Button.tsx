@@ -60,8 +60,13 @@ const BUTTON_BASE =
  *  panel as a fill, the label has to be readable text on that panel. On dark
  *  themes --destructive is too dark to read as text — no single red satisfies
  *  both roles at AA across our themes, which is why the token is split. */
+// WHY `border border-transparent` on the FILLED variants (primary, danger — Destin approved,
+// 2026-10-05): every outlined variant draws a 1px border, which made it 2px taller than a filled
+// button of the same size, so a filled button beside an outlined one never lined up (Connect 36px
+// beside Uninstall 38px — found by shoot's "parts agree" check). An invisible border gives the
+// filled ones the same box. Every filled button in the app grows by 2px, deliberately.
 const BUTTON_VARIANT: Record<ButtonVariant, string> = {
-  primary: 'bg-accent text-on-accent hover:bg-accent/90 active:bg-accent/80',
+  primary: 'border border-transparent bg-accent text-on-accent hover:bg-accent/90 active:bg-accent/80',
   // WHY border-edge-strong, not border-edge (round 2, 2026-09-28, Destin's
   // review found Meadow Mist's outline still nearly invisible after the prior
   // border-edge fix — that theme's OWN --edge is a pastel that composites
@@ -69,7 +74,7 @@ const BUTTON_VARIANT: Record<ButtonVariant, string> = {
   // the border is guaranteed visible on every theme, not just the 4 built-ins.
   secondary: 'border border-edge-strong text-fg-2 hover:bg-inset active:bg-edge',
   ghost: 'text-fg-dim hover:text-fg hover:bg-inset active:bg-edge',
-  danger: 'bg-destructive text-on-destructive hover:bg-destructive/90 active:bg-destructive/80',
+  danger: 'border border-transparent bg-destructive text-on-destructive hover:bg-destructive/90 active:bg-destructive/80',
   'danger-outline': 'border border-destructive/50 text-destructive-fg hover:bg-destructive/10 active:bg-destructive/20',
   // ghost, but for a control sitting ON an accent-filled surface (ViewToggleHint's
   // ✕). Added 2026-09-04: ghost there was wrong twice over — its hover fill is

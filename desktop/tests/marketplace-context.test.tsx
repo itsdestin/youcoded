@@ -752,6 +752,34 @@ describe('InstallingFooterStrip — the words match the operation and its result
     expect(screen.queryByText(/failed to install/i)).toBeNull();
   });
 
+  // A failure used to clear itself after 6 seconds, taking its reason with it — the detail
+  // page then showed a plain Install button as if nothing had happened (2026-10-05).
+  it('a failed install stays until it is dismissed, however long it is left', async () => {
+    setupWindowClaude({ install: vi.fn().mockResolvedValue({ status: 'failed', error: 'repository not found', type: 'plugin' }) });
+    await renderFooter();
+    // Fake timers BEFORE the failure, so any timer it schedules is one this test controls.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      await press('install');
+      await act(async () => { vi.advanceTimersByTime(60_000); });
+      expect(screen.getByText(/couldn.t install Notes: repository not found/i)).toBeInTheDocument();
+    } finally { vi.useRealTimers(); }
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Dismiss' })); });
+    expect(screen.queryByText(/couldn.t install Notes/i)).toBeNull();
+  });
+
+  it('trying again puts the old failure away', async () => {
+    const install = vi.fn()
+      .mockResolvedValueOnce({ status: 'failed', error: 'repository not found', type: 'plugin' })
+      .mockImplementationOnce(() => new Promise(() => {}));
+    setupWindowClaude({ install });
+    await renderFooter();
+    await press('install');
+    expect(screen.getByText(/couldn.t install Notes/i)).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'install' })); });
+    expect(screen.queryByText(/couldn.t install Notes/i)).toBeNull();
+  });
+
   it('an uninstall in progress says "Uninstalling", not "Installing"', async () => {
     setupWindowClaude({ uninstall: vi.fn(() => new Promise(() => {})) });
     await renderFooter();

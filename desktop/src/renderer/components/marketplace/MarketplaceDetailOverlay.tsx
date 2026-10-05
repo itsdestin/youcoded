@@ -28,7 +28,7 @@ import UpdateButton from "./UpdateButton";
 import { Button, Callout, CARD_LEVEL_1, Chip, Pill, SettingRow } from "../ui";
 // Task 3: `longDescription` is markdown and used to be printed verbatim.
 import MarkdownContent from "../MarkdownContent";
-import { DetailActions, DetailIdentity, DetailPage, PAIRED_PRIMARY, type DetailSection } from "./DetailPage";
+import { DetailActions, DetailIdentity, DetailPage, type DetailSection } from "./DetailPage";
 import { workbenchThemeLiked } from "../../workbench-mode";
 
 export type DetailTarget =
@@ -57,6 +57,11 @@ export default function MarketplaceDetailOverlay({
   const mp = useMarketplace();
   // Needed for Apply action and isActive check in ThemeDetail
   const { theme: activeThemeSlug, setTheme } = useTheme();
+  // Closing the page (or moving to another item) puts its failed-install reason away — the one
+  // place a failure leaves besides Retry (marketplace-context.tsx, recordInstallError, says why).
+  const trackingKey = target.kind === 'skill' ? installTrackingKey('skill', target.id) : installTrackingKey('theme', target.slug);
+  const dismiss = mp.dismissInstallError;
+  useEffect(() => () => dismiss(trackingKey), [dismiss, trackingKey]);
   // WHY no useEscClose here any more: the shared popup (Dialog, inside DetailPage)
   // registers Escape itself — two registrations would be two closes to unwind.
 
@@ -208,7 +213,7 @@ function QuickActions({ installed, favorited, onToggleFavorite, onShare, shareNe
 /** "Installing…" — the main button's busy state, full width like the button it replaces. */
 function InstallingButton() {
   return (
-    <Button size="lg" disabled className={`${PAIRED_PRIMARY} cursor-wait`}>
+    <Button size="lg" disabled className="cursor-wait">
       <span className="inline-block w-3 h-3 border-2 border-on-accent border-t-transparent rounded-full animate-spin" aria-hidden />
       Installing…
     </Button>
@@ -319,7 +324,7 @@ function SkillDetail({
       </DetailActions>
     );
   } else if (!installError) {
-    actions = <DetailActions><Button size="lg" className={PAIRED_PRIMARY} onClick={onInstall}>Install</Button></DetailActions>;
+    actions = <DetailActions><Button size="lg" onClick={onInstall}>Install</Button></DetailActions>;
   }
 
   const identity = (
@@ -581,7 +586,7 @@ function ThemeDetail({
   if (isInstalling) {
     actions = <DetailActions><InstallingButton /></DetailActions>;
   } else if (!installed) {
-    if (!installError) actions = <DetailActions><Button size="lg" className={PAIRED_PRIMARY} onClick={onInstall}>Install</Button></DetailActions>;
+    if (!installError) actions = <DetailActions><Button size="lg" onClick={onInstall}>Install</Button></DetailActions>;
   } else {
     // installTheme already overwrites an installed slug in place, so the update path
     // always worked — there was simply no button. Uninstall is outlined now, never
@@ -591,7 +596,7 @@ function ThemeDetail({
       <DetailActions>
         <Button variant="secondary" size="lg" onClick={handleUninstall}>Uninstall</Button>
         {updateAvailable && <UpdateButton id={entry.slug} kind="theme" variant="button" primary={isActive} block />}
-        {!isActive && <Button size="lg" className={PAIRED_PRIMARY} onClick={onApply}>Apply theme</Button>}
+        {!isActive && <Button size="lg" onClick={onApply}>Apply theme</Button>}
       </DetailActions>
     );
   }

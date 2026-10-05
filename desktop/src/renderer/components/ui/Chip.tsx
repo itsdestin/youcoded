@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { HTMLAttributes, ReactNode } from 'react';
 
 /**
  * The fact chip — one short fact in a row of them: "Likely safe", "@destin", "412 installs",
@@ -16,6 +16,6 @@ import type { ReactNode } from 'react';
  */
 export const CHIP = 'inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-2xs text-fg-2 bg-inset border border-edge-dim whitespace-nowrap';
 
-export function Chip({ children, title, className = '' }: { children: ReactNode; title?: string; className?: string }) {
-  return <span className={`${CHIP} ${className}`.trim()} title={title} data-chip>{children}</span>;
+export function Chip({ children, className = '', ...rest }: { children: ReactNode; className?: string } & Omit<HTMLAttributes<HTMLSpanElement>, 'className' | 'children'> & Record<`data-${string}`, unknown>) {
+  return <span className={`${CHIP} ${className}`.trim()} data-chip {...rest}>{children}</span>;
 }

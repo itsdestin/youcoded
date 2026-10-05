@@ -10,7 +10,7 @@ import type { IntegrationEntry, IntegrationState } from "../../../shared/types";
 import { platformListDisplay } from "../../../shared/platform-display";
 import { Button, Callout, Chip, Pill, SettingRow } from "../ui";
 import type { PillTone } from "../ui/Pill";
-import { DetailActions, DetailIdentity, DetailPage, PAIRED_PRIMARY, type DetailSection } from "./DetailPage";
+import { DetailActions, DetailIdentity, DetailPage, type DetailSection } from "./DetailPage";
 
 export type IntegrationCardItem = IntegrationEntry & { state: IntegrationState };
 
@@ -57,12 +57,12 @@ export function IntegrationDetailOverlay({
   let actions: React.ReactNode = null;
   if (!unavailable) {
     if (!s.installed) {
-      actions = <DetailActions><Button size="lg" className={PAIRED_PRIMARY} onClick={() => { void onInstall(); }}>{s.error ? 'Retry install' : 'Install'}</Button></DetailActions>;
+      actions = <DetailActions><Button size="lg" onClick={() => { void onInstall(); }}>{s.error ? 'Retry install' : 'Install'}</Button></DetailActions>;
     } else if (!s.connected) {
       actions = (
         <DetailActions>
           <Button variant="secondary" size="lg" onClick={() => { void onUninstall(); }}>Uninstall</Button>
-          <Button size="lg" className={PAIRED_PRIMARY} onClick={() => { void onConnect(); }}>Connect</Button>
+          <Button size="lg" onClick={() => { void onConnect(); }}>Connect</Button>
         </DetailActions>
       );
     } else {

@@ -70,6 +70,8 @@ interface MarketplaceState {
   /** Which operation each in-flight key is running, so the footer can name it. */
   installOps: Map<string, InstallOp>;
   installError: Map<string, InstallFailure>;
+  /** Forget one key's failure — the person dismissed it, or closed the page showing it. */
+  dismissInstallError(key: string): void;
   // Loading/error state
   loading: boolean;
   error: string | null;
@@ -303,21 +305,26 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   const markInstalling = useCallback((key: string, op: InstallOp) => {
     setInstallingIds(prev => { const n = new Set(prev); n.add(key); return n; });
     setInstallOps(prev => { const n = new Map(prev); n.set(key, op); return n; });
+    // A new attempt on this item (Retry, or another install / update / uninstall) replaces
+    // its old failure — the one moment a failure leaves without being dismissed.
+    setInstallError(prev => { if (!prev.has(key)) return prev; const n = new Map(prev); n.delete(key); return n; });
   }, []);
   const clearInstalling = useCallback((key: string) => {
     setInstallingIds(prev => { const n = new Set(prev); n.delete(key); return n; });
     setInstallOps(prev => { const n = new Map(prev); n.delete(key); return n; });
   }, []);
+  // WHY no timer (Destin approved, 2026-10-05): a failure used to clear itself after 6 seconds,
+  // so the detail page's "Couldn't install" notice — and its reason, the only explanation —
+  // vanished and left a plain Install button, as if nothing had happened (found by photographing
+  // the practice failure after 8s). A failure now stays until the person retries or starts
+  // another operation on that item (markInstalling), dismisses it (the footer's Dismiss), or
+  // closes the page that showed it (MarketplaceDetailOverlay). One state, so every surface —
+  // desktop, Android and remote run this same renderer — keeps it the same way.
   const recordInstallError = useCallback((key: string, op: InstallOp, message: string) => {
     setInstallError(prev => { const n = new Map(prev); n.set(key, { op, message, at: Date.now() }); return n; });
-    // Auto-clear after 6s
-    setTimeout(() => {
-      setInstallError(prev => {
-        const entry = prev.get(key);
-        if (!entry || Date.now() - entry.at < 6000) return prev;
-        const n = new Map(prev); n.delete(key); return n;
-      });
-    }, 6500);
+  }, []);
+  const dismissInstallError = useCallback((key: string) => {
+    setInstallError(prev => { if (!prev.has(key)) return prev; const n = new Map(prev); n.delete(key); return n; });
   }, []);
 
   // Every mutation below has the same two halves, for the same two reasons
@@ -601,6 +608,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     installingIds,
     installOps,
     installError,
+    dismissInstallError,
     // The installed list rides SkillContext (W17), so its load state folds in
     // here: the Library's installed tab keeps saying "loading" / "couldn't
     // load" exactly as it did when this context fetched that list itself.
@@ -619,7 +627,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     ensureLoaded,
   }), [
     skillEntries, themeEntries, featured, packages, updateAvailable, installedSkills,
-    favorites, themeFavorites, installingIds, installOps, installError, loading, skillsLoading,
+    favorites, themeFavorites, installingIds, installOps, installError, dismissInstallError, loading, skillsLoading,
     error, skillsLoadError, themesError,
     installSkill, uninstallSkill, installTheme, uninstallTheme, update,
     setFavorite, favoriteTheme, refresh, publishSkill, ensureLoaded,

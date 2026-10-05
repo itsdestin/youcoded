@@ -1,10 +1,10 @@
 // Docked footer strip that lists in-flight skill/theme installs, uninstalls and
-// updates. Visible iff something is in flight or recently failed. Uses theme tokens
+// updates. Visible iff something is in flight or failed and not yet dismissed. Uses theme tokens
 // (.layer-surface + accent) so no hardcoded colors. Respects safe-area-inset-bottom
 // for Android.
 import { useMarketplace, installTrackingKey, type InstallOp } from '../../state/marketplace-context';
 import { plainMessage } from '../../utils/ipc-error';
-import { Callout } from '../ui';
+import { Button, Callout } from '../ui';
 
 // WHY a word per operation (error inventory 2026-09-10, false message 14): this strip
 // printed "Installing" and "Failed to install {label}" for every entry, so a failed
@@ -63,7 +63,10 @@ export default function InstallingFooterStrip() {
         const err = mp.installError.get(k)!;
         const label = labelForKey(k, mp.skillEntries, mp.themeEntries);
         return (
-          <Callout key={k} tone="danger">
+          // Dismiss inside the notice, at the right (guide "Status and notices"): failures no
+          // longer clear themselves after 6s (marketplace-context.tsx says why), so the strip
+          // needs a way to put one away.
+          <Callout key={k} tone="danger" compact actions={<Button variant="secondary" size="sm" onClick={() => mp.dismissInstallError(k)}>Dismiss</Button>}>
             {FAILED[err.op]} {label}: {plainMessage(err.message, 'no reason was given')}
           </Callout>
         );
