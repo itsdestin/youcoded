@@ -14,7 +14,7 @@ const CHESS = gameById('chess')!;
 
 function picker(statuses: Record<string, any>, signedIn = true) {
   return render(
-    <ArcadePicker statuses={statuses} onPick={vi.fn()} signedIn={signedIn} onSignIn={vi.fn()} />,
+    <ArcadePicker statuses={statuses} onPick={vi.fn()} signedIn={signedIn} />,
   );
 }
 
@@ -57,20 +57,22 @@ describe('the picker states the deciding fact', () => {
 });
 
 describe('signed out, solo still plays', () => {
-  it('leaves solo tiles enabled and only gates the versus ones', () => {
+  it('leaves solo tiles enabled and greys the versus ones', () => {
     picker({ flappy: { bestScore: '31 pipes' }, chess: { friendsOnline: ['Jake'] } }, false);
     const flappy = screen.getByText('Flappy').closest('button')!;
     const chess = screen.getByText('Chess').closest('button')!;
     expect(flappy).not.toBeDisabled();
-    // Signed out is NOT disabled — the tile explains the gate when clicked.
-    // A dead tile teaches nothing (design guide §4.7).
-    expect(chess).not.toBeDisabled();
+    // Redesign backlog row 11 (Destin: "grey/disable unplayable games"): a
+    // versus game signed out is disabled — and still says why in words.
+    expect(chess).toBeDisabled();
     expect(screen.getAllByText('Sign in to play').length).toBeGreaterThan(0);
   });
 
-  it('says what an account actually buys, and does not gate the panel', () => {
+  it('does not gate the panel, and the old banner copy is gone', () => {
     picker({}, false);
-    expect(screen.getByText(/play without an account/i)).toBeInTheDocument();
+    // Row 11: "remove 'flappy and 2048 play without an account'" — the sign-in
+    // card is the friends panel above the grid now (FriendsPanel.tsx).
+    expect(screen.queryByText(/play without an account/i)).toBeNull();
     // The four tiles are still on screen — the old panel replaced everything
     // with a sign-in wall, which is the friction §4.2 exists to remove.
     expect(screen.getByText('Flappy')).toBeInTheDocument();
@@ -149,7 +151,7 @@ describe('the leaderboard', () => {
 describe('picking a game', () => {
   it('hands back the definition, not a string', () => {
     const onPick = vi.fn();
-    render(<ArcadePicker statuses={{}} onPick={onPick} signedIn onSignIn={vi.fn()} />);
+    render(<ArcadePicker statuses={{}} onPick={onPick} signedIn />);
     fireEvent.click(screen.getByText('Chess').closest('button')!);
     expect(onPick).toHaveBeenCalledWith(CHESS);
   });

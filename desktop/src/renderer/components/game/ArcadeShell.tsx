@@ -18,6 +18,7 @@ import { GAMES, type GameDefinition } from './game-registry';
 import { readAllBests, recordRun } from './local-best';
 import { useMatchReport } from '../../hooks/useMatchReport';
 import ArcadePicker from './ArcadePicker';
+import FriendsPanel from './FriendsPanel';
 import Leaderboard, { type LeaderboardRow } from './Leaderboard';
 import { arcadeApi, buildStatuses, mergeBests, serverBests, staleNote, toRows } from './arcade-api';
 import ChessBoard, { type PieceTreatment } from './ChessBoard';
@@ -249,16 +250,16 @@ export default function ArcadeShell({ connection, chessConnection, incognito, on
         {openGame?.kind === 'solo' && !playing && board !== null && <ScreenMark name={`chat/games/${openGame.id === 'twenty-forty-eight' ? '2048' : openGame.id}`} />}
         {openGame?.kind === 'versus' && <ScreenMark name={`chat/games/${openGame.id}${inPlay ? '' : '/lobby'}`} />}
         {!openGame && (
-          statuses === null
-            ? <LoadingState what="games" />
-            : (
-              <ArcadePicker
-                statuses={statuses}
-                onPick={setOpenGame}
-                signedIn={!!signedIn}
-                onSignIn={() => { void startSignIn(); }}
-              />
-            )
+          // WHY friends first, games below (redesign backlog row 11, Destin: the
+          // sign-in banner "should be at the top, and should be replaced by a new
+          // friends panel/menu when signed in with games below"). 16px between the
+          // two groups (guide "Spacing": 16 between groups).
+          <div className="flex flex-col gap-4 p-3">
+            <FriendsPanel incognito={incognito} onToggleIncognito={onToggleIncognito} />
+            {statuses === null
+              ? <LoadingState what="games" />
+              : <ArcadePicker statuses={statuses} onPick={setOpenGame} signedIn={!!signedIn} />}
+          </div>
         )}
 
         {openGame?.kind === 'solo' && (
@@ -329,6 +330,7 @@ export default function ArcadeShell({ connection, chessConnection, incognito, on
               incognito={incognito}
               onToggleIncognito={onToggleIncognito}
               gameId={openGame.id}
+              onAddFriend={leave}
             />
           )
         )}
@@ -341,7 +343,7 @@ export default function ArcadeShell({ connection, chessConnection, incognito, on
               {state.screen === 'game-over' && <GameOverlay connection={connection} />}
             </div>
           ) : (
-            <GameLobby connection={connection} incognito={incognito} onToggleIncognito={onToggleIncognito} gameId={openGame.id} />
+            <GameLobby connection={connection} incognito={incognito} onToggleIncognito={onToggleIncognito} gameId={openGame.id} onAddFriend={leave} />
           )
         )}
       </div>

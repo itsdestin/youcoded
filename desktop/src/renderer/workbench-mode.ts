@@ -173,3 +173,44 @@ export function workbenchThemeLiked(): boolean {
   if (!isWorkbenchMode()) return false;
   return new URLSearchParams(location.search).get('liked') === '1';
 }
+
+/** Games-social redesign (redesign backlog row 11, deck games-social-1): three
+ *  open choices Destin picks between on the deck, each a workbench-only switch
+ *  that returns the SHIPPED value everywhere else (the `workbenchScreenFrame`
+ *  pattern — a typo shows the real screen). Delete each switch and its losing
+ *  branches once he picks.
+ *
+ *  `?friendsAdd=` — how "add a friend" folds into the friends card:
+ *  `field` (shipped) the handle box near the top of the card, like Session
+ *  details' "Add a tag"; `button` a full-width outlined "Add a friend" under the
+ *  list that opens the box (guide: follow-up actions); `fold` a fold-out row. */
+export const FRIENDS_ADD_LOOKS = ['field', 'button', 'fold'] as const;
+export type FriendsAddLook = typeof FRIENDS_ADD_LOOKS[number];
+export function workbenchFriendsAdd(): FriendsAddLook {
+  if (!isWorkbenchMode()) return 'field';
+  const raw = new URLSearchParams(location.search).get('friendsAdd') ?? 'field';
+  return (FRIENDS_ADD_LOOKS as readonly string[]).includes(raw) ? (raw as FriendsAddLook) : 'field';
+}
+
+/** `?signInButton=` — the signed-out card's Sign in: `centred` (shipped; Destin's
+ *  words, "centered filled sign in") or `full` (the guide's "a lone button is full
+ *  width"). */
+export const SIGN_IN_BUTTON_LOOKS = ['centred', 'full'] as const;
+export type SignInButtonLook = typeof SIGN_IN_BUTTON_LOOKS[number];
+export function workbenchSignInButton(): SignInButtonLook {
+  if (!isWorkbenchMode()) return 'centred';
+  const raw = new URLSearchParams(location.search).get('signInButton') ?? 'centred';
+  return (SIGN_IN_BUTTON_LOOKS as readonly string[]).includes(raw) ? (raw as SignInButtonLook) : 'centred';
+}
+
+/** `?lobbyScores=` — how a game lobby shows your record against each friend:
+ *  `column` (shipped) a right-hand score column like the solo leaderboards;
+ *  `chip` today's "4W - 2L" chip beside the name; `line` a sentence under the
+ *  name ("You lead 4–2"). */
+export const LOBBY_SCORE_LOOKS = ['column', 'chip', 'line'] as const;
+export type LobbyScoreLook = typeof LOBBY_SCORE_LOOKS[number];
+export function workbenchLobbyScores(): LobbyScoreLook {
+  if (!isWorkbenchMode()) return 'column';
+  const raw = new URLSearchParams(location.search).get('lobbyScores') ?? 'column';
+  return (LOBBY_SCORE_LOOKS as readonly string[]).includes(raw) ? (raw as LobbyScoreLook) : 'column';
+}

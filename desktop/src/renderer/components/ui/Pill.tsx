@@ -31,11 +31,32 @@ const TONE: Record<PillTone, string> = {
   danger: 'bg-destructive/15 border-destructive/30',
 };
 
-export function Pill({ tone = 'neutral', children, className = '' }: { tone?: PillTone; children: ReactNode; className?: string }) {
+const DOT: Record<PillTone, string> = {
+  neutral: 'bg-fg-muted',
+  info: 'bg-accent',
+  ok: 'bg-green-400',
+  warning: 'bg-amber-500',
+  danger: 'bg-destructive',
+};
+
+/**
+ * `dot` — a LIVE status (someone online, a session working) carries its coloured
+ * dot inside the pill, before the word.
+ *
+ * WHY (guide "Status and notices": "A live status … carries its coloured dot inside
+ * the pill"; decisions "Status labels", S-1 — the session switcher's look): the
+ * friends panel's Online / In game / Offline pills are the second live-status
+ * caller after the session switcher, whose pill is its own copy in SessionStrip
+ * (with a breathing dot). This one is static — a friend's presence is a fact, not
+ * an activity, and an infinite animation per row costs a frame budget
+ * (performance rule 6).
+ */
+export function Pill({ tone = 'neutral', dot = false, children, className = '' }: { tone?: PillTone; dot?: boolean; children: ReactNode; className?: string }) {
   return (
     <span
-      className={`inline-flex items-center shrink-0 rounded-full border px-2 py-px text-3xs leading-tight text-fg-2 whitespace-nowrap ${TONE[tone]} ${className}`.trim()}
+      className={`inline-flex items-center shrink-0 rounded-full border ${dot ? 'gap-1 pl-1.5 pr-2' : 'px-2'} py-px text-3xs leading-tight text-fg-2 whitespace-nowrap ${TONE[tone]} ${className}`.trim()}
     >
+      {dot && <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full shrink-0 ${DOT[tone]}`} />}
       {children}
     </span>
   );

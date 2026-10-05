@@ -1,4 +1,4 @@
-// The arcade picker (spec §4.1) — the panel's home screen.
+// The arcade picker (spec §4.1) — the games grid under the friends panel.
 //
 // The design rule this screen exists to satisfy: EVERY tile carries the one
 // fact that decides whether you click it, so the panel answers "is there
@@ -7,11 +7,13 @@
 //   - versus tile -> who is online who could play it right now
 //
 // Solo tiles are never gated and never degraded: they play signed out and
-// they play with the leaderboard down (§4.2, §6.6). Only versus tiles can go
-// unavailable, and when they do they say WHY rather than disappearing.
+// they play with the leaderboard down (§4.2, §6.6). A versus tile that cannot
+// be played right now — signed out, or the game server unreachable — is greyed
+// and disabled, and its line still says why (redesign backlog row 11: "grey/
+// disable unplayable games").
 
 import { GAMES, type GameDefinition } from './game-registry';
-import { Button, CARD_LEVEL_1 } from '../ui';
+import { CARD_LEVEL_1, SectionLabel } from '../ui';
 
 /** What the shell knows about a game right now. Deliberately flat and dumb —
  *  Step 2 fills it from the reducer + leaderboard; Step 1 fills it from a
@@ -30,10 +32,10 @@ export interface ArcadeStatus {
 interface Props {
   statuses: Record<string, ArcadeStatus>;
   onPick: (game: GameDefinition) => void;
-  /** Signed-out players still get the whole picker; versus tiles explain the
-   *  gate on the tile rather than hiding behind a wall (§4.2). */
+  /** Signed-out players still get the whole picker; versus tiles are greyed
+   *  with "Sign in to play" on them, and the friends panel above carries the
+   *  Sign in button (§4.2; backlog row 11). */
   signedIn: boolean;
-  onSignIn: () => void;
 }
 
 /** The deciding fact, in plain words. This function is the whole point of the
@@ -61,10 +63,12 @@ function GameCard({
   game, status, signedIn, onPick,
 }: { game: GameDefinition; status: ArcadeStatus; signedIn: boolean; onPick: () => void }) {
   const fact = decidingFact(game, status, signedIn);
-  // A versus game is only truly unclickable when the service is down. Signed
-  // out is NOT disabled — clicking explains the gate, which is a better answer
-  // than a dead tile (design guide §4.7: a disabled control must say why).
-  const disabled = game.kind === 'versus' && !!status.unavailable;
+  // WHY signed out is disabled now (redesign backlog row 11, Destin: "grey/
+  // disable unplayable games"): it used to stay clickable so the lobby could
+  // explain the gate (§4.2). The friends panel above now says exactly that, with
+  // the Sign in button, so a click into a lobby that can only say "sign in" is a
+  // detour. The tile still says why in words (guide: a disabled control says why).
+  const disabled = game.kind === 'versus' && (!signedIn || !!status.unavailable);
 
   return (
     <button
@@ -83,7 +87,7 @@ function GameCard({
       // the app's one first-level card — outline-led, so it reads on the
       // bg-inset pane in every theme without the darker `well` fill. Hover
       // deepens the fill like a clickable Settings row (SettingRow).
-      className={`group ${CARD_LEVEL_1} flex flex-col gap-2 p-3 text-left transition-colors hover:bg-inset disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
+      className={`group ${CARD_LEVEL_1} flex flex-col gap-2 p-3 text-left transition-colors hover:bg-inset disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-inset/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
     >
       <game.Tile />
       <div className="flex flex-col gap-0.5 min-w-0">
@@ -99,9 +103,13 @@ function GameCard({
   );
 }
 
-export default function ArcadePicker({ statuses, onPick, signedIn, onSignIn }: Props) {
+export default function ArcadePicker({ statuses, onPick, signedIn }: Props) {
   return (
-    <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-3">
+    // A label over the grid (guide "Spacing" → once one card has a label, every
+    // card does — the friends panel above has "Friends"). The sign-in card that
+    // sat UNDER the grid moved to the top, as the friends panel (row 11).
+    <section>
+      <SectionLabel className="mb-2">Games</SectionLabel>
       <div className="grid grid-cols-2 gap-2">
         {GAMES.map((game) => (
           <GameCard
@@ -113,24 +121,6 @@ export default function ArcadePicker({ statuses, onPick, signedIn, onSignIn }: P
           />
         ))}
       </div>
-
-      {/* The sign-in line sits UNDER the grid, not in front of it. Reversing
-          the old panel's gate is the point of §4.2: Flappy and 2048 are
-          playable right now, and the account only buys the ranking. */}
-      {!signedIn && (
-        <div className={`${CARD_LEVEL_1} px-3 py-2.5 flex flex-col gap-2`}>
-          <p className="text-2xs text-fg-muted leading-relaxed">
-            Flappy and 2048 play without an account. Sign in to play friends and
-            to put your scores on the board.
-          </p>
-          {/* WHY outlined, not the old "G-4: the only primary" text-link
-              (guide: secondary actions are outlined, never bare text —
-              "Sign in links that are really actions" is named explicitly). */}
-          <Button variant="secondary" size="sm" className="self-start" onClick={onSignIn}>
-            Sign in
-          </Button>
-        </div>
-      )}
-    </div>
+    </section>
   );
 }
