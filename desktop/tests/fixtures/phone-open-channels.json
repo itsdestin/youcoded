@@ -277,5 +277,5 @@
   "zoom:out",
   "zoom:reset"
  ],
- "_added_ha_pages": "2026-10-05, branch session/ha-pages-connection merged into one-core: the 7 pages:socket-* / pages:video-* channels were already open to a phone on that branch (a phone's Home page holds a live connection and camera through the computer, each owned by that phone alone). Destin has not yet signed off this widening of the phone's list."
+ "_added_ha_pages": "2026-10-05, branch session/ha-pages-connection merged into one-core: the 7 pages:socket-* / pages:video-* channels were already open to a phone on that branch (a phone's Home page holds a live connection and camera through the computer, each owned by that phone alone). Destin signed off this widening on 2026-10-05 (\"yes\", asked whether a phone may use the Home page's live updates and camera video)."
 }
