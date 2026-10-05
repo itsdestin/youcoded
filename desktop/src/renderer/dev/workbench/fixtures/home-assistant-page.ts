@@ -1363,7 +1363,13 @@ ${HOME_ICONS_JS}
       var gr = rooms.filter(function (r) { return r.id === gb; })[0];
       var gids = gr ? liveLights(gr.items).filter(dimmable).map(function (x) { return x.id; }) : [];
       var gp = Number(t.value);
-      gids.forEach(function (x) { holdVal(x, 'brightness', Math.round(gp * 2.55), 4000, 'room:' + gb); holdVal(x, 'state', 'on', HOLD_MS, 'room:' + gb); });
+      // WHY every light follows on THIS frame (Destin: "the individual lights lag behind and jump around"):
+      // the guess is also laid on each light's own data and the page draws now, so every light's bar,
+      // percent and glow move with the room's bar. The guess holds each one against per-light answers that
+      // land late, one by one, out of order or capped. Lights that cannot dim, or are not responding, are
+      // not in this list and are never touched; an off light that can dim turns on and joins at the bar's level.
+      gids.forEach(function (x) { holdVal(x, 'brightness', Math.round(gp * 2.55), 4000, 'room:' + gb); holdVal(x, 'state', 'on', HOLD_MS, 'room:' + gb); var li = thing(x); li.state = 'on'; li.brightness = Math.round(gp * 2.55); });
+      if (gids.length) render();
       if (gids.length) sendSoon(function () { quiet('/api/services/light/turn_on', { entity_id: gids, brightness_pct: gp }, 'room:' + gb); });
     }
     if (b && Number(t.value) > 0) { var bp = Number(t.value); holdVal(b, 'brightness', Math.round(bp * 2.55), 4000, b); sendSoon(function () { quiet('/api/services/light/turn_on', { entity_id: b, brightness_pct: bp }, b); }); }
