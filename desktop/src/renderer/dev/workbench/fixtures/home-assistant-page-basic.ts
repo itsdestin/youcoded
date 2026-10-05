@@ -48,7 +48,13 @@ export const HOME_BASIC_JS = `
   // A Google / Android TV can be paired for the arrow pad and apps; say so, quietly, only where that is true.
   // WHY the maker test: Home Assistant's own device record is the only reliable sign here (Cast and Google TV devices say Google);
   // a Samsung or LG TV cannot be paired this way, so telling its owner to would be wrong.
-  function bcPairable(it) { return isTv(it) && it.dc === 'tv' && /google|chromecast/i.test((it.maker || '') + ' ' + (it.model || '')); }
+  // WHY by model (2026-10-05, real house): his unpaired Google TV Streamer (Grandma's Room) reports no device_class, so the
+  // old dc === 'tv' test missed it; a plain "Chromecast" (Living Room) has no Android TV inside and can never be paired.
+  function bcPairable(it) { return !!it.cast && isTv(it) && /google tv|android tv/i.test(it.model || ''); }
+  // A device Home Assistant sees ONLY through Google Cast (no paired remote): its "off" means nothing is being cast to it, not
+  // that the screen is off — the TV can be on and playing its own app or an HDMI input (Destin, 2026-10-05: "i know the living
+  // room tv is on and playing rn, but the media tab is showing it as off"). Say what is actually known.
+  function castOnlyOff(it, rc) { return !!it.cast && !rc && it.state === 'off'; }
   function bcExtra(it, rc) {
     if (rc || gone(it)) return '';
     var out = '';

@@ -30,6 +30,8 @@ export const HOME_MEDIA_JS = `
   var MV_OFF = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M12 3v8M6.3 6.8a8 8 0 1 0 11.4 0"/></svg>';
   var MV_GONE = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M6.5 6.5l11 11"/></svg>';
   var MV_WORDS = { playing: 'Playing', on: 'On', paused: 'Paused', idle: 'Idle', off: 'Off', gone: 'Not responding' };
+  // WHY (2026-10-05): a Cast-only device's "off" means nothing is cast to it — its screen may well be on (castOnlyOff, -basic.ts).
+  function mvWord(x) { return x.st === 'off' && castOnlyOff(x.it, x.rc) ? 'Nothing casting' : MV_WORDS[x.st]; }
   // Everything the tab needs to know about one player, worked out once.
   function mvInfo(it, room) {
     var kind = kindOf(it), tv = kind === 'tv', rc = tv ? remoteFor(it, room) : null, power = rc || it;
@@ -60,7 +62,7 @@ export const HOME_MEDIA_JS = `
   // WHY the "On" mark is a still dot (never the moving bars): "On" is exactly the case where the page does not know that anything plays.
   function mvGlyph(st) { return st === 'playing' ? eqBars(true) : st === 'on' ? MV_ON : st === 'paused' ? MV_PAUSE : st === 'idle' ? MV_IDLE : st === 'off' ? MV_OFF : MV_GONE; }
   // The state, said by shape and colour first and by a word second.
-  function mvBadge(x) { return '<span class="mv-b ' + x.st + '">' + mvGlyph(x.st) + MV_WORDS[x.st] + '</span>'; }
+  function mvBadge(x) { return '<span class="mv-b ' + x.st + '">' + mvGlyph(x.st) + mvWord(x) + '</span>'; }
   // The play/pause/skip keys. A TV: its one row of seven (home-assistant-page-tv.ts). A speaker: its own three.
   function mvKeys(x) {
     var it = x.it, isPlay = it.state === 'playing' && !x.stale, f = x.f;
@@ -204,7 +206,7 @@ export const HOME_MEDIA_JS = `
   }
   // The Not Playing shelf: small tiles, the name still the title.
   function mvSub(x) {
-    var s = x.st === 'idle' ? (x.tv ? 'On' + (x.app ? ' · ' + x.app.name : '') : 'Idle') : MV_WORDS[x.st];
+    var s = x.st === 'idle' ? (x.tv ? 'On' + (x.app ? ' · ' + x.app.name : '') : 'Idle') : mvWord(x);
     return '<span class="mv-g ' + x.st + '">' + mvGlyph(x.st) + '</span>' + esc(s);
   }
   function mvTile(u) {

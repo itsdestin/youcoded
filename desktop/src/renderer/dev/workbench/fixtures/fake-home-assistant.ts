@@ -13,7 +13,7 @@ interface Thing {
   vol?: number | null; title?: string | null; features?: number;
   rgb?: number[] | null; k?: number | null;
   modesHvac?: string[]; action?: string | null;
-  model?: string; dc?: string; activity?: string; app?: string; source?: string; muted?: boolean;
+  model?: string; dc?: string; cast?: boolean; activity?: string; app?: string; source?: string; muted?: boolean;
   maker?: string; entry?: string; since?: string; upd?: string;
   /** Sonos `group_members`: the speakers playing together, leader first. */
   group?: string[];
@@ -78,7 +78,7 @@ function seed(): Array<{ id: string; name: string; items: Thing[] }> {
     ] },
     // A Cast TV that cannot be turned up or muted from here (like Grandma's room).
     { id: 'grandmas_room', name: "Grandma's Room", items: [
-      { id: 'media_player.grandmas_room_tv', name: "Grandma's Room TV", state: 'idle', features: 1 | 2 | 128 | 256 | 4096 | 16384, model: 'Chromecast', dc: 'tv' },
+      { id: 'media_player.grandmas_room_tv', name: "Grandma's Room TV", state: 'idle', features: 1 | 2 | 128 | 256 | 4096 | 16384, model: 'Google TV Streamer' }, // like the real one: no device_class
     ] },
     // A DLNA-style renderer (a Samsung TV while it is on): seek, volume, mute, skip, input, no power control.
     { id: 'family_room', name: 'Family Room', items: [
@@ -116,6 +116,8 @@ for (const r of ROOMS) for (const t of r.items) {
   const d = t.id.split('.')[0];
   const [maker, entry] = MAKERS[d] ?? (t.model?.startsWith('Sonos') ? ['Sonos', 'entry_sonos'] : ['Google Inc.', 'entry_cast']);
   t.maker ??= maker; t.entry ??= entry;
+  // Like the real template's 'cast' flag: a media player that comes through the Google Cast integration.
+  if (d === 'media_player' && t.entry === 'entry_cast') t.cast = true;
   t.since = new Date(Date.now() - 3 * 3600_000).toISOString();
 }
 const ago = (h: number) => new Date(Date.now() - h * 3600_000).toISOString();

@@ -461,7 +461,7 @@ ${HOME_ICONS_JS}
     var neutral = media && tv && playing && !what && !playReported(it);
     var app = tv && rc ? appOf(rc.activity) : media && !tv ? sourceOf(it) : null;
     var status = na ? 'Not responding'
-      : media ? (on ? (neutral ? 'On' : playing && it.state === 'paused' ? 'Paused' : playing ? 'Playing' : 'On') : 'Off')
+      : media ? (on ? (neutral ? 'On' : playing && it.state === 'paused' ? 'Paused' : playing ? 'Playing' : 'On') : castOnlyOff(it, rc) ? 'Nothing casting' : 'Off')
       : on ? (dimmable(it) && it.brightness != null ? pct + '%' : 'On') : 'Off';
     // Speakers and soundbars get play/pause and skip while something is
     // playing; a TV gets its remote instead (round 5 testing: "soundbar

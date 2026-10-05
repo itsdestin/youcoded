@@ -113,10 +113,28 @@ for (const page of PAGES) describe(`basic controls on the ${page === 'home' ? 'H
   it('the pairing hint shows on a Cast / Google TV with no remote, never on a Samsung, an Android TV box or a TV that has its remote', async () => {
     await mount({ data: dataFor(page) });
     expect(card(CAST).textContent).toContain(NOTE);
-    expect(card(NOVOL).textContent).toContain(NOTE);
+    expect(card(NOVOL).textContent).toContain(NOTE); // a Google TV Streamer seen only through Cast, like Grandma's Room TV
     expect(card(DLNA).textContent).not.toContain('Pair this TV');
     expect(card(ATV).textContent).not.toContain('Pair this TV');
     expect(card(PAIRED).textContent).not.toContain('Pair this TV');
+  });
+
+  it('a plain Chromecast (no Android TV inside) never gets the pairing hint: it can never be paired', async () => {
+    fakeHomeAssistantSet(CAST, { model: 'Chromecast' });
+    await mount({ data: dataFor(page) });
+    expect(card(CAST).textContent).not.toContain('Pair this TV');
+  });
+
+  it('a Cast-only TV that Home Assistant calls off says "Nothing casting", not "Off" (its screen may be on and playing)', async () => {
+    // WHY (2026-10-05): "i know the living room tv is on and playing rn, but the media tab is showing it as off" — Cast only
+    // knows what is cast to it; a TV's own app or an HDMI input reads as off.
+    fakeHomeAssistantSet(CAST, { state: 'off' });
+    fakeHomeAssistantSet(PAIRED, { state: 'off' });
+    await mount({ data: dataFor(page) });
+    expect(card(CAST).textContent).toContain('Nothing casting');
+    expect(card(CAST).textContent).not.toMatch(/\bOff\b/);
+    // a TV with its remote paired knows its real power: it still says Off
+    expect(card(PAIRED).textContent).not.toContain('Nothing casting');
   });
 
   it('the paired-remote TV is unchanged: its seven remote keys, no Stop, no input picker', async () => {
