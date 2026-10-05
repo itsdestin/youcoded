@@ -168,7 +168,8 @@ export const HOME_TV_CSS = `
   .rdial .pk:not(.ok):focus-visible { outline: none; color: var(--accent); }
   .rdial .pk:not(.ok):focus-visible::before { opacity: .7; }
   /* OK is the page's primary round button (the same accent fill as play/pause), in the page's button lettering. */
-  .rdial .ok { left: 60px; top: 60px; width: 62px; height: 62px; place-items: center; border-radius: 50%; background: var(--accent); color: var(--on-accent);
+  /* WHY centred by calc, not fixed 60px: the wide card sizes the pad to its column, and OK must stay in the middle. */
+  .rdial .ok { left: calc(50% - 31px); top: calc(50% - 31px); width: 62px; height: 62px; place-items: center; border-radius: 50%; background: var(--accent); color: var(--on-accent);
     font: inherit; font-size: 14px; font-weight: 700; letter-spacing: .04em; box-shadow: 0 6px 16px -8px var(--accent); transition: transform 90ms ease, box-shadow 160ms ease; }
   @media (hover: hover) { .rdial .ok:hover { box-shadow: 0 6px 16px -8px var(--accent), 0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent); } }
   .rdial .ok:active { transform: scale(.94); }
