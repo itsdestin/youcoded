@@ -56,6 +56,7 @@ export const HOME_PENDING_JS = `
     // The page shows the target at once and from then on, so a drawing (say the one right after you let go)
     // never draws the device's old value for a moment before its answer.
     if (it) it[field] = value;
+    memNote(id, field, value); // a level the person set is the one to bring back after an off (home-assistant-page-memory.ts)
   }
   function holdState(id, state) { guess(id, 'state', state, HOLD_MS); }
   function holdVal(id, key, value, ms, src) { guess(id, key, value, ms, src); }

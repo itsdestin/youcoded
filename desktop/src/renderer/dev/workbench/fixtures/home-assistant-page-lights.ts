@@ -26,7 +26,7 @@ export const HOME_LIGHTS_JS = `
     return list.map(function (x, i) { return [x, i]; }).sort(function (a, b) { return (ltDead(a[0]) ? 1 : 0) - (ltDead(b[0]) ? 1 : 0) || a[1] - b[1]; }).map(function (p) { return p[0]; });
   }
   function ltPct(it) { return it.brightness ? Math.max(1, Math.round(it.brightness / 2.55)) : 0; }
-  function ltStatus(it) { return gone(it) ? 'Not responding' : !isOn(it) ? 'Off' : dimmable(it) ? ltPct(it) + '%' : 'On'; }
+  function ltStatus(it) { return gone(it) ? 'Not responding' : !isOn(it) ? 'Off' : dimmable(it) && it.brightness != null ? ltPct(it) + '%' : 'On'; }
   function ltDot(it, on) {
     return !gone(it) && on && canWhite(it) ? '<button class="cbtn" style="--c:' + colourOf(it) + '" data-expand="' + esc(it.id) + '" aria-expanded="' + (expanded.has(it.id) ? 'true' : 'false') + '" aria-label="Colour of ' + esc(it.name) + '" title="Colour"></button>' : '';
   }

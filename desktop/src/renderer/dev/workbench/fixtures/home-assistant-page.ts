@@ -23,6 +23,7 @@ import { HOME_TABS_JS } from './home-assistant-page-tabs';
 import { HOME_ICONS_JS } from './home-assistant-page-icons';
 import { HOME_REDRAW_CSS, HOME_REDRAW_JS } from './home-assistant-page-redraw';
 import { HOME_PENDING_CSS, HOME_PENDING_JS } from './home-assistant-page-pending';
+import { HOME_MEMORY_CSS, HOME_MEMORY_JS } from './home-assistant-page-memory';
 import { HOME_EDIT_CSS, HOME_EDIT_JS } from './home-assistant-page-edit';
 import { HOME_CAMERA_CSS, HOME_CAMERA_JS } from './home-assistant-page-camera';
 import { HOME_TV_JS, HOME_TV_CSS } from './home-assistant-page-tv';
@@ -88,7 +89,7 @@ export const HOME_ASSISTANT_PAGE_JSON = {
 function homeAssistantPageHtml(): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>Home</title>
-<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}${HOME_CAMERA_CSS}${HOME_REDRAW_CSS}${HOME_PENDING_CSS}${HOME_EDIT_CSS}${HOME_LOOK_CSS}${HOME_FEEL_CSS}${HOME_TV_CSS}${HOME_BASIC_CSS}${HOME_COMPUTER_CSS}${HOME_MEDIA_CSS}${HOME_LIGHTS_CSS}${HOME_GLASS_CSS}${HOME_CLIMATE_CSS}</style></head>
+<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}${HOME_CAMERA_CSS}${HOME_REDRAW_CSS}${HOME_PENDING_CSS}${HOME_MEMORY_CSS}${HOME_EDIT_CSS}${HOME_LOOK_CSS}${HOME_FEEL_CSS}${HOME_TV_CSS}${HOME_BASIC_CSS}${HOME_COMPUTER_CSS}${HOME_MEDIA_CSS}${HOME_LIGHTS_CSS}${HOME_GLASS_CSS}${HOME_CLIMATE_CSS}</style></head>
 <body>
 <div class="yc-page yc-stack" id="root">
   <!-- No page title: the app's own bar already names the page, so the
@@ -208,6 +209,7 @@ function homeAssistantPageHtml(): string {
       var first = rooms === null;
       rooms = JSON.parse(r.body);
       dropRoomGroups(rooms);
+      memReportAll(); // what the house says now, before pushes are laid back on top (home-assistant-page-memory.ts)
       noteReports();
       camPrune(); // frames kept for cameras no longer on the page are dropped
       // WHY stamps (redesign audit F4 "the newest one wins", code review 4): every state
@@ -394,7 +396,7 @@ ${HOME_ICONS_JS}
     return '<button class="cbtn" style="--c:' + colourOf(it) + '" data-expand="' + esc(it.id) + '" aria-expanded="' + (expanded.has(it.id) ? 'true' : 'false') + '" aria-label="Colour of ' + esc(it.name) + '" title="Colour"></button>';
   }
   function rangeHtml(it, pct) {
-    return '<input class="lr" type="range" min="1" max="100" value="' + pct + '" style="--v:' + Math.round((pct - 1) / 99 * 100) + ';--c:' + colourOf(it) + '" aria-label="Brightness of ' + esc(it.name) + '" data-bright="' + esc(it.id) + '">';
+    return '<input class="lr' + (it.brightness == null ? ' lr-unk' : '') + '" type="range" min="1" max="100" value="' + pct + '" style="--v:' + Math.round((pct - 1) / 99 * 100) + ';--c:' + colourOf(it) + '" aria-label="Brightness of ' + esc(it.name) + '" data-bright="' + esc(it.id) + '">';
   }
 
   // Volume: − and + either side of a bar (round 7). \`target\` is the player
@@ -460,7 +462,7 @@ ${HOME_ICONS_JS}
     var app = tv && rc ? appOf(rc.activity) : media && !tv ? sourceOf(it) : null;
     var status = na ? 'Not responding'
       : media ? (on ? (neutral ? 'On' : playing && it.state === 'paused' ? 'Paused' : playing ? 'Playing' : 'On') : 'Off')
-      : on ? (dimmable(it) ? pct + '%' : 'On') : 'Off';
+      : on ? (dimmable(it) && it.brightness != null ? pct + '%' : 'On') : 'Off';
     // Speakers and soundbars get play/pause and skip while something is
     // playing; a TV gets its remote instead (round 5 testing: "soundbar
     // shouldn't have full tv controls").
@@ -655,10 +657,11 @@ ${HOME_ICONS_JS}
     // WHY (U8, UX review 2): Kitchen read "1 of 2 on" with its bar at zero, because the one light on (Under cabinet) cannot dim
     // and the one that can (Pendants) was off. A room that is on while nothing dimmable is lit has no brightness to average,
     // so the bar shows full (what an on/off-only light is) instead of looking switched off.
-    var pct = lit.length ? Math.max(1, Math.round(lit.reduce(function (a, it) { return a + (it.brightness || 0); }, 0) / lit.length / 2.55)) : onList.length ? 100 : 1;
+    var pct = groupPct(lit, onList), unk = pct == null; // WHY: a lit light with no level yet is left out of the average, not counted as 0
+    if (unk) pct = 1;
     var key = 'room:' + room.id;
     if (dragging === key) { var liveEl = document.querySelector('[data-gbright="' + room.id + '"]'); if (liveEl) pct = Number(liveEl.value); }
-    return '<input class="lr" type="range" min="1" max="100" value="' + pct + '" style="--v:' + Math.round((pct - 1) / 99 * 100) + ';--c:' + c + '" aria-label="Brightness of every light in ' + esc(room.name) + '" data-gbright="' + esc(room.id) + '">';
+    return '<input class="lr' + (unk ? ' lr-unk' : '') + '" type="range" min="1" max="100" value="' + pct + '" style="--v:' + Math.round((pct - 1) / 99 * 100) + ';--c:' + c + '" aria-label="Brightness of every light in ' + esc(room.name) + '" data-gbright="' + esc(room.id) + '">';
   }
   // Hue scenes, folded into a Scenes section of the room's Lights card
   // (round 4, Q-scenes: "collapse into a scenes expandable card in the
@@ -1069,6 +1072,7 @@ ${HOME_ICONS_JS}
 
   function render() { if (batching) { batchDirty = true; return; } draw(); }
   function draw() {
+    memFix(); // a device that is on with a blank level shows what it had, never 0 (home-assistant-page-memory.ts)
     camTabSync(); // the Cameras tab starts and stops its live pictures with what is on screen
     if (edDrag) { edDirty = true; return; } // a row is being dragged: nothing redraws under the finger, and it all draws when it ends (redesign round 1, Edit c)
     $('root').classList.toggle('editing', editing);
@@ -1473,6 +1477,7 @@ ${HOME_MEDIA_JS}
 ${HOME_LIGHTS_JS}
 ${HOME_REDRAW_JS}
 ${HOME_PENDING_JS}
+${HOME_MEMORY_JS}
 ${HOME_EDIT_JS}
 ${HOME_MOTION_JS}
 ${HOME_FEEL_JS}

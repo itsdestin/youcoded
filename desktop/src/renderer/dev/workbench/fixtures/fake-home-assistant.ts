@@ -136,11 +136,21 @@ export function fakeHomeAssistantReset(): void {
   // outlived the reset ROOMS and disagreed with them in the next.
   AREAS.splice(0, AREAS.length, ...SEED.map((r) => ({ area_id: r.id, name: r.name })));
   lastBrightness.clear();
+  lastLevels.clear();
+  reportDelayMs = 0;
   journal.length = 0;
   calls.length = 0;
 }
 /** A light's brightness before it was switched off, so turning it on again with no brightness restores it (as Home Assistant does). */
 const lastBrightness = new Map<string, number>();
+/** What a device had when it was switched off: Home Assistant BLANKS these attributes while a device is off (a light's brightness and
+ *  colour, a speaker's volume and mute, a thermostat's set points) and the device reports them back when it comes on. */
+const lastLevels = new Map<string, Partial<Thing>>();
+const BLANKED: Array<keyof Thing> = ['brightness', 'rgb', 'k', 'vol', 'muted', 'target', 'tlo', 'thi'];
+/** How long a device takes to report after it accepts a power-on (Hue answers about a second later, with the new state and its
+ *  levels in ONE message, as the real house was traced doing). 0 = instantly, which is how every older test expects it. */
+let reportDelayMs = 0;
+export function fakeHomeAssistantReportDelay(ms: number): void { reportDelayMs = ms; }
 
 /** Every service call the page made since the last reset, in order: lets a test see WHICH service a button used
  *  (media_seek, or remote.send_command with a key name) without reading the page's code. */
@@ -158,6 +168,20 @@ export function fakeHomeAssistantRemove(id: string): void {
 }
 /** Test set-up: change what the pretend house reports for one device (e.g. make a TV able to seek). */
 export function fakeHomeAssistantSet(id: string, patch: Partial<Thing>): void { const t = find(id); if (t) Object.assign(t, patch); notifyLive(); }
+
+/** Switching off: remember the levels, then blank them (the house reports them as null while the device is off). */
+function blank(t: Thing, id: string): void {
+  const had: Partial<Thing> = lastLevels.get(id) ?? {};
+  for (const f of BLANKED) if (t[f] != null) (had as Record<string, unknown>)[f] = t[f];
+  lastLevels.set(id, had);
+  for (const f of BLANKED) if (t[f] !== undefined) (t as unknown as Record<string, unknown>)[f] = null;
+}
+/** Switching on: the device reports back what it had. */
+function restore(t: Thing, id: string): void {
+  const had = lastLevels.get(id);
+  if (!had) return;
+  for (const f of BLANKED) if (t[f] == null && had[f] != null) (t as unknown as Record<string, unknown>)[f] = had[f];
+}
 
 function find(id: string): Thing | undefined {
   for (const r of ROOMS) for (const t of r.items) if (t.id === id) return t;
@@ -295,8 +319,9 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
       if (!t || t.state === 'unavailable') continue;
       const [, action] = svc.slice(1);
       const stateBefore = t.state;
+      const snap = structuredClone(t);
       if (action === 'turn_off' && id.startsWith('light.') && t.brightness) lastBrightness.set(id, t.brightness);
-      if (action === 'turn_off') t.state = 'off';
+      if (action === 'turn_off') { t.state = 'off'; if (!id.startsWith('camera.')) blank(t, id); }
       // A wake-on-LAN button: its state becomes the press time; the PC's ping sensor goes on a little later (unless it never wakes).
       if (svc[1] === 'button' && action === 'press') {
         t.state = new Date().toISOString();
@@ -306,19 +331,22 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
       // turn_on with no brightness brings back what the light had before, not always full.
       if (action === 'turn_on' && id.startsWith('light.') && data.brightness_pct === 0) {
         if (t.brightness) lastBrightness.set(id, t.brightness);
-        t.state = 'off'; t.brightness = null;
+        t.state = 'off'; blank(t, id);
       } else if (action === 'turn_on') {
         t.state = id.startsWith('media_player.') ? 'idle' : 'on';
+        restore(t, id);
         if (typeof data.brightness_pct === 'number') t.brightness = Math.round(data.brightness_pct * 2.55);
         else if (id.startsWith('light.') && !t.brightness) t.brightness = lastBrightness.get(id) ?? 255;
       }
       if (action === 'turn_on' && Array.isArray(data.rgb_color)) { t.rgb = data.rgb_color as number[]; t.k = null; }
       if (action === 'turn_on' && typeof data.color_temp_kelvin === 'number') { t.k = data.color_temp_kelvin; t.rgb = null; }
       if (action === 'set_hvac_mode' && typeof data.hvac_mode === 'string') {
+        if (data.hvac_mode === 'off') blank(t, id); else if (stateBefore === 'off') restore(t, id);
         t.state = data.hvac_mode;
+        // WHY the set point comes back for every mode but Off: a real Nest has none while off.
         // Like a real Nest: Auto holds a low and a high set point and has NO single `temperature`; every other mode has one.
         if (data.hvac_mode === 'heat_cool') { t.tlo = t.tlo ?? 68; t.thi = t.thi ?? 75; t.target = null; }
-        else if (t.target == null && t.modesHvac) { t.target = 72; t.tlo = null; t.thi = null; }
+        else if (data.hvac_mode !== 'off' && t.target == null && t.modesHvac) { t.target = 72; t.tlo = null; t.thi = null; }
         t.action = data.hvac_mode === 'off' ? 'off' : data.hvac_mode === 'heat' ? 'heating' : data.hvac_mode === 'cool' ? 'cooling' : 'idle';
       }
       if (action === 'volume_set' && typeof data.volume_level === 'number') t.vol = data.volume_level;
@@ -355,6 +383,13 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
       // target, heating only while it is cooler, otherwise idle (U11: the fake used to say "cooling" at 74 for a 75 target).
       if (id.startsWith('climate.') && t.cur != null && t.target != null && (action === 'set_temperature' || action === 'set_hvac_mode')) {
         t.action = t.state === 'off' ? 'off' : t.state === 'cool' ? (t.cur > t.target ? 'cooling' : 'idle') : t.state === 'heat' ? (t.cur < t.target ? 'heating' : 'idle') : t.action;
+      }
+      // A device coming ON reports a moment later, state and levels in one message; until then the house still says "off".
+      const comingOn = stateBefore !== t.state && stateBefore === 'off' && t.state !== 'off';
+      if (reportDelayMs > 0 && comingOn) {
+        const after = { ...t };
+        Object.assign(t, snap);
+        pcTimers.push(setTimeout(() => { const x = find(id); if (x) { Object.assign(x, after); notifyLive(); } }, reportDelayMs));
       }
     }
     // Whoever is listening live hears about it now, as with the real one.
