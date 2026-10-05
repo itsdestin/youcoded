@@ -36,6 +36,11 @@ export const PAGES: readonly ScreenEntry[] = [
   // The Media tab with the remote open (the pad, the Back/Home row and the app buttons inside the now-playing box).
   { ...pg('pages/page/page-home#remote-media', 'view'), params: { pagesHome: 'remote-media' } },
   { ...pg('pages/page/page-home#media-group', 'view'), params: { pagesHome: 'media-group' } },
+  // The Media tab with the remote open on a very wide card (the page's width cap lifted): the app drawer takes the left two thirds with big tiles.
+  { ...pg('pages/page/page-home#remote-wide', 'view'), params: { pagesHome: 'remote-wide' } },
+  // The background choices on the connected Home tab (gear > Background).
+  { ...pg('pages/page/page-home#bg-frosted', 'view'), params: { pagesHome: 'bg-frosted' } },
+  { ...pg('pages/page/page-home#bg-house', 'view'), params: { pagesHome: 'bg-house' } },
   { ...pg('pages/page/page-home#group', 'view'), params: { pagesHome: 'group' } },
   { ...pg('pages/page/page-home#device', 'view'), params: { pagesHome: 'device' } },
   { ...pg('pages/page/page-home#activity', 'view'), params: { pagesHome: 'view-activity' } },

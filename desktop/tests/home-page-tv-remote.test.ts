@@ -124,32 +124,70 @@ describe('the -10s / +10s buttons: seek, remote keys, or not at all', () => {
   });
 });
 
-describe('the app buttons', () => {
-  it('shows four of YouTube / Netflix / HBO Max / Disney+, the app on the TV swapped in place for Prime Video', async () => {
+describe('the app drawer', () => {
+  const ORDER = ['YouTube', 'Netflix', 'HBO Max', 'Disney+', 'Prime Video', 'Hulu', 'Apple TV', 'Peacock', 'Paramount+', 'Spotify', 'YouTube Music', 'Plex', 'Tubi', 'Twitch', 'Crunchyroll'];
+  const on = () => qa(`[data-eid="${TV}"] .rapp.on`).map((b) => b.getAttribute('data-name'));
+
+  it('lists Destin\'s four first, then Prime Video, then the rest, then a More button; every app is always drawn (no swapping)', async () => {
     const m = await mount({ data: { startOpen: ['destins_room'], remote: [RC] } });
-    expect(chipNames()).toEqual(['Prime Video', 'Netflix', 'HBO Max', 'Disney+']); // YouTube is on
+    expect(chipNames()).toEqual([...ORDER, null]); // null = the More button
     push(m.socks[0], RC, { a: { current_activity: 'com.netflix.ninja' } }); await frame();
-    expect(chipNames()).toEqual(['YouTube', 'Prime Video', 'HBO Max', 'Disney+']);
-    push(m.socks[0], RC, { a: { current_activity: 'com.wbd.stream' } }); await frame();
-    expect(chipNames()).toEqual(['YouTube', 'Netflix', 'Prime Video', 'Disney+']);
-    push(m.socks[0], RC, { a: { current_activity: 'com.disney.disneyplus' } }); await frame();
-    expect(chipNames()).toEqual(['YouTube', 'Netflix', 'HBO Max', 'Prime Video']);
+    expect(chipNames()).toEqual([...ORDER, null]); // the open app does not move or disappear
+  });
+
+  it('the app on the TV is highlighted "on now" in place (including the new apps, matched by package name); none when it is not in the list', async () => {
+    const m = await mount({ data: { startOpen: ['destins_room'], remote: [RC] } });
+    expect(on()).toEqual(['YouTube']);
+    expect(card().querySelector('.rapp.on')!.getAttribute('aria-label')).toBe('Open YouTube (on now)');
+    push(m.socks[0], RC, { a: { current_activity: 'com.netflix.ninja' } }); await frame();
+    expect(on()).toEqual(['Netflix']);
     push(m.socks[0], RC, { a: { current_activity: 'com.spotify.tv.android' } }); await frame();
-    expect(chipNames()).toEqual(['YouTube', 'Netflix', 'HBO Max', 'Disney+']); // none of the four is on: nothing to swap
+    expect(on()).toEqual(['Spotify']);
+    push(m.socks[0], RC, { a: { current_activity: 'com.google.android.youtube.tvmusic' } }); await frame();
+    expect(on()).toEqual(['YouTube Music']); // not YouTube, although the package name contains "youtube"
+    push(m.socks[0], RC, { a: { current_activity: 'com.some.other.app' } }); await frame();
+    expect(on()).toEqual([]);
   });
 
-  it('pressing one opens that app through the remote; HBO Max uses its web address', async () => {
+  it('pressing one opens that app through the remote: the five older apps by web address, the new ones by Android app id', async () => {
     await mount({ data: { startOpen: ['destins_room'], remote: [RC] } });
-    card().querySelector<HTMLElement>('[data-name="HBO Max"]')!.click();
-    card().querySelector<HTMLElement>('[data-name="Prime Video"]')!.click();
+    for (const n of ['HBO Max', 'Prime Video', 'Spotify', 'Plex']) card().querySelector<HTMLElement>(`[data-name="${n}"]`)!.click();
     await tick(10);
-    expect(fakeHomeAssistantCalls().filter((c) => c.service === 'turn_on').map((c) => [c.data.entity_id, c.data.activity])).toEqual([[RC, 'https://play.hbomax.com'], [RC, 'https://app.primevideo.com']]);
+    expect(fakeHomeAssistantCalls().filter((c) => c.service === 'turn_on').map((c) => [c.data.entity_id, c.data.activity])).toEqual([
+      [RC, 'https://play.hbomax.com'], [RC, 'https://app.primevideo.com'], [RC, 'com.spotify.tv.android'], [RC, 'com.plexapp.android']]);
   });
 
-  it('the app buttons are only reachable while the remote is open', async () => {
-    await mount({ data: { startOpen: ['destins_room'] } });
-    // closed: drawn (so opening can animate them) but the row that holds them is a closed 0-height row
-    expect(card().querySelector('.rpad')!.getAttribute('data-open')).toBe('0');
-    expect(card().querySelector('.np:has(.rpad[data-open="1"])')).toBeNull();
+  it('More / Less: pressing it toggles the drawer, and a redraw from the house cannot fold it shut again', async () => {
+    const m = await mount({ data: { startOpen: ['destins_room'], remote: [RC] } });
+    const chips = () => card().querySelector('.rchips')!;
+    expect(chips().getAttribute('data-more')).toBe('0');
+    card().querySelector<HTMLElement>('.rapp.more')!.click(); await frame();
+    expect(chips().getAttribute('data-more')).toBe('1');
+    expect(card().querySelector('.rapp.more')!.getAttribute('aria-expanded')).toBe('true');
+    expect(card().querySelector('.rapp.more .nm')!.textContent).toBe('Less');
+    push(m.socks[0], TV, { a: { media_title: 'Another video' } }); await frame();
+    push(m.socks[0], RC, { a: { current_activity: 'com.netflix.ninja' } }); await frame();
+    await tick(6000); // a periodic check too
+    expect(chips().getAttribute('data-more')).toBe('1');
+    card().querySelector<HTMLElement>('.rapp.more')!.click(); await frame();
+    expect(chips().getAttribute('data-more')).toBe('0');
+  });
+
+  it('the drawer\'s sizes are container queries on the TV card (narrow bar, side by side, two thirds wide) and the wide size shows every app with no More', async () => {
+    await mount({ data: { startOpen: ['destins_room'], remote: [RC] } });
+    const css = Array.from(document.querySelectorAll('style')).map((s) => s.textContent).join('\n');
+    expect(css).toMatch(/\.tile\.mv-wide, \.np-ctl\.tv \{ container: tvc \/ inline-size; \}/);
+    for (const w of [400, 460, 650, 900, 1200, 1500, 1800]) expect(css).toContain(`@container tvc (min-width: ${w}px)`);
+    const wide = css.slice(css.indexOf('@container tvc (min-width: 900px)'));
+    expect(wide).toMatch(/grid-template-columns: minmax\(0, 2fr\) minmax\(0, 1fr\)/); // drawer two thirds, pad one third
+    expect(wide).toMatch(/\.rchips \.rapp\.more \{ display: none !important; \}/);
+    expect(css).toMatch(/\.mv-np > \.rchips \{ grid-column: 1;/); // wide: drawer left
+    expect(css).toMatch(/\.mv-np > \.rpad \{ grid-column: 2; align-self: center;/); // wide: pad right, centred up and down
+  });
+
+  it('the drawer sits after the pad in the Media tab\'s now-playing box, so the pad and drawer share one row at medium and wide sizes', async () => {
+    await mount({ data: { view: 'media', remote: [RC] } });
+    const np = card().querySelector('.mv-np')!;
+    expect(Array.from(np.children).map((e) => e.getAttribute('data-slot') ?? e.className.split(' ')[0])).toEqual(['mv-nprow', 'mv-vol', 'pad', 'chips']);
   });
 });

@@ -24,6 +24,7 @@ import { HOME_PENDING_CSS, HOME_PENDING_JS } from './home-assistant-page-pending
 import { HOME_EDIT_CSS, HOME_EDIT_JS } from './home-assistant-page-edit';
 import { HOME_CAMERA_CSS, HOME_CAMERA_JS } from './home-assistant-page-camera';
 import { HOME_TV_JS, HOME_TV_CSS } from './home-assistant-page-tv';
+import { HOME_BG_JS, HOME_BG_CSS } from './home-assistant-page-bg';
 import { HOME_MEDIA_JS, HOME_MEDIA_CSS } from './home-assistant-page-media';
 import { HOME_LIGHTS_JS, HOME_LIGHTS_CSS } from './home-assistant-page-lights';
 import { HOME_LOOK_CSS } from './home-assistant-page-look';
@@ -83,7 +84,7 @@ export const HOME_ASSISTANT_PAGE_JSON = {
 function homeAssistantPageHtml(): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>Home</title>
-<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}${HOME_CAMERA_CSS}${HOME_REDRAW_CSS}${HOME_PENDING_CSS}${HOME_EDIT_CSS}${HOME_LOOK_CSS}${HOME_FEEL_CSS}${HOME_TV_CSS}${HOME_MEDIA_CSS}${HOME_LIGHTS_CSS}</style></head>
+<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}${HOME_CAMERA_CSS}${HOME_REDRAW_CSS}${HOME_PENDING_CSS}${HOME_EDIT_CSS}${HOME_LOOK_CSS}${HOME_FEEL_CSS}${HOME_TV_CSS}${HOME_MEDIA_CSS}${HOME_LIGHTS_CSS}${HOME_BG_CSS}</style></head>
 <body>
 <div class="yc-page yc-stack" id="root">
   <!-- No page title: the app's own bar already names the page, so the
@@ -903,7 +904,7 @@ ${HOME_ICONS_JS}
           var on = pref(r[0]);
           return '<label class="set-row"><span>' + r[1] + '</span><button class="tog" role="switch" aria-checked="' + on + '" data-pref="' + r[0] + '"><span></span></button></label>';
         }).join('') + '</section>';
-    }).join('') + '</div>';
+    }).join('') + bgSectionHtml() + '</div>';
   }
 
   function barHtml() {
@@ -949,7 +950,7 @@ ${HOME_ICONS_JS}
     // focus, held sliders, typed names, hover, transitions and a playing clip survive.
     // WHY motionBefore/After (redesign round 1, motion-nav c): the pop-up's grow and shrink need to see it appear and disappear.
     motionBefore(id, html); mediaHold(); morphInto($(id), html); mediaBack(); motionAfter(id);
-    feelAfter(id); tvAfter(id); ltAfter(); // ltAfter = a colour panel on the Lights tab kept inside its card (home-assistant-page-lights.ts); feel = redesign round 1, motion-state c (home-assistant-page-feel.ts); tvAfter = the TV's app buttons swapping (home-assistant-page-tv.ts)
+    feelAfter(id); ltAfter(); bgAfter(id); // ltAfter = a colour panel on the Lights tab kept inside its card (home-assistant-page-lights.ts); feel = redesign round 1, motion-state c (home-assistant-page-feel.ts); bgAfter = the Background choice and House colours tint (home-assistant-page-bg.ts)
     // Redesign options in the practice app hook each redraw (fixtures/home-variants/).
     if (window.__homeAfterPut) window.__homeAfterPut(id);
   }
@@ -1467,6 +1468,7 @@ ${HOME_PENDING_JS}
 ${HOME_EDIT_JS}
 ${HOME_MOTION_JS}
 ${HOME_FEEL_JS}
+${HOME_BG_JS}
   start();
 })();
 </script>

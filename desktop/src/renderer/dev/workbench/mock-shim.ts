@@ -3782,16 +3782,25 @@ function createPagesMock(empty: boolean): PagesBridge {
   if (onlyCameras || homeView === 'view-cameras' || homeView === 'camera-limited') fakeHomeAssistantNestSignedIn(true); // events need the Nest account working
   if (homeView === 'camera-events') fakeHomeAssistantCameraEvents(true);
   fakeCameraRefuse(homeView === 'camera-limited' ? FAKE_RATE_LIMIT_WHY : null);
-  if (onlyCameras || homeView === 'connected' || homeView === 'edit' || homeView === 'remote' || homeView === 'remote-media' || homeView === 'media-group' || homeView === 'group' || homeView === 'device' || chipView || homeView === 'settings' || chipStyle || mockup || variant) {
+  if (onlyCameras || homeView === 'connected' || homeView === 'edit' || homeView === 'remote' || homeView === 'remote-media' || homeView === 'remote-wide' || homeView === 'bg-frosted' || homeView === 'bg-house' || homeView === 'media-group' || homeView === 'group' || homeView === 'device' || chipView || homeView === 'settings' || chipStyle || mockup || variant) {
     pages = pages.map((p) => (p.id !== 'page-home' ? p : {
       ...p,
-      ...(mockup ? { html: withHomeMockup(p.html, mockup) } : variant ? { html: withHomeVariant(p.html, variant) } : {}),
+      // WHY (screenshots only): the page's first-load rise of room cards runs for about a second, and a picture taken during it misses room cards
+      // 2 and up. The shoot tool sets window.__shootInflight in this window (and nothing else does), so only then is the page's own
+      // __feelOff switch (home-assistant-page-feel.ts) turned on. Destin's live panes and his real app never set it: motion is unchanged.
+      ...(() => {
+        const shooting = typeof (window as unknown as { __shootInflight?: number }).__shootInflight === 'number';
+        const wide = (h: string) => (homeView === 'remote-wide' ? h.replace('</head>', '<style>.yc-page { max-width: none !important; }</style></head>') : h); // remote-wide: the page's own width cap lifted, so a 1900 px window gives a ~1700 px card
+        const still = (h: string) => wide(shooting ? h.replace('<body>', '<body><script>window.__feelOff = true;</script>') : h);
+        return mockup ? { html: still(withHomeMockup(p.html, mockup)) } : variant ? { html: withHomeVariant(p.html, variant) } /* WHY not still(): redesign options carry their own motion switches, and a motion-only option must keep looking different from its 'before' */ : shooting || homeView === 'remote-wide' ? { html: still(p.html) } : {};
+      })(),
       connections: (p.connections ?? []).map((c) => (c.kind === 'device' ? { ...c, address: '100.99.234.114:8123', approved: true, savedKey: true } : c)),
       refresh: { at: new Date().toISOString(), failed: false },
-      data: variant?.data ? variant.data : onlyCameras ? { hidden: fakeHomeAssistantIds().filter((id) => !id.startsWith('camera.')), startOpen: [] } : homeView === 'group' ? { groupOpen: ['media_player.destins_room'] } : homeView === 'device' ? { dlg: 'light.living_room_lamp' } : mockup ? { startOpen: mockup.startsWith('device') ? ['living_room'] : [] } : chipStyle ? { chipStyle, startOpen: ['destins_room'] } : chipView ? { view: chipView, startScenes: ['destins_room'], ...(chipView === 'lights' ? { startOpen: ['destins_room'] } : {}), ...(homeView === 'lights-colour' ? { startPalettes: ['light.desk_backlight'] } : {}) } : homeView === 'settings' ? { settingsOpen: true } : homeView === 'remote' ? { remote: ['remote.destins_room_tv_remote'], startOpen: ['destins_room'], hidden: tvOnly } : homeView === 'remote-media' ? { view: 'media', remote: ['remote.destins_room_tv_remote'] } : homeView === 'media-group' ? { view: 'media' } : {
+      data: variant?.data ? variant.data : onlyCameras ? { hidden: fakeHomeAssistantIds().filter((id) => !id.startsWith('camera.')), startOpen: [] } : homeView === 'group' ? { groupOpen: ['media_player.destins_room'] } : homeView === 'device' ? { dlg: 'light.living_room_lamp' } : mockup ? { startOpen: mockup.startsWith('device') ? ['living_room'] : [] } : chipStyle ? { chipStyle, startOpen: ['destins_room'] } : chipView ? { view: chipView, startScenes: ['destins_room'], ...(chipView === 'lights' ? { startOpen: ['destins_room'] } : {}), ...(homeView === 'lights-colour' ? { startPalettes: ['light.desk_backlight'] } : {}) } : homeView === 'settings' ? { settingsOpen: true } : homeView === 'remote' ? { remote: ['remote.destins_room_tv_remote'], startOpen: ['destins_room'], hidden: tvOnly } : homeView === 'remote-media' ? { view: 'media', remote: ['remote.destins_room_tv_remote'] } : homeView === 'remote-wide' ? { view: 'media', remote: ['remote.destins_room_tv_remote'], hidden: tvOnly } : homeView === 'media-group' ? { view: 'media' } : {
         startOpen: ['destins_room'], startPalettes: ['light.desk_backlight'],
         fav: ['light.living_room_lamp', 'climate.thermostat'],
         ...(homeView === 'edit' ? { editing: true } : {}),
+        ...(homeView === 'bg-frosted' ? { prefs: { bg: 'frosted' } } : homeView === 'bg-house' ? { prefs: { bg: 'house' } } : {}),
       },
     }));
   }

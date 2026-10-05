@@ -21,6 +21,8 @@
 // keeps the elements), so the CSS transition carries on and nothing is cut off or flickers.
 // HOME_TV_JS is pasted INSIDE the page's script. Template string: no backticks, no dollar-brace, no backslashes.
 
+import { HOME_DRAWER_JS, HOME_DRAWER_CSS } from './home-assistant-page-drawer';
+
 export const HOME_TV_JS = `
   // ── Does this TV's app really report play and pause? ─────────────────────
   var playSeen = {};
@@ -83,17 +85,7 @@ export const HOME_TV_JS = `
       k('DPAD_RIGHT', 'Right', ico('<path d="m9 18 6-6-6-6"/>', 22), 'right') + k('DPAD_DOWN', 'Down', ico('<path d="m6 9 6 6 6-6"/>', 22), 'down') +
       '<button class="pk ok" data-rc="' + id + '" data-cmd="DPAD_CENTER" aria-label="OK" title="OK">OK</button></div></div></div>';
   }
-  // Four app buttons from this order; whichever is on the TV right now is replaced, in the same place, by Prime Video.
-  // Drawn always (hidden by CSS until the remote opens) for the same reason as the pad.
-  var RC_ORDER = ['YouTube', 'Netflix', 'HBO Max', 'Disney+'];
-  function tvChipsHtml(r, active) {
-    var id = esc(r.id);
-    var list = RC_ORDER.map(function (n) { return active && active.name === n ? 'Prime Video' : n; });
-    return '<div class="rchips" data-slot="chips"><div class="rchips-in"><div class="rapps">' + list.map(function (n) {
-      var a = APPS.filter(function (x) { return x.name === n; })[0];
-      return '<button class="app rapp" data-rc="' + id + '" data-app="' + esc(a.url) + '" data-name="' + esc(a.name) + '" aria-label="Open ' + esc(a.name) + '"><span class="logo" style="--app:' + a.bg + '">' + a.mark + '</span><span class="nm">' + esc(a.name) + '</span></button>';
-    }).join('') + '</div></div></div>';
-  }
+  // The app buttons are the drawer in home-assistant-page-drawer.ts (tvChipsHtml); it is appended to this script below.
   // A press on a TV key or app button: straight to the TV, no redraw, no re-check, so pressing Down five times is five quick presses.
   function tvPress(t, rcId) {
     var cmd = t.getAttribute('data-cmd'), app = t.getAttribute('data-app');
@@ -113,42 +105,7 @@ export const HOME_TV_JS = `
     call('/api/services/media_player/media_seek', { entity_id: id, seek_position: to })
       .catch(function (e) { banner(e && e.message ? e.message : 'The TV did not get that.', true); });
   }
-  // The app buttons: the one that left slides out and fades while the new one slides in. WHY it compares after each drawing: the
-  // TV tells the page which app is on whenever it likes; remembering the buttons from the previous drawing lets the one that
-  // left be drawn once more as a throw-away copy that fades away. Nothing here lives on the elements the page redraws.
-  var tvSeen = {};
-  function tvSnap(box) {
-    var br = box.getBoundingClientRect();
-    return Array.prototype.map.call(box.children, function (c) { var r = c.getBoundingClientRect(); return { n: c.getAttribute('data-name'), x: r.left - br.left, y: r.top - br.top, w: r.width, html: c.outerHTML }; });
-  }
-  function tvAfter(id) {
-    if (id !== 'rooms' && id !== 'favs' && id !== 'view') return;
-    var seen = {};
-    Array.prototype.forEach.call(document.querySelectorAll('#' + id + ' .rapps'), function (box) {
-      var card = box.closest('[data-eid]'), key = id + ':' + (card ? card.getAttribute('data-eid') : '');
-      var cur = tvSnap(box), was = tvSeen[key];
-      seen[key] = cur;
-      if (!was || !fxCan()) return;
-      var wn = was.map(function (c) { return c.n; }), cn = cur.map(function (c) { return c.n; });
-      if (wn.join('|') === cn.join('|')) return;
-      was.forEach(function (c) {
-        if (cn.indexOf(c.n) >= 0) return;
-        var g = document.createElement('div'); g.innerHTML = c.html; var el = g.firstChild;
-        el.classList.add('ghost'); el.setAttribute('inert', ''); el.setAttribute('aria-hidden', 'true');
-        el.style.left = c.x + 'px'; el.style.top = c.y + 'px'; el.style.width = c.w + 'px';
-        box.appendChild(el);
-        var a = el.animate([{ transform: 'translateX(0)', opacity: 1 }, { transform: 'translateX(-18px)', opacity: 0 }], { duration: 220, easing: 'ease-in' });
-        a.onfinish = a.oncancel = function () { if (el.parentNode) el.parentNode.removeChild(el); };
-      });
-      Array.prototype.forEach.call(box.children, function (el) {
-        if (wn.indexOf(el.getAttribute('data-name')) < 0 && !el.classList.contains('ghost')) el.animate([{ transform: 'translateX(18px)', opacity: 0 }, { transform: 'none', opacity: 1 }], { duration: 320, delay: 110, easing: FX_EASE, fill: 'backwards' });
-      });
-    });
-    // Only this area's boxes were measured; the other areas keep what they had.
-    Object.keys(tvSeen).forEach(function (k) { if (k.indexOf(id + ':') === 0) delete tvSeen[k]; });
-    Object.keys(seen).forEach(function (k) { tvSeen[k] = seen[k]; });
-  }
-`;
+` + HOME_DRAWER_JS;
 
 export const HOME_TV_CSS = `
   /* The remote icon in the header, beside power. Filled with the accent while the remote is open. */
@@ -221,16 +178,12 @@ export const HOME_TV_CSS = `
   .rchips { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 340ms cubic-bezier(.2,.8,.2,1); }
   .rchips-in { min-height: 0; overflow: hidden; }
   .np-ctl:has(.rpad[data-open="1"]) .rchips, .np:has(.rpad[data-open="1"]) .rchips { grid-template-rows: 1fr; }
-  .rapps { position: relative; display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding-top: 12px; opacity: 0; transform: translateY(8px); transition: opacity 200ms ease, transform 200ms ease; }
+  .rapps { position: relative; opacity: 0; transform: translateY(8px); transition: opacity 200ms ease, transform 200ms ease; }
   .np:has(.rpad[data-open="1"]) .rapps { opacity: 1; transform: none; transition: opacity 260ms ease 140ms, transform 300ms cubic-bezier(.2,.8,.2,1) 140ms; }
-  .rapp { padding: 4px 2px; gap: 5px; font-size: 10.5px; }
-  /* "Prime Video" is the one long name: it wraps to two lines instead of being cut off. */
-  .rapp .nm { white-space: normal; text-align: center; line-height: 1.15; overflow-wrap: anywhere; }
   .rapp .logo { width: 40px; height: 40px; border-radius: 12px; font-size: 14px; transition: transform 90ms ease; }
   .rapp:active .logo { transform: scale(.94); }
-  .rapps > .ghost { position: absolute; pointer-events: none; margin: 0; }
   @media (prefers-reduced-motion: reduce) {
     .rpad, .rdial, .rdial .pk, .rdial .pk::before, .rdial .pk .ch, .rdial .ok, .np-keys[data-open] > .key, .rapp .logo, .rchips, .rapps { transition: none !important; animation: none !important; }
     .rdial .pk:not(.ok):hover .ch { transform: none !important; }
   }
-`;
+` + HOME_DRAWER_CSS;
