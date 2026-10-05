@@ -10,6 +10,7 @@ import * as os from 'os';
 // the store imports, so spying here affects the store's calls.
 import { safeStorage } from 'electron';
 import { SecretsStore } from '../src/main/providers/secrets-store';
+import { getSecretStorage } from '../src/main/providers/secret-storage';
 import { KeychainHelperError } from '../src/main/providers/keychain-client';
 
 describe('SecretsStore', () => {
@@ -17,7 +18,7 @@ describe('SecretsStore', () => {
   let store: SecretsStore;
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-secrets-'));
-    store = new SecretsStore(dir);
+    store = new SecretsStore(dir, getSecretStorage());
   });
   afterEach(() => {
     vi.restoreAllMocks(); // undo any isEncryptionAvailable spy

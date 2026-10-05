@@ -23,7 +23,7 @@
 // assistant-thinking / compact-summary / session-error never entered model
 // history live either, so they're skipped here too.
 import * as path from 'path';
-import type { TranscriptEvent } from '../../shared/types';
+import { looseData, type TranscriptEvent } from '../../shared/types';
 import type { ModelMessage, TextPart, ToolCallPart, ToolResultPart } from 'ai';
 import { markAppGenerated } from './compaction';
 import { validatedDeltaReferences } from './session-store';
@@ -55,11 +55,14 @@ export function restorePortableHistory(events: TranscriptEvent[], readImage?: Re
     const index = positions.get(value.anchorUuid);
     if (index === undefined) return -1;
     const anchor = active[index];
+    // WHY the loose view (M5): the anchor is a disk event whose type is only
+    // compared to the (also untrusted) record at runtime, so it is not narrowed.
+    const anchorData = looseData(anchor);
     if (anchor.type !== value.type || !anchor.uuid ||
-        (anchor.data?.partId == null ? value.partId !== undefined :
-          value.partId !== String(anchor.data.partId))) return -1;
-    const coalesced = (anchor.type === 'assistant-text' || anchor.type === 'assistant-thinking') && anchor.data?.partId != null;
-    const length = coalesced ? String(anchor.data?.text ?? '').length : JSON.stringify(anchor.data ?? {}).length;
+        (anchorData.partId == null ? value.partId !== undefined :
+          value.partId !== String(anchorData.partId))) return -1;
+    const coalesced = (anchor.type === 'assistant-text' || anchor.type === 'assistant-thinking') && anchorData.partId != null;
+    const length = coalesced ? String(anchorData.text ?? '').length : JSON.stringify(anchor.data ?? {}).length;
     // A cut can only start/end at a whole persisted part boundary. The exact
     // delta reference is checked against disk witnesses, not a guessed offset.
     if (value.start < 0 || value.end !== length || value.start >= value.end ||

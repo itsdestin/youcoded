@@ -9,7 +9,6 @@ import {
 } from './outbox-format';
 import { getConversationStore, noteFlagChanged, noteSessionNote, emitConversationMetaChanged } from '../conversations/service';
 import { getTagRegistry } from '../conversations/tag-registry-service';
-import { broadcastSessionMeta, broadcastTagsChanged } from '../ipc-handlers';
 import { tagFlagKey, DEFAULT_TAG_COLOR } from '../../shared/tags';
 import { log } from '../logger';
 
@@ -37,7 +36,18 @@ const STORE_DOWN = 'conversation storage is not available right now — retry wi
 
 export function outboxDir(homeRoot: string): string { return path.join(chatsearchDir(homeRoot), 'outbox'); }
 
-export interface ApplyDeps { appVersion: string; today: () => string }
+/** WHY (2026-09-29 one-core R1): the drainer changes flags, notes and tags outside any window's
+ *  handler, so it must tell every window and phone itself. Those pushes belong to the desktop
+ *  door (window registry + remote server), which used to hand them out through module-level
+ *  `let`s in ipc-handlers.ts that were only filled once registerIpcHandlers had run — an order
+ *  trap. They are now an explicit value the caller must supply to startOutboxDrain(). */
+export interface OutboxBroadcast {
+  /** Same push the IPC flag/note handlers fire. */
+  sessionMeta(sessionId: string, payload: { flag: string; value: boolean } | { note: string }): void;
+  /** Same push the TAGS_CREATE handler fires. */
+  tagsChanged(): void;
+}
+export interface ApplyDeps { appVersion: string; today: () => string; broadcast: OutboxBroadcast }
 export interface DrainOpts extends ApplyDeps {
   homeRoot: string; storeRoot: string; isDevInstance: boolean; devOverride?: boolean;
 }
@@ -49,7 +59,7 @@ function writeJsonAtomic(target: string, value: unknown): void {
   fs.renameSync(tmp, target);
 }
 
-async function applyFlag(store: Store, t: OutboxTarget, flagKey: string, value: boolean): Promise<ReceiptResult> {
+async function applyFlag(store: Store, t: OutboxTarget, flagKey: string, value: boolean, broadcast: OutboxBroadcast): Promise<ReceiptResult> {
   const rec = await store.get(t.provider, t.id);
   if (!rec) return { ...t, op: 'flag', status: 'not-found' };
   const current = rec.flags?.[flagKey]?.value === true;
@@ -61,7 +71,7 @@ async function applyFlag(store: Store, t: OutboxTarget, flagKey: string, value: 
   // write the flag into.
   const res = await noteFlagChanged(t.id, flagKey, value, t.provider === 'native');
   if (!res.ok) return { ...t, op: 'flag', status: 'error', error: 'Could not save — conversation storage is not available on this device.' };
-  broadcastSessionMeta(t.id, { flag: flagKey, value });
+  broadcast.sessionMeta(t.id, { flag: flagKey, value });
   return { ...t, op: 'flag', status: 'applied' };
 }
 
@@ -79,7 +89,7 @@ export async function applyOutboxRequest(req: OutboxRequest, deps: ApplyDeps): P
 
   for (const op of req.ops) {
     if (op.op === 'flag') {
-      for (const t of op.targets) results.push(await applyFlag(store, t, op.flag, op.value));
+      for (const t of op.targets) results.push(await applyFlag(store, t, op.flag, op.value, deps.broadcast));
     } else if (op.op === 'note') {
       for (const t of op.targets) {
         const rec = await store.get(t.provider, t.id);
@@ -90,7 +100,7 @@ export async function applyOutboxRequest(req: OutboxRequest, deps: ApplyDeps): P
         if (next === (rec.note ?? '')) { results.push({ ...t, op: 'note', status: 'already' }); continue; }
         const res = await noteSessionNote(t.id, next, t.provider === 'native');
         if (!res.ok) { results.push({ ...t, op: 'note', status: 'error', error: 'Could not save — conversation storage is not available on this device.' }); continue; }
-        broadcastSessionMeta(t.id, { note: next });
+        deps.broadcast.sessionMeta(t.id, { note: next });
         results.push({ ...t, op: 'note', status: 'applied' });
       }
     } else if (op.op === 'tag') {
@@ -119,7 +129,7 @@ export async function applyOutboxRequest(req: OutboxRequest, deps: ApplyDeps): P
       for (const t of op.targets) {
         let worst: ReceiptResult | null = null; let applied = false;
         for (const [tag, value] of [...adds.map((a) => [a, true] as const), ...removes.map((r) => [r, false] as const)]) {
-          const r = await applyFlag(store, t, tagFlagKey(tag.id), value);
+          const r = await applyFlag(store, t, tagFlagKey(tag.id), value, deps.broadcast);
           if (r.status === 'applied') applied = true;
           if (r.status === 'not-found' || r.status === 'error') { worst = { ...r, op: 'tag' }; break; }
         }
@@ -134,7 +144,7 @@ export async function applyOutboxRequest(req: OutboxRequest, deps: ApplyDeps): P
   // registry and filter list until a restart, even though the conversation
   // already shows the tag flag. Fired once per REQUEST (not per op, not per
   // tag), matching emitConversationMetaChanged's discipline above.
-  if (createdTags.length > 0) broadcastTagsChanged();
+  if (createdTags.length > 0) deps.broadcast.tagsChanged();
   return receipt();
 }
 
@@ -287,10 +297,16 @@ const STORE_WAIT_TRIES = 120;
 // the exact failure the dev-instance gate exists to prevent. Exporting this
 // seam lets tests call it directly instead of only through drainOutboxOnce's
 // hand-built opts.
+let doorBroadcast: OutboxBroadcast | null = null;
+// Only reachable when liveOpts()/drainSerialized() run without startOutboxDrain() (unit tests):
+// in the app every drain starts from startOutboxDrain(broadcast).
+const NO_BROADCAST: OutboxBroadcast = { sessionMeta: () => {}, tagsChanged: () => {} };
+
 export function liveOpts(): DrainOpts | null {
   const store = getConversationStore();
   if (!store) return null;
   return {
+    broadcast: doorBroadcast ?? NO_BROADCAST,
     homeRoot: os.homedir(), storeRoot: store.root(),
     isDevInstance: !!process.env.YOUCODED_PROFILE, devOverride: process.env.YOUCODED_CHATSEARCH_OUTBOX === '1',
     appVersion: app?.getVersion?.() ?? 'dev', today: () => new Date().toISOString().slice(0, 10),
@@ -325,8 +341,9 @@ function drainWhenStoreReady(triesLeft: number): void {
   storeWaitTimer.unref?.();
 }
 
-export function startOutboxDrain(): void {
+export function startOutboxDrain(broadcast: OutboxBroadcast): void {
   stopOutboxDrain();
+  doorBroadcast = broadcast;
   const home = os.homedir();
   const dir = outboxDir(home);
   try { fs.mkdirSync(dir, { recursive: true }); } catch { /* drain will no-op */ }
@@ -350,6 +367,7 @@ export function startOutboxDrain(): void {
 }
 
 export function stopOutboxDrain(): void {
+  doorBroadcast = null;
   watcher?.close(); watcher = null;
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   if (sweepTimer) { clearInterval(sweepTimer); sweepTimer = null; }

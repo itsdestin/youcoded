@@ -1,3 +1,4 @@
+import { isPhoneDeniedFile } from './phone-read-deny';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -105,11 +106,11 @@ async function discoverContextGroups(projectPath: string): Promise<ContextGroup[
   return groups;
 }
 
-export async function listContext(projectPath: string): Promise<ContextGroup[]> {
+export async function listContext(projectPath: string, opts?: { refusePrivate?: boolean }): Promise<ContextGroup[]> {
   const groups = await discoverContextGroups(projectPath);
   // Enrich each file with a one-line description + formatted size for the rows
   // (the prototype's ctxRow shows both). Cheap — a handful of files per project.
-  await Promise.all(groups.flatMap((g) => g.files).map(enrichContextFile));
+  await Promise.all(groups.flatMap((g) => g.files).map((f) => enrichContextFile(f, opts)));
   return groups;
 }
 
@@ -139,7 +140,10 @@ function deriveDescription(headRaw: string): string | undefined {
   return undefined;
 }
 
-async function enrichContextFile(f: ContextFile): Promise<void> {
+async function enrichContextFile(f: ContextFile, opts?: { refusePrivate?: boolean }): Promise<void> {
+  // WHY (2026-10-01 one-core R3-SEC review): the first line is read to describe the row; for a phone, a context file that
+  // is really a link to a secret is not opened at all (the row keeps its name, with no size or description).
+  if (opts?.refusePrivate && await isPhoneDeniedFile(f.absolutePath)) return;
   try {
     const stat = await fs.promises.stat(f.absolutePath);
     f.size = formatBytes(stat.size);

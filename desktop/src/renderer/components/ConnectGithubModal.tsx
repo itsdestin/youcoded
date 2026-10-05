@@ -10,7 +10,7 @@
 // (shell.openExternal on Electron; a copyable link on remote — see below).
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useEscClose } from '../hooks/use-esc-close';
-import { getPlatform } from '../platform';
+import { getCapabilities } from '../platform';
 import { Button, Dialog } from './ui';
 
 type Stage = 'checking' | 'gh-missing' | 'code' | 'done' | 'error';
@@ -48,7 +48,8 @@ interface InstallResult {
 
 export default function ConnectGithubModal({ onClose, onConnected }: Props) {
   const gh = (window as any).claude?.github;
-  const isElectron = getPlatform() === 'electron';
+  // R4-1: `openExternal` capability (can this screen open the computer's browser), not a platform-name guess.
+  const canOpenBrowser = getCapabilities().openExternal;
 
   const [stage, setStage] = useState<Stage>('checking');
   const [code, setCode] = useState<ConnectCode | null>(null);
@@ -291,7 +292,7 @@ export default function ConnectGithubModal({ onClose, onConnected }: Props) {
                   </Button>
                 </div>
 
-                {isElectron ? (
+                {canOpenBrowser ? (
                   // Desktop — open the OS browser directly. lg: this is the one
                   // thing to do on this screen, and it had no hover state at all.
                   <Button size="lg" onClick={openVerificationUrl} className="w-full">

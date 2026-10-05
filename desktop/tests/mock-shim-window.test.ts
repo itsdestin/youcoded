@@ -132,8 +132,7 @@ describe('mock contract', () => {
   // ast-grep rule or type can express. readSource strips Windows line endings first.
   const preload = readSource(join(__dirname, '../src/main/preload.ts'));
   // remote-shim is the OTHER real implementation of window.claude — a handful of
-  // channels (on.chatHydrate) exist only there, because Electron clients get the
-  // same data from the transcript watcher. "Mirrors something real" has to mean
+  // channels can exist only there (a remote-only push). "Mirrors something real" has to mean
   // either file, or the mock would be forced to declare a real channel MOCK_ONLY.
   const remoteShim = readSource(join(__dirname, '../src/renderer/remote-shim.ts'));
   const mockOnly = new Set(MOCK_ONLY.map((m) => m.channel));
@@ -174,14 +173,14 @@ describe('mock contract', () => {
     return end < 0 ? remoteShim.slice(start) : remoteShim.slice(start, end);
   }
 
-  /** `'on.chatHydrate'` -> is there a `chatHydrate` inside remote-shim's `on` block?
+  /** `'on.something'` -> is there a `something` inside remote-shim's `on` block?
    *
    *  WHY namespace-scoped and not a bare leaf match (which is what this was until
    *  2026-08-11): a leaf regex reports `permissions.list` as REAL because some
    *  other namespace happens to have a `list:`. That false positive made the
    *  MOCK_ONLY staleness check below fail the moment MOCK_ONLY got its first
    *  entries — the check would have kept firing for any future `*.list` or
-   *  `*.remove` channel too. Scoping is strictly stronger; `on.chatHydrate`, the
+   *  `*.remove` channel too. Scoping is strictly stronger; `on.something`, the
    *  one channel that legitimately relies on this fallback, still resolves. */
   function existsInRemoteShim(path: string): boolean {
     const parts = path.split('.');
@@ -216,12 +215,12 @@ describe('mock contract', () => {
 
     // What this protects: remote-shim's namespace scoping, which the fallback and
     // MOCK_ONLY staleness cases below rely on. It pins product facts about
-    // remote-shim.ts — on.chatHydrate (remote-only), providers.list and
+    // remote-shim.ts — session.open (both bridges), providers.list and
     // permissions.list are exposed; there is no notifications namespace — so a
     // scan that resolved nothing, or matched a leaf in the wrong namespace, fails
     // here instead of letting those cases pass vacuously.
     it('the remote-shim scan actually resolves known channels', () => {
-      expect(existsInRemoteShim('on.chatHydrate')).toBe(true);
+      expect(existsInRemoteShim('session.open')).toBe(true);
       expect(existsInRemoteShim('providers.list')).toBe(true);
       expect(existsInRemoteShim('on.thisDoesNotExist')).toBe(false);
       // The false positive that scoping exists to kill. This probe used to be
@@ -248,7 +247,7 @@ describe('mock contract', () => {
     // passing on a leaf match that the namespace-scoped scan would have caught.
     it('only the known channels fall back to remote-shim', () => {
       const shimOnly = HAND_WRITTEN.filter((p) => !existsInPreload(p) && existsInRemoteShim(p));
-      expect(shimOnly).toEqual(['on.chatHydrate']);
+      expect(shimOnly).toEqual([]);
     });
 
     // A stale registry is worse than none — it would keep claiming a feature is

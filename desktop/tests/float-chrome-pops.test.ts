@@ -222,7 +222,7 @@ describe('the approved float look', () => {
   it('fades messages with a wallpaper copy above the transcript, never a mask on it', () => {
     const css = floatCSS();
     const view = readSource(join(RENDERER, 'components/ChatView.tsx'));
-    expect(view).toContain('visible && <ChatEdgeFade belowFindRow={findOpen || !!stripStatus} />');
+    expect(view).toContain('visible && <ChatEdgeFade belowFindRow={findOpen || !!shownStrip} />');
     // A mask on any bubble ancestor creates a backdrop root and kills bubble glass.
     expect(css).not.toMatch(/\.chat-scroll[^{}]*\{[^}]*mask-image:/s);
     expect(css).toMatch(/\.chat-edge-fade \{[^}]*pointer-events: none/s);

@@ -23,7 +23,7 @@ import { useArtifactSelector, useArtifactDispatch } from '../state/ArtifactConte
 import { SessionDrawer } from './SessionDrawer';
 import { useActiveProject } from '../hooks/useActiveProject';
 import { assistantName } from '../utils/assistant-name';
-import { ContentFindBar } from './ContentFindBar';
+import { ChatFindBar } from './ChatFindBar';
 import { isTypingTarget } from '../utils/is-typing-target';
 import { CardKeysLiveContext } from '../state/card-keys-context';
 import { OnScreenContext } from '../state/on-screen-context';
@@ -98,12 +98,16 @@ interface Props {
   conversationStatus?: 'reconnecting' | 'restoring' | 'incomplete' | 'complete';
   /** Asks the host for a fresh copy — the strip's Refresh. */
   onRefreshConversation?: () => void;
+  /** A phone is filling this conversation right now, or is about to (it was just switched to and is not watched yet). While the
+   *  conversation has no content yet, the screen says it is catching up instead of drawing an empty conversation (one-core R5-3).
+   *  Never set on the computer. */
+  filling?: boolean;
   /** Fake local-model state solely for the workbench width review; no engine. */
   modelLoadingDemo?: boolean;
 }
 
 // Memoised at the bottom of the file — see the WHY there.
-function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onAddCredit, onCancelQueued, onEditQueued, onSendQueuedNow, conversationStatus, onRefreshConversation, modelLoadingDemo }: Props) {
+function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onAddCredit, onCancelQueued, onEditQueued, onSendQueuedNow, conversationStatus, onRefreshConversation, filling, modelLoadingDemo }: Props) {
   const state = useChatState(sessionId, { paused: !visible }); // WHY paused: hidden, it redrew per streamed word; live again on show (see useChatState)
   const dispatch = useChatDispatch();
 
@@ -127,6 +131,11 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     }
     setStripStatus(conversationStatus ?? null);
   }, [conversationStatus]);
+  // WHY (one-core R5-3): a phone watches only a few conversations, so switching to one it has not opened means its content is still
+  // on its way. Until some arrives, show the SAME "Catching up with your computer…" strip a reconnect shows (no new copy) and not the
+  // "Start a conversation" hint, which would claim a conversation with history is empty for the moment the fill takes.
+  const waitingForFill = !!filling && state.timeline.length === 0;
+  const shownStrip = stripStatus ?? (waitingForFill ? 'restoring' : null);
   const { showTimestamps, reducedEffects } = useTheme();
 
   // Motion on a SESSION SWITCH only.
@@ -282,11 +291,17 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
 
   // Scroll to bottom on tab switch / mount. The follow-up ResizeObserver below
   // handles the chrome-height race (input bar can differ per session).
+  const wasVisibleRef = useRef(visible);
   useEffect(() => {
+    const returned = visible && !wasVisibleRef.current;
+    wasVisibleRef.current = visible;
     if (!visible) return;
-    const raf = requestAnimationFrame(stickToBottom);
+    if (returned) stickToBottom();
+    // WHY: a mount/switch RAF can outlive the Find selection that released
+    // bottom-stick. Re-arm on an actual tab return, not from that stale RAF.
+    const raf = requestAnimationFrame(() => { if (stickRef.current) scrollToBottom(); });
     return () => cancelAnimationFrame(raf);
-  }, [visible, stickToBottom]);
+  }, [visible, stickToBottom, scrollToBottom, stickRef]);
 
   // Fix: input bar height can differ between sessions (drafts, multi-line),
   // so --bottom-chrome-height changes right after tab switch. App's ResizeObserver
@@ -527,9 +542,12 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     let lastHeight = node.scrollHeight;
     const observer = new ResizeObserver(() => {
       const next = node.scrollHeight;
-      if (next > lastHeight && stickRef.current) {
-        scrollToBottom();
-      }
+      // WHY: private long-history tool arrival showed a transient +516px
+      // content resize followed by a shrink. Scroll anchoring moved scrollTop
+      // 289px up on the shrink, but growth-only pinning left stickRef=true and
+      // hid Jump while the new tool card sat below the viewport. RO runs after
+      // layout; re-pin on BOTH directions, never on unchanged streaming deltas.
+      if (next !== lastHeight && stickRef.current) scrollToBottom();
       lastHeight = next;
     });
     observer.observe(node);
@@ -572,15 +590,14 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // height they last occupied, instead of their full body. Nothing leaves the
   // reducer — see use-entry-folding.ts for why eviction was rejected on review.
   //
-  // Suspended while the find bar is open: ContentFindBar finds text by walking
-  // the DOM, so a folded entry would be unfindable and the user would be told
-  // "0 results" for text that is in their conversation.
+  // WHY: source-backed Find keeps the ordinary fold budget; only the selected
+  // row is revealed and pinned while its message-body Range is in use.
   //
   // `sessionActive` (2026-09-18): a background pane is content-visibility:hidden,
   // which reads to the folding observer as "everything scrolled away". Telling
   // it the pane is merely in the background is what stops a tab you left a
   // moment ago from being blank when you come back — see INACTIVE_FOLD_MS.
-  const folding = useEntryFolding(!findOpen, scrollContainerRef, sessionActive);
+  const folding = useEntryFolding(true, scrollContainerRef, sessionActive);
 
   // Scroll, unfold and re-frost BEFORE the first painted frame of a switch —
   // the three reasons messages popped in. WHY per step: the hook's header.
@@ -869,6 +886,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
       // stable across toggles — no reflow, no flash, and focus/IME survive.
       // `inert` removes hidden subtree from tab order + a11y tree.
       ref={chatRootRef}
+      // WHY: strip pills can overflow/reorder independently of App's mounted panes;
+      // a stable DOM identity lets private diagnostics confirm the actual visible chat.
+      data-chat-session-id={sessionId}
       inert={!visible}
       aria-hidden={visible ? undefined : true}
       style={{
@@ -921,10 +941,10 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
         <div className="frame-edge" />
         <div className="chat-pane">
           {visible && <ScreenMark name="chat" />}
-          {visible && <ChatEdgeFade belowFindRow={findOpen || !!stripStatus} />}
+          {visible && <ChatEdgeFade belowFindRow={findOpen || !!shownStrip} />}
           {/* Center the hint between measured chrome edges, clearing even a
               floating header's extra margin. Use the actual provider name. */}
-          {state.timeline.length === 0 && !state.isThinking && (
+          {state.timeline.length === 0 && !state.isThinking && !waitingForFill && (
             <div
               // select-none: a hint, not content. Ctrl+A must not paint it
               // (Destin, 2026-09-10).
@@ -944,13 +964,15 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               down while the bar is open and back when it closes. `.find-row`'s
               top margin clears the overlaid header (globals.css). */}
           {findOpen && (
-            <ContentFindBar
-              layout="row"
-              containerRef={contentRef}
+            <ChatFindBar
+              state={state}
+              sessionId={sessionId}
+              contentRef={contentRef}
               scrollRef={scrollContainerRef}
-              highlightName="chat-find"
-              placeholder="Find in chat"
-              resetKey={sessionId}
+              getEntryEl={getEntryEl}
+              revealAndPin={folding.revealAndPin}
+              unfoldNearViewport={folding.unfoldNearViewport}
+              releaseStick={releaseStick}
               onClose={() => setFindOpen(false)}
             />
           )}
@@ -961,9 +983,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               top of the scroll content was never on screen (measured 2026-09-10).
               `.find-row` clears the overlaid header the same way. Desktop never
               sets the prop, so nothing changes there. */}
-          {stripStatus && (
-            <div className={`find-row px-3 pb-2 shrink-0${findOpen ? ' !mt-0' : ''}`} data-conversation-status={stripStatus}>
-              {stripStatus === 'incomplete' ? (
+          {shownStrip && (
+            <div className={`find-row px-3 pb-2 shrink-0${findOpen ? ' !mt-0' : ''}`} data-conversation-status={shownStrip}>
+              {shownStrip === 'incomplete' ? (
                 // Wording per the first phone tester (U11, 2026-09-10): "behind
                 // your computer" read as a place, not a time.
                 <StatusStrip
@@ -973,11 +995,11 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
                 >
                   This conversation may be out of date.
                 </StatusStrip>
-              ) : stripStatus === 'reconnecting' ? (
+              ) : shownStrip === 'reconnecting' ? (
                 <StatusStrip tone="busy" detail="Your draft is safe. It sends once you’re reconnected.">
                   Reconnecting to your computer…
                 </StatusStrip>
-              ) : stripStatus === 'restoring' ? (
+              ) : shownStrip === 'restoring' ? (
                 // No draft line here: the connection IS back (tester U8).
                 <StatusStrip tone="busy" detail="Loading the newest messages…">
                   Catching up with your computer…
@@ -995,7 +1017,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               drops the header-clearing padding-top while the row is open —
               the content no longer starts under the header, it starts under
               the row. */}
-          <div ref={scrollContainerRef} className={`chat-scroll flex-1 min-h-0 overflow-y-auto${findOpen || stripStatus ? ' chat-scroll--below-find-row' : ''}`}>
+          <div ref={scrollContainerRef} className={`chat-scroll flex-1 min-h-0 overflow-y-auto${findOpen || shownStrip ? ' chat-scroll--below-find-row' : ''}`}>
            {/* The arrival class is on the CONTENT wrapper, not the scroller:
                animating transform on the scroll container would make it a
                containing block and disturb useStickToBottom's measurements. */}

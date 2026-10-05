@@ -27,6 +27,7 @@ vi.mock('electron', () => {
 });
 
 import { registerIpcHandlers } from '../src/main/ipc-handlers';
+import { registerWithRuntime } from './helpers/register-ipc';
 import { EDIT_MAX_BYTES, FULL_READ_MAX_BYTES } from '../src/shared/artifacts/editable-path-policy';
 
 let root: string;
@@ -43,7 +44,7 @@ function getHandler() {
     install: vi.fn(), installMany: vi.fn(),
     ensureBundledPluginsInstalled: vi.fn(), ensureMigrated: vi.fn(),
   };
-  registerIpcHandlers(mockIpcMain, mockSessionManager, mockWindow, mockSkillProvider);
+  registerWithRuntime(registerIpcHandlers, mockIpcMain, mockSessionManager, mockWindow, mockSkillProvider);
   return mockIpcMain.handle.mock.calls.find((c: any) => c[0] === 'artifacts:get')[1];
 }
 
@@ -70,7 +71,7 @@ describe('artifacts:get above EDIT_MAX_BYTES', () => {
     const id = writeFile('big.log', Buffer.from(line.repeat(Math.ceil(size / line.length))));
     const onDisk = fs.statSync(path.join(root, 'big.log')).size;
 
-    const res = await getHandler()({}, root, id);
+    const res = await getHandler()({}, { projectRoot: root, artifactId: id });
     expect(res.ok).toBe(true);
     expect(res.truncated).toBe(true);
     expect(res.binary).toBe(false);
@@ -89,7 +90,7 @@ describe('artifacts:get above EDIT_MAX_BYTES', () => {
     buf[10] = 0; // a NUL in the head
     const id = writeFile('blob.dat', buf);
 
-    const res = await getHandler()({}, root, id);
+    const res = await getHandler()({}, { projectRoot: root, artifactId: id });
     expect(res.binary).toBe(true);
     expect(res.content).toBeNull();
     expect(res.truncated).toBe(false);
@@ -101,7 +102,7 @@ describe('artifacts:get above EDIT_MAX_BYTES', () => {
     const buf = Buffer.from(line.repeat(Math.ceil((EDIT_MAX_BYTES + 5000) / line.length)));
     const id = writeFile('big2.log', buf);
 
-    const res = await getHandler()({}, root, id, { full: true });
+    const res = await getHandler()({}, { projectRoot: root, artifactId: id, full: true });
     expect(res.truncated).toBe(false);
     expect(res.content.length).toBe(buf.length);
     expect(res.sizeBytes).toBe(buf.length);
@@ -114,14 +115,14 @@ describe('artifacts:get above EDIT_MAX_BYTES', () => {
     const buf = Buffer.from(line.repeat(Math.ceil((FULL_READ_MAX_BYTES + 5000) / line.length)));
     const id = writeFile('huge.log', buf);
 
-    const res = await getHandler()({}, root, id, { full: true });
+    const res = await getHandler()({}, { projectRoot: root, artifactId: id, full: true });
     expect(res.truncated).toBe(true);
     expect(res.content.length).toBeLessThanOrEqual(EDIT_MAX_BYTES);
   });
 
   it('leaves an under-cap file alone but still stamps size and truncated', async () => {
     const id = writeFile('small.txt', Buffer.from('hello\nworld\n'));
-    const res = await getHandler()({}, root, id);
+    const res = await getHandler()({}, { projectRoot: root, artifactId: id });
     expect(res.content).toBe('hello\nworld\n');
     expect(res.truncated).toBe(false);
     expect(res.sizeBytes).toBe(12);

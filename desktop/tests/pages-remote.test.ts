@@ -1,4 +1,4 @@
-// A remote browser's live sockets: owned by that client alone, pushed to it
+// A remote browser's live sockets (the table entries in main/ipc/pages.ts, served by the phone door's serveRemoteChannel): owned by that client alone, pushed to it
 // alone, closed when it drops, and reported closed by the shim when ITS
 // connection to the computer drops.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -8,9 +8,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import WebSocket from 'ws';
 import { SecretsStore } from '../src/main/providers/secrets-store';
+import { getSecretStorage } from '../src/main/providers/secret-storage';
 import { PageConnectionsStore } from '../src/main/pages/connections-store';
 import { initPagesService } from '../src/main/pages/pages-service';
-import { handlePagesMessage, sendToClient, clientOwnerKey, type RemotePagesClient } from '../src/main/pages/pages-remote';
+import { sendToClient, clientOwnerKey, type RemotePagesClient } from '../src/main/pages/page-owner';
+import { findChannel, serveRemoteChannel } from '../src/main/ipc/channel-table';
 import { LIVE_LIMITS, type LiveWsLike } from '../src/main/pages/page-live-socket';
 import { createRemotePagesBridge } from '../src/renderer/remote-pages-bridge';
 import type { PageSocketEvent } from '../src/shared/pages-types';
@@ -36,7 +38,7 @@ beforeEach(async () => {
   wss = [];
   service = initPagesService({
     personalRoot: () => personal, listProjects: async () => [], deviceId: () => 'dev-1', localFallbackDir: () => path.join(root, 'local'),
-    connections: new PageConnectionsStore(userData, new SecretsStore(userData)), broadcast: () => {},
+    connections: new PageConnectionsStore(userData, new SecretsStore(userData, getSecretStorage())), broadcast: () => {},
     lookup: async () => { throw new Error('no DNS'); },
     liveSocketConnect: () => { const w = new FakeWs(); wss.push(w); return w as unknown as LiveWsLike; },
   });
@@ -48,17 +50,23 @@ beforeEach(async () => {
 });
 afterEach(() => { service.stop(); rmSync(root, { recursive: true, force: true, maxRetries: 3 }); });
 
+// Runs a pages:* request the way remote-server.ts does: look the entry up, serve it with THIS client's context.
 const ask = async (client: RemotePagesClient, type: string, payload: unknown) => {
-  let answer: any;
-  expect(await handlePagesMessage(client, type, payload, (a) => { answer = a; })).toBe(true);
-  return answer;
+  const def = findChannel(type);
+  expect(def, `${type} has no table entry`).toBeTruthy();
+  const out = await serveRemoteChannel(def!, payload, {
+    door: 'remote', runtime: null, clientId: client.id, broadcast: () => {},
+    remote: { pageSocketPush: (e: PageSocketEvent) => sendToClient(client, e) } as never,
+  });
+  expect(out.reply).toBe(true);
+  return (out as { payload: any }).payload;
 };
 
 describe('the remote host\'s live sockets', () => {
   it('belongs to the client that opened it: another client cannot send, ping or close it', async () => {
     const a = fakeClient('A'); const b = fakeClient('B');
     const opened = await ask(a.client, 'pages:socket-open', { page: 'personal:home', frame: 'f', url: URL_HA });
-    expect(opened.ok).toBe(true);
+    expect(opened, JSON.stringify(opened)).toMatchObject({ ok: true });
     wss[0].emit('open');
     const mine = { page: 'personal:home', frame: 'f', socket: opened.socket };
     expect((await ask(b.client, 'pages:socket-send', { ...mine, text: '{"type":"ping"}' })).ok).toBe(false);
@@ -112,10 +120,11 @@ describe('the remote host\'s live sockets', () => {
     expect(service.sockets.count).toBe(0);
   });
 
-  it('leaves other pages:* types to their own answers and refuses nothing it does not know', async () => {
-    let answered = false;
-    expect(await handlePagesMessage(fakeClient('A').client, 'pages:nope', {}, () => { answered = true; })).toBe(false);
-    expect(answered).toBe(false);
+  it('answers a socket call with a soft failure, never a hang, when the host cannot say which phone asked', async () => {
+    const def = findChannel('pages:socket-open')!;
+    const out = await serveRemoteChannel(def, { page: 'personal:home', frame: 'f', url: URL_HA }, { door: 'remote', runtime: null, broadcast: () => {} } as never);
+    expect(out).toMatchObject({ reply: true, payload: { ok: false } });
+    expect(service.sockets.count).toBe(0);
   });
 });
 

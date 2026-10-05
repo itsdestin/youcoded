@@ -7,14 +7,8 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
-export interface SavedFolder {
-  path: string;
-  nickname: string;
-  addedAt: number;
-  // Local-only description. A plain folder has nothing to sync it to — the
-  // synced equivalent lives in the project registry (project-registry.ts).
-  description?: string | null;
-}
+import type { SavedFolder } from '../shared/prefs-types';
+export type { SavedFolder };
 
 function foldersFilePath(): string {
   return path.join(os.homedir(), '.claude', 'youcoded-folders.json');

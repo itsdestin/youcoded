@@ -53,3 +53,14 @@ export interface UpdateCachedDownload {
   filePath: string;
   version: string;
 }
+
+// WHY (2026-09-30 one-core R3-2): the beta-channel answer and the changelog answer were typed
+// inline in the window.claude type; the channel table's rows now share these.
+/** `betaChannel` is the saved answer (null = never chosen); `effective` is what the next check uses. */
+export interface UpdateBetaChannelState { betaChannel: boolean | null; effective: boolean }
+export interface UpdateChangelogResult {
+  markdown: string | null;
+  entries: Array<{ version: string; date?: string; body: string }>;
+  fromCache: boolean;
+  error?: boolean;
+}

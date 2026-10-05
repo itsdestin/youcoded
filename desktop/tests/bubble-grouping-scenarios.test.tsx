@@ -84,7 +84,7 @@ function toAction(ev: Ev): ChatAction {
     case 'reason': return { type: 'TRANSCRIPT_ASSISTANT_REASONING', sessionId: S, uuid: `u${t}`, text: ev[1], timestamp: t, partId: ev[2] };
     case 'text': return { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: S, uuid: `u${t}`, text: ev[1], timestamp: t, partId: ev[2] };
     case 'prep': return { type: 'NATIVE_TOOL_PREPARING', sessionId: S, toolCallId: ev[1], toolName: ev[2], chars: 0 };
-    case 'tool': return { type: 'TRANSCRIPT_TOOL_USE', sessionId: S, uuid: `u${t}`, toolUseId: ev[1], toolName: ev[2], toolInput: ev[3] ?? {} };
+    case 'tool': return { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: S, uuid: `u${t}`, toolUseId: ev[1], toolName: ev[2], toolInput: ev[3] ?? {} };
     case 'result': return { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: S, uuid: `u${t}`, toolUseId: ev[1], result: ev[2] ?? 'ok', isError: ev[3] ?? false };
     case 'ask': return { type: 'PERMISSION_REQUEST', sessionId: S, toolName: ev[2], input: ev[3], requestId: ev[1] };
     case 'answered': return { type: 'PERMISSION_RESPONDED', sessionId: S, requestId: ev[1] };
@@ -122,7 +122,10 @@ function signature(events: Ev[]): string[] {
       const tokens: string[] = [];
       for (const child of b.children) {
         if (child.matches('.mb-2') && /(Show|Hide) reasoning/.test(child.textContent ?? '')) { tokens.push('R'); continue; }
-        if (child.matches('[data-md]')) { tokens.push((child.textContent ?? '').trim() ? 'T' : 'T∅'); continue; }
+        // Message-only Find's display:contents marker wraps markdown without changing its visual place.
+        if (child.matches('[data-md]') || child.matches('[data-message-find-body]') && child.querySelector('[data-md]')) {
+          tokens.push((child.textContent ?? '').trim() ? 'T' : 'T∅'); continue;
+        }
         // ToolGroupInline's root is `.my-0\.5`; the trailing skill row is `.mt-1.space-y-0.5`.
         if (child.matches('.my-0\\.5')) {
           const names = [...child.querySelectorAll('[data-tool]')].map((el) => el.getAttribute('data-tool'));

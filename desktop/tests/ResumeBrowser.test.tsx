@@ -27,6 +27,7 @@ import { claudeAliasForModelId, isPlaceholderModelId } from '../src/shared/model
 import { previewPage } from './helpers/preview-page';
 import { installFiringIntersectionObserver } from './helpers/firing-intersection-observer';
 import { REVEAL_CHUNK } from '../src/renderer/hooks/use-chunked-reveal';
+import { DESKTOP_WINDOW_CAPABILITIES } from '../src/shared/capabilities';
 
 beforeAll(() => {
   if (typeof window.ResizeObserver === 'undefined') {
@@ -91,6 +92,7 @@ describe('model prefill for Claude Code rows', () => {
 
   function mockWindowClaude(sessions: any[]) {
     (window as any).claude = {
+      capabilities: DESKTOP_WINDOW_CAPABILITIES, // these tests model the computer's own window
       session: {
         browse: vi.fn().mockResolvedValue(sessions),
         setFlag: vi.fn().mockResolvedValue({ ok: true }),
@@ -269,6 +271,7 @@ describe('speed', () => {
   function mockClaude(sessions: any[]) {
     const read = vi.fn(async (req: { id: string }) => previewPage(req.id, [`text of ${req.id}`]));
     (window as any).claude = {
+      capabilities: DESKTOP_WINDOW_CAPABILITIES, // these tests model the computer's own window
       session: {
         browse: vi.fn().mockResolvedValue(sessions),
         setFlag: vi.fn().mockResolvedValue({ ok: true }),
@@ -434,6 +437,7 @@ describe('native resume', () => {
 
   function mockWindowClaude(sessions: any[]) {
     (window as any).claude = {
+      capabilities: DESKTOP_WINDOW_CAPABILITIES, // these tests model the computer's own window
       session: {
         browse: vi.fn().mockResolvedValue(sessions),
         setFlag: vi.fn().mockResolvedValue({ ok: true }),
@@ -633,6 +637,7 @@ describe('organizing', () => {
 
   function mockWindowClaude(sessions: any[] = [row()]) {
     (window as any).claude = {
+      capabilities: DESKTOP_WINDOW_CAPABILITIES, // these tests model the computer's own window
       session: {
         browse: vi.fn().mockResolvedValue(sessions),
         setFlag: vi.fn().mockResolvedValue({ ok: true }),
@@ -827,6 +832,7 @@ describe('preview panel', () => {
 
   function mockClaude(sessions: any[]) {
     (window as any).claude = {
+      capabilities: DESKTOP_WINDOW_CAPABILITIES, // these tests model the computer's own window
       session: {
         browse: vi.fn().mockResolvedValue(sessions),
         setFlag: vi.fn().mockResolvedValue({ ok: true }),
@@ -1007,6 +1013,7 @@ describe('ResumeBrowser — a slow load says so', () => {
     vi.useFakeTimers();
     const browse = vi.fn(() => new Promise(() => {}));        // never answers
     (window as any).claude = {
+      capabilities: DESKTOP_WINDOW_CAPABILITIES, // these tests model the computer's own window
       session: { browse, setFlag: vi.fn(), setTag: vi.fn(), setNote: vi.fn() },
       tags: { list: vi.fn().mockResolvedValue([]) },
       providers: { catalog: vi.fn().mockResolvedValue([]), list: vi.fn().mockResolvedValue([]) },

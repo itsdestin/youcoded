@@ -142,6 +142,22 @@ export interface MascotCompanion {
   ghost?: boolean;
 }
 
+/** A theme's extra app-icon files (manifest `appIconVariants`). Paths are relative in the manifest
+ *  and theme-asset:// URIs once loaded, like `appIcon`. */
+export interface ThemeAppIconVariants {
+  /** Windows taskbar: a multi-size .ico, so 16–32px get their own sharper drawings. */
+  windows?: string;
+  /** Mac Dock in the Dark and Clear icon looks: the face on see-through glass (brand round 28). */
+  macGlass?: string;
+  /** Tray icon on Windows and Linux, and its "needs you" twin with the red dot. */
+  tray?: string;
+  trayAlert?: string;
+  /** The @2x twins of the tray files. Never read by the app — Electron finds `tray@2x.png` beside
+   *  `tray.png` on its own — but the marketplace only downloads files the manifest names, so they
+   *  are listed here to arrive at all. */
+  hiDpi?: string[];
+}
+
 export interface ThemeScrollbar {
   'thumb-image'?: string;
   'track-color'?: string;
@@ -193,6 +209,10 @@ export interface ThemeDefinition {
    *  Desktop-only: Electron calls BrowserWindow.setIcon() + app.dock.setIcon().
    *  Android WebView ignores this — launcher icons can't be hot-swapped. */
   appIcon?: string;
+  /** Extra versions of the app icon for places one picture can't serve (brand rounds 27–31).
+   *  All relative paths inside the theme dir, all optional; a missing one falls back to `appIcon`
+   *  (or, for the tray, to the default tray icon). Desktop-only, like `appIcon`. */
+  appIconVariants?: ThemeAppIconVariants;
   custom_css?: string;
 }
 

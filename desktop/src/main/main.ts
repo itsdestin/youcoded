@@ -22,40 +22,41 @@ for (const stream of [process.stdout, process.stderr]) {
 import os from 'os';
 import fs from 'fs';
 import { SessionManager } from './session-manager';
-import { resolveNoFolderCwd } from './no-folder';
 import { HookRelay } from './hook-relay';
+import { hookWindowTargets } from './hook-window-route';
 import { WindowRegistry } from './window-registry';
 import { PendingAcquireQueue } from './pending-acquire';
-import { registerIpcHandlers, buddyShowRefusal, cachedBuddyHelperStatus, refreshBuddyHelperStatus, setBuddyHelperLostHandler } from './ipc-handlers';
+import { bindApp } from './ipc/app';
+import { bindWindow } from './ipc/window';
+import { bindDetach } from './ipc/detach';
+import { bindBuddy } from './ipc/buddy';
+import { registerIpcHandlers, cachedBuddyHelperStatus, refreshBuddyHelperStatus, setBuddyHelperLostHandler } from './ipc-handlers';
 import { RemoteServer } from './remote-server';
-import { getFavorites as getGameFavorites, setFavorites as setGameFavorites, getIncognito as getGameIncognito, setIncognito as setGameIncognito } from './prefs-service';
+import { createRuntime, type NativeRuntime } from './create-runtime';
+import { createElectronPlatform, sendSyncEventToWindows } from './electron-platform';
 import { RemoteConfig } from './remote-config';
 import { LocalSkillProvider } from './skill-provider';
 import { CommandProvider } from './command-provider';
 import { shouldAutoApprove, shouldAutoApproveDocComment } from './permission-auto-approve';
-import { IPC, PermissionOverrides, PERMISSION_OVERRIDES_DEFAULT, type AttentionState, type AttentionSummary, type AttentionReport, type SessionOwnershipAcquired } from '../shared/types';
+import { IPC, PermissionOverrides, PERMISSION_OVERRIDES_DEFAULT, type AttentionState, type AttentionSummary, type SessionOwnershipAcquired } from '../shared/types';
 import { VITE_DEV_PORT } from '../shared/ports';
-import { validateHandoffDraft, type DetachedHandoffDraft } from '../shared/handoff-draft';
 import { MOUNT_PROBE_JS } from './dev-mount-probe';
 import { log, rotateLog } from './logger';
 import { applyWindowsUserToolsToEnv } from './prerequisite-installer';
 import { isSmokeTest, reportWhenRendered } from './smoke-probe';
 import { hangDeps, installCrashDiagnostics, reportPreviousCrashes, wireWindowHangDiagnostics } from './crash-diagnostics';
 import { registerThemeProtocol } from './theme-protocol';
-import { officeEditorSettings, officeThemeFonts, registerOfficeProtocol } from './office/office-protocol';
 import { sealOfficeFrames } from './office/office-frame-guard';
-import { registerOfficeIpc } from './office/office-ipc';
-import { registerOfficeComments } from './office/office-comments';
-import { officeAvailable, officeRoot } from './office/office-root';
-import { getOfficeSessions, initOfficeSessionsSafely, quitOfficeSessions } from './office/office-session-registry';
+import { officeIpc } from './ipc/office'; // the table's Office channels reach the modules below through this (ipc/office.ts)
+import { startOffice } from './office/office-boot';
+import { getOfficeSessions, quitOfficeSessions } from './office/office-session-registry';
 import { refuseCloseForUnsaved, refuseQuitForUnsaved, watchUnsavedEdits } from './unsaved-quit';
 import { syncJournals } from './office/office-journal-sync';
 import { createCloseGate } from './window-close-gate';
 import { gatedQuit, onWillQuit, quitAfterTeardown } from './app-restart';
 import { isAppPageUrl } from './app-navigation';
-import { FirstRunManager, markSetupCompleted, setupIsUsable, type FirstRunNativeDeps, type NativeKeyService, type OpenRouterSignInAuth } from './first-run';
-import { pickSuggestedModel } from './first-run-local';
-import type { FirstRunState } from '../shared/first-run-types';
+import { FirstRunManager, markSetupCompleted, setupIsUsable, type FirstRunNativeDeps } from './first-run';
+import { bindFirstRunManager } from './ipc/first-run';
 // Sign in with ChatGPT (backend design 2026-09-05 §1): the account object is
 // built HERE, inside createWindow, and handed to the IPC layer and both
 // first-run managers. It needs its own SecretsStore over the same encrypted
@@ -67,7 +68,7 @@ import { SecretsStore } from './providers/secrets-store';
 import { SyncService } from './sync-service';
 import { setSyncService, getSyncConfig } from './sync-state';
 // Cross-device sync spaces (spec 2026-07-03) — folder-based sync engine.
-import { startSyncSpaces, stopSyncSpaces, setSyncSpacesRemoteBroadcaster, setSyncSpacesAuthStore, hubLeaseRequest, setSyncSpacesLeaseEventListener, getManagedRoots, syncSpacesSyncNowAwaited } from './sync-spaces/service';
+import { startSyncSpaces, stopSyncSpaces, setSyncSpacesRemoteBroadcaster, setSyncSpacesWindowBroadcaster, setSyncSpacesAuthStore, hubLeaseRequest, setSyncSpacesLeaseEventListener, getManagedRoots, syncSpacesSyncNowAwaited } from './sync-spaces/service';
 import { loadSpaceBackupTargets } from './sync-spaces/backup-targets';
 import { createGithubClient, setGithubClient } from './github-client';
 // Plan 2b Task 8: conversation-lease lifecycle. The lease client coordinates
@@ -86,7 +87,7 @@ import { upsertSelf } from './sync-spaces/device-registry';
 import { startConversationStore, stopConversationStore, materializeOne, resumeSweeps, HANDOFF_SYNC_TIMEOUT_MS } from './conversations/service';
 import { runSlugRepair } from './conversations/slug-repair';
 import { startChatsearchIndex, stopChatsearchIndex } from './chatsearch-index/index-service';
-import { startOutboxDrain, stopOutboxDrain } from './chatsearch-index/outbox-drain';
+import { startOutboxDrain, stopOutboxDrain, type OutboxBroadcast } from './chatsearch-index/outbox-drain';
 import { stopProjectWatchers } from './artifacts/project-watcher';
 // One-time cleanup of the legacy sync-service's slug-symlink aggregation (Plan 2c).
 import { sweepProjectSymlinks } from './conversations/symlink-sweep';
@@ -102,10 +103,9 @@ import { randomUUID } from 'crypto';
 import { createAuthStore } from './marketplace-auth-store';
 import { registerMarketplaceApiHandlers } from './marketplace-api-handlers';
 import { reconcileInstalls } from './install-reconcile';
-import { registerSocialHandlers, destroySocialHandlers } from './social-handlers';
-import { registerArcadeHandlers } from './arcade-handlers';
-import { registerVoiceHandlers, shutdownVoiceHandlers } from './voice/voice-handlers';
-import { requestMergedChatSnapshot } from './chat-snapshot';
+import { startSocial, destroySocialHandlers } from './social-handlers';
+import { initArcadeOps } from './arcade-handlers';
+import { startVoice, shutdownVoiceHandlers } from './voice/voice-handlers';
 import { BuddyWindowManager } from './buddy-window-manager';
 import { createBuddyTray } from './buddy-tray';
 import { BAR_SIZE, MASCOT_SIZE, CHAT_SIZE } from './buddy-bar-geometry';
@@ -113,7 +113,7 @@ import { BAR_SIZE, MASCOT_SIZE, CHAT_SIZE } from './buddy-bar-geometry';
 // the lookup that asks KDE how much of the screen the taskbar has taken.
 import { syncHelperOnLaunch, setExperimentKwinDisabled } from './kwin-helper';
 import { WorkAreaResolver } from './buddy-work-area';
-import { excludeFromCapture, nativeCaptureExclusionAvailable } from './window-exclude-capture';
+import { excludeFromCapture } from './window-exclude-capture';
 import { cleanupStaleDownloads } from './update-installer';
 import { startDailyHeartbeat } from './analytics-service';
 import { loadConfigSync, setAppliedAtLaunch, setCachedGpu } from './performance-config';
@@ -338,45 +338,20 @@ const commandProvider = new CommandProvider(
 // When skills change (plugin install/uninstall), invalidate the command
 // cache so skill-name dedup re-evaluates.
 skillProvider.setCacheInvalidationListener(() => commandProvider.invalidateCache());
-// Pass a snapshot provider so RemoteServer can request the full chat state when a
-// remote client restores. Batch 2 (§2): from EVERY main window, each session from its
-// owner — see requestMergedChatSnapshot. The closures read mainWindow by reference; it
-// is null here and set before any client can connect.
+// WHY (2026-10-01 one-core R5-2): the remote snapshot provider that used to be passed here (a copy of every window's chat
+// state, requestMergedChatSnapshot) is gone: a phone fills each session from the computer's record through `session:open`.
+// WHY (2026-09-29 one-core R1): built once in createWindow, read by RemoteServer through an accessor
+// (module order: see remote-server.ts).
+let nativeRuntime: NativeRuntime | null = null;
+const platform = createElectronPlatform();
 const remoteServer = new RemoteServer(sessionManager, hookRelay, remoteConfig, skillProvider, {
+  getNativeRuntime: () => nativeRuntime,
   // The installed app serves the phone its built copy; a dev window serves live code unless
   // run-dev.sh --phone-build made a fresh copy (see choosePhonePageSource).
   serveBuiltPage: app.isPackaged || process.env.YOUCODED_REMOTE_BUILT === '1',
-  // The "No folder" sentinel → the app-owned empty folder, exactly as the desktop's
-  // own session:create does in ipc-handlers.ts (2026-09-16, remote-access.md).
-  prepareCreate: (payload) => resolveNoFolderCwd(payload, app.getPath('userData')),
-  // The phone's / menu: the same list the desktop's commands:list handler returns.
-  listCommands: () => commandProvider.getCommands(),
-  requestSnapshot: () => requestMergedChatSnapshot({
-    registry: windowRegistry,
-    webContentsFor: (id) => {
-      const wc = webContents.fromId(id);
-      return wc && !wc.isDestroyed() ? wc : null;
-    },
-    fallbackWindowId: () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents.id : undefined),
-    knownSessionIds: () => sessionManager.listSessions().map((s) => s.id),
-  }),
   getFocusSessionId: () => windowRegistry.getFocusSessionId(),
-  // A theme change made on a phone reaches every window here, the same message a peer
-  // window sends (tests/remote-server-connections.test.ts). This callback's presence is
-  // guarded by the ast-grep rule appearance-broadcast-relays-to-remote (workspace
-  // scripts/ast-grep/rules/).
-  onAppearanceBroadcast: (prefs) => {
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (!win.isDestroyed()) win.webContents.send(IPC.APPEARANCE_SYNC, prefs);
-    }
-  },
-  // Welcome back (design §2): a phone/remote browser's own X on a session must
-  // untrack it here too — this WS host answers session:destroy independently
-  // of the desktop's SESSION_DESTROY IPC handler and never reaches it. Same
-  // lazy-closure-over-a-module-var pattern as `prepareCreate` above:
-  // welcomeBackStore is constructed later, in app.whenReady(), but this
-  // closure only runs when a remote client actually destroys a session.
-  untrackWelcomeBack: (id) => welcomeBackStore?.untrack(id),
+  // Phones join the window registry as members with negative ids (one-core R5-1, seam S6).
+  audience: windowRegistry,
 });
 
 // WHY push and not poll: a bind failure happens once, seconds after launch, and a panel
@@ -387,6 +362,8 @@ remoteServer.onStatusChange((status) => {
     if (!win.isDestroyed()) win.webContents.send(IPC.REMOTE_STATUS, status);
   }
 });
+
+setSyncSpacesWindowBroadcaster(sendSyncEventToWindows); // module load: no sync event can precede it
 
 // Dev server URL — env override wins; otherwise compute from YOUCODED_PORT_OFFSET
 // (via shared/ports.ts) so Vite and main stay in sync without a second env var.
@@ -442,13 +419,13 @@ const DEV_WINDOW_TITLE =
 const BUDDY_WINDOW_TITLE = 'YouCoded';
 
 // Windows AUMID alignment: electron-builder's NSIS installer stamps the Start
-// Menu shortcut with an AppUserModelID derived from `appId`. If the runtime
-// process's AUMID doesn't match, Windows resolves the taskbar button's icon
-// via the shortcut's AUMID (i.e. the embedded exe .ico) and silently ignores
-// BrowserWindow.setIcon() updates. That's why theme-driven icon hot-swap
-// worked in dev (no installer shortcut, so setIcon wins) but not in packaged
-// builds. Must be called before any BrowserWindow is created.
-// See: electron-builder NSIS docs + electron/electron#28581.
+// Menu shortcut with an AppUserModelID derived from `appId`; matching it keeps the
+// running app on the same taskbar button as a pin. Consequence (tested on Windows 11,
+// 2026-10-04): with matching IDs the taskbar button wears the SHORTCUT's icon and
+// BrowserWindow.setIcon() reaches only Alt+Tab and the title bar — the theme icon
+// reaches the button through windows-taskbar-icon.ts instead. (An earlier version of
+// this comment said matching made setIcon work on the taskbar; it does not.)
+// Must be called before any BrowserWindow is created.
 if (process.platform === 'win32') {
   app.setAppUserModelId('com.youcoded.desktop');
 }
@@ -474,27 +451,14 @@ export function setPermissionOverrides(overrides: Partial<PermissionOverrides>) 
 }
 
 /**
- * First-run local models (2026-09-14): the setup channels that reach the native
- * runtime — local setup's suggestion, connecting a model app already running,
- * and a local download finishing setup. Called by BOTH first-run registrations
- * (a fresh install, and the late sign-in screen); `getManager` because the late
- * one creates its manager after this is wired.
+ * First-run local models (2026-09-14): a finished local download hands setup on. Called by BOTH
+ * first-run paths (a fresh install, and the late sign-in screen); `getManager` because the late one
+ * creates its manager after this is wired.
+ * WHY only the listener is left (2026-09-30 one-core R3-3): the setup channels themselves (local
+ * setup's suggestion, connecting a model app already running) are table entries now
+ * (main/ipc/first-run.ts); a progress subscription is not a channel, so it stays here.
  */
-function registerFirstRunLocalIpc(getManager: () => FirstRunManager | null, deps: FirstRunNativeDeps): void {
-  ipcMain.handle(IPC.FIRST_RUN_LOCAL_SETUP, async () => {
-    try {
-      const os: typeof import('os') = require('os');
-      return { suggested: pickSuggestedModel(await deps.models.curatedList(), os.totalmem()) };
-    } catch (e) {
-      log('ERROR', 'FirstRun', 'Local setup suggestion failed', { error: String(e) });
-      return null;
-    }
-  });
-  ipcMain.handle(IPC.FIRST_RUN_CONNECT_LOCAL_APP, async (_event, baseUrl: string, name: string) => {
-    const manager = getManager();
-    if (!manager) return { ok: false, message: 'Setup is not running.' };
-    return manager.handleConnectLocalApp(baseUrl, name, deps);
-  });
+function wireSetupDownloadHandoff(getManager: () => FirstRunManager | null, deps: FirstRunNativeDeps): void {
   deps.models.on('download-progress', (p) => {
     void getManager()?.handleSetupDownloadProgress(p, deps).catch((e) => {
       log('WARN', 'FirstRun', 'Setup download hand-off failed', { error: String(e) });
@@ -509,10 +473,6 @@ function registerFirstRunIpc(
   // with ChatGPT" button routes through here to the SAME account object the
   // Settings card uses, so a sign-in finished in the wizard is signed in everywhere.
   chatgptAuth: ChatGptAuth,
-  // First-run local models: what "Use an API key" reaches for a named service.
-  nativeDeps: FirstRunNativeDeps,
-  // Sign in with OpenRouter: the SAME object the Settings card drives.
-  openRouterSignIn: OpenRouterSignInAuth,
 ) {
   // Push state updates to renderer
   firstRunManager.on('state-changed', (state) => {
@@ -530,58 +490,12 @@ function registerFirstRunIpc(
     log('INFO', 'FirstRun', 'First-run complete, transitioning to normal app');
   });
 
-  ipcMain.handle(IPC.FIRST_RUN_STATE, async () => {
-    try { return firstRunManager.getState(); }
-    catch { return { currentStep: 'COMPLETE' }; }
-  });
-
-  ipcMain.handle(IPC.FIRST_RUN_RETRY, async () => {
-    try { await firstRunManager.retry(); }
-    catch (e) { log('ERROR', 'FirstRun', 'Retry failed', { error: String(e) }); }
-  });
-
-  ipcMain.handle(IPC.FIRST_RUN_START_AUTH, async (_event, mode: FirstRunState['authMode']) => {
-    try {
-      if (mode === 'oauth') {
-        // claude auth login opens the browser itself — don't double-open
-        await firstRunManager.handleOAuthLogin();
-      } else if (mode === 'chatgpt') {
-        // Opens the browser through ChatGptAuth and waits for the callback.
-        // handleChatGptLogin catches signIn()'s own throws (port 1455 held,
-        // no keychain) into lastError itself — the catch below is only the
-        // last resort, since a swallowed throw here would leave the wizard's
-        // button silently doing nothing.
-        await firstRunManager.handleChatGptLogin(chatgptAuth);
-      } else if (mode === 'openrouter') {
-        // Opens the browser and waits; handleOpenRouterLogin writes its own
-        // lastError, so the catch below is the last resort only.
-        await firstRunManager.handleOpenRouterLogin(openRouterSignIn);
-      }
-    } catch (e) { log('ERROR', 'FirstRun', 'Auth failed', { error: String(e) }); }
-  });
-
-  ipcMain.handle(IPC.FIRST_RUN_SUBMIT_API_KEY, async (_event, key: string, service?: NativeKeyService) => {
-    // With a service (F-2) the key runs on YouCoded's own assistant; without one
-    // it is the old Claude Code key path.
-    try {
-      if (service) await firstRunManager.handleNativeApiKey(key, service, nativeDeps);
-      else await firstRunManager.handleApiKeySubmit(key);
-    }
-    catch (e) { log('ERROR', 'FirstRun', 'API key submit failed', { error: String(e) }); }
-  });
-
-  ipcMain.handle(IPC.FIRST_RUN_CANCEL_AUTH, async () => {
-    try { await firstRunManager.cancelAuth(); }
-    catch (e) { log('ERROR', 'FirstRun', 'Cancel sign-in failed', { error: String(e) }); }
-  });
-
-  ipcMain.handle(IPC.FIRST_RUN_SKIP, async () => {
-    // One writer for the setup-completed flag (first-run.ts). WHY: it is the
-    // only place that knows WHERE the wizard's files live, so a dev instance
-    // pointed at a scratch folder cannot write the installed app's config.
-    markSetupCompleted();
-    // Transition the state machine so the renderer's onStateChanged fires
-    firstRunManager.skip();
+  // WHY (2026-09-30 one-core R3-3): the request handlers (state, retry, start-auth, submit-api-key,
+  // cancel-auth, skip) are table entries (main/ipc/first-run.ts); this hands them the manager.
+  bindFirstRunManager({
+    getManager: () => firstRunManager,
+    getState: () => { try { return firstRunManager.getState(); } catch { return { currentStep: 'COMPLETE' }; } },
+    chatgptAuth,
   });
 
   // Start the first-run flow (async, doesn't block)
@@ -967,6 +881,7 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
     attentionReports.delete(wid);
     debouncedBroadcastAttention();
     pendingAcquire.forget(wid);
+    nativeRuntime?.fills.forget(`w${wid}`); // a closed window is owed nothing (one-core R5-2)
     windowRegistry.unregisterWindow(wid);
     // Spec §7.6: "Buddy closes with main." If this was the last main window
     // (i.e., all remaining open windows are buddy windows), tear down the
@@ -1044,7 +959,7 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   return win;
 }
 
-function createWindow(firstRunManager?: FirstRunManager) {
+function createWindow(firstRunManager?: FirstRunManager): OutboxBroadcast {
   mainWindow = createAppWindow({ maximize: true });
   // Perf lab: the renderer bundle has finished loading (not yet mounted).
   // Registered HERE, not in createAppWindow: createAppWindow also builds the
@@ -1118,20 +1033,17 @@ function createWindow(firstRunManager?: FirstRunManager) {
     delay: (ms) => new Promise((r) => setTimeout(r, ms)),
   });
 
-  // Sign in with ChatGPT (backend design 2026-09-05 §1, §6). Built HERE, right
-  // before registerIpcHandlers — i.e. AFTER the dev-profile userData override
-  // near the top of this file — and never beside `remoteServer`, which is
-  // The kill switch, read once: YOUCODED_CHATGPT=0 turns the whole feature off.
+  // Sign in with ChatGPT (backend design 2026-09-05 §1, §6). The kill switch, read once:
+  // YOUCODED_CHATGPT=0 turns the whole feature off. Built HERE, after the dev-profile userData
+  // override near the top of this file and never beside `remoteServer` (built before that override:
+  // an instance there would read/write the BUILT app's native-secrets.json and chatgpt-account.json
+  // from a dev instance). Constructed even under the switch: it is the file reader the launch-time
+  // auth check needs, so a ChatGPT-only install is not locked out; createRuntime applies the
+  // switch to everything user-facing.
   const chatgptEnabled = process.env.YOUCODED_CHATGPT !== '0';
-  // constructed before that override: an instance built there would read and
-  // write the BUILT app's native-secrets.json and chatgpt-account.json from a
-  // dev instance (the live-app rule broken through a file). Constructed even
-  // under the kill switch (YOUCODED_CHATGPT=0): it is the file reader the
-  // launch-time auth check below needs, so a ChatGPT-only install is not locked
-  // out by the switch; ipc-handlers applies the switch to everything user-facing.
   chatgptAuth = new ChatGptAuth({
     userDataDir: app.getPath('userData'),
-    secrets: new SecretsStore(app.getPath('userData')),
+    secrets: new SecretsStore(app.getPath('userData'), platform.secretStorage),
     appVersion: app.getVersion(),
     // WHY: this isolated experiment's request ceiling must refuse a model
     // dispatch before the provider fetch; never enable it in the built app.
@@ -1144,18 +1056,20 @@ function createWindow(firstRunManager?: FirstRunManager) {
     pollUsage: chatgptEnabled,
   });
 
+  // One-core R1: the runtime is built where registerIpcHandlers used to build it inline; both doors get this one.
+  nativeRuntime = createRuntime({ userDataDir: app.getPath('userData'), appVersion: app.getVersion(), platform, chatgptAuth, sessionManager });
   const ipcWiring = registerIpcHandlers(ipcMain, sessionManager, mainWindow, skillProvider, commandProvider, hookRelay, remoteConfig, remoteServer, windowRegistry,
     { client: leaseClient, setHolderTakeover: (fn) => { holderTakeoverRef.fn = fn; }, requester,
       deviceId: deviceIdentity.id, machineId: machineIdentity?.id ?? '' },
-    chatgptAuth, welcomeBackStore);
+    nativeRuntime, welcomeBackStore);
   cleanupIpcHandlers = ipcWiring.cleanup;
   watchUnsavedEdits(); // unsaved files refuse a quit before teardown (unsaved-quit.ts, fix rounds 9–10)
   cancelWindowHandoffs = (id) => ipcWiring.handoffAttempts?.cancelOwner(`window:${id}`);
   const hasUsableProvider = ipcWiring.hasUsableProvider;
 
   if (firstRunManager) {
-    registerFirstRunIpc(mainWindow, firstRunManager, chatgptAuth, ipcWiring.firstRunDeps, ipcWiring.openRouterSignIn);
-    registerFirstRunLocalIpc(() => firstRunManager, ipcWiring.firstRunDeps);
+    registerFirstRunIpc(mainWindow, firstRunManager, chatgptAuth);
+    wireSetupDownloadHandoff(() => firstRunManager, ipcWiring.firstRunDeps);
   } else {
     // Not a first-run — but verify Claude Code can actually run.
     // If auth is missing, re-trigger first-run at the auth step so the user
@@ -1166,7 +1080,9 @@ function createWindow(firstRunManager?: FirstRunManager) {
     // user installed toolkit manually but never logged in, corrupted state, etc.
     let lateFirstRunManager: FirstRunManager | null = null;
     let lateAuthCheck: Promise<any> | null = null;
-    ipcMain.handle(IPC.FIRST_RUN_STATE, () => {
+    // WHY (2026-09-30 one-core R3-3): first-run:state is a table entry (main/ipc/first-run.ts); this is the
+    // answer it gives when no wizard was needed at launch, and the manager it hands the other channels.
+    const lateFirstRunState = () => {
       // If we already spun up a late first-run manager, delegate to it
       if (lateFirstRunManager) {
         try { return lateFirstRunManager.getState(); }
@@ -1208,40 +1124,14 @@ function createWindow(firstRunManager?: FirstRunManager) {
             markSetupCompleted();
             lateFirstRunManager = new FirstRunManager();
             lateFirstRunManager.forceStep('AUTHENTICATE');
-            registerFirstRunLocalIpc(() => lateFirstRunManager, ipcWiring.firstRunDeps);
+            wireSetupDownloadHandoff(() => lateFirstRunManager, ipcWiring.firstRunDeps);
 
-            // Wire up events (but skip FIRST_RUN_STATE — we're already handling it)
+            // Wire up events (but skip FIRST_RUN_STATE — the table's first-run:state answers from here)
             lateFirstRunManager.on('state-changed', (state) => {
               try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(IPC.FIRST_RUN_STATE, state); } catch {}
             });
             lateFirstRunManager.on('launch-wizard', () => {
               log('INFO', 'FirstRun', 'Late first-run complete, transitioning to normal app');
-            });
-
-            // Register the other handlers
-            ipcMain.handle(IPC.FIRST_RUN_RETRY, async () => { try { await lateFirstRunManager!.retry(); } catch {} });
-            // Same three arms as registerFirstRunIpc above (ChatGPT / OpenRouter
-            // per backend design 2026-09-05 §5); swallowed throws are the last
-            // resort only — handleChatGptLogin writes its own lastError.
-            ipcMain.handle(IPC.FIRST_RUN_START_AUTH, async (_event, mode: FirstRunState['authMode']) => {
-              try {
-                if (mode === 'oauth') await lateFirstRunManager!.handleOAuthLogin();
-                // Gated on the switch as well as on the renderer's hidden button:
-                // an ungated arm would still open a browser tab and bind port
-                // 1455 with the feature turned off (review T4 F3).
-                else if (mode === 'chatgpt' && chatgptEnabled) await lateFirstRunManager!.handleChatGptLogin(chatgptAuth!);
-                else if (mode === 'openrouter') await lateFirstRunManager!.handleOpenRouterLogin(ipcWiring.openRouterSignIn);
-              } catch {} });
-            ipcMain.handle(IPC.FIRST_RUN_SUBMIT_API_KEY, async (_event, key: string, service?: NativeKeyService) => {
-              try {
-                if (service) await lateFirstRunManager!.handleNativeApiKey(key, service, ipcWiring.firstRunDeps);
-                else await lateFirstRunManager!.handleApiKeySubmit(key);
-              } catch {}
-            });
-            ipcMain.handle(IPC.FIRST_RUN_CANCEL_AUTH, async () => { try { await lateFirstRunManager!.cancelAuth(); } catch {} });
-            ipcMain.handle(IPC.FIRST_RUN_SKIP, async () => {
-              markSetupCompleted(); // same one writer as above
-              lateFirstRunManager?.skip();
             });
 
             return lateFirstRunManager.getState();
@@ -1251,7 +1141,11 @@ function createWindow(firstRunManager?: FirstRunManager) {
         })();
       }
       return lateAuthCheck;
-    });
+    };
+    // The other first-run channels find the late manager through getManager, and the ChatGPT arm stays
+    // gated on the kill switch (an ungated arm would open a browser tab and bind port 1455 with the
+    // feature turned off — review T4 F3).
+    bindFirstRunManager({ getManager: () => lateFirstRunManager, getState: lateFirstRunState, chatgptAuth: chatgptEnabled ? chatgptAuth : null });
   }
 
   // Adversarial review 2026-09-27, finding #2: `shouldAutoApproveDocComment`
@@ -1272,8 +1166,24 @@ function createWindow(firstRunManager?: FirstRunManager) {
     docCommentsServerIdsBySession.delete(sessionId);
   });
 
+  // The windows' leg of a Claude Code hook event: the window that owns the session, else the main window; an event that ENDS an ask also reaches the
+  // watching buddy chat (hook-window-route.ts). WHY here and not in publish (one-core R5-2): publish delivers the phones' leg and the record.
+  const sendHookToOwner = (skip: boolean) => (sessionId: string, channel: string, args: unknown[], hold?: (windowId: number, deliver: () => void) => boolean) => {
+    if (skip) return; // an auto-approved ask never reached any window
+    const ownerId = windowRegistry.getOwner(sessionId);
+    const win = ownerId != null ? windowFromWcId(ownerId) : null;
+    const target = win && !win.isDestroyed() ? win : (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null);
+    for (const wid of hookWindowTargets(args[0] as { type?: string }, target ? target.webContents.id : null, windowRegistry.getSubscribers(sessionId))) {
+      const w = windowFromWcId(wid);
+      const deliver = () => { if (w && !w.isDestroyed()) w.webContents.send(channel, ...args); };
+      if (!hold?.(wid, deliver)) deliver();
+    }
+  };
+
   // Forward hook events to renderer
   hookRelay.on('hook-event', (event) => {
+    // Auto-approved asks are answered here and never shown in a window; a phone has always been told about them anyway.
+    let autoApproved = false;
     // In bypass mode (--dangerously-skip-permissions), Claude Code handles most
     // permissions natively. But a few things still fire PermissionRequest:
     //   - Protected path writes (.git/, .bashrc, .claude/ except commands/agents/skills/worktrees)
@@ -1320,23 +1230,15 @@ function createWindow(firstRunManager?: FirstRunManager) {
       // (see permission-auto-approve.ts's own header for the full reasoning).
       if (requestId && (shouldAutoApproveDocComment(toolName, toolInput, permissionMode, docCommentsServerId) || shouldAutoApprove(toolName, toolInput, permissionOverrides))) {
         hookRelay.respond(requestId, { decision: { behavior: 'allow' } });
-        return;
+        autoApproved = true;
       }
     }
 
-    // Route to the window that owns this session; fall back to mainWindow if
-    // ownership is unknown (e.g., session not yet created via IPC).
-    const ownerId = windowRegistry.getOwner(event.sessionId);
-    if (ownerId != null) {
-      const win = windowFromWcId(ownerId);
-      if (win && !win.isDestroyed()) {
-        win.webContents.send(IPC.HOOK_EVENT, event);
-        return;
-      }
-    }
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send(IPC.HOOK_EVENT, event);
-    }
+    // WHY publish (one-core R5-2): a Claude Code ask used to reach the windows here and the phones through RemoteServer's own
+    // listener, so the record (which a fill is answered from) only heard it while remote access was on. One publish numbers it,
+    // records it and delivers it to the phones that watch this session; the windows' leg stays exactly the route this
+    // listener always used (see sendHookToOwner).
+    ipcWiring.publish(event.sessionId, IPC.HOOK_EVENT, event, { windows: sendHookToOwner(autoApproved) });
   });
 
   // Tell the renderer a held ask ended without a user decision, and WHY:
@@ -1353,345 +1255,22 @@ function createWindow(firstRunManager?: FirstRunManager) {
       payload: { _requestId: requestId, _reason: reason },
       timestamp: Date.now(),
     };
-    const ownerId = windowRegistry.getOwner(sessionId);
-    if (ownerId != null) {
-      const win = windowFromWcId(ownerId);
-      if (win && !win.isDestroyed()) {
-        win.webContents.send(IPC.HOOK_EVENT, evt);
-        return;
-      }
-    }
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send(IPC.HOOK_EVENT, evt);
-    }
+    // Same route and same record as hook-event above; the phones hear the expiry too (they used to, through RemoteServer's own
+    // listener). `_reason` rides inside the payload, so an older phone ignores it and resolves the card, the safe default.
+    ipcWiring.publish(sessionId, IPC.HOOK_EVENT, evt, { windows: sendHookToOwner(false) });
   });
+  return ipcWiring.outboxBroadcast; // for startOutboxDrain (chatsearch): its flag/note/tag pushes
 }
 
-// Welcome back (design §4, plan T3): the renderer's answer to a
-// window:close-request push. One handler for every window — closeRequests
-// routes the answer to the right pending entry by requestId, so this needs no
-// per-window registration the way createAppWindow's own close listener does.
-function registerCloseRequestIpc() {
-  ipcMain.handle(IPC.WINDOW_ANSWER_CLOSE, (_evt, answer: { requestId: string; close: boolean; reopen?: boolean }) => {
-    if (!answer || typeof answer.requestId !== 'string') return;
-    closeRequests.answer(answer.requestId, { close: !!answer.close, reopen: answer.reopen });
-  });
-}
-
-// Detach subsystem: IPC handlers for drag-a-session-to-new-window feature.
-// All session-scoped traffic is routed via windowRegistry.getOwner(). These
-// handlers coordinate ownership transfers between windows and broadcast the
-// cross-window cursor during an active drag so peer windows can highlight
-// their strip as a drop target.
-function registerDetachIpc() {
-  // Renderer asks "which window am I?" — used by SessionStrip to avoid
-  // treating its own directory entry as a remote session.
-  ipcMain.handle(IPC.WINDOW_GET_ID, (evt) => evt.sender.id);
-
-  // Renderer asks "did I inherit anything while I was still booting?"
-  //
-  // WHY (2026-09-03): a tear-off hands the session to a window created one
-  // statement earlier, so `tgt.webContents.send(SESSION_OWNERSHIP_ACQUIRED)`
-  // fired at a renderer whose React tree did not exist yet. Electron does NOT
-  // queue for a late subscriber — measured on 41.10.7: a message sent right
-  // after `new BrowserWindow()` never reaches a listener registered 1.5s later,
-  // it is dropped outright. So the handoff, and everything it triggers (history
-  // hydration, opening on the dragged session, re-sending open permission asks)
-  // silently did nothing on EVERY tear-off into a fresh window.
-  //
-  // Fix shape: the renderer PULLS once mounted rather than being pushed at
-  // before it can listen (the same shape the since-deleted buddy overlay used
-  // for its boot geometry). `readyWindows` is what makes the
-  // two paths exclusive — before a window has pulled, transfers queue; after,
-  // they push as before — so a payload is delivered exactly once either way.
-  ipcMain.handle(IPC.DETACH_CLAIM_PENDING, (evt) => pendingAcquire.claim(evt.sender.id));
-
-  // Appearance sync across peer windows. When one window writes a theme /
-  // font / reduced-effects change, it broadcasts and every OTHER window
-  // receives the same prefs via appearance:sync. ThemeProvider applies
-  // locally without re-broadcasting (guarded by a ref) so there's no loop.
-  ipcMain.on(IPC.APPEARANCE_BROADCAST, (evt, prefs) => {
-    // WHY BrowserWindow is the delivery authority here: Buddy floaters do not
-    // own sessions, so filtering through session-peer registry entries can
-    // leave their independent ThemeProvider permanently on its launch theme.
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (win.isDestroyed() || win.webContents.id === evt.sender.id) continue;
-      win.webContents.send(IPC.APPEARANCE_SYNC, prefs);
-    }
-    // WHY phones too: a phone read the computer's theme once, at page load, and kept it until
-    // reloaded (Destin, 2026-09-11). The computer's change reaches phones already open.
-    remoteServer.broadcast({ type: IPC.APPEARANCE_SYNC, payload: prefs });
-  });
-
-  // Transfer a session from its current owner window to a target window.
-  // Rejects if the source claim is stale (race protection). Emits ownership
-  // events to both windows so renderers can update their reducers.
-  function transferOwnership(sessionId: string, srcWindowId: number, targetWindowId: number, freshWindow: boolean,
-    draft?: DetachedHandoffDraft) {
-    const info = sessionManager.getSession(sessionId);
-    if (!info) return;
-    // Stale (another event already moved it) → transferSession refuses and changes
-    // nothing. Otherwise it assigns the target AND marks the gap: the target has not
-    // been receiving this session's live transcript stream, so its first page of
-    // history must read to EOF rather than stopping at the watcher's startOffset
-    // (WindowRegistry.markInheritedByTransfer), and the remote snapshot omits the
-    // session until that page is read (isPendingTransfer).
-    if (!windowRegistry.transferSession(sessionId, srcWindowId, targetWindowId)) return;
-    const src = windowFromWcId(srcWindowId);
-    const tgt = windowFromWcId(targetWindowId);
-    src?.webContents.send(IPC.SESSION_OWNERSHIP_LOST, { sessionId });
-    // WHY: only this newly admitted detach carries unsent composer state;
-    // never mutate the authoritative SessionInfo kept by SessionManager.
-    const payload = { sessionId, sessionInfo: draft
-      ? { ...info, initialInput: draft.text, initialAttachments: draft.attachments } : info, freshWindow };
-    // A window that has not yet pulled (DETACH_CLAIM_PENDING) has no listener —
-    // a send would be dropped on the floor. Queue for its pull instead.
-    if (pendingAcquire.isReady(targetWindowId)) {
-      tgt?.webContents.send(IPC.SESSION_OWNERSHIP_ACQUIRED, payload);
-    } else {
-      pendingAcquire.enqueue(targetWindowId, payload);
-    }
-  }
-
-  // If a window was emptied by a detach/re-dock and another peer window
-  // exists, close it automatically. The last surviving window may stay empty.
-  function maybeAutoCloseEmpty(windowId: number) {
-    if (windowRegistry.sessionsForWindow(windowId).length > 0) return;
-    if (windowRegistry.getWindowIds().length <= 1) return;
-    windowFromWcId(windowId)?.close();
-  }
-
-  // "Launch in new window" entry point and the direct-spawn fallback for drops
-  // outside any window. Spawns a peer window at/near the cursor and hands it
-  // ownership of the session.
-  ipcMain.on(IPC.WINDOW_OPEN_DETACHED, (evt, { sessionId, draft }: { sessionId: string; draft?: unknown }) => {
-    // A malformed optional draft must never be silently discarded by a move.
-    const safeDraft = draft === undefined ? undefined : validateHandoffDraft(draft);
-    if (draft !== undefined && !safeDraft) return;
-    const { x, y } = screen.getCursorScreenPoint();
-    const newWin = createAppWindow({ x: x - 60, y: y - 40, width: 900, height: 700 });
-    transferOwnership(sessionId, evt.sender.id, newWin.webContents.id, /*freshWindow*/ true, safeDraft ?? undefined);
-    maybeAutoCloseEmpty(evt.sender.id);
-  });
-
-  // Cursor left the source window while dragging — spawn a peer at the cursor
-  // and hand off the session.
-  ipcMain.on(IPC.SESSION_DETACH_START, (evt, payload: { sessionId: string; screenX: number; screenY: number }) => {
-    const newWin = createAppWindow({ x: payload.screenX - 60, y: payload.screenY - 40, width: 900, height: 700 });
-    transferOwnership(payload.sessionId, evt.sender.id, newWin.webContents.id, /*freshWindow*/ true);
-    maybeAutoCloseEmpty(evt.sender.id);
-    stopCursorTicker();
-  });
-
-  // Chrome-style live tear-off. Spawns a peer window mid-drag (threshold hit in
-  // SessionStrip) and returns its id so the source window can stream cursor
-  // positions to it until pointerup. Ownership transfers immediately; the new
-  // window is repositioned via SESSION_DRAG_WINDOW_MOVE as the user drags.
-  // Approx. position of the FIRST pill inside a freshly-spawned window's
-  // header, measured from the window's top-left in DIPs. Used to offset the
-  // new window so the cursor ends up over the pill, not the window corner.
-  // Tuned empirically on Windows (hidden titlebar, no REMOTE badge, chat/
-  // terminal toggle on the left); bump if the left cluster grows or shrinks.
-  const DETACHED_FIRST_PILL_X = 96;
-  const DETACHED_FIRST_PILL_Y = 12;
-
-  // Given cursor screen coords + where inside the pill the user grabbed,
-  // compute where the new window's top-left should sit so the cursor hovers
-  // over the same spot on that session's pill inside the new window.
-  const computeDetachedWindowPos = (screenX: number, screenY: number, offsetX: number, offsetY: number) => ({
-    x: Math.round(screenX - DETACHED_FIRST_PILL_X - offsetX),
-    y: Math.round(screenY - DETACHED_FIRST_PILL_Y - offsetY),
-  });
-
-  // Tracks live tear-off state so we can defer source-window auto-close until
-  // the user releases (closing mid-drag would kill the pointer-capture path
-  // and leave the new window stuck in mouse-passthrough mode).
-  let liveDragWindowId: number | null = null;
-  let liveDragSourceId: number | null = null;
-  let liveDragOffset: { x: number; y: number } = { x: 40, y: 12 };
-  // Updated by the post-spawn measurement (see SESSION_DETACH_LIVE) so the
-  // streaming setPosition uses the *real* first-pill position in the new
-  // window, not the static DETACHED_FIRST_PILL_X/Y guess.
-  let measuredFirstPillX: number = DETACHED_FIRST_PILL_X;
-  let measuredFirstPillY: number = DETACHED_FIRST_PILL_Y;
-
-  ipcMain.handle(IPC.SESSION_DETACH_LIVE, (evt, payload: { sessionId: string; offsetX?: number; offsetY?: number }) => {
-    // Read cursor position from main (DIPs, DPI-correct) instead of trusting
-    // renderer-reported screenX/screenY — those can be in physical pixels on
-    // scaled Windows displays and put the new window at the wrong screen pos.
-    const cursor = screen.getCursorScreenPoint();
-    liveDragOffset = { x: payload.offsetX ?? 40, y: payload.offsetY ?? 12 };
-    const pos = computeDetachedWindowPos(cursor.x, cursor.y, liveDragOffset.x, liveDragOffset.y);
-    // inactive: show without stealing focus so the source window keeps
-    // receiving pointer events (the drag isn't finished yet).
-    const newWin = createAppWindow({ x: pos.x, y: pos.y, width: 900, height: 700, inactive: true });
-    // Make the new window pass pointer events through to whatever sits under
-    // the cursor. Combined with setPosition() following the cursor, the source
-    // window keeps getting pointermove until the user releases — at which
-    // point SESSION_DRAG_ENDED clears this and refocuses.
-    try { newWin.setIgnoreMouseEvents(true, { forward: true }); } catch { /* older electron */ }
-    liveDragWindowId = newWin.webContents.id;
-    liveDragSourceId = evt.sender.id;
-    transferOwnership(payload.sessionId, evt.sender.id, newWin.webContents.id, /*freshWindow*/ true);
-    // Defer maybeAutoCloseEmpty(source) to SESSION_DRAG_ENDED — if we close
-    // the source mid-drag, its renderer dies and never fires pointerup, so
-    // dragEnded never reaches main and the new window stays click-through.
-
-    // Once the new window has its React tree up, measure the actual first pill
-    // position and re-anchor the window so the cursor sits exactly over the
-    // grabbed spot on that pill. The DETACHED_FIRST_PILL_X/Y constants used at
-    // initial spawn are only an approximation; this corrects any drift from
-    // varying header layouts (REMOTE badge present/absent, mac vs win toggle).
-    newWin.webContents.once('did-finish-load', () => {
-      // Small delay so React mounts and the pill paints before we measure.
-      setTimeout(async () => {
-        if (newWin.isDestroyed() || liveDragWindowId !== newWin.webContents.id) return;
-        try {
-          const pillRect = await newWin.webContents.executeJavaScript(
-            `(() => { const el = document.querySelector('[data-session-idx]'); if (!el) return null; const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height }; })()`,
-          );
-          if (!pillRect) return;
-          const cursor = screen.getCursorScreenPoint();
-          const correctedX = Math.round(cursor.x - pillRect.left - liveDragOffset.x);
-          const correctedY = Math.round(cursor.y - pillRect.top - liveDragOffset.y);
-          // Update the constants too so the streaming setPosition during the
-          // remaining drag uses the measured values, not the initial guess.
-          measuredFirstPillX = pillRect.left;
-          measuredFirstPillY = pillRect.top;
-          newWin.setPosition(correctedX, correctedY);
-        } catch { /* measurement is best-effort; constants fall back */ }
-      }, 80);
-    });
-
-    return { windowId: newWin.webContents.id };
-  });
-
-  // Follow-the-cursor. Renderer just signals a frame happened; main reads the
-  // authoritative cursor position from the OS and uses the *measured* first-
-  // pill position (set after the new window mounts) so the cursor stays over
-  // the pill the user grabbed, not over an estimated header offset.
-  ipcMain.on(IPC.SESSION_DRAG_WINDOW_MOVE, () => {
-    if (liveDragWindowId === null) return;
-    const win = windowFromWcId(liveDragWindowId);
-    if (!win || win.isDestroyed()) return;
-    const cursor = screen.getCursorScreenPoint();
-    win.setPosition(
-      Math.round(cursor.x - measuredFirstPillX - liveDragOffset.x),
-      Math.round(cursor.y - measuredFirstPillY - liveDragOffset.y),
-    );
-  });
-
-  // Drop landed on another window's SessionStrip — move ownership there.
-  ipcMain.on(IPC.SESSION_DRAG_DROPPED, (evt, payload: { sessionId: string; targetWindowId: number; insertIndex: number }) => {
-    transferOwnership(payload.sessionId, evt.sender.id, payload.targetWindowId, /*freshWindow*/ false);
-    maybeAutoCloseEmpty(evt.sender.id);
-    stopCursorTicker();
-  });
-
-  // ── 'html-drag' tear-off (Linux/Wayland) ──────────────────────────────────
-  //
-  // Everything above this point resolves a cross-window drag from SCREEN
-  // coordinates, and on Wayland every one of those is zero — the cursor's
-  // position, each window's position, and setPosition, which is a no-op that
-  // still reports success. So peer windows never highlighted, the torn-off
-  // window never followed the cursor, and the drop always resolved to "you
-  // dropped it on nothing". A pill in a torn-off window could never be dragged
-  // back (Destin, 2026-09-03: "permanently stuck with two windows").
-  //
-  // There, the pill is a browser-native draggable and the compositor carries
-  // the whole gesture; the window it lands on is TOLD, in its own window-local
-  // coordinates, and claims the session with the message below. Main's only
-  // job is ownership. (A previous attempt started the drag from here with
-  // webContents.startDrag — abandoned because on Linux that API crops the
-  // picture to ~138px and can carry nothing but a file: session-drag-model.ts.)
-  //
-  // The window that RECEIVED an 'html-drag' drop claims the session. Unlike
-  // SESSION_DRAG_DROPPED (sent by the source), this arrives from the TARGET, so
-  // the source is resolved from the registry and never taken from the payload —
-  // a forged message can only move a session to the window that sent it, and
-  // only if some window really owns it.
-  ipcMain.on(IPC.SESSION_DRAG_ADOPT, (evt, payload: { sessionId: string }) => {
-    const from = windowRegistry.getOwner(payload.sessionId);
-    if (from == null || from === evt.sender.id) return;
-    transferOwnership(payload.sessionId, from, evt.sender.id, /*freshWindow*/ false);
-    maybeAutoCloseEmpty(from);
-  });
-
-  // Switcher selected a remote session — focus that window and tell it to
-  // switch its active session.
-  ipcMain.on(IPC.WINDOW_FOCUS_AND_SWITCH, (_evt, { windowId, sessionId }: { windowId: number; sessionId: string }) => {
-    const info = sessionManager.getSession(sessionId);
-    const win = windowFromWcId(windowId);
-    if (!win || !info) return;
-    win.focus();
-    // refocusOnly tells the target its state already has this session — just switch active.
-    win.webContents.send(IPC.SESSION_OWNERSHIP_ACQUIRED, { sessionId, sessionInfo: info, freshWindow: false, refocusOnly: true });
-  });
-
-  // Active-drag cursor broadcasting: while a source window is dragging a pill,
-  // every other window needs to know where the cursor is (OS only delivers
-  // pointer events to the active window). Ticker runs ~30Hz; stops on any
-  // drop resolution.
-  let cursorTicker: NodeJS.Timeout | null = null;
-  function stopCursorTicker() {
-    if (cursorTicker) { clearInterval(cursorTicker); cursorTicker = null; }
-  }
-  ipcMain.on(IPC.SESSION_DRAG_STARTED, () => {
-    stopCursorTicker();
-    cursorTicker = setInterval(() => {
-      const { x, y } = screen.getCursorScreenPoint();
-      for (const wid of windowRegistry.getWindowIds()) {
-        windowFromWcId(wid)?.webContents.send(IPC.CROSS_WINDOW_CURSOR, { screenX: x, screenY: y });
-      }
-    }, 33);
-  });
-  ipcMain.on(IPC.SESSION_DRAG_ENDED, () => {
-    stopCursorTicker();
-    // Finalize any live-detached window: re-enable pointer events and focus
-    // it so the user can interact with the session they just tore off.
-    if (liveDragWindowId !== null) {
-      const win = windowFromWcId(liveDragWindowId);
-      if (win && !win.isDestroyed()) {
-        try { win.setIgnoreMouseEvents(false); } catch { /* ignore */ }
-        win.focus();
-      }
-      liveDragWindowId = null;
-    }
-    // Now safe to close the source window if it became empty during the drag.
-    // Deferred from SESSION_DETACH_LIVE so the source's renderer survives long
-    // enough to fire pointerup and reach this handler.
-    if (liveDragSourceId !== null) {
-      maybeAutoCloseEmpty(liveDragSourceId);
-      liveDragSourceId = null;
-    }
-    measuredFirstPillX = DETACHED_FIRST_PILL_X;
-    measuredFirstPillY = DETACHED_FIRST_PILL_Y;
-  });
-
-  // Resolve a drop: ask each window whether its SessionStrip bounding box
-  // currently contains the cursor. The source window uses the answer on
-  // pointerup to pick between re-dock (other window) vs detach (no hit).
-  ipcMain.handle(IPC.SESSION_DROP_RESOLVE, async () => {
-    const { x, y } = screen.getCursorScreenPoint();
-    for (const wid of windowRegistry.getWindowIds()) {
-      const win = windowFromWcId(wid);
-      if (!win || win.isDestroyed()) continue;
-      try {
-        const hit = await win.webContents.executeJavaScript(
-          `(() => {
-            const el = document.querySelector('[data-session-strip]');
-            if (!el) return false;
-            const r = el.getBoundingClientRect();
-            const lx = ${x} - window.screenX;
-            const ly = ${y} - window.screenY;
-            return (lx >= r.left && lx <= r.right && ly >= r.top && ly <= r.bottom);
-          })()`,
-        );
-        if (hit) return { targetWindowId: wid };
-      } catch { /* window not ready — skip */ }
-    }
-    return { targetWindowId: null };
-  });
+// WHY (2026-10-01 one-core R3-8): the window, detach and drag channels (window:answer-close, window:open-detached,
+// session:detach-*, session:drag-*, detach:claim-pending, ...) are table entries (main/ipc/window.ts, detach.ts). They lean on
+// this file's window plumbing (creating a window, the ownership registry, the pending-claim queue, the close-request
+// queue), so those stay here and are handed over once.
+function bindWindowPlumbing() {
+  // Welcome back (design §4, plan T3): the renderer's answer to a window:close-request push. closeRequests routes the
+  // answer to the right pending entry by requestId, so one hand-over serves every window.
+  bindWindow({ answerClose: (answer) => closeRequests.answer(answer.requestId, { close: answer.close, reopen: answer.reopen }) });
+  bindDetach({ windowRegistry, sessionManager, pendingAcquire, fills: nativeRuntime?.fills, createAppWindow, windowFromWcId });
 }
 
 // Apply GPU preference. Reads ~/.claude/youcoded-performance.json synchronously.
@@ -1940,15 +1519,9 @@ void app.whenReady().then(async () => {
   }
   perfMark('main:chore:remote-server:done');
 
-  // Game favorites + presence incognito: prefs-service.ts owns the file, shared with
-  // remote-server.ts so a phone gets the same answers (its copy had drifted).
-  ipcMain.handle('favorites:get', async () => getGameFavorites());
-  ipcMain.handle('favorites:set', async (_event, favorites: string[]) => setGameFavorites(favorites));
-  ipcMain.handle('game:getIncognito', async () => getGameIncognito());
-  ipcMain.handle('game:setIncognito', async (_event, incognito: boolean) => setGameIncognito(incognito));
+  // WHY (2026-10-01 one-core R3-8): favorites:* and game:* are table entries (main/ipc/game.ts); prefs-service.ts owns the file.
 
-  // Expose the system home directory to the renderer (async to avoid blocking)
-  ipcMain.handle('get-home-path', () => os.homedir());
+  // get-home-path is a table entry (main/ipc/files.ts) since one-core R3-7.
 
   // Remove the default menu bar (File, Edit, View, Window, Help)
   Menu.setApplicationMenu(null);
@@ -1962,18 +1535,7 @@ void app.whenReady().then(async () => {
   registerThemeProtocol();
   perfMark('main:chore:theme-protocol:done');
 
-  // Office editors (design §3a): each open document gets its own sealed office://<token>
-  // origin. initOfficeSessionsSafely() makes this instance's own random-suffixed temp base
-  // (office-session-registry.ts, never shared with the live app); the protocol and the IPC
-  // below reach the same registry through getOfficeSessions(). WHY guarded, not awaited bare (fix round 2): a failed
-  // mkdtemp (full/unwritable/policy-blocked temp dir) must degrade Office to unavailable, not
-  // abort the rest of startup and leave the app with no window.
-  const officeSessions = await initOfficeSessionsSafely();
-  if (officeSessions) registerOfficeProtocol({ root: officeRoot(), sessions: officeSessions, fonts: officeThemeFonts(app.getPath('userData'), path.join(os.homedir(), '.claude')), editorSettings: officeEditorSettings(app.getPath('userData')) });
-  // office:* (Task 5). WHY even without sessions: the renderer gets "unavailable", not a missing
-  // handler. WHY the getter: the registry goes away at quit, and each request must see that.
-  registerOfficeIpc(ipcMain, { getSessions: getOfficeSessions, available: () => officeAvailable(), root: officeRoot(), userData: app.getPath('userData'), documents: app.getPath('documents'), pruneVersionsAfterMs: 30_000 });
-  registerOfficeComments(); // comments on an open document go through its editor (office-comments.ts)
+  await startOffice(app); // sealed office:// origins, the office:* handlers and live comments (office/office-boot.ts)
   perfMark('main:chore:office-protocol:done');
 
   // Marketplace auth store — instantiated once at startup, passed to IPC handlers.
@@ -1985,27 +1547,23 @@ void app.whenReady().then(async () => {
   // plugins installed on another device since last launch. No-ops when signed
   // out; never awaited (bookkeeping must not delay startup).
   void reconcileInstalls(marketplaceAuthStore, skillProvider);
-  // Remote clients read the signed-in state through the WS server, which has no
-  // ipcMain access — without this the game lobby showed "signed out" in a remote
-  // browser while the host app was signed in.
-  remoteServer.setAccountStore(marketplaceAuthStore);
   // Accounts Phase 2 — social graph (friends/requests/blocks) IPC. Shares the
   // same token-bound auth store; handlers live in a sibling module to keep the
   // account file focused on auth + marketplace writes. windowRegistry +
   // remoteServer let the presence relay (Task 6) reach every local window and
   // any connected remote browser.
-  registerSocialHandlers(marketplaceAuthStore, windowRegistry, remoteServer);
+  startSocial(marketplaceAuthStore, windowRegistry, remoteServer);
   // Games arcade scores (spec §6.1). Same token-bound store; its own module for
   // the same reason social has one — the account file stays about auth.
-  registerArcadeHandlers(marketplaceAuthStore);
+  initArcadeOps(marketplaceAuthStore);
   // Voice typing (design 2026-09-05). WITHOUT THIS LINE the six `voice:*`
   // channels exist in preload.ts and nothing answers them, so tapping the
   // microphone would hang forever — the feature would ship dead. It takes only
   // the userData path: everything else it needs (the downloaded speech engine,
   // the window that opened the mic) it resolves for itself.
-  registerVoiceHandlers(app.getPath('userData'));
+  startVoice(app.getPath('userData'));
   // Named "accounts", not "auth-store": this window covers five registrations —
-  // createAuthStore, registerMarketplaceApiHandlers, remoteServer.setAccountStore,
+  // createAuthStore, registerMarketplaceApiHandlers, the account channel table entries,
   // registerSocialHandlers and registerArcadeHandlers — not just the store.
   perfMark('main:chore:accounts:done');
 
@@ -2020,10 +1578,9 @@ void app.whenReady().then(async () => {
   void welcomeBackStore.startup();
 
   perfMark('main:create-window:start');
-  createWindow(isFirstRun ? firstRunManager : undefined);
+  const outboxBroadcast = createWindow(isFirstRun ? firstRunManager : undefined);
   perfMark('main:create-window:done');
-  registerDetachIpc();
-  registerCloseRequestIpc();
+  bindWindowPlumbing();
 
   // Buddy window position persistence — JSON file in userData so restarts
   // restore the mascot to where the user left it. Keyed by 'mascot' only:
@@ -2172,217 +1729,32 @@ void app.whenReady().then(async () => {
   // NOTICE this; without a reaction, noticing changed nothing.
   setBuddyHelperLostHandler(() => buddyManager.hide());
 
-  // ─── CONSENT IS ENFORCED HERE, not in the settings screen (design §5) ────
-  //
-  // The product promise is "decline the helper and you get no buddy at all",
-  // and a check in the settings screen cannot keep it: the settings screen is
-  // not the only thing that turns the buddy on — the app also brings him back
-  // at launch from a saved preference, with no helper check anywhere on that
-  // path. Without this line, a user who declined (or who never got asked,
-  // because the status lookup failed) gets a buddy who appears and then refuses
-  // to be dragged: the exact bug this feature exists to remove.
-  //
-  // It refuses on "a helper is needed here", NEVER on "this is Linux". A KDE
-  // user on X11 — or on Wayland whose windows are actually X11-backed, which
-  // looks identical from every environment variable — moves his own windows
-  // perfectly well and must never lose a buddy that already works.
-  //
-  // The status is re-read on every show rather than trusted from launch,
-  // because the user can switch the script off in KDE's own System Settings
-  // while YouCoded is running (design §4).
-  ipcMain.handle(IPC.BUDDY_SHOW, async (_evt, style?: unknown) => {
-    const refusal = buddyShowRefusal(await refreshBuddyHelperStatus());
-    if (refusal) return { ok: false, reason: refusal };
-    // Renderer input — only the two known styles get through; anything else
-    // keeps the current style.
-    buddyManager.show(style === 'tray' || style === 'floating' ? style : undefined);
-    return { ok: true };
-  });
-  ipcMain.handle(IPC.BUDDY_HIDE, () => buddyManager.hide());
-  ipcMain.handle(IPC.BUDDY_TOGGLE_CHAT, () => buddyManager.toggleChat());
-  ipcMain.handle(IPC.BUDDY_SET_SESSION, (_evt, sessionId: string) => {
-    buddyManager.setViewedSession(sessionId);
-  });
-  ipcMain.handle(IPC.BUDDY_SUBSCRIBE, (evt, sessionId: string) => {
-    windowRegistry.subscribe(sessionId, evt.sender.id);
-    // No replay kick is needed here — the renderer calls
-    // window.claude.detach.requestTranscriptReplay(sessionId) right after
-    // subscribe resolves, which sends IPC.TRANSCRIPT_REPLAY; history
-    // streams back via the normal TRANSCRIPT_EVENT channel, which reaches
-    // owner ∪ subscribers (including this new subscription) thanks to A2.
-  });
-  ipcMain.handle(IPC.BUDDY_UNSUBSCRIBE, (evt, sessionId: string) => {
-    windowRegistry.unsubscribe(sessionId, evt.sender.id);
-  });
-  ipcMain.handle(IPC.BUDDY_GET_VIEWED_SESSION, () => buddyManager.getViewedSession());
-  // Fire-and-forget drag handler. High-frequency (one event per pointermove);
-  // using ipcMain.on rather than ipcMain.handle avoids the async round-trip.
-  // CSS -webkit-app-region: drag was removed from BuddyMascot because on
-  // Windows Electron implements it via WM_NCHITTEST → HTCAPTION, which makes
-  // the OS consume all pointer events for window dragging — the renderer
-  // never gets pointerup, so click-to-toggle-chat never fires.
-  // The payload is WINDOW-LOCAL on purpose — how far the cursor has strayed
-  // from the pixel it grabbed him by, inside the mascot's own window. A
-  // renderer's screen coordinates are a lie on Wayland (probe Round 8:
-  // window.screenX stayed 0 through three real moves), and feeding them back
-  // made the buddy bounce between two points every frame. See
-  // BuddyWindowManager.moveMascotFromPointer.
-  ipcMain.on(IPC.BUDDY_MOVE_MASCOT, (_evt, target: { localDx: number; localDy: number }) => {
-    buddyManager.moveMascotFromPointer(target.localDx, target.localDy);
-  });
-  // Drag release → edge-snap detection against the window's final bounds.
-  ipcMain.on(IPC.BUDDY_DRAG_ENDED, () => buddyManager.dragEnded());
-  ipcMain.on(IPC.BUDDY_MASCOT_HIT, (_evt, over: unknown) => buddyManager.setMascotHit(over === true));
-  ipcMain.handle(IPC.BUDDY_DISMISS, () => buddyManager.dismiss());
-  // WHY no `keepAbove` on the status any more (2026-09-16): it rode along here
-  // for the deleted overlay's KDE "pin above" toggle, whose Settings row went
-  // 2026-09-04. Nothing in the renderer read the field; the three-window buddy
-  // is pinned by the KWin helper, not by a saved preference.
-  ipcMain.handle(IPC.BUDDY_GET_STATUS, () => buddyManager.getStatus());
-  // Restore + focus the main window, then ask it to switch to the buddy's
-  // viewed session so the user lands in the same conversation (spec §4.2).
-  ipcMain.handle(IPC.BUDDY_OPEN_MAIN, (_event, request?: { resume?: string }) => {
-    // Same source of truth the buddyManager deps use for mainWindow.
-    const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
-    if (!win) {
-      if (request?.resume) throw new Error('Main window unavailable for handoff.');
-      return;
-    }
-    if (win.isMinimized()) win.restore();
-    win.show();
-    win.focus();
-    // WHY: a buddy explicit handoff must enter main's pending read/draft flow;
-    // focusing its old writer would bypass freshness. Main re-reads the row.
-    if (typeof request?.resume === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(request.resume)) {
-      win.webContents.send(IPC.UI_ACTION_RECEIVED, { type: '_BUDDY_RESUME', sessionId: request.resume });
-      return;
-    }
-    const sid = buddyManager.getViewedSession();
-    if (sid) win.webContents.send(IPC.SESSION_FOCUS_REQUEST, sid);
-  });
+  // WHY (2026-10-01 one-core R3-8): every buddy:* channel is a table entry (main/ipc/buddy.ts), including the consent gate
+  // (design section 5: a decline means no buddy at all, enforced where the buddy is shown, not in the settings screen) and
+  // the desktop capture. They lean on the window manager and registry built here, handed over once.
+  bindBuddy({ buddyManager, windowRegistry, getMainWindow: () => mainWindow });
 
-  // Desktop-capture action: screenshot the display the mascot sits on,
-  // excluding the buddy windows themselves.
-  //
-  // Two exclusion strategies, picked at runtime:
-  //
-  // 1. NATIVE EXCLUSION (preferred). excludeFromCapture() applied to
-  //    each buddy window at creation time (Windows 10 build 19041+ via
-  //    WDA_EXCLUDEFROMCAPTURE; macOS via NSWindowSharingNone). Buddy
-  //    stays fully visible to the user but invisible to every screen-
-  //    capture API, including our own desktopCapturer. Zero flicker.
-  //
-  // 2. OPACITY-DIM FALLBACK. On older Win10, Linux, or if the koffi
-  //    binding failed to load, we dip the buddy windows to opacity 0
-  //    for ~60 ms, capture, and restore. One-frame flicker but still a
-  //    clean desktop shot. We chose opacity over hide/show because on
-  //    frameless+transparent+alwaysOnTop windows the hide path can
-  //    strand them invisible until the app restarts.
-  //
-  // Why NOT setContentProtection(true) on Windows: it maps to
-  // WDA_MONITOR which paints the window solid black during capture —
-  // three black rectangles in the screenshot.
-  ipcMain.handle(IPC.BUDDY_CAPTURE_DESKTOP, async (): Promise<string | null> => {
-    const { desktopCapturer } = require('electron') as typeof import('electron');
-    // captureWindows() filters to alive, non-destroyed windows, mascot first
-    // when present — the same set and ordering the older three getters
-    // (getMascotWindow/getChatWindow/getBarWindow) produced.
-    const liveBuddyWindows = buddyManager.captureWindows();
-    const mascotWin = liveBuddyWindows[0] ?? null;
-    // Pick the display the mascot lives on — multi-monitor users expect
-    // "screenshot my desktop" to mean the one their buddy is sitting on,
-    // not every monitor merged into one long strip.
-    // WHY (targetDisplay): picks mascot's display when present, or primary
-    // display as fallback. Theoretical "mascot gone but chat/bar alive" state
-    // would pick the surviving window's display instead — but hide() clears all
-    // three windows together, so behavior is unchanged in practice.
-    const targetDisplay = mascotWin
-      ? screen.getDisplayMatching(mascotWin.getBounds())
-      : screen.getPrimaryDisplay();
-
-    // If the platform supports native capture exclusion (set at window
-    // creation in createAppWindow), the buddies are already invisible to
-    // desktopCapturer and we skip the opacity dip entirely.
-    const needsOpacityFallback = !nativeCaptureExclusionAvailable();
-    const buddyWindows = needsOpacityFallback ? liveBuddyWindows : [];
-
-    try {
-      if (needsOpacityFallback) {
-        // One compositor frame (~16 ms) suffices; 60 ms cushions slower
-        // machines. The buddy is visually invisible during this window —
-        // reads as a single-frame flicker, NOT a vanishing event.
-        for (const w of buddyWindows) w.setOpacity(0);
-        await new Promise<void>((r) => setTimeout(r, 60));
+  // Wire the attention:report / attention:get-summary channels. Renderers push per-session states; module-scope
+  // attentionReports + debouncedBroadcastAttention aggregate and fan out the summary. The Map and debouncer are module-scope so
+  // the 'closed' handler in createAppWindow can also clean up on window removal.
+  // WHY (2026-10-01 one-core R3-8): the two channels are table entries (main/ipc/app.ts); this hands them the bookkeeping.
+  bindApp({
+    reportAttention: (windowId, payload) => {
+      let byWin = attentionReports.get(windowId);
+      if (!byWin) { byWin = new Map(); attentionReports.set(windowId, byWin); }
+      if ('clear' in payload) {
+        byWin.delete(payload.sessionId);
+      } else {
+        byWin.set(payload.sessionId, {
+          attentionState: payload.attentionState,
+          awaitingApproval: payload.awaitingApproval,
+          status: payload.status,
+        });
       }
-
-      // Request thumbnails at physical pixel resolution so the saved
-      // PNG is full-res, not a 150×150 thumbnail. display.size is in
-      // DIPs — multiply by scaleFactor for HiDPI screens.
-      const sf = targetDisplay.scaleFactor || 1;
-      const thumbnailSize = {
-        width: Math.round(targetDisplay.size.width * sf),
-        height: Math.round(targetDisplay.size.height * sf),
-      };
-      const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize });
-      // Match by display_id. On Electron, display_id is a stringified
-      // number equal to Electron's display.id — but on some Linux setups
-      // it comes back empty, so we fall back to the first screen source
-      // if an exact match isn't found.
-      const targetId = String(targetDisplay.id);
-      const src = sources.find((s) => s.display_id === targetId) ?? sources[0];
-      if (!src) return null;
-      const pngBuffer = src.thumbnail.toPNG();
-
-      // Write to a timestamped temp file. InputBar renders the preview
-      // with <img src={`file://${path}`}> and sends the path as input to
-      // the PTY, so a stable on-disk path is exactly what it wants.
-      const tmpName = `youcoded-buddy-capture-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.png`;
-      const tmpPath = path.join(os.tmpdir(), tmpName);
-      await fs.promises.writeFile(tmpPath, pngBuffer);
-
-      // Push to the chat renderer specifically — it's the only window
-      // whose InputBar should auto-attach this capture. We resolve via
-      // buddyManager instead of broadcasting because other windows
-      // (main, detached peers) shouldn't auto-attach a screenshot the
-      // user took from the floater's capture button.
-      buddyManager.chatWebContents()?.send(IPC.BUDDY_ATTACH_FILE, tmpPath);
-      return tmpPath;
-    } catch (err) {
-      log('ERROR', 'Buddy', 'capture-desktop failed', { error: String(err) });
-      return null;
-    } finally {
-      // Always restore opacity — even on error — so a failed capture
-      // (e.g. macOS screen-recording permission denial) can't leave the
-      // buddy invisible. No-op when we didn't dip in the first place.
-      for (const w of buddyWindows) {
-        if (!w.isDestroyed()) w.setOpacity(1);
-      }
-    }
+      debouncedBroadcastAttention();
+    },
+    attentionSummary: () => buildAttentionSummary(),
   });
-
-  // Wire the attention:report IPC channel. Renderers push per-session states
-  // here; module-scope attentionReports + debouncedBroadcastAttention aggregate
-  // and fan out the summary. The Map and debouncer are module-scope so the
-  // 'closed' handler in createAppWindow can also clean up on window removal.
-  ipcMain.on(IPC.ATTENTION_REPORT, (evt, payload: AttentionReport) => {
-    let byWin = attentionReports.get(evt.sender.id);
-    if (!byWin) { byWin = new Map(); attentionReports.set(evt.sender.id, byWin); }
-    if ('clear' in payload) {
-      byWin.delete(payload.sessionId);
-    } else {
-      byWin.set(payload.sessionId, {
-        attentionState: payload.attentionState,
-        awaitingApproval: payload.awaitingApproval,
-        status: payload.status,
-      });
-    }
-    debouncedBroadcastAttention();
-  });
-
-  // Pull-style companion to the SESSION_ATTENTION_SUMMARY push. A renderer
-  // calls this from its mount effect so a window opened mid-turn draws the
-  // right dot immediately instead of waiting for the next state flip.
-  ipcMain.handle(IPC.ATTENTION_GET_SUMMARY, async () => buildAttentionSummary());
 
   // Start native sync service — owns push/pull lifecycle, background timer,
   // session-end sync. Replaces bash hook sync when app is running.
@@ -2519,7 +1891,7 @@ void app.whenReady().then(async () => {
   startChatsearchIndex();
   // WHY after the index: the drainer reads the same store root; requests it
   // applies trigger the index rebuild through emitConversationMetaChanged.
-  startOutboxDrain();
+  startOutboxDrain(outboxBroadcast);
 
   // The legacy session-end backup push (SyncService.pushSession) was removed in
   // sync-legacy-demolition. Conversations now travel via the sync-spaces

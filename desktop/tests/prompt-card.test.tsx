@@ -22,7 +22,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, act } from '@testing-library/react';
 import React from 'react';
 import PromptCard from '../src/renderer/components/PromptCard';
-import { parseInkSelect, menuToButtons } from '../src/renderer/parser/ink-select-parser';
+import { parseInkSelect, menuToButtons } from '../src/shared/ink-select-parser';
 import type { InteractivePrompt } from '../src/renderer/state/chat-types';
 
 const RESUME_SCREEN = [

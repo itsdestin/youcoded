@@ -2,6 +2,9 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { EventEmitter } from 'events';
+// WHY (2026-09-29 one-core R1): startOAuthLogin used to read Electron's `app` itself; it now takes
+// the flag so prerequisite-installer.ts (also loaded by the native runtime) needs no Electron.
+import { app } from 'electron';
 import { log } from './logger';
 import {
   FirstRunState,
@@ -26,8 +29,10 @@ import type { ChatGptAuth } from './providers/chatgpt-auth';
 import type { CuratedModel, DownloadProgress } from '../shared/model-manager-types';
 import { writeSetupDownload } from './first-run-local';
 
-/** The key services "Use an API key" accepts (first-run local models, F-1). */
-export type NativeKeyService = 'anthropic' | 'openai' | 'google' | 'openrouter';
+// WHY (2026-09-30 one-core R3-3): NativeKeyService moved to shared/first-run-types.ts (the
+// first-run:submit-api-key channel row names it); re-exported so existing imports keep working.
+import type { NativeKeyService } from '../shared/first-run-types';
+export type { NativeKeyService };
 const NATIVE_KEY_LABEL: Record<Exclude<NativeKeyService, 'openrouter'>, string> = {
   anthropic: 'Anthropic',
   openai: 'OpenAI',
@@ -478,7 +483,7 @@ export class FirstRunManager extends EventEmitter {
     if (round !== this.authRound) return { url: null };
 
     // Spawn the login process — it outputs the auth URL then waits for callback
-    const oauth = startOAuthLogin();
+    const oauth = startOAuthLogin(app?.isPackaged);
     this.stopOAuth = () => oauth.kill();
 
     // Wait briefly for the URL to be captured from stdout

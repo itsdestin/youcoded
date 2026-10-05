@@ -40,6 +40,7 @@ import { isSensitivePath } from './artifacts/read-binary-access';
 import { authorizeBytesRead, judgeRecordLocation } from './artifacts/read-service';
 import { readSidecarShared } from './artifacts/artifact-store';
 import { authorizeArtifactRead } from './artifacts/write-authorization';
+import { isPhoneDeniedFile, KEPT_ON_COMPUTER } from './phone-read-deny';
 
 type FileHandle = fs.promises.FileHandle;
 
@@ -88,6 +89,7 @@ export interface MintRequest {
  * Refusal codes, each naming what the host actually decided. The phone's
  * notice puts them into words and must never guess (download-file.ts):
  *   sensitive      the real path is in the private set (keys, credentials, .env)
+ *   kept-on-computer  the real path is on the phone deny list (phone-read-deny.ts: .git, keys, the app's own secrets…)
  *   outside-roots  not under any folder the computer shows, nor a tracked file
  *   not-a-file     a folder, a pipe, a device
  *   not-allowed    no stable identity (inode 0), or the path changed under us
@@ -233,6 +235,9 @@ export class RemoteDownloads {
       return { ok: false, error: e?.code === 'ENOENT' ? 'orphan' : String(e?.message ?? e) };
     }
     if (isSensitivePath(canonicalize(realPath, null))) return { ok: false, error: 'sensitive' };
+    // WHY (2026-10-01 one-core R3-SEC): Download is phone-only, so the phone deny list applies to every mint, on the
+    // resolved path and the name the phone gave (`.git/config`, `id_rsa`, `*.pem`, the remote password file…).
+    if (await isPhoneDeniedFile(absolutePath, realPath)) return { ok: false, error: KEPT_ON_COMPUTER };
 
     const bytes = await authorizeBytesRead(realPath);
     let allowed = bytes.ok;
@@ -460,7 +465,10 @@ export class RemoteDownloads {
     // folder on the way swapped for a link must be caught here (finding 3).
     if (st.dev !== entry.dev || st.ino !== entry.ino || !st.isFile()
         || realNow !== entry.realPath || (opened !== null && opened !== entry.realPath)
-        || isSensitivePath(canonicalize(realNow, null))) {
+        || isSensitivePath(canonicalize(realNow, null))
+        // WHY (2026-10-01 one-core R3-SEC): the same deny list again at the GET, in case the file was swapped for a
+        // link to a secret after the link was minted.
+        || await isPhoneDeniedFile(realNow)) {
       this.tokens.delete(token);     // a link that can never succeed again
       dropHandle();
       this.notFound(res);

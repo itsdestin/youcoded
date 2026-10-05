@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createArtifactToolUseTracker } from '../../src/renderer/state/artifact-tool-use-tracker';
+import { ev, malformedEv } from '../helpers/transcript-events';
 
 /**
  * Pins the renderer half of the 2026-08-15 "YouCoded dies 16–21 s after
@@ -14,26 +15,20 @@ import { createArtifactToolUseTracker } from '../../src/renderer/state/artifact-
 const ROOT = '/home/u/proj';
 
 function toolUse(i: number, opts: { tool?: string; path?: string; sessionId?: string; toolUseId?: string } = {}) {
-  return {
-    type: 'tool-use',
-    sessionId: opts.sessionId ?? 'sess-1',
-    uuid: `u${i}`,
-    timestamp: Date.now(),
-    data: {
-      toolName: opts.tool ?? 'Edit',
-      toolUseId: opts.toolUseId ?? `toolu_${i}`,
-      toolInput: { file_path: opts.path ?? `${ROOT}/src/file${i % 20}.ts` },
-    },
-  };
+  return ev('tool-use', {
+    toolName: opts.tool ?? 'Edit',
+    toolUseId: opts.toolUseId ?? `toolu_${i}`,
+    toolInput: { file_path: opts.path ?? `${ROOT}/src/file${i % 20}.ts` },
+  }, { sessionId: opts.sessionId ?? 'sess-1', uuid: `u${i}`, timestamp: Date.now() });
 }
 
 function sendUse(toolUseId: string, files: string[], sessionId = 'sess-1') {
-  return { type: 'tool-use', sessionId, uuid: `u-${toolUseId}`, timestamp: Date.now(),
-    data: { toolName: 'SendUserFile', toolUseId, toolInput: { files, status: 'normal' } } };
+  return ev('tool-use', { toolName: 'SendUserFile', toolUseId, toolInput: { files, status: 'normal' } },
+    { sessionId, uuid: `u-${toolUseId}`, timestamp: Date.now() });
 }
 function toolResult(toolUseId: string, opts: { isError?: boolean; sessionId?: string } = {}) {
-  return { type: 'tool-result', sessionId: opts.sessionId ?? 'sess-1', uuid: `r-${toolUseId}`, timestamp: Date.now(),
-    data: { toolUseId, toolResult: 'x', isError: opts.isError ?? false } };
+  return ev('tool-result', { toolUseId, toolResult: 'x', isError: opts.isError ?? false },
+    { sessionId: opts.sessionId ?? 'sess-1', uuid: `r-${toolUseId}`, timestamp: Date.now() });
 }
 
 function makeTracker(overrides: Partial<Parameters<typeof createArtifactToolUseTracker>[0]> = {}) {
@@ -138,7 +133,8 @@ describe('artifact tool-use tracker', () => {
   describe('what is tracked (unchanged behaviour, now pinned)', () => {
     it('ignores non-tool events, untracked tools, and events for unknown sessions', () => {
       const { tracker, appendVersion } = makeTracker();
-      tracker.handle({ type: 'assistant-text', sessionId: 'sess-1', data: {} });
+      // Deliberately malformed (no uuid, no text): a screen must ignore, not throw.
+      tracker.handle(malformedEv('assistant-text', {}, { sessionId: 'sess-1' }));
       tracker.handle(toolUse(1, { tool: 'Bash' }));
       tracker.handle(toolUse(2, { sessionId: 'nope' }));
       expect(appendVersion).not.toHaveBeenCalled();

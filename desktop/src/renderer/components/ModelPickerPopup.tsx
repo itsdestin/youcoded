@@ -461,6 +461,7 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
                 onSelect={(c) => { void applyChoice(c); }}
                 includeClaude={!isNative}
                 includeNative={isNative}
+                runsOn="host" // the conversation lives on the computer; a phone switching its model is executed there
                 // This dialog's whole job is "change the model" — the picker IS
                 // the surface, so open straight to the favourites+search list
                 // instead of making the status-bar chip cost two clicks.

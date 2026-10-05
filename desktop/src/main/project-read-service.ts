@@ -16,8 +16,8 @@ export async function repoInfo(projectPath: string) {
   return { ok: true, ...(await getRepoInfo(projectPath)) };
 }
 
-export async function listContextFiles(projectPath: string) {
-  return { ok: true, groups: await listContext(projectPath) };
+export async function listContextFiles(projectPath: string, opts?: { refusePrivate?: boolean }) {
+  return { ok: true, groups: await listContext(projectPath, opts) };
 }
 
 /** Allow-listed to the discovered context set — project-context.ts refuses anything else. */

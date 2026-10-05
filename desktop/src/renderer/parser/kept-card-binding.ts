@@ -30,7 +30,7 @@
 //   NotebookEdit like Edit; any other tool shows its name, case-insensitive,
 //   and each short string argument somewhere in its box.
 
-import { parseInkSelect, rebindButtons, type PromptButton } from './ink-select-parser';
+import { parseInkSelect, rebindButtons, type PromptButton } from '../../shared/ink-select-parser';
 
 const clean = (l: string) => l.replace(/^\s*│\s?/, '').trim();
 const squash = (t: string) => t.replace(/\s+/g, '');

@@ -2,7 +2,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { createHash } from 'crypto';
 import type { ModelMessage } from 'ai';
-import type { TranscriptEvent } from '../../shared/types';
+// WHY looseData everywhere below (M5): every event here was read back off DISK
+// (the accepted-history reader parses JSONL lines and checks only `type`/`uuid`),
+// and these helpers look at a field BY EVENT KIND LOOKED UP AT RUNTIME, not by a
+// narrowed compile-time type. The loose view says exactly that: any payload field
+// may be there or not, and the existing `?? ''` / `?? {}` defaults stay in force.
+import { looseData, type TranscriptEvent } from '../../shared/types';
 import type { PersistedEventReference } from './session-store';
 import { imageCollapsedToolResultText, isAppGenerated, markAppGenerated, prunedToolResultText } from './compaction';
 import { restoreContinuationSizing, durableContinuationSizing } from './openai-continuation';
@@ -254,6 +259,8 @@ function parseTranscriptLines(text: string, events: Map<string, TranscriptEvent>
   for (const line of text.split('\n')) {
     if (!line.trim()) continue;
     try {
+      // WHY the cast: an UNTRUSTED disk line — only `type`/`uuid` are checked below; every
+      // payload read in this file goes through looseData() with its existing defaults (M5).
       const value = JSON.parse(line) as TranscriptEvent;
       if (value && typeof value.type === 'string' && typeof value.uuid === 'string') {
         if (events.has(value.uuid)) return false;
@@ -372,12 +379,12 @@ function eventText(event: TranscriptEvent, field: TextField): string | null {
   switch (field) {
     case 'skill-text': {
       // Mirrors history-rebuild: a body-less skill event never entered history.
-      const body = event.data?.body;
+      const body = looseData(event).body;
       if (!body) return null;
-      return event.data?.args ? `${String(body)}\n\n${String(event.data.args)}` : String(body);
+      return looseData(event).args ? `${String(body)}\n\n${String(looseData(event).args)}` : String(body);
     }
-    case 'summary-text': return `${SUMMARY_PREFIX}${String(event.data?.summary ?? '')}`;
-    default: return String(event.data?.text ?? '');
+    case 'summary-text': return `${SUMMARY_PREFIX}${String(looseData(event).summary ?? '')}`;
+    default: return String(looseData(event).text ?? '');
   }
 }
 
@@ -489,7 +496,7 @@ function acceptedAnchors(references: PersistedEventReference[], events: Map<stri
     const coalesced = group.length > 1 || (COALESCED_TYPES.has(event.type) && group[0].partId !== undefined);
     if (!coalesced) { if (group.length !== 1) return null; continue; }
     if (!COALESCED_TYPES.has(event.type)) return null;
-    const length = String(event.data?.text ?? '').length;
+    const length = String(looseData(event).text ?? '').length;
     const sorted = [...group].sort((a, b) => a.start - b.start);
     let at = 0;
     for (const reference of sorted) {
@@ -554,7 +561,7 @@ export class AcceptedHistoryStore {
         let eventUuids = allAccepted;
         if (proposal.transformation?.kind === 'summary') {
           const marker = raw.events.get(proposal.transformation.summaryEventUuid);
-          const record = marker?.data?.compactionRecord;
+          const record = (marker && looseData(marker).compactionRecord);
           const chronological = [...raw.events.keys()];
           const summary = chronological.indexOf(proposal.transformation.summaryEventUuid);
           if (!marker || summary < 0) return { ok: false, reason: 'unreferenced-history' } as const;
@@ -658,7 +665,7 @@ export class AcceptedHistoryStore {
       // recorded at publish time, not a guess based on their text.
       if (message.role === 'user' && (descriptor.appGenerated === true || (descriptor.content?.kind === 'event' &&
         (descriptor.content.field === 'skill-text' || descriptor.content.field === 'summary-text' ||
-          (descriptor.content.field === 'user-text' && Boolean(raw.events.get(descriptor.content.uuid)?.data?.injected)))))) {
+          (descriptor.content.field === 'user-text' && Boolean((raw.events.get(descriptor.content.uuid) && looseData(raw.events.get(descriptor.content.uuid)!).injected))))))) {
         markAppGenerated(message);
       }
       if (descriptor.sizing) restoreContinuationSizing(message, descriptor.sizing);
@@ -777,8 +784,8 @@ function textDescriptor(uuids: string[], field: 'assistant-text' | 'reasoning-te
  *  pruned, image-collapsed, or image-bearing. Null when it is none of those, in
  *  which case the part cannot be rebuilt exactly and the publish must fail. */
 function describeToolResult(part: Record<string, any>, event: TranscriptEvent, digestOf: (file: string) => string | null): { images?: ImageDescriptor[]; pruned?: PrunedDescriptor } | null {
-  const text = String(event.data?.toolResult ?? '');
-  const paths = Array.isArray(event.data?.images) ? (event.data.images as string[]) : [];
+  const text = String(looseData(event).toolResult ?? '');
+  const paths = Array.isArray(looseData(event).images) ? looseData(event).images! : [];
   const output = record(part.output);
   if (!output) return null;
 
@@ -866,9 +873,9 @@ function describeParts(message: ModelMessage, anchors: AnchorSet): PartDescripto
       if (!onlyKeys(part, ['type', 'toolCallId', 'toolName', 'input', 'providerOptions'])) return null;
       const options = providerOptionsFor(part.providerOptions, 'tool-call');
       if (!options) return null;
-      const match = anchors.matchEvent('tool-call', event => String(event.data?.toolUseId ?? '') === part.toolCallId
-        && String(event.data?.toolName ?? '') === part.toolName
-        && canonical(event.data?.toolInput ?? {}) === canonical(part.input ?? {}));
+      const match = anchors.matchEvent('tool-call', event => String(looseData(event).toolUseId ?? '') === part.toolCallId
+        && String(looseData(event).toolName ?? '') === part.toolName
+        && canonical(looseData(event).toolInput ?? {}) === canonical(part.input ?? {}));
       if (!match) return null;
       parts.push({ kind: 'event', uuid: match.uuid, field: 'tool-call', ...options });
       continue;
@@ -884,7 +891,7 @@ function describeParts(message: ModelMessage, anchors: AnchorSet): PartDescripto
         // longer relates to its event text must not claim that anchor. The result
         // is kept rather than recomputed so images are digested once.
         described = null;
-        if (String(event.data?.toolUseId ?? '') !== part.toolCallId || String(event.data?.toolName ?? '') !== part.toolName) return false;
+        if (String(looseData(event).toolUseId ?? '') !== part.toolCallId || String(looseData(event).toolName ?? '') !== part.toolName) return false;
         described = describeToolResult(part, event, anchors.digestOf);
         return described !== null;
       });
@@ -945,7 +952,7 @@ function describeString(message: ModelMessage, anchors: AnchorSet): ContentDescr
   // message can claim an anchor. Skills, summaries and injected user events
   // really are persisted; an anchorless rule must never spend a human event.
   if (isAppGenerated(message)) {
-    const injected = anchors.matchEvent('user-text', event => Boolean(event.data?.injected) && eventText(event, 'user-text') === text);
+    const injected = anchors.matchEvent('user-text', event => Boolean(looseData(event).injected) && eventText(event, 'user-text') === text);
     if (injected) return { kind: 'event', uuid: injected.uuid, field: 'user-text' };
     for (const field of ['skill-text', 'summary-text'] as const) {
       const uuids = anchors.matchText(field, text, 1);
@@ -1028,11 +1035,11 @@ async function restorePart(raw: PartDescriptor, events: Map<string, TranscriptEv
   const providerOptions = part.providerOptions !== undefined ? { providerOptions: part.providerOptions } : {};
 
   if (part.field === 'tool-call') {
-    return { value: { type: 'tool-call', toolCallId: String(event.data?.toolUseId ?? ''), toolName: String(event.data?.toolName ?? ''), input: event.data?.toolInput ?? {}, ...providerOptions } };
+    return { value: { type: 'tool-call', toolCallId: String(looseData(event).toolUseId ?? ''), toolName: String(looseData(event).toolName ?? ''), input: looseData(event).toolInput ?? {}, ...providerOptions } };
   }
   if (part.field === 'tool-result') {
-    const toolName = String(event.data?.toolName ?? '');
-    const text = String(event.data?.toolResult ?? '');
+    const toolName = String(looseData(event).toolName ?? '');
+    const text = String(looseData(event).toolResult ?? '');
     let output: any;
     if (part.pruned && 'keepChars' in part.pruned) {
       // WHY: keepChars indexes into the event text; a value the text cannot support
@@ -1050,7 +1057,7 @@ async function restorePart(raw: PartDescriptor, events: Map<string, TranscriptEv
       }
       output = { type: 'content', value: [{ type: 'text', text }, ...files] };
     } else output = { type: 'text', value: text };
-    return { value: { type: 'tool-result', toolCallId: String(event.data?.toolUseId ?? ''), toolName, output, ...providerOptions } };
+    return { value: { type: 'tool-result', toolCallId: String(looseData(event).toolUseId ?? ''), toolName, output, ...providerOptions } };
   }
 
   const text = eventText(event, part.field);

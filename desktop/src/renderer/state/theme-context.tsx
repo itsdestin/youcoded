@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 
 import { validateTheme } from '../themes/theme-validator';
 import { applyThemeToDom, applyThemeFont, buildBackgroundStyle, buildPatternStyle } from '../themes/theme-engine';
-import { isRemoteMode } from '../platform';
+import { getCapabilities } from '../platform';
 import type { ThemeDefinition, LoadedTheme } from '../themes/theme-types';
 import { resolveAllAssetPaths } from '../themes/theme-asset-resolver';
 import { applyLookOverrides, parseLookOverrides, PAGES_SOLID_ATTR, type LookOverrides } from '../themes/look-overrides';
@@ -14,6 +14,8 @@ import lightJson from '../themes/builtin/light.json';
 import darkJson from '../themes/builtin/dark.json';
 import midnightJson from '../themes/builtin/midnight.json';
 import cremeJson from '../themes/builtin/creme.json';
+import { themeIconSet, type ThemeIconSet } from '../../shared/theme-icons';
+import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';
 
 const BUILTIN_THEMES: LoadedTheme[] = [
   { ...(lightJson as unknown as ThemeDefinition), source: 'youcoded-core' },
@@ -362,6 +364,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
   useEffect(() => () => { selectionGeneration.current++; }, []);
+  // True while a reconnect refresh is in flight (and a moment after): nothing it does may be written back as the user's choice.
+  const reconnectRefreshing = useRef(false);
 
   // The theme as the user sees it: its own choices, with any global override on top.
   // WHY every source (user themes too): the override is the user's, not the theme's —
@@ -384,7 +388,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     if (!allThemesInternal.find(t => t.slug === activeSlug)) {
       setActiveSlug(DEFAULT_THEME);
       try { localStorage.setItem(STORAGE_KEY, DEFAULT_THEME); } catch {}
-      persistAppearance({ theme: DEFAULT_THEME });
+      // A refresh after a reconnect is never a choice: it must not overwrite the saved theme for every screen (sync-fix3 review).
+      if (!reconnectRefreshing.current) persistAppearance({ theme: DEFAULT_THEME });
     }
   }, [allThemesInternal, activeSlug, userThemesLoaded]);
 
@@ -392,12 +397,18 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   // can refresh the list; the active-theme fallback effect (above) uses the
   // refreshed list to reset to the default if the user just uninstalled the
   // theme they had applied.
-  const reloadUserThemes = useCallback(async () => {
+  // WHY (2026-10-01, one-core R5-2): the theme list is read asynchronously; when the provider is
+  // gone before the read finishes, setting state afterwards ran against a torn-down window and
+  // surfaced as an unhandled error in a full-suite run (app-welcome-back-gating.test.tsx).
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  const reloadUserThemes = useCallback(async (opts?: { keepOnFailure?: boolean }) => {
     try {
       const claude = (window as any).claude;
-      if (!claude?.theme?.list) { setUserThemesLoaded(true); return; }
+      if (!claude?.theme?.list) { if (alive.current) setUserThemesLoaded(true); return; }
       const slugs: string[] = await claude.theme.list();
       const loaded: LoadedTheme[] = [];
+      const failed: string[] = [];
       for (const slug of slugs) {
         try {
           const raw = await claude.theme.readFile(slug);
@@ -406,22 +417,30 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
           loaded.push(resolveAllAssetPaths({ ...theme, source }));
         } catch (e) {
           console.warn(`[ThemeProvider] Failed to load user theme "${slug}":`, e);
+          failed.push(slug);
         }
       }
-      setUserThemes(loaded);
+      if (!alive.current) return;
+      // WHY (sync-fix3 review): a reconnect is exactly when a file read is likely to fail, and replacing the list without the active theme
+      // would send it to the "uninstalled" fallback. On a refresh, a theme whose read failed keeps its old definition, and a builder preview stays.
+      if (opts?.keepOnFailure) {
+        setUserThemes((prev) => [...loaded, ...prev.filter((t) => failed.includes(t.slug) || t.slug === '_preview')]);
+      } else setUserThemes(loaded);
       setUserThemesLoaded(true);
     } catch {
-      setUserThemesLoaded(true); // Mark loaded even on error so fallback can run
+      if (alive.current) setUserThemesLoaded(true); // Mark loaded even on error so fallback can run
     }
   }, []);
 
   // Initial load on mount
   useEffect(() => { reloadUserThemes(); }, [reloadUserThemes]);
 
-  // Load appearance preferences from disk (source of truth) on mount
-  useEffect(() => {
-    const generation = selectionGeneration.current;
-    const loadAppearance = async () => {
+  // Load appearance preferences from disk (source of truth) on mount, and again after a remote reconnect.
+  // WHY a callback that reads the generation when it RUNS (sync-fix3): the same body now serves the mount and a reconnect, and a choice the
+  // user makes while the read is in flight must still win over what the read brings back.
+  const loadAppearance = useCallback(async (startedAt?: number) => {
+    const generation = startedAt ?? selectionGeneration.current;
+    {
       try {
         const claude = (window as any).claude;
         if (!claude?.appearance?.get) return;
@@ -468,9 +487,19 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
           try { localStorage.setItem(LOOK_OVERRIDES_KEY, JSON.stringify(look)); } catch {}
         }
       } catch {}
-    };
-    loadAppearance();
+    }
   }, [applyIncomingTheme]);
+  useEffect(() => { void loadAppearance(); }, [loadAppearance]);
+
+  // WHY (sync-fix3): `appearance:sync` and `theme:reload` are one-shot pushes, so a phone that was asleep when another screen changed the theme (or
+  // when a theme was installed on the computer) kept the old look until a full page reload. After a reconnect: re-read the installed themes
+  // first (a newly installed one must exist before the chosen slug is looked up), then the saved appearance.
+  useOnRemoteReconnect(() => {
+    // The generation is taken BEFORE the theme reload, so a theme picked while it runs wins over the saved one read afterwards.
+    const startedAt = selectionGeneration.current;
+    reconnectRefreshing.current = true;
+    void reloadUserThemes({ keepOnFailure: true }).then(() => loadAppearance(startedAt)).finally(() => { setTimeout(() => { reconnectRefreshing.current = false; }, 100); });
+  });
 
   // Listen for cross-window appearance broadcasts from peer windows. The
   // source window already persisted to disk, so we only update in-memory
@@ -616,7 +645,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     // theme/color tokens" (2026-09-10). Tokens and shape still apply, so a phone paired to
     // this computer looks like this computer.
     applyThemeToDom(
-      isRemoteMode() ? { ...activeTheme, background: undefined } : activeTheme,
+      !getCapabilities().themePictures ? { ...activeTheme, background: undefined } : activeTheme,
       reducedEffects,
     );
     applyHighlightTheme(activeTheme.dark);
@@ -624,16 +653,17 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     // Hot-swap the Electron window + dock icon. Guarded via optional chaining —
     // the Android WebView shim deliberately omits window.* (launcher icons can't
     // be swapped at runtime), so this is a no-op there.
-    // A theme that declares its own appIcon gets it; every other theme sends null,
-    // which main resets to the bundled assets/icon.png.
+    // A theme that declares its own appIcon sends its whole icon bundle (app icon, Windows .ico,
+    // Mac glass version, tray icons — shared/theme-icons.ts); every other theme sends null, which
+    // main resets to the app's own icons.
     // WHY no theme tint (2026-09-10): the tint redrew the retired "YC" terminal
     // square, so once the mascot icon shipped the taskbar would swap from the new
     // icon back to the old one the moment the app opened. Theme-matched icons drawn
     // from the mascot are a parked item in the workspace's themes roadmap.
-    const anyWin = window as unknown as { claude?: { window?: { setIcon?: (u: string | null) => Promise<void> } } };
+    const anyWin = window as unknown as { claude?: { window?: { setIcon?: (set: ThemeIconSet | null) => Promise<void> } } };
     const setIconFn = anyWin.claude?.window?.setIcon;
     if (setIconFn) {
-      setIconFn(activeTheme.appIcon ?? null).catch(() => {});
+      setIconFn(themeIconSet(activeTheme)).catch(() => {});
     }
 
     // Sync font state: use theme's declared font, or fall back to default.

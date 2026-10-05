@@ -8,6 +8,7 @@ import { promises as fs, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { SecretsStore } from '../src/main/providers/secrets-store';
+import { getSecretStorage } from '../src/main/providers/secret-storage';
 import { PageConnectionsStore } from '../src/main/pages/connections-store';
 import { initPagesService } from '../src/main/pages/pages-service';
 import type { LiveWsLike } from '../src/main/pages/page-live-socket';
@@ -63,7 +64,7 @@ beforeEach(async () => {
     listProjects: async () => [],
     deviceId: () => 'dev-1',
     localFallbackDir: () => path.join(root, 'local'),
-    connections: new PageConnectionsStore(userData, new SecretsStore(userData)),
+    connections: new PageConnectionsStore(userData, new SecretsStore(userData, getSecretStorage())),
     broadcast: () => {},
     lookup: async () => { throw new Error('no DNS in this test'); },
     liveSocketConnect: (url) => { urls.push(url); const w = new FakeWs(); wss.push(w); return w as unknown as LiveWsLike; },
@@ -139,7 +140,7 @@ describe('a live socket and the approvals it stands on', () => {
     const userData = path.join(root, 'userData');
     const fresh = initPagesService({
       personalRoot: () => personal, listProjects: async () => [], deviceId: () => 'dev-1', localFallbackDir: () => path.join(root, 'local'),
-      connections: new PageConnectionsStore(userData, new SecretsStore(userData)), broadcast: () => {},
+      connections: new PageConnectionsStore(userData, new SecretsStore(userData, getSecretStorage())), broadcast: () => {},
       lookup: async () => { throw new Error('no DNS in this test'); },
       liveSocketConnect: () => { const w = new FakeWs(); wss.push(w); return w as unknown as LiveWsLike; },
     });

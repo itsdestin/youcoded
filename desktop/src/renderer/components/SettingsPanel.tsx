@@ -7,8 +7,7 @@ import { createPortal } from 'react-dom';
 import type { RemoteAccessView, RemoteAccessAction, RemoteAccessPreview } from './remote/preview-types';
 
 import { QRCodeSVG } from 'qrcode.react';
-import { isAndroid } from '../platform';
-import { useCurrentPlatform } from '../state/platform';
+import { isAndroid, useCurrentPlatform } from '../platform';
 import ThemeScreen from './ThemeScreen';
 import SyncSection from './SyncPanel';
 import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';

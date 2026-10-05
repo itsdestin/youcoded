@@ -1,10 +1,14 @@
 // @vitest-environment jsdom
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import { render, screen, cleanup } from '@testing-library/react';
 import { PartialFileBanner } from '../src/renderer/components/artifact-views/PartialFileBanner';
+import { DESKTOP_WINDOW_CAPABILITIES, REMOTE_SCREEN_CAPABILITIES } from '../src/shared/capabilities';
 
-afterEach(cleanup);
+// The banner offers "Open externally" only where the screen's `openInOs` capability says the computer's apps can be reached.
+const screenCan = (caps: typeof DESKTOP_WINDOW_CAPABILITIES) => { (window as any).claude = { capabilities: caps }; };
+beforeEach(() => screenCan(DESKTOP_WINDOW_CAPABILITIES));
+afterEach(() => { cleanup(); delete (window as any).claude; });
 
 // Sizes are MiB-based, matching every existing size string in the app (the
 // message Destin saw called his 2,411,724-byte file "2.3 MB"). The bar shares
@@ -30,9 +34,8 @@ describe('PartialFileBanner', () => {
 
   // A button that silently does nothing is worse than no button (spec §4.3).
   it('offers no action at all on a platform without shell.openPath', () => {
-    (window as any).__PLATFORM__ = 'browser';
+    screenCan(REMOTE_SCREEN_CAPABILITIES);
     render(<PartialFileBanner sizeBytes={500 * 1024 * 1024} onLoadFull={() => {}} onOpenExternally={() => {}} />);
     expect(screen.queryByRole('button')).toBeNull();
-    (window as any).__PLATFORM__ = 'electron';
   });
 });

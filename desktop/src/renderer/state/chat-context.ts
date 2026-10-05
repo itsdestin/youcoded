@@ -271,6 +271,12 @@ export function useChatStore(): ChatStore {
   return useStore();
 }
 
+/** The store when there is one, else null: for a control that also renders outside a chat tree (the Stop button's own test), where only the phone's
+ *  instant-stop path needs the store (one-core R6-2). */
+export function useOptionalChatStore(): ChatStore | null {
+  return useContext(ChatStoreContext);
+}
+
 export function useChatStateMap(): ChatState {
   const store = useStore();
   const subscribe = useCallback(

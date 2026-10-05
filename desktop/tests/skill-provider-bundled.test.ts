@@ -430,3 +430,19 @@ describe('LocalSkillProvider.update', () => {
     expect(versions['youcoded-chatsearch']).toBe('1.5.2');
   });
 });
+
+describe('LocalSkillProvider.resolveUninstallTarget', () => {
+  const provider = (installed: Record<string, unknown>, scanned: Array<{ id: string; pluginName?: string }>) => {
+    const p = new LocalSkillProvider();
+    vi.spyOn(p.configStore, 'getInstalledPlugins').mockReturnValue(installed as any);
+    vi.spyOn(p, 'getInstalled').mockResolvedValue(scanned as any);
+    return p;
+  };
+  it('a plugin id names itself; a skill id names the installed plugin that ships it; anything else names nothing', async () => {
+    const p = provider({ 'youcoded-chatsearch': {}, other: {} }, [{ id: 'youcoded-chatsearch:chatsearch', pluginName: 'youcoded-chatsearch' }, { id: 'mine' }]);
+    expect(await p.resolveUninstallTarget('other')).toBe('other');
+    expect(await p.resolveUninstallTarget('youcoded-chatsearch:chatsearch')).toBe('youcoded-chatsearch');
+    expect(await p.resolveUninstallTarget('mine')).toBeNull();
+    expect(await p.resolveUninstallTarget('nothing')).toBeNull();
+  });
+});

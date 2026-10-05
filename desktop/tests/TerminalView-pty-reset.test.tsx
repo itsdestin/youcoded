@@ -49,6 +49,7 @@ vi.mock('../src/renderer/platform', () => ({
   isTouchDevice: vi.fn().mockReturnValue(false),
   isRemoteMode: vi.fn().mockReturnValue(false),
   getPlatform: vi.fn().mockReturnValue('browser'),
+  getCapabilities: vi.fn().mockReturnValue({ terminalTransport: 'text' }),
 }));
 vi.mock('../src/renderer/state/theme-context', () => ({ useTheme: () => ({ activeTheme: null, reducedEffects: false }) }));
 vi.mock('../src/renderer/hooks/terminal-registry', () => ({ registerTerminal: vi.fn(), unregisterTerminal: vi.fn(), notifyBufferReady: vi.fn() }));

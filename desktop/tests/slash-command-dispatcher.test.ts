@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { dispatchSlashCommand, type DispatcherCallbacks } from '../src/renderer/state/slash-command-dispatcher';
+import { ANDROID_LOCAL_CAPABILITIES } from '../src/shared/capabilities';
 import { chatReducer } from '../src/renderer/state/chat-reducer';
 import type { ChatAction, ChatState } from '../src/renderer/state/chat-types';
 
@@ -26,6 +27,11 @@ function dispatchModelCommand(raw: string, callbacks: DispatcherCallbacks = {}, 
     deferUiEffectsToRuntime: false,
   });
 }
+
+// These pin what a screen draws ITSELF; a host with a record draws the divider from the host's event instead (tests/session-live-two-screens.test.ts),
+// so they run as the Android app's own runtime, which has none (one-core R5-4a).
+beforeEach(() => { (window as any).claude = { capabilities: ANDROID_LOCAL_CAPABILITIES }; });
+afterEach(() => { delete (window as any).claude; });
 
 describe('dispatchSlashCommand — typed /model <alias> never falls through to a chat turn', () => {
   it('a recognized alias is fully intercepted: no alsoSendToPty, no passthrough', () => {

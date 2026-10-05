@@ -151,3 +151,32 @@ describe('usePresence — incognito after a remote reconnect', () => {
     expect(result.current.incognito).toBe(true);
   });
 });
+
+describe('usePresence on a phone', () => {
+  // A rejected promise nobody handles is an "unhandled rejection" in the console. The in-process hooks cannot observe that
+  // reliably, so this watches for the handling itself: each refused call must have a .catch attached.
+  function refused(message: string) {
+    const calls: Array<ReturnType<typeof vi.spyOn>> = [];
+    const fn = vi.fn(() => {
+      const p = Promise.reject(new Error(message));
+      calls.push(vi.spyOn(p, 'catch'));
+      return p;
+    });
+    return { fn, calls };
+  }
+
+  it('a presence call the computer refuses ("unsupported") is handled, not left as an unhandled rejection', async () => {
+    const disconnect = refused('remote-unsupported: social:presence-disconnect');
+    const connect = refused('remote-unsupported: social:presence-connect');
+    (window as any).claude.social = makeSocial({ presenceConnect: connect.fn, presenceDisconnect: disconnect.fn });
+    h.account.signedIn = false; // -> asks to disconnect
+    const first = renderHook(() => usePresence());
+    await waitFor(() => expect(disconnect.fn).toHaveBeenCalled());
+    first.unmount();
+    h.account.signedIn = true; // -> asks to connect
+    renderHook(() => usePresence());
+    await waitFor(() => expect(connect.fn).toHaveBeenCalled());
+    expect(disconnect.calls[0]).toHaveBeenCalled();
+    expect(connect.calls[0]).toHaveBeenCalled();
+  });
+});

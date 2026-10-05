@@ -6,6 +6,7 @@ import { render, cleanup, fireEvent, screen, waitFor, act } from '@testing-libra
 import ModelPicker, { type ModelChoice } from '../src/renderer/components/model/ModelPicker';
 import { installFiringIntersectionObserver } from './helpers/firing-intersection-observer';
 import { REVEAL_CHUNK } from '../src/renderer/hooks/use-chunked-reveal';
+import { DESKTOP_WINDOW_CAPABILITIES, REMOTE_SCREEN_CAPABILITIES } from '../src/shared/capabilities';
 
 // ── A failed provider load ───────────────────────────────────────────────────
 /**
@@ -22,6 +23,7 @@ import { REVEAL_CHUNK } from '../src/renderer/hooks/use-chunked-reveal';
 describe('ModelPicker — a failed provider load is not "no providers set up"', () => {
   function bridge(list: ReturnType<typeof vi.fn>, catalog: ReturnType<typeof vi.fn>) {
     (globalThis as any).window.claude = {
+      capabilities: DESKTOP_WINDOW_CAPABILITIES, // the computer's window: native models can run here
       providers: { list, catalog },
       models: { onDownloadProgress: () => () => {} },
     };
@@ -114,6 +116,7 @@ describe('list refresh after a download', () => {
     subscribers = [];
     unsubscribes = 0;
     (globalThis as any).window.claude = {
+      capabilities: DESKTOP_WINDOW_CAPABILITIES,
       providers: {
         list: vi.fn(async () => [
           { id: 'openrouter', type: 'openrouter', label: 'OpenRouter', ready: true },
@@ -269,6 +272,7 @@ describe('ModelPicker selectable-first ordering', () => {
 
   function bridge() {
     (globalThis as any).window.claude = {
+      capabilities: DESKTOP_WINDOW_CAPABILITIES,
       providers: {
         list: vi.fn(async () => providers),
         catalog: vi.fn(async () => catalog),
@@ -443,6 +447,7 @@ describe('ModelPicker recommended-models bands', () => {
 
   function bridge() {
     (globalThis as any).window.claude = {
+      capabilities: DESKTOP_WINDOW_CAPABILITIES,
       providers: {
         list: vi.fn(async () => providers),
         catalog: vi.fn(async () => catalog),
@@ -727,6 +732,7 @@ describe('ModelPicker recommended-models bands', () => {
 describe('ModelPicker — inline layout', () => {
   beforeEach(() => {
     (globalThis as any).window.claude = {
+      capabilities: DESKTOP_WINDOW_CAPABILITIES,
       providers: { list: vi.fn().mockResolvedValue([]), catalog: vi.fn().mockResolvedValue([]) },
       models: { onDownloadProgress: () => () => {} },
     };
@@ -752,5 +758,105 @@ describe('ModelPicker — inline layout', () => {
     host();
     fireEvent.click(await screen.findByRole('button', { name: 'Filter and sort' }));
     expect(await screen.findByText('Source')).toBeInTheDocument();
+  });
+});
+
+/** Remote-access roadmap: "the model picker offers models the browser cannot actually run, so choosing one saves a default that
+ *  quietly does nothing there". The app's own engine runs only on a screen whose capabilities say so. */
+describe('ModelPicker — offers only the models this screen can run', () => {
+  const NATIVE_LABEL = 'Nimbus Native One';
+  function bridge(capabilities: typeof DESKTOP_WINDOW_CAPABILITIES) {
+    (globalThis as any).window.claude = {
+      capabilities,
+      providers: {
+        list: vi.fn().mockResolvedValue([{ id: 'cloud', type: 'openrouter', label: 'Cloud', ready: true }]),
+        catalog: vi.fn().mockResolvedValue([{ id: 'nimbus-1', providerId: 'cloud', label: NATIVE_LABEL }]),
+      },
+      models: { onDownloadProgress: () => () => {} },
+    };
+  }
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); delete (window as any).claude; });
+
+  const host = () => render(<ModelPicker value={null} onSelect={() => {}} defaultOpen layout="inline" />);
+
+  it("the computer's own window lists the app's native models next to Claude Code's", async () => {
+    bridge(DESKTOP_WINDOW_CAPABILITIES);
+    host();
+    // The list opens on favourites; search reaches the whole catalogue.
+    fireEvent.change(await screen.findByLabelText('Search all models'), { target: { value: 'Nimbus' } });
+    expect(await screen.findByText(NATIVE_LABEL)).toBeInTheDocument();
+  });
+
+  it('a screen that cannot run them (a phone, the paired Android app) lists Claude Code models only', async () => {
+    bridge(REMOTE_SCREEN_CAPABILITIES);
+    host();
+    const search = await screen.findByLabelText('Search all models');
+    // The list has loaded (the provider call answered); the native row is simply not offered, even when searched for by name.
+    await waitFor(() => expect((window.claude.providers.catalog as any).mock.calls.length).toBeGreaterThan(0));
+    fireEvent.change(search, { target: { value: 'Nimbus' } });
+    expect(screen.queryByText(NATIVE_LABEL)).toBeNull();
+    fireEvent.change(search, { target: { value: 'Sonnet' } });
+    expect(screen.getAllByText(/Sonnet/i).length).toBeGreaterThan(0);
+  });
+});
+
+/** One-core R6-1 (Destin, 2026-09-11: "remote access should be identical to the desktop"): a native session runs on the COMPUTER, so a phone
+ *  watching a current computer (which says `nativeSessions: true` in its handshake) is offered native models in the ordinary new-session
+ *  picker too, not only in the host-run ones. An older computer says nothing and the phone keeps hiding them (the test above). */
+describe('ModelPicker — a phone watching a current computer may start a native session', () => {
+  const LABEL = 'Nimbus Native One';
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); delete (window as any).claude; });
+  it('the ordinary new-session picker lists native models on a phone whose computer says nativeSessions', async () => {
+    (globalThis as any).window.claude = {
+      capabilities: { ...REMOTE_SCREEN_CAPABILITIES, nativeSessions: true },
+      providers: {
+        list: vi.fn().mockResolvedValue([{ id: 'cloud', type: 'openrouter', label: 'Cloud', ready: true }]),
+        catalog: vi.fn().mockResolvedValue([{ id: 'nimbus-1', providerId: 'cloud', label: LABEL }]),
+      },
+      models: { onDownloadProgress: () => () => {} },
+    };
+    render(<ModelPicker value={null} onSelect={() => {}} defaultOpen layout="inline" />);
+    fireEvent.change(await screen.findByLabelText('Search all models'), { target: { value: 'Nimbus' } });
+    expect(await screen.findByText(LABEL)).toBeInTheDocument();
+    expect(screen.queryByText('These models can only be chosen on your computer.')).toBeNull();
+  });
+});
+
+/** Review fix: a picker whose choice is saved or run by the COMPUTER (naming model, specialist tiers, switching or resuming a
+ *  native conversation) must keep native models on a phone; only a picker choosing what THIS screen runs hides them. */
+describe('ModelPicker — pickers that choose for the computer keep native models on a phone', () => {
+  const LABEL = 'Nimbus Native One';
+  function bridge(caps = REMOTE_SCREEN_CAPABILITIES) {
+    (globalThis as any).window.claude = {
+      capabilities: caps,
+      providers: {
+        list: vi.fn().mockResolvedValue([{ id: 'cloud', type: 'openrouter', label: 'Cloud', ready: true }]),
+        catalog: vi.fn().mockResolvedValue([{ id: 'nimbus-1', providerId: 'cloud', label: LABEL }]),
+      },
+      models: { onDownloadProgress: () => () => {} },
+    };
+  }
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); delete (window as any).claude; });
+  const search = async (q: string) => fireEvent.change(await screen.findByLabelText('Search all models'), { target: { value: q } });
+
+  it('a native-only picker marked runsOn="host" lists native models on a phone', async () => {
+    bridge();
+    render(<ModelPicker value={null} onSelect={() => {}} includeClaude={false} runsOn="host" defaultOpen layout="inline" />);
+    await search('Nimbus');
+    expect(await screen.findByText(LABEL)).toBeInTheDocument();
+  });
+
+  it('a native-only picker that chooses what THIS screen runs, on a phone, says so in one sentence instead of showing nothing', async () => {
+    bridge();
+    render(<ModelPicker value={null} onSelect={() => {}} includeClaude={false} defaultOpen layout="inline" />);
+    await waitFor(() => expect((window.claude.providers.catalog as any).mock.calls.length).toBeGreaterThan(0));
+    expect(await screen.findByText('These models can only be chosen on your computer.')).toBeInTheDocument();
+    expect(screen.queryByText(/not set up any model providers/)).toBeNull();
+  });
+
+  it('a saved native model this screen does not list shows its friendly name, not the bare id', async () => {
+    bridge();
+    render(<ModelPicker value={{ runtime: 'native', providerId: 'cloud', modelId: 'nimbus-1' }} onSelect={() => {}} />);
+    expect(await screen.findByRole('button', { name: 'Model' })).toHaveTextContent(`${LABEL} · Cloud`);
   });
 });

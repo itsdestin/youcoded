@@ -176,7 +176,8 @@ describe('McpManager startup wiring', () => {
     );
 
     const { registerIpcHandlers } = await import('../src/main/ipc-handlers');
-    registerIpcHandlers(
+    const { registerWithRuntime } = await import('./helpers/register-ipc');
+    registerWithRuntime(registerIpcHandlers, 
       makeMockIpcMain() as any,
       makeMockSessionManager() as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
@@ -219,7 +220,8 @@ describe('McpManager startup wiring', () => {
     // case for almost every install (brief: "must be silent and
     // side-effect-free for them").
     const { registerIpcHandlers } = await import('../src/main/ipc-handlers');
-    registerIpcHandlers(
+    const { registerWithRuntime } = await import('./helpers/register-ipc');
+    registerWithRuntime(registerIpcHandlers, 
       makeMockIpcMain() as any,
       makeMockSessionManager() as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
@@ -273,7 +275,8 @@ describe('visionSupportFor: which bindings consult the catalog (Fix 2, T18)', ()
       JSON.stringify({ v: 1, providers }),
     );
     const { registerIpcHandlers } = await import('../src/main/ipc-handlers');
-    registerIpcHandlers(
+    const { registerWithRuntime } = await import('./helpers/register-ipc');
+    registerWithRuntime(registerIpcHandlers, 
       makeMockIpcMain() as any,
       makeMockSessionManager() as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
@@ -297,7 +300,8 @@ describe('visionSupportFor: which bindings consult the catalog (Fix 2, T18)', ()
     );
 
     const { registerIpcHandlers } = await import('../src/main/ipc-handlers');
-    registerIpcHandlers(
+    const { registerWithRuntime } = await import('./helpers/register-ipc');
+    registerWithRuntime(registerIpcHandlers, 
       makeMockIpcMain() as any,
       makeMockSessionManager() as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
@@ -383,7 +387,8 @@ describe('pricingFor', () => {
     );
 
     const { registerIpcHandlers } = await import('../src/main/ipc-handlers');
-    registerIpcHandlers(
+    const { registerWithRuntime } = await import('./helpers/register-ipc');
+    registerWithRuntime(registerIpcHandlers, 
       makeMockIpcMain() as any,
       makeMockSessionManager() as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
@@ -411,7 +416,8 @@ describe('pricingFor', () => {
     );
 
     const { registerIpcHandlers } = await import('../src/main/ipc-handlers');
-    registerIpcHandlers(
+    const { registerWithRuntime } = await import('./helpers/register-ipc');
+    registerWithRuntime(registerIpcHandlers, 
       makeMockIpcMain() as any,
       makeMockSessionManager() as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
@@ -433,7 +439,8 @@ describe('pricingFor', () => {
     );
 
     const { registerIpcHandlers } = await import('../src/main/ipc-handlers');
-    registerIpcHandlers(
+    const { registerWithRuntime } = await import('./helpers/register-ipc');
+    registerWithRuntime(registerIpcHandlers, 
       makeMockIpcMain() as any,
       makeMockSessionManager() as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
@@ -488,7 +495,8 @@ describe('contextAndSlotsFor wiring', () => {
       JSON.stringify({ v: 1, providers: [{ id: 'anthropic-test', type: 'anthropic', label: 'Anthropic', enabled: true }] }),
     );
     const { registerIpcHandlers } = await import('../src/main/ipc-handlers');
-    registerIpcHandlers(
+    const { registerWithRuntime } = await import('./helpers/register-ipc');
+    registerWithRuntime(registerIpcHandlers, 
       makeMockIpcMain() as any,
       makeMockSessionManager() as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
@@ -509,7 +517,8 @@ describe('contextAndSlotsFor wiring', () => {
       JSON.stringify({ v: 1, providers: [{ id: 'local', type: 'local-engine', label: 'Local models (llama.cpp)', enabled: true }] }),
     );
     const { registerIpcHandlers } = await import('../src/main/ipc-handlers');
-    registerIpcHandlers(
+    const { registerWithRuntime } = await import('./helpers/register-ipc');
+    registerWithRuntime(registerIpcHandlers, 
       makeMockIpcMain() as any,
       makeMockSessionManager() as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
@@ -545,7 +554,8 @@ describe('contextAndSlotsFor wiring', () => {
       modelId === 'model-a' ? { contextLength: 8192, totalSlots: 2 } : { contextLength: 4096, totalSlots: 4 }
     ));
     const { registerIpcHandlers } = await import('../src/main/ipc-handlers');
-    registerIpcHandlers(
+    const { registerWithRuntime } = await import('./helpers/register-ipc');
+    registerWithRuntime(registerIpcHandlers, 
       makeMockIpcMain() as any,
       makeMockSessionManager() as any,
       { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,

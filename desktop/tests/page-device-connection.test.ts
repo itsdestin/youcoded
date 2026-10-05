@@ -10,6 +10,7 @@ import { promises as fs, mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { SecretsStore } from '../src/main/providers/secrets-store';
+import { getSecretStorage } from '../src/main/providers/secret-storage';
 import { PageConnectionsStore, CONNECTIONS_FILE } from '../src/main/pages/connections-store';
 import { initPagesService } from '../src/main/pages/pages-service';
 import { covers, fingerprint, parseConnections } from '../src/main/pages/page-connections';
@@ -145,7 +146,7 @@ beforeEach(() => {
     listProjects: async () => [],
     deviceId: () => 'dev-1',
     localFallbackDir: () => path.join(root, 'local'),
-    connections: new PageConnectionsStore(userData, new SecretsStore(userData)),
+    connections: new PageConnectionsStore(userData, new SecretsStore(userData, getSecretStorage())),
     broadcast: () => {},
     fetchImpl: fetchMock as unknown as typeof fetch,
     lookup: async (host) => host === 'homeassistant.local' ? [{ address: '192.168.4.54', family: 4 }] : [{ address: '93.184.216.34', family: 4 }],

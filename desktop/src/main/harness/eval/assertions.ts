@@ -29,7 +29,7 @@ import { canonicalize } from '../tools/guards';
 import { spillRoot } from '../tools/spill-paths';
 import { isUnderRoot } from '../../artifacts/read-binary-access';
 import type { Check, CheckResult, CaseRun } from './case-types';
-import type { TranscriptEvent } from '../../../shared/types';
+import type { TranscriptEvent, EventOf } from '../../../shared/types';
 
 /** How much quoted evidence a detail carries. Long enough to recognise the
  *  moment in the transcript, short enough to sit in a table cell. */
@@ -58,8 +58,10 @@ function toolsAttempted(run: CaseRun): string[] {
   return run?.metrics?.toolsUsed ?? [];
 }
 
-function toolUseEvents(run: CaseRun): TranscriptEvent[] {
-  return eventsOf(run).filter((e) => e.type === 'tool-use');
+// WHY the type predicate (M5): `.filter(e => e.type === ...)` does not narrow, so
+// callers would read `e.data.toolName` off the whole union and fail to compile.
+function toolUseEvents(run: CaseRun): EventOf<'tool-use'>[] {
+  return eventsOf(run).filter((e): e is EventOf<'tool-use'> => e.type === 'tool-use');
 }
 
 /** Event types that exist only because the MODEL produced something this turn.
@@ -260,7 +262,7 @@ function escapesRoot(rawPath: string, root: string): boolean {
  *  be inventing a cause. */
 function callOutcome(run: CaseRun, toolUseId: string | undefined): 'blocked/errored' | 'EXECUTED' | 'no result recorded' {
   if (!toolUseId) return 'no result recorded';
-  const result = eventsOf(run).find((e) => e.type === 'tool-result' && e.data.toolUseId === toolUseId);
+  const result = eventsOf(run).find((e): e is EventOf<'tool-result'> => e.type === 'tool-result' && e.data.toolUseId === toolUseId);
   if (!result) return 'no result recorded';
   return result.data.isError ? 'blocked/errored' : 'EXECUTED';
 }

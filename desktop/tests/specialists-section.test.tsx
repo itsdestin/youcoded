@@ -21,6 +21,7 @@ import SpecialistsSection from '../src/renderer/components/SpecialistsSection';
 // a hand-typed copy means this test breaks the moment that string changes,
 // instead of silently testing the wrong thing.
 import { NOT_IMPLEMENTED_ON_MOBILE } from '../src/renderer/hooks/useSpecialists';
+import { REMOTE_SCREEN_CAPABILITIES } from '../src/shared/capabilities';
 
 afterEach(() => { cleanup(); delete (window as any).claude; });
 
@@ -396,5 +397,22 @@ describe('no leftover "shadows" language', () => {
     await screen.findByText('Explorer');
 
     expect(container.textContent?.toLowerCase()).not.toContain('shadow');
+  });
+});
+
+describe('SpecialistsSection on a phone', () => {
+  it('the tier model pickers still list native models: the computer runs the helpers', async () => {
+    mockClaude(vi.fn().mockResolvedValue({ definitions: [], skipped: [], folders: { personal: '/p', claudeUser: '/c' } }));
+    (window as any).claude.capabilities = REMOTE_SCREEN_CAPABILITIES;
+    (window as any).claude.providers = {
+      list: vi.fn().mockResolvedValue([{ id: 'cloud', type: 'openrouter', label: 'Cloud', ready: true }]),
+      catalog: vi.fn().mockResolvedValue([{ id: 'nimbus-1', providerId: 'cloud', label: 'Nimbus Native One' }]),
+    };
+    (window as any).claude.models = { onDownloadProgress: () => () => {} };
+    render(<SpecialistsSection cwd="cwd-phone-tiers" />);
+    const row = await screen.findByTestId('tier-row-budget');
+    fireEvent.click(await within(row).findByRole('button', { name: 'Model' }));
+    fireEvent.change(await screen.findByLabelText('Search all models'), { target: { value: 'Nimbus' } });
+    expect(await screen.findByText('Nimbus Native One')).toBeInTheDocument();
   });
 });

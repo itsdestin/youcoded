@@ -9,7 +9,7 @@ import { SubagentIndex } from '../src/main/subagent-index';
 import { chatReducer } from '../src/renderer/state/chat-reducer';
 import { pageEventToAction } from '../src/renderer/state/transcript-page-actions';
 import type { ChatState, ChatAction } from '../src/renderer/state/chat-types';
-import type { TranscriptEvent } from '../src/shared/types';
+import { looseData, type TranscriptEvent } from '../src/shared/types';
 
 const agentReceipt = JSON.stringify({
   type: 'user', uuid: 'r1', timestamp: '2026-08-06T07:10:00.000Z', promptId: 'p1',
@@ -31,14 +31,14 @@ describe('parseTranscriptLine — background launch receipts', () => {
   it('an Agent receipt carries the helper id', () => {
     const [ev] = parseTranscriptLine(agentReceipt, 's');
     expect(ev.type).toBe('tool-result');
-    expect(ev.data.backgroundTaskId).toBe('a3ecf');
+    expect(looseData(ev).backgroundTaskId).toBe('a3ecf');
   });
   it('a background Bash receipt carries its task id', () => {
-    expect(parseTranscriptLine(bashReceipt, 's')[0].data.backgroundTaskId).toBe('bt1v7');
+    expect(looseData(parseTranscriptLine(bashReceipt, 's')[0]).backgroundTaskId).toBe('bt1v7');
   });
   it('an ordinary result carries none', () => {
     const line = JSON.stringify({ type: 'user', uuid: 'r3', message: { content: [{ type: 'tool_result', tool_use_id: 't', content: 'ok' }] }, toolUseResult: { stdout: 'ok' } });
-    expect(parseTranscriptLine(line, 's')[0].data.backgroundTaskId).toBeUndefined();
+    expect(looseData(parseTranscriptLine(line, 's')[0]).backgroundTaskId).toBeUndefined();
   });
 });
 
@@ -58,14 +58,14 @@ describe('parseTranscriptLine — task notifications', () => {
   });
   it('killed reads stopped; failed stays failed', () => {
     const k = parseTranscriptLine(noticeLine(notice('<task-id>b1</task-id>\n<tool-use-id>toolu_K</tool-use-id>\n<status>killed</status>\n<summary>Background command "x" was stopped</summary>')), 's');
-    expect(k[0].data.backgroundTask?.status).toBe('stopped');
+    expect(looseData(k[0]).backgroundTask?.status).toBe('stopped');
     const f = parseTranscriptLine(noticeLine(notice('<task-id>b2</task-id>\n<tool-use-id>toolu_F</tool-use-id>\n<status>failed</status>\n<summary>failed with exit code 144</summary>')), 's');
-    expect(f[0].data.backgroundTask?.status).toBe('failed');
+    expect(looseData(f[0]).backgroundTask?.status).toBe('failed');
   });
   it("the resume orphan summary lists several tasks and drops Claude Code's scan marker", () => {
     const evs = parseTranscriptLine(noticeLine(notice('<task-id>b2a</task-id>\n<task-id>b6u</task-id>\n<task-id>__orphan_summary__:shell</task-id>\n<status>stopped</status>\n<summary>…</summary>')), 's');
-    expect(evs[0].data.toolUseId).toBeUndefined();
-    expect(evs[0].data.backgroundTask?.taskIds).toEqual(['b2a', 'b6u']);
+    expect(looseData(evs[0]).toolUseId).toBeUndefined();
+    expect(looseData(evs[0]).backgroundTask?.taskIds).toEqual(['b2a', 'b6u']);
   });
   it('a Monitor event (no status) changes no card', () => {
     expect(parseTranscriptLine(noticeLine(notice('<task-id>bf3</task-id>\n<summary>Monitor event: "x"</summary>\n<event>DONE</event>')), 's')).toEqual([]);
@@ -111,7 +111,7 @@ const card = (s: ChatState, id = 'toolu_A') => s.get(S)!.toolCalls.get(id)!;
 const toAction = (e: TranscriptEvent) => pageEventToAction(e)!;
 const ev = (line: string) => parseTranscriptLine(line, S);
 function launchAgent(s: ChatState): ChatState {
-  s = d(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: S, uuid: 'u1', toolUseId: 'toolu_A', toolName: 'Agent', toolInput: { description: 'Fetch guidance', prompt: 'go' } } as ChatAction);
+  s = d(s, { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: S, uuid: 'u1', toolUseId: 'toolu_A', toolName: 'Agent', toolInput: { description: 'Fetch guidance', prompt: 'go' } } as ChatAction);
   return d(s, toAction(ev(agentReceipt)[0]));
 }
 
@@ -165,7 +165,7 @@ describe('chatReducer — Claude Code background runs', () => {
   // SendMessage to a finished helper resumes it (159 resumes measured); its
   // next notice names the SendMessage call, not the Agent card.
   const resume = (s: ChatState) => {
-    s = d(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: S, uuid: 'u2', toolUseId: 'toolu_SM', toolName: 'SendMessage', toolInput: { to: 'a3ecf', message: 'keep going' } } as ChatAction);
+    s = d(s, { type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: S, uuid: 'u2', toolUseId: 'toolu_SM', toolName: 'SendMessage', toolInput: { to: 'a3ecf', message: 'keep going' } } as ChatAction);
     const line = JSON.stringify({ type: 'user', uuid: 'r9', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_SM', content: 'ok' }] }, toolUseResult: { success: true, message: 'Resuming agent a3ecf', resumedAgentId: 'a3ecf' } });
     return d(s, toAction(ev(line)[0]));
   };

@@ -74,10 +74,12 @@ export function usePresence(isLeader: boolean = true) {
     // state so this effect re-runs when it flips true — mirrors usePartyLobby).
     if (!incognitoLoaded) return;
     const shouldConnect = signedIn && !incognito && isLeader;
+    // WHY the .catch (R4-1): presence belongs to the computer's own windows (the table refuses it for a phone), so on a phone the
+    // call is answered "unsupported" and rejected. Nothing is wrong, so it must not surface as an unhandled error in the console.
     if (shouldConnect) {
-      void window.claude.social.presenceConnect();
+      void window.claude.social.presenceConnect().catch(() => {});
     } else {
-      void window.claude.social.presenceDisconnect();
+      void window.claude.social.presenceDisconnect().catch(() => {});
     }
   }, [signedIn, incognito, incognitoLoaded, isLeader]);
 
