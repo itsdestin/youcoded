@@ -287,7 +287,7 @@ export const HOME_HISTORY_JS = String.raw`
   var pressTimer = null, pressed = false;
   document.addEventListener('pointerdown', function (e) {
     var card = e.target.closest && e.target.closest('[data-eid]');
-    if (!card || dlgId || editing || e.button !== 0 || e.target.closest('input, select')) return;
+    if (!card || dlgId || editing || e.button !== 0 || e.target.closest('input, select, [data-th-h]')) return; // WHY [data-th-h]: dragging the thermostat's handle must not open the pop-up after 550 ms
     pressed = false;
     clearTimeout(pressTimer);
     pressTimer = setTimeout(function () { pressed = true; openDevice(card.getAttribute('data-eid')); }, 550);

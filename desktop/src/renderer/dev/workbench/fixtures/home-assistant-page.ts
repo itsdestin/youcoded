@@ -19,6 +19,7 @@ import { HOME_HISTORY_CSS, HOME_HISTORY_JS } from './home-assistant-page-history
 import { ROOMS_TEMPLATE, EXTRAS_TEMPLATE } from './home-assistant-page-templates';
 import { HOME_LIVE_JS } from './home-assistant-page-live';
 import { HOME_CLIMATE_CSS, HOME_CLIMATE_JS } from './home-assistant-page-climate';
+import { HOME_DIAL_CSS, HOME_DIAL_JS } from './home-assistant-page-dial';
 import { HOME_TABS_JS } from './home-assistant-page-tabs';
 import { HOME_ICONS_JS } from './home-assistant-page-icons';
 import { HOME_REDRAW_CSS, HOME_REDRAW_JS } from './home-assistant-page-redraw';
@@ -89,7 +90,7 @@ export const HOME_ASSISTANT_PAGE_JSON = {
 function homeAssistantPageHtml(): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>Home</title>
-<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}${HOME_CAMERA_CSS}${HOME_REDRAW_CSS}${HOME_PENDING_CSS}${HOME_MEMORY_CSS}${HOME_EDIT_CSS}${HOME_LOOK_CSS}${HOME_FEEL_CSS}${HOME_TV_CSS}${HOME_BASIC_CSS}${HOME_COMPUTER_CSS}${HOME_MEDIA_CSS}${HOME_LIGHTS_CSS}${HOME_GLASS_CSS}${HOME_CLIMATE_CSS}</style></head>
+<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}${HOME_CAMERA_CSS}${HOME_REDRAW_CSS}${HOME_PENDING_CSS}${HOME_MEMORY_CSS}${HOME_EDIT_CSS}${HOME_LOOK_CSS}${HOME_FEEL_CSS}${HOME_TV_CSS}${HOME_BASIC_CSS}${HOME_COMPUTER_CSS}${HOME_MEDIA_CSS}${HOME_LIGHTS_CSS}${HOME_GLASS_CSS}${HOME_CLIMATE_CSS}${HOME_DIAL_CSS}</style></head>
 <body>
 <div class="yc-page yc-stack" id="root">
   <!-- No page title: the app's own bar already names the page, so the
@@ -1007,29 +1008,19 @@ ${HOME_ICONS_JS}
     }
     return head + edHint() + body;
   }
-  // The thermostat, large: a dial whose arc fills to the setting in the
-  // mode's colour, a dot where the room is now, the setting in the middle,
-  // big − and + either side, and the modes under it.
+  // The thermostat, large: a dial whose arc fills to the setting in the mode's colour, a short line across the ring where the
+  // room is now, a handle on the set point (drag it, or use the arrow keys), the setting in the middle, big - and + either side,
+  // and the modes under it. The dial's parts are drawn by thDialHtml (home-assistant-page-dial.ts).
   function thermoHero(it, room, compact) {
     if (gone(it)) return '<div class="th-hero gone"><div class="th-side"><div class="th-name">' + esc(it.name) + '</div><div class="vsub">Not responding' + (it.maker && /nest/i.test(it.maker) ? ' — Google Nest needs you to sign in again (see Problems).' : '.') + '</div></div></div>';
     var mode = it.state, lo = it.min != null ? it.min : 50, hi = it.max != null ? it.max : 90;
-    var f = function (v) { return Math.max(0, Math.min(1, (v - lo) / (hi - lo))); };
-    var range = thRange(it); // Auto: a low and a high set point (home-assistant-page-climate.ts)
-    var hasSet = (it.target != null || range) && mode !== 'off';
-    var R = 80, L = 2 * Math.PI * R * 0.75, C = 2 * Math.PI * R;
-    var fill = hasSet ? f(range ? it.thi : it.target) * L : 0, fromA = 0;
-    if (range) { fromA = f(it.tlo) * L; fill = Math.max(2, fill - fromA); } // Auto fills BETWEEN the two set points
+    var hasSet = (it.target != null || thRange(it)) && mode !== 'off'; // Auto: a low and a high set point (home-assistant-page-climate.ts)
     var tv = thValue(it);
-    var nowA = it.cur != null ? (135 + 270 * f(it.cur)) * Math.PI / 180 : null;
-    var dot = nowA == null ? '' : '<circle class="th-now" cx="' + (100 + R * Math.cos(nowA)).toFixed(1) + '" cy="' + (100 + R * Math.sin(nowA)).toFixed(1) + '" r="7"/>';
-    var doing = it.action ? (DOING[it.action] || it.action) : (MODE_NAMES[mode] || mode);
     var step = it.step || 1;
     var modes = Array.isArray(it.modesHvac) && it.modesHvac.length ? '<div class="th-modes" role="group" aria-label="Mode">' + it.modesHvac.map(function (m) {
       return '<button class="th-mode" aria-pressed="' + (m === mode) + '" data-mode="' + esc(it.id) + '" data-hvac="' + esc(m) + '">' + esc(MODE_NAMES[m] || m) + '</button>';
     }).join('') + '</div>' : '';
-    var dial = '<div class="th-dial"><svg viewBox="0 0 200 200" aria-hidden="true"><circle class="th-track" cx="100" cy="100" r="' + R + '" stroke-dasharray="' + L.toFixed(1) + ' ' + C.toFixed(1) + '" transform="rotate(135 100 100)"/>' +
-      (hasSet ? '<circle class="th-fill" cx="100" cy="100" r="' + R + '" stroke-dasharray="' + fill.toFixed(1) + ' ' + C.toFixed(1) + '"' + (fromA ? ' stroke-dashoffset="' + (-fromA).toFixed(1) + '"' : '') + ' transform="rotate(135 100 100)"/>' : '') + dot + '</svg>' +
-      '<div class="th-mid">' + (range && hasSet ? thRangeMid(it, doing) : '<span class="th-lbl">' + (hasSet ? esc(thWords(it)) : 'Off') + '</span><span class="th-set">' + (hasSet ? esc(it.target) + '°' : '—') + '</span>') + '<span class="th-cur">' + (it.cur != null ? 'Now ' + esc(it.cur) + '°' : '') + '</span></div></div>';
+    var dial = thDialHtml(it, compact);
     var minus = hasSet ? '<button class="th-step" aria-label="Cooler" data-temp="' + esc(it.id) + '" data-delta="' + (-step) + '"' + (tv <= lo ? ' disabled' : '') + '>−</button>' : '';
     var plus = hasSet ? '<button class="th-step" aria-label="Warmer" data-temp="' + esc(it.id) + '" data-delta="' + step + '"' + (tv >= hi ? ' disabled' : '') + '>+</button>' : '';
     if (compact) {
@@ -1482,6 +1473,7 @@ ${HOME_EDIT_JS}
 ${HOME_MOTION_JS}
 ${HOME_FEEL_JS}
 ${HOME_CLIMATE_JS}
+${HOME_DIAL_JS}
 ${HOME_TABS_JS}
   start();
 })();

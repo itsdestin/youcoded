@@ -3769,7 +3769,7 @@ function createPagesMock(empty: boolean): PagesBridge {
   // Round 4: `?pagesHome=view-lights|view-media|view-climate|view-problems`
   // opens on that chip's page; `settings` opens the gear's panel.
   // `camera-limited` is the Cameras tab with Google refusing every live start (the page's back-off, fake-camera.ts).
-  const chipView = homeView && homeView.startsWith('view-') ? homeView.slice(5) : homeView === 'camera-limited' ? 'cameras' : homeView === 'lights-colour' ? 'lights' : null;
+  const chipView = homeView && homeView.startsWith('view-') ? homeView.slice(5) : homeView === 'camera-limited' ? 'cameras' : homeView === 'lights-colour' ? 'lights' : homeView && /^thermo-\d+-climate/.test(homeView) ? 'climate' : null;
   // `chips-pills|chips-sentence|chips-tiles`: the main page in that chip style.
   const chipStyle = homeView && homeView.startsWith('chips-') ? homeView.slice(6) : null;
   // `group`: Destin's Room soundbar with its Sonos tick list open (round 5).
@@ -3790,10 +3790,15 @@ function createPagesMock(empty: boolean): PagesBridge {
     const song = { state: 'playing', title: 'Weightless \u2014 Marconi Union', app: 'Spotify', group: ['media_player.living_room_speaker', 'media_player.roam_2'] };
     fakeHomeAssistantSet('media_player.living_room_speaker', song); fakeHomeAssistantSet('media_player.roam_2', song);
   }
+  // `thermo-<now>[-climate][-auto]`: only the thermostat, with the room at <now> degrees (50 and 90 are the dial's two ends), on the Home tab's
+  // narrow card or, with -climate, the Climate tab's big dial; -auto puts it in Auto (a low and a high). WHY: the dial's "Now" label must be seen
+  // at the extremes beside the - and + buttons (owner's concern). Changed here, not in the pretend house's list: other screens rely on it as it is.
+  const thermo = homeView ? /^thermo-(\d+)(-climate)?(-auto)?$/.exec(homeView) : null;
+  if (thermo) fakeHomeAssistantSet('climate.thermostat', { cur: Number(thermo[1]), ...(thermo[3] ? { state: 'heat_cool', target: null, tlo: Math.max(50, Number(thermo[1]) - 3), thi: Math.min(90, Number(thermo[1]) + 3), action: 'idle' } : {}) });
   if (onlyCameras || homeView === 'view-cameras' || homeView === 'camera-limited') fakeHomeAssistantNestSignedIn(true); // events need the Nest account working
   if (homeView === 'camera-events') fakeHomeAssistantCameraEvents(true);
   fakeCameraRefuse(homeView === 'camera-limited' ? FAKE_RATE_LIMIT_WHY : null);
-  if (onlyCameras || homeView === 'connected' || homeView === 'edit' || homeView === 'remote' || homeView === 'remote-media' || homeView === 'remote-wide' || homeView === 'media-group' || homeView === 'group' || homeView === 'device' || chipView || homeView === 'settings' || chipStyle || variant) {
+  if (onlyCameras || homeView === 'connected' || homeView === 'edit' || homeView === 'remote' || homeView === 'remote-media' || homeView === 'remote-wide' || homeView === 'media-group' || homeView === 'group' || homeView === 'device' || chipView || homeView === 'settings' || chipStyle || variant || thermo) {
     pages = pages.map((p) => (p.id !== 'page-home' ? p : {
       ...p,
       // WHY (screenshots only): the page's first-load rise of room cards runs for about a second, and a picture taken during it misses room cards
@@ -3807,7 +3812,7 @@ function createPagesMock(empty: boolean): PagesBridge {
       })(),
       connections: (p.connections ?? []).map((c) => (c.kind === 'device' ? { ...c, address: '100.99.234.114:8123', approved: true, savedKey: true } : c)),
       refresh: { at: new Date().toISOString(), failed: false },
-      data: variant?.data ? variant.data : onlyCameras ? { hidden: fakeHomeAssistantIds().filter((id) => !id.startsWith('camera.')), startOpen: [] } : homeView === 'group' ? { groupOpen: ['media_player.destins_room'] } : homeView === 'device' ? { dlg: 'light.living_room_lamp' } : chipStyle ? { chipStyle, startOpen: ['destins_room'] } : chipView ? { view: chipView, startScenes: ['destins_room'], ...(chipView === 'lights' ? { startOpen: ['destins_room'] } : {}), ...(homeView === 'lights-colour' ? { startPalettes: ['light.desk_backlight'] } : {}) } : homeView === 'settings' ? { settingsOpen: true } : homeView === 'remote' ? { remote: ['remote.destins_room_tv_remote'], startOpen: ['destins_room'], hidden: tvOnly } : homeView === 'remote-media' ? { view: 'media', remote: ['remote.destins_room_tv_remote'] } : homeView === 'remote-wide' ? { view: 'media', remote: ['remote.destins_room_tv_remote'], hidden: tvOnly } : homeView === 'media-group' ? { view: 'media' } : {
+      data: variant?.data ? variant.data : thermo && !thermo[2] ? { hidden: fakeHomeAssistantIds().filter((id) => id !== 'climate.thermostat'), startOpen: ['upstairs'] } : onlyCameras ? { hidden: fakeHomeAssistantIds().filter((id) => !id.startsWith('camera.')), startOpen: [] } : homeView === 'group' ? { groupOpen: ['media_player.destins_room'] } : homeView === 'device' ? { dlg: 'light.living_room_lamp' } : chipStyle ? { chipStyle, startOpen: ['destins_room'] } : chipView ? { view: chipView, startScenes: ['destins_room'], ...(chipView === 'lights' ? { startOpen: ['destins_room'] } : {}), ...(homeView === 'lights-colour' ? { startPalettes: ['light.desk_backlight'] } : {}) } : homeView === 'settings' ? { settingsOpen: true } : homeView === 'remote' ? { remote: ['remote.destins_room_tv_remote'], startOpen: ['destins_room'], hidden: tvOnly } : homeView === 'remote-media' ? { view: 'media', remote: ['remote.destins_room_tv_remote'] } : homeView === 'remote-wide' ? { view: 'media', remote: ['remote.destins_room_tv_remote'], hidden: tvOnly } : homeView === 'media-group' ? { view: 'media' } : {
         startOpen: ['destins_room'], startPalettes: ['light.desk_backlight'],
         fav: ['light.living_room_lamp', 'climate.thermostat'],
         ...(homeView === 'edit' ? { editing: true } : {}),

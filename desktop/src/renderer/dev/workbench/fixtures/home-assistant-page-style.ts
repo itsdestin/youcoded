@@ -97,8 +97,8 @@ export const HOME_ASSISTANT_PAGE_CSS = `
   .th-dial svg { width: 100%; height: 100%; }
   .th-track, .th-fill { fill: none; stroke-width: 14; stroke-linecap: round; }
   .th-track { stroke: var(--well); }
-  .th-fill { stroke: var(--m); transition: stroke-dasharray 300ms ease; }
-  .th-now { fill: var(--fg); stroke: var(--inset); stroke-width: 4; }
+  /* No glide on the fill: the handle sits at its end and is placed instantly, so a glide would leave them apart (and a redraw must not animate). */
+  .th-fill { stroke: var(--m); }
   .th-mid { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
   .th-lbl { font-size: 12px; color: var(--fg-2); }
   .th-set { font-family: var(--font-mono); font-size: 54px; line-height: 1.05; color: var(--fg); }

@@ -24,5 +24,5 @@ export const HOME_GLASS_CSS = `
   :root[data-yc-see-through] .th-hero {
     background: linear-gradient(180deg, color-mix(in srgb, var(--fg) 6%, transparent), transparent 55%),
       color-mix(in srgb, var(--panel) calc(var(--panels-opacity, 1) * 60%), transparent); }
-  :root[data-yc-see-through] .th-now { stroke: color-mix(in srgb, var(--panel) 80%, transparent); }
+  :root[data-yc-see-through] .th-now-halo { stroke: color-mix(in srgb, var(--panel) 80%, transparent); }
 `;

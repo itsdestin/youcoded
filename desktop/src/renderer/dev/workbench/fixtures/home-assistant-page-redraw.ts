@@ -38,6 +38,8 @@ export const HOME_REDRAW_JS = `
   // slider being dragged.
   function keepAsIs(el) {
     if (el.hasAttribute('data-rn') || el.hasAttribute('data-nr')) return true;
+    // WHY the thermostat handle being dragged: the in-place drawing must not reset its place or focus mid-drag (thDrag, home-assistant-page-dial.ts); its place is set by the drag itself.
+    if (el.hasAttribute('data-th-h') && typeof thDrag !== 'undefined' && thDrag && thDrag.k === el.getAttribute('data-k')) return true;
     if (el !== document.activeElement) return false;
     if (el.nodeName === 'SELECT') return true;
     // WHY an open colour picker is left alone too (code review F15): a drawing that landed while it was open reset its value to the light's

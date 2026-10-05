@@ -52,6 +52,13 @@ export const PAGES: readonly ScreenEntry[] = [
   { ...pg('pages/page/page-home#lights-colour', 'view'), params: { pagesHome: 'lights-colour' } },
   { ...pg('pages/page/page-home#media', 'view'), params: { pagesHome: 'view-media' } },
   { ...pg('pages/page/page-home#climate', 'view'), params: { pagesHome: 'view-climate' } },
+  // The thermostat dial with the room at the dial's two ends (and Auto), on the Home tab's narrow card and on the Climate tab: where "Now 79" goes.
+  { ...pg('pages/page/page-home#thermo-cold', 'view'), params: { pagesHome: 'thermo-50' } },
+  { ...pg('pages/page/page-home#thermo-hot', 'view'), params: { pagesHome: 'thermo-90' } },
+  { ...pg('pages/page/page-home#thermo-auto', 'view'), params: { pagesHome: 'thermo-79-auto' } },
+  { ...pg('pages/page/page-home#thermo-cold-climate', 'view'), params: { pagesHome: 'thermo-50-climate' } },
+  { ...pg('pages/page/page-home#thermo-hot-climate', 'view'), params: { pagesHome: 'thermo-90-climate' } },
+  { ...pg('pages/page/page-home#thermo-auto-climate', 'view'), params: { pagesHome: 'thermo-79-climate-auto' } },
   { ...pg('pages/page/page-home#problems', 'view', 'error-state'), params: { pagesHome: 'view-problems' } },
   { ...pg('pages/page/page-home#settings', 'view'), params: { pagesHome: 'settings' } },
   { ...pg('pages/page/page-home#chips-pills', 'view'), params: { pagesHome: 'chips-pills' } },
