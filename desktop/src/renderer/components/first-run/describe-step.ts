@@ -1,20 +1,13 @@
 import type { FirstRunState, PrerequisiteState } from '../../../shared/first-run-types';
 
-// Per-prerequisite copy. Keys match PrerequisiteState.name.
-// WHY these words (2026-10-02): the old lines claimed Node "runs the AI engine"
-// and Git keeps "YouCoded" up to date — neither is true. Node runs Terminal and
-// Claude Code sessions; Git fetches the built-in skills and powers sync and the
-// Git panel. App updates never use either.
-const PREREQ_COPY: Record<string, string> = {
-  node: 'Installing Node.js — used by Terminal and Claude Code sessions.',
-  git: 'Installing Git — used for skills, syncing and project history.',
-  claude: 'Installing Claude Code — the AI that powers YouCoded.',
-};
-
 // WHY: on a Mac, Git arrives with Apple's developer tools, which open their own
 // window that must be answered; setup waits for it (installGit, 2026-10-02).
-const MAC_GIT_COPY =
-  'Installing Git — if macOS asks to install developer tools, click Install. It can take a few minutes.';
+const MAC_GIT_LINE = 'If macOS asks to install developer tools, click Install. It can take a few minutes.';
+
+// WHY one plain line and no tool names (first-run decks L-1, first-run-4 P4-1): "Step 1
+// of 2" and "Installing Node.js — …" named things a new user can't place. Tool names
+// appear only when one fails, in the stopped card's sentence.
+const INSTALL_LINE = 'Setting up the tools your assistant needs. This can take a few minutes.';
 
 function onMac(): boolean {
   return typeof navigator !== 'undefined' && /^Mac/.test(navigator.platform);
@@ -26,10 +19,6 @@ function activePrerequisite(prereqs: PrerequisiteState[]): PrerequisiteState | u
   );
 }
 
-/**
- * Single-sentence explainer for the first-run screen. Tells the user
- * what's happening right now and why, scoped to the current state.
- */
 /**
  * Is "Try again" the right answer to the message currently on screen?
  *
@@ -54,44 +43,42 @@ export function canRetry(state: FirstRunState): boolean {
   return state.currentStep !== 'AUTHENTICATE';
 }
 
-export function describeStep(state: FirstRunState, isMac: boolean = onMac()): string {
-  // The error's own words are always shown below the buttons; this headline
-  // only claims "something went wrong" where a retry is actually offered.
-  if (state.lastError && canRetry(state)) {
-    return 'Something went wrong. You can retry the last step.';
-  }
+/** Is setup stopped on a failure it can retry? The stopped card replaces the bar then. */
+export function isStopped(state: FirstRunState): boolean {
+  return !!state.lastError && canRetry(state);
+}
 
+/**
+ * The heading and grey line for the current step (brand rebuild, decks first-run-1…7).
+ * The heading is empty while stopped: the stopped card carries its own title.
+ */
+export function describeStep(state: FirstRunState, isMac: boolean = onMac()): { heading: string; line: string | null } {
+  if (isStopped(state)) return { heading: '', line: null };
   switch (state.currentStep) {
     case 'DETECT_PREREQUISITES':
-      return "Checking what's already installed on this machine.";
-
+      return { heading: 'Getting things ready', line: "Checking what's already on this computer…" };
     case 'INSTALL_PREREQUISITES': {
       const active = activePrerequisite(state.prerequisites);
-      if (active?.name === 'git' && isMac) return MAC_GIT_COPY;
-      if (active && PREREQ_COPY[active.name]) {
-        return PREREQ_COPY[active.name];
-      }
-      return 'Getting the next piece ready…';
+      return { heading: 'Getting things ready', line: active?.name === 'git' && isMac ? MAC_GIT_LINE : INSTALL_LINE };
     }
-
     case 'AUTHENTICATE':
-      // Sign in with ChatGPT (design 2026-09-04): either plan finishes setup.
-      // First-run local models (2026-09-14, Q-1): so does a model on this
-      // computer, which needs no account — the line must not say every way in
-      // is a sign-in.
-      return 'Sign in with an account, or run a model on this computer, to finish setup.';
-
+      return { heading: 'Choose how your assistant runs', line: null };
     case 'LAUNCH_WIZARD':
     case 'COMPLETE':
-      return 'All set. Opening YouCoded…';
-
+      return { heading: "You're all set", line: null };
     default: {
-      // Exhaustiveness check — if a new FirstRunStep is added the compiler
-      // flags this. The binding is the check itself; the underscore prefix
-      // doesn't suppress noUnusedLocals, so we use @ts-ignore for this line.
+      // Exhaustiveness check — a new FirstRunStep fails to compile here.
       // @ts-ignore — TS6133: the binding IS the exhaustiveness check
       const _exhaustive: never = state.currentStep;
-      return '';
+      return { heading: '', line: null };
     }
   }
+}
+
+/** The stopped card's one plain sentence: the failed tool by name, else the step. */
+export function stoppedSentence(state: FirstRunState): string {
+  const failed = state.prerequisites.find((p) => p.status === 'failed');
+  if (failed?.name === 'auth') return "Signing in didn't finish.";
+  if (failed) return `${failed.displayName} couldn't be installed.`;
+  return "This step didn't finish.";
 }

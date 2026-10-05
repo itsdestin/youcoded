@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FirstRunState, PrerequisiteState } from '../../shared/first-run-types';
 import type { CatalogModel } from '../../shared/provider-types';
 import BrailleSpinner from './BrailleSpinner';
-import { canRetry, describeStep } from './first-run/describe-step';
+import { describeStep, isStopped, stoppedSentence } from './first-run/describe-step';
 import { persistLastBinding, persistRuntimeDefault } from './RuntimeBinding';
 import { Button, CARD_LEVEL_1, ErrorState, FieldError, FoldRow } from './ui';
 import { BrandWordmark } from './brand/BrandLockup';
@@ -283,10 +283,6 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
     (p) => p.status === 'installing' || p.status === 'checking',
   );
 
-  // One predicate, shared with describeStep(), so the button and the
-  // "something went wrong" headline always appear together or not at all.
-  const retryable = !!state?.lastError && canRetry(state);
-
   const handleRetry = useCallback(() => {
     if (busy) return;
     (window as any).claude.firstRun.retry();
@@ -319,35 +315,8 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
   const launching =
     state?.currentStep === 'LAUNCH_WIZARD' || state?.currentStep === 'COMPLETE';
 
-  // The prerequisites this install actually works through. Round 3 review (B-9): Claude
-  // Code's on-demand install is shown on the sign-in card, never counted here, and a
-  // waiting/skipped Claude Code would never move (Q-5).
-  // Node.js joined Claude Code here (Destin, 2026-10-02): it installs with Claude Code now,
-  // so it counts only on a machine that already has it or is installing it.
-  const steps = (state?.prerequisites ?? []).filter((p) => !((p.name === 'claude' || p.name === 'node') && (state?.currentStep === 'AUTHENTICATE' || p.status === 'waiting' || p.status === 'skipped')));
-  const activeAt = steps.findIndex((p) => p.status === 'installing' || p.status === 'checking');
-  const failed = steps.find((p) => p.status === 'failed');
-  const stopped = !!state?.lastError && retryable;
-
-  // One heading and one line per step (first-run deck L-1, "one line and a bar"): tool
-  // names stay out of sight unless one of them fails.
-  let heading = 'Getting things ready';
-  let line: string | null = null;
-  if (stopped) {
-    heading = '';
-  } else if (state?.currentStep === 'DETECT_PREREQUISITES') {
-    line = "Checking what's already on this computer…";
-  } else if (state?.currentStep === 'INSTALL_PREREQUISITES') {
-    // On a Mac, Git arrives with Apple's developer tools, whose own window must be answered
-    // (installGit, 2026-10-02) — the one step where the line has to say what to do.
-    line = activeAt >= 0 && steps[activeAt].name === 'git' && /^Mac/.test(navigator.platform)
-      ? 'If macOS asks to install developer tools, click Install. It can take a few minutes.'
-      // WHY not "Step 1 of 2" (deck first-run-4 P4-1, Destin: "what does that mean?"): a
-      // count of tools nobody named says nothing. Say what is happening and how long.
-      : 'Setting up the tools your assistant needs. This can take a few minutes.';
-  } else if (state?.currentStep === 'AUTHENTICATE') {
-    heading = 'Choose how your assistant runs';
-  }
+  const stopped = !!state && isStopped(state);
+  const { heading, line } = state ? describeStep(state) : { heading: '', line: null };
   const installing = state?.currentStep === 'DETECT_PREREQUISITES' || state?.currentStep === 'INSTALL_PREREQUISITES';
 
   return (
@@ -408,7 +377,7 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
                 re-running the install pass is the right answer (canRetry: a refused key
                 or a sign-in message must not offer to reinstall the app's plumbing). */}
             {stopped && state?.lastError && <SetupStopped
-              sentence={failed && failed.name !== 'auth' ? `${failed.displayName} couldn't be installed.` : "This step didn't finish."}
+              sentence={stoppedSentence(state)}
               detail={state.lastError}
               busy={busy}
               onRetry={handleRetry}

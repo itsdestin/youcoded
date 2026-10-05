@@ -520,7 +520,7 @@ describe('FirstRunView completion path (authMode chatgpt)', () => {
     });
     render(React.createElement(FirstRunView, { onComplete: vi.fn() }));
 
-    await waitFor(() => expect(screen.getByText("You're all set.")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("You're all set")).toBeTruthy());
     await act(async () => { await Promise.resolve(); });
     expect(localStorage.getItem('youcoded-runtime-default')).toBeNull();
     expect(localStorage.getItem('youcoded-last-binding')).toBeNull();
@@ -542,12 +542,21 @@ describe('FirstRunView — the ChatGPT button and the kill switch', () => {
     delete (window as any).claude;
   });
 
-  it('hides "Log in with ChatGPT" when chatgpt.supported is false; the other two plans stay', async () => {
+  // Sign-in asks for a kind first (deck first-run-2 P2-3): the plan buttons live behind
+  // the "A plan you already pay for" row, the OpenRouter one behind "Pay as you go".
+  async function openKind(title: string) {
+    fireEvent.click(await screen.findByText(title));
+  }
+
+  it('hides "Log in with ChatGPT" when chatgpt.supported is false; Claude and OpenRouter stay', async () => {
     stubClaude({ state: viewState({}), chatgptSupported: false });
     render(React.createElement(FirstRunView, { onComplete: vi.fn() }));
 
-    await waitFor(() => expect(screen.getByText('Log in with Claude')).toBeTruthy());
+    await openKind('A plan you already pay for');
+    expect(screen.getByText('Log in with Claude')).toBeTruthy();
     expect(screen.queryByText('Log in with ChatGPT')).toBeNull();
+    fireEvent.click(screen.getByText(/All options/));
+    await openKind('Pay as you go');
     expect(screen.getByText('Log in with OpenRouter')).toBeTruthy();
   });
 
@@ -555,7 +564,8 @@ describe('FirstRunView — the ChatGPT button and the kill switch', () => {
     stubClaude({ state: viewState({}) });
     render(React.createElement(FirstRunView, { onComplete: vi.fn() }));
 
-    await waitFor(() => expect(screen.getByText('Log in with Claude')).toBeTruthy());
+    await openKind('A plan you already pay for');
+    expect(screen.getByText('Log in with Claude')).toBeTruthy();
     expect(screen.queryByText('Log in with ChatGPT')).toBeNull();
   });
 
@@ -563,8 +573,8 @@ describe('FirstRunView — the ChatGPT button and the kill switch', () => {
     const { firstRun } = stubClaude({ state: viewState({}), chatgptSupported: true });
     render(React.createElement(FirstRunView, { onComplete: vi.fn() }));
 
-    const button = await screen.findByText('Log in with ChatGPT');
-    button.click();
+    await openKind('A plan you already pay for');
+    fireEvent.click(screen.getByText('Log in with ChatGPT'));
     expect(firstRun.startAuth).toHaveBeenCalledWith('chatgpt');
   });
 });
@@ -573,12 +583,17 @@ describe('FirstRunView — the ChatGPT button and the kill switch', () => {
 // The wizard's error line and its Try again button
 // ---------------------------------------------------------------------------
 
-describe('FirstRunView — Try again is offered only when something actually failed', () => {
+describe('FirstRunView — Retry is offered only when something actually failed', () => {
   afterEach(() => { cleanup(); delete (window as any).claude; });
 
-  it('a refused OpenRouter key shows the message with no Try again button', async () => {
-    // One click reaches this state and nothing broke. "Try again" here would
-    // re-run the whole Node/Git/Claude install pass against a working machine.
+  // The raw message sits behind "Show details" on the stopped card (deck first-run-1 E-2).
+  function showDetails() {
+    fireEvent.click(screen.getByRole('button', { name: 'Show details' }));
+  }
+
+  it('a refused OpenRouter key shows the message with no Retry and no stopped card', async () => {
+    // One click reaches this state and nothing broke. Retry here would re-run the
+    // whole install pass against a working machine.
     stubClaude({ state: viewState({
       currentStep: 'AUTHENTICATE',
       lastError: "OpenRouter didn't accept this key. Check that you copied all of it.",
@@ -586,15 +601,14 @@ describe('FirstRunView — Try again is offered only when something actually fai
     render(React.createElement(FirstRunView, { onComplete: vi.fn() }));
 
     await waitFor(() => expect(screen.getByText("OpenRouter didn't accept this key. Check that you copied all of it.")).toBeTruthy());
-    expect(screen.queryByText('Try again')).toBeNull();
-    // …and the headline stays the step's own line, not "Something went wrong".
-    expect(screen.queryByText(/Something went wrong/)).toBeNull();
-    expect(screen.getByText('Sign in with an account, or run a model on this computer, to finish setup.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(screen.queryByText('Setup stopped')).toBeNull();
+    expect(screen.getByText('Choose how your assistant runs')).toBeTruthy();
   });
 
-  it('a ChatGPT sign-in that timed out keeps its Try again button', async () => {
+  it('a ChatGPT sign-in that timed out stops with Retry', async () => {
     // handleChatGptLogin marks the 'auth' prerequisite failed, which is the
-    // signal the button reads.
+    // signal the card reads.
     const prerequisites = INITIAL_PREREQUISITES.map((p) => (
       p.name === 'auth' ? { ...p, status: 'failed' as const, error: 'Timed out' } : { ...p, status: 'installed' as const }
     ));
@@ -605,25 +619,29 @@ describe('FirstRunView — Try again is offered only when something actually fai
     }) });
     render(React.createElement(FirstRunView, { onComplete: vi.fn() }));
 
-    await waitFor(() => expect(screen.getByText('Sign-in timed out. Try again?')).toBeTruthy());
-    expect(screen.getByText('Try again')).toBeTruthy();
-    expect(screen.getByText('Something went wrong. You can retry the last step.')).toBeTruthy();
+    await waitFor(() => expect(screen.getByText('Setup stopped')).toBeTruthy());
+    expect(screen.getByText("Signing in didn't finish.")).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+    showDetails();
+    expect(screen.getByText('Sign-in timed out. Try again?')).toBeTruthy();
   });
 
-  it('an error with no failed prerequisite and no other control (no disk space) keeps its Try again button', async () => {
-    // On the install step there are no sign-in buttons — Try again is the only
-    // way forward, so removing it would strand the user.
+  it('an error with no failed prerequisite and no other control (no disk space) keeps Retry', async () => {
+    // On the install step there are no sign-in buttons — Retry is the only way
+    // forward, so removing it would strand the user.
     stubClaude({ state: viewState({
       currentStep: 'INSTALL_PREREQUISITES',
       lastError: 'Insufficient disk space: 210 MB available (need >= 500 MB)',
     }) });
     render(React.createElement(FirstRunView, { onComplete: vi.fn() }));
 
-    await waitFor(() => expect(screen.getByText(/Insufficient disk space/)).toBeTruthy());
-    expect(screen.getByText('Try again')).toBeTruthy();
+    await waitFor(() => expect(screen.getByText("This step didn't finish.")).toBeTruthy());
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+    showDetails();
+    expect(screen.getByText(/Insufficient disk space/)).toBeTruthy();
   });
 
-  it('a failed prerequisite install keeps its Try again button', async () => {
+  it('a failed prerequisite install names the tool and keeps Retry', async () => {
     const prerequisites = INITIAL_PREREQUISITES.map((p) => (
       p.name === 'node' ? { ...p, status: 'failed' as const, error: 'network' } : { ...p }
     ));
@@ -634,8 +652,10 @@ describe('FirstRunView — Try again is offered only when something actually fai
     }) });
     render(React.createElement(FirstRunView, { onComplete: vi.fn() }));
 
-    await waitFor(() => expect(screen.getByText('Could not download Node.js')).toBeTruthy());
-    expect(screen.getByText('Try again')).toBeTruthy();
+    await waitFor(() => expect(screen.getByText("Node.js couldn't be installed.")).toBeTruthy());
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+    // The bar steps aside while stopped (deck L-2).
+    expect(screen.queryByRole('progressbar')).toBeNull();
   });
 });
 
