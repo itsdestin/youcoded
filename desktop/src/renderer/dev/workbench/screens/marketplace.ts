@@ -28,6 +28,10 @@ export const MARKETPLACE: readonly ScreenEntry[] = [
   // `/install` presses Install on an item that is not installed.
   mp('marketplace/detail/install', 'dialog'),
   { ...mp('marketplace/detail/install#failed', 'dialog', 'error-state'), params: { install: 'fail' } },
+  // The same, photographed 8 seconds after the failure: the reason must still be on screen.
+  { ...mp('marketplace/detail/install#failed-later', 'dialog', 'error-state'), params: { install: 'fail' }, waitMs: 8000 },
+  // Phone-width Marketplace grid: the compact cards' chip rows.
+  { ...mp('marketplace/skills#phone', 'view', 'narrow'), viewport: { width: 390, height: 844 } },
   { ...mp('marketplace/detail/install#slow', 'dialog'), params: { install: 'slow' } },
   { ...mp('marketplace/detail#update', 'dialog'), params: { mpUpdate: '1' } },
   mp('marketplace/theme-detail/install', 'dialog'),

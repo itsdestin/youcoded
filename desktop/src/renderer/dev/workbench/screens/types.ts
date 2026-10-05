@@ -15,6 +15,10 @@ export type ScreenEntry = {
   /** A practice session to select before opening (fixtures/sessions.ts ids: wb-2 is the
    *  native-runtime session that seeded conversations, error cards and `stalled` replay into). */
   session?: string;
+  /** Milliseconds to wait after the screen shows before its picture — for a state that
+   *  CHANGES on its own (a notice that used to clear itself after 6s). Keep it rare: it is
+   *  slow by design. */
+  waitMs?: number;
   /** Another screen this one is EXPECTED to look identical to, and why. */
   sameAs?: { name: string; why: string };
 };
