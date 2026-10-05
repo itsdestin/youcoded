@@ -5,7 +5,7 @@ import BrailleSpinner from './BrailleSpinner';
 import { canRetry, describeStep } from './first-run/describe-step';
 import { persistLastBinding, persistRuntimeDefault } from './RuntimeBinding';
 import { Button, CARD_LEVEL_1, ErrorState, FieldError, FoldRow } from './ui';
-import { BrandLockupRow } from './brand/BrandLockup';
+import { BrandLockupRow, BrandWordmark } from './brand/BrandLockup';
 import { SignInChoices, type WayIn } from './first-run/SignInChoices';
 import { StatusStrip } from './ui/StatusStrip';
 import { ApiKeySetup } from './first-run/ApiKeySetup';
@@ -128,16 +128,23 @@ function AuthScreen({
   return (
     <div className="w-full flex flex-col gap-3">
       <SignInChoices chatGpt={isChatGptSupported()} onPick={pick} />
-      {/* First-run guide design 2026-09-10 §1.1: the one warning nobody can
-          skip. It lives on the sign-in step because every install passes
-          through here; the app's own dialogs only warn the first time a
-          permission switch flips. Wording is Destin's (review deck 2026-09-10, Z-1). */}
-      <p className="text-xs text-fg-muted text-center leading-relaxed">
-        With your permission, the assistant may create, change, or delete files on your device.
-        Create backups for anything you cannot replace.
-      </p>
+      {/* WHY the backup warning is gone from here (deck first-run-4 P4-2, Destin: "remove
+          the copy at the bottom about backups. this is a weird place for that warning").
+          The line about changing it later takes its place. */}
+      <p className="text-sm text-fg-muted text-center">You can change this at any time.</p>
     </div>
   );
+}
+
+/** TRIAL (deck first-run-4 P4-3: "can we try a few where we drop the icon and just use
+ *  the brand name/tagline?"): `?logo=stack|tuck|name` in the workbench; removed once
+ *  one is picked. */
+function SetupLogo() {
+  const v = new URLSearchParams(location.search).get('logo');
+  if (v === 'stack') return <BrandWordmark size={72} tagline="stack" />;
+  if (v === 'tuck') return <BrandWordmark size={72} tagline="tuck" />;
+  if (v === 'name') return <BrandWordmark size={80} tagline="none" />;
+  return <BrandLockupRow icon={112} />;
 }
 
 /* ------------------------------------------------------------------ */
@@ -346,10 +353,11 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
     // (installGit, 2026-10-02) — the one step where the line has to say what to do.
     line = activeAt >= 0 && steps[activeAt].name === 'git' && /^Mac/.test(navigator.platform)
       ? 'If macOS asks to install developer tools, click Install. It can take a few minutes.'
-      : activeAt >= 0 ? `Step ${activeAt + 1} of ${steps.length}` : 'Getting the next piece ready…';
+      // WHY not "Step 1 of 2" (deck first-run-4 P4-1, Destin: "what does that mean?"): a
+      // count of tools nobody named says nothing. Say what is happening and how long.
+      : 'Setting up the tools your assistant needs. This can take a few minutes.';
   } else if (state?.currentStep === 'AUTHENTICATE') {
     heading = 'Choose how your assistant runs';
-    line = 'You can add the others later in Settings.';
   }
   const installing = state?.currentStep === 'DETECT_PREREQUISITES' || state?.currentStep === 'INSTALL_PREREQUISITES';
 
@@ -365,7 +373,7 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
           a step's content changed height. It now holds one place above the middle on every
           step, and each step's content starts a fixed distance below it. */}
       <div className="brand-stage">
-        <BrandLockupRow icon={112} />
+        <SetupLogo />
 
         {launching ? (
           <CompletionCard />
@@ -373,7 +381,13 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
           <div className="flex flex-col items-center gap-4 w-full max-w-md">
             {state && (
               <div className="text-center">
-                {heading && <h1 className="brand-heading text-3xl text-fg">{heading}</h1>}
+                {/* P4-1: a spinner beside the heading while setup is working. */}
+                {heading && (
+                  <h1 className="brand-heading text-3xl text-fg inline-flex items-center gap-3">
+                    {installing && !stopped && <BrailleSpinner size="lg" className="relative top-2 w-8 text-4xl! leading-none text-accent" />}
+                    {heading}
+                  </h1>
+                )}
                 {line && <p className="mt-1 text-sm text-fg-dim">{line}</p>}
               </div>
             )}

@@ -46,7 +46,7 @@ export function BrandLockup({ size = 36, tagline = true }: { size?: number; tagl
  * icon, the gap is a quarter of the icon. One measurement on mount, after the bundled font
  * has loaded — not per frame.
  */
-export function BrandLockupRow({ icon = 80 }: { icon?: number }) {
+export function BrandLockupRow({ icon = 80, showIcon = true }: { icon?: number; showIcon?: boolean }) {
   const k = icon / 64;
   const size = 42 * k;
   const blockRef = useRef<HTMLDivElement>(null);
@@ -71,7 +71,7 @@ export function BrandLockupRow({ icon = 80 }: { icon?: number }) {
   }, [size]);
   return (
     <div className="flex items-center select-none" style={{ gap: icon / 4 }} aria-label="YouCoded — agents for everyone" role="img">
-      <img src={appIcon} alt="" width={icon} height={icon} className="brand-icon" draggable={false} />
+      {showIcon && <img src={appIcon} alt="" width={icon} height={icon} className="brand-icon" draggable={false} />}
       <div ref={blockRef} className="relative inline-block" style={{ transform: `translateY(${2 * k}px)`, height: place?.height, lineHeight: 'normal' }}>
         <span ref={nameRef} className="brand-name" style={{ fontSize: size }}>
           <span className="brand-name__you">you</span>coded
@@ -80,6 +80,26 @@ export function BrandLockupRow({ icon = 80 }: { icon?: number }) {
           <span className="brand-tagline inline-block" style={{ fontSize: size * 0.33 }}>agents for everyone</span>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The name without the icon (deck first-run-4 P4-3), with the tagline stacked under it
+ * (the stacked lockup's spacing: 0.34× the name, pulled 6px tighter at a 36px name),
+ * tucked beside the "y" as in the side-by-side lockup, or left off.
+ */
+export function BrandWordmark({ size, tagline }: { size: number; tagline: 'stack' | 'tuck' | 'none' }) {
+  if (tagline === 'tuck') return <BrandLockupRow icon={size * 64 / 42} showIcon={false} />;
+  const k = size / 36;
+  return (
+    <div className="flex flex-col items-center select-none" style={{ lineHeight: 'normal' }} aria-label="YouCoded" role="img">
+      <span className="brand-name" style={{ fontSize: size }}>
+        <span className="brand-name__you">you</span>coded
+      </span>
+      {tagline === 'stack' && (
+        <span className="brand-tagline" style={{ fontSize: size * 0.34, marginTop: -6 * k }}>agents for everyone</span>
+      )}
     </div>
   );
 }
