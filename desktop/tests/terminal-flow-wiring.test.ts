@@ -430,3 +430,74 @@ describe('the real SessionManager provides everything the terminal router calls'
     expect(typeof (SessionManager.prototype as any)[name]).toBe('function');
   });
 });
+
+
+// A terminal that is mounted AFTER the session already drew into an earlier one (page reload, crash, tear-off to a
+// new window, a buddy window opening) starts EMPTY and nothing makes the program redraw: the terminal stays blank and
+// the chat send gate cannot read an input box. Main asks the program to repaint once per such mount (2026-10-05).
+describe('terminal flow wiring: a re-mounted terminal is given a picture', () => {
+  beforeEach(() => { vi.clearAllMocks(); vi.useRealTimers(); });
+  const reload = (w: any) => w.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
+
+  it('the very first mount never asks for a repaint (startup trust prompt etc.)', () => {
+    const t = world();
+    t.registry.assignSession(SID, 2);
+    t.out('trust prompt'); t.ready(t.w2);
+    expect(t.sm.bounceSize).not.toHaveBeenCalled();
+    const u = world(); u.registry.assignSession(SID, 2); u.ready(u.w2);   // nothing drawn yet either
+    expect(u.sm.bounceSize).not.toHaveBeenCalled();
+  });
+
+  it('a page reload that mounts a new terminal for a session that already drew asks for exactly one repaint, after the replay', () => {
+    const t = world();
+    t.registry.assignSession(SID, 2); t.ready(t.w2);
+    t.out('screen');                                        // drawn into the first terminal
+    reload(t.w2);
+    t.out('while loading');                                 // held for the new page
+    t.ready(t.w2);
+    expect(t.w2.sent.map((s: any) => s.data)).toContain('while loading');
+    expect(t.sm.bounceSize).toHaveBeenCalledTimes(1);
+    expect(t.sm.bounceSize).toHaveBeenCalledWith(SID);
+  });
+
+  it('ready reported twice in a row repaints once (rate limit shared with the renderer request)', () => {
+    const t = world();
+    t.registry.assignSession(SID, 2); t.ready(t.w2); t.out('x');
+    reload(t.w2); t.ready(t.w2); t.ready(t.w2);
+    expect(t.sm.bounceSize).toHaveBeenCalledTimes(1);
+  });
+
+  it('ownership moving to a new window (tear-off / re-dock): the new empty terminal gets a repaint, once', () => {
+    const t = world();
+    t.registry.assignSession(SID, 2); t.ready(t.w2); t.out('screen');
+    t.registry.assignSession(SID, 3);
+    t.ready(t.w3);
+    expect(t.sm.bounceSize).toHaveBeenCalledTimes(1);
+  });
+
+  it('a buddy window mounting later for a session that already drew gets one; a session that never drew does not', () => {
+    const t = world();
+    t.registry.assignSession(SID, 2); t.registry.subscribe(SID, 3);
+    t.ready(t.w2); t.out('screen'); t.ready(t.w3);
+    expect(t.sm.bounceSize).toHaveBeenCalledTimes(1);
+    const u = world(); u.registry.assignSession(SID, 2); u.registry.subscribe(SID, 3);
+    u.ready(u.w2); u.ready(u.w3);
+    expect(u.sm.bounceSize).not.toHaveBeenCalled();
+  });
+
+  it('a pre-mount cut and a re-mount together still repaint once', () => {
+    const t = world();
+    t.registry.assignSession(SID, 2); t.ready(t.w2); t.out('screen'); reload(t.w2);
+    const ink = '\x1b[2K\x1b[1A\x1b[2K\x1b[Gframe ' + 'x'.repeat(1000) + '\n';
+    for (let i = 0; i < 6; i++) t.out(ink.repeat(1000));
+    t.ready(t.w2);
+    expect(t.sm.bounceSize).toHaveBeenCalledTimes(1);
+  });
+
+  it('a session that ended is never repainted by a late ready', () => {
+    const t = world();
+    t.registry.assignSession(SID, 2); t.ready(t.w2); t.out('x');
+    t.sm.emit('session-exit', SID, 0); reload(t.w2); t.ready(t.w2);
+    expect(t.sm.bounceSize).not.toHaveBeenCalled();
+  });
+});

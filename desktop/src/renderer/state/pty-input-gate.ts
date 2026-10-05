@@ -1,7 +1,7 @@
 import type { SessionChatState } from './chat-types';
 import { HISTORY_EXPAND_PROMPT_ID } from './chat-types';
 import { getVisibleScreenText } from '../hooks/terminal-registry';
-import { readInputFocus, inputIsBlocked, type InputFocus } from '../parser/cc-input-focus';
+import { readInputFocus, inputIsBlocked, screenIsUnpainted, type InputFocus } from '../parser/cc-input-focus';
 
 // Shared safety gate for programmatic PTY writes.
 //
@@ -88,7 +88,17 @@ export function pendingInteractionKind(session: SessionChatState): 'approval' | 
  * when there is no readable terminal (no verdict, so no new refusal).
  */
 export function screenInputBlock(sessionId: string): Exclude<InputFocus, { kind: 'message-box' } | { kind: 'unknown' }> | null {
-  const focus = readInputFocus(getVisibleScreenText(sessionId));
+  const screen = getVisibleScreenText(sessionId);
+  // UNKNOWN is not a pop-up (2026-10-05): a terminal re-mounted after a reload/crash/tear-off is blank or holds one stray
+  // row until the program repaints; refusing the send there told users an idle session "is waiting on something". Ask for the
+  // repaint (main rate-limits it) and let the send through — real prompts are still caught by the chat-state checks, and a
+  // genuine pop-up always has an edge rule and body, so it never counts as unpainted. (Waiting for the frame is not done:
+  // every caller is synchronous and the repaint lands a moment after the send.)
+  if (screen != null && screenIsUnpainted(screen)) {
+    try { (globalThis as any).window?.claude?.session?.requestRepaint?.(sessionId); } catch { /* no bridge: nothing to ask */ }
+    return null;
+  }
+  const focus = readInputFocus(screen);
   return inputIsBlocked(focus) ? (focus as Exclude<InputFocus, { kind: 'message-box' } | { kind: 'unknown' }>) : null;
 }
 

@@ -41,6 +41,19 @@ export function createTerminalOutputRouter(d: RouterDeps): (sessionId: string) =
   const trimmed = new Set<string>();
   const pendingChars = new Map<string, number>();
   const readySessions = new Set<string>();
+  // Sessions whose output has already been drawn into some terminal. A terminal that mounts for one of these is a RE-mount
+  // (page reload, renderer crash, tear-off to a new window, a buddy window opening): its xterm is empty and nothing makes
+  // the program redraw, so it needs one repaint. Kept across reloads on purpose (reconcile drops readySessions, not this).
+  const drew = new Set<string>();
+  // Shared 1 s per-session limit for every repaint request (renderer-initiated and re-mount), so a misbehaving
+  // renderer or a double ready cannot bounce a PTY in a loop; the nudge itself is arbitrated in the worker.
+  const lastRepaintAt = new Map<string, number>();
+  const requestRepaint = (sessionId: string) => {
+    const t = Date.now();
+    if (t - (lastRepaintAt.get(sessionId) ?? 0) < 1000) return;
+    lastRepaintAt.set(sessionId, t);
+    d.sessionManager.bounceSize(sessionId);
+  };
 
   const reconcile = (lost: string[] = []) => {
     for (const [sid, wids] of [...awaitingReady]) {
@@ -71,6 +84,7 @@ export function createTerminalOutputRouter(d: RouterDeps): (sessionId: string) =
   d.sessionManager.on('pty-output', (sessionId: string, data: string) => {
     const routed = readySessions.has(sessionId);
     if (routed) {
+      drew.add(sessionId);
       d.sendForSession(sessionId, `pty:output:${sessionId}`, data);
     } else {
       let buf = pendingOutput.get(sessionId);
@@ -96,15 +110,25 @@ export function createTerminalOutputRouter(d: RouterDeps): (sessionId: string) =
     // consumer without touching anyone else's books.
     const primary = ownerId == null || ownerId === wid;
     flow.ready(sessionId, wid, primary ? (pendingChars.get(sessionId) ?? 0) : 0);
-    if (!primary) return;
+    // WHY: this terminal's xterm is new and empty, but the session already drew into an earlier one — the program will not
+    // redraw by itself, so the terminal stays blank and the chat send gate (which reads the screen) sees no input box.
+    // Any mounting window needs it (a non-primary buddy window's xterm is just as empty). The nudge runs in the worker AFTER
+    // the replay below is already queued ahead of it, so the repaint lands on top of the replayed text. A shell session
+    // redraws its prompt line too — harmless, the terminal was empty. Windows: the worker skips the nudge (see pty-worker.js
+    // 'bounce'); the new terminal's first fit sends a resize and ConPTY re-emits its buffer on a resize.
+    const remount = drew.has(sessionId);
+    if (!primary) { if (remount) requestRepaint(sessionId); return; }
     readySessions.add(sessionId);
     const buffered = pendingOutput.get(sessionId);
     pendingOutput.delete(sessionId);
     pendingChars.delete(sessionId);
     for (const c of buffered ?? []) d.sendForSession(sessionId, `pty:output:${sessionId}`, c.s);
+    if (buffered?.length) drew.add(sessionId);
     trimMemos.delete(sessionId);
     // Text was cut from the front: the cursor position is unknown, so the program repaints once (size nudge, in the worker).
-    if (trimmed.delete(sessionId)) d.sessionManager.bounceSize(sessionId);
+    // That one nudge also serves a re-mount — never two.
+    if (trimmed.delete(sessionId)) { lastRepaintAt.set(sessionId, Date.now()); d.sessionManager.bounceSize(sessionId); }
+    else if (remount) requestRepaint(sessionId);
   };
 
   // A terminal mounted in the sending window.
@@ -137,18 +161,14 @@ export function createTerminalOutputRouter(d: RouterDeps): (sessionId: string) =
   // The window cut its hidden-window backlog and is showing again: ask the program to repaint. Accepted only from a window
   // this session's output is ROUTED to (its routing targets — not necessarily a consumer or the owner), and at most once a
   // second per session so a misbehaving renderer cannot bounce a PTY in a loop; the nudge itself is arbitrated in the worker.
-  const lastRepaintAt = new Map<string, number>();
   d.ipcMain.on(d.channels.repaint, (event, sessionId: string) => {
     if (typeof sessionId !== 'string' || !d.routeTargets(sessionId).includes(event.sender.id)) return;
-    const t = Date.now();
-    if (t - (lastRepaintAt.get(sessionId) ?? 0) < 1000) return;
-    lastRepaintAt.set(sessionId, t);
-    d.sessionManager.bounceSize(sessionId);
+    requestRepaint(sessionId);
   });
 
   return (sessionId: string) => {
     pendingOutput.delete(sessionId); pendingChars.delete(sessionId); flow.end(sessionId); readySessions.delete(sessionId);
-    awaitingReady.delete(sessionId); lastRepaintAt.delete(sessionId);
+    awaitingReady.delete(sessionId); lastRepaintAt.delete(sessionId); drew.delete(sessionId);
     trimMemos.delete(sessionId); trimmed.delete(sessionId);
     ended.add(sessionId);
     if (ended.size > ENDED_MEMORY) ended.delete(ended.values().next().value as string);

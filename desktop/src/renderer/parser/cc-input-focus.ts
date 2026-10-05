@@ -100,3 +100,19 @@ export function readInputFocus(screen: string | null | undefined): InputFocus {
 export function inputIsBlocked(focus: InputFocus): boolean {
   return focus.kind === 'popup' || focus.kind === 'other-view';
 }
+
+/**
+ * True when the screen is "no picture yet" rather than a pop-up: nothing drawn, or a few stray rows and NOT ONE
+ * edge rule. WHY (2026-10-05): a re-mounted terminal is empty (or shows one status row) until the program repaints, and
+ * readInputFocus reads "no message box" as a pop-up. Every real Claude Code pop-up draws an edge (a column-0 rule in
+ * the classic renderer, a ▔ edge in fullscreen) and has a body and footer, so requiring "no edge AND at most 3 rows"
+ * keeps every genuine pop-up blocked. Callers must treat this as UNKNOWN, never as permission to type blindly
+ * forever: they ask for a repaint and chat-state pending-interaction checks still guard real prompts.
+ */
+export function screenIsUnpainted(screen: string | null | undefined): boolean {
+  if (!screen) return true;
+  const rows = rowsOf(screen);
+  if (rows.length === 0) return true;
+  if (rows.length > 3) return false;
+  return !rows.some((r) => EDGE.test(r) || /^▔{20,}\s*$/.test(r));
+}
