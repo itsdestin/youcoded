@@ -4124,9 +4124,21 @@ function AppInner() {
                   if (args) void (createSession as any)(...args);
                 }}
               />
+            ) : firstTimeWelcome && WELCOME_TRIAL ? (
+              // Welcome deck WL-1 (Destin): "putting the mascot to the left of the start your
+              // first session text". The tour's first stop still rings the buddy here.
+              <div className="flex items-center gap-5 w-96 select-none">
+                <div data-guide-anchor="welcome-mascot" className="flex shrink-0">
+                  <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-20 h-20 text-fg-dim" scene />
+                </div>
+                <div className="flex flex-col gap-1 min-w-0">
+                  <p className="brand-heading text-2xl text-fg leading-tight whitespace-nowrap">Start your first session</p>
+                  <p className="text-sm text-fg-muted">A session is one conversation with the assistant, working in one folder.</p>
+                </div>
+              </div>
             ) : firstTimeWelcome ? (
               <div className="flex flex-col items-center gap-1 text-center max-w-sm select-none">
-                <p className={WELCOME_TRIAL ? 'brand-heading text-3xl text-fg' : 'text-xl text-fg'}>Start your first session</p>
+                <p className="text-xl text-fg">Start your first session</p>
                 <p className="text-sm text-fg-muted">A session is one conversation with the assistant, working in one folder.</p>
               </div>
             ) : (
@@ -4135,9 +4147,11 @@ function AppInner() {
             {/* scene: the hero surface renders the theme's companions (sun,
                 motes, sparkles) orbiting the mascot — big canvas, no clipping.
                 data-guide-anchor: the tour's first stop rings the buddy. */}
-            <div data-guide-anchor="welcome-mascot" className="flex">
-              <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-36 h-36 text-fg-dim" scene />
-            </div>
+            {!(firstTimeWelcome && WELCOME_TRIAL) && (
+              <div data-guide-anchor="welcome-mascot" className="flex">
+                <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-36 h-36 text-fg-dim" scene />
+              </div>
+            )}
             {/* Welcome screen: New session (expandable) + Resume session */}
             <div className={`flex flex-col items-center gap-2 mt-1 ${firstTimeWelcome && WELCOME_TRIAL ? 'w-96' : 'w-64'}${remoteCatchingUp || startingSession ? ' hidden' : ''}`}>
               {firstTimeWelcome && WELCOME_TRIAL === 'D2' && !welcomeD2Details ? (
