@@ -654,6 +654,9 @@ export const IPC = {
   VOICE_MIC_ACCESS: 'voice:mic-access',
   VOICE_AUDIO: 'voice:audio',
   VOICE_EVENT: 'voice:event',   // push
+  // Hitch recorder: renderer -> main, fire-and-forget, desktop only. Registered by main/hitch-recorder.ts itself (it is created in whenReady),
+  // deliberately NOT a channel-table entry and never phone-reachable.
+  PERF_HITCH_BATCH: 'perf:hitch-batch',
   // Office (main/ipc/office.ts). Requests the editor page makes, and the window's answers to main's pushes.
   OFFICE_STATUS: 'office:status',
   OFFICE_CREATE: 'office:create',

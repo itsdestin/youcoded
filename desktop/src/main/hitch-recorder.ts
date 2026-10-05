@@ -1,0 +1,340 @@
+// Always-on, low-overhead "hitch recorder" (perf gap review M1-M3, 2026-10-05).
+//
+// WHAT IT IS: one private local file, `<userData>/perf/hitches.jsonl` (+ `hitches.1.jsonl`
+// after rotation, ~10 MiB max in total), one JSON object per line. It records each time a
+// window froze for 100 ms or more, each slow keypress/click, each time the main process
+// stopped answering, once a minute the memory/CPU of every app process, and once per launch
+// the startup timings. Read it with `scripts/perf-lab/hitch-report.mjs`.
+//
+// RECORDED, per line (always): ts (ISO), v (app version), launch (random id of this launch),
+// win (window id w1, w2 ... of this launch), kind.
+//  - frame:  duration, blocking time, style+layout time, render time, whether a keypress/click
+//            was waiting, and the 3 slowest scripts of the APP'S OWN BUNDLE: invoker type (fixed list),
+//            invoker (none for script starts; "url" for anything path-like; TAG.onevent for element
+//            listeners, ids and classes dropped), function name, bundle file BASENAME (index-abc.js),
+//            character position, ms, forced-layout ms. A script from anywhere else is "other" with no name.
+//  - event:  type (keydown/pointerdown/pointerup/click/input), duration, input delay, handler
+//            time, wait-to-draw time, a COARSE target kind (terminal/text-input/chat/other).
+//  - task:   duration only (fallback when the browser has no long-animation-frame).
+//  - context, only when a hitch is recorded: page visible/hidden, focused, view mode
+//            (chat/terminal), whether a dialog or full screen is open (yes/no), pixel ratio,
+//            DOM element count (at most every 10 s), session COUNT, window COUNT.
+//  - main-stall: how many ms the main process did not respond (a sleep/resume or a "stall" over a
+//            minute is discarded), and the NAME of the last IPC channel it started plus how long ago
+//            (a hint, not proof).
+//  - minute: event-loop delay p50/p99/max, memory + CPU % per process type (browser, each
+//            renderer, GPU, utility), main-process heap, window count, session count, and
+//            the renderers' tallies of 50-100 ms frames.
+//  - startup: millisecond gaps between the boot marks, first window loaded, the renderer's
+//            yc:* marks and first-contentful-paint.
+// EVERY STRING that reaches the file is an enum or a tight pattern, enforced here (hitch-validate.ts), not
+// trusted from the window: invoker type (6 fixed names), invoker (url, TAG.onevent, or a short letters-only API name like Window.requestAnimationFrame, else "other"), function
+// (^[A-Za-z_$][\w$.]{0,59}$ else dropped), source (^[\w.-]{1,60}\.(js|mjs)$, "inline" or "other"), event type (5
+// fixed), target kind (5 fixed), mode and window kind (fixed), view mode (^[a-z][a-z0-9-]{0,19}$), visibility (3
+// fixed), mark names (^yc:[a-z0-9:-]{1,40}$ from the window; app mark names matched against a name pattern in
+// main), IPC channel names (^[A-Za-z0-9_:.*-]{1,60}$ with id-like runs masked, else "?"), process-type keys (fixed:
+// browser, gpu, utility, other, renderer), plus ids this module generates itself. Free text is dropped, never trimmed.
+// NEVER recorded: message text, prompts, file names or paths of the user's files, keys typed,
+// element text, ids or classes, session names (only the COUNT), URLs, tokens. Function names and bundle
+// file basenames are the app's own code, never user content: only scripts under the window's own app
+// directory are named. User HTML (HtmlView, Pages) runs in sandboxed opaque-origin frames and Office in its
+// own sealed office:// origin, so the browser does not attribute their scripts to this window.
+//
+// COST RULES: nothing here blocks (all writes async, batched, <= one flush / 2 s); the recurring
+// work is ONE unref'd 1 s interval (reads event-loop delay; every 60th tick also writes the minute
+// line) plus Node's event-loop sampler (a timer every 100 ms, see DEFAULT_RESOLUTION_MS for what it
+// costs and why) — justified because stall detection and the memory-over-hours record need a clock. Renderer data is re-validated field by field (hitch-validate.ts) and
+// rate-limited again here, so a compromised renderer cannot flood or poison the file.
+// OFF SWITCH: env YOUCODED_HITCH_LOG=0 turns everything off (no file, no timers, no hooks).
+import { randomUUID } from 'node:crypto';
+import { join } from 'node:path';
+import { monitorEventLoopDelay, createHistogram, type Histogram, type RecordableHistogram } from 'node:perf_hooks';
+import { RotatingJsonlWriter } from './hitch-log-writer';
+import { validateBatch, appName, type CleanBatch } from './hitch-validate';
+
+export const HITCH_CHANNEL = 'perf:hitch-batch';
+/** A main-process stall is written at or above this many ms. */
+const STALL_MS = 100;
+/** Event-loop sampling interval. WHY 100 and tunable: each sample is a timer wake-up of the main process, and in Electron a
+ *  wake-up is far dearer than in plain Node. Measured idle on the rig (2026-10-05, main process, % of one core, recorder
+ *  off 0.25-0.32): 20 ms -> 1.4-1.7, 50 ms -> 0.9, 100 ms -> 0.6, 250 ms -> 0.37. 100 ms keeps a stall's length accurate to
+ *  about +/-50 ms (see onSecond) for ~0.3 of a core-percent; env YOUCODED_HITCH_LOOP_MS (10-1000) overrides. */
+const DEFAULT_RESOLUTION_MS = 100;
+export function loopResolution(env: NodeJS.ProcessEnv = process.env): number {
+  const n = Number(env.YOUCODED_HITCH_LOOP_MS);
+  return Number.isFinite(n) && n >= 10 && n <= 1000 ? Math.round(n) : DEFAULT_RESOLUTION_MS;
+}
+/** A tick-to-tick gap or stall this long (ms) is a suspend/resume, never an app hitch. */
+const SLEEP_GAP_MS = 60_000;
+const PER_WINDOW_PER_MIN = 30;
+const BATCHES_PER_WINDOW_PER_MIN = 40;
+
+export function hitchLogDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.YOUCODED_HITCH_LOG === '0';
+}
+
+// --- "what was main last doing" hook -------------------------------------------------------
+export interface IpcTrace { last(): { channel: string; agoMs: number } | null }
+
+/** Wrap ipcMain.handle / ipcMain.on ONCE, before the handlers register, so the recorder can say
+ *  which channel main started last. A wrapper only stores a name and a timestamp (nanoseconds).
+ *  `wrapper.listener` keeps ipcMain.off(channel, original) working (EventEmitter looks for it). */
+export function traceIpc(ipcMain: { handle: (...a: any[]) => any; on: (...a: any[]) => any }, now: () => number = Date.now): IpcTrace {
+  let channel = '';
+  let at = 0;
+  const wrap = (ch: unknown, fn: (...a: any[]) => any) => {
+    // Channel names are app constants, but a dynamic one could carry an id: mask long id-like runs.
+    const name = appName(ch);
+    // The recorder's own batches are not 'work main was doing' — leave them out or every stall names us.
+    if (ch === HITCH_CHANNEL) return fn;
+    const w = function (this: unknown, ...args: any[]) { channel = name; at = now(); return fn.apply(this, args); };
+    (w as any).listener = fn;
+    return w;
+  };
+  const origHandle = ipcMain.handle.bind(ipcMain);
+  const origOn = ipcMain.on.bind(ipcMain);
+  ipcMain.handle = (ch: unknown, fn: (...a: any[]) => any) => origHandle(ch, wrap(ch, fn));
+  // EventEmitter's once() hands us ITS wrapper (it carries `.listener`). Wrapping that would hide the original from
+  // off(channel, original) and stop once-wrappers removing themselves, so once-registrations are passed through untraced.
+  ipcMain.on = (ch: unknown, fn: (...a: any[]) => any) => origOn(ch, (fn as any).listener ? fn : wrap(ch, fn));
+  return { last: () => (channel ? { channel, agoMs: now() - at } : null) };
+}
+
+// --- the recorder --------------------------------------------------------------------------
+interface ProcessMetric { type: string; memory?: { workingSetSize?: number }; cpu?: { percentCPUUsage?: number } }
+export interface RecorderDeps {
+  userDataDir: string;
+  appVersion: string;
+  ipcMain: { on: (ch: string, fn: (e: any, raw: unknown) => void) => unknown };
+  getWindowCount: () => number;
+  getSessionCount: () => number;
+  getAppMetrics: () => ProcessMetric[];
+  getMarks: () => Array<{ name: string; t: number }>;
+  processStartMs: () => number;
+  trace?: IpcTrace;
+  now?: () => number;
+  writer?: Pick<RotatingJsonlWriter, 'append' | 'flush'>;
+  /** Test seams: the per-second event-loop monitor and the per-minute accumulator. */
+  histogram?: () => Histogram & { enable?: () => boolean; disable?: () => boolean };
+  minuteHistogram?: () => RecordableHistogram;
+  /** Tests drive ticks by hand; production passes true to start the 1 s timer. */
+  startTimer?: boolean;
+  env?: NodeJS.ProcessEnv;
+}
+
+interface WindowState { id: string; minStart: number; minCount: number; batchStart: number; batchCount: number }
+const mb = (bytes: number) => Math.round(bytes / 1048576 * 10) / 10;
+const r1 = (ms: number) => Math.round(ms * 10) / 10;
+
+export class HitchRecorder {
+  readonly launch = randomUUID().slice(0, 8);
+  private readonly res: number;
+  private readonly now: () => number;
+  private readonly writer: Pick<RotatingJsonlWriter, 'append' | 'flush'>;
+  private readonly hist: Histogram & { enable?: () => boolean; disable?: () => boolean };
+  private readonly minuteHist: RecordableHistogram;
+  private readonly windows = new Map<number, WindowState>();
+  private nextWindow = 1;
+  private tick = 0;
+  private timer: ReturnType<typeof setInterval> | undefined;
+  private minuteTally = { frames: 0, framesMs: 0, over: 0, overMs: 0, dropped: 0, rejected: 0, entries: 0 };
+  private stalls = 0;
+  private skipTicks = 0;
+  private lastTick = 0;
+  private startupWritten = false;
+  private mainLoadedAt = 0;
+  private startupFallback: ReturnType<typeof setTimeout> | undefined;
+
+  constructor(private readonly d: RecorderDeps) {
+    this.now = d.now ?? Date.now;
+    this.res = loopResolution(d.env);
+    this.lastTick = this.now();
+    this.writer = d.writer ?? new RotatingJsonlWriter({ dir: join(d.userDataDir, 'perf') });
+    const mk = d.histogram ?? (() => monitorEventLoopDelay({ resolution: this.res }));
+    this.hist = mk();
+    this.hist.enable?.();
+    // The per-minute record merges each second's histogram into this one (percentiles survive the 1 s reset).
+    this.minuteHist = (d.minuteHistogram ?? (() => createHistogram()))();
+    d.ipcMain.on(HITCH_CHANNEL, (e, raw) => this.onBatch(e?.sender, raw));
+    if (d.startTimer) { this.timer = setInterval(() => this.onSecond(), 1000); this.timer.unref(); }
+  }
+
+  private line(kind: string, extra: Record<string, unknown>, win?: string, ts = this.now()): void {
+    this.writer.append({ ts: new Date(ts).toISOString(), v: this.d.appVersion, launch: this.launch, ...(win ? { win } : {}), kind, ...extra });
+  }
+
+  // ---- renderer batches ----
+  /** The window's state, or null when 64 windows are already alive (ids come from webContents, never from the page). */
+  private windowFor(sender: { id?: number; once?: (e: string, f: () => void) => unknown } | undefined): WindowState | null {
+    const id = typeof sender?.id === 'number' ? sender.id : -1;
+    let w = this.windows.get(id);
+    if (!w) {
+      if (this.windows.size >= 64) return null;
+      w = { id: `w${this.nextWindow++}`, minStart: 0, minCount: 0, batchStart: 0, batchCount: 0 };
+      this.windows.set(id, w);
+      // WHY: without pruning, a long launch that opens and closes 64 windows would silently drop every later batch.
+      try { sender?.once?.('destroyed', () => this.windows.delete(id)); } catch { /* ignore */ }
+    }
+    return w;
+  }
+
+  onBatch(sender: { id?: number; once?: (e: string, f: () => void) => unknown } | undefined, raw: unknown): void {
+    try {
+      const t = this.now();
+      const w = this.windowFor(sender);
+      if (!w) { this.minuteTally.rejected++; return; }
+      if (t - w.batchStart >= 60_000) { w.batchStart = t; w.batchCount = 0; }
+      if (++w.batchCount > BATCHES_PER_WINDOW_PER_MIN) { this.minuteTally.rejected++; return; }
+      const b = validateBatch(raw, t);
+      if (!b) { this.minuteTally.rejected++; return; }
+      this.minuteTally.frames += b.tally.f; this.minuteTally.framesMs += b.tally.fms;
+      this.minuteTally.over += b.tally.over; this.minuteTally.overMs += b.tally.oms; this.minuteTally.dropped += b.dropped; this.minuteTally.rejected += b.rejected;
+      if (t - w.minStart >= 60_000) { w.minStart = t; w.minCount = 0; }
+      const sessions = this.d.getSessionCount();
+      const windows = this.d.getWindowCount();
+      for (const e of b.entries) {
+        // Second, independent cap: 30 detailed entries per window per minute no matter what the renderer says.
+        if (w.minCount >= PER_WINDOW_PER_MIN) { this.minuteTally.over++; this.minuteTally.overMs += e.d; continue; }
+        w.minCount++;
+        this.minuteTally.entries++;
+        const { k, t: et, ...rest } = e;
+        this.line(k, { ...rest, sessions, windows, ...(b.kind !== 'main' ? { window: b.kind } : {}), src: b.mode }, w.id, et);
+      }
+      if (b.startup) this.onRendererStartup(b, w.id);
+    } catch { /* instrumentation never throws into main */ }
+  }
+
+  // ---- startup ----
+  /** Called when the main window's page has loaded (perfMark main:main-window:did-finish-load). */
+  noteMainWindowLoaded(): void {
+    this.mainLoadedAt = this.now();
+    // If the renderer never reports (broken page, off-switch in preload), still write the main-side half after 30 s.
+    this.startupFallback = setTimeout(() => this.writeStartup(null), 30_000);
+    this.startupFallback.unref();
+  }
+
+  private onRendererStartup(b: CleanBatch, win: string): void {
+    if (b.kind !== 'main' || !b.startup) return;
+    this.writeStartup({ marks: b.startup.marks, fcp: b.startup.fcp }, win);
+  }
+
+  private writeStartup(renderer: { marks: Record<string, number>; fcp: number | null } | null, win?: string): void {
+    if (this.startupWritten) return;
+    this.startupWritten = true;
+    if (this.startupFallback) { clearTimeout(this.startupFallback); this.startupFallback = undefined; }
+    const start = this.d.processStartMs();
+    const marks: Record<string, number> = {};
+    let n = 0;
+    for (const m of this.d.getMarks()) if (n++ < 60) marks[appName(m.name)] = Math.max(0, Math.round(m.t - start));
+    this.line('startup', {
+      main: marks,
+      loadedMs: this.mainLoadedAt ? Math.max(0, Math.round(this.mainLoadedAt - start)) : null,
+      renderer: renderer ?? null,
+    }, win);
+  }
+
+  /** Fold this second's distribution into the minute histogram, then the caller resets the second's.
+   *  WHY not histogram.add(): Node only merges RecordableHistograms, not the event-loop monitor's.
+   *  The monitor's percentile table (a handful of rows) is replayed as samples — at most ~50 per
+   *  second — so the minute's p50/p99 are real percentiles of the whole minute, not of one second. */
+  private fold(h: Histogram): void {
+    let prev = 0;
+    for (const [p, v] of h.percentiles) {
+      const n = Math.min(60, Math.round(((p - prev) / 100) * h.count));
+      for (let i = 0; i < n; i++) this.minuteHist.record(Math.max(1, Math.round(v)));
+      prev = p;
+    }
+    // A 100th-percentile row can round to zero samples; the max must still land in the minute's max.
+    this.minuteHist.record(Math.max(1, Math.round(h.max)));
+  }
+
+  /** The computer slept, woke or (un)locked: whatever the monitor holds spans the gap, so discard it and skip the next tick. */
+  noteSleep(): void {
+    try { this.hist.reset(); this.minuteHist.reset(); this.skipTicks = 1; this.lastTick = this.now(); } catch { /* ignore */ }
+  }
+
+  // ---- once a second ----
+  onSecond(): void {
+    try {
+      const h = this.hist;
+      const nowMs = this.now();
+      const gap = nowMs - this.lastTick;
+      this.lastTick = nowMs;
+      // WHY (suspend guard): after a sleep the first tick is hours late (Windows' monotonic clock even counts the sleep).
+      // A wall-clock gap or a "stall" over a minute is not a hitch of this app; discard it and its histogram.
+      const slept = this.skipTicks > 0 || gap > SLEEP_GAP_MS || (h.count > 0 && h.max / 1e6 > SLEEP_GAP_MS);
+      if (slept) {
+        if (this.skipTicks > 0) this.skipTicks--;
+        h.reset(); this.minuteHist.reset();
+        if (++this.tick % 60 === 0) this.onMinute();
+        return;
+      }
+      // The histogram records tick-to-tick gaps, so a quiet loop reads ~res; the delay is the excess. A stall of S ms makes
+      // the next tick late by anywhere in (S-res, S], so S is estimated at delay + res/2 (accurate to +/- res/2) and a line is
+      // written when that estimate reaches STALL_MS.
+      let maxMs = 0;
+      if (h.count > 0) maxMs = Math.max(0, h.max / 1e6 - this.res) + this.res / 2;
+      if (h.count > 0) this.fold(h);
+      h.reset();
+      if (maxMs >= STALL_MS) {
+        const last = this.d.trace?.last();
+        this.stalls++;
+        this.line('main-stall', {
+          ms: Math.round(maxMs), resMs: this.res, sessions: this.d.getSessionCount(), windows: this.d.getWindowCount(),
+          ...(last ? { lastIpc: last.channel, lastIpcAgoMs: Math.round(last.agoMs) } : {}),
+        });
+      }
+      if (++this.tick % 60 === 0) this.onMinute();
+    } catch { /* ignore */ }
+  }
+
+  // ---- once a minute ----
+  onMinute(): void {
+    const windows = this.d.getWindowCount();
+    const mh = this.minuteHist;
+    const loop = mh.count > 0
+      ? { p50: r1(Math.max(0, mh.percentile(50) / 1e6 - this.res)), p99: r1(Math.max(0, mh.percentile(99) / 1e6 - this.res)), max: r1(Math.max(0, mh.max / 1e6 - this.res)), res: this.res }
+      : { p50: 0, p99: 0, max: 0, res: this.res };
+    mh.reset();
+    const tally = this.minuteTally;
+    this.minuteTally = { frames: 0, framesMs: 0, over: 0, overMs: 0, dropped: 0, rejected: 0, entries: 0 };
+    const stalls = this.stalls;
+    this.stalls = 0;
+    if (windows < 1) return; // one line per minute only while a window exists
+    const procs: Record<string, unknown> = {};
+    const renderers: Array<{ ws: number; cpu: number }> = [];
+    const agg: Record<string, { n: number; ws: number; cpu: number }> = {};
+    try {
+      for (const p of this.d.getAppMetrics()) {
+        const ws = mb((p.memory?.workingSetSize ?? 0) * 1024); // Electron reports KB
+        const cpu = r1(p.cpu?.percentCPUUsage ?? 0);
+        if (p.type === 'Tab') { renderers.push({ ws, cpu }); continue; }
+        const key = p.type === 'Browser' ? 'browser' : p.type === 'GPU' ? 'gpu' : p.type === 'Utility' ? 'utility' : 'other';
+        const a = (agg[key] ??= { n: 0, ws: 0, cpu: 0 });
+        a.n++; a.ws = r1(a.ws + ws); a.cpu = r1(a.cpu + cpu);
+      }
+    } catch { /* getAppMetrics can throw during shutdown */ }
+    Object.assign(procs, agg);
+    procs.renderer = renderers.sort((a, b) => b.ws - a.ws).slice(0, 12);
+    const mem = process.memoryUsage();
+    this.line('minute', {
+      loop, procs, windows, sessions: this.d.getSessionCount(),
+      main: { rss: mb(mem.rss), heapUsed: mb(mem.heapUsed), heapTotal: mb(mem.heapTotal), external: mb(mem.external), arrayBuffers: mb(mem.arrayBuffers) },
+      rend: tally, stalls,
+      lost: (this.writer as RotatingJsonlWriter).lost ?? 0,
+    });
+  }
+
+  /** Flush at quit. Bounded by the caller. */
+  async stop(): Promise<void> {
+    if (this.timer) { clearInterval(this.timer); this.timer = undefined; }
+    if (this.startupFallback) { clearTimeout(this.startupFallback); this.startupFallback = undefined; }
+    this.hist.disable?.();
+    await this.writer.flush();
+  }
+}
+
+export function startHitchRecorder(deps: RecorderDeps): HitchRecorder | null {
+  if (hitchLogDisabled(deps.env)) return null;
+  try { return new HitchRecorder({ startTimer: true, ...deps }); } catch { return null; }
+}

@@ -390,6 +390,7 @@ const IPC = {
   VOICE_MIC_ACCESS: 'voice:mic-access',
   VOICE_AUDIO: 'voice:audio',
   VOICE_EVENT: 'voice:event',
+  PERF_HITCH_BATCH: 'perf:hitch-batch',
   OFFICE_STATUS: 'office:status',
   OFFICE_CREATE: 'office:create',
   OFFICE_PICK: 'office:pick',
@@ -562,6 +563,163 @@ const PLAYABLE_PUSHES = new Set<string>([
   // One-core R5-4a: the shared lines and live facts, and a Claude Code session's mode as the host read it.
   'session:live', 'session:permission-mode',
 ]);
+
+// ── Hitch recorder, renderer half (2026-10-05) ─────────────────────────────────────────
+// WHY here: the sandboxed preload cannot import another module, and a second preload file
+// would need its own per-window registration. The main half (hitch-recorder.ts) documents
+// what is and is not recorded; this half only OBSERVES what the browser already measured:
+// it adds no work when nothing is slow (the observers call back only for a >50 ms frame or
+// a >=104 ms interaction) and never reads text, keys or element content. Desktop only —
+// nothing is added to window.claude, so the shared bridge shape is untouched.
+interface HitchEnv {
+  PerformanceObserver: any;
+  perf: { timeOrigin: number; getEntriesByType(t: string): any[]; getEntriesByName(n: string): any[] }; // not `performance:` — mock-shim-window.test.ts finds the bridge's namespace by that name
+  document: any;
+  window: any;
+  now: () => number;
+  setTimeout: (f: () => void, ms: number) => unknown;
+  send: (batch: unknown) => void;
+  mode: string | null;
+  /** This page's own directory URL: only scripts under it are named. */
+  base: string;
+}
+const MAX_PLAUSIBLE = 120_000; // ms: a 'frame' longer than 2 min means the computer slept, not that the page hitched
+const HITCH_EVENTS = ['keydown', 'pointerdown', 'pointerup', 'click', 'input'];
+export function installHitchRecorder(env: HitchEnv): { mode: string } | null {
+  const PO = env.PerformanceObserver;
+  if (!PO) return null;
+  const supported: string[] = PO.supportedEntryTypes || [];
+  const mode = supported.includes('long-animation-frame') ? 'loaf' : supported.includes('longtask') ? 'longtask' : 'none';
+  if (mode === 'none') return { mode };
+  let buf: any[] = [];
+  let tally = { f: 0, fms: 0, over: 0, oms: 0 }; // 50-100 ms frames (count, summed ms); entries past the rate limit (count, summed ms)
+  let dropped = 0;
+  let timer: unknown = null;
+  let winStart = 0;
+  let winCount = 0;
+  let elsAt = -1e9;
+  let els = 0;
+  let startupSent = false;
+  const r = (n: unknown) => (typeof n === 'number' && isFinite(n) ? Math.round(n) : 0);
+  const kindOf = (t: any): string => {
+    try {
+      if (!t || !t.closest) return 'other';
+      if (t.closest('.xterm')) return 'terminal';
+      if (t.closest('textarea,input,[contenteditable="true"]')) return 'text-input';
+      if (t.closest('[data-chat-session-id]')) return 'chat';
+    } catch { /* detached node */ }
+    return 'other';
+  };
+  // Only scripts of the app's own bundle may be named: Chromium reports a script's URL/function even when it is a user file
+  // (e.g. a file:// path), so anything outside this window's own base is "other" with no function name.
+  const own = (u: unknown): boolean => typeof u === 'string' && (u === '' || /^(data|blob):/.test(u) || u.startsWith(env.base));
+  const base = (u: unknown): string => {
+    if (typeof u !== 'string' || !u || /^(data|blob):/.test(u)) return 'inline'; // never carry inline/blob content
+    if (!u.startsWith(env.base)) return 'other';
+    return u.split(/[?#]/)[0].split('/').pop()!.slice(0, 60);
+  };
+  // Invoker -> a shape that cannot carry user data: '' for script starts (the invoker IS the script URL), 'url' for anything
+  // path/URL-like, TAG.onevent for element listeners (ids and classes dropped), a plain dotted name otherwise.
+  const invoker = (type: unknown, raw: unknown): string => {
+    if (type === 'classic-script' || type === 'module-script') return '';
+    const v = String(raw || '').slice(0, 200);
+    if (/[/?\s\\]|:\/\//.test(v)) return 'url';
+    const el = /^([A-Za-z][A-Za-z0-9-]*)[#.].*\.(on[a-z]+)$/.exec(v);
+    if (el) return `${el[1]}.${el[2]}`;
+    const plain = v.replace(/#.*$/, '');
+    return /^[A-Za-z0-9_.:-]{1,60}$/.test(plain) && /^[A-Za-z]+(?:[.:][A-Za-z]+)?$/.test(plain) && !/^[A-Z]+\.[a-z-]+$/.test(plain) ? plain : plain ? 'other' : '';
+  };
+  // Hitch-time context only: no layout reads. The element count walks the tree, so it is
+  // cached for 10 s — a burst of hitches pays for it once.
+  const ctx = () => {
+    const d = env.document;
+    const t = env.now();
+    if (t - elsAt > 10_000) { elsAt = t; try { els = d.getElementsByTagName('*').length; } catch { els = 0; } }
+    return {
+      vis: d.visibilityState, foc: !!d.hasFocus(), vm: d.documentElement?.dataset?.viewMode,
+      dlg: !!d.querySelector('[role="dialog"]'), scr: !!d.querySelector('[data-screen-open="true"]'),
+      dpr: env.window.devicePixelRatio, els,
+    };
+  };
+  const flush = () => {
+    timer = null;
+    if (!buf.length && !tally.f && !tally.over && !dropped) return;
+    const batch = { v: 1, mode, kind: env.mode, entries: buf, tally, dropped };
+    buf = []; tally = { f: 0, fms: 0, over: 0, oms: 0 }; dropped = 0;
+    try { env.send(batch); } catch { /* instrumentation never throws into the app */ }
+  };
+  const arm = () => { if (!timer) timer = env.setTimeout(flush, 5000); };
+  const keep = (e: any) => {
+    const t = env.now();
+    if (t - winStart >= 60_000) { winStart = t; winCount = 0; }
+    if (winCount >= 30) { tally.over++; tally.oms += r(e.d); arm(); return; } // hard cap: 30 detailed entries/min/window
+    winCount++;
+    e.ctx = ctx();
+    if (buf.length >= 200) { buf.shift(); dropped++; }
+    buf.push(e);
+    arm();
+  };
+  const t0 = (e: any) => r(env.perf.timeOrigin + e.startTime);
+  const onFrames = (list: any) => {
+    for (const e of list.getEntries()) {
+      if (e.duration > MAX_PLAUSIBLE) continue; // spans a suspend/resume: not a hitch
+      if (e.duration < 100) { tally.f++; tally.fms += r(e.duration); arm(); continue; }
+      const sl = e.styleAndLayoutStart > 0 ? e.startTime + e.duration - e.styleAndLayoutStart : 0;
+      const rd = e.renderStart > 0 && e.styleAndLayoutStart > e.renderStart ? e.styleAndLayoutStart - e.renderStart : 0;
+      const sc = (e.scripts ? Array.from(e.scripts as any[]) : []).sort((a: any, b: any) => b.duration - a.duration).slice(0, 3).map((s: any) => ({
+        it: String(s.invokerType || '').slice(0, 40), iv: invoker(s.invokerType, s.invoker),
+        fn: own(s.sourceURL) ? String(s.sourceFunctionName || '').slice(0, 60) : '', src: base(s.sourceURL), pos: r(s.sourceCharPosition),
+        d: r(s.duration), fl: r(s.forcedStyleAndLayoutDuration),
+      }));
+      keep({ k: 'frame', t: t0(e), d: r(e.duration), b: r(e.blockingDuration), sl: r(sl), rd: r(rd), inp: e.firstUIEventTimestamp > 0, sc });
+    }
+  };
+  const onTasks = (list: any) => {
+    for (const e of list.getEntries()) {
+      if (e.duration > MAX_PLAUSIBLE) continue;
+      if (e.duration < 100) { tally.f++; tally.fms += r(e.duration); arm(); } else keep({ k: 'task', t: t0(e), d: r(e.duration) });
+    }
+  };
+  const onEvents = (list: any) => {
+    for (const e of list.getEntries()) {
+      if (!HITCH_EVENTS.includes(e.name) || e.duration > MAX_PLAUSIBLE) continue; // interactions only: no mouseover/pointermove noise
+      keep({
+        k: 'event', t: t0(e), type: e.name, d: r(e.duration), delay: r(e.processingStart - e.startTime),
+        proc: r(e.processingEnd - e.processingStart), pres: r(e.startTime + e.duration - e.processingEnd), tgt: kindOf(e.target),
+      });
+    }
+  };
+  try {
+    if (mode === 'loaf') new PO(onFrames).observe({ type: 'long-animation-frame', buffered: true });
+    else new PO(onTasks).observe({ type: 'longtask', buffered: true });
+    if (supported.includes('event')) new PO(onEvents).observe({ type: 'event', durationThreshold: 104 });
+  } catch { return { mode: 'none' }; }
+  env.window.addEventListener('pagehide', flush);
+  // One-shot, 10 s after load: the app's own yc:* marks and first paint, once per window.
+  env.setTimeout(() => {
+    if (startupSent) return;
+    startupSent = true;
+    try {
+      const marks: Record<string, number> = {};
+      for (const m of env.perf.getEntriesByType('mark')) if (typeof m.name === 'string' && m.name.startsWith('yc:')) marks[m.name] = r(m.startTime);
+      const fcp = env.perf.getEntriesByName('first-contentful-paint')[0];
+      env.send({ v: 1, mode, kind: env.mode, entries: [], tally: { f: 0, fms: 0, over: 0, oms: 0 }, dropped: 0, startup: { marks, fcp: fcp ? r(fcp.startTime) : null } });
+    } catch { /* ignore */ }
+  }, 10_000);
+  return { mode };
+}
+// YOUCODED_HITCH_LOG=0 switches the whole recorder off (main drops the channel too).
+if (process.env.YOUCODED_HITCH_LOG !== '0') {
+  try {
+    installHitchRecorder({
+      PerformanceObserver, perf: performance, document, window, now: () => Date.now(),
+      setTimeout: (f, ms) => setTimeout(f, ms),
+      send: (batch) => ipcRenderer.send(IPC.PERF_HITCH_BATCH, batch),
+      mode: new URLSearchParams(location.search).get('mode'),
+      base: location.href.split(/[?#]/)[0].replace(/[^/]*$/, ''),
+    });
+  } catch { /* a missing browser API must never break the preload */ }
+}
 
 // Strip the transport prefix Electron puts on a rejected invoke (see the
 // `chatgpt` namespace for why), keeping the handler's own sentence. Anything
