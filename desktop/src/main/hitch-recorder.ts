@@ -46,7 +46,13 @@ import { validateBatch, cleanString, type CleanBatch } from './hitch-validate';
 export const HITCH_CHANNEL = 'perf:hitch-batch';
 /** A main-process stall is written at or above this many ms. */
 export const STALL_MS = 100;
-const RESOLUTION_MS = 20;
+/** Event-loop sampling interval. WHY tunable: each sample is a timer wake-up of the main process, and in Electron a
+ *  wake-up is far dearer than in plain Node (measured 2026-10-05: 50/s cost ~1.2% of a core idle). */
+export const DEFAULT_RESOLUTION_MS = 20;
+export function loopResolution(env: NodeJS.ProcessEnv = process.env): number {
+  const n = Number(env.YOUCODED_HITCH_LOOP_MS);
+  return Number.isFinite(n) && n >= 10 && n <= 1000 ? Math.round(n) : DEFAULT_RESOLUTION_MS;
+}
 const PER_WINDOW_PER_MIN = 30;
 const BATCHES_PER_WINDOW_PER_MIN = 40;
 
@@ -107,6 +113,7 @@ const r1 = (ms: number) => Math.round(ms * 10) / 10;
 
 export class HitchRecorder {
   readonly launch = randomUUID().slice(0, 8);
+  private readonly res: number;
   private readonly now: () => number;
   private readonly writer: Pick<RotatingJsonlWriter, 'append' | 'flush'>;
   private readonly hist: Histogram & { enable?: () => boolean; disable?: () => boolean };
@@ -123,8 +130,9 @@ export class HitchRecorder {
 
   constructor(private readonly d: RecorderDeps) {
     this.now = d.now ?? Date.now;
+    this.res = loopResolution(d.env);
     this.writer = d.writer ?? new RotatingJsonlWriter({ dir: join(d.userDataDir, 'perf') });
-    const mk = d.histogram ?? (() => monitorEventLoopDelay({ resolution: RESOLUTION_MS }));
+    const mk = d.histogram ?? (() => monitorEventLoopDelay({ resolution: this.res }));
     this.hist = mk();
     this.hist.enable?.();
     // The per-minute record merges each second's histogram into this one (percentiles survive the 1 s reset).
@@ -219,7 +227,7 @@ export class HitchRecorder {
     try {
       const h = this.hist;
       let maxMs = 0;
-      if (h.count > 0) maxMs = Math.max(0, h.max / 1e6 - RESOLUTION_MS); // the histogram's floor is its own tick
+      if (h.count > 0) maxMs = Math.max(0, h.max / 1e6 - this.res); // the histogram's floor is its own tick
       if (h.count > 0) this.fold(h);
       h.reset();
       if (maxMs >= STALL_MS) {
@@ -239,7 +247,7 @@ export class HitchRecorder {
     const windows = this.d.getWindowCount();
     const mh = this.minuteHist;
     const loop = mh.count > 0
-      ? { p50: r1(Math.max(0, mh.percentile(50) / 1e6 - RESOLUTION_MS)), p99: r1(Math.max(0, mh.percentile(99) / 1e6 - RESOLUTION_MS)), max: r1(Math.max(0, mh.max / 1e6 - RESOLUTION_MS)) }
+      ? { p50: r1(Math.max(0, mh.percentile(50) / 1e6 - this.res)), p99: r1(Math.max(0, mh.percentile(99) / 1e6 - this.res)), max: r1(Math.max(0, mh.max / 1e6 - this.res)) }
       : { p50: 0, p99: 0, max: 0 };
     mh.reset();
     const tally = this.minuteTally;
