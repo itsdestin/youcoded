@@ -22,7 +22,7 @@ Cross-device sync = a hidden per-space git repo the app pushes/pulls, plus SyncH
 
 ## Corruption & self-repair (`sync-error-classifier.ts`, `sync-spaces/git-transport.ts`, `sync-spaces/repair.ts`, `sync-spaces/engine.ts`)
 
-Full design: `docs/active/specs/2026-07-30-sync-corruption-self-heal-design.md` (workspace path, `youcoded-dev` repo).
+Original design: `docs/archive/specs/2026-07-30-sync-corruption-self-heal-design.md` (workspace path, `youcoded-dev` repo). Its Tier 1 is superseded by the refetch-the-gap behaviour below (2026-10-05).
 
 **The motivating incident (2026-07-27, Destin's Z13).** Three hard power-loss freezes (a known EC-wedge/s2idle hardware bug) left 16 zero-byte loose objects across three crashes in the Personal space's hidden sync repo. Every subsequent git op on that repo failed — but the transport's old shape turned every failure into a benign-looking result (`push()` returned `{pushed:false}`, identical to "nothing to push"; `pull()` returned `{updated:false}`). Sync was dead for three days while the panel showed green and `lastSync` kept advancing. 3,381 files (three days of conversations) sat staged locally and never reached GitHub.
 
