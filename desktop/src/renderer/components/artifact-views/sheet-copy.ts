@@ -24,6 +24,9 @@ export function rangeToTsv(
 ): string {
   const lastR = Math.min(r1, model.usedRows - 1), lastC = Math.min(c1, model.usedCols - 1);
   if (r0 > lastR || c0 > lastC) return '';
+  // ONE cell is copied as its plain text: quoting exists so cells survive a paste into a spreadsheet, and pasted into a
+  // chat or text field the doubled quotes would show.
+  if (r0 === r1 && c0 === c1) return isCovered(r0, c0) ? '' : model.text(r0, c0);
   const lines: string[] = [];
   for (let r = r0; r <= lastR; r++) {
     const fields: string[] = [];

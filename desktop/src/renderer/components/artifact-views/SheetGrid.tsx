@@ -212,13 +212,16 @@ export const SheetGrid = forwardRef<SheetGridHandle, Props>(function SheetGrid(
     const el = scrollerRef.current;
     if (!el) return;
     let next: Map<number, number> | null = null;
-    el.querySelectorAll<HTMLElement>('tr[data-tall]').forEach((tr) => {
+    // Three passes so the browser lays the table out ONCE: release every wrapped row, then read them all, then put
+    // the heights back (writing and reading row by row would force a layout per row).
+    const rows = [...el.querySelectorAll<HTMLElement>('tr[data-tall]')];
+    const kept = rows.map((tr) => tr.style.height);
+    for (const tr of rows) tr.style.height = 'auto';
+    const natural = rows.map((tr) => Math.max(ROW_H, Math.ceil(tr.getBoundingClientRect().height)));
+    rows.forEach((tr, i) => {
+      tr.style.height = kept[i];
       const r = Number(tr.getAttribute('data-r'));
-      const kept = tr.style.height;
-      tr.style.height = 'auto';
-      const h = Math.max(ROW_H, Math.ceil(tr.getBoundingClientRect().height));
-      tr.style.height = kept;
-      if (Math.abs(h - rowHeights[r]) > 1) (next ??= new Map(fix)).set(r, h);
+      if (Math.abs(natural[i] - rowHeights[r]) > 1) (next ??= new Map(fix)).set(r, natural[i]);
     });
     if (next) setFix(next);
     // the drawn cells changed: the find bar re-marks its matches (artifact-find-bridge.ts)

@@ -131,6 +131,32 @@ describe('wrapped rows are measured whichever way the estimate was wrong', () =>
   });
 });
 
+describe('measuring wrapped rows costs one layout, not one per row', () => {
+  it('releases every wrapped row first, then reads them all', () => {
+    const wb = new Workbook(); const ws = wb.addWorksheet('S');
+    for (let r = 1; r <= 40; r++) ws.addRow(['a', 'b']);
+    for (const a of ['A3', 'A6', 'A9', 'A12']) { ws.getCell(a).value = 'some words that wrap'; ws.getCell(a).alignment = { wrapText: true }; }
+    const sheet = buildSheet(ws);
+    const events: string[] = [];
+    // writes of height:auto and reads of a row's box, in the order they happen
+    const proto = Object.getPrototypeOf(document.createElement('tr').style);
+    const desc = Object.getOwnPropertyDescriptor(proto, 'height')!;
+    Object.defineProperty(proto, 'height', { configurable: true, get: desc.get, set(v: string) { if (v === 'auto') events.push('release'); desc.set!.call(this, v); } });
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      if (this.hasAttribute('data-tall')) events.push('read');
+      return { height: 24, width: 0, top: 0, left: 0, right: 0, bottom: 0, x: 0, y: 0, toJSON() {} } as DOMRect;
+    });
+    try {
+      render(<SheetGrid model={sheet.model} sel={null} onSelect={() => {}} />);
+    } finally { Object.defineProperty(proto, 'height', desc); }
+    // group the log into runs of the same kind: each measuring pass must be ONE run of releases then ONE run of reads
+    const runs: number[] = [];
+    events.forEach((e, i) => { if (i && e === events[i - 1]) runs[runs.length - 1]++; else runs.push(1); });
+    expect(events.filter((e) => e === 'read').length).toBeGreaterThanOrEqual(4);
+    expect(Math.min(...runs)).toBeGreaterThanOrEqual(4);   // never release, read, release, read...
+  });
+});
+
 describe('building a big sheet', () => {
   function bigWs() {
     const wb = new Workbook(); const ws = wb.addWorksheet('S');
@@ -233,5 +259,15 @@ describe('selection and copy edge cases', () => {
   it('a cell holding a tab, a line break or a quote copies as ONE quoted cell', () => {
     const model = { usedRows: 1, usedCols: 3, text: (_r: number, c: number) => ['plain', 'two\nlines', 'say "hi"\tnow'][c] };
     expect(rangeToTsv(model, () => false, 0, 0, 0, 2)).toBe('plain\t"two\nlines"\t"say ""hi""\tnow"');
+  });
+
+  it('copying exactly one cell gives its plain text, never the quoted form', () => {
+    const model = { usedRows: 1, usedCols: 3, text: (_r: number, c: number) => ['plain', 'he said "hi"', 'two\nlines'][c] };
+    expect(rangeToTsv(model, () => false, 0, 1, 0, 1)).toBe('he said "hi"');
+    expect(rangeToTsv(model, () => false, 0, 2, 0, 2)).toBe('two\nlines');
+    // and through the viewer: one clicked cell
+    const { container } = render(<CsvView {...csvProps('a,"he said ""hi"""\n')} />);
+    fireEvent.click(container.querySelector('td[data-r="0"][data-c="1"]')!);
+    expect(copyText(scroller(container))).toBe('he said "hi"');
   });
 });

@@ -8,18 +8,26 @@ export function formatBubbleTime(timestamp: number): string {
   // returns "Invalid Date".
   const d = new Date(timestamp);
   if (Number.isNaN(d.getTime())) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  // WHY the offset check: an Intl formatter fixes the time zone when it is built, while toLocaleTimeString re-read it
-  // on every call, so a system zone change (travel, daylight-saving rule update, a laptop waking elsewhere) would
-  // otherwise keep the old zone until restart. getTimezoneOffset() is cheap; any change rebuilds the formatter.
-  const offset = d.getTimezoneOffset();
-  if (!bubbleTimeFormat || offset !== bubbleTimeOffset) {
-    bubbleTimeFormat = new Intl.DateTimeFormat([], { hour: 'numeric', minute: '2-digit' });
-    bubbleTimeOffset = offset;
+  // WHY the zone check, and why on NOW (not on the message's own date): an Intl formatter fixes the time zone when
+  // it is built, while toLocaleTimeString re-read it on every call, so a system zone change (travel, a laptop
+  // waking elsewhere) would otherwise keep the old zone until restart. The formatter already knows a zone's
+  // historical offsets, so a message on either side of a daylight-saving change is shown correctly by one
+  // formatter; only a change of ZONE needs a rebuild. (abs(): a clock set backwards also re-checks.) Comparing each message's own offset rebuilt it every time two
+  // neighbouring messages straddled the change. The current offset is re-read at most once a minute.
+  const now = Date.now();
+  if (!bubbleTimeFormat || Math.abs(now - bubbleTimeCheckedAt) >= 60_000) {
+    bubbleTimeCheckedAt = now;
+    const offset = new Date(now).getTimezoneOffset();
+    if (!bubbleTimeFormat || offset !== bubbleTimeOffset) {
+      bubbleTimeFormat = new Intl.DateTimeFormat([], { hour: 'numeric', minute: '2-digit' });
+      bubbleTimeOffset = offset;
+    }
   }
   return bubbleTimeFormat.format(d);
 }
 let bubbleTimeFormat: Intl.DateTimeFormat | null = null;
 let bubbleTimeOffset = NaN;
+let bubbleTimeCheckedAt = 0;
 
 /**
  * Compact relative-time label ("just now", "5m ago", "3h ago", "2d ago", then
