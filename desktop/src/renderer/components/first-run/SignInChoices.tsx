@@ -162,7 +162,8 @@ function Guided({ list, onPick, initial }: { list: Group[]; onPick: (w: WayIn) =
             <span className="block brand-heading text-lg text-fg">{x.title}</span>
             <span className="block text-sm text-fg-dim">{x.summary}</span>
           </span>
-          <span className="brand-badge shrink-0">{x.badge}</span>
+          {/* Narrow window: the badge waits for the second page, so the row's words get the room. */}
+          <span className="brand-badge shrink-0 max-sm:hidden">{x.badge}</span>
           <span aria-hidden className="text-fg-muted text-lg">›</span>
         </button>
       ))}

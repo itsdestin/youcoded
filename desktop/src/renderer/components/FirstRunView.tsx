@@ -364,7 +364,10 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
       <div className="brand-stage">
         {/* The name with the tagline stacked under it, no icon (deck first-run-5 P5-3 "bigger",
             first-run-6 P6-2: "drop the icon. i thought i picked the stacked option"). */}
-        <BrandWordmark size={88} tagline="stack" />
+        {/* The size follows the window (deck first-run-7: "make sure these windows all resize
+            properly and fit the pages"): 88px on a normal window, down to 44px on a short or
+            narrow one, so each step's content stays in view. */}
+        <BrandWordmark size="clamp(44px, min(9.5vh, 17vw), 88px)" tagline="stack" />
 
         {launching ? (
           <CompletionCard />
@@ -375,7 +378,7 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
                 {/* P4-1/P5-1: the app's own spinner, exactly as everywhere else (Destin: "the
                     spinner should be the same one we use everywhere else"), beside the heading. */}
                 {heading && (
-                  <h1 className="brand-heading text-3xl text-fg inline-flex items-center gap-3">
+                  <h1 className="brand-heading text-3xl max-sm:text-2xl text-fg inline-flex items-center gap-3">
                     {installing && !stopped && <BrailleSpinner size="3xl" />}
                     {heading}
                   </h1>

@@ -89,21 +89,23 @@ export function BrandLockupRow({ icon = 80, showIcon = true }: { icon?: number; 
  * (the stacked lockup's spacing: 0.34× the name, pulled 6px tighter at a 36px name),
  * tucked beside the "y" as in the side-by-side lockup, or left off.
  */
-export function BrandWordmark({ size, tagline }: { size: number; tagline: 'stack' | 'tuck' | 'none' }) {
-  if (tagline === 'tuck') return <BrandLockupRow icon={size * 64 / 42} showIcon={false} />;
-  const k = size / 36;
+export function BrandWordmark({ size, tagline }: { size: number | string; tagline: 'stack' | 'tuck' | 'none' }) {
+  if (tagline === 'tuck') return <BrandLockupRow icon={(typeof size === 'number' ? size : 88) * 64 / 42} showIcon={false} />;
+  // WHY em units: setup passes a size that follows the window (a CSS clamp), so every
+  // measure below is a share of the name's size and the proportions hold at any size.
+  // From the approved stacked board (v26 STACK sc): −6px and a 16px line at a 36px name,
+  // tagline 0.34× the name.
   return (
-    <div className="flex flex-col items-center select-none" style={{ lineHeight: 'normal' }} aria-label="YouCoded" role="img">
-      <span className="brand-name" style={{ fontSize: size }}>
+    <div className="flex flex-col items-center select-none" style={{ fontSize: size, lineHeight: 'normal' }} aria-label="YouCoded" role="img">
+      <span className="brand-name" style={{ fontSize: '1em' }}>
         <span className="brand-name__you">you</span>coded
       </span>
-      {/* WHY the wrapper with its own 16px-at-36 line: the approved board (v26 STACK sc) set
-          the tagline in a block whose line box came from the page's 16px text, and its −6px
-          pull is measured from that box. Without it the tagline sat on the "y" (rejected,
-          deck first-run-6). Scaled with the name so the proportions hold at any size. */}
+      {/* The tagline sits in a block with its own line (16px at a 36px name), as on the board;
+          the −6px pull is measured from that line. Without it the tagline sat on the "y"
+          (rejected, deck first-run-6). */}
       {tagline === 'stack' && (
-        <div style={{ marginTop: -6 * k, fontSize: 16 * k, lineHeight: 'normal' }}>
-          <span className="brand-tagline inline-block" style={{ fontSize: size * 0.34 }}>agents for everyone</span>
+        <div style={{ marginTop: `${-6 / 36}em`, fontSize: `${16 / 36}em`, lineHeight: 'normal' }}>
+          <span className="brand-tagline inline-block" style={{ fontSize: `${0.34 * 36 / 16}em` }}>agents for everyone</span>
         </div>
       )}
     </div>
