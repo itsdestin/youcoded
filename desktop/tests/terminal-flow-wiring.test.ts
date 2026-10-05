@@ -131,7 +131,7 @@ function world() {
   const out = (data: string) => sm.emit('pty-output', SID, data);
   /** Total credit passed back to the PTY worker so far. */
   const released = () => sm.ackOutput.mock.calls.reduce((n: number, c: any[]) => n + c[1], 0);
-  return { w1, w2, w3, registry, sm, ready, ack, out, released, repaint };
+  return { w1, w2, w3, registry, sm, ready, ack, out, released, repaint, resizeHandler: handlers.get(IPC.SESSION_RESIZE)! };
 }
 
 describe('terminal flow wiring: nothing can brake a session no desktop terminal will answer', () => {
@@ -519,6 +519,22 @@ describe('terminal flow wiring: a re-mounted terminal is given a picture', () =>
       t.sm.emit('pty-size', SID, 79, 24);
       t.sm.emit('pty-size', SID, 80, 24);
       expect(spy.mock.calls.map((c) => c.join('x'))).toEqual([`${SID}x79x24`, `${SID}x80x24`]);
+    } finally { spy.mockRestore(); }
+  });
+
+  it("a window's resize request does not touch the computer's screen copy: only the worker's size report does", () => {
+    const spy = vi.spyOn(SessionScreens.prototype, 'noteResize');
+    try {
+      const t = world();
+      t.sm.resizeSession = vi.fn(() => true);                       // a PTY session: the request is accepted
+      t.registry.assignSession(SID, 2);
+      // the table entry the window's preload message lands on (kind 'on': (event, payload))
+      const resize = (t as any).resizeHandler as (e: any, p: any) => void;
+      resize({ sender: t.w2 }, { sessionId: SID, cols: 100, rows: 30 });
+      expect(t.sm.resizeSession).toHaveBeenCalledWith(SID, 100, 30);
+      expect(spy).not.toHaveBeenCalled();                            // old-size output is still draining: the copy must not move yet
+      t.sm.emit('pty-size', SID, 100, 30);                           // the worker says it resized
+      expect(spy.mock.calls.map((c) => c.join('x'))).toEqual([`${SID}x100x30`]);
     } finally { spy.mockRestore(); }
   });
 

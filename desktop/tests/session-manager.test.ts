@@ -440,6 +440,24 @@ describe('SessionManager', () => {
     expect(received).toEqual(['hello world']);
   });
 
+  // The PTY worker is the ONE authority on the terminal's size (it reports every change in stream order): a resize REQUEST changes
+  // nothing the manager reports until the worker's 'size' message arrives, and that message reaches getPtySize() and 'pty-size'.
+  it("takes the terminal's size from the worker's 'size' report, not from the resize request", () => {
+    const info = manager.createSession({ name: 'test', cwd: tmpDir, skipPermissions: false, cols: 80, rows: 24 });
+    const messageHandler = mockWorker.on.mock.calls.find((c: any) => c[0] === 'message')?.[1];
+    const seen: string[] = [];
+    manager.on('pty-size', (id: string, c: number, r: number) => seen.push(`${id === info.id ? 'S' : id} ${c}x${r}`));
+    expect(manager.getPtySize(info.id)).toEqual({ cols: 80, rows: 24 });
+    expect(manager.resizeSession(info.id, 100, 30)).toBe(true);
+    expect(mockWorker.send).toHaveBeenCalledWith({ type: 'resize', cols: 100, rows: 30 });
+    expect(manager.getPtySize(info.id)).toEqual({ cols: 80, rows: 24 });   // the request alone changes nothing
+    expect(seen).toEqual([]);
+    messageHandler({ type: 'size', cols: 79, rows: 24 });                   // a repaint nudge's narrow half, reported first
+    messageHandler({ type: 'size', cols: 100, rows: 30 });                  // then the real size: the last report stands
+    expect(seen).toEqual(['S 79x24', 'S 100x30']);
+    expect(manager.getPtySize(info.id)).toEqual({ cols: 100, rows: 30 });
+  });
+
   // Terminal flow control: the renderer's "parsed N characters" and "a terminal re-attached" reach the
   // PTY worker as 'ack' messages — that is the only thing that ever lifts its brake.
   it('relays terminal acknowledgements to the PTY worker', () => {

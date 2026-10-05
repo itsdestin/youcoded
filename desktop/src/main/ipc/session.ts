@@ -251,7 +251,7 @@ const sessionEntries: MainChannelDef[] = [
       }
     },
   }),
-  defineChannel({ name: IPC.SESSION_RESIZE, kind: 'on', handler: ({ sessionId, cols, rows }) => { const o = ops(); if (o.sessionManager.resizeSession(sessionId, cols, rows)) o.screens?.noteResize(sessionId, cols, rows); } }),
+  defineChannel({ name: IPC.SESSION_RESIZE, kind: 'on', handler: ({ sessionId, cols, rows }) => { const o = ops(); o.sessionManager.resizeSession(sessionId, cols, rows); /* the computer's screen copy follows the PTY worker's size report (pty-size), not this request */ } }),
   // The renderer says its terminal is mounted; main then releases the output it buffered. A phone needs no
   // such gate (it replays the PTY buffer on connect), so the message is dropped silently.
   defineChannel({

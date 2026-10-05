@@ -607,7 +607,9 @@ export class SessionManager extends EventEmitter {
     const session = this.sessions.get(id);
     if (!session || !session.worker) return false; // native sessions have no PTY
     try { session.worker.send({ type: 'resize', cols, rows }); } catch { return false; }
-    this.ptySizes.set(id, { cols, rows });
+    // WHY no ptySizes.set here: the worker reports every size change in stream order ('size' below) and is the ONE authority. Setting it at
+    // request time ran before the PTY had resized and before old-size output had drained, and made the screen copy wobble when a request
+    // landed mid repaint-nudge. A session with no worker (native) has no PTY and no screen copy, so there is nothing to keep in step.
     return true;
   }
 
