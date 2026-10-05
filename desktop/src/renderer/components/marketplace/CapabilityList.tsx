@@ -7,7 +7,7 @@ import React from 'react';
 import type { CatalogMeta, Capability } from '../../../shared/catalog-types';
 import { RISKY_CAPABILITY_KINDS } from '../../../shared/catalog-types';
 import { CapabilityIcon } from './type-icons';
-import { SectionLabel } from '../ui';
+import { Callout } from '../ui';
 
 export const CAPABILITY_TITLE: Record<Capability['kind'], string> = {
   shell: 'Runs commands',
@@ -27,46 +27,43 @@ export function capabilityLine(capabilities: Capability[]): string | null {
   return kinds.map((k) => CAPABILITY_TITLE[k]).join(' · ');
 }
 
-/** Full list for the detail page. Renders the "nothing risky" line when the
- *  catalog block exists but lists no capabilities, so the section never
+/** Full list for the detail page — the CONTENTS of its "What this can do" card (the
+ *  page draws the label and the card; DetailPage.tsx). Renders the "nothing risky" line
+ *  when the catalog block exists but lists no capabilities, so the section never
  *  silently vanishes — an empty panel would read as "we didn't look". */
 export function CapabilityList({ catalog }: { catalog: CatalogMeta }) {
   const caps = catalog.capabilities;
   const risky = caps.filter((c) => RISKY_CAPABILITY_KINDS.includes(c.kind));
   const rest = caps.filter((c) => !RISKY_CAPABILITY_KINDS.includes(c.kind));
+  const findings = catalog.scan.status === 'caution' ? catalog.scan.findings ?? [] : [];
   return (
-    <section data-capabilities>
-      {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels batch,
-          guide: no spaced capitals — decisions H-3/L-1…L-4). */}
-      <SectionLabel className="mb-2">What this can do</SectionLabel>
-      <div className="layer-surface p-3 flex flex-col gap-2 text-sm">
-        {caps.length === 0 && (
-          <div className="flex items-center gap-2 text-fg-2">
-            <span className="text-fg-dim inline-flex"><CapabilityIcon kind="adds" /></span>
-            Adds instructions only — no commands, no internet, no files outside its own folder.
-          </div>
-        )}
-        {[...risky, ...rest].map((c, i) => (
-          <div key={i} className="flex items-start gap-2">
-            <span className="text-fg-dim inline-flex mt-0.5 shrink-0"><CapabilityIcon kind={c.kind} /></span>
-            <span className="text-fg-2">
-              {c.label}
-              {c.detail && <span className="text-fg-dim"> · {c.detail}</span>}
-            </span>
-          </div>
-        ))}
-        {catalog.scan.status === 'caution' && catalog.scan.findings && catalog.scan.findings.length > 0 && (
-          <div className="mt-1 pt-2 border-t border-edge-dim flex flex-col gap-1">
-            <div className="text-xs text-fg-dim">The automatic check flagged:</div>
-            {catalog.scan.findings.map((f, i) => (
-              <div key={i} className="flex items-start gap-2 text-fg-2">
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-700 mt-2 shrink-0" aria-hidden />
-                <span>{f}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </section>
+    <div className="flex flex-col gap-2 text-sm" data-capabilities>
+      {caps.length === 0 && (
+        <div className="flex items-center gap-2 text-fg-2">
+          <span className="text-fg-dim inline-flex"><CapabilityIcon kind="adds" /></span>
+          Adds instructions only — no commands, no internet, no files outside its own folder.
+        </div>
+      )}
+      {[...risky, ...rest].map((c, i) => (
+        <div key={i} className="flex items-start gap-2">
+          <span className="text-fg-dim inline-flex mt-0.5 shrink-0"><CapabilityIcon kind={c.kind} /></span>
+          <span className="text-fg-2">
+            {c.label}
+            {c.detail && <span className="text-fg-dim"> · {c.detail}</span>}
+          </span>
+        </div>
+      ))}
+      {/* WHY the warning notice box, not a ruled-off list with amber dots: the flagged
+          findings are a warning about THIS item, so they are the one notice look, inside
+          the card they are about (guide "Status and notices"; decisions W-1, P-4), and a
+          line across the card is never used to separate (guide "Card levels"). */}
+      {findings.length > 0 && (
+        <Callout tone="warning" title="The automatic check flagged" className="mt-1">
+          <ul className="list-disc pl-4 space-y-0.5">
+            {findings.map((f, i) => <li key={i}>{f}</li>)}
+          </ul>
+        </Callout>
+      )}
+    </div>
   );
 }

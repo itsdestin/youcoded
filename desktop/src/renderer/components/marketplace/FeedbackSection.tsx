@@ -10,7 +10,7 @@ import { useAccount } from '../../state/account-context';
 import { useMarketplaceStats } from '../../state/marketplace-stats-context';
 import { forgetHeldComments, readHeldComments, rememberHeldComment, type HeldComment } from '../../state/held-comments';
 import type { CommentEntry } from '../../state/marketplace-api-client';
-import { Button, FieldError, SectionLabel, Textarea } from '../ui';
+import { Button, FieldError, Textarea } from '../ui';
 import CommentList from './CommentList';
 import SignInPromptModal from './SignInPromptModal';
 
@@ -243,51 +243,49 @@ export default function FeedbackSection({ pluginId, installed }: { pluginId: str
     : !auth.signedIn ? 'Sign in to vote' : undefined;
 
   return (
-    <section data-feedback>
-      <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
-        <div className="flex items-center gap-3">
-          {/* WHY SectionLabel, not the old spaced-caps eyebrow (labels batch,
-              guide: no spaced capitals — decisions H-3/L-1…L-4). */}
-          <SectionLabel>Feedback</SectionLabel>
-          {/* Under MIN_VOTES_FOR_PCT a percentage lies ("Helpful 100%" off one
-              vote) and the count reads "1 votes" — so say it in words instead.
-              At or above it the approved G-19 markup stands unchanged. */}
-          {lowCountLabel
-            ? <span className="text-sm text-fg-2">{lowCountLabel}</span>
-            : summary
-              ? <span className="text-sm text-fg-2">Helpful <span className="text-fg">{summary.pct}%</span> <span className="text-fg-muted">{summary.total.toLocaleString()} votes</span></span>
-              : <span className="text-sm text-fg-dim">No votes yet</span>}
-        </div>
+    // WHY no label or box of its own: the detail page puts this inside its "Feedback"
+    // card (DetailPage.tsx) — a group is a small label and then one card (guide
+    // "Spacing" → nothing bare), so a second label here would read as a card in a card.
+    <div data-feedback className="flex flex-col gap-3">
+      {/* Text left, buttons right, on one line when they fit (guide "Buttons" → text and
+          buttons in one box; decisions NB-2). */}
+      <div className="flex items-center justify-between gap-x-3 gap-y-2 flex-wrap">
+        {/* Under MIN_VOTES_FOR_PCT a percentage lies ("Helpful 100%" off one
+            vote) and the count reads "1 votes" — so say it in words instead.
+            At or above it the approved G-19 markup stands unchanged. */}
+        {lowCountLabel
+          ? <span className="text-sm text-fg-2">{lowCountLabel}</span>
+          : summary
+            ? <span className="text-sm text-fg-2">Helpful <span className="text-fg">{summary.pct}%</span> <span className="text-fg-muted">{summary.total.toLocaleString()} votes</span></span>
+            : <span className="text-sm text-fg-dim">No votes yet</span>}
         {/* Both `secondary sm` — the page's one primary is Install (G-4). */}
-        <div className="flex flex-col items-end gap-1">
-          <div className="flex items-center gap-1.5" role="group" aria-label="Was this helpful?">
-            <Button variant="secondary" size="sm" onClick={() => castVote('up')} disabled={!installed || saving} title={voteReason ?? 'Helpful'} aria-pressed={vote === 'up'} className={vote === 'up' ? 'ring-1 ring-accent' : ''}>
-              <ThumbIcon /> Helpful
-            </Button>
-            <Button variant="secondary" size="sm" onClick={() => castVote('down')} disabled={!installed || saving} title={voteReason ?? 'Not for me'} aria-pressed={vote === 'down'} className={vote === 'down' ? 'ring-1 ring-accent' : ''}>
-              <ThumbIcon down /> Not for me
-            </Button>
-          </div>
-          {/* Visible, not a `title`: Android runs this same bundle and has no
-              hover, and several engines suppress title on a disabled button
-              entirely — so the tooltip was the only explanation and nobody
-              could reach it. */}
-          {/* WHY plain/FieldError (guide: no coloured body text for
-              messages) — `text-danger` was also a dead class here (no
-              --color-danger token exists). */}
-          {(voteError || voteReason) && (
-            voteError
-              ? <FieldError as="p">{voteError}</FieldError>
-              : <p className="text-xs text-fg-muted">{voteReason}</p>
-          )}
+        <div className="flex items-center gap-1.5 ml-auto" role="group" aria-label="Was this helpful?">
+          <Button variant="secondary" size="sm" onClick={() => castVote('up')} disabled={!installed || saving} title={voteReason ?? 'Helpful'} aria-pressed={vote === 'up'} className={vote === 'up' ? 'ring-1 ring-accent' : ''}>
+            <ThumbIcon /> Helpful
+          </Button>
+          <Button variant="secondary" size="sm" onClick={() => castVote('down')} disabled={!installed || saving} title={voteReason ?? 'Not for me'} aria-pressed={vote === 'down'} className={vote === 'down' ? 'ring-1 ring-accent' : ''}>
+            <ThumbIcon down /> Not for me
+          </Button>
         </div>
       </div>
+      {/* Visible, not a `title`: Android runs this same bundle and has no
+          hover, and several engines suppress title on a disabled button
+          entirely — so the tooltip was the only explanation and nobody
+          could reach it. */}
+      {/* WHY plain/FieldError (guide: no coloured body text for
+          messages) — `text-danger` was also a dead class here (no
+          --color-danger token exists). */}
+      {(voteError || voteReason) && (
+        voteError
+          ? <FieldError as="p">{voteError}</FieldError>
+          : <p className="text-xs text-fg-muted -mt-1 text-right">{voteReason}</p>
+      )}
 
       <CommentList pluginId={pluginId} refreshKey={refresh} held={heldRows} onHeldListed={onHeldListed} />
 
       {/* Composer — anyone signed in can ask a question or report how it went;
           you do NOT need to have installed it to ask. */}
-      <div className="mt-3 flex flex-col gap-2">
+      <div className="flex flex-col gap-2">
         <Textarea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -317,6 +315,6 @@ export default function FeedbackSection({ pluginId, installed }: { pluginId: str
         title={signIn === 'vote' ? 'Sign in to vote' : 'Sign in to comment'}
         message={signIn === 'vote' ? 'Votes are tied to your account so each person counts once.' : 'Comments show your marketplace handle.'}
       />
-    </section>
+    </div>
   );
 }

@@ -27,9 +27,15 @@ interface Props {
   kind: "skill" | "theme";
   /** `pill` for the card corner, `button` for a detail-overlay header action. */
   variant?: "pill" | "button";
+  /** `button` only: fill the width it is given (a detail page's lone or stacked button —
+   *  guide "Buttons": one button is full width, stacked buttons are full width). */
+  block?: boolean;
+  /** `button` only: the filled main action. A detail page whose only other button is
+   *  Uninstall makes Update the main one (guide: one filled button per view). */
+  primary?: boolean;
 }
 
-export default function UpdateButton({ id, kind, variant = "pill" }: Props) {
+export default function UpdateButton({ id, kind, variant = "pill", block = false, primary = false }: Props) {
   const mp = useMarketplace();
   const [updating, setUpdating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -57,12 +63,12 @@ export default function UpdateButton({ id, kind, variant = "pill" }: Props) {
     // stopPropagation on the wrapper too, so clicking the error text inside a
     // card doesn't open the detail overlay.
     <span
-      className="inline-flex flex-col items-end gap-0.5 min-w-0"
+      className={block ? "flex flex-col gap-1 min-w-0" : "inline-flex flex-col items-end gap-0.5 min-w-0"}
       onClick={(e) => e.stopPropagation()}
     >
       {variant === "button" ? (
         <Button
-          variant="secondary"
+          variant={primary ? "primary" : "secondary"}
           size="lg"
           onClick={run}
           disabled={updating}
@@ -88,7 +94,7 @@ export default function UpdateButton({ id, kind, variant = "pill" }: Props) {
       )}
       {/* WHY FieldError (guide: no red/coloured body text for messages) */}
       {error && (
-        <FieldError as="span" size="2xs" className="text-right max-w-[16rem] break-words">
+        <FieldError as="span" size="2xs" className={block ? "break-words" : "text-right max-w-[16rem] break-words"}>
           {error}
         </FieldError>
       )}

@@ -23,6 +23,13 @@ export const MARKETPLACE: readonly ScreenEntry[] = [
   { ...mp('marketplace/detail#phone', 'dialog', 'narrow'), viewport: { width: 390, height: 844 } },
   { ...mp('marketplace/theme-detail#phone', 'dialog', 'narrow'), viewport: { width: 390, height: 844 } },
   { ...mp('marketplace/detail#small', 'dialog'), viewport: { width: 640, height: 480 } },
+  // The two other arrangements of the same page (workbench-mode.ts `workbenchDetailLayout`),
+  // for Destin to pick between; without the switch the page is the one-column `stack`.
+  { ...mp('marketplace/detail#columns', 'dialog'), params: { detailLayout: 'columns' } },
+  { ...mp('marketplace/detail#folded', 'dialog'), params: { detailLayout: 'folded' } },
+  { ...mp('marketplace/detail/bundle#columns', 'dialog'), params: { detailLayout: 'columns' } },
+  { ...mp('marketplace/detail/bundle#folded', 'dialog'), params: { detailLayout: 'folded' } },
+  { ...mp('marketplace/integration-detail#columns', 'dialog'), params: { detailLayout: 'columns' } },
   // Share/publish sheets — App.tsx owns their id state; both open on the same
   // fixture items marketplace/detail and marketplace/theme-detail use.
   mp('marketplace/share', 'dialog'),

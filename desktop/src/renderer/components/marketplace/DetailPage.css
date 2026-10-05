@@ -1,0 +1,7 @@
+/* WHY: a detail page's chip row never wraps — it is one line that fades out at its
+   end (decisions G-9, "Card chip row"). The fade covers the last 24px only, so a row
+   that fits ends on empty space and nothing visible is dimmed. */
+[data-detail-chips] {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+}

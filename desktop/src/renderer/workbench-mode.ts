@@ -165,3 +165,26 @@ export function workbenchChromeStyle(): ChromeStyleOverride | null {
     ? (raw as ChromeStyleOverride)
     : null;
 }
+
+/** Marketplace detail-page layouts for the 2026-10-04 redesign review
+ *  (redesign-backlog row 9: "rethink how we show these pages"). The design guide
+ *  fixes the pieces (popup, labelled cards, notices, buttons) but not how a page
+ *  with this much information is arranged, so three arrangements are built from
+ *  the same pieces and Destin picks one:
+ *
+ *  - `stack`   one column, every section a labelled card, all open (Settings / Account)
+ *  - `columns` a wider popup: the reading on the left, the short facts on the right
+ *  - `folded`  one column; what it can do stays open, the rest are fold-out rows
+ *              inside one card (About → Privacy's recipe)
+ *
+ *  `stack` is what SHIPS until he picks; this switch only changes the workbench and
+ *  the photo-only build, so a typo renders the shipped page rather than a blank one. */
+export type DetailLayout = 'stack' | 'columns' | 'folded';
+
+const DETAIL_LAYOUTS: ReadonlyArray<DetailLayout> = ['stack', 'columns', 'folded'];
+
+export function workbenchDetailLayout(): DetailLayout {
+  if (!isWorkbenchMode()) return 'stack';
+  const raw = new URLSearchParams(location.search).get('detailLayout') ?? 'stack';
+  return (DETAIL_LAYOUTS as readonly string[]).includes(raw) ? (raw as DetailLayout) : 'stack';
+}

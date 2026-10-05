@@ -596,13 +596,16 @@ describe('marketplace small fixes', () => {
 
   // 3 — longDescription printed its markdown source instead of rendering it.
   it('the detail overlay renders the long description as markdown', async () => {
-    const { container } = await renderWithProviders(
+    await renderWithProviders(
       <MarketplaceDetailOverlay target={{ kind: 'skill', id: 'x' }} onClose={() => {}} />,
     );
-    expect(container.querySelector('strong')?.textContent).toBe('bold');
-    expect(container.querySelectorAll('li').length).toBe(2);
+    // The page is the shared popup (Dialog), which renders into document.body rather
+    // than inside the test's container (detail redesign, 2026-10-04).
+    const page = document.body;
+    expect(page.querySelector('strong')?.textContent).toBe('bold');
+    expect(page.querySelectorAll('li').length).toBe(2);
     // The literal source must not be on screen anywhere.
-    expect(container.textContent).not.toContain('**bold**');
+    expect(page.textContent).not.toContain('**bold**');
   });
 });
 

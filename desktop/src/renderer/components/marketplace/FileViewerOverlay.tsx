@@ -68,10 +68,9 @@ export default function FileViewerOverlay({ target, onClose }: Props) {
   return (
     <>
       <Scrim layer={3} onClick={onClose} />
-      {/* Inset matches MarketplaceDetailOverlay/IntegrationDetailOverlay so the
-          file viewer reads as a same-size full-bleed popup on phones — the
-          underlying parent popup stays mounted at layer 2 and re-appears when
-          this layer-3 viewer closes (Esc / scrim click). */}
+      {/* Nearly the whole window, so a long file reads comfortably; full-bleed on
+          phones. The detail popup it opened from stays mounted at layer 2 and
+          re-appears when this layer-3 viewer closes (Esc / scrim click). */}
       <OverlayPanel
         layer={3}
         className="fixed inset-2 sm:inset-12 md:inset-24 flex flex-col overflow-hidden"
@@ -80,22 +79,10 @@ export default function FileViewerOverlay({ target, onClose }: Props) {
           {/* WHY: Destin selected the single-line file identity, matching the
               16px medium headings on the other reviewed popup shells. */}
           <h2 className="text-base font-medium text-fg truncate min-w-0">{title}</h2>
-          {/* Wide: Esc-text. Narrow: bordered close-X — matches the marketplace top bar. */}
-          <button
-            type="button"
-            onClick={onClose}
-            className="hidden sm:inline-block text-fg-dim hover:text-fg text-sm px-2 py-1 shrink-0"
-            aria-label="Close file viewer"
-          >
-            Esc · Close
-          </button>
-          {/* The border survives as a className override: this narrow-only closer is
-              deliberately a bordered container matching the marketplace top bar. */}
-          <CloseButton
-            onClick={onClose}
-            label="Close file viewer"
-            className="sm:hidden shrink-0 rounded-md border border-edge-dim hover:border-edge"
-          />
+          {/* WHY the ✕ at every width (decisions B-1; guide "Popups": the close control is
+              always the ✕ — never the words "Esc" or "Close"). Was the words Esc and Close on wide
+              windows and a bordered ✕ only on narrow ones. */}
+          <CloseButton onClick={onClose} label="Close file viewer" className="shrink-0" />
         </header>
         <div ref={scrollRef} data-file-viewer-scroll className="flex-1 overflow-y-auto p-3 sm:p-6">
           {state.status === "loading" && (

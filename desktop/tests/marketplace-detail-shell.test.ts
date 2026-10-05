@@ -6,28 +6,27 @@ const components = join(__dirname, '..', 'src', 'renderer', 'components', 'marke
 const preview = join(__dirname, '..', 'src', 'renderer', 'dev', 'workbench', 'mockups');
 
 describe('Marketplace Details outer shell', () => {
-  it('uses the approved compact header and contained divider without changing the entry title', () => {
-    // WHY: this is the shared shell used for both skill and theme entries;
-    // the separate entry title inside each scroll body is not a dialog title.
-    const source = readSource(join(components, 'MarketplaceDetailOverlay.tsx'));
-    const css = readSource(join(components, 'MarketplaceDetailOverlay.css'));
-    expect(source).toContain('data-marketplace-detail-header className="flex items-center justify-between p-3 sm:p-4"');
-    expect(source).toContain('<h2 className="text-base font-medium text-fg">Details</h2>');
-    expect(css).toMatch(/\[data-marketplace-detail-header\]::after\s*\{[^}]*left:\s*16px;[^}]*right:\s*16px;[^}]*var\(--edge-card\) 8%, var\(--edge-card\) 92%/);
-    expect(source).toContain('<h1 className="text-xl sm:text-2xl font-semibold text-fg">{entry.displayName}</h1>');
-    expect(source).toContain('<h1 className="text-xl sm:text-2xl font-semibold text-fg">{entry.name}</h1>');
+  // WHY (detail redesign 2026-10-04, redesign-backlog row 9): every detail page —
+  // plugin, skill, connection, theme, integration — is the shared popup (Dialog: its
+  // one-line title, the ✕, the tapered line, Escape), never a hand-made panel with its
+  // own header. The integration page had drifted into a second copy once before; this
+  // pins that both pages go through the one shell, without pinning any measurement.
+  it('builds every detail page on the shared popup', () => {
+    const shell = readSource(join(components, 'DetailPage.tsx'));
+    expect(shell).toContain("import { CARD_LEVEL_1, Dialog, FoldRow, SectionLabel } from '../ui';");
+    expect(shell).toMatch(/<Dialog open onClose=\{onClose\} title=\{title\}/);
+    for (const file of ['MarketplaceDetailOverlay.tsx', 'IntegrationDetailOverlay.tsx']) {
+      const source = readSource(join(components, file));
+      expect(source).toContain('<DetailPage');
+      expect(source).not.toContain('OverlayPanel');
+    }
   });
 
-  it('masks scroll content only at edges with hidden room', () => {
-    const source = readSource(join(components, 'MarketplaceDetailOverlay.tsx'));
-    const css = readSource(join(components, 'MarketplaceDetailOverlay.css'));
-    expect(source).toContain('useScrollFade<HTMLDivElement>()');
-    expect(source).toContain('ref={scrollRef} data-marketplace-detail-scroll className="flex-1 overflow-y-auto p-3 sm:p-6"');
-    expect(css).toContain('mask-image:');
-    expect(css).toContain('mask-composite: add;');
-    expect(css).toContain('transparent 4%, transparent 96%');
-    expect(css).toMatch(/\[data-marketplace-detail-scroll\]\[data-fade-top="true"\]\s*\{\s*--detail-fade-top:\s*42px;/);
-    expect(css).toMatch(/\[data-marketplace-detail-scroll\]\[data-fade-bottom="true"\]\s*\{\s*--detail-fade-bottom:\s*42px;/);
+  it('closes with the ✕, never the words "Esc · Close"', () => {
+    // decisions B-1: Marketplace's "Esc · Close" text conforms to the drawn ✕.
+    for (const file of ['DetailPage.tsx', 'MarketplaceDetailOverlay.tsx', 'IntegrationDetailOverlay.tsx', 'FileViewerOverlay.tsx']) {
+      expect(readSource(join(components, file))).not.toContain('Esc · Close');
+    }
   });
 
   it('keeps Today as the original header and bare body only in the Workbench', () => {

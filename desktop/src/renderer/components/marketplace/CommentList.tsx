@@ -23,7 +23,7 @@ import {
   MARKETPLACE_API_HOST,
   type CommentEntry,
 } from '../../state/marketplace-api-client';
-import { LoadingState, EmptyState, FieldError } from '../ui';
+import { CARD_LEVEL_2, LoadingState, EmptyState, FieldError } from '../ui';
 
 // Unauthenticated client — listComments is a public endpoint
 const apiClient = createMarketplaceApiClient({
@@ -44,7 +44,10 @@ function CommentRow({ c, pluginId, held = false }: { c: CommentEntry; pluginId: 
   const [avatarFailed, setAvatarFailed] = React.useState(false);
   const when = relativeDate(c.created_at);
   return (
-    <div className={`flex flex-col gap-1 py-3 border-b border-edge-dim last:border-0${held ? ' opacity-80' : ''}`} data-comment data-held={held || undefined}>
+    // WHY each comment its own nested box, not rows split by full-width lines: a line never
+    // crosses a card (guide "Card levels"; decisions "Card levels (the Settings rule)"), and
+    // everything boxed inside a first-level card takes the one nested look (CARD_LEVEL_2).
+    <div className={`${CARD_LEVEL_2} flex flex-col gap-1 p-3${held ? ' opacity-80' : ''}`} data-comment data-held={held || undefined}>
       <div className="flex items-center gap-2">
         {c.user_avatar_url && !avatarFailed ? (
           <img src={c.user_avatar_url} alt={c.user_login} onError={() => setAvatarFailed(true)} className="w-6 h-6 rounded-full shrink-0 object-cover" />
@@ -123,11 +126,12 @@ export default function CommentList({ pluginId, refreshKey = 0, held = [], onHel
       {state.status === 'loading' && <LoadingState variant="inline" what="comments" />}
       {/* "No comments yet" would be a lie above the author's own held comment. */}
       {state.status === 'empty' && heldRows.length === 0 && <EmptyState variant="inline" message="No comments yet — ask a question or say how it went." />}
-      {state.status === 'empty' && heldRows.length > 0 && <div>{heldRows}</div>}
+      {state.status === 'empty' && heldRows.length > 0 && <div className="flex flex-col gap-2">{heldRows}</div>}
       {/* WHY FieldError (guide: no red/coloured body text for messages) */}
       {state.status === 'error' && <FieldError as="p">Couldn't load comments.</FieldError>}
       {state.status === 'loaded' && (
-        <div>
+        // 8px between neighbouring boxes (decisions "Popup spacing", SP-5).
+        <div className="flex flex-col gap-2">
           {heldRows}
           {state.comments.map((c) => <CommentRow key={c.id} c={c} pluginId={pluginId} />)}
           {/* The Worker caps the list at the 50 most recent and, since 2026-09-01,
@@ -137,7 +141,7 @@ export default function CommentList({ pluginId, refreshKey = 0, held = [], onHel
               the count is actually larger — an older Worker sends no `total`,
               and a thread that fits needs no caption. */}
           {typeof state.total === 'number' && state.total > state.comments.length && (
-            <p className="pt-3 text-xs text-fg-muted" data-comments-cut>
+            <p className="pt-1 text-xs text-fg-muted" data-comments-cut>
               Showing the {state.comments.length} most recent of {state.total.toLocaleString()} comments.
             </p>
           )}
