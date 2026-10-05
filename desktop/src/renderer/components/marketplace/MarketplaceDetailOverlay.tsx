@@ -50,10 +50,12 @@ interface Props {
   // "Part of …" link, or a bundle's "What's inside" rows. The screen owns
   // the target, so this just swaps it.
   onNavigate?(target: DetailTarget): void;
+  /** Photo-only build: the shoot screen this popup marks itself as (defaults by kind). */
+  screen?: string;
 }
 
 export default function MarketplaceDetailOverlay({
-  target, onClose, onOpenShareSheet, onOpenThemeShare, onNavigate,
+  target, onClose, onOpenShareSheet, onOpenThemeShare, onNavigate, screen,
 }: Props) {
   const mp = useMarketplace();
   // Needed for Apply action and isActive check in ThemeBody
@@ -151,7 +153,7 @@ export default function MarketplaceDetailOverlay({
         className="fixed inset-2 sm:inset-8 md:inset-16 flex flex-col overflow-hidden"
       >
         {/* Photo-only build: marked only when the item was found, never on "not found". */}
-        {React.isValidElement(content) && content.type !== NotFound && <ScreenMark name={target.kind === 'skill' ? 'marketplace/detail' : 'marketplace/theme-detail'} />}
+        {React.isValidElement(content) && content.type !== NotFound && <ScreenMark name={screen ?? (target.kind === 'skill' ? 'marketplace/detail' : 'marketplace/theme-detail')} />}
         <header data-marketplace-detail-header className="flex items-center justify-between p-3 sm:p-4">
           <h2 className="text-base font-medium text-fg">Details</h2>
           {/* Wide: Esc-text hint. Narrow: bordered close-X matching the marketplace top bar. */}

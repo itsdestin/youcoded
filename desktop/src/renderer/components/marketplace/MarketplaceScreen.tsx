@@ -41,6 +41,16 @@ type IntegrationCardItem = IntegrationEntry & { state: IntegrationState };
 const INTEGRATION_MARKETPLACE_BRANCH = 'master';
 const INTEGRATION_ICON_BASE = `https://raw.githubusercontent.com/itsdestin/wecoded-marketplace/${INTEGRATION_MARKETPLACE_BRANCH}/integrations`;
 
+// Photo-only build: which practice-marketplace item each `marketplace/detail/<kind>` screen
+// opens (dev/workbench/screens/marketplace.ts names the screens). '' is the plain screen.
+const SHOOT_DETAIL_IDS: Record<string, string> = {
+  '': 'civic-report',
+  bundle: 'superpowers',
+  member: 'superpowers/brainstorming',
+  caution: 'browser-use',
+  connection: 'mcp-registry/io.github.modelcontextprotocol/filesystem',
+};
+
 interface Props {
   onExit(): void;
   // Phase 2 redesign — jump to Your library without round-tripping through
@@ -74,13 +84,31 @@ export default function MarketplaceScreen({
   useScreenOpen('marketplace/skills', () => setFilter({ ...emptyFilter(), type: 'plugin' }));
   useScreenOpen('marketplace/themes', () => setFilter({ ...emptyFilter(), type: 'theme' }));
   useScreenOpen('marketplace/search', () => setFilter({ ...emptyFilter(), query: 'civic' }));
-  useScreenOpen('marketplace/detail', () => setDetail({ kind: 'skill', id: 'civic-report' }));
-  useScreenOpen('marketplace/theme-detail', () => setDetail({ kind: 'theme', slug: 'meadow-mist' }));
+  // WHY one screen per KIND of detail page (2026-10-04, detail-page redesign): the page
+  // reads differently for a bundle, a member skill, an item the check flagged, a listing
+  // that cannot be installed from here, a theme not yet installed and an integration —
+  // and only the plain-plugin and installed-theme pages could be photographed before.
+  // `detailScreen` tells the popup which name to mark itself with (shoot proves a screen
+  // by its mark); it is only ever set here, so outside the photo-only build it stays unset.
+  const [detailScreen, setDetailScreen] = useState<string | undefined>(undefined);
+  useScreenOpen('marketplace/detail', (sub) => {
+    setDetailScreen(sub ? `marketplace/detail/${sub}` : undefined);
+    setDetail({ kind: 'skill', id: SHOOT_DETAIL_IDS[sub ?? ''] ?? 'civic-report' });
+  }, Object.keys(SHOOT_DETAIL_IDS).filter(Boolean));
+  useScreenOpen('marketplace/theme-detail', (sub) => {
+    setDetailScreen(sub ? `marketplace/theme-detail/${sub}` : undefined);
+    setDetail({ kind: 'theme', slug: sub === 'not-installed' ? 'cotton-candy-sky' : 'meadow-mist' });
+  }, ['not-installed']);
   const [integrations, setIntegrations] = useState<IntegrationCardItem[]>([]);
   // Integration click-to-expand — mirrors the plugin detail-overlay pattern
   // but renders IntegrationDetailOverlay (below) because integrations aren't
   // in mp.skillEntries and need their own action wiring via handleIntegration.
   const [integrationDetail, setIntegrationDetail] = useState<IntegrationCardItem | null>(null);
+  // Photo-only build: the integration popup, on the fixture that still needs signing in.
+  useScreenOpen('marketplace/integration-detail', () => {
+    const match = integrations.find((it) => it.slug === 'google-workspace') ?? integrations[0];
+    if (match) setIntegrationDetail(match);
+  });
   // After an install/connect that returns a postInstallCommand, we show an
   // inline "run this command to finish setup" banner in the detail overlay
   // rather than auto-typing into a new session. Auto-typing raced the CLI's
@@ -675,6 +703,7 @@ export default function MarketplaceScreen({
       {detail && (
         <MarketplaceDetailOverlay
           target={detail}
+          screen={detailScreen}
           onClose={() => setDetail(null)}
           onNavigate={setDetail}
           onOpenShareSheet={onOpenShareSheet}
@@ -800,6 +829,7 @@ function IntegrationDetailOverlay({
         className="fixed inset-2 sm:inset-8 md:inset-16 flex flex-col overflow-hidden"
         style={item.accentColor ? { borderColor: item.accentColor } : undefined}
       >
+        <ScreenMark name="marketplace/integration-detail" />
         <header className="flex items-center justify-between p-3 sm:p-4 border-b border-edge-dim">
           <h2 className="text-lg font-semibold text-fg">Integration</h2>
           {/* Wide: Esc-text. Narrow: bordered close-X. */}

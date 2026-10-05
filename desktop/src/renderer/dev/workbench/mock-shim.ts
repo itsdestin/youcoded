@@ -48,6 +48,7 @@ import type { StructuredPatchHunk } from '../../../shared/types';
 // rule rather than a lookalike (it used to grey the last two words, full stop).
 import { splitAtLastSentenceEnd } from '../../../shared/voice-types';
 import { buildCatalog, buildStressCatalog } from './fixtures/marketplace/catalog';
+import { WORKBENCH_INTEGRATIONS, type WorkbenchIntegration } from './fixtures/marketplace/integrations';
 // `?guide=tip:<id>` (below): fire one first-run tip on demand for a photograph.
 import { triggerTip } from '../../components/guide/tips';
 import { isNoFolderCwd } from '../../../shared/no-folder';
@@ -235,6 +236,9 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'appearance.set', 'appearance.broadcast', 'appearance.onSync',
   'skills.listMarketplace', 'skills.list', 'skills.getFavorites', 'skills.setFavorite', 'skills.getFeatured',
   'marketplace.getPackages', 'theme.marketplace',
+  // Marketplace integrations (2026-10-04) — real preload channels; faked so the integration
+  // detail popup can be opened and reviewed (fixtures/marketplace/integrations.ts).
+  'integrations.list', 'integrations.status', 'integrations.install', 'integrations.connect', 'integrations.uninstall',
   // Real, but served by remote-shim.ts rather than preload.ts — Electron
   // clients get their timelines from the transcript watcher instead. The
   // contract test checks both files for exactly this reason.
@@ -3571,6 +3575,29 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
   };
 
+  // Integrations (the Marketplace's Integrations rail and its detail popup). WHY hand-written
+  // (2026-10-04): the catch-all's `[]` meant the integration detail popup could never open in
+  // the workbench, so it was never reviewed. Install/connect/uninstall flip the fixture's state
+  // so the popup's buttons show their real next state; `connect` hands back the setup command
+  // the way the real handler does, so the "finish setup" notice can be seen too.
+  let integrationList: WorkbenchIntegration[] = marketplaceEmpty ? [] : WORKBENCH_INTEGRATIONS.map((i) => ({ ...i, state: { ...i.state } }));
+  const setIntegration = (slug: string, patch: Partial<WorkbenchIntegration['state']>) => {
+    integrationList = integrationList.map((i) => (i.slug === slug ? { ...i, state: { ...i.state, ...patch } } : i));
+  };
+  const integrations = {
+    list: async () => integrationList.map((i) => ({ ...i, state: { ...i.state } })),
+    status: async (slug: string) => integrationList.find((i) => i.slug === slug)?.state ?? null,
+    install: async (slug: string) => {
+      setIntegration(slug, { installed: true });
+      return { ok: true, postInstallCommand: integrationList.find((i) => i.slug === slug)?.setup.postInstallCommand };
+    },
+    connect: async (slug: string) => {
+      setIntegration(slug, { connected: true });
+      return { ok: true, postInstallCommand: integrationList.find((i) => i.slug === slug)?.setup.postInstallCommand };
+    },
+    uninstall: async (slug: string) => { setIntegration(slug, { installed: false, connected: false }); return { ok: true }; },
+  };
+
   // The app's own update flow (UpdatePanel). Only reachable with ?update=available — without
   // it no pill renders. WHY hand-written: the catch-all's `[]` from getCachedDownload is
   // TRUTHY, so the panel jumped straight to "Launch Installer" and never downloaded.
@@ -3623,7 +3650,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     session, providers, permissions, models, engine, defaults, native, detach, tags, on, theme, firstRun,
     terminal, artifacts, syncSpaces, sync, project, account, social, appearance, specialists, shell,
     skills, marketplace, folders, fs, modes, git, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, search, performance: perfMock,
-    update, dev: devMock, ...(remote ? { remote } : {}),
+    update, integrations, dev: devMock, ...(remote ? { remote } : {}),
     pages: createPagesMock(activeScenario === 'empty'),
     office: createOfficeMock(activeScenario === 'empty'),
     docComments: createDocCommentsMock(activeScenario === 'empty'),
