@@ -40,7 +40,7 @@ export const HOME_CAMERA_CSS = `
   .cam-live-btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); box-shadow: 0 6px 18px -6px var(--accent); }
   .cam-live-btn[aria-pressed="true"]::before { background: rgb(235, 70, 55); box-shadow: 0 0 0 3px color-mix(in srgb, rgb(235, 70, 55) 35%, transparent); }
   .cam-evs-wait { min-height: 158px; }
-  .cam-evs { display: flex; flex-direction: column; gap: 4px; max-height: 158px; overflow-y: auto; overscroll-behavior: contain; padding-right: 2px; scrollbar-width: thin; }
+  .cam-evs { display: flex; flex-direction: column; gap: 4px; max-height: 158px; overflow-y: auto; overscroll-behavior: contain; padding-right: 2px; }
   .cam-ev { appearance: none; font: inherit; font-size: 12px; display: flex; align-items: center; gap: 10px; width: 100%; flex-shrink: 0; padding: 7px 10px; border: 0; border-radius: 14px; background: color-mix(in srgb, var(--fg) 6%, var(--panel)); color: var(--fg); cursor: pointer; text-align: left; }
   .cam-ev:hover:not(:disabled) { background: color-mix(in srgb, var(--fg) 10%, var(--panel)); }
   .cam-ev:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

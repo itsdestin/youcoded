@@ -162,3 +162,23 @@ describe('a camera that gives a still picture', () => {
     expect(card('Doorbell')).toBeUndefined();
   });
 });
+
+describe('scroll bars', () => {
+  it('are thin, rounded and in the theme colours on every scrolling area, and no list switches that off with scrollbar-width', () => {
+    const css = Array.from(document.querySelectorAll('style')).map((s) => s.textContent).join('\n');
+    expect(css).toMatch(/\*::-webkit-scrollbar-thumb \{[^}]*border-radius: 9999px/);
+    expect(css).toMatch(/\*::-webkit-scrollbar-thumb:hover \{[^}]*var\(--fg-muted\)/);
+    expect(css).toMatch(/\*::-webkit-scrollbar-track[^{]*\{ background: transparent/);
+    // Where scrollbar-width is set Chromium ignores the ::-webkit-scrollbar rules, so it may only appear for browsers without them.
+    const outside = css.replace(/\/\*[\s\S]*?\*\//g, '').replace(/@supports not selector\(::-webkit-scrollbar\) \{[^}]*\{[^}]*\} \}/, '');
+    expect(outside).not.toMatch(/scrollbar-width/);
+  });
+});
+
+describe('the three ways to start live (practice options)', () => {
+  it.each(['look-cam-a', 'look-cam-b', 'look-cam-c'])('%s rewrites the built card and still runs as a page', async (key) => {
+    const { findHomeVariant, withHomeVariant } = await import('../src/renderer/dev/workbench/fixtures/home-variants/registry');
+    const out = withHomeVariant(HOME_ASSISTANT_PAGE_HTML, findHomeVariant(key)!); // throws if the page changed under the option
+    for (const script of out.split('<script>').slice(1)) expect(() => new Function(script.split('</script>')[0])).not.toThrow();
+  });
+});

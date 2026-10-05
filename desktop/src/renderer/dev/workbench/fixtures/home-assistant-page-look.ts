@@ -9,6 +9,15 @@
 // Activity rows: the round-1 picture had a coloured edge and a round tinted "thumbnail" per row;
 // Destin disliked it, so each row keeps only a small plain icon in the event's colour.
 export const HOME_LOOK_CSS = `
+  /* Scroll bars (Destin, 2026-10-05: "theme/style the new scrollbar"): thin, rounded, in the theme's own colours, on
+     every scrolling area of the page (the recordings list, the pop-up, the page itself). Chromium styles them
+     through ::-webkit-scrollbar; where that is missing the standard scrollbar-color/width say the same. The two are
+     kept apart on purpose: where scrollbar-width is set Chromium ignores the ::-webkit-scrollbar rules. */
+  *::-webkit-scrollbar { width: 10px; height: 10px; }
+  *::-webkit-scrollbar-track, *::-webkit-scrollbar-corner { background: transparent; }
+  *::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--fg-faint, var(--edge)) 70%, transparent); border-radius: 9999px; border: 3px solid transparent; background-clip: padding-box; }
+  *::-webkit-scrollbar-thumb:hover { background: var(--fg-muted); background-clip: padding-box; border: 3px solid transparent; }
+  @supports not selector(::-webkit-scrollbar) { * { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--fg-faint, var(--edge)) 70%, transparent) transparent; } }
   .yc-card.room, .yc-card.set-sec { border-radius: 24px; padding: 16px; gap: 12px; border-color: color-mix(in srgb, var(--fg) 11%, transparent);
     background: linear-gradient(180deg, color-mix(in srgb, var(--fg) 6%, var(--panel)), var(--panel));
     box-shadow: inset 0 1px 0 color-mix(in srgb, var(--fg) 12%, transparent), 0 14px 30px -18px rgba(0,0,0,.55); }

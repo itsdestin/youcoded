@@ -3768,6 +3768,7 @@ function createPagesMock(empty: boolean): PagesBridge {
   // `v-<task>-<key>`: one redesign option (fixtures/home-variants/), on the
   // connected page, starting from the option's own saved data if it has any.
   const variant = homeView && homeView.startsWith('v-') ? findHomeVariant(homeView.slice(2)) : null;
+  if (variant?.nestSignedIn) fakeHomeAssistantNestSignedIn(true);
   if (onlyCameras || homeView === 'view-cameras') fakeHomeAssistantNestSignedIn(true); // events need the Nest account working
   if (onlyCameras || homeView === 'connected' || homeView === 'edit' || homeView === 'remote' || homeView === 'group' || homeView === 'device' || chipView || homeView === 'settings' || chipStyle || mockup || variant) {
     pages = pages.map((p) => (p.id !== 'page-home' ? p : {

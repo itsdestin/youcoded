@@ -122,6 +122,7 @@ export const HOME_LIVE_JS = `
     if (stamp && Date.parse(it.upd || '') > stamp) return; // the check already has something newer
     var before = JSON.stringify(it);
     it.state = raw.s;
+    noteReport(it); // the house's word on whether this app really reports play and pause (home-assistant-page-tv.ts)
     var a = raw.a || {};
     LIVE_ATTRS.forEach(function (p) { if (p[0] in a) it[p[1]] = a[p[0]]; else if (p[0] !== 'friendly_name') it[p[1]] = null; });
     it.features = a.supported_features == null ? 0 : a.supported_features;

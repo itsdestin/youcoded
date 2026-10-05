@@ -23,6 +23,7 @@ import { HOME_REDRAW_CSS, HOME_REDRAW_JS } from './home-assistant-page-redraw';
 import { HOME_PENDING_CSS, HOME_PENDING_JS } from './home-assistant-page-pending';
 import { HOME_EDIT_CSS, HOME_EDIT_JS } from './home-assistant-page-edit';
 import { HOME_CAMERA_CSS, HOME_CAMERA_JS } from './home-assistant-page-camera';
+import { HOME_TV_JS } from './home-assistant-page-tv';
 import { HOME_LOOK_CSS } from './home-assistant-page-look';
 import { HOME_MOTION_JS } from './home-assistant-page-motion';
 import { HOME_FEEL_CSS, HOME_FEEL_JS } from './home-assistant-page-feel';
@@ -178,6 +179,7 @@ function homeAssistantPageHtml(): string {
     call('/api/template', { template: TEMPLATE }).then(function (r) {
       var first = rooms === null;
       rooms = JSON.parse(r.body);
+      noteReports();
       // WHY stamps (redesign audit F4 "the newest one wins", code review 4): every state
       // carries when the house last updated it; a pushed state newer than this answer's
       // goes back on top, an older one never overwrites a newer.
@@ -437,9 +439,11 @@ ${HOME_ICONS_JS}
     if (tv && rc && playing && castStale(it, rc)) playing = false;
     // A soundbar playing the TV's sound reports the title "TV".
     var what = it.title === 'TV' && kind === 'soundbar' ? 'TV sound' : it.title;
+    // Option A (Destin, 2026-10-05): an app that gives no title and has never shown a real play/pause is not claimed to be playing (home-assistant-page-tv.ts).
+    var neutral = media && tv && playing && !what && !playReported(it);
     var app = tv && rc ? appOf(rc.activity) : media && !tv ? sourceOf(it) : null;
     var status = na ? 'Not responding'
-      : media ? (on ? (playing && it.state === 'paused' ? 'Paused' : playing ? 'Playing' : 'On') : 'Off')
+      : media ? (on ? (neutral ? 'On' : playing && it.state === 'paused' ? 'Paused' : playing ? 'Playing' : 'On') : 'Off')
       : on ? (dimmable(it) ? pct + '%' : 'On') : 'Off';
     // Speakers and soundbars get play/pause and skip while something is
     // playing; a TV gets its remote instead (round 5 testing: "soundbar
@@ -453,7 +457,7 @@ ${HOME_ICONS_JS}
     var ctl = '';
     if (media && tv && rc && on) {
       var rk = function (cmd, label, icon, cls) { return '<button class="key' + (cls || '') + '" data-rc="' + esc(rc.id) + '" data-cmd="' + cmd + '" aria-label="' + label + '" title="' + label + '">' + icon + '</button>'; };
-      ctl = rk('MEDIA_PREVIOUS', 'Previous', PREV) + rk('MEDIA_PLAY_PAUSE', 'Play or pause', isPlay ? PAUSE : PLAY, ' main') + rk('MEDIA_NEXT', 'Next', NEXT);
+      ctl = rk('MEDIA_PREVIOUS', 'Previous', PREV) + rk('MEDIA_PLAY_PAUSE', 'Play or pause', neutral ? PLAYPAUSE : isPlay ? PAUSE : PLAY, ' main') + rk('MEDIA_NEXT', 'Next', NEXT);
     // A soundbar playing the TV has nothing of its own to pause or skip.
     } else if (media && !tv && playing && (f & 1) && !(kind === 'soundbar' && (it.source === 'TV' || it.title === 'TV'))) {
       var mk = function (svc, label, icon, cls) { return '<button class="key' + (cls || '') + '" data-mp="' + esc(it.id) + '" data-svc="' + svc + '" aria-label="' + label + '" title="' + label + '">' + icon + '</button>'; };
@@ -470,8 +474,8 @@ ${HOME_ICONS_JS}
     var nowHtml = media && on && (playing && what || app)
       ? '<div class="np' + (ctl || vol ? ' has-ctl' : '') + '"><span class="art" style="--app:' + (app ? app.bg : 'var(--accent)') + '">' +
         (app ? app.mark : '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>') +
-        '</span><span class="txt"><div class="lbl">' + (it.state === 'paused' ? 'Paused' : 'Now playing') +
-        '<span class="eq' + (it.state === 'playing' ? ' on' : '') + '" aria-hidden="true"><i></i><i></i><i></i></span></div>' +
+        '</span><span class="txt">' + (neutral ? '' : '<div class="lbl">' + (it.state === 'paused' ? 'Paused' : 'Now playing') +
+        '<span class="eq' + (it.state === 'playing' ? ' on' : '') + '" aria-hidden="true"><i></i><i></i><i></i></span></div>') +
         '<div class="ttl">' + esc(playing && what ? what : app.name) + '</div>' +
         (app && playing && what && what !== app.name && app.name !== 'TV' ? '<div class="by">' + (tv ? 'in ' : 'on ') + esc(app.name) + '</div>' : '') + '</span>' +
         // Volume above previous/play/next (round 7).
@@ -524,9 +528,16 @@ ${HOME_ICONS_JS}
   // ── Order ───────────────────────────────────────────────────────────────
   // A chosen order lists ids; anything not in it (a new device) goes last,
   // in Home Assistant's order.
+  // WHY (Destin, 2026-10-05: "disabled/broken devices should sort to the end by default"): a device that is not
+  // responding goes after the working ones, in every list (rooms' cards, the Lights/Media/Climate/Cameras pages,
+  // Favourites, the Cameras grid, the Edit board). Once he has put THIS list in an order himself in Edit, that
+  // order is kept as it is: order[key] exists only after he moved something in that list, so its presence is
+  // how his choice is told from the default. A device that comes back simply stops being "gone" and is back in its place.
   function ordered(list, key, idOf) {
     var o = order[key];
-    if (!Array.isArray(o)) return list;
+    if (!Array.isArray(o)) return list.map(function (x, i) { return [x, i]; })
+      .sort(function (a, b) { return (gone(a[0]) ? 1 : 0) - (gone(b[0]) ? 1 : 0) || a[1] - b[1]; })
+      .map(function (p) { return p[0]; });
     var rank = function (x) { var i = o.indexOf(idOf(x)); return i < 0 ? 1e6 : i; };
     return list.map(function (x, i) { return [x, i]; })
       .sort(function (a, b) { return rank(a[0]) - rank(b[0]) || a[1] - b[1]; })
@@ -773,7 +784,7 @@ ${HOME_ICONS_JS}
     var nr = lights.filter(function (x) { return gone(x.it); }).length;
     var media = items.filter(function (x) { return domain(x.it.id) === 'media_player' && !remoteDevice(x.it); });
     // Same rule as the cards: a TV's stale Cast title is not "playing".
-    var playing = media.filter(function (x) { var rc = isTv(x.it) ? remoteFor(x.it, x.room) : null; return x.it.state === 'playing' && !(rc && castStale(x.it, rc)); });
+    var playing = media.filter(function (x) { var rc = isTv(x.it) ? remoteFor(x.it, x.room) : null; return x.it.state === 'playing' && !(rc && castStale(x.it, rc)) && !(isTv(x.it) && !x.it.title && !playReported(x.it)); });
     var tvsOn = media.filter(function (x) { return isTv(x.it) && isOn(remoteFor(x.it, x.room) || x.it) && !gone(x.it); });
     var clim = items.filter(function (x) { return domain(x.it.id) === 'climate'; });
     var th = clim.filter(function (x) { return !gone(x.it); })[0];
@@ -1457,6 +1468,7 @@ ${HOME_ICONS_JS}
 ${HOME_HISTORY_JS}
 ${HOME_LIVE_JS}
 ${HOME_CAMERA_JS}
+${HOME_TV_JS}
 ${HOME_REDRAW_JS}
 ${HOME_PENDING_JS}
 ${HOME_EDIT_JS}
