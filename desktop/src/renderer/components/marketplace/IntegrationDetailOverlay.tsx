@@ -12,7 +12,6 @@ import { Button, Callout, Pill, SettingRow } from "../ui";
 import { MetaChip } from "./TrustBadges";
 import type { PillTone } from "../ui/Pill";
 import { DetailActions, DetailIdentity, DetailPage, type DetailSection } from "./DetailPage";
-import { workbenchIntegrationAlign } from "../../workbench-mode";
 
 export type IntegrationCardItem = IntegrationEntry & { state: IntegrationState };
 
@@ -72,10 +71,9 @@ export function IntegrationDetailOverlay({
     }
   }
 
-  // The big tile stays (marketplace-detail-3#M3-2); how it lines up with the words is the
-  // round-4 choice (workbench-mode.ts `IntegrationAlign`). The integration's own icon
+  // The big tile stays (marketplace-detail-3#M3-2), on one centre line with the name,
+  // description and buttons (marketplace-detail-4#M4-1 "row"). The integration's own icon
   // image wins over the letter when it has one.
-  const align = workbenchIntegrationAlign();
   const icon = (
     <div
       className="w-10 h-10 rounded-lg shrink-0 overflow-hidden bg-inset flex items-center justify-center text-on-accent text-lg font-semibold"
@@ -90,7 +88,7 @@ export function IntegrationDetailOverlay({
     <DetailIdentity
       icon={icon}
       name={item.displayName}
-      iconLayout={align}
+      iconLayout="row"
       status={<Pill tone={PILL_TONE[statusBadge.tone]}>{statusBadge.text}</Pill>}
       description={item.tagline}
       actions={actions}

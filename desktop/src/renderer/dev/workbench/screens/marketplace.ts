@@ -23,13 +23,7 @@ export const MARKETPLACE: readonly ScreenEntry[] = [
   { ...mp('marketplace/detail#phone', 'dialog', 'narrow'), viewport: { width: 390, height: 844 } },
   { ...mp('marketplace/theme-detail#phone', 'dialog', 'narrow'), viewport: { width: 390, height: 844 } },
   { ...mp('marketplace/detail#small', 'dialog'), viewport: { width: 640, height: 480 } },
-  // Round 4 drafts still to pick between (workbench-mode.ts): how the integration's tile
-  // lines up with its words (the plain screen shows `row`), and how a theme's chips fit
-  // the narrow right column (the plain screen shows `wrap`).
-  { ...mp('marketplace/integration-detail#block', 'dialog'), params: { integrationAlign: 'block' } },
-  { ...mp('marketplace/integration-detail#top', 'dialog'), params: { integrationAlign: 'top' } },
-  { ...mp('marketplace/theme-detail#facts', 'dialog'), params: { themeChips: 'facts' } },
-  { ...mp('marketplace/theme-detail#fewer', 'dialog'), params: { themeChips: 'fewer' } },
+  { ...mp('marketplace/theme-detail/not-installed#phone', 'dialog', 'narrow'), viewport: { width: 390, height: 844 } },
   // Share/publish sheets — App.tsx owns their id state; both open on the same
   // fixture items marketplace/detail and marketplace/theme-detail use.
   mp('marketplace/share', 'dialog'),

@@ -121,9 +121,40 @@ export function DetailPage({
  * the one approved popup that opens on the thing it is about. A label here could only
  * repeat the title. (Recorded as a conflict with "A label comes first" in the friction log.)
  */
+/** The chip row: one line that scrolls sideways (round 5, marketplace-detail-4#M4-2).
+ *  WHY no wheel translation: like the Marketplace rails, the row takes the browser's own
+ *  sideways scrolling — touch swipe, trackpad two-finger, and Shift + mouse wheel. Turning
+ *  a plain vertical wheel into sideways scrolling would trap the popup's own scrolling
+ *  whenever the pointer crossed the row. The fade tells the eye there is more. */
+function ChipRow({ children }: { children: React.ReactNode }) {
+  const ref = React.useRef<HTMLDivElement>(null);
+  const [fade, setFade] = React.useState<'none' | 'left' | 'right' | 'both'>('none');
+  // 1px slack absorbs sub-pixel scroll positions (MarketplaceRail's rule).
+  const update = React.useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    const max = el.scrollWidth - el.clientWidth;
+    if (max <= 1) { setFade('none'); return; }
+    const left = el.scrollLeft > 1, right = el.scrollLeft < max - 1;
+    setFade(left && right ? 'both' : left ? 'left' : right ? 'right' : 'none');
+  }, []);
+  // Window resize only, as the rails do: the row's width follows the window.
+  React.useEffect(() => {
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, [update, children]);
+  return (
+    <div ref={ref} data-detail-chips data-fade={fade} onScroll={update}
+      className="flex-1 min-w-0 flex items-center gap-1.5 flex-nowrap overflow-x-auto">
+      {children}
+    </div>
+  );
+}
+
 export function DetailIdentity({
-  icon, name, status, quickActions, chips, description, children, actions, footer,
-  iconLayout = 'top', quickActionsOnTitle = false, chipsWrap = false,
+  icon, name, status, quickActions, chips, description, children, actions,
+  iconLayout = 'top', quickActionsOnTitle = false,
 }: {
   icon?: React.ReactNode;
   name: React.ReactNode;
@@ -135,21 +166,14 @@ export function DetailIdentity({
   children?: React.ReactNode;
   /** <DetailActions> — the item's buttons. */
   actions?: React.ReactNode;
-  /** Small print under the buttons (a theme's facts, in one of the round-4 drafts). */
-  footer?: React.ReactNode;
-  /** How an icon tile lines up with the words (round 4, M3-2: "i just don't like how the
-   *  description/title/icon line up"):
-   *   top    the tile beside the name only; the description runs under both (round 3)
-   *   block  the tile vertically centred on the name + description block; buttons below
-   *   row    one row: tile | name + description | buttons, all on one centre line — the
-   *          Account "Your profile" card and the shared setting row (icon, title, hint,
-   *          control at the right, vertically centred: guide "Settings") */
-  iconLayout?: 'top' | 'block' | 'row';
+  /** How an icon tile lines up with the words. `row` (Destin picked it, marketplace-detail-4
+   *  #M4-1): one row, tile | name + description | buttons on one centre line — the Account
+   *  profile card and the shared setting row (guide "Settings": control at the right,
+   *  vertically centred). `top`: no icon, or the icon beside the name only. */
+  iconLayout?: 'top' | 'row';
   /** Keep the quick actions on the name's line even in the narrow column; the name then
    *  wraps between words, never inside one. */
   quickActionsOnTitle?: boolean;
-  /** Let the chips wrap onto a second line instead of fading at the end. */
-  chipsWrap?: boolean;
 }) {
   const phone = useNarrowViewport();
   const inColumn = React.useContext(NarrowColumn);
@@ -168,13 +192,7 @@ export function DetailIdentity({
   );
   const chipRow = (chips || (actionsBelow && quickActions)) && (
     <div className="-mt-1 flex items-center gap-2 min-w-0">
-      {/* WHY one row that never wraps and fades at its end (decisions G-9, U-1) — unless
-          a draft lets it wrap (`chipsWrap`, round 4, M3-3: the narrow column cut the
-          chips short). DetailPage.css draws the fade; the wrapping row has none. */}
-      <div
-        {...(chipsWrap ? {} : { 'data-detail-chips': true })}
-        className={`flex-1 min-w-0 flex items-center gap-1.5 ${chipsWrap ? 'flex-wrap' : 'flex-nowrap overflow-hidden'}`}
-      >{chips}</div>
+      <ChipRow>{chips}</ChipRow>
       {actionsBelow && quickActions && <div className="shrink-0 flex items-center gap-1 -mr-1">{quickActions}</div>}
     </div>
   );
@@ -192,23 +210,20 @@ export function DetailIdentity({
         </div>
         {chipRow}
         {children}
-        {footer}
       </div>
     );
   }
-  const block = iconLayout === 'block';
   return (
     <div className={`${CARD_LEVEL_1} p-4 space-y-3`} data-detail-identity>
-      <div className={`flex gap-3 ${block ? 'items-center' : 'items-start'}`}>
+      <div className="flex gap-3 items-start">
         {icon}
-        <div className="min-w-0 flex-1 space-y-1">{nameLine}{block && desc}</div>
+        <div className="min-w-0 flex-1 space-y-1">{nameLine}</div>
         {quick}
       </div>
       {chipRow}
-      {!block && desc}
+      {desc}
       {children}
       {actions}
-      {footer}
     </div>
   );
 }

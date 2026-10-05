@@ -1,7 +1,19 @@
-/* WHY: a detail page's chip row never wraps — it is one line that fades out at its
-   end (decisions G-9, "Card chip row"). The fade covers the last 24px only, so a row
-   that fits ends on empty space and nothing visible is dimmed. */
-[data-detail-chips] {
+/* WHY: a detail page's chip row is ONE line that scrolls sideways when it doesn't fit
+   (Destin, marketplace-detail-4#M4-2: "chips can be scrollable left/right" — refines
+   decision G-9 "never wraps; fades at its end"). The edge fades only on a side that has
+   more to show, the Marketplace rails' treatment (MarketplaceRail.tsx), shorter because
+   chips are small. No scrollbar, like the rails. */
+[data-detail-chips] { scrollbar-width: none; }
+[data-detail-chips]::-webkit-scrollbar { display: none; }
+[data-detail-chips][data-fade="right"] {
   -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
   mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+}
+[data-detail-chips][data-fade="left"] {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 24px);
+  mask-image: linear-gradient(to right, transparent, #000 24px);
+}
+[data-detail-chips][data-fade="both"] {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 24px, #000 calc(100% - 24px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 24px, #000 calc(100% - 24px), transparent);
 }

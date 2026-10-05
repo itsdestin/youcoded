@@ -29,7 +29,6 @@ import { Button, Callout, CARD_LEVEL_1, Pill, SettingRow } from "../ui";
 // Task 3: `longDescription` is markdown and used to be printed verbatim.
 import MarkdownContent from "../MarkdownContent";
 import { DetailActions, DetailIdentity, DetailPage, type DetailSection } from "./DetailPage";
-import { workbenchThemeChipFit } from "../../workbench-mode";
 
 export type DetailTarget =
   | { kind: "skill"; id: string }
@@ -567,7 +566,6 @@ function ThemeDetail({
   // (marketplace-detail-3#M3-1). Re-seeded if the stats arrive late.
   const [likeCount, setLikeCount] = useState(likes);
   useEffect(() => { setLikeCount(likes); }, [likes]);
-  const chipFit = workbenchThemeChipFit();
 
   // Confirmation wrapper — locally-built themes are permanent deletes (no marketplace copy to reinstall from)
   const handleUninstall = () => {
@@ -597,31 +595,25 @@ function ThemeDetail({
     );
   }
 
-  const authorChip = entry.author && <AuthorBadge author={entry.author} />;
-  const downloadsChip = !!themeStats?.installs && <CountChip n={themeStats.installs} word="download" />;
-  const likesChip = likeCount > 0 && <CountChip n={likeCount} word="like" />;
-  // Round 4 (M3-3: the chips were cut short by the fade in the narrow right column) —
-  // three ways to fit them, picked in the workbench (workbench-mode.ts `ThemeChipFit`):
-  // wrap: all three chips, allowed onto a second line; facts: no chips, one plain line of
-  // facts under the buttons (bold number, grey word — guide "Text and numbers"); fewer:
-  // only who made it and how liked it is.
-  const chips = chipFit === 'facts' ? undefined
-    : chipFit === 'fewer' ? <>{authorChip}{likesChip}</>
-    : <>{authorChip}{downloadsChip}{likesChip}</>;
-  const factLine = chipFit === 'facts' ? (
-    <p className="text-xs text-fg-muted">
-      {[
-        entry.author && <span key="a">by <span className="text-fg-2">{entry.author}</span></span>,
-        !!themeStats?.installs && <span key="d"><span className="font-medium text-fg-2">{themeStats.installs.toLocaleString()}</span> downloads</span>,
-        likeCount > 0 && <span key="l"><span className="font-medium text-fg-2">{likeCount.toLocaleString()}</span> {likeCount === 1 ? 'like' : 'likes'}</span>,
-      ].filter(Boolean).reduce<React.ReactNode[]>((out, part, i) => (i ? [...out, ' · ', part] : [part]), [])}
-    </p>
-  ) : undefined;
+  // One chip row that scrolls sideways when it doesn't fit (marketplace-detail-4#M4-2);
+  // the heart is icon-only and its live count is the "N likes" chip (M3-1).
+  const chips = (
+    <>
+      {entry.author && <AuthorBadge author={entry.author} />}
+      {!!themeStats?.installs && <CountChip n={themeStats.installs} word="download" />}
+      {likeCount > 0 && <CountChip n={likeCount} word="like" />}
+    </>
+  );
 
   const identity = (
     <DetailIdentity
       name={entry.name}
-      status={isActive ? <Pill tone="ok">In use</Pill> : installed ? <Pill tone="ok">Installed</Pill> : undefined}
+      // WHY no "Installed" pill on a theme (Destin, marketplace-detail-4#M4-2: "remove th
+      // installed chip"): its Apply theme / Uninstall buttons already say it is installed.
+      // Themes only — plugin pages keep theirs (approved, marketplace-detail-1#MD-2;
+      // decisions S-1 "tinted pill looks good for installed"). The theme in use keeps
+      // "In use", which the buttons do not say.
+      status={isActive ? <Pill tone="ok">In use</Pill> : undefined}
       quickActions={
         <>
           {/* Theme "like" = the public count on the Worker; a heart-only button, its count
@@ -632,9 +624,7 @@ function ThemeDetail({
         </>
       }
       quickActionsOnTitle
-      chipsWrap={chipFit === 'wrap'}
       chips={chips}
-      footer={factLine}
       description={entry.description}
       actions={actions}
     >
