@@ -154,3 +154,7 @@
 /* The one filled button on a setup screen: the name's gradient. */
 .brand-surface .brand-primary { height: 44px; border-radius: 12px; border: 0; color: #FFFFFF; font-weight: 600; background: linear-gradient(100deg, #9D5BD0, #D25AA0); box-shadow: 0 6px 16px -6px rgba(157, 91, 208, 0.6); }
 .brand-surface .brand-primary:hover { filter: brightness(1.05); }
+/* Setup's column: the logo held at a fixed height above the middle (deck first-run-3
+   P3-2), each step's content a fixed gap below it, scrolling only if a step is taller
+   than the window. */
+.brand-stage { min-height: 100%; display: flex; flex-direction: column; align-items: center; gap: 56px; padding: max(40px, 21vh) 16px 40px; }

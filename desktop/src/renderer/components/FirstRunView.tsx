@@ -156,7 +156,8 @@ function SetupStopped({ sentence, detail, busy, onRetry }: { sentence: string; d
     <section className="brand-card w-full p-6 flex flex-col gap-5" role="alert">
       {/* P2-2 (Destin, deck first-run-2): "square exclamation/error icon, directly to the
           left of the setup stopped / git couldn't be installed message". */}
-      <div className="flex items-center gap-4">
+      {/* P3-3: the mark and its two lines centred as one group in the card. */}
+      <div className="flex items-center justify-center gap-4">
         <span className="brand-stop" aria-hidden>
           <svg viewBox="0 0 24 24" width={22} height={22} fill="none" stroke="currentColor" strokeWidth={2.6} strokeLinecap="round"><path d="M12 6v7.5M12 18h.01" /></svg>
         </span>
@@ -358,9 +359,13 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
     // read the brand colours through the same tokens they use everywhere else.
     <div className="brand-surface absolute inset-0 overflow-y-auto">
       {state && <ScreenMark name="first-run" />}
-      <div className="min-h-full flex flex-col items-center justify-center gap-6 px-4 py-10">
-        {/* B-1: the stacked logo replaces the plain "YouCoded" title. */}
-        <BrandLockupRow icon={80} />
+      {/* WHY a fixed top and not centred (deck first-run-3 P3-2, Destin: "the brand stuff
+          can be bigger and sit at a fixed upwards of center position, then the
+          loading/action menus a bit further below it"): centring moved the logo every time
+          a step's content changed height. It now holds one place above the middle on every
+          step, and each step's content starts a fixed distance below it. */}
+      <div className="brand-stage">
+        <BrandLockupRow icon={112} />
 
         {launching ? (
           <CompletionCard />
