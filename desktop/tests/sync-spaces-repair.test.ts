@@ -146,20 +146,22 @@ describe('GitTransport.repair (real git)', () => {
     w.cleanup();
   });
 
-  it('Tier 2: origin/main unreadable too → repo moved aside as .broken-*, fresh init', async () => {
+  it('Tier 2: everything unreadable and GitHub unreachable → repo moved aside as .broken-*, fresh init', async () => {
     const w = makeWorld();
     await w.transport.init(w.space);
     await w.transport.setRemote(w.space, w.bare);
     fs.writeFileSync(path.join(w.root, 'a.md'), 'content-a');
     await w.transport.push(w.space, 'seed');
-    // Zero EVERY loose object: local origin/main's closure is gone → Tier 1
-    // verification fails → Tier 2.
+    // Zero EVERY loose object: no complete save point is left anywhere, and
+    // the remote is unreachable so nothing can be refetched → Tier 2. (With
+    // the remote reachable, Tier 1 now refetches in place instead.)
     const objects = path.join(w.gitDir, 'objects');
     for (const d of fs.readdirSync(objects)) {
       const dir = path.join(objects, d);
       if (!fs.statSync(dir).isDirectory()) continue;
       for (const f of fs.readdirSync(dir)) truncateObject(path.join(dir, f));
     }
+    await w.transport.setRemote(w.space, path.join(w.tmp, 'unreachable.git'));
     const outcome = await w.transport.repair!(w.space);
     const parent = path.join(w.root, '.youcoded');
     const entries = fs.readdirSync(parent);
@@ -186,13 +188,10 @@ describe('GitTransport.repair (real git)', () => {
     w.cleanup();
   });
 
-  // NOTE: this exercises Tier 2 only. The seed push makes HEAD == origin/main,
-  // so truncating HEAD's object also destroys origin/main's closure, which
-  // fails Tier 1's cat-file verification and falls through to Tier 2 every
-  // time. The Tier-1-specific worktree-untouched pin lives in the Tier 1 test
-  // above — Tier 1 is the riskier path (it manipulates refs and deletes the
-  // index in place) and needs its own coverage rather than inheriting this
-  // one by coincidence.
+  // The seed push makes HEAD == origin/main, so truncating HEAD's object
+  // destroys origin/main's closure too; with the remote unreachable that falls
+  // through to Tier 2. The Tier-1 worktree-untouched pin lives in the Tier 1
+  // test above.
   it('worktree files are NEVER touched by repair (Tier 2 path)', async () => {
     const w = makeWorld();
     await w.transport.init(w.space);
@@ -202,9 +201,42 @@ describe('GitTransport.repair (real git)', () => {
     const before = fs.statSync(path.join(w.root, 'precious.md')).mtimeMs;
     const head = execFileSync('git', ['rev-parse', 'HEAD'], { env: w.gitEnv }).toString().trim();
     truncateObject(path.join(w.gitDir, 'objects', head.slice(0, 2), head.slice(2)));
-    await w.transport.repair!(w.space);
+    await w.transport.setRemote(w.space, path.join(w.tmp, 'unreachable.git'));
+    const outcome = await w.transport.repair!(w.space);
+    expect(outcome.tier).toBe(2);
     expect(fs.readFileSync(path.join(w.root, 'precious.md'), 'utf8')).toBe('do not touch');
     expect(fs.statSync(path.join(w.root, 'precious.md')).mtimeMs).toBe(before);
+    w.cleanup();
+  });
+
+  it('a pushed tip emptied by a crash heals in place: steps back one save point, refetches only the gap, restores the exact tip', async () => {
+    const w = makeWorld();
+    await w.transport.init(w.space);
+    await w.transport.setRemote(w.space, w.bare);
+    fs.writeFileSync(path.join(w.root, 'a.md'), 'one');
+    await w.transport.push(w.space, 'first');
+    fs.writeFileSync(path.join(w.root, 'b.md'), 'two');
+    await w.transport.push(w.space, 'second');                       // reached GitHub
+    const tipSha = execFileSync('git', ['rev-parse', 'HEAD'], { env: w.gitEnv }).toString().trim();
+    // The Z13 shape: the newest commit (main AND origin/main) and the file it
+    // added are emptied by the power cut; everything older is intact.
+    const blob = execFileSync('git', ['rev-parse', 'HEAD:b.md'], { env: w.gitEnv }).toString().trim();
+    truncateObject(path.join(w.gitDir, 'objects', tipSha.slice(0, 2), tipSha.slice(2)));
+    truncateObject(path.join(w.gitDir, 'objects', blob.slice(0, 2), blob.slice(2)));
+    fs.writeFileSync(path.join(w.root, 'c.md'), 'after the crash');  // worktree moved on
+
+    const outcome = await w.transport.repair!(w.space);
+    expect(outcome.tier).toBe(1);
+    expect(fs.readdirSync(path.join(w.root, '.youcoded')).some(e => e.startsWith('sync.git.broken-'))).toBe(false);
+    // main is back on the exact commit this device had made — fetched from the remote.
+    expect(execFileSync('git', ['rev-parse', 'refs/heads/main'], { env: w.gitEnv }).toString().trim()).toBe(tipSha);
+    expect(w.logs.some(l => /tier=1 healed/.test(l) && /refetched missing history/.test(l) && /main restored/.test(l))).toBe(true);
+
+    const r = await w.transport.push(w.space, 'healed');
+    expect(r.pushed).toBe(true);
+    const remote = remoteState(w.bare, w.tmp);
+    expect(remote.files).toEqual(['a.md', 'b.md', 'c.md']);
+    // No conflict copies: the merge base was this device's own tip.
     w.cleanup();
   });
 });
