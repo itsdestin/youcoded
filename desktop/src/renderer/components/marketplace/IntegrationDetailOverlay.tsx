@@ -8,7 +8,8 @@
 import React, { useState } from "react";
 import type { IntegrationEntry, IntegrationState } from "../../../shared/types";
 import { platformListDisplay } from "../../../shared/platform-display";
-import { Badge, Button, Callout, Pill, SettingRow } from "../ui";
+import { Button, Callout, Pill, SettingRow } from "../ui";
+import { MetaChip } from "./TrustBadges";
 import type { PillTone } from "../ui/Pill";
 import { DetailActions, DetailIdentity, DetailPage, type DetailSection } from "./DetailPage";
 
@@ -106,14 +107,13 @@ export function IntegrationDetailOverlay({
     sections.push({
       id: 'about',
       label: 'About',
-      summary: item.tagline,
       node: (
         <div className="space-y-3">
           {item.longDescription && <p className="text-sm text-fg-2 whitespace-pre-wrap">{item.longDescription}</p>}
           {(tags.length > 0 || areas.length > 0) && (
             <div className="flex flex-wrap gap-1.5 items-center">
-              {tags.map((t) => <Badge key={`tag-${t}`}>#{t}</Badge>)}
-              {areas.map((a) => <Badge key={`area-${a}`} className="capitalize">{a}</Badge>)}
+              {tags.map((t) => <MetaChip key={`tag-${t}`}>#{t}</MetaChip>)}
+              {areas.map((a) => <MetaChip key={`area-${a}`}>{a.charAt(0).toUpperCase() + a.slice(1)}</MetaChip>)}
             </div>
           )}
         </div>
@@ -126,7 +126,6 @@ export function IntegrationDetailOverlay({
       id: 'setup',
       label: 'Setup',
       side: true,
-      keepOpen: true,
       node: (
         // Setting rows, not a bulleted list: each is one fact with its own title
         // (guide "Settings" → rows use the shared setting row).
@@ -144,7 +143,6 @@ export function IntegrationDetailOverlay({
       onClose={onClose}
       identity={identity}
       sections={sections}
-      moreLabel="More about this integration"
     />
   );
 }

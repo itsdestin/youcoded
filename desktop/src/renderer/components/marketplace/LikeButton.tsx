@@ -21,7 +21,7 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { useAccount } from '../../state/account-context';
 import SignInPromptModal from './SignInPromptModal';
-import { Toast } from '../ui';
+import { Button, Toast } from '../ui';
 
 // ── Local toast state (no global toast context available inside the modal) ────
 //
@@ -41,34 +41,17 @@ function useLocalToast() {
   return { toast, showToast, clearToast: useCallback(() => setToast(null), []) };
 }
 
-// ── Heart SVG icons ───────────────────────────────────────────────────────────
-
-function HeartFilled({ size = 14 }: { size?: number }) {
+// ── Heart icon ────────────────────────────────────────────────────────────────
+// WHY redrawn (marketplace-detail-1#MD-7, Destin: "the heart svg just isn't really a
+// heart"): the old 16-unit path's second arc ended at (15, 4.5) instead of mirroring the
+// first lobe, so the right half was flattened and the point sat off-centre — at 12px it
+// read as a lopsided blob. This is the standard symmetric 24-unit heart (the same drawing
+// as the Feather/Lucide sets), on the same 24 grid and stroke weight as the star and share
+// icons it sits beside. Filled = liked.
+function HeartIcon({ filled, size = 16 }: { filled: boolean; size?: number }) {
   return (
-    <svg
-      aria-hidden="true"
-      width={size}
-      height={size}
-      viewBox="0 0 16 16"
-      fill="currentColor"
-    >
-      <path d="M8 14.25l-.345-.666C3.5 9.402 1 7.16 1 4.5a3.5 3.5 0 0 1 5.5-2.878A3.5 3.5 0 0 1 15 4.5c0 2.66-2.5 4.902-6.655 9.084L8 14.25z" />
-    </svg>
-  );
-}
-
-function HeartOutline({ size = 14 }: { size?: number }) {
-  return (
-    <svg
-      aria-hidden="true"
-      width={size}
-      height={size}
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.25"
-    >
-      <path d="M8 14.25l-.345-.666C3.5 9.402 1 7.16 1 4.5a3.5 3.5 0 0 1 5.5-2.878A3.5 3.5 0 0 1 15 4.5c0 2.66-2.5 4.902-6.655 9.084L8 14.25z" />
+    <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
     </svg>
   );
 }
@@ -179,21 +162,23 @@ export default function LikeButton({ themeId, initialLiked = false, initialCount
 
   return (
     <div className="relative">
-      <button
+      {/* WHY the shared ghost button (guide "Control primitives"): it sits beside the star
+          and share icon buttons, so it is their height and hover; the count is the word-
+          then-number style. Liked is the accent fill like the favourite star — not red
+          text (status hues never colour words; guide principle 2). */}
+      <Button
+        variant="ghost"
+        size="sm"
         onClick={handleClick}
         disabled={inFlight}
         title={title}
         aria-label={liked ? `Unlike (${count})` : `Like (${count})`}
         aria-pressed={liked}
-        className={`flex items-center gap-1 px-1.5 py-0.5 rounded-md text-3xs font-medium transition-colors disabled:opacity-50 ${
-          liked
-            ? 'text-red-400 hover:text-red-300'
-            : 'text-fg-muted hover:text-red-400'
-        }`}
+        className={`h-7 px-1.5 text-xs ${liked ? 'text-accent' : ''}`}
       >
-        {liked ? <HeartFilled size={12} /> : <HeartOutline size={12} />}
-        <span>{count > 0 ? count : ''}</span>
-      </button>
+        <HeartIcon filled={liked} />
+        {count > 0 && <span>{count}</span>}
+      </Button>
 
       {/* Inline toast — shown briefly on non-auth errors only. Auth errors now
           open the SignInPromptModal below instead of using this toast.

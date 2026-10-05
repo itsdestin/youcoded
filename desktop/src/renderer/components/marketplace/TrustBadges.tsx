@@ -142,3 +142,14 @@ export function SourceBadge({ origin, size = 'sm' }: { origin: CatalogMeta['orig
     </span>
   );
 }
+
+/** Any other short fact in a chip row — "412 installs", "👍 93%", "1,240 downloads".
+ *  WHY (marketplace-detail-1#MD-1, Destin: "the chips are different sizes for some reason
+ *  (install is tiny)"): the detail page drew its number chips with the shared `Badge`
+ *  (11px with `leading-none`, so a shorter box) beside these badges (11px at normal line
+ *  height), and the thumbs chip carried its own 12px text inside — three heights in one
+ *  row. Every chip in a row now comes from this one recipe (BADGE), so they cannot drift
+ *  apart again; tests/trust-badges-scan.test.tsx pins that they share it. */
+export function MetaChip({ children, title }: { children: React.ReactNode; title?: string }) {
+  return <span className={BADGE} title={title} data-meta-chip>{children}</span>;
+}

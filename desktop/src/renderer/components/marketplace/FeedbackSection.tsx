@@ -10,7 +10,8 @@ import { useAccount } from '../../state/account-context';
 import { useMarketplaceStats } from '../../state/marketplace-stats-context';
 import { forgetHeldComments, readHeldComments, rememberHeldComment, type HeldComment } from '../../state/held-comments';
 import type { CommentEntry } from '../../state/marketplace-api-client';
-import { Button, FieldError, Textarea } from '../ui';
+import { Button, FieldError, InputGroup } from '../ui';
+import type { FeedbackLook } from '../../workbench-mode';
 import CommentList from './CommentList';
 import SignInPromptModal from './SignInPromptModal';
 
@@ -21,7 +22,7 @@ function heldStorage(): Storage | null {
   try { return typeof localStorage !== 'undefined' ? localStorage : null; } catch { return null; }
 }
 
-function ThumbIcon({ down = false }: { down?: boolean }) {
+export function ThumbIcon({ down = false }: { down?: boolean }) {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={down ? { transform: 'scaleY(-1)' } : undefined} aria-hidden>
       <path d="M7 10v11H4a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1z" />
@@ -80,7 +81,16 @@ export function thumbsLabel(up?: number, down?: number): string | null {
   return d === 0 ? `${people(u)} found this helpful` : `${u} of ${people(total)} found this helpful`;
 }
 
-export default function FeedbackSection({ pluginId, installed }: { pluginId: string; installed: boolean }) {
+export type FeedbackPart = 'all' | 'votes' | 'comments';
+
+export default function FeedbackSection({ pluginId, installed, look = 'together', part = 'all' }: {
+  pluginId: string;
+  installed: boolean;
+  /** Which of the round-2 drafts (workbench-mode.ts `FeedbackLook`). */
+  look?: FeedbackLook;
+  /** `split` draws the votes and the comments as two cards: two instances, each one part. */
+  part?: FeedbackPart;
+}) {
   const stats = useMarketplaceStats();
   const auth = useAccount();
 
@@ -114,7 +124,8 @@ export default function FeedbackSection({ pluginId, installed }: { pluginId: str
   // save" and gets you voting a second time. Skipped when not installed, because
   // then no vote can exist and the round-trip would be pure waste on every open.
   useEffect(() => {
-    if (!auth.signedIn || !installed) { setVote(null); return; }
+    // The comments-only half never shows a vote, so it never asks for one.
+    if (!auth.signedIn || !installed || part === 'comments') { setVote(null); return; }
     let live = true;
     void window.claude.marketplaceApi
       .myThumb(pluginId)
@@ -133,7 +144,7 @@ export default function FeedbackSection({ pluginId, installed }: { pluginId: str
       })
       .catch(() => undefined);   // a failed read just leaves the buttons unlit
     return () => { live = false; };
-  }, [pluginId, auth.signedIn, installed]);
+  }, [pluginId, auth.signedIn, installed, part]);
 
   // Reset per-plugin UI state when the page switches plugins.
   useEffect(() => { setLocalTotals(null); setVoteError(null); setCommentNote(null); }, [pluginId]);
@@ -242,73 +253,89 @@ export default function FeedbackSection({ pluginId, installed }: { pluginId: str
     ? 'Install it first — only people who have used it can vote'
     : !auth.signedIn ? 'Sign in to vote' : undefined;
 
-  return (
-    // WHY no label or box of its own: the detail page puts this inside its "Feedback"
-    // card (DetailPage.tsx) — a group is a small label and then one card (guide
-    // "Spacing" → nothing bare), so a second label here would read as a card in a card.
-    <div data-feedback className="flex flex-col gap-3">
-      {/* Text left, buttons right, on one line when they fit (guide "Buttons" → text and
-          buttons in one box; decisions NB-2). */}
-      <div className="flex items-center justify-between gap-x-3 gap-y-2 flex-wrap">
-        {/* Under MIN_VOTES_FOR_PCT a percentage lies ("Helpful 100%" off one
-            vote) and the count reads "1 votes" — so say it in words instead.
-            At or above it the approved G-19 markup stands unchanged. */}
-        {lowCountLabel
-          ? <span className="text-sm text-fg-2">{lowCountLabel}</span>
-          : summary
-            ? <span className="text-sm text-fg-2">Helpful <span className="text-fg">{summary.pct}%</span> <span className="text-fg-muted">{summary.total.toLocaleString()} votes</span></span>
-            : <span className="text-sm text-fg-dim">No votes yet</span>}
-        {/* Both `secondary sm` — the page's one primary is Install (G-4). */}
-        <div className="flex items-center gap-1.5 ml-auto" role="group" aria-label="Was this helpful?">
-          <Button variant="secondary" size="sm" onClick={() => castVote('up')} disabled={!installed || saving} title={voteReason ?? 'Helpful'} aria-pressed={vote === 'up'} className={vote === 'up' ? 'ring-1 ring-accent' : ''}>
-            <ThumbIcon /> Helpful
-          </Button>
-          <Button variant="secondary" size="sm" onClick={() => castVote('down')} disabled={!installed || saving} title={voteReason ?? 'Not for me'} aria-pressed={vote === 'down'} className={vote === 'down' ? 'ring-1 ring-accent' : ''}>
-            <ThumbIcon down /> Not for me
-          </Button>
-        </div>
+  // The vote line's words: the percentage and the count, or plain words under
+  // MIN_VOTES_FOR_PCT (a percentage of one vote lies — G-19 below that).
+  const voteSummary = lowCountLabel
+    ? <span className="text-fg-2">{lowCountLabel}</span>
+    : summary
+      ? <span className="text-fg-2"><span className="font-medium text-fg">{summary.pct}%</span> found it helpful <span className="text-fg-muted">· {summary.total.toLocaleString()} votes</span></span>
+      : <span className="text-fg-dim">No votes yet</span>;
+
+  const voteButtons = (
+    // Both `secondary sm` — the page's one filled button is Install (G-4).
+    <div className="flex items-center gap-1.5 shrink-0" role="group" aria-label="Was this helpful?">
+      <Button variant="secondary" size="sm" onClick={() => castVote('up')} disabled={!installed || saving} title={voteReason ?? 'Helpful'} aria-pressed={vote === 'up'} className={vote === 'up' ? 'ring-1 ring-accent' : ''}>
+        <ThumbIcon /> Helpful
+      </Button>
+      <Button variant="secondary" size="sm" onClick={() => castVote('down')} disabled={!installed || saving} title={voteReason ?? 'Not for me'} aria-pressed={vote === 'down'} className={vote === 'down' ? 'ring-1 ring-accent' : ''}>
+        <ThumbIcon down /> Not for me
+      </Button>
+    </div>
+  );
+
+  // WHY the reason sits UNDER the words on the left, not under the buttons on the right
+  // (round 2, MD-6: "text kinda all running together"): in round 1 it hung right-aligned
+  // under the buttons and read as a third column. Visible, not a `title` — Android has no
+  // hover and several engines hide title on a disabled button.
+  const reasonLine = voteError
+    ? <FieldError as="p" className="mt-1">{voteError}</FieldError>
+    : voteReason ? <p className="text-xs text-fg-muted mt-0.5">{voteReason}</p> : null;
+
+  // Text left, buttons right, on one line when they fit (guide "Buttons" → text and
+  // buttons in one box; decisions NB-2).
+  const votes = look === 'question' ? (
+    <div className="flex items-center justify-between gap-x-3 gap-y-2 flex-wrap">
+      <div className="min-w-0">
+        <p className="text-sm font-medium text-fg">Did it help you?</p>
+        <p className="text-xs text-fg-muted">{voteSummary}</p>
+        {reasonLine}
       </div>
-      {/* Visible, not a `title`: Android runs this same bundle and has no
-          hover, and several engines suppress title on a disabled button
-          entirely — so the tooltip was the only explanation and nobody
-          could reach it. */}
-      {/* WHY plain/FieldError (guide: no coloured body text for
-          messages) — `text-danger` was also a dead class here (no
-          --color-danger token exists). */}
-      {(voteError || voteReason) && (
-        voteError
-          ? <FieldError as="p">{voteError}</FieldError>
-          : <p className="text-xs text-fg-muted -mt-1 text-right">{voteReason}</p>
-      )}
+      {voteButtons}
+    </div>
+  ) : (
+    <div className="flex items-center justify-between gap-x-3 gap-y-2 flex-wrap">
+      <div className="min-w-0 text-sm">
+        {voteSummary}
+        {reasonLine}
+      </div>
+      {voteButtons}
+    </div>
+  );
 
+  const comments = (
+    <div className="flex flex-col gap-3">
       <CommentList pluginId={pluginId} refreshKey={refresh} held={heldRows} onHeldListed={onHeldListed} />
-
-      {/* Composer — anyone signed in can ask a question or report how it went;
-          you do NOT need to have installed it to ask. */}
-      <div className="flex flex-col gap-2">
-        <Textarea
+      {/* WHY the action INSIDE the box, small and filled (guide "Buttons": a text box with
+          its own action keeps it inside, at the right — like the message box; decisions
+          G-8, P-5). Round 1 kept a two-line box with an outlined button under it — two
+          boxes and a button for one job (MD-6: "cluttered buttons/boxes"). Enter posts. */}
+      <InputGroup>
+        <InputGroup.Field
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          rows={2}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); post(); } }}
           placeholder={auth.signedIn ? 'Ask a question or say how it went…' : 'Sign in to comment'}
           aria-label="Write a comment"
         />
-        <div className="flex items-center justify-end gap-2">
-          {/* WHY plain/FieldError (guide: no coloured body text for
-              messages) — `text-danger` was also a dead class (no
-              --color-danger token exists), so the error case rendered with
-              no colour at all either way. */}
-          {commentNote && (
-            commentNote.kind === 'error'
-              ? <FieldError as="p">{commentNote.text}</FieldError>
-              : <p className="text-xs text-fg-muted" role="status">{commentNote.text}</p>
-          )}
-          <Button variant="secondary" size="sm" onClick={post} disabled={posting || draft.trim().length === 0} title={!auth.signedIn ? 'Sign in to comment' : undefined}>
-            {posting ? 'Posting…' : 'Post comment'}
-          </Button>
-        </div>
-      </div>
+        <Button size="sm" aria-label="Post comment" onClick={post} disabled={posting || draft.trim().length === 0} title={!auth.signedIn ? 'Sign in to comment' : undefined}>
+          {posting ? 'Posting…' : 'Post'}
+        </Button>
+      </InputGroup>
+      {commentNote && (
+        commentNote.kind === 'error'
+          ? <FieldError as="p">{commentNote.text}</FieldError>
+          : <p className="text-xs text-fg-muted" role="status">{commentNote.text}</p>
+      )}
+    </div>
+  );
 
+  return (
+    // WHY no label or card of its own: the detail page puts this inside its "Feedback"
+    // (and, split, "Comments") card — a group is a small label then one card (guide
+    // "Spacing" → nothing bare), so a second label here would read as a card in a card.
+    <div data-feedback={part} className="flex flex-col gap-4">
+      {part !== 'comments' && votes}
+      {part !== 'votes' && comments}
       <SignInPromptModal
         open={signIn !== null}
         onClose={() => setSignIn(null)}

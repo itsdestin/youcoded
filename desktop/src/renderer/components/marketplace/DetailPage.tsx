@@ -16,12 +16,12 @@
 //     decisions U-1, G-9), its quick actions at the top right (guide "Cards");
 //   - every other group is a small label and then a card (guide "Spacing" →
 //     "Nothing sits bare", "A label comes first"; decisions NB-1…3).
-// How those groups are ARRANGED is the one thing the guide leaves open, so it is
-// a switch (`workbenchDetailLayout`, workbench-only) until Destin picks.
+// How the groups are ARRANGED was the one thing the guide left open; Destin picked two
+// columns (marketplace-detail-1#MD-1): the reading on the left, the short facts on the
+// right, one column at phone width. The one-column and folded drafts were removed.
 import React from 'react';
-import { CARD_LEVEL_1, Dialog, FoldRow, SectionLabel } from '../ui';
+import { CARD_LEVEL_1, Dialog, SectionLabel } from '../ui';
 import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
-import { workbenchDetailLayout } from '../../workbench-mode';
 import './DetailPage.css';
 
 export type DetailSection = {
@@ -29,15 +29,14 @@ export type DetailSection = {
   /** The small label above the section's card (sentence case, never repeats the title). */
   label: string;
   node: React.ReactNode;
-  /** Short facts rather than reading: sits in the right-hand column of the wide layout. */
+  /** Short facts rather than reading: sits in the right-hand column. */
   side?: boolean;
-  /** Stays open in the folded layout (what an item can do is read BEFORE installing —
-   *  marketplace overhaul decision #3). */
-  keepOpen?: boolean;
-  /** One line under the fold-out row's title in the folded layout, so a closed row
-   *  still says what is inside it. */
-  summary?: React.ReactNode;
 };
+
+/** True inside the narrow right-hand column: buttons there stack full width, as in any
+ *  narrow space (guide "Buttons": stacked when narrow; decisions BP-1) — the column is
+ *  about 250px, narrower than the guide's 420px "narrow popup". */
+const NarrowColumn = React.createContext(false);
 
 /** A labelled group: the small label, then one first-level card holding it. */
 function LabelledCard({ section }: { section: DetailSection }) {
@@ -50,7 +49,7 @@ function LabelledCard({ section }: { section: DetailSection }) {
 }
 
 export function DetailPage({
-  title, screen, onClose, identity, sections, moreLabel,
+  title, screen, onClose, identity, sections, hero, identitySide = false,
 }: {
   /** The popup's own title, e.g. "Plugin details". */
   title: string;
@@ -60,59 +59,44 @@ export function DetailPage({
   /** The top card about the item (see DetailIdentity). */
   identity: React.ReactNode;
   sections: DetailSection[];
-  /** Label over the fold-out card in the folded layout, e.g. "More about this plugin". */
-  moreLabel: string;
+  /** Something shown first, full width, above everything (a theme's preview picture). */
+  hero?: React.ReactNode;
+  /** Put the top card at the head of the right-hand column instead of across the top. */
+  identitySide?: boolean;
 }) {
-  const layout = workbenchDetailLayout();
   const narrow = useNarrowViewport();
-  // WHY document (600px) for the one-column layouts: it is the shared popup's width for
-  // long reading (Dialog.tsx, DIALOG_WIDTHS), and these pages are mostly reading. The
-  // two-column layout needs the two-pane `wide` size to fit a facts column beside it.
-  const size = layout === 'columns' ? 'wide' : 'document';
+  const main = sections.filter((s) => !s.side);
+  const side = sections.filter((s) => s.side);
+  const sideItems = [
+    ...(identitySide ? [<NarrowColumn.Provider key="identity" value>{identity}</NarrowColumn.Provider>] : []),
+    ...side.map((s) => <LabelledCard key={s.id} section={s} />),
+  ];
+  const mainItems = main.map((s) => <LabelledCard key={s.id} section={s} />);
 
   let body: React.ReactNode;
-  if (layout === 'columns' && !narrow) {
-    const main = sections.filter((s) => !s.side);
-    const side = sections.filter((s) => s.side);
+  if (narrow) {
+    // Phone width: one column, the top card first, then the reading, then the facts.
+    body = <>{identitySide && identity}{mainItems}{side.map((s) => <LabelledCard key={s.id} section={s} />)}</>;
+  } else if (sideItems.length === 0 || mainItems.length === 0) {
+    // Nothing to put beside it (a theme with only its preview): one column, full width.
+    body = <>{identitySide && identity}{mainItems}{side.map((s) => <LabelledCard key={s.id} section={s} />)}</>;
+  } else {
     body = (
       // WHY a 2:1 grid and not a fixed side width: the guide keeps exact sizes in the
       // shared pieces, and a ratio reflows with the window instead of needing a number.
       <div className="grid grid-cols-3 gap-4 items-start">
-        <div className="col-span-2 space-y-4 min-w-0">{main.map((s) => <LabelledCard key={s.id} section={s} />)}</div>
-        <div className="col-span-1 space-y-4 min-w-0">{side.map((s) => <LabelledCard key={s.id} section={s} />)}</div>
+        <div className="col-span-2 space-y-4 min-w-0">{mainItems}</div>
+        <div className="col-span-1 space-y-4 min-w-0">{sideItems}</div>
       </div>
     );
-  } else if (layout === 'folded') {
-    const open = sections.filter((s) => s.keepOpen);
-    const folded = sections.filter((s) => !s.keepOpen);
-    body = (
-      <>
-        {open.map((s) => <LabelledCard key={s.id} section={s} />)}
-        {folded.length > 0 && (
-          // WHY fold-out rows inside ONE labelled card: About → Privacy's approved recipe
-          // (decisions "Nothing bare — … About": "each text section into a card, some
-          // collapsible, easier to navigate and more concise"; guide "Settings" → one
-          // fold-out style everywhere).
-          <section data-detail-section="more">
-            <SectionLabel className="mb-2">{moreLabel}</SectionLabel>
-            <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
-              {folded.map((s) => (
-                <FoldRow key={s.id} title={s.label} description={s.summary}>
-                  <div className="px-1 pb-1">{s.node}</div>
-                </FoldRow>
-              ))}
-            </div>
-          </section>
-        )}
-      </>
-    );
-  } else {
-    body = sections.map((s) => <LabelledCard key={s.id} section={s} />);
   }
 
   return (
-    <Dialog open onClose={onClose} title={title} size={size} screen={screen}>
-      {identity}
+    // WHY `wide`: the two-pane popup size (Dialog.tsx) — the only shared width with room
+    // for a facts column beside the reading.
+    <Dialog open onClose={onClose} title={title} size="wide" screen={screen}>
+      {hero}
+      {!identitySide && identity}
       {body}
     </Dialog>
   );
@@ -176,7 +160,10 @@ export function DetailIdentity({
  * filled (main) action LAST.
  */
 export function DetailActions({ children }: { children: React.ReactNode }) {
-  const narrow = useNarrowViewport();
+  // Both hooks always run (never short-circuit a hook call).
+  const phone = useNarrowViewport();
+  const inColumn = React.useContext(NarrowColumn);
+  const narrow = phone || inColumn;
   const items = React.Children.toArray(children).filter(Boolean);
   if (items.length === 0) return null;
   const stacked = narrow || items.length === 1;

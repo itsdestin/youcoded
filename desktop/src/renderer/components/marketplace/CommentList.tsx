@@ -44,10 +44,11 @@ function CommentRow({ c, pluginId, held = false }: { c: CommentEntry; pluginId: 
   const [avatarFailed, setAvatarFailed] = React.useState(false);
   const when = relativeDate(c.created_at);
   return (
-    // WHY each comment its own nested box, not rows split by full-width lines: a line never
-    // crosses a card (guide "Card levels"; decisions "Card levels (the Settings rule)"), and
-    // everything boxed inside a first-level card takes the one nested look (CARD_LEVEL_2).
-    <div className={`${CARD_LEVEL_2} flex flex-col gap-1 p-3${held ? ' opacity-80' : ''}`} data-comment data-held={held || undefined}>
+    // WHY plain rows in ONE shared box (round 2, MD-6: "cluttered buttons/boxes"): round 1
+    // boxed every comment, so a thread was a stack of boxes inside a card. The guide's list
+    // recipe is plain rows inside one shared box, separated by space, never by lines (guide
+    // "Card levels": lists of short items in one box; no full-width lines).
+    <div className={`flex flex-col gap-1${held ? ' opacity-80' : ''}`} data-comment data-held={held || undefined}>
       <div className="flex items-center gap-2">
         {c.user_avatar_url && !avatarFailed ? (
           <img src={c.user_avatar_url} alt={c.user_login} onError={() => setAvatarFailed(true)} className="w-6 h-6 rounded-full shrink-0 object-cover" />
@@ -126,12 +127,12 @@ export default function CommentList({ pluginId, refreshKey = 0, held = [], onHel
       {state.status === 'loading' && <LoadingState variant="inline" what="comments" />}
       {/* "No comments yet" would be a lie above the author's own held comment. */}
       {state.status === 'empty' && heldRows.length === 0 && <EmptyState variant="inline" message="No comments yet — ask a question or say how it went." />}
-      {state.status === 'empty' && heldRows.length > 0 && <div className="flex flex-col gap-2">{heldRows}</div>}
+      {state.status === 'empty' && heldRows.length > 0 && <div className={`${CARD_LEVEL_2} p-3 flex flex-col gap-4`}>{heldRows}</div>}
       {/* WHY FieldError (guide: no red/coloured body text for messages) */}
       {state.status === 'error' && <FieldError as="p">Couldn't load comments.</FieldError>}
       {state.status === 'loaded' && (
-        // 8px between neighbouring boxes (decisions "Popup spacing", SP-5).
-        <div className="flex flex-col gap-2">
+        // 16px between comments: separate items in one list, spaced, never ruled.
+        <div className={`${CARD_LEVEL_2} p-3 flex flex-col gap-4`}>
           {heldRows}
           {state.comments.map((c) => <CommentRow key={c.id} c={c} pluginId={pluginId} />)}
           {/* The Worker caps the list at the 50 most recent and, since 2026-09-01,

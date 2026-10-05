@@ -23,13 +23,14 @@ export const MARKETPLACE: readonly ScreenEntry[] = [
   { ...mp('marketplace/detail#phone', 'dialog', 'narrow'), viewport: { width: 390, height: 844 } },
   { ...mp('marketplace/theme-detail#phone', 'dialog', 'narrow'), viewport: { width: 390, height: 844 } },
   { ...mp('marketplace/detail#small', 'dialog'), viewport: { width: 640, height: 480 } },
-  // The two other arrangements of the same page (workbench-mode.ts `workbenchDetailLayout`),
-  // for Destin to pick between; without the switch the page is the one-column `stack`.
-  { ...mp('marketplace/detail#columns', 'dialog'), params: { detailLayout: 'columns' } },
-  { ...mp('marketplace/detail#folded', 'dialog'), params: { detailLayout: 'folded' } },
-  { ...mp('marketplace/detail/bundle#columns', 'dialog'), params: { detailLayout: 'columns' } },
-  { ...mp('marketplace/detail/bundle#folded', 'dialog'), params: { detailLayout: 'folded' } },
-  { ...mp('marketplace/integration-detail#columns', 'dialog'), params: { detailLayout: 'columns' } },
+  // Round 2 drafts still to pick between (workbench-mode.ts): the Feedback card's other two
+  // looks (the plain screen shows `together`), and the theme page's other two arrangements.
+  { ...mp('marketplace/detail/member#feedback-split', 'dialog'), params: { feedbackLook: 'split' } },
+  { ...mp('marketplace/detail/member#feedback-question', 'dialog'), params: { feedbackLook: 'question' } },
+  { ...mp('marketplace/theme-detail#hero', 'dialog'), params: { themeLayout: 'hero' } },
+  { ...mp('marketplace/theme-detail#side', 'dialog'), params: { themeLayout: 'side' } },
+  { ...mp('marketplace/theme-detail/not-installed#hero', 'dialog'), params: { themeLayout: 'hero' } },
+  { ...mp('marketplace/theme-detail/not-installed#side', 'dialog'), params: { themeLayout: 'side' } },
   // Share/publish sheets — App.tsx owns their id state; both open on the same
   // fixture items marketplace/detail and marketplace/theme-detail use.
   mp('marketplace/share', 'dialog'),

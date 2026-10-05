@@ -11,7 +11,7 @@ import React from 'react';
 import '@testing-library/jest-dom/vitest';
 import { describe, it, expect, afterEach } from 'vitest';
 import { render, cleanup, screen } from '@testing-library/react';
-import { ScanBadge, scanExplainer, SCAN_LABEL, SourceBadge, sourceLabel, sourceExplainer } from '../src/renderer/components/marketplace/TrustBadges';
+import { AuthorBadge, MetaChip, ScanBadge, scanExplainer, SCAN_LABEL, SourceBadge, sourceLabel, sourceExplainer } from '../src/renderer/components/marketplace/TrustBadges';
 import type { CatalogMeta } from '../src/shared/catalog-types';
 
 afterEach(cleanup);
@@ -100,5 +100,21 @@ describe('SourceBadge — names the list, never a vetting', () => {
 
   it('falls back to a readable name for an upstream we have not mapped', () => {
     expect(sourceLabel(origin('community', 'SomeOwner/some-new-list'))).toBe('some-new-list');
+  });
+});
+
+// A detail page's chip row is ONE size (Destin, reviewing the detail pages: "the chips are
+// different sizes for some reason (install is tiny)"). The row mixed three chip recipes —
+// these badges, the shared Badge (same font size but a tighter line, so a shorter box) and
+// a thumbs summary carrying its own larger text — and nothing compared them. Pinned here as
+// the cause, not a pixel: every fact chip renders with the badges' own box.
+describe('fact chips share the badge box', () => {
+  it('renders MetaChip, the scan, source and author badges with one box', () => {
+    const cls = (ui: React.ReactElement) => (render(ui).container.firstElementChild as HTMLElement).className;
+    const meta = cls(<MetaChip>412 installs</MetaChip>);
+    expect(cls(<ScanBadge scan={{ status: 'checked' }} />)).toBe(meta);
+    expect(cls(<SourceBadge origin={{ tier: 'youcoded' }} />)).toBe(meta);
+    // The author chip adds only its truncation limits on top of the same box.
+    expect(cls(<AuthorBadge author="someone" />).startsWith(meta)).toBe(true);
   });
 });

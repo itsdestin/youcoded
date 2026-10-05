@@ -18,18 +18,18 @@ import type { ThemeRegistryEntryWithStatus } from "../../../shared/theme-marketp
 import LikeButton from "./LikeButton";
 // Marketplace overhaul (2026-08-27): trust chips, "What this can do", and the
 // Feedback section (thumbs + comments) replace star reviews.
-import { SourceBadge, ScanBadge, AuthorBadge } from "./TrustBadges";
+import { SourceBadge, ScanBadge, AuthorBadge, MetaChip } from "./TrustBadges";
 import { CapabilityList } from "./CapabilityList";
-import FeedbackSection, { ThumbsSummary, thumbsLabel, thumbsSummary } from "./FeedbackSection";
+import FeedbackSection, { MIN_VOTES_FOR_PCT, ThumbIcon, thumbsSummary } from "./FeedbackSection";
 import { CATALOG_TYPE_LABEL, isInstallableSource } from "../../../shared/catalog-types";
 import FileViewerOverlay, { type FileViewerTarget } from "./FileViewerOverlay";
 // Task 1: an installed item with an update available needs a way to take it.
 import UpdateButton from "./UpdateButton";
-import { Badge, Button, Callout, CARD_LEVEL_1, Pill, SettingRow } from "../ui";
+import { Button, Callout, CARD_LEVEL_1, Pill, SettingRow } from "../ui";
 // Task 3: `longDescription` is markdown and used to be printed verbatim.
 import MarkdownContent from "../MarkdownContent";
-import { plural } from "../../../shared/plural";
 import { DetailActions, DetailIdentity, DetailPage, type DetailSection } from "./DetailPage";
+import { workbenchFeedbackLook, workbenchThemePageLayout } from "../../workbench-mode";
 
 export type DetailTarget =
   | { kind: "skill"; id: string }
@@ -141,7 +141,6 @@ function NotFound({ what, onClose }: { what: "plugin" | "theme"; onClose(): void
       onClose={onClose}
       identity={<div className={`${CARD_LEVEL_1} p-4 text-sm text-fg-2`}>This {what} is not in the Marketplace list right now.</div>}
       sections={[]}
-      moreLabel=""
     />
   );
 }
@@ -228,13 +227,29 @@ function InstallFailed({ message, onRetry }: { message: string; onRetry(): void 
   );
 }
 
-/** A number chip: bold number, grey word — "412 installs" (guide "Text and numbers"). */
+/** A number chip: bold number, grey word — "412 installs" (guide "Text and numbers"). Same
+ *  chip recipe as the trust badges beside it (MetaChip — round 2, MD-1 "install is tiny"). */
 function CountChip({ n, word }: { n: number; word: string }) {
   return (
-    <Badge>
+    <MetaChip>
       <span className="font-medium text-fg">{n.toLocaleString()}</span>
-      <span className="ml-1">{n === 1 ? word : `${word}s`}</span>
-    </Badge>
+      {n === 1 ? word : `${word}s`}
+    </MetaChip>
+  );
+}
+
+/** "👍 93%" — or the raw count under MIN_VOTES_FOR_PCT, where a percentage would lie. Drawn
+ *  inside MetaChip rather than reusing the card's ThumbsSummary, whose own 12px text made
+ *  this chip taller than its neighbours in round 1. */
+function ThumbsChip({ up, down }: { up?: number; down?: number }) {
+  const s = thumbsSummary(up, down);
+  if (!s) return null;
+  const low = s.total < MIN_VOTES_FOR_PCT;
+  return (
+    <MetaChip title={low ? `${s.up} of ${s.total} found it helpful` : `${s.pct}% of ${s.total.toLocaleString()} people found it helpful`}>
+      <span className="inline-flex text-fg-dim"><ThumbIcon /></span>
+      {low ? s.up : `${s.pct}%`}
+    </MetaChip>
   );
 }
 
@@ -324,9 +339,7 @@ function SkillDetail({
           {catalog && <SourceBadge origin={catalog.origin} />}
           {entry.author && <AuthorBadge author={entry.author} />}
           {!!stats?.installs && <CountChip n={stats.installs} word="install" />}
-          {stats && thumbsSummary(stats.thumbs_up, stats.thumbs_down) && (
-            <Badge><ThumbsSummary up={stats.thumbs_up} down={stats.thumbs_down} /></Badge>
-          )}
+          {stats && <ThumbsChip up={stats.thumbs_up} down={stats.thumbs_down} />}
         </>
       }
       description={entry.tagline}
@@ -357,11 +370,10 @@ function SkillDetail({
   const sections: DetailSection[] = [];
   // Overhaul (decision #3): what it does to your machine, in plain words, BEFORE the
   // description — read it, then decide. So it stays open in every layout.
-  if (catalog) sections.push({ id: "can-do", label: "What this can do", node: <CapabilityList catalog={catalog} />, side: true, keepOpen: true });
+  if (catalog) sections.push({ id: "can-do", label: "What this can do", node: <CapabilityList catalog={catalog} />, side: true });
   sections.push({
     id: "about",
     label: "About",
-    summary: entry.description,
     node: (
       <div className="space-y-3">
         {entry.longDescription ? (
@@ -375,12 +387,10 @@ function SkillDetail({
       </div>
     ),
   });
-  const inside = componentGroups(entry.components);
-  if (inside) {
+  if (hasComponents(entry.components)) {
     sections.push({
       id: "inside",
       label: "What's inside",
-      summary: inside.summary,
       node: (
         <ComponentsList
           components={entry.components!}
@@ -396,15 +406,17 @@ function SkillDetail({
       ),
     });
   }
-  // Overhaul (decision #4): thumbs + comments replace star reviews.
-  sections.push({
-    id: "feedback",
-    label: "Feedback",
-    summary: feedbackSummary(stats?.thumbs_up, stats?.thumbs_down),
-    node: <FeedbackSection pluginId={entry.id} installed={installed} />,
-  });
+  // Overhaul (decision #4): thumbs + comments replace star reviews. Round 2 (MD-6) tries
+  // three looks for this card; `split` makes it two labelled cards (workbench-mode.ts).
+  const look = workbenchFeedbackLook();
+  if (look === 'split') {
+    sections.push({ id: "feedback", label: "Feedback", node: <FeedbackSection pluginId={entry.id} installed={installed} look={look} part="votes" /> });
+    sections.push({ id: "comments", label: "Comments", node: <FeedbackSection pluginId={entry.id} installed={installed} look={look} part="comments" /> });
+  } else {
+    sections.push({ id: "feedback", label: "Feedback", node: <FeedbackSection pluginId={entry.id} installed={installed} look={look} /> });
+  }
   if (entry.repoUrl || catalog) {
-    sections.push({ id: "source", label: "Source", side: true, summary: catalog?.license ? `${catalog.license} licence` : undefined, node: <SourceRows entry={entry} /> });
+    sections.push({ id: "source", label: "Source", side: true, node: <SourceRows entry={entry} /> });
   }
 
   return (
@@ -415,49 +427,36 @@ function SkillDetail({
         onClose={onClose}
         identity={identity}
         sections={sections}
-        moreLabel={`More about this ${kindWord}`}
       />
       {fileTarget && <FileViewerOverlay target={fileTarget} onClose={() => setFileTarget(null)} />}
     </>
   );
 }
 
-function feedbackSummary(up?: number, down?: number): string {
-  const low = thumbsLabel(up, down);
-  if (low) return low;
-  const s = thumbsSummary(up, down);
-  return s ? `${s.pct}% found it helpful` : "No votes yet";
-}
-
 /** Topics, life areas and audience — neutral chips at the foot of the About card (they
  *  describe the item, so they live inside the card that describes it — guide "Card
- *  levels"). Badge, not a hand-typed pill: the shared static chip. */
+ *  levels"). The same chip as the top card's row (MetaChip), so every chip is one size. */
 function TopicChips({ entry }: { entry: SkillEntry }) {
   const tags = entry.tags || [];
   const lifeAreas = entry.lifeArea || [];
   if (!tags.length && !lifeAreas.length && !entry.audience) return null;
   return (
     <div className="flex flex-wrap gap-1.5 items-center">
-      {tags.map((t) => <Badge key={`tag-${t}`}>#{t}</Badge>)}
-      {lifeAreas.map((a) => <Badge key={`area-${a}`} className="capitalize">{a}</Badge>)}
-      {entry.audience && <Badge>{entry.audience === "developer" ? "For developers" : "For everyone"}</Badge>}
+      {tags.map((t) => <MetaChip key={`tag-${t}`}>#{t}</MetaChip>)}
+      {lifeAreas.map((a) => <MetaChip key={`area-${a}`}>{a.charAt(0).toUpperCase() + a.slice(1)}</MetaChip>)}
+      {entry.audience && <MetaChip>{entry.audience === "developer" ? "For developers" : "For everyone"}</MetaChip>}
     </div>
   );
 }
 
 type OpenableKind = "skill" | "command" | "agent";
 
-function componentGroups(c: SkillComponents | null | undefined): { summary: string } | null {
+function hasComponents(c: SkillComponents | null | undefined): boolean {
   // `null` = extraction failed — hide entirely (don't alarm the user). `undefined` =
   // pre-Phase-1 cached entry; same. Empty object = the plugin genuinely has nothing.
-  if (!c) return null;
-  const parts: string[] = [];
-  if (c.skills.length) parts.push(plural(c.skills.length, "skill"));
-  if (c.commands.length) parts.push(plural(c.commands.length, "command"));
-  if (c.agents.length) parts.push(plural(c.agents.length, "specialist"));
-  if (c.hooks.length || c.hasHooksManifest) parts.push("hooks");
-  if (c.mcpServers.length || c.hasMcpConfig) parts.push("connections");
-  return parts.length ? { summary: parts.join(" · ") } : null;
+  if (!c) return false;
+  return !!(c.skills.length || c.commands.length || c.agents.length || c.hooks.length
+    || c.hasHooksManifest || c.mcpServers.length || c.hasMcpConfig);
 }
 
 /** "What's inside" — one group per kind, each a list of rows that open the member's own
@@ -526,6 +525,9 @@ function SourceRows({ entry }: { entry: SkillEntry }) {
           variant="item"
           title="Source code"
           description={entry.repoUrl.replace(/^https?:\/\//, "")}
+          // A long address has no spaces to wrap at, so let it break anywhere rather than
+          // run under the Open button (seen in the side column, round 2).
+          descriptionClassName="text-fg-muted break-all"
           control={<Button variant="secondary" size="sm" onClick={() => window.open(entry.repoUrl, '_blank', 'noopener')}>Open</Button>}
         />
       )}
@@ -534,7 +536,7 @@ function SourceRows({ entry }: { entry: SkillEntry }) {
         <SettingRow
           variant="item"
           title="Checked version"
-          description="Pinned to this exact upstream version; the author can't swap the files after it was checked."
+          description="The files we checked are pinned to this version."
           value={catalog.sourceCommit}
         />
       )}
@@ -619,30 +621,34 @@ function ThemeDetail({
     </DetailIdentity>
   );
 
+  // PNG preview (uploaded on publish) — the real rendered screen; the colour swatches are a
+  // supplement for themes whose picture hasn't been regenerated.
+  const picture = entry.preview
+    ? <img src={entry.preview} alt={`${entry.name} preview`} loading="lazy" className="w-full rounded-md border border-edge-card" />
+    : null;
+  const swatches = entry.previewTokens ? (
+    <div className="flex gap-2 flex-wrap" aria-label="Theme colours">
+      {Object.entries(entry.previewTokens).map(([name, color]) => (
+        <span key={name} title={name} className="inline-block w-8 h-8 rounded-md border border-edge-card" style={{ background: color as string }} />
+      ))}
+    </div>
+  ) : null;
+
+  // Round 2 (MD-7/MD-8: "i'd like 1-2 more attempts/alternatives for this page"): three
+  // arrangements of the same pieces, picked in the workbench (workbench-mode.ts).
+  const layout = workbenchThemePageLayout();
   const sections: DetailSection[] = [];
-  // PNG preview (uploaded on publish) first, so the user sees the real rendered screen;
-  // the colour swatches sit under it in the same card as a supplement for themes whose
-  // picture hasn't been regenerated.
-  if (entry.preview || entry.previewTokens) {
-    sections.push({
-      id: "preview",
-      label: "Preview",
-      keepOpen: true,
-      node: (
-        <div className="space-y-3">
-          {entry.preview && (
-            <img src={entry.preview} alt={`${entry.name} preview`} loading="lazy" className="w-full rounded-md border border-edge-card" />
-          )}
-          {entry.previewTokens && (
-            <div className="flex gap-2 flex-wrap" aria-label="Theme colours">
-              {Object.entries(entry.previewTokens).map(([name, color]) => (
-                <span key={name} title={name} className="inline-block w-8 h-8 rounded-md border border-edge-card" style={{ background: color as string }} />
-              ))}
-            </div>
-          )}
-        </div>
-      ),
-    });
+  let hero: React.ReactNode = undefined;
+  if (layout === 'hero') {
+    // The picture first, full width, in its own card with no label: it IS the subject —
+    // the same exception as the top card (no label could say more than the title).
+    if (picture) hero = <div className={`${CARD_LEVEL_1} p-2`} data-theme-hero>{picture}</div>;
+    if (swatches) sections.push({ id: "colours", label: "Colours", node: swatches });
+  } else if (layout === 'side') {
+    if (picture) sections.push({ id: "preview", label: "Preview", node: picture });
+    if (swatches) sections.push({ id: "colours", label: "Colours", side: true, node: swatches });
+  } else if (picture || swatches) {
+    sections.push({ id: "preview", label: "Preview", node: <div className="space-y-3">{picture}{swatches}</div> });
   }
 
   return (
@@ -652,7 +658,8 @@ function ThemeDetail({
       onClose={onClose}
       identity={identity}
       sections={sections}
-      moreLabel="More about this theme"
+      hero={hero}
+      identitySide={layout === 'side'}
     />
   );
 }

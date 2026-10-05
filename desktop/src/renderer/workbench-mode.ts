@@ -166,25 +166,36 @@ export function workbenchChromeStyle(): ChromeStyleOverride | null {
     : null;
 }
 
-/** Marketplace detail-page layouts for the 2026-10-04 redesign review
- *  (redesign-backlog row 9: "rethink how we show these pages"). The design guide
- *  fixes the pieces (popup, labelled cards, notices, buttons) but not how a page
- *  with this much information is arranged, so three arrangements are built from
- *  the same pieces and Destin picks one:
+/** Marketplace detail pages, round 2 (2026-10-05, marketplace-detail-1 answers). The page
+ *  arrangement is decided (Destin picked the two-column layout, MD-1); two parts are still
+ *  being chosen, so each is a workbench-only switch until he picks:
  *
- *  - `stack`   one column, every section a labelled card, all open (Settings / Account)
- *  - `columns` a wider popup: the reading on the left, the short facts on the right
- *  - `folded`  one column; what it can do stays open, the rest are fold-out rows
- *              inside one card (About → Privacy's recipe)
+ *  Feedback card (MD-6: "text kinda all running together, cluttered buttons/boxes"):
+ *  - `together`  one card: the vote line, then every comment in ONE shared box, then the box
+ *                to write in with Post inside it
+ *  - `split`     two labelled cards: "Feedback" holds only the vote line, "Comments" the rest
+ *  - `question`  one card that opens on the question "Did it help you?" with its two buttons
  *
- *  `stack` is what SHIPS until he picks; this switch only changes the workbench and
- *  the photo-only build, so a typo renders the shipped page rather than a blank one. */
-export type DetailLayout = 'stack' | 'columns' | 'folded';
+ *  Theme page (MD-7/MD-8: "i'd like 1-2 more attempts/alternatives for this page"):
+ *  - `card`      round 1's page: top card, then the Preview card
+ *  - `hero`      the preview picture first, full width, the top card under it
+ *  - `side`      the preview large on the left; the top card and the colours on the right
+ *
+ *  The first value of each is what SHIPS until he picks; outside the workbench and the
+ *  photo-only build these always return it, so a typo renders the shipped page. */
+export type FeedbackLook = 'together' | 'split' | 'question';
+export type ThemePageLayout = 'card' | 'hero' | 'side';
 
-const DETAIL_LAYOUTS: ReadonlyArray<DetailLayout> = ['stack', 'columns', 'folded'];
+function workbenchChoice<T extends string>(param: string, values: readonly T[]): T {
+  if (!isWorkbenchMode()) return values[0];
+  const raw = new URLSearchParams(location.search).get(param) ?? values[0];
+  return (values as readonly string[]).includes(raw) ? (raw as T) : values[0];
+}
 
-export function workbenchDetailLayout(): DetailLayout {
-  if (!isWorkbenchMode()) return 'stack';
-  const raw = new URLSearchParams(location.search).get('detailLayout') ?? 'stack';
-  return (DETAIL_LAYOUTS as readonly string[]).includes(raw) ? (raw as DetailLayout) : 'stack';
+export function workbenchFeedbackLook(): FeedbackLook {
+  return workbenchChoice<FeedbackLook>('feedbackLook', ['together', 'split', 'question']);
+}
+
+export function workbenchThemePageLayout(): ThemePageLayout {
+  return workbenchChoice<ThemePageLayout>('themeLayout', ['card', 'hero', 'side']);
 }

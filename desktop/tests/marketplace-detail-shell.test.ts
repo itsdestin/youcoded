@@ -13,8 +13,8 @@ describe('Marketplace Details outer shell', () => {
   // pins that both pages go through the one shell, without pinning any measurement.
   it('builds every detail page on the shared popup', () => {
     const shell = readSource(join(components, 'DetailPage.tsx'));
-    expect(shell).toContain("import { CARD_LEVEL_1, Dialog, FoldRow, SectionLabel } from '../ui';");
-    expect(shell).toMatch(/<Dialog open onClose=\{onClose\} title=\{title\}/);
+    expect(shell).toContain("import { CARD_LEVEL_1, Dialog, SectionLabel } from '../ui';");
+    expect(shell).toMatch(/<Dialog open onClose=\{onClose\} title=\{title\} size="wide"/);
     for (const file of ['MarketplaceDetailOverlay.tsx', 'IntegrationDetailOverlay.tsx']) {
       const source = readSource(join(components, file));
       expect(source).toContain('<DetailPage');
