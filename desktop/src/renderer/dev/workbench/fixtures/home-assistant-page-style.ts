@@ -242,12 +242,14 @@ export const HOME_ASSISTANT_PAGE_CSS = `
   /* Playing: three bars that bounce beside Now playing, still when paused.
      steps() keeps the animation cheap (performance rule 6). */
   .eq { display: inline-flex; align-items: flex-end; gap: 2px; height: 9px; margin-left: 6px; vertical-align: -1px; }
-  .eq i { width: 2px; height: 3px; border-radius: 1px; background: var(--accent); }
+  /* WHY the bars scale (transform) instead of changing height (code review F12): height is a layout property; the bar is as tall as
+     the box and scaled down to its resting 3 of 9 pixels. */
+  .eq i { width: 2px; height: 100%; border-radius: 1px; background: var(--accent); transform: scaleY(.33); transform-origin: bottom; }
   .eq.on i { animation: eq 0.9s steps(6, end) infinite; }
   .eq.on i:nth-child(2) { animation-delay: -0.3s; }
   .eq.on i:nth-child(3) { animation-delay: -0.6s; }
-  @keyframes eq { 0% { height: 3px; } 50% { height: 9px; } 100% { height: 3px; } }
-  @media (prefers-reduced-motion: reduce) { .eq.on i { animation: none; height: 6px; } }
+  @keyframes eq { 0% { transform: scaleY(.33); } 50% { transform: scaleY(1); } 100% { transform: scaleY(.33); } }
+  @media (prefers-reduced-motion: reduce) { .eq.on i { animation: none; transform: scaleY(.66); } }
   /* The remote: one card. Its header is the button; open, the remote sits
      inside the same card. */
   .rcard { position: relative; border-radius: var(--radius-md, 8px); border: 1px solid var(--edge-dim); background: var(--well); overflow: hidden; }

@@ -8,9 +8,9 @@
 // (a switch's state, a slider's value, a speaker's group, a new name). Each guess
 // remembers what it replaced, so a refusal puts the old value back, and holds against
 // a push that has not caught up. A guess ends when the house agrees, when its send
-// fails (undone), or, for a send that was accepted, at the next check asked after
-// that (the house's word, even if it clamped the value), with 8 seconds as the
-// outer limit. `pend` holds a press's status; only a refusal is ever shown ("Didn't work"): Destin found the
+// fails (undone), or, for an accepted send of a value the device may clamp (a
+// temperature), at the next check asked after that; a switch's state is held until
+// the device reports it, with 8 seconds as the outer limit. `pend` holds a press's status; only a refusal is ever shown ("Didn't work"): Destin found the
 // "Sending…" and "Done" notes annoying (2026-10-05), so a slow or finished press shows no text.
 //
 // Escapes: this text lives in a template string inside another one, so every
@@ -84,12 +84,18 @@ export const HOME_PENDING_JS = `
   // A check asked AFTER a send was accepted reports the house's final word: the guess
   // (say a temperature the device capped) gives way to it instead of lingering 8 seconds.
   function dropSettled(sentAt) { Object.keys(guesses).forEach(function (k) { if (guesses[k].settledAt && guesses[k].settledAt <= sentAt) delete guesses[k]; }); }
-  function settle(keys) { keys.forEach(function (k) { if (guesses[k] && !TARGETS[guesses[k].field]) guesses[k].settledAt = Date.now(); }); }
+  // WHY a switch's state is NOT settled (code review F2, the rubber-banding Destin reported): the house takes a moment (Hue
+  // about a second) to report after it ACCEPTS a call, so the first check asked afterwards still shows the OLD state; dropping
+  // the hold there flipped the card back and forward again. A state guess keeps its hold until the device reports it
+  // (guessReport) or the 8 seconds run out. Other fields (a temperature the device may clamp) still give way to the next check.
+  function settle(keys) { keys.forEach(function (k) { var f = guesses[k] && guesses[k].field; if (f && !TARGETS[f] && f !== 'state') guesses[k].settledAt = Date.now(); }); }
   // Put back only what still shows the guess: a field the house has since changed is left alone.
-  function undoGuesses(keys) {
+  // WHY tok (code review F13): an OLDER press that is refused after a NEWER press on the same field must not undo the newer
+  // press's guess (the newer one may have gone through); a guess is stamped with the press that owns it, and only that press undoes it.
+  function undoGuesses(keys, tok) {
     keys.forEach(function (k) {
       var g = guesses[k];
-      if (!g) return;
+      if (!g || (tok && g.tok !== tok)) return;
       var it = thing(g.id);
       if (it && JSON.stringify(it[g.field]) === JSON.stringify(g.value)) it[g.field] = g.before;
       delete guesses[k];
@@ -106,7 +112,8 @@ export const HOME_PENDING_JS = `
   // own: the retry function shows its own guess (a rename, a move); otherwise Try again puts the guess back first (code review 7).
   function pendBegin(id, again, own, undo) {
     var taken = fresh; fresh = [];
-    var keys = taken.map(function (g) { g.src = id; return g.id + '|' + g.field; });
+    var tok0 = pendSeq + 1;
+    var keys = taken.map(function (g) { g.src = id; g.tok = tok0; return g.id + '|' + g.field; });
     var redo = taken.map(function (g) { return { id: g.id, field: g.field, value: g.value }; });
     var tok = ++pendSeq;
     var e = pend[id] = { tok: tok, state: 'quiet', keys: keys, msg: '', again: !again ? null : own ? again : function () {
@@ -122,7 +129,7 @@ export const HOME_PENDING_JS = `
     delete toks[tok];
     if (!e || e.tok !== tok) { // a newer press on the same thing took over
       if (err) {
-        undoGuesses(t.keys); if (t.undo) t.undo();
+        undoGuesses(t.keys, tok); if (t.undo) t.undo();
         // The older refusal still says so on the same row, even if the newer press has long finished.
         if (e) clearTimeout(e.timer);
         pend[id] = { tok: e ? e.tok : ++pendSeq, state: 'failed', keys: e ? e.keys : [], msg: err, again: t.again };

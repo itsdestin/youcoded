@@ -115,7 +115,7 @@ export const HOME_HISTORY_JS = String.raw`
     if (e.context_entity_id_name) return 'by ' + e.context_entity_id_name;
     if (e.context_user_id) {
       var p = (extras.people || []).filter(function (x) { return x.user === e.context_user_id; })[0];
-      return 'by ' + (p ? p.name : 'someone in Home Assistant') + (e.context_service ? '' : '');
+      return 'by ' + (p ? p.name : 'someone in Home Assistant');
     }
     return 'on the device or another app';
   }
@@ -192,11 +192,18 @@ export const HOME_HISTORY_JS = String.raw`
     var more = hist.days < HIST_DAYS_MAX ? '<button class="yc-button yc-button--sm act-more" data-hist-more="1"' + (hist.loading ? ' disabled' : '') + '>' + (hist.loading ? 'Loading…' : 'Show the day before') + '</button>' : '<div class="yc-caption act-more">Home Assistant keeps about ' + HIST_DAYS_MAX + ' days.</div>';
     return '<div class="act-list">' + filters + body + more + '</div>';
   }
+  // WHY cached (code review F11): the pill's count walked the whole loaded logbook on EVERY drawing (any push, any tab). It now
+  // recounts only when the logbook, the rooms or the day changes, which is once per check at most.
+  var actCount = { events: null, rooms: null, day: 0, text: '' };
   function activityCount() {
     if (!hist.at) return '';
     var dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
-    var n = pageEvents(hist.events).filter(function (e) { return e.t >= dayStart.getTime(); }).length;
-    return n + ' change' + (n === 1 ? '' : 's') + ' today';
+    var day = dayStart.getTime();
+    if (actCount.events !== hist.events || actCount.rooms !== rooms || actCount.day !== day) {
+      var n = pageEvents(hist.events).filter(function (e) { return e.t >= day; }).length;
+      actCount = { events: hist.events, rooms: rooms, day: day, text: n + ' change' + (n === 1 ? '' : 's') + ' today' };
+    }
+    return actCount.text;
   }
 
   // ── A device's pop-up ────────────────────────────────────────────────────

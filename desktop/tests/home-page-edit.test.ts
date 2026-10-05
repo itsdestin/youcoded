@@ -388,7 +388,11 @@ describe('review 2: a drag that loses its pointer does not freeze the page', () 
       lose();
       expect(row(a!).style.transform).toBe('');
       expect(ids('r:kitchen')).toEqual([a, b]);
-      push(m.socks[0]!, 'light.living_room_lamp', { a: { friendly_name: 'Floor lamp 5' } }); await frame();
+      // WHY shown again first (code review F10, hidden means idle): a hidden page ends its live subscription and drops pushes; once it is shown
+      // again it subscribes anew (a new subscription id), and the page draws what it hears.
+      if (document.hidden) { Object.defineProperty(document, 'hidden', { configurable: true, get: () => false }); document.dispatchEvent(new Event('visibilitychange')); await frame(); }
+      const subs = m.socks[0]!.sent.filter((t) => t.includes('"subscribe_entities"'));
+      push(m.socks[0]!, 'light.living_room_lamp', { a: { friendly_name: 'Floor lamp 5' } }, JSON.parse(subs[subs.length - 1]).id); await frame();
       expect(row('light.living_room_lamp').textContent).toContain('Floor lamp 5');
     });
   }

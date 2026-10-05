@@ -81,7 +81,9 @@ export async function mount(opts: { data?: Record<string, unknown>; fetchHook?: 
   if (opts.video) (window as any).youcoded.video = (_c: string, target: string, o: any) => { const v = { target, o, at: Date.now(), stop: vi.fn() }; videos.push(v); return v; };
   new Function(/<script>([\s\S]*?)<\/script>/.exec(html)![1])();
   await flush();
-  await vi.waitFor(() => { if (!document.querySelector('[data-eid]')) throw new Error('not drawn'); });
+  // WHY a 10 s limit (the default is 1 s of real time): on a machine busy running the whole suite the first drawing can take longer than
+  // a second, and waitFor then failed with a timeout that had nothing to do with the page (home-page-camera-backoff timed out this way).
+  await vi.waitFor(() => { if (!document.querySelector('[data-eid]')) throw new Error('not drawn'); }, { timeout: 10_000 });
   if (socks[0]) { socks[0].open(); await flush(); await frame(); }
   await tick(1000);
   return { puts, socks, saves, videos };

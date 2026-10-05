@@ -62,3 +62,18 @@ describe('a TV app that gives no play/pause information', () => {
     expect(playing()).toBe(before - 1);
   });
 });
+
+// Code review F3: the TV came on AFTER its Cast side last reported (a restart), so the Cast "playing" is old news.
+describe('a TV whose Cast side is stale', () => {
+  it('shows no Now playing, no moving bars and no Pause key on the Home card or the Media tab', async () => {
+    const m = await mount({ data: { startOpen: ['destins_room'] } });
+    expect(card().querySelector('.eq.on')).toBeTruthy();
+    push(m.socks[0], 'remote.destins_room_tv_remote', { lc: Date.now() / 1000 + 600 }); await frame(); // the TV just came on
+    expect(card().querySelector('.lbl')).toBeNull();
+    expect(card().querySelector('.eq')).toBeNull();
+    expect(card().querySelector('.key.main')!.innerHTML).not.toContain('<rect'); // no pause bars
+    q('#chips [data-view="media"]').click(); await frame();
+    expect(card().querySelector('.eq.on')).toBeNull();
+    expect(card().querySelector('.key.main')!.innerHTML).not.toContain('<rect');
+  });
+});

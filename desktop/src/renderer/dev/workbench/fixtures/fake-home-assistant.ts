@@ -9,7 +9,7 @@ import { FAKE_NEST_CLIP_BASE64 } from './fake-nest-clip';
 interface Thing {
   id: string; name: string; state: string;
   brightness?: number | null; modes?: string[] | null;
-  cur?: number | null; target?: number | null; min?: number; max?: number; step?: number;
+  cur?: number | null; target?: number | null; tlo?: number | null; thi?: number | null; min?: number; max?: number; step?: number;
   vol?: number | null; title?: string | null; features?: number;
   rgb?: number[] | null; k?: number | null;
   modesHvac?: string[]; action?: string | null;
@@ -252,6 +252,9 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
       if (action === 'turn_on' && typeof data.color_temp_kelvin === 'number') { t.k = data.color_temp_kelvin; t.rgb = null; }
       if (action === 'set_hvac_mode' && typeof data.hvac_mode === 'string') {
         t.state = data.hvac_mode;
+        // Like a real Nest: Auto holds a low and a high set point and has NO single `temperature`; every other mode has one.
+        if (data.hvac_mode === 'heat_cool') { t.tlo = t.tlo ?? 68; t.thi = t.thi ?? 75; t.target = null; }
+        else if (t.target == null && t.modesHvac) { t.target = 72; t.tlo = null; t.thi = null; }
         t.action = data.hvac_mode === 'off' ? 'off' : data.hvac_mode === 'heat' ? 'heating' : data.hvac_mode === 'cool' ? 'cooling' : 'idle';
       }
       if (action === 'volume_set' && typeof data.volume_level === 'number') t.vol = data.volume_level;
@@ -260,6 +263,7 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
       if (action === 'media_seek' && typeof data.seek_position === 'number') { t.pos = data.seek_position; t.posAt = new Date().toISOString(); }
       if (action === 'volume_mute') t.muted = data.is_volume_muted === true;
       if (action === 'set_temperature' && typeof data.temperature === 'number') t.target = data.temperature;
+      if (action === 'set_temperature' && typeof data.target_temp_low === 'number' && typeof data.target_temp_high === 'number') { t.tlo = data.target_temp_low; t.thi = data.target_temp_high; }
       // Sonos grouping, as Home Assistant does it: `join` adds speakers to
       // this one's group (leaving any group they were in), `unjoin` takes
       // this one out of its group. Every member lists the whole group.
@@ -347,9 +351,10 @@ const eventLog: Array<{ entity: string; minAgo: number; offsetSec?: number; type
 // or changed and '-' for attributes that went away) and removals (`r`). This
 // pretends to be that, driven by the same ROOMS the template answers from, so
 // the page's instant updates can be seen with no house.
-type Squashed = { s: string; a: Record<string, unknown>; lc: number; lu: number };
+// lu is OMITTED when it equals lc, exactly as the real house compresses it (code review F1).
+type Squashed = { s: string; a: Record<string, unknown>; lc: number; lu?: number };
 const ATTRS: Array<[keyof Thing, string]> = [
-  ['name', 'friendly_name'], ['brightness', 'brightness'], ['modes', 'supported_color_modes'], ['cur', 'current_temperature'], ['target', 'temperature'],
+  ['name', 'friendly_name'], ['brightness', 'brightness'], ['modes', 'supported_color_modes'], ['cur', 'current_temperature'], ['target', 'temperature'], ['tlo', 'target_temp_low'], ['thi', 'target_temp_high'],
   ['min', 'min_temp'], ['max', 'max_temp'], ['step', 'target_temp_step'], ['vol', 'volume_level'], ['title', 'media_title'], ['rgb', 'rgb_color'],
   ['k', 'color_temp_kelvin'], ['modesHvac', 'hvac_modes'], ['action', 'hvac_action'], ['dc', 'device_class'], ['activity', 'current_activity'],
   ['app', 'app_name'], ['source', 'source'], ['muted', 'is_volume_muted'], ['group', 'group_members'], ['features', 'supported_features'], ['pos', 'media_position'], ['posAt', 'media_position_updated_at'],
@@ -359,7 +364,8 @@ function squash(t: Thing): Squashed {
   for (const [field, attr] of ATTRS) if (t[field] !== undefined) a[attr] = t[field];
   const lc = Date.parse(t.since ?? '') / 1000 || 0;
   // The house's own "last updated" stamp: the template answers with it (`upd`) too, so the page can tell which is newer.
-  return { s: t.state, a, lc, lu: Date.parse(t.upd ?? '') / 1000 || lc };
+  const lu = Date.parse(t.upd ?? '') / 1000 || lc;
+  return lu === lc ? { s: t.state, a, lc } : { s: t.state, a, lc, lu };
 }
 interface LiveSub { id: number; ids: Set<string>; last: Map<string, Squashed> }
 interface LiveSession { push?: (texts: string[]) => void; subs: LiveSub[] }
@@ -378,6 +384,8 @@ function notifyLive(): void {
       const was = sub.last.get(id);
       if (!was) { sub.last.set(id, now); added[id] = now; continue; }
       const plus: Record<string, unknown> = {};
+      // A state change gets a new "last changed" even when something else (a group join) moved it without stamping one.
+      if (now.s !== was.s && now.lc <= was.lc) { t.since = new Date().toISOString(); now = squash(t); }
       if (now.s !== was.s) { plus.s = now.s; plus.lc = now.lc; }
       const aPlus: Record<string, unknown> = {};
       for (const k of Object.keys(now.a)) if (JSON.stringify(now.a[k]) !== JSON.stringify(was.a[k])) aPlus[k] = now.a[k];
@@ -385,8 +393,12 @@ function notifyLive(): void {
       const gone = Object.keys(was.a).filter((k) => !(k in now.a));
       if (!Object.keys(plus).length && !gone.length) { sub.last.set(id, now); continue; }
       // Something changed: the house stamps it now (once, however many listeners hear of it).
-      if (!t.upd || Date.parse(t.upd) / 1000 <= was.lu) t.upd = new Date().toISOString();
-      now = squash(t); plus.lu = now.lu;
+      // Like the real house: a state change stamps last-updated the same moment as last-changed, so ONLY lc is sent
+      // (lu left out); a change to attributes alone sends only lu. Sending both always hid a bug (code review F1).
+      if (!t.upd || Date.parse(t.upd) / 1000 <= (was.lu ?? was.lc)) t.upd = new Date().toISOString();
+      if ('lc' in plus) t.upd = t.since;
+      now = squash(t);
+      if (!('lc' in plus)) plus.lu = now.lu ?? now.lc;
       sub.last.set(id, now);
       changed[id] = { ...(Object.keys(plus).length ? { '+': plus } : {}), ...(gone.length ? { '-': { a: gone } } : {}) };
     }

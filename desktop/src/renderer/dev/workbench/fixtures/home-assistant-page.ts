@@ -18,6 +18,7 @@ import { HOME_ASSISTANT_PAGE_CSS } from './home-assistant-page-style';
 import { HOME_HISTORY_CSS, HOME_HISTORY_JS } from './home-assistant-page-history';
 import { ROOMS_TEMPLATE, EXTRAS_TEMPLATE } from './home-assistant-page-templates';
 import { HOME_LIVE_JS } from './home-assistant-page-live';
+import { HOME_CLIMATE_CSS, HOME_CLIMATE_JS } from './home-assistant-page-climate';
 import { HOME_ICONS_JS } from './home-assistant-page-icons';
 import { HOME_REDRAW_CSS, HOME_REDRAW_JS } from './home-assistant-page-redraw';
 import { HOME_PENDING_CSS, HOME_PENDING_JS } from './home-assistant-page-pending';
@@ -84,7 +85,7 @@ export const HOME_ASSISTANT_PAGE_JSON = {
 function homeAssistantPageHtml(): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>Home</title>
-<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}${HOME_CAMERA_CSS}${HOME_REDRAW_CSS}${HOME_PENDING_CSS}${HOME_EDIT_CSS}${HOME_LOOK_CSS}${HOME_FEEL_CSS}${HOME_TV_CSS}${HOME_MEDIA_CSS}${HOME_LIGHTS_CSS}${HOME_GLASS_CSS}</style></head>
+<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}${HOME_CAMERA_CSS}${HOME_REDRAW_CSS}${HOME_PENDING_CSS}${HOME_EDIT_CSS}${HOME_LOOK_CSS}${HOME_FEEL_CSS}${HOME_TV_CSS}${HOME_MEDIA_CSS}${HOME_LIGHTS_CSS}${HOME_GLASS_CSS}${HOME_CLIMATE_CSS}</style></head>
 <body>
 <div class="yc-page yc-stack" id="root">
   <!-- No page title: the app's own bar already names the page, so the
@@ -145,7 +146,10 @@ function homeAssistantPageHtml(): string {
   if (typeof saved.view === 'string') view = saved.view;
   if (saved.settingsOpen === true) view = 'settings';
   if (typeof saved.chipStyle === 'string') prefs.chipStyle = saved.chipStyle;
-  if (saved.editing) editing = true;
+  // WHY Edit mode is never saved (code review F6): every other open/closed toggle starts fresh on each load, and a page left in Edit
+  // reopened as slim rows with no explanation. A practice screen can still seed "editing"; a stale saved true (written by an
+  // earlier build) opens Edit once and is cleared here.
+  if (saved.editing) { editing = true; setTimeout(function () { persist({ editing: false }); }, 0); }
   var $ = function (id) { return document.getElementById(id); };
 
   function esc(t) { return String(t == null ? '' : t).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
@@ -188,10 +192,15 @@ function homeAssistantPageHtml(): string {
       });
     });
   }
+  // WHY an answer older than one already laid in is dropped (code review F14, latest check wins): on a slow link a check asked earlier can
+  // come back after a later one and would put the older rooms back; with no live connection nothing re-lays the newer state.
+  var checkSeq = 0, checkApplied = 0;
   function load() {
     if (!base) { banner('This page has not been connected to Home Assistant yet.'); return; }
-    var sentAt = Date.now();
+    var sentAt = Date.now(), mine = ++checkSeq;
     call('/api/template', { template: TEMPLATE }).then(function (r) {
+      if (mine < checkApplied) return;
+      checkApplied = mine;
       var first = rooms === null;
       rooms = JSON.parse(r.body);
       dropRoomGroups(rooms);
@@ -432,7 +441,9 @@ ${HOME_ICONS_JS}
     // (testing note: "keep the old now playing info after a tv … restarts").
     // So the Cast side's title is ignored when the TV came on after it last
     // changed, or when the TV is now in a different app than the one casting.
-    if (tv && rc && playing && castStale(it, rc)) playing = false;
+    // WHY "stale" is kept (code review F3): a stale Cast side must not show "Now playing", moving bars or a Pause key either.
+    var stale = !!(tv && rc && playing && castStale(it, rc));
+    if (stale) playing = false;
     // A soundbar playing the TV's sound reports the title "TV".
     var what = it.title === 'TV' && kind === 'soundbar' ? 'TV sound' : it.title;
     // Option A (Destin, 2026-10-05): an app that gives no title and has never shown a real play/pause is not claimed to be playing (home-assistant-page-tv.ts).
@@ -448,7 +459,7 @@ ${HOME_ICONS_JS}
     // Controls live inside Now playing. A speaker uses its own play/pause
     // and skip; a TV sends the same keys through its remote, which works for
     // any app on it, not only ones that cast.
-    var isPlay = it.state === 'playing';
+    var isPlay = it.state === 'playing' && !stale;
     var pp = isPlay ? 'Pause' : 'Play';
     var ctl = '';
     // WHY tvKeysHtml (Destin, 2026-10-05): the TV's keys are one row of seven that the remote button re-arranges (home-assistant-page-tv.ts).
@@ -469,8 +480,8 @@ ${HOME_ICONS_JS}
     var nowHtml = media && on && (playing && what || app || (tv && rc)) // a TV with a remote always has its panel, so the pad has a place
       ? '<div class="np' + (ctl || vol ? ' has-ctl' : '') + '"><span class="art" style="--app:' + (app ? app.bg : 'var(--accent)') + '">' +
         (app ? app.mark : '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>') +
-        '</span><span class="txt">' + (neutral ? '' : '<div class="lbl">' + (it.state === 'paused' ? 'Paused' : 'Now playing') +
-        '<span class="eq' + (it.state === 'playing' ? ' on' : '') + '" aria-hidden="true"><i></i><i></i><i></i></span></div>') +
+        '</span><span class="txt">' + (neutral || stale ? '' : '<div class="lbl">' + (it.state === 'paused' ? 'Paused' : 'Now playing') +
+        '<span class="eq' + (isPlay ? ' on' : '') + '" aria-hidden="true"><i></i><i></i><i></i></span></div>') +
         '<div class="ttl">' + esc(playing && what ? what : app ? app.name : 'TV') + '</div>' +
         (app && playing && what && what !== app.name && app.name !== 'TV' ? '<div class="by">' + (tv ? 'in ' : 'on ') + esc(app.name) + '</div>' : '') + '</span>' +
         // Volume above previous/play/next (round 7).
@@ -679,11 +690,15 @@ ${HOME_ICONS_JS}
 
   var camCache = {};
   var camNote = {};
-  function refreshCameras() {
+  function refreshCameras(force) { // force: the page was shown again or refreshed by the app, so ask everything
     if (!base || document.hidden || !rooms) return;
     allItems().forEach(function (x) {
       var it = x.it, id = it.id;
       if (domain(id) !== 'camera') return;
+      // WHY skip a Nest camera already known to have no still picture (code review F8): asking cost a failing request, a rewrite of its
+      // note and a redraw every 10 seconds, forever. It is asked again every 10 minutes in case that has changed.
+      var known = camNote[id];
+      if (!force && known && known.nest && Date.now() - (known.at || 0) < 600000) { camEvents(it); return; } // its events still refresh (camEvents asks at most once a minute)
       window.youcoded.fetch(base + '/api/camera_proxy/' + id, { as: 'picture' }).then(function (r) {
         // A tiny picture is Home Assistant's blank stand-in, not a real one.
         if (r.status === 200 && String(r.body).length > 6000) { camCache[id] = r.body; delete camNote[id]; var img = document.querySelector('img[data-cam="' + id + '"]'); if (img) img.src = r.body; else renderSoon(); return; }
@@ -691,7 +706,7 @@ ${HOME_ICONS_JS}
         var auth = health.flows.some(function (f) { return f.handler === 'nest' && f.context && f.context.source === 'reauth'; });
         camNote[id] = nest && auth ? { text: 'No picture: Google Nest needs you to sign in again.', link: 'Sign in', href: '/config/integrations/integration/nest' }
           // A Nest camera is shown as its events card (camera.ts), not a note.
-          : nest ? { nest: true }
+          : nest ? { nest: true, at: Date.now() }
           : { text: 'This camera sent no picture.' };
         renderSoon();
         if (camNote[id] && camNote[id].nest) camEvents(it);
@@ -810,7 +825,7 @@ ${HOME_ICONS_JS}
       // The real sky outside, not a thermometer (round 4 choice note).
       { id: 'climate', label: 'Climate', icon: w ? skyIcon(w.state, 16) : THERMO, on: !!(th && th.it.state !== 'off'),
         main: w && w.temp != null ? Math.round(w.temp) + '° ' + condName(w.state) : th && th.it.cur != null ? th.it.cur + '° inside' : 'No climate',
-        sub: th ? (th.it.cur != null ? th.it.cur + '° inside' : '') + (th.it.state && th.it.state !== 'off' && th.it.target != null ? ' · ' + (MODE_NAMES[th.it.state] || th.it.state) + ' to ' + th.it.target + '°' : th.it.state === 'off' ? ' · off' : '') : '' },
+        sub: th ? (th.it.cur != null ? th.it.cur + '° inside' : '') + (th.it.state && th.it.state !== 'off' && th.it.target != null ? ' · ' + (MODE_NAMES[th.it.state] || th.it.state) + ' to ' + th.it.target + '°' : thRange(th.it) ? thSummary(th.it) : th.it.state === 'off' ? ' · off' : '') : '' },
       // Reshaped after real use: every camera, live at once, on a tab of its own (home-assistant-page-camera.ts).
       camerasChip(),
       { id: 'problems', label: 'Problems', icon: ALERT, on: probs.length > 0, warn: probs.some(function (p) { return p.sev === 'high'; }),
@@ -1009,9 +1024,12 @@ ${HOME_ICONS_JS}
     if (gone(it)) return '<div class="th-hero gone"><div class="th-side"><div class="th-name">' + esc(it.name) + '</div><div class="vsub">Not responding' + (it.maker && /nest/i.test(it.maker) ? ' — Google Nest needs you to sign in again (see Problems).' : '.') + '</div></div></div>';
     var mode = it.state, lo = it.min != null ? it.min : 50, hi = it.max != null ? it.max : 90;
     var f = function (v) { return Math.max(0, Math.min(1, (v - lo) / (hi - lo))); };
-    var hasSet = it.target != null && mode !== 'off';
+    var range = thRange(it); // Auto: a low and a high set point (home-assistant-page-climate.ts)
+    var hasSet = (it.target != null || range) && mode !== 'off';
     var R = 80, L = 2 * Math.PI * R * 0.75, C = 2 * Math.PI * R;
-    var fill = hasSet ? f(it.target) * L : 0;
+    var fill = hasSet ? f(range ? it.thi : it.target) * L : 0, fromA = 0;
+    if (range) { fromA = f(it.tlo) * L; fill = Math.max(2, fill - fromA); } // Auto fills BETWEEN the two set points
+    var tv = thValue(it);
     var nowA = it.cur != null ? (135 + 270 * f(it.cur)) * Math.PI / 180 : null;
     var dot = nowA == null ? '' : '<circle class="th-now" cx="' + (100 + R * Math.cos(nowA)).toFixed(1) + '" cy="' + (100 + R * Math.sin(nowA)).toFixed(1) + '" r="7"/>';
     var doing = it.action ? (DOING[it.action] || it.action) : (MODE_NAMES[mode] || mode);
@@ -1020,10 +1038,10 @@ ${HOME_ICONS_JS}
       return '<button class="th-mode" aria-pressed="' + (m === mode) + '" data-mode="' + esc(it.id) + '" data-hvac="' + esc(m) + '">' + esc(MODE_NAMES[m] || m) + '</button>';
     }).join('') + '</div>' : '';
     var dial = '<div class="th-dial"><svg viewBox="0 0 200 200" aria-hidden="true"><circle class="th-track" cx="100" cy="100" r="' + R + '" stroke-dasharray="' + L.toFixed(1) + ' ' + C.toFixed(1) + '" transform="rotate(135 100 100)"/>' +
-      (hasSet ? '<circle class="th-fill" cx="100" cy="100" r="' + R + '" stroke-dasharray="' + fill.toFixed(1) + ' ' + C.toFixed(1) + '" transform="rotate(135 100 100)"/>' : '') + dot + '</svg>' +
-      '<div class="th-mid"><span class="th-lbl">' + (hasSet ? esc(doing) + ' to' : 'Off') + '</span><span class="th-set">' + (hasSet ? esc(it.target) + '°' : '—') + '</span><span class="th-cur">' + (it.cur != null ? 'Now ' + esc(it.cur) + '°' : '') + '</span></div></div>';
-    var minus = hasSet ? '<button class="th-step" aria-label="Cooler" data-temp="' + esc(it.id) + '" data-delta="' + (-step) + '"' + (it.target <= lo ? ' disabled' : '') + '>−</button>' : '';
-    var plus = hasSet ? '<button class="th-step" aria-label="Warmer" data-temp="' + esc(it.id) + '" data-delta="' + step + '"' + (it.target >= hi ? ' disabled' : '') + '>+</button>' : '';
+      (hasSet ? '<circle class="th-fill" cx="100" cy="100" r="' + R + '" stroke-dasharray="' + fill.toFixed(1) + ' ' + C.toFixed(1) + '"' + (fromA ? ' stroke-dashoffset="' + (-fromA).toFixed(1) + '"' : '') + ' transform="rotate(135 100 100)"/>' : '') + dot + '</svg>' +
+      '<div class="th-mid">' + (range && hasSet ? thRangeMid(it, doing) : '<span class="th-lbl">' + (hasSet ? esc(doing) + ' to' : 'Off') + '</span><span class="th-set">' + (hasSet ? esc(it.target) + '°' : '—') + '</span>') + '<span class="th-cur">' + (it.cur != null ? 'Now ' + esc(it.cur) + '°' : '') + '</span></div></div>';
+    var minus = hasSet ? '<button class="th-step" aria-label="Cooler" data-temp="' + esc(it.id) + '" data-delta="' + (-step) + '"' + (tv <= lo ? ' disabled' : '') + '>−</button>' : '';
+    var plus = hasSet ? '<button class="th-step" aria-label="Warmer" data-temp="' + esc(it.id) + '" data-delta="' + step + '"' + (tv >= hi ? ' disabled' : '') + '>+</button>' : '';
     if (compact) {
       // WHY compact: on the Home page the same dial sits in a room card, so it is the Climate page's dial with
       // − and + either side and the modes under it. The name keeps the old card's ".line > .name" so pressing it
@@ -1282,7 +1300,9 @@ ${HOME_ICONS_JS}
     if (tid) {
       var it = null;
       rooms.forEach(function (r) { r.items.forEach(function (x) { if (x.id === tid) it = x; }); });
-      if (!it || it.target == null) return;
+      if (!it) return;
+      if (thRange(it)) { var rn = thNext(it, t.getAttribute('data-delta')); setLocal(tid, rn.patch); service('climate', 'set_temperature', rn.body, tid); return; }
+      if (it.target == null) return;
       var next = Math.round((Number(it.target) + Number(t.getAttribute('data-delta'))) * 10) / 10;
       if (it.min != null) next = Math.max(it.min, next);
       if (it.max != null) next = Math.min(it.max, next);
@@ -1293,7 +1313,6 @@ ${HOME_ICONS_JS}
   function onAct(act, id, t) {
     if (act === 'edit') {
       editing = !editing; edReset(); confirmOff = false;
-      persist({ editing: editing });
       render();
       if (!editing) load();
       return;
@@ -1445,8 +1464,8 @@ ${HOME_ICONS_JS}
     camTimer = setInterval(refreshCameras, CAMERA_MS);
   }
   function stop() { clearInterval(timer); clearInterval(camTimer); }
-  document.addEventListener('visibilitychange', function () { if (!document.hidden) { load(); refreshCameras(); } });
-  window.youcoded.onRefresh(function () { load(); refreshCameras(); liveStart(); });
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) { load(); refreshCameras(true); } });
+  window.youcoded.onRefresh(function () { load(); refreshCameras(true); liveStart(); });
   window.youcoded.onData(function (d) {
     d = d || {};
     hidden = new Set(Array.isArray(d.hidden) ? d.hidden : []);
@@ -1468,6 +1487,7 @@ ${HOME_PENDING_JS}
 ${HOME_EDIT_JS}
 ${HOME_MOTION_JS}
 ${HOME_FEEL_JS}
+${HOME_CLIMATE_JS}
   start();
 })();
 </script>

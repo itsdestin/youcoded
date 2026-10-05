@@ -33,7 +33,7 @@ export const HOME_LIVE_JS = `
     ['temperature', 'target'], ['min_temp', 'min'], ['max_temp', 'max'], ['target_temp_step', 'step'], ['volume_level', 'vol'],
     ['media_title', 'title'], ['rgb_color', 'rgb'], ['color_temp_kelvin', 'k'], ['hvac_modes', 'modesHvac'], ['hvac_action', 'action'],
     ['device_class', 'dc'], ['current_activity', 'activity'], ['app_name', 'app'], ['source', 'source'], ['media_content_id', 'cid'], ['media_position', 'pos'], ['media_position_updated_at', 'posAt'],
-    ['is_volume_muted', 'muted'], ['group_members', 'group']
+    ['is_volume_muted', 'muted'], ['group_members', 'group'], ['target_temp_low', 'tlo'], ['target_temp_high', 'thi']
   ];
 
   function repoll(ms) {
@@ -72,7 +72,7 @@ export const HOME_LIVE_JS = `
   // Called from both, so whichever finishes last starts it. A changed list of
   // devices (found by a later check) replaces the subscription.
   function liveSubscribe() {
-    if (!live.sock || live.state !== 'open' || !live.authed || !rooms) return;
+    if (!live.sock || live.state !== 'open' || !live.authed || !rooms || document.hidden) return; // hidden means idle: nothing is subscribed while the page is not on screen
     var ids = itemIds(), sig = ids.join('|');
     if (sig === live.sig && live.subId) return;
     if (live.subId) liveSend({ type: 'unsubscribe_events', subscription: live.subId });
@@ -81,6 +81,15 @@ export const HOME_LIVE_JS = `
     live.sig = sig; live.subId = live.msg + 1;
     liveSend({ type: 'subscribe_entities', entity_ids: ids });
   }
+  // WHY unsubscribe on hide and resubscribe on show: while the page is not on screen every light and speaker push would still be
+  // parsed and applied. Showing it again subscribes anew, and Home Assistant answers with every state in full, so nothing is missed
+  // (the page's own check runs on show too).
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) {
+      if (live.subId && live.sock && live.state === 'open') liveSend({ type: 'unsubscribe_events', subscription: live.subId });
+      live.subId = 0; live.sig = ''; live.raw = {};
+    } else liveSubscribe();
+  });
   function liveStart() {
     if (!base || typeof window.youcoded.socket !== 'function' || live.sock) return;
     live.sock = window.youcoded.socket(base + '/api/websocket', { onState: liveState, onMessages: liveMessages });
@@ -97,6 +106,9 @@ export const HOME_LIVE_JS = `
     if (state === 'closed') live.sock = null;
   }
   function liveMessages(texts) {
+    // WHY nothing is parsed while hidden (code review F10, "hidden means idle"): once the greeting is answered, the pushes
+    // that were already on their way when the page was hidden are dropped unread; the subscription is ended below.
+    if (document.hidden && live.authed) return;
     texts.forEach(function (text) {
       var m;
       try { m = JSON.parse(text); } catch (e) { return; }
@@ -114,7 +126,10 @@ export const HOME_LIVE_JS = `
   // WHY stamps (redesign audit F4 "the newest one wins", code review 4): the house stamps every
   // state with when it last updated it (lu, else lc); the check's answer carries the same
   // stamp as upd. Whichever is newer wins, in both directions, whatever order they arrive in.
-  function liveStamp(raw) { return Math.round((raw.lu || raw.lc || 0) * 1000); }
+  // WHY the NEWER of lc and lu (code review F1): the real house sends lc ALONE when the state changes (lu equals it and
+  // is left out) and lu alone when only attributes change, so "lu, else lc" kept an old lu after a later state change and
+  // the push was thrown away as stale.
+  function liveStamp(raw) { return Math.round(Math.max(raw.lu || 0, raw.lc || 0) * 1000); }
   function liveApply(id, raw) {
     var it = thing(id);
     if (!it) return;
@@ -140,7 +155,7 @@ export const HOME_LIVE_JS = `
       var raw = live.raw[id] || (live.raw[id] = { s: '', a: {}, lc: 0, lu: 0 });
       var plus = changed[id]['+'] || {}, minus = changed[id]['-'] || {};
       if ('s' in plus) raw.s = plus.s;
-      if ('lc' in plus) raw.lc = plus.lc;
+      if ('lc' in plus) { raw.lc = plus.lc; raw.lu = plus.lc; } // a state change: last updated is that same moment
       if ('lu' in plus) raw.lu = plus.lu;
       Object.assign(raw.a, plus.a || {});
       (minus.a || []).forEach(function (k) { delete raw.a[k]; });

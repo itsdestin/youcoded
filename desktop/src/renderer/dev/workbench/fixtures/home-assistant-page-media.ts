@@ -35,14 +35,16 @@ export const HOME_MEDIA_JS = `
     var kind = kindOf(it), tv = kind === 'tv', rc = tv ? remoteFor(it, room) : null, power = rc || it;
     var sb = tv ? soundbarFor(it) : null, na = gone(power), on = !na && isOn(power), f = it.features || 0;
     var playing = it.state === 'playing' || it.state === 'paused';
-    if (tv && rc && playing && castStale(it, rc)) playing = false;
+    // WHY "stale" is kept (code review F3): a stale Cast side must also not show a Pause key (mvKeys) or moving bars.
+    var stale = !!(tv && rc && playing && castStale(it, rc));
+    if (stale) playing = false;
     var what = it.title === 'TV' && kind === 'soundbar' ? 'TV sound' : it.title;
     // A TV app that never reports play/pause claims nothing (home-assistant-page-tv.ts): it is "On", with a neutral key.
     var neutral = tv && playing && !what && !playReported(it);
     var app = tv && rc ? appOf(rc.activity) : !tv ? sourceOf(it) : null;
     // WHY a TV with a remote that is on is "On" (not "Idle"): it stays a wide card so the remote has somewhere to open.
     var st = na ? 'gone' : !on ? 'off' : (on && playing) ? (neutral ? 'on' : it.state === 'paused' ? 'paused' : 'playing') : (tv && rc ? 'on' : 'idle');
-    return { sb: sb, it: it, room: room, kind: kind, tv: tv, sound: kind === 'soundbar' || kind === 'speaker', rc: rc, power: power, na: na, on: on, f: f,
+    return { sb: sb, stale: stale, it: it, room: room, kind: kind, tv: tv, sound: kind === 'soundbar' || kind === 'speaker', rc: rc, power: power, na: na, on: on, f: f,
       what: what || (app ? app.name : tv ? 'TV' : ''), app: app, neutral: neutral, st: st, tier: { playing: 0, on: 0, paused: 1, idle: 2, off: 3, gone: 4 }[st],
       tvAudio: kind === 'soundbar' && (it.source === 'TV' || it.title === 'TV') };
   }
@@ -60,7 +62,7 @@ export const HOME_MEDIA_JS = `
   function mvBadge(x) { return '<span class="mv-b ' + x.st + '">' + mvGlyph(x.st) + MV_WORDS[x.st] + '</span>'; }
   // The play/pause/skip keys. A TV: its one row of seven (home-assistant-page-tv.ts). A speaker: its own three.
   function mvKeys(x) {
-    var it = x.it, isPlay = it.state === 'playing', f = x.f;
+    var it = x.it, isPlay = it.state === 'playing' && !x.stale, f = x.f;
     if (x.tv && x.rc && x.on) return tvKeysHtml(it, x.rc, x.neutral, isPlay);
     if (!x.tv && x.on && (f & 1) && !x.tvAudio) {
       var mk = function (svc, label, icon, main) { return '<button class="key' + (main ? ' main' : '') + '" data-mp="' + esc(it.id) + '" data-svc="' + svc + '" aria-label="' + label + '" title="' + label + '">' + icon + '</button>'; };
@@ -112,7 +114,8 @@ export const HOME_MEDIA_JS = `
   function mvUnits(list) {
     var xs = [], byId = {}, seen = {}, units = [];
     list.forEach(function (r) {
-      r.items.forEach(function (it) {
+      // WHY ordered (code review F16): the order he chose in Edit for a room's devices applies here too, inside the playing-first / gone-last steps.
+      ordered(r.items, 'r:' + r.id, function (x) { return x.id; }).forEach(function (it) {
         if (domain(it.id) !== 'media_player' || hidden.has(it.id) || remoteDevice(it)) return;
         var x = mvInfo(it, roomOf(it.id) || r);
         xs.push(x); byId[it.id] = x;

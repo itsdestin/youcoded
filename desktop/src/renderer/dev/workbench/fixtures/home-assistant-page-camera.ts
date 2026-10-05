@@ -186,7 +186,7 @@ export const HOME_CAMERA_JS = `
       : lower.indexOf('motion') >= 0 ? 'Motion' : lower.indexOf('sound') >= 0 ? 'Sound' : title.replace(m ? m[0] : '', '').trim() || 'Event';
     return { id: c.media_content_id, what: what, at: at, thumbUrl: c.thumbnail || null, thumb: null };
   }
-  function clock(ms) { return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).toLowerCase(); }
+  // (clock() is defined once, in home-assistant-page-history.ts: a second copy here silently won over it, code review F18)
   // ── Google refusing live video ───────────────────────────────────────────
   // Per camera, shared by its tile and its card: how many refusals in a row, and when trying again stops being a hammering.
   var rate = {};
@@ -288,10 +288,14 @@ export const HOME_CAMERA_JS = `
     var hist = ids.length ? camHistory(ids).then(function (x) { return x; }, function () { return null; }) : Promise.resolve([]);
     Promise.all([browse, hist]).then(function (r) {
       var list = r[0], evs = r[1];
-      if (list === null && (evs === null || !ids.length)) { st.events = { state: 'failed', list: [], evs: [], at: Date.now() }; renderSoon(); return; }
+      if (list === null && (evs === null || !ids.length)) {
+        // WHY the last good list stays (code review F9): a one-minute blip must not swap the card's events for "Could not load" until the next minute.
+        st.events = st.events.state === 'ready' ? Object.assign({}, st.events, { at: Date.now() }) : { state: 'failed', list: [], evs: [], at: Date.now() };
+        renderSoon(); return;
+      }
       list = list || [];
       // Keep a thumbnail already fetched for the same event.
-      (st.events.list || []).forEach(function (o) { list.forEach(function (e) { if (o.id === e.id) { e.thumb = o.thumb; e.thumbBusy = o.thumbBusy; } }); });
+      (st.events.list || []).forEach(function (o) { list.forEach(function (e) { if (o.id === e.id) { e.thumb = o.thumb; e.thumbBusy = o.thumbBusy; e.thumbTry = o.thumbTry; } }); });
       st.events = { state: 'ready', list: list, evs: evs || [], at: Date.now() };
       renderSoon();
       camThumbs(st, 0);
@@ -299,17 +303,20 @@ export const HOME_CAMERA_JS = `
   }
   function camThumbs(st, first) {
     // Rows are the merged list (recordings and picture-less events), so the place scrolled to is looked up there.
-    camRows(st).slice(first, first + THUMBS_AHEAD).forEach(function (e) { if (!e.thumb && !e.thumbBusy && e.thumbUrl) camThumb(e, e === st.events.list[0]); });
+    camRows(st).slice(first, first + THUMBS_AHEAD).forEach(function (e) { if (!e.thumb && !e.thumbBusy && e.thumbUrl && Date.now() - (e.thumbTry || 0) > THUMB_RETRY_MS) camThumb(e, e === st.events.list[0]); });
   }
+  // WHY a failed thumbnail is asked again later (code review F7): thumbBusy was never cleared on a failure, so one blip left the
+  // grey box until the event left the list. It is retried on a later refresh or scroll, no sooner than THUMB_RETRY_MS after the try.
+  var THUMB_RETRY_MS = 30000;
   function camThumb(e, newest) {
-    e.thumbBusy = true;
+    e.thumbBusy = true; e.thumbTry = Date.now();
     var u = /^https?:/i.test(e.thumbUrl) ? e.thumbUrl : base + e.thumbUrl;
     window.youcoded.fetch(u, { as: 'picture' }).then(function (r) {
-      if (r.status !== 200 || String(r.body).indexOf('data:image/') !== 0) return;
+      if (r.status !== 200 || String(r.body).indexOf('data:image/') !== 0) { e.thumbBusy = false; return; }
       e.thumb = r.body;
       if (newest) renderSoon(); // the newest one is also the card's preview still
       Array.prototype.forEach.call(document.querySelectorAll('img[data-thumb]'), function (img) { if (img.getAttribute('data-thumb') === e.id) img.src = r.body; });
-    }, function () { /* a missing thumbnail leaves the grey box */ });
+    }, function () { e.thumbBusy = false; /* a missing thumbnail leaves the grey box until the retry */ });
   }
   // Scrolling the list asks for the thumbnails now in view (and a few after), never all twenty at once.
   document.addEventListener('scroll', function (e) {
@@ -424,6 +431,14 @@ export const HOME_CAMERA_JS = `
   // visible. Called after every drawing and when the page is hidden or shown; it only ever
   // starts what is missing and stops what is not wanted, so calling it often is harmless.
   function tabWanted() { return view === 'cameras' && !document.hidden && !!rooms; }
+  // WHY the streaming set follows the DRAWN order (code review F5): it used to be the first four in house order, which could leave the
+  // top tiles still. Cameras the person swapped in (tabFront, newest first) go first; anything beyond the cap says so (camTileHtml).
+  var tabFront = [], tabIdsNow = [];
+  function camLive() {
+    var all = ordered(camsOnPage(), 'cameras', function (x) { return x.id; }).filter(function (it) { var cm = camNoteOf(it); return cm && cm.nest && !gone(it); });
+    var front = tabFront.map(function (id) { return all.filter(function (x) { return x.id === id; })[0]; }).filter(Boolean);
+    return front.concat(all.filter(function (x) { return front.indexOf(x) < 0; })).slice(0, CAM_MAX_LIVE);
+  }
   function camTabSync() {
     if (!canVideo()) return;
     if (!tabWanted()) {
@@ -432,7 +447,10 @@ export const HOME_CAMERA_JS = `
       return;
     }
     // Only cameras that give no still picture and are answering stream (a Pi Zero shows its picture instead).
-    var cams = camsOnPage().filter(function (it) { var cm = camNoteOf(it); return cm && cm.nest && !gone(it); }).slice(0, CAM_MAX_LIVE);
+    var cams = camLive();
+    // WHY stop what fell out of the set (code review F5): a camera the person swapped in takes a slot from the last one, which must stop streaming.
+    var keep = {}; cams.forEach(function (it) { keep[it.id] = 1; });
+    Object.keys(tabOn).forEach(function (id) { if (!keep[id]) { clearTimeout(tabRetry[id]); delete tabRetry[id]; stopLive(id); delete tabOn[id]; renderSoon(); } });
     cams.forEach(function (it) {
       var id = it.id;
       if (liveVid[id] || tabRetry[id]) return;
@@ -464,7 +482,19 @@ export const HOME_CAMERA_JS = `
       Object.keys(liveVid).forEach(function (id) { if (!document.querySelector('[data-live-slot="' + id + '"]')) { stopLive(id); delete tabOn[id]; } });
     }, 0);
   }
-  document.addEventListener('visibilitychange', function () { camTabSync(); });
+  // WHY card streams stop while hidden too (code review F10, "hidden means idle"): only the Cameras tab's streams used to stop, so a
+  // "Watch live" started from a card kept decoding frames nobody could see. They start again when the page is shown.
+  var cardHeld = [];
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) {
+      cardHeld = Object.keys(liveVid).filter(function (id) { return !tabOn[id]; });
+      cardHeld.forEach(stopLive);
+      camTabSync();
+    } else {
+      camTabSync();
+      cardHeld.splice(0).forEach(function (id) { var it = thing(id); if (it && !liveVid[id] && view !== 'cameras') startLive(it); });
+    }
+  });
 
   function nestFallback(it) {
     return '<a href="' + esc(base + (it.device ? '/config/devices/device/' + encodeURIComponent(it.device) : '/config/integrations/integration/nest')) + '" target="_blank" rel="noopener">Watch live in Home Assistant</a>';
@@ -516,22 +546,26 @@ export const HOME_CAMERA_JS = `
   // One camera in the Cameras tab: its live picture (or its still picture, or why there is none),
   // a LIVE badge only while a live picture is really playing, and its name. Pressing it opens the pop-up.
   function camTileHtml(it) {
-    var cm = camNoteOf(it), st = camState(it.id), live = st.live, eid = esc(it.id), na = gone(it), body, badge = '';
+    var cm = camNoteOf(it), st = camState(it.id), live = st.live, eid = esc(it.id), na = gone(it), body, badge = '', over = false;
     if (cm && cm.nest) {
       if (na) body = '<span class="cam-msg">Not responding</span>';
       else if (!canVideo()) body = '<span class="cam-msg">This window cannot show live video.</span>';
       else if (live && live.state === 'stopped' && live.limited) body = camPreviewHtml(it) + '<span class="cam-slot" data-live-slot="' + eid + '"></span><span class="cam-msg" style="background:rgba(0,0,0,.55)">Google is limiting live video. Trying again at ' + clock(live.limited) + '.</span>';
       else if (live && live.state === 'stopped') body = camPreviewHtml(it) + '<span class="cam-slot" data-live-slot="' + eid + '"></span><span class="cam-msg" style="background:rgba(0,0,0,.55)">Live view stopped' + (live.why ? ': ' + esc(live.why) : '') + '. Trying again…</span>';
       else if (live && live.state === 'playing') { body = '<span class="cam-slot" data-live-slot="' + eid + '"></span>'; badge = '<span class="cam-badge">LIVE</span>'; }
+      else if (tabIdsNow.indexOf(it.id) < 0) { over = true; body = camPreviewHtml(it) + '<span class="cam-msg" style="background:rgba(0,0,0,.55)">Live view limit reached (' + CAM_MAX_LIVE + ' at once)</span>'; }
       else body = camPreviewHtml(it) + '<span class="cam-slot" data-live-slot="' + eid + '"></span><span class="cam-msg">Starting live view…</span>';
     } else body = camCache[it.id] ? '<img class="cam" alt="" data-cam="' + eid + '" src="' + camCache[it.id] + '">' : '<span class="cam-msg">' + esc(cm ? cm.text : 'Looking for a picture…') + '</span>';
     return '<div class="cam-tile" data-eid="' + eid + '"><button class="cam-view cam-open" data-cam-act="open" data-id="' + eid + '" aria-label="Open ' + esc(it.name) + ' and its recordings">' + body + badge +
       '<span class="cam-cap"><span>' + esc(it.name) + '</span><span class="sub">' + (na ? 'Not responding' : esc(it.model || '')) + '</span></span></button>' +
       // A person's own Retry is always allowed, even before the page's own try (a sibling of the tile button: buttons cannot nest).
-      (cm && cm.nest && live && live.state === 'stopped' && live.limited && !na ? '<button class="cam-x cam-retry" data-cam-act="retry" data-id="' + eid + '">Retry</button>' : '') + '</div>';
+      (cm && cm.nest && live && live.state === 'stopped' && live.limited && !na ? '<button class="cam-x cam-retry" data-cam-act="retry" data-id="' + eid + '">Retry</button>' : '') +
+      // Over the cap: one press swaps this camera in for the last one streaming (the same corner as Retry).
+      (over ? '<button class="cam-x cam-retry" data-cam-act="swap" data-id="' + eid + '">Watch live instead</button>' : '') + '</div>';
   }
   function camerasPageHtml() {
     var cams = ordered(camsOnPage(), 'cameras', function (x) { return x.id; });
+    tabIdsNow = camLive().map(function (x) { return x.id; });
     return cams.length ? '<div class="cam-grid">' + cams.map(camTileHtml).join('') + '</div>' : '<div class="yc-empty">No cameras on this page. Put cameras in rooms in Home Assistant.</div>';
   }
   // The tab's pill: how many cameras there are, or how many are live right now.
@@ -568,6 +602,7 @@ export const HOME_CAMERA_JS = `
     else if (act === 'stop') { stopLive(id); render(); }
     // A person's Retry is allowed at any time: it skips the wait (and, if Google refuses again, the next wait is longer).
     else if (act === 'retry') { clearTimeout(tabRetry[id]); delete tabRetry[id]; if (!liveVid[id] && tabWanted()) { tabOn[id] = true; startLive(it, true); } }
+    else if (act === 'swap') { tabFront = [id].concat(tabFront.filter(function (x) { return x !== id; })).slice(0, CAM_MAX_LIVE); camTabSync(); render(); }
     else if (act === 'close') closeClip(id);
     else if (act === 'open') { camEvents(it); openDevice(id); }
     else if (act === 'play') {

@@ -40,6 +40,9 @@ export const HOME_REDRAW_JS = `
     if (el.hasAttribute('data-rn') || el.hasAttribute('data-nr')) return true;
     if (el !== document.activeElement) return false;
     if (el.nodeName === 'SELECT') return true;
+    // WHY an open colour picker is left alone too (code review F15): a drawing that landed while it was open reset its value to the light's
+    // current colour, which could undo the pick before its change event fired.
+    if (el.nodeName === 'INPUT' && el.type === 'color') return true;
     return el.nodeName === 'INPUT' && el.type === 'range' && !!(dragging || gripping === el);
   }
   function patchEl(a, b) {
