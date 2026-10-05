@@ -20,6 +20,7 @@ import { ROOMS_TEMPLATE, EXTRAS_TEMPLATE } from './home-assistant-page-templates
 import { HOME_LIVE_JS } from './home-assistant-page-live';
 import { HOME_ICONS_JS } from './home-assistant-page-icons';
 import { HOME_REDRAW_CSS, HOME_REDRAW_JS } from './home-assistant-page-redraw';
+import { HOME_PENDING_CSS, HOME_PENDING_JS } from './home-assistant-page-pending';
 import { HOME_EDIT_CSS, HOME_EDIT_JS } from './home-assistant-page-edit';
 import { HOME_CAMERA_CSS, HOME_CAMERA_JS } from './home-assistant-page-camera';
 
@@ -76,7 +77,7 @@ export const HOME_ASSISTANT_PAGE_JSON = {
 function homeAssistantPageHtml(): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>Home</title>
-<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}${HOME_CAMERA_CSS}${HOME_REDRAW_CSS}${HOME_EDIT_CSS}</style></head>
+<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}${HOME_CAMERA_CSS}${HOME_REDRAW_CSS}${HOME_PENDING_CSS}${HOME_EDIT_CSS}</style></head>
 <body>
 <div class="yc-page yc-stack" id="root">
   <!-- No page title: the app's own bar already names the page, so the
@@ -171,12 +172,12 @@ function homeAssistantPageHtml(): string {
     call('/api/template', { template: TEMPLATE }).then(function (r) {
       var first = rooms === null;
       rooms = JSON.parse(r.body);
-      // WHY (redesign audit F4, "the newest one wins"): this answer was taken when
-      // the check was asked; any live change that arrived since is newer, so it goes
-      // back on top instead of being overwritten by an older picture.
-      liveReplay(sentAt);
+      // WHY stamps (redesign audit F4 "the newest one wins", code review 4): every state
+      // carries when the house last updated it; a pushed state newer than this answer's
+      // goes back on top, an older one never overwrites a newer.
+      liveReplay();
+      dropSettled(sentAt); // guesses for sends accepted before this check was asked: the house has spoken
       applyHeld();
-      applyHeldVals();
       liveSubscribe(); // the first check tells the live connection which devices to follow
       // WHY no guards for a held slider or an open name box (audit F1): drawing is
       // now in place and leaves what you are working in alone, so nothing waits.
@@ -225,26 +226,12 @@ function homeAssistantPageHtml(): string {
   // has would flip the switch back and then forward again — so a pressed
   // switch holds its new position for up to 8 seconds, until Home Assistant
   // agrees (round 5 testing: "on/off doesn't work super well").
-  var held = {};
-  var HOLD_MS = 8000;
-  function holdState(id, state) { held[id] = { state: state, until: Date.now() + HOLD_MS }; }
-  function applyHeld() {
-    var now = Date.now();
-    (rooms || []).forEach(function (room) { room.items.forEach(function (it) {
-      var h = held[it.id];
-      if (!h) return;
-      if (now > h.until || (it.state === h.state) || (h.state === 'on' && isOn(it))) { delete held[it.id]; return; }
-      it.state = h.state;
-    }); });
-  }
-  // WHY every field is held and remembered (redesign audit F5/F7, A-6): a guess shown
-  // before the house agrees keeps what it replaced (to undo on a refusal) and holds
-  // against a push that has not caught up, whatever the field (state, name, group …).
+  // WHY every field is a guess (redesign audit F5/F7, A-6; code review 7): shown before the
+  // house agrees, it keeps what it replaced (to undo on a refusal) and holds against a push
+  // that has not caught up, whatever the field (see home-assistant-page-pending.ts).
   function setLocal(id, patch) {
-    if (patch && typeof patch.state === 'string') holdState(id, patch.state);
-    var it = thing(id), before = {};
-    if (it) { Object.keys(patch).forEach(function (k) { before[k] = it[k]; if (k !== 'state') holdVal(id, k, patch[k], HOLD_MS); }); undoBuf.push({ id: id, before: before }); }
-    if (it) Object.assign(it, patch);
+    var it = thing(id);
+    if (it) { Object.keys(patch).forEach(function (k) { guess(id, k, patch[k], HOLD_MS); }); Object.assign(it, patch); }
     render();
   }
 
@@ -1098,9 +1085,9 @@ ${HOME_ICONS_JS}
   function renameThing(id, name) {
     var it = thing(id);
     if (!it || !name || name === it.name) return;
-    undoBuf = [];
+    fresh = [];
     setLocal(id, { name: name }); // held like a switch (audit F7): a push still carrying the old name cannot flip it back
-    var tok = pendBegin(id, function () { renameThing(id, name); });
+    var tok = pendBegin(id, function () { renameThing(id, name); }, true);
     registry([{ type: 'config/entity_registry/update', entity_id: id, name: name }])
       .then(function () { pendEnd(id, tok, null); }, function (e) { pendEnd(id, tok, e && e.message ? e.message : 'Home Assistant did not take the new name.'); })
       .then(afterChange);
@@ -1117,8 +1104,8 @@ ${HOME_ICONS_JS}
     var from = roomOf(id), it = thing(id);
     if (!from || !it || from.id === roomId) return;
     var fromId = from.id;
-    undoBuf = [];
-    var tok = pendBegin(id, function () { moveThing(id, roomId, roomName); });
+    fresh = [];
+    var tok = pendBegin(id, function () { moveThing(id, roomId, roomName); }, true);
     relocate(id, roomId, roomName);
     render();
     var moveTo = function (areaId) {
@@ -1345,44 +1332,28 @@ ${HOME_ICONS_JS}
     sendNext(); sendNext = null;
     sendTimer = setTimeout(function () { sendTimer = null; if (sendNext) { var f = sendNext; sendNext = null; sendSoon(f); } }, 250);
   }
-  function quiet(path, body, key) { call(path, body).catch(function (e) { var m = e && e.message ? e.message : 'That did not go through.'; if (key) sliderFailed(key, m); else banner(m, true); }); }
   document.addEventListener('input', function (e) {
     var t = e.target;
     if (!t.classList || !t.classList.contains('lr')) return;
     var lo = Number(t.min) || 0, hi = Number(t.max) || 100;
     t.style.setProperty('--v', String((Number(t.value) - lo) / (hi - lo) * 100));
     var v = t.getAttribute('data-vol'), b = t.getAttribute('data-bright');
-    if (!dragging) dragSnap(t); // what it was before this drag, to put back if the house says no (audit F6)
     dragging = v || b;
     if (v) {
       var vi = t.parentNode && t.parentNode.querySelector('.vicon');
       if (vi) { vi.innerHTML = volIcon(Number(t.value), false); vi.classList.toggle('low', Number(t.value) < 12); }
-      var lv = t.value / 100; holdVal(v, 'vol', lv); sendSoon(function () { quiet('/api/services/media_player/volume_set', { entity_id: v, volume_level: lv }, v); }); }
+      var lv = t.value / 100; holdVal(v, 'vol', lv, 4000, v); sendSoon(function () { quiet('/api/services/media_player/volume_set', { entity_id: v, volume_level: lv }, v); }); }
     var gb = t.getAttribute('data-gbright');
     if (gb) {
       dragging = 'room:' + gb;
       var gr = rooms.filter(function (r) { return r.id === gb; })[0];
       var gids = gr ? liveLights(gr.items).filter(dimmable).map(function (x) { return x.id; }) : [];
       var gp = Number(t.value);
-      gids.forEach(function (x) { holdVal(x, 'brightness', Math.round(gp * 2.55)); holdState(x, 'on'); });
+      gids.forEach(function (x) { holdVal(x, 'brightness', Math.round(gp * 2.55), 4000, 'room:' + gb); holdVal(x, 'state', 'on', HOLD_MS, 'room:' + gb); });
       if (gids.length) sendSoon(function () { quiet('/api/services/light/turn_on', { entity_id: gids, brightness_pct: gp }, 'room:' + gb); });
     }
-    if (b && Number(t.value) > 0) { var bp = Number(t.value); holdVal(b, 'brightness', Math.round(bp * 2.55)); sendSoon(function () { quiet('/api/services/light/turn_on', { entity_id: b, brightness_pct: bp }, b); }); }
+    if (b && Number(t.value) > 0) { var bp = Number(t.value); holdVal(b, 'brightness', Math.round(bp * 2.55), 4000, b); sendSoon(function () { quiet('/api/services/light/turn_on', { entity_id: b, brightness_pct: bp }, b); }); }
   });
-  // A value you set holds until Home Assistant reports it (or 4 seconds),
-  // so a check that lands just after you let go cannot snap the bar back.
-  var heldVal = {};
-  function holdVal(id, key, value, ms) { heldVal[id + '|' + key] = { id: id, key: key, value: value, until: Date.now() + (ms || 4000) }; }
-  // Numbers agree when close (a bar's rounding); anything else (names, groups, colours) when equal.
-  function heldSame(a, b, key) { return typeof b === 'number' ? Math.abs((a || 0) - b) < 0.015 * (key === 'brightness' ? 255 : 1) : JSON.stringify(a) === JSON.stringify(b); }
-  function applyHeldVals() {
-    var now = Date.now();
-    Object.keys(heldVal).forEach(function (k) {
-      var h = heldVal[k], it = thing(h.id);
-      if (!it || now > h.until || heldSame(it[h.key], h.value, h.key)) { delete heldVal[k]; return; }
-      it[h.key] = h.value;
-    });
-  }
   document.addEventListener('pointerup', function () { if (dragging) setTimeout(function () { dragging = null; }, 300); });
   document.addEventListener('change', function (e) {
     var t = e.target;
@@ -1390,7 +1361,7 @@ ${HOME_ICONS_JS}
     if (b) {
       // The big slider reaches 0: dragging all the way down turns the light off.
       if (Number(t.value) === 0) { setLocal(b, { state: 'off' }); service('light', 'turn_off', { entity_id: b }, b); return; }
-      dragging = null; holdVal(b, 'brightness', Math.round(t.value * 2.55));
+      dragging = null; holdVal(b, 'brightness', Math.round(t.value * 2.55), 4000, b);
       var fb = Number(t.value); sendSoon(function () { quiet('/api/services/light/turn_on', { entity_id: b, brightness_pct: fb }, b); }); return;
     }
     // Any colour, from the rainbow swatch's colour picker.
@@ -1423,7 +1394,7 @@ ${HOME_ICONS_JS}
       return;
     }
     var v = t.getAttribute && t.getAttribute('data-vol');
-    if (v) { dragging = null; holdVal(v, 'vol', t.value / 100); sendSoon(function () { quiet('/api/services/media_player/volume_set', { entity_id: v, volume_level: t.value / 100 }, v); }); }
+    if (v) { dragging = null; holdVal(v, 'vol', t.value / 100, 4000, v); sendSoon(function () { quiet('/api/services/media_player/volume_set', { entity_id: v, volume_level: t.value / 100 }, v); }); }
   });
 
   // Checking every 5 seconds only while the page is on screen (deck Q-live):
@@ -1454,6 +1425,7 @@ ${HOME_HISTORY_JS}
 ${HOME_LIVE_JS}
 ${HOME_CAMERA_JS}
 ${HOME_REDRAW_JS}
+${HOME_PENDING_JS}
 ${HOME_EDIT_JS}
   start();
 })();

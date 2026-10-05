@@ -25,8 +25,18 @@ it('keeps the same pop-up, with focus inside it, when history arrives and its de
   expect(ev.defaultPrevented).toBe(true);
 });
 
-it('reserves room for the history so the pop-up does not jump when it arrives', async () => {
+// Code review 9: the history area is sized for the lines it will hold (what this device showed last time), so a
+// pop-up opened again does not change size when its history arrives.
+it('reserves the history room it needed last time, so a second opening does not change size', async () => {
   await mount({ fetchHook: noCameraPicture });
-  q('[data-eid="light.living_room_lamp"]').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
-  expect(document.querySelector('.dlg .dlg-hist')).toBeTruthy(); // the history area exists from the first moment, with its own reserved height (see the style)
+  const open = () => q('[data-eid="light.living_room_lamp"]').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+  const room = () => document.querySelector<HTMLElement>('.dlg-hist')!.style.minHeight;
+  open();
+  expect(room()).not.toBe('');
+  await tick(1000);
+  const after = room();
+  expect(parseFloat(after)).toBeGreaterThan(0);
+  q('[data-dlg-close]').click();
+  open();
+  expect(room()).toBe(after); // reserved from the first moment, equal to what it turned out to need
 });

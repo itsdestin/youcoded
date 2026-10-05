@@ -4,7 +4,7 @@
 // what you are holding, typing in, or focused on is never thrown away; a quiet
 // house does not touch the page at all, even with a camera picture refreshing.
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mount, unmount, q, qa, flush, frame, tick, house, flip, noCameraPicture } from './home-page-harness';
+import { mount, unmount, q, qa, flush, frame, tick, house, flip, push, pointer, noCameraPicture } from './home-page-harness';
 
 afterEach(() => { unmount(); vi.useRealTimers(); });
 const lampCard = () => q('[data-eid="light.living_room_lamp"]');
@@ -40,9 +40,10 @@ describe('Home page draws changes in place', () => {
     const card = lampCard();
     let structural = 0;
     const obs = new MutationObserver((ms) => ms.forEach((m) => { if (m.type === 'childList') structural++; }));
-    obs.observe(q('#rooms'), { childList: true, subtree: true });
+    for (const area of ['#rooms', '#favs', '#bar', '#chips']) obs.observe(q(area), { childList: true, subtree: true });
     for (let s = 0; s < 60; s++) await tick(1000);
     await flush();
+    structural += obs.takeRecords().filter((m) => m.type === 'childList').length; // records not yet delivered still count
     obs.disconnect();
     expect(document.contains(card)).toBe(true);
     expect(structural).toBe(0);
@@ -71,12 +72,13 @@ describe('Home page draws changes in place', () => {
   it('keeps a slider you have grabbed when something else changes, and through the minute check', async () => {
     await mount({ fetchHook: noCameraPicture });
     const el = q('[data-vol="media_player.living_room_speaker"]') as HTMLInputElement;
-    el.focus(); // finger down, not moved yet
+    el.focus(); pointer(el, 'pointerdown'); // finger down on it, not moved yet
     flip('light.under_cabinet');
     await frame();
     expect(document.contains(el)).toBe(true);
     el.value = '55'; input(el); // now moving
     await tick(61_000);
+    pointer(document, 'pointerup');
     expect(document.contains(el)).toBe(true);
     expect(el.value).toBe('55');
   });
@@ -103,5 +105,58 @@ describe('Home page draws changes in place', () => {
     await tick(40_000); // inside the 60-second live checking gap: nothing else redraws the area
     expect(el().value).toBe(start);
     fail = false;
+  });
+
+  // Code review 1: a card going away must not make the cards after it be pulled out and put back.
+  it('keeps the other cards, and the focus on one of them, when a device disappears from the house', async () => {
+    const m = await mount({ fetchHook: noCameraPicture });
+    const later = q('[data-eid="light.desk_backlight"]'), btn = later.querySelector<HTMLElement>('[data-toggle]')!;
+    btn.focus();
+    m.socks[0].say(JSON.stringify({ id: 1, type: 'event', event: { r: ['light.overhead_light'] } }));
+    await frame();
+    expect(document.querySelector('[data-eid="light.overhead_light"]')).toBeNull();
+    expect(document.contains(later)).toBe(true);
+    expect(document.activeElement).toBe(btn);
+  });
+
+  // Code review 2: clicking elsewhere with the name box still open must not reset what was typed.
+  it('keeps a name being typed when the box loses focus and something redraws', async () => {
+    const m = await mount({ data: { open: ['living_room', 'kitchen'], editing: true }, fetchHook: noCameraPicture });
+    q('[data-eid="light.living_room_lamp"] [data-act="edopen"]').click();
+    const box = document.querySelector<HTMLInputElement>('[data-rn]')!;
+    box.value = 'Reading lamp';
+    box.blur(); // the person clicked on empty page
+    push(m.socks[0], 'light.kitchen_pendants', { a: { friendly_name: 'Pendant lights' } }); // another row changes, so the page really redraws
+    await frame();
+    await tick(61_000);
+    expect(document.querySelector<HTMLInputElement>('[data-rn]')).toBe(box);
+    expect(box.value).toBe('Reading lamp');
+  });
+
+  // Code review 11: a name box belongs to its own device and is never reused for another.
+  it('never shows one device\'s half-typed name in another device\'s box', async () => {
+    await mount({ data: { open: ['living_room'], editing: true }, fetchHook: noCameraPicture });
+    q('[data-eid="light.living_room_lamp"] [data-act="edopen"]').click();
+    document.querySelector<HTMLInputElement>('[data-rn]')!.value = 'half typed';
+    q('[data-eid="light.living_room_ceiling"] [data-act="edopen"]').click();
+    const box = document.querySelector<HTMLInputElement>('[data-rn]')!;
+    expect(box.getAttribute('data-rn')).toBe('light.living_room_ceiling');
+    expect(box.value).toBe('Ceiling');
+  });
+
+  // Code review 3: a plain click is not a slider being let go, so nothing is compared again.
+  it('does not redraw anything for a click that is not a slider being let go', async () => {
+    await mount({ fetchHook: noCameraPicture });
+    const card = lampCard();
+    card.setAttribute('data-marker', '1'); // a redraw that compared the page afresh would take this off
+    pointer(document, 'pointerdown'); pointer(document, 'pointerup');
+    await tick(100);
+    expect(card.getAttribute('data-marker')).toBe('1');
+    // while letting go of a held slider does compare afresh (see the refused-slider test)
+  });
+
+  it('starts a Nest camera as its events card, never as an empty grey picture box', async () => {
+    const m = await mount({ fetchHook: noCameraPicture });
+    expect(m.puts.greyBox ?? false).toBe(false);
   });
 });

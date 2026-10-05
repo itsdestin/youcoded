@@ -9,15 +9,7 @@
 // backslash in the page's own code is doubled and no backtick may appear.
 
 export const HOME_REDRAW_CSS = `
-  /* A press that is slow, finished or refused says so on its own card (audit A-4). Kept neutral on purpose. */
-  .pend { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 6px; font-size: 12px; color: var(--fg-muted); }
-  .pend .pend-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--fg-muted); flex-shrink: 0; }
-  .pend[data-pend="done"] .pend-dot { background: rgb(50, 205, 90); }
-  .pend[data-pend="failed"] { color: var(--fg); }
-  .pend[data-pend="failed"] .pend-dot { background: rgb(235, 70, 55); }
   .banner .yc-button { margin-left: 10px; }
-  /* The pop-up's history keeps its room while it loads, so the pop-up does not jump (audit F8). */
-  .dlg-hist { min-height: 11em; }
 `;
 
 export const HOME_REDRAW_JS = `
@@ -28,13 +20,24 @@ export const HOME_REDRAW_JS = `
   // thrown away. morphInto() instead walks the new drawing against what is on the
   // page and changes only what differs. Cards are matched by their device id.
   var gripping = null; // the slider a finger or mouse is holding right now
-  function keyOf(n) { return n.nodeType === 1 ? (n.getAttribute('data-eid') || n.id || null) : null; }
-  function sameKind(a, b) { return a.nodeType === b.nodeType && a.nodeName === b.nodeName; }
-  // Things the person is working in are left exactly as they are: a text box
-  // being typed in, an open drop-down, a slider being dragged.
+  // WHY every control and media slot has a key (code review 1, 2, 11): a thing is matched to
+  // the SAME thing by its key, never to a neighbour that merely has the same tag, so an input
+  // is never reused as another input, a video slot never keeps another slot's player, and a
+  // typed name belongs to its own device.
+  var KEYS = ['data-eid', 'id', 'data-rn', 'data-nr', 'data-vol', 'data-bright', 'data-gbright', 'data-move', 'data-sound', 'data-any', 'data-clip-slot', 'data-live-slot', 'data-k'];
+  function keyOf(n) {
+    if (n.nodeType !== 1) return null;
+    for (var i = 0; i < KEYS.length; i++) { var v = n.getAttribute(KEYS[i]); if (v != null && v !== '') return KEYS[i] + ':' + v; }
+    return null;
+  }
+  function sameKind(a, b) { return a.nodeType === b.nodeType && a.nodeName === b.nodeName && (a.nodeName !== 'INPUT' || a.type === b.type); }
+  // Things the person is working in are left exactly as they are: a name box (focused or
+  // not: clicking elsewhere must not reset it, code review 2), an open drop-down, a
+  // slider being dragged.
   function keepAsIs(el) {
+    if (el.hasAttribute('data-rn') || el.hasAttribute('data-nr')) return true;
     if (el !== document.activeElement) return false;
-    if (el.nodeName === 'SELECT' || el.hasAttribute('data-rn') || el.hasAttribute('data-nr')) return true;
+    if (el.nodeName === 'SELECT') return true;
     return el.nodeName === 'INPUT' && el.type === 'range' && !!(dragging || gripping === el);
   }
   function patchEl(a, b) {
@@ -52,20 +55,48 @@ export const HOME_REDRAW_JS = `
     if (a.nodeName === 'INPUT') { var v = b.getAttribute('value'); if (v != null && a.value !== v) a.value = v; }
     else if (a.nodeName === 'SELECT') { var sel = b.querySelector('option[selected]'); if (sel && a.value !== sel.getAttribute('value')) a.value = sel.getAttribute('value'); }
   }
+  // The longest run of old children already in the right order stays where it is.
+  function stableRun(seq) {
+    var tails = [], prev = [];
+    seq.forEach(function (s, i) {
+      var lo = 0, hi = tails.length;
+      while (lo < hi) { var m = (lo + hi) >> 1; if (seq[tails[m]].pos < s.pos) lo = m + 1; else hi = m; }
+      prev[i] = lo ? tails[lo - 1] : -1; tails[lo] = i;
+    });
+    var out = new Set(), k = tails.length ? tails[tails.length - 1] : -1;
+    while (k >= 0) { out.add(seq[k].node); k = prev[k]; }
+    return out;
+  }
+  // WHY (code review 1): children that are gone are removed FIRST, and only children that
+  // really changed place are moved. The first version walked a cursor that stayed on a
+  // doomed card, so removing one card pulled every later card out and put it back, which
+  // loses focus and restarts a playing clip: the harm this drawing exists to prevent.
   function patchKids(a, b) {
-    var byKey = {}, used = [];
-    Array.prototype.forEach.call(a.childNodes, function (n) { var k = keyOf(n); if (k) byKey[k] = n; });
-    var pos = a.firstChild;
-    Array.prototype.slice.call(b.childNodes).forEach(function (bn) {
+    var olds = Array.prototype.slice.call(a.childNodes), news = Array.prototype.slice.call(b.childNodes);
+    var byKey = {}, loose = [], taken = new Set(), match = [], j = 0;
+    olds.forEach(function (n) { var k = keyOf(n); if (k) { if (!byKey[k]) byKey[k] = n; } else loose.push(n); });
+    news.forEach(function (bn, i) {
       var k = keyOf(bn), an = null;
-      if (k) { an = byKey[k] && used.indexOf(byKey[k]) < 0 && sameKind(byKey[k], bn) ? byKey[k] : null; }
-      else { for (var c = pos; c; c = c.nextSibling) { if (!keyOf(c) && used.indexOf(c) < 0 && sameKind(c, bn)) { an = c; break; } } }
-      if (!an) { a.insertBefore(bn, pos); used.push(bn); return; }
-      if (an === pos) pos = pos.nextSibling; else a.insertBefore(an, pos);
-      used.push(an);
+      if (k) { an = byKey[k]; if (an && (taken.has(an) || !sameKind(an, bn))) an = null; }
+      else { for (var c = j; c < loose.length; c++) { if (!taken.has(loose[c]) && sameKind(loose[c], bn)) { an = loose[c]; j = c + 1; break; } } }
+      if (an) taken.add(an);
+      match[i] = an;
+    });
+    olds.forEach(function (n) { if (!taken.has(n)) a.removeChild(n); });
+    var order = new Map(), seq = [];
+    Array.prototype.forEach.call(a.childNodes, function (n, i) { order.set(n, i); });
+    match.forEach(function (an) { if (an) seq.push({ node: an, pos: order.get(an) }); });
+    var stable = stableRun(seq), ref = null;
+    for (var i = news.length - 1; i >= 0; i--) {
+      var node = match[i] || news[i];
+      if (!match[i] || !stable.has(node)) a.insertBefore(node, ref);
+      ref = node;
+    }
+    news.forEach(function (bn, i) {
+      var an = match[i];
+      if (!an) return;
       if (an.nodeType === 1) patchEl(an, bn); else if (an.nodeValue !== bn.nodeValue) an.nodeValue = bn.nodeValue;
     });
-    Array.prototype.slice.call(a.childNodes).forEach(function (n) { if (used.indexOf(n) < 0) a.removeChild(n); });
   }
   function morphInto(el, html) {
     if (!el.firstChild || !html) { el.innerHTML = html; return; }
@@ -77,10 +108,17 @@ export const HOME_REDRAW_JS = `
   // Letting go: whatever was held back while the slider was held draws now, and
   // the drawing is compared with the page afresh (a slider the house did not take
   // goes back, audit F6).
-  function released() { gripping = null; drawn = {}; renderSoon(); }
-  document.addEventListener('pointerup', released);
-  document.addEventListener('pointercancel', released);
-  document.addEventListener('change', function (e) { if (e.target.classList && e.target.classList.contains('lr')) released(); });
+  // WHY it returns early unless a slider was held (code review 3): clearing drawn forces a
+  // full compare of every area, and a plain click or a touch-scroll start must not do that.
+  function released(force) {
+    var was = gripping || dragging;
+    gripping = null;
+    if (!was && force !== true) return;
+    drawn = {}; renderSoon();
+  }
+  document.addEventListener('pointerup', function () { released(); });
+  document.addEventListener('pointercancel', function () { released(); });
+  document.addEventListener('change', function (e) { if (e.target.classList && e.target.classList.contains('lr')) released(true); });
 
   // ── One drawing per moment (audit F3, A-2) ───────────────────────────────
   // What the person presses draws at once (render). Everything that arrives by
@@ -97,79 +135,4 @@ export const HOME_REDRAW_JS = `
     try { fn(); } finally { batching -= 1; }
     if (!batching && batchDirty) { batchDirty = false; draw(); }
   }
-
-  // ── Pending changes (audit F5/F6/F7, A-4 and A-6) ────────────────────────
-  // Every guess the page shows before the house has agreed (a pressed switch, a
-  // dragged slider, a speaker tick, a new name) is kept in one place with what it
-  // replaced. If the house does not take it, the old value comes back at once and
-  // the card says "Didn't work" until dismissed or until the next press on it.
-  // A slow one says "Sending…" (only after half a second, so quick presses stay
-  // quiet) and then "Done".
-  var pend = {}, pendSeq = 0, undoBuf = [], dragBefore = {};
-  ['click', 'change', 'input'].forEach(function (n) { document.addEventListener(n, function () { undoBuf = []; }, true); });
-  function undoAll(list) {
-    (list || []).forEach(function (u) {
-      var it = thing(u.id);
-      if (it) Object.assign(it, u.before);
-      delete held[u.id];
-      Object.keys(u.before).forEach(function (k) { delete heldVal[u.id + '|' + k]; });
-    });
-  }
-  function pendBegin(id, again) {
-    var tok = ++pendSeq, e = pend[id] = { tok: tok, state: 'quiet', undo: undoBuf, again: again, msg: '' };
-    undoBuf = [];
-    e.timer = setTimeout(function () { if (pend[id] === e && e.state === 'quiet') { e.state = 'sending'; renderSoon(); } }, 500);
-    return tok;
-  }
-  function pendEnd(id, tok, err) {
-    var e = pend[id];
-    if (!e || e.tok !== tok) return; // a newer press on the same thing took over
-    clearTimeout(e.timer);
-    if (err) return pendFail(id, e, err);
-    if (e.state === 'sending') {
-      e.state = 'done';
-      e.timer = setTimeout(function () { if (pend[id] === e) { delete pend[id]; renderSoon(); } }, 1500);
-    } else delete pend[id];
-    renderSoon();
-  }
-  function pendFail(id, e, msg) {
-    undoAll(e.undo);
-    e.state = 'failed'; e.msg = msg;
-    // Something with no card of its own (a scene, Everything off) says it in the bar at the top.
-    if (!thing(id) && id.indexOf('room:') !== 0) { delete pend[id]; banner(msg, true); }
-    render();
-  }
-  // A slider the house did not take (they send without waiting, so no pendBegin).
-  function dragSnap(t) {
-    var v = t.getAttribute('data-vol'), b = t.getAttribute('data-bright'), g = t.getAttribute('data-gbright'), key = v || b || (g ? 'room:' + g : null), list = [];
-    if (!key) return;
-    if (v) list.push({ id: v, fields: ['vol'] });
-    else if (b) list.push({ id: b, fields: ['brightness', 'state'] });
-    else (rooms || []).filter(function (r) { return r.id === g; }).forEach(function (r) { liveLights(r.items).filter(dimmable).forEach(function (x) { list.push({ id: x.id, fields: ['brightness', 'state'] }); }); });
-    dragBefore[key] = list.map(function (p) { var it = thing(p.id), before = {}; p.fields.forEach(function (f) { before[f] = it ? it[f] : null; }); return { id: p.id, before: before }; });
-  }
-  function sliderFailed(key, msg) {
-    var e = pend[key] = { tok: ++pendSeq, state: 'failed', undo: dragBefore[key], again: null, msg: msg };
-    pendFail(key, e, msg);
-  }
-  function pendHtml(a, b) {
-    var e = pend[a] && pend[a].state !== 'quiet' ? pend[a] : pend[b] && pend[b].state !== 'quiet' ? pend[b] : null;
-    if (!e) return '';
-    var key = pend[a] === e ? a : b;
-    if (e.state === 'failed') {
-      return '<div class="pend" role="alert" data-pend="failed"><span class="pend-dot" aria-hidden="true"></span><span>Didn\\u2019t work. ' + esc(e.msg) + '</span>' +
-        (e.again ? '<button class="yc-button yc-button--sm" data-pend-retry="' + esc(key) + '">Try again</button>' : '') +
-        '<button class="yc-button yc-button--sm yc-button--ghost" data-pend-dismiss="' + esc(key) + '">Dismiss</button></div>';
-    }
-    return '<div class="pend" role="status" data-pend="' + e.state + '"><span class="pend-dot" aria-hidden="true"></span><span>' + (e.state === 'done' ? 'Done' : 'Sending\\u2026') + '</span></div>';
-  }
-  document.addEventListener('click', function (e) {
-    var t = e.target.closest && e.target.closest('[data-pend-dismiss],[data-pend-retry],[data-banner-dismiss]');
-    if (!t) return;
-    var d = t.getAttribute('data-pend-dismiss'), r = t.getAttribute('data-pend-retry');
-    if (t.hasAttribute('data-banner-dismiss')) { bannerSticky = false; banner(''); return; }
-    if (d) { delete pend[d]; render(); return; }
-    var p = pend[r];
-    if (p && p.again) { delete pend[r]; p.again(); }
-  });
 `;

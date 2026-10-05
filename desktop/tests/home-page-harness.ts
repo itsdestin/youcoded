@@ -1,3 +1,6 @@
+// NOTE: this file patches EventTarget.prototype.addEventListener for the whole test file, to remember every
+// document- or window-level listener the page adds, so unmount() can remove them and a second mount starts
+// clean. That is safe only because vitest gives each test file its own environment.
 // Shared set-up for the Home page behaviour tests (redraw, newest-wins, pending,
 // pop-up, clip): runs the REAL page in jsdom against the workbench's pretend Home
 // Assistant, with fake clocks and a stand-in for `youcoded.socket`. Not a test file.
@@ -5,7 +8,7 @@
 // document-level listeners so a second mount starts clean.
 import { vi } from 'vitest';
 import { HOME_ASSISTANT_PAGE_HTML } from '../src/renderer/dev/workbench/fixtures/home-assistant-page';
-import { fakeHomeAssistantFetch, fakeHomeAssistantLive, fakeHomeAssistantSocket } from '../src/renderer/dev/workbench/fixtures/fake-home-assistant';
+import { fakeHomeAssistantFetch, fakeHomeAssistantLive, fakeHomeAssistantReset, fakeHomeAssistantSocket } from '../src/renderer/dev/workbench/fixtures/fake-home-assistant';
 
 export const BASE = 'http://100.99.234.114:8123';
 export const flush = async () => { await vi.advanceTimersByTimeAsync(0); await vi.advanceTimersByTimeAsync(0); };
@@ -19,6 +22,9 @@ export const flip = (entity: string) => {
   const now = rooms.flatMap((r) => r.items).find((i) => i.id === entity)!.state;
   house(now === 'on' ? 'light/turn_off' : 'light/turn_on', { entity_id: entity });
 };
+/** A pointer event on an element (a finger or mouse), the way a slider is really grabbed and let go. */
+export const pointer = (el: Element | Document, type: 'pointerdown' | 'pointerup' | 'pointercancel') =>
+  el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true }));
 export const q = (s: string) => document.querySelector<HTMLElement>(s)!;
 export const qa = (s: string) => Array.from(document.querySelectorAll<HTMLElement>(s));
 export const noCameraPicture = (req: { url: string }) => { if (req.url.includes('camera_proxy')) throw new Error('no picture'); return undefined; };
@@ -33,6 +39,7 @@ EventTarget.prototype.addEventListener = function (this: EventTarget, t: string,
 } as never;
 
 export function unmount() {
+  fakeHomeAssistantReset(); // a fresh house for the next test: nothing one test changes reaches another
   for (const [t, n, l, o] of listeners.splice(0)) t.removeEventListener(n, l, o as never);
   vi.clearAllTimers();
   document.body.innerHTML = '';
@@ -44,8 +51,9 @@ export async function mount(opts: { data?: Record<string, unknown>; fetchHook?: 
   const html = HOME_ASSISTANT_PAGE_HTML;
   document.head.innerHTML = /<head>([\s\S]*?)<\/head>/.exec(html)![1];
   document.body.innerHTML = /<body>([\s\S]*?)<script>/.exec(html)![1];
-  const puts: string[] = [];
-  (window as any).__homeAfterPut = (id: string) => puts.push(id);
+  const puts: string[] & { greyBox?: boolean } = [];
+  // Every time the rooms are drawn: was an empty grey picture box on screen (a camera card that is about to change shape)?
+  (window as any).__homeAfterPut = (id: string) => { puts.push(id); if (id === 'rooms' && document.querySelector('#rooms img.cam:not([src])')) puts.greyBox = true; };
   const socks: Sock[] = [];
   (window as any).youcoded = {
     devices: { ha: BASE }, data: opts.data ?? { open: ['living_room', 'destins_room'] },

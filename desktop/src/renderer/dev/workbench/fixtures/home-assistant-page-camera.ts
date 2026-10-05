@@ -25,6 +25,7 @@
 export const HOME_CAMERA_CSS = `
   /* Camera card: recent events, a clip, live video (C-camera "events") */
   .cam-card .sub { font-size: 11px; color: var(--fg-muted); font-weight: 400; }
+  .cam-evs-wait { min-height: 9em; }
   .cam-evs { display: flex; flex-direction: column; gap: 4px; }
   .cam-ev { appearance: none; font: inherit; font-size: 12px; display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 8px; border: 0; border-radius: 8px; background: var(--well); color: var(--fg); cursor: pointer; text-align: left; }
   .cam-ev:hover:not(:disabled) { background: var(--inset); }
@@ -185,6 +186,9 @@ export const HOME_CAMERA_JS = `
   // events, a clip or live view, and Watch live.
   function cameraCardHtml(it, cls, na, ctx) {
     var cm = camNote[it.id];
+    // WHY (code review 10): a Nest camera is known from its maker at the first drawing, so its card starts as
+    // the events card with its room reserved, not as an empty grey picture that then jumps into one.
+    if (!cm && !camCache[it.id] && /nest|google/i.test((it.maker || '') + ' ' + (it.model || ''))) cm = { nest: true };
     if (!cm || !cm.nest) {
       return '<div class="' + cls + ' col"><div class="line"><div class="name">' + esc(it.name) + (na && !camCache[it.id] ? '<div class="sub">Not responding</div>' : na ? '<div class="sub">Last picture · camera not responding</div>' : '') + '</div></div>' +
         (cm ? '<div class="cam-empty note">' + esc(cm.text) + (cm.href ? ' <a href="' + esc(base + cm.href) + '" target="_blank" rel="noopener">' + esc(cm.link) + '</a>' : '') + '</div>'
@@ -203,7 +207,8 @@ export const HOME_CAMERA_JS = `
         : '<div class="cam-view"><div class="cam-slot" data-clip-slot="' + eid + '"></div>' + (clip.state === 'loading' ? '<div class="cam-msg">Loading clip…</div>' : '') +
           '<button class="yc-button yc-button--sm cam-stop" data-cam-act="close" data-id="' + eid + '">Close</button></div>';
     }
-    if (ev.state === 'failed') html += '<div class="cam-note">Could not load recent events from Home Assistant.</div>';
+    if (ev.state === 'loading') html += '<div class="cam-evs cam-evs-wait" aria-hidden="true"></div>';
+    else if (ev.state === 'failed') html += '<div class="cam-note">Could not load recent events from Home Assistant.</div>';
     else if (ev.state === 'ready' && !ev.list.length) html += '<div class="cam-note">No recordings yet. Nest only saves clips when it can send events to Home Assistant.</div>';
     else if (ev.state === 'ready') {
       html += '<div class="cam-evs">' + ev.list.map(function (e) {

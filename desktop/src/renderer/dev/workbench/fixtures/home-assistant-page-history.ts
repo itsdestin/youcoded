@@ -60,6 +60,8 @@ export const HOME_HISTORY_JS = String.raw`
   var hist = { events: [], days: 1, at: 0, loading: false, failed: false };
   var devHist = { id: null, events: [], at: 0, loading: false, failed: false };
   var actRoom = 'all', actKind = 'all';
+  // How many history lines each device showed last time, so its pop-up reserves that much room (code review 9).
+  var histRows = {};
   // A workbench screen can open with a device's pop-up showing (saved dlg).
   var dlgId = typeof saved.dlg === 'string' ? saved.dlg : null, dlgReturn = null;
   var ACTIVITY = ico('<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>', 16);
@@ -169,7 +171,7 @@ export const HOME_HISTORY_JS = String.raw`
     return diff === 0 ? 'Today' : diff === 1 ? 'Yesterday' : d.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
   }
   function evRow(ev) {
-    return '<div class="ev" style="--d:' + evColour(ev) + '"><span class="when">' + esc(clock(ev.t)) + '</span><span class="i">' + evIcon(ev) + '</span>' +
+    return '<div class="ev" data-k="' + esc(ev.id + '|' + ev.t) + '" style="--d:' + evColour(ev) + '"><span class="when">' + esc(clock(ev.t)) + '</span><span class="i">' + evIcon(ev) + '</span>' +
       '<span class="what">' + (ev.scene ? '<b>' + esc(ev.name) + '</b>' : '<button class="ev-name" data-dev="' + esc(ev.devId) + '">' + esc(ev.name) + '</button>') + ' ' + esc(ev.words) +
       '<span class="by">' + esc(ev.who) + '</span></span><span class="where">' + esc(ev.room.name) + '</span></div>';
   }
@@ -209,6 +211,10 @@ export const HOME_HISTORY_JS = String.raw`
       : evs.length ? evs.map(function (e) {
         return '<div class="hrow"><span class="when">' + esc(dayName(e.t) === 'Today' ? clock(e.t) : dayName(e.t).split(',')[0]) + '</span><span><span class="hdot" style="--d:' + evColour(e) + '"></span>' + esc(e.words.charAt(0).toUpperCase() + e.words.slice(1)) + '<span class="by">' + esc(e.who) + '</span></span></div>';
       }).join('') : '<div class="muted">No changes in the last 3 days.</div>';
+    // WHY rows, not a fixed height (code review 9): the area is sized for the lines it will hold, from what this
+    // device showed last time (3 the first time), so it does not jump when the history arrives.
+    var loaded = devHist.id === it.id && !devHist.loading, hrows = loaded ? Math.max(evs.length, 1) : (histRows[it.id] || 3);
+    if (loaded) histRows[it.id] = hrows;
     var about = [['Maker', it.maker], ['Model', it.model], ['Connects through', entry ? (entry.title && entry.title !== prettyDomain(entry.domain) ? prettyDomain(entry.domain) + ' · ' + entry.title : prettyDomain(entry.domain)) : null], ['Room', room ? room.name : null], ['Software', it.sw]]
       .filter(function (a) { return a[1]; });
     var since = it.since ? (gone(it) ? 'Not responding since ' : 'Last changed ') + ago(it.since) : '';
@@ -216,7 +222,7 @@ export const HOME_HISTORY_JS = String.raw`
       '<div class="dlg-head"><div class="t"><h2 id="dlg-title">' + esc(it.name) + '</h2><span class="vsub">' + esc([room ? room.name : '', since].filter(Boolean).join(' · ')) + '</span></div>' +
       '<button class="dlg-x" data-dlg-close="1" aria-label="Close">' + CLOSE + '</button></div>' +
       itemHtml(it, null) +
-      '<div class="dlg-cols"><section><div class="dlg-sec">History</div><div class="dlg-hist">' + histHtml + '</div></section>' +
+      '<div class="dlg-cols"><section><div class="dlg-sec">History</div><div class="dlg-hist" style="min-height:' + (hrows * 1.9) + 'em">' + histHtml + '</div></section>' +
       '<section><div class="dlg-sec">About this device</div>' + (about.length ? '<dl class="about">' + about.map(function (a) { return '<dt>' + esc(a[0]) + '</dt><dd>' + esc(a[1]) + '</dd>'; }).join('') + '</dl>' : '<div class="muted">Home Assistant has no details for it.</div>') +
       (it.device ? '<a class="yc-button yc-button--sm" href="' + esc(base + '/config/devices/device/' + encodeURIComponent(it.device)) + '" target="_blank" rel="noopener">Open in Home Assistant ' + OUT + '</a>' : '') + '</section></div></div></div>';
   }

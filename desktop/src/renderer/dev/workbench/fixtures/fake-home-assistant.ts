@@ -14,7 +14,7 @@ interface Thing {
   rgb?: number[] | null; k?: number | null;
   modesHvac?: string[]; action?: string | null;
   model?: string; dc?: string; activity?: string; app?: string; source?: string; muted?: boolean;
-  maker?: string; entry?: string; since?: string;
+  maker?: string; entry?: string; since?: string; upd?: string;
   /** Sonos `group_members`: the speakers playing together, leader first. */
   group?: string[];
   sw?: string;
@@ -80,6 +80,14 @@ const ago = (h: number) => new Date(Date.now() - h * 3600_000).toISOString();
 ROOMS[0].scenes = ['Tokyo', 'Relax', 'Read', 'Concentrate', 'Energize', 'Nightlight', 'TV Time', 'Sunset Glow', 'Galaxy', 'Malibu pink']
   .map((n, i) => ({ id: `scene.destins_room_${n.toLowerCase().replace(/ /g, '_')}`, name: `Destin's Room ${n}`, last: ago(i === 6 ? 1 : 30 + i) }));
 ROOMS[1].scenes = ['Relax', 'Read', 'Bright'].map((n, i) => ({ id: `scene.living_room_${n.toLowerCase()}`, name: `Living Room ${n}`, last: ago(40 + i) }));
+// A fresh house for each test: everything above is copied once, and this puts it back
+// (tests/home-page-harness.ts calls it after every test, so what one test leaves behind never reaches the next).
+const SEED = structuredClone(ROOMS);
+export function fakeHomeAssistantReset(): void {
+  ROOMS.splice(0, ROOMS.length, ...structuredClone(SEED));
+  nestSignedIn = false;
+  liveSessions.clear();
+}
 
 function find(id: string): Thing | undefined {
   for (const r of ROOMS) for (const t of r.items) if (t.id === id) return t;
@@ -275,7 +283,8 @@ function squash(t: Thing): Squashed {
   const a: Record<string, unknown> = {};
   for (const [field, attr] of ATTRS) if (t[field] !== undefined) a[attr] = t[field];
   const lc = Date.parse(t.since ?? '') / 1000 || 0;
-  return { s: t.state, a, lc, lu: lc };
+  // The house's own "last updated" stamp: the template answers with it (`upd`) too, so the page can tell which is newer.
+  return { s: t.state, a, lc, lu: Date.parse(t.upd ?? '') / 1000 || lc };
 }
 interface LiveSub { id: number; ids: Set<string>; last: Map<string, Squashed> }
 interface LiveSession { push?: (texts: string[]) => void; subs: LiveSub[] }
@@ -290,16 +299,20 @@ function notifyLive(): void {
     for (const id of sub.ids) {
       const t = find(id);
       if (!t) continue;
-      const now = squash(t), was = sub.last.get(id);
-      sub.last.set(id, now);
-      if (!was) { added[id] = now; continue; }
+      let now = squash(t);
+      const was = sub.last.get(id);
+      if (!was) { sub.last.set(id, now); added[id] = now; continue; }
       const plus: Record<string, unknown> = {};
-      if (now.s !== was.s) { plus.s = now.s; plus.lc = now.lc; plus.lu = now.lu; }
+      if (now.s !== was.s) { plus.s = now.s; plus.lc = now.lc; }
       const aPlus: Record<string, unknown> = {};
       for (const k of Object.keys(now.a)) if (JSON.stringify(now.a[k]) !== JSON.stringify(was.a[k])) aPlus[k] = now.a[k];
-      if (Object.keys(aPlus).length) { plus.a = aPlus; plus.lu = Date.now() / 1000; }
+      if (Object.keys(aPlus).length) plus.a = aPlus;
       const gone = Object.keys(was.a).filter((k) => !(k in now.a));
-      if (!Object.keys(plus).length && !gone.length) continue;
+      if (!Object.keys(plus).length && !gone.length) { sub.last.set(id, now); continue; }
+      // Something changed: the house stamps it now (once, however many listeners hear of it).
+      if (!t.upd || Date.parse(t.upd) / 1000 <= was.lu) t.upd = new Date().toISOString();
+      now = squash(t); plus.lu = now.lu;
+      sub.last.set(id, now);
       changed[id] = { ...(Object.keys(plus).length ? { '+': plus } : {}), ...(gone.length ? { '-': { a: gone } } : {}) };
     }
     const event: Record<string, unknown> = {};
