@@ -23,6 +23,7 @@ import { HOME_REDRAW_CSS, HOME_REDRAW_JS } from './home-assistant-page-redraw';
 import { HOME_PENDING_CSS, HOME_PENDING_JS } from './home-assistant-page-pending';
 import { HOME_EDIT_CSS, HOME_EDIT_JS } from './home-assistant-page-edit';
 import { HOME_CAMERA_CSS, HOME_CAMERA_JS } from './home-assistant-page-camera';
+import { HOME_LOOK_CSS } from './home-assistant-page-look';
 
 
 export const HOME_ASSISTANT_PAGE_JSON = {
@@ -77,7 +78,7 @@ export const HOME_ASSISTANT_PAGE_JSON = {
 function homeAssistantPageHtml(): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>Home</title>
-<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}${HOME_CAMERA_CSS}${HOME_REDRAW_CSS}${HOME_PENDING_CSS}${HOME_EDIT_CSS}</style></head>
+<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}${HOME_CAMERA_CSS}${HOME_REDRAW_CSS}${HOME_PENDING_CSS}${HOME_EDIT_CSS}${HOME_LOOK_CSS}</style></head>
 <body>
 <div class="yc-page yc-stack" id="root">
   <!-- No page title: the app's own bar already names the page, so the
