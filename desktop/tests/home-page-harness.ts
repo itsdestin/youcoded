@@ -56,7 +56,7 @@ export async function mount(opts: { data?: Record<string, unknown>; fetchHook?: 
   (window as any).__homeAfterPut = (id: string) => { puts.push(id); if (id === 'rooms' && document.querySelector('#rooms [data-eid]:not([data-eid="camera.garage_pi"]) img.cam:not([src])')) puts.greyBox = true; };
   const socks: Sock[] = [];
   const saves: unknown[] = [];
-  const videos: Array<{ target: string; stop: ReturnType<typeof vi.fn>; o: { onFrame: (b: unknown, ack: () => void) => void; onState: (s: string, why?: string) => void } }> = [];
+  const videos: Array<{ target: string; at: number; stop: ReturnType<typeof vi.fn>; o: { onFrame: (b: unknown, ack: () => void) => void; onState: (s: string, why?: string) => void } }> = [];
   (window as any).youcoded = {
     devices: { ha: BASE }, data: opts.data ?? { startOpen: ['living_room', 'destins_room'] },
     // Like the real bridge: a save is what the page sees as its data from then on, and every save is kept to read.
@@ -78,7 +78,7 @@ export async function mount(opts: { data?: Record<string, unknown>; fetchHook?: 
       return { send, close: () => undefined };
     },
   };
-  if (opts.video) (window as any).youcoded.video = (_c: string, target: string, o: any) => { const v = { target, o, stop: vi.fn() }; videos.push(v); return v; };
+  if (opts.video) (window as any).youcoded.video = (_c: string, target: string, o: any) => { const v = { target, o, at: Date.now(), stop: vi.fn() }; videos.push(v); return v; };
   new Function(/<script>([\s\S]*?)<\/script>/.exec(html)![1])();
   await flush();
   await vi.waitFor(() => { if (!document.querySelector('[data-eid]')) throw new Error('not drawn'); });

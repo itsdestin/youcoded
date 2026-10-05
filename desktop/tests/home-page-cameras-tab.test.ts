@@ -123,6 +123,8 @@ describe('the Cameras tab', () => {
     hidden = false;
     document.dispatchEvent(new Event('visibilitychange'));
     await flush();
+    // They start 1.5 s apart (the Cameras tab no longer sends every offer in the same instant): one now, the rest by 3 s.
+    await vi.advanceTimersByTimeAsync(3_100);
     expect(running()).toEqual(new Set(NEST_LIVE));
   });
 

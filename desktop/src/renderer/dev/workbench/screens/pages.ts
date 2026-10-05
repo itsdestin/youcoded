@@ -26,6 +26,10 @@ export const PAGES: readonly ScreenEntry[] = [
   { ...pg('pages/page/page-home#edit', 'view'), params: { pagesHome: 'edit' } },
   // The camera card (spec 2026-10-04): recent events with thumbnails, Watch live; the other camera has none yet.
   { ...pg('pages/page/page-home#camera', 'view'), params: { pagesHome: 'camera' } },
+  // The camera card with events that have no recording (the owner's newer Nest cameras): plain icon rows among the recordings.
+  { ...pg('pages/page/page-home#camera-events', 'view'), params: { pagesHome: 'camera-events' } },
+  // The Cameras tab while Google refuses live video: the calm "trying again at" state, with Retry.
+  { ...pg('pages/page/page-home#camera-limited', 'view'), params: { pagesHome: 'camera-limited' } },
   // The Cameras tab: every camera in a grid, all live at once (pretend video).
   { ...pg('pages/page/page-home#cameras', 'view'), params: { pagesHome: 'view-cameras' } },
   { ...pg('pages/page/page-home#remote', 'view'), params: { pagesHome: 'remote' } },

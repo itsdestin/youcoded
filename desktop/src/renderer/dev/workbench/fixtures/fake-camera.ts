@@ -7,6 +7,13 @@ import type { PeerLike, VideoElLike, VideoHostDeps } from '../../../components/p
 
 const FRAME_MS = 160;
 
+/** Google refusing live video (HA's own words for the real refusal, from the owner's log): while set, the workbench's pretend
+ *  Home Assistant answers every video start with "stopped" and this reason, so the page's back-off can be seen. Off by default. */
+export const FAKE_RATE_LIMIT_WHY = 'Error handling WebRTC offer: Nest API error: Too Many Requests (429): RESOURCE_EXHAUSTED Rate limited for the GenerateWebRtcStream API';
+let refusal: string | null = null;
+export function fakeCameraRefuse(why: string | null): void { refusal = why; }
+export function fakeCameraRefusal(): string | null { return refusal; }
+
 export function fakeCameraDeps(): Partial<VideoHostDeps> {
   // Made on the first picture, not here: the mock is built in places with no real document.
   let canvas: HTMLCanvasElement | null = null;

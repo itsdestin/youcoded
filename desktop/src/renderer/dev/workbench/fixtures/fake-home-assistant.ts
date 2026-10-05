@@ -99,6 +99,7 @@ const SEED = structuredClone(ROOMS);
 export function fakeHomeAssistantReset(): void {
   ROOMS.splice(0, ROOMS.length, ...structuredClone(SEED));
   nestSignedIn = false;
+  cameraEventsOn = false;
   liveSessions.clear();
   calls.length = 0;
 }
@@ -178,6 +179,21 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
   // changes to the page's own devices, newest last as Home Assistant sends
   // them. Who did it follows the real shapes: a person's id, an automation,
   // or nothing at all when the change came from the device or another app.
+  // Home Assistant's history list (the camera card reads the event entities' with it): one list per entity asked for, each
+  // starting with the state at the start of the window, then every change in it. Only when camera events are switched on.
+  const hist = /^\/api\/history\/period\/(.+)$/.exec(url.pathname);
+  if (hist) {
+    const from = Date.parse(decodeURIComponent(hist[1])) || Date.now() - 86400000;
+    const wanted = (url.searchParams.get('filter_entity_id') ?? '').split(',').filter(Boolean);
+    return ok(JSON.stringify(wanted.map((entity) => {
+      const rows = cameraEventsOn ? eventLog.filter((e) => e.entity === entity) : [];
+      return [
+        { entity_id: entity, state: new Date(from - 4 * 86400000).toISOString(), attributes: { event_type: 'motion' }, last_changed: new Date(from).toISOString() },
+        ...rows.map((e) => ({ entity_id: entity, state: e.state ?? new Date(Date.now() - e.minAgo * 60000 + (e.offsetSec ?? 0) * 1000).toISOString(), attributes: { event_type: e.type }, last_changed: new Date(Date.now() - e.minAgo * 60000).toISOString() }))
+          .filter((e) => !Date.parse(e.state) || Date.parse(e.state) >= from),
+      ];
+    }).filter((l) => l.length)));
+  }
   const lb = /^\/api\/logbook\/(.+)$/.exec(url.pathname);
   if (lb) {
     const from = Date.parse(decodeURIComponent(lb[1])) || Date.now() - 86400000;
@@ -194,7 +210,7 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
         people: [{ user: USER_DESTIN, name: 'Destin' }],
       }));
     }
-    return ok(JSON.stringify(ROOMS.filter((r) => r.items.length).map((r) => ({ ...r, items: r.items.map((t) => ({ ...t, device: deviceOf(t.id) })) }))));
+    return ok(JSON.stringify(ROOMS.filter((r) => r.items.length).map((r) => ({ ...r, items: r.items.map((t) => ({ ...t, device: deviceOf(t.id), ...(cameraEventsOn && eventEntities[deviceOf(t.id)] ? { evs: eventEntities[deviceOf(t.id)] } : {}) })) }))));
   }
   // A Nest event's recorded clip and thumbnail (spec 2026-10-04, Part 3). The
   // clip is answered the way the app answers `as: 'video'`: a data: link.
@@ -290,6 +306,34 @@ const nestEvents: Record<string, Array<{ id: string; title: () => string }>> = {
   nestEvents.dev_camera_backyard_camera = [{ id: 'e1', title: stamp(35, 'Motion') }, { id: 'e2', title: stamp(300, 'Motion') }];
   nestEvents.dev_camera_doorbell = [];
 }
+
+/** Camera events that arrive with no recording (the owner's real Living Room and Back Door cameras: newer Nest cameras save no
+ *  clips, only send events). OFF by default so the screens and tests built before this keep their lists; the camera-events
+ *  screen and the event tests switch it on. When on, every camera's template line lists its event entities (`evs`), the
+ *  Backyard camera has NO recordings (only events), and a few events line up with a recording (they must show once). */
+let cameraEventsOn = false;
+export function fakeHomeAssistantCameraEvents(on: boolean): void { cameraEventsOn = on; }
+const eventEntities: Record<string, string[]> = {
+  dev_camera_living_room_camera: ['event.living_room_camera_motion', 'event.living_room_camera_person'],
+  dev_camera_hallway_camera: ['event.hallway_camera_motion'],
+  dev_camera_backyard_camera: ['event.backyard_camera_motion'],
+};
+const eventLog: Array<{ entity: string; minAgo: number; offsetSec?: number; type: string; state?: string }> = [
+  // Living room: Person 55 min ago and Motion 152 min ago have recordings (e1, e2); the Person event also fired Motion at the same second.
+  { entity: 'event.living_room_camera_person', minAgo: 55, offsetSec: 4, type: 'person' },
+  { entity: 'event.living_room_camera_motion', minAgo: 55, offsetSec: 4, type: 'motion' },
+  { entity: 'event.living_room_camera_motion', minAgo: 152, offsetSec: 2, type: 'motion' },
+  // ...and these have none: shown as plain rows. One "unavailable" state, which is not an event.
+  { entity: 'event.living_room_camera_motion', minAgo: 20, type: 'motion' },
+  { entity: 'event.living_room_camera_motion', minAgo: 31, type: 'motion' },
+  { entity: 'event.living_room_camera_person', minAgo: 100, type: 'person' },
+  { entity: 'event.living_room_camera_motion', minAgo: 77, type: 'motion', state: 'unavailable' },
+  { entity: 'event.hallway_camera_motion', minAgo: 130, offsetSec: 1, type: 'motion' },
+  { entity: 'event.hallway_camera_motion', minAgo: 400, type: 'motion' },
+  { entity: 'event.backyard_camera_motion', minAgo: 12, type: 'motion' },
+  { entity: 'event.backyard_camera_motion', minAgo: 95, type: 'motion' },
+  { entity: 'event.backyard_camera_motion', minAgo: 240, type: 'motion' },
+];
 
 // ── Instant updates (spec 2026-10-04, Part 1) ─────────────────────────────
 // Home Assistant's `subscribe_entities`: the first answer is every state in
@@ -405,7 +449,7 @@ function answerOne(raw: string): string | null {
       const dev = /^media-source:\/\/nest\/([^/]+)$/.exec(String(m.media_content_id ?? ''))?.[1];
       if (!dev) return reply(id, null, 'Unknown media source.');
       return reply(id, { title: 'Events', media_class: 'directory', media_content_id: `media-source://nest/${dev}`, can_play: false, can_expand: true,
-        children: (nestEvents[dev] ?? []).map((e) => ({ title: e.title(), media_class: 'video', media_content_type: 'video/mp4', media_content_id: `media-source://nest/${dev}/${e.id}`, can_play: true, can_expand: false, thumbnail: `/api/nest/event_media/${dev}/${e.id}/thumbnail` })) });
+        children: (cameraEventsOn && dev === 'dev_camera_backyard_camera' ? [] : nestEvents[dev] ?? []).map((e) => ({ title: e.title(), media_class: 'video', media_content_type: 'video/mp4', media_content_id: `media-source://nest/${dev}/${e.id}`, can_play: true, can_expand: false, thumbnail: `/api/nest/event_media/${dev}/${e.id}/thumbnail` })) });
     }
     case 'media_source/resolve_media': {
       const mm = /^media-source:\/\/nest\/([^/]+)\/([^/]+)$/.exec(String(m.media_content_id ?? ''));

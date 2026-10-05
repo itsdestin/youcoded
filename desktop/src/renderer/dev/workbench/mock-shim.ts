@@ -504,8 +504,8 @@ const NAMESPACES = [
 
 import { createNamingPreview } from './naming-preview';
 import { seedPages } from './fixtures/pages';
-import { fakeCameraDeps } from './fixtures/fake-camera';
-import { fakeHomeAssistantFetch, fakeHomeAssistantIds, fakeHomeAssistantLive, fakeHomeAssistantNestSignedIn, fakeHomeAssistantSet, fakeHomeAssistantSocket } from './fixtures/fake-home-assistant';
+import { fakeCameraDeps, fakeCameraRefuse, fakeCameraRefusal, FAKE_RATE_LIMIT_WHY } from './fixtures/fake-camera';
+import { fakeHomeAssistantFetch, fakeHomeAssistantIds, fakeHomeAssistantLive, fakeHomeAssistantCameraEvents, fakeHomeAssistantNestSignedIn, fakeHomeAssistantSet, fakeHomeAssistantSocket } from './fixtures/fake-home-assistant';
 import { withHomeMockup } from './fixtures/home-assistant-mockups';
 import { findHomeVariant, withHomeVariant } from './fixtures/home-variants/registry';
 import { OFFICE_EDITOR_ORIGIN, OFFICE_FILES, officeFixtureName, officeSampleUrl } from './fixtures/office';
@@ -3753,7 +3753,8 @@ function createPagesMock(empty: boolean): PagesBridge {
   // `?pagesHome=remote`: Destin's Room with its TV's remote open (round 5).
   // Round 4: `?pagesHome=view-lights|view-media|view-climate|view-problems`
   // opens on that chip's page; `settings` opens the gear's panel.
-  const chipView = homeView && homeView.startsWith('view-') ? homeView.slice(5) : null;
+  // `camera-limited` is the Cameras tab with Google refusing every live start (the page's back-off, fake-camera.ts).
+  const chipView = homeView && homeView.startsWith('view-') ? homeView.slice(5) : homeView === 'camera-limited' ? 'cameras' : null;
   // `chips-pills|chips-sentence|chips-tiles`: the main page in that chip style.
   const chipStyle = homeView && homeView.startsWith('chips-') ? homeView.slice(6) : null;
   // `group`: Destin's Room soundbar with its Sonos tick list open (round 5).
@@ -3764,7 +3765,8 @@ function createPagesMock(empty: boolean): PagesBridge {
   const mockup = homeView && homeView.startsWith('mock-') ? homeView.slice(5) : null;
   // `camera`: only the cameras, so the camera card (recent events, Watch live)
   // is the whole picture instead of something far down a long page.
-  const onlyCameras = homeView === 'camera';
+  // `camera-events`: the same, with cameras whose events have no recording (fake-home-assistant.ts `fakeHomeAssistantCameraEvents`).
+  const onlyCameras = homeView === 'camera' || homeView === 'camera-events';
   // `remote`: the Home page with the TV's remote open and nothing else in the way (every other device hidden), so the card is the whole picture.
   const tvOnly = fakeHomeAssistantIds().filter((id) => id !== 'media_player.destins_room_google_tv' && id !== 'remote.destins_room_tv_remote');
   // `v-<task>-<key>`: one redesign option (fixtures/home-variants/), on the
@@ -3777,7 +3779,9 @@ function createPagesMock(empty: boolean): PagesBridge {
     fakeHomeAssistantSet('media_player.living_room_speaker', song); fakeHomeAssistantSet('media_player.roam_2', song);
   }
   if (variant?.nestSignedIn) fakeHomeAssistantNestSignedIn(true);
-  if (onlyCameras || homeView === 'view-cameras') fakeHomeAssistantNestSignedIn(true); // events need the Nest account working
+  if (onlyCameras || homeView === 'view-cameras' || homeView === 'camera-limited') fakeHomeAssistantNestSignedIn(true); // events need the Nest account working
+  if (homeView === 'camera-events') fakeHomeAssistantCameraEvents(true);
+  fakeCameraRefuse(homeView === 'camera-limited' ? FAKE_RATE_LIMIT_WHY : null);
   if (onlyCameras || homeView === 'connected' || homeView === 'edit' || homeView === 'remote' || homeView === 'remote-media' || homeView === 'media-group' || homeView === 'group' || homeView === 'device' || chipView || homeView === 'settings' || chipStyle || mockup || variant) {
     pages = pages.map((p) => (p.id !== 'page-home' ? p : {
       ...p,
@@ -3898,7 +3902,10 @@ function createPagesMock(empty: boolean): PagesBridge {
       }
       const video = `lv_mock_${++liveSeq}`;
       liveVideos.add(video);
-      setTimeout(() => { if (liveVideos.has(video)) emitSocket({ socket: video, kind: 'video-answer', answer: 'v=0\r\n(workbench answer)' }); }, 30);
+      // `?pagesHome=camera-limited`: Google refuses every start (as main would relay it), so the page's back-off can be seen.
+      const refused = fakeCameraRefusal();
+      if (refused) setTimeout(() => { if (liveVideos.delete(video)) emitSocket({ socket: video, kind: 'video-stopped', why: refused }); }, 60);
+      else setTimeout(() => { if (liveVideos.has(video)) emitSocket({ socket: video, kind: 'video-answer', answer: 'v=0\r\n(workbench answer)' }); }, 30);
       return { ok: true as const, video };
     },
     videoStop: async (req) => { liveVideos.delete(req.video); return { ok: true as const }; },

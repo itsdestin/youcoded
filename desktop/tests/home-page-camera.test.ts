@@ -81,7 +81,7 @@ describe('a Nest camera card', () => {
 
   it('says plainly when a camera has no recordings, and still offers Watch live', () => {
     const bell = card('Doorbell')!;
-    expect(bell.querySelector('.cam-note')!.textContent).toBe('No recordings yet. Nest only saves clips when it can send events to Home Assistant.');
+    expect(bell.querySelector('.cam-note')!.textContent).toBe('No recordings or events yet.');
     expect(bell.querySelector('.cam-ev')).toBeNull();
     // The doorbell is not responding in the pretend house: the button is there but cannot be pressed.
     expect(bell.querySelector<HTMLButtonElement>('.cam-play')!.disabled).toBe(true);
