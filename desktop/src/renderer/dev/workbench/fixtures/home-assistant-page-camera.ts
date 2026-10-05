@@ -87,7 +87,10 @@ export const HOME_CAMERA_CSS = `
   .cam-note { font-size: 12px; color: var(--fg-muted); line-height: 1.4; }
   .cam-note a, .cam-actions a { color: var(--accent); font-size: 12px; }
   /* The Cameras tab */
-  .cam-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+  /* U13: the one sign-in banner above the Cameras tab's tiles */
+  .cam-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 12px; padding: 10px 14px; border-radius: var(--radius-lg, 12px); border: 1px solid var(--edge); background: var(--inset); font-size: 13px; color: var(--fg); }
+  .cam-banner span { flex: 1 1 220px; min-width: 0; }
+    .cam-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
   .cam-tile { position: relative; }
   .cam-open { cursor: pointer; width: 100%; }
   .cam-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -504,13 +507,14 @@ export const HOME_CAMERA_JS = `
   function cameraCardHtml(it, cls, na, ctx) {
     var cm = camNoteOf(it);
     if (!cm || !cm.nest) {
-      return '<div class="' + cls + ' col"><div class="line"><div class="name">' + esc(it.name) + (na && !camCache[it.id] ? '<div class="sub">Not responding</div>' : na ? '<div class="sub">Last picture · camera not responding</div>' : '') + '</div></div>' +
+      // WHY the name only outside the pop-up (U18, UX review 2): the pop-up's own title already names the device (ctx is null there).
+      return '<div class="' + cls + ' col"><div class="line"><div class="name">' + (ctx ? esc(it.name) : '') + (na && !camCache[it.id] ? '<div class="sub">Not responding</div>' : na ? '<div class="sub">Last picture · camera not responding</div>' : '') + '</div></div>' +
         (cm ? '<div class="cam-empty note">' + esc(cm.text) + (cm.href ? ' <a href="' + esc(base + cm.href) + '" target="_blank" rel="noopener">' + esc(cm.link) + '</a>' : '') + '</div>'
           : '<img class="cam" alt="" role="img" aria-label="' + esc(it.name) + '" data-cam="' + esc(it.id) + '"' + (camCache[it.id] ? ' src="' + camCache[it.id] + '"' : '') + '>') + '</div>';
     }
     var st = camState(it.id), ev = st.events, live = st.live, clip = st.clip, eid = esc(it.id), inTab = view === 'cameras';
     var running = live && live.state !== 'stopped';
-    var html = '<div class="' + cls + ' col cam-card"><div class="line cam-head"><div class="name">' + esc(it.name) + '<div class="sub">' + (na ? 'Not responding' : esc(it.model || 'Camera')) + '</div></div></div>';
+    var html = '<div class="' + cls + ' col cam-card"><div class="line cam-head"><div class="name">' + (ctx ? esc(it.name) : '') + '<div class="sub">' + (na ? 'Not responding' : esc(it.model || 'Camera')) + '</div></div></div>';
     var stoppedNow = live && live.state === 'stopped' && !inTab;
     // Nothing playing: the picture area holds the play disc (a camera that is not answering shows why instead, and the disc waits).
     if (!running && !clip && !inTab && canVideo()) {
@@ -555,7 +559,11 @@ export const HOME_CAMERA_JS = `
       else if (live && live.state === 'playing') { body = '<span class="cam-slot" data-live-slot="' + eid + '"></span>'; badge = '<span class="cam-badge">LIVE</span>'; }
       else if (tabIdsNow.indexOf(it.id) < 0) { over = true; body = camPreviewHtml(it) + '<span class="cam-msg" style="background:rgba(0,0,0,.55)">Live view limit reached (' + CAM_MAX_LIVE + ' at once)</span>'; }
       else body = camPreviewHtml(it) + '<span class="cam-slot" data-live-slot="' + eid + '"></span><span class="cam-msg">Starting live view…</span>';
-    } else body = camCache[it.id] ? '<img class="cam" alt="" data-cam="' + eid + '" src="' + camCache[it.id] + '">' : '<span class="cam-msg">' + esc(cm ? cm.text : 'Looking for a picture…') + '</span>';
+    } else body = camCache[it.id] ? '<img class="cam" alt="" data-cam="' + eid + '" src="' + camCache[it.id] + '">'
+      // WHY short words (U13, UX review 2): every tile used to repeat the whole "No picture: Google Nest needs you to sign in again."
+      // sentence with no way to act, and a camera that was simply not answering showed it too. The banner above the tiles carries the
+      // sentence and the one Sign in button; a tile says only what is true of it.
+      : '<span class="cam-msg">' + (na ? 'Not responding' : cm && cm.href ? 'Signed out' : esc(cm ? cm.text : 'Looking for a picture\u2026')) + '</span>';
     return '<div class="cam-tile" data-eid="' + eid + '"><button class="cam-view cam-open" data-cam-act="open" data-id="' + eid + '" aria-label="Open ' + esc(it.name) + ' and its recordings">' + body + badge +
       '<span class="cam-cap"><span>' + esc(it.name) + '</span><span class="sub">' + (na ? 'Not responding' : esc(it.model || '')) + '</span></span></button>' +
       // A person's own Retry is always allowed, even before the page's own try (a sibling of the tile button: buttons cannot nest).
@@ -566,7 +574,9 @@ export const HOME_CAMERA_JS = `
   function camerasPageHtml() {
     var cams = ordered(camsOnPage(), 'cameras', function (x) { return x.id; });
     tabIdsNow = camLive().map(function (x) { return x.id; });
-    return cams.length ? '<div class="cam-grid">' + cams.map(camTileHtml).join('') + '</div>' : '<div class="yc-empty">No cameras on this page. Put cameras in rooms in Home Assistant.</div>';
+    var signIn = cams.map(function (it) { return camNote[it.id]; }).filter(function (cm) { return cm && cm.href; })[0];
+    var banner = signIn ? '<div class="cam-banner" role="status"><span>Google Nest needs you to sign in again before its cameras can show a picture.</span><a class="yc-button yc-button--sm yc-button--primary" href="' + esc(base + signIn.href) + '" target="_blank" rel="noopener">' + esc(signIn.link) + '</a></div>' : '';
+    return cams.length ? banner + '<div class="cam-grid">' + cams.map(camTileHtml).join('') + '</div>' : '<div class="yc-empty">No cameras on this page. Put cameras in rooms in Home Assistant.</div>';
   }
   // The tab's pill: how many cameras there are, or how many are live right now.
   function camerasChip() {

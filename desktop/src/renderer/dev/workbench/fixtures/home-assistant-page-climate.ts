@@ -42,6 +42,17 @@ export const HOME_CLIMATE_JS = `
     if (side === 'low') tlo = Math.max(lo, Math.min(next, thi - step)); else thi = Math.min(hi, Math.max(next, tlo + step));
     return { patch: { tlo: tlo, thi: thi }, body: { entity_id: it.id, target_temp_low: tlo, target_temp_high: thi } };
   }
+  // What the thermostat is DOING, in words that stay true (U11, UX review 2: it said "Cooling to 75°" at 74° because the
+  // words came from the mode, not from what the machine is doing). Home Assistant's hvac_action decides: cooling and
+  // heating are working toward the number, idle is holding it. thLine is the header pill's version.
+  function thWords(it) {
+    var a = it.action;
+    if (a === 'cooling') return 'Cooling to';
+    if (a === 'heating') return 'Heating to';
+    if (a === 'idle' || a === 'off') return 'Holding at';
+    return (MODE_NAMES[it.state] || it.state) + ' to';
+  }
+  function thLine(it) { return thWords(it) + ' ' + it.target + '°'; }
   // " · Auto 68–74°" for the one-line summaries.
   function thSummary(it) { return thRange(it) ? ' · Auto ' + it.tlo + '–' + it.thi + '°' : ''; }
   document.addEventListener('click', function (e) {

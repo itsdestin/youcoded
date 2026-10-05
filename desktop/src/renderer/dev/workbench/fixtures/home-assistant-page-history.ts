@@ -8,7 +8,7 @@
 // which keeps about ten days. It names the person or automation behind a
 // change when it knows; a change made on the device itself, in the Hue app or
 // through Google Home reaches it with no source, and the page says exactly
-// that ("on the device or another app") rather than guessing which.
+// that (a note once above the list: "from a switch or another app") rather than guessing which.
 
 export const HOME_HISTORY_CSS = `
   /* Activity tab */
@@ -83,8 +83,9 @@ export const HOME_HISTORY_JS = String.raw`
   // page's own checks while it stays open (at most every 30 seconds).
   function refreshHistory(force) {
     if (!base || hist.loading) return;
-    if (!force && Date.now() - hist.at < 30000) return;
-    hist.loading = true;
+    // WHY stale (U9): a change made from this page must show in Activity at the next check, not up to 30 seconds later.
+    if (!force && !hist.stale && Date.now() - hist.at < 30000) return;
+    hist.loading = true; hist.stale = false;
     logbook(hist.days).then(function (list) { hist.events = list; hist.failed = false; })
       .catch(function () { hist.failed = true; })
       .then(function () { hist.loading = false; hist.at = Date.now(); renderSoon(); });
@@ -117,7 +118,9 @@ export const HOME_HISTORY_JS = String.raw`
       var p = (extras.people || []).filter(function (x) { return x.user === e.context_user_id; })[0];
       return 'by ' + (p ? p.name : 'someone in Home Assistant');
     }
-    return 'on the device or another app';
+    // WHY empty (U9, UX review 2): "on the device or another app" sat under most rows. Rows with no name beside them are
+    // explained once, by a line above the list (activityHtml), and are not repeated.
+    return '';
   }
   function evKind(e) { return e.state === 'unavailable' ? 'problems' : KIND_OF_DOMAIN[domain(e.entity_id || '')] || null; }
   // The page's devices and scenes only, newest first; a burst of changes to
@@ -133,6 +136,11 @@ export const HOME_HISTORY_JS = String.raw`
     (rooms || []).forEach(function (r) { (r.scenes || []).forEach(function (sc) { mine[sc.id] = { it: { id: sc.id, name: sceneName(sc, r) }, room: r, scene: true }; }); });
     // A line that repeats the state before it (a TV still playing, only a
     // new title) says nothing new, so it is dropped.
+    // WHY sorted here (U9): this walk assumes oldest first, and Home Assistant does send it that way, but nothing here proved it;
+    // an out-of-order answer showed 1:45, 1:44, then 1:54 and 12:54. Stable for equal times.
+    // Cheap check first (same-format ISO times compare as text), so the usual in-order answer costs no date parsing.
+    var inOrder = list.every(function (x, i) { return !i || String(list[i - 1].when) <= String(x.when); });
+    if (!inOrder) list = list.map(function (x, i) { return [x, i, Date.parse(x.when)]; }).sort(function (a, b) { return a[2] - b[2] || a[1] - b[1]; }).map(function (p) { return p[0]; });
     var prev = {}, fresh = [];
     list.forEach(function (e) { if (prev[e.entity_id] !== e.state || domain(e.entity_id || '') === 'scene') fresh.push(e); prev[e.entity_id] = e.state; });
     var out = [];
@@ -173,7 +181,7 @@ export const HOME_HISTORY_JS = String.raw`
   function evRow(ev) {
     return '<div class="ev" data-k="' + esc(ev.id + '|' + ev.t) + '" style="--d:' + evColour(ev) + '"><span class="when">' + esc(clock(ev.t)) + '</span><span class="i">' + evIcon(ev) + '</span>' +
       '<span class="what">' + (ev.scene ? '<b>' + esc(ev.name) + '</b>' : '<button class="ev-name" data-dev="' + esc(ev.devId) + '">' + esc(ev.name) + '</button>') + ' ' + esc(ev.words) +
-      '<span class="by">' + esc(ev.who) + '</span></span><span class="where">' + esc(ev.room.name) + '</span></div>';
+      (ev.who ? '<span class="by">' + esc(ev.who) + '</span>' : '') + '</span><span class="where">' + esc(ev.room.name) + '</span></div>';
   }
   function activityHtml() {
     if (!hist.at && !hist.failed) return '<div class="yc-empty">Reading the house’s history…</div>';
@@ -185,12 +193,14 @@ export const HOME_HISTORY_JS = String.raw`
         return '<button class="fchip" data-act-room="' + esc(r.id) + '" aria-pressed="' + (actRoom === r.id) + '">' + esc(r.name) + '</button>';
       }).join('') + '<span class="fsep" aria-hidden="true"></span>' +
       KIND_NAMES.map(function (k) { return '<button class="fchip" data-act-kind="' + k[0] + '" aria-pressed="' + (actKind === k[0]) + '">' + k[1] + '</button>'; }).join('') + '</div>';
+    // The once-only explanation for rows with no name beside them (U9).
+    var unnamed = evs.some(function (e) { return !e.who; }) ? '<div class="yc-caption">Changes with no name beside them came from a switch or another app.</div>' : '';
     var shown = evs.filter(function (e) { return (actRoom === 'all' || e.room.id === actRoom) && (actKind === 'all' || e.kind === actKind); });
     var body = '', day = null;
     shown.forEach(function (e) { var dn = dayName(e.t); if (dn !== day) { day = dn; body += '<div class="act-day">' + esc(dn) + '</div>'; } body += evRow(e); });
     if (!shown.length) body = '<div class="yc-empty">' + (evs.length ? 'Nothing matches. Press All rooms, or the same kind again, to see everything.' : 'Nothing has changed in the last ' + (hist.days === 1 ? 'day' : hist.days + ' days') + '.') + '</div>';
     var more = hist.days < HIST_DAYS_MAX ? '<button class="yc-button yc-button--sm act-more" data-hist-more="1"' + (hist.loading ? ' disabled' : '') + '>' + (hist.loading ? 'Loading…' : 'Show the day before') + '</button>' : '<div class="yc-caption act-more">Home Assistant keeps about ' + HIST_DAYS_MAX + ' days.</div>';
-    return '<div class="act-list">' + filters + body + more + '</div>';
+    return '<div class="act-list">' + filters + unnamed + body + more + '</div>';
   }
   // WHY cached (code review F11): the pill's count walked the whole loaded logbook on EVERY drawing (any push, any tab). It now
   // recounts only when the logbook, the rooms or the day changes, which is once per check at most.
@@ -216,7 +226,7 @@ export const HOME_HISTORY_JS = String.raw`
     var histHtml = devHist.id !== it.id || (devHist.loading && !evs.length) ? '<div class="muted">Reading its history…</div>'
       : devHist.failed ? '<div class="muted">Home Assistant did not send its history.</div>'
       : evs.length ? evs.map(function (e) {
-        return '<div class="hrow"><span class="when">' + esc(dayName(e.t) === 'Today' ? clock(e.t) : dayName(e.t).split(',')[0]) + '</span><span><span class="hdot" style="--d:' + evColour(e) + '"></span>' + esc(e.words.charAt(0).toUpperCase() + e.words.slice(1)) + '<span class="by">' + esc(e.who) + '</span></span></div>';
+        return '<div class="hrow"><span class="when">' + esc(dayName(e.t) === 'Today' ? clock(e.t) : dayName(e.t).split(',')[0]) + '</span><span><span class="hdot" style="--d:' + evColour(e) + '"></span>' + esc(e.words.charAt(0).toUpperCase() + e.words.slice(1)) + (e.who ? '<span class="by">' + esc(e.who) + '</span>' : '') + '</span></div>';
       }).join('') : '<div class="muted">No changes in the last 3 days.</div>';
     // WHY rows, not a fixed height (code review 9): the area is sized for the lines it will hold, from what this
     // device showed last time (3 the first time), so it does not jump when the history arrives.

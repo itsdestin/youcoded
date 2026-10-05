@@ -19,6 +19,7 @@ import { HOME_HISTORY_CSS, HOME_HISTORY_JS } from './home-assistant-page-history
 import { ROOMS_TEMPLATE, EXTRAS_TEMPLATE } from './home-assistant-page-templates';
 import { HOME_LIVE_JS } from './home-assistant-page-live';
 import { HOME_CLIMATE_CSS, HOME_CLIMATE_JS } from './home-assistant-page-climate';
+import { HOME_TABS_JS } from './home-assistant-page-tabs';
 import { HOME_ICONS_JS } from './home-assistant-page-icons';
 import { HOME_REDRAW_CSS, HOME_REDRAW_JS } from './home-assistant-page-redraw';
 import { HOME_PENDING_CSS, HOME_PENDING_JS } from './home-assistant-page-pending';
@@ -253,7 +254,7 @@ function homeAssistantPageHtml(): string {
     var tok = pendBegin(id, function () { service(dom, svc, data, id); });
     return call('/api/services/' + dom + '/' + svc, data)
       .then(function () { pendEnd(id, tok, null); }, function (e) { pendEnd(id, tok, e && e.message ? e.message : 'That did not go through.'); })
-      .then(function () { delete busy[id]; setTimeout(load, 400); });
+      .then(function () { delete busy[id]; hist.stale = true; setTimeout(load, 400); });
   }
 
   // Optimistic: the switch moves the moment it is pressed. A TV or light can
@@ -640,7 +641,10 @@ ${HOME_ICONS_JS}
     var dim = live.filter(dimmable);
     if (!dim.length) return '';
     var lit = onList.filter(dimmable);
-    var pct = lit.length ? Math.max(1, Math.round(lit.reduce(function (a, it) { return a + (it.brightness || 0); }, 0) / lit.length / 2.55)) : 1;
+    // WHY (U8, UX review 2): Kitchen read "1 of 2 on" with its bar at zero, because the one light on (Under cabinet) cannot dim
+    // and the one that can (Pendants) was off. A room that is on while nothing dimmable is lit has no brightness to average,
+    // so the bar shows full (what an on/off-only light is) instead of looking switched off.
+    var pct = lit.length ? Math.max(1, Math.round(lit.reduce(function (a, it) { return a + (it.brightness || 0); }, 0) / lit.length / 2.55)) : onList.length ? 100 : 1;
     var key = 'room:' + room.id;
     if (dragging === key) { var liveEl = document.querySelector('[data-gbright="' + room.id + '"]'); if (liveEl) pct = Number(liveEl.value); }
     return '<input class="lr" type="range" min="1" max="100" value="' + pct + '" style="--v:' + Math.round((pct - 1) / 99 * 100) + ';--c:' + c + '" aria-label="Brightness of every light in ' + esc(room.name) + '" data-gbright="' + esc(room.id) + '">';
@@ -677,7 +681,9 @@ ${HOME_ICONS_JS}
     var live = liveLights(lights), onList = live.filter(isOn), anyOn = onList.length > 0;
     var isOpen = editing || open.has(room.id);
     var c = anyOn ? colourOf(onList[0]) : 'rgb(255, 190, 110)';
-    var status = !live.length ? 'Not responding' : anyOn ? onList.length + ' of ' + live.length + ' on' : 'All off';
+    // WHY the not-responding count (U8): the Lights tab says "3 of 3 on · 1 not responding" for the same room; Home must agree.
+    var nGone = lights.filter(function (it) { return gone(it); }).length;
+    var status = !live.length ? 'Not responding' : (anyOn ? onList.length + ' of ' + live.length + ' on' : 'All off') + (nGone ? ' \\u00b7 ' + nGone + ' not responding' : '');
     var all = '<div class="tile all' + (anyOn ? ' on' : '') + '" style="--c:' + c + '"><span class="glow"></span><div class="line">' +
       '<button class="tile-face" data-room="' + esc(room.id) + '" data-room-to="' + (anyOn ? 'off' : 'on') + '" aria-pressed="' + anyOn + '"' + (live.length ? '' : ' disabled') +
       ' aria-label="All lights in ' + esc(room.name) + ', ' + esc(status) + '">' +
@@ -825,7 +831,7 @@ ${HOME_ICONS_JS}
       // The real sky outside, not a thermometer (round 4 choice note).
       { id: 'climate', label: 'Climate', icon: w ? skyIcon(w.state, 16) : THERMO, on: !!(th && th.it.state !== 'off'),
         main: w && w.temp != null ? Math.round(w.temp) + '° ' + condName(w.state) : th && th.it.cur != null ? th.it.cur + '° inside' : 'No climate',
-        sub: th ? (th.it.cur != null ? th.it.cur + '° inside' : '') + (th.it.state && th.it.state !== 'off' && th.it.target != null ? ' · ' + (MODE_NAMES[th.it.state] || th.it.state) + ' to ' + th.it.target + '°' : thRange(th.it) ? thSummary(th.it) : th.it.state === 'off' ? ' · off' : '') : '' },
+        sub: th ? (th.it.cur != null ? th.it.cur + '° inside' : '') + (th.it.state && th.it.state !== 'off' && th.it.target != null ? ' · ' + thLine(th.it) : thRange(th.it) ? thSummary(th.it) : th.it.state === 'off' ? ' · off' : '') : '' },
       // Reshaped after real use: every camera, live at once, on a tab of its own (home-assistant-page-camera.ts).
       camerasChip(),
       { id: 'problems', label: 'Problems', icon: ALERT, on: probs.length > 0, warn: probs.some(function (p) { return p.sev === 'high'; }),
@@ -857,15 +863,6 @@ ${HOME_ICONS_JS}
     if (c.id === 'activity') return null;
     if (c.id === 'cameras') return c.on ? 'rgb(235, 70, 55)' : null;
     return x.sevs.high ? 'rgb(235, 70, 55)' : (x.sevs.mid || x.sevs.low) ? 'rgb(240, 165, 40)' : 'rgb(60, 190, 110)';
-  }
-  function chipShort(c) {
-    var x = c.x || {};
-    if (c.id === 'lights') return c.on ? x.big + ' on' : 'Lights off';
-    if (c.id === 'media') return x.playing ? (c.main) : c.on ? c.main : 'Quiet';
-    if (c.id === 'climate') return x.big + (x.inside != null ? ' · ' + x.inside + '° in' : '');
-    if (c.id === 'activity') return 'Activity';
-    if (c.id === 'cameras') return c.main;
-    return c.x.sevs.high + c.x.sevs.mid + c.x.sevs.low ? c.main : 'All good';
   }
   function chipPill(c) {
     var col = stateColour(c);
@@ -899,27 +896,6 @@ ${HOME_ICONS_JS}
     // give all the pills a clear selected state so they serve as pages").
     var home = st === 'pills' ? '<button class="pill k-home' + (view ? '' : ' sel') + '" data-home="1" aria-pressed="' + !view + '" aria-label="Home: every room"><span class="pill-ic">' + HOUSE + '</span>Home</button>' : '';
     return '<div class="' + (st === 'tiles' ? 'tiles2' : 'pills') + '" role="tablist" aria-label="Your home at a glance">' + home + cs.map(st === 'tiles' ? chipTile : chipPill).join('') + '</div>';
-  }
-
-  // ── The gear's settings (round 4, Q-settings: a gear next to Edit).
-  var PREF_ROWS = [
-    ['chip-lights', 'Lights chip'], ['chip-media', 'Media chip'], ['chip-climate', 'Climate chip'], ['chip-cameras', 'Cameras chip'], ['chip-problems', 'Problems chip'],
-    ['scenes', 'Hue scenes in each room'], ['favourites', 'Favourites row'], ['cameras', 'Camera pictures'],
-  ];
-  // Settings are a page of their own (round 4 settings note: "should
-  // probably be a full page menu"), grouped into sections.
-  var PREF_SECTIONS = [
-    { title: 'At a glance', note: 'The chips across the top of the page.', rows: PREF_ROWS.slice(0, 5) },
-    { title: 'In each room', note: 'What each room card shows.', rows: PREF_ROWS.slice(5) },
-  ];
-  function settingsPageHtml() {
-    return '<div class="set-grid">' + PREF_SECTIONS.map(function (sec) {
-      return '<section class="yc-card set-sec"><h3>' + sec.title + '</h3><p class="yc-caption">' + sec.note + '</p>' +
-        sec.rows.map(function (r) {
-          var on = pref(r[0]);
-          return '<label class="set-row"><span>' + r[1] + '</span><button class="tog" role="switch" aria-checked="' + on + '" data-pref="' + r[0] + '"><span></span></button></label>';
-        }).join('') + '</section>';
-    }).join('') + '</div>';
   }
 
   function barHtml() {
@@ -1015,7 +991,7 @@ ${HOME_ICONS_JS}
       // The Media tab is one list of devices, not rooms (Destin, 2026-10-05: home-assistant-page-media.ts); Edit keeps the room board.
       body += view === 'media' && !editing ? mediaTabHtml(list) : '<div class="rooms">' + list.map(function (r) { return roomHtml(r, ids); }).join('') + '</div>';
     }
-    return head + body;
+    return head + edHint() + body;
   }
   // The thermostat, large: a dial whose arc fills to the setting in the
   // mode's colour, a dot where the room is now, the setting in the middle,
@@ -1039,7 +1015,7 @@ ${HOME_ICONS_JS}
     }).join('') + '</div>' : '';
     var dial = '<div class="th-dial"><svg viewBox="0 0 200 200" aria-hidden="true"><circle class="th-track" cx="100" cy="100" r="' + R + '" stroke-dasharray="' + L.toFixed(1) + ' ' + C.toFixed(1) + '" transform="rotate(135 100 100)"/>' +
       (hasSet ? '<circle class="th-fill" cx="100" cy="100" r="' + R + '" stroke-dasharray="' + fill.toFixed(1) + ' ' + C.toFixed(1) + '"' + (fromA ? ' stroke-dashoffset="' + (-fromA).toFixed(1) + '"' : '') + ' transform="rotate(135 100 100)"/>' : '') + dot + '</svg>' +
-      '<div class="th-mid">' + (range && hasSet ? thRangeMid(it, doing) : '<span class="th-lbl">' + (hasSet ? esc(doing) + ' to' : 'Off') + '</span><span class="th-set">' + (hasSet ? esc(it.target) + '°' : '—') + '</span>') + '<span class="th-cur">' + (it.cur != null ? 'Now ' + esc(it.cur) + '°' : '') + '</span></div></div>';
+      '<div class="th-mid">' + (range && hasSet ? thRangeMid(it, doing) : '<span class="th-lbl">' + (hasSet ? esc(thWords(it)) : 'Off') + '</span><span class="th-set">' + (hasSet ? esc(it.target) + '°' : '—') + '</span>') + '<span class="th-cur">' + (it.cur != null ? 'Now ' + esc(it.cur) + '°' : '') + '</span></div></div>';
     var minus = hasSet ? '<button class="th-step" aria-label="Cooler" data-temp="' + esc(it.id) + '" data-delta="' + (-step) + '"' + (tv <= lo ? ' disabled' : '') + '>−</button>' : '';
     var plus = hasSet ? '<button class="th-step" aria-label="Warmer" data-temp="' + esc(it.id) + '" data-delta="' + step + '"' + (tv >= hi ? ' disabled' : '') + '>+</button>' : '';
     if (compact) {
@@ -1098,13 +1074,13 @@ ${HOME_ICONS_JS}
     favItems = ordered(favItems, 'fav', function (x) { return x.id; });
     var favCtx = { key: 'fav', ids: favItems.map(function (x) { return x.id; }) };
     put('favs', favItems.length && pref('favourites')
-      ? '<section class="yc-card room"><div class="room-head fav-head">' + STAR_ON + '<h2>Favourites</h2></div><div class="fav-grid">' + favItems.map(function (it) { return itemHtml(it, favCtx); }).join('') + '</div></section>'
+      ? '<section class="yc-card room"><div class="room-head fav-head">' + STAR_ON + '<h2>Favorites</h2></div><div class="fav-grid">' + favItems.map(function (it) { return itemHtml(it, favCtx); }).join('') + '</div></section>'
       : '');
     var list = ordered(rooms.filter(function (r) { return r.items.some(function (it) { return editing || !hidden.has(it.id); }); }), 'rooms', function (r) { return r.id; });
     var roomIds = list.map(function (r) { return r.id; });
     var html = list.map(function (r) { return roomHtml(r, roomIds); }).join('');
     if (html) html += edNewZone(); // no dashed box when there is nothing to drag
-    put('rooms', html || '<div class="yc-empty">Nothing to show. Put devices in rooms in Home Assistant, or press Edit to bring hidden ones back.</div>');
+    put('rooms', (html ? edHint() : '') + html || '<div class="yc-empty">Nothing to show. Put devices in rooms in Home Assistant, or press Edit to bring hidden ones back.</div>');
     edFocusBox();
   }
 
@@ -1488,6 +1464,7 @@ ${HOME_EDIT_JS}
 ${HOME_MOTION_JS}
 ${HOME_FEEL_JS}
 ${HOME_CLIMATE_JS}
+${HOME_TABS_JS}
   start();
 })();
 </script>

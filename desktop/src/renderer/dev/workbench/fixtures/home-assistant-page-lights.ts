@@ -92,13 +92,16 @@ export const HOME_LIGHTS_JS = `
     if (!dot) render();
   }, true);
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && view === 'lights' && !editing && expanded.size) { expanded.clear(); render(); }
+    if (e.key === 'Escape' && view === 'lights' && !editing && expanded.size) { e.preventDefault(); expanded.clear(); render(); } // WHY preventDefault: the frame sends Escape on to the app (back to chat) unless the page used it
   });
 `;
 
 export const HOME_LIGHTS_CSS = `
   /* Lights tab: wider columns than the Home tab's, since one card per room carries a longer title. */
-  #view .rooms { columns: 440px; }
+  /* WHY a grid, not columns (U10, UX review 2): CSS columns re-balance when a card gets shorter or taller, so turning a room off
+     made Living Room and Kitchen swap places while the person was looking. A grid keeps every card in its order and place;
+     a card changing height only moves what is below it. Cards keep their own bottom gap (the base .room margin). */
+  #view .rooms { columns: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(440px, 100%), 1fr)); column-gap: 12px; align-items: start; }
   /* overflow stays visible so a colour panel can hang outside the card; the glow rounds itself instead. */
   .lt { position: relative; gap: 12px; }
   .lt > .glow { position: absolute; inset: 0; border-radius: inherit; background: radial-gradient(120% 90% at 0% 0%, var(--c), transparent 72%); opacity: 0; pointer-events: none; transition: opacity 200ms ease; }

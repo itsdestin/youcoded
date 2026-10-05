@@ -109,6 +109,7 @@ export function fakeHomeAssistantReset(): void {
   // outlived the reset ROOMS and disagreed with them in the next.
   AREAS.splice(0, AREAS.length, ...SEED.map((r) => ({ area_id: r.id, name: r.name })));
   lastBrightness.clear();
+  journal.length = 0;
   calls.length = 0;
 }
 /** A light's brightness before it was switched off, so turning it on again with no brightness restores it (as Home Assistant does). */
@@ -166,8 +167,14 @@ function logbook(): LogEntry[] {
     [45, 'light.overhead_light', 'Overhead light', 'on'],
     [12, 'light.living_room_lamp', 'Floor lamp', 'on'],
   ];
-  return rows.map(([m, entity_id, name, state, ctx]) => ({ entity_id, name, state, when: at(m), ...(ctx ?? {}) }));
+  // WHY sorted, and WHY the journal (U9, UX review 2): real Home Assistant sends the logbook oldest first and records every state
+  // change, including the ones a service call makes. The made-up rows above were out of order, and nothing the page did was ever
+  // written down, so the Activity tab never showed the tester's own changes.
+  const all = [...rows.map(([m, entity_id, name, state, ctx]) => ({ entity_id, name, state, when: at(m), ...(ctx ?? {}) })), ...journal];
+  return all.sort((a, b) => Date.parse(a.when) - Date.parse(b.when));
 }
+/** What the page itself changed since the house was reset, as the logbook records it (a person acting through the API). */
+const journal: LogEntry[] = [];
 
 function leaveGroup(id: string): void {
   const t = find(id);
@@ -293,7 +300,15 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
       if (action === 'unjoin') leaveGroup(id);
       // Home Assistant stamps "last changed" when the STATE moves (not for a
       // brightness or volume change), and the live push carries it.
-      if (t.state !== stateBefore) t.since = new Date().toISOString();
+      if (t.state !== stateBefore) {
+        t.since = new Date().toISOString();
+        journal.push({ entity_id: id, name: t.name, state: t.state, when: t.since, context_user_id: USER_DESTIN, context_event_type: 'call_service' });
+      }
+      // A thermostat's hvac_action follows the set point, as a real one does: cooling only while the room is warmer than the
+      // target, heating only while it is cooler, otherwise idle (U11: the fake used to say "cooling" at 74 for a 75 target).
+      if (id.startsWith('climate.') && t.cur != null && t.target != null && (action === 'set_temperature' || action === 'set_hvac_mode')) {
+        t.action = t.state === 'off' ? 'off' : t.state === 'cool' ? (t.cur > t.target ? 'cooling' : 'idle') : t.state === 'heat' ? (t.cur < t.target ? 'heating' : 'idle') : t.action;
+      }
     }
     // Whoever is listening live hears about it now, as with the real one.
     notifyLive();

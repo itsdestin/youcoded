@@ -319,9 +319,11 @@ export const HOME_ASSISTANT_PAGE_CSS = `
   .key:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
   /* ── Round 4: folding lights, Edit mode, Everything off ─────────────── */
-  .toprow { display: flex; align-items: center; gap: 12px; }
+  /* WHY flex-start and no wrap on the bar (U7, UX review 2): at a medium width the tabs wrap into several rows, and the buttons, centred on
+     the whole block, floated beside row 2. Pinned to the top, Edit and the gear stay in the top-right corner whatever the tabs do. */
+  .toprow { display: flex; align-items: flex-start; gap: 12px; }
   .toprow > #chips { flex: 1; min-width: 0; }
-  .bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  .bar { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; flex-shrink: 0; justify-content: flex-end; min-height: 36px; }
   .confirm { display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 12px; border-radius: 9999px; border: 1px solid var(--edge); background: var(--inset); font-size: 13px; }
   /* A room's lights: one card whose header IS the All row, with each light
      as a card inside it, evenly inset on every side (round 4 reviews, S-fold

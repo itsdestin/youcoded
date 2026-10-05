@@ -98,6 +98,10 @@ export const HOME_DRAWER_CSS = `
   /* Medium: the drawer and the pad side by side, centred as one block. */
   @container tvc (min-width: 460px) {
     .mv-wide .np.mv-np { display: grid; grid-template-columns: minmax(0, 1fr) auto auto minmax(0, 1fr); column-gap: 28px; } /* WHY .mv-wide in front: the Media tab sheet (loaded after this one) says display: block at the same weight */
+    /* WHY reading-flow (U17, UX review 2): the page order is keys, volume, pad, drawer, but on screen the drawer sits left of the pad and, with
+       the remote open and wide, the keys sit last. Tab and a screen reader now follow what is SEEN: row by row, left to right. Chrome-only
+       (the app's own engine); anywhere else it is ignored and the old order stays. */
+    .mv-wide .np.mv-np { reading-flow: grid-rows; }
     .mv-np > .mv-nprow, .mv-np > .mv-vol { grid-column: 1 / -1; }
     .mv-np > .mv-nprow { grid-row: 1; } .mv-np > .mv-vol { grid-row: 2; }
     .mv-np > .rchips { grid-column: 2; grid-row: 3; align-self: center; }

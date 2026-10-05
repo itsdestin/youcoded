@@ -14,6 +14,7 @@
 export const HOME_EDIT_CSS = `
   /* ── Edit: the organise board (redesign round 1, Edit c) ── */
   .edc-room .room-head { gap: 6px; }
+  .ed-hint { margin: 0 0 10px; }
   .edc-list { display: flex; flex-direction: column; gap: 6px; }
   .edc-row { position: relative; border: 1px solid var(--edge-dim); border-radius: var(--radius-md, 8px); background: var(--well); padding: 6px 8px; }
   .edc-row.open { border-color: var(--edge); }
@@ -95,6 +96,11 @@ export const HOME_EDIT_JS = `
     var k = kindOf(it);
     return k === 'tv' ? 'TV' : k === 'soundbar' ? 'Soundbar' : k === 'display' ? 'Display' : 'Speaker';
   }
+  // WHY a visible line (U14, UX review 2): the star, eye, dots and arrows only explained themselves on hover, which a touch screen and a
+  // keyboard never get. One quiet line under the header says what each does.
+  function edHint() {
+    return editing ? '<p class="yc-caption ed-hint">Star = favorite \u00b7 Eye = hide \u00b7 Dots = drag to reorder or move to another room \u00b7 Arrows = move a room up or down</p>' : '';
+  }
   function edIb(act, id, icon, label, extra) {
     return '<button class="ib" data-act="' + act + '" data-id="' + esc(id) + '" aria-label="' + esc(label) + '" title="' + esc(label) + '"' + (extra || '') + '>' + icon + '</button>';
   }
@@ -126,7 +132,7 @@ export const HOME_EDIT_JS = `
     return '<div class="edc-row' + (h ? ' is-hidden' : '') + (o ? ' open' : '') + '" data-eid="' + esc(id) + '" data-edkey="' + esc(ctx.key) + '" data-edid="' + esc(id) + '">' +
       '<div class="edc-main"><span class="edc-grip" data-edgrip="1" title="Drag to reorder, or onto another room" aria-hidden="true">' + GRIP + '</span>' +
       '<button class="edc-name" data-act="edopen" data-tok="' + esc(tok) + '" data-ed-name="' + esc(tok) + '" aria-expanded="' + o + '" aria-label="Settings for ' + esc(it.name) + '"><span class="edc-n">' + esc(it.name) + '</span><span class="edc-k">' + edKind(it) + '</span></button>' +
-      edIb('fav', id, f ? STAR_ON : STAR, f ? 'Remove from favourites' : 'Add to favourites', ' aria-pressed="' + f + '"') +
+      edIb('fav', id, f ? STAR_ON : STAR, f ? 'Remove from favorites' : 'Add to favorites', ' aria-pressed="' + f + '"') +
       edIb('hide', id, h ? EYE_OFF : EYE, h ? 'Show on this page' : 'Hide from this page') + '</div>' +
       (o ? edPanel(it, ctx) : '') + pendHtml(id) + '</div>';
   }

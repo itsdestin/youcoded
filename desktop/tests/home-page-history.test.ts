@@ -35,8 +35,9 @@ describe('the Activity tab', () => {
     const rows = text('.ev');
     expect(rows.some((r) => r.includes('Thermostat set to Cool') && r.includes('by Destin'))).toBe(true);
     expect(rows.some((r) => r.includes('Overhead light turned off') && r.includes('by Lights out at 8'))).toBe(true);
-    // No source in the logbook: the page says so instead of naming a switch or app.
-    expect(rows.some((r) => r.includes('Overhead light turned on') && r.includes('on the device or another app'))).toBe(true);
+    // No source in the logbook: no name is guessed; one note above the list explains such rows (U9), not a line on every row.
+    expect(rows.some((r) => r.includes('Overhead light turned on') && !r.includes(' by '))).toBe(true);
+    expect(rows.some((r) => r.includes('on the device or another app'))).toBe(false);
     // A TV's remote is told as the TV, and a repeat of the same state is dropped.
     expect(rows.some((r) => r.includes('TV remote'))).toBe(false);
     expect(rows.filter((r) => r.includes("Destin's Room TV started playing")).length).toBe(1);
