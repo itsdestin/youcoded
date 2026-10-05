@@ -31,6 +31,7 @@ function setup(over: Partial<RecorderDeps> = {}) {
     getMarks: () => [{ name: 'main:imports-done', t: NOW + 400 }, { name: 'main:when-ready', t: NOW + 900 }],
     processStartMs: () => NOW,
     now: () => clock,
+    env: { YOUCODED_HITCH_LOOP_MS: '20' },
     writer: { append: (r: any) => lines.push(r), flush: async () => {} },
     histogram: () => hist, minuteHistogram: () => createHistogram(),
     ...over,
@@ -101,15 +102,32 @@ describe('main-process stalls', () => {
     const { lines, hist, rec } = setup({ trace });
     hist.set(420); rec.onSecond();
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toMatchObject({ kind: 'main-stall', ms: 400, lastIpc: 'session:create', sessions: 5 });
+    expect(lines[0]).toMatchObject({ kind: 'main-stall', ms: 410, resMs: 20, lastIpc: 'session:create', sessions: 5 });
     expect(lines[0].lastIpcAgoMs).toBe(400);
   });
 
   it('writes nothing for a quiet second or a small hiccup', () => {
     const { lines, hist, rec } = setup();
     hist.set(20); rec.onSecond();
-    hist.set(110); rec.onSecond(); // 110 - 20 tick = 90 ms < 100
+    hist.set(100); rec.onSecond(); // 100 - 20 tick + 10 = 90 ms < 100
     expect(lines).toHaveLength(0);
+  });
+});
+
+describe('stall resolution', () => {
+  it('defaults to a 100 ms sampler and estimates the stall at delay + half a tick', () => {
+    const { lines, hist, rec } = setup({ env: {} });
+    hist.set(150); rec.onSecond(); // 150 - 100 = 50 late, +50 = 100 -> written
+    expect(lines[0]).toMatchObject({ kind: 'main-stall', ms: 100, resMs: 100 });
+    hist.set(140); rec.onSecond(); // 40 late + 50 = 90 -> not written
+    expect(lines).toHaveLength(1);
+  });
+  it('accepts a 10-1000 ms override and ignores nonsense', async () => {
+    const { loopResolution } = await import('../src/main/hitch-recorder');
+    expect(loopResolution({ YOUCODED_HITCH_LOOP_MS: '250' })).toBe(250);
+    expect(loopResolution({ YOUCODED_HITCH_LOOP_MS: '1' })).toBe(100);
+    expect(loopResolution({ YOUCODED_HITCH_LOOP_MS: 'abc' })).toBe(100);
+    expect(loopResolution({})).toBe(100);
   });
 });
 
@@ -201,9 +219,9 @@ describe('off switch and timers', () => {
       userDataDir: '/x', appVersion: '1', ipcMain: new EventEmitter() as any, getWindowCount: () => 1, getSessionCount: () => 0,
       getAppMetrics: () => [], getMarks: () => [], processStartMs: () => NOW, writer: { append: (r: any) => lines.push(r), flush: async () => {} },
     });
-    await new Promise((r) => setTimeout(r, 80)); // let the monitor take its first samples
-    const end = Date.now() + 250; while (Date.now() < end) { /* block the loop ~250 ms */ }
-    await new Promise((r) => setTimeout(r, 60));
+    await new Promise((r) => setTimeout(r, 300)); // let the monitor take its first samples
+    const end = Date.now() + 300; while (Date.now() < end) { /* block the loop ~300 ms */ }
+    await new Promise((r) => setTimeout(r, 250));
     rec.onSecond();
     await rec.stop();
     expect(lines.find((l) => l.kind === 'main-stall')?.ms).toBeGreaterThanOrEqual(100);

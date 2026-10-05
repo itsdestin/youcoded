@@ -31,10 +31,10 @@
 // (data:/blob:) script sources are recorded as "inline". Session names are never read — only
 // the number of sessions.
 //
-// COST RULES: nothing here blocks (all writes async, batched, <= one flush / 2 s); the only
-// recurring timer is ONE unref'd 1 s interval (reads event-loop delay; every 60th tick also
-// writes the minute line) — justified because stall detection and the memory-over-hours record
-// need a clock. Renderer data is re-validated field by field (hitch-validate.ts) and
+// COST RULES: nothing here blocks (all writes async, batched, <= one flush / 2 s); the recurring
+// work is ONE unref'd 1 s interval (reads event-loop delay; every 60th tick also writes the minute
+// line) plus Node's event-loop sampler (a timer every 100 ms, see DEFAULT_RESOLUTION_MS for what it
+// costs and why) — justified because stall detection and the memory-over-hours record need a clock. Renderer data is re-validated field by field (hitch-validate.ts) and
 // rate-limited again here, so a compromised renderer cannot flood or poison the file.
 // OFF SWITCH: env YOUCODED_HITCH_LOG=0 turns everything off (no file, no timers, no hooks).
 import { randomUUID } from 'node:crypto';
@@ -46,9 +46,11 @@ import { validateBatch, cleanString, type CleanBatch } from './hitch-validate';
 export const HITCH_CHANNEL = 'perf:hitch-batch';
 /** A main-process stall is written at or above this many ms. */
 export const STALL_MS = 100;
-/** Event-loop sampling interval. WHY tunable: each sample is a timer wake-up of the main process, and in Electron a
- *  wake-up is far dearer than in plain Node (measured 2026-10-05: 50/s cost ~1.2% of a core idle). */
-export const DEFAULT_RESOLUTION_MS = 20;
+/** Event-loop sampling interval. WHY 100 and tunable: each sample is a timer wake-up of the main process, and in Electron a
+ *  wake-up is far dearer than in plain Node. Measured idle on the rig (2026-10-05, main process, % of one core, recorder
+ *  off 0.25-0.32): 20 ms -> 1.4-1.7, 50 ms -> 0.9, 100 ms -> 0.6, 250 ms -> 0.37. 100 ms keeps a stall's length accurate to
+ *  about +/-50 ms (see onSecond) for ~0.3 of a core-percent; env YOUCODED_HITCH_LOOP_MS (10-1000) overrides. */
+export const DEFAULT_RESOLUTION_MS = 100;
 export function loopResolution(env: NodeJS.ProcessEnv = process.env): number {
   const n = Number(env.YOUCODED_HITCH_LOOP_MS);
   return Number.isFinite(n) && n >= 10 && n <= 1000 ? Math.round(n) : DEFAULT_RESOLUTION_MS;
@@ -226,15 +228,18 @@ export class HitchRecorder {
   onSecond(): void {
     try {
       const h = this.hist;
+      // The histogram records tick-to-tick gaps, so a quiet loop reads ~res; the delay is the excess. A stall of S ms makes
+      // the next tick late by anywhere in (S-res, S], so S is estimated at delay + res/2 (accurate to +/- res/2) and a line is
+      // written when that estimate reaches STALL_MS.
       let maxMs = 0;
-      if (h.count > 0) maxMs = Math.max(0, h.max / 1e6 - this.res); // the histogram's floor is its own tick
+      if (h.count > 0) maxMs = Math.max(0, h.max / 1e6 - this.res) + this.res / 2;
       if (h.count > 0) this.fold(h);
       h.reset();
       if (maxMs >= STALL_MS) {
         const last = this.d.trace?.last();
         this.stalls++;
         this.line('main-stall', {
-          ms: Math.round(maxMs), sessions: this.d.getSessionCount(), windows: this.d.getWindowCount(),
+          ms: Math.round(maxMs), resMs: this.res, sessions: this.d.getSessionCount(), windows: this.d.getWindowCount(),
           ...(last ? { lastIpc: last.channel, lastIpcAgoMs: Math.round(last.agoMs) } : {}),
         });
       }
@@ -247,8 +252,8 @@ export class HitchRecorder {
     const windows = this.d.getWindowCount();
     const mh = this.minuteHist;
     const loop = mh.count > 0
-      ? { p50: r1(Math.max(0, mh.percentile(50) / 1e6 - this.res)), p99: r1(Math.max(0, mh.percentile(99) / 1e6 - this.res)), max: r1(Math.max(0, mh.max / 1e6 - this.res)) }
-      : { p50: 0, p99: 0, max: 0 };
+      ? { p50: r1(Math.max(0, mh.percentile(50) / 1e6 - this.res)), p99: r1(Math.max(0, mh.percentile(99) / 1e6 - this.res)), max: r1(Math.max(0, mh.max / 1e6 - this.res)), res: this.res }
+      : { p50: 0, p99: 0, max: 0, res: this.res };
     mh.reset();
     const tally = this.minuteTally;
     this.minuteTally = { frames: 0, framesMs: 0, over: 0, overMs: 0, dropped: 0, rejected: 0, entries: 0 };

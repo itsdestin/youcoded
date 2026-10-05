@@ -20,8 +20,8 @@ observers). No UI.
 | `frame` | `d` ms the page was frozen (>= 100), `b` blocking ms, `sl` style+layout ms, `rd` render ms, `inp` a keypress/click was waiting, `sc` top 3 scripts `{it invokerType, iv invoker (ids stripped), fn function, src bundle file BASENAME, pos char position, d ms, fl forced-layout ms}`, `ctx`, `sessions`, `windows`, `src` (`loaf` or `longtask`) |
 | `event` | `type` (keydown/pointerdown/pointerup/click/input), `d`, `delay` input delay, `proc` handler ms, `pres` wait-to-draw ms, `tgt` coarse kind (`terminal`/`text-input`/`chat`/`other`), `ctx`, `sessions` |
 | `task` | `d` only (fallback when `long-animation-frame` is unsupported) |
-| `main-stall` | `ms` the main process did not answer (>= 100), `lastIpc` + `lastIpcAgoMs` (last request main started: a hint), `sessions`, `windows` |
-| `minute` | `loop` {p50,p99,max ms of event-loop delay}, `procs` {browser, gpu, utility, other: {n, ws MB, cpu %}; renderer: [{ws, cpu}] top 12}, `main` {rss, heapUsed, heapTotal, external, arrayBuffers MB}, `windows`, `sessions`, `rend` {frames, framesMs (50-100 ms frames), over (detail entries not written), dropped, rejected, entries}, `stalls`, `lost` |
+| `main-stall` | `ms` estimated time the main process did not answer (>= 100, accurate to about +/- `resMs`/2), `resMs` sampler interval, `lastIpc` + `lastIpcAgoMs` (last request main started: a hint, only meaningful when `lastIpcAgoMs` is not much larger than `ms`), `sessions`, `windows` |
+| `minute` | `loop` {p50,p99,max ms of event-loop delay, `res` sampler interval}, `procs` {browser, gpu, utility, other: {n, ws MB, cpu %}; renderer: [{ws, cpu}] top 12}, `main` {rss, heapUsed, heapTotal, external, arrayBuffers MB}, `windows`, `sessions`, `rend` {frames, framesMs (50-100 ms frames), over (detail entries not written), dropped, rejected, entries}, `stalls`, `lost` |
 | `startup` | `main` {mark: ms since process start}, `loadedMs` (first window loaded), `renderer` {marks: yc:* ms, fcp} or null |
 
 `ctx` (only on a hitch, no layout reads): `vis`, `foc`, `vm` view mode, `dlg` a `[role=dialog]` exists, `scr` a full screen is
@@ -37,7 +37,7 @@ per window, <= 30 entries/min per window) and writes at most every 2 s. The file
 never held open, so it can be read while the app runs.
 
 **Costs:** one unref'd 1 s timer in main (event-loop delay read + every 60th tick the minute line, which calls
-`app.getAppMetrics()`); Node's own 20 ms event-loop sampler; a wrapper on `ipcMain.handle`/`on` that stores a channel name and
+`app.getAppMetrics()`); Node's own event-loop sampler (a timer every 100 ms; env `YOUCODED_HITCH_LOOP_MS`, 10-1000, overrides: measured idle cost of the main process on the rig, in % of one core: off 0.3, 250 ms 0.4, 100 ms 0.6, 50 ms 0.9, 20 ms 1.4-1.7, so 100 ms is the default); a wrapper on `ipcMain.handle`/`on` that stores a channel name and
 a timestamp. Renderer: two PerformanceObservers that call back only for slow work, and one-shot timers.
 
 **Reading it:** `node scripts/perf-lab/hitch-report.mjs <file|dir> [--since 24h] [--json]` (workspace repo).
