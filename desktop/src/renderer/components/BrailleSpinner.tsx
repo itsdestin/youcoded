@@ -70,7 +70,7 @@ const getVersion = () => version;
 
 interface Props {
   /** Size class — maps to text-xs, text-sm, text-base, text-lg */
-  size?: 'xs' | 'sm' | 'base' | 'lg';
+  size?: 'xs' | 'sm' | 'base' | 'lg' | '3xl';
   /** Whether to cycle through colors (default true) */
   colorCycle?: boolean;
   /** Extra classes on the glyph. WHY (audit W20): a caller that needs a colour
@@ -89,6 +89,8 @@ const sizeClass: Record<string, string> = {
   sm: 'text-sm',
   base: 'text-base',
   lg: 'text-lg',
+  // Setup's heading (deck first-run-5 P5-1): the same spinner, sized to a 30px heading.
+  '3xl': 'text-3xl',
 };
 
 export default function BrailleSpinner({ size = 'sm', colorCycle = true, className }: Props) {

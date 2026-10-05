@@ -144,7 +144,8 @@ function SetupLogo() {
   if (v === 'stack') return <BrandWordmark size={72} tagline="stack" />;
   if (v === 'tuck') return <BrandWordmark size={72} tagline="tuck" />;
   if (v === 'name') return <BrandWordmark size={80} tagline="none" />;
-  return <BrandLockupRow icon={112} />;
+  // P5-3 "bigger": the icon lockup (the answer picked no other version), 112 → 144px.
+  return <BrandLockupRow icon={144} />;
 }
 
 /* ------------------------------------------------------------------ */
@@ -381,20 +382,26 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
           <div className="flex flex-col items-center gap-4 w-full max-w-md">
             {state && (
               <div className="text-center">
-                {/* P4-1: a spinner beside the heading while setup is working. */}
+                {/* P4-1/P5-1: the app's own spinner, exactly as everywhere else (Destin: "the
+                    spinner should be the same one we use everywhere else"), beside the heading. */}
                 {heading && (
                   <h1 className="brand-heading text-3xl text-fg inline-flex items-center gap-3">
-                    {installing && !stopped && <BrailleSpinner size="lg" className="relative top-2 w-8 text-4xl! leading-none text-accent" />}
+                    {installing && !stopped && <BrailleSpinner size="3xl" />}
                     {heading}
                   </h1>
                 )}
-                {line && <p className="mt-1 text-sm text-fg-dim">{line}</p>}
+                {line && !installing && <p className="mt-1 text-sm text-fg-dim">{line}</p>}
               </div>
             )}
 
             {/* L-2: while setup is stopped the bar goes away, so nothing on screen
-                still looks busy. */}
-            {state && installing && !stopped && <ProgressBar percent={state.overallProgress} />}
+                still looks busy. P5-1: the heading above the bar, the grey line below it. */}
+            {state && installing && !stopped && (
+              <div className="w-full flex flex-col items-center gap-3">
+                <ProgressBar percent={state.overallProgress} />
+                {line && <p className="text-sm text-fg-dim text-center">{line}</p>}
+              </div>
+            )}
 
             {state?.currentStep === 'AUTHENTICATE' && (
               <AuthScreen
