@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs'; import * as path from 'path'; import * as os from 'os';
 import { NativeHome } from '../src/main/native-home';
 import { SecretsStore } from '../src/main/providers/secrets-store';
+import { getSecretStorage } from '../src/main/providers/secret-storage';
 import { ProviderRegistry } from '../src/main/providers/provider-registry';
 import { OpenRouterHealth, openRouterTurnFetch, ProviderAccountError } from '../src/main/providers/openrouter-health';
 import { describeProviderError } from '../src/main/harness/harness-session';
@@ -140,7 +141,7 @@ describe('ProviderRegistry + OpenRouterHealth', () => {
   beforeEach(async () => {
     fetchMock = vi.fn(async () => keyInfo());
     health = new OpenRouterHealth({ dir: root, fetch: fetchMock as any });
-    reg = new ProviderRegistry(new NativeHome(root), new SecretsStore(root), null, null, health);
+    reg = new ProviderRegistry(new NativeHome(root), new SecretsStore(root, getSecretStorage()), null, null, health);
     await reg.init();
   });
   const row = async () => (await reg.list()).find((p) => p.id === 'openrouter')!;

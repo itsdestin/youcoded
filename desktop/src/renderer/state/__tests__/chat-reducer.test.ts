@@ -1,8 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { chatReducer } from '../chat-reducer';
-import { createSessionChatState, serializeChatState } from '../chat-types';
+import { createSessionChatState } from '../chat-types';
 import type { ChatState } from '../chat-types';
 import type { ToolCallState } from '../../../shared/types';
+
+// One waiting message appended to what the host's queue snapshot already said (the host announces the WHOLE queue; one-core R5-4a).
+const queueRow = (st: any, sessionId: string, queueId: string, content: string, timestamp: number) =>
+  chatReducer(st, { type: 'QUEUE_SYNCED', sessionId, queue: [...(st.get(sessionId)?.queuedMessages ?? []), { queueId, content, timestamp }] } as any);
 
 function stateWithInFlightTurn(sessionId = 'sess-1', turnId = 'turn-1'): ChatState {
   const session = createSessionChatState();
@@ -234,7 +238,7 @@ describe('chatReducer tool card duplication', () => {
   }
 
   const askAction = {
-    type: 'TRANSCRIPT_TOOL_USE' as const,
+    type: 'TRANSCRIPT_TOOL_USE' as const, timestamp: 1,
     sessionId: 'sess-1',
     uuid: 'line-uuid-1',
     toolUseId: 'toolu_ask_1',
@@ -334,7 +338,7 @@ describe('chatReducer permission ask renders the requesting tool input', () => {
     // delivers its tool_result — a window in which it is still a match target.
     let state = initState();
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: 'sess-1', uuid: 'u1',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: 'sess-1', uuid: 'u1',
       toolUseId: 'toolu_ask_1', toolName: 'AskUserQuestion', toolInput: Q1,
     } as any);
     state = chatReducer(state, perm('req-1', Q1) as any);
@@ -361,7 +365,7 @@ describe('chatReducer permission ask renders the requesting tool input', () => {
       type: 'PERMISSION_RESPONDED', sessionId: 'sess-1', requestId: 'req-1',
     } as any);
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: 'sess-1', uuid: 'u1',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: 'sess-1', uuid: 'u1',
       toolUseId: 'toolu_ask_1', toolName: 'AskUserQuestion', toolInput: Q1,
     } as any);
     state = chatReducer(state, {
@@ -385,7 +389,7 @@ describe('chatReducer permission ask renders the requesting tool input', () => {
     } as any);
     // Ask #2's tool_use lands before ask #1's did — different questions.
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: 'sess-1', uuid: 'u2',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: 'sess-1', uuid: 'u2',
       toolUseId: 'toolu_ask_2', toolName: 'AskUserQuestion', toolInput: Q2,
     } as any);
 
@@ -402,7 +406,7 @@ describe('chatReducer permission ask renders the requesting tool input', () => {
     // Bash's name above AskUserQuestion's questions.
     let state = initState();
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: 'sess-1', uuid: 'u1',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: 'sess-1', uuid: 'u1',
       toolUseId: 'toolu_bash_1', toolName: 'Bash', toolInput: { command: 'ls' },
     } as any);
     state = chatReducer(state, perm('req-1', Q1) as any);
@@ -415,7 +419,7 @@ describe('chatReducer permission ask renders the requesting tool input', () => {
     // hook-dispatcher.ts defaults a missing payload.tool_input to `{}`.
     let state = initState();
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: 'sess-1', uuid: 'u1',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: 'sess-1', uuid: 'u1',
       toolUseId: 'toolu_ask_1', toolName: 'AskUserQuestion', toolInput: Q1,
     } as any);
     state = chatReducer(state, {
@@ -432,11 +436,11 @@ describe('chatReducer permission ask renders the requesting tool input', () => {
     // card for ask #2 already exists, the request must bind to THAT card.
     let state = initState();
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: 'sess-1', uuid: 'u1',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: 'sess-1', uuid: 'u1',
       toolUseId: 'toolu_ask_1', toolName: 'AskUserQuestion', toolInput: Q1,
     } as any);
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: 'sess-1', uuid: 'u2',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: 'sess-1', uuid: 'u2',
       toolUseId: 'toolu_ask_2', toolName: 'AskUserQuestion', toolInput: Q2,
     } as any);
     state = chatReducer(state, perm('req-2', Q2) as any);
@@ -451,106 +455,6 @@ describe('chatReducer permission ask renders the requesting tool input', () => {
 // Remote-access hydration guards. Both invariants here are the kind that fail
 // silently in production — a wrong-looking timeline, or a chat that vanishes —
 // so they are pinned rather than left to manual verification.
-describe('chatReducer HYDRATE_CHAT_STATE', () => {
-  /** A snapshot as a long-running host would send it: ids from its own counter. */
-  function snapshotWithLegacyIds() {
-    const session = createSessionChatState();
-    session.timeline.push({
-      kind: 'user',
-      message: { id: 'msg-1', role: 'user', content: 'hydrated message', timestamp: 1000 },
-    } as any);
-    return serializeChatState(new Map([['sess-1', session]]));
-  }
-
-  /** Timeline message ids — they live on entry.message.id, not entry.id. */
-  function messageIds(state: ChatState, sessionId = 'sess-1'): string[] {
-    return state
-      .get(sessionId)!
-      .timeline.filter((e: any) => e.kind === 'user')
-      .map((e: any) => e.message.id);
-  }
-
-  it('never mints a live message id that collides with a hydrated one', async () => {
-    // The bug: the module-level id counter restarts at 0 on a fresh remote
-    // client while the snapshot already holds msg-1..msg-N, so the next live
-    // message reused an existing React key and the list mis-reconciled.
-    //
-    // resetModules() is load-bearing. This MUST run against a freshly-imported
-    // reducer so the counter really is at 0 — reusing the file-level import
-    // makes the test vacuous, because earlier tests here have already advanced
-    // the counter past the ids in the snapshot and no collision can occur.
-    vi.resetModules();
-    const { chatReducer: freshReducer } = await import('../chat-reducer');
-
-    let state: ChatState = new Map();
-    state = freshReducer(state, {
-      type: 'HYDRATE_CHAT_STATE',
-      sessions: snapshotWithLegacyIds(),
-    } as any);
-
-    const hydratedIds = new Set(messageIds(state));
-    expect(hydratedIds.has('msg-1')).toBe(true);
-
-    state = freshReducer(state, {
-      type: 'USER_PROMPT',
-      sessionId: 'sess-1',
-      content: 'live message',
-      timestamp: 2000,
-    } as any);
-
-    const ids = messageIds(state);
-    const liveId = ids[ids.length - 1];
-    expect(liveId).toBeDefined();
-    expect(hydratedIds.has(liveId)).toBe(false);
-    expect(new Set(ids).size).toBe(ids.length);
-  });
-
-  it('ignores an empty snapshot instead of blanking live state', () => {
-    // An empty payload is what the host sends on export timeout or serialize
-    // failure — not a claim that there are no sessions. Applying it wiped a
-    // reconnecting client's chat with no error surfaced.
-    let state: ChatState = new Map();
-    state = chatReducer(state, {
-      type: 'HYDRATE_CHAT_STATE',
-      sessions: snapshotWithLegacyIds(),
-    } as any);
-
-    const before = state;
-    state = chatReducer(state, {
-      type: 'HYDRATE_CHAT_STATE',
-      sessions: { sessions: [], degraded: true },
-    } as any);
-
-    expect(state).toBe(before);
-    expect(state.get('sess-1')!.timeline).toHaveLength(1);
-  });
-
-  it('still replaces state for a non-empty snapshot', () => {
-    // Guard against over-correcting the empty-snapshot fix into "never replaces".
-    let state: ChatState = new Map();
-    state = chatReducer(state, {
-      type: 'HYDRATE_CHAT_STATE',
-      sessions: snapshotWithLegacyIds(),
-    } as any);
-
-    const replacement = createSessionChatState();
-    replacement.timeline.push({
-      id: 'msg-99',
-      role: 'user',
-      content: 'replacement',
-      timestamp: 3000,
-    } as any);
-
-    state = chatReducer(state, {
-      type: 'HYDRATE_CHAT_STATE',
-      sessions: serializeChatState(new Map([['sess-2', replacement]])),
-    } as any);
-
-    expect(state.has('sess-1')).toBe(false);
-    expect(state.get('sess-2')!.timeline).toHaveLength(1);
-  });
-});
-
 // ─────────────────────────────────────────────────────────────────────────
 // Task 12: queued messages leave the timeline — docked strip + true-position
 // confirm. Replaces the Task 3/11 timeline-based queued mechanics (the
@@ -577,10 +481,10 @@ function withStreamingTurn(sessionId = SID, turnId = 't1', groupId = 'g1'): Chat
   return new Map([[sessionId, session]]);
 }
 
-describe('chatReducer QUEUED_MESSAGE_ADDED / QUEUED_MESSAGE_REMOVED (Task 12)', () => {
-  it('QUEUED_MESSAGE_ADDED appends to queuedMessages and touches NEITHER the timeline NOR turn state', () => {
+describe('chatReducer QUEUE_SYNCED / QUEUED_MESSAGE_REMOVED (Task 12)', () => {
+  it('a queue snapshot sets to queuedMessages and touches NEITHER the timeline NOR turn state', () => {
     let s = withStreamingTurn(); // currentTurnId 't1', currentGroupId 'g1', isThinking true
-    s = chatReducer(s, { type: 'QUEUED_MESSAGE_ADDED', sessionId: SID, queueId: 'q-1', content: 'next msg', timestamp: 5 });
+    s = queueRow(s, SID, 'q-1', 'next msg', 5);
     const sess = s.get(SID)!;
     expect(sess.currentTurnId).toBe('t1');   // NOT nulled — later deltas keep merging into the live turn
     expect(sess.currentGroupId).toBe('g1');  // NOT nulled — tool grouping unaffected
@@ -588,24 +492,24 @@ describe('chatReducer QUEUED_MESSAGE_ADDED / QUEUED_MESSAGE_REMOVED (Task 12)', 
     expect(sess.queuedMessages).toEqual([{ queueId: 'q-1', content: 'next msg', timestamp: 5 }]);
   });
 
-  it('QUEUED_MESSAGE_ADDED is a no-op for an unknown session id', () => {
+  it('a queue snapshot is a no-op for an unknown session id', () => {
     const s = new Map<string, ReturnType<typeof createSessionChatState>>();
     const before = s;
-    const after = chatReducer(before, { type: 'QUEUED_MESSAGE_ADDED', sessionId: 'ghost', queueId: 'q-1', content: 'x', timestamp: 1 });
+    const after = queueRow(before, 'ghost', 'q-1', 'x', 1);
     expect(after).toBe(before);
   });
 
   it('QUEUED_MESSAGE_REMOVED removes only the matching entry by queueId', () => {
     let s: ChatState = new Map([[SID, createSessionChatState()]]);
-    s = chatReducer(s, { type: 'QUEUED_MESSAGE_ADDED', sessionId: SID, queueId: 'q-1', content: 'first', timestamp: 1 });
-    s = chatReducer(s, { type: 'QUEUED_MESSAGE_ADDED', sessionId: SID, queueId: 'q-2', content: 'second', timestamp: 2 });
+    s = queueRow(s, SID, 'q-1', 'first', 1);
+    s = queueRow(s, SID, 'q-2', 'second', 2);
     s = chatReducer(s, { type: 'QUEUED_MESSAGE_REMOVED', sessionId: SID, queueId: 'q-1' });
     expect(s.get(SID)!.queuedMessages).toEqual([{ queueId: 'q-2', content: 'second', timestamp: 2 }]);
   });
 
   it('QUEUED_MESSAGE_REMOVED is a no-op when the queueId is not present', () => {
     let s: ChatState = new Map([[SID, createSessionChatState()]]);
-    s = chatReducer(s, { type: 'QUEUED_MESSAGE_ADDED', sessionId: SID, queueId: 'q-1', content: 'first', timestamp: 1 });
+    s = queueRow(s, SID, 'q-1', 'first', 1);
     const before = s;
     const after = chatReducer(before, { type: 'QUEUED_MESSAGE_REMOVED', sessionId: SID, queueId: 'ghost-id' });
     expect(after).toBe(before);
@@ -627,7 +531,7 @@ describe('chatReducer TRANSCRIPT_USER_MESSAGE — true-position confirm for a dr
     // possible landing position is wherever TRANSCRIPT_USER_MESSAGE appends
     // it: the end.
     let s = withStreamingTurn();
-    s = chatReducer(s, { type: 'QUEUED_MESSAGE_ADDED', sessionId: SID, queueId: 'q-1', content: 'queued text', timestamp: 1 });
+    s = queueRow(s, SID, 'q-1', 'queued text', 1);
     s = chatReducer(s, {
       type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SID, uuid: 'u-1', text: 'queued text', timestamp: 2,
     });
@@ -643,8 +547,8 @@ describe('chatReducer TRANSCRIPT_USER_MESSAGE — true-position confirm for a dr
 
   it('drain-confirm removes the oldest queuedMessages entry with matching content', () => {
     let s: ChatState = new Map([[SID, createSessionChatState()]]);
-    s = chatReducer(s, { type: 'QUEUED_MESSAGE_ADDED', sessionId: SID, queueId: 'q-1', content: 'hi', timestamp: 1 });
-    s = chatReducer(s, { type: 'QUEUED_MESSAGE_ADDED', sessionId: SID, queueId: 'q-2', content: 'hi', timestamp: 2 });
+    s = queueRow(s, SID, 'q-1', 'hi', 1);
+    s = queueRow(s, SID, 'q-2', 'hi', 2);
     s = chatReducer(s, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SID, uuid: 'u-1', text: 'hi', timestamp: 3 });
     // Oldest-content-match discipline (mirrors the pending-bubble dedup):
     // q-1 (the OLDER entry) is removed, q-2 survives for the next drain.
@@ -672,7 +576,7 @@ describe('chatReducer TRANSCRIPT_USER_MESSAGE — true-position confirm for a dr
     // by the same TRANSCRIPT_USER_MESSAGE dispatch.
     let s: ChatState = new Map([[SID, createSessionChatState()]]);
     s = chatReducer(s, { type: 'USER_PROMPT', sessionId: SID, content: 'same text', timestamp: 1 });
-    s = chatReducer(s, { type: 'QUEUED_MESSAGE_ADDED', sessionId: SID, queueId: 'q-1', content: 'same text', timestamp: 2 });
+    s = queueRow(s, SID, 'q-1', 'same text', 2);
     s = chatReducer(s, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SID, uuid: 'u-1', text: 'same text', timestamp: 3 });
     const timeline = s.get(SID)!.timeline;
     expect(timeline).toHaveLength(1); // pending bubble confirmed in place, not double-appended
@@ -696,7 +600,7 @@ describe('chatReducer tool-group collapse semantics (Task 8 / BUG B)', () => {
 
   function toolUse(toolUseId: string, uuid: string, sessionId = SID) {
     return {
-      type: 'TRANSCRIPT_TOOL_USE' as const,
+      type: 'TRANSCRIPT_TOOL_USE' as const, timestamp: 1,
       sessionId,
       uuid,
       toolUseId,
@@ -815,7 +719,7 @@ describe('chatReducer PERMISSION_REQUEST tool identity', () => {
   }
 
   const bashUse = {
-    type: 'TRANSCRIPT_TOOL_USE' as const,
+    type: 'TRANSCRIPT_TOOL_USE' as const, timestamp: 1,
     sessionId: 'sess-1',
     uuid: 'u-bash',
     toolUseId: 'toolu_bash_1',
@@ -880,7 +784,7 @@ describe('chatReducer TRANSCRIPT_REPLAY_COMPLETE', () => {
   it('fails a tool left running by an interrupted transcript', () => {
     let state = initState();
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
       sessionId: 'sess-1',
       uuid: 'u-1',
       toolUseId: 'toolu_1',
@@ -904,7 +808,7 @@ describe('chatReducer TRANSCRIPT_REPLAY_COMPLETE', () => {
   it('leaves a completed replayed tool alone', () => {
     let state = initState();
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
       sessionId: 'sess-1', uuid: 'u-1',
       toolUseId: 'toolu_1', toolName: 'Bash', toolInput: { command: 'ls' },
     } as any);
@@ -932,7 +836,7 @@ describe('chatReducer TRANSCRIPT_REPLAY_COMPLETE on a live session', () => {
   it('leaves a running tool alone when the session is NOT idle', () => {
     let state: ChatState = new Map([['sess-1', createSessionChatState()]]);
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
       sessionId: 'sess-1', uuid: 'u-1',
       toolUseId: 'toolu_1', toolName: 'Bash', toolInput: { command: 'sleep 1000' },
     } as any);
@@ -991,7 +895,7 @@ describe('chatReducer NATIVE_TOOL_PREPARING', () => {
     let state = chatReducer(initState(), prep(2048));
     const groupIdBefore = groupsOf(state)[0].id;
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'u-1',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'u-1',
       toolUseId: 'c1', toolName: 'Write', toolInput: { file_path: 'a.ts', content: 'x' },
     } as any);
 
@@ -1021,7 +925,7 @@ describe('chatReducer NATIVE_TOOL_PREPARING', () => {
     // result is still coming — the dangling-pair failure the runtime forbids.
     let state = chatReducer(initState(), prep(2048));
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'u-1',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'u-1',
       toolUseId: 'c1', toolName: 'Write', toolInput: { file_path: 'a.ts' },
     } as any);
     state = chatReducer(state, prep(2048, { cleared: true }));
@@ -1035,7 +939,7 @@ describe('chatReducer NATIVE_TOOL_PREPARING', () => {
     // describe an event that did not happen (Destin, 2026-08-12).
     let state = chatReducer(initState(), prep(2048));
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'u-1',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'u-1',
       toolUseId: 'real-1', toolName: 'Bash', toolInput: { command: 'ls' },
     } as any);
     state = chatReducer(state, {

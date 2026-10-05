@@ -2,7 +2,7 @@ import React, { useState, useRef, useCallback, useEffect, useLayoutEffect, useMe
 import { createPortal } from 'react-dom';
 import { SessionStatusColor, STATUS_LABEL } from './StatusDot';
 import { Button, Toggle, Tooltip } from './ui';
-import { isAndroid, isRemoteMode } from '../platform';
+import { getCapabilities, isAndroid } from '../platform';
 import FolderSwitcher from './FolderSwitcher';
 import { SkipPermissionsInfoTooltip } from './SkipPermissionsInfoTooltip';
 import { useNativeBinding, usePreset, NativeExtras, loadLastBinding, persistLastBinding, defaultRuntime, type Runtime, type Binding } from './RuntimeBinding';
@@ -1537,7 +1537,7 @@ export default function SessionStrip({
     // Desktop Electron only. The phone and the remote browser are one window,
     // and their shim stubs every detach call as a no-op — so the function
     // check alone would offer "Move to new window" there and do nothing.
-    if (isAndroid() || isRemoteMode() || typeof det?.openDetached !== 'function') return;
+    if (!getCapabilities().nativeWindows || typeof det?.openDetached !== 'function') return; // R4-1: capability, was a three-way guess; the function check is a feature-detect
     e.preventDefault();
     e.stopPropagation();
     setPillMenu({ x: e.clientX, y: e.clientY, sessionId });

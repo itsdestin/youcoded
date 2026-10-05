@@ -9,7 +9,7 @@ import {
   TranscriptWatcher,
 } from '../src/main/transcript-watcher';
 import { ccProjectSlug } from '../src/main/slug-encoding';
-import type { TranscriptEvent } from '../src/shared/types';
+import { looseData, type TranscriptEvent } from '../src/shared/types';
 
 /** Poll ceilings as tries counts, sized to ~15s at each loop's own interval —
  *  same reasoning as POLL_TRIES in native-session-host.test.ts: these loops wait
@@ -61,7 +61,7 @@ describe('parseTranscriptLine', () => {
     expect(events[0].type).toBe('assistant-text');
     expect(events[0].sessionId).toBe(sessionId);
     expect(events[0].uuid).toBe('uuid-1');
-    expect(events[0].data.text).toBe('Hello, world!');
+    expect(looseData(events[0]).text).toBe('Hello, world!');
   });
 
   it('parses tool_use block → tool-use event with id, name, input', () => {
@@ -85,9 +85,9 @@ describe('parseTranscriptLine', () => {
     const events = parseTranscriptLine(line, sessionId);
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe('tool-use');
-    expect(events[0].data.toolUseId).toBe('toolu_abc');
-    expect(events[0].data.toolName).toBe('Read');
-    expect(events[0].data.toolInput).toEqual({ file_path: '/tmp/test.ts' });
+    expect(looseData(events[0]).toolUseId).toBe('toolu_abc');
+    expect(looseData(events[0]).toolName).toBe('Read');
+    expect(looseData(events[0]).toolInput).toEqual({ file_path: '/tmp/test.ts' });
   });
 
   it('parses tool_result from user message → tool-result event', () => {
@@ -110,9 +110,9 @@ describe('parseTranscriptLine', () => {
     const events = parseTranscriptLine(line, sessionId);
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe('tool-result');
-    expect(events[0].data.toolUseId).toBe('toolu_abc');
-    expect(events[0].data.toolResult).toBe('file contents here');
-    expect(events[0].data.isError).toBe(false);
+    expect(looseData(events[0]).toolUseId).toBe('toolu_abc');
+    expect(looseData(events[0]).toolResult).toBe('file contents here');
+    expect(looseData(events[0]).isError).toBe(false);
   });
 
   it('parses user prompt (has promptId) → user-message event', () => {
@@ -129,7 +129,7 @@ describe('parseTranscriptLine', () => {
     const events = parseTranscriptLine(line, sessionId);
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe('user-message');
-    expect(events[0].data.text).toBe('Fix the bug in main.ts');
+    expect(looseData(events[0]).text).toBe('Fix the bug in main.ts');
   });
 
   it('emits turn-complete for end_turn stop reason (in addition to content events)', () => {
@@ -146,9 +146,9 @@ describe('parseTranscriptLine', () => {
     const events = parseTranscriptLine(line, sessionId);
     expect(events).toHaveLength(2);
     expect(events[0].type).toBe('assistant-text');
-    expect(events[0].data.text).toBe('Done.');
+    expect(looseData(events[0]).text).toBe('Done.');
     expect(events[1].type).toBe('turn-complete');
-    expect(events[1].data.stopReason).toBe('end_turn');
+    expect(looseData(events[1]).stopReason).toBe('end_turn');
   });
 
   it('returns [] for file-history-snapshot lines', () => {
@@ -189,9 +189,9 @@ describe('parseTranscriptLine', () => {
     const events = parseTranscriptLine(line, sessionId);
     expect(events).toHaveLength(2);
     expect(events[0].type).toBe('assistant-text');
-    expect(events[0].data.text).toBe('Let me read that file.');
+    expect(looseData(events[0]).text).toBe('Let me read that file.');
     expect(events[1].type).toBe('tool-use');
-    expect(events[1].data.toolName).toBe('Read');
+    expect(looseData(events[1]).toolName).toBe('Read');
   });
 
   it('emits assistant-thinking heartbeat alongside text for reasoning blocks', () => {
@@ -214,7 +214,7 @@ describe('parseTranscriptLine', () => {
     expect(events).toHaveLength(2);
     expect(events[0].type).toBe('assistant-thinking');
     expect(events[1].type).toBe('assistant-text');
-    expect(events[1].data.text).toBe('Here is my answer.');
+    expect(looseData(events[1]).text).toBe('Here is my answer.');
   });
 
   it('skips user messages without promptId (tool result wrappers)', () => {
@@ -254,7 +254,7 @@ describe('parseTranscriptLine', () => {
     const events = parseTranscriptLine(line, sessionId);
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe('tool-result');
-    expect(events[0].data.toolResult).toBe('line one\nline two');
+    expect(looseData(events[0]).toolResult).toBe('line one\nline two');
   });
 
   it('returns [] for lines missing message field', () => {
@@ -356,7 +356,7 @@ describe('TranscriptWatcher', () => {
 
     expect(events.length).toBeGreaterThanOrEqual(1);
     expect(events[0].type).toBe('assistant-text');
-    expect(events[0].data.text).toBe('Hello from watcher');
+    expect(looseData(events[0]).text).toBe('Hello from watcher');
   });
 
   it('startWatching on an existing file starts at EOF and emits nothing for old content', async () => {
@@ -403,8 +403,8 @@ describe('TranscriptWatcher', () => {
       await new Promise((r) => setTimeout(r, 50));
       if (events.length > 0) break;
     }
-    expect(events.map((e) => e.data.text)).toContain('brand new');
-    expect(events.map((e) => e.data.text)).not.toContain('old one');
+    expect(events.map((e) => looseData(e).text)).toContain('brand new');
+    expect(events.map((e) => looseData(e).text)).not.toContain('old one');
   });
 
   it('deduplicates events by uuid', async () => {
@@ -449,7 +449,7 @@ describe('TranscriptWatcher', () => {
 
     // Only the first occurrence should be emitted (second uuid-dup is deduplicated)
     expect(events).toHaveLength(1);
-    expect(events[0].data.text).toBe('first');
+    expect(looseData(events[0]).text).toBe('first');
   });
 
   it('stopWatching cleans up the session', () => {
@@ -506,7 +506,7 @@ describe('TranscriptWatcher', () => {
     fs.appendFileSync(jsonlPath, fullLine.substring(50) + '\n');
     // fs.watch/poll delivery — poll for it instead of betting 2500ms.
     await vi.waitFor(() => expect(events).toHaveLength(1), { timeout: WATCH_MS });
-    expect(events[0].data.text).toBe('partial test');
+    expect(looseData(events[0]).text).toBe('partial test');
   });
 
   it('emits all events from a single line (dedup is per-line, not per-event)', async () => {
@@ -578,7 +578,7 @@ describe('TranscriptWatcher', () => {
     // 1500ms is under the interval's worst case on a loaded machine.
     await vi.waitFor(() => expect(events.length).toBeGreaterThanOrEqual(1), { timeout: WATCH_MS });
 
-    expect(events[0].data.text).toBe('From polling');
+    expect(looseData(events[0]).text).toBe('From polling');
   });
 
   // Regression: if a listener threw mid-batch, session.offset had already
@@ -672,7 +672,7 @@ describe('TranscriptWatcher', () => {
       fs.appendFileSync(parentJsonl, agentToolUseLine('uuid-1', 'toolu_P1') + '\n');
       tw.readNewLinesForSession('desktop-sess-1');
       await vi.waitFor(() => {
-        expect(events.map(e => e.type + ':' + (e.data.toolName ?? ''))).toContain('tool-use:Read');
+        expect(events.map(e => e.type + ':' + (looseData(e).toolName ?? ''))).toContain('tool-use:Read');
       }, { timeout: WATCH_MS });
     } finally {
       tw.stopWatching('desktop-sess-1');
@@ -682,9 +682,9 @@ describe('TranscriptWatcher', () => {
     const parentToolUse = events.find(e => e.type === 'tool-use' && e.data.toolName === 'Agent');
     const subagentToolUse = events.find(e => e.type === 'tool-use' && e.data.toolName === 'Read');
     expect(parentToolUse).toBeDefined();
-    expect(parentToolUse!.data.parentAgentToolUseId).toBeUndefined();
-    expect(subagentToolUse!.data.parentAgentToolUseId).toBe('toolu_P1');
-    expect(subagentToolUse!.data.agentId).toBe('abc');
+    expect(looseData(parentToolUse!).parentAgentToolUseId).toBeUndefined();
+    expect(looseData(subagentToolUse!).parentAgentToolUseId).toBe('toolu_P1');
+    expect(looseData(subagentToolUse!).agentId).toBe('abc');
   });
 });
 
@@ -1017,8 +1017,8 @@ describe('startWatching path source', () => {
     const subagentToolUse = history.find(e => e.type === 'tool-use' && e.data.toolName === 'Read');
     expect(parentToolUse).toBeDefined();
     expect(subagentToolUse).toBeDefined();
-    expect(subagentToolUse!.data.parentAgentToolUseId).toBe('toolu_HP1');
-    expect(subagentToolUse!.data.agentId).toBe('hook');
+    expect(looseData(subagentToolUse!).parentAgentToolUseId).toBe('toolu_HP1');
+    expect(looseData(subagentToolUse!).agentId).toBe('hook');
   });
 });
 
@@ -1231,7 +1231,7 @@ describe('TranscriptWatcher safety-net poll', () => {
       message: { role: 'assistant', content: [{ type: 'text', text: 'via fs.watch' }], stop_reason: null },
     }) + '\n');
     await vi.waitFor(() => expect(events.length).toBeGreaterThanOrEqual(1), { timeout: WATCH_MS });
-    expect(events[0].data.text).toBe('via fs.watch');
+    expect(looseData(events[0]).text).toBe('via fs.watch');
     expect(watcher.isPolling()).toBe(false);
   });
 

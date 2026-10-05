@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { ToolCallState, type FloorStop } from '../../shared/types';
-import { useChatDispatch } from '../state/chat-context';
+import { useChatDispatch, useChatStore } from '../state/chat-context';
+import { answerPermission } from '../state/phone-actions';
+import PendingAnswerNote from './PendingAnswerNote';
 import { useSpecialistDefinition, useSpecialistRunByChild } from '../hooks/useSpecialists';
 import { TaskConsentBlock } from './SpecialistEnvelope';
 import { hasNestedAsk } from '../utils/specialist-cards';
@@ -522,7 +524,7 @@ function grantFolderName(workDir: unknown, sessionCwd?: string): string {
 
 const NATIVE_ALWAYS_ALLOW = 'native:always-allow';
 
-export function PermissionButtons({ requestId, suggestions, denyListed, command, folderName, toolName, external, specialistName, suppressAlwaysAllow, floorStop, alwaysAllowNote, permissionMode, onResponded, onFailed, bare = false, noKeyboard = false }: {
+export function PermissionButtons({ requestId, suggestions, denyListed, command, folderName, toolName, external, specialistName, suppressAlwaysAllow, floorStop, alwaysAllowNote, permissionMode, onResponded, onFailed, onAnswerNow, answerUnconfirmed = false, bare = false, noKeyboard = false }: {
   requestId: string;
   /** Specialists 1c: render the generic row WITHOUT its own band (border/bg/
    *  padding) so a host can lay it out inline — the specialists popup puts the
@@ -565,6 +567,10 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   permissionMode?: 'ask' | 'auto-edit' | 'full-auto';
   onResponded?: () => void;
   onFailed?: () => void;
+  /** One-core R6-2: on a phone, answers the card at once and sees the answer through (state/phone-actions.ts); returns true when it took the answer. */
+  onAnswerNow?: (decision: object) => boolean;
+  /** The card was put back after an answer got no reply (kept on the tool, so it survives this component remounting). */
+  answerUnconfirmed?: boolean;
   /** Click/tap only — no global arrow/Enter handling. WHY: every card's Enter
    *  listener is window-wide and the first one registered wins, so with a
    *  helper's request sitting beside the main assistant's, Enter meant for one
@@ -633,6 +639,8 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   // Set when an answer got NO reply (the call rejected); cleared on the next try.
   const [unconfirmed, setUnconfirmed] = useState(false);
   const handleRespond = useCallback(async (decision: object) => {
+    // A phone draws the answer at once and the helper sees it through; this component never waits (it is gone the moment the card is answered).
+    if (onAnswerNow?.(decision)) return;
     setResponding(true);
     setUnconfirmed(false);
     try {
@@ -656,10 +664,10 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
       // stays answerable instead, and says what is actually known.
       setUnconfirmed(true);
     }
-  }, [requestId, onResponded, onFailed]);
+  }, [requestId, onResponded, onFailed, onAnswerNow]);
   // Same sentence in every button layout below (and in the question card and the
   // buddy's compact strip): the answer's fate is unknown, so it says only that.
-  const unconfirmedNote = unconfirmed ? (
+  const unconfirmedNote = unconfirmed || answerUnconfirmed ? (
     <p role="alert" className="text-3xs text-fg-muted leading-relaxed">
       YouCoded couldn&apos;t confirm your answer reached the session. If this is still waiting for you, answer again.
     </p>
@@ -1263,6 +1271,7 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
   useEffect(() => { if (nestedAsk) setExpanded(true); }, [nestedAsk]);
   useExpandAllToggle(() => setExpanded(true), () => setExpanded(false));
   const dispatch = useChatDispatch();
+  const chatStore = useChatStore();
   // Optional: the workbench tool gallery (?mode=workbench&view=tools) renders
   // ToolCard outside the ArtifactProvider. Missing cwd just drops the folder
   // name from the confirm header rather than crashing the card.
@@ -1418,6 +1427,9 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
         </div>
       )}
 
+      {/* One-core R6-2: the answer is drawn but the computer has not confirmed it yet. Shown only if the wait is noticeable (a fast link never flashes it). */}
+      {tool.status === 'running' && tool.answerPending && <PendingAnswerNote />}
+
       {/* Permission / AskUserQuestion / ExitPlanMode UI */}
       {tool.status === 'awaiting-approval' && (tool.requestId || tool.expired) && (() => {
         // AskUserQuestion needs its own UI with option selection instead of Yes/No
@@ -1449,6 +1461,12 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
             (window as any).claude?.remote?.broadcastAction(action);
           }
         };
+        // One-core R6-2: a phone answers at once (state/phone-actions.ts); the computer's own window and a helper's ask keep the old path.
+        const answerNow = (decision: object): boolean => !!sessionId && !!tool.requestId && !tool.specialist && answerPermission({
+          sessionId, requestId: tool.requestId, decision, dispatch,
+          tools: () => chatStore.getSession(sessionId).toolCalls,
+          broadcast: (a) => (window as any).claude?.remote?.broadcastAction?.(a),
+        });
         const onFailedCb = () => {
           if (sessionId && tool.requestId) {
             // 'delivery-failed': the host confirmed the socket is gone, so this
@@ -1559,6 +1577,8 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
               : undefined}
             onResponded={onRespondedCb}
             onFailed={onFailedCb}
+            onAnswerNow={answerNow}
+            answerUnconfirmed={tool.answerUnconfirmed}
           />
         );
       })()}

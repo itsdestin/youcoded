@@ -21,7 +21,7 @@ import type { ChatAction } from '../src/renderer/state/chat-types';
 import { useSessionTasks } from '../src/renderer/hooks/useSessionTasks';
 import { useTrustGateActive } from '../src/renderer/components/TrustGate';
 import ToolBody from '../src/renderer/components/tool-views/ToolBody';
-import { TRUST_PROMPT_TITLE } from '../src/renderer/parser/ink-select-parser';
+import { TRUST_PROMPT_TITLE } from '../src/shared/ink-select-parser';
 import type { ToolCallState } from '../src/shared/types';
 
 const SID = 's1';

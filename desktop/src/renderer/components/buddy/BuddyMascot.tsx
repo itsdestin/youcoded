@@ -6,7 +6,7 @@ import { MascotRig, type RigMotion } from '../mascot/MascotRig';
 import { purifySvgMarkup } from '../mascot/sanitize-rig-svg';
 import type { PoseName } from '../mascot/mascot-poses';
 import { defaultMascotPaint } from '../mascot/default-mascot-paint';
-import { useCurrentPlatform } from '../../state/platform';
+import { useCurrentPlatform } from '../../platform';
 
 const DRAG_THRESHOLD_PX = 4;
 // Slack around his drawn outline that still counts as "on him", so thin arms

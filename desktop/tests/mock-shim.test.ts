@@ -130,7 +130,8 @@ describe('channels', () => {
     // all — it teaches the reviewer the revert path is fine when it never ran.
     it('defaults.set is refused too', async () => {
       const c = shim('refused');
-      expect(await c.defaults.set({ model: 'opus' })).toEqual({ ok: false });
+      // The real defaults:set answers null when it could not write (contract: SessionDefaults | null).
+      expect(await c.defaults.set({ model: 'opus' })).toBeNull();
       expect((await c.defaults.get()).model).not.toBe('opus');
     });
 
@@ -413,7 +414,6 @@ describe('proxy semantics', () => {
       const c = shim();
       await expect(c.getIncognito()).resolves.toBe(false);
       await expect(c.getHomePath()).resolves.toContain('/');
-      expect(typeof c.onChatExportSnapshot(() => {})).toBe('function');
       expect(() => c.fireRemoteAttentionChanged({})).not.toThrow();
     });
 

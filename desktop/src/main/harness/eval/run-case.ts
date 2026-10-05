@@ -12,7 +12,7 @@ import { assembleSystemPrompt } from '../prompt-assembly';
 import { prepareProjectInstructions } from '../injection/project-instructions';
 import { resolvePreset } from '../preset-registry';
 import { BATTERY_PROMPT } from './battery';
-import type { TranscriptEvent } from '../../../shared/types';
+import type { TranscriptEvent, EventOf } from '../../../shared/types';
 import type { AskRequest, AskDecision } from '../permission-broker';
 import type { SkillCatalog } from '../skills/skill-catalog';
 import type { ToolServices, NativeTool } from '../tools/types';
@@ -142,7 +142,7 @@ export const WRAP_UP_TIMEOUT_MS = 120_000;
 function pickReview(events: TranscriptEvent[], sliceFrom: number, anchor: number): string {
   return events
     .slice(sliceFrom)
-    .filter((e, i) => e.type === 'assistant-text' && i > anchor)
+    .filter((e, i): e is EventOf<'assistant-text'> => e.type === 'assistant-text' && i > anchor)
     .map((e) => e.data.text ?? '')
     .join('')
     .trim();

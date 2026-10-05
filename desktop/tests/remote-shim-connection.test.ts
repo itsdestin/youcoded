@@ -156,6 +156,61 @@ describe('remote-shim — saved-key sign-in', () => {
       expect(store[KEY]).toBe('dev-1:secret');
     });
 
+    it('takes the computer\'s protocol version and capabilities from auth:ok, and starts from conservative defaults before it', async () => {
+      const claude = () => (globalThis as any).claude;
+      expect(claude().protocolVersion).toBe(0);
+      expect(claude().capabilities).toMatchObject({ nativeWindows: false, openInOs: false, nativeSessions: false, terminalTransport: 'text' });
+      store[KEY] = 'dev-1:secret';
+      start();
+      latest().open();
+      latest().receive({ type: 'auth:ok', deviceId: 'dev-1', platform: 'desktop', protocolVersion: 1,
+        capabilities: { openInOs: true, terminalTransport: 'raw-bytes', liveHandoff: false } });
+      await Promise.resolve();
+      expect(claude().protocolVersion).toBe(1);
+      expect(claude().capabilities).toMatchObject({ openInOs: true, terminalTransport: 'raw-bytes', liveHandoff: false, nativeWindows: false });
+    });
+
+    it('native.supported follows the computer\'s nativeSessions answer: false before it and on an older computer, true from a current one', async () => {
+      const claude = () => (globalThis as any).claude;
+      expect(claude().native.supported).toBe(false);
+      store[KEY] = 'dev-1:secret';
+      start();
+      latest().open();
+      latest().receive({ type: 'auth:ok', deviceId: 'dev-1', platform: 'desktop', protocolVersion: 1, capabilities: { nativeSessions: true } });
+      await Promise.resolve();
+      expect(claude().native.supported).toBe(true);
+      latest().close(1006);
+      await vi.advanceTimersByTimeAsync(1000);
+      latest().open();
+      latest().receive({ type: 'auth:ok', deviceId: 'dev-1', platform: 'desktop' }); // an older computer
+      await Promise.resolve();
+      expect(claude().native.supported).toBe(false);
+    });
+
+    it('an older computer that sends no capabilities leaves the screen on the conservative set', async () => {
+      store[KEY] = 'dev-1:secret';
+      start();
+      latest().open();
+      latest().receive({ type: 'auth:ok', deviceId: 'dev-1', platform: 'desktop' });
+      await Promise.resolve();
+      expect((globalThis as any).claude.protocolVersion).toBe(0);
+      expect((globalThis as any).claude.capabilities).toMatchObject({ nativeWindows: false, openInOs: false, git: false, nativeSessions: false, projectWrites: false, terminalTransport: 'text' });
+    });
+
+    it('a reconnect to a different host replaces what the first one said', async () => {
+      store[KEY] = 'dev-1:secret';
+      start();
+      latest().open();
+      latest().receive({ type: 'auth:ok', deviceId: 'dev-1', platform: 'desktop', protocolVersion: 1, capabilities: { openInOs: true } });
+      await Promise.resolve();
+      latest().close(1006);
+      await vi.advanceTimersByTimeAsync(1000);
+      latest().open();
+      latest().receive({ type: 'auth:ok', deviceId: 'dev-1', platform: 'desktop' });
+      await Promise.resolve();
+      expect((globalThis as any).claude.capabilities.openInOs).toBe(false);
+    });
+
     it('a reconnect after a drop whose key is then refused stops instead of retrying forever', async () => {
       store[KEY] = 'dev-1:secret';
       start();
@@ -312,69 +367,69 @@ describe('remote-shim — client:ready', () => {
       await connectPromise;
     }
 
-    it('is sent the first time the chat:hydrate listener is added after auth:ok — not before', async () => {
+    it('is sent the first time the session:created listener is added after auth:ok — not before', async () => {
       const p = shim.connect('pw', false);
       const ws = FakeWebSocket.instances[0];
       await authenticate(ws, p);
       expect(ws.sentOf('client:ready')).toEqual([]);          // App has not mounted its listener yet
 
-      (window as any).claude.on.chatHydrate(() => {});
+      (window as any).claude.on.sessionCreated(() => {});
       const readies = ws.sentOf('client:ready');
       expect(readies).toHaveLength(1);
-      expect(readies[0].payload).toEqual({ seq: 1, reconnect: false, ptyOffsets: {} });
+      expect(readies[0].payload).toEqual({ reconnect: false, protocolVersion: 2 });
       expect(readies[0].id).toBeUndefined();                    // no reply expected
     });
 
     it('a listener added while the socket is still authenticating sends one client:ready at auth:ok, reconnect:false', async () => {
       const p = shim.connect('pw', false);
       const ws = FakeWebSocket.instances[0];
-      (window as any).claude.on.chatHydrate(() => {});           // App mounted before auth finished
+      (window as any).claude.on.sessionCreated(() => {});           // App mounted before auth finished
       ws.open();
       expect(ws.sentOf('client:ready')).toEqual([]);
       ws.receive({ type: 'auth:ok', deviceId: 'dev-1', secret: 's', platform: 'desktop' });
       await p;
       const readies = ws.sentOf('client:ready');
       expect(readies).toHaveLength(1);
-      expect(readies[0].payload).toMatchObject({ seq: 1, reconnect: false });
+      expect(readies[0].payload).toMatchObject({ reconnect: false });
     });
 
     it('a first connect to a DIFFERENT host is not a reconnect, however many times the old one was reached', async () => {
       const p1 = shim.connect('pw', false);
       const ws1 = FakeWebSocket.instances[0];
       await authenticate(ws1, p1);
-      (window as any).claude.on.chatHydrate(() => {});
+      (window as any).claude.on.sessionCreated(() => {});
       expect(ws1.sentOf('client:ready')[0].payload.reconnect).toBe(false);
 
       (globalThis as any).location.host = 'other-desktop:9900';   // the page now points at another host
       const p2 = shim.connect('pw', false);
       const ws2 = FakeWebSocket.instances[1];
       await authenticate(ws2, p2);
-      expect(ws2.sentOf('client:ready')[0].payload).toMatchObject({ seq: 2, reconnect: false });
+      expect(ws2.sentOf('client:ready')[0].payload).toMatchObject({ reconnect: false });
 
       const p3 = shim.connect('pw', false);                         // the same host again: now a reconnect
       const ws3 = FakeWebSocket.instances[2];
       await authenticate(ws3, p3);
-      expect(ws3.sentOf('client:ready')[0].payload).toMatchObject({ seq: 3, reconnect: true });
+      expect(ws3.sentOf('client:ready')[0].payload).toMatchObject({ reconnect: true });
     });
 
     it('a second listener add (an effect re-run, a StrictMode double mount) sends no second client:ready', async () => {
       const p = shim.connect('pw', false);
       const ws = FakeWebSocket.instances[0];
       await authenticate(ws, p);
-      const h = (window as any).claude.on.chatHydrate(() => {});
-      (window as any).claude.off('chat:hydrate', h);
-      (window as any).claude.on.chatHydrate(() => {});
-      (window as any).claude.on.chatHydrate(() => {});
+      const h = (window as any).claude.on.sessionCreated(() => {});
+      (window as any).claude.off('session:created', h);
+      (window as any).claude.on.sessionCreated(() => {});
+      (window as any).claude.on.sessionCreated(() => {});
       expect(ws.sentOf('client:ready')).toHaveLength(1);
     });
 
-    it('on a reconnect the listener is still registered, so client:ready goes out on auth:ok with reconnect:true and the next seq', async () => {
+    it('on a reconnect the listener is still registered, so client:ready goes out on auth:ok with reconnect:true', async () => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       const p = shim.connect('pw', false);
       const ws1 = FakeWebSocket.instances[0];
       await authenticate(ws1, p);
-      (window as any).claude.on.chatHydrate(() => {});
-      expect(ws1.sentOf('client:ready')[0].payload.seq).toBe(1);
+      (window as any).claude.on.sessionCreated(() => {});
+      expect(ws1.sentOf('client:ready')).toHaveLength(1);
 
       ws1.close();                                              // the connection drops
       vi.advanceTimersByTime(1000);                             // the shim's first reconnect delay
@@ -386,20 +441,7 @@ describe('remote-shim — client:ready', () => {
 
       const readies = ws2.sentOf('client:ready');
       expect(readies).toHaveLength(1);
-      expect(readies[0].payload.seq).toBe(2);                   // monotonic for the shim's lifetime
       expect(readies[0].payload.reconnect).toBe(true);
-    });
-
-    it('applies only a hydrate whose seq is the latest it sent', async () => {
-      const p = shim.connect('pw', false);
-      const ws = FakeWebSocket.instances[0];
-      await authenticate(ws, p);
-      const applied: any[] = [];
-      (window as any).claude.on.chatHydrate((s: any) => applied.push(s));
-      ws.receive({ type: 'chat:hydrate', payload: { sessions: [], seq: 7 } });   // stale (never sent)
-      ws.receive({ type: 'chat:hydrate', payload: { sessions: [], seq: 1 } });   // the one it asked for
-      ws.receive({ type: 'chat:hydrate', payload: { sessions: [] } });           // an old host sends no seq
-      expect(applied.map((s) => s.seq)).toEqual([1, undefined]);
     });
 
     it('drops a frame from a socket that is no longer the current one', async () => {
@@ -792,6 +834,18 @@ describe('remote-shim — overlapping connections', () => {
       refused.fireClose(4003);                        // the refused socket's close event, after the fallback began
       await vi.advanceTimersByTimeAsync(10_000);
       expect(FakeWebSocket.instances.filter((s) => s.url.startsWith('ws://localhost:'))).toHaveLength(1);
+    });
+
+    it('goes back to local mode only once its own runtime has answered, so the mode and the capabilities change together', async () => {
+      await pairThenReconnectRefused('revoked');
+      const { isRemoteMode } = await import('../src/renderer/platform');
+      expect(isRemoteMode()).toBe(true);              // the fallback has started, nothing has answered yet
+      const own = FakeWebSocket.instances.find((w) => w.url.startsWith('ws://localhost:'))!;
+      own.open();
+      own.receive({ type: 'auth:ok', platform: 'android', protocolVersion: 1, capabilities: { terminalTransport: 'raw-bytes', terminalScreenRead: true } });
+      await settle();
+      expect(isRemoteMode()).toBe(false);
+      expect(claude().capabilities).toMatchObject({ terminalTransport: 'raw-bytes', terminalScreenRead: true });
     });
 
     it('keeps the pairing when the computer only switched remote access off', async () => {

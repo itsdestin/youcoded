@@ -5,7 +5,6 @@ import path from 'path';
 import fs from 'fs';
 import https from 'https';
 import crypto from 'crypto';
-import { app } from 'electron';
 import { log } from './logger';
 
 /**
@@ -925,6 +924,17 @@ export async function ensureNode(): Promise<{ success: boolean; error?: string }
   return nodeInstallInFlight;
 }
 
+/**
+ * ensureNode for a moment that must stop if it fails: null when Node is there, else the sentence to show.
+ * `purpose` finishes "Node.js is needed ...", e.g. "to open a terminal".
+ * WHY one helper (one-core merge, 2026-10-04): starting a session, installing Claude Code and opening a terminal
+ * each had their own copy of "ensure Node, else build the sentence", on both doors.
+ */
+export async function nodeRefusal(purpose: string): Promise<string | null> {
+  const node = await ensureNode();
+  return node.success ? null : `Node.js is needed ${purpose} and couldn't be installed: ${node.error}`;
+}
+
 /** Install Git silently. */
 export async function installGit(): Promise<{ success: boolean; error?: string }> {
   try {
@@ -1248,13 +1258,16 @@ export async function installClaude(): Promise<{ success: boolean; error?: strin
  * The CLI process is kept alive — it waits for the OAuth callback.
  * Call pollAuthStatus() to detect when login completes.
  */
-export function startOAuthLogin(): { url: string | null; kill: () => void } {
+// WHY `isPackaged` is a parameter (2026-09-29 one-core R1): this module is imported by the native
+// runtime (ClaudeAccount uses resolveCommand), and the runtime must load without Electron. The
+// one caller, first-run.ts, already runs inside Electron and passes `app.isPackaged`.
+export function startOAuthLogin(isPackaged = false): { url: string | null; kill: () => void } {
   const claudePath = resolveClaudeCommand();
 
   // Locate pty-worker.js the same way SessionManager does — in packaged builds
   // it lives under app.asar.unpacked/ so the system node can read it.
   let workerPath = path.join(__dirname, 'pty-worker.js');
-  if (app?.isPackaged) {
+  if (isPackaged) {
     const unpacked = workerPath.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
     if (fs.existsSync(unpacked)) workerPath = unpacked;
   }

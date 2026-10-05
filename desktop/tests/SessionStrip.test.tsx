@@ -10,6 +10,7 @@ import SessionStrip from '../src/renderer/components/SessionStrip';
 import { ArtifactProvider } from '../src/renderer/state/ArtifactContext';
 import { SESSION_DRAG_MIME, endLocalSessionDrag } from '../src/renderer/session-drag-model';
 import type { SessionStatusColor } from '../src/renderer/components/StatusDot';
+import { DESKTOP_WINDOW_CAPABILITIES } from '../src/shared/capabilities';
 
 // The strip packs its pills against the bar parent's clientWidth, which jsdom
 // reports as 0 — leaving exactly ONE pill rendered. Hand it a real budget.
@@ -88,6 +89,7 @@ describe('All Sessions menu reordering', () => {
       const r = document.createElement('div'); r.id = 'root'; document.body.appendChild(r);
     }
     (window as any).claude = {
+      capabilities: DESKTOP_WINDOW_CAPABILITIES, // these tests model the computer's own window
       detach,
       platformFacts: facts,
       tags: { list: async () => [] },
@@ -330,6 +332,7 @@ describe('html-drag tear-off', () => {
     vi.clearAllMocks();
     endLocalSessionDrag();
     (window as any).claude = {
+      capabilities: DESKTOP_WINDOW_CAPABILITIES, // these tests model the computer's own window
       detach,
       platformFacts: facts,
       tags: { list: async () => [] },
@@ -543,6 +546,7 @@ describe('renaming from the session list', () => {
 
   function bridge(withNaming: boolean) {
     (window as any).claude = {
+      capabilities: DESKTOP_WINDOW_CAPABILITIES, // these tests model the computer's own window
       detach,
       platformFacts: { platform: 'linux', wayland: true },
       tags: { list: async () => [] },
@@ -731,6 +735,7 @@ describe('sessions in other windows', () => {
       document.body.appendChild(root);
     }
     (window as any).claude = {
+      capabilities: DESKTOP_WINDOW_CAPABILITIES, // these tests model the computer's own window
       detach,
       platformFacts: { platform: 'linux', wayland: true },
       tags: { list: async () => [] },

@@ -2,6 +2,7 @@
 // specialist delegation (plan 1b Task 2). Real filesystem (temp dir per
 // test), same fixture style as permission-store.test.ts: NativeHome(dir)
 // against a fresh temp root, no fs mocking.
+import { deadPid } from './helpers/dead-pid';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import * as fs from 'fs'; import * as os from 'os'; import * as path from 'path';
 import { NativeHome } from '../src/main/native-home';
@@ -9,6 +10,8 @@ import { DelegationLedger, OWNER, isOwnerAlive, toRunView, type DelegationRecord
 import { MISSED_STEERS_MAX_ENTRIES } from '../src/main/harness/specialists/delegation-ledger';
 import { SPECIALIST_NOTE_MAX_CHARS } from '../src/main/harness/specialists/limits';
 import type { SpecialistNote } from '../src/shared/types';
+
+const DEAD_PID = deadPid();
 
 let home: NativeHome; let ledger: DelegationLedger; let dir: string;
 const CWD = '/some/project';
@@ -147,7 +150,7 @@ describe('DelegationLedger', () => {
       status: 'completed',
       startedAt: 100,
       delivered: false,
-      claimedBy: { pid: 999_999, instanceId: 'a-process-that-is-long-gone' },
+      claimedBy: { pid: DEAD_PID, instanceId: 'a-process-that-is-long-gone' },
       claimedAt: 1,
     }));
     const rec = await ledger.claimUndelivered(CWD, 'p1');
@@ -199,7 +202,7 @@ describe('DelegationLedger', () => {
 
   it('isOwnerAlive: our own stamp is alive; an absurd pid+instanceId is not', () => {
     expect(isOwnerAlive(OWNER)).toBe(true);
-    expect(isOwnerAlive({ pid: 999_999, instanceId: 'nonexistent-owner' })).toBe(false);
+    expect(isOwnerAlive({ pid: DEAD_PID, instanceId: 'nonexistent-owner' })).toBe(false);
   });
 
   // ---- Review round 2, Finding 4: "interrupted" always wins a teardown/
@@ -319,7 +322,7 @@ describe('DelegationLedger', () => {
     it('case (b) also blocks the dead-owner and never-claimed lease branches — injectionAttempted gates all three, not just self-reclaim', async () => {
       await ledger.recordStart(CWD, 'p1', makeRecord({
         childId: 'dead-owner-already-injected', status: 'completed', startedAt: 100, delivered: false,
-        claimedBy: { pid: 999_999, instanceId: 'a-process-that-is-long-gone' }, claimedAt: 1, injectionAttempted: true,
+        claimedBy: { pid: DEAD_PID, instanceId: 'a-process-that-is-long-gone' }, claimedAt: 1, injectionAttempted: true,
       }));
       expect(await ledger.claimUndelivered(CWD, 'p1')).toBeNull();
 

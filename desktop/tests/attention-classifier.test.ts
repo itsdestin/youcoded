@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyBuffer, ClassifierContext } from '../src/renderer/state/attention-classifier';
+import { classifyBuffer, ClassifierContext } from '../src/shared/attention-classifier';
 import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 

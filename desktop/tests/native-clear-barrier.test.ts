@@ -12,23 +12,24 @@ import { rebuildHistory } from '../src/main/harness/history-rebuild';
 import { HarnessSession } from '../src/main/harness/harness-session';
 import { ASSISTANT_PRESET } from '../src/shared/harness-manifest';
 import { MockLanguageModelV4 } from 'ai/test';
-import type { TranscriptEvent } from '../src/shared/types';
+import type { TranscriptEvent, TranscriptEventType, DataOf, EventOf } from '../src/shared/types';
+import { ev as mkEv } from './helpers/transcript-events';
 import { EMPTY_SKILL_CATALOG } from './helpers/harness-fakes';
 
 let seq = 0;
-const ev = (type: string, data: any = {}): TranscriptEvent =>
-  ({ type, sessionId: 's-1', uuid: `u-${++seq}`, timestamp: 1000 + seq, data } as TranscriptEvent);
+const ev = <T extends TranscriptEventType>(type: T, data: DataOf<T>): EventOf<T> =>
+  mkEv(type, data, { sessionId: 's-1', uuid: `u-${++seq}`, timestamp: 1000 + seq });
 
 describe('rebuildHistory — context-clear barrier', () => {
   it('drops everything before the barrier and keeps everything after', () => {
     const history = rebuildHistory([
       ev('user-message', { text: 'old question' }),
       ev('assistant-text', { text: 'old answer' }),
-      ev('turn-complete'),
-      ev('context-clear'),
+      ev('turn-complete', {}),
+      ev('context-clear', {}),
       ev('user-message', { text: 'fresh question' }),
       ev('assistant-text', { text: 'fresh answer' }),
-      ev('turn-complete'),
+      ev('turn-complete', {}),
     ]);
 
     expect(history).toEqual([
@@ -41,8 +42,8 @@ describe('rebuildHistory — context-clear barrier', () => {
     const history = rebuildHistory([
       ev('user-message', { text: 'q' }),
       ev('assistant-text', { text: 'a' }),
-      ev('turn-complete'),
-      ev('context-clear'),
+      ev('turn-complete', {}),
+      ev('context-clear', {}),
     ]);
     expect(history).toEqual([]);
   });
@@ -50,9 +51,9 @@ describe('rebuildHistory — context-clear barrier', () => {
   it('only the LAST barrier survives when the user clears more than once', () => {
     const history = rebuildHistory([
       ev('user-message', { text: 'first' }),
-      ev('context-clear'),
+      ev('context-clear', {}),
       ev('user-message', { text: 'second' }),
-      ev('context-clear'),
+      ev('context-clear', {}),
       ev('user-message', { text: 'third' }),
     ]);
     expect(history).toEqual([{ role: 'user', content: 'third' }]);
@@ -66,7 +67,7 @@ describe('rebuildHistory — context-clear barrier', () => {
       ev('user-message', { text: 'old' }),
       ev('assistant-text', { text: 'calling a tool' }),
       ev('tool-use', { toolUseId: 't1', toolName: 'Read', toolInput: {} }),
-      ev('context-clear'),
+      ev('context-clear', {}),
       ev('user-message', { text: 'new' }),
     ]);
     expect(history).toEqual([{ role: 'user', content: 'new' }]);
@@ -78,7 +79,7 @@ describe('rebuildHistory — context-clear barrier', () => {
     const events = [
       ev('user-message', { text: 'q' }),
       ev('assistant-text', { text: 'a' }),
-      ev('turn-complete'),
+      ev('turn-complete', {}),
     ];
     expect(rebuildHistory(events)).toEqual([
       { role: 'user', content: 'q' },

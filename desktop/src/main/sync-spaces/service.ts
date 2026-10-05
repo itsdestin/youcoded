@@ -5,7 +5,6 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { BrowserWindow } from 'electron';
 import { ManagedRoots } from './managed-roots';
 import { SpaceManager, repoNameForSpace } from './space-manager';
 import { GitTransport } from './git-transport';
@@ -164,6 +163,14 @@ let discoverAgain = false;
 // remoteServer.broadcast). This keeps service.ts free of a remote-server import
 // (remote-server imports THIS module, so importing back would be circular).
 let remoteBroadcast: ((e: SpaceSyncEvent) => void) | null = null;
+// WHY (2026-09-29 one-core R1): the window fan-out used to call Electron's BrowserWindow directly,
+// which made everything that imports this file (the native runtime, via getManagedRoots) need
+// Electron. Same shape as the remote hand-out above: main.ts wires it at module load, before any
+// sync work can start, so no event is ever emitted without it.
+let windowBroadcast: ((e: SpaceSyncEvent) => void) | null = null;
+export function setSyncSpacesWindowBroadcaster(fn: ((e: SpaceSyncEvent) => void) | null): void {
+  windowBroadcast = fn;
+}
 export function setSyncSpacesRemoteBroadcaster(fn: ((e: SpaceSyncEvent) => void) | null): void {
   remoteBroadcast = fn;
 }
@@ -199,9 +206,7 @@ function broadcast(e: SpaceSyncEvent): void {
   try {
     if (stamped.type === 'synced' && stamped.at && stamped.contacted !== false) manager?.recordSyncSuccess(stamped.spaceId, stamped.at);
   } catch { /* a failed marker write must never block event delivery */ }
-  for (const w of BrowserWindow.getAllWindows()) {
-    try { w.webContents.send('syncspaces:event', stamped); } catch { /* window closing */ }
-  }
+  try { windowBroadcast?.(stamped); } catch { /* window closing */ }
   // Fan out to remote clients too (see comment on remoteBroadcast above).
   try { remoteBroadcast?.(stamped); } catch { /* remote server not up / closing */ }
   // Fan out to main-process subscribers (each isolated — same rationale as the

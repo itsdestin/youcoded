@@ -1,5 +1,4 @@
-import type { IpcMain } from 'electron';
-import { IPC, type SessionInfo } from '../../shared/types';
+import type { SessionInfo } from '../../shared/types';
 import type { CreateSessionOpts } from '../session-manager';
 import type { createHandoffAttempts } from './handoff-attempt';
 import { validateSyncName } from '../sync-spaces/guards';
@@ -39,29 +38,6 @@ export function createHandoffTransport(controller: Controller | null) {
     }
   };
   return Object.assign(route, { cancelOwner: (owner: string) => controller?.cancelOwner(owner) });
-}
-
-// WHY: register only the narrow transport routes here, not business logic in the oversized IPC handler.
-export function registerHandoffIpc(ipcMain: IpcMain, route: ReturnType<typeof createHandoffTransport>): void {
-  for (const [channel, action] of [
-    [IPC.HANDOFF_BEGIN, 'begin'], [IPC.HANDOFF_STATUS, 'status'], [IPC.HANDOFF_WAIT, 'wait'],
-    [IPC.HANDOFF_RETRY, 'retry'], [IPC.HANDOFF_SAVED_COPY, 'saved-copy'], [IPC.HANDOFF_FORCE, 'force'],
-    [IPC.HANDOFF_CANCEL, 'cancel'], [IPC.HANDOFF_CREATE_PARAMS, 'create-params'],
-  ] as const) ipcMain.handle(channel, (event, payload: unknown) => route(`window:${event.sender.id}`, action, payload));
-}
-
-// WHY: the socket may close during wait; cancellation wins and no stale result is replayed to a new connection.
-export async function handleRemoteHandoff(
-  route: ReturnType<typeof createHandoffTransport> | undefined, owner: string, type: string,
-  payload: unknown, connected: () => boolean, respond: (value: unknown) => void,
-): Promise<void> {
-  try {
-    if (!route || !connected()) throw new Error('Handoff attempts are unavailable.');
-    const result = await route(owner, type.slice('handoff:'.length), payload);
-    if (connected()) respond(result);
-  } catch (error) {
-    if (connected()) respond({ ok: false, error: error instanceof Error ? error.message : 'Handoff request failed.' });
-  }
 }
 
 function parseCreate(value: unknown, conversationId?: string, provider?: string): CreateSessionOpts {

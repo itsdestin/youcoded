@@ -14,6 +14,7 @@ import * as fs from 'fs'; import * as path from 'path'; import * as os from 'os'
 import { generateText } from 'ai';
 import { NativeHome } from '../src/main/native-home';
 import { SecretsStore } from '../src/main/providers/secrets-store';
+import { getSecretStorage } from '../src/main/providers/secret-storage';
 import { ProviderRegistry } from '../src/main/providers/provider-registry';
 import { withChatGptRequest } from '../src/main/providers/chatgpt-request-diagnostics';
 import { ENV_OPEN } from '../src/main/harness/prompt-assembly';
@@ -33,7 +34,7 @@ describe('prompt-cache request shaping', () => {
   let root: string; let reg: ProviderRegistry; let anthropicId: string;
   beforeEach(async () => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-pcache-'));
-    reg = new ProviderRegistry(new NativeHome(root), new SecretsStore(root));
+    reg = new ProviderRegistry(new NativeHome(root), new SecretsStore(root, getSecretStorage()));
     await reg.init();
     await reg.setKey('openrouter', 'sk-or-abc');
     anthropicId = await reg.upsert({ type: 'anthropic', label: 'Anthropic', enabled: true });

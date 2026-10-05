@@ -5,13 +5,13 @@ import path from 'path';
 // local `readSource` name below is this file's own long-standing wrapper.
 import { readSource as readSourceFile } from './helpers/guard-scope';
 
-// This test verifies that IPC channel constants in preload.ts match shared/types.ts.
+// This test verifies that IPC channel constants in preload.ts match shared/backend-contract.ts.
 // Preload can't import from shared/types due to Electron sandbox restrictions,
 // so channel names are duplicated. This test catches drift.
 
 // The two IPC constant maps and how they are compared.
 //
-// preload.ts cannot import shared/types.ts (Electron's sandbox), so the channel
+// preload.ts cannot import shared/backend-contract.ts (Electron's sandbox), so the channel
 // map is written out TWICE and the two copies are kept identical by this file.
 //
 // Fixed 2026-09-04 (linux-buddy-helper design §11): this test used to
@@ -45,41 +45,34 @@ function ipcConstants(source: string, decl: RegExp): Map<string, string> {
   return out;
 }
 
-// The drift that already existed on 2026-09-04, measured, not guessed. Every
-// name here is a constant one map carries and the other does not. Most are
-// namespaces preload owns end-to-end (account:, social:, marketplace:) or that
-// main owns end-to-end (specialists:, permissions:, search:).
-const PRELOAD_ONLY_ON_2026_09_04 = [
-  'ACCOUNT_DELETE', 'ACCOUNT_EXPORT', 'ACCOUNT_POLL', 'ACCOUNT_REFRESH', 'ACCOUNT_SET_HANDLE',
-  'ACCOUNT_SIGNED_IN', 'ACCOUNT_SIGN_OUT', 'ACCOUNT_START', 'ACCOUNT_UPDATE_PROFILE',
-  'ACCOUNT_USER', 'ANALYTICS_GET_OPT_IN', 'ANALYTICS_SET_OPT_IN', 'APPEARANCE_GET',
-  'APPEARANCE_SET', 'CHAT_EXPORT_SNAPSHOT', 'CHAT_SNAPSHOT_RESPONSE', 'DEFAULTS_GET',
-  'DEFAULTS_SET', 'MARKETPLACE_COMMENT', 'MARKETPLACE_INSTALL', 'MARKETPLACE_RATE',
-  'MARKETPLACE_RATE_DELETE', 'MARKETPLACE_REPORT', 'MARKETPLACE_THEME_LIKE',
-  'MARKETPLACE_THUMB', 'MARKETPLACE_THUMB_GET', 'MODEL_GET_PREFERENCE', 'MODEL_READ_LAST',
-  'MODEL_SET_PREFERENCE', 'MODES_GET', 'MODES_SET', 'PTY_RAW_BYTES',
-  'REMOTE_ATTENTION_CHANGED', 'SETTINGS_GET', 'SETTINGS_SET', 'SOCIAL_ACCEPT_REQUEST',
-  'SOCIAL_BLOCK', 'SOCIAL_CANCEL_REQUEST', 'SOCIAL_DECLINE_REQUEST', 'SOCIAL_LIST_BLOCKS',
-  'SOCIAL_LIST_FRIENDS', 'SOCIAL_LIST_REQUESTS', 'SOCIAL_LOOKUP_HANDLE',
-  'SOCIAL_PRESENCE_CONNECT', 'SOCIAL_PRESENCE_DISCONNECT', 'SOCIAL_PRESENCE_EVENT',
-  'SOCIAL_PRESENCE_SEND', 'SOCIAL_SEND_REQUEST', 'SOCIAL_UNBLOCK', 'SOCIAL_UNFRIEND',
-];
-const TYPES_ONLY_ON_2026_09_04 = [
-  'FS_READ_HEAD', 'NATIVE_SUPPORTED', 'PERMISSIONS_LIST', 'PERMISSIONS_REMOVE',
-  'PERMISSIONS_REMOVE_PROJECT', 'SEARCH_LIST', 'SEARCH_REMOVE_KEY', 'SEARCH_SET_KEY',
-  'SEARCH_TEST', 'SPECIALISTS_DELEGATED_GET', 'SPECIALISTS_DELEGATED_SET',
-  'SPECIALISTS_EVENT', 'SPECIALISTS_INTERRUPT', 'SPECIALISTS_LIST', 'SPECIALISTS_STEER',
-];
+// WHY (2026-09-29 one-core R2): this file used to carry two baselines of measured drift
+// (52 names only preload had, 15 only the shared list had). preload's list is now GENERATED from
+// shared/backend-contract.ts (scripts/generate-preload-channels.mjs), so both maps are equal by
+// construction and the baselines are gone — any difference at all is a failure.
+// WHY (2026-09-30 one-core R3-6): provider, chatgpt, openrouter, claude-code, search, engine and models
+// channels are ONE channel-table entry each (main/ipc/<file>.ts), served to windows and phones by one body.
+// Pinned for each: the entry exists, no hand-written ipcMain.handle is left in ipc-handlers.ts, and no
+// leftover `case` is left in remote-server.ts (the table answers first, so a leftover would be dead code).
+function expectTableEntry(file: string, konst: string, channel: string): void {
+  const entries = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'ipc', `${file}.ts`));
+  expect(entries, `${channel}: no entry in ipc/${file}.ts`).toContain(`name: IPC.${konst},`);
+  expect(readSourceFile(path.join(__dirname, '..', 'src', 'main', 'ipc-handlers.ts')), `${channel}: still hand-registered in ipc-handlers.ts`)
+    .not.toContain(`ipcMain.handle(IPC.${konst}`);
+  expect(readSourceFile(path.join(__dirname, '..', 'src', 'main', 'remote-server.ts')), `${channel}: leftover case in remote-server.ts`)
+    .not.toContain(`case '${channel}'`);
+}
 
 describe('IPC channel consistency', () => {
   const preloadSource = readSource('src', 'main', 'preload.ts');
-  const typesSource = readSource('src', 'shared', 'types.ts');
+  const typesSource = readSource('src', 'shared', 'backend-contract.ts');
   const preloadIpc = ipcConstants(preloadSource, /const IPC\s*=\s*\{([\s\S]*?)\n\} as const;/);
   const typesIpc = ipcConstants(typesSource, /export const IPC\s*=\s*\{([\s\S]*?)\n\} as const;/);
 
   test('handoff channels explicitly refuse Android-local while both desktop transports expose them', () => {
     const kotlin = readSource('..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt');
     const host = readSource('src', 'main', 'remote-server.ts');
+    // WHY (2026-09-30 one-core R3-5): both desktop doors now serve handoff:* from ONE table entry each.
+    const entries = readSource('src', 'main', 'ipc', 'handoff.ts');
     const shim = readSource('src', 'renderer', 'remote-shim.ts');
     // WHY: a missing Android branch returns unsupported by default, but explicit refusal pins the intent.
     for (const [name, action] of Object.entries({ HANDOFF_BEGIN: 'begin', HANDOFF_STATUS: 'status',
@@ -89,7 +82,8 @@ describe('IPC channel consistency', () => {
       expect(preloadIpc.get(name)).toBe(channel);
       expect(typesIpc.get(name)).toBe(channel);
       expect(kotlin).toContain(`"${channel}"`);
-      expect(host).toContain(`case '${channel}':`);
+      expect(entries).toContain(`IPC.${name}`);
+      expect(host).not.toContain(`case '${channel}':`);
       expect(shim).toContain(`invoke('${channel}'`);
     }
     expect(kotlin).toMatch(/"handoff:create-params"\s*->\s*\{[\s\S]*?put\("unsupported", true\)/);
@@ -115,20 +109,8 @@ describe('IPC channel consistency', () => {
     const preloadOnly = [...preloadIpc.keys()].filter((n) => !typesIpc.has(n)).sort();
     const typesOnly = [...typesIpc.keys()].filter((n) => !preloadIpc.has(n)).sort();
     // Compared as ARRAYS so a failure names the exact constant that drifted.
-    // SUBSET-PLUS-CAP, not equality (B4 review, F4). Equality pins BOTH
-    // directions: fixing a legitimate piece of drift — adding one of the
-    // types-only constants to preload — would turn this red until someone
-    // hand-edited the baseline, and the failure would be a raw array diff that
-    // does not say which direction is the good one. This way a fix passes
-    // silently, a NEW one-sided constant fails and names itself, and quietly
-    // appending to the baseline no longer works: the count is a hard number that
-    // has to be edited too, which is a visible change in review.
-    const strays = preloadOnly.filter((n) => !PRELOAD_ONLY_ON_2026_09_04.includes(n));
-    expect(strays, 'new preload-only channel constant(s); add them to shared/types.ts too').toEqual([]);
-    expect(preloadOnly.length).toBeLessThanOrEqual(PRELOAD_ONLY_ON_2026_09_04.length);
-    const typesStrays = typesOnly.filter((n) => !TYPES_ONLY_ON_2026_09_04.includes(n));
-    expect(typesStrays, 'new types-only channel constant(s); add them to preload.ts too').toEqual([]);
-    expect(typesOnly.length).toBeLessThanOrEqual(TYPES_ONLY_ON_2026_09_04.length);
+    expect(preloadOnly, 'preload-only constant(s): add them to shared/backend-contract.ts and regenerate').toEqual([]);
+    expect(typesOnly, 'contract-only constant(s): run node scripts/generate-preload-channels.mjs').toEqual([]);
   });
 
   // Channel strings preload passes to ipcRenderer directly, without going
@@ -157,10 +139,10 @@ describe('dev:* channel parity', () => {
   // WHY derived, not hand-listed (2026-09-10): this was a fixed array, so the two
   // channels added for managed workspace setup escaped every assertion below
   // silently — the suite stayed green while the new channels were on no platform
-  // but desktop. The list now comes from shared/types.ts, so a dev:* channel
+  // but desktop. The list now comes from shared/backend-contract.ts, so a dev:* channel
   // cannot be added without this test having an opinion about it.
   const ALL_DEV_TYPES = [...ipcConstants(
-    readSource('src', 'shared', 'types.ts'),
+    readSource('src', 'shared', 'backend-contract.ts'),
     /export const IPC\s*=\s*\{([\s\S]*?)\n\} as const;/,
   ).values()].filter(v => v.startsWith('dev:'));
 
@@ -245,7 +227,8 @@ describe('shell:open-external channel parity', () => {
     // The scheme check is the actual security boundary for a URL the model
     // chose — the tile is only ever opened by a user click, but file:,
     // intent: and javascript: must never reach an opener on any platform.
-    expect(readFrom('src', 'main', 'ipc-handlers.ts')).toMatch(/\^https\?:\\\/\\\//);
+    // WHY ipc/shell.ts (one-core R3-8): shell:open-external is a channel-table entry now.
+    expect(readFrom('src', 'main', 'ipc', 'shell.ts')).toMatch(/\^https\?:\\\/\\\//);
     const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
     expect(kt).toContain('url.startsWith("http://") || url.startsWith("https://")');
   });
@@ -268,9 +251,11 @@ describe('account:* channel parity', () => {
     const src = read('src', 'renderer', 'remote-shim.ts');
     for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
   });
-  it('all account:* types are handled in marketplace-api-handlers.ts', () => {
-    const src = read('src', 'main', 'marketplace-api-handlers.ts');
-    for (const t of NEW_TYPES) expect(src).toContain(`"${t}"`);
+  it('all account:* types are served by the channel table (main/ipc/account.ts)', () => {
+    // WHY (2026-09-30 one-core R3-2): the handlers moved out of marketplace-api-handlers.ts.
+    const src = read('src', 'main', 'ipc', 'account.ts');
+    for (const t of NEW_TYPES) expect(src).toContain(`IPC.${t.toUpperCase().replace(/[:-]/g, '_')}`);
+    expect(read('src', 'main', 'marketplace-api-handlers.ts')).not.toMatch(/ipcMain\.handle\(\s*"account:/);
   });
   it('all account:* types are handled by SessionService.kt (Android)', () => {
     const src = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
@@ -311,9 +296,13 @@ describe('social:* channel parity', () => {
     const src = read('src', 'renderer', 'remote-shim.ts');
     for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
   });
-  it('all social:* types are handled in social-handlers.ts', () => {
-    const src = read('src', 'main', 'social-handlers.ts');
-    for (const t of NEW_TYPES) expect(src).toContain(`"${t}"`);
+  it('all social:* request types are served by one channel-table entry each, with no hand-written copy left', () => {
+    // WHY (2026-10-01 one-core R3-8): main/ipc/social.ts holds the entries; social-handlers.ts builds the operations behind them.
+    // social:presence-event is the push to windows, not a request.
+    for (const t of NEW_TYPES.filter((n) => n !== 'social:presence-event')) {
+      expectTableEntry('social', konstOf(t), t);
+      expect(read('src', 'main', 'social-handlers.ts'), `${t} is still registered by hand in social-handlers.ts`).not.toContain(`ipcMain.handle("${t}"`);
+    }
   });
   it('all social:* types are handled by SessionService.kt (Android)', () => {
     const src = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
@@ -347,7 +336,7 @@ describe('terminal:get-screen-text channel parity', () => {
   // CRLF-normalising reader so a Windows checkout matches the same regex.
   it('preload.ts forwards the tailRows argument', () => {
     const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'preload.ts'));
-    expect(src).toMatch(/ipcRenderer\.invoke\('terminal:get-screen-text',\s*sessionId,\s*tailRows\)/);
+    expect(src).toMatch(/ipcRenderer\.invoke\('terminal:get-screen-text',\s*\{\s*sessionId,\s*tailRows\s*\}\)/);
   });
 
   it('remote-shim.ts forwards the tailRows argument', () => {
@@ -355,9 +344,8 @@ describe('terminal:get-screen-text channel parity', () => {
     expect(src).toMatch(/invoke\('terminal:get-screen-text',\s*\{\s*sessionId,\s*tailRows\s*\}\)/);
   });
 
-  it('terminal:get-screen-text is referenced in ipc-handlers.ts', () => {
-    const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'ipc-handlers.ts'));
-    expect(src).toContain(`'${CHANNEL}'`);
+  it('terminal:get-screen-text is served by one channel-table entry (main/ipc/ui.ts)', () => {
+    expectTableEntry('ui', 'TERMINAL_GET_SCREEN_TEXT', CHANNEL);
   });
 
   it('terminal:get-screen-text is handled by SessionService.kt (Android)', () => {
@@ -378,20 +366,21 @@ describe('native:retry channel parity', () => {
   const CHANNEL = 'native:retry';
   const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
 
-  it('is declared in shared/types.ts', () => {
-    expect(read('src', 'shared', 'types.ts')).toContain(`'${CHANNEL}'`);
+  it('is declared in shared/backend-contract.ts', () => {
+    expect(read('src', 'shared', 'backend-contract.ts')).toContain(`'${CHANNEL}'`);
   });
   it('is declared in preload.ts', () => {
     expect(read('src', 'main', 'preload.ts')).toContain(`'${CHANNEL}'`);
   });
-  it('is handled in ipc-handlers.ts', () => {
-    expect(read('src', 'main', 'ipc-handlers.ts')).toContain('NATIVE_RETRY');
+  // WHY (2026-09-30 one-core R3-5): one table entry serves both the computer's windows and a phone.
+  it('is served by one channel-table entry (main/ipc/native.ts)', () => {
+    expect(read('src', 'main', 'ipc', 'native.ts')).toContain('IPC.NATIVE_RETRY');
   });
   it('is referenced in remote-shim.ts', () => {
     expect(read('src', 'renderer', 'remote-shim.ts')).toContain(`'${CHANNEL}'`);
   });
-  it('is handled in remote-server.ts', () => {
-    expect(read('src', 'main', 'remote-server.ts')).toContain(`'${CHANNEL}'`);
+  it('has no leftover case in remote-server.ts (the table answers first)', () => {
+    expect(read('src', 'main', 'remote-server.ts')).not.toContain(`case '${CHANNEL}'`);
   });
   it('is answered not-implemented by SessionService.kt (Android)', () => {
     const src = readSourceFile(path.join(
@@ -405,7 +394,7 @@ describe('native:retry channel parity', () => {
 // session:menu-lock — the one-device-at-a-time lease for answering a Claude Code
 // menu by verified navigation (main/menu-answer-lock.ts). WHY every surface is
 // pinned here (2026-09-24): the constant check above only compares preload with
-// shared/types.ts. If remote-server or Kotlin dropped the case, a phone's lock ask
+// shared/backend-contract.ts. If remote-server or Kotlin dropped the case, a phone's lock ask
 // would get `unsupported` — and a desktop window and a phone could then both type
 // arrows and Enter into one startup dialog, combining into an answer neither
 // person chose (e.g. trusting a folder). The desktop IPC handler and the remote
@@ -414,21 +403,21 @@ describe('session:menu-lock channel parity', () => {
   const CHANNEL = 'session:menu-lock';
   const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
 
-  it('is declared in shared/types.ts and preload.ts under the same constant', () => {
-    expect(read('src', 'shared', 'types.ts')).toMatch(/SESSION_MENU_LOCK:\s*'session:menu-lock'/);
+  it('is declared in shared/backend-contract.ts and preload.ts under the same constant', () => {
+    expect(read('src', 'shared', 'backend-contract.ts')).toMatch(/SESSION_MENU_LOCK:\s*'session:menu-lock'/);
     expect(read('src', 'main', 'preload.ts')).toMatch(/SESSION_MENU_LOCK:\s*'session:menu-lock'/);
   });
   it('is invoked by preload.ts', () => {
     expect(read('src', 'main', 'preload.ts')).toMatch(/ipcRenderer\.invoke\(IPC\.SESSION_MENU_LOCK\b/);
   });
-  it('is handled in ipc-handlers.ts by the shared host lock', () => {
-    expect(read('src', 'main', 'ipc-handlers.ts')).toMatch(/ipcMain\.handle\(IPC\.SESSION_MENU_LOCK,[^\n]*menuAnswerLock\.handle\(/);
+  // WHY (2026-09-30 one-core R3-4): one table entry serves both doors, so the ONE shared host lock is
+  // asserted once, where the entry is (main/ipc/session.ts).
+  it('is served by one channel-table entry over the shared host lock', () => {
+    expect(read('src', 'main', 'ipc', 'session.ts')).toMatch(/IPC\.SESSION_MENU_LOCK,[^\n]*menuAnswerLock\.handle\(/);
+    expect(read('src', 'main', 'remote-server.ts')).not.toContain("case 'session:menu-lock'");
   });
   it('is invoked by remote-shim.ts', () => {
     expect(read('src', 'renderer', 'remote-shim.ts')).toContain(`invoke('${CHANNEL}'`);
-  });
-  it('is handled in remote-server.ts by the shared host lock', () => {
-    expect(read('src', 'main', 'remote-server.ts')).toMatch(/case 'session:menu-lock':[^\n]*menuAnswerLock\.handle\(/);
   });
   it('is handled by SessionService.kt (Android)', () => {
     const src = readSourceFile(path.join(
@@ -543,7 +532,7 @@ describe('system:back and system:notify-stack-state parity', () => {
   test('system:notify-stack-state appears in preload.ts, types.ts, remote-shim.ts, SessionService.kt', () => {
     const stackStateSites = {
       'preload.ts': readSourceFile(path.join(__dirname, '../src/main/preload.ts')),
-      'types.ts': readSourceFile(path.join(__dirname, '../src/shared/types.ts')),
+      'types.ts': readSourceFile(path.join(__dirname, '../src/shared/backend-contract.ts')),
       'remote-shim.ts': readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts')),
       'SessionService.kt': readSourceFile(
         path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt')),
@@ -558,7 +547,7 @@ describe('system:back and system:notify-stack-state parity', () => {
   test('system:back appears in preload.ts, types.ts, remote-shim.ts, MainActivity.kt', () => {
     const backSites = {
       'preload.ts': readSourceFile(path.join(__dirname, '../src/main/preload.ts')),
-      'types.ts': readSourceFile(path.join(__dirname, '../src/shared/types.ts')),
+      'types.ts': readSourceFile(path.join(__dirname, '../src/shared/backend-contract.ts')),
       'remote-shim.ts': readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts')),
       'MainActivity.kt': readSourceFile(
         path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/MainActivity.kt')),
@@ -606,6 +595,9 @@ describe('performance:* and app:restart parity', () => {
 // an ipcMain.handle — it broadcasts from main to renderer only. Phase 8 will
 // add SessionService.kt handlers; until then, those assertions are expected to
 // fail as a tracker for when Android parity lands.
+// WHY (2026-09-30 one-core R3-7): the contract constant for a channel name (artifacts:list-session -> ARTIFACTS_LIST_SESSION).
+const konstOf = (channel: string) => channel.toUpperCase().replace(/[:-]/g, '_');
+
 describe('artifact IPC parity', () => {
   // Dynamically read the ipc-channels.ts file and extract the channel values
   const ipcChannelsSource = readSourceFile(
@@ -616,51 +608,9 @@ describe('artifact IPC parity', () => {
     .map(m => m[1])
     .filter((v, i, a) => a.indexOf(v) === i); // deduplicate
 
-  // Build a reverse lookup mapping channel string → constant name
-  // for recognizing constant references (e.g., ARTIFACT_IPC.LIST_SESSION) in ipc-handlers.ts
-  const CHANNEL_TO_CONST = Object.entries({
-    LIST_SESSION: 'artifacts:list-session',
-    LIST_PROJECT: 'artifacts:list-project',
-    LIST_ALL_FILES: 'artifacts:list-all-files',
-    LIST_PROJECTS_INDEX: 'artifacts:list-projects-index',
-    GET: 'artifacts:get',
-    READ_BINARY: 'artifacts:read-binary',
-    SAVE: 'artifacts:save',
-    // Fix: data-flow gap — new channel that wires renderer Tracker → central index
-    APPEND_VERSION: 'artifacts:append-version',
-    // Copy/move a picked file into the project (import-file.ts). Was missing
-    // from this map, which made the constForm check below vacuous for this
-    // channel (see the CHANNEL_TO_CONST-coverage test just below this map).
-    IMPORT_FILE: 'artifacts:import-file',
-    INCLUDE_EXTERNAL: 'artifacts:include-external',
-    EXCLUDE: 'artifacts:exclude',
-    CHANGED: 'artifacts:changed',
-    // Task 7.3: project deletion
-    DELETE_PROJECT: 'artifacts:delete-project',
-    // Existence check folds "file not on disk" into the deleted UI state.
-    CHECK_EXISTENCE: 'artifacts:check-existence',
-    // Rename a file on disk + update the sidecar record.
-    RENAME: 'artifacts:rename',
-    // Was missing (registered only via its literal form) — a handler switched to
-    // the constant would have failed the suite for the wrong reason.
-    REMOVE_RECORD: 'artifacts:remove-record',
-    // External-change watcher subscribe/unsubscribe (project-watcher.ts).
-    WATCH_PROJECT: 'artifacts:watch-project',
-    UNWATCH_PROJECT: 'artifacts:unwatch-project',
-    SEARCH_CONTENT: 'artifacts:search-content',
-    // One tapped chat path resolved on the host (read-service.ts resolveArtifactPath).
-    RESOLVE_PATH: 'artifacts:resolve-path',
-    // One folder of Project Files, a page at a time (folder-listing.ts).
-    LIST_FOLDER: 'artifacts:list-folder',
-  }).reduce<Record<string, string>>((acc, [name, value]) => {
-    acc[value] = `ARTIFACT_IPC.${name}`;
-    return acc;
-  }, {});
-
   // Resolve paths relative to the desktop directory (where vitest is invoked from)
   const preload = readSourceFile('src/main/preload.ts');
   const shim = readSourceFile('src/renderer/remote-shim.ts');
-  const handlers = readSourceFile('src/main/ipc-handlers.ts');
 
   // Kotlin file lives in the sibling app/ directory of the youcoded sub-repo
   const kotlinPath = path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt');
@@ -678,20 +628,10 @@ describe('artifact IPC parity', () => {
 
     if (channel !== 'artifacts:changed') {
       // Push events don't need an ipcMain.handle — only request/response channels do
-      it(`channel ${channel} is registered in ipc-handlers.ts`, () => {
-        // ipc-handlers.ts may use the channel as a literal string OR as a constant reference
-        // (e.g., ARTIFACT_IPC.LIST_SESSION), so accept either form
-        const literalForm = handlers.includes(channel);
-        const constName = CHANNEL_TO_CONST[channel];
-        // Fix: a channel missing from CHANNEL_TO_CONST made constName
-        // `undefined`, and handlers.includes(undefined) coerces its argument
-        // to the string "undefined" — which ipc-handlers.ts contains many
-        // times in ordinary type annotations, so this assertion passed
-        // regardless of whether the handler was registered. Fail loudly
-        // instead of letting a missing map entry silently pass.
-        expect(constName, `${channel} has no CHANNEL_TO_CONST entry — add one, do not rely on the constant-form check`).toBeDefined();
-        const constForm = handlers.includes(constName as string);
-        expect(literalForm || constForm, `${channel} missing from ipc-handlers.ts`).toBe(true);
+      // WHY (2026-09-30 one-core R3-7): one channel-table entry each (main/ipc/artifacts.ts), with no hand-written
+      // copy left in ipc-handlers.ts or remote-server.ts.
+      it(`channel ${channel} is served by one channel-table entry`, () => {
+        expectTableEntry('artifacts', konstOf(channel), channel);
       });
     }
 
@@ -710,17 +650,8 @@ describe('artifact IPC parity', () => {
 // Regression net for the project:* IPC channels (Project View redesign).
 // Desktop is authoritative in v1; SessionService.kt carries stub cases so the
 // type strings stay in parity (handlers return not-implemented-on-mobile).
-// ipc-handlers.ts references PROJECT_IPC.* constants rather than literal
-// strings (same convention as ARTIFACT_IPC), so that assertion accepts either.
 describe('project:* channel parity', () => {
-  const CHANNEL_TO_CONST: Record<string, string> = {
-    'project:list-conversations': 'PROJECT_IPC.LIST_CONVERSATIONS',
-    'project:repo-info': 'PROJECT_IPC.REPO_INFO',
-    'project:list-context': 'PROJECT_IPC.LIST_CONTEXT',
-    'project:read-context-file': 'PROJECT_IPC.READ_CONTEXT_FILE',
-    'project:write-context-file': 'PROJECT_IPC.WRITE_CONTEXT_FILE',
-  };
-  const NEW_TYPES = Object.keys(CHANNEL_TO_CONST);
+  const NEW_TYPES = ['project:list-conversations', 'project:repo-info', 'project:list-context', 'project:read-context-file', 'project:write-context-file'];
 
   it('declared in preload.ts', () => {
     const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'preload.ts'));
@@ -730,13 +661,9 @@ describe('project:* channel parity', () => {
     const src = readSourceFile(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'));
     for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
   });
-  it('registered in ipc-handlers.ts (literal or PROJECT_IPC constant)', () => {
-    const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'ipc-handlers.ts'));
-    for (const t of NEW_TYPES) {
-      const literal = src.includes(`'${t}'`);
-      const constRef = src.includes(CHANNEL_TO_CONST[t]);
-      expect(literal || constRef, `${t} missing from ipc-handlers.ts`).toBe(true);
-    }
+  // WHY (2026-09-30 one-core R3-7): one table entry each (main/ipc/project.ts).
+  it('served by one channel-table entry each, with no hand-written copy left', () => {
+    for (const t of NEW_TYPES) expectTableEntry('project', konstOf(t), t);
   });
   it('stubbed in SessionService.kt (Android)', () => {
     const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
@@ -749,11 +676,7 @@ describe('project:* channel parity', () => {
 // able to ask and get the clean not-implemented answer that makes the shared UI
 // fall back to plain shell output.
 describe('chatsearch:* channel parity', () => {
-  const CHANNEL_TO_CONST: Record<string, string> = {
-    'chatsearch:resolve': 'CHATSEARCH_IPC.RESOLVE',
-    'chatsearch:read': 'CHATSEARCH_IPC.READ',
-  };
-  const NEW_TYPES = Object.keys(CHANNEL_TO_CONST);
+  const NEW_TYPES = ['chatsearch:resolve', 'chatsearch:read'];
 
   it('declared in preload.ts', () => {
     const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'preload.ts'));
@@ -763,17 +686,9 @@ describe('chatsearch:* channel parity', () => {
     const src = readSourceFile(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'));
     for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
   });
-  it('registered in ipc-handlers.ts (literal or CHATSEARCH_IPC constant)', () => {
-    const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'ipc-handlers.ts'));
-    for (const t of NEW_TYPES) {
-      const literal = src.includes(`'${t}'`);
-      const constRef = src.includes(CHANNEL_TO_CONST[t]);
-      expect(literal || constRef, `${t} missing from ipc-handlers.ts`).toBe(true);
-    }
-  });
-  it('handled in remote-server.ts (the remote browser and the phone both ride this)', () => {
-    const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'remote-server.ts'));
-    for (const t of NEW_TYPES) expect(src).toContain(`case '${t}'`);
+  // WHY (2026-09-30 one-core R3-7): one table entry each (main/ipc/chatsearch.ts), served to windows and phones.
+  it('served by one channel-table entry each, with no hand-written copy left', () => {
+    for (const t of NEW_TYPES) expectTableEntry('chatsearch', konstOf(t), t);
   });
   it('stubbed in SessionService.kt (Android)', () => {
     const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
@@ -809,14 +724,15 @@ describe('syncspaces:* channel parity (desktop surfaces)', () => {
   ];
   const preload = readSourceFile(path.join(__dirname, '../src/main/preload.ts'));
   const shim = readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts'));
-  const handlers = readSourceFile(path.join(__dirname, '../src/main/ipc-handlers.ts'));
-  const remoteServer = readSourceFile(path.join(__dirname, '../src/main/remote-server.ts'));
+  // WHY (2026-09-30 one-core R3-4): the desktop and phone halves are ONE table entry now
+  // (main/ipc/sync-spaces.ts), so the two host-side surfaces collapse to one check; that both doors
+  // serve it from the table is channel-table-families.test.ts.
+  const table = readSourceFile(path.join(__dirname, '../src/main/ipc/sync-spaces.ts'));
   for (const [ch, constant] of channels) {
-    it(`${ch} present in preload, remote-shim, ipc-handlers, remote-server`, () => {
+    it(`${ch} present in preload, remote-shim and the channel table`, () => {
       expect(preload).toContain(ch);
       expect(shim).toContain(ch);
-      expect(handlers).toContain(constant);
-      expect(remoteServer).toContain(ch);
+      expect(table).toContain(constant);
     });
   }
   it('syncspaces:event push channel present in preload + remote-shim', () => {
@@ -875,14 +791,15 @@ describe('folders:set-description channel parity (desktop surfaces)', () => {
   ];
   const preload = readSourceFile(path.join(__dirname, '../src/main/preload.ts'));
   const shim = readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts'));
-  const handlers = readSourceFile(path.join(__dirname, '../src/main/ipc-handlers.ts'));
-  const remoteServer = readSourceFile(path.join(__dirname, '../src/main/remote-server.ts'));
+  // WHY (2026-09-30 one-core R3-1): the desktop and phone halves are ONE table entry now
+  // (main/ipc/folders.ts), so the two host-side surfaces collapse to one check; that both doors
+  // serve it from the table is channel-table-families.test.ts.
+  const table = readSourceFile(path.join(__dirname, '../src/main/ipc/folders.ts'));
   for (const [ch, constant] of channels) {
-    it(`${ch} present in preload, remote-shim, ipc-handlers, remote-server`, () => {
+    it(`${ch} present in preload, remote-shim and the channel table`, () => {
       expect(preload).toContain(ch);
       expect(shim).toContain(ch);
-      expect(handlers).toContain(constant);
-      expect(remoteServer).toContain(ch);
+      expect(table).toContain(constant);
     });
   }
 
@@ -920,14 +837,13 @@ describe('github:* channel parity (desktop surfaces)', () => {
   ];
   const preload = readSourceFile(path.join(__dirname, '../src/main/preload.ts'));
   const shim = readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts'));
-  const handlers = readSourceFile(path.join(__dirname, '../src/main/ipc-handlers.ts'));
-  const remoteServer = readSourceFile(path.join(__dirname, '../src/main/remote-server.ts'));
+  // WHY (2026-09-30 one-core R3-4): one table entry serves both doors (main/ipc/github.ts).
+  const table = readSourceFile(path.join(__dirname, '../src/main/ipc/github.ts'));
   for (const [ch, constant] of channels) {
-    it(`${ch} present in preload, remote-shim, ipc-handlers, remote-server`, () => {
+    it(`${ch} present in preload, remote-shim and the channel table`, () => {
       expect(preload).toContain(ch);
       expect(shim).toContain(ch);
-      expect(handlers).toContain(constant);
-      expect(remoteServer).toContain(ch);
+      expect(table).toContain(constant);
     });
   }
 
@@ -1011,20 +927,26 @@ describe('native:*/provider:* channel parity', () => {
     const src = read('src', 'renderer', 'remote-shim.ts');
     for (const t of NEW_TYPES) expect(src, `${t} missing from remote-shim.ts`).toContain(`'${t}'`);
   });
-  it('registered in ipc-handlers.ts (literal or IPC constant)', () => {
-    const src = read('src', 'main', 'ipc-handlers.ts');
-    for (const t of NEW_TYPES) expect(src.includes(`'${t}'`) || src.includes(CHANNEL_TO_CONST[t]), `${t} missing from ipc-handlers.ts`).toBe(true);
+  // WHY (2026-09-30 one-core R3-5): native:* are channel-table entries (main/ipc/native.ts), served to windows
+  // AND phones by one body; provider:* are still hand-registered in ipc-handlers.ts.
+  it('served by the native / provider table entries', () => {
+    const src = read('src', 'main', 'ipc', 'native.ts') + read('src', 'main', 'ipc', 'provider.ts');
+    for (const t of NEW_TYPES) expect(src.includes(CHANNEL_TO_CONST[t]), `${t} missing from ipc/native.ts / ipc/provider.ts`).toBe(true);
+    for (const t of NEW_TYPES.filter((c) => c.startsWith('provider:'))) expectTableEntry('provider', CHANNEL_TO_CONST[t].slice(4), t);
   });
   it('stubbed in SessionService.kt (Android)', () => {
     const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
     for (const t of NEW_TYPES) expect(kt, `${t} missing from SessionService.kt`).toContain(`"${t}"`);
   });
-  // native:get-permission-mode is the one native channel with a remote-server WS
-  // case (Task 14 — the chip must seed over remote too); assert that fifth surface.
-  it('native:get-permission-mode handled by remote-server.ts (WS case)', () => {
-    const src = read('src', 'main', 'remote-server.ts');
-    expect(src, "native:get-permission-mode missing from remote-server.ts").toContain(`'native:get-permission-mode'`);
-  });
+  // WHY (2026-09-30 one-core R3-5): the request/response native channels are ONE table entry each, so a
+  // phone is answered by the same body as a window and there is no second `case` to forget. Pinned: each
+  // entry exists, and remote-server has no leftover case for it.
+  it.each(['native:get-permission-mode', 'native:get-step-guard', 'native:set-step-guard', 'native:send', 'native:queue-remove', 'native:queue-send-now', 'native:sessions-list'])(
+    '%s is a table entry with no leftover case in remote-server.ts', (channel) => {
+      const constant = 'IPC.' + channel.toUpperCase().replace(/[:-]/g, '_');
+      expect(read('src', 'main', 'ipc', 'native.ts')).toMatch(new RegExp(`name: ${constant.replace('.', '\\.')}, kind: 'handle'`));
+      expect(read('src', 'main', 'remote-server.ts')).not.toContain(`case '${channel}'`);
+    });
   // The mode push (push-only, so no Kotlin or remote-server request case): the
   // chip in every window and on every phone depends on receiving it.
   it('native:permission-mode push is sent by main and consumed by preload + remote-shim', () => {
@@ -1034,26 +956,8 @@ describe('native:*/provider:* channel parity', () => {
     expect(shim).toContain(`case 'native:permission-mode':`);
     expect(shim).toContain('onPermissionMode:');
     const main = read('src', 'main', 'ipc-handlers.ts');
-    expect(main).toContain('sendForSession(e.sessionId, IPC.NATIVE_PERMISSION_MODE, e)');
-    expect(main).toContain('remoteServer?.broadcast({ type: IPC.NATIVE_PERMISSION_MODE, payload: e })');
-  });
-  it.each(['native:get-step-guard', 'native:set-step-guard'])('%s is answered by remote-server', (channel) => {
-    const src = read('src', 'main', 'remote-server.ts');
-    const caseBlock = src.slice(src.indexOf(`case '${channel}'`));
-    expect(caseBlock.slice(0, 500), `${channel} must send a response`).toContain('this.respond(');
-  });
-  it('native:send is answered by remote-server (request/response, not fire-and-forget)', () => {
-    const src = read('src', 'main', 'remote-server.ts');
-    const caseBlock = src.slice(src.indexOf(`case 'native:send'`));
-    expect(caseBlock.slice(0, 400)).toContain('this.respond(');
-  });
-  // Task 11's queue-remove is also request/response (the renderer needs the
-  // true/false result) — same fifth-surface + shape checks as native:send above.
-  it('native:queue-remove handled by remote-server.ts (WS case, request/response)', () => {
-    const src = read('src', 'main', 'remote-server.ts');
-    expect(src, "native:queue-remove missing from remote-server.ts").toContain(`'native:queue-remove'`);
-    const caseBlock = src.slice(src.indexOf(`case 'native:queue-remove'`));
-    expect(caseBlock.slice(0, 400)).toContain('this.respond(');
+    // One call reaches the windows and every phone (publish.ts); tests/session-publish-equivalence.test.ts pins the delivery.
+    expect(main).toContain('publish(e.sessionId, IPC.NATIVE_PERMISSION_MODE, e)');
   });
 });
 
@@ -1081,13 +985,9 @@ describe('search:* channel parity', () => {
     const src = read('src', 'renderer', 'remote-shim.ts');
     for (const t of NEW_TYPES) expect(src, `${t} missing from remote-shim.ts`).toContain(`'${t}'`);
   });
-  it('registered in ipc-handlers.ts (literal or IPC constant)', () => {
-    const src = read('src', 'main', 'ipc-handlers.ts');
-    for (const t of NEW_TYPES) expect(src.includes(`'${t}'`) || src.includes(CHANNEL_TO_CONST[t]), `${t} missing from ipc-handlers.ts`).toBe(true);
-  });
-  it('handled by remote-server.ts (WS case)', () => {
-    const src = read('src', 'main', 'remote-server.ts');
-    for (const t of NEW_TYPES) expect(src, `${t} missing from remote-server.ts`).toContain(`'${t}'`);
+  // WHY (2026-09-30 one-core R3-6): one table entry each (main/ipc/search.ts).
+  it('served by one channel-table entry each, with no hand-written copy left', () => {
+    for (const t of NEW_TYPES) expectTableEntry('search', CHANNEL_TO_CONST[t].slice(4), t);
   });
   it('stubbed in SessionService.kt (Android)', () => {
     const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
@@ -1119,7 +1019,7 @@ describe('custom tags + notes channel parity', () => {
 
 // Welcome back (design 2026-09-24 §3, plan T2): the per-install "sessions open
 // at last shutdown" list. HAND-WRITTEN parity block (design §6) — the
-// automatic check only diffs preload.ts against shared/types.ts (review 2 D7),
+// automatic check only diffs preload.ts against shared/backend-contract.ts (review 2 D7),
 // so it can't see remote-shim.ts, remote-server.ts or SessionService.kt drift.
 // Desktop-only (S-phone): remote-server.ts and SessionService.kt must always
 // answer as if nothing is offered, never carry the real store.
@@ -1143,21 +1043,20 @@ describe('session:reopen-list / session:forget-reopen channel parity (Welcome ba
     expect(remoteShim).toContain("invoke('session:forget-reopen'");
   });
 
-  it('ipc-handlers.ts awaits the store\'s ready promise for both handlers', () => {
-    expect(ipcHandlers).toMatch(/ipcMain\.handle\(IPC\.SESSION_REOPEN_LIST,/);
-    expect(ipcHandlers).toMatch(/ipcMain\.handle\(IPC\.SESSION_FORGET_REOPEN,/);
-    expect(ipcHandlers).toContain('await welcomeBackStore.ready');
+  // WHY (2026-09-30 one-core R3-4): both are table entries (main/ipc/session.ts). desktopOnly, with the
+  // "nothing to offer" answer declared as the entry's refusal, so a phone gets it byte-for-byte without
+  // the handler (and the real store) ever running.
+  it('the channel table awaits the store\'s ready promise for both handlers', () => {
+    const table = read('src', 'main', 'ipc', 'session.ts');
+    expect(table).toMatch(/IPC\.SESSION_REOPEN_LIST, kind: 'handle', desktopOnly: true, refusal: \{ kind: 'reply', payload: \[\] \}/);
+    expect(table).toMatch(/IPC\.SESSION_FORGET_REOPEN, kind: 'handle', desktopOnly: true, refusal: \{ kind: 'reply', payload: \{ ok: true \} \}/);
+    expect(table).toContain('await store.ready');
+    expect(ipcHandlers).not.toMatch(/ipcMain\.handle\(IPC\.SESSION_(REOPEN_LIST|FORGET_REOPEN)/);
   });
 
-  it('remote-server.ts (a phone never shows this screen) answers []/{ok:true}', () => {
-    expect(remoteServer).toContain("case 'session:reopen-list'");
-    expect(remoteServer).toContain("case 'session:forget-reopen'");
-    // Scoped to the case body, not the whole file — a bare "id, []" match
-    // elsewhere would pass vacuously.
-    const reopenBlock = remoteServer.slice(remoteServer.indexOf("case 'session:reopen-list'"), remoteServer.indexOf("case 'session:forget-reopen'"));
-    expect(reopenBlock).toContain('this.respond(client.ws, type, id, []);');
-    const forgetBlock = remoteServer.slice(remoteServer.indexOf("case 'session:forget-reopen'"), remoteServer.indexOf("case 'session:forget-reopen'") + 300);
-    expect(forgetBlock).toContain('this.respond(client.ws, type, id, { ok: true });');
+  it('a phone is told there is nothing to offer, and remote-server.ts keeps no case for either', () => {
+    expect(remoteServer).not.toContain("case 'session:reopen-list'");
+    expect(remoteServer).not.toContain("case 'session:forget-reopen'");
   });
 
   it('SessionService.kt (Android never shows this screen) answers []/{ok:true}', () => {
@@ -1170,7 +1069,7 @@ describe('session:reopen-list / session:forget-reopen channel parity (Welcome ba
 
 // Welcome back (design 2026-09-24 §4, plan T3): the in-app quit warning.
 // HAND-WRITTEN parity block (design §6, same reason as the reopen-list block
-// above) — the automatic check only diffs preload.ts against shared/types.ts.
+// above) — the automatic check only diffs preload.ts against shared/backend-contract.ts.
 // Electron-only (design §3: "window.claude.window is the documented
 // Electron-only namespace... so the close pair lives there and needs no
 // shim/Android twin") — unlike session:reopen-list, this trio must be ABSENT
@@ -1178,13 +1077,13 @@ describe('session:reopen-list / session:forget-reopen channel parity (Welcome ba
 describe('window:close-request / window:answer-close / window:close-request-cancelled parity (Welcome back)', () => {
   const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
   const preload = read('src', 'main', 'preload.ts');
-  const sharedTypes = read('src', 'shared', 'types.ts');
+  const sharedTypes = read('src', 'shared', 'backend-contract.ts');
   const remoteShim = read('src', 'renderer', 'remote-shim.ts');
   const ipcHandlers = read('src', 'main', 'ipc-handlers.ts');
   const main = read('src', 'main', 'main.ts');
   const kotlin = read('..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt');
 
-  it('preload.ts and shared/types.ts carry byte-identical channel strings', () => {
+  it('preload.ts and shared/backend-contract.ts carry byte-identical channel strings', () => {
     for (const [name, channel] of [
       ['WINDOW_CLOSE_REQUEST', 'window:close-request'],
       ['WINDOW_ANSWER_CLOSE', 'window:answer-close'],
@@ -1204,11 +1103,10 @@ describe('window:close-request / window:answer-close / window:close-request-canc
   it('main.ts pushes the request/cancelled pair and handles the answer', () => {
     expect(main).toContain('IPC.WINDOW_CLOSE_REQUEST');
     expect(main).toContain('IPC.WINDOW_CLOSE_REQUEST_CANCELLED');
-    expect(main).toMatch(/ipcMain\.handle\(IPC\.WINDOW_ANSWER_CLOSE,/);
-    // ipc-handlers.ts owns every OTHER window:* handler (WINDOW_CLOSE,
-    // WINDOW_GET_ID, ...) — this one is registered in main.ts instead because
-    // it must reach the module-scope closeRequests manager, not a per-window
-    // BrowserWindow the way the rest of that file's handlers do.
+    // WHY (2026-10-01 one-core R3-8): the answer is a channel-table entry (main/ipc/window.ts), like every other window:* control; it
+    // reaches the module-scope closeRequests manager through the answerClose hand-over main.ts makes.
+    expectTableEntry('window', 'WINDOW_ANSWER_CLOSE', 'window:answer-close');
+    expect(main).toMatch(/answerClose:[^\n]*closeRequests\.answer\(/);
     expect(ipcHandlers).not.toContain('WINDOW_ANSWER_CLOSE');
   });
 
@@ -1238,9 +1136,17 @@ describe('engine:* channel parity (Plan B)', () => {
     const src = read('src', 'renderer', 'remote-shim.ts');
     for (const ch of [...channels, ...pushChannels]) expect(src).toContain(`'${ch}'`);
   });
-  it('ipc-handlers registers every request-response engine channel', () => {
+  it('every request-response engine channel is a table entry (main/ipc/engine.ts)', () => {
+    for (const c of ['ENGINE_STATUS', 'ENGINE_INSTALL', 'ENGINE_RESTART']) expectTableEntry('engine', c, `engine:${c.slice(7).toLowerCase()}`);
+  });
+  // The pushes stay in ipc-handlers.ts and reach every window AND every phone.
+  it('the engine pushes still go to every window and every phone', () => {
     const src = read('src', 'main', 'ipc-handlers.ts');
-    for (const c of ['ENGINE_STATUS', 'ENGINE_INSTALL', 'ENGINE_RESTART']) expect(src).toContain(`IPC.${c}`);
+    for (const ch of ['engine:install-progress', 'engine:status-changed']) {
+      expect(src).toContain(`remoteServer?.broadcast({ type: '${ch}'`);
+    }
+    expect(src).toContain('send(IPC.ENGINE_INSTALL_PROGRESS, p)');
+    expect(src).toContain('send(IPC.ENGINE_STATUS_CHANGED, s)');
   });
   it('SessionService.kt stubs every request-response engine channel', () => {
     const src = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
@@ -1317,9 +1223,18 @@ describe('models:* + engine:set-* channel parity (Plan C)', () => {
   // also matches a COMMENT. Proven, not assumed — replacing the whole
   // add-vision handler with `// FIXME reinstate the IPC.MODELS_ADD_VISION
   // handler` kept this test green until the call shape was required.
-  it('ipc-handlers registers every request-response channel via ipcMain.handle', () => {
+  // WHY (2026-09-30 one-core R3-6): "registered" now means a table entry (main/ipc/engine.ts, models.ts or
+  // provider.ts) with its `name: IPC.X,` line (a comment naming the constant does not count), no leftover
+  // ipcMain.handle and no leftover remote-server case.
+  it('every request-response channel is a table entry with no hand-written copy left', () => {
+    for (const [ch, konst] of channels) {
+      expectTableEntry(ch.startsWith('engine:') ? 'engine' : ch.startsWith('endpoints:') ? 'provider' : 'models', konst, ch);
+    }
+  });
+  it('the download progress push still goes to every window and every phone', () => {
     const src = read('src', 'main', 'ipc-handlers.ts');
-    for (const [, konst] of channels) expect(src).toContain(`ipcMain.handle(IPC.${konst}`);
+    expect(src).toContain('send(IPC.MODELS_DOWNLOAD_PROGRESS, p)');
+    expect(src).toContain("remoteServer?.broadcast({ type: 'models:download-progress'");
   });
   // On a line that is NOT commented out, for the same reason: commenting the
   // Kotlin string leaves it in the file, so a bare text scan stays green while
@@ -1336,8 +1251,9 @@ describe('models:* + engine:set-* channel parity (Plan C)', () => {
   // calls contextBridge at load), so the call shape is pinned as text.
   it('preload forwards every argument of the two-argument channels', () => {
     const src = read('src', 'main', 'preload.ts');
-    expect(src).toContain('ipcRenderer.invoke(IPC.MODELS_SET_SETTINGS, modelId, patch)');
-    expect(src).toContain('ipcRenderer.invoke(IPC.MODELS_DOWNLOAD, repo, quant)');
+    // One object per call since one-core R2 (same keys the phone shim sends).
+    expect(src).toContain('ipcRenderer.invoke(IPC.MODELS_SET_SETTINGS, { modelId, patch })');
+    expect(src).toContain('ipcRenderer.invoke(IPC.MODELS_DOWNLOAD, { repo, quant })');
   });
   // Android NAMES these six — and only these six — as `unsupported` inside the
   // not-implemented list; every other desktop-only channel listed there sends the
@@ -1397,10 +1313,15 @@ describe('models:* + engine:set-* channel parity (Plan C)', () => {
   // never looked at — a channel missing here answers nothing at all over the
   // remote link, and nothing else in the suite would notice. Every channel in
   // the list above is served here today, so there are no exemptions.
-  it('remote-server.ts answers every request-response channel (the fifth surface)', () => {
-    const src = read('src', 'main', 'remote-server.ts');
-    const missing = channels.map(([ch]) => ch).filter((ch) => !src.includes(`case '${ch}':`));
-    expect(missing).toEqual([]);
+  // WHY (2026-09-30 one-core R3-6): the fifth surface is the channel table now: a phone is answered by the
+  // table entry (never refused: no desktopOnly, no remoteAllowed:false) unless it is listed here on purpose.
+  it('a phone is served every request-response channel by the table', async () => {
+    const { findChannel } = await import('../src/main/ipc/channel-table');
+    const notServed = channels.map(([ch]) => ch).filter((ch) => {
+      const def = findChannel(ch);
+      return !def || def.desktopOnly || def.remoteAllowed === false;
+    });
+    expect(notServed).toEqual([]);
   });
 });
 
@@ -1430,9 +1351,13 @@ describe('model memory lifecycle channel parity', () => {
     for (const [ch] of invokeChannels) expect(src).toContain(`'${ch}'`);
     for (const ch of pushChannels) expect(src).toContain(`'${ch}'`);
   });
-  it('ipc-handlers registers every request-response channel via its IPC.* constant', () => {
+  it('every request-response channel is a table entry (main/ipc/engine.ts, models.ts)', () => {
+    for (const [ch, konst] of invokeChannels) expectTableEntry(ch.startsWith('engine:') ? 'engine' : 'models', konst, ch);
+  });
+  it('the models-changed push still reaches every window and every phone', () => {
     const src = read('src', 'main', 'ipc-handlers.ts');
-    for (const [, konst] of invokeChannels) expect(src).toContain(`IPC.${konst}`);
+    // One publish reaches the windows and every phone (publish.ts); the equivalence test pins what each receives.
+    expect(src).toContain('publish(sessionId, IPC.NATIVE_MODEL_STATE, full)');
   });
   it('SessionService.kt stubs every request-response channel', () => {
     const src = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
@@ -1443,27 +1368,17 @@ describe('model memory lifecycle channel parity', () => {
 describe('git:* IPC parity (git surface)', () => {
   const preload = readSourceFile(path.join(__dirname, '../src/main/preload.ts'));
   const shim = readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts'));
-  const handlers = readSourceFile(path.join(__dirname, '../src/main/ipc-handlers.ts'));
   const kotlinPath = path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt');
   const kotlin = fs.existsSync(kotlinPath) ? readSourceFile(kotlinPath) : null;
 
-  const channels: Array<[string, string]> = [
-    ['git:file-status', 'GIT_IPC.FILE_STATUS'],
-    ['git:file-review', 'GIT_IPC.FILE_REVIEW'],
-    ['git:commit-file-diff', 'GIT_IPC.COMMIT_FILE_DIFF'],
-    ['git:stage', 'GIT_IPC.STAGE'],
-    ['git:unstage', 'GIT_IPC.UNSTAGE'],
-    ['git:commit', 'GIT_IPC.COMMIT'],
-    ['git:discard', 'GIT_IPC.DISCARD'],
-    ['git:watch', 'GIT_IPC.WATCH'],
-    ['git:unwatch', 'GIT_IPC.UNWATCH'],
-  ];
+  const channels = ['git:file-status', 'git:file-review', 'git:commit-file-diff', 'git:stage', 'git:unstage', 'git:commit', 'git:discard', 'git:watch', 'git:unwatch'];
 
-  for (const [ch, constant] of channels) {
-    it(`${ch} present in preload + remote-shim + ipc-handlers`, () => {
+  for (const ch of channels) {
+    // WHY (2026-09-30 one-core R3-7): one table entry each (main/ipc/git.ts), refused to a phone.
+    it(`${ch} present in preload + remote-shim, and served by one channel-table entry`, () => {
       expect(preload).toContain(`'${ch}'`);
       expect(shim).toContain(`'${ch}'`);
-      expect(handlers.includes(`'${ch}'`) || handlers.includes(constant)).toBe(true);
+      expectTableEntry('git', konstOf(ch), ch);
     });
     it(`${ch} has an Android not-implemented-on-mobile stub`, () => {
       if (kotlin) expect(kotlin).toContain(`"${ch}"`);
@@ -1595,17 +1510,13 @@ describe('docComments:* IPC parity', () => {
       expect(preload).toContain(`'${ch}'`);
       expect(shim).toContain(`'${ch}'`);
     });
-    it(`${ch} registered in ipc-handlers.ts (literal, DOC_COMMENTS_IPC constant, or the factored registerDocCommentsHandlers call)`, () => {
-      // T3 factors registration into doc-comments/ipc-handlers.ts (testability
-      // — see doc-comments-ipc-handlers.test.ts), so the MAIN ipc-handlers.ts
-      // file carries only the registerDocCommentsHandlers(...) call, not a
-      // literal or constant for every channel — accept either shape.
-      const registeredHere = handlers.includes(`'${ch}'`) || handlers.includes(constant);
-      const factoredOut = handlers.includes('registerDocCommentsHandlers');
-      expect(registeredHere || factoredOut).toBe(true);
-    });
-    it(`${ch} handled by remote-server.ts (WS case)`, () => {
-      expect(server).toContain(`case '${ch}':`);
+    it(`${ch} is served by one channel-table entry, with no hand-written copy left`, () => {
+      // WHY (2026-10-01 one-core R3-8): main/ipc/doc-comments.ts holds one entry per channel, served to windows and phones by one body;
+      // doc-comments/ipc-handlers.ts keeps only the change push and remote-server.ts has no case for it.
+      const entries = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'ipc', 'doc-comments.ts'));
+      expect(entries, `${ch}: no entry in ipc/doc-comments.ts`).toContain(`name: ${constant}`);
+      expect(readSourceFile(path.join(__dirname, '..', 'src', 'main', 'doc-comments', 'ipc-handlers.ts'))).not.toContain('ipcMain');
+      expect(server).not.toContain(`case '${ch}':`);
     });
     it(`${ch} has a Kotlin arm in SessionService.kt`, () => {
       if (kotlin) expect(kotlin).toContain(`"${ch}"`);
@@ -1629,8 +1540,8 @@ describe('docComments:* IPC parity', () => {
     expect(block![0]).toContain(`'docComments:unwatch'`);
   });
 
-  it('the doc-comments IPC surface registration is actually wired into registerIpcHandlers', () => {
-    expect(handlers).toContain('registerDocCommentsHandlers(ipcMain');
+  it('the document-comment change push is wired into registerIpcHandlers', () => {
+    expect(handlers).toContain('wireDocCommentsPush(');
   });
 
   it('docComments:watch/:unwatch answer the SAME not-implemented-on-mobile shape as artifacts:watch-project, never the bare unsupported catch-all', () => {
@@ -1764,13 +1675,14 @@ describe('permissions:* channel parity', () => {
     const src = read('src', 'renderer', 'remote-shim.ts');
     for (const t of NEW_TYPES) expect(src, `${t} missing from remote-shim.ts`).toContain(`'${t}'`);
   });
-  it('registered in ipc-handlers.ts', () => {
-    const src = read('src', 'main', 'ipc-handlers.ts');
-    for (const t of NEW_TYPES) expect(src.includes(`'${t}'`) || src.includes(CHANNEL_TO_CONST[t]), `${t} missing from ipc-handlers.ts`).toBe(true);
-  });
-  it('handled by remote-server.ts (WS case)', () => {
-    const src = read('src', 'main', 'remote-server.ts');
-    for (const t of NEW_TYPES) expect(src, `${t} missing from remote-server.ts`).toContain(`'${t}'`);
+  // WHY (2026-09-30 one-core R3-5): served by ONE channel-table entry each (main/ipc/permissions.ts).
+  it('served by one channel-table entry each, with no leftover case in remote-server.ts', () => {
+    const table = read('src', 'main', 'ipc', 'permissions.ts');
+    const host = read('src', 'main', 'remote-server.ts');
+    for (const t of NEW_TYPES) {
+      expect(table, `${t} missing from ipc/permissions.ts`).toContain(CHANNEL_TO_CONST[t]);
+      expect(host, `${t} still has a case in remote-server.ts`).not.toContain(`case '${t}'`);
+    }
   });
   it('stubbed in SessionService.kt (Android)', () => {
     const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
@@ -1807,13 +1719,14 @@ describe('specialists:* channel parity', () => {
     const src = read('src', 'renderer', 'remote-shim.ts');
     for (const t of NEW_TYPES) expect(src, `${t} missing from remote-shim.ts`).toContain(`'${t}'`);
   });
-  it('registered in ipc-handlers.ts', () => {
-    const src = read('src', 'main', 'ipc-handlers.ts');
-    for (const t of NEW_TYPES) expect(src.includes(`'${t}'`) || src.includes(CHANNEL_TO_CONST[t]), `${t} missing from ipc-handlers.ts`).toBe(true);
-  });
-  it('handled by remote-server.ts (WS case)', () => {
-    const src = read('src', 'main', 'remote-server.ts');
-    for (const t of NEW_TYPES) expect(src, `${t} missing from remote-server.ts`).toContain(`'${t}'`);
+  // WHY (2026-09-30 one-core R3-5): served by ONE channel-table entry each (main/ipc/specialists.ts).
+  it('served by one channel-table entry each, with no leftover case in remote-server.ts', () => {
+    const table = read('src', 'main', 'ipc', 'specialists.ts');
+    const host = read('src', 'main', 'remote-server.ts');
+    for (const t of NEW_TYPES) {
+      expect(table, `${t} missing from ipc/specialists.ts`).toContain(CHANNEL_TO_CONST[t]);
+      expect(host, `${t} still has a case in remote-server.ts`).not.toContain(`case '${t}'`);
+    }
   });
   it('stubbed in SessionService.kt (Android)', () => {
     const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
@@ -1843,7 +1756,6 @@ describe('specialists:* channel parity', () => {
 // silently turn every preview into the glyph on remote or Android.
 describe('fs:* channel parity', () => {
   const NEW_TYPES = ['fs:read-head'];
-  const CHANNEL_TO_CONST: Record<string, string> = { 'fs:read-head': 'IPC.FS_READ_HEAD' };
   const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
   it('exposed in preload.ts', () => {
     const src = read('src', 'main', 'preload.ts');
@@ -1853,13 +1765,9 @@ describe('fs:* channel parity', () => {
     const src = read('src', 'renderer', 'remote-shim.ts');
     for (const t of NEW_TYPES) expect(src, `${t} missing from remote-shim.ts`).toContain(`'${t}'`);
   });
-  it('registered in ipc-handlers.ts', () => {
-    const src = read('src', 'main', 'ipc-handlers.ts');
-    for (const t of NEW_TYPES) expect(src.includes(`'${t}'`) || src.includes(CHANNEL_TO_CONST[t]), `${t} missing from ipc-handlers.ts`).toBe(true);
-  });
-  it('handled by remote-server.ts (WS case)', () => {
-    const src = read('src', 'main', 'remote-server.ts');
-    for (const t of NEW_TYPES) expect(src, `${t} missing from remote-server.ts`).toContain(`'${t}'`);
+  // WHY (2026-09-30 one-core R3-7): one table entry (main/ipc/files.ts), served to windows and phones.
+  it('served by one channel-table entry, with no hand-written copy left', () => {
+    for (const t of NEW_TYPES) expectTableEntry('files', konstOf(t), t);
   });
   it('handled by SessionService.kt (Android)', () => {
     const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
@@ -1892,9 +1800,12 @@ describe('marketplace feedback channel parity', () => {
     const src = read('src', 'renderer', 'remote-shim.ts');
     for (const t of NEW_TYPES) expect(src, `${t} missing from remote-shim.ts`).toContain(`'${t}'`);
   });
-  it('registered in marketplace-api-handlers.ts', () => {
-    const src = read('src', 'main', 'marketplace-api-handlers.ts');
-    for (const t of NEW_TYPES) expect(src, `${t} missing from marketplace-api-handlers.ts`).toContain(`"${t}"`);
+  // WHY retargeted (2026-09-30 one-core R3-3): these eight handlers are channel-table entries now
+  // (main/ipc/marketplace.ts); marketplace-api-handlers.ts only builds the client they use.
+  it('a channel-table entry in main/ipc/marketplace.ts', () => {
+    const src = read('src', 'main', 'ipc', 'marketplace.ts');
+    const consts: Record<string, string> = { 'marketplace:thumb': 'IPC.MARKETPLACE_THUMB,', 'marketplace:thumb:get': 'IPC.MARKETPLACE_THUMB_GET,', 'marketplace:comment': 'IPC.MARKETPLACE_COMMENT,' };
+    for (const t of NEW_TYPES) expect(src, `${t} has no channel-table entry`).toContain(`name: ${consts[t]}`);
   });
   it('handled by SessionService.kt (Android)', () => {
     const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
@@ -1907,13 +1818,16 @@ describe('marketplace feedback channel parity', () => {
     // to fix: a lit thumb beside "No votes yet" on reopen, because the count
     // falls back to the /stats snapshot taken at app start. Caught in a dev
     // build after a silent no-op edit, never by the suite — hence this guard.
-    const src = read('src', 'main', 'marketplace-api-handlers.ts');
-    for (const ch of ['marketplace:thumb', 'marketplace:thumb:get']) {
-      const start = src.indexOf(`ipcMain.handle("${ch}"`);
+    const src = read('src', 'main', 'ipc', 'marketplace.ts');
+    // The one helper both handlers answer through must carry both totals...
+    const helper = src.slice(src.indexOf('const thumbs ='), src.indexOf('export const marketplaceChannels'));
+    expect(helper, 'the thumbs helper must forward thumbs_up').toContain('thumbs_up');
+    expect(helper, 'the thumbs helper must forward thumbs_down').toContain('thumbs_down');
+    // ...and each handler must answer THROUGH it.
+    for (const ch of ['IPC.MARKETPLACE_THUMB,', 'IPC.MARKETPLACE_THUMB_GET,']) {
+      const start = src.indexOf(`name: ${ch}`);
       expect(start, `${ch} handler not found`).toBeGreaterThan(-1);
-      const body = src.slice(start, start + 900);
-      expect(body, `${ch} must forward thumbs_up`).toContain('thumbs_up');
-      expect(body, `${ch} must forward thumbs_down`).toContain('thumbs_down');
+      expect(src.slice(start, start + 400), `${ch} must answer through thumbs()`).toContain('thumbs(');
     }
   });
 
@@ -1986,14 +1900,12 @@ describe('arcade:* channel parity', () => {
     for (const t of TYPES) expect(src, `${t} missing from remote-shim.ts`).toContain(`'${t}'`);
   });
 
-  it('registered in arcade-handlers.ts', () => {
-    const src = read('src', 'main', 'arcade-handlers.ts');
-    for (const t of TYPES) expect(src, `${t} missing from arcade-handlers.ts`).toContain(`"${t}"`);
-  });
-
-  it('handled by remote-server.ts (WS case)', () => {
-    const src = read('src', 'main', 'remote-server.ts');
-    for (const t of TYPES) expect(src, `${t} missing from remote-server.ts`).toContain(`'${t}'`);
+  it('served by one channel-table entry each (main/ipc/game.ts), with no hand-written copy left', () => {
+    // WHY (2026-10-01 one-core R3-8): both doors run the entries; arcade-handlers.ts only builds the operations behind them.
+    for (const t of TYPES) {
+      expectTableEntry('game', konstOf(t), t);
+      expect(read('src', 'main', 'arcade-handlers.ts'), `${t} is still registered by hand in arcade-handlers.ts`).not.toContain(`"${t}"`);
+    }
   });
 
   it('has a REAL Android handler arm, not a not-implemented stub', () => {
@@ -2036,9 +1948,9 @@ describe('buddy:* helper channel parity', () => {
   const TYPES = ['buddy:helper-status', 'buddy:install-helper', 'buddy:remove-helper'];
   const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
 
-  it('declared in the shared/types.ts channel map', () => {
-    const src = read('src', 'shared', 'types.ts');
-    for (const t of TYPES) expect(src, `${t} missing from shared/types.ts`).toContain(`'${t}'`);
+  it('declared in the shared/backend-contract.ts channel map', () => {
+    const src = read('src', 'shared', 'backend-contract.ts');
+    for (const t of TYPES) expect(src, `${t} missing from shared/backend-contract.ts`).toContain(`'${t}'`);
   });
 
   it("declared in preload.ts's duplicate of that map", () => {
@@ -2046,13 +1958,12 @@ describe('buddy:* helper channel parity', () => {
     for (const t of TYPES) expect(src, `${t} missing from preload.ts`).toContain(`'${t}'`);
   });
 
-  it('handled in ipc-handlers.ts', () => {
-    const src = read('src', 'main', 'ipc-handlers.ts');
-    // Asserted through the constant, not the string: this file imports the map
+  it('served by one channel-table entry each (main/ipc/buddy.ts)', () => {
+    // Asserted through the constant, not the string: the entries import the map
     // rather than writing channel names out, so a literal search would fail on
-    // correct code.
-    for (const name of ['BUDDY_HELPER_STATUS', 'BUDDY_INSTALL_HELPER', 'BUDDY_REMOVE_HELPER']) {
-      expect(src, `IPC.${name} has no handler in ipc-handlers.ts`).toContain(`IPC.${name}`);
+    // correct code. WHY buddy.ts (2026-10-01 one-core R3-8): they were ipcMain handlers in ipc-handlers.ts.
+    for (const [name, channel] of [['BUDDY_HELPER_STATUS', 'buddy:helper-status'], ['BUDDY_INSTALL_HELPER', 'buddy:install-helper'], ['BUDDY_REMOVE_HELPER', 'buddy:remove-helper']]) {
+      expectTableEntry('buddy', name, channel);
     }
   });
 
@@ -2129,27 +2040,17 @@ describe('voice:* channel parity', () => {
     }
   });
 
-  it('voice-handlers.ts really registers an arm for every voice channel', () => {
-    // Fix (whole-branch review F5): this used to be `toContain("'voice:start'")`
-    // over the raw source, which the file's own CHANNELS list already satisfied
-    // — deleting every ipcMain.handle call left it green. Match the registration
-    // itself, so the test fails when the arm goes away rather than when a string
-    // does.
-    for (const t of SHARED) {
-      expect(handlers, `${t} has no ipcMain.handle in voice-handlers.ts`)
-        .toMatch(new RegExp(`ipcMain\\.handle\\('${t}'`));
-    }
-    // The permission question is a handle; the audio stream is a fire-and-forget
-    // `on` ten times a second, so it is registered the other way on purpose.
-    expect(handlers).toMatch(/ipcMain\.handle\('voice:mic-access'/);
-    expect(handlers).toMatch(/ipcMain\.on\(AUDIO_CHANNEL/);
+  it('every voice channel is a channel-table entry (main/ipc/voice.ts), and the handlers file only sends the push', () => {
+    // WHY (2026-10-01 one-core R3-8): the arms were ipcMain registrations in voice-handlers.ts. Match the entry itself, so the test
+    // fails when the arm goes away rather than when a string does. The permission question is a `handle`; the audio stream is a
+    // fire-and-forget `on` ten times a second, so it is an `on` entry on purpose.
+    for (const t of [...SHARED, 'voice:mic-access']) expectTableEntry('voice', konstOf(t), t);
+    const entries = read('src', 'main', 'ipc', 'voice.ts');
+    expect(entries).toMatch(/name: IPC\.VOICE_AUDIO, kind: 'on'/);
+    expect(handlers).not.toContain('ipcMain');
     // The push has no handler at all — it is sent TO the window.
     expect(handlers).toMatch(/const EVENT_CHANNEL = 'voice:event'/);
     expect(handlers).toMatch(/send\(EVENT_CHANNEL/);
-    // And every channel is on the list the double-registration guard clears.
-    for (const t of [...SHARED, 'voice:mic-access']) {
-      expect(handlers, `${t} missing from the CHANNELS clear-list`).toContain(`  '${t}',`);
-    }
   });
 
   it('remote-shim.ts carries the five shared channels and the push event', () => {
@@ -2249,21 +2150,21 @@ describe('openrouter:* sign-in channel parity', () => {
   });
 
   it('registered in ipc-handlers.ts through the shared constants', () => {
-    const types = read('src', 'shared', 'types.ts');
+    const types = read('src', 'shared', 'backend-contract.ts');
     const handlers = read('src', 'main', 'ipc-handlers.ts');
     for (const t of TYPES) {
       expect(types).toContain(`${CONSTS[t]}: '${t}'`);
-      expect(handlers).toContain(`ipcMain.handle(IPC.${CONSTS[t]}`);
+      expect(handlers).not.toContain(`ipcMain.handle(IPC.${CONSTS[t]}`);
+      expectTableEntry('openrouter', CONSTS[t], t);
     }
   });
 
-  it('exposed in remote-shim.ts and handled by remote-server.ts', () => {
+  // WHY (2026-09-30 one-core R3-6): a phone is answered by the table entry; sign-in is its policy refusal (`false`).
+  it('exposed in remote-shim.ts and answered by the table (sign-in refused to a phone with false)', () => {
     const shim = read('src', 'renderer', 'remote-shim.ts');
-    const server = read('src', 'main', 'remote-server.ts');
-    for (const t of TYPES) {
-      expect(shim, `${t} missing from remote-shim.ts`).toContain(`invoke('${t}')`);
-      expect(server, `${t} missing from remote-server.ts`).toContain(`case '${t}'`);
-    }
+    const entries = read('src', 'main', 'ipc', 'openrouter.ts');
+    for (const t of TYPES) expect(shim, `${t} missing from remote-shim.ts`).toContain(`invoke('${t}')`);
+    expect(entries).toMatch(/name: IPC\.OPENROUTER_SIGN_IN, kind: 'handle', remoteAllowed: false, refusal: \{ kind: 'reply', payload: false \}/);
   });
 
   it('is listed in the Android not-implemented fall-through, NOT a real arm', () => {
@@ -2314,8 +2215,8 @@ describe('chatgpt:* channel parity', () => {
 
   it('registered in ipc-handlers.ts (through the IPC constants)', () => {
     // The handlers use IPC.CHATGPT_* rather than string literals, so assert
-    // the constant exists in shared/types.ts AND the handler references it.
-    const types = read('src', 'shared', 'types.ts');
+    // the constant exists in shared/backend-contract.ts AND the handler references it.
+    const types = read('src', 'shared', 'backend-contract.ts');
     const handlers = read('src', 'main', 'ipc-handlers.ts');
     const constants: Record<string, string> = {
       'chatgpt:status': 'CHATGPT_STATUS',
@@ -2324,14 +2225,16 @@ describe('chatgpt:* channel parity', () => {
       'chatgpt:sign-out': 'CHATGPT_SIGN_OUT',
     };
     for (const t of TYPES) {
-      expect(types, `${t} missing from shared/types.ts IPC`).toContain(`${constants[t]}: '${t}'`);
-      expect(handlers, `IPC.${constants[t]} has no ipcMain.handle in ipc-handlers.ts`).toContain(`ipcMain.handle(IPC.${constants[t]}`);
+      expect(types, `${t} missing from shared/backend-contract.ts IPC`).toContain(`${constants[t]}: '${t}'`);
+      expect(handlers, `IPC.${constants[t]} is still hand-registered in ipc-handlers.ts`).not.toContain(`ipcMain.handle(IPC.${constants[t]}`);
+      expectTableEntry('chatgpt', constants[t], t);
     }
   });
 
-  it('handled by remote-server.ts (WS case)', () => {
-    const src = read('src', 'main', 'remote-server.ts');
-    for (const t of TYPES) expect(src, `${t} missing from remote-server.ts`).toContain(`case '${t}'`);
+  // WHY (2026-09-30 one-core R3-6): the phone's sign-in is the entry's policy refusal (`false`): the browser tab and
+  // the 127.0.0.1:1455 listener it needs live on the computer.
+  it('a phone is refused sign-in with false, by the entry', () => {
+    expect(read('src', 'main', 'ipc', 'chatgpt.ts')).toMatch(/name: IPC\.CHATGPT_SIGN_IN, kind: 'handle', remoteAllowed: false, refusal: \{ kind: 'reply', payload: false \}/);
   });
 
   it('is listed in the Android not-implemented fall-through, NOT a real arm', () => {
@@ -2389,12 +2292,8 @@ describe('claude-code:status channel parity', () => {
   });
 
   it('registered in ipc-handlers.ts (through the IPC constant)', () => {
-    expect(read('src', 'shared', 'types.ts')).toContain(`CLAUDE_CODE_STATUS: '${T}'`);
-    expect(read('src', 'main', 'ipc-handlers.ts')).toContain('ipcMain.handle(IPC.CLAUDE_CODE_STATUS');
-  });
-
-  it('handled by remote-server.ts (WS case)', () => {
-    expect(read('src', 'main', 'remote-server.ts'), `${T} missing from remote-server.ts`).toContain(`case '${T}'`);
+    expect(read('src', 'shared', 'backend-contract.ts')).toContain(`CLAUDE_CODE_STATUS: '${T}'`);
+    expectTableEntry('claude-code', 'CLAUDE_CODE_STATUS', T);
   });
 
   it('has a REAL Android arm — the phone runs Claude Code too', () => {
@@ -2437,9 +2336,9 @@ describe('claude-code:status channel parity', () => {
     const avail = read('src', 'renderer', 'components', 'model', 'availability.ts');
     expect(avail, 'availability.ts must normalize an unrecognized status to unknown')
       .toMatch(/return \{ state: 'unknown' \};/);
-    const server = read('src', 'main', 'remote-server.ts');
-    expect(server, 'remote-server must answer unknown when the runtime is not wired')
-      .toMatch(/claude-code:status[\s\S]{0,400}state: 'unknown'/);
+    const entry = read('src', 'main', 'ipc', 'claude-code.ts');
+    expect(entry, 'the entry must answer unknown when the runtime is not wired')
+      .toMatch(/CLAUDE_CODE_STATUS[\s\S]{0,500}state: 'unknown'/);
   });
 });
 
@@ -2455,9 +2354,8 @@ describe('claude-code:install channel parity', () => {
   });
 
   it('registered in ipc-handlers.ts and remote-server.ts', () => {
-    expect(read('src', 'shared', 'types.ts')).toContain(`CLAUDE_CODE_INSTALL: '${T}'`);
-    expect(read('src', 'main', 'ipc-handlers.ts')).toContain('ipcMain.handle(IPC.CLAUDE_CODE_INSTALL');
-    expect(read('src', 'main', 'remote-server.ts')).toContain(`case '${T}'`);
+    expect(read('src', 'shared', 'backend-contract.ts')).toContain(`CLAUDE_CODE_INSTALL: '${T}'`);
+    expectTableEntry('claude-code', 'CLAUDE_CODE_INSTALL', T);
   });
 
   it('refused on Android, and the refusal reaches the caller as an error', () => {
@@ -2486,16 +2384,21 @@ describe('first-run local channels', () => {
   });
 
   it('the band channels are registered for every launch, not only during setup', () => {
-    // The band above the message box is read AFTER setup finished, when main.ts
-    // registers no first-run handlers at all — so these two live in ipc-handlers.
-    const handlers = read('src', 'main', 'ipc-handlers.ts');
-    expect(handlers).toContain('ipcMain.handle(IPC.FIRST_RUN_LOCAL_DOWNLOAD');
-    expect(handlers).toContain('ipcMain.handle(IPC.FIRST_RUN_RESUME_LOCAL_DOWNLOAD');
+    // The band above the message box is read AFTER setup finished, when main.ts wires no wizard at
+    // all. WHY (2026-09-30 one-core R3-3): both are table entries now, and registerIpcHandlers (which
+    // runs on every launch) binds what they read.
+    const entries = read('src', 'main', 'ipc', 'first-run.ts');
+    expect(entries, 'no table entry').toContain('name: IPC.FIRST_RUN_LOCAL_DOWNLOAD,');
+    expect(entries, 'no table entry').toContain('name: IPC.FIRST_RUN_RESUME_LOCAL_DOWNLOAD,');
+    expect(read('src', 'main', 'ipc-handlers.ts')).toContain('bindFirstRunNative(');
   });
 
   it('both first-run registrations wire the setup channels', () => {
     const main = read('src', 'main', 'main.ts');
-    expect(main.match(/registerFirstRunLocalIpc\(/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
+    // WHY (2026-09-30 one-core R3-3): the channels are table entries (main/ipc/first-run.ts); each path
+    // hands them its manager (bindFirstRunManager) and wires the download hand-off. Two paths, two of each.
+    expect(main.match(/bindFirstRunManager\(\{/g)?.length ?? 0).toBe(2);
+    expect(main.match(/wireSetupDownloadHandoff\(\(\) =>/g)?.length ?? 0).toBe(2);
   });
 });
 
@@ -2507,7 +2410,9 @@ describe('Sign in with ChatGPT - the wiring that has no other guard', () => {
   const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
 
   it('the kill switch reaches the handlers, the background poll and the first-run arm', () => {
-    const handlers = read('src', 'main', 'ipc-handlers.ts');
+    // The switch is applied where the runtime is built (create-runtime.ts, since the 2026-09-29
+    // one-core R1 hoist moved it out of ipc-handlers.ts); both doors read the switched value.
+    const handlers = read('src', 'main', 'create-runtime.ts');
     const main = read('src', 'main', 'main.ts');
     // 1. The handlers, the provider row and the catalog.
     expect(handlers, 'the kill switch no longer gates the user-facing handle')
@@ -2522,8 +2427,12 @@ describe('Sign in with ChatGPT - the wiring that has no other guard', () => {
       .toMatch(/const chatgptEnabled = process\.env\.YOUCODED_CHATGPT !== '0'/);
     // 3. The first-run arm, which would otherwise still open a browser tab and
     //    bind port 1455 with the feature turned off.
-    expect(main, "the wizard's ChatGPT arm ignores the kill switch")
-      .toMatch(/mode === 'chatgpt' && chatgptEnabled/);
+    //    WHY retargeted (2026-09-30 one-core R3-3): the arm is a table entry now; the late sign-in path
+    //    hands it a null ChatGPT account when the switch is off, and the arm only runs for a non-null one.
+    expect(main, "the late sign-in path hands the wizard's ChatGPT arm an account despite the kill switch")
+      .toMatch(/chatgptAuth: chatgptEnabled \? chatgptAuth : null/);
+    expect(read('src', 'main', 'ipc', 'first-run.ts'), "the wizard's ChatGPT arm ignores a null (switched-off) account")
+      .toMatch(/mode === 'chatgpt' && wizard\?\.chatgptAuth/);
   });
 
   it('re-showing the setup wizard marks setup complete first, so it cannot strand an established install', () => {
@@ -2555,8 +2464,8 @@ describe('pages:* Phase 2 channel parity', () => {
   ];
   const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
 
-  it('every type is declared in shared/types.ts and preload.ts, which cannot import it', () => {
-    const shared = read('src', 'shared', 'types.ts');
+  it('every type is declared in shared/backend-contract.ts and preload.ts, which cannot import it', () => {
+    const shared = read('src', 'shared', 'backend-contract.ts');
     const preload = read('src', 'main', 'preload.ts');
     for (const t of PHASE_2) {
       expect(shared, t).toContain(`'${t}'`);
@@ -2564,32 +2473,22 @@ describe('pages:* Phase 2 channel parity', () => {
     }
   });
 
-  it('every type is handled by the desktop IPC handlers', () => {
-    const handlers = read('src', 'main', 'ipc-handlers.ts');
-    const preload = read('src', 'main', 'preload.ts');
-    for (const t of PHASE_2) {
-      // ipc-handlers registers through the IPC.* constant, so the constant NAME
-      // is what to look for — resolved from the spelling preload declares.
-      const name = new RegExp(`(PAGES_[A-Z_]+): '${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'`).exec(preload)?.[1];
-      expect(name, `no IPC constant is named for ${t}`).toBeTruthy();
-      expect(handlers, t).toContain(`IPC.${name}`);
-    }
+  // WHY (2026-09-30 one-core R3-7): one table entry each (main/ipc/pages.ts) for the computer's windows and for a phone.
+  it('every type is served by one channel-table entry, with no hand-written copy left', () => {
+    for (const t of PHASE_2) expectTableEntry('pages', konstOf(t), t);
   });
 
-  it('every type is invoked by the remote shim AND answered by the remote host', () => {
+  it('every type is invoked by the remote shim', () => {
     const shim = read('src', 'renderer', 'remote-shim.ts');
-    const server = read('src', 'main', 'remote-server.ts');
-    for (const t of PHASE_2) {
-      expect(shim, t).toContain(`invoke('${t}'`);
-      expect(server, t).toContain(`case '${t}':`);
-    }
+    for (const t of PHASE_2) expect(shim, t).toContain(`invoke('${t}'`);
   });
 
   it('main, not the renderer, is where a pasted key from a phone is refused', () => {
     // "No keys on the phone" was a renderer rule until design review 1 finding
     // 13. The remote host must mark its caller remote, and the desktop handler
     // must not — otherwise either every phone can paste a key, or no desktop can.
-    expect(read('src', 'main', 'remote-server.ts')).toMatch(/\.approve\([\s\S]{0,200}?remote: true/);
-    expect(read('src', 'main', 'ipc-handlers.ts')).toMatch(/pagesService\.approve\([\s\S]{0,200}?remote: false/);
+    // The door that took the call says who is asking (never the payload): the entry passes `remote` from ctx.door.
+    expect(read('src', 'main', 'ipc', 'pages.ts')).toMatch(/\.approve\([\s\S]{0,200}?remote: ctx\.door === 'remote'/);
+    expect(read('src', 'main', 'ipc-handlers.ts')).not.toMatch(/pagesService\.approve\(/);
   });
 });

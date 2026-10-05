@@ -10,15 +10,15 @@
 // Companion files: native-context-occupancy.test.ts (the harness half),
 // statusbar-native-usage.test.ts (the rest of the chip selector).
 import { describe, it, expect, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { chatReducer } from '../src/renderer/state/chat-reducer';
 import type { ChatState, ChatAction } from '../src/renderer/state/chat-types';
 import { selectNativeStatusChips } from '../src/renderer/components/StatusBar';
 import { buildUsageSnapshot } from '../src/renderer/state/usage-snapshot';
 import { pageEventToAction } from '../src/renderer/state/transcript-page-actions';
+import { eventToAction } from '../src/renderer/state/transcript-event-actions';
 import { emptyTotals } from '../src/renderer/state/session-totals';
-import type { TranscriptEvent } from '../src/shared/types';
+import type { TranscriptEvent, TranscriptEventType, DataOf } from '../src/shared/types';
+import { ev as mkEv } from './helpers/transcript-events';
 
 const SESSION = 'gauge-session';
 const init = (): ChatState => chatReducer(new Map(), { type: 'SESSION_INIT', sessionId: SESSION });
@@ -179,6 +179,10 @@ describe('the compaction marker can finally say what it freed', () => {
   });
 
   it('native /compact marks its card awaitsResult so the 3-minute watchdog never guesses; CC does not', async () => {
+    // The Android app's own runtime has no host record, so its screen still raises the spinner itself (one-core R5-4a); on a host with a record
+    // the host's event does, and tests/session-live-two-screens.test.ts covers that.
+    const { ANDROID_LOCAL_CAPABILITIES } = await import('../src/shared/capabilities');
+    vi.stubGlobal('window', { claude: { capabilities: ANDROID_LOCAL_CAPABILITIES } });
     const { dispatchSlashCommand } = await import('../src/renderer/state/slash-command-dispatcher');
     for (const native of [true, false]) {
       const dispatch = vi.fn();
@@ -187,6 +191,7 @@ describe('the compaction marker can finally say what it freed', () => {
       const pending = dispatch.mock.calls.map(c => c[0]).find(a => a.type === 'COMPACTION_PENDING');
       expect(pending.awaitsResult).toBe(native ? true : undefined);
     }
+    vi.unstubAllGlobals();
   });
 
   it('a Stop during native /compact cancels the card instead of "Compaction may have failed"', async () => {
@@ -217,12 +222,12 @@ describe('the compaction marker can finally say what it freed', () => {
   });
 
   it('uses the transcript uuid as the marker id so the reducer can dedupe event replay', () => {
-    // WHY a cross-file source guard: the App transcript callback depends on live
-    // IPC wiring, while the reducer's replay test above alone cannot catch a
-    // fresh clock-based id minted by the event adapter on every delivery.
-    const source = readFileSync(fileURLToPath(new URL('../src/renderer/App.tsx', import.meta.url)), 'utf8');
-    const compactCase = source.split("case 'compact-summary': {")[1]?.split("case '")[0];
-    expect(compactCase).toMatch(/markerId:\s*`compact-done-\$\{event\.uuid\}`/);
+    // The translator (not a clock) mints the id, so the same event delivered twice
+    // yields the same id. The reducer's replay test above covers the dedupe itself.
+    const event = mkEv('compact-summary', { autoCompaction: true }, { sessionId: SESSION, uuid: 'cs-9', timestamp: 1 });
+    const marker = () => eventToAction(event, { live: true }).find((a) => a.type === 'COMPACTION_COMPLETE');
+    expect(marker()).toMatchObject({ markerId: 'compact-done-cs-9' });
+    expect(marker()).toEqual(marker());
   });
 
   it('still falls back to Claude Code’s own reading when the event carries none', () => {
@@ -237,16 +242,17 @@ describe('the compaction marker can finally say what it freed', () => {
 });
 
 describe('page replay carries the bookkeeping a resumed session would otherwise lose', () => {
-  const ev = (over: Partial<TranscriptEvent>): TranscriptEvent => ({
-    type: 'turn-complete', sessionId: SESSION, uuid: 'u', timestamp: 1, data: {}, ...over,
-  } as TranscriptEvent);
+  // WHY typed (M5): the event's type and payload must belong together, so a fixture with
+  // a field the real event never carries is a compile error, not a pass on a made-up shape.
+  const ev = <T extends TranscriptEventType>(over: { type: T; uuid?: string; data: DataOf<T> }) =>
+    mkEv(over.type, over.data, { sessionId: SESSION, uuid: over.uuid ?? 'u', timestamp: 1 });
 
   it('maps subagent-usage — a specialist’s whole spend used to vanish on every reopen', () => {
     const action = pageEventToAction(ev({
       type: 'subagent-usage', uuid: 'sa-1',
       data: {
         usage: { inputTokens: 5000, outputTokens: 100, cacheReadTokens: 0, cacheCreationTokens: 0, costUsd: 0.02 },
-        parentAgentToolUseId: 'tool-9', agentId: 'agent-3',
+        parentAgentToolUseId: 'tool-9', agentId: 'agent-3', model: 'm',
       },
     }))!;
     expect(action.type).toBe('TRANSCRIPT_SUBAGENT_USAGE');

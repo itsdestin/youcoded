@@ -12,7 +12,7 @@
 // the steps that completed, exactly once, and never a fabricated zero.
 import { describe, it, expect } from 'vitest';
 import { HarnessSession } from '../src/main/harness/harness-session';
-import type { TranscriptEvent } from '../src/shared/types';
+import { looseData, type TranscriptEvent } from '../src/shared/types';
 import type { PermissionDecision } from '../src/shared/permission-types';
 import type { AskDecision } from '../src/main/harness/permission-broker';
 import { textChunks, toolCallChunk, finishChunk, stream, scriptedModel } from './helpers/scripted-model';
@@ -110,7 +110,7 @@ describe('an abandoned turn reports what it already spent', () => {
     });
     await session.send('go');
 
-    const billed = events.filter((e) => e.data.usage && (e.type === 'turn-complete' || e.type === 'session-error' || e.type === 'user-interrupt'));
+    const billed = events.filter((e) => looseData(e).usage && (e.type === 'turn-complete' || e.type === 'session-error' || e.type === 'user-interrupt'));
     expect(billed).toHaveLength(1);
     expect(billed[0].type).toBe('turn-complete');
   });

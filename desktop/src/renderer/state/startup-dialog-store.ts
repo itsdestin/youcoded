@@ -87,3 +87,18 @@ export function composerDisabled(s: { trustGate: boolean; moved: boolean; starte
 export function startedIds(list: ReadonlyArray<{ id: string; awaitingStart?: boolean }>): string[] {
   return list.filter((s) => !s.awaitingStart).map((s) => s.id);
 }
+
+/**
+ * Has this announced session already STARTED? A Claude Code session is announced with `awaitingStart` until its first hook; one announced without it was
+ * already running (a reconnecting phone is sent every live session this way); native and shell sessions never carry it.
+ * (One-core sync-fix2: only the list path read this; `session:created` did not, so a phone never marked a session it learned of on reconnect.)
+ */
+export function announcedAsStarted(info: { awaitingStart?: boolean }): boolean {
+  return !info.awaitingStart;
+}
+
+/** Sessions the computer's summary says have started that this screen does not yet hold as started (a phone's way to learn it for sessions it missed or does not watch). */
+export function startedFromSummaries(summaries: Record<string, { started?: boolean } | undefined> | null, known: ReadonlySet<string>): string[] {
+  if (!summaries) return [];
+  return Object.keys(summaries).filter((id) => summaries[id]?.started === true && !known.has(id));
+}

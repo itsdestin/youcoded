@@ -5,7 +5,7 @@ import os from 'os';
 import path from 'path';
 import { SubagentIndex } from '../src/main/subagent-index';
 import { SubagentWatcher } from '../src/main/subagent-watcher';
-import type { TranscriptEvent } from '../src/shared/types';
+import { looseData, type TranscriptEvent } from '../src/shared/types';
 
 function writeMeta(dir: string, agentId: string, description: string, agentType: string) {
   fs.writeFileSync(
@@ -93,9 +93,9 @@ describe('SubagentWatcher', () => {
     await vi.waitFor(() => expect(emitted).toHaveLength(1), { timeout: SETTLE_MS });
 
     expect(emitted[0].type).toBe('tool-use');
-    expect(emitted[0].data.parentAgentToolUseId).toBe('toolu_parent');
-    expect(emitted[0].data.agentId).toBe('abc');
-    expect(emitted[0].data.toolUseId).toBe('toolu_X');
+    expect(looseData(emitted[0]).parentAgentToolUseId).toBe('toolu_parent');
+    expect(looseData(emitted[0]).agentId).toBe('abc');
+    expect(looseData(emitted[0]).toolUseId).toBe('toolu_X');
   });
 
   it('picks up a subagent file that appears after start', async () => {
@@ -125,13 +125,13 @@ describe('SubagentWatcher', () => {
     appendLine(subagentsDir, 'abc', toolUseLine('u2', 'toolu_Y', 'Grep', { pattern: 'foo' }));
     // fs.watch delivery of the append — poll, don't sleep (see wait() above).
     await vi.waitFor(() => {
-      expect(emitted.find(e => e.data.toolName === 'Grep')).toBeDefined();
+      expect(emitted.find(e => looseData(e).toolName === 'Grep')).toBeDefined();
     }, { timeout: WATCH_MS });
 
     expect(emitted.length).toBeGreaterThanOrEqual(2);
-    const grep = emitted.find(e => e.data.toolName === 'Grep');
-    expect(grep?.data.parentAgentToolUseId).toBe('toolu_parent');
-    expect(grep?.data.agentId).toBe('abc');
+    const grep = emitted.find(e => looseData(e).toolName === 'Grep');
+    expect((grep && looseData(grep).parentAgentToolUseId)).toBe('toolu_parent');
+    expect((grep && looseData(grep).agentId)).toBe('abc');
   });
 
   it('buffers events when no parent binding exists, flushes when parent arrives', async () => {
@@ -153,7 +153,7 @@ describe('SubagentWatcher', () => {
       watcher.flushPendingFor('abc');
       expect(emitted).toHaveLength(1);
     }, { timeout: SETTLE_MS });
-    expect(emitted[0].data.parentAgentToolUseId).toBe('toolu_parent');
+    expect(looseData(emitted[0]).parentAgentToolUseId).toBe('toolu_parent');
   });
 
   it('dedups on re-reading the same lines (seen-uuid window)', async () => {
@@ -183,11 +183,11 @@ describe('SubagentWatcher', () => {
     const events = await watcher.getHistory(historyIndex);
     expect(events.length).toBe(2);
     const byTool: Record<string, TranscriptEvent> = {};
-    for (const e of events) byTool[e.data.toolName!] = e;
-    expect(byTool['Read'].data.parentAgentToolUseId).toBe('toolu_P1');
-    expect(byTool['Read'].data.agentId).toBe('abc');
-    expect(byTool['Grep'].data.parentAgentToolUseId).toBe('toolu_P2');
-    expect(byTool['Grep'].data.agentId).toBe('def');
+    for (const e of events) byTool[looseData(e).toolName!] = e;
+    expect(looseData(byTool['Read']).parentAgentToolUseId).toBe('toolu_P1');
+    expect(looseData(byTool['Read']).agentId).toBe('abc');
+    expect(looseData(byTool['Grep']).parentAgentToolUseId).toBe('toolu_P2');
+    expect(looseData(byTool['Grep']).agentId).toBe('def');
   });
 
   it('live-path flush: buffered subagent events emit in order after parent arrives', async () => {
@@ -210,12 +210,12 @@ describe('SubagentWatcher', () => {
       expect(emitted).toHaveLength(2);
     }, { timeout: SETTLE_MS });
     // Preserved order: first buffered event still emits first.
-    expect(emitted[0].data.toolName).toBe('Read');
-    expect(emitted[1].data.toolName).toBe('Grep');
+    expect(looseData(emitted[0]).toolName).toBe('Read');
+    expect(looseData(emitted[1]).toolName).toBe('Grep');
     // Both stamped with the correct parent.
-    expect(emitted[0].data.parentAgentToolUseId).toBe('toolu_parent');
-    expect(emitted[1].data.parentAgentToolUseId).toBe('toolu_parent');
-    expect(emitted[0].data.agentId).toBe('abc');
+    expect(looseData(emitted[0]).parentAgentToolUseId).toBe('toolu_parent');
+    expect(looseData(emitted[1]).parentAgentToolUseId).toBe('toolu_parent');
+    expect(looseData(emitted[0]).agentId).toBe('abc');
   });
 
   // ---- Blocking-call batch B1 (2026-09-24): the scan and replay are async ----
@@ -247,8 +247,8 @@ describe('SubagentWatcher', () => {
     const historyIndex = new SubagentIndex();
     for (const p of ['P1', 'P2', 'P3']) historyIndex.recordParentAgentToolUse(p, 'Same task', 'Explore');
     const events = await watcher.getHistory(historyIndex);
-    expect(events.map(e => e.data.agentId)).toEqual(order);
-    expect(events.map(e => e.data.parentAgentToolUseId)).toEqual(['P1', 'P2', 'P3']);
+    expect(events.map(e => looseData(e).agentId)).toEqual(order);
+    expect(events.map(e => looseData(e).parentAgentToolUseId)).toEqual(['P1', 'P2', 'P3']);
   });
 
   it('overlapping directory scans coalesce: a burst of triggers is one scan plus one rerun', async () => {
@@ -257,9 +257,13 @@ describe('SubagentWatcher', () => {
     const readdir = vi.spyOn(fs.promises, 'readdir');
     try {
       for (let i = 0; i < 20; i++) watcher.kickScan(); // e.g. 20 appended lines → 20 dir events
-      await vi.waitFor(() => expect((watcher as any).scanInFlight).toBeNull(), { timeout: SETTLE_MS });
-      expect(readdir.mock.calls.length).toBeLessThanOrEqual(2);
-      expect(readdir.mock.calls.length).toBeGreaterThanOrEqual(1);
+      // WHY count the moment the scan promise settles, not after a poll (macOS CI flake: 3 > 2): the real directory watch can deliver a
+      // late event of its own (FSEvents batches) between the burst's scans finishing and the next poll, and that is a new burst,
+      // not a failure to coalesce this one. The count is read in the microtask right after the last scan, before any such event.
+      await (watcher as any).scanInFlight;
+      const scans = readdir.mock.calls.length;
+      expect(scans).toBeLessThanOrEqual(2);
+      expect(scans).toBeGreaterThanOrEqual(1);
     } finally {
       readdir.mockRestore();
     }
@@ -304,8 +308,8 @@ describe('SubagentWatcher', () => {
       index.recordParentAgentToolUse('toolu_parent_r', 'Race task', 'Explore');
       watcher.flushAllPending(); // what TranscriptWatcher does — nothing buffered yet
       release();
-      await vi.waitFor(() => expect(emitted.map(e => e.data.toolUseId)).toEqual(['toolu_R']), { timeout: SETTLE_MS });
-      expect(emitted[0].data.parentAgentToolUseId).toBe('toolu_parent_r');
+      await vi.waitFor(() => expect(emitted.map(e => looseData(e).toolUseId)).toEqual(['toolu_R']), { timeout: SETTLE_MS });
+      expect(looseData(emitted[0]).parentAgentToolUseId).toBe('toolu_parent_r');
     } finally {
       release();
       openSpy.mockRestore();
@@ -426,7 +430,7 @@ describe('SubagentWatcher timer lifecycle', () => {
 
     watcher.kickScan();
     await vi.waitFor(() => {
-      expect(emitted.some(e => e.data.agentId === 'kick')).toBe(true);
+      expect(emitted.some(e => looseData(e).agentId === 'kick')).toBe(true);
     }, { timeout: SETTLE_MS });
   });
 
@@ -557,7 +561,7 @@ describe('SubagentWatcher arms timers only when there is something to poll', () 
     index.recordParentAgentToolUse('toolu_parent_k', 'Kicked task', 'claude');
     appendLine(subagentsDir, 'k', toolUseLine('u-k', 'toolu_K', 'Read', { file_path: '/k' }));
     await vi.advanceTimersByTimeAsync(5000);
-    await vi.waitFor(() => expect(emitted.some(e => e.data.agentId === 'k')).toBe(true), { timeout: SETTLE_MS });
+    await vi.waitFor(() => expect(emitted.some(e => looseData(e).agentId === 'k')).toBe(true), { timeout: SETTLE_MS });
     // Directory watched, file watched, helper bound: nothing left to poll.
     expect(vi.getTimerCount()).toBe(0);
     expect(watcher.hasActivePoll('k')).toBe(false);
@@ -574,7 +578,7 @@ describe('SubagentWatcher arms timers only when there is something to poll', () 
 
     index.recordParentAgentToolUse('toolu_parent_o', 'Early task', 'claude');
     watcher.flushPendingFor('orphan');
-    expect(emitted.some(e => e.data.agentId === 'orphan')).toBe(true);
+    expect(emitted.some(e => looseData(e).agentId === 'orphan')).toBe(true);
     await vi.advanceTimersByTimeAsync(5000); // the next prune tick finds nothing buffered
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -611,7 +615,7 @@ describe('SubagentWatcher arms timers only when there is something to poll', () 
 
     appendLine(subagentsDir, 'lf', toolUseLine('u-lf2', 'toolu_LF2', 'Grep', { pattern: 'x' }));
     await vi.advanceTimersByTimeAsync(5000); // one directory-poll tick
-    await vi.waitFor(() => expect(emitted.map(e => e.data.toolUseId)).toContain('toolu_LF2'), { timeout: SETTLE_MS });
+    await vi.waitFor(() => expect(emitted.map(e => looseData(e).toolUseId)).toContain('toolu_LF2'), { timeout: SETTLE_MS });
     expect(emitted).toHaveLength(2); // drained once, not replayed
   });
 
@@ -634,7 +638,7 @@ describe('SubagentWatcher arms timers only when there is something to poll', () 
 
     appendLine(subagentsDir, 'lw', toolUseLine('u-lw2', 'toolu_LW2', 'Grep', { pattern: 'y' }));
     await vi.advanceTimersByTimeAsync(5000); // one safety-net tick
-    await vi.waitFor(() => expect(emitted.map(e => e.data.toolUseId)).toContain('toolu_LW2'), { timeout: SETTLE_MS });
+    await vi.waitFor(() => expect(emitted.map(e => looseData(e).toolUseId)).toContain('toolu_LW2'), { timeout: SETTLE_MS });
     expect(emitted).toHaveLength(2);
   });
 });

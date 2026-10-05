@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useChatState, useChatDispatch, useChatStore } from '../state/chat-context';
 import { InteractivePrompt, TimelineEntry, HISTORY_EXPAND_PROMPT_ID } from '../state/chat-types';
-import { TRUST_PROMPT_TITLE } from '../parser/ink-select-parser';
+import { TRUST_PROMPT_TITLE } from '../../shared/ink-select-parser';
 import { sendPromptInput, PROMPT_FAILURE_COPY, PROMPT_UNKNOWN_FAILURE } from '../state/prompt-input';
 import type { PromptCardButton } from './PromptCard';
 import { AppIcon, ThemeMascot } from './Icons';

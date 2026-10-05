@@ -154,7 +154,7 @@ function renderChip(actions: ChatAction[]) {
 }
 
 const toolUse = (toolUseId: string, toolName: string, toolInput: Record<string, unknown>): ChatAction => ({
-  type: 'TRANSCRIPT_TOOL_USE', sessionId: 's1', uuid: `u-${toolUseId}`, toolUseId, toolName, toolInput,
+  type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: 's1', uuid: `u-${toolUseId}`, toolUseId, toolName, toolInput,
 });
 
 /** The chip's words, without the leading braille spinner frame the icon draws. */

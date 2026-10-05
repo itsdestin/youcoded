@@ -383,9 +383,9 @@ describe('voice: the wiring from main.ts', () => {
   const read = (rel: string) =>
     fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
 
-  it('main.ts registers the handlers and kills the engine at quit', () => {
+  it('main.ts starts the speech service and kills the engine at quit', () => {
     const main = read('src/main/main.ts');
-    expect(main).toMatch(/registerVoiceHandlers\(app\.getPath\('userData'\)\)/);
+    expect(main).toMatch(/startVoice\(app\.getPath\('userData'\)\)/);
     // The teardown must sit on the app's single shutdown path, which is what
     // before-quit, a last-window-close and an OS shutdown all route through.
     const shutdown = main.slice(main.indexOf('async function runShutdown'));

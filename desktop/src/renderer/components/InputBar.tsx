@@ -27,7 +27,8 @@ import { runNativeSlashAction, routeSlashResult } from '../state/native-slash-ac
 import type { UsageSnapshot } from '../state/chat-types';
 import { sendBlock, pendingInteractionRefusalCopy, waitForMessageBox } from '../state/pty-input-gate';
 import { buildOutgoingMessage } from './outgoing-message';
-import { sendChatMessage } from './native-send';
+import { sendToClaudeCode, sendToNative, canDrawSendNow, RESTORE_UNSENT_EVENT } from '../state/submit-outgoing';
+import { optimisticScreen, connected } from '../state/pending-action';
 import type { NativeSendResult } from '../../shared/types';
 import type { ClaudeAlias } from '../../shared/model-ids';
 import { useScrollFade } from '../hooks/useScrollFade';
@@ -560,6 +561,19 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     return () => window.removeEventListener('buddy:attach-file', listener);
   }, [addFiles]);
 
+  // "Discard" on an unsent message puts its words back here, but ONLY into an empty box: a draft the person has since typed is never overwritten.
+  // No focus() on purpose: on a phone that would pop the keyboard up over a button press that was meant to get rid of something.
+  useEffect(() => {
+    const listener = (e: Event) => {
+      const d = (e as CustomEvent<{ sessionId?: string; text?: string }>).detail;
+      if (!d?.text || d.sessionId !== sessionId) return;
+      if ((inputRef.current?.value ?? '').trim().length > 0) return;
+      setText(d.text);
+    };
+    window.addEventListener(RESTORE_UNSENT_EVENT, listener);
+    return () => window.removeEventListener(RESTORE_UNSENT_EVENT, listener);
+  }, [sessionId]);
+
   useEffect(() => {
     const listener = () => {
       // WHY: the context menu identifies a composer-only image paste, while this
@@ -819,109 +833,29 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       // it RETURNs before the CC/PTY dispatch and paste machinery below.
       if (provider === 'native') {
         void (async () => {
-          // Fix (final-review Important, 2026-07-22): the host's send() itself
-          // never rejects (NativeSessionHost.send() is documented SYNCHRONOUS
-          // and NEVER throws), but the invoke() HOP to get there can — version
-          // skew on the IPC channel, or (on remote access) the WebSocket
-          // dropping mid-round-trip. An unhandled rejection here would toast
-          // nothing and silently vanish the draft, so a rejection is routed
-          // through the EXACT same failure branch as a failed/undefined ack
-          // (same toast copy, same guarded draft restore) rather than treated
-          // as a distinct case. NOTE (error inventory 2026-09-10, false message 5):
-          // that a rejected send "didn't go anywhere" is NOT known — over remote
-          // access a rejection is the timeout and the send may still have run —
-          // so sendFailureCopy words an unanswered send as "couldn't confirm".
-          let result: NativeSendResult | undefined;
-          try {
-            result = await sendChatMessage('native', sessionId, outgoing.ptyText, files.map((f) => f.path));
-          } catch (err) {
-            console.error('native send invoke rejected:', err);
-          }
-          if (!result || result.status === 'failed') {
-            onToast?.(sendFailureCopy(result));
-            // Fix (reviewer Critical, post-de30b908): `send()` already ran
-            // setText('')/setAttachments([]) synchronously right after this
-            // function returned `true` — a failed ack must not silently lose
-            // the draft (the file's own invariant, documented at send()'s
-            // `if (!sendMessage(...)) return;`, says a refused send keeps the
-            // draft). Restore effectiveMessage (pre-sanitize, keeps newlines —
-            // what was actually in the textarea) and the original files.
-            // Guarded: only refill if the user hasn't typed/attached something
-            // new during the ack round-trip (a local IPC invoke, ~ms) — never
-            // clobber newer input.
-            setText((cur) => (cur.trim() ? cur : effectiveMessage));
-            setAttachments((cur) => (cur.length > 0 ? cur : files));
-            return;
-          }
-          // Task 12: a 'queued' ack dispatches QUEUED_MESSAGE_ADDED instead of
-          // USER_PROMPT — the docked strip renders it, NOT the timeline (the
-          // Task 3/11 bug this replaces: an enqueue-time timeline bubble
-          // froze above content the still-streaming prior turn hadn't
-          // emitted yet). A 'sent' ack is unchanged: nothing is streaming, so
-          // the optimistic bubble's position is already correct.
-          if (result.status === 'queued') {
-            dispatch({
-              type: 'QUEUED_MESSAGE_ADDED',
-              sessionId,
-              queueId: result.queueId,
-              content: outgoing.content,
-              timestamp: Date.now(),
-            });
-          } else {
-            dispatch({
-              type: 'USER_PROMPT',
-              sessionId,
-              content: outgoing.content,
-              timestamp: Date.now(),
-              attachments: files.map((f) => f.path),
-            });
-          }
+          // The host's own send() never rejects, but the invoke() HOP to it can (version skew, or over remote access the WebSocket dropping
+          // mid-round-trip: then the host MAY have the message). sendToNative turns every case into one of four answers; see submit-outgoing.ts.
+          // (Error inventory 2026-09-10, false message 5: that a rejected send "didn't go anywhere" is NOT known, so an unanswered send is worded
+          // "couldn't confirm" — or, new in R5-4b, drawn as a bubble that says "Not sure this was sent" and is checked against the computer's record.)
+          // One-core R6-2: on a phone with nothing running, the bubble goes up now, before the computer answers (the composer was already cleared by `send()`).
+          const instant = optimisticScreen() && connected() && canDrawSendNow(getSessionState?.(sessionId));
+          const out = await sendToNative({ sessionId, provider, ptyText: outgoing.ptyText, content: outgoing.content, paths: files.map((f) => f.path), dispatch, instant });
+          if (out.status !== 'failed') return; // sent / queued / unsure: the bubble (or the host's queue strip) says it, and an unsure one says so on itself
+          onToast?.(sendFailureCopy(out.result));
+          // A failed ack must not silently lose the draft (the file's own invariant: a refused send keeps the draft). `send()` already ran
+          // setText('')/setAttachments([]) right after this function returned `true`, so restore what was in the textarea (pre-sanitize, keeps
+          // newlines) and the original files — but only if nothing new was typed or attached meanwhile (never clobber newer input).
+          setText((cur) => (cur.trim() ? cur : effectiveMessage));
+          setAttachments((cur) => (cur.length > 0 ? cur : files));
         })();
         return true;
       }
 
-      // CC/PTY path (unchanged): dispatch the optimistic bubble BEFORE
-      // sending — Claude Code's transcript watcher confirms it once the JSONL
-      // line lands (see TRANSCRIPT_USER_MESSAGE dedup).
-      dispatch({
-        type: 'USER_PROMPT',
-        sessionId,
-        content: outgoing.content,
-        timestamp: Date.now(),
-        // Exact attachment paths so UserMessage can render each as a clickable
-        // pill — file-picker paths routinely contain spaces, which the joined
-        // content string can't be split back out of.
-        attachments: files.map((f) => f.path),
-      });
-
-      // Sending strategy:
-      //
-      // Claude Code's input handler auto-resolves file paths into attachments,
-      // but if multiple paths arrive within Ink's 500ms PASTE_TIMEOUT, they
-      // coalesce into a single paste event and each new path-detection REPLACES
-      // the staged attachment instead of appending (verified via transcript
-      // JSONL: a 4-image send showed only the last image in the content array).
-      //
-      // Fix: send each path 600ms apart (> 500ms PASTE_TIMEOUT) so each path
-      // is a discrete paste event and Claude's autocomplete accumulates them.
-      // Then send the user's text + \r as one write — the pty-worker splits it
-      // into "text" + 600ms gap + "\r" so Enter arrives after the paste commits
-      // (previously this was two scattered setTimeouts in the renderer).
-      const FILE_GAP_MS = 600; // > Ink's 500ms PASTE_TIMEOUT — breaks paste buffer between paths
-
-      files.forEach((f, idx) => {
-        setTimeout(() => {
-          window.claude.session.sendInput(sessionId, f.path + ' ');
-        }, idx * FILE_GAP_MS);
-      });
-
-      // After all files, send text+\r as one write. pty-worker auto-splits
-      // on trailing \r with a 600ms gap so Enter isn't swallowed by paste mode.
-      // Attachments-only case: send just "\r" (single char, no split applied).
-      const submitStart = files.length * FILE_GAP_MS;
-      setTimeout(() => {
-        window.claude.session.sendInput(sessionId, outgoing.ptyText + '\r');
-      }, submitStart);
+      // CC/PTY path: the optimistic bubble goes up BEFORE the write — Claude Code's transcript watcher confirms it once the JSONL line lands
+      // (see TRANSCRIPT_USER_MESSAGE dedup). Claude Code's input handler auto-resolves file paths into attachments, but paths arriving within Ink's
+      // 500ms PASTE_TIMEOUT coalesce into one paste and each new path REPLACES the staged attachment (a 4-image send showed only the last), so each path
+      // goes FILE_GAP_MS apart and the text + \r goes last as one write (the pty-worker splits it with its own gap). All of that is in submit-outgoing.ts.
+      sendToClaudeCode({ sessionId, provider, ptyText: outgoing.ptyText, content: outgoing.content, paths: files.map((f) => f.path), dispatch });
       return true;
     },
     [sessionId, disabled, dispatch, view, provider, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand],

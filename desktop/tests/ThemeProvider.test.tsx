@@ -3,6 +3,7 @@ import React from 'react';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { LOOK_PERSIST_MS, ThemeProvider, useTheme } from '../src/renderer/state/theme-context';
+import { REMOTE_RECONNECTED_EVENT } from '../src/renderer/remote-events';
 import midnight from '../src/renderer/themes/builtin/midnight.json';
 
 const slug = 'devils-garden';
@@ -170,4 +171,40 @@ it('a newer Look edit from a peer window cancels our older pending write', async
     expect(lookWrites()).toEqual([]);
     expect(main.result.current.lookOverrides.chromeStyle).toBe('float');
   } finally { vi.useRealTimers(); }
+});
+it('a phone that slept through a theme change picks it up when the connection comes back (sync-fix3)', async () => {
+  // The push that carries a theme change is never replayed to a screen that was away, so the reconnect must ask again.
+  const phone = mount(); await flush();
+  expect(phone.result.current.theme).not.toBe(slug);
+  installed = [slug];   // also installed on the computer while the phone was away
+  (window as any).claude.appearance.get.mockResolvedValue({ theme: slug, reducedEffects: true });
+  await act(async () => { window.dispatchEvent(new Event(REMOTE_RECONNECTED_EVENT)); });
+  await waitFor(() => expect(phone.result.current.theme).toBe(slug));
+  expect(phone.result.current.reducedEffects).toBe(true);
+});
+it('a reconnect whose theme-file read FAILS keeps the theme and never writes the appearance back (sync-fix3 review)', async () => {
+  installed = [slug];
+  const phone = mount(); await flush();
+  act(() => phone.result.current.setTheme(slug)); await flush();
+  await waitFor(() => expect(phone.result.current.theme).toBe(slug));
+  persist.mockClear(); broadcast.mockClear();
+  (window as any).claude.appearance.get.mockResolvedValue({ theme: slug });
+  read.mockRejectedValue(new Error('link just came back'));
+  await act(async () => { window.dispatchEvent(new Event(REMOTE_RECONNECTED_EVENT)); });
+  await act(async () => { await new Promise((r) => setTimeout(r, 150)); });
+  expect(phone.result.current.theme).toBe(slug);          // not reset to the default
+  expect(phone.result.current.activeTheme.slug).toBe(slug);
+  expect(persist).not.toHaveBeenCalled();                  // and nothing is written for every other screen
+});
+it('a reconnect that finds the theme really gone shows the default here but still does not write it for every screen', async () => {
+  installed = [slug];
+  const phone = mount(); await flush();
+  act(() => phone.result.current.setTheme(slug)); await flush();
+  await waitFor(() => expect(phone.result.current.theme).toBe(slug));
+  persist.mockClear();
+  installed = [];                                          // uninstalled on the computer while away
+  (window as any).claude.appearance.get.mockResolvedValue(null);
+  await act(async () => { window.dispatchEvent(new Event(REMOTE_RECONNECTED_EVENT)); });
+  await waitFor(() => expect(phone.result.current.theme).not.toBe(slug));
+  expect(persist).not.toHaveBeenCalled();
 });

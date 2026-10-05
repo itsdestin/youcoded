@@ -1,11 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { chatReducer } from '../src/renderer/state/chat-reducer';
 import { ChatState, ChatAction, createSessionChatState } from '../src/renderer/state/chat-types';
-// Source-text parity check below reads the two hand-mirrored forwarding
-// switches directly off disk (App.tsx has no test harness that exercises the
-// buddy window, and vice versa) — see the describe block at the bottom.
-import fs from 'fs';
-import path from 'path';
+import { eventToAction } from '../src/renderer/state/transcript-event-actions';
+import type { TranscriptEvent, DataOf } from '../src/shared/types';
+import { ev as mkEv } from './helpers/transcript-events';
 
 const SESSION = 'test-session';
 
@@ -92,7 +90,7 @@ describe('TRANSCRIPT_* reducer actions', () => {
     });
 
     state = dispatch(state, {
-      type: 'TRANSCRIPT_TOOL_USE',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
       sessionId: SESSION,
       uuid: 'uuid-2',
       toolUseId: 'tool-1',
@@ -137,7 +135,7 @@ describe('TRANSCRIPT_* reducer actions', () => {
     });
 
     state = dispatch(state, {
-      type: 'TRANSCRIPT_TOOL_USE',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
       sessionId: SESSION,
       uuid: 'uuid-2',
       toolUseId: 'tool-1',
@@ -172,7 +170,7 @@ describe('TRANSCRIPT_* reducer actions', () => {
     });
 
     state = dispatch(state, {
-      type: 'TRANSCRIPT_TOOL_USE',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
       sessionId: SESSION,
       uuid: 'uuid-2',
       toolUseId: 'tool-1',
@@ -221,7 +219,6 @@ describe('TRANSCRIPT_* reducer actions', () => {
 
     const session = state.get(SESSION)!;
     expect(session.isThinking).toBe(false);
-    expect(session.streamingText).toBe('');
     expect(session.currentGroupId).toBeNull();
   });
 
@@ -238,7 +235,7 @@ describe('TRANSCRIPT_* reducer actions', () => {
 
     // First tool use — creates group 1
     state = dispatch(state, {
-      type: 'TRANSCRIPT_TOOL_USE',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
       sessionId: SESSION,
       uuid: 'uuid-2',
       toolUseId: 'tool-1',
@@ -272,7 +269,7 @@ describe('TRANSCRIPT_* reducer actions', () => {
 
     // Second tool use — should create a NEW group
     state = dispatch(state, {
-      type: 'TRANSCRIPT_TOOL_USE',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
       sessionId: SESSION,
       uuid: 'uuid-5',
       toolUseId: 'tool-2',
@@ -425,7 +422,7 @@ describe('Subagent threading', () => {
 
   function emitParentAgentToolUse(): ChatState {
     return chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
       sessionId: SESSION,
       uuid: 'uuid-parent',
       toolUseId: 'toolu_parent',
@@ -437,7 +434,7 @@ describe('Subagent threading', () => {
   it('subagent tool_use appends a subagent segment to the parent Agent tool', () => {
     state = emitParentAgentToolUse();
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1,
       sessionId: SESSION,
       uuid: 'uuid-s1',
       toolUseId: 'toolu_child',
@@ -465,7 +462,7 @@ describe('Subagent threading', () => {
   it('subagent tool_result flips the matching segment to complete', () => {
     state = emitParentAgentToolUse();
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'uuid-s1',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-s1',
       toolUseId: 'toolu_child', toolName: 'Read', toolInput: {},
       parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
     });
@@ -551,7 +548,7 @@ describe('Subagent threading', () => {
   it('subagent event for unknown parent is a no-op', () => {
     const before = state;
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'uuid-s1',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-s1',
       toolUseId: 'toolu_child', toolName: 'Read', toolInput: {},
       parentAgentToolUseId: 'toolu_nonexistent', agentId: 'abc',
     });
@@ -565,7 +562,7 @@ describe('Subagent threading', () => {
     const groupsBefore = new Map(beforeSession.toolGroups);
 
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'uuid-s1',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-s1',
       toolUseId: 'toolu_child', toolName: 'Read', toolInput: {},
       parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
     });
@@ -578,12 +575,12 @@ describe('Subagent threading', () => {
   it('duplicate subagent tool_use for same toolUseId updates in place (no duplicate segment)', () => {
     state = emitParentAgentToolUse();
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'uuid-s1',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-s1',
       toolUseId: 'toolu_child', toolName: 'Read', toolInput: {},
       parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
     });
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'uuid-s1',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-s1',
       toolUseId: 'toolu_child', toolName: 'Read', toolInput: { file_path: '/updated' },
       parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
     });
@@ -594,7 +591,7 @@ describe('Subagent threading', () => {
   it('subagent tool_result with isError:true flips segment to failed', () => {
     state = emitParentAgentToolUse();
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'uuid-s1',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-s1',
       toolUseId: 'toolu_child', toolName: 'Read', toolInput: {},
       parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
     });
@@ -616,7 +613,7 @@ describe('Subagent threading', () => {
   it('subagent tool_result carries structuredPatch onto the segment', () => {
     state = emitParentAgentToolUse();
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'uuid-s1',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-s1',
       toolUseId: 'toolu_child', toolName: 'Edit',
       toolInput: { file_path: '/a', old_string: 'x', new_string: 'y' },
       parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
@@ -645,7 +642,7 @@ describe('Subagent threading', () => {
       parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
     });
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'uuid-tool1',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1000, sessionId: SESSION, uuid: 'uuid-tool1',
       toolUseId: 'toolu_mid', toolName: 'Read', toolInput: {},
       parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
     });
@@ -709,7 +706,7 @@ describe('Subagent threading', () => {
   it('CLEAR_TIMELINE preserves subagentSegments on toolCalls entries', () => {
     state = emitParentAgentToolUse();
     state = chatReducer(state, {
-      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'uuid-s1',
+      type: 'TRANSCRIPT_TOOL_USE', timestamp: 1, sessionId: SESSION, uuid: 'uuid-s1',
       toolUseId: 'toolu_child', toolName: 'Read', toolInput: {},
       parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
     });
@@ -782,20 +779,36 @@ describe('Subagent threading', () => {
   });
 });
 
-// App.tsx (main window) and BubbleFeed.tsx (buddy window) each hand-forward the
-// native heartbeat's fields onto TRANSCRIPT_THINKING_HEARTBEAT. They are copies,
-// and a field added to one and not the other makes the two windows disagree
-// about whether a turn is stalled. Pinned as source text because the buddy
-// window has no test harness of its own.
-describe('native heartbeat forwarding parity', () => {
-  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
-  const APP = read('src', 'renderer', 'App.tsx');
-  const BUDDY = read('src', 'renderer', 'components', 'buddy', 'BubbleFeed.tsx');
+// The main window and the buddy window both translate a native heartbeat through
+// eventToAction (state/transcript-event-actions.ts), so a field added there reaches
+// both. This pins that each watchdog field actually lands on the action, for the
+// two option sets the two windows use.
+describe('native heartbeat forwarding is shared by both windows', () => {
+  const ev = (data: DataOf<'assistant-thinking'>) =>
+    mkEv('assistant-thinking', data, { sessionId: 's', uuid: 'u', timestamp: 1 });
+  const WINDOWS = {
+    'main window': { live: true, compactionPending: false, fallbackContextTokens: 5 },
+    'buddy window': { live: true, compactionPending: false, fallbackContextTokens: null },
+  };
 
-  for (const field of ['stallWarning', 'stalled', 'dropPart']) {
-    it(`both windows forward ${field}`, () => {
-      expect(APP).toContain(`event.data?.${field}`);
-      expect(BUDDY).toContain(`event.data?.${field}`);
+  for (const [name, opts] of Object.entries(WINDOWS)) {
+    it(`${name} forwards stallWarning`, () => {
+      const stallWarning = { retryInMs: 5, willRetry: true };
+      expect(eventToAction(ev({ stallWarning }), opts)).toContainEqual(expect.objectContaining({ type: 'TRANSCRIPT_THINKING_HEARTBEAT', stallWarning }));
+    });
+    it(`${name} forwards stalled`, () => {
+      expect(eventToAction(ev({ stalled: true }), opts)).toContainEqual(expect.objectContaining({ type: 'TRANSCRIPT_THINKING_HEARTBEAT', stalled: true }));
+    });
+    it(`${name} forwards dropPart, ahead of the heartbeat`, () => {
+      const types = eventToAction(ev({ dropPart: { partIds: ['p'] } }), opts).map((a) => a.type);
+      expect(types).toEqual(['NATIVE_PARTS_DROPPED', 'TRANSCRIPT_THINKING_HEARTBEAT']);
     });
   }
+
+  // A history page keeps the saved marker (it used to return nothing, so a reopened
+  // conversation showed the discarded retry text) but never the live-only heartbeat.
+  it('a history page forwards dropPart and drops the heartbeat', () => {
+    const types = eventToAction(ev({ dropPart: { partIds: ['p'] } }), { live: false }).map((a) => a.type);
+    expect(types).toEqual(['NATIVE_PARTS_DROPPED']);
+  });
 });

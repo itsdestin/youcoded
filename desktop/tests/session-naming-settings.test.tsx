@@ -7,6 +7,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act, cleanup } from '@testing-library/react';
 import SessionNaming from '../src/renderer/components/assistant-settings/SessionNaming';
+import { REMOTE_SCREEN_CAPABILITIES } from '../src/shared/capabilities';
 
 afterEach(cleanup);
 
@@ -107,5 +108,20 @@ describe('Session naming settings card', () => {
     // a choice already made.
     expect(document.body.textContent).not.toContain('Choose a model');
     expect(document.body.textContent).not.toContain('Conversation model (default)');
+  });
+});
+
+describe('Session naming settings card on a phone', () => {
+  it('the Naming model picker still lists native models: the computer names the conversations', async () => {
+    (window as any).claude = {
+      capabilities: REMOTE_SCREEN_CAPABILITIES,
+      sessionNaming: { get: async () => ({ mode: 'ai', model: null }), set: async () => {}, title: async () => ({ title: '', manual: false }), rename: async () => {} },
+      providers: { list: async () => [{ id: 'cloud', type: 'openrouter', label: 'Cloud', ready: true }], catalog: async () => [{ id: 'nimbus-1', providerId: 'cloud', label: 'Nimbus Native One' }] },
+      models: { onDownloadProgress: () => () => {} },
+    };
+    render(<SessionNaming />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Model' }));
+    fireEvent.change(await screen.findByLabelText('Search all models'), { target: { value: 'Nimbus' } });
+    expect(await screen.findByText('Nimbus Native One')).toBeTruthy();
   });
 });

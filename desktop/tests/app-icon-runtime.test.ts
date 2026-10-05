@@ -79,12 +79,13 @@ describe('runtime app icon (app-icon.ts)', () => {
   });
 
   it('the theme icon swap and window creation never hard-code the Windows tile', () => {
-    for (const file of ['src/main/ipc-handlers.ts', 'src/main/main.ts']) {
+    // WHY window.ts (one-core R3-8): the theme icon swap (window:set-icon) is a channel-table entry now.
+    for (const file of ['src/main/ipc/window.ts', 'src/main/main.ts']) {
       const src = readSource(path.join(DESKTOP, file));
       expect(src, `${file} must load its icon through app-icon.ts`).not.toMatch(/assets\/icon\.png/);
       expect(src).toContain('loadDefaultAppIcon(');
     }
-    expect(readSource(path.join(DESKTOP, 'src/main/ipc-handlers.ts'))).toContain('app.dock.setIcon(fitForMacDock(');
+    expect(readSource(path.join(DESKTOP, 'src/main/ipc/window.ts'))).toContain('app.dock.setIcon(fitForMacDock(');
   });
 
   it('a single faint pixel on the border does not count as art reaching the edge', () => {

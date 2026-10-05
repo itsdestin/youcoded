@@ -13,6 +13,7 @@ import {
   markConnectedForNotices,
 } from '../src/renderer/remote-shim';
 import { REMOTE_UNSUPPORTED_EVENT } from '../src/renderer/remote-unsupported';
+import { TABLE_ERROR_FLAG } from '../src/shared/backend-contract';
 
 // WHY each section starts with isolateGlobals(): every section below was its own file, so each
 // began with a clean global object and a fresh module graph. The sections install fakes on
@@ -63,11 +64,42 @@ describe('remote-shim — rejecting failures', () => {
       starts.push([[...m[0].matchAll(/case '([^']+)'/g)].map(label => label[1]), m.index]);
     for (let i = 0; i < starts.length; i++) {
       const body = server.slice(starts[i][1], starts[i + 1]?.[1] ?? server.length);
-      const helperRefuses = body.includes('handleRemoteHandoff(') &&
-        read('../src/main/conversations/handoff-transport.ts').includes('{ ok: false, error:');
-      if (body.includes('{ ok: false, error:') || helperRefuses)
+      if (body.includes('{ ok: false, error:'))
         for (const channel of starts[i][0]) out.add(channel);
     }
+    // WHY (2026-09-30 one-core R3-4): session:create moved into the channel table; its `{ ok:false }`
+    // answers now come from the entry's phone guard and soft failure answer, not from a `case`.
+    if (/IPC\.SESSION_CREATE[\s\S]*?remoteGuard[\s\S]*?ok: false[\s\S]*?remoteOnError[\s\S]*?ok: false/.test(read('../src/main/ipc/session.ts'))) out.add('session:create');
+    // WHY (2026-09-30 one-core R3-5): handoff:* moved into the table; the phone's failure answer is the
+    // entry's remoteOnError ({ ok:false, error }). The four native settings reads/writes moved too: a table
+    // handler that throws answers { ok:false, error } for ANY channel (the table's generic failure answer).
+    const handoffEntries = read('../src/main/ipc/handoff.ts');
+    if (/phoneFailure = [^\n]*ok: false/.test(handoffEntries) && /remoteOnError: phoneFailure/.test(handoffEntries))
+      for (const a of ['begin', 'status', 'wait', 'retry', 'saved-copy', 'force', 'cancel', 'create-params']) out.add(`handoff:${a}`);
+    const nativeEntries = read('../src/main/ipc/native.ts');
+    for (const [c, constant] of [['native:get-step-guard', 'NATIVE_GET_STEP_GUARD'], ['native:set-step-guard', 'NATIVE_SET_STEP_GUARD'],
+      ['native:get-context-preferences', 'NATIVE_GET_CONTEXT_PREFERENCES'], ['native:set-context-preferences', 'NATIVE_SET_CONTEXT_PREFERENCES']])
+      if (nativeEntries.includes(`IPC.${constant}`)) out.add(c);
+    // WHY (2026-09-30 one-core R3-6): the engine and model-manager channels moved into the table too. A table
+    // handler that throws answers { ok:false, error } carrying the failure marker for ANY channel, so each of
+    // these still can fail on the phone's door.
+    const engineEntries = read('../src/main/ipc/engine.ts') + read('../src/main/ipc/models.ts') + read('../src/main/ipc/claude-code.ts');
+    for (const [c, constant] of [['claude-code:install', 'CLAUDE_CODE_INSTALL'], ['engine:run-in-terminal', 'ENGINE_RUN_IN_TERMINAL'],
+      ['engine:set-config', 'ENGINE_SET_CONFIG'], ['engine:prereqs', 'ENGINE_PREREQS'], ['models:settings', 'MODELS_SETTINGS'],
+      ['models:set-settings', 'MODELS_SET_SETTINGS'], ['models:add-vision', 'MODELS_ADD_VISION']])
+      if (engineEntries.includes(`name: IPC.${constant},`)) out.add(c);
+    // WHY (2026-10-01 one-core R3-8): the last phone channels moved into the table. The four host-administration refusals are the
+    // entries that carry `refusal: hostAdminRefusal` ({ ok:false, error: HOST_ADMIN_REFUSAL }); the document-comment watch pair, the
+    // theme and command lists and the favourite themes can throw, and a table handler that throws answers { ok:false, error }
+    // carrying the failure marker for ANY channel.
+    const adminEntries = read('../src/main/ipc/remote-admin.ts');
+    for (const [c, constant] of [['remote:set-password', 'REMOTE_SET_PASSWORD'], ['remote:set-config', 'REMOTE_SET_CONFIG'],
+      ['remote:devices:rename', 'REMOTE_DEVICES_RENAME'], ['remote:devices:unpair', 'REMOTE_DEVICES_UNPAIR']])
+      if (new RegExp(`name: IPC\\.${constant}, kind: 'handle', remoteAllowed: false, refusal: hostAdminRefusal`).test(adminEntries)) out.add(c);
+    if (read('../src/main/ipc/doc-comments.ts').includes('DOC_COMMENTS_IPC.WATCH')) { out.add('docComments:watch'); out.add('docComments:unwatch'); }
+    if (read('../src/main/ipc/appearance.ts').includes('name: IPC.THEME_LIST')) out.add('theme:list');
+    if (read('../src/main/ipc/appearance.ts').includes('name: IPC.APPEARANCE_GET_FAVORITE_THEMES')) out.add('appearance:get-favorite-themes');
+    if (read('../src/main/ipc/ui.ts').includes('name: IPC.COMMANDS_LIST')) out.add('commands:list');
     return out;
   }
 
@@ -79,7 +111,7 @@ describe('remote-shim — rejecting failures', () => {
       expect(canFail.has('models:set-settings')).toBe(true);
       expect(canFail.has('engine:set-config')).toBe(true);
       // A channel that responds with no try/catch is genuinely not in the set.
-      expect(canFail.has('engine:status')).toBe(false);
+      expect(canFail.has('platform:get')).toBe(false);
     });
 
     // The membership itself. Pinned exactly: this is the assertion that goes red
@@ -154,6 +186,24 @@ describe('remote-shim — rejecting failures', () => {
       // And "the host does not implement this" stays its own case, so the user
       // gets the plain-language notice rather than a raw error string.
       expect(responseOutcome('models:settings', { ok: false, unsupported: true })).toBe('unsupported');
+    });
+
+    // WHY (2026-09-30 one-core R3-2): a table handler that throws answers the phone
+    // { ok:false, error, <TABLE_ERROR_FLAG>:true }. The flag, not a per-channel list, is what
+    // makes the shim reject, so a channel moved into the table can never hand its caller a
+    // failure object where the type promises a list, a record or a boolean.
+    it('rejects ANY channel\u2019s reply carrying the table\u2019s error flag, listed or not', () => {
+      const reply = { ok: false, error: 'disk trouble', [TABLE_ERROR_FLAG]: true };
+      expect(REJECT_ON_NOT_OK.has('defaults:set')).toBe(false);
+      expect(responseOutcome('defaults:set', reply)).toBe('failure');
+      expect(responseOutcome('sync:force', reply)).toBe('failure');
+      // No flag = an ordinary answer, and "unsupported" still wins over the flag.
+      expect(responseOutcome('defaults:set', { ok: false, error: 'x' })).toBe('value');
+      expect(responseOutcome('defaults:set', { ...reply, unsupported: true })).toBe('unsupported');
+      const resolve = vi.fn(); const reject = vi.fn();
+      applyResponse({ resolve, reject }, 'defaults:set', reply);
+      expect(reject).toHaveBeenCalledWith(expect.objectContaining({ message: 'disk trouble' }));
+      expect(resolve).not.toHaveBeenCalled();
     });
 
     it('rejects startup errors but keeps admission denials as retryable data', () => {

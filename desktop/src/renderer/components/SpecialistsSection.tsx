@@ -346,6 +346,7 @@ function TierRow({ tier, title, hint, value, loaded, onPick, onClear }: {
           value={choice}
           onSelect={onPick}
           includeClaude={false}
+          runsOn="host" // the tier model is run by the computer
           emptyLabel={loaded ? AUTOMATIC_SPECIALIST_MODEL_COPY : 'Loading models…'}
         />
         {value && (

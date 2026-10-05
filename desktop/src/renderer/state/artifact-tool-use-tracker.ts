@@ -1,5 +1,6 @@
 import { categorizeArtifact } from '../../shared/artifacts/categorization';
 import { resolveTrackedPath } from '../../shared/artifacts/resolve-tracked-path';
+import type { TranscriptEvent } from '../../shared/types';
 
 /**
  * The artifact tracker: turns Write/Edit/MultiEdit/Read tool-use transcript
@@ -46,7 +47,10 @@ export interface ArtifactToolUseTrackerDeps {
 }
 
 export interface ArtifactToolUseTracker {
-  handle: (event: unknown) => void;
+  // WHY a TranscriptEvent, not `unknown` (M5): App feeds it the live event stream, so the
+  // field reads below are compiler-checked per event type. The `?.` guards stay for a
+  // malformed wire event.
+  handle: (event: TranscriptEvent) => void;
   dispose: () => void;
 }
 
@@ -122,9 +126,8 @@ export function createArtifactToolUseTracker(deps: ArtifactToolUseTrackerDeps): 
     pendingRefresh.set(sessionId, { timer, projectRoot });
   };
 
-  const handle = (raw: unknown) => {
+  const handle = (event: TranscriptEvent) => {
     if (disposed) return;
-    const event = raw as { type?: string; sessionId?: string; data?: { toolName?: string; toolUseId?: string; toolInput?: Record<string, unknown>; isError?: boolean } } | null;
     if (!event?.type || !event?.sessionId) return;
     if (event.type === 'tool-result') { settleDelivery(event.data?.toolUseId, event.data?.isError === true); return; }
     if (event.type !== 'tool-use') return;

@@ -4373,7 +4373,7 @@ class SessionService : Service() {
             // remote-server.ts), never through Android's own native runtime.
             "native:submit-admin-password",
             // "What the assistant was given" (2026-09-10). The context record
-            // itself is PUSHED, and reaches a phone inside chat:hydrate over the
+            // itself is PUSHED, and reaches a phone through session:open over the
             // remote WebSocket — there is nothing to answer here. This is the
             // on-demand read of one file's text, which lives on the desktop
             // beside the session that was given it; a phone paired to a desktop

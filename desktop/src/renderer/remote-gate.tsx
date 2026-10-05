@@ -26,6 +26,9 @@ export interface RemoteGateShim {
 }
 
 /** Refusals that mean the computer will not take this device's key again. */
+// WHY: the host closes with 4005 when this page is older than the computer's YouCoded. Before
+// this, the gate showed a bare password box with no hint, so later version bumps looped silently.
+const OLD_PAGE_NOTICE = "This page is older than your computer's YouCoded. Refresh to update.";
 const KEY_REFUSALS = new Set(['revoked', 'unknown', 'invalid-credentials', 'retired']);
 
 type Trouble = Exclude<SignInFailure['kind'], 'refused'>;
@@ -108,6 +111,11 @@ function LoginScreen({ onLogin, notice }: { onLogin: (password: string) => Promi
       <form onSubmit={handleSubmit} className="flex flex-col gap-3 w-72">
         <h1 className="text-xl font-bold text-center mb-2">YouCoded Remote</h1>
         {notice && <p className="text-xs text-fg-2 text-center" role="status">{notice}</p>}
+        {/* WHY: a password can't fix a page that is older than its computer; only a reload
+            fetches the new page, so the notice carries the one button that helps. */}
+        {notice === OLD_PAGE_NOTICE && (
+          <Button type="button" onClick={() => window.location.reload()}>Refresh</Button>
+        )}
         {/* Was a hand-rolled field with gray focus (`focus:border-fg-muted`) — the
             exact paradigm change 20 retires. Fields focus by accent border now. */}
         <TextInput
@@ -230,7 +238,7 @@ export function RemoteGate({ isAndroid, loadShim, renderApp }: {
         setConnected(false);
         setHasConnectedOnce(false);
         setSavedKey('none');
-        setNotice(KEY_REFUSALS.has(reason) ? 'This computer no longer accepts this device. Enter the password to connect again.' : null);
+        setNotice(reason === 'unsupported-version' ? OLD_PAGE_NOTICE : KEY_REFUSALS.has(reason) ? 'This computer no longer accepts this device. Enter the password to connect again.' : null);
       });
       setShim(s);
       // Android WebView: auto-connect to LocalBridgeServer. If the bridge server isn't

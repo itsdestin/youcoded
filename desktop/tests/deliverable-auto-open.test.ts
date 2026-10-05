@@ -5,6 +5,7 @@
 // the file panel open on every session switch.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createDeliverableAutoOpen, FRESH_WINDOW_MS } from '../src/renderer/state/deliverable-auto-open';
+import { ev } from './helpers/transcript-events';
 
 const NOW = Date.parse('2026-08-25T12:00:00.000Z');
 
@@ -21,12 +22,12 @@ function makeDeps(overrides: Partial<Parameters<typeof createDeliverableAutoOpen
 }
 
 const use = (id: string, input: Record<string, unknown>, sessionId = 's1') =>
-  ({ type: 'tool-use', sessionId, uuid: `u-${id}`, timestamp: NOW, data: { toolName: 'SendUserFile', toolUseId: id, toolInput: input } });
+  ev('tool-use', { toolName: 'SendUserFile', toolUseId: id, toolInput: input }, { sessionId, uuid: `u-${id}`, timestamp: NOW });
 // A live result: recorded just now (CC carries recordedAt; native carries a fresh timestamp).
 const result = (id: string, opts: { isError?: boolean; recordedAt?: number; timestamp?: number; sessionId?: string } = {}) =>
-  ({ type: 'tool-result', sessionId: opts.sessionId ?? 's1', uuid: `r-${id}`, timestamp: opts.timestamp ?? NOW,
-     data: { toolUseId: id, toolResult: 'Sent 1 file to the user.', isError: opts.isError ?? false, ...(opts.recordedAt !== undefined ? { recordedAt: opts.recordedAt } : {}) } });
-const userMessage = (sessionId = 's1') => ({ type: 'user-message', sessionId, uuid: 'um', timestamp: NOW, data: { text: 'next' } });
+  ev('tool-result', { toolUseId: id, toolResult: 'Sent 1 file to the user.', isError: opts.isError ?? false, ...(opts.recordedAt !== undefined ? { recordedAt: opts.recordedAt } : {}) },
+    { sessionId: opts.sessionId ?? 's1', uuid: `r-${id}`, timestamp: opts.timestamp ?? NOW });
+const userMessage = (sessionId = 's1') => ev('user-message', { text: 'next' }, { sessionId, uuid: 'um', timestamp: NOW });
 
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(NOW); });
 afterEach(() => { vi.useRealTimers(); });
