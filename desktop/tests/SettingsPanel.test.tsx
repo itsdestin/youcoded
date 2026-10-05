@@ -29,7 +29,7 @@ describe('SettingsPanel — drawer edges', () => {
     expect(panel).toMatch(/settings-drawer-header[^"\n]*\bpx-4\b[^"\n]*\bpy-3\b"/);
     expect(panel).not.toMatch(/settings-drawer-header[^"\n]*\bborder-b\b/);
     expect(panel).toMatch(/<h2 className="text-base font-medium text-fg">Settings<\/h2>/);
-    expect(css).toMatch(/\.settings-drawer-header::after\s*\{[^}]*left:\s*16px;[^}]*right:\s*16px;[^}]*linear-gradient\(to right, transparent, var\(--edge\) 8%, var\(--edge\) 92%, transparent\)/);
+    expect(css).toMatch(/\.settings-drawer-header::after\s*\{[^}]*left:\s*16px;[^}]*right:\s*16px;[^}]*linear-gradient\(to right, transparent, var\(--edge-card\) 8%, var\(--edge-card\) 92%, transparent\)/);
   });
 
   it('preserves the unchanged Today pane of the visual comparison', () => {

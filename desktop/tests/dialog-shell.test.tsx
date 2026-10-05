@@ -81,7 +81,7 @@ describe('Dialog shell', () => {
     // WHY: CSS and the rendered hook must agree; jsdom cannot compute mask or
     // gradient styles, so pin their exact shape alongside the real DOM classes.
     const css = readSource(join(__dirname, '..', 'src', 'renderer', 'components', 'ui', 'Dialog.css'));
-    expect(css).toMatch(/\.dialog-header::after,\s*\[data-session-files-header\]::after\s*\{[^}]*left:\s*16px;[^}]*right:\s*16px;[^}]*var\(--edge\) 8%, var\(--edge\) 92%/);
+    expect(css).toMatch(/\.dialog-header::after,\s*\[data-session-files-header\]::after\s*\{[^}]*left:\s*16px;[^}]*right:\s*16px;[^}]*var\(--edge-card\) 8%, var\(--edge-card\) 92%/);
   });
 
   it('only titled scrolling bodies mask content at both edges, leaving untitled bodies unchanged', () => {

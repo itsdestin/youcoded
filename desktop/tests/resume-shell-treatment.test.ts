@@ -11,7 +11,7 @@ describe('Resume session keeps its chosen outer header and list edge', () => {
     expect(source).toMatch(/data-resume-header[^>]*>/);
     expect(source).toContain('<h2 className="text-base font-medium text-fg">Resume session</h2>');
     expect(source).not.toContain('var(--edge) 14%');
-    expect(css()).toContain('var(--edge) 8%');
+    expect(css()).toContain('var(--edge-card) 8%');
     expect(css()).toContain('left: 16px');
     expect(css()).toContain('right: 16px');
     expect(source).toContain("w-[420px] shrink-0 min-w-0 flex flex-col min-h-0 border-r border-edge overflow-hidden");

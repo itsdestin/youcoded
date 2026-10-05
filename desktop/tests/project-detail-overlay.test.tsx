@@ -17,7 +17,7 @@ describe('Project detail overlay', () => {
     expect(header.className).not.toContain('border-b');
     expect(header.querySelector('span')!.className).toContain('text-base font-medium');
     const css = readSource(join(__dirname, '..', 'src', 'renderer', 'components', 'project-view', 'ProjectDetailOverlay.css'));
-    expect(css).toMatch(/\.project-detail-header::after\s*\{[^}]*left:\s*16px;[^}]*right:\s*16px;[^}]*var\(--edge\) 8%, var\(--edge\) 92%/);
+    expect(css).toMatch(/\.project-detail-header::after\s*\{[^}]*left:\s*16px;[^}]*right:\s*16px;[^}]*var\(--edge-card\) 8%, var\(--edge-card\) 92%/);
   });
 
   it('tracks scroll edges without adding the painted global fade', () => {

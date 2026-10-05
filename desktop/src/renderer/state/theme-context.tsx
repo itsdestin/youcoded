@@ -92,7 +92,7 @@ const LOOK_OVERRIDES_KEY = 'youcoded-look-overrides';
 // deck T-1/T-5, Destin 2026-10-04): setup is brand lavender, and opening a new install in
 // near-black Midnight was the sharpest jump of the first run. Only a NEW install reads
 // this — anyone with a stored theme keeps it.
-export function defaultThemeSlug(): string {
+function defaultThemeSlug(): string {
   const dark = typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)').matches;
   return dark ? 'youcoded-night' : 'youcoded';
 }

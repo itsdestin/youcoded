@@ -13,7 +13,7 @@
       "do": "click",
       "target": {
         "role": "button",
-        "label": "Create session",
+        "label": "Start session",
         "nth": 1
       }
     },

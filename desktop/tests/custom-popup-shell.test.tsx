@@ -20,7 +20,7 @@ describe('approved custom popup shells', () => {
     expect(header.querySelector('h2')!.className).toContain('text-base font-medium');
     expect(header.className).not.toContain('border-b');
     const css = readSource(join(components, 'marketplace', 'FileViewerOverlay.css'));
-    expect(css).toMatch(/\[data-file-viewer-header\]::after\s*\{[^}]*left:\s*16px;[^}]*right:\s*16px;[^}]*var\(--edge\) 8%, var\(--edge\) 92%/);
+    expect(css).toMatch(/\[data-file-viewer-header\]::after\s*\{[^}]*left:\s*16px;[^}]*right:\s*16px;[^}]*var\(--edge-card\) 8%, var\(--edge-card\) 92%/);
   });
 
   it('tracks file scroll room and masks only edges with hidden content', () => {

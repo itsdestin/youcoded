@@ -13,7 +13,7 @@ describe('Marketplace Details outer shell', () => {
     const css = readSource(join(components, 'MarketplaceDetailOverlay.css'));
     expect(source).toContain('data-marketplace-detail-header className="flex items-center justify-between p-3 sm:p-4"');
     expect(source).toContain('<h2 className="text-base font-medium text-fg">Details</h2>');
-    expect(css).toMatch(/\[data-marketplace-detail-header\]::after\s*\{[^}]*left:\s*16px;[^}]*right:\s*16px;[^}]*var\(--edge\) 8%, var\(--edge\) 92%/);
+    expect(css).toMatch(/\[data-marketplace-detail-header\]::after\s*\{[^}]*left:\s*16px;[^}]*right:\s*16px;[^}]*var\(--edge-card\) 8%, var\(--edge-card\) 92%/);
     expect(source).toContain('<h1 className="text-xl sm:text-2xl font-semibold text-fg">{entry.displayName}</h1>');
     expect(source).toContain('<h1 className="text-xl sm:text-2xl font-semibold text-fg">{entry.name}</h1>');
   });
