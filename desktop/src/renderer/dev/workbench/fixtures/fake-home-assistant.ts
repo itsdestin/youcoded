@@ -105,8 +105,14 @@ export function fakeHomeAssistantReset(): void {
   nestSignedIn = false;
   cameraEventsOn = false;
   liveSessions.clear();
+  // WHY (review F3): AREAS is mutated by area_registry/create and /update; without this a room made or renamed in one test
+  // outlived the reset ROOMS and disagreed with them in the next.
+  AREAS.splice(0, AREAS.length, ...SEED.map((r) => ({ area_id: r.id, name: r.name })));
+  lastBrightness.clear();
   calls.length = 0;
 }
+/** A light's brightness before it was switched off, so turning it on again with no brightness restores it (as Home Assistant does). */
+const lastBrightness = new Map<string, number>();
 
 /** Every service call the page made since the last reset, in order: lets a test see WHICH service a button used
  *  (media_seek, or remote.send_command with a key name) without reading the page's code. */
@@ -189,6 +195,7 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
   if (hist) {
     const from = Date.parse(decodeURIComponent(hist[1])) || Date.now() - 86400000;
     const wanted = (url.searchParams.get('filter_entity_id') ?? '').split(',').filter(Boolean);
+    // WHY (review F13): Home Assistant answers an entity with no changes in the window by leaving its list out (an empty list overall).
     return ok(JSON.stringify(wanted.map((entity) => {
       const rows = cameraEventsOn ? eventLog.filter((e) => e.entity === entity) : [];
       return [
@@ -196,7 +203,7 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
         ...rows.map((e) => ({ entity_id: entity, state: e.state ?? new Date(Date.now() - e.minAgo * 60000 + (e.offsetSec ?? 0) * 1000).toISOString(), attributes: { event_type: e.type }, last_changed: new Date(Date.now() - e.minAgo * 60000).toISOString() }))
           .filter((e) => !Date.parse(e.state) || Date.parse(e.state) >= from),
       ];
-    }).filter((l) => l.length)));
+    }).filter((l) => l.length > 1)));
   }
   const lb = /^\/api\/logbook\/(.+)$/.exec(url.pathname);
   if (lb) {
@@ -214,6 +221,8 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
         people: [{ user: USER_DESTIN, name: 'Destin' }],
       }));
     }
+    // WHY (review F14): only the two known templates are answered; a future third one gets a refusal, not the rooms list by accident.
+    if (!(req.body ?? '').includes('namespace(rooms=[])')) return { ok: true, status: 400, headers: { 'content-type': 'text/plain' }, body: 'Unknown template.' };
     return ok(JSON.stringify(ROOMS.filter((r) => r.items.length).map((r) => ({ ...r, items: r.items.map((t) => ({ ...t, device: deviceOf(t.id), ...(cameraEventsOn && eventEntities[deviceOf(t.id)] ? { evs: eventEntities[deviceOf(t.id)] } : {}) })) }))));
   }
   // A Nest event's recorded clip and thumbnail (spec 2026-10-04, Part 3). The
@@ -242,11 +251,17 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
       if (!t || t.state === 'unavailable') continue;
       const [, action] = svc.slice(1);
       const stateBefore = t.state;
+      if (action === 'turn_off' && id.startsWith('light.') && t.brightness) lastBrightness.set(id, t.brightness);
       if (action === 'turn_off') t.state = 'off';
-      if (action === 'turn_on') {
+      // WHY (review F6): real Home Assistant treats brightness_pct 0 as "turn off" (the light is NOT left on at 0), and a
+      // turn_on with no brightness brings back what the light had before, not always full.
+      if (action === 'turn_on' && id.startsWith('light.') && data.brightness_pct === 0) {
+        if (t.brightness) lastBrightness.set(id, t.brightness);
+        t.state = 'off'; t.brightness = null;
+      } else if (action === 'turn_on') {
         t.state = id.startsWith('media_player.') ? 'idle' : 'on';
         if (typeof data.brightness_pct === 'number') t.brightness = Math.round(data.brightness_pct * 2.55);
-        else if (id.startsWith('light.') && !t.brightness) t.brightness = 255;
+        else if (id.startsWith('light.') && !t.brightness) t.brightness = lastBrightness.get(id) ?? 255;
       }
       if (action === 'turn_on' && Array.isArray(data.rgb_color)) { t.rgb = data.rgb_color as number[]; t.k = null; }
       if (action === 'turn_on' && typeof data.color_temp_kelvin === 'number') { t.k = data.color_temp_kelvin; t.rgb = null; }
@@ -482,6 +497,14 @@ function answerOne(raw: string): string | null {
       const area = { area_id: areaId, name };
       AREAS.push(area);
       return reply(id, area);
+    }
+    // WHY (review F7): the page rolls back a half-made room with this (home-assistant-page.ts); answering "Unknown command" meant
+    // the rollback could never succeed here. Real Home Assistant also leaves the area's devices in place, just unassigned.
+    case 'config/area_registry/delete': {
+      const at = AREAS.findIndex((a) => a.area_id === m.area_id);
+      if (at < 0) return reply(id, null, 'No such room.');
+      AREAS.splice(at, 1);
+      return reply(id, null);
     }
     case 'config/area_registry/update': {
       const area = AREAS.find((a) => a.area_id === m.area_id);

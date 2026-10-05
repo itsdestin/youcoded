@@ -60,15 +60,6 @@ export const PAGES: readonly ScreenEntry[] = [
   // Redesign options, one screen each (fixtures/home-variants/), listed from the registry so
   // a helper adding an option never edits this file.
   ...homeVariantEntries().map(([k, v]) => ({ ...pg(`pages/page/page-home#v-${k}`, 'view', 'redesign'), params: { pagesHome: `v-${k}` }, ...(v.sameAs ? { sameAs: v.sameAs } : {}) })),
-  { ...pg('pages/page/page-home#mock-device-inplace', 'view'), params: { pagesHome: 'mock-device-inplace' } },
-  { ...pg('pages/page/page-home#mock-device-popup', 'view'), params: { pagesHome: 'mock-device-popup' } },
-  { ...pg('pages/page/page-home#mock-device-panel', 'view'), params: { pagesHome: 'mock-device-panel' } },
-  { ...pg('pages/page/page-home#mock-activity-tab', 'view'), params: { pagesHome: 'mock-activity-tab' } },
-  { ...pg('pages/page/page-home#mock-activity-feed', 'view'), params: { pagesHome: 'mock-activity-feed' } },
-  { ...pg('pages/page/page-home#mock-activity-timeline', 'view'), params: { pagesHome: 'mock-activity-timeline' } },
-  { ...pg('pages/page/page-home#mock-camera-tap', 'view'), params: { pagesHome: 'mock-camera-tap' } },
-  { ...pg('pages/page/page-home#mock-camera-always', 'view'), params: { pagesHome: 'mock-camera-always' } },
-  { ...pg('pages/page/page-home#mock-camera-events', 'view'), params: { pagesHome: 'mock-camera-events' } },
   pg('pages/page/page-analytics', 'view', 'approval'),
   pg('pages/page/page-trip-board', 'view', 'approval', 'error-state'),
   // Office (built in, design stage). Documents need the editor add-on served on

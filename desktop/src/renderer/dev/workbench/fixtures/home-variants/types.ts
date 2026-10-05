@@ -1,8 +1,9 @@
 // One design option for the Home page, shown in the practice app only
-// (`?pagesHome=v-<task>-<key>`). The redesign helpers each own ONE task file
-// in this folder and never edit the page itself while designing, so several
-// can work at once (2026-10-04 redesign plan). The chosen option is built
-// into the real page afterwards, one task at a time.
+// (`?pagesHome=v-<task>-<key>`). A redesign helper adds options as ONE task
+// file in this folder (registered in registry.ts) and never edits the page
+// itself while designing, so several can work at once (2026-10-04 redesign
+// plan). The chosen option is built into the real page afterwards, and its
+// task file is deleted (WHY: the 2026-10-04 round's files were removed at merge prep).
 export interface HomeVariant {
   /** A few words naming the option, shown in screen lists. */
   label: string;
@@ -15,8 +16,6 @@ export interface HomeVariant {
   transform?: (html: string) => string;
   /** The page's saved data to start from (open cards, edit mode, a view…). */
   data?: Record<string, unknown>;
-  /** The pretend Nest account is signed in, so camera cards show their recordings. */
-  nestSignedIn?: boolean;
   /** Looks the same at rest as another screen (motion-only options), and why. */
   sameAs?: { name: string; why: string };
 }

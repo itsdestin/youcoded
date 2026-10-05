@@ -506,7 +506,6 @@ import { createNamingPreview } from './naming-preview';
 import { seedPages } from './fixtures/pages';
 import { fakeCameraDeps, fakeCameraRefuse, fakeCameraRefusal, FAKE_RATE_LIMIT_WHY } from './fixtures/fake-camera';
 import { fakeHomeAssistantFetch, fakeHomeAssistantIds, fakeHomeAssistantLive, fakeHomeAssistantCameraEvents, fakeHomeAssistantNestSignedIn, fakeHomeAssistantSet, fakeHomeAssistantSocket } from './fixtures/fake-home-assistant';
-import { withHomeMockup } from './fixtures/home-assistant-mockups';
 import { findHomeVariant, withHomeVariant } from './fixtures/home-variants/registry';
 import { OFFICE_EDITOR_ORIGIN, OFFICE_FILES, officeFixtureName, officeSampleUrl } from './fixtures/office';
 import { OFFICE_PAGE_SUMMARY } from '../../../shared/pages-types';
@@ -3729,6 +3728,9 @@ function createDocCommentsMock(empty: boolean) {
 function createPagesMock(empty: boolean): PagesBridge {
   // Live sockets (page-live-socket.ts's twin): who holds which, and who listens.
   const liveSockets = new Map<string, { page: string; frame: string; live: ReturnType<typeof fakeHomeAssistantLive> }>();
+  // WHY (review F12): a session is dropped by socketClose only; a page that goes away without closing (the tab navigates or
+  // unloads) left its session in the pretend house's list, iterated by every later change. Close them all when the tab goes.
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') window.addEventListener('pagehide', () => { for (const s of liveSockets.values()) s.live.close(); liveSockets.clear(); });
   const socketSubs = new Set<(e: PageSocketEvent) => void>();
   let liveSeq = 0;
   const liveVideos = new Set<string>();
@@ -3760,9 +3762,6 @@ function createPagesMock(empty: boolean): PagesBridge {
   // `group`: Destin's Room soundbar with its Sonos tick list open (round 5).
   // `device`: the Floor lamp's pop-up open (round 5); `view-activity` is the
   // Activity tab, through the same switch as the other pills.
-  // `mock-<name>`: the connected page with one of the 2026-10-04 design
-  // mockups laid over it (device page, activity, cameras — fixtures/home-assistant-mockups.ts).
-  const mockup = homeView && homeView.startsWith('mock-') ? homeView.slice(5) : null;
   // `camera`: only the cameras, so the camera card (recent events, Watch live)
   // is the whole picture instead of something far down a long page.
   // `camera-events`: the same, with cameras whose events have no recording (fake-home-assistant.ts `fakeHomeAssistantCameraEvents`).
@@ -3778,11 +3777,10 @@ function createPagesMock(empty: boolean): PagesBridge {
     const song = { state: 'playing', title: 'Weightless \u2014 Marconi Union', app: 'Spotify', group: ['media_player.living_room_speaker', 'media_player.roam_2'] };
     fakeHomeAssistantSet('media_player.living_room_speaker', song); fakeHomeAssistantSet('media_player.roam_2', song);
   }
-  if (variant?.nestSignedIn) fakeHomeAssistantNestSignedIn(true);
   if (onlyCameras || homeView === 'view-cameras' || homeView === 'camera-limited') fakeHomeAssistantNestSignedIn(true); // events need the Nest account working
   if (homeView === 'camera-events') fakeHomeAssistantCameraEvents(true);
   fakeCameraRefuse(homeView === 'camera-limited' ? FAKE_RATE_LIMIT_WHY : null);
-  if (onlyCameras || homeView === 'connected' || homeView === 'edit' || homeView === 'remote' || homeView === 'remote-media' || homeView === 'remote-wide' || homeView === 'media-group' || homeView === 'group' || homeView === 'device' || chipView || homeView === 'settings' || chipStyle || mockup || variant) {
+  if (onlyCameras || homeView === 'connected' || homeView === 'edit' || homeView === 'remote' || homeView === 'remote-media' || homeView === 'remote-wide' || homeView === 'media-group' || homeView === 'group' || homeView === 'device' || chipView || homeView === 'settings' || chipStyle || variant) {
     pages = pages.map((p) => (p.id !== 'page-home' ? p : {
       ...p,
       // WHY (screenshots only): the page's first-load rise of room cards runs for about a second, and a picture taken during it misses room cards
@@ -3792,11 +3790,11 @@ function createPagesMock(empty: boolean): PagesBridge {
         const shooting = typeof (window as unknown as { __shootInflight?: number }).__shootInflight === 'number';
         const wide = (h: string) => (homeView === 'remote-wide' ? h.replace('</head>', '<style>.yc-page { max-width: none !important; }</style></head>') : h); // remote-wide: the page's own width cap lifted, so a 1900 px window gives a ~1700 px card
         const still = (h: string) => wide(shooting ? h.replace('<body>', '<body><script>window.__feelOff = true;</script>') : h);
-        return mockup ? { html: still(withHomeMockup(p.html, mockup)) } : variant ? { html: withHomeVariant(p.html, variant) } /* WHY not still(): redesign options carry their own motion switches, and a motion-only option must keep looking different from its 'before' */ : shooting || homeView === 'remote-wide' ? { html: still(p.html) } : {};
+        return variant ? { html: withHomeVariant(p.html, variant) } /* WHY not still(): redesign options carry their own motion switches, and a motion-only option must keep looking different from its 'before' */ : shooting || homeView === 'remote-wide' ? { html: still(p.html) } : {};
       })(),
       connections: (p.connections ?? []).map((c) => (c.kind === 'device' ? { ...c, address: '100.99.234.114:8123', approved: true, savedKey: true } : c)),
       refresh: { at: new Date().toISOString(), failed: false },
-      data: variant?.data ? variant.data : onlyCameras ? { hidden: fakeHomeAssistantIds().filter((id) => !id.startsWith('camera.')), startOpen: [] } : homeView === 'group' ? { groupOpen: ['media_player.destins_room'] } : homeView === 'device' ? { dlg: 'light.living_room_lamp' } : mockup ? { startOpen: mockup.startsWith('device') ? ['living_room'] : [] } : chipStyle ? { chipStyle, startOpen: ['destins_room'] } : chipView ? { view: chipView, startScenes: ['destins_room'], ...(chipView === 'lights' ? { startOpen: ['destins_room'] } : {}), ...(homeView === 'lights-colour' ? { startPalettes: ['light.desk_backlight'] } : {}) } : homeView === 'settings' ? { settingsOpen: true } : homeView === 'remote' ? { remote: ['remote.destins_room_tv_remote'], startOpen: ['destins_room'], hidden: tvOnly } : homeView === 'remote-media' ? { view: 'media', remote: ['remote.destins_room_tv_remote'] } : homeView === 'remote-wide' ? { view: 'media', remote: ['remote.destins_room_tv_remote'], hidden: tvOnly } : homeView === 'media-group' ? { view: 'media' } : {
+      data: variant?.data ? variant.data : onlyCameras ? { hidden: fakeHomeAssistantIds().filter((id) => !id.startsWith('camera.')), startOpen: [] } : homeView === 'group' ? { groupOpen: ['media_player.destins_room'] } : homeView === 'device' ? { dlg: 'light.living_room_lamp' } : chipStyle ? { chipStyle, startOpen: ['destins_room'] } : chipView ? { view: chipView, startScenes: ['destins_room'], ...(chipView === 'lights' ? { startOpen: ['destins_room'] } : {}), ...(homeView === 'lights-colour' ? { startPalettes: ['light.desk_backlight'] } : {}) } : homeView === 'settings' ? { settingsOpen: true } : homeView === 'remote' ? { remote: ['remote.destins_room_tv_remote'], startOpen: ['destins_room'], hidden: tvOnly } : homeView === 'remote-media' ? { view: 'media', remote: ['remote.destins_room_tv_remote'] } : homeView === 'remote-wide' ? { view: 'media', remote: ['remote.destins_room_tv_remote'], hidden: tvOnly } : homeView === 'media-group' ? { view: 'media' } : {
         startOpen: ['destins_room'], startPalettes: ['light.desk_backlight'],
         fav: ['light.living_room_lamp', 'climate.thermostat'],
         ...(homeView === 'edit' ? { editing: true } : {}),
@@ -3815,32 +3813,22 @@ function createPagesMock(empty: boolean): PagesBridge {
     list: async () => summaries(),
     get: async (id) => {
       const page = pages.find((p) => p.id === id);
-      // A mockup is laid over the page only after the page has drawn its
-      // rooms, which the screenshot tool cannot see from out here: count it as
-      // one more thing in flight until the page says the mockup is drawn
-      // (capped at 8 s, so a broken mockup still gets photographed).
       // WHY (2026-10-05): a Home page screen was still shot "Loading your rooms…" (creme, twice in a day) — between the
       // frame starting and its first request to the pretend house nothing is in flight, so the tool saw a quiet page.
       // Count the page as in flight from here until its first answer has come back and had a moment to draw (cap 8 s).
-      if (id === 'page-home') {
-        const w = window as unknown as { __shootInflight?: number };
+      // Only a page that HAS an approved device connection will ask the house anything: the approval screens never do, and
+      // holding them would make every later wait on that screen run to its full cap (review F2).
+      // The shoot tool's first wait is capped at 3 s, so the hold also publishes a deadline (window.__shootHoldUntil) that
+      // scripts/shoot/engine.mjs STILL honours: the wait lasts as long as the hold, not the shorter cap (review F1).
+      if (id === 'page-home' && page?.connections?.some((c) => c.kind === 'device' && c.approved)) {
+        const w = window as unknown as { __shootInflight?: number; __shootHoldUntil?: number };
         if (typeof w.__shootInflight === 'number' && !homeFirstAnswer) {
           w.__shootInflight += 1;
+          w.__shootHoldUntil = performance.now() + 8000;
           let held = true;
-          const release = () => { if (!held) return; held = false; homeFirstAnswer = null; w.__shootInflight = (w.__shootInflight ?? 1) - 1; };
+          const release = () => { if (!held) return; held = false; homeFirstAnswer = null; w.__shootHoldUntil = 0; w.__shootInflight = (w.__shootInflight ?? 1) - 1; };
           homeFirstAnswer = () => { setTimeout(release, 250); };
           setTimeout(release, 8000);
-        }
-      }
-      if (mockup && id === 'page-home') {
-        const w = window as unknown as { __shootInflight?: number };
-        if (typeof w.__shootInflight === 'number') {
-          w.__shootInflight += 1;
-          let done = false;
-          const finish = () => { if (done) return; done = true; w.__shootInflight = (w.__shootInflight ?? 1) - 1; window.removeEventListener('message', onMsg); };
-          const onMsg = (e: MessageEvent) => { if (e.data && e.data.homeMockupReady) finish(); };
-          window.addEventListener('message', onMsg);
-          setTimeout(finish, 8000);
         }
       }
       return page

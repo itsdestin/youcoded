@@ -1,20 +1,9 @@
 // Every task's design options, by task name (see types.ts).
+// To add a task: create <task>.ts exporting `VARIANTS: HomeVariants`, import it here and add `'<task>': imported` to the map below.
+// (The 2026-10-04 round's task files were removed at merge prep, 2026-10-05; they are in git history.)
 import type { HomeVariant, HomeVariants } from './types';
-import { VARIANTS as look } from './look';
-import { VARIANTS as motionNav } from './motion-nav';
-import { VARIANTS as motionState } from './motion-state';
-import { VARIANTS as edit } from './edit';
-import { VARIANTS as audit } from './audit';
-import { VARIANTS as tvRemote } from './tv-remote';
-import { VARIANTS as lightsTab } from './lights-tab';
-import { VARIANTS as mediaTab } from './media-tab';
-import { VARIANTS as pageBg } from './page-bg';
 
-const HOME_VARIANT_TASKS: Record<string, HomeVariants> = {
-  look, 'motion-nav': motionNav, 'motion-state': motionState, edit, audit,
-  'tv-remote': tvRemote, 'lights-tab': lightsTab, 'media-tab': mediaTab,
-  'page-bg': pageBg,
-};
+const HOME_VARIANT_TASKS: Record<string, HomeVariants> = {};
 
 /** Every option with its screen key "<task>-<key>". */
 export function homeVariantEntries(): Array<[string, HomeVariant]> {

@@ -428,3 +428,24 @@ describe('mock contract', () => {
     });
   });
 });
+
+// The Home page's "first answer" hold (2026-10-05 review F1/F2): only a page that will ask the house holds the shoot tool, and it says how long.
+describe('the Home page first-answer hold while shooting', () => {
+  const w = window as unknown as { __shootInflight?: number; __shootHoldUntil?: number };
+  afterEach(() => { delete w.__shootInflight; delete w.__shootHoldUntil; vi.useRealTimers(); window.history.replaceState({}, '', '/'); });
+  const shim = (query: string) => { window.history.replaceState({}, '', query); return (createMockShim(createStore('default')) as any).pages; };
+
+  it('holds, and publishes a deadline the shoot tool waits for, once the page has an approved device connection', async () => {
+    w.__shootInflight = 0;
+    await shim('/?pagesHome=connected').get('page-home');
+    expect(w.__shootInflight).toBe(1);
+    expect(w.__shootHoldUntil).toBeGreaterThan(performance.now());
+  });
+
+  it('takes no hold on the approval screen, where no request is ever made', async () => {
+    w.__shootInflight = 0;
+    await shim('/').get('page-home');
+    expect(w.__shootInflight).toBe(0);
+    expect(w.__shootHoldUntil).toBeUndefined();
+  });
+});

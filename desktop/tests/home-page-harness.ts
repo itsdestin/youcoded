@@ -9,6 +9,7 @@
 import { vi } from 'vitest';
 import { HOME_ASSISTANT_PAGE_HTML } from '../src/renderer/dev/workbench/fixtures/home-assistant-page';
 import { fakeHomeAssistantFetch, fakeHomeAssistantLive, fakeHomeAssistantReset, fakeHomeAssistantSocket } from '../src/renderer/dev/workbench/fixtures/fake-home-assistant';
+import { ROOMS_TEMPLATE } from '../src/renderer/dev/workbench/fixtures/home-assistant-page-templates';
 
 export const BASE = 'http://100.99.234.114:8123';
 export const flush = async () => { await vi.advanceTimersByTimeAsync(0); await vi.advanceTimersByTimeAsync(0); };
@@ -18,7 +19,7 @@ export const tick = async (ms: number) => { await vi.advanceTimersByTimeAsync(ms
 export const house = (path: string, body: unknown) => fakeHomeAssistantFetch({ url: `${BASE}/api/services/${path}`, method: 'POST', body: JSON.stringify(body) } as never);
 /** Switches a light the other way, whichever way it is now, so a test never depends on what an earlier one left behind. */
 export const flip = (entity: string) => {
-  const rooms = JSON.parse((fakeHomeAssistantFetch({ url: `${BASE}/api/template`, method: 'POST', body: 'ROOMS' } as never) as { body: string }).body) as Array<{ items: Array<{ id: string; state: string }> }>;
+  const rooms = JSON.parse((fakeHomeAssistantFetch({ url: `${BASE}/api/template`, method: 'POST', body: JSON.stringify({ template: ROOMS_TEMPLATE }) } as never) as { body: string }).body) as Array<{ items: Array<{ id: string; state: string }> }>;
   const now = rooms.flatMap((r) => r.items).find((i) => i.id === entity)!.state;
   house(now === 'on' ? 'light/turn_off' : 'light/turn_on', { entity_id: entity });
 };
