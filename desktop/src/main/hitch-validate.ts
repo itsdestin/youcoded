@@ -29,12 +29,12 @@ type CleanEntry =
 // no duration of its own to rate-limit by and has its own, more generous, per-minute cap (see hitch-recorder.ts). EVERY string is an
 // enum from this file; there is no free-text slot, so no session id/name/path can reach the line — the window uses the session id
 // only to find the pane in memory and never sends it.
-export const SWITCH_CAUSES = ['pill', 'menu', 'key', 'drawer', 'auto', 'other'] as const;
+const SWITCH_CAUSES = ['pill', 'menu', 'key', 'drawer', 'auto', 'other'] as const;
 const SWITCH_VIEWS = new Set(['chat', 'terminal']);
 const SWITCH_KINDS = new Set(['claude', 'native', 'shell']);
 const SWITCH_ENDS = new Set(['settled', 'streaming', 'cap', 'interrupted', 'hidden', 'closed']);
-export const MAX_SWITCHES_PER_BATCH = 100;
-export interface CleanSwitch {
+const MAX_SWITCHES_PER_BATCH = 100;
+interface CleanSwitch {
   t: number; cause: string; vm: string; dk: string; str: boolean; cold: boolean; open: number;
   ff: number | null; st: number | null; end: string; e1: number | null; e2: number | null; mut: number;
   ls: number; lsv: number; loaf: number; loafMs: number; ind: number | null; gap: number | null; drain: number | null;
