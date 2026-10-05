@@ -175,12 +175,25 @@ function homeAssistantPageHtml(): string {
     });
   }
 
+  // WHY: a Hue room is also a light of its own (light.destin_s_room lists its 9 lights). Drawn, it was a tile for the
+  // whole room inside the room's own card. A group whose lights are all already in that room is dropped; the room's All
+  // button and bar already do its job. A group reaching into other rooms stays.
+  function dropRoomGroups(list) {
+    list.forEach(function (r) {
+      var ids = {}; r.items.forEach(function (x) { ids[x.id] = 1; });
+      r.items = r.items.filter(function (x) {
+        var m = Array.isArray(x.members) ? x.members.filter(function (id) { return id !== x.id; }) : [];
+        return m.length < 2 || !m.every(function (id) { return ids[id]; });
+      });
+    });
+  }
   function load() {
     if (!base) { banner('This page has not been connected to Home Assistant yet.'); return; }
     var sentAt = Date.now();
     call('/api/template', { template: TEMPLATE }).then(function (r) {
       var first = rooms === null;
       rooms = JSON.parse(r.body);
+      dropRoomGroups(rooms);
       noteReports();
       camPrune(); // frames kept for cameras no longer on the page are dropped
       // WHY stamps (redesign audit F4 "the newest one wins", code review 4): every state

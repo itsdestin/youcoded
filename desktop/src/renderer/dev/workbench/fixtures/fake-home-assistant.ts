@@ -17,6 +17,8 @@ interface Thing {
   maker?: string; entry?: string; since?: string; upd?: string;
   /** Sonos `group_members`: the speakers playing together, leader first. */
   group?: string[];
+  /** A light that is itself a group (a Hue room): the lights it switches. */
+  members?: string[];
   sw?: string;
   /** `media_position` (seconds) and `media_position_updated_at` (when that was true): what the media_seek +/-10s buttons work from. */
   pos?: number; posAt?: string;
@@ -33,6 +35,8 @@ function seed(): Array<{ id: string; name: string; items: Thing[] }> {
       { id: 'light.desk_backlight', name: 'Desk backlight', state: 'on', brightness: 102, modes: ['color_temp', 'xy'], rgb: [50, 110, 255] },
       { id: 'light.hue_play_1', name: 'Hue Play 1', state: 'on', brightness: 200, modes: ['color_temp', 'xy'], rgb: [150, 80, 255] },
       { id: 'light.tv_backlight', name: 'TV backlight', state: 'unavailable', modes: dim },
+      // The Hue room itself, as the real house has it (light.destin_s_room lists its lights): the page must never draw it.
+      { id: 'light.destins_room_hue', name: "Destin's Room", state: 'on', brightness: 200, modes: ['color_temp', 'xy'], members: ['light.overhead_light', 'light.desk_backlight', 'light.hue_play_1', 'light.tv_backlight'] },
       { id: 'media_player.destins_room_tv', name: "Destin's Samsung TV", state: 'off', features: 4, vol: 0.2, model: 'QN65Q80CAFXZA', dc: 'tv' },
       // Named like the room, as the real Sonos Beam is: it must never get the
       // TV's remote (round 5 testing).

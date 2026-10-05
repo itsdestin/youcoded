@@ -111,3 +111,14 @@ it('the Home tab keeps its own lights cards', async () => {
   expect(qa('.lt')).toHaveLength(0);
   expect(qa('.lights')).not.toHaveLength(0);
 });
+
+it('never draws a Hue room (a light whose members are that room\'s lights) as a light of its own, on either tab', async () => {
+  // WHY: the real house's light.destin_s_room lists its 9 lights; drawn, it was a tile for the whole room inside the room's card.
+  await mount({ data: OPEN, fetchHook: noCameraPicture });
+  expect(cards()).not.toContain('light.destins_room_hue');
+  expect(cards()).toContain('light.overhead_light');
+  expect(q('[data-lt="destins_room"] .tile.all .sub').textContent).not.toMatch(/4 of|of 4/); // the group is not counted as a light
+  unmount();
+  await mount({ data: { startOpen: ['destins_room'] }, fetchHook: noCameraPicture });
+  expect(document.querySelector('[data-eid="light.destins_room_hue"]')).toBeNull();
+});
