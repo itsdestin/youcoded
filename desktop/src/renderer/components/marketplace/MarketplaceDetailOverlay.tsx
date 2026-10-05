@@ -18,17 +18,18 @@ import type { ThemeRegistryEntryWithStatus } from "../../../shared/theme-marketp
 import LikeButton from "./LikeButton";
 // Marketplace overhaul (2026-08-27): trust chips, "What this can do", and the
 // Feedback section (thumbs + comments) replace star reviews.
-import { SourceBadge, ScanBadge, AuthorBadge, MetaChip } from "./TrustBadges";
+import { SourceBadge, ScanBadge, AuthorBadge } from "./TrustBadges";
 import { CapabilityList } from "./CapabilityList";
 import FeedbackSection, { MIN_VOTES_FOR_PCT, ThumbIcon, thumbsSummary } from "./FeedbackSection";
 import { CATALOG_TYPE_LABEL, isInstallableSource } from "../../../shared/catalog-types";
 import FileViewerOverlay, { type FileViewerTarget } from "./FileViewerOverlay";
 // Task 1: an installed item with an update available needs a way to take it.
 import UpdateButton from "./UpdateButton";
-import { Button, Callout, CARD_LEVEL_1, Pill, SettingRow } from "../ui";
+import { Button, Callout, CARD_LEVEL_1, Chip, Pill, SettingRow } from "../ui";
 // Task 3: `longDescription` is markdown and used to be printed verbatim.
 import MarkdownContent from "../MarkdownContent";
-import { DetailActions, DetailIdentity, DetailPage, type DetailSection } from "./DetailPage";
+import { DetailActions, DetailIdentity, DetailPage, PAIRED_PRIMARY, type DetailSection } from "./DetailPage";
+import { workbenchThemeLiked } from "../../workbench-mode";
 
 export type DetailTarget =
   | { kind: "skill"; id: string }
@@ -146,7 +147,7 @@ function NotFound({ what, onClose }: { what: "plugin" | "theme"; onClose(): void
 
 // ── Quick actions (top right of the top card) ───────────────────────────────
 
-function StarIcon({ filled }: { filled: boolean }) {
+export function StarIcon({ filled }: { filled: boolean }) {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth={filled ? 0 : 1.8} strokeLinejoin="round" aria-hidden>
       <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
@@ -154,7 +155,7 @@ function StarIcon({ filled }: { filled: boolean }) {
   );
 }
 
-function ShareIcon() {
+export function ShareIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
       <circle cx="18" cy="5" r="3" />
@@ -207,7 +208,7 @@ function QuickActions({ installed, favorited, onToggleFavorite, onShare, shareNe
 /** "Installing…" — the main button's busy state, full width like the button it replaces. */
 function InstallingButton() {
   return (
-    <Button size="lg" disabled className="cursor-wait">
+    <Button size="lg" disabled className={`${PAIRED_PRIMARY} cursor-wait`}>
       <span className="inline-block w-3 h-3 border-2 border-on-accent border-t-transparent rounded-full animate-spin" aria-hidden />
       Installing…
     </Button>
@@ -227,28 +228,28 @@ function InstallFailed({ message, onRetry }: { message: string; onRetry(): void 
 }
 
 /** A number chip: bold number, grey word — "412 installs" (guide "Text and numbers"). Same
- *  chip recipe as the trust badges beside it (MetaChip — round 2, MD-1 "install is tiny"). */
+ *  chip recipe as the trust badges beside it (Chip — round 2, MD-1 "install is tiny"). */
 function CountChip({ n, word }: { n: number; word: string }) {
   return (
-    <MetaChip>
+    <Chip>
       <span className="font-medium text-fg">{n.toLocaleString()}</span>
       {n === 1 ? word : `${word}s`}
-    </MetaChip>
+    </Chip>
   );
 }
 
 /** "👍 93%" — or the raw count under MIN_VOTES_FOR_PCT, where a percentage would lie. Drawn
- *  inside MetaChip rather than reusing the card's ThumbsSummary, whose own 12px text made
+ *  inside Chip rather than reusing the card's ThumbsSummary, whose own 12px text made
  *  this chip taller than its neighbours in round 1. */
 function ThumbsChip({ up, down }: { up?: number; down?: number }) {
   const s = thumbsSummary(up, down);
   if (!s) return null;
   const low = s.total < MIN_VOTES_FOR_PCT;
   return (
-    <MetaChip title={low ? `${s.up} of ${s.total} found it helpful` : `${s.pct}% of ${s.total.toLocaleString()} people found it helpful`}>
+    <Chip title={low ? `${s.up} of ${s.total} found it helpful` : `${s.pct}% of ${s.total.toLocaleString()} people found it helpful`}>
       <span className="inline-flex text-fg-dim"><ThumbIcon /></span>
       {low ? s.up : `${s.pct}%`}
-    </MetaChip>
+    </Chip>
   );
 }
 
@@ -318,7 +319,7 @@ function SkillDetail({
       </DetailActions>
     );
   } else if (!installError) {
-    actions = <DetailActions><Button size="lg" onClick={onInstall}>Install</Button></DetailActions>;
+    actions = <DetailActions><Button size="lg" className={PAIRED_PRIMARY} onClick={onInstall}>Install</Button></DetailActions>;
   }
 
   const identity = (
@@ -429,16 +430,16 @@ function SkillDetail({
 
 /** Topics, life areas and audience — neutral chips at the foot of the About card (they
  *  describe the item, so they live inside the card that describes it — guide "Card
- *  levels"). The same chip as the top card's row (MetaChip), so every chip is one size. */
+ *  levels"). The same chip as the top card's row (Chip), so every chip is one size. */
 function TopicChips({ entry }: { entry: SkillEntry }) {
   const tags = entry.tags || [];
   const lifeAreas = entry.lifeArea || [];
   if (!tags.length && !lifeAreas.length && !entry.audience) return null;
   return (
     <div className="flex flex-wrap gap-1.5 items-center">
-      {tags.map((t) => <MetaChip key={`tag-${t}`}>#{t}</MetaChip>)}
-      {lifeAreas.map((a) => <MetaChip key={`area-${a}`}>{a.charAt(0).toUpperCase() + a.slice(1)}</MetaChip>)}
-      {entry.audience && <MetaChip>{entry.audience === "developer" ? "For developers" : "For everyone"}</MetaChip>}
+      {tags.map((t) => <Chip key={`tag-${t}`}>#{t}</Chip>)}
+      {lifeAreas.map((a) => <Chip key={`area-${a}`}>{a.charAt(0).toUpperCase() + a.slice(1)}</Chip>)}
+      {entry.audience && <Chip>{entry.audience === "developer" ? "For developers" : "For everyone"}</Chip>}
     </div>
   );
 }
@@ -580,7 +581,7 @@ function ThemeDetail({
   if (isInstalling) {
     actions = <DetailActions><InstallingButton /></DetailActions>;
   } else if (!installed) {
-    if (!installError) actions = <DetailActions><Button size="lg" onClick={onInstall}>Install</Button></DetailActions>;
+    if (!installError) actions = <DetailActions><Button size="lg" className={PAIRED_PRIMARY} onClick={onInstall}>Install</Button></DetailActions>;
   } else {
     // installTheme already overwrites an installed slug in place, so the update path
     // always worked — there was simply no button. Uninstall is outlined now, never
@@ -590,7 +591,7 @@ function ThemeDetail({
       <DetailActions>
         <Button variant="secondary" size="lg" onClick={handleUninstall}>Uninstall</Button>
         {updateAvailable && <UpdateButton id={entry.slug} kind="theme" variant="button" primary={isActive} block />}
-        {!isActive && <Button size="lg" onClick={onApply}>Apply theme</Button>}
+        {!isActive && <Button size="lg" className={PAIRED_PRIMARY} onClick={onApply}>Apply theme</Button>}
       </DetailActions>
     );
   }
@@ -618,7 +619,7 @@ function ThemeDetail({
         <>
           {/* Theme "like" = the public count on the Worker; a heart-only button, its count
               is the "N likes" fact (marketplace-detail-3#M3-1). */}
-          <LikeButton themeId={entry.slug} initialCount={likes} onCountChange={setLikeCount} />
+          <LikeButton themeId={entry.slug} initialCount={likes} initialLiked={workbenchThemeLiked()} onCountChange={setLikeCount} />
           {/* Local favourite (drives the Appearance panel), distinct from the public like. */}
           <QuickActions installed={installed} favorited={favorited} onToggleFavorite={onToggleFavorite} onShare={onShare} shareNeedsInstall={false} />
         </>

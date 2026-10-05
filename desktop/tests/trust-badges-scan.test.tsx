@@ -11,8 +11,9 @@ import React from 'react';
 import '@testing-library/jest-dom/vitest';
 import { describe, it, expect, afterEach } from 'vitest';
 import { render, cleanup, screen } from '@testing-library/react';
-import { AuthorBadge, MetaChip, ScanBadge, scanExplainer, SCAN_LABEL, SourceBadge, sourceLabel, sourceExplainer } from '../src/renderer/components/marketplace/TrustBadges';
+import { AuthorBadge, ScanBadge, scanExplainer, SCAN_LABEL, SourceBadge, sourceLabel, sourceExplainer } from '../src/renderer/components/marketplace/TrustBadges';
 import type { CatalogMeta } from '../src/shared/catalog-types';
+import { Chip } from '../src/renderer/components/ui';
 
 afterEach(cleanup);
 
@@ -109,9 +110,9 @@ describe('SourceBadge — names the list, never a vetting', () => {
 // a thumbs summary carrying its own larger text — and nothing compared them. Pinned here as
 // the cause, not a pixel: every fact chip renders with the badges' own box.
 describe('fact chips share the badge box', () => {
-  it('renders MetaChip, the scan, source and author badges with one box', () => {
+  it('renders the fact chip, the scan, source and author badges with one box', () => {
     const cls = (ui: React.ReactElement) => (render(ui).container.firstElementChild as HTMLElement).className;
-    const meta = cls(<MetaChip>412 installs</MetaChip>);
+    const meta = cls(<Chip>412 installs</Chip>);
     expect(cls(<ScanBadge scan={{ status: 'checked' }} />)).toBe(meta);
     expect(cls(<SourceBadge origin={{ tier: 'youcoded' }} />)).toBe(meta);
     // The author chip adds only its truncation limits on top of the same box.

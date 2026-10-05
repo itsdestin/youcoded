@@ -8,7 +8,16 @@
 // document shows the editor's own "couldn't open" state, which is the honest answer.
 import type { OfficeFile } from '../../../../shared/office-types';
 
-export const OFFICE_EDITOR_ORIGIN = 'http://127.0.0.1:4717';
+// `?officePort=` — WHY (2026-10-05): shoot starts this checkout's own editor on a free port when
+// another worktree's holds 4717 (scripts/shoot/office-editor.mjs in the workspace), so a picture
+// never shows a different build of the editor and verify is not blocked by another session.
+function officePort(): number {
+  try {
+    const p = Number(new URLSearchParams(typeof location !== 'undefined' ? location.search : '').get('officePort'));
+    return Number.isInteger(p) && p > 0 && p < 65536 ? p : 4717;
+  } catch { return 4717; }
+}
+export const OFFICE_EDITOR_ORIGIN = `http://127.0.0.1:${officePort()}`;
 
 const DIR = '/home/you/Projects/community-garden';
 

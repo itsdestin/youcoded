@@ -234,6 +234,14 @@ export function DetailIdentity({
   );
 }
 
+/** Added to the filled buttons beside an outlined one on a detail page.
+ *  WHY (found 2026-10-05 by shoot's "parts agree" pass on its first run): an outlined button's 1px
+ *  border makes it 2px taller than a filled one (Uninstall 38px beside Connect / Apply theme
+ *  36px). A transparent border gives the filled one the same box. Scoped to the detail pages: the
+ *  same 2px difference exists wherever the app pairs the two, and the fix belongs in the Button
+ *  primitive — an app-wide size change left for Destin's call, not made here. */
+export const PAIRED_PRIMARY = 'border border-transparent';
+
 /**
  * The item's buttons, placed by the guide's width rule (guide "Buttons"; decisions
  * BP-1, BP-3, BW-1/2): one button is full width; two sit side by side hugging the right

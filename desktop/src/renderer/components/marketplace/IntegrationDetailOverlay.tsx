@@ -8,10 +8,9 @@
 import React, { useState } from "react";
 import type { IntegrationEntry, IntegrationState } from "../../../shared/types";
 import { platformListDisplay } from "../../../shared/platform-display";
-import { Button, Callout, Pill, SettingRow } from "../ui";
-import { MetaChip } from "./TrustBadges";
+import { Button, Callout, Chip, Pill, SettingRow } from "../ui";
 import type { PillTone } from "../ui/Pill";
-import { DetailActions, DetailIdentity, DetailPage, type DetailSection } from "./DetailPage";
+import { DetailActions, DetailIdentity, DetailPage, PAIRED_PRIMARY, type DetailSection } from "./DetailPage";
 
 export type IntegrationCardItem = IntegrationEntry & { state: IntegrationState };
 
@@ -58,12 +57,12 @@ export function IntegrationDetailOverlay({
   let actions: React.ReactNode = null;
   if (!unavailable) {
     if (!s.installed) {
-      actions = <DetailActions><Button size="lg" onClick={() => { void onInstall(); }}>{s.error ? 'Retry install' : 'Install'}</Button></DetailActions>;
+      actions = <DetailActions><Button size="lg" className={PAIRED_PRIMARY} onClick={() => { void onInstall(); }}>{s.error ? 'Retry install' : 'Install'}</Button></DetailActions>;
     } else if (!s.connected) {
       actions = (
         <DetailActions>
           <Button variant="secondary" size="lg" onClick={() => { void onUninstall(); }}>Uninstall</Button>
-          <Button size="lg" onClick={() => { void onConnect(); }}>Connect</Button>
+          <Button size="lg" className={PAIRED_PRIMARY} onClick={() => { void onConnect(); }}>Connect</Button>
         </DetailActions>
       );
     } else {
@@ -114,8 +113,8 @@ export function IntegrationDetailOverlay({
           {item.longDescription && <p className="text-sm text-fg-2 whitespace-pre-wrap">{item.longDescription}</p>}
           {(tags.length > 0 || areas.length > 0) && (
             <div className="flex flex-wrap gap-1.5 items-center">
-              {tags.map((t) => <MetaChip key={`tag-${t}`}>#{t}</MetaChip>)}
-              {areas.map((a) => <MetaChip key={`area-${a}`}>{a.charAt(0).toUpperCase() + a.slice(1)}</MetaChip>)}
+              {tags.map((t) => <Chip key={`tag-${t}`}>#{t}</Chip>)}
+              {areas.map((a) => <Chip key={`area-${a}`}>{a.charAt(0).toUpperCase() + a.slice(1)}</Chip>)}
             </div>
           )}
         </div>

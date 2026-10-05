@@ -69,6 +69,9 @@ export default function UpdateButton({ id, kind, variant = "pill", block = false
       {variant === "button" ? (
         <Button
           variant={primary ? "primary" : "secondary"}
+          // A filled Update sits beside the outlined Uninstall: same box height (DetailPage's
+          // PAIRED_PRIMARY says why; not imported, to keep this card-and-page piece standalone).
+          className={primary ? "border border-transparent" : undefined}
           size="lg"
           onClick={run}
           disabled={updating}

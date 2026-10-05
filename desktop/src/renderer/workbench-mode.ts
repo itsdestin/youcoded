@@ -165,3 +165,11 @@ export function workbenchChromeStyle(): ChromeStyleOverride | null {
     ? (raw as ChromeStyleOverride)
     : null;
 }
+
+/** `?liked=1` — a theme page opens with its heart already liked (marketplace-detail friction,
+ *  proposal 10): the practice backend has no per-user like, so the liked state could never be
+ *  photographed. False outside the workbench and the photo-only build. */
+export function workbenchThemeLiked(): boolean {
+  if (!isWorkbenchMode()) return false;
+  return new URLSearchParams(location.search).get('liked') === '1';
+}

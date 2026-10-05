@@ -12,6 +12,7 @@
 import React from 'react';
 import type { CatalogMeta, OriginTier, ScanStatus } from '../../../shared/catalog-types';
 import { OriginIcon } from './type-icons';
+import { CHIP } from '../ui';
 
 // WHY THIS REPLACED THE "Verified / Community" TIER (2026-08-31).
 //
@@ -79,7 +80,8 @@ export function scanExplainer(scan: CatalogMeta['scan']): string {
   return 'We haven\'t checked this one — read "What this can do" and look at the source before you install it.';
 }
 
-const BADGE = 'inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-2xs text-fg-2 bg-inset border border-edge-dim whitespace-nowrap';
+// The fact chip's own box (components/ui/Chip.tsx) — the badges below ARE chips, with an icon.
+const BADGE = CHIP;
 
 /** Shield glyph: tick (checked), exclamation (caution), or empty outline. */
 export function ShieldIcon({ status, size = 12 }: { status: ScanStatus; size?: number }) {
@@ -141,15 +143,4 @@ export function SourceBadge({ origin, size = 'sm' }: { origin: CatalogMeta['orig
       {label}
     </span>
   );
-}
-
-/** Any other short fact in a chip row — "412 installs", "👍 93%", "1,240 downloads".
- *  WHY (marketplace-detail-1#MD-1, Destin: "the chips are different sizes for some reason
- *  (install is tiny)"): the detail page drew its number chips with the shared `Badge`
- *  (11px with `leading-none`, so a shorter box) beside these badges (11px at normal line
- *  height), and the thumbs chip carried its own 12px text inside — three heights in one
- *  row. Every chip in a row now comes from this one recipe (BADGE), so they cannot drift
- *  apart again; tests/trust-badges-scan.test.tsx pins that they share it. */
-export function MetaChip({ children, title }: { children: React.ReactNode; title?: string }) {
-  return <span className={BADGE} title={title} data-meta-chip>{children}</span>;
 }

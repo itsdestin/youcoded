@@ -13,4 +13,7 @@ export const APP: readonly ScreenEntry[] = [
   app('app/unsaved-before-quit/discard', 'dialog'),
   // Everything got saved while the prompt was open: "All saved." with Quit / Cancel.
   app('app/unsaved-before-quit/all-saved', 'dialog'),
+  // Not a screen of the app: every shared hand-drawn icon at 48px (dev/workbench/IconSheet.tsx),
+  // so a malformed drawing is visible at a glance. Photo-only build only.
+  { name: 'dev/icons', tags: ['dev'], viewport: { width: 1440, height: 1300 } },
 ];

@@ -16,6 +16,9 @@ export type { ButtonProps, ButtonVariant, ButtonSize } from './Button';
 export { Badge } from './Badge';
 export type { BadgeProps } from './Badge';
 
+// The fact chip (2026-10-05): one recipe for every chip in a row of facts — Chip.tsx says why.
+export { Chip, CHIP } from './Chip';
+
 export { CloseButton } from './CloseButton';
 export type { CloseButtonProps } from './CloseButton';
 

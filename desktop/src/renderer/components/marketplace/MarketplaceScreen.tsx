@@ -47,6 +47,7 @@ const SHOOT_DETAIL_IDS: Record<string, string> = {
   member: 'superpowers/brainstorming',
   caution: 'browser-use',
   connection: 'mcp-registry/io.github.modelcontextprotocol/filesystem',
+  install: 'browser-use',
 };
 
 interface Props {
@@ -92,11 +93,15 @@ export default function MarketplaceScreen({
   useScreenOpen('marketplace/detail', (sub) => {
     setDetailScreen(sub ? `marketplace/detail/${sub}` : undefined);
     setDetail({ kind: 'skill', id: SHOOT_DETAIL_IDS[sub ?? ''] ?? 'civic-report' });
+    // `install`: press Install on an item that is not installed, so the practice backend's
+    // ?install=fail / ?install=slow states (an install that fails, one still running) show.
+    if (sub === 'install') mp.installSkill(SHOOT_DETAIL_IDS.install).catch(() => undefined);
   }, Object.keys(SHOOT_DETAIL_IDS).filter(Boolean));
   useScreenOpen('marketplace/theme-detail', (sub) => {
     setDetailScreen(sub ? `marketplace/theme-detail/${sub}` : undefined);
-    setDetail({ kind: 'theme', slug: sub === 'not-installed' ? 'cotton-candy-sky' : 'meadow-mist' });
-  }, ['not-installed']);
+    setDetail({ kind: 'theme', slug: sub === 'not-installed' || sub === 'install' ? 'cotton-candy-sky' : 'meadow-mist' });
+    if (sub === 'install') mp.installTheme('cotton-candy-sky').catch(() => undefined);
+  }, ['not-installed', 'install']);
   const [integrations, setIntegrations] = useState<IntegrationCardItem[]>([]);
   // Integration click-to-expand — mirrors the plugin detail-overlay pattern
   // but renders IntegrationDetailOverlay (below) because integrations aren't

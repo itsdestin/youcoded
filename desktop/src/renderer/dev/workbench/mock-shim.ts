@@ -3322,6 +3322,20 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // registry in fixtures/marketplace/registry.ts.
   const marketplaceEmpty = typeof location !== 'undefined'
     && new URLSearchParams(location.search).get('marketplace') === 'empty';
+  // Marketplace detail states nobody could photograph before (marketplace-detail friction,
+  // proposal 10 — five review rounds never saw them):
+  //   ?install=fail   every plugin / theme install answers a failure with a reason
+  //   ?install=slow   every install takes two minutes, so "Installing…" can be seen
+  //   ?mpUpdate=1     the installed Civic Report and Meadow Mist are older than the listing
+  const mpParams = typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams();
+  const installMode = mpParams.get('install');
+  const mpUpdate = mpParams.get('mpUpdate') === '1';
+  const INSTALL_FAILURE = { ok: false as const, error: "Couldn't download it: the source repository did not answer (workbench practice failure)." };
+  const installGate = async (): Promise<typeof INSTALL_FAILURE | null> => {
+    if (installMode === 'fail') return INSTALL_FAILURE;
+    if (installMode === 'slow') await new Promise((r) => setTimeout(r, 120_000));
+    return null;
+  };
   const theme = {
     list: async () => Object.keys(THEME_FIXTURES),
     readFile: async (slug: string) => THEME_FIXTURES[slug] ?? '{}',
@@ -3335,6 +3349,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // throwing synchronously inside marketplace-context's Promise.all.
     marketplace: {
       list: async () => (marketplaceEmpty ? [] : MARKETPLACE_THEMES.map((t) => ({ ...t }))),
+      // Only the practice failure / slow install is hand-written; a normal install keeps
+      // falling through to the catch-all, exactly as before.
+      ...(installMode ? { install: async () => (await installGate()) ?? { ok: true } } : {}),
       // Real implementations for ThemeShareSheet's two mount-time calls: left to
       // the catch-all, both resolve `[]` (truthy), and `previewPath.replace(...)`
       // on an array crashes the dialog on open (found opening `marketplace/theme-share`).
@@ -3402,6 +3419,8 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // composer's QuickChips read skills.getChips), so mutating the three lists
     // here is enough. The catalog is untouched: star ratings stay what they are.
     install: async (id: string) => {
+      const gate = await installGate();
+      if (gate) return gate;
       const plugin = MARKETPLACE_PLUGINS.find((p) => p.id === id);
       if (!plugin || installedSkills.some((s) => s.id === id || s.pluginName === id)) return { ok: true };
       const installedAt = new Date(1_756_900_000_000).toISOString();
@@ -3452,7 +3471,15 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
   };
   const marketplace = {
-    getPackages: async () => (marketplaceEmpty ? {} : JSON.parse(JSON.stringify(installedPackages))),
+    getPackages: async () => {
+      if (marketplaceEmpty) return {};
+      const out = JSON.parse(JSON.stringify(installedPackages));
+      if (mpUpdate) {
+        out['civic-report'] = { ...out['civic-report'], version: '0.9.0' };
+        out['theme:meadow-mist'] = { version: '0.0.1', source: 'marketplace', installedAt: '2026-08-01T12:00:00Z', removable: true, components: [], status: 'installed' };
+      }
+      return out;
+    },
     // WHY: the real file viewer needs a scrolling file for visual review; this
     // dev-only id is local to the fake backend and never reads or writes disk.
     readComponent: async (target: { pluginId: string }) => target.pluginId === 'ui-guide-preview'

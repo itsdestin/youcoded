@@ -25,7 +25,9 @@ const DESKTOP = path.resolve(HERE, '..');
 const ROOT = path.join(DESKTOP, 'office-addon');
 const EDITORS = path.join(ROOT, 'editors');
 const FIXTURES = path.join(DESKTOP, 'src/renderer/dev/workbench/fixtures/office');
-const PORT = 4717;
+// YC_OFFICE_PORT: shoot starts this on a free port when another worktree's editor holds 4717
+// (scripts/shoot/office-editor.mjs in the workspace); the practice app follows `?officePort=`.
+const PORT = Number(process.env.YC_OFFICE_PORT) || 4717;
 
 const require = createRequire(import.meta.url);
 let x2t, protocolModule, themeFonts;

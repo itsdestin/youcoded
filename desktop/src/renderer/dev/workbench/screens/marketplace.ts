@@ -24,6 +24,16 @@ export const MARKETPLACE: readonly ScreenEntry[] = [
   { ...mp('marketplace/theme-detail#phone', 'dialog', 'narrow'), viewport: { width: 390, height: 844 } },
   { ...mp('marketplace/detail#small', 'dialog'), viewport: { width: 640, height: 480 } },
   { ...mp('marketplace/theme-detail/not-installed#phone', 'dialog', 'narrow'), viewport: { width: 390, height: 844 } },
+  // States the practice backend can now play (mock-shim ?install= / ?mpUpdate= / ?liked=):
+  // `/install` presses Install on an item that is not installed.
+  mp('marketplace/detail/install', 'dialog'),
+  { ...mp('marketplace/detail/install#failed', 'dialog', 'error-state'), params: { install: 'fail' } },
+  { ...mp('marketplace/detail/install#slow', 'dialog'), params: { install: 'slow' } },
+  { ...mp('marketplace/detail#update', 'dialog'), params: { mpUpdate: '1' } },
+  mp('marketplace/theme-detail/install', 'dialog'),
+  { ...mp('marketplace/theme-detail/install#failed', 'dialog', 'error-state'), params: { install: 'fail' } },
+  { ...mp('marketplace/theme-detail#update', 'dialog'), params: { mpUpdate: '1' } },
+  { ...mp('marketplace/theme-detail#liked', 'dialog'), params: { liked: '1' } },
   // Share/publish sheets — App.tsx owns their id state; both open on the same
   // fixture items marketplace/detail and marketplace/theme-detail use.
   mp('marketplace/share', 'dialog'),
