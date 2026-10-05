@@ -190,4 +190,31 @@ describe('the app drawer', () => {
     const np = card().querySelector('.mv-np')!;
     expect(Array.from(np.children).map((e) => e.getAttribute('data-slot') ?? e.className.split(' ')[0])).toEqual(['mv-nprow', 'mv-vol', 'pad', 'chips']);
   });
+
+  // WHY CSS-only: jsdom cannot measure a container query, so this pins the DOM (nothing moves, nothing is re-made) and the exact
+  // rules that arrange it. Destin's markup (2026-10-05): wide + remote open = drawer fills the left under the title; right column is
+  // pad, then volume, then the five keys; row 1 keeps only the app mark and title.
+  it('wide + remote open: pad, volume and the five keys stack in the right column; every other size keeps today\'s structure', async () => {
+    await mount({ data: { view: 'media', remote: [RC] } });
+    const np = card().querySelector('.mv-np')!;
+    // The elements are the same ones at every size: keys stay inside row 1 in the DOM, volume and drawer are the panel's own children.
+    expect(np.querySelector(':scope > .mv-nprow > .np-keys')).toBeTruthy();
+    expect(np.querySelector(':scope > .mv-vol .vrow')).toBeTruthy();
+    expect(np.querySelector('.mv-nprow > .mv-art')).toBeTruthy();
+    const css = Array.from(document.querySelectorAll('style')).map((s) => s.textContent).join('\n');
+    const start = css.indexOf('@container tvc (min-width: 900px)');
+    const wide = css.slice(start, css.indexOf('@container tvc (min-width: 1200px)'));
+    const open = '.mv-wide .np.mv-np:has(.rpad[data-open="1"])';
+    const rule = (sel: string) => wide.match(new RegExp(sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ' \\{([^}]*)\\}'))?.[1] ?? '';
+    expect(rule(open + ' > .mv-nprow')).toContain('display: contents'); // row 1 stops being a box so its keys can leave it
+    expect(rule(open + ' > .rchips')).toMatch(/grid-column: 1; grid-row: 2 \/ -1/); // drawer: whole left area under the title
+    expect(rule(open + ' > .rpad')).toMatch(/grid-column: 2; grid-row: 2/); // pad first, top lined up with the drawer
+    expect(rule(open + ' > .mv-vol')).toMatch(/grid-column: 2; grid-row: 3/); // then the volume
+    expect(rule(open + ' .mv-nprow > .np-keys')).toMatch(/grid-column: 2; grid-row: 4/); // then the keys, last
+    // Closed, medium and narrow: no arrangement rule exists outside the wide size, and none without "open".
+    const before = css.slice(0, start);
+    expect(before).not.toContain('display: contents');
+    expect(before).not.toContain(open);
+    expect(wide).not.toMatch(/\.mv-wide \.np\.mv-np > /); // every wide rule above is gated on :has(open)
+  });
 });

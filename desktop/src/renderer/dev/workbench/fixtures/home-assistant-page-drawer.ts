@@ -122,6 +122,19 @@ export const HOME_DRAWER_CSS = `
     .rchips .rapp.more { display: none !important; }
     .rapp .logo { zoom: 1.3; }
     .mv-np > .mv-vol { width: min(100%, 640px); justify-self: center; }
+    /* WIDE + REMOTE OPEN only (Destin's markup, 2026-10-05): the drawer takes the whole left area right under the app title; the right
+       column, top to bottom, is the pad, the volume, then the five transport keys (bottom lines up with the drawer's bottom).
+       WHY CSS only: row 1's flex box is made transparent (display: contents) so the keys, which live inside it, become grid items of
+       the panel; no element is moved or redrawn, so slider drags, the reveal and keyed redraws are untouched. Closed, medium and
+       narrow keep their layout because every rule needs data-open="1" on the pad AND this width. */
+    .mv-wide .np.mv-np:has(.rpad[data-open="1"]) { grid-template-rows: auto auto auto 1fr; }
+    .mv-wide .np.mv-np:has(.rpad[data-open="1"]) > .mv-nprow { display: contents; }
+    .mv-wide .np.mv-np:has(.rpad[data-open="1"]) .mv-nprow > .mv-art { grid-column: 1; grid-row: 1; justify-self: start; align-self: center; }
+    .mv-wide .np.mv-np:has(.rpad[data-open="1"]) .mv-nprow > .mv-nowt { grid-column: 1 / -1; grid-row: 1; margin-left: 62px; align-self: center; } /* 62 = art 52 + gap 10 */
+    .mv-wide .np.mv-np:has(.rpad[data-open="1"]) > .rchips { grid-column: 1; grid-row: 2 / -1; }
+    .mv-wide .np.mv-np:has(.rpad[data-open="1"]) > .rpad { grid-column: 2; grid-row: 2; align-self: start; }
+    .mv-wide .np.mv-np:has(.rpad[data-open="1"]) > .mv-vol { grid-column: 2; grid-row: 3; width: 100%; margin-top: 0; padding-top: 0; border-top: 0; }
+    .mv-wide .np.mv-np:has(.rpad[data-open="1"]) .mv-nprow > .np-keys { grid-column: 2; grid-row: 4; align-self: end; justify-self: center; margin: 12px 0 0; }
   }
   @container tvc (min-width: 1200px) { .rchips .rapps { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); } .rapp .logo { zoom: 1.55; } .rchips .rapp { font-size: 13px; } }
   @container tvc (min-width: 1500px) { .rchips .rapps { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); } .rapp .logo { zoom: 1.8; } .rchips .rapp { font-size: 14px; } }
