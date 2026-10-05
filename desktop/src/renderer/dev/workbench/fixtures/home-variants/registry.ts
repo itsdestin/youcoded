@@ -8,10 +8,12 @@ import { VARIANTS as audit } from './audit';
 import { VARIANTS as tvRemote } from './tv-remote';
 import { VARIANTS as lightsTab } from './lights-tab';
 import { VARIANTS as mediaTab } from './media-tab';
+import { VARIANTS as pageBg } from './page-bg';
 
 const HOME_VARIANT_TASKS: Record<string, HomeVariants> = {
   look, 'motion-nav': motionNav, 'motion-state': motionState, edit, audit,
   'tv-remote': tvRemote, 'lights-tab': lightsTab, 'media-tab': mediaTab,
+  'page-bg': pageBg,
 };
 
 /** Every option with its screen key "<task>-<key>". */
