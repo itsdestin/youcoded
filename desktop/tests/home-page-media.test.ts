@@ -29,7 +29,8 @@ const together = () => {
 describe('the Media tab: order and layout', () => {
   it('playing and paused devices are wide cards (playing first), the rest a Not Playing shelf: idle, off, not responding last and dimmed', async () => {
     await mount({ data: DATA });
-    expect(wideNames()).toEqual(['Destin\'s Room TV', 'Living Room speaker']); // the TV is playing, the speaker is paused
+    // The TV is playing, the speaker is paused. WHY the four newer TVs are wide too (basic controls): a TV with no remote but controls stays a wide card, so its volume, play and stop have a place.
+    expect(wideNames()).toEqual(['Destin\'s Room TV', 'Media Room TV', 'Grandma\'s Room TV', 'Family Room Samsung TV', 'Guest Room Streamer', 'Living Room speaker']);
     expect(card(TV).classList.contains('st-playing')).toBe(true);
     expect(card(LR).classList.contains('st-paused')).toBe(true);
     expect(shelfNames()).toEqual(['Roam 2', 'Destin\'s Samsung TV', 'Move 2']); // idle, off, not responding

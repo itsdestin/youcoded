@@ -26,6 +26,7 @@ import { HOME_PENDING_CSS, HOME_PENDING_JS } from './home-assistant-page-pending
 import { HOME_EDIT_CSS, HOME_EDIT_JS } from './home-assistant-page-edit';
 import { HOME_CAMERA_CSS, HOME_CAMERA_JS } from './home-assistant-page-camera';
 import { HOME_TV_JS, HOME_TV_CSS } from './home-assistant-page-tv';
+import { HOME_BASIC_JS, HOME_BASIC_CSS } from './home-assistant-page-basic';
 import { HOME_GLASS_CSS } from './home-assistant-page-glass';
 import { HOME_MEDIA_JS, HOME_MEDIA_CSS } from './home-assistant-page-media';
 import { HOME_LIGHTS_JS, HOME_LIGHTS_CSS } from './home-assistant-page-lights';
@@ -86,7 +87,7 @@ export const HOME_ASSISTANT_PAGE_JSON = {
 function homeAssistantPageHtml(): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>Home</title>
-<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}${HOME_CAMERA_CSS}${HOME_REDRAW_CSS}${HOME_PENDING_CSS}${HOME_EDIT_CSS}${HOME_LOOK_CSS}${HOME_FEEL_CSS}${HOME_TV_CSS}${HOME_MEDIA_CSS}${HOME_LIGHTS_CSS}${HOME_GLASS_CSS}${HOME_CLIMATE_CSS}</style></head>
+<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}${HOME_CAMERA_CSS}${HOME_REDRAW_CSS}${HOME_PENDING_CSS}${HOME_EDIT_CSS}${HOME_LOOK_CSS}${HOME_FEEL_CSS}${HOME_TV_CSS}${HOME_BASIC_CSS}${HOME_MEDIA_CSS}${HOME_LIGHTS_CSS}${HOME_GLASS_CSS}${HOME_CLIMATE_CSS}</style></head>
 <body>
 <div class="yc-page yc-stack" id="root">
   <!-- No page title: the app's own bar already names the page, so the
@@ -413,6 +414,11 @@ ${HOME_ICONS_JS}
         '<span class="vicon' + (v < 12 || target.muted ? ' low' : '') + '" data-vicon="' + esc(target.id) + '">' + volIcon(v, target.muted) + '</span></span>' +
         '<button class="vbtn" data-mp="' + esc(target.id) + '" data-svc="volume_up" aria-label="Volume up' + esc(where) + '" title="Volume up">' + plus + '</button></div>';
     }
+    // WHY (basic controls, 2026-10-05): a player with only volume steps (an Android TV box) gets - / + that step it, with no bar.
+    if (target && ((target.features || 0) & 1024)) {
+      return '<div class="vrow keys-only"><button class="vbtn" data-mp="' + esc(target.id) + '" data-svc="volume_down" aria-label="Volume down' + esc(where) + '" title="Volume down">' + minus + '</button>' +
+        '<span class="vlbl">Volume</span><button class="vbtn" data-mp="' + esc(target.id) + '" data-svc="volume_up" aria-label="Volume up' + esc(where) + '" title="Volume up">' + plus + '</button></div>';
+    }
     if (rc) {
       return '<div class="vrow keys-only"><button class="vbtn" data-rc="' + esc(rc.id) + '" data-cmd="VOLUME_DOWN" aria-label="Volume down" title="Volume down">' + minus + '</button>' +
         '<span class="vlbl">Volume</span>' +
@@ -465,28 +471,28 @@ ${HOME_ICONS_JS}
     var ctl = '';
     // WHY tvKeysHtml (Destin, 2026-10-05): the TV's keys are one row of seven that the remote button re-arranges (home-assistant-page-tv.ts).
     if (media && tv && rc && on) ctl = tvKeysHtml(it, rc, neutral, isPlay);
+    // WHY one rule for every player with no paired remote (basic controls, home-assistant-page-basic.ts): the keys are what the device says it can do now.
     // A soundbar playing the TV has nothing of its own to pause or skip.
-    else if (media && !tv && playing && (f & 1) && !(kind === 'soundbar' && (it.source === 'TV' || it.title === 'TV'))) {
-      var mk = function (svc, label, icon, cls) { return '<button class="key' + (cls || '') + '" data-mp="' + esc(it.id) + '" data-svc="' + svc + '" aria-label="' + label + '" title="' + label + '">' + icon + '</button>'; };
-      ctl = ((f & 16) ? mk('media_previous_track', 'Previous', PREV) : '') + mk('media_play_pause', pp, isPlay ? PAUSE : PLAY, ' main') + ((f & 32) ? mk('media_next_track', 'Next', NEXT) : '');
-    }
+    else if (media && on && !(kind === 'soundbar' && (it.source === 'TV' || it.title === 'TV'))) ctl = bcKeys(it, { playing: playing, isPlay: isPlay, neutral: neutral, sound: kind === 'soundbar' || kind === 'speaker', resume: 'Play' });
     var playRow = '';
     // A TV's volume bar moves the soundbar playing its sound, when there is
     // one (the TV's own volume is not what you hear).
     var sb = tv ? soundbarFor(it) : null;
     var volOf = sb || it;
-    var vol = media && (on || ((kind === 'soundbar' || kind === 'speaker') && !gone(it))) ? volRow(it, tv && !sb ? null : volOf, tv ? rc : null) : '';
+    var vol = media && (on || ((kind === 'soundbar' || kind === 'speaker') && !gone(it))) ? volRow(it, tv && rc && !sb ? null : volOf, tv ? rc : null) : '';
     // Now playing, in a block of its own (S-kinds notes: "improve the now
     // playing ui styling"): the app's mark on a TV, a note on a speaker.
-    var nowHtml = media && on && (playing && what || app || (tv && rc)) // a TV with a remote always has its panel, so the pad has a place
+    // The input picker and the pairing hint (none for a paired-remote TV, a speaker or a player that is not responding).
+    var bcx = media && on && !rc ? bcExtra(it, rc) : '';
+    var nowHtml = media && on && (playing && what || app || (tv && rc) || (tv && bcAny(it))) // a TV with a remote always has its panel, so the pad has a place
       ? '<div class="np' + (ctl || vol ? ' has-ctl' : '') + '"><span class="art" style="--app:' + (app ? app.bg : 'var(--accent)') + '">' +
-        (app ? app.mark : '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>') +
-        '</span><span class="txt">' + (neutral || stale ? '' : '<div class="lbl">' + (it.state === 'paused' ? 'Paused' : 'Now playing') +
+        (app ? app.mark : tv && !rc ? TV : '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>') +
+        '</span><span class="txt">' + (neutral || stale || (tv && !rc && !playing) ? '' : '<div class="lbl">' + (it.state === 'paused' ? 'Paused' : 'Now playing') +
         '<span class="eq' + (isPlay ? ' on' : '') + '" aria-hidden="true"><i></i><i></i><i></i></span></div>') +
         '<div class="ttl">' + esc(playing && what ? what : app ? app.name : 'TV') + '</div>' +
         (app && playing && what && what !== app.name && app.name !== 'TV' ? '<div class="by">' + (tv ? 'in ' : 'on ') + esc(app.name) + '</div>' : '') + '</span>' +
         // Volume above previous/play/next (round 7).
-        (vol || ctl ? '<div class="np-ctl' + (tv && rc ? ' tv' : '') + '">' + (tv && rc ? tvPadHtml(rc, remoteOpen.has(rc.id)) : '') + vol + (ctl ? (tv && rc ? ctl : '<div class="np-keys">' + ctl + '</div>') : '') + (tv && rc ? tvChipsHtml(rc, app) : '') + '</div>' : '') + '</div>'
+        (vol || ctl || bcx ? '<div class="np-ctl' + (tv && rc ? ' tv' : '') + '">' + (tv && rc ? tvPadHtml(rc, remoteOpen.has(rc.id)) : '') + vol + (ctl ? (tv && rc ? ctl : '<div class="np-keys">' + ctl + '</div>') : '') + (tv && rc ? tvChipsHtml(rc, app) : bcx) + '</div>' : '') + '</div>'
       : '';
     var c = media ? 'var(--accent)' : colourOf(it);
     var bright = !media && on && dimmable(it) ? rangeHtml(it, pct) : '';
@@ -507,13 +513,15 @@ ${HOME_ICONS_JS}
       : isSound ? (((it.features || 0) & 8) && !na
         ? '<button class="pwr mute" data-mp="' + esc(it.id) + '" data-svc="volume_mute" data-mute="' + (muted ? 'false' : 'true') + '" aria-pressed="' + muted + '" aria-label="' + (muted ? 'Unmute ' : 'Mute ') + esc(it.name) + '" title="' + (muted ? 'Unmute' : 'Mute') + '">' + volIcon(muted ? 0 : 70, muted) + '</button>' : '')
       : '<button class="pwr" data-toggle="' + esc(power.id) + '" aria-pressed="' + on + '"' + (na ? ' disabled' : '') + ' aria-label="Turn ' + esc(it.name) + (on ? ' off' : ' on') + '" title="' + (on ? 'Turn off' : 'Turn on') + '">' + POWER + '</button>';
+    // A TV or display with no remote: mute (when it can) and power (when it can), both only as the device says (basic controls).
+    if (media && !isSound && !rc) right = '<span class="rctl">' + bcActs(it, on, na, sb) + '</span>';
     var mSub = na ? 'Not responding' : isSound ? (muted ? 'Muted' : '') : status;
     var header = media
       ? '<div class="mhead"><div class="kind">' + icon + KIND_LABEL[kind] + '</div><div class="mname">' + esc(it.name) + '</div>' + (nowHtml || !mSub ? '' : '<div class="sub">' + esc(mSub) + '</div>') + '</div>'
       : face + '<span class="bulb">' + icon + '</span><span class="name">' + esc(it.name) + '<div class="sub">' + esc(status) + '</div></span></button>';
     return '<div class="tile' + (media ? ' media' : '') + (on && !isSound ? ' on' : '') + (na ? ' gone' : '') + (hidden.has(it.id) ? ' is-hidden' : '') + (muted ? ' muted' : '') + '" style="--c:' + c + '"><span class="glow"></span>' +
       '<div class="line">' + header +
-      (tv && rc && on ? tvToggleHtml(rc, it, right) : right) + '</div>' + nowHtml + bright + (nowHtml ? '' : vol) + playRow + (isSound ? groupHtml(it) : '') +
+      (tv && rc && on ? tvToggleHtml(rc, it, right) : right) + '</div>' + nowHtml + bright + (nowHtml ? '' : vol + bcx) + playRow + (isSound ? groupHtml(it) : '') +
       // The old separate Remote row is gone (Destin, 2026-10-05): the remote is an icon in the header that opens inside the now-playing panel.
       (media ? '' : paletteHtml(it)) + pendHtml(it.id, rc && rc.id) + '</div>';
   }
@@ -1195,7 +1203,7 @@ ${HOME_ICONS_JS}
         var vt = thing(mp);
         if (vt && vt.vol != null) { var nv = Math.max(0, Math.min(1, Math.round((vt.vol + (svc === 'volume_up' ? 0.05 : -0.05)) * 100) / 100)); setLocal(mp, { vol: nv }); svc = 'volume_set'; volTo = nv; }
       }
-      if (svc === 'media_play_pause') { var cur = thing(mp); if (cur) setLocal(mp, { state: cur.state === 'playing' ? 'paused' : 'playing' }); }
+      if (svc === 'media_play_pause' && !t.hasAttribute('data-neutral')) { var cur = thing(mp); if (cur) setLocal(mp, { state: cur.state === 'playing' ? 'paused' : 'playing' }); }
       var body = { entity_id: mp };
       if (volTo != null) body.volume_level = volTo;
       if (svc === 'volume_mute') { body.is_volume_muted = t.getAttribute('data-mute') === 'true'; setLocal(mp, { muted: body.is_volume_muted }); }
@@ -1456,6 +1464,7 @@ ${HOME_HISTORY_JS}
 ${HOME_LIVE_JS}
 ${HOME_CAMERA_JS}
 ${HOME_TV_JS}
+${HOME_BASIC_JS}
 ${HOME_MEDIA_JS}
 ${HOME_LIGHTS_JS}
 ${HOME_REDRAW_JS}

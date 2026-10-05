@@ -22,6 +22,8 @@ interface Thing {
   sw?: string;
   /** `media_position` (seconds) and `media_position_updated_at` (when that was true): what the media_seek +/-10s buttons work from. */
   pos?: number; posAt?: string;
+  /** `source_list`: the inputs a player offers (the page's Input picker). */
+  sources?: string[];
 }
 
 /** Home Assistant's "can play in a group" flag on a media player. */
@@ -37,7 +39,7 @@ function seed(): Array<{ id: string; name: string; items: Thing[] }> {
       { id: 'light.tv_backlight', name: 'TV backlight', state: 'unavailable', modes: dim },
       // The Hue room itself, as the real house has it (light.destin_s_room lists its lights): the page must never draw it.
       { id: 'light.destins_room_hue', name: "Destin's Room", state: 'on', brightness: 200, modes: ['color_temp', 'xy'], members: ['light.overhead_light', 'light.desk_backlight', 'light.hue_play_1', 'light.tv_backlight'] },
-      { id: 'media_player.destins_room_tv', name: "Destin's Samsung TV", state: 'off', features: 4, vol: 0.2, model: 'QN65Q80CAFXZA', dc: 'tv' },
+      { id: 'media_player.destins_room_tv', name: "Destin's Samsung TV", state: 'off', features: 4 | 128 | 256, vol: 0.2, model: 'QN65Q80CAFXZA', dc: 'tv' },
       // Named like the room, as the real Sonos Beam is: it must never get the
       // TV's remote (round 5 testing).
       { id: 'media_player.destins_room', name: "Destin's Room", state: 'playing', vol: 0.35, title: 'TV', model: 'Sonos Beam', source: 'TV', features: 4 | 8 | 1 | 16 | 32 | GROUPING, group: ['media_player.destins_room'] },
@@ -62,6 +64,25 @@ function seed(): Array<{ id: string; name: string; items: Thing[] }> {
     ] },
     { id: 'patio', name: 'Patio', items: [
       { id: 'media_player.move_2', name: 'Move 2', state: 'unavailable', model: 'Move 2', features: 4 | 8 | 1 | 16 | 32 | GROUPING },
+    ] },
+    // TVs and players with NO paired remote (basic controls, 2026-10-05). Each in a room of its own so the rooms above keep their lists.
+    // Feature bits as the real house reports them: 1 pause, 2 seek, 4 volume_set, 8 mute, 16 prev, 32 next, 128 turn_on, 256 turn_off,
+    // 512 play_media, 1024 volume_step, 2048 source, 4096 stop, 16384 play.
+    // A Cast TV with no remote (like the living room's): idle, so no seek / next until an app plays.
+    { id: 'media_room', name: 'Media Room', items: [
+      { id: 'media_player.media_room_tv', name: 'Media Room TV', state: 'idle', features: 1 | 4 | 8 | 128 | 256 | 512 | 4096 | 16384, vol: 0.3, model: 'Chromecast with Google TV', dc: 'tv' },
+    ] },
+    // A Cast TV that cannot be turned up or muted from here (like Grandma's room).
+    { id: 'grandmas_room', name: "Grandma's Room", items: [
+      { id: 'media_player.grandmas_room_tv', name: "Grandma's Room TV", state: 'idle', features: 1 | 2 | 128 | 256 | 4096 | 16384, model: 'Chromecast', dc: 'tv' },
+    ] },
+    // A DLNA-style renderer (a Samsung TV while it is on): seek, volume, mute, skip, input, no power control.
+    { id: 'family_room', name: 'Family Room', items: [
+      { id: 'media_player.family_room_samsung_tv', name: 'Family Room Samsung TV', state: 'idle', features: 1 | 2 | 4 | 8 | 16 | 32 | 2048 | 4096 | 16384, vol: 0.25, model: 'QN55Q60CAFXZA', dc: 'tv', maker: 'Samsung', entry: 'entry_dlna', source: 'HDMI 1', sources: ['TV', 'HDMI 1', 'HDMI 2', 'HDMI 3'] },
+    ] },
+    // An Android TV box through its own player (not Cast): volume steps only, no bar.
+    { id: 'guest_room', name: 'Guest Room', items: [
+      { id: 'media_player.guest_room_streamer', name: 'Guest Room Streamer', state: 'on', features: 1 | 8 | 16 | 32 | 128 | 256 | 1024 | 4096 | 16384, model: 'Google TV Streamer', maker: 'Google', entry: 'entry_atv' },
     ] },
     // More cameras, each in a room of its own so the rooms above keep their lists (the Cameras tab shows them all).
     { id: 'hallway', name: 'Hallway', items: [
@@ -284,6 +305,11 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
       if (action === 'volume_down' && t.vol != null) t.vol = Math.max(0, t.vol - 0.02);
       if (action === 'media_seek' && typeof data.seek_position === 'number') { t.pos = data.seek_position; t.posAt = new Date().toISOString(); }
       if (action === 'volume_mute') t.muted = data.is_volume_muted === true;
+      // Playback, as a real player does it: stop and an idle play, pause/resume, and picking an input.
+      if (action === 'media_stop') { t.state = 'idle'; t.title = null; t.pos = undefined; t.posAt = undefined; }
+      if (action === 'media_play' && t.state === 'idle') t.state = 'playing';
+      if (action === 'media_play_pause' && (t.state === 'playing' || t.state === 'paused')) t.state = t.state === 'playing' ? 'paused' : 'playing';
+      if (action === 'select_source' && typeof data.source === 'string') t.source = data.source;
       if (action === 'set_temperature' && typeof data.temperature === 'number') t.target = data.temperature;
       if (action === 'set_temperature' && typeof data.target_temp_low === 'number' && typeof data.target_temp_high === 'number') { t.tlo = data.target_temp_low; t.thi = data.target_temp_high; }
       // Sonos grouping, as Home Assistant does it: `join` adds speakers to
@@ -387,7 +413,7 @@ const ATTRS: Array<[keyof Thing, string]> = [
   ['name', 'friendly_name'], ['brightness', 'brightness'], ['modes', 'supported_color_modes'], ['cur', 'current_temperature'], ['target', 'temperature'], ['tlo', 'target_temp_low'], ['thi', 'target_temp_high'],
   ['min', 'min_temp'], ['max', 'max_temp'], ['step', 'target_temp_step'], ['vol', 'volume_level'], ['title', 'media_title'], ['rgb', 'rgb_color'],
   ['k', 'color_temp_kelvin'], ['modesHvac', 'hvac_modes'], ['action', 'hvac_action'], ['dc', 'device_class'], ['activity', 'current_activity'],
-  ['app', 'app_name'], ['source', 'source'], ['muted', 'is_volume_muted'], ['group', 'group_members'], ['features', 'supported_features'], ['pos', 'media_position'], ['posAt', 'media_position_updated_at'],
+  ['app', 'app_name'], ['source', 'source'], ['muted', 'is_volume_muted'], ['group', 'group_members'], ['features', 'supported_features'], ['pos', 'media_position'], ['posAt', 'media_position_updated_at'], ['sources', 'source_list'],
 ];
 function squash(t: Thing): Squashed {
   const a: Record<string, unknown> = {};

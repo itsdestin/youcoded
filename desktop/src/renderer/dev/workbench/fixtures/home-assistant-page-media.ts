@@ -42,8 +42,9 @@ export const HOME_MEDIA_JS = `
     // A TV app that never reports play/pause claims nothing (home-assistant-page-tv.ts): it is "On", with a neutral key.
     var neutral = tv && playing && !what && !playReported(it);
     var app = tv && rc ? appOf(rc.activity) : !tv ? sourceOf(it) : null;
-    // WHY a TV with a remote that is on is "On" (not "Idle"): it stays a wide card so the remote has somewhere to open.
-    var st = na ? 'gone' : !on ? 'off' : (on && playing) ? (neutral ? 'on' : it.state === 'paused' ? 'paused' : 'playing') : (tv && rc ? 'on' : 'idle');
+    // WHY a TV with a remote that is on is "On" (not "Idle"): it stays a wide card so the remote has somewhere to open. A TV with no remote
+    // but controls (volume, play, stop...) does too (basic controls, home-assistant-page-basic.ts): its controls need a card, not a shelf tile.
+    var st = na ? 'gone' : !on ? 'off' : (on && playing) ? (neutral ? 'on' : it.state === 'paused' ? 'paused' : 'playing') : (tv && (rc || bcAny(it)) ? 'on' : 'idle');
     return { sb: sb, stale: stale, it: it, room: room, kind: kind, tv: tv, sound: kind === 'soundbar' || kind === 'speaker', rc: rc, power: power, na: na, on: on, f: f,
       what: what || (app ? app.name : tv ? 'TV' : ''), app: app, neutral: neutral, st: st, tier: { playing: 0, on: 0, paused: 1, idle: 2, off: 3, gone: 4 }[st],
       tvAudio: kind === 'soundbar' && (it.source === 'TV' || it.title === 'TV') };
@@ -54,7 +55,7 @@ export const HOME_MEDIA_JS = `
   function mvBy(x) { return x.app && x.what !== x.app.name && x.app.name !== 'TV' && x.st !== 'idle' ? (x.tv ? 'in ' : 'on ') + x.app.name : ''; }
   function mvArt(x, size) {
     var plain = !x.app || String(x.app.bg).indexOf('var(') === 0;
-    return '<span class="mv-art s' + size + (plain ? ' plain' : '') + '" style="--app:' + (x.app ? x.app.bg : 'var(--accent)') + '">' + (x.app ? x.app.mark : MV_NOTE) + '</span>';
+    return '<span class="mv-art s' + size + (plain ? ' plain' : '') + '" style="--app:' + (x.app ? x.app.bg : 'var(--accent)') + '">' + (x.app ? x.app.mark : x.tv && !x.rc ? TV : MV_NOTE) + '</span>';
   }
   // WHY the "On" mark is a still dot (never the moving bars): "On" is exactly the case where the page does not know that anything plays.
   function mvGlyph(st) { return st === 'playing' ? eqBars(true) : st === 'on' ? MV_ON : st === 'paused' ? MV_PAUSE : st === 'idle' ? MV_IDLE : st === 'off' ? MV_OFF : MV_GONE; }
@@ -64,16 +65,16 @@ export const HOME_MEDIA_JS = `
   function mvKeys(x) {
     var it = x.it, isPlay = it.state === 'playing' && !x.stale, f = x.f;
     if (x.tv && x.rc && x.on) return tvKeysHtml(it, x.rc, x.neutral, isPlay);
-    if (!x.tv && x.on && (f & 1) && !x.tvAudio) {
-      var mk = function (svc, label, icon, main) { return '<button class="key' + (main ? ' main' : '') + '" data-mp="' + esc(it.id) + '" data-svc="' + svc + '" aria-label="' + label + '" title="' + label + '">' + icon + '</button>'; };
-      var skip = x.st === 'playing' || x.st === 'paused';
-      return '<div class="np-keys">' + (skip && (f & 16) ? mk('media_previous_track', 'Previous', PREV) : '') + mk('media_play_pause', isPlay ? 'Pause' : x.st === 'paused' ? 'Resume' : 'Play', isPlay ? PAUSE : PLAY, true) + (skip && (f & 32) ? mk('media_next_track', 'Next', NEXT) : '') + '</div>';
+    // WHY one rule for every player with no paired remote (basic controls): the keys are what the device says it can do now.
+    if (x.on && !x.tvAudio) {
+      var ks = bcKeys(it, { playing: it.state === 'playing' || it.state === 'paused', isPlay: isPlay, neutral: x.neutral, sound: x.sound, resume: 'Resume' });
+      return ks ? '<div class="np-keys">' + ks + '</div>' : '';
     }
     return '';
   }
   function mvVol(x) {
     var sb = x.tv ? soundbarFor(x.it) : null;
-    return x.on || (x.sound && !x.na) ? volRow(x.it, x.tv && !sb ? null : (sb || x.it), x.tv ? x.rc : null) : '';
+    return x.on || (x.sound && !x.na) ? volRow(x.it, x.tv && x.rc && !sb ? null : (sb || x.it), x.tv ? x.rc : null) : '';
   }
   function mvCanGroup(it) { return canGroup(it) && !gone(it) && allItems().some(function (o) { return o.it.id !== it.id && canGroup(o.it); }); }
   // The button that opens the tick list for adding or removing speakers (the Home tab's "Playing with..." bar did this).
@@ -88,7 +89,7 @@ export const HOME_MEDIA_JS = `
     if (x.tv) {
       if (!x.na) {
         var pw = '<button class="pwr" data-toggle="' + esc(x.power.id) + '" aria-pressed="' + x.on + '" aria-label="Turn ' + esc(it.name) + (x.on ? ' off' : ' on') + '" title="' + (x.on ? 'Turn off' : 'Turn on') + '">' + POWER + '</button>';
-        out += x.rc && x.on ? tvToggleHtml(x.rc, it, pw) : pw;
+        out += x.rc && x.on ? tvToggleHtml(x.rc, it, pw) : x.rc ? pw : bcActs(it, x.on, x.na, x.sb);
       }
     } else if ((x.f & 8) && !x.na) {
       var m = !!it.muted;
@@ -99,7 +100,7 @@ export const HOME_MEDIA_JS = `
   // The one obvious action on a device that is not playing.
   function mvQuick(x) {
     if (x.na) return '';
-    if (x.st === 'off') return '<button class="mv-act" data-toggle="' + esc(x.power.id) + '" aria-pressed="false" aria-label="Turn on ' + esc(x.it.name) + '">' + POWER + 'Turn on</button>';
+    if (x.st === 'off' && (x.rc || !x.tv || bcCanPower(x.it, false))) return '<button class="mv-act" data-toggle="' + esc(x.power.id) + '" aria-pressed="false" aria-label="Turn on ' + esc(x.it.name) + '">' + POWER + 'Turn on</button>';
     if (x.st === 'idle' && !x.tv && (x.f & 1)) return '<button class="mv-act main" data-mp="' + esc(x.it.id) + '" data-svc="media_play_pause" aria-label="Play ' + esc(x.it.name) + '">' + PLAY + 'Play</button>';
     return mvActs(x);
   }
@@ -162,7 +163,7 @@ export const HOME_MEDIA_JS = `
   function mvNow(x, vol) {
     var by = mvBy(x), w = x.what || (x.st === 'idle' ? '' : 'Nothing playing'), tvx = x.tv && x.rc && x.on;
     return '<div class="np mv-np' + (tvx ? ' tv' : '') + '"><div class="mv-nprow">' + mvArt(x, 52) + '<span class="txt mv-nowt"><div class="ttl mv-song">' + esc(w) + '</div>' + (by ? '<div class="by">' + esc(by) + '</div>' : '') + '</span>' + mvKeys(x) + '</div>' + (vol || '') +
-      (tvx ? tvPadHtml(x.rc, remoteOpen.has(x.rc.id)) + tvChipsHtml(x.rc, x.app) : '') + '</div>';
+      (tvx ? tvPadHtml(x.rc, remoteOpen.has(x.rc.id)) + tvChipsHtml(x.rc, x.app) : x.on ? bcExtra(x.it, x.rc) : '') + '</div>';
   }
   // A glass box with a small title: the soundbar's volume, or the speakers playing together (one look for both).
   function mvBox(title, icon, inner, head) { return '<div class="mv-tog"><div class="mv-togh">' + icon + '<span>' + esc(title) + '</span>' + (head || '') + '</div>' + inner + '</div>'; }
