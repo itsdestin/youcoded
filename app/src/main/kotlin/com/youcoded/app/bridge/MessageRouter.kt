@@ -26,7 +26,7 @@ object MessageRouter {
 
     // WHY (one-core R4-1, seam S7): the version of the handshake and what this screen can do, so the shared UI asks
     // `capabilities.x` instead of guessing from "am I Android". The VALUES mirror ANDROID_LOCAL_CAPABILITIES in
-    // desktop/src/shared/capabilities.ts (tests/capabilities-parity.test.ts reads this file to keep them equal): the
+    // desktop/src/shared/capabilities.ts (tests/capabilities.test.ts reads this file to keep them equal): the
     // WebView here talks to this device's own runtime, which has the terminal buffer and sends raw terminal bytes, and
     // has no windows, no git, no engine for the app's own assistant. Minimal on purpose: A3 deletes this file's role.
     const val PROTOCOL_VERSION = 1

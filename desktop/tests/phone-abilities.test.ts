@@ -282,6 +282,13 @@ describe('the instruction-file read for a phone (answer 9), under the R3-SEC pho
       const huge = { ...answer, full: 'x'.repeat(1024 * 1024 + 1) };
       expect(((await ask('skill', ctxFor({ s1: dir }, { nativeHost: { sessionContextText: vi.fn(() => huge) } }), 's1', 'mine')) as any).payload).toEqual({ error: 'too-large' });
     });
+    it('a host answer that names no path never reaches a phone; the computer reads and judges the file itself', async () => {
+      const dir = tmp(); mkSkill(dir);
+      const pathless = { sessionContextText: vi.fn(() => ({ text: 'UNJUDGED HOST TEXT', full: 'UNJUDGED HOST TEXT', truncated: false })) };
+      const out: any = await ask('skill', ctxFor({ s1: dir }, { nativeHost: pathless }), 's1', 'mine');
+      expect(JSON.stringify(out)).not.toContain('UNJUDGED HOST TEXT');
+      expect(out.payload.text).toContain('SKILL BODY');
+    });
     it('a SKILL.md that links to an ordinary file outside every skills folder is refused; a link that stays inside the skills folder is read', async () => {
       const dir = tmp(); const sd = mkSkill(dir);
       const notes = path.join(tmp(), 'notes.txt');

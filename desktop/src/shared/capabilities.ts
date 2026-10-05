@@ -10,7 +10,7 @@
 // Keep this file DATA ONLY (no imports, literal values): scripts/generate-preload-channels.mjs copies
 // PROTOCOL_VERSION and DESKTOP_WINDOW_CAPABILITIES into preload.ts, because Electron's sandboxed preload cannot import
 // another module. Kotlin's MessageRouter.kt mirrors ANDROID_LOCAL_CAPABILITIES (pinned by
-// tests/capabilities-parity.test.ts, the way bundled-plugins-parity pins its list).
+// tests/capabilities.test.ts, the way bundled-plugins-parity pins its list).
 
 /** The version of the handshake and message shapes between a screen and its host. Bump it when a message changes in a
  *  way an older screen or host would misread; a screen never refuses a host over it (it falls back to

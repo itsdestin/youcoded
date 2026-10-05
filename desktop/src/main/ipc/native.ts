@@ -216,7 +216,10 @@ export const nativeChannels: MainChannelDef[] = [
           if ('error' in fromHost && fromHost.error === 'not-live') return undefined;
           if (!('error' in fromHost)) {
             // The host already read it (its own business); a phone is sent it only if the path passes the deny list and the text is of sane size.
-            if (typeof fromHost.path === 'string' && await isPhoneDeniedFile(fromHost.path)) return { error: KEPT_ON_COMPUTER };
+            // WHY an answer with no path is not sent (Destin, 2026-10-04, one-core merge review Q-3): with no path there is nothing to judge, and
+            // an unjudged answer is exactly what the deny list exists to stop. Falling through lets the computer's own lookup find and judge the file.
+            if (typeof fromHost.path !== 'string') return undefined;
+            if (await isPhoneDeniedFile(fromHost.path)) return { error: KEPT_ON_COMPUTER };
             if ((fromHost.full?.length ?? fromHost.text?.length ?? 0) > PHONE_CONTEXT_MAX_BYTES) return { error: 'too-large' };
           }
           return fromHost;
