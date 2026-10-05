@@ -114,15 +114,12 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat/games#long', 'pane', 'games'), params: { signedIn: '1', friends: 'lots', friendsOpen: '1' } },
   { ...chat('chat/games#incognito', 'pane', 'games'), params: { signedIn: '1', friends: 'many', incognito: '1' } },
   { ...chat('chat/games#offline', 'pane', 'games'), params: { signedIn: '1', friends: 'many', network: 'offline' } },
-  // Round 3 (deck games-social-3): your status pill's menu open, and the three ways of showing
-  // your status beside your friends' (workbench-mode.ts `?statusLook=`), folded and opened, on
-  // the same practice data (a request waiting). Delete the losers once Destin picks.
+  // Round 3/4: your status pill's menu open; then (deck games-social-4) the three ways to manage a
+  // friend (workbench-mode.ts `?friendManage=`), each opened on the first friend. Delete the
+  // losers once Destin picks. The details popup is its own screen (a Dialog).
   { ...chat('chat/games#status-menu', 'pane', 'games'), params: { signedIn: '1', friends: 'many', statusMenu: '1' } },
-  ...(['account', 'roster', 'strip'] as const).flatMap((v): ScreenEntry[] => [
-    { ...chat(`chat/games#look-${v}`, 'pane', 'games'), params: { signedIn: '1', friends: 'requests', statusLook: v } },
-    { ...chat(`chat/games#look-${v}-open`, 'pane', 'games'), params: { signedIn: '1', friends: 'requests', statusLook: v, friendsOpen: '1' },
-      ...(v === 'account' ? { sameAs: { name: 'chat/games#requests', why: 'account is the shipped look, and #requests is it opened on the same data' } } : {}) },
-  ]),
+  { ...chat('chat/games/friend', 'dialog', 'games'), params: { signedIn: '1', friends: 'many', friendsOpen: '1' } },
+  ...(['inline', 'edit'] as const).map((v): ScreenEntry => ({ ...chat(`chat/games#manage-${v}`, 'pane', 'games'), params: { signedIn: '1', friends: 'many', friendsOpen: '1', friendManage: v, manageOpen: '1' } })),
   // Another computer holds this conversation: each phase of "open it here instead?".
   ...['confirm', 'force', 'undeliverable', 'claim-denied'].map((ph) => chat(`chat/takeover/${ph}`, 'dialog', 'handoff')),
   chat('chat/resume/preview', 'dialog'),

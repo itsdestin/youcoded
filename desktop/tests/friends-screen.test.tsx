@@ -259,30 +259,21 @@ describe('Friends panel — in-flight mutation guards', () => {
 });
 
 describe('Friends panel — block is consequence-gated', () => {
-  it('requires the confirm step before calling block()', async () => {
+  it('requires the confirm step in the friend details popup before calling block()', async () => {
     const blockFn = vi.fn().mockResolvedValue(ok(undefined));
     (window as any).claude.social = makeSocial({
       listFriends: vi.fn().mockResolvedValue(ok([friend({ id: 'github:1', display_name: 'Alice', handle: 'alice' })])),
       block: blockFn,
     });
-
-    const { findByLabelText, getByRole, getByText, queryByText } = await openPanel();
-
-    // Open the row menu.
-    const menuBtn = await findByLabelText('Friend options');
-    fireEvent.click(menuBtn);
-
-    // The menu shows Unfriend + Block; consequence copy is NOT yet visible.
-    expect(getByText('Unfriend')).toBeTruthy();
-    expect(queryByText(/Blocking removes this friend/)).toBeNull();
-
-    // Click the Block menu item → swaps to the confirm; block() not called yet.
-    fireEvent.click(getByRole('menuitem', { name: 'Block' }));
-    expect(getByText(/Blocking removes this friend/)).toBeTruthy();
+    const u = await openPanel();
+    fireEvent.click(await u.findByRole('button', { name: 'Alice — details' }));
+    // The popup names the friend and shows the handle; no warning yet.
+    expect(await u.findByText('@alice')).toBeTruthy();
+    expect(u.queryByText(/Blocking removes this friend/)).toBeNull();
+    fireEvent.click(u.getByRole('button', { name: 'Block…' }));
+    expect(u.getByText(/Blocking removes this friend/)).toBeTruthy();
     expect(blockFn).not.toHaveBeenCalled();
-
-    // Confirm — now block() fires with the account id.
-    fireEvent.click(getByRole('button', { name: 'Block' }));
+    fireEvent.click(u.getByRole('button', { name: 'Block Alice' }));
     await waitFor(() => expect(blockFn).toHaveBeenCalledWith('github:1'));
   });
 });
@@ -316,13 +307,13 @@ describe('Friends panel — folded summary and request order', () => {
 
   it('no internet and an unreachable server replace the whole card with the error card', async () => {
     const off = render(<FriendsPanel social="offline" onRetry={vi.fn()} />);
-    expect(await off.findByText('No internet connection')).toBeTruthy();
+    expect(await off.findByText(/^No internet connection\./)).toBeTruthy();
     expect(off.queryByRole('button', { name: /^Show all/ })).toBeNull();
     off.unmount();
     const onRetry = vi.fn();
     const srv = render(<FriendsPanel social="server" onRetry={onRetry} />);
-    expect(await srv.findByText("Can't reach the game server")).toBeTruthy();
-    expect(srv.queryByText('No internet connection')).toBeNull();
+    expect(await srv.findByText(/^Can't reach the game server\./)).toBeTruthy();
+    expect(srv.queryByText(/No internet connection/)).toBeNull();
     fireEvent.click(srv.getByRole('button', { name: 'Try again' }));
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
@@ -337,14 +328,24 @@ describe('Friends panel — your status pill and the handle', () => {
     expect(h.toggleIncognito).toHaveBeenCalledTimes(1);
   });
 
-  it('rows show the name only; the @handle is inside the friend menu', async () => {
+  it('rows show the name only; the @handle is in the friend details popup', async () => {
     (window as any).claude.social = makeSocial({
       listFriends: vi.fn().mockResolvedValue(ok([friend({ id: 'github:1', display_name: 'Alice', handle: 'alice' })])),
     });
     const u = await openPanel();
     await u.findByText('Alice');
     expect(u.queryByText('@alice')).toBeNull();
-    fireEvent.click(u.getByLabelText('Friend options'));
-    expect(u.getByText('@alice')).toBeTruthy();
+    fireEvent.click(u.getByRole('button', { name: 'Alice — details' }));
+    expect(await u.findByText('@alice')).toBeTruthy();
+  });
+});
+
+describe('Friends panel — incognito', () => {
+  it('says who is online is hidden rather than showing a number it cannot know', async () => {
+    (window as any).claude.social = makeSocial({
+      listFriends: vi.fn().mockResolvedValue(ok([friend({ id: 'github:1', display_name: 'Alice' })])),
+    });
+    const u = render(<FriendsPanel social="incognito" incognito onRetry={vi.fn()} onToggleIncognito={h.toggleIncognito} />);
+    expect(await u.findByText(/1 friend · who's online is hidden/)).toBeTruthy();
   });
 });

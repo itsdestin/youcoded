@@ -6,10 +6,11 @@
 // everything social lives HERE; a game's page keeps people, records and Challenge.
 //
 // Round 2 (games-social-1): folded by default; an Appearance-style capped list with a filled
-// "Add a friend" inside it; Account's sign-in card. Round 3 (games-social-2): your status is
-// the status PILL itself, clickable (G2-2); rows are name + pill, handle only in the ⋯ menu
-// (G2-3/G2-7); no internet / server down replace the whole card with the error card (G2-5);
-// three ways to show your status beside your friends' are on the deck (G2C-1).
+// "Add a friend" inside it; Account's sign-in card. Round 3 (games-social-2): your status is the
+// status PILL itself, clickable; rows are name + pill; no internet / server down replace the
+// whole card with an error box. Round 4 (games-social-3): Account's profile-row header shipped
+// (G3C-1); each friend is a box like the game page's (G3-4); the ⋯ menu is gone — three ways to
+// manage a friend are on the deck (G3-3); the error box drops its red title (G3-7).
 import { useEffect, useRef, useState } from 'react';
 import { useGameState } from '../../state/game-context';
 import { useAccount } from '../../state/account-context';
@@ -17,8 +18,9 @@ import { statusLabel, type FriendRowData, type SocialState } from './friends-dat
 import { useFriends } from './useFriends';
 import { useScrollFade } from '../../hooks/useScrollFade';
 import { useEscClose } from '../../hooks/use-esc-close';
-import { Button, CARD_LEVEL_1, CARD_LEVEL_2, Callout, ChevronDown, FieldError, InputGroup, LoadingState, Pill, PillButton, SectionLabel } from '../ui';
-import { workbenchFriendsOpen, workbenchStatusLook, workbenchStatusMenuOpen } from '../../workbench-mode';
+import { Button, CARD_LEVEL_1, Callout, ChevronDown, Dialog, FieldError, InputGroup, LoadingState, Pill, PillButton, SectionLabel } from '../ui';
+import { workbenchFriendManage, workbenchFriendsOpen, workbenchManageOpen, workbenchStatusMenuOpen } from '../../workbench-mode';
+import { useScreenOpen } from '../../shoot-mode';
 
 interface Props {
   incognito?: boolean;
@@ -60,27 +62,26 @@ function SignInCard() {
   );
 }
 
-/** No internet / game server down: the whole card is the problem (Destin, G2-5: "could
- *  probably just replace the whole card with the error state?"). The guide's one notice box
- *  with its button inside (guide "Status and notices"). Words per the error-message
- *  standards: "No internet" only when the computer reports no network at all
- *  (useNetworkOnline); otherwise WHERE it failed, never a guessed why. */
+/** No internet / game server down: the whole card is the problem (G2-5). The guide's one notice
+ *  box with its button inside (guide "Status and notices"). NO title (G3-7: "that red text seems
+ *  to be unique styling not used elsewhere"): of the app's 16 red notice boxes, 13 carry no
+ *  title and say it in one plain sentence — the 3 with a red title (Marketplace install
+ *  failure, integration error, local model failed to load) are the odd ones out, and
+ *  `ErrorState`'s title is normal text colour. Words per the error-message standards: "No
+ *  internet" only when the computer reports no network at all (useNetworkOnline); otherwise
+ *  WHERE it failed, never a guessed why. */
 function ConnectionErrorCard({ social, onRetry }: { social: 'offline' | 'server'; onRetry: () => void }) {
   const offline = social === 'offline';
   return (
-    <Callout
-      tone={offline ? 'warning' : 'danger'}
-      title={offline ? 'No internet connection' : "Can't reach the game server"}
-      actions={<Button variant="secondary" size="sm" onClick={onRetry}>Try again</Button>}
-    >
+    <Callout tone={offline ? 'warning' : 'danger'} actions={<Button variant="secondary" size="sm" onClick={onRetry}>Try again</Button>}>
       {offline
-        ? 'This computer is offline. Your friends, Connect 4 and Chess come back when it reconnects. Flappy and 2048 still play.'
-        : 'Your friends, Connect 4 and Chess are unavailable until it answers. Flappy and 2048 still play.'}
+        ? 'No internet connection. Your friends, Connect 4 and Chess come back when this computer reconnects; Flappy and 2048 still play.'
+        : "Can't reach the game server. Your friends, Connect 4 and Chess are unavailable until it answers; Flappy and 2048 still play."}
     </Callout>
   );
 }
 
-/** A small menu anchored under its trigger — the ⋯ row menu's popover (MarketplaceAuthChip's
+/** A small menu anchored under its trigger — the old ⋯ row menu's popover (MarketplaceAuthChip's
  *  pattern: no scrim, closes on an outside click and on Esc). */
 function useAnchoredMenu(initial = false) {
   const [open, setOpen] = useState(initial);
@@ -144,114 +145,123 @@ function FoldToggle({ open, onToggle, count }: { open: boolean; onToggle: () => 
   );
 }
 
+
 function FriendsCard({ incognito, onToggleIncognito, social }: Props) {
   const state = useGameState();
   const { user } = useAccount();
   const f = useFriends();
-  const look = workbenchStatusLook();
-  // Your account's display name — the name your friends see (the arcade's own `username` can
-  // be a placeholder before presence connects).
-  const myName = user?.display_name || user?.login || 'You';
   // Starts folded every time the panel opens (GS-2). Nothing remembered.
   const [open, setOpen] = useState(workbenchFriendsOpen);
-  // Friends' live states are KNOWN only while connected — otherwise no pill, never a guess.
-  const known = social === 'online';
+  // Your account's display name — the name your friends see.
+  const myName = user?.display_name || user?.login || 'You';
   const online = f.merged.filter((r) => r.online);
   const requests = f.incoming.length;
   const requestText = requests ? ` · ${requests} ${requests === 1 ? 'request' : 'requests'}` : '';
-  const self = <SelfStatus incognito={incognito} connected={state.connected} onToggleIncognito={onToggleIncognito} />;
-  const toggle = <FoldToggle open={open} onToggle={() => setOpen((o) => !o)} count={f.merged.length} />;
+  const total = `${f.merged.length} ${f.merged.length === 1 ? 'friend' : 'friends'}`;
 
+  // The grey line under your name. While incognito the presence connection is OFF (that is what
+  // incognito is: usePresence disconnects), so nobody's online state reaches this computer —
+  // there is no number to show, and inventing one is not allowed (G3-9 asked for the count; the
+  // honest answer is that it is hidden while you are hidden).
   const summary = !f.loaded ? 'Loading your friends…'
     : f.merged.length === 0 ? `No friends yet${requestText}`
-    : social === 'incognito' ? `Friends can't see you · ${f.merged.length} friends${requestText}`
-    : `${online.length} of ${f.merged.length} friends online${requestText}`;
+    : social === 'incognito' ? `${total} · who's online is hidden${requestText}`
+    : social === 'connecting' ? `${total} · connecting…${requestText}`
+    : `${online.length} of ${total} online${requestText}`;
 
   return (
-    // One first-level card for the one idea, "your friends" (guide "Card levels").
-    <div className={`${CARD_LEVEL_1} p-3 flex flex-col gap-2`} data-friends-card data-status-look={look}>
-      {look === 'account' && (
-        // Settings → Account's profile row: your name with your status beside it, one grey
-        // line under it, the control at the right — here, the count of friends online.
-        <div className="flex items-center gap-3">
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="text-sm font-medium text-fg truncate min-w-0">{myName}</span>
-              {self}
-            </div>
-            <p className="text-2xs text-fg-muted truncate">{summary}</p>
+    // One first-level card for the one idea, "your friends" (guide "Card levels"). Its header is
+    // Settings → Account's profile row (Destin picked it, G3C-1): your name with your clickable
+    // status pill, one grey line under it, the arrow at the right.
+    <div className={`${CARD_LEVEL_1} p-3 flex flex-col gap-2`} data-friends-card>
+      <div className="flex items-center gap-3">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-sm font-medium text-fg truncate min-w-0">{myName}</span>
+            <SelfStatus incognito={incognito} connected={state.connected} onToggleIncognito={onToggleIncognito} />
           </div>
-          {toggle}
+          <p className="text-2xs text-fg-muted truncate">{summary}</p>
         </div>
-      )}
-      {look === 'strip' && (
-        // One line: your pill, then who is online as pills in the same look — a status strip,
-        // like a detail page's one-line chip row; anyone past three folds into "+N".
-        <div className="flex items-center gap-2 min-w-0">
-          {self}
-          <span className="w-px h-4 bg-edge-dim shrink-0" aria-hidden="true" />
-          <div className="flex-1 min-w-0 flex items-center gap-1.5 overflow-hidden">
-            {!f.loaded ? <span className="text-2xs text-fg-muted">Loading…</span>
-              : social === 'incognito' ? <span className="text-2xs text-fg-muted truncate">Friends can't see you</span>
-              : online.length === 0 ? <span className="text-2xs text-fg-muted truncate">{f.merged.length ? 'Nobody online' : 'No friends yet'}</span>
-              : online.slice(0, 3).map((r) => <Pill key={r.id} tone="ok" dot>{r.name}</Pill>)}
-            {known && online.length > 3 && <Pill>+{online.length - 3}</Pill>}
-            {requests > 0 && <Pill tone="info">{requests} {requests === 1 ? 'request' : 'requests'}</Pill>}
-          </div>
-          {toggle}
-        </div>
-      )}
-      {look === 'roster' ? (
-        // The sessions menu: a list of people with their status pills, YOU first. Folded, only
-        // the ones you could play now (and any request waiting); open, everyone.
-        <PeopleList f={f} known={known} rows={open ? 'all' : 'online'} you={self} youName={myName}
-          footer={<FoldRowButton open={open} onToggle={() => setOpen((o) => !o)} count={f.merged.length} />} />
-      ) : open && <PeopleList f={f} known={known} rows="all" />}
+        <FoldToggle open={open} onToggle={() => setOpen((o) => !o)} count={f.merged.length} />
+      </div>
+      {open && <PeopleList f={f} known={social === 'online'} />}
     </div>
   );
 }
 
-/** The roster's "show everyone" row at the foot of its list — a plain row like a menu's last
- *  row ("Manage models…"), arrow on the right. */
-function FoldRowButton({ open, onToggle, count }: { open: boolean; onToggle: () => void; count: number }) {
+/** The box every person sits in — the game page's row look (G3-4: "use cards styled more like
+ *  this in the previous menu's scrollable friend list"): the Settings list's boxed row
+ *  (SettingRow's surface = CARD_LEVEL_1, which re-levels itself to the nested look inside the
+ *  friends card). `onClick` makes the whole box the button (the details variant), with the
+ *  setting row's arrow at the right. */
+function PersonBox({ name, pill, sub, right, error, onClick, children }: {
+  name: string; pill?: React.ReactNode; sub?: React.ReactNode; right?: React.ReactNode;
+  error?: string; onClick?: () => void; children?: React.ReactNode;
+}) {
+  const line = (
+    <div className="flex items-center gap-2 min-h-8">
+      <div className="flex-1 min-w-0 text-left">
+        <NameWithPill name={name} pill={pill} />
+        {sub && <div className="text-2xs text-fg-muted truncate">{sub}</div>}
+      </div>
+      {right}
+      {onClick && (
+        <svg className="w-4 h-4 text-fg-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+        </svg>
+      )}
+    </div>
+  );
   return (
-    <button type="button" onClick={onToggle} aria-expanded={open}
-      className="w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-md text-xs text-fg-2 hover:text-fg hover:bg-inset transition-colors">
-      {/* A count beside a label is the word then a smaller, fainter number (guide "Text and numbers"). */}
-      <span>{open ? 'Show online only' : <>All friends <span className="text-2xs text-fg-muted">{count}</span></>}</span>
-      <ChevronDown className={`w-3 h-3 shrink-0 text-fg-muted transition-transform ${open ? 'rotate-180' : ''}`} strokeWidth={2.5} />
-    </button>
+    <li className={`${CARD_LEVEL_1} px-3 py-1.5 flex flex-col gap-1.5`}>
+      {onClick
+        ? <button type="button" onClick={onClick} className="w-full rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent" aria-label={`${name} — details`}>{line}</button>
+        : line}
+      {children}
+      {/* WHY FieldError (guide: no red/coloured body text for messages) */}
+      {error && <FieldError as="p" size="2xs">{error}</FieldError>}
+    </li>
   );
 }
 
-/** The people, as plain rows in one nested box that scrolls under the see-through fade with a
- *  filled "Add a friend" inside it at the bottom — Appearance's themes box (GC-1, GQ-1). */
-function PeopleList({ f, known, rows, you, youName, footer }: {
-  f: ReturnType<typeof useFriends>;
-  known: boolean;
-  rows: 'all' | 'online';
-  you?: React.ReactNode;
-  youName?: string;
-  footer?: React.ReactNode;
-}) {
+/** The people: boxes 8px apart that scroll under the see-through fade, with a filled "Add a
+ *  friend" inside the scroll area at the bottom — Appearance's themes box (GC-1, GQ-1). */
+function PeopleList({ f, known }: { f: ReturnType<typeof useFriends>; known: boolean }) {
+  const manage = workbenchFriendManage();
   const [adding, setAdding] = useState(false);
+  // Which friend's management is open: the popup (details), the opened box (inline). Edit mode
+  // is one switch for the whole list.
+  const first = f.merged[0]?.id ?? null;
+  const [focus, setFocus] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  // Practice state: open the chosen management view on the first friend for pictures.
+  const [seeded, setSeeded] = useState(false);
+  useEffect(() => {
+    if (seeded || !first || !workbenchManageOpen()) return;
+    setSeeded(true);
+    if (manage === 'edit') setEditing(true); else setFocus(first);
+  }, [first, manage, seeded]);
+  // Photo-only build: shoot opens the friend details popup by name.
+  useScreenOpen('chat/games/friend', () => { if (first) setFocus(first); });
+
   const listRef = useRef<HTMLUListElement>(null);
   useScrollFade(listRef);
-  const friends = rows === 'all' ? f.merged : f.merged.filter((r) => r.online);
-  const showAdd = rows === 'all';
   const people = f.incoming.length + f.merged.length + f.outgoing.length;
+  const focused = f.merged.find((r) => r.id === focus) ?? null;
+  const unfriend = (id: string) => f.runMutation(() => window.claude.social.unfriend(id), id, "Couldn't unfriend — try again");
+  const block = (id: string) => f.runMutation(() => window.claude.social.block(id), id, "Couldn't block — try again");
+
   return (
-    <div className={`relative ${CARD_LEVEL_2} overflow-hidden`}>
+    <div className="relative">
       <ul
         ref={listRef}
-        className={`scroll-mask max-h-64 overscroll-contain p-1 ${showAdd ? 'pb-14' : ''} flex flex-col gap-0.5`}
-        // 52 = the button zone's top edge (8px padding + a ~36px button or box + 8px).
-        style={showAdd ? { ['--scroll-mask-under' as string]: '52px' } : undefined}
+        className="scroll-mask max-h-72 overscroll-contain pb-14 flex flex-col gap-2"
+        // 52 = the button zone's top edge (8px gap + a ~36px button or box + 8px).
+        style={{ ['--scroll-mask-under' as string]: '52px' }}
         aria-label="Your friends"
       >
-        {you && <PersonRow name={!youName || youName === 'You' ? 'You' : `${youName} (you)`} pill={you} />}
         {f.incoming.map((req) => (
-          <PersonRow
+          <PersonBox
             key={req.id}
             name={req.from.display_name}
             sub="Wants to be your friend"
@@ -265,27 +275,48 @@ function PeopleList({ f, known, rows, you, youName, footer }: {
             )}
           />
         ))}
-        {friends.map((row) => (
-          <PersonRow
-            key={row.id}
-            name={row.name}
-            pill={known ? <PresencePill row={row} /> : undefined}
-            // "Last seen 3h ago" is history, not a live state: the row's grey line.
-            sub={!row.online && row.lastSeenAt ? statusLabel(row, Date.now()) : undefined}
-            error={f.rowError[row.id]}
-            right={(
-              <FriendRowMenu
+        {f.merged.map((row) => {
+          const pill = known ? <PresencePill row={row} /> : undefined;
+          const lastSeen = !row.online && row.lastSeenAt ? statusLabel(row, Date.now()) : undefined;
+          if (manage === 'details') {
+            return <PersonBox key={row.id} name={row.name} pill={pill} sub={lastSeen} error={f.rowError[row.id]} onClick={() => setFocus(row.id)} />;
+          }
+          if (manage === 'inline') {
+            const isOpen = focus === row.id;
+            return (
+              <PersonBox
+                key={row.id}
                 name={row.name}
-                handle={row.handle}
-                pending={f.pendingRows.has(row.id)}
-                onUnfriend={() => f.runMutation(() => window.claude.social.unfriend(row.id), row.id, "Couldn't unfriend — try again")}
-                onBlock={() => f.runMutation(() => window.claude.social.block(row.id), row.id, "Couldn't block — try again")}
-              />
-            )}
-          />
-        ))}
-        {rows === 'all' && f.outgoing.map((req) => (
-          <PersonRow
+                pill={pill}
+                sub={lastSeen}
+                error={f.rowError[row.id]}
+                right={(
+                  <Button variant="secondary" size="sm" aria-expanded={isOpen} onClick={() => setFocus(isOpen ? null : row.id)} className="shrink-0">
+                    {isOpen ? 'Done' : 'Manage'}
+                  </Button>
+                )}
+              >
+                {isOpen && <ManageFriend row={row} pending={f.pendingRows.has(row.id)} onUnfriend={() => unfriend(row.id)} onBlock={() => block(row.id)} />}
+              </PersonBox>
+            );
+          }
+          // edit: every friend shows its handle and its two actions while editing.
+          return (
+            <EditRow
+              key={row.id}
+              row={row}
+              pill={pill}
+              sub={editing ? (row.handle ? `@${row.handle}` : 'No handle') : lastSeen}
+              editing={editing}
+              error={f.rowError[row.id]}
+              pending={f.pendingRows.has(row.id)}
+              onUnfriend={() => unfriend(row.id)}
+              onBlock={() => block(row.id)}
+            />
+          );
+        })}
+        {f.outgoing.map((req) => (
+          <PersonBox
             key={req.id}
             name={req.to.display_name}
             pill={<Pill>Request sent</Pill>}
@@ -293,25 +324,150 @@ function PeopleList({ f, known, rows, you, youName, footer }: {
             right={<Button variant="secondary" size="sm" onClick={() => f.runMutation(() => window.claude.social.cancelRequest(req.id), req.id, "Couldn't cancel — try again")} disabled={f.pendingRows.has(req.id)} className="shrink-0">Cancel</Button>}
           />
         ))}
-        {rows === 'online' && friends.length === 0 && f.loaded && f.merged.length > 0 && (
-          <li className="px-2 py-1.5 text-xs text-fg-muted">Nobody online right now.</li>
-        )}
         {people === 0 && (
           f.loaded
-            ? <li className="px-2 py-1.5 text-xs text-fg-muted">No friends yet. Add someone by their handle and they show up here.</li>
+            ? <li className="px-1 py-1.5 text-xs text-fg-muted">No friends yet. Add someone by their handle and they show up here.</li>
             : <li><LoadingState what="your friends" variant="inline" /></li>
         )}
-        {footer && <li>{footer}</li>}
       </ul>
-      {showAdd && (
-        <div className="absolute inset-x-0 bottom-0 p-2">
-          {adding
-            ? <AddFriend refresh={f.refresh} autoFocus onCancel={() => setAdding(false)} />
-            // Filled, full width, inside the box — Appearance's "Build new theme".
-            : <Button className="w-full" onClick={() => setAdding(true)}>Add a friend</Button>}
-        </div>
+      <div className="absolute inset-x-0 bottom-0 pt-2">
+        {manage === 'edit' && f.merged.length > 0 ? (
+          // Settings → Account's Edit account: an Edit button, and Done to leave the mode. Two
+          // buttons side by side: the filled one on the right (guide "Buttons").
+          editing
+            ? <Button className="w-full" onClick={() => setEditing(false)}>Done</Button>
+            : adding
+              ? <AddFriend refresh={f.refresh} autoFocus onCancel={() => setAdding(false)} />
+              : (
+                <div className="flex gap-2">
+                  <Button variant="secondary" className="flex-1" onClick={() => setEditing(true)}>Edit friends</Button>
+                  <Button className="flex-1" onClick={() => setAdding(true)}>Add a friend</Button>
+                </div>
+              )
+        ) : adding
+          ? <AddFriend refresh={f.refresh} autoFocus onCancel={() => setAdding(false)} />
+          // Filled, full width, inside the list's area — Appearance's "Build new theme".
+          : <Button className="w-full" onClick={() => setAdding(true)}>Add a friend</Button>}
+      </div>
+      {manage === 'details' && (
+        <FriendDetails
+          row={focused}
+          pending={focused ? f.pendingRows.has(focused.id) : false}
+          known={known}
+          onClose={() => setFocus(null)}
+          onUnfriend={() => { if (focused) { void unfriend(focused.id); setFocus(null); } }}
+          onBlock={() => { if (focused) { void block(focused.id); setFocus(null); } }}
+        />
       )}
     </div>
+  );
+}
+
+/** Block is consequence-gated in every variant: the first press swaps to a plain-language
+ *  confirm, and only the red button inside it acts (Destin's standing rule for hard-to-reverse
+ *  actions). */
+const BLOCK_WARNING = 'Blocking removes this friend, cancels pending requests, and hides you from each other. You can unblock later in Settings → Account.';
+
+/** The `details` variant: a small popup about one friend — the shared popup titled by kind, the
+ *  friend's own card first with no label above it (Session details; the Marketplace detail
+ *  pages' "top card"), then Unfriend / Block as outlined and red buttons. */
+function FriendDetails({ row, pending, known, onClose, onUnfriend, onBlock }: {
+  row: FriendRowData | null; pending: boolean; known: boolean;
+  onClose: () => void; onUnfriend: () => void; onBlock: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  useEffect(() => { setConfirming(false); }, [row?.id]);
+  return (
+    <Dialog open={!!row} onClose={onClose} title="Friend details" size="prompt" screen="chat/games/friend">
+      {row && (
+        <div className="flex flex-col gap-4">
+          <div className={`${CARD_LEVEL_1} p-3`}>
+            <NameWithPill name={row.name} pill={known ? <PresencePill row={row} /> : undefined} />
+            <p className="text-2xs text-fg-muted truncate">
+              {row.handle ? `@${row.handle}` : 'No handle'}
+              {!row.online && row.lastSeenAt ? ` · ${statusLabel(row, Date.now())}` : ''}
+            </p>
+          </div>
+          {confirming ? (
+            <Callout tone="danger">
+              <p className="mb-2">{BLOCK_WARNING}</p>
+              {/* Stacked in a narrow popup: red on top (guide "Buttons" → destructive confirm). */}
+              <div className="flex flex-col gap-2">
+                <Button variant="danger" className="w-full" onClick={onBlock} disabled={pending}>Block {row.name}</Button>
+                <Button variant="secondary" className="w-full" onClick={() => setConfirming(false)}>Cancel</Button>
+              </div>
+            </Callout>
+          ) : (
+            // Two follow-up actions under the card: full-width outlined, stacked (guide
+            // "Buttons": a follow-up action under a group; narrow popups stack).
+            <div className="flex flex-col gap-2">
+              <Button variant="secondary" className="w-full" onClick={onUnfriend} disabled={pending}>Unfriend</Button>
+              <Button variant="secondary" className="w-full" onClick={() => setConfirming(true)}>Block…</Button>
+            </div>
+          )}
+        </div>
+      )}
+    </Dialog>
+  );
+}
+
+/** The block confirm every variant shows inside the friend's box: the warning in words, then
+ *  Cancel and the red Block side by side, red on the right (guide "Buttons" → destructive
+ *  confirm). */
+function BlockConfirm({ pending, onBlock, onCancel }: { pending: boolean; onBlock: () => void; onCancel: () => void }) {
+  return (
+    <div className="flex flex-col gap-2 pb-1.5">
+      <p className="text-xs text-fg-2">{BLOCK_WARNING}</p>
+      <div className="flex gap-2 justify-end" data-parts-agree="block confirm buttons">
+        <Button variant="secondary" size="sm" onClick={onCancel}>Cancel</Button>
+        <Button variant="danger" size="sm" onClick={onBlock} disabled={pending}>Block</Button>
+      </div>
+    </div>
+  );
+}
+
+/** The `inline` variant: the friend's box opens in place (the Tags card's edit-in-place) to show
+ *  the handle and the two actions. */
+function ManageFriend({ row, pending, onUnfriend, onBlock }: { row: FriendRowData; pending: boolean; onUnfriend: () => void; onBlock: () => void }) {
+  const [confirming, setConfirming] = useState(false);
+  return (
+    <div className="flex flex-col gap-2 pb-1.5">
+      <p className="text-2xs text-fg-muted">{row.handle ? `@${row.handle}` : 'No handle'}</p>
+      {confirming
+        ? <BlockConfirm pending={pending} onBlock={onBlock} onCancel={() => setConfirming(false)} />
+        : (
+          <div className="flex gap-2 justify-end" data-parts-agree="manage friend buttons">
+            <Button variant="secondary" size="sm" onClick={onUnfriend} disabled={pending}>Unfriend</Button>
+            <Button variant="secondary" size="sm" onClick={() => setConfirming(true)}>Block…</Button>
+          </div>
+        )}
+    </div>
+  );
+}
+
+/** The `edit` variant's row: in edit mode (Settings → Account's Edit account), the handle shows
+ *  under the name and Unfriend / Block… sit at the right; Block asks inside the box first. */
+function EditRow({ row, pill, sub, editing, error, pending, onUnfriend, onBlock }: {
+  row: FriendRowData; pill?: React.ReactNode; sub?: string; editing: boolean; error?: string;
+  pending: boolean; onUnfriend: () => void; onBlock: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  useEffect(() => { if (!editing) setConfirming(false); }, [editing]);
+  return (
+    <PersonBox
+      name={row.name}
+      pill={pill}
+      sub={sub}
+      error={error}
+      right={editing && !confirming ? (
+        <div className="flex items-center gap-1.5 shrink-0" data-parts-agree="edit friend buttons">
+          <Button variant="secondary" size="sm" onClick={onUnfriend} disabled={pending}>Unfriend</Button>
+          <Button variant="secondary" size="sm" onClick={() => setConfirming(true)}>Block…</Button>
+        </div>
+      ) : undefined}
+    >
+      {editing && confirming && <BlockConfirm pending={pending} onBlock={onBlock} onCancel={() => setConfirming(false)} />}
+    </PersonBox>
   );
 }
 
@@ -334,30 +490,6 @@ export function NameWithPill({ name, pill }: { name: string; pill?: React.ReactN
       <span className="text-sm leading-5 text-fg truncate min-w-0">{name}</span>
       {pill && <span className="flex items-center h-5 shrink-0">{pill}</span>}
     </span>
-  );
-}
-
-/** One person: name + pill, an optional grey line under it, and the row's action at the right
- *  edge, centred on the row (guide "Actions live on the right"; the setting row's control slot). */
-function PersonRow({ name, pill, sub, error, right }: {
-  name: string;
-  pill?: React.ReactNode;
-  sub?: React.ReactNode;
-  error?: string;
-  right?: React.ReactNode;
-}) {
-  return (
-    <li className="flex flex-col gap-1 px-2 py-1.5">
-      <div className="flex items-center gap-2 min-h-7">
-        <div className="flex-1 min-w-0">
-          <NameWithPill name={name} pill={pill} />
-          {sub && <div className="text-2xs text-fg-muted truncate">{sub}</div>}
-        </div>
-        {right}
-      </div>
-      {/* WHY FieldError (guide: no red/coloured body text for messages) */}
-      {error && <FieldError as="p" size="2xs">{error}</FieldError>}
-    </li>
   );
 }
 
@@ -434,53 +566,3 @@ function AddFriend({ refresh, autoFocus, onCancel }: { refresh: () => Promise<vo
   );
 }
 
-// Per-friend "…" row menu. The friend's @handle lives HERE now and nowhere else (G2-7: "only
-// show @ tags in the manage friend/3 dot menu"), as the menu's own header. Block is
-// consequence-gated: it swaps the menu to a plain-language confirm BEFORE acting.
-function FriendRowMenu({ name, handle, onUnfriend, onBlock, pending }: { name: string; handle: string | null; onUnfriend: () => void; onBlock: () => void; pending?: boolean }) {
-  const m = useAnchoredMenu();
-  const [confirmingBlock, setConfirmingBlock] = useState(false);
-  const close = () => { m.setOpen(false); setConfirmingBlock(false); };
-  return (
-    <div ref={m.wrapRef} className="relative shrink-0">
-      <button
-        type="button"
-        onClick={() => { m.setOpen((o) => !o); setConfirmingBlock(false); }}
-        title="Manage friend"
-        aria-label="Friend options"
-        aria-haspopup="menu"
-        aria-expanded={m.open}
-        // Same 28px square as the header's ✕ and the fold arrow, centred on the row.
-        className="w-7 h-7 flex items-center justify-center rounded-md text-fg-muted hover:text-fg-2 hover:bg-inset coarse-hit transition-colors"
-      >
-        ⋯
-      </button>
-      {m.open && (
-        <div role="menu" className={`${MENU} right-0 min-w-56`} style={{ zIndex: 62 }}>
-          <div className="px-2 pt-1 pb-1.5">
-            <div className="text-xs font-medium text-fg truncate">{name}</div>
-            {handle && <div className="text-2xs text-fg-muted truncate">@{handle}</div>}
-          </div>
-          {confirmingBlock ? (
-            <div className="flex flex-col gap-2 p-1">
-              <p className="text-fg-2 leading-snug">
-                Blocking removes this friend, cancels pending requests, and hides you
-                from each other. You can unblock later in Settings → Account.
-              </p>
-              {/* Destructive confirm, stacked in a narrow box: red on top (guide "Buttons"). */}
-              <div className="flex flex-col gap-2">
-                <Button type="button" variant="danger" size="md" onClick={() => { onBlock(); close(); }} disabled={pending} className="w-full">Block</Button>
-                <Button type="button" variant="secondary" size="md" onClick={() => setConfirmingBlock(false)} className="w-full">Cancel</Button>
-              </div>
-            </div>
-          ) : (
-            <>
-              <button type="button" role="menuitem" onClick={() => { onUnfriend(); close(); }} disabled={pending} className={MENU_ITEM}>Unfriend</button>
-              <button type="button" role="menuitem" onClick={() => setConfirmingBlock(true)} className="w-full text-left px-2 py-1.5 rounded text-destructive-fg hover:bg-inset transition-colors">Block</button>
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
