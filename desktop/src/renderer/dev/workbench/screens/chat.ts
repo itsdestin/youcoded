@@ -96,6 +96,18 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat/games/chess/lobby', 'pane', 'games'), params: { signedIn: '1', autoplay: '0' } },
   { ...chat('chat/games/connect-four', 'pane', 'games'), params: { signedIn: '1' } },
   { ...chat('chat/games/connect-four/lobby', 'pane', 'games'), params: { signedIn: '1', autoplay: '0' } },
+  // The friends panel's states (backlog row 11; mock-shim `?friends=`): four friends with every
+  // status, none yet, a request each way; then a phone and a 640×480 window. The chess lobby with
+  // the same four friends shows a winning, a losing, an even and a never-played record.
+  { ...chat('chat/games#friends', 'pane', 'games'), params: { signedIn: '1', friends: 'many' } },
+  { ...chat('chat/games#no-friends', 'pane', 'games'), params: { signedIn: '1', friends: 'none' } },
+  { ...chat('chat/games#requests', 'pane', 'games'), params: { signedIn: '1', friends: 'requests' } },
+  { ...chat('chat/games#phone', 'pane', 'games', 'narrow'), viewport: { width: 390, height: 844 }, params: { signedIn: '1', friends: 'many' } },
+  { ...chat('chat/games#signed-out-phone', 'pane', 'games', 'narrow'), viewport: { width: 390, height: 844 } },
+  { ...chat('chat/games#small', 'pane', 'games'), viewport: { width: 640, height: 480 }, params: { signedIn: '1', friends: 'many' } },
+  { ...chat('chat/games/chess/lobby#friends', 'pane', 'games'), params: { signedIn: '1', autoplay: '0', friends: 'many' } },
+  { ...chat('chat/games/chess/lobby#no-friends', 'pane', 'games'), params: { signedIn: '1', autoplay: '0', friends: 'none' } },
+  { ...chat('chat/games/chess/lobby#phone', 'pane', 'games', 'narrow'), viewport: { width: 390, height: 844 }, params: { signedIn: '1', autoplay: '0', friends: 'many' } },
   // Another computer holds this conversation: each phase of "open it here instead?".
   ...['confirm', 'force', 'undeliverable', 'claim-denied'].map((ph) => chat(`chat/takeover/${ph}`, 'dialog', 'handoff')),
   chat('chat/resume/preview', 'dialog'),

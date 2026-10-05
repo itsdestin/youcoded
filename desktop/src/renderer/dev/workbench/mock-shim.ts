@@ -37,7 +37,7 @@ import { playReply, resolvePermission, parseReplyScript, isControl, splitTurns, 
 // Task 7c: Connect Four's friends/presence layer (window.claude.social) — see
 // fake-party.ts for why this exists and what it stands in for.
 import { JAKE_ID, JAKE_USERNAME } from './fake-party';
-import { arcadeStatusFor, arcadeBoardFor, arcadeRecordsFor, arcadeVersusIsDown, type ArcadeScenario } from './arcade-fixtures';
+import { MIRA_ID, arcadeStatusFor, arcadeBoardFor, arcadeRecordsFor, arcadeVersusIsDown, type ArcadeScenario } from './arcade-fixtures';
 import type { VoiceEvent, VoiceReadiness } from '../../../shared/voice-types';
 import type {
   GitFileStatusResult, GitFileReviewResult, GitLogEntry, GitCommitFileDiffResult, GitOpResult,
@@ -2582,6 +2582,33 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     id: JAKE_ID, display_name: JAKE_USERNAME, handle: 'jake', avatar_url: null,
     last_seen_at: jakeNowSec, created_at: jakeNowSec - 86_400,
   };
+  // `?friends=` (games-social redesign, backlog row 11): the friends panel's
+  // states. Unset = Jake alone (what the landing page films). `many` = four
+  // friends — Jake online, Mira in a game, Sam last seen 3 hours ago, Ada never
+  // seen — so every status pill shows at once. `requests` = `many` plus one
+  // request each way. `none` = signed in with no friends yet.
+  const friendsSwitch = typeof location === 'undefined' ? null : new URLSearchParams(location.search).get('friends');
+  const friendCard = (id: string, name: string, lastSeen: number | null) => ({
+    id, display_name: name, handle: name.toLowerCase(), avatar_url: null,
+    last_seen_at: lastSeen, created_at: jakeNowSec - 86_400,
+  });
+  const friendList = !signedInSwitch || friendsSwitch === 'none' ? []
+    : friendsSwitch === 'many' || friendsSwitch === 'requests'
+      ? [JAKE_FRIEND, friendCard(MIRA_ID, 'Mira', jakeNowSec), friendCard('sam', 'Sam', jakeNowSec - 3 * 3600), friendCard('ada', 'Ada', null)]
+      : [JAKE_FRIEND];
+  const presenceUsers = friendsSwitch === 'none' ? []
+    : friendsSwitch === 'many' || friendsSwitch === 'requests'
+      ? [
+        { id: JAKE_FRIEND.id, display_name: JAKE_FRIEND.display_name, handle: JAKE_FRIEND.handle, status: 'idle' },
+        { id: MIRA_ID, display_name: 'Mira', handle: 'mira', status: 'in-game' },
+      ]
+      : [{ id: JAKE_FRIEND.id, display_name: JAKE_FRIEND.display_name, handle: JAKE_FRIEND.handle, status: 'idle' }];
+  const requestList = friendsSwitch === 'requests'
+    ? {
+      incoming: [{ id: 'req-zed', from: { id: 'zed', display_name: 'Zed', handle: 'zed', avatar_url: null }, created_at: jakeNowSec }],
+      outgoing: [{ id: 'req-lee', to: { id: 'lee', display_name: 'Lee', handle: 'lee', avatar_url: null }, created_at: jakeNowSec }],
+    }
+    : { incoming: [], outgoing: [] };
   // Holds the one onPresenceEvent callback the app registers (usePresence.ts
   // subscribes exactly once) so presenceConnect can push events into it.
   let presenceListener: ((ev: { type: string; [k: string]: unknown }) => void) | null = null;
@@ -2589,7 +2616,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   const social: Ns<'social'> = {
     lookupHandle: async () => ({ ok: false, status: 404, message: 'No one has that handle' }),
     sendRequest: async () => ({ ok: false, status: 404, message: 'No one has that handle' }),
-    listRequests: async () => ({ ok: true, value: { incoming: [], outgoing: [] } }),
+    listRequests: async () => ({ ok: true, value: requestList }),
     acceptRequest: async () => ({ ok: true, value: undefined }),
     declineRequest: async () => ({ ok: true, value: undefined }),
     cancelRequest: async () => ({ ok: true, value: undefined }),
@@ -2597,7 +2624,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // FriendsScreen has something to show even before presence reports him
     // online (mirrors a real friends list, which loads independently of who's
     // currently connected).
-    listFriends: async () => ({ ok: true, value: signedInSwitch ? [JAKE_FRIEND] : [] }),
+    listFriends: async () => ({ ok: true, value: friendList }),
     unfriend: async () => ({ ok: true, value: undefined }),
     block: async () => ({ ok: true, value: undefined }),
     unblock: async () => ({ ok: true, value: undefined }),
@@ -2620,10 +2647,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
           presenceListener?.({ type: 'error', message: "Can't reach the game server" });
           return;
         }
-        presenceListener?.({
-          type: 'presence',
-          users: [{ id: JAKE_FRIEND.id, display_name: JAKE_FRIEND.display_name, handle: JAKE_FRIEND.handle, status: 'idle' }],
-        });
+        presenceListener?.({ type: 'presence', users: presenceUsers });
       }, 150);
       return { ok: true };
     },
