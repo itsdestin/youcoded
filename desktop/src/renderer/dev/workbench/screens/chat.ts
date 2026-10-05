@@ -47,8 +47,8 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/menu/file', 'menu'),
   // No session at all: the first screen a new user sees.
   { name: 'welcome', tags: ['view'], scenario: 'empty' },
-  // TRIAL (first-run deck C-2): the first-time welcome in brand versions, removed once one is picked.
-  ...['W1', 'W2', 'W3'].map((w) => ({ name: `welcome#${w.toLowerCase()}`, tags: ['view'], scenario: 'empty' as const, params: { welcome: w } })),
+  // TRIAL (welcome deck): the first-time welcome's two directions, removed once one is picked.
+  ...['D1', 'D2'].map((w) => ({ name: `welcome#${w.toLowerCase()}`, tags: ['view'], scenario: 'empty' as const, params: { welcome: w } })),
   { name: 'welcome/new-session', tags: ['view'], scenario: 'empty', sameAs: { name: 'welcome', why: 'a first-ever launch opens the form already' } },
   { name: 'projects', tags: ['view', 'projects'] },
   { name: 'marketplace', tags: ['view', 'marketplace'] },

@@ -2,9 +2,8 @@
 // can call getScreenText for the attention classifier's ~1s buffer reads.
 // Must run before any TerminalView mounts (which call registerTerminal).
 import { guardDirtyEditor } from './components/artifact-views/dirty-editor-guard';
-// TRIAL (first-run deck C-2): the first-time welcome screen's brand versions, picked by
-// `?welcome=W1|W2|W3` in the workbench until Destin chooses; removed then.
-import brandAppIcon from './components/brand/app-icon-192.png';
+// TRIAL (welcome deck, 2026-10-04): the first-time welcome screen's two directions, picked by
+// `?welcome=D1|D2` in the workbench until Destin chooses; removed then.
 const WELCOME_TRIAL = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('welcome') : null;
 import './bootstrap/terminal-bridge';
 import React, { useState, useEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
@@ -571,6 +570,7 @@ function AppInner() {
   // Welcome screen "New session" expansion form state
   const [welcomeFormOpen, setWelcomeFormOpen] = useState(false);
   const [welcomeCwd, setWelcomeCwd] = useState('');
+  const [welcomeD2Details, setWelcomeD2Details] = useState(false); // TRIAL (welcome D2)
   const [welcomeModel, setWelcomeModel] = useState('sonnet');
   const [welcomeDangerous, setWelcomeDangerous] = useState(false);
   // Runtime (Claude Code vs YouCoded native harness) + native binding for the
@@ -4088,7 +4088,7 @@ function AppInner() {
           <div
             // invisible under Welcome back: that screen takes this one's place
             // until you choose (Q-where), rather than sitting on top of it.
-            className={`flex-1 flex flex-col items-center justify-center gap-3${welcomeBackMode ? ' invisible' : ''}${firstTimeWelcome && WELCOME_TRIAL === 'W2' ? ' brand-surface' : ''}`}
+            className={`flex-1 flex flex-col items-center justify-center gap-3${welcomeBackMode ? ' invisible' : ''}`}
             // The header is position:absolute over the top of this area, so
             // center the welcome content in the space BELOW it (and above the
             // bare frame's bottom strip) rather than behind it. --top-chrome-
@@ -4126,7 +4126,7 @@ function AppInner() {
               />
             ) : firstTimeWelcome ? (
               <div className="flex flex-col items-center gap-1 text-center max-w-sm select-none">
-                <p className={WELCOME_TRIAL ? 'brand-heading text-2xl text-fg' : 'text-xl text-fg'}>Start your first session</p>
+                <p className={WELCOME_TRIAL ? 'brand-heading text-3xl text-fg' : 'text-xl text-fg'}>Start your first session</p>
                 <p className="text-sm text-fg-muted">A session is one conversation with the assistant, working in one folder.</p>
               </div>
             ) : (
@@ -4136,13 +4136,19 @@ function AppInner() {
                 motes, sparkles) orbiting the mascot — big canvas, no clipping.
                 data-guide-anchor: the tour's first stop rings the buddy. */}
             <div data-guide-anchor="welcome-mascot" className="flex">
-              {firstTimeWelcome && (WELCOME_TRIAL === 'W2' || WELCOME_TRIAL === 'W3')
-                ? <img src={brandAppIcon} alt="" width={120} height={120} className="brand-icon my-3" draggable={false} />
-                : <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-36 h-36 text-fg-dim" scene />}
+              <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-36 h-36 text-fg-dim" scene />
             </div>
             {/* Welcome screen: New session (expandable) + Resume session */}
-            <div className={`flex flex-col items-center gap-2 mt-1 w-64${remoteCatchingUp || startingSession ? ' hidden' : ''}`}>
-              {welcomeFormOpen ? (
+            <div className={`flex flex-col items-center gap-2 mt-1 ${firstTimeWelcome && WELCOME_TRIAL ? 'w-96' : 'w-64'}${remoteCatchingUp || startingSession ? ' hidden' : ''}`}>
+              {firstTimeWelcome && WELCOME_TRIAL === 'D2' && !welcomeD2Details ? (
+                <>
+                  <Button variant="primary" size="lg" className="w-full py-3 text-base">Start your first session</Button>
+                  <p className="text-sm text-fg-muted text-center">
+                    Works in the <span className="text-fg-2">{welcomeCwd.split(/[\\/]/).filter(Boolean).pop() || 'home'}</span> folder.{' '}
+                    <button type="button" className="text-fg-2 underline underline-offset-2 hover:text-fg" onClick={() => setWelcomeD2Details(true)}>Change folder or model</button>
+                  </p>
+                </>
+              ) : welcomeFormOpen ? (
                 /* Expanded new-session form with toggles.
                    data-guide-anchor: the tour's "sessions" stop rings the form. */
                 <div className="layer-surface w-full p-3 flex flex-col gap-2" data-guide-anchor="new-session-form">
@@ -4221,13 +4227,13 @@ function AppInner() {
                         (bg-inset text-fg-dim hover:bg-edge) that decision 60 collapses
                         into the outline, and it sits beside Create as a peer choice —
                         the exact case decision 60 gives for rejecting ghost. */}
-                    <Button
+                    {!(firstTimeWelcome && WELCOME_TRIAL) && <Button
                       variant="secondary"
                       size="lg"
                       onClick={() => setWelcomeFormOpen(false)}
                     >
                       Cancel
-                    </Button>
+                    </Button>}
                     {/* Third skip-permissions Create button — spec decision 62 cited only
                         SessionStrip and ResumeBrowser plus App.tsx's toggle, and missed this
                         one on the welcome form. Same call: FILLED danger, deliberately
@@ -4278,7 +4284,7 @@ function AppInner() {
                       size="lg"
                       className="flex-1 py-1.5"
                     >
-                      {welcomeDangerous && welcomeRuntime !== 'native' ? 'Create (dangerous)' : 'Create session'}
+                      {welcomeDangerous && welcomeRuntime !== 'native' ? 'Create (dangerous)' : firstTimeWelcome && WELCOME_TRIAL ? 'Start session' : 'Create session'}
                     </Button>
                   </div>
                 </div>
