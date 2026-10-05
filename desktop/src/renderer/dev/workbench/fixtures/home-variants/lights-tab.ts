@@ -1,18 +1,17 @@
-// Design options for the "lights-tab" task of the Home page redesign, ROUND 2b. Keys are
+// Design options for the "lights-tab" task of the Home page redesign, ROUND 2c. Keys are
 // "<option>" or "<option>-<state>"; each becomes the practice screen
 // pages/page/page-home#v-lights-tab-<key>. See types.ts.
 //
-// Round 2 verdicts (Destin): keep the page's EXISTING room control as it is (the round "All" bulb
-// button, the palette scenes button, the fold arrow, the room bar); no separate "All off" button.
-// He liked the room strip and the tile grid, not the mixer, and asked for more of those two kinds.
-// Colour: in-card menu for rows; a small glass pop-over anchored to the light for the tile-like kinds.
-// A room is ONE card ("Destin's Room Lights"), unreachable lights last in it, all-unreachable rooms
-// last on the tab. The three kinds differ in how the open card shows each light:
-//   rows   "Roomy rows"   one wide row per light: bulb, name, percent, a thick bar, the colour menu inside the card
-//   tiles  "Big tiles"    two big tiles per row, the fill shows brightness; tap switches, drag sideways dims;
-//                         the colour dot opens a pop-over
-//   chips  "Chips"        a wrapped line of small chips (tap switches); the small arrow on a chip opens it into a
-//                         full-width panel with its bar and colour pop-over
+// Round 2b verdict (Destin): torn between the STYLE of Roomy rows (clear name + percent, thick full bar,
+// calm glass surface, colour dot) and the SHAPE of Big tiles (2-3 per line, tap to switch). Round 2c mixes
+// the two. Still settled: one card per room "<Room> Lights" with the page's own round All button, the
+// palette scenes button and the fold arrow; unreachable lights last; all-unreachable rooms last; colour
+// opens a floating glass pop-up hanging off the light.
+//   r1  "Tall cards"   portrait cards, about three per line: bulb, name, percent and colour dot on top, a thick
+//                      bar along the bottom; tap the card to switch, use the bar to dim
+//   r2  "Slide tiles"  wide tiles, two per line, rows' type on a calm surface; the whole tile is the slider
+//                      (fill = brightness): tap switches, drag sideways dims
+//   r3  "Half rows"    the rows exactly as they are, half width, two lights per line
 import type { HomeVariants } from './types';
 
 // The page's own functions are reached from inside its script, so this block is pasted into it by
@@ -20,7 +19,7 @@ import type { HomeVariants } from './types';
 // open, scenesBtn, groupBright, paletteHtml ... which live inside the page's closure).
 // Plain ES5, no backticks, no dollar-brace.
 const LT_CODE = String.raw`
-  var LT_KIND = '__KIND__', LT_GONE = __GONE__, ltSel = __SEL__;
+  var LT_KIND = '__KIND__', LT_GONE = __GONE__;
   // Practice-only: make a room's lights unreachable so the "sort to the end" rule can be seen.
   function ltMutate(rs) { rs.forEach(function (r) { if (LT_GONE.indexOf(r.id) >= 0) r.items.forEach(function (x) { if (isLight(x)) { x.state = 'unavailable'; } }); }); }
   // Unreachable lights always go last in their card, whatever order was chosen in Edit.
@@ -42,25 +41,25 @@ const LT_CODE = String.raw`
     var p = paletteHtml(it);
     return p ? '<div class="ltp' + (up ? ' up' : '') + '" role="dialog" aria-label="Colour of ' + esc(it.name) + '"><div class="ltp-h">Colour of ' + esc(it.name) + '</div>' + p + '</div>' : '';
   }
-  // Big tile (option tiles): the whole tile switches the light; sliding it sideways dims it.
-  function ltTile(it) {
+  // Cards (r1 Tall cards, r3 Half rows): the page's own light row, shrunk into a grid cell. Same markup as a row
+  // (face = bulb + name + percent, colour dot, thick bar) so it picks up the page's calm surface and glow.
+  function ltCell(it) {
+    var na = gone(it), on = !na && isOn(it), pct = ltPct(it), dim = dimmable(it);
+    if (dragging === it.id) { var le = document.querySelector('[data-bright="' + it.id + '"]'); if (le) pct = Number(le.value); }
+    var r = on && dim ? rangeHtml(it, pct) : '';
+    return '<div class="ltw' + (expanded.has(it.id) && on ? ' pop' : '') + '"><div class="tile lt-cell' + (on ? ' on' : '') + (na ? ' gone' : '') + '" data-eid="' + esc(it.id) + '" style="--c:' + colourOf(it) + '"><span class="glow"></span>' +
+      '<div class="line"><button class="tile-face" data-toggle="' + esc(it.id) + '" aria-pressed="' + on + '"' + (na ? ' disabled' : '') + ' aria-label="' + esc(it.name) + (on ? ', on' : ', off') + '">' +
+      '<span class="bulb">' + BULB + '</span><span class="name">' + esc(it.name) + '<div class="sub">' + esc(ltStatus(it)) + '</div></span></button>' + ltDot(it, on) + '</div>' + r + '</div>' + ltPop(it, false) + '</div>';
+  }
+  // Slide tile (r2): the whole tile is the slider. Its brightness bar is kept (hidden, 1px) so the page's own
+  // sending, holding and "Didn't work" handling run; DRAG_JS moves it from a sideways drag.
+  function ltTile2(it) {
     var na = gone(it), on = !na && isOn(it), pct = ltPct(it), dim = dimmable(it);
     if (dragging === it.id) { var le = document.querySelector('[data-bright="' + it.id + '"]'); if (le) pct = Number(le.value); }
     var r = on && dim ? rangeHtml(it, pct).replace('class="lr"', 'class="lr ltt-r"') : '';
-    return '<div class="ltw' + (expanded.has(it.id) && on ? ' pop' : '') + '"><div class="ltt' + (on ? ' on' : '') + (na ? ' gone' : '') + '" data-eid="' + esc(it.id) + '" style="--c:' + colourOf(it) + ';--v:' + (on ? pct : 0) + '">' +
+    return '<div class="ltw' + (expanded.has(it.id) && on ? ' pop' : '') + '"><div class="ltt ltt2' + (on ? ' on' : '') + (na ? ' gone' : '') + '" data-eid="' + esc(it.id) + '" style="--c:' + colourOf(it) + ';--v:' + (on ? pct : 0) + '">' +
       '<button class="ltt-face" data-toggle="' + esc(it.id) + '" aria-pressed="' + on + '"' + (na ? ' disabled' : '') + ' aria-label="' + esc(it.name) + (on ? ', on' : ', off') + '">' +
-      '<span class="bulb">' + BULB + '</span><span class="pc">' + esc(ltStatus(it)) + '</span><span class="nm">' + esc(it.name) + '</span></button>' + ltDot(it, on) + r + '</div>' + ltPop(it, false) + '</div>';
-  }
-  // Chip (option chips): small, one line. Tap switches; the little arrow opens it into a full-width panel.
-  function ltChip(it) {
-    var na = gone(it), on = !na && isOn(it), pct = ltPct(it), dim = dimmable(it);
-    var more = !na && on && (dim || canWhite(it));
-    var sel = more && ltSel === it.id;
-    if (dragging === it.id) { var le = document.querySelector('[data-bright="' + it.id + '"]'); if (le) pct = Number(le.value); }
-    var face = '<button class="ltc-face" data-toggle="' + esc(it.id) + '" aria-pressed="' + on + '"' + (na ? ' disabled' : '') + ' aria-label="' + esc(it.name) + (on ? ', on' : ', off') + '"><span class="bulb">' + BULB + '</span><span class="nm">' + esc(it.name) + '</span><span class="pc">' + esc(na ? 'Not responding' : ltStatus(it)) + '</span></button>';
-    var arrow = more ? '<button class="ltc-more" data-ltx="' + esc(it.id) + '" aria-expanded="' + sel + '" aria-label="' + (sel ? 'Close' : 'Open') + ' settings for ' + esc(it.name) + '" title="Brightness and colour">' + CHEVRON + '</button>' : '';
-    var ex = sel ? '<div class="ltc-ex">' + (dim ? rangeHtml(it, pct) : '<div class="ltc-only">This light only switches on and off.</div>') + (canWhite(it) ? '<div class="ltw' + (expanded.has(it.id) ? ' pop' : '') + '">' + ltDot(it, on) + ltPop(it, true) + '</div>' : '') + '</div>' : '';
-    return '<div class="ltc' + (on ? ' on' : '') + (na ? ' gone' : '') + (sel ? ' sel' : '') + '" data-eid="' + esc(it.id) + '" style="--c:' + colourOf(it) + '"><div class="ltc-row">' + face + arrow + '</div>' + ex + '</div>';
+      '<span class="bulb">' + BULB + '</span><span class="tx"><span class="nm">' + esc(it.name) + '</span><span class="pc">' + esc(ltStatus(it)) + '</span></span></button>' + ltDot(it, on) + r + '</div>' + ltPop(it, false) + '</div>';
   }
   // The ONE card for a room on the Lights tab. The header is the page's own "All" tile, unchanged.
   function ltRoom(room, items, ctx) {
@@ -77,26 +76,23 @@ const LT_CODE = String.raw`
       groupBright(room, live, onList, c) + pendHtml('room:' + room.id) + '</div>';
     var body = '', popped = false;
     if (isOpen) {
-      popped = LT_KIND !== 'rows' && lights.some(function (it) { return expanded.has(it.id) && isOn(it) && !gone(it); });
-      if (LT_KIND === 'rows') body = '<div class="lt-rows">' + lights.map(function (it) { return itemHtml(it, ctx); }).join('') + '</div>';
-      else if (LT_KIND === 'tiles') body = '<div class="lt-grid">' + lights.map(ltTile).join('') + '</div>';
-      else body = '<div class="lt-chips">' + lights.map(ltChip).join('') + '</div>';
+      popped = lights.some(function (it) { return expanded.has(it.id) && isOn(it) && !gone(it); });
+      if (LT_KIND === 'r1') body = '<div class="lt-grid lt-g1">' + lights.map(ltCell).join('') + '</div>';
+      else if (LT_KIND === 'r2') body = '<div class="lt-grid lt-g2">' + lights.map(ltTile2).join('') + '</div>';
+      else body = '<div class="lt-grid lt-g3">' + lights.map(ltCell).join('') + '</div>';
     }
-    var pend = LT_KIND === 'rows' || !isOpen ? '' : lights.map(function (it) { return pendHtml(it.id); }).join('');
+    var pend = !isOpen ? '' : lights.map(function (it) { return pendHtml(it.id); }).join('');
     return '<section class="yc-card room lt lt-k-' + LT_KIND + (anyOn ? ' on' : '') + (isOpen ? ' is-open' : '') + (popped ? ' has-pop' : '') + '" style="--c:' + c + '" data-lt="' + esc(room.id) + '"><span class="glow"></span>' +
       all + scenesHtml(room) + body + (pend ? '<div class="lt-pend">' + pend + '</div>' : '') + '</section>';
   }
-  // Pop-overs close on a click outside them, and on Escape. Rows keep their in-card menu, so they are left alone.
+  // The colour pop-up closes on a click outside it, and on Escape.
   document.addEventListener('click', function (e) {
-    var x = e.target.closest && e.target.closest('button[data-ltx]');
-    if (x) { var id = x.getAttribute('data-ltx'); ltSel = ltSel === id ? null : id; expanded.clear(); render(); return; }
-    if (LT_KIND === 'rows' || !expanded.size) return;
+    if (!expanded.size) return;
     if (e.target.closest && (e.target.closest('.ltp') || e.target.closest('.cbtn'))) return;
     expanded.clear(); render();
   }, true);
   document.addEventListener('keydown', function (e) {
-    if (e.key !== 'Escape' || LT_KIND === 'rows') return;
-    if (expanded.size) { expanded.clear(); render(); } else if (ltSel) { ltSel = null; render(); }
+    if (e.key === 'Escape' && expanded.size) { expanded.clear(); render(); }
   });
 `;
 
@@ -107,12 +103,12 @@ const IDS_LINE = 'var ids = list.map(function (r) { return r.id; });';
 // WHY exact-text swaps (not CSS): the Lights tab draws through roomHtml/viewHtml, which only the page's own
 // script can change. Each swap is checked, so a page edit that moves these lines makes the screen fail loudly
 // instead of silently showing today's page.
-function transformFor(kind: string, gone: string[] = [], sel: string | null = null) {
+function transformFor(kind: string, gone: string[] = []) {
   return (html: string): string => {
     for (const s of [ROOM_HTML_HEAD, CTX_LINE, IDS_LINE]) {
       if (html.split(s).length !== 2) throw new Error('lights-tab variant: page text changed, cannot find: ' + s);
     }
-    const code = LT_CODE.replace('__KIND__', kind).replace('__GONE__', JSON.stringify(gone)).replace('__SEL__', JSON.stringify(sel));
+    const code = LT_CODE.replace('__KIND__', kind).replace('__GONE__', JSON.stringify(gone));
     return html
       .replace(ROOM_HTML_HEAD, () => code + '\n  ' + ROOM_HTML_HEAD)
       .replace(CTX_LINE, () => CTX_LINE + " if (forceOpen && !editing) return ltRoom(room, items, ctx);")
@@ -162,69 +158,71 @@ const CSS_BASE = String.raw`
   .ltp.up { animation-name: ltp-in-up; }
   @keyframes ltp-in-up { from { opacity: 0; transform: translateY(4px) scale(.96); } to { opacity: 1; transform: none; } }
   @media (prefers-reduced-motion: reduce) { .ltp { animation: none; } }
-  .lt .fold:focus-visible, .ltc-more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .lt .fold:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   @media (max-width: 520px) { .lt .scn, .lt .fold { width: 30px; height: 30px; } }
 `;
 
-// ── rows: Roomy rows ────────────────────────────────────────────────────────────────────────────
-// The page's own light rows, but loose: tall, with a thick bar, and no card inside the card.
-const CSS_ROWS = String.raw`
-  .lt-rows { display: flex; flex-direction: column; gap: 8px; }
-  .lt-rows .tile { padding: 12px 16px 14px; gap: 10px; border-radius: 18px; background: color-mix(in srgb, var(--fg) 5%, var(--panel)); }
-  .lt-rows .tile .bulb { width: 40px; height: 40px; }
-  .lt-rows .tile .name { font-size: 15px; font-weight: 600; }
-  .lt-rows .tile .lr { --h: 34px; height: 34px; }
-  .lt-rows .tile .cbtn { width: 30px; height: 30px; }
-  .lt-rows .tile.gone .name { color: var(--fg-muted); }
+// ── shared grid ─────────────────────────────────────────────────────────────────────────────────
+const CSS_GRID = String.raw`
+  .lt-grid { display: grid; gap: 10px; }
+  /* a grid cell is as tall as its row, so an unreachable light is not a short stub beside working ones */
+  .ltw { min-width: 0; display: flex; flex-direction: column; }
+  .ltw > .tile, .ltw > .ltt { flex: 1; }
+  .lt-cell { min-width: 0; border-radius: 18px; background: color-mix(in srgb, var(--fg) 5%, var(--panel)); }
+  .lt-cell .name { font-size: 15px; font-weight: 600; white-space: normal; line-height: 1.25; }
+  .lt-cell .lr { --h: 30px; height: 30px; }
+  .lt-cell .cbtn { width: 28px; height: 28px; flex-shrink: 0; }
+  .lt-cell.gone .name { color: var(--fg-muted); }
 `;
 
-// ── tiles: Big tiles ────────────────────────────────────────────────────────────────────────────
-const CSS_TILES = String.raw`
-  .lt-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
-  .ltt { position: relative; min-height: 124px; border-radius: 20px; overflow: hidden; touch-action: pan-y; user-select: none; -webkit-user-select: none;
-    border: 1px solid color-mix(in srgb, var(--fg) 10%, transparent); background: color-mix(in srgb, var(--fg) 5%, var(--panel)); }
-  /* The fill shows how bright the light is: it grows from the left as the tile is dragged sideways. */
-  .ltt.on { border-color: color-mix(in srgb, var(--c) 55%, transparent); box-shadow: 0 10px 24px -14px var(--c);
-    background: linear-gradient(to right, color-mix(in srgb, var(--c) 42%, transparent) calc(var(--v, 0) * 1%), color-mix(in srgb, var(--fg) 5%, var(--panel)) 0); }
+// ── r1: Tall cards ──────────────────────────────────────────────────────────────────────────────
+// Portrait: the top of the card is one big tap area (bulb, name, percent); the thick bar lies along the bottom.
+const CSS_R1 = String.raw`
+  .lt-g1 { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+  .lt-g1 .lt-cell { min-height: 140px; padding: 12px 12px 12px; gap: 10px; }
+  .lt-g1 .lt-cell .line { flex: 1; align-items: stretch; }
+  .lt-g1 .lt-cell .tile-face { flex-direction: column; align-items: flex-start; justify-content: space-between; gap: 8px; align-self: stretch; }
+  .lt-g1 .lt-cell .bulb { width: 38px; height: 38px; }
+  .lt-g1 .lt-cell .name { flex: 0 0 auto; width: 100%; }
+  .lt-g1 .lt-cell .name .sub { margin-top: 2px; white-space: nowrap; }
+  .lt-g1 .lt-cell .cbtn { position: absolute; top: 0; right: 0; }
+`;
+
+// ── r2: Slide tiles ─────────────────────────────────────────────────────────────────────────────
+// A calm surface with the rows' type. The fill is a soft tint of the light's colour; a thin bright edge marks the level.
+const CSS_R2 = String.raw`
+  .lt-g2 { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+  .ltt { position: relative; min-height: 100px; border-radius: 18px; overflow: hidden; touch-action: pan-y; user-select: none; -webkit-user-select: none;
+    border: 1px solid var(--edge-dim); background: color-mix(in srgb, var(--fg) 5%, var(--panel)); }
+  /* The fill grows from the left as the tile is dragged sideways (two gradients: the thin edge, then the tint). */
+  .ltt.on { border-color: color-mix(in srgb, var(--c) 40%, var(--edge-dim));
+    background:
+      linear-gradient(to right, transparent calc(var(--v, 0) * 1% - 3px), var(--c) 0, var(--c) calc(var(--v, 0) * 1%), transparent 0),
+      linear-gradient(to right, color-mix(in srgb, var(--c) 26%, var(--panel)) calc(var(--v, 0) * 1%), color-mix(in srgb, var(--fg) 5%, var(--panel)) 0); }
   .ltt.drag { cursor: ew-resize; }
-  .ltt-face { appearance: none; font: inherit; color: inherit; text-align: left; background: none; border: 0; cursor: pointer; width: 100%; height: 100%; min-height: 124px; padding: 14px; display: flex; flex-direction: column; justify-content: space-between; align-items: flex-start; gap: 4px; }
+  .ltt-face { appearance: none; font: inherit; color: inherit; text-align: left; background: none; border: 0; cursor: pointer; width: 100%; height: 100%; min-height: 98px; padding: 0 52px 0 14px; display: flex; align-items: center; gap: 12px; }
   .ltt-face:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
-  .ltt-face .bulb { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: var(--well); color: var(--fg-muted); }
-  .ltt.on .bulb { background: var(--c); color: #1a1a1a; box-shadow: 0 0 16px var(--c); }
-  .ltt .pc { font-size: 24px; font-weight: 600; line-height: 1; color: var(--fg); margin-top: auto; }
-  .ltt.gone .pc { font-size: 12px; font-weight: 400; color: var(--fg-muted); }
-  .ltt .nm { font-size: 13px; font-weight: 600; line-height: 1.2; color: var(--fg-2); }
-  .ltt .cbtn { position: absolute; top: 14px; right: 14px; }
+  .ltt-face .bulb { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; flex-shrink: 0; background: var(--well); color: var(--fg-muted); }
+  .ltt.on .bulb { background: var(--c); color: #1a1a1a; box-shadow: 0 0 14px var(--c); }
+  .ltt .tx { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .ltt .nm { font-size: 15px; font-weight: 600; line-height: 1.25; color: var(--fg); overflow-wrap: anywhere; }
+  .ltt .pc { font-size: 12px; font-family: var(--font-mono); color: var(--fg-2); }
+  .ltt.gone .nm, .ltt.gone .pc { color: var(--fg-muted); }
+  .ltt.gone .pc { font-family: inherit; }
+  .ltt .cbtn { position: absolute; top: 50%; right: 14px; translate: 0 -50%; }
   .ltt .ltt-r { position: absolute; width: 1px; height: 1px; left: 0; bottom: 0; opacity: 0; pointer-events: none; }
   .ltt:has(.ltt-r:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
-  /* A pop-over from a right-hand tile keeps inside the card (the page nudges it with --dx). */
 `;
 
-// ── chips: Chips that open into a panel ─────────────────────────────────────────────────────────
-const CSS_CHIPS = String.raw`
-  .lt-chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
-  .ltc { border-radius: 22px; border: 1px solid color-mix(in srgb, var(--fg) 10%, transparent); background: color-mix(in srgb, var(--fg) 5%, var(--panel)); }
-  .ltc.on { border-color: color-mix(in srgb, var(--c) 50%, transparent); }
-  .ltc.sel { flex: 1 0 100%; border-radius: 20px; background: color-mix(in srgb, var(--c) 14%, var(--panel)); }
-  .ltc-row { display: flex; align-items: center; }
-  .ltc.sel .ltc-row { padding-right: 2px; }
-  .ltc-face { appearance: none; font: inherit; color: inherit; background: none; border: 0; cursor: pointer; display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 12px 0 8px; text-align: left; border-radius: 22px; flex: 1; min-width: 0; }
-  .ltc-face:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-  .ltc-face .bulb { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; flex-shrink: 0; background: var(--well); color: var(--fg-muted); }
-  .ltc-face .bulb svg { width: 14px; height: 14px; }
-  .ltc.on .bulb { background: var(--c); color: #1a1a1a; box-shadow: 0 0 12px var(--c); }
-  .ltc .nm { font-size: 13px; font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .ltc .pc { font-size: 12px; color: var(--fg-2); font-family: var(--font-mono); white-space: nowrap; margin-left: auto; padding-left: 4px; }
-  .ltc:not(.sel) .pc { margin-left: 0; }
-  .ltc.gone .pc { color: var(--fg-muted); font-family: inherit; }
-  .ltc-more { width: 44px; height: 44px; border: 0; background: none; color: var(--fg-2); cursor: pointer; display: grid; place-items: center; padding: 0; border-radius: 50%; margin-left: -10px; }
-  .ltc-more svg { width: 14px; height: 14px; transition: transform 140ms ease; }
-  .ltc.sel .ltc-more svg { transform: rotate(180deg); }
-  .ltc-ex { display: flex; align-items: center; gap: 12px; padding: 2px 14px 14px; }
-  .ltc-ex .lr { flex: 1; min-width: 0; }
-  .ltc-only { flex: 1; font-size: 12px; color: var(--fg-muted); }
-  .ltc-ex .ltw { flex-shrink: 0; }
-  @media (prefers-reduced-motion: reduce) { .ltc-more svg { transition: none; } }
+// ── r3: Half rows ───────────────────────────────────────────────────────────────────────────────
+// The roomy row, unchanged but half as wide: two lights per line (one per line on a phone).
+const CSS_R3 = String.raw`
+  .lt-g3 { grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); }
+  .lt-g3 .lt-cell .tile-face { align-items: flex-start; }
+  .lt-g3 .lt-cell { padding: 12px 14px 14px; gap: 10px; }
+  .lt-g3 .lt-cell .bulb { width: 40px; height: 40px; }
+  .lt-g3 .lt-cell .lr { --h: 34px; height: 34px; }
+  .lt-g3 .lt-cell .cbtn { width: 30px; height: 30px; }
 `;
 
 // Keeps a pop-over inside its card: after every redraw, nudge it sideways if it would poke out.
@@ -278,32 +276,28 @@ const DRAG_JS = String.raw`
 })();`;
 
 const OPEN = { view: 'lights', startOpen: ['destins_room'] };
-// What the still picture shows open: rows → Desk backlight's colour menu inside the card; tiles → Hue Play's pop-over;
-// chips → Desk backlight opened to its panel with its colour pop-over (hanging upward so the unreachable chip stays visible).
-const SHOWN: Record<string, { pal: string; sel: string | null }> = {
-  rows: { pal: 'light.desk_backlight', sel: null },
-  tiles: { pal: 'light.hue_play_1', sel: null },
-  chips: { pal: 'light.desk_backlight', sel: 'light.desk_backlight' },
-};
+const CSS_OF: Record<string, string> = { r1: CSS_GRID + CSS_R1, r2: CSS_GRID + CSS_R2, r3: CSS_GRID + CSS_R3 };
 const states = (k: string, label: string) => {
-  const css = CSS_BASE + (k === 'rows' ? CSS_ROWS : k === 'tiles' ? CSS_TILES : CSS_CHIPS);
-  const js = (k === 'tiles' ? DRAG_JS : '') + (k === 'rows' ? '' : POP_JS);
-  const base = { css, js: js || undefined };
-  const sh = SHOWN[k];
+  const css = CSS_BASE + CSS_OF[k];
+  const base = { css, js: (k === 'r2' ? DRAG_JS : '') + POP_JS };
   return {
-    // the picture: Destin's Room open (it has an unreachable light), one colour menu showing, the other rooms closed
-    [k]: { label, ...base, transform: transformFor(k, [], sh.sel), data: { ...OPEN, startPalettes: [sh.pal] } },
+    // the picture: Destin's Room open (it has an unreachable light), the other rooms closed, no pop-up showing
+    // (so the three crops stay the same height; the pop-up is tried in the live panes)
+    [k]: { label, ...base, transform: transformFor(k), data: OPEN },
     // practice pane: everything just as it first opens, only Destin's Room unfolded
-    [k + '-play']: { label: label + ', to try', ...base, transform: transformFor(k), data: OPEN },
+    [k + '-play']: { label: label + ', to try', ...base, transform: transformFor(k), data: OPEN, sameAs: { name: 'pages/page/page-home#v-lights-tab-' + k, why: 'the same open card; this one is for the live pane' } },
     // how it first appears: every card closed
-    [k + '-closed']: { label: label + ', all closed', ...base, transform: transformFor(k), data: { view: 'lights' } },
+    // WHY only r1: closed cards are drawn the same in every option, so one closed screen covers all three
+    ...(k === 'r1' ? { [k + '-closed']: { label: label + ', all closed', ...base, transform: transformFor(k), data: { view: 'lights' } } } : {}),
+    // the colour pop-up showing on the second light
+    [k + '-colour']: { label: label + ', colour pop-up', ...base, transform: transformFor(k), data: { ...OPEN, startPalettes: ['light.desk_backlight'] } },
     // Living Room's lights unreachable: its card goes to the end, greyed
     [k + '-gone']: { label: label + ', a room unreachable', ...base, transform: transformFor(k, ['living_room']), data: { view: 'lights', startOpen: ['destins_room', 'living_room'] } },
   };
 };
 
 export const VARIANTS: HomeVariants = {
-  ...states('rows', 'Roomy rows'),
-  ...states('tiles', 'Big tiles'),
-  ...states('chips', 'Chips'),
+  ...states('r1', 'Tall cards'),
+  ...states('r2', 'Slide tiles'),
+  ...states('r3', 'Half rows'),
 };
