@@ -180,6 +180,7 @@ function homeAssistantPageHtml(): string {
       var first = rooms === null;
       rooms = JSON.parse(r.body);
       noteReports();
+      camPrune(); // frames kept for cameras no longer on the page are dropped
       // WHY stamps (redesign audit F4 "the newest one wins", code review 4): every state
       // carries when the house last updated it; a pushed state newer than this answer's
       // goes back on top, an older one never overwrites a newer.

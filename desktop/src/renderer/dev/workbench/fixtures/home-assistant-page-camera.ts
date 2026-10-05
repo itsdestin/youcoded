@@ -43,6 +43,10 @@ export const HOME_CAMERA_CSS = `
   .cam-play:focus-visible { outline: 2px solid #fff; outline-offset: 4px; }
   .cam-play:active:not(:disabled) { transform: scale(.94); }
   .cam-play:disabled { opacity: .4; cursor: default; }
+  /* A preview still (a recording's thumbnail, or the last live frame) behind the disc: dimmed and softened so the disc reads
+     clearly and an old picture can never pass for live; its label always says what it is and when. */
+  .cam-prev { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; filter: brightness(.6) blur(1.5px) saturate(.9); transform: scale(1.03); }
+  .cam-prevlbl { position: absolute; top: 8px; left: 8px; z-index: 1; max-width: calc(100% - 16px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 8px; border-radius: 9999px; background: rgba(0, 0, 0, .55); color: #fff; font-size: 11px; font-weight: 600; }
   @media (prefers-reduced-motion: reduce) { .cam-play { transition: none; } .cam-play:active:not(:disabled) { transform: none; } }
   .cam-evs { display: flex; flex-direction: column; gap: 4px; max-height: 158px; overflow-y: auto; overscroll-behavior: contain; padding-right: 2px; }
   .cam-ev { appearance: none; font: inherit; font-size: 12px; display: flex; align-items: center; gap: 10px; width: 100%; flex-shrink: 0; padding: 7px 10px; border: 0; border-radius: 14px; background: color-mix(in srgb, var(--fg) 6%, var(--panel)); color: var(--fg); cursor: pointer; text-align: left; }
@@ -102,6 +106,59 @@ export const HOME_CAMERA_JS = `
   }
   function liveCount() { return Object.keys(liveVid).length; }
 
+  // ── Preview stills ────────────────────────────────────────────────────────
+  // Nest gives no still on request, so a card that is not live shows the NEWER of two things: the newest recording's
+  // thumbnail, or the last live frame this page kept when a live view ended. Never a live view started to get one.
+  // The last frame is kept per camera in the page's own saved data, only when live STOPS (not per frame): shrunk to at
+  // most 640 px wide as a JPEG, under about 60 KB of text each, at most 8 cameras (the saved data may be 1 MB in all).
+  // A frame comes from the app as an ImageBitmap, so the canvas is never tainted and can be read back.
+  var FRAME_MAX_CHARS = 60000, FRAMES_MAX = 8;
+  function camFrames() { var f = (window.youcoded.data || {}).frames; return f && typeof f === 'object' ? f : {}; }
+  function camShrink(c) {
+    var tries = [[640, 0.7], [640, 0.5], [480, 0.5], [320, 0.5]];
+    for (var i = 0; i < tries.length; i++) {
+      try {
+        var w = Math.min(tries[i][0], c.width), h = Math.max(1, Math.round(c.height * w / c.width)), o = document.createElement('canvas');
+        o.width = w; o.height = h;
+        o.getContext('2d').drawImage(c, 0, 0, w, h);
+        var url = o.toDataURL('image/jpeg', tries[i][1]);
+        if (url && url.indexOf('data:image/jpeg') === 0 && url.length <= FRAME_MAX_CHARS) return url;
+      } catch (e) { return null; }
+    }
+    return null;
+  }
+  function camKeepFrame(id) {
+    var c = liveCanvas[id];
+    if (!c || !c.__drawn || !c.width) return;
+    var url = camShrink(c);
+    if (!url) return;
+    var frames = Object.assign({}, camFrames());
+    frames[id] = { at: Date.now(), img: url };
+    var ids = Object.keys(frames).sort(function (a, b) { return frames[b].at - frames[a].at; });
+    ids.slice(FRAMES_MAX).forEach(function (k) { delete frames[k]; });
+    persist({ frames: frames });
+  }
+  // Frames of cameras no longer on the page are dropped (checked after each check of the house).
+  function camPrune() {
+    if (!rooms) return;
+    var have = {}, frames = camFrames(), drop = false;
+    rooms.forEach(function (r) { r.items.forEach(function (it) { have[it.id] = 1; }); });
+    var keep = {};
+    Object.keys(frames).forEach(function (k) { if (have[k]) keep[k] = frames[k]; else drop = true; });
+    if (drop) persist({ frames: keep });
+  }
+  // What a card that is not live shows: the newer of the newest recording's thumbnail and the kept last frame.
+  function camPreview(it) {
+    var list = camState(it.id).events.list, ev = list && list[0], fr = camFrames()[it.id], best = null;
+    if (ev && ev.thumb) best = { img: ev.thumb, at: ev.at ? ev.at.getTime() : 0, label: ev.what + (ev.at ? ' · ' + evTime(ev.at) : '') };
+    if (fr && fr.img && (!best || fr.at > best.at)) best = { img: fr.img, at: fr.at, label: 'Last seen ' + evTime(new Date(fr.at)) };
+    return best;
+  }
+  function camPreviewHtml(it) {
+    var pv = camPreview(it);
+    return pv ? '<img class="cam-prev" alt="" src="' + pv.img + '"><span class="cam-prevlbl">' + esc(pv.label) + '</span>' : '';
+  }
+
   // A Nest title is the local time and what it saw: "2026-10-04 18:48:02 Person".
   function eventFrom(c) {
     var title = String(c.title || ''), lower = title.toLowerCase();
@@ -142,14 +199,15 @@ export const HOME_CAMERA_JS = `
     });
   }
   function camThumbs(st, first) {
-    st.events.list.slice(first, first + THUMBS_AHEAD).forEach(function (e) { if (!e.thumb && !e.thumbBusy && e.thumbUrl) camThumb(e); });
+    st.events.list.slice(first, first + THUMBS_AHEAD).forEach(function (e, i) { if (!e.thumb && !e.thumbBusy && e.thumbUrl) camThumb(e, first + i === 0); });
   }
-  function camThumb(e) {
+  function camThumb(e, newest) {
     e.thumbBusy = true;
     var u = /^https?:/i.test(e.thumbUrl) ? e.thumbUrl : base + e.thumbUrl;
     window.youcoded.fetch(u, { as: 'picture' }).then(function (r) {
       if (r.status !== 200 || String(r.body).indexOf('data:image/') !== 0) return;
       e.thumb = r.body;
+      if (newest) renderSoon(); // the newest one is also the card's preview still
       Array.prototype.forEach.call(document.querySelectorAll('img[data-thumb]'), function (img) { if (img.getAttribute('data-thumb') === e.id) img.src = r.body; });
     }, function () { /* a missing thumbnail leaves the grey box */ });
   }
@@ -211,6 +269,7 @@ export const HOME_CAMERA_JS = `
         try {
           if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) { canvas.width = bitmap.width; canvas.height = bitmap.height; }
           canvas.getContext('2d').drawImage(bitmap, 0, 0);
+          canvas.__drawn = true;
         } catch (e) { /* a frame that cannot be drawn is skipped */ }
         try { if (bitmap.close) bitmap.close(); } catch (e2) { /* already closed */ }
         ack();
@@ -223,6 +282,7 @@ export const HOME_CAMERA_JS = `
         delete liveVid[id];
         if (quiet && tabOn[id]) { tabEnded(it, st, why, Date.now() - at > 10000 && frames > 0); return; }
         // The reason, in the app's own words; the card offers Play again.
+        camKeepFrame(id);
         delete liveCanvas[id];
         st.live = { state: 'stopped', why: why || '' };
         render();
@@ -235,6 +295,7 @@ export const HOME_CAMERA_JS = `
   // with a growing pause, and says why in the meantime.
   function tabEnded(it, st, why, played) {
     var id = it.id;
+    if (!tabWanted() || !played) camKeepFrame(id); // a stream that ended on its own and restarts at once needs no kept frame
     if (!tabWanted()) { st.live = { state: 'stopped', why: why || '' }; renderSoon(); return; }
     var delay;
     if (played) { tabFails[id] = 0; delay = 300; }
@@ -250,6 +311,7 @@ export const HOME_CAMERA_JS = `
   function stopLive(id) {
     var v = liveVid[id];
     if (v) { try { v.stop(); } catch (e) { /* already stopped */ } }
+    camKeepFrame(id); // the last picture stays as the card's preview
     delete liveVid[id]; delete liveCanvas[id];
     var st = camEv[id];
     if (st && st.live) { st.live = null; }
@@ -304,10 +366,10 @@ export const HOME_CAMERA_JS = `
     var stoppedNow = live && live.state === 'stopped' && !inTab;
     // Nothing playing: the picture area holds the play disc (a camera that is not answering shows why instead, and the disc waits).
     if (!running && !clip && !inTab && canVideo()) {
-      html += '<div class="cam-view cam-idle"><button class="cam-play" data-cam-act="live" data-id="' + eid + '" aria-label="' + (stoppedNow ? 'Play ' + esc(it.name) + ' again' : 'Watch ' + esc(it.name) + ' live') + '" title="' + (stoppedNow ? 'Play again' : 'Watch live') + '"' + (na ? ' disabled' : '') + '>' + PLAYG + '</button>' + (na ? '<span class="cam-msg" style="top:auto;bottom:10px;height:auto">Not responding</span>' : '') + '</div>';
+      html += '<div class="cam-view cam-idle">' + camPreviewHtml(it) + '<button class="cam-play" data-cam-act="live" data-id="' + eid + '" aria-label="' + (stoppedNow ? 'Play ' + esc(it.name) + ' again' : 'Watch ' + esc(it.name) + ' live') + '" title="' + (stoppedNow ? 'Play again' : 'Watch live') + '"' + (na ? ' disabled' : '') + '>' + PLAYG + '</button>' + (na ? '<span class="cam-msg" style="top:auto;bottom:10px;height:auto">Not responding</span>' : '') + '</div>';
     }
     if (running && !inTab) {
-      html += '<div class="cam-view"><span class="cam-slot" data-live-slot="' + eid + '"></span>' + (live.state === 'playing' ? '<span class="cam-badge">LIVE</span>' : '<span class="cam-msg">Starting live view…</span>') +
+      html += '<div class="cam-view">' + (live.state === 'playing' ? '' : camPreviewHtml(it)) + '<span class="cam-slot" data-live-slot="' + eid + '"></span>' + (live.state === 'playing' ? '<span class="cam-badge">LIVE</span>' : '<span class="cam-msg">Starting live view…</span>') +
         '<button class="cam-x" data-cam-act="stop" data-id="' + eid + '">' + STOPG + 'Stop</button></div>';
     } else if (clip) {
       html += clip.state === 'failed' ? '<div class="cam-note" role="status">' + esc(clip.why) + '</div>'
@@ -338,9 +400,9 @@ export const HOME_CAMERA_JS = `
     if (cm && cm.nest) {
       if (na) body = '<span class="cam-msg">Not responding</span>';
       else if (!canVideo()) body = '<span class="cam-msg">This window cannot show live video.</span>';
-      else if (live && live.state === 'stopped') body = '<span class="cam-slot" data-live-slot="' + eid + '"></span><span class="cam-msg" style="background:rgba(0,0,0,.55)">Live view stopped' + (live.why ? ': ' + esc(live.why) : '') + '. Trying again…</span>';
+      else if (live && live.state === 'stopped') body = camPreviewHtml(it) + '<span class="cam-slot" data-live-slot="' + eid + '"></span><span class="cam-msg" style="background:rgba(0,0,0,.55)">Live view stopped' + (live.why ? ': ' + esc(live.why) : '') + '. Trying again…</span>';
       else if (live && live.state === 'playing') { body = '<span class="cam-slot" data-live-slot="' + eid + '"></span>'; badge = '<span class="cam-badge">LIVE</span>'; }
-      else body = '<span class="cam-slot" data-live-slot="' + eid + '"></span><span class="cam-msg">Starting live view…</span>';
+      else body = camPreviewHtml(it) + '<span class="cam-slot" data-live-slot="' + eid + '"></span><span class="cam-msg">Starting live view…</span>';
     } else body = camCache[it.id] ? '<img class="cam" alt="" data-cam="' + eid + '" src="' + camCache[it.id] + '">' : '<span class="cam-msg">' + esc(cm ? cm.text : 'Looking for a picture…') + '</span>';
     return '<div class="cam-tile" data-eid="' + eid + '"><button class="cam-view cam-open" data-cam-act="open" data-id="' + eid + '" aria-label="Open ' + esc(it.name) + ' and its recordings">' + body + badge +
       '<span class="cam-cap"><span>' + esc(it.name) + '</span><span class="sub">' + (na ? 'Not responding' : esc(it.model || '')) + '</span></span></button></div>';

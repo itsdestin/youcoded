@@ -69,6 +69,8 @@ describe('the Cameras tab', () => {
   it('gives each tile a LIVE badge only once its picture is really playing, and says how many are live on the pill', async () => {
     expect(tile('camera.living_room_camera').querySelector('.cam-badge')).toBeNull();
     expect(tile('camera.living_room_camera').textContent).toContain('Starting live view');
+    // While it connects the tile shows the same labelled preview as the card (the newest recording's thumbnail here).
+    await vi.waitFor(() => expect(tile('camera.living_room_camera').querySelector('.cam-prevlbl')?.textContent).toMatch(/^Person · /));
     play(latest('camera.living_room_camera'));
     await frame();
     expect(tile('camera.living_room_camera').querySelector('.cam-badge')!.textContent).toBe('LIVE');

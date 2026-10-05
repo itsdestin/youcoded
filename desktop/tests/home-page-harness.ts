@@ -55,9 +55,12 @@ export async function mount(opts: { data?: Record<string, unknown>; fetchHook?: 
   // Every time the rooms are drawn: was an empty grey picture box on screen (a Nest camera card that is about to change shape)? The Pi camera really does show a picture box until its first picture arrives.
   (window as any).__homeAfterPut = (id: string) => { puts.push(id); if (id === 'rooms' && document.querySelector('#rooms [data-eid]:not([data-eid="camera.garage_pi"]) img.cam:not([src])')) puts.greyBox = true; };
   const socks: Sock[] = [];
+  const saves: unknown[] = [];
+  const videos: Array<{ target: string; stop: ReturnType<typeof vi.fn>; o: { onFrame: (b: unknown, ack: () => void) => void; onState: (s: string, why?: string) => void } }> = [];
   (window as any).youcoded = {
     devices: { ha: BASE }, data: opts.data ?? { startOpen: ['living_room', 'destins_room'] },
-    save: () => undefined, onRefresh: () => undefined, onData: () => undefined,
+    // Like the real bridge: a save is what the page sees as its data from then on, and every save is kept to read.
+    save: (d: unknown) => { saves.push(d); (window as any).youcoded.data = d; }, onRefresh: () => undefined, onData: () => undefined,
     fetch: async (url: string, o: Record<string, unknown> = {}) => {
       const req = { url, ...o } as { url: string; body?: string };
       if (opts.fetchHook) { const r = await opts.fetchHook(req); if (r) return r; }
@@ -75,13 +78,13 @@ export async function mount(opts: { data?: Record<string, unknown>; fetchHook?: 
       return { send, close: () => undefined };
     },
   };
-  if (opts.video) (window as any).youcoded.video = () => ({ stop: () => undefined });
+  if (opts.video) (window as any).youcoded.video = (_c: string, target: string, o: any) => { const v = { target, o, stop: vi.fn() }; videos.push(v); return v; };
   new Function(/<script>([\s\S]*?)<\/script>/.exec(html)![1])();
   await flush();
   await vi.waitFor(() => { if (!document.querySelector('[data-eid]')) throw new Error('not drawn'); });
   if (socks[0]) { socks[0].open(); await flush(); await frame(); }
   await tick(1000);
-  return { puts, socks };
+  return { puts, socks, saves, videos };
 }
 /** A change Home Assistant pushes over the live connection for one entity (compressed form). */
 export const push = (s: Sock, entity: string, plus: Record<string, unknown>, id = 1) =>
