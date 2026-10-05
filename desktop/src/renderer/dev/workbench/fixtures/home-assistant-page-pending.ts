@@ -35,22 +35,48 @@ export const HOME_PENDING_JS = `
   // ── Guesses (code review 7, 8; audit A-6) ─────────────────────────────────
   var guesses = {}, fresh = [], HOLD_MS = 8000;
   // Numbers agree when close (a bar's rounding); anything else (names, groups, colours) when equal.
-  function heldSame(a, b, key) { return typeof b === 'number' ? Math.abs((a || 0) - b) < 0.015 * (key === 'brightness' ? 255 : 1) : JSON.stringify(a) === JSON.stringify(b); }
+  // Within 2% of the bar's range counts as the device having taken it (Hue rounds a little).
+  function heldSame(a, b, key) { return typeof b === 'number' ? Math.abs((a || 0) - b) <= 0.02 * (key === 'brightness' ? 255 : 1) : JSON.stringify(a) === JSON.stringify(b); }
+  // WHY a slider's value is a TARGET (Destin's real house, rubber-banding, 2026-10-05): a Hue light answers about a
+  // second after each call, with the answers for EARLIER values stamped newer than the guess, so newest-wins applied
+  // the stale one and the bar jumped back and forward. A target stays until the device reports a value within 2% of
+  // it, or about 4 seconds pass with no such report (then the device's word is accepted); until then every report
+  // that does not match it is ignored whatever its stamp, and a check cannot drop it.
+  var TARGETS = { brightness: 1, vol: 1 };
   function guessAgrees(it, g) { return g.field === 'state' ? it.state === g.value || (g.value === 'on' && isOn(it)) : heldSame(it[g.field], g.value, g.field); }
   // src names what the guess belongs to (a slider's key); a guess made by a press has none
   // yet and is picked up by pendBegin() ("fresh"), which tags it with the press's key.
   function guess(id, field, value, ms, src) {
     var k = id + '|' + field, old = guesses[k], it = thing(id);
-    var g = guesses[k] = { id: id, field: field, value: value, before: old ? old.before : it ? it[field] : null, until: Date.now() + (ms || 4000), src: src || null, settledAt: 0 };
+    if (old) clearTimeout(old.timer);
+    var g = guesses[k] = { id: id, field: field, value: value, before: old ? old.before : it ? it[field] : null, until: Date.now() + (ms || 4000), src: src || null, settledAt: 0, rep: old ? old.rep : null };
+    // When nobody reports, the page still gives up the guess on time and shows what the device last said (or had).
+    g.timer = setTimeout(function () { applyGuesses(); renderSoon(); }, (ms || 4000) + 20);
     if (!src) fresh.push(g);
+    // The page shows the target at once and from then on, so a drawing (say the one right after you let go)
+    // never draws the device's old value for a moment before its answer.
+    if (it) it[field] = value;
   }
   function holdState(id, state) { guess(id, 'state', state, HOLD_MS); }
   function holdVal(id, key, value, ms, src) { guess(id, key, value, ms, src); }
+  // WHY agreement is judged only when the HOUSE reports (rubber-banding, 2026-10-05): the page writes its own guess onto
+  // the device's data, so comparing that data with the guess "agreed" at once and the guess was dropped by the next
+  // unrelated update. guessReport(id) runs right after a push or a check wrote the house's value for that device.
+  function guessReport(id) {
+    Object.keys(guesses).forEach(function (k) {
+      var g = guesses[k], it = g.id === id ? thing(id) : null;
+      if (it && guessAgrees(it, g)) delete guesses[k];
+    });
+  }
+  function guessReportAll() { var seen = {}; Object.keys(guesses).forEach(function (k) { var id = guesses[k].id; if (!seen[id]) { seen[id] = 1; guessReport(id); } }); }
   function applyGuesses() {
     var now = Date.now();
     Object.keys(guesses).forEach(function (k) {
       var g = guesses[k], it = thing(g.id);
-      if (!it || now > g.until || guessAgrees(it, g)) { delete guesses[k]; return; }
+      if (!it) { delete guesses[k]; return; }
+      if (now > g.until) { clearTimeout(g.timer); delete guesses[k]; if (g.rep) it[g.field] = g.rep.v; else if (!g.reported) it[g.field] = g.before; return; }
+      // A report that did not match is remembered (not shown): it is what the device last said if the target never comes.
+      if (!heldSame(it[g.field], g.value, g.field) || g.field === 'state' && it.state !== g.value) { g.rep = { v: it[g.field] }; g.reported = true; }
       it[g.field] = g.value;
     });
   }
@@ -58,7 +84,7 @@ export const HOME_PENDING_JS = `
   // A check asked AFTER a send was accepted reports the house's final word: the guess
   // (say a temperature the device capped) gives way to it instead of lingering 8 seconds.
   function dropSettled(sentAt) { Object.keys(guesses).forEach(function (k) { if (guesses[k].settledAt && guesses[k].settledAt <= sentAt) delete guesses[k]; }); }
-  function settle(keys) { keys.forEach(function (k) { if (guesses[k]) guesses[k].settledAt = Date.now(); }); }
+  function settle(keys) { keys.forEach(function (k) { if (guesses[k] && !TARGETS[guesses[k].field]) guesses[k].settledAt = Date.now(); }); }
   // Put back only what still shows the guess: a field the house has since changed is left alone.
   function undoGuesses(keys) {
     keys.forEach(function (k) {
@@ -122,12 +148,29 @@ export const HOME_PENDING_JS = `
     if (!thing(id) && id.indexOf('room:') !== 0) { delete pend[id]; banner(msg, true); }
     render();
   }
+  // Mid-drag values go out at most every ms per slider key (a light 400 ms, a room's command 1 s: a Hue group takes about one
+  // a second), the newest value only; letting go always sends the final value, and never the same value twice.
+  var sends = {};
+  function flushSend(s) {
+    var n = s.n; s.n = null;
+    if (!n || (n.val === s.last && Date.now() - s.at < 4000)) return;
+    s.last = n.val; s.at = Date.now(); n.fn();
+  }
+  function sendSlider(key, ms, val, fn, final) {
+    var s = sends[key] || (sends[key] = { t: null, n: null, last: null, at: 0 });
+    s.n = { val: val, fn: fn };
+    if (final) { clearTimeout(s.t); s.t = null; flushSend(s); return; }
+    if (s.t) return; // a send is waiting its turn and will carry the newest value
+    var wait = s.at + ms - Date.now();
+    if (wait <= 0) { flushSend(s); return; }
+    s.t = setTimeout(function () { s.t = null; flushSend(s); }, wait);
+  }
   // Sliders send without waiting. Only the NEWEST send of a slider decides (code review 5):
   // an older one failing after a later one went through must not put the old value back.
   function quiet(path, body, key) {
     var n = key ? (quietSeq[key] = (quietSeq[key] || 0) + 1) : 0;
     call(path, body).then(function () {
-      if (key && quietSeq[key] === n) { settle(keysOf(key)); setTimeout(load, 400); }
+      // (nothing to do on success: the target stays until the device reports it, or about 4 seconds pass)
     }, function (e) {
       var m = e && e.message ? e.message : 'That did not go through.';
       if (!key) { banner(m, true); return; }

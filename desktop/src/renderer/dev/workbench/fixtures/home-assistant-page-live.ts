@@ -126,6 +126,7 @@ export const HOME_LIVE_JS = `
     LIVE_ATTRS.forEach(function (p) { if (p[0] in a) it[p[1]] = a[p[0]]; else if (p[0] !== 'friendly_name') it[p[1]] = null; });
     it.features = a.supported_features == null ? 0 : a.supported_features;
     if (typeof raw.lc === 'number') it.since = new Date(raw.lc * 1000).toISOString();
+    guessReport(id); // the house just spoke for this device: does it agree with what the page is showing?
     if (JSON.stringify(it) !== before) liveDirty = true;
     if (stamp) it.upd = new Date(stamp).toISOString();
   }

@@ -182,6 +182,7 @@ function homeAssistantPageHtml(): string {
       // carries when the house last updated it; a pushed state newer than this answer's
       // goes back on top, an older one never overwrites a newer.
       liveReplay();
+      guessReportAll(); // the check is the house speaking for every device
       dropSettled(sentAt); // guesses for sends accepted before this check was asked: the house has spoken
       applyHeld();
       liveSubscribe(); // the first check tells the live connection which devices to follow
@@ -1347,13 +1348,6 @@ ${HOME_ICONS_JS}
   // the fill follows the finger every frame, and the light or speaker
   // follows too — at most every 250 ms, so a long drag is a few requests,
   // not hundreds — and the last value is always sent.
-  var sendTimer = null, sendNext = null;
-  function sendSoon(fn) {
-    sendNext = fn;
-    if (sendTimer) return;
-    sendNext(); sendNext = null;
-    sendTimer = setTimeout(function () { sendTimer = null; if (sendNext) { var f = sendNext; sendNext = null; sendSoon(f); } }, 250);
-  }
   document.addEventListener('input', function (e) {
     var t = e.target;
     if (!t.classList || !t.classList.contains('lr')) return;
@@ -1364,7 +1358,7 @@ ${HOME_ICONS_JS}
     if (v) {
       var vi = t.parentNode && t.parentNode.querySelector('.vicon');
       if (vi) { vi.innerHTML = volIcon(Number(t.value), false); vi.classList.toggle('low', Number(t.value) < 12); }
-      var lv = t.value / 100; holdVal(v, 'vol', lv, 4000, v); sendSoon(function () { quiet('/api/services/media_player/volume_set', { entity_id: v, volume_level: lv }, v); }); }
+      var lv = t.value / 100; holdVal(v, 'vol', lv, 4000, v); sendSlider(v, 400, lv, function () { quiet('/api/services/media_player/volume_set', { entity_id: v, volume_level: lv }, v); }); }
     var gb = t.getAttribute('data-gbright');
     if (gb) {
       dragging = 'room:' + gb;
@@ -1378,9 +1372,9 @@ ${HOME_ICONS_JS}
       // not in this list and are never touched; an off light that can dim turns on and joins at the bar's level.
       gids.forEach(function (x) { holdVal(x, 'brightness', Math.round(gp * 2.55), 4000, 'room:' + gb); holdVal(x, 'state', 'on', HOLD_MS, 'room:' + gb); var li = thing(x); li.state = 'on'; li.brightness = Math.round(gp * 2.55); });
       if (gids.length) render();
-      if (gids.length) sendSoon(function () { quiet('/api/services/light/turn_on', { entity_id: gids, brightness_pct: gp }, 'room:' + gb); });
+      if (gids.length) sendSlider('room:' + gb, 1000, gp, function () { quiet('/api/services/light/turn_on', { entity_id: gids, brightness_pct: gp }, 'room:' + gb); });
     }
-    if (b && Number(t.value) > 0) { var bp = Number(t.value); holdVal(b, 'brightness', Math.round(bp * 2.55), 4000, b); sendSoon(function () { quiet('/api/services/light/turn_on', { entity_id: b, brightness_pct: bp }, b); }); }
+    if (b && Number(t.value) > 0) { var bp = Number(t.value); holdVal(b, 'brightness', Math.round(bp * 2.55), 4000, b); sendSlider(b, 400, bp, function () { quiet('/api/services/light/turn_on', { entity_id: b, brightness_pct: bp }, b); }); }
   });
   document.addEventListener('pointerup', function () { if (dragging) setTimeout(function () { dragging = null; }, 300); });
   document.addEventListener('change', function (e) {
@@ -1390,7 +1384,7 @@ ${HOME_ICONS_JS}
       // The big slider reaches 0: dragging all the way down turns the light off.
       if (Number(t.value) === 0) { setLocal(b, { state: 'off' }); service('light', 'turn_off', { entity_id: b }, b); return; }
       dragging = null; holdVal(b, 'brightness', Math.round(t.value * 2.55), 4000, b);
-      var fb = Number(t.value); sendSoon(function () { quiet('/api/services/light/turn_on', { entity_id: b, brightness_pct: fb }, b); }); return;
+      var fb = Number(t.value); sendSlider(b, 400, fb, function () { quiet('/api/services/light/turn_on', { entity_id: b, brightness_pct: fb }, b); }, true); return;
     }
     // Any colour, from the rainbow swatch's colour picker.
     var any = t.getAttribute && t.getAttribute('data-any');
@@ -1418,12 +1412,15 @@ ${HOME_ICONS_JS}
       // Let go: show every light at the new brightness straight away.
       dragging = null;
       var grc = rooms.filter(function (r) { return r.id === gbc; })[0];
-      if (grc) liveLights(grc.items).filter(dimmable).forEach(function (x) { x.state = 'on'; x.brightness = Math.round(Number(t.value) * 2.55); });
+      var gfin = Number(t.value), gfids = grc ? liveLights(grc.items).filter(dimmable).map(function (x) { return x.id; }) : [];
+      gfids.forEach(function (x) { holdVal(x, 'brightness', Math.round(gfin * 2.55), 4000, 'room:' + gbc); holdVal(x, 'state', 'on', HOLD_MS, 'room:' + gbc); });
+      // The final value is always sent, once (never the same value twice).
+      if (gfids.length) sendSlider('room:' + gbc, 1000, gfin, function () { quiet('/api/services/light/turn_on', { entity_id: gfids, brightness_pct: gfin }, 'room:' + gbc); }, true);
       render();
       return;
     }
     var v = t.getAttribute && t.getAttribute('data-vol');
-    if (v) { dragging = null; holdVal(v, 'vol', t.value / 100, 4000, v); sendSoon(function () { quiet('/api/services/media_player/volume_set', { entity_id: v, volume_level: t.value / 100 }, v); }); }
+    if (v) { var vf = t.value / 100; dragging = null; holdVal(v, 'vol', vf, 4000, v); sendSlider(v, 400, vf, function () { quiet('/api/services/media_player/volume_set', { entity_id: v, volume_level: vf }, v); }, true); }
   });
 
   // Checking every 5 seconds only while the page is on screen (deck Q-live):

@@ -137,7 +137,7 @@ describe('what is undone, and when', () => {
     el().value = '50'; el().dispatchEvent(new Event('input', { bubbles: true })); // sent at once, and held up
     await tick(10);
     el().value = '70'; el().dispatchEvent(new Event('input', { bubbles: true })); // sent after the throttle, and accepted
-    await tick(300);
+    await tick(450); // a slider sends at most every 400 ms
     expect(calls).toBe(2);
     release(); await tick(100); // the first one now fails
     expect(note(id)).toBeNull();
