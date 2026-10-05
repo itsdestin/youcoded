@@ -6,7 +6,7 @@
 // card can just be a single device card"). The Media tab's drawing is replaced by a script injected INSIDE the
 // page's own script (the page is one closed block, so a separate script could not reach its helpers): it flattens
 // every room's players into one list, sorts it (playing first, then paused, idle, off, and unreachable LAST) and
-// draws it three different ways. Edit mode keeps the page's own board. Controls reuse the page's own buttons
+// draws it three different ways (round 2b: the device name leads, all three). Edit mode keeps the page's own board. Controls reuse the page's own buttons
 // (data-mp / data-rc / data-vol / data-remote / data-toggle), so every press, slider and live update keeps working.
 // "-group" states stage Sonos speakers playing together without touching the fake house (see mvStage below).
 import type { HomeVariants } from './types';
@@ -21,19 +21,24 @@ const MV_JS = String.raw`
   var MV_OFF = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M12 3v8M6.3 6.8a8 8 0 1 0 11.4 0"/></svg>';
   var MV_GONE = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M6.5 6.5l11 11"/></svg>';
   var MV_WORDS = { playing: 'Playing', on: 'On', paused: 'Paused', idle: 'Idle', off: 'Off', gone: 'Not responding' };
-  // Practice only: two Sonos speakers playing one song together, so the grouped look can be shown.
+  // Practice only: Roam 2 and the Living Room speaker play one song together, so the grouped look can be shown. WHY these two and
+  // not the Sonos Beam: the Beam belongs to the TV pair. Once someone presses a play/pause button the staging stops forcing "playing",
+  // so the practice page does not look broken when you pause.
+  var MV_TOUCH = false;
+  document.addEventListener('click', function (e) { if (e.target && e.target.closest && e.target.closest('[data-mp]')) MV_TOUCH = true; }, true);
   function mvStage(it) {
     if (!MV_STAGE) return it;
-    if (it.id !== 'media_player.destins_room' && it.id !== 'media_player.roam_2') return it;
+    if (it.id !== 'media_player.living_room_speaker' && it.id !== 'media_player.roam_2') return it;
     var c = {}, k;
     for (k in it) c[k] = it[k];
-    c.state = 'playing'; c.title = 'Weightless — Marconi Union'; c.app = 'Spotify'; c.source = 'Spotify';
-    c.group = ['media_player.destins_room', 'media_player.roam_2'];
+    if (!MV_TOUCH) c.state = 'playing';
+    c.title = 'Weightless \u2014 Marconi Union'; c.app = 'Spotify'; c.source = 'Spotify';
+    c.group = ['media_player.roam_2', 'media_player.living_room_speaker'];
     return c;
   }
   function mvInfo(it, room) {
     var kind = kindOf(it), tv = kind === 'tv', rc = tv ? remoteFor(it, room) : null, power = rc || it;
-    var na = gone(power), on = !na && isOn(power), f = it.features || 0;
+    var sb = tv ? soundbarFor(it) : null, na = gone(power), on = !na && isOn(power), f = it.features || 0;
     var playing = it.state === 'playing' || it.state === 'paused';
     if (tv && rc && playing && castStale(it, rc)) playing = false;
     var what = it.title === 'TV' && kind === 'soundbar' ? 'TV sound' : it.title;
@@ -41,7 +46,7 @@ const MV_JS = String.raw`
     var neutral = tv && playing && !what && !playReported(it);
     var app = tv && rc ? appOf(rc.activity) : !tv ? sourceOf(it) : null;
     var st = na ? 'gone' : !on ? 'off' : (on && playing) ? (neutral ? 'on' : it.state === 'paused' ? 'paused' : 'playing') : 'idle';
-    return { it: it, room: room, kind: kind, tv: tv, sound: kind === 'soundbar' || kind === 'speaker', rc: rc, power: power, na: na, on: on, f: f,
+    return { sb: sb, it: it, room: room, kind: kind, tv: tv, sound: kind === 'soundbar' || kind === 'speaker', rc: rc, power: power, na: na, on: on, f: f,
       what: what || (app ? app.name : ''), app: app, neutral: neutral, st: st, tier: { playing: 0, on: 0, paused: 1, idle: 2, off: 3, gone: 4 }[st],
       tvAudio: kind === 'soundbar' && (it.source === 'TV' || it.title === 'TV') };
   }
@@ -100,7 +105,8 @@ const MV_JS = String.raw`
   }
   function mvNames(u) { return u.members.map(function (m) { return m.it.name; }).join(' + '); }
   function mvSub(x) {
-    var w = mvWhere(x);
+    // WHY no room here: round 2b shows the room as its own small label above the state.
+    var w = '';
     var s = x.st === 'idle' ? (x.tv ? 'On' + (x.app ? ' · ' + x.app.name : '') : 'Idle') : MV_WORDS[x.st];
     return '<span class="mv-g ' + x.st + '">' + mvGlyph(x.st) + '</span>' + esc(s + (w ? ' · ' + w : ''));
   }
@@ -113,8 +119,15 @@ const MV_JS = String.raw`
         x.i = xs.length; xs.push(x); byId[it.id] = x;
       });
     });
+    // WHY: the page already knows which soundbar carries a TV's sound (soundbarFor: your Edit choice, else the room's one
+    // soundbar with its one remote-paired TV). That bar is folded into the TV's card unless it is playing its own music.
+    var folded = {};
     xs.forEach(function (x) {
-      if (seen[x.it.id]) return;
+      var b = x.sb && byId[x.sb.id];
+      if (b && !((b.it.state === 'playing' || b.it.state === 'paused') && !b.tvAudio)) folded[b.it.id] = 1;
+    });
+    xs.forEach(function (x) {
+      if (seen[x.it.id] || folded[x.it.id]) return;
       var g = groupOf(x.it).filter(function (m) { return byId[m] && !byId[m].na; });
       if (g.length > 1) { g.forEach(function (m) { seen[m] = 1; }); units.push({ x: byId[g[0]], members: g.map(function (m) { return byId[m]; }) }); }
       else { seen[x.it.id] = 1; units.push({ x: x, members: [x] }); }
@@ -126,64 +139,73 @@ const MV_JS = String.raw`
   function mvQuiet() { return '<div class="mv-quiet">' + MV_NOTE + '<span>Nothing is playing right now.</span></div>'; }
   function mvGroupBar(u) { return u.x.sound ? groupHtml(u.x.it) : ''; }
 
-  // ── A: Now playing hero ──
-  function mvAHero(u) {
+  // ── Round 2b: name first ──────────────────────────────────────────────────
+  // The device (and its room) is the loudest text on every card; the song or app is the quiet line.
+  function mvTitle(u) { return u.members.length > 1 ? mvNames(u) : u.x.it.name; }
+  // The room, as a small label: only when the name does not already say it (a group lists each room once).
+  function mvRoom(u) {
+    if (u.members.length < 2) return mvWhere(u.x);
+    var seen = {}, out = [];
+    u.members.forEach(function (m) { var r = m.room ? m.room.name : ''; if (r && !seen[r]) { seen[r] = 1; out.push(r); } });
+    return out.join(' · ');
+  }
+  // The song or app, as the quiet line: art, then what plays and where it comes from.
+  function mvNow(x, size) {
+    var by = mvBy(x), w = x.what || (x.st === 'idle' ? '' : 'Nothing playing');
+    return '<div class="mv-now">' + mvArt(x, size) + '<div class="mv-nowt"><div class="mv-song">' + esc(w) + '</div>' + (by ? '<div class="mv-by">' + esc(by) + '</div>' : '') + '</div></div>';
+  }
+  // The TV card says where its sound comes out (the same soundbar the page's own volume bar moves).
+  function mvSound(x) {
+    return x.sb ? '<span class="mv-snd">' + SOUNDBAR + '<span>Sound from ' + esc(x.sb.name) + ' soundbar</span></span>' : '';
+  }
+  function mvTogBox(u) {
+    return '<div class="mv-tog"><div class="mv-togh">' + MV_LINK + 'Playing together</div>' + u.members.map(function (m) {
+      var w = mvWhere(m);
+      return '<div class="mv-mem"><span class="mv-mn">' + mvKind(m) + '<b>' + esc(m.it.name) + '</b>' + (w ? '<i>' + esc(w) + '</i>' : '') + '</span>' + mvVol(m) + '</div>'; }).join('') + '</div>';
+  }
+  function mvCtl(x, tog) {
+    var keys = mvKeys(x), vol = tog ? '' : mvVol(x);
+    return keys || vol ? '<div class="mv-wctl">' + (keys ? '<div class="mv-keys l">' + keys + '</div>' : '') + vol + '</div>' : '';
+  }
+  function mvTail(u) { return (u.members.length > 1 ? mvTogBox(u) : '') + mvGroupBar(u); }
+  function mvRoomLbl(u) { var r = mvRoom(u); return r ? '<div class="mv-room">' + esc(r) + '</div>' : ''; }
+
+  // ── Option 1 (a): the name is the card's title, the song sits under it ──
+  function mvW1(u) {
     var x = u.x, tog = u.members.length > 1;
-    var by = mvBy(x), w = mvWhere(x);
-    var top = '<div class="mv-htop">' + mvArt(x, 84) + '<div class="mv-htxt">' + mvBadge(x) +
-      '<div class="mv-ttl">' + esc(x.what || x.it.name) + '</div>' + (by ? '<div class="mv-by">' + esc(by) + '</div>' : '') +
-      '<div class="mv-dev">' + mvKind(x) + '<span>' + esc(tog ? mvNames(u) : x.it.name + (w ? ' · ' + w : '')) + '</span></div></div>' + (tog ? '' : mvActs(x)) + '</div>';
-    var together = tog ? '<div class="mv-tog"><div class="mv-togh">' + MV_LINK + 'Playing together</div>' + u.members.map(function (m) {
-      return '<div class="mv-mem"><span class="mv-mn">' + mvKind(m) + esc(m.it.name) + '</span>' + mvVol(m) + '</div>'; }).join('') + '</div>' : '';
-    var keys = mvKeys(x);
-    return mvCard(x, 'mv-hero', top + (keys ? '<div class="mv-keys">' + keys + '</div>' : '') + (tog ? together : mvVol(x)) + mvGroupBar(u));
+    var head = '<div class="mv-h1"><span class="mv-ic big">' + mvKind(x) + '</span><div class="mv-h1t"><div class="mv-name">' + esc(mvTitle(u)) + '</div>' + mvRoomLbl(u) + '</div>' + mvBadge(x) + (tog ? '' : mvActs(x)) + '</div>';
+    return mvCard(x, 'mv-wide mv-w1', head + mvNow(x, 52) + mvSound(x) + mvCtl(x, tog) + mvTail(u));
   }
-  function mvARow(u) {
-    var x = u.x, w = mvWhere(x);
-    return mvCard(x, 'mv-row', '<span class="mv-ic">' + mvKind(x) + '</span><div class="mv-rtxt"><div class="mv-rname">' + esc(x.it.name) + '</div><div class="mv-rsub">' + mvSub(x) + '</div></div>' + mvQuick(x));
+  function mvT1(u) {
+    var x = u.x;
+    return mvCard(x, 'mv-sq', '<div class="mv-sqtop"><div class="mv-sqn"><div class="mv-name sm">' + esc(x.it.name) + '</div>' + mvRoomLbl(u) + '</div>' + mvQuick(x) + '</div><div class="mv-rsub">' + mvSub(x) + '</div>');
   }
-  function mvA(units) {
-    var live = units.filter(function (u) { return u.x.tier === 0; }), paused = units.filter(function (u) { return u.x.tier === 1; }), idle = units.filter(function (u) { return u.x.tier >= 2 && u.x.tier < 4; }), gn = units.filter(function (u) { return u.x.tier === 4; });
-    return '<div class="mv-wrap mv-opta">' + (live.length ? mvSec('Playing now', live.length) + '<div class="mv-heroes">' + live.map(mvAHero).join('') + '</div>' : paused.length ? '' : mvQuiet()) +
-      (paused.length ? mvSec('Paused', paused.length) + '<div class="mv-heroes">' + paused.map(mvAHero).join('') + '</div>' : '') +
-      (idle.length ? mvSec('Not playing', idle.length) + '<div class="mv-list">' + idle.map(mvARow).join('') + '</div>' : '') +
-      (gn.length ? mvSec('Not responding', gn.length) + '<div class="mv-list">' + gn.map(mvARow).join('') + '</div>' : '') + '</div>';
+  // ── Option 2 (b): a header strip in the app's colour carries the name ──
+  function mvW2(u) {
+    var x = u.x, tog = u.members.length > 1;
+    var strip = '<div class="mv-strip"><span class="mv-ic">' + mvKind(x) + '</span><div class="mv-h1t">' + mvRoomLbl(u) + '<div class="mv-name">' + esc(mvTitle(u)) + '</div></div>' + mvBadge(x) + (tog ? '' : mvActs(x)) + '</div>';
+    return mvCard(x, 'mv-wide mv-w2', strip + '<div class="mv-body">' + mvNow(x, 52) + mvSound(x) + mvCtl(x, tog) + mvTail(u) + '</div>');
   }
-
-  // ── B: Stage and shelf ──
-  function mvBWide(u) {
-    var x = u.x, tog = u.members.length > 1, by = mvBy(x), w = mvWhere(x);
-    var head = '<div class="mv-wtop">' + mvArt(x, 72) + '<div class="mv-htxt">' + mvBadge(x) + '<div class="mv-ttl small">' + esc(x.what || x.it.name) + '</div>' +
-      '<div class="mv-dev">' + mvKind(x) + '<span>' + esc((tog ? mvNames(u) : x.it.name + (w ? ' · ' + w : '')) + (by ? ' · ' + by : '')) + '</span></div></div>' + (tog ? '' : mvActs(x)) + '</div>';
-    var chips = tog ? '<div class="mv-chips">' + MV_LINK + '<span>Playing together</span>' + u.members.map(function (m) { return '<i>' + mvKind(m) + esc(m.it.name) + '</i>'; }).join('') + '</div>' : '';
-    var keys = mvKeys(x), vol = mvVol(x);
-    return mvCard(x, 'mv-wide', head + chips + (keys || vol ? '<div class="mv-wctl">' + (keys ? '<div class="mv-keys l">' + keys + '</div>' : '') + vol + '</div>' : '') + mvGroupBar(u));
+  function mvT2(u) {
+    var x = u.x;
+    return mvCard(x, 'mv-sq mv-t2', '<div class="mv-tstrip"><div class="mv-name sm">' + esc(x.it.name) + '</div>' + mvRoomLbl(u) + '</div><div class="mv-tbody"><div class="mv-rsub">' + mvSub(x) + '</div>' + mvQuick(x) + '</div>');
   }
-  function mvBTile(u) {
-    var x = u.x, w = mvWhere(x), open = x.rc && x.on && remoteOpen.has(x.rc.id);
-    return mvCard(x, 'mv-sq' + (open ? ' rem-open' : ''), '<div class="mv-sqtop"><span class="mv-ic">' + mvKind(x) + '</span>' + mvQuick(x) + '</div>' +
-      '<div class="mv-sqtxt"><div class="mv-rname wrap">' + esc(x.it.name) + '</div><div class="mv-rsub">' + mvSub(x) + '</div></div>');
+  // ── Option 3 (c): the name owns the left column, the controls own the right ──
+  function mvW3(u) {
+    var x = u.x, tog = u.members.length > 1;
+    var left = '<div class="mv-lcol"><span class="mv-ic big">' + mvKind(x) + '</span><div><div class="mv-name">' + esc(mvTitle(u)) + '</div>' + mvRoomLbl(u) + '</div>' + mvBadge(x) + (tog ? '' : mvActs(x)) + '</div>';
+    return mvCard(x, 'mv-wide mv-w3', left + '<div class="mv-rcol">' + mvNow(x, 44) + mvSound(x) + mvCtl(x, tog) + mvTail(u) + '</div>');
   }
-  function mvB(units) {
-    var live = units.filter(function (u) { return u.x.tier < 2; }), rest = units.filter(function (u) { return u.x.tier >= 2; });
-    return '<div class="mv-wrap mv-optb">' + (live.length ? '<div class="mv-stage">' + live.map(mvBWide).join('') + '</div>' : mvQuiet()) +
-      (rest.length ? '<div class="mv-shelfh">' + mvSec('On the shelf', rest.length) + '</div><div class="mv-shelf">' + rest.map(mvBTile).join('') + '</div>' : '') + '</div>';
+  function mvT3(u) {
+    var x = u.x;
+    return mvCard(x, 'mv-lrow3', '<div class="mv-rtxt"><div class="mv-name sm">' + esc(x.it.name) + '</div><div class="mv-rsub">' + mvSub(x) + '</div></div>' + mvQuick(x));
   }
-
-  // ── C: One list, live rows ──
-  function mvCRow(u) {
-    var x = u.x, tog = u.members.length > 1, live = x.tier < 2, w = mvWhere(x), by = mvBy(x);
-    if (!live) return mvCard(x, 'mv-lrow', '<div class="mv-lmain"><span class="mv-ic">' + mvKind(x) + '</span><div class="mv-rtxt"><div class="mv-rname">' + esc(x.it.name) + '</div><div class="mv-rsub">' + mvSub(x) + '</div></div>' + mvQuick(x) + '</div>');
-    var line2 = tog ? '<span class="mv-tg">' + MV_LINK + esc(mvNames(u) + ' together') + '</span>' : esc(x.it.name + (w ? ' · ' + w : '') + (by ? ' · ' + by : ''));
-    var keys = mvKeys(x), vol = mvVol(x);
-    return mvCard(x, 'mv-lrow live', '<div class="mv-lmain">' + mvArt(x, 48) + '<div class="mv-rtxt"><div class="mv-rname big">' + esc(x.what || x.it.name) + '</div><div class="mv-rsub">' + line2 + '</div></div>' + mvBadge(x) + (tog ? '' : mvActs(x)) + '</div>' +
-      (keys || vol ? '<div class="mv-lsub">' + (keys ? '<div class="mv-keys l">' + keys + '</div>' : '') + vol + '</div>' : '') + mvGroupBar(u));
-  }
-  function mvC(units) { return '<div class="mv-wrap mv-optc">' + units.map(mvCRow).join('') + '</div>'; }
 
   function mvHtml(list) {
-    var units = mvUnits(list);
-    return MV_OPT === 'a' ? mvA(units) : MV_OPT === 'b' ? mvB(units) : mvC(units);
+    var units = mvUnits(list), W = MV_OPT === 'a' ? mvW1 : MV_OPT === 'b' ? mvW2 : mvW3, T = MV_OPT === 'a' ? mvT1 : MV_OPT === 'b' ? mvT2 : mvT3;
+    var live = units.filter(function (u) { return u.x.tier < 2; }), rest = units.filter(function (u) { return u.x.tier >= 2; });
+    return '<div class="mv-wrap mv-opt' + MV_OPT + '">' + (live.length ? '<div class="mv-stage">' + live.map(W).join('') + '</div>' : mvQuiet()) +
+      (rest.length ? '<div class="mv-shelfh">' + mvSec('Not Playing', rest.length) + '</div><div class="mv-shelf">' + rest.map(T).join('') + '</div>' : '') + '</div>';
   }
 `;
 
@@ -252,71 +274,82 @@ const MV_CSS = String.raw`
   .mv-act:hover { border-color: var(--fg-muted); }
   .mv-act:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-  /* ── A: Now playing hero ── */
-  .mv-heroes { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 400px), 1fr)); gap: 14px; align-items: start; }
-  .tile.mv-hero { padding: 18px; gap: 16px; border-radius: 26px; }
-  .mv-htop { display: flex; gap: 16px; align-items: flex-start; position: relative; }
-  .mv-hero .mv-keys { gap: 16px; }
-  .mv-hero .key { width: 46px; height: 46px; }
-  .mv-hero .key.main { width: 60px; height: 60px; }
-  .mv-hero .key.main svg { width: 24px; height: 24px; }
-  .mv-tog { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px 12px; border-radius: 18px; background: color-mix(in srgb, var(--fg) 5%, transparent); border: 1px solid color-mix(in srgb, var(--fg) 10%, transparent); }
-  .mv-togh { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-2); }
-  .mv-mem { display: flex; flex-direction: column; gap: 4px; }
-  .mv-mn { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--fg); }
-  .mv-mn svg { width: 13px; height: 13px; color: var(--fg-muted); }
-  .mv-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 8px; }
-  .tile.mv-row { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 16px; }
-  .mv-row > .rcard, .mv-row > .pend { flex-basis: 100%; }
-
-  /* ── B: Stage and shelf ── */
-  .mv-stage { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: 12px; }
+  /* ── Round 2b: name first. Shared by all three options. ── */
+  .mv-stage { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 12px; align-items: start; }
   .tile.mv-wide { padding: 14px; gap: 12px; border-radius: 22px; }
-  .mv-wtop { display: flex; gap: 14px; align-items: flex-start; position: relative; }
   .mv-wctl { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   .mv-wctl .vrow { flex: 1 1 150px; }
-  .mv-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 11px; color: var(--fg-2); }
-  .mv-chips svg { width: 14px; height: 14px; }
-  .mv-chips > span { font-weight: 700; letter-spacing: .06em; text-transform: uppercase; margin-right: 4px; }
-  .mv-chips i { font-style: normal; display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 9999px; background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--fg); }
-  .mv-chips i svg { width: 12px; height: 12px; color: var(--fg-muted); }
+  .mv-name { font-size: 21px; font-weight: 800; line-height: 1.15; color: var(--fg); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .mv-name.sm { font-size: 15px; font-weight: 700; line-height: 1.2; }
+  .mv-room { font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--fg-muted); line-height: 1.3; }
+  .mv-ic.big { width: 44px; height: 44px; border-radius: 14px; background: color-mix(in srgb, var(--c) 22%, var(--well)); color: var(--fg); }
+  .mv-ic.big svg { width: 22px; height: 22px; }
+  .mv-h1t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .mv-now { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .mv-nowt { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .mv-song { font-size: 13.5px; font-weight: 600; color: var(--fg-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mv-art.s52 { width: 52px; height: 52px; border-radius: 14px; font-size: 18px; }
+  .mv-art.s44 { width: 44px; height: 44px; border-radius: 12px; font-size: 15px; }
+  .mv-snd { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; font-size: 11.5px; color: var(--fg-2); padding: 3px 10px 3px 8px; border-radius: 9999px; background: color-mix(in srgb, var(--fg) 7%, transparent); max-width: 100%; }
+  .mv-snd svg { width: 13px; height: 13px; flex-shrink: 0; color: var(--fg-muted); }
+  .mv-snd span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mv-tog { display: flex; flex-direction: column; gap: 10px; padding: 10px 12px 12px; border-radius: 16px; background: color-mix(in srgb, var(--fg) 5%, transparent); border: 1px solid color-mix(in srgb, var(--fg) 10%, transparent); }
+  .mv-togh { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-2); }
+  .mv-mem { display: flex; flex-direction: column; gap: 4px; }
+  .mv-mn { display: flex; align-items: baseline; gap: 6px; font-size: 14px; color: var(--fg); }
+  .mv-mn b { font-weight: 700; }
+  .mv-mn i { font-style: normal; font-size: 11px; color: var(--fg-muted); }
+  .mv-mn svg { width: 13px; height: 13px; color: var(--fg-muted); align-self: center; }
   .mv-shelfh { margin-top: 4px; }
-  .mv-shelf { display: grid; grid-template-columns: repeat(auto-fill, minmax(136px, 1fr)); gap: 10px; }
-  .tile.mv-sq { min-height: 128px; padding: 12px; gap: 8px; justify-content: space-between; border-radius: 20px; }
-  .mv-sq.rem-open { grid-column: 1 / -1; }
+  .mv-shelf { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .tile.mv-sq { min-height: 104px; padding: 12px; gap: 8px; justify-content: space-between; border-radius: 18px; }
   .mv-sqtop { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
-  .mv-sq .mv-act { width: 38px; padding: 0; justify-content: center; }
-  .mv-sq .mv-act { font-size: 0; gap: 0; }
+  .mv-sqn { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .mv-sq .mv-act { width: 36px; padding: 0; justify-content: center; font-size: 0; gap: 0; flex-shrink: 0; }
   .mv-sq .mv-act svg { width: 16px; height: 16px; }
   .mv-sq .mv-rsub { white-space: normal; }
+  .mv-sq.st-off .mv-name, .mv-sq.st-gone .mv-name { color: var(--fg-2); }
 
-  /* ── C: One list, live rows ── */
-  .mv-optc { max-width: 780px; gap: 8px; }
-  .tile.mv-lrow { padding: 0; gap: 0; border-radius: 18px; --rail: var(--fg-faint); }
-  .mv-lrow::before { content: ''; position: absolute; left: 0; top: 12px; bottom: 12px; width: 4px; border-radius: 0 4px 4px 0; background: var(--rail); z-index: 1; }
-  .mv-lrow.st-playing, .mv-lrow.st-on { --rail: var(--accent); }
-  .mv-lrow.st-paused { --rail: #e8a33d; }
-  .mv-lrow.st-gone { --rail: #d9534f; }
-  .mv-lrow.st-off { --rail: transparent; }
-  .mv-lmain { display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 18px; position: relative; }
-  .mv-lrow.live .mv-lmain { padding: 14px 14px 8px 18px; }
-  .mv-lsub { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 4px 14px 14px 18px; position: relative; }
-  .mv-lsub .vrow { flex: 1 1 170px; }
-  .mv-lrow > .rcard { margin: 0 14px 14px 18px; }
-  .mv-lrow > .gcard { margin: 0 14px 14px 18px; }
-  .mv-tg { display: inline-flex; align-items: center; gap: 5px; color: var(--accent); font-weight: 600; }
-  .mv-lrow .mv-rsub { font-size: 12px; }
+  /* Option 1: the name is the title */
+  .mv-h1 { display: flex; align-items: center; gap: 12px; position: relative; }
+  .mv-w1 .mv-now { padding: 10px; border-radius: 16px; background: color-mix(in srgb, var(--fg) 5%, transparent); }
+
+  /* Option 2: a header strip in the app's colour carries the name */
+  .tile.mv-w2 { padding: 0; gap: 0; overflow: hidden; }
+  .mv-strip { display: flex; align-items: center; gap: 12px; padding: 12px 14px; position: relative;
+    background: linear-gradient(100deg, color-mix(in srgb, var(--c) 46%, var(--panel)), color-mix(in srgb, var(--c) 18%, var(--panel))); border-bottom: 1px solid color-mix(in srgb, var(--c) 40%, var(--edge-dim)); }
+  .mv-strip .mv-ic { background: color-mix(in srgb, var(--c) 40%, var(--panel)); color: var(--fg); }
+  .mv-strip .mv-room { color: var(--fg-2); }
+  .mv-body { display: flex; flex-direction: column; gap: 12px; padding: 14px; position: relative; }
+  .st-paused .mv-strip { filter: saturate(.5); }
+  .tile.mv-t2 { padding: 0; gap: 0; overflow: hidden; justify-content: flex-start; }
+  .mv-tstrip { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; background: color-mix(in srgb, var(--fg) 8%, var(--panel)); border-bottom: 1px solid var(--edge-dim); }
+  .mv-tbody { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; flex: 1; }
+  .mv-t2 .mv-act { width: 36px; padding: 0; justify-content: center; }
+
+  /* Option 3: the name owns the left column, controls the right */
+  .tile.mv-w3 { flex-direction: row; padding: 0; gap: 0; overflow: hidden; }
+  .mv-lcol { flex: 0 0 40%; max-width: 230px; min-width: 150px; overflow: hidden; display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 14px; background: color-mix(in srgb, var(--c) 14%, var(--well)); border-right: 1px solid var(--edge-dim); position: relative; }
+  .mv-lcol .mv-acts { margin-top: auto; }
+  .mv-lcol .mv-name { font-size: 18px; -webkit-line-clamp: 3; }
+  .mv-lcol .mv-room { white-space: normal; margin-top: 3px; }
+  .mv-rcol { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; padding: 14px; position: relative; justify-content: flex-start; }
+  .mv-w3 .mv-wctl { flex-direction: column; align-items: stretch; }
+  .mv-w3 .mv-wctl .vrow { flex: none; }
+  .mv-w3 .mv-keys.l { justify-content: flex-start; }
+  .mv-shelf { }
+  .mv-opt-c .mv-shelf, .mv-optc .mv-shelf { grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 8px; }
+  .tile.mv-lrow3 { flex-direction: row; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 16px; }
   @media (max-width: 520px) {
-    .tile.mv-hero { padding: 14px; border-radius: 22px; }
-    .mv-art.s84 { width: 68px; height: 68px; border-radius: 18px; }
-    .mv-ttl { font-size: 18px; }
-    .mv-lmain { flex-wrap: wrap; }
-    .mv-lrow.live .mv-lmain > .mv-rtxt { flex-basis: calc(100% - 140px); }
+    .tile.mv-w3 { flex-direction: column; }
+    .mv-lcol { flex: none; max-width: none; flex-direction: row; flex-wrap: wrap; align-items: center; border-right: 0; border-bottom: 1px solid var(--edge-dim); }
+    .mv-lcol .mv-acts { margin: 0 0 0 auto; }
+    .mv-name { font-size: 19px; }
   }
 `;
 
-function build(opt: 'a' | 'b' | 'c', stage: boolean) {
-  const inject = `var MV_OPT = '${opt}', MV_STAGE = ${stage};\n${MV_JS}\n  `;
+function build(opt: 'a' | 'b' | 'c') {
+  const inject = `var MV_OPT = '${opt}', MV_STAGE = true;\n${MV_JS}\n  `;
   return {
     css: MV_CSS,
     data: { view: 'media' },
@@ -327,11 +360,10 @@ function build(opt: 'a' | 'b' | 'c', stage: boolean) {
   };
 }
 
+// Every option shows the same house in the same state: the TV and its soundbar as one card, two speakers playing together,
+// the Not Playing shelf, and one speaker that is not responding.
 export const VARIANTS: HomeVariants = {
-  a: { label: 'Now playing hero', ...build('a', false) },
-  'a-group': { label: 'Now playing hero, speakers together', ...build('a', true) },
-  b: { label: 'Stage and shelf', ...build('b', false) },
-  'b-group': { label: 'Stage and shelf, speakers together', ...build('b', true) },
-  c: { label: 'One list, live rows', ...build('c', false) },
-  'c-group': { label: 'One list, live rows, speakers together', ...build('c', true) },
+  a: { label: 'Name as the title', ...build('a') },
+  b: { label: 'Name strip across the top', ...build('b') },
+  c: { label: 'Name column on the left', ...build('c') },
 };
