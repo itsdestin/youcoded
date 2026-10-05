@@ -38,7 +38,7 @@ function activePrerequisite(prereqs: PrerequisiteState[]): PrerequisiteState | u
  * FirstRunView shows the button on exactly this test, so the headline and the
  * button always agree.
  */
-export function canRetry(state: FirstRunState): boolean {
+function canRetry(state: FirstRunState): boolean {
   if (state.prerequisites.some((p) => p.status === 'failed')) return true;
   return state.currentStep !== 'AUTHENTICATE';
 }
