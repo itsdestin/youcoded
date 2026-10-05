@@ -2362,6 +2362,8 @@ export const IPC = {
   VOICE_MIC_ACCESS: 'voice:mic-access',
   VOICE_AUDIO: 'voice:audio',
   VOICE_EVENT: 'voice:event',   // push
+  // Hitch recorder: renderer -> main, fire-and-forget, desktop only (no remote/Android lane).
+  PERF_HITCH_BATCH: 'perf:hitch-batch',
 } as const;
 
 // Performance / GPU configuration snapshot — returned by performance:get-config.

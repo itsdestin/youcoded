@@ -33,3 +33,16 @@ describe('perfMark', () => {
     appendSpy.mockRestore();
   });
 });
+
+describe('perfMark keeps marks in memory for the hitch recorder', () => {
+  it('keeps marks even when YOUCODED_PERF_LOG is unset, and caps how many', async () => {
+    vi.stubEnv('YOUCODED_PERF_LOG', undefined);
+    vi.resetModules();
+    const { perfMark, getPerfMarks } = await import('../src/main/perf-marks');
+    perfMark('main:a'); perfMark('main:b');
+    expect(getPerfMarks().map((m) => m.name)).toEqual(['main:a', 'main:b']);
+    for (let i = 0; i < 500; i++) perfMark('bg:repeat');
+    expect(getPerfMarks().length).toBe(120);
+    vi.unstubAllEnvs(); vi.resetModules();
+  });
+});
