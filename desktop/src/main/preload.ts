@@ -528,7 +528,7 @@ export function installHitchRecorder(env: HitchEnv): { mode: string } | null {
   const mode = supported.includes('long-animation-frame') ? 'loaf' : supported.includes('longtask') ? 'longtask' : 'none';
   if (mode === 'none') return { mode };
   let buf: any[] = [];
-  let tally = { f: 0, fms: 0, over: 0 }; // 50-100 ms frames (count, summed ms); detailed entries over the rate limit
+  let tally = { f: 0, fms: 0, over: 0, oms: 0 }; // 50-100 ms frames (count, summed ms); entries past the rate limit (count, summed ms)
   let dropped = 0;
   let timer: unknown = null;
   let winStart = 0;
@@ -566,14 +566,14 @@ export function installHitchRecorder(env: HitchEnv): { mode: string } | null {
     timer = null;
     if (!buf.length && !tally.f && !tally.over && !dropped) return;
     const batch = { v: 1, mode, kind: env.mode, entries: buf, tally, dropped };
-    buf = []; tally = { f: 0, fms: 0, over: 0 }; dropped = 0;
+    buf = []; tally = { f: 0, fms: 0, over: 0, oms: 0 }; dropped = 0;
     try { env.send(batch); } catch { /* instrumentation never throws into the app */ }
   };
   const arm = () => { if (!timer) timer = env.setTimeout(flush, 5000); };
   const keep = (e: any) => {
     const t = env.now();
     if (t - winStart >= 60_000) { winStart = t; winCount = 0; }
-    if (winCount >= 30) { tally.over++; arm(); return; } // hard cap: 30 detailed entries/min/window
+    if (winCount >= 30) { tally.over++; tally.oms += r(e.d); arm(); return; } // hard cap: 30 detailed entries/min/window
     winCount++;
     e.ctx = ctx();
     if (buf.length >= 200) { buf.shift(); dropped++; }
@@ -624,7 +624,7 @@ export function installHitchRecorder(env: HitchEnv): { mode: string } | null {
       const marks: Record<string, number> = {};
       for (const m of env.performance.getEntriesByType('mark')) if (typeof m.name === 'string' && m.name.startsWith('yc:')) marks[m.name] = r(m.startTime);
       const fcp = env.performance.getEntriesByName('first-contentful-paint')[0];
-      env.send({ v: 1, mode, kind: env.mode, entries: [], tally: { f: 0, fms: 0, over: 0 }, dropped: 0, startup: { marks, fcp: fcp ? r(fcp.startTime) : null } });
+      env.send({ v: 1, mode, kind: env.mode, entries: [], tally: { f: 0, fms: 0, over: 0, oms: 0 }, dropped: 0, startup: { marks, fcp: fcp ? r(fcp.startTime) : null } });
     } catch { /* ignore */ }
   }, 10_000);
   return { mode };

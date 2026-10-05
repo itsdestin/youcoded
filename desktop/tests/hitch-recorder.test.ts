@@ -69,6 +69,7 @@ describe('renderer batches', () => {
     rec.onMinute();
     const minute = lines.at(-1);
     expect(minute.rend.over).toBe(70);
+    expect(minute.rend.overMs).toBe(70 * 200);
   });
 
   it('limits batches per window per minute', () => {
@@ -210,6 +211,16 @@ describe('off switch and timers', () => {
 });
 
 describe('traceIpc', () => {
+  it('does not trace the recorder\'s own channel', () => {
+    const ipcMain: any = new EventEmitter();
+    const orig = vi.fn(); ipcMain.handle = orig;
+    const trace = traceIpc(ipcMain, () => 5);
+    const fn = vi.fn();
+    ipcMain.on(HITCH_CHANNEL, fn);
+    ipcMain.emit(HITCH_CHANNEL, {}, 1);
+    expect(fn).toHaveBeenCalled();
+    expect(trace.last()).toBeNull();
+  });
   it('records channel + age for handle and on, keeps off(original) working, masks id-like names', () => {
     const ipcMain: any = new EventEmitter();
     const origHandle = vi.fn();

@@ -23,7 +23,7 @@ export interface CleanBatch {
   /** 'main' for ordinary windows, else one of the three buddy window kinds. */
   kind: string;
   entries: CleanEntry[];
-  tally: { f: number; fms: number; over: number };
+  tally: { f: number; fms: number; over: number; oms: number };
   dropped: number;
   rejected: number;
   startup?: { marks: Record<string, number>; fcp: number | null };
@@ -106,7 +106,7 @@ export function validateBatch(raw: unknown, now: number): CleanBatch | null {
     }
   }
   const t = isObj(raw.tally) ? raw.tally : {};
-  const tally = { f: int(t.f, 0, 1e7) ?? 0, fms: int(t.fms, 0, 1e10) ?? 0, over: int(t.over, 0, 1e7) ?? 0 };
+  const tally = { f: int(t.f, 0, 1e7) ?? 0, fms: int(t.fms, 0, 1e10) ?? 0, over: int(t.over, 0, 1e7) ?? 0, oms: int(t.oms, 0, 1e10) ?? 0 };
   const out: CleanBatch = { mode, kind, entries, tally, dropped: int(raw.dropped, 0, 1e7) ?? 0, rejected };
   if (isObj(raw.startup) && isObj(raw.startup.marks)) {
     const marks: Record<string, number> = {};

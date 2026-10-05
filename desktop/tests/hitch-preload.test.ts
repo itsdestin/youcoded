@@ -125,6 +125,7 @@ describe('renderer hitch recorder (inlined in preload)', () => {
     t.fire(5000);
     expect(t.sent[0].b.entries).toHaveLength(30);
     expect(t.sent[0].b.tally.over).toBe(50);
+    expect(t.sent[0].b.tally.oms).toBe(50 * 300);
     t.advance(61_000);
     t.emit('long-animation-frame', [loaf()]);
     t.fire(5000);

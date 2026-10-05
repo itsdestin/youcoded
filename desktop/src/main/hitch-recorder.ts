@@ -66,6 +66,8 @@ export function traceIpc(ipcMain: { handle: (...a: any[]) => any; on: (...a: any
   const wrap = (ch: unknown, fn: (...a: any[]) => any) => {
     // Channel names are app constants, but a dynamic one could carry an id: mask long id-like runs.
     const name = cleanString(ch, 60).replace(/[0-9a-f]{8}[0-9a-f-]{4,}/gi, '*');
+    // The recorder's own batches are not 'work main was doing' — leave them out or every stall names us.
+    if (ch === HITCH_CHANNEL) return fn;
     const w = function (this: unknown, ...args: any[]) { channel = name; at = now(); return fn.apply(this, args); };
     (w as any).listener = fn;
     return w;
@@ -113,7 +115,7 @@ export class HitchRecorder {
   private nextWindow = 1;
   private tick = 0;
   private timer: ReturnType<typeof setInterval> | undefined;
-  private minuteTally = { frames: 0, framesMs: 0, over: 0, dropped: 0, rejected: 0, entries: 0 };
+  private minuteTally = { frames: 0, framesMs: 0, over: 0, overMs: 0, dropped: 0, rejected: 0, entries: 0 };
   private stalls = 0;
   private startupWritten = false;
   private mainLoadedAt = 0;
@@ -152,13 +154,13 @@ export class HitchRecorder {
       const b = validateBatch(raw, t);
       if (!b) { this.minuteTally.rejected++; return; }
       this.minuteTally.frames += b.tally.f; this.minuteTally.framesMs += b.tally.fms;
-      this.minuteTally.over += b.tally.over; this.minuteTally.dropped += b.dropped; this.minuteTally.rejected += b.rejected;
+      this.minuteTally.over += b.tally.over; this.minuteTally.overMs += b.tally.oms; this.minuteTally.dropped += b.dropped; this.minuteTally.rejected += b.rejected;
       if (t - w.minStart >= 60_000) { w.minStart = t; w.minCount = 0; }
       const sessions = this.d.getSessionCount();
       const windows = this.d.getWindowCount();
       for (const e of b.entries) {
         // Second, independent cap: 30 detailed entries per window per minute no matter what the renderer says.
-        if (w.minCount >= PER_WINDOW_PER_MIN) { this.minuteTally.over++; continue; }
+        if (w.minCount >= PER_WINDOW_PER_MIN) { this.minuteTally.over++; this.minuteTally.overMs += e.d; continue; }
         w.minCount++;
         this.minuteTally.entries++;
         const { k, t: et, ...rest } = e;
@@ -241,7 +243,7 @@ export class HitchRecorder {
       : { p50: 0, p99: 0, max: 0 };
     mh.reset();
     const tally = this.minuteTally;
-    this.minuteTally = { frames: 0, framesMs: 0, over: 0, dropped: 0, rejected: 0, entries: 0 };
+    this.minuteTally = { frames: 0, framesMs: 0, over: 0, overMs: 0, dropped: 0, rejected: 0, entries: 0 };
     const stalls = this.stalls;
     this.stalls = 0;
     if (windows < 1) return; // one line per minute only while a window exists

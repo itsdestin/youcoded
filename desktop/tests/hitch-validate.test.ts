@@ -18,7 +18,7 @@ describe('validateBatch', () => {
     expect(b.entries).toHaveLength(1);
     expect(b.entries[0]).toMatchObject({ k: 'frame', d: 250, b: 200, inp: true });
     expect((b.entries[0] as any).sc[0]).toMatchObject({ fn: 'renderThing', src: 'index-abc.js', pos: 1234 });
-    expect(b.tally).toEqual({ f: 3, fms: 210, over: 0 });
+    expect(b.tally).toEqual({ f: 3, fms: 210, over: 0, oms: 0 });
   });
 
   it.each([null, undefined, 5, 'x', [], { v: 2 }, { mode: 'loaf' }])('rejects a non-batch (%j)', (raw) => {
