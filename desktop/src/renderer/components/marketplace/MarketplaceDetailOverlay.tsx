@@ -8,7 +8,7 @@
 // the top card and the labelled sections come from DetailPage.tsx; its header
 // comment says which guide rule each piece follows.
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useMarketplace, installTrackingKey } from "../../state/marketplace-context";
 import { useMarketplaceStats } from "../../state/marketplace-stats-context";
 import { useTheme } from "../../state/theme-context";
@@ -29,7 +29,7 @@ import { Button, Callout, CARD_LEVEL_1, Pill, SettingRow } from "../ui";
 // Task 3: `longDescription` is markdown and used to be printed verbatim.
 import MarkdownContent from "../MarkdownContent";
 import { DetailActions, DetailIdentity, DetailPage, type DetailSection } from "./DetailPage";
-import { workbenchLikeStyle } from "../../workbench-mode";
+import { workbenchThemeChipFit } from "../../workbench-mode";
 
 export type DetailTarget =
   | { kind: "skill"; id: string }
@@ -562,7 +562,12 @@ function ThemeDetail({
   const themeStats = useMarketplaceStats().themes[entry.slug];
   const likes = themeStats?.likes ?? 0;
   const installed = !!entry.installed;
-  const likeStyle = workbenchLikeStyle();
+  // The live like count: seeded from the page stats, then told every change by the heart
+  // (optimistic step included), so the "N likes" chip moves the instant you click
+  // (marketplace-detail-3#M3-1). Re-seeded if the stats arrive late.
+  const [likeCount, setLikeCount] = useState(likes);
+  useEffect(() => { setLikeCount(likes); }, [likes]);
+  const chipFit = workbenchThemeChipFit();
 
   // Confirmation wrapper — locally-built themes are permanent deletes (no marketplace copy to reinstall from)
   const handleUninstall = () => {
@@ -592,27 +597,44 @@ function ThemeDetail({
     );
   }
 
+  const authorChip = entry.author && <AuthorBadge author={entry.author} />;
+  const downloadsChip = !!themeStats?.installs && <CountChip n={themeStats.installs} word="download" />;
+  const likesChip = likeCount > 0 && <CountChip n={likeCount} word="like" />;
+  // Round 4 (M3-3: the chips were cut short by the fade in the narrow right column) —
+  // three ways to fit them, picked in the workbench (workbench-mode.ts `ThemeChipFit`):
+  // wrap: all three chips, allowed onto a second line; facts: no chips, one plain line of
+  // facts under the buttons (bold number, grey word — guide "Text and numbers"); fewer:
+  // only who made it and how liked it is.
+  const chips = chipFit === 'facts' ? undefined
+    : chipFit === 'fewer' ? <>{authorChip}{likesChip}</>
+    : <>{authorChip}{downloadsChip}{likesChip}</>;
+  const factLine = chipFit === 'facts' ? (
+    <p className="text-xs text-fg-muted">
+      {[
+        entry.author && <span key="a">by <span className="text-fg-2">{entry.author}</span></span>,
+        !!themeStats?.installs && <span key="d"><span className="font-medium text-fg-2">{themeStats.installs.toLocaleString()}</span> downloads</span>,
+        likeCount > 0 && <span key="l"><span className="font-medium text-fg-2">{likeCount.toLocaleString()}</span> {likeCount === 1 ? 'like' : 'likes'}</span>,
+      ].filter(Boolean).reduce<React.ReactNode[]>((out, part, i) => (i ? [...out, ' · ', part] : [part]), [])}
+    </p>
+  ) : undefined;
+
   const identity = (
     <DetailIdentity
       name={entry.name}
       status={isActive ? <Pill tone="ok">In use</Pill> : installed ? <Pill tone="ok">Installed</Pill> : undefined}
       quickActions={
         <>
-          {/* Theme "like" = the public count on the Worker. Round 3 tries four looks for it
-              (workbench-mode.ts `LikeStyle`). */}
-          <LikeButton themeId={entry.slug} initialCount={likes} look={likeStyle} />
+          {/* Theme "like" = the public count on the Worker; a heart-only button, its count
+              is the "N likes" fact (marketplace-detail-3#M3-1). */}
+          <LikeButton themeId={entry.slug} initialCount={likes} onCountChange={setLikeCount} />
           {/* Local favourite (drives the Appearance panel), distinct from the public like. */}
           <QuickActions installed={installed} favorited={favorited} onToggleFavorite={onToggleFavorite} onShare={onShare} shareNeedsInstall={false} />
         </>
       }
-      chips={
-        <>
-          {entry.author && <AuthorBadge author={entry.author} />}
-          {!!themeStats?.installs && <CountChip n={themeStats.installs} word="download" />}
-          {/* `chip` look: the heart is icon-only and its count is a fact in this row. */}
-          {likeStyle === 'chip' && likes > 0 && <CountChip n={likes} word="like" />}
-        </>
-      }
+      quickActionsOnTitle
+      chipsWrap={chipFit === 'wrap'}
+      chips={chips}
+      footer={factLine}
       description={entry.description}
       actions={actions}
     >

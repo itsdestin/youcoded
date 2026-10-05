@@ -41,7 +41,7 @@ export type DetailSection = {
  *  about 250px, narrower than the guide's 420px "narrow popup". */
 const NarrowColumn = React.createContext(false);
 
-/** True when the top card puts its buttons on the description's line (`compact`): they
+/** True when the top card puts its buttons on its text's line (`iconLayout="row"`): they
  *  then hug the right like any text-and-buttons line (guide "Buttons" → text and buttons
  *  in one box, on one line when they fit; decisions NB-2), never full width. */
 const InlineActions = React.createContext(false);
@@ -122,7 +122,8 @@ export function DetailPage({
  * repeat the title. (Recorded as a conflict with "A label comes first" in the friction log.)
  */
 export function DetailIdentity({
-  icon, name, status, quickActions, chips, description, children, actions, compact = false,
+  icon, name, status, quickActions, chips, description, children, actions, footer,
+  iconLayout = 'top', quickActionsOnTitle = false, chipsWrap = false,
 }: {
   icon?: React.ReactNode;
   name: React.ReactNode;
@@ -134,56 +135,80 @@ export function DetailIdentity({
   children?: React.ReactNode;
   /** <DetailActions> — the item's buttons. */
   actions?: React.ReactNode;
-  /** Tighter card: the description and the buttons share one line when they fit
-   *  (marketplace-detail-2#M2-10: "i think we could compact this a little"). */
-  compact?: boolean;
+  /** Small print under the buttons (a theme's facts, in one of the round-4 drafts). */
+  footer?: React.ReactNode;
+  /** How an icon tile lines up with the words (round 4, M3-2: "i just don't like how the
+   *  description/title/icon line up"):
+   *   top    the tile beside the name only; the description runs under both (round 3)
+   *   block  the tile vertically centred on the name + description block; buttons below
+   *   row    one row: tile | name + description | buttons, all on one centre line — the
+   *          Account "Your profile" card and the shared setting row (icon, title, hint,
+   *          control at the right, vertically centred: guide "Settings") */
+  iconLayout?: 'top' | 'block' | 'row';
+  /** Keep the quick actions on the name's line even in the narrow column; the name then
+   *  wraps between words, never inside one. */
+  quickActionsOnTitle?: boolean;
+  /** Let the chips wrap onto a second line instead of fading at the end. */
+  chipsWrap?: boolean;
 }) {
   const phone = useNarrowViewport();
   const inColumn = React.useContext(NarrowColumn);
-  const inline = compact && !phone;
-  // WHY the quick actions move down beside the chips in the narrow right-hand column
-  // (round 3, the theme page): beside the name they left ~100px, and "Meadow Mist" broke
-  // mid-word ("Meado / w Mist"). The name gets the whole line; the actions stay at the
-  // card's right edge, one line lower.
-  const chipRow = (chips || (inColumn && quickActions)) && (
-    <div className="-mt-1 flex items-center gap-2 min-w-0">
-      {/* WHY one row that never wraps and fades at its end (decisions G-9, U-1): the
-          chips are short facts, and a second row of them pushed the description down by a
-          line at phone width. Full card width (not beside the quick actions) so a phone
-          shows as many as it can before the fade. DetailPage.css draws the fade. */}
-      <div data-detail-chips className="flex-1 min-w-0 flex items-center gap-1.5 flex-nowrap overflow-hidden">{chips}</div>
-      {inColumn && quickActions && <div className="shrink-0 flex items-center gap-1 -mr-1">{quickActions}</div>}
+  // WHY (round 3): in the narrow right-hand column the quick actions moved down beside
+  // the chips, because beside the name "Meadow Mist" broke mid-word. A draft can now put
+  // them back on the name's line (`quickActionsOnTitle`) with word-only wrapping instead.
+  const actionsBelow = inColumn && !quickActionsOnTitle;
+  const row = iconLayout === 'row' && !phone;
+  const nameLine = (
+    <div className="flex items-center gap-2 min-w-0 flex-wrap">
+      {/* Session details' name size (text-lg semibold) — the subject of the popup.
+          `break-normal` where the name shares its line: wrap between words only. */}
+      <div className={`text-lg font-semibold text-fg leading-tight min-w-0 ${quickActionsOnTitle ? 'break-normal' : 'break-words'}`}>{name}</div>
+      {status}
     </div>
   );
-  return (
-    <div className={`${CARD_LEVEL_1} ${compact ? 'p-3 space-y-2' : 'p-4 space-y-3'}`} data-detail-identity>
-      <div className="flex items-start gap-3">
-        {icon}
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 min-w-0 flex-wrap">
-            {/* Session details' name size (text-lg semibold) — the subject of the popup. */}
-            <div className="text-lg font-semibold text-fg leading-tight break-words min-w-0">{name}</div>
-            {status}
-          </div>
+  const chipRow = (chips || (actionsBelow && quickActions)) && (
+    <div className="-mt-1 flex items-center gap-2 min-w-0">
+      {/* WHY one row that never wraps and fades at its end (decisions G-9, U-1) — unless
+          a draft lets it wrap (`chipsWrap`, round 4, M3-3: the narrow column cut the
+          chips short). DetailPage.css draws the fade; the wrapping row has none. */}
+      <div
+        {...(chipsWrap ? {} : { 'data-detail-chips': true })}
+        className={`flex-1 min-w-0 flex items-center gap-1.5 ${chipsWrap ? 'flex-wrap' : 'flex-nowrap overflow-hidden'}`}
+      >{chips}</div>
+      {actionsBelow && quickActions && <div className="shrink-0 flex items-center gap-1 -mr-1">{quickActions}</div>}
+    </div>
+  );
+  const quick = !actionsBelow && quickActions && <div className="shrink-0 flex items-center gap-1 -mt-1 -mr-1">{quickActions}</div>;
+  const desc = description && <p className="text-sm text-fg-2">{description}</p>;
+
+  if (row) {
+    return (
+      <div className={`${CARD_LEVEL_1} p-3 space-y-2`} data-detail-identity>
+        <div className="flex items-center gap-3">
+          {icon}
+          <div className="min-w-0 flex-1 space-y-0.5">{nameLine}{desc}</div>
+          <InlineActions.Provider value>{actions}</InlineActions.Provider>
+          {quick}
         </div>
-        {!inColumn && quickActions && <div className="shrink-0 flex items-center gap-1 -mt-1 -mr-1">{quickActions}</div>}
+        {chipRow}
+        {children}
+        {footer}
+      </div>
+    );
+  }
+  const block = iconLayout === 'block';
+  return (
+    <div className={`${CARD_LEVEL_1} p-4 space-y-3`} data-detail-identity>
+      <div className={`flex gap-3 ${block ? 'items-center' : 'items-start'}`}>
+        {icon}
+        <div className="min-w-0 flex-1 space-y-1">{nameLine}{block && desc}</div>
+        {quick}
       </div>
       {chipRow}
-      {inline ? (
-        <>
-          {children}
-          <div className="flex items-center gap-3">
-            <p className="flex-1 min-w-0 text-sm text-fg-2">{description}</p>
-            <InlineActions.Provider value>{actions}</InlineActions.Provider>
-          </div>
-        </>
-      ) : (
-        <>
-          {description && <p className="text-sm text-fg-2">{description}</p>}
-          {children}
-          {actions}
-        </>
-      )}
+      {!block && desc}
+      {children}
+      {actions}
+      {footer}
     </div>
   );
 }

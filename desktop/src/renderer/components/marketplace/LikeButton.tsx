@@ -22,7 +22,6 @@ import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { useAccount } from '../../state/account-context';
 import SignInPromptModal from './SignInPromptModal';
 import { Button, Toast } from '../ui';
-import type { LikeStyle } from '../../workbench-mode';
 
 // ── Local toast state (no global toast context available inside the modal) ────
 //
@@ -63,11 +62,12 @@ interface LikeButtonProps {
   themeId: string;
   initialLiked?: boolean;
   initialCount: number;
-  /** Round-3 drafts (workbench-mode.ts `LikeStyle`); `ghost` until Destin picks. */
-  look?: LikeStyle;
+  /** Told the live count after every like / unlike, including the optimistic step, so
+   *  the page's "N likes" chip moves the moment the heart does. */
+  onCountChange?(count: number): void;
 }
 
-export default function LikeButton({ themeId, initialLiked = false, initialCount, look = 'ghost' }: LikeButtonProps) {
+export default function LikeButton({ themeId, initialLiked = false, initialCount, onCountChange }: LikeButtonProps) {
   const { signedIn } = useAccount();
 
   const [liked, setLiked] = useState(initialLiked);
@@ -91,6 +91,12 @@ export default function LikeButton({ themeId, initialLiked = false, initialCount
   useEffect(() => {
     if (!inFlight) setCount(initialCount);
   }, [initialCount, inFlight]);
+
+  // The page's "N likes" chip follows this count, optimistic step included (round 4, M3-1).
+  // A ref keeps the effect from re-running when the caller passes a fresh callback.
+  const onCountChangeRef = useRef(onCountChange);
+  onCountChangeRef.current = onCountChange;
+  useEffect(() => { onCountChangeRef.current?.(count); }, [count]);
 
   // Note: initialLiked is NOT synced here intentionally. The backend doesn't expose
   // per-user liked state today, so initialLiked is always undefined → false. Adding
@@ -165,27 +171,21 @@ export default function LikeButton({ themeId, initialLiked = false, initialCount
 
   return (
     <div className="relative">
-      {/* WHY the shared Button in every look (guide "Control primitives"): it sits beside
-          the star and share icon buttons, so it shares their height (h-7) and hover. Liked is
-          the accent fill like the favourite star — not red (approved, marketplace-detail-2
-          #M2-5). The four looks (round 3, M2-3 "restyling the like button"):
-            ghost   heart + count, no outline (round 2)
-            outline heart + count in an outlined button
-            filled  outlined "Like 88"; filled with the accent once liked
-            chip    heart only — the page shows the count as a chip ("88 likes") */}
+      {/* WHY a heart-only icon button (Destin picked it, marketplace-detail-3#M3-1): the
+          count is a fact, so the page shows it in the chip row ("88 likes") and this button
+          only toggles. The shared icon button — same size and hover as the star and share
+          beside it. Liked is the accent fill like the favourite star (approved, M2-5). */}
       <Button
-        variant={look === 'outline' ? 'secondary' : look === 'filled' ? (liked ? 'primary' : 'secondary') : 'ghost'}
-        size={look === 'chip' ? 'icon' : 'sm'}
+        variant="ghost"
+        size="icon"
         onClick={handleClick}
         disabled={inFlight}
         title={title}
         aria-label={liked ? `Unlike (${count})` : `Like (${count})`}
         aria-pressed={liked}
-        className={look === 'chip' ? (liked ? 'text-accent' : '') : `h-7 px-2 text-xs ${liked && look !== 'filled' ? 'text-accent' : ''}`}
+        className={liked ? 'text-accent' : ''}
       >
         <HeartIcon filled={liked} />
-        {look === 'filled' && <span>{liked ? 'Liked' : 'Like'}</span>}
-        {look !== 'chip' && count > 0 && <span className={look === 'filled' ? 'opacity-80' : ''}>{count}</span>}
       </Button>
 
       {/* Inline toast — shown briefly on non-auth errors only. Auth errors now

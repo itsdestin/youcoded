@@ -12,7 +12,7 @@ import { Button, Callout, Pill, SettingRow } from "../ui";
 import { MetaChip } from "./TrustBadges";
 import type { PillTone } from "../ui/Pill";
 import { DetailActions, DetailIdentity, DetailPage, type DetailSection } from "./DetailPage";
-import { workbenchIntegrationTile } from "../../workbench-mode";
+import { workbenchIntegrationAlign } from "../../workbench-mode";
 
 export type IntegrationCardItem = IntegrationEntry & { state: IntegrationState };
 
@@ -72,34 +72,25 @@ export function IntegrationDetailOverlay({
     }
   }
 
-  // Round 3 (marketplace-detail-2#M2-10: "not sure i like the g tile… compact this a
-  // little"): three drafts, picked in the workbench (workbench-mode.ts `IntegrationTile`).
-  // The integration's own icon image always wins over the letter when it has one.
-  const tile = workbenchIntegrationTile();
-  const letter = iconUrl ? <img src={iconUrl} alt="" className="w-full h-full object-contain" /> : item.displayName.slice(0, 1);
-  const tileStyle = iconUrl ? undefined : { background: item.accentColor || 'var(--accent)' };
-  // tile: round 2's 40px square beside the name and the pill.
-  const icon = tile === 'tile' ? (
-    <div className="w-10 h-10 rounded-lg shrink-0 overflow-hidden bg-inset flex items-center justify-center text-on-accent text-lg font-semibold" style={tileStyle} aria-hidden>
-      {letter}
+  // The big tile stays (marketplace-detail-3#M3-2); how it lines up with the words is the
+  // round-4 choice (workbench-mode.ts `IntegrationAlign`). The integration's own icon
+  // image wins over the letter when it has one.
+  const align = workbenchIntegrationAlign();
+  const icon = (
+    <div
+      className="w-10 h-10 rounded-lg shrink-0 overflow-hidden bg-inset flex items-center justify-center text-on-accent text-lg font-semibold"
+      style={iconUrl ? undefined : { background: item.accentColor || 'var(--accent)' }}
+      aria-hidden
+    >
+      {iconUrl ? <img src={iconUrl} alt="" className="w-full h-full object-contain" /> : item.displayName.slice(0, 1)}
     </div>
-  ) : undefined;
-  // badge: the same mark at the name's own height, inline before it — the size the app's
-  // provider logos use in the model picker and status bar.
-  const name = tile === 'badge' ? (
-    <span className="inline-flex items-center gap-2">
-      <span className="w-5 h-5 rounded-md shrink-0 overflow-hidden bg-inset inline-flex items-center justify-center text-on-accent text-xs font-semibold" style={tileStyle} aria-hidden>
-        {letter}
-      </span>
-      {item.displayName}
-    </span>
-  ) : item.displayName;
+  );
 
   const identity = (
     <DetailIdentity
       icon={icon}
-      name={name}
-      compact={tile !== 'tile'}
+      name={item.displayName}
+      iconLayout={align}
       status={<Pill tone={PILL_TONE[statusBadge.tone]}>{statusBadge.text}</Pill>}
       description={item.tagline}
       actions={actions}

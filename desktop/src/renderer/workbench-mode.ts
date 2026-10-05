@@ -166,26 +166,28 @@ export function workbenchChromeStyle(): ChromeStyleOverride | null {
     : null;
 }
 
-/** Marketplace detail pages, round 3 (2026-10-05, marketplace-detail-2 answers). Decided:
- *  Feedback as two cards (M2-2 "split") and the theme page with the picture beside the top
- *  card (M2-3/M2-4 "side") — both are now the only version. Still being chosen, each a
- *  workbench-only switch until Destin picks:
+/** Marketplace detail pages, round 4 (2026-10-05, marketplace-detail-3 answers). Decided:
+ *  the like button is a heart icon with its count as a chip (M3-1 "chip") and the
+ *  integration keeps its big tile (M3-2). Still being chosen, each a workbench-only switch:
  *
- *  Like button on a theme (M2-3: "want to try restyling the like button a few different ways"):
- *  - `ghost`    heart + count as a plain icon button (round 2)
- *  - `outline`  an outlined button with the heart and the count
- *  - `filled`   outlined "Like 88"; filled with the accent once you have liked it
- *  - `chip`     a heart-only icon button; the count moves into the chip row ("88 likes")
+ *  Integration top card alignment (M3-2: "i just don't like how the description/title/icon
+ *  line up"):
+ *  - `row`    one row, everything on one centre line: tile | name + description | buttons
+ *             (the Account profile card / setting-row recipe — recommended)
+ *  - `block`  tile vertically centred on the name + description; buttons on their own line
+ *  - `top`    round 3: tile beside the name only, description under both
  *
- *  Integration top card (M2-10: "not sure i like the g tile… compact this a little"):
- *  - `tile`     round 2: the 40px coloured letter tile, roomy card
- *  - `badge`    a small coloured letter beside the name, compact card
- *  - `none`     no tile at all, compact card
+ *  Theme page chips in the narrow right column (M3-3: "canwe try a few way to fit the
+ *  chips and make it look better"):
+ *  - `wrap`   heart/star/share back on the name's line (name wraps between words); the
+ *             chips wrap onto two lines instead of fading
+ *  - `facts`  no chip row: the facts become one plain line under the buttons
+ *  - `fewer`  heart/star/share on the name's line; one row with only the author and likes
  *
  *  The first value of each is what SHIPS until he picks; outside the workbench and the
  *  photo-only build these always return it, so a typo renders the shipped page. */
-export type LikeStyle = 'ghost' | 'outline' | 'filled' | 'chip';
-export type IntegrationTile = 'tile' | 'badge' | 'none';
+export type IntegrationAlign = 'row' | 'block' | 'top';
+export type ThemeChipFit = 'wrap' | 'facts' | 'fewer';
 
 function workbenchChoice<T extends string>(param: string, values: readonly T[]): T {
   if (!isWorkbenchMode()) return values[0];
@@ -193,10 +195,10 @@ function workbenchChoice<T extends string>(param: string, values: readonly T[]):
   return (values as readonly string[]).includes(raw) ? (raw as T) : values[0];
 }
 
-export function workbenchLikeStyle(): LikeStyle {
-  return workbenchChoice<LikeStyle>('likeStyle', ['ghost', 'outline', 'filled', 'chip']);
+export function workbenchIntegrationAlign(): IntegrationAlign {
+  return workbenchChoice<IntegrationAlign>('integrationAlign', ['row', 'block', 'top']);
 }
 
-export function workbenchIntegrationTile(): IntegrationTile {
-  return workbenchChoice<IntegrationTile>('integrationTile', ['tile', 'badge', 'none']);
+export function workbenchThemeChipFit(): ThemeChipFit {
+  return workbenchChoice<ThemeChipFit>('themeChips', ['wrap', 'facts', 'fewer']);
 }
