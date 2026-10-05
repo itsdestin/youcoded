@@ -49,7 +49,7 @@ function rig(opts: { panes?: Record<string, number>; types?: string[] } = {}) {
       if (m) {
         const n = panes[m[1]];
         if (n === undefined) return null;
-        return { querySelector: () => (n > 0 ? { parentElement: { childElementCount: n } } : null) };
+        return { contains: (node: any) => !!node && node.inPane === true, querySelector: () => (n > 0 ? { parentElement: { childElementCount: n } } : null) };
       }
       return null;
     },
@@ -127,17 +127,33 @@ describe('switch marks: the state machine', () => {
     expect(l.st).toBeGreaterThan(l.ff + 40);
   });
 
-  it('counts layout shifts the user did not cause, and a shift pushes settled out', () => {
+  it('counts layout shifts of things INSIDE the new pane (including ones the browser blames on the click) and a shift pushes settled out; shifts elsewhere (the session strip) are ignored', () => {
     const r = rig();
     r.start();
     r.advance(40);
     const lso = r.observers.find((o) => o.type === 'layout-shift');
-    lso.cb({ getEntries: () => [{ value: 0.12, startTime: r.now(), hadRecentInput: false }, { value: 0.5, startTime: r.now(), hadRecentInput: true }] });
+    const inPane = { inPane: true }, strip = { inPane: false };
+    lso.cb({ getEntries: () => [
+      { value: 0.12, startTime: r.now(), hadRecentInput: false, sources: [{ node: inPane }] },
+      { value: 0.5, startTime: r.now(), hadRecentInput: true, sources: [{ node: inPane }] },      // caused by the click: still this switch's
+      { value: 0.9, startTime: r.now(), hadRecentInput: false, sources: [{ node: strip }] },      // a pill resizing: not the pane
+      { value: 0.9, startTime: r.now(), hadRecentInput: false },                                  // no source: cannot be attributed
+    ] });
     r.advance(1000);
     const [l] = r.lines();
-    expect(l.ls).toBe(1);
-    expect(l.lsv).toBeCloseTo(0.12, 3);
+    expect(l.ls).toBe(2);
+    expect(l.lsv).toBeCloseTo(0.62, 3);
     expect(l.st).toBeGreaterThan(l.ff);
+  });
+
+  it('shifts elsewhere in the page never hold a chat switch open', () => {
+    const r = rig();
+    r.start();
+    for (let i = 0; i < 20; i++) { r.advance(16); r.observers.find((o) => o.type === 'layout-shift').cb({ getEntries: () => [{ value: 0.001, startTime: r.now(), sources: [{ node: { inPane: false } }] }] }); }
+    r.advance(1000);
+    const [l] = r.lines();
+    expect(l).toMatchObject({ end: 'settled', ls: 0 });
+    expect(l.st).toBe(l.ff);
   });
 
   it('a pane that keeps changing ends at the cap: "streaming" when the destination was streaming, else "cap"; settled is null either way', () => {

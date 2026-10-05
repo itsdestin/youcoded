@@ -721,7 +721,7 @@ export function installHitchRecorder(env: HitchEnv): { mode: string } | null {
   const swTeardown = (x: any) => {
     try { x.mo && x.mo.disconnect(); } catch { /* ignore */ }
     try { x.lso && x.lso.disconnect(); } catch { /* ignore */ }
-    x.mo = null; x.lso = null;
+    x.mo = null; x.lso = null; x.pane = null;
     const ct = env.clearTimeout, cr = env.cancelRaf;
     if (ct) { if (x.capT) ct(x.capT); if (x.quietT) ct(x.quietT); if (x.ffT) ct(x.ffT); }
     if (cr && x.rafH) cr(x.rafH);
@@ -760,9 +760,18 @@ export function installHitchRecorder(env: HitchEnv): { mode: string } | null {
   };
   const noteShifts = (x: any, list: any) => {
     for (const e of list.getEntries()) {
-      if (e.hadRecentInput) continue; // a shift the user caused is not a surprise
+      // Chat view: only a shift of something INSIDE the new pane counts. The document-wide observer also sees the session strip's
+      // pills resizing for ~200 ms after every switch (measured on the rig: ~14 tiny shifts per switch, even into an empty chat), which
+      // would otherwise read as "the new pane is still changing". A shift with no usable source node cannot be attributed and is skipped.
+      // Shifts the browser calls "caused by input" (any shift within 500 ms of the click, i.e. every one of a real switch's) DO count:
+      // the switch is the cause, which is exactly what is being measured. Terminal view: all shifts are counted but do not delay settling.
+      if (x.vm === 'chat') {
+        const pane = x.pane;
+        const srcs = e.sources;
+        if (!pane || !srcs || !Array.prototype.some.call(srcs, (s: any) => s && s.node && pane.contains(s.node))) continue;
+      }
       x.ls++; x.lsv += Number(e.value) || 0;
-      if (typeof e.startTime === 'number') x.lastChange = Math.max(x.lastChange, e.startTime);
+      if (x.vm === 'chat' && typeof e.startTime === 'number') x.lastChange = Math.max(x.lastChange, e.startTime);
     }
   };
   /** Chat view: the pane is quiet once nothing has changed for SW_QUIET_MS; checked by ONE timer that re-arms itself. */
@@ -785,6 +794,7 @@ export function installHitchRecorder(env: HitchEnv): { mode: string } | null {
     if (x.vm === 'chat') {
       const pane = paneOf(x.id);
       x.e1 = entriesIn(pane);
+      if (pane) x.pane = pane;
       if (!x.mo && pane && env.MutationObserver) armMutations(x, pane, token);
       x.quietT = env.setTimeout(() => swQuietCheck(token), SW_QUIET_MS);
     } else if (x.termAt !== null) {
@@ -825,11 +835,12 @@ export function installHitchRecorder(env: HitchEnv): { mode: string } | null {
       ff: null, e1: null, mutN: 0, ls: 0, lsv: 0, lastChange: now,
       // Terminal view with no terminal show reported (a native session's terminal that was never mounted): nothing to wait for.
       termAt: vm === 'terminal' && typeof d.dr !== 'number' ? now : null,
-      frames: [], evs: [], mo: null, lso: null, capT: null, quietT: null, ffT: null, rafH: null,
+      frames: [], evs: [], pane: null, mo: null, lso: null, capT: null, quietT: null, ffT: null, rafH: null,
     };
     sw = x;
     try {
-      if (env.MutationObserver && vm === 'chat') { const pane = paneOf(id); if (pane) armMutations(x, pane, token); }
+      if (vm === 'chat') x.pane = paneOf(id);
+      if (env.MutationObserver && x.pane) armMutations(x, x.pane, token);
       if ((env.PerformanceObserver.supportedEntryTypes || []).includes('layout-shift')) {
         x.lso = new env.PerformanceObserver((l: any) => { if (sw && sw.token === token) noteShifts(sw, l); });
         x.lso.observe({ type: 'layout-shift' });
