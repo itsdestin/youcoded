@@ -60,7 +60,7 @@ const BUILTIN_THEMES: LoadedTheme[] = [
   { ...(cremeJson as unknown as ThemeDefinition), source: 'youcoded-core' },
   // The YouCoded pair (theme questions deck, Destin 2026-10-04): brand purple, the
   // glow-and-silk picture (deck yc-walls-2, "Richer"), Outfit for text. Drawn by
-  // scripts in the workspace (scratch/decks/yc-walls/walls.html), so the app owns them.
+  // the workspace's scripts/brand/theme-walls.html (?w=gs2), so the app owns them.
   withWallpaper(youcodedJson, youcodedWall, youcodedWallTerminal, [ycRig, ycIdle, ycWelcome, ycCurious, ycShocked]),
   withWallpaper(youcodedNightJson, youcodedNightWall, youcodedNightWallTerminal, [ycnRig, ycnIdle, ycnWelcome, ycnCurious, ycnShocked]),
 ];
