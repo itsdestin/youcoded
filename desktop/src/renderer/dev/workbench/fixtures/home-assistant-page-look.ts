@@ -22,18 +22,21 @@ export const HOME_LOOK_CSS = `
   .lights-body > .tile { background: color-mix(in srgb, var(--fg) 6%, var(--panel)); }
   .tile .bulb { width: 38px; height: 38px; }
   .tile.on .bulb { box-shadow: 0 0 22px var(--c), inset 0 1px 0 rgba(255,255,255,.5); }
-  /* Slider handle (redesign round 1, look b, refined after Destin's note). The handle is a 30px box
-     the full height of the bar, with a 24px white disc drawn inside it, so the disc sits 3px in from
-     the bar's rounded ends at 0% and 100% and is exactly centred up and down. --tw tells the page's
-     fill rule the handle box's width. The fill ends at the disc's centre at 0% and at the bar's very end
-     at 100% (it grows half a handle faster than the disc moves), so the disc is always on a filled
-     bar, never beside a dark gap or a square-cut sliver. The volume bar's speaker icon keeps its colour
-     on the fill, and at exactly 0% (where the white disc would sit on top of it) it steps aside. */
-  .vwrap:has(.vlr[style*="--v:0;"]) .vicon { opacity: 0; }
-  .tile .lr { --tw: 30px; height: 30px; border-radius: 15px; box-shadow: inset 0 1px 3px rgba(0,0,0,.3);
-    background: linear-gradient(to right, var(--c, var(--accent)) calc(var(--tw) / 2 + (100% - var(--tw) / 2) * var(--v, 0) / 100), var(--well) 0); }
+  /* Slider handle (redesign round 1, look b, second refinement: "I shouldn't be able to see the straight
+     edge of the fill next to the handle"). The fill is two background layers: a bar of colour up to the
+     handle's centre, plus a full circle of colour (diameter = bar height) centred on the handle. So the
+     fill's leading end is always a round cap whose middle is the handle; a 24px white disc, concentric,
+     sits on it with a 3px ring of colour showing. --v (0 to 100, also set live while dragging) places
+     both layers, so this holds at every value. The handle box is 30px wide, so its centre runs from 15px
+     to 15px short of the bar's end. The volume bar's speaker icon steps aside below 10%. */
+  .tile .lr { height: 30px; border-radius: 15px; box-shadow: inset 0 1px 3px rgba(0,0,0,.3);
+    background:
+      radial-gradient(circle at center, var(--c, var(--accent)) 14.5px, transparent 15px) calc(var(--v, 0) * 1%) 0 / 30px 30px no-repeat,
+      linear-gradient(to right, var(--c, var(--accent)) calc(15px + (100% - 30px) * var(--v, 0) / 100), var(--well) 0); }
   .tile .lr::-webkit-slider-thumb { width: 30px; height: 30px; margin: 0; border-radius: 50%; border: 0; box-sizing: border-box;
     background: radial-gradient(circle, #fff 11.5px, rgba(255,255,255,0) 12px); filter: drop-shadow(0 1px 2px rgba(0,0,0,.45)); }
+  /* below 10% the white disc sits where the speaker icon is, so the icon steps aside (the page writes --v with or without a space after the colon) */
+  .vwrap:has(.vlr[style*="--v:0;"]) .vicon, .vwrap:has(.vlr[style*="--v: 0;"]) .vicon, .vwrap:has(.vlr[style*="--v:1;"]) .vicon, .vwrap:has(.vlr[style*="--v: 1;"]) .vicon, .vwrap:has(.vlr[style*="--v:2;"]) .vicon, .vwrap:has(.vlr[style*="--v: 2;"]) .vicon, .vwrap:has(.vlr[style*="--v:3;"]) .vicon, .vwrap:has(.vlr[style*="--v: 3;"]) .vicon, .vwrap:has(.vlr[style*="--v:4;"]) .vicon, .vwrap:has(.vlr[style*="--v: 4;"]) .vicon, .vwrap:has(.vlr[style*="--v:5;"]) .vicon, .vwrap:has(.vlr[style*="--v: 5;"]) .vicon, .vwrap:has(.vlr[style*="--v:6;"]) .vicon, .vwrap:has(.vlr[style*="--v: 6;"]) .vicon, .vwrap:has(.vlr[style*="--v:7;"]) .vicon, .vwrap:has(.vlr[style*="--v: 7;"]) .vicon, .vwrap:has(.vlr[style*="--v:8;"]) .vicon, .vwrap:has(.vlr[style*="--v: 8;"]) .vicon, .vwrap:has(.vlr[style*="--v:9;"]) .vicon, .vwrap:has(.vlr[style*="--v: 9;"]) .vicon { opacity: 0; }
   .scenes { border-radius: 14px; border-color: color-mix(in srgb, var(--fg) 8%, transparent); }
   .pill { border-color: color-mix(in srgb, var(--fg) 14%, transparent); background: linear-gradient(180deg, color-mix(in srgb, var(--fg) 8%, var(--panel)), var(--panel)); box-shadow: 0 4px 12px -8px rgba(0,0,0,.5); }
   .pill.sel, .pill.lit.sel { background: var(--accent); border-color: var(--accent); color: var(--on-accent); box-shadow: 0 6px 18px -6px var(--accent); }

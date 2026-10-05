@@ -112,6 +112,21 @@ export const HOME_ASSISTANT_PAGE_CSS = `
   .th-mode { appearance: none; font: inherit; font-size: 12px; padding: 7px 14px; border-radius: 9999px; border: 0; background: transparent; color: var(--fg-2); cursor: pointer; }
   .th-mode[aria-pressed="true"] { background: var(--m); color: #111; }
   .th-hero.gone { opacity: .7; }
+  /* The same dial inside a room card or Favourites (redesign round 1: Home's thermostat matches Climate's).
+     Same parts, scaled: a name line, then dial and controls side by side. */
+  .th-hero.th-compact { display: flex; flex-direction: column; align-items: stretch; flex-wrap: nowrap; gap: 8px; padding: 12px; }
+  .th-compact .line { display: flex; align-items: center; position: relative; }
+  .th-compact .line .name { font-size: 14px; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .th-compact .th-row { display: flex; align-items: center; justify-content: center; gap: 12px; position: relative; }
+  .th-compact .th-dial { width: 148px; height: 148px; }
+  .th-compact .th-track, .th-compact .th-fill { stroke-width: 16; }
+  .th-compact .th-set { font-size: 38px; }
+  .th-compact .th-lbl, .th-compact .th-cur { font-size: 10px; }
+  .th-compact .th-step { width: 42px; height: 42px; font-size: 20px; flex-shrink: 0; }
+  .th-compact .th-modes { width: auto; align-self: stretch; flex-wrap: nowrap; justify-content: space-between; }
+  /* Narrow window: a room card is under 260px wide inside, so the dial and the two buttons shrink to fit. */
+  @media (max-width: 420px) { .th-compact .th-dial { width: 118px; height: 118px; } .th-compact .th-set { font-size: 30px; } .th-compact .th-step { width: 36px; height: 36px; } .th-compact .th-row { gap: 8px; } }
+  .th-compact .th-mode { flex: 1; padding: 6px 4px; font-size: 11px; text-align: center; }
   @media (prefers-reduced-motion: reduce) { .th-fill, .th-step { transition: none; } }
   /* The weather: a wide card painted like the sky outside. Its colours are
      always deep enough for white text. */

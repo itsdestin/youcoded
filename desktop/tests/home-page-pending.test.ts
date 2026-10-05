@@ -149,7 +149,8 @@ describe('what is undone, and when', () => {
   // Code review 8: a guess lasts until the house reports, not a blanket 8 seconds.
   it('shows the value the house really took when it capped a request', async () => {
     await mount({ fetchHook: (req) => { noCameraPicture(req); return req.url.includes('/climate/set_temperature') ? { ok: true, status: 200, headers: {}, body: '[]' } : undefined; } }); // accepted, but the temperature stays
-    const shown = () => q('[data-eid="climate.thermostat"] .val b').textContent;
+    // Redesign round 1: the Home thermostat is the Climate page's dial, so the set point reads from .th-set (was the old card's .val b).
+    const shown = () => q('[data-eid="climate.thermostat"] .th-set').textContent;
     const start = shown();
     q('[data-eid="climate.thermostat"] [data-temp]').click();
     expect(shown()).not.toBe(start); // the guess shows at once

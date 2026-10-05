@@ -512,24 +512,9 @@ ${HOME_ICONS_JS}
   function climateHtml(it, ctx) {
     var na = gone(it), mode = it.state;
     if (na) return '<div class="clim gone"><div class="line"><div class="name">' + esc(it.name) + '<div class="sub">Not responding</div></div></div></div>';
-    var lo = it.min != null ? it.min : 50, hi = it.max != null ? it.max : 90;
-    var at = function (v) { return Math.max(0, Math.min(100, (v - lo) / (hi - lo) * 100)); };
-    var hasSet = it.target != null && mode !== 'off';
-    var now = it.cur != null ? at(it.cur) : null, set = hasSet ? at(it.target) : null;
-    var scale = now == null ? '' : '<div class="scale" aria-hidden="true">' +
-      (set != null ? '<span class="fill" style="left:' + Math.min(now, set) + '%;width:' + Math.abs(now - set) + '%"></span><span class="mk set" style="left:' + set + '%"></span>' : '') +
-      '<span class="mk now" style="left:' + now + '%"></span></div><div class="scale-lbl"><span>' + lo + '°</span><span>' + hi + '°</span></div>';
-    var doing = it.action ? (DOING[it.action] || it.action) : (MODE_NAMES[mode] || mode);
-    var modes = Array.isArray(it.modesHvac) && it.modesHvac.length ? '<div class="modes" role="group" aria-label="Mode">' + it.modesHvac.map(function (m) {
-      return '<button class="mode" aria-pressed="' + (m === mode) + '" data-mode="' + esc(it.id) + '" data-hvac="' + esc(m) + '">' + esc(MODE_NAMES[m] || m) + '</button>';
-    }).join('') + '</div>' : '';
-    return '<div class="clim ' + esc(mode) + (hidden.has(it.id) ? ' is-hidden' : '') + '"><span class="glow"></span>' +
-      '<div class="line" style="position:relative"><div class="name">' + esc(it.name) + '</div></div>' +
-      '<div class="clim-top"><div class="clim-now"><div class="temp">' + (it.cur != null ? esc(it.cur) + '°' : '—') + '</div><div class="clim-doing">' + esc(doing) + '</div></div>' +
-      (hasSet ? '<div class="clim-set"><button class="step" aria-label="Cooler" data-temp="' + esc(it.id) + '" data-delta="' + (-(it.step || 1)) + '"' + (it.target <= lo ? ' disabled' : '') + '>−</button>' +
-        '<div class="val"><b>' + esc(it.target) + '°</b><span class="sub">Set to</span></div>' +
-        '<button class="step" aria-label="Warmer" data-temp="' + esc(it.id) + '" data-delta="' + (it.step || 1) + '"' + (it.target >= hi ? ' disabled' : '') + '>+</button></div>' : '<div class="clim-set sub">Off</div>') +
-      '</div>' + scale + modes + pendHtml(it.id) + '</div>';
+    // Redesign round 1 (Destin: "the thermostat on the home page should match the one on the Climate page"):
+    // a room card and Favourites show the Climate page's dial, scaled down (thermoHero's compact form).
+    return thermoHero(it, null, true);
   }
 
   // ── Order ───────────────────────────────────────────────────────────────
@@ -992,7 +977,7 @@ ${HOME_ICONS_JS}
   // The thermostat, large: a dial whose arc fills to the setting in the
   // mode's colour, a dot where the room is now, the setting in the middle,
   // big − and + either side, and the modes under it.
-  function thermoHero(it, room) {
+  function thermoHero(it, room, compact) {
     if (gone(it)) return '<div class="th-hero gone"><div class="th-side"><div class="th-name">' + esc(it.name) + '</div><div class="vsub">Not responding' + (it.maker && /nest/i.test(it.maker) ? ' — Google Nest needs you to sign in again (see Problems).' : '.') + '</div></div></div>';
     var mode = it.state, lo = it.min != null ? it.min : 50, hi = it.max != null ? it.max : 90;
     var f = function (v) { return Math.max(0, Math.min(1, (v - lo) / (hi - lo))); };
@@ -1006,14 +991,22 @@ ${HOME_ICONS_JS}
     var modes = Array.isArray(it.modesHvac) && it.modesHvac.length ? '<div class="th-modes" role="group" aria-label="Mode">' + it.modesHvac.map(function (m) {
       return '<button class="th-mode" aria-pressed="' + (m === mode) + '" data-mode="' + esc(it.id) + '" data-hvac="' + esc(m) + '">' + esc(MODE_NAMES[m] || m) + '</button>';
     }).join('') + '</div>' : '';
-    return '<div class="th-hero clim ' + esc(mode) + '"><span class="glow"></span>' +
-      '<div class="th-dial"><svg viewBox="0 0 200 200" aria-hidden="true"><circle class="th-track" cx="100" cy="100" r="' + R + '" stroke-dasharray="' + L.toFixed(1) + ' ' + C.toFixed(1) + '" transform="rotate(135 100 100)"/>' +
+    var dial = '<div class="th-dial"><svg viewBox="0 0 200 200" aria-hidden="true"><circle class="th-track" cx="100" cy="100" r="' + R + '" stroke-dasharray="' + L.toFixed(1) + ' ' + C.toFixed(1) + '" transform="rotate(135 100 100)"/>' +
       (hasSet ? '<circle class="th-fill" cx="100" cy="100" r="' + R + '" stroke-dasharray="' + fill.toFixed(1) + ' ' + C.toFixed(1) + '" transform="rotate(135 100 100)"/>' : '') + dot + '</svg>' +
-      '<div class="th-mid"><span class="th-lbl">' + (hasSet ? esc(doing) + ' to' : 'Off') + '</span><span class="th-set">' + (hasSet ? esc(it.target) + '°' : '—') + '</span><span class="th-cur">' + (it.cur != null ? 'Now ' + esc(it.cur) + '°' : '') + '</span></div></div>' +
+      '<div class="th-mid"><span class="th-lbl">' + (hasSet ? esc(doing) + ' to' : 'Off') + '</span><span class="th-set">' + (hasSet ? esc(it.target) + '°' : '—') + '</span><span class="th-cur">' + (it.cur != null ? 'Now ' + esc(it.cur) + '°' : '') + '</span></div></div>';
+    var minus = hasSet ? '<button class="th-step" aria-label="Cooler" data-temp="' + esc(it.id) + '" data-delta="' + (-step) + '"' + (it.target <= lo ? ' disabled' : '') + '>−</button>' : '';
+    var plus = hasSet ? '<button class="th-step" aria-label="Warmer" data-temp="' + esc(it.id) + '" data-delta="' + step + '"' + (it.target >= hi ? ' disabled' : '') + '>+</button>' : '';
+    if (compact) {
+      // WHY compact: on the Home page the same dial sits in a room card, so it is the Climate page's dial with
+      // − and + either side and the modes under it. The name keeps the old card's ".line > .name" so pressing it
+      // still opens the pop-up; the room is already the card's heading.
+      return '<div class="th-hero clim th-compact ' + esc(mode) + (hidden.has(it.id) ? ' is-hidden' : '') + '"><span class="glow"></span>' +
+        '<div class="line" style="position:relative"><div class="name">' + esc(it.name) + '</div></div>' +
+        '<div class="th-row">' + minus + dial + plus + '</div>' + modes + pendHtml(it.id) + '</div>';
+    }
+    return '<div class="th-hero clim ' + esc(mode) + '"><span class="glow"></span>' + dial +
       '<div class="th-side"><div class="th-name">' + esc(it.name) + '<span class="vsub"> · ' + esc(room.name) + '</span></div>' +
-      (hasSet ? '<div class="th-steps"><button class="th-step" aria-label="Cooler" data-temp="' + esc(it.id) + '" data-delta="' + (-step) + '"' + (it.target <= lo ? ' disabled' : '') + '>−</button>' +
-        '<button class="th-step" aria-label="Warmer" data-temp="' + esc(it.id) + '" data-delta="' + step + '"' + (it.target >= hi ? ' disabled' : '') + '>+</button></div>' : '') +
-      modes + pendHtml(it.id) + '</div></div>';
+      (hasSet ? '<div class="th-steps">' + minus + plus + '</div>' : '') + modes + pendHtml(it.id) + '</div></div>';
   }
   // Outside, as a wide card coloured like the sky it describes (round 4
   // note: the weather card "looks a bit odd … we can make it prettier").
