@@ -22,6 +22,7 @@ import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { useAccount } from '../../state/account-context';
 import SignInPromptModal from './SignInPromptModal';
 import { Button, Toast } from '../ui';
+import type { LikeStyle } from '../../workbench-mode';
 
 // ── Local toast state (no global toast context available inside the modal) ────
 //
@@ -62,9 +63,11 @@ interface LikeButtonProps {
   themeId: string;
   initialLiked?: boolean;
   initialCount: number;
+  /** Round-3 drafts (workbench-mode.ts `LikeStyle`); `ghost` until Destin picks. */
+  look?: LikeStyle;
 }
 
-export default function LikeButton({ themeId, initialLiked = false, initialCount }: LikeButtonProps) {
+export default function LikeButton({ themeId, initialLiked = false, initialCount, look = 'ghost' }: LikeButtonProps) {
   const { signedIn } = useAccount();
 
   const [liked, setLiked] = useState(initialLiked);
@@ -162,22 +165,27 @@ export default function LikeButton({ themeId, initialLiked = false, initialCount
 
   return (
     <div className="relative">
-      {/* WHY the shared ghost button (guide "Control primitives"): it sits beside the star
-          and share icon buttons, so it is their height and hover; the count is the word-
-          then-number style. Liked is the accent fill like the favourite star — not red
-          text (status hues never colour words; guide principle 2). */}
+      {/* WHY the shared Button in every look (guide "Control primitives"): it sits beside
+          the star and share icon buttons, so it shares their height (h-7) and hover. Liked is
+          the accent fill like the favourite star — not red (approved, marketplace-detail-2
+          #M2-5). The four looks (round 3, M2-3 "restyling the like button"):
+            ghost   heart + count, no outline (round 2)
+            outline heart + count in an outlined button
+            filled  outlined "Like 88"; filled with the accent once liked
+            chip    heart only — the page shows the count as a chip ("88 likes") */}
       <Button
-        variant="ghost"
-        size="sm"
+        variant={look === 'outline' ? 'secondary' : look === 'filled' ? (liked ? 'primary' : 'secondary') : 'ghost'}
+        size={look === 'chip' ? 'icon' : 'sm'}
         onClick={handleClick}
         disabled={inFlight}
         title={title}
         aria-label={liked ? `Unlike (${count})` : `Like (${count})`}
         aria-pressed={liked}
-        className={`h-7 px-1.5 text-xs ${liked ? 'text-accent' : ''}`}
+        className={look === 'chip' ? (liked ? 'text-accent' : '') : `h-7 px-2 text-xs ${liked && look !== 'filled' ? 'text-accent' : ''}`}
       >
         <HeartIcon filled={liked} />
-        {count > 0 && <span>{count}</span>}
+        {look === 'filled' && <span>{liked ? 'Liked' : 'Like'}</span>}
+        {look !== 'chip' && count > 0 && <span className={look === 'filled' ? 'opacity-80' : ''}>{count}</span>}
       </Button>
 
       {/* Inline toast — shown briefly on non-auth errors only. Auth errors now

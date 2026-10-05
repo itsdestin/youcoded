@@ -26,7 +26,10 @@ import './DetailPage.css';
 
 export type DetailSection = {
   id: string;
-  /** The small label above the section's card (sentence case, never repeats the title). */
+  /** The small label above the section's card (sentence case, never repeats the title).
+   *  Empty = no label: only for a card that is a PICTURE of the item (a theme's preview) —
+   *  Destin dropped "Preview" there (marketplace-detail-2#M2-3: "dont need the text
+   *  'preview'"), the same exception as the top card. */
   label: string;
   node: React.ReactNode;
   /** Short facts rather than reading: sits in the right-hand column. */
@@ -38,11 +41,16 @@ export type DetailSection = {
  *  about 250px, narrower than the guide's 420px "narrow popup". */
 const NarrowColumn = React.createContext(false);
 
+/** True when the top card puts its buttons on the description's line (`compact`): they
+ *  then hug the right like any text-and-buttons line (guide "Buttons" → text and buttons
+ *  in one box, on one line when they fit; decisions NB-2), never full width. */
+const InlineActions = React.createContext(false);
+
 /** A labelled group: the small label, then one first-level card holding it. */
 function LabelledCard({ section }: { section: DetailSection }) {
   return (
     <section data-detail-section={section.id}>
-      <SectionLabel className="mb-2">{section.label}</SectionLabel>
+      {section.label && <SectionLabel className="mb-2">{section.label}</SectionLabel>}
       <div className={`${CARD_LEVEL_1} p-3`}>{section.node}</div>
     </section>
   );
@@ -114,7 +122,7 @@ export function DetailPage({
  * repeat the title. (Recorded as a conflict with "A label comes first" in the friction log.)
  */
 export function DetailIdentity({
-  icon, name, status, quickActions, chips, description, children, actions,
+  icon, name, status, quickActions, chips, description, children, actions, compact = false,
 }: {
   icon?: React.ReactNode;
   name: React.ReactNode;
@@ -126,9 +134,29 @@ export function DetailIdentity({
   children?: React.ReactNode;
   /** <DetailActions> — the item's buttons. */
   actions?: React.ReactNode;
+  /** Tighter card: the description and the buttons share one line when they fit
+   *  (marketplace-detail-2#M2-10: "i think we could compact this a little"). */
+  compact?: boolean;
 }) {
+  const phone = useNarrowViewport();
+  const inColumn = React.useContext(NarrowColumn);
+  const inline = compact && !phone;
+  // WHY the quick actions move down beside the chips in the narrow right-hand column
+  // (round 3, the theme page): beside the name they left ~100px, and "Meadow Mist" broke
+  // mid-word ("Meado / w Mist"). The name gets the whole line; the actions stay at the
+  // card's right edge, one line lower.
+  const chipRow = (chips || (inColumn && quickActions)) && (
+    <div className="-mt-1 flex items-center gap-2 min-w-0">
+      {/* WHY one row that never wraps and fades at its end (decisions G-9, U-1): the
+          chips are short facts, and a second row of them pushed the description down by a
+          line at phone width. Full card width (not beside the quick actions) so a phone
+          shows as many as it can before the fade. DetailPage.css draws the fade. */}
+      <div data-detail-chips className="flex-1 min-w-0 flex items-center gap-1.5 flex-nowrap overflow-hidden">{chips}</div>
+      {inColumn && quickActions && <div className="shrink-0 flex items-center gap-1 -mr-1">{quickActions}</div>}
+    </div>
+  );
   return (
-    <div className={`${CARD_LEVEL_1} p-4 space-y-3`} data-detail-identity>
+    <div className={`${CARD_LEVEL_1} ${compact ? 'p-3 space-y-2' : 'p-4 space-y-3'}`} data-detail-identity>
       <div className="flex items-start gap-3">
         {icon}
         <div className="min-w-0 flex-1">
@@ -138,16 +166,24 @@ export function DetailIdentity({
             {status}
           </div>
         </div>
-        {quickActions && <div className="shrink-0 flex items-center gap-1 -mt-1 -mr-1">{quickActions}</div>}
+        {!inColumn && quickActions && <div className="shrink-0 flex items-center gap-1 -mt-1 -mr-1">{quickActions}</div>}
       </div>
-      {/* WHY one row that never wraps and fades at its end (decisions G-9, U-1): the
-          chips are short facts, and a second row of them pushed the description down by a
-          line at phone width. Full card width (not beside the quick actions) so a phone
-          shows as many as it can before the fade. DetailPage.css draws the fade. */}
-      {chips && <div data-detail-chips className="-mt-1 flex items-center gap-1.5 flex-nowrap overflow-hidden">{chips}</div>}
-      {description && <p className="text-sm text-fg-2">{description}</p>}
-      {children}
-      {actions}
+      {chipRow}
+      {inline ? (
+        <>
+          {children}
+          <div className="flex items-center gap-3">
+            <p className="flex-1 min-w-0 text-sm text-fg-2">{description}</p>
+            <InlineActions.Provider value>{actions}</InlineActions.Provider>
+          </div>
+        </>
+      ) : (
+        <>
+          {description && <p className="text-sm text-fg-2">{description}</p>}
+          {children}
+          {actions}
+        </>
+      )}
     </div>
   );
 }
@@ -163,12 +199,13 @@ export function DetailActions({ children }: { children: React.ReactNode }) {
   // Both hooks always run (never short-circuit a hook call).
   const phone = useNarrowViewport();
   const inColumn = React.useContext(NarrowColumn);
+  const inline = React.useContext(InlineActions);
   const narrow = phone || inColumn;
   const items = React.Children.toArray(children).filter(Boolean);
   if (items.length === 0) return null;
-  const stacked = narrow || items.length === 1;
+  const stacked = !inline && (narrow || items.length === 1);
   return (
-    <div data-detail-actions className={stacked ? 'flex flex-col-reverse gap-2' : 'flex items-center justify-end gap-2'}>
+    <div data-detail-actions className={stacked ? 'flex flex-col-reverse gap-2' : `flex items-center justify-end gap-2${inline ? ' shrink-0' : ''}`}>
       {stacked
         ? items.map((child, i) => <div key={i} className="flex flex-col">{child}</div>)
         : items}

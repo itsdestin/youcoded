@@ -23,14 +23,13 @@ export const MARKETPLACE: readonly ScreenEntry[] = [
   { ...mp('marketplace/detail#phone', 'dialog', 'narrow'), viewport: { width: 390, height: 844 } },
   { ...mp('marketplace/theme-detail#phone', 'dialog', 'narrow'), viewport: { width: 390, height: 844 } },
   { ...mp('marketplace/detail#small', 'dialog'), viewport: { width: 640, height: 480 } },
-  // Round 2 drafts still to pick between (workbench-mode.ts): the Feedback card's other two
-  // looks (the plain screen shows `together`), and the theme page's other two arrangements.
-  { ...mp('marketplace/detail/member#feedback-split', 'dialog'), params: { feedbackLook: 'split' } },
-  { ...mp('marketplace/detail/member#feedback-question', 'dialog'), params: { feedbackLook: 'question' } },
-  { ...mp('marketplace/theme-detail#hero', 'dialog'), params: { themeLayout: 'hero' } },
-  { ...mp('marketplace/theme-detail#side', 'dialog'), params: { themeLayout: 'side' } },
-  { ...mp('marketplace/theme-detail/not-installed#hero', 'dialog'), params: { themeLayout: 'hero' } },
-  { ...mp('marketplace/theme-detail/not-installed#side', 'dialog'), params: { themeLayout: 'side' } },
+  // Round 3 drafts still to pick between (workbench-mode.ts): the like button's other
+  // looks (the plain theme screen shows `ghost`) and the integration card's other tiles.
+  { ...mp('marketplace/theme-detail#like-outline', 'dialog'), params: { likeStyle: 'outline' }, sameAs: { name: 'marketplace/theme-detail', why: "the like button's outline/count is a few pixels — below the look-alike check's thumbnail resolution, though the screens really differ" } },
+  { ...mp('marketplace/theme-detail#like-filled', 'dialog'), params: { likeStyle: 'filled' } },
+  { ...mp('marketplace/theme-detail#like-chip', 'dialog'), params: { likeStyle: 'chip' }, sameAs: { name: 'marketplace/theme-detail', why: "the like button's outline/count is a few pixels — below the look-alike check's thumbnail resolution, though the screens really differ" } },
+  { ...mp('marketplace/integration-detail#badge', 'dialog'), params: { integrationTile: 'badge' } },
+  { ...mp('marketplace/integration-detail#none', 'dialog'), params: { integrationTile: 'none' } },
   // Share/publish sheets — App.tsx owns their id state; both open on the same
   // fixture items marketplace/detail and marketplace/theme-detail use.
   mp('marketplace/share', 'dialog'),

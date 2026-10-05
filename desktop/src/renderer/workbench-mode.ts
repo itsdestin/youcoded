@@ -166,25 +166,26 @@ export function workbenchChromeStyle(): ChromeStyleOverride | null {
     : null;
 }
 
-/** Marketplace detail pages, round 2 (2026-10-05, marketplace-detail-1 answers). The page
- *  arrangement is decided (Destin picked the two-column layout, MD-1); two parts are still
- *  being chosen, so each is a workbench-only switch until he picks:
+/** Marketplace detail pages, round 3 (2026-10-05, marketplace-detail-2 answers). Decided:
+ *  Feedback as two cards (M2-2 "split") and the theme page with the picture beside the top
+ *  card (M2-3/M2-4 "side") — both are now the only version. Still being chosen, each a
+ *  workbench-only switch until Destin picks:
  *
- *  Feedback card (MD-6: "text kinda all running together, cluttered buttons/boxes"):
- *  - `together`  one card: the vote line, then every comment in ONE shared box, then the box
- *                to write in with Post inside it
- *  - `split`     two labelled cards: "Feedback" holds only the vote line, "Comments" the rest
- *  - `question`  one card that opens on the question "Did it help you?" with its two buttons
+ *  Like button on a theme (M2-3: "want to try restyling the like button a few different ways"):
+ *  - `ghost`    heart + count as a plain icon button (round 2)
+ *  - `outline`  an outlined button with the heart and the count
+ *  - `filled`   outlined "Like 88"; filled with the accent once you have liked it
+ *  - `chip`     a heart-only icon button; the count moves into the chip row ("88 likes")
  *
- *  Theme page (MD-7/MD-8: "i'd like 1-2 more attempts/alternatives for this page"):
- *  - `card`      round 1's page: top card, then the Preview card
- *  - `hero`      the preview picture first, full width, the top card under it
- *  - `side`      the preview large on the left; the top card and the colours on the right
+ *  Integration top card (M2-10: "not sure i like the g tile… compact this a little"):
+ *  - `tile`     round 2: the 40px coloured letter tile, roomy card
+ *  - `badge`    a small coloured letter beside the name, compact card
+ *  - `none`     no tile at all, compact card
  *
  *  The first value of each is what SHIPS until he picks; outside the workbench and the
  *  photo-only build these always return it, so a typo renders the shipped page. */
-export type FeedbackLook = 'together' | 'split' | 'question';
-export type ThemePageLayout = 'card' | 'hero' | 'side';
+export type LikeStyle = 'ghost' | 'outline' | 'filled' | 'chip';
+export type IntegrationTile = 'tile' | 'badge' | 'none';
 
 function workbenchChoice<T extends string>(param: string, values: readonly T[]): T {
   if (!isWorkbenchMode()) return values[0];
@@ -192,10 +193,10 @@ function workbenchChoice<T extends string>(param: string, values: readonly T[]):
   return (values as readonly string[]).includes(raw) ? (raw as T) : values[0];
 }
 
-export function workbenchFeedbackLook(): FeedbackLook {
-  return workbenchChoice<FeedbackLook>('feedbackLook', ['together', 'split', 'question']);
+export function workbenchLikeStyle(): LikeStyle {
+  return workbenchChoice<LikeStyle>('likeStyle', ['ghost', 'outline', 'filled', 'chip']);
 }
 
-export function workbenchThemePageLayout(): ThemePageLayout {
-  return workbenchChoice<ThemePageLayout>('themeLayout', ['card', 'hero', 'side']);
+export function workbenchIntegrationTile(): IntegrationTile {
+  return workbenchChoice<IntegrationTile>('integrationTile', ['tile', 'badge', 'none']);
 }

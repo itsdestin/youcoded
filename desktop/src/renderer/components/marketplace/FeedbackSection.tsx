@@ -11,7 +11,6 @@ import { useMarketplaceStats } from '../../state/marketplace-stats-context';
 import { forgetHeldComments, readHeldComments, rememberHeldComment, type HeldComment } from '../../state/held-comments';
 import type { CommentEntry } from '../../state/marketplace-api-client';
 import { Button, FieldError, InputGroup } from '../ui';
-import type { FeedbackLook } from '../../workbench-mode';
 import CommentList from './CommentList';
 import SignInPromptModal from './SignInPromptModal';
 
@@ -83,12 +82,11 @@ export function thumbsLabel(up?: number, down?: number): string | null {
 
 export type FeedbackPart = 'all' | 'votes' | 'comments';
 
-export default function FeedbackSection({ pluginId, installed, look = 'together', part = 'all' }: {
+export default function FeedbackSection({ pluginId, installed, part = 'all' }: {
   pluginId: string;
   installed: boolean;
-  /** Which of the round-2 drafts (workbench-mode.ts `FeedbackLook`). */
-  look?: FeedbackLook;
-  /** `split` draws the votes and the comments as two cards: two instances, each one part. */
+  /** The detail page draws the votes and the comments as two cards (Destin picked "two
+   *  cards", marketplace-detail-2#M2-2): two instances, each one part. */
   part?: FeedbackPart;
 }) {
   const stats = useMarketplaceStats();
@@ -283,16 +281,7 @@ export default function FeedbackSection({ pluginId, installed, look = 'together'
 
   // Text left, buttons right, on one line when they fit (guide "Buttons" → text and
   // buttons in one box; decisions NB-2).
-  const votes = look === 'question' ? (
-    <div className="flex items-center justify-between gap-x-3 gap-y-2 flex-wrap">
-      <div className="min-w-0">
-        <p className="text-sm font-medium text-fg">Did it help you?</p>
-        <p className="text-xs text-fg-muted">{voteSummary}</p>
-        {reasonLine}
-      </div>
-      {voteButtons}
-    </div>
-  ) : (
+  const votes = (
     <div className="flex items-center justify-between gap-x-3 gap-y-2 flex-wrap">
       <div className="min-w-0 text-sm">
         {voteSummary}

@@ -29,7 +29,7 @@ import { Button, Callout, CARD_LEVEL_1, Pill, SettingRow } from "../ui";
 // Task 3: `longDescription` is markdown and used to be printed verbatim.
 import MarkdownContent from "../MarkdownContent";
 import { DetailActions, DetailIdentity, DetailPage, type DetailSection } from "./DetailPage";
-import { workbenchFeedbackLook, workbenchThemePageLayout } from "../../workbench-mode";
+import { workbenchLikeStyle } from "../../workbench-mode";
 
 export type DetailTarget =
   | { kind: "skill"; id: string }
@@ -406,15 +406,10 @@ function SkillDetail({
       ),
     });
   }
-  // Overhaul (decision #4): thumbs + comments replace star reviews. Round 2 (MD-6) tries
-  // three looks for this card; `split` makes it two labelled cards (workbench-mode.ts).
-  const look = workbenchFeedbackLook();
-  if (look === 'split') {
-    sections.push({ id: "feedback", label: "Feedback", node: <FeedbackSection pluginId={entry.id} installed={installed} look={look} part="votes" /> });
-    sections.push({ id: "comments", label: "Comments", node: <FeedbackSection pluginId={entry.id} installed={installed} look={look} part="comments" /> });
-  } else {
-    sections.push({ id: "feedback", label: "Feedback", node: <FeedbackSection pluginId={entry.id} installed={installed} look={look} /> });
-  }
+  // Overhaul (decision #4): thumbs + comments replace star reviews. Two cards — the votes,
+  // then the comments (Destin picked "two cards", marketplace-detail-2#M2-2).
+  sections.push({ id: "feedback", label: "Feedback", node: <FeedbackSection pluginId={entry.id} installed={installed} part="votes" /> });
+  sections.push({ id: "comments", label: "Comments", node: <FeedbackSection pluginId={entry.id} installed={installed} part="comments" /> });
   if (entry.repoUrl || catalog) {
     sections.push({ id: "source", label: "Source", side: true, node: <SourceRows entry={entry} /> });
   }
@@ -567,6 +562,7 @@ function ThemeDetail({
   const themeStats = useMarketplaceStats().themes[entry.slug];
   const likes = themeStats?.likes ?? 0;
   const installed = !!entry.installed;
+  const likeStyle = workbenchLikeStyle();
 
   // Confirmation wrapper — locally-built themes are permanent deletes (no marketplace copy to reinstall from)
   const handleUninstall = () => {
@@ -602,8 +598,9 @@ function ThemeDetail({
       status={isActive ? <Pill tone="ok">In use</Pill> : installed ? <Pill tone="ok">Installed</Pill> : undefined}
       quickActions={
         <>
-          {/* Theme "like" = the public count on the Worker. */}
-          <LikeButton themeId={entry.slug} initialCount={likes} />
+          {/* Theme "like" = the public count on the Worker. Round 3 tries four looks for it
+              (workbench-mode.ts `LikeStyle`). */}
+          <LikeButton themeId={entry.slug} initialCount={likes} look={likeStyle} />
           {/* Local favourite (drives the Appearance panel), distinct from the public like. */}
           <QuickActions installed={installed} favorited={favorited} onToggleFavorite={onToggleFavorite} onShare={onShare} shareNeedsInstall={false} />
         </>
@@ -612,6 +609,8 @@ function ThemeDetail({
         <>
           {entry.author && <AuthorBadge author={entry.author} />}
           {!!themeStats?.installs && <CountChip n={themeStats.installs} word="download" />}
+          {/* `chip` look: the heart is icon-only and its count is a fact in this row. */}
+          {likeStyle === 'chip' && likes > 0 && <CountChip n={likes} word="like" />}
         </>
       }
       description={entry.description}
@@ -634,22 +633,12 @@ function ThemeDetail({
     </div>
   ) : null;
 
-  // Round 2 (MD-7/MD-8: "i'd like 1-2 more attempts/alternatives for this page"): three
-  // arrangements of the same pieces, picked in the workbench (workbench-mode.ts).
-  const layout = workbenchThemePageLayout();
+  // The picture large on the left; the top card and the colours on the right (Destin
+  // picked "picture beside", marketplace-detail-2#M2-3/M2-4). The picture card has no
+  // label: "dont need the text 'preview'" — it is a picture OF the item, like the top card.
   const sections: DetailSection[] = [];
-  let hero: React.ReactNode = undefined;
-  if (layout === 'hero') {
-    // The picture first, full width, in its own card with no label: it IS the subject —
-    // the same exception as the top card (no label could say more than the title).
-    if (picture) hero = <div className={`${CARD_LEVEL_1} p-2`} data-theme-hero>{picture}</div>;
-    if (swatches) sections.push({ id: "colours", label: "Colours", node: swatches });
-  } else if (layout === 'side') {
-    if (picture) sections.push({ id: "preview", label: "Preview", node: picture });
-    if (swatches) sections.push({ id: "colours", label: "Colours", side: true, node: swatches });
-  } else if (picture || swatches) {
-    sections.push({ id: "preview", label: "Preview", node: <div className="space-y-3">{picture}{swatches}</div> });
-  }
+  if (picture) sections.push({ id: "preview", label: "", node: picture });
+  if (swatches) sections.push({ id: "colours", label: "Colours", side: true, node: swatches });
 
   return (
     <DetailPage
@@ -658,8 +647,7 @@ function ThemeDetail({
       onClose={onClose}
       identity={identity}
       sections={sections}
-      hero={hero}
-      identitySide={layout === 'side'}
+      identitySide
     />
   );
 }
