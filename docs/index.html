@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>YouCoded Assistant — Agentic AI for Everyone</title>
+<!-- Lowercase "youcoded", as in the logo (Destin, brand-website-v1 TAB note); the wording is picked in brand-website-v2. -->
+<title>youcoded — Agentic AI for Everyone</title>
 <meta name="description" content="One app for Claude, hundreds of cloud models, or one that runs free on your own computer — working in your files, on every device you own. Windows, macOS, Linux, Android.">
 <!-- Social preview. og-image.png is a PHOTOGRAPH OF THIS PAGE, rebuilt by
      docs/tools/gen-og-image.mjs — regenerate it whenever the hero changes.
@@ -114,7 +115,8 @@ a{color:inherit}
 .sw:hover{transform:scale(1.16)}
 .sw.on{outline:2px solid var(--accent);outline-offset:2px}
 .nav-links{display:flex;gap:20px;list-style:none}
-.nav-links a{text-decoration:none;font-size:.86rem;font-weight:600;opacity:.72}
+/* Outfit, the logo's typeface, so the bar reads as one set (Destin, brand-website-v1 SHARE note). */
+.nav-links a{text-decoration:none;font:500 .92rem/1 'Outfit',system-ui,sans-serif;letter-spacing:-.005em;opacity:.72}
 .nav-links a:hover{opacity:1}
 
 /* ---- hero ---- */
@@ -654,7 +656,7 @@ body.pill-accent.legend-on .dl-legend{border-color:transparent;color:var(--fg);
      (--wm-a/--wm-b/--wm-ink, set per theme by applyTheme()).
    - Icon and name sit a quarter of the icon's height apart; the name is
      raised 3.5% of the icon's height (.lockup).
-   - With the tagline (footer): the name is 42/64 of the icon, the tagline
+   - With the tagline (header): the name is 42/64 of the icon, the tagline
      0.33x the name, tucked up beside the "y"'s tail — its top 0.42x the
      name's size above the bottom of the name's line, starting 0.8x the "y"'s
      width in — and the text block sits 2/64 of the icon lower (.lockup-tag).
@@ -679,7 +681,11 @@ body.pill-accent.legend-on .dl-legend{border-color:transparent;color:var(--fg);
    name's), so the board's .421 and .84 of the name's size are divided by .33. */
 .wm-tag{position:absolute;left:1.276em;top:2.545em;font:400 .33em/normal 'Outfit',system-ui,sans-serif;
   letter-spacing:-.005em;color:var(--wm-tag,#8a7b96)}
-.foot .logo{--icon:52px}
+/* Header carries the tagline, footer the plain name (Destin, brand-website-v1 HEADER/FOOTER notes).
+   44px, not 36: with the tagline at a third of the name's size, a smaller icon
+   shrinks "agents for everyone" below 9px. */
+.nav .logo{--icon:44px}
+.foot .logo{--icon:44px}
 
 /* ==========================================================================
    HEADER ARRANGEMENTS (D1–D4)
@@ -1562,7 +1568,7 @@ body.motion-on .m-rise{transform-origin:50% 0}
   /* the bar's own rules are in the block above this one -- they apply to a
      phone on its SIDE as well, which is 844px wide. */
   /* A phone shrinks the whole lockup together: every size in it is a share of --icon. */
-  .nav .logo{--icon:32px}
+  .nav .logo{--icon:40px}
 
   /* ---- hero ------------------------------------------------------------ */
   .hero{padding-top:calc(var(--nav-h) + 10px)}
@@ -1673,9 +1679,9 @@ body.motion-on .m-rise{transform-origin:50% 0}
   .foot{flex-direction:column;align-items:flex-start;gap:14px;padding:22px 18px}
   /* logo and badge share the first line; `order` does the rest of the stack. */
   .foot .logo{order:1}
-  /* Beside the 52px lockup (about 205px wide), centred on its icon: back up
-     the 14px gap and the icon, then down half the icon less half the badge. */
-  .foot .badge{order:2;margin-top:-55px;margin-left:220px}
+  /* Beside the 44px name-only lockup (about 185px wide), centred on its icon:
+     back up the 14px gap and the icon, then down half the icon less half the badge. */
+  .foot .badge{order:2;margin-top:-47px;margin-left:200px}
   .flinks{order:3;margin-left:0;flex-wrap:wrap;gap:4px 6px}
   /* 44px tall, not 23px -- these were the smallest tap targets on the page. */
   .flinks a{font-size:.9rem;padding:11px 10px;margin:0 -10px}
@@ -1735,7 +1741,7 @@ html{-webkit-tap-highlight-color:transparent}
 <div class="backdrop" id="backdrop"><div class="bd-layer" id="bd-a"></div><div class="bd-layer" id="bd-b"></div><div class="bd-scrim"></div></div>
 
 <nav class="nav"><div class="nav-in">
-  <a href="#top" class="logo" aria-label="YouCoded, back to top"><img class="logo-icon" src="brand/default-128.png" alt="" width="36" height="36"><span class="wm"><span class="wm-you">you</span>coded</span></a>
+  <a href="#top" class="logo lockup-tag" aria-label="YouCoded, agents for everyone. Back to top"><img class="logo-icon" src="brand/default-128.png" alt="" width="44" height="44"><span class="wm"><span class="wm-you">you</span>coded<span class="wm-tag">agents for everyone</span></span></a>
   <div class="nav-right">
     
     <ul class="nav-links"><li><a href="#about">About</a></li><li><a href="#demo">Features</a></li><li><a href="#faq">FAQ</a></li></ul>
@@ -2226,7 +2232,7 @@ Contract: mascots/README.md (from the repo root)
 </div></div></section>
 
 <footer><div class="wrap"><div class="panel foot">
-  <a href="#top" class="logo lockup-tag" aria-label="YouCoded, agents for everyone. Back to top"><img class="logo-icon" src="brand/default-128.png" alt="" width="52" height="52"><span class="wm"><span class="wm-you">you</span>coded<span class="wm-tag">agents for everyone</span></span></a>
+  <a href="#top" class="logo" aria-label="YouCoded, back to top"><img class="logo-icon" src="brand/default-128.png" alt="" width="44" height="44"><span class="wm"><span class="wm-you">you</span>coded</span></a>
   <span class="badge">Open Source</span>
   <div class="flinks"><a href="https://github.com/itsdestin/youcoded" target="_blank" rel="noopener">GitHub</a><a href="https://github.com/itsdestin" target="_blank" rel="noopener">Built by Destin</a><a href="https://github.com/itsdestin/youcoded/blob/master/PRIVACY.md" target="_blank" rel="noopener">Privacy</a><a href="https://github.com/itsdestin/youcoded/blob/master/TERMS.md" target="_blank" rel="noopener">Terms</a></div>
   <p class="legal">MIT License &middot; YouCoded is an independent, community-built project. Not affiliated with, endorsed by, or officially supported by Anthropic, OpenAI, or OpenRouter.</p>
