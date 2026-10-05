@@ -3754,7 +3754,7 @@ function createPagesMock(empty: boolean): PagesBridge {
   // Round 4: `?pagesHome=view-lights|view-media|view-climate|view-problems`
   // opens on that chip's page; `settings` opens the gear's panel.
   // `camera-limited` is the Cameras tab with Google refusing every live start (the page's back-off, fake-camera.ts).
-  const chipView = homeView && homeView.startsWith('view-') ? homeView.slice(5) : homeView === 'camera-limited' ? 'cameras' : null;
+  const chipView = homeView && homeView.startsWith('view-') ? homeView.slice(5) : homeView === 'camera-limited' ? 'cameras' : homeView === 'lights-colour' ? 'lights' : null;
   // `chips-pills|chips-sentence|chips-tiles`: the main page in that chip style.
   const chipStyle = homeView && homeView.startsWith('chips-') ? homeView.slice(6) : null;
   // `group`: Destin's Room soundbar with its Sonos tick list open (round 5).
@@ -3788,7 +3788,7 @@ function createPagesMock(empty: boolean): PagesBridge {
       ...(mockup ? { html: withHomeMockup(p.html, mockup) } : variant ? { html: withHomeVariant(p.html, variant) } : {}),
       connections: (p.connections ?? []).map((c) => (c.kind === 'device' ? { ...c, address: '100.99.234.114:8123', approved: true, savedKey: true } : c)),
       refresh: { at: new Date().toISOString(), failed: false },
-      data: variant?.data ? variant.data : onlyCameras ? { hidden: fakeHomeAssistantIds().filter((id) => !id.startsWith('camera.')), startOpen: [] } : homeView === 'group' ? { groupOpen: ['media_player.destins_room'] } : homeView === 'device' ? { dlg: 'light.living_room_lamp' } : mockup ? { startOpen: mockup.startsWith('device') ? ['living_room'] : [] } : chipStyle ? { chipStyle, startOpen: ['destins_room'] } : chipView ? { view: chipView, startScenes: ['destins_room'] } : homeView === 'settings' ? { settingsOpen: true } : homeView === 'remote' ? { remote: ['remote.destins_room_tv_remote'], startOpen: ['destins_room'], hidden: tvOnly } : homeView === 'remote-media' ? { view: 'media', remote: ['remote.destins_room_tv_remote'] } : homeView === 'media-group' ? { view: 'media' } : {
+      data: variant?.data ? variant.data : onlyCameras ? { hidden: fakeHomeAssistantIds().filter((id) => !id.startsWith('camera.')), startOpen: [] } : homeView === 'group' ? { groupOpen: ['media_player.destins_room'] } : homeView === 'device' ? { dlg: 'light.living_room_lamp' } : mockup ? { startOpen: mockup.startsWith('device') ? ['living_room'] : [] } : chipStyle ? { chipStyle, startOpen: ['destins_room'] } : chipView ? { view: chipView, startScenes: ['destins_room'], ...(chipView === 'lights' ? { startOpen: ['destins_room'] } : {}), ...(homeView === 'lights-colour' ? { startPalettes: ['light.desk_backlight'] } : {}) } : homeView === 'settings' ? { settingsOpen: true } : homeView === 'remote' ? { remote: ['remote.destins_room_tv_remote'], startOpen: ['destins_room'], hidden: tvOnly } : homeView === 'remote-media' ? { view: 'media', remote: ['remote.destins_room_tv_remote'] } : homeView === 'media-group' ? { view: 'media' } : {
         startOpen: ['destins_room'], startPalettes: ['light.desk_backlight'],
         fav: ['light.living_room_lamp', 'climate.thermostat'],
         ...(homeView === 'edit' ? { editing: true } : {}),

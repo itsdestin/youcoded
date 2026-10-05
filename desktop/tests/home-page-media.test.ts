@@ -45,15 +45,16 @@ describe('the Media tab: order and layout', () => {
     expect(text(card(LR).querySelector('.mv-song'))).toBe('Clair de Lune — Debussy'); // the song is the quiet line
   });
 
-  it('the keys sit at the right end of the now-playing box; the volume sliders are outside it, full width', async () => {
+  it('the keys sit at the right end of the now-playing box; the volume is INSIDE the same box, directly under the song row (one glass sub-card)', async () => {
     await mount({ data: DATA });
     const c = card(LR), np = c.querySelector('.mv-np')!;
     expect(np.querySelector('.mv-nprow > .np-keys')).toBeTruthy();
     expect(Array.from(np.querySelectorAll('.np-keys .key')).map((k) => k.getAttribute('aria-label'))).toEqual(['Previous', 'Resume', 'Next']);
-    expect(np.querySelector('.vrow, .vlr')).toBeNull(); // no slider inside the box
-    const vol = c.querySelector('.vrow')!;
-    expect(vol.parentElement).toBe(c); // a direct child of the card: the card's full width
-    expect(np.compareDocumentPosition(vol) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const vol = np.querySelector('.vrow')!; // the slider is in the box ...
+    expect(np.querySelector('.vlr')).toBeTruthy();
+    expect(c.querySelectorAll('.vrow')).toHaveLength(1); // ... and nowhere else on the card
+    expect(np.querySelector('.mv-nprow')!.compareDocumentPosition(vol) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy(); // under the song row
+    expect(c.querySelector('.mv-tog')).toBeNull(); // no separate glass box
   });
 
   it('a TV with a remote is a wide card even with nothing playing; a TV that is off is a tile with a Turn on button', async () => {
@@ -68,11 +69,13 @@ describe('the Media tab: order and layout', () => {
 });
 
 describe('a TV and its soundbar are one card', () => {
-  it('one card for the pair: the soundbar has no card of its own, and its slider sits in a glass box titled with its name', async () => {
+  it('one card for the pair: the soundbar has no card of its own; its slider is inside the now-playing box, labelled with its name', async () => {
     await mount({ data: DATA });
     expect(qa(`[data-eid="${BAR}"]`)).toHaveLength(0);
-    const box = card(TV).querySelector('.mv-tog')!;
-    expect(text(box.querySelector('.mv-togh'))).toBe('Destin\'s Room'); // the soundbar's real name
+    const box = card(TV).querySelector('.mv-np')!;
+    expect(card(TV).querySelector('.mv-tog')).toBeNull(); // the separate soundbar box is gone
+    expect(text(box.querySelector('.mv-vlbl'))).toBe('Destin\'s Room'); // the soundbar's real name, by a small speaker icon
+    expect(box.querySelector('.mv-vlbl svg')).toBeTruthy();
     expect(box.querySelectorAll(`.vlr[data-vol="${BAR}"]`)).toHaveLength(1);
     expect(qa(`[data-vol="${BAR}"]`)).toHaveLength(1); // not drawn twice on the page
   });
@@ -91,13 +94,35 @@ describe('a TV and its soundbar are one card', () => {
     expect(Number((q(`[data-vol="${BAR}"]`) as HTMLInputElement).value)).toBe(60); // and the house agrees
   });
 
-  it('the remote opens inside the same card: pad above the soundbar box, in the now-playing box', async () => {
+  it('the remote opens inside the same card: the pad opens in the now-playing box, below the volume', async () => {
     await mount({ data: { view: 'media', remote: ['remote.destins_room_tv_remote'] } });
     const c = card(TV), np = c.querySelector('.mv-np')!, pad = np.querySelector('.rpad')!;
     expect(pad.getAttribute('data-open')).toBe('1');
     expect(np.querySelector('.rchips')).toBeTruthy();
     expect(np.querySelector('.np-keys')!.getAttribute('data-open')).toBe('1');
-    expect(pad.compareDocumentPosition(c.querySelector('.mv-tog')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(np.querySelector('.mv-vol')!.compareDocumentPosition(pad) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('the card has a Group button for the SOUNDBAR; ticking a speaker joins it to the soundbar (the join service gets the soundbar and the speaker)', async () => {
+    await mount({ data: DATA });
+    const btn = card(TV).querySelector<HTMLElement>('.mv-gbtn[data-group]')!;
+    expect(btn.getAttribute('data-group')).toBe(BAR); // the soundbar, not the TV
+    expect(text(btn)).toBe('Group');
+    expect(qa('.glist')).toHaveLength(0);
+    btn.click(); await frame();
+    const tick1 = card(TV).querySelector<HTMLElement>(`[data-join="${BAR}"][data-member="${ROAM}"]`)!;
+    expect(tick1).toBeTruthy(); // the other Sonos speaker is offered
+    tick1.click(); await tick(500);
+    const joins = fakeHomeAssistantCalls().filter((c) => c.service === 'join');
+    expect(joins.at(-1)!.data).toMatchObject({ entity_id: BAR, group_members: [ROAM] });
+  });
+
+  it('a plain speaker keeps its Group button; its volume is in the same sub-card as its song', async () => {
+    fakeHomeAssistantSet(ROAM, { state: 'playing', title: 'Weightless', app: 'Spotify' }); // a Sonos speaker playing alone
+    await mount({ data: DATA });
+    const c = card(ROAM);
+    expect(c.querySelector('.mv-np .vrow')).toBeTruthy();
+    expect(c.querySelector('.mv-gbtn[data-group]')!.getAttribute('data-group')).toBe(ROAM);
   });
 });
 

@@ -25,6 +25,7 @@ import { HOME_EDIT_CSS, HOME_EDIT_JS } from './home-assistant-page-edit';
 import { HOME_CAMERA_CSS, HOME_CAMERA_JS } from './home-assistant-page-camera';
 import { HOME_TV_JS, HOME_TV_CSS } from './home-assistant-page-tv';
 import { HOME_MEDIA_JS, HOME_MEDIA_CSS } from './home-assistant-page-media';
+import { HOME_LIGHTS_JS, HOME_LIGHTS_CSS } from './home-assistant-page-lights';
 import { HOME_LOOK_CSS } from './home-assistant-page-look';
 import { HOME_MOTION_JS } from './home-assistant-page-motion';
 import { HOME_FEEL_CSS, HOME_FEEL_JS } from './home-assistant-page-feel';
@@ -82,7 +83,7 @@ export const HOME_ASSISTANT_PAGE_JSON = {
 function homeAssistantPageHtml(): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>Home</title>
-<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}${HOME_CAMERA_CSS}${HOME_REDRAW_CSS}${HOME_PENDING_CSS}${HOME_EDIT_CSS}${HOME_LOOK_CSS}${HOME_FEEL_CSS}${HOME_TV_CSS}${HOME_MEDIA_CSS}</style></head>
+<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}${HOME_CAMERA_CSS}${HOME_REDRAW_CSS}${HOME_PENDING_CSS}${HOME_EDIT_CSS}${HOME_LOOK_CSS}${HOME_FEEL_CSS}${HOME_TV_CSS}${HOME_MEDIA_CSS}${HOME_LIGHTS_CSS}</style></head>
 <body>
 <div class="yc-page yc-stack" id="root">
   <!-- No page title: the app's own bar already names the page, so the
@@ -647,9 +648,9 @@ ${HOME_ICONS_JS}
       return '<button class="scene' + (last && sc.id === last.id ? ' last' : '') + '" data-scene="' + esc(sc.id) + '">' + esc(sceneName(sc, room)) + '</button>';
     }).join('') + '</div>' + (last && Date.parse(last.last) ? '<div class="sc-foot">Last used: ' + esc(sceneName(last, room)) + '</div>' : '') + '</div>';
   }
-  function lightsCard(room, lights, ctx, forceOpen) {
+  function lightsCard(room, lights, ctx) {
     var live = liveLights(lights), onList = live.filter(isOn), anyOn = onList.length > 0;
-    var isOpen = editing || forceOpen || open.has(room.id);
+    var isOpen = editing || open.has(room.id);
     var c = anyOn ? colourOf(onList[0]) : 'rgb(255, 190, 110)';
     var status = !live.length ? 'Not responding' : anyOn ? onList.length + ' of ' + live.length + ' on' : 'All off';
     var all = '<div class="tile all' + (anyOn ? ' on' : '') + '" style="--c:' + c + '"><span class="glow"></span><div class="line">' +
@@ -909,15 +910,17 @@ ${HOME_ICONS_JS}
       '<button class="yc-button yc-button--sm yc-button--icon gear" data-view="settings" aria-pressed="' + (view === 'settings') + '" aria-label="Page settings" title="Page settings">' + GEAR + '</button>';
   }
 
-  function roomHtml(room, roomIds, forceOpen) {
+  function roomHtml(room, roomIds) {
     if (editing) return edRoomHtml(room, roomIds); // redesign round 1, Edit c
     var key = 'r:' + room.id;
     var items = ordered(room.items.filter(function (it) { return !hidden.has(it.id) && domain(it.id) !== 'remote' && !remoteDevice(it); }), key, function (x) { return x.id; });
     if (!items.length) return '';
     var ctx = { key: key, ids: items.map(function (x) { return x.id; }) };
+    // The Lights tab draws ONE card per room, "<Room> Lights", with tall light cards inside (home-assistant-page-lights.ts); the Home tab keeps lightsCard.
+    if (view === 'lights') return ltRoom(room, items);
     var lights = items.filter(isLight), rest = items.filter(function (it) { return !isLight(it); });
     // One light needs no card: its own tile already does what All would.
-    var lightsHtml = lights.length > 1 ? lightsCard(room, lights, ctx, forceOpen) : lights.map(function (it) { return itemHtml(it, ctx); }).join('');
+    var lightsHtml = lights.length > 1 ? lightsCard(room, lights, ctx) : lights.map(function (it) { return itemHtml(it, ctx); }).join('');
     return '<section class="yc-card room"><div class="room-head"><h2>' + esc(room.name) + '</h2></div>' +
       lightsHtml + rest.map(function (it) { return itemHtml(it, ctx); }).join('') + '</section>';
   }
@@ -933,7 +936,7 @@ ${HOME_ICONS_JS}
     // focus, held sliders, typed names, hover, transitions and a playing clip survive.
     // WHY motionBefore/After (redesign round 1, motion-nav c): the pop-up's grow and shrink need to see it appear and disappear.
     motionBefore(id, html); mediaHold(); morphInto($(id), html); mediaBack(); motionAfter(id);
-    feelAfter(id); tvAfter(id); // feel = redesign round 1, motion-state c (home-assistant-page-feel.ts); tvAfter = the TV's app buttons swapping (home-assistant-page-tv.ts)
+    feelAfter(id); tvAfter(id); ltAfter(); // ltAfter = a colour panel on the Lights tab kept inside its card (home-assistant-page-lights.ts); feel = redesign round 1, motion-state c (home-assistant-page-feel.ts); tvAfter = the TV's app buttons swapping (home-assistant-page-tv.ts)
     // Redesign options in the practice app hook each redraw (fixtures/home-variants/).
     if (window.__homeAfterPut) window.__homeAfterPut(id);
   }
@@ -968,6 +971,8 @@ ${HOME_ICONS_JS}
       var list = ordered(rooms, 'rooms', function (r) { return r.id; }).map(function (r) {
         return { id: r.id, name: r.name, scenes: view === 'lights' ? r.scenes : [], items: r.items.filter(keep) };
       }).filter(function (r) { return r.items.some(function (it) { return !hidden.has(it.id) && domain(it.id) !== 'remote'; }); });
+      // WHY (Lights tab): a room whose lights ALL stopped answering goes after every working room.
+      if (view === 'lights') list = ltRooms(list);
       var ids = list.map(function (r) { return r.id; });
       if (view === 'climate') {
         // Most homes have one thermostat, so it leads the page, large (round
@@ -979,7 +984,7 @@ ${HOME_ICONS_JS}
         list = list.map(function (r) { return { id: r.id, name: r.name, scenes: [], items: r.items.filter(function (it) { return !ths.length || it.id !== ths[0].it.id; }) }; }).filter(function (r) { return r.items.length; });
       }
       // The Media tab is one list of devices, not rooms (Destin, 2026-10-05: home-assistant-page-media.ts); Edit keeps the room board.
-      body += view === 'media' && !editing ? mediaTabHtml(list) : '<div class="rooms">' + list.map(function (r) { return roomHtml(r, ids, view === 'lights'); }).join('') + '</div>';
+      body += view === 'media' && !editing ? mediaTabHtml(list) : '<div class="rooms">' + list.map(function (r) { return roomHtml(r, ids); }).join('') + '</div>';
     }
     return head + body;
   }
@@ -1443,6 +1448,7 @@ ${HOME_LIVE_JS}
 ${HOME_CAMERA_JS}
 ${HOME_TV_JS}
 ${HOME_MEDIA_JS}
+${HOME_LIGHTS_JS}
 ${HOME_REDRAW_JS}
 ${HOME_PENDING_JS}
 ${HOME_EDIT_JS}

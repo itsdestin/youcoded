@@ -8,8 +8,11 @@
 //    sliders under it can run the full card width.
 //  - Everything else (idle, off, not responding) is a small tile on a "Not Playing" shelf below. Order: playing, paused, idle, off,
 //    not responding last (dimmed).
-//  - A TV and its soundbar are ONE card (soundbarFor decides which bar carries the TV's sound): the volume slider sits in a glass
-//    box titled with the soundbar's name, like the Playing together box.
+//  - The volume lives INSIDE the now-playing box, directly under the song row (Destin, round 2c: "volume slider should just be part of
+//    the same glass media card ... a sub-card in the media card"), so song, keys and volume are one glass sub-card. There is no separate
+//    soundbar box any more.
+//  - A TV and its soundbar are ONE card (soundbarFor decides which bar carries the TV's sound): that sub-card's slider controls the
+//    SOUNDBAR, labelled with a small speaker icon and the soundbar's name, and the card gets a Group button for the soundbar.
 //  - Speakers playing together are ONE card with a Playing together box and one volume bar per speaker. The old "Playing with..."
 //    bar is not drawn here; adding or removing speakers is a small button in that box's header (or, for a speaker playing alone, in
 //    the card's header), which opens the same tick list the Home tab uses.
@@ -122,11 +125,19 @@ export const HOME_MEDIA_JS = `
       var b = x.sb && byId[x.sb.id];
       if (b && !((b.it.state === 'playing' || b.it.state === 'paused') && !b.tvAudio)) folded[b.it.id] = 1;
     });
+    // WHY (soundbar Group button): speakers grouped WITH a TV's soundbar are listed in that TV's card (a Playing together box), never as a
+    // second card with the same soundbar in it; they are marked seen before the main loop so their own turn skips them.
+    var extras = {};
+    xs.forEach(function (x) {
+      var b = x.sb && byId[x.sb.id];
+      if (!b || !folded[b.it.id]) return;
+      extras[x.it.id] = groupOf(b.it).filter(function (m) { return m !== b.it.id && m !== x.it.id && byId[m] && !byId[m].na; }).map(function (m) { seen[m] = 1; return byId[m]; });
+    });
     xs.forEach(function (x) {
       if (seen[x.it.id] || folded[x.it.id]) return;
       var g = groupOf(x.it).filter(function (m) { return byId[m] && !byId[m].na; });
       if (g.length > 1) { g.forEach(function (m) { seen[m] = 1; }); units.push({ x: byId[g[0]], members: g.map(function (m) { return byId[m]; }) }); }
-      else { seen[x.it.id] = 1; units.push({ x: x, members: [x] }); }
+      else { seen[x.it.id] = 1; units.push({ x: x, members: [x], extra: extras[x.it.id] || [] }); }
     });
     // Playing first, unreachable last; a stable sort keeps the house's own order inside each step.
     return units.map(function (u, i) { return [u, i]; }).sort(function (a, b) { return a[0].x.tier - b[0].x.tier || a[1] - b[1]; }).map(function (p) { return p[0]; });
@@ -143,10 +154,11 @@ export const HOME_MEDIA_JS = `
     return out.join(' · ');
   }
   function mvRoomLbl(u) { var r = mvRoom(u); return r ? '<div class="mv-room">' + esc(r) + '</div>' : ''; }
-  // The now-playing box: art, what plays, and the keys at its right end. A TV's pad and app buttons open inside it.
-  function mvNow(x) {
+  // The now-playing box: art, what plays, the keys at its right end, then the volume directly under that row (one glass sub-card).
+  // A TV's pad and app buttons open below the volume, inside it too.
+  function mvNow(x, vol) {
     var by = mvBy(x), w = x.what || (x.st === 'idle' ? '' : 'Nothing playing'), tvx = x.tv && x.rc && x.on;
-    return '<div class="np mv-np' + (tvx ? ' tv' : '') + '"><div class="mv-nprow">' + mvArt(x, 52) + '<span class="txt mv-nowt"><div class="ttl mv-song">' + esc(w) + '</div>' + (by ? '<div class="by">' + esc(by) + '</div>' : '') + '</span>' + mvKeys(x) + '</div>' +
+    return '<div class="np mv-np' + (tvx ? ' tv' : '') + '"><div class="mv-nprow">' + mvArt(x, 52) + '<span class="txt mv-nowt"><div class="ttl mv-song">' + esc(w) + '</div>' + (by ? '<div class="by">' + esc(by) + '</div>' : '') + '</span>' + mvKeys(x) + '</div>' + (vol || '') +
       (tvx ? tvPadHtml(x.rc, remoteOpen.has(x.rc.id)) + tvChipsHtml(x.rc, x.app) : '') + '</div>';
   }
   // A glass box with a small title: the soundbar's volume, or the speakers playing together (one look for both).
@@ -160,21 +172,31 @@ export const HOME_MEDIA_JS = `
       return '<div class="mv-mem"><span class="mv-mn">' + mvKind(m) + '<b>' + esc(m.it.name) + '</b>' + (w ? '<i>' + esc(w) + '</i>' : '') + '</span>' + mvVol(m) + '</div>';
     }).join('') + (lead ? groupHtml(lead, true) : ''), lead ? mvGroupBtn(lead, 'Change') : '');
   }
-  // The card's volume area: a group's box, a TV's soundbar box, or plain full-width sliders.
-  function mvVolArea(u) {
+  // The volume inside the now-playing box. A TV with a soundbar: the slider is the SOUNDBAR's, said by a small speaker icon and its name.
+  // A group has no slider here (its Playing together box has one per speaker).
+  function mvSubVol(u) {
     var x = u.x;
-    if (u.members.length > 1) return mvTogBox(u);
+    if (u.members.length > 1) return '';
     var v = mvVol(x);
     if (!v) return '';
-    if (x.tv && x.sb) return mvBox(x.sb.name, SOUNDBAR, v);
-    return v;
+    var lbl = x.tv && x.sb ? '<span class="mv-vlbl" title="Volume of ' + esc(x.sb.name) + '">' + SOUNDBAR + '<span>' + esc(x.sb.name) + '</span></span>' : '';
+    return '<div class="mv-vol">' + lbl + v + '</div>';
+  }
+  // Speakers playing with a TV's soundbar: their own bar each, and the button that changes who plays along.
+  function mvExtraBox(u) {
+    var x = u.x, sb = x.sb;
+    return mvBox('Playing together', MV_LINK, u.extra.map(function (m) {
+      var w = mvWhere(m);
+      return '<div class="mv-mem"><span class="mv-mn">' + mvKind(m) + '<b>' + esc(m.it.name) + '</b>' + (w ? '<i>' + esc(w) + '</i>' : '') + '</span>' + mvVol(m) + '</div>';
+    }).join('') + groupHtml(sb, true), mvGroupBtn(sb, 'Change'));
   }
   function mvWide(u) {
     var x = u.x, tog = u.members.length > 1;
     var head = '<div class="mv-h1"><span class="mv-ic big">' + mvKind(x) + '</span><div class="mv-h1t"><div class="mv-name">' + esc(mvTitle(u)) + '</div>' + mvRoomLbl(u) + '</div>' + mvBadge(x) + (tog ? '' : mvActs(x)) + '</div>';
-    // A speaker playing alone can still start a group: the button sits under its volume, the list opens there.
-    var solo = !tog && x.sound ? mvGroupBtn(x.it, 'Group') + groupHtml(x.it, true) : '';
-    return mvCard(x, 'mv-wide', head + mvNow(x) + mvVolArea(u) + solo, x.sb ? [x.sb.id] : u.members.slice(1).map(function (m) { return m.it.id; }));
+    // A speaker playing alone (or a TV's soundbar) can still start a group: the button sits under the sub-card, the list opens there.
+    var lead = tog ? null : x.sound ? x.it : x.tv && x.sb ? x.sb : null, extra = !tog && u.extra && u.extra.length && lead;
+    var grp = extra ? mvExtraBox(u) : lead ? mvGroupBtn(lead, 'Group') + groupHtml(lead, true) : '';
+    return mvCard(x, 'mv-wide', head + mvNow(x, mvSubVol(u)) + (tog ? mvTogBox(u) : '') + grp, x.sb ? [x.sb.id] : u.members.slice(1).map(function (m) { return m.it.id; }));
   }
   // The Not Playing shelf: small tiles, the name still the title.
   function mvSub(x) {
@@ -262,7 +284,14 @@ export const HOME_MEDIA_CSS = `
   .mv .np-keys .key.main { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
   .mv .np-keys[data-open] { --k: 40px; --g: 4px; }
   .mv .np.tv .rpad { margin-top: 2px; }
-  /* The glass box (soundbar volume, speakers playing together). */
+  /* The volume sits inside the now-playing box, under the song row, after a hairline: one glass sub-card. */
+  .mv-vol { display: flex; align-items: center; gap: 10px; margin-top: 10px; padding-top: 10px; border-top: 1px solid color-mix(in srgb, var(--fg) 8%, transparent); min-width: 0; }
+  .mv-vol .vrow { flex: 1 1 0; }
+  .mv-vlbl { flex: 0 0 auto; max-width: 42%; min-width: 0; display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; color: var(--fg-2); }
+  .mv-vlbl svg { width: 15px; height: 15px; flex-shrink: 0; color: var(--fg-muted); }
+  .mv-vlbl > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  @media (max-width: 420px) { .mv-vlbl > span { display: none; } }
+  /* The glass box (speakers playing together). */
   .mv-tog { display: flex; flex-direction: column; gap: 10px; padding: 10px 12px 12px; border-radius: 16px; background: color-mix(in srgb, var(--fg) 5%, transparent); border: 1px solid color-mix(in srgb, var(--fg) 10%, transparent); }
   .mv-togh { display: flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-2); min-width: 0; }
   .mv-togh svg { flex-shrink: 0; width: 14px; height: 14px; }

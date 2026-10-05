@@ -38,7 +38,8 @@ describe('preview stills on a camera card', () => {
     await mount({ video: true });
     await tick(1000);
     expect(preview(LIVING)!.getAttribute('src')).toMatch(/^data:image\//);
-    expect(label(LIVING)).toMatch(/^Person · \d{1,2}:\d{2} (am|pm)$/);
+    // WHY the optional "Yesterday ": the pretend recording is minutes old, so a run just after midnight correctly says "Yesterday" (found 2026-10-05, 12:07 am).
+    expect(label(LIVING)).toMatch(/^Person · (Yesterday )?\d{1,2}:\d{2} (am|pm)$/);
     expect(card(LIVING).querySelector('.cam-play')).toBeTruthy(); // the disc stays on top
   });
 
@@ -46,7 +47,7 @@ describe('preview stills on a camera card', () => {
     await mount({ video: true, data: { frames: { [LIVING]: { at: Date.now() - 60_000, img: 'data:image/jpeg;base64,FRAME' } } } });
     await tick(1000);
     expect(preview(LIVING)!.getAttribute('src')).toBe('data:image/jpeg;base64,FRAME');
-    expect(label(LIVING)).toMatch(/^Last seen \d{1,2}:\d{2} (am|pm)$/);
+    expect(label(LIVING)).toMatch(/^Last seen (Yesterday )?\d{1,2}:\d{2} (am|pm)$/);
   });
 
   it('keeps the thumbnail when the kept frame is older than the newest recording', async () => {

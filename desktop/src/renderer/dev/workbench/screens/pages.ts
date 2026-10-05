@@ -40,6 +40,8 @@ export const PAGES: readonly ScreenEntry[] = [
   { ...pg('pages/page/page-home#device', 'view'), params: { pagesHome: 'device' } },
   { ...pg('pages/page/page-home#activity', 'view'), params: { pagesHome: 'view-activity' } },
   { ...pg('pages/page/page-home#lights', 'view'), params: { pagesHome: 'view-lights' } },
+  // `#lights` shows Destin's Room unfolded (cards start closed); `#lights-colour` adds the floating colour panel on its desk backlight.
+  { ...pg('pages/page/page-home#lights-colour', 'view'), params: { pagesHome: 'lights-colour' } },
   { ...pg('pages/page/page-home#media', 'view'), params: { pagesHome: 'view-media' } },
   { ...pg('pages/page/page-home#climate', 'view'), params: { pagesHome: 'view-climate' } },
   { ...pg('pages/page/page-home#problems', 'view', 'error-state'), params: { pagesHome: 'view-problems' } },
