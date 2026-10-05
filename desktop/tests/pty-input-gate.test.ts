@@ -289,6 +289,14 @@ describe('unpainted screens — strict for sync callers, waited on by the compos
     m.done();
   });
 
+  it('a fully blank screen is no verdict for the sync gate (as before) but the composer treats it as unpainted', async () => {
+    const m = mount('p-blank');
+    await m.set([]);
+    expect(screenInputBlock('p-blank')).toBeNull();
+    expect(screenPaint('p-blank')).toBe('unpainted');
+    m.done();
+  });
+
   it('a 2-3 row rule-less prompt blocks the sync gate and is "unpainted" for the composer', async () => {
     const m = mount('p-short');
     await m.set(['  Do you trust this folder?', '  ❯ 1. Yes']);

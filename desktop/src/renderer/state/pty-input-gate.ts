@@ -95,8 +95,10 @@ export function screenInputBlock(sessionId: string): Exclude<InputFocus, { kind:
   // The one caller that may WAIT for a picture instead of refusing is the chat composer (waitForPaintedScreen).
   if (screen != null && screenIsUnpainted(screen)) requestScreenRepaint(sessionId);
   const focus = readInputFocus(screen);
-  // Blank/unreadable-but-present screens are blocked here too (heading unknown).
-  if (screen != null && screenIsUnpainted(screen)) return { kind: 'popup', heading: '' };
+  // A stray FRAGMENT (some text, no frame) blocks like a pop-up with an unknown heading. A fully BLANK screen stays "no
+  // verdict" as it always was: it carries no evidence of a pop-up, and blocking it would refuse model switches in
+  // sessions whose terminal has not drawn yet. (The composer still waits for a picture on blank — see waitForPaintedScreen.)
+  if (screen != null && screenIsUnpainted(screen) && screen.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '').trim() !== '') return { kind: 'popup', heading: '' };
   return inputIsBlocked(focus) ? (focus as Exclude<InputFocus, { kind: 'message-box' } | { kind: 'unknown' }>) : null;
 }
 
@@ -114,7 +116,7 @@ export function screenPaint(sessionId: string): 'none' | 'unpainted' | 'painted'
   return screenIsUnpainted(screen) ? 'unpainted' : 'painted';
 }
 
-export const PAINT_WAIT_MS = 1500;
+const PAINT_WAIT_MS = 1500;
 
 /**
  * The composer's alternative to refusing on an unpainted screen: request a repaint, then look every `stepMs` for up to
