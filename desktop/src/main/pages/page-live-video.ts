@@ -12,7 +12,7 @@
 // (a window or remote client; events go to that owner only), the same access
 // check run fresh at start, the same rate gate, redaction, outgoing-message
 // check (with the connection's deny list), lease length and `closeFor` /
-// `closeOwner` shape. Videos are counted apart from sockets (2 per page, 4 per
+// `closeOwner` shape. Videos are counted apart from sockets (4 per page, 6 per
 // app) and never mark a page "fresh".
 import { randomBytes } from 'node:crypto';
 import WebSocket from 'ws';
@@ -23,7 +23,11 @@ import { filterAnswerSdp, filterCandidate } from './page-video-sdp';
 import type { PageSocketCallResult, PageVideoCall, PageVideoStartRequest, PageVideoStartResult } from '../../shared/pages-types';
 
 export const VIDEO_LIMITS = {
-  perPage: 2, perApp: 4,
+  // WHY 4 and 6 (was 2 and 4): the Home page's Cameras tab runs every camera at once (Destin has 3
+  // Nest cameras). Cost stays bounded because each video's frame pump is unchanged: one picture in
+  // flight until the page acks, at most ~15 a second, at most 1280 px wide (page-video-host.ts), so 4
+  // at once is at most ~60 small pictures a second, and Nest's 640x360 stream is ~1/4 of that cap's size.
+  perPage: 4, perApp: 6,
   /** The offer a page's host may send (an SDP is about 2-4 KB; Nest's is small). */
   offerBytes: 32 * 1024,
   /** A video ends by itself after this; the card offers Play again. */

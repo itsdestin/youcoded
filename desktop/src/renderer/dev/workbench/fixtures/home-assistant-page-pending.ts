@@ -10,7 +10,8 @@
 // a push that has not caught up. A guess ends when the house agrees, when its send
 // fails (undone), or, for a send that was accepted, at the next check asked after
 // that (the house's word, even if it clamped the value), with 8 seconds as the
-// outer limit. `pend` is the status of each press: sending, done, didn't work.
+// outer limit. `pend` holds a press's status; only a refusal is ever shown ("Didn't work"): Destin found the
+// "Sending…" and "Done" notes annoying (2026-10-05), so a slow or finished press shows no text.
 //
 // Escapes: this text lives in a template string inside another one, so every
 // backslash in the page's own code is doubled and no backtick may appear.
@@ -23,7 +24,6 @@ export const HOME_PENDING_CSS = `
   .pend { position: absolute; right: 8px; bottom: 6px; z-index: 3; max-width: calc(100% - 16px); display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 3px 8px; border-radius: 9999px; border: 1px solid var(--edge); background: var(--panel); color: var(--fg-muted); font-size: 11px; line-height: 1.3; }
   .pend-msg { max-width: 18em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .pend .pend-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--fg-muted); flex-shrink: 0; }
-  .pend[data-pend="done"] .pend-dot { background: rgb(50, 205, 90); }
   .pend[data-pend="failed"] { color: var(--fg); }
   .pend[data-pend="failed"] .pend-dot { background: rgb(235, 70, 55); }
   .pend .yc-button { padding: 0 8px; min-height: 22px; font-size: 11px; }
@@ -100,7 +100,7 @@ export const HOME_PENDING_JS = `
   ['click', 'change', 'input'].forEach(function (n) { document.addEventListener(n, function () { fresh = []; }, true); });
 
   // ── Status of each press (audit A-4) ─────────────────────────────────────
-  // A slow one says "Sending…" (after half a second, so quick presses stay quiet), then "Done".
+  // A press that goes through shows no note at all (the button's own feel is the acknowledgement).
   // A refused one is undone at once and says "Didn't work" until dismissed or replaced.
   var pend = {}, pendSeq = 0, quietSeq = {}, toks = {};
   // own: the retry function shows its own guess (a rename, a move); otherwise Try again puts the guess back first (code review 7).
@@ -115,7 +115,6 @@ export const HOME_PENDING_JS = `
     } };
     // Each press keeps its own undo, so a refusal that comes back after a newer press on the same thing still undoes ITS change (edit-board review 6).
     toks[tok] = { keys: keys, undo: undo || null, again: e.again };
-    e.timer = setTimeout(function () { if (pend[id] === e && e.state === 'quiet') { e.state = 'sending'; renderSoon(); } }, 500);
     return tok;
   }
   function pendEnd(id, tok, err) {
@@ -135,10 +134,7 @@ export const HOME_PENDING_JS = `
     if (err) { if (t.undo) t.undo(); return pendFail(id, e, err); }
     settle(e.keys);
     if (e.state === 'failed') { renderSoon(); return; } // an older refusal on this row stays until dismissed
-    if (e.state === 'sending') {
-      e.state = 'done';
-      e.timer = setTimeout(function () { if (pend[id] === e) { delete pend[id]; renderSoon(); } }, 1500);
-    } else delete pend[id];
+    delete pend[id];
     renderSoon();
   }
   function pendFail(id, e, msg) {
@@ -189,7 +185,7 @@ export const HOME_PENDING_JS = `
         (e.again ? '<button class="yc-button yc-button--sm" data-pend-retry="' + esc(key) + '">Try again</button>' : '') +
         '<button class="yc-button yc-button--sm yc-button--ghost" data-pend-dismiss="' + esc(key) + '">Dismiss</button></div>';
     }
-    return '<div class="pend" role="status" data-pend="' + e.state + '"><span class="pend-dot" aria-hidden="true"></span><span>' + (e.state === 'done' ? 'Done' : 'Sending\\u2026') + '</span></div>';
+    return ''; // only a refusal has a note
   }
   document.addEventListener('click', function (e) {
     var t = e.target.closest && e.target.closest('[data-pend-dismiss],[data-pend-retry],[data-banner-dismiss]');

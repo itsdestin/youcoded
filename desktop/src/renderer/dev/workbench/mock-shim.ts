@@ -408,6 +408,11 @@ function withCatchAll(namespace: string, impl: Record<string, unknown>): Record<
 
       if (Object.prototype.hasOwnProperty.call(impl, key)) {
         const value = impl[key];
+        // WHY videoPlayback is handed over as it is: it is a bundle of the host's own stand-ins (a pretend peer
+        // connection, picture source), not a channel. Wrapped like a namespace, every call on it came back as a
+        // Promise after the practice latency, so the real host code never got a peer it could use and every live
+        // picture in the workbench stopped with "the camera's answer could not be used".
+        if (key === 'videoPlayback') return value;
         // A nested hand-written namespace (`theme.marketplace = { list }`) gets
         // the same catch-all as a top-level one, so the members it does NOT
         // implement still resolve `[]` rather than being undefined — the
@@ -3763,7 +3768,7 @@ function createPagesMock(empty: boolean): PagesBridge {
   // `v-<task>-<key>`: one redesign option (fixtures/home-variants/), on the
   // connected page, starting from the option's own saved data if it has any.
   const variant = homeView && homeView.startsWith('v-') ? findHomeVariant(homeView.slice(2)) : null;
-  if (onlyCameras) fakeHomeAssistantNestSignedIn(true); // events need the Nest account working
+  if (onlyCameras || homeView === 'view-cameras') fakeHomeAssistantNestSignedIn(true); // events need the Nest account working
   if (onlyCameras || homeView === 'connected' || homeView === 'edit' || homeView === 'remote' || homeView === 'group' || homeView === 'device' || chipView || homeView === 'settings' || chipStyle || mockup || variant) {
     pages = pages.map((p) => (p.id !== 'page-home' ? p : {
       ...p,

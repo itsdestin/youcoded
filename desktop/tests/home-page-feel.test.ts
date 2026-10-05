@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Redesign round 1, motion-state c ("Spread and spring", calmed): a press shows its result at once,
 // repeated volume presses add up without snapping back, motion plays only for what the person just
-// pressed (a change that arrives by itself gets one quiet shine), the sending note never catches a
+// pressed (a change that arrives by itself gets one quiet shine), a slow press shows no note that could catch a
 // press, and it is all off for a hidden page, reduced motion and the practice "before" screen.
 // jsdom cannot play animations, so Element.animate is a recorder and the tests read what was asked.
 import { it, expect, afterEach, vi } from 'vitest';
@@ -96,15 +96,13 @@ it('plays motion only for what was pressed: a change that arrives by itself gets
   expect(calls).toEqual([]);
 });
 
-it('the sending note is see-through to the pointer, so it never swallows the next press', async () => {
+it('a slow press puts no note over the card, so nothing can cover the next press', async () => {
   await mount({
     fetchHook: async (req) => { if (req.url.includes('/api/services/')) await new Promise((r) => setTimeout(r, 2500)); return noCameraPicture(req); },
   });
   volButton('volume_up').click();
   await tick(700);
-  const note = q(`[data-eid="${SOUNDBAR}"] .pend`);
-  expect(note.getAttribute('data-pend')).toBe('sending');
-  expect(getComputedStyle(note).pointerEvents).toBe('none');
+  expect(document.querySelector(`[data-eid="${SOUNDBAR}"] .pend`)).toBeNull();
 });
 
 it('plays nothing when the page is hidden, when reduced motion is asked for, or on the "before" screen', async () => {

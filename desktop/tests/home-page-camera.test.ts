@@ -51,17 +51,33 @@ beforeAll(async () => {
 afterAll(() => { vi.useRealTimers(); fakeHomeAssistantNestSignedIn(false); });
 
 describe('a Nest camera card', () => {
-  it('names the camera with its model, lists recent events with their times, and offers Watch live', () => {
+  it('has a header with the camera name, its model and a Live button, then a short scrolling list of up to 20 recent events', () => {
     expect(living().querySelector('.name .sub')!.textContent).toBe('Nest Cam');
     const rows = Array.from(living().querySelectorAll('.cam-ev')).map((r) => r.querySelector('.w')!.textContent);
-    expect(rows).toEqual(['Person', 'Motion', 'Doorbell rang']);
+    // The pretend house has 22; the card loads 20, newest first, each with a kind and a time.
+    expect(rows).toHaveLength(20);
+    expect(rows.slice(0, 6)).toEqual(['Person', 'Motion', 'Doorbell rang', 'Person', 'Motion', 'Sound']);
     for (const t of Array.from(living().querySelectorAll('.cam-ev time'))) expect(t.textContent).toMatch(/\d{1,2}:\d{2} (am|pm)/);
-    expect(living().querySelector('[data-cam-act="live"]')!.textContent).toContain('Watch live');
+    // The Live button is in the header, unpressed; the list is its own scrolling box.
+    const btn = living().querySelector('.cam-head [data-cam-act="live"]')!;
+    expect(btn.textContent).toBe('Live');
+    expect(btn.getAttribute('aria-pressed')).toBe('false');
+    expect(living().querySelector('.cam-evs')).toBeTruthy();
   });
 
   it('asks Home Assistant for the camera’s own events, and shows thumbnails as they arrive', async () => {
     expect(fetched.some((r) => r.socket?.send.some((m) => m.includes('media_source/browse_media') && m.includes('media-source://nest/dev_camera_living_room_camera')))).toBe(true);
     await vi.waitFor(() => expect(living().querySelector('.cam-ev img')!.getAttribute('src')).toMatch(/^data:image\//));
+  });
+
+  it('loads thumbnails for the first rows only, and more as the list is scrolled', async () => {
+    const thumbs = () => fetched.filter((r) => r.url.includes('/living_room_camera/') || r.url.includes('dev_camera_living_room_camera')).filter((r) => r.url.endsWith('/thumbnail')).length;
+    await vi.waitFor(() => expect(thumbs()).toBe(6));
+    const box = living().querySelector<HTMLElement>('.cam-evs')!;
+    Object.defineProperty(box, 'scrollTop', { configurable: true, value: 10 * 50 });
+    box.dispatchEvent(new Event('scroll'));
+    await vi.waitFor(() => expect(thumbs()).toBe(12));
+    expect(living().querySelectorAll('.cam-ev img[src^="data:image/"]').length).toBe(12);
   });
 
   it('says plainly when a camera has no recordings, and still offers Watch live', () => {
@@ -79,13 +95,17 @@ describe('a Nest camera card', () => {
     expect(clipFetch).toHaveLength(1);
     expect(clipFetch[0].url).toMatch(/^http:\/\/100\.99\.234\.114:8123\/api\/nest\/event_media\//);
     const video = living().querySelector('video')!;
+    // It plays in the picture area under the header, above the list (not below it).
+    const stage = video.closest('.cam-view')!;
+    expect(stage.compareDocumentPosition(living().querySelector('.cam-evs')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(living().querySelector('.cam-head')!.compareDocumentPosition(stage) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(video.getAttribute('src')).toMatch(/^data:video\/mp4;base64,/);
     expect(video.controls).toBe(true);
     expect(video.muted).toBe(true);
     // Closing it takes the player away and leaves the list.
     living().querySelector<HTMLButtonElement>('[data-cam-act="close"]')!.click();
     expect(living().querySelector('video')).toBeNull();
-    expect(living().querySelectorAll('.cam-ev')).toHaveLength(3);
+    expect(living().querySelectorAll('.cam-ev')).toHaveLength(20);
   });
 
   it('keeps the player when the page redraws for another reason', async () => {
@@ -101,6 +121,7 @@ describe('a Nest camera card', () => {
 
   it('draws live pictures on a canvas with a LIVE badge, hands each one back, and stops when told to', async () => {
     living().querySelector<HTMLButtonElement>('[data-cam-act="live"]')!.click();
+    expect(living().querySelector('[data-cam-act="stop"]')!.getAttribute('aria-pressed')).toBe('true'); // the Live button is pressed while live
     expect(videos).toHaveLength(1);
     expect(videos[0].connection).toBe('ha');
     expect(videos[0].target).toBe('camera.living_room_camera');
@@ -114,19 +135,19 @@ describe('a Nest camera card', () => {
     const canvas = living().querySelector('canvas')!;
     expect(canvas.width).toBe(640);
     expect(living().querySelector('.cam-badge')!.textContent).toBe('LIVE');
-    // Pressing Stop ends it in the app and puts the list and Watch live back.
+    // Pressing the pressed Live button ends it in the app and puts the button back to unpressed.
     living().querySelector<HTMLButtonElement>('[data-cam-act="stop"]')!.click();
     expect(videos[0].stop).toHaveBeenCalledTimes(1);
     expect(living().querySelector('canvas')).toBeNull();
-    expect(living().querySelector('[data-cam-act="live"]')!.textContent).toContain('Watch live');
+    expect(living().querySelector('[data-cam-act="live"]')!.getAttribute('aria-pressed')).toBe('false');
   });
 
   it('says in plain words why live video stopped, offers Play again, and keeps the Home Assistant link', () => {
-    living().querySelector<HTMLButtonElement>('[data-cam-act="live"]')!.click();
+    living().querySelector<HTMLButtonElement>('.cam-head [data-cam-act="live"]')!.click();
     videos[1].o.onState('stopped', 'paused while the page was hidden');
     const note = living().querySelector('.cam-note')!.textContent;
     expect(note).toBe('Live view stopped: paused while the page was hidden.');
-    expect(living().querySelector('[data-cam-act="live"]')!.textContent).toContain('Play again');
+    expect(living().querySelector('.cam-actions [data-cam-act="live"]')!.textContent).toContain('Play again');
     expect(living().querySelector('.cam-actions a')!.textContent).toBe('Watch live in Home Assistant');
     expect(living().querySelector('.cam-actions a')!.getAttribute('href')).toContain('/config/devices/device/');
   });

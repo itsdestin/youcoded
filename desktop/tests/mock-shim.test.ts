@@ -69,6 +69,8 @@ describe('channels', () => {
         expect(heard).toEqual([{ socket: started.video, kind: 'video-answer', answer: expect.stringContaining('workbench answer') }]);
         // The pretend peer and picture source are handed to the real host code, never the network.
         expect(c.pages.videoPlayback).toBeTruthy();
+        // Handed over as it is: a peer is made at once (not a Promise after the practice delay), so the real host code can drive it.
+        expect(typeof c.pages.videoPlayback.createPeer().addTransceiver).toBe('function');
         expect((await c.pages.videoPing({ page: 'page-home', frame: 'f1', video: started.video })).ok).toBe(true);
         await c.pages.videoStop({ page: 'page-home', frame: 'f1', video: started.video });
         expect((await c.pages.videoPing({ page: 'page-home', frame: 'f1', video: started.video })).ok).toBe(false);

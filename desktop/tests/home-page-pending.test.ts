@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 // Redesign audit F5/F6/F7 (A-4 "show sending, done, failed", A-6 "one list of
 // pending changes"): a press the house does not take is undone at once and says
-// so on its own card until dismissed; a slow press says "Sending…" and then
-// "Done"; speaker ticks and new names are held like switches are.
+// so on its own card until dismissed; a slow press says nothing and a finished one
+// says nothing either; speaker ticks and new names are held like switches are.
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mount, unmount, q, qa, flush, frame, tick, push, house, flip, pointer, noCameraPicture } from './home-page-harness';
 
@@ -55,20 +55,20 @@ describe('a press the house does not take', () => {
 });
 
 describe('a slow press', () => {
-  it('stays quiet when fast, shows Sending… when it takes a while, then Done', async () => {
+  // WHY no "Sending…" or "Done" any more: Destin found them annoying (2026-10-05). The press's own feel is the
+  // acknowledgement; only a refusal (see the refused tests above) still says anything.
+  it('shows no note at all, however long the house takes, and none when it finishes', async () => {
     let release!: () => void; const gate = new Promise<void>((r) => { release = r; });
     await mount({ data: OPEN, fetchHook: async (req) => { noCameraPicture(req); if (req.url.includes('/services/light/')) await gate; return undefined; } });
     const id = 'light.kitchen_pendants';
     card(id).querySelector<HTMLElement>('[data-toggle]')!.click();
     await tick(100);
     expect(note(id)).toBeNull();
-    await tick(600);
-    expect(note(id)!.getAttribute('data-pend')).toBe('sending');
-    expect(note(id)!.textContent).toContain('Sending');
-    release(); await tick(100);
-    expect(note(id)!.getAttribute('data-pend')).toBe('done');
-    await tick(3000);
+    await tick(2000); // slow: it used to say "Sending…" after half a second
     expect(note(id)).toBeNull();
+    release(); await tick(100);
+    expect(note(id)).toBeNull(); // and it used to say "Done"
+    expect(card(id).textContent).not.toMatch(/Sending|Done/);
   });
 });
 

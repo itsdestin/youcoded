@@ -57,6 +57,17 @@ function seed(): Array<{ id: string; name: string; items: Thing[] }> {
     { id: 'patio', name: 'Patio', items: [
       { id: 'media_player.move_2', name: 'Move 2', state: 'unavailable', model: 'Move 2', features: 4 | 8 | 1 | 16 | 32 | GROUPING },
     ] },
+    // More cameras, each in a room of its own so the rooms above keep their lists (the Cameras tab shows them all).
+    { id: 'hallway', name: 'Hallway', items: [
+      { id: 'camera.hallway_camera', name: 'Hallway camera', state: 'idle', model: 'Nest Cam' },
+    ] },
+    { id: 'backyard', name: 'Backyard', items: [
+      { id: 'camera.backyard_camera', name: 'Backyard camera', state: 'idle', model: 'Nest Cam (outdoor)' },
+    ] },
+    // A camera that DOES give Home Assistant a still picture (a Pi Zero): the Cameras tab shows its picture, refreshing.
+    { id: 'garage', name: 'Garage', items: [
+      { id: 'camera.garage_pi', name: 'Garage camera', state: 'idle', model: 'Pi Zero camera', maker: 'Raspberry Pi', entry: 'entry_picam' },
+    ] },
     { id: 'upstairs', name: 'Upstairs', items: [
       { id: 'climate.thermostat', name: 'Thermostat', state: 'cool', cur: 74, target: 72, min: 50, max: 90, step: 1, modesHvac: ['off', 'cool', 'heat', 'heat_cool'], action: 'cooling' },
     ] },
@@ -95,14 +106,14 @@ function find(id: string): Thing | undefined {
 }
 
 /** A drawn "snapshot": a dim room with a timestamp, so a refresh is visible. */
-function snapshot(name: string): string {
+function snapshot(name: string, big = false): string {
   const time = new Date().toLocaleTimeString();
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
 <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2b3340"/><stop offset="1" stop-color="#151a22"/></linearGradient></defs>
 <rect width="640" height="360" fill="url(#g)"/><rect x="60" y="150" width="220" height="120" rx="8" fill="#39424f"/>
 <rect x="380" y="70" width="170" height="110" rx="4" fill="#48607a" opacity=".7"/><rect x="0" y="290" width="640" height="70" fill="#1d232c"/>
 <text x="16" y="28" fill="#e6e6e6" font-family="monospace" font-size="16">${name.replace(/[<&]/g, '')}</text>
-<text x="624" y="344" fill="#e6e6e6" font-family="monospace" font-size="14" text-anchor="end">${time}</text></svg>`;
+<text x="624" y="344" fill="#e6e6e6" font-family="monospace" font-size="14" text-anchor="end">${time}</text>${big ? `<!-- ${'a real camera sends a real picture; '.repeat(150)} -->` : ''}</svg>`;
   return `data:image/svg+xml;base64,${btoa(svg)}`;
 }
 
@@ -188,7 +199,7 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
     // A Nest camera gives Home Assistant no still picture: it answers with
     // its small blank stand-in, as the real house does.
     if (t?.maker === 'Google Nest') return { ok: true, status: 200, headers: { 'content-type': 'image/jpeg' }, body: 'data:image/jpeg;base64,' + 'A'.repeat(3500) };
-    return { ok: true, status: 200, headers: { 'content-type': 'image/svg+xml' }, body: snapshot(t?.name ?? cam[1]) };
+    return { ok: true, status: 200, headers: { 'content-type': 'image/svg+xml' }, body: snapshot(t?.name ?? cam[1], true) };
   }
   const svc = /^\/api\/services\/([a-z_]+)\/([a-z_]+)$/.exec(url.pathname);
   if (svc) {
@@ -260,9 +271,11 @@ const nestEvents: Record<string, Array<{ id: string; title: () => string }>> = {
     const p = (n: number) => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())} ${what}`;
   };
-  nestEvents.dev_camera_living_room_camera = [
-    { id: 'e1', title: stamp(55, 'Person') }, { id: 'e2', title: stamp(300, 'Motion') }, { id: 'e3', title: stamp(480, 'Doorbell') },
-  ];
+  // A long history for the Living Room camera (to see the list scroll), a few for the others.
+  const kinds = ['Person', 'Motion', 'Doorbell', 'Person', 'Motion', 'Sound'];
+  nestEvents.dev_camera_living_room_camera = Array.from({ length: 22 }, (_, i) => ({ id: `e${i + 1}`, title: stamp(55 + i * 97, kinds[i % kinds.length]) }));
+  nestEvents.dev_camera_hallway_camera = [{ id: 'e1', title: stamp(130, 'Person') }, { id: 'e2', title: stamp(610, 'Motion') }, { id: 'e3', title: stamp(1500, 'Person') }];
+  nestEvents.dev_camera_backyard_camera = [{ id: 'e1', title: stamp(35, 'Motion') }, { id: 'e2', title: stamp(300, 'Motion') }];
   nestEvents.dev_camera_doorbell = [];
 }
 

@@ -23,15 +23,11 @@ export const HOME_FEEL_CSS = `
   .tile.on > .glow { opacity: calc(.14 + var(--b, .6) * .26); }
   /* Muting dims the volume bar softly instead of snapping. */
   @media (prefers-reduced-motion: no-preference) { :root:not([data-feel-off]) .tile .vlr { transition: opacity 160ms ease; } }
-  /* The sending / done / didn't work note: it must never catch a press meant for the control
+  /* The didn't-work note: it must never catch a press meant for the control
      under it (it sat over the volume +), so it is see-through to the pointer unless it holds
      buttons. Smaller and quieter, a pill that fades up (feelAfter plays it). */
   .pend { pointer-events: none; font-size: 10px; line-height: 1.2; padding: 2px 8px; bottom: 5px; }
   .pend[data-pend="failed"] { pointer-events: auto; font-size: 11px; }
-  .pend[data-pend="sending"] .pend-dot { animation: fxDot 1s steps(2) infinite; }
-  @keyframes fxDot { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
-  @media (prefers-reduced-motion: reduce) { .pend[data-pend="sending"] .pend-dot { animation: none; } }
-  :root[data-hid] .pend-dot { animation-play-state: paused; }
   /* A change from elsewhere: a soft shine crosses the card once. The box clips it to the card. */
   .fx-glint { position: absolute; inset: 0; z-index: 2; overflow: hidden; border-radius: inherit; pointer-events: none; }
   .fx-glint i { position: absolute; top: 0; bottom: 0; left: 0; width: 45%; background: linear-gradient(100deg, transparent, rgba(255, 255, 255, .2), transparent); }
@@ -158,8 +154,6 @@ export const HOME_FEEL_JS = `
       note.__fxs = st;
       if (!can) continue;
       if (st === 'failed') fxAnim(note, [{ transform: 'translateX(0)' }, { transform: 'translateX(-4px)' }, { transform: 'translateX(3px)' }, { transform: 'none' }], 240);
-      else if (st === 'done') fxAnim(note.querySelector('.pend-dot'), [{ transform: 'scale(1.8)' }, { transform: 'none' }], 200);
-      else fxAnim(note, [{ opacity: 0, transform: 'translateY(4px)' }, { opacity: 1, transform: 'none' }], 160);
     }
   }
 `;

@@ -448,15 +448,14 @@ describe('what is let through from the device\'s answer', () => {
 describe('limits, ownership and when a video must end', () => {
   afterEach(() => { vi.useRealTimers(); });
 
-  it('allows 2 videos per page and 4 in the whole app, counted apart from sockets', async () => {
+  it('allows 4 videos per page and 6 in the whole app, counted apart from sockets', async () => {
     const r = rig();
-    expect((await r.videos.start(r.owner(), req())).ok).toBe(true);
-    expect((await r.videos.start(r.owner(), req())).ok).toBe(true);
-    expect(await r.videos.start(r.owner(), req())).toMatchObject({ ok: false, message: expect.stringContaining('at most 2') });
+    for (let i = 0; i < 4; i++) expect((await r.videos.start(r.owner(), req())).ok).toBe(true);
+    expect(await r.videos.start(r.owner(), req())).toMatchObject({ ok: false, message: expect.stringContaining('at most 4') });
     expect((await r.videos.start(r.owner(), req({ page: 'personal:two' }))).ok).toBe(true);
     expect((await r.videos.start(r.owner(), req({ page: 'personal:two' }))).ok).toBe(true);
-    expect(await r.videos.start(r.owner(), req({ page: 'personal:three' }))).toMatchObject({ ok: false, message: expect.stringContaining('at most 4') });
-    expect(r.videos.count).toBe(4);
+    expect(await r.videos.start(r.owner(), req({ page: 'personal:three' }))).toMatchObject({ ok: false, message: expect.stringContaining('at most 6') });
+    expect(r.videos.count).toBe(6);
   });
 
   it('counts a start that is still waiting for its checks, so two quick starts cannot both pass', async () => {
@@ -464,11 +463,13 @@ describe('limits, ownership and when a video must end', () => {
     const r = rig(() => new Promise((res) => { waiting.push(() => res(okAccess())); }));
     const a = r.videos.start(r.owner(), req());
     const b = r.videos.start(r.owner(), req());
-    const c = r.videos.start(r.owner(), req());
-    expect(await c).toMatchObject({ ok: false });
-    await vi.waitFor(() => expect(waiting).toHaveLength(2));
+    const more = [r.videos.start(r.owner(), req()), r.videos.start(r.owner(), req())];
+    // The fifth start is refused at once: the four before it are counted although none has finished its checks.
+    const fifth = r.videos.start(r.owner(), req());
+    expect(await fifth).toMatchObject({ ok: false });
+    await vi.waitFor(() => expect(waiting).toHaveLength(4));
     waiting.forEach((w) => w());
-    await Promise.all([a, b]);
+    await Promise.all([a, b, ...more]);
   });
 
   it('takes a slot from the rate gate for every start', async () => {

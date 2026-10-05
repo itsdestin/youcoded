@@ -795,6 +795,7 @@ ${HOME_ICONS_JS}
       climate: { big: temp != null ? Math.round(temp) + '°' : '—', unit: w ? 'outside' : 'inside', temp: temp, inside: th && th.it.cur != null ? th.it.cur : null, mode: th ? th.it.state : null },
       problems: { big: probs.length ? String(probs.length) : '✓', unit: probs.length ? 'to fix' : 'all good', sevs: sevs },
       activity: { big: '', unit: '' },
+      cameras: { big: '', unit: '' },
     };
     return [
       { id: 'lights', label: 'Lights', icon: BULB, on: nLit > 0,
@@ -806,11 +807,13 @@ ${HOME_ICONS_JS}
       { id: 'climate', label: 'Climate', icon: w ? skyIcon(w.state, 16) : THERMO, on: !!(th && th.it.state !== 'off'),
         main: w && w.temp != null ? Math.round(w.temp) + '° ' + condName(w.state) : th && th.it.cur != null ? th.it.cur + '° inside' : 'No climate',
         sub: th ? (th.it.cur != null ? th.it.cur + '° inside' : '') + (th.it.state && th.it.state !== 'off' && th.it.target != null ? ' · ' + (MODE_NAMES[th.it.state] || th.it.state) + ' to ' + th.it.target + '°' : th.it.state === 'off' ? ' · off' : '') : '' },
+      // Reshaped after real use: every camera, live at once, on a tab of its own (home-assistant-page-camera.ts).
+      camerasChip(),
       { id: 'problems', label: 'Problems', icon: ALERT, on: probs.length > 0, warn: probs.some(function (p) { return p.sev === 'high'; }),
         main: probs.length ? probs.length + ' to fix' : 'All good', sub: probs.length ? probs[0].title : '' },
       // Round 5 (C-activity "tab"): the house's history is a tab of its own.
       { id: 'activity', label: 'Activity', icon: ACTIVITY, on: false, main: activityCount() || 'Activity', sub: '' },
-    ].map(function (c) { c.x = extra[c.id]; return c; }).filter(function (c) { return pref('chip-' + c.id); });
+    ].map(function (c) { c.x = extra[c.id]; return c; }).filter(function (c) { return pref('chip-' + c.id) && (c.id !== 'cameras' || c.n); });
   }
   // A temperature as a colour: deep blue when cold, through teal and
   // yellow, to orange-red when hot (°F; °C is converted first).
@@ -833,6 +836,7 @@ ${HOME_ICONS_JS}
     if (c.id === 'media') return c.on ? (x.appBg || 'var(--accent)') : null;
     if (c.id === 'climate') return tempColour(x.temp);
     if (c.id === 'activity') return null;
+    if (c.id === 'cameras') return c.on ? 'rgb(235, 70, 55)' : null;
     return x.sevs.high ? 'rgb(235, 70, 55)' : (x.sevs.mid || x.sevs.low) ? 'rgb(240, 165, 40)' : 'rgb(60, 190, 110)';
   }
   function chipShort(c) {
@@ -841,6 +845,7 @@ ${HOME_ICONS_JS}
     if (c.id === 'media') return x.playing ? (c.main) : c.on ? c.main : 'Quiet';
     if (c.id === 'climate') return x.big + (x.inside != null ? ' · ' + x.inside + '° in' : '');
     if (c.id === 'activity') return 'Activity';
+    if (c.id === 'cameras') return c.main;
     return c.x.sevs.high + c.x.sevs.mid + c.x.sevs.low ? c.main : 'All good';
   }
   function chipPill(c) {
@@ -853,6 +858,7 @@ ${HOME_ICONS_JS}
     if (c.id === 'lights') b = c.on ? '<b>' + x.big + ' light' + (x.big === '1' ? '' : 's') + '</b> on' + (c.main.indexOf(' in ') > 0 ? c.main.slice(c.main.indexOf(' in ')) : '') : '<b>All lights</b> off';
     else if (c.id === 'media') b = x.playing ? '<b>' + c.main + '</b>' : c.on ? '<b>' + c.main + '</b>' : '<b>Nothing</b> playing';
     else if (c.id === 'climate') b = '<b>' + x.big + '</b> ' + esc(c.main.replace(/^[^ ]+ /, '')) + ' outside';
+    else if (c.id === 'cameras') b = '<b>' + c.main + '</b>';
     else b = c.on ? '<b>' + c.main.replace(' to fix', '') + ' problem' + (c.main.indexOf('1 ') === 0 ? '' : 's') + '</b> to fix' : '<b>No problems</b>';
     return '<button class="part k-' + c.id + (view === c.id ? ' sel' : '') + '" style="--k:' + (stateColour(c) || 'var(--fg)') + '" data-view="' + c.id + '" aria-pressed="' + (view === c.id) + '">' + b + '</button>';
   }
@@ -878,14 +884,14 @@ ${HOME_ICONS_JS}
 
   // ── The gear's settings (round 4, Q-settings: a gear next to Edit).
   var PREF_ROWS = [
-    ['chip-lights', 'Lights chip'], ['chip-media', 'Media chip'], ['chip-climate', 'Climate chip'], ['chip-problems', 'Problems chip'],
+    ['chip-lights', 'Lights chip'], ['chip-media', 'Media chip'], ['chip-climate', 'Climate chip'], ['chip-cameras', 'Cameras chip'], ['chip-problems', 'Problems chip'],
     ['scenes', 'Hue scenes in each room'], ['favourites', 'Favourites row'], ['cameras', 'Camera pictures'],
   ];
   // Settings are a page of their own (round 4 settings note: "should
   // probably be a full page menu"), grouped into sections.
   var PREF_SECTIONS = [
-    { title: 'At a glance', note: 'The chips across the top of the page.', rows: PREF_ROWS.slice(0, 4) },
-    { title: 'In each room', note: 'What each room card shows.', rows: PREF_ROWS.slice(4) },
+    { title: 'At a glance', note: 'The chips across the top of the page.', rows: PREF_ROWS.slice(0, 5) },
+    { title: 'In each room', note: 'What each room card shows.', rows: PREF_ROWS.slice(5) },
   ];
   function settingsPageHtml() {
     return '<div class="set-grid">' + PREF_SECTIONS.map(function (sec) {
@@ -956,6 +962,7 @@ ${HOME_ICONS_JS}
     var body = '';
     if (view === 'settings') return head + settingsPageHtml();
     if (view === 'activity') return head + activityHtml();
+    if (view === 'cameras') return head + camerasPageHtml();
     if (view === 'problems') {
       var ps = problems();
       // Problems are cards in a grid that fills the page (round 4 note:
@@ -1048,6 +1055,7 @@ ${HOME_ICONS_JS}
 
   function render() { if (batching) { batchDirty = true; return; } draw(); }
   function draw() {
+    camTabSync(); // the Cameras tab starts and stops its live pictures with what is on screen
     if (edDrag) { edDirty = true; return; } // a row is being dragged: nothing redraws under the finger, and it all draws when it ends (redesign round 1, Edit c)
     $('root').classList.toggle('editing', editing);
     put('bar', barHtml());

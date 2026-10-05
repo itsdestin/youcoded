@@ -52,8 +52,8 @@ export async function mount(opts: { data?: Record<string, unknown>; fetchHook?: 
   document.head.innerHTML = /<head>([\s\S]*?)<\/head>/.exec(html)![1];
   document.body.innerHTML = /<body>([\s\S]*?)<script>/.exec(html)![1];
   const puts: string[] & { greyBox?: boolean } = [];
-  // Every time the rooms are drawn: was an empty grey picture box on screen (a camera card that is about to change shape)?
-  (window as any).__homeAfterPut = (id: string) => { puts.push(id); if (id === 'rooms' && document.querySelector('#rooms img.cam:not([src])')) puts.greyBox = true; };
+  // Every time the rooms are drawn: was an empty grey picture box on screen (a Nest camera card that is about to change shape)? The Pi camera really does show a picture box until its first picture arrives.
+  (window as any).__homeAfterPut = (id: string) => { puts.push(id); if (id === 'rooms' && document.querySelector('#rooms [data-eid]:not([data-eid="camera.garage_pi"]) img.cam:not([src])')) puts.greyBox = true; };
   const socks: Sock[] = [];
   (window as any).youcoded = {
     devices: { ha: BASE }, data: opts.data ?? { startOpen: ['living_room', 'destins_room'] },
