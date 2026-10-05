@@ -1,4 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect, useLayoutEffect, useImperativeHandle, forwardRef, useContext } from 'react';
+import { NARROW_VIEWPORT_QUERY } from '../hooks/use-narrow-viewport';
 import { useChatDispatch } from '../state/chat-context';
 import QuickChips, { QuickChip } from './QuickChips';
 import TerminalToolbar from './TerminalToolbar';
@@ -58,6 +59,8 @@ export interface InputBarHandle {
   // the required check-then-act sequence; see task-11-report.md.
   /** True when the composer currently holds a non-empty (trimmed) draft. */
   hasDraft: () => boolean;
+  /** Take focus after the user switched session — only when that is safe (see the method). */
+  focusAfterSwitch: () => void;
   /** Read the unsent draft before a pending tab is rebound to an admitted writer. */
   readDraft: (sessionId?: string) => string;
   readDraftPayload: (sessionId?: string) => { text: string; attachments: string[] };
@@ -397,6 +400,21 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     // Task 11: read the LIVE DOM value (not the `text` state closure) — mirrors
     // send()'s currentText read above, same stale-closure rationale.
     hasDraft: () => (inputRef.current?.value ?? text).trim().length > 0,
+    // WHY (2026-10-05): see hooks/use-focus-composer-after-switch.ts. Every refusal below is a case
+    // where taking focus would surprise someone: a touch device (raises the on-screen keyboard), a
+    // narrow screen, a dialog on top, a box that cannot be typed in, or focus deliberately sitting
+    // in another field or editor. Focus resting on the strip's own button (the pill just clicked)
+    // or on nothing is what we replace. No layout read, no scroll.
+    focusAfterSwitch: () => {
+      const el = inputRef.current;
+      if (!el || disabled || el.disabled) return;
+      if (isAndroid() || lastPointerWasTouch.current || window.matchMedia?.('(pointer: coarse)')?.matches === true
+        || window.matchMedia?.(NARROW_VIEWPORT_QUERY)?.matches === true) return;
+      if (document.querySelector('[role="dialog"], [aria-modal="true"]')) return;
+      const active = document.activeElement;
+      if (active && active !== document.body && active !== el && !active.closest('[data-session-strip]')) return;
+      el.focus({ preventScroll: true });
+    },
     readDraft: (id = sessionId) => id === sessionId ? (inputRef.current?.value ?? text) : (draftsRef.current.get(id)?.text ?? ''),
     readDraftPayload: (id = sessionId) => {
       const draft = id === sessionId

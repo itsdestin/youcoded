@@ -170,6 +170,7 @@ import { requestGuideAdvance, requestGuideReset } from './components/guide/guide
 import { armGuideForFreshInstall, bumpCounter, guideDoneAt, isGuidePending, markGuideDone } from './components/guide/guide-state';
 import { triggerTip } from './components/guide/tips';
 // --- First-time warnings: Skip Permissions, Full auto, a small model ---
+import { useFocusComposerAfterSwitch } from './hooks/use-focus-composer-after-switch';
 import { useFirstTimeGate } from './components/FirstTimeWarning';
 import { isSmallModel } from './components/first-time-warnings';
 import { SkipPermissionsInfoTooltip } from './components/SkipPermissionsInfoTooltip';
@@ -3360,7 +3361,10 @@ function AppInner() {
   const openTasksCounts = useMemo(() => sessionId ? { running: openTasks.counts.running, pending: openTasks.counts.pending } : undefined, [sessionId, openTasks.counts.running, openTasks.counts.pending]);
   // Stable references on purpose — see the hook for what an inline arrow costs.
   const chatViewHandlers = useChatViewHandlers({ setProvidersAutoOpen, setSettingsOpen, setModelPickerOpen });
+  // Chat view only: after the user's own switch the message box takes focus (hook explains).
+  const noteUserSwitch = useFocusComposerAfterSwitch(sessionId, currentViewMode, () => inputBarRef.current?.focusAfterSwitch());
   const handleSelectSession = useCallback((id: string) => {
+    noteUserSwitch(id);
     // Switching sessions REMOUNTS the artifact drawer, which would silently
     // discard a dirty editor draft — route the user-initiated switch through
     // the D3 guard. Programmatic switches (session died/closed) stay unguarded.
@@ -3372,7 +3376,7 @@ function AppInner() {
       // Notify Android/remote bridge so the native terminal view switches too
       (window as any).claude?.session?.switch?.(id);
     });
-  }, []);
+  }, [noteUserSwitch]);
   const handleCloseSession = useCallback((id: string, name?: string) => {
     // WHY: a pending tab is not a writer. Closing it invalidates admission
     // synchronously; session:destroy and the ordinary close prompt are wrong here.
