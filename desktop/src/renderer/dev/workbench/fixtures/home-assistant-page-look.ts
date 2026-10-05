@@ -22,8 +22,18 @@ export const HOME_LOOK_CSS = `
   .lights-body > .tile { background: color-mix(in srgb, var(--fg) 6%, var(--panel)); }
   .tile .bulb { width: 38px; height: 38px; }
   .tile.on .bulb { box-shadow: 0 0 22px var(--c), inset 0 1px 0 rgba(255,255,255,.5); }
-  .tile .lr { height: 30px; border-radius: 15px; box-shadow: inset 0 1px 3px rgba(0,0,0,.3); }
-  .tile .lr::-webkit-slider-thumb { width: 26px; height: 26px; margin: 0 2px; border-radius: 50%; background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,.4); }
+  /* Slider handle (redesign round 1, look b, refined after Destin's note). The handle is a 30px box
+     the full height of the bar, with a 24px white disc drawn inside it, so the disc sits 3px in from
+     the bar's rounded ends at 0% and 100% and is exactly centred up and down. --tw tells the page's
+     fill rule the handle box's width. The fill ends at the disc's centre at 0% and at the bar's very end
+     at 100% (it grows half a handle faster than the disc moves), so the disc is always on a filled
+     bar, never beside a dark gap or a square-cut sliver. The volume bar's speaker icon keeps its colour
+     on the fill, and at exactly 0% (where the white disc would sit on top of it) it steps aside. */
+  .vwrap:has(.vlr[style*="--v:0;"]) .vicon { opacity: 0; }
+  .tile .lr { --tw: 30px; height: 30px; border-radius: 15px; box-shadow: inset 0 1px 3px rgba(0,0,0,.3);
+    background: linear-gradient(to right, var(--c, var(--accent)) calc(var(--tw) / 2 + (100% - var(--tw) / 2) * var(--v, 0) / 100), var(--well) 0); }
+  .tile .lr::-webkit-slider-thumb { width: 30px; height: 30px; margin: 0; border-radius: 50%; border: 0; box-sizing: border-box;
+    background: radial-gradient(circle, #fff 11.5px, rgba(255,255,255,0) 12px); filter: drop-shadow(0 1px 2px rgba(0,0,0,.45)); }
   .scenes { border-radius: 14px; border-color: color-mix(in srgb, var(--fg) 8%, transparent); }
   .pill { border-color: color-mix(in srgb, var(--fg) 14%, transparent); background: linear-gradient(180deg, color-mix(in srgb, var(--fg) 8%, var(--panel)), var(--panel)); box-shadow: 0 4px 12px -8px rgba(0,0,0,.5); }
   .pill.sel, .pill.lit.sel { background: var(--accent); border-color: var(--accent); color: var(--on-accent); box-shadow: 0 6px 18px -6px var(--accent); }
