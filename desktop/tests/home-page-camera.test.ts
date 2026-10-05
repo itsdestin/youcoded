@@ -58,10 +58,9 @@ describe('a Nest camera card', () => {
     expect(rows).toHaveLength(20);
     expect(rows.slice(0, 6)).toEqual(['Person', 'Motion', 'Doorbell rang', 'Person', 'Motion', 'Sound']);
     for (const t of Array.from(living().querySelectorAll('.cam-ev time'))) expect(t.textContent).toMatch(/\d{1,2}:\d{2} (am|pm)/);
-    // The Live button is in the header, unpressed; the list is its own scrolling box.
-    const btn = living().querySelector('.cam-head [data-cam-act="live"]')!;
-    expect(btn.textContent).toBe('Live');
-    expect(btn.getAttribute('aria-pressed')).toBe('false');
+    // The header holds only the name: no Live control. The play disc is on the picture area; the list is its own scrolling box.
+    expect(living().querySelector('.cam-head [data-cam-act]')).toBeNull();
+    expect(living().querySelector('.cam-idle .cam-play[data-cam-act="live"]')!.getAttribute('aria-label')).toBe('Watch Living room camera live');
     expect(living().querySelector('.cam-evs')).toBeTruthy();
   });
 
@@ -85,7 +84,7 @@ describe('a Nest camera card', () => {
     expect(bell.querySelector('.cam-note')!.textContent).toBe('No recordings yet. Nest only saves clips when it can send events to Home Assistant.');
     expect(bell.querySelector('.cam-ev')).toBeNull();
     // The doorbell is not responding in the pretend house: the button is there but cannot be pressed.
-    expect(bell.querySelector<HTMLButtonElement>('[data-cam-act="live"]')!.disabled).toBe(true);
+    expect(bell.querySelector<HTMLButtonElement>('.cam-play')!.disabled).toBe(true);
   });
 
   it('plays an event’s clip: the app fetches it as a video and the card shows a player', async () => {
@@ -120,8 +119,8 @@ describe('a Nest camera card', () => {
   });
 
   it('draws live pictures on a canvas with a LIVE badge, hands each one back, and stops when told to', async () => {
-    living().querySelector<HTMLButtonElement>('[data-cam-act="live"]')!.click();
-    expect(living().querySelector('[data-cam-act="stop"]')!.getAttribute('aria-pressed')).toBe('true'); // the Live button is pressed while live
+    living().querySelector<HTMLButtonElement>('.cam-play')!.click(); // the play disc on the picture
+    expect(living().querySelector('.cam-play')).toBeNull(); // the disc gives way to the picture
     expect(videos).toHaveLength(1);
     expect(videos[0].connection).toBe('ha');
     expect(videos[0].target).toBe('camera.living_room_camera');
@@ -135,19 +134,20 @@ describe('a Nest camera card', () => {
     const canvas = living().querySelector('canvas')!;
     expect(canvas.width).toBe(640);
     expect(living().querySelector('.cam-badge')!.textContent).toBe('LIVE');
-    // Pressing the pressed Live button ends it in the app and puts the button back to unpressed.
-    living().querySelector<HTMLButtonElement>('[data-cam-act="stop"]')!.click();
+    // Stop, in the picture's corner, ends it in the app and brings the play disc back.
+    living().querySelector<HTMLButtonElement>('.cam-view .cam-x[data-cam-act="stop"]')!.click();
     expect(videos[0].stop).toHaveBeenCalledTimes(1);
     expect(living().querySelector('canvas')).toBeNull();
-    expect(living().querySelector('[data-cam-act="live"]')!.getAttribute('aria-pressed')).toBe('false');
+    expect(living().querySelector('.cam-play')).toBeTruthy();
   });
 
   it('says in plain words why live video stopped, offers Play again, and keeps the Home Assistant link', () => {
-    living().querySelector<HTMLButtonElement>('.cam-head [data-cam-act="live"]')!.click();
+    living().querySelector<HTMLButtonElement>('.cam-play')!.click();
     videos[1].o.onState('stopped', 'paused while the page was hidden');
     const note = living().querySelector('.cam-note')!.textContent;
     expect(note).toBe('Live view stopped: paused while the page was hidden.');
-    expect(living().querySelector('.cam-actions [data-cam-act="live"]')!.textContent).toContain('Play again');
+    // The disc on the picture is Play again.
+    expect(living().querySelector('.cam-play')!.getAttribute('aria-label')).toBe('Play Living room camera again');
     expect(living().querySelector('.cam-actions a')!.textContent).toBe('Watch live in Home Assistant');
     expect(living().querySelector('.cam-actions a')!.getAttribute('href')).toContain('/config/devices/device/');
   });
@@ -175,10 +175,12 @@ describe('scroll bars', () => {
   });
 });
 
-describe('the three ways to start live (practice options)', () => {
-  it.each(['look-cam-a', 'look-cam-b', 'look-cam-c'])('%s rewrites the built card and still runs as a page', async (key) => {
-    const { findHomeVariant, withHomeVariant } = await import('../src/renderer/dev/workbench/fixtures/home-variants/registry');
-    const out = withHomeVariant(HOME_ASSISTANT_PAGE_HTML, findHomeVariant(key)!); // throws if the page changed under the option
-    for (const script of out.split('<script>').slice(1)) expect(() => new Function(script.split('</script>')[0])).not.toThrow();
+describe('the play disc and a clip', () => {
+  it('is not on the picture while a clip plays, so it never fights the clip player’s controls; closing the clip brings it back', async () => {
+    living().querySelector<HTMLButtonElement>('.cam-ev')!.click();
+    await vi.waitFor(() => expect(living().querySelector('video')).toBeTruthy());
+    expect(living().querySelector('.cam-play')).toBeNull();
+    living().querySelector<HTMLButtonElement>('[data-cam-act="close"]')!.click();
+    expect(living().querySelector('.cam-play')).toBeTruthy();
   });
 });

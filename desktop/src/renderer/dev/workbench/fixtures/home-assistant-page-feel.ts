@@ -112,7 +112,7 @@ export const HOME_FEEL_JS = `
   }
   // Buttons acknowledge at once, even for a tap shorter than a frame (and for ones whose
   // result comes later: next track, a remote key).
-  var FX_ACK = '.vbtn, .key, .pwr, .step, .th-step, .mode, .th-mode, .gitem, .sw';
+  var FX_ACK = '.vbtn, .key, .pwr, .step, .th-step, .mode, .th-mode, .gitem, .sw, .cam-x, .cam-play';
   document.addEventListener('click', function (e) {
     var t = e.target.closest ? e.target.closest('button') : null; if (!t) return;
     fxPress(t);

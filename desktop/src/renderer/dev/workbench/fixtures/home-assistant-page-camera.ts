@@ -31,15 +31,19 @@ export const HOME_CAMERA_CSS = `
   /* Camera card: header with a Live button, the picture, a short scrolling list of events */
   .cam-card .sub { font-size: 11px; color: var(--fg-muted); font-weight: 400; }
   .cam-head { justify-content: space-between; }
-  .cam-live-btn { appearance: none; font: inherit; font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 14px; border-radius: 9999px; cursor: pointer; flex-shrink: 0;
-    color: var(--fg); border: 1px solid color-mix(in srgb, var(--fg) 14%, transparent); background: linear-gradient(180deg, color-mix(in srgb, var(--fg) 8%, var(--panel)), var(--panel)); }
-  .cam-live-btn::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--fg-muted); }
-  .cam-live-btn:hover:not(:disabled) { border-color: color-mix(in srgb, var(--fg) 30%, transparent); }
-  .cam-live-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .cam-live-btn:disabled { opacity: .5; cursor: default; }
-  .cam-live-btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); box-shadow: 0 6px 18px -6px var(--accent); }
-  .cam-live-btn[aria-pressed="true"]::before { background: rgb(235, 70, 55); box-shadow: 0 0 0 3px color-mix(in srgb, rgb(235, 70, 55) 35%, transparent); }
-  .cam-evs-wait { min-height: 158px; }
+  /* The play disc on the picture (Destin picked "a play button on the picture", 2026-10-05, and asked for it to fit the
+     Glass and glow look): a frosted disc with a soft ring, filling with the theme's accent when hovered or focused.
+     The same glass chip is the LIVE badge, Stop and Close, so the picture's overlays read as one family. */
+  .cam-view.cam-idle { background: radial-gradient(120% 120% at 30% 20%, color-mix(in srgb, var(--accent) 20%, #10151c), #0b0f14); }
+  .cam-play { appearance: none; position: absolute; inset: 0; margin: auto; width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; cursor: pointer; padding: 0; color: #fff;
+    background: linear-gradient(180deg, rgba(255,255,255,.22), rgba(255,255,255,.08)); border: 1px solid rgba(255,255,255,.34);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 0 0 7px rgba(255,255,255,.07), 0 12px 30px -8px rgba(0,0,0,.75); transition: background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease, color 140ms ease; }
+  .cam-play svg { width: 24px; height: 24px; margin-left: 3px; }
+  .cam-play:hover:not(:disabled), .cam-play:focus-visible { background: var(--accent); border-color: var(--accent); color: var(--on-accent); box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 0 0 7px color-mix(in srgb, var(--accent) 28%, transparent), 0 0 32px -4px var(--accent); outline: none; }
+  .cam-play:focus-visible { outline: 2px solid #fff; outline-offset: 4px; }
+  .cam-play:active:not(:disabled) { transform: scale(.94); }
+  .cam-play:disabled { opacity: .4; cursor: default; }
+  @media (prefers-reduced-motion: reduce) { .cam-play { transition: none; } .cam-play:active:not(:disabled) { transform: none; } }
   .cam-evs { display: flex; flex-direction: column; gap: 4px; max-height: 158px; overflow-y: auto; overscroll-behavior: contain; padding-right: 2px; }
   .cam-ev { appearance: none; font: inherit; font-size: 12px; display: flex; align-items: center; gap: 10px; width: 100%; flex-shrink: 0; padding: 7px 10px; border: 0; border-radius: 14px; background: color-mix(in srgb, var(--fg) 6%, var(--panel)); color: var(--fg); cursor: pointer; text-align: left; }
   .cam-ev:hover:not(:disabled) { background: color-mix(in srgb, var(--fg) 10%, var(--panel)); }
@@ -57,7 +61,12 @@ export const HOME_CAMERA_CSS = `
   .cam-view .cam-msg { position: absolute; inset: 0; display: grid; place-items: center; padding: 12px; text-align: center; font-size: 12px; line-height: 1.4; }
   .cam-badge { position: absolute; top: 8px; left: 8px; display: flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 9999px; background: rgba(0, 0, 0, .55); color: #fff; font-size: 11px; font-weight: 600; z-index: 1; }
   .cam-badge::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: #ff4d4d; }
-  .cam-x { position: absolute; right: 8px; top: 8px; z-index: 1; }
+  .cam-x { position: absolute; right: 8px; top: 8px; z-index: 1; appearance: none; font: inherit; font-size: 11px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: 9999px; cursor: pointer; border: 0;
+    background: rgba(0, 0, 0, .55); color: #fff; transition: background-color 120ms ease; }
+  .cam-x:hover { background: rgba(0, 0, 0, .78); } .cam-x:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+  .cam-x:active { transform: scale(.94); }
+  .cam-x svg { width: 10px; height: 10px; }
+  @media (prefers-reduced-motion: reduce) { .cam-x { transition: none; } .cam-x:active { transform: none; } }
   .cam-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .cam-note { font-size: 12px; color: var(--fg-muted); line-height: 1.4; }
   .cam-note a, .cam-actions a { color: var(--accent); font-size: 12px; }
@@ -77,6 +86,7 @@ export const HOME_CAMERA_JS = `
   // live { state: 'starting' | 'playing' | 'stopped', why }.
   var camEv = {}, clipEv = {}, clipEl = {}, liveCanvas = {}, liveVid = {}, clipBusy = false;
   var EVENTS_MAX = 20, EVENTS_EVERY_MS = 60000, EVENT_ROW_PX = 50, THUMBS_AHEAD = 6, CAM_MAX_LIVE = 4;
+  var STOPG = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2.5"/></svg>';
   var PLAYG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4v16l13-8z"/></svg>';
   var CAMERA_ICO = ico('<path d="m23 7-7 5 7 5z"/><rect x="1" y="5" width="15" height="14" rx="2"/>', 16);
   function camState(id) { return camEv[id] || (camEv[id] = { events: { state: 'loading', list: [], at: 0 }, clip: null, live: null }); }
@@ -290,17 +300,21 @@ export const HOME_CAMERA_JS = `
     }
     var st = camState(it.id), ev = st.events, live = st.live, clip = st.clip, eid = esc(it.id), inTab = view === 'cameras';
     var running = live && live.state !== 'stopped';
-    // In the Cameras tab the tile is already live behind the pop-up, so the card there has no Live button.
-    var btn = canVideo() && !inTab ? '<button class="cam-live-btn" data-cam-act="' + (running ? 'stop' : 'live') + '" data-id="' + eid + '" aria-pressed="' + !!running + '"' + (na ? ' disabled' : '') + '>Live</button>' : '';
-    var html = '<div class="' + cls + ' col cam-card"><div class="line cam-head"><div class="name">' + esc(it.name) + '<div class="sub">' + (na ? 'Not responding' : esc(it.model || 'Camera')) + '</div></div>' + btn + '</div>';
+    var html = '<div class="' + cls + ' col cam-card"><div class="line cam-head"><div class="name">' + esc(it.name) + '<div class="sub">' + (na ? 'Not responding' : esc(it.model || 'Camera')) + '</div></div></div>';
+    var stoppedNow = live && live.state === 'stopped' && !inTab;
+    // Nothing playing: the picture area holds the play disc (a camera that is not answering shows why instead, and the disc waits).
+    if (!running && !clip && !inTab && canVideo()) {
+      html += '<div class="cam-view cam-idle"><button class="cam-play" data-cam-act="live" data-id="' + eid + '" aria-label="' + (stoppedNow ? 'Play ' + esc(it.name) + ' again' : 'Watch ' + esc(it.name) + ' live') + '" title="' + (stoppedNow ? 'Play again' : 'Watch live') + '"' + (na ? ' disabled' : '') + '>' + PLAYG + '</button>' + (na ? '<span class="cam-msg" style="top:auto;bottom:10px;height:auto">Not responding</span>' : '') + '</div>';
+    }
     if (running && !inTab) {
-      html += '<div class="cam-view"><span class="cam-slot" data-live-slot="' + eid + '"></span>' + (live.state === 'playing' ? '<span class="cam-badge">LIVE</span>' : '<span class="cam-msg">Starting live view…</span>') + '</div>';
+      html += '<div class="cam-view"><span class="cam-slot" data-live-slot="' + eid + '"></span>' + (live.state === 'playing' ? '<span class="cam-badge">LIVE</span>' : '<span class="cam-msg">Starting live view…</span>') +
+        '<button class="cam-x" data-cam-act="stop" data-id="' + eid + '">' + STOPG + 'Stop</button></div>';
     } else if (clip) {
       html += clip.state === 'failed' ? '<div class="cam-note" role="status">' + esc(clip.why) + '</div>'
         : '<div class="cam-view"><span class="cam-slot" data-clip-slot="' + eid + '"></span>' + (clip.state === 'loading' ? '<span class="cam-msg">Loading clip…</span>' : '') +
-          '<button class="yc-button yc-button--sm cam-x" data-cam-act="close" data-id="' + eid + '">Close</button></div>';
+          '<button class="cam-x" data-cam-act="close" data-id="' + eid + '">Close</button></div>';
     }
-    var stopped = live && live.state === 'stopped' && !inTab;
+    var stopped = stoppedNow;
     if (stopped) html += '<div class="cam-note" role="status">Live view stopped' + (live.why ? ': ' + esc(live.why) : '') + '.</div>';
     if (ev.state === 'loading') html += '<div class="cam-evs-wait" aria-hidden="true"></div>';
     else if (ev.state === 'failed') html += '<div class="cam-note">Could not load recent events from Home Assistant.</div>';
@@ -312,7 +326,8 @@ export const HOME_CAMERA_JS = `
           '<span class="w">' + esc(e.what) + '</span><time>' + esc(evTime(e.at)) + '</time></button>';
       }).join('') + '</div>';
     }
-    if (stopped || !canVideo()) html += '<div class="cam-actions">' + (stopped && canVideo() ? '<button class="yc-button yc-button--sm" data-cam-act="live" data-id="' + eid + '">' + PLAYG + ' Play again</button>' : '') + nestFallback(it) + '</div>';
+    // The disc on the picture is Play again; the link to Home Assistant stays as the other way to watch.
+    if (stopped || !canVideo()) html += '<div class="cam-actions">' + nestFallback(it) + '</div>';
     return html + '</div>';
   }
 

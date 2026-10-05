@@ -94,7 +94,7 @@ describe('the Cameras tab', () => {
     const stopsBefore = videos.filter((v) => v.stop.mock.calls.length).length;
     tile('camera.hallway_camera').querySelector<HTMLButtonElement>('[data-cam-act="open"]')!.click();
     await vi.waitFor(() => expect(document.querySelectorAll('.dlg .cam-ev').length).toBe(3));
-    expect(document.querySelector('.dlg [data-cam-act="live"]')).toBeNull(); // no second Live button: the tile is the live view
+    expect(document.querySelector('.dlg .cam-play')).toBeNull(); // no play disc: the tile is the live view
     expect(videos.filter((v) => v.stop.mock.calls.length).length).toBe(stopsBefore);
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
     await flush();
