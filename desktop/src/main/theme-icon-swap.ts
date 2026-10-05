@@ -8,6 +8,7 @@ import path from 'path';
 import { loadDefaultAppIcon, fitForMacDock, chooseDockIcon, hasLiquidGlass, type MacIconLook } from './app-icon';
 import { readMacIconLook, watchMacIconLook } from './mac-icon-look';
 import { setBuddyTrayTheme } from './buddy-tray';
+import { applyWindowsTaskbarIcon } from './windows-taskbar-icon';
 import type { ThemeIconSet } from '../shared/theme-icons';
 
 export function registerThemeIconSwap(ipcMain: IpcMain, channel: string, mainWindow: BrowserWindow, SAFE_SLUG_RE: RegExp): void {
@@ -66,6 +67,10 @@ export function registerThemeIconSwap(ipcMain: IpcMain, channel: string, mainWin
     // size, where one big PNG shrunk to 16px blurs the eyes.
     const winIcon = (process.platform === 'win32' ? loadIcon(currentIcons?.windows) : null) ?? loadIcon(currentIcons?.app);
     mainWindow.setIcon(winIcon ?? loadDefaultAppIcon(ASSETS_DIR));
+    // The taskbar BUTTON follows the shortcut, not the window (windows-taskbar-icon.ts). Only a
+    // loaded .ico is handed over; anything else puts the shortcuts back on the app's own icon.
+    const winIco = process.platform === 'win32' && winIcon ? themeAssetFile(currentIcons?.windows) : null;
+    void applyWindowsTaskbarIcon(mainWindow, winIco);
     applyMacDock();
     // The buddy's tray icon follows the theme too (not on the Mac — buddy-tray.ts).
     const trayIdle = themeAssetFile(currentIcons?.tray);
