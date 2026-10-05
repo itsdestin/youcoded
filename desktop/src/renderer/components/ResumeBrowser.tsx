@@ -1908,7 +1908,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               <div
                 aria-hidden
                 className="absolute inset-x-4 top-0 h-px"
-                style={{ background: 'linear-gradient(to right, transparent, var(--edge) 8%, var(--edge) 92%, transparent)' }}
+                style={{ background: 'linear-gradient(to right, transparent, var(--edge-card) 8%, var(--edge-card) 92%, transparent)' }}
               />
               {/* Stacked, full width, primary over secondary — the app's dialog
                   footer (review round 2, C-1: "stacked"). */}

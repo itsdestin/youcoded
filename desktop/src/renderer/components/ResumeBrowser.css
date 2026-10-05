@@ -9,7 +9,7 @@
   right: 16px;
   height: 1px;
   pointer-events: none;
-  background: linear-gradient(to right, transparent, var(--edge) 8%, var(--edge) 92%, transparent);
+  background: linear-gradient(to right, transparent, var(--edge-card) 8%, var(--edge-card) 92%, transparent);
 }
 @property --resume-fade-top { syntax: '<length>'; inherits: false; initial-value: 0px; }
 @property --resume-fade-bottom { syntax: '<length>'; inherits: false; initial-value: 0px; }

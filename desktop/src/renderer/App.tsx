@@ -4124,13 +4124,15 @@ function AppInner() {
               // Welcome deck WL-1 (Destin picked D1, the roomy form, with "the mascot to the
               // left of the start your first session text"). The tour's first stop still rings
               // the buddy here.
-              <div className="flex items-center gap-5 w-96 select-none">
+              // YT-1 (Destin): header, mascot and text "proportionally a bit bigger compared
+              // to the menu box below, and maybe just slightly higher above" it.
+              <div className="flex items-center gap-6 mb-6 select-none">
                 <div data-guide-anchor="welcome-mascot" className="flex shrink-0">
-                  <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-20 h-20 text-fg-dim" scene />
+                  <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-28 h-28 text-fg-dim" scene />
                 </div>
-                <div className="flex flex-col gap-1 min-w-0">
-                  <p className="brand-heading text-2xl text-fg leading-tight whitespace-nowrap">Start your first session</p>
-                  <p className="text-sm text-fg-muted">A session is one conversation with the assistant, working in one folder.</p>
+                <div className="flex flex-col gap-1.5 min-w-0 max-w-sm">
+                  <p className="brand-heading text-4xl text-fg leading-tight whitespace-nowrap">Start your first session</p>
+                  <p className="text-base text-fg-muted">A session is one conversation with the assistant, working in one folder.</p>
                 </div>
               </div>
             ) : (

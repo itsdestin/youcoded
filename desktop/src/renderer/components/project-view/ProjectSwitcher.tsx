@@ -307,7 +307,7 @@ export function ProjectSwitcher({
           <span
             aria-hidden
             className="absolute inset-x-4 top-0 h-px"
-            style={{ background: 'linear-gradient(to right, transparent, var(--edge) 8%, var(--edge) 92%, transparent)' }}
+            style={{ background: 'linear-gradient(to right, transparent, var(--edge-card) 8%, var(--edge-card) 92%, transparent)' }}
           />
           <PlusIcon size={15} />
           Add a project
