@@ -115,9 +115,14 @@ describe('Mac Dock rule (chooseDockIcon)', () => {
     expect(chooseDockIcon('tinted', true, true)).toBe('bundle');
     expect(chooseDockIcon('unknown', true, true)).toBe('bundle');
   });
-  it('reads the Mac icon-look setting, and anything unrecognised as unknown', () => {
-    expect(parseMacIconLook(undefined)).toBe('unknown');
-    expect(parseMacIconLook('')).toBe('unknown');
+  it('reads the Mac icon-look setting (AppleIconAppearanceTheme, seen on macOS 26.7.1)', () => {
+    // Default removes the setting entirely; Electron reports a missing string as ''.
+    expect(parseMacIconLook(undefined)).toBe('default');
+    expect(parseMacIconLook('')).toBe('default');
+    expect(parseMacIconLook('ClearLight')).toBe('clear');
+    expect(parseMacIconLook('ClearDark')).toBe('clear');
+    expect(parseMacIconLook('TintedDark')).toBe('tinted');
+    expect(parseMacIconLook('RegularDark')).toBe('dark');
     expect(parseMacIconLook('somethingNew')).toBe('unknown');
   });
   it('a theme without a glass version uses its normal icon in Dark and Clear', () => {

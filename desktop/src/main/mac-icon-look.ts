@@ -8,12 +8,17 @@
 import { app, systemPreferences } from 'electron';
 import type { MacIconLook } from './app-icon';
 
-// TODO(brand round 32): confirm the key and its values on the Tahoe VM before shipping.
+// Read off macOS 26.7.1 (Tahoe VM, 2026-10-04): System Settings → Appearance → Icon & widget style
+// writes this global default — "ClearLight" for Clear in light mode — and REMOVES it for Default.
 const LOOK_KEY = 'AppleIconAppearanceTheme';
 
 /** Map the raw setting to a look. Exported for tests. */
 export function parseMacIconLook(raw: unknown): MacIconLook {
-  if (typeof raw !== 'string' || raw === '') return 'unknown';
+  // WHY missing = default: macOS deletes the setting when the user picks Default, and Electron
+  // hands back '' for a missing string default. Reading that as 'unknown' left the Dock alone in
+  // the most common look of all.
+  if (raw === undefined || raw === null || raw === '') return 'default';
+  if (typeof raw !== 'string') return 'unknown';
   const v = raw.toLowerCase();
   if (v.includes('tint')) return 'tinted';
   if (v.includes('clear')) return 'clear';
