@@ -90,6 +90,14 @@ const OVERFLOW_CHIP_PX = 28;
  *  to the next dot switches it at once — the intent is already shown. */
 const PEEK_DWELL_MS = 150;
 
+/** Whether two packs describe the same row, so a repack that changed nothing can keep the old object. */
+function samePack(a: PackResult, b: PackResult): boolean {
+  if (a.pillBudget !== b.pillBudget || a.expanded.size !== b.expanded.size) return false;
+  for (const id of a.expanded) if (!b.expanded.has(id)) return false;
+  return a.collapsed.length === b.collapsed.length && a.collapsed.every((id, i) => id === b.collapsed[i])
+    && a.overflow.length === b.overflow.length && a.overflow.every((id, i) => id === b.overflow[i]);
+}
+
 /** The room the strip's children have: the flex-1 wrapper's width (not the
  *  strip's own, which is whatever its pills happen to occupy — a chicken-and-
  *  egg that once kept a 2nd pill from ever appearing) minus the strip's OWN
@@ -1861,22 +1869,48 @@ export default function SessionStrip({
   useEffect(() => { dragIdRef.current = dragId; }, [dragId]);
 
 
+  // WHY the budget is cached (2026-10-05, perf-switch): stripBudget reads
+  // getComputedStyle + clientWidth, which forces a style+layout flush. repack ran
+  // it on EVERY active-session change — right after React's commit, when the DOM
+  // is dirty — measured at 1.2 s over ~200 switches (median 5 ms, worst 17 ms) in
+  // a real window. The room only changes when the wrapper is resized or the theme
+  // changes the strip's padding, so it is read in the ResizeObserver callback
+  // (layout is clean there, so the read is free) and once per theme application,
+  // and a switch reuses it. null = not measured yet (first mount): measure then.
+  const budgetRef = useRef<number | null>(null);
+  // WHY refs for the inputs: the callback below must be stable. It used to depend
+  // on the active id, so the ResizeObserver effect below tore down and re-observed
+  // on every switch — and a fresh observe() always delivers an initial callback,
+  // i.e. one more repack (and render) per switch.
+  const repackInputs = useRef({ activeSessionId, measurementsOf });
+  repackInputs.current = { activeSessionId, measurementsOf };
   const repack = useCallback(() => {
     const bar = pillBarRef.current;
     if (!bar) return;
+    if (budgetRef.current === null) budgetRef.current = stripBudget(bar);   // see stripBudget
+    const { activeSessionId: activeId, measurementsOf: measurements } = repackInputs.current;
     const result = packSessions({
-      sessions: measurementsOf(),
-      activeId: activeSessionId,
-      budget: stripBudget(bar),   // see stripBudget
+      sessions: measurements(),
+      activeId,
+      budget: budgetRef.current,
       gap: PILL_GAP,
       triggerWidth: 24, // ▾ button is w-5 + ml-1
       overflowChipWidth: OVERFLOW_CHIP_PX,
     });
-    setPack(result);
-  }, [activeSessionId, measurementsOf]);
+    // WHY skip an equal result: setPack always got a fresh object, so even a
+    // repack that changed nothing cost the strip another render.
+    setPack((prev) => (samePack(prev, result) ? prev : result));
+  }, []);
 
   // Pack on mount, on session-list change, and on any container resize.
-  useLayoutEffect(() => { repack(); }, [repack]);
+  useLayoutEffect(() => { repack(); }, [repack, activeSessionId, measurementsOf]);
+  // The strip's padding comes from the theme/zoom; re-read the room once when a theme lands.
+  useLayoutEffect(() => {
+    const bar = pillBarRef.current;
+    if (!bar || budgetRef.current === null) return;
+    const room = stripBudget(bar);
+    if (room !== budgetRef.current) { budgetRef.current = room; repack(); }
+  }, [themeApplied, repack]);
   useEffect(() => {
     const bar = pillBarRef.current;
     if (!bar) return;
@@ -1884,10 +1918,10 @@ export default function SessionStrip({
     // content-sized and never grows on its own, so observing it would never
     // fire when more space becomes available.
     const target = bar.parentElement ?? bar;
-    const ro = new ResizeObserver(() => repack());
+    const ro = new ResizeObserver(() => { budgetRef.current = stripBudget(bar); repack(); });
     ro.observe(target);
     return () => ro.disconnect();
-  }, [repack]);
+  }, [repack, hasPills]);
 
   // Android always forces single-session mode (no room for siblings on mobile chrome).
   const forceSingle = isAndroid();

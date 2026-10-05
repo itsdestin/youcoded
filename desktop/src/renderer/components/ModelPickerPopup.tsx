@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { memoWhileClosed } from './memo-while-closed';
 import { createPortal } from 'react-dom';
 import type { ModelAlias } from './StatusBar';
 import { FastIcon } from './Icons';
@@ -158,7 +159,7 @@ interface Props {
   sendPtyCommand: (text: string) => boolean;
 }
 
-export default function ModelPickerPopup({ open, onClose, sessionId, currentModel, onSelectModel, provider, currentModelId, onNativeModelChanged, onNativeSummaryPending, sendPtyCommand }: Props) {
+function ModelPickerPopup({ open, onClose, sessionId, currentModel, onSelectModel, provider, currentModelId, onNativeModelChanged, onNativeSummaryPending, sendPtyCommand }: Props) {
   useEscClose(open, onClose);
   const [fast, setFast] = useState(false);
   const [effort, setEffort] = useState<EffortLevel>('auto');
@@ -632,3 +633,7 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
     document.body,
   );
 }
+
+// WHY (2026-10-05): mounted by the shell all the time, so every session switch rebuilt this closed popup.
+// memoWhileClosed ignores prop changes until `open` flips (memo-while-closed.ts).
+export default memoWhileClosed(ModelPickerPopup);

@@ -25,6 +25,7 @@ export const lastVisible = new Map<string, boolean>();
 export function resetSubtreeRenders(): void {
   subtreeRenders.chat.clear();
   subtreeRenders.terminal.clear();
+  namedRenders.clear();
 }
 
 type Kind = keyof typeof subtreeRenders;
@@ -54,6 +55,51 @@ export function probe<P extends { sessionId: string }>(real: any, kind: Kind): R
   }
   Probed.displayName = `Probed(${kind})`;
   return (isMemo ? React.memo(Probed, real.compare ?? undefined) : Probed) as React.ComponentType<P>;
+}
+
+// ── Named-component probes (switching budgets) ──────────────────────────────
+// WHY (2026-10-05): the per-session probes above only see ChatView/TerminalView,
+// so a switch that rebuilt Settings, the command drawer and every closed dialog
+// passed. These count, by NAME, the commits that touch one component's subtree —
+// summed over all its instances (SkillCard has dozens). Same Profiler-inside-memo
+// trick: a memoised component still bails out exactly as in the real app.
+export const namedRenders = new Map<string, number>();
+export function resetNamedRenders(): void { namedRenders.clear(); }
+const bumpNamed = (name: string) => namedRenders.set(name, (namedRenders.get(name) ?? 0) + 1);
+
+const FORWARD_REF = Symbol.for('react.forward_ref');
+
+/** `real` is a function, memo or forwardRef component; `name` is the key counted under. */
+export function countProbe(real: any, name: string): any {
+  const isMemo = real && typeof real === 'object' && real.$$typeof === MEMO;
+  const base = isMemo ? real.type : real;
+  const isFwd = base && typeof base === 'object' && base.$$typeof === FORWARD_REF;
+  const wrap = (children: React.ReactNode) => (
+    <React.Profiler id={name} onRender={() => bumpNamed(name)}>{children}</React.Profiler>
+  );
+  const Probed: any = isFwd
+    ? React.forwardRef((props: any, ref: any) => wrap(React.createElement(base, { ...props, ref })))
+    : (props: any) => wrap(React.createElement(base, props));
+  Probed.displayName = `Counted(${name})`;
+  return isMemo ? React.memo(Probed, real.compare ?? undefined) : Probed;
+}
+
+/** A module copy whose listed exports are counted: { default: 'SettingsPanel' }. */
+export function countedModule(real: any, names: Record<string, string>): any {
+  const out = { ...real };
+  for (const [exp, name] of Object.entries(names)) out[exp] = countProbe(real[exp], name);
+  return out;
+}
+
+/** The Dialog primitive, counting every render by whether it was open. A closed
+ *  Dialog renders nothing, so what this really counts is how often a parent
+ *  rebuilt a dialog nobody could see. */
+export function dialogProbe(real: any): any {
+  const Real = real;
+  return function DialogProbed(props: any) {
+    bumpNamed(props.open ? 'Dialog(open)' : 'Dialog(closed)');
+    return React.createElement(Real, props);
+  };
 }
 
 /** Everything written into any fake terminal, by write order. */

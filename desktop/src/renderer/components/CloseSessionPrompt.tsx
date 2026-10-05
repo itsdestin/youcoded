@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { memoWhileClosed } from './memo-while-closed';
 import { useEscClose } from '../hooks/use-esc-close';
 import { triggerTip } from './guide/tips';
 import { useTagRegistry } from '../hooks/useTagRegistry';
@@ -101,7 +102,7 @@ const SUPPRESS_KEY = CLOSE_PROMPT_SUPPRESS_KEY;
 // Shown when the user closes an active session. Preloads the session's current
 // tags + note (so applied tags stay selected — nothing changes unless the user
 // toggles it), and lets them set Priority/Complete in the same step.
-export default function CloseSessionPrompt({ open, sessionName, sessionId, onCancel, onConfirm }: Props) {
+function CloseSessionPrompt({ open, sessionName, sessionId, onCancel, onConfirm }: Props) {
   const [sel, setSel] = useState<Record<FlagName, boolean>>({ priority: false, complete: false });
   // "Don't show again" — persisted to localStorage so the caller can skip this
   // prompt on future closes. Default off so users see it at least once.
@@ -371,3 +372,7 @@ export default function CloseSessionPrompt({ open, sessionName, sessionId, onCan
     </>
   );
 }
+
+// WHY (2026-10-05): mounted by the shell all the time, so every session switch rebuilt this closed popup.
+// memoWhileClosed ignores prop changes until `open` flips (memo-while-closed.ts).
+export default memoWhileClosed(CloseSessionPrompt);

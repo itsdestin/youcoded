@@ -15,6 +15,7 @@
 
 import React, { useCallback, useRef, useState, type ReactNode } from 'react';
 import { Button, Checkbox, Dialog } from './ui';
+import { memoWhileClosed } from './memo-while-closed';
 import {
   hasAcknowledged,
   markAcknowledged,
@@ -29,7 +30,7 @@ export interface FirstTimeWarningProps {
   onContinue: () => void;
 }
 
-export function FirstTimeWarning({ kind, open, onCancel, onContinue }: FirstTimeWarningProps) {
+function FirstTimeWarningImpl({ kind, open, onCancel, onContinue }: FirstTimeWarningProps) {
   const copy = WARNING_COPY[kind];
   const [checked, setChecked] = useState(false);
   // WHY: the checkbox state is reset whenever the dialog closes rather than on
@@ -98,6 +99,10 @@ export function FirstTimeWarning({ kind, open, onCancel, onContinue }: FirstTime
     </Dialog>
   );
 }
+
+// WHY: mounted in five hosts (the shell, the session strip, resume options) and rebuilt its Dialog
+// contents on every session switch although closed. See memo-while-closed.ts.
+export const FirstTimeWarning = memoWhileClosed(FirstTimeWarningImpl);
 
 export interface FirstTimeGateOptions {
   /** Runs when the dialog actually opens (not when `gate` proceeds at once). */

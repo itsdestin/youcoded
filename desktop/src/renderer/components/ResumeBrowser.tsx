@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
+import { memoWhileClosed } from './memo-while-closed';
 import { createPortal } from 'react-dom';
 import { Scrim, OverlayPanel, CONTENT_Z } from './overlays/Overlay';
 import { Button, Toggle, LoadingState, EmptyState, ErrorState, FilterChip, FilterMenuChip, Checkbox, CheckboxMark, SearchFilterPill, SettingRow } from './ui';
@@ -354,7 +355,7 @@ const PreviewLayer = React.memo(function PreviewLayer({ id, provider, title, pro
   );
 });
 
-export default function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermissions, welcomeBack }: Props) {
+function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermissions, welcomeBack }: Props) {
   const wb = welcomeBack;
   // Welcome back: which rows are ticked, and which already launched from this
   // screen (they leave the list — they are open tabs now).
@@ -2067,3 +2068,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     </>
   );
 }
+
+// WHY (2026-10-05): mounted by the shell all the time, so every session switch rebuilt this closed popup.
+// memoWhileClosed ignores prop changes until `open` flips (memo-while-closed.ts).
+export default memoWhileClosed(ResumeBrowser);
