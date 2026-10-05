@@ -42,9 +42,9 @@ export const HOME_DIAL_GEOM_JS = `
   // Where things are drawn in the page, as the CSS lays them out (the same numbers as the dial's CSS): the dial's size, the round
   // buttons either side of it on a room card, and the sizes of its text. narrow = the window under 420px.
   function thGeom(compact, narrow) {
-    if (!compact) return { S: 210, arcW: 14, hs: 30, setFs: 54, lblFs: 12, nowFs: 12, rangeFs: 30, btn: 0, gap: 0, mx: 12, my: 12 };
-    return narrow ? { S: 118, arcW: 16, hs: 26, setFs: 30, lblFs: 10, nowFs: 10, rangeFs: 15, btn: 36, gap: 8, mx: 42, my: 4 }
-      : { S: 148, arcW: 16, hs: 28, setFs: 38, lblFs: 10, nowFs: 10, rangeFs: 19, btn: 42, gap: 12, mx: 52, my: 4 };
+    if (!compact) return { S: 210, arcW: 14, hs: 30, setFs: 54, lblFs: 12, nowFs: 12, rangeFs: 22, btn: 0, gap: 0, mx: 12, my: 12 };
+    return narrow ? { S: 118, arcW: 16, hs: 26, setFs: 30, lblFs: 10, nowFs: 10, rangeFs: 10, btn: 36, gap: 8, mx: 42, my: 4 }
+      : { S: 148, arcW: 16, hs: 28, setFs: 38, lblFs: 10, nowFs: 10, rangeFs: 14, btn: 42, gap: 12, mx: 52, my: 4 };
   }
   // Where "Now 79°" goes. o: S (dial px), R (ring radius px), half (half the ring's thickness), tick (how far the line sticks out of the
   // ring each way), a (the line's angle in degrees), w/h (the label's box), mx / my (how far past the dial it may reach sideways / up and down), circles [{x,y,r}]
@@ -109,8 +109,9 @@ export const HOME_DIAL_CSS = `
   .th-now-line { stroke: var(--fg); stroke-width: 2.5; stroke-linecap: round; fill: none; }
   .th-now-lbl { position: absolute; transform: translate(-50%, -50%); z-index: 1; padding: 1px 4px; border-radius: 9999px; font-size: 12px; line-height: 1.25; white-space: nowrap; color: var(--fg-2); pointer-events: none;
     background: color-mix(in srgb, var(--inset) 82%, transparent); }
-  /* Auto's two numbers sat on the ring in a room card; smaller, they sit inside it beside the handles. */
-  .th-compact .th-range { font-size: 19px; gap: 4px; } @media (max-width: 420px) { .th-compact .th-range { font-size: 15px; } }
+  /* Auto's two numbers must fit inside the ring clear of the handles: sized from the ring's inner radius (a test pins it); the Climate dial's is set below. */
+  .th-dial .th-range { font-size: 22px; gap: 6px; }
+  .th-compact .th-range { font-size: 14px; gap: 3px; } @media (max-width: 420px) { .th-compact .th-range { font-size: 10px; gap: 2px; } }
   .th-compact .th-now-lbl { font-size: 10px; padding: 1px 3px; }
   /* The set point: the same handle as the brightness and volume bars (a white disc with a ring of the fill's colour and a soft shadow). */
   .th-dial { --hs: 30px; } .th-compact .th-dial { --hs: 28px; }

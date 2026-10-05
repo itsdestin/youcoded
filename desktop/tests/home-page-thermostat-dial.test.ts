@@ -213,3 +213,16 @@ it('the label is drawn at the place the page computed, as a share of the dial, a
   expect(lbl!.style.left).toMatch(/%$/);
   expect(card().querySelector('.th-mid .th-cur')).toBeNull();
 });
+
+it('the centre text (Auto\'s two numbers, or the big number) fits inside the ring, clear of the handles, on every dial size', () => {
+  for (const [name, compact, narrow] of SIZES) {
+    const g = G.thGeom(compact, narrow);
+    for (const range of [false, true]) {
+      const { o } = G.thLabelPlan(g, 135, 7, [0.5], true, range, range ? 5 : 3);
+      // The text box (with its caption line) has corners that must stay inside the ring's inner edge, less the handle's overhang and a gap.
+      const clear = o.R - (range ? Math.max(o.half, g.hs / 2) : o.half) - 3; // Auto's text sits beside two handles; the single number is a short word with empty corners
+      const corner = Math.hypot(o.core.w / 2, o.core.h / 2) - (range ? 0 : 4);
+      expect(corner, `${name}${range ? ' (Auto)' : ''}: text corner ${corner.toFixed(1)} vs clear radius ${clear.toFixed(1)}`).toBeLessThanOrEqual(clear);
+    }
+  }
+});
