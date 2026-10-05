@@ -335,3 +335,36 @@ describe('traceIpc with once/off', () => {
     expect(ipcMain.listenerCount('x:z')).toBe(0);
   });
 });
+
+// ── Switch marks (2026-10-05) ─────────────────────────────────────────────────────────────────────────────────────────
+const swLine = (over: Record<string, unknown> = {}) => ({ t: NOW, cause: 'pill', vm: 'chat', dk: 'claude', str: false, cold: false, open: 4, ff: 30, st: 150, end: 'settled', e1: 9, e2: 9, mut: 0, ls: 0, lsv: 0, loaf: 0, loafMs: 0, ind: null, gap: null, drain: null, ...over });
+describe('switch lines', () => {
+  it('writes one kind:"switch" line each, with the window id, an interrupted flag derived from the ending, and no id of any session', () => {
+    const { lines, send } = setup();
+    send(batch([], { sw: [swLine(), swLine({ end: 'interrupted', st: null, ff: null })], id: 'SECRET' }));
+    const s = lines.filter((l) => l.kind === 'switch');
+    expect(s).toHaveLength(2);
+    expect(s[0]).toMatchObject({ kind: 'switch', win: 'w1', cause: 'pill', vm: 'chat', dk: 'claude', ff: 30, st: 150, end: 'settled', interrupted: false, open: 4, src: 'loaf' });
+    expect(s[1]).toMatchObject({ end: 'interrupted', interrupted: true, st: null });
+    expect(JSON.stringify(lines)).not.toContain('SECRET');
+  });
+
+  it('main caps switch lines at 120 a minute per window (independent of the 30 detailed-entry cap), counting the excess in the minute line', () => {
+    const { lines, send, advance, rec } = setup();
+    for (let i = 0; i < 5; i++) send(batch([], { sw: Array.from({ length: 30 }, () => swLine()), swOver: 2 }));
+    expect(lines.filter((l) => l.kind === 'switch')).toHaveLength(120);
+    rec.onMinute();
+    const m = lines.filter((l) => l.kind === 'minute')[0];
+    expect(m.rend).toMatchObject({ switches: 120, swOver: 30 + 10 }); // 30 over main's cap + 5 batches x 2 reported by the window
+    advance(61_000);
+    send(batch([], { sw: [swLine()] }));
+    expect(lines.filter((l) => l.kind === 'switch')).toHaveLength(121); // a new minute starts a new allowance
+  });
+
+  it('switch lines do not use up the 30-a-minute budget of frames and events', () => {
+    const { lines, send } = setup();
+    send(batch([], { sw: Array.from({ length: 50 }, () => swLine()) }));
+    send(batch(Array.from({ length: 30 }, () => frame())));
+    expect(lines.filter((l) => l.kind === 'frame')).toHaveLength(30);
+  });
+});

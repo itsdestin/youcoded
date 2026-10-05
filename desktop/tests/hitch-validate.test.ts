@@ -152,3 +152,72 @@ describe('script source names', () => {
     expect(one('index-abc.js', 'has space')).toMatchObject({ src: 'index-abc.js', fn: '' });
   });
 });
+
+// ── Switch marks (2026-10-05): the `sw` array of a batch ─────────────────────────────────────────────────────────────
+const sw = (over: Record<string, unknown> = {}) => ({
+  t: NOW - 5, cause: 'pill', vm: 'chat', dk: 'claude', str: false, cold: true, open: 6, ff: 40, st: 190, end: 'settled',
+  e1: 120, e2: 140, mut: 33, ls: 1, lsv: 0.0123456, loaf: 2, loafMs: 180, ind: 130, gap: 2500, drain: null, ...over,
+});
+const swBatch = (list: unknown[], over: Record<string, unknown> = {}) => ({ v: 1, mode: 'loaf', kind: null, entries: [], sw: list, swOver: 3, tally: {}, dropped: 0, ...over });
+
+describe('switch lines (batch.sw)', () => {
+  it('passes a well-formed switch through, rounding the shift sum', () => {
+    const b = validateBatch(swBatch([sw()]), NOW)!;
+    expect(b.sw).toHaveLength(1);
+    expect(b.sw[0]).toMatchObject({ cause: 'pill', vm: 'chat', dk: 'claude', str: false, cold: true, open: 6, ff: 40, st: 190, end: 'settled', e1: 120, e2: 140, mut: 33, ls: 1, lsv: 0.012, loaf: 2, loafMs: 180, ind: 130, gap: 2500, drain: null });
+    expect(b.swOver).toBe(3);
+  });
+
+  it('a batch with no sw array has none (older windows keep working)', () => {
+    const b = validateBatch({ v: 1, mode: 'loaf', kind: null, entries: [], tally: {}, dropped: 0 }, NOW)!;
+    expect(b.sw).toEqual([]);
+    expect(b.swOver).toBe(0);
+  });
+
+  it('rejects a line whose view, kind or ending is not one of the fixed values; an unknown cause is honestly "other"', () => {
+    const b = validateBatch(swBatch([sw({ vm: 'x' }), sw({ dk: 'cloud' }), sw({ end: 'weird' }), sw({ cause: 'bribe' }), null, 5, 'x']), NOW)!;
+    expect(b.sw).toHaveLength(1);
+    expect(b.sw[0].cause).toBe('other');
+    expect(b.rejected).toBe(6);
+  });
+
+  it('keeps a missing measurement null (never 0) and settled only when the switch really settled', () => {
+    const [a, c] = validateBatch(swBatch([sw({ ff: null, st: null, e1: null, ind: null, gap: null, end: 'interrupted' }), sw({ end: 'cap', st: 99 })]), NOW)!.sw;
+    expect([a.ff, a.st, a.e1, a.ind, a.gap]).toEqual([null, null, null, null, null]);
+    expect(c.st).toBeNull();
+  });
+
+  it('settled can never precede the first frame', () => {
+    expect(validateBatch(swBatch([sw({ ff: 80, st: 20 })]), NOW)!.sw[0].st).toBe(80);
+  });
+
+  it('range-checks every number and replaces a lying timestamp', () => {
+    const [l] = validateBatch(swBatch([sw({ t: 5, ff: -1, st: Infinity, e1: NaN, mut: 1e12, ls: -4, loaf: 'x', gap: 1e12, open: 1e9, lsv: 5000 })]), NOW)!.sw;
+    expect(l.t).toBe(NOW);
+    expect([l.ff, l.st, l.e1, l.gap]).toEqual([null, null, null, null]);
+    expect([l.mut, l.ls, l.loaf, l.open, l.lsv]).toEqual([0, 0, 0, 0, 0]);
+  });
+
+  it('caps the array and counts what it ignored', () => {
+    const b = validateBatch(swBatch(Array.from({ length: 400 }, () => sw())), NOW)!;
+    expect(b.sw).toHaveLength(100);
+    expect(b.rejected).toBe(300);
+  });
+
+  it('fuzz: free text in EVERY slot of a switch reaches the line nowhere (the line has no string slot except fixed enums)', () => {
+    const TEXT = ['MY SECRET DRAFT', '/home/u/Clients/Acme/report.js', 'https://host/x?token=abc', 'C:\\Users\\me\\f.js', '\u4e2d\u6587\u00e9', 'line1\nline2', 'user@example.com', 'sess-1234-abcd', 'My Project Name'];
+    const out: any[] = [];
+    for (const t of [...TEXT, ...TEXT.map((x) => x.repeat(30)), 5, null, {}, [], true]) {
+      out.push(sw({ cause: t, vm: t, dk: t, end: t, str: t, cold: t, id: t, name: t, path: t, sid: t, sessionId: t, label: t, why: t, open: t, ff: t, st: t, e1: t, e2: t, mut: t, ls: t, lsv: t, loaf: t, loafMs: t, ind: t, gap: t, drain: t }));
+      // the same text in every slot, but with valid enums, so the line IS accepted and every free slot is exercised
+      out.push(sw({ id: t, name: t, path: t, sid: t, sessionId: t, label: t, why: t, text: t, title: t, extra: { deep: t } }));
+    }
+    const text = JSON.stringify(validateBatch(swBatch(out), NOW));
+    expect(text).not.toMatch(/SECRET|Acme|token|host|passwd|example\.com|sess-1234|Project Name|Users|[\u4e2d\u00e9]|line1/);
+    // And the accepted lines carry exactly the known keys.
+    for (const l of validateBatch(swBatch(out), NOW)!.sw) {
+      expect(Object.keys(l).sort()).toEqual(['cause', 'cold', 'dk', 'drain', 'e1', 'e2', 'end', 'ff', 'gap', 'ind', 'loaf', 'loafMs', 'ls', 'lsv', 'mut', 'open', 'st', 'str', 't', 'vm']);
+      for (const v of Object.values(l)) if (typeof v === 'string') expect(v).toMatch(/^(pill|menu|key|drawer|auto|other|chat|terminal|claude|native|shell|settled|streaming|cap|interrupted|hidden|closed)$/);
+    }
+  });
+});

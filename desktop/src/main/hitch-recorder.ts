@@ -19,6 +19,11 @@
 //  - context, only when a hitch is recorded: page visible/hidden, focused, view mode
 //            (chat/terminal), whether a dialog or full screen is open (yes/no), pixel ratio,
 //            DOM element count (at most every 10 s), session COUNT, window COUNT.
+//  - switch: one per session switch in a window (2026-10-05, "switch marks"): cause (pill/menu/key/drawer/auto/other), view
+//            (chat/terminal), destination kind (claude/native/shell), whether it was streaming, ms to the first frame that
+//            shows the new pane, ms until its content stopped changing (or why that is unknown), counts only (open sessions,
+//            entries at first frame / at settle, DOM mutations, layout shifts, long frames, worst slow-input delay), ms since the
+//            previous switch, first visit or revisit. Every field is an enum or a number (validated in hitch-validate.ts); no id.
 //  - main-stall: how many ms the main process did not respond (a sleep/resume or a "stall" over a
 //            minute is discarded), and the NAME of the last IPC channel it started plus how long ago
 //            (a hint, not proof).
@@ -67,6 +72,8 @@ export function loopResolution(env: NodeJS.ProcessEnv = process.env): number {
 /** A tick-to-tick gap or stall this long (ms) is a suspend/resume, never an app hitch. */
 const SLEEP_GAP_MS = 60_000;
 const PER_WINDOW_PER_MIN = 30;
+/** Switch lines per window per minute (separate from the 30 above: a rapid A-B-A-B flip is 4 a second, and every one is wanted). */
+const SWITCHES_PER_WINDOW_PER_MIN = 120;
 const BATCHES_PER_WINDOW_PER_MIN = 40;
 
 export function hitchLogDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -122,7 +129,7 @@ export interface RecorderDeps {
   env?: NodeJS.ProcessEnv;
 }
 
-interface WindowState { id: string; minStart: number; minCount: number; batchStart: number; batchCount: number }
+interface WindowState { id: string; minStart: number; minCount: number; batchStart: number; batchCount: number; swStart: number; swCount: number }
 const mb = (bytes: number) => Math.round(bytes / 1048576 * 10) / 10;
 const r1 = (ms: number) => Math.round(ms * 10) / 10;
 
@@ -137,7 +144,7 @@ export class HitchRecorder {
   private nextWindow = 1;
   private tick = 0;
   private timer: ReturnType<typeof setInterval> | undefined;
-  private minuteTally = { frames: 0, framesMs: 0, over: 0, overMs: 0, dropped: 0, rejected: 0, entries: 0 };
+  private minuteTally = { frames: 0, framesMs: 0, over: 0, overMs: 0, dropped: 0, rejected: 0, entries: 0, switches: 0, swOver: 0 };
   private stalls = 0;
   private skipTicks = 0;
   private lastTick = 0;
@@ -170,7 +177,7 @@ export class HitchRecorder {
     let w = this.windows.get(id);
     if (!w) {
       if (this.windows.size >= 64) return null;
-      w = { id: `w${this.nextWindow++}`, minStart: 0, minCount: 0, batchStart: 0, batchCount: 0 };
+      w = { id: `w${this.nextWindow++}`, minStart: 0, minCount: 0, batchStart: 0, batchCount: 0, swStart: 0, swCount: 0 };
       this.windows.set(id, w);
       // WHY: without pruning, a long launch that opens and closes 64 windows would silently drop every later batch.
       try { sender?.once?.('destroyed', () => this.windows.delete(id)); } catch { /* ignore */ }
@@ -199,6 +206,16 @@ export class HitchRecorder {
         this.minuteTally.entries++;
         const { k, t: et, ...rest } = e;
         this.line(k, { ...rest, sessions, windows, ...(b.kind !== 'main' ? { window: b.kind } : {}), src: b.mode }, w.id, et);
+      }
+      // Switch marks: an independent per-window cap, and the excess (this side's AND the window's own) is only COUNTED.
+      this.minuteTally.swOver += b.swOver;
+      if (t - w.swStart >= 60_000) { w.swStart = t; w.swCount = 0; }
+      for (const s of b.sw) {
+        if (w.swCount >= SWITCHES_PER_WINDOW_PER_MIN) { this.minuteTally.swOver++; continue; }
+        w.swCount++;
+        this.minuteTally.switches++;
+        const { t: st, end, ...rest } = s;
+        this.line('switch', { ...rest, end, interrupted: end === 'interrupted', ...(b.kind !== 'main' ? { window: b.kind } : {}), src: b.mode }, w.id, st);
       }
       if (b.startup) this.onRendererStartup(b, w.id);
     } catch { /* instrumentation never throws into main */ }
@@ -297,7 +314,7 @@ export class HitchRecorder {
       : { p50: 0, p99: 0, max: 0, res: this.res };
     mh.reset();
     const tally = this.minuteTally;
-    this.minuteTally = { frames: 0, framesMs: 0, over: 0, overMs: 0, dropped: 0, rejected: 0, entries: 0 };
+    this.minuteTally = { frames: 0, framesMs: 0, over: 0, overMs: 0, dropped: 0, rejected: 0, entries: 0, switches: 0, swOver: 0 };
     const stalls = this.stalls;
     this.stalls = 0;
     if (windows < 1) return; // one line per minute only while a window exists

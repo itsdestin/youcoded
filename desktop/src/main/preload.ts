@@ -573,7 +573,7 @@ const PLAYABLE_PUSHES = new Set<string>([
 // nothing is added to window.claude, so the shared bridge shape is untouched.
 interface HitchEnv {
   PerformanceObserver: any;
-  perf: { timeOrigin: number; getEntriesByType(t: string): any[]; getEntriesByName(n: string): any[] }; // not `performance:` — mock-shim-window.test.ts finds the bridge's namespace by that name
+  perf: { timeOrigin: number; now?: () => number; getEntriesByType(t: string): any[]; getEntriesByName(n: string): any[] }; // not `performance:` — mock-shim-window.test.ts finds the bridge's namespace by that name
   document: any;
   window: any;
   now: () => number;
@@ -582,6 +582,11 @@ interface HitchEnv {
   mode: string | null;
   /** This page's own directory URL: only scripts under it are named. */
   base: string;
+  /** Switch marks (below). All optional: a window without them simply records no switches. */
+  raf?: (f: () => void) => unknown;
+  cancelRaf?: (h: unknown) => void;
+  clearTimeout?: (h: unknown) => void;
+  MutationObserver?: any;
 }
 const MAX_PLAUSIBLE = 120_000; // ms: a 'frame' longer than 2 min means the computer slept, not that the page hitched
 const HITCH_EVENTS = ['keydown', 'pointerdown', 'pointerup', 'click', 'input'];
@@ -592,6 +597,7 @@ export function installHitchRecorder(env: HitchEnv): { mode: string } | null {
   const mode = supported.includes('long-animation-frame') ? 'loaf' : supported.includes('longtask') ? 'longtask' : 'none';
   if (mode === 'none') return { mode };
   let buf: any[] = [];
+  let swBuf: any[] = []; // switch lines (their own array and cap, see the switch marks block)
   let tally = { f: 0, fms: 0, over: 0, oms: 0 }; // 50-100 ms frames (count, summed ms); entries past the rate limit (count, summed ms)
   let dropped = 0;
   let timer: unknown = null;
@@ -600,6 +606,8 @@ export function installHitchRecorder(env: HitchEnv): { mode: string } | null {
   let elsAt = -1e9;
   let els = 0;
   let startupSent = false;
+  let sw: any = null; // the switch in flight, or null (switch marks block below)
+  let swOver = 0; // switch lines the window itself dropped over its own cap, for the next batch
   const r = (n: unknown) => (typeof n === 'number' && isFinite(n) ? Math.round(n) : 0);
   const kindOf = (t: any): string => {
     try {
@@ -643,9 +651,9 @@ export function installHitchRecorder(env: HitchEnv): { mode: string } | null {
   };
   const flush = () => {
     timer = null;
-    if (!buf.length && !tally.f && !tally.over && !dropped) return;
-    const batch = { v: 1, mode, kind: env.mode, entries: buf, tally, dropped };
-    buf = []; tally = { f: 0, fms: 0, over: 0, oms: 0 }; dropped = 0;
+    if (!buf.length && !swBuf.length && !tally.f && !tally.over && !dropped && !swOver) return;
+    const batch = { v: 1, mode, kind: env.mode, entries: buf, sw: swBuf, swOver, tally, dropped };
+    buf = []; swBuf = []; swOver = 0; tally = { f: 0, fms: 0, over: 0, oms: 0 }; dropped = 0;
     try { env.send(batch); } catch { /* instrumentation never throws into the app */ }
   };
   const arm = () => { if (!timer) timer = env.setTimeout(flush, 5000); };
@@ -660,9 +668,205 @@ export function installHitchRecorder(env: HitchEnv): { mode: string } | null {
     arm();
   };
   const t0 = (e: any) => r(env.perf.timeOrigin + e.startTime);
+
+  // ── Switch marks (2026-10-05) ───────────────────────────────────────────────────────────
+  // WHAT: one `switch` line per session switch (format + privacy: docs/hitch-recorder.md, validation: hitch-validate.ts).
+  // HOW IT HEARS ABOUT A SWITCH: the page (renderer/state/switch-marks.ts) dispatches a DOM event on `document` — nothing is added
+  // to window.claude, so the bridge shape stays shared with Android/remote. The detail is a JSON STRING (a plain object would not
+  // survive the world boundary) holding enums, ints and the session id; the id is used ONLY to find the pane in memory and is never
+  // sent to main or written. Anything unexpected in the detail is ignored.
+  // COST: nothing runs between switches except two idle event listeners. A switch arms: one requestAnimationFrame (first frame),
+  // one MutationObserver on the visible chat pane (childList/subtree/characterData only — attributes are not watched), one
+  // layout-shift observer and one or two timers, and ALL of it is torn down when the switch settles, is interrupted, or after
+  // SW_CAP_MS, whichever is first. No layout reads: entry counts walk a handful of siblings, never the pane's whole subtree.
+  // DEFINITIONS (blind spots are documented, not hidden):
+  //  - START: the user's input event timestamp (pointerdown/click/keydown) when the page passed one, else the moment the page noticed.
+  //  - FIRST FRAME: the first task after the animation frame that followed React's commit of the new pane — i.e. about when that
+  //    frame was produced. Not a GPU "presented" time (no browser API gives one to a page).
+  //  - SETTLED (chat view): SW_QUIET_MS with no DOM change in the pane and no layout shift; reported as the moment of the LAST change
+  //    (never earlier than the first frame). Pure paint/GPU work, CSS animations and attribute-only changes are invisible to it.
+  //  - SETTLED (terminal view): xterm draws on a canvas, so a DOM observer sees nothing. It is the moment xterm finished PARSING the
+  //    backlog the hidden terminal had queued (an empty write whose callback runs after the drain), or the first frame if there was
+  //    none. WebGL repaint after that is not seen.
+  //  - A streaming destination whose pane never goes quiet ends at the cap with settled = null, why = "streaming".
+  const SW_QUIET_MS = 150;
+  const SW_CAP_MS = 3000;
+  const SW_PER_MIN = 120;
+  const SW_CAUSES = ['pill', 'menu', 'key', 'drawer', 'auto', 'other'];
+  const SW_KINDS = ['claude', 'native', 'shell'];
+  const SW_ID_RE = /^[A-Za-z0-9_:.-]{1,100}$/;
+  const pnow = (): number => (typeof env.perf.now === 'function' ? env.perf.now() : env.now() - env.perf.timeOrigin);
+  const visited = new Set<string>(); // sessions this window has shown (memory only; never written)
+  let lastSwitchStart = -1;
+  let swWinStart = 0;
+  let swWinCount = 0;
+  let swToken = 0;
+  let frameObs: any = null;
+  let evObs: any = null;
+  const paneOf = (id: string): any => {
+    try { return env.document.querySelector(`[data-chat-session-id="${id}"]`); } catch { return null; }
+  };
+  // Entries are siblings under one parent: the first one is near the top of the markup, so this is O(1) however long the chat is.
+  const entriesIn = (pane: any): number | null => {
+    try {
+      if (!pane) return null;
+      const first = pane.querySelector('.timeline-entry');
+      return first && first.parentElement ? first.parentElement.childElementCount : 0;
+    } catch { return null; }
+  };
+  const drain = (obs: any, handler: (l: any) => void) => {
+    // Entries the browser has queued but not yet delivered belong to this switch: take them now rather than lose them.
+    try { const recs = obs && obs.takeRecords ? obs.takeRecords() : []; if (recs.length) handler({ getEntries: () => recs }); } catch { /* ignore */ }
+  };
+  const swTeardown = (x: any) => {
+    try { x.mo && x.mo.disconnect(); } catch { /* ignore */ }
+    try { x.lso && x.lso.disconnect(); } catch { /* ignore */ }
+    x.mo = null; x.lso = null;
+    const ct = env.clearTimeout, cr = env.cancelRaf;
+    if (ct) { if (x.capT) ct(x.capT); if (x.quietT) ct(x.quietT); if (x.ffT) ct(x.ffT); }
+    if (cr && x.rafH) cr(x.rafH);
+    x.capT = x.quietT = x.ffT = x.rafH = null;
+  };
+  const swEnd = (end: string, settleAt?: number) => {
+    const x = sw;
+    if (!x) return;
+    const endAt = settleAt ?? pnow();
+    // Deliver what the browser has queued, so the last frames/events/mutations/shifts count (the handlers file them under `sw`,
+    // so the switch is still open here).
+    drain(frameObs, onFramesOrTasks);
+    drain(evObs, onEvents);
+    sw = null; // from here nothing re-enters while the record is built
+    if (x.mo) { try { const recs = x.mo.takeRecords(); x.mutN += recs.length; } catch { /* ignore */ } }
+    if (x.lso) drain(x.lso, (l: any) => noteShifts(x, l));
+    let loaf = 0, loafMs = 0, ind: number | null = null;
+    for (const [st, du] of x.frames) if (st + du >= x.t0 && st <= endAt + 50) { loaf++; loafMs += du; }
+    for (const [st, dl] of x.evs) if (st >= x.t0 - 1 && st <= endAt + 50) ind = Math.max(ind ?? 0, dl);
+    const e2 = x.vm === 'chat' ? entriesIn(paneOf(x.id)) : null;
+    swTeardown(x);
+    const settled = end === 'settled';
+    const line = {
+      t: r(env.perf.timeOrigin + x.t0), cause: x.cause, vm: x.vm, dk: x.dk, str: x.str, cold: x.cold, open: x.open,
+      ff: x.ff === null ? null : r(x.ff - x.t0), st: settled ? r(Math.max(x.ff ?? 0, endAt) - x.t0) : null,
+      end, e1: x.e1, e2, mut: Math.min(x.mutN, 1e7), ls: x.ls, lsv: Math.round(x.lsv * 1000) / 1000,
+      loaf, loafMs: r(loafMs), ind: ind === null ? null : r(ind), gap: x.gap, drain: x.drain,
+    };
+    const t = env.now();
+    if (t - swWinStart >= 60_000) { swWinStart = t; swWinCount = 0; }
+    if (swWinCount >= SW_PER_MIN) { swOver++; arm(); return; } // window-side cap; main enforces its own
+    swWinCount++;
+    if (swBuf.length >= 200) { swBuf.shift(); dropped++; }
+    swBuf.push(line);
+    arm();
+  };
+  const noteShifts = (x: any, list: any) => {
+    for (const e of list.getEntries()) {
+      if (e.hadRecentInput) continue; // a shift the user caused is not a surprise
+      x.ls++; x.lsv += Number(e.value) || 0;
+      if (typeof e.startTime === 'number') x.lastChange = Math.max(x.lastChange, e.startTime);
+    }
+  };
+  /** Chat view: the pane is quiet once nothing has changed for SW_QUIET_MS; checked by ONE timer that re-arms itself. */
+  const swQuietCheck = (token: number) => {
+    const x = sw;
+    if (!x || x.token !== token) return;
+    x.quietT = null;
+    // Pull in changes the browser has not yet delivered before judging "quiet".
+    if (x.mo) { try { const recs = x.mo.takeRecords(); if (recs.length) { x.mutN += recs.length; x.lastChange = pnow(); } } catch { /* ignore */ } }
+    if (x.lso) drain(x.lso, (l: any) => noteShifts(x, l));
+    const wait = x.lastChange + SW_QUIET_MS - pnow();
+    if (wait > 1) { x.quietT = env.setTimeout(() => swQuietCheck(token), Math.ceil(wait)); return; }
+    swEnd('settled', Math.max(x.ff ?? 0, x.lastChange));
+  };
+  const swFirstFrame = (token: number) => {
+    const x = sw;
+    if (!x || x.token !== token) return;
+    x.ff = pnow();
+    x.ffT = null;
+    if (x.vm === 'chat') {
+      const pane = paneOf(x.id);
+      x.e1 = entriesIn(pane);
+      if (!x.mo && pane && env.MutationObserver) armMutations(x, pane, token);
+      x.quietT = env.setTimeout(() => swQuietCheck(token), SW_QUIET_MS);
+    } else if (x.termAt !== null) {
+      swEnd('settled', Math.max(x.ff, x.termAt));
+    }
+    // Terminal view otherwise waits for the page's "drained" event, or the cap.
+  };
+  const armMutations = (x: any, pane: any, token: number) => {
+    try {
+      x.mo = new env.MutationObserver((recs: any[]) => {
+        if (!sw || sw.token !== token) return;
+        sw.mutN += recs.length;
+        sw.lastChange = pnow();
+      });
+      x.mo.observe(pane, { childList: true, subtree: true, characterData: true });
+    } catch { x.mo = null; }
+  };
+  const swStart = (d: any) => {
+    const now = pnow();
+    if (sw) swEnd('interrupted');
+    const id = typeof d.id === 'string' && SW_ID_RE.test(d.id) ? d.id : '';
+    const cold = !visited.has(id);
+    if (id) { if (visited.size >= 500) visited.clear(); visited.add(id); } // 500 is far past any real window; a clear only makes a few revisits read as first visits
+    if (d.r !== 1) return; // the page marks a first selection / not-a-switch with r = 0: remembered as visited, not recorded
+    if (env.document.visibilityState === 'hidden') return; // no frames are produced for a hidden page: nothing a person could feel
+    const vm = d.vm === 'terminal' ? 'terminal' : 'chat';
+    // The page's own event timestamp (same clock as performance.now()) when it is plausible, else "now".
+    const t0 = typeof d.t === 'number' && isFinite(d.t) && d.t <= now + 5 && d.t >= now - 5000 ? d.t : now;
+    const gap = lastSwitchStart >= 0 ? Math.min(3_600_000, Math.max(0, r(t0 - lastSwitchStart))) : null;
+    lastSwitchStart = t0;
+    const token = ++swToken;
+    const x: any = {
+      token, id, t0, vm, cold, gap, q: typeof d.q === 'number' ? d.q : 0, // q = the page's own switch number: a drained report for an older switch must not settle this one
+      cause: SW_CAUSES.includes(d.c) ? d.c : 'other',
+      dk: SW_KINDS.includes(d.k) ? d.k : 'claude',
+      str: d.s === 1, open: Math.max(0, Math.min(10_000, r(d.n))),
+      drain: vm === 'terminal' && typeof d.dr === 'number' && isFinite(d.dr) && d.dr >= 0 ? Math.min(1e9, r(d.dr)) : null,
+      ff: null, e1: null, mutN: 0, ls: 0, lsv: 0, lastChange: now,
+      // Terminal view with no terminal show reported (a native session's terminal that was never mounted): nothing to wait for.
+      termAt: vm === 'terminal' && typeof d.dr !== 'number' ? now : null,
+      frames: [], evs: [], mo: null, lso: null, capT: null, quietT: null, ffT: null, rafH: null,
+    };
+    sw = x;
+    try {
+      if (env.MutationObserver && vm === 'chat') { const pane = paneOf(id); if (pane) armMutations(x, pane, token); }
+      if ((env.PerformanceObserver.supportedEntryTypes || []).includes('layout-shift')) {
+        x.lso = new env.PerformanceObserver((l: any) => { if (sw && sw.token === token) noteShifts(sw, l); });
+        x.lso.observe({ type: 'layout-shift' });
+      }
+    } catch { /* an observer that cannot be created just means fewer counts */ }
+    // First frame = the first TASK after the frame whose rAF callback ran next (the rAF callback itself runs BEFORE that frame is drawn).
+    const raf = env.raf;
+    const afterFrame = () => { x.ffT = env.setTimeout(() => swFirstFrame(token), 0); };
+    if (raf) x.rafH = raf(afterFrame); else afterFrame();
+    x.capT = env.setTimeout(() => {
+      if (!sw || sw.token !== token) return;
+      swEnd(sw.str ? 'streaming' : 'cap');
+    }, Math.max(1, Math.ceil(SW_CAP_MS - (now - t0))));
+  };
+  const parse = (e: any): any => {
+    try {
+      const raw = e && e.detail;
+      if (typeof raw !== 'string' || raw.length > 600) return null;
+      const d = JSON.parse(raw);
+      return d && typeof d === 'object' && !Array.isArray(d) ? d : null;
+    } catch { return null; }
+  };
+  const swHeard = (e: any) => { const d = parse(e); if (d) { try { swStart(d); } catch { sw = null; } } };
+  const swNoSession = () => { if (sw) swEnd('closed'); }; // the last session went away mid-switch
+  const swTermDrained = (e: any) => {
+    const d = parse(e);
+    const x = sw;
+    if (!d || !x || d.q !== x.q || x.vm !== 'terminal' || x.termAt !== null) return;
+    x.termAt = pnow();
+    if (x.ff !== null) swEnd('settled', Math.max(x.ff, x.termAt));
+  };
+  const swVisibility = () => { if (sw && env.document.visibilityState === 'hidden') swEnd('hidden'); };
+  const onFramesOrTasks = (l: any) => (mode === 'loaf' ? onFrames(l) : onTasks(l));
   const onFrames = (list: any) => {
     for (const e of list.getEntries()) {
       if (e.duration > MAX_PLAUSIBLE) continue; // spans a suspend/resume: not a hitch
+      if (sw && sw.frames.length < 200) sw.frames.push([e.startTime, e.duration]); // switch marks: long frames seen while a switch is open
       if (e.duration < 100) { tally.f++; tally.fms += r(e.duration); arm(); continue; }
       const sl = e.styleAndLayoutStart > 0 ? e.startTime + e.duration - e.styleAndLayoutStart : 0;
       const rd = e.renderStart > 0 && e.styleAndLayoutStart > e.renderStart ? e.styleAndLayoutStart - e.renderStart : 0;
@@ -683,6 +887,7 @@ export function installHitchRecorder(env: HitchEnv): { mode: string } | null {
   const onEvents = (list: any) => {
     for (const e of list.getEntries()) {
       if (!HITCH_EVENTS.includes(e.name) || e.duration > MAX_PLAUSIBLE) continue; // interactions only: no mouseover/pointermove noise
+      if (sw && sw.evs.length < 100) sw.evs.push([e.startTime, e.processingStart - e.startTime]); // switch marks: worst slow-input delay
       keep({
         k: 'event', t: t0(e), type: e.name, d: r(e.duration), delay: r(e.processingStart - e.startTime),
         proc: r(e.processingEnd - e.processingStart), pres: r(e.startTime + e.duration - e.processingEnd), tgt: kindOf(e.target),
@@ -690,11 +895,17 @@ export function installHitchRecorder(env: HitchEnv): { mode: string } | null {
     }
   };
   try {
-    if (mode === 'loaf') new PO(onFrames).observe({ type: 'long-animation-frame', buffered: true });
-    else new PO(onTasks).observe({ type: 'longtask', buffered: true });
-    if (supported.includes('event')) new PO(onEvents).observe({ type: 'event', durationThreshold: 104 });
+    if (mode === 'loaf') { frameObs = new PO(onFrames); frameObs.observe({ type: 'long-animation-frame', buffered: true }); }
+    else { frameObs = new PO(onTasks); frameObs.observe({ type: 'longtask', buffered: true }); }
+    if (supported.includes('event')) { evObs = new PO(onEvents); evObs.observe({ type: 'event', durationThreshold: 104 }); }
   } catch { return { mode: 'none' }; }
   env.window.addEventListener('pagehide', flush);
+  try {
+    env.document.addEventListener?.('yc:switch', swHeard);
+    env.document.addEventListener?.('yc:switch-term', swTermDrained);
+    env.document.addEventListener?.('yc:switch-none', swNoSession);
+    env.document.addEventListener?.('visibilitychange', swVisibility);
+  } catch { /* ignore */ }
   // One-shot, 10 s after load: the app's own yc:* marks and first paint, once per window.
   env.setTimeout(() => {
     if (startupSent) return;
@@ -715,6 +926,10 @@ if (process.env.YOUCODED_HITCH_LOG !== '0') {
       PerformanceObserver, perf: performance, document, window, now: () => Date.now(),
       setTimeout: (f, ms) => setTimeout(f, ms),
       send: (batch) => ipcRenderer.send(IPC.PERF_HITCH_BATCH, batch),
+      raf: (f) => (typeof requestAnimationFrame === 'function' ? requestAnimationFrame(f) : setTimeout(f, 16)),
+      cancelRaf: (h) => { if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(h as number); else clearTimeout(h as any); },
+      clearTimeout: (h) => clearTimeout(h as any),
+      MutationObserver: typeof MutationObserver === 'function' ? MutationObserver : undefined,
       mode: new URLSearchParams(location.search).get('mode'),
       base: location.href.split(/[?#]/)[0].replace(/[^/]*$/, ''),
     });

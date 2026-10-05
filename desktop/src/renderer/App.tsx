@@ -3,7 +3,8 @@
 // Must run before any TerminalView mounts (which call registerTerminal).
 import { guardDirtyEditor } from './components/artifact-views/dirty-editor-guard';
 import './bootstrap/terminal-bridge';
-import React, { useState, useEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
+import { announceSwitch, announceNoSession, noteSwitchIntent } from './state/switch-marks';
 import { SessionTerminal } from './components/SessionTerminal';
 import ChatView from './components/ChatView';
 import PendingHandoffView from './components/PendingHandoffView';
@@ -1129,6 +1130,7 @@ function AppInner() {
   useEffect(() => {
     const off = window.claude?.buddy?.onFocusSession?.((sid: string) => {
       if (sessionsRef.current.some((s: any) => s.id === sid)) {
+        noteSwitchIntent('other'); // switch marks: the buddy window asked for this one
         setSessionId(sid);
         // Notify Android/remote bridge so the native terminal view switches too
         (window as any).claude?.session?.switch?.(sid);
@@ -2810,6 +2812,29 @@ function AppInner() {
   useEffect(() => {
     document.documentElement.dataset.viewMode = currentViewMode;
   }, [currentViewMode]);
+
+  // SWITCH MARKS (2026-10-05): tell the hitch recorder every time the active session changes, so it can time the switch
+  // (state/switch-marks.ts, docs/hitch-recorder.md). WHY a LAYOUT effect: it runs in the same commit that makes the new pane the
+  // visible one, i.e. before the browser's next frame — the recorder's "first frame" is counted from here. WHY here and not in the
+  // callers: sessionId is set from ~15 places (pill, menu, keys, session created/closed, buddy, adoption); this is the one
+  // place they all reach. It reads state only inside the effect body (no new subscription, no re-render); the first selection
+  // (null -> a session) is remembered but not recorded, and no session at all ends a switch still in flight.
+  const prevSwitchSessionRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const prev = prevSwitchSessionRef.current;
+    prevSwitchSessionRef.current = sessionId;
+    if (prev === sessionId) return;
+    if (!sessionId) { announceNoSession(); return; }
+    // `sessions` of THIS render, not sessionsRef (a passive effect refreshes that one later, so a just-created session would read stale).
+    const provider = sessions.find((s: any) => s.id === sessionId)?.provider;
+    announceSwitch({
+      sessionId, record: prev !== null, viewMode: currentViewMode,
+      kind: provider === 'native' ? 'native' : provider === 'shell' ? 'shell' : 'claude',
+      streaming: !!chatStore.getState().get(sessionId)?.isThinking,
+      sessionCount: sessions.length,
+    });
+    // sessions/currentViewMode are read, not triggers: a chat/terminal toggle or a list change is not a session switch.
+  }, [sessionId]);
 
   // Auto-dismiss: the hint has done its job the moment the user is back in chat.
   // Keyed on the view rather than on the toggle's own click so the keyboard

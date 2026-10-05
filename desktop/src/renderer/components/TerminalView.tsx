@@ -8,6 +8,7 @@ import { usePtyOutput } from '../hooks/useIpc';
 import { usePtyRawBytes } from '../hooks/usePtyRawBytes';
 import { usePtyReset } from '../hooks/usePtyReset';
 import { createTerminalFeeder, type TerminalFeeder } from '../hooks/terminal-feeder';
+import { noteTerminalShown } from '../state/switch-marks';
 import { registerTerminal, unregisterTerminal, notifyBufferReady, noteAtlasClear } from '../hooks/terminal-registry';
 import { createTerminalKeyHandler } from './terminal-key-handler';
 import { attachRenderPause, type RenderPause } from './xterm-render-pause';
@@ -551,7 +552,15 @@ function TerminalView({ sessionId, visible }: Props) {
   useLayoutEffect(() => {
     renderPauseRef.current?.setHidden(!visible);
     // Shown again: write whatever the hidden-terminal allowance held back, so it is current at once.
-    if (visible) { feederRef.current?.feeder.wake(); updateThumbRef.current?.(); }
+    if (visible) {
+      // SWITCH MARKS: how much the hidden backlog held, so the hitch recorder can report it, and a way to be told when xterm has
+      // parsed it all (an empty write is queued behind what wake() just wrote). Parked for the App's switch announcement in the
+      // same commit; a show that is not a session switch (the chat/terminal toggle) simply drops it. No work if no switch follows.
+      const owed = feederRef.current?.feeder.queued() ?? 0;
+      feederRef.current?.feeder.wake();
+      noteTerminalShown(owed, (cb) => { try { terminalRef.current?.write('', cb); } catch { /* terminal gone */ } });
+      updateThumbRef.current?.();
+    }
   }, [visible]);
 
   // Visibility toggle side effects.

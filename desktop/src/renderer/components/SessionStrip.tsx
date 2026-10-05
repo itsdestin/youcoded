@@ -1,5 +1,6 @@
 import React, { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
+import { noteSwitchIntent, type SwitchCause } from '../state/switch-marks';
 import { SessionStatusColor, STATUS_LABEL } from './StatusDot';
 import { Button, Toggle, Tooltip } from './ui';
 import { getCapabilities, isAndroid } from '../platform';
@@ -345,12 +346,22 @@ function blankDragImage(): HTMLCanvasElement {
 /* ── Main component ──────────────────────────────────────── */
 
 export default function SessionStrip({
-  sessions: sourceSessions, activeSessionId, onSelectSession,
+  sessions: sourceSessions, activeSessionId, onSelectSession: selectSession,
   onCreateSession, onCloseSession, sessionStatuses,
   onOpenResumeBrowser, onReorderSessions,
   defaultModel, defaultStartModel, defaultSkipPermissions, defaultProjectFolder,
   windowDirectory, myWindowId,
 }: Props) {
+  // SWITCH MARKS (2026-10-05): every user-driven switch from this strip says WHY and WHEN before it selects, so the hitch recorder
+  // can start its clock at the input event itself (state/switch-marks.ts). A press on the already-active session is not a switch
+  // and notes nothing (otherwise its stale timestamp would be blamed for the next, unrelated switch). A ref keeps this callback's
+  // identity stable across switches.
+  const activeIdRef = useRef(activeSessionId);
+  activeIdRef.current = activeSessionId;
+  const onSelectSession = useCallback((id: string, cause: SwitchCause = 'pill', ev?: { timeStamp?: number }) => {
+    if (id !== activeIdRef.current) noteSwitchIntent(cause, ev);
+    selectSession(id);
+  }, [selectSession]);
   const sourceNames = useMemo(() => Object.fromEntries(sourceSessions.map((s) => [s.id, s.name])), [sourceSessions]);
   const previewNames = useRenamedSessions(sourceNames);
   const sessions = useMemo(() => sourceSessions.map((s) => previewNames[s.id] === undefined
@@ -687,7 +698,7 @@ export default function SessionStrip({
           shiftNavActive.current = false;
           setShiftNavIdx(idx => {
             if (idx >= 0 && idx < sessions.length) {
-              onSelectSession(sessions[idx].id);
+              onSelectSession(sessions[idx].id, 'key', e);
             }
             return -1;
           });
@@ -942,7 +953,7 @@ export default function SessionStrip({
       const originLeft = first ? first.getBoundingClientRect().left : barRect.left + 6;
       pillRectsRef.current = layoutRects(visible.map(x => ({ id: x.id, width: widthOf(x.id) })), originLeft, PILL_GAP);
     }
-    if (selectsNow) onSelectSession(sessionId);
+    if (selectsNow) onSelectSession(sessionId, 'pill', e);
 
     // Measure where in the pill the cursor landed. Used when the live-detach
     // spawns a new window: we offset that window's screen position so the
@@ -1569,9 +1580,9 @@ export default function SessionStrip({
     return entries;
   }, [pillMenu, sessions.length, windowDirectory, myWindowId]);
 
-  const handleClick = useCallback((id: string) => {
+  const handleClick = useCallback((id: string, ev?: { timeStamp?: number }) => {
     if (suppressClick.current) return;
-    onSelectSession(id);
+    onSelectSession(id, 'pill', ev);
   }, [onSelectSession]);
 
   const pillElement = (id: string) =>
@@ -2050,7 +2061,7 @@ export default function SessionStrip({
                 onPointerDown={(e) => handlePointerDown(e, s.id, true)}
                 onPointerMove={handlePointerMove}
                 onPointerUp={handlePointerUp}
-                onClick={() => handleClick(s.id)}
+                onClick={(e) => handleClick(s.id, e)}
                 onContextMenu={(e) => handlePillContextMenu(e, s.id)}
                 // 'html-drag' only (Linux/Wayland): the browser starts a native
                 // drag from the press. Everywhere else the pointer path owns
@@ -2427,13 +2438,13 @@ export default function SessionStrip({
                       role="button"
                       tabIndex={0}
                       aria-label={s.name}
-                      onClick={() => { if (!suppressClick.current) { onSelectSession(s.id); setMenuOpen(false); } }}
+                      onClick={(e) => { if (!suppressClick.current) { onSelectSession(s.id, 'menu', e); setMenuOpen(false); } }}
                       onKeyDown={(e) => {
                         if (e.key !== 'Enter' && e.key !== ' ') return;
                         // Space scrolls the menu otherwise, and Enter would
                         // fall through to whatever else is listening.
                         e.preventDefault();
-                        if (!suppressClick.current) { onSelectSession(s.id); setMenuOpen(false); }
+                        if (!suppressClick.current) { onSelectSession(s.id, 'menu', e); setMenuOpen(false); }
                       }}
                       className="flex-1 text-left pl-1 pr-1.5 py-1.5 flex items-center min-w-0 cursor-pointer"
                     >

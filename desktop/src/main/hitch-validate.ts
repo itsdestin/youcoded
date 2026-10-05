@@ -25,8 +25,25 @@ type CleanEntry =
   | { k: 'frame'; t: number; d: number; b: number; sl: number; rd: number; inp: boolean; sc: CleanScript[]; ctx: CleanCtx }
   | { k: 'task'; t: number; d: number; ctx: CleanCtx }
   | { k: 'event'; t: number; type: string; d: number; delay: number; proc: number; pres: number; tgt: string; ctx: CleanCtx };
+// SWITCH MARKS (2026-10-05): one line per session switch. Kept in its OWN array (batch.sw), not in `entries`, because a switch has
+// no duration of its own to rate-limit by and has its own, more generous, per-minute cap (see hitch-recorder.ts). EVERY string is an
+// enum from this file; there is no free-text slot, so no session id/name/path can reach the line — the window uses the session id
+// only to find the pane in memory and never sends it.
+export const SWITCH_CAUSES = ['pill', 'menu', 'key', 'drawer', 'auto', 'other'] as const;
+const SWITCH_VIEWS = new Set(['chat', 'terminal']);
+const SWITCH_KINDS = new Set(['claude', 'native', 'shell']);
+const SWITCH_ENDS = new Set(['settled', 'streaming', 'cap', 'interrupted', 'hidden', 'closed']);
+export const MAX_SWITCHES_PER_BATCH = 100;
+export interface CleanSwitch {
+  t: number; cause: string; vm: string; dk: string; str: boolean; cold: boolean; open: number;
+  ff: number | null; st: number | null; end: string; e1: number | null; e2: number | null; mut: number;
+  ls: number; lsv: number; loaf: number; loafMs: number; ind: number | null; gap: number | null; drain: number | null;
+}
 export interface CleanBatch {
   mode: 'loaf' | 'longtask' | 'none';
+  sw: CleanSwitch[];
+  /** Switch lines the window itself dropped over its own per-minute cap. */
+  swOver: number;
   /** 'main' for ordinary windows, else one of the three buddy window kinds. */
   kind: string;
   entries: CleanEntry[];
@@ -100,6 +117,32 @@ function cleanEntry(x: unknown, now: number): CleanEntry | null {
   return null;
 }
 
+/** An integer within range, or null (a missing measurement is null, never 0 — a zero would read as "instant"). */
+const intOrNull = (x: unknown, hi: number): number | null => (x === null || x === undefined ? null : int(x, 0, hi) ?? null);
+
+/** One switch line, or null when it is malformed. Unknown enum values reject the line (they are never copied or defaulted
+ *  into something that looks valid), except `cause`, where an unknown value is honestly "other". */
+function cleanSwitch(x: unknown, now: number): CleanSwitch | null {
+  if (!isObj(x)) return null;
+  if (typeof x.vm !== 'string' || !SWITCH_VIEWS.has(x.vm)) return null;
+  if (typeof x.dk !== 'string' || !SWITCH_KINDS.has(x.dk)) return null;
+  if (typeof x.end !== 'string' || !SWITCH_ENDS.has(x.end)) return null;
+  const cause = typeof x.cause === 'string' && (SWITCH_CAUSES as readonly string[]).includes(x.cause) ? x.cause : 'other';
+  let t = int(x.t, 0, 8.64e15) ?? now;
+  if (t < now - 15 * 60_000 || t > now + 60_000) t = now;
+  const lsv = typeof x.lsv === 'number' && Number.isFinite(x.lsv) && x.lsv >= 0 && x.lsv <= 1000 ? Math.round(x.lsv * 1000) / 1000 : 0;
+  const ff = intOrNull(x.ff, MAX_MS);
+  // `settled` only means something when the switch really settled, and cannot precede the first frame.
+  const st = x.end === 'settled' ? intOrNull(x.st, MAX_MS) : null;
+  return {
+    t, cause, vm: x.vm, dk: x.dk, str: x.str === true, cold: x.cold === true, open: int(x.open, 0, 10_000) ?? 0,
+    ff, st: st !== null && ff !== null && st < ff ? ff : st, end: x.end,
+    e1: intOrNull(x.e1, 5_000_000), e2: intOrNull(x.e2, 5_000_000), mut: int(x.mut, 0, 1e7) ?? 0,
+    ls: int(x.ls, 0, 1e6) ?? 0, lsv, loaf: int(x.loaf, 0, 1e5) ?? 0, loafMs: int(x.loafMs, 0, 3_600_000) ?? 0,
+    ind: intOrNull(x.ind, MAX_MS), gap: intOrNull(x.gap, 3_600_000), drain: intOrNull(x.drain, 1e9),
+  };
+}
+
 /** The whole batch, or null when it is not a batch at all. */
 export function validateBatch(raw: unknown, now: number): CleanBatch | null {
   if (!isObj(raw) || raw.v !== 1) return null;
@@ -115,9 +158,17 @@ export function validateBatch(raw: unknown, now: number): CleanBatch | null {
       if (c) entries.push(c); else rejected++;
     }
   }
+  const sw: CleanSwitch[] = [];
+  if (Array.isArray(raw.sw)) {
+    if (raw.sw.length > MAX_SWITCHES_PER_BATCH) rejected += raw.sw.length - MAX_SWITCHES_PER_BATCH;
+    for (const e of raw.sw.slice(0, MAX_SWITCHES_PER_BATCH)) {
+      const c = cleanSwitch(e, now);
+      if (c) sw.push(c); else rejected++;
+    }
+  }
   const t = isObj(raw.tally) ? raw.tally : {};
   const tally = { f: int(t.f, 0, 1e7) ?? 0, fms: int(t.fms, 0, 1e10) ?? 0, over: int(t.over, 0, 1e7) ?? 0, oms: int(t.oms, 0, 1e10) ?? 0 };
-  const out: CleanBatch = { mode, kind, entries, tally, dropped: int(raw.dropped, 0, 1e7) ?? 0, rejected };
+  const out: CleanBatch = { mode, kind, entries, sw, swOver: int(raw.swOver, 0, 1e7) ?? 0, tally, dropped: int(raw.dropped, 0, 1e7) ?? 0, rejected };
   if (isObj(raw.startup) && isObj(raw.startup.marks)) {
     const marks: Record<string, number> = {};
     let n = 0;
