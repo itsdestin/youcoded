@@ -48,6 +48,7 @@ function AuthScreen({
   onChatGpt,
   onOpenRouter,
   onApiKey,
+  onCancel,
 }: {
   authMode: FirstRunState['authMode'];
   onOAuth: () => void;
@@ -62,6 +63,9 @@ function AuthScreen({
   onApiKey: (key: string, service: KeyService) => void;
   // S-1: Claude Code installs after "Log in with Claude", not before the screen.
   claudeInstalling: boolean;
+  // The wait screen's way back (Destin, 2026-10-03): without it, changing your mind after
+  // pressing a sign-in button meant restarting the app.
+  onCancel: () => void;
 }) {
   const [localOpen, setLocalOpen] = useState(authMode === 'local');
   // Round 3 review (A-7): the API key opens its own page, like Use a local model.
@@ -107,6 +111,7 @@ function AuthScreen({
           <BrailleSpinner size="sm" />
           <span>A browser window should have opened. Finish signing in to {where} there…</span>
         </div>
+        <Button variant="ghost" onClick={onCancel}>Cancel</Button>
       </div>
     );
   }
@@ -128,31 +133,6 @@ function AuthScreen({
       <p className="text-xs text-fg-muted text-center leading-relaxed">
         With your permission, the assistant may create, change, or delete files on your device.
         Create backups for anything you cannot replace.
-      </p>
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/*  DevModeScreen                                                     */
-/* ------------------------------------------------------------------ */
-
-function DevModeScreen({ onEnable }: { onEnable: () => void }) {
-  return (
-    <div className={`${CARD_LEVEL_1} w-full p-5 flex flex-col items-center gap-4 text-center`}>
-      <p className="text-sm text-fg leading-relaxed">
-        Windows Developer Mode allows YouCoded to create symbolic links, which
-        the toolkit uses for configuration files. This is a one-time system setting.
-      </p>
-      <Button onClick={onEnable} className="px-5 py-2.5 rounded-full">
-        Enable Developer Mode
-      </Button>
-      <p className="text-xs text-fg-muted leading-relaxed">
-        If the button doesn't work, open{' '}
-        <span className="font-mono text-fg-dim">
-          Settings &gt; Update &amp; Security &gt; For Developers
-        </span>{' '}
-        and enable Developer Mode manually, then click retry.
       </p>
     </div>
   );
@@ -287,6 +267,10 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
     (window as any).claude.firstRun.startAuth('chatgpt');
   }, []);
 
+  const handleCancelAuth = useCallback(() => {
+    (window as any).claude.firstRun.cancelAuth?.();
+  }, []);
+
   const handleOpenRouter = useCallback(() => {
     (window as any).claude.firstRun.startAuth('openrouter');
   }, []);
@@ -296,9 +280,6 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
   const handleApiKey = useCallback((key: string, service: KeyService) => {
     (window as any).claude.firstRun.submitApiKey(key, service);
   }, []);
-  const handleDevMode = useCallback(() => {
-    (window as any).claude.firstRun.devModeDone();
-  }, []);
 
   const launching =
     state?.currentStep === 'LAUNCH_WIZARD' || state?.currentStep === 'COMPLETE';
@@ -306,7 +287,9 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
   // The prerequisites this install actually works through. Round 3 review (B-9): Claude
   // Code's on-demand install is shown on the sign-in card, never counted here, and a
   // waiting/skipped Claude Code would never move (Q-5).
-  const steps = (state?.prerequisites ?? []).filter((p) => !(p.name === 'claude' && (state?.currentStep === 'AUTHENTICATE' || p.status === 'waiting' || p.status === 'skipped')));
+  // Node.js joined Claude Code here (Destin, 2026-10-02): it installs with Claude Code now,
+  // so it counts only on a machine that already has it or is installing it.
+  const steps = (state?.prerequisites ?? []).filter((p) => !((p.name === 'claude' || p.name === 'node') && (state?.currentStep === 'AUTHENTICATE' || p.status === 'waiting' || p.status === 'skipped')));
   const activeAt = steps.findIndex((p) => p.status === 'installing' || p.status === 'checking');
   const failed = steps.find((p) => p.status === 'failed');
   const stopped = !!state?.lastError && retryable;
@@ -320,12 +303,14 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
   } else if (state?.currentStep === 'DETECT_PREREQUISITES') {
     line = "Checking what's already on this computer…";
   } else if (state?.currentStep === 'INSTALL_PREREQUISITES') {
-    line = activeAt >= 0 ? `Step ${activeAt + 1} of ${steps.length}` : 'Getting the next piece ready…';
+    // On a Mac, Git arrives with Apple's developer tools, whose own window must be answered
+    // (installGit, 2026-10-02) — the one step where the line has to say what to do.
+    line = activeAt >= 0 && steps[activeAt].name === 'git' && /^Mac/.test(navigator.platform)
+      ? 'If macOS asks to install developer tools, click Install. It can take a few minutes.'
+      : activeAt >= 0 ? `Step ${activeAt + 1} of ${steps.length}` : 'Getting the next piece ready…';
   } else if (state?.currentStep === 'AUTHENTICATE') {
     heading = 'Choose how your assistant runs';
     line = 'You can add the others later in Settings.';
-  } else if (state?.currentStep === 'ENABLE_DEVELOPER_MODE') {
-    heading = 'One Windows setting';
   }
   const installing = state?.currentStep === 'DETECT_PREREQUISITES' || state?.currentStep === 'INSTALL_PREREQUISITES';
 
@@ -361,12 +346,9 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
                 onChatGpt={handleChatGpt}
                 onOpenRouter={handleOpenRouter}
                 onApiKey={handleApiKey}
+                onCancel={handleCancelAuth}
                 claudeInstalling={state.prerequisites.some((p) => p.name === 'claude' && p.status === 'installing')}
               />
-            )}
-
-            {state?.currentStep === 'ENABLE_DEVELOPER_MODE' && (
-              <DevModeScreen onEnable={handleDevMode} />
             )}
 
             {/* E-2: a failure is the app's standard error card — one plain sentence and

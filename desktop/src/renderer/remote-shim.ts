@@ -9,7 +9,7 @@ import type { RemoteBridge } from '../shared/bridge-types';
 
 // ── Marketplace types re-declared locally ─────────────────────────────────────
 // WHY: remote-shim.ts lives in renderer/ and cannot import from main/ (Node.js
-import { REMOTE_UNSUPPORTED_EVENT, hasFeatureName, remoteFeatureName, remoteUnsupportedMessage } from './remote-unsupported';
+import { REMOTE_UNSUPPORTED_EVENT, hasFeatureName, remoteFeatureName, remoteUnsupportedMessage, saidInPlace } from './remote-unsupported';
 import { REMOTE_RECONNECTED_EVENT } from './remote-events';
 // The phone's own runtime while paired: localBridgeUrl + invokeLocalBridge (WHY there).
 import { localBridgeUrl, invokeLocalBridge } from './android-local-bridge';
@@ -455,6 +455,8 @@ export const MESSAGE_KIND: Readonly<Record<string, 'user-action' | 'read' | 'tra
   'handoff:retry': 'user-action', 'handoff:saved-copy': 'user-action', 'handoff:force': 'user-action',
   'handoff:cancel': 'user-action', 'handoff:create-params': 'user-action',
   'session:input': 'user-action',
+  // A screen verdict, true only while connected — never replayed later.
+  'session:input-blocked': 'transport',
   'session:resize': 'read',
   'session:terminal-ready': 'transport',
   'native:interrupt': 'user-action',
@@ -742,6 +744,12 @@ export const REJECT_ON_NOT_OK: ReadonlySet<string> = new Set([
   'models:settings', 'models:set-settings', 'models:add-vision',
   'native:get-step-guard', 'native:set-step-guard',
   'native:get-context-preferences', 'native:set-context-preferences',
+  // Document comments watch/unwatch (T3, design §1.6): new channels with no
+  // existing caller convention to match (unlike artifacts:watch-project,
+  // whose caller already tolerates {ok:false} itself). A failed watch must
+  // reject to the comments pane's catch, never resolve as an ordinary value
+  // it could misread as "subscribed, no changes yet" (review 1, F10).
+  'docComments:watch', 'docComments:unwatch',
 ]);
 
 /** What a `<channel>:response` payload MEANS, as one pure decision.
@@ -771,6 +779,8 @@ function noteUnsupported(channel: string): void {
     console.warn(`[remote-shim] not available over remote access (unnamed): ${channel}`);
     return;
   }
+  // WHY: Office says this very sentence in its own pane (Task 5 fix round 2), so no toast.
+  if (saidInPlace(channel)) { console.warn(`[remote-shim] not available here (said in place): ${channel}`); return; }
   const feature = remoteFeatureName(channel);
   if (announced.has(feature)) return;
   announced.add(feature);
@@ -1104,6 +1114,13 @@ function handleMessage(data: string, generation: number): void {
       break;
     case 'git:changed':
       dispatchEvent('git:changed', payload);
+      break;
+    case 'docComments:changed':
+      // Document comments (T3): {path} of the source file whose comments
+      // changed — client re-lists, no diff payload (design §1.6). Un-filtered
+      // broadcast (§1.5 "Broadcast scope"): a window not showing that path
+      // ignores it cheaply, same as pages:changed above.
+      dispatchEvent('docComments:changed', payload);
       break;
     case 'specialists:event':
       // Task 8 — push-only (see ipc-handlers.ts's nativeHost.on('specialists-
@@ -1952,6 +1969,7 @@ export function installShim(): void {
       forgetReopen: (ids: string[]) => invoke('session:forget-reopen', { ids }),
       canSend: () => ws?.readyState === WebSocket.OPEN && connectionState === 'connected',
       sendInput: (sessionId: string, text: string) => fire('session:input', { sessionId, text }),
+      reportInputBlocked: (sessionId: string, blocked: boolean) => fire('session:input-blocked', { sessionId, blocked }),
       resize: (sessionId: string, cols: number, rows: number) => fire('session:resize', { sessionId, cols, rows }),
       signalReady: (sessionId: string) => fire('session:terminal-ready', { sessionId }),
       // Tracked while in flight so the host's resolution of THIS answer is not shown as
@@ -2565,6 +2583,46 @@ export function installShim(): void {
       // the redacted answer crosses the socket.
       fetch: (id: string, request: unknown) => invoke('pages:fetch', { id, request }),
     },
+    // Document comments (T3, design docs/active/specs/2026-09-26-doc-comments-
+    // build-design.md §1.6) — mirrors preload.ts's docComments namespace
+    // exactly (core parity invariant: SAME shared window.claude shape).
+    docComments: {
+      list: (filePath: string, projectRoot?: string) => invoke('docComments:list', { path: filePath, projectRoot }),
+      // `id` (F4, T5 review): mirrors preload.ts — the renderer mints the
+      // comment id, main uses it instead of minting its own.
+      add: (filePath: string, selector: unknown, text: string, author: string, projectRoot?: string, id?: string) =>
+        invoke('docComments:add', { path: filePath, selector, text, author, projectRoot, id }),
+      reply: (filePath: string, id: string, text: string, author: string, projectRoot?: string) =>
+        invoke('docComments:reply', { path: filePath, id, text, author, projectRoot }),
+      resolve: (filePath: string, id: string, by: string, projectRoot?: string) =>
+        invoke('docComments:resolve', { path: filePath, id, by, projectRoot }),
+      reopen: (filePath: string, id: string, by: string, projectRoot?: string) =>
+        invoke('docComments:reopen', { path: filePath, id, by, projectRoot }),
+      move: (filePath: string, id: string, newSelector: unknown, projectRoot?: string) =>
+        invoke('docComments:move', { path: filePath, id, newSelector, projectRoot }),
+      // Edit/delete build (2026-09-28, design doc §"Edit and delete") —
+      // mirrors preload.ts exactly.
+      edit: (filePath: string, id: string, text: string, projectRoot?: string) =>
+        invoke('docComments:edit', { path: filePath, id, text, projectRoot }),
+      editReply: (filePath: string, id: string, replyId: string, text: string, projectRoot?: string) =>
+        invoke('docComments:edit-reply', { path: filePath, id, replyId, text, projectRoot }),
+      delete: (filePath: string, id: string, projectRoot?: string) =>
+        invoke('docComments:delete', { path: filePath, id, projectRoot }),
+      deleteReply: (filePath: string, id: string, replyId: string, projectRoot?: string) =>
+        invoke('docComments:delete-reply', { path: filePath, id, replyId, projectRoot }),
+      // REJECT_ON_NOT_OK below (new channels, no existing caller tolerates
+      // {ok:false} itself — review 1, F10): a failed watch must reach the
+      // caller's catch, never resolve as a value a comments pane could
+      // misread as "subscribed, no changes yet".
+      watch: (filePath: string, projectRoot?: string) => invoke('docComments:watch', { path: filePath, projectRoot }),
+      unwatch: (filePath: string, projectRoot?: string) => invoke('docComments:unwatch', { path: filePath, projectRoot }),
+      // `projectRoot` (F3, T5 review): mirrors preload.ts's onChanged shape.
+      onChanged: (cb: (evt: { path: string; projectRoot?: string }) => void) => {
+        const handler: Callback = (evt: any) => cb(evt);
+        addListener('docComments:changed', handler);
+        return () => removeListener('docComments:changed', handler);
+      },
+    },
     git: {
       fileStatus: (projectRoot: string, relPath: string) =>
         invoke('git:file-status', { projectRoot, relPath }),
@@ -2585,6 +2643,21 @@ export function installShim(): void {
         addListener('git:changed', handler);
         return () => removeListener('git:changed', handler);
       },
+    },
+    // Office is desktop only (R28). WHY every member routes through invoke(): the host has no handler, so the
+    // call is refused ("Office isn't available via remote access yet.") — not a "not a function" crash.
+    // No onUnsavedPrompt: the quit gate is the desktop window's own (unsaved-quit.ts). onChanged never fires (restore is refused).
+    office: {
+      status: (projectRoot: string | null) => invoke('office:status', { projectRoot }),
+      create: (kind: string, projectRoot: string | null) => invoke('office:create', { kind, projectRoot }),
+      pick: () => invoke('office:pick'),
+      open: (filePath: string) => invoke('office:open', { path: filePath }),
+      invoke: (token: string, cmd: string, args: unknown) => invoke('office:invoke', { token, cmd, args }),
+      close: (token: string) => invoke('office:close', { token }),
+      versions: (filePath: string) => invoke('office:versions', { path: filePath }),
+      restore: (filePath: string, versionId: string) => invoke('office:restore', { path: filePath, versionId }),
+      onChanged: (cb: (p: { path: string; token: string }) => void) => { const h: Callback = (p: any) => cb(p); addListener('office:changed', h); return () => removeListener('office:changed', h); },
+      saveCopy: (token: string, mode: string, data?: string) => invoke('office:save-copy', { token, mode, data }),
     },
     // Project View IPC — sibling to artifacts. Object-payload invoke style
     // mirrors the artifacts namespace above; the literal 'project:*' channel
@@ -2727,7 +2800,7 @@ export function installShim(): void {
       // Same widened type as preload's (FirstRunState['authMode']); still a no-op here.
       startAuth: (_mode: FirstRunState['authMode']) => Promise.resolve(),
       submitApiKey: (_key: string, _service?: string) => Promise.resolve(),
-      devModeDone: () => Promise.resolve(),
+      cancelAuth: () => Promise.resolve(),
       skip: () => Promise.resolve(),
       // First-run local models (2026-09-14). First-run never shows here, and the
       // band above the message box describes the HOST's first download, which a
@@ -2882,6 +2955,7 @@ export function installShim(): void {
       // throwing would spam the console if a buddy surface ever loaded
       // remote-shim. The on* listeners return no-op unsubscribers.
       dragEnded: () => { /* desktop-only */ },
+      mascotHit: () => { /* desktop-only — fires from pointer moves, so never throws */ },
       openMain: () => { throw new Error('Buddy is desktop-only in this version'); },
       dismiss: () => { throw new Error('Buddy is desktop-only in this version'); },
       getStatus: () => { throw new Error('Buddy is desktop-only in this version'); },
@@ -2954,6 +3028,7 @@ export function installShim(): void {
       send: (sessionId: string, text: string, attachments?: string[]) => invoke('native:send', { sessionId, text, attachments }),
       // Task 11: cancel/edit a queued message — request/response (mirrors preload.ts).
       queueRemove: (sessionId: string, queueId: string) => invoke('native:queue-remove', { sessionId, queueId }),
+      queueSendNow: (sessionId: string, queueId: string) => invoke('native:queue-send-now', { sessionId, queueId }),
       // Fire-and-forget: no response expected
       interrupt: (sessionId: string) => fire('native:interrupt', { sessionId }),
       // Fire-and-forget like interrupt above — the stalled card needs no answer.

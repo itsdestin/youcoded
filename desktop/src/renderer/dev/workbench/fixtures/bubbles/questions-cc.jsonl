@@ -1,0 +1,4 @@
+{"type":"user_message","text":"Help me make two choices for the room."}
+{"type":"assistant_text","text":"Which look should I use?"}
+{"type":"tool_use","id":"d4-cc-ask","name":"AskUserQuestion","input":{"questions":[{"question":"What color for the walls?","header":"Walls","multiSelect":false,"options":[{"label":"Blue","description":"Calm and bright"},{"label":"Red","description":"Warm and bold"}]},{"question":"What color for the trim?","header":"Trim","multiSelect":false,"options":[{"label":"Green","description":"Natural contrast"},{"label":"Yellow","description":"Sunny accent"}]}]}}
+{"type":"permission_request","tool_use_id":"d4-cc-ask","requestId":"cc-d4-visual"}

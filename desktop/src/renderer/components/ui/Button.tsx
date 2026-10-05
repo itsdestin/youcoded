@@ -13,7 +13,7 @@ import React from 'react';
  * don't get reintroduced as "improvements".
  */
 
-export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'danger-outline' | 'on-accent' | 'raised';
+export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'danger-outline' | 'on-accent' | 'raised' | 'toggle';
 export type ButtonSize = 'sm' | 'md' | 'lg' | 'xl' | 'icon' | 'icon-sm' | 'icon-xs';
 
 /** The one focus ring — every interactive control shares it (design rule 4),
@@ -82,6 +82,10 @@ const BUTTON_VARIANT: Record<ButtonVariant, string> = {
   // thumbnail): a solid panel fill and outline so it stays visible over any image.
   // Added 2026-09-16 — the attachment chip hand-restyled a ghost button into this.
   raised: 'bg-panel border border-edge text-fg-2 hover:bg-edge',
+  // ghost that can be ON (aria-pressed): a formatting toggle like Bold in the
+  // Office slim bar. Added 2026-09-28 — the bar hand-restyled ghost for its on
+  // state. On = the hover fill held, so on and hovered read as one step apart.
+  toggle: 'text-fg-dim hover:text-fg hover:bg-inset active:bg-edge aria-pressed:bg-inset aria-pressed:text-fg',
 };
 
 /** sm  — inline row actions (EngineCard, provider rows, chips)

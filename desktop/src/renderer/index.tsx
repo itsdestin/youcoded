@@ -33,8 +33,12 @@ performance.mark('yc:modules-evaluated');
 // plain ?mode=workbench tab on the same port. Dev-only, and the deck always passes a theme.)
 const __liveQuery = new URLSearchParams(location.search);
 const __liveTheme = __liveQuery.get('theme');
-if (__liveTheme && __liveQuery.get('mode') === 'workbench'
-    && __liveQuery.get('child') === '1' && __liveQuery.get('view') === 'live') {
+// A deck's real-app pane ({"app": …}) carries theme + scenario but no view=live — it
+// must obey its theme too, or it wears whatever theme that browser last stored for
+// this port (2026-09-26: Destin's panes stayed on a broken Meadow Mist after the deck
+// was pinned to Midnight).
+if (__liveTheme && __liveQuery.get('mode') === 'workbench' && __liveQuery.get('child') === '1'
+    && (__liveQuery.get('view') === 'live' || __liveQuery.has('scenario'))) {
   try { localStorage.setItem('youcoded-theme', __liveTheme); } catch { /* private mode */ }
 }
 

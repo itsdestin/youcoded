@@ -32,7 +32,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from 'vitest';
-import { render, screen, cleanup, waitFor, act } from '@testing-library/react';
+import { render, screen, cleanup, waitFor, act, fireEvent } from '@testing-library/react';
 import type { FirstRunState } from '../src/shared/first-run-types';
 import { INITIAL_PREREQUISITES } from '../src/shared/first-run-types';
 
@@ -52,7 +52,7 @@ vi.mock('../src/main/prerequisite-installer', () => ({
   detectNode: vi.fn(), detectGit: vi.fn(), detectClaude: vi.fn(), detectAuth: vi.fn(),
   installNode: vi.fn(), installGit: vi.fn(), installClaude: vi.fn(),
   startOAuthLogin: vi.fn(), pollAuthStatus: vi.fn(), submitApiKey: vi.fn(),
-  checkDiskSpace: vi.fn(), checkWindowsDevMode: vi.fn(), enableWindowsDevMode: vi.fn(),
+  checkDiskSpace: vi.fn(),
 }));
 
 import {
@@ -84,7 +84,8 @@ function fakeAuth(outcome: Outcome, opts: { throwOnSignIn?: string } = {}) {
   const waitForSignIn = vi.fn(async () => outcome);
   // A token-shaped method the wizard must never reach for.
   const accessToken = vi.fn(async () => 'sk-secret-never-read');
-  return { signIn, waitForSignIn, accessToken };
+  const cancelSignIn = vi.fn(async () => true);
+  return { signIn, waitForSignIn, accessToken, cancelSignIn };
 }
 
 function managerAtAuth(): FirstRunManager {
@@ -128,7 +129,7 @@ describe('FirstRunManager.handleChatGptLogin', () => {
     const auth = fakeAuth('signed-in');
     // A failed first attempt leaves a red line on screen; the sign-in that
     // then works must take it away with it (fix 7).
-    await m.handleOpenRouterLogin({ signIn: async () => true, waitForSignIn: async () => 'timed-out' });
+    await m.handleOpenRouterLogin({ signIn: async () => true, waitForSignIn: async () => 'timed-out', cancelSignIn: async () => true });
     expect(m.getState().lastError).toBe('Sign-in timed out. Try again?');
 
     await m.handleChatGptLogin(auth);
@@ -203,6 +204,7 @@ describe('FirstRunManager.handleOpenRouterLogin', () => {
   const auth = (outcome: Awaited<ReturnType<Parameters<FirstRunManager['handleOpenRouterLogin']>[0]['waitForSignIn']>>, throwOnSignIn?: string) => ({
     signIn: vi.fn(async (_o?: { timeoutMs?: number }) => { if (throwOnSignIn) throw new Error(throwOnSignIn); return true; }),
     waitForSignIn: vi.fn(async () => outcome),
+    cancelSignIn: vi.fn(async () => true),
   });
 
   it('signed-in finishes setup on OpenRouter, with the 5-minute window', async () => {
@@ -242,6 +244,53 @@ describe('FirstRunManager.handleOpenRouterLogin', () => {
 // launch after setup). Answering `false` puts the user back on the sign-in
 // screen, and this branch removed the Skip link, so `false` means locked out.
 // ---------------------------------------------------------------------------
+
+// The wait screen's Cancel (Destin, 2026-10-03 VM test: "no way to go back/cancel once i click
+// log in with openrouter"). Cancelling returns to the choices with no error, stops the browser
+// round, and a late answer from the cancelled round changes nothing.
+describe('FirstRunManager.cancelAuth', () => {
+  function pending() {
+    let answer!: (o: Outcome) => void;
+    const waitForSignIn = vi.fn(() => new Promise<Outcome>((r) => (answer = r)));
+    const cancelSignIn = vi.fn(async () => { answer('cancelled'); return true; });
+    return { signIn: vi.fn(async () => true), waitForSignIn, cancelSignIn, answer: (o: Outcome) => answer(o) };
+  }
+
+  it.each(['openrouter', 'chatgpt'] as const)('%s: Cancel puts the sign-in choices back with no error line', async (mode) => {
+    const m = managerAtAuth();
+    const a = pending();
+    const run = mode === 'openrouter' ? m.handleOpenRouterLogin(a) : m.handleChatGptLogin(a);
+    await vi.waitFor(() => expect(a.waitForSignIn).toHaveBeenCalled());
+    expect(m.getState().authMode).toBe(mode);
+    await m.cancelAuth();
+    await run;
+    expect(a.cancelSignIn).toHaveBeenCalledTimes(1);
+    const s = m.getState();
+    expect(s.authMode).toBe('none');
+    expect(s.lastError).toBeUndefined();
+    expect(s.currentStep).toBe('AUTHENTICATE');
+    expect(authPrereq(m).status).toBe('waiting');
+  });
+
+  it('a sign-in that completes after Cancel does not finish setup', async () => {
+    const m = managerAtAuth();
+    const a = pending();
+    a.cancelSignIn.mockImplementation(async () => true); // the browser answers anyway
+    const run = m.handleOpenRouterLogin(a);
+    await vi.waitFor(() => expect(a.waitForSignIn).toHaveBeenCalled());
+    await m.cancelAuth();
+    a.answer('signed-in');
+    await run;
+    expect(m.getState().currentStep).toBe('AUTHENTICATE');
+    expect(m.getState().authMode).toBe('none');
+  });
+
+  it('does nothing when no sign-in is waiting', async () => {
+    const m = managerAtAuth();
+    await m.cancelAuth();
+    expect(m.getState().authMode).toBe('none');
+  });
+});
 
 describe('setupIsUsable', () => {
   /** The three inputs, each defaulting to "no". */
@@ -386,7 +435,6 @@ function viewState(overrides: Partial<FirstRunState>): FirstRunState {
     statusMessage: 'Sign in to continue',
     authMode: 'none',
     authComplete: false,
-    needsDevMode: false,
     ...overrides,
   };
 }
@@ -400,7 +448,7 @@ function stubClaude(opts: {
   const firstRun = {
     getState: vi.fn(async () => opts.state),
     onStateChanged: vi.fn(() => () => {}),
-    startAuth: vi.fn(), submitApiKey: vi.fn(), retry: vi.fn(), devModeDone: vi.fn(),
+    startAuth: vi.fn(), submitApiKey: vi.fn(), retry: vi.fn(), cancelAuth: vi.fn(),
   };
   const catalog = vi.fn(opts.catalog ?? (async () => []));
   (window as any).claude = {
@@ -477,6 +525,14 @@ describe('FirstRunView completion path (authMode chatgpt)', () => {
     expect(localStorage.getItem('youcoded-runtime-default')).toBeNull();
     expect(localStorage.getItem('youcoded-last-binding')).toBeNull();
     expect(catalog).not.toHaveBeenCalled();
+  });
+
+  it('the wait screen offers Cancel, which asks main to stop the sign-in', async () => {
+    const { firstRun } = stubClaude({ state: viewState({ currentStep: 'AUTHENTICATE', authMode: 'openrouter' }) });
+    render(React.createElement(FirstRunView, { onComplete: vi.fn() }));
+    await waitFor(() => expect(screen.getByText(/Finish signing in to OpenRouter/)).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(firstRun.cancelAuth).toHaveBeenCalledTimes(1);
   });
 });
 

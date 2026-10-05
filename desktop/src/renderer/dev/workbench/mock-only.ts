@@ -91,6 +91,14 @@
 // goes. They are deliberately desktop-only, which ipc-channels.test.ts's DESKTOP_ONLY set
 // enforces rather than leaving implicit.
 //
+// The six Office rows (office.status, office.create, office.pick, office.source,
+// office.versions, office.restore) came off 2026-09-28 when the real channels landed
+// (build plan Task 5: main/office/office-ipc.ts, preload, remote-shim, SessionService.kt).
+// office.source did not survive the move: the v2 bridge opens a document with office.open
+// and relays the editor's own requests through office.invoke. status, create, pick,
+// versions and restore are all real in main now; the fake in mock-shim.ts stays so the
+// workbench can still show the start screen and history without a desktop backend.
+//
 // Add a row the moment you design a channel ahead of its backend; delete the row, never the
 // guard, when it ships. An empty list is the healthy state.
 export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
@@ -133,4 +141,15 @@ export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   // and Android's catch-all answers unsupported by design. The fakes in mock-shim.ts stay
   // so the status strip, the too-large card and the Download button stay reviewable
   // without a host.
+  // Doc comments edit/delete (2026-09-28, docs/active/design/2026-09-24-doc-comments/
+  // doc-comments.edit-delete.questions.answers.json): `docComments.edit`, `.editReply`,
+  // `.delete` and `.deleteReply` were designed and built here (CommentCard/
+  // HighlightHoverCard's edit/delete icons, doc-comments-store.ts's editComment/
+  // editReply/deleteComment/deleteReply) ahead of the main-process/Kotlin backend.
+  // GONE (same session, 2026-09-28): the real `docComments:edit`/`docComments:edit-reply`/
+  // `docComments:delete`/`docComments:delete-reply` channels now land on preload,
+  // remote-shim, ipc-handlers and remote-server (plain-text sidecar + docx + xlsx),
+  // with the Kotlin arm following on the same session. The fakes in mock-shim.ts
+  // STAY — the workbench still has no real filesystem or Word/Excel parser — only
+  // the "no real backend" claim goes.
 ];

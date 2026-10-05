@@ -4,6 +4,13 @@ import QuickChips, { QuickChip } from './QuickChips';
 import TerminalToolbar from './TerminalToolbar';
 import { Button } from './ui';
 import { AttachmentChip } from './AttachmentChip';
+// Round 2 (Destin): reference tokens ride INSIDE the draft as invisible
+// markers, with a real pill drawn over each by the mirror layer below — see
+// compose-ref.ts's own header comment for the full WHY. Ported from the
+// "inline & conversational" mockup (session/comments-mock-c).
+import { makeDraftToken, splitDraftTokens, draftTokenRanges, expandDraftTokens, draftRef, dispatchRefHover, jumpToRef, type ComposeRef } from './context-menu/compose-ref';
+import { useOpenFilepath } from '../hooks/useOpenFilepath';
+import { installChatRefHighlight } from './context-menu/chat-ref-highlight';
 import { AttachIcon, CompassIcon } from './Icons';
 import { VoiceButton, VoiceMeter, VoiceStyleContext } from './VoiceButton';
 import { StatusStrip } from './ui/StatusStrip';
@@ -18,7 +25,7 @@ import { isTypingTarget } from '../utils/is-typing-target';
 import { dispatchSlashCommand, type ViewMode } from '../state/slash-command-dispatcher';
 import { runNativeSlashAction, routeSlashResult } from '../state/native-slash-actions';
 import type { UsageSnapshot } from '../state/chat-types';
-import { hasPendingInteraction, pendingInteractionKind, pendingInteractionRefusalCopy } from '../state/pty-input-gate';
+import { sendBlock, pendingInteractionRefusalCopy, waitForMessageBox } from '../state/pty-input-gate';
 import { buildOutgoingMessage } from './outgoing-message';
 import { sendChatMessage } from './native-send';
 import type { NativeSendResult } from '../../shared/types';
@@ -81,7 +88,8 @@ interface Props {
   // Pending-prompt send was refused. App surfaces a "Send anyway" affordance
   // wired to `retry`, which presses ESC (to neutralize any genuinely-live Ink
   // menu) then re-sends bypassing the gate. See sendMessage's gate branch.
-  onSendBlocked?: (retry: () => void) => void;
+  // `block` says what refused it, for the refusal sentence.
+  onSendBlocked?: (retry: () => void, block: NonNullable<ReturnType<typeof sendBlock>>) => void;
   // /copy needs to read assistant turns from session state to extract blocks
   getSessionState?: (sessionId: string) => import('../state/chat-types').SessionChatState | undefined;
   // Bare /model, /fast, /effort open the unified ModelPickerPopup
@@ -164,6 +172,9 @@ function sendFailureCopy(result: NativeSendResult | undefined): string {
 const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId, disabled, sendBlocked, minimal, compact, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, initialAttachments, provider }, ref) {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  // Read by window-event listeners that must not re-subscribe on every change.
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
 
   // Voice prompting (deck 2026-09-05). The draft stays the one source of truth:
   // `text` holds what was typed plus the words the engine has SETTLED on;
@@ -561,30 +572,124 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     return () => window.removeEventListener('youcoded:composer-paste-image', listener);
   }, [addFiles]);
 
-  // External "insert into composer" entry point — the chat right-click menu's
-  // "Ask about this" action dispatches this window CustomEvent with a pre-built
-  // quote + follow-up scaffold. Mirrors buddy:attach-file so no prop threading
-  // is needed. We PREPEND the scaffold and drop the caret right after it, so any
-  // draft the user was already typing survives as the follow-up text.
+  // External "insert a reference token into the composer" entry point
+  // (round 2, ported from session/comments-mock-c — compose-ref.ts has the
+  // full WHY for the marker-in-text approach). The right-click menu's "Ask
+  // about this" ('youcoded:compose-insert', one ref) lands here, appended at
+  // the END of the current draft — never prepended — so typing before/after
+  // a right-click builds the sentence in the order the user actually did it.
+  const insertRefs = useCallback((refs: ComposeRef[]) => {
+    // Display-sized tokens, not full markers — see compose-ref.ts "Draft tokens".
+    const markers = refs.map(makeDraftToken).join(' ');
+    setText((prev) => {
+      const sep = prev.length > 0 && !/\s$/.test(prev) ? ' ' : '';
+      return `${prev}${sep}${markers} `;
+    });
+    requestAnimationFrame(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    });
+  }, []);
+
+  // Chips point back at their source text (Destin, 2026-09-24: "click the
+  // chip and have it focus/highlight the originating text… hover sensitive
+  // as well"). The mirror layer sits UNDER the textarea with pointer events
+  // off, so the pointer is hit-tested against the chips' own rects here.
+  const openFile = useOpenFilepath(sessionId);
+  // Chat-message chips light up their message (one global listener pair).
+  useEffect(() => installChatRefHighlight(), []);
+  const [hoverChipKey, setHoverChipKey] = useState<string | null>(null);
+  const chipKeyAt = useCallback((x: number, y: number): string | null => {
+    const chips = mirrorContentRef.current?.querySelectorAll<HTMLElement>('[data-draft-chip]');
+    if (!chips) return null;
+    for (const chip of chips) {
+      for (const r of chip.getClientRects()) {
+        if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return chip.dataset.draftChip ?? null;
+      }
+    }
+    return null;
+  }, []);
+  const hoverChipKeyRef = useRef<string | null>(null);
+  const updateChipHover = useCallback((key: string | null) => {
+    if (hoverChipKeyRef.current === key) return;
+    hoverChipKeyRef.current = key;
+    setHoverChipKey(key);
+    dispatchRefHover(key ? draftRef(key) : null);
+  }, []);
+
+  // A chip is one object: a click (or any caret move) that lands inside one
+  // snaps to its nearer edge, and a selection that cuts through one grows to
+  // take it whole — so typing can never split a chip into stray invisible
+  // characters. `selectionchange` rather than React's onSelect: the latter
+  // missed programmatic and some pointer-driven caret moves. Cheap when idle:
+  // it returns at once unless this textarea is focused AND holds a chip.
+  useEffect(() => {
+    const onSelectionChange = () => {
+      const ta = inputRef.current;
+      if (!ta || document.activeElement !== ta || !ta.value.includes('⦃')) return;
+      const s0 = ta.selectionStart ?? 0;
+      const e0 = ta.selectionEnd ?? 0;
+      let s1 = s0;
+      let e1 = e0;
+      for (const r of draftTokenRanges(ta.value)) {
+        if (s0 === e0) {
+          if (s0 > r.start && s0 < r.end) s1 = e1 = (s0 - r.start < r.end - s0 ? r.start : r.end);
+        } else {
+          if (s1 > r.start && s1 < r.end) s1 = r.start;
+          if (e1 > r.start && e1 < r.end) e1 = r.end;
+        }
+      }
+      if (s1 !== s0 || e1 !== e0) ta.setSelectionRange(s1, e1);
+    };
+    document.addEventListener('selectionchange', onSelectionChange);
+    return () => document.removeEventListener('selectionchange', onSelectionChange);
+  }, []);
+
   useEffect(() => {
     const listener = (e: Event) => {
-      const insert = (e as CustomEvent<{ text?: string }>).detail?.text;
-      if (!insert) return;
-      setText((prev) => insert + prev);
-      requestAnimationFrame(() => {
-        const el = inputRef.current;
-        if (!el) return;
-        el.focus();
-        el.setSelectionRange(insert.length, insert.length);
-      });
+      const ref = (e as CustomEvent<{ ref?: ComposeRef }>).detail?.ref;
+      if (ref) insertRefs([ref]);
     };
     window.addEventListener('youcoded:compose-insert', listener);
     return () => window.removeEventListener('youcoded:compose-insert', listener);
-  }, []);
+  }, [insertRefs]);
+
+  // Comments mode's "Send to assistant" — ONE system with "Ask about this"
+  // above (same ComposeRef/pill), but this one calls the composer's normal
+  // send path itself rather than waiting for a click: the comments already
+  // carry their own note text via each pill's label, so there is nothing
+  // left for the user to type.
+  useEffect(() => {
+    const listener = (e: Event) => {
+      const detail = (e as CustomEvent<{ lead?: string; refs?: ComposeRef[] }>).detail;
+      if (!detail?.refs?.length) return;
+      // WHY (2026-09-28 PR review): this used to REPLACE the box's text and
+      // send at once, so anything the user was halfway through typing was
+      // silently thrown away. With a draft (or attached files) waiting, the
+      // comments chip is added to it instead and nothing is sent — sending
+      // would also send the unfinished text. The user finishes and presses
+      // Send. An empty box keeps the one-click send.
+      if ((inputRef.current?.value ?? '').trim() || attachmentsRef.current.length > 0) {
+        insertRefs(detail.refs);
+        return;
+      }
+      const markers = detail.refs.map(makeDraftToken).join(' ');
+      setText(`${detail.lead ?? ''} ${markers}`.trim());
+      // A React state update isn't visible to the DOM textarea until the next
+      // paint — send() deliberately reads inputRef.current.value (see its own
+      // WHY) to dodge stale-closure races, so it must run AFTER that paint.
+      requestAnimationFrame(() => sendRef.current(false));
+    };
+    window.addEventListener('youcoded:compose-send-comments', listener);
+    return () => window.removeEventListener('youcoded:compose-send-comments', listener);
+  }, [insertRefs]);
 
   const removeAttachment = useCallback((path: string) => {
     setAttachments((prev) => prev.filter((a) => a.path !== path));
   }, []);
+
 
   // Returns true when the message was consumed (input can clear), false when
   // the send was refused and the draft should stay in the input bar.
@@ -603,8 +708,13 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       // `force` is the "Send anyway" override (below): the gate already refused
       // once and the user chose to push through, so skip the re-check.
       if (!force && provider !== 'native') {
-        const session = getSessionState?.(sessionId);
-        if (session && hasPendingInteraction(session)) {
+        // WHY the screen too (2026-09-29): the chat state only knows what the
+        // hook system and the known-title detector reported. A Claude Code
+        // pop-up nobody reports (auto-mode setup, compaction and billing
+        // notices, the agents view) swallowed the message while its bubble
+        // looked sent. sendBlock also reads the live terminal.
+        const block = sendBlock(getSessionState?.(sessionId), sessionId);
+        if (block) {
           // Offer an ESC-first escape hatch instead of a dead-end toast: press
           // ESC (closes any genuinely-live Ink menu; a no-op on an idle input
           // bar, so it can NEVER answer a real menu), then re-send with the
@@ -613,12 +723,17 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
           if (onSendBlocked) {
             onSendBlocked(() => {
               window.claude.session.sendInput(sessionId, '\x1b');
-              sendRef.current(true);
-            });
+              // Wait for the pop-up to actually close before typing: text sent
+              // while it is still closing would land in it.
+              void waitForMessageBox(sessionId).then((cleared) => {
+                if (cleared) sendRef.current(true);
+                else onToast?.("Claude Code didn't close it — switch to terminal view to answer it. Your message is still here.");
+              });
+            }, block);
           } else {
             // Names the blocker (a card in the chat vs a terminal prompt) — one
             // shared sentence with App.tsx's refusals (pty-input-gate.ts).
-            onToast?.(pendingInteractionRefusalCopy(pendingInteractionKind(session)));
+            onToast?.(pendingInteractionRefusalCopy(block.kind, block.screen));
           }
           return false;
         }
@@ -673,12 +788,23 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       // produces, but the compiler can't see that through the route value.
       const effectiveMessage = (!dispatchResult.handled && dispatchResult.rewritten) || message;
 
+      // Ref-token markers (compose-ref.ts) already ride INSIDE effectiveMessage
+      // (InputBar's own insertRefs put them there) — round 2 dropped the
+      // separate references/refTokens plumbing round 1 had here: a real
+      // Claude Code session reads the marker as plain text (same as before),
+      // and UserMessage.tsx decodes the identical marker back into a pill
+      // straight from `content`, no extra field needed.
+      //
       // One sanitized source string for BOTH the optimistic bubble and the PTY
       // send. The transcript confirms the bubble by EXACT content match, so if
       // the bubble kept newlines the send stripped, a multiline message could
       // never be confirmed — `pending` stayed set forever and
       // useSubmitConfirmation fired a stray recovery \r. See outgoing-message.ts.
-      const outgoing = buildOutgoingMessage(effectiveMessage, files.map((f) => f.path));
+      // Draft tokens become full reference markers only now, at send — the
+      // composer holds display-sized tokens so its caret lines up (see
+      // compose-ref.ts "Draft tokens"). A refused send restores
+      // effectiveMessage, which still holds the display tokens.
+      const outgoing = buildOutgoingMessage(expandDraftTokens(effectiveMessage), files.map((f) => f.path));
       if (!outgoing) return true; // nothing to send — treat as consumed
       if (disabled) return false;
 
@@ -1035,7 +1161,16 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
                 // for 16px text — characters drifted off the caret.
                 className="input-bar-mirror-content text-sm text-fg leading-snug whitespace-pre-wrap break-words"
               >
-                <FlowingKeywordsText text={text} />
+                {/* Reference tokens ride as invisible markers in `text` (see
+                    compose-ref.ts) — split them out here and draw a real pill
+                    in their place; plain-text runs keep the existing keyword
+                    treatment. Pills opt back into pointer events individually
+                    (their × and jump-click) despite this layer's pointer-events-none. */}
+                {splitDraftTokens(text).map((seg, i) => (
+                  seg.type === 'token'
+                    ? <DraftChip key={`tok-${i}`} tokenKey={seg.key} label={seg.label} hovered={hoverChipKey === seg.key} />
+                    : <FlowingKeywordsText key={`t-${i}`} text={seg.value} />
+                ))}
                 {voiceTail && <span className="text-fg-muted">{voiceTail}</span>}
                 {/* Zero-width char keeps a trailing newline visible in the mirror */}
                 {'\u200B'}
@@ -1050,6 +1185,14 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
             spellCheck={false}
             autoCorrect="off"
             autoCapitalize="off"
+            // Only does work while the draft actually holds a chip.
+            onMouseMove={text.includes('⦃') ? (e) => updateChipHover(chipKeyAt(e.clientX, e.clientY)) : undefined}
+            onMouseLeave={hoverChipKey ? () => updateChipHover(null) : undefined}
+            onClick={text.includes('⦃') ? (e) => {
+              const key = chipKeyAt(e.clientX, e.clientY);
+              const ref = key ? draftRef(key) : null;
+              if (ref) jumpToRef(ref, openFile);
+            } : undefined}
             onScroll={(e) => {
               if (mirrorContentRef.current) {
                 mirrorContentRef.current.style.transform = `translateY(${-e.currentTarget.scrollTop}px)`;
@@ -1083,6 +1226,37 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
               }
             }}
             onKeyDown={(e) => {
+              // A reference pill rides as an invisible plain-text marker with
+              // a real pill drawn over it by the mirror layer above —
+              // Backspace or Delete right at its edge must remove the WHOLE
+              // marker in one keystroke, not nibble it into a corrupt
+              // fragment one invisible character at a time.
+              const ta = e.currentTarget;
+              if (ta.selectionStart === ta.selectionEnd) {
+                const pos = ta.selectionStart ?? 0;
+                const ranges = draftTokenRanges(text);
+                if (e.key === 'Backspace' || e.key === 'Delete') {
+                  const hit = ranges.find((r) => (e.key === 'Backspace' ? r.end === pos : r.start === pos));
+                  if (hit) {
+                    e.preventDefault();
+                    setText(text.slice(0, hit.start) + text.slice(hit.end));
+                    requestAnimationFrame(() => ta.setSelectionRange(hit.start, hit.start));
+                    return;
+                  }
+                }
+                // Arrow keys step over a chip in one press — it is one
+                // object, and stepping into it would only be snapped back out
+                // by onSelect, leaving the caret stuck at its edge.
+                if (!e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+                  const hit = ranges.find((r) => (e.key === 'ArrowLeft' ? r.end === pos : r.start === pos));
+                  if (hit) {
+                    e.preventDefault();
+                    const to = e.key === 'ArrowLeft' ? hit.start : hit.end;
+                    ta.setSelectionRange(to, to);
+                    return;
+                  }
+                }
+              }
               // Hold Space anywhere in the box = walkie-talkie (see spaceHoldTimer).
               if (e.key === ' ' && !minimal) {
                 // Already talking: the space bar belongs to the microphone.
@@ -1183,7 +1357,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
             // keyword text as you type, and selection reveals a second copy
             // of the text. Inherit font metrics from the parent so both
             // layers measure identically.
-            style={{ caretColor: 'var(--fg)', fontFamily: 'inherit', letterSpacing: 'inherit' }}
+            style={{ caretColor: 'var(--fg)', fontFamily: 'inherit', letterSpacing: 'inherit', cursor: hoverChipKey ? 'pointer' : undefined }}
             // break-words makes the textarea wrap long URLs/paths at the same
             // character position as the mirror (which also has break-words).
             // Without this, textarea used Chromium's default algorithm and
@@ -1259,3 +1433,32 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
 });
 
 export default InputBar;
+
+/** A reference chip in the composer's mirror layer. It draws EXACTLY the
+ *  token's characters — brackets and key transparent, the label on a chip
+ *  fill — so it takes the same width as the (transparent) textarea text
+ *  above it and the caret lines up (compose-ref.ts "Draft tokens"). Colour
+ *  and vertical padding only: horizontal padding or a border would change
+ *  the width and bring the drift back, so the edge is an inset box-shadow and
+ *  the invisible brackets act as the side padding. Styled after TagChip (the
+ *  app's chip: a tinted fill, a stronger tinted edge, the text in the theme's
+ *  own colour), in the accent. */
+function DraftChip({ tokenKey, label, hovered }: { tokenKey: string; label: string; hovered: boolean }) {
+  return (
+    <span
+      data-draft-chip={tokenKey}
+      className="rounded-sm py-0.5 text-fg"
+      style={{
+        // Deeper fill while hovered — the same cue as the sent chip (TokenPill).
+        backgroundColor: `color-mix(in srgb, var(--accent) ${hovered ? 36 : 22}%, transparent)`,
+        boxShadow: 'inset 0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent)',
+        boxDecorationBreak: 'clone',
+        WebkitBoxDecorationBreak: 'clone',
+      }}
+    >
+      <span className="text-transparent">{'⦃'}{tokenKey}</span>
+      {label}
+      <span className="text-transparent">{'⦄'}</span>
+    </span>
+  );
+}

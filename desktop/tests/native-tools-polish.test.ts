@@ -2,7 +2,7 @@
 // (batches A + B). Each `describe` names the ledger id it pins. Wording pins
 // assert the NEW sentence is present and the OLD one absent — the description
 // is the only place a model learns a tool's rules before it trips one.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -12,6 +12,13 @@ import { EditTool } from '../src/main/harness/tools/edit';
 import { BashTool } from '../src/main/harness/tools/bash';
 import { WebFetchTool } from '../src/main/harness/tools/web-fetch';
 import type { ToolContext } from '../src/main/harness/tools/types';
+import { canonicalize } from '../src/main/harness/tools/guards';
+
+// WHY the registry is read through canonicalize(): the tools key it by the
+// canonical form (forward slashes, lower-case on Windows), so looking it up by
+// the raw path.join() result found nothing on Windows and these fingerprint
+// assertions compared undefined with undefined.
+const registryKey = (p: string, cwd: string) => canonicalize(p, cwd);
 
 let dir: string;
 let ctx: ToolContext;
@@ -289,7 +296,7 @@ describe('G-11: a repeat Read of an unchanged slice returns a short notice', () 
     expect(second.text).toMatch(/the content you already have is current/);
   });
 
-  it('serves the content again once the file changed on disk', async () => {
+  it('deduplicates unchanged bytes even when the mtime changed', async () => {
     const p = path.join(dir, 'a.txt');
     fs.writeFileSync(p, 'alpha\n');
     const shared = new Map();
@@ -297,7 +304,100 @@ describe('G-11: a repeat Read of an unchanged slice returns a short notice', () 
     const future = new Date(Date.now() + 2000);
     fs.utimesSync(p, future, future);
     const r = await ReadTool.execute({ file_path: 'a.txt' }, { ...ctx, servedReads: shared, toolCallIndex: 2 });
-    expect(r.text).toContain('alpha');
+    expect(r.text).toMatch(/Unchanged since your earlier Read/);
+    expect(r.text).not.toContain('     1\talpha');
+  });
+
+  it('answers an unchanged repeat without loading the whole file again', async () => {
+    // WHY: loading + splitting a big file holds the main process that serves
+    // every window; an unchanged repeat is checked in pieces instead.
+    const p = path.join(dir, 'a.txt');
+    fs.writeFileSync(p, 'alpha\n');
+    const shared = new Map();
+    const original = fs.promises.readFile;
+    const read = vi.spyOn(fs.promises, 'readFile');
+    try {
+      await ReadTool.execute({ file_path: 'a.txt' }, { ...ctx, servedReads: shared, toolCallIndex: 1 });
+      const repeat = await ReadTool.execute({ file_path: 'a.txt' }, { ...ctx, servedReads: shared, toolCallIndex: 2 });
+      expect(repeat.text).toMatch(/content you already have is current/);
+      expect(read.mock.calls.filter(([name]) => name === p)).toHaveLength(1);
+      expect(read.mock.results.every(r => r.type === 'return')).toBe(true);
+    } finally {
+      read.mockRestore();
+      expect(fs.promises.readFile).toBe(original);
+    }
+  });
+
+  it('changed bytes with the same size and mtime are returned, not called current', async () => {
+    const p = path.join(dir, 'a.txt');
+    const stamp = new Date('2025-01-01T00:00:00Z');
+    fs.writeFileSync(p, 'OLD_CONTENT');
+    fs.utimesSync(p, stamp, stamp);
+    const shared = new Map();
+    await ReadTool.execute({ file_path: 'a.txt' }, { ...ctx, servedReads: shared, toolCallIndex: 1 });
+    const oldFingerprint = ctx.readRegistry.get(registryKey(p, dir));
+    expect(oldFingerprint).toBeDefined();
+    fs.writeFileSync(p, 'NEW_CONTENT');
+    fs.utimesSync(p, stamp, stamp);
+    const second = await ReadTool.execute({ file_path: 'a.txt' }, { ...ctx, servedReads: shared, toolCallIndex: 2 });
+    expect(second.text).toContain('NEW_CONTENT');
+    expect(second.text).not.toContain('the content you already have is current');
+    expect(ctx.readRegistry.get(registryKey(p, dir))).not.toBe(oldFingerprint);
+    const edit = await EditTool.execute({ file_path: 'a.txt', old_string: 'NEW_CONTENT', new_string: 'EDITED_TEXT' }, ctx);
+    expect(edit.isError).toBeFalsy();
+  });
+
+  it('a binary or missing replacement cannot reuse an old read or restore its write grant', async () => {
+    const p = path.join(dir, 'a.txt');
+    const stamp = new Date('2025-01-01T00:00:00Z');
+    fs.writeFileSync(p, 'OLD_CONTENT');
+    fs.utimesSync(p, stamp, stamp);
+    const shared = new Map();
+    await ReadTool.execute({ file_path: 'a.txt' }, { ...ctx, servedReads: shared, toolCallIndex: 1 });
+    const oldFingerprint = ctx.readRegistry.get(registryKey(p, dir));
+    expect(oldFingerprint).toBeDefined();
+    fs.writeFileSync(p, Buffer.from('NEW\0CONTENT'));
+    fs.utimesSync(p, stamp, stamp);
+    const binary = await ReadTool.execute({ file_path: 'a.txt' }, { ...ctx, servedReads: shared, toolCallIndex: 2 });
+    expect(binary.isError).toBe(true);
+    expect(binary.text).toContain('binary file');
+    expect(ctx.readRegistry.get(registryKey(p, dir))).toBe(oldFingerprint);
+    const edit = await EditTool.execute({ file_path: 'a.txt', old_string: 'OLD_CONTENT', new_string: 'bad' }, ctx);
+    expect(edit.isError).toBe(true);
+    const write = await WriteTool.execute({ file_path: 'a.txt', content: 'bad' }, ctx);
+    expect(write.isError).toBe(true);
+    expect(fs.readFileSync(p).includes(0)).toBe(true);
+    fs.rmSync(p);
+    const missing = await ReadTool.execute({ file_path: 'a.txt' }, { ...ctx, servedReads: shared, toolCallIndex: 3 });
+    expect(missing.isError).toBe(true);
+    expect(missing.text).not.toContain('content you already have is current');
+    expect(ctx.readRegistry.get(registryKey(p, dir))).toBe(oldFingerprint);
+  });
+
+  it('an invalid page never stamps a changed file or reuses its old notice', async () => {
+    const p = path.join(dir, 'a.txt');
+    const stamp = new Date('2025-01-01T00:00:00Z');
+    fs.writeFileSync(p, 'old\n'); fs.utimesSync(p, stamp, stamp);
+    const shared = new Map();
+    await ReadTool.execute({ file_path: 'a.txt', offset: 1 }, { ...ctx, servedReads: shared, toolCallIndex: 1 });
+    const oldFingerprint = ctx.readRegistry.get(registryKey(p, dir));
+    expect(oldFingerprint).toBeDefined();
+    fs.writeFileSync(p, 'new\n'); fs.utimesSync(p, stamp, stamp);
+    const rejected = await ReadTool.execute({ file_path: 'a.txt', offset: 9 }, { ...ctx, servedReads: shared, toolCallIndex: 2 });
+    expect(rejected.isError).toBe(true);
+    expect(rejected.text).toContain('past the end');
+    expect(ctx.readRegistry.get(registryKey(p, dir))).toBe(oldFingerprint);
+    const blocked = await EditTool.execute({ file_path: 'a.txt', old_string: 'new', new_string: 'bad' }, ctx);
+    expect(blocked.isError).toBe(true);
+  });
+
+  it('clearing served slice history serves the full text again', async () => {
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'alpha\n');
+    const shared = new Map();
+    await ReadTool.execute({ file_path: 'a.txt' }, { ...ctx, servedReads: shared, toolCallIndex: 1 });
+    shared.clear(); // HarnessSession clears this on /clear, successful compaction and resume.
+    const again = await ReadTool.execute({ file_path: 'a.txt' }, { ...ctx, servedReads: shared, toolCallIndex: 2 });
+    expect(again.text).toContain('     1\talpha');
   });
 
   it('a different slice (offset/limit) is not a repeat', async () => {

@@ -638,7 +638,7 @@ describe('NativeSessionHost', () => {
     expect(host.send('s-warmup2', 'first').status).toBe('queued');
     expect(host.send('s-warmup2', 'second').status).toBe('queued');
     await creating;
-    await waitForTurnComplete(host, 2);
+    await waitForTurnComplete(host, 1);
     await host.drain('s-warmup2');
     const typed = host.getHistory('s-warmup2')!.filter((e) => e.type === 'user-message').map((e) => e.data.text);
     expect(typed).toEqual(['first', 'second']);
@@ -1990,8 +1990,210 @@ describe('NativeSessionHost', () => {
       expect(r2.status).toBe('queued');
       expect(typeof (r2 as { queueId: string }).queueId).toBe('string');
       expect((r2 as { queueId: string }).queueId.length).toBeGreaterThan(0);
-      await waitForTurnComplete(host, 2);
+      await waitForTurnComplete(host, 1);
       expect(events).toEqual(['first', 'second']); // user-message for 'second' fires only when drained
+    });
+
+    it.each(['idle notice pass', 'user turn tail'])('delivers FIFO sends accepted during an %s before stable idle', async (start) => {
+      const h = new NativeSessionHost(new SessionStore(new NativeHome(root)), factory, NO_CONTEXT, async () => null, async () => null);
+      const sid = `tail-${start}`;
+      await h.create({ sessionId: sid, cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+      try {
+        const entry = (h as any).live.get(sid);
+        let entered!: () => void;
+        let release!: () => void;
+        const started = new Promise<void>((r) => { entered = r; });
+        const gate = new Promise<void>((r) => { release = r; });
+        const notice = vi.spyOn(entry.session, 'runNotice').mockImplementation(async () => { entered(); await gate; });
+        const seen: string[] = [];
+        h.on('transcript-event', (e: any) => { if (e.type === 'user-message') seen.push(e.data.text); });
+        if (start === 'user turn tail') h.send(sid, 'opening');
+        (h as any).queueHostNotice(sid, 'notice', { kind: 'shell', runs: [] }, 'test');
+        await started;
+        const receipts = ['one', 'two', 'three'].map((text) => h.send(sid, text));
+        expect(receipts.every((r) => r.status === 'queued')).toBe(true);
+        expect(new Set(receipts.map((r: any) => r.queueId)).size).toBe(3);
+        release();
+        await vi.waitFor(() => expect(seen.slice(-3)).toEqual(['one', 'two', 'three']));
+        await entry.running;
+        expect(entry.queue).toHaveLength(0);
+        expect(h.isIdle(sid)).toBe(true);
+        expect(notice).toHaveBeenCalledTimes(1);
+      } finally { await h.destroyAll(); }
+    });
+
+    it('delivers an acknowledged busy send inside the active turn without a second completion', async () => {
+      const seen: string[] = [];
+      let started!: () => void;
+      const firstEvent = new Promise<void>(resolve => { started = resolve; });
+      let completions = 0;
+      host.on('transcript-event', (event: any) => {
+        if (event.type === 'user-message') { seen.push(event.data.text); if (event.data.text === 'opening') started(); }
+        if (event.type === 'turn-complete') completions++;
+      });
+      expect(host.send(id, 'opening').status).toBe('sent');
+      await firstEvent;
+      const receipt = host.send(id, 'correction') as { status: 'queued'; queueId: string };
+      expect(receipt.status).toBe('queued');
+      await vi.waitFor(() => expect(seen).toEqual(['opening', 'correction']));
+      await (host as any).live.get(id).running;
+      expect(completions).toBe(1);
+      expect(host.removeQueued(id, receipt.queueId)).toBe(false);
+    });
+
+    it('consumes ready input at a second empty response without host-draining another turn', async () => {
+      let requests = 0;
+      const prompts: any[] = [];
+      const empty = [{ type: 'stream-start', warnings: [] },
+        { type: 'finish', finishReason: { unified: 'stop' }, usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } }];
+      const modelFactory = async () => new MockLanguageModelV4({ doStream: async (req: any) => {
+        const index = requests++;
+        prompts.push(req.prompt);
+        // WHY: the host's setImmediate readiness fence must open before the
+        // second empty response settles; text alone never bypasses that fence.
+        if (index === 1) await new Promise<void>(resolve => setImmediate(resolve));
+        return { stream: simulateReadableStream({ chunks: index < 2 ? empty : CHUNKS }) };
+      } }) as any;
+      const h = new NativeSessionHost(new SessionStore(new NativeHome(root)), modelFactory, NO_CONTEXT, async () => null, async () => null);
+      const sid = 'empty-ready';
+      await h.create({ sessionId: sid, cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+      try {
+        const events: any[] = [];
+        h.on('transcript-event', e => {
+          events.push(e);
+          if (e.type === 'user-message' && e.data.text === 'opening') {
+            expect(h.send(sid, 'correction').status).toBe('queued');
+          }
+        });
+        expect(h.send(sid, 'opening').status).toBe('sent');
+        await (h as any).live.get(sid).running;
+        expect(events.filter(e => e.type === 'user-message').map(e => e.data.text)).toEqual(['opening', 'correction']);
+        expect(events.filter(e => e.type === 'turn-complete')).toHaveLength(1);
+        expect(requests).toBe(3);
+        expect(JSON.stringify(prompts[2])).toContain('correction');
+        expect((h as any).live.get(sid).queue).toHaveLength(0);
+      } finally { await h.destroyAll(); }
+    });
+
+    it('dispatches input arriving at final completion through the host without losing it', async () => {
+      const seen: string[] = [];
+      let receipt: ReturnType<typeof host.send> | undefined;
+      let completions = 0;
+      host.on('transcript-event', (e: any) => {
+        if (e.type === 'user-message') seen.push(e.data.text);
+        if (e.type === 'turn-complete' && ++completions === 1) receipt = host.send(id, 'late');
+      });
+      expect(host.send(id, 'first').status).toBe('sent');
+      await vi.waitFor(() => expect(seen).toEqual(['first', 'late']));
+      await vi.waitFor(() => expect(completions).toBe(2));
+      expect(receipt?.status).toBe('queued');
+    });
+
+    it('claims only an acknowledged live FIFO head and preserves cancel IDs', async () => {
+      const entry = (host as any).live.get(id);
+      const first = host.send(id, 'opening');
+      const canceled = host.send(id, 'cancel') as { queueId: string };
+      const kept = host.send(id, 'kept') as { queueId: string };
+      expect(first.status).toBe('sent');
+      expect((host as any).takeReadyBusyMessage(id, entry.session)).toBeUndefined();
+      expect(host.removeQueued(id, canceled.queueId)).toBe(true);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      const claim = (host as any).takeReadyBusyMessage(id, entry.session);
+      expect(claim?.id).toBe(kept.queueId);
+      expect(host.removeQueued(id, kept.queueId)).toBe(false);
+      claim.restore();
+      expect(host.removeQueued(id, kept.queueId)).toBe(true);
+      expect((host as any).takeReadyBusyMessage(id, {})).toBeUndefined();
+    });
+
+    it('Send now stops the running task and sends that waiting message ahead of the others', async () => {
+      const order: string[] = [];
+      let sendNow: boolean | undefined;
+      let later!: { queueId: string };
+      host.on('transcript-event', (e: any) => {
+        if (e.type === 'user-message') order.push(e.data.text);
+        if (e.type === 'user-interrupt') order.push('stopped');
+        // Pressed while the first task is genuinely running.
+        if (e.type === 'user-message' && e.data.text === 'first') sendNow = host.sendQueuedNow(id, later.queueId);
+      });
+      expect(host.send(id, 'first').status).toBe('sent');
+      expect(host.send(id, 'waiting').status).toBe('queued');
+      later = host.send(id, 'urgent') as { queueId: string };
+      await vi.waitFor(() => expect(order.filter(t => t !== 'stopped')).toEqual(['first', 'urgent', 'waiting']));
+      expect(sendNow).toBe(true);
+      expect(order.indexOf('stopped')).toBeGreaterThan(order.indexOf('first'));
+      expect(order.indexOf('stopped')).toBeLessThan(order.indexOf('urgent'));
+      // Already on its way: the same honest false as Cancel.
+      expect(host.sendQueuedNow(id, later.queueId)).toBe(false);
+    });
+
+    it('keeps the ack ahead of idle and busy user-message events, including queued edits', async () => {
+      const order: string[] = [];
+      host.on('transcript-event', (e: any) => { if (e.type === 'user-message') order.push(`event:${e.data.text}`); });
+      order.push(`ack:${host.send(id, 'first').status}`);
+      const canceled = host.send(id, 'cancel me') as { status: 'queued'; queueId: string };
+      order.push(`ack:${canceled.status}`);
+      expect(host.removeQueued(id, canceled.queueId)).toBe(true);
+      const edited = host.send(id, 'edited') as { status: 'queued'; queueId: string };
+      order.push(`ack:${edited.status}`);
+      await waitForTurnComplete(host, 1);
+      expect(order).toEqual(['ack:sent', 'ack:queued', 'ack:queued', 'event:first', 'event:edited']);
+      expect(host.removeQueued(id, edited.queueId)).toBe(false);
+    });
+
+    it('does not skip an unready head and kicks it after a final idle check', async () => {
+      const entry = (host as any).live.get(id);
+      let entered!: () => void;
+      let release!: () => void;
+      const started = new Promise<void>((r) => { entered = r; });
+      const gate = new Promise<void>((r) => { release = r; });
+      vi.spyOn(entry.session, 'runNotice').mockImplementation(async () => { entered(); await gate; });
+      const seen: string[] = [];
+      host.on('transcript-event', (e: any) => { if (e.type === 'user-message') seen.push(e.data.text); });
+      (host as any).queueHostNotice(id, 'notice', { kind: 'shell', runs: [] }, 'test');
+      await started;
+      const head = host.send(id, 'head') as { status: 'queued'; queueId: string };
+      const follower = host.send(id, 'follower') as { status: 'queued'; queueId: string };
+      expect(entry.queue[0].ready).toBe(false);
+      // The real readiness transition is setImmediate; the pass settles before
+      // that callback, proving it cannot skip head OR require another send.
+      release();
+      await entry.running;
+      expect(seen).toEqual([]);
+      expect(entry.queue.map((q: any) => q.id)).toEqual([head.queueId, follower.queueId]);
+      await vi.waitFor(() => expect(seen).toEqual(['head', 'follower']));
+      expect(entry.queue).toHaveLength(0);
+      expect(host.removeQueued(id, head.queueId)).toBe(false);
+    });
+
+    it('continues queued user dispatch when a host notice fails and leaves that notice for retry', async () => {
+      const entry = (host as any).live.get(id);
+      let entered!: () => void;
+      let release!: () => void;
+      const started = new Promise<void>((r) => { entered = r; });
+      const gate = new Promise<void>((r) => { release = r; });
+      vi.spyOn(entry.session, 'runNotice').mockImplementation(async () => { entered(); await gate; throw new Error('notice failed'); });
+      (host as any).queueHostNotice(id, 'notice', { kind: 'shell', runs: [] }, 'test');
+      await started;
+      const sent = host.send(id, 'survivor');
+      release();
+      expect(sent.status).toBe('queued');
+      await waitForTurnComplete(host, 1);
+      expect((host as any).pendingHostNotices.get(id)).toHaveLength(1);
+      expect(host.removeQueued(id, (sent as { queueId: string }).queueId)).toBe(false);
+    });
+
+    it('cancels an unready head without letting its readiness callback revive it', async () => {
+      host.send(id, 'first');
+      const canceled = host.send(id, 'old') as { status: 'queued'; queueId: string };
+      expect((host as any).live.get(id).queue[0].ready).toBe(false);
+      expect(host.removeQueued(id, canceled.queueId)).toBe(true);
+      const replacement = host.send(id, 'new') as { status: 'queued'; queueId: string };
+      const seen: string[] = [];
+      host.on('transcript-event', (e: any) => { if (e.type === 'user-message') seen.push(e.data.text); });
+      await waitForTurnComplete(host, 1);
+      expect(seen).toEqual(['first', 'new']);
+      expect(replacement.queueId).not.toBe(canceled.queueId);
     });
 
     it('refuses honestly past the queue cap', () => {
@@ -2009,7 +2211,7 @@ describe('NativeSessionHost', () => {
         const rA = host.send(id, 'a') as { status: 'queued'; queueId: string };
         const rB = host.send(id, 'b') as { status: 'queued'; queueId: string };
         expect(host.removeQueued(id, rA.queueId)).toBe(true);
-        await waitForTurnComplete(host, 2);                      // 'first' + 'b' — 'a' was cut
+        await waitForTurnComplete(host, 1);                      // 'first' + 'b' — 'a' was cut
         expect(events).toEqual(['first', 'b']);
         expect(rB.queueId).not.toBe(rA.queueId);
       });
@@ -2017,7 +2219,7 @@ describe('NativeSessionHost', () => {
       it('returns false for an id that already drained (shift() beat the removal)', async () => {
         host.send(id, 'first');
         const rA = host.send(id, 'a') as { status: 'queued'; queueId: string };
-        await waitForTurnComplete(host, 2); // both turns finish — 'a' has been shift()'d and sent
+        await waitForTurnComplete(host, 1); // both turns finish — 'a' has been shift()'d and sent
         expect(host.removeQueued(id, rA.queueId)).toBe(false);
       });
 
@@ -2333,6 +2535,75 @@ describe('NativeSessionHost', () => {
       // Exactly the definition's allowlist — no Write/Edit/Bash/TodoWrite/AskUserQuestion.
       expect(toolNames(h, childId).sort()).toEqual([...EXPLORER.allowedTools].sort());
       await h.destroyAll();
+    });
+
+    it('Bash-enabled Worker advertises and authorizes its own background companions without widening its definition', async () => {
+      const { h } = await withParent();
+      try {
+        const worker = resolveSpecialist('worker')!;
+        const original = [...worker.allowedTools];
+        const { childId } = await h.createChild('root-1', {
+          specialist: worker, prompt: 'p', workDir: root, parentToolCallId: 'tc-1',
+        });
+        const child = childSession(h, childId);
+        const names = toolNames(h, childId);
+        expect(names.sort()).toEqual([...worker.allowedTools, 'BashOutput', 'KillShell'].sort());
+        for (const name of ['Bash', 'BashOutput', 'KillShell']) {
+          expect((await child.opts.decide(name, undefined)).action).toBe('allow');
+        }
+        expect(worker.allowedTools).toEqual(original);
+        expect(worker.allowedTools).not.toContain('BashOutput');
+        expect(worker.allowedTools).not.toContain('KillShell');
+        expect(child.opts.shells).not.toBe((childSession(h, 'root-1') as any).opts.shells);
+        const { childId: otherId } = await h.createChild('root-1', {
+          specialist: worker, prompt: 'p', workDir: root, parentToolCallId: 'tc-2',
+        });
+        expect(child.opts.shells).not.toBe(childSession(h, otherId).opts.shells);
+        // Exercise the advertised real tool implementations against the session's
+        // own registry, without starting an OS subprocess or signaling a process.
+        const owned = child.opts.shells;
+        const foreignId = 'sh-parent-only';
+        const peerId = 'sh-other-child';
+        const childShellId = 'sh-child-owned';
+        const entry = (shellId: string) => ({ shellId, command: 'test', status: 'exited', startedAt: 1, endedAt: 2 });
+        (childSession(h, 'root-1') as any).opts.shells.runs.set(foreignId, entry(foreignId));
+        childSession(h, otherId).opts.shells.runs.set(peerId, entry(peerId));
+        owned.runs.set(childShellId, entry(childShellId));
+        const output = child.opts.tools.find((t: any) => t.name === 'BashOutput');
+        const kill = child.opts.tools.find((t: any) => t.name === 'KillShell');
+        const ctx = { sessionId: childId, cwd: root, signal: new AbortController().signal, shells: owned } as any;
+        expect((await output.execute({}, ctx)).text).toContain(childShellId);
+        expect((await output.execute({}, ctx)).text).not.toContain(foreignId);
+        for (const id of [foreignId, peerId]) {
+          expect((await output.execute({ shell_id: id }, ctx)).isError).toBe(true);
+          expect((await kill.execute({ shell_id: id }, ctx)).isError).toBe(true);
+        }
+        expect((await kill.execute({ shell_id: childShellId }, ctx)).text).toContain('not running');
+        for (const id of ['root-1', otherId]) {
+          const foreign = childSession(h, id).opts;
+          const foreignCtx = { ...ctx, sessionId: id, shells: foreign.shells };
+          const foreignOutput = foreign.tools.find((t: any) => t.name === 'BashOutput');
+          const foreignKill = foreign.tools.find((t: any) => t.name === 'KillShell');
+          expect((await foreignOutput.execute({ shell_id: childShellId }, foreignCtx)).isError).toBe(true);
+          expect((await foreignKill.execute({ shell_id: childShellId }, foreignCtx)).isError).toBe(true);
+        }
+      } finally { await h.destroyAll(); }
+    });
+
+    it('a read-write definition without Bash does not inherit Bash or background companions', async () => {
+      const { h } = await withParent();
+      try {
+        const worker = resolveSpecialist('worker')!;
+        const noBash = { ...worker, allowedTools: worker.allowedTools.filter(name => name !== 'Bash') };
+        const { childId } = await h.createChild('root-1', {
+          specialist: noBash, prompt: 'p', workDir: root, parentToolCallId: 'tc-1',
+        });
+        expect(toolNames(h, childId).sort()).toEqual([...noBash.allowedTools].sort());
+        for (const name of ['Bash', 'BashOutput', 'KillShell']) {
+          expect((await childSession(h, childId).opts.decide(name, undefined)).action).toBe('deny');
+        }
+        expect(worker.allowedTools).toContain('Bash');
+      } finally { await h.destroyAll(); }
     });
 
     // Task 14: opts.binding, when tools/task.ts already resolved an override
@@ -3702,6 +3973,11 @@ describe('NativeSessionHost', () => {
       const recAfterRun2 = (h as any).ledger.listFor(root, 'root-1').find((r: any) => r.childId === childId);
       expect(recAfterRun2.rawReport).toContain('SECOND REPORT');
 
+      // WHY await the parent's delivery pass first: injecting run 2's report
+      // runs a turn that still appends to the session file under
+      // .youcoded/sessions after the transcript event fires; ending the test
+      // mid-pass raced afterEach's folder removal (ENOTEMPTY, Linux CI).
+      await (h as any).live.get('root-1')?.running;
       await h.destroyAll();
     });
 

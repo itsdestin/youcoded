@@ -69,6 +69,10 @@ class SessionRegistry {
         // Start EventBridge BEFORE Claude Code — hooks fire immediately on launch
         bridge.startEventBridge(scope)
         bridge.start()
+        // T20: start this session's docx/xlsx pending-mutation queue AFTER
+        // start() — that's when docCommentsServerId/token are known (a
+        // failed doc-comments MCP deploy makes this a no-op).
+        bridge.startDocCommentsQueue()
         session.startTitleObserver()
 
         // Wire up the current-session check for blue dot logic

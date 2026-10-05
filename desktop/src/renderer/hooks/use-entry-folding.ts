@@ -97,15 +97,13 @@ export interface EntryFolding {
    * the rects read here are where the entries will actually be.
    */
   unfoldNearViewport: () => void;
+  /** Reveal only this registered row and keep its body mounted until release. */
+  revealAndPin: (key: string) => () => void;
 }
 
 /**
- * @param enabled  false suspends folding AND unfolds everything — used while the
- *   find bar is open, because `ContentFindBar` finds text by walking the DOM
- *   (`document.createTreeWalker`), so a folded entry is unfindable. Find is a
- *   deliberate user action on a bounded conversation, so paying the full DOM back
- *   for its duration is the right trade; the alternative is telling the user
- *   "0 results" for text that is in their conversation.
+ * @param enabled false suspends folding and unfolds everything. Chat Find stays
+ *   enabled and uses a targeted reveal/pin instead of this whole-list switch.
  * @param active  false while this conversation's pane is in the background —
  *   see INACTIVE_FOLD_MS.
  */
@@ -143,6 +141,7 @@ export function useEntryFolding(
   // across three conversations, uniformly ~6%, in three different builds.
   // At fold time the element is in the DOM and has a real height; just read it.
   const elements = useRef(new Map<string, HTMLElement>());
+  const pins = useRef(new Map<string, number>());
   const observer = useRef<IntersectionObserver | null>(null);
   const unfoldTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const foldTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -154,6 +153,17 @@ export function useEntryFolding(
   const publish = useCallback(() => {
     setState({ folded: new Set(folded.current), heights: new Map(heights.current) });
   }, []);
+  const removalPublishPending = useRef(false);
+  const publishRemovals = useCallback(() => {
+    if (removalPublishPending.current) return;
+    removalPublishPending.current = true;
+    // WHY: detached keys must leave the published spacer snapshot too, but
+    // clearing a page must not copy all history once per removed row.
+    queueMicrotask(() => {
+      removalPublishPending.current = false;
+      publish();
+    });
+  }, [publish]);
 
   const flushUnfold = useCallback(() => {
     unfoldTimer.current = null;
@@ -169,7 +179,7 @@ export function useEntryFolding(
     if (!enabledRef.current) return;
     let changed = false;
     for (const key of outOfView.current) {
-      if (folded.current.has(key)) continue;
+      if (folded.current.has(key) || pins.current.has(key)) continue;
       // Measure NOW, from the element itself. Falls back to a height captured
       // while the entry was visible, which is what makes an inactive session
       // foldable: its pane is `content-visibility: hidden`, so its children lay
@@ -247,6 +257,16 @@ export function useEntryFolding(
     };
   }, [flushFold, flushUnfold, rootRef]);
 
+  // Root teardown releases held nodes and pins even if React detaches refs after
+  // the observer effect. Per-row detach handles ordinary history removal.
+  useEffect(() => () => {
+    elements.current.clear();
+    pins.current.clear();
+    folded.current.clear();
+    heights.current.clear();
+    outOfView.current.clear();
+  }, []);
+
   // The pane changed sides. Either way the pending fold is re-timed for the side
   // it is now on, and membership is untouched:
   //  • to the background — a fold armed moments before the switch would
@@ -270,19 +290,20 @@ export function useEntryFolding(
     const top = r.top - FOLD_MARGIN_PX;
     const bottom = r.bottom + FOLD_MARGIN_PX;
     let changed = false;
-    // Walked in DOCUMENT order from the END, and abandoned at the first entry
-    // above the band. WHY not `for (key of folded)`: a long conversation read to
-    // its top has thousands of folded entries, nearly all of them far above, and
-    // the first version measured every one of them on every switch — inside the
-    // click, ahead of the first frame (Destin, 2026-09-18: "the switch still lags
-    // a second behind me clicking"). A switch lands at the bottom, so this reads
-    // a band's worth however long the conversation is. Nothing is written between
-    // reads, so it is still one layout.
+    // WHY: switching arrives at the end, but Find jumps into the MIDDLE of
+    // loaded history. A reverse scan measured hundreds of newer spacers before
+    // finding the viewport. Timeline rows are in document/layout order; binary
+    // seek the first entry below the band, then inspect only neighboring rows.
     const entries = root.querySelectorAll<HTMLElement>('[data-entry-key]');
-    for (let i = entries.length - 1; i >= 0; i--) {
+    let lo = 0, hi = entries.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (entries[mid].getBoundingClientRect().top > bottom) hi = mid;
+      else lo = mid + 1;
+    }
+    for (let i = lo - 1; i >= 0; i--) {
       const el = entries[i];
       const b = el.getBoundingClientRect();
-      if (b.top > bottom) continue;
       if (b.bottom < top) break;
       const key = el.dataset.entryKey;
       if (!key || !folded.current.has(key)) continue;
@@ -306,6 +327,29 @@ export function useEntryFolding(
     publish();
   }, [enabled, publish]);
 
+  const revealAndPin = useCallback((key: string) => {
+    const owner = elements.current.get(key);
+    if (!owner) return NOOP;
+    pins.current.set(key, (pins.current.get(key) ?? 0) + 1);
+    if (folded.current.delete(key)) publish();
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      // A removed key can later be reused; an old selection cannot unpin it.
+      if (elements.current.get(key) !== owner) return;
+      const count = pins.current.get(key);
+      if (count === 1) pins.current.delete(key);
+      else if (count) pins.current.set(key, count - 1);
+      // WHY: a selected Range cannot survive folding, but after the last
+      // release ordinary idle folding resumes without unfolding other rows.
+      if (count === 1 && outOfView.current.has(key) && enabledRef.current) {
+        if (foldTimer.current != null) clearTimeout(foldTimer.current);
+        foldTimer.current = setTimeout(flushFold, activeRef.current ? FOLD_IDLE_MS : INACTIVE_FOLD_MS);
+      }
+    };
+  }, [flushFold, publish]);
+
   // Same contract as useObservedRef: ALWAYS return a cleanup, so React never
   // falls back to calling the ref with null (see that hook for the regression).
   const registerEntry = useCallback((el: HTMLElement | null) => {
@@ -313,20 +357,27 @@ export function useEntryFolding(
     const key = el.dataset.entryKey;
     if (key) elements.current.set(key, el);
     const io = observer.current;
-    if (!io) return () => { if (key) elements.current.delete(key); };
-    io.observe(el);
-    return () => {
-      io.unobserve(el);
+    const cleanup = () => {
       // Only drop the mapping if it still points at THIS element: a re-render
       // that swaps the node registers the new one before releasing the old.
-      if (key && elements.current.get(key) === el) elements.current.delete(key);
+      if (key && elements.current.get(key) === el) {
+        elements.current.delete(key);
+        outOfView.current.delete(key);
+        const wasFolded = folded.current.delete(key);
+        const hadHeight = heights.current.delete(key);
+        pins.current.delete(key);
+        if (wasFolded || hadHeight) publishRemovals();
+      }
     };
-  }, []);
+    if (!io) return cleanup;
+    io.observe(el);
+    return () => { io.unobserve(el); cleanup(); };
+  }, [publishRemovals]);
 
   const isFolded = useCallback((key: string) => state.folded.has(key), [state]);
   const heightOf = useCallback((key: string) => state.heights.get(key), [state]);
 
-  return { registerEntry, isFolded, heightOf, unfoldNearViewport };
+  return { registerEntry, isFolded, heightOf, unfoldNearViewport, revealAndPin };
 }
 
 const NOOP = () => {};

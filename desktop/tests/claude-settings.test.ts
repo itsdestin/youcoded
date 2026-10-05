@@ -212,7 +212,10 @@ describe('settings.json has one reader and one writer', () => {
     'sync-service.ts': 'copies the file into the sync space by path — never parses or edits it',
     'sync-state.ts': 'checks whether the file exists by path',
   };
-  const PATTERN = /settings\.json/;
+  // WHY the look-behind: only Claude's own file, named exactly "settings.json". Other stores whose
+  // names merely end in it (Office's office-editor-settings.json, its yc-settings.json route) are
+  // not Claude's settings and have their own readers.
+  const PATTERN = /(?<![\w-])settings\.json/;
 
   function walk(dir: string): string[] {
     const out: string[] = [];
@@ -226,6 +229,7 @@ describe('settings.json has one reader and one writer', () => {
 
   it('every code mention of settings.json under src/main is claude-settings.ts or an allowed path-only use', () => {
     assertPatternMatches(PATTERN, "path.join(os.homedir(), '.claude', 'settings.json')", 'the settings path');
+    expect(PATTERN.test("path.join(userData, 'office-editor-settings.json')")).toBe(false);
     const files = walk(MAIN);
     expect(files.length).toBeGreaterThan(100);
     const offenders = files

@@ -14,13 +14,14 @@
     {"file": "migrate-permission-overrides.ts", "fn": "migratePermissionOverrides", "call": "fs.mkdirSync", "count": 1, "reason": "startup only: one-time settings migration run during launch (packaged builds)"},
     {"file": "migrate-permission-overrides.ts", "fn": "migratePermissionOverrides", "call": "fs.readFileSync", "count": 1, "reason": "startup only: one-time settings migration run during launch (packaged builds)"},
     {"file": "migrate-permission-overrides.ts", "fn": "migratePermissionOverrides", "call": "fs.writeFileSync", "count": 1, "reason": "startup only: one-time settings migration run during launch (packaged builds)"},
-    {"file": "symlink-cleanup.ts", "fn": "sweepDir", "call": "fs.existsSync", "count": 1, "reason": "startup only: main.ts sweeps orphaned plugin symlinks once during launch"},
-    {"file": "symlink-cleanup.ts", "fn": "sweepDir", "call": "fs.readdirSync", "count": 1, "reason": "startup only: main.ts sweeps orphaned plugin symlinks once during launch"},
-    {"file": "sync-spaces/space-manager.ts", "fn": "SpaceManager.loadInitial", "call": "fs.readFileSync", "count": 1, "reason": "startup only: the FIRST read of the small sync-spaces.json state file, made once when startSyncSpaces constructs the manager and asks isEnabled(); every later read is served from memory and every write is async"},
-    {"file": "symlink-cleanup.ts", "fn": "sweepDir", "call": "fs.readlinkSync", "count": 1, "reason": "startup only: main.ts sweeps orphaned plugin symlinks once during launch"},
-    {"file": "symlink-cleanup.ts", "fn": "sweepDir", "call": "fs.unlinkSync", "count": 1, "reason": "startup only: main.ts sweeps orphaned plugin symlinks once during launch"}
+    {"file": "sync-spaces/space-manager.ts", "fn": "SpaceManager.loadInitial", "call": "fs.readFileSync", "count": 1, "reason": "startup only: the FIRST read of the small sync-spaces.json state file, made once when startSyncSpaces constructs the manager and asks isEnabled(); every later read is served from memory and every write is async"}
   ],
   "user-rare": [
+    {"file": "prerequisite-installer.ts", "fn": "applyWindowsUserToolsToEnv", "call": "fs.existsSync", "count": 3, "reason": "three stat calls, Windows only: once at launch and once after each setup install's PATH rebuild (refreshPath)"},
+    {"file": "claude-code-doc-comments-mcp.ts", "fn": "deployClaudeCodeDocCommentsMcp", "call": "fs.mkdirSync", "count": 1, "reason": "once per Claude Code session create, same rarity/shape as the sibling deployClaudeCodeLinkMcp (session-manager.ts calls both inline, synchronously, from the same non-async createSession)"},
+    {"file": "claude-code-doc-comments-mcp.ts", "fn": "deployClaudeCodeDocCommentsMcp", "call": "fs.chmodSync", "count": 2, "reason": "T9c/T20 adversarial review, finding #1 (cheap hardening): owner-only permissions on the per-session deploy directory and its config file, once per Claude Code session create, same rarity/shape as the sibling deployClaudeCodeLinkMcp"},
+    {"file": "claude-code-doc-comments-mcp.ts", "fn": "deployClaudeCodeDocCommentsMcp", "call": "fs.writeFileSync", "count": 2, "reason": "once per Claude Code session create, same rarity/shape as the sibling deployClaudeCodeLinkMcp (session-manager.ts calls both inline, synchronously, from the same non-async createSession)"},
+    {"file": "claude-code-doc-comments-mcp.ts", "fn": "sweepStaleDeploysOnce", "call": "fs.rmSync", "count": 1, "reason": "T9c/T20 adversarial review, finding #3: sweeps leftover deploy directories once per PROCESS LIFETIME (guarded by a flag, only fires on the very first doc-comments MCP deploy of a fresh app launch), called inline from the same non-async deployClaudeCodeDocCommentsMcp"},
     {"file": "conversations/conversation-store.ts", "fn": "createConversationStore.mutateRecord", "call": "fs.writeFileSync", "count": 1, "reason": "runs only when a record file is unreadable: keeps its bytes before the locked write replaces them; mutateFileUnderLock's callback is synchronous, so it cannot await"},
     {"file": "harness/eval/battery.ts", "fn": "loadRoster", "call": "fs.readFileSync", "count": 1, "reason": "developer evaluator only (test-engine/harness-eval), never runs inside the app"},
     {"file": "harness/eval/fixture-workspace.ts", "fn": "seedFixtureWorkspace.write", "call": "fs.mkdirSync", "count": 1, "reason": "developer evaluator only (test-engine/harness-eval), never runs inside the app"},
@@ -28,7 +29,9 @@
     {"file": "harness/eval/fixture-workspace.ts", "fn": "seedFixtureWorkspace", "call": "fs.mkdirSync", "count": 1, "reason": "developer evaluator only (test-engine/harness-eval), never runs inside the app"},
     {"file": "harness/eval/fixture-workspace.ts", "fn": "seedFixtureWorkspace", "call": "fs.mkdtempSync", "count": 1, "reason": "developer evaluator only (test-engine/harness-eval), never runs inside the app"},
     {"file": "harness/eval/fixture-workspace.ts", "fn": "seedFixtureWorkspace", "call": "fs.realpathSync", "count": 1, "reason": "developer evaluator only (test-engine/harness-eval), never runs inside the app"},
-    {"file": "harness/eval/run-case.ts", "fn": "runCase", "call": "fs.rmSync", "count": 1, "reason": "developer evaluator only (test-engine/harness-eval), never runs inside the app"}
+    {"file": "harness/eval/run-case.ts", "fn": "runCase", "call": "fs.rmSync", "count": 1, "reason": "developer evaluator only (test-engine/harness-eval), never runs inside the app"},
+    {"file": "harness/tools/doc-comments-tools.ts", "fn": "resolvedPathForFormatDecision", "call": "realpathSync", "count": 1, "reason": "review finding #5 (docs/active/reviews/2026-09-27-doc-comments-t9ab-review.md): resolves a symlink before the native-vs-sidecar format decision, once per AddComment/ReplyToComment/etc. tool call (an assistant leaving a comment) and once more from permissionSubject's own use of the same helper — permissionSubject has no cwd/async available (same shape as bash.ts's own realPath entry below), so this stays synchronous; a single bounded stat, not proportional to file size"},
+    {"file": "permission-auto-approve.ts", "fn": "isPathItselfASymlink", "call": "lstatSync", "count": 1, "reason": "review finding #5: fail-safe check so a symlinked absolute path never gets a free ride through the doc-comments auto-approve hook (main.ts calls shouldAutoApproveDocComment inline, synchronously, before responding to a blocking PermissionRequest hook, so this can't become async) — fires at most once per PermissionRequest for one of the six doc-comments MCP tools, never a hot loop"}
   ],
   "unreviewed-hot-path-candidate": [
     {"file": "analytics-service.ts", "fn": "readState", "call": "fs.readFileSync", "count": 1},
@@ -454,7 +457,6 @@
     {"file": "plugin-installer.ts", "fn": "upgradePluginFromLocal", "call": "fs.rmSync", "count": 3},
     {"file": "plugin-installer.ts", "fn": "upgradePluginFromLocal", "call": "fs.statSync", "count": 1},
     {"file": "prerequisite-installer.ts", "fn": "checkDiskSpace", "call": "fs.statfsSync", "count": 1},
-    {"file": "prerequisite-installer.ts", "fn": "checkWindowsDevMode", "call": "execSync", "count": 1},
     {"file": "prerequisite-installer.ts", "fn": "cleanStaleClaudeDownloads", "call": "fs.readdirSync", "count": 1},
     {"file": "prerequisite-installer.ts", "fn": "cleanStaleClaudeDownloads", "call": "fs.rmSync", "count": 1},
     {"file": "prerequisite-installer.ts", "fn": "detectClaude", "call": "fs.existsSync", "count": 1},

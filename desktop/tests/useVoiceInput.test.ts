@@ -469,3 +469,106 @@ describe('a refusal from the operating system', () => {
   });
 });
 
+
+// Fixes from the 2026-09-30 "voice dies randomly" investigation. Each of these
+// used to leave voice broken until the app was restarted, or lose the words.
+describe('voice keeps working after something goes wrong', () => {
+  // WHY: closing only our own microphone on unmount left the host holding a
+  // session nothing would ever end, and every later tap in the window was
+  // refused with "already listening in this window".
+  it('taking the composer off screen mid-dictation tells the host to let go', async () => {
+    const { bridge } = installBridge({ desktop: true });
+    const { result, unmount } = mount();
+    await settle();
+    await act(async () => { await result.current.start(); });
+    expect(result.current.phase).toBe('listening');
+    unmount();
+    expect(bridge.cancel).toHaveBeenCalledTimes(1);
+    expect(cap.closes).toBe(1);
+  });
+
+  it('an idle composer leaving says nothing to the host', async () => {
+    const { bridge } = installBridge({ desktop: true });
+    const { unmount } = mount();
+    await settle();
+    unmount();
+    expect(bridge.cancel).not.toHaveBeenCalled();
+  });
+
+  // WHY: opening the microphone had no time limit. One that never answered left
+  // the composer "starting" forever, and every later tap was silently ignored.
+  it('a microphone that never opens gives up after ten seconds, and the next tap works', async () => {
+    vi.useFakeTimers();
+    const { bridge } = installBridge({ desktop: true });
+    let lateOpen: (h: { close: () => void; finish: () => Promise<void> }) => void = () => {};
+    cap.open.mockImplementationOnce(() => new Promise((r) => { lateOpen = r; }));
+    const { result } = mount();
+    await settle();
+    let starting!: Promise<void>;
+    act(() => { starting = result.current.start(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); await starting; });
+    expect(result.current.phase).toBe('idle');
+    expect(result.current.readiness).toEqual({
+      state: 'unavailable',
+      reason: 'Voice could not open a microphone.\nTimeoutError: The microphone did not open within 10 seconds.',
+    });
+    expect(bridge.cancel).toHaveBeenCalledTimes(1);
+
+    // The open finally answers after we gave up: that microphone is closed at once.
+    let lateClosed = 0;
+    await act(async () => { lateOpen({ close: () => { lateClosed += 1; }, finish: async () => {} }); await Promise.resolve(); });
+    expect(lateClosed).toBe(1);
+
+    // And the composer is not stuck "starting": Check again, then a tap, opens the mic.
+    await act(async () => { await result.current.recheck(); });
+    await act(async () => { await result.current.start(); });
+    expect(result.current.phase).toBe('listening');
+  });
+
+  // WHY: a microphone that stopped by itself left "Listening" on screen with a
+  // flat meter forever. Now it finishes like a Stop — words kept — and says why.
+  it('a microphone that stops by itself ends the dictation like Stop, and says so', async () => {
+    const { bridge } = installBridge({ desktop: true });
+    let lost: () => void = () => {};
+    cap.open.mockImplementationOnce(async (_onChunk: unknown, onLost: () => void) => {
+      lost = onLost;
+      return { close: () => { cap.closes += 1; }, finish: async () => { cap.closes += 1; } };
+    });
+    const { result } = mount();
+    await settle();
+    await act(async () => { await result.current.start(); });
+    await act(async () => { lost(); await Promise.resolve(); });
+    expect(bridge.stop).toHaveBeenCalledTimes(1);   // a stop, not a cancel: the words are kept
+    expect(bridge.cancel).not.toHaveBeenCalled();
+    expect(result.current.phase).toBe('finishing');
+    expect(result.current.error).toBe('Voice stopped because the microphone stopped sending sound.');
+  });
+});
+
+// WHY (2026-09-30 review): the host knows sessions only by window, and a new
+// start now replaces a window's leftover session. A start unwinding late — its
+// composer taken off screen while the mic was opening — used to send a cancel
+// that ended the NEWER composer's live dictation instead of its own.
+describe('a late unwind never ends a newer dictation', () => {
+  it('an abandoned start does not cancel the start that replaced it', async () => {
+    const { bridge } = installBridge({ desktop: true });
+    let releaseFirst: () => void = () => {};
+    (bridge.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      () => new Promise<void>((r) => { releaseFirst = r; }),
+    );
+    const a = mount();
+    await settle();
+    let aStarting!: Promise<void>;
+    act(() => { aStarting = a.result.current.start(); });
+    a.unmount();                                   // composer A leaves mid-start
+
+    const b = mount();                             // composer B, same window
+    await settle();
+    await act(async () => { await b.result.current.start(); });
+    expect(b.result.current.phase).toBe('listening');
+
+    await act(async () => { releaseFirst(); await aStarting; });
+    expect(bridge.cancel).not.toHaveBeenCalled(); // B's dictation survives
+    expect(b.result.current.phase).toBe('listening');
+  });
+});

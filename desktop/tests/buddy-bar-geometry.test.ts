@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   BAR_CONTENT, BAR_PADDING, BAR_GAP_PX, BAR_SIZE, CHAT_SIZE, CHAT_GAP_PX, MASCOT_SIZE,
   computeBarContentRect, computeBarPosition, computeGroupLayout, chatOffsetX,
-  mascotXRangeForChat, mascotInkRect,
+  mascotXRangeForChat, mascotInkRect, computeTrayLayout,
 } from '../src/main/buddy-bar-geometry';
 
 const wa = { x: 0, y: 0, width: 1920, height: 1080 };
@@ -218,5 +218,27 @@ describe('computeGroupLayout', () => {
       expect(l.chat.x).toBeGreaterThanOrEqual(SHORT_WA.x);
       expect(l.chat.x + CHAT_SIZE.width).toBeLessThanOrEqual(SHORT_WA.x + SHORT_WA.width);
     }
+  });
+});
+
+// ─── Taskbar-icon layout ─────────────────────────────────────────────────────
+
+describe('computeTrayLayout', () => {
+  const WA = { x: 0, y: 0, width: 1920, height: 1040 };
+  it('bottom bar: chat above the button row, the pair against the bar', () => {
+    const { chat, bar } = computeTrayLayout({ x: 1700, y: 1048, width: 24, height: 24 }, WA);
+    expect(chat.x + CHAT_SIZE.width / 2).toBe(1712);
+    expect(bar.y).toBe(chat.y + CHAT_SIZE.height);
+    expect(bar.y + BAR_SIZE.height).toBe(1040 - 8);
+  });
+  it('top bar (macOS menu bar): the chat hangs from the top', () => {
+    const { chat } = computeTrayLayout({ x: 1500, y: 2, width: 22, height: 22 }, { x: 0, y: 25, width: 1920, height: 1055 });
+    expect(chat.y).toBe(25 + 8);
+  });
+  it('icon position unknown (Linux): bottom-right corner, fully on screen', () => {
+    const { chat, bar } = computeTrayLayout(null, WA);
+    expect(chat.x + CHAT_SIZE.width).toBe(1920 - 8);
+    expect(bar.x + BAR_SIZE.width).toBeLessThanOrEqual(1920);
+    expect(bar.y + BAR_SIZE.height).toBeLessThanOrEqual(1040);
   });
 });

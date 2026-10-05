@@ -75,7 +75,17 @@ const factory = async () =>
   new MockLanguageModelV4({ doStream: async () => ({ stream: simulateReadableStream({ chunks: [] }) }) }) as any;
 const NO_CONTEXT = async () => ({ contextLength: null, totalSlots: null });
 
-describe('resolveAskpassPaths — the one resolver both askpass paths come from', () => {
+// WHY these platform skips: the admin-password feature only ever starts on
+// Linux (admin-password-startup.ts — macOS stays off, Windows has no sudo).
+// The suites below drive a REAL Unix-socket server, the real /bin/sh wrapper
+// or POSIX exec bits; on Windows the socket listen is refused (EACCES) and the
+// helper waits out the 30 s timeout, and on macOS the kernel peer-pid self-test
+// and the OS-injected __CF_USER_TEXT_ENCODING variable make them fail for
+// reasons no user can reach. Suites that hold on every platform still run.
+const NOT_LINUX = process.platform !== 'linux';
+const IS_WINDOWS = process.platform === 'win32';
+
+describe.skipIf(IS_WINDOWS)('resolveAskpassPaths — the one resolver both askpass paths come from', () => {
   it('resolves SUDO_ASKPASS to the executable wrapper, never the non-executable askpass.cjs it execs into', async () => {
     const resolveAskpassPaths = await importResolver();
     const paths = await resolveAskpassPaths();
@@ -118,7 +128,7 @@ describe('resolveAskpassPaths — the one resolver both askpass paths come from'
   });
 });
 
-describe('NativeSessionHost.attachAdminPassword — the real resolver feeding the real host', () => {
+describe.skipIf(NOT_LINUX)('NativeSessionHost.attachAdminPassword — the real resolver feeding the real host', () => {
   let root: string;
   let host: NativeSessionHost;
   let server: AskpassServer | null;
@@ -163,7 +173,7 @@ describe('NativeSessionHost.attachAdminPassword — the real resolver feeding th
   });
 });
 
-describe('the real wrapper against a real AskpassServer (no sudo — refused at the parent check)', () => {
+describe.skipIf(NOT_LINUX)('the real wrapper against a real AskpassServer (no sudo — refused at the parent check)', () => {
   it('reaches a verify attempt with the right argv, refused only for lacking a genuine sudo parent', async () => {
     const resolveAskpassPaths = await importResolver();
     const paths = await resolveAskpassPaths();

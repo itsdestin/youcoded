@@ -1,10 +1,10 @@
 // ActiveArtifactView — shared component for viewing and editing a single artifact.
 // Extracted from SessionDrawer.tsx (Task 7.2) so both SessionDrawer and ProjectView
 // can use it identically without duplicating the edit state + conflict-detection logic.
-import { useCallback, useEffect, useRef, useState, forwardRef, useImperativeHandle, Suspense } from 'react';
-import { getViewer, getEditViewer, rendersFromBytesOnly, isTextContentViewer } from './RendererRegistry';
+import { lazy, useCallback, useEffect, useRef, useState, forwardRef, useImperativeHandle, Suspense } from 'react';
+import { getViewer, getEditViewer, rendersFromBytesOnly, isTextContentViewer, isCodeEditorViewer, isCommentableBinaryViewer } from './RendererRegistry';
 import { PartialFileBanner } from './PartialFileBanner';
-import { canEditArtifact } from './edit-permission';
+import { canEditArtifact, draftFileStatus } from './edit-permission';
 import { ViewerErrorBoundary } from './ViewerErrorBoundary';
 import type { ArtifactRecord } from '../../../shared/artifacts/types';
 import { editTier, EDIT_MAX_BYTES } from '../../../shared/artifacts/editable-path-policy';
@@ -14,6 +14,24 @@ import { LoadingState, ErrorState } from '../ui/states';
 import { RemoteFileCard } from './RemoteFileCard';
 import { describeReadError } from './read-error-copy';
 import { isRemoteMode } from '../../platform';
+// Doc comments (round 2, Destin): Reading mode (default) vs Comments mode
+// (the comment panel). Every host draws the Comments button itself (the file
+// drawer as a floating pill beside Edit, the Projects screen as a header tool
+// beside Edit) and calls toggleComments().
+import { CommentsActionsInPaneContext, CommentsCloseContext } from '../comments/CommentsPaneFrame';
+import { CodeCommentsRail } from '../comments/CodeCommentsRail';
+import { CodeCommentPopover } from '../comments/CodeCommentPopover';
+import { requestThreadAgain } from '../comments/CommentsMargin';
+import { useDocComments } from '../../state/doc-comments-store';
+import { useNarrowByRef } from '../../hooks/use-container-narrow';
+// Round 3: Comments mode needs margin-card room the drawer's DEFAULT width
+// doesn't have (see the effect below's own WHY) — reuses the drawer's
+// existing Expand control's shared state rather than inventing a second
+// "wide" concept for this one mode. Optional variants: several existing
+// ActiveArtifactView tests render it with no ArtifactProvider ancestor at
+// all (it didn't read this store before), and the throwing hooks would take
+// down every one of them rather than just no-op the auto-expand.
+import { useArtifactSelectorOptional, useArtifactDispatchOptional } from '../../state/ArtifactContext';
 
 /** Absolute on-disk path of an artifact — the same join SessionDrawer and
  *  FilesTab make for Copy path, so Download asks the host for the same file. */
@@ -23,8 +41,15 @@ function absoluteArtifactPath(projectRoot: string, a: ArtifactRecord): string {
     : (a.absolutePath ?? a.path);
 }
 import { openEditorSearch, revealLineIn } from './cm/editor-registry';
-import { draftKey, stashDraft, takeDraft, clearDraft } from './draft-store';
+import { draftKey, stashDraft, takeDraft, clearDraft, settleDraft } from './draft-store';
 import { ScreenMark } from '../../shoot-mode';
+import { isOfficeEditable } from '../office/office-files';
+import { useOfficeAvailable } from '../office/office-availability';
+import { flushOffice } from '../office/office-store';
+import { holdUnsavedEditor } from '../../state/unsaved-editors';
+// Office files edit in the Euro-Office editor (design stage, 2026-09-28) — lazy,
+// so the editor code loads only when someone presses Edit on one.
+const OfficeInlineEditor = lazy(() => import('../office/OfficeInlineEditor').then((m) => ({ default: m.OfficeInlineEditor })));
 
 // Confirm-tier wording (D5): name the actual consequence, per path family.
 // Never a vague "are you sure" — the user should know what the file DOES.
@@ -54,6 +79,43 @@ function saveErrorMessage(res: any): string {
   return `Save failed: ${String(err ?? 'unknown error')}`;
 }
 
+/**
+ * Save a parked draft from the refused-quit prompt (Task 6 fix round 13) — the editor's own save
+ * path (artifacts:save: the same write authorization, temp file + rename and changed-on-disk
+ * check in main), with the draft's own base token. Without a token nothing can tell whether the
+ * file changed since, so that is reported as a possible conflict, never saved blind; `force`
+ * (Save anyway, confirmed) overwrites. On success the draft is cleared (its mark with it).
+ */
+export async function saveParkedDraft(p: {
+  projectRoot: string; projectId: string; projectName: string; artifact: ArtifactRecord; sessionId: string;
+  draft: string; baseMtimeMs: number | null; resolvedPath?: string | null; force?: boolean; confirmed?: boolean;
+}): Promise<import('../../state/unsaved-editors').ParkedSaveResult> {
+  // The write tier is judged on the RESOLVED path, as the editor does (a link may lead into a
+  // settings folder); a settings file asks first, inline (fix round 14) — never a dead-end message.
+  const abs = p.resolvedPath ?? (p.artifact.kind === 'internal'
+    ? `${p.projectRoot.replace(/\\/g, '/').replace(/\/+$/, '')}/${p.artifact.path.replace(/\\/g, '/')}`
+    : (p.artifact.absolutePath ?? p.artifact.path));
+  const needsConfirm = editTier(canonicalize(abs, null)) === 'needs-confirm';
+  if (needsConfirm && !p.confirmed) return { needsConfirm: true };
+  if (!p.force && p.baseMtimeMs === null) return { conflict: true, unknown: true };
+  const opts: { baseMtimeMs?: number; confirmed?: boolean } = {};
+  if (!p.force && p.baseMtimeMs !== null) opts.baseMtimeMs = p.baseMtimeMs;
+  if (needsConfirm) opts.confirmed = true;
+  let res: any;
+  try {
+    res = await (window.claude as any).artifacts.save(p.projectRoot, p.projectId, p.projectName, p.artifact.id, p.draft, p.sessionId, opts);
+  } catch (e) {
+    return { error: `Save failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+  if (res && res.ok) { clearDraft(draftKey(p.projectRoot, p.artifact.id)); return { ok: true }; }
+  if (res && res.error === 'conflict') return { conflict: true };
+  // Main's own answers the prompt can act on (fix round 15): a settings file → the inline
+  // question (never the editor's "re-enter edit mode" advice); a protected path → Discard only.
+  if (res && res.error === 'needs-confirm') return { needsConfirm: true };
+  if (res && res.error === 'protected-path') return { protected: true };
+  return { error: saveErrorMessage(res) };
+}
+
 // Imperative handle so an external chrome (the SessionDrawer header toolbar) can
 // drive edit mode while ActiveArtifactView keeps owning the edit/save/conflict
 // logic. Paired with onEditStateChange so the header re-renders on state change.
@@ -63,6 +125,9 @@ export interface ActiveArtifactHandle {
   /** True when edit mode holds changes not yet on disk — hosts must gate
    * selection/close behind the unsaved-changes prompt when set (D3). */
   dirty: boolean;
+  /** Office files save themselves as you edit: hosts show one "Done" instead of
+   *  Save + Cancel, and saveEdit/cancelEdit both just leave edit mode. */
+  autosaves: boolean;
   startEdit(): void;
   /** Resolves true when the save landed — false means the pane is showing a
    * conflict or error and the caller should NOT proceed with navigation. */
@@ -76,6 +141,32 @@ export interface ActiveArtifactHandle {
    * Retries briefly — the lazy CM6 chunk may still be mounting when a search
    * result opens a file. No-op for non-code viewers. */
   revealLine(line: number): void;
+  /** Switch between Reading and Comments mode — driven by the host header's
+   *  Comments button (round 4), paired with onCommentsStateChange. */
+  toggleComments(): void;
+}
+
+/** What the host header needs to draw the Comments button. */
+export interface CommentsHeaderState {
+  /** False on viewers with no text to anchor to (images, PDFs…) and while editing. */
+  available: boolean;
+  active: boolean;
+  count: number;
+  /** The full comment column is on screen — Comments mode AND wide enough
+   *  for the margin (not collapsed to its marker rail). */
+  paneVisible: boolean;
+  /** Where the comment cards sit, measured from this view's right edge:
+   *  `actionsRight`/`actionsWidth` line the floating comment actions up with
+   *  the cards; `paneLeft` is the comment pane's outer left edge, so
+   *  Comments/Edit can clear it. Measured rather than assumed because the
+   *  pane's framing (round 15), its scrollbar and its padding all move them. */
+  actionsRight: number;
+  actionsWidth: number;
+  paneLeft: number;
+  /** Distance from the bottom of the host's positioning box to 8px above the
+   *  pane's bottom edge — so the floating actions keep the cards' 8px inset
+   *  from a rounded panel's bottom border too (round 16). */
+  actionsBottom: number;
 }
 
 /** Metadata from the artifacts:get response that content alone cannot carry —
@@ -139,7 +230,14 @@ export interface ActiveArtifactViewProps {
   // (SessionDrawer) renders them in its header instead. ProjectView omits this.
   controlsInHeader?: boolean;
   // Fires whenever editability / edit-mode changes so the host header can update.
-  onEditStateChange?: (s: { isEditable: boolean; editing: boolean }) => void;
+  onEditStateChange?: (s: { isEditable: boolean; editing: boolean; autosaves?: boolean }) => void;
+  /** Fires when the Comments button's state changes; the host draws the
+   *  button (and the floating actions, unless commentsActionsInPane). */
+  onCommentsStateChange?: (s: CommentsHeaderState) => void;
+  /** The host has no floating button cluster (the Projects screen's file
+   *  overlay): Ask Your Assistant then floats inside the comment panel, and
+   *  `beforeAsk` runs before it sends (see CommentsActionsInPaneContext). */
+  commentsActionsInPane?: React.ContextType<typeof CommentsActionsInPaneContext>;
   /** Host's Ctrl+F bar is open — forwarded so a viewer can move its own floating
    *  controls out from under it. */
   findBarOpen?: boolean;
@@ -147,7 +245,7 @@ export interface ActiveArtifactViewProps {
 
 export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifactViewProps>(function ActiveArtifactView({
   artifact, content, contentInfo, contentState, onRetryRead, projectRoot, projectId, projectName, sessionId, onContentChange, onDiskRead,
-  controlsInHeader = false, onEditStateChange, findBarOpen = false,
+  controlsInHeader = false, onEditStateChange, onCommentsStateChange, commentsActionsInPane, findBarOpen = false,
 }, ref) {
   // Legacy default: a caller that doesn't thread contentState keeps the OLD
   // semantics (null content = missing) rather than silently losing the
@@ -170,7 +268,14 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // The four conditions (resolved content, policy, binary sniff, SIZE) live in
   // one predicate so the affordance, entering edit mode, restoring a stashed
   // draft, and the save call cannot disagree — see edit-permission.ts.
-  const isEditable = canEditArtifact(contentInfo, content, tier);
+  // Office files are not text: they edit in the Office editor, which saves them
+  // itself (office-questions#Q-open-mode, #Q-save), so none of the text-draft
+  // machinery below applies. Only where the app can run the editors: a desktop whose
+  // Office add-on is installed (Task 6 — the namespace itself exists on remote and the phone
+  // too, where Office stays off until phones get it, #Q-phones).
+  const officeAvailable = useOfficeAvailable();
+  const office = isOfficeEditable(artifact.path) && officeAvailable;
+  const isEditable = office ? tier !== 'denied' : canEditArtifact(contentInfo, content, tier);
 
   // ── Task 6.4: controlled edit state (lifted from MarkdownView) ──
   // Owning edit state here lets the conflict banner read/reset it without
@@ -217,6 +322,11 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
       setDraft(pending.draft);
       mtimeRef.current = pending.mtimeMs;
       setEditing(true);
+      settleDraft(draftKey(projectRoot, artifact.id), true); // back in the editor (fix round 11)
+    } else if (pending && content !== null) {
+      // Can't be edited any more: the draft stays parked (and listed), never dropped.
+      pendingRestoreRef.current = undefined;
+      settleDraft(draftKey(projectRoot, artifact.id), false);
     }
   }, [content, artifact.id]);
 
@@ -246,16 +356,27 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
         setDraft(pending.draft);
         mtimeRef.current = pending.mtimeMs;
         setEditing(true);
+        settleDraft(key, true);
       }
     }
     return () => {
+      // Switched away (or unmounted) before a taken draft could be applied: it stays parked.
+      if (pendingRestoreRef.current) { pendingRestoreRef.current = undefined; settleDraft(key, false); }
       // THE SAFETY NET: unmounting (or switching away) while dirty stashes
       // the draft instead of discarding it. Guarded paths never reach here
       // dirty — Discard runs cancelEdit first; unguarded paths (any layout
       // change that unmounts the drawer) degrade to draft-survives.
       const cur = stateRef.current;
       if (cur.editing && cur.content !== null && cur.draft !== cur.content) {
-        stashDraft(key, { draft: cur.draft, mtimeMs: mtimeRef.current });
+        // Named and savable from the refused-quit prompt (fix rounds 11–13): the file name only.
+        const draftText = cur.draft;
+        const baseMtimeMs = mtimeRef.current;
+        const resolvedPath = cur.contentInfo?.resolvedPath ?? null;
+        stashDraft(key, {
+          draft: draftText, mtimeMs: baseMtimeMs, name: artifact.path.split(/[\\/]/).pop() || artifact.path,
+          available: () => draftFileStatus(projectRoot, artifact),
+          save: (o) => saveParkedDraft({ projectRoot, projectId, projectName, artifact, sessionId, draft: draftText, baseMtimeMs, resolvedPath, ...o }),
+        });
       }
     };
   }, [artifact.id, projectRoot]);
@@ -309,6 +430,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
 
   // ── Edit lifecycle callbacks (passed down to MarkdownView as controlled props) ──
   const handleStartEdit = useCallback(() => {
+    if (office) { setEditing(true); return; }
     // Confirm-tier paths get one deliberate click BEFORE editing starts, not a
     // surprise refusal at save time (D5 — mistake-prevention, not security; the
     // hard boundary is main's).
@@ -334,12 +456,16 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     setEditing(true);
     setConflict(null);
     setSaveError(null);
-  }, [tier, absolutePath, projectRoot, artifact.id, content, contentInfo, onContentChange, onDiskRead]);
+  }, [office, tier, absolutePath, projectRoot, artifact.id, content, contentInfo, onContentChange, onDiskRead]);
 
   // opts.force: skip the concurrency token — the deliberate "Keep mine"
   // overwrite. Shaped as an options object so accidental event-object args
   // (onClick={handleSave}) can never read as force=true.
   const handleSave = useCallback(async (opts?: { force?: boolean }): Promise<boolean> => {
+    // The Office editor saves as you type (3 s after the last change); Done waits for that
+    // last save, at most 5 s, so leaving never drops the final few seconds of typing. A save
+    // that failed keeps the editor open, where its reason and the save-failed actions show (I1).
+    if (office) { const r = await flushOffice(absolutePath); if (!r.ok) return false; setEditing(false); return true; }
     // The §2.2 empty-file guarantee: while content is null (the fetch
     // transient, an orphan, a binary file) there is NOTHING valid to save — a
     // write here would truncate the file to the placeholder draft. This is the
@@ -417,7 +543,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     }
     setSaveError(saveErrorMessage(res));
     return false;
-  }, [projectRoot, projectId, projectName, artifact.id, draft, sessionId, onContentChange, onDiskRead, tier, content, contentInfo]);
+  }, [office, absolutePath, projectRoot, projectId, projectName, artifact.id, draft, sessionId, onContentChange, onDiskRead, tier, content, contentInfo]);
 
   const handleCancel = useCallback(() => {
     clearDraft(draftKey(projectRoot, artifact.id));
@@ -426,6 +552,9 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     setConflict(null);
     setSaveError(null);
   }, [content, projectRoot, artifact.id]);
+  // The refused-quit prompt's discard reaches the latest cancel (the effect below holds it).
+  const cancelRef = useRef(handleCancel);
+  cancelRef.current = handleCancel;
 
   // ── Conflict resolution actions ──
   const resolveKeepMine = useCallback(() => {
@@ -472,6 +601,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     isEditable,
     editing,
     dirty,
+    autosaves: office,
     startEdit: handleStartEdit,
     saveEdit: () => handleSave(),
     cancelEdit: handleCancel,
@@ -487,23 +617,28 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
       };
       tryReveal();
     },
-  }), [isEditable, editing, dirty, handleStartEdit, handleSave, handleCancel]);
+    toggleComments: () => setCommentsMode((m) => (m === 'comments' ? 'reading' : 'comments')),
+  }), [isEditable, editing, dirty, office, handleStartEdit, handleSave, handleCancel]);
 
   // Desktop app-quit / window-close guard while dirty (D3). Android never
   // fires beforeunload usefully — its back navigation goes through the
   // useEscClose stack in the hosts instead.
+  // Also held in unsaved-editors so a quit refuses BEFORE teardown rather than meeting this
+  // veto after every session was stopped (Task 6 fix round 9).
   useEffect(() => {
     if (!dirty) return;
     const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
     window.addEventListener('beforeunload', handler);
-    return () => window.removeEventListener('beforeunload', handler);
+    // Named (file name only) and discardable from the refused-quit prompt (fix round 11).
+    const release = holdUnsavedEditor({ name: artifact.path.split(/[\\/]/).pop() || artifact.path, discard: () => cancelRef.current() });
+    return () => { window.removeEventListener('beforeunload', handler); release(); };
   }, [dirty]);
 
   // Notify the host whenever editability / edit-mode changes so its header
   // can swap the pencil ↔ save/cancel icons.
   useEffect(() => {
-    onEditStateChange?.({ isEditable, editing });
-  }, [isEditable, editing, onEditStateChange]);
+    onEditStateChange?.({ isEditable, editing, autosaves: office });
+  }, [isEditable, editing, office, onEditStateChange]);
 
   // The Registry returns a real component for every type (heavy viewers —
   // pdf/docx/xlsx — are React.lazy, so they're code-split but still rendered
@@ -512,7 +647,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // editor component — most read viewers (HtmlView iframe, CsvView grid) have
   // no edit UI, so "Edit" on those files used to render nothing.
   const ViewerComponent = editing
-    ? getEditViewer(artifact.path)
+    ? (office ? OfficeInlineEditor : getEditViewer(artifact.path))
     : getViewer(artifact.path, {
         // Only assert text when a get response actually sniffed the bytes —
         // absent info keeps the registry's conservative extension routing.
@@ -532,6 +667,154 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // lives) so the handoff can say which of the two it is.
   const sniffedBinaryTextFile = contentInfo?.binary === true
     && isTextContentViewer(getViewer(artifact.path));
+
+  // Doc comments (round 2, Destin): only on a viewer that renders real text —
+  // a binary preview (image/pdf/csv grid) has nothing a selection or a line
+  // number could anchor to. Comments mode/Reading mode is a distinct toggle
+  // now, not always-on: "kinda be a distinct 'mode' entered by the user".
+  // Word and Excel files joined on 2026-09-24 (isCommentableBinaryViewer).
+  const showComments = !editing && (isTextContentViewer(ViewerComponent) || isCommentableBinaryViewer(ViewerComponent));
+  const showCodeRail = showComments && isCodeEditorViewer(ViewerComponent);
+  // SessionDrawer's pane is a fixed ~480px regardless of window width, so the
+  // review bar needs the PANE's own width, same reasoning as MarkdownView's
+  // margin collapse (use-container-narrow.ts has the full WHY).
+  const narrowPane = useNarrowByRef(rootRef, 640);
+
+  // Reading mode is the default every time a file opens (brief: "READING
+  // MODE (default when a file opens)") — reset on every artifact switch
+  // rather than a single mount-time default, since this component instance
+  // is reused across files (SessionDrawer/ProjectView never remount it).
+  const [commentsMode, setCommentsMode] = useState<'reading' | 'comments'>('reading');
+  const [focusThreadId, setFocusThreadId] = useState<string | undefined>(undefined);
+  useEffect(() => { setCommentsMode('reading'); setFocusThreadId(undefined); }, [artifact.id]);
+  // WHY read the store here too (Comments mode/ReadingHighlights each read
+  // it independently): "Open in comments" on a RESOLVED thread must reveal
+  // it — Comments mode hides resolved by default, and jumping to a thread
+  // nobody can see would look like the link did nothing.
+  const { comments: pathComments, setShowResolved: setPathShowResolved } = useDocComments(artifact.path, projectRoot);
+  // The Comments button's number counts OPEN comments only — "Comments 4"
+  // with two already resolved read as four things still waiting on you.
+  const openCount = pathComments.filter((c) => !c.resolved).length;
+  // Rounds 11 + 15: measure where the comment cards actually are. The host
+  // positions its floating buttons from this view's right edge, and the
+  // cards' distance from that edge depends on the pane's framing, its
+  // padding and whether its list shows a scrollbar — so it is measured, not
+  // assumed. [data-comments-list] is the padded card list (cards sit 8px
+  // inside it; its box already excludes the list's own scrollbar);
+  // [data-comments-pane] is the pane's outer edge.
+  const [paneGeom, setPaneGeom] = useState({ actionsRight: 8, actionsWidth: 240, paneLeft: 256, actionsBottom: 36 });
+  useEffect(() => {
+    if (commentsMode !== 'comments') return;
+    const root = rootRef.current;
+    let ro: ResizeObserver | null = null;
+    // The pane mounts with the viewer (a lazy chunk): look on the next frame.
+    const raf = requestAnimationFrame(() => {
+      const list = root?.querySelector<HTMLElement>('[data-comments-list]');
+      const pane = root?.querySelector<HTMLElement>('[data-comments-pane]');
+      if (!root || !list || !pane) return;
+      const measure = () => {
+        const r = root.getBoundingClientRect();
+        const l = list.getBoundingClientRect();
+        const p = pane.getBoundingClientRect();
+        // The host's floating buttons are positioned inside root's
+        // offsetParent (the doc column, which also holds the metadata strip
+        // below this view), so the bottom is measured from THAT box.
+        const host = (root.offsetParent as HTMLElement | null)?.getBoundingClientRect() ?? r;
+        const next = {
+          actionsRight: Math.round(r.right - (l.right - 8)),
+          actionsWidth: Math.round(l.width - 16),
+          paneLeft: Math.round(r.right - p.left),
+          actionsBottom: Math.round(host.bottom - p.bottom + 8),
+        };
+        setPaneGeom((cur) => (cur.actionsRight === next.actionsRight && cur.actionsWidth === next.actionsWidth
+          && cur.paneLeft === next.paneLeft && cur.actionsBottom === next.actionsBottom ? cur : next));
+      };
+      measure();
+      ro = new ResizeObserver(measure);
+      ro.observe(root);
+      ro.observe(list);
+    });
+    return () => { cancelAnimationFrame(raf); ro?.disconnect(); };
+  }, [commentsMode, artifact.id, showCodeRail, narrowPane]);
+
+  // Round 4 (Destin): the Comments button lives in the host's header icon
+  // row "alongside the other actions" — same imperative-handle + state
+  // callback pattern the header already uses for Edit/Save.
+  useEffect(() => {
+    // paneVisible: MarkdownView collapses its margin to a marker rail below
+    // the same 640px pane width narrowPane measures here; the code rail is
+    // always full width.
+    const paneVisible = commentsMode === 'comments' && showComments && (showCodeRail || !narrowPane);
+    onCommentsStateChange?.({ available: showComments, active: commentsMode === 'comments', count: openCount, paneVisible, ...paneGeom });
+  }, [showComments, showCodeRail, narrowPane, commentsMode, openCount, paneGeom, onCommentsStateChange]);
+  // The comment panel's own × (review deck R-3).
+  const closeCommentsPane = useCallback(() => setCommentsMode('reading'), []);
+  const openComments = useCallback((commentId?: string) => {
+    if (commentId) {
+      if (pathComments.find((c) => c.id === commentId)?.resolved) setPathShowResolved(true);
+      // An explicit click is always honoured once; only REMOUNTS are ignored
+      // (CommentsMargin's HANDLED_THREADS).
+      requestThreadAgain(artifact.path);
+      setFocusThreadId(commentId);
+    }
+    setCommentsMode('comments');
+  }, [pathComments, setPathShowResolved, artifact.path]);
+
+  // CHANGE (Destin, testing the dev instance): code files used to force-
+  // switch into the WHOLE Comments panel the instant a fresh draft appeared
+  // (this used to be a `useEffect` calling `openComments(pathFocusId)` here,
+  // added because CodeEditorView never wired up commentsMode/onOpenComments
+  // at all — types.ts's own WHY: "CodeEditorView's simpler treatment ...
+  // lives entirely in ActiveArtifactView instead" — and build-menu.ts's "Add
+  // comment" writes straight into the store with no callback of its own, so
+  // nothing flipped the mode without this). Code now matches markdown/text:
+  // Reading mode renders `<CodeCommentPopover>` below (the same small
+  // floating box ReadingHighlights shows, anchored through CM6's own
+  // `coordsAtPos` instead of a DOM Range — CM6 virtualizes, so there's no
+  // <mark> to measure), and the mode never has to change just to type a note.
+
+  // Round 3 (item 6): Comments mode needs the margin's card width; the
+  // drawer's DEFAULT ~480px pane (SessionDrawer's --right-pane-width) has
+  // none, which is why it used to fall back to a bottom sheet that covered
+  // the composer. Fix: entering Comments mode at that width flips the
+  // drawer's existing Expand control — the same one the header's ⛶ button
+  // drives — and flipping it back on exit restores exactly what the user
+  // had. Reusing that shared flag (over inventing a second "wide" concept)
+  // does mean it's global, not per-file: if the app window itself is under
+  // 640px wide while Project View's file tab (already full-width in
+  // practice, so narrowPane there is normally false) has Comments mode
+  // open, exiting will also un-expand whatever chat session is behind it —
+  // an accepted, rare edge case flagged in the round-3 report rather than
+  // solved with a second, viewer-local width flag.
+  const dispatch = useArtifactDispatchOptional();
+  const drawerExpanded = useArtifactSelectorOptional((s) => s.drawerExpanded);
+  const autoExpandedRef = useRef(false);
+  // Round 3 coordinator review (defect 1): `narrowPane` starts `false` and
+  // only becomes `true` once useNarrowByRef's ResizeObserver fires — one or
+  // more frames after commentsMode flips to 'comments'. A deps array of just
+  // `[commentsMode]` ran this ONCE, at the instant of the click, and missed
+  // narrowPane's real value entirely (still measuring), so the auto-expand
+  // silently never fired and the margin stayed at the default cramped
+  // width — reproduced with the artifact list open AND closed. Depending on
+  // narrowPane/drawerExpanded too makes the effect re-check as they settle;
+  // `autoExpandedRef` still guards it to firing (and un-firing) exactly once.
+  useEffect(() => {
+    if (!dispatch) return; // no provider (e.g. a unit test rendering this in isolation) — nothing to reuse
+    if (commentsMode === 'comments') {
+      if (narrowPane && !drawerExpanded && !autoExpandedRef.current) {
+        dispatch({ type: 'DRAWER_EXPAND_TOGGLED' });
+        autoExpandedRef.current = true;
+      }
+    } else if (autoExpandedRef.current) {
+      dispatch({ type: 'DRAWER_EXPAND_TOGGLED' });
+      autoExpandedRef.current = false;
+    }
+  }, [commentsMode, narrowPane, drawerExpanded, dispatch]);
+  // Restore on unmount too (closing the file entirely while still expanded
+  // for it) — otherwise the flag leaks past this component's own lifetime.
+  useEffect(() => () => {
+    if (autoExpandedRef.current) dispatch?.({ type: 'DRAWER_EXPAND_TOGGLED' });
+  }, [dispatch]);
 
   const showPartialBanner = !editing
     && contentInfo?.truncated === true
@@ -576,6 +859,8 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   }
 
   return (
+    <CommentsActionsInPaneContext.Provider value={commentsActionsInPane ?? null}>
+    <CommentsCloseContext.Provider value={closeCommentsPane}>
     <div ref={rootRef} className="h-full flex flex-col relative">
       {/* Conflict banner — shown when the file changes on disk while the user
           has UNSAVED edits. Three actions: keep draft, accept the disk version,
@@ -636,32 +921,52 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
           <UnifiedDiff oldStr={conflict.disk} newStr={draft} fill />
         </div>
       )}
-      <div className="flex-1 overflow-hidden">
-        {/* Boundary catches lazy chunk-load failures + viewer render crashes
-            (Suspense alone can't — lazy() THROWS its rejection). Keyed by
-            artifact so switching files retries with a clean slate. */}
-        <ViewerErrorBoundary key={artifact.id} path={artifact.path}>
-        <Suspense fallback={<div className="flex items-center justify-center h-full text-fg-muted text-sm">Loading viewer…</div>}>
-          {/* Photo-only build: inside Suspense, so `shoot` marks the file only once its viewer loaded. */}
-          <ScreenMark name={`chat/files/open/${artifact.id}`} />
-          <ViewerComponent
-            path={artifact.path}
-            content={content}
-            contentInfo={contentInfo}
-            sniffedBinaryTextFile={sniffedBinaryTextFile}
-            absolutePath={absolutePath}
-            isEditable={isEditable}
-            editing={editing}
-            draft={draft}
-            onDraftChange={setDraft}
-            onStartEdit={handleStartEdit}
-            onSaveEdit={handleSave}
-            onCancelEdit={handleCancel}
-            hideControls={controlsInHeader}
-            findBarOpen={findBarOpen}
-          />
-        </Suspense>
-        </ViewerErrorBoundary>
+      <div className="flex-1 overflow-hidden flex">
+        <div className="flex-1 min-w-0 h-full">
+          {/* Boundary catches lazy chunk-load failures + viewer render crashes
+              (Suspense alone can't — lazy() THROWS its rejection). Keyed by
+              artifact so switching files retries with a clean slate. */}
+          <ViewerErrorBoundary key={artifact.id} path={artifact.path}>
+          <Suspense fallback={<div className="flex items-center justify-center h-full text-fg-muted text-sm">Loading viewer…</div>}>
+            {/* Photo-only build: inside Suspense, so `shoot` marks the file only once its viewer loaded. */}
+            <ScreenMark name={`chat/files/open/${artifact.id}`} />
+            <ViewerComponent
+              path={artifact.path}
+              artifactId={artifact.id}
+              content={content}
+              contentInfo={contentInfo}
+              sniffedBinaryTextFile={sniffedBinaryTextFile}
+              absolutePath={absolutePath}
+              isEditable={isEditable}
+              editing={editing}
+              draft={draft}
+              onDraftChange={setDraft}
+              onStartEdit={handleStartEdit}
+              onSaveEdit={handleSave}
+              onCancelEdit={handleCancel}
+              hideControls={controlsInHeader}
+              findBarOpen={findBarOpen}
+              commentsMode={commentsMode}
+              onOpenComments={openComments}
+              focusThreadId={focusThreadId}
+              projectRoot={projectRoot}
+            />
+          </Suspense>
+          </ViewerErrorBoundary>
+        </div>
+        {/* Code files: the same Comments panel, linked to LINES rather than
+            in-text highlights (CM6 virtualises its DOM — CodeCommentsRail's
+            own comment has the WHY). Comments mode only; Reading mode for code
+            is the plain editor, full width, same as markdown. */}
+        {showCodeRail && commentsMode === 'comments' && (
+          <CodeCommentsRail path={artifact.path} projectRoot={projectRoot} />
+        )}
+        {/* CHANGE: Reading mode's own small floating box (see the import's
+            WHY) — the code-file equivalent of ReadingHighlights' popover,
+            replacing the old force-switch-to-panel effect. */}
+        {showCodeRail && commentsMode === 'reading' && (
+          <CodeCommentPopover path={artifact.path} projectRoot={projectRoot} />
+        )}
       </div>
       {/* Partial-view notice — floats over the BOTTOM of the doc pane, in the
           spot the Edit pill would occupy (a file this large is read-only, so
@@ -675,5 +980,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
         />
       )}
     </div>
+    </CommentsCloseContext.Provider>
+    </CommentsActionsInPaneContext.Provider>
   );
 });

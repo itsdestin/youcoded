@@ -1,0 +1,11 @@
+{
+  "fixture": "spanning-comment.docx",
+  "path": "docs/spanning-comment.docx",
+  "op": "resolve",
+  "args": {
+    "id": "w-5"
+  },
+  "result": {
+    "ok": true
+  }
+}

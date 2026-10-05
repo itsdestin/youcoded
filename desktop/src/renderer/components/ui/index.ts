@@ -98,3 +98,6 @@ export type { ZoomPillProps } from './ZoomPill';
 
 export { StatusStrip } from './StatusStrip';
 export type { StatusStripProps, StatusTone } from './StatusStrip';
+
+export { DocumentTabs } from './DocumentTabs';
+export type { DocumentTab } from './DocumentTabs';

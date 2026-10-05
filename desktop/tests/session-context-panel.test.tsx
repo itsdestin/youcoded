@@ -48,6 +48,38 @@ describe('the Project tab is named for what it holds', () => {
     userInstructions: { path: '/home/me/.claude/CLAUDE.md', truncated: false },
   };
 
+  it('reuses file rows for every captured ancestor and marks a shortened parent', () => {
+    show({ assembledBy: 'youcoded', projectInstructionFiles: [
+      { path: '/workspace/AGENTS.md', truncated: true, note: 'Outlined parent', notUsed: 'CLAUDE.md' },
+      { path: '/workspace/repo/CLAUDE.md', truncated: false },
+    ], skills: [], tools: [] });
+    expect(screen.getByText('Not everything fit')).toBeInTheDocument();
+    // Short, named summary — never "file(s)" or a bare count.
+    expect(screen.getByText('Shortened · AGENTS.md')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Project' }));
+    // Folder names, not long absolute paths; a same-folder file that was not used is named.
+    expect(screen.getByText('From the “workspace” folder · Outlined parent · CLAUDE.md here not used')).toBeInTheDocument();
+    expect(screen.getByText('This project · Read in full')).toBeInTheDocument();
+  });
+
+  it('counts the captured chain on Overview and keeps the same rows on Project', () => {
+    show({ assembledBy: 'youcoded', projectInstructionFiles: [
+      { path: '/workspace/AGENTS.md', truncated: false },
+      { path: '/workspace/repo/CLAUDE.md', truncated: false },
+    ], skills: [], tools: ['Read'] });
+    expect(screen.getByText(/2 rules files/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Project' }));
+    expect(screen.getByText('From the “workspace” folder · Read in full')).toBeInTheDocument();
+    expect(screen.getByText('This project · Read in full')).toBeInTheDocument();
+  });
+
+  it('counts the legacy Claude Code single-file record on Overview and Project', () => {
+    show(withUser);
+    expect(screen.getByText(/1 rules file/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Project' }));
+    expect(screen.getByText(/This project ·/)).toBeInTheDocument();
+  });
+
   it('shows both files, and neither card claims to be the other', () => {
     show(withUser);
     fireEvent.click(screen.getByRole('tab', { name: 'Project' }));

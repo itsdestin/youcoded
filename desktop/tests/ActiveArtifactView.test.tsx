@@ -4,11 +4,13 @@
 // useArtifactContent, and the conflict check that guards every save. Each section
 // keeps its own window.claude bridge fake and hooks, so they stay inside it.
 import React from 'react';
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { render, act, fireEvent, cleanup, renderHook, waitFor, within } from '@testing-library/react';
+import { EditorView } from '@codemirror/view';
 import { ActiveArtifactView, type ActiveArtifactHandle } from '../src/renderer/components/artifact-views/ActiveArtifactView';
 import { setConnectionMode } from '../src/renderer/platform';
 import { useArtifactContent, contentPathFor } from '../src/renderer/components/artifact-views/useArtifactContent';
+import { addComment, __resetDocCommentsStoreForTest } from '../src/renderer/state/doc-comments-store';
 
 // Pins the D4-unlock safety behavior of ActiveArtifactView (plan step 4):
 // 1. THE §2.2 EMPTY-FILE GUARANTEE — while content is null (fetch transient /
@@ -791,5 +793,67 @@ describe('first save without a conflict token', () => {
       expect(save).not.toHaveBeenCalled();
       expect(utils.getByText(/couldn.t check/i)).toBeTruthy();
     });
+  });
+});
+
+/**
+ * CHANGE (Destin, testing the dev instance): a fresh code-file comment used
+ * to force a switch into the whole Comments panel (the old bug fix this
+ * block used to pin — selecting text, right-clicking "Add comment", typing
+ * a note only worked once ActiveArtifactView auto-flipped commentsMode).
+ * Code now matches markdown/text files exactly: the draft gets the SAME
+ * small floating box (CodeCommentPopover, anchored through CM6's own
+ * `coordsAtPos`) right over the selection, in Reading mode, with no mode
+ * switch at all — see CodeCommentPopover.tsx and ActiveArtifactView.tsx's
+ * own WHY at the old effect's former call site.
+ */
+describe('code files show the small popover for a fresh draft, not the panel', () => {
+  const get = vi.fn();
+  const PATH = 'total.py';
+
+  beforeAll(() => {
+    // jsdom never lays out real geometry — CodeCommentPopover's own
+    // `visibleEditorFor` needs `getClientRects().length > 0` (same
+    // precedent as use-code-comment-anchors.test.tsx), and CM6's
+    // `coordsAtPos` needs real layout to answer at all.
+    Element.prototype.getClientRects = () => [{}] as unknown as DOMRectList;
+    vi.spyOn(EditorView.prototype, 'coordsAtPos').mockReturnValue({ left: 10, right: 10, top: 20, bottom: 30 } as any);
+  });
+
+  beforeEach(() => {
+    __resetDocCommentsStoreForTest();
+    get.mockReset().mockResolvedValue({ ok: true, content: 'result += price\n', orphan: false, mtimeMs: 1 });
+    (window as any).claude = {
+      artifacts: { save: vi.fn(), get, onChanged: () => () => {} },
+    };
+  });
+  afterEach(() => { __resetDocCommentsStoreForTest(); });
+
+  it('renders the popover in place, and commentsMode never switches to comments', async () => {
+    // The same call build-menu.ts's "Add comment" makes from the right-click
+    // menu on a code file's selection.
+    addComment(PATH, 'result += p', 'line 3 · total.py', {
+      startLine: 3, endLine: 3, prefix: '', suffix: '', occurrence: 0, projectRoot: '/proj',
+    });
+    const onCommentsStateChange = vi.fn();
+    const { container } = render(
+      <ActiveArtifactView
+        artifact={{ id: 'py1', kind: 'internal', path: PATH } as any}
+        content="result += price\n"
+        projectRoot="/proj"
+        projectId="p1"
+        projectName="Proj"
+        sessionId="s1"
+        onContentChange={vi.fn()}
+        onCommentsStateChange={onCommentsStateChange}
+      />,
+    );
+    // CodeCommentPopover renders the draft's own auto-focused note box — the
+    // same "Add a comment…" textarea a text file's popover shows.
+    await waitFor(() => expect(container.querySelector('[placeholder="Add a comment…"]')).toBeTruthy());
+    // Never switched into the full panel — no auto-open-panel effect exists
+    // anymore, and the panel's own chrome (Show Resolved) is absent.
+    expect(onCommentsStateChange).not.toHaveBeenCalledWith(expect.objectContaining({ active: true }));
+    expect(container.querySelector('[data-comments-list]')).toBeNull();
   });
 });

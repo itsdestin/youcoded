@@ -1,20 +1,26 @@
 // @vitest-environment jsdom
-// Pins the artifact-viewer branch of the right-click menu: the "Ask about this"
-// scaffold must cite SOURCE LINE NUMBERS for raw text/code views and fall back to
-// a quote for rendered markdown (whose DOM doesn't map back to source lines).
+// Pins the artifact-viewer branch of the right-click menu: "Ask about this"
+// must cite SOURCE LINE NUMBERS for raw text/code views and fall back to a
+// quote for rendered markdown (whose DOM doesn't map back to source lines).
+// Round 2 (Destin): the menu no longer builds a scaffold STRING, nor a
+// {quote, sourceLabel} chip (round 1) — it attaches a ComposeRef PILL via
+// youcoded:compose-insert, ported from session/comments-mock-c (compose-ref.ts).
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { buildContextMenu } from './build-menu';
-import { COPY } from '../../../shared/chatsearch-refs';
+import type { ComposeRef } from './compose-ref';
 
 // Builds the DOM shape MarkdownView emits for raw text (txt) and rendered md.
 // CODE files no longer use this shape — CodeMirror replaced CodeView, and its
 // contract is pinned by build-menu-cm6.test.tsx, which mounts the REAL
 // component (a synthetic shape here would stay green while production broke).
-function mountViewer(opts: { path: string; source: 'raw' | 'rendered'; body: string }) {
+function mountViewer(opts: { path: string; source: 'raw' | 'rendered'; body: string; projectRoot?: string }) {
   const container = document.createElement('div');
   container.setAttribute('data-artifact-viewer', 'true');
   container.setAttribute('data-doc-path', opts.path);
   container.setAttribute('data-artifact-source', opts.source);
+  // F3 (T5 implementation review): CommentableDocument stamps this too — see
+  // that component's own WHY for why "Add comment" needs it.
+  container.setAttribute('data-project-root', opts.projectRoot ?? '');
   const pre = document.createElement('pre');
   pre.textContent = opts.body;
   container.appendChild(pre);
@@ -33,9 +39,9 @@ function selectWithin(node: Node, start: number, end: number) {
   sel.addRange(range);
 }
 
-// Runs the menu's "Ask about this" action and returns the text it would insert
-// into the composer (delivered via the youcoded:compose-insert CustomEvent).
-function composedTextFor(container: HTMLElement): string | null {
+// Runs the menu's "Ask about this" action and returns the ComposeRef pill it
+// would attach to the composer (delivered via youcoded:compose-insert).
+function referenceFor(container: HTMLElement): ComposeRef | null {
   const entries = buildContextMenu(container);
   const ask = entries?.find((e) => e.type === 'item' && e.id === 'ask');
   if (!ask || ask.type !== 'item') return null;
@@ -43,7 +49,7 @@ function composedTextFor(container: HTMLElement): string | null {
   window.addEventListener('youcoded:compose-insert', spy);
   ask.run();
   window.removeEventListener('youcoded:compose-insert', spy);
-  return (spy.mock.calls[0]?.[0] as CustomEvent)?.detail?.text ?? null;
+  return (spy.mock.calls[0]?.[0] as CustomEvent)?.detail?.ref ?? null;
 }
 
 const FILE = 'alpha\nbravo\ncharlie\ndelta';
@@ -140,25 +146,98 @@ describe('artifact viewer context menu', () => {
   it('cites a single source line for a one-line selection', () => {
     const { container, pre } = mountViewer({ path: 'docs/notes.txt', source: 'raw', body: FILE });
     selectWithin(pre, 6, 11); // "bravo" — second line
-    expect(composedTextFor(container)).toBe(
-      'The user is referencing line 2 from "docs/notes.txt". Respond to the following prompt accordingly:\n\n',
-    );
+    expect(referenceFor(container)).toMatchObject({ kind: 'doc', path: 'docs/notes.txt', fileName: 'notes.txt', label: 'line 2 · notes.txt', lineRange: [2, 2] });
   });
 
   it('cites a line RANGE for a multi-line selection', () => {
     const { container, pre } = mountViewer({ path: 'src/app.ts', source: 'raw', body: FILE });
     selectWithin(pre, 6, 19); // "bravo\ncharlie" — lines 2-3
-    expect(composedTextFor(container)).toBe(
-      'The user is referencing lines 2-3 from "src/app.ts". Respond to the following prompt accordingly:\n\n',
-    );
+    expect(referenceFor(container)).toMatchObject({ kind: 'doc', path: 'src/app.ts', label: 'lines 2-3 · app.ts', lineRange: [2, 3] });
   });
 
-  it('falls back to a quote for rendered markdown (no reliable source mapping)', () => {
+  it('falls back to a paragraph mark + quote for rendered markdown (no reliable source mapping)', () => {
     const { container, pre } = mountViewer({ path: 'README.md', source: 'rendered', body: FILE });
     selectWithin(pre, 6, 11);
-    expect(composedTextFor(container)).toBe(
-      'The user is referencing "bravo" from "README.md". Respond to the following prompt accordingly:\n\n',
-    );
+    expect(referenceFor(container)).toMatchObject({ kind: 'doc', path: 'README.md', label: '“bravo”', lineRange: undefined });
+  });
+
+  it('"Add comment" writes straight into the shared doc-comments store, anchored to the same selection', async () => {
+    const { container, pre } = mountViewer({ path: 'docs/notes.txt', source: 'raw', body: FILE });
+    selectWithin(pre, 6, 11);
+    const entries = buildContextMenu(container);
+    const comment = entries?.find((e) => e.type === 'item' && e.id === 'comment');
+    expect(comment, 'Add comment must exist for a selection').toBeTruthy();
+    const { commentsForPath } = await import('../../state/doc-comments-store');
+    const before = commentsForPath('docs/notes.txt').length;
+    if (comment?.type === 'item') comment.run();
+    const after = commentsForPath('docs/notes.txt');
+    expect(after.length).toBe(before + 1);
+    expect(after[after.length - 1]).toMatchObject({ quote: 'bravo', sourceLabel: 'line 2 · notes.txt', resolved: false });
+  });
+
+  // F1 (T5 implementation review, blocker): before this fix every "Add
+  // comment" stored prefix: '' / suffix: '' / occurrence: 0 regardless of
+  // which copy of a repeated phrase was selected — a choice `resolveSelector`
+  // can never retroactively recover. This selects the THIRD "marker" (each
+  // copy has distinct surrounding context) and proves the stored selector
+  // both records the right occurrence index AND, fed back into
+  // `resolveSelector`, actually resolves to that third copy's real position.
+  it('a comment on the 3rd copy of a repeated phrase stores distinguishing prefix/suffix and resolveSelector finds the 3rd copy (F1)', async () => {
+    const body = 'alpha marker one\nbeta marker two\ngamma marker three';
+    const needle = 'marker';
+    const first = body.indexOf(needle);
+    const second = body.indexOf(needle, first + 1);
+    const third = body.indexOf(needle, second + 1);
+    expect(third).toBeGreaterThan(second);
+
+    const { container, pre } = mountViewer({ path: 'docs/repeated.txt', source: 'raw', body });
+    selectWithin(pre, third, third + needle.length);
+    const entries = buildContextMenu(container);
+    const comment = entries?.find((e) => e.type === 'item' && e.id === 'comment');
+    expect(comment, 'Add comment must exist for a selection').toBeTruthy();
+    const { commentsForPath } = await import('../../state/doc-comments-store');
+    if (comment?.type === 'item') comment.run();
+    const after = commentsForPath('docs/repeated.txt');
+    const added = after[after.length - 1] as any;
+    expect(added.quote).toBe(needle);
+    expect(added.selectorOccurrence).toBe(2); // 0-indexed: the THIRD copy
+    expect(added.selectorPrefix).toContain('gamma');
+    expect(added.selectorSuffix).toContain('three');
+
+    const { resolveSelector } = await import('../../../shared/doc-comments-anchor');
+    const resolved = resolveSelector(body, {
+      type: 'TextQuoteSelector',
+      exact: added.quote,
+      prefix: added.selectorPrefix ?? '',
+      suffix: added.selectorSuffix ?? '',
+      occurrence: added.selectorOccurrence ?? 0,
+    });
+    expect(resolved).toEqual({ start: third, end: third + needle.length });
+  });
+
+  // F3 (T5 implementation review): before this fix "Add comment" had no way
+  // to know WHICH project a right-clicked file belonged to, so two projects
+  // sharing a relative path (both a README.md) always merged into the
+  // per-machine loose-file store. `data-project-root` (read off the SAME
+  // container `data-doc-path` already comes from) fixes that.
+  it('"Add comment" sends the container\'s own data-project-root, keeping two projects\' same-named files separate', async () => {
+    const a = mountViewer({ path: 'README.md', source: 'raw', body: FILE, projectRoot: '/proj-a' });
+    selectWithin(a.pre, 6, 11); // "bravo"
+    const entriesA = buildContextMenu(a.container);
+    const commentA = entriesA?.find((e) => e.type === 'item' && e.id === 'comment');
+    if (commentA?.type === 'item') commentA.run();
+
+    const b = mountViewer({ path: 'README.md', source: 'raw', body: FILE, projectRoot: '/proj-b' });
+    selectWithin(b.pre, 12, 19); // "charlie"
+    const entriesB = buildContextMenu(b.container);
+    const commentB = entriesB?.find((e) => e.type === 'item' && e.id === 'comment');
+    if (commentB?.type === 'item') commentB.run();
+
+    const { commentsForPath } = await import('../../state/doc-comments-store');
+    const inA = commentsForPath('README.md', '/proj-a');
+    const inB = commentsForPath('README.md', '/proj-b');
+    expect(inA.map((c) => c.quote)).toEqual(['bravo']);
+    expect(inB.map((c) => c.quote)).toEqual(['charlie']);
   });
 
   it('offers no "Ask about this" without a selection — the whole file is never implied', () => {
@@ -180,6 +259,51 @@ describe('artifact viewer context menu', () => {
     document.body.appendChild(ta);
     const ids = buildContextMenu(ta)?.filter((e) => e.type === 'item').map((e: any) => e.id);
     expect(ids).toEqual(['cut', 'copy', 'paste', 'select-all']);
+  });
+
+  // F6 (T14 review): a ChatImage placeholder's interaction-state text
+  // ("Image from … · Show", marked data-anchor-skip) must never enter a
+  // comment's captured prefix/suffix/exact — it isn't the document's real
+  // content and changes independently of any edit to the file (it vanishes
+  // once the image is shown).
+  it('"Add comment" never captures an interaction-state placeholder\'s text as context (F6)', async () => {
+    const container = document.createElement('div');
+    container.setAttribute('data-artifact-viewer', 'true');
+    container.setAttribute('data-doc-path', 'notes.md');
+    container.setAttribute('data-artifact-source', 'rendered');
+    container.setAttribute('data-project-root', '');
+    const before = document.createTextNode('before');
+    const placeholder = document.createElement('button');
+    placeholder.setAttribute('data-anchor-skip', '');
+    placeholder.textContent = 'Image from example.com · Show';
+    const after = document.createTextNode(' TARGET after');
+    container.append(before, placeholder, after);
+    document.body.appendChild(container);
+
+    const range = document.createRange();
+    range.setStart(after, 1); // " TARGET after" — index 1 is 'T'
+    range.setEnd(after, 1 + 'TARGET'.length);
+    const sel = window.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(range);
+
+    const entries = buildContextMenu(container);
+    const comment = entries?.find((e) => e.type === 'item' && e.id === 'comment');
+    expect(comment, 'Add comment must exist for a selection').toBeTruthy();
+    const { commentsForPath } = await import('../../state/doc-comments-store');
+    if (comment?.type === 'item') comment.run();
+    const stored = commentsForPath('notes.md');
+    const added = stored[stored.length - 1] as any;
+
+    expect(added.quote).toBe('TARGET');
+    // The placeholder's own words never leak into the captured context.
+    expect(added.selectorPrefix).not.toMatch(/show|image from/i);
+    expect(added.selectorSuffix).not.toMatch(/show|image from/i);
+    // Consistent with use-quote-marks.ts's own skip-filtered text model: the
+    // placeholder contributes NOTHING, so "before" and " after" sit directly
+    // adjacent to "TARGET" in the captured context.
+    expect(added.selectorPrefix).toBe('before ');
+    expect(added.selectorSuffix).toBe(' after');
   });
 });
 
@@ -231,26 +355,24 @@ describe('previewed-conversation right-click (spec §A3)', () => {
     expect(entries?.some((e) => e.type === 'item' && e.id === 'ask')).toBe(true);
   });
 
-  it('the preview scaffold names the conversation: contains both its id and its title', () => {
+  it('the preview reference names the pill after the conversation title, not a generic "message" label', () => {
     const bubble = mountBubble({ scroll: 'preview', role: 'assistant', text: 'hello world', conversationId: 'conv-1', conversationTitle: 'Debugging sync' });
-    const composed = composedTextFor(bubble);
-    expect(composed).toContain('conv-1');
-    expect(composed).toContain('Debugging sync');
-    expect(composed).toBe(`${COPY.askPreviewContext('Debugging sync', 'conv-1')} In an earlier message, you said:\n"hello world"\n\nThe user has a follow-up: `);
+    expect(referenceFor(bubble)).toMatchObject({ kind: 'chat', label: '“Debugging sync” · “hello world”' });
   });
 
-  it('PIN: the live chat scaffold is byte-for-byte unchanged — no conversation reference appears', () => {
+  it('the live chat reference is generic (no preview marker to name)', () => {
     const bubble = mountBubble({ scroll: 'chat-scroll', role: 'assistant', text: 'hello world' });
-    const composed = composedTextFor(bubble);
-    expect(composed).toBe('In an earlier message, you said:\n"hello world"\n\nThe user has a follow-up: ');
-    expect(composed).not.toContain('conv-1');
-    expect(composed).not.toContain('past conversation');
+    expect(referenceFor(bubble)).toMatchObject({ kind: 'chat', label: '“hello world”' });
   });
 
-  it('the user bubble variant is also named in a preview (role-specific lead preserved)', () => {
+  it('a user bubble with no preview reads the same generic way', () => {
+    const bubble = mountBubble({ scroll: 'chat-scroll', role: 'user', text: 'my question' });
+    expect(referenceFor(bubble)).toMatchObject({ kind: 'chat', label: '“my question”' });
+  });
+
+  it('a previewed user bubble still prefers the conversation title', () => {
     const bubble = mountBubble({ scroll: 'preview', role: 'user', text: 'my question', conversationId: 'conv-2', conversationTitle: 'Untitled thread' });
-    const composed = composedTextFor(bubble);
-    expect(composed).toBe(`${COPY.askPreviewContext('Untitled thread', 'conv-2')} Earlier I wrote:\n"my question"\n\nThe user has a follow-up: `);
+    expect(referenceFor(bubble)).toMatchObject({ kind: 'chat', label: '“Untitled thread” · “my question”' });
   });
 });
 
@@ -297,8 +419,7 @@ describe('app chrome is not copy material', () => {
 
   it('"Ask about this" on the prose quotes the message without the tool title, keeping the file name', () => {
     const { prose } = mountMessageWithChrome();
-    const composed = composedTextFor(prose);
-    expect(composed).toBe('In an earlier message, you said:\n"Edited app.ts"\n\nThe user has a follow-up: ');
+    expect(referenceFor(prose)).toMatchObject({ kind: 'chat', label: '“Edited app.ts”' });
   });
 
   it('whole-message Copy leaves chrome text out', async () => {

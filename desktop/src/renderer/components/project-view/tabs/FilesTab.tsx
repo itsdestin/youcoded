@@ -15,6 +15,7 @@
 // Drawer (artifacts.listSession) — that stays their home.
 // Cards use .layer-surface; the deleted badge is a plain word "deleted" (the ●◐○ / ✕
 // glyph language is disliked — plain words instead).
+import { makeDraftToken, type ComposeRef } from '../../context-menu/compose-ref';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 // WHY no useArtifact import: this file must not read ArtifactContext — see the
 // memo comment on FilesTab below. The one value it needs arrives as props.
@@ -25,7 +26,7 @@ import { dedupeContentHits, groupContentHits, capGroups, MAX_CONTENT_ROWS, type 
 import type { CentralIndexProject, ArtifactRecord } from '../../../../shared/artifacts/types';
 import { FOLDER_PAGE_SIZE, type FolderPage, type FolderSummary } from '../../../../shared/artifacts/folder-page';
 import { ActiveArtifactView } from '../../artifact-views/ActiveArtifactView';
-import type { ActiveArtifactHandle } from '../../artifact-views/ActiveArtifactView';
+import type { ActiveArtifactHandle, CommentsHeaderState } from '../../artifact-views/ActiveArtifactView';
 import { useArtifactContent } from '../../artifact-views/useArtifactContent';
 import { useUnsavedGuard } from '../../artifact-views/UnsavedChangesDialog';
 import { ArtifactThumbnail } from '../../ArtifactThumbnail';
@@ -124,10 +125,11 @@ function folderErrorMessage(error: string, detail: string | undefined, atRoot: b
 // Aliased: detail-tool-icons also exports a (different) FolderIcon used by the
 // Reveal button above.
 import { FolderIcon as FolderCardIcon, DocIcon, ImageIcon, SheetIcon, CodeGlyphIcon, GridViewIcon, ListViewIcon } from '../icons';
-import { ChevronIcon } from '../../Icons';
+import { ChevronIcon, ChatIcon } from '../../Icons';
 import { EmptyState, ErrorState, SectionLabel } from '../../ui';
 import { TabHeading } from '../TabHeading';
 import { useScrollFade } from '../../../hooks/useScrollFade';
+import { useOfficeHeaderAction } from '../../office/use-office-edit-screen';
 import { useScreenOpen, ScreenMark } from '../../../shoot-mode';
 
 // The rounded box the list-view rows sit in — the same container language the
@@ -1205,7 +1207,24 @@ function ArtifactDetail({ artifact, project, artifactDispatch: dispatch, initial
   // ActiveArtifactView still owns the edit/save/conflict logic; we only call into
   // it and mirror its edit state so the header can swap Edit ↔ Save/Cancel.
   const viewRef = useRef<ActiveArtifactHandle>(null);
-  const [editState, setEditState] = useState({ isEditable: false, editing: false });
+  const [editState, setEditState] = useState<{ isEditable: boolean; editing: boolean; autosaves?: boolean }>({ isEditable: false, editing: false });
+  // Comments button state (doc comments polish pass): this screen puts its
+  // actions in the header tool row, so Comments sits there too, just left of
+  // Edit — the file drawer's "Comments next to Edit", in this screen's style.
+  const [commentsState, setCommentsState] = useState<CommentsHeaderState | null>(null);
+  // Stable, so the viewer's context value doesn't change every render.
+  // Review deck Q-1 (Destin, 2026-09-26: "a chat in the file's project… show a
+  // popup requesting model and such. kinda like we do for the 'build a page'
+  // button"): Ask Your Assistant here opens the new-session dialog (App's
+  // PageCreateDialog) in THIS project, with the request waiting in the
+  // composer — not a send into whatever chat happens to be current.
+  const askInPane = useMemo(() => ({
+    sendVia: (lead: string, refs: ComposeRef[]) => {
+      window.dispatchEvent(new CustomEvent('youcoded:ask-in-new-session', {
+        detail: { cwd: project.path, initialInput: `${lead} ${refs.map(makeDraftToken).join(' ')} ` },
+      }));
+    },
+  }), [project.path]);
   const [copied, setCopied] = useState(false);
 
   const filename = artifact.path.split('/').pop() ?? artifact.path;
@@ -1235,6 +1254,7 @@ function ArtifactDetail({ artifact, project, artifactDispatch: dispatch, initial
   // the right action for formats the in-app viewer can't render (html) or only
   // renders partially (docx/xlsx). Desktop-only (shell.openPath); no-op on remote.
   const handleOpenExternal = () => (window.claude as any).shell?.openPath?.(absPath);
+  const office = useOfficeHeaderAction(absPath, dispatch, () => viewRef.current?.cancelEdit());
   // Project and record along with the path (T7 review, finding 9).
   const handleDownload = () => { void downloadFile(absPath, { projectRoot: project.path, artifactId: artifact.id }); };
   const narrowViewport = useNarrowViewport();
@@ -1248,7 +1268,29 @@ function ArtifactDetail({ artifact, project, artifactDispatch: dispatch, initial
   // Header tools: Edit ↔ Save/Cancel (only for editable formats) + Reveal + Copy.
   const tools = (
     <>
-      {editState.isEditable && (editState.editing ? (
+      {commentsState?.available && !editState.editing && (
+        <button
+          type="button"
+          // Pressed = Comments mode is open: the stronger edge and text the
+          // neutral tool uses on hover, held (no second pressed-button style).
+          className={`${TOOL_BTN_NEUTRAL} aria-pressed:border-edge aria-pressed:text-fg`}
+          aria-pressed={commentsState.active}
+          onClick={() => viewRef.current?.toggleComments()}
+        >
+          <ChatIcon className="w-3.5 h-3.5" />
+          Comments
+          {/* G-19: a count is the label plus a muted numeral. */}
+          {/* Open comments only; no "0" once all are resolved (as in the drawer). */}
+          {commentsState.count > 0 && <span className="text-fg-muted">{commentsState.count}</span>}
+        </button>
+      )}
+      {editState.isEditable && (editState.editing && editState.autosaves ? (
+        // Office files save as you edit (office-questions#Q-save): one Done.
+        <button type="button" className={TOOL_BTN_ACCENT} onClick={() => viewRef.current?.saveEdit()}>
+          <CheckIcon size={13} />
+          Done
+        </button>
+      ) : editState.editing ? (
         <>
           <button type="button" className={TOOL_BTN_ACCENT} onClick={() => viewRef.current?.saveEdit()}>
             <CheckIcon size={13} />
@@ -1269,10 +1311,18 @@ function ArtifactDetail({ artifact, project, artifactDispatch: dispatch, initial
           buttons can't render dead, matching SessionDrawer's toolbar. */}
       {isElectron && (
         <>
-          <button type="button" className={TOOL_BTN_NEUTRAL} onClick={handleOpenExternal} title="Open with the default app">
-            <ExternalLinkIcon size={13} />
-            Open
-          </button>
+          {/* Office files open in Office instead of the default app (office-review#B-inline). */}
+          {office ? (
+            <button type="button" className={TOOL_BTN_NEUTRAL} onClick={office.onClick} title={office.title}>
+              {office.glyph}
+              Office
+            </button>
+          ) : (
+            <button type="button" className={TOOL_BTN_NEUTRAL} onClick={handleOpenExternal} title="Open with the default app">
+              <ExternalLinkIcon size={13} />
+              Open
+            </button>
+          )}
           <button type="button" className={TOOL_BTN_NEUTRAL} onClick={handleReveal}>
             <FolderIcon size={13} />
             Reveal
@@ -1332,6 +1382,10 @@ function ArtifactDetail({ artifact, project, artifactDispatch: dispatch, initial
           onDiskRead={applyDiskRead}
           controlsInHeader
           onEditStateChange={setEditState}
+          onCommentsStateChange={setCommentsState}
+          // Ask Your Assistant leaves Projects for the chat, where the
+          // message is sent and seen.
+          commentsActionsInPane={askInPane}
         />
       </div>
     </ProjectDetailOverlay>

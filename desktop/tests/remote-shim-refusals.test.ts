@@ -92,6 +92,12 @@ describe('remote-shim — rejecting failures', () => {
         // Settings card would read it as an install that finished.
         'claude-code:install',
         'commands:list',
+        // Document comments watch/unwatch (T3, design §1.6, review 1 F10): new
+        // channels with no existing caller convention to match, unlike
+        // artifacts:watch-project — a failed watch must reject to the
+        // comments pane's catch, never resolve as "subscribed, no changes yet".
+        'docComments:unwatch',
+        'docComments:watch',
         'engine:prereqs',
         'engine:run-in-terminal',
         'engine:set-config',
@@ -209,6 +215,24 @@ describe('remote-shim — rejecting failures', () => {
         // channel id.
         expect(seen).toHaveLength(1);
         expect(seen[0].message).toBe("The local model manager isn't available via remote access yet.");
+      } finally {
+        vi.useRealTimers();
+        window.removeEventListener(REMOTE_UNSUPPORTED_EVENT, onNotice);
+      }
+    });
+
+    it('refuses Office without a toast, because its own pane says the same sentence', () => {
+      const seen: any[] = [];
+      const onNotice = (e: any) => seen.push(e.detail);
+      window.addEventListener(REMOTE_UNSUPPORTED_EVENT, onNotice);
+      vi.useFakeTimers({ toFake: ['Date'] });
+      markConnectedForNotices();
+      vi.setSystemTime(Date.now() + 10_000);
+      try {
+        const resolve = vi.fn(); const reject = vi.fn();
+        applyResponse({ resolve, reject }, 'office:open', { ok: false, unsupported: true });
+        expect(reject.mock.calls[0][0].message).toBe('remote-unsupported: office:open');
+        expect(seen).toEqual([]);
       } finally {
         vi.useRealTimers();
         window.removeEventListener(REMOTE_UNSUPPORTED_EVENT, onNotice);

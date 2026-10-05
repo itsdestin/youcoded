@@ -5,6 +5,7 @@ import path from 'path';
 import { SessionManager, resolveShellCommand, shellDisplayName, prepareRunInTerminal } from '../src/main/session-manager';
 import { createTransferredExitGate } from '../src/main/conversations/handoff-exit';
 import { createResumeAdmission } from '../src/main/conversations/resume-admission';
+import { DOC_COMMENTS_MCP_SERVER_PREFIX, YOUCODED_PROJECT_ROOT_ENV, YOUCODED_MCP_TOKEN_ENV } from '../src/shared/doc-comments-mcp';
 
 const tmpDir = os.tmpdir();
 
@@ -326,6 +327,105 @@ describe('SessionManager', () => {
     expect(args[args.indexOf('--allowedTools') + 1]).toBe('mcp__youcoded__SendUserLink');
   });
 
+  // T9a: the doc-comments MCP server rides the SAME two flags, combined into
+  // one occurrence each rather than a second `--mcp-config`/`--allowedTools`
+  // pair (claude --help documents both as variadic — see
+  // youcoded/docs/cc-dependencies.md's own entry for why repeating either
+  // flag was avoided). Only ReadFileComments is pre-approved; the five
+  // mutation tools are deliberately absent (§5.2a's own permission gate).
+  // The `mcpServers` config KEY is a fresh random id per deployment
+  // (adversarial review 2026-09-27, finding #2 — no fixed, guessable,
+  // checked-into-a-repo-able string), so this test reads it back off the
+  // config file itself rather than asserting a literal.
+  it('attaches the doc-comments MCP server to every Claude Code session, combined into the SAME flags as SendUserLink', () => {
+    manager.createSession({ name: 'doc-comments', cwd: tmpDir, skipPermissions: false });
+    const args: string[] = mockWorker.send.mock.calls[0][0].args;
+
+    const configIdx = args.indexOf('--mcp-config');
+    const docCommentsConfigPath = args[configIdx + 2]; // [0]=link config, [1]=doc-comments config
+    expect(docCommentsConfigPath.startsWith(path.join(tmpDir, 'claude-code-doc-comments-mcp'))).toBe(true);
+    const config = JSON.parse(fs.readFileSync(docCommentsConfigPath, 'utf8'));
+    const serverIds = Object.keys(config.mcpServers);
+    expect(serverIds).toHaveLength(1);
+    const serverId = serverIds[0];
+    expect(serverId.startsWith(`${DOC_COMMENTS_MCP_SERVER_PREFIX}-`)).toBe(true);
+    expect(config.mcpServers[serverId].env[YOUCODED_PROJECT_ROOT_ENV]).toBe(tmpDir);
+    // A real, unpredictable secret — never empty, never the literal env-var
+    // name (a copy-paste bug that would defeat finding #1's whole point).
+    expect(typeof config.mcpServers[serverId].env[YOUCODED_MCP_TOKEN_ENV]).toBe('string');
+    expect(config.mcpServers[serverId].env[YOUCODED_MCP_TOKEN_ENV].length).toBeGreaterThan(16);
+    expect(fs.existsSync(config.mcpServers[serverId].args[0])).toBe(true);
+
+    // Only ONE occurrence of each flag exists in the whole args array — never
+    // a second `--mcp-config`/`--allowedTools` pair for the second server.
+    expect(args.filter((a) => a === '--mcp-config')).toHaveLength(1);
+    expect(args.filter((a) => a === '--allowedTools')).toHaveLength(1);
+
+    const allowedIdx = args.indexOf('--allowedTools');
+    const allowedTools = args.slice(allowedIdx + 1);
+    expect(allowedTools).toContain('mcp__youcoded__SendUserLink');
+    expect(allowedTools).toContain(`mcp__${serverId}__ReadFileComments`);
+    // The five mutation tools are never pre-approved (§5.2a) — a plain-text
+    // target is auto-approved elsewhere (permission-auto-approve.ts), a
+    // Word/Excel target gets an ordinary ask.
+    for (const bare of ['ReplyToComment', 'ResolveComment', 'ReopenComment', 'AddComment', 'MoveComment']) {
+      expect(allowedTools).not.toContain(`mcp__${serverId}__${bare}`);
+    }
+  });
+
+  it('two sessions on the same host get DIFFERENT doc-comments server ids and tokens (finding #2)', () => {
+    manager.createSession({ name: 'a', cwd: tmpDir, skipPermissions: false });
+    manager.createSession({ name: 'b', cwd: tmpDir, skipPermissions: false });
+    const readConfig = (call: number) => {
+      const args: string[] = mockWorker.send.mock.calls[call][0].args;
+      const configPath = args[args.indexOf('--mcp-config') + 2];
+      return JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    };
+    const configA = readConfig(0);
+    const configB = readConfig(1);
+    const serverIdA = Object.keys(configA.mcpServers)[0];
+    const serverIdB = Object.keys(configB.mcpServers)[0];
+    expect(serverIdA).not.toBe(serverIdB);
+    expect(configA.mcpServers[serverIdA].env[YOUCODED_MCP_TOKEN_ENV])
+      .not.toBe(configB.mcpServers[serverIdB].env[YOUCODED_MCP_TOKEN_ENV]);
+  });
+
+  // Adversarial review 2026-09-27, finding #1: the token/server id must
+  // reach the pending-mutation queue and the permission check WITHOUT
+  // riding through the renderer-facing `session-created` broadcast (that
+  // event is sent to the owning window verbatim, over IPC — a renderer-side
+  // script reading it back could otherwise forge a request or impersonate
+  // the server). `doc-comments-mcp-attached` is a SEPARATE, private event
+  // for exactly this.
+  it('emits a PRIVATE doc-comments-mcp-attached event carrying the token/server id, never inside session-created', () => {
+    const attached = vi.fn();
+    const created = vi.fn();
+    manager.on('doc-comments-mcp-attached', attached);
+    manager.on('session-created', created);
+    manager.createSession({ name: 'private-event', cwd: tmpDir, skipPermissions: false });
+
+    expect(attached).toHaveBeenCalledTimes(1);
+    const [sessionId, cwd, token, serverId, deployDir] = attached.mock.calls[0];
+    expect(cwd).toBe(tmpDir);
+    expect(typeof token).toBe('string');
+    expect(token.length).toBeGreaterThan(16);
+    expect(serverId.startsWith(`${DOC_COMMENTS_MCP_SERVER_PREFIX}-`)).toBe(true);
+    // T9c/T20 adversarial review, finding #3: ipc-handlers.ts's own
+    // session-exit listener needs this to delete the deploy directory —
+    // carries no secret of its own (a plain filesystem path), but still
+    // rides the same PRIVATE event, never session-created.
+    expect(typeof deployDir).toBe('string');
+    expect(deployDir.length).toBeGreaterThan(0);
+
+    expect(created).toHaveBeenCalledTimes(1);
+    const createdInfo = created.mock.calls[0][0];
+    expect(createdInfo.id).toBe(sessionId);
+    // The token/serverId must never appear anywhere on the object that gets
+    // broadcast to the renderer.
+    expect(JSON.stringify(createdInfo)).not.toContain(token);
+    expect(JSON.stringify(createdInfo)).not.toContain(serverId);
+  });
+
   it('emits pty-output when worker sends data', () => {
     manager.createSession({ name: 'test', cwd: tmpDir, skipPermissions: false });
 
@@ -450,6 +550,22 @@ describe('SessionManager', () => {
 
       // …then the permission resolves and the next retry delivers the reload.
       blocked = false;
+      vi.advanceTimersByTime(5000);
+      expect(reloadSends()).toHaveLength(1);
+    });
+
+    it('also defers while the renderer reports a pop-up holding the keyboard', () => {
+      // The hook gate only knows reported asks; an unreported Claude Code
+      // pop-up is read off the screen by the renderer (cc-input-focus.ts).
+      const info = manager.createSession({ name: 's1', cwd: tmpDir, skipPermissions: false });
+      manager.setReloadPluginsGate(() => false);
+      manager.setInputBlocked(info.id, true);
+
+      manager.broadcastReloadPlugins(100);
+      vi.advanceTimersByTime(100);
+      expect(reloadSends()).toHaveLength(0);
+
+      manager.setInputBlocked(info.id, false);
       vi.advanceTimersByTime(5000);
       expect(reloadSends()).toHaveLength(1);
     });

@@ -1,0 +1,51 @@
+{
+  "comments": [
+    {
+      "id": "w-0",
+      "path": "docs/launch-brief.docx",
+      "selector": {
+        "kind": "text",
+        "selector": {
+          "type": "TextQuoteSelector",
+          "exact": "Move 30% of weekly active users to the new app within six weeks of launch.",
+          "prefix": "p for existing customers. Goals ",
+          "suffix": " Keep support tickets about the ",
+          "occurrence": 0
+        }
+      },
+      "text": "Is 30% realistic? The last launch reached 18% in the same window.",
+      "author": "person:Priya Shah",
+      "createdAt": 1790157600000,
+      "replies": [],
+      "resolved": true,
+      "history": []
+    },
+    {
+      "id": "w-1",
+      "path": "docs/launch-brief.docx",
+      "selector": {
+        "kind": "text",
+        "selector": {
+          "type": "TextQuoteSelector",
+          "exact": "Beta opens to 500 customers on March 10",
+          "prefix": "te below 200 per week. Timeline ",
+          "suffix": ", with the public launch on Apri",
+          "occurrence": 0
+        }
+      },
+      "text": "Legal needs the beta terms by March 3 at the latest.",
+      "author": "person:Priya Shah",
+      "createdAt": 1790157900000,
+      "replies": [
+        {
+          "id": "w-1-r1",
+          "author": "person:Marcus Lee",
+          "text": "Confirmed with legal — the beta terms are ready as of this morning.",
+          "createdAt": 1790173200000
+        }
+      ],
+      "resolved": false,
+      "history": []
+    }
+  ]
+}

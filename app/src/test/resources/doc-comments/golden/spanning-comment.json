@@ -1,0 +1,24 @@
+{
+  "comments": [
+    {
+      "id": "w-5",
+      "path": "docs/spanning-comment.docx",
+      "selector": {
+        "kind": "text",
+        "selector": {
+          "type": "TextQuoteSelector",
+          "exact": "first half \nsecond half.",
+          "prefix": "Before the change: ",
+          "suffix": " After the note. ",
+          "occurrence": 0
+        }
+      },
+      "text": "Should this be one paragraph instead of two?",
+      "author": "person:Priya Shah",
+      "createdAt": 1790413200000,
+      "replies": [],
+      "resolved": false,
+      "history": []
+    }
+  ]
+}

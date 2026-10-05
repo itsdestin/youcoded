@@ -39,6 +39,40 @@ describe('assertPublicHttpUrl', () => {
     const url = await assertPublicHttpUrl('https://example.com/page', resolves(['93.184.216.34']));
     expect(url.hostname).toBe('example.com');
   });
+  it('preserves actual DNS failure as a guard error and removes the hop listener when it settles', async () => {
+    const controller = new AbortController();
+    const added = vi.spyOn(controller.signal, 'addEventListener');
+    const removed = vi.spyOn(controller.signal, 'removeEventListener');
+    const lookup = vi.fn(async () => { throw new Error('DNS server failed'); });
+    await expect(assertPublicHttpUrl('https://missing.example/', lookup, controller.signal))
+      .rejects.toThrow(NetGuardError);
+    expect(added).toHaveBeenCalledWith('abort', expect.any(Function), { once: true });
+    expect(removed).toHaveBeenCalledWith('abort', added.mock.calls.find(c => c[0] === 'abort')?.[1]);
+    expect(lookup).toHaveBeenCalledTimes(1);
+    added.mockRestore(); removed.mockRestore();
+  });
+  it('removes the pending DNS abort listener when canceled', async () => {
+    const controller = new AbortController();
+    const lookupGate = new Promise<Array<{ address: string; family: number }>>(() => {});
+    const added = vi.spyOn(controller.signal, 'addEventListener');
+    const removed = vi.spyOn(controller.signal, 'removeEventListener');
+    const pending = assertPublicHttpUrl('https://pending.example/', () => lookupGate, controller.signal)
+      .then(() => null, error => error);
+    await Promise.resolve();
+    controller.abort();
+    expect(await pending).toMatchObject({ name: 'AbortError' });
+    expect(removed).toHaveBeenCalledWith('abort', added.mock.calls.find(c => c[0] === 'abort')?.[1]);
+    added.mockRestore(); removed.mockRestore();
+  });
+  it('retains private-address checks when a public redirect host resolves privately', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 302, headers: { location: 'https://internal.example/' } }));
+    await expect(guardedFetch('https://public.example/', {
+      signal: new AbortController().signal,
+      lookup: async host => [{ address: host === 'internal.example' ? '10.1.2.3' : '93.184.216.34', family: 4 }],
+      fetchImpl: fetchMock,
+    })).rejects.toThrow(/private|internal/i);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
   it('rejects v4-mapped IPv6 literals in the HEX form new URL emits (C1)', async () => {
     // new URL('http://[::ffff:127.0.0.1]/').hostname === '[::ffff:7f00:1]' — the
     // dotted form NEVER reaches us in production, so these must be caught in hex.
@@ -61,6 +95,95 @@ describe('assertPublicHttpUrl', () => {
 describe('guardedFetch', () => {
   afterEach(() => vi.restoreAllMocks());
   const publicLookup = async () => [{ address: '93.184.216.34', family: 4 }];
+  const publicAnswers = [{ address: '93.184.216.34', family: 4 }];
+  const deferredLookup = () => {
+    let resolve!: (addresses: typeof publicAnswers) => void;
+    let reject!: (error: Error) => void;
+    const promise = new Promise<typeof publicAnswers>((yes, no) => { resolve = yes; reject = no; });
+    return { promise, resolve, reject };
+  };
+  const nextTurn = () => new Promise<void>(resolve => setImmediate(resolve));
+
+  it.each(['resolve', 'reject'] as const)('caller abort settles pending DNS before late %s and never dispatches HTTP', async late => {
+    const gate = deferredLookup();
+    const controller = new AbortController();
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const fetchMock = vi.fn();
+    let settled = false;
+    const pending = guardedFetch('https://pending.example/', {
+      signal: controller.signal, lookup: () => { entered(); return gate.promise; }, fetchImpl: fetchMock,
+    }).then(() => { settled = true; return null; }, error => { settled = true; return error; });
+    try {
+      await started;
+      controller.abort();
+      await nextTurn();
+      expect(settled).toBe(true);
+      const error = await pending;
+      expect(error).toMatchObject({ name: 'AbortError' });
+      expect(error).not.toBeInstanceOf(NetGuardError);
+      if (late === 'resolve') gate.resolve(publicAnswers);
+      else gate.reject(new Error('late DNS failure'));
+      await nextTurn();
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally { gate.resolve(publicAnswers); await pending; }
+  });
+
+  it('one deadline ends a pending first-hop DNS without dispatching HTTP', async () => {
+    const timer = new AbortController();
+    const deadline = vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => { expect(ms).toBe(25); return timer.signal; });
+    const gate = deferredLookup();
+    const fetchMock = vi.fn();
+    const pending = guardedFetch('https://pending.example/', {
+      signal: new AbortController().signal, timeoutMs: 25, lookup: () => gate.promise, fetchImpl: fetchMock,
+    }).then(() => null, error => error);
+    try {
+      await nextTurn();
+      timer.abort(new DOMException('deadline reached', 'TimeoutError'));
+      await nextTurn();
+      // WHY: the race keeps the RED test finite while the DNS gate stays shut.
+      const verdict = await Promise.race([pending, Promise.resolve('still-pending')]);
+      expect(verdict).toMatchObject({ name: 'TimeoutError' });
+      gate.resolve(publicAnswers);
+      await pending;
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally { gate.resolve(publicAnswers); deadline.mockRestore(); }
+  });
+
+  it('an already-aborted signal does not start DNS or HTTP', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const lookup = vi.fn(async () => publicAnswers);
+    const fetchMock = vi.fn();
+    await expect(guardedFetch('https://pending.example/', {
+      signal: controller.signal, lookup, fetchImpl: fetchMock,
+    })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(lookup).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('redirect DNS shares the original deadline and late public answer cannot start the second request', async () => {
+    const timer = new AbortController();
+    const deadline = vi.spyOn(AbortSignal, 'timeout').mockImplementation(ms => { expect(ms).toBe(25); return timer.signal; });
+    const gate = deferredLookup();
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, {
+      status: 302, headers: { location: 'https://other.example/next' },
+    }));
+    const lookup = vi.fn((host: string) => host === 'other.example' ? gate.promise : Promise.resolve(publicAnswers));
+    const pending = guardedFetch('https://first.example/', {
+      signal: new AbortController().signal, timeoutMs: 25, lookup, fetchImpl: fetchMock,
+    }).then(() => null, error => error);
+    try {
+      await nextTurn();
+      timer.abort(new DOMException('deadline reached', 'TimeoutError'));
+      await nextTurn();
+      expect(await Promise.race([pending, Promise.resolve('still-pending')])).toMatchObject({ name: 'TimeoutError' });
+      gate.resolve(publicAnswers);
+      await pending;
+      expect(lookup).toHaveBeenCalledWith('other.example');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally { gate.resolve(publicAnswers); deadline.mockRestore(); }
+  });
 
   it('follows redirects manually and validates EVERY hop', async () => {
     // Public URL 302s to a private target — the classic SSRF bypass. Must throw.

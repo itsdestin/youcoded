@@ -69,6 +69,16 @@ import { ContentFindBar } from '../src/renderer/components/ContentFindBar';
 // (ContentFindBar's default layout) — untouched.
 const ctrlF = () => fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
 
+describe('chat session DOM identity', () => {
+  it('labels the owning pane independently of strip overflow and keeps its scroller inside', () => {
+    const { container } = render(<ChatView sessionId="session-overflow-id" visible sessionActive />);
+    const root = container.querySelector('[data-chat-session-id="session-overflow-id"]');
+    expect(root).toBeTruthy();
+    expect(root?.getAttribute('aria-hidden')).toBeNull();
+    expect(root?.querySelector('.chat-scroll')).toBeTruthy();
+  });
+});
+
 describe('model status placement', () => {
   beforeEach(() => { cleanup(); mocks.artifact.drawerOpenBySession = {}; });
 
@@ -259,8 +269,11 @@ describe('ChatView window keys reach only the chat on screen', () => {
     try {
       render(<ChatView sessionId="s1" visible sessionActive />);
       const types = add.mock.calls.map(([type]) => type);
+      // WHY no 'pointerdown' (2026-09-29): its only window listener was the
+      // homemade scroll glide's click-to-cancel, removed when wheel scrolling
+      // went back to the browser (tests/wheel-scroll-stays-native.test.ts).
+      expect(types).toContain('keydown');
       expect(types).toContain('keyup');
-      expect(types).toContain('pointerdown');
     } finally {
       add.mockRestore();
     }

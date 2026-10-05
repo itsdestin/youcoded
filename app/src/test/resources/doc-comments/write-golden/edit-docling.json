@@ -1,0 +1,17 @@
+{
+  "fixture": "docling-xlsx-comments.xlsx",
+  "path": "reports/docling-xlsx-comments.xlsx",
+  "steps": [
+    {
+      "op": "edit",
+      "args": {
+        "id": "xt-1-G12-3A26E9AE-8B38-864D-BAF4-BA5D9C6E1DA4",
+        "text": "Edited: confirmed against the vendor spec sheet."
+      },
+      "result": {
+        "ok": true,
+        "text": "Edited: confirmed against the vendor spec sheet."
+      }
+    }
+  ]
+}

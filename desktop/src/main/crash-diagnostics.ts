@@ -23,7 +23,7 @@
 // Crash dumps NEVER leave the machine: uploadToServer is false and no submitURL
 // is set, so Crashpad writes to app.getPath('crashDumps') and stops there.
 
-import { app, crashReporter, type BrowserWindow } from 'electron';
+import { app, crashReporter, dialog, type BrowserWindow } from 'electron';
 import fs from 'fs';
 import path from 'path';
 import { log } from './logger';
@@ -129,7 +129,7 @@ export function reportPreviousCrashes(): void {
  * background work right up to the moment the user killed it, so every other
  * signal looked healthy.
  */
-export function wireWindowHangDiagnostics(win: BrowserWindow, label: string): void {
+export function wireWindowHangDiagnostics(win: BrowserWindow, label: string): { readonly unresponsive: boolean } {
   let hungSince: number | null = null;
 
   win.on('unresponsive', () => {
@@ -153,4 +153,41 @@ export function wireWindowHangDiagnostics(win: BrowserWindow, label: string): vo
       hungForMs: Date.now() - hungSince,
     });
   });
+  // Read by the window close gate and the quit watchdog (fix rounds 7–8).
+  const hang = { get unresponsive() { return hungSince !== null; } };
+  hangs.set(win, hang);
+  return hang;
+}
+
+const hangs = new WeakMap<BrowserWindow, { readonly unresponsive: boolean }>();
+/** Whether this window is hung right now (false for a window never wired). */
+export function isUnresponsive(win: BrowserWindow): boolean {
+  return hangs.get(win)?.unresponsive ?? false;
+}
+
+/** The hung-window part of the close gate's deps, in one place (fix round 8: main.ts budget). */
+export function hangDeps(win: BrowserWindow) {
+  return {
+    unresponsive: () => isUnresponsive(win),
+    confirmCloseHung: () => askCloseHungWindow(win),
+    destroy: () => win.destroy(),
+  };
+}
+
+/**
+ * The native "this window isn't responding" question, asked by the window close gate on a second
+ * X while the page is hung (Task 6 fix round 7). Native because the hung page cannot draw one.
+ * Resolves true for Close anyway; Wait is the default and what Escape picks.
+ */
+async function askCloseHungWindow(win: BrowserWindow): Promise<boolean> {
+  const r = await dialog.showMessageBox(win, {
+    type: 'warning',
+    buttons: ['Close anyway', 'Wait'],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+    message: "This window isn't responding. Close it anyway?",
+    detail: 'Changes not yet saved may be lost.',
+  });
+  return r.response === 0;
 }

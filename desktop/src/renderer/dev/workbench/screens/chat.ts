@@ -31,6 +31,7 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/quick-chips/edit', 'dialog'),
   chat('chat/quick-chips/add', 'dialog'),
   chat('chat/session-context', 'dialog'),
+  { ...chat('chat/session-context#ancestors', 'dialog'), session: 'wb-2', params: { contextChain: '1' } },
   chat('chat/quit-sessions', 'dialog'),
   // Each first-run warning, once per kind (localStorage is unwritten on a fresh
   // photo-only tab, so every kind is still un-acknowledged).
@@ -58,6 +59,10 @@ export const CHAT: readonly ScreenEntry[] = [
   // Conversations on the practice sessions. wb-2 is the native-runtime session that the
   // seeded conversations, OpenRouter error cards and the stalled replay play into.
   { ...chat('chat#native', 'view'), session: 'wb-2' },
+  // Dev-only fixture: real shared question card with duplicate wording, selected
+  // and typed via explore rather than drawing a stand-in or changing the app.
+  { ...chat('chat#questions-native', 'view'), session: 'wb-2', params: { seed: 'bubbles-questions-native' } },
+  { ...chat('chat#questions-cc', 'view'), session: 'wb-1', params: { seed: 'bubbles-questions-cc' } },
   { ...chat('chat#chatgpt', 'view'), session: 'wb-3' },
   { ...chat('chat#chatgpt-plan-limit', 'view', 'error-state'), session: 'wb-3', params: { planLimit: '1' } },
   { ...chat('chat#stalled', 'view', 'error-state'), session: 'wb-2', params: { stalled: '1' } },
@@ -65,14 +70,16 @@ export const CHAT: readonly ScreenEntry[] = [
   ...['handoff', 'reasoning-stop', 'skill-first', 'approval', 'skills-spread', 'skills-chain', 'deliverables', 'mix', 'silent-steps'].map((b) => ({ ...chat(`chat#bubbles-${b}`, 'view', 'conversation'), session: 'wb-2', params: { seed: `bubbles-${b}` } })),
   // First-run setup, one entry per step (?firstRun=<STEP>). LAUNCH_WIZARD is left out: it
   // hands over to the app after 1.5 s by design.
-  ...['DETECT_PREREQUISITES', 'INSTALL_PREREQUISITES', 'ENABLE_DEVELOPER_MODE', 'AUTHENTICATE'].map((st) => ({ name: `first-run#${st.toLowerCase().replace(/_/g, '-')}`, tags: ['first-run', 'view'], params: { firstRun: st } })),
+  ...['DETECT_PREREQUISITES', 'INSTALL_PREREQUISITES', 'AUTHENTICATE'].map((st) => ({ name: `first-run#${st.toLowerCase().replace(/_/g, '-')}`, tags: ['first-run', 'view'], params: { firstRun: st } })),
   // TRIAL (first-run deck L-3): the sign-in layouts B and C, removed once one is picked.
   { name: 'first-run#signin-b', tags: ['first-run', 'view'], params: { firstRun: 'AUTHENTICATE', signIn: 'B' } },
   { name: 'first-run#signin-b-payg', tags: ['first-run', 'view'], params: { firstRun: 'AUTHENTICATE', signIn: 'B', signInPick: 'payg' } },
   { name: 'first-run#signin-c', tags: ['first-run', 'view'], params: { firstRun: 'AUTHENTICATE', signIn: 'C' } },
-  { name: 'first-run#installing', tags: ['first-run', 'view'], params: { firstRun: 'INSTALL_PREREQUISITES', prereqs: 'installing' } },
   { name: 'first-run#install-failed', tags: ['first-run', 'view'], params: { firstRun: 'INSTALL_PREREQUISITES', prereqs: 'failed' } },
   { name: 'first-run#authenticate-chatgpt', tags: ['first-run', 'view', 'sign-in'], params: { firstRun: 'AUTHENTICATE', authMode: 'chatgpt' } },
+  // A new user's checklist: Git installing, then Git done at sign-in (?prereqs, mock-shim).
+  { name: 'first-run#setup-installing', tags: ['first-run', 'view'], viewport: { width: 800, height: 440 }, params: { firstRun: 'INSTALL_PREREQUISITES', prereqs: 'installing' } },
+  { name: 'first-run#setup-done', tags: ['first-run', 'view'], viewport: { width: 800, height: 680 }, params: { firstRun: 'AUTHENTICATE', prereqs: 'done' } },
   // The arcade signed in (a friend online), and its lonelier states.
   { ...chat('chat/games#signed-in', 'pane', 'games'), params: { signedIn: '1' } },
   ...['degraded', 'empty'].map((a) => ({ ...chat(`chat/games#${a}`, 'pane', 'games'), params: { signedIn: '1', arcade: a } })),
@@ -105,4 +112,11 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/files/open/a-sent-chart', 'pane', 'viewer'),
   chat('chat/files/open/a-sent-diagram', 'pane', 'viewer'),
   chat('chat/files/open/a-sent-pdf', 'pane', 'viewer'),
+  // Office (design stage): a Word file's quick preview, then Edit in place.
+  chat('chat/files/open/a-sent-plan', 'pane', 'viewer', 'office'),
+  chat('chat/files/edit/a-sent-plan', 'pane', 'viewer', 'office'),
+  // The reading view of the Word and Excel files whose comments office/*-comments shows in
+  // Office's own panel — the two are compared side by side (finish plan Task 6).
+  chat('chat/files/open/a-launch-brief', 'pane', 'viewer'),
+  chat('chat/files/open/a-q3-sales-comments', 'pane', 'viewer'),
 ];

@@ -4,6 +4,7 @@ import path from 'path';
 import os from 'os';
 import { resolveNoFolderCwd } from './no-folder';
 import { loadDefaultAppIcon, fitForMacDock } from './app-icon';
+import { requestRestart } from './app-restart';
 import { randomUUID } from 'crypto';
 import { CHATSEARCH_IPC } from './chatsearch-index/ipc-channels';
 import { buildClaudeCodeContext, readWholeContextFile } from './claude-code-context';
@@ -12,6 +13,7 @@ import type { ChatsearchReadRequest } from '../shared/chatsearch-refs';
 import https from 'https';
 import { execFile } from 'child_process';
 import { SessionManager, prepareRunInTerminal, shellDisplayName } from './session-manager';
+import { wireDocCommentsSessionLifecycle } from './doc-comments/session-lifecycle';
 import { shouldReconcileNativePage, snapshotResumeBoundary } from './transcript-page-source';
 import { HookRelay } from './hook-relay';
 import { IPC, SESSION_FLAG_NAMES, type SessionFlagName, type SessionProvider, type TranscriptEvent, type TranscriptPageRequest, type TranscriptPageResult, type HookEvent, type SpecialistsEvent, type ShellEvent } from '../shared/types';
@@ -59,7 +61,7 @@ import { enginePrereqs } from './engine/rocm-prereqs';
 import type { EngineModel as EngineModelType } from '../shared/engine-types';
 import { ModelManager } from './models/model-manager';
 import type { DownloadProgress, ModelSettingsWrite } from '../shared/model-manager-types';
-import { installClaude } from './prerequisite-installer';
+import { installClaude, ensureNode } from './prerequisite-installer';
 import { firstRunStateDir, type FirstRunNativeDeps } from './first-run';
 import { clearSetupDownload, computeSetupDownloadStatus, readSetupDownload } from './first-run-local';
 import { detectEndpoints } from './models/endpoint-detectors';
@@ -157,6 +159,7 @@ import { appendVersion, readSidecar, readSidecarShared, writeSidecar, renameArti
 import { listProjects, removeProject } from './artifacts/central-index';
 import { initPagesService, getPagesService } from './pages/pages-service';
 import { PageConnectionsStore } from './pages/connections-store';
+import { registerDocCommentsHandlers } from './doc-comments/ipc-handlers';
 import { createAuthStore } from './marketplace-auth-store';
 import type { PageFetchRequest } from '../shared/pages-types';
 import { getMachineIdentity } from './device-identity';
@@ -741,10 +744,9 @@ export function registerIpcHandlers(
   });
 
   ipcMain.handle(IPC.APP_RESTART, () => {
-    // Generic restart channel — reused by any future setting that needs a
-    // restart to apply. relaunch() schedules the restart for after exit().
-    app.relaunch();
-    app.exit(0);
+    // Generic restart channel. WHY quit, not exit (fix round 6, I-B): exit() skipped before-quit, so
+    // open Office documents were never saved or asked about. See app-restart.ts.
+    requestRestart(() => app.quit());
   });
 
   // --- Theme marketplace ---
@@ -836,6 +838,11 @@ export function registerIpcHandlers(
   });
   attachStartupDialogLog(sessionManager, hookRelay, log, (id) => sessionManager.markStarted(id)); // desktop.log + SessionInfo.awaitingStart
 
+  // The docx/xlsx pending-mutation queue's lifecycle (T9b/T20/finding #3) —
+  // extracted to its own file (session-lifecycle.ts) to keep this file under
+  // its own line budget; see that file's own header for the full WHY.
+  wireDocCommentsSessionLifecycle(sessionManager);
+
   // window.claude.terminal.getScreenText — reads the visible xterm buffer
   // for the given session. The actual read happens in the renderer (xterm
   // lives there), so main calls back via executeJavaScript. ~1s cadence
@@ -903,6 +910,17 @@ export function registerIpcHandlers(
     await adminCapabilityReady();
     checkWindow();
     const opts = resolveNoFolderCwd(rawOpts, app.getPath('userData'));
+    // WHY (2026-10-02): setup no longer installs Node for everyone, and Claude
+    // Code and Terminal sessions run through it (the PTY worker). Usually the
+    // Claude sign-in already installed it; this is the safety net for anyone
+    // who reaches one of these sessions another way. Native chats skip it.
+    if (opts.provider !== 'native') {
+      const node = await ensureNode();
+      if (!node.success) {
+        throw new Error(`Node.js is needed for this kind of session and couldn't be installed: ${node.error}`);
+      }
+      checkWindow();
+    }
     // Snapshot BEFORE spawn: a fallback page can otherwise include new Claude Code turns.
     const resumeBoundary = opts.provider === 'claude' && opts.resumeSessionId
       ? snapshotResumeBoundary(opts.cwd, opts.resumeSessionId) : null;
@@ -1968,6 +1986,12 @@ export function registerIpcHandlers(
   // PTY input (fire-and-forget, not request-response)
   ipcMain.on(IPC.SESSION_INPUT, (_event, sessionId: string, text: string) => {
     sessionManager.sendInput(sessionId, text);
+  });
+
+  // A Claude Code pop-up holds this session's keyboard (fire-and-forget; the
+  // renderer reads the screen, main has none) — gates /reload-plugins.
+  ipcMain.on(IPC.SESSION_INPUT_BLOCKED, (_event, sessionId: string, blocked: boolean) => {
+    sessionManager.setInputBlocked(sessionId, blocked === true);
   });
 
   // PTY resize (fire-and-forget)
@@ -3622,6 +3646,9 @@ export function registerIpcHandlers(
   // too late / unknown), so this is a thin pass-through like NATIVE_SEND above.
   ipcMain.handle(IPC.NATIVE_QUEUE_REMOVE, (_e, { sessionId, queueId }: { sessionId: string; queueId: string }) =>
     nativeHost.removeQueued(sessionId, queueId));
+  // "Send now" on a waiting message — same sync, never-throws boolean contract.
+  ipcMain.handle(IPC.NATIVE_QUEUE_SEND_NOW, (_e, { sessionId, queueId }: { sessionId: string; queueId: string }) =>
+    nativeHost.sendQueuedNow(sessionId, queueId));
   // Fire-and-forget I/O (no response): interrupt only. The host never throws for unknown ids.
   ipcMain.on(IPC.NATIVE_INTERRUPT, (_e, { sessionId }: { sessionId: string }) => {
     nativeHost.interrupt(sessionId);
@@ -3772,6 +3799,10 @@ export function registerIpcHandlers(
   // own { success, error } is the answer; the cached "not-installed" is dropped
   // so the card's refresh reads the new state.
   ipcMain.handle(IPC.CLAUDE_CODE_INSTALL, async () => {
+    // WHY Node first (2026-10-02): setup no longer installs it for everyone,
+    // and Claude Code sessions cannot start without it.
+    const node = await ensureNode();
+    if (!node.success) return { success: false, error: `Node.js, which Claude Code needs, couldn't be installed: ${node.error}` };
     const result = await installClaude();
     claudeAccount.invalidate();
     return result;
@@ -3935,6 +3966,11 @@ export function registerIpcHandlers(
     // is not installed. Throws with the real reason, which reaches EngineCard's
     // FieldError beside the button — see session-manager.ts.
     const checked = prepareRunInTerminal(command);
+    // A Terminal session runs through Node (the PTY worker), which setup no
+    // longer installs for everyone (2026-10-02). A failure throws to the same
+    // FieldError beside the button.
+    const node = await ensureNode();
+    if (!node.success) throw new Error(`Node.js is needed to open a terminal and couldn't be installed: ${node.error}`);
     // WHY the folder comes from the calling window's own sessions: the button
     // lives in Settings, which has no folder of its own, and the project the
     // user is working in is whatever their live sessions are open on. The
@@ -5361,9 +5397,9 @@ export function registerIpcHandlers(
     deviceId: () => getMachineIdentity(app.getPath('userData'))?.id ?? null,
     localFallbackDir: () => app.getPath('userData'),
     noteOwnWrite,
-    // Phase 2: approvals and key POINTERS beside the model-provider keys in
-    // userData, never in a sync space — a key is machine-bound ciphertext.
-    connections: new PageConnectionsStore(app.getPath('userData'), secretsStore),
+    // Phase 2: approvals and key POINTERS beside the model-provider keys in userData, never a sync space (a key is machine-bound ciphertext).
+    // officeListed (WHY): the built-in Office page is listed, and pinnable, only where the add-on is installed (pages-store.ts).
+    connections: new PageConnectionsStore(app.getPath('userData'), secretsStore), officeListed: async () => (await import('./office/office-root')).officeAvailable(),
     // A FRESH reader per call, not a held instance: the fs-backed store caches
     // after its first load, so a long-lived one here would keep answering with
     // the token from before the person signed in or out.
@@ -5391,6 +5427,22 @@ export function registerIpcHandlers(
     pagesService.deleteSavedKey(String(service ?? ''), String(address ?? '')));
   ipcMain.handle(IPC.PAGES_FETCH, async (_e, id: string, req: PageFetchRequest) =>
     pagesService.fetch(String(id ?? ''), req ?? { url: '' }));
+
+  // ── Document comments (T3, design docs/active/specs/2026-09-26-doc-comments-
+  // build-design.md §1.5/§1.6) — list/add/reply/resolve/reopen/move plus the
+  // chokidar-backed watch/unwatch relay. Factored into its own function so the
+  // containment/plumbing behaviour is testable without this function's full
+  // dependency graph — see doc-comments/ipc-handlers.ts.
+  registerDocCommentsHandlers(ipcMain, {
+    getAllWebContents: () => webContents.getAllWebContents(),
+    remoteBroadcast: (msg) => remoteServer?.broadcast(msg),
+    // F1 fix: a live session's cwd counts as a "known" projectRoot too (same
+    // "records" carve-out remote-server.ts's own sessionRoots() already
+    // grants) — a file opened via an unregistered session's drawer must keep
+    // working, not just closes accepted for saved folders/indexed projects.
+    sessionRoots: () => sessionManager.listSessions().filter(s => s.status !== 'destroyed').map(s => s.cwd),
+  });
+
   // A crashed/closed renderer never sends unwatch — drop its refs on destroy so
   // it cannot pin a watcher forever. One listener per webContents, attached on
   // its first subscribe.

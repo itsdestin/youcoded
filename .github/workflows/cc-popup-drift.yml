@@ -1,0 +1,59 @@
+name: Claude Code pop-up drift
+
+# Does the app still tell, on the LATEST published Claude Code, when a pop-up
+# holds the keyboard and when the message box is live?
+#
+# WHY: the app refuses a chat send (and holds back its lost-message Enter)
+# whenever something other than Claude Code's message box has the keyboard,
+# read from the SHAPE of the screen (desktop/src/renderer/parser/cc-input-focus.ts).
+# New pop-ups need no code change; what can break it is Claude Code redrawing
+# that shape — then every send is refused, or a new mode swallows sends. This
+# re-records ~100 situations (classic and fullscreen renderer, YouCoded's
+# status line) against npm's latest @anthropic-ai/claude-code and scores them
+# with the app's own code (desktop/test-conpty/check-popup-drift.mjs).
+#
+# Needs NO secrets and costs nothing: busy states come from a local stand-in
+# API (fake-anthropic.mjs) and no scenario reaches a real model. A failure
+# only turns this run red and writes the report to the run's summary page; it
+# opens no issue and comments on nothing.
+on:
+  schedule:
+    # 09:17 UTC daily, after the startup-dialog check, off the hour on purpose.
+    - cron: '17 9 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      # No token left in .git/config: the job runs an untrusted package (npm's
+      # latest Claude Code) and nothing it starts should find one.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # No `cache: npm`: an untrusted package runs here, and the npm cache is
+      # shared with the build workflows.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+
+      # One retry before failing: a slow runner can miss a screen's deadline
+      # once. A real change fails both runs the same way.
+      - name: Score the latest Claude Code's pop-ups with the app's detector
+        run: |
+          node test-conpty/check-popup-drift.mjs --latest --jobs 3 && exit 0
+          echo "::warning::First run reported a difference or failed — retrying once to rule out a flake."
+          node test-conpty/check-popup-drift.mjs --latest --jobs 3

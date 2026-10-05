@@ -1,0 +1,15 @@
+{
+  "fixture": "elden-ring-completionist-checklist.xlsx",
+  "path": "reports/elden-ring-completionist-checklist.xlsx",
+  "steps": [
+    {
+      "op": "resolve",
+      "args": {
+        "id": "xt-1-B19-11a0fac8-69fe-49e4-a4d6-f19627c11856"
+      },
+      "result": {
+        "ok": true
+      }
+    }
+  ]
+}

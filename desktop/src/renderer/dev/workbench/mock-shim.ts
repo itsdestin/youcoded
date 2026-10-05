@@ -25,6 +25,8 @@ import {
 import type { ArtifactRecord } from '../../../shared/artifacts/types';
 import { resolveFixture, CS_ERR_READ } from './fixtures/chatsearch';
 import { SHEET_BEFORE, SHEET_AFTER } from './fixtures/sheets';
+import { SHEET_BY_REP } from './fixtures/sheets-by-rep';
+import { DOC_LAUNCH_BRIEF } from './fixtures/docs';
 import type { MockState, MockSessionMeta } from './scenarios';
 import { stressRowCount } from './scenarios';
 import { specialistRoster, delegatedModels as seedDelegatedModels } from './fixtures/specialists';
@@ -51,6 +53,12 @@ import { triggerTip } from '../../components/guide/tips';
 import { isNoFolderCwd } from '../../../shared/no-folder';
 import { createRemoteAccessPreview } from './fixtures/remote-access';
 import { folderPageFromRecords } from '../../../shared/artifacts/folder-page';
+// Doc comments (T5, design docs/active/specs/2026-09-26-doc-comments-build-
+// design.md §7): the real `docComments:*` channels are hand-written here so
+// the workbench keeps showing every seeded comment state without a main
+// process — see createDocCommentsMock's own WHY below.
+import { seedDocComments } from './fixtures/doc-comments';
+import type { CommentAuthor, CommentSelector, PersistedComment } from '../../../shared/doc-comments-types';
 
 // artifactId -> pretend on-disk size, for exercising the over-cap artifact
 // states (partial-view banner, handoff) against the fake backend.
@@ -220,6 +228,10 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'pages.list', 'pages.get', 'pages.setPinned', 'pages.setData', 'pages.onChanged',
   // Pages Phase 2 (connections) — designed ahead of the backend; rows in mock-only.ts.
   'pages.approve', 'pages.removeConnection', 'pages.refresh', 'pages.savedKeys', 'pages.deleteSavedKey',
+  // Office — real channels since build plan Task 5 (main/office/office-ipc.ts). Faked so the
+  // workbench has files to list and versions to show without the add-on or a disk.
+  'office.status', 'office.create', 'office.pick', 'office.open', 'office.invoke', 'office.close',
+  'office.versions', 'office.restore', 'office.saveCopy',
   'appearance.set', 'appearance.broadcast', 'appearance.onSync',
   'skills.listMarketplace', 'skills.list', 'skills.getFavorites', 'skills.setFavorite', 'skills.getFeatured',
   'marketplace.getPackages', 'theme.marketplace',
@@ -246,6 +258,17 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // catch-all on purpose: it must return its unsubscribe synchronously.
   'update.changelog', 'update.download', 'update.cancel', 'update.launch', 'update.getCachedDownload',
   'update.getBetaChannel', 'update.setBetaChannel',
+  // Document comments (T5, design §1.6) — real on all five surfaces (T1-T4);
+  // hand-written so the workbench serves the seeded comment fixtures instead
+  // of the catch-all's `[]`, which the store's own `list()` would read as
+  // "not an {ok:true,...} shape" and quietly show zero comments everywhere.
+  'docComments.list', 'docComments.add', 'docComments.reply', 'docComments.resolve',
+  'docComments.reopen', 'docComments.move', 'docComments.watch', 'docComments.unwatch',
+  'docComments.onChanged',
+  // Edit/delete (2026-09-28) — real on every surface (main-process/Kotlin
+  // build, same session); no longer MOCK_ONLY (see mock-only.ts's changelog
+  // for these four rows' own removal).
+  'docComments.edit', 'docComments.editReply', 'docComments.delete', 'docComments.deleteReply',
 ];
 
 const warned = new Set<string>();
@@ -472,10 +495,17 @@ const NAMESPACES = [
   // was missing, which left Assistant settings → Web search an empty page in
   // the workbench (UX review 1, U1).
   'search',
+  // Document comments (T5) — real on all five surfaces (T1-T4); hand-written
+  // here so the workbench shows every seeded comment state (open/replied/
+  // resolved/Word/Excel) without a main process.
+  'docComments',
 ];
 
 import { createNamingPreview } from './naming-preview';
 import { seedPages } from './fixtures/pages';
+import { OFFICE_EDITOR_ORIGIN, OFFICE_FILES, officeFixtureName, officeSampleUrl } from './fixtures/office';
+import { OFFICE_PAGE_SUMMARY } from '../../../shared/pages-types';
+import type { OfficeBridge, OfficeVersion } from '../../../shared/office-types';
 import type { PagesBridge, PageDocument, PageSummary, SavedPageKey } from '../../../shared/pages-types';
 
 /** `?fail=<ns.method>[,…]` — those channels REJECT from the first call.
@@ -839,6 +869,12 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     ? 'default'
     : new URLSearchParams(location.search).get('scenario') ?? 'default';
 
+  // WHY: conversation JSONL is replayed as reducer state, not a live scripted
+  // turn (reply-script.pending). This single native review ask needs a mock
+  // response so a successful Submit is not falsely reported as expired.
+  let visualNativeAskOpen = typeof location !== 'undefined'
+    && new URLSearchParams(location.search).get('seed') === 'bubbles-questions-native';
+
   // `?arcade=<state>` overrides the mapping. WHY it needs its own switch: the
   // app's `empty` scenario has NO SESSIONS, so the header — and with it the
   // games button — never renders, making the brand-new-arcade state
@@ -1070,9 +1106,36 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // makes for Claude Code sessions ('\r', '\x1b') never start a script.
     canSend: () => true,
     sendInput: (sessionId: string, text: string) => startReply(sessionId, text, true),
+    // No main process here: the screen verdict has no automated writer to gate.
+    reportInputBlocked: () => {},
     // Real signature is Promise<boolean> (useIpc.ts/preload.ts), not {ok} —
     // resolvePermission already returns a boolean (false = stale/unknown id).
-    respondToPermission: async (requestId: string, _decision: object) => resolvePermission(requestId),
+    respondToPermission: async (requestId: string, decision: any) => {
+      if (requestId !== 'native-d4-visual' || !visualNativeAskOpen) return resolvePermission(requestId);
+      const behavior = decision?.decision?.behavior;
+      const ordered = decision?.decision?.updatedInput?.orderedAnswers;
+      // Never claim delivery for malformed/non-answer submissions. This is a
+      // dev fixture only; the production broker still validates real request IDs.
+      if (behavior !== 'deny' && (behavior !== 'allow' || !Array.isArray(ordered)
+          || ordered.length !== 2 || ordered.some((item: any) => !item || typeof item.answer !== 'string'
+            || (item.note !== undefined && typeof item.note !== 'string')))) return false;
+      visualNativeAskOpen = false;
+      const dismissed = behavior === 'deny';
+      const lines = dismissed ? [] : ordered.map((item: { answer: string; note?: string }) =>
+        `Q: Which color?\nA: ${item.answer}${item.note ? `\nNote from the user: ${item.note}` : ''}`);
+      subs.transcript.forEach(f => f({ type: 'tool-result', sessionId: 'wb-2',
+        uuid: 'wb-d4-native-result', timestamp: Date.now(),
+        data: { toolUseId: 'd4-native-ask',
+          toolResult: dismissed
+            ? 'The user closed this question without answering and took over. Stop here and wait for their next message.'
+            : `The user answered:\n\n${lines.join('\n\n')}`, isError: dismissed } }));
+      // This canned answer has no model continuation; settle its fixture turn
+      // rather than leaving a never-ending Thinking chip after the real result.
+      subs.transcript.forEach(f => f({ type: 'turn-complete', sessionId: 'wb-2',
+        uuid: 'wb-d4-native-end', timestamp: Date.now(),
+        data: { stopReason: dismissed ? 'question_dismissed' : 'end_turn', model: null } }));
+      return true;
+    },
 
     // Reads the live-session meta slice, falling back to a `past` row of the
     // same id, then to empty. `supported: true` always — the desktop refuses
@@ -1794,6 +1857,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       return mode;
     },
   };
+  let queuedSends = 0;
   const native: Ns<'native'> = {
     supported: true,
     getContextPreferences: async () => ({ ...contextPreferences }),
@@ -1824,9 +1888,19 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // Shares startReply with session.sendInput — see that helper's WHY.
     send: async (sessionId: string, text: string, _attachments?: string[]) => {
       if (store.refuseWrites) return { status: 'failed', reason: 'not-live' };
+      // `?queueSends=1`: answer as if the assistant were busy, so typed messages
+      // wait in the strip above the message box (Send now / Edit / Cancel).
+      // WHY a switch: the strip is renderer-local and a restored chat copy
+      // deliberately drops it, so it can only be shown by sending while busy.
+      if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('queueSends') === '1') {
+        return { status: 'queued', queueId: `wb-queued-${++queuedSends}` };
+      }
       startReply(sessionId, text);
       return { status: 'sent' };
     },
+    // Pretend the waiting message was found; the real host decides in main.
+    queueRemove: async () => true,
+    queueSendNow: async () => true,
     // Model picker (ModelPickerPopup.tsx:304). Real backend rebinds the
     // provider/model on the live session; here it updates the row the status
     // bar and picker read from, so the chip changes on screen. No `subs.*`
@@ -1871,7 +1945,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // shortened one, because the got/cut comparison is most of what this panel
     // is for and a workbench that only ever shows whole files never renders it.
     sessionContextText: async (_sessionId: string, kind: 'project' | 'user' | 'skill', id?: string) => {
-      const fixture = kind === 'project' ? CONTEXT_TEXT.project
+      const fixture = kind === 'project' && id === '/workspace/AGENTS.md'
+        ? { path: id, text: '# Workspace\n\n…\n\n[Outlined to fit]', full: '# Workspace\n\nAlways check your work.', truncated: true }
+        : kind === 'project' && id === '/workspace/repo/CLAUDE.md'
+          ? { path: id, text: '# Project\n\nFollow the task.', full: '# Project\n\nFollow the task.', truncated: false }
+          : kind === 'project' ? CONTEXT_TEXT.project
         : kind === 'user' ? CONTEXT_TEXT.user
           : CONTEXT_TEXT.skills[id ?? ''];
       if (!fixture) return { error: 'unreadable' };
@@ -2832,9 +2910,31 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       // swaps in the sorted workbook; the viewer re-reads when its file is
       // re-opened, and the video cuts across that re-open.
       if (ext === 'xlsx') {
+        // Doc comments mockup: a two-tab workbook, so cell comments can name
+        // their sheet (fixtures/sheets/make-by-rep.mjs).
+        if (absolutePath.endsWith('q3-sales-by-rep.xlsx')) {
+          return { ok: true, base64: SHEET_BY_REP, mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
+        }
         const after = (globalThis as any).__workbenchSheet === 'after';
         return { ok: true, base64: after ? SHEET_AFTER : SHEET_BEFORE,
                  mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
+      }
+      // Doc comments mockup: a real Word document with real Word comments
+      // (fixtures/docs/make.mjs), for DocxView's highlights and comment pane.
+      if (absolutePath.endsWith('launch-brief.docx')) {
+        return { ok: true, base64: DOC_LAUNCH_BRIEF,
+                 mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' };
+      }
+      // Office (design stage): the fixture documents live on the editor add-on's
+      // origin, so the quick preview reads the same bytes the editor opens.
+      if (ext === 'docx' || ext === 'pptx') {
+        try {
+          const name = absolutePath.split('/').pop() ?? '';
+          const buf = new Uint8Array(await (await fetch(officeSampleUrl(OFFICE_EDITOR_ORIGIN, name))).arrayBuffer());
+          let bin = '';
+          for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+          return { ok: true, base64: btoa(bin), mime: 'application/octet-stream' };
+        } catch { return { ok: false, reason: 'not-an-image' }; }
       }
       if (ext === 'pdf') {
         const pdf = makeSamplePdfBase64();
@@ -2861,8 +2961,8 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // return a real shape; the catch-all can only ever be right about SHAPE, not
   // MEANING. Shape from shared/first-run-types.ts.
   // `?firstRun=<STEP>` renders the onboarding wizard at that step (e.g.
-  // DETECT_PREREQUISITES, INSTALL_PREREQUISITES, ENABLE_DEVELOPER_MODE,
-  // AUTHENTICATE, LAUNCH_WIZARD). WHY: the wizard is the first thing a new user
+  // DETECT_PREREQUISITES, INSTALL_PREREQUISITES, AUTHENTICATE,
+  // LAUNCH_WIZARD). WHY: the wizard is the first thing a new user
   // sees and, until 2026-08-25, the only surface no review rig could reach —
   // the mock always answered COMPLETE, so App routed straight past it.
   const firstRunStep = (typeof location !== 'undefined' && new URLSearchParams(location.search).get('firstRun')) || 'COMPLETE';
@@ -2896,6 +2996,29 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   const firstRunParams = typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams();
   const localFitTight = firstRunParams.get('localFit') === 'tight';
   const localDownloadPin = firstRunParams.get('localDownload');
+  // `?prereqs=installing|done` puts a new user's setup checklist on screen —
+  // Git installing, or Git done at the sign-in step. Node.js and Claude Code
+  // are skipped rows, as the real setup leaves them for anyone not already
+  // signed in to Claude Code (Destin, 2026-10-02). Without it the checklist is
+  // empty, so no review shot showed what setup installs.
+  const prereqsPin = firstRunParams.get('prereqs');
+  // `?prereqs=failed` (first-run deck R-2): Git's download stopped, with the raw
+  // message a failed download really produces, so "Show details" has something real.
+  const setupChecklist = prereqsPin === 'installing' || prereqsPin === 'done' || prereqsPin === 'failed'
+    ? {
+        prerequisites: [
+          { name: 'node', displayName: 'Node.js', status: 'skipped' },
+          prereqsPin === 'installing'
+            ? { name: 'git', displayName: 'Git', status: 'installing' }
+            : prereqsPin === 'failed'
+              ? { name: 'git', displayName: 'Git', status: 'failed' }
+              : { name: 'git', displayName: 'Git', status: 'installed', version: 'git version 2.56.0' },
+          { name: 'claude', displayName: 'Claude Code', status: 'skipped' },
+          { name: 'auth', displayName: 'Sign in', status: 'waiting' },
+        ],
+        overallProgress: prereqsPin === 'installing' ? 0 : 45,
+      }
+    : null;
   const firstRun = {
     // The suggestion is one of the curated cards (the same two `models.curated`
     // serves), so setup can show it with the Local models row — round 3 review
@@ -2914,24 +3037,16 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     resumeLocalDownload: async () => true,
     getState: async () => ({
       currentStep: firstRunStep,
-      // `?prereqs=installing|failed` stages the 'getting things ready' step mid-way and
-      // stopped on a failure (first-run deck L-1/L-2/E-2) — the failure text is the real
-      // winget message from Destin's Windows screenshot, so the details fold shows it.
-      prerequisites: firstRunParams.get('claudeInstall') === 'installing'
+      prerequisites: setupChecklist?.prerequisites ?? (firstRunParams.get('claudeInstall') === 'installing'
         ? [{ name: 'claude', displayName: 'Claude Code', status: 'installing' }]
-        : firstRunParams.get('prereqs') === 'installing'
-          ? [{ name: 'node', displayName: 'Node.js', status: 'installed', version: 'v22.20.0' }, { name: 'git', displayName: 'Git', status: 'installing' }]
-          : firstRunParams.get('prereqs') === 'failed'
-            ? [{ name: 'node', displayName: 'Node.js', status: 'installed', version: 'v22.20.0' }, { name: 'git', displayName: 'Git', status: 'failed' }]
-            : [],
-      overallProgress: firstRunParams.get('prereqs') ? 50 : 100,
-      ...(firstRunParams.get('prereqs') === 'failed' ? { lastError: 'winget (App Installer) is missing, disabled, or not on your system PATH. Please install App Installer from the Microsoft Store (https://aka.ms/getwinget) or enable it in Windows Settings / Policy, then try again.' } : {}),
+        : []),
+      overallProgress: setupChecklist?.overallProgress ?? 100,
+      ...(prereqsPin === 'failed' ? { lastError: 'Error: HTTP 503 downloading https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.1/PortableGit-2.56.0-64-bit.7z.exe' } : {}),
       statusMessage: '',
       // `?authMode=chatgpt|oauth|apikey` pins the sign-in screen's in-flight
       // state (design 2026-09-04: the ChatGPT round-trip has its own waiting copy).
       authMode: (typeof location !== 'undefined' && new URLSearchParams(location.search).get('authMode')) || 'none',
       authComplete: true,
-      needsDevMode: false,
     }),
   };
 
@@ -3510,7 +3625,174 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     skills, marketplace, folders, fs, modes, git, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, search, performance: perfMock,
     update, dev: devMock, ...(remote ? { remote } : {}),
     pages: createPagesMock(activeScenario === 'empty'),
+    office: createOfficeMock(activeScenario === 'empty'),
+    docComments: createDocCommentsMock(activeScenario === 'empty'),
   } as unknown as Record<string, Record<string, unknown>>;
+}
+
+/** `window.claude.docComments` for the workbench (T5). Mirrors the real
+ *  main-process store's OWN wire shape (`PersistedComment[]`, `{ok:true,id}`/
+ *  `{ok:false,error}`) so the renderer's real `docComments:list/add/…`
+ *  handling (doc-comments-store.ts) runs unmodified against fixture data —
+ *  the workbench has no `.youcoded/comments/` sidecar and no main process to
+ *  parse a real `.docx`/`.xlsx`, so this is a flat in-memory list keyed by
+ *  path, same as every other file-backed feature's workbench fake. `empty`
+ *  seeds nothing (a first-open file with zero comments is the common case
+ *  reviewers also need to see); every other scenario gets the fixture set
+ *  (open/replied/resolved/Word/Excel — fixtures/doc-comments.ts). */
+function createDocCommentsMock(empty: boolean) {
+  let comments: PersistedComment[] = empty ? [] : seedDocComments();
+  // `?docCommentsFail=<code>` — every `add` fails with that MutationResult
+  // error code instead of saving. WHY (review-deck V-3, doc-comments confirm-2
+  // deck, 2026-09-27): the generic `?fail=docComments.add` switch (above) only
+  // throws a made-up "Mock failure (...)" string, which `describeError` cannot
+  // recognize, so it can never show a SPECIFIC real error's wording (e.g.
+  // `file-open-elsewhere`'s "This file looks open in another app..."). This
+  // mock-only, workbench-only toggle lets the shot rig ask for a named real
+  // error code and see the exact card `describeError` (doc-comments-store.ts)
+  // produces for it — never product code, and inert unless the param is set.
+  const docCommentsFailCode = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('docCommentsFail') : null;
+  // `?docCommentsDetached=1` — adds one seed comment whose quote is not a
+  // substring of any fixture document, so the real `resolveSelector` (run
+  // client-side by use-quote-marks.ts, same as production) can never find it
+  // and marks it `detached` on its own — no fake status field, the actual
+  // "text no longer found" code path. WHY (review-deck V-2, same deck as
+  // above): every real seed comment's quote is deliberately an exact
+  // substring of its fixture (doc-comments.ts's own top comment), so none of
+  // them can show this state without one written to NOT match. Gated behind
+  // the param so ordinary (non-review-deck) workbench sessions keep seeing
+  // only genuinely anchored fixture comments.
+  const detachedDemo: PersistedComment[] = (typeof location !== 'undefined' && new URLSearchParams(location.search).get('docCommentsDetached'))
+    ? [{
+        id: 'demo-detached',
+        path: 'docs/active/plans/2026-09-24-onboarding-redesign.md',
+        selector: { kind: 'text', selector: { type: 'TextQuoteSelector', exact: 'This sentence was in the plan when the comment was left, but the plan moved on without it.', prefix: '', suffix: '', occurrence: 0 } },
+        text: 'Is this still the plan, or did the rewrite drop it?',
+        author: 'user',
+        createdAt: Date.now() - 60 * 60 * 1000,
+        replies: [],
+        resolved: false,
+        history: [],
+      }]
+    : [];
+  if (detachedDemo.length) comments = [...comments, ...detachedDemo];
+  const subs = new Set<(evt: { path: string; projectRoot?: string }) => void>();
+  // `projectRoot` on the push (F3, T5 review): mirrors the real watcher —
+  // harmless here (the workbench only ever has one fixture project), but
+  // keeps this mock's wire shape identical to production's.
+  const publish = (path: string, projectRoot?: string) => subs.forEach((cb) => cb({ path, projectRoot }));
+  // Refcounted the same shape as the real chokidar relay (doc-comments-
+  // watcher.ts) — the workbench never actually pushes an unprompted change
+  // (nothing else writes to this fixture concurrently), but tracking refs
+  // honestly is what a mock-shim contract test can assert against.
+  const watchRefs = new Map<string, number>();
+
+  function findIndex(id: string): number { return comments.findIndex((c) => c.id === id); }
+
+  return {
+    list: async (path: string, _projectRoot?: string) => ({ ok: true, comments: comments.filter((c) => c.path === path) }),
+    // `id` (F4, T5 review): the renderer now mints and sends this — honored
+    // here instead of minting a fresh one, mirroring the real store's own
+    // (now caller-supplied-id-first) `addComment`.
+    add: async (path: string, selector: CommentSelector, text: string, author: CommentAuthor, projectRoot?: string, id?: string) => {
+      // Mirrors ipc-handlers.ts's own `reqStr` refusal — an empty `text` is
+      // never written, same as the real store.
+      if (!text) return { ok: false, error: 'missing-field', field: 'text' };
+      if (docCommentsFailCode) return { ok: false, error: docCommentsFailCode };
+      const realId = id ?? `c-${Math.random().toString(36).slice(2, 10)}`;
+      const comment: PersistedComment = { id: realId, path, selector, text, author, createdAt: Date.now(), replies: [], resolved: false, history: [] };
+      comments = [...comments, comment];
+      publish(path, projectRoot);
+      return { ok: true, id: realId };
+    },
+    reply: async (path: string, id: string, text: string, author: CommentAuthor, projectRoot?: string) => {
+      const idx = findIndex(id);
+      if (idx === -1) return { ok: false, error: 'comment-not-found' };
+      const c = comments[idx];
+      // Same rule as the real store's nextReplyId (highest number + 1, so a
+      // deleted middle reply never gets its id reused).
+      const replyId = `${c.id}-r${Math.max(c.replies.length, ...c.replies.map((r: { id: string }) => Number.parseInt(r.id.slice(`${c.id}-r`.length), 10) || 0)) + 1}`;
+      comments = comments.map((x, i) => (i === idx ? { ...c, replies: [...c.replies, { id: replyId, author, text, createdAt: Date.now() }] } : x));
+      publish(path, projectRoot);
+      return { ok: true };
+    },
+    resolve: async (path: string, id: string, by: CommentAuthor, projectRoot?: string) => {
+      const idx = findIndex(id);
+      if (idx === -1) return { ok: false, error: 'comment-not-found' };
+      const c = comments[idx];
+      comments = comments.map((x, i) => (i === idx ? { ...c, resolved: true, history: [...c.history, { by, at: Date.now(), action: 'resolved' as const }] } : x));
+      publish(path, projectRoot);
+      return { ok: true };
+    },
+    reopen: async (path: string, id: string, by: CommentAuthor, projectRoot?: string) => {
+      const idx = findIndex(id);
+      if (idx === -1) return { ok: false, error: 'comment-not-found' };
+      const c = comments[idx];
+      comments = comments.map((x, i) => (i === idx ? { ...c, resolved: false, history: [...c.history, { by, at: Date.now(), action: 'reopened' as const }] } : x));
+      publish(path, projectRoot);
+      return { ok: true };
+    },
+    move: async (path: string, id: string, newSelector: CommentSelector, projectRoot?: string) => {
+      const idx = findIndex(id);
+      if (idx === -1) return { ok: false, error: 'comment-not-found' };
+      comments = comments.map((x, i) => (i === idx ? { ...x, selector: newSelector } : x));
+      publish(path, projectRoot);
+      return { ok: true };
+    },
+    // Edit/delete (2026-09-28, real on every surface): E-2 (anyone's
+    // comment/reply) means no author/`by` check here, mirroring resolve/
+    // reopen's own shape above but with no such argument at all.
+    edit: async (path: string, id: string, text: string, projectRoot?: string) => {
+      const idx = findIndex(id);
+      if (idx === -1) return { ok: false, error: 'comment-not-found' };
+      if (!text) return { ok: false, error: 'missing-field', field: 'text' };
+      comments = comments.map((x, i) => (i === idx ? { ...x, text } : x));
+      publish(path, projectRoot);
+      return { ok: true };
+    },
+    editReply: async (path: string, id: string, replyId: string, text: string, projectRoot?: string) => {
+      const idx = findIndex(id);
+      if (idx === -1) return { ok: false, error: 'comment-not-found' };
+      if (!text) return { ok: false, error: 'missing-field', field: 'text' };
+      const c = comments[idx];
+      if (!c.replies.some((r) => r.id === replyId)) return { ok: false, error: 'comment-not-found' };
+      comments = comments.map((x, i) => (i === idx ? { ...c, replies: c.replies.map((r) => (r.id === replyId ? { ...r, text } : r)) } : x));
+      publish(path, projectRoot);
+      return { ok: true };
+    },
+    // E-3: deleting a thread's first comment deletes the whole thread — true
+    // for free here too, since a thread IS one PersistedComment plus its
+    // nested `replies`; removing the record removes every reply with it.
+    delete: async (path: string, id: string, projectRoot?: string) => {
+      const idx = findIndex(id);
+      if (idx === -1) return { ok: false, error: 'comment-not-found' };
+      comments = comments.filter((_, i) => i !== idx);
+      publish(path, projectRoot);
+      return { ok: true };
+    },
+    deleteReply: async (path: string, id: string, replyId: string, projectRoot?: string) => {
+      const idx = findIndex(id);
+      if (idx === -1) return { ok: false, error: 'comment-not-found' };
+      const c = comments[idx];
+      if (!c.replies.some((r) => r.id === replyId)) return { ok: false, error: 'comment-not-found' };
+      comments = comments.map((x, i) => (i === idx ? { ...c, replies: c.replies.filter((r) => r.id !== replyId) } : x));
+      publish(path, projectRoot);
+      return { ok: true };
+    },
+    watch: async (path: string, _projectRoot?: string) => {
+      watchRefs.set(path, (watchRefs.get(path) ?? 0) + 1);
+      return { ok: true };
+    },
+    unwatch: async (path: string, _projectRoot?: string) => {
+      const n = (watchRefs.get(path) ?? 1) - 1;
+      if (n <= 0) watchRefs.delete(path); else watchRefs.set(path, n);
+      return { ok: true };
+    },
+    onChanged: (cb: (evt: { path: string; projectRoot?: string }) => void) => {
+      subs.add(cb);
+      return () => { subs.delete(cb); };
+    },
+  };
 }
 
 /** `window.claude.pages` for the workbench (Phase 1 shell). `empty` seeds no
@@ -3518,7 +3800,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
  *  gets the three fixture pages. Pin toggles publish through onChanged the way
  *  the real host will, so the header and the library never disagree. */
 function createPagesMock(empty: boolean): PagesBridge {
-  let pages: PageDocument[] = empty ? [] : seedPages();
+  // Office is built in, so it is listed in every scenario — even the empty one.
+  // Unpinned, as a new install has it: pinning it filled the header's fourth slot,
+  // and the resume journey's All Sessions click then raced the session strip
+  // re-packing under verify.sh's load (failed 2 of 4 runs, 2026-09-28).
+  let pages: PageDocument[] = [OFFICE_PAGE, ...(empty ? [] : seedPages())];
   // One key is saved from the start (Trip board uses it), so the Weather page
   // can show "Uses your saved OpenWeather key".
   const savedServices = new Map<string, string>(empty ? [] : [['OpenWeather', 'api.openweathermap.org']]);
@@ -3597,6 +3883,80 @@ function createPagesMock(empty: boolean): PagesBridge {
       usedBy: pages.filter((p) => p.connections?.some((c) => c.kind === 'key' && c.service === service && c.approved)).map((p) => ({ id: p.id, name: p.name })),
     }));
   }
+}
+
+/** The built-in Office page as the pages list carries it — the same row main lists. */
+const OFFICE_PAGE: PageDocument = { ...OFFICE_PAGE_SUMMARY, html: '', data: null };
+
+/** `window.claude.office` for the workbench — a fake HOST around the real editor (Task 6).
+ *  The editor add-on itself is served by scripts/office-workbench-server.mjs on
+ *  127.0.0.1:4717 (fixtures/office.ts); `open` hands out that origin, and `invoke` answers the
+ *  editor's requests the way main would: `open_file` returns the fixture translated by the
+ *  real x2t (the server runs main's own convert()), a save answers 'ok' and writes nothing.
+ *  WHY a fake host that still runs x2t: the Office screens then show the real editor with real
+ *  content, as Destin reviewed them. */
+function createOfficeMock(empty: boolean): OfficeBridge {
+  const HOUR = 3_600_000;
+  const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+  const recent = empty ? [] : OFFICE_FILES.map((f, i) => ({ ...f, at: ago([0.4, 5, 30][i] * HOUR) }));
+  let created = 0;
+  return {
+    status: async () => ({
+      available: true,
+      recent,
+      // Two files beyond Recent, so the "In <project>" list has something of its own to show
+      // (Recent's files are not repeated there). They open the fixture of their kind.
+      project: empty ? null : { name: 'community-garden', files: [
+        ...OFFICE_FILES.map((f, i) => ({ ...f, at: ago([26, 49, 75][i] * HOUR) })),
+        { ...OFFICE_FILES[1], path: '/home/you/Projects/community-garden/Volunteer rota.xlsx', name: 'Volunteer rota.xlsx', at: ago(52 * HOUR) },
+        { ...OFFICE_FILES[0], path: '/home/you/Projects/community-garden/Grant report.docx', name: 'Grant report.docx', at: ago(120 * HOUR) },
+      ] },
+    }),
+    create: async (kind) => {
+      created += 1;
+      const base = OFFICE_FILES.find((f) => f.kind === kind)!;
+      const name = `${{ document: 'Untitled document', spreadsheet: 'Untitled spreadsheet', presentation: 'Untitled presentation' }[kind]}${created > 1 ? ` ${created}` : ''}${base.name.slice(base.name.lastIndexOf('.'))}`;
+      return { ok: true, file: { ...base, path: `/home/you/Documents/${name}`, name, folder: 'Documents', at: new Date().toISOString() } };
+    },
+    pick: async () => OFFICE_FILES[0],
+    // One token per file (not one 'wb' for all): two documents can be open at once, and the
+    // token is how invoke knows which fixture the editor is asking for. The origin is the one
+    // local server, so the frames are told apart by their window, as EditorFrame already does.
+    open: async (path) => ({ ok: true, token: `wb:${path}`, origin: OFFICE_EDITOR_ORIGIN }),
+    invoke: async (token, cmd) => {
+      const path = token.slice('wb:'.length);
+      const base = path.slice(path.lastIndexOf('/') + 1);
+      switch (cmd) {
+        case 'open_file': {
+          const r = await fetch(`${OFFICE_EDITOR_ORIGIN}/fixtures/${encodeURIComponent(officeFixtureName(path))}`);
+          if (!r.ok) throw new Error("Office couldn't open this file.");
+          return r.text();
+        }
+        case 'write_editor_bin': case 'save_file': case 'save_changes': return 'ok';
+        // Save As / Export (finish plan Task 2): main's handle for the chosen name, then where it went.
+        case 'save_dialog': return `yc-save/${'0'.repeat(32)}/${base}`;
+        case 'save_file_as': return { name: base, folder: 'Documents' };
+        // Print (Task 3): the workbench has no print window; answer as a cancelled dialog does.
+        case 'print_document': return {};
+        // The rest answer as main's own defaults do (main/office/office-commands.ts).
+        case 'get_current_path': return base;
+        case 'recent_files_state': return { enabled: false, files: [] };
+        case 'get_system_fonts': return '';
+        case 'list_user_dictionaries': return { folders: [], refused: [] };
+        case 'recovery_candidates': return [];
+        default: return null;
+      }
+    },
+    close: async () => {},
+    // "Save a copy…" answers as main would for a failed save whose translation worked.
+    saveCopy: async (_token, mode) => (mode === 'check' ? { ok: true, possible: true } : { ok: true, folder: 'Documents', path: '/home/you/Documents/Garden plan (copy).docx', ...(mode === 'again' ? { unchanged: true } : {}) }),
+    versions: async () => {
+      if (empty) return [];
+      const v = (id: string, h: number, reason: OfficeVersion['reason']): OfficeVersion => ({ id, at: ago(h * HOUR), reason, bytes: 37_000 });
+      return [v('v4', 0.1, 'autosave'), v('v3', 0.4, 'opened'), v('v2', 3, 'autosave'), v('v1', 26, 'opened')];
+    },
+    restore: async () => ({ ok: true }),
+  };
 }
 
 const VOICE_SCRIPT = "Can you look at the budget spreadsheet I sent yesterday? Row 14 is wrong: it says $2,300 but Sarah's invoice was $2,030. Fix it and draft a short reply to her.".split(' ');

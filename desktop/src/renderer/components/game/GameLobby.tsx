@@ -7,6 +7,8 @@ import { mergeFriends, statusLabel } from './friends-data';
 import { Badge, Button, CARD_LEVEL_1, CARD_LEVEL_2, Callout, Pill, FieldError, InputGroup, SectionLabel } from '../ui';
 import type { FriendRow, HeadToHead, RequestsPayload } from '../../state/marketplace-api-client';
 import { recordAria, recordLabel, recordsByOpponent } from './head-to-head';
+// WHY (Office fix round 5): the reload button reloads the window, so open Office documents save first.
+import { reloadAfterOfficeSave } from '../office/office-store';
 // Task 7c, workbench-only auto-play — see the effect below and
 // dev/workbench/fake-party.ts. isWorkbenchAutoplay() is false in every
 // shipped build (it checks for a global only install-mock.ts ever sets).
@@ -97,7 +99,7 @@ function ErrorScreen({ connection }: { connection: GameConnection }) {
           <Button
             variant="secondary"
             size="sm"
-            onClick={() => window.location.reload()}
+            onClick={() => reloadAfterOfficeSave()}
             title="Hard reload the renderer — drops all in-memory state"
           >
             Reload app

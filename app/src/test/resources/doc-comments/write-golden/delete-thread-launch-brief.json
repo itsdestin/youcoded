@@ -1,0 +1,11 @@
+{
+  "fixture": "launch-brief.docx",
+  "path": "docs/launch-brief.docx",
+  "op": "delete",
+  "args": {
+    "id": "w-1"
+  },
+  "result": {
+    "ok": true
+  }
+}

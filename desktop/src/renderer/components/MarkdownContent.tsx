@@ -11,6 +11,7 @@ import { FilepathToken } from './FilepathToken';
 import { CONVERSATIONS_FENCE, parseConversationRefs } from '../../shared/chatsearch-refs';
 import ChatsearchRefBlock from './tool-views/ChatsearchRefBlock';
 import { SessionRefsEnabled } from './session-refs-context';
+import { ANCHOR_SKIP_ATTR } from './comments/anchor-skip';
 import {
   startStream, advanceStream, withDefinitions, type StreamView,
   DETAILS_OPEN_WITH_SUMMARY, DETAILS_OPEN, DETAILS_SUMMARY, DETAILS_CLOSE, DETAILS_OPEN_ANY,
@@ -292,6 +293,8 @@ function CopyButton({ text }: { text: string }) {
       variant="ghost"
       size="sm"
       onClick={handleCopy}
+      data-message-find-ignore
+      // WHY: Copy/Copied is code chrome, not a word of the assistant's message.
       // Floating overlay control in the code block's corner, so opacity-0 at rest
       // is correct and stays (spec decision 74). focus-visible:opacity-100 is new:
       // at opacity-0 the button was invisible to keyboard users who tabbed to it.
@@ -343,8 +346,15 @@ function ChatImage({ src, alt, ...props }: any) {
     <button
       type="button"
       onClick={() => setShown(true)}
+      // F6 (doc-comments T14 review): this label is interaction STATE (it
+      // disappears the moment the image is shown), not part of the document's
+      // own words — ANCHOR_SKIP_ATTR (anchor-skip.ts) tells both the
+      // save-time (build-menu.ts) and resolve-time (use-quote-marks.ts) text
+      // walkers to leave it out of a comment's captured/searched text.
+      {...{ [ANCHOR_SKIP_ATTR]: true }}
       className="my-2 inline-flex items-center gap-2 rounded border border-edge bg-inset px-3 py-2 text-sm text-fg-2 hover:bg-panel"
       title={`Load image from ${host}`}
+      data-message-find-ignore
     >
       <span aria-hidden>🖼</span>
       <span>Image from {host}</span>
@@ -500,7 +510,9 @@ function ConversationsFence({ body }: { body: string }) {
   // Not enabled here: fall back to what the text says on its own, rather than
   // silently swallowing the block.
   if (!enabled) return <pre className="yc-code rounded-md bg-canvas border border-edge p-3 overflow-x-auto text-sm text-fg">{body}</pre>;
-  return <ChatsearchRefBlock shortIds={ids} />;
+  // WHY: the fenced IDs become a live reference CARD with asynchronously
+  // resolved titles, not message words. Those labels cannot be source-indexed.
+  return <span data-message-find-ignore className="contents"><ChatsearchRefBlock shortIds={ids} /></span>;
 }
 // Preview mode: the same renderer with NOTHING interactive in it. WHY: a file tile is itself a
 // <button> (FilesTab, Deliverables), and the code-block Copy button / links inside a rendered

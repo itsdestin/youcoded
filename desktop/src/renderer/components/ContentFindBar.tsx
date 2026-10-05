@@ -7,8 +7,20 @@
 // overlay) — otherwise its own text (the match counter) would be walked and
 // matched by the search.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { ChevronDown, TextInput, Tooltip } from './ui';
 import { ScreenMark } from '../shoot-mode';
+import { resolveBodyRanges, type MessageFindHit } from './chat-message-find';
+
+/** Chat-only source search. Artifact documents keep the unmodified live DOM path. */
+export interface ChatFindAdapter {
+  search: (query: string, signal: AbortSignal) => Promise<{ hits: readonly MessageFindHit[]; pending: boolean } | null> | { hits: readonly MessageFindHit[]; pending: boolean };
+  beforeReveal?: () => void;
+  pin: (hit: MessageFindHit) => () => void;
+  resolve: (hit: MessageFindHit, query: string, signal: AbortSignal) => Promise<Range | null>;
+  subscribe?: (listener: (phase: 'pending' | 'refresh') => void) => () => void;
+  afterScroll?: () => void;
+}
 
 function highlightsSupported(): boolean {
   return typeof CSS !== 'undefined' && 'highlights' in CSS && typeof (window as any).Highlight === 'function';
@@ -47,7 +59,7 @@ function computeRanges(root: HTMLElement, query: string): Range[] {
   return ranges;
 }
 
-export function ContentFindBar({ containerRef, onClose, resetKey, highlightName = 'artifact-find', placeholder = 'Find in document', positionClassName = 'top-2 right-2', scrollRef, layout = 'floating' }: {
+export function ContentFindBar({ containerRef, onClose, resetKey, highlightName = 'artifact-find', placeholder = 'Find in document', positionClassName = 'top-2 right-2', scrollRef, layout = 'floating', chatFind }: {
   containerRef: React.RefObject<HTMLElement | null>;
   onClose: () => void;
   resetKey: string; // changes when the active artifact changes → reset the search
@@ -75,6 +87,7 @@ export function ContentFindBar({ containerRef, onClose, resetKey, highlightName 
   // while it is open instead. The caller owns the strip's top offset (chat
   // sits under an overlaid header) via CSS on `.find-row`.
   layout?: 'floating' | 'row';
+  chatFind?: ChatFindAdapter;
 }) {
   const HL = highlightName;
   const HL_CURRENT = `${highlightName}-current`;
@@ -93,6 +106,20 @@ export function ContentFindBar({ containerRef, onClose, resetKey, highlightName 
   const mutationsRef = useRef(0);
   const walkedAtRef = useRef(0);
   const [walkKey, setWalkKey] = useState(0);
+  const [pending, setPending] = useState(false);
+  const chatHitsRef = useRef<readonly MessageFindHit[]>([]);
+  const searchAbortRef = useRef<AbortController | null>(null);
+  const chatFindRef = useRef(chatFind);
+  chatFindRef.current = chatFind;
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
+  const queryRef = useRef(query);
+  queryRef.current = query;
+  const searchedQueryRef = useRef('');
+  const recoveryUsedRef = useRef(false);
+  const recoveryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => { recoveryUsedRef.current = false; }, [query, resetKey]);
+  useEffect(() => () => { if (recoveryTimerRef.current != null) clearTimeout(recoveryTimerRef.current); }, []);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
   // New artifact → clear the search.
@@ -103,10 +130,49 @@ export function ContentFindBar({ containerRef, onClose, resetKey, highlightName 
   useEffect(() => {
     const root = containerRef.current;
     if (!root || typeof MutationObserver === 'undefined') return;
-    const obs = new MutationObserver(() => { mutationsRef.current++; });
+    let recovery: ReturnType<typeof setTimeout> | null = null;
+    const obs = new MutationObserver((records) => {
+      mutationsRef.current++;
+      if (!chatFindRef.current || !pendingRef.current || !queryRef.current) return;
+      // WHY: a pending projection can become valid after Markdown's own commit.
+      // Ignore unrelated row/chrome changes; one coalesced recheck per body edit,
+      // never a polling loop that recurses on its own highlights.
+      if (!records.some((record) => (record.target as Element).parentElement?.closest?.('[data-message-find-body]')
+          || (record.target as Element).closest?.('[data-message-find-body]'))) return;
+      if (recovery != null) clearTimeout(recovery);
+      recovery = setTimeout(() => { recovery = null; recoveryUsedRef.current = false; setWalkKey((k) => k + 1); }, 80);
+    });
     obs.observe(root, { childList: true, characterData: true, subtree: true });
-    return () => obs.disconnect();
+    return () => { obs.disconnect(); if (recovery != null) clearTimeout(recovery); };
   }, [containerRef, resetKey]);
+
+  useEffect(() => {
+    if (!chatFind || !containerRef.current || typeof MutationObserver === 'undefined') return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const root = containerRef.current;
+    const observer = new MutationObserver((records) => {
+      if (!records.some((record) => record.type === 'childList' &&
+          [...record.addedNodes, ...record.removedNodes].some((node) => node instanceof Element &&
+            (node.matches('[data-message-find-body]') || !!node.querySelector('[data-message-find-body]'))))) return;
+      if (timer != null) clearTimeout(timer);
+      // WHY: afterScroll may mount neighboring folded rows in a later React
+      // commit. Refresh ONLY mounted highlights, never the source corpus/pin.
+      timer = setTimeout(() => {
+        timer = null;
+        if (!queryRef.current || pendingRef.current || !highlightsSupported() || !(CSS as any).highlights.has(HL_CURRENT)) return;
+        const bodies = root.querySelectorAll<HTMLElement>('[data-message-find-body]');
+        const ranges = Array.from(bodies, (body) => resolveBodyRanges(body, queryRef.current)).flat();
+        (CSS as any).highlights.set(HL, new (window as any).Highlight(...ranges));
+      }, 0);
+    });
+    observer.observe(root, { childList: true, subtree: true });
+    return () => { observer.disconnect(); if (timer != null) clearTimeout(timer); };
+  }, [!!chatFind, containerRef, HL, HL_CURRENT]);
+
+  useEffect(() => chatFind?.subscribe?.((phase) => {
+    if (phase === 'pending') { searchAbortRef.current?.abort(); recoveryUsedRef.current = false; pendingRef.current = true; setPending(true); clearHighlights(HL, HL_CURRENT); }
+    else setWalkKey((k) => k + 1);
+  }), [chatFind, HL, HL_CURRENT]);
 
   // WHY two effects (2026-09-16 audit W22): one effect used to walk every text
   // node in the container on every keystroke AND on every next/previous match,
@@ -116,6 +182,32 @@ export function ContentFindBar({ containerRef, onClose, resetKey, highlightName 
   // content changed since the last walk (walkKey); moving the current match
   // otherwise reuses the ranges from the ref.
   useEffect(() => {
+    if (chatFindRef.current) {
+      const abort = new AbortController();
+      searchAbortRef.current = abort;
+      const apply = (result: { hits: readonly MessageFindHit[]; pending: boolean } | null) => {
+        if (abort.signal.aborted || !result) return;
+        chatHitsRef.current = result.hits;
+        walkedAtRef.current = mutationsRef.current;
+        pendingRef.current = result.pending;
+        setPending(result.pending);
+        setCount(result.hits.length);
+        setRangesVersion((v) => v + 1);
+      };
+      // WHY: an earlier query/source revision cannot publish when its yielded
+      // slices finish after a newer input or after close. Hold navigation blank.
+      const changedQuery = searchedQueryRef.current !== query;
+      searchedQueryRef.current = query;
+      if (changedQuery) {
+        pendingRef.current = !!query;
+        setPending(!!query);
+        clearHighlights(HL, HL_CURRENT);
+      }
+      const result = chatFindRef.current.search(query, abort.signal);
+      if (result instanceof Promise) void result.then(apply);
+      else apply(result);
+      return () => { abort.abort(); if (searchAbortRef.current === abort) searchAbortRef.current = null; };
+    }
     const root = containerRef.current;
     if (!root || !highlightsSupported()) { rangesRef.current = []; setCount(0); return; }
     const ranges = computeRanges(root, query);
@@ -128,8 +220,122 @@ export function ContentFindBar({ containerRef, onClose, resetKey, highlightName 
     (CSS as any).highlights.set(HL, new HighlightCtor(...ranges));
   }, [query, resetKey, walkKey, containerRef, HL, HL_CURRENT]);
 
+  // WHY: the source hit may be folded. Hold exactly one pin until navigation or
+  // unmount, then validate the committed body before painting a real DOM Range.
+  useEffect(() => {
+    const adapter = chatFindRef.current;
+    if (!adapter || pending || !query || chatHitsRef.current.length === 0 || !highlightsSupported()) return;
+    const hit = chatHitsRef.current[((current % chatHitsRef.current.length) + chatHitsRef.current.length) % chatHitsRef.current.length];
+    const abort = new AbortController();
+    let settleCleanup: (() => void) | undefined;
+    // WHY: programmatic Find navigation is scroll intent. Release auto-stick
+    // before the selected body mounts or any resize observer can repin the tail.
+    adapter.beforeReveal?.();
+    const release = adapter.pin(hit);
+    void adapter.resolve(hit, query, abort.signal).then((range) => {
+      if (abort.signal.aborted) return;
+      if (!range || range.toString().toLowerCase() !== query.toLowerCase()) {
+        // A stale source coordinate cannot be reported as a completed count.
+        pendingRef.current = true;
+        setPending(true);
+        clearHighlights(HL, HL_CURRENT);
+        // WHY: a selected folded row can commit its shell before Markdown's
+        // content. One bounded second look catches it; no perpetual polling.
+        if (!recoveryUsedRef.current) {
+          recoveryUsedRef.current = true;
+          recoveryTimerRef.current = setTimeout(() => {
+            recoveryTimerRef.current = null;
+            setWalkKey((k) => k + 1);
+          }, 80);
+        }
+        return;
+      }
+      recoveryUsedRef.current = false;
+      const HighlightCtor = (window as any).Highlight;
+      // WHY: highlight every mounted message match, not just the selected one,
+      // without rebuilding folded rows or including reasoning/tool/card text.
+      const mountedBodies = containerRef.current?.querySelectorAll<HTMLElement>('[data-message-find-body]') ?? [];
+      const mountedRanges = Array.from(mountedBodies, (body) => resolveBodyRanges(body, query)).flat();
+      (CSS as any).highlights.set(HL, new HighlightCtor(...mountedRanges));
+      (CSS as any).highlights.set(HL_CURRENT, new HighlightCtor(range));
+      let jumped = false;
+      try {
+        const viewport = scrollRef?.current ?? containerRef.current;
+        const rect = range.getBoundingClientRect();
+        const vp = viewport?.getBoundingClientRect();
+        if (vp && (rect.top < vp.top || rect.bottom > vp.bottom)) {
+          (range.startContainer.parentElement as HTMLElement | null)?.scrollIntoView({ block: 'center' });
+          jumped = true;
+        }
+      } catch { /* range geometry unavailable on detached nodes */ }
+      // WHY: nearby rows can change height when mounted, shifting the match to
+      // the covered edge of the viewport. Commit this bounded band, then centre
+      // the match again before paint; never rebuild the rest of the conversation.
+      flushSync(() => adapter.afterScroll?.());
+      if (jumped && !abort.signal.aborted && range.startContainer.isConnected) {
+        (range.startContainer.parentElement as HTMLElement | null)?.scrollIntoView({ block: 'center' });
+      }
+      // A private 1020-entry hardware trace measured the target correctly
+      // centered at y=531 after both scrollIntoView calls, then content height
+      // expanded by 4747px in the NEXT layout frame. Scroll anchoring moved its
+      // Range to y=909, underneath bottom chrome (elementFromPoint hit a chip).
+      // ResizeObserver reports that layout change; one bounded post-layout
+      // correction keeps Find's target readable without fighting later user scroll.
+      const root = containerRef.current;
+      if (!root || typeof ResizeObserver === 'undefined') return;
+      let frame: number | null = null;
+      let corrections = 0;
+      let stopped = false;
+      const vpEl = scrollRef?.current ?? root;
+      const events = ['wheel', 'touchstart', 'pointerdown', 'keydown'];
+      const stop = () => {
+        if (stopped) return;
+        stopped = true;
+        clearTimeout(expiry);
+        if (frame !== null) cancelAnimationFrame(frame);
+        observer.disconnect();
+        for (const event of events) vpEl.removeEventListener(event, stopIntent);
+      };
+      const settle = () => {
+        frame = null;
+        if (stopped || abort.signal.aborted || !range.startContainer.isConnected) return;
+        const viewport = scrollRef?.current ?? root;
+        const vp = viewport.getBoundingClientRect();
+        const rect = range.getBoundingClientRect();
+        const overlay = document.querySelector('.chrome-wrapper--bottom')?.getBoundingClientRect();
+        const bottom = overlay && overlay.top > vp.top && overlay.top < vp.bottom ? overlay.top : vp.bottom;
+        const center = (vp.top + bottom) / 2;
+        // Ignore harmless sub-pixel drift; correct only a displaced/covered hit.
+        if (Math.abs((rect.top + rect.bottom) / 2 - center) > (bottom - vp.top) / 4) {
+          (range.startContainer.parentElement as HTMLElement | null)?.scrollIntoView({ block: 'center' });
+          if (++corrections >= 4) stop();
+        }
+      };
+      const observer = new ResizeObserver(() => {
+        if (!stopped && frame === null) frame = requestAnimationFrame(settle);
+      });
+      observer.observe(root);
+      const expiry = setTimeout(() => {
+        // WHY: an RO can report the displaced match while rAF is throttled past
+        // expiry. Drain only that already-queued correction before disconnecting;
+        // intent/abort still cancel it, and settle keeps the existing four-pin cap.
+        if (frame !== null && !stopped && !abort.signal.aborted) {
+          cancelAnimationFrame(frame);
+          frame = null;
+          settle();
+        }
+        stop();
+      }, 800);
+      const stopIntent = () => stop();
+      for (const event of events) vpEl.addEventListener(event, stopIntent, { once: true, passive: true });
+      settleCleanup = stop;
+    });
+    return () => { abort.abort(); settleCleanup?.(); release(); clearHighlights(HL, HL_CURRENT); };
+  }, [current, query, rangesVersion, pending, HL, HL_CURRENT, containerRef, scrollRef]);
+
   // Paint the current match and scroll it into view if it's off-screen.
   useEffect(() => {
+    if (chatFindRef.current) return;
     const ranges = rangesRef.current;
     if (ranges.length === 0 || !highlightsSupported()) return;
     // Never paint from ranges the content has outgrown. In practice the walk
@@ -158,15 +364,23 @@ export function ContentFindBar({ containerRef, onClose, resetKey, highlightName 
   useEffect(() => () => clearHighlights(HL, HL_CURRENT), [HL, HL_CURRENT]);
 
   const go = useCallback((dir: number) => {
+    if (chatFindRef.current) {
+      // WHY: cached coordinates make ordinary Next/Previous constant-time.
+      // A source-change push refreshes separately; a DOM mutation can also
+      // arrive before its push, so navigation rechecks only in that case.
+      if (pending || mutationsRef.current !== walkedAtRef.current) setWalkKey((k) => k + 1);
+      if (!pending) setCurrent((c) => c + dir);
+      return;
+    }
     // Text arrived since the last walk (a streaming reply): re-walk first so a
     // match in the new text is found and the count is right. The index is left
     // unnormalised here — the current-match effect and the counter both take
     // it modulo the fresh count.
     if (mutationsRef.current !== walkedAtRef.current) setWalkKey((k) => k + 1);
     setCurrent((c) => c + dir);
-  }, []);
+  }, [pending]);
 
-  const shown = count > 0 ? `${((current % count) + count) % count + 1}/${count}` : (query ? '0/0' : '');
+  const shown = pending ? '' : count > 0 ? `${((current % count) + count) % count + 1}/${count}` : (query ? '0/0' : '');
 
   // One set of controls, two wrappers — the input/counter/prev/next/close and
   // their key handling are identical in both layouts by construction.

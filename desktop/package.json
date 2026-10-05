@@ -6,9 +6,9 @@
   "main": "dist/main/bootstrap.js",
   "scripts": {
     "dev": "node scripts/run-dev.js",
-    "dev:main": "tsc -p tsconfig.json && node -e \"require('fs').cpSync('src/main/pty-worker.js','dist/main/pty-worker.js')\" && electron .",
+    "dev:main": "node scripts/fetch-office.mjs && tsc -p tsconfig.json && node -e \"require('fs').cpSync('src/main/pty-worker.js','dist/main/pty-worker.js')\" && electron .",
     "dev:renderer": "vite",
-    "build": "tsc && node -e \"require('fs').cpSync('src/main/pty-worker.js','dist/main/pty-worker.js')\" && node -e \"require('fs').mkdirSync('dist/renderer/data',{recursive:true})\" && node -e \"require('fs').cpSync('src/renderer/data/skill-registry.json','dist/renderer/data/skill-registry.json')\" && vite build && electron-builder",
+    "build": "node scripts/fetch-office.mjs --release --required && tsc && node -e \"require('fs').cpSync('src/main/pty-worker.js','dist/main/pty-worker.js')\" && node -e \"require('fs').mkdirSync('dist/renderer/data',{recursive:true})\" && node -e \"require('fs').cpSync('src/renderer/data/skill-registry.json','dist/renderer/data/skill-registry.json')\" && vite build && electron-builder",
     "build:main": "tsc",
     "build:web": "node -e \"require('fs').mkdirSync('dist/renderer/data',{recursive:true})\" && node -e \"require('fs').cpSync('src/renderer/data/skill-registry.json','dist/renderer/data/skill-registry.json')\" && vite build",
     "build:site": "VITE_WORKBENCH=1 vite build --outDir ../../../docs/site --emptyOutDir",
@@ -17,7 +17,7 @@
     "lint": "oxlint --type-aware",
     "postinstall": "node scripts/patch-node-pty.js && node scripts/patch-xterm-webgl-mipmap.js",
     "typecheck": "tsgo --noEmit -p tsconfig.json && tsgo --noEmit -p tsconfig.tests.json",
-    "lint:design": "oxlint -c .oxlintrc.design.json --format default --max-warnings 542"
+    "lint:design": "oxlint -c .oxlintrc.design.json --format default --max-warnings 537"
   },
   "keywords": [],
   "author": "itsdestin",
@@ -49,6 +49,7 @@
     "diff": "^9.0.0",
     "dompurify": "^3.4.15",
     "exceljs": "^4.4.0",
+    "jszip": "^3.10.1",
     "koffi": "^2.16.3",
     "linkedom": "0.18.13",
     "mammoth": "^1.12.2",

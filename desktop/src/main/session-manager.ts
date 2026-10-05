@@ -9,6 +9,7 @@ import type { ModelBinding } from '../shared/provider-types';
 import { EventEmitter } from 'events';
 import { log } from './logger';
 import { deployClaudeCodeLinkMcp } from './claude-code-mcp';
+import { deployClaudeCodeDocCommentsMcp } from './claude-code-doc-comments-mcp';
 
 // Optional — which may not be installed; fall back to bare command name
 let whichSync: ((cmd: string) => string) | null = null;
@@ -258,16 +259,75 @@ export class SessionManager extends EventEmitter {
       if (opts.model) {
         args.push('--model', opts.model);
       }
+      // Attach this session's app-owned MCP servers. Claude Code's
+      // `--mcp-config`/`--allowedTools` are both variadic ("Load MCP servers
+      // from JSON files or strings (space-separated)" / "Comma or space-
+      // separated list of tool names to allow" — `claude --help`, verified
+      // against the installed 2.1.283 CLI): ONE occurrence of each flag,
+      // carrying every server/tool this session needs, rather than repeating
+      // either flag per server — repeating a flag commander-style CLIs treat
+      // as "last value wins" is exactly the failure mode that would silently
+      // un-approve SendUserLink the moment a second server's own
+      // `--allowedTools` occurrence landed after it. SendUserLink's config
+      // path and tool name are pushed FIRST so session-manager.test.ts's own
+      // "first --mcp-config/--allowedTools value" assertions keep working
+      // unchanged.
+      const mcpConfigPaths: string[] = [];
+      const allowedToolNames: string[] = [];
       // Give this session YouCoded's SendUserLink tool (claude-code-mcp.ts) —
       // Claude Code has no link deliverable of its own. Best-effort: if the
       // deploy throws (read-only userData, disk full) the session still starts,
       // just without the link tool. Pushing a --mcp-config path that does not
       // exist would instead be a hard startup failure for the whole session.
       try {
-        args.push(...deployClaudeCodeLinkMcp(app.getPath('userData'), nodePath).args);
+        const link = deployClaudeCodeLinkMcp(app.getPath('userData'), nodePath);
+        mcpConfigPaths.push(link.configPath);
+        allowedToolNames.push(...link.args.slice(link.args.indexOf('--allowedTools') + 1));
       } catch (err) {
         log('WARN', 'SessionManager', 'SendUserLink MCP deploy failed — this session starts without the link tool', { error: String(err) });
       }
+      // Give this session the six document-comment tools (doc-comments build
+      // design §5, §9, T9a/T9b) — `ReadFileComments` alone is pre-approved
+      // (a read never mutates anything); the five mutation tools are
+      // deliberately NOT allow-listed here (§5.2a's Word/Excel-vs-plain-text
+      // split can't be expressed as a tool-name allow-list — see
+      // claude-code-doc-comments-mcp.ts's own header for the real mechanism,
+      // main.ts's permission-auto-approve wiring). `resolvedCwd` becomes the
+      // ONE trusted project root every tool call on this surface is
+      // contained to — never a value the model can influence.
+      try {
+        const docComments = deployClaudeCodeDocCommentsMcp(app.getPath('userData'), nodePath, resolvedCwd);
+        mcpConfigPaths.push(docComments.configPath);
+        allowedToolNames.push(...docComments.allowedTools);
+        // A PRIVATE event, never forwarded to the renderer/IPC (unlike
+        // 'session-created', which ipc-handlers.ts sends verbatim to the
+        // owning window) — `token` is this session's own request-
+        // authentication secret (adversarial review 2026-09-27, finding #1)
+        // and must never reach anywhere a renderer-side script (a malicious
+        // skill's injected UI, or just ordinary DevTools) could read it back
+        // and forge a pending-mutation request with it. `serverId` (finding
+        // #2) is likewise session-private: it is the exact string
+        // `shouldAutoApproveDocComment` needs to recognize THIS session's
+        // own MCP tool calls, and leaking it would only help something try
+        // to impersonate this session's server, never help the user. Both
+        // listeners live in ipc-handlers.ts (the queue) and main.ts (the
+        // permission check) — see each file's own comment at its listener.
+        // `deployDir` (T9c/T20 review, finding #3) lets ipc-handlers.ts
+        // delete this session's own deploy directory on session-exit —
+        // never sent to the renderer either, though it carries no secret of
+        // its own (a plain filesystem path).
+        this.emit('doc-comments-mcp-attached', id, resolvedCwd, docComments.token, docComments.serverId, docComments.deployDir);
+      } catch (err) {
+        log('WARN', 'SessionManager', 'doc-comments MCP deploy failed — this session starts without comment tools', { error: String(err) });
+      }
+      if (mcpConfigPaths.length) args.push('--mcp-config', ...mcpConfigPaths);
+      if (allowedToolNames.length) args.push('--allowedTools', ...allowedToolNames);
+      // The docx/xlsx pending-mutation queue's main-process half (T9b) is
+      // started/stopped from ipc-handlers.ts's own `doc-comments-mcp-
+      // attached`/`session-exit` listeners, not here — see that file's own
+      // comment for why (a real chokidar watcher on `resolvedCwd` would
+      // otherwise leak into every session-manager.test.ts case, which shares
+      // one `cwd` across dozens of tests with no listeners attached).
     }
 
     // Spawn a separate Node.js process for node-pty so it uses Node's
@@ -328,6 +388,7 @@ export class SessionManager extends EventEmitter {
       if (this.sessions.has(id)) {
         this.sessions.get(id)!.info.status = 'destroyed';
         this.sessions.delete(id);
+        this.inputBlocked.delete(id);
         this.emit('session-exit', id, 1);
       }
     });
@@ -411,6 +472,7 @@ export class SessionManager extends EventEmitter {
           exitingSession.info.status = 'destroyed';
           this.emit('session-exit', id, deliberate ? 0 : msg.exitCode);
           this.sessions.delete(id);
+          this.inputBlocked.delete(id);
           break;
       }
     });
@@ -430,6 +492,7 @@ export class SessionManager extends EventEmitter {
       exitingSession.info.status = 'destroyed';
       this.emit('session-exit', id, 0);
       this.sessions.delete(id);
+      this.inputBlocked.delete(id);
     });
 
     // Tell the worker to spawn the CLI, passing our session ID
@@ -502,6 +565,7 @@ export class SessionManager extends EventEmitter {
     if (!session) return false;
     session.info.status = 'destroyed';
     this.sessions.delete(id);
+    this.inputBlocked.delete(id);
     // Uniform teardown: native sessions (no worker) still emit session-exit so
     // downstream cleanup (window release, remote broadcast) runs identically.
     this.emit('session-exit', id, 0);
@@ -584,10 +648,25 @@ export class SessionManager extends EventEmitter {
     }, delayMs);
   }
 
+  /** Per session: the renderer read a pop-up holding the keyboard (see
+   *  setInputBlocked). Absent = not blocked. */
+  private inputBlocked = new Set<string>();
+
+  /** The renderer's screen verdict (parser/cc-input-focus.ts): a Claude Code
+   *  pop-up no hook reported holds this session's keyboard. Main has no screen
+   *  of its own, so its automated writes ask this as well as the hook gate. */
+  setInputBlocked(id: string, blocked: boolean): void {
+    if (blocked && this.sessions.has(id)) this.inputBlocked.add(id);
+    else this.inputBlocked.delete(id);
+  }
+
   private sendReloadWhenClear(id: string, attempt: number): void {
     const session = this.sessions.get(id);
     if (!session || session.info.status !== 'active') return;
-    if (this.reloadPluginsGate?.(id)) {
+    // WHY the screen verdict too (2026-09-30 review F1): the hook gate only
+    // knows reported asks; "/reload-plugins\r" typed into an unreported
+    // pop-up (auto-mode setup offer, compaction menu) would answer it.
+    if (this.reloadPluginsGate?.(id) || this.inputBlocked.has(id)) {
       if (attempt >= SessionManager.RELOAD_MAX_RETRIES) return;
       setTimeout(
         () => this.sendReloadWhenClear(id, attempt + 1),

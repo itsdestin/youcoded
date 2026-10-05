@@ -7,7 +7,7 @@
 import React from 'react';
 import '@testing-library/jest-dom/vitest';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
+import { render, cleanup, fireEvent, screen, waitFor, act } from '@testing-library/react';
 import ModelPickerPopup from './ModelPickerPopup';
 import { EscCloseProvider } from '../hooks/use-esc-close';
 import { switchFailureMessage } from './ModelSwitchPrompt';
@@ -82,6 +82,21 @@ describe('model switch popup (U11)', () => {
     const { onClose, onNativeModelChanged } = renderPicker();
     await pickSmall();
     await screen.findByRole('dialog', { name: 'Switch model' });
+    // WHY (diagnosed 2026-09-26, was flaky under load — see
+    // .claude/rules/test-suite-hygiene.md "Before calling a failure flake"):
+    // `findByRole` resolves as soon as ITS OWN MutationObserver microtask sees
+    // the dialog's DOM commit; ModelSwitchPrompt's `useEscClose(open, onClose)`
+    // registers on the escape stack in a SEPARATE passive effect, which React
+    // schedules as its own (macro)task and can still be pending at that exact
+    // instant. Firing Escape in that gap hits whatever was PREVIOUSLY on top of
+    // the stack (the picker's own onClose) instead of the just-opened dialog's
+    // — reproduced directly (600/600 failures under 30-way CPU contention with
+    // no flush; 0/600 with it) by looping this exact body in isolation. `act()`
+    // with no work of its own still drains React's pending passive-effect queue
+    // before resolving, so this is a real signal (registration done), not a
+    // guessed delay — raising the `waitFor` timeout below would only make the
+    // race statistically rarer, never close it.
+    await act(async () => {});
     fireEvent.keyDown(window, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Switch model' })).toBeNull());
     expect(onClose).not.toHaveBeenCalled();

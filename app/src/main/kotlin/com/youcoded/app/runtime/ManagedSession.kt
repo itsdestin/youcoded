@@ -88,6 +88,12 @@ class ManagedSession(
      *  See EventBridge.hasPendingPermission (stray-Enter fix, youcoded#110). */
     fun hasPendingPermission(): Boolean =
         ptyBridge?.getEventBridge()?.hasPendingPermission() ?: false
+    /** True while the renderer reads a Claude Code pop-up (one no hook reported)
+     *  or another view holding the keyboard in this session's terminal — sent as
+     *  `session:input-blocked` by the shared React detector, which reads the
+     *  screen (parser/cc-input-focus.ts). Automated writers must not type then
+     *  either: the text would land in the pop-up and its Enter could answer it. */
+    @Volatile var inputBlocked: Boolean = false
     val screenVersion: StateFlow<Int> get() =
         ptyBridge?.screenVersion ?: directShellBridge?.screenVersion ?: MutableStateFlow(0)
 
@@ -215,12 +221,27 @@ class ManagedSession(
                 bridgeServer?.let { server ->
                     when (event) {
                         is HookEvent.PermissionRequest -> {
+                            // doc-comments build design §5.2a (decided option
+                            // 1, T20): a call to one of the six document-
+                            // comment MCP tools (com.youcoded.app.doccomments.
+                            // DocCommentsPermission, mirroring desktop's
+                            // permission-auto-approve.ts) is auto-approved
+                            // UNCONDITIONALLY for a plain-text/markdown/code
+                            // target, and only in an already-frictionless
+                            // permission mode for a Word/Excel target — this
+                            // runs BEFORE shouldAutoApprove below because a
+                            // doc-comments tool call is never AskUserQuestion/
+                            // ExitPlanMode and never matches any of that
+                            // function's own Bash/file-path regexes.
+                            val docCommentsApprove = com.youcoded.app.doccomments.shouldAutoApproveDocComment(
+                                event.toolName, event.toolInput, event.permissionMode, bridge.docCommentsServerId,
+                            )
                             // Auto-approve per the user's override settings. WHY one call
                             // (2026-09-24): the decision is shouldAutoApprove in
                             // PermissionAutoApprove.kt, which never allows ExitPlanMode or
                             // AskUserQuestion — Claude Code ignores a hook allow for them,
                             // so an allow only hid the card while the menu stayed live.
-                            if (shouldAutoApprove(event.toolName, event.toolInput, permissionOverridesCache)) {
+                            if (docCommentsApprove || shouldAutoApprove(event.toolName, event.toolInput, permissionOverridesCache)) {
                                 val decision = JSONObject().put("decision",
                                     JSONObject().put("behavior", "allow"))
                                 ptyBridge?.getEventBridge()?.respond(event.requestId, decision)

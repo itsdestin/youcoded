@@ -190,6 +190,9 @@ export type DialogProps = {
    * Documentation only; renders nothing.
    */
   noScreen?: string;
+  /** While true the dialog cannot be dismissed: the ✕ is disabled, and Escape and outside
+   *  clicks do nothing. For work that must finish with the dialog on screen (a restore). */
+  busy?: boolean;
   children: React.ReactNode;
 };
 
@@ -208,9 +211,14 @@ export function Dialog({
   className = '',
   scrollBody = true,
   screen,
+  busy = false,
   children,
   ...aria
 }: DialogProps) {
+  // WHY one guarded close for all three ways out: a busy dialog must not vanish mid-work by any
+  // of them (the ✕, Escape or a click outside). Escape is still taken, so it cannot fall through
+  // to close the panel under the dialog either.
+  const close = busy ? () => {} : onClose;
   // Dialog owns the scroll region, so it owns the edge-fade hook too. Callers
   // used to wire their own useScrollFade at the body they supplied; leaving it
   // to them now would silently drop the fades on every migrated dialog.
@@ -222,13 +230,13 @@ export function Dialog({
   // up (Donate, Assistant settings, Create a page…). A caller with its own
   // layered Escape keeps it: the caller renders this Dialog, so its entry
   // registers after this one and sits on top of the stack.
-  useEscClose(open, onClose);
+  useEscClose(open, close);
 
   if (!open) return null;
 
   return createPortal(
     <>
-      <Scrim layer={layer} onClick={onClose} />
+      <Scrim layer={layer} onClick={close} />
       {/* Outer wrapper centers and carries the stacking; the panel then runs at
           position:relative / z-index:auto. pointer-events-none lets clicks fall
           through to the Scrim beneath, which is what closes on outside-click. */}
@@ -279,7 +287,7 @@ export function Dialog({
               </div>
               <div className="flex items-center gap-1">
                 {headerActions}
-                <CloseButton onClick={onClose} label={`Close ${title}`} />
+                <CloseButton onClick={close} disabled={busy} label={`Close ${title}`} />
               </div>
             </div>
           )}

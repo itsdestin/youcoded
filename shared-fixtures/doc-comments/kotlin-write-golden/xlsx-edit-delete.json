@@ -1,0 +1,7 @@
+{
+  "fixture": "docling-xlsx-comments.xlsx",
+  "path": "reports/docling-xlsx-comments.xlsx",
+  "editCell": "G12",
+  "deletedCell": "F7",
+  "editText": "Edited by Kotlin: confirmed against the vendor spec sheet."
+}

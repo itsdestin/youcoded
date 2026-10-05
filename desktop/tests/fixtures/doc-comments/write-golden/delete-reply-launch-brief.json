@@ -1,0 +1,12 @@
+{
+  "fixture": "launch-brief.docx",
+  "path": "docs/launch-brief.docx",
+  "op": "delete-reply",
+  "args": {
+    "id": "w-1",
+    "replyId": "w-1-r1"
+  },
+  "result": {
+    "ok": true
+  }
+}

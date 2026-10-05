@@ -216,6 +216,26 @@ const KIND_BY_TOOL: Record<string, RuleKind> = {
   // Read / Glob / Grep / Skill / TodoWrite fall through to `other` on purpose:
   // they never change anything, and rulesForMode already allows them at every
   // baseline, so a remembered rule for one is a rarity rather than a category.
+  //
+  // T8 review F1 (doc-comments build, 2026-09-27): the five comment-MUTATION
+  // tools file under `files`, same as Edit/Write — permission-types.ts's
+  // rulesForMode() baseline-allows a plain-text/markdown/code target for all
+  // five (undefined permissionSubject, never prompts, so no "Always allow"
+  // button can ever exist for that case), which means every REMEMBERED rule
+  // a user can actually create for one of these tools is, by construction,
+  // "let the assistant write into this specific Word/Excel file's real
+  // bytes" — functionally identical to a remembered Edit/Write grant on that
+  // same file, and someone auditing "File changes" should find it there, not
+  // filed next to a specialist grant under `other`.
+  ReplyToComment: 'files',
+  ResolveComment: 'files',
+  ReopenComment: 'files',
+  AddComment: 'files',
+  MoveComment: 'files',
+  // ReadFileComments deliberately has NO entry, same as Read/Glob/Grep just
+  // above: it never mutates anything, and rulesForMode() always allows it
+  // (F1's own review confirmed a remembered rule for it should be rare to
+  // nonexistent) — it falls through to `other` exactly like Read already does.
 };
 
 export function ruleKind(rule: PermissionRule): RuleKind {

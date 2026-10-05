@@ -1,0 +1,20 @@
+{
+  "contentTypes": {
+    "vmlDefaultContentType": "application/vnd.openxmlformats-officedocument.vmlDrawing",
+    "commentsOverrideContentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"
+  },
+  "worksheetRels": [
+    {
+      "id": "rId1",
+      "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments",
+      "target": "../comments1.xml"
+    },
+    {
+      "id": "rId2",
+      "type": "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing",
+      "target": "../drawings/vmlDrawing1.vml"
+    }
+  ],
+  "legacyDrawingImmediatelyPrecedesClosingWorksheetTag": true,
+  "legacyDrawingRelationshipId": "rId2"
+}

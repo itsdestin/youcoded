@@ -421,6 +421,29 @@ describe('html-drag tear-off', () => {
       expect(dt.dropEffect).toBe('none'); // never claimed the drag
     });
 
+    it('a press released away from the strip does not leave the pill stuck to the cursor', () => {
+      // No pointer capture on this model, so the release can land anywhere.
+      // A later press elsewhere that sweeps across the strip (selecting chat
+      // text, say) must not pick the old pill up.
+      const { bar, pills } = mount();
+      const twin = () => bar.querySelector(':scope > div[aria-hidden]:not([data-ghost])');
+      fireEvent.pointerDown(pills[1], { button: 0, buttons: 1, clientX: 100, clientY: 10, pointerId: 1, pointerType: 'mouse' });
+      fireEvent.pointerUp(document.body, { button: 0, buttons: 0, clientX: 100, clientY: 300, pointerId: 1, pointerType: 'mouse' });
+      fireEvent.pointerMove(bar, { buttons: 1, clientX: 160, clientY: 10, pointerId: 1, pointerType: 'mouse' });
+      fireEvent.pointerMove(bar, { buttons: 1, clientX: 200, clientY: 10, pointerId: 1, pointerType: 'mouse' });
+      expect(twin()).toBeNull();
+    });
+
+    it('hovering with no button held never drags, even if the release was missed entirely', () => {
+      // The release can be swallowed outright (a window switch, a native menu).
+      const { bar, pills } = mount();
+      const twin = () => bar.querySelector(':scope > div[aria-hidden]:not([data-ghost])');
+      fireEvent.pointerDown(pills[1], { button: 0, buttons: 1, clientX: 100, clientY: 10, pointerId: 1, pointerType: 'mouse' });
+      fireEvent.pointerMove(bar, { buttons: 0, clientX: 160, clientY: 10, pointerId: 1, pointerType: 'mouse' });
+      fireEvent.pointerMove(bar, { buttons: 0, clientX: 200, clientY: 10, pointerId: 1, pointerType: 'mouse' });
+      expect(twin()).toBeNull();
+    });
+
     it('a drag that nothing accepted opens a new window — the desktop drop, as on Windows', () => {
       // Escape ends a drag identically (dropEffect 'none'); Destin chose the
       // desktop drop over Escape — cancelling is dragging back into the strip.

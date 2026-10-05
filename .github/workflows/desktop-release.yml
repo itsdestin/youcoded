@@ -32,8 +32,19 @@ jobs:
             name: linux
 
     runs-on: ${{ matrix.os }}
+    # WHY (Windows signing, 2026-10-01): only the Windows leg of a tagged release or a
+    # master run signs. Azure trusts GitHub's sign-in ONLY from jobs in the
+    # windows-signing environment (one federated credential, subject
+    # environment:windows-signing, so no Azure password lives in GitHub), and that
+    # environment only admits master and v* tags. Every other leg/run gets no
+    # environment and builds exactly as before.
+    environment: ${{ (matrix.name == 'windows' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/master')) && 'windows-signing' || '' }}
+    env:
+      SIGN_WINDOWS: ${{ matrix.name == 'windows' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/master') }}
     permissions:
       contents: write
+      # Lets azure/login trade GitHub's short-lived OIDC token for Azure access.
+      id-token: write
     defaults:
       run:
         working-directory: desktop
@@ -82,6 +93,13 @@ jobs:
             "@vscode/ripgrep-darwin-x64@$RG" \
             "@napi-rs/canvas-darwin-x64@$CANVAS"
 
+      # WHY before the tests (Task 9): the Office tests that run the real converter skip when no
+      # add-on is installed, so without this they ran on Linux developer machines only. Fetching
+      # this runner's own bundle runs them on Windows and macOS too — the only place a Windows or
+      # Mac converter problem shows before a user meets it.
+      - name: Fetch the Office add-on
+        run: node scripts/fetch-office.mjs --required
+
       - name: Run tests
         run: npm test
 
@@ -95,8 +113,65 @@ jobs:
         run: sudo apt-get install -y xvfb rpm libarchive-tools
         working-directory: .
 
+      # Keep these three Windows-signing steps and the Build/verify pair in sync with
+      # desktop-test-build.yml. Fails loudly when the environment's variables are
+      # missing: an unsigned installer must never ship as if it were signed.
+      - name: Check Windows signing is configured
+        if: env.SIGN_WINDOWS == 'true'
+        shell: bash
+        env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          if [ -z "$AZURE_CLIENT_ID" ] || [ -z "$AZURE_TENANT_ID" ] || [ -z "$AZURE_SUBSCRIPTION_ID" ]; then
+            echo "::error::The windows-signing environment is missing AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID, so the Windows installer cannot be signed. See docs/build-and-release.md (youcoded-dev) → Windows signing."
+            exit 1
+          fi
+
+      - name: Sign in to Azure for Windows signing
+        if: env.SIGN_WINDOWS == 'true'
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # WHY fetch the signing token here: GitHub's sign-in token is only good for a few
+      # minutes, and electron-builder asks Azure for a signing token only when it
+      # reaches the first file. Fetching it now caches it in the Azure CLI (about an
+      # hour), which the signing module reuses for every file.
+      - name: Fetch the Windows signing token
+        if: env.SIGN_WINDOWS == 'true'
+        shell: bash
+        run: az account get-access-token --scope https://codesigning.azure.net/.default -o none
+
       - name: Build
-        run: npm run build
+        shell: bash
+        run: |
+          if [ "$SIGN_WINDOWS" = "true" ]; then
+            # WHY a second config: see electron-builder.win-sign.yml. `--` hands the flag
+            # to the electron-builder call that ends the build script.
+            npm run build -- --config electron-builder.win-sign.yml
+          else
+            npm run build
+          fi
+
+      # WHY: a build can finish with a file silently left unsigned. Windows' own check
+      # is the verdict: the installer and the app it installs must both carry a
+      # valid signature, or the release is held back.
+      - name: Verify the Windows installer is signed
+        if: env.SIGN_WINDOWS == 'true'
+        shell: pwsh
+        run: |
+          $failed = $false
+          $files = @(Get-ChildItem release/*.exe) + @(Get-Item release/win-unpacked/YouCoded.exe)
+          foreach ($f in $files) {
+            $sig = Get-AuthenticodeSignature -FilePath $f.FullName
+            Write-Host "$($f.Name): $($sig.Status) - $($sig.SignerCertificate.Subject)"
+            if ($sig.Status -ne 'Valid') { $failed = $true }
+          }
+          if ($failed) { Write-Error 'A Windows file is not validly signed.'; exit 1 }
 
       # WHY: electron-builder SILENTLY skips macOS signing when it cannot sign, and a
       # Dependabot bump did exactly that on 2026-07-23 - six weeks of unopenable Mac
@@ -106,6 +181,16 @@ jobs:
         if: matrix.name == 'macos'
         shell: bash
         run: bash scripts/verify-mac-signature.sh
+
+      # WHY (final review, 2026-09-30): nothing else ever runs the Office converter INSIDE the
+      # packaged app — the copy electron-builder re-signed, and for the Intel dmg one from a
+      # different bundle than this runner's. This checks each app's x2t and dylibs are for its
+      # dmg's CPU, then opens, saves and exports a docx as PDF with them through the app's own
+      # x2t code (dist/main/office/x2t.js). The Intel copy runs under Rosetta when the runner has it.
+      - name: Run the packaged Office converter
+        if: matrix.name == 'macos'
+        shell: bash
+        run: node scripts/office-packaged-smoke.mjs release
 
       - name: Smoke test
         # Launch the production build briefly and verify no renderer crash.

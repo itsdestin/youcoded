@@ -555,9 +555,12 @@ describe('MarkdownContent while a reply streams in', () => {
     live.unmount();
   });
 
-  // A fixed amount of work (30 documents), measured ~3 s alone; it timed out at the 30 s
-  // default in a full run at load 70 (2026-10-03). More time tests no less.
-  const RANDOM_REPLIES_MS = 90_000;
+  // WHY a named budget (measured 2026-09-28): these fixed-count streaming
+  // checks take 1.5–7 s alone, but in verify.sh's full run — every suite and the
+  // screenshot checks at once — two of them passed 30 s and timed out while
+  // correct. They count work, never clock time, so more time tests nothing less.
+  const STREAMING_SWEEP_BUDGET_MS = 120_000;
+
   // Review F4: seeded random replies, streamed word by word into a bubble that
   // sometimes mounts mid-reply, compared as DRAWN PAGES (not parse trees) with
   // the whole-message render after every word. Mixes in the constructs that act
@@ -608,7 +611,7 @@ describe('MarkdownContent while a reply streams in', () => {
       live.unmount();
       today.unmount();
     }
-  }, RANDOM_REPLIES_MS);
+  }, STREAMING_SWEEP_BUDGET_MS);
 
   // What each streamed update costs, in characters: everything the splitter
   // parsed plus everything handed to react-markdown. Today's whole-message
@@ -646,7 +649,7 @@ describe('MarkdownContent while a reply streams in', () => {
     expectNoMoreThanToday(costs);
     // A definition only re-draws the blocks that use its label.
     for (const c of costs) expect(c.drawn.length, `after ${JSON.stringify(c.md.slice(-40))}`).toBeLessThanOrEqual(2);
-  });
+  }, STREAMING_SWEEP_BUDGET_MS);
 
   // A reply that ends in one big block with no blank line in it: the splitter
   // must not parse that block again on top of drawing it.
@@ -928,6 +931,5 @@ describe('MarkdownContent while a reply streams in', () => {
       live.unmount();
       today.unmount();
     }
-    // Headroom for a busy machine (the suite runs files in parallel).
-  }, 60_000);
+  }, STREAMING_SWEEP_BUDGET_MS);
 });

@@ -163,6 +163,194 @@ describe('HarnessSession — multi-step turn driver', () => {
     expect(events.some(e => e.type === 'session-error')).toBe(true);
   });
 
+  it.each(['before calls', 'during first call', 'after final text'] as const)('accepts queued human input %s inside the same turn, after the whole batch runs', async (arrival) => {
+    const read = fakeTool('Read', { onExecute: () => {
+      if (arrival === 'during first call' && !(read as any).calls.slice(1).length) queue.push({ id: 'follow', text: 'correct this', attachments: [] });
+      return { text: 'done' };
+    } });
+    const queue: Array<{ id: string; text: string; attachments: string[] }> = [];
+    const prompts: any[] = [];
+    const model = scriptedModel(arrival === 'after final text'
+      ? [stream(...textChunks('a', 'first answer'), finishChunk('stop')), stream(...textChunks('b', 'updated'), finishChunk('stop'))]
+      : [stream(toolCallChunk('c1', 'Read', { file_path: 'a' }), toolCallChunk('c2', 'Read', { file_path: 'b' }), finishChunk('tool-calls')),
+        stream(...textChunks('b', 'updated'), finishChunk('stop'))], prompts);
+    const session = new HarnessSession(makeOpts({ tools: [read], decide: async () => ALLOW,
+      takeReadyBusyMessage: () => queue.shift(),
+    }), async () => model as any);
+    const events = collect(session);
+    if (arrival !== 'during first call') session.on('transcript-event', (e: TranscriptEvent) => {
+      if (arrival === 'before calls' && e.type === 'tool-use' && e.data.toolUseId === 'c2') queue.push({ id: 'follow', text: 'correct this', attachments: [] });
+      if (arrival === 'after final text' && e.type === 'assistant-text' && !events.some(event => event.type === 'user-message' && event.data.text === 'correct this') && queue.length === 0) queue.push({ id: 'follow', text: 'correct this', attachments: [] });
+    });
+    await session.send('original');
+    expect(prompts).toHaveLength(2);
+    expect(events.filter(e => e.type === 'user-message').map(e => e.data.text)).toEqual(['original', 'correct this']);
+    // The batch the assistant already chose runs in full; nothing is discarded.
+    expect((read as any).calls).toHaveLength(arrival === 'after final text' ? 0 : 2);
+    if (arrival !== 'after final text') {
+      const results = events.filter(e => e.type === 'tool-result');
+      expect(results).toHaveLength(2);
+      expect(results.every(e => !/not run/i.test(e.data.toolResult ?? ''))).toBe(true);
+      expect(events.indexOf(results[1])).toBeLessThan(events.findIndex(e => e.type === 'user-message' && e.data.text === 'correct this'));
+    }
+    expect(JSON.stringify(prompts[1])).toContain('correct this');
+    expect(session.acceptedHistory().eventUuids).toContain(events.find(e => e.type === 'user-message' && e.data.text === 'correct this')!.uuid);
+  });
+
+  it('consumes several ready duplicate messages in FIFO order without starting another turn', async () => {
+    const queue = ['same', 'same', 'last'].map((text, n) => ({ id: String(n), text, attachments: [] as string[] }));
+    const prompts: any[] = [];
+    const model = scriptedModel(Array.from({ length: 4 }, (_, n) =>
+      stream(...textChunks(`reply-${n}`, `answer-${n}`), finishChunk('stop'))), prompts);
+    const session = new HarnessSession(makeOpts({ takeReadyBusyMessage: () => queue.shift() }), async () => model as any);
+    const events = collect(session);
+    await session.send('first');
+    expect(events.filter(e => e.type === 'user-message').map(e => e.data.text)).toEqual(['first', 'same', 'same', 'last']);
+    expect(events.filter(e => e.type === 'turn-complete')).toHaveLength(1);
+    expect(prompts).toHaveLength(4);
+    expect(queue).toHaveLength(0);
+  });
+
+  it.each(['allow', 'deny'] as const)('leaves a pending approval open for busy input until the human answers %s', async (behavior) => {
+    let answer!: (decision: AskDecision) => void;
+    let asked!: () => void;
+    const open = new Promise<void>(resolve => { asked = resolve; });
+    const decision = new Promise<AskDecision>(resolve => { answer = resolve; });
+    const queue: Array<{ id: string; text: string; attachments: string[] }> = [];
+    const read = fakeTool('Read');
+    const seen: any[] = [];
+    const model = scriptedModel([
+      stream(toolCallChunk('c1', 'Read', { file_path: 'a' }), toolCallChunk('c2', 'Read', { file_path: 'b' }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'updated'), finishChunk('stop')),
+    ], seen);
+    const session = new HarnessSession(makeOpts({ tools: [read], decide: async () => ({ action: 'ask', denyListed: false }),
+      askUser: () => { asked(); return decision; }, takeReadyBusyMessage: () => queue.shift(),
+    }), async () => model as any);
+    const events = collect(session);
+    const turn = session.send('first');
+    await open;
+    queue.push({ id: 'follow', text: 'new instructions', attachments: [] });
+    expect(events.filter(e => e.type === 'user-message')).toHaveLength(1);
+    expect((read as any).calls).toHaveLength(0);
+    answer({ behavior } as AskDecision);
+    await turn;
+    expect((read as any).calls).toHaveLength(behavior === 'allow' ? 2 : 0);
+    expect(events.filter(e => e.type === 'tool-result')).toHaveLength(2);
+    expect(events.filter(e => e.type === 'user-message').map(e => e.data.text)).toEqual(['first', 'new instructions']);
+    expect(JSON.stringify(seen[1])).toContain('new instructions');
+  });
+
+  it('restores a claimed message when accepting its event throws', async () => {
+    const queue = [{ id: 'follow', text: 'survive', attachments: [] as string[] }];
+    const restored: string[] = [];
+    const model = scriptedModel([stream(...textChunks('a', 'first'), finishChunk('stop'))]);
+    const session = new HarnessSession(makeOpts({ tools: [], takeReadyBusyMessage: () => {
+      const item = queue.shift();
+      return item && { ...item, restore: () => { restored.push(item.id); queue.unshift(item); } };
+    } }), async () => model as any);
+    session.on('transcript-event', (e: TranscriptEvent) => {
+      if (e.type === 'user-message' && e.data.text === 'survive') throw new Error('append refused');
+    });
+    await session.send('first');
+    expect(restored).toEqual(['follow']);
+    expect(queue.map(item => item.text)).toEqual(['survive']);
+  });
+
+  it.each(['decision', 'approval broker'] as const)('pairs permission %s failure without executing announced calls and permits the next send', async (failure) => {
+    const read = fakeTool('Read');
+    const seen: any[] = [];
+    const model = scriptedModel([
+      stream(toolCallChunk('c1', 'Read', { file_path: 'a.ts' }), toolCallChunk('c2', 'Read', { file_path: 'b.ts' }), finishChunk('tool-calls')),
+      stream(...textChunks('next', 'next reply'), finishChunk('stop')),
+    ], seen);
+    const error = new Error('permission store EACCES');
+    const session = new HarnessSession(makeOpts({ tools: [read],
+      decide: async () => { if (failure === 'decision') throw error; return { action: 'ask', denyListed: false }; },
+      askUser: async () => { throw error; },
+    }), async () => model as any);
+    const events = collect(session);
+    await session.send('first');
+    expect(events.filter(e => e.type === 'tool-use').map(e => e.data.toolUseId)).toEqual(['c1', 'c2']);
+    const results = events.filter(e => e.type === 'tool-result');
+    expect(results.map(e => e.data.toolUseId)).toEqual(['c1', 'c2']);
+    expect(results.every(e => e.data.isError && !/user declined|user interrupted/i.test(e.data.toolResult))).toBe(true);
+    expect(results[0].data.toolResult).toContain('permission store EACCES');
+    expect(events.find(e => e.type === 'session-error')?.data.text).toContain('permission store EACCES');
+    expect((read as any).calls).toHaveLength(0);
+    await session.send('next');
+    expect(seen).toHaveLength(2);
+    expect(events.filter(e => e.type === 'session-error')).toHaveLength(1);
+  });
+
+  it.each(['decision', 'approval broker'] as const)('preserves a completed call when a later permission %s fails', async (failure) => {
+    const read = fakeTool('Read');
+    const model = scriptedModel([stream(
+      toolCallChunk('c1', 'Read', { file_path: 'a.ts' }),
+      toolCallChunk('c2', 'Read', { file_path: 'b.ts' }),
+      toolCallChunk('c3', 'Read', { file_path: 'c.ts' }), finishChunk('tool-calls'))]);
+    let decisions = 0;
+    const session = new HarnessSession(makeOpts({ tools: [read], decide: async () => {
+      if (++decisions === 2) {
+        if (failure === 'decision') throw new Error('permission lookup unavailable');
+        return { action: 'ask', denyListed: false };
+      }
+      return ALLOW;
+    }, askUser: async () => { throw new Error('permission lookup unavailable'); } }), async () => model as any);
+    const events = collect(session);
+    await session.send('go');
+    const results = events.filter(e => e.type === 'tool-result');
+    expect(results.map(e => e.data.toolUseId)).toEqual(['c1', 'c2', 'c3']);
+    expect(results[0].data.toolResult).toBe('Read ran');
+    expect(results[0].data.isError).toBe(false);
+    expect(results[1].data.toolResult).toContain('permission lookup unavailable');
+    expect(results[2].data.toolResult).toMatch(/not run/i);
+    expect((read as any).calls).toHaveLength(1);
+    expect(events.find(e => e.type === 'session-error')?.data.text).toContain('permission lookup unavailable');
+  });
+
+  it.each(['decision', 'approval broker'] as const)('reports a permission %s AbortError as a session error while the turn is live', async (failure) => {
+    const read = fakeTool('Read');
+    const seen: any[] = [];
+    const model = scriptedModel([
+      stream(toolCallChunk('c1', 'Read', { file_path: 'a.ts' }), toolCallChunk('c2', 'Read', { file_path: 'b.ts' }), finishChunk('tool-calls')),
+      stream(...textChunks('next', 'usable'), finishChunk('stop')),
+    ], seen);
+    const error = Object.assign(new Error('permission storage aborted independently'), { name: 'AbortError' });
+    const session = new HarnessSession(makeOpts({ tools: [read],
+      decide: async () => { if (failure === 'decision') throw error; return { action: 'ask', denyListed: false }; },
+      askUser: async () => { throw error; },
+    }), async () => model as any);
+    const events = collect(session);
+    await session.send('first');
+    expect(events.filter(e => e.type === 'tool-result').map(e => [e.data.toolUseId, e.data.isError])).toEqual([['c1', true], ['c2', true]]);
+    expect(events.find(e => e.type === 'tool-result')?.data.toolResult).toContain('permission storage aborted independently');
+    expect(events.find(e => e.type === 'session-error')?.data.text).toContain('permission storage aborted independently');
+    expect(events.some(e => e.type === 'user-interrupt')).toBe(false);
+    expect((read as any).calls).toHaveLength(0);
+    await session.send('next');
+    expect(seen).toHaveLength(2);
+    expect(events.filter(e => e.type === 'session-error')).toHaveLength(1);
+  });
+
+  it.each(['decision', 'approval broker'] as const)('keeps a genuinely interrupted turn interrupted after a permission %s AbortError', async (failure) => {
+    const read = fakeTool('Read');
+    const model = scriptedModel([stream(
+      toolCallChunk('c1', 'Read', { file_path: 'a.ts' }), toolCallChunk('c2', 'Read', { file_path: 'b.ts' }), finishChunk('tool-calls'))]);
+    const error = Object.assign(new Error('approval callback aborted'), { name: 'AbortError' });
+    let session: HarnessSession;
+    session = new HarnessSession(makeOpts({ tools: [read],
+      decide: async () => { if (failure === 'decision') { session.interrupt(); throw error; } return { action: 'ask', denyListed: false }; },
+      askUser: async () => { session.interrupt(); throw error; },
+    }), async () => model as any);
+    const events = collect(session);
+    await session.send('first');
+    expect(events.filter(e => e.type === 'tool-result').map(e => e.data.toolUseId)).toEqual(['c1', 'c2']);
+    expect(events.find(e => e.type === 'tool-result')?.data.toolResult).toContain('approval callback aborted');
+    expect(events.filter(e => e.type === 'user-interrupt')).toHaveLength(1);
+    expect(events.some(e => e.type === 'session-error')).toBe(false);
+    expect((read as any).calls).toHaveLength(0);
+  });
+
   it('happy path: emits user-message → text → tool-use → tool-result → text → turn-complete IN ORDER', async () => {
     const read = fakeTool('Read');
     const model = scriptedModel([
@@ -683,6 +871,26 @@ describe('HarnessSession — multi-step turn driver', () => {
     expect(events.find((event) => event.type === 'turn-complete')?.data.stopReason).toBe('end_turn');
   });
 
+  it('a message that joins the running turn starts the keep-going count over', async () => {
+    const twoStepHarness: HarnessManifest = { ...HARNESS, limits: { maxSteps: 2, maxTokens: 256 } };
+    const queue: Array<{ id: string; text: string; attachments: string[] }> = [];
+    const write = fakeTool('Write', { onExecute: () => {
+      // Arrives during the SECOND step: without a reset that step would reach
+      // the two-step limit and ask "keep going?".
+      if ((write as any).calls.length === 2) queue.push({ id: 'f', text: 'also do this', attachments: [] });
+      return { text: 'ok' };
+    } });
+    const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'deny' }));
+    const tc = () => stream(toolCallChunk('c', 'Write', { file_path: 'x.ts' }), finishChunk('tool-calls'));
+    const model = scriptedModel([tc(), tc(), tc(), stream(...textChunks('z', 'done'), finishChunk('stop'))]);
+    const session = new HarnessSession(makeOpts({ harness: twoStepHarness, tools: [write], decide: async () => ALLOW, askUser,
+      takeReadyBusyMessage: () => queue.shift() }), async () => model as any);
+    const events = collect(session);
+    await session.send('go');
+    expect(askUser.mock.calls.some((c) => c[0].toolName === 'max_steps')).toBe(false);
+    expect(events.find((e) => e.type === 'turn-complete')!.data.stopReason).toBe('end_turn');
+  });
+
   it('maxSteps: allow → loop continues (counter resets); deny → turn-complete stopReason max_steps', async () => {
     const twoStepHarness: HarnessManifest = { ...HARNESS, limits: { maxSteps: 2, maxTokens: 256 } };
     // deny path: two tool-calls hit the budget, ask denies → stopReason max_steps.
@@ -764,6 +972,60 @@ describe('HarnessSession — multi-step turn driver', () => {
     expect(texts.map((e) => e.data.text).join('')).toBe('Hello!');    // no duplicate from attempt 1
     expect(events.some((e) => e.type === 'turn-complete')).toBe(true);
     expect(events.some((e) => e.type === 'session-error')).toBe(false);
+  });
+
+  it.each([503, 429, 'ECONNRESET'] as const)('retracts abandoned text and reasoning before transient retry %s', async (failureKind) => {
+    const failure = Object.assign(new Error('transient failure'), typeof failureKind === 'number'
+      ? { statusCode: failureKind } : { code: failureKind });
+    const seen: any[] = [];
+    const model = scriptedModel([
+      stream(...textChunks('abandoned', 'ABANDONED_ATTEMPT'), ...reasoningChunks('thought', 'old reasoning'),
+        ...toolInputChunks('pending', 'Read', { file_path: 'pending' }), { type: 'error', error: failure }),
+      stream(...textChunks('replacement', 'SUCCESSFUL_ATTEMPT'), finishChunk('stop')),
+    ], seen);
+    const session = new HarnessSession(makeOpts({ retryDelays: [1], tools: [fakeTool('Read')] }), async () => model as any);
+    const events = collect(session);
+    await session.send('go');
+    const dropIndex = events.findIndex(e => e.data.dropPart);
+    const replacementIndex = events.findIndex(e => e.type === 'assistant-text' && e.data.text === 'SUCCESSFUL_ATTEMPT');
+    expect(dropIndex).toBeGreaterThanOrEqual(0);
+    expect(dropIndex).toBeLessThan(replacementIndex);
+    expect(events[dropIndex].data.dropPart.partIds).toEqual(expect.arrayContaining(['abandoned', 'thought']));
+    expect(events.some(e => e.data.toolPreparing?.toolCallId === 'pending' && e.data.toolPreparing.cleared)).toBe(true);
+    expect(JSON.stringify(session.acceptedHistory())).not.toContain('ABANDONED_ATTEMPT');
+    expect(JSON.stringify((session as any).history)).not.toContain('ABANDONED_ATTEMPT');
+    expect(events.some(e => e.type === 'turn-complete')).toBe(true);
+    expect(seen).toHaveLength(2);
+  });
+
+  it('does not restore abandoned retry text if its replacement fails before text', async () => {
+    const failure = Object.assign(new Error('temporary'), { statusCode: 503 });
+    const model = scriptedModel([
+      stream(...textChunks('old', 'ABANDONED_ATTEMPT'), { type: 'error', error: failure }),
+      stream({ type: 'error', error: new Error('replacement failed') }),
+    ]);
+    const session = new HarnessSession(makeOpts({ retryDelays: [1] }), async () => model as any);
+    const events = collect(session);
+    await session.send('go');
+    expect(events.some(e => e.data.dropPart?.partIds.includes('old'))).toBe(true);
+    expect(events.some(e => e.type === 'session-error')).toBe(true);
+    expect(JSON.stringify((session as any).history)).not.toContain('ABANDONED_ATTEMPT');
+    expect(JSON.stringify(session.acceptedHistory())).not.toContain('ABANDONED_ATTEMPT');
+  });
+
+  it('keeps the final failed attempt partial when the transient retry budget is exhausted', async () => {
+    const failure = Object.assign(new Error('temporary'), { statusCode: 503 });
+    const model = scriptedModel([
+      stream(...textChunks('old', 'abandoned'), { type: 'error', error: failure }),
+      stream(...textChunks('new', 'final partial'), { type: 'error', error: failure }),
+    ]);
+    const session = new HarnessSession(makeOpts({ retryDelays: [1] }), async () => model as any);
+    const events = collect(session);
+    await session.send('go');
+    expect(events.filter(e => e.data.dropPart)).toHaveLength(1);
+    expect(JSON.stringify((session as any).history)).toContain('final partial');
+    expect(JSON.stringify((session as any).history)).not.toContain('abandoned');
+    expect(events.some(e => e.type === 'session-error')).toBe(true);
   });
 
   it('tool-layer guard: path OUTSIDE cwd forces an ask even when decide() allows (external_directory)', async () => {
@@ -2437,6 +2699,29 @@ describe('HarnessSession — empty final step recovery', () => {
     const history = (session as any).history as any[];
     expect(history.map((m) => m.role)).toEqual(['user', 'assistant', 'tool', 'assistant']);
     expect(JSON.stringify(history.at(-1))).toContain('recovered');
+  });
+
+  it('accepts ready busy input after a second empty response within the same turn', async () => {
+    const queue: Array<{ id: string; text: string; attachments: string[] }> = [];
+    const prompts: any[] = [];
+    const scripts = [stream(finishChunk('stop')), stream(finishChunk('stop')),
+      stream(finishChunk('stop')), stream(...textChunks('reply', 'answer to correction'), finishChunk('stop'))];
+    let requests = 0;
+    const model = new MockLanguageModelV4({ doStream: async (request: any) => {
+      prompts.push(request.prompt);
+      const index = requests++;
+      if (index === 1) queue.push({ id: 'correction', text: 'please correct that', attachments: [] });
+      return { stream: simulateReadableStream({ chunks: scripts[index] ?? scripts.at(-1)! }) };
+    } });
+    const session = new HarnessSession(makeOpts({ takeReadyBusyMessage: () => queue.shift() }), async () => model as any);
+    const events = collect(session);
+    await session.send('original');
+    expect(prompts).toHaveLength(4); // two empty attempts before AND one permitted retry after the new input
+    expect(JSON.stringify(prompts[2])).toContain('please correct that');
+    expect(queue).toHaveLength(0);
+    expect(events.filter(e => e.type === 'user-message').map(e => e.data.text)).toEqual(['original', 'please correct that']);
+    expect(events.filter(e => e.type === 'turn-complete').map(e => e.data.stopReason)).toEqual(['end_turn']);
+    expect(session.acceptedHistory().eventUuids).toContain(events.find(e => e.type === 'user-message' && e.data.text === 'please correct that')!.uuid);
   });
 
   it('case 2: empty twice consecutively → empty_response; usage sums BOTH attempts; no empty history', async () => {

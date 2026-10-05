@@ -55,10 +55,12 @@ import { dispatchSlashCommand, type DispatcherCallbacks, type DispatcherResult }
 import { useStatusBarData, useStatusBarDispatch } from './hooks/useStatusBarProps';
 import { runNativeSlashAction, routeSlashResult } from './state/native-slash-actions';
 import { GameProvider, useGameState, useGameDispatch } from './state/game-context';
-import { hookEventToAction } from './state/hook-dispatcher';
+import { applyHookEvent } from './state/hook-dispatcher';
 import { buildUsageSnapshot, pruneExpiredUsage, type SubscriptionUsage } from './state/usage-snapshot';
 import { invalidateProviderTypeCache, resolveProviderType, useModelProviderType } from './hooks/use-provider-type';
-import { hasPendingInteraction, pendingInteractionKind, pendingInteractionRefusalCopy, canPtySend } from './state/pty-input-gate';
+import { sendBlock, canPtySend } from './state/pty-input-gate';
+import { useBlockedSend } from './hooks/useBlockedSend';
+import type { ToastAction } from './components/ui/Toast';
 import { buildOutgoingMessage } from './components/outgoing-message';
 import type { SyncWarning } from '../main/sync-state';
 import { latestUnresolvedError, type SyncStatusData } from './components/sync-dot-state';
@@ -85,6 +87,7 @@ import { InitializingCover } from './components/InitializingCover';
 import { promptShowMeansStarted, composerDisabled, startedIds } from './state/startup-dialog-store';
 import MovedGate from './components/MovedGate';
 import SettingsPanel from './components/SettingsPanel';
+import { readBuddyStyle } from './components/BuddyStyleRow';
 import ResumeBrowser from './components/ResumeBrowser';
 import QuitSessionsPrompt from './components/QuitSessionsPrompt';
 import { fetchReopenList, forgetReopenList, resolveNativeBinding, claudeModelFor } from './state/welcome-back';
@@ -626,7 +629,7 @@ function AppInner() {
   // 3s. Omit it for the common 3s case; the primitive supplies that default.
   type ToastState =
     | string
-    | { message: string; durationMs?: number; action?: { label: string; onClick: () => void } };
+    | { message: string; durationMs?: number; action?: ToastAction; actions?: ToastAction[] };
   const [toast, setToast] = useState<ToastState | null>(null);
   // Components with no prop path to this state (the file drawer's Download and
   // Copy path, the too-big card) announce through a window event — see
@@ -720,6 +723,23 @@ function AppInner() {
   // Pages' "Create a page" / Edit: the new-session dialog waiting for a folder
   // and model (Destin, 2026-09-17). Null while closed.
   const [pageCreate, setPageCreate] = useState<PageCreateRequest | null>(null);
+  // Document comments' Ask Your Assistant on the Projects screen (review deck
+  // Q-1): the same new-session dialog, started in that file's project with the
+  // request waiting in the composer (FilesTab raises the event).
+  useEffect(() => {
+    const onAsk = (e: Event) => {
+      const d = (e as CustomEvent<{ cwd?: string; initialInput?: string }>).detail;
+      if (!d?.initialInput) return;
+      setPageCreate({
+        title: 'Ask your assistant',
+        subtitle: 'Pick where the conversation starts and which model works through your comments.',
+        initialInput: d.initialInput,
+        cwd: d.cwd,
+      });
+    };
+    window.addEventListener('youcoded:ask-in-new-session', onAsk);
+    return () => window.removeEventListener('youcoded:ask-in-new-session', onAsk);
+  }, []);
   // Ref mirror of artifact state so the (once-registered) tool-use handler can
   // dedup Read-tracking against the session's already-known artifacts without
   // re-subscribing on every reducer tick.
@@ -736,6 +756,10 @@ function AppInner() {
     return chatStore.subscribeAll(() => { chatStateMapRef.current = chatStore.getState(); });
   }, [chatStore]);
 
+  // Refused sends and their toast (pending cards, then the live screen).
+  const { showBlockedSend, notifyIfPtyBlocked } = useBlockedSend({ chatState: chatStateMapRef,
+    showToast: setToast, openTerminal: (sid) => setViewModes((prev) => new Map(prev).set(sid, 'terminal')) });
+
   // Guarded PTY send for command-shaped writes triggered by UI actions
   // (command drawer, skill runs, /sync, /config, /model, Settings sends).
   // While a permission/AskUserQuestion/plan request is pending, CC's native
@@ -745,16 +769,6 @@ function AppInner() {
   // InputBar.sendMessage applies to typed messages. Deliberate menu-driving
   // writes (ToolCard plan keys, TrustGate, prompt option clicks, terminal
   // view) must NOT use this helper. Returns false when the send was refused.
-  const notifyIfPtyBlocked = useCallback((sid: string): boolean => {
-    const session = chatStateMapRef.current.get(sid);
-    if (session && hasPendingInteraction(session)) {
-      // Name the blocker — see pendingInteractionRefusalCopy.
-      setToast(pendingInteractionRefusalCopy(pendingInteractionKind(session)));
-      return true;
-    }
-    return false;
-  }, []);
-
   const guardedPtySend = useCallback((sid: string, text: string): boolean => {
     // Honest guard (M1): refuse before sending, so callers' `if (!guardedPtySend)`
     // bails actually fire for native/destroyed sessions and skip optimistic writes.
@@ -852,6 +866,20 @@ function AppInner() {
     }
     dispatch({ type: 'QUEUED_MESSAGE_REMOVED', sessionId: sid, queueId });
     inputBarRef.current?.fillDraft(text);
+  }, [dispatch]);
+
+  // "Send now": the row stays until the drain sends it (TRANSCRIPT_USER_MESSAGE
+  // removes it); false = already on its way, handled like Cancel's too-late.
+  const handleSendQueuedNow = useCallback(async (sid: string, queueId: string) => {
+    // WHY catch (PR #585 review): over remote access the request can fail (e.g. the
+    // connection drops) and a click that silently does nothing reads as broken.
+    // The cause is unknown here, so the words stay general and the row stays put.
+    const moved = await window.claude.native.queueSendNow(sid, queueId).catch(() => null);
+    if (moved === null) { setToast("Send now didn't go through — try again."); return; }
+    if (!moved) {
+      setToast('Already sending.');
+      dispatch({ type: 'QUEUED_MESSAGE_REMOVED', sessionId: sid, queueId });
+    }
   }, [dispatch]);
 
   // Compaction watchdog: activity-aware — resets on any reducer update for a
@@ -1380,28 +1408,21 @@ function AppInner() {
       }
     });
 
-    // G-1: a background command's run record changed — lands on its Bash
-    // card. MUST mirror BubbleFeed.tsx. on.shellEvent returns the unsubscribe fn.
+    // G-1: a background command's run record changed — lands on its Bash card.
+    // MUST mirror BubbleFeed.tsx. WHY the flush: same drop class as the hook
+    // handler below — this dispatches immediately, its card's own tool-use may not.
     const shellHandler = window.claude.on.shellEvent((event) => {
+      flushTranscriptActions();
       dispatch({ type: 'SHELL_RUN_CHANGED', sessionId: event.sessionId, run: event.run });
     });
 
     const hookHandler = window.claude.on.hookEvent((event) => {
-      const action = hookEventToAction(event);
-      // T2 re-review (4): a desktop window must not say "Answered on the computer" — the
-      // note would name the wrong device — but ignoring the resolution left live buttons
-      // whenever a phone's answer broadcast was lost. Clear the card quietly instead.
-      if (action?.type === 'PERMISSION_RESOLVED_ELSEWHERE' && !isRemoteMode()) action.silent = true;
-      if (action) {
-        // WHY (bubble-split, 2026-09-28): hook events dispatch straight to the
-        // store, but TRANSCRIPT_* deltas wait for the batcher's next frame. An
-        // ask landing while the reply's tail is still queued let its synthetic
-        // tool-group (chat-reducer PERMISSION_REQUEST) jump ahead, so the
-        // queued delta then split into a second bubble. Flush first to keep
-        // true arrival order. tests/hook-event-transcript-ordering.test.tsx.
-        flushTranscriptActions();
-        dispatch(action);
-      }
+      applyHookEvent(event, dispatch, (a) => {
+        // T2 re-review (4): a desktop window must not say "Answered on the computer" — the
+        // note would name the wrong device — but ignoring the resolution left live buttons
+        // whenever a phone's answer broadcast was lost. Clear the card quietly instead.
+        if (a.type === 'PERMISSION_RESOLVED_ELSEWHERE' && !isRemoteMode()) a.silent = true;
+      });
       // First hook event for a session = Claude is initialized
       if (event.sessionId) {
         setInitializedSessions((prev) => {
@@ -3394,6 +3415,11 @@ function AppInner() {
     // the guard that makes pty-input-gate's "exactly once, at creation, and
     // never again" true.
     if (sessionsRef.current.find((x) => x.id === sessionId)?.provider === 'shell') return;
+    // An unreported Claude Code pop-up has the keyboard (review F5): Shift+Tab
+    // would go to it, and the optimistic chip would show a mode never applied.
+    // Hook-reported cards keep today's behaviour, so only the screen verdict.
+    const block = sendBlock(chatStateMapRef.current.get(sessionId), sessionId);
+    if (block?.kind === 'screen') { showBlockedSend(sessionId, block); return; }
     const canAuto = currentModel === 'opus[1m]';
     const cycle: PermissionMode[] = [
       'normal',
@@ -3415,7 +3441,7 @@ function AppInner() {
     // same warning the form's toggle shows.
     if (next === 'bypass') { gateSkip(apply); return; }
     apply();
-  }, [sessionId, canBypass, currentPermissionMode, currentModel, gateSkip]);
+  }, [sessionId, canBypass, currentPermissionMode, currentModel, gateSkip, showBlockedSend]);
   cyclePermissionRef.current = cyclePermission;
 
   useEffect(() => {
@@ -3898,6 +3924,7 @@ function AppInner() {
                       onAddCredit={chatViewHandlers.addCredit}
                       onCancelQueued={handleCancelQueued}
                       onEditQueued={handleEditQueued}
+                      onSendQueuedNow={handleSendQueuedNow}
                       conversationStatus={conversationStatus}
                       onRefreshConversation={handleRefreshConversation}
                       modelLoadingDemo={s.id === sessionId && new URLSearchParams(location.search).get('mode') === 'workbench' && new URLSearchParams(location.search).get('modelLoading') === '1'}
@@ -4001,12 +4028,11 @@ function AppInner() {
                     ChatInputBar when minimal={isTerminalTouch}, slotted in
                     the QuickChips position so both modes share one container. */}
                 {!isShellSession && (<>
-                <ChatInputBar ref={inputBarRef} sendBlocked={isPendingTab} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={composerDisabled({ trustGate: trustGateActive, moved: !!movedGate, started: sessionInitialized, terminalTouch: isTerminalTouch })} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry) => {
+                <ChatInputBar ref={inputBarRef} sendBlocked={isPendingTab} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={composerDisabled({ trustGate: trustGateActive, moved: !!movedGate, started: sessionInitialized, terminalTouch: isTerminalTouch })} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry, block) => {
                   // Name the blocker so reaching for "Send anyway" is an informed
                   // choice (it presses Esc into Claude Code first — which on a
                   // live permission or plan menu DECLINES it).
-                  const blocked = chatStateMapRef.current.get(sessionId ?? '');
-                  setToast({ message: pendingInteractionRefusalCopy(blocked ? pendingInteractionKind(blocked) : null), durationMs: 8000, action: { label: 'Send anyway', onClick: () => { setToast(null); retry(); } } });
+                  if (sessionId) showBlockedSend(sessionId, block, retry);
                 }} getSessionState={(sid) => chatStateMapRef.current.get(sid)} onOpenModelPicker={() => setModelPickerOpen(true)} onModelSwitchCommand={handleModelSwitchCommand} initialInput={currentSession?.initialInput} initialAttachments={currentSession?.initialAttachments} provider={currentSession?.provider} />
                 <StatusBar
                   statusData={statusBarData}
@@ -4349,7 +4375,7 @@ function AppInner() {
         settingsOpen={settingsOpen}
         onToggleSettings={() => setSettingsOpen(prev => !prev)}
         settingsBadge={settingsBadge}
-        settingsDangerBadge={settingsDangerBadge}
+        settingsDangerBadge={settingsDangerBadge} projectRoot={currentSession?.cwd ?? null}
         onCreatePage={() => setPageCreate({ title: 'Create a page', initialInput: '/page-builder ' })}
       />
       <PageCreateDialog
@@ -4357,7 +4383,9 @@ function AppInner() {
         onCancel={() => setPageCreate(null)}
         // The form created the session; adopt it the way createSession does
         // (list entry, view mode, focus) and leave pages so the chat shows.
-        onCreated={(info) => { setPageCreate(null); adoptCreatedSession(info); dispatchArtifact({ type: 'PAGE_VIEW_CLOSED' }); }}
+        // PROJECT_VIEW_CLOSED too: comments' Ask Your Assistant opens this
+        // from the Projects screen, and the new chat must be what shows next.
+        onCreated={(info) => { setPageCreate(null); adoptCreatedSession(info); dispatchArtifact({ type: 'PAGE_VIEW_CLOSED' }); dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' }); }}
         onManageProjects={() => { setPageCreate(null); dispatchArtifact({ type: 'PROJECT_VIEW_OPENED' }); }}
       />
       {/* The game panel now renders inside the active session's framed-shell
@@ -4602,13 +4630,10 @@ function AppInner() {
           message={typeof toast === 'string' ? toast : toast.message}
           durationMs={typeof toast === 'string' ? undefined : toast.durationMs}
           onDismiss={() => setToast(null)}
-          action={
-            typeof toast !== 'string' && toast.action ? (
-              <Button variant="secondary" size="sm" onClick={toast.action.onClick}>
-                {toast.action.label}
-              </Button>
-            ) : undefined
-          }
+          action={typeof toast !== 'string' && toast.action ? (
+            <Button variant="secondary" size="sm" onClick={toast.action.onClick}>{toast.action.label}</Button>
+          ) : undefined}
+          actions={typeof toast === 'string' ? undefined : toast.actions}
         />
       )}
       {/* Plan 2b Task 9 — conversation-lease takeover dialog (3-state redesign,
@@ -4765,7 +4790,7 @@ function AppInner() {
 // getUsageSnapshot lets /cost and /usage snapshot live stats from App state.
 import type { UsageSnapshot } from './state/chat-types';
 import type { SessionChatState } from './state/chat-types';
-const ChatInputBar = React.forwardRef<InputBarHandle, { sessionId: string; view?: ViewMode; onOpenDrawer: (searchMode: boolean) => void; onCloseDrawer?: () => void; onDrawerSearch?: (query: string) => void; disabled?: boolean; sendBlocked?: boolean; minimal?: boolean; onResumeCommand?: () => void; getUsageSnapshot?: (sessionId: string) => UsageSnapshot | null; onOpenPreferences?: () => void; onToast?: (msg: string) => void; onSendBlocked?: (retry: () => void) => void; getSessionState?: (sessionId: string) => SessionChatState | undefined; onOpenModelPicker?: () => void; onModelSwitchCommand?: (alias: ModelAlias) => 'sent' | 'blocked' | 'ineligible'; initialInput?: string; initialAttachments?: string[]; provider?: 'claude' | 'native' }>(
+const ChatInputBar = React.forwardRef<InputBarHandle, { sessionId: string; view?: ViewMode; onOpenDrawer: (searchMode: boolean) => void; onCloseDrawer?: () => void; onDrawerSearch?: (query: string) => void; disabled?: boolean; sendBlocked?: boolean; minimal?: boolean; onResumeCommand?: () => void; getUsageSnapshot?: (sessionId: string) => UsageSnapshot | null; onOpenPreferences?: () => void; onToast?: (msg: string) => void; onSendBlocked?: React.ComponentProps<typeof InputBar>['onSendBlocked']; getSessionState?: (sessionId: string) => SessionChatState | undefined; onOpenModelPicker?: () => void; onModelSwitchCommand?: (alias: ModelAlias) => 'sent' | 'blocked' | 'ineligible'; initialInput?: string; initialAttachments?: string[]; provider?: 'claude' | 'native' }>(
   function ChatInputBar({ sessionId, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, disabled, sendBlocked, minimal, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, initialAttachments, provider }, ref) {
     return <InputBar ref={ref} sessionId={sessionId} view={view} onOpenDrawer={onOpenDrawer} onCloseDrawer={onCloseDrawer} onDrawerSearch={onDrawerSearch} disabled={disabled} sendBlocked={sendBlocked} minimal={minimal} onResumeCommand={onResumeCommand} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={onOpenPreferences} onToast={onToast} onSendBlocked={onSendBlocked} getSessionState={getSessionState} onOpenModelPicker={onOpenModelPicker} onModelSwitchCommand={onModelSwitchCommand} initialInput={initialInput} initialAttachments={initialAttachments} provider={provider} />;
   },
@@ -4904,7 +4929,8 @@ export async function bootBuddyOnLaunch(): Promise<void> {
   // desktop. The refusal itself is main's to explain; the launch path stays
   // silent (R13: no dialog interrupts you).
   try {
-    const res = await window.claude.buddy?.show?.();
+    // Floating mascot or taskbar icon — whichever Settings last saved.
+    const res = await window.claude.buddy?.show?.(readBuddyStyle());
     if (res && res.ok === false) localStorage.setItem('youcoded-buddy-enabled', '0');
   } catch { /* a throwing bridge is not a refusal — leave the preference alone */ }
 }

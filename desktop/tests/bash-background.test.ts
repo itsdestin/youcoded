@@ -1,6 +1,6 @@
 // G-1 background Bash — the Bash tool's half: foreground family kill (Task 2),
 // run_in_background (Task 3), hand-off at the time limit (Task 4).
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -146,6 +146,70 @@ describe.skipIf(!posix)('run_in_background', () => {
     const r = await BashTool.execute({ command: 'sleep 5', run_in_background: true }, ctx());
     expect(r.isError).toBe(true);
     expect(r.text).toBe(`5 background commands are already running (${ids.join(', ')}). Stop one with KillShell before starting another.`);
+  });
+});
+
+describe.skipIf(!posix)('hand-off registration failure', () => {
+  it('settles with the registration error after output without claiming a background run', async () => {
+    const error = Object.assign(new Error('mkdir denied'), { code: 'EACCES' });
+    const adopt = vi.spyOn(reg, 'adopt').mockImplementation(() => { throw error; });
+    const r = await BashTool.execute({ command: 'echo early; node -e "setTimeout(()=>{}, 4000)"', timeout: 200 }, ctx());
+    expect(adopt).toHaveBeenCalledOnce();
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain('mkdir denied');
+    expect(r.text).toContain('early');
+    expect(r.text).not.toContain('handed off to the background');
+    expect(reg.list()).toHaveLength(0);
+    adopt.mockRestore();
+  });
+
+  it.each(['close', 'error'] as const)('a child %s racing failed setup keeps its first settled result', async (event) => {
+    const adopt = vi.spyOn(reg, 'adopt').mockImplementation((spec) => {
+      if (event === 'close') spec.child.emit('close', 7);
+      else spec.child.emit('error', new Error('child failed during setup'));
+      throw new Error('registration failed after child event');
+    });
+    try {
+      const result = await BashTool.execute({ command: 'echo early; node -e "setTimeout(()=>{}, 4000)"', timeout: 200 }, ctx());
+      expect(adopt).toHaveBeenCalledOnce();
+      expect(result.isError).toBe(true);
+      expect(result.text).toContain(event === 'error' ? 'child failed during setup' : 'exit 7');
+      expect(result.text).not.toContain('handed off to the background');
+      expect(reg.list()).toEqual([]);
+    } finally { adopt.mockRestore(); }
+  });
+
+  it('an abort during successful adoption leaves the registry owning cleanup but reports cancellation', async () => {
+    const ac = new AbortController();
+    const original = reg.adopt.bind(reg);
+    const adopt = vi.spyOn(reg, 'adopt').mockImplementation((spec) => {
+      ac.abort();
+      return original(spec);
+    });
+    try {
+      const result = await BashTool.execute({ command: 'echo early; node -e "setTimeout(()=>{}, 4000)"', timeout: 200 }, ctx({ signal: ac.signal }));
+      expect(adopt).toHaveBeenCalledOnce();
+      expect(result.text).toContain('Canceled: the user interrupted this operation.');
+      expect(result.text).not.toContain('handed off to the background');
+      expect(reg.list()).toHaveLength(1);
+      await reg.list()[0].exited;
+    } finally { adopt.mockRestore(); }
+  });
+
+  it('an abort racing a failed adoption settles once as canceled without a phantom run', async () => {
+    const ac = new AbortController();
+    const adopt = vi.spyOn(reg, 'adopt').mockImplementation(() => {
+      ac.abort();
+      throw new Error('registration failed after abort');
+    });
+    try {
+      const result = await BashTool.execute({ command: 'echo early; node -e "setTimeout(()=>{}, 4000)"', timeout: 200 }, ctx({ signal: ac.signal }));
+      expect(adopt).toHaveBeenCalledOnce();
+      expect(result.isError).toBe(true);
+      expect(result.text).toContain('Canceled: the user interrupted this operation.');
+      expect(result.text).not.toContain('handed off to the background');
+      expect(reg.list()).toEqual([]);
+    } finally { adopt.mockRestore(); }
   });
 });
 

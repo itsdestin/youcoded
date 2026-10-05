@@ -23,7 +23,7 @@ import { useArtifactSelector, useArtifactDispatch } from '../state/ArtifactConte
 import { SessionDrawer } from './SessionDrawer';
 import { useActiveProject } from '../hooks/useActiveProject';
 import { assistantName } from '../utils/assistant-name';
-import { ContentFindBar } from './ContentFindBar';
+import { ChatFindBar } from './ChatFindBar';
 import { isTypingTarget } from '../utils/is-typing-target';
 import { CardKeysLiveContext } from '../state/card-keys-context';
 import { OnScreenContext } from '../state/on-screen-context';
@@ -89,6 +89,7 @@ interface Props {
   // session's ChatView instance.
   onCancelQueued?: (sessionId: string, queueId: string) => void;
   onEditQueued?: (sessionId: string, queueId: string, text: string) => void;
+  onSendQueuedNow?: (sessionId: string, queueId: string) => void;
   /** Remote access batch 2 (questions deck 2026-09-10, Q-3 "keep it, say so"):
    *  where a PHONE's copy of this conversation stands. `reconnecting` and
    *  `restoring` show a quiet busy strip; `incomplete` says the copy may be
@@ -102,7 +103,7 @@ interface Props {
 }
 
 // Memoised at the bottom of the file — see the WHY there.
-function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onAddCredit, onCancelQueued, onEditQueued, conversationStatus, onRefreshConversation, modelLoadingDemo }: Props) {
+function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onAddCredit, onCancelQueued, onEditQueued, onSendQueuedNow, conversationStatus, onRefreshConversation, modelLoadingDemo }: Props) {
   const state = useChatState(sessionId, { paused: !visible }); // WHY paused: hidden, it redrew per streamed word; live again on show (see useChatState)
   const dispatch = useChatDispatch();
 
@@ -281,11 +282,17 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
 
   // Scroll to bottom on tab switch / mount. The follow-up ResizeObserver below
   // handles the chrome-height race (input bar can differ per session).
+  const wasVisibleRef = useRef(visible);
   useEffect(() => {
+    const returned = visible && !wasVisibleRef.current;
+    wasVisibleRef.current = visible;
     if (!visible) return;
-    const raf = requestAnimationFrame(stickToBottom);
+    if (returned) stickToBottom();
+    // WHY: a mount/switch RAF can outlive the Find selection that released
+    // bottom-stick. Re-arm on an actual tab return, not from that stale RAF.
+    const raf = requestAnimationFrame(() => { if (stickRef.current) scrollToBottom(); });
     return () => cancelAnimationFrame(raf);
-  }, [visible, stickToBottom]);
+  }, [visible, stickToBottom, scrollToBottom, stickRef]);
 
   // Fix: input bar height can differ between sessions (drafts, multi-line),
   // so --bottom-chrome-height changes right after tab switch. App's ResizeObserver
@@ -526,9 +533,12 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     let lastHeight = node.scrollHeight;
     const observer = new ResizeObserver(() => {
       const next = node.scrollHeight;
-      if (next > lastHeight && stickRef.current) {
-        scrollToBottom();
-      }
+      // WHY: private long-history tool arrival showed a transient +516px
+      // content resize followed by a shrink. Scroll anchoring moved scrollTop
+      // 289px up on the shrink, but growth-only pinning left stickRef=true and
+      // hid Jump while the new tool card sat below the viewport. RO runs after
+      // layout; re-pin on BOTH directions, never on unchanged streaming deltas.
+      if (next !== lastHeight && stickRef.current) scrollToBottom();
       lastHeight = next;
     });
     observer.observe(node);
@@ -571,15 +581,14 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // height they last occupied, instead of their full body. Nothing leaves the
   // reducer — see use-entry-folding.ts for why eviction was rejected on review.
   //
-  // Suspended while the find bar is open: ContentFindBar finds text by walking
-  // the DOM, so a folded entry would be unfindable and the user would be told
-  // "0 results" for text that is in their conversation.
+  // WHY: source-backed Find keeps the ordinary fold budget; only the selected
+  // row is revealed and pinned while its message-body Range is in use.
   //
   // `sessionActive` (2026-09-18): a background pane is content-visibility:hidden,
   // which reads to the folding observer as "everything scrolled away". Telling
   // it the pane is merely in the background is what stops a tab you left a
   // moment ago from being blank when you come back — see INACTIVE_FOLD_MS.
-  const folding = useEntryFolding(!findOpen, scrollContainerRef, sessionActive);
+  const folding = useEntryFolding(true, scrollContainerRef, sessionActive);
 
   // Scroll, unfold and re-frost BEFORE the first painted frame of a switch —
   // the three reasons messages popped in. WHY per step: the hook's header.
@@ -698,175 +707,23 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     if (stickRef.current) scrollToBottom();
   }, [findOpen, scrollToBottom, stickRef]);
 
-  // Wheel scroll: burst acceleration + momentum ("flick") glide.
+  // Wheel and trackpad scrolling are left ENTIRELY to the browser engine — no
+  // wheel handler here, on purpose (2026-09-29).
   //
-  // Burst acceleration: rapid successive flicks compound — the 5th flick in a
-  // row scrolls farther than the 1st. A pause (~350ms) resets the multiplier so
-  // an intentional small scroll stays small.
-  //
-  // Momentum glide: on macOS the OS appends a ~20-30-event momentum tail to a
-  // flick, so scrolling coasts for free. Linux/libinput emits NO such tail —
-  // the wheel events stop the instant the finger lifts, so scrolling died
-  // immediately (Destin's report). We fix that ourselves: sample the recent
-  // wheel velocity and, once events stop, keep scrolling under exponential
-  // friction until it decays away. A single mouse-wheel notch (one isolated
-  // event) never reaches flick velocity, so discrete mouse scrolling stays
-  // snappy — only a fast multi-event trackpad flick coasts.
-  useEffect(() => {
-    // WHY gated on `visible` (2026-09-23): the glide-cancel below listens on
-    // `window` for every click and key, and every open session's ChatView is
-    // mounted — so each keystroke anywhere ran it once per open chat. A hidden
-    // pane takes no wheel input (pointer-events:none, inert), so it has nothing
-    // to glide or cancel; the listeners come back with the pane. Leaving the pane
-    // mid-glide stops that glide (cleanup below), which nobody can see.
-    if (!visible) return;
-    const container = scrollContainerRef.current;
-    if (!container) return;
-
-    // — Burst acceleration state (unchanged behavior) —
-    let multiplier = 1;
-    let lastWheelTime = 0;
-    let lastBumpTime = 0;
-    const RESET_MS = 350;
-    const BURST_GAP = 120;
-    const STEP = 0.25;
-    const MAX = 4;
-
-    // — Momentum glide state —
-    let velocity = 0; // px/ms, signed; the speed the glide coasts at
-    let momentumRaf: number | null = null;
-    let gliding = false; // true only while coasting on inertia (finger is OFF the pad)
-    let lastFrameTime = 0;
-    const samples: { d: number; t: number }[] = []; // recent applied deltas
-    const VELOCITY_WINDOW = 90; // ms window the velocity estimate averages over
-    const IDLE_GAP = 28; // ms with no wheel event ⇒ finger lifted, start coasting
-    const FRICTION = 0.0021; // per-ms exponential decay — controls deceleration rate
-    const MIN_VELOCITY = 0.03; // px/ms ⇒ glide has effectively stopped
-    const MIN_FLICK_VELOCITY = 0.35; // px/ms ⇒ fast enough to coast at all
-
-    const stopMomentum = () => {
-      if (momentumRaf !== null) {
-        cancelAnimationFrame(momentumRaf);
-        momentumRaf = null;
-      }
-      velocity = 0;
-      gliding = false;
-      samples.length = 0;
-    };
-
-    // Estimate current velocity as total recent scroll ÷ its time span. A lone
-    // event (one sample) can't establish a velocity, so it never coasts.
-    const estimateVelocity = (now: number): number => {
-      while (samples.length && now - samples[0].t > VELOCITY_WINDOW) samples.shift();
-      if (samples.length < 2) return 0;
-      const span = Math.max(now - samples[0].t, 16);
-      const total = samples.reduce((sum, s) => sum + s.d, 0);
-      return total / span;
-    };
-
-    const glide = (now: number) => {
-      const dt = Math.min(now - lastFrameTime, 32); // clamp tab-switch jumps
-      lastFrameTime = now;
-
-      // Finger still down (events still arriving): the direct scroll in onWheel
-      // is driving. Idle, so the hand-off to inertia is seamless.
-      if (now - lastWheelTime < IDLE_GAP) {
-        gliding = false; // an OS momentum tail (macOS) is still feeding us
-        momentumRaf = requestAnimationFrame(glide);
-        return;
-      }
-
-      // Past the idle gap ⇒ the finger is off and we're coasting on our own
-      // inertia. A touch/tap now should "catch" and freeze it (see onWheel).
-      gliding = true;
-      velocity *= Math.exp(-FRICTION * dt);
-      if (Math.abs(velocity) < MIN_VELOCITY) {
-        stopMomentum();
-        return;
-      }
-
-      const before = container.scrollTop;
-      container.scrollTop = before + velocity * dt;
-      // Hit the top/bottom and couldn't move ⇒ nothing left to coast into.
-      if (Math.abs(container.scrollTop - before) < 0.5) {
-        stopMomentum();
-        return;
-      }
-      momentumRaf = requestAnimationFrame(glide);
-    };
-
-    const onWheel = (e: WheelEvent) => {
-      // Let browser zoom (Ctrl+wheel) pass through untouched
-      if (e.ctrlKey) return;
-
-      // "Catch the glide": while we're coasting on inertia, ANY new wheel input —
-      // including the sub-pixel jitter of just resting fingers on the pad — means
-      // the user touched the pad to stop it. Freeze in place and swallow this
-      // event (don't scroll by it), so a tap parks the view exactly where it is;
-      // the next real scroll then fine-tunes from there. Runs BEFORE the small-
-      // delta guard because a tap's delta is often < 1px. Only fires during our
-      // own inertia (gliding), never mid-flick or during a macOS momentum tail.
-      if (gliding) {
-        e.preventDefault();
-        stopMomentum();
-        lastWheelTime = performance.now();
-        return;
-      }
-
-      if (Math.abs(e.deltaY) < 1) return;
-
-      const now = performance.now();
-      const gapSinceLastEvent = now - lastWheelTime;
-      const gapSinceLastBump = now - lastBumpTime;
-
-      if (gapSinceLastEvent > RESET_MS) {
-        // Long pause — reset to baseline (next flick = 1x)
-        multiplier = 1;
-        lastBumpTime = now;
-      } else if (gapSinceLastBump > BURST_GAP) {
-        // New flick after previous flick's momentum settled — compound
-        multiplier = Math.min(multiplier + STEP, MAX);
-        lastBumpTime = now;
-      }
-      // else: mid-burst momentum events — leave multiplier alone
-      lastWheelTime = now;
-
-      const applied = e.deltaY * multiplier;
-
-      // Feed the velocity estimator with the delta we actually apply, so the
-      // glide coasts at the speed the content was visibly moving.
-      samples.push({ d: applied, t: now });
-      velocity = estimateVelocity(now);
-
-      e.preventDefault();
-      // Direct 1:1 scroll while the finger is down (zero latency); the glide
-      // loop takes over only once events stop.
-      container.scrollBy({ top: applied, behavior: 'auto' });
-
-      // Arm the glide loop once the gesture is fast enough to be a real flick.
-      if (momentumRaf === null && Math.abs(velocity) >= MIN_FLICK_VELOCITY) {
-        lastFrameTime = now;
-        momentumRaf = requestAnimationFrame(glide);
-      }
-    };
-
-    // Any deliberate interaction cancels an in-flight glide (standard "grab to
-    // stop" behavior): a click, a touch, or a key (incl. the arrow-key scroll).
-    const cancelOnInput = () => {
-      if (momentumRaf !== null) stopMomentum();
-    };
-
-    // Non-passive so preventDefault() works and our delta replaces native scroll
-    container.addEventListener('wheel', onWheel, { passive: false });
-    window.addEventListener('pointerdown', cancelOnInput, true);
-    window.addEventListener('keydown', cancelOnInput, true);
-    return () => {
-      container.removeEventListener('wheel', onWheel);
-      window.removeEventListener('pointerdown', cancelOnInput, true);
-      window.removeEventListener('keydown', cancelOnInput, true);
-      stopMomentum();
-    };
-  }, [visible]);
+  // WHY: this used to be a homemade engine (non-passive wheel listener +
+  // preventDefault + a burst multiplier + a JS friction glide). Measured on the
+  // Z13 (Electron 41, Wayland) with a raw-event probe, the built-in engine already
+  // does everything it was imitating: a two-finger flick coasts ~1.7 s and
+  // decelerates, resting fingers on the pad catches the coast, and repeated
+  // flicks in one direction boost the coast (13 → 78 px/ms over six flicks) while
+  // a single drag follows the fingers 1:1. The homemade version fought it: the
+  // multiplier grew every 120 ms of ANY continuous input, so one slow drag reached
+  // 4× the finger distance and the engine's own coast (delivered as wheel events)
+  // was multiplied too — the "loosely follows / keeps scrolling" jank — and a
+  // fast mouse-wheel spin armed the glide. Native scrolling also runs off the
+  // main thread, so it no longer stutters while a reply streams (smoothness sweep
+  // B5). The passive wheel listeners in use-stick-to-bottom and the anchor
+  // restore above only READ wheel intent, which is fine.
 
   const handlePromptSelect = useCallback(
     (promptId: string, button: PromptCardButton, label: string, promptTitle?: string) => {
@@ -1020,6 +877,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
       // stable across toggles — no reflow, no flash, and focus/IME survive.
       // `inert` removes hidden subtree from tab order + a11y tree.
       ref={chatRootRef}
+      // WHY: strip pills can overflow/reorder independently of App's mounted panes;
+      // a stable DOM identity lets private diagnostics confirm the actual visible chat.
+      data-chat-session-id={sessionId}
       inert={!visible}
       aria-hidden={visible ? undefined : true}
       style={{
@@ -1095,13 +955,15 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               down while the bar is open and back when it closes. `.find-row`'s
               top margin clears the overlaid header (globals.css). */}
           {findOpen && (
-            <ContentFindBar
-              layout="row"
-              containerRef={contentRef}
+            <ChatFindBar
+              state={state}
+              sessionId={sessionId}
+              contentRef={contentRef}
               scrollRef={scrollContainerRef}
-              highlightName="chat-find"
-              placeholder="Find in chat"
-              resetKey={sessionId}
+              getEntryEl={getEntryEl}
+              revealAndPin={folding.revealAndPin}
+              unfoldNearViewport={folding.unfoldNearViewport}
+              releaseStick={releaseStick}
               onClose={() => setFindOpen(false)}
             />
           )}
@@ -1360,6 +1222,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
             queuedMessages={state.queuedMessages}
             onCancel={onCancelQueued ? (queueId) => onCancelQueued(sessionId, queueId) : undefined}
             onEdit={onEditQueued ? (queueId, text) => onEditQueued(sessionId, queueId, text) : undefined}
+            onSendNow={onSendQueuedNow ? (queueId) => onSendQueuedNow(sessionId, queueId) : undefined}
           />
           {/* WHY mount the actual model floater in the chat column: when Files or
               Games opens, outer-root centering would span the drawer as well. */}

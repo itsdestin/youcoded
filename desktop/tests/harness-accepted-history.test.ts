@@ -69,6 +69,25 @@ const uuidOfText = (events: TranscriptEvent[], text: string) =>
   events.find((e) => e.type === 'assistant-text' && e.data.text === text)!.uuid;
 
 describe('HarnessSession accepted history', () => {
+  it('excludes abandoned transient retry UUIDs after a completed tool step', async () => {
+    const tool = fakeTool('Read');
+    const failure = Object.assign(new Error('temporary'), { statusCode: 503 });
+    const model = scriptedModel([
+      stream(toolCallChunk('read-once', 'Read', { file_path: 'a' }), finishChunk('tool-calls')),
+      stream(...textChunks('old', 'abandoned text'), ...reasoningChunks('old-reasoning', 'abandoned thought'), { type: 'error', error: failure }),
+      stream(...textChunks('new', 'replacement'), finishChunk('stop')),
+    ]);
+    const session = new HarnessSession(makeOpts({ tools: [tool], retryDelays: [1], decide: async () => ({ action: 'allow', denyListed: false }) }), async () => model as any);
+    const events = collect(session);
+    await session.send('go');
+    const accepted = session.acceptedHistory();
+    expect((tool as any).calls).toHaveLength(1);
+    expect(accepted.eventUuids).not.toContain(uuidOfText(events, 'abandoned text'));
+    expect(accepted.eventUuids).toContain(uuidOfText(events, 'replacement'));
+    expect(JSON.stringify(accepted.messages)).not.toContain('abandoned text');
+    expect(accepted.messages).toEqual((session as any).history);
+    expect(events.find(e => e.data.dropPart)!.data.dropPart!.partIds).toEqual(['old', 'old-reasoning']);
+  });
   it('a text + tool-call turn accepts exactly the emitted user/text/tool uuids, in emit order', async () => {
     const events: TranscriptEvent[] = [];
     const session = makeSession({
@@ -276,6 +295,24 @@ describe('HarnessSession accepted history', () => {
     const cleared = session.acceptedHistory();
     expect(cleared.eventUuids).toEqual([]);
     expect(cleared.revision).toBe(before.revision + 1);
+  });
+
+  it('restored accepted rule literal is kept once with its source provenance', async () => {
+    const { markAppGenerated, isAppGenerated } = await import('../src/main/harness/compaction');
+    const text = '<project-rule source="rules/one.md">\nCAPTURED-RULE\n</project-rule>';
+    const rule = markAppGenerated({ role: 'user', content: text } as any);
+    const seen: any[] = [];
+    const model = scriptedModel([stream(toolCallChunk('c1', 'Read', { file_path: 'a.ts' }), finishChunk('tool-calls')),
+      stream(...textChunks('done', 'done'), finishChunk('stop'))], seen);
+    const session = new HarnessSession(makeOpts({ tools: [fakeTool('Read', { permissionSubject: (args: any) => args.file_path })],
+      decide: async () => ({ action: 'allow', denyListed: false }),
+      triggers: { match: () => [{ id: 'rule:/project/one.md', source: 'rules/one.md', body: 'CAPTURED-RULE' }] },
+    }), async () => model as any);
+    session.seedHistory([{ role: 'user', content: 'old' }, rule] as any,
+      { eventUuids: ['old'], revision: 2, messageOrigins: [['old'], null] });
+    await session.send('touch');
+    expect(JSON.stringify(seen.at(-1)).split('CAPTURED-RULE').length - 1).toBe(1);
+    expect(session.acceptedHistory().messages.filter(m => isAppGenerated(m) && m.content === text)).toHaveLength(1);
   });
 
   it('seedHistory restores the accepted list, revision and transformation from a checkpoint', () => {

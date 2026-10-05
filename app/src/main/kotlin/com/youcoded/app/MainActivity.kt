@@ -225,19 +225,30 @@ class MainActivity : ComponentActivity() {
                             }
 
                             if (selfTestResult != null && !selfTestResult.passed) {
+                                val resetScope = rememberCoroutineScope()
+                                var resetting by remember { mutableStateOf(false) }
                                 Column(
                                     modifier = Modifier.fillMaxSize().padding(32.dp),
                                     verticalArrangement = Arrangement.Center,
                                     horizontalAlignment = Alignment.CenterHorizontally,
                                 ) {
-                                    Text("Bootstrap Self-Test Failed", style = MaterialTheme.typography.titleLarge)
+                                    Text("Setup didn't finish correctly", style = MaterialTheme.typography.titleLarge)
                                     Spacer(modifier = Modifier.height(16.dp))
                                     Text(selfTestResult.failureMessage ?: "Unknown failure", color = MaterialTheme.colorScheme.error)
                                     Spacer(modifier = Modifier.height(24.dp))
-                                    Button(onClick = {
-                                        isReady = false
-                                        progress = null
-                                    }) { Text("Re-extract") }
+                                    // WHY clear first: setup() skips unpacking while the
+                                    // old files exist, so a plain re-run fixed nothing.
+                                    Button(
+                                        enabled = !resetting,
+                                        onClick = {
+                                            resetting = true
+                                            resetScope.launch {
+                                                withContext(Dispatchers.IO) { bootstrap.clearRuntime() }
+                                                isReady = false
+                                                progress = null
+                                            }
+                                        },
+                                    ) { Text(if (resetting) "Clearing…" else "Reinstall") }
                                 }
                                 return@Column
                             }
