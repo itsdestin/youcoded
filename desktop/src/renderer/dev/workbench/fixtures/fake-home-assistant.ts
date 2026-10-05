@@ -188,7 +188,7 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
     return ok(JSON.stringify(wanted.map((entity) => {
       const rows = cameraEventsOn ? eventLog.filter((e) => e.entity === entity) : [];
       return [
-        { entity_id: entity, state: new Date(from - 4 * 86400000).toISOString(), attributes: { event_type: 'motion' }, last_changed: new Date(from).toISOString() },
+        { entity_id: entity, state: new Date(from - 4 * 86400000).toISOString(), attributes: { event_type: 'camera_motion' }, last_changed: new Date(from).toISOString() },
         ...rows.map((e) => ({ entity_id: entity, state: e.state ?? new Date(Date.now() - e.minAgo * 60000 + (e.offsetSec ?? 0) * 1000).toISOString(), attributes: { event_type: e.type }, last_changed: new Date(Date.now() - e.minAgo * 60000).toISOString() }))
           .filter((e) => !Date.parse(e.state) || Date.parse(e.state) >= from),
       ];
@@ -316,23 +316,25 @@ export function fakeHomeAssistantCameraEvents(on: boolean): void { cameraEventsO
 const eventEntities: Record<string, string[]> = {
   dev_camera_living_room_camera: ['event.living_room_camera_motion', 'event.living_room_camera_person'],
   dev_camera_hallway_camera: ['event.hallway_camera_motion'],
-  dev_camera_backyard_camera: ['event.backyard_camera_motion'],
+  // WHY "doorbell" in a motion entity's name: the real house has event.doorbell_motion (sending camera_motion /
+  // camera_person); its name must not turn every motion into "Doorbell rang".
+  dev_camera_backyard_camera: ['event.backyard_doorbell_motion'],
 };
 const eventLog: Array<{ entity: string; minAgo: number; offsetSec?: number; type: string; state?: string }> = [
   // Living room: Person 55 min ago and Motion 152 min ago have recordings (e1, e2); the Person event also fired Motion at the same second.
-  { entity: 'event.living_room_camera_person', minAgo: 55, offsetSec: 4, type: 'person' },
-  { entity: 'event.living_room_camera_motion', minAgo: 55, offsetSec: 4, type: 'motion' },
-  { entity: 'event.living_room_camera_motion', minAgo: 152, offsetSec: 2, type: 'motion' },
+  { entity: 'event.living_room_camera_person', minAgo: 55, offsetSec: 4, type: 'camera_person' },
+  { entity: 'event.living_room_camera_motion', minAgo: 55, offsetSec: 4, type: 'camera_motion' },
+  { entity: 'event.living_room_camera_motion', minAgo: 152, offsetSec: 2, type: 'camera_motion' },
   // ...and these have none: shown as plain rows. One "unavailable" state, which is not an event.
-  { entity: 'event.living_room_camera_motion', minAgo: 20, type: 'motion' },
-  { entity: 'event.living_room_camera_motion', minAgo: 31, type: 'motion' },
-  { entity: 'event.living_room_camera_person', minAgo: 100, type: 'person' },
-  { entity: 'event.living_room_camera_motion', minAgo: 77, type: 'motion', state: 'unavailable' },
-  { entity: 'event.hallway_camera_motion', minAgo: 130, offsetSec: 1, type: 'motion' },
-  { entity: 'event.hallway_camera_motion', minAgo: 400, type: 'motion' },
-  { entity: 'event.backyard_camera_motion', minAgo: 12, type: 'motion' },
-  { entity: 'event.backyard_camera_motion', minAgo: 95, type: 'motion' },
-  { entity: 'event.backyard_camera_motion', minAgo: 240, type: 'motion' },
+  { entity: 'event.living_room_camera_motion', minAgo: 20, type: 'camera_motion' },
+  { entity: 'event.living_room_camera_motion', minAgo: 31, type: 'camera_motion' },
+  { entity: 'event.living_room_camera_person', minAgo: 100, type: 'camera_person' },
+  { entity: 'event.living_room_camera_motion', minAgo: 77, type: 'camera_motion', state: 'unavailable' },
+  { entity: 'event.hallway_camera_motion', minAgo: 130, offsetSec: 1, type: 'camera_motion' },
+  { entity: 'event.hallway_camera_motion', minAgo: 400, type: 'camera_motion' },
+  { entity: 'event.backyard_doorbell_motion', minAgo: 12, type: 'camera_motion' },
+  { entity: 'event.backyard_doorbell_motion', minAgo: 95, type: 'camera_motion' },
+  { entity: 'event.backyard_doorbell_motion', minAgo: 240, type: 'camera_motion' },
 ];
 
 // ── Instant updates (spec 2026-10-04, Part 1) ─────────────────────────────

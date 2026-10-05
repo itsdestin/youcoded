@@ -28,6 +28,16 @@ describe('camera events with no recording', () => {
     expect(w).toHaveLength(23);
   });
 
+  it('names an event by its kind, not by its entity name (a motion on a "doorbell_motion" entity is Motion, not Doorbell rang)', async () => {
+    // WHY: the real house's event.doorbell_motion sends camera_motion / camera_person; reading the entity name made every
+    // one of them "Doorbell rang". The pretend backyard camera's entity carries "doorbell" in its name for this test.
+    await mount({ data: OPEN, video: true });
+    await tick(1000);
+    const w = words('camera.backyard_camera').filter((x) => x.includes('(no picture)'));
+    expect(w.length).toBeGreaterThan(0);
+    expect(w.every((x) => x === 'Motion (no picture)')).toBe(true);
+  });
+
   it('gives a picture-less row an icon and a time, with no thumbnail, no play button, and nothing to press or tab to', async () => {
     await mount({ data: OPEN, video: true });
     await tick(1000);

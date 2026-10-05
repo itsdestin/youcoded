@@ -212,9 +212,12 @@ export const HOME_CAMERA_JS = `
 
   // An event entity's kind, from its event_type (what Nest sends: motion, person, chime…) or, failing that, its name.
   // "more" ranks them when two arrive together (one person walking up sets off both Motion and Person): the most specific wins.
+  // WHY the type alone when there is one: the real house's event.doorbell_motion sends camera_person / camera_motion,
+  // and reading its entity name too made every doorbell motion "Doorbell rang". Real Nest types: camera_motion,
+  // camera_person, camera_sound, ring (checked on the owner's house 2026-10-05).
   function histKind(entity, type) {
-    var t = (String(type || '') + ' ' + String(entity || '')).toLowerCase();
-    return t.indexOf('chime') >= 0 || t.indexOf('doorbell') >= 0 ? { k: 'chime', what: 'Doorbell rang', more: 4 }
+    var t = String(type || entity || '').toLowerCase();
+    return t.indexOf('chime') >= 0 || t.indexOf('doorbell') >= 0 || /(^|_)ring$/.test(t) ? { k: 'chime', what: 'Doorbell rang', more: 4 }
       : t.indexOf('person') >= 0 ? { k: 'person', what: 'Person', more: 3 }
       : t.indexOf('sound') >= 0 ? { k: 'sound', what: 'Sound', more: 2 }
       : t.indexOf('motion') >= 0 ? { k: 'motion', what: 'Motion', more: 1 }
