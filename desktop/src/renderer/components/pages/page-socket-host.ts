@@ -65,6 +65,11 @@ export function createPageSocketHub(opts: {
   let disposed = false;
   let pinger: ReturnType<typeof setInterval> | null = null;
   let unsubscribe: (() => void) | null = null;
+  // WHY (same as the video hub): main can push an event for a socket (a quick 'closed' after a refused
+  // login or ECONNREFUSED) BEFORE the open call's own reply tells us its id. Dropping it left the page's
+  // handle 'connecting' for good. Kept only while an open is in flight, a few per id, and replayed once mapped.
+  const early = new Map<string, PageSocketEvent[]>();
+  let opening = 0;
 
   const call = (): PageSocketCall => ({ page: opts.pageId, frame });
   const tell = (id: string, state: PageSocketState, why?: string) => {
@@ -80,7 +85,17 @@ export function createPageSocketHub(opts: {
     if (pinger !== null) return;
     pinger = setInterval(() => {
       const b = opts.bridge();
-      for (const e of local.values()) if (e.mainId !== null) void b?.socketPing?.({ ...call(), socket: e.mainId })?.catch(() => { /* the next ping tries again */ });
+      for (const [id, e] of [...local]) {
+        if (e.mainId === null) continue;
+        // WHY the answer is read: main answers {ok:false} for a socket it already ended without a push we saw,
+        // and ignoring that left the page's handle 'open' for good. Same as the video hub.
+        void b?.socketPing?.({ ...call(), socket: e.mainId })?.then((r) => {
+          if (r && r.ok === false && local.get(id) === e && e.mainId !== null && !disposed) {
+            byMain.delete(e.mainId); e.mainId = null; e.state = 'closed'; local.delete(id); syncPinger();
+            opts.post({ type: PAGE_SOCKET_EVENT_MESSAGE, id, kind: 'state', state: 'closed', why: 'The live connection ended.' });
+          }
+        }).catch(() => { /* the next ping tries again */ });
+      }
     }, SOCKET_PING_MS);
   };
 
@@ -89,18 +104,25 @@ export function createPageSocketHub(opts: {
     unsubscribe = opts.bridge()?.onSocketEvent?.((ev: PageSocketEvent) => {
       // Only an id this hub made a mapping for: anything else (another frame's
       // socket, a stale one, a forged one) is not ours and resolves nothing.
+      if (disposed) return;
       const id = byMain.get(ev?.socket);
-      if (!id || disposed) return;
-      const e = local.get(id);
-      if (!e) return;
-      if (ev.kind === 'state') {
-        if (ev.state === 'closed') { byMain.delete(ev.socket); e.mainId = null; e.state = 'closed'; syncPinger(); }
-        tell(id, ev.state, ev.why);
-        if (ev.state === 'closed') local.delete(id);
-      } else if (ev.kind === 'messages' && Array.isArray(ev.texts)) {
-        opts.post({ type: PAGE_SOCKET_EVENT_MESSAGE, id, kind: 'messages', texts: ev.texts });
+      if (!id) {
+        if (opening > 0 && typeof ev?.socket === 'string') { const list = early.get(ev.socket) ?? []; if (list.length < 64 && early.size < 16) { list.push(ev); early.set(ev.socket, list); } }
+        return;
       }
+      applyEvent(id, ev);
     }) ?? null;
+  };
+  const applyEvent = (id: string, ev: PageSocketEvent) => {
+    const e = local.get(id);
+    if (!e) return;
+    if (ev.kind === 'state') {
+      if (ev.state === 'closed') { byMain.delete(ev.socket); e.mainId = null; e.state = 'closed'; syncPinger(); }
+      tell(id, ev.state, ev.why);
+      if (ev.state === 'closed') local.delete(id);
+    } else if (ev.kind === 'messages' && Array.isArray(ev.texts)) {
+      opts.post({ type: PAGE_SOCKET_EVENT_MESSAGE, id, kind: 'messages', texts: ev.texts });
+    }
   };
 
   /** Ask main for the connection. Used on the page's open and after a hidden pause (`resume`). */
@@ -114,31 +136,39 @@ export function createPageSocketHub(opts: {
     const attempt = ++e.attempt;
     tell(id, 'connecting');
     let result;
+    opening++;
     try { result = await b.socketOpen({ ...call(), url: e.url }); }
     catch { result = { ok: false as const, message: 'The live connection could not be started.' }; }
-    const now = local.get(id);
-    // The page closed it, the frame went away, or a newer attempt began while we waited:
-    // the socket main just made belongs to nobody, so it is closed again at once.
-    if (disposed || !now || now.attempt !== attempt) {
-      if (result.ok) void b.socketClose?.({ ...call(), socket: result.socket })?.catch(() => { /* gone */ });
-      return;
-    }
-    if (!result.ok) {
-      // WHY not closed on a resume: this socket worked before the window was hidden, and a refusal now
-      // (the opening-rate limit after a few quick hide/show cycles) is usually momentary. Stay paused and
-      // try again; only a first open, or several refusals in a row, is the end.
-      if (resume && ++now.retries <= RESUME_RETRIES) {
-        tell(id, 'paused', result.message);
-        now.retryTimer = setTimeout(() => { now.retryTimer = null; if (!disposed && local.get(id) === now && now.state === 'paused' && !hidden()) void connect(id, true); }, RESUME_RETRY_MS);
+    try {
+      const now = local.get(id);
+      // The page closed it, the frame went away, or a newer attempt began while we waited:
+      // the socket main just made belongs to nobody, so it is closed again at once.
+      if (disposed || !now || now.attempt !== attempt) {
+        if (result.ok) void b.socketClose?.({ ...call(), socket: result.socket })?.catch(() => { /* gone */ });
         return;
       }
-      tell(id, 'closed', result.message); local.delete(id); return;
-    }
-    now.retries = 0;
-    now.mainId = result.socket;
-    byMain.set(result.socket, id);
-    syncPinger();
+      if (!result.ok) {
+        // WHY not closed on a resume: this socket worked before the window was hidden, and a refusal now
+        // (the opening-rate limit after a few quick hide/show cycles) is usually momentary. Stay paused and
+        // try again; only a first open, or several refusals in a row, is the end.
+        if (resume && ++now.retries <= RESUME_RETRIES) {
+          tell(id, 'paused', result.message);
+          now.retryTimer = setTimeout(() => { now.retryTimer = null; if (!disposed && local.get(id) === now && now.state === 'paused' && !hidden()) void connect(id, true); }, RESUME_RETRY_MS);
+          return;
+        }
+        tell(id, 'closed', result.message); local.delete(id); return;
+      }
+      now.retries = 0;
+      now.mainId = result.socket;
+      byMain.set(result.socket, id);
+      syncPinger();
+      // Replay what main pushed before we knew this socket's id (it may include its 'closed').
+      const pending = early.get(result.socket);
+      early.delete(result.socket);
+      for (const ev of pending ?? []) applyEvent(id, ev);
+    } finally { if (--opening === 0) early.clear(); }
   };
+
 
   const closeMain = (e: Entry) => {
     const main = e.mainId;

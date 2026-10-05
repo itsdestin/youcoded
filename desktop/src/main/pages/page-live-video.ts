@@ -34,6 +34,8 @@ export const VIDEO_LIMITS = {
   maxMs: 5 * 60_000,
   /** "Logged in" reply wait, and the wait for a usable candidate when the answer had none. */
   readyWaitMs: 10_000, candidateWaitMs: 10_000,
+  /** The time a device has to finish opening the socket (same as the live socket's). */
+  openWaitMs: LIVE_LIMITS.openWaitMs,
   leaseMs: LIVE_LIMITS.leaseMs,
   /** One reply from the device (an answer SDP is a few KB), and how many replies one video may take. */
   replyBytes: 256 * 1024, maxReplies: 200,
@@ -64,7 +66,7 @@ interface Video {
   /** The device's answer has been seen (a second one is ignored). */
   answered: boolean;
   replies: number;
-  timers: { lease?: ReturnType<typeof setTimeout>; max?: ReturnType<typeof setTimeout>; ready?: ReturnType<typeof setTimeout>; cand?: ReturnType<typeof setTimeout> };
+  timers: { lease?: ReturnType<typeof setTimeout>; max?: ReturnType<typeof setTimeout>; open?: ReturnType<typeof setTimeout>; ready?: ReturnType<typeof setTimeout>; cand?: ReturnType<typeof setTimeout> };
 }
 
 const refusal = (message: string): { ok: false; message: string } => ({ ok: false, message });
@@ -136,6 +138,10 @@ export class PageLiveVideos {
     try { ws = (this.deps.connect ?? defaultConnect)(wsUrl.toString(), headers); }
     catch (e) { this.finish(v, '', false); return refusal(`The app could not reach ${host}. ${redact(e instanceof Error ? e.message : String(e), v.secrets)}`.trim()); }
     v.ws = ws;
+    // WHY an open timer here: defaultConnect has no handshake timeout (the module's own timer owns it, as in
+    // page-live-socket.ts). Without this, a device that takes the connection but never finishes opening held a
+    // video slot until the 5-minute limit. Cleared on 'open'; finish() clears every timer.
+    v.timers.open = setTimeout(() => { v.timers.open = undefined; this.finish(v, `${host} did not answer within ${VIDEO_LIMITS.openWaitMs / 1000} seconds.`, true); }, VIDEO_LIMITS.openWaitMs);
 
     /** Fill the approved template in ONE pass and send what the message check returns. */
     const sendTemplate = () => {
@@ -153,6 +159,7 @@ export class PageLiveVideos {
 
     ws.on('open', () => {
       if (v.closed) { try { ws.terminate(); } catch { /* gone */ } return; }
+      clearTimeout(v.timers.open); v.timers.open = undefined;
       try { if (helloText) ws.send(helloText); }
       catch (e) { this.finish(v, redact(e instanceof Error ? e.message : String(e), v.secrets), true); return; }
       if (ready) {

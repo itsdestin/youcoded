@@ -95,6 +95,32 @@ describe('the hub between a page and main', () => {
     hub.dispose();
   });
 
+  // F2: main can push a socket's 'closed' before the open call's own reply names the socket.
+  it('keeps an event main pushes before the open reply, so a quick refusal still ends the page\'s handle', async () => {
+    const { m, posted, hub } = hubRig();
+    m.bridge.socketOpen.mockImplementationOnce((async () => {
+      m.push({ socket: 'm9', kind: 'state', state: 'closed', why: 'Connection refused.' });
+      return { ok: true as const, socket: 'm9' };
+    }) as any);
+    hub.handleFrameMessage(OPEN);
+    await flush();
+    expect(posted.at(-1)).toMatchObject({ id: 's1', kind: 'state', state: 'closed', why: 'Connection refused.' });
+    hub.dispose();
+  });
+
+  it('ends the page\'s handle when a lease ping learns main no longer has the socket', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+    const { m, posted, hub } = hubRig();
+    hub.handleFrameMessage(OPEN);
+    await flush();
+    m.push({ socket: 'm1', kind: 'state', state: 'open' });
+    m.bridge.socketPing.mockResolvedValueOnce({ ok: false, reason: 'not-approved', message: 'gone' } as any);
+    await vi.advanceTimersByTimeAsync(SOCKET_PING_MS);
+    await flush();
+    expect(posted.at(-1)).toMatchObject({ id: 's1', kind: 'state', state: 'closed' });
+    hub.dispose();
+  });
+
   it('answers every open it will not make with "closed" and a plain reason, so the page never waits forever', async () => {
     const { m, posted, hub } = hubRig();
     hub.handleFrameMessage({ ...OPEN, id: 's2', url: 7 });

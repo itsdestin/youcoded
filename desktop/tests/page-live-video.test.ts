@@ -204,6 +204,21 @@ describe('the conversation with the device', () => {
     } finally { vi.useRealTimers(); }
   });
 
+  it('gives up if the device never finishes opening the socket, within 10 seconds (and frees the slot)', async () => {
+    vi.useFakeTimers();
+    try {
+      const r = rig();
+      await r.videos.start(r.owner(), req());
+      // The device never accepts: no 'open' ever comes.
+      await vi.advanceTimersByTimeAsync(VIDEO_LIMITS.openWaitMs - 1);
+      expect(r.videos.count).toBe(1);
+      await vi.advanceTimersByTimeAsync(2);
+      expect(stopped(r)?.why).toContain('did not answer within 10 seconds');
+      expect(r.videos.count).toBe(0);
+      expect(r.wss[0].terminated).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+
   it('stops at once, with the key advice, when the device refuses the key', async () => {
     const r = rig();
     const { ws } = await playing(r);

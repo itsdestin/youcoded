@@ -264,6 +264,11 @@ async function performApprovedFetch(request: PageFetchRequest, ctx: PageFetchCon
       }
       const { bytes, truncated } = await readBytesCapped(res, MAX_PICTURE_BYTES);
       if (truncated) return { ok: false, reason: 'network', message: `That picture from ${url.hostname} is too large to show.` };
+      // WHY the bytes too (as:'video' does the same with 'ftyp'): the header is the device's own word. A
+      // reflecting endpoint could label request data image/png and, as base64, carry the key past the text redaction.
+      if (res.status >= 200 && res.status < 300 && !looksLikePicture(type, bytes)) {
+        return { ok: false, reason: 'network', message: `${url.hostname} did not answer with a picture.` };
+      }
       const body = res.status >= 200 && res.status < 300 ? `data:${type};base64,${bytes.toString('base64')}` : redact(bytes.toString('utf8'), secrets);
       return { ok: true, status: res.status, headers: out, body };
     }
@@ -307,5 +312,16 @@ async function performApprovedFetch(request: PageFetchRequest, ctx: PageFetchCon
       return { ok: false, reason: 'network', message: `${url.hostname} did not answer within 30 seconds.` };
     }
     return { ok: false, reason: 'network', message: `The app could not reach ${url.hostname}. ${message}` };
+  }
+}
+
+/** Do the first bytes match the image type the header claimed? (jpeg ff d8 ff, png 89 'PNG', gif 'GIF8', webp 'RIFF'....'WEBP'.) */
+function looksLikePicture(type: string, b: Buffer): boolean {
+  switch (type) {
+    case 'image/jpeg': return b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff;
+    case 'image/png': return b.length >= 8 && b.toString('latin1', 0, 8) === '\x89PNG\r\n\x1a\n';
+    case 'image/gif': return b.length >= 4 && b.toString('latin1', 0, 4) === 'GIF8';
+    case 'image/webp': return b.length >= 12 && b.toString('latin1', 0, 4) === 'RIFF' && b.toString('latin1', 8, 12) === 'WEBP';
+    default: return false;
   }
 }

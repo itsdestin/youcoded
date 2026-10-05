@@ -441,7 +441,7 @@ class PagesService {
     if (!door.ok) return { ok: false, refusal: door.refusal };
     const c = door.ctx.connections.find((x) => x.id === connectionId);
     if (!c || c.kind !== 'device') return { ok: false, refusal: { ok: false, reason: 'not-approved', message: 'This page has no home device connection by that name.' } };
-    return checkDeviceSocketAccess(`http://${c.address}${c.videoProfile?.socketPath ?? '/api/websocket'}`, door.ctx);
+    return checkDeviceSocketAccess(`http://${c.address}${c.videoProfile?.socketPath ?? '/api/websocket'}`, door.ctx, c.id);
   }
 
   private noteFreshness(id: string, succeeded: boolean): void {

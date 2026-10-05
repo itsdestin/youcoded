@@ -82,6 +82,20 @@ export function describeConnection(c: PageConnection): { what: string; limit: st
   }
 }
 
+/** Extra plain lines for a device whose manifest asks for more than ordinary look-ups: a live connection
+ *  (a login greeting or a "logged in" reply means the page keeps a socket open) and camera video. Only the
+ *  fields that are present produce a line, so a device that asks for neither shows nothing new.
+ *  WHY: both ride the approval fingerprint, so the person was approving them without being told. */
+const LIVE_CONNECTION_LINE = 'Keeps a live connection open for instant updates.';
+const CAMERA_VIDEO_LINE = 'Can play camera video through the app.';
+function deviceExtraLines(c: PageConnection): string[] {
+  if (c.kind !== 'device') return [];
+  const lines: string[] = [];
+  if (c.socketHello || c.socketReady) lines.push(LIVE_CONNECTION_LINE);
+  if (c.videoProfile) lines.push(CAMERA_VIDEO_LINE);
+  return lines;
+}
+
 /** Home-device deck, S-plain-connection: most home devices only speak the
  *  unencrypted form of web traffic, so the card says what that means rather
  *  than hiding it. Tailscale encrypts on its own, which is why the line says
@@ -174,6 +188,7 @@ function ConnectionLine({ c, children, small }: { c: PageConnectionStatus; child
       <div className={`${small ? 'text-xs' : 'text-sm'} text-fg-2 leading-relaxed`}>
         {withAddress(words.what, addressOf(c), c.kind === 'device')} <span className="text-fg-dim">{words.limit}</span>
       </div>
+      {deviceExtraLines(c).map((line) => <div key={line} className={`${small ? 'text-xs' : 'text-sm'} text-fg-2 leading-relaxed`} data-device-extra>{line}</div>)}
       {children}
     </div>
   );

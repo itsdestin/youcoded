@@ -14,6 +14,7 @@ import { PageConnectionsStore, CONNECTIONS_FILE } from '../src/main/pages/connec
 import { initPagesService } from '../src/main/pages/pages-service';
 import { covers, fingerprint, parseConnections } from '../src/main/pages/page-connections';
 import { cleanDeviceAddress, deviceAddressProblem, urlMatchesDevice } from '../src/shared/page-device-address';
+import { checkDeviceSocketAccess } from '../src/main/pages/page-socket';
 import { assertHomeHttpUrl, NetGuardError } from '../src/main/harness/tools/net-guard';
 
 const HA = {
@@ -38,7 +39,7 @@ describe('which addresses count as a device in the home', () => {
   it.each([
     'api.openweathermap.org', '8.8.8.8', '93.184.216.34:443', '127.0.0.1:8123', 'localhost:8123',
     '169.254.1.1', '172.32.0.1', '100.128.0.1', '192.168.4.54:0', '192.168.4.54:70000',
-    'user@192.168.4.54', '192.168.4.54/path', '', '   ', 'homeassistant', 'evil.local.attacker.com',
+    '100.100.100.200', '100.100.100.200:8123', 'user@192.168.4.54', '192.168.4.54/path', '', '   ', 'homeassistant', 'evil.local.attacker.com',
   ])('%s is refused', (raw) => expect(cleanDeviceAddress(raw)).toBeNull());
 
   it('explains a refusal in words, never "fine"', () => {
@@ -46,6 +47,16 @@ describe('which addresses count as a device in the home', () => {
     expect(deviceAddressProblem('127.0.0.1')).toContain('this computer');
     expect(deviceAddressProblem('8.8.8.8')).toContain('not a home');
     expect(deviceAddressProblem('')).toContain('Type the address');
+    expect(deviceAddressProblem('100.100.100.200')).toContain('cloud service');
+  });
+
+  // F5: a cloud metadata address inside Tailscale's range is never "home", at approval or at dial time.
+  it('refuses the Alibaba metadata address at approval and when dialled, but not its neighbours', async () => {
+    expect(parseConnections([{ ...HA, address: '100.100.100.200:8123' }])).toEqual([]);
+    await expect(assertHomeHttpUrl('http://100.100.100.200/')).rejects.toThrow(/not an address inside your home/);
+    await expect(assertHomeHttpUrl('http://100.100.100.201/')).resolves.toBeInstanceOf(URL);
+    const lookup = async () => [{ address: '100.100.100.200', family: 4 }];
+    await expect(assertHomeHttpUrl('http://sneaky.local/', lookup)).rejects.toThrow(/outside your home network/);
   });
 
   it('matches a request on host AND port', () => {
@@ -221,6 +232,17 @@ describe('reaching the device', () => {
     expect(JSON.stringify(sneaky)).not.toContain(KEY);
   });
 
+  // F3: the header alone is not enough; the bytes must be that image type.
+  it('refuses text labelled as an image, so a picture cannot read the key back', async () => {
+    await allowed();
+    fetchMock.mockResolvedValueOnce(new Response(`{"echo":"${KEY}"}`, { status: 200, headers: { 'content-type': 'image/png' } }));
+    const r = await service.fetch('personal:home', { url: 'http://192.168.4.54:8123/api/echo', as: 'picture' });
+    expect(r).toMatchObject({ ok: false });
+    expect(JSON.stringify(r)).not.toContain(Buffer.from(KEY).toString('base64').slice(0, 12));
+    fetchMock.mockResolvedValueOnce(new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]), { status: 200, headers: { 'content-type': 'image/png' } }));
+    expect(await service.fetch('personal:home', { url: 'http://192.168.4.54:8123/api/x.png', as: 'picture' })).toMatchObject({ ok: true });
+  });
+
   // Recorded clips (spec 2026-10-04, Part 3): as:'video' answers a data: link
   // for a <video>, and refuses anything that is not a real, small mp4.
   describe('a recorded clip', () => {
@@ -278,5 +300,23 @@ describe('reaching the device', () => {
     expect((await service.listAndWatch())[0].connections).toMatchObject([{ approved: false }]);
     const r = await service.fetch('personal:home', { url: 'http://192.168.4.54:8123/api/states' });
     expect(r).toMatchObject({ ok: false, reason: 'not-approved' });
+  });
+});
+
+
+// F4: a video names its connection; the check must use THAT one, not the first at the same address.
+describe('two device lines at one address', () => {
+  it('a named connection is the one used', async () => {
+    const conns = parseConnections([
+      { id: 'a', kind: 'device', service: 'First', address: '192.168.4.54:8123', access: 'full', socketHello: '{"type":"auth","access_token":"{{key}}"}' },
+      { id: 'b', kind: 'device', service: 'Second', address: '192.168.4.54:8123', access: 'full' },
+    ]);
+    expect(conns.map((c) => c.id)).toEqual(['a', 'b']);
+    const approved = Object.fromEntries(conns.map((c) => [c.id, fingerprint(c)]));
+    const ctx = { signal: new AbortController().signal, connections: conns, approved, credential: async () => ({ in: 'header' as const, param: 'authorization', value: 'Bearer k', secret: 'k' }), lookup: async () => [] as never };
+    const first = await checkDeviceSocketAccess('http://192.168.4.54:8123/api/websocket', ctx);
+    expect(first.ok && first.connection.id).toBe('a');
+    const named = await checkDeviceSocketAccess('http://192.168.4.54:8123/api/websocket', ctx, 'b');
+    expect(named.ok && named.connection.id).toBe('b');
   });
 });

@@ -129,6 +129,8 @@ type DeviceConnection = Extract<PageConnection, { kind: 'device' }>;
 export async function checkDeviceSocketAccess(
   url: unknown,
   ctx: Pick<PageFetchContext, 'connections' | 'approved' | 'credential' | 'lookup' | 'signal'>,
+  /** When the caller named a connection (a video start does), THAT one is used, not just the first at the address. */
+  connectionId?: string,
 ): Promise<DeviceSocketAccess> {
   const no = (refusal: PageFetchResult): DeviceSocketAccess => ({ ok: false, refusal });
   // The page names its device the way it names it for a fetch — its http(s)
@@ -141,7 +143,9 @@ export async function checkDeviceSocketAccess(
   if (scheme === 'ws:' || scheme === 'wss:') httpUrl = new URL(httpUrl.toString().replace(/^ws/, 'http'));
   else if (scheme !== 'http:' && scheme !== 'https:') return no(refuse('bad-url', 'A socket exchange needs a ws:// or http:// address.'));
 
-  const connection = ctx.connections.find((c) => covers(c, httpUrl));
+  // WHY the named id: two device lines can share an address (different service/profile); picking the first
+  // that covers it handed back the wrong line's hello, key and deny list.
+  const connection = ctx.connections.find((c) => (connectionId === undefined || c.id === connectionId) && covers(c, httpUrl));
   if (!connection || connection.kind !== 'device') {
     return no(refuse('not-approved', `This page may not open a socket to ${httpUrl.hostname}. Only an allowed home device can be reached that way.`));
   }

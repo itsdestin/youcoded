@@ -35,6 +35,10 @@ export function isHomeIpv4(ip: string): boolean {
   if (a === 10) return true;
   if (a === 172 && b >= 16 && b <= 31) return true;
   if (a === 192 && b === 168) return true;
+  // WHY 100.100.100.200 is carved out: it sits inside Tailscale's 100.64/10 but is Alibaba Cloud's metadata
+  // address, which the video code's never-dial list (net-guard isNeverDialIp) already refuses. A "home
+  // device" there would let a page reach a cloud metadata service. The only never-dial address inside a home range.
+  if (a === 100 && b === 100 && c === 100 && d === 200) return false;
   if (a === 100 && b >= 64 && b <= 127) return true; // Tailscale / CGNAT
   return false;
 }
@@ -84,6 +88,7 @@ export function deviceAddressProblem(raw: string): string {
   if (!text) return 'Type the address of the device.';
   const host = text.replace(/^https?:\/\//i, '').split(/[:/]/)[0].toLowerCase();
   if (host === 'localhost' || host.startsWith('127.')) return 'That address is this computer, not a device in your home.';
+  if (host === '100.100.100.200') return 'That address belongs to a cloud service, not a device in your home.';
   if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) return 'That is not a home or Tailscale address. Home addresses start with 192.168, 10, 172.16–31 or 100.';
   if (host.includes('.')) return 'That looks like a website. Only devices in your home can be used here, such as 192.168.1.20:8123 or homeassistant.local:8123.';
   return 'Type an address like 192.168.1.20:8123 or homeassistant.local:8123.';
