@@ -605,6 +605,33 @@ export class SessionManager extends EventEmitter {
     return true;
   }
 
+  /**
+   * The terminal finished parsing `chars` characters of this session's output: tell the PTY worker so
+   * it can lift its brake. WHY here and not in the worker's own bookkeeping: only the renderer knows
+   * when xterm has actually consumed the text — that is the whole point of flow control (the old
+   * pipeline forwarded everything instantly and xterm silently discarded the overflow).
+   * Fire-and-forget; a session with no worker (native) or a closed channel is simply a no-op.
+   */
+  ackOutput(id: string, chars: number): boolean {
+    const session = this.sessions.get(id);
+    if (!session || !session.worker) return false;
+    try { session.worker.send({ type: 'ack', n: chars }); } catch { return false; }
+    return true;
+  }
+
+  /**
+   * Ask the program to repaint its whole screen: the PTY worker nudges the PTY size (one column narrower, then back).
+   * The single owner of that nudge — main's router (a cut pre-mount buffer) and the renderer (a cut hidden-window
+   * backlog, via session:terminal-repaint) both come here, so overlapping requests and real resizes (a phone's
+   * included) are arbitrated in one place. Not on Windows (the worker skips it: ConPTY re-emits its buffer).
+   */
+  bounceSize(id: string): boolean {
+    const session = this.sessions.get(id);
+    if (!session || !session.worker) return false;
+    try { session.worker.send({ type: 'bounce' }); } catch { return false; }
+    return true;
+  }
+
   /** Claude Code ran its first hook for this session: its startup dialogs are behind it. */
   markStarted(id: string): void {
     const s = this.sessions.get(id);

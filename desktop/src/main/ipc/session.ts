@@ -60,7 +60,12 @@ export interface SessionOps {
    *  claimed before its first await (tests/ipc-handlers-create-ownership.test.ts). */
   createSession(sender: { id: number; isDestroyed?: () => boolean } | null, opts: any): Promise<any>;
   destroySession(sessionId: string): Promise<boolean>;
-  signalTerminalReady(sessionId: string): void;
+  /** `windowId` is the window whose terminal mounted (ctx.sender.id); flow control needs to know WHICH terminal is ready. */
+  signalTerminalReady(sessionId: string, windowId?: number): void;
+  /** Terminal flow control (perf): a window finished drawing `chars` characters of this session's output. */
+  ackTerminalOutput(sessionId: string, windowId: number | undefined, chars: number): void;
+  /** A window cut its hidden-window backlog and asks the program to repaint once. */
+  requestTerminalRepaint(sessionId: string, windowId?: number): void;
   /** One page of a conversation's history: the SAME body for a window and a phone (resume boundaries, watchers, the transcript
    *  file by id). WHY one (one-core R5-2): see ipc-handlers.ts transcriptPage. */
   transcriptPage(req: TranscriptPageRequest): Promise<TranscriptPageResult>;
@@ -251,7 +256,19 @@ const sessionEntries: MainChannelDef[] = [
   // such gate (it replays the PTY buffer on connect), so the message is dropped silently.
   defineChannel({
     name: IPC.TERMINAL_READY, kind: 'on', desktopOnly: true, refusal: { kind: 'silent' },
-    handler: ({ sessionId }) => { ops().signalTerminalReady(sessionId); },
+    handler: ({ sessionId }, ctx) => { ops().signalTerminalReady(sessionId, ctx.sender?.id); },
+  }),
+  // Terminal flow control (perf, 2026-10-04): "this terminal finished drawing N characters" lets main lift the brake on a flooding program.
+  // WHY desktopOnly + silent refusal: only a desktop window's OWN terminal may release the brake, so a slow phone can never stall the
+  // desktop's program; the shim does not send it and a stray/older client's copy is dropped before the handler runs.
+  defineChannel({
+    name: IPC.TERMINAL_ACK, kind: 'on', desktopOnly: true, refusal: { kind: 'silent' },
+    handler: ({ sessionId, chars }, ctx) => { ops().ackTerminalOutput(sessionId, ctx.sender?.id, chars); },
+  }),
+  // A hidden window's backlog was cut: ask the program to repaint once. Same window-only rule (a phone must not resize the desktop's terminal).
+  defineChannel({
+    name: IPC.TERMINAL_REPAINT, kind: 'on', desktopOnly: true, refusal: { kind: 'silent' },
+    handler: ({ sessionId }, ctx) => { ops().requestTerminalRepaint(sessionId, ctx.sender?.id); },
   }),
   // One device at a time answers a menu by verified navigation — the SAME lock the computer's windows use.
   defineChannel({ name: IPC.SESSION_MENU_LOCK, kind: 'handle', handler: ({ sessionId, holder, action }) => menuAnswerLock.handle(sessionId, holder, action) }),

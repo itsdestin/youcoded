@@ -260,3 +260,89 @@ describe('advanceStream: the groups a growing message is drawn as', () => {
     }
   });
 });
+
+// An open code fence must be recognised however the streamed words happen to line up.
+// WHY (2026-10-04, perf fix 5): the splitter records where an open fence's code starts, but only once the
+// opening line has its line ending. When that line ending arrived in an update that was then ADDED to the
+// previous piece without parsing, the record stayed "unknown" for the rest of the fence, so the fence was
+// never drawn in chunks and every word re-read and re-coloured all of it (the app sat at 85-100% busy
+// writing a 500-line file). This path has now been alignment-dependent three times, so the test is a matrix:
+// what comes before the fence x how many characters arrive per update x the fence's shape.
+describe('an open code fence is found however the words arrive', () => {
+  const body = (n: number) => Array.from({ length: n }, (_, i) => `  const value${i} = compute(${i}, "row-${i}");`).join('\n');
+  const prefaces: Record<string, string> = {
+    'after a blank line': 'Here is the whole file:\n\n',
+    'right after a paragraph line, no blank line': 'Here is the whole file:\n',
+    'after a line holding only spaces, indenting the opener': 'Here is the whole file:\n  ',
+    'right after a list item': '- first item\n',
+    'right after a heading': '# The file\n',
+    'as the very first thing in the message': '',
+    // A message already split into pieces (an earlier paragraph), then a fence with no blank line before it: the
+    // whole opener and its line ending can arrive in one update that is added to the live piece.
+    'after an earlier paragraph, then a paragraph line with no blank line': 'Intro.\n\nHere is the whole file:\n',
+    'after an earlier paragraph, then a line of spaces': 'Intro.\n\nHere is the whole file:\n  ',
+    'after an earlier paragraph, then a list item': 'Intro.\n\n- first item\n',
+  };
+  const shapes: Record<string, [string, string]> = {
+    'backticks with a language': ['```ts', '```'],
+    'bare backticks': ['```', '```'],
+    'tildes': ['~~~', '~~~'],
+    'four backticks': ['````js', '````'],
+  };
+  const steps = [1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 20, 40];
+
+  /** Streams `message` `step` characters at a time; returns the update lengths at which the open fence was NOT recorded. */
+  function missesFor(message: string, windows: [number, number][], step: number): number[] {
+    let view: StreamView = startStream('');
+    const missing: number[] = [];
+    for (let end = step; end < message.length + step; end += step) {
+      const len = Math.min(end, message.length);
+      view = advanceStream(view, message.slice(0, len));
+      if (windows.some(([from, to]) => len >= from && len < to) && view.groups.at(-1)!.fenceAt === undefined) missing.push(len);
+    }
+    return missing;
+  }
+
+  for (const [pName, preface] of Object.entries(prefaces)) {
+    for (const [fName, [open, close]] of Object.entries(shapes)) {
+      it(`${fName}, ${pName}: recorded at every update size`, () => {
+        const opening = `${open}\n`;
+        const message = `${preface}${opening}export function generated() {\n${body(60)}\n}\n${close}\n`;
+        const from = message.indexOf(opening, preface.length) + opening.length;
+        const to = message.lastIndexOf(close);
+        const bad: string[] = [];
+        for (const step of steps) {
+          const m = missesFor(message, [[from, to]], step);
+          if (m.length) bad.push(`${step}/update: first miss after ${JSON.stringify(message.slice(Math.max(0, m[0] - 12), m[0]))}`);
+        }
+        expect(bad).toEqual([]);
+      });
+    }
+  }
+
+  it('an opener split as two backticks then the rest is recorded', () => {
+    const message = `Here is the file:\n\`\`\`ts\n${body(30)}\n\`\`\`\n`;
+    const cut = message.indexOf('```') + 2;
+    let view: StreamView = startStream('');
+    for (const part of [message.slice(0, cut), message.slice(0, cut + 4)]) view = advanceStream(view, part);
+    expect(view.groups.at(-1)!.fenceAt).not.toBeUndefined();
+  });
+
+  it('a second fence after a closed one is recorded too', () => {
+    const one = `First:\n\n\`\`\`ts\n${body(30)}\n\`\`\`\nThen directly after:\n\`\`\`py\n${body(30)}\n`;
+    const secondOpen = one.indexOf('```py\n') + 6;
+    for (const step of steps) {
+      expect(`${step}: ${missesFor(one, [[secondOpen, one.length + 1]], step).length}`).toBe(`${step}: 0`);
+    }
+  });
+
+  it('the splitter reads a bounded amount of text per update for a 300-line fence', () => {
+    const message = `Here is the file:\n\`\`\`ts\n${body(300)}\n\`\`\`\n`;
+    for (const step of [3, 7]) {
+      parsed.chars = 0;
+      missesFor(message, [], step);
+      // Parsed once at the opening line and once at the close, never per update: well under 4x the message.
+      expect(parsed.chars).toBeLessThan(4 * message.length);
+    }
+  });
+});

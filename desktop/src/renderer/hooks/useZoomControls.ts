@@ -74,6 +74,11 @@ export function useZoomControls() {
   const pinchFlushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    // True only when the page has POSITIVELY identified itself as the desktop app — see the long WHY where the
+    // wheel listener is registered. WHY not getPlatform(): that falls back to 'electron' when nothing is set yet,
+    // and a remote browser that mounted before its platform was known would get a passive listener for good and
+    // zoom the page twice (review fix 6). Here "unknown" means cancelable. Read at registration, not at import.
+    const SCROLL_NEVER_WAITS = (window as any).__PLATFORM__ === 'electron';
     const handler = (e: WheelEvent) => {
       if (!e.ctrlKey) return; // Only intercept pinch (ctrlKey) wheel events
       // The artifact viewer owns pinch/ctrl+wheel over a picture. This listener
@@ -81,7 +86,9 @@ export function useZoomControls() {
       // bail BOTH handlers run and a single pinch resizes the app and the image
       // together — two zoom readouts moving at once in opposite corners.
       if ((e.target as Element | null)?.closest?.('[data-zoomable]')) return;
-      e.preventDefault();
+      // Only a cancelable listener may cancel. On the desktop app the listener is passive (see below), where
+      // the call would do nothing but log a console warning on every pinch tick.
+      if (!SCROLL_NEVER_WAITS) e.preventDefault();
 
       // Accumulate delta and flush after a short pause — prevents one pinch
       // gesture from firing dozens of IPC calls
@@ -99,8 +106,18 @@ export function useZoomControls() {
         }
       }, 50);
     };
-    // Must use { passive: false } to allow preventDefault on wheel
-    window.addEventListener('wheel', handler, { passive: false, capture: true });
+    // WHY the platform split (measured 2026-10-04, docs/active/investigations/2026-10-04-performance-gap-review.md 4d):
+    // a NON-passive wheel listener on window makes the browser ask the page's main thread before it scrolls
+    // ANYTHING, so whenever the page is busy (a reply streaming, a terminal flood) every scroll waits. On the
+    // desktop app that wait was ~400 ms of a 400 ms main-thread block, in all 24 of 24 trials. A passive listener
+    // lets the compositor scroll on its own; this listener still sees every ctrl+wheel and still does the zoom,
+    // it just cannot cancel the browser's own reaction. Desktop does not need to: the app turns the browser's
+    // pinch zoom off (main.ts setVisualZoomLevelLimits(1, 1)) and Electron's own ctrl+wheel reaction is only a
+    // 'zoom-changed' event nobody listens to, so there is nothing to cancel (measured: a ctrl+wheel over a
+    // scroller zooms the app and moves nothing). Remote browsers and Android WebView keep the cancelable
+    // listener: there the browser's OWN page zoom is what preventDefault stops, so removing it would zoom the
+    // page twice. Those surfaces are unchanged from before.
+    window.addEventListener('wheel', handler, { passive: SCROLL_NEVER_WAITS, capture: true });
     return () => window.removeEventListener('wheel', handler, true);
   }, []);
 

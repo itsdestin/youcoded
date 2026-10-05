@@ -1,7 +1,7 @@
 import type { SessionChatState } from './chat-types';
 import { HISTORY_EXPAND_PROMPT_ID } from './chat-types';
 import { getVisibleScreenText } from '../hooks/terminal-registry';
-import { readInputFocus, inputIsBlocked, type InputBlock } from '../../shared/cc-input-focus';
+import { readInputFocus, inputIsBlocked, screenIsUnpainted, type InputBlock } from '../../shared/cc-input-focus';
 import { getCapabilities } from '../platform';
 import { getScreenInputBlock } from './screen-input-store';
 
@@ -95,7 +95,19 @@ export function screenInputBlock(sessionId: string): InputBlock | null {
   // screen asks that one reading, so a phone refuses a send typed into an open "Switch model?" exactly as the window does, and the two cannot disagree.
   // Only a host with no record of its own (the Android app's own runtime) reads its own terminal here, and reports it to its host (usePromptDetector).
   if (getCapabilities().sessionRecord) return getScreenInputBlock(sessionId);
-  const focus = readInputFocus(getVisibleScreenText(sessionId));
+  const screen = getVisibleScreenText(sessionId);
+  // WHY this is only on the own-terminal branch (merge with one-core): wherever the computer reads the terminal (windows and phones) its own
+  // copy never goes blank on a window reload, so the re-mount problem below cannot arise there; a host that reads its own terminal still can.
+  // UNKNOWN is not a pop-up (2026-10-05): a terminal re-mounted after a reload/crash/tear-off is blank or holds one stray
+  // row until the program repaints; refusing the send there told users an idle session "is waiting on something". Ask for the
+  // repaint (main rate-limits it) and let the send through — real prompts are still caught by the chat-state checks, and a
+  // genuine pop-up always has an edge rule and body, so it never counts as unpainted. (Waiting for the frame is not done:
+  // every caller is synchronous and the repaint lands a moment after the send.)
+  if (screen != null && screenIsUnpainted(screen)) {
+    try { (globalThis as any).window?.claude?.session?.requestRepaint?.(sessionId); } catch { /* no bridge: nothing to ask */ }
+    return null;
+  }
+  const focus = readInputFocus(screen);
   return inputIsBlocked(focus) ? (focus as InputBlock) : null;
 }
 

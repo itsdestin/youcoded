@@ -1,8 +1,33 @@
 /** Format an epoch-ms timestamp as a short time string for chat bubbles (e.g. "2:34 PM"). */
 export function formatBubbleTime(timestamp: number): string {
+  // WHY a cached formatter (2026-10-04, perf fix 5): toLocaleTimeString builds a brand-new Intl formatter on
+  // EVERY call, and the streaming bubble calls this on every redraw (60+ a second while a reply streams). The
+  // CPU profile put it at ~1.5% of the whole window's time. Same output as
+  // toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }): same locale list, same options.
+  // A bad timestamp keeps the old path: Intl's format() throws on an invalid date where toLocaleTimeString
+  // returns "Invalid Date".
   const d = new Date(timestamp);
-  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (Number.isNaN(d.getTime())) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  // WHY the zone check, and why on NOW (not on the message's own date): an Intl formatter fixes the time zone when
+  // it is built, while toLocaleTimeString re-read it on every call, so a system zone change (travel, a laptop
+  // waking elsewhere) would otherwise keep the old zone until restart. The formatter already knows a zone's
+  // historical offsets, so a message on either side of a daylight-saving change is shown correctly by one
+  // formatter; only a change of ZONE needs a rebuild. (abs(): a clock set backwards also re-checks.) Comparing each message's own offset rebuilt it every time two
+  // neighbouring messages straddled the change. The current offset is re-read at most once a minute.
+  const now = Date.now();
+  if (!bubbleTimeFormat || Math.abs(now - bubbleTimeCheckedAt) >= 60_000) {
+    bubbleTimeCheckedAt = now;
+    const offset = new Date(now).getTimezoneOffset();
+    if (!bubbleTimeFormat || offset !== bubbleTimeOffset) {
+      bubbleTimeFormat = new Intl.DateTimeFormat([], { hour: 'numeric', minute: '2-digit' });
+      bubbleTimeOffset = offset;
+    }
+  }
+  return bubbleTimeFormat.format(d);
 }
+let bubbleTimeFormat: Intl.DateTimeFormat | null = null;
+let bubbleTimeOffset = NaN;
+let bubbleTimeCheckedAt = 0;
 
 /**
  * Compact relative-time label ("just now", "5m ago", "3h ago", "2d ago", then

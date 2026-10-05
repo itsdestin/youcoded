@@ -440,6 +440,21 @@ describe('SessionManager', () => {
     expect(received).toEqual(['hello world']);
   });
 
+  // Terminal flow control: the renderer's "parsed N characters" and "a terminal re-attached" reach the
+  // PTY worker as 'ack' messages — that is the only thing that ever lifts its brake.
+  it('relays terminal acknowledgements to the PTY worker', () => {
+    const info = manager.createSession({ name: 'test', cwd: tmpDir, skipPermissions: false });
+    mockWorker.send.mockClear();
+    expect(manager.ackOutput(info.id, 1234)).toBe(true);
+    expect(mockWorker.send).toHaveBeenCalledWith({ type: 'ack', n: 1234 });
+    // The repaint nudge: the REAL manager must deliver 'bounce' to the worker (a missing method once made it a silent no-op).
+    expect(manager.bounceSize(info.id)).toBe(true);
+    expect(mockWorker.send).toHaveBeenCalledWith({ type: 'bounce' });
+    // an unknown session is a quiet no-op, never a throw
+    expect(manager.ackOutput('nope', 5)).toBe(false);
+    expect(manager.bounceSize('nope')).toBe(false);
+  });
+
   it('emits session-exit when worker reports exit', () => {
     manager.createSession({ name: 'test', cwd: tmpDir, skipPermissions: false });
 

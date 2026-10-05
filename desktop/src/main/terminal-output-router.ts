@@ -1,0 +1,189 @@
+// PTY output routing to desktop terminals, with buffering until a terminal mounts and flow control
+// (extracted from ipc-handlers.ts, 2026-10-04 review round). See terminal-flow.ts for the brake rules.
+import { TerminalFlow, watchWebContents } from './terminal-flow';
+import { trimOldest, type Chunk, type TrimMemo } from '../shared/pty-trim';
+
+// Output waiting for a terminal to mount is capped at the newest this-many characters — the same
+// "keep the tail" rule as the remote ring buffer — instead of growing without bound.
+const PENDING_CAP = 4 * 1024 * 1024;
+// Cut down to this much at once (not just under the cap), so the boundary scan runs once per ~1 M of output, not per chunk.
+const PENDING_TARGET = 3 * 1024 * 1024;
+// Remember this many ended sessions so a late "ready" from a closing window cannot resurrect their books.
+const ENDED_MEMORY = 512;
+
+export interface RouterDeps {
+  sessionManager: {
+    on(event: string, fn: (...args: any[]) => void): unknown;
+    ackOutput(sessionId: string, chars: number): unknown;
+    /** Make the program repaint (PTY size nudge in the worker). REQUIRED: an optional call here once silently did nothing. */
+    bounceSize(sessionId: string): unknown;
+  };
+  windowRegistry?: { on(event: string, fn: () => void): unknown; getOwner(sessionId: string): number | undefined };
+  routeTargets(sessionId: string): number[];
+  /** One-core signature: the payload goes as an ARRAY of arguments. */
+  sendForSession(sessionId: string, channel: string, args: any[]): void;
+  fromId(id: number): { isDestroyed(): boolean; on(e: string, f: (...a: any[]) => void): unknown; removeListener(e: string, f: (...a: any[]) => void): unknown } | undefined;
+}
+
+/** What the router hands back. ready/ack/repaint are called by the session table entries (main/ipc/session.ts)
+ *  with the id of the window that sent them; `end` is the session-exit cleanup. */
+export interface TerminalOutputRouter {
+  /** A terminal mounted in window `wid` (session:terminal-ready). */
+  ready(sessionId: string, wid: number | undefined): void;
+  /** Window `wid` finished drawing `chars` characters (session:terminal-ack). */
+  ack(sessionId: string, wid: number | undefined, chars: unknown): void;
+  /** Window `wid` cut its hidden-window backlog and wants a repaint (session:terminal-repaint). */
+  repaint(sessionId: string, wid: number | undefined): void;
+  end(sessionId: string): void;
+}
+
+/** Wire pty-output -> windows, terminal ready/ack handling and flow control. */
+export function createTerminalOutputRouter(d: RouterDeps): TerminalOutputRouter {
+  // Buffer output per-session until the renderer signals its terminal is mounted. This prevents losing the
+  // initial trust prompt on slow systems where PTY output arrives before TerminalView registers its listener.
+  const pendingOutput = new Map<string, Chunk[]>();
+  // A terminal that said "ready" before main had made its window a target of the session (buddy subscribe or
+  // owner assignment landing a moment later): remembered, and promoted the moment routing includes it. The
+  // renderer says ready once per mount and never retries, so dropping it would leave a blank terminal.
+  const awaitingReady = new Map<string, Set<number>>();
+  const ended = new Set<string>();
+  // Per session: scan memo for the pre-mount cut, and whether a cut happened (then the program must repaint once the terminal mounts).
+  const trimMemos = new Map<string, TrimMemo>();
+  const trimmed = new Set<string>();
+  const pendingChars = new Map<string, number>();
+  const readySessions = new Set<string>();
+  // Sessions whose output has already been drawn into some terminal. A terminal that mounts for one of these is a RE-mount
+  // (page reload, renderer crash, tear-off to a new window, a buddy window opening): its xterm is empty and nothing makes
+  // the program redraw, so it needs one repaint. Kept across reloads on purpose (reconcile drops readySessions, not this).
+  const drew = new Set<string>();
+  // Shared 1 s per-session limit for every repaint request (renderer-initiated and re-mount), so a misbehaving
+  // renderer or a double ready cannot bounce a PTY in a loop; the nudge itself is arbitrated in the worker.
+  const lastRepaintAt = new Map<string, number>();
+  const requestRepaint = (sessionId: string) => {
+    const t = Date.now();
+    if (t - (lastRepaintAt.get(sessionId) ?? 0) < 1000) return;
+    lastRepaintAt.set(sessionId, t);
+    d.sessionManager.bounceSize(sessionId);
+  };
+
+  const reconcile = (lost: string[] = []) => {
+    for (const [sid, wids] of [...awaitingReady]) {
+      const targets = d.routeTargets(sid);
+      for (const wid of [...wids]) {
+        if (!targets.includes(wid)) { const wc = d.fromId(wid); if (!wc || wc.isDestroyed()) wids.delete(wid); continue; }
+        wids.delete(wid);
+        handleReady(sid, wid);
+      }
+      if (wids.size === 0) awaitingReady.delete(sid);
+    }
+    flow.recompute();
+    // A session nobody can draw falls back to buffering until a terminal mounts again.
+    for (const sid of readySessions) if (lost.includes(sid) || !flow.hasConsumer(sid)) readySessions.delete(sid);
+  };
+  const flow: TerminalFlow = new TerminalFlow({
+    targets: d.routeTargets,
+    isOwner: (sid, wid) => d.windowRegistry?.getOwner(sid) === wid,
+    alive: (wid) => { const wc = d.fromId(wid); return !!wc && !wc.isDestroyed(); },
+    release: (sid, n) => { d.sessionManager.ackOutput(sid, n); },
+    now: () => Date.now(),
+    watch: (wid, gone) => { const wc = d.fromId(wid); if (wc) watchWebContents(wc, gone); },
+    lost: (sids) => reconcile(sids),
+  });
+  d.windowRegistry?.on('changed', () => reconcile());
+
+  // Perf: output goes to the per-session channel only (the old global broadcast is gone — App.tsx subscribes per session).
+  d.sessionManager.on('pty-output', (sessionId: string, data: string) => {
+    const routed = readySessions.has(sessionId);
+    if (routed) {
+      drew.add(sessionId);
+      d.sendForSession(sessionId, `pty:output:${sessionId}`, [data]);
+    } else {
+      let buf = pendingOutput.get(sessionId);
+      if (!buf) { buf = []; pendingOutput.set(sessionId, buf); }
+      buf.push({ s: data });
+      let held = (pendingChars.get(sessionId) ?? 0) + data.length;
+      if (held > PENDING_CAP) {
+        // Keep the newest text, cut at a line start outside any escape sequence, with the terminal's sticky modes restored.
+        let memo = trimMemos.get(sessionId);
+        if (!memo) { memo = { skipUntil: 0, scans: 0 }; trimMemos.set(sessionId, memo); }
+        const r = trimOldest(buf, PENDING_CAP, PENDING_TARGET, memo);
+        held += r.added - r.removed;
+        if (r.repaint) trimmed.add(sessionId);   // only text that repainted with relative moves / the alt screen needs a repaint
+      }
+      pendingChars.set(sessionId, held);
+    }
+    flow.output(sessionId, data.length, routed);
+  });
+
+  const handleReady = (sessionId: string, wid: number) => {
+    const ownerId = d.windowRegistry?.getOwner(sessionId);
+    // Only the session's PRIMARY terminal opens the pre-mount buffer; a second window mounting joins as a
+    // consumer without touching anyone else's books.
+    const primary = ownerId == null || ownerId === wid;
+    flow.ready(sessionId, wid, primary ? (pendingChars.get(sessionId) ?? 0) : 0);
+    // WHY: this terminal's xterm is new and empty, but the session already drew into an earlier one — the program will not
+    // redraw by itself, so the terminal stays blank and the chat send gate (which reads the screen) sees no input box.
+    // Any mounting window needs it (a non-primary buddy window's xterm is just as empty). The nudge runs in the worker AFTER
+    // the replay below is already queued ahead of it, so the repaint lands on top of the replayed text. A shell session
+    // redraws its prompt line too — harmless, the terminal was empty. Windows: the worker skips the nudge (see pty-worker.js
+    // 'bounce'); the new terminal's first fit sends a resize and ConPTY re-emits its buffer on a resize.
+    const remount = drew.has(sessionId);
+    if (!primary) { if (remount) requestRepaint(sessionId); return; }
+    readySessions.add(sessionId);
+    const buffered = pendingOutput.get(sessionId);
+    pendingOutput.delete(sessionId);
+    pendingChars.delete(sessionId);
+    for (const c of buffered ?? []) d.sendForSession(sessionId, `pty:output:${sessionId}`, [c.s]);
+    if (buffered?.length) drew.add(sessionId);
+    trimMemos.delete(sessionId);
+    // Text was cut from the front: the cursor position is unknown, so the program repaints once (size nudge, in the worker).
+    // That one nudge also serves a re-mount — never two.
+    if (trimmed.delete(sessionId)) { lastRepaintAt.set(sessionId, Date.now()); d.sessionManager.bounceSize(sessionId); }
+    else if (remount) requestRepaint(sessionId);
+  };
+
+  // A terminal mounted in window `wid`.
+  const ready = (sessionId: string, wid: number | undefined) => {
+    if (typeof sessionId !== 'string' || wid == null) return;
+    if (ended.has(sessionId)) return;
+    if (!d.routeTargets(sessionId).includes(wid)) {
+      // Not routed to yet (see awaitingReady): remember it instead of losing it.
+      let set = awaitingReady.get(sessionId);
+      if (!set) { set = new Set(); awaitingReady.set(sessionId, set); }
+      if (!set.has(wid)) {
+        set.add(wid);
+        // The page that said ready may reload or navigate before routing includes it: its ready died with it
+        // (the new page sends its own), so forget this one — otherwise it is promoted later into a page with no terminal.
+        const wc = d.fromId(wid);
+        if (wc) watchWebContents(wc, () => { awaitingReady.get(sessionId)?.delete(wid); });
+      }
+      return;
+    }
+    handleReady(sessionId, wid);
+  };
+
+  // The terminal finished drawing `chars`: believed from any window that is a terminal for this session and
+  // receives its output; the program follows the slowest of them.
+  const ack = (sessionId: string, wid: number | undefined, chars: unknown) => {
+    if (typeof sessionId !== 'string' || wid == null || typeof chars !== 'number' || !Number.isFinite(chars) || chars <= 0) return;
+    flow.ack(sessionId, wid, Math.min(chars, 1e9));
+  };
+
+  // The window cut its hidden-window backlog and is showing again: ask the program to repaint. Accepted only from a window
+  // this session's output is ROUTED to (its routing targets — not necessarily a consumer or the owner), and at most once a
+  // second per session so a misbehaving renderer cannot bounce a PTY in a loop; the nudge itself is arbitrated in the worker.
+  const repaint = (sessionId: string, wid: number | undefined) => {
+    if (typeof sessionId !== 'string' || wid == null || !d.routeTargets(sessionId).includes(wid)) return;
+    requestRepaint(sessionId);
+  };
+
+  const end = (sessionId: string) => {
+    pendingOutput.delete(sessionId); pendingChars.delete(sessionId); flow.end(sessionId); readySessions.delete(sessionId);
+    awaitingReady.delete(sessionId); lastRepaintAt.delete(sessionId); drew.delete(sessionId);
+    trimMemos.delete(sessionId); trimmed.delete(sessionId);
+    ended.add(sessionId);
+    if (ended.size > ENDED_MEMORY) ended.delete(ended.values().next().value as string);
+  };
+
+  return { ready, ack, repaint, end };
+}

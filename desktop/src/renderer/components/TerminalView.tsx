@@ -7,6 +7,7 @@ import '@xterm/xterm/css/xterm.css';
 import { usePtyOutput } from '../hooks/useIpc';
 import { usePtyRawBytes } from '../hooks/usePtyRawBytes';
 import { usePtyReset } from '../hooks/usePtyReset';
+import { createTerminalFeeder, type TerminalFeeder } from '../hooks/terminal-feeder';
 import { registerTerminal, unregisterTerminal, notifyBufferReady, noteAtlasClear } from '../hooks/terminal-registry';
 import { createTerminalKeyHandler } from './terminal-key-handler';
 import { attachRenderPause, type RenderPause } from './xterm-render-pause';
@@ -84,6 +85,11 @@ function TerminalView({ sessionId, visible }: Props) {
   // WHY: pauses this terminal's DRAWING (never its buffer) while hidden — see
   // xterm-render-pause.ts. Null when the installed xterm lacks the hook.
   const renderPauseRef = useRef<RenderPause | null>(null);
+  // WHY: the one place PTY text enters xterm — flow control (terminal-feeder.ts). It reports each
+  // parsed write back to main so a flooding program is braked instead of overrunning xterm's input
+  // limit, and it spends a hidden terminal's parsing sparingly. Rebuilt per session id.
+  const feederRef = useRef<{ id: string; feeder: TerminalFeeder } | null>(null);
+  const updateThumbRef = useRef<(() => void) | null>(null);
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
   // Previous `visible`, updated only inside the visibility effect (NOT on every
@@ -220,7 +226,18 @@ function TerminalView({ sessionId, visible }: Props) {
       thumb.style.top = `${top}px`;
       thumb.style.opacity = '0.55';
     };
-    terminal.onScroll(updateThumb);
+    // WHY coalesced to one animation frame (2026-10-04, found by a CPU profile of a flood's first 1.5 s): xterm
+    // scrolls on EVERY line, and each call here writes the thumb's style and then reads layout (clientHeight,
+    // offsetTop) — a forced layout per line, ~40% of the window's time (668 of 1,700 ms) and the ~230 ms long
+    // task at the start of every flood. One update per frame shows the same thumb. A hidden terminal skips it
+    // (nothing to see); the visibility effect below redraws the thumb when it is shown.
+    let thumbRaf: number | null = null;
+    const scheduleThumb = () => {
+      if (thumbRaf !== null || !visibleRef.current) return;
+      thumbRaf = requestAnimationFrame(() => { thumbRaf = null; updateThumb(); });
+    };
+    updateThumbRef.current = updateThumb;
+    terminal.onScroll(scheduleThumb);
     // Initial paint after layout settles (matches the existing fit timer).
     const thumbInitTimer = setTimeout(updateThumb, 120);
 
@@ -498,8 +515,14 @@ function TerminalView({ sessionId, visible }: Props) {
     resizeObserver.observe(containerRef.current);
 
     return () => {
+      // Release whatever this terminal still owed the program, so it is not left braked behind a
+      // terminal that no longer exists (the next terminal's signalReady also resets the books).
+      feederRef.current?.feeder.dispose();
+      feederRef.current = null;
       clearTimeout(timer);
       clearTimeout(thumbInitTimer);
+      if (thumbRaf !== null) cancelAnimationFrame(thumbRaf);
+      updateThumbRef.current = null;
       if (debounceTimer !== null) clearTimeout(debounceTimer);
       if (resizeRafId !== null) cancelAnimationFrame(resizeRafId);
       offWindowResize();
@@ -513,6 +536,7 @@ function TerminalView({ sessionId, visible }: Props) {
       renderPause?.dispose();
       renderPauseRef.current = null;
       disposed = true;
+      terminalRef.current = null;   // a feeder still holding this terminal sees it is gone (isAlive)
       terminal.dispose();
     };
     // WHY only sessionId: see xtermBackgroundRef — a backing change recolours
@@ -526,6 +550,8 @@ function TerminalView({ sessionId, visible }: Props) {
   // paused — writes below keep landing in it, which the prompt detector reads.
   useLayoutEffect(() => {
     renderPauseRef.current?.setHidden(!visible);
+    // Shown again: write whatever the hidden-terminal allowance held back, so it is current at once.
+    if (visible) { feederRef.current?.feeder.wake(); updateThumbRef.current?.(); }
   }, [visible]);
 
   // Visibility toggle side effects.
@@ -616,7 +642,33 @@ function TerminalView({ sessionId, visible }: Props) {
     terminalRef.current?.scrollToBottom();
   });
   usePtyOutput(useRawBytes ? null : sessionId, (data) => {
-    terminalRef.current?.write(data, () => notifyBufferReady(sessionId));
+    let held = feederRef.current;
+    if (!held || held.id !== sessionId) {
+      held?.feeder.dispose();
+      held = {
+        id: sessionId,
+        feeder: createTerminalFeeder({
+          write: (chunk, done) => {
+            const t = terminalRef.current;
+            // No terminal (not built yet / already disposed): there is nothing to wait for.
+            if (!t) { done(); return; }
+            t.write(chunk, () => { notifyBufferReady(sessionId); done(); });
+          },
+          ack: (chars) => window.claude.session.ackOutput?.(sessionId, chars),
+          isHidden: () => !visibleRef.current,
+          // The terminal this feeder writes to is gone: its pump must stop (see terminal-feeder.ts).
+          isAlive: () => terminalRef.current !== null,
+          // Text that repainted with relative cursor moves was cut from a hidden window's backlog: ask for one repaint.
+          // main owns the size nudge (worker: one at a time, a real resize wins, never on Windows).
+          onRepaintNeeded: () => window.claude.session.requestRepaint?.(sessionId),
+          // Only where main has a brake to pull: a desktop window (not a remote browser or the phone app). WHY nativeWindows: it is true for
+          // exactly the desktop's own window (shared/capabilities.ts), which is the one door the ack/repaint channels are served on.
+          throttleHidden: getCapabilities().nativeWindows,
+        }),
+      };
+      feederRef.current = held;
+    }
+    held.feeder.push(data);
   });
   usePtyRawBytes(useRawBytes ? sessionId : null, (data) => {
     terminalRef.current?.write(data, () => notifyBufferReady(sessionId));

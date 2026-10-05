@@ -163,6 +163,7 @@ import { bindPermissionHooks } from './ipc/permissions';
 import { createTransferredExitGate } from './conversations/handoff-exit';
 import { hubLeaseRequest, syncSpacesSyncNowAwaited } from './sync-spaces/service';
 import type { RequesterTakeoverType } from './conversations/takeover';
+import { createTerminalOutputRouter } from './terminal-output-router';
 
 // Max age for clipboard paste images (1 hour)
 
@@ -1014,48 +1015,32 @@ export function registerIpcHandlers(
 
   // session:browse / :history / :input / :resize are table entries (main/ipc/session.ts).
 
-  // --- PTY output buffering ---
-  // Buffer output per-session until the renderer signals its terminal is mounted.
-  // This prevents losing the initial trust prompt on slow systems where
-  // PTY output arrives before TerminalView mounts and registers its listener.
-  const pendingOutput = new Map<string, string[]>();
-  const readySessions = new Set<string>();
-
-  // Perf: previously we dual-sent every PTY chunk to BOTH the per-session
-  // channel AND the global IPC.PTY_OUTPUT channel. The global channel existed
-  // solely so App.tsx could watch permission-mode strings ("bypass permissions
-  // on" etc.) across all sessions with one listener. With many sessions
-  // streaming that doubled IPC traffic and forced every BrowserWindow to
-  // deserialize output for sessions it may not own. App.tsx now subscribes
-  // per-session in sync with session:created / session:destroyed events, so
-  // the global broadcast is no longer needed.
+  // --- PTY output: buffering until a terminal mounts, routing, and flow control (terminal-output-router.ts) ---
+  // WHY a separate function: terminal flow control must agree EXACTLY with where output is routed
+  // (which windows get a session's PTY text), so both read this one rule (the same audience sendForSession uses).
+  const routeTargets = (sessionId: string): number[] => {
+    const ids = windowRegistry ? [...windowRegistry.resolveAudience(sessionId).windowIds] : [];
+    if (ids.length === 0 && !mainWindow.isDestroyed()) ids.push(mainWindow.webContents.id);
+    return ids;
+  };
+  // Perf: output goes to the per-session channel only (the old global PTY_OUTPUT broadcast is gone — App.tsx subscribes per session).
+  // Registered BEFORE the router's own pty-output listener so the computer's readings (live facts, its own screen copy) see each chunk
+  // first, exactly as they did when this handler sent it on.
   sessionManager.on('pty-output', (sessionId: string, data: string) => {
     // One reading of the permission-mode footer for the session, instead of every screen scanning its own copy (one-core R5-4a).
     liveFacts.noteOutput(sessionId, data);
     screens.noteOutput(sessionId, data); // the computer's own copy of the terminal (one-core R5-4b)
-    if (readySessions.has(sessionId)) {
-      sendForSession(sessionId, `pty:output:${sessionId}`, [data]);
-    } else {
-      let buf = pendingOutput.get(sessionId);
-      if (!buf) {
-        buf = [];
-        pendingOutput.set(sessionId, buf);
-      }
-      buf.push(data);
-    }
   });
-
-  // Renderer signals terminal is mounted and listening
-  const signalTerminalReady = (sessionId: string): void => {
-    readySessions.add(sessionId);
-    const buffered = pendingOutput.get(sessionId);
-    if (buffered) {
-      for (const data of buffered) {
-        sendForSession(sessionId, `pty:output:${sessionId}`, [data]);
-      }
-      pendingOutput.delete(sessionId);
-    }
-  };
+  const terminalOutput = createTerminalOutputRouter({
+    sessionManager, windowRegistry, routeTargets,
+    sendForSession: (sessionId, channel, args) => sendForSession(sessionId, channel, args),
+    fromId: (id) => webContents.fromId(id) as any,
+  });
+  // Renderer signals terminal is mounted and listening; `windowId` is the window that said so (ctx.sender.id).
+  const signalTerminalReady = (sessionId: string, windowId?: number): void => terminalOutput.ready(sessionId, windowId);
+  // Flow control + repaint (desktop windows only; table entries in main/ipc/session.ts refuse a phone's copy silently).
+  const ackTerminalOutput = (sessionId: string, windowId: number | undefined, chars: number): void => terminalOutput.ack(sessionId, windowId, chars);
+  const requestTerminalRepaint = (sessionId: string, windowId?: number): void => terminalOutput.repaint(sessionId, windowId);
 
   // Forward session exit events — exitCode is piped through to the renderer
   // so the reducer can distinguish clean shutdowns from 'session-died' cases.
@@ -1064,8 +1049,7 @@ export function registerIpcHandlers(
     runtime.records.drop(sessionId); // the session is over: its record goes with it (one-core R5-1)
     liveFacts.forget(sessionId);
     screens.forget(sessionId);
-    pendingOutput.delete(sessionId);
-    readySessions.delete(sessionId);
+    terminalOutput.end(sessionId);
     windowRegistry?.endSession(sessionId); // over: windows' AND phones' watches go (a window merely releasing keeps phones', R5-3)
   });
 
@@ -2470,7 +2454,7 @@ export function registerIpcHandlers(
   bindSessionOps({
     sessionManager, sessionIdMap, nativeHost, stampProviderTypes, windowRegistry, welcomeBackStore,
     createSession: (sender, opts) => createSession(sender ? { sender } : null, opts),
-    destroySession, signalTerminalReady, transcriptPage, canWriteStoreRecord, publish, liveFacts, screens,
+    destroySession, signalTerminalReady, ackTerminalOutput, requestTerminalRepaint, transcriptPage, canWriteStoreRecord, publish, liveFacts, screens,
     naming: { get: namingGet, set: namingSet, title: namingTitle, rename: namingRename },
   });
   // WHY (2026-09-29 one-core R2, filled by R3): the channel table's desktop half. Every family moved

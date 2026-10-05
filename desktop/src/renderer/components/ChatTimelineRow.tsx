@@ -57,6 +57,8 @@ interface Props {
   sessionId: string;
   provider?: SessionProvider;
   showTimestamps: boolean;
+  /** Assistant-turn rows: this turn is the one being written right now (a primitive, so the row's memo holds). */
+  streaming?: boolean;
   /** Above the last /compact or /clear: faded, with a hint beside it. */
   archived: boolean;
   archiveKind: 'compact' | 'clear' | null;
@@ -115,6 +117,7 @@ function renderContent(p: Props): React.ReactNode {
           sessionId={sessionId}
           provider={p.provider}
           showTimestamps={showTimestamps}
+          streaming={p.streaming}
         />
       );
     case 'prompt': {

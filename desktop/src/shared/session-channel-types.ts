@@ -32,6 +32,9 @@ export interface SessionChannelTypes {
   'session:input': { request: { sessionId: string; text: string; /** a typed chat command, so the host can draw its divider (R5-4a) */ notice?: 'model-switch'; /** the phone's id for this send, so it can ask later whether the computer got it (R5-4b) */ sendId?: string }; response: void };
   'session:resize': { request: { sessionId: string; cols: number; rows: number }; response: void };
   'session:terminal-ready': { request: { sessionId: string }; response: void };
+  // Terminal flow control (desktop window only; a phone's copy is refused silently, so a slow phone can never brake the desktop's program).
+  'session:terminal-ack': { request: { sessionId: string; chars: number }; response: void };
+  'session:terminal-repaint': { request: { sessionId: string }; response: void };
   'session:menu-lock': { request: { sessionId: string; holder: string; action: 'acquire' | 'release' }; response: boolean };
   // Browsing and history.
   'session:browse': { request: void; response: PastSession[] };
