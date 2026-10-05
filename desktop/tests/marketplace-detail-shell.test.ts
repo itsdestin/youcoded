@@ -35,4 +35,13 @@ describe('Marketplace Details outer shell', () => {
     expect(css).toMatch(/\[data-treatment="today"\].*header:first-child h2\s*\{[^}]*font-size:\s*18px;[^}]*font-weight:\s*600/);
     expect(css).toMatch(/\[data-treatment="today"\].*header:first-child \+ div\s*\{[^}]*mask-image:\s*none/);
   });
+
+  it('gives the scrolling chip row vertical room so chip borders are not clipped', () => {
+    // A sideways-scrolling row clips vertically at its content edge; at a 1.5× screen
+    // scale the chips' bottom border fell outside it (marketplace-detail-5#M5-3). The fix
+    // is padding inside the clip, cancelled by a negative margin outside. jsdom has no
+    // layout, so this pins the cause; the geometry was checked in shoot at 1× and 1.5×.
+    const shell = readSource(join(components, 'DetailPage.tsx'));
+    expect(shell).toMatch(/data-detail-chips[^>]*className="[^"]*overflow-x-auto[^"]*\bpy-1 -my-1\b/s);
+  });
 });

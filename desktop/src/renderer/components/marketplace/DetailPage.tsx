@@ -145,8 +145,14 @@ function ChipRow({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener('resize', update);
   }, [update, children]);
   return (
+    // WHY py-1 with a matching -my-1 (Destin, marketplace-detail-5#M5-3: "the bottom of the
+    // claude chip is clipping"): a sideways-scrolling box clips vertically too (CSS turns
+    // overflow-y to auto alongside overflow-x), exactly at its content edge — and at a
+    // fractional screen scale (1.5×) the chips' 1px bottom border rounded just outside it.
+    // The padding gives the borders room inside the clip; the negative margin keeps the
+    // card's spacing unchanged. Pinned in tests/marketplace-detail-shell.test.ts.
     <div ref={ref} data-detail-chips data-fade={fade} onScroll={update}
-      className="flex-1 min-w-0 flex items-center gap-1.5 flex-nowrap overflow-x-auto">
+      className="flex-1 min-w-0 flex items-center gap-1.5 flex-nowrap overflow-x-auto py-1 -my-1">
       {children}
     </div>
   );
