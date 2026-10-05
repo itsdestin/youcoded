@@ -4,7 +4,7 @@
 // it is off for reduced-motion, a hidden page and the practice "before" screen. jsdom cannot play
 // animations, so Element.animate is replaced by a recorder and the tests read what was asked for.
 import { it, expect, afterEach, vi } from 'vitest';
-import { mount, unmount, q, qa, frame, tick, flip, noCameraPicture } from './home-page-harness';
+import { mount as mountPage, unmount, q, qa, frame, tick, flip, noCameraPicture } from './home-page-harness';
 
 interface Call { el: Element; frames: Array<Record<string, unknown>>; opts: Record<string, unknown>; anim: Record<string, unknown> }
 let calls: Call[] = [];
@@ -19,6 +19,9 @@ afterEach(() => {
   delete (Element.prototype as any).animate; delete (window as any).__motionOff; delete (window as any).matchMedia;
   Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
 });
+// WHY the recorder is cleared after mounting: the page's first drawing plays its own "wake up" polish
+// (home-page-feel.test.ts); these tests are about movement from presses and pop-ups.
+async function mount(o: Parameters<typeof mountPage>[0]) { const r = await mountPage(o); calls.length = 0; return r; }
 const collapsed = () => ({ open: [] as string[] });
 const press = async (el: HTMLElement) => { el.click(); await frame(); };
 
@@ -34,7 +37,8 @@ it('plays a card opening only for the press, and nothing for a redraw that arriv
   expect(calls.some((c) => c.el.tagName.toLowerCase() === 'svg')).toBe(true); // the arrow turns
   calls.length = 0;
   flip('light.living_room_lamp'); await frame(); await tick(5000); // a push and a check
-  expect(calls).toEqual([]);
+  // (the card that changed by itself gets the one quiet shine from home-page-feel.test.ts, nothing else)
+  expect(calls.filter((c) => !c.el.parentElement?.classList.contains('fx-glint'))).toEqual([]);
 });
 
 it('slides a page in from the side its tab sits on, and back the other way', async () => {
@@ -108,8 +112,8 @@ it('grows the pop-up out of its card, fades its contents in after, and shrinks i
 
 it('does not animate a pop-up that is already open when the page loads', async () => {
   recordAnimations();
-  await mount({ data: { dlg: 'light.living_room_lamp' }, fetchHook: noCameraPicture });
-  expect(calls).toEqual([]);
+  await mountPage({ data: { dlg: 'light.living_room_lamp' }, fetchHook: noCameraPicture });
+  expect(calls.filter((c) => c.el.closest('#dlg'))).toEqual([]);
 });
 
 it('opens an Edit row’s settings the same way: contents drop in one after another', async () => {

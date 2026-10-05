@@ -25,6 +25,7 @@ import { HOME_EDIT_CSS, HOME_EDIT_JS } from './home-assistant-page-edit';
 import { HOME_CAMERA_CSS, HOME_CAMERA_JS } from './home-assistant-page-camera';
 import { HOME_LOOK_CSS } from './home-assistant-page-look';
 import { HOME_MOTION_JS } from './home-assistant-page-motion';
+import { HOME_FEEL_CSS, HOME_FEEL_JS } from './home-assistant-page-feel';
 
 
 export const HOME_ASSISTANT_PAGE_JSON = {
@@ -79,7 +80,7 @@ export const HOME_ASSISTANT_PAGE_JSON = {
 function homeAssistantPageHtml(): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>Home</title>
-<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}${HOME_CAMERA_CSS}${HOME_REDRAW_CSS}${HOME_PENDING_CSS}${HOME_EDIT_CSS}${HOME_LOOK_CSS}</style></head>
+<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}${HOME_CAMERA_CSS}${HOME_REDRAW_CSS}${HOME_PENDING_CSS}${HOME_EDIT_CSS}${HOME_LOOK_CSS}${HOME_FEEL_CSS}</style></head>
 <body>
 <div class="yc-page yc-stack" id="root">
   <!-- No page title: the app's own bar already names the page, so the
@@ -89,7 +90,7 @@ function homeAssistantPageHtml(): string {
   <div id="banner" class="banner" hidden></div>
   <div id="view"></div>
   <div id="favs"></div>
-  <div class="rooms" id="rooms"><div class="yc-empty">Loading your rooms…</div></div>
+  <div class="rooms" id="rooms"><div class="yc-empty"><div class="fx-bulbs"><i></i><i></i><i></i></div>Loading your rooms…</div></div>
   <div id="dlg"></div>
 </div>
 <script>
@@ -940,6 +941,7 @@ ${HOME_ICONS_JS}
     // focus, held sliders, typed names, hover, transitions and a playing clip survive.
     // WHY motionBefore/After (redesign round 1, motion-nav c): the pop-up's grow and shrink need to see it appear and disappear.
     motionBefore(id, html); mediaHold(); morphInto($(id), html); mediaBack(); motionAfter(id);
+    feelAfter(id); // redesign round 1, motion-state c: the press-and-change feel (home-assistant-page-feel.ts)
     // Redesign options in the practice app hook each redraw (fixtures/home-variants/).
     if (window.__homeAfterPut) window.__homeAfterPut(id);
   }
@@ -1168,9 +1170,18 @@ ${HOME_ICONS_JS}
     }
     var mp = t.getAttribute('data-mp');
     if (mp) {
-      var svc = t.getAttribute('data-svc');
+      var svc = t.getAttribute('data-svc'), volTo = null;
+      // WHY volume_up/down become an exact volume_set (redesign round 1, motion-state c: "the +/- buttons feel laggy"):
+      // the bar used to move only after the house answered and a re-check 0.4 s later, and a "step" is whatever the
+      // device decides, so quick presses could not add up on screen. Now the new level is worked out here from what is
+      // shown (so five quick presses are five steps), shown at once, and sent as that exact level.
+      if (svc === 'volume_up' || svc === 'volume_down') {
+        var vt = thing(mp);
+        if (vt && vt.vol != null) { var nv = Math.max(0, Math.min(1, Math.round((vt.vol + (svc === 'volume_up' ? 0.05 : -0.05)) * 100) / 100)); setLocal(mp, { vol: nv }); svc = 'volume_set'; volTo = nv; }
+      }
       if (svc === 'media_play_pause') { var cur = thing(mp); if (cur) setLocal(mp, { state: cur.state === 'playing' ? 'paused' : 'playing' }); }
       var body = { entity_id: mp };
+      if (volTo != null) body.volume_level = volTo;
       if (svc === 'volume_mute') { body.is_volume_muted = t.getAttribute('data-mute') === 'true'; setLocal(mp, { muted: body.is_volume_muted }); }
       service('media_player', svc, body, mp);
       return;
@@ -1439,6 +1450,7 @@ ${HOME_REDRAW_JS}
 ${HOME_PENDING_JS}
 ${HOME_EDIT_JS}
 ${HOME_MOTION_JS}
+${HOME_FEEL_JS}
   start();
 })();
 </script>

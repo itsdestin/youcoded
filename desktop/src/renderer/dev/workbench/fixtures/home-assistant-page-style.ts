@@ -246,7 +246,7 @@ export const HOME_ASSISTANT_PAGE_CSS = `
      between states and gives a small press, sliders show a handle on hover
      and while held, and touch targets stay at least 30px. */
   .tile-face, .key, .pwr, .vbtn, .nk .ic, .app, .rbtn, .fold, .cbtn, .sw, .mode, .step, .ib, .dpad button, .volpill button {
-    transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, transform 90ms ease, box-shadow 120ms ease;
+    transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, transform 90ms ease;
   }
   .key:active, .pwr:active, .vbtn:active, .nk:active .ic, .app:active, .fold:active, .cbtn:active, .sw:active, .mode:active, .step:active, .ib:active { transform: scale(.94); }
   .tile:has(> .line > .tile-face:active) { transform: scale(.99); }
