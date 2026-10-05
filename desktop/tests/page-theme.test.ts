@@ -4,7 +4,7 @@
 // is pinned here is that OUR shell always wins: the policy, the theme and the
 // bootstrap cannot be moved, commented out or faked by anything the page's
 // author writes, and the bootstrap only believes the host.
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { prepareHostedDocument } from '../src/renderer/components/pages/page-theme';
 
 const THEME = ':root { --canvas: #fff; }';
@@ -135,7 +135,8 @@ function runBootstrap(html = '<p>hi</p>') {
   const deliver = (data: unknown, source: unknown = parent) => {
     for (const fn of listeners.message ?? []) fn({ data, source });
   };
-  return { yc: win.youcoded as Record<string, (...a: unknown[]) => unknown>, posted, deliver };
+  const key = (e: Record<string, unknown>) => { for (const fn of listeners.keydown ?? []) fn(e); };
+  return { yc: win.youcoded as Record<string, (...a: unknown[]) => unknown>, posted, deliver, key };
 }
 
 describe('what a page can call', () => {
@@ -348,5 +349,33 @@ describe('the watcher', () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(seen.at(-1)).toBe(false);
     stop();
+  });
+});
+
+// U1 (ux review 2, 2026-10-05): Esc that the PAGE used (closing its own pop-up) must not also drop the Pages view back to chat.
+describe('Escape inside a page', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  it('is forwarded to the app when the page left it alone (old behaviour)', () => {
+    vi.useFakeTimers();
+    const { posted, key } = runBootstrap();
+    key({ key: 'Escape', defaultPrevented: false });
+    vi.runAllTimers();
+    expect(posted.filter((m) => m.type === 'youcoded:esc')).toHaveLength(1);
+  });
+  it('is NOT forwarded when the page handled it (preventDefault), even by a handler that runs after the bootstrap', () => {
+    vi.useFakeTimers();
+    const { posted, key } = runBootstrap();
+    const e = { key: 'Escape', defaultPrevented: false };
+    key(e);
+    e.defaultPrevented = true; // the page's own listener, running after ours
+    vi.runAllTimers();
+    expect(posted.filter((m) => m.type === 'youcoded:esc')).toHaveLength(0);
+  });
+  it('ignores other keys', () => {
+    vi.useFakeTimers();
+    const { posted, key } = runBootstrap();
+    key({ key: 'a', defaultPrevented: false });
+    vi.runAllTimers();
+    expect(posted).toHaveLength(0);
   });
 });

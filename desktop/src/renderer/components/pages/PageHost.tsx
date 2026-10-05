@@ -418,9 +418,11 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
           files/games pane are in a chat session. */}
       <div className="screen-body flex-1 min-h-0 flex">
         {/* With Office built in the panel always has something to list, so it
-            stays beside the first-run card instead of hiding. */}
+            stays beside the first-run card instead of hiding. WHY panel-glass while see-through (ux review 2, U5): the list sat over
+            the wallpaper unframed and names ran into tree edges; it gets the same one theme-engine glass as the page pane, and Reduced
+            effects removes it the same way. */}
         {open && !pageFocus && (!emptyPages || builtin.length > 0) && (
-        <aside className="screen-pane screen-pane--panel w-60 shrink-0 flex flex-col select-none rounded-xl bg-canvas overflow-hidden">
+        <aside className={`screen-pane screen-pane--panel w-60 shrink-0 flex flex-col select-none rounded-xl bg-canvas overflow-hidden${seeThrough ? ' panel-glass' : ''}`}>
           <div className="flex-1 overflow-y-auto p-2">
             {builtin.length > 0 && (
               <RailGroup label="Built in">
@@ -542,7 +544,8 @@ function RailRow({ page, current, pinFull, onOpen }: { page: PageSummary; curren
       data-rail-page={page.id}
       aria-current={current ? 'page' : undefined}
       onClick={onOpen}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); } }}
+      // WHY the target check (U19): Enter/Space on the pin button inside this row bubbled up and also opened the page.
+      onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(); } }}
       className={`group flex items-center gap-2.5 h-8 pl-2 pr-1 rounded-md text-sm text-left cursor-pointer transition-colors ${current ? 'bg-inset text-fg' : 'text-fg-2 hover:text-fg hover:bg-inset/60'}`}
     >
       <PageGlyph icon={page.icon} className="w-4 h-4 shrink-0" />

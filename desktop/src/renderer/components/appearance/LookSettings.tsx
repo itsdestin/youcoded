@@ -231,7 +231,7 @@ function StackedRow({ title, hint, children }: { title: string; hint?: ReactNode
   );
 }
 
-function GlassSettings({ active, raw, look, set, reducedEffects }: {
+export function GlassSettings({ active, raw, look, set, reducedEffects }: {
   active: LoadedTheme; raw: LoadedTheme; look: LookOverrides; set: (next: LookOverrides) => void; reducedEffects: boolean;
 }) {
   const { pagesSeeThrough, setPagesSeeThrough } = useTheme();
@@ -285,11 +285,13 @@ function GlassSettings({ active, raw, look, set, reducedEffects }: {
       <SettingRow
         variant="item"
         title="Show theme background behind pages"
-        description={!seeThrough ? 'No effect on this theme — it has no wallpaper'
-          : framed ? 'Works in the Floating bars and Minimalist layouts'
+        description={!seeThrough ? 'This theme has no wallpaper'
+          : framed ? 'Works with the Floating bars or Minimalist layout'
           : 'Pages and Office frost over your wallpaper'}
-        disabled={!seeThrough || framed}
-        control={<Toggle checked={pagesSeeThrough} onChange={setPagesSeeThrough} disabled={!seeThrough || framed} aria-label="Show theme background behind pages" />}
+        // WHY the row is not `disabled` (ux review 2, U3/U4): that dims the whole row, note included, so the reason was too faint
+        // to read. Only the switch is disabled; it SHOWS off while it cannot apply, but the saved choice is untouched, so picking a
+        // layout/theme where it works shows the saved value again.
+        control={<Toggle checked={pagesSeeThrough && seeThrough && !framed} onChange={setPagesSeeThrough} disabled={!seeThrough || framed} aria-label="Show theme background behind pages" />}
       />
       <SettingRow
         variant="item"
@@ -383,7 +385,7 @@ export function LookSettings() {
       <SettingRow
         variant="item"
         title="Additional Customizations"
-        description={changed === 0 ? 'Message bubbles, corners, glass' : `${changed} changed from the theme`}
+        description={changed === 0 ? 'Bubbles, corners, glass, page background' : `${changed} changed from the theme`}
         expanded={open}
         onClick={() => setOpen(v => !v)}
         className={open ? 'rounded-b-none' : ''}

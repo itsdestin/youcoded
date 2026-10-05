@@ -150,7 +150,14 @@ function bootstrap(dataJson: string, devicesJson = '{}'): string {
     for (var i = 0; i < list.length; i++) { try { list[i](arg); } catch (err) {} }
   }
   window.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape') { try { parent.postMessage({ type: ESC }, '*'); } catch (err) {} }
+    if (e.key !== 'Escape') return;
+    // WHY wait one tick: a page's own Escape handler (closing its pop-up) may be registered after this one, so it has not run yet.
+    // If it called preventDefault (or stopped the key before it got here) the page used the key, and the app must not ALSO leave the
+    // view (ux review 2, U1). A page that ignores Escape still leaves as before.
+    setTimeout(function () {
+      if (e.defaultPrevented) return;
+      try { parent.postMessage({ type: ESC }, '*'); } catch (err) {}
+    }, 0);
   });
   window.youcoded = {
     data: ${dataJson},
