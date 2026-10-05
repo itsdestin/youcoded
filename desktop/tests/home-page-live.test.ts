@@ -43,7 +43,7 @@ beforeAll(async () => {
   document.head.innerHTML = /<head>([\s\S]*?)<\/head>/.exec(html)![1];
   document.body.innerHTML = /<body>([\s\S]*?)<script>/.exec(html)![1];
   (window as unknown as { youcoded: unknown }).youcoded = {
-    devices: { ha: 'http://100.99.234.114:8123' }, data: { open: ['living_room'] },
+    devices: { ha: 'http://100.99.234.114:8123' }, data: { startOpen: ['living_room'] },
     save: () => undefined, onRefresh: () => undefined, onData: () => undefined,
     fetch: async (url: string, opts: Omit<PageFetchRequest, 'url'> = {}) => {
       const req = { url, ...opts } as PageFetchRequest;

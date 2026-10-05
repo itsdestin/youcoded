@@ -102,15 +102,17 @@ function homeAssistantPageHtml(): string {
   var rooms = null, editing = false, timer = null, camTimer = null, busy = {};
   var saved = window.youcoded.data || {};
   var hidden = new Set(Array.isArray(saved.hidden) ? saved.hidden : []);
-  // Which lights have their colour palette open. Kept with the page's data so
-  // a palette left open stays open (and so a review screen can show one).
-  var expanded = new Set(Array.isArray(saved.expanded) ? saved.expanded : []);
-  // Round 4. open: rooms whose lights card is unfolded (Q-fold: as you left
-  // them). fav: starred things, shown in a row above the rooms. order: the
+  // Which lights have their colour palette open. WHY not saved (Destin, 2026-10-04: "the color menus should
+  // start closed even when the parent card is expanded"): every palette starts closed on each load. Only the
+  // practice app and tests can seed one, through saved.startPalettes (the real page never writes it).
+  var expanded = new Set(Array.isArray(saved.startPalettes) ? saved.startPalettes : []);
+  // Round 4. open: rooms whose lights card is unfolded. WHY not saved (Destin, 2026-10-04: "all grouped light
+  // cards should start collapsed by default"): every Lights card starts collapsed on each load; the Lights tab
+  // still opens them all. Practice screens and tests seed one through saved.startOpen. fav: starred things, shown in a row above the rooms. order: the
   // order you chose, per room ('r:<room>'), for rooms ('rooms') and for
   // favourites ('fav'). All three are this page's own, not Home Assistant's
   // (Q-where: layout stays personal to the page).
-  var open = new Set(Array.isArray(saved.open) ? saved.open : []);
+  var open = new Set(Array.isArray(saved.startOpen) ? saved.startOpen : []);
   var fav = new Set(Array.isArray(saved.fav) ? saved.fav : []);
   var order = saved.order && typeof saved.order === 'object' ? saved.order : {};
   // One text box at a time: a row's name box, or the new room's name.
@@ -131,7 +133,8 @@ function homeAssistantPageHtml(): string {
   // Scenes section is unfolded. fixing: a Fix button that is working.
   var view = null, extras = { weather: null, low: [] }, health = { entries: [], flows: [], issues: [] }, healthAt = 0;
   var prefs = saved.prefs && typeof saved.prefs === 'object' ? saved.prefs : {};
-  var scenesOpen = new Set(Array.isArray(saved.scenesOpen) ? saved.scenesOpen : []);
+  // Scenes also start closed on each load (practice screens seed one with saved.startScenes).
+  var scenesOpen = new Set(Array.isArray(saved.startScenes) ? saved.startScenes : []);
   var fixing = {};
   function pref(k) { return prefs[k] !== false; }
   // A review screen can open on a chip's page or with settings showing.
@@ -634,17 +637,24 @@ ${HOME_ICONS_JS}
     var n = sc.name || sc.id;
     return n.toLowerCase().indexOf(room.name.toLowerCase() + ' ') === 0 ? n.slice(room.name.length + 1) : n;
   }
-  function scenesHtml(room) {
-    var list = Array.isArray(room.scenes) ? room.scenes : [];
-    if (!list.length || !pref('scenes')) return '';
+  function scenesList(room) { var l = Array.isArray(room.scenes) ? room.scenes : []; return pref('scenes') ? l : []; }
+  // Redesign round 1 (Destin: "an easel type icon to the left of the main lights dropdown button"): the
+  // Scenes row is now a round easel button in the Lights card's header, left of the chevron. It opens the
+  // scene chips under the header on their own, whether or not the lights list below is unfolded.
+  var EASEL = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="3" width="16" height="11" rx="1.5"/><path d="M12 14v3M8 21l4-4 4 4M2 3h2M20 3h2"/></svg>';
+  function scenesBtn(room) {
+    var l = scenesList(room); if (!l.length) return '';
     var isOpen = scenesOpen.has(room.id);
+    return '<button class="scn" data-scenes="' + esc(room.id) + '" aria-expanded="' + isOpen + '" aria-label="Scenes in ' + esc(room.name) + ', ' + l.length + '" title="Scenes (' + l.length + ')">' + EASEL + '</button>';
+  }
+  function scenesHtml(room) {
+    var list = scenesList(room);
+    if (!list.length || !scenesOpen.has(room.id)) return '';
     var last = list.reduce(function (a, b) { return Date.parse(b.last) > Date.parse(a ? a.last : 0) ? b : a; }, null);
     var sorted = list.slice().sort(function (a, b) { return sceneName(a, room).localeCompare(sceneName(b, room)); });
-    return '<div class="scenes' + (isOpen ? ' open' : '') + '"><button class="sc-head" data-scenes="' + esc(room.id) + '" aria-expanded="' + isOpen + '">' + SPARK +
-      '<span class="sc-lbl">Scenes <span class="sc-n">' + list.length + '</span></span>' + (last && !isOpen ? '<span class="sc-last">Last: ' + esc(sceneName(last, room)) + '</span>' : '') + '<span class="rchev">' + CHEVRON + '</span></button>' +
-      (isOpen ? '<div class="sc-list">' + sorted.map(function (sc) {
-        return '<button class="scene' + (last && sc.id === last.id ? ' last' : '') + '" data-scene="' + esc(sc.id) + '">' + esc(sceneName(sc, room)) + '</button>';
-      }).join('') + '</div>' : '') + '</div>';
+    return '<div class="scenes open"><div class="sc-list">' + sorted.map(function (sc) {
+      return '<button class="scene' + (last && sc.id === last.id ? ' last' : '') + '" data-scene="' + esc(sc.id) + '">' + esc(sceneName(sc, room)) + '</button>';
+    }).join('') + '</div>' + (last && Date.parse(last.last) ? '<div class="sc-foot">Last used: ' + esc(sceneName(last, room)) + '</div>' : '') + '</div>';
   }
   function lightsCard(room, lights, ctx, forceOpen) {
     var live = liveLights(lights), onList = live.filter(isOn), anyOn = onList.length > 0;
@@ -656,7 +666,7 @@ ${HOME_ICONS_JS}
       ' aria-label="All lights in ' + esc(room.name) + ', ' + esc(status) + '">' +
       '<span class="bulb-col"><span class="bulb">' + BULB + '</span><span class="all-lbl">All</span></span>' +
       '<span class="name">Lights<div class="sub">' + esc(status) + '</div></span></button>' +
-      (editing ? '' : '<button class="fold" data-fold="' + esc(room.id) + '" aria-expanded="' + isOpen + '" aria-label="' + (isOpen ? 'Hide' : 'Show') + ' each light in ' + esc(room.name) + '" title="' + (isOpen ? 'Hide each light' : 'Show each light') + '">' + CHEVRON + '</button>') +
+      (editing ? '' : scenesBtn(room) + '<button class="fold" data-fold="' + esc(room.id) + '" aria-expanded="' + isOpen + '" aria-label="' + (isOpen ? 'Hide' : 'Show') + ' each light in ' + esc(room.name) + '" title="' + (isOpen ? 'Hide each light' : 'Show each light') + '">' + CHEVRON + '</button>') +
       '</div>' + groupBright(room, live, onList, c) + pendHtml('room:' + room.id) + '</div>';
     return '<div class="lights' + (anyOn ? ' on' : '') + '" style="--c:' + c + '"><span class="glow"></span>' + all + scenesHtml(room) + (isOpen ? '<div class="lights-body">' + lights.map(function (it) { return itemHtml(it, ctx); }).join('') + '</div>' : '') + '</div>';
   }
@@ -1142,7 +1152,7 @@ ${HOME_ICONS_JS}
     var pf = t.getAttribute('data-pref');
     if (pf) { prefs[pf] = !pref(pf); persist({ prefs: prefs }); render(); return; }
     var scn = t.getAttribute('data-scenes');
-    if (scn) { if (scenesOpen.has(scn)) scenesOpen.delete(scn); else scenesOpen.add(scn); persist({ scenesOpen: Array.from(scenesOpen) }); render(); return; }
+    if (scn) { if (scenesOpen.has(scn)) scenesOpen.delete(scn); else scenesOpen.add(scn); render(); return; }
     var sc = t.getAttribute('data-scene');
     if (sc) {
       // Mark it as the one used last straight away; the lights follow.
@@ -1215,14 +1225,12 @@ ${HOME_ICONS_JS}
     var fd = t.getAttribute('data-fold');
     if (fd) {
       if (open.has(fd)) open.delete(fd); else open.add(fd);
-      persist({ open: Array.from(open) });
       render();
       return;
     }
     var ex = t.getAttribute('data-expand');
     if (ex) {
       if (expanded.has(ex)) expanded.delete(ex); else expanded.add(ex);
-      window.youcoded.save(Object.assign({}, window.youcoded.data || {}, { expanded: Array.from(expanded) }));
       render();
       return;
     }
@@ -1433,13 +1441,11 @@ ${HOME_ICONS_JS}
   window.youcoded.onData(function (d) {
     d = d || {};
     hidden = new Set(Array.isArray(d.hidden) ? d.hidden : []);
-    open = new Set(Array.isArray(d.open) ? d.open : []);
     fav = new Set(Array.isArray(d.fav) ? d.fav : []);
     order = d.order && typeof d.order === 'object' ? d.order : {};
     remoteOpen = new Set(Array.isArray(d.remote) ? d.remote : []);
     sound = d.sound && typeof d.sound === 'object' ? d.sound : {};
     prefs = d.prefs && typeof d.prefs === 'object' ? d.prefs : {};
-    scenesOpen = new Set(Array.isArray(d.scenesOpen) ? d.scenesOpen : []);
     renderSoon();
   });
 ${HOME_HISTORY_JS}

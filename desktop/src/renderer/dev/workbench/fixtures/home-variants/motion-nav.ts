@@ -7,7 +7,7 @@ import type { HomeVariants } from './types';
 
 // WHY every card starts closed: there is more to open, and it differs from the plain connected
 // screen, so the review pictures are not look-alikes.
-const DATA = { open: [] as string[] };
+const DATA = { startOpen: [] as string[] };
 
 export const VARIANTS: HomeVariants = {
   // The built page with every movement at quarter speed, to see what it is doing.

@@ -9,7 +9,7 @@
 // itself, the page is not told directly), replay first load.
 import type { HomeVariants } from './types';
 
-const DATA = { open: ['destins_room', 'living_room'] };
+const DATA = { startOpen: ['destins_room', 'living_room'] };
 
 // Plain ES5, no backticks. WHY the one-line page hook (transform): replaying the first load needs the
 // page's own `drawn` list and render(); without the hook the button just does nothing.

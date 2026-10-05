@@ -50,14 +50,14 @@ describe('Home page draws changes in place', () => {
   });
 
   it('draws "All lights" once for the press, not once per light', async () => {
-    const m = await mount({ data: { open: ['destins_room'] }, fetchHook: noCameraPicture });
+    const m = await mount({ data: { startOpen: ['destins_room'] }, fetchHook: noCameraPicture });
     m.puts.length = 0;
     q('[data-room="destins_room"]').click();
     expect(m.puts.filter((p) => p === 'rooms')).toHaveLength(1);
   });
 
   it('keeps a name being typed in Edit, and does not re-select it, when anything redraws', async () => {
-    await mount({ data: { open: ['living_room'], editing: true }, fetchHook: noCameraPicture });
+    await mount({ data: { startOpen: ['living_room'], editing: true }, fetchHook: noCameraPicture });
     q('[data-eid="light.living_room_lamp"] [data-act="edopen"]').click();
     const box = () => document.querySelector<HTMLInputElement>('[data-rn]')!;
     box().value = 'Reading lamp'; box().setSelectionRange(12, 12);
@@ -121,7 +121,7 @@ describe('Home page draws changes in place', () => {
 
   // Code review 2: clicking elsewhere with the name box still open must not reset what was typed.
   it('keeps a name being typed when the box loses focus and something redraws', async () => {
-    const m = await mount({ data: { open: ['living_room', 'kitchen'], editing: true }, fetchHook: noCameraPicture });
+    const m = await mount({ data: { startOpen: ['living_room', 'kitchen'], editing: true }, fetchHook: noCameraPicture });
     q('[data-eid="light.living_room_lamp"] [data-act="edopen"]').click();
     const box = document.querySelector<HTMLInputElement>('[data-rn]')!;
     box.value = 'Reading lamp';
@@ -135,7 +135,7 @@ describe('Home page draws changes in place', () => {
 
   // Code review 11: a name box belongs to its own device and is never reused for another.
   it('never shows one device\'s half-typed name in another device\'s box', async () => {
-    await mount({ data: { open: ['living_room'], editing: true }, fetchHook: noCameraPicture });
+    await mount({ data: { startOpen: ['living_room'], editing: true }, fetchHook: noCameraPicture });
     q('[data-eid="light.living_room_lamp"] [data-act="edopen"]').click();
     document.querySelector<HTMLInputElement>('[data-rn]')!.value = 'half typed';
     q('[data-eid="light.living_room_ceiling"] [data-act="edopen"]').click();

@@ -10,7 +10,7 @@ afterEach(() => { unmount(); vi.useRealTimers(); });
 const card = (id: string) => q(`[data-eid="${id}"]`);
 const sw = (id: string) => card(id).querySelector('[data-toggle]')!.getAttribute('aria-pressed') === 'true';
 const note = (id: string) => card(id).querySelector<HTMLElement>('.pend');
-const OPEN = { open: ['kitchen', 'living_room', 'destins_room'] };
+const OPEN = { startOpen: ['kitchen', 'living_room', 'destins_room'] };
 const refuse = (what: string) => (req: { url: string }) => { noCameraPicture(req); return req.url.includes(what) ? { ok: false, status: 500, headers: {}, body: '' } : undefined; };
 
 describe('a press the house does not take', () => {
@@ -90,7 +90,7 @@ describe('guesses held until the house agrees', () => {
   it('keeps a new name while another update still carrying the old name lands', async () => {
     let release!: () => void, gated = false; const gate = new Promise<void>((r) => { release = r; });
     // the page asks Home Assistant for a rename by sending a registry message over its websocket exchange
-    const m = await mount({ data: { open: ['living_room'], editing: true }, fetchHook: async (req) => { noCameraPicture(req); if (req.url.endsWith('/api/websocket') && JSON.stringify((req as any).socket?.send ?? '').includes('entity_registry/update')) { gated = true; await gate; } return undefined; } });
+    const m = await mount({ data: { startOpen: ['living_room'], editing: true }, fetchHook: async (req) => { noCameraPicture(req); if (req.url.endsWith('/api/websocket') && JSON.stringify((req as any).socket?.send ?? '').includes('entity_registry/update')) { gated = true; await gate; } return undefined; } });
     const id = 'light.living_room_lamp';
     card(id).querySelector<HTMLElement>('[data-act="edopen"]')!.click();
     const box = document.querySelector<HTMLInputElement>('[data-rn]')!; box.value = 'Reading lamp';

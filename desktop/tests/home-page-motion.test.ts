@@ -22,7 +22,7 @@ afterEach(() => {
 // WHY the recorder is cleared after mounting: the page's first drawing plays its own "wake up" polish
 // (home-page-feel.test.ts); these tests are about movement from presses and pop-ups.
 async function mount(o: Parameters<typeof mountPage>[0]) { const r = await mountPage(o); calls.length = 0; return r; }
-const collapsed = () => ({ open: [] as string[] });
+const collapsed = () => ({ startOpen: [] as string[] });
 const press = async (el: HTMLElement) => { el.click(); await frame(); };
 
 it('plays a card opening only for the press, and nothing for a redraw that arrives by itself', async () => {
@@ -118,7 +118,7 @@ it('does not animate a pop-up that is already open when the page loads', async (
 
 it('opens an Edit row’s settings the same way: contents drop in one after another', async () => {
   recordAnimations();
-  await mount({ data: { editing: true, open: [] }, fetchHook: noCameraPicture });
+  await mount({ data: { editing: true, startOpen: [] }, fetchHook: noCameraPicture });
   const name = qa('[data-act="edopen"]')[0];
   await press(name);
   expect(name.getAttribute('aria-expanded')).toBe('true');

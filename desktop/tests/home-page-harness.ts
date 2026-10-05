@@ -56,7 +56,7 @@ export async function mount(opts: { data?: Record<string, unknown>; fetchHook?: 
   (window as any).__homeAfterPut = (id: string) => { puts.push(id); if (id === 'rooms' && document.querySelector('#rooms img.cam:not([src])')) puts.greyBox = true; };
   const socks: Sock[] = [];
   (window as any).youcoded = {
-    devices: { ha: BASE }, data: opts.data ?? { open: ['living_room', 'destins_room'] },
+    devices: { ha: BASE }, data: opts.data ?? { startOpen: ['living_room', 'destins_room'] },
     save: () => undefined, onRefresh: () => undefined, onData: () => undefined,
     fetch: async (url: string, o: Record<string, unknown> = {}) => {
       const req = { url, ...o } as { url: string; body?: string };

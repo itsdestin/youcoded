@@ -153,16 +153,13 @@ export const HOME_ASSISTANT_PAGE_CSS = `
   .prob-detail { font-size: 12px; color: var(--fg-2); line-height: 1.45; flex: 1; }
   .prob-acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
   .prob-acts a { text-decoration: none; }
-  .scenes { position: relative; margin: 0 8px 8px; border-radius: var(--radius-md, 8px); border: 1px solid var(--edge-dim); background: var(--well); overflow: hidden; }
-  .sc-head { appearance: none; font: inherit; font-size: 12px; color: var(--fg-2); width: 100%; height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border: 0; background: transparent; cursor: pointer; }
-  .sc-head:hover { color: var(--fg); }
-  .sc-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-  .sc-lbl { flex: 0 0 auto; }
-  .sc-n { color: var(--fg-muted); }
-  .sc-last { flex: 1; text-align: right; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .scenes.open .rchev { transform: rotate(180deg); }
-  .scenes:not(.open) .sc-lbl { flex: 0 0 auto; }
-  .scenes.open .sc-head .rchev { margin-left: auto; }
+  .scenes { position: relative; margin: 0 8px 8px; border-radius: var(--radius-md, 8px); border: 1px solid var(--edge-dim); background: var(--well); overflow: hidden; padding-top: 10px; }
+  .sc-foot { font-size: 11px; color: var(--fg-muted); padding: 0 12px 10px; }
+  /* The easel button: the same round button as the fold chevron; filled with the accent while its chips are open. */
+  .scn { width: 32px; height: 32px; flex-shrink: 0; border-radius: 50%; border: 1px solid var(--edge); background: var(--well); color: var(--fg-2); cursor: pointer; display: grid; place-items: center; padding: 0; position: relative; }
+  .scn:hover { color: var(--fg); border-color: var(--fg-muted); }
+  .scn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .scn[aria-expanded="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
   .sc-list { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 10px 10px; }
   .scene { appearance: none; font: inherit; font-size: 12px; padding: 5px 11px; border-radius: 9999px; border: 1px solid var(--edge); background: var(--inset); color: var(--fg); cursor: pointer; transition: border-color 120ms ease, transform 90ms ease; }
   .scene:hover { border-color: var(--accent); }
@@ -261,7 +258,7 @@ export const HOME_ASSISTANT_PAGE_CSS = `
   /* Interactions (round 7: "better hover/touch/drag"): every control eases
      between states and gives a small press, sliders show a handle on hover
      and while held, and touch targets stay at least 30px. */
-  .tile-face, .key, .pwr, .vbtn, .nk .ic, .app, .rbtn, .fold, .cbtn, .sw, .mode, .step, .ib, .dpad button, .volpill button {
+  .tile-face, .key, .pwr, .vbtn, .nk .ic, .app, .rbtn, .fold, .scn, .cbtn, .sw, .mode, .step, .ib, .dpad button, .volpill button {
     transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, transform 90ms ease;
   }
   .key:active, .pwr:active, .vbtn:active, .nk:active .ic, .app:active, .fold:active, .cbtn:active, .sw:active, .mode:active, .step:active, .ib:active { transform: scale(.94); }

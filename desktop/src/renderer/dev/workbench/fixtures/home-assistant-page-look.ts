@@ -18,6 +18,9 @@ export const HOME_LOOK_CSS = `
   .tile { padding: 12px 14px; }
   .tile.on { border-color: color-mix(in srgb, var(--c) 50%, transparent); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--c) 30%, transparent), 0 10px 26px -14px var(--c); }
   .tile.on .glow { opacity: .3; background: radial-gradient(120% 160% at 0% 0%, var(--c), transparent 75%); }
+  /* The room's All bar sits inside the Lights card, which already glows; its own raised shadow would draw a
+     lighter band cut off by the card's edge and the scenes box (Destin's "weird line where the glow seems bugged"). */
+  .lights > .tile.all { box-shadow: none; border-color: transparent; }
   .lights { border-radius: 20px; border-color: color-mix(in srgb, var(--fg) 9%, transparent); }
   .lights-body > .tile { background: color-mix(in srgb, var(--fg) 6%, var(--panel)); }
   .tile .bulb { width: 38px; height: 38px; }

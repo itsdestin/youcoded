@@ -21,7 +21,8 @@ export const HOME_MOTION_JS = `
   // (nothing runs in the background), and the practice-only "before" screen switches it all off.
   function moCan() { return !moRM.matches && !document.hidden && !window.__motionOff && typeof Element.prototype.animate === 'function'; }
   var MO_BODY = { 'data-fold': '.lights-body', 'data-scenes': '.sc-list', 'data-remote': '.remote', 'data-group': '.glist' };
-  var MO_HOLD = { 'data-fold': '.lights', 'data-scenes': '.scenes', 'data-remote': '.rcard', 'data-group': '.rcard' };
+  // WHY data-scenes is held by '.lights': the easel button sits in the card's header, so the whole card holds button and chips.
+  var MO_HOLD = { 'data-fold': '.lights', 'data-scenes': '.lights', 'data-remote': '.rcard', 'data-group': '.rcard' };
   // Everything that can change place when a card opens or closes: rooms, cards inside them and rows.
   var MO_MOVE = '.room, .lights, .scenes, .rcard, .edc-row, [data-eid]';
   function moAll(sel) { return Array.prototype.slice.call(document.querySelectorAll(sel)); }

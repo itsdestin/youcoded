@@ -14,7 +14,7 @@ const group = () => q('[data-gbright="destins_room"]') as HTMLInputElement;
 const drag = (to: number) => { group().value = String(to); group().dispatchEvent(new Event('input', { bubbles: true })); };
 
 it('moves every light\'s bar, percent and glow on the same frame as the room bar', async () => {
-  await mount({ data: { open: ['destins_room'] }, fetchHook: noCameraPicture });
+  await mount({ data: { startOpen: ['destins_room'] }, fetchHook: noCameraPicture });
   group().focus(); pointer(group(), 'pointerdown');
   for (const pct of [30, 45, 62, 81]) {
     drag(pct);
@@ -27,7 +27,7 @@ it('moves every light\'s bar, percent and glow on the same frame as the room bar
 });
 
 it('never moves a light\'s bar backwards while late, out-of-order answers land, during or after the drag', async () => {
-  const m = await mount({ data: { open: ['destins_room'] }, fetchHook: noCameraPicture });
+  const m = await mount({ data: { startOpen: ['destins_room'] }, fetchHook: noCameraPicture });
   group().focus(); pointer(group(), 'pointerdown');
   const last: Record<string, number> = {};
   const check = () => { for (const id of KIDS) { expect(v(id)).toBeGreaterThanOrEqual(last[id] ?? 0); last[id] = v(id); } };
@@ -44,7 +44,7 @@ it('never moves a light\'s bar backwards while late, out-of-order answers land, 
 });
 
 it('shows the final values on release with no jump', async () => {
-  await mount({ data: { open: ['destins_room'] }, fetchHook: noCameraPicture });
+  await mount({ data: { startOpen: ['destins_room'] }, fetchHook: noCameraPicture });
   group().focus(); pointer(group(), 'pointerdown');
   drag(35); drag(66);
   const before = KIDS.map(v), barBefore = group().value;
@@ -53,7 +53,7 @@ it('shows the final values on release with no jump', async () => {
 });
 
 it('leaves a light that is not responding alone, and turns on an off light that can dim', async () => {
-  await mount({ data: { open: ['destins_room', 'living_room'] }, fetchHook: noCameraPicture });
+  await mount({ data: { startOpen: ['destins_room', 'living_room'] }, fetchHook: noCameraPicture });
   expect(document.querySelector('[data-eid="light.tv_backlight"] .lr')).toBeNull(); // unavailable: no bar
   const room = q('[data-gbright="living_room"]') as HTMLInputElement; // Living Room: lamp on, ceiling off (both dim)
   room.focus(); pointer(room, 'pointerdown');
