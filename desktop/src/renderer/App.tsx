@@ -4129,12 +4129,12 @@ function AppInner() {
               <div className="flex items-center gap-2 mb-5 select-none">
                 {/* WHY -translate-y-3 (deck glass-buddy-3 GB3-2, "fix alignment between mascot
                     and text"): the rig box centres the BODY, but the feet hang below it, so the
-                    whole figure sat ~13px lower than the text block. Lifted 8px: centred, with the text a
-                    smidge lower and gap-2 closer, as Destin asked (GB4-1). */}
-                <div data-guide-anchor="welcome-mascot" className="flex shrink-0 -translate-y-2">
+                    whole figure sat ~13px lower than the text block. Destin then set the text lower than
+                    centre, twice (GB4-1 "a smidge", GB5-1 "lower"), and gap-2 closer. */}
+                <div data-guide-anchor="welcome-mascot" className="flex shrink-0 -translate-y-3">
                   <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-40 h-40 -my-6 text-fg-dim" scene />
                 </div>
-                <div className="flex flex-col gap-1.5 min-w-0 max-w-xs">
+                <div className="flex flex-col gap-1.5 min-w-0 max-w-xs translate-y-1">
                   <p className="brand-heading text-2xl text-fg leading-tight whitespace-nowrap">Start your first session</p>
                   <p className="text-sm text-fg-muted">A session is one conversation with the assistant, working in one folder.</p>
                 </div>
