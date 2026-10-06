@@ -6,6 +6,45 @@ import okhttp3.*
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
+// HIDDEN MODE (incognito, per device) — desktop parity with presence-socket.ts "HIDDEN MODE".
+// Destin, 2026-10-05: "they shouldn't be able to see me in incognito, but i feel like i should still
+// be able to see who else is online." The server (wecoded-marketplace PresenceRoom) keeps a
+// `?hidden=1` socket out of every friend's view while it still RECEIVES their presence. An OLDER
+// server ignores the flag and would announce the user, so two guards: (1) ask CAPABILITIES_URL first
+// and never connect hidden without `{"hidden": true}`; (2) the first frame must be
+// {"type":"hello","hidden":true}, or disconnect at once and report "hidden-unsupported". While hidden,
+// status changes and challenges never leave the device.
+object HiddenPresence {
+    const val PRESENCE_URL = "wss://api.youcoded.ai/social/presence"
+    const val CAPABILITIES_URL = "https://api.youcoded.ai/social/presence/capabilities"
+    private val BLOCKED = setOf("status", "challenge", "challenge-response")
+
+    fun url(hidden: Boolean): String = if (hidden) "$PRESENCE_URL?hidden=1" else PRESENCE_URL
+
+    /** Guard 1's answer: only an explicit 200 + {"hidden": true} is a yes. */
+    fun supportsHidden(code: Int, body: String?): Boolean =
+        code == 200 && runCatching { JSONObject(body ?: "").optBoolean("hidden", false) }.getOrDefault(false)
+
+    /** Guard 2: is this first frame the server's confirmation? */
+    fun confirmsHidden(frame: String): Boolean = runCatching {
+        val o = JSONObject(frame)
+        o.optString("type") == "hello" && o.optBoolean("hidden", false)
+    }.getOrDefault(false)
+
+    /** Frames a hidden device must never send. */
+    fun blockedWhileHidden(message: JSONObject): Boolean = message.optString("type") in BLOCKED
+
+    /** Guard 1, asynchronously (never on the main looper). */
+    fun probe(http: OkHttpClient, url: String = CAPABILITIES_URL, done: (Boolean) -> Unit) {
+        http.newCall(Request.Builder().url(url).build()).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: java.io.IOException) = done(false)
+            override fun onResponse(call: Call, response: Response) {
+                response.use { done(supportsHidden(it.code, it.body?.string())) }
+            }
+        })
+    }
+}
+
 class PresenceClient(
     private val getToken: () -> String?,
     private val onEvent: (JSONObject) -> Unit,
@@ -35,16 +74,44 @@ class PresenceClient(
     // presence-send receipt check) while writes happen on the main looper — so
     // this one flag stays @Volatile even though the rest of the state doesn't.
     @Volatile private var connected = false
+    // Hidden mode for this device, and whether THIS socket's server confirmed it (guard 2). Read on
+    // OkHttp's thread in onMessage, written on the looper — hence @Volatile.
+    @Volatile private var hidden = false
+    @Volatile private var helloSeen = false
 
     fun isConnected(): Boolean = connected
 
-    fun setDesired(want: Boolean) {
+    fun setDesired(want: Boolean, hiddenMode: Boolean = false) {
         // Marshal onto the main looper: the caller runs on the bridge thread and
         // this compound check-then-act must not race a queued retry connect().
         handler.post {
+            if (hiddenMode != hidden) {
+                // The mode is part of the URL: close the current socket first, so a visible one is
+                // gone (and announced as left) before a hidden one opens.
+                closeCurrent()
+                hidden = hiddenMode
+                helloSeen = false
+            }
             desired = want
-            if (want) { connect(); return@post }
-            val s = ws ?: return@post // want-off with no socket: any queued retry self-cancels via connect()'s desired guard
+            if (want) {
+                if (!hidden) { connect(); return@post }
+                // Guard 1: no hidden connection without the server's promise to hide it.
+                HiddenPresence.probe(http) { ok ->
+                    handler.post {
+                        if (!desired || !hidden) return@post
+                        if (ok) connect()
+                        else { desired = false; onEvent(JSONObject().put("type", "hidden-unsupported")) }
+                    }
+                }
+                return@post
+            }
+            closeCurrent()
+        }
+    }
+
+    // Intentional local close (want-off or a mode switch). Runs on the looper.
+    private fun closeCurrent() {
+            val s = ws ?: return // want-off with no socket: any queued retry self-cancels via connect()'s desired guard
             // Capture-and-null FIRST so the socket's async onClosed/onFailure is
             // recognized as superseded (retry()'s `ws !== source` guard) and
             // doesn't double-emit or schedule a reconnect.
@@ -55,10 +122,11 @@ class PresenceClient(
             // Task 7 uses it to suppress "reconnecting" UI. Emitted synchronously
             // here rather than waiting for OkHttp's async close callback.
             onEvent(JSONObject().put("type", "disconnected").put("code", 1000).put("reason", "local"))
-        }
     }
 
     fun send(message: JSONObject) {
+        // While hidden, nothing a friend could notice leaves this device (the server refuses these too).
+        if (hidden && HiddenPresence.blockedWhileHidden(message)) return
         // Same looper as all other socket-state access — see THREADING MODEL.
         handler.post { ws?.send(message.toString()) }
     }
@@ -73,7 +141,7 @@ class PresenceClient(
         if (!desired || ws != null) return
         val req = Request.Builder()
             // WHY: Moved to its own domain so Cloudflare's cache and rate limiter apply; the old workers.dev address still answers for older app versions.
-            .url("wss://api.youcoded.ai/social/presence")
+            .url(HiddenPresence.url(hidden))
             .header("Authorization", "Bearer $token")
             .build()
         ws = http.newWebSocket(req, object : WebSocketListener() {
@@ -83,12 +151,35 @@ class PresenceClient(
                     // the connect window) — don't emit a spurious 'connected'.
                     if (ws !== webSocket) return@post
                     attempts = 0
+                    schedulePing(webSocket)
+                    // A hidden socket is not "connected" until the server confirms it (onMessage).
+                    if (hidden) { helloSeen = false; return@post }
                     connected = true
                     onEvent(JSONObject().put("type", "connected"))
-                    schedulePing(webSocket)
                 }
             }
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (hidden && !helloSeen) {
+                    // Guard 2, decided on this thread so no later frame can slip past it.
+                    if (HiddenPresence.confirmsHidden(text)) {
+                        helloSeen = true
+                        handler.post {
+                            if (ws !== webSocket) return@post
+                            connected = true
+                            onEvent(JSONObject().put("type", "connected"))
+                        }
+                    } else {
+                        // This server counted us VISIBLE: leave at once, relay nothing, say why.
+                        helloSeen = true // stop judging later frames of this dying socket
+                        handler.post {
+                            if (ws !== webSocket) return@post
+                            desired = false
+                            closeCurrent()
+                            onEvent(JSONObject().put("type", "hidden-unsupported"))
+                        }
+                    }
+                    return
+                }
                 // Server protocol frames + pong are all JSON; ignore non-JSON.
                 // Relay directly (no state touched) — onEvent is thread-safe.
                 runCatching { onEvent(JSONObject(text)) }

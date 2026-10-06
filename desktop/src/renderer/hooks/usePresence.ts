@@ -73,13 +73,22 @@ export function usePresence(isLeader: boolean = true) {
     // Don't act until the incognito preference has loaded (incognitoLoaded is
     // state so this effect re-runs when it flips true — mirrors usePartyLobby).
     if (!incognitoLoaded) return;
-    const shouldConnect = signedIn && !incognito && isLeader;
+    // WHY incognito no longer disconnects (games-social round 5 — Destin: "they shouldn't be
+    // able to see me in incognito, but i feel like i should still be able to see who else is
+    // online"): incognito connects HIDDEN — this device receives friends' presence and is never
+    // shown to them. Main refuses to connect at all if the server can't do that
+    // (presence-socket.ts HIDDEN MODE), so the fallback is "see no one", never "be seen".
+    const shouldConnect = signedIn && isLeader;
     if (shouldConnect) {
-      void window.claude.social.presenceConnect();
+      void window.claude.social.presenceConnect({ hidden: incognito });
     } else {
       void window.claude.social.presenceDisconnect();
     }
   }, [signedIn, incognito, incognitoLoaded, isLeader]);
+
+  // Read by the send helpers below without re-creating them on every toggle.
+  const incognitoRef = useRef(incognito);
+  incognitoRef.current = incognito;
 
   // Event subscription: map relayed server frames + synthetic connection-state
   // events onto the SAME reducer actions the old PartyKit hook dispatched.
@@ -197,12 +206,26 @@ export function usePresence(isLeader: boolean = true) {
         case 'pong':
           // Liveness only — no state change.
           break;
+
+        // Incognito, but the server could not promise to hide this device (an older server, or
+        // no answer to the capability check): main stayed disconnected. Same silent state as a
+        // deliberate disconnect — the friends card says who's online is hidden.
+        case 'hidden-unsupported':
+          dispatch({ type: 'PARTY_DISCONNECTED' });
+          break;
+
+        // The server refused something a hidden device tried to send. The UI never offers
+        // those while incognito, so there is nothing to show.
+        case 'refused':
+          break;
       }
     });
     return unsub;
   }, [dispatch]);
 
   const updateStatus = useCallback((status: 'idle' | 'in-game') => {
+    // Incognito: a status change would show friends this device is here.
+    if (incognitoRef.current) return;
     // Fire-and-forget: presenceSend is fallible ('not connected' while
     // reconnecting), but a dropped status ping self-heals on the next presence
     // snapshot, so we don't surface an error for it.
@@ -210,6 +233,8 @@ export function usePresence(isLeader: boolean = true) {
   }, []);
 
   const challengePlayer = useCallback((target: string, gameType: string, code: string) => {
+    // Incognito: a challenge would reveal you, so it never leaves this device.
+    if (incognitoRef.current) { dispatch({ type: 'CHALLENGE_FAILED', target }); return; }
     // target is the challenged player's ACCOUNT ID (spec §3). presenceSend is
     // fallible — if the challenge never leaves the machine (socket down),
     // synthesize a CHALLENGE_FAILED so the UI doesn't hang on the waiting

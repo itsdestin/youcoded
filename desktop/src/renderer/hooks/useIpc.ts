@@ -218,7 +218,7 @@ declare global {
         // relayed server frame (presence/user-joined/challenge/…) or a synthetic
         // connection-state event ({type:'connected'|'disconnected'|'error'}) — all
         // carry a `type` discriminator; the renderer (Task 7) narrows on it.
-        presenceConnect: () => Promise<{ ok: true }>;
+        presenceConnect: (opts?: { hidden?: boolean }) => Promise<{ ok: true }>;
         presenceDisconnect: () => Promise<{ ok: true }>;
         // Honest receipt: { ok:false, status:0, message:'not connected' } when
         // no live socket exists — don't treat presenceSend as infallible.

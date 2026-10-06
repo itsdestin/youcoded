@@ -160,12 +160,14 @@ function FriendsCard({ incognito, onToggleIncognito, social }: Props) {
   const requestText = requests ? ` · ${requests} ${requests === 1 ? 'request' : 'requests'}` : '';
   const total = `${f.merged.length} ${f.merged.length === 1 ? 'friend' : 'friends'}`;
 
-  // The grey line under your name. While incognito the presence connection is OFF (that is what
-  // incognito is: usePresence disconnects), so nobody's online state reaches this computer —
-  // there is no number to show, and inventing one is not allowed (G3-9 asked for the count; the
-  // honest answer is that it is hidden while you are hidden).
+  // The grey line under your name. Incognito connects HIDDEN (round 5, G4-3: "i should still be
+  // able to see who else is online"), so once the server has confirmed it (state.connected) the
+  // real count shows. If it could not — an older server, no answer — nothing about friends
+  // reached this computer and there is no number to show; inventing one is not allowed.
+  const hiddenConnected = social === 'incognito' && state.connected;
   const summary = !f.loaded ? 'Loading your friends…'
     : f.merged.length === 0 ? `No friends yet${requestText}`
+    : hiddenConnected ? `${online.length} of ${total} online · they can't see you${requestText}`
     : social === 'incognito' ? `${total} · who's online is hidden${requestText}`
     : social === 'connecting' ? `${total} · connecting…${requestText}`
     : `${online.length} of ${total} online${requestText}`;
@@ -185,7 +187,7 @@ function FriendsCard({ incognito, onToggleIncognito, social }: Props) {
         </div>
         <FoldToggle open={open} onToggle={() => setOpen((o) => !o)} count={f.merged.length} />
       </div>
-      {open && <PeopleList f={f} known={social === 'online'} />}
+      {open && <PeopleList f={f} known={social === 'online' || hiddenConnected} />}
     </div>
   );
 }

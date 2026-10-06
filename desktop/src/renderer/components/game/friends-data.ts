@@ -71,7 +71,8 @@ export function statusLabel(row: FriendRowData, nowMs: number): string {
  *
  *  - `offline`    the computer reports no network connection (useNetworkOnline). Wins
  *                 over everything: going online or retrying cannot help until it returns.
- *  - `incognito`  your own choice — hidden from friends, presence off on purpose.
+ *  - `incognito`  your own choice — hidden from friends. Since round 5 this device still
+ *                 RECEIVES friends' presence over a hidden connection (presence-socket.ts).
  *  - `server`     the presence connection reported an error while the computer is online.
  *                 Said as "Can't reach the game server" — WHERE it failed, not why.
  *  - `connecting` the second before the socket opens.
@@ -81,8 +82,10 @@ export type SocialState = 'offline' | 'incognito' | 'server' | 'connecting' | 'o
 
 export function socialState(s: { networkOnline: boolean; incognito?: boolean; connected: boolean; partyError: string | null }): SocialState {
   if (!s.networkOnline) return 'offline';
-  if (s.incognito) return 'incognito';
+  // A server failure outranks incognito now that incognito keeps a (hidden) connection open
+  // (round 5): if that connection fails, the problem is what to show.
   if (s.partyError) return 'server';
+  if (s.incognito) return 'incognito';
   return s.connected ? 'online' : 'connecting';
 }
 

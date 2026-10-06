@@ -52,8 +52,11 @@ const TONE: Record<CalloutTone, { surface: string; body: string; title: string }
   // `destructive` is the one status color that IS tokenised: change 17 moved the
   // app's reds onto it so theme packs can restyle their own danger.
   // WHY body text-fg-2 (2026-09-25, decisions.md P-2): "text is normal
-  // grey/black, never red" — only the box and its title carry the red.
-  danger: { surface: CALLOUT_DANGER_SURFACE, body: 'text-fg-2', title: 'text-destructive-fg' },
+  // grey/black, never red". WHY the title too (2026-10-05, Destin: the red title "seems to
+  // be unique styling not used elsewhere"): 13 of 16 red notices had no title at all, and the
+  // warning/info titles and ErrorState's title were already the normal text colour — only the
+  // box and its border carry the red. Pinned by callout-authority.test.tsx.
+  danger: { surface: CALLOUT_DANGER_SURFACE, body: 'text-fg-2', title: 'text-fg' },
 };
 
 export type CalloutProps = {

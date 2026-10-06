@@ -68,7 +68,7 @@ describe('Callout', () => {
     for (const cls of ['rounded-lg', 'p-3', 'border', 'bg-amber-500/10']) expect(details.className).toContain(cls);
   });
 
-  it('body text is the normal grey in every tone, danger included — colour lives in the box and title', () => {
+  it('body text is the normal grey in every tone, danger included — colour lives in the box', () => {
     // Design guide "Status and notices": never red or coloured body text. The
     // danger tone used to write its body in text-destructive-fg.
     for (const tone of ['info', 'warning', 'danger'] as const) {
@@ -79,8 +79,6 @@ describe('Callout', () => {
       expect(body.className, tone).not.toMatch(/text-(destructive|red|amber)/);
     }
     cleanup();
-    render(<Callout tone="danger" title="Couldn't sync">body</Callout>);
-    expect(screen.getByText("Couldn't sync").className).toContain('text-destructive-fg');
   });
 
   it("a notice's buttons sit INSIDE the box, after the text (at the right)", () => {
@@ -102,6 +100,19 @@ describe('Callout', () => {
   it('defaults to info', () => {
     render(<Callout>body</Callout>);
     expect(surface().className).toContain('bg-accent/10');
+  });
+
+  // Destin, 2026-10-05 (games-social G3-7, then app-wide): a red title "seems to be unique styling
+  // not used elsewhere". Titles are the normal text colour in EVERY tone — the colour lives in
+  // the box and its border, never in words (guide principle 2).
+  it('a title is the normal text colour in every tone, danger included', () => {
+    for (const tone of ['info', 'warning', 'danger'] as const) {
+      const { unmount } = render(<Callout tone={tone} title={`T-${tone}`}>body</Callout>);
+      const title = screen.getByText(`T-${tone}`);
+      expect(title.className).toContain('text-fg');
+      expect(title.className).not.toMatch(/destructive|red-|amber-/);
+      unmount();
+    }
   });
 
   it('an optional title sits above the body', () => {

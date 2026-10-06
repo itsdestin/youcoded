@@ -3114,7 +3114,9 @@ class SessionService : Service() {
             // social:presence-event broadcast (see the presenceClient onEvent).
 
             "social:presence-connect" -> {
-                presenceClient.setDesired(true)
+                // payload.hidden = incognito on this device: receive friends' presence, never be seen
+                // (PresenceClient.kt HIDDEN MODE; desktop parity with social-handlers.ts).
+                presenceClient.setDesired(true, msg.payload.optBoolean("hidden", false))
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", true)) }
             }
 

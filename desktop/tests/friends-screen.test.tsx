@@ -84,6 +84,7 @@ function makeSocial(over: Record<string, any> = {}) {
 
 beforeEach(() => {
   h.dispatch.mockClear();
+  h.state.connected = true;
   h.state.onlineUsers = [];
   h.state.username = 'Me';
   h.state.challengeFrom = null;
@@ -341,7 +342,17 @@ describe('Friends panel — your status pill and the handle', () => {
 });
 
 describe('Friends panel — incognito', () => {
-  it('says who is online is hidden rather than showing a number it cannot know', async () => {
+  it('connected hidden: shows the real online count and that friends cannot see you', async () => {
+    h.state.onlineUsers = [{ id: 'github:1', name: 'Alice', handle: 'alice', status: 'idle' }];
+    (window as any).claude.social = makeSocial({
+      listFriends: vi.fn().mockResolvedValue(ok([friend({ id: 'github:1', display_name: 'Alice' }), friend({ id: 'github:2', display_name: 'Bo' })])),
+    });
+    const u = render(<FriendsPanel social="incognito" incognito onRetry={vi.fn()} onToggleIncognito={h.toggleIncognito} />);
+    expect(await u.findByText("1 of 2 friends online · they can't see you")).toBeTruthy();
+  });
+
+  it('not connected (an older server refused hidden mode): says who is online is hidden, never a number', async () => {
+    h.state.connected = false;
     (window as any).claude.social = makeSocial({
       listFriends: vi.fn().mockResolvedValue(ok([friend({ id: 'github:1', display_name: 'Alice' })])),
     });

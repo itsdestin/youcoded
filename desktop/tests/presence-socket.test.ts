@@ -3,7 +3,7 @@
 // 'ws' sockets. The fake models exactly the event-emitter surface the manager
 // consumes (on/send/close/readyState).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createPresenceSocket, wakeEvidence, SUSPEND_GRACE_MS, HUMAN_INPUT_TYPES, type PresenceWebSocketLike } from '../src/main/presence-socket';
+import { createPresenceSocket, probeHiddenPresence, wakeEvidence, SUSPEND_GRACE_MS, HUMAN_INPUT_TYPES, type PresenceWebSocketLike } from '../src/main/presence-socket';
 
 class FakeSocket implements PresenceWebSocketLike {
   static instances: FakeSocket[] = [];
@@ -434,5 +434,84 @@ describe('presence self-healing', () => {
       expect(FakeSocket.instances).toHaveLength(2);
       sock.destroy();
     });
+  });
+});
+
+// Incognito = a HIDDEN connection (presence-socket.ts HIDDEN MODE): this device receives friends'
+// presence and is never shown to them. An older server would ignore the flag and show the user,
+// so the client keeps the connection only when the server's FIRST frame confirms hidden mode.
+describe('presence-socket hidden mode (incognito)', () => {
+  beforeEach(() => { FakeSocket.instances = []; vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('asks for hidden mode in the address and is connected only after the hello confirms it', () => {
+    const { sock, events } = makeSocket(() => 'tok');
+    sock.setHidden(true);
+    sock.setDesired(true);
+    const inst = FakeSocket.instances[0];
+    expect(inst.url).toBe('wss://api.youcoded.ai/social/presence?hidden=1');
+    inst.emit('open');
+    expect(types(events)).toEqual([]); // not "connected" yet
+    expect(sock.isConnected()).toBe(false);
+    inst.emit('message', JSON.stringify({ type: 'hello', hidden: true }));
+    inst.emit('message', JSON.stringify({ type: 'presence', users: [{ id: 'jake' }] }));
+    expect(types(events)).toEqual(['connected', 'presence']); // friends' presence arrives
+    expect(sock.isConnected()).toBe(true);
+    sock.destroy();
+  });
+
+  it('disconnects at once, relays nothing and reports it when an older server sends anything else first', () => {
+    const { sock, events } = makeSocket(() => 'tok');
+    sock.setHidden(true);
+    sock.setDesired(true);
+    const inst = FakeSocket.instances[0];
+    inst.emit('open');
+    inst.emit('message', JSON.stringify({ type: 'presence', users: [{ id: 'jake' }] }));
+    expect(inst.closeCalls).toHaveLength(1);
+    expect(types(events)).toEqual(['disconnected', 'hidden-unsupported']);
+    expect(events.some((e) => e.type === 'presence')).toBe(false);
+    // ...and it does not quietly reconnect.
+    inst.emit('close', 1000, 'bye');
+    vi.advanceTimersByTime(120_000);
+    expect(FakeSocket.instances).toHaveLength(1);
+    sock.destroy();
+  });
+
+  it('never sends a status change or a challenge while hidden', () => {
+    const { sock } = makeSocket(() => 'tok');
+    sock.setHidden(true);
+    sock.setDesired(true);
+    const inst = FakeSocket.instances[0];
+    inst.emit('open');
+    inst.emit('message', JSON.stringify({ type: 'hello', hidden: true }));
+    sock.send({ type: 'status', status: 'in-game' });
+    sock.send({ type: 'challenge', target: 'jake', gameType: 'chess', code: 'X' });
+    sock.send({ type: 'challenge-response', to: 'jake', accept: true });
+    sock.send({ type: 'game-result', game: 'chess' });
+    expect(inst.sent.map((m) => JSON.parse(m).type)).toEqual(['game-result']);
+    sock.destroy();
+  });
+
+  it('switching to hidden closes the visible connection before opening the hidden one', () => {
+    const { sock } = makeSocket(() => 'tok');
+    sock.setDesired(true);
+    const visible = FakeSocket.instances[0];
+    visible.emit('open');
+    sock.setHidden(true);
+    expect(visible.closeCalls).toHaveLength(1);
+    expect(FakeSocket.instances).toHaveLength(2);
+    expect(FakeSocket.instances[1].url).toContain('?hidden=1');
+    sock.destroy();
+  });
+
+  it('asks the server first: only an explicit {hidden: true} is a yes', async () => {
+    const answer = (status: number, body: unknown) =>
+      vi.fn(async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
+    vi.useRealTimers();
+    expect(await probeHiddenPresence(answer(200, { hidden: true }))).toBe(true);
+    expect(await probeHiddenPresence(answer(404, { error: 'not found' }))).toBe(false); // older server
+    expect(await probeHiddenPresence(answer(200, { hidden: false }))).toBe(false);
+    const offline = vi.fn(async () => { throw new Error('offline'); }) as unknown as typeof fetch;
+    expect(await probeHiddenPresence(offline)).toBe(false);
   });
 });

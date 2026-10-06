@@ -14,6 +14,32 @@ import {
 // WHY: Moved to its own domain so Cloudflare's cache and rate limiter apply; the old workers.dev address still answers for older app versions.
 const PRESENCE_URL = 'wss://api.youcoded.ai/social/presence';
 
+// HIDDEN MODE (incognito, per device — games-social round 5; Destin: "they shouldn't be able to see
+// me in incognito, but i feel like i should still be able to see who else is online"). The server
+// (wecoded-marketplace PresenceRoom) keeps a `?hidden=1` socket out of every friend's view while it
+// still RECEIVES their presence. Privacy rests on two client-side guards, because an OLDER server
+// ignores the flag and would announce the user online:
+//  1. Before connecting hidden, social-handlers asks CAPABILITIES_URL; no `hidden: true`, no connect.
+//  2. On the socket, the very first frame must be {type:'hello', hidden:true}; anything else means
+//     the server did not honour it — disconnect at once and report 'hidden-unsupported'.
+// And while hidden this side never sends a status change or a challenge (the server refuses them
+// too). Desktop and Android (PresenceClient.kt) implement the same rules.
+export const PRESENCE_CAPABILITIES_URL = 'https://api.youcoded.ai/social/presence/capabilities';
+const HIDDEN_BLOCKED = new Set(['status', 'challenge', 'challenge-response']);
+
+/** Does the presence server support hidden mode? Never throws; anything but an explicit
+ *  `{hidden: true}` (an older server's 404, no network, a timeout) is a no. */
+export async function probeHiddenPresence(fetchImpl: typeof fetch = fetch, timeoutMs = 5000): Promise<boolean> {
+  try {
+    const res = await fetchImpl(PRESENCE_CAPABILITIES_URL, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) return false;
+    const body = (await res.json()) as { hidden?: unknown };
+    return body?.hidden === true;
+  } catch {
+    return false;
+  }
+}
+
 // Structural socket surface + injectable constructor. Kept as named exports so
 // the state-machine test (tests/presence-socket.test.ts) can substitute a fake
 // socket. Both alias the shared engine's types (identical shape).
@@ -22,6 +48,8 @@ export type WebSocketCtor = ReconnectingWebSocketCtor;
 
 export interface PresenceSocket {
   setDesired(want: boolean): void;
+  /** Hidden (incognito) mode for the NEXT connection; switching modes while connected reconnects. */
+  setHidden(hidden: boolean): void;
   // System sleep gate (powerMonitor suspend/resume). Kept SEPARATE from
   // setDesired: desired is the RENDERER's intent (sign-in/incognito/leader)
   // and must survive a sleep/wake cycle unchanged.
@@ -96,16 +124,33 @@ export function createPresenceSocket(opts: {
   // {type:'connected'} + this frame instead of returning silently — without it
   // the fresh renderer never leaves "Connecting…".
   let lastPresence: Record<string, unknown> | null = null;
+  // Hidden mode, and whether THIS connection's server has confirmed it (see HIDDEN MODE above).
+  let hidden = false;
+  let helloSeen = false;
 
   const engine = createReconnectingWs({
     Ctor: opts.WebSocketCtor,
-    getUrl: () => PRESENCE_URL,
+    getUrl: () => (hidden ? `${PRESENCE_URL}?hidden=1` : PRESENCE_URL),
     getToken: opts.getToken,
     noToken: 'wait',
     closeReason: 'incognito or sign-out',
     onMessage: (data) => {
       try {
         const ev = JSON.parse(String(data));
+        if (hidden && !helloSeen) {
+          // Guard 2: the first frame decides. Confirmed → only now tell the renderer it is
+          // connected. Anything else → this server counted us VISIBLE: leave at once, relay
+          // nothing from it, and say why.
+          if (ev && ev.type === 'hello' && ev.hidden === true) {
+            helloSeen = true;
+            opts.onEvent({ type: 'connected' });
+          } else {
+            rendererDesired = false;
+            applyDesire();
+            opts.onEvent({ type: 'hidden-unsupported' });
+          }
+          return;
+        }
         // Cache the latest full presence snapshot for renderer-reload replay
         // (see lastPresence above).
         if (ev && ev.type === 'presence') {
@@ -130,7 +175,8 @@ export function createPresenceSocket(opts: {
         opts.onEvent(ev);
       } catch { /* non-JSON frame: ignore */ }
     },
-    onConnected: () => opts.onEvent({ type: 'connected' }),
+    // A hidden socket is not "connected" until the server confirms it (onMessage above).
+    onConnected: () => { helloSeen = false; if (!hidden) opts.onEvent({ type: 'connected' }); },
     onDisconnected: (info) => {
       // reason:'local' marks an INTENTIONAL disconnect — Task 7 uses it to
       // suppress "reconnecting" UI. A dropped/failed socket forwards the ws
@@ -142,6 +188,7 @@ export function createPresenceSocket(opts: {
     // socket so its 'close' schedules the retry.
     onError: (err) => opts.onEvent({ type: 'error', message: err.message }),
     onReplay: () => {
+      if (hidden && !helloSeen) return; // not confirmed yet — the hello will announce it
       opts.onEvent({ type: 'connected' });
       if (lastPresence) opts.onEvent(lastPresence);
     },
@@ -165,6 +212,15 @@ export function createPresenceSocket(opts: {
 
   return {
     setDesired(want) { rendererDesired = want; applyDesire(); },
+    setHidden(next) {
+      if (hidden === next) return;
+      // Switching modes needs a NEW connection (the mode is part of the URL): drop the current one
+      // first, so a visible socket is closed — and announced as left — before a hidden one opens.
+      engine.setDesired(false);
+      hidden = next;
+      helloSeen = false;
+      applyDesire();
+    },
     setSuspended(asleep) {
       if (suspended === asleep) return;
       suspended = asleep;
@@ -178,11 +234,16 @@ export function createPresenceSocket(opts: {
       idle = nowIdle;
       applyDesire();
     },
-    send(message) { engine.send(JSON.stringify(message)); },
+    send(message) {
+      // While hidden, nothing a friend could notice leaves this computer (the server refuses these
+      // too — this is the second lock on the same door).
+      if (hidden && HIDDEN_BLOCKED.has(String(message.type))) return;
+      engine.send(JSON.stringify(message));
+    },
     // True only when a socket exists AND finished its handshake — lets the
     // presence-send handler return an honest failure instead of silently
     // dropping a frame with a success receipt.
-    isConnected() { return engine.isOpen(); },
+    isConnected() { return engine.isOpen() && (!hidden || helloSeen); },
     repairIfStalled() {
       if (!engine.isStalled()) return false;
       // desired is already true inside the engine; setDesired(true) on a

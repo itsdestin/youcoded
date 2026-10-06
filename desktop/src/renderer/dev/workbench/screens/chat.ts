@@ -113,6 +113,8 @@ export const CHAT: readonly ScreenEntry[] = [
   // not-connected states.
   { ...chat('chat/games#long', 'pane', 'games'), params: { signedIn: '1', friends: 'lots', friendsOpen: '1' } },
   { ...chat('chat/games#incognito', 'pane', 'games'), params: { signedIn: '1', friends: 'many', incognito: '1' } },
+  // Incognito with the card opened: friends' statuses still show (hidden presence, round 5).
+  { ...chat('chat/games#incognito-open', 'pane', 'games'), params: { signedIn: '1', friends: 'many', incognito: '1', friendsOpen: '1' } },
   { ...chat('chat/games#offline', 'pane', 'games'), params: { signedIn: '1', friends: 'many', network: 'offline' } },
   // Your status pill's menu open, and a friend's details popup (a Dialog, deck games-social-4).
   { ...chat('chat/games#status-menu', 'pane', 'games'), params: { signedIn: '1', friends: 'many', statusMenu: '1' } },

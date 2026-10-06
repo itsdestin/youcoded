@@ -1119,8 +1119,9 @@ function ModelSettingsDialog({ open, modelId, name, onClose }: { open: boolean; 
         // who fixed the flag an hour ago should not read a card that says the
         // model is broken right now. `break-words` because engine errors carry
         // long unbroken file paths that CSS will not break on its own.
-        <Callout tone="danger" title="This model failed to load last time">
-          <p className="text-2xs break-words">{settings.lastLoadError}</p>
+        // WHY no red title (games-social round 5): one plain sentence, the engine's own words after it.
+        <Callout tone="danger">
+          <p className="break-words">This model failed to load last time: <span className="break-words">{settings.lastLoadError}</span></p>
         </Callout>
       )}
       <SettingRow

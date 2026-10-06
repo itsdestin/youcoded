@@ -94,7 +94,9 @@ export function IntegrationDetailOverlay({
     >
       {/* The error is a notice inside the item's card, words in the normal text colour
           (guide "Status and notices"), not a red line clipped to 40 characters. */}
-      {s.error && <Callout tone="danger" title="Something went wrong">{s.error}</Callout>}
+      {/* WHY no title (games-social round 5): the plain error box — the message itself is the
+          specific cause; "Something went wrong" above it added nothing. */}
+      {s.error && <Callout tone="danger">{s.error}</Callout>}
       {setupHint && (
         <SetupHint command={setupHint.command} onDismiss={onDismissSetupHint} onOpenSetupSession={onOpenSetupSession} />
       )}

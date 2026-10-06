@@ -913,8 +913,8 @@ contextBridge.exposeInMainWorld('claude', {
     // Presence socket (Task 6). connect/disconnect/send return { ok: true };
     // all real data arrives asynchronously via onPresenceEvent. message is
     // passed positionally (matches the ipcMain.handle signature).
-    presenceConnect: (): Promise<{ ok: true }> =>
-      ipcRenderer.invoke(IPC.SOCIAL_PRESENCE_CONNECT),
+    presenceConnect: (opts?: { hidden?: boolean }): Promise<{ ok: true }> => // hidden = incognito (presence-socket.ts)
+      ipcRenderer.invoke(IPC.SOCIAL_PRESENCE_CONNECT, opts ?? {}),
     presenceDisconnect: (): Promise<{ ok: true }> =>
       ipcRenderer.invoke(IPC.SOCIAL_PRESENCE_DISCONNECT),
     // presenceSend returns an honest receipt: { ok:false, status:0, message }

@@ -193,7 +193,7 @@ function LobbyScreen({ connection, incognito, onToggleIncognito, gameId, onAddFr
           itself lives in the friends panel now. */}
       {incognito && onToggleIncognito && (
         <Callout actions={<Button variant="secondary" size="sm" onClick={onToggleIncognito}>Go online</Button>}>
-          <p className="text-xs text-fg-2">You're incognito. Friends can't see you or challenge you.</p>
+          <p className="text-xs text-fg-2">You're incognito. Friends can't see you or challenge you, and you can't challenge them.</p>
         </Callout>
       )}
 
@@ -211,9 +211,11 @@ function LobbyScreen({ connection, incognito, onToggleIncognito, gameId, onAddFr
                 <SettingRow
                   key={row.id}
                   variant="nav"
-                  title={<NameWithPill name={row.name} pill={!incognito ? <PresencePill row={row} /> : undefined} />}
+                  // Presence is real while incognito too (a hidden connection, round 5), but a
+                  // challenge would reveal you — so no Challenge until you go online.
+                  title={<NameWithPill name={row.name} pill={state.connected ? <PresencePill row={row} /> : undefined} />}
                   description={rec ? recordSentence(rec, row.name) : 'Not played yet'}
-                  control={row.online ? <ChallengeButton onClick={() => connection.challengePlayer(row.id, gameId)} /> : undefined}
+                  control={row.online && !incognito ? <ChallengeButton onClick={() => connection.challengePlayer(row.id, gameId)} /> : undefined}
                 />
               );
             })}

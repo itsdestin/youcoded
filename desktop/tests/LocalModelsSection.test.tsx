@@ -330,7 +330,9 @@ async function openSettings(settings: StoredModelSettings, later?: StoredModelSe
   return () => { landed = true; };
 }
 
-const LOAD_ERROR_TITLE = 'This model failed to load last time';
+// The opening words of the load-error sentence (no longer a separate red title — 2026-10-05,
+// plain error boxes app-wide); the engine's own words follow in their own span.
+const LOAD_ERROR_TITLE = /This model failed to load last time/;
 
 describe('fields main computes', () => {
   beforeAll(() => { shippedPollMs = setModelSettingsPollMs(50); });
@@ -410,7 +412,7 @@ describe('fields main computes', () => {
       await openSettings({ ...SETTINGS, lastLoadError: 'error: invalid argument: --tempp' });
       const body = screen.getByTestId('model-settings');
       const first = body.firstElementChild as HTMLElement;
-      expect(first.textContent).toContain(LOAD_ERROR_TITLE);
+      expect(first.textContent).toMatch(LOAD_ERROR_TITLE);
     });
 
     it('R26: opens Advanced when the model failed to load, and leaves it shut otherwise', async () => {

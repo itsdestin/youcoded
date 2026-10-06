@@ -20,7 +20,7 @@ import { wrap, makeClearSessionOn401 } from "./handler-utils";
 // Platform-owned presence socket (Task 6). The account session token and the
 // WebSocket live in the main process; the renderer only ever sees relayed
 // social:presence-event pushes and expresses desired connection state.
-import { createPresenceSocket, wakeEvidence, HUMAN_INPUT_TYPES, type PresenceSocket } from "./presence-socket";
+import { createPresenceSocket, probeHiddenPresence, wakeEvidence, HUMAN_INPUT_TYPES, type PresenceSocket } from "./presence-socket";
 import { log } from "./logger";
 import type { WindowRegistry } from "./window-registry";
 import type { RemoteServer } from "./remote-server";
@@ -285,7 +285,22 @@ export function registerSocialHandlers(
   // These express desired state / send one message; they never return data — the
   // socket relays everything back asynchronously via social:presence-event.
 
-  ipcMain.handle("social:presence-connect", (): { ok: true } => {
+  // `hidden` = incognito on THIS device (see HIDDEN MODE in presence-socket.ts). Guard 1 lives
+  // here: a hidden connection is opened only after the server says it supports hidden mode; an
+  // older server (or no answer) leaves presence OFF and tells the renderer why — never a visible
+  // fallback. The probe is an async fetch, so the main process never blocks on it.
+  ipcMain.handle("social:presence-connect", async (_e?: unknown, opts?: { hidden?: boolean }): Promise<{ ok: true }> => {
+    const hidden = opts?.hidden === true;
+    if (hidden) {
+      presence.setHidden(true);
+      if (!(await probeHiddenPresence())) {
+        presence.setDesired(false);
+        broadcastPresenceEvent({ type: "hidden-unsupported" });
+        return { ok: true };
+      }
+    } else {
+      presence.setHidden(false);
+    }
     presence.setDesired(true);
     startIdlePoller(); // see the poller's WHY: it lives with the renderer's intent
     return { ok: true };

@@ -2156,7 +2156,7 @@ export function installShim(): void {
       // events flow back via the 'social:presence-event' push (handleMessage below).
       // message is object-wrapped as { message } so the Android SessionService
       // reads it via msg.payload.getJSONObject("message").
-      presenceConnect: (): Promise<{ ok: true }> => invoke('social:presence-connect'),
+      presenceConnect: (opts?: { hidden?: boolean }): Promise<{ ok: true }> => invoke('social:presence-connect', opts ?? {}), // hidden: SessionService reads payload.hidden
       presenceDisconnect: (): Promise<{ ok: true }> => invoke('social:presence-disconnect'),
       // presenceSend returns an honest receipt: { ok:false, status:0, message }
       // when the platform socket isn't connected (frame would silently drop).

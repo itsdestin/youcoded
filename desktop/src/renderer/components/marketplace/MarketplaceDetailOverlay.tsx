@@ -226,8 +226,12 @@ function InstallingButton() {
  *  touch screens never saw it. */
 function InstallFailed({ message, onRetry }: { message: string; onRetry(): void }) {
   return (
-    <Callout tone="danger" title="Couldn't install" actions={<Button size="sm" onClick={onRetry}>Retry install</Button>}>
-      {message}
+    // WHY no title (games-social round 5; Destin: the red title "seems to be unique styling not
+    // used elsewhere"): one plain sentence that still names the real reason.
+    <Callout tone="danger" actions={<Button size="sm" onClick={onRetry}>Retry install</Button>}>
+      {/* The reason usually already says what failed ("Couldn't download it: …"); prefix only a
+          bare one, so the sentence never reads "Couldn't install: Couldn't…". */}
+      {/^(couldn't|can't|could not|cannot)\b/i.test(message.trim()) ? message : `Couldn't install: ${message}`}
     </Callout>
   );
 }

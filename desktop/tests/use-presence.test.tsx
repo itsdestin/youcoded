@@ -53,9 +53,9 @@ beforeEach(() => {
 });
 
 describe('usePresence — desired state', () => {
-  it('connects when signed in and not incognito', async () => {
+  it('connects visibly when signed in and not incognito', async () => {
     renderHook(() => usePresence());
-    await waitFor(() => expect((window as any).claude.social.presenceConnect).toHaveBeenCalled());
+    await waitFor(() => expect((window as any).claude.social.presenceConnect).toHaveBeenCalledWith({ hidden: false }));
     expect((window as any).claude.social.presenceDisconnect).not.toHaveBeenCalled();
   });
 
@@ -72,11 +72,21 @@ describe('usePresence — desired state', () => {
     expect((window as any).claude.social.presenceConnect).not.toHaveBeenCalled();
   });
 
-  it('stored incognito=true disconnects instead of connecting', async () => {
+  // Incognito connects HIDDEN (round 5): this device still sees friends, they never see it.
+  it('stored incognito=true connects hidden, never visibly', async () => {
     (window as any).claude.getIncognito = vi.fn().mockResolvedValue(true);
     renderHook(() => usePresence());
-    await waitFor(() => expect((window as any).claude.social.presenceDisconnect).toHaveBeenCalled());
-    expect((window as any).claude.social.presenceConnect).not.toHaveBeenCalled();
+    await waitFor(() => expect((window as any).claude.social.presenceConnect).toHaveBeenCalledWith({ hidden: true }));
+    expect((window as any).claude.social.presenceConnect).not.toHaveBeenCalledWith({ hidden: false });
+  });
+
+  it('while incognito, a status change or a challenge never leaves the device', async () => {
+    (window as any).claude.getIncognito = vi.fn().mockResolvedValue(true);
+    const { result } = renderHook(() => usePresence());
+    await waitFor(() => expect((window as any).claude.social.presenceConnect).toHaveBeenCalledWith({ hidden: true }));
+    act(() => { result.current.updateStatus('in-game'); result.current.challengePlayer('github:2', 'chess', 'X'); });
+    expect((window as any).claude.social.presenceSend).not.toHaveBeenCalled();
+    expect(h.dispatch).toHaveBeenCalledWith({ type: 'CHALLENGE_FAILED', target: 'github:2' });
   });
 });
 
