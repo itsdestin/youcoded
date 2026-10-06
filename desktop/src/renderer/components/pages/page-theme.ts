@@ -21,6 +21,10 @@ const PAGE_THEME_TOKENS: readonly string[] = [
   'edge', 'edge-dim',
   'link', 'link-hover',
   'destructive', 'destructive-fg', 'on-destructive',
+  // WHY: the theme's own warning amber (theme-engine derives it per theme so it
+  // clears contrast on pale themes too). Pages that warn — a card near its limit,
+  // a late bill — would otherwise hand-pick an amber that vanishes on Meadow Mist.
+  'warning-fg',
   'radius', 'radius-sm', 'radius-md', 'radius-lg', 'radius-xl', 'radius-full',
   'font-sans', 'font-mono',
 ];

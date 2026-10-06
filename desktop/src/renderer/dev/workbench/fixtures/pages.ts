@@ -14,6 +14,7 @@
 // and redo — because the samples are what sets the expectation for the
 // creator skill.
 import type { PageDocument } from '../../../../shared/pages-types';
+import { MONEY_PAGE } from './money/money';
 
 const T = '2026-09-14T18:20:00.000Z';
 
@@ -443,6 +444,8 @@ function connectedPages(): PageDocument[] {
 
 export function seedPages(): PageDocument[] {
   return [
+    // Finance dashboard, design stage (2026-10-05).
+    MONEY_PAGE,
     ...connectedPages(),
     {
       id: 'page-focus-timer',

@@ -11,6 +11,8 @@ export const PAGES: readonly ScreenEntry[] = [
   { ...pg('pages#empty', 'view', 'empty-state'), scenario: 'empty' },
   pg('pages/page/page-week-planner', 'view'),
   pg('pages/focus/page-focus-timer', 'view'),
+  // Finance dashboard mockup (design stage, 2026-10-05).
+  pg('pages/page/page-money', 'view', 'money'),
   // Approval states, one fixture page each.
   pg('pages/page/page-weather', 'view', 'approval'),
   pg('pages/page/page-task-board', 'view', 'approval'),

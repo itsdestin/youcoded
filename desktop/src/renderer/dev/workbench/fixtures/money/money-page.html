@@ -1,0 +1,380 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Money</title>
+<!--
+  Money page — design-stage mockup (finance dashboard, 2026-10-05).
+  Decisions it follows: docs/active/design/2026-10-05-finance-dashboard/
+  finance-dashboard.questions.answers.json (summary sheet first, grouped by kind,
+  card bars warn at 30% / alert at 80%, bills by due date with late + "reported in
+  N days" warnings, net-worth history chart, live check on open, stale after 3 days,
+  typed-in accounts editable here and by chat, balances only).
+  Everything it shows comes from youcoded.data, so the same file runs against the
+  workbench's made-up numbers now and Plaid-fed numbers later.
+-->
+<style>
+  :root { --warn: var(--warning-fg, #c77a00); --bad: var(--destructive-fg, #d33); }
+  .num { font-variant-numeric: tabular-nums; }
+  .neg { color: var(--fg); }
+  .head { align-items: flex-start; }
+  .updated { gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+  .yc-button { white-space: nowrap; }
+  .yc-button svg { width: 14px; height: 14px; flex: none; }
+  .head { gap: 12px; flex-wrap: wrap; }
+
+  /* Summary sheet: four tiles, the first carries the big number. */
+  .sheet { display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; gap: 12px; }
+  .tile { padding: 14px 16px; }
+  .tile .val { font-size: 22px; font-weight: 500; line-height: 1.2; margin-top: 4px; }
+  .tile--hero .val { font-size: 30px; }
+  .tile .sub { margin-top: 4px; }
+  .delta { font-size: 12px; color: var(--fg-2); }
+
+  /* Alerts: icon + words, never colour alone. */
+  .alerts { display: flex; flex-direction: column; gap: 6px; }
+  .alert { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--radius-md, 8px);
+           background: var(--inset); border: 1px solid var(--edge-dim); }
+  .alert svg { flex: none; width: 16px; height: 16px; }
+  .alert--warn svg { color: var(--warn); }
+  .alert--bad { border-color: var(--bad); }
+  .alert--bad svg { color: var(--bad); }
+  .alert .msg { flex: 1; min-width: 0; }
+
+  /* Chart */
+  .chart-card { padding: 14px 16px 10px; }
+  .chart { position: relative; height: 180px; margin-top: 8px; }
+  .chart svg { width: 100%; height: 100%; display: block; overflow: visible; }
+  .chart .grid line { stroke: var(--edge-dim); stroke-width: 1; }
+  .chart .axis text { fill: var(--fg-muted); font-size: 11px; }
+  .chart .line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .chart .area { fill: var(--accent); opacity: .08; }
+  .chart .zero { stroke: var(--fg-faint); stroke-dasharray: 3 3; }
+  .chart .cross { stroke: var(--fg-muted); stroke-width: 1; }
+  .chart .dot { fill: var(--accent); stroke: var(--panel); stroke-width: 2; }
+  .tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--edge); border-radius: var(--radius-md, 8px);
+         padding: 6px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.25); white-space: nowrap; transform: translate(-50%, -110%); }
+  .ranges { gap: 4px; }
+  .ranges .yc-button { min-width: 40px; }
+  .ranges .on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+
+  /* Groups */
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
+  .group { padding: 0; overflow: hidden; }
+  .group-head { display: flex; align-items: baseline; justify-content: space-between; padding: 12px 16px 8px; }
+  .group-head .total { font-size: 14px; font-weight: 500; }
+  .acct { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 10px 16px; border-top: 1px solid var(--edge-dim); align-items: center; }
+  .acct .name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .acct .bal { text-align: right; font-weight: 500; }
+  .acct .meta { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-muted); min-width: 0; }
+  .acct .side { display: flex; align-items: center; justify-content: flex-end; gap: 6px; font-size: 12px; color: var(--fg-muted); }
+  .acct--stale .name, .acct--stale .bal { color: var(--fg-dim); }
+  .src { display: inline-flex; align-items: center; gap: 4px; }
+  .src svg { width: 12px; height: 12px; }
+  .stale { color: var(--warn); display: inline-flex; align-items: center; gap: 4px; }
+  .stale svg { width: 12px; height: 12px; }
+  .icon-btn { width: 26px; height: 26px; padding: 0; }
+  .icon-btn svg { width: 14px; height: 14px; }
+
+  /* Card limit meter */
+  .meter { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+  .bar { flex: 1; height: 6px; border-radius: 9999px; background: var(--inset); overflow: hidden; position: relative; }
+  .bar > i { position: absolute; inset: 0 auto 0 0; border-radius: 9999px; background: var(--fg-2); }
+  .bar .mark { position: absolute; top: -2px; bottom: -2px; width: 1px; background: var(--fg-faint); }
+  .meter--warn .bar > i { background: var(--warn); }
+  .meter--bad .bar > i { background: var(--bad); }
+  .meter .pct { font-size: 12px; min-width: 128px; text-align: right; color: var(--fg-2); display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; }
+  .meter .pct svg { width: 12px; height: 12px; }
+  .meter--warn .pct svg { color: var(--warn); }
+  .meter--bad .pct svg { color: var(--bad); }
+
+  /* Bills */
+  .bill { display: grid; grid-template-columns: 1fr auto auto; gap: 2px 12px; padding: 10px 16px; border-top: 1px solid var(--edge-dim); align-items: center; }
+  .bill .when { font-size: 12px; text-align: right; min-width: 150px; display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; color: var(--fg-2); }
+  .bill .when svg { width: 12px; height: 12px; }
+  .bill--late .when { color: var(--warn); }
+  .bill--late .when svg { color: var(--warn); }
+  .bill--report { background: color-mix(in srgb, var(--bad) 8%, transparent); }
+  .bill--report .when { color: var(--bad); font-weight: 500; }
+  .bill--paid .name, .bill--paid .amt { color: var(--fg-dim); }
+  .bill .amt { text-align: right; font-weight: 500; min-width: 72px; }
+
+  /* Inline edit */
+  .edit { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+  .edit .yc-input { max-width: 160px; }
+  .edit .hint { flex: 1; font-size: 12px; color: var(--fg-muted); }
+
+  .menu { position: absolute; right: 0; top: calc(100% + 6px); background: var(--panel); border: 1px solid var(--edge); border-radius: var(--radius-md, 8px);
+          padding: 4px; min-width: 220px; z-index: 5; box-shadow: 0 8px 24px rgba(0,0,0,.25); }
+  .menu button { display: flex; flex-direction: column; align-items: flex-start; width: 100%; text-align: left; background: none; border: 0; color: var(--fg);
+                 font: inherit; font-size: 12px; padding: 8px 10px; border-radius: var(--radius-sm, 4px); cursor: pointer; }
+  .menu button:hover { background: var(--inset); }
+  .menu .yc-caption { margin-top: 2px; }
+
+  @media (max-width: 760px) {
+    .sheet { grid-template-columns: 1fr 1fr; }
+    .tile--hero { grid-column: 1 / -1; }
+    .cols { grid-template-columns: 1fr; }
+    .bill { grid-template-columns: 1fr auto; }
+    .bill .when { grid-column: 1 / -1; justify-content: flex-start; text-align: left; min-width: 0; }
+  }
+</style></head>
+<body>
+<div class="yc-page yc-stack" id="root"></div>
+<script>
+(function(){
+  var ICON = {
+    warn: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M8 2 1.5 13.5h13L8 2Z"/><path d="M8 6.5v3.2M8 11.6v.1" stroke-linecap="round"/></svg>',
+    stop: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6.2"/><path d="M8 4.8v3.6M8 10.9v.1" stroke-linecap="round"/></svg>',
+    link: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M6.5 9.5 9.5 6.5"/><path d="M7 4.5 8.5 3a2.5 2.5 0 0 1 3.5 3.5L10.5 8M9 11.5 7.5 13A2.5 2.5 0 0 1 4 9.5L5.5 8"/></svg>',
+    hand: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 2.5l3 3L6 13H3v-3l7.5-7.5Z"/></svg>',
+    refresh: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5v2.5h-2.5"/></svg>',
+    check: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg>',
+    plus: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>'
+  };
+  var DAY = 86400000;
+  var KINDS = [
+    { k: 'checking', label: 'Checking' }, { k: 'savings', label: 'Savings' },
+    { k: 'investment', label: 'Investments' }, { k: 'credit', label: 'Credit cards' },
+    { k: 'loan', label: 'Loans' }
+  ];
+
+  var data = (window.youcoded && window.youcoded.data) || { accounts: [], bills: [], history: [], settings: {} };
+  var S = Object.assign({ staleDays: 3, warnPct: 30, alertPct: 80, reportDay: 30, reportWarnDays: 7 }, data.settings || {});
+  var range = '6m', editing = null, menuOpen = false, checking = false;
+
+  // WHY a fixed "today" when the data names one: the workbench's made-up numbers
+  // are dated, so pictures of the mockup stay the same from day to day. A real
+  // page has no demoToday and uses the clock.
+  function today(){ return data.demoToday ? new Date(data.demoToday + 'T12:00:00') : new Date(); }
+  function day(s){ return new Date(s + 'T12:00:00'); }
+  function daysBetween(a, b){ return Math.round((b - a) / DAY); }
+  function money(n, opt){
+    var neg = n < 0, v = Math.abs(n);
+    var s = v.toLocaleString('en-US', { minimumFractionDigits: opt === 'whole' ? 0 : 2, maximumFractionDigits: opt === 'whole' ? 0 : 2 });
+    return (neg ? '−$' : '$') + s;
+  }
+  function short(d){ return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); }
+  function ago(iso){
+    var m = Math.round((today() - new Date(iso)) / 60000);
+    if (m < 2) return 'just now';
+    if (m < 60) return m + ' min ago';
+    var h = Math.round(m / 60); if (h < 24) return h + ' hr ago';
+    var d = Math.round(h / 24); return d === 1 ? 'yesterday' : d + ' days ago';
+  }
+  function isStale(a){ return (today() - new Date(a.updatedAt)) / DAY >= S.staleDays; }
+  function esc(s){ return String(s).replace(/[&<>"]/g, function(c){ return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]; }); }
+
+  // Owed things are stored as positive balances; the sign is decided here, once.
+  // "Robinhood Gold Card" already names its bank; "Store card" needs "Synchrony" in front.
+  function fullName(a){ return a.name.indexOf(a.institution) === 0 ? a.name : a.institution + ' ' + a.name; }
+  function isDebt(a){ return a.kind === 'credit' || a.kind === 'loan'; }
+  function totals(){
+    var have = 0, owe = 0, cash = 0;
+    data.accounts.forEach(function(a){
+      if (isDebt(a)) owe += a.balance; else have += a.balance;
+      if (a.kind === 'checking' || a.kind === 'savings') cash += a.balance;
+    });
+    // Cash available = checking + savings, minus every unpaid payment due before month end.
+    var t = today(), end = new Date(t.getFullYear(), t.getMonth() + 1, 0, 23);
+    var due = 0;
+    allBills().forEach(function(b){ if (!b.paid && b.due <= end) due += b.amount; });
+    return { have: have, owe: owe, net: have - owe, cash: cash - due, dueThisMonth: due };
+  }
+
+  // Bills = every account's next payment + standalone bills (insurance, phone).
+  function allBills(){
+    var out = [];
+    data.accounts.forEach(function(a){ if (a.payment) out.push({ id: a.id, name: fullName(a) + (a.kind === 'credit' ? ' · minimum' : ''), amount: a.payment.amount, due: day(a.payment.due), paid: a.payment.paid ? day(a.payment.paid) : null }); });
+    (data.bills || []).forEach(function(b){ out.push({ id: b.id, name: b.name, amount: b.amount, due: day(b.due), paid: b.paid ? day(b.paid) : null }); });
+    return out.sort(function(x, y){ return (x.paid ? 1 : 0) - (y.paid ? 1 : 0) || x.due - y.due; });
+  }
+  function billState(b){
+    var t = today();
+    if (b.paid) return { cls: 'bill--paid', icon: ICON.check, text: 'Paid ' + short(b.paid) };
+    var d = daysBetween(b.due, t);
+    if (d > 0) {
+      var left = S.reportDay - d;
+      if (left <= 0) return { cls: 'bill--late bill--report', icon: ICON.stop, text: d + ' days late — may be on your credit report', alert: 'bad' };
+      if (left <= S.reportWarnDays) return { cls: 'bill--late bill--report', icon: ICON.stop, text: d + ' days late — reported to credit bureaus in ' + left + (left === 1 ? ' day' : ' days'), alert: 'bad' };
+      return { cls: 'bill--late', icon: ICON.warn, text: d + (d === 1 ? ' day late' : ' days late'), alert: 'warn' };
+    }
+    if (d === 0) return { cls: '', icon: '', text: 'Due today' };
+    return { cls: '', icon: '', text: (-d === 1 ? 'Due tomorrow' : 'Due ' + short(b.due) + ' · ' + (-d) + ' days') };
+  }
+
+  function alerts(){
+    var out = [];
+    allBills().forEach(function(b){
+      var s = billState(b);
+      if (s.alert) out.push({ lvl: s.alert, text: '<b>' + esc(b.name) + '</b> · ' + money(b.amount) + ' · ' + s.text });
+    });
+    data.accounts.forEach(function(a){
+      if (a.kind === 'credit' && a.limit) {
+        var p = a.balance / a.limit * 100;
+        if (p >= S.alertPct) out.push({ lvl: 'bad', text: '<b>' + esc(fullName(a)) + '</b> is at ' + Math.round(p) + '% of its ' + money(a.limit, 'whole') + ' limit' });
+      }
+      if (isStale(a) && a.source === 'plaid') out.push({ lvl: 'warn', text: '<b>' + esc(a.institution) + '</b> hasn’t updated in ' + Math.floor((today() - new Date(a.updatedAt)) / DAY) + ' days — sign in to the bank again to reconnect', action: 'reconnect' });
+    });
+    return out.sort(function(x, y){ return (x.lvl === 'bad' ? 0 : 1) - (y.lvl === 'bad' ? 0 : 1); });
+  }
+
+  function render(){
+    var t = totals(), al = alerts();
+    var h = '';
+    // Header
+    h += '<div class="yc-row yc-row--between head"><div><div class="yc-eyebrow">Money</div><h1>Where you stand</h1></div>';
+    h += '<div class="yc-row updated"><span class="yc-caption">' + (checking ? 'Checking your banks…' : 'Balances checked ' + ago(data.checkedAt || today().toISOString())) + '</span>';
+    h += '<button class="yc-button" id="check"' + (checking ? ' disabled' : '') + '>' + ICON.refresh + ' Check now</button>';
+    h += '<div style="position:relative"><button class="yc-button" id="add">' + ICON.plus + ' Add account</button>';
+    if (menuOpen) h += '<div class="menu" role="menu"><button data-add="bank">Connect a bank<span class="yc-caption">Sign in through Plaid in your browser</span></button><button data-add="hand">Add one by hand<span class="yc-caption">For accounts that can’t connect</span></button><button data-add="bill">Add a bill<span class="yc-caption">Insurance, phone, anything with a due date</span></button></div>';
+    h += '</div></div></div>';
+
+    // Alerts first: what needs you today.
+    if (al.length) {
+      h += '<div class="alerts">';
+      al.forEach(function(a){
+        h += '<div class="alert alert--' + a.lvl + '">' + (a.lvl === 'bad' ? ICON.stop : ICON.warn) + '<span class="msg">' + a.text + '</span>' + (a.action ? '<button class="yc-button yc-button--sm">Reconnect</button>' : '') + '</div>';
+      });
+      h += '</div>';
+    }
+
+    // Summary sheet
+    var hist = data.history || [], first = hist.length ? hist[Math.max(0, hist.length - 31)].v : null;
+    var change = first == null ? null : t.net - first;
+    h += '<div class="sheet">';
+    h += '<div class="yc-card tile tile--hero"><div class="yc-eyebrow">Net worth</div><div class="val num">' + money(t.net, 'whole') + '</div>';
+    if (change != null) h += '<div class="sub delta num">' + (change >= 0 ? '▲ ' : '▼ ') + money(Math.abs(change), 'whole') + ' in the last 30 days</div>';
+    h += '</div>';
+    h += '<div class="yc-card tile"><div class="yc-eyebrow">Cash available</div><div class="val num">' + money(t.cash, 'whole') + '</div><div class="sub yc-caption">After ' + money(t.dueThisMonth, 'whole') + ' still due this month</div></div>';
+    h += '<div class="yc-card tile"><div class="yc-eyebrow">Total owed</div><div class="val num">' + money(t.owe, 'whole') + '</div><div class="sub yc-caption">Cards, loans and Affirm</div></div>';
+    h += '<div class="yc-card tile"><div class="yc-eyebrow">You have</div><div class="val num">' + money(t.have, 'whole') + '</div><div class="sub yc-caption">Cash, savings and investments</div></div>';
+    h += '</div>';
+
+    // Chart
+    h += '<div class="yc-card chart-card"><div class="yc-row yc-row--between"><div class="yc-eyebrow">Net worth over time</div><div class="yc-row ranges">';
+    [['3m','3M'],['6m','6M'],['1y','1Y'],['all','All']].forEach(function(r){ h += '<button class="yc-button yc-button--sm' + (range === r[0] ? ' on' : '') + '" data-range="' + r[0] + '">' + r[1] + '</button>'; });
+    h += '</div></div><div class="chart" id="chart"></div></div>';
+
+    // Groups: two columns — what you have, what you owe — then bills.
+    h += '<div class="cols"><div class="yc-stack">';
+    ['checking','savings','investment'].forEach(function(k){ h += group(k); });
+    h += '</div><div class="yc-stack">';
+    ['credit','loan'].forEach(function(k){ h += group(k); });
+    h += '</div></div>';
+    h += billsCard();
+
+    document.getElementById('root').innerHTML = h;
+    drawChart();
+    wire();
+  }
+
+  function group(k){
+    var list = data.accounts.filter(function(a){ return a.kind === k; });
+    if (!list.length) return '';
+    var label = KINDS.filter(function(x){ return x.k === k; })[0].label;
+    var sum = list.reduce(function(s, a){ return s + a.balance; }, 0);
+    var h = '<div class="yc-card group"><div class="group-head"><span class="yc-eyebrow">' + label + ' ' + '<span class="yc-faint">' + list.length + '</span></span><span class="total num">' + (k === 'credit' || k === 'loan' ? 'Owe ' : '') + money(sum) + '</span></div>';
+    list.forEach(function(a){ h += row(a); });
+    return h + '</div>';
+  }
+
+  function row(a){
+    var stale = isStale(a);
+    var h = '<div class="acct' + (stale ? ' acct--stale' : '') + '" data-id="' + a.id + '">';
+    h += '<div class="name" title="' + esc(a.name) + '">' + esc(a.name) + '</div><div class="bal num">' + money(a.balance) + '</div>';
+    h += '<div class="meta">' + esc(a.institution);
+    if (a.kind === 'loan' && a.apr) h += ' · ' + a.apr + '% interest';
+    if (a.note) h += ' · ' + esc(a.note);
+    h += '</div><div class="side">';
+    if (stale) h += '<span class="stale">' + ICON.warn + (a.source === 'plaid' ? 'Out of date · ' + ago(a.updatedAt) : 'Update me · ' + ago(a.updatedAt)) + '</span>';
+    else h += '<span class="src" title="' + (a.source === 'plaid' ? 'Connected through Plaid' : 'Typed in') + '">' + (a.source === 'plaid' ? ICON.link + 'Connected' : ICON.hand + 'Typed in · ' + ago(a.updatedAt)) + '</span>';
+    if (a.source === 'manual') h += '<button class="yc-button yc-button--ghost icon-btn" data-edit="' + a.id + '" aria-label="Update ' + esc(a.name) + '" title="Update the balance">' + ICON.hand + '</button>';
+    h += '</div>';
+    if (a.kind === 'credit' && a.limit) {
+      var p = a.balance / a.limit * 100, lvl = p >= S.alertPct ? 'bad' : p >= S.warnPct ? 'warn' : '';
+      h += '<div class="meter' + (lvl ? ' meter--' + lvl : '') + '"><div class="bar" title="' + Math.round(p) + '% of limit"><i style="width:' + Math.min(100, p) + '%"></i><span class="mark" style="left:' + S.warnPct + '%"></span></div>';
+      h += '<span class="pct num">' + (lvl ? (lvl === 'bad' ? ICON.stop : ICON.warn) : '') + Math.round(p) + '% of ' + money(a.limit, 'whole') + '</span></div>';
+    }
+    if (editing === a.id) {
+      h += '<div class="edit"><input class="yc-input num" id="edit-val" inputmode="decimal" value="' + a.balance.toFixed(2) + '" aria-label="New balance"><span class="hint">You can also tell YouCoded in chat: “' + esc(a.institution) + ' is $…”</span>';
+      h += '<button class="yc-button yc-button--ghost" data-cancel>Cancel</button><button class="yc-button yc-button--primary" data-save="' + a.id + '">Save</button></div>';
+    }
+    return h + '</div>';
+  }
+
+  function billsCard(){
+    var bills = allBills(), t = today();
+    var next14 = bills.filter(function(b){ return !b.paid && daysBetween(t, b.due) <= 14; }).reduce(function(s, b){ return s + b.amount; }, 0);
+    var h = '<div class="yc-card group"><div class="group-head"><span class="yc-eyebrow">Bills <span class="yc-faint">' + bills.length + '</span></span><span class="total num">' + money(next14) + ' <span class="yc-caption">due in the next 14 days</span></span></div>';
+    bills.forEach(function(b){
+      var s = billState(b);
+      h += '<div class="bill ' + s.cls + '"><div class="name">' + esc(b.name) + '</div><div class="when">' + s.icon + esc(s.text) + '</div><div class="amt num">' + money(b.amount) + '</div></div>';
+    });
+    return h + '</div>';
+  }
+
+  function drawChart(){
+    var el = document.getElementById('chart'); if (!el) return;
+    var hist = data.history || [];
+    var n = { '3m': 92, '6m': 183, '1y': 365, 'all': 1e9 }[range];
+    var cut = today() - n * DAY;
+    var pts = hist.filter(function(p){ return day(p.d) >= cut; });
+    if (pts.length < 2) { el.innerHTML = '<div class="yc-empty">The chart fills in as days go by — one point each day the page checks your balances.</div>'; return; }
+    var W = el.clientWidth || 600, H = el.clientHeight || 180, L = 64, R = 8, T = 8, B = 22;
+    var vs = pts.map(function(p){ return p.v; });
+    var lo = Math.min.apply(null, vs), hi = Math.max.apply(null, vs);
+    var pad = (hi - lo) * 0.12 || 1000; lo -= pad; hi += pad;
+    var x = function(i){ return L + (W - L - R) * i / (pts.length - 1); };
+    var y = function(v){ return T + (H - T - B) * (1 - (v - lo) / (hi - lo)); };
+    var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Net worth over time"><g class="grid axis">';
+    for (var g = 0; g < 4; g++) { var v = lo + (hi - lo) * g / 3; s += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y(v) + '" y2="' + y(v) + '"/><text x="' + (L - 8) + '" y="' + (y(v) + 4) + '" text-anchor="end">' + money(Math.round(v / 1000) * 1000, 'whole').replace(',000', 'k') + '</text>'; }
+    var ticks = 4;
+    for (var k = 0; k <= ticks; k++) { var i = Math.round((pts.length - 1) * k / ticks); s += '<text x="' + x(i) + '" y="' + (H - 4) + '" text-anchor="' + (k === 0 ? 'start' : k === ticks ? 'end' : 'middle') + '">' + short(day(pts[i].d)) + '</text>'; }
+    s += '</g>';
+    if (lo < 0 && hi > 0) s += '<line class="zero" x1="' + L + '" x2="' + (W - R) + '" y1="' + y(0) + '" y2="' + y(0) + '"/>';
+    var d = pts.map(function(p, i){ return (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(p.v).toFixed(1); }).join('');
+    s += '<path class="area" d="' + d + 'L' + x(pts.length - 1) + ' ' + (H - B) + 'L' + L + ' ' + (H - B) + 'Z"/>';
+    s += '<path class="line" d="' + d + '"/><line class="cross" id="cx" y1="' + T + '" y2="' + (H - B) + '" style="display:none"/><circle class="dot" id="cd" r="4" style="display:none"/></svg><div class="tip" id="tip" style="display:none"></div>';
+    el.innerHTML = s;
+    var svg = el.querySelector('svg'), cx = el.querySelector('#cx'), cd = el.querySelector('#cd'), tip = el.querySelector('#tip');
+    svg.addEventListener('pointermove', function(e){
+      var r = svg.getBoundingClientRect(), px = (e.clientX - r.left) * W / r.width;
+      var i = Math.max(0, Math.min(pts.length - 1, Math.round((px - L) / (W - L - R) * (pts.length - 1))));
+      cx.setAttribute('x1', x(i)); cx.setAttribute('x2', x(i)); cx.style.display = '';
+      cd.setAttribute('cx', x(i)); cd.setAttribute('cy', y(pts[i].v)); cd.style.display = '';
+      tip.style.display = ''; tip.style.left = (x(i) * r.width / W) + 'px'; tip.style.top = (y(pts[i].v) * r.height / H) + 'px';
+      tip.innerHTML = '<span class="yc-muted">' + short(day(pts[i].d)) + '</span> &nbsp;<b class="num">' + money(pts[i].v, 'whole') + '</b>';
+    });
+    svg.addEventListener('pointerleave', function(){ cx.style.display = cd.style.display = tip.style.display = 'none'; });
+  }
+
+  function save(){ if (window.youcoded) window.youcoded.save(data); }
+
+  function wire(){
+    document.querySelectorAll('[data-range]').forEach(function(b){ b.onclick = function(){ range = b.dataset.range; render(); }; });
+    document.querySelectorAll('[data-edit]').forEach(function(b){ b.onclick = function(){ editing = b.dataset.edit; render(); var i = document.getElementById('edit-val'); if (i) { i.focus(); i.select(); } }; });
+    var c = document.querySelector('[data-cancel]'); if (c) c.onclick = function(){ editing = null; render(); };
+    var sv = document.querySelector('[data-save]');
+    if (sv) sv.onclick = function(){
+      var v = parseFloat(String(document.getElementById('edit-val').value).replace(/[$,\s]/g, ''));
+      if (isNaN(v)) return;
+      var a = data.accounts.filter(function(x){ return x.id === sv.dataset.save; })[0];
+      a.balance = v; a.updatedAt = today().toISOString(); editing = null; save(); render();
+    };
+    var ev = document.getElementById('edit-val');
+    if (ev) ev.onkeydown = function(e){ if (e.key === 'Enter') document.querySelector('[data-save]').click(); if (e.key === 'Escape') { editing = null; render(); } };
+    document.getElementById('add').onclick = function(e){ e.stopPropagation(); menuOpen = !menuOpen; render(); };
+    document.getElementById('check').onclick = function(){
+      // Mockup: pretend to ask every connected bank for a fresh balance.
+      checking = true; render();
+      setTimeout(function(){ checking = false; data.checkedAt = today().toISOString(); save(); render(); }, 900);
+    };
+  }
+  document.addEventListener('click', function(){ if (menuOpen) { menuOpen = false; render(); } });
+  window.addEventListener('resize', drawChart);
+  if (window.youcoded) {
+    window.youcoded.onData(function(d){ data = d || data; render(); });
+    if (window.youcoded.onRefresh) window.youcoded.onRefresh(function(){ document.getElementById('check').click(); });
+  }
+  render();
+})();
+</script>
+</body></html>
