@@ -1,6 +1,6 @@
 import React, { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { markPointerSwitch, noteStripDrag } from '../hooks/use-focus-composer-after-switch';
+import { markPointerSwitch } from '../hooks/use-focus-composer-after-switch';
 import { noteSwitchIntent, type SwitchCause } from '../state/switch-marks';
 import { SessionStatusColor, STATUS_LABEL } from './StatusDot';
 import { Button, Toggle, Tooltip } from './ui';
@@ -368,14 +368,10 @@ export default function SessionStrip({
   const activeIdRef = useRef(activeSessionId);
   activeIdRef.current = activeSessionId;
   const onSelectSession = useCallback((id: string, cause: SwitchCause = 'pill', ev?: { timeStamp?: number; type?: string; detail?: number }) => {
-    if (id !== activeIdRef.current) {
-      noteSwitchIntent(cause, ev);
-      // Composer focus (hooks/use-focus-composer-after-switch.ts): only for a switch made with a pointer or the
-      // Shift-hold switcher. No event = a drop; a pointerdown = a pill press; a click/menu click with detail > 0 =
-      // a real pointer click. Enter/Space on a focused pill or menu row gives detail 0 or a keydown: keyboard users
-      // keep their focus where it is.
-      if (cause === 'key' || !ev || ev.type === 'pointerdown' || (ev.detail ?? 0) > 0) markPointerSwitch();
-    }
+    if (id !== activeIdRef.current) noteSwitchIntent(cause, ev);
+    // Composer focus (hooks/use-focus-composer-after-switch.ts): only a pointer made switch. No event = a drop; a pointerdown =
+    // a pill press; detail > 0 = a real click. Enter/Space (detail 0 or a keydown) and the Shift-hold switcher ('key') do not.
+    if (id !== activeIdRef.current && cause !== 'key' && (!ev || ev.type === 'pointerdown' || (ev.detail ?? 0) > 0)) markPointerSwitch();
     selectSession(id);
   }, [selectSession]);
   const sourceNames = useMemo(() => Object.fromEntries(sourceSessions.map((s) => [s.id, s.name])), [sourceSessions]);
@@ -666,10 +662,7 @@ export default function SessionStrip({
   const shiftHoldTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      // A composer focused BY the switch-focus feature does not count as typing (InputBar marks it until the first
-      // key or input): otherwise a second Shift-hold right after a switch would never open the switcher.
-      const ae = document.activeElement as HTMLElement | null;
-      if (isTypingTarget(ae) && !ae?.hasAttribute('data-focused-by-switch')) return;
+      if (isTypingTarget(document.activeElement)) return;
 
       // Bare Shift press — start hold timer to open dropdown
       if (e.key === 'Shift' && !e.ctrlKey && !e.altKey && !e.metaKey && !shiftNavActive.current) {
@@ -1044,7 +1037,6 @@ export default function SessionStrip({
       const dy = e.clientY - dragOrigin.current.y;
       if (Math.abs(dx) < 5 && Math.abs(dy) < 5) return;
       isDragging.current = true;
-      noteStripDrag();   // the press that selected this pill is a reorder drag: no composer focus
       setDragActive(true);   // see dragActive
       suppressClick.current = true;
       dragStartX.current = e.clientX;   // see dragStartX
@@ -1429,7 +1421,6 @@ export default function SessionStrip({
     setTimeout(() => {
       if (!htmlDragActive.current) return;   // already ended — nothing to arm
       isDragging.current = true;
-      noteStripDrag();
       setDragActive(true);   // see dragActive
     }, 0);
   }, [tearOffModel, sessions]);

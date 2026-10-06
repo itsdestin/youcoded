@@ -414,14 +414,6 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       const active = document.activeElement;
       if (active && active !== document.body && active !== el && !active.closest('[data-session-strip]')) return;
       el.focus({ preventScroll: true });
-      // Mark: this focus was ours, not the user's typing. The Shift-hold switcher ignores a marked box (SessionStrip);
-      // the first real key, input or blur clears it (below).
-      el.setAttribute('data-focused-by-switch', '');
-      // WHY the idle blur is armed (same rule as after typing): the Shift-hold switcher and the other
-      // bare-key shortcuts refuse to start while a text box has focus, so a box that kept focus
-      // forever after a switch would lock the keyboard switcher. Typing still works after the blur
-      // (the type-anywhere handler above takes focus on the first key).
-      armIdleBlurRef.current?.();
     },
     readDraft: (id = sessionId) => id === sessionId ? (inputRef.current?.value ?? text) : (draftsRef.current.get(id)?.text ?? ''),
     readDraftPayload: (id = sessionId) => {
@@ -526,7 +518,6 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   // on-screen keyboard), a touchpad/mouse click or physical typing restores
   // the unfocus (see lastPointerWasTouch in the auto-focus handler above).
   const idleBlurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const armIdleBlurRef = useRef<(() => void) | null>(null);
   useEffect(() => {
     const el = inputRef.current;
     const hasSoftKeyboard = isAndroid()
@@ -551,25 +542,12 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
         if (document.activeElement === el) el.blur();
       }, 750);
     };
-    armIdleBlurRef.current = resetTimer;
-    // Shift is the switcher's key (and auto-repeats while held): it must neither re-arm the blur nor clear the mark.
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Shift') return;
-      if (!['Control', 'Alt', 'Meta'].includes(e.key)) el.removeAttribute('data-focused-by-switch');
-      resetTimer();
-    };
-    const clearMark = () => el.removeAttribute('data-focused-by-switch');
-    el.addEventListener('keydown', onKey);
-    el.addEventListener('blur', clearMark);
+    el.addEventListener('keydown', resetTimer);
     el.addEventListener('input', resetTimer);
-    el.addEventListener('input', clearMark);
     el.addEventListener('paste', resetTimer);
     return () => {
-      armIdleBlurRef.current = null;
       window.removeEventListener('pointerdown', notePointer, true);
-      el.removeEventListener('keydown', onKey);
-      el.removeEventListener('blur', clearMark);
-      el.removeEventListener('input', clearMark);
+      el.removeEventListener('keydown', resetTimer);
       el.removeEventListener('input', resetTimer);
       el.removeEventListener('paste', resetTimer);
       if (idleBlurTimer.current) clearTimeout(idleBlurTimer.current);
