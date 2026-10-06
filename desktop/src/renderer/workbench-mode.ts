@@ -174,31 +174,8 @@ export function workbenchThemeLiked(): boolean {
   return new URLSearchParams(location.search).get('liked') === '1';
 }
 
-/** Games-social redesign (redesign backlog row 11). Rounds 1–3 settled add-a-friend, the Sign
- *  in width, the lobby record and rows, and how your status shows (Account's profile row); those
- *  switches are gone. Round 4 (deck games-social-4) asks one question, a workbench-only switch
- *  that returns the SHIPPED value everywhere else (the `workbenchScreenFrame` pattern). Delete it
- *  and the losing branches once Destin picks.
- *
- *  `?friendManage=` — how you see a friend's @handle and unfriend or block them, now the ⋯ menu
- *  is gone (G3-3: "i don't like the 3-dot menu/icon"): `details` (shipped) click the friend's box
- *  for a small "Friend details" popup, like Session details; `inline` a Manage button that opens
- *  the box in place, like the Tags card's edit-in-place; `edit` an Edit button that puts the
- *  whole list in an edit mode with Done, like Settings → Account's Edit account. */
-export const FRIEND_MANAGE_LOOKS = ['details', 'inline', 'edit'] as const;
-export type FriendManageLook = typeof FRIEND_MANAGE_LOOKS[number];
-export function workbenchFriendManage(): FriendManageLook {
-  if (!isWorkbenchMode()) return 'details';
-  const raw = new URLSearchParams(location.search).get('friendManage') ?? 'details';
-  return (FRIEND_MANAGE_LOOKS as readonly string[]).includes(raw) ? (raw as FriendManageLook) : 'details';
-}
-
-/** `?manageOpen=1` — the chosen management view starts open on the first friend (the popup, the
- *  opened box, or edit mode), so it can be photographed. False outside the workbench. */
-export function workbenchManageOpen(): boolean {
-  if (!isWorkbenchMode()) return false;
-  return new URLSearchParams(location.search).get('manageOpen') === '1';
-}
+/** Games-social redesign (redesign backlog row 11): every choice is settled (decks
+ *  games-social-1…4), so no variant switches remain — only the practice states below. */
 
 /** `?statusMenu=1` — the friends card opens with your status pill's menu already open, so the
  *  menu can be photographed. False outside the workbench and the photo-only build. */

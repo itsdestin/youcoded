@@ -10,7 +10,8 @@
 // status PILL itself, clickable; rows are name + pill; no internet / server down replace the
 // whole card with an error box. Round 4 (games-social-3): Account's profile-row header shipped
 // (G3C-1); each friend is a box like the game page's (G3-4); the ⋯ menu is gone — three ways to
-// manage a friend are on the deck (G3-3); the error box drops its red title (G3-7).
+// manage a friend were on the deck (G3-3) — the friend details popup won (G4C-1); the error box
+// drops its red title (G3-7).
 import { useEffect, useRef, useState } from 'react';
 import { useGameState } from '../../state/game-context';
 import { useAccount } from '../../state/account-context';
@@ -19,7 +20,7 @@ import { useFriends } from './useFriends';
 import { useScrollFade } from '../../hooks/useScrollFade';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { Button, CARD_LEVEL_1, Callout, ChevronDown, Dialog, FieldError, InputGroup, LoadingState, Pill, PillButton, SectionLabel } from '../ui';
-import { workbenchFriendManage, workbenchFriendsOpen, workbenchManageOpen, workbenchStatusMenuOpen } from '../../workbench-mode';
+import { workbenchFriendsOpen, workbenchStatusMenuOpen } from '../../workbench-mode';
 import { useScreenOpen } from '../../shoot-mode';
 
 interface Props {
@@ -227,20 +228,11 @@ function PersonBox({ name, pill, sub, right, error, onClick, children }: {
 /** The people: boxes 8px apart that scroll under the see-through fade, with a filled "Add a
  *  friend" inside the scroll area at the bottom — Appearance's themes box (GC-1, GQ-1). */
 function PeopleList({ f, known }: { f: ReturnType<typeof useFriends>; known: boolean }) {
-  const manage = workbenchFriendManage();
   const [adding, setAdding] = useState(false);
-  // Which friend's management is open: the popup (details), the opened box (inline). Edit mode
-  // is one switch for the whole list.
+  // Which friend's details popup is open (G4C-1 picked the popup; the Manage-in-place and
+  // edit-mode drafts are gone).
   const first = f.merged[0]?.id ?? null;
   const [focus, setFocus] = useState<string | null>(null);
-  const [editing, setEditing] = useState(false);
-  // Practice state: open the chosen management view on the first friend for pictures.
-  const [seeded, setSeeded] = useState(false);
-  useEffect(() => {
-    if (seeded || !first || !workbenchManageOpen()) return;
-    setSeeded(true);
-    if (manage === 'edit') setEditing(true); else setFocus(first);
-  }, [first, manage, seeded]);
   // Photo-only build: shoot opens the friend details popup by name.
   useScreenOpen('chat/games/friend', () => { if (first) setFocus(first); });
 
@@ -278,42 +270,7 @@ function PeopleList({ f, known }: { f: ReturnType<typeof useFriends>; known: boo
         {f.merged.map((row) => {
           const pill = known ? <PresencePill row={row} /> : undefined;
           const lastSeen = !row.online && row.lastSeenAt ? statusLabel(row, Date.now()) : undefined;
-          if (manage === 'details') {
-            return <PersonBox key={row.id} name={row.name} pill={pill} sub={lastSeen} error={f.rowError[row.id]} onClick={() => setFocus(row.id)} />;
-          }
-          if (manage === 'inline') {
-            const isOpen = focus === row.id;
-            return (
-              <PersonBox
-                key={row.id}
-                name={row.name}
-                pill={pill}
-                sub={lastSeen}
-                error={f.rowError[row.id]}
-                right={(
-                  <Button variant="secondary" size="sm" aria-expanded={isOpen} onClick={() => setFocus(isOpen ? null : row.id)} className="shrink-0">
-                    {isOpen ? 'Done' : 'Manage'}
-                  </Button>
-                )}
-              >
-                {isOpen && <ManageFriend row={row} pending={f.pendingRows.has(row.id)} onUnfriend={() => unfriend(row.id)} onBlock={() => block(row.id)} />}
-              </PersonBox>
-            );
-          }
-          // edit: every friend shows its handle and its two actions while editing.
-          return (
-            <EditRow
-              key={row.id}
-              row={row}
-              pill={pill}
-              sub={editing ? (row.handle ? `@${row.handle}` : 'No handle') : lastSeen}
-              editing={editing}
-              error={f.rowError[row.id]}
-              pending={f.pendingRows.has(row.id)}
-              onUnfriend={() => unfriend(row.id)}
-              onBlock={() => block(row.id)}
-            />
-          );
+          return <PersonBox key={row.id} name={row.name} pill={pill} sub={lastSeen} error={f.rowError[row.id]} onClick={() => setFocus(row.id)} />;
         })}
         {f.outgoing.map((req) => (
           <PersonBox
@@ -331,26 +288,12 @@ function PeopleList({ f, known }: { f: ReturnType<typeof useFriends>; known: boo
         )}
       </ul>
       <div className="absolute inset-x-0 bottom-0 pt-2">
-        {manage === 'edit' && f.merged.length > 0 ? (
-          // Settings → Account's Edit account: an Edit button, and Done to leave the mode. Two
-          // buttons side by side: the filled one on the right (guide "Buttons").
-          editing
-            ? <Button className="w-full" onClick={() => setEditing(false)}>Done</Button>
-            : adding
-              ? <AddFriend refresh={f.refresh} autoFocus onCancel={() => setAdding(false)} />
-              : (
-                <div className="flex gap-2">
-                  <Button variant="secondary" className="flex-1" onClick={() => setEditing(true)}>Edit friends</Button>
-                  <Button className="flex-1" onClick={() => setAdding(true)}>Add a friend</Button>
-                </div>
-              )
-        ) : adding
+        {adding
           ? <AddFriend refresh={f.refresh} autoFocus onCancel={() => setAdding(false)} />
           // Filled, full width, inside the list's area — Appearance's "Build new theme".
           : <Button className="w-full" onClick={() => setAdding(true)}>Add a friend</Button>}
       </div>
-      {manage === 'details' && (
-        <FriendDetails
+      <FriendDetails
           row={focused}
           pending={focused ? f.pendingRows.has(focused.id) : false}
           known={known}
@@ -358,12 +301,11 @@ function PeopleList({ f, known }: { f: ReturnType<typeof useFriends>; known: boo
           onUnfriend={() => { if (focused) { void unfriend(focused.id); setFocus(null); } }}
           onBlock={() => { if (focused) { void block(focused.id); setFocus(null); } }}
         />
-      )}
     </div>
   );
 }
 
-/** Block is consequence-gated in every variant: the first press swaps to a plain-language
+/** Block is consequence-gated: the first press swaps to a plain-language
  *  confirm, and only the red button inside it acts (Destin's standing rule for hard-to-reverse
  *  actions). */
 const BLOCK_WARNING = 'Blocking removes this friend, cancels pending requests, and hides you from each other. You can unblock later in Settings → Account.';
@@ -408,66 +350,6 @@ function FriendDetails({ row, pending, known, onClose, onUnfriend, onBlock }: {
         </div>
       )}
     </Dialog>
-  );
-}
-
-/** The block confirm every variant shows inside the friend's box: the warning in words, then
- *  Cancel and the red Block side by side, red on the right (guide "Buttons" → destructive
- *  confirm). */
-function BlockConfirm({ pending, onBlock, onCancel }: { pending: boolean; onBlock: () => void; onCancel: () => void }) {
-  return (
-    <div className="flex flex-col gap-2 pb-1.5">
-      <p className="text-xs text-fg-2">{BLOCK_WARNING}</p>
-      <div className="flex gap-2 justify-end" data-parts-agree="block confirm buttons">
-        <Button variant="secondary" size="sm" onClick={onCancel}>Cancel</Button>
-        <Button variant="danger" size="sm" onClick={onBlock} disabled={pending}>Block</Button>
-      </div>
-    </div>
-  );
-}
-
-/** The `inline` variant: the friend's box opens in place (the Tags card's edit-in-place) to show
- *  the handle and the two actions. */
-function ManageFriend({ row, pending, onUnfriend, onBlock }: { row: FriendRowData; pending: boolean; onUnfriend: () => void; onBlock: () => void }) {
-  const [confirming, setConfirming] = useState(false);
-  return (
-    <div className="flex flex-col gap-2 pb-1.5">
-      <p className="text-2xs text-fg-muted">{row.handle ? `@${row.handle}` : 'No handle'}</p>
-      {confirming
-        ? <BlockConfirm pending={pending} onBlock={onBlock} onCancel={() => setConfirming(false)} />
-        : (
-          <div className="flex gap-2 justify-end" data-parts-agree="manage friend buttons">
-            <Button variant="secondary" size="sm" onClick={onUnfriend} disabled={pending}>Unfriend</Button>
-            <Button variant="secondary" size="sm" onClick={() => setConfirming(true)}>Block…</Button>
-          </div>
-        )}
-    </div>
-  );
-}
-
-/** The `edit` variant's row: in edit mode (Settings → Account's Edit account), the handle shows
- *  under the name and Unfriend / Block… sit at the right; Block asks inside the box first. */
-function EditRow({ row, pill, sub, editing, error, pending, onUnfriend, onBlock }: {
-  row: FriendRowData; pill?: React.ReactNode; sub?: string; editing: boolean; error?: string;
-  pending: boolean; onUnfriend: () => void; onBlock: () => void;
-}) {
-  const [confirming, setConfirming] = useState(false);
-  useEffect(() => { if (!editing) setConfirming(false); }, [editing]);
-  return (
-    <PersonBox
-      name={row.name}
-      pill={pill}
-      sub={sub}
-      error={error}
-      right={editing && !confirming ? (
-        <div className="flex items-center gap-1.5 shrink-0" data-parts-agree="edit friend buttons">
-          <Button variant="secondary" size="sm" onClick={onUnfriend} disabled={pending}>Unfriend</Button>
-          <Button variant="secondary" size="sm" onClick={() => setConfirming(true)}>Block…</Button>
-        </div>
-      ) : undefined}
-    >
-      {editing && confirming && <BlockConfirm pending={pending} onBlock={onBlock} onCancel={() => setConfirming(false)} />}
-    </PersonBox>
   );
 }
 

@@ -114,12 +114,9 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat/games#long', 'pane', 'games'), params: { signedIn: '1', friends: 'lots', friendsOpen: '1' } },
   { ...chat('chat/games#incognito', 'pane', 'games'), params: { signedIn: '1', friends: 'many', incognito: '1' } },
   { ...chat('chat/games#offline', 'pane', 'games'), params: { signedIn: '1', friends: 'many', network: 'offline' } },
-  // Round 3/4: your status pill's menu open; then (deck games-social-4) the three ways to manage a
-  // friend (workbench-mode.ts `?friendManage=`), each opened on the first friend. Delete the
-  // losers once Destin picks. The details popup is its own screen (a Dialog).
+  // Your status pill's menu open, and a friend's details popup (a Dialog, deck games-social-4).
   { ...chat('chat/games#status-menu', 'pane', 'games'), params: { signedIn: '1', friends: 'many', statusMenu: '1' } },
   { ...chat('chat/games/friend', 'dialog', 'games'), params: { signedIn: '1', friends: 'many', friendsOpen: '1' } },
-  ...(['inline', 'edit'] as const).map((v): ScreenEntry => ({ ...chat(`chat/games#manage-${v}`, 'pane', 'games'), params: { signedIn: '1', friends: 'many', friendsOpen: '1', friendManage: v, manageOpen: '1' } })),
   // Another computer holds this conversation: each phase of "open it here instead?".
   ...['confirm', 'force', 'undeliverable', 'claim-denied'].map((ph) => chat(`chat/takeover/${ph}`, 'dialog', 'handoff')),
   chat('chat/resume/preview', 'dialog'),
