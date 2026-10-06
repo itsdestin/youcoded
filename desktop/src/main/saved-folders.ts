@@ -14,6 +14,13 @@ export interface SavedFolder {
   // Local-only description. A plain folder has nothing to sync it to — the
   // synced equivalent lives in the project registry (project-registry.ts).
   description?: string | null;
+  // A synced project (its folder lives in ~/YouCoded/Projects) that the user removed from
+  // THIS computer's list. WHY a flag on a saved entry (redesign backlog row 10 — "there's no
+  // way to delete some projects currently"): synced projects are listed because their FOLDER is
+  // there, so dropping the entry did nothing — it came straight back. The record stays as a
+  // marker; its folder, files and sync are untouched. Readers that only want the folder paths
+  // (trust roots, slug repair) still see it, which is right: it is still a project on disk.
+  hidden?: true;
 }
 
 function foldersFilePath(): string {

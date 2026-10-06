@@ -122,6 +122,11 @@ export async function listProjectsIndex(opts?: { withCounts?: boolean }): Promis
   // for the same path wins (keeps the user's nickname).
   const managed = getManagedRoots()?.listProjects() ?? [];
   for (const p of managed) saved.push({ path: p.path, nickname: p.name, addedAt: 0 });
+  // A synced project removed from this computer's list (its saved entry is marked `hidden`,
+  // folders-service.ts — backlog row 10) stays out of Project View exactly as it stays out of
+  // the new-session picker.
+  const hiddenKeys = new Set(saved.filter((f) => f.hidden).map((f) => canonicalize(f.path, null)));
+  saved = saved.filter((f) => !f.hidden && !hiddenKeys.has(canonicalize(f.path, null)));
   const indexProjects = await listProjects(CLAUDE_DIR);
   const projects = buildSavedFolderProjects(saved, indexProjects);
 
@@ -163,8 +168,13 @@ export async function listProjectsIndex(opts?: { withCounts?: boolean }): Promis
       artifactCount = trackedCount;
     }
 
+    // WHY (backlog row 10): a saved folder that was moved or deleted outside YouCoded still
+    // listed like any other, so the project switcher could not say why opening it showed
+    // nothing — and that is exactly the project someone wants to remove. One existsSync each.
+    const missing = await fs.promises.access(p.path).then(() => false, () => true);
     return {
       ...p,
+      ...(missing ? { missing: true } : {}),
       stats: { ...p.stats, artifactCount },
       ...(fileCount !== undefined ? { fileCount } : {}),
       ...(fileCountTruncated ? { fileCountTruncated } : {}),

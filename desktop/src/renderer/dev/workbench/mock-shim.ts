@@ -198,7 +198,7 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // because the catch-all's `[]` is a truthy non-status that crashed the panel.
   'sync.getStatus', 'sync.getLog', 'sync.force', 'sync.dismissWarning',
   'sync.pushBackend', 'sync.updateBackend', 'sync.removeBackend', 'sync.addBackend',
-  'folders.list', 'folders.rename', 'folders.setDescription',
+  'folders.list', 'folders.rename', 'folders.setDescription', 'folders.remove',
   'project.listConversations', 'project.listContext', 'project.readContextFile',
   'project.writeContextFile', 'project.repoInfo',
   'account.signedIn', 'account.user', 'account.refresh',
@@ -2244,6 +2244,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       { path: '/home/you/code/youcoded', nickname: 'youcoded', addedAt: 0, exists: true },
     ],
     rename: async () => ({ ok: true }),
+    // Project switcher → Remove (backlog row 10): the project leaves the fake index too, so
+    // the switcher can be seen without it — the real folders-service keeps a synced one off.
+    remove: async (path: string) => { removedProjects.add(path); return true; },
     setDescription: async (path: string, description: string) => {
       descriptions[path] = description.trim() || null;
       return { ok: true };
@@ -2463,6 +2466,32 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // arcade switch above documents). This composes with any scenario.
   const noProjectsSwitch = typeof location !== 'undefined'
     && new URLSearchParams(location.search).get('projects') === 'none';
+  // `&projects=many` (project switcher, backlog row 10): twelve more plain folders, one of
+  // them moved away on disk ("Folder missing"), so a long list and the missing state show.
+  const manyProjectsSwitch = typeof location !== 'undefined'
+    && new URLSearchParams(location.search).get('projects') === 'many';
+  const MANY_PROJECTS = [
+    ['Econ 201', '/home/destin/school/econ-201', 'Problem sets and the midterm study guide.'],
+    ['Thesis (old copy)', '/home/destin/Documents/thesis-old', null, true],
+    ['Budget 2026', '/home/destin/Documents/budget-2026', null],
+    ['Wedding planning', '/home/destin/Documents/wedding', 'Guest list, vendors, the seating chart.'],
+    ['Garden', '/home/destin/Documents/garden', null],
+    ['Job search', '/home/destin/Documents/job-search', 'Cover letters and the tracker.'],
+    ['Photos 2025', '/home/destin/Pictures/2025', null],
+    ['Book club', '/home/destin/Documents/book-club', null],
+    ['Taxes', '/home/destin/Documents/taxes', null],
+    ['Recipes archive', '/home/destin/Documents/recipes-archive', null],
+    ['Side project', '/home/destin/code/side-project', 'A tiny weather app.'],
+    ['Notes', '/home/destin/Documents/notes', null],
+  ] as const;
+  const manyProjects = (withCounts: boolean) => MANY_PROJECTS.map(([name, path, description, missing], i) => ({
+    id: path, name, path, lastIndexed: '', lastSession: null, contentTypes: [] as ('artifacts' | 'conversations')[],
+    stats: { artifactCount: 0 }, description,
+    ...(missing ? { missing: true } : {}),
+    ...(withCounts && !missing ? { fileCount: (i * 7) % 40, conversationCount: i % 4 } : {}),
+  }));
+  // Paths "removed" through folders.remove this page load (see `folders` below).
+  const removedProjects = new Set<string>();
 
   // Promo (model beat): the model picker shows ONLY favourites until you type
   // (components/model/ModelPicker.tsx), and it keeps them in localStorage under
@@ -2790,7 +2819,8 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       // inline editor behaves like the real thing instead of snapping back.
       projects: noProjectsSwitch ? [] : (studentSwitch
         ? (opts?.withCounts ? studentProjectsWithCounts((path) => conversationsIn(path).length) : studentProjects())
-        : (opts?.withCounts ? projectsWithCounts() : artifactProjects()))
+        : [...(opts?.withCounts ? projectsWithCounts() : artifactProjects()), ...(manyProjectsSwitch ? manyProjects(!!opts?.withCounts) : [])])
+        .filter((p) => !removedProjects.has(p.path))
         .map((p) => ({ ...p, description: descriptionFor(p.path, p.description) })),
     }),
     // Student mode: every session's drawer lists the Econ 201 session's files

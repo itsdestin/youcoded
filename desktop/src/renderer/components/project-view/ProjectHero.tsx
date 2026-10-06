@@ -73,7 +73,7 @@ interface ProjectHeroProps {
   onTurnOnSync: () => void;
   onSyncNow: (spaceId: string) => void;
   onRenamed: () => void;             // parent refreshes the list after a rename / stop
-  canRemove: boolean;                // false for synced projects (move-out is deferred)
+  canRemove: boolean;                // true for every project since backlog row 10: a synced one is removed from THIS computer's list only (folders-service `hidden`)
   onRemove: () => void;
 }
 

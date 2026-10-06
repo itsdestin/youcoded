@@ -13,7 +13,7 @@ import path from 'node:path';
 const h = vi.hoisted(() => ({ managed: null as null | { projectsRoot: string; listProjects: () => { path: string; name: string }[] } }));
 vi.mock('../src/main/sync-spaces/service', () => ({ getManagedRoots: () => h.managed }));
 
-import { listPickerFolders, addFolder, removeFolder, renameFolder, setFolderDescription } from '../src/main/folders-service';
+import { listPickerFolders, addFolder, removeFolder, renameFolder, setFolderDescription, isHiddenProject } from '../src/main/folders-service';
 
 let dir: string;
 let file: string;
@@ -83,5 +83,43 @@ describe('the folder writes behave as the desktop handlers always did', () => {
     expect(removeFolder('/missing', file)).toBe(false);
     expect(removeFolder('/a', file)).toBe(true);
     expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual([]);
+  });
+});
+
+// Backlog row 10 (Destin, 2026-09-29: "there's no way to delete some projects currently"): a
+// synced project lives in ~/YouCoded/Projects and is listed because its FOLDER is there, so
+// dropping it from youcoded-folders.json did nothing — it came straight back. Removing one now
+// puts it on this computer's "removed" list. Nothing on disk is touched and sync is not stopped.
+describe('removing a synced project hides it on this computer, and Add a project brings it back', () => {
+  function setup() {
+    const projectsRoot = path.join(dir, 'Projects');
+    const paf = path.join(projectsRoot, 'PAF 574');
+    fs.mkdirSync(paf, { recursive: true });
+    fs.writeFileSync(path.join(paf, 'notes.md'), 'keep me');
+    fs.writeFileSync(file, JSON.stringify([{ path: dir, nickname: 'work', addedAt: 5 }]));
+    h.managed = { projectsRoot, listProjects: () => [{ path: paf, name: 'PAF 574' }] };
+    return { paf };
+  }
+
+  it('remove reports a match, the picker stops listing it, and its files stay', () => {
+    const { paf } = setup();
+    expect(removeFolder(paf, file)).toBe(true);
+    expect(listPickerFolders(file).map((f) => f.nickname)).toEqual(['work']);
+    expect(isHiddenProject(paf, file)).toBe(true);
+    expect(fs.readFileSync(path.join(paf, 'notes.md'), 'utf8')).toBe('keep me');
+  });
+
+  it('adding the folder again lists it again', () => {
+    const { paf } = setup();
+    removeFolder(paf, file);
+    addFolder(paf, undefined, file);
+    expect(isHiddenProject(paf, file)).toBe(false);
+    expect(listPickerFolders(file).map((f) => f.path)).toContain(paf);
+  });
+
+  it('a plain folder is only dropped from the saved list, never put on the removed list', () => {
+    setup();
+    expect(removeFolder(dir, file)).toBe(true);
+    expect(isHiddenProject(dir, file)).toBe(false);
   });
 });

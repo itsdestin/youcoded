@@ -21,6 +21,25 @@ export interface PickerFolder extends SavedFolder {
   managed?: true;
 }
 
+const keyOf = (p: string) => {
+  const r = path.resolve(p);
+  return process.platform === 'win32' ? r.toLowerCase() : r;
+};
+
+/** A folder YouCoded lists because it lives in ~/YouCoded/Projects (a synced project). */
+function isManagedPath(folderPath: string): boolean {
+  const root = getManagedRoots()?.projectsRoot;
+  if (!root) return false;
+  return keyOf(folderPath).startsWith(keyOf(root) + path.sep);
+}
+
+/** True when this synced project was removed from this computer's project list (backlog row
+ *  10). Project View's list (artifacts/projects-index.ts) reads the same marker. */
+export function isHiddenProject(folderPath: string, file?: string): boolean {
+  const k = keyOf(folderPath);
+  return readFolders(file).some((f) => f.hidden && keyOf(f.path) === k);
+}
+
 /** Saved folders (seeded with Home on first use), then every synced project not already saved. */
 export function listPickerFolders(file?: string): PickerFolder[] {
   let folders = readFolders(file);
@@ -32,6 +51,10 @@ export function listPickerFolders(file?: string): PickerFolder[] {
   // flow rewrites saved entries to their new managed path) — badge it like the synthesized rows.
   const projectsRoot = getManagedRoots()?.projectsRoot;
   const projectsPrefix = projectsRoot ? path.resolve(projectsRoot).toLowerCase() + path.sep : null;
+  // A synced project removed from this computer's list stays out of the picker: its marker
+  // entry is dropped here AND blocks the managed row below (backlog row 10).
+  const hidden = new Set(folders.filter((f) => f.hidden).map((f) => keyOf(f.path)));
+  folders = folders.filter((f) => !f.hidden);
   const result: PickerFolder[] = folders.map((f) => ({
     ...f,
     exists: fs.existsSync(f.path),
@@ -42,6 +65,7 @@ export function listPickerFolders(file?: string): PickerFolder[] {
   const managed = getManagedRoots()?.listProjects() ?? [];
   const known = new Set(result.map((f) => path.resolve(f.path).toLowerCase()));
   for (const p of managed) {
+    if (hidden.has(keyOf(p.path))) continue;
     if (!known.has(path.resolve(p.path).toLowerCase())) {
       result.push({ path: p.path, nickname: p.name, addedAt: 0, exists: true, managed: true });
     }
@@ -53,6 +77,11 @@ export function addFolder(folderPath: string, nickname: string | undefined, file
   const folders = readFolders(file);
   const normalized = path.resolve(folderPath);
   const existing = folders.find((f) => path.resolve(f.path) === normalized);
+  if (existing?.hidden) {
+    // Adding a removed synced project back lists it again (backlog row 10).
+    delete existing.hidden;
+    writeFolders(folders, file);
+  }
   if (existing) return existing;
   const entry: SavedFolder = { path: normalized, nickname: nickname || path.basename(normalized), addedAt: Date.now() };
   folders.unshift(entry);
@@ -68,6 +97,15 @@ export function removeFolder(folderPath: string, file?: string): boolean {
     process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
   const normalized = path.resolve(folderPath);
   const filtered = folders.filter((f) => !samePath(path.resolve(f.path), normalized));
+  // A synced project would be listed again from its folder alone, so it leaves a marker
+  // entry behind (`hidden`, saved-folders.ts — backlog row 10). Its files and sync are left
+  // exactly as they are. A plain folder is simply dropped, as before.
+  if (isManagedPath(normalized)) {
+    const was = folders.find((f) => samePath(path.resolve(f.path), normalized));
+    if (was?.hidden) return true;
+    writeFolders([...filtered, { path: normalized, nickname: was?.nickname ?? path.basename(normalized), addedAt: was?.addedAt ?? 0, hidden: true }], file);
+    return true;
+  }
   if (filtered.length === folders.length) return false;
   writeFolders(filtered, file);
   return true;

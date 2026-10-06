@@ -117,6 +117,9 @@ export interface CentralIndexProject {
   // payload, mirroring how `displayName` is overlaid there — the hero prefers
   // the synced one.
   description?: string | null;
+  // True when the project's folder is not on disk any more (moved or deleted outside
+  // YouCoded). Set at list time; the project switcher shows "Folder missing" (backlog row 10).
+  missing?: boolean;
 }
 
 export interface CentralIndex {

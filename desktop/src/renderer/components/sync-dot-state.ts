@@ -76,6 +76,28 @@ export function syncDotFor(folderPath: string, status: SyncStatusData | null): S
   return { color: 'green', label: 'Syncs across your devices' };
 }
 
+/** A row's sync status as a named pill — the session switcher's Working / Inactive look.
+ *
+ * WHY (redesign backlog row 10 — Destin on the project switcher: "how sync appears. should
+ * probably be a status like the working/inactive/etc chips in session swithcer"): the bare
+ * coloured dot said nothing until you hovered it, and hovering never happens on a phone. The
+ * short words are the Project View hero's own pill words (ProjectHero `syncPill.short`, minus
+ * its time) so one project reads the same in both places; `detail` is the dot's full sentence
+ * above, unchanged, for the tooltip and screen readers. Tone follows the guide's status pills:
+ * colour in the tint and the dot, never in the words. */
+interface SyncPill { tone: 'ok' | 'danger' | 'neutral'; short: string; detail: string }
+
+export function syncPillFor(folderPath: string, status: SyncStatusData | null): SyncPill | null {
+  const dot = syncDotFor(folderPath, status);
+  if (!dot) return null;
+  if (dot.color === 'green') return { tone: 'ok', short: 'Synced', detail: dot.label };
+  if (dot.color === 'red') return { tone: 'danger', short: 'Sync problem', detail: dot.label };
+  const space = findSpaceFor(folderPath, status);
+  if (!space) return { tone: 'neutral', short: 'Only on this computer', detail: dot.label };
+  if (space.state === 'stopped') return { tone: 'neutral', short: 'Sync stopped', detail: dot.label };
+  return { tone: 'neutral', short: 'Sync off', detail: dot.label };
+}
+
 /**
  * The latest 'error' event that a later successful 'synced' for the SAME space
  * hasn't already superseded — i.e. "sync is broken right now", not "sync
