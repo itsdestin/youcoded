@@ -295,6 +295,8 @@ export function ProjectView(props: ProjectViewProps) {
 
   // Project deletion modal state.
   const [deletingProject, setDeletingProject] = useState<CentralIndexProject | null>(null);
+  // Why the last Remove failed, in the service's own words (shown on the confirm).
+  const [removeError, setRemoveError] = useState<string | null>(null);
 
   // Per-project sync state (spec §4) — feeds the hero sync line + switcher dots.
   const [syncStatus, setSyncStatus] = useState<SyncStatusData | null>(null);
@@ -624,10 +626,22 @@ export function ProjectView(props: ProjectViewProps) {
 
   const confirmDelete = async (alsoDeleteSidecar: boolean) => {
     if (!deletingProject) return;
-    // The project list IS the saved-folders store now, so "Remove" removes the
-    // folder from that store (which also drops it from the new-session folder
-    // picker). A synced project is put on this computer's removed list by the
-    // same call (folders-service.ts, backlog row 10) — files and sync untouched.
+    // A synced project (a folder in ~/YouCoded/Projects) is removed EVERYWHERE first: sync
+    // stops on every device and it leaves every device's lists (Destin, project-switcher-1
+    // PQ-1). Files stay on every device; GitHub is untouched. A failure keeps the confirm
+    // open with the service's own words — nothing else is changed then.
+    const space = findSpaceFor(deletingProject.path, syncStatus);
+    if (space && !deletingProject.missing && space.id.startsWith('project:')) {
+      const res = await (window.claude as any).syncSpaces.removeProject?.(space.id.slice('project:'.length))
+        .catch((e: unknown) => ({ ok: false, error: String((e as Error)?.message ?? e) }));
+      if (!res?.ok) {
+        setRemoveError(res?.error ?? "This project couldn't be removed.");
+        return;
+      }
+    }
+    // The project list IS the saved-folders store for plain folders, so "Remove" removes the
+    // folder from that store (which also drops it from the new-session folder picker); for a
+    // synced one this drops any saved entry the import flow wrote.
     // Optionally wipe the artifact-history sidecar + any index entry.
     await (window.claude as any).folders.remove(deletingProject.path);
     if (alsoDeleteSidecar) {
@@ -643,6 +657,7 @@ export function ProjectView(props: ProjectViewProps) {
       );
     }
     setDeletingProject(null);
+    setRemoveError(null);
   };
 
   // Join the project root with the folder FilesTab is currently showing.
@@ -1083,9 +1098,11 @@ export function ProjectView(props: ProjectViewProps) {
           <RemoveProjectDialog
             name={shown}
             kind={kind}
-            keepsSyncing={!!space && space.state !== 'stopped' && !!syncStatus?.enabled}
+            // The GitHub page of this project's backup, from this device's sync remote.
+            githubUrl={space?.remote && /^https:\/\/github\.com\//.test(space.remote) ? space.remote.replace(/\.git$/, '') : null}
+            error={removeError}
             onConfirm={(alsoDelete) => void confirmDelete(alsoDelete)}
-            onCancel={() => setDeletingProject(null)}
+            onCancel={() => { setDeletingProject(null); setRemoveError(null); }}
           />
         );
       })()}

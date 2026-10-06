@@ -16,7 +16,7 @@ import { MAX_SYNC_FILE_BYTES } from './guards';
 import { createSyncHubSocket } from '../sync-hub-socket';
 import { getGithubClient } from '../github-client';
 import type { LeaseResult, SyncHubEvent } from '../sync-hub-socket';
-import { readProjectRegistry, ensureProjectEntry, setProjectDisplayName, setProjectStopped, setProjectDescription } from './project-registry';
+import { readProjectRegistry, ensureProjectEntry, setProjectDisplayName, setProjectStopped, setProjectDescription, markProjectRemoved, readRemovedProjects } from './project-registry';
 import { planReconcile, activeManagedSpaces } from './materialization-planner';
 import type { SpaceSyncEvent, SyncSpace } from './types';
 
@@ -26,6 +26,11 @@ let engine: SpaceSyncEngine | null = null;
 let backup: DailyBackup | null = null;
 let backupTimer: ReturnType<typeof setInterval> | null = null;
 let recentEvents: SpaceSyncEvent[] = [];
+// Projects removed from every device's lists (ProjectSync/Removed/, project-registry.ts —
+// backlog row 10). Held in memory because the lists that read it (folders-service,
+// projects-index) are on click paths; refreshed at startup, on every discovery pass (i.e.
+// after each Personal pull, which is how an offline device catches up), and on a local remove.
+let removedNames = new Set<string>();
 // Every over-limit file reported this launch, per space. Kept outside the
 // last-50 event buffer so the Sync panel can keep telling the user which
 // files are not syncing for as long as that is true (the engine reports each
@@ -247,6 +252,7 @@ export async function startSyncSpaces(getBackupTargets: () => Promise<BackupTarg
   machineId = machineIdArg;
   roots = new ManagedRoots();
   roots.ensure();
+  void refreshRemoved();
   manager = new SpaceManager();
   if (manager.isEnabled()) await startEngine(logFn);
   backup = new DailyBackup();
@@ -309,6 +315,7 @@ async function runDiscovery(): Promise<void> {
     do {
       discoverAgain = false;
       if (!engine || !roots) break;
+      await refreshRemoved(); // a remove made on another device arrives with this Personal pull
       const registry = readProjectRegistry(roots.personalRoot);
       const localNames = roots.listProjects().map((p) => p.name);
       const liveNames = engine.liveSpaceIds()
@@ -517,6 +524,12 @@ export async function syncSpacesStatus() {
       };
     }) ?? [],
     recentEvents,
+    // Removed projects and where their GitHub backup is (Backup & Sync lists them).
+    removed: [...removedNames].sort().map((name) => ({
+      name,
+      displayName: byName.get(name)?.displayName ?? name,
+      githubUrl: githubPageFor(name),
+    })),
     oversize: currentOversize(),
     oversizeLimitMb: MAX_SYNC_FILE_BYTES / (1024 * 1024),
     syncHub: hubStatus, // SyncHub connection state (Plan 1b): 'off' when sync disabled
@@ -566,6 +579,50 @@ export async function syncSpacesSetProjectDescription(name: string, description:
   if (!roots) return { ok: false as const, error: 'Sync is still starting up — try again in a moment' };
   await setProjectDescription(roots.personalRoot, name, repoNameFor(name), description);
   await pushPersonal();
+  return { ok: true as const };
+}
+
+/** Re-read the removed-projects markers; tell the renderer to refetch its lists if the set
+ *  changed, so a project removed on another device leaves the switcher and picker live. */
+async function refreshRemoved(): Promise<void> {
+  if (!roots) return;
+  const next = await readRemovedProjects(roots.personalRoot);
+  const changed = next.size !== removedNames.size || [...next].some((n) => !removedNames.has(n));
+  removedNames = next;
+  if (changed) broadcast({ type: 'projects-changed', spaceId: 'projects' });
+}
+
+/** True when this synced project was removed from every device's lists. */
+export function isRemovedProject(name: string): boolean {
+  return removedNames.has(name);
+}
+
+/** The project's GitHub page — the backup the app leaves in place when a project is removed.
+ *  This device's own remote for it when known; else the account (read from the Personal
+ *  backup's remote) plus the project's deterministic repository name. null when neither is
+ *  known (sync never set up here). Only ever a link: the app never calls GitHub to delete. */
+function githubPageFor(name: string): string | null {
+  const own = manager?.remoteFor(`project:${name}`);
+  const toPage = (u: string) => u.replace(/\.git$/, '');
+  if (own && /^https:\/\/github\.com\//.test(own)) return toPage(own);
+  const personal = manager?.remoteFor('personal') ?? '';
+  const owner = /^https:\/\/github\.com\/([^/]+)\//.exec(personal)?.[1];
+  return owner ? `https://github.com/${owner}/${repoNameFor(name)}` : null;
+}
+
+/** Remove a synced project = stop syncing it on every device AND take it off every device's
+ *  lists (Destin, project-switcher-1 PQ-1: "stop syncing on all devices, remove from list on
+ *  all devices"). The stop is the existing permanent tombstone; the removed marker rides the
+ *  same Personal push. Every device KEEPS its copy of the folder and its files, and the
+ *  GitHub backup is never touched — the confirm and Backup & Sync say so, with a link. */
+export async function syncSpacesRemoveProject(name: string) {
+  if (!roots) return { ok: false as const, error: 'Sync is still starting up — try again in a moment' };
+  await setProjectStopped(roots.personalRoot, name, repoNameFor(name));
+  await markProjectRemoved(roots.personalRoot, name);
+  removedNames = new Set([...removedNames, name]);
+  await pushPersonal();
+  if (engine) await engine.removeSpace(`project:${name}`);
+  broadcast({ type: 'projects-changed', spaceId: 'projects' });
   return { ok: true as const };
 }
 

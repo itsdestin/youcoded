@@ -30,6 +30,7 @@ import { summarizeSpaceSyncError } from './sync-space-error-summary';
 import { plainMessage } from '../utils/ipc-error';
 import { HANDOFF_EXPLANATION } from './takeover-dialog-copy';
 import { useScreenOpen } from '../shoot-mode';
+import { RemovedProjectsCard } from './RemovedProjectsCard';
 
 // --- Explainer content (updated for V2 multi-instance model) ---
 
@@ -1698,6 +1699,9 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                 </div>
               </div>
             )}
+
+            {/* Removed projects and their GitHub backups (backlog row 10) — RemovedProjectsCard. */}
+            <RemovedProjectsCard removed={spacesStatus?.removed} />
 
             {/* 5. Sync log — WHY a FoldRow (fix batch 2, 2026-09-26 — decisions.md
                 "Fold-out sections", settings-pieces#P-1): a boxed row like a

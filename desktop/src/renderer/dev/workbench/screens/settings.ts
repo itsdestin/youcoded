@@ -32,6 +32,8 @@ export const SETTINGS: readonly ScreenEntry[] = [
   { ...settings('settings/sync#ok', 'dialog'), params: { sync: 'ok' } },
   { ...settings('settings/sync#auth-error', 'dialog', 'error-state'), params: { sync: 'auth-error' } },
   { ...settings('settings/sync#oversize', 'dialog', 'error-state'), params: { sync: 'oversize' } },
+  // Removed projects and their GitHub backups (project switcher round 2, backlog row 10).
+  { ...settings('settings/sync#removed', 'dialog'), params: { sync: 'removed' }, open: [{ do: 'scroll', dir: 'down', times: 8 }] },
   // "Remove backup?" on the default fixture's one backend (drive-1).
   settings('settings/sync/remove-backend', 'dialog'),
   settings('settings/remote', 'dialog'),

@@ -248,6 +248,7 @@ const IPC = {
   // because the sandboxed preload can't resolve relative imports.
   SYNC_SPACES_SET_PROJECT_DESCRIPTION: 'syncspaces:set-project-description',
   SYNC_SPACES_STOP_PROJECT: 'syncspaces:stop-project',
+  SYNC_SPACES_REMOVE_PROJECT: 'syncspaces:remove-project',
   // Conversation-lease takeover (Plan 2b Task 9) — inlined literals (preload can't import).
   SYNC_SPACES_LEASE_QUERY: 'syncspaces:lease-query',
   SYNC_SPACES_LEASE_TAKEOVER: 'syncspaces:lease-takeover',
@@ -1150,6 +1151,9 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke(IPC.SYNC_SPACES_RENAME_PROJECT, { name, displayName }),
     stopProject: (name: string) =>
       ipcRenderer.invoke(IPC.SYNC_SPACES_STOP_PROJECT, { name }),
+    // Remove = stop syncing + off every device's lists; files and GitHub untouched (backlog row 10).
+    removeProject: (name: string) =>
+      ipcRenderer.invoke(IPC.SYNC_SPACES_REMOVE_PROJECT, { name }),
     // Synced project description (Task 3) — payload-object shape, same convention
     // as renameProject above.
     setProjectDescription: (name: string, description: string) =>

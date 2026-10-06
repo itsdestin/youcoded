@@ -21,6 +21,7 @@ import { isAbsoluteRecorded } from './write-authorization';
 import { discoverProjectFiles, discoveredFileRecord } from './project-file-discovery';
 import { canonicalize } from '../../shared/artifacts/canonicalize';
 import { readFolders, type SavedFolder } from '../saved-folders';
+import { isRemovedFromLists } from '../folders-service';
 import { getManagedRoots } from '../sync-spaces/service';
 import { listPastSessions } from '../session-browser';
 import { ccProjectSlug } from '../slug-encoding';
@@ -122,11 +123,10 @@ export async function listProjectsIndex(opts?: { withCounts?: boolean }): Promis
   // for the same path wins (keeps the user's nickname).
   const managed = getManagedRoots()?.listProjects() ?? [];
   for (const p of managed) saved.push({ path: p.path, nickname: p.name, addedAt: 0 });
-  // A synced project removed from this computer's list (its saved entry is marked `hidden`,
-  // folders-service.ts — backlog row 10) stays out of Project View exactly as it stays out of
-  // the new-session picker.
-  const hiddenKeys = new Set(saved.filter((f) => f.hidden).map((f) => canonicalize(f.path, null)));
-  saved = saved.filter((f) => !f.hidden && !hiddenKeys.has(canonicalize(f.path, null)));
+  // A synced project removed on any device stays out of Project View exactly as it stays out
+  // of the new-session picker (folders-service.ts, backlog row 10) — unless re-added here.
+  const savedOnly = saved;
+  saved = saved.filter((f) => !isRemovedFromLists(f.path, savedOnly));
   const indexProjects = await listProjects(CLAUDE_DIR);
   const projects = buildSavedFolderProjects(saved, indexProjects);
 

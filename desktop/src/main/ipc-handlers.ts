@@ -110,7 +110,7 @@ import { startStatusPushGate } from './status-push-gate';
 // Cross-device sync spaces (spec 2026-07-03) — the folder-based sync engine.
 import {
   syncSpacesStatus, syncSpacesEnable, syncSpacesSyncNow, syncSpacesCreateProject, syncSpacesImportProject,
-  syncSpacesRenameProject, syncSpacesStopProject, syncSpacesSetProjectDescription, getManagedRoots, isSyncSpacesEnabled, getLastSyncByDevice,
+  syncSpacesRenameProject, syncSpacesStopProject, syncSpacesRemoveProject, syncSpacesSetProjectDescription, getManagedRoots, isSyncSpacesEnabled, getLastSyncByDevice,
   getSelfLastSyncEpochMs, isSyncSpacesSyncing,
 } from './sync-spaces/service';
 // Self-row recency derivation (spec §4) — pure fn so the ms→wire-seconds
@@ -4804,6 +4804,9 @@ export function registerIpcHandlers(
     syncSpacesRenameProject(String(p?.name ?? ''), String(p?.displayName ?? '')));
   ipcMain.handle(IPC.SYNC_SPACES_STOP_PROJECT, (_e, p: { name: string }) =>
     syncSpacesStopProject(String(p?.name ?? '')));
+  // Remove a synced project everywhere (backlog row 10) — same payload shape as stop.
+  ipcMain.handle(IPC.SYNC_SPACES_REMOVE_PROJECT, (_e, p: { name: string }) =>
+    syncSpacesRemoveProject(String(p?.name ?? '')));
   // Synced project description (Task 3) — payload-object shape, matching renameProject.
   ipcMain.handle(IPC.SYNC_SPACES_SET_PROJECT_DESCRIPTION, (_e, p: { name: string; description: string }) =>
     syncSpacesSetProjectDescription(String(p?.name ?? ''), String(p?.description ?? '')));

@@ -4498,6 +4498,8 @@ class SessionService : Service() {
             // that never arrives instead of failing fast.
             "syncspaces:set-project-description",
             "syncspaces:stop-project",
+            // Remove a synced project everywhere (2026-10-06) — desktop-only like stop.
+            "syncspaces:remove-project",
             // Plan 2b — conversation leases/takeover + device registry are
             // desktop-only (Android has no lease/takeover). The shared React UI
             // degrades: these invokes reject fast with this stub instead of

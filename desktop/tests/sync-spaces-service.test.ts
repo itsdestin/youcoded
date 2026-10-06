@@ -59,6 +59,7 @@ const h = vi.hoisted(() => {
     ensureEntry: vi.fn(),
     setDisplay: vi.fn(),
     setStopped: vi.fn(),
+    removedMarks: [] as string[],
     ensureRemoteFails: false,
     autoAddSpace: false,
     // When true, the fake SpaceManager reports enabled at construction time —
@@ -117,6 +118,8 @@ vi.mock('../src/main/sync-spaces/project-registry', () => ({
   ensureProjectEntry: (_root: string, input: any) => { h.ensureEntry(input); },
   setProjectDisplayName: async (_r: string, name: string, repo: string, dn: string) => { h.setDisplay({ name, repo, dn }); },
   setProjectStopped: async (_r: string, name: string, repo: string) => { h.setStopped({ name, repo }); },
+  markProjectRemoved: async (_r: string, name: string) => { h.removedMarks.push(name); },
+  readRemovedProjects: async () => new Set(h.removedMarks),
 }));
 vi.mock('../src/main/sync-spaces/space-manager', () => ({
   SpaceManager: class {
@@ -667,6 +670,28 @@ describe('sync-spaces service transition serialization', () => {
     expect(h.setStopped).toHaveBeenCalledWith(expect.objectContaining({ name: 'app' }));
     expect(engine.removed).toContain('project:app'); // detached, folder kept
     expect(h.engines[0].synced).toContain('personal'); // pushed
+  });
+
+  it('syncSpacesRemoveProject stops it everywhere, marks it removed, and keeps the folder', async () => {
+    h.autoAddSpace = true; h.projects = ['app']; h.removedMarks = [];
+    const svc = await freshService();
+    await svc.syncSpacesEnable(true);
+    const engine = h.engines[0];
+    expect(svc.isRemovedProject('app')).toBe(false);
+    await svc.syncSpacesRemoveProject('app');
+    expect(h.setStopped).toHaveBeenCalledWith(expect.objectContaining({ name: 'app' })); // stop on every device
+    expect(h.removedMarks).toEqual(['app']);                    // off every device's lists
+    expect(svc.isRemovedProject('app')).toBe(true);             // this device's lists, at once
+    expect(engine.removed).toContain('project:app');            // detached here, folder kept
+    expect(engine.synced).toContain('personal');                // pushed to the other devices
+    const st = await svc.syncSpacesStatus();
+    expect(st.removed.map((r: any) => r.name)).toEqual(['app']);
+  });
+
+  it('a project removed on another device is picked up at startup', async () => {
+    h.projects = ['app']; h.removedMarks = ['app'];
+    const svc = await freshService();
+    await vi.waitFor(() => expect(svc.isRemovedProject('app')).toBe(true));
   });
 
   it('status spaces carry displayName + state for synced projects', async () => {

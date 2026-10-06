@@ -191,7 +191,7 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'artifacts.listAllFiles', 'artifacts.listFolder', 'artifacts.get', 'artifacts.checkExistence',
   'artifacts.searchContent', 'artifacts.watchProject', 'artifacts.unwatchProject',
   'artifacts.readBinary', 'artifacts.save',
-  'syncSpaces.status', 'syncSpaces.syncNow', 'syncSpaces.stopProject',
+  'syncSpaces.status', 'syncSpaces.syncNow', 'syncSpaces.stopProject', 'syncSpaces.removeProject',
   'syncSpaces.renameProject', 'syncSpaces.setProjectDescription',
   'syncSpaces.listDevices', 'syncSpaces.renameDevice', 'syncSpaces.removeDevice',
   // Legacy rclone half of Backup & Sync. All real preload channels — hand-written
@@ -2127,6 +2127,14 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
             },
           ],
       syncHub: 'connected',
+      // `&sync=removed` (project switcher round 2): two projects removed from every device, so
+      // Backup & sync's "Removed projects" card — the GitHub backup note — can be photographed.
+      ...(typeof location !== 'undefined' && new URLSearchParams(location.search).get('sync') === 'removed' ? {
+        removed: [
+          { name: 'old-thesis', displayName: 'Old thesis', githubUrl: 'https://github.com/itsdestin/old-thesis' },
+          { name: 'wedding', displayName: 'Wedding planning', githubUrl: 'https://github.com/itsdestin/wedding' },
+        ],
+      } : {}),
     }),
     // Real channel (syncspaces:set-project-description); the fake stays so the
     // description editor works in the workbench without a synced registry.
@@ -2138,6 +2146,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
     syncNow: async () => ({ ok: true }),
     stopProject: async () => ({ ok: true }),
+    removeProject: async () => ({ ok: true }),
     renameProject: async () => ({ ok: true }),
     leaseQuery: async () => leaseHolder && leaseMode !== 'raced' && !leaseReleased
       ? { held: true, device: leaseHolder, self: false, source: 'workbench' } : { held: false },

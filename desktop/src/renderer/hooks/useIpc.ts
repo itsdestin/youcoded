@@ -541,6 +541,8 @@ declare global {
         // Cross-device rename (display-name only) + stop-syncing (2026-07-12).
         renameProject?: (name: string, displayName: string) => Promise<{ ok: boolean; error?: string }>;
         stopProject?: (name: string) => Promise<{ ok: boolean; error?: string }>;
+        // Remove a synced project everywhere: stop + off every device's lists (backlog row 10).
+        removeProject?: (name: string) => Promise<{ ok: boolean; error?: string }>;
         // Conversation-lease takeover (Plan 2b Task 9). Optional so remote/Android
         // builds predating these members still typecheck; the Resume Browser gate
         // guards every call. leaseQuery answers who holds the session; leaseTakeover

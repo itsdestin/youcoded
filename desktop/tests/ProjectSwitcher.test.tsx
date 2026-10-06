@@ -56,13 +56,14 @@ describe('project switcher rows', () => {
     mount();
     expect(within(rowOf('app')).getByText('Synced')).toBeTruthy();
     expect(within(rowOf('themes')).getByText('Sync problem')).toBeTruthy();
-    expect(within(rowOf('notes')).getByText('Only on this computer')).toBeTruthy();
+    expect(within(rowOf('notes')).getByText('Not synced')).toBeTruthy();
   });
 
-  it('marks the project you are in with a Current pill, not a check mark', () => {
+  it('marks the project you are in beside its name, without tinting its row', () => {
     mount();
-    expect(within(rowOf('app')).getByText('Current')).toBeTruthy();
-    expect(within(rowOf('themes')).queryByText('Current')).toBeNull();
+    expect(within(rowOf('app')).getByLabelText('Current project')).toBeTruthy();
+    expect(within(rowOf('themes')).queryByLabelText('Current project')).toBeNull();
+    expect(rowOf('app').parentElement!.className).not.toMatch(/bg-accent/);
   });
 
   it('says when a folder is missing', () => {
@@ -70,12 +71,15 @@ describe('project switcher rows', () => {
     expect(within(rowOf('thesis')).getByText('Folder missing')).toBeTruthy();
   });
 
-  it('every row has a visible Remove — synced projects included', () => {
+  it('every row has a Remove — synced projects included — shown only on the pointed row', () => {
     const onDelete = mount();
     for (const n of ['app', 'themes', 'notes', 'thesis']) {
-      expect(screen.getByRole('button', { name: `Remove ${n} from your project list` })).toBeTruthy();
+      expect(screen.getByRole('button', { name: `Remove ${n} from your projects`, hidden: true })).toBeTruthy();
     }
-    fireEvent.click(screen.getByRole('button', { name: 'Remove themes from your project list' }));
+    // Hidden rows take no space (display:none, not transparent) so the pills sit flush right.
+    expect(screen.getByRole('button', { name: 'Remove themes from your projects', hidden: true }).className).toMatch(/(^|\s)hidden(\s|$)/);
+    expect(screen.getByRole('button', { name: 'Remove app from your projects' }).className).toMatch(/(^|\s)inline-flex(\s|$)/); // the highlighted row
+    fireEvent.click(screen.getByRole('button', { name: 'Remove themes from your projects', hidden: true }));
     expect(onDelete).toHaveBeenCalledWith(projects[1]);
   });
 

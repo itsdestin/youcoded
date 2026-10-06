@@ -2424,6 +2424,7 @@ export function installShim(): void {
       renameProject: (name: string, displayName: string) =>
         invoke('syncspaces:rename-project', { name, displayName }),
       stopProject: (name: string) => invoke('syncspaces:stop-project', { name }),
+      removeProject: (name: string) => invoke('syncspaces:remove-project', { name }),
       // Synced project description (Task 3) — payload-object shape, matching
       // preload's renameProject/setProjectDescription convention.
       setProjectDescription: (name: string, description: string) =>

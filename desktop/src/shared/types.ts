@@ -2017,6 +2017,8 @@ export const IPC = {
   // ipc-handlers.ts resolves IPC.SYNC_SPACES_SET_PROJECT_DESCRIPTION against.
   SYNC_SPACES_SET_PROJECT_DESCRIPTION: 'syncspaces:set-project-description',
   SYNC_SPACES_STOP_PROJECT: 'syncspaces:stop-project',
+  // Remove a synced project everywhere: stop + off every device's lists (backlog row 10).
+  SYNC_SPACES_REMOVE_PROJECT: 'syncspaces:remove-project',
   // Conversation-lease takeover (Plan 2b Task 9). query = who holds this session;
   // takeover = ask-hand-off-then-poll-and-acquire; force = overwrite a stale lease.
   SYNC_SPACES_LEASE_QUERY: 'syncspaces:lease-query',

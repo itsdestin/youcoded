@@ -13,13 +13,13 @@ export const PROJECTS: readonly ScreenEntry[] = [
   pr('projects/context/how', 'dialog'),
   pr('projects/switcher', 'dialog'),
   // Project switcher redesign (backlog row 10): a long list with a missing folder, and one
-  // state per open choice (components/project-view/switcher-variants.ts).
+  // state per open choice (`workbenchSwitcherCurrent` in workbench-mode.ts).
   { ...pr('projects/switcher#many', 'dialog'), params: { projects: 'many' } },
-  { ...pr('projects/switcher#counts-chips', 'dialog'), params: { switcherCounts: 'chips' } },
-  { ...pr('projects/switcher#counts-none', 'dialog'), params: { switcherCounts: 'none' } },
-  { ...pr('projects/switcher#current-fill', 'dialog'), params: { switcherCurrent: 'fill' } },
-  { ...pr('projects/switcher#current-top', 'dialog'), params: { switcherCurrent: 'top' } },
-  { ...pr('projects/switcher#remove-hover', 'dialog'), params: { switcherRemove: 'hover' } },
+  // `#pointed`: the keyboard highlight moved to the second row, so the project you are in
+  // shows its own marking (not the highlight on top of it) and the bin shows on another row.
+  { ...pr('projects/switcher#pointed', 'dialog'), open: [{ do: 'key', key: 'ArrowDown' }] },
+  { ...pr('projects/switcher#current-edge', 'dialog'), params: { switcherCurrent: 'edge' }, open: [{ do: 'key', key: 'ArrowDown' }] },
+  { ...pr('projects/switcher#current-subtext', 'dialog'), params: { switcherCurrent: 'subtext' }, open: [{ do: 'key', key: 'ArrowDown' }] },
   // The Remove confirm, one per wording: a plain folder, a synced project, a missing folder.
   pr('projects/remove', 'dialog'),
   pr('projects/remove/synced', 'dialog'),
