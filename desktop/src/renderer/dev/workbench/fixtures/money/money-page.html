@@ -2,154 +2,236 @@
 <html><head><meta charset="utf-8"><title>Money</title>
 <!--
   Money page — design-stage mockup (finance dashboard, 2026-10-05).
-  Decisions it follows: docs/active/design/2026-10-05-finance-dashboard/
-  finance-dashboard.questions.answers.json (summary sheet first, grouped by kind,
-  card bars warn at 30% / alert at 80%, bills by due date with late + "reported in
-  N days" warnings, net-worth history chart, live check on open, stale after 3 days,
-  typed-in accounts editable here and by chat, balances only).
-  Everything it shows comes from youcoded.data, so the same file runs against the
+  Decisions: docs/active/design/2026-10-05-finance-dashboard/ — the questions deck
+  (summary first, grouped by kind, card bars warn at 30% / alert at 80%, bills by due
+  date with late and "reaches your credit report" warnings, net-worth history, live
+  check on open, stale after 3 days, typed-in accounts editable here and by chat,
+  balances only) and review round 1 (accounting brackets for negatives, the Home
+  page's raised-glass look, links out to each provider's own site).
+  Everything shown comes from youcoded.data, so the same file runs against the
   workbench's made-up numbers now and Plaid-fed numbers later.
 -->
 <style>
   :root { --warn: var(--warning-fg, #c77a00); --bad: var(--destructive-fg, #d33); }
+  body { font-size: 14px; }
   .num { font-variant-numeric: tabular-nums; }
-  .neg { color: var(--fg); }
-  .head { align-items: flex-start; }
-  .updated { gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
-  .yc-button { white-space: nowrap; }
-  .yc-button svg { width: 14px; height: 14px; flex: none; }
-  .head { gap: 12px; flex-wrap: wrap; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 16px 20px 32px; display: flex; flex-direction: column; gap: 14px; }
 
-  /* Summary sheet: four tiles, the first carries the big number. */
-  .sheet { display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; gap: 12px; }
-  .tile { padding: 14px 16px; }
-  .tile .val { font-size: 22px; font-weight: 500; line-height: 1.2; margin-top: 4px; }
-  .tile--hero .val { font-size: 30px; }
-  .tile .sub { margin-top: 4px; }
-  .delta { font-size: 12px; color: var(--fg-2); }
+  /* Raised glass, same recipe as the Home page's look layer: a faint top-lit gradient, a hairline
+     highlight along the top edge, a soft shadow under it. Colours only from the theme. */
+  .card { position: relative; border-radius: 24px; padding: 18px; border: 1px solid color-mix(in srgb, var(--fg) 11%, transparent);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--fg) 6%, var(--panel)), var(--panel));
+    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--fg) 12%, transparent), 0 14px 30px -18px rgba(0,0,0,.55); }
+  .tile { position: relative; border-radius: 18px; border: 1px solid color-mix(in srgb, var(--fg) 9%, transparent);
+    background: color-mix(in srgb, var(--fg) 4%, var(--panel)); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--fg) 8%, transparent); }
+  :root[data-yc-see-through] .card { background: linear-gradient(180deg, color-mix(in srgb, var(--fg) 6%, transparent), transparent 55%),
+      color-mix(in srgb, var(--panel) calc(var(--panels-opacity, 1) * 60%), transparent); }
+  .card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .card-head h2 { flex: 1; font-size: 16px; font-weight: 600; letter-spacing: -.005em; }
+  .card-head .total { font-size: 15px; font-weight: 500; }
+  .label { font-size: 11px; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-muted); }
+  .muted { color: var(--fg-muted); }
+  .small { font-size: 12px; }
+  svg.i { width: 16px; height: 16px; flex: none; }
 
-  /* Alerts: icon + words, never colour alone. */
-  .alerts { display: flex; flex-direction: column; gap: 6px; }
-  .alert { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--radius-md, 8px);
-           background: var(--inset); border: 1px solid var(--edge-dim); }
-  .alert svg { flex: none; width: 16px; height: 16px; }
-  .alert--warn svg { color: var(--warn); }
-  .alert--bad { border-color: var(--bad); }
-  .alert--bad svg { color: var(--bad); }
-  .alert .msg { flex: 1; min-width: 0; }
+  /* Top row: the page's name and quiet status pills, like the Home page's tab row. */
+  .top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .pill { appearance: none; font: inherit; font-size: 13px; display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px 0 6px;
+    border-radius: 9999px; border: 1px solid var(--edge-dim); background: var(--panel); color: var(--fg); white-space: nowrap; cursor: pointer;
+    transition: border-color 120ms ease, transform 90ms ease; }
+  .pill:hover { border-color: var(--edge); }
+  .pill:active { transform: scale(.97); }
+  .pill.title { background: var(--fg); border-color: var(--fg); color: var(--panel); cursor: default; font-weight: 500; }
+  .pill.title:active { transform: none; }
+  .pill-ic { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: var(--well); color: var(--fg-2); }
+  .pill.title .pill-ic { background: var(--panel); color: var(--fg); }
+  .pill-ic.bad { background: var(--bad); color: #fff; box-shadow: 0 0 14px color-mix(in srgb, var(--bad) 60%, transparent); }
+  .pill-ic.warn { background: var(--warn); color: #1a1200; }
+  .pill-ic.ok { background: color-mix(in srgb, var(--fg) 12%, var(--panel)); }
+  .pill-ic svg { width: 14px; height: 14px; }
+  .top .spacer { flex: 1; }
+  .btn { appearance: none; font: inherit; font-size: 12px; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px;
+    border-radius: 9999px; border: 1px solid var(--edge); background: var(--inset); color: var(--fg); cursor: pointer; white-space: nowrap; text-decoration: none;
+    transition: background-color 120ms ease, border-color 120ms ease, transform 90ms ease; }
+  .btn:hover { background: var(--well); border-color: var(--fg-faint); }
+  .btn:active { transform: scale(.97); }
+  .btn:focus-visible, .pill:focus-visible, .ibtn:focus-visible, .rng:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .btn.primary { background: var(--fg); border-color: var(--fg); color: var(--panel); }
+  .btn.sm { height: 28px; font-size: 11px; padding: 0 10px; }
+  .btn svg { width: 14px; height: 14px; }
+  .ibtn { appearance: none; width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--edge-dim); background: var(--panel); color: var(--fg-2);
+    display: inline-grid; place-items: center; cursor: pointer; flex: none; text-decoration: none; transition: border-color 120ms ease, color 120ms ease, transform 90ms ease; }
+  .ibtn:hover { border-color: var(--edge); color: var(--fg); }
+  .ibtn:active { transform: scale(.94); }
+  .ibtn svg { width: 14px; height: 14px; }
 
-  /* Chart */
-  .chart-card { padding: 14px 16px 10px; }
-  .chart { position: relative; height: 180px; margin-top: 8px; }
+  /* Hero: the big number and its chart in one card, the three other totals beside it. */
+  .hero { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(220px, 1fr); gap: 14px; }
+  .nw .big { font-size: 40px; font-weight: 500; line-height: 1.05; letter-spacing: -.01em; margin-top: 6px; }
+  .nw .delta { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 12px; padding: 3px 10px; border-radius: 9999px;
+    background: color-mix(in srgb, var(--fg) 7%, transparent); color: var(--fg-2); }
+  .nw .delta svg { width: 12px; height: 12px; }
+  .nw-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .ranges { display: inline-flex; padding: 3px; gap: 2px; border-radius: 9999px; background: var(--well); border: 1px solid var(--edge-dim); }
+  .rng { appearance: none; font: inherit; font-size: 11px; font-weight: 500; height: 26px; min-width: 40px; padding: 0 10px; border: 0; border-radius: 9999px;
+    background: transparent; color: var(--fg-2); cursor: pointer; }
+  .rng.on { background: var(--fg); color: var(--panel); }
+  .chart { position: relative; height: 190px; margin-top: 14px; }
   .chart svg { width: 100%; height: 100%; display: block; overflow: visible; }
-  .chart .grid line { stroke: var(--edge-dim); stroke-width: 1; }
+  .chart .grid line { stroke: color-mix(in srgb, var(--fg) 8%, transparent); }
   .chart .axis text { fill: var(--fg-muted); font-size: 11px; }
-  .chart .line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
-  .chart .area { fill: var(--accent); opacity: .08; }
-  .chart .zero { stroke: var(--fg-faint); stroke-dasharray: 3 3; }
-  .chart .cross { stroke: var(--fg-muted); stroke-width: 1; }
-  .chart .dot { fill: var(--accent); stroke: var(--panel); stroke-width: 2; }
-  .tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--edge); border-radius: var(--radius-md, 8px);
-         padding: 6px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.25); white-space: nowrap; transform: translate(-50%, -110%); }
-  .ranges { gap: 4px; }
-  .ranges .yc-button { min-width: 40px; }
-  .ranges .on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .chart .line { fill: none; stroke: var(--fg); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .chart .zero { stroke: var(--fg-faint); stroke-dasharray: 3 4; }
+  .chart .cross { stroke: var(--fg-muted); }
+  .chart .dot { fill: var(--fg); stroke: var(--panel); stroke-width: 3; }
+  .tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--edge); border-radius: 12px; padding: 6px 10px; font-size: 12px;
+    box-shadow: 0 8px 24px -8px rgba(0,0,0,.5); white-space: nowrap; transform: translate(-50%, -120%); }
+  .stats { display: flex; flex-direction: column; gap: 10px; }
+  .stat { padding: 14px 16px; display: flex; align-items: center; gap: 12px; flex: 1; }
+  .stat .v { font-size: 22px; font-weight: 500; line-height: 1.15; margin-top: 2px; }
+  .stat .sub { font-size: 11px; color: var(--fg-muted); margin-top: 2px; }
+  .badge { width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; flex: none; background: var(--well); color: var(--fg-2); }
+  .badge svg { width: 18px; height: 18px; }
 
-  /* Groups */
-  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
-  .group { padding: 0; overflow: hidden; }
-  .group-head { display: flex; align-items: baseline; justify-content: space-between; padding: 12px 16px 8px; }
-  .group-head .total { font-size: 14px; font-weight: 500; }
-  .acct { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 10px 16px; border-top: 1px solid var(--edge-dim); align-items: center; }
+  /* Needs you: one tile per account, glowing in its warning colour. */
+  .needs { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 10px; }
+  .need { display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 14px; overflow: hidden;
+    border-color: color-mix(in srgb, var(--c) 45%, transparent); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--c) 25%, transparent), 0 10px 26px -16px var(--c); }
+  .need::before { content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; opacity: .22;
+    background: radial-gradient(120% 160% at 0% 0%, var(--c), transparent 70%); }
+  .need.bad { --c: var(--bad); } .need.warn { --c: var(--warn); }
+  .need > * { position: relative; }
+  .need .txt { flex: 1; min-width: 0; }
+  .need .who { font-weight: 500; }
+  .need .facts { font-size: 12px; color: var(--fg-2); margin-top: 2px; }
+  .need .facts b { font-weight: 500; color: var(--fg); }
+
+  /* Accounts */
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+  .sec + .sec { margin-top: 14px; }
+  .sec-head { display: flex; align-items: baseline; justify-content: space-between; padding: 0 4px 8px; }
+  .list { display: flex; flex-direction: column; gap: 8px; }
+  .acct { padding: 10px 12px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 4px 12px; align-items: center; }
+  .acct.stale .name, .acct.stale .bal { color: var(--fg-dim); }
+  .mark { width: 36px; height: 36px; border-radius: 12px; display: grid; place-items: center; font-size: 11px; font-weight: 700; letter-spacing: -.02em;
+    color: #fff; background: var(--b, var(--well)); box-shadow: inset 0 1px 0 rgba(255,255,255,.25); flex: none; }
+  .acct > .mark { grid-row: span 2; }
   .acct .name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .acct .bal { text-align: right; font-weight: 500; }
-  .acct .meta { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-muted); min-width: 0; }
-  .acct .side { display: flex; align-items: center; justify-content: flex-end; gap: 6px; font-size: 12px; color: var(--fg-muted); }
-  .acct--stale .name, .acct--stale .bal { color: var(--fg-dim); }
-  .src { display: inline-flex; align-items: center; gap: 4px; }
+  .acct .bal { font-weight: 500; text-align: right; }
+  /* Second line spans both columns so the status and buttons never squeeze the name on the first line. */
+  .acct .row2 { grid-column: 2 / -1; display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .acct .meta { flex: 1; min-width: 0; font-size: 12px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .acct .side { display: flex; align-items: center; justify-content: flex-end; gap: 6px; font-size: 12px; color: var(--fg-muted); flex: none; }
+  .src { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
   .src svg { width: 12px; height: 12px; }
-  .stale { color: var(--warn); display: inline-flex; align-items: center; gap: 4px; }
-  .stale svg { width: 12px; height: 12px; }
-  .legend { padding: 0 16px 10px; }
-  .chart-sum { margin-top: 2px; }
-
-  /* Card limit meter */
-  .meter { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; margin-top: 4px; }
-  .bar { flex: 1; height: 6px; border-radius: 9999px; background: var(--inset); overflow: hidden; position: relative; }
+  .flag { display: inline-flex; align-items: center; gap: 4px; color: var(--warn); white-space: nowrap; }
+  .flag svg { width: 12px; height: 12px; }
+  .meter { grid-column: 2 / -1; display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+  .bar { flex: 1; height: 10px; border-radius: 9999px; background: color-mix(in srgb, var(--fg) 9%, var(--well)); position: relative; overflow: hidden; }
   .bar > i { position: absolute; inset: 0 auto 0 0; border-radius: 9999px; background: var(--fg-2); }
-  .bar .mark { position: absolute; top: -2px; bottom: -2px; width: 1px; background: var(--fg-faint); }
-  .meter--warn .bar > i { background: var(--warn); }
-  .meter--bad .bar > i { background: var(--bad); }
-  .meter .pct { font-size: 12px; min-width: 128px; text-align: right; color: var(--fg-2); display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; }
+  .bar .tick { position: absolute; top: 2px; bottom: 2px; width: 2px; border-radius: 2px; background: var(--panel); opacity: .9; }
+  .meter.warn .bar > i { background: var(--warn); box-shadow: 0 0 12px color-mix(in srgb, var(--warn) 60%, transparent); }
+  .meter.bad .bar > i { background: var(--bad); box-shadow: 0 0 12px color-mix(in srgb, var(--bad) 60%, transparent); }
+  .meter .pct { font-size: 12px; color: var(--fg-2); white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; min-width: 150px; justify-content: flex-end; }
+  .meter.warn .pct svg { color: var(--warn); } .meter.bad .pct svg { color: var(--bad); }
   .meter .pct svg { width: 12px; height: 12px; }
-  .meter--warn .pct svg { color: var(--warn); }
-  .meter--bad .pct svg { color: var(--bad); }
+  .legend { font-size: 11px; color: var(--fg-muted); padding: 0 4px 8px; }
+  .edit { grid-column: 2 / -1; display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+  .edit input { font: inherit; font-size: 14px; width: 150px; height: 32px; padding: 0 12px; border-radius: 9999px; border: 1px solid var(--edge); background: var(--inset); color: var(--fg); }
+  .edit input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .edit .hint { flex: 1; min-width: 160px; font-size: 11px; color: var(--fg-muted); }
 
   /* Bills */
-  .bill { display: grid; grid-template-columns: 1fr auto auto; gap: 2px 12px; padding: 10px 16px; border-top: 1px solid var(--edge-dim); align-items: center; }
-  .bill .when { font-size: 12px; text-align: right; min-width: 150px; display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; color: var(--fg-2); }
-  .bill .when svg { width: 12px; height: 12px; }
-  .bill--late .when { color: var(--warn); }
-  .bill--late .when svg { color: var(--warn); }
-  .bill--report { background: color-mix(in srgb, var(--bad) 8%, transparent); }
-  .bill--report .when { color: var(--bad); font-weight: 500; }
-  .bill--paid .name, .bill--paid .amt { color: var(--fg-dim); }
-  .bill .amt { text-align: right; font-weight: 500; min-width: 72px; }
+  .bills { display: flex; flex-direction: column; gap: 8px; }
+  .bill { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto auto; gap: 12px; align-items: center; padding: 8px 10px 8px 12px; }
+  .bill .mark { width: 30px; height: 30px; border-radius: 10px; font-size: 10px; }
+  .bill .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bill .name small { font-size: 11px; color: var(--fg-muted); margin-left: 6px; }
+  .when { font-size: 12px; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 9999px; white-space: nowrap;
+    background: color-mix(in srgb, var(--fg) 6%, transparent); color: var(--fg-2); }
+  .when svg { width: 12px; height: 12px; }
+  .bill.soon .when { background: color-mix(in srgb, var(--fg) 12%, transparent); color: var(--fg); }
+  .bill.late .when { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--fg); }
+  .bill.late .when svg { color: var(--warn); }
+  .bill.report { border-color: color-mix(in srgb, var(--bad) 45%, transparent); box-shadow: 0 10px 26px -18px var(--bad); }
+  .bill.report .when { background: color-mix(in srgb, var(--bad) 20%, transparent); color: var(--fg); font-weight: 500; }
+  .bill.report .when svg { color: var(--bad); }
+  .bill.paid { opacity: .6; }
+  .bill .amt { font-weight: 500; text-align: right; min-width: 76px; }
 
-  /* Inline edit */
-  .edit { grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; margin-top: 8px; }
-  .edit .yc-input { max-width: 160px; }
-  .edit .hint { flex: 1; font-size: 12px; color: var(--fg-muted); }
-
-  .menu { position: absolute; right: 0; top: calc(100% + 6px); background: var(--panel); border: 1px solid var(--edge); border-radius: var(--radius-md, 8px);
-          padding: 4px; min-width: 220px; z-index: 5; box-shadow: 0 8px 24px rgba(0,0,0,.25); }
-  .menu button { display: flex; flex-direction: column; align-items: flex-start; width: 100%; text-align: left; background: none; border: 0; color: var(--fg);
-                 font: inherit; font-size: 12px; padding: 8px 10px; border-radius: var(--radius-sm, 4px); cursor: pointer; }
+  .menu { position: absolute; right: 0; top: calc(100% + 8px); background: var(--panel); border: 1px solid var(--edge); border-radius: 16px; padding: 6px;
+    min-width: 240px; z-index: 5; box-shadow: 0 16px 40px -12px rgba(0,0,0,.5); }
+  .menu button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; text-align: left; background: none; border: 0; color: var(--fg);
+    font: inherit; font-size: 13px; padding: 9px 12px; border-radius: 10px; cursor: pointer; }
   .menu button:hover { background: var(--inset); }
-  .menu .yc-caption { margin-top: 2px; }
+  .menu span { font-size: 11px; color: var(--fg-muted); }
+  .empty { padding: 28px 12px; text-align: center; color: var(--fg-muted); font-size: 13px; }
 
-  @media (max-width: 760px) {
-    .sheet { grid-template-columns: 1fr 1fr; }
-    .tile--hero { grid-column: 1 / -1; }
-    .cols { grid-template-columns: 1fr; }
-    .bill { grid-template-columns: 1fr auto; }
-    .bill .when { grid-column: 1 / -1; justify-content: flex-start; text-align: left; min-width: 0; }
+  @media (max-width: 860px) { .hero, .cols { grid-template-columns: 1fr; } .stats { flex-direction: row; flex-wrap: wrap; } .stat { min-width: 200px; } }
+  @media (max-width: 560px) {
+    .bill { grid-template-columns: auto minmax(0, 1fr) auto; } .bill .when { grid-column: 2 / -1; justify-self: start; } .bill .ibtn { display: none; }
+    .nw .big { font-size: 32px; } .meter .pct { min-width: 0; }
   }
+  @media (prefers-reduced-motion: reduce) { .pill, .btn, .ibtn { transition: none; } }
 </style></head>
 <body>
-<div class="yc-page yc-stack" id="root"></div>
+<div class="wrap" id="root"></div>
 <script>
 (function(){
-  var ICON = {
-    warn: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M8 2 1.5 13.5h13L8 2Z"/><path d="M8 6.5v3.2M8 11.6v.1" stroke-linecap="round"/></svg>',
-    stop: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="8" cy="8" r="6.2"/><path d="M8 4.8v3.6M8 10.9v.1" stroke-linecap="round"/></svg>',
-    link: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M6.5 9.5 9.5 6.5"/><path d="M7 4.5 8.5 3a2.5 2.5 0 0 1 3.5 3.5L10.5 8M9 11.5 7.5 13A2.5 2.5 0 0 1 4 9.5L5.5 8"/></svg>',
-    hand: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 2.5l3 3L6 13H3v-3l7.5-7.5Z"/></svg>',
-    refresh: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5v2.5h-2.5"/></svg>',
-    check: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8.5 3 3 6-7"/></svg>',
-    plus: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>'
+  function ic(d){ return '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + '</svg>'; }
+  var I = {
+    money: ic('<rect x="3" y="6" width="18" height="12" rx="1.5"/><circle cx="12" cy="12" r="3"/><path d="M6 9.5h.01M18 14.5h.01"/>'),
+    warn: ic('<path d="M12 3 2 20h20L12 3z"/><path d="M12 10v4M12 17h.01"/>'),
+    stop: ic('<circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5h.01"/>'),
+    link: ic('<path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"/><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/>'),
+    pen: ic('<path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4z"/>'),
+    refresh: ic('<path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4"/>'),
+    check: ic('<path d="m5 12.5 4.5 4.5L19 7.5"/>'),
+    plus: ic('<path d="M12 5v14M5 12h14"/>'),
+    out: ic('<path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>'),
+    cal: ic('<rect x="4" y="5" width="16" height="16" rx="2"/><path d="M4 10h16M8 3v4M16 3v4"/>'),
+    up: ic('<path d="m6 15 6-6 6 6"/>'),
+    down: ic('<path d="m6 9 6 6 6-6"/>'),
+    wallet: ic('<path d="M3 7a2 2 0 0 1 2-2h13v4"/><path d="M3 7v11a2 2 0 0 0 2 2h15V9H5a2 2 0 0 1-2-2z"/><path d="M16 14.5h.01"/>'),
+    owe: ic('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18M7 15h4"/>'),
+    have: ic('<path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/>')
   };
-  var DAY = 86400000;
-  var KINDS = [
-    { k: 'checking', label: 'Checking' }, { k: 'savings', label: 'Savings' },
-    { k: 'investment', label: 'Investments' }, { k: 'credit', label: 'Credit cards' },
-    { k: 'loan', label: 'Loans' }
-  ];
 
+  // Each provider's mark and its own website. WHY drawn here rather than fetched: a page cannot load
+  // pictures from the internet without asking, and a coloured badge reads at a glance (the Home page
+  // draws its TV app marks the same way). Brand colours are literal on purpose — like a light's own
+  // colour on the Home page, they do not change with the theme. The sites are each company's main
+  // sign-in or home page; a data entry's own `site` overrides them.
+  var PROVIDERS = {
+    'Capital One':      { m: 'C1', b: '#004879', site: 'https://myaccounts.capitalone.com' },
+    'American Express': { m: 'AX', b: '#016fd0', site: 'https://www.americanexpress.com' },
+    'Robinhood':        { m: 'RH', b: '#0b8f2a', site: 'https://robinhood.com' },
+    'Synchrony':        { m: 'SY', b: '#3b3b3b', site: 'https://www.mysynchrony.com' },
+    'Wells Fargo':      { m: 'WF', b: '#c8102e', site: 'https://www.wellsfargo.com' },
+    'Earnest':          { m: 'E',  b: '#2a52be', site: 'https://www.earnest.com' },
+    'MOHELA':           { m: 'MO', b: '#0b4a8b', site: 'https://www.mohela.com' },
+    'Affirm':           { m: 'af', b: '#4a4af4', site: 'https://www.affirm.com' },
+    'Liberty Mutual':   { m: 'LM', b: '#1a1446', site: 'https://www.libertymutual.com' },
+    'Visible':          { m: 'V',  b: '#1f2ad6', site: 'https://www.visible.com' }
+  };
+  function prov(name){ return PROVIDERS[name] || { m: String(name || '?').slice(0, 2).toUpperCase(), b: '', site: '' }; }
+  function mark(name){ var p = prov(name); return '<span class="mark" style="' + (p.b ? '--b:' + p.b : '') + '" aria-hidden="true">' + p.m + '</span>'; }
+  function siteOf(x){ return x.site || prov(x.institution).site; }
+  function outBtn(x, what){ var u = siteOf(x); return u ? '<a class="ibtn" href="' + esc(u) + '" target="_blank" rel="noopener" title="Open ' + esc(x.institution) + ' to ' + what + '" aria-label="Open ' + esc(x.institution) + ' to ' + what + '">' + I.out + '</a>' : ''; }
+
+  var DAY = 86400000;
   var data = (window.youcoded && window.youcoded.data) || { accounts: [], bills: [], history: [], settings: {} };
   var S = Object.assign({ staleDays: 3, warnPct: 30, alertPct: 80, reportDay: 30, reportWarnDays: 7 }, data.settings || {});
   var range = '6m', editing = null, menuOpen = false, checking = false;
 
-  // WHY a fixed "today" when the data names one: the workbench's made-up numbers
-  // are dated, so pictures of the mockup stay the same from day to day. A real
-  // page has no demoToday and uses the clock.
+  // A pinned "today" when the data names one keeps the workbench's dated numbers stable in pictures.
   function today(){ return data.demoToday ? new Date(data.demoToday + 'T12:00:00') : new Date(); }
   function day(s){ return new Date(s + 'T12:00:00'); }
   function daysBetween(a, b){ return Math.round((b - a) / DAY); }
-  function money(n, opt){
-    var neg = n < 0, v = Math.abs(n);
-    var s = v.toLocaleString('en-US', { minimumFractionDigits: opt === 'whole' ? 0 : 2, maximumFractionDigits: opt === 'whole' ? 0 : 2 });
-    return (neg ? '−$' : '$') + s;
+  // Accounting style (review 1, Destin): a negative amount is written in brackets, never with a minus.
+  function money(n, whole){
+    var s = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: whole ? 0 : 2, maximumFractionDigits: whole ? 0 : 2 });
+    return n < 0 ? '($' + s + ')' : '$' + s;
   }
   function short(d){ return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); }
   function ago(iso){
@@ -161,169 +243,149 @@
   }
   function isStale(a){ return (today() - new Date(a.updatedAt)) / DAY >= S.staleDays; }
   function esc(s){ return String(s).replace(/[&<>"]/g, function(c){ return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]; }); }
-
-  // Owed things are stored as positive balances; the sign is decided here, once.
   // "Robinhood Gold Card" already names its bank; "Store card" needs "Synchrony" in front.
   function fullName(a){ return a.name.indexOf(a.institution) === 0 ? a.name : a.institution + ' ' + a.name; }
   function isDebt(a){ return a.kind === 'credit' || a.kind === 'loan'; }
+
+  function allBills(){
+    var out = [];
+    data.accounts.forEach(function(a){ if (a.payment) out.push({ id: a.id, institution: a.institution, site: a.site, name: fullName(a), sub: a.kind === 'credit' ? 'min. payment' : '', amount: a.payment.amount, due: day(a.payment.due), paid: a.payment.paid ? day(a.payment.paid) : null }); });
+    (data.bills || []).forEach(function(b){ out.push({ id: b.id, institution: b.provider, site: b.site, name: b.name, sub: b.sub || '', amount: b.amount, due: day(b.due), paid: b.paid ? day(b.paid) : null }); });
+    return out.sort(function(x, y){ return (x.paid ? 1 : 0) - (y.paid ? 1 : 0) || x.due - y.due; });
+  }
+  function billState(b){
+    if (b.paid) return { cls: 'paid', icon: I.check, text: 'Paid ' + short(b.paid) };
+    var d = daysBetween(b.due, today());
+    if (d > 0) {
+      var left = S.reportDay - d;
+      if (left <= 0) return { cls: 'late report', icon: I.stop, text: d + ' days late · may already be on your credit report', alert: 'bad' };
+      if (left <= S.reportWarnDays) return { cls: 'late report', icon: I.stop, text: d + ' days late · on your credit report in ' + left + (left === 1 ? ' day' : ' days'), alert: 'bad' };
+      return { cls: 'late', icon: I.warn, text: d + (d === 1 ? ' day late' : ' days late'), alert: 'warn' };
+    }
+    if (d === 0) return { cls: 'soon', icon: I.cal, text: 'Due today' };
+    if (-d === 1) return { cls: 'soon', icon: I.cal, text: 'Due tomorrow' };
+    return { cls: -d <= 7 ? 'soon' : '', icon: '', text: 'Due in ' + (-d) + ' days · ' + short(b.due) };
+  }
   function totals(){
     var have = 0, owe = 0, cash = 0;
     data.accounts.forEach(function(a){
       if (isDebt(a)) owe += a.balance; else have += a.balance;
       if (a.kind === 'checking' || a.kind === 'savings') cash += a.balance;
     });
-    // Cash available = checking + savings, minus every unpaid payment due before month end.
-    var t = today(), end = new Date(t.getFullYear(), t.getMonth() + 1, 0, 23);
-    var due = 0;
-    allBills().forEach(function(b){ if (!b.paid && b.due <= end) due += b.amount; });
-    return { have: have, owe: owe, net: have - owe, cash: cash - due, dueThisMonth: due };
+    var t = today(), end = new Date(t.getFullYear(), t.getMonth() + 1, 0, 23), due = 0, week = 0;
+    allBills().forEach(function(b){ if (!b.paid && b.due <= end) due += b.amount; if (!b.paid && daysBetween(t, b.due) <= 7) week++; });
+    return { have: have, owe: owe, net: have - owe, cash: cash - due, dueThisMonth: due, dueThisWeek: week };
   }
 
-  // Bills = every account's next payment + standalone bills (insurance, phone).
-  function allBills(){
-    var out = [];
-    data.accounts.forEach(function(a){ if (a.payment) out.push({ id: a.id, name: fullName(a) + (a.kind === 'credit' ? ' · min. payment' : ''), amount: a.payment.amount, due: day(a.payment.due), paid: a.payment.paid ? day(a.payment.paid) : null }); });
-    (data.bills || []).forEach(function(b){ out.push({ id: b.id, name: b.name, amount: b.amount, due: day(b.due), paid: b.paid ? day(b.paid) : null }); });
-    return out.sort(function(x, y){ return (x.paid ? 1 : 0) - (y.paid ? 1 : 0) || x.due - y.due; });
-  }
-  function billState(b){
-    var t = today();
-    if (b.paid) return { cls: 'bill--paid', icon: ICON.check, text: 'Paid ' + short(b.paid) };
-    var d = daysBetween(b.due, t);
-    if (d > 0) {
-      var left = S.reportDay - d;
-      if (left <= 0) return { cls: 'bill--late bill--report', icon: ICON.stop, text: d + ' days late — may already be on your credit report', alert: 'bad' };
-      if (left <= S.reportWarnDays) return { cls: 'bill--late bill--report', icon: ICON.stop, text: d + ' days late — shows on your credit report in ' + left + (left === 1 ? ' day' : ' days'), alert: 'bad' };
-      return { cls: 'bill--late', icon: ICON.warn, text: d + (d === 1 ? ' day late' : ' days late'), alert: 'warn' };
-    }
-    if (d === 0) return { cls: '', icon: '', text: 'Due today' };
-    return { cls: '', icon: '', text: (-d === 1 ? 'Due tomorrow' : 'Due in ' + (-d) + ' days · ' + short(b.due)) };
-  }
-
-  // One row per account (or bill), however many things are wrong with it — the
-  // UX tester read three banners about one card as three problems (review 1, U3).
+  // One tile per account, however many things are wrong with it (UX review 1, U3).
   function alerts(){
     var by = {}, order = [];
-    function add(id, name, lvl, fact, action){
-      if (!by[id]) { by[id] = { name: name, lvl: lvl, facts: [], action: null }; order.push(id); }
-      var r = by[id]; r.facts.push(fact);
-      if (lvl === 'bad') r.lvl = 'bad';
-      if (action) r.action = action;
+    function add(id, x, name, lvl, fact, action){
+      if (!by[id]) { by[id] = { x: x, name: name, lvl: lvl, facts: [], action: null }; order.push(id); }
+      var r = by[id]; r.facts.push(fact); if (lvl === 'bad') r.lvl = 'bad'; if (action) r.action = action;
     }
-    allBills().forEach(function(b){
-      var s = billState(b);
-      if (s.alert) add(b.id, b.name.replace(/ · min\. payment$/, ''), s.alert, money(b.amount) + ' payment ' + s.text);
-    });
+    allBills().forEach(function(b){ var s = billState(b); if (s.alert) add(b.id, b, b.name, s.alert, '<b>' + money(b.amount) + '</b> payment ' + s.text); });
     data.accounts.forEach(function(a){
-      if (a.kind === 'credit' && a.limit) {
-        var p = a.balance / a.limit * 100;
-        if (p >= S.alertPct) add(a.id, fullName(a), 'bad', Math.round(p) + '% of its ' + money(a.limit, 'whole') + ' limit used');
-      }
+      if (a.kind === 'credit' && a.limit) { var p = a.balance / a.limit * 100; if (p >= S.alertPct) add(a.id, a, fullName(a), 'bad', '<b>' + Math.round(p) + '%</b> of its ' + money(a.limit, true) + ' limit used'); }
       if (isStale(a)) {
-        // Same ago() as the account row, so the banner and the row never disagree by a day.
-        if (a.source === 'plaid') add(a.id, fullName(a), 'warn', 'last updated ' + ago(a.updatedAt), { label: 'Reconnect ' + a.institution, kind: 'reconnect' });
-        else add(a.id, fullName(a), 'warn', 'you last updated it ' + ago(a.updatedAt), { label: 'Update', kind: 'edit', id: a.id });
+        if (a.source === 'plaid') add(a.id, a, fullName(a), 'warn', 'last updated ' + ago(a.updatedAt), { label: 'Reconnect ' + a.institution, kind: 'reconnect' });
+        else add(a.id, a, fullName(a), 'warn', 'you last updated it ' + ago(a.updatedAt), { label: 'Update', kind: 'edit', id: a.id });
       }
     });
-    return order.map(function(id){ return by[id]; })
-      .sort(function(x, y){ return (x.lvl === 'bad' ? 0 : 1) - (y.lvl === 'bad' ? 0 : 1); });
+    return order.map(function(id){ return by[id]; }).sort(function(x, y){ return (x.lvl === 'bad' ? 0 : 1) - (y.lvl === 'bad' ? 0 : 1); });
   }
 
   function render(){
-    var t = totals(), al = alerts();
-    var h = '';
-    // Header
-    h += '<div class="yc-row yc-row--between head"><div><div class="yc-eyebrow">Money</div><h1>Where you stand</h1></div>';
-    h += '<div class="yc-row updated"><span class="yc-caption">' + (checking ? 'Checking your banks…' : 'Balances checked ' + ago(data.checkedAt || today().toISOString())) + '</span>';
-    h += '<button class="yc-button" id="check"' + (checking ? ' disabled' : '') + '>' + ICON.refresh + ' Check now</button>';
-    h += '<div style="position:relative"><button class="yc-button" id="add">' + ICON.plus + ' Add account</button>';
-    if (menuOpen) h += '<div class="menu" role="menu"><button data-add="bank">Connect a bank<span class="yc-caption">Sign in through Plaid in your browser</span></button><button data-add="hand">Add one by hand<span class="yc-caption">For accounts that can’t connect</span></button><button data-add="bill">Add a bill<span class="yc-caption">Insurance, phone, anything with a due date</span></button></div>';
-    h += '</div></div></div>';
+    var t = totals(), al = alerts(), h = '';
+    var bad = al.filter(function(a){ return a.lvl === 'bad'; }).length;
 
-    // Alerts first: what needs you today.
+    h += '<div class="top">';
+    h += '<span class="pill title"><span class="pill-ic">' + I.money + '</span>Money</span>';
+    if (al.length) h += '<button class="pill" data-jump="needs"><span class="pill-ic ' + (bad ? 'bad' : 'warn') + '">' + (bad ? I.stop : I.warn) + '</span>' + al.length + ' to look at</button>';
+    else h += '<span class="pill"><span class="pill-ic ok">' + I.check + '</span>All clear</span>';
+    h += '<button class="pill" data-jump="bills"><span class="pill-ic">' + I.cal + '</span>' + t.dueThisWeek + ' due this week</button>';
+    h += '<span class="spacer"></span>';
+    h += '<span class="small muted">' + (checking ? 'Checking your banks…' : 'Checked ' + ago(data.checkedAt || today().toISOString())) + '</span>';
+    h += '<button class="btn" id="check"' + (checking ? ' disabled' : '') + '>' + I.refresh + 'Check now</button>';
+    h += '<div style="position:relative"><button class="btn" id="add">' + I.plus + 'Add</button>';
+    if (menuOpen) h += '<div class="menu" role="menu"><button data-add="bank">Connect a bank<span>Sign in through Plaid in your browser</span></button><button data-add="hand">Add an account by hand<span>For accounts that can’t connect</span></button><button data-add="bill">Add a bill<span>Insurance, phone, anything with a due date</span></button></div>';
+    h += '</div></div>';
+
+    var hist = data.history || [], back30 = hist.length > 30 ? hist[hist.length - 31].v : null;
+    h += '<div class="hero"><div class="card nw"><div class="nw-head"><div><div class="label">Net worth</div><div class="big num">' + money(t.net, true) + '</div>';
+    if (back30 != null) { var ch = t.net - back30; h += '<span class="delta num">' + (ch >= 0 ? I.up : I.down) + (ch >= 0 ? 'Up ' : 'Down ') + money(Math.abs(ch), true) + ' in 30 days</span>'; }
+    h += '</div><div class="ranges" role="group" aria-label="Chart range">';
+    [['3m','3M'],['6m','6M'],['1y','1Y'],['all','All']].forEach(function(r){ h += '<button class="rng' + (range === r[0] ? ' on' : '') + '" data-range="' + r[0] + '">' + r[1] + '</button>'; });
+    h += '</div></div><div class="chart" id="chart"></div><div class="small muted num" id="chart-sum"></div></div>';
+    h += '<div class="stats">';
+    h += stat(I.wallet, 'Cash available', money(t.cash, true), 'After ' + money(t.dueThisMonth, true) + ' still due this month');
+    h += stat(I.owe, 'Total owed', money(t.owe, true), 'Cards, loans and Affirm');
+    h += stat(I.have, 'You have', money(t.have, true), 'Cash, savings and investments');
+    h += '</div></div>';
+
     if (al.length) {
-      h += '<div class="alerts">';
+      h += '<div class="card" id="needs"><div class="card-head"><h2>Needs you</h2></div><div class="needs">';
       al.forEach(function(a){
-        var btn = !a.action ? '' : a.action.kind === 'edit'
-          ? '<button class="yc-button yc-button--sm" data-edit="' + a.action.id + '">' + a.action.label + '</button>'
-          : '<button class="yc-button yc-button--sm">' + esc(a.action.label) + '</button>';
-        h += '<div class="alert alert--' + a.lvl + '">' + (a.lvl === 'bad' ? ICON.stop : ICON.warn) + '<span class="msg"><b>' + esc(a.name) + '</b> · ' + a.facts.join(' · ') + '</span>' + btn + '</div>';
+        var btn = !a.action ? outBtn(a.x, 'pay') : a.action.kind === 'edit'
+          ? '<button class="btn sm" data-edit="' + a.action.id + '">' + I.pen + a.action.label + '</button>'
+          : '<a class="btn sm" href="' + esc(siteOf(a.x)) + '" target="_blank" rel="noopener">' + esc(a.action.label) + '</a>';
+        h += '<div class="tile need ' + a.lvl + '">' + mark(a.x.institution) + '<div class="txt"><div class="who">' + esc(a.name) + '</div><div class="facts">' + a.facts.join(' · ') + '</div></div>' + btn + '</div>';
       });
-      h += '</div>';
+      h += '</div></div>';
     }
 
-    // Summary sheet
-    var hist = data.history || [], first = hist.length ? hist[Math.max(0, hist.length - 31)].v : null;
-    var change = first == null ? null : t.net - first;
-    h += '<div class="sheet">';
-    h += '<div class="yc-card tile tile--hero"><div class="yc-eyebrow">Net worth</div><div class="val num">' + money(t.net, 'whole') + '</div>';
-    if (change != null) h += '<div class="sub delta num">' + (change >= 0 ? '▲ ' : '▼ ') + money(Math.abs(change), 'whole') + ' in the last 30 days</div>';
-    h += '</div>';
-    h += '<div class="yc-card tile"><div class="yc-eyebrow">Cash available</div><div class="val num">' + money(t.cash, 'whole') + '</div><div class="sub yc-caption">After ' + money(t.dueThisMonth, 'whole') + ' still due this month</div></div>';
-    h += '<div class="yc-card tile"><div class="yc-eyebrow">Total owed</div><div class="val num">' + money(t.owe, 'whole') + '</div><div class="sub yc-caption">Cards, loans and Affirm</div></div>';
-    h += '<div class="yc-card tile"><div class="yc-eyebrow">You have</div><div class="val num">' + money(t.have, 'whole') + '</div><div class="sub yc-caption">Cash, savings and investments</div></div>';
-    h += '</div>';
-
-    // Chart
-    h += '<div class="yc-card chart-card"><div class="yc-row yc-row--between"><div class="yc-eyebrow">Net worth over time</div><div class="yc-row ranges">';
-    [['3m','3M'],['6m','6M'],['1y','1Y'],['all','All']].forEach(function(r){ h += '<button class="yc-button yc-button--sm' + (range === r[0] ? ' on' : '') + '" data-range="' + r[0] + '">' + r[1] + '</button>'; });
-    h += '</div></div><div class="chart-sum yc-small yc-muted num" id="chart-sum"></div><div class="chart" id="chart"></div></div>';
-
-    // Groups: two columns — what you have, what you owe — then bills.
-    h += '<div class="cols"><div class="yc-stack">';
-    ['checking','savings','investment'].forEach(function(k){ h += group(k); });
-    h += '</div><div class="yc-stack">';
-    ['credit','loan'].forEach(function(k){ h += group(k); });
+    h += '<div class="cols"><div class="card"><div class="card-head"><h2>What you have</h2><span class="total num">' + money(t.have) + '</span></div>';
+    h += sec('checking', 'Checking') + sec('savings', 'Savings') + sec('investment', 'Investments');
+    h += '</div><div class="card"><div class="card-head"><h2>What you owe</h2><span class="total num">' + money(t.owe) + '</span></div>';
+    h += sec('credit', 'Credit cards') + sec('loan', 'Loans');
     h += '</div></div>';
-    h += billsCard();
+
+    var bills = allBills();
+    h += '<div class="card" id="bills"><div class="card-head"><h2>Bills</h2><span class="total num">' + money(t.dueThisMonth) + ' <span class="small muted">still due this month</span></span></div><div class="bills">';
+    bills.forEach(function(b){
+      var s = billState(b);
+      h += '<div class="tile bill ' + s.cls + '">' + mark(b.institution) + '<div class="name">' + esc(b.name) + (b.sub ? '<small>' + esc(b.sub) + '</small>' : '') + '</div><span class="when">' + s.icon + esc(s.text) + '</span><span class="amt num">' + money(b.amount) + '</span>' + outBtn(b, 'pay') + '</div>';
+    });
+    if (!bills.length) h += '<div class="empty">No bills yet. Add one, or connect a card or loan and its payments appear here.</div>';
+    h += '</div></div>';
 
     document.getElementById('root').innerHTML = h;
-    drawChart();
-    wire();
+    drawChart(); wire();
   }
 
-  function group(k){
+  function stat(icon, label, v, sub){ return '<div class="tile stat"><span class="badge">' + icon + '</span><div><div class="label">' + label + '</div><div class="v num">' + v + '</div><div class="sub">' + sub + '</div></div></div>'; }
+
+  function sec(k, label){
     var list = data.accounts.filter(function(a){ return a.kind === k; });
     if (!list.length) return '';
-    var label = KINDS.filter(function(x){ return x.k === k; })[0].label;
     var sum = list.reduce(function(s, a){ return s + a.balance; }, 0);
-    var h = '<div class="yc-card group"><div class="group-head"><span class="yc-eyebrow">' + label + ' ' + '<span class="yc-faint">' + list.length + '</span></span><span class="total num">' + (k === 'credit' || k === 'loan' ? 'Owe ' : '') + money(sum) + '</span></div>';
-    if (k === 'credit') h += '<div class="legend yc-caption">The line on each bar marks ' + S.warnPct + '%. Above it a bar turns amber, which can lower your credit score; above ' + S.alertPct + '% it turns red.</div>';
+    var h = '<div class="sec"><div class="sec-head"><span class="label">' + label + ' <span style="opacity:.6">' + list.length + '</span></span><span class="small num muted">' + money(sum) + '</span></div>';
+    if (k === 'credit') h += '<div class="legend">The notch on each bar is ' + S.warnPct + '%. Past it a bar turns amber, which can lower your credit score; past ' + S.alertPct + '% it turns red.</div>';
+    h += '<div class="list">';
     list.forEach(function(a){ h += row(a); });
-    return h + '</div>';
+    return h + '</div></div>';
   }
 
   function row(a){
     var stale = isStale(a);
-    var h = '<div class="acct' + (stale ? ' acct--stale' : '') + '" data-id="' + a.id + '">';
-    h += '<div class="name" title="' + esc(a.name) + '">' + esc(a.name) + '</div><div class="bal num">' + money(a.balance) + '</div>';
-    h += '<div class="meta">' + esc(a.institution);
-    if (a.kind === 'loan' && a.apr) h += ' · ' + a.apr + '% interest';
-    if (a.note) h += ' · ' + esc(a.note);
-    h += '</div><div class="side">';
-    if (stale) h += '<span class="stale">' + ICON.warn + (a.source === 'plaid' ? 'Out of date · ' + ago(a.updatedAt) : 'Needs update · ' + ago(a.updatedAt)) + '</span>';
-    else h += '<span class="src" title="' + (a.source === 'plaid' ? 'Connected through Plaid' : 'Entered by you') + '">' + (a.source === 'plaid' ? ICON.link + 'Connected' : ICON.hand + 'Entered by you · ' + ago(a.updatedAt)) + '</span>';
-    if (a.source === 'manual' && editing !== a.id) h += '<button class="yc-button yc-button--sm" data-edit="' + a.id + '" aria-label="Update ' + esc(fullName(a)) + '">Update</button>';
-    h += '</div>';
+    var h = '<div class="tile acct' + (stale ? ' stale' : '') + '">' + mark(a.institution);
+    h += '<div class="name" title="' + esc(fullName(a)) + '">' + esc(a.name) + '</div><div class="bal num">' + money(a.balance) + '</div>';
+    var meta = esc(a.institution) + (a.apr ? ' · ' + a.apr + '% interest' : '') + (a.note ? ' · ' + esc(a.note) : '');
+    h += '<div class="row2"><div class="meta" title="' + meta + '">' + meta + '</div><div class="side">';
+    if (stale) h += '<span class="flag">' + I.warn + (a.source === 'plaid' ? 'Out of date · ' : 'Needs update · ') + ago(a.updatedAt) + '</span>';
+    else h += '<span class="src" title="' + (a.source === 'plaid' ? 'Connected through Plaid' : 'Entered by you') + '">' + (a.source === 'plaid' ? I.link + 'Connected' : I.pen + 'Entered by you · ' + ago(a.updatedAt)) + '</span>';
+    if (a.source === 'manual' && editing !== a.id) h += '<button class="btn sm" data-edit="' + a.id + '" aria-label="Update ' + esc(fullName(a)) + '">Update</button>';
+    h += outBtn(a, 'see this account');
+    h += '</div></div>';
     if (a.kind === 'credit' && a.limit) {
       var p = a.balance / a.limit * 100, lvl = p >= S.alertPct ? 'bad' : p >= S.warnPct ? 'warn' : '';
-      h += '<div class="meter' + (lvl ? ' meter--' + lvl : '') + '"><div class="bar" title="' + Math.round(p) + '% of limit"><i style="width:' + Math.min(100, p) + '%"></i><span class="mark" style="left:' + S.warnPct + '%"></span></div>';
-      h += '<span class="pct num">' + (lvl ? (lvl === 'bad' ? ICON.stop : ICON.warn) : '') + Math.round(p) + '% used · ' + money(Math.max(0, a.limit - a.balance), 'whole') + ' left</span></div>';
+      h += '<div class="meter ' + lvl + '"><div class="bar" title="' + Math.round(p) + '% of the limit used"><i style="width:' + Math.min(100, p) + '%"></i><span class="tick" style="left:' + S.warnPct + '%"></span></div>';
+      h += '<span class="pct num">' + (lvl ? (lvl === 'bad' ? I.stop : I.warn) : '') + Math.round(p) + '% used · ' + money(Math.max(0, a.limit - a.balance), true) + ' left</span></div>';
     }
     if (editing === a.id) {
-      h += '<div class="edit"><input class="yc-input num" id="edit-val" inputmode="decimal" value="' + a.balance.toFixed(2) + '" aria-label="New balance"><span class="hint">You can also tell YouCoded in chat: “' + esc(a.institution) + ' is $…”</span>';
-      h += '<button class="yc-button yc-button--ghost" data-cancel>Cancel</button><button class="yc-button yc-button--primary" data-save="' + a.id + '">Save</button></div>';
+      h += '<div class="edit"><input class="num" id="edit-val" inputmode="decimal" value="' + a.balance.toFixed(2) + '" aria-label="New balance"><button class="btn" data-cancel>Cancel</button><button class="btn primary" data-save="' + a.id + '">Save</button>';
+      h += '<span class="hint">Or tell YouCoded in chat: “' + esc(a.institution) + ' is $…”</span></div>';
     }
-    return h + '</div>';
-  }
-
-  function billsCard(){
-    var bills = allBills(), t = today();
-    var h = '<div class="yc-card group"><div class="group-head"><span class="yc-eyebrow">Bills <span class="yc-faint">' + bills.length + '</span></span><span class="total num">' + money(totals().dueThisMonth) + ' <span class="yc-caption">still due this month</span></span></div>';
-    bills.forEach(function(b){
-      var s = billState(b);
-      h += '<div class="bill ' + s.cls + '"><div class="name">' + esc(b.name) + '</div><div class="when">' + s.icon + esc(s.text) + '</div><div class="amt num">' + money(b.amount) + '</div></div>';
-    });
     return h + '</div>';
   }
 
@@ -331,26 +393,24 @@
     var el = document.getElementById('chart'); if (!el) return;
     var hist = data.history || [];
     var n = { '3m': 92, '6m': 183, '1y': 365, 'all': 1e9 }[range];
-    var cut = today() - n * DAY;
-    var pts = hist.filter(function(p){ return day(p.d) >= cut; });
-    if (pts.length < 2) { el.innerHTML = '<div class="yc-empty">The chart fills in as days go by — one point each day the page checks your balances.</div>'; return; }
-    var W = el.clientWidth || 600, H = el.clientHeight || 180, L = 64, R = 8, T = 8, B = 22;
-    var vs = pts.map(function(p){ return p.v; });
-    var diff = vs[vs.length - 1] - vs[0], sum = document.getElementById('chart-sum');
-    if (sum) sum.textContent = (diff >= 0 ? 'Up ' : 'Down ') + money(Math.abs(diff), 'whole') + ' since ' + short(day(pts[0].d));
-    var lo = Math.min.apply(null, vs), hi = Math.max.apply(null, vs);
-    var pad = (hi - lo) * 0.12 || 1000; lo -= pad; hi += pad;
+    var cut = today() - n * DAY, pts = hist.filter(function(p){ return day(p.d) >= cut; });
+    var sum = document.getElementById('chart-sum');
+    if (pts.length < 2) { el.innerHTML = '<div class="empty">The chart fills in as days go by — one point each day the page checks your balances.</div>'; if (sum) sum.textContent = ''; return; }
+    var W = el.clientWidth || 600, H = el.clientHeight || 190, L = 66, R = 8, T = 8, B = 22;
+    var vs = pts.map(function(p){ return p.v; }), diff = vs[vs.length - 1] - vs[0];
+    if (sum) sum.textContent = (diff >= 0 ? 'Up ' : 'Down ') + money(Math.abs(diff), true) + ' since ' + short(day(pts[0].d));
+    var lo = Math.min.apply(null, vs), hi = Math.max.apply(null, vs), pad = (hi - lo) * 0.12 || 1000; lo -= pad; hi += pad;
     var x = function(i){ return L + (W - L - R) * i / (pts.length - 1); };
     var y = function(v){ return T + (H - T - B) * (1 - (v - lo) / (hi - lo)); };
-    var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Net worth over time"><g class="grid axis">';
-    for (var g = 0; g < 4; g++) { var v = lo + (hi - lo) * g / 3; s += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y(v) + '" y2="' + y(v) + '"/><text x="' + (L - 8) + '" y="' + (y(v) + 4) + '" text-anchor="end">' + money(Math.round(v / 1000) * 1000, 'whole').replace(',000', 'k') + '</text>'; }
-    var ticks = 4;
-    for (var k = 0; k <= ticks; k++) { var i = Math.round((pts.length - 1) * k / ticks); s += '<text x="' + x(i) + '" y="' + (H - 4) + '" text-anchor="' + (k === 0 ? 'start' : k === ticks ? 'end' : 'middle') + '">' + short(day(pts[i].d)) + '</text>'; }
+    var k = function(v){ var r = Math.round(v / 1000); return (r < 0 ? '($' + (-r) + 'k)' : '$' + r + 'k'); };
+    var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Net worth over time"><defs><linearGradient id="fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".16"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient></defs><g class="grid axis">';
+    for (var g = 0; g < 4; g++) { var v = lo + (hi - lo) * g / 3; s += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y(v) + '" y2="' + y(v) + '"/><text x="' + (L - 10) + '" y="' + (y(v) + 4) + '" text-anchor="end">' + k(v) + '</text>'; }
+    for (var j = 0; j <= 4; j++) { var i = Math.round((pts.length - 1) * j / 4); s += '<text x="' + x(i) + '" y="' + (H - 4) + '" text-anchor="' + (j === 0 ? 'start' : j === 4 ? 'end' : 'middle') + '">' + short(day(pts[i].d)) + '</text>'; }
     s += '</g>';
     if (lo < 0 && hi > 0) s += '<line class="zero" x1="' + L + '" x2="' + (W - R) + '" y1="' + y(0) + '" y2="' + y(0) + '"/>';
     var d = pts.map(function(p, i){ return (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(p.v).toFixed(1); }).join('');
-    s += '<path class="area" d="' + d + 'L' + x(pts.length - 1) + ' ' + (H - B) + 'L' + L + ' ' + (H - B) + 'Z"/>';
-    s += '<path class="line" d="' + d + '"/><line class="cross" id="cx" y1="' + T + '" y2="' + (H - B) + '" style="display:none"/><circle class="dot" id="cd" r="4" style="display:none"/></svg><div class="tip" id="tip" style="display:none"></div>';
+    s += '<path d="' + d + 'L' + x(pts.length - 1) + ' ' + (H - B) + 'L' + L + ' ' + (H - B) + 'Z" fill="url(#fill)" style="color:var(--fg)"/>';
+    s += '<path class="line" d="' + d + '"/><line class="cross" id="cx" y1="' + T + '" y2="' + (H - B) + '" style="display:none"/><circle class="dot" id="cd" r="5" style="display:none"/></svg><div class="tip" id="tip" style="display:none"></div>';
     el.innerHTML = s;
     var svg = el.querySelector('svg'), cx = el.querySelector('#cx'), cd = el.querySelector('#cd'), tip = el.querySelector('#tip');
     svg.addEventListener('pointermove', function(e){
@@ -359,20 +419,20 @@
       cx.setAttribute('x1', x(i)); cx.setAttribute('x2', x(i)); cx.style.display = '';
       cd.setAttribute('cx', x(i)); cd.setAttribute('cy', y(pts[i].v)); cd.style.display = '';
       tip.style.display = ''; tip.style.left = (x(i) * r.width / W) + 'px'; tip.style.top = (y(pts[i].v) * r.height / H) + 'px';
-      tip.innerHTML = '<span class="yc-muted">' + short(day(pts[i].d)) + '</span> &nbsp;<b class="num">' + money(pts[i].v, 'whole') + '</b>';
+      tip.innerHTML = '<span class="muted">' + short(day(pts[i].d)) + '</span>&nbsp; <b class="num">' + money(pts[i].v, true) + '</b>';
     });
     svg.addEventListener('pointerleave', function(){ cx.style.display = cd.style.display = tip.style.display = 'none'; });
   }
 
   function save(){ if (window.youcoded) window.youcoded.save(data); }
-
   function wire(){
     document.querySelectorAll('[data-range]').forEach(function(b){ b.onclick = function(){ range = b.dataset.range; render(); }; });
+    document.querySelectorAll('[data-jump]').forEach(function(b){ b.onclick = function(){ var t = document.getElementById(b.dataset.jump); if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' }); }; });
     document.querySelectorAll('[data-edit]').forEach(function(b){ b.onclick = function(){ editing = b.dataset.edit; render(); var i = document.getElementById('edit-val'); if (i) { i.scrollIntoView({ block: 'center' }); i.focus(); i.select(); } }; });
     var c = document.querySelector('[data-cancel]'); if (c) c.onclick = function(){ editing = null; render(); };
     var sv = document.querySelector('[data-save]');
     if (sv) sv.onclick = function(){
-      var v = parseFloat(String(document.getElementById('edit-val').value).replace(/[$,\s]/g, ''));
+      var v = parseFloat(String(document.getElementById('edit-val').value).replace(/[$,()\s]/g, ''));
       if (isNaN(v)) return;
       var a = data.accounts.filter(function(x){ return x.id === sv.dataset.save; })[0];
       a.balance = v; a.updatedAt = today().toISOString(); editing = null; save(); render();

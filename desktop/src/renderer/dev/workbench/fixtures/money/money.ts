@@ -63,8 +63,8 @@ const accounts = [
 ];
 
 const bills = [
-  { id: 'visible', name: 'Visible (phone)', amount: 25, due: shift(1) },
-  { id: 'liberty', name: 'Liberty Mutual (car insurance)', amount: 138, due: shift(6) },
+  { id: 'visible', provider: 'Visible', name: 'Visible', sub: 'phone', amount: 25, due: shift(1) },
+  { id: 'liberty', provider: 'Liberty Mutual', name: 'Liberty Mutual', sub: 'car insurance', amount: 138, due: shift(6) },
 ];
 
 const net = accounts.reduce((s, a) => s + (a.kind === 'credit' || a.kind === 'loan' ? -a.balance : a.balance), 0);
@@ -73,7 +73,7 @@ export const MONEY_PAGE: PageDocument = {
   id: 'page-money',
   name: 'Money',
   description: 'Every account, card, loan and bill in one place: net worth, limits, and what is due next.',
-  icon: 'chart',
+  icon: 'money',
   home: { kind: 'personal' },
   pinned: true,
   updatedAt: at(0),

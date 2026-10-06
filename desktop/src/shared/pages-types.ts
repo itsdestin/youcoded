@@ -20,7 +20,7 @@ export type PageHome =
  *  A named glyph, not an image: the pinned button is 16px in the header bar
  *  and follows `currentColor` like the Projects folder beside it. */
 export type PageIcon =
-  | 'page' | 'timer' | 'notes' | 'paint' | 'chart' | 'calendar' | 'list' | 'game'
+  | 'page' | 'timer' | 'notes' | 'paint' | 'chart' | 'calendar' | 'list' | 'game' | 'money'
   // Built-in pages only.
   | 'office';
 
