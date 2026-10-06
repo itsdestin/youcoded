@@ -117,7 +117,8 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat/games#incognito-open', 'pane', 'games'), params: { signedIn: '1', friends: 'many', incognito: '1', friendsOpen: '1' } },
   { ...chat('chat/games#offline', 'pane', 'games'), params: { signedIn: '1', friends: 'many', network: 'offline' } },
   // Your status pill's menu open, and a friend's details popup (a Dialog, deck games-social-4).
-  { ...chat('chat/games#status-menu', 'pane', 'games'), params: { signedIn: '1', friends: 'many', statusMenu: '1' } },
+  // The menu is opened by clicking the pill (screen list `open`), not by a practice switch.
+  { ...chat('chat/games#status-menu', 'pane', 'games'), params: { signedIn: '1', friends: 'many' }, open: ['Your status: Online'] },
   { ...chat('chat/games/friend', 'dialog', 'games'), params: { signedIn: '1', friends: 'many', friendsOpen: '1' } },
   // Another computer holds this conversation: each phase of "open it here instead?".
   ...['confirm', 'force', 'undeliverable', 'claim-denied'].map((ph) => chat(`chat/takeover/${ph}`, 'dialog', 'handoff')),

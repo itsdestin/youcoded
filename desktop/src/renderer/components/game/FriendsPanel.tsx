@@ -18,9 +18,8 @@ import { useAccount } from '../../state/account-context';
 import { statusLabel, type FriendRowData, type SocialState } from './friends-data';
 import { useFriends } from './useFriends';
 import { useScrollFade } from '../../hooks/useScrollFade';
-import { useEscClose } from '../../hooks/use-esc-close';
-import { Button, CARD_LEVEL_1, Callout, ChevronDown, Dialog, FieldError, InputGroup, LoadingState, Pill, PillButton, SectionLabel } from '../ui';
-import { workbenchFriendsOpen, workbenchStatusMenuOpen } from '../../workbench-mode';
+import { Button, CARD_LEVEL_1, Callout, ChevronDown, Dialog, FieldError, InputGroup, LoadingState, Menu, MenuRadioItem, Pill, PillButton, SectionLabel } from '../ui';
+import { workbenchFriendsOpen } from '../../workbench-mode';
 import { useScreenOpen } from '../../shoot-mode';
 
 interface Props {
@@ -82,51 +81,30 @@ function ConnectionErrorCard({ social, onRetry }: { social: 'offline' | 'server'
   );
 }
 
-/** A small menu anchored under its trigger — the old ⋯ row menu's popover (MarketplaceAuthChip's
- *  pattern: no scrim, closes on an outside click and on Esc). */
-function useAnchoredMenu(initial = false) {
-  const [open, setOpen] = useState(initial);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent) => { if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false); };
-    document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
-  }, [open]);
-  useEscClose(open, () => setOpen(false));
-  return { open, setOpen, wrapRef };
-}
-
-const MENU = 'layer-surface absolute top-full mt-1 rounded-md p-1.5 text-xs shadow-md';
-const MENU_ITEM = 'w-full text-left px-2 py-1.5 rounded text-fg-2 hover:text-fg hover:bg-inset disabled:opacity-40 transition-colors';
-
 /** Your own status: the status pill itself, clickable, opening Online / Incognito (G2-2:
- *  "keep the styling of the online pill, but make it clickable"). */
+ *  "keep the styling of the online pill, but make it clickable"). The menu is the shared
+ *  `Menu` (outside click, Escape, arrow keys) — this file used to carry its own copy. */
 function SelfStatus({ incognito, connected, onToggleIncognito }: { incognito?: boolean; connected: boolean; onToggleIncognito?: () => void }) {
-  const m = useAnchoredMenu(workbenchStatusMenuOpen());
+  const [open, setOpen] = useState(false);
   const label = incognito ? 'Incognito' : connected ? 'Online' : 'Connecting…';
   const tone = !incognito && connected ? 'ok' : 'neutral';
   if (!onToggleIncognito) return <Pill tone={tone} dot>{label}</Pill>;
-  const pick = (hide: boolean) => { if (hide !== !!incognito) onToggleIncognito(); m.setOpen(false); };
+  const pick = (hide: boolean) => { if (hide !== !!incognito) onToggleIncognito(); };
   return (
-    <div ref={m.wrapRef} className="relative shrink-0 flex">
-      <PillButton tone={tone} dot open={m.open} onClick={() => m.setOpen((o) => !o)} aria-label={`Your status: ${label}`}>
-        {label}
-      </PillButton>
-      {m.open && (
-        // z-index 62 = one above L2 popup content (61), as the row menu.
-        <div role="menu" className={`${MENU} left-0 min-w-60`} style={{ zIndex: 62 }}>
-          <button type="button" role="menuitemradio" aria-checked={!incognito} onClick={() => pick(false)} className={MENU_ITEM}>
-            <span className="block text-fg">Online</span>
-            <span className="block text-2xs text-fg-muted">Friends see you and can challenge you</span>
-          </button>
-          <button type="button" role="menuitemradio" aria-checked={!!incognito} onClick={() => pick(true)} className={MENU_ITEM}>
-            <span className="block text-fg">Incognito</span>
-            <span className="block text-2xs text-fg-muted">Hidden from friends; no challenges</span>
-          </button>
-        </div>
+    <Menu
+      open={open}
+      onOpenChange={setOpen}
+      label="Your status"
+      className="min-w-60"
+      trigger={(
+        <PillButton tone={tone} dot open={open} onClick={() => setOpen((o) => !o)} aria-label={`Your status: ${label}`}>
+          {label}
+        </PillButton>
       )}
-    </div>
+    >
+      <MenuRadioItem checked={!incognito} onSelect={() => pick(false)} hint="Friends see you and can challenge you">Online</MenuRadioItem>
+      <MenuRadioItem checked={!!incognito} onSelect={() => pick(true)} hint="Hidden from friends; no challenges">Incognito</MenuRadioItem>
+    </Menu>
   );
 }
 
@@ -179,7 +157,7 @@ function FriendsCard({ incognito, onToggleIncognito, social }: Props) {
     <div className={`${CARD_LEVEL_1} p-3 flex flex-col gap-2`} data-friends-card>
       <div className="flex items-center gap-3">
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 min-w-0">
+          <div className="flex items-center gap-2 min-w-0" data-centres-agree="your name and status">
             <span className="text-sm font-medium text-fg truncate min-w-0">{myName}</span>
             <SelfStatus incognito={incognito} connected={state.connected} onToggleIncognito={onToggleIncognito} />
           </div>
@@ -202,7 +180,7 @@ function PersonBox({ name, pill, sub, right, error, onClick, children }: {
   error?: string; onClick?: () => void; children?: React.ReactNode;
 }) {
   const line = (
-    <div className="flex items-center gap-2 min-h-8">
+    <div className="flex items-center gap-2 min-h-8" data-centres-agree="friend row">
       <div className="flex-1 min-w-0 text-left">
         <NameWithPill name={name} pill={pill} />
         {sub && <div className="text-2xs text-fg-muted truncate">{sub}</div>}
@@ -370,7 +348,8 @@ export function PresencePill({ row }: { row: FriendRowData }) {
  *  24px-leading name — a pixel or two low at 1.5×). */
 export function NameWithPill({ name, pill }: { name: string; pill?: React.ReactNode }) {
   return (
-    <span className="flex items-center gap-2 min-w-0 h-5" data-name-pill>
+    // data-centres-agree: shoot checks the name and the pill share one centre line (G2-7).
+    <span className="flex items-center gap-2 min-w-0 h-5" data-name-pill data-centres-agree="name and pill">
       <span className="text-sm leading-5 text-fg truncate min-w-0">{name}</span>
       {pill && <span className="flex items-center h-5 shrink-0">{pill}</span>}
     </span>

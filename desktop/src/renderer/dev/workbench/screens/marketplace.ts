@@ -9,6 +9,8 @@ export const MARKETPLACE: readonly ScreenEntry[] = [
   mp('marketplace/themes', 'view'),
   mp('marketplace/search', 'view'),
   mp('marketplace/detail', 'dialog'),
+  // The account chip's small menu, opened by clicking the chip (signed in as the practice "you").
+  { ...mp('marketplace/skills#account-menu', 'view'), params: { signedIn: '1' }, open: ['Signed in as @you'] },
   // One screen per kind of detail page (2026-10-04 redesign): a bundle with what's inside
   // it, a skill that came in a bundle, an item the automatic check flagged, a listing that
   // cannot be installed from here, a theme not installed yet, and an integration.

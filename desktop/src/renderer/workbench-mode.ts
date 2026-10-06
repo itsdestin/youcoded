@@ -177,13 +177,6 @@ export function workbenchThemeLiked(): boolean {
 /** Games-social redesign (redesign backlog row 11): every choice is settled (decks
  *  games-social-1…4), so no variant switches remain — only the practice states below. */
 
-/** `?statusMenu=1` — the friends card opens with your status pill's menu already open, so the
- *  menu can be photographed. False outside the workbench and the photo-only build. */
-export function workbenchStatusMenuOpen(): boolean {
-  if (!isWorkbenchMode()) return false;
-  return new URLSearchParams(location.search).get('statusMenu') === '1';
-}
-
 /** Practice states, not choices. `?friendsOpen=1` opens the friends card (it starts folded, so
  *  its rows could not be photographed). `?network=offline` makes the app believe the computer has
  *  no network connection (the browser's own online flag), for the offline state. Both false

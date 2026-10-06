@@ -409,6 +409,9 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
     <div className={`${CARD_LEVEL_1} mt-2 px-3 py-2.5`}>
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
+          {/* Not marked data-centres-agree on purpose: shoot's "centres agree" check found the
+              pill riding the words' baseline 1.4px low at 1.5x (2026-10-05). Reported, not fixed
+              in that round; mark the row once the pill is centred on it. */}
           <p className="text-xs text-fg font-medium">
             Local engine
             {/* WHY a pill (status pills trial, 2026-09-29): a live state — the

@@ -269,7 +269,7 @@ export default function SpecialistsSection({ cwd }: {
             count beside a label is the word then a smaller, fainter number
             ("Available specialists 7"), never "· 7 ·". The warnings are a
             status, so they are the tinted pill ("1 warning"), not more text. */}
-        <div className="mb-2 flex items-center gap-2">
+        <div className="mb-2 flex items-center gap-2" data-centres-agree="label and warnings">
           <SectionLabel>
             Available specialists
             {roster.status === 'ready' && <span className="ml-1.5 text-3xs font-normal text-fg-dim">{definitions.length}</span>}

@@ -189,7 +189,8 @@ export function DetailIdentity({
   const actionsBelow = inColumn && !quickActionsOnTitle;
   const row = iconLayout === 'row' && !phone;
   const nameLine = (
-    <div className="flex items-center gap-2 min-w-0 flex-wrap">
+    // data-centres-agree: shoot checks the name and its status pill share one centre line.
+    <div className="flex items-center gap-2 min-w-0 flex-wrap" data-centres-agree="name and status">
       {/* Session details' name size (text-lg semibold) — the subject of the popup.
           `break-normal` where the name shares its line: wrap between words only. */}
       <div className={`text-lg font-semibold text-fg leading-tight min-w-0 ${quickActionsOnTitle ? 'break-normal' : 'break-words'}`}>{name}</div>

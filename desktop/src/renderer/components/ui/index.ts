@@ -96,6 +96,9 @@ export { FoldRow } from './FoldRow';
 export { ConsentRow } from './ConsentRow';
 export { Pill, PillButton } from './Pill';
 
+// The small anchored menu (games-social friction, proposal 8) — Menu.tsx says why.
+export { Menu, MenuItem, MenuRadioItem, MenuNote } from './Menu';
+
 export { ZoomPill } from './ZoomPill';
 export type { ZoomPillProps } from './ZoomPill';
 

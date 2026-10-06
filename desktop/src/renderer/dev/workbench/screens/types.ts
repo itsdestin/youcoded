@@ -19,6 +19,11 @@ export type ScreenEntry = {
    *  CHANGES on its own (a notice that used to clear itself after 6s). Keep it rare: it is
    *  slow by design. */
   waitMs?: number;
+  /** "Open this first": steps `shoot` replays once the screen shows, before its picture — a
+   *  button label to click (`'Your status: Online'`), or a journey step (`{ do: 'key', key:
+   *  'ArrowDown' }`). WHY (games-social friction, proposal 9): an opened menu or folded card
+   *  otherwise needs a workbench-only switch in production code just to be photographed. */
+  open?: readonly (string | { readonly do: string; readonly [k: string]: unknown })[];
   /** Another screen this one is EXPECTED to look identical to, and why. */
   sameAs?: { name: string; why: string };
 };

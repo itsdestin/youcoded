@@ -23,11 +23,12 @@ import { ChevronDown } from './ChevronDown';
  * StatusStrip remains for a subsystem's RUNNING state ("Checking…", "Not set up
  * yet"), which is not a problem notice.
  *
- * ── Colour lives in the box and the title only ─────────────────────────────
+ * ── Colour lives in the box only ───────────────────────────────────────────
  * Design guide "Status and notices": the text inside is the normal grey/black,
- * never red or coloured body text. The danger tone used to write its body in
- * `text-destructive-fg`; it is now `text-fg-2` like the other two tones, and
- * only the title keeps the tone's colour.
+ * never red or coloured text. The danger tone used to write its body in
+ * `text-destructive-fg`, then kept a red title; since 2026-10-05 (Destin, app-wide)
+ * every tone's title and body are the normal text colours and only the tint and
+ * border carry the colour (pinned by callout-authority.test.tsx).
  *
  * Tone preserves change 14's rule — accent means information, amber means
  * warning — plus the danger tone.
