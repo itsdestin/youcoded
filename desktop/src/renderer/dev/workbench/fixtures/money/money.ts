@@ -40,19 +40,19 @@ function history(end: number): { d: string; v: number }[] {
 }
 
 const accounts = [
-  { id: 'c1-checking', kind: 'checking', name: '360 Checking', institution: 'Capital One', source: 'plaid', balance: 2418.52, updatedAt: at(0) },
-  { id: 'amex-checking', kind: 'checking', name: 'Rewards Checking', institution: 'American Express', source: 'plaid', balance: 1105.2, updatedAt: at(0) },
-  { id: 'rh-cash', kind: 'savings', name: 'Cash (earning interest)', institution: 'Robinhood', source: 'plaid', balance: 6240, updatedAt: at(0) },
-  { id: 'rh-invest', kind: 'investment', name: 'Individual investing', institution: 'Robinhood', source: 'plaid', balance: 18932.41, updatedAt: at(0) },
-  { id: 'c1-card', kind: 'credit', name: 'Quicksilver', institution: 'Capital One', source: 'plaid', balance: 1284.11, limit: 5000, updatedAt: at(0),
+  { id: 'c1-checking', kind: 'checking', name: '360 Checking', institution: 'Capital One', source: 'plaid', itemId: 'item-c1', balance: 2418.52, updatedAt: at(0) },
+  { id: 'amex-checking', kind: 'checking', name: 'Rewards Checking', institution: 'American Express', source: 'plaid', itemId: 'item-ax', balance: 1105.2, updatedAt: at(0) },
+  { id: 'rh-cash', kind: 'savings', name: 'Cash (earning interest)', institution: 'Robinhood', source: 'plaid', itemId: 'item-rh', balance: 6240, updatedAt: at(0) },
+  { id: 'rh-invest', kind: 'investment', name: 'Individual investing', institution: 'Robinhood', source: 'plaid', itemId: 'item-rh', balance: 18932.41, updatedAt: at(0) },
+  { id: 'c1-card', kind: 'credit', name: 'Quicksilver', institution: 'Capital One', source: 'plaid', itemId: 'item-c1', balance: 1284.11, limit: 5000, updatedAt: at(0),
     payment: { amount: 35, due: shift(-4), paid: shift(-4) } },
-  { id: 'amex-card', kind: 'credit', name: 'Blue Cash Everyday', institution: 'American Express', source: 'plaid', balance: 2940, limit: 8000, updatedAt: at(0),
+  { id: 'amex-card', kind: 'credit', name: 'Blue Cash Everyday', institution: 'American Express', source: 'plaid', itemId: 'item-ax', balance: 2940, limit: 8000, updatedAt: at(0),
     payment: { amount: 40, due: shift(15) } },
   { id: 'rh-gold', kind: 'credit', name: 'Robinhood Gold Card', institution: 'Robinhood', source: 'manual', balance: 3100, limit: 5000, updatedAt: at(1, 20),
     payment: { amount: 62, due: shift(9) } },
-  { id: 'sync-card', kind: 'credit', name: 'Store card', institution: 'Synchrony', source: 'plaid', balance: 820, limit: 1000, updatedAt: at(4),
+  { id: 'sync-card', kind: 'credit', name: 'Store card', institution: 'Synchrony', source: 'plaid', itemId: 'item-sy', balance: 820, limit: 1000, updatedAt: at(4),
     payment: { amount: 40, due: shift(-24) } },
-  { id: 'wf-auto', kind: 'loan', name: 'Auto loan', institution: 'Wells Fargo', source: 'plaid', balance: 14876.3, apr: 6.49, updatedAt: at(0),
+  { id: 'wf-auto', kind: 'loan', name: 'Auto loan', institution: 'Wells Fargo', source: 'plaid', itemId: 'item-wf', balance: 14876.3, apr: 6.49, updatedAt: at(0),
     payment: { amount: 412, due: shift(12) } },
   { id: 'earnest', kind: 'loan', name: 'Consolidated student loan', institution: 'Earnest', source: 'manual', balance: 22410, apr: 5.2, updatedAt: at(12, 18),
     payment: { amount: 286, due: shift(9) } },
@@ -66,6 +66,16 @@ const bills = [
   { id: 'visible', provider: 'Visible', name: 'Visible', sub: 'phone', amount: 25, due: shift(1) },
   { id: 'liberty', provider: 'Liberty Mutual', name: 'Liberty Mutual', sub: 'car insurance', amount: 138, due: shift(6) },
 ];
+
+// The banks as the page last heard from Plaid: Synchrony needs signing in again,
+// which is what a real "ITEM_LOGIN_REQUIRED" answer looks like on the page.
+const banks = {
+  'item-c1': { name: 'Capital One', ok: true, error: null },
+  'item-ax': { name: 'American Express', ok: true, error: null },
+  'item-rh': { name: 'Robinhood', ok: true, error: null },
+  'item-wf': { name: 'Wells Fargo', ok: true, error: null },
+  'item-sy': { name: 'Synchrony', ok: false, error: { code: 'ITEM_LOGIN_REQUIRED', message: 'Synchrony needs you to sign in again.', reconnect: true } },
+};
 
 const net = accounts.reduce((s, a) => s + (a.kind === 'credit' || a.kind === 'loan' ? -a.balance : a.balance), 0);
 
@@ -85,6 +95,7 @@ export const MONEY_PAGE: PageDocument = {
     settings: { staleDays: 3, warnPct: 30, alertPct: 80 },
     accounts,
     bills,
+    banks,
     history: [...history(Math.round(net)), { d: TODAY, v: Math.round(net) }],
   },
 };

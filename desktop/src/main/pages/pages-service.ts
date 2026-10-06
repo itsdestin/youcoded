@@ -10,7 +10,7 @@ import path from 'node:path';
 import chokidar, { type FSWatcher } from 'chokidar';
 import { PagesStore, PAGES_DIR, isUnderPagesDir, type PagesStoreDeps } from './pages-store';
 import { applyScheme, fingerprint, keyPlacement, savedKeyTarget, withApprovedAddress } from './page-connections';
-import { cleanPlaidRequest, parseCredentials, runPlaid, type PlaidItemsStore } from './plaid';
+import { PlaidItemsStore, cleanPlaidRequest, openPlaidLink, parseCredentials, runPlaid } from './plaid';
 import { cleanDeviceAddress } from '../../shared/page-device-address';
 import { hashHtml, savedKeyId, splitSavedKeyId, type PageApproval } from './connections-store';
 import { PageRateGate, performPageFetch, type PageCredential } from './page-fetch';
@@ -47,9 +47,9 @@ export interface PagesServiceDeps extends PagesStoreDeps {
   socketConnect?: PageSocketContext['connect'];
   /** Test injection for a page's LIVE socket (page-live-socket.ts). */
   liveSocketConnect?: (url: string, headers: Record<string, string>) => LiveWsLike;
-  /** Connected banks for a `plaid` connection (plaid.ts). Absent: Plaid is refused. */
+  /** Test injection: the connected-banks store. Production builds it from `connections`. */
   plaidItems?: PlaidItemsStore;
-  /** Opens Plaid's sign-in page in the person's browser. */
+  /** Test injection: opening Plaid's sign-in page (production: openPlaidLink). */
   openExternal?: (url: string) => Promise<void> | void;
 }
 
@@ -74,8 +74,12 @@ class PagesService {
    *  change to either closes that page's live sockets. */
   private readonly seenSignature = new Map<string, string>();
 
+  /** Connected banks (plaid.ts), kept beside the page connections under the same keychain. */
+  private readonly plaidItems: PlaidItemsStore | undefined;
+
   constructor(private readonly deps: PagesServiceDeps) {
     this.store = new PagesStore({ ...deps, refreshState: (id) => this.freshness.get(id) });
+    this.plaidItems = deps.plaidItems ?? (deps.connections ? new PlaidItemsStore(deps.connections.userDataDir, deps.connections.secrets) : undefined);
     this.sockets = new PageLiveSockets({
       access: (pageId, url, signal) => this.socketAccess(pageId, url, signal),
       gate: this.gate,
@@ -408,7 +412,7 @@ class PagesService {
     if (!req) return { ok: false, op: 'status', code: 'BAD_REQUEST', message: 'The page asked Plaid for something the app does not do.' };
     const refuse = (message: string, code = 'NOT_APPROVED'): PlaidResult => ({ ok: false, op: req.op, code, message });
     const store = this.deps.connections;
-    const items = this.deps.plaidItems;
+    const items = this.plaidItems;
     if (!store || !items) return refuse('Bank connections are not available on this computer.', 'UNAVAILABLE');
     const info = await this.store.connectionsOf(id);
     const pageKey = await this.store.approvalKeyFor(id);
@@ -429,7 +433,7 @@ class PagesService {
     try {
       const result = await runPlaid({
         env: c.environment, creds, items,
-        openExternal: (url) => this.deps.openExternal?.(url),
+        openExternal: this.deps.openExternal ?? openPlaidLink,
         fetchImpl: this.deps.fetchImpl,
       }, req);
       if (req.op === 'accounts') this.noteFreshness(id, result.ok && result.items.every((i) => i.ok));
@@ -514,9 +518,9 @@ class PagesService {
   private async credentialFor(c: PageConnection): Promise<PageCredential | null> {
     const store = this.deps.connections;
     switch (c.kind) {
+      // Plaid's keys go only into plaid.ts's own calls, never onto a page fetch.
       case 'public':
       case 'open':
-      // Plaid's keys go only into plaid.ts's own calls, never onto a page fetch.
       case 'plaid':
         return null;
       case 'device':

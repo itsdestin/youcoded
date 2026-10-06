@@ -14,10 +14,21 @@ const $$ = (sel: string) => Array.from(document.querySelectorAll<HTMLButtonEleme
 const groupBar = (id: string) => document.querySelector<HTMLButtonElement>(`[data-group="${id}"]`)!;
 const item = (member: string) => document.querySelector<HTMLButtonElement>(`[data-join="media_player.destins_room"][data-member="${member}"]`);
 
+// WHY: the page's own "ask again 400 ms later" timers are real, so one could still be pending when the file ends; it
+// then ran after jsdom was torn down ("window is not defined", an unhandled error under a loaded full run). Every
+// timeout the page sets is remembered and cleared in afterAll.
+const pageTimers = new Set<ReturnType<typeof setTimeout>>();
+const realSetTimeout = globalThis.setTimeout;
+
 beforeAll(async () => {
   // The page's own 5-second checks are faked out; each service call asks
   // again 400 ms later, which is what the tests wait on.
   vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  globalThis.setTimeout = ((fn: (...a: unknown[]) => void, ms?: number, ...args: unknown[]) => {
+    const id = realSetTimeout((...a: unknown[]) => { pageTimers.delete(id); fn(...a); }, ms, ...args);
+    pageTimers.add(id);
+    return id;
+  }) as typeof setTimeout;
   const html = HOME_ASSISTANT_PAGE_HTML;
   document.head.innerHTML = /<head>([\s\S]*?)<\/head>/.exec(html)![1];
   const body = /<body>([\s\S]*?)<script>/.exec(html)![1];
@@ -38,7 +49,7 @@ beforeAll(async () => {
   new Function(script)();
   await vi.waitFor(() => expect(document.querySelector('[data-group]')).toBeTruthy());
 });
-afterAll(() => { vi.useRealTimers(); });
+afterAll(() => { for (const id of pageTimers) clearTimeout(id); pageTimers.clear(); globalThis.setTimeout = realSetTimeout; vi.useRealTimers(); });
 
 describe('Sonos grouping on the Home page', () => {
   it('gives a groupable speaker a Group bar, closed until pressed', () => {

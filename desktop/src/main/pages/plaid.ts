@@ -28,7 +28,7 @@ import type {
   PlaidAccount, PlaidEnvironment, PlaidInstitution, PlaidItemSummary, PlaidRequest, PlaidResult,
 } from '../../shared/pages-types';
 
-export const PLAID_ITEMS_FILE = 'plaid-items.json';
+const PLAID_ITEMS_FILE = 'plaid-items.json';
 const HOSTS: Record<PlaidEnvironment, string> = {
   sandbox: 'https://sandbox.plaid.com',
   production: 'https://production.plaid.com',
@@ -55,7 +55,7 @@ export function parseCredentials(raw: string | null): PlaidCredentials | null {
 }
 
 /** Plaid's own error, kept to the fields that are safe and useful to show. */
-export class PlaidError extends Error {
+class PlaidError extends Error {
   constructor(readonly code: string, message: string, readonly type = '') { super(message); }
 }
 
@@ -143,7 +143,7 @@ export interface PlaidContext {
  *  error_code / error_message / display_message, and we show Plaid's own words
  *  rather than inventing a cause (docs/error-message-standards.md). The
  *  secrets are put in the body here and nowhere else. */
-export async function plaidCall<T>(ctx: PlaidContext, endpoint: string, body: Record<string, unknown>): Promise<T> {
+async function plaidCall<T>(ctx: PlaidContext, endpoint: string, body: Record<string, unknown>): Promise<T> {
   const f = ctx.fetchImpl ?? fetch;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), CALL_TIMEOUT_MS);
@@ -367,6 +367,15 @@ export async function runPlaid(ctx: PlaidContext, req: PlaidRequest): Promise<Pl
     const err = e instanceof PlaidError ? e : new PlaidError('UNKNOWN', e instanceof Error && e.message ? e.message : 'Plaid could not finish this request.');
     return { ok: false, op: req.op, code: err.code, message: err.message };
   }
+}
+
+/** Opens Plaid's sign-in page in the person's browser — only an https page on
+ *  plaid.com, so nothing else Plaid's answer might name is ever opened. Electron
+ *  is loaded on first use, so tests that never sign in never touch it. */
+export async function openPlaidLink(url: string): Promise<void> {
+  if (!/^https:\/\/([a-z0-9-]+\.)*plaid\.com\//i.test(url)) throw new PlaidError('BAD_LINK', 'Plaid returned a sign-in address the app will not open.');
+  const { shell } = await import('electron');
+  await shell.openExternal(url);
 }
 
 /** The page sends anything; only these shapes get through. */

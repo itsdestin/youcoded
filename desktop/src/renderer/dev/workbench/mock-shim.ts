@@ -3870,6 +3870,11 @@ function createPagesMock(empty: boolean): PagesBridge {
     // refusal rather than a promise that never settles.
     // The one exception: an allowed device connection is answered by the
     // pretend Home Assistant, so the Home page can be operated end to end.
+    // Plaid (finance dashboard): the practice app has no banks to sign in to. Reading balances answers "not set up"
+    // so the Money page keeps its made-up numbers quietly; connecting says why nothing opens.
+    plaid: async (_id, req) => (req?.op === 'connect' || req?.op === 'reconnect'
+      ? { ok: false as const, op: req.op, code: 'UNSUPPORTED', message: 'The practice app cannot sign in to banks. Try this in YouCoded on your computer.' }
+      : { ok: false as const, op: req?.op ?? 'status', code: 'NO_KEYS', message: 'No Plaid keys in the practice app.' }),
     fetch: async (id, req) => {
       const page = pages.find((p) => p.id === id);
       const device = page?.connections?.find((c) => c.kind === 'device' && c.approved);

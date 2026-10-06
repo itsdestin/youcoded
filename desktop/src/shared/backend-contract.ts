@@ -554,8 +554,7 @@ export const IPC = {
   PAGES_SAVED_KEYS: 'pages:saved-keys',
   PAGES_DELETE_SAVED_KEY: 'pages:delete-saved-key',
   PAGES_FETCH: 'pages:fetch',
-  // Bank balances through Plaid, on the page's behalf (main/pages/plaid.ts). Desktop only.
-  PAGES_PLAID: 'pages:plaid',
+  PAGES_PLAID: 'pages:plaid', // bank balances via main/pages/plaid.ts, desktop only
   // ---- Live sockets and camera video a page holds through main (spec 2026-10-04); events ride PAGES_SOCKET_EVENT ----
   PAGES_SOCKET_OPEN: 'pages:socket-open',
   PAGES_SOCKET_SEND: 'pages:socket-send',

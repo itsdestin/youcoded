@@ -143,7 +143,8 @@
 
   /* Bills */
   .bills { display: flex; flex-direction: column; gap: 8px; }
-  .bill { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto auto; gap: 12px; align-items: center; padding: 8px 10px 8px 12px; }
+  .bill { display: flex; gap: 12px; align-items: center; padding: 8px 10px 8px 12px; }
+  .bill .name { flex: 1; min-width: 0; }
   .bill .mark { width: 30px; height: 30px; border-radius: 10px; font-size: 10px; }
   .bill .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bill .name small { font-size: 11px; color: var(--fg-muted); margin-left: 6px; }
@@ -169,9 +170,31 @@
 
   @media (max-width: 860px) { .hero, .cols { grid-template-columns: 1fr; } .stats { flex-direction: row; flex-wrap: wrap; } .stat { min-width: 200px; } }
   @media (max-width: 560px) {
-    .bill { grid-template-columns: auto minmax(0, 1fr) auto; } .bill .when { grid-column: 2 / -1; justify-self: start; } .bill .ibtn { display: none; }
+    .bill { flex-wrap: wrap; } .bill .when { order: 9; margin-left: 42px; } .bill .ibtn { display: none; }
     .nw .big { font-size: 32px; } .meter .pct { min-width: 0; }
   }
+  /* Real logos: a bank's own picture from Plaid fills the badge; a brand mark sits inside it. */
+  .mark svg { width: 20px; height: 20px; }
+  .bill .mark svg { width: 16px; height: 16px; }
+  .mark.logo { background: #fff; overflow: hidden; padding: 4px; }
+  .mark.logo img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .btn.danger { border-color: var(--bad); color: var(--fg); }
+  .btn.danger:hover { background: color-mix(in srgb, var(--bad) 18%, var(--inset)); }
+  .btn:disabled { opacity: .5; cursor: default; transform: none; }
+  .menu button:disabled { opacity: .5; cursor: default; background: none; }
+  .row-btns { display: flex; gap: 8px; flex-wrap: wrap; } .row-btns.end { justify-content: flex-end; margin-top: 14px; }
+  .empty-card { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 28px; }
+  .empty-card h2 { font-size: 18px; font-weight: 600; } .empty-card p { max-width: 560px; }
+  .badge.big { width: 48px; height: 48px; border-radius: 16px; } .badge.big svg { width: 22px; height: 22px; }
+  .form-card .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+  .fld { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--fg-2); }
+  .fld input, .fld select { font: inherit; font-size: 14px; height: 34px; padding: 0 12px; border-radius: 12px; border: 1px solid var(--edge); background: var(--inset); color: var(--fg); }
+  .fld input:focus, .fld select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .fld.chk { flex-direction: row; align-items: center; gap: 8px; align-self: end; height: 34px; }
+  .fld.chk input { height: auto; accent-color: var(--accent); }
+  .bank-row { display: flex; align-items: center; gap: 12px; padding: 8px 10px 8px 12px; }
+  .bank-row .name { flex: 1; font-weight: 500; }
+  .need.note { padding: 10px 12px; }
   @media (prefers-reduced-motion: reduce) { .pill, .btn, .ibtn { transition: none; } }
 </style></head>
 <body>
@@ -194,14 +217,28 @@
     down: ic('<path d="m6 9 6 6 6-6"/>'),
     wallet: ic('<path d="M3 7a2 2 0 0 1 2-2h13v4"/><path d="M3 7v11a2 2 0 0 0 2 2h15V9H5a2 2 0 0 1-2-2z"/><path d="M16 14.5h.01"/>'),
     owe: ic('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18M7 15h4"/>'),
-    have: ic('<path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/>')
+    have: ic('<path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/>'),
+    bank: ic('<path d="M3 10 12 4l9 6M5 10v8M9 10v8M15 10v8M19 10v8M3 20h18"/>')
   };
 
-  // Each provider's mark and its own website. WHY drawn here rather than fetched: a page cannot load
-  // pictures from the internet without asking, and a coloured badge reads at a glance (the Home page
-  // draws its TV app marks the same way). Brand colours are literal on purpose — like a light's own
-  // colour on the Home page, they do not change with the theme. The sites are each company's main
-  // sign-in or home page; a data entry's own `site` overrides them.
+  // Real logos for well-known companies, drawn as one-colour marks on their own brand colour.
+  // Source: Simple Icons (simpleicons.org), CC0 — free to copy, kept here so the page needs
+  // nothing from the internet. A bank connected through Plaid brings its own logo instead.
+  var BRAND = {
+    "American Express": { c: '#2E77BC', d: 'M16.015 14.378c0-.32-.135-.496-.344-.622-.21-.12-.464-.135-.81-.135h-1.543v2.82h.675v-1.027h.72c.24 0 .39.024.478.125.12.13.104.38.104.55v.35h.66v-.555c-.002-.25-.017-.376-.108-.516-.06-.08-.18-.18-.33-.234l.02-.008c.18-.072.48-.297.48-.747zm-.87.407l-.028-.002c-.09.053-.195.058-.33.058h-.81v-.63h.824c.12 0 .24 0 .33.05.098.048.156.147.15.255 0 .12-.045.215-.134.27zM20.297 15.837H19v.6h1.304c.676 0 1.05-.278 1.05-.884 0-.28-.066-.448-.187-.582-.153-.133-.392-.193-.73-.207l-.376-.015c-.104 0-.18 0-.255-.03-.09-.03-.15-.105-.15-.21 0-.09.017-.166.09-.21.083-.046.177-.066.272-.06h1.23v-.602h-1.35c-.704 0-.958.437-.958.84 0 .9.776.855 1.407.87.104 0 .18.015.225.06.046.03.082.106.082.18 0 .077-.035.15-.08.18-.06.053-.15.07-.277.07zM0 0v10.096L.81 8.22h1.75l.225.464V8.22h2.043l.45 1.02.437-1.013h6.502c.295 0 .56.057.756.236v-.23h1.787v.23c.307-.17.686-.23 1.12-.23h2.606l.24.466v-.466h1.918l.254.465v-.466h1.858v3.948H20.87l-.36-.6v.585h-2.353l-.256-.63h-.583l-.27.614h-1.213c-.48 0-.84-.104-1.08-.24v.24h-2.89v-.884c0-.12-.03-.12-.105-.135h-.105v1.036H6.067v-.48l-.21.48H4.69l-.202-.48v.465H2.235l-.256-.624H1.4l-.256.624H0V24h23.786v-7.108c-.27.135-.613.18-.973.18H21.09v-.255c-.21.165-.57.255-.914.255H14.71v-.9c0-.12-.018-.12-.12-.12h-.075v1.022h-1.8v-1.066c-.298.136-.643.15-.928.136h-.214v.915h-2.18l-.54-.617-.57.6H4.742v-3.93h3.61l.518.602.554-.6h2.412c.28 0 .74.03.942.225v-.24h2.177c.202 0 .644.045.903.225v-.24h3.265v.24c.163-.164.508-.24.803-.24h1.89v.24c.194-.15.464-.24.84-.24h1.176V0H0zM21.156 14.955c.004.005.006.012.01.016.01.01.024.01.032.02l-.042-.035zM23.828 13.082h.065v.555h-.065zM23.865 15.03v-.005c-.03-.025-.046-.048-.075-.07-.15-.153-.39-.215-.764-.225l-.36-.012c-.12 0-.194-.007-.27-.03-.09-.03-.15-.105-.15-.21 0-.09.03-.16.09-.204.076-.045.15-.05.27-.05h1.223v-.588h-1.283c-.69 0-.96.437-.96.84 0 .9.78.855 1.41.87.104 0 .18.015.224.06.046.03.076.106.076.18 0 .07-.034.138-.09.18-.045.056-.136.07-.27.07h-1.288v.605h1.287c.42 0 .734-.118.9-.36h.03c.09-.134.135-.3.135-.523 0-.24-.045-.39-.135-.526zM18.597 14.208v-.583h-2.235V16.458h2.235v-.585h-1.57v-.57h1.533v-.584h-1.532v-.51M13.51 8.787h.685V11.6h-.684zM13.126 9.543l-.007.006c0-.314-.13-.5-.34-.624-.217-.125-.47-.135-.81-.135H10.43v2.82h.674v-1.034h.72c.24 0 .39.03.487.12.122.136.107.378.107.548v.354h.677v-.553c0-.25-.016-.375-.11-.516-.09-.107-.202-.19-.33-.237.172-.07.472-.3.472-.75zm-.855.396h-.015c-.09.054-.195.056-.33.056H11.1v-.623h.825c.12 0 .24.004.33.05.09.04.15.128.15.25s-.047.22-.134.266zM15.92 9.373h.632v-.6h-.644c-.464 0-.804.105-1.02.33-.286.3-.362.69-.362 1.11 0 .512.123.833.36 1.074.232.238.645.31.97.31h.78l.255-.627h1.39l.262.627h1.36v-2.11l1.272 2.11h.95l.002.002V8.786h-.684v1.963l-1.18-1.96h-1.02V11.4L18.11 8.744h-1.004l-.943 2.22h-.3c-.177 0-.362-.03-.468-.134-.125-.15-.186-.36-.186-.662 0-.285.08-.51.194-.63.133-.135.272-.165.516-.165zm1.668-.108l.464 1.118v.002h-.93l.466-1.12zM2.38 10.97l.254.628H4V9.393l.972 2.205h.584l.973-2.202.015 2.202h.69v-2.81H6.118l-.807 1.904-.876-1.905H3.343v2.663L2.205 8.787h-.997L.01 11.597h.72l.26-.626h1.39zm-.688-1.705l.46 1.118-.003.002h-.915l.457-1.12zM11.856 13.62H9.714l-.85.923-.825-.922H5.346v2.82H8l.855-.932.824.93h1.302v-.94h.838c.6 0 1.17-.164 1.17-.945l-.006-.003c0-.78-.598-.93-1.128-.93zM7.67 15.853l-.014-.002H6.02v-.557h1.47v-.574H6.02v-.51H7.7l.733.82-.764.824zm2.642.33l-1.03-1.147 1.03-1.108v2.253zm1.553-1.258h-.885v-.717h.885c.24 0 .42.098.42.344 0 .243-.15.372-.42.372zM9.967 9.373v-.586H7.73V11.6h2.237v-.58H8.4v-.564h1.527V9.88H8.4v-.507' },
+    "Wells Fargo": { c: '#D71E28', d: 'M12.136 13.949c0 .392-.245.616-.719.616h-.628v-1.226h.628c.48 0 .72.212.72.61zM6.922 15.06h1.044l-.523-1.443-.521 1.443zm12.46-1.82c-.72 0-1.109.562-1.109 1.526 0 .97.384 1.526 1.108 1.526.725 0 1.108-.556 1.108-1.526 0-.964-.389-1.526-1.108-1.526zM23.73 0v24H.269V0h23.462zm-5.548 10.652c.484.245.948.354 1.571.354.895 0 1.481-.458 1.481-1.171 0-.6-.357-1.014-1.028-1.172l-.677-.158c-.394-.092-.559-.25-.559-.517 0-.322.25-.523.74-.523s.778.18.89.604l.048.186h.383v-.943a2.927 2.927 0 0 0-1.352-.338c-.911 0-1.497.447-1.497 1.166 0 .556.34.965.996 1.112l.676.152c.432.099.592.273.592.562 0 .354-.261.55-.784.55-.59 0-.894-.24-1.027-.697l-.07-.235h-.383v1.068zm-3.378.245h3.02V9.595h-.383l-.043.19c-.106.486-.255.638-.607.638h-.74V7.557h.506v-.474h-1.753v.474h.453v2.866h-.453v.474zm-3.355 0h3.02V9.595h-.384l-.042.19c-.107.486-.256.638-.608.638h-.74V7.557h.506v-.474H11.45v.474h.452v2.866h-.452v.474zm-8.758-3.34.938 3.34h.74l.778-2.768.756 2.768h.74l.932-3.34h.736v2.866h-.453v.474h3.201V9.595h-.383l-.043.19c-.106.486-.26.638-.607.638h-.922V9.241h1.071a.58.58 0 0 0 .059-.273.55.55 0 0 0-.059-.26h-1.07v-1.15h.884c.357 0 .48.157.596.615l.038.147h.383V7.083H6.49v.474h.522l-.613 2.305-.762-2.779h-.766l-.746 2.774-.624-2.3h.501v-.474H2.266v.474h.426zm1.412 7.002v-1.22h.947c.358 0 .48.158.597.615l.038.147h.383v-1.236H2.857v.474h.453v2.866h-.453v.474h1.78v-.474h-.533v-1.112H5.2a.58.58 0 0 0 .058-.272.551.551 0 0 0-.058-.262H4.104zm9.114 1.913a.461.461 0 0 0-.048-.224.663.663 0 0 1-.112.011c-.245 0-.309-.142-.34-.458l-.022-.201c-.048-.43-.245-.708-.73-.746v-.017c.48-.022.975-.349.975-.964 0-.621-.496-1.008-1.257-1.008H9.542v.474h.453v2.866H9.26l-1.332-3.34H7.22l-1.305 3.34h-.373v.474h1.412v-.474h-.448l.245-.682h1.385l.245.682h-.437v.474h3.35v-.474h-.505v-1.16h.293c.586 0 .761.212.826.762l.02.19c.06.507.31.725.826.725.15 0 .299-.01.416-.027a.46.46 0 0 0 .048-.223zm3.633-1.788h-1.417a.52.52 0 0 0-.059.256c0 .11.016.18.059.268h.634v.964a1.598 1.598 0 0 1-.629.125c-.767 0-1.166-.56-1.166-1.53s.4-1.532 1.124-1.532c.485 0 .767.245.932.67l.058.153h.384v-.976a3.063 3.063 0 0 0-1.412-.337c-1.172 0-1.96.8-1.96 2.027 0 1.231.767 2.016 1.96 2.016.474 0 .964-.136 1.492-.404v-1.7zm4.512.082c0-1.182-.831-2.021-1.982-2.021-1.145 0-1.981.839-1.981 2.021 0 1.188.83 2.022 1.981 2.022 1.156 0 1.982-.834 1.982-2.022z' },
+    "Robinhood": { c: '#CCFF00', d: 'M2.84 24h.53c.096 0 .192-.048.224-.128C7.591 13.696 11.94 8.656 14.67 5.638c.112-.128.064-.225-.096-.225h-4.88a.55.55 0 0 0-.45.225L5.746 9.972c-.514.642-.642 1.236-.642 2.086v4.43c-1.14 3.194-1.862 5.361-2.392 7.32-.032.125.016.192.129.192M20.447.646c-.754-.802-4.157-.834-5.73-.224a3 3 0 0 0-.786.465 41 41 0 0 0-3.323 3.178c-.112.113-.064.225.097.225h5.409c.497 0 .786.289.786.786v6.1c0 .16.128.208.225.064l3.258-4.254c.53-.69.69-.898.835-1.861.192-1.413.08-3.58-.77-4.479m-6.982 16.18 2.231-3.676a.7.7 0 0 0 .064-.29V6.73c0-.16-.112-.225-.224-.097-3.355 3.74-5.971 7.672-8.395 12.407-.06.12.016.225.16.177l5.009-1.54c.565-.174.882-.402 1.155-.852' },
+    "Chase": { c: '#117ACA', d: 'M0 15.415c0 .468.38.85.848.85h5.937V.575L0 7.72v7.695m15.416 8.582c.467 0 .846-.38.846-.849v-5.937H.573l7.146 6.785h7.697M24 8.587a.844.844 0 0 0-.847-.846h-5.938V23.43l6.782-7.148L24 8.586M8.585.003a.847.847 0 0 0-.847.847v5.94h15.688L16.282.003H8.585Z' },
+    "Bank of America": { c: '#012169', d: 'M15.194 7.57c.487-.163 1.047-.307 1.534-.451-1.408-.596-3.176-1.227-4.764-1.625-.253.073-1.01.271-1.534.434.541.162 2.328.577 4.764 1.642zm-8.896 6.785c.577.343 1.19.812 1.786 1.209 3.952-3.068 7.85-5.432 12.127-6.767-.596-.307-1.119-.578-1.787-.902-2.562.65-6.947 2.4-12.126 6.46zm-.758-6.46c-2.112.974-4.331 2.31-5.54 3.085.433.199.866.361 1.461.65 2.671-1.805 4.764-2.905 5.594-3.266-.595-.217-1.154-.361-1.515-.47zm8.066.234c-.686-.379-3.068-1.263-4.71-1.642-.487.18-1.173.451-1.642.65.595.162 2.815.758 4.71 1.714.487-.235 1.173-.523 1.642-.722zm-3.374 1.552c-.56-.27-1.173-.523-1.643-.74-1.425.704-3.284 1.769-5.63 3.447.505.27 1.047.595 1.624.92 1.805-1.335 3.627-2.598 5.649-3.627zm1.732 8.825c3.79-3.249 9.113-6.407 12.036-7.544a48.018 48.018 0 00-1.949-1.155c-3.771 1.246-8.174 4.007-12.108 7.129.667.505 1.371 1.028 2.02 1.57zm2.851-.235h-.108l-.18-.27h-.109v.27h-.072v-.596h.27c.055 0 .109 0 .145.036.054.019.072.073.072.127 0 .108-.09.162-.198.162zm-.289-.343c.09 0 .199.018.199-.09 0-.072-.072-.09-.144-.09h-.163v.18zm-.523.036c0-.289.235-.523.541-.523.307 0 .542.234.542.523a.543.543 0 01-.542.542.532.532 0 01-.54-.542m.107 0c0 .235.199.433.451.433a.424.424 0 100-.848c-.27 0-.45.199-.45.415' },
+    "Discover": { c: '#FF6000', d: 'M14.58 12a2.023 2.023 0 1 1-2.025-2.023h.002c1.118 0 2.023.906 2.023 2.023zm-5.2-2.001c-1.124 0-2.025.884-2.025 1.99 0 1.118.878 1.984 2.007 1.984.319 0 .593-.063.93-.221v-.873c-.296.297-.559.416-.895.416-.747 0-1.277-.542-1.277-1.312 0-.73.547-1.306 1.243-1.306.354 0 .622.126.93.428v-.873a1.898 1.898 0 0 0-.913-.233zm-3.352 1.545c-.445-.165-.576-.273-.576-.479 0-.239.233-.422.553-.422.222 0 .405.091.598.308l.388-.508a1.665 1.665 0 0 0-1.117-.422c-.673 0-1.186.467-1.186 1.089 0 .524.239.792.936 1.043.291.103.438.171.513.217a.456.456 0 0 1 .222.394c0 .308-.245.536-.576.536-.354 0-.639-.177-.809-.507l-.479.461c.342.502.752.724 1.317.724.771 0 1.311-.513 1.311-1.249-.002-.603-.252-.876-1.095-1.185zM24 10.3a.29.29 0 0 1-.288.291.29.29 0 0 1-.291-.291v-.003A.29.29 0 1 1 24 10.3zm-.059.001a.235.235 0 0 0-.231-.239.234.234 0 0 0-.232.239c0 .132.104.239.232.239a.235.235 0 0 0 .231-.239zM3.472 13.887h.742v-3.803h-.742v3.803zm12.702-1.248l-1.014-2.554h-.81l1.614 3.9h.399l1.643-3.9h-.804l-1.028 2.554zm2.166 1.248h2.104v-.644h-1.362v-1.027h1.312v-.644h-1.312v-.844h1.362v-.644H18.34v3.803zm5.409-3.557l.11.138h-.097l-.094-.13v.13h-.08v-.334h.107c.081 0 .126.036.126.103.001.046-.025.08-.072.093zm-.006-.092c0-.029-.021-.043-.06-.043h-.014v.087h.014c.039 0 .06-.014.06-.044zm-1.228 2.047l1.197 1.602H22.8l-1.027-1.528h-.097v1.528h-.741v-3.803h1.1c.855 0 1.346.411 1.346 1.123 0 .583-.308.965-.866 1.078zm.103-1.038c0-.37-.251-.563-.713-.563h-.228v1.152h.217c.473-.001.724-.207.724-.589zm-19.487.742a1.91 1.91 0 0 1-.69 1.46c-.365.303-.781.439-1.357.439H.001v-3.803H1.09c1.202 0 2.041.781 2.041 1.904zm-.764-.006c0-.364-.154-.718-.411-.947-.245-.222-.536-.308-1.015-.308H.742v2.515h.199c.479 0 .782-.092 1.015-.302.256-.228.411-.593.411-.958z' },
+    "PayPal": { c: '#002991', d: 'M15.607 4.653H8.941L6.645 19.251H1.82L4.862 0h7.995c3.754 0 6.375 2.294 6.473 5.513-.648-.478-2.105-.86-3.722-.86m6.57 5.546c0 3.41-3.01 6.853-6.958 6.853h-2.493L11.595 24H6.74l1.845-11.538h3.592c4.208 0 7.346-3.634 7.153-6.949a5.24 5.24 0 0 1 2.848 4.686M9.653 5.546h6.408c.907 0 1.942.222 2.363.541-.195 2.741-2.655 5.483-6.441 5.483H8.714Z' },
+    "Venmo": { c: '#008CFF', d: 'M21.772 13.119c-.267 0-.381-.251-.38-.655 0-.533.121-1.575.712-1.575.267 0 .357.243.357.598 0 .533-.13 1.632-.689 1.632Zm.502-3.377c-1.677 0-2.405 1.285-2.405 2.658 0 1.042.421 1.874 1.693 1.874 1.717 0 2.438-1.406 2.438-2.763 0-1.025-.462-1.769-1.726-1.769Zm-3.833 0c-.558 0-.964.17-1.393.477-.154-.275-.462-.477-.932-.477-.542 0-.947.219-1.247.437l-.04-.364H13.54l-.688 4.354h1.506l.479-3.053c.129-.065.323-.154.518-.154.145 0 .267.049.267.267 0 .056-.016.145-.024.218l-.429 2.722h1.498l.478-3.053c.138-.073.324-.154.51-.154.146 0 .268.049.268.267 0 .056-.017.145-.025.218l-.429 2.722h1.499l.461-2.908c.025-.153.049-.388.049-.549 0-.582-.267-.97-1.037-.97Zm-6.871 0c-.575 0-.98.219-1.287.421l-.017-.348H8.962l-.689 4.354H9.78l.478-3.053c.13-.065.324-.154.518-.154.147 0 .268.049.268.242 0 .081-.024.227-.032.299l-.422 2.666h1.499l.462-2.908c.024-.153.049-.388.049-.549 0-.582-.268-.97-1.03-.97Zm-5.631 1.834c.041-.485.413-.824.697-.824.162 0 .299.097.299.291 0 .404-.713.533-.996.533Zm.843-1.834c-1.604 0-2.382 1.39-2.382 2.698 0 1.01.478 1.817 1.814 1.817.527 0 1.07-.113 1.418-.282l.186-1.26c-.494.25-.874.347-1.271.347-.365 0-.64-.194-.64-.687.826-.008 2.252-.347 2.252-1.453 0-.687-.494-1.18-1.377-1.18Zm-4.239.267c.089.186.146.412.146.743 0 .606-.429 1.494-.777 2.06l-.373-2.989L0 9.969l.705 4.2h1.757c.77-1.01 1.718-2.448 1.718-3.554 0-.347-.073-.622-.235-.889l-1.402.283Z' },
+    "Klarna": { c: '#FFB3C7', d: 'M4.592 2v20H0V2h4.592zm11.46 0c0 4.194-1.583 8.105-4.415 11.068l-.278.283L17.702 22h-5.668l-6.893-9.4 1.779-1.332c2.858-2.14 4.535-5.378 4.637-8.924L11.562 2h4.49zM21.5 17a2.5 2.5 0 110 5 2.5 2.5 0 010-5z' },
+    "Verizon": { c: '#CD040B', d: 'M18.302 0H22v.003L10.674 24H7.662L2 12h3.727l3.449 7.337z' },
+    "AT&T": { c: '#009FDB', d: 'M4.584 21.438a12.077 12.077 0 0 0 7.349 2.495 12 12 0 0 0 7.887-2.967c-.944.607-3.64 2.023-7.887 2.023-3.708 0-6.068-.81-7.349-1.55m8.158.606c2.966 0 6.202-.809 8.09-2.427.539-.405 1.01-1.011 1.483-1.753.27-.472.539-1.011.741-1.483-1.82 2.63-7.011 4.315-12.404 4.315-3.776 0-7.888-1.214-9.506-3.573 1.483 3.236 6 4.92 11.596 4.92m-3.236-5.257C3.37 16.787.472 13.955 0 12c0 .674.067 1.483.202 2.09.068.27.27.674.607 1.079 1.483 1.55 5.191 3.707 11.595 3.707 8.697 0 10.72-2.898 11.124-3.842.27-.674.472-1.888.472-2.967v-.674c-.607 2.292-8.022 5.394-14.494 5.394m-8.427-9.91C.742 7.55.337 8.763.202 9.37c-.067.27 0 .404.068.607.741 1.55 4.45 4.044 13.078 4.044 5.259 0 9.371-1.28 10.045-3.64.135-.404.135-.876 0-1.483-.202-.674-.472-1.483-.809-2.09.068 3.101-8.562 5.124-12.944 5.124-4.719 0-8.696-1.888-8.696-4.248.067-.337.135-.606.135-.809M19.82 3.034c.068.067.068.135.068.27 0 1.348-4.045 3.64-10.517 3.64-4.787 0-5.663-1.753-5.663-2.9 0-.404.135-.808.472-1.213-.607.607-1.146 1.147-1.686 1.82-.202.27-.337.54-.337.675 0 2.36 5.865 3.977 11.259 3.977 5.797 0 8.427-1.887 8.427-3.573 0-.606-.203-.943-.81-1.618a17.301 17.301 0 0 0-1.213-1.078m-1.753-1.281A11.794 11.794 0 0 0 11.933.067C9.64.067 7.55.674 5.73 1.82c-.539.27-.876.54-.876.877 0 1.01 2.36 2.09 6.54 2.09 4.112 0 7.348-1.214 7.348-2.36.067-.202-.203-.405-.675-.674' },
+  };
+  // Letters and colours for companies with no logo in either place, and each one's own site.
+  // A Plaid-connected bank's site comes from Plaid; these cover typed-in accounts and bills.
   var PROVIDERS = {
     'Capital One':      { m: 'C1', b: '#004879', site: 'https://myaccounts.capitalone.com' },
     'American Express': { m: 'AX', b: '#016fd0', site: 'https://www.americanexpress.com' },
@@ -212,23 +249,59 @@
     'MOHELA':           { m: 'MO', b: '#0b4a8b', site: 'https://www.mohela.com' },
     'Affirm':           { m: 'af', b: '#4a4af4', site: 'https://www.affirm.com' },
     'Liberty Mutual':   { m: 'LM', b: '#1a1446', site: 'https://www.libertymutual.com' },
-    'Visible':          { m: 'V',  b: '#1f2ad6', site: 'https://www.visible.com' }
+    'Visible':          { m: 'V',  b: '#1f2ad6', site: 'https://www.visible.com' },
+    'Chase':            { m: 'CH', b: '#117aca', site: 'https://www.chase.com' },
+    'Bank of America':  { m: 'BA', b: '#012169', site: 'https://www.bankofamerica.com' },
+    'Discover':         { m: 'D',  b: '#ff6000', site: 'https://www.discover.com' },
+    'PayPal':           { m: 'PP', b: '#002991', site: 'https://www.paypal.com' },
+    'Venmo':            { m: 'V',  b: '#008cff', site: 'https://venmo.com' },
+    'Klarna':           { m: 'K',  b: '#ffb3c7', site: 'https://www.klarna.com' },
+    'Verizon':          { m: 'VZ', b: '#cd040b', site: 'https://www.verizon.com' },
+    'AT&T':             { m: 'AT', b: '#009fdb', site: 'https://www.att.com' }
   };
-  function prov(name){ return PROVIDERS[name] || { m: String(name || '?').slice(0, 2).toUpperCase(), b: '', site: '' }; }
-  function mark(name){ var p = prov(name); return '<span class="mark" style="' + (p.b ? '--b:' + p.b : '') + '" aria-hidden="true">' + p.m + '</span>'; }
-  function siteOf(x){ return x.site || prov(x.institution).site; }
+  function inst(name){ return (data.institutions && data.institutions[name]) || {}; }
+  function prov(name){ return PROVIDERS[name] || { m: String(name || '?').replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase() || '?', b: '', site: '' }; }
+  // White on a dark brand colour, near-black on a pale one (Robinhood's lime, Klarna's pink).
+  function inkOn(hex){
+    var h = String(hex || '').replace('#', ''); if (h.length !== 6) return '#fff';
+    var r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+    return (0.299 * r + 0.587 * g + 0.114 * b) > 160 ? '#111' : '#fff';
+  }
+  function mark(name){
+    var p = inst(name);
+    if (p.logo && /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(p.logo)) {
+      return '<span class="mark logo" aria-hidden="true"><img src="' + p.logo + '" alt=""></span>';
+    }
+    var br = BRAND[name];
+    if (br) return '<span class="mark" style="--b:' + br.c + ';color:' + inkOn(br.c) + '" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="' + br.d + '"/></svg></span>';
+    var pv = prov(name), bg = p.color || pv.b;
+    return '<span class="mark" style="' + (bg ? '--b:' + bg + ';color:' + inkOn(bg) : '') + '" aria-hidden="true">' + esc(pv.m) + '</span>';
+  }
+  function siteOf(x){ return x.site || inst(x.institution).url || prov(x.institution).site; }
   function outBtn(x, what){ var u = siteOf(x); return u ? '<a class="ibtn" href="' + esc(u) + '" target="_blank" rel="noopener" title="Open ' + esc(x.institution) + ' to ' + what + '" aria-label="Open ' + esc(x.institution) + ' to ' + what + '">' + I.out + '</a>' : ''; }
 
   var DAY = 86400000;
-  var data = (window.youcoded && window.youcoded.data) || { accounts: [], bills: [], history: [], settings: {} };
-  var S = Object.assign({ staleDays: 3, warnPct: 30, alertPct: 80, reportDay: 30, reportWarnDays: 7 }, data.settings || {});
-  var range = '6m', editing = null, menuOpen = false, checking = false;
+  var data = normalise(window.youcoded && window.youcoded.data);
+  function normalise(d){
+    d = d && typeof d === 'object' ? d : {};
+    if (!Array.isArray(d.accounts)) d.accounts = [];
+    if (!Array.isArray(d.bills)) d.bills = [];
+    if (!Array.isArray(d.history)) d.history = [];
+    if (!d.settings || typeof d.settings !== 'object') d.settings = {};
+    if (!d.institutions || typeof d.institutions !== 'object') d.institutions = {};
+    if (!d.banks || typeof d.banks !== 'object') d.banks = {};
+    return d;
+  }
+  var S = Object.assign({ staleDays: 3, warnPct: 30, alertPct: 80, reportDay: 30, reportWarnDays: 7 }, data.settings);
+  var plaidOn = !!(window.youcoded && typeof window.youcoded.plaid === 'function');
+  var range = '6m', editing = null, menuOpen = false, checking = false, connecting = false, form = null, bankNote = null, removing = null;
 
   // A pinned "today" when the data names one keeps the workbench's dated numbers stable in pictures.
   function today(){ return data.demoToday ? new Date(data.demoToday + 'T12:00:00') : new Date(); }
+  function isoDay(d){ var z = new Date(d.getTime() - d.getTimezoneOffset() * 60000); return z.toISOString().slice(0, 10); }
   function day(s){ return new Date(s + 'T12:00:00'); }
   function daysBetween(a, b){ return Math.round((b - a) / DAY); }
-  // Accounting style (review 1, Destin): a negative amount is written in brackets, never with a minus.
+  // Accounting style: a negative amount is written in brackets, never with a minus.
   function money(n, whole){
     var s = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: whole ? 0 : 2, maximumFractionDigits: whole ? 0 : 2 });
     return n < 0 ? '($' + s + ')' : '$' + s;
@@ -241,26 +314,124 @@
     var h = Math.round(m / 60); if (h < 24) return h + ' hr ago';
     var d = Math.round(h / 24); return d === 1 ? 'yesterday' : d + ' days ago';
   }
-  function isStale(a){ return (today() - new Date(a.updatedAt)) / DAY >= S.staleDays; }
-  function esc(s){ return String(s).replace(/[&<>"]/g, function(c){ return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]; }); }
-  // "Robinhood Gold Card" already names its bank; "Store card" needs "Synchrony" in front.
+  function isStale(a){ return !a.updatedAt || (today() - new Date(a.updatedAt)) / DAY >= S.staleDays; }
+  function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){ return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]; }); }
   function fullName(a){ return a.name.indexOf(a.institution) === 0 ? a.name : a.institution + ' ' + a.name; }
   function isDebt(a){ return a.kind === 'credit' || a.kind === 'loan'; }
+  function num(v){ var n = parseFloat(String(v == null ? '' : v).replace(/[$,()\s]/g, '')); return isNaN(n) ? null : n; }
+  function addMonth(iso){ var d = day(iso); var m = d.getMonth(); d.setMonth(m + 1); if (d.getMonth() !== (m + 1) % 12) d.setDate(0); return isoDay(d); }
+
+  // ── Plaid → the page's accounts ───────────────────────────────────────
+  // A card or loan's next payment, from what the bank shares. Paid when a
+  // payment at least the minimum landed within the 25 days before the due date.
+  function paymentOf(p){
+    var l = p.liability;
+    if (!l || !l.nextDue || !(l.minimumPayment > 0)) return null;
+    var paid = null;
+    if (l.lastPaymentDate && daysBetween(day(l.lastPaymentDate), day(l.nextDue)) <= 25 && (l.lastPaymentAmount || 0) >= l.minimumPayment) paid = l.lastPaymentDate;
+    return { amount: l.minimumPayment, due: l.nextDue, paid: paid, overdue: !!l.isOverdue };
+  }
+  function mergePlaid(items){
+    var kept = data.accounts.filter(function(a){ return a.source !== 'plaid'; });
+    var old = data.accounts.filter(function(a){ return a.source === 'plaid'; });
+    var now = today().toISOString();
+    var banks = {};
+    items.forEach(function(it){
+      var i = it.institution || {};
+      data.institutions[i.name] = { logo: i.logo, color: i.color, url: i.url };
+      banks[it.itemId] = { name: i.name, ok: it.ok, error: it.error || null };
+      if (!it.ok) {
+        // A bank that needs signing in again keeps its last numbers, which go
+        // stale and say so, rather than vanishing from the totals.
+        old.forEach(function(a){ if (a.itemId === it.itemId) kept.push(a); });
+        return;
+      }
+      it.accounts.forEach(function(p){
+        if (p.kind === 'other') return;
+        var prev = old.filter(function(a){ return a.id === 'plaid:' + p.id; })[0] || {};
+        kept.push({
+          id: 'plaid:' + p.id, itemId: it.itemId, source: 'plaid', kind: p.kind, institution: i.name,
+          name: p.name + (p.mask ? ' ··' + p.mask : ''),
+          balance: p.balance,
+          // A limit typed by hand survives when the bank shares none.
+          limit: p.limit != null ? p.limit : prev.limit,
+          apr: p.liability && p.liability.apr != null ? Math.round(p.liability.apr * 100) / 100 : prev.apr,
+          payment: paymentOf(p),
+          updatedAt: now
+        });
+      });
+    });
+    data.banks = banks;
+    data.accounts = kept;
+  }
+  // One net-worth point per day; a later check the same day replaces it.
+  function snapshot(){
+    var t = totals(), d = isoDay(today());
+    var last = data.history[data.history.length - 1];
+    if (last && last.d === d) last.v = Math.round(t.net); else data.history.push({ d: d, v: Math.round(t.net) });
+    if (data.history.length > 3660) data.history.splice(0, data.history.length - 3660);
+  }
+  function syncBanks(){
+    if (!plaidOn || checking) return;
+    checking = true; render();
+    // Live balances on every check (questions deck: "Live, every open").
+    window.youcoded.plaid({ op: 'accounts', live: true }).then(function(r){
+      checking = false;
+      if (!r || !r.ok) {
+        // A page not yet allowed, with no keys, or in a window with no bank channel (no answer at all) is not a
+        // failure worth a warning: the Add menu says how to connect.
+        bankNote = !r || typeof r.ok !== 'boolean' || r.code === 'NOT_APPROVED' || r.code === 'NO_KEYS' || r.code === 'UNSUPPORTED' ? null : r.message || 'The banks could not be checked.';
+        render(); return;
+      }
+      bankNote = null;
+      if (r.items.length) { mergePlaid(r.items); snapshot(); }
+      data.checkedAt = today().toISOString();
+      save(); render();
+    });
+  }
+  function connectBank(){
+    if (!plaidOn || connecting) return;
+    connecting = true; bankNote = null; render();
+    window.youcoded.plaid({ op: 'connect' }).then(function(r){
+      connecting = false;
+      if (!r || !r.ok) { bankNote = r && r.code === 'CANCELLED' ? null : (r && r.message) || 'The bank could not be connected.'; render(); return; }
+      render(); syncBanks();
+    });
+  }
+  function reconnectBank(itemId){
+    if (!plaidOn || connecting) return;
+    connecting = true; render();
+    window.youcoded.plaid({ op: 'reconnect', itemId: itemId }).then(function(r){
+      connecting = false;
+      if (!r || !r.ok) { bankNote = (r && r.message) || 'The bank could not be reconnected.'; render(); return; }
+      render(); syncBanks();
+    });
+  }
+  function removeBank(itemId){
+    window.youcoded.plaid({ op: 'remove', itemId: itemId }).then(function(r){
+      removing = null;
+      if (!r || !r.ok) { bankNote = (r && r.message) || 'The bank could not be removed.'; render(); return; }
+      data.accounts = data.accounts.filter(function(a){ return a.itemId !== itemId; });
+      delete data.banks[itemId];
+      save(); render();
+    });
+  }
 
   function allBills(){
     var out = [];
-    data.accounts.forEach(function(a){ if (a.payment) out.push({ id: a.id, institution: a.institution, site: a.site, name: fullName(a), sub: a.kind === 'credit' ? 'min. payment' : '', amount: a.payment.amount, due: day(a.payment.due), paid: a.payment.paid ? day(a.payment.paid) : null }); });
-    (data.bills || []).forEach(function(b){ out.push({ id: b.id, institution: b.provider, site: b.site, name: b.name, sub: b.sub || '', amount: b.amount, due: day(b.due), paid: b.paid ? day(b.paid) : null }); });
+    data.accounts.forEach(function(a){ if (a.payment && a.payment.amount > 0) out.push({ id: a.id, account: a, institution: a.institution, site: a.site, name: fullName(a), sub: a.kind === 'credit' ? 'min. payment' : '', amount: a.payment.amount, due: day(a.payment.due), paid: a.payment.paid ? day(a.payment.paid) : null, overdue: a.payment.overdue, mine: a.source !== 'plaid' }); });
+    data.bills.forEach(function(b){ out.push({ id: b.id, bill: b, institution: b.provider, site: b.site, name: b.name, sub: b.sub || '', amount: b.amount, due: day(b.due), paid: b.paid ? day(b.paid) : null, mine: true }); });
     return out.sort(function(x, y){ return (x.paid ? 1 : 0) - (y.paid ? 1 : 0) || x.due - y.due; });
   }
   function billState(b){
     if (b.paid) return { cls: 'paid', icon: I.check, text: 'Paid ' + short(b.paid) };
     var d = daysBetween(b.due, today());
-    if (d > 0) {
-      var left = S.reportDay - d;
-      if (left <= 0) return { cls: 'late report', icon: I.stop, text: d + ' days late · may already be on your credit report', alert: 'bad' };
-      if (left <= S.reportWarnDays) return { cls: 'late report', icon: I.stop, text: d + ' days late · on your credit report in ' + left + (left === 1 ? ' day' : ' days'), alert: 'bad' };
-      return { cls: 'late', icon: I.warn, text: d + (d === 1 ? ' day late' : ' days late'), alert: 'warn' };
+    if (d > 0 || b.overdue) {
+      var late = Math.max(d, 0), left = S.reportDay - late;
+      if (late === 0) return { cls: 'late', icon: I.warn, text: 'Past due', alert: 'warn' };
+      if (left <= 0) return { cls: 'late report', icon: I.stop, text: late + ' days late · may already be on your credit report', alert: 'bad' };
+      if (left <= S.reportWarnDays) return { cls: 'late report', icon: I.stop, text: late + ' days late · on your credit report in ' + left + (left === 1 ? ' day' : ' days'), alert: 'bad' };
+      return { cls: 'late', icon: I.warn, text: late + (late === 1 ? ' day late' : ' days late'), alert: 'warn' };
     }
     if (d === 0) return { cls: 'soon', icon: I.cal, text: 'Due today' };
     if (-d === 1) return { cls: 'soon', icon: I.cal, text: 'Due tomorrow' };
@@ -277,19 +448,30 @@
     return { have: have, owe: owe, net: have - owe, cash: cash - due, dueThisMonth: due, dueThisWeek: week };
   }
 
-  // One tile per account, however many things are wrong with it (UX review 1, U3).
+  // One tile per account or bank, however many things are wrong with it.
   function alerts(){
     var by = {}, order = [];
     function add(id, x, name, lvl, fact, action){
       if (!by[id]) { by[id] = { x: x, name: name, lvl: lvl, facts: [], action: null }; order.push(id); }
       var r = by[id]; r.facts.push(fact); if (lvl === 'bad') r.lvl = 'bad'; if (action) r.action = action;
     }
+    // A bank that needs signing in again folds into its account's tile (one card, one row), or stands alone if
+    // it has no accounts on the page yet.
+    Object.keys(data.banks).forEach(function(itemId){
+      var b = data.banks[itemId];
+      if (b.ok || !b.error) return;
+      var mine = data.accounts.filter(function(a){ return a.itemId === itemId; });
+      var action = b.error.reconnect ? { label: 'Reconnect ' + b.name, kind: 'reconnect', id: itemId } : null;
+      var fact = b.error.reconnect ? 'needs you to sign in again' : esc(b.error.message);
+      if (mine.length) mine.forEach(function(a){ add(a.id, a, fullName(a), 'warn', fact, action); });
+      else add('bank:' + itemId, { institution: b.name }, b.name, 'warn', fact, action);
+    });
     allBills().forEach(function(b){ var s = billState(b); if (s.alert) add(b.id, b, b.name, s.alert, '<b>' + money(b.amount) + '</b> payment ' + s.text); });
     data.accounts.forEach(function(a){
       if (a.kind === 'credit' && a.limit) { var p = a.balance / a.limit * 100; if (p >= S.alertPct) add(a.id, a, fullName(a), 'bad', '<b>' + Math.round(p) + '%</b> of its ' + money(a.limit, true) + ' limit used'); }
       if (isStale(a)) {
-        if (a.source === 'plaid') add(a.id, a, fullName(a), 'warn', 'last updated ' + ago(a.updatedAt), { label: 'Reconnect ' + a.institution, kind: 'reconnect' });
-        else add(a.id, a, fullName(a), 'warn', 'you last updated it ' + ago(a.updatedAt), { label: 'Update', kind: 'edit', id: a.id });
+        if (a.source === 'plaid') { if (!data.banks[a.itemId] || data.banks[a.itemId].ok) add(a.id, a, fullName(a), 'warn', 'last updated ' + (a.updatedAt ? ago(a.updatedAt) : 'never'), plaidOn ? { label: 'Check now', kind: 'check' } : null); }
+        else add(a.id, a, fullName(a), 'warn', 'you last updated it ' + (a.updatedAt ? ago(a.updatedAt) : 'never'), { label: 'Update', kind: 'edit', id: a.id });
       }
     });
     return order.map(function(id){ return by[id]; }).sort(function(x, y){ return (x.lvl === 'bad' ? 0 : 1) - (y.lvl === 'bad' ? 0 : 1); });
@@ -302,52 +484,86 @@
     h += '<div class="top">';
     h += '<span class="pill title"><span class="pill-ic">' + I.money + '</span>Money</span>';
     if (al.length) h += '<button class="pill" data-jump="needs"><span class="pill-ic ' + (bad ? 'bad' : 'warn') + '">' + (bad ? I.stop : I.warn) + '</span>' + al.length + ' to look at</button>';
-    else h += '<span class="pill"><span class="pill-ic ok">' + I.check + '</span>All clear</span>';
-    h += '<button class="pill" data-jump="bills"><span class="pill-ic">' + I.cal + '</span>' + t.dueThisWeek + ' due this week</button>';
+    else if (data.accounts.length) h += '<span class="pill"><span class="pill-ic ok">' + I.check + '</span>All clear</span>';
+    if (data.accounts.length || data.bills.length) h += '<button class="pill" data-jump="bills"><span class="pill-ic">' + I.cal + '</span>' + t.dueThisWeek + ' due this week</button>';
     h += '<span class="spacer"></span>';
-    h += '<span class="small muted">' + (checking ? 'Checking your banks…' : 'Checked ' + ago(data.checkedAt || today().toISOString())) + '</span>';
-    h += '<button class="btn" id="check"' + (checking ? ' disabled' : '') + '>' + I.refresh + 'Check now</button>';
-    h += '<div style="position:relative"><button class="btn" id="add">' + I.plus + 'Add</button>';
-    if (menuOpen) h += '<div class="menu" role="menu"><button data-add="bank">Connect a bank<span>Sign in through Plaid in your browser</span></button><button data-add="hand">Add an account by hand<span>For accounts that can’t connect</span></button><button data-add="bill">Add a bill<span>Insurance, phone, anything with a due date</span></button></div>';
+    if (plaidOn || data.checkedAt) h += '<span class="small muted">' + (connecting ? 'Finish signing in to your bank in your browser…' : checking ? 'Checking your banks…' : data.checkedAt ? 'Checked ' + ago(data.checkedAt) : '') + '</span>';
+    if (plaidOn) h += '<button class="btn" id="check"' + (checking || connecting ? ' disabled' : '') + '>' + I.refresh + 'Check now</button>';
+    h += '<div style="position:relative"><button class="btn" id="add" aria-haspopup="menu" aria-expanded="' + menuOpen + '">' + I.plus + 'Add</button>';
+    if (menuOpen) {
+      h += '<div class="menu" role="menu">';
+      h += '<button role="menuitem" data-add="bank"' + (plaidOn ? '' : ' disabled') + '>Connect a bank<span>' + (plaidOn ? 'Sign in through Plaid in your browser' : 'Needs YouCoded on your computer') + '</span></button>';
+      h += '<button role="menuitem" data-add="hand">Add an account by hand<span>For accounts that can’t connect</span></button>';
+      h += '<button role="menuitem" data-add="bill">Add a bill<span>Insurance, phone, anything with a due date</span></button></div>';
+    }
     h += '</div></div>';
 
-    var hist = data.history || [], back30 = hist.length > 30 ? hist[hist.length - 31].v : null;
+    if (bankNote) h += '<div class="tile need warn note" role="alert"><span class="badge">' + I.warn + '</span><div class="txt"><div class="facts">' + esc(bankNote) + '</div></div><button class="btn sm" data-dismiss-note>Dismiss</button></div>';
+    if (form) h += formCard();
+
+    if (!data.accounts.length && !data.bills.length && !form) {
+      h += '<div class="card empty-card"><span class="badge big">' + I.bank + '</span><h2>Everything you have and owe, in one place</h2>';
+      h += '<p class="muted">Connect a bank to see live balances, card limits and due dates. Accounts that can’t connect can be added by hand, and YouCoded can update them when you tell it in chat.</p>';
+      h += '<div class="row-btns">' + (plaidOn ? '<button class="btn primary" data-add="bank">' + I.bank + 'Connect a bank</button>' : '') + '<button class="btn" data-add="hand">' + I.pen + 'Add an account by hand</button></div></div>';
+      document.getElementById('root').innerHTML = h; wire(); return;
+    }
+
+    var hist = data.history, back30 = null;
+    for (var hi = hist.length - 1; hi >= 0; hi--) { if (daysBetween(day(hist[hi].d), today()) >= 30) { back30 = hist[hi].v; break; } }
     h += '<div class="hero"><div class="card nw"><div class="nw-head"><div><div class="label">Net worth</div><div class="big num">' + money(t.net, true) + '</div>';
     if (back30 != null) { var ch = t.net - back30; h += '<span class="delta num">' + (ch >= 0 ? I.up : I.down) + (ch >= 0 ? 'Up ' : 'Down ') + money(Math.abs(ch), true) + ' in 30 days</span>'; }
     h += '</div><div class="ranges" role="group" aria-label="Chart range">';
-    [['3m','3M'],['6m','6M'],['1y','1Y'],['all','All']].forEach(function(r){ h += '<button class="rng' + (range === r[0] ? ' on' : '') + '" data-range="' + r[0] + '">' + r[1] + '</button>'; });
+    [['3m','3M'],['6m','6M'],['1y','1Y'],['all','All']].forEach(function(r){ h += '<button class="rng' + (range === r[0] ? ' on' : '') + '" data-range="' + r[0] + '" aria-pressed="' + (range === r[0]) + '">' + r[1] + '</button>'; });
     h += '</div></div><div class="chart" id="chart"></div><div class="small muted num" id="chart-sum"></div></div>';
     h += '<div class="stats">';
     h += stat(I.wallet, 'Cash available', money(t.cash, true), 'After ' + money(t.dueThisMonth, true) + ' still due this month');
-    h += stat(I.owe, 'Total owed', money(-t.owe, true), 'Cards, loans and Affirm');
+    h += stat(I.owe, 'Total owed', money(-t.owe, true), 'Cards and loans');
     h += stat(I.have, 'You have', money(t.have, true), 'Cash, savings and investments');
     h += '</div></div>';
 
     if (al.length) {
       h += '<div class="card" id="needs"><div class="card-head"><h2>Needs you</h2></div><div class="needs">';
       al.forEach(function(a){
-        var btn = !a.action ? outBtn(a.x, 'pay') : a.action.kind === 'edit'
-          ? '<button class="btn sm" data-edit="' + a.action.id + '">' + I.pen + a.action.label + '</button>'
-          : '<a class="btn sm" href="' + esc(siteOf(a.x)) + '" target="_blank" rel="noopener">' + esc(a.action.label) + '</a>';
+        var btn = !a.action ? outBtn(a.x, 'pay')
+          : a.action.kind === 'edit' ? '<button class="btn sm" data-edit="' + esc(a.action.id) + '">' + I.pen + a.action.label + '</button>'
+          : a.action.kind === 'reconnect' ? '<button class="btn sm" data-reconnect="' + esc(a.action.id) + '"' + (connecting ? ' disabled' : '') + '>' + a.action.label + '</button>'
+          : '<button class="btn sm" data-check' + (checking ? ' disabled' : '') + '>' + a.action.label + '</button>';
         h += '<div class="tile need ' + a.lvl + '">' + mark(a.x.institution) + '<div class="txt"><div class="who">' + esc(a.name) + '</div><div class="facts">' + a.facts.join(' · ') + '</div></div>' + btn + '</div>';
       });
       h += '</div></div>';
     }
 
     h += '<div class="cols"><div class="card"><div class="card-head"><h2>What you have</h2><span class="total num">' + money(t.have) + '</span></div>';
-    h += sec('checking', 'Checking') + sec('savings', 'Savings') + sec('investment', 'Investments');
+    var haveSecs = sec('checking', 'Checking') + sec('savings', 'Savings') + sec('investment', 'Investments');
+    h += haveSecs || '<div class="empty">Nothing here yet.</div>';
     h += '</div><div class="card"><div class="card-head"><h2>What you owe</h2><span class="total num">' + money(-t.owe) + '</span></div>';
-    h += sec('credit', 'Credit cards') + sec('loan', 'Loans');
+    var oweSecs = sec('credit', 'Credit cards') + sec('loan', 'Loans');
+    h += oweSecs || '<div class="empty">Nothing here yet.</div>';
     h += '</div></div>';
 
     var bills = allBills();
     h += '<div class="card" id="bills"><div class="card-head"><h2>Bills</h2><span class="total num">' + money(t.dueThisMonth) + ' <span class="small muted">still due this month</span></span></div><div class="bills">';
     bills.forEach(function(b){
       var s = billState(b);
-      h += '<div class="tile bill ' + s.cls + '">' + mark(b.institution) + '<div class="name">' + esc(b.name) + (b.sub ? '<small>' + esc(b.sub) + '</small>' : '') + '</div><span class="when">' + s.icon + esc(s.text) + '</span><span class="amt num">' + money(b.amount) + '</span>' + outBtn(b, 'pay') + '</div>';
+      var markPaid = b.mine && !b.paid ? '<button class="btn sm" data-paid="' + esc(b.id) + '">Mark paid</button>' : '';
+      h += '<div class="tile bill ' + s.cls + '">' + mark(b.institution) + '<div class="name">' + esc(b.name) + (b.sub ? '<small>' + esc(b.sub) + '</small>' : '') + '</div><span class="when">' + s.icon + esc(s.text) + '</span><span class="amt num">' + money(b.amount) + '</span>' + markPaid + outBtn(b, 'pay') + '</div>';
     });
     if (!bills.length) h += '<div class="empty">No bills yet. Add one, or connect a card or loan and its payments appear here.</div>';
     h += '</div></div>';
+
+    var bankIds = Object.keys(data.banks);
+    if (bankIds.length) {
+      h += '<div class="card"><div class="card-head"><h2>Connected banks</h2><span class="small muted">Through Plaid. Removing one stops it sharing.</span></div><div class="list">';
+      bankIds.forEach(function(id){
+        var b = data.banks[id];
+        h += '<div class="tile bank-row">' + mark(b.name) + '<div class="name">' + esc(b.name) + '</div><span class="small ' + (b.ok ? 'muted' : 'flag') + '">' + (b.ok ? 'Connected' : (b.error && b.error.reconnect ? 'Needs you to sign in again' : 'Not answering')) + '</span>';
+        h += removing === id
+          ? '<button class="btn sm" data-cancel-remove>Keep</button><button class="btn sm danger" data-remove-bank="' + esc(id) + '">Remove ' + esc(b.name) + '</button>'
+          : '<button class="btn sm" data-ask-remove="' + esc(id) + '">Remove</button>';
+        h += '</div>';
+      });
+      h += '</div></div>';
+    }
 
     document.getElementById('root').innerHTML = h;
     drawChart(); wire();
@@ -359,7 +575,7 @@
     var list = data.accounts.filter(function(a){ return a.kind === k; });
     if (!list.length) return '';
     var sum = list.reduce(function(s, a){ return s + a.balance; }, 0);
-    // Owed money reads as a negative in brackets (review 2, Destin), so the two columns add up to net worth at a glance.
+    // Owed money reads as a negative in brackets, so the two columns add up to net worth at a glance.
     var signed = (k === 'credit' || k === 'loan') ? -sum : sum;
     var h = '<div class="sec"><div class="sec-head"><span class="label">' + label + ' <span style="opacity:.6">' + list.length + '</span></span><span class="small num muted">' + money(signed) + '</span></div>';
     if (k === 'credit') h += '<div class="legend">The notch on each bar is ' + S.warnPct + '%. Past it a bar turns amber, which can lower your credit score; past ' + S.alertPct + '% it turns red.</div>';
@@ -374,26 +590,83 @@
     h += '<div class="name" title="' + esc(fullName(a)) + '">' + esc(a.name) + '</div><div class="bal num">' + money(isDebt(a) ? -a.balance : a.balance) + '</div>';
     var meta = esc(a.institution) + (a.apr ? ' · ' + a.apr + '% interest' : '') + (a.note ? ' · ' + esc(a.note) : '');
     h += '<div class="row2"><div class="meta" title="' + meta + '">' + meta + '</div><div class="side">';
-    if (stale) h += '<span class="flag">' + I.warn + (a.source === 'plaid' ? 'Out of date · ' : 'Needs update · ') + ago(a.updatedAt) + '</span>';
-    else h += '<span class="src" title="' + (a.source === 'plaid' ? 'Connected through Plaid' : 'Entered by you') + '">' + (a.source === 'plaid' ? I.link + 'Connected' : I.pen + 'Entered by you · ' + ago(a.updatedAt)) + '</span>';
-    if (a.source === 'manual' && editing !== a.id) h += '<button class="btn sm" data-edit="' + a.id + '" aria-label="Update ' + esc(fullName(a)) + '">Update</button>';
+    var when = a.updatedAt ? ago(a.updatedAt) : 'never';
+    if (stale) h += '<span class="flag">' + I.warn + (a.source === 'plaid' ? 'Out of date · ' : 'Needs update · ') + when + '</span>';
+    else h += '<span class="src" title="' + (a.source === 'plaid' ? 'Connected through Plaid' : 'Entered by you') + '">' + (a.source === 'plaid' ? I.link + 'Connected' : I.pen + 'Entered by you · ' + when) + '</span>';
+    if (a.source !== 'plaid' && editing !== a.id) h += '<button class="btn sm" data-edit="' + esc(a.id) + '" aria-label="Update ' + esc(fullName(a)) + '">Update</button>';
     h += outBtn(a, 'see this account');
     h += '</div></div>';
     if (a.kind === 'credit' && a.limit) {
       var p = a.balance / a.limit * 100, lvl = p >= S.alertPct ? 'bad' : p >= S.warnPct ? 'warn' : '';
-      h += '<div class="meter ' + lvl + '"><div class="bar" title="' + Math.round(p) + '% of the limit used"><i style="width:' + Math.min(100, p) + '%"></i><span class="tick" style="left:' + S.warnPct + '%"></span></div>';
+      h += '<div class="meter ' + lvl + '"><div class="bar" title="' + Math.round(p) + '% of the limit used"><i style="width:' + Math.max(0, Math.min(100, p)) + '%"></i><span class="tick" style="left:' + S.warnPct + '%"></span></div>';
       h += '<span class="pct num">' + (lvl ? (lvl === 'bad' ? I.stop : I.warn) : '') + Math.round(p) + '% used · ' + money(Math.max(0, a.limit - a.balance), true) + ' left</span></div>';
     }
     if (editing === a.id) {
-      h += '<div class="edit"><input class="num" id="edit-val" inputmode="decimal" value="' + a.balance.toFixed(2) + '" aria-label="New balance"><button class="btn" data-cancel>Cancel</button><button class="btn primary" data-save="' + a.id + '">Save</button>';
-      h += '<span class="hint">Or tell YouCoded in chat: “' + esc(a.institution) + ' is $…”</span></div>';
+      h += '<div class="edit"><input class="num" id="edit-val" inputmode="decimal" value="' + a.balance.toFixed(2) + '" aria-label="New balance"><button class="btn" data-cancel>Cancel</button><button class="btn primary" data-save="' + esc(a.id) + '">Save</button>';
+      h += '<button class="btn danger" data-delete="' + esc(a.id) + '">Delete</button><span class="hint">Or tell YouCoded in chat: “' + esc(a.institution) + ' is $…”</span></div>';
     }
     return h + '</div>';
   }
 
+  // The add-by-hand forms: an account, or a bill (insurance, phone).
+  function formCard(){
+    var f = form, h = '<div class="card form-card"><div class="card-head"><h2>' + (f.type === 'bill' ? 'Add a bill' : 'Add an account by hand') + '</h2></div><div class="grid">';
+    function field(id, label, value, attrs){ return '<label class="fld"><span>' + label + '</span><input id="f-' + id + '" value="' + esc(value || '') + '" ' + (attrs || '') + '></label>'; }
+    if (f.type === 'bill') {
+      h += field('name', 'What it is', '', 'placeholder="Car insurance"');
+      h += field('provider', 'Company', '', 'placeholder="Liberty Mutual" list="f-companies"');
+      h += field('amount', 'Amount', '', 'inputmode="decimal" placeholder="138.00"');
+      h += field('due', 'Next due date', isoDay(today()), 'type="date"');
+      h += '<label class="fld chk"><input id="f-monthly" type="checkbox" checked><span>Repeats every month</span></label>';
+    } else {
+      h += field('institution', 'Company', '', 'placeholder="Earnest" list="f-companies"');
+      h += field('name', 'Account name', '', 'placeholder="Student loan"');
+      h += '<label class="fld"><span>Kind</span><select id="f-kind"><option value="checking">Checking</option><option value="savings">Savings</option><option value="investment">Investments</option><option value="credit">Credit card</option><option value="loan" selected>Loan</option></select></label>';
+      h += field('balance', 'Balance (what you have, or what you owe)', '', 'inputmode="decimal" placeholder="22,410.00"');
+      h += field('limit', 'Credit limit (cards only)', '', 'inputmode="decimal"');
+      h += field('apr', 'Interest rate %', '', 'inputmode="decimal"');
+      h += field('payment', 'Monthly payment', '', 'inputmode="decimal"');
+      h += field('due', 'Next payment due', '', 'type="date"');
+    }
+    h += '</div><datalist id="f-companies">' + Object.keys(PROVIDERS).map(function(n){ return '<option value="' + esc(n) + '">'; }).join('') + '</datalist>';
+    if (f.problem) h += '<div class="small" role="alert" style="color:var(--warn)">' + esc(f.problem) + '</div>';
+    h += '<div class="row-btns end"><button class="btn" data-form-cancel>Cancel</button><button class="btn primary" data-form-save>Add</button></div></div>';
+    return h;
+  }
+  function saveForm(){
+    var v = function(id){ var el = document.getElementById('f-' + id); return el ? String(el.value).trim() : ''; };
+    var now = today().toISOString();
+    if (form.type === 'bill') {
+      var amount = num(v('amount'));
+      if (!v('name') || amount == null || !v('due')) { form.problem = 'Give the bill a name, an amount and a due date.'; render(); return; }
+      var provider = v('provider') || v('name');
+      data.bills.push({ id: 'b' + Date.now(), provider: provider, name: v('provider') ? provider : v('name'), sub: v('provider') ? v('name') : '', amount: amount, due: v('due'), monthly: !!(document.getElementById('f-monthly') || {}).checked });
+    } else {
+      var bal = num(v('balance'));
+      if (!v('institution') || bal == null) { form.problem = 'Give the account a company and a balance.'; render(); return; }
+      var a = { id: 'm' + Date.now(), source: 'manual', kind: v('kind') || 'loan', institution: v('institution'), name: v('name') || v('institution'), balance: Math.abs(bal), updatedAt: now };
+      if (a.kind === 'checking' || a.kind === 'savings' || a.kind === 'investment') a.balance = bal;
+      var lim = num(v('limit')); if (lim != null && a.kind === 'credit') a.limit = lim;
+      var apr = num(v('apr')); if (apr != null) a.apr = apr;
+      var pay = num(v('payment')); if (pay != null && v('due')) a.payment = { amount: pay, due: v('due'), monthly: true };
+      data.accounts.push(a);
+    }
+    form = null; snapshot(); save(); render();
+  }
+  // Paying a repeating bill moves it to next month; a one-off is marked paid.
+  function markPaid(id){
+    var t = isoDay(today());
+    var b = data.bills.filter(function(x){ return x.id === id; })[0];
+    var target = b || (data.accounts.filter(function(x){ return x.id === id; })[0] || {}).payment;
+    if (!target) return;
+    if (target.monthly !== false) { target.lastPaid = t; target.due = addMonth(target.due); delete target.paid; }
+    else target.paid = t;
+    save(); render();
+  }
+
   function drawChart(){
     var el = document.getElementById('chart'); if (!el) return;
-    var hist = data.history || [];
+    var hist = data.history;
     var n = { '3m': 92, '6m': 183, '1y': 365, 'all': 1e9 }[range];
     var cut = today() - n * DAY, pts = hist.filter(function(p){ return day(p.d) >= cut; });
     var sum = document.getElementById('chart-sum');
@@ -427,34 +700,50 @@
   }
 
   function save(){ if (window.youcoded) window.youcoded.save(data); }
+  function on(sel, fn){ document.querySelectorAll(sel).forEach(function(el){ el.onclick = function(e){ fn(el, e); }; }); }
   function wire(){
-    document.querySelectorAll('[data-range]').forEach(function(b){ b.onclick = function(){ range = b.dataset.range; render(); }; });
-    document.querySelectorAll('[data-jump]').forEach(function(b){ b.onclick = function(){ var t = document.getElementById(b.dataset.jump); if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' }); }; });
-    document.querySelectorAll('[data-edit]').forEach(function(b){ b.onclick = function(){ editing = b.dataset.edit; render(); var i = document.getElementById('edit-val'); if (i) { i.scrollIntoView({ block: 'center' }); i.focus(); i.select(); } }; });
-    var c = document.querySelector('[data-cancel]'); if (c) c.onclick = function(){ editing = null; render(); };
-    var sv = document.querySelector('[data-save]');
-    if (sv) sv.onclick = function(){
-      var v = parseFloat(String(document.getElementById('edit-val').value).replace(/[$,()\s]/g, ''));
-      if (isNaN(v)) return;
-      var a = data.accounts.filter(function(x){ return x.id === sv.dataset.save; })[0];
-      a.balance = v; a.updatedAt = today().toISOString(); editing = null; save(); render();
-    };
+    on('[data-range]', function(b){ range = b.dataset.range; render(); });
+    on('[data-jump]', function(b){ var t = document.getElementById(b.dataset.jump); if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+    on('[data-edit]', function(b){ editing = b.dataset.edit; render(); var i = document.getElementById('edit-val'); if (i) { i.scrollIntoView({ block: 'center' }); i.focus(); i.select(); } });
+    on('[data-cancel]', function(){ editing = null; render(); });
+    on('[data-save]', function(b){
+      var v = num(document.getElementById('edit-val').value);
+      if (v == null) return;
+      var a = data.accounts.filter(function(x){ return x.id === b.dataset.save; })[0];
+      a.balance = v; a.updatedAt = today().toISOString(); editing = null; snapshot(); save(); render();
+    });
+    on('[data-delete]', function(b){ data.accounts = data.accounts.filter(function(x){ return x.id !== b.dataset.delete; }); editing = null; snapshot(); save(); render(); });
+    on('[data-paid]', function(b){ markPaid(b.dataset.paid); });
+    on('[data-reconnect]', function(b){ reconnectBank(b.dataset.reconnect); });
+    on('[data-check]', function(){ syncBanks(); });
+    on('[data-ask-remove]', function(b){ removing = b.dataset.askRemove; render(); });
+    on('[data-cancel-remove]', function(){ removing = null; render(); });
+    on('[data-remove-bank]', function(b){ removeBank(b.dataset.removeBank); });
+    on('[data-dismiss-note]', function(){ bankNote = null; render(); });
+    on('[data-add]', function(b, e){
+      e.stopPropagation(); menuOpen = false;
+      var what = b.dataset.add;
+      if (what === 'bank') { connectBank(); return; }
+      form = { type: what === 'bill' ? 'bill' : 'account' }; render();
+      var first = document.querySelector('.form-card input'); if (first) first.focus();
+    });
+    on('[data-form-cancel]', function(){ form = null; render(); });
+    on('[data-form-save]', function(){ saveForm(); });
     var ev = document.getElementById('edit-val');
-    if (ev) ev.onkeydown = function(e){ if (e.key === 'Enter') document.querySelector('[data-save]').click(); if (e.key === 'Escape') { editing = null; render(); } };
-    document.getElementById('add').onclick = function(e){ e.stopPropagation(); menuOpen = !menuOpen; render(); };
-    document.getElementById('check').onclick = function(){
-      // Mockup: pretend to ask every connected bank for a fresh balance.
-      checking = true; render();
-      setTimeout(function(){ checking = false; data.checkedAt = today().toISOString(); save(); render(); }, 900);
-    };
+    if (ev) ev.onkeydown = function(e){ if (e.key === 'Enter') document.querySelector('[data-save]').click(); if (e.key === 'Escape') { e.preventDefault(); editing = null; render(); } };
+    var add = document.getElementById('add'); if (add) add.onclick = function(e){ e.stopPropagation(); menuOpen = !menuOpen; render(); };
+    var chk = document.getElementById('check'); if (chk) chk.onclick = function(){ syncBanks(); };
   }
   document.addEventListener('click', function(){ if (menuOpen) { menuOpen = false; render(); } });
   window.addEventListener('resize', drawChart);
   if (window.youcoded) {
-    window.youcoded.onData(function(d){ data = d || data; render(); });
-    if (window.youcoded.onRefresh) window.youcoded.onRefresh(function(){ document.getElementById('check').click(); });
+    // A change from elsewhere (YouCoded updating a balance from chat, another window) redraws in place.
+    window.youcoded.onData(function(d){ data = normalise(d); render(); });
+    if (window.youcoded.onRefresh) window.youcoded.onRefresh(function(){ syncBanks(); });
   }
   render();
+  // Live balances every time the page opens.
+  if (plaidOn) syncBanks();
 })();
 </script>
 </body></html>
