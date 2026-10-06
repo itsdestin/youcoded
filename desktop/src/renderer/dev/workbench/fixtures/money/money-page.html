@@ -380,6 +380,10 @@
     var old = data.accounts.filter(function(a){ return a.source === 'plaid'; });
     var now = today().toISOString();
     var banks = {};
+    // The same account reached through two connections to one bank (signing in to it twice): the working one wins,
+    // so a dead connection's last numbers are never counted on top of the live ones.
+    var live = {};
+    items.forEach(function(it){ if (it.ok) it.accounts.forEach(function(p){ live[(it.institution || {}).name + '|' + (p.mask || p.name)] = true; }); });
     items.forEach(function(it){
       var i = it.institution || {};
       data.institutions[i.name] = { logo: i.logo, color: i.color, url: i.url };
@@ -387,7 +391,12 @@
       if (!it.ok) {
         // A bank that needs signing in again keeps its last numbers, which go
         // stale and say so, rather than vanishing from the totals.
-        old.forEach(function(a){ if (a.itemId === it.itemId) kept.push(a); });
+        old.forEach(function(a){
+          if (a.itemId !== it.itemId) return;
+          var mask = (a.name.match(/(\d{4})\s*$/) || [])[1];
+          if (live[a.institution + '|' + (mask || a.name)]) return;
+          kept.push(a);
+        });
         return;
       }
       it.accounts.forEach(function(p){
@@ -532,7 +541,9 @@
       if (b.ok || !b.error) return;
       var mine = data.accounts.filter(function(a){ return a.itemId === itemId; });
       var action = b.error.reconnect ? { label: 'Reconnect ' + b.name, kind: 'reconnect', id: itemId } : null;
-      var fact = b.error.reconnect ? 'needs you to sign in again' : esc(b.error.message);
+      var fact = b.error.reconnect ? 'needs you to sign in again'
+        : b.error.code === 'NO_ACCOUNTS' ? 'this connection no longer reaches any accounts (often because the bank was connected again). Remove it below.'
+        : esc(b.error.message);
       if (mine.length) mine.forEach(function(a){ add(a.id, a, fullName(a), 'warn', fact, action); });
       else add('bank:' + itemId, { institution: b.name }, b.name, 'warn', fact, action);
     });

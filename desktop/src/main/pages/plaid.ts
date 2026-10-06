@@ -60,7 +60,9 @@ class PlaidError extends Error {
 }
 
 /** Errors that mean "sign in to this bank again" rather than "something broke". */
-const RECONNECT_CODES = new Set(['ITEM_LOGIN_REQUIRED', 'PENDING_EXPIRATION', 'PENDING_DISCONNECT', 'ACCESS_NOT_GRANTED', 'NO_ACCOUNTS']);
+// NO_ACCOUNTS is not one of them: it is what a connection says after the bank moved its accounts to a newer one
+// (signing in to the same bank twice). Reconnecting would only repeat that, so the page offers Remove instead.
+const RECONNECT_CODES = new Set(['ITEM_LOGIN_REQUIRED', 'PENDING_EXPIRATION', 'PENDING_DISCONNECT', 'ACCESS_NOT_GRANTED']);
 
 interface ItemRecord {
   itemId: string;

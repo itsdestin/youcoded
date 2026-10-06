@@ -115,6 +115,20 @@ describe('the Money page', () => {
     expect(p.text()).toContain('Wells Fargo AUTO LOAN ...8709');
   });
 
+  it('a bank connected twice is counted once: the dead connection\'s copies give way to the working one', async () => {
+    const prior = { demoToday: TODAY, banks: { old: { name: 'Capital One', ok: true } }, accounts: [
+      { id: 'plaid:o1', itemId: 'old', source: 'plaid', kind: 'credit', institution: 'Capital One', name: 'Quicksilver ··3863', balance: 100, updatedAt: `${TODAY}T10:00:00Z` },
+    ] };
+    const answer = { ok: true, op: 'accounts', items: [
+      { itemId: 'old', ok: false, institution: { id: '', name: 'Capital One' }, accounts: [], error: { code: 'NO_ACCOUNTS', message: 'x', reconnect: false } },
+      { itemId: 'new', ok: true, institution: { id: '', name: 'Capital One' }, accounts: [{ id: 'n1', name: 'Quicksilver', mask: '3863', type: 'credit', kind: 'credit', balance: 120 }] },
+    ] };
+    const p = open(prior, async () => answer);
+    await p.settle();
+    expect(p.last().accounts.map((a: any) => a.id)).toEqual(['plaid:n1']);
+    expect(p.text()).toContain('no longer reaches any accounts');
+  });
+
   it('asks the app to reconnect a bank, then checks again', async () => {
     const asked: any[] = [];
     const p = open({ demoToday: TODAY }, async (req) => { asked.push(req); return req.op === 'reconnect' ? { ok: true, op: 'reconnect', items: [] } : bankAnswer; });
