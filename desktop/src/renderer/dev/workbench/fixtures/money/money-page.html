@@ -70,8 +70,8 @@
   .src svg { width: 12px; height: 12px; }
   .stale { color: var(--warn); display: inline-flex; align-items: center; gap: 4px; }
   .stale svg { width: 12px; height: 12px; }
-  .icon-btn { width: 26px; height: 26px; padding: 0; }
-  .icon-btn svg { width: 14px; height: 14px; }
+  .legend { padding: 0 16px 10px; }
+  .chart-sum { margin-top: 2px; }
 
   /* Card limit meter */
   .meter { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; margin-top: 4px; }
@@ -182,7 +182,7 @@
   // Bills = every account's next payment + standalone bills (insurance, phone).
   function allBills(){
     var out = [];
-    data.accounts.forEach(function(a){ if (a.payment) out.push({ id: a.id, name: fullName(a) + (a.kind === 'credit' ? ' · minimum' : ''), amount: a.payment.amount, due: day(a.payment.due), paid: a.payment.paid ? day(a.payment.paid) : null }); });
+    data.accounts.forEach(function(a){ if (a.payment) out.push({ id: a.id, name: fullName(a) + (a.kind === 'credit' ? ' · min. payment' : ''), amount: a.payment.amount, due: day(a.payment.due), paid: a.payment.paid ? day(a.payment.paid) : null }); });
     (data.bills || []).forEach(function(b){ out.push({ id: b.id, name: b.name, amount: b.amount, due: day(b.due), paid: b.paid ? day(b.paid) : null }); });
     return out.sort(function(x, y){ return (x.paid ? 1 : 0) - (y.paid ? 1 : 0) || x.due - y.due; });
   }
@@ -192,28 +192,41 @@
     var d = daysBetween(b.due, t);
     if (d > 0) {
       var left = S.reportDay - d;
-      if (left <= 0) return { cls: 'bill--late bill--report', icon: ICON.stop, text: d + ' days late — may be on your credit report', alert: 'bad' };
-      if (left <= S.reportWarnDays) return { cls: 'bill--late bill--report', icon: ICON.stop, text: d + ' days late — reported to credit bureaus in ' + left + (left === 1 ? ' day' : ' days'), alert: 'bad' };
+      if (left <= 0) return { cls: 'bill--late bill--report', icon: ICON.stop, text: d + ' days late — may already be on your credit report', alert: 'bad' };
+      if (left <= S.reportWarnDays) return { cls: 'bill--late bill--report', icon: ICON.stop, text: d + ' days late — shows on your credit report in ' + left + (left === 1 ? ' day' : ' days'), alert: 'bad' };
       return { cls: 'bill--late', icon: ICON.warn, text: d + (d === 1 ? ' day late' : ' days late'), alert: 'warn' };
     }
     if (d === 0) return { cls: '', icon: '', text: 'Due today' };
-    return { cls: '', icon: '', text: (-d === 1 ? 'Due tomorrow' : 'Due ' + short(b.due) + ' · ' + (-d) + ' days') };
+    return { cls: '', icon: '', text: (-d === 1 ? 'Due tomorrow' : 'Due in ' + (-d) + ' days · ' + short(b.due)) };
   }
 
+  // One row per account (or bill), however many things are wrong with it — the
+  // UX tester read three banners about one card as three problems (review 1, U3).
   function alerts(){
-    var out = [];
+    var by = {}, order = [];
+    function add(id, name, lvl, fact, action){
+      if (!by[id]) { by[id] = { name: name, lvl: lvl, facts: [], action: null }; order.push(id); }
+      var r = by[id]; r.facts.push(fact);
+      if (lvl === 'bad') r.lvl = 'bad';
+      if (action) r.action = action;
+    }
     allBills().forEach(function(b){
       var s = billState(b);
-      if (s.alert) out.push({ lvl: s.alert, text: '<b>' + esc(b.name) + '</b> · ' + money(b.amount) + ' · ' + s.text });
+      if (s.alert) add(b.id, b.name.replace(/ · min\. payment$/, ''), s.alert, money(b.amount) + ' payment ' + s.text);
     });
     data.accounts.forEach(function(a){
       if (a.kind === 'credit' && a.limit) {
         var p = a.balance / a.limit * 100;
-        if (p >= S.alertPct) out.push({ lvl: 'bad', text: '<b>' + esc(fullName(a)) + '</b> is at ' + Math.round(p) + '% of its ' + money(a.limit, 'whole') + ' limit' });
+        if (p >= S.alertPct) add(a.id, fullName(a), 'bad', Math.round(p) + '% of its ' + money(a.limit, 'whole') + ' limit used');
       }
-      if (isStale(a) && a.source === 'plaid') out.push({ lvl: 'warn', text: '<b>' + esc(a.institution) + '</b> hasn’t updated in ' + Math.floor((today() - new Date(a.updatedAt)) / DAY) + ' days — sign in to the bank again to reconnect', action: 'reconnect' });
+      if (isStale(a)) {
+        // Same ago() as the account row, so the banner and the row never disagree by a day.
+        if (a.source === 'plaid') add(a.id, fullName(a), 'warn', 'last updated ' + ago(a.updatedAt), { label: 'Reconnect ' + a.institution, kind: 'reconnect' });
+        else add(a.id, fullName(a), 'warn', 'you last updated it ' + ago(a.updatedAt), { label: 'Update', kind: 'edit', id: a.id });
+      }
     });
-    return out.sort(function(x, y){ return (x.lvl === 'bad' ? 0 : 1) - (y.lvl === 'bad' ? 0 : 1); });
+    return order.map(function(id){ return by[id]; })
+      .sort(function(x, y){ return (x.lvl === 'bad' ? 0 : 1) - (y.lvl === 'bad' ? 0 : 1); });
   }
 
   function render(){
@@ -231,7 +244,10 @@
     if (al.length) {
       h += '<div class="alerts">';
       al.forEach(function(a){
-        h += '<div class="alert alert--' + a.lvl + '">' + (a.lvl === 'bad' ? ICON.stop : ICON.warn) + '<span class="msg">' + a.text + '</span>' + (a.action ? '<button class="yc-button yc-button--sm">Reconnect</button>' : '') + '</div>';
+        var btn = !a.action ? '' : a.action.kind === 'edit'
+          ? '<button class="yc-button yc-button--sm" data-edit="' + a.action.id + '">' + a.action.label + '</button>'
+          : '<button class="yc-button yc-button--sm">' + esc(a.action.label) + '</button>';
+        h += '<div class="alert alert--' + a.lvl + '">' + (a.lvl === 'bad' ? ICON.stop : ICON.warn) + '<span class="msg"><b>' + esc(a.name) + '</b> · ' + a.facts.join(' · ') + '</span>' + btn + '</div>';
       });
       h += '</div>';
     }
@@ -251,7 +267,7 @@
     // Chart
     h += '<div class="yc-card chart-card"><div class="yc-row yc-row--between"><div class="yc-eyebrow">Net worth over time</div><div class="yc-row ranges">';
     [['3m','3M'],['6m','6M'],['1y','1Y'],['all','All']].forEach(function(r){ h += '<button class="yc-button yc-button--sm' + (range === r[0] ? ' on' : '') + '" data-range="' + r[0] + '">' + r[1] + '</button>'; });
-    h += '</div></div><div class="chart" id="chart"></div></div>';
+    h += '</div></div><div class="chart-sum yc-small yc-muted num" id="chart-sum"></div><div class="chart" id="chart"></div></div>';
 
     // Groups: two columns — what you have, what you owe — then bills.
     h += '<div class="cols"><div class="yc-stack">';
@@ -272,6 +288,7 @@
     var label = KINDS.filter(function(x){ return x.k === k; })[0].label;
     var sum = list.reduce(function(s, a){ return s + a.balance; }, 0);
     var h = '<div class="yc-card group"><div class="group-head"><span class="yc-eyebrow">' + label + ' ' + '<span class="yc-faint">' + list.length + '</span></span><span class="total num">' + (k === 'credit' || k === 'loan' ? 'Owe ' : '') + money(sum) + '</span></div>';
+    if (k === 'credit') h += '<div class="legend yc-caption">The line on each bar marks ' + S.warnPct + '%. Above it a bar turns amber, which can lower your credit score; above ' + S.alertPct + '% it turns red.</div>';
     list.forEach(function(a){ h += row(a); });
     return h + '</div>';
   }
@@ -284,14 +301,14 @@
     if (a.kind === 'loan' && a.apr) h += ' · ' + a.apr + '% interest';
     if (a.note) h += ' · ' + esc(a.note);
     h += '</div><div class="side">';
-    if (stale) h += '<span class="stale">' + ICON.warn + (a.source === 'plaid' ? 'Out of date · ' + ago(a.updatedAt) : 'Update me · ' + ago(a.updatedAt)) + '</span>';
-    else h += '<span class="src" title="' + (a.source === 'plaid' ? 'Connected through Plaid' : 'Typed in') + '">' + (a.source === 'plaid' ? ICON.link + 'Connected' : ICON.hand + 'Typed in · ' + ago(a.updatedAt)) + '</span>';
-    if (a.source === 'manual') h += '<button class="yc-button yc-button--ghost icon-btn" data-edit="' + a.id + '" aria-label="Update ' + esc(a.name) + '" title="Update the balance">' + ICON.hand + '</button>';
+    if (stale) h += '<span class="stale">' + ICON.warn + (a.source === 'plaid' ? 'Out of date · ' + ago(a.updatedAt) : 'Needs update · ' + ago(a.updatedAt)) + '</span>';
+    else h += '<span class="src" title="' + (a.source === 'plaid' ? 'Connected through Plaid' : 'Entered by you') + '">' + (a.source === 'plaid' ? ICON.link + 'Connected' : ICON.hand + 'Entered by you · ' + ago(a.updatedAt)) + '</span>';
+    if (a.source === 'manual' && editing !== a.id) h += '<button class="yc-button yc-button--sm" data-edit="' + a.id + '" aria-label="Update ' + esc(fullName(a)) + '">Update</button>';
     h += '</div>';
     if (a.kind === 'credit' && a.limit) {
       var p = a.balance / a.limit * 100, lvl = p >= S.alertPct ? 'bad' : p >= S.warnPct ? 'warn' : '';
       h += '<div class="meter' + (lvl ? ' meter--' + lvl : '') + '"><div class="bar" title="' + Math.round(p) + '% of limit"><i style="width:' + Math.min(100, p) + '%"></i><span class="mark" style="left:' + S.warnPct + '%"></span></div>';
-      h += '<span class="pct num">' + (lvl ? (lvl === 'bad' ? ICON.stop : ICON.warn) : '') + Math.round(p) + '% of ' + money(a.limit, 'whole') + '</span></div>';
+      h += '<span class="pct num">' + (lvl ? (lvl === 'bad' ? ICON.stop : ICON.warn) : '') + Math.round(p) + '% used · ' + money(Math.max(0, a.limit - a.balance), 'whole') + ' left</span></div>';
     }
     if (editing === a.id) {
       h += '<div class="edit"><input class="yc-input num" id="edit-val" inputmode="decimal" value="' + a.balance.toFixed(2) + '" aria-label="New balance"><span class="hint">You can also tell YouCoded in chat: “' + esc(a.institution) + ' is $…”</span>';
@@ -302,8 +319,7 @@
 
   function billsCard(){
     var bills = allBills(), t = today();
-    var next14 = bills.filter(function(b){ return !b.paid && daysBetween(t, b.due) <= 14; }).reduce(function(s, b){ return s + b.amount; }, 0);
-    var h = '<div class="yc-card group"><div class="group-head"><span class="yc-eyebrow">Bills <span class="yc-faint">' + bills.length + '</span></span><span class="total num">' + money(next14) + ' <span class="yc-caption">due in the next 14 days</span></span></div>';
+    var h = '<div class="yc-card group"><div class="group-head"><span class="yc-eyebrow">Bills <span class="yc-faint">' + bills.length + '</span></span><span class="total num">' + money(totals().dueThisMonth) + ' <span class="yc-caption">still due this month</span></span></div>';
     bills.forEach(function(b){
       var s = billState(b);
       h += '<div class="bill ' + s.cls + '"><div class="name">' + esc(b.name) + '</div><div class="when">' + s.icon + esc(s.text) + '</div><div class="amt num">' + money(b.amount) + '</div></div>';
@@ -320,6 +336,8 @@
     if (pts.length < 2) { el.innerHTML = '<div class="yc-empty">The chart fills in as days go by — one point each day the page checks your balances.</div>'; return; }
     var W = el.clientWidth || 600, H = el.clientHeight || 180, L = 64, R = 8, T = 8, B = 22;
     var vs = pts.map(function(p){ return p.v; });
+    var diff = vs[vs.length - 1] - vs[0], sum = document.getElementById('chart-sum');
+    if (sum) sum.textContent = (diff >= 0 ? 'Up ' : 'Down ') + money(Math.abs(diff), 'whole') + ' since ' + short(day(pts[0].d));
     var lo = Math.min.apply(null, vs), hi = Math.max.apply(null, vs);
     var pad = (hi - lo) * 0.12 || 1000; lo -= pad; hi += pad;
     var x = function(i){ return L + (W - L - R) * i / (pts.length - 1); };
@@ -350,7 +368,7 @@
 
   function wire(){
     document.querySelectorAll('[data-range]').forEach(function(b){ b.onclick = function(){ range = b.dataset.range; render(); }; });
-    document.querySelectorAll('[data-edit]').forEach(function(b){ b.onclick = function(){ editing = b.dataset.edit; render(); var i = document.getElementById('edit-val'); if (i) { i.focus(); i.select(); } }; });
+    document.querySelectorAll('[data-edit]').forEach(function(b){ b.onclick = function(){ editing = b.dataset.edit; render(); var i = document.getElementById('edit-val'); if (i) { i.scrollIntoView({ block: 'center' }); i.focus(); i.select(); } }; });
     var c = document.querySelector('[data-cancel]'); if (c) c.onclick = function(){ editing = null; render(); };
     var sv = document.querySelector('[data-save]');
     if (sv) sv.onclick = function(){
