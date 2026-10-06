@@ -15,7 +15,7 @@
     "- balance: always positive. For credit cards and loans it is the amount owed; the page shows owed money in brackets itself.",
     "- updatedAt: set it to the current date-time whenever you change a balance, or the page will say it needs updating.",
     "- limit: a credit card's credit limit. apr: the interest rate as a percent number (5.2). note: a few words (\"4 payments left\").",
-    "- payment: the next payment on a card or loan, { amount, due, monthly: true }.",
+    "- payment: the next payment on a card or loan, { amount, due, monthly: true }. On an account with source \"plaid\" the bank shares no payment for some loans (auto loans): set payment with \"manual\": true and it is kept through refreshes; apr may be set too.",
     "- Accounts with source \"plaid\" are refreshed from the bank every time the page opens: do not change their balance, it would be overwritten. Adding a limit the bank does not share is fine.",
     "bills: a list of bills that are not an account (insurance, phone, subscriptions). Each is { id, provider, name, sub, amount, due, monthly }.",
     "- id: \"b\" followed by digits. provider and name: the company (\"Liberty Mutual\"). sub: what it is (\"car insurance\"). due: the next due date. monthly: true when it repeats every month.",

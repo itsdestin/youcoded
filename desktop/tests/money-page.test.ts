@@ -95,6 +95,26 @@ describe('the Money page', () => {
     expect(p.last().banks).toEqual({});
   });
 
+  it('a payment typed onto a bank-connected auto loan survives every refresh, and its name is not doubled', async () => {
+    const answer = { ok: true, op: 'accounts', items: [{ itemId: 'wf', ok: true, institution: { id: '', name: 'Wells Fargo' }, accounts: [
+      { id: 'auto', name: 'AUTO LOAN ...8709', mask: '8709', type: 'loan', subtype: 'auto', kind: 'loan', balance: 14876 },
+    ] }] };
+    const p = open({ demoToday: TODAY }, async () => answer);
+    await p.settle();
+    expect(p.last().accounts[0].name).toBe('AUTO LOAN ...8709');
+    p.click('[data-open="plaid:auto"]');
+    expect(p.text()).toContain('No due date yet');
+    p.click('[data-pay="plaid:auto"]');
+    (p.d.getElementById('pay-amt') as HTMLInputElement).value = '412';
+    (p.d.getElementById('pay-due') as HTMLInputElement).value = '2026-10-18';
+    (p.d.getElementById('pay-apr') as HTMLInputElement).value = '6.49';
+    p.click('[data-pay-save="plaid:auto"]');
+    p.click('#check');
+    await p.settle();
+    expect(p.last().accounts[0]).toMatchObject({ apr: 6.49, payment: { amount: 412, due: '2026-10-18', manual: true } });
+    expect(p.text()).toContain('Wells Fargo AUTO LOAN ...8709');
+  });
+
   it('asks the app to reconnect a bank, then checks again', async () => {
     const asked: any[] = [];
     const p = open({ demoToday: TODAY }, async (req) => { asked.push(req); return req.op === 'reconnect' ? { ok: true, op: 'reconnect', items: [] } : bankAnswer; });

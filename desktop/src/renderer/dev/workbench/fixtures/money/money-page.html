@@ -334,7 +334,7 @@
   }
   var S = Object.assign({ staleDays: 3, warnPct: 30, alertPct: 80, reportDay: 30, reportWarnDays: 7 }, data.settings);
   var plaidOn = !!(window.youcoded && typeof window.youcoded.plaid === 'function');
-  var openId = null, billEdit = null, limitEdit = null;
+  var openId = null, billEdit = null, limitEdit = null, payEdit = null;
   var range = '6m', editing = null, menuOpen = false, checking = false, connecting = false, form = null, bankNote = null, removing = null;
 
   // A pinned "today" when the data names one keeps the workbench's dated numbers stable in pictures.
@@ -391,18 +391,22 @@
         return;
       }
       it.accounts.forEach(function(p){
-        if (p.kind === 'other') return;
+        // Plaid files some holdings (crypto, for one) under "other": they are things you own, so they count with
+        // investments rather than vanishing from the page.
         var prev = old.filter(function(a){ return a.id === 'plaid:' + p.id; })[0] || {};
         kept.push({
-          id: 'plaid:' + p.id, itemId: it.itemId, source: 'plaid', kind: p.kind, institution: i.name,
-          name: p.name + (p.mask ? ' ··' + p.mask : ''),
+          id: 'plaid:' + p.id, itemId: it.itemId, source: 'plaid', kind: p.kind === 'other' ? 'investment' : p.kind, institution: i.name,
+          // Some banks already end the name with the last four ("AUTO LOAN ...8709"); add them only when missing.
+          name: p.name + (p.mask && p.name.indexOf(p.mask) < 0 ? ' ··' + p.mask : ''),
           balance: p.balance,
           available: p.available,
           hist: prev.hist,
           // A limit typed by hand survives when the bank shares none.
           limit: p.limit != null ? p.limit : prev.limit,
           apr: p.liability && p.liability.apr != null ? Math.round(p.liability.apr * 100) / 100 : prev.apr,
-          payment: paymentOf(p),
+          // Plaid shares due dates for cards, student loans and mortgages only; an auto loan's payment details are
+          // entered by hand (or by chat) and must survive every refresh.
+          payment: paymentOf(p) || (prev.payment && prev.payment.manual ? prev.payment : null),
           updatedAt: now
         });
       });
@@ -485,7 +489,7 @@
 
   function allBills(){
     var out = [];
-    data.accounts.forEach(function(a){ if (a.payment && a.payment.amount > 0) out.push({ id: a.id, account: a, institution: a.institution, site: a.site, name: fullName(a), sub: a.kind === 'credit' ? 'min. payment' : '', amount: a.payment.amount, due: day(a.payment.due), paid: a.payment.paid ? day(a.payment.paid) : null, overdue: a.payment.overdue, mine: a.source !== 'plaid' }); });
+    data.accounts.forEach(function(a){ if (a.payment && a.payment.amount > 0) out.push({ id: a.id, account: a, institution: a.institution, site: a.site, name: fullName(a), sub: a.kind === 'credit' ? 'min. payment' : '', amount: a.payment.amount, due: day(a.payment.due), paid: a.payment.paid ? day(a.payment.paid) : null, overdue: a.payment.overdue, mine: a.source !== 'plaid' || !!a.payment.manual }); });
     data.bills.forEach(function(b){ out.push({ id: b.id, bill: b, institution: b.provider, site: b.site, name: b.name, sub: b.sub || '', amount: b.amount, due: day(b.due), paid: b.paid ? day(b.paid) : null, mine: true }); });
     return out.sort(function(x, y){ return (x.paid ? 1 : 0) - (y.paid ? 1 : 0) || x.due - y.due; });
   }
@@ -739,6 +743,7 @@
           if (p1 && !p1.never && p0.months - p1.months > 0) ins += insight(monthsText(p0.months - p1.months) + ' sooner', 'with $50 more a month' + (p0.interest - p1.interest > 1 ? ', saving about ' + money(p0.interest - p1.interest, true) + ' in interest' : ''), 'up');
         }
       } else if (a.apr && a.balance > 0) ins += insight('≈' + money(a.balance * a.apr / 1200), 'of interest a month at ' + a.apr + '%. Add the monthly payment to see when it is paid off.');
+      else if (a.balance > 0) ins += insight('No due date yet', a.source === 'plaid' ? 'your bank does not share payment details for this kind of loan. Add the payment and due date below, once.' : 'add the monthly payment and due date below to track it and see when it is paid off.');
     } else if ((a.kind === 'checking' || a.kind === 'savings') && t.dueThisMonth > 0) {
       ins += insight((a.balance / t.dueThisMonth).toFixed(1) + '×', 'what is still due this month (' + money(t.dueThisMonth, true) + ')');
     }
@@ -747,11 +752,19 @@
     ins += change30(a.hist, debt);
     h += '<div class="ins-grid">' + ins + '</div>' + spark(a.hist);
     h += '<div class="acts"><span class="hint">' + (a.source === 'plaid' ? 'From ' + esc(a.institution) + ' through Plaid' : 'Entered by you') + ' · updated ' + (a.updatedAt ? ago(a.updatedAt) : 'never') + (a.available != null && !debt ? ' · ' + money(a.available) + ' available' : '') + '</span>';
-    if (limitEdit === a.id) {
+    if (payEdit === a.id) {
+      var pp = a.payment || {};
+      h += '<input id="pay-amt" class="num" inputmode="decimal" placeholder="Monthly payment" value="' + (pp.amount || '') + '" aria-label="Monthly payment">';
+      h += '<input id="pay-due" type="date" value="' + esc(pp.due || '') + '" aria-label="Next due date">';
+      h += '<input id="pay-apr" class="num" inputmode="decimal" placeholder="Interest %" value="' + (a.apr || '') + '" aria-label="Interest rate">';
+      h += '<button class="btn sm" data-pay-cancel>Cancel</button><button class="btn sm primary" data-pay-save="' + esc(a.id) + '">Save</button>';
+    } else if (limitEdit === a.id) {
       h += '<input id="limit-val" class="num" inputmode="decimal" value="' + (a.limit || '') + '" aria-label="Credit limit"><button class="btn sm" data-limit-cancel>Cancel</button><button class="btn sm primary" data-limit-save="' + esc(a.id) + '">Save limit</button>';
     } else {
       if (a.source !== 'plaid' && editing !== a.id) h += '<button class="btn sm" data-edit="' + esc(a.id) + '">' + I.pen + 'Update balance</button>';
       if (a.kind === 'credit') h += '<button class="btn sm" data-limit="' + esc(a.id) + '">' + (a.limit ? 'Change limit' : 'Set limit') + '</button>';
+      // Where the bank shares no payment (auto loans, any typed-in loan), or it was entered by hand: add or change it.
+      if ((a.kind === 'loan' || a.kind === 'credit') && (!a.payment || a.payment.manual || a.source !== 'plaid')) h += '<button class="btn sm" data-pay="' + esc(a.id) + '">' + (a.payment ? 'Change payment' : 'Add payment & due date') + '</button>';
       var u = siteOf(a); if (u) h += '<a class="btn sm" href="' + esc(u) + '" target="_blank" rel="noopener">' + I.out + 'Open ' + esc(a.institution) + '</a>';
       if (a.source === 'plaid') h += '<button class="btn sm" data-jump="banks">Manage bank</button>';
     }
@@ -876,7 +889,7 @@
 
   function save(){ if (window.youcoded) window.youcoded.save(data); }
   function on(sel, fn){ document.querySelectorAll(sel).forEach(function(el){ el.onclick = function(e){ fn(el, e); }; }); }
-  function toggle(id){ openId = openId === id ? null : id; billEdit = null; limitEdit = null; render(); }
+  function toggle(id){ openId = openId === id ? null : id; billEdit = null; limitEdit = null; payEdit = null; render(); }
   function focusAccount(id){
     openId = id; render();
     var el = document.querySelector('[data-open="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]');
@@ -894,6 +907,17 @@
     on('[data-focus]', function(el, e){ if (e.target.closest('button, a')) return; focusAccount(el.dataset.focus); });
     on('[data-limit]', function(b){ limitEdit = b.dataset.limit; render(); var i = document.getElementById('limit-val'); if (i) { i.focus(); i.select(); } });
     on('[data-limit-cancel]', function(){ limitEdit = null; render(); });
+    on('[data-pay]', function(b){ payEdit = b.dataset.pay; render(); var i = document.getElementById('pay-amt'); if (i) i.focus(); });
+    on('[data-pay-cancel]', function(){ payEdit = null; render(); });
+    on('[data-pay-save]', function(b){
+      var a = data.accounts.filter(function(x){ return x.id === b.dataset.paySave; })[0];
+      var amt = num(document.getElementById('pay-amt').value), due = document.getElementById('pay-due').value, apr = num(document.getElementById('pay-apr').value);
+      if (a) {
+        if (amt != null && amt > 0 && due) a.payment = { amount: amt, due: due, monthly: true, manual: a.source === 'plaid' };
+        if (apr != null) a.apr = apr;
+      }
+      payEdit = null; save(); render();
+    });
     on('[data-limit-save]', function(b){
       var v = num(document.getElementById('limit-val').value);
       var a = data.accounts.filter(function(x){ return x.id === b.dataset.limitSave; })[0];

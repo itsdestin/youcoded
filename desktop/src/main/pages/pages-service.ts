@@ -445,7 +445,11 @@ class PagesService {
       if (req.op === 'accounts') this.noteFreshness(id, result.ok && result.items.every((i) => i.ok));
       // Plaid's code only (never a key or message), so a failed connection can be diagnosed from the log.
       if (!result.ok && result.code !== 'CANCELLED') log('WARN', 'Pages', 'Plaid request failed', { op: req.op, code: result.code, env: c.environment });
-      if (result.ok && req.op === 'accounts') for (const it of result.items) if (!it.ok) log('WARN', 'Pages', 'Plaid bank not answering', { code: it.error?.code, bank: it.institution.name });
+      if (result.ok && req.op === 'accounts') for (const it of result.items) {
+        if (!it.ok) log('WARN', 'Pages', 'Plaid bank not answering', { code: it.error?.code, bank: it.institution.name });
+        // Which kinds of account each bank sent (never balances), to explain one that seems missing.
+        else log('INFO', 'Pages', 'Plaid accounts', { bank: it.institution.name, types: it.accounts.map((a) => `${a.type}/${a.subtype ?? ''}`) });
+      }
       return result;
     } finally {
       if (linking) { if (this.plaidLinking.get(id) === mine) this.plaidLinking.delete(id); } else this.gate.release(id);
