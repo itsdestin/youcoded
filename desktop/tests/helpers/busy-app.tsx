@@ -71,7 +71,7 @@ export interface BusyApp {
   /** Types into the visible session's composer, the whole value at once. */
   type(value: string): Promise<void>;
   /** Switches tabs through the session strip's All Sessions menu. */
-  switchTo(id: string): Promise<void>;
+  switchTo(id: string, how?: 'pointer' | 'keyboard'): Promise<void>;
   /** Like switchTo, but the counters are zeroed AFTER the menu is open, so they hold only what
    *  the switch itself (the row click and its settling) caused. */
   switchMeasured(id: string): Promise<void>;
@@ -489,7 +489,7 @@ export async function mountBusyApp(
       if (app.visibleId() !== id) throw new Error(`busy-app: switched to ${id} but ${app.visibleId()} is showing`);
     },
 
-    async switchTo(id) {
+    async switchTo(id, how = 'pointer') {
       // The path a mouse user takes: the strip's All Sessions menu, then the
       // row. (In a zero-width jsdom header the strip packs every pill except
       // the active one into that menu.)
@@ -498,7 +498,8 @@ export async function mountBusyApp(
       await act(async () => { fireEvent.click(trigger); });
       const row = document.querySelector(`[data-session-id="${id}"] [role="button"]`);
       if (!row) throw new Error(`busy-app: no row for ${id} in the All Sessions menu`);
-      await act(async () => { fireEvent.click(row); });
+      // detail > 0 is a real pointer click; Enter/Space on a focused row arrives as a keydown (focus-composer-after-switch).
+      await act(async () => { how === 'keyboard' ? fireEvent.keyDown(row, { key: 'Enter' }) : fireEvent.click(row, { detail: 1 }); });
       await wait(500);
       if (app.visibleId() !== id) throw new Error(`busy-app: switched to ${id} but ${app.visibleId()} is showing`);
     },

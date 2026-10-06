@@ -7,32 +7,64 @@ import { useCallback, useEffect, useRef } from 'react';
  * type-anywhere-to-focus handler deliberately ignores keys aimed at a focused button, so the
  * first words typed after a switch went nowhere.
  *
- * Only the strip's own selection (pill, All Sessions row, Shift-hold switcher, drop) calls
- * `noteUserSwitch`; every programmatic change (session created/closed elsewhere, a phone, the
- * buddy) sets the session id directly and never reaches it. The hook only decides WHEN (the
- * switch has committed, the destination is shown in chat view); whether the box may take focus
- * (touch, narrow screen, dialogs, someone typing elsewhere, a disabled box) is the composer's
- * own `focusAfterSwitch` answer.
+ * Which switches count is decided by the strip (SessionStrip.onSelectSession → `markPointerSwitch`):
+ * a pointer press, a click or menu click with a real pointer (event.detail > 0), a drop, and the
+ * Shift-hold switcher's release. NOT Enter/Space on a focused pill or menu row (detail 0 / a key
+ * event): those users navigate by keyboard and moving focus off the control would break their Tab
+ * order. Automatic switches (session created/closed elsewhere, a phone, the buddy) never go through
+ * the strip's callback, so they never count either.
+ *
+ * A pill PRESS selects on pointerdown, before we know whether the hand is starting a drag to
+ * reorder. So when the pointer is still down we wait for its release and skip if the strip said a
+ * drag started (`noteStripDrag`). The composer's own `focusAfterSwitch` decides whether focus may
+ * move at all (touch, narrow screen, dialogs, someone typing elsewhere, a disabled box).
  */
+const INTENT_MS = 1500;
+let markedAt = -Infinity;
+let pressed = false;
+let dragged = false;
+const releaseWaiters = new Set<() => void>();
+let listening = false;
+
+function listen(): void {
+  if (listening || typeof window === 'undefined') return;
+  listening = true;
+  window.addEventListener('pointerdown', () => { pressed = true; dragged = false; }, true);
+  const up = () => { pressed = false; const w = [...releaseWaiters]; releaseWaiters.clear(); w.forEach((f) => f()); };
+  window.addEventListener('pointerup', up, true);
+  window.addEventListener('pointercancel', up, true);
+}
+
+/** The strip: this switch was made with a pointer (or the Shift-hold switcher). */
+export function markPointerSwitch(): void { listen(); markedAt = Date.now(); }
+/** The strip: the pill under the pointer started a drag — do not focus the composer for this press. */
+export function noteStripDrag(): void { dragged = true; }
+
 export function useFocusComposerAfterSwitch(
   sessionId: string | null,
   viewMode: 'chat' | 'terminal',
   focusComposer: () => void,
 ): (id: string) => void {
-  // The id the user just picked and when; stale after a moment, so a later automatic switch to
-  // the same session (picking the already-active one changes nothing) cannot inherit it.
   const pending = useRef<{ id: string; at: number } | null>(null);
-  const noteUserSwitch = useCallback((id: string) => { pending.current = { id, at: Date.now() }; }, []);
+  const noteUserSwitch = useCallback((id: string) => {
+    // Only a switch the strip marked as pointer-made; the mark is single use.
+    if (Date.now() - markedAt > INTENT_MS) return;
+    markedAt = -Infinity;
+    pending.current = { id, at: Date.now() };
+  }, []);
   const focusRef = useRef(focusComposer);
   focusRef.current = focusComposer;
   useEffect(() => {
     const p = pending.current;
     if (!p || p.id !== sessionId) return;
     pending.current = null;
-    if (Date.now() - p.at > 1500 || viewMode !== 'chat') return; // terminal view focuses its own terminal
+    if (Date.now() - p.at > INTENT_MS || viewMode !== 'chat') return; // terminal view focuses its own terminal
+    let raf = 0;
+    let cancelled = false;
+    const go = () => { raf = requestAnimationFrame(() => { if (!cancelled && !dragged) focusRef.current(); }); };
     // One frame later: the pill takes focus as the press finishes, after this commit.
-    const raf = requestAnimationFrame(() => focusRef.current());
-    return () => cancelAnimationFrame(raf);
+    if (pressed) releaseWaiters.add(go); else go();
+    return () => { cancelled = true; releaseWaiters.delete(go); cancelAnimationFrame(raf); };
   }, [sessionId, viewMode]);
   return noteUserSwitch;
 }

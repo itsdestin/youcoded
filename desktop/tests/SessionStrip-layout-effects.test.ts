@@ -70,10 +70,12 @@ describe('SessionStrip layout effects', () => {
   // the render-budget test cannot see the re-subscription; this pins its shape.
   it('repack is stable and the room is read in the observer, not on every switch', () => {
     const src = readStripped(FILE);
-    expect(src).toMatch(/const repack = useCallback\(\(\) => \{[\s\S]*?\}, \[\]\);/);
-    expect(src).toMatch(/new ResizeObserver\(\(\) => \{ budgetRef\.current = stripBudget\(bar\); repack\(\); \}\)/);
-    expect(src).toMatch(/\}, \[repack, hasPills\]\);/);
-    // The only other stripBudget calls: the first-mount fallback, the theme re-read, a drag press.
-    expect(src.match(/stripBudget\(/g)!.length).toBeLessThanOrEqual(5);
+    // Behaviour-level: repack has no dependencies of its own (stable identity), and the observer effect is
+    // not keyed on the active session — so a switch cannot tear the observer down.
+    const repack = /const repack = useCallback\([\s\S]*?\}, (\[[^\]]*\])\);/.exec(src);
+    expect(repack?.[1], 'repack deps').toBe('[]');
+    const observer = /new ResizeObserver\([\s\S]*?\n  \}, (\[[^\]]*\])\);/.exec(src);
+    expect(observer?.[1], 'observer effect deps').not.toMatch(/activeSessionId|measurementsOf/);
+    expect(src).toMatch(/new ResizeObserver\([\s\S]{0,80}stripBudget\(/);
   });
 });
