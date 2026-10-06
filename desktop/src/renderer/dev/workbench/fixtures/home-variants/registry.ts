@@ -2,8 +2,9 @@
 // To add a task: create <task>.ts exporting `VARIANTS: HomeVariants`, import it here and add `'<task>': imported` to the map below.
 // (The 2026-10-04 round's task files were removed at merge prep, 2026-10-05; they are in git history.)
 import type { HomeVariant, HomeVariants } from './types';
+import { VARIANTS as nowLabel } from './now-label';
 
-const HOME_VARIANT_TASKS: Record<string, HomeVariants> = {};
+const HOME_VARIANT_TASKS: Record<string, HomeVariants> = { 'now-label': nowLabel };
 
 /** Every option with its screen key "<task>-<key>". */
 export function homeVariantEntries(): Array<[string, HomeVariant]> {
