@@ -217,6 +217,18 @@
   .dt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .dt span { font-size: 11px; color: var(--fg-muted); letter-spacing: .04em; text-transform: uppercase; }
   .dt b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
+  .ins-grid { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; }
+  .ins { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border-radius: 14px; background: color-mix(in srgb, var(--fg) 5%, transparent); border: 1px solid color-mix(in srgb, var(--fg) 7%, transparent); }
+  .ins b { font-size: 16px; font-weight: 600; }
+  .ins span { font-size: 12px; color: var(--fg-2); line-height: 1.35; }
+  .ins.up b { color: color-mix(in srgb, #3fb950 75%, var(--fg)); }
+  .ins.down b, .ins.warnish b { color: var(--warn); }
+  .spark { grid-column: 1 / -1; }
+  .spark svg { width: 100%; height: 44px; display: block; }
+  .spark .ln { fill: none; stroke: var(--fg-2); stroke-width: 1.6; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+  .spark .area { fill: color-mix(in srgb, var(--fg) 7%, transparent); }
+  .spark-x { display: flex; justify-content: space-between; font-size: 11px; color: var(--fg-muted); margin-top: 2px; }
+  .spark.empty { font-size: 12px; color: var(--fg-muted); padding: 4px 0; }
   .detail .acts { grid-column: 1 / -1; display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
   .detail .acts .hint { flex: 1; min-width: 160px; font-size: 11px; color: var(--fg-muted); }
   .detail input { font: inherit; font-size: 14px; width: 140px; height: 30px; padding: 0 12px; border-radius: 9999px; border: 1px solid var(--edge); background: var(--inset); color: var(--fg); }
@@ -386,6 +398,7 @@
           name: p.name + (p.mask ? ' ··' + p.mask : ''),
           balance: p.balance,
           available: p.available,
+          hist: prev.hist,
           // A limit typed by hand survives when the bank shares none.
           limit: p.limit != null ? p.limit : prev.limit,
           apr: p.liability && p.liability.apr != null ? Math.round(p.liability.apr * 100) / 100 : prev.apr,
@@ -400,6 +413,13 @@
   // One net-worth point per day; a later check the same day replaces it.
   function snapshot(){
     var t = totals(), d = isoDay(today());
+    // Each account keeps its own daily balance too (≈400 days), for the chart inside its opened card.
+    data.accounts.forEach(function(a){
+      a.hist = Array.isArray(a.hist) ? a.hist : [];
+      var l = a.hist[a.hist.length - 1];
+      if (l && l.d === d) l.v = a.balance; else a.hist.push({ d: d, v: a.balance });
+      if (a.hist.length > 400) a.hist.splice(0, a.hist.length - 400);
+    });
     var last = data.history[data.history.length - 1];
     if (last && last.d === d) last.v = Math.round(t.net); else data.history.push({ d: d, v: Math.round(t.net) });
     if (data.history.length > 3660) data.history.splice(0, data.history.length - 3660);
@@ -645,22 +665,76 @@
     return h + '</div>';
   }
 
-  // What an opened account shows: every fact the page has about it, and what can be done with it.
-  function dt(label, value){ return '<div class="dt"><span>' + label + '</span><b class="num">' + value + '</b></div>'; }
+  // ── Opened cards: what the page can work out, not what the card already says ──
+  // Months to pay a balance off at a fixed payment, and the interest on the way; null when the payment never
+  // gets ahead of the interest (or there is no rate to work with).
+  function payoff(balance, apr, pay){
+    if (!(balance > 0) || !(pay > 0)) return null;
+    var r = (apr || 0) / 100 / 12, b = balance, months = 0, interest = 0;
+    if (r > 0 && pay <= b * r) return { never: true };
+    while (b > 0.005 && months < 600) { var i = b * r; interest += i; b = b + i - pay; months++; }
+    return months >= 600 ? { never: true } : { months: months, interest: interest };
+  }
+  function monthsFrom(n){ var d = today(); d.setMonth(d.getMonth() + n); return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }); }
+  function monthsText(n){ var y = Math.floor(n / 12), m = n % 12; return (y ? y + (y === 1 ? ' year' : ' years') : '') + (y && m ? ' ' : '') + (m || !y ? m + (m === 1 ? ' month' : ' months') : ''); }
+  // One fact worth opening the card for: a big figure and a sentence saying what it means.
+  function insight(figure, words, tone){ return '<div class="ins' + (tone ? ' ' + tone : '') + '"><b class="num">' + figure + '</b><span>' + words + '</span></div>'; }
+  // The account's own balance, day by day, as a small line.
+  function spark(hist){
+    if (!hist || hist.length < 2) return '<div class="spark empty">Its own chart starts here and adds a point each day the page checks.</div>';
+    var pts = hist.slice(-90), vs = pts.map(function(p){ return p.v; });
+    var lo = Math.min.apply(null, vs), hi = Math.max.apply(null, vs); if (hi === lo) { hi += 1; lo -= 1; }
+    var W = 300, H = 44, x = function(i){ return (W * i / (pts.length - 1)).toFixed(1); }, y = function(v){ return (4 + (H - 8) * (1 - (v - lo) / (hi - lo))).toFixed(1); };
+    var d = pts.map(function(p, i){ return (i ? 'L' : 'M') + x(i) + ' ' + y(p.v); }).join('');
+    return '<div class="spark"><svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" role="img" aria-label="Balance over the last ' + pts.length + ' days"><path d="' + d + 'L' + W + ' ' + H + 'L0 ' + H + 'Z" class="area"/><path d="' + d + '" class="ln"/></svg><div class="spark-x"><span>' + short(day(pts[0].d)) + '</span><span>' + short(day(pts[pts.length - 1].d)) + '</span></div></div>';
+  }
+  function change30(hist, debt){
+    if (!hist || hist.length < 2) return '';
+    var now = hist[hist.length - 1], then = hist[0];
+    for (var i = hist.length - 1; i >= 0; i--) { if (daysBetween(day(hist[i].d), today()) >= 30) { then = hist[i]; break; } }
+    var diff = now.v - then.v, days = daysBetween(day(then.d), day(now.d));
+    if (!days) return '';
+    // For money owed, going down is the good direction.
+    var good = debt ? diff < 0 : diff > 0;
+    return insight((diff >= 0 ? '+' : '−') + money(Math.abs(diff), true), (debt ? (diff <= 0 ? 'less owed' : 'more owed') : (diff >= 0 ? 'more' : 'less')) + ' than ' + days + ' days ago', diff === 0 ? '' : good ? 'up' : 'down');
+  }
   function accountDetail(a){
-    var h = '<div class="detail">';
-    h += dt(isDebt(a) ? 'Owed' : 'Balance', money(a.balance));
-    if (a.available != null) h += dt('Available', money(a.available));
-    if (a.kind === 'credit') h += dt('Credit limit', a.limit ? money(a.limit, true) : 'Not shared');
-    if (a.apr) h += dt('Interest', a.apr + '%');
-    if (a.payment && a.payment.amount > 0) h += dt('Next payment', money(a.payment.amount) + ' · ' + (a.payment.paid ? 'paid' : 'due ' + short(day(a.payment.due))));
-    h += dt('Comes from', a.source === 'plaid' ? esc(a.institution) + ' through Plaid' : 'Entered by you');
-    h += dt('Updated', a.updatedAt ? ago(a.updatedAt) : 'never');
-    h += '<div class="acts">';
+    var t = totals(), h = '<div class="detail">', ins = '';
+    var debt = isDebt(a);
+    if (a.kind === 'credit') {
+      if (a.apr && a.balance > 0) ins += insight('≈' + money(a.balance * a.apr / 1200), 'interest a month if this balance is carried (' + a.apr + '% a year)', 'warnish');
+      if (a.limit) {
+        var under = a.balance - a.limit * S.warnPct / 100;
+        ins += under > 0
+          ? insight(money(Math.ceil(under), true), 'to pay now to get under ' + S.warnPct + '% of the limit, where it stops weighing on your credit score')
+          : insight(money(Math.floor(-under), true), 'you can spend before this card passes ' + S.warnPct + '% of its limit');
+      }
+      if (a.payment && a.payment.amount > 0 && a.balance > 0) {
+        var pm = payoff(a.balance, a.apr, a.payment.amount);
+        if (pm && pm.never) ins += insight('Never', 'paid off at the ' + money(a.payment.amount) + ' minimum: it barely covers the interest', 'down');
+        else if (pm) ins += insight(monthsText(pm.months), 'to clear it paying only the ' + money(a.payment.amount) + ' minimum' + (pm.interest > 1 ? ', costing about ' + money(pm.interest, true) + ' in interest' : ''));
+      }
+    } else if (a.kind === 'loan') {
+      var pay = a.payment && a.payment.amount;
+      if (pay && a.balance > 0) {
+        var p0 = payoff(a.balance, a.apr, pay), p1 = payoff(a.balance, a.apr, pay + 50);
+        if (p0 && p0.never) ins += insight('Never', 'paid off at ' + money(pay) + ' a month: that is less than the interest', 'down');
+        else if (p0) {
+          ins += insight(monthsFrom(p0.months), 'paid off at ' + money(pay) + ' a month (' + monthsText(p0.months) + ')' + (p0.interest > 1 ? ', with about ' + money(p0.interest, true) + ' of interest still to come' : ''));
+          if (p1 && !p1.never && p0.months - p1.months > 0) ins += insight(monthsText(p0.months - p1.months) + ' sooner', 'with $50 more a month' + (p0.interest - p1.interest > 1 ? ', saving about ' + money(p0.interest - p1.interest, true) + ' in interest' : ''), 'up');
+        }
+      } else if (a.apr && a.balance > 0) ins += insight('≈' + money(a.balance * a.apr / 1200), 'of interest a month at ' + a.apr + '%. Add the monthly payment to see when it is paid off.');
+    } else if ((a.kind === 'checking' || a.kind === 'savings') && t.dueThisMonth > 0) {
+      ins += insight((a.balance / t.dueThisMonth).toFixed(1) + '×', 'what is still due this month (' + money(t.dueThisMonth, true) + ')');
+    }
+    var share = debt ? (t.owe ? a.balance / t.owe : 0) : (t.have ? a.balance / t.have : 0);
+    if (share > 0 && share < 1) ins += insight(Math.round(share * 100) + '%', 'of everything you ' + (debt ? 'owe' : 'have'));
+    ins += change30(a.hist, debt);
+    h += '<div class="ins-grid">' + ins + '</div>' + spark(a.hist);
+    h += '<div class="acts"><span class="hint">' + (a.source === 'plaid' ? 'From ' + esc(a.institution) + ' through Plaid' : 'Entered by you') + ' · updated ' + (a.updatedAt ? ago(a.updatedAt) : 'never') + (a.available != null && !debt ? ' · ' + money(a.available) + ' available' : '') + '</span>';
     if (limitEdit === a.id) {
       h += '<input id="limit-val" class="num" inputmode="decimal" value="' + (a.limit || '') + '" aria-label="Credit limit"><button class="btn sm" data-limit-cancel>Cancel</button><button class="btn sm primary" data-limit-save="' + esc(a.id) + '">Save limit</button>';
     } else {
-      if (a.source === 'plaid') h += '<span class="hint">Your bank keeps this one up to date.</span>';
       if (a.source !== 'plaid' && editing !== a.id) h += '<button class="btn sm" data-edit="' + esc(a.id) + '">' + I.pen + 'Update balance</button>';
       if (a.kind === 'credit') h += '<button class="btn sm" data-limit="' + esc(a.id) + '">' + (a.limit ? 'Change limit' : 'Set limit') + '</button>';
       var u = siteOf(a); if (u) h += '<a class="btn sm" href="' + esc(u) + '" target="_blank" rel="noopener">' + I.out + 'Open ' + esc(a.institution) + '</a>';
@@ -668,20 +742,24 @@
     }
     return h + '</div></div>';
   }
-  // What an opened bill shows.
   function billDetail(b){
-    var h = '<div class="detail">';
-    h += dt('Amount', money(b.amount));
-    h += dt(b.paid ? 'Paid' : 'Due', short(b.paid || b.due));
-    var monthly = b.bill ? b.bill.monthly !== false : (b.account && b.account.payment && b.account.payment.monthly !== false);
-    h += dt('Repeats', b.mine ? (monthly ? 'Every month' : 'Once') : 'Set by your bank');
-    if (b.bill && b.bill.lastPaid) h += dt('Last paid', short(day(b.bill.lastPaid)));
+    var h = '<div class="detail">', ins = '';
+    var monthly = b.bill ? b.bill.monthly !== false : true;
+    if (monthly) ins += insight(money(b.amount * 12, true), 'a year at ' + money(b.amount) + ' a month');
+    if (monthly && !b.paid) {
+      var next = [b.due], iso = isoDay(b.due);
+      for (var k = 0; k < 2; k++) { iso = addMonth(iso); next.push(day(iso)); }
+      ins += insight(next.map(short).join(' · '), 'the next three due dates');
+    }
+    var log = (b.bill && b.bill.paidLog) || (b.account && b.account.payment && b.account.payment.paidLog) || [];
+    if (log.length) ins += insight(log.length + (log.length === 1 ? ' time' : ' times'), 'marked paid here, most recently ' + short(day(log[log.length - 1])));
+    else if (!b.mine) ins += insight('Automatic', 'your bank updates this when you pay');
+    h += '<div class="ins-grid">' + ins + '</div>';
     h += '<div class="acts">';
     if (billEdit === b.id && b.bill) {
       h += '<input id="bill-amt" class="num" inputmode="decimal" value="' + b.amount + '" aria-label="Amount"><input id="bill-due" type="date" value="' + esc(b.bill.due) + '" aria-label="Due date">';
       h += '<button class="btn sm" data-bill-cancel>Cancel</button><button class="btn sm primary" data-bill-save="' + esc(b.id) + '">Save</button>';
     } else {
-      if (!b.mine) h += '<span class="hint">Your bank updates this when you pay.</span>';
       if (b.mine && !b.paid) h += '<button class="btn sm" data-paid="' + esc(b.id) + '">' + I.check + 'Mark paid</button>';
       if (b.bill) h += '<button class="btn sm" data-bill-edit="' + esc(b.id) + '">' + I.pen + 'Edit</button><button class="btn sm danger" data-bill-delete="' + esc(b.id) + '">Delete</button>';
       var u = siteOf(b); if (u) h += '<a class="btn sm" href="' + esc(u) + '" target="_blank" rel="noopener">' + I.out + 'Pay at ' + esc(b.institution) + '</a>';
@@ -740,6 +818,7 @@
     var b = data.bills.filter(function(x){ return x.id === id; })[0];
     var target = b || (data.accounts.filter(function(x){ return x.id === id; })[0] || {}).payment;
     if (!target) return;
+    target.paidLog = (Array.isArray(target.paidLog) ? target.paidLog : []).concat([t]).slice(-36);
     if (target.monthly !== false) { target.lastPaid = t; target.due = addMonth(target.due); delete target.paid; }
     else target.paid = t;
     save(); render();

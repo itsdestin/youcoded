@@ -120,20 +120,31 @@ describe('the Money page', () => {
     const p = open({ demoToday: TODAY, accounts: [{ id: 'm1', source: 'manual', kind: 'credit', institution: 'Synchrony', name: 'Store card', balance: 300, updatedAt: `${TODAY}T10:00:00Z` }] });
     p.click('[data-open="m1"]');
     expect(p.d.querySelector('[data-open="m1"]')!.getAttribute('aria-expanded')).toBe('true');
-    expect(p.text()).toContain('Credit limit');
+    expect(p.text()).toContain('Set limit');
     p.click('[data-limit="m1"]');
     (p.d.getElementById('limit-val') as HTMLInputElement).value = '1,000';
     p.click('[data-limit-save="m1"]');
     expect(p.last().accounts[0].limit).toBe(1000);
     expect(p.text()).toContain('30% used');
+    // Opened again, it works out what the card does not say: the room left before 30%.
+    p.click('[data-open="m1"]'); p.click('[data-open="m1"]');
+    expect(p.text()).toContain('you can spend before this card passes 30% of its limit');
     p.click('[data-open="m1"]');
     expect(p.d.querySelector('[data-open="m1"]')!.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('an opened loan says when it is paid off and what $50 more a month would change', () => {
+    const p = open({ demoToday: TODAY, accounts: [{ id: 'l', source: 'manual', kind: 'loan', institution: 'Earnest', name: 'Loan', balance: 10000, apr: 6, updatedAt: `${TODAY}T10:00:00Z`, payment: { amount: 200, due: '2026-10-15' } }] });
+    p.click('[data-open="l"]');
+    // 10,000 at 6% and $200/month clears in 58 months; $250/month in 45.
+    expect(p.text()).toContain('(4 years 10 months)');
+    expect(p.text()).toContain('1 year 1 month sooner');
   });
 
   it('marking a monthly bill paid moves it to next month', () => {
     const p = open({ demoToday: TODAY, bills: [{ id: 'b1', provider: 'Visible', name: 'Visible', amount: 25, due: '2026-10-07' }] });
     p.click('[data-paid="b1"]');
-    expect(p.last().bills[0]).toMatchObject({ due: '2026-11-07', lastPaid: TODAY });
+    expect(p.last().bills[0]).toMatchObject({ due: '2026-11-07', lastPaid: TODAY, paidLog: [TODAY] });
   });
 
   it('warns a week before a late payment reaches the credit report', () => {
