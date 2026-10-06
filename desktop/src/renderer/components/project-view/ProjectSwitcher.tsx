@@ -12,8 +12,12 @@
 //  - a remove bin that shows only on the pointed / keyboard row, always on touch, and takes NO
 //    space when hidden so the pills and counts sit flush right (PC-3 "hover" + note);
 //  - "Folder missing" for a project whose folder is gone (PS-3 states);
-//  - the project you are in: round 1's pill / tint / own box were all declined (PC-2), so
-//    round 2 offers check / edge / subtext (workbench switch `?switcherCurrent=`).
+//  - the project you are in has NO marker (project-switcher-2 P2C-1: "just drop that indicator.
+//    the currently selected one should be the highlighted/hovered one when nothing else is
+//    hovered, but focus should switch when hovering on a different project"): the highlight
+//    rests on it, follows the pointer or the arrow keys, and returns to it when the pointer
+//    leaves the list. Screen readers still get aria-current;
+//  - Add a project is centred (P2-1) and the list fades at the edge that has more (P2-2).
 // WHY: the search row borrows the popups' tapered divider (.dialog-header).
 import '../ui/Dialog.css';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -21,7 +25,7 @@ import { Scrim, OverlayPanel } from '../overlays/Overlay';
 import { useEscClose } from '../../hooks/use-esc-close';
 import type { CentralIndexProject } from '../../../shared/artifacts/types';
 import { syncPillFor, findSpaceFor, type SyncStatusData } from '../sync-dot-state';
-import { workbenchSwitcherCurrent } from '../../workbench-mode';
+import { useScrollFade } from '../../hooks/useScrollFade';
 
 interface ProjectSwitcherProps {
   projects: CentralIndexProject[];
@@ -38,7 +42,7 @@ interface ProjectSwitcherProps {
 }
 
 // Shared glyphs — see ./icons.tsx.
-import { SearchIcon, CheckIcon, PlusIcon, TrashIcon } from './icons';
+import { SearchIcon, PlusIcon, TrashIcon } from './icons';
 import { Button, CloseButton, Pill, SectionLabel } from '../ui';
 import { ScreenMark } from '../../shoot-mode';
 
@@ -52,9 +56,11 @@ export function ProjectSwitcher({
   syncStatus,
 }: ProjectSwitcherProps) {
   const [query, setQuery] = useState('');
-  const [highlightIndex, setHighlightIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
-  const currentLook = workbenchSwitcherCurrent();
+  // The list fades at the edge that has more (P2-2 "need scroll fade") — the see-through
+  // .scroll-mask the sessions menu and Appearance's themes box use, not the painted band.
+  const listRef = useRef<HTMLDivElement>(null);
+  useScrollFade<HTMLDivElement>(listRef);
 
   // ESC closes via the shared LIFO stack too — the input's own onKeyDown only fires while the
   // field is FOCUSED, and clicking a row blurs it. The palette is only mounted while open.
@@ -76,13 +82,27 @@ export function ProjectSwitcher({
     );
   }, [query, projects]);
 
-  // Reset the keyboard highlight to the top whenever the filtered set changes.
+  // WHERE THE HIGHLIGHT RESTS (P2C-1): on the project you are in while nothing else is pointed
+  // at; with a search typed, on the first match (Enter opens it, as before). The pointer and the
+  // arrow keys move it; leaving the list puts it back.
+  const restIndex = useMemo(() => {
+    if (query.trim()) return 0;
+    const i = filtered.findIndex((p) => p.id === activeId);
+    return i >= 0 ? i : 0;
+  }, [filtered, activeId, query]);
+  const [highlightIndex, setHighlightIndex] = useState(restIndex);
+  // `moved`: the highlight was moved by the pointer or the keys (not resting). The bin follows
+  // only a MOVED highlight, so it never sits on the project you are in by default — that would
+  // put "remove" on the one row you were most likely about to pick (see the deck's P3-4).
+  const [moved, setMoved] = useState(false);
   useEffect(() => {
-    setHighlightIndex(0);
-  }, [query]);
+    setHighlightIndex(restIndex);
+    setMoved(false);
+  }, [restIndex, query]);
 
   // No Escape branch here — useEscClose above owns it. This handler owns the list keys.
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') setMoved(true);
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       if (filtered.length === 0) return;
@@ -139,7 +159,11 @@ export function ProjectSwitcher({
           </div>
         </div>
 
-        <div className="p-2 max-h-[50vh] overflow-y-auto flex flex-col gap-0.5">
+        <div
+          ref={listRef}
+          className="scroll-mask p-2 max-h-[50vh] flex flex-col gap-0.5"
+          onMouseLeave={() => { setHighlightIndex(restIndex); setMoved(false); }}
+        >
           {filtered.length === 0 && (
             <div className="px-3 py-4 text-sm-tight text-fg-muted">
               No projects match “{query.trim()}”.
@@ -162,46 +186,34 @@ export function ProjectSwitcher({
             return (
               // The old row look, kept (PS-1): keyboard highlight is an accent outline. It sits
               // on this wrapper so the bin is INSIDE the row's box when it shows.
-              // WHY no fill for the project you are in any more: the old fill + check was what
-              // read as "odd" (backlog row 10); its marking is now `currentLook`.
-              // WHY `relative`: the `edge` look draws its bar inside the row.
+              // No fill or mark for the project you are in (P2C-1): the resting highlight IS
+              // its marking.
               <div
                 key={p.id}
                 className={`group relative flex items-center rounded-md transition-colors border ${
                   isHighlighted ? 'border-accent bg-inset' : 'border-transparent hover:bg-inset'
                 }`}
-                onMouseEnter={() => setHighlightIndex(i)}
+                onMouseEnter={() => { setHighlightIndex(i); setMoved(true); }}
               >
                 <button
                   type="button"
                   aria-current={isActive ? 'true' : undefined}
+                  // A short name for screen readers (and saved click paths): the project and its
+                  // status, not every line of the row — the avatar letter, path and description
+                  // made it a 70-character sentence.
+                  aria-label={[shown, p.missing ? 'Folder missing' : sync?.short].filter(Boolean).join(', ')}
                   data-project-row=""
                   className="flex-1 min-w-0 flex items-center gap-2.5 px-2 py-2 text-left"
                   onClick={() => onSelect(p)}
                 >
-                  {currentLook === 'edge' && isActive && (
-                    // An accent bar at the row's left edge — the marking a sidebar uses for
-                    // "you are here", without tinting the row like a hover.
-                    <span aria-hidden className="absolute left-0 top-2 bottom-2 w-1 rounded-full bg-accent" />
-                  )}
                   <span aria-hidden className="shrink-0 w-7 h-7 rounded-md bg-inset border border-edge-dim flex items-center justify-center text-xs font-semibold text-fg-2">
                     {avatar}
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-1.5 min-w-0">
                       <span className="text-sm font-medium text-fg truncate">{shown}</span>
-                      {currentLook === 'check' && isActive && (
-                        // The old check, restyled: beside the name, in the accent colour, in a
-                        // small tinted round — it belongs to the name, not the row's far edge.
-                        <span title="Current project" aria-label="Current project" className="shrink-0 w-4 h-4 rounded-full bg-accent/15 text-accent flex items-center justify-center">
-                          <CheckIcon size={11} strokeWidth={3} />
-                        </span>
-                      )}
                     </span>
                     <span className="block font-mono text-2xs text-fg-muted truncate" title={p.path}>
-                      {currentLook === 'subtext' && isActive && (
-                        <span className="font-sans font-medium text-accent">Current project · </span>
-                      )}
                       {p.path}
                     </span>
                     {/* Description as a third line (unchanged): rows without one keep their
@@ -251,7 +263,7 @@ export function ProjectSwitcher({
                     size="icon"
                     aria-label={`Remove ${shown} from your projects`}
                     title="Remove from your projects"
-                    className={`shrink-0 mr-1 hover:text-destructive-fg group-hover:inline-flex focus-visible:inline-flex pointer-coarse:inline-flex ${isHighlighted ? 'inline-flex' : 'hidden'}`}
+                    className={`shrink-0 mr-1 hover:text-destructive-fg group-hover:inline-flex focus-visible:inline-flex pointer-coarse:inline-flex ${isHighlighted && moved ? 'inline-flex' : 'hidden'}`}
                     onClick={(e) => { e.stopPropagation(); onDeleteProject(p); }}
                   >
                     <TrashIcon size={14} />
@@ -266,7 +278,8 @@ export function ProjectSwitcher({
             line, not border-t (quick-fix batch): same divider as the header above. */}
         <button
           type="button"
-          className="relative flex items-center gap-2 px-4 py-3 text-sm-tight text-fg-2 hover:bg-inset hover:text-fg transition-colors rounded-b-[inherit]"
+          // Centred (P2-1: "center the add a project button").
+          className="relative flex items-center justify-center gap-2 px-4 py-3 text-sm-tight text-fg-2 hover:bg-inset hover:text-fg transition-colors rounded-b-[inherit]"
           onClick={onAddProject}
         >
           <span

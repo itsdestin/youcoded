@@ -283,7 +283,10 @@ export function ProjectHero({
           action: null, // The switch is global; it lives in Settings, not here.
         }
       : {
-          short: 'Only on this computer', tone: 'text-fg-2',
+          // WHY "Not synced" (project-switcher-2#P2Q-1, "match"): the project switcher's pill
+          // says it for the same state; one project, one wording. The full sentence below
+          // still says it stays on this computer.
+          short: 'Not synced', tone: 'text-fg-2',
           detail: 'This project stays on this computer until you turn on sync for it.',
           // The action that had NO desktop home in the refresh-icon shape.
           action: { label: 'Turn on sync for this project', onClick: onTurnOnSync },

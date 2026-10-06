@@ -88,7 +88,10 @@ describe('Dialog shell', () => {
     const { rerender } = render(<Dialog open onClose={() => {}} title="About">body</Dialog>);
     expect(panel().querySelector('.dialog-scroll')).toBeInTheDocument();
     const css = readSource(join(__dirname, '..', 'src', 'renderer', 'components', 'ui', 'Dialog.css'));
-    expect(css).toMatch(/\.dialog-scroll,\s*\[data-session-files-scroll\]\s*\{[^}]*mask-image:\s*linear-gradient\(to bottom, transparent 0px,[^}]*transparent 100%\),\s*linear-gradient\(to right, #000 0%, transparent 4%, transparent 96%, #000 100%\);[^}]*mask-composite:\s*add/);
+    expect(css).toMatch(/\.dialog-scroll,\s*\[data-session-files-scroll\]\s*\{[^}]*mask-image:\s*linear-gradient\(to bottom, transparent 0px,[^}]*transparent 100%\);/);
+    // The fade is even across the width: no side strip left unfaded, which lit every card's
+    // edges as two bright stripes under the fade (project-switcher-2 P2-5, Backup & sync).
+    expect(css).not.toMatch(/linear-gradient\(to right, #000 0%, transparent 4%/);
     expect(css).toMatch(/\.dialog-scroll\[data-fade-top="true"\],\s*\[data-session-files-scroll\]\[data-fade-top="true"\]\s*\{\s*--dialog-fade-top:\s*42px;/);
     expect(css).toMatch(/\.dialog-scroll\[data-fade-bottom="true"\],\s*\[data-session-files-scroll\]\[data-fade-bottom="true"\]\s*\{\s*--dialog-fade-bottom:\s*42px;/);
     expect(css).toMatch(/\.dialog-scroll::before,\s*\.dialog-scroll::after,\s*\[data-session-files-scroll\]::before,\s*\[data-session-files-scroll\]::after\s*\{\s*display:\s*none;/);

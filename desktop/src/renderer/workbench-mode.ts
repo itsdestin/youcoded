@@ -190,14 +190,3 @@ export function workbenchNetworkOffline(): boolean {
   return new URLSearchParams(location.search).get('network') === 'offline';
 }
 
-/** Project switcher (redesign backlog row 10, deck project-switcher-2): how the project you are
- *  in is marked — `check` (shipped: an accent check beside the name), `edge` (an accent bar at
- *  the row's left edge), `subtext` ("Current project" before the path). Round 1's pill / tint /
- *  own-box were all declined (project-switcher-1 PC-2). Returns the shipped value outside the
- *  workbench and the photo-only build. */
-export type SwitcherCurrent = 'check' | 'edge' | 'subtext';
-export function workbenchSwitcherCurrent(): SwitcherCurrent {
-  if (!isWorkbenchMode()) return 'check';
-  const v = new URLSearchParams(location.search).get('switcherCurrent');
-  return v === 'edge' || v === 'subtext' ? v : 'check';
-}

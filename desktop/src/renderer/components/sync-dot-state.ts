@@ -85,7 +85,7 @@ export function syncDotFor(folderPath: string, status: SyncStatusData | null): S
  * probably be a status like the working/inactive/etc chips in session swithcer"): the bare
  * coloured dot said nothing until you hovered it, and hovering never happens on a phone. The
  * short words are the Project View hero's own pill words (ProjectHero `syncPill.short`, minus
- * its time, and "Not synced" for its "Only on this computer" — PQ-2); `detail` is the dot's full sentence
+ * its time; both say "Not synced" since project-switcher-1 PQ-2 / -2 P2Q-1); `detail` is the dot's full sentence
  * above, unchanged, for the tooltip and screen readers. Tone follows the guide's status pills:
  * colour in the tint and the dot, never in the words. */
 interface SyncPill { tone: 'ok' | 'danger' | 'neutral'; short: string; detail: string }
@@ -96,7 +96,7 @@ export function syncPillFor(folderPath: string, status: SyncStatusData | null): 
   if (dot.color === 'green') return { tone: 'ok', short: 'Synced', detail: dot.label };
   if (dot.color === 'red') return { tone: 'danger', short: 'Sync problem', detail: dot.label };
   const space = findSpaceFor(folderPath, status);
-  // "Not synced", not the hero's "Only on this computer": most rows are unsynced folders, and
+  // "Not synced" (the hero says the same since P2Q-1): most rows are unsynced folders, and
   // the long words squeezed names at phone width (project-switcher-1 PQ-2, "short").
   if (!space) return { tone: 'neutral', short: 'Not synced', detail: dot.label };
   if (space.state === 'stopped') return { tone: 'neutral', short: 'Sync stopped', detail: dot.label };

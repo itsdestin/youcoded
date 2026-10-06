@@ -184,7 +184,7 @@ describe('ProjectHero on desktop', () => {
       canRemove: false,
       sync: { dot: { color: 'gray' }, spaceId: null, lastSynced: null, errorMessage: null, stopped: false },
     });
-    fireEvent.click(screen.getByLabelText('Sync status: Only on this computer'));
+    fireEvent.click(screen.getByLabelText('Sync status: Not synced'));
     expect(screen.getByText('Turn on sync for this project')).toBeTruthy();
   });
 

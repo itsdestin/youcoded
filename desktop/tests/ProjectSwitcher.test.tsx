@@ -34,11 +34,11 @@ const sync: SyncStatusData = {
   recentEvents: [{ type: 'error', spaceId: 'project:themes', message: 'nope' }],
 };
 
-function mount(onDeleteProject = vi.fn()) {
+function mount(onDeleteProject = vi.fn(), activeId = '/p/app') {
   render(
     <ProjectSwitcher
       projects={projects}
-      activeId="/p/app"
+      activeId={activeId}
       onSelect={vi.fn()}
       onClose={vi.fn()}
       onAddProject={vi.fn()}
@@ -59,11 +59,17 @@ describe('project switcher rows', () => {
     expect(within(rowOf('notes')).getByText('Not synced')).toBeTruthy();
   });
 
-  it('marks the project you are in beside its name, without tinting its row', () => {
-    mount();
-    expect(within(rowOf('app')).getByLabelText('Current project')).toBeTruthy();
-    expect(within(rowOf('themes')).queryByLabelText('Current project')).toBeNull();
-    expect(rowOf('app').parentElement!.className).not.toMatch(/bg-accent/);
+  it('has no marker for the project you are in: the highlight rests on it and follows the pointer', () => {
+    mount(vi.fn(), '/p/notes'); // not the first row, so resting there is a real choice
+    const box = (n: string) => rowOf(n).parentElement!;
+    expect(rowOf('notes').getAttribute('aria-current')).toBe('true'); // screen readers still know
+    expect(screen.queryByLabelText('Current project')).toBeNull();
+    expect(box('notes').className).toMatch(/border-accent/);
+    fireEvent.mouseEnter(box('themes'));
+    expect(box('themes').className).toMatch(/border-accent/);
+    expect(box('notes').className).not.toMatch(/border-accent/);
+    fireEvent.mouseLeave(box('themes').parentElement!);
+    expect(box('notes').className).toMatch(/border-accent/);
   });
 
   it('says when a folder is missing', () => {
@@ -71,15 +77,15 @@ describe('project switcher rows', () => {
     expect(within(rowOf('thesis')).getByText('Folder missing')).toBeTruthy();
   });
 
-  it('every row has a Remove — synced projects included — shown only on the pointed row', () => {
+  it('every row has a Remove — synced projects included — shown only where the pointer is', () => {
     const onDelete = mount();
-    for (const n of ['app', 'themes', 'notes', 'thesis']) {
-      expect(screen.getByRole('button', { name: `Remove ${n} from your projects`, hidden: true })).toBeTruthy();
-    }
-    // Hidden rows take no space (display:none, not transparent) so the pills sit flush right.
-    expect(screen.getByRole('button', { name: 'Remove themes from your projects', hidden: true }).className).toMatch(/(^|\s)hidden(\s|$)/);
-    expect(screen.getByRole('button', { name: 'Remove app from your projects' }).className).toMatch(/(^|\s)inline-flex(\s|$)/); // the highlighted row
-    fireEvent.click(screen.getByRole('button', { name: 'Remove themes from your projects', hidden: true }));
+    const bin = (n: string) => screen.getByRole('button', { name: `Remove ${n} from your projects`, hidden: true });
+    for (const n of ['app', 'themes', 'notes', 'thesis']) expect(bin(n)).toBeTruthy();
+    // Resting on the project you are in, the bin stays hidden there (display:none, no space).
+    expect(bin('app').className).toMatch(/(^|\s)hidden(\s|$)/);
+    fireEvent.mouseEnter(rowOf('themes').parentElement!);
+    expect(bin('themes').className).toMatch(/(^|\s)inline-flex(\s|$)/);
+    fireEvent.click(bin('themes'));
     expect(onDelete).toHaveBeenCalledWith(projects[1]);
   });
 
