@@ -87,6 +87,29 @@ describe('plaid', () => {
     expect(r).toMatchObject({ ok: false, code: 'CANCELLED' });
   });
 
+  it('stops waiting the moment the sign-in is cancelled (a closed browser tab tells Plaid nothing)', async () => {
+    const { fetchImpl } = fakePlaid({
+      '/link/token/create': () => ({ link_token: 'l', hosted_link_url: 'https://hosted.plaid.com/x' }),
+      '/link/token/get': () => ({ link_sessions: [{ finished_at: null }] }),
+    });
+    const ctrl = new AbortController();
+    let polls = 0;
+    const r = await runPlaid({ ...ctx(fetchImpl), signal: ctrl.signal, sleep: async () => { if (++polls === 3) ctrl.abort(); } }, { op: 'connect' });
+    expect(r).toMatchObject({ ok: false, code: 'CANCELLED' });
+    expect(polls).toBe(3);
+  });
+
+  it('a sign-in the bank refused comes back with Plaid\'s own reason, naming the bank', async () => {
+    const { fetchImpl } = fakePlaid({
+      '/link/token/create': () => ({ link_token: 'l', hosted_link_url: 'https://hosted.plaid.com/x' }),
+      '/link/token/get': () => ({ link_sessions: [{ finished_at: '2026-10-05T00:00:00Z', exit: {
+        error: { error_code: 'INSTITUTION_NOT_RESPONDING', display_message: 'This bank is not responding right now.' },
+        metadata: { institution: { name: 'American Express' } } } }] }),
+    });
+    const r = await runPlaid(ctx(fetchImpl), { op: 'connect' });
+    expect(r).toEqual({ ok: false, op: 'connect', code: 'INSTITUTION_NOT_RESPONDING', message: 'American Express: This bank is not responding right now.' });
+  });
+
   it('gives up waiting after the deadline instead of hanging', async () => {
     const { fetchImpl } = fakePlaid({
       '/link/token/create': () => ({ link_token: 'l', hosted_link_url: 'https://hosted.plaid.com/x' }),

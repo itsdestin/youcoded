@@ -445,19 +445,29 @@
       save(); render();
     });
   }
+  // Each sign-in is numbered: starting a new one (or cancelling) makes the old one's late answer meaningless.
+  var linkSeq = 0;
   function connectBank(){
-    if (!plaidOn || connecting) return;
+    if (!plaidOn) return;
+    var mine = ++linkSeq;
     connecting = true; bankNote = null; render();
     window.youcoded.plaid({ op: 'connect' }).then(function(r){
+      if (mine !== linkSeq) return;
       connecting = false;
       if (!r || !r.ok) { bankNote = r && r.code === 'CANCELLED' ? null : (r && r.message) || 'The bank could not be connected.'; render(); return; }
       render(); syncBanks();
     });
   }
+  function cancelLink(){
+    linkSeq++; connecting = false; render();
+    window.youcoded.plaid({ op: 'cancel' });
+  }
   function reconnectBank(itemId){
-    if (!plaidOn || connecting) return;
+    if (!plaidOn) return;
+    var mine = ++linkSeq;
     connecting = true; render();
     window.youcoded.plaid({ op: 'reconnect', itemId: itemId }).then(function(r){
+      if (mine !== linkSeq) return;
       connecting = false;
       if (!r || !r.ok) { bankNote = (r && r.message) || 'The bank could not be reconnected.'; render(); return; }
       render(); syncBanks();
@@ -544,7 +554,9 @@
     if (data.accounts.length || data.bills.length) h += '<button class="pill" data-jump="bills"><span class="pill-ic">' + I.cal + '</span>' + t.dueThisWeek + ' due this week</button>';
     h += '<span class="spacer"></span>';
     if (plaidOn || data.checkedAt) h += '<span class="small muted">' + (connecting ? 'Finish signing in to your bank in your browser…' : checking ? 'Checking your banks…' : data.checkedAt ? 'Checked ' + ago(data.checkedAt) : '') + '</span>';
-    if (plaidOn) h += '<button class="btn" id="check"' + (checking || connecting ? ' disabled' : '') + '>' + I.refresh + 'Check now</button>';
+    // While a bank sign-in is open in the browser: a way out, for a tab that was closed or a bank that got stuck.
+    if (connecting) h += '<button class="btn" data-cancel-link>Cancel</button>';
+    else if (plaidOn) h += '<button class="btn" id="check"' + (checking ? ' disabled' : '') + '>' + I.refresh + 'Check now</button>';
     h += '<div style="position:relative"><button class="btn" id="add" aria-haspopup="menu" aria-expanded="' + menuOpen + '">' + I.plus + 'Add</button>';
     if (menuOpen) {
       h += '<div class="menu" role="menu">';
@@ -915,6 +927,7 @@
     on('[data-cancel-remove]', function(){ removing = null; render(); });
     on('[data-remove-bank]', function(b){ removeBank(b.dataset.removeBank); });
     on('[data-dismiss-note]', function(){ bankNote = null; render(); });
+    on('[data-cancel-link]', function(){ cancelLink(); });
     on('[data-add]', function(b, e){
       e.stopPropagation(); menuOpen = false;
       var what = b.dataset.add;

@@ -10,6 +10,7 @@ import path from 'node:path';
 import chokidar, { type FSWatcher } from 'chokidar';
 import { PagesStore, PAGES_DIR, isUnderPagesDir, type PagesStoreDeps } from './pages-store';
 import { applyScheme, fingerprint, keyPlacement, savedKeyTarget, withApprovedAddress } from './page-connections';
+import { log } from '../logger';
 import { PlaidItemsStore, cleanPlaidRequest, openPlaidLink, parseCredentials, runPlaid } from './plaid';
 import { cleanDeviceAddress } from '../../shared/page-device-address';
 import { setPersonalPagesRoot } from '../claude-code-pages-mcp';
@@ -401,7 +402,7 @@ class PagesService {
 
   /** Pages that are mid-way through a bank sign-in, so a second press of
    *  "Connect a bank" does not open a second browser tab. */
-  private readonly plaidLinking = new Set<string>();
+  private readonly plaidLinking = new Map<string, AbortController>();
 
   /** `pages:plaid` — the page asked the app to do one Plaid thing. The page
    *  must hold an APPROVED plaid connection (the fingerprint on disk matches),
@@ -427,20 +428,27 @@ class PagesService {
     const creds = parseCredentials(record ? await store.keyValue(record).catch(() => null) : null);
     if (!creds) return refuse('No Plaid keys are saved on this computer. Open the page’s connections to add them.', 'NO_KEYS');
 
+    // Cancel stops this page's open sign-in. Starting a new one also stops the old one, so a closed browser tab can
+    // never leave the Connect button stuck.
+    if (req.op === 'cancel') { this.plaidLinking.get(id)?.abort(); this.plaidLinking.delete(id); return { ok: true, op: 'cancel', items: [] }; }
     const linking = req.op === 'connect' || req.op === 'reconnect';
-    if (linking && this.plaidLinking.has(id)) return refuse('A bank sign-in is already open in your browser. Finish or close it first.', 'BUSY');
     if (!linking && !(await this.gate.acquire(id))) return refuse('This page is asking faster than the app will allow. Try again shortly.', 'TOO_MANY');
-    if (linking) this.plaidLinking.add(id);
+    let mine: AbortController | undefined;
+    if (linking) { this.plaidLinking.get(id)?.abort(); mine = new AbortController(); this.plaidLinking.set(id, mine); }
     try {
       const result = await runPlaid({
         env: c.environment, creds, items,
         openExternal: this.deps.openExternal ?? openPlaidLink,
         fetchImpl: this.deps.fetchImpl,
+        signal: mine?.signal,
       }, req);
       if (req.op === 'accounts') this.noteFreshness(id, result.ok && result.items.every((i) => i.ok));
+      // Plaid's code only (never a key or message), so a failed connection can be diagnosed from the log.
+      if (!result.ok && result.code !== 'CANCELLED') log('WARN', 'Pages', 'Plaid request failed', { op: req.op, code: result.code, env: c.environment });
+      if (result.ok && req.op === 'accounts') for (const it of result.items) if (!it.ok) log('WARN', 'Pages', 'Plaid bank not answering', { code: it.error?.code, bank: it.institution.name });
       return result;
     } finally {
-      if (linking) this.plaidLinking.delete(id); else this.gate.release(id);
+      if (linking) { if (this.plaidLinking.get(id) === mine) this.plaidLinking.delete(id); } else this.gate.release(id);
     }
   }
 

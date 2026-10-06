@@ -143,6 +143,8 @@ export const PLAID_SERVICE = 'Plaid';
 export type PlaidRequest =
   | { op: 'status' }
   | { op: 'connect' }
+  /** Stop waiting for a bank sign-in (the person closed the browser tab). */
+  | { op: 'cancel' }
   | { op: 'accounts'; live?: boolean }
   | { op: 'reconnect'; itemId: string }
   | { op: 'remove'; itemId: string };

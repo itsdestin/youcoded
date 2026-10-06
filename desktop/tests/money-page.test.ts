@@ -104,6 +104,22 @@ describe('the Money page', () => {
     expect(asked.map((r) => r.op)).toEqual(['accounts', 'reconnect', 'accounts']);
   });
 
+  it('while a bank sign-in is open, Cancel stops it and a late answer is ignored', async () => {
+    let finish: (v: unknown) => void = () => {};
+    const asked: any[] = [];
+    const p = open({ demoToday: TODAY, accounts: [{ id: 'm1', source: 'manual', kind: 'checking', institution: 'X', name: 'Y', balance: 1, updatedAt: `${TODAY}T10:00:00Z` }] },
+      (req) => { asked.push(req); if (req.op === 'connect') return new Promise((r) => { finish = r; }); return Promise.resolve({ ok: true, op: req.op, items: [] }); });
+    await p.settle();
+    p.click('#add'); p.click('[data-add="bank"]');
+    expect(p.text()).toContain('Finish signing in to your bank');
+    p.click('[data-cancel-link]');
+    expect(asked.at(-1)).toEqual({ op: 'cancel' });
+    expect(p.text()).not.toContain('Finish signing in to your bank');
+    finish({ ok: false, op: 'connect', code: 'CANCELLED', message: 'Connecting was stopped.' });
+    await p.settle();
+    expect(p.d.querySelector('[role="alert"]')).toBeNull();
+  });
+
   it('with no Plaid keys yet, shows the welcome card and no warning', async () => {
     const p = open({}, async () => ({ ok: false, op: 'accounts', code: 'NO_KEYS', message: 'No keys' }));
     await p.settle();

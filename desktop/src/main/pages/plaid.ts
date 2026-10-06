@@ -137,6 +137,8 @@ export interface PlaidContext {
   pollMs?: number;
   linkWaitMs?: number;
   sleep?: (ms: number) => Promise<void>;
+  /** Aborted when the person cancels, or starts a new sign-in over this one. */
+  signal?: AbortSignal;
 }
 
 /** One Plaid call. Plaid always answers JSON; an error answer carries
@@ -171,11 +173,21 @@ async function plaidCall<T>(ctx: PlaidContext, endpoint: string, body: Record<st
 }
 
 const sleepReal = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+/** Waits, but wakes the moment the sign-in is cancelled. */
+function sleepOrAbort(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) return sleepReal(ms);
+  return new Promise<void>((r) => {
+    const t = setTimeout(done, ms);
+    function done() { clearTimeout(t); signal!.removeEventListener('abort', done); r(); }
+    signal.addEventListener('abort', done);
+  });
+}
 
 /** Create a Hosted Link session (new bank, or update mode for one that needs
  *  signing in again), open it, and wait for it to finish. Returns the public
  *  tokens of every bank added (empty for update mode or a cancelled session). */
-async function runHostedLink(ctx: PlaidContext, accessToken?: string): Promise<{ publicTokens: string[]; finished: boolean; exited: boolean }> {
+type LinkOutcome = { publicTokens: string[]; finished: boolean; exited: boolean; cancelled?: boolean; exitError?: { code: string; message: string } };
+async function runHostedLink(ctx: PlaidContext, accessToken?: string): Promise<LinkOutcome> {
   const body: Record<string, unknown> = {
     client_name: 'YouCoded',
     language: 'en',
@@ -199,13 +211,18 @@ async function runHostedLink(ctx: PlaidContext, accessToken?: string): Promise<{
   if (!created.hosted_link_url) throw new PlaidError('NO_HOSTED_LINK', 'Plaid did not return a sign-in page for this account. Hosted Link may not be enabled for your Plaid team.');
   await ctx.openExternal(created.hosted_link_url);
 
-  const sleep = ctx.sleep ?? sleepReal;
+  const sleep = ctx.sleep ?? ((ms: number) => sleepOrAbort(ms, ctx.signal));
   const deadline = Date.now() + (ctx.linkWaitMs ?? LINK_WAIT_MS);
+  // WHY a way out: closing the browser tab tells Plaid nothing, so the session never "finishes" and this loop
+  // would hold the page's Connect button for the full 20 minutes (seen on the first real Amex try).
+  const cancelled = (): LinkOutcome => ({ publicTokens: [], finished: false, exited: false, cancelled: true });
   while (Date.now() < deadline) {
+    if (ctx.signal?.aborted) return cancelled();
     await sleep(ctx.pollMs ?? POLL_MS);
+    if (ctx.signal?.aborted) return cancelled();
     const got = await plaidCall<{ link_sessions?: Array<{
       finished_at?: string | null;
-      exit?: unknown;
+      exit?: { error?: { error_code?: string; error_message?: string; display_message?: string | null } | null; metadata?: { institution?: { name?: string } | null } | null } | null;
       results?: { item_add_results?: Array<{ public_token?: string }> };
       on_success?: { public_token?: string } | null;
     }> }>(ctx, '/link/token/get', { link_token: created.link_token });
@@ -215,7 +232,13 @@ async function runHostedLink(ctx: PlaidContext, accessToken?: string): Promise<{
     const tokens = sessions.flatMap((s) => (s.results?.item_add_results ?? []).map((r) => r.public_token).filter((t): t is string => !!t));
     // Legacy field, for a team whose sessions report only on_success.
     if (!tokens.length && done.on_success?.public_token) tokens.push(done.on_success.public_token);
-    return { publicTokens: tokens, finished: true, exited: !!done.exit && !tokens.length };
+    // When the bank or Plaid refused, keep Plaid's own reason so the page can say it rather than a vague failure.
+    const err = done.exit?.error;
+    const bank = done.exit?.metadata?.institution?.name;
+    const exitError = err && (err.error_code || err.display_message || err.error_message)
+      ? { code: err.error_code || 'LINK_ERROR', message: `${bank ? bank + ': ' : ''}${err.display_message || err.error_message || 'the sign-in did not finish.'}` }
+      : undefined;
+    return { publicTokens: tokens, finished: true, exited: !!done.exit && !tokens.length, exitError };
   }
   return { publicTokens: [], finished: false, exited: false };
 }
@@ -331,8 +354,11 @@ export async function runPlaid(ctx: PlaidContext, req: PlaidRequest): Promise<Pl
       }
       case 'connect': {
         const link = await runHostedLink(ctx);
+        if (link.cancelled) return { ok: false, op: 'connect', code: 'CANCELLED', message: 'Connecting was stopped.' };
         if (!link.finished) return { ok: false, op: 'connect', code: 'TIMED_OUT', message: 'Signing in to the bank was not finished within 20 minutes. Try again when you are ready.' };
-        if (!link.publicTokens.length) return { ok: false, op: 'connect', code: 'CANCELLED', message: 'No bank was connected.' };
+        if (!link.publicTokens.length) return link.exitError
+          ? { ok: false, op: 'connect', code: link.exitError.code, message: link.exitError.message }
+          : { ok: false, op: 'connect', code: 'CANCELLED', message: 'No bank was connected.' };
         const added: PlaidItemSummary[] = [];
         for (const pt of link.publicTokens) {
           const ex = await plaidCall<{ access_token: string; item_id: string }>(ctx, '/item/public_token/exchange', { public_token: pt });
@@ -349,9 +375,13 @@ export async function runPlaid(ctx: PlaidContext, req: PlaidRequest): Promise<Pl
         const token = await ctx.items.accessToken(r);
         if (!token) return { ok: false, op: 'reconnect', code: 'NO_TOKEN', message: `This computer no longer holds the sign-in for ${r.institution.name}. Remove it and connect it again.` };
         const link = await runHostedLink(ctx, token);
+        if (link.cancelled) return { ok: false, op: 'reconnect', code: 'CANCELLED', message: 'Reconnecting was stopped.' };
+        if (link.exitError) return { ok: false, op: 'reconnect', code: link.exitError.code, message: link.exitError.message };
         if (!link.finished) return { ok: false, op: 'reconnect', code: 'TIMED_OUT', message: 'Signing in to the bank was not finished within 20 minutes. Try again when you are ready.' };
         return { ok: true, op: 'reconnect', items: [] };
       }
+      // Handled by the pages service (it owns the in-flight sign-in); answered here only for completeness.
+      case 'cancel': return { ok: true, op: 'cancel', items: [] };
       case 'remove': {
         const r = (await ctx.items.list(ctx.env)).find((x) => x.itemId === req.itemId);
         if (!r) return { ok: true, op: 'remove', items: [] };
@@ -386,6 +416,7 @@ export function cleanPlaidRequest(raw: unknown): PlaidRequest | null {
   switch (o.op) {
     case 'status': return { op: 'status' };
     case 'connect': return { op: 'connect' };
+    case 'cancel': return { op: 'cancel' };
     case 'accounts': return { op: 'accounts', live: o.live === true };
     case 'reconnect': return itemId ? { op: 'reconnect', itemId } : null;
     case 'remove': return itemId ? { op: 'remove', itemId } : null;
