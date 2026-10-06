@@ -2,8 +2,16 @@ import { useEffect, useRef, type RefObject } from 'react';
 
 // Attach to any scrollable element to hide the scrollbar and fade the
 // content at whichever edge has hidden scroll room. The hook sets two
-// data attributes — `data-fade-top` and `data-fade-bottom` — which the
-// `.scroll-fade` CSS class reads to drive the fade pseudo-element opacity.
+// data attributes — `data-fade-top` and `data-fade-bottom` — which a fade
+// class reads:
+//   • `.scroll-mask` (styles/scroll-mask.css) — USE THIS for a new list. The
+//     content itself fades to clear, so it blends into wallpaper and glass.
+//   • `.scroll-fade` (globals.css) — the older painted band, kept only for the
+//     files listed in tests/scroll-mask.test.ts (a new file using it fails).
+// WHY the steer (project-switcher friction, 2026-10-05): this hook's name
+// points at `.scroll-fade`, the switcher's first draft took it, and its
+// `::before` band became a flex item that opened the list already scrolled
+// ~60px; Destin asked for the masked fade twice (sessions menu, switcher).
 //
 // Why useEffect-without-deps instead of [] deps: some callers (e.g.
 // ResumeBrowser) conditionally render with `if (!open) return null`, so the

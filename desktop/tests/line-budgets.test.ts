@@ -48,6 +48,22 @@ const HOW_TO =
   'To fix: split the file, or — if the growth is the reviewed shape of this change — raise its number (or add a line for a new file) and say why in the commit. ' +
   'When a refactor shrinks a listed file, lower its number in the same commit; delete the line once it is under `default`.';
 
+// What one new IPC channel normally costs, file by file (measured on syncspaces:remove-project,
+// 2026-10-05: handler, preload bridge, remote-server route, remote-shim bridge, shared type).
+// WHY (project-switcher friction, proposal 11): that change failed this guard on five files at
+// once, and the author had to work out by hand that the overrun was simply one channel's cost.
+const IPC_CHANNEL_COST: Record<string, number> = {
+  'main/ipc-handlers.ts': 3, 'main/preload.ts': 4, 'main/remote-server.ts': 5,
+  'renderer/remote-shim.ts': 1, 'shared/types.ts': 2,
+};
+/** When every overrun is a small one in a file a channel touches, the usual raise for each. */
+function ipcChannelHint(over: { file: string; excess: number }[]): string {
+  if (!over.length || !over.every((o) => o.file in IPC_CHANNEL_COST && o.excess <= 3 * IPC_CHANNEL_COST[o.file])) return '';
+  const usual = Object.entries(IPC_CHANNEL_COST).map(([f, n]) => `${f} +${n}`).join(', ');
+  return `\n\nThis looks like a new IPC channel. One channel usually adds about: ${usual}. ` +
+    'Raise those numbers by what this change actually needs and name the channel in the commit message.';
+}
+
 describe('source files stay inside their line budgets', () => {
   const budgets = JSON.parse(readFileSync(BUDGET_FILE, 'utf8')) as Budgets;
   const files = walk(SRC);
@@ -73,11 +89,13 @@ describe('source files stay inside their line budgets', () => {
 
   it('holds every file to its budget', () => {
     const over: string[] = [];
+    const excess: { file: string; excess: number }[] = [];
     for (const [file, lines] of counts) {
       if (file in budgets.exempt) continue;
       const listed = budgets.budgets[file];
       const max = listed ?? budgets.default;
       if (lines > max) {
+        excess.push({ file, excess: lines - max });
         over.push(
           listed === undefined
             ? `${file}: ${lines} lines, over the ${max}-line default for an unlisted file`
@@ -85,7 +103,21 @@ describe('source files stay inside their line budgets', () => {
         );
       }
     }
-    expect(over, `Over budget:\n  ${over.join('\n  ')}\n\n${HOW_TO}`).toEqual([]);
+    expect(over, `Over budget:\n  ${over.join('\n  ')}\n\n${HOW_TO}${ipcChannelHint(excess)}`).toEqual([]);
+  });
+
+  it('names the usual raise when the overrun is a new IPC channel', () => {
+    // WHY (project-switcher friction, proposal 11): a new channel failed this guard on five
+    // files at once (+1…+5 each) and the author had to work out, file by file, that this is
+    // simply what one channel costs. The failure now says so.
+    const hint = ipcChannelHint([
+      { file: 'main/ipc-handlers.ts', excess: 3 }, { file: 'main/preload.ts', excess: 4 },
+    ]);
+    expect(hint).toMatch(/new IPC channel/);
+    expect(hint).toMatch(/main\/remote-server\.ts \+5/);
+    // Not a channel: an unrelated file over budget, or a big jump in a channel file.
+    expect(ipcChannelHint([{ file: 'renderer/App.tsx', excess: 2 }])).toBe('');
+    expect(ipcChannelHint([{ file: 'main/ipc-handlers.ts', excess: 80 }])).toBe('');
   });
 
   it('reports listed files that have shrunk, so the ceiling can come down', () => {
