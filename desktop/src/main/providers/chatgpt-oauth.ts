@@ -57,7 +57,7 @@ export function chatGptModelsUrl(clientVersion: string): string {
 // ---------------------------------------------------------------------------
 // The OFFICIAL route — OpenAI's "Sign in with ChatGPT" for open-source, locally
 // run apps (launched 2026-09-29). Measured against a real account on
-// 2026-10-05: youcoded-dev docs/active/investigations/2026-10-05-chatgpt-official-siwc-phase0.md.
+// 2026-10-05: youcoded-dev docs/archive/investigations/2026-10-05-chatgpt-official-siwc-phase0.md.
 //
 // WHY two routes: the one above borrows the Codex CLI's client id and a private
 // endpoint, which OpenAI may close at any time. Destin chose (2026-10-05) to ship

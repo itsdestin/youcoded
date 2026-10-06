@@ -1,7 +1,7 @@
 // The OFFICIAL route of Sign in with ChatGPT — OpenAI's own sign-in for
 // open-source apps — built in but off (YOUCODED_CHATGPT_ROUTE=official).
 // Every wire fact pinned here was measured against a real account on
-// 2026-10-05: youcoded-dev docs/active/investigations/2026-10-05-chatgpt-official-siwc-phase0.md.
+// 2026-10-05: youcoded-dev docs/archive/investigations/2026-10-05-chatgpt-official-siwc-phase0.md.
 //
 // Same harness idea as chatgpt-auth.test.ts: a REAL http listener for the
 // callback, a routed fake fetch standing in for OpenAI, the real SecretsStore
