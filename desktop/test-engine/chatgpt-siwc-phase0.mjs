@@ -130,6 +130,13 @@ async function main() {
   const interestingHeaders = (r) => { const h = {}; r.headers.forEach((v, k) => { if (/ratelimit|rate-limit|usage|limit|plan|retry|x-request-id|openai|codex|reset|window/i.test(k)) h[k] = v; }); return h; };
 
   // --followup: the questions the first run left open (run 1, 2026-10-05).
+  if (argv.includes('--usage-hunt')) {
+    await usageHunt({ authH, interestingHeaders });
+    // Leave no "YouCoded" connection behind in the account's ChatGPT settings.
+    const rv = await fetch(disc.revocation_endpoint, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form({ token: refreshToken, token_type_hint: 'refresh_token', client_id: clientId }) });
+    say(`signed out: revoke HTTP ${rv.status}`);
+    return;
+  }
   if (argv.includes('--followup')) { await followup({ disc, clientId, authH, interestingHeaders, tokenPost, getRefresh: () => refreshToken, form }); return; }
 
   // Q3 — models.
@@ -261,6 +268,63 @@ async function followup({ disc, clientId, authH, interestingHeaders, tokenPost, 
   const rj = await rf.json().catch(() => ({}));
   record('F3_refresh_after_revoke', { revokeStatus: rv.status, refreshStatus: rf.status, error: rj.error ?? null, error_description: rj.error_description ?? null, code: rj.code ?? rj.error?.code ?? null });
   say(`F3: revoke HTTP ${rv.status}; refresh afterwards HTTP ${rf.status} ${JSON.stringify(rj).slice(0, 200)}`);
+  say(`done — results in ${path.join(OUT, 'results.json')}`);
+}
+
+// --usage-hunt (2026-10-05, Destin: "there's gotta be a way to find/pull this information").
+// The docs say apps cannot read plan usage; /wham/usage refused this token. Three more places:
+// U1  candidate GET addresses on both hosts
+// U2  the same HTTP reply asked for in the Codex client's dress (originator / beta headers) —
+//     the Codex route put x-codex-primary-* on every reply; does any header set unlock them here?
+// U3  the Responses WebSocket (the manifest says prefer_websockets: true). Codex receives a
+//     `codex.rate_limits` event over it; every event type and the upgrade headers are recorded.
+async function usageHunt({ authH, interestingHeaders }) {
+  const { default: WebSocket } = await import('ws');
+  for (const u of [
+    `${API}/me`, `${API}/usage`, `${API}/rate_limits`, `${API}/chatgpt/usage`, `${API}/subscription_sharing/usage`,
+    `${API}/organization/usage`, 'https://chatgpt.com/backend-api/wham/usage', 'https://chatgpt.com/backend-api/codex/usage',
+    'https://chatgpt.com/backend-api/me', 'https://auth.openai.com/userinfo',
+  ]) {
+    try {
+      const r = await fetch(u, { headers: { ...authH(), accept: 'application/json' } });
+      const t = await r.text();
+      record(`U1 ${u}`, { status: r.status, body: t.slice(0, 300) });
+      say(`U1 ${u}: HTTP ${r.status} ${t.slice(0, 140).replace(/\s+/g, ' ')}`);
+    } catch (e) { say(`U1 ${u}: ${e.message}`); }
+  }
+  const mr = await (await fetch(`${API}/models`, { headers: { ...authH(), accept: 'application/json' } })).json();
+  const model = mr.models.find((m) => m.visibility === 'list').slug;
+  const body = { model, store: false, stream: true, instructions: 'Reply with the single word: ok', input: [{ role: 'user', content: [{ type: 'input_text', text: 'ok?' }] }] };
+  for (const [label, extra] of [
+    ['plain', {}],
+    ['codex-originator', { originator: 'codex_cli_rs', version: '0.140.0' }],
+    ['beta-experimental', { 'OpenAI-Beta': 'responses=experimental' }],
+  ]) {
+    const r = await fetch(`${API}/responses`, { method: 'POST', headers: { ...authH(), ...extra, 'content-type': 'application/json', accept: 'text/event-stream' }, body: JSON.stringify(body) });
+    const t = await r.text();
+    const names = []; r.headers.forEach((_, k) => names.push(k));
+    const types = [...new Set([...t.matchAll(/"type":"([a-z_.]+)"/g)].map((m) => m[1]).filter((x) => !x.startsWith('response.output') && !x.startsWith('response.content')))];
+    record(`U2 ${label}`, { status: r.status, headerNames: names, interesting: interestingHeaders(r), eventTypes: types });
+    say(`U2 ${label}: HTTP ${r.status} headers=${names.filter((n) => /codex|limit|usage|plan/i.test(n)).join(',')} events=${types.join(',')}`);
+  }
+  for (const [label, extra] of [['ws-plain', {}], ['ws-beta', { 'OpenAI-Beta': 'responses_websockets=2026-02-06' }]]) {
+    await new Promise((resolve) => {
+      const events = []; let upgrade = null;
+      const ws = new WebSocket('wss://api.openai.com/v1/responses', { headers: { ...authH(), ...extra } });
+      const done = (why) => { try { ws.close(); } catch {} record(`U3 ${label}`, { why, upgrade, events }); say(`U3 ${label}: ${why}; events=${events.map((e) => e.type).join(',')}`); resolve(); };
+      ws.on('upgrade', (res) => { upgrade = Object.fromEntries(Object.entries(res.headers).filter(([k]) => /codex|limit|usage|plan|x-/i.test(k))); });
+      ws.on('unexpected-response', (_req, res) => { let b = ''; res.on('data', (c) => { b += c; }); res.on('end', () => done(`HTTP ${res.statusCode} ${b.slice(0, 200)}`)); });
+      ws.on('open', () => ws.send(JSON.stringify({ type: 'response.create', ...body, stream: undefined })));
+      ws.on('message', (data) => {
+        let e; try { e = JSON.parse(String(data)); } catch { return; }
+        // Keep whole any event that is not ordinary text streaming — that is where usage would be.
+        events.push(/^response\.(output|content)/.test(e.type) ? { type: e.type } : { type: e.type, body: redact(e) });
+        if (e.type === 'response.completed' || e.type === 'response.failed' || e.type === 'error') setTimeout(() => done('finished'), 1500);
+      });
+      ws.on('error', (e) => done(`error ${e.message}`));
+      setTimeout(() => done('timeout'), 30000);
+    });
+  }
   say(`done — results in ${path.join(OUT, 'results.json')}`);
 }
 
