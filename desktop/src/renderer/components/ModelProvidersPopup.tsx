@@ -4,7 +4,7 @@ import { useEscClose } from '../hooks/use-esc-close';
 import ProvidersSection from './ProvidersSection';
 import LocalModelsSection from './LocalModelsSection';
 import { OPENROUTER_CREDITS_URL, type OpenRouterSignInStatus, type ProviderHealth, type ProviderStatus } from '../../shared/provider-types';
-import { CHATGPT_MANAGE_USAGE_LINK, chatGptPlanLabel, type ChatGptAccountStatus } from '../../shared/chatgpt-types';
+import { chatGptPlanLabel, type ChatGptAccountStatus } from '../../shared/chatgpt-types';
 import { claudePlanLabel } from '../../shared/claude-account-types';
 import { useClaudeStatus } from './model/availability';
 import { AnchorTip, Button, Dialog, InputGroup, TextInput } from './ui';
@@ -39,7 +39,7 @@ function SectionHeader({ title, info }: { title: string; info: { label: string; 
 // same muted grey · one action on the right · optional plan bars underneath.
 // No green "connected" text and no "Default engine" badge — the status line
 // says the state in words and the plan bars say how much is left.
-function ProviderRow({ title, info, status, detail, action, account, accountLabel = 'My Account', children, screen }: {
+function ProviderRow({ title, info, status, detail, action, account, children, screen }: {
   title: string;
   /** The `shoot` name of this card (photo-only build): marks it so a picture of the
    *  page scrolls to this card instead of whatever sits at the top. */
@@ -56,9 +56,6 @@ function ProviderRow({ title, info, status, detail, action, account, accountLabe
    *  provider's own account page in the browser. Only passed when signed in —
    *  an account page is no use to someone who has no account here yet. */
   account?: string;
-  /** The account button's words when it opens something other than the
-   *  account page (official ChatGPT route: its usage page). */
-  accountLabel?: string;
   children?: React.ReactNode;
 }) {
   return (
@@ -79,7 +76,7 @@ function ProviderRow({ title, info, status, detail, action, account, accountLabe
             {account && (
               <Button variant="secondary" size="sm"
                 onClick={() => void (window as any).claude.shell.openExternal(account)}>
-                {accountLabel}
+                My Account
               </Button>
             )}
             {action}
@@ -358,7 +355,9 @@ export function ChatGptBlock() {
     // Email on the status line, plan on the detail line: the two together
     // wrapped onto a second line beside the button (round-2 self-check).
     line = `Signed in as ${status.email}`;
-    detail = { text: official ? "How much is left is on ChatGPT's usage page." : chatGptPlanLabel(status.plan) };
+    // Official route: no plan name to show, and no extra line in its place
+    // (review R-1, Destin 2026-10-06: "remove the extra copy line").
+    detail = official ? null : { text: chatGptPlanLabel(status.plan) };
   } else if (status?.state === 'waiting') {
     line = (
       <span className="inline-flex items-center gap-1.5">
@@ -417,7 +416,7 @@ export function ChatGptBlock() {
               </p>
               <p>
                 How much of your plan YouCoded may use, and how much is left, is on ChatGPT's usage
-                page. Manage usage opens it.
+                page (ChatGPT Settings → Usage).
               </p>
             </>
           ) : (
@@ -441,9 +440,9 @@ export function ChatGptBlock() {
         }}
         status={line}
         detail={note ? { text: note, tone: 'bad' } : detail}
-        account={official ? CHATGPT_MANAGE_USAGE_LINK
-          : status?.state === 'signed-in' || status?.state === 'blocked' ? 'https://chatgpt.com/#settings/Account' : undefined}
-        accountLabel={official ? 'Manage usage' : undefined}
+        // Review R-1 (Destin, 2026-10-06): the official card keeps My Account
+        // like today; Manage usage lives only on the limit message.
+        account={status?.state === 'signed-in' || status?.state === 'blocked' ? 'https://chatgpt.com/#settings/Account' : undefined}
         action={action}
       >
         {/* The official route has no bars to draw; rendering the empty
