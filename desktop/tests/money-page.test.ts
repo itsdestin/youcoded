@@ -84,6 +84,17 @@ describe('the Money page', () => {
     expect(p.last().accounts.some((a: any) => a.id === 'plaid:s1')).toBe(true);
   });
 
+  it('with no banks connected any more, drops accounts that came from a bank and keeps the ones entered by hand', async () => {
+    const prior = { demoToday: TODAY, banks: { old: { name: 'Practice', ok: true } }, accounts: [
+      { id: 'plaid:x', itemId: 'old', source: 'plaid', kind: 'checking', institution: 'Practice', name: 'Fake', balance: 1, updatedAt: `${TODAY}T10:00:00Z` },
+      { id: 'm1', source: 'manual', kind: 'loan', institution: 'Earnest', name: 'Loan', balance: 5, updatedAt: `${TODAY}T10:00:00Z` },
+    ] };
+    const p = open(prior, async () => ({ ok: true, op: 'accounts', items: [] }));
+    await p.settle();
+    expect(p.last().accounts.map((a: any) => a.id)).toEqual(['m1']);
+    expect(p.last().banks).toEqual({});
+  });
+
   it('asks the app to reconnect a bank, then checks again', async () => {
     const asked: any[] = [];
     const p = open({ demoToday: TODAY }, async (req) => { asked.push(req); return req.op === 'reconnect' ? { ok: true, op: 'reconnect', items: [] } : bankAnswer; });

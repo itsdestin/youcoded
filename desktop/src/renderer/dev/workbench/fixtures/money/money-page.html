@@ -437,7 +437,10 @@
         render(); return;
       }
       bankNote = null;
-      if (r.items.length) { mergePlaid(r.items); snapshot(); }
+      // Merged even with no banks: an empty answer means none are connected (all removed, or practice switched to
+      // real), so accounts that came from a bank must go too. A bank that failed keeps its last numbers (mergePlaid).
+      mergePlaid(r.items);
+      if (data.accounts.length) snapshot();
       data.checkedAt = today().toISOString();
       save(); render();
     });
