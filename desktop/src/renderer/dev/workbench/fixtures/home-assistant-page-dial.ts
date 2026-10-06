@@ -1,18 +1,20 @@
-// The thermostat dial's tick, handle and "Now" label (owner, 2026-10-05: "the current temp should be a line cutting across the
+// The thermostat dial's tick, handle and current-temperature label (owner, 2026-10-05: "the current temp should be a line cutting across the
 // wheel instead of a dot; the wheel should have a handle like the brightness/volume sliders that I can use instead of the +/-
 // buttons; 'Now 79' should sit next to the line; make sure it never overlaps the +/- buttons").
 // Kept apart from home-assistant-page.ts for its line budget. HOME_DIAL_JS is pasted INSIDE the page's script and shares its
 // helpers (thing, esc, holdVal, sendSlider, quiet, thRange, thSide, thWords, thRangeMid, morphInto, renderSoon, MODE_NAMES).
 //
 // What a person sees: the room's temperature is a short line crossing the ring; the set point is a round handle on the ring (two in
-// Auto) that can be dragged or moved with the arrow keys; "Now 79°" sits beside the line. The − and + buttons stay: the handle is
+// Auto) that can be dragged or moved with the arrow keys; the room's number ("79°", nothing else) hangs off the line's outer tip (owner, 2026-10-05, design deck now-label-all, option b "Just the number"). The − and + buttons stay: the handle is
 // a second way to do the same thing.
 //
+// Owner's pick (deck now-label-all, option b): the label stays attached to the line instead of sliding round the ring. Its nearest corner
+// sits on the line's outer tip (2px gap), first on the side the line leans to, then the other side, each time a little further out along
+// the line (2px per step); then the same on the inner tip; if nothing is clear, the middle of the dial. The line's angle never changes.
 // WHY the label's place is computed (HOME_DIAL_GEOM_JS, pure, no page): the card is narrow, the − and + buttons sit right beside the dial and
 // the ring leaves almost no room outside it, so "just put it next to the line" overlaps something at some temperatures. The rule, tried in
-// this order, first one that overlaps nothing wins: (1) just outside the ring at the line's angle; (2) just inside the ring at the line's
-// angle; (3) the same two, moved along the ring a few degrees at a time (up to 90 degrees either way, closest first); (4) the middle of the
-// dial under the big number (the old place). A spot is refused if it leaves the dial's allowed area (the dial plus a margin, so it
+// this order, first one that overlaps nothing wins: (1) hung off the outer tip; (2) hung off the inner tip; (3) the same two, pushed
+// further along the line a little at a time, either side of it; (4) the middle of the dial under the big number (the old place). A spot is refused if it leaves the dial's allowed area (the dial plus a margin, so it
 // stays in the card: on a room card sideways it may reach as far as the buttons' column, since the buttons themselves are obstacles), touches the ring, a handle, the − or + button (with a gap), or the big number in the middle.
 // The geometry is its own string so a test can run the exact code the page runs (jsdom cannot measure layout).
 //
@@ -42,14 +44,14 @@ export const HOME_DIAL_GEOM_JS = `
   // Where things are drawn in the page, as the CSS lays them out (the same numbers as the dial's CSS): the dial's size, the round
   // buttons either side of it on a room card, and the sizes of its text. narrow = the window under 420px.
   function thGeom(compact, narrow) {
-    if (!compact) return { S: 210, arcW: 14, hs: 30, setFs: 54, lblFs: 12, nowFs: 12, rangeFs: 22, btn: 0, gap: 0, mx: 12, my: 12 };
-    return narrow ? { S: 118, arcW: 16, hs: 26, setFs: 30, lblFs: 10, nowFs: 10, rangeFs: 10, btn: 36, gap: 8, mx: 42, my: 4 }
-      : { S: 148, arcW: 16, hs: 28, setFs: 38, lblFs: 10, nowFs: 10, rangeFs: 14, btn: 42, gap: 12, mx: 52, my: 4 };
+    if (!compact) return { S: 210, arcW: 14, hs: 30, setFs: 54, lblFs: 12, nowFs: 15, rangeFs: 22, btn: 0, gap: 0, mx: 32, my: 24 };
+    return narrow ? { S: 118, arcW: 16, hs: 26, setFs: 30, lblFs: 10, nowFs: 12, rangeFs: 10, btn: 36, gap: 8, mx: 42, my: 16 }
+      : { S: 148, arcW: 16, hs: 28, setFs: 38, lblFs: 10, nowFs: 12, rangeFs: 14, btn: 42, gap: 12, mx: 52, my: 16 };
   }
-  // Where "Now 79°" goes. o: S (dial px), R (ring radius px), half (half the ring's thickness), tick (how far the line sticks out of the
+  // Where the current temperature ("79°") goes. o: S (dial px), R (ring radius px), half (half the ring's thickness), tick (how far the line sticks out of the
   // ring each way), a (the line's angle in degrees), w/h (the label's box), mx / my (how far past the dial it may reach sideways / up and down), circles [{x,y,r}]
   // (the handles), rects [{x,y,w,h}] (the buttons, dial-local), core {w,h} (the big number, centred) or null.
-  // Returns { x, y, side: 'out' | 'in', turn } (the label's centre), or null: put it in the middle under the number.
+  // Returns { x, y, side: 'out' | 'in' } (the label's centre), or null: put it in the middle under the number.
   function thLabelSpot(o) {
     var c = o.S / 2, lox = -o.mx, hix = o.S + o.mx, loy = -o.my, hiy = o.S + o.my, pad = 4;
     function clear(x, y) {
@@ -71,17 +73,17 @@ export const HOME_DIAL_GEOM_JS = `
       if (o.core && l < c + o.core.w / 2 + pad && r > c - o.core.w / 2 - pad && t < c + o.core.h / 2 + pad && b > c - o.core.h / 2 - pad) return false; // touches the big number
       return true;
     }
+    // The line's direction is fixed (WHY: the label stays attached to the line, deck now-label-all option b). Each step pushes the label 2px
+    // further along it; the corner nearest the tip is on the tip's x/y side of the line, first one way across the line, then the other.
+    var rad = o.a * Math.PI / 180, ux = Math.cos(rad), uy = Math.sin(rad), sides = ['out', 'in'];
     for (var n = 0; n <= 15; n++) {
-      var turns = n === 0 ? [0] : [n * 6, -n * 6];
-      for (var j = 0; j < turns.length; j++) {
-        var rad = (o.a + turns[j]) * Math.PI / 180, ux = Math.cos(rad), uy = Math.sin(rad);
-        var sup = Math.abs(ux) * o.w / 2 + Math.abs(uy) * o.h / 2;
-        var sides = ['out', 'in'];
+      for (var sg = 1; sg >= (n === 0 ? 1 : -1); sg -= 2) {
         for (var s = 0; s < 2; s++) {
-          var rc = sides[s] === 'out' ? o.R + o.tick + 2 + sup : o.R - o.tick - 2 - sup;
-          if (rc <= 0) continue;
-          var x = c + ux * rc, y = c + uy * rc;
-          if (clear(x, y)) return { x: x, y: y, side: sides[s], turn: turns[j] };
+          var dir = s === 0 ? 1 : -1, tr = o.R + dir * (o.tick + 2) + dir * n * 2;
+          if (tr <= 0) continue;
+          var sx = (ux >= 0 ? 1 : -1) * dir * sg, sy = (uy >= 0 ? 1 : -1) * dir;
+          var x = c + ux * tr + sx * o.w / 2, y = c + uy * tr + sy * o.h / 2;
+          if (clear(x, y)) return { x: x, y: y, side: sides[s] };
         }
       }
     }
@@ -97,7 +99,7 @@ export const HOME_DIAL_GEOM_JS = `
     });
     var core = { w: (range ? 2 * 3 * 0.62 * bigFs + bigFs * 1.4 : setLen * 0.62 * bigFs) + 4, h: g.lblFs * 1.25 + bigFs * 1.1 };
     var rects = g.btn && hasSet ? [{ x: -g.gap - g.btn, y: g.S / 2 - g.btn / 2, w: g.btn, h: g.btn }, { x: g.S + g.gap, y: g.S / 2 - g.btn / 2, w: g.btn, h: g.btn }] : [];
-    var o = { S: g.S, R: 80 * k, half: g.arcW / 2 * k, tick: 12 * k, a: nowDeg, w: nowLen * 0.56 * g.nowFs + 8, h: g.nowFs * 1.25 + 2, mx: g.mx, my: g.my, circles: circles, rects: rects, core: core };
+    var o = { S: g.S, R: 80 * k, half: g.arcW / 2 * k, tick: 12 * k, a: nowDeg, w: nowLen * 0.56 * g.nowFs + 6, h: g.nowFs * 1.25 + 4, mx: g.mx, my: g.my, circles: circles, rects: rects, core: core };
     return { o: o, spot: thLabelSpot(o) };
   }
 `;
@@ -107,12 +109,13 @@ export const HOME_DIAL_CSS = `
      coloured fill and on the empty track alike. */
   .th-now-halo { stroke: var(--inset); stroke-width: 5.5; stroke-linecap: round; fill: none; }
   .th-now-line { stroke: var(--fg); stroke-width: 2.5; stroke-linecap: round; fill: none; }
-  .th-now-lbl { position: absolute; transform: translate(-50%, -50%); z-index: 1; padding: 1px 4px; border-radius: 9999px; font-size: 12px; line-height: 1.25; white-space: nowrap; color: var(--fg-2); pointer-events: none;
-    background: color-mix(in srgb, var(--inset) 82%, transparent); }
+  /* WHY just the number, larger and quieter, no pill (owner's pick, deck now-label-all option b): the line is the marker. A halo in the card colour keeps it readable over the ring. */
+  .th-now-lbl { position: absolute; transform: translate(-50%, -50%); z-index: 1; padding: 0; font-size: 15px; font-weight: 400; line-height: 1.25; white-space: nowrap; color: var(--fg-2); pointer-events: none;
+    text-shadow: 0 0 3px var(--inset), 0 0 3px var(--inset), 0 0 5px var(--inset); }
   /* Auto's two numbers must fit inside the ring clear of the handles: sized from the ring's inner radius (a test pins it); the Climate dial's is set below. */
   .th-dial .th-range { font-size: 22px; gap: 6px; }
   .th-compact .th-range { font-size: 14px; gap: 3px; } @media (max-width: 420px) { .th-compact .th-range { font-size: 10px; gap: 2px; } }
-  .th-compact .th-now-lbl { font-size: 10px; padding: 1px 3px; }
+  .th-compact .th-now-lbl { font-size: 12px; }
   /* The set point: the same handle as the brightness and volume bars (a white disc with a ring of the fill's colour and a soft shadow). */
   .th-dial { --hs: 30px; } .th-compact .th-dial { --hs: 28px; }
   @media (max-width: 420px) { .th-compact .th-dial { --hs: 26px; } }
@@ -134,7 +137,7 @@ export const HOME_DIAL_JS = `${HOME_DIAL_GEOM_JS}
     var nm = which === 'low' ? 'Heat setting' : which === 'high' ? 'Cool setting' : 'Temperature setting';
     return '<div class="th-h" role="slider" tabindex="0" data-th-h="' + which + '" data-th-id="' + esc(it.id) + '" data-k="th-h:' + esc(it.id) + ':' + which + '" aria-label="' + nm + '" aria-valuemin="' + min + '" aria-valuemax="' + max + '" aria-valuenow="' + val + '" aria-valuetext="' + val + ' degrees" style="left:' + thPct(100 + 80 * Math.cos(a)) + ';top:' + thPct(100 + 80 * Math.sin(a)) + '"></div>';
   }
-  // The dial's inside: ring, line, middle, handles, and "Now" label.
+  // The dial's inside: ring, line, middle, handles, and the room's-temperature label.
   function thDialInner(it, compact) {
     var mode = it.state, lo = it.min != null ? it.min : 50, hi = it.max != null ? it.max : 90, step = it.step || 1;
     var f = function (v) { return Math.max(0, Math.min(1, (v - lo) / (hi - lo))); };
@@ -154,11 +157,11 @@ export const HOME_DIAL_JS = `${HOME_DIAL_GEOM_JS}
       (range ? [['low', it.tlo], ['high', it.thi]] : [['set', it.target]]).forEach(function (p) { hs += thHandle(it, p[0], p[1], lo, hi, step, f(p[1])); fr.push(f(p[1])); });
     }
     // The label: beside the line when there is room, else in the middle (the rule is at the top of this file).
-    var nowTxt = haveNow ? 'Now ' + esc(it.cur) + '°' : '', lbl = '', centre = '';
+    var nowTxt = haveNow ? esc(it.cur) + '°' : '', nowName = haveNow ? 'aria-label="Now ' + esc(it.cur) + '° inside" title="Now ' + esc(it.cur) + '° inside" role="img" ' : '', lbl = '', centre = '';
     if (haveNow) {
       var plan = thLabelPlan(g, nowDeg, nowTxt.length, fr, hasSet, range, hasSet ? String(range ? 5 : it.target).length + 1 : 1), spot = plan.spot;
-      if (spot) lbl = '<span class="th-now-lbl" data-k="th-now:' + esc(it.id) + '" data-spot="' + spot.side + '" style="left:' + (spot.x / g.S * 100).toFixed(2) + '%;top:' + (spot.y / g.S * 100).toFixed(2) + '%">' + nowTxt + '</span>';
-      else centre = '<span class="th-cur" data-spot="centre">' + nowTxt + '</span>';
+      if (spot) lbl = '<span class="th-now-lbl" ' + nowName + 'data-k="th-now:' + esc(it.id) + '" data-spot="' + spot.side + '" style="left:' + (spot.x / g.S * 100).toFixed(2) + '%;top:' + (spot.y / g.S * 100).toFixed(2) + '%">' + nowTxt + '</span>';
+      else centre = '<span class="th-cur" ' + nowName + 'data-spot="centre">' + nowTxt + '</span>';
     }
     return svg + '<div class="th-mid">' + (range && hasSet ? thRangeMid(it, doing) : '<span class="th-lbl">' + (hasSet ? esc(thWords(it)) : 'Off') + '</span><span class="th-set">' + (hasSet ? esc(it.target) + '°' : '—') + '</span>') + centre + '</div>' + hs + lbl;
   }
