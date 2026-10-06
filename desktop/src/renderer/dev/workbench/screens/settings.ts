@@ -48,6 +48,8 @@ export const SETTINGS: readonly ScreenEntry[] = [
   { ...settings('settings/assistant/cloud/chatgpt#signed-out', 'dialog', 'sign-in'), params: { chatgpt: 'signed-out', planUsage: '1' } },
   { ...settings('settings/assistant/cloud/chatgpt#waiting', 'dialog', 'sign-in'), params: { chatgpt: 'waiting', planUsage: '1' } },
   { ...settings('settings/assistant/cloud/chatgpt#blocked', 'dialog', 'sign-in', 'error-state'), params: { chatgpt: 'blocked', planUsage: '1' } },
+  { ...settings('settings/assistant/cloud/chatgpt#official', 'dialog', 'sign-in'), params: { chatgpt: 'official', planUsage: '1' } },
+  { ...settings('settings/assistant/cloud/chatgpt#reauth', 'dialog', 'sign-in'), params: { chatgpt: 'reauth', planUsage: '1' } },
   { ...settings('settings/assistant/cloud/openrouter#none', 'dialog', 'sign-in'), params: { openrouter: 'none', planUsage: '1' } },
   { ...settings('settings/assistant/cloud/openrouter#waiting', 'dialog', 'sign-in'), params: { openrouter: 'none', openrouterSignIn: 'waiting', planUsage: '1' } },
   { ...settings('settings/assistant/cloud/openrouter#failed', 'dialog', 'sign-in', 'error-state'), params: { openrouter: 'none', openrouterSignIn: 'failed', planUsage: '1' } },

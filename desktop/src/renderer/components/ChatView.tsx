@@ -78,6 +78,8 @@ interface Props {
   onSwitchProviders?: () => void;
   /** Plan-limit card's Upgrade plan button: opens OpenAI's upgrade page. */
   onUpgradePlan?: () => void;
+  /** Official ChatGPT route's limit card: opens ChatGPT's usage page. */
+  onManageUsage?: () => void;
   /** OpenRouter "not enough credit" card: opens OpenRouter's add-credit page. */
   onAddCredit?: () => void;
   // Task 12 (docked strip, replaces Task 11's UserMessage-bubble affordances):
@@ -107,7 +109,7 @@ interface Props {
 }
 
 // Memoised at the bottom of the file — see the WHY there.
-function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onAddCredit, onCancelQueued, onEditQueued, onSendQueuedNow, conversationStatus, onRefreshConversation, filling, modelLoadingDemo }: Props) {
+function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onManageUsage, onAddCredit, onCancelQueued, onEditQueued, onSendQueuedNow, conversationStatus, onRefreshConversation, filling, modelLoadingDemo }: Props) {
   const state = useChatState(sessionId, { paused: !visible }); // WHY paused: hidden, it redrew per streamed word; live again on show (see useChatState)
   const dispatch = useChatDispatch();
 
@@ -1192,6 +1194,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
                     onOpenProviderSettings={onOpenProviderSettings}
                     onSwitchProviders={onSwitchProviders}
                     onUpgradePlan={onUpgradePlan}
+                    onManageUsage={onManageUsage}
                     onAddCredit={onAddCredit}
                     // Stalled card only. Retry re-runs the PARKED STEP — it is
                     // deliberately NOT the native-send helper the old TODO here

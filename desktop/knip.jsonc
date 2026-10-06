@@ -50,6 +50,9 @@
     // swapped in for a downloaded file cannot freeze a file thread on the host.
     // A POSIX utility (coreutils), not an npm package: Node has no mkfifo API.
     "mkfifo",
+    // Opens the browser for test-engine/chatgpt-siwc-phase0.mjs, a hand-run
+    // probe that signs a real ChatGPT account in. A desktop utility, not npm.
+    "xdg-open",
     // Linux socket-stats tool, engine-supervisor.ts: which process holds the port.
     "ss",
     // Windows process lister, sync-service.ts: is this sync PID still alive.

@@ -60,9 +60,10 @@ function stalledRequested(): boolean {
 
 /** `?planLimit=1`: replay the chatgpt fixture's used-up-plan error (see
  *  LoadOptions.includePlanLimit). Same node-test guard as stalledRequested(). */
-function planLimitRequested(): boolean {
+function planLimitRequested(): boolean | 'official' {
   if (typeof location === 'undefined') return false;
-  return new URLSearchParams(location.search).get('planLimit') === '1';
+  const v = new URLSearchParams(location.search).get('planLimit');
+  return v === 'official' ? 'official' : v === '1';
 }
 
 /** `?providerError=<case>`: replay one OpenRouter failure card on the native
