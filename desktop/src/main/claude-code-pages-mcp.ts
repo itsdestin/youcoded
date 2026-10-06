@@ -63,7 +63,7 @@ var TOOLS = [
   },
   {
     name: 'UpdatePageData',
-    description: 'Change a YouCoded Page\'s saved data when the user asks ("my Earnest balance is $14,200", "add eggs to my grocery page", "mark the phone bill paid"). Read the page first so the change matches the shape the page already uses. An open page updates immediately. Changes: "set" puts a value at a path (making missing fields), "append" adds a value to the end of a list, "remove" deletes a field or list item. ' + PATH_HELP + ' Keep any "updatedAt" style field current when the page has one.',
+    description: 'Change a YouCoded Page\'s saved data when the user asks ("my Earnest balance is $14,200", "add eggs to my grocery page", "mark the phone bill paid"). Read the page first: ReadPageData shows the page\'s own data guide when it has one, which says exactly what each item looks like, so there is no need to read the page\'s code. An open page updates immediately. Changes: "set" puts a value at a path (making missing fields), "append" adds a value to the end of a list, "remove" deletes a field or list item. ' + PATH_HELP + ' Keep any "updatedAt" style field current when the page has one.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -107,7 +107,10 @@ function listPages() {
           var dir = path.join(root, e.name);
           return readJson(path.join(dir, 'page.json')).then(function (j) {
             if (!j || typeof j !== 'object') return;
-            out.push({ id: (ri === 0 ? '' : 'project:') + e.name, slug: e.name, dir: dir, name: typeof j.name === 'string' ? j.name : e.name, description: typeof j.description === 'string' ? j.description : '' });
+            // dataHelp: the page's own note on how its saved data is shaped (a string, or a list of lines), so a change
+            // can match it even when a list is still empty and there is no example to copy.
+            var help = Array.isArray(j.dataHelp) ? j.dataHelp.filter(function (x) { return typeof x === 'string'; }).join('\n') : typeof j.dataHelp === 'string' ? j.dataHelp : '';
+            out.push({ id: (ri === 0 ? '' : 'project:') + e.name, slug: e.name, dir: dir, name: typeof j.name === 'string' ? j.name : e.name, description: typeof j.description === 'string' ? j.description : '', help: help.slice(0, 4000) });
           });
         }));
       }, function () { /* no Pages folder here */ });
@@ -247,7 +250,7 @@ function callTool(id, params) {
       return Promise.all(pages.map(function (p) {
         return readData(p.dir).then(function (d) {
           var fields = d && typeof d === 'object' && !Array.isArray(d) ? Object.keys(d).join(', ') : d === null ? 'nothing saved yet' : typeof d;
-          return '- ' + p.name + ' (id: ' + p.id + ')' + (p.description ? ': ' + p.description : '') + '\n  saved data: ' + fields;
+          return '- ' + p.name + ' (id: ' + p.id + ')' + (p.description ? ': ' + p.description : '') + '\n  saved data: ' + fields + (p.help ? '\n  has a data guide (shown by ReadPageData)' : '');
         });
       })).then(function (lines) { text(id, lines.join('\n')); });
     }).catch(function (e) { text(id, 'Could not list pages: ' + messageOf(e), true); });
@@ -257,7 +260,8 @@ function callTool(id, params) {
       if (!p) return text(id, 'No page called "' + String(a.page) + '". Use ListPages to see them.', true);
       return readData(p.dir).then(function (d) {
         var at = Array.isArray(a.path) && a.path.length ? getAt(d, a.path) : d;
-        text(id, JSON.stringify(trimmed(at === undefined ? null : at), null, 1));
+        var guide = p.help ? 'How this page keeps its data (from the page itself; follow it when changing anything):\n' + p.help + '\n\nData:\n' : '';
+        text(id, guide + JSON.stringify(trimmed(at === undefined ? null : at), null, 1));
       });
     }).catch(function (e) { text(id, 'Could not read that page: ' + messageOf(e), true); });
   }

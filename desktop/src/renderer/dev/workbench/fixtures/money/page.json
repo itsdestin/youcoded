@@ -1,0 +1,25 @@
+{
+  "name": "Money",
+  "description": "Every account, card, loan and bill in one place: net worth, limits, and what is due next.",
+  "icon": "money",
+  "connections": [
+    { "id": "bank", "kind": "plaid", "environment": "sandbox" }
+  ],
+  "dataHelp": [
+    "Amounts are plain numbers in dollars (22100, not \"$22,100\"). Dates are \"YYYY-MM-DD\"; times are full ISO date-times.",
+    "accounts: a list. Each account is { id, source, kind, institution, name, balance, updatedAt } plus optional limit, apr, note, payment.",
+    "- id: unique text. For one added by hand use \"m\" followed by digits (e.g. \"m1791250000000\").",
+    "- source: \"manual\" for anything added by hand or by you; \"plaid\" for accounts the bank fills in.",
+    "- kind: \"checking\", \"savings\", \"investment\", \"credit\" (a credit card) or \"loan\" (student loan, car loan, Affirm plan...).",
+    "- institution: the company's name, spelled the usual way (\"Earnest\", \"MOHELA\", \"Capital One\", \"American Express\", \"Affirm\").",
+    "- balance: always positive. For credit cards and loans it is the amount owed; the page shows owed money in brackets itself.",
+    "- updatedAt: set it to the current date-time whenever you change a balance, or the page will say it needs updating.",
+    "- limit: a credit card's credit limit. apr: the interest rate as a percent number (5.2). note: a few words (\"4 payments left\").",
+    "- payment: the next payment on a card or loan, { amount, due, monthly: true }.",
+    "- Accounts with source \"plaid\" are refreshed from the bank every time the page opens: do not change their balance, it would be overwritten. Adding a limit the bank does not share is fine.",
+    "bills: a list of bills that are not an account (insurance, phone, subscriptions). Each is { id, provider, name, sub, amount, due, monthly }.",
+    "- id: \"b\" followed by digits. provider and name: the company (\"Liberty Mutual\"). sub: what it is (\"car insurance\"). due: the next due date. monthly: true when it repeats every month.",
+    "Marking a bill or payment paid: when monthly, move due forward one month and set lastPaid to today's date; otherwise set paid to today's date.",
+    "history, banks, institutions and checkedAt are written by the page itself: leave them alone. settings holds staleDays, warnPct and alertPct (the card-limit warning points)."
+  ]
+}

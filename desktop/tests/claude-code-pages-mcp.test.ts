@@ -84,6 +84,17 @@ describe('the page-data tools', () => {
     expect(one.text).toBe('5');
   });
 
+  it('shows the page\'s own data guide when reading, so an empty list still has a shape to follow', async () => {
+    page(personal, 'money', 'Money', { bills: [] });
+    const pj = path.join(personal, 'money', 'page.json');
+    writeFileSync(pj, JSON.stringify({ name: 'Money', dataHelp: ['bills: { id, provider, amount, due }', 'Amounts are numbers.'] }));
+    const { call } = start([personal]);
+    expect((await call('ListPages')).text).toContain('has a data guide');
+    const r = await call('ReadPageData', { page: 'money' });
+    expect(r.text).toContain('bills: { id, provider, amount, due }\nAmounts are numbers.');
+    expect(r.text).toContain('"bills": []');
+  });
+
   it('sets, appends and removes, writing the envelope the app reads', async () => {
     page(personal, 'money', 'Money', { accounts: [{ id: 'm1', balance: 22410 }], bills: [{ id: 'b1' }, { id: 'b2' }] });
     const { call } = start([personal]);
