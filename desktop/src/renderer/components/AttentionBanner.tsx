@@ -2,7 +2,7 @@ import React from 'react';
 import type { AttentionState } from '../state/chat-types';
 import BrailleSpinner from './BrailleSpinner';
 import { Button } from './ui';
-import { isChatGptLimitMessage } from '../../shared/chatgpt-types';
+import { isChatGptAppLimitMessage, isChatGptLimitMessage } from '../../shared/chatgpt-types';
 import { useSecondsTick } from '../hooks/useSecondsTick';
 
 // Banner shown in place of ThinkingIndicator when the classifier (or a
@@ -40,6 +40,9 @@ interface Props {
    *  the user can raise the exhausted window, side by side with switching
    *  providers. Shown only for a plan-limit error, like Switch Providers. */
   onUpgradePlan?: () => void;
+  /** Official-route limit card: opens ChatGPT's usage page, where the user sees
+   *  what is left and can raise YouCoded's share of the plan. */
+  onManageUsage?: () => void;
   /** OpenRouter "not enough credit" card: opens OpenRouter's add-credit page. */
   onAddCredit?: () => void;
   /** Which runtime the session runs. Only 'native' changes anything: the
@@ -106,7 +109,7 @@ function elapsedLabel(ms: number): string {
   return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
-export default function AttentionBanner({ state, anthropicRequestId, errorMessage, errorCode, onRetry, onOpenProviderSettings, stalledSince, onStop, onSwitchProviders, onUpgradePlan, onAddCredit, provider }: Props) {
+export default function AttentionBanner({ state, anthropicRequestId, errorMessage, errorCode, onRetry, onOpenProviderSettings, stalledSince, onStop, onSwitchProviders, onUpgradePlan, onManageUsage, onAddCredit, provider }: Props) {
   // Rides the shared seconds clock while parked. `stalledSince` IS serialized
   // to the host (chat-types.ts) so a reconnecting phone can still see the card
   // — see that field's own comment for why the elapsed number is only
@@ -160,9 +163,15 @@ export default function AttentionBanner({ state, anthropicRequestId, errorMessag
   // A used-up ChatGPT plan window is not a failure to retry — the message
   // already names when it resets — so Try again is withheld and the one useful
   // action is offered instead: carry on with another connected provider.
-  const planLimit = state === 'error' && isChatGptLimitMessage(errorMessage);
+  const codexLimit = state === 'error' && isChatGptLimitMessage(errorMessage);
+  // The official route's limit names no reset time (OpenAI does not say), so
+  // its way out is ChatGPT's own usage page rather than an upgrade link — the
+  // cap may be YouCoded's share, which the user can raise there.
+  const appLimit = state === 'error' && isChatGptAppLimitMessage(errorMessage);
+  const planLimit = codexLimit || appLimit;
   const showSwitch = planLimit && !!onSwitchProviders;
-  const showUpgrade = planLimit && !!onUpgradePlan;
+  const showUpgrade = codexLimit && !!onUpgradePlan;
+  const showManageUsage = appLimit && !!onManageUsage;
 
   return (
     // in-view: opts the bubble into wallpaper-driven bubble glassmorphism
@@ -206,6 +215,12 @@ export default function AttentionBanner({ state, anthropicRequestId, errorMessag
           // label AND style: transparent (secondary), left of Switch Providers.
           <Button size="sm" variant="secondary" onClick={onUpgradePlan} className="ml-auto shrink-0">
             Upgrade plan
+          </Button>
+        )}
+        {showManageUsage && (
+          // Same place and style as Upgrade plan on the other route's card.
+          <Button size="sm" variant="secondary" onClick={onManageUsage} className="ml-auto shrink-0">
+            Manage usage
           </Button>
         )}
         {showSwitch && (

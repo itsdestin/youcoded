@@ -1,0 +1,52 @@
+name: ChatGPT sign-in watch
+
+# Is the Codex route that Sign in with ChatGPT runs on still open?
+#
+# WHY: the app borrows the Codex CLI's client id and a private ChatGPT endpoint,
+# which OpenAI can close at any time. OpenAI's official route is built in but
+# switched off (Destin, 2026-10-05); a red run here is the signal to switch it on.
+# desktop/test-engine/chatgpt-route-watch.mjs explains each check and what it
+# cannot see.
+#
+# Needs NO secrets: it signs nobody in and sends nothing to a model. A red run is
+# the alarm (GitHub emails a failed scheduled run). An answer it cannot read, such
+# as a Cloudflare page in front of chatgpt.com, is a yellow warning on the run's
+# summary, not a red run, so a bot wall alone never sends a false alarm.
+on:
+  schedule:
+    # 09:17 UTC daily, off the hour on purpose (GitHub delays :00 cron under load).
+    - cron: '17 9 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: desktop/test-engine/chatgpt-route-watch.mjs
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      # One retry before failing: a single network blip must not send a red email.
+      # Exit 2 ("could not tell") is a warning, never a failure.
+      - name: Check the Codex route
+        run: |
+          set +e
+          for attempt in 1 2; do
+            node desktop/test-engine/chatgpt-route-watch.mjs
+            code=$?
+            [ "$code" -eq 0 ] && exit 0
+            [ "$attempt" -eq 1 ] && { echo "::warning::First run was not clean (exit $code) — retrying once."; sleep 30; }
+          done
+          if [ "$code" -eq 2 ]; then echo "::warning::Some answers could not be read — see the summary."; exit 0; fi
+          echo "::error::The Codex route changed — see the summary. Time to switch to the official route."
+          exit 1

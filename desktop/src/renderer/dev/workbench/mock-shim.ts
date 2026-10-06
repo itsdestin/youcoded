@@ -1221,8 +1221,13 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     state: 'signed-in', email: 'destin@example.com', plan: 'free',
     usage: chatgptUsageFixture(),
   };
+  // `?chatgpt=official` / `reauth`: the official route's signed-in card (no
+  // plan name, no bars — it cannot read them) and the one-time "sign in again"
+  // a sign-in made the old way shows after the switch.
   let chatgptStatus: ChatGptAccountStatus =
-    chatgptPin === 'signed-out' ? { state: 'signed-out' }
+    chatgptPin === 'official' ? { state: 'signed-in', email: 'destin@example.com', plan: '', usage: null, route: 'official' }
+    : chatgptPin === 'reauth' ? { state: 'signed-out', reauth: true }
+    : chatgptPin === 'signed-out' ? { state: 'signed-out' }
     : chatgptPin === 'waiting' ? { state: 'waiting' }
     : chatgptPin === 'blocked' ? { state: 'blocked', email: 'destin@example.com', reason: 'Your workspace admin has turned off Codex for this account.' }
     : chatgptPin === 'free' ? CHATGPT_SIGNED_IN_FREE

@@ -4,7 +4,7 @@ import { useEscClose } from '../hooks/use-esc-close';
 import ProvidersSection from './ProvidersSection';
 import LocalModelsSection from './LocalModelsSection';
 import { OPENROUTER_CREDITS_URL, type OpenRouterSignInStatus, type ProviderHealth, type ProviderStatus } from '../../shared/provider-types';
-import { chatGptPlanLabel, type ChatGptAccountStatus } from '../../shared/chatgpt-types';
+import { CHATGPT_MANAGE_USAGE_LINK, chatGptPlanLabel, type ChatGptAccountStatus } from '../../shared/chatgpt-types';
 import { claudePlanLabel } from '../../shared/claude-account-types';
 import { useClaudeStatus } from './model/availability';
 import { AnchorTip, Button, Dialog, InputGroup, TextInput } from './ui';
@@ -39,7 +39,7 @@ function SectionHeader({ title, info }: { title: string; info: { label: string; 
 // same muted grey · one action on the right · optional plan bars underneath.
 // No green "connected" text and no "Default engine" badge — the status line
 // says the state in words and the plan bars say how much is left.
-function ProviderRow({ title, info, status, detail, action, account, children, screen }: {
+function ProviderRow({ title, info, status, detail, action, account, accountLabel = 'My Account', children, screen }: {
   title: string;
   /** The `shoot` name of this card (photo-only build): marks it so a picture of the
    *  page scrolls to this card instead of whatever sits at the top. */
@@ -56,6 +56,9 @@ function ProviderRow({ title, info, status, detail, action, account, children, s
    *  provider's own account page in the browser. Only passed when signed in —
    *  an account page is no use to someone who has no account here yet. */
   account?: string;
+  /** The account button's words when it opens something other than the
+   *  account page (official ChatGPT route: its usage page). */
+  accountLabel?: string;
   children?: React.ReactNode;
 }) {
   return (
@@ -76,7 +79,7 @@ function ProviderRow({ title, info, status, detail, action, account, children, s
             {account && (
               <Button variant="secondary" size="sm"
                 onClick={() => void (window as any).claude.shell.openExternal(account)}>
-                My Account
+                {accountLabel}
               </Button>
             )}
             {action}
@@ -347,11 +350,15 @@ export function ChatGptBlock() {
   // the one state with a second thing to say, a detail line under it.
   let line: React.ReactNode = 'Checking…';
   let detail: { text: React.ReactNode; tone?: 'muted' | 'bad' } | null = null;
+  // The official route (OpenAI's own Sign in with ChatGPT; built in but off
+  // until the Codex route breaks — Destin, 2026-10-05) cannot read the plan's
+  // name or usage, so its card points at ChatGPT's usage page instead.
+  const official = status?.state === 'signed-in' && status.route === 'official';
   if (status?.state === 'signed-in') {
     // Email on the status line, plan on the detail line: the two together
     // wrapped onto a second line beside the button (round-2 self-check).
     line = `Signed in as ${status.email}`;
-    detail = { text: chatGptPlanLabel(status.plan) };
+    detail = { text: official ? "How much is left is on ChatGPT's usage page." : chatGptPlanLabel(status.plan) };
   } else if (status?.state === 'waiting') {
     line = (
       <span className="inline-flex items-center gap-1.5">
@@ -363,6 +370,11 @@ export function ChatGptBlock() {
     // OpenAI's own words, verbatim — never a guessed cause.
     line = `Signed in as ${status.email}`;
     detail = { text: status.reason, tone: 'bad' };
+  } else if (status?.state === 'signed-out' && status.reauth) {
+    // Questions deck Q-2: a sign-in made the old way is asked for once more,
+    // in plain words, rather than failing every message.
+    line = 'Sign in again';
+    detail = { text: 'ChatGPT sign-in has changed. Sign in once more to keep using your plan here.' };
   } else if (status?.state === 'signed-out') {
     line = 'Not signed in';
     detail = { text: "Your plan's models, in YouCoded's assistant." };
@@ -396,7 +408,19 @@ export function ChatGptBlock() {
         title="ChatGPT"
         info={{
           label: 'About ChatGPT sign-in',
-          body: (
+          body: official ? (
+            <>
+              <p>
+                Sign in with your ChatGPT account and YouCoded's assistant can use the models your
+                plan includes, with no API key and nothing extra to pay. It uses OpenAI's own
+                sign-in for apps, which needs a Plus or Pro plan.
+              </p>
+              <p>
+                How much of your plan YouCoded may use, and how much is left, is on ChatGPT's usage
+                page. Manage usage opens it.
+              </p>
+            </>
+          ) : (
             <>
               <p>
                 Sign in with your ChatGPT account and YouCoded's assistant can use the models your
@@ -417,10 +441,14 @@ export function ChatGptBlock() {
         }}
         status={line}
         detail={note ? { text: note, tone: 'bad' } : detail}
-        account={status?.state === 'signed-in' || status?.state === 'blocked' ? 'https://chatgpt.com/#settings/Account' : undefined}
+        account={official ? CHATGPT_MANAGE_USAGE_LINK
+          : status?.state === 'signed-in' || status?.state === 'blocked' ? 'https://chatgpt.com/#settings/Account' : undefined}
+        accountLabel={official ? 'Manage usage' : undefined}
         action={action}
       >
-        {status?.state === 'signed-in' && <PlanWindows usage={status.usage} />}
+        {/* The official route has no bars to draw; rendering the empty
+            component would still leave a blank strip under the card. */}
+        {status?.state === 'signed-in' && !official && <PlanWindows usage={status.usage} />}
       </ProviderRow>
     </>
   );

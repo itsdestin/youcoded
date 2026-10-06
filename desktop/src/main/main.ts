@@ -1054,6 +1054,8 @@ function createWindow(firstRunManager?: FirstRunManager): OutboxBroadcast {
     // refreshes the token, and a rejected refresh deletes the saved sign-in.
     // Turning the feature off must never sign anyone out (review T4 F1).
     pollUsage: chatgptEnabled,
+    // WHY: OpenAI's official route is built in but OFF until the Codex route breaks (Destin, 2026-10-05; chatgpt-route-watch.yml).
+    route: process.env.YOUCODED_CHATGPT_ROUTE === 'official' ? 'official' : 'codex',
   });
 
   // One-core R1: the runtime is built where registerIpcHandlers used to build it inline; both doors get this one.
