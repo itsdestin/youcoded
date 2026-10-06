@@ -21,10 +21,10 @@ interface AboutPopupProps {
   channel?: string;
 }
 
-// Canonical homes of the two policy documents (TERMS.md §11 names this URL as
-// the always-current copy). Also linked from the landing-page footer.
-const PRIVACY_POLICY_URL = 'https://github.com/itsdestin/youcoded/blob/master/PRIVACY.md';
-const TERMS_OF_SERVICE_URL = 'https://github.com/itsdestin/youcoded/blob/master/TERMS.md';
+// WHY: the website provides the approved reading experience on both platforms;
+// its pages are generated from the canonical Markdown, not separate legal copy.
+const PRIVACY_POLICY_URL = 'https://youcoded.ai/privacy.html';
+const TERMS_OF_SERVICE_URL = 'https://youcoded.ai/terms.html';
 
 const DESKTOP_LIBS: { lib: string; license: string; source: string }[] = [
   { lib: 'Electron', license: 'MIT', source: 'github.com/electron/electron' },
