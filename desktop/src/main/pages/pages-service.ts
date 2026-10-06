@@ -12,6 +12,7 @@ import { PagesStore, PAGES_DIR, isUnderPagesDir, type PagesStoreDeps } from './p
 import { applyScheme, fingerprint, keyPlacement, savedKeyTarget, withApprovedAddress } from './page-connections';
 import { PlaidItemsStore, cleanPlaidRequest, openPlaidLink, parseCredentials, runPlaid } from './plaid';
 import { cleanDeviceAddress } from '../../shared/page-device-address';
+import { setPersonalPagesRoot } from '../claude-code-pages-mcp';
 import { hashHtml, savedKeyId, splitSavedKeyId, type PageApproval } from './connections-store';
 import { PageRateGate, performPageFetch, type PageCredential } from './page-fetch';
 import { checkDeviceSocketAccess, performPageSocket, type DeviceSocketAccess, type PageSocketContext } from './page-socket';
@@ -595,6 +596,8 @@ function messageOf(e: unknown): string {
 let service: PagesService | null = null;
 
 export function initPagesService(deps: PagesServiceDeps): PagesService {
+  // The assistant's page-data tools (claude-code-pages-mcp.ts) look in the same Personal Pages/ folder.
+  setPersonalPagesRoot(() => { const root = deps.personalRoot(); return root ? path.join(root, PAGES_DIR) : null; });
   service?.stop();
   service = new PagesService(deps);
   service.ensureWatching();
