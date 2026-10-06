@@ -37,6 +37,8 @@ export function createRemotePagesBridge(invoke: Invoke, addListener: Listen, rem
     // The request runs on the desktop, with the desktop's credential; only
     // the redacted answer crosses the socket.
     fetch: (id: string, request: any) => invoke('pages:fetch', { id, request }),
+    // Desktop only: the computer refuses it from a phone (a bank sign-in opens a browser there).
+    plaid: (id: string, request: any) => invoke('pages:plaid', { id, request }),
     socketOpen: async (req) => {
       const r = await invoke('pages:socket-open', req);
       if (r?.ok) live.add(r.socket);

@@ -1,0 +1,204 @@
+// Plaid on a page's behalf (main/pages/plaid.ts) — finance dashboard, 2026-10-05.
+// A fake Plaid answers each endpoint; nothing touches the network.
+import { describe, it, expect, beforeEach } from 'vitest';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { PlaidItemsStore, cleanPlaidRequest, kindOf, parseCredentials, runPlaid, type PlaidContext } from '../src/main/pages/plaid';
+import { parseConnections, fingerprint, covers, savedKeyTarget } from '../src/main/pages/page-connections';
+import type { SecretsStore } from '../src/main/providers/secrets-store';
+
+function fakeSecrets() {
+  const m = new Map<string, string>();
+  let n = 0;
+  return {
+    map: m,
+    async set(v: string, ref?: string) { const r = ref ?? `ref${++n}`; m.set(r, v); return r; },
+    async get(r: string) { return m.has(r) ? m.get(r)! : null; },
+    async delete(r: string) { m.delete(r); },
+  } as unknown as SecretsStore & { map: Map<string, string> };
+}
+
+type Handler = (body: Record<string, unknown>) => unknown;
+function fakePlaid(handlers: Record<string, Handler>) {
+  const calls: Array<{ endpoint: string; body: Record<string, unknown> }> = [];
+  const fetchImpl = (async (url: string, init: RequestInit) => {
+    const endpoint = new URL(url).pathname;
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    calls.push({ endpoint, body });
+    const h = handlers[endpoint];
+    const out = h ? h(body) : { error_code: 'NOT_FOUND', error_message: `no fake for ${endpoint}` };
+    const isErr = !!(out as { error_code?: string }).error_code;
+    return new Response(JSON.stringify(out), { status: isErr ? 400 : 200, headers: { 'content-type': 'application/json' } });
+  }) as unknown as typeof fetch;
+  return { calls, fetchImpl };
+}
+
+describe('plaid', () => {
+  let dir: string;
+  let secrets: ReturnType<typeof fakeSecrets>;
+  let items: PlaidItemsStore;
+  const opened: string[] = [];
+  const ctx = (fetchImpl: typeof fetch): PlaidContext => ({
+    env: 'sandbox', creds: { clientId: 'cid', secret: 'sec' }, items,
+    openExternal: (u) => { opened.push(u); }, fetchImpl, pollMs: 0, sleep: async () => {},
+  });
+
+  beforeEach(() => {
+    dir = mkdtempSync(path.join(tmpdir(), 'plaid-'));
+    secrets = fakeSecrets();
+    items = new PlaidItemsStore(dir, secrets);
+    opened.length = 0;
+  });
+
+  it('connects a bank through Hosted Link: opens Plaid, waits, exchanges, keeps the token out of the answer and the file', async () => {
+    let polls = 0;
+    const { calls, fetchImpl } = fakePlaid({
+      '/link/token/create': () => ({ link_token: 'link-1', hosted_link_url: 'https://hosted.plaid.com/link/abc' }),
+      '/link/token/get': () => (++polls < 3 ? { link_sessions: [{ finished_at: null }] }
+        : { link_sessions: [{ finished_at: '2026-10-05T00:00:00Z', results: { item_add_results: [{ public_token: 'public-1' }] } }] }),
+      '/item/public_token/exchange': () => ({ access_token: 'access-SECRET-1', item_id: 'item-1' }),
+      '/item/get': () => ({ item: { institution_id: 'ins_1', institution_name: 'First Platypus Bank' } }),
+      '/institutions/get_by_id': () => ({ institution: { institution_id: 'ins_1', name: 'First Platypus Bank', logo: 'iVBORw0KGgo=', primary_color: '#1f6feb', url: 'https://platypus.example' } }),
+    });
+    const r = await runPlaid(ctx(fetchImpl), { op: 'connect' });
+    expect(r.ok).toBe(true);
+    expect(opened).toEqual(['https://hosted.plaid.com/link/abc']);
+    expect(polls).toBe(3);
+    // Every call carries the keys in the body, from main.
+    expect(calls.every((c) => c.body.client_id === 'cid' && c.body.secret === 'sec')).toBe(true);
+    const create = calls.find((c) => c.endpoint === '/link/token/create')!.body;
+    expect(create.hosted_link).toEqual({});
+    expect(create.products).toEqual(['transactions']);
+    if (!r.ok) return;
+    expect(r.items[0].institution).toMatchObject({ name: 'First Platypus Bank', color: '#1f6feb', logo: 'data:image/png;base64,iVBORw0KGgo=' });
+    // The access token never comes back to the page, and is not written in plain text.
+    expect(JSON.stringify(r)).not.toContain('access-SECRET-1');
+    expect(readFileSync(path.join(dir, 'plaid-items.json'), 'utf8')).not.toContain('access-SECRET-1');
+    expect([...secrets.map.values()]).toContain('access-SECRET-1');
+  });
+
+  it('a session the person closes without connecting is a plain "no bank was connected"', async () => {
+    const { fetchImpl } = fakePlaid({
+      '/link/token/create': () => ({ link_token: 'l', hosted_link_url: 'https://hosted.plaid.com/x' }),
+      '/link/token/get': () => ({ link_sessions: [{ finished_at: '2026-10-05T00:00:00Z', exit: { status: 'requires_credentials' } }] }),
+    });
+    const r = await runPlaid(ctx(fetchImpl), { op: 'connect' });
+    expect(r).toMatchObject({ ok: false, code: 'CANCELLED' });
+  });
+
+  it('gives up waiting after the deadline instead of hanging', async () => {
+    const { fetchImpl } = fakePlaid({
+      '/link/token/create': () => ({ link_token: 'l', hosted_link_url: 'https://hosted.plaid.com/x' }),
+      '/link/token/get': () => ({ link_sessions: [] }),
+    });
+    const r = await runPlaid({ ...ctx(fetchImpl), linkWaitMs: 0 }, { op: 'connect' });
+    expect(r).toMatchObject({ ok: false, code: 'TIMED_OUT' });
+  });
+
+  it('reads balances with card limits, due dates and loan rates, and maps every account to a group', async () => {
+    await items.add('sandbox', 'item-1', 'access-1', { id: 'ins_1', name: 'Bank' });
+    const { calls, fetchImpl } = fakePlaid({
+      '/accounts/balance/get': () => ({ accounts: [
+        { account_id: 'a1', name: 'Checking', type: 'depository', subtype: 'checking', balances: { current: 100, available: 90, limit: null } },
+        { account_id: 'a2', name: 'Savings', type: 'depository', subtype: 'savings', balances: { current: 500, available: 500, limit: null } },
+        { account_id: 'a3', name: 'Card', type: 'credit', subtype: 'credit card', balances: { current: 410, available: 590, limit: 1000 } },
+        { account_id: 'a4', name: 'Student', type: 'loan', subtype: 'student', balances: { current: 9000, available: null, limit: null } },
+      ] }),
+      '/liabilities/get': () => ({ liabilities: {
+        credit: [{ account_id: 'a3', is_overdue: false, next_payment_due_date: '2026-10-20', minimum_payment_amount: 25, last_payment_date: '2026-09-20', aprs: [{ apr_type: 'purchase_apr', apr_percentage: 24.9 }] }],
+        student: [{ account_id: 'a4', interest_rate_percentage: 5.2, next_payment_due_date: '2026-10-15', minimum_payment_amount: 120 }],
+      } }),
+    });
+    const r = await runPlaid(ctx(fetchImpl), { op: 'accounts', live: true });
+    expect(calls.map((c) => c.endpoint)).toEqual(['/accounts/balance/get', '/liabilities/get']);
+    expect(calls[0].body.access_token).toBe('access-1');
+    if (!r.ok) throw new Error(r.message);
+    const acc = r.items[0].accounts;
+    expect(acc.map((a) => a.kind)).toEqual(['checking', 'savings', 'credit', 'loan']);
+    expect(acc[2]).toMatchObject({ balance: 410, limit: 1000, liability: { apr: 24.9, nextDue: '2026-10-20', minimumPayment: 25 } });
+    expect(acc[3].liability).toMatchObject({ apr: 5.2, nextDue: '2026-10-15' });
+  });
+
+  it('uses Plaid\'s daily copy when not asked for live balances', async () => {
+    await items.add('sandbox', 'item-1', 'access-1', { id: '', name: 'Bank' });
+    const { calls, fetchImpl } = fakePlaid({
+      '/accounts/get': () => ({ accounts: [] }),
+      '/liabilities/get': () => ({ error_code: 'PRODUCTS_NOT_SUPPORTED', error_message: 'no liabilities' }),
+    });
+    const r = await runPlaid(ctx(fetchImpl), { op: 'accounts' });
+    expect(calls[0].endpoint).toBe('/accounts/get');
+    // A bank with no cards or loans is still fine.
+    expect(r.ok && r.items[0].ok).toBe(true);
+  });
+
+  it('a bank that needs signing in again says so, per bank, without failing the others', async () => {
+    await items.add('sandbox', 'item-1', 'access-1', { id: '', name: 'Good Bank' });
+    await items.add('sandbox', 'item-2', 'access-2', { id: '', name: 'Stale Bank' });
+    const { fetchImpl } = fakePlaid({
+      '/accounts/balance/get': (b) => (b.access_token === 'access-2'
+        ? { error_code: 'ITEM_LOGIN_REQUIRED', error_message: 'the login details of this item have changed', display_message: 'Sign in to Stale Bank again.' }
+        : { accounts: [] }),
+      '/liabilities/get': () => ({ liabilities: {} }),
+    });
+    const r = await runPlaid(ctx(fetchImpl), { op: 'accounts', live: true });
+    if (!r.ok) throw new Error(r.message);
+    expect(r.items.map((i) => i.ok)).toEqual([true, false]);
+    expect(r.items[1].error).toEqual({ code: 'ITEM_LOGIN_REQUIRED', message: 'Sign in to Stale Bank again.', reconnect: true });
+  });
+
+  it('removing a bank tells Plaid and forgets its sign-in', async () => {
+    await items.add('sandbox', 'item-1', 'access-1', { id: '', name: 'Bank' });
+    const { calls, fetchImpl } = fakePlaid({ '/item/remove': () => ({}) });
+    const r = await runPlaid(ctx(fetchImpl), { op: 'remove', itemId: 'item-1' });
+    expect(r.ok).toBe(true);
+    expect(calls[0]).toMatchObject({ endpoint: '/item/remove', body: { access_token: 'access-1' } });
+    expect(await items.list('sandbox')).toEqual([]);
+    expect(secrets.map.size).toBe(0);
+  });
+
+  it('practice and real banks are kept apart', async () => {
+    await items.add('sandbox', 'item-s', 'a', { id: '', name: 'Practice' });
+    await items.add('production', 'item-p', 'b', { id: '', name: 'Real' });
+    expect((await items.list('sandbox')).map((r) => r.itemId)).toEqual(['item-s']);
+    expect((await items.list('production')).map((r) => r.itemId)).toEqual(['item-p']);
+  });
+
+  it('accepts only the five requests, with a well-formed bank id', () => {
+    expect(cleanPlaidRequest({ op: 'accounts', live: 'yes' })).toEqual({ op: 'accounts', live: false });
+    expect(cleanPlaidRequest({ op: 'remove', itemId: '../../etc' })).toBeNull();
+    expect(cleanPlaidRequest({ op: 'transfer' })).toBeNull();
+    expect(cleanPlaidRequest(null)).toBeNull();
+  });
+
+  it('reads the saved key only when both halves are there', () => {
+    expect(parseCredentials('{"clientId":"a","secret":"b"}')).toEqual({ clientId: 'a', secret: 'b' });
+    expect(parseCredentials('{"clientId":"a"}')).toBeNull();
+    expect(parseCredentials('not json')).toBeNull();
+  });
+
+  it('maps Plaid account types to the page\'s groups', () => {
+    expect(kindOf('depository', 'money market')).toBe('savings');
+    expect(kindOf('depository', 'checking')).toBe('checking');
+    expect(kindOf('investment', 'brokerage')).toBe('investment');
+    expect(kindOf('other', null)).toBe('other');
+  });
+});
+
+describe('the plaid connection in a page manifest', () => {
+  it('parses one per page, keeps it apart from "any website", and never covers a fetch address', () => {
+    const [c] = parseConnections([{ id: 'bank', kind: 'plaid', environment: 'sandbox' }, { id: 'bank2', kind: 'plaid', environment: 'production' }]);
+    expect(c).toMatchObject({ id: 'bank', kind: 'plaid', environment: 'sandbox' });
+    expect(parseConnections([{ id: 'bank', kind: 'plaid', environment: 'sandbox' }, { id: 'o', kind: 'open' }])).toEqual([]);
+    expect(parseConnections([{ id: 'bank', kind: 'plaid', environment: 'staging' }])).toEqual([]);
+    expect(covers(c, new URL('https://sandbox.plaid.com/accounts/get'))).toBe(false);
+  });
+
+  it('switching from practice to real banks asks again, and the key is kept per environment', () => {
+    const [s] = parseConnections([{ id: 'b', kind: 'plaid', environment: 'sandbox' }]);
+    const [p] = parseConnections([{ id: 'b', kind: 'plaid', environment: 'production' }]);
+    expect(fingerprint(s)).not.toBe(fingerprint(p));
+    expect(savedKeyTarget(s)).toEqual({ service: 'Plaid', address: 'sandbox.plaid.com' });
+    expect(savedKeyTarget(p)).toEqual({ service: 'Plaid', address: 'production.plaid.com' });
+  });
+});

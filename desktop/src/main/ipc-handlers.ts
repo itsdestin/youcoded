@@ -1,4 +1,4 @@
-import { app, IpcMain, BrowserWindow, powerSaveBlocker, webContents } from 'electron';
+import { app, IpcMain, BrowserWindow, powerSaveBlocker, shell, webContents } from 'electron';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -123,6 +123,7 @@ import { startSessionSummaryPush, SESSION_SUMMARY_CHANNEL } from './session-summ
 import { listProjects } from './artifacts/central-index';
 import { initPagesService, getPagesService } from './pages/pages-service';
 import { PageConnectionsStore } from './pages/connections-store';
+import { PlaidItemsStore } from './pages/plaid';
 import { wireDocCommentsPush } from './doc-comments/ipc-handlers';
 import { createAuthStore } from './marketplace-auth-store';
 import { getMachineIdentity } from './device-identity';
@@ -2398,6 +2399,10 @@ export function registerIpcHandlers(
     noteOwnWrite,
     // Phase 2: approvals and key POINTERS beside the model-provider keys in userData, never a sync space (a key is machine-bound ciphertext).
     // officeListed (WHY): the built-in Office page is listed, and pinnable, only where the add-on is installed (pages-store.ts).
+    // Plaid (finance dashboard): connected banks' sign-ins beside the keys, never synced. The browser opens only
+    // Plaid's own https sign-in page — plaid.ts asks for nothing else.
+    plaidItems: new PlaidItemsStore(app.getPath('userData'), secretsStore),
+    openExternal: (url) => { if (/^https:\/\/[a-z0-9.-]*plaid\.com\//i.test(url)) void shell.openExternal(url); },
     connections: new PageConnectionsStore(app.getPath('userData'), secretsStore), officeListed: async () => (await import('./office/office-root')).officeAvailable(),
     // A FRESH reader per call, not a held instance: the fs-backed store caches
     // after its first load, so a long-lived one here would keep answering with

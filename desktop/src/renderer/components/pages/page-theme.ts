@@ -48,6 +48,11 @@ export const PAGE_REFRESH_MESSAGE = 'youcoded:refresh';
 export const PAGE_FETCH_MESSAGE = 'youcoded:fetch';
 /** Host → page: the answer to one `youcoded:fetch`, matched by request id. */
 export const PAGE_FETCH_RESULT_MESSAGE = 'youcoded:fetch:result';
+/** Page → host: `youcoded.plaid(request)` (finance dashboard). Host → page: the
+ *  whole PlaidResult, ok or not, matched by the page's own id — a refusal is a
+ *  normal answer here (a bank that needs signing in again), not a thrown error. */
+export const PAGE_PLAID_MESSAGE = 'youcoded:plaid';
+export const PAGE_PLAID_RESULT_MESSAGE = 'youcoded:plaid:result';
 /** The live socket (spec 2026-10-04). Page → host: open / send / close, each
  *  carrying the page's OWN socket id; host → page: one event kind for both a
  *  state change and a batch of messages, matched by that same id. */
@@ -134,6 +139,8 @@ function bootstrap(dataJson: string, devicesJson = '{}'): string {
   var REFRESH = ${JSON.stringify(PAGE_REFRESH_MESSAGE)};
   var FETCH = ${JSON.stringify(PAGE_FETCH_MESSAGE)};
   var RESULT = ${JSON.stringify(PAGE_FETCH_RESULT_MESSAGE)};
+  var PLAID = ${JSON.stringify(PAGE_PLAID_MESSAGE)};
+  var PLAID_RESULT = ${JSON.stringify(PAGE_PLAID_RESULT_MESSAGE)};
   var S_OPEN = ${JSON.stringify(PAGE_SOCKET_OPEN_MESSAGE)};
   var S_SEND = ${JSON.stringify(PAGE_SOCKET_SEND_MESSAGE)};
   var S_CLOSE = ${JSON.stringify(PAGE_SOCKET_CLOSE_MESSAGE)};
@@ -216,6 +223,17 @@ function bootstrap(dataJson: string, devicesJson = '{}'): string {
         }
       };
     },
+    // Bank balances through Plaid, done by the app (main/pages/plaid.ts). Ask for
+    // { op: 'status' | 'connect' | 'accounts' (live?) | 'reconnect' | 'remove' (itemId) }.
+    // Always resolves with { ok, op, items } or { ok: false, op, code, message }.
+    plaid: function (request) {
+      return new Promise(function (resolve) {
+        var id = 'p' + (++seq);
+        waiting[id] = { resolve: resolve, reject: resolve, plaid: true };
+        try { parent.postMessage({ type: PLAID, id: id, request: request }, '*'); }
+        catch (e) { delete waiting[id]; resolve({ ok: false, op: request && request.op, code: 'UNAVAILABLE', message: 'This page could not reach YouCoded.' }); }
+      });
+    },
     fetch: function (url, opts) {
       return new Promise(function (resolve, reject) {
         var o = opts || {};
@@ -277,6 +295,13 @@ function bootstrap(dataJson: string, devicesJson = '{}'): string {
     }
     if (d.type === DATA) { window.youcoded.data = d.data; call(subs, d.data); return; }
     if (d.type === REFRESH) { call(refreshSubs); return; }
+    if (d.type === PLAID_RESULT) {
+      var pp = waiting[d.id];
+      if (!pp || !pp.plaid) return;
+      delete waiting[d.id];
+      pp.resolve(d.result);
+      return;
+    }
     if (d.type === RESULT) {
       var p = waiting[d.id];
       if (!p) return;

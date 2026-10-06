@@ -4424,6 +4424,8 @@ class SessionService : Service() {
             "pages:saved-keys",
             "pages:delete-saved-key",
             "pages:fetch",
+            // Plaid bank balances run in the desktop main process only.
+            "pages:plaid",
             // The live socket to a home device lives in the desktop's main process;
             // Android answers not-implemented. pages:socket-event is outbound-only
             // (a push), so it needs no entry here.

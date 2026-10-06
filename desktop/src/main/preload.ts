@@ -340,6 +340,7 @@ const IPC = {
   PAGES_SAVED_KEYS: 'pages:saved-keys',
   PAGES_DELETE_SAVED_KEY: 'pages:delete-saved-key',
   PAGES_FETCH: 'pages:fetch',
+  PAGES_PLAID: 'pages:plaid',
   PAGES_SOCKET_OPEN: 'pages:socket-open',
   PAGES_SOCKET_SEND: 'pages:socket-send',
   PAGES_SOCKET_CLOSE: 'pages:socket-close',
@@ -2020,6 +2021,7 @@ contextBridge.exposeInMainWorld('claude', {
     // Both parts: a key is identified by service AND address.
     deleteSavedKey: (service: string, address: string) => ipcRenderer.invoke(IPC.PAGES_DELETE_SAVED_KEY, { service, address }),
     fetch: (id: string, req: unknown) => ipcRenderer.invoke(IPC.PAGES_FETCH, { id, request: req }),
+    plaid: (id: string, req: unknown) => ipcRenderer.invoke(IPC.PAGES_PLAID, { id, request: req }),
     // Live sockets + camera video a page holds through main: ONE object each, main knows the calling window itself.
     socketOpen: (req: unknown) => ipcRenderer.invoke(IPC.PAGES_SOCKET_OPEN, req), socketSend: (req: unknown) => ipcRenderer.invoke(IPC.PAGES_SOCKET_SEND, req),
     socketClose: (req: unknown) => ipcRenderer.invoke(IPC.PAGES_SOCKET_CLOSE, req), socketPing: (req: unknown) => ipcRenderer.invoke(IPC.PAGES_SOCKET_PING, req),
