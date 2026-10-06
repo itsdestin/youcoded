@@ -65,6 +65,16 @@ describe('the Money page', () => {
     expect(p.text()).toContain('Reconnect Synchrony');
   });
 
+  it('ignores a due date months in the past instead of calling it years late', async () => {
+    const stale = { ok: true, op: 'accounts', items: [{ itemId: 'i', ok: true, institution: { id: '', name: 'Bank' }, accounts: [
+      { id: 's', name: 'Student', type: 'loan', kind: 'loan', balance: 1000, liability: { minimumPayment: 25, nextDue: '2019-05-28' } },
+    ] }] };
+    const p = open({ demoToday: TODAY }, async () => stale);
+    await p.settle();
+    expect(p.last().accounts[0].payment).toBeNull();
+    expect(p.text()).not.toContain('days late');
+  });
+
   it('a bank that needs signing in again keeps its last numbers rather than dropping them from the totals', async () => {
     const prior = { demoToday: TODAY, banks: { 'item-2': { name: 'Synchrony', ok: true } }, accounts: [
       { id: 'plaid:s1', itemId: 'item-2', source: 'plaid', kind: 'credit', institution: 'Synchrony', name: 'Store card', balance: 820, limit: 1000, updatedAt: '2026-10-01T12:00:00Z' },
@@ -104,6 +114,20 @@ describe('the Money page', () => {
     (p.d.getElementById('edit-val') as HTMLInputElement).value = '22,100';
     p.click('[data-save]');
     expect(p.last().accounts[0].balance).toBe(22100);
+  });
+
+  it('a card opens in place with its details and actions, and closes again', () => {
+    const p = open({ demoToday: TODAY, accounts: [{ id: 'm1', source: 'manual', kind: 'credit', institution: 'Synchrony', name: 'Store card', balance: 300, updatedAt: `${TODAY}T10:00:00Z` }] });
+    p.click('[data-open="m1"]');
+    expect(p.d.querySelector('[data-open="m1"]')!.getAttribute('aria-expanded')).toBe('true');
+    expect(p.text()).toContain('Credit limit');
+    p.click('[data-limit="m1"]');
+    (p.d.getElementById('limit-val') as HTMLInputElement).value = '1,000';
+    p.click('[data-limit-save="m1"]');
+    expect(p.last().accounts[0].limit).toBe(1000);
+    expect(p.text()).toContain('30% used');
+    p.click('[data-open="m1"]');
+    expect(p.d.querySelector('[data-open="m1"]')!.getAttribute('aria-expanded')).toBe('false');
   });
 
   it('marking a monthly bill paid moves it to next month', () => {

@@ -195,7 +195,34 @@
   .bank-row { display: flex; align-items: center; gap: 12px; padding: 8px 10px 8px 12px; }
   .bank-row .name { flex: 1; font-weight: 500; }
   .need.note { padding: 10px 12px; }
-  @media (prefers-reduced-motion: reduce) { .pill, .btn, .ibtn { transition: none; } }
+  /* Everything you can open answers the pointer like the Home page's tiles: the edge brightens and the card lifts a
+     touch on hover, it squeezes slightly while pressed, and an open card stays lit. Transform only, so nothing reflows. */
+  .tap { cursor: pointer; transition: transform 140ms ease, border-color 140ms ease, box-shadow 180ms ease, background-color 140ms ease; }
+  @media (hover: hover) {
+    .tap:hover { border-color: color-mix(in srgb, var(--fg) 22%, transparent); transform: translateY(-1px);
+      box-shadow: inset 0 1px 0 color-mix(in srgb, var(--fg) 12%, transparent), 0 12px 26px -14px rgba(0,0,0,.6); }
+    .need.tap:hover { border-color: color-mix(in srgb, var(--c) 70%, transparent); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--c) 30%, transparent), 0 14px 32px -12px var(--c); }
+    .tap:hover .chev { color: var(--fg); }
+  }
+  .tap:active { transform: scale(.985); }
+  .tap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .tap.open { border-color: color-mix(in srgb, var(--fg) 26%, transparent); background: color-mix(in srgb, var(--fg) 7%, var(--panel)); }
+  .tap.open:active { transform: none; }
+  .chev { width: 16px; height: 16px; color: var(--fg-faint); transition: transform 180ms ease, color 140ms ease; flex: none; }
+  .open > .chev, .open .head-chev .chev { transform: rotate(180deg); }
+  .acct .chev { grid-column: 3; justify-self: end; }
+  .detail { cursor: default; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px 18px; padding-top: 12px; margin-top: 6px; border-top: 1px solid color-mix(in srgb, var(--fg) 10%, transparent); }
+  .acct .detail { grid-column: 1 / -1; }
+  .bill .detail { flex-basis: 100%; }
+  .dt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .dt span { font-size: 11px; color: var(--fg-muted); letter-spacing: .04em; text-transform: uppercase; }
+  .dt b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
+  .detail .acts { grid-column: 1 / -1; display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+  .detail .acts .hint { flex: 1; min-width: 160px; font-size: 11px; color: var(--fg-muted); }
+  .detail input { font: inherit; font-size: 14px; width: 140px; height: 30px; padding: 0 12px; border-radius: 9999px; border: 1px solid var(--edge); background: var(--inset); color: var(--fg); }
+  .bill { flex-wrap: wrap; }
+  .stat.tap .chev { margin-left: auto; }
+  @media (prefers-reduced-motion: reduce) { .pill, .btn, .ibtn, .tap, .chev { transition: none; } .tap:hover, .tap:active { transform: none; } }
 </style></head>
 <body>
 <div class="wrap" id="root"></div>
@@ -218,6 +245,7 @@
     wallet: ic('<path d="M3 7a2 2 0 0 1 2-2h13v4"/><path d="M3 7v11a2 2 0 0 0 2 2h15V9H5a2 2 0 0 1-2-2z"/><path d="M16 14.5h.01"/>'),
     owe: ic('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18M7 15h4"/>'),
     have: ic('<path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/>'),
+    chev: '<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>',
     bank: ic('<path d="M3 10 12 4l9 6M5 10v8M9 10v8M15 10v8M19 10v8M3 20h18"/>')
   };
 
@@ -294,6 +322,7 @@
   }
   var S = Object.assign({ staleDays: 3, warnPct: 30, alertPct: 80, reportDay: 30, reportWarnDays: 7 }, data.settings);
   var plaidOn = !!(window.youcoded && typeof window.youcoded.plaid === 'function');
+  var openId = null, billEdit = null, limitEdit = null;
   var range = '6m', editing = null, menuOpen = false, checking = false, connecting = false, form = null, bankNote = null, removing = null;
 
   // A pinned "today" when the data names one keeps the workbench's dated numbers stable in pictures.
@@ -327,6 +356,9 @@
   function paymentOf(p){
     var l = p.liability;
     if (!l || !l.nextDue || !(l.minimumPayment > 0)) return null;
+    // A due date months gone is a bank (or Plaid's practice data) that stopped updating it, not a payment that is
+    // years late: show no payment rather than an alarming, untrue warning.
+    if (daysBetween(day(l.nextDue), today()) > 120) return null;
     var paid = null;
     if (l.lastPaymentDate && daysBetween(day(l.lastPaymentDate), day(l.nextDue)) <= 25 && (l.lastPaymentAmount || 0) >= l.minimumPayment) paid = l.lastPaymentDate;
     return { amount: l.minimumPayment, due: l.nextDue, paid: paid, overdue: !!l.isOverdue };
@@ -353,6 +385,7 @@
           id: 'plaid:' + p.id, itemId: it.itemId, source: 'plaid', kind: p.kind, institution: i.name,
           name: p.name + (p.mask ? ' ··' + p.mask : ''),
           balance: p.balance,
+          available: p.available,
           // A limit typed by hand survives when the bank shares none.
           limit: p.limit != null ? p.limit : prev.limit,
           apr: p.liability && p.liability.apr != null ? Math.round(p.liability.apr * 100) / 100 : prev.apr,
@@ -516,9 +549,9 @@
     [['3m','3M'],['6m','6M'],['1y','1Y'],['all','All']].forEach(function(r){ h += '<button class="rng' + (range === r[0] ? ' on' : '') + '" data-range="' + r[0] + '" aria-pressed="' + (range === r[0]) + '">' + r[1] + '</button>'; });
     h += '</div></div><div class="chart" id="chart"></div><div class="small muted num" id="chart-sum"></div></div>';
     h += '<div class="stats">';
-    h += stat(I.wallet, 'Cash available', money(t.cash, true), 'After ' + money(t.dueThisMonth, true) + ' still due this month');
-    h += stat(I.owe, 'Total owed', money(-t.owe, true), 'Cards and loans');
-    h += stat(I.have, 'You have', money(t.have, true), 'Cash, savings and investments');
+    h += stat(I.wallet, 'Cash available', money(t.cash, true), 'After ' + money(t.dueThisMonth, true) + ' still due this month', 'have');
+    h += stat(I.owe, 'Total owed', money(-t.owe, true), 'Cards and loans', 'owe');
+    h += stat(I.have, 'You have', money(t.have, true), 'Cash, savings and investments', 'have');
     h += '</div></div>';
 
     if (al.length) {
@@ -528,15 +561,16 @@
           : a.action.kind === 'edit' ? '<button class="btn sm" data-edit="' + esc(a.action.id) + '">' + I.pen + a.action.label + '</button>'
           : a.action.kind === 'reconnect' ? '<button class="btn sm" data-reconnect="' + esc(a.action.id) + '"' + (connecting ? ' disabled' : '') + '>' + a.action.label + '</button>'
           : '<button class="btn sm" data-check' + (checking ? ' disabled' : '') + '>' + a.action.label + '</button>';
-        h += '<div class="tile need ' + a.lvl + '">' + mark(a.x.institution) + '<div class="txt"><div class="who">' + esc(a.name) + '</div><div class="facts">' + a.facts.join(' · ') + '</div></div>' + btn + '</div>';
+        var target = a.x && a.x.id ? (String(a.x.id).indexOf('bank:') === 0 ? '' : a.x.id) : '';
+        h += '<div class="tile need tap ' + a.lvl + '" role="button" tabindex="0" ' + (target ? 'data-focus="' + esc(target) + '"' : 'data-jump="banks"') + ' title="Show this account">' + mark(a.x.institution) + '<div class="txt"><div class="who">' + esc(a.name) + '</div><div class="facts">' + a.facts.join(' · ') + '</div></div>' + btn + '</div>';
       });
       h += '</div></div>';
     }
 
-    h += '<div class="cols"><div class="card"><div class="card-head"><h2>What you have</h2><span class="total num">' + money(t.have) + '</span></div>';
+    h += '<div class="cols"><div class="card" id="have"><div class="card-head"><h2>What you have</h2><span class="total num">' + money(t.have) + '</span></div>';
     var haveSecs = sec('checking', 'Checking') + sec('savings', 'Savings') + sec('investment', 'Investments');
     h += haveSecs || '<div class="empty">Nothing here yet.</div>';
-    h += '</div><div class="card"><div class="card-head"><h2>What you owe</h2><span class="total num">' + money(-t.owe) + '</span></div>';
+    h += '</div><div class="card" id="owe"><div class="card-head"><h2>What you owe</h2><span class="total num">' + money(-t.owe) + '</span></div>';
     var oweSecs = sec('credit', 'Credit cards') + sec('loan', 'Loans');
     h += oweSecs || '<div class="empty">Nothing here yet.</div>';
     h += '</div></div>';
@@ -546,14 +580,15 @@
     bills.forEach(function(b){
       var s = billState(b);
       var markPaid = b.mine && !b.paid ? '<button class="btn sm" data-paid="' + esc(b.id) + '">Mark paid</button>' : '';
-      h += '<div class="tile bill ' + s.cls + '">' + mark(b.institution) + '<div class="name">' + esc(b.name) + (b.sub ? '<small>' + esc(b.sub) + '</small>' : '') + '</div><span class="when">' + s.icon + esc(s.text) + '</span><span class="amt num">' + money(b.amount) + '</span>' + markPaid + outBtn(b, 'pay') + '</div>';
+      var bo = openId === 'bill:' + b.id;
+      h += '<div class="tile bill tap ' + s.cls + (bo ? ' open' : '') + '" role="button" tabindex="0" aria-expanded="' + bo + '" data-open="bill:' + esc(b.id) + '">' + mark(b.institution) + '<div class="name">' + esc(b.name) + (b.sub ? '<small>' + esc(b.sub) + '</small>' : '') + '</div><span class="when">' + s.icon + esc(s.text) + '</span><span class="amt num">' + money(b.amount) + '</span>' + markPaid + outBtn(b, 'pay') + I.chev + (bo ? billDetail(b) : '') + '</div>';
     });
     if (!bills.length) h += '<div class="empty">No bills yet. Add one, or connect a card or loan and its payments appear here.</div>';
     h += '</div></div>';
 
     var bankIds = Object.keys(data.banks);
     if (bankIds.length) {
-      h += '<div class="card"><div class="card-head"><h2>Connected banks</h2><span class="small muted">Through Plaid. Removing one stops it sharing.</span></div><div class="list">';
+      h += '<div class="card" id="banks"><div class="card-head"><h2>Connected banks</h2><span class="small muted">Through Plaid. Removing one stops it sharing.</span></div><div class="list">';
       bankIds.forEach(function(id){
         var b = data.banks[id];
         h += '<div class="tile bank-row">' + mark(b.name) + '<div class="name">' + esc(b.name) + '</div><span class="small ' + (b.ok ? 'muted' : 'flag') + '">' + (b.ok ? 'Connected' : (b.error && b.error.reconnect ? 'Needs you to sign in again' : 'Not answering')) + '</span>';
@@ -569,7 +604,7 @@
     drawChart(); wire();
   }
 
-  function stat(icon, label, v, sub){ return '<div class="tile stat"><span class="badge">' + icon + '</span><div><div class="label">' + label + '</div><div class="v num">' + v + '</div><div class="sub">' + sub + '</div></div></div>'; }
+  function stat(icon, label, v, sub, jump){ return '<div class="tile stat tap" role="button" tabindex="0" data-jump="' + jump + '" title="Show these accounts"><span class="badge">' + icon + '</span><div><div class="label">' + label + '</div><div class="v num">' + v + '</div><div class="sub">' + sub + '</div></div>' + I.chev.replace('class="chev"', 'class="chev" style="transform:rotate(-90deg)"') + '</div>'; }
 
   function sec(k, label){
     var list = data.accounts.filter(function(a){ return a.kind === k; });
@@ -586,7 +621,8 @@
 
   function row(a){
     var stale = isStale(a);
-    var h = '<div class="tile acct' + (stale ? ' stale' : '') + '">' + mark(a.institution);
+    var isOpen = openId === a.id || editing === a.id;
+    var h = '<div class="tile acct tap' + (stale ? ' stale' : '') + (isOpen ? ' open' : '') + '" role="button" tabindex="0" aria-expanded="' + isOpen + '" data-open="' + esc(a.id) + '">' + mark(a.institution);
     h += '<div class="name" title="' + esc(fullName(a)) + '">' + esc(a.name) + '</div><div class="bal num">' + money(isDebt(a) ? -a.balance : a.balance) + '</div>';
     var meta = esc(a.institution) + (a.apr ? ' · ' + a.apr + '% interest' : '') + (a.note ? ' · ' + esc(a.note) : '');
     h += '<div class="row2"><div class="meta" title="' + meta + '">' + meta + '</div><div class="side">';
@@ -594,18 +630,63 @@
     if (stale) h += '<span class="flag">' + I.warn + (a.source === 'plaid' ? 'Out of date · ' : 'Needs update · ') + when + '</span>';
     else h += '<span class="src" title="' + (a.source === 'plaid' ? 'Connected through Plaid' : 'Entered by you') + '">' + (a.source === 'plaid' ? I.link + 'Connected' : I.pen + 'Entered by you · ' + when) + '</span>';
     if (a.source !== 'plaid' && editing !== a.id) h += '<button class="btn sm" data-edit="' + esc(a.id) + '" aria-label="Update ' + esc(fullName(a)) + '">Update</button>';
-    h += outBtn(a, 'see this account');
+    h += outBtn(a, 'see this account') + I.chev;
     h += '</div></div>';
     if (a.kind === 'credit' && a.limit) {
       var p = a.balance / a.limit * 100, lvl = p >= S.alertPct ? 'bad' : p >= S.warnPct ? 'warn' : '';
       h += '<div class="meter ' + lvl + '"><div class="bar" title="' + Math.round(p) + '% of the limit used"><i style="width:' + Math.max(0, Math.min(100, p)) + '%"></i><span class="tick" style="left:' + S.warnPct + '%"></span></div>';
       h += '<span class="pct num">' + (lvl ? (lvl === 'bad' ? I.stop : I.warn) : '') + Math.round(p) + '% used · ' + money(Math.max(0, a.limit - a.balance), true) + ' left</span></div>';
     }
+    if (isOpen) h += accountDetail(a);
     if (editing === a.id) {
       h += '<div class="edit"><input class="num" id="edit-val" inputmode="decimal" value="' + a.balance.toFixed(2) + '" aria-label="New balance"><button class="btn" data-cancel>Cancel</button><button class="btn primary" data-save="' + esc(a.id) + '">Save</button>';
       h += '<button class="btn danger" data-delete="' + esc(a.id) + '">Delete</button><span class="hint">Or tell YouCoded in chat: “' + esc(a.institution) + ' is $…”</span></div>';
     }
     return h + '</div>';
+  }
+
+  // What an opened account shows: every fact the page has about it, and what can be done with it.
+  function dt(label, value){ return '<div class="dt"><span>' + label + '</span><b class="num">' + value + '</b></div>'; }
+  function accountDetail(a){
+    var h = '<div class="detail">';
+    h += dt(isDebt(a) ? 'Owed' : 'Balance', money(a.balance));
+    if (a.available != null) h += dt('Available', money(a.available));
+    if (a.kind === 'credit') h += dt('Credit limit', a.limit ? money(a.limit, true) : 'Not shared');
+    if (a.apr) h += dt('Interest', a.apr + '%');
+    if (a.payment && a.payment.amount > 0) h += dt('Next payment', money(a.payment.amount) + ' · ' + (a.payment.paid ? 'paid' : 'due ' + short(day(a.payment.due))));
+    h += dt('Comes from', a.source === 'plaid' ? esc(a.institution) + ' through Plaid' : 'Entered by you');
+    h += dt('Updated', a.updatedAt ? ago(a.updatedAt) : 'never');
+    h += '<div class="acts">';
+    if (limitEdit === a.id) {
+      h += '<input id="limit-val" class="num" inputmode="decimal" value="' + (a.limit || '') + '" aria-label="Credit limit"><button class="btn sm" data-limit-cancel>Cancel</button><button class="btn sm primary" data-limit-save="' + esc(a.id) + '">Save limit</button>';
+    } else {
+      if (a.source === 'plaid') h += '<span class="hint">Your bank keeps this one up to date.</span>';
+      if (a.source !== 'plaid' && editing !== a.id) h += '<button class="btn sm" data-edit="' + esc(a.id) + '">' + I.pen + 'Update balance</button>';
+      if (a.kind === 'credit') h += '<button class="btn sm" data-limit="' + esc(a.id) + '">' + (a.limit ? 'Change limit' : 'Set limit') + '</button>';
+      var u = siteOf(a); if (u) h += '<a class="btn sm" href="' + esc(u) + '" target="_blank" rel="noopener">' + I.out + 'Open ' + esc(a.institution) + '</a>';
+      if (a.source === 'plaid') h += '<button class="btn sm" data-jump="banks">Manage bank</button>';
+    }
+    return h + '</div></div>';
+  }
+  // What an opened bill shows.
+  function billDetail(b){
+    var h = '<div class="detail">';
+    h += dt('Amount', money(b.amount));
+    h += dt(b.paid ? 'Paid' : 'Due', short(b.paid || b.due));
+    var monthly = b.bill ? b.bill.monthly !== false : (b.account && b.account.payment && b.account.payment.monthly !== false);
+    h += dt('Repeats', b.mine ? (monthly ? 'Every month' : 'Once') : 'Set by your bank');
+    if (b.bill && b.bill.lastPaid) h += dt('Last paid', short(day(b.bill.lastPaid)));
+    h += '<div class="acts">';
+    if (billEdit === b.id && b.bill) {
+      h += '<input id="bill-amt" class="num" inputmode="decimal" value="' + b.amount + '" aria-label="Amount"><input id="bill-due" type="date" value="' + esc(b.bill.due) + '" aria-label="Due date">';
+      h += '<button class="btn sm" data-bill-cancel>Cancel</button><button class="btn sm primary" data-bill-save="' + esc(b.id) + '">Save</button>';
+    } else {
+      if (!b.mine) h += '<span class="hint">Your bank updates this when you pay.</span>';
+      if (b.mine && !b.paid) h += '<button class="btn sm" data-paid="' + esc(b.id) + '">' + I.check + 'Mark paid</button>';
+      if (b.bill) h += '<button class="btn sm" data-bill-edit="' + esc(b.id) + '">' + I.pen + 'Edit</button><button class="btn sm danger" data-bill-delete="' + esc(b.id) + '">Delete</button>';
+      var u = siteOf(b); if (u) h += '<a class="btn sm" href="' + esc(u) + '" target="_blank" rel="noopener">' + I.out + 'Pay at ' + esc(b.institution) + '</a>';
+    }
+    return h + '</div></div>';
   }
 
   // The add-by-hand forms: an account, or a bill (insurance, phone).
@@ -701,7 +782,39 @@
 
   function save(){ if (window.youcoded) window.youcoded.save(data); }
   function on(sel, fn){ document.querySelectorAll(sel).forEach(function(el){ el.onclick = function(e){ fn(el, e); }; }); }
+  function toggle(id){ openId = openId === id ? null : id; billEdit = null; limitEdit = null; render(); }
+  function focusAccount(id){
+    openId = id; render();
+    var el = document.querySelector('[data-open="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]');
+    if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.focus({ preventScroll: true }); }
+  }
   function wire(){
+    // A card opens on a click anywhere but its own buttons, links and fields; Enter or Space opens it from the keyboard.
+    document.querySelectorAll('[data-open]').forEach(function(el){
+      el.onclick = function(e){ if (e.target.closest('button, a, input, select, .detail')) return; toggle(el.dataset.open); };
+      el.onkeydown = function(e){ if ((e.key === 'Enter' || e.key === ' ') && e.target === el) { e.preventDefault(); toggle(el.dataset.open); } };
+    });
+    document.querySelectorAll('[data-focus], .tap[data-jump]').forEach(function(el){
+      el.onkeydown = function(e){ if ((e.key === 'Enter' || e.key === ' ') && e.target === el) { e.preventDefault(); el.click(); } };
+    });
+    on('[data-focus]', function(el, e){ if (e.target.closest('button, a')) return; focusAccount(el.dataset.focus); });
+    on('[data-limit]', function(b){ limitEdit = b.dataset.limit; render(); var i = document.getElementById('limit-val'); if (i) { i.focus(); i.select(); } });
+    on('[data-limit-cancel]', function(){ limitEdit = null; render(); });
+    on('[data-limit-save]', function(b){
+      var v = num(document.getElementById('limit-val').value);
+      var a = data.accounts.filter(function(x){ return x.id === b.dataset.limitSave; })[0];
+      if (a) { if (v && v > 0) a.limit = v; else delete a.limit; }
+      limitEdit = null; save(); render();
+    });
+    on('[data-bill-edit]', function(b){ billEdit = b.dataset.billEdit; render(); });
+    on('[data-bill-cancel]', function(){ billEdit = null; render(); });
+    on('[data-bill-save]', function(b){
+      var bill = data.bills.filter(function(x){ return x.id === b.dataset.billSave; })[0];
+      var amt = num(document.getElementById('bill-amt').value), due = document.getElementById('bill-due').value;
+      if (bill && amt != null && due) { bill.amount = amt; bill.due = due; delete bill.paid; }
+      billEdit = null; save(); render();
+    });
+    on('[data-bill-delete]', function(b){ data.bills = data.bills.filter(function(x){ return x.id !== b.dataset.billDelete; }); openId = null; save(); render(); });
     on('[data-range]', function(b){ range = b.dataset.range; render(); });
     on('[data-jump]', function(b){ var t = document.getElementById(b.dataset.jump); if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
     on('[data-edit]', function(b){ editing = b.dataset.edit; render(); var i = document.getElementById('edit-val'); if (i) { i.scrollIntoView({ block: 'center' }); i.focus(); i.select(); } });
