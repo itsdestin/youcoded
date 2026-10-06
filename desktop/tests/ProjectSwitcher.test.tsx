@@ -72,6 +72,28 @@ describe('project switcher rows', () => {
     expect(box('notes').className).toMatch(/border-accent/);
   });
 
+  it('only one row ever looks highlighted: the highlight and the bin come from one state, never CSS hover', () => {
+    // Found with explore: pointer resting on "recipes", then ArrowUp — the keys moved the
+    // highlight to the row above while CSS :hover kept "recipes" tinted with its bin, so two
+    // rows were lit. Any hover-driven class on a row or a bin brings that back.
+    mount();
+    const box = (n: string) => rowOf(n).parentElement!;
+    const bin = (n: string) => screen.getByRole('button', { name: `Remove ${n} from your projects`, hidden: true });
+    for (const n of ['app', 'themes', 'notes', 'thesis']) {
+      expect(box(n).className).not.toMatch(/(^|\s)hover:/);
+      expect(bin(n).className).not.toMatch(/group-hover:/);
+    }
+    fireEvent.mouseEnter(box('themes'));
+    fireEvent.mouseEnter(box('notes'));
+    const lit = ['app', 'themes', 'notes', 'thesis'].filter((n) => /border-accent/.test(box(n).className));
+    const bins = ['app', 'themes', 'notes', 'thesis'].filter((n) => /(^|\s)inline-flex(\s|$)/.test(bin(n).className));
+    expect(lit).toEqual(['notes']);
+    expect(bins).toEqual(['notes']);
+    fireEvent.mouseLeave(box('notes').parentElement!);
+    expect(['app', 'themes', 'notes', 'thesis'].filter((n) => /border-accent/.test(box(n).className))).toEqual(['app']);
+    expect(['app', 'themes', 'notes', 'thesis'].filter((n) => /(^|\s)inline-flex(\s|$)/.test(bin(n).className))).toEqual([]);
+  });
+
   it('says when a folder is missing', () => {
     mount();
     expect(within(rowOf('thesis')).getByText('Folder missing')).toBeTruthy();

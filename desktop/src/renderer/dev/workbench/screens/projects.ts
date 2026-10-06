@@ -15,9 +15,10 @@ export const PROJECTS: readonly ScreenEntry[] = [
   // Project switcher redesign (backlog row 10): a long list with a missing folder; the
   // highlight moved off the project you are in by the pointer (it rests there otherwise).
   { ...pr('projects/switcher#many', 'dialog'), params: { projects: 'many' } },
-  // Moved with the arrow keys, not the pointer: a pointer trip in headless Chrome left another
-  // row it crossed in its :hover state, so the picture showed two rows lit (friction log).
-  { ...pr('projects/switcher#pointed', 'dialog'), open: [{ do: 'key', key: 'ArrowDown' }, { do: 'key', key: 'ArrowDown' }, { do: 'key', key: 'ArrowDown' }] },
+  // The pointer on another row: the highlight (and its bin) moves there off the project you
+  // are in. (Round 3 first used arrow keys here: a pointer trip showed two rows lit — a real
+  // bug, CSS :hover beside the highlight state, fixed in ProjectSwitcher.)
+  { ...pr('projects/switcher#pointed', 'dialog'), open: [{ do: 'hover', target: { role: 'button', label: 'recipes, Sync stopped' } }] },
   // A project that doesn't sync, open in the hero: its sync pill reads "Not synced" (P2Q-1).
   { ...pr('projects/files#not-synced', 'view'), open: ['youcoded', 'wecoded-marketplace, Not synced'] },
   // The Remove confirm, one per wording: a plain folder, a synced project, a missing folder.

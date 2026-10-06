@@ -190,10 +190,16 @@ export function ProjectSwitcher({
               // its marking.
               <div
                 key={p.id}
-                className={`group relative flex items-center rounded-md transition-colors border ${
-                  isHighlighted ? 'border-accent bg-inset' : 'border-transparent hover:bg-inset'
+                // WHY no `hover:` look here (project-switcher-3 check, 2026-10-06): the highlight
+                // and the bin come from ONE state, highlightIndex. A CSS :hover tint and a
+                // group-hover bin were a second source — with the pointer resting on one row and
+                // the arrow keys moving the highlight, two rows were lit, one with a bin
+                // (reproduced with explore). mouseMove re-takes the highlight after the keys.
+                className={`relative flex items-center rounded-md transition-colors border ${
+                  isHighlighted ? 'border-accent bg-inset' : 'border-transparent'
                 }`}
                 onMouseEnter={() => { setHighlightIndex(i); setMoved(true); }}
+                onMouseMove={() => { if (!isHighlighted || !moved) { setHighlightIndex(i); setMoved(true); } }}
               >
                 <button
                   type="button"
@@ -255,15 +261,16 @@ export function ProjectSwitcher({
                 </button>
                 {onDeleteProject && (
                   // PC-3 "hover" — "when hidden, the other chips and such should sit flush right":
-                  // the bin is display:none (not just transparent) until the row is pointed at
-                  // or keyboard-highlighted, so it takes no space; on a touch screen it always
-                  // shows (hover never happens there). Every project has one, synced included.
+                  // the bin is display:none (not just transparent) until the highlight is MOVED
+                  // onto its row (pointer or keys) — the same state that draws the highlight, so
+                  // they can never disagree; on a touch screen it always shows (pointer-coarse:
+                  // hover never happens there). Every project has one, synced included.
                   <Button
                     variant="ghost"
                     size="icon"
                     aria-label={`Remove ${shown} from your projects`}
                     title="Remove from your projects"
-                    className={`shrink-0 mr-1 hover:text-destructive-fg group-hover:inline-flex focus-visible:inline-flex pointer-coarse:inline-flex ${isHighlighted && moved ? 'inline-flex' : 'hidden'}`}
+                    className={`shrink-0 mr-1 hover:text-destructive-fg pointer-coarse:inline-flex ${isHighlighted && moved ? 'inline-flex' : 'hidden'}`}
                     onClick={(e) => { e.stopPropagation(); onDeleteProject(p); }}
                   >
                     <TrashIcon size={14} />
