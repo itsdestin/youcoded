@@ -27,6 +27,7 @@ import { mutateFileUnderLock } from '../artifacts/cas-write';
 import { canonicalize } from '../../shared/artifacts/canonicalize';
 import type { SecretsStore } from '../providers/secrets-store';
 import type { PageHome } from '../../shared/pages-types';
+import { cleanDeviceAddress } from '../../shared/page-device-address';
 
 export const CONNECTIONS_FILE = 'page-connections.json';
 const VERSION = 1;
@@ -40,6 +41,10 @@ export interface PageApproval {
    *  page's code should make it ask again is a question for Destin (design
    *  review 1, finding 5), so nothing reads this yet. */
   htmlHash: string;
+  /** A device connection only: the address the person allowed, which may
+   *  differ from the page's suggestion (home-device deck, Q-address). What is
+   *  contacted is this, never the manifest. */
+  address?: string;
 }
 
 /** Where a saved key lives and how the service takes it. */
@@ -172,12 +177,16 @@ export class PageConnectionsStore {
     const id = savedKeyId(service, address);
     const record = (await this.read()).keys[id];
     const prefix = `key|${service}|${address}|`;
+    // A device approval carries its address beside the fingerprint, not in it.
+    const devicePrefix = `device|${service}|`;
+    const stoodOnThisKey = (a: PageApproval) =>
+      a.fingerprint.startsWith(prefix) || (a.fingerprint.startsWith(devicePrefix) && a.address === address);
     await this.mutate((cur) => {
       let changed = false;
       if (cur.keys[id]) { delete cur.keys[id]; changed = true; }
       for (const [pageKey, page] of Object.entries(cur.pages)) {
         for (const [connId, approval] of Object.entries(page)) {
-          if (!approval.fingerprint.startsWith(prefix)) continue;
+          if (!stoodOnThisKey(approval)) continue;
           delete page[connId];
           changed = true;
         }
@@ -269,6 +278,10 @@ function cleanPages(raw: unknown): Record<string, Record<string, PageApproval>> 
         approvedAt: typeof e.approvedAt === 'string' ? e.approvedAt : '',
         htmlHash: typeof e.htmlHash === 'string' ? e.htmlHash : '',
       };
+      // Re-checked on every read: a hand-edited file must not be able to turn
+      // a device approval into one for a website.
+      const address = cleanDeviceAddress(e.address);
+      if (address) kept[connId].address = address;
     }
     if (Object.keys(kept).length) out[pageKey] = kept;
   }

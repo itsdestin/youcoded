@@ -1,6 +1,6 @@
 {
  "_note": "Every channel a PHONE may call, as of one-core R6-3 (2026-10-01). Any change to this list is a decision for Destin: edit it only with his approval. tests/phone-open-set.test.ts compares the live channel table to it.",
- "total": 418,
+ "total": 274,
  "open": [
   "account:signed-in",
   "account:user",
@@ -141,6 +141,13 @@
   "pages:saved-keys",
   "pages:set-data",
   "pages:set-pinned",
+  "pages:socket-close",
+  "pages:socket-open",
+  "pages:socket-ping",
+  "pages:socket-send",
+  "pages:video-ping",
+  "pages:video-start",
+  "pages:video-stop",
   "permission:respond",
   "permissions:list",
   "permissions:remove",
@@ -269,5 +276,6 @@
   "zoom:in",
   "zoom:out",
   "zoom:reset"
- ]
+ ],
+ "_added_ha_pages": "2026-10-05, branch session/ha-pages-connection merged into one-core: the 7 pages:socket-* / pages:video-* channels were already open to a phone on that branch (a phone's Home page holds a live connection and camera through the computer, each owned by that phone alone). Destin signed off this widening on 2026-10-05 (\"yes\", asked whether a phone may use the Home page's live updates and camera video)."
 }

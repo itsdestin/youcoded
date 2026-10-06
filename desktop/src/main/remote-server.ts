@@ -40,6 +40,8 @@ import type { ChatGptAuth } from './providers/chatgpt-auth';
 import type { OpenRouterSignIn } from './providers/openrouter-oauth';
 import type { RemoteNativeRuntime } from './create-runtime';
 import { findChannel, serveRemoteChannel } from './ipc/channel-table';
+import { getPagesService } from './pages/pages-service';
+import { clientOwnerKey, sendToClient } from './pages/page-owner';
 import { sendToAllWindows } from './window-broadcast';
 import { toListResult } from './harness/specialists/catalog';
 import { BrowserWindow, app } from 'electron';
@@ -523,6 +525,7 @@ export class RemoteServer {
     for (const client of this.clients) {
       // WHY: stop clears clients before close events run; invalidate pending starts now.
       this.handoffRoute?.cancelOwner(`remote:${client.id}`);
+      getPagesService()?.closeOwner(clientOwnerKey(client.id)); // shutdown clears `clients` without removeClient
       client.ws.close(1001, 'Server shutting down');
       this.leaveAudience(client);
     }
@@ -610,6 +613,7 @@ export class RemoteServer {
     this.leaveAudience(client);
     // WHY: close/error/liveness drops must invalidate in-flight starts for this connection only.
     this.handoffRoute?.cancelOwner(`remote:${client.id}`);
+    getPagesService()?.closeOwner(clientOwnerKey(client.id)); // WHY here: every real drop (close, error, ping timeout, unpair) ends here; without it a phone's live sockets lived on for the 60 s lease and counted against its reconnect
     if (this.clients.size === 0 && this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null; }
     this.emitStatus(); // clientCount changed — see RemoteStatus.clientCount
   }
@@ -1051,6 +1055,7 @@ export class RemoteServer {
             }
           },
           sendToWindows: (channel, payload) => this.broadcastToWindows(channel, payload),
+          pageSocketPush: (event) => sendToClient(client, event),
           host: { config: this.config, getClientCount: () => this.getClientCount(), getClientList: () => this.getClientList(), getStatus: () => this.getStatus(), getDeviceList: () => this.getDeviceList() },
         },
         // Every screen: all phones (the sender included), then this computer's windows.

@@ -18,7 +18,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { mutateFileUnderLock } from '../artifacts/cas-write';
-import { fingerprint, parseConnections } from './page-connections';
+import { fingerprint, parseConnections, withApprovedAddress } from './page-connections';
 import { approvalKey, savedKeyId, type ConnectionsSnapshot, type PageConnectionsStore, hashHtml } from './connections-store';
 import type {
   PageConnection, PageConnectionStatus, PageDocument, PageHome, PageIcon,
@@ -119,11 +119,17 @@ export class PagesStore {
         const approvals = saved.pages[approvalKey(h.home, e.name)] ?? {};
         const allApproved = manifest.connections.length > 0
           && manifest.connections.every((c) => approvals[c.id]?.fingerprint === fingerprint(c));
-        const connections: PageConnectionStatus[] = manifest.connections.map((c) => ({
-          ...c,
-          approved: approvals[c.id]?.fingerprint === fingerprint(c),
-          ...(c.kind === 'key' ? { savedKey: !!saved.keys[savedKeyId(c.service, c.address)] } : {}),
-        }));
+        const connections: PageConnectionStatus[] = manifest.connections.map((m) => {
+          const approved = approvals[m.id]?.fingerprint === fingerprint(m);
+          // An approved device is shown at the address the person allowed; one
+          // still waiting shows the page's suggestion, for the card to edit.
+          const c = approved ? withApprovedAddress(m, approvals[m.id]?.address) : m;
+          return {
+            ...c,
+            approved,
+            ...(c.kind === 'key' || c.kind === 'device' ? { savedKey: !!saved.keys[savedKeyId(c.service, c.address)] } : {}),
+          };
+        });
         out.push({
           id,
           name: manifest.name,

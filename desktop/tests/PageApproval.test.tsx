@@ -35,6 +35,21 @@ describe('the approval screen', () => {
     expect(screen.getByText('api.openweathermap.org.').className).toContain('text-fg-dim');
   });
 
+  it('tells the person when a home device page asks for a live connection or camera video, and only then', () => {
+    const base = { id: 'ha', kind: 'device' as const, service: 'Home Assistant', address: '192.168.4.54:8123', access: 'full' as const, needsKey: true, approved: false };
+    const vp = { targetPrefix: 'camera.', send: '{"offer":{{offer}}}', answer: 'a', candidate: 'c', failed: 'f' };
+    const { unmount } = render(<PageApproval page={page([{ ...base, socketHello: '{"type":"auth","access_token":"{{key}}"}', socketReady: 'auth_ok', videoProfile: vp }])} onNotNow={() => {}} />);
+    expect(screen.getByText('Keeps a live connection open for instant updates.')).toBeInTheDocument();
+    expect(screen.getByText('Can play camera video through the app.')).toBeInTheDocument();
+    unmount();
+    render(<PageApproval page={page([{ ...base, socketHello: '{"type":"auth","access_token":"{{key}}"}' }])} onNotNow={() => {}} />);
+    expect(screen.getByText('Keeps a live connection open for instant updates.')).toBeInTheDocument();
+    expect(screen.queryByText(/camera video/)).toBeNull();
+    cleanup();
+    render(<PageApproval page={page([{ ...base }])} onNotNow={() => {}} />);
+    expect(document.querySelector('[data-device-extra]')).toBeNull();
+  });
+
   it('says so when allowing failed, and does not pretend the page opened', async () => {
     const approve = vi.fn(async () => ({ ok: false, message: 'This computer has no keychain, so the key could not be stored.' }) as PageApproveResult);
     withBridge(approve);

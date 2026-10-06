@@ -14,6 +14,8 @@
 // host internals. The list below is the design guide's token vocabulary (§2)
 // plus the radius and font scale, i.e. what the style kit is written against.
 
+import { PAGES_SOLID_ATTR } from '../../themes/look-overrides';
+
 const PAGE_THEME_TOKENS: readonly string[] = [
   'canvas', 'panel', 'inset', 'well',
   'accent', 'on-accent',
@@ -46,18 +48,60 @@ export const PAGE_REFRESH_MESSAGE = 'youcoded:refresh';
 export const PAGE_FETCH_MESSAGE = 'youcoded:fetch';
 /** Host → page: the answer to one `youcoded:fetch`, matched by request id. */
 export const PAGE_FETCH_RESULT_MESSAGE = 'youcoded:fetch:result';
+/** The live socket (spec 2026-10-04). Page → host: open / send / close, each
+ *  carrying the page's OWN socket id; host → page: one event kind for both a
+ *  state change and a batch of messages, matched by that same id. */
+export const PAGE_SOCKET_OPEN_MESSAGE = 'youcoded:socket:open';
+export const PAGE_SOCKET_SEND_MESSAGE = 'youcoded:socket:send';
+export const PAGE_SOCKET_CLOSE_MESSAGE = 'youcoded:socket:close';
+export const PAGE_SOCKET_EVENT_MESSAGE = 'youcoded:socket:event';
+/** Camera video (spec 2026-10-04, Part 2). Page → host: start / stop / ack (the
+ *  page is done with the picture numbered `n`); host → page: one event kind for a
+ *  state change and for a picture (an ImageBitmap, transferred). */
+export const PAGE_VIDEO_START_MESSAGE = 'youcoded:video:start';
+export const PAGE_VIDEO_STOP_MESSAGE = 'youcoded:video:stop';
+export const PAGE_VIDEO_ACK_MESSAGE = 'youcoded:video:ack';
+export const PAGE_VIDEO_EVENT_MESSAGE = 'youcoded:video:event';
 const PAGE_THEME_STYLE_ID = 'youcoded-theme';
+
+/** True when the app's page pane is glass: the theme has a wallpaper/gradient
+ *  AND the chrome style is floating or float. This is EXACTLY the condition
+ *  under which styles/globals.css ("Screens in floating chrome") and
+ *  styles/float-chrome.css make `.screen-pane` see-through, so a page that goes
+ *  transparent here is always sitting on glass and never on a hole. WHY here and
+ *  not in CSS: the page lives in a sandboxed frame and cannot see the host's
+ *  attributes, so the host reads them and tells it. */
+export function paneIsGlass(root: HTMLElement = document.documentElement, body: HTMLElement = document.body): boolean {
+  const style = body.getAttribute('data-chrome-style');
+  // WHY the switch is read here, off <html>: Settings → Appearance → "Show theme background behind pages" is ONE global
+  // switch (owner, 2026-10-05). ThemeProvider mirrors it onto <html> as PAGES_SOLID_ATTR (present = OFF, so the default
+  // needs no attribute). Reading the DOM lets every consumer (page pane, page document, Office) follow it live through
+  // the observers they already have, with no new prop, IPC or per-page storage.
+  return root.hasAttribute('data-wallpaper') && !root.hasAttribute(PAGES_SOLID_ATTR) && (style === 'floating' || style === 'float');
+}
+
+
+/** The attribute the page's own CSS keys on (`:root[data-yc-see-through]`). */
+export const PAGE_SEE_THROUGH_ATTR = 'data-yc-see-through';
 
 /** Snapshot of the current theme as one `:root { … }` rule. Reads computed
  *  values, so it works whether a token came from a stylesheet or from the
  *  engine's inline setProperty. Unset tokens are skipped rather than emitted
  *  empty, so a page's own fallback (`var(--x, …)`) still applies. */
-export function readThemeCss(root: HTMLElement = document.documentElement): string {
+export function readThemeCss(root: HTMLElement = document.documentElement, seeThrough = false): string {
   const cs = getComputedStyle(root);
   const lines: string[] = [];
   for (const t of PAGE_THEME_TOKENS) {
     const v = cs.getPropertyValue(`--${t}`).trim();
     if (v) lines.push(`--${t}: ${v};`);
+  }
+  // The theme's glass density, only while the page is see-through: a page that
+  // lets the wallpaper show draws its own cards with the same recipe the app's
+  // panes use (--panel at --panels-opacity). Not in the token list: it means
+  // nothing to a page that is not see-through.
+  if (seeThrough) {
+    const op = Number.parseFloat(cs.getPropertyValue('--panels-opacity'));
+    lines.push(`--panels-opacity: ${Number.isFinite(op) ? op : 1};`);
   }
   // color-scheme steers native controls (scrollbars, date pickers) inside the
   // frame the same way the host's <html> steers its own.
@@ -80,7 +124,7 @@ export function readThemeCss(root: HTMLElement = document.documentElement): stri
  *  it. `e.source !== parent` drops anything that did not come from the host,
  *  and every answer is matched against this bootstrap's own request map, so a
  *  forged `youcoded:fetch:result` resolves nothing (design review 1, finding 8). */
-function bootstrap(dataJson: string): string {
+function bootstrap(dataJson: string, devicesJson = '{}'): string {
   return `(function(){
   var ID = ${JSON.stringify(PAGE_THEME_STYLE_ID)};
   var THEME = ${JSON.stringify(PAGE_THEME_MESSAGE)};
@@ -90,6 +134,18 @@ function bootstrap(dataJson: string): string {
   var REFRESH = ${JSON.stringify(PAGE_REFRESH_MESSAGE)};
   var FETCH = ${JSON.stringify(PAGE_FETCH_MESSAGE)};
   var RESULT = ${JSON.stringify(PAGE_FETCH_RESULT_MESSAGE)};
+  var S_OPEN = ${JSON.stringify(PAGE_SOCKET_OPEN_MESSAGE)};
+  var S_SEND = ${JSON.stringify(PAGE_SOCKET_SEND_MESSAGE)};
+  var S_CLOSE = ${JSON.stringify(PAGE_SOCKET_CLOSE_MESSAGE)};
+  var S_EVENT = ${JSON.stringify(PAGE_SOCKET_EVENT_MESSAGE)};
+  var V_START = ${JSON.stringify(PAGE_VIDEO_START_MESSAGE)};
+  var V_STOP = ${JSON.stringify(PAGE_VIDEO_STOP_MESSAGE)};
+  var V_ACK = ${JSON.stringify(PAGE_VIDEO_ACK_MESSAGE)};
+  var V_EVENT = ${JSON.stringify(PAGE_VIDEO_EVENT_MESSAGE)};
+  var videos = {};
+  var videoSeq = 0;
+  var sockets = {};
+  var socketSeq = 0;
   var subs = [];
   var refreshSubs = [];
   var waiting = {};
@@ -98,13 +154,68 @@ function bootstrap(dataJson: string): string {
     for (var i = 0; i < list.length; i++) { try { list[i](arg); } catch (err) {} }
   }
   window.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape') { try { parent.postMessage({ type: ESC }, '*'); } catch (err) {} }
+    if (e.key !== 'Escape') return;
+    // WHY wait one tick: a page's own Escape handler (closing its pop-up) may be registered after this one, so it has not run yet.
+    // If it called preventDefault (or stopped the key before it got here) the page used the key, and the app must not ALSO leave the
+    // view (ux review 2, U1). A page that ignores Escape still leaves as before.
+    setTimeout(function () {
+      if (e.defaultPrevented) return;
+      try { parent.postMessage({ type: ESC }, '*'); } catch (err) {}
+    }, 0);
   });
   window.youcoded = {
     data: ${dataJson},
+    // Home-device deck, Q-address: the page suggested an address but the
+    // person may have allowed another, so the page asks here where its device
+    // is. Only ALLOWED devices appear; a page waiting for a yes sees none.
+    devices: ${devicesJson},
     save: function (data) { window.youcoded.data = data; try { parent.postMessage({ type: SET, data: data }, '*'); } catch (e) {} },
     onData: function (cb) { if (typeof cb === 'function') subs.push(cb); },
     onRefresh: function (cb) { if (typeof cb === 'function') refreshSubs.push(cb); },
+    // A live connection to the page's approved home device. The host owns the
+    // real one; this is a handle. Every 'open' is a fresh connection: wait for
+    // the device's own "logged in" reply in onMessages before subscribing, and
+    // subscribe again after every 'open'. send() is refused unless 'open'.
+    socket: function (url, opts) {
+      var o = opts || {};
+      var id = 's' + (++socketSeq);
+      var rec = { state: 'connecting', onState: o.onState, onMessages: o.onMessages };
+      sockets[id] = rec;
+      try { parent.postMessage({ type: S_OPEN, id: id, url: String(url) }, '*'); }
+      catch (e) { rec.state = 'closed'; delete sockets[id]; }
+      return {
+        send: function (text) {
+          if (rec.state !== 'open' || typeof text !== 'string') return false;
+          try { parent.postMessage({ type: S_SEND, id: id, text: text }, '*'); return true; } catch (e) { return false; }
+        },
+        close: function () {
+          if (!sockets[id]) return;
+          delete sockets[id];
+          rec.state = 'closed';
+          try { parent.postMessage({ type: S_CLOSE, id: id }, '*'); } catch (e) {}
+        }
+      };
+    },
+    // Live camera video, played by the app: the page names a device connection and
+    // a camera, and gets PICTURES (ImageBitmaps) — never an address or a stream.
+    // onFrame(bitmap, ack): draw it on a canvas, then call ack() to ask for the next.
+    // onState('starting' | 'playing' | 'stopped', why). stop() ends it.
+    video: function (connection, target, opts) {
+      var o = opts || {};
+      var id = 'v' + (++videoSeq);
+      var rec = { state: 'starting', onFrame: o.onFrame, onState: o.onState };
+      videos[id] = rec;
+      try { parent.postMessage({ type: V_START, id: id, connection: String(connection), target: String(target) }, '*'); }
+      catch (e) { rec.state = 'stopped'; delete videos[id]; }
+      return {
+        stop: function () {
+          if (!videos[id]) return;
+          delete videos[id];
+          rec.state = 'stopped';
+          try { parent.postMessage({ type: V_STOP, id: id }, '*'); } catch (e) {}
+        }
+      };
+    },
     fetch: function (url, opts) {
       return new Promise(function (resolve, reject) {
         var o = opts || {};
@@ -113,7 +224,7 @@ function bootstrap(dataJson: string): string {
         try {
           parent.postMessage({
             type: FETCH, id: id, url: String(url),
-            method: o.method, headers: o.headers, body: o.body
+            method: o.method, headers: o.headers, body: o.body, as: o.as, socket: o.socket
           }, '*');
         } catch (e) {
           delete waiting[id];
@@ -130,6 +241,38 @@ function bootstrap(dataJson: string): string {
       var el = document.getElementById(ID);
       if (!el) { el = document.createElement('style'); el.id = ID; document.head.appendChild(el); }
       el.textContent = d.css;
+      // The host says whether the app's pane behind this page is glass (and the
+      // person has not switched it off): the page turns see-through with it, live.
+      document.documentElement.toggleAttribute(${JSON.stringify(PAGE_SEE_THROUGH_ATTR)}, d.seeThrough === true);
+      return;
+    }
+    if (d.type === S_EVENT && typeof d.id === 'string') {
+      // Matched by this page's own id: a forged event for an id it never made resolves nothing.
+      var sr = sockets[d.id];
+      if (!sr) return;
+      if (d.kind === 'state' && typeof d.state === 'string') {
+        sr.state = d.state;
+        if (d.state === 'closed') delete sockets[d.id];
+        if (typeof sr.onState === 'function') { try { sr.onState(d.state, typeof d.why === 'string' ? d.why : undefined); } catch (err) {} }
+      } else if (d.kind === 'messages' && Array.isArray(d.texts) && typeof sr.onMessages === 'function') {
+        try { sr.onMessages(d.texts.filter(function (t) { return typeof t === 'string'; })); } catch (err) {}
+      }
+      return;
+    }
+    if (d.type === V_EVENT && typeof d.id === 'string') {
+      // Matched by this page's own id: a forged event for an id it never made resolves nothing.
+      var vr = videos[d.id];
+      if (!vr) { if (d.bitmap && typeof d.bitmap.close === 'function') { try { d.bitmap.close(); } catch (err) {} } return; }
+      if (d.kind === 'state' && typeof d.state === 'string') {
+        vr.state = d.state;
+        if (d.state === 'stopped') delete videos[d.id];
+        if (typeof vr.onState === 'function') { try { vr.onState(d.state, typeof d.why === 'string' ? d.why : undefined); } catch (err) {} }
+      } else if (d.kind === 'frame' && d.bitmap) {
+        var vn = d.n, finished = false;
+        var release = function () { if (finished) return; finished = true; try { parent.postMessage({ type: V_ACK, id: d.id, n: vn }, '*'); } catch (err) {} };
+        if (typeof vr.onFrame === 'function') { try { vr.onFrame(d.bitmap, release); } catch (err) { release(); } }
+        else { try { d.bitmap.close(); } catch (err) {} release(); }
+      }
       return;
     }
     if (d.type === DATA) { window.youcoded.data = d.data; call(subs, d.data); return; }
@@ -161,6 +304,10 @@ function pageCsp(connections: readonly { kind: string }[]): string {
   // (deck Q-open: a reader page is useless without them). It still cannot
   // open a socket of its own.
   const open = connections.some((c) => c.kind === 'open');
+  // A recorded clip arrives as a data: link from youcoded.fetch(url, {as:'video'})
+  // (spec 2026-10-04, Part 3). WHY only with a device connection: that is the only
+  // kind main will fetch a clip for, so no other page needs to play a data: video.
+  const device = connections.some((c) => c.kind === 'device');
   return [
     "default-src 'none'",
     "connect-src 'none'",
@@ -168,7 +315,7 @@ function pageCsp(connections: readonly { kind: string }[]): string {
     "style-src 'unsafe-inline'",
     `img-src data: blob:${open ? ' https:' : ''}`,
     `font-src data:${open ? ' https:' : ''}`,
-    ...(open ? ['media-src https:'] : []),
+    ...(open || device ? [`media-src ${[device ? 'data:' : '', open ? 'https:' : ''].filter(Boolean).join(' ')}`] : []),
     "form-action 'none'",
     "base-uri 'none'",
     "frame-src 'none'",
@@ -317,30 +464,45 @@ export function prepareHostedDocument(
   themeCss: string,
   kitCss: string,
   data: unknown = null,
-  connections: readonly { kind: string }[] = [],
+  connections: readonly { kind: string; id?: string; address?: string; approved?: boolean }[] = [],
+  seeThrough = false,
 ): string {
   // `</script>` inside the data would end the script early; escape the one
   // sequence that matters in a JSON literal placed in a script.
   const dataJson = JSON.stringify(data ?? null).replace(/<\//g, '<\\/');
+  // Each allowed device as `http://<address>`: the page builds its requests
+  // on this, and main still refuses anything that is not exactly that device.
+  const devices: Record<string, string> = {};
+  for (const c of connections) if (c.kind === 'device' && c.approved && c.id && c.address) devices[c.id] = `http://${c.address}`;
+  const devicesJson = JSON.stringify(devices).replace(/<\//g, '<\\/');
   const ours =
     `<meta http-equiv="Content-Security-Policy" content="${pageCsp(connections)}">` +
     '<meta http-equiv="x-dns-prefetch-control" content="off">' +
     `<style id="${PAGE_THEME_STYLE_ID}">${themeCss}</style>` +
     `<style id="youcoded-kit">${kitCss}</style>` +
-    `<script>${bootstrap(dataJson)}</script>`;
+    `<script>${bootstrap(dataJson, devicesJson)}</script>`;
   const a = splitAuthorDocument(html);
-  return `<!doctype html><html${a.htmlAttrs}><head>${ours}${a.head}</head><body${a.bodyAttrs}>${a.body}</body></html>`;
+  // WHY the attribute is baked in: set from first paint, the page never flashes
+  // an opaque canvas before the host's first message arrives.
+  const see = seeThrough ? ` ${PAGE_SEE_THROUGH_ATTR}` : '';
+  return `<!doctype html><html${a.htmlAttrs}${see}><head>${ours}${a.head}</head><body${a.bodyAttrs}>${a.body}</body></html>`;
 }
 
 /** Watches the host document for anything the theme engine touches — the
  *  inline style and data attributes on <html> and <body> — and reports the
- *  fresh CSS. Attribute-level, not a React subscription, so a theme-pack
- *  reload or the appearance sliders count too, not only a theme switch. */
-export function watchThemeCss(onChange: (css: string) => void): () => void {
-  let last = readThemeCss();
+ *  fresh CSS plus whether the page should be see-through (the pane is glass,
+ *  which already includes the global Appearance switch). Attribute-level, not
+ *  a React subscription, so a theme-pack reload, the appearance sliders and the
+ *  switch itself all count, not only a theme switch. */
+export function watchThemeCss(onChange: (css: string, seeThrough: boolean) => void): () => void {
+  const read = () => {
+    const see = paneIsGlass();
+    return { css: readThemeCss(document.documentElement, see), see };
+  };
+  let last = read();
   const check = () => {
-    const next = readThemeCss();
-    if (next !== last) { last = next; onChange(next); }
+    const next = read();
+    if (next.css !== last.css || next.see !== last.see) { last = next; onChange(next.css, next.see); }
   };
   const mo = new MutationObserver(check);
   mo.observe(document.documentElement, { attributes: true });

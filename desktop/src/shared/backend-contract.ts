@@ -554,6 +554,15 @@ export const IPC = {
   PAGES_SAVED_KEYS: 'pages:saved-keys',
   PAGES_DELETE_SAVED_KEY: 'pages:delete-saved-key',
   PAGES_FETCH: 'pages:fetch',
+  // ---- Live sockets and camera video a page holds through main (spec 2026-10-04); events ride PAGES_SOCKET_EVENT ----
+  PAGES_SOCKET_OPEN: 'pages:socket-open',
+  PAGES_SOCKET_SEND: 'pages:socket-send',
+  PAGES_SOCKET_CLOSE: 'pages:socket-close',
+  PAGES_SOCKET_PING: 'pages:socket-ping',
+  PAGES_SOCKET_EVENT: 'pages:socket-event',
+  PAGES_VIDEO_START: 'pages:video-start',
+  PAGES_VIDEO_STOP: 'pages:video-stop',
+  PAGES_VIDEO_PING: 'pages:video-ping',
   // ---- Remembered "Always allow" rules (M5 2a: permissions management UI) ----
   // list = every project's stored grants; remove/remove-project revoke them.
   // Keyed by PROJECT SLUG, not cwd — permissions.json never stored the cwd for

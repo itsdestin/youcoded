@@ -406,6 +406,11 @@ function withCatchAll(namespace: string, impl: Record<string, unknown>): Record<
 
       if (Object.prototype.hasOwnProperty.call(impl, key)) {
         const value = impl[key];
+        // WHY videoPlayback is handed over as it is: it is a bundle of the host's own stand-ins (a pretend peer
+        // connection, picture source), not a channel. Wrapped like a namespace, every call on it came back as a
+        // Promise after the practice latency, so the real host code never got a peer it could use and every live
+        // picture in the workbench stopped with "the camera's answer could not be used".
+        if (key === 'videoPlayback') return value;
         // A nested hand-written namespace (`theme.marketplace = { list }`) gets
         // the same catch-all as a top-level one, so the members it does NOT
         // implement still resolve `[]` rather than being undefined — the
@@ -497,10 +502,13 @@ const NAMESPACES = [
 
 import { createNamingPreview } from './naming-preview';
 import { seedPages } from './fixtures/pages';
+import { fakeCameraDeps, fakeCameraRefuse, fakeCameraRefusal, FAKE_RATE_LIMIT_WHY } from './fixtures/fake-camera';
+import { fakeHomeAssistantFetch, fakeHomeAssistantIds, fakeHomeAssistantLive, fakeHomeAssistantCameraEvents, fakeHomeAssistantNestSignedIn, fakeHomeAssistantSet, fakeHomeAssistantSocket } from './fixtures/fake-home-assistant';
+import { findHomeVariant, withHomeVariant } from './fixtures/home-variants/registry';
 import { OFFICE_EDITOR_ORIGIN, OFFICE_FILES, officeFixtureName, officeSampleUrl } from './fixtures/office';
 import { OFFICE_PAGE_SUMMARY } from '../../../shared/pages-types';
 import type { OfficeBridge, OfficeVersion } from '../../../shared/office-types';
-import type { PagesBridge, PageDocument, PageSummary, SavedPageKey } from '../../../shared/pages-types';
+import type { PagesBridge, PageDocument, PageSocketEvent, PageSummary, SavedPageKey } from '../../../shared/pages-types';
 
 /** `?fail=<ns.method>[,…]` — those channels REJECT from the first call.
  *
@@ -3731,21 +3739,116 @@ function createDocCommentsMock(empty: boolean) {
  *  gets the three fixture pages. Pin toggles publish through onChanged the way
  *  the real host will, so the header and the library never disagree. */
 function createPagesMock(empty: boolean): PagesBridge {
+  // Live sockets (page-live-socket.ts's twin): who holds which, and who listens.
+  const liveSockets = new Map<string, { page: string; frame: string; live: ReturnType<typeof fakeHomeAssistantLive> }>();
+  // WHY (review F12): a session is dropped by socketClose only; a page that goes away without closing (the tab navigates or
+  // unloads) left its session in the pretend house's list, iterated by every later change. Close them all when the tab goes.
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') window.addEventListener('pagehide', () => { for (const s of liveSockets.values()) s.live.close(); liveSockets.clear(); });
+  const socketSubs = new Set<(e: PageSocketEvent) => void>();
+  let liveSeq = 0;
+  const liveVideos = new Set<string>();
+  const emitSocket = (e: PageSocketEvent) => { for (const cb of [...socketSubs]) cb(e); };
   // Office is built in, so it is listed in every scenario — even the empty one.
   // Unpinned, as a new install has it: pinning it filled the header's fourth slot,
   // and the resume journey's All Sessions click then raced the session strip
   // re-packing under verify.sh's load (failed 2 of 4 runs, 2026-09-28).
   let pages: PageDocument[] = [OFFICE_PAGE, ...(empty ? [] : seedPages())];
+  // `?pagesHome=connected` opens the Home page already allowed at the
+  // Tailscale address, so its running state is a screen of its own rather
+  // than something only a click-through reaches (home-device deck review).
+  // `?pagesHome=refused`: the address box already holds a website, so the
+  // refusal and its explanation are a screen too.
+  if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('pagesHome') === 'refused') {
+    pages = pages.map((p) => (p.id !== 'page-home' ? p : { ...p, connections: (p.connections ?? []).map((c) => (c.kind === 'device' ? { ...c, address: 'my-home.example.com' } : c)) }));
+  }
+  // `?pagesHome=connected`: one room's lights card open (with a palette), the
+  // rest folded, two favourites starred. `?pagesHome=edit`: the same page in
+  // Edit mode (home-page-v2 round 4).
+  const homeView = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('pagesHome') : null;
+  // `?pagesHome=remote`: Destin's Room with its TV's remote open (round 5).
+  // Round 4: `?pagesHome=view-lights|view-media|view-climate|view-problems`
+  // opens on that chip's page; `settings` opens the gear's panel.
+  // `camera-limited` is the Cameras tab with Google refusing every live start (the page's back-off, fake-camera.ts).
+  const chipView = homeView && homeView.startsWith('view-') ? homeView.slice(5) : homeView === 'camera-limited' ? 'cameras' : homeView === 'lights-colour' ? 'lights' : homeView && /^thermo-\d+-climate/.test(homeView) ? 'climate' : null;
+  // `chips-pills|chips-sentence|chips-tiles`: the main page in that chip style.
+  const chipStyle = homeView && homeView.startsWith('chips-') ? homeView.slice(6) : null;
+  // `group`: Destin's Room soundbar with its Sonos tick list open (round 5).
+  // `device`: the Floor lamp's pop-up open (round 5); `view-activity` is the
+  // Activity tab, through the same switch as the other pills.
+  // `camera`: only the cameras, so the camera card (recent events, Watch live)
+  // is the whole picture instead of something far down a long page.
+  // `camera-events`: the same, with cameras whose events have no recording (fake-home-assistant.ts `fakeHomeAssistantCameraEvents`).
+  const onlyCameras = homeView === 'camera' || homeView === 'camera-events';
+  // `remote`: the Home page with the TV's remote open and nothing else in the way (every other device hidden), so the card is the whole picture.
+  const tvOnly = fakeHomeAssistantIds().filter((id) => id !== 'media_player.destins_room_google_tv' && id !== 'remote.destins_room_tv_remote');
+  // `v-<task>-<key>`: one redesign option (fixtures/home-variants/), on the
+  // connected page, starting from the option's own saved data if it has any.
+  const variant = homeView && homeView.startsWith('v-') ? findHomeVariant(homeView.slice(2)) : null;
+  // `media-group`: the Media tab with two speakers playing one song together, so the Playing together box can be seen (the pretend house has
+  // none by default). WHY the speakers are changed here and not in the pretend house's own list: other screens and tests rely on it as it is.
+  if (homeView === 'media-group') {
+    const song = { state: 'playing', title: 'Weightless \u2014 Marconi Union', app: 'Spotify', group: ['media_player.living_room_speaker', 'media_player.roam_2'] };
+    fakeHomeAssistantSet('media_player.living_room_speaker', song); fakeHomeAssistantSet('media_player.roam_2', song);
+  }
+  // `thermo-<now>[-climate][-auto]`: only the thermostat, with the room at <now> degrees (50 and 90 are the dial's two ends), on the Home tab's
+  // narrow card or, with -climate, the Climate tab's big dial; -auto puts it in Auto (a low and a high). WHY: the dial's "Now" label must be seen
+  // at the extremes beside the - and + buttons (owner's concern). Changed here, not in the pretend house's list: other screens rely on it as it is.
+  const thermo = homeView ? /^thermo-(\d+)(-climate)?(-auto)?$/.exec(homeView) : null;
+  if (thermo) fakeHomeAssistantSet('climate.thermostat', { cur: Number(thermo[1]), ...(thermo[3] ? { state: 'heat_cool', target: null, tlo: Math.max(50, Number(thermo[1]) - 3), thi: Math.min(90, Number(thermo[1]) + 3), action: 'idle' } : {}) });
+  if (onlyCameras || homeView === 'view-cameras' || homeView === 'camera-limited') fakeHomeAssistantNestSignedIn(true); // events need the Nest account working
+  if (homeView === 'camera-events') fakeHomeAssistantCameraEvents(true);
+  fakeCameraRefuse(homeView === 'camera-limited' ? FAKE_RATE_LIMIT_WHY : null);
+  if (onlyCameras || homeView === 'connected' || homeView === 'edit' || homeView === 'remote' || homeView === 'remote-media' || homeView === 'remote-wide' || homeView === 'media-group' || homeView === 'group' || homeView === 'device' || chipView || homeView === 'settings' || chipStyle || variant || thermo) {
+    pages = pages.map((p) => (p.id !== 'page-home' ? p : {
+      ...p,
+      // WHY (screenshots only): the page's first-load rise of room cards runs for about a second, and a picture taken during it misses room cards
+      // 2 and up. The shoot tool sets window.__shootInflight in this window (and nothing else does), so only then is the page's own
+      // __feelOff switch (home-assistant-page-feel.ts) turned on. Destin's live panes and his real app never set it: motion is unchanged.
+      ...(() => {
+        const shooting = typeof (window as unknown as { __shootInflight?: number }).__shootInflight === 'number';
+        const wide = (h: string) => (homeView === 'remote-wide' ? h.replace('</head>', '<style>.yc-page { max-width: none !important; }</style></head>') : h); // remote-wide: the page's own width cap lifted, so a 1900 px window gives a ~1700 px card
+        const still = (h: string) => wide(shooting ? h.replace('<body>', '<body><script>window.__feelOff = true;</script>') : h);
+        return variant ? { html: withHomeVariant(p.html, variant) } /* WHY not still(): redesign options carry their own motion switches, and a motion-only option must keep looking different from its 'before' */ : shooting || homeView === 'remote-wide' ? { html: still(p.html) } : {};
+      })(),
+      connections: (p.connections ?? []).map((c) => (c.kind === 'device' ? { ...c, address: '100.99.234.114:8123', approved: true, savedKey: true } : c)),
+      refresh: { at: new Date().toISOString(), failed: false },
+      data: variant?.data ? variant.data : thermo && !thermo[2] ? { hidden: fakeHomeAssistantIds().filter((id) => id !== 'climate.thermostat'), startOpen: ['upstairs'] } : onlyCameras ? { hidden: fakeHomeAssistantIds().filter((id) => !id.startsWith('camera.')), startOpen: [] } : homeView === 'group' ? { groupOpen: ['media_player.destins_room'] } : homeView === 'device' ? { dlg: 'light.living_room_lamp' } : chipStyle ? { chipStyle, startOpen: ['destins_room'] } : chipView ? { view: chipView, startScenes: ['destins_room'], ...(chipView === 'lights' ? { startOpen: ['destins_room'] } : {}), ...(homeView === 'lights-colour' ? { startPalettes: ['light.desk_backlight'] } : {}) } : homeView === 'settings' ? { settingsOpen: true } : homeView === 'remote' ? { remote: ['remote.destins_room_tv_remote'], startOpen: ['destins_room'], hidden: tvOnly } : homeView === 'remote-media' ? { view: 'media', remote: ['remote.destins_room_tv_remote'] } : homeView === 'remote-wide' ? { view: 'media', remote: ['remote.destins_room_tv_remote'], hidden: tvOnly } : homeView === 'media-group' ? { view: 'media' } : {
+        startOpen: ['destins_room'], startPalettes: ['light.desk_backlight'],
+        fav: ['light.living_room_lamp', 'climate.thermostat'],
+        ...(homeView === 'edit' ? { editing: true } : {}),
+      },
+    }));
+  }
   // One key is saved from the start (Trip board uses it), so the Weather page
   // can show "Uses your saved OpenWeather key".
   const savedServices = new Map<string, string>(empty ? [] : [['OpenWeather', 'api.openweathermap.org']]);
   const subs = new Set<(p: PageSummary[]) => void>();
+  // Set while a Home page screen waits for its first answer from the pretend house (see get).
+  let homeFirstAnswer: (() => void) | null = null;
   const summaries = () => pages.map(({ html: _html, data: _data, ...rest }) => rest);
   const publish = () => subs.forEach((cb) => cb(summaries()));
   return {
     list: async () => summaries(),
     get: async (id) => {
       const page = pages.find((p) => p.id === id);
+      // WHY (2026-10-05): a Home page screen was still shot "Loading your rooms…" (creme, twice in a day) — between the
+      // frame starting and its first request to the pretend house nothing is in flight, so the tool saw a quiet page.
+      // Count the page as in flight from here until its first answer has come back and had a moment to draw (cap 8 s).
+      // Only a page that HAS an approved device connection will ask the house anything: the approval screens never do, and
+      // holding them would make every later wait on that screen run to its full cap (review F2).
+      // The shoot tool's first wait is capped at 3 s, so the hold also publishes a deadline (window.__shootHoldUntil) that
+      // scripts/shoot/engine.mjs STILL honours: the wait lasts as long as the hold, not the shorter cap (review F1).
+      if (id === 'page-home' && page?.connections?.some((c) => c.kind === 'device' && c.approved)) {
+        const w = window as unknown as { __shootInflight?: number; __shootHoldUntil?: number };
+        if (typeof w.__shootInflight === 'number' && !homeFirstAnswer) {
+          w.__shootInflight += 1;
+          w.__shootHoldUntil = performance.now() + 8000;
+          let held = true;
+          const release = () => { if (!held) return; held = false; homeFirstAnswer = null; w.__shootHoldUntil = 0; w.__shootInflight = (w.__shootInflight ?? 1) - 1; };
+          homeFirstAnswer = () => { setTimeout(release, 250); };
+          setTimeout(release, 8000);
+        }
+      }
       return page
         ? { ok: true, page }
         : { ok: false, failure: { kind: 'missing', message: 'This page is no longer in your library.' } };
@@ -3765,20 +3868,96 @@ function createPagesMock(empty: boolean): PagesBridge {
     // The workbench never reaches the network: every fixture page's numbers are
     // baked in. The door still answers, so a page that calls it gets an honest
     // refusal rather than a promise that never settles.
-    fetch: async () => ({ ok: false as const, reason: 'network' as const, message: 'The workbench has no network; this page shows saved numbers.' }),
+    // The one exception: an allowed device connection is answered by the
+    // pretend Home Assistant, so the Home page can be operated end to end.
+    fetch: async (id, req) => {
+      const page = pages.find((p) => p.id === id);
+      const device = page?.connections?.find((c) => c.kind === 'device' && c.approved);
+      if (device && device.kind === 'device' && req.url.startsWith(`http://${device.address}/`)) {
+        // WHY: the screenshot tool waits for requests in flight before it
+        // takes a picture, but it only counts window.fetch — these pretend
+        // answers never touch it, so under load a Home page screen was shot
+        // still "Loading your rooms…" and two different screens came out as
+        // the same picture (shoot --check LOOK-ALIKE, 2026-10-03). Counting
+        // them makes the tool wait for the page's data like any other.
+        const w = window as unknown as { __shootInflight?: number };
+        const counted = typeof w.__shootInflight === 'number';
+        if (counted) w.__shootInflight = (w.__shootInflight ?? 0) + 1;
+        try {
+          await delay(120);
+          const answer = req.socket ? fakeHomeAssistantSocket(req) : fakeHomeAssistantFetch(req);
+          if (answer) return answer;
+        } finally {
+          if (counted) w.__shootInflight = (w.__shootInflight ?? 1) - 1;
+          if (id === 'page-home' && homeFirstAnswer) homeFirstAnswer();
+        }
+      }
+      return { ok: false as const, reason: 'network' as const, message: 'The workbench has no network; this page shows saved numbers.' };
+    },
+    // The live socket, answered by the pretend Home Assistant (never the network).
+    // Events arrive a moment AFTER the open's answer, as the real ones do, so the
+    // host has the socket's id before anything is said on it.
+    socketOpen: async (req) => {
+      const device = pages.find((p) => p.id === req.page)?.connections?.find((c) => c.kind === 'device' && c.approved);
+      if (!device || device.kind !== 'device' || !/^(https?|wss?):\/\/[^/]+\/api\/websocket/.test(req.url) || new URL(req.url.replace(/^ws/, 'http')).host !== device.address) {
+        return { ok: false as const, message: 'The workbench has no network; this page shows saved numbers.' };
+      }
+      const socket = `ls_mock_${++liveSeq}`;
+      // Changes the house makes on its own (a switch pressed elsewhere, a
+      // rename) are pushed to the page the way the real device would.
+      const live = fakeHomeAssistantLive((texts) => setTimeout(() => { if (liveSockets.has(socket)) emitSocket({ socket, kind: 'messages', texts }); }, 30));
+      liveSockets.set(socket, { page: req.page, frame: req.frame, live });
+      setTimeout(() => {
+        if (!liveSockets.has(socket)) return;
+        emitSocket({ socket, kind: 'state', state: 'open' });
+        emitSocket({ socket, kind: 'messages', texts: live.opened() });
+      }, 30);
+      return { ok: true as const, socket };
+    },
+    socketSend: async (req) => {
+      const s = liveSockets.get(req.socket);
+      if (!s || s.page !== req.page || s.frame !== req.frame) return { ok: false as const, message: 'That live connection is not open any more.' };
+      const texts = s.live.message(req.text);
+      if (texts.length) setTimeout(() => { if (liveSockets.has(req.socket)) emitSocket({ socket: req.socket, kind: 'messages', texts }); }, 30);
+      return { ok: true as const };
+    },
+    socketClose: async (req) => { liveSockets.get(req.socket)?.live.close(); liveSockets.delete(req.socket); return { ok: true as const }; },
+    // Camera video: the pretend peer lives in fake-camera.ts and is handed to the real
+    // host code through `videoPlayback`; the mock's own part is only main's: answer, then stay quiet.
+    videoPlayback: fakeCameraDeps(),
+    videoStart: async (req) => {
+      const device = pages.find((p) => p.id === req.page)?.connections?.find((c) => c.kind === 'device' && c.id === req.connection && c.approved);
+      if (!device || device.kind !== 'device' || !device.videoProfile || !req.target.startsWith(device.videoProfile.targetPrefix)) {
+        return { ok: false as const, message: 'The workbench has no camera for that.' };
+      }
+      const video = `lv_mock_${++liveSeq}`;
+      liveVideos.add(video);
+      // `?pagesHome=camera-limited`: Google refuses every start (as main would relay it), so the page's back-off can be seen.
+      const refused = fakeCameraRefusal();
+      if (refused) setTimeout(() => { if (liveVideos.delete(video)) emitSocket({ socket: video, kind: 'video-stopped', why: refused }); }, 60);
+      else setTimeout(() => { if (liveVideos.has(video)) emitSocket({ socket: video, kind: 'video-answer', answer: 'v=0\r\n(workbench answer)' }); }, 30);
+      return { ok: true as const, video };
+    },
+    videoStop: async (req) => { liveVideos.delete(req.video); return { ok: true as const }; },
+    videoPing: async (req) => (liveVideos.has(req.video) ? { ok: true as const } : { ok: false as const, message: 'That video is not playing any more.' }),
+    socketPing: async (req) => (liveSockets.has(req.socket) ? { ok: true as const } : { ok: false as const, message: 'That live connection is not open any more.' }),
+    onSocketEvent: (cb) => { socketSubs.add(cb); return () => { socketSubs.delete(cb); }; },
     onChanged: (cb) => { subs.add(cb); return () => { subs.delete(cb); }; },
     // ── Phase 2 (connections) — no backend yet; mock-only.ts carries the rows ──
     // Allow: every waiting line becomes approved, a pasted key becomes a saved
     // key, and the page gets its first "Updated just now".
-    approve: async (id, keys) => {
+    approve: async (id, keys, addresses = {}) => {
       await delay();
       pages = pages.map((p) => {
         if (p.id !== id) return p;
-        for (const c of p.connections ?? []) {
-          if (c.kind === 'key' && keys[c.id] && keys[c.id] !== 'saved') savedServices.set(c.service, c.address);
+        // A device takes the address the person allowed (home-device deck,
+        // Q-address), exactly as the real store records it.
+        const conns = (p.connections ?? []).map((c) => (c.kind === 'device' && addresses[c.id] ? { ...c, address: addresses[c.id] } : c));
+        for (const c of conns) {
+          if ((c.kind === 'key' || c.kind === 'device') && keys[c.id] && keys[c.id] !== 'saved') savedServices.set(c.service, c.address);
         }
         // Allowing (or dismissing "code changed") records the current code too.
-        return { ...p, codeChanged: false, connections: (p.connections ?? []).map((c) => ({ ...c, approved: true, ...(c.kind === 'key' ? { savedKey: true } : {}) })), refresh: p.refresh ?? { at: new Date().toISOString(), failed: false } };
+        return { ...p, codeChanged: false, connections: conns.map((c) => ({ ...c, approved: true, ...(c.kind === 'key' || c.kind === 'device' ? { savedKey: true } : {}) })), refresh: p.refresh ?? { at: new Date().toISOString(), failed: false } };
       });
       publish();
       return { ok: true, pages: summaries() };

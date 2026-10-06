@@ -81,15 +81,78 @@ export type PageConnection =
   | { id: string; kind: 'github'; access: PageAccess }
   /** The whole internet — its own blunt approval, never combined with a key
    *  or sign-in on the same page (follow-up deck Q-open, Q-open-mix). */
-  | { id: string; kind: 'open' };
+  | { id: string; kind: 'open' }
+  /** ONE device in the home or on the person's Tailscale network, such as Home
+   *  Assistant (home-device questions deck, 2026-10-01). The page SUGGESTS an
+   *  address; the person may change it on the approval card, and what they
+   *  allow is what the app uses (Q-address). Only home and Tailscale addresses
+   *  are accepted (S-only-home, `page-device-address.ts`). Never combined with
+   *  `open` on one page, like every other credentialled kind. */
+  | {
+      id: string; kind: 'device'; service: string;
+      /** `host` or `host:port`. Before approval: the page's suggestion. After:
+       *  the address the person allowed, which may differ from the manifest. */
+      address: string;
+      access: PageAccess;
+      /** False for a device that needs no key (most home devices do). */
+      needsKey: boolean;
+      keyHelp?: { steps: string[] };
+      /** A path on the device where its key is made (Home Assistant:
+       *  `/profile/security`). The key step offers a button that opens it in
+       *  the browser, so the person does not have to find it. */
+      keyPage?: string;
+      keyIn?: 'header' | 'query';
+      keyParam?: string;
+      keyScheme?: KeyScheme;
+      /** The first message of a socket exchange (`PageFetchRequest.socket`),
+       *  sent BY THE APP before any of the page's own, with `{{key}}` replaced
+       *  by the saved key. It is how a device that signs in over its socket
+       *  (Home Assistant: `{"type":"auth","access_token":"{{key}}"}`) gets the
+       *  key without the page ever holding it: the page cannot put the key in
+       *  a message of its own, so it cannot write it somewhere it could read
+       *  back. Part of the approval fingerprint. */
+      socketHello?: string;
+      // The device profile (spec 2026-10-04) is the four fields below: what main
+      // must know about the device, read from the approved manifest and never
+      // chosen by a page. All of it rides the approval fingerprint (one
+      // `|profile:` segment).
+      /** The reply TYPE that means "logged in" (Home Assistant: `auth_ok`). */
+      socketReady?: string;
+      /** The reply TYPE that means "wrong key" (`auth_invalid`). */
+      socketAuthFailed?: string;
+      /** Extra lower-case type prefixes refused on this device's socket, added
+       *  to main's built-in floor. */
+      socketDeny?: string[];
+      /** How main plays a camera on the page's behalf. */
+      videoProfile?: VideoProfile;
+    };
+
+/** How main asks a device for camera video. `send` is a JSON template that
+ *  may hold `{{offer}}` and `{{target}}` but never `{{key}}`; the other three
+ *  are dotted paths into the device's replies. */
+export interface VideoProfile {
+  /** What a page may ask to watch. Must end with "." (the device's
+   *  `domain.` form, e.g. `camera.`): one character or a bare word would
+   *  widen "a camera" to "anything on the device". */
+  targetPrefix: string;
+  /** The path of the device's socket (default `/api/websocket`). Main opens
+   *  its own connection there for a video, never one the page names. */
+  socketPath?: string;
+  send: string;
+  answer: string;
+  candidate: string;
+  failed: string;
+}
 
 /** A connection as the person sees it on one page. */
 export type PageConnectionStatus = PageConnection & {
   /** False for a line added since the last approval — the page pauses and the
    *  approval screen marks just this line New (deck S-change). */
   approved: boolean;
-  /** `key` only: a key for this service is already saved, so the approval
-   *  offers it instead of asking again (deck Q-key-reuse). */
+  /** `key` and `device`: a key for this service is already saved, so the
+   *  approval offers it instead of asking again (deck Q-key-reuse). For a
+   *  device it is the key saved for the SUGGESTED address; a changed address
+   *  asks for a key again, because keys are kept per service AND address. */
   savedKey?: boolean;
 };
 
@@ -119,6 +182,24 @@ export interface PageFetchRequest {
   /** Only Accept, Accept-Language and Content-Type survive. */
   headers?: Record<string, string>;
   body?: string;
+  /** `picture`: answer an image as a `data:` link the page can put straight
+   *  into an <img> (camera snapshots — home-device deck, Q-scope). Refused for
+   *  anything that is not an image, so it cannot become a way to carry other
+   *  bytes past the text redaction. Default: text.
+   *  `video`: the same for a recorded clip (spec 2026-10-04, Part 3) — a
+   *  `data:video/mp4;base64,…` link for a <video>. Only a device connection;
+   *  `video/mp4` with an `ftyp` box, at most 4 MB, one at a time per page. */
+  as?: 'text' | 'picture' | 'video';
+  /** A one-shot socket exchange with an approved `device` that may make
+   *  changes (home-page-v2 deck, Q-where: renames and room moves happen in
+   *  the device itself, which some devices only offer over a socket). The
+   *  app opens `ws://` (or `wss://` for an https URL) to the SAME approved
+   *  host and port, sends the connection's `socketHello` and then `send` in
+   *  order, collects text messages until it holds `until` of them (or the
+   *  device closes), and closes. The answer's `body` is a JSON array of the
+   *  messages received, in order, with the key removed. Nothing stays open:
+   *  a page that is hidden or closed holds no socket. */
+  socket?: { send: string[]; until: number; timeoutMs?: number };
 }
 
 type PageFetchRefusal =
@@ -185,6 +266,40 @@ export type PageLoadFailure =
   | { kind: 'missing'; message: string }
   | { kind: 'unreadable'; message: string };
 
+// ── The live socket (spec 2026-10-04, Part 1) ────────────────────────────
+/** What a page sees of its live connection. `paused` is made by the host (the
+ *  window is hidden), never by main. */
+export type PageSocketState = 'connecting' | 'open' | 'reconnecting' | 'paused' | 'closed';
+/** Every call names the page and the FRAME INSTANCE it came from; main also
+ *  knows the caller (window or remote client) itself, so a socket is usable
+ *  only by the frame that opened it. */
+export interface PageSocketCall { page: string; frame: string; }
+export type PageSocketOpenResult = { ok: true; socket: string } | { ok: false; message: string };
+export type PageSocketCallResult = { ok: true } | { ok: false; message: string };
+/** Pushed by main to the owner only. `socket` is main's id for it. */
+export type PageSocketEvent =
+  | { socket: string; kind: 'state'; state: PageSocketState; why?: string }
+  | { socket: string; kind: 'messages'; texts: string[] }
+  // Camera video (spec 2026-10-04, Part 2). `socket` is main's id for the VIDEO.
+  // Main hands the host only what the device answered, already filtered and
+  // redacted; the host never sees a network address it was not meant to dial.
+  | { socket: string; kind: 'video-answer'; answer: string }
+  | { socket: string; kind: 'video-candidate'; candidate: string }
+  | { socket: string; kind: 'video-stopped'; why: string };
+/** The channels, written out here because preload cannot import this file
+ *  (pinned equal by tests/ipc-channels.test.ts). */
+export const PAGE_SOCKET_CHANNELS = {
+  open: 'pages:socket-open', send: 'pages:socket-send', close: 'pages:socket-close',
+  ping: 'pages:socket-ping', event: 'pages:socket-event',
+} as const;
+
+/** Camera video: the host asks main to start / stop / keep alive one video.
+ *  Events come back on the same push channel as the live socket. */
+export type PageVideoStartRequest = PageSocketCall & { connection: string; target: string; offer: string };
+export type PageVideoCall = PageSocketCall & { video: string };
+export type PageVideoStartResult = { ok: true; video: string } | { ok: false; message: string };
+export const PAGE_VIDEO_CHANNELS = { start: 'pages:video-start', stop: 'pages:video-stop', ping: 'pages:video-ping' } as const;
+
 export interface PagesBridge {
   list: () => Promise<PageSummary[]>;
   get: (id: string) => Promise<{ ok: true; page: PageDocument } | { ok: false; failure: PageLoadFailure }>;
@@ -197,9 +312,11 @@ export interface PagesBridge {
    *  unsubscribe. */
   onChanged: (cb: (pages: PageSummary[]) => void) => () => void;
   // Phase 2 — workbench-only until the screens are approved (mock-only.ts).
-  /** Approves every unapproved line. `keys` carries a pasted key per `key`
-   *  connection id, or 'saved' to use the one already kept. */
-  approve?: (id: string, keys: Record<string, string>) => Promise<PageApproveResult>;
+  /** Approves every unapproved line. `keys` carries a pasted key per `key` or
+   *  `device` connection id, or 'saved' to use the one already kept.
+   *  `addresses` carries the address the person allowed per `device` id; main
+   *  re-checks it is a home address before recording anything. */
+  approve?: (id: string, keys: Record<string, string>, addresses?: Record<string, string>) => Promise<PageApproveResult>;
   /** Stops future use of one connection; the page asks again next time. */
   removeConnection?: (id: string, connectionId: string) => Promise<PageSummary[]>;
   /** Fetch fresh information now (the band's refresh button). */
@@ -209,6 +326,20 @@ export interface PagesBridge {
   deleteSavedKey?: (service: string, address: string) => Promise<SavedPageKey[]>;
   /** The one door out of a page. Main checks it against the approvals on disk. */
   fetch?: (id: string, req: PageFetchRequest) => Promise<PageFetchResult>;
+  /** The live socket (platform tooling). Absent where a window cannot hold one. */
+  socketOpen?: (req: PageSocketCall & { url: string }) => Promise<PageSocketOpenResult>;
+  socketSend?: (req: PageSocketCall & { socket: string; text: string }) => Promise<PageSocketCallResult>;
+  socketClose?: (req: PageSocketCall & { socket: string }) => Promise<PageSocketCallResult>;
+  /** The lease: main closes a socket that has not been pinged for 60 s. */
+  socketPing?: (req: PageSocketCall & { socket: string }) => Promise<PageSocketCallResult>;
+  onSocketEvent?: (cb: (e: PageSocketEvent) => void) => () => void;
+  /** Camera video played by the app (platform tooling). */
+  videoStart?: (req: PageVideoStartRequest) => Promise<PageVideoStartResult>;
+  videoStop?: (req: PageVideoCall) => Promise<PageSocketCallResult>;
+  videoPing?: (req: PageVideoCall) => Promise<PageSocketCallResult>;
+  /** Workbench only: a pretend peer connection and picture source for the host
+   *  code to run against (no camera exists there). Real bridges never set it. */
+  videoPlayback?: object;
 }
 
 /** How many pinned pages the header shows before the rest stay in the
