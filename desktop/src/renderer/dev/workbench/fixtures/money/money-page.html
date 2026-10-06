@@ -180,7 +180,7 @@
 (function(){
   function ic(d){ return '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + '</svg>'; }
   var I = {
-    money: ic('<rect x="3" y="6" width="18" height="12" rx="1.5"/><circle cx="12" cy="12" r="3"/><path d="M6 9.5h.01M18 14.5h.01"/>'),
+    money: ic('<path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>'),
     warn: ic('<path d="M12 3 2 20h20L12 3z"/><path d="M12 10v4M12 17h.01"/>'),
     stop: ic('<circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5h.01"/>'),
     link: ic('<path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"/><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/>'),
@@ -319,7 +319,7 @@
     h += '</div></div><div class="chart" id="chart"></div><div class="small muted num" id="chart-sum"></div></div>';
     h += '<div class="stats">';
     h += stat(I.wallet, 'Cash available', money(t.cash, true), 'After ' + money(t.dueThisMonth, true) + ' still due this month');
-    h += stat(I.owe, 'Total owed', money(t.owe, true), 'Cards, loans and Affirm');
+    h += stat(I.owe, 'Total owed', money(-t.owe, true), 'Cards, loans and Affirm');
     h += stat(I.have, 'You have', money(t.have, true), 'Cash, savings and investments');
     h += '</div></div>';
 
@@ -336,7 +336,7 @@
 
     h += '<div class="cols"><div class="card"><div class="card-head"><h2>What you have</h2><span class="total num">' + money(t.have) + '</span></div>';
     h += sec('checking', 'Checking') + sec('savings', 'Savings') + sec('investment', 'Investments');
-    h += '</div><div class="card"><div class="card-head"><h2>What you owe</h2><span class="total num">' + money(t.owe) + '</span></div>';
+    h += '</div><div class="card"><div class="card-head"><h2>What you owe</h2><span class="total num">' + money(-t.owe) + '</span></div>';
     h += sec('credit', 'Credit cards') + sec('loan', 'Loans');
     h += '</div></div>';
 
@@ -359,7 +359,9 @@
     var list = data.accounts.filter(function(a){ return a.kind === k; });
     if (!list.length) return '';
     var sum = list.reduce(function(s, a){ return s + a.balance; }, 0);
-    var h = '<div class="sec"><div class="sec-head"><span class="label">' + label + ' <span style="opacity:.6">' + list.length + '</span></span><span class="small num muted">' + money(sum) + '</span></div>';
+    // Owed money reads as a negative in brackets (review 2, Destin), so the two columns add up to net worth at a glance.
+    var signed = (k === 'credit' || k === 'loan') ? -sum : sum;
+    var h = '<div class="sec"><div class="sec-head"><span class="label">' + label + ' <span style="opacity:.6">' + list.length + '</span></span><span class="small num muted">' + money(signed) + '</span></div>';
     if (k === 'credit') h += '<div class="legend">The notch on each bar is ' + S.warnPct + '%. Past it a bar turns amber, which can lower your credit score; past ' + S.alertPct + '% it turns red.</div>';
     h += '<div class="list">';
     list.forEach(function(a){ h += row(a); });
@@ -369,7 +371,7 @@
   function row(a){
     var stale = isStale(a);
     var h = '<div class="tile acct' + (stale ? ' stale' : '') + '">' + mark(a.institution);
-    h += '<div class="name" title="' + esc(fullName(a)) + '">' + esc(a.name) + '</div><div class="bal num">' + money(a.balance) + '</div>';
+    h += '<div class="name" title="' + esc(fullName(a)) + '">' + esc(a.name) + '</div><div class="bal num">' + money(isDebt(a) ? -a.balance : a.balance) + '</div>';
     var meta = esc(a.institution) + (a.apr ? ' · ' + a.apr + '% interest' : '') + (a.note ? ' · ' + esc(a.note) : '');
     h += '<div class="row2"><div class="meta" title="' + meta + '">' + meta + '</div><div class="side">';
     if (stale) h += '<span class="flag">' + I.warn + (a.source === 'plaid' ? 'Out of date · ' : 'Needs update · ') + ago(a.updatedAt) + '</span>';

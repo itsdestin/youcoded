@@ -14,9 +14,10 @@ const PATHS: Record<PageIcon, React.ReactNode> = {
   list: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01" />,
   // Office (built in): a briefcase — the suite as a whole, not one file type.
   office: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8a1 1 0 011-1h14a1 1 0 011 1v10a1 1 0 01-1 1H5a1 1 0 01-1-1V8zM9 7V5a1 1 0 011-1h4a1 1 0 011 1v2M4 12h16M11 12v2h2v-2" />,
-  // Money (finance dashboard review, 2026-10-05): a banknote with a coin, so a money page
-  // never shares the bar chart with an analytics page (UX review 1, U12).
-  money: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7a1 1 0 011-1h16a1 1 0 011 1v10a1 1 0 01-1 1H4a1 1 0 01-1-1V7zM12 15a3 3 0 100-6 3 3 0 000 6zM6 9.5v.01M18 14.5v.01" />,
+  // Money (finance dashboard review, 2026-10-05): a dollar sign, so a money page never shares the
+  // bar chart with an analytics page (UX review 1, U12). A banknote was tried first and "looks like
+  // a camera" at 16px (review 2).
+  money: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6" />,
   game: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 8h12a4 4 0 014 4v2a4 4 0 01-4 4h-1l-2-2H9l-2 2H6a4 4 0 01-4-4v-2a4 4 0 014-4zM8 11v4M6 13h4M15 12h.01M18 14h.01" />,
 };
 
