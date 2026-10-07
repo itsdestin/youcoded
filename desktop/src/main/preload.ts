@@ -395,6 +395,8 @@ const IPC = {
   VOICE_STOP: 'voice:stop',
   VOICE_CANCEL: 'voice:cancel',
   VOICE_MIC_ACCESS: 'voice:mic-access',
+  VOICE_VOCABULARY_GET: 'voice:vocabulary-get',
+  VOICE_VOCABULARY_SAVE: 'voice:vocabulary-save',
   VOICE_AUDIO: 'voice:audio',
   VOICE_EVENT: 'voice:event',
   OFFICE_STATUS: 'office:status',
@@ -1885,6 +1887,11 @@ contextBridge.exposeInMainWorld('claude', {
   // phone the operating system's own recogniser owns the microphone, and the
   // Activity's permission launcher owns the permission question — so the shared
   // renderer tests `typeof bridge.sendAudio === 'function'` instead of assuming.
+  // WHY: vocabulary editing has no microphone side effects and stays local.
+  voiceVocabulary: {
+    get: (): Promise<string[]> => ipcRenderer.invoke(IPC.VOICE_VOCABULARY_GET),
+    save: (phrases: string[]): Promise<void> => ipcRenderer.invoke(IPC.VOICE_VOCABULARY_SAVE, { phrases }),
+  },
   voice: {
     status: (): Promise<unknown> => ipcRenderer.invoke(IPC.VOICE_STATUS),
     download: (): Promise<void> => ipcRenderer.invoke(IPC.VOICE_DOWNLOAD),

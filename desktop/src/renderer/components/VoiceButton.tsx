@@ -38,6 +38,9 @@ import { MicIcon } from './Icons';
 import type { VoiceReadiness } from '../../shared/voice-types';
 import type { VoicePhase } from '../hooks/useVoiceInput';
 import { Tooltip } from './ui';
+import { getCapabilities } from '../platform';
+import { useScreenOpen } from '../shoot-mode';
+import VocabularyPanel from './voice/VoiceVocabulary';
 
 /** Round-2 alternatives (review deck 2026-09-05, V-1: "alternatives for the
  *  counter/feedback location and styling, and the animation on the mic icon").
@@ -107,6 +110,20 @@ export function VoiceButton({ phase, readiness, level, seconds, error, disabled,
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const wasDownloading = useRef(false);
+  const [vocabularyOpen, setVocabularyOpen] = useState(false);
+  // WHY: a one-action menu added a click and an unwanted floating pill. Right-click
+  // opens the approved editor directly, without calling the recording handler.
+  // The capability/API guards keep desktop hints off phones and older hosts.
+  const preview = getCapabilities().nativeWindows
+    && typeof window.claude?.voiceVocabulary?.get === 'function'
+    && typeof window.claude?.voiceVocabulary?.save === 'function'
+    ? window.claude.voiceVocabulary : null;
+  const openVocabulary = () => {
+    if (!preview) return;
+    setOpen(false);
+    setVocabularyOpen(true);
+  };
+  useScreenOpen('chat/voice/vocabulary', openVocabulary, undefined, !!preview && !disabled);
 
   const listening = phase === 'listening';
   const state = readiness?.state ?? 'unavailable';
@@ -293,6 +310,19 @@ export function VoiceButton({ phase, readiness, level, seconds, error, disabled,
         aria-expanded={open || undefined}
         disabled={disabled || phase === 'finishing'}
         onClick={handleClick}
+        onContextMenu={(event) => {
+          if (!preview) return;
+          event.preventDefault();
+          event.stopPropagation();
+          openVocabulary();
+        }}
+        onKeyDown={(event) => {
+          if (preview && (event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey))) {
+            event.preventDefault();
+            event.stopPropagation();
+            openVocabulary();
+          }
+        }}
         className={`relative rounded-full ${listening && style.motion === 'breathe' ? 'voice-mic-on' : ''}`}
         style={levelRing}
       >
@@ -305,6 +335,7 @@ export function VoiceButton({ phase, readiness, level, seconds, error, disabled,
         )}
       </Button>
       </Tooltip>
+      {preview && vocabularyOpen && <VocabularyPanel bridge={preview} onClose={() => setVocabularyOpen(false)} />}
       {open && card &&
         createPortal(
           <OverlayPanel

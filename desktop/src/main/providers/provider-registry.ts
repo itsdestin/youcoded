@@ -22,7 +22,7 @@ import type { LocalEngineHook } from '../engine/engine-manager';
 import { NativeHome } from '../native-home';
 import { SecretsStore } from './secrets-store';
 import type { ChatGptAuth } from './chatgpt-auth';
-import { CHATGPT_CODEX_BASE_URL, CHATGPT_SIGN_IN_REQUIRED_MESSAGE } from './chatgpt-oauth';
+import { CHATGPT_CODEX_BASE_URL, CHATGPT_OFFICIAL_BASE_URL, CHATGPT_SIGN_IN_REQUIRED_MESSAGE } from './chatgpt-oauth';
 import { chatGptMiddleware } from './chatgpt-model';
 import { promptCacheMiddleware, type PromptCacheProvider } from './prompt-cache';
 import { openRouterTurnFetch, type OpenRouterHealth } from './openrouter-health';
@@ -454,12 +454,21 @@ export class ProviderRegistry {
           // request with the live token (refreshing when needed) — pinned:
           // 'Bearer chatgpt' never reaches the network.
           apiKey: 'chatgpt',
-          baseURL: CHATGPT_CODEX_BASE_URL,
-          headers: {
-            'chatgpt-account-id': acct.accountId,
-            originator: CHATGPT_ORIGINATOR,
-            'OpenAI-Beta': 'responses=experimental',
-          },
+          // WHY two shapes: the official route (OpenAI's own Sign in with
+          // ChatGPT) is the public Responses API, addressed by the token alone;
+          // the Codex endpoint wants its account and client headers. The
+          // official endpoint REFUSED a Codex-style `originator` (400, measured
+          // 2026-10-05), so it gets none of them.
+          ...(this.chatgpt.route === 'official'
+            ? { baseURL: CHATGPT_OFFICIAL_BASE_URL }
+            : {
+                baseURL: CHATGPT_CODEX_BASE_URL,
+                headers: {
+                  'chatgpt-account-id': acct.accountId,
+                  originator: CHATGPT_ORIGINATOR,
+                  'OpenAI-Beta': 'responses=experimental',
+                },
+              }),
           // Bind the SDK model to the account generation whose continuation
           // passed the harness check; auth rechecks after async serialization.
           fetch: this.chatgpt.fetch(acct),

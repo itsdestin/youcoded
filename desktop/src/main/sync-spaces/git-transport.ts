@@ -221,10 +221,11 @@ export class GitTransport implements SyncTransport {
     // Injectable so tests can force a gc after a couple of syncs instead of 50.
     this.gcInterval = opts.gcInterval ?? DEFAULT_GC_INTERVAL;
     // A git *.lock older than this is treated as orphaned and reaped before a
-    // sync (see reapStaleLocks). Default = GIT_TIMEOUT: any legitimate holder
-    // would already have been SIGTERM-killed by the exec timeout, so a lock that
-    // has survived longer than that is provably dead. Injectable so tests don't
-    // have to wait 5 real minutes.
+    // sync (see reapStaleLocks). Default = GIT_TIMEOUT: every git call except
+    // fetch is SIGTERM-killed by the exec timeout, so its lock cannot outlive it.
+    // fetch has no fixed limit (fetchOrigin) but takes its ref locks only in its
+    // last moments, held for milliseconds — a 5-minute-old lock is still dead.
+    // Injectable so tests don't have to wait 5 real minutes.
     this.lockStaleMs = opts.lockStaleMs ?? GIT_TIMEOUT;
   }
 
@@ -250,8 +251,9 @@ export class GitTransport implements SyncTransport {
    *  WHY age-gated (never remove a fresh lock): a lock younger than lockStaleMs
    *  might be held by a genuinely-live git — most plausibly a second instance
    *  mid-write. Deleting it would corrupt that write. The default threshold is
-   *  GIT_TIMEOUT, so any lock we reap is older than the longest a live op could
-   *  possibly run before the exec timeout kills it — i.e. provably orphaned.
+   *  GIT_TIMEOUT, so any lock we reap is older than the longest any live op
+   *  holds one (exec-timed ops are killed by then; a long fetch only locks refs
+   *  briefly at its end) — i.e. provably orphaned.
    *  Synchronous + best-effort: a reap failure must never itself break a sync. */
   private reapStaleLocks(space: SyncSpace): void {
     const gd = this.gitDir(space);
@@ -1140,7 +1142,7 @@ export class GitTransport implements SyncTransport {
     // can never tell you.
     let zeroByteObjectsDeleted = 0;
     let tier1Failure: string | undefined;
-    // ---- Tier 1: surgical, offline-capable ----
+    // ---- Tier 1: surgical; refetches only the gap when online, works offline ----
     if (fs.existsSync(path.join(gd, 'HEAD'))) {
       // Reap first: assertLocalOk's own comment above notes that a power-loss
       // crash's classic signature is an orphaned *.lock (not yet past
@@ -1188,7 +1190,7 @@ export class GitTransport implements SyncTransport {
           }
           tier1Failure = `update-ref/HEAD probe failed (update-ref exit ${upd.code}, probe exit ${probe.code})`;
         } else {
-          tier1Failure = commitOk ? 'origin/main root tree unreadable' : 'origin/main commit unreadable';
+          tier1Failure = commitOk ? 'origin/main file tree incomplete' : 'origin/main commit unreadable';
         }
       } else {
         tier1Failure = 'origin/main unresolvable';

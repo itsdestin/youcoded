@@ -39,13 +39,18 @@ import { currentChatGptRequest } from './chatgpt-request-diagnostics';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
-import { randomBytes as nodeRandomBytes } from 'crypto';
+import { randomBytes as nodeRandomBytes, randomUUID } from 'crypto';
 import { SECRET_STORAGE_UNAVAILABLE_MESSAGE } from './secret-storage-errors';
 import type { CatalogModel } from '../../shared/provider-types';
 import type { ChatGptAccountStatus, ChatGptUsage, ChatGptUsageWindow } from '../../shared/chatgpt-types';
 import { mutateFileUnderLock } from '../artifacts/cas-write';
 import type { SecretsStore } from './secrets-store';
 import {
+  CHATGPT_OFFICIAL_MODELS_URL,
+  CHATGPT_OFFICIAL_REVOKE_URL,
+  CHATGPT_OFFICIAL_TOKEN_URL,
+  CHATGPT_PLAN_USAGE_SCOPE,
+  CHATGPT_SIGN_IN_AGAIN_MESSAGE,
   CHATGPT_SIGN_IN_REQUIRED_MESSAGE,
   CHATGPT_TOKEN_URL,
   CHATGPT_USAGE_URL,
@@ -54,6 +59,7 @@ import {
   accountFromTokens,
   blockedError,
   buildAuthorizeUrl,
+  buildOfficialAuthorizeUrl,
   chatGptModelsUrl,
   classifyErrorBody,
   exchangeBody,
@@ -61,12 +67,17 @@ import {
   generatePkce,
   generateState,
   limitError,
+  officialAccountFromIdToken,
+  officialExchangeBody,
+  officialRefreshBody,
+  officialRevokeBody,
   parseModelsManifest,
   parseUsageBody,
   parseUsageHeaders,
   refreshBody,
   toChatGptUsage,
   tokenExpiresAt,
+  type ChatGptRoute,
   type ClassifiedError,
   type ParsedUsage,
   type RandomBytesFn,
@@ -77,7 +88,14 @@ import {
 // ---------------------------------------------------------------------------
 
 export const CHATGPT_ACCOUNT_FILE = 'chatgpt-account.json';
-/** Fixed by the redirect URI registered for the Codex client id (§3). */
+/** Official route only: this install's registration with OpenAI — a stable
+ *  host id, plus the client id and callback port the first sign-in was issued.
+ *  Kept APART from the account file because it outlives a sign-out: reusing it
+ *  means each sign-in does not add another "YouCoded" entry to the user's
+ *  ChatGPT settings. Holds no secret. */
+export const CHATGPT_REGISTRATION_FILE = 'chatgpt-registration.json';
+/** Fixed by the redirect URI registered for the Codex client id (§3). The
+ *  official route picks a free port instead, then keeps it with its registration. */
 export const CHATGPT_CALLBACK_PORT = 1455;
 export const CHATGPT_CALLBACK_HOST = '127.0.0.1';
 export const CHATGPT_CALLBACK_PATH = '/auth/callback';
@@ -141,7 +159,16 @@ export interface ChatGptAccountFile {
   // continuation manifest possible to match up against the live account.
   // Optional so a row written before this field existed still parses.
   credentialEpoch?: string;
+  /** Which route these tokens belong to. Absent = 'codex' (every row written
+   *  before the official route existed). A row on the other route than the
+   *  app is using reads as "sign in again" and is never sent anywhere. */
+  route?: ChatGptRoute;
+  /** Official route: the client id OpenAI issued this sign-in. Refresh and
+   *  revocation must name it. */
+  clientId?: string;
 }
+
+interface RegistrationFile { hostId: string; clientId?: string; port?: number }
 
 /** What the secrets store holds under `secretRef`, as JSON. */
 interface TokenBlob {
@@ -200,6 +227,9 @@ export interface ChatGptAuthDeps {
    *  and DELETE the user's saved sign-in. The switch is meant to be a fast
    *  revert, never a sign-out (review T4 F1). Defaults to on. */
   pollUsage?: boolean;
+  /** Which way to reach the plan. Defaults to 'codex'; 'official' is the
+   *  built-in-but-off replacement (YOUCODED_CHATGPT_ROUTE=official). */
+  route?: ChatGptRoute;
   fetch?: typeof fetch;
   /** Experiment-only pre-dispatch reservation; no request data crosses this boundary. */
   beforeModelRequest?: () => Promise<void>;
@@ -355,6 +385,13 @@ function limitWindowMinutes(c: Extract<ClassifiedError, { kind: 'limit' }>): num
 interface SignInRound {
   state: string;
   verifier: string;
+  /** Official route: answers this round's id token (replay guard). */
+  nonce?: string;
+  /** Official route: the exact redirect URI the authorize URL named — the
+   *  exchange must repeat it, port and all. */
+  redirectUri?: string;
+  /** Official route: the client id the callback brought back. */
+  clientId?: string;
   url: string;
   server: CallbackServerLike;
   timer: TimerHandle | null;
@@ -434,8 +471,11 @@ export class ChatGptAuth {
   private lastUsagePollAt = Number.NEGATIVE_INFINITY;
   private modelsRefresh: Promise<void> | null = null;
   private lastModelsAttemptAt = 0;
-  /** False under the kill switch: no background traffic, no token refresh. */
+  /** False under the kill switch: no background traffic, no token refresh.
+   *  Also false on the official route, which has no usage to poll. */
   private readonly pollUsage: boolean;
+  readonly route: ChatGptRoute;
+  private readonly registrationFile: string;
   private disposed = false;
 
   constructor(deps: ChatGptAuthDeps) {
@@ -452,7 +492,11 @@ export class ChatGptAuth {
     this.randomBytes = deps.randomBytes ?? ((n) => nodeRandomBytes(n));
     this.log = deps.log ?? defaultLog;
 
-    this.pollUsage = deps.pollUsage ?? true;
+    this.route = deps.route ?? 'codex';
+    this.registrationFile = path.join(deps.userDataDir, CHATGPT_REGISTRATION_FILE);
+    // WHY the route gates the poll: the official route refuses /wham/usage
+    // (measured 401), so polling it would be a refused request every minute.
+    this.pollUsage = (deps.pollUsage ?? true) && this.route === 'codex';
 
     this.account = this.readAccountSync();
     // §4.4: the poll starts with the process when an account is already
@@ -476,14 +520,22 @@ export class ChatGptAuth {
     if (this.round && !this.round.timedOut) return { state: 'waiting' };
     const a = this.account;
     if (!a || !this.secrets.has(a.secretRef)) return { state: 'signed-out' };
+    if (!this.onThisRoute(a)) return { state: 'signed-out', reauth: true };
     if (a.blocked) return { state: 'blocked', email: a.email, reason: a.blocked.reason };
-    return { state: 'signed-in', email: a.email, plan: a.plan, usage: this.usageForStatus() };
+    return { state: 'signed-in', email: a.email, plan: a.plan, usage: this.usageForStatus(), route: this.route };
   }
 
-  /** File present + secret present + not blocked. No decrypt. */
+  /** WHY: tokens from one route are refused by the other's servers, so a row
+   *  from the other route is kept (switching back finds it intact) but never
+   *  used — it reads as "sign in again" until the user does. */
+  private onThisRoute(a: ChatGptAccountFile): boolean {
+    return (a.route ?? 'codex') === this.route;
+  }
+
+  /** File present + secret present + this route + not blocked. No decrypt. */
   isSignedIn(): boolean {
     const a = this.account;
-    return !!a && !a.blocked && this.secrets.has(a.secretRef);
+    return !!a && !a.blocked && this.onThisRoute(a) && this.secrets.has(a.secretRef);
   }
 
   /** For the registry: throws the sentence the card renders when the model
@@ -491,6 +543,7 @@ export class ChatGptAuth {
   signedInAccount(): { accountId: string; email: string; plan: string; authGeneration: number; credentialEpoch: string } {
     const a = this.account;
     if (!a || !this.secrets.has(a.secretRef)) throw new Error(CHATGPT_SIGN_IN_REQUIRED_MESSAGE);
+    if (!this.onThisRoute(a)) throw new Error(CHATGPT_SIGN_IN_AGAIN_MESSAGE);
     if (a.blocked) throw blockedError(a.blocked.reason);
     // WHY 'legacy': a row written before credentialEpoch existed has none on
     // disk; reporting a fixed sentinel (rather than undefined) keeps every
@@ -564,11 +617,35 @@ export class ChatGptAuth {
       state, verifier, url: '', server: null as unknown as CallbackServerLike,
       timer: null, generation: 0, exchanging: false, timedOut: false, waiters: [],
     };
-    try {
-      round.server = await this.listen(CHATGPT_CALLBACK_PORT, CHATGPT_CALLBACK_HOST, (req, res) => this.onCallback(round, req, res));
-    } catch (e) {
-      if (errorCode(e) === 'EADDRINUSE') throw new Error(CHATGPT_PORT_IN_USE_MESSAGE);
-      throw e;
+    const handler: CallbackHandler = (req, res) => this.onCallback(round, req, res);
+    let registration: RegistrationFile | null = null;
+    if (this.route === 'official') {
+      // The official route takes any free port. A reused registration keeps
+      // the port it was issued with, in case OpenAI pins the redirect to it
+      // (unverified either way); a taken port just means registering afresh.
+      registration = await this.readRegistration();
+      if (generation !== this.generation || this.disposed) return false;
+      if (registration.port) {
+        try {
+          round.server = await this.listen(registration.port, CHATGPT_CALLBACK_HOST, handler);
+        } catch (e) {
+          if (errorCode(e) !== 'EADDRINUSE') throw e;
+          registration = { hostId: registration.hostId };
+        }
+      }
+      if (!round.server) round.server = await this.listen(0, CHATGPT_CALLBACK_HOST, handler);
+      const address = round.server.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      round.redirectUri = `http://${CHATGPT_CALLBACK_HOST}:${port}${CHATGPT_CALLBACK_PATH}`;
+      round.nonce = generateState(this.randomBytes);
+      if (registration.port !== port) registration = { hostId: registration.hostId, port };
+    } else {
+      try {
+        round.server = await this.listen(CHATGPT_CALLBACK_PORT, CHATGPT_CALLBACK_HOST, handler);
+      } catch (e) {
+        if (errorCode(e) === 'EADDRINUSE') throw new Error(CHATGPT_PORT_IN_USE_MESSAGE);
+        throw e;
+      }
     }
 
     if (generation !== this.generation || this.disposed) {
@@ -583,7 +660,12 @@ export class ChatGptAuth {
     this.lastOutcome = null;
 
     // (3) The URL, the browser, the phase flag, the timer.
-    round.url = buildAuthorizeUrl({ state, challenge });
+    round.url = registration
+      ? buildOfficialAuthorizeUrl({
+          state, challenge, nonce: round.nonce!, redirectUri: round.redirectUri!,
+          hostId: registration.hostId, clientId: registration.clientId,
+        })
+      : buildAuthorizeUrl({ state, challenge });
     this.round = round;
     const timeoutMs = opts?.timeoutMs ?? DEFAULT_SIGN_IN_TIMEOUT_MS;
     round.timer = this.unref(this.timers.setTimeout(() => this.onRoundTimeout(round), timeoutMs));
@@ -623,13 +705,71 @@ export class ChatGptAuth {
    *  ciphertext blob would be unreachable forever, an orphaned account row is
    *  just re-deletable (§2, the same order ProviderRegistry.remove uses). */
   async signOut(): Promise<boolean> {
+    // Official route: tell OpenAI too, so "YouCoded" stops being connected in
+    // the user's ChatGPT settings. Read BEFORE the clear deletes the secret;
+    // sent after, best-effort — a failed revoke must never keep anyone signed in.
+    const revoke = await this.revocationFor().catch(() => null);
     const cleared = this.clearAccount();
     // Observe deletion failures even while the callback listener is closing.
     void cleared.catch(() => undefined);
     if (this.round && !this.round.timedOut) await this.finishRound(this.round, 'cancelled');
     await this.closeLingering();
     await cleared;
+    if (revoke) {
+      try {
+        const r = await this.realFetch(CHATGPT_OFFICIAL_REVOKE_URL, {
+          method: 'POST',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          body: officialRevokeBody(revoke),
+          signal: AbortSignal.timeout(TOKEN_REQUEST_TIMEOUT_MS),
+        });
+        if (!r.ok) this.log('warn', 'ChatGPT did not confirm the disconnect', { status: r.status });
+      } catch (e) {
+        this.log('warn', 'could not reach ChatGPT to disconnect', { reason: errorMessage(e) });
+      }
+    }
     return true;
+  }
+
+  /** The refresh token and client id an official sign-out revokes, or null. */
+  private async revocationFor(): Promise<{ refreshToken: string; clientId: string } | null> {
+    const a = this.account;
+    if (!a || a.route !== 'official' || !a.clientId) return null;
+    const blob = parseTokenBlob(await this.secrets.get(a.secretRef));
+    return blob ? { refreshToken: blob.refresh_token, clientId: a.clientId } : null;
+  }
+
+  // ----- the official route's registration ---------------------------------
+
+  /** This install's registration; mints the stable host id on first use. */
+  private async readRegistration(): Promise<RegistrationFile> {
+    try {
+      const parsed: unknown = JSON.parse(await fs.promises.readFile(this.registrationFile, 'utf8'));
+      if (isRecord(parsed) && typeof parsed.hostId === 'string' && parsed.hostId) {
+        return {
+          hostId: parsed.hostId,
+          ...(typeof parsed.clientId === 'string' && parsed.clientId ? { clientId: parsed.clientId } : {}),
+          ...(typeof parsed.port === 'number' && Number.isInteger(parsed.port) && parsed.port > 0 ? { port: parsed.port } : {}),
+        };
+      }
+    } catch (e) {
+      if (errorCode(e) !== 'ENOENT') this.log('warn', 'registration file unreadable; registering afresh', { reason: errorMessage(e) });
+    }
+    const fresh = { hostId: `urn:uuid:${randomUUID()}` };
+    await this.writeRegistration(fresh);
+    return fresh;
+  }
+
+  private async saveRegistration(next: { clientId: string; port: number }): Promise<void> {
+    const cur = await this.readRegistration();
+    await this.writeRegistration({ hostId: cur.hostId, clientId: next.clientId, port: next.port });
+  }
+
+  /** Whole-file replace through a temp name, so a crash never leaves half a file. */
+  private async writeRegistration(reg: RegistrationFile): Promise<void> {
+    const tmp = `${this.registrationFile}.${process.pid}.tmp`;
+    await fs.promises.writeFile(tmp, JSON.stringify(reg, null, 2));
+    await fs.promises.rename(tmp, this.registrationFile);
   }
 
   /** The four callback branches, in the order §3 fixes, and nothing else. */
@@ -672,6 +812,16 @@ export class ChatGptAuth {
       reply(res, 400, CALLBACK_PAGE_FAILED);
       return;
     }
+    if (this.route === 'official') {
+      // The issued id rides back on the callback; the placeholder is never one.
+      const clientId = url.searchParams.get('client_id');
+      if (!clientId || clientId === 'dynamic_agent_client' || !/^[A-Za-z0-9_-]{1,200}$/.test(clientId)) {
+        reply(res, 400, CALLBACK_PAGE_FAILED);
+        void this.finishRound(round, { error: 'OpenAI did not say which app this sign-in was for. Try again.' });
+        return;
+      }
+      round.clientId = clientId;
+    }
     round.exchanging = true;
     const p = this.exchange(round, code, res).finally(() => { if (this.exchangeInFlight === p) this.exchangeInFlight = null; });
     this.exchangeInFlight = p;
@@ -683,11 +833,22 @@ export class ChatGptAuth {
       await this.finishRound(round, outcome);
     };
     let tokens: { access_token: string; refresh_token: string; id_token?: string; expires_at: number };
+    let grantedScope: string | null = null;
+    const official = this.route === 'official';
+    if (official) {
+      // Saved BEFORE the one-time exchange, so a failed exchange does not make
+      // the next sign-in register yet another "YouCoded" with OpenAI.
+      const port = Number(new URL(round.redirectUri!).port);
+      await this.saveRegistration({ clientId: round.clientId!, port }).catch((e) =>
+        this.log('warn', 'could not save the ChatGPT registration', { reason: errorMessage(e) }));
+    }
     try {
-      const r = await this.realFetch(CHATGPT_TOKEN_URL, {
+      const r = await this.realFetch(official ? CHATGPT_OFFICIAL_TOKEN_URL : CHATGPT_TOKEN_URL, {
         method: 'POST',
         headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
-        body: exchangeBody({ code, verifier: round.verifier }),
+        body: official
+          ? officialExchangeBody({ code, verifier: round.verifier, clientId: round.clientId!, redirectUri: round.redirectUri! })
+          : exchangeBody({ code, verifier: round.verifier }),
         signal: AbortSignal.timeout(TOKEN_REQUEST_TIMEOUT_MS),
       });
       const json: unknown = await r.json().catch(() => null);
@@ -705,6 +866,7 @@ export class ChatGptAuth {
         ...(typeof json.id_token === 'string' ? { id_token: json.id_token } : {}),
         expires_at: tokenExpiresAt(json.expires_in, this.now()),
       };
+      if (typeof json.scope === 'string') grantedScope = json.scope;
     } catch (e) {
       this.log('warn', 'code exchange failed', { reason: errorMessage(e) });
       await fail(CALLBACK_PAGE_FAILED, { error: `Could not reach OpenAI to finish the sign-in: ${errorMessage(e)}` });
@@ -719,10 +881,20 @@ export class ChatGptAuth {
       return;
     }
 
-    const claims = accountFromTokens({ accessToken: tokens.access_token, idToken: tokens.id_token });
+    const claims = official
+      ? officialAccountFromIdToken(tokens.id_token, { clientId: round.clientId!, nonce: round.nonce })
+      : accountFromTokens({ accessToken: tokens.access_token, idToken: tokens.id_token });
     if (!claims) {
-      this.log('warn', 'token carried no chatgpt_account_id; sign-in not recorded');
+      this.log('warn', official ? 'id token missing or not for this sign-in; sign-in not recorded' : 'token carried no chatgpt_account_id; sign-in not recorded');
       await fail(CALLBACK_PAGE_FAILED, { error: 'OpenAI signed you in but reported no ChatGPT account for this login.' });
+      return;
+    }
+    // The consent screen lets a user sign in WITHOUT letting YouCoded use the
+    // plan. Recording that sign-in would show "Signed in" and then fail every
+    // message, so it is refused here with what actually happened.
+    if (official && grantedScope !== null && !grantedScope.split(/\s+/).includes(CHATGPT_PLAN_USAGE_SCOPE)) {
+      this.log('warn', 'sign-in did not grant plan usage; not recorded');
+      await fail(CALLBACK_PAGE_FAILED, { error: "You signed in, but didn't allow YouCoded to use your ChatGPT plan. Sign in again and allow it to use ChatGPT models here." });
       return;
     }
 
@@ -751,8 +923,11 @@ export class ChatGptAuth {
             // elsewhere in this file and so carry the existing epoch forward
             // unchanged; this is the one place that overwrites it.
             credentialEpoch: Buffer.from(this.randomBytes(16)).toString('hex'),
-            ...(cur?.usage ? { usage: cur.usage } : {}),
-            ...(cur?.models ? { models: cur.models } : {}),
+            // WHY not carried across routes: the other route's usage bars and
+            // model list describe a different door into the plan.
+            ...(cur?.usage && (cur.route ?? 'codex') === this.route ? { usage: cur.usage } : {}),
+            ...(cur?.models && (cur.route ?? 'codex') === this.route ? { models: cur.models } : {}),
+            ...(official ? { route: 'official' as const, clientId: round.clientId! } : {}),
           };
         });
         if (round.generation !== this.generation || !written || written.secretRef !== secretRef) {
@@ -890,10 +1065,13 @@ export class ChatGptAuth {
     if (!account) throw new Error(CHATGPT_SIGN_IN_REQUIRED_MESSAGE);
     let r: Response;
     try {
-      r = await this.realFetch(CHATGPT_TOKEN_URL, {
+      const official = (account.route ?? 'codex') === 'official';
+      r = await this.realFetch(official ? CHATGPT_OFFICIAL_TOKEN_URL : CHATGPT_TOKEN_URL, {
         method: 'POST',
         headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
-        body: refreshBody({ refreshToken: current.refresh_token }),
+        body: official
+          ? officialRefreshBody({ refreshToken: current.refresh_token, clientId: account.clientId ?? '' })
+          : refreshBody({ refreshToken: current.refresh_token }),
         signal: AbortSignal.timeout(TOKEN_REQUEST_TIMEOUT_MS),
       });
     } catch (e) {
@@ -933,7 +1111,9 @@ export class ChatGptAuth {
       this.assertCredentialOwner(owner);
       // The renewed token's claims may name a new plan or email; keep the file
       // honest without a poll. One write, only when something changed.
-      const claims = accountFromTokens({ accessToken: next.access_token, idToken: next.id_token });
+      // The official route's access token says nothing about the account, and
+      // its identity never changes on a refresh — nothing to re-read.
+      const claims = (account.route ?? 'codex') === 'official' ? null : accountFromTokens({ accessToken: next.access_token, idToken: next.id_token });
       if (claims && (claims.email !== account.email || (claims.plan && claims.plan !== account.plan) || claims.accountId !== account.accountId)) {
         await this.mutate((cur) => {
           if (!cur || generation !== this.generation || cur.secretRef !== owner.secretRef) return null;
@@ -1004,7 +1184,9 @@ export class ChatGptAuth {
       }
       const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
       headers.set('authorization', `Bearer ${credentials.token}`);
-      headers.set('chatgpt-account-id', credentials.accountId);
+      // The account header is the Codex endpoint's; the official one addresses
+      // the account through the token alone.
+      if (this.route === 'codex') headers.set('chatgpt-account-id', credentials.accountId);
       // WHY: reserve on each actual send, including the invisible 401 resend;
       // refusal must happen before diagnostics or the network sees this attempt.
       await this.beforeModelRequest?.();
@@ -1077,7 +1259,7 @@ export class ChatGptAuth {
    *  the bars keep the last snapshot and the account is never transitioned
    *  by the poll — that happens only on a turn. */
   async refreshUsage(): Promise<void> {
-    if (this.disposed || !this.isSignedIn()) return;
+    if (this.disposed || !this.isSignedIn() || this.route !== 'codex') return;
     this.lastUsagePollAt = this.now();
     try {
       const acct = this.signedInAccount();
@@ -1207,9 +1389,11 @@ export class ChatGptAuth {
     try {
       const acct = this.signedInAccount();
       const token = await this.accessToken();
-      const r = await this.realFetch(chatGptModelsUrl(this.appVersion), {
-        headers: { authorization: `Bearer ${token}`, 'chatgpt-account-id': acct.accountId, accept: 'application/json' },
-      });
+      const r = this.route === 'official'
+        ? await this.realFetch(CHATGPT_OFFICIAL_MODELS_URL, { headers: { authorization: `Bearer ${token}`, accept: 'application/json' } })
+        : await this.realFetch(chatGptModelsUrl(this.appVersion), {
+            headers: { authorization: `Bearer ${token}`, 'chatgpt-account-id': acct.accountId, accept: 'application/json' },
+          });
       if (!r.ok) {
         this.log('warn', 'models manifest refused; keeping the cached rows', { status: r.status });
         return;
