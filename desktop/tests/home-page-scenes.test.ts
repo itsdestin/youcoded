@@ -36,7 +36,7 @@ describe('the Scenes easel button', () => {
     b.click(); await tick(50);
     expect(easel('destins_room').getAttribute('aria-expanded')).toBe('true');
     expect(qa('.scenes .scene').length).toBeGreaterThan(1);
-    expect(q('.scenes .sc-foot').textContent).toContain('Last used');
+    expect(qa('.scenes .sx-card.last').length).toBe(1); // the scene used last is outlined; no "Last used" line any more
     expect(qa('.lights-body').length).toBe(0); // the lights list stayed folded
     easel('destins_room').click(); await tick(50);
     expect(qa('.scenes').length).toBe(0);
@@ -48,5 +48,33 @@ describe('the Scenes easel button', () => {
     easel('destins_room').click(); await tick(50);
     q('.scenes .scene').click(); await tick(50);
     expect(urls.some((u) => u.includes('/api/services/scene/turn_on'))).toBe(true);
+  });
+});
+
+// Scene cards (Destin, 2026-10-06/07): scenes and the lights list never open together; cards show the colours the page learned.
+describe('scene cards', () => {
+  it('opening Scenes folds the lights, and unfolding the lights closes Scenes', async () => {
+    await mount({ data: {}, fetchHook: noCameraPicture });
+    q('[data-fold="destins_room"]').click(); await tick(50);
+    expect(qa('.lights-body').length).toBe(1);
+    easel('destins_room').click(); await tick(50);
+    expect(qa('.scenes').length).toBe(1);
+    expect(qa('.lights-body').length).toBe(0);
+    q('[data-fold="destins_room"]').click(); await tick(50);
+    expect(qa('.lights-body').length).toBe(1);
+    expect(qa('.scenes').length).toBe(0);
+  });
+
+  it('paints a learned scene as a gradient with its own brightness, and an unseen one as "try it"', async () => {
+    const id = 'scene.destins_room_tokyo';
+    await mount({ data: { sceneLook: { [id]: { c: ['rgb(255, 70, 150)', 'rgb(60, 190, 255)'] } } }, fetchHook: noCameraPicture });
+    easel('destins_room').click(); await tick(50);
+    const tokyo = q(`.sx-card[data-scene="${id}"]`);
+    expect(tokyo.querySelector('.sg-bg')!.getAttribute('style')).toContain('rgb(255, 70, 150)');
+    expect(tokyo.querySelector('.sx-pct')!.textContent).toBe('70%'); // 179 of 255
+    expect(tokyo.querySelector('.sx-mv')).not.toBeNull(); // Tokyo moves through its colours
+    const read = q('.sx-card[data-scene="scene.destins_room_read"]');
+    expect(read.classList.contains('unk')).toBe(true);
+    expect(read.textContent).toContain('Try it to see its colours');
   });
 });

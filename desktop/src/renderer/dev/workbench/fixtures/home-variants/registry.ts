@@ -1,10 +1,9 @@
 // Every task's design options, by task name (see types.ts).
 // To add a task: create <task>.ts exporting `VARIANTS: HomeVariants`, import it here and add `'<task>': imported` to the map below.
-// (The 2026-10-04 round's task files were removed at merge prep, 2026-10-05; they are in git history.)
+// (Task files are removed once their choice is built: the 2026-10-04 round at merge prep, scenes on 2026-10-07; they are in git history.)
 import type { HomeVariant, HomeVariants } from './types';
-import { VARIANTS as scenes } from './scenes';
 
-const HOME_VARIANT_TASKS: Record<string, HomeVariants> = { 'scenes': scenes };
+const HOME_VARIANT_TASKS: Record<string, HomeVariants> = {};
 
 /** Every option with its screen key "<task>-<key>". */
 export function homeVariantEntries(): Array<[string, HomeVariant]> {

@@ -108,7 +108,7 @@ function seed(): Array<{ id: string; name: string; items: Thing[] }> {
   ];
 }
 
-const ROOMS: Array<{ id: string; name: string; items: Thing[]; scenes?: Array<{ id: string; name: string; last: string }> }> = seed();
+const ROOMS: Array<{ id: string; name: string; items: Thing[]; scenes?: Array<{ id: string; name: string; last: string; b?: number; dyn?: boolean }> }> = seed();
 // Round 4: what the page shows about where each thing comes from, and Hue
 // scenes per room, so chips, Problems and Scenes have something to show.
 const MAKERS: Record<string, [string, string]> = { binary_sensor: ['', 'entry_ping'], button: ['', 'entry_wol'], light: ['Signify Netherlands B.V.', 'entry_hue'], climate: ['Google Nest', 'entry_nest'], camera: ['Google Nest', 'entry_nest'], remote: ['Google', 'entry_atv'] };
@@ -121,8 +121,14 @@ for (const r of ROOMS) for (const t of r.items) {
   t.since = new Date(Date.now() - 3 * 3600_000).toISOString();
 }
 const ago = (h: number) => new Date(Date.now() - h * 3600_000).toISOString();
+// Each scene's own brightness (0-255) and whether it moves through its colours, as a Hue scene reports them (2026-10-07).
+const SCENE_INFO: Record<string, { b: number; dyn: boolean }> = {
+  Tokyo: { b: 179, dyn: true }, Relax: { b: 140, dyn: false }, Read: { b: 230, dyn: false }, Concentrate: { b: 255, dyn: false },
+  Energize: { b: 255, dyn: false }, Nightlight: { b: 31, dyn: false }, 'TV Time': { b: 89, dyn: false },
+  'Sunset Glow': { b: 166, dyn: true }, Galaxy: { b: 115, dyn: true }, 'Malibu pink': { b: 204, dyn: true },
+};
 ROOMS[0].scenes = ['Tokyo', 'Relax', 'Read', 'Concentrate', 'Energize', 'Nightlight', 'TV Time', 'Sunset Glow', 'Galaxy', 'Malibu pink']
-  .map((n, i) => ({ id: `scene.destins_room_${n.toLowerCase().replace(/ /g, '_')}`, name: `Destin's Room ${n}`, last: ago(i === 6 ? 1 : 30 + i) }));
+  .map((n, i) => ({ id: `scene.destins_room_${n.toLowerCase().replace(/ /g, '_')}`, name: `Destin's Room ${n}`, last: ago(i === 6 ? 1 : 30 + i), ...SCENE_INFO[n] }));
 ROOMS[1].scenes = ['Relax', 'Read', 'Bright'].map((n, i) => ({ id: `scene.living_room_${n.toLowerCase()}`, name: `Living Room ${n}`, last: ago(40 + i) }));
 // A fresh house for each test: everything above is copied once, and this puts it back
 // (tests/home-page-harness.ts calls it after every test, so what one test leaves behind never reaches the next).

@@ -14,6 +14,8 @@
 // string would be split into letters by "| list", a missing one is none), and it is JSON-safe (a list of names).
 // WHY computers (2026-10-05): a ping sensor and a wake-on-LAN button are the two halves of one "Computer" card. Only entities of those two
 // integrations are taken (integration_entities is a list of entity-id strings, JSON-safe), never every button or binary sensor in the house.
+// WHY a scene's 'b' and 'dyn' (2026-10-07): a Hue scene's own brightness (0-255) and whether it moves through its colours, shown on its
+// card. 'b' is type-guarded and 'dyn' forced to true/false, so a non-Hue scene (neither attribute) is still JSON-safe.
 // WHY the camera's 'evs': Nest publishes a camera's motion / person / chime events as separate event.* entities on the SAME
 // device, and the camera card reads their history so an event with no recording still shows. `[.]` rather than an escaped dot
 // because a backslash here would need doubling through two template strings.
@@ -25,7 +27,8 @@ export const ROOMS_TEMPLATE = `{%- set ns = namespace(rooms=[]) -%}
 {%- for e in area_entities(a) -%}
 {%- set d = e.split('.')[0] -%}
 {%- if d == 'scene' and states[e] is not none -%}
-{%- set ens.scenes = ens.scenes + [{'id': e, 'name': states[e].name, 'last': states[e].state}] -%}
+{%- set sb = states[e].attributes.get('brightness') -%}
+{%- set ens.scenes = ens.scenes + [{'id': e, 'name': states[e].name, 'last': states[e].state, 'b': (sb if sb is number else none), 'dyn': states[e].attributes.get('is_dynamic') is true}] -%}
 {%- endif -%}
 {%- if d in ['light','climate','media_player','camera','remote'] and states[e] is not none -%}
 {%- set s = states[e] -%}

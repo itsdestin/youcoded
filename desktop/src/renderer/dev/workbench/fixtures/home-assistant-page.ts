@@ -30,6 +30,7 @@ import { HOME_CAMERA_CSS, HOME_CAMERA_JS } from './home-assistant-page-camera';
 import { HOME_TV_JS, HOME_TV_CSS } from './home-assistant-page-tv';
 import { HOME_BASIC_JS, HOME_BASIC_CSS } from './home-assistant-page-basic';
 import { HOME_COMPUTER_JS, HOME_COMPUTER_CSS } from './home-assistant-page-computer';
+import { HOME_SCENES_JS, HOME_SCENES_CSS } from './home-assistant-page-scenes';
 import { HOME_GLASS_CSS } from './home-assistant-page-glass';
 import { HOME_MEDIA_JS, HOME_MEDIA_CSS } from './home-assistant-page-media';
 import { HOME_LIGHTS_JS, HOME_LIGHTS_CSS } from './home-assistant-page-lights';
@@ -90,7 +91,7 @@ export const HOME_ASSISTANT_PAGE_JSON = {
 function homeAssistantPageHtml(): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>Home</title>
-<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}${HOME_CAMERA_CSS}${HOME_REDRAW_CSS}${HOME_PENDING_CSS}${HOME_MEMORY_CSS}${HOME_EDIT_CSS}${HOME_LOOK_CSS}${HOME_FEEL_CSS}${HOME_TV_CSS}${HOME_BASIC_CSS}${HOME_COMPUTER_CSS}${HOME_MEDIA_CSS}${HOME_LIGHTS_CSS}${HOME_GLASS_CSS}${HOME_CLIMATE_CSS}${HOME_DIAL_CSS}</style></head>
+<style>${HOME_ASSISTANT_PAGE_CSS}${HOME_HISTORY_CSS}${HOME_CAMERA_CSS}${HOME_REDRAW_CSS}${HOME_PENDING_CSS}${HOME_MEMORY_CSS}${HOME_EDIT_CSS}${HOME_LOOK_CSS}${HOME_FEEL_CSS}${HOME_TV_CSS}${HOME_BASIC_CSS}${HOME_COMPUTER_CSS}${HOME_MEDIA_CSS}${HOME_LIGHTS_CSS}${HOME_GLASS_CSS}${HOME_CLIMATE_CSS}${HOME_DIAL_CSS}${HOME_SCENES_CSS}</style></head>
 <body>
 <div class="yc-page yc-stack" id="root">
   <!-- No page title: the app's own bar already names the page, so the
@@ -683,15 +684,7 @@ ${HOME_ICONS_JS}
     var isOpen = scenesOpen.has(room.id);
     return '<button class="scn" data-scenes="' + esc(room.id) + '" aria-expanded="' + isOpen + '" aria-label="Scenes in ' + esc(room.name) + ', ' + l.length + '" title="Scenes (' + l.length + ')">' + SCENE_ICON + '</button>';
   }
-  function scenesHtml(room) {
-    var list = scenesList(room);
-    if (!list.length || !scenesOpen.has(room.id)) return '';
-    var last = list.reduce(function (a, b) { return Date.parse(b.last) > Date.parse(a ? a.last : 0) ? b : a; }, null);
-    var sorted = list.slice().sort(function (a, b) { return sceneName(a, room).localeCompare(sceneName(b, room)); });
-    return '<div class="scenes open"><div class="sc-list">' + sorted.map(function (sc) {
-      return '<button class="scene' + (last && sc.id === last.id ? ' last' : '') + '" data-scene="' + esc(sc.id) + '">' + esc(sceneName(sc, room)) + '</button>';
-    }).join('') + '</div>' + (last && Date.parse(last.last) ? '<div class="sc-foot">Last used: ' + esc(sceneName(last, room)) + '</div>' : '') + '</div>';
-  }
+  // scenesHtml (the colour cards) lives in home-assistant-page-scenes.ts.
   function lightsCard(room, lights, ctx) {
     var live = liveLights(lights), onList = live.filter(isOn), anyOn = onList.length > 0;
     var isOpen = editing || open.has(room.id);
@@ -1171,12 +1164,13 @@ ${HOME_ICONS_JS}
     var pf = t.getAttribute('data-pref');
     if (pf) { prefs[pf] = !pref(pf); persist({ prefs: prefs }); render(); return; }
     var scn = t.getAttribute('data-scenes');
-    if (scn) { if (scenesOpen.has(scn)) scenesOpen.delete(scn); else scenesOpen.add(scn); render(); return; }
+    if (scn) { if (scenesOpen.has(scn)) scenesOpen.delete(scn); else { scenesOpen.add(scn); open.delete(scn); } render(); return; }
     var sc = t.getAttribute('data-scene');
     if (sc) {
       // Mark it as the one used last straight away; the lights follow.
       rooms.forEach(function (r) { (r.scenes || []).forEach(function (x) { if (x.id === sc) x.last = new Date().toISOString(); }); });
       service('scene', 'turn_on', { entity_id: sc }, sc);
+      learnScene(sc); // remembers the colours the lights settle on (home-assistant-page-scenes.ts)
       render();
       return;
     }
@@ -1237,7 +1231,7 @@ ${HOME_ICONS_JS}
     if (t.getAttribute('data-seek')) { tvSeek(t); return; }
     var fd = t.getAttribute('data-fold');
     if (fd) {
-      if (open.has(fd)) open.delete(fd); else open.add(fd);
+      if (open.has(fd)) open.delete(fd); else { open.add(fd); scenesOpen.delete(fd); } // WHY: lights and scenes never open together (Destin, 2026-10-06)
       render();
       return;
     }
@@ -1458,6 +1452,7 @@ ${HOME_CAMERA_JS}
 ${HOME_TV_JS}
 ${HOME_BASIC_JS}
 ${HOME_COMPUTER_JS}
+${HOME_SCENES_JS}
 ${HOME_MEDIA_JS}
 ${HOME_LIGHTS_JS}
 ${HOME_REDRAW_JS}
