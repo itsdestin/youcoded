@@ -3,6 +3,48 @@ import type { ScreenEntry } from './types';
 
 const settings = (name: string, ...tags: string[]): ScreenEntry => ({ name, tags: ['settings', ...tags] });
 
+// ── Submit a ticket: practice steps ──────────────────────────────────────────────
+const TICKET = 'settings/development/bug-report';
+const TYPE_TITLE = { do: 'type', target: { role: 'textbox', label: 'Title' }, text: 'Settings text is cut off on my phone' };
+const TYPE_DESCRIPTION = { do: 'type', target: { role: 'textbox', label: 'Description' },
+  text: 'On my phone, Settings → Sound cuts off the right edge of the Volume card. I expected it to fit the screen.' };
+const TICK_LOGS = { do: 'click', target: { role: 'checkbox', label: 'Include recent logs' } };
+const TICK_FILES = { do: 'click', target: { role: 'checkbox', label: 'Finish with attachments in GitHub' } };
+const FILL = [TYPE_TITLE, TYPE_DESCRIPTION];
+const REVIEW = 'Review ticket';
+const SEND = 'Submit public ticket';
+const AI = 'Optional AI help';
+const HAND_OVER = 'Let your assistant try to fix it';
+const PHONE = { width: 390, height: 844 };
+const SMALL = { width: 640, height: 480 };
+const ticket = (state: string, extra: Partial<ScreenEntry>): ScreenEntry => ({ ...settings(`${TICKET}#${state}`, 'dialog', 'ticket'), ...extra });
+const TICKET_STATES: readonly ScreenEntry[] = [
+  ticket('feature', { open: [{ do: 'click', target: { role: 'tab', label: 'Feature' } }] }),
+  ticket('filled', { open: FILL }),
+  ticket('filled-all', { open: [...FILL, TICK_LOGS, TICK_FILES] }),
+  ticket('from-error', { params: { reportFrom: 'error' } }),
+  ticket('review', { open: [...FILL, REVIEW] }),
+  ticket('review-logs', { open: [...FILL, TICK_LOGS, REVIEW] }),
+  ticket('review-files', { open: [...FILL, TICK_FILES, REVIEW] }),
+  ticket('review-error', { params: { reportFrom: 'error' }, open: [TYPE_TITLE, REVIEW] }),
+  ticket('review-ai', { open: [...FILL, REVIEW, AI] }),
+  // Three drafts of the review step (ticket-practice.ts `ticketReview`), same ticket, logs ticked.
+  ticket('review-folded', { params: { ticketReview: 'folded' }, open: [...FILL, TICK_LOGS, REVIEW] }),
+  ticket('review-onepage', { params: { ticketReview: 'onepage' }, open: [...FILL, TICK_LOGS] }),
+  ticket('handover-failed', { scenario: 'refused', open: [...FILL, REVIEW, AI, HAND_OVER], waitMs: 3500 }),
+  ticket('sending', { params: { ticket: 'hold' }, open: [...FILL, REVIEW, SEND] }),
+  ticket('sent', { open: [...FILL, REVIEW, SEND] }),
+  ticket('browser', { open: [...FILL, TICK_FILES, REVIEW, 'Continue in GitHub'] }),
+  ticket('failed', { scenario: 'refused', open: [...FILL, REVIEW, SEND] }),
+  ticket('offline', { params: { network: 'offline' }, open: [...FILL, REVIEW, SEND] }),
+  ticket('handing-over', { params: { ticket: 'hold' }, open: [...FILL, REVIEW, AI, HAND_OVER] }),
+  ticket('handed-over', { open: [...FILL, REVIEW, AI, HAND_OVER], waitMs: 3500 }),
+  ticket('phone', { viewport: PHONE, open: FILL }),
+  ticket('phone-review', { viewport: PHONE, open: [...FILL, TICK_LOGS, REVIEW] }),
+  ticket('small', { viewport: SMALL, open: FILL }),
+  ticket('small-review', { viewport: SMALL, open: [...FILL, TICK_LOGS, REVIEW] }),
+];
+
 export const SETTINGS: readonly ScreenEntry[] = [
   settings('settings', 'drawer'),
   settings('settings/account', 'dialog'),
@@ -39,6 +81,10 @@ export const SETTINGS: readonly ScreenEntry[] = [
   settings('settings/remote', 'dialog'),
   settings('settings/help', 'dialog'),
   settings('settings/development/bug-report', 'dialog'),
+  // Every step and outcome of the ticket (redesign backlog 13), reached the way a person
+  // reaches it: typed, ticked and clicked by "open this first". `ticket=hold` keeps a send
+  // or a setup waiting; `network=offline` and the `refused` scenario fail the send.
+  ...TICKET_STATES,
   settings('settings/development/contribute', 'dialog'),
   settings('settings/shortcuts', 'dialog'),
   settings('settings/donate', 'dialog'),

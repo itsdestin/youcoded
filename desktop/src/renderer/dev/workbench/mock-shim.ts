@@ -1762,6 +1762,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // Main-process state in the real thing: setup is not owned by the dialog, so
   // closing it cannot cancel setup and reopening can ask where it got to.
   let setupState: 'idle' | 'running' | 'ready' | 'failed' = 'idle';
+  const ticketHold = () => typeof location !== 'undefined' && new URLSearchParams(location.search).get('ticket') === 'hold';
   let setupPath = '';
   let setupError = '';
   const devMock = {
@@ -1782,11 +1783,20 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       flagged_strings: [] as string[],
     }),
     submitIssue: async (a?: { browserOnly?: boolean }) => {
+      // `?ticket=hold`: the send never answers, so the "Sending your ticket" state can be
+      // photographed (it otherwise flashes past in 0 ms).
+      if (ticketHold()) return new Promise<never>(() => {});
       // The attachment route finishes in the browser whatever the scenario — that is
       // the point of it, not a degraded outcome.
       if (a?.browserOnly) {
         return { ok: false as const, needsBrowser: true as const, truncated: false,
           fallbackUrl: 'https://github.com/itsdestin/youcoded/issues/new?title=Settings+text+is+cut+off' };
+      }
+      // `?network=offline`: what the real send answers with no network — the request's own
+      // error, passed through untouched (dev-tools.ts submitIssue's catch). Never a guess.
+      if (new URLSearchParams(location.search).get('network') === 'offline') {
+        return { ok: false as const, error: 'getaddrinfo ENOTFOUND api.github.com',
+          fallbackUrl: 'https://github.com/itsdestin/youcoded/issues/new' };
       }
       return activeScenario === 'refused'
         // A failure the user can act on, and one this flow can actually produce:
@@ -1812,6 +1822,8 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // exact failure the latency knob exists to prevent, one size too small.
     setupWorkspace: () => {
       setupState = 'running';
+      // `?ticket=hold`: setup never finishes, so "Setting up a working copy" can be photographed.
+      if (ticketHold()) return new Promise<never>(() => {});
       return new Promise(resolve => setTimeout(() => {
         if (activeScenario === 'refused') {
           setupState = 'failed';

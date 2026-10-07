@@ -109,7 +109,7 @@ describe('development design safety', () => {
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'A title' } });
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'A description' } });
     fireEvent.click(screen.getByText('Review ticket'));
-    expect(screen.getByText('Review your ticket')).toBeTruthy();
+    expect(screen.getByText('Your ticket')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Submit public ticket' })).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/bug report|feature request|public issue/i);
   });
@@ -214,8 +214,13 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
-    await screen.findByText('GitHub rejected the request.');
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+    await screen.findByText(/GitHub rejected the request\./);
+    // The notice carries its own Try again (guide: a notice's buttons sit inside it).
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    // The review step shows the ticket read-only; the words are still there, and Back
+    // to draft returns them to their boxes untouched.
+    expect(screen.getByText('The menu closes')).toBeTruthy();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Back to draft' })[0]);
     // This file does not load jest-dom, so read the values directly.
     expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('The menu closes');
     expect((screen.getByLabelText('Description') as HTMLTextAreaElement).value)
@@ -271,7 +276,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
     await screen.findByText(/Finish your ticket in GitHub/);
-    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 
   it('starts a report from an error with the failure already in it', async () => {
@@ -293,7 +298,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     // quietly turned all five into a button that opens an empty ticket.
     Object.assign(window, { claude: { dev: { submitIssue: vi.fn() } } });
     render(<BugReportPopup open onClose={() => {}} context={{ surface: 'Local model settings', diagnose: true }} />);
-    expect(screen.getByRole('heading', { name: 'Review your ticket' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Sent with it' })).toBeTruthy();
     expect(screen.getByText(/Only this draft and selected details go to your chosen assistant/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Improve wording with the assistant' })).toBeTruthy();
   });
@@ -313,10 +318,10 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
-    await screen.findByText('No browser is available.');
+    await screen.findByText(/No browser is available\./);
     expect(screen.queryByText(/Finish your ticket in GitHub/)).toBeNull();
     // …and the report they wrote is still there.
-    expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('The menu closes');
+    expect(screen.getByText('The menu closes')).toBeTruthy();
   });
 
   it('hands the ticket to a working copy without sending it anywhere', async () => {
@@ -356,7 +361,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     fireEvent.click(screen.getByRole('button', { name: 'Optional AI help' }));
     fireEvent.click(screen.getByRole('button', { name: 'Let your assistant try to fix it' }));
     await screen.findByText(/Could not reach github\.com\./);
-    expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('The menu closes');
+    expect(screen.getByText('The menu closes')).toBeTruthy();
   });
 
   it('rewrites the wording only when something actually rewrote it', async () => {
@@ -372,8 +377,8 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Optional AI help' }));
     fireEvent.click(screen.getByRole('button', { name: 'Improve wording with the assistant' }));
-    await vi.waitFor(() => expect((screen.getByLabelText('Title') as HTMLInputElement).value)
-      .toBe('Menu closes the window'));
+    // The review step shows the ticket as it will read, so the new words appear there.
+    await screen.findByText('Menu closes the window');
   });
 
   it('leaves the wording alone, and says so, when nothing rewrote it', async () => {
@@ -392,7 +397,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     fireEvent.click(screen.getByRole('button', { name: 'Optional AI help' }));
     fireEvent.click(screen.getByRole('button', { name: 'Improve wording with the assistant' }));
     await screen.findByText('No assistant is set up on this computer to rewrite it.');
-    expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('menu bad');
+    expect(screen.getByText('menu bad')).toBeTruthy();
   });
 
   it('says what remote access cannot do, not a channel name', async () => {
@@ -410,7 +415,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     await screen.findByText(/Developer tools isn.t available via remote access yet/);
     expect(document.body.textContent).not.toContain('remote-unsupported');
     // The draft survives it, like any other failure (R23).
-    expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('The menu closes');
+    expect(screen.getByText('The menu closes')).toBeTruthy();
   });
 
   it('sends a ticket with no AI call at all', async () => {

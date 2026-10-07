@@ -21,6 +21,7 @@ import AboutPopup from './AboutPopup';
 import { HelpPopup } from './HelpPopup';
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
+import { workbenchReportContext } from '../ticket-practice';
 import { ContributePopup } from './development/ContributePopup';
 import PerformanceButton from './PerformanceButton';
 import AccountSection from './AccountSection';
@@ -2877,7 +2878,8 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
   // development sub-screens open the way their menu rows do — the menu closes
   // and the popup takes its place.
   useScreenOpen('settings/help', () => setShowHelp(true));
-  useScreenOpen('settings/development/bug-report', () => setReportContext({}));
+  // `?reportFrom=error` (practice app only) opens it the way an error's Report bug does.
+  useScreenOpen('settings/development/bug-report', () => setReportContext(workbenchReportContext() ?? {}));
   useScreenOpen('settings/development/contribute', () => setShowContribute(true));
   useScreenOpen('settings/shortcuts', () => setShowShortcuts(true));
   useScreenOpen('settings/donate', () => setShowDonateConfirm(true));
