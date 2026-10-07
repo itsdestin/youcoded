@@ -58,8 +58,8 @@ describe('the Money page', () => {
     const data = p.last();
     expect(data.accounts.map((a: any) => a.id).sort()).toEqual(['m1', 'plaid:a1', 'plaid:a2']);
     expect(data.accounts.find((a: any) => a.id === 'plaid:a2')).toMatchObject({ itemId: 'item-1', kind: 'credit', limit: 1000, apr: 24.99, payment: { amount: 35, due: '2026-10-20' } });
-    // Net worth = 1500 − 400 − 20000, written in brackets.
-    expect(p.text()).toContain('($18,900)');
+    // Net worth = 1500 − 400 − 20000, in accounting brackets with the dollar sign outside.
+    expect(p.text()).toContain('$(18,900)');
     expect(data.history).toEqual([{ d: expect.any(String), v: -18900 }]);
     expect(data.banks['item-2']).toMatchObject({ ok: false, error: { reconnect: true } });
     expect(p.text()).toContain('Reconnect Synchrony');
@@ -154,6 +154,17 @@ describe('the Money page', () => {
     expect(p.d.querySelector('[role="alert"]')).toBeNull();
   });
 
+  it('remembers the browser chosen for bank sign-ins and asks for it', async () => {
+    const asked: any[] = [];
+    const p = open({ demoToday: TODAY, accounts: [{ id: 'm1', source: 'manual', kind: 'checking', institution: 'X', name: 'Y', balance: 1, updatedAt: `${TODAY}T10:00:00Z` }] },
+      (req) => { asked.push(req); return req.op === 'connect' ? new Promise(() => {}) : Promise.resolve({ ok: true, op: req.op, items: [] }); });
+    await p.settle();
+    p.click('#add'); p.click('[data-browser="firefox"]');
+    expect(p.last().settings.browser).toBe('firefox');
+    p.click('[data-add="bank"]');
+    expect(asked.at(-1)).toEqual({ op: 'connect', browser: 'firefox' });
+  });
+
   it('with no Plaid keys yet, shows the welcome card and no warning', async () => {
     const p = open({}, async () => ({ ok: false, op: 'accounts', code: 'NO_KEYS', message: 'No keys' }));
     await p.settle();
@@ -200,6 +211,18 @@ describe('the Money page', () => {
     // 10,000 at 6% and $200/month clears in 58 months; $250/month in 45.
     expect(p.text()).toContain('(4 years 10 months)');
     expect(p.text()).toContain('1 year 1 month sooner');
+  });
+
+  it('bills sort by due date (late first) by default, or by amount', () => {
+    const p = open({ demoToday: TODAY, bills: [
+      { id: 'a', provider: 'A', name: 'Small soon', amount: 10, due: '2026-10-08' },
+      { id: 'b', provider: 'B', name: 'Big later', amount: 500, due: '2026-11-01' },
+      { id: 'c', provider: 'C', name: 'Late', amount: 50, due: '2026-10-01' },
+    ] });
+    const order = () => [...p.d.querySelectorAll('.bill .name')].map((e) => e.textContent);
+    expect(order()).toEqual(['Late', 'Small soon', 'Big later']);
+    p.click('[data-bill-sort="amount"]');
+    expect(order()).toEqual(['Big later', 'Late', 'Small soon']);
   });
 
   it('marking a monthly bill paid moves it to next month', () => {

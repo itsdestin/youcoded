@@ -25,7 +25,7 @@ import path from 'node:path';
 import { mutateFileUnderLock } from '../artifacts/cas-write';
 import type { SecretsStore } from '../providers/secrets-store';
 import type {
-  PlaidAccount, PlaidEnvironment, PlaidInstitution, PlaidItemSummary, PlaidRequest, PlaidResult,
+  PlaidAccount, PlaidBrowser, PlaidEnvironment, PlaidInstitution, PlaidItemSummary, PlaidRequest, PlaidResult,
 } from '../../shared/pages-types';
 
 const PLAID_ITEMS_FILE = 'plaid-items.json';
@@ -133,7 +133,9 @@ export interface PlaidContext {
   creds: PlaidCredentials;
   items: PlaidItemsStore;
   /** Opens a URL in the person's browser (shell.openExternal in production). */
-  openExternal: (url: string) => Promise<void> | void;
+  openExternal: (url: string, browser?: PlaidBrowser) => Promise<void> | void;
+  /** Which browser the person picked for bank sign-ins. */
+  browser?: PlaidBrowser;
   fetchImpl?: typeof fetch;
   /** Test hooks: shorter waits. */
   pollMs?: number;
@@ -211,7 +213,7 @@ async function runHostedLink(ctx: PlaidContext, accessToken?: string): Promise<L
   }
   const created = await plaidCall<{ link_token: string; hosted_link_url?: string }>(ctx, '/link/token/create', body);
   if (!created.hosted_link_url) throw new PlaidError('NO_HOSTED_LINK', 'Plaid did not return a sign-in page for this account. Hosted Link may not be enabled for your Plaid team.');
-  await ctx.openExternal(created.hosted_link_url);
+  await ctx.openExternal(created.hosted_link_url, ctx.browser);
 
   const sleep = ctx.sleep ?? ((ms: number) => sleepOrAbort(ms, ctx.signal));
   const deadline = Date.now() + (ctx.linkWaitMs ?? LINK_WAIT_MS);
@@ -404,11 +406,37 @@ export async function runPlaid(ctx: PlaidContext, req: PlaidRequest): Promise<Pl
 /** Opens Plaid's sign-in page in the person's browser — only an https page on
  *  plaid.com, so nothing else Plaid's answer might name is ever opened. Electron
  *  is loaded on first use, so tests that never sign in never touch it. */
-export async function openPlaidLink(url: string): Promise<void> {
+export async function openPlaidLink(url: string, browser: PlaidBrowser = 'default'): Promise<void> {
   if (!/^https:\/\/([a-z0-9-]+\.)*plaid\.com\//i.test(url)) throw new PlaidError('BAD_LINK', 'Plaid returned a sign-in address the app will not open.');
+  if (browser !== 'default' && (await openInBrowser(url, browser))) return;
+  // The default browser, or the chosen one when it could not be started.
   const { shell } = await import('electron');
   await shell.openExternal(url);
 }
+
+/** Start one named browser on the URL. False when it is not installed (the caller falls back to the default). The
+ *  URL is passed as a single argument, never through a shell, and was already checked to be Plaid's own https page. */
+async function openInBrowser(url: string, browser: Exclude<PlaidBrowser, 'default'>): Promise<boolean> {
+  const { spawn } = await import('node:child_process');
+  const plans: Array<[string, string[]]> = process.platform === 'darwin'
+    ? [['open', ['-a', browser === 'firefox' ? 'Firefox' : 'Google Chrome', url]]]
+    : process.platform === 'win32'
+      ? [[browser === 'firefox' ? 'firefox.exe' : 'chrome.exe', [url]]]
+      : browser === 'firefox' ? [['firefox', ['--new-tab', url]]] : [['google-chrome-stable', [url]], ['google-chrome', [url]], ['chromium', [url]]];
+  for (const [cmd, args] of plans) {
+    const ok = await new Promise<boolean>((resolve) => {
+      try {
+        const child = spawn(cmd, args, { detached: true, stdio: 'ignore' });
+        child.once('error', () => resolve(false));
+        child.once('spawn', () => { child.unref(); resolve(true); });
+      } catch { resolve(false); }
+    });
+    if (ok) return true;
+  }
+  return false;
+}
+
+function cleanBrowser(v: unknown): PlaidBrowser { return v === 'firefox' || v === 'chrome' ? v : 'default'; }
 
 /** The page sends anything; only these shapes get through. */
 export function cleanPlaidRequest(raw: unknown): PlaidRequest | null {
@@ -417,10 +445,10 @@ export function cleanPlaidRequest(raw: unknown): PlaidRequest | null {
   const itemId = typeof o.itemId === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(o.itemId) ? o.itemId : '';
   switch (o.op) {
     case 'status': return { op: 'status' };
-    case 'connect': return { op: 'connect' };
+    case 'connect': return { op: 'connect', browser: cleanBrowser(o.browser) };
     case 'cancel': return { op: 'cancel' };
     case 'accounts': return { op: 'accounts', live: o.live === true };
-    case 'reconnect': return itemId ? { op: 'reconnect', itemId } : null;
+    case 'reconnect': return itemId ? { op: 'reconnect', itemId, browser: cleanBrowser(o.browser) } : null;
     case 'remove': return itemId ? { op: 'remove', itemId } : null;
     default: return null;
   }

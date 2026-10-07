@@ -139,14 +139,18 @@ export type PlaidEnvironment = 'sandbox' | 'production';
 export function plaidAddress(env: PlaidEnvironment): string { return `${env}.plaid.com`; }
 export const PLAID_SERVICE = 'Plaid';
 
+/** Which browser a bank sign-in opens in. Some banks' own login pages fail in one browser and work in another
+ *  (American Express's, in Chrome, on the first real try), so the person can pick. */
+export type PlaidBrowser = 'default' | 'firefox' | 'chrome';
+
 /** What a page may ask Plaid for, through the app. */
 export type PlaidRequest =
   | { op: 'status' }
-  | { op: 'connect' }
+  | { op: 'connect'; browser?: PlaidBrowser }
   /** Stop waiting for a bank sign-in (the person closed the browser tab). */
   | { op: 'cancel' }
   | { op: 'accounts'; live?: boolean }
-  | { op: 'reconnect'; itemId: string }
+  | { op: 'reconnect'; itemId: string; browser?: PlaidBrowser }
   | { op: 'remove'; itemId: string };
 
 /** A bank as Plaid describes it. `logo` is a data: PNG; `color` a #rrggbb. */

@@ -194,6 +194,11 @@ describe('plaid', () => {
     expect(cleanPlaidRequest(null)).toBeNull();
   });
 
+  it('a sign-in may name its browser; anything else falls back to the default', () => {
+    expect(cleanPlaidRequest({ op: 'connect', browser: 'firefox' })).toEqual({ op: 'connect', browser: 'firefox' });
+    expect(cleanPlaidRequest({ op: 'connect', browser: 'rm -rf' })).toEqual({ op: 'connect', browser: 'default' });
+  });
+
   it('reads the saved key only when both halves are there', () => {
     expect(parseCredentials('{"clientId":"a","secret":"b"}')).toEqual({ clientId: 'a', secret: 'b' });
     expect(parseCredentials('{"clientId":"a"}')).toBeNull();

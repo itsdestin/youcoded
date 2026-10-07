@@ -439,6 +439,7 @@ class PagesService {
       const result = await runPlaid({
         env: c.environment, creds, items,
         openExternal: this.deps.openExternal ?? openPlaidLink,
+        browser: req.op === 'connect' || req.op === 'reconnect' ? req.browser : undefined,
         fetchImpl: this.deps.fetchImpl,
         signal: mine?.signal,
       }, req);
