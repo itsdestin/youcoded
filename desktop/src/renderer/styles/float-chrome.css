@@ -507,6 +507,10 @@
   border-radius: var(--radius-lg);
   box-shadow: var(--float-sheet-ring), var(--float-sheet-drop);
 }
+/* WHY: "Show theme background behind pages" off — the frame behind a page or Office is solid (see globals.css). */
+[data-pages-solid] [data-chrome-style='float'] .screen-pane--frame {
+  background-color: var(--canvas) !important;
+}
 /* Cards on a screen (the project hero, file tiles, the search field): the
    light surface, no blur of their own. */
 [data-chrome-style='float'] .screen-pane :is(.bg-panel, .bg-inset, .bg-well, .bg-canvas) {

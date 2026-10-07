@@ -4,6 +4,7 @@ import path from 'path';
 // WHY: readSourceFile aliases guard-scope's readSource (CRLF-normalising) — the
 // local `readSource` name below is this file's own long-standing wrapper.
 import { readSource as readSourceFile } from './helpers/guard-scope';
+import { PAGE_SOCKET_CHANNELS, PAGE_VIDEO_CHANNELS } from '../src/shared/pages-types';
 
 // This test verifies that IPC channel constants in preload.ts match shared/backend-contract.ts.
 // Preload can't import from shared/types due to Electron sandbox restrictions,
@@ -2462,6 +2463,14 @@ describe('pages:* Phase 2 channel parity', () => {
     'pages:approve', 'pages:remove-connection', 'pages:refresh',
     'pages:saved-keys', 'pages:delete-saved-key', 'pages:fetch',
   ];
+  // The live socket (spec 2026-10-04). Its handlers moved with the rest of the
+  // pages:* ones into pages/pages-ipc.ts and pages/pages-remote.ts (ipc-handlers.ts
+  // and remote-server.ts are at their line budgets). Channel strings are inlined in
+  // preload and handed to main through shared/pages-types.ts PAGE_SOCKET_CHANNELS.
+  const SOCKET = ['pages:socket-open', 'pages:socket-send', 'pages:socket-close', 'pages:socket-ping'];
+  const SOCKET_EVENT = 'pages:socket-event';
+  // Camera video (step 3): its three calls are listed beside the socket's everywhere; its events ride SOCKET_EVENT.
+  const VIDEO = ['pages:video-start', 'pages:video-stop', 'pages:video-ping'];
   const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
 
   it('every type is declared in shared/backend-contract.ts and preload.ts, which cannot import it', () => {
@@ -2479,7 +2488,8 @@ describe('pages:* Phase 2 channel parity', () => {
   });
 
   it('every type is invoked by the remote shim', () => {
-    const shim = read('src', 'renderer', 'remote-shim.ts');
+    // The pages bridge left remote-shim.ts for remote-pages-bridge.ts when the live socket arrived (the shim is at its line budget).
+    const shim = read('src', 'renderer', 'remote-pages-bridge.ts');
     for (const t of PHASE_2) expect(shim, t).toContain(`invoke('${t}'`);
   });
 
@@ -2490,5 +2500,49 @@ describe('pages:* Phase 2 channel parity', () => {
     // The door that took the call says who is asking (never the payload): the entry passes `remote` from ctx.door.
     expect(read('src', 'main', 'ipc', 'pages.ts')).toMatch(/\.approve\([\s\S]{0,200}?remote: ctx\.door === 'remote'/);
     expect(read('src', 'main', 'ipc-handlers.ts')).not.toMatch(/pagesService\.approve\(/);
+  });
+
+  // WHY (2026-10-05, HA-pages merge into one-core): the live socket and camera video are table entries too (main/ipc/pages.ts),
+  // so these guards ask the table and the surfaces, not hand-written handlers. A socket's owner is the calling window or
+  // phone (pages/page-owner.ts); behaviour is pinned in pages-ipc.test.ts and pages-remote.test.ts.
+  it('every live socket and camera video call is ONE table entry, declared in the contract, preload and the phone shim', () => {
+    const types = read('src', 'shared', 'pages-types.ts');
+    const preload = read('src', 'main', 'preload.ts');
+    const contract = read('src', 'shared', 'backend-contract.ts');
+    const shim = read('src', 'renderer', 'remote-pages-bridge.ts');
+    for (const t of [...SOCKET, ...VIDEO]) {
+      expect(types, t).toContain(`'${t}'`);
+      expect(contract, t).toContain(`'${t}'`);
+      expect(preload, t).toContain(`'${t}'`);
+      expect(shim, t).toContain(`invoke('${t}'`);
+      expectTableEntry('pages', konstOf(t), t);
+    }
+    // The strings pages-types hands main equal the contract's.
+    expect(PAGE_SOCKET_CHANNELS).toEqual({ open: 'pages:socket-open', send: 'pages:socket-send', close: 'pages:socket-close', ping: 'pages:socket-ping', event: SOCKET_EVENT });
+    expect(PAGE_VIDEO_CHANNELS).toEqual({ start: 'pages:video-start', stop: 'pages:video-stop', ping: 'pages:video-ping' });
+  });
+
+  it('Android answers every live socket and camera video call (not-implemented, a phone-only feature of the computer)', () => {
+    const kotlin = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
+    for (const t of [...SOCKET, ...VIDEO]) expect(kotlin, t).toContain(`"${t}"`);
+  });
+
+  it('the socket-event push is declared, subscribed in preload, handled by the shim, and sent only to the owner', () => {
+    expect(read('src', 'shared', 'pages-types.ts')).toContain(`'${SOCKET_EVENT}'`);
+    expect(read('src', 'main', 'preload.ts')).toContain(`'${SOCKET_EVENT}'`);
+    expect(read('src', 'renderer', 'remote-shim.ts')).toContain(`case '${SOCKET_EVENT}':`);
+    const owner = read('src', 'main', 'pages', 'page-owner.ts');
+    expect(owner).toContain('PAGE_SOCKET_CHANNELS.event');
+    // A phone's events never go through broadcast or the restore queue.
+    expect(owner).not.toMatch(/\.broadcast\(|enqueueForRestoring/);
+    // The owner comes from the DOOR (the calling window or this phone), never from the request.
+    expect(read('src', 'main', 'ipc', 'pages.ts')).toMatch(/ctx\.clientId[\s\S]{0,200}?clientOwnerKey/);
+  });
+
+  it('a window or phone going away stops its sockets and videos (one closeOwner call covers both)', () => {
+    expect(read('src', 'main', 'pages', 'page-owner.ts')).toContain('svc.closeOwner(key)');
+    // That a dropped client's sockets close is a behaviour test: remote-server-connections.test.ts (the real removeClient path).
+    expect(read('src', 'main', 'remote-server.ts')).toContain('closeOwner(clientOwnerKey(client.id))');
+    expect(read('src', 'shared', 'pages-types.ts')).toContain('PAGE_VIDEO_CHANNELS');
   });
 });

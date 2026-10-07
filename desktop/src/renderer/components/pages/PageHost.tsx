@@ -42,7 +42,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useArtifactSelector, useArtifactDispatch } from '../../state/ArtifactContext';
 import { useDismissTop, useEscClose } from '../../hooks/use-esc-close';
-import { workbenchScreenFrame } from '../../workbench-mode';
+import { isWorkbenchDocument, workbenchScreenFrame } from '../../workbench-mode';
 import { Button, LoadingState, ErrorState, Tooltip } from '../ui';
 import { ScreenBand } from '../ScreenBand';
 import type { PageDocument, PageFetchRequest, PageFetchResult, PageLoadFailure, PageSummary, PagesBridge } from '../../../shared/pages-types';
@@ -53,13 +53,15 @@ import { OfficeAlerts } from '../office/OfficeAlerts';
 import { PageGlyph, PagesIcon, PinGlyph } from './page-icons';
 import { PagesEmptyCard } from './PagesEmptyCard';
 import { usePages, setPagePinned, refreshPages } from './use-pages';
+import { usePageSockets } from './use-page-sockets';
 import { PAGE_KIT_CSS } from './page-kit';
 import { PageApproval, needsApproval } from './page-connections';
 import { PageFreshness } from './PageFreshness';
 import { PageCodeChanged } from './PageCodeChanged';
+import { usePaneGlass } from './use-pane-glass';
 import {
   PAGE_DATA_MESSAGE, PAGE_DATA_SET_MESSAGE, PAGE_ESC_MESSAGE, PAGE_FETCH_MESSAGE, PAGE_FETCH_RESULT_MESSAGE,
-  PAGE_REFRESH_MESSAGE, PAGE_THEME_MESSAGE, prepareHostedDocument, readThemeCss, watchThemeCss,
+  PAGE_REFRESH_MESSAGE, PAGE_THEME_MESSAGE, paneIsGlass, prepareHostedDocument, readThemeCss, watchThemeCss,
 } from './page-theme';
 import { useScreenOpen, ScreenMark } from '../../shoot-mode';
 
@@ -70,6 +72,12 @@ function pagesBridge(): PagesBridge | undefined {
 /** A page's own script wrote these, so nothing is assumed about them: only a
  *  flat object of strings is forwarded as request headers (main allows three
  *  of them through anyway — design §4 step 4). */
+function isSocketPlan(v: unknown): v is NonNullable<PageFetchRequest['socket']> {
+  const o = v as { send?: unknown; until?: unknown; timeoutMs?: unknown } | null;
+  return !!o && typeof o === 'object' && Array.isArray(o.send) && o.send.every((m) => typeof m === 'string')
+    && typeof o.until === 'number' && (o.timeoutMs === undefined || typeof o.timeoutMs === 'number');
+}
+
 function isStringMap(v: unknown): v is Record<string, string> {
   return !!v && typeof v === 'object' && !Array.isArray(v) && Object.values(v).every((x) => typeof x === 'string');
 }
@@ -111,6 +119,14 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // closed by Esc with the page focused — Destin, 2026-09-17.)
   const dismissTop = useDismissTop();
   const { pages, loaded, failed, pinnedTotal } = usePages();
+  // Practice app only (workbench / landing demo, never the real app): `?openPage=<id>` opens that
+  // page at start. WHY: a review deck's live pane must land straight on a page's design option
+  // (`pagesHome=v-…`) for Destin to operate, not on the chat two clicks away.
+  useEffect(() => {
+    if (!isWorkbenchDocument()) return;
+    const id = new URLSearchParams(location.search).get('openPage');
+    if (id) dispatch({ type: 'PAGE_OPENED', pageId: id });
+  }, [dispatch]);
   // Photo-only build: `shoot` opens a page by id, in the panel or focused (the pinned-button view).
   const pageIds = pages.map((p) => p.id);
   useScreenOpen('pages/page', (id) => { if (id) dispatch({ type: 'PAGE_OPENED', pageId: id }); }, pageIds);
@@ -142,7 +158,9 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // means the answer on disk moved, so the document is read again: approving a
   // line is what turns the approval screen back into the page.
   const connSig = useMemo(
-    () => (summary?.connections ?? []).map((c) => `${c.id}:${c.approved ? 1 : 0}`).join('|'),
+    // A device's address is in it too: allowing a different address must
+    // rebuild the document, so `youcoded.devices` names the one now allowed.
+    () => (summary?.connections ?? []).map((c) => `${c.id}:${c.approved ? 1 : 0}${c.kind === 'device' ? `@${c.address}` : ''}`).join('|'),
     [summary],
   );
 
@@ -165,6 +183,21 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // The data the page in the frame is known to hold, so an outside change can
   // be told apart from the echo of the page's own save (see the onData effect).
   const frameDataRef = useRef<string>('null');
+  // True while the page's own save is waiting to be written (the 500 ms
+  // debounce, then the write itself). WHY: any pages broadcast in that window
+  // — a page's request updating its "Updated now" stamp is enough — re-read
+  // the file from disk, found the OLD data, saw it differ from the frame's,
+  // and posted it in: the Home page's remote flickered closed and open again
+  // (round 4 testing). Disk is stale until the save lands, so nothing is
+  // posted in until then.
+  const savingRef = useRef(false);
+  // See-through: the pane is glass (a wallpaper theme in a floating style AND the global
+  // Appearance switch "Show theme background behind pages" on, default on). The document build reads
+  // paneIsGlass() at that moment instead of depending on this value — a dependency would reload
+  // the frame and lose the page's working state on every theme change.
+  const glass = usePaneGlass(open);
+  // Office wears the same frost (owner: "make office use this new frosted styling"), so no !isOffice.
+  const seeThrough = glass;
 
   // Fetch the working version when the open page changes or its document was
   // rewritten. The document is prepared ONCE here, with the theme and the
@@ -186,9 +219,11 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
       if (cancelled) return;
       if (r.ok) {
         try { frameDataRef.current = JSON.stringify(r.page.data ?? null); } catch { frameDataRef.current = 'null'; }
+        // Read at this moment (not a dependency): the page is born see-through or not.
+        const seeNow = paneIsGlass();
         // The policy the document carries is built from THIS page's connections
         // (design §6), so a page that reaches nothing gets the tightest one.
-        setLoad({ state: 'ready', page: r.page, doc: prepareHostedDocument(r.page.html, readThemeCss(), PAGE_KIT_CSS, r.page.data, r.page.connections ?? []) });
+        setLoad({ state: 'ready', page: r.page, doc: prepareHostedDocument(r.page.html, readThemeCss(document.documentElement, seeNow), PAGE_KIT_CSS, r.page.data, r.page.connections ?? [], seeNow) });
       } else setLoad({ state: 'failed', failure: r.failure });
     }, () => {
       if (!cancelled) setLoad({ state: 'failed', failure: { kind: 'unreadable', message: 'The page could not be read.' } });
@@ -214,11 +249,15 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
       timer = null;
       if (pending === undefined) return;
       const data = pending; pending = undefined;
-      void pagesBridge()?.setData(pageId, data);
+      const write = pagesBridge()?.setData(pageId, data);
+      if (!write) { savingRef.current = false; return; }
+      // A newer save arriving while this one is written keeps the flag up.
+      write.then(() => { if (timer === null && pending === undefined) savingRef.current = false; },
+        () => { if (timer === null && pending === undefined) savingRef.current = false; });
     };
     const onMessage = (e: MessageEvent) => {
       if (e.source !== frameRef.current?.contentWindow) return;
-      const d = e.data as { type?: unknown; data?: unknown; id?: unknown; url?: unknown; method?: unknown; headers?: unknown; body?: unknown } | null;
+      const d = e.data as { type?: unknown; data?: unknown; id?: unknown; url?: unknown; method?: unknown; headers?: unknown; body?: unknown; as?: unknown; socket?: unknown } | null;
       if (!d) return;
       // Esc inside the page = Esc on the view: leave, unless Settings or the
       // library is open over it (their own Esc handling owns the key then).
@@ -242,6 +281,11 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
           ...(typeof d.method === 'string' ? { method: d.method } : {}),
           ...(isStringMap(d.headers) ? { headers: d.headers } : {}),
           ...(typeof d.body === 'string' ? { body: d.body } : {}),
+          // A camera snapshot comes back as a data: link (home-device deck).
+          ...(d.as === 'picture' ? { as: 'picture' as const } : d.as === 'video' ? { as: 'video' as const } : {}),
+          // A one-shot socket exchange with a home device (renames, room
+          // moves). Shape-checked here; main checks everything that matters.
+          ...(isSocketPlan(d.socket) ? { socket: d.socket } : {}),
         };
         bridge.fetch(pageId, req).then(answer, () => {
           answer({ ok: false, reason: 'network', message: 'The request could not be completed.' });
@@ -253,6 +297,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
       try { json = JSON.stringify(d.data ?? null); } catch { return; }
       if (json.length > MAX_PAGE_DATA_BYTES) return; // main refuses it too; no point posting
       frameDataRef.current = json;
+      savingRef.current = true;
       pending = d.data ?? null;
       if (timer === null) timer = setTimeout(flush, 500);
     };
@@ -268,11 +313,13 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // nothing and cannot loop.
   useEffect(() => {
     if (load.state !== 'ready' || pageId === null) return;
+    // The page's own save has not landed: disk is older than the frame.
+    if (savingRef.current) return;
     const bridge = pagesBridge();
     if (!bridge) return;
     let cancelled = false;
     bridge.get(pageId).then((r) => {
-      if (cancelled || !r.ok) return;
+      if (cancelled || !r.ok || savingRef.current) return;
       let json = '';
       try { json = JSON.stringify(r.page.data ?? null); } catch { return; }
       if (json === frameDataRef.current) return;
@@ -285,8 +332,8 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // Live theme: watch the host document and post the fresh tokens in.
   useEffect(() => {
     if (load.state !== 'ready') return;
-    return watchThemeCss((css) => {
-      frameRef.current?.contentWindow?.postMessage({ type: PAGE_THEME_MESSAGE, css }, '*');
+    return watchThemeCss((css, see) => {
+      frameRef.current?.contentWindow?.postMessage({ type: PAGE_THEME_MESSAGE, css, seeThrough: see }, '*');
     });
   }, [load.state]);
 
@@ -299,6 +346,9 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // arrived" flag (first-run landing, merged from master 2026-09-23).
   const loadedPage = load.state === 'ready' ? load.page : null;
   const awaitingApproval = needsApproval(loadedPage ?? summary);
+  // The page's live sockets live only as long as ITS frame: not while the view is
+  // closed, awaiting approval or loading, and a new document is a new frame.
+  usePageSockets(frameRef, pageId, open && load.state === 'ready' && !awaitingApproval, load.state === 'ready' ? load.doc : null, pagesBridge);
   /** The band's refresh button is how a person asks the page for fresh
    *  information; the page hears it through `youcoded.onRefresh` (§5). */
   const askPageToRefresh = () => {
@@ -368,9 +418,11 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
           files/games pane are in a chat session. */}
       <div className="screen-body flex-1 min-h-0 flex">
         {/* With Office built in the panel always has something to list, so it
-            stays beside the first-run card instead of hiding. */}
+            stays beside the first-run card instead of hiding. WHY panel-glass while see-through (ux review 2, U5): the list sat over
+            the wallpaper unframed and names ran into tree edges; it gets the same one theme-engine glass as the page pane, and Reduced
+            effects removes it the same way. */}
         {open && !pageFocus && (!emptyPages || builtin.length > 0) && (
-        <aside className="screen-pane screen-pane--panel w-60 shrink-0 flex flex-col select-none rounded-xl bg-canvas overflow-hidden">
+        <aside className={`screen-pane screen-pane--panel w-60 shrink-0 flex flex-col select-none rounded-xl bg-canvas overflow-hidden${seeThrough ? ' panel-glass' : ''}`}>
           <div className="flex-1 overflow-y-auto p-2">
             {builtin.length > 0 && (
               <RailGroup label="Built in">
@@ -410,7 +462,12 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
           </div>
         </aside>
         )}
-        <div className="screen-pane screen-pane--frame relative flex-1 min-w-0 rounded-xl overflow-hidden bg-canvas">
+        {/* WHY panel-glass while see-through (owner, 2026-10-05: "a glass effect kinda like marketplace or terminal"): it is the
+            app's own opt-in for theme-engine's ONE glass rule (blur at the theme's --panels-blur, written only while a wallpaper is
+            on and Reduced effects is off), so the page pane frosts exactly like Marketplace's surfaces and "Reduced effects" removes
+            it the same way. One element — never a blur per card inside the page. In 'float' chrome the pane already has its own
+            heavier frost (!important), which simply wins. Solid pages (plain theme, framed chrome, or the Appearance switch off) do not get the class: unchanged. Office's frame is this same pane, so it frosts too. */}
+        <div className={`screen-pane screen-pane--frame relative flex-1 min-w-0 rounded-xl overflow-hidden bg-canvas${seeThrough ? ' panel-glass' : ''}`}>
           {/* First, so its place in the tree never changes whatever else shows (see officeKept). */}
           {(isOffice || officeKept) && (
             <div className={`absolute inset-0 ${open && isOffice ? '' : 'invisible pointer-events-none'}`} aria-hidden={open && isOffice ? undefined : true} inert={!(open && isOffice)}>
@@ -453,7 +510,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
               ref={frameRef}
               srcDoc={load.doc}
               sandbox="allow-scripts allow-popups allow-forms"
-              className="absolute inset-0 w-full h-full border-0 bg-canvas"
+              className={`absolute inset-0 w-full h-full border-0 ${seeThrough ? '' : 'bg-canvas'}`}
               title={title}
             />
           )}
@@ -487,7 +544,8 @@ function RailRow({ page, current, pinFull, onOpen }: { page: PageSummary; curren
       data-rail-page={page.id}
       aria-current={current ? 'page' : undefined}
       onClick={onOpen}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); } }}
+      // WHY the target check (U19): Enter/Space on the pin button inside this row bubbled up and also opened the page.
+      onKeyDown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(); } }}
       className={`group flex items-center gap-2.5 h-8 pl-2 pr-1 rounded-md text-sm text-left cursor-pointer transition-colors ${current ? 'bg-inset text-fg' : 'text-fg-2 hover:text-fg hover:bg-inset/60'}`}
     >
       <PageGlyph icon={page.icon} className="w-4 h-4 shrink-0" />

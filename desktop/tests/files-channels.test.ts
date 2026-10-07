@@ -137,8 +137,8 @@ describe('which of these a phone may call: exactly what it could before', () => 
   const entries = CHANNEL_TABLE.filter((d) => inFamily(d.name));
   const phoneOpen = (d: (typeof entries)[number]) => !d.desktopOnly && d.remoteAllowed !== false;
 
-  it('the table holds all 50 channels of the group', () => {
-    expect(entries).toHaveLength(50); // 21 artifacts + 5 project + 2 chatsearch + 9 git + 10 pages + 3 singles
+  it('the table holds all 57 channels of the group', () => {
+    expect(entries).toHaveLength(57); // 21 artifacts + 5 project + 2 chatsearch + 9 git + 17 pages (10 + 4 socket + 3 video) + 3 singles
   });
 
   it('exactly these are open to a phone; everything else is refused', () => {
@@ -149,6 +149,8 @@ describe('which of these a phone may call: exactly what it could before', () => 
       'chatsearch:read', 'chatsearch:resolve', 'file:upload', 'fs:read-head', 'get-home-path',
       'pages:approve', 'pages:delete-saved-key', 'pages:fetch', 'pages:get', 'pages:list', 'pages:refresh',
       'pages:remove-connection', 'pages:saved-keys', 'pages:set-data', 'pages:set-pinned',
+      // The live socket and camera video (HA-pages branch): open to a phone, each owned by the phone that opened it.
+      'pages:socket-close', 'pages:socket-open', 'pages:socket-ping', 'pages:socket-send', 'pages:video-ping', 'pages:video-start', 'pages:video-stop',
       'project:list-context', 'project:list-conversations', 'project:read-context-file', 'project:repo-info',
     ]);
   });
@@ -248,12 +250,12 @@ describe('what only one door does', () => {
 
   it('pages:approve is told which door asked: a phone may only reuse a saved key, the computer may paste one', async () => {
     await overIpc('pages:approve', { id: 'p1', keys: { svc: 'k' } });
-    expect(pagesFake.approve).toHaveBeenLastCalledWith('p1', { svc: 'k' }, { remote: false });
+    expect(pagesFake.approve).toHaveBeenLastCalledWith('p1', { svc: 'k' }, { remote: false, addresses: {} });
     await overRemote('pages:approve', { id: 'p1', keys: { svc: 'k' } });
-    expect(pagesFake.approve).toHaveBeenLastCalledWith('p1', { svc: 'k' }, { remote: true });
+    expect(pagesFake.approve).toHaveBeenLastCalledWith('p1', { svc: 'k' }, { remote: true, addresses: {} });
     // The payload cannot claim to be the computer.
     await overRemote('pages:approve', { id: 'p1', keys: {}, remote: false });
-    expect(pagesFake.approve).toHaveBeenLastCalledWith('p1', {}, { remote: true });
+    expect(pagesFake.approve).toHaveBeenLastCalledWith('p1', {}, { remote: true, addresses: {} });
   });
 
   it('a pages call that throws gives a phone the soft answer its page reads, and the computer a rejection', async () => {

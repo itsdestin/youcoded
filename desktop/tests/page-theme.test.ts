@@ -1,9 +1,10 @@
+// @vitest-environment jsdom
 // The document a page is framed in is the first of the two things that keep
 // Phase 2's promise ("a page reaches exactly what its approval lists"), so what
 // is pinned here is that OUR shell always wins: the policy, the theme and the
 // bootstrap cannot be moved, commented out or faked by anything the page's
 // author writes, and the bootstrap only believes the host.
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { prepareHostedDocument } from '../src/renderer/components/pages/page-theme';
 
 const THEME = ':root { --canvas: #fff; }';
@@ -104,6 +105,14 @@ describe('the policy the document carries', () => {
     expect(csp).not.toContain('https:');
   });
 
+  it('lets only a page with a device connection play a data: video clip', () => {
+    expect(cspOf(doc('<p>hi</p>', [{ kind: 'device' }]))).toContain('media-src data:');
+    expect(cspOf(doc('<p>hi</p>', [{ kind: 'device' }]))).not.toContain('media-src data: https:');
+    for (const none of [[], [{ kind: 'key' }], [{ kind: 'public' }]]) expect(cspOf(doc('<p>hi</p>', none))).not.toContain('media-src');
+    // An open page keeps https video; adding a device adds data: beside it.
+    expect(cspOf(doc('<p>hi</p>', [{ kind: 'open' }, { kind: 'device' }]))).toContain('media-src data: https:');
+  });
+
   it('lets a whole-internet page show pictures, video and webfonts, but not open a socket', () => {
     const csp = cspOf(doc('<p>hi</p>', [{ kind: 'open' }]));
     expect(csp).toContain('img-src data: blob: https:');
@@ -126,7 +135,8 @@ function runBootstrap(html = '<p>hi</p>') {
   const deliver = (data: unknown, source: unknown = parent) => {
     for (const fn of listeners.message ?? []) fn({ data, source });
   };
-  return { yc: win.youcoded as Record<string, (...a: unknown[]) => unknown>, posted, deliver };
+  const key = (e: Record<string, unknown>) => { for (const fn of listeners.keydown ?? []) fn(e); };
+  return { yc: win.youcoded as Record<string, (...a: unknown[]) => unknown>, posted, deliver, key };
 }
 
 describe('what a page can call', () => {
@@ -162,6 +172,66 @@ describe('what a page can call', () => {
     await expect(p).resolves.toMatchObject({ body: 'real' });
   });
 
+  it('hands the page a live socket handle and hears only events for its own ids', () => {
+    const { yc, posted, deliver } = runBootstrap();
+    const states: unknown[][] = [];
+    const messages: string[][] = [];
+    const sock = (yc.socket as (u: string, o: unknown) => { send(t: unknown): boolean; close(): void })('http://ha.local:8123/api/websocket', {
+      onState: (...a: unknown[]) => states.push(a), onMessages: (t: string[]) => messages.push(t),
+    });
+    expect(posted[0]).toMatchObject({ type: 'youcoded:socket:open', id: 's1', url: 'http://ha.local:8123/api/websocket' });
+    // Refused unless 'open': nothing is posted.
+    expect(sock.send('{"type":"ping"}')).toBe(false);
+    expect(posted).toHaveLength(1);
+    deliver({ type: 'youcoded:socket:event', id: 's1', kind: 'state', state: 'open' });
+    expect(sock.send('{"type":"ping"}')).toBe(true);
+    expect(sock.send(42)).toBe(false); // strings only
+    expect(posted[1]).toMatchObject({ type: 'youcoded:socket:send', id: 's1', text: '{"type":"ping"}' });
+    deliver({ type: 'youcoded:socket:event', id: 's1', kind: 'messages', texts: ['a', 7, 'b'] });
+    expect(messages).toEqual([['a', 'b']]);
+    // A forged event: from another window, or for an id this page never made.
+    deliver({ type: 'youcoded:socket:event', id: 's1', kind: 'messages', texts: ['forged'] }, { name: 'popup' });
+    deliver({ type: 'youcoded:socket:event', id: 's99', kind: 'messages', texts: ['wrong id'] });
+    deliver({ type: 'youcoded:socket:event', id: 's99', kind: 'state', state: 'open' });
+    expect(messages).toEqual([['a', 'b']]);
+    expect(states).toEqual([['open', undefined]]);
+    // Closing tells the host once, and later events resolve nothing.
+    sock.close();
+    expect(posted.at(-1)).toMatchObject({ type: 'youcoded:socket:close', id: 's1' });
+    deliver({ type: 'youcoded:socket:event', id: 's1', kind: 'messages', texts: ['late'] });
+    expect(messages).toHaveLength(1);
+  });
+
+  it('hands the page a video handle: pictures arrive with an ack, only for its own ids, and a picture nobody wants is closed', () => {
+    const { yc, posted, deliver } = runBootstrap();
+    const states: unknown[][] = [];
+    const frames: Array<{ bitmap: unknown; ack: () => void }> = [];
+    const v = (yc.video as (c: string, t: string, o: unknown) => { stop(): void })('ha', 'camera.living_room', {
+      onState: (...a: unknown[]) => states.push(a), onFrame: (bitmap: unknown, ack: () => void) => frames.push({ bitmap, ack }),
+    });
+    expect(posted[0]).toEqual({ type: 'youcoded:video:start', id: 'v1', connection: 'ha', target: 'camera.living_room' });
+    deliver({ type: 'youcoded:video:event', id: 'v1', kind: 'state', state: 'playing' });
+    const bitmap = { close: () => {} };
+    deliver({ type: 'youcoded:video:event', id: 'v1', kind: 'frame', n: 7, bitmap });
+    expect(frames[0].bitmap).toBe(bitmap);
+    frames[0].ack(); frames[0].ack(); // acking twice asks once
+    expect(posted.filter((m) => (m as { type: string }).type === 'youcoded:video:ack')).toEqual([{ type: 'youcoded:video:ack', id: 'v1', n: 7 }]);
+    // A forged event (another window, an id never made) resolves nothing; its picture is closed.
+    let closed = 0;
+    deliver({ type: 'youcoded:video:event', id: 'v1', kind: 'frame', n: 8, bitmap }, { name: 'popup' });
+    deliver({ type: 'youcoded:video:event', id: 'v9', kind: 'frame', n: 1, bitmap: { close: () => { closed++; } } });
+    deliver({ type: 'youcoded:video:event', id: 'v9', kind: 'state', state: 'playing' });
+    expect(frames).toHaveLength(1);
+    expect(closed).toBe(1);
+    expect(states).toEqual([['playing', undefined]]);
+    v.stop();
+    expect(posted.at(-1)).toEqual({ type: 'youcoded:video:stop', id: 'v1' });
+    let late = 0;
+    deliver({ type: 'youcoded:video:event', id: 'v1', kind: 'frame', n: 9, bitmap: { close: () => { late++; } } });
+    expect(frames).toHaveLength(1);
+    expect(late).toBe(1);
+  });
+
   it('hears the refresh button and a data change, from the host only', () => {
     const { yc, deliver } = runBootstrap();
     let refreshes = 0;
@@ -177,5 +247,135 @@ describe('what a page can call', () => {
     deliver({ type: 'youcoded:data', data: { seed: 2 } });
     expect(seen).toEqual([{ seed: 2 }]);
     expect((yc as unknown as { data: unknown }).data).toEqual({ seed: 2 });
+  });
+});
+
+// ── See-through (owner, 2026-10-05: "peek through to the real theme background") ──────────────
+// A page turns see-through ONLY when the app's page pane is glass AND the person has the page's
+// switch on. These pin the three places that decide it: the pane test, the first-paint document,
+// and the live message the page's own bootstrap obeys.
+import { paneIsGlass, readThemeCss, watchThemeCss, PAGE_SEE_THROUGH_ATTR } from '../src/renderer/components/pages/page-theme';
+import { PAGES_SOLID_ATTR } from '../src/renderer/themes/look-overrides';
+import { PAGE_KIT_CSS } from '../src/renderer/components/pages/page-kit';
+
+function setPane(wallpaper: boolean, chrome: string | null) {
+  const root = document.documentElement;
+  if (wallpaper) root.setAttribute('data-wallpaper', ''); else root.removeAttribute('data-wallpaper');
+  if (chrome) document.body.setAttribute('data-chrome-style', chrome); else document.body.removeAttribute('data-chrome-style');
+}
+
+describe('when the page pane is glass', () => {
+  afterEach(() => setPane(false, null));
+  it('needs a wallpaper AND a floating or float chrome style (the same condition globals.css and float-chrome.css use)', () => {
+    setPane(true, 'floating'); expect(paneIsGlass()).toBe(true);
+    setPane(true, 'float'); expect(paneIsGlass()).toBe(true);
+    setPane(true, 'default'); expect(paneIsGlass()).toBe(false); // framed: the pane is an opaque canvas card
+    setPane(true, null); expect(paneIsGlass()).toBe(false);
+    setPane(false, 'floating'); expect(paneIsGlass()).toBe(false); // a plain theme has nothing behind to show
+    setPane(false, 'float'); expect(paneIsGlass()).toBe(false);
+  });
+  it('is never glass while the global Appearance switch is OFF (<html data-pages-solid>), and is again when it comes back on', () => {
+    setPane(true, 'floating');
+    document.documentElement.setAttribute(PAGES_SOLID_ATTR, '');
+    try { expect(paneIsGlass()).toBe(false); } finally { document.documentElement.removeAttribute(PAGES_SOLID_ATTR); }
+    expect(paneIsGlass()).toBe(true);
+  });
+});
+
+describe('the framed document carries the see-through flag', () => {
+  it('is baked into <html> from first paint only when asked', () => {
+    expect(prepareHostedDocument('<p>x</p>', THEME, KIT, null, [], true).startsWith(`<!doctype html><html ${PAGE_SEE_THROUGH_ATTR}><head>`)).toBe(true);
+    expect(prepareHostedDocument('<p>x</p>', THEME, KIT, null, [], false)).not.toContain(PAGE_SEE_THROUGH_ATTR + '>');
+    expect(prepareHostedDocument('<p>x</p>', THEME, KIT)).not.toContain(`<html ${PAGE_SEE_THROUGH_ATTR}`);
+  });
+  it('hands over the glass density only while see-through', () => {
+    document.documentElement.style.setProperty('--panels-opacity', '0.72');
+    try {
+      expect(readThemeCss(document.documentElement, true)).toContain('--panels-opacity: 0.72;');
+      expect(readThemeCss(document.documentElement, false)).not.toContain('panels-opacity');
+      expect(readThemeCss()).not.toContain('panels-opacity');
+    } finally { document.documentElement.style.removeProperty('--panels-opacity'); }
+  });
+  it('the kit paints no backdrop of its own behind that flag, and a plain page still paints the canvas', () => {
+    expect(PAGE_KIT_CSS).toMatch(/body \{[^}]*background: var\(--canvas\)/);
+    expect(PAGE_KIT_CSS).toMatch(/:root\[data-yc-see-through\] body \{ background: transparent; \}/);
+  });
+});
+
+describe('the page obeys the host\'s live message', () => {
+  function run() {
+    const src = /<script>([\s\S]*?)<\/script>/.exec(prepareHostedDocument('<p>hi</p>', THEME, KIT))?.[1] ?? '';
+    const listeners: ((e: unknown) => void)[] = [];
+    const attrs = new Set<string>();
+    const el = { textContent: '' };
+    const documentStub = {
+      getElementById: () => el, createElement: () => ({}), head: { appendChild: () => {} },
+      documentElement: { toggleAttribute: (n: string, on: boolean) => { if (on) attrs.add(n); else attrs.delete(n); } },
+    };
+    const parent = { postMessage: () => {} };
+    new Function('window', 'document', 'parent', src)({ addEventListener: (_t: string, fn: (e: unknown) => void) => listeners.push(fn) }, documentStub, parent);
+    return { attrs, el, deliver: (data: unknown, source: unknown = parent) => listeners.forEach((fn) => fn({ data, source })) };
+  }
+  it('turns see-through on and off with the message, and ignores anything not from the host', () => {
+    const { attrs, el, deliver } = run();
+    deliver({ type: 'youcoded:theme', css: ':root{--a:1}', seeThrough: true });
+    expect(attrs.has(PAGE_SEE_THROUGH_ATTR)).toBe(true);
+    expect(el.textContent).toBe(':root{--a:1}');
+    deliver({ type: 'youcoded:theme', css: ':root{--a:2}', seeThrough: false });
+    expect(attrs.has(PAGE_SEE_THROUGH_ATTR)).toBe(false);
+    deliver({ type: 'youcoded:theme', css: 'x', seeThrough: true }, { name: 'popup' });
+    expect(attrs.has(PAGE_SEE_THROUGH_ATTR)).toBe(false);
+    deliver({ type: 'youcoded:theme', css: ':root{--a:3}' }); // an older host sends no flag: solid, as before
+    expect(attrs.has(PAGE_SEE_THROUGH_ATTR)).toBe(false);
+  });
+});
+
+describe('the watcher', () => {
+  afterEach(() => { setPane(false, null); document.documentElement.removeAttribute(PAGES_SOLID_ATTR); });
+  it('reports a wallpaper, chrome-style or Appearance-switch change live', async () => {
+    setPane(false, 'floating');
+    const seen: boolean[] = [];
+    const stop = watchThemeCss((_css, see) => seen.push(see));
+    setPane(true, 'floating');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(seen.at(-1)).toBe(true);
+    document.documentElement.setAttribute(PAGES_SOLID_ATTR, ''); // the switch turned OFF
+    await new Promise((r) => setTimeout(r, 0));
+    expect(seen.at(-1)).toBe(false);
+    document.documentElement.removeAttribute(PAGES_SOLID_ATTR); // and back ON
+    await new Promise((r) => setTimeout(r, 0));
+    expect(seen.at(-1)).toBe(true);
+    setPane(true, 'default');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(seen.at(-1)).toBe(false);
+    stop();
+  });
+});
+
+// U1 (ux review 2, 2026-10-05): Esc that the PAGE used (closing its own pop-up) must not also drop the Pages view back to chat.
+describe('Escape inside a page', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  it('is forwarded to the app when the page left it alone (old behaviour)', () => {
+    vi.useFakeTimers();
+    const { posted, key } = runBootstrap();
+    key({ key: 'Escape', defaultPrevented: false });
+    vi.runAllTimers();
+    expect(posted.filter((m) => m.type === 'youcoded:esc')).toHaveLength(1);
+  });
+  it('is NOT forwarded when the page handled it (preventDefault), even by a handler that runs after the bootstrap', () => {
+    vi.useFakeTimers();
+    const { posted, key } = runBootstrap();
+    const e = { key: 'Escape', defaultPrevented: false };
+    key(e);
+    e.defaultPrevented = true; // the page's own listener, running after ours
+    vi.runAllTimers();
+    expect(posted.filter((m) => m.type === 'youcoded:esc')).toHaveLength(0);
+  });
+  it('ignores other keys', () => {
+    vi.useFakeTimers();
+    const { posted, key } = runBootstrap();
+    key({ key: 'a', defaultPrevented: false });
+    vi.runAllTimers();
+    expect(posted).toHaveLength(0);
   });
 });
