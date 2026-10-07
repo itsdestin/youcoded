@@ -23,7 +23,12 @@
 // hand-written fake recogniser always improves tidily — each answer extends the
 // last — so it can never reproduce the thing this whole rule exists to contain:
 // the real engine going back and rewriting words it has already said.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import * as moduleApi from 'module';
+vi.mock('module', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('module')>();
+  return { ...actual, createRequire: vi.fn(actual.createRequire) };
+});
 import * as fs from 'fs';
 import * as path from 'path';
 import { splitAtLastSentenceEnd } from '../src/shared/voice-types';
@@ -43,6 +48,10 @@ import {
   joinSegments,
   int16ToFloat32,
   loadSherpa,
+  createRecognizer,
+  runWorker,
+  type VoiceWorkerInbound,
+  type SherpaModule,
 } from '../src/main/voice/voice-worker';
 import * as os from 'os';
 import { createRequire } from 'module';
@@ -714,6 +723,82 @@ describe('joining finished sentences', () => {
 // a file that is not a real library, and a JavaScript half whose neighbour is
 // missing — in a throwaway folder, and check that the real words come out. sherpa
 // is never downloaded, installed, or imported here.
+describe('recognizer vocabulary configuration', () => {
+  const vocab = path.resolve(__dirname, '../resources/voice/parakeet-tdt-v3.vocab');
+  function fakeSherpa() {
+    const configs: unknown[] = [];
+    const payloads: unknown[][] = [];
+    const sherpa: SherpaModule = { OfflineRecognizer: { createAsync: async (config) => {
+      configs.push(config);
+      return {
+        createStream: (...args: unknown[]) => { payloads.push(args); return { acceptWaveform() {} }; },
+        decodeAsync: async () => {},
+        getResult: () => ({ text: 'Original words.' }),
+      };
+    } } };
+    return { sherpa, configs, payloads };
+  }
+  it('keeps empty vocabulary on the original greedy defaults and no stream arguments', async () => {
+    const h = fakeSherpa();
+    const rec = await createRecognizer('/profile', h.sherpa);
+    await rec.decode(sound(1, LOUD));
+    expect(h.configs[0]).not.toHaveProperty('decodingMethod');
+    expect(h.configs[0]).not.toHaveProperty('hotwordsScore');
+    expect(h.configs[0]).not.toHaveProperty('modelConfig.bpeVocab');
+    expect(h.payloads).toEqual([[]]);
+  });
+  it('uses conservative native TDT beam search and copies slash-separated phrases for every stream', async () => {
+    const h = fakeSherpa();
+    const phrases = ['Destin', 'Zyphora', 'two words', 'Élodie'];
+    const rec = await createRecognizer('/profile', h.sherpa, phrases, vocab);
+    phrases[0] = 'Changed after start';
+    expect(await rec.decode(sound(1, LOUD))).toBe('Original words.');
+    await rec.decode(sound(2, LOUD));
+    expect(h.configs[0]).toMatchObject({
+      decodingMethod: 'modified_beam_search', maxActivePaths: 2, hotwordsScore: 0.5,
+      modelConfig: { modelType: 'nemo_transducer', modelingUnit: 'bpe', bpeVocab: vocab },
+    });
+    expect(h.payloads).toEqual([['Destin/Zyphora/two words/Élodie'], ['Destin/Zyphora/two words/Élodie']]);
+  });
+  it('freezes the one-time process configuration before queued audio and ignores subsequent vocabulary messages', async () => {
+    const h = fakeSherpa();
+    const requireSpy = vi.mocked(moduleApi.createRequire).mockReturnValueOnce((() => h.sherpa) as unknown as NodeJS.Require);
+    const sent: VoiceWorkerOutbound[] = [];
+    let receive!: (event: { data: VoiceWorkerInbound }) => void;
+    try {
+      runWorker(path.resolve('/profile'), { on: (_event, cb) => { receive = cb; }, postMessage: (m) => sent.push(m) }, vocab);
+      const phrases = ['Destin', 'two words'];
+      receive({ data: { type: 'vocabulary', phrases } });
+      receive({ data: { type: 'start' } });
+      phrases[0] = 'Mutated';
+      receive({ data: { type: 'vocabulary', phrases: ['Later save'] } });
+      const pcm = new Int16Array(16000).fill(5000);
+      receive({ data: { type: 'audio', chunk: pcm.buffer } });
+      receive({ data: { type: 'stop' } });
+      await vi.waitFor(() => expect(sent.filter((m) => m.type === 'final')).toHaveLength(1));
+      expect(h.payloads).toEqual([['Destin/two words']]);
+      receive({ data: { type: 'start' } });
+      receive({ data: { type: 'audio', chunk: pcm.buffer } });
+      receive({ data: { type: 'stop' } });
+      await vi.waitFor(() => expect(sent.filter((m) => m.type === 'final')).toHaveLength(2));
+      expect(h.configs).toHaveLength(1);
+      expect(h.payloads.every((args) => args[0] === 'Destin/two words')).toBe(true);
+    } finally { requireSpy.mockRestore(); }
+  });
+
+  it('refuses a missing or altered tokenizer before creating a native recognizer', async () => {
+    const h = fakeSherpa();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-tokenizer-'));
+    try {
+      const asset = path.join(dir, 'bad.vocab');
+      await expect(createRecognizer('/profile', h.sherpa, ['Destin'], asset)).rejects.toThrow('ENOENT');
+      fs.writeFileSync(asset, 'wrong bytes');
+      await expect(createRecognizer('/profile', h.sherpa, ['Destin'], asset)).rejects.toThrow('checksum');
+      expect(h.configs).toEqual([]);
+    } finally { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+});
+
 describe('loadSherpa — loading the downloaded speech engine', () => {
   let userData = '';
 

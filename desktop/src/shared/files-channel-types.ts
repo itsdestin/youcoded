@@ -22,7 +22,7 @@ import type { getPagesService } from '../main/pages/pages-service';
 import type { ensureProjectCoalesced } from '../main/artifacts/project-manager';
 import type { readFileHead } from '../main/fs-read-head';
 import type { ChatsearchReadRequest } from './chatsearch-refs';
-import type { PageFetchRequest } from './pages-types';
+import type { PageFetchRequest, PageSocketCall, PageSocketOpenResult, PageSocketCallResult, PageVideoStartRequest, PageVideoCall, PageVideoStartResult } from './pages-types';
 
 type Answer<F extends (...a: any[]) => any> = Awaited<ReturnType<F>>;
 type PagesService = NonNullable<ReturnType<typeof getPagesService>>;
@@ -96,12 +96,21 @@ export interface FilesChannelTypes {
   'pages:get': { request: { id: string }; response: unknown };
   'pages:set-pinned': { request: { id: string; pinned: boolean }; response: unknown };
   'pages:set-data': { request: { id: string; data: unknown }; response: unknown };
-  'pages:approve': { request: { id: string; keys: Record<string, string> }; response: PagesAnswer<'approve'> | { ok: false; message: string } };
+  'pages:approve': { request: { id: string; keys: Record<string, string>; addresses?: Record<string, string> }; response: PagesAnswer<'approve'> | { ok: false; message: string } };
   'pages:remove-connection': { request: { id: string; connectionId: string }; response: PagesAnswer<'removeConnection'> };
   'pages:refresh': { request: { id: string }; response: PagesAnswer<'refresh'> };
   'pages:saved-keys': { request: void; response: PagesAnswer<'savedKeys'> };
   'pages:delete-saved-key': { request: { service: string; address: string }; response: PagesAnswer<'deleteSavedKey'> };
   'pages:fetch': { request: { id: string; request: PageFetchRequest }; response: PagesAnswer<'fetch'> | { ok: false; reason: 'network'; message: string } };
+  // Live sockets and camera video (spec 2026-10-04). Each call names its page and frame; main knows the caller itself
+  // (a window or a phone), so these rows carry no owner. Events come back as the pages:socket-event push, not a row.
+  'pages:socket-open': { request: PageSocketCall & { url: string }; response: PageSocketOpenResult };
+  'pages:socket-send': { request: PageSocketCall & { socket: string; text: string }; response: PageSocketCallResult };
+  'pages:socket-close': { request: PageSocketCall & { socket: string }; response: PageSocketCallResult };
+  'pages:socket-ping': { request: PageSocketCall & { socket: string }; response: PageSocketCallResult };
+  'pages:video-start': { request: PageVideoStartRequest; response: PageVideoStartResult };
+  'pages:video-stop': { request: PageVideoCall; response: PageSocketCallResult };
+  'pages:video-ping': { request: PageVideoCall; response: PageSocketCallResult };
   // ── Singles ──
   'fs:read-head': { request: { filePath: string; maxBytes?: number }; response: Answer<typeof readFileHead> };
   /** Phone only: the attach button hands a file to the computer, which answers where it landed. */

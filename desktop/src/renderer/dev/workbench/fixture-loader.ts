@@ -18,6 +18,7 @@
 // `loadFixture` returns those dispatched actions in `LoadResult.actions` for the
 // workbench to replay into the live reducer on boot.
 
+import { CHATGPT_APP_LIMIT_MESSAGE } from '../../../shared/chatgpt-types';
 import { chatReducer } from '../../state/chat-reducer';
 import type { ChatState, ChatAction, ToolCallState } from '../../state/chat-types';
 
@@ -65,7 +66,7 @@ export interface LoadOptions {
    *  session, and an error card over it belongs to one review, not every one.
    *  `?planLimit=1` turns it on. A session_error line with no `optIn` always
    *  replays. */
-  includePlanLimit?: boolean;
+  includePlanLimit?: boolean | 'official';
   /** Replay the ONE `{"type":"session_error", "optIn":"providerError",
    *  "case": <name>}` line whose case matches — the OpenRouter failure cards
    *  (connection-trust review, 2026-09-18). `?providerError=<case>`. */
@@ -229,8 +230,11 @@ export function loadFixture(
         // so the error banner (and its plan-limit variant) is reviewable.
         if (parsed.optIn === 'planLimit' && !opts.includePlanLimit) continue;
         if (parsed.optIn === 'providerError' && parsed.case !== opts.providerError) continue;
+        // `?planLimit=official`: the same card on the official route, whose
+        // limit sentence names no reset time.
+        const message = parsed.optIn === 'planLimit' && opts.includePlanLimit === 'official' ? CHATGPT_APP_LIMIT_MESSAGE : parsed.text;
         const action: ChatAction = {
-          type: 'NATIVE_SESSION_ERROR', sessionId, message: parsed.text,
+          type: 'NATIVE_SESSION_ERROR', sessionId, message,
           ...(typeof parsed.errorCode === 'string' ? { errorCode: parsed.errorCode } : {}),
         };
         state = chatReducer(state, action);

@@ -26,7 +26,7 @@
 // at runtime. They are the reason a few members are still typed against a
 // non-shared file — R3 moves each type into shared/ as it tightens that family.
 
-import type { VoiceBridge } from './voice-types';
+import type { VoiceBridge, VoiceVocabularyBridge } from './voice-types';
 import type { PagesBridge } from './pages-types';
 import type { OfficeBridge } from './office-types';
 import type { SavedFolder, PickerFolder, SessionDefaults, ModelModes } from './prefs-types';
@@ -558,6 +558,15 @@ export const IPC = {
   PAGES_SAVED_KEYS: 'pages:saved-keys',
   PAGES_DELETE_SAVED_KEY: 'pages:delete-saved-key',
   PAGES_FETCH: 'pages:fetch',
+  // ---- Live sockets and camera video a page holds through main (spec 2026-10-04); events ride PAGES_SOCKET_EVENT ----
+  PAGES_SOCKET_OPEN: 'pages:socket-open',
+  PAGES_SOCKET_SEND: 'pages:socket-send',
+  PAGES_SOCKET_CLOSE: 'pages:socket-close',
+  PAGES_SOCKET_PING: 'pages:socket-ping',
+  PAGES_SOCKET_EVENT: 'pages:socket-event',
+  PAGES_VIDEO_START: 'pages:video-start',
+  PAGES_VIDEO_STOP: 'pages:video-stop',
+  PAGES_VIDEO_PING: 'pages:video-ping',
   // ---- Remembered "Always allow" rules (M5 2a: permissions management UI) ----
   // list = every project's stored grants; remove/remove-project revoke them.
   // Keyed by PROJECT SLUG, not cwd — permissions.json never stored the cwd for
@@ -652,6 +661,8 @@ export const IPC = {
   VOICE_STOP: 'voice:stop',
   VOICE_CANCEL: 'voice:cancel',
   VOICE_MIC_ACCESS: 'voice:mic-access',
+  VOICE_VOCABULARY_GET: 'voice:vocabulary-get',
+  VOICE_VOCABULARY_SAVE: 'voice:vocabulary-save',
   VOICE_AUDIO: 'voice:audio',
   VOICE_EVENT: 'voice:event',   // push
   // Hitch recorder: renderer -> main, fire-and-forget, desktop only. Registered by main/hitch-recorder.ts itself (it is created in whenReady),
@@ -1478,6 +1489,7 @@ interface ClaudeApi {
   // speech engine yet (remote browser, older builds) — the composer hides
   // the mic when it is undefined. Shape: shared/voice-types.ts.
   voice?: VoiceBridge;
+  voiceVocabulary?: VoiceVocabularyBridge;
   // YouCoded Pages (Phase 1 shell). Optional: absent until the backend
   // lands; the header hides the pinned buttons and the library shows an
   // error when it is undefined. Shape: shared/pages-types.ts.
