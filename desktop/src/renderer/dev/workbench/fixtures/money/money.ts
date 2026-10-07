@@ -58,13 +58,13 @@ const accounts = [
     payment: { amount: 286, due: shift(9) } },
   { id: 'mohela', kind: 'loan', name: 'Federal student loans', institution: 'MOHELA', source: 'manual', balance: 18250, apr: 4.99, updatedAt: at(2, 19),
     payment: { amount: 198, due: shift(22) } },
-  { id: 'affirm', kind: 'loan', name: 'Laptop plan', institution: 'Affirm', source: 'manual', balance: 345, note: '4 payments left', updatedAt: at(2, 19),
-    payment: { amount: 86.25, due: shift(16) } },
+  { id: 'affirm', kind: 'bnpl', name: 'Laptop plan', institution: 'Affirm', source: 'manual', balance: 345, left: 4, updatedAt: at(2, 19),
+    payment: { amount: 86.25, due: shift(16), every: '2weeks' } },
 ];
 
 const bills = [
-  { id: 'visible', provider: 'Visible', name: 'Visible', sub: 'phone', amount: 25, due: shift(1) },
-  { id: 'liberty', provider: 'Liberty Mutual', name: 'Liberty Mutual', sub: 'car insurance', amount: 138, due: shift(6) },
+  { id: 'visible', provider: 'Visible', name: 'Visible', sub: 'phone', category: 'Phone & internet', amount: 25, due: shift(1) },
+  { id: 'liberty', provider: 'Liberty Mutual', name: 'Liberty Mutual', sub: 'car insurance', category: 'Insurance', amount: 138, due: shift(6) },
 ];
 
 // The banks as the page last heard from Plaid: Synchrony needs signing in again,
@@ -76,6 +76,30 @@ const banks = {
   'item-wf': { name: 'Wells Fargo', ok: true, error: null },
   'item-sy': { name: 'Synchrony', ok: false, error: { code: 'ITEM_LOGIN_REQUIRED', message: 'Synchrony needs you to sign in again.', reconnect: true } },
 };
+
+// Four months of made-up purchases, so the spending chart, bills chart and found repeating payments have
+// something to show: monthly subscriptions and insurance (found as bills), weekly groceries, takeout, fuel, shopping.
+function purchases() {
+  const out: Array<{ i: string; a: string; d: string; m: number; n: string; c: string; k: string; p: number }> = [];
+  let n = 0, seed = 11;
+  const rand = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+  const add = (daysAgo: number, m: number, name: string, c: string, k: string, a = 'c1-checking') => {
+    if (daysAgo < 0) return;
+    out.push({ i: `t${++n}`, a, d: shift(-daysAgo), m: Math.round(m * 100) / 100, n: name, c, k, p: 0 });
+  };
+  for (let mo = 0; mo < 4; mo++) {
+    add(mo * 30 + 3, 15.49, 'Netflix', 'ENTERTAINMENT', 'ENTERTAINMENT_TV_AND_MOVIES', 'amex-card');
+    add(mo * 30 + 12, 11.99, 'Spotify', 'ENTERTAINMENT', 'ENTERTAINMENT_MUSIC_AND_AUDIO', 'c1-card');
+    add(mo * 30 + 9, 25, 'Visible', 'RENT_AND_UTILITIES', 'RENT_AND_UTILITIES_TELEPHONE');
+    add(mo * 30 + 18, 54 + rand() * 20, 'SRP Electric', 'RENT_AND_UTILITIES', 'RENT_AND_UTILITIES_GAS_AND_ELECTRICITY');
+  }
+  for (let d = 1; d < 120; d += 7) add(d, 60 + rand() * 50, 'Safeway', 'FOOD_AND_DRINK', 'FOOD_AND_DRINK_GROCERIES', 'amex-card');
+  for (let d = 2; d < 120; d += 3 + Math.floor(rand() * 4)) add(d, 12 + rand() * 30, ['Chipotle', 'DoorDash', 'Starbucks', 'Taco Bell'][Math.floor(rand() * 4)], 'FOOD_AND_DRINK', 'FOOD_AND_DRINK_RESTAURANT', 'c1-card');
+  for (let d = 4; d < 120; d += 9) add(d, 38 + rand() * 15, 'Shell', 'TRANSPORTATION', 'TRANSPORTATION_GAS', 'c1-card');
+  for (let d = 6; d < 120; d += 11) add(d, 20 + rand() * 90, 'Amazon', 'GENERAL_MERCHANDISE', 'GENERAL_MERCHANDISE_ONLINE_MARKETPLACES', 'amex-card');
+  for (let mo = 0; mo < 4; mo++) add(mo * 30 + 14, 400, 'Transfer to Robinhood', 'TRANSFER_OUT', 'TRANSFER_OUT_INVESTMENT_AND_RETIREMENT_FUNDS');
+  return out.sort((x, y) => (x.d < y.d ? -1 : 1));
+}
 
 const net = accounts.reduce((s, a) => s + (a.kind === 'credit' || a.kind === 'loan' ? -a.balance : a.balance), 0);
 
@@ -96,6 +120,7 @@ export const MONEY_PAGE: PageDocument = {
     accounts,
     bills,
     banks,
+    tx: purchases(),
     history: [...history(Math.round(net)), { d: TODAY, v: Math.round(net) }],
   },
 };

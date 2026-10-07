@@ -1,15 +1,14 @@
 <!doctype html>
 <html><head><meta charset="utf-8"><title>Money</title>
 <!--
-  Money page — design-stage mockup (finance dashboard, 2026-10-05).
-  Decisions: docs/active/design/2026-10-05-finance-dashboard/ — the questions deck
-  (summary first, grouped by kind, card bars warn at 30% / alert at 80%, bills by due
-  date with late and "reaches your credit report" warnings, net-worth history, live
-  check on open, stale after 3 days, typed-in accounts editable here and by chat,
-  balances only) and review round 1 (accounting brackets for negatives, the Home
-  page's raised-glass look, links out to each provider's own site).
-  Everything shown comes from youcoded.data, so the same file runs against the
-  workbench's made-up numbers now and Plaid-fed numbers later.
+  Money page (finance dashboard). Decisions: docs/active/design/2026-10-05-finance-dashboard/ —
+  round 1 (summary first, grouped by kind, card bars warn at 30% / alert at 80%, bills by due
+  date with late and credit-report warnings, live check on open, stale after 3 days, typed-in
+  accounts editable here and by chat), reviews 1–2 (Home-page glass look, links out, brackets),
+  and round 3 (purchases kept with the page, chart modes, per-kind accounts, categories, found
+  bills that you confirm, trimmed cards, $(…) format, 1W/1M, bills sortable).
+  Everything shown comes from youcoded.data (and youcoded.plaid when connected), so the same
+  file runs against the workbench's made-up numbers and against real banks.
 -->
 <style>
   :root { --warn: var(--warning-fg, #c77a00); --bad: var(--destructive-fg, #d33); }
@@ -246,17 +245,57 @@
   .bill { flex-wrap: wrap; }
   .stat.tap .chev { margin-left: auto; }
   @media (prefers-reduced-motion: reduce) { .pill, .btn, .ibtn, .tap, .chev { transition: none; } .tap:hover, .tap:active { transform: none; } }
+
+  /* Round 3: chart modes, bar legend, found bills, purchase lists, matched-as chips, thin card bars. */
+  .modes { display: flex; flex-wrap: wrap; gap: 4px; margin: -4px 0 12px; }
+  .mode { appearance: none; font: inherit; font-size: 12px; font-weight: 500; height: 28px; padding: 0 12px; border-radius: 9999px; cursor: pointer;
+    border: 1px solid var(--edge-dim); background: transparent; color: var(--fg-2); transition: border-color 120ms ease, background-color 120ms ease; }
+  .mode:hover { border-color: var(--edge); color: var(--fg); }
+  .mode.on { background: color-mix(in srgb, var(--fg) 12%, var(--panel)); border-color: color-mix(in srgb, var(--fg) 30%, transparent); color: var(--fg); }
+  .mode:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .pick { font: inherit; font-size: 13px; height: 30px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--edge); background: var(--inset); color: var(--fg); max-width: 100%; }
+  .nw .pick { margin-bottom: 6px; }
+  .legend-row { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 8px; }
+  .lg { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-2); }
+  .lg i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+  .lg b { font-weight: 500; color: var(--fg); }
+  .chart .barg rect { transition: opacity 120ms ease; }
+  .chart .barg:hover rect { opacity: .82; }
+  .found { margin-bottom: 12px; padding: 12px; border-radius: 18px; border: 1px dashed color-mix(in srgb, var(--fg) 18%, transparent); display: flex; flex-direction: column; gap: 8px; }
+  .found-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .found-head svg { color: var(--fg-2); }
+  .frow { display: flex; align-items: center; gap: 12px; padding: 8px 10px 8px 12px; }
+  .frow .mark { width: 30px; height: 30px; border-radius: 10px; font-size: 10px; }
+  .frow .name, .bill .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .frow .name small, .bill .name small { display: block; font-size: 11px; color: var(--fg-muted); margin-left: 0; }
+  .btn.ghostish { align-self: flex-start; background: transparent; border-color: transparent; color: var(--fg-2); }
+  .txlist { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 2px; }
+  .txlist .label { margin-bottom: 4px; }
+  .txrow { display: flex; align-items: center; gap: 10px; font-size: 12px; padding: 3px 0; border-bottom: 1px solid color-mix(in srgb, var(--fg) 6%, transparent); }
+  .txrow:last-child { border-bottom: 0; }
+  .txrow .muted { min-width: 52px; }
+  .txrow .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-2); }
+  .txrow b { font-weight: 500; }
+  .chips { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 2px 4px 2px 10px; border-radius: 9999px; background: color-mix(in srgb, var(--fg) 8%, transparent); }
+  .chipx { appearance: none; border: 0; background: transparent; color: var(--fg-muted); width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; cursor: pointer; }
+  .chipx:hover { background: color-mix(in srgb, var(--fg) 12%, transparent); color: var(--fg); }
+  .chipx svg { width: 12px; height: 12px; }
+  .meter.thin { margin-top: 2px; }
+  .meter.thin .bar { height: 5px; }
+  .meter.thin .bar .tick { top: 0; bottom: 0; }
+  .acct .side .flag, .acct .side { font-size: 12px; }
 </style></head>
 <body>
 <div class="wrap" id="root"></div>
 <script>
 (function(){
+  // ── Icons ────────────────────────────────────────────────────────────────
   function ic(d){ return '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + '</svg>'; }
   var I = {
     money: ic('<path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>'),
     warn: ic('<path d="M12 3 2 20h20L12 3z"/><path d="M12 10v4M12 17h.01"/>'),
     stop: ic('<circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5h.01"/>'),
-    link: ic('<path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"/><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/>'),
     pen: ic('<path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4z"/>'),
     refresh: ic('<path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4"/>'),
     check: ic('<path d="m5 12.5 4.5 4.5L19 7.5"/>'),
@@ -268,8 +307,10 @@
     wallet: ic('<path d="M3 7a2 2 0 0 1 2-2h13v4"/><path d="M3 7v11a2 2 0 0 0 2 2h15V9H5a2 2 0 0 1-2-2z"/><path d="M16 14.5h.01"/>'),
     owe: ic('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18M7 15h4"/>'),
     have: ic('<path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/>'),
-    chev: '<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>',
-    bank: ic('<path d="M3 10 12 4l9 6M5 10v8M9 10v8M15 10v8M19 10v8M3 20h18"/>')
+    bank: ic('<path d="M3 10 12 4l9 6M5 10v8M9 10v8M15 10v8M19 10v8M3 20h18"/>'),
+    spark: ic('<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/>'),
+    x: ic('<path d="M6 6l12 12M18 6 6 18"/>'),
+    chev: '<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>'
   };
 
   // Real logos for well-known companies, drawn as one-colour marks on their own brand colour.
@@ -289,7 +330,6 @@
     "AT&T": { c: '#009FDB', d: 'M4.584 21.438a12.077 12.077 0 0 0 7.349 2.495 12 12 0 0 0 7.887-2.967c-.944.607-3.64 2.023-7.887 2.023-3.708 0-6.068-.81-7.349-1.55m8.158.606c2.966 0 6.202-.809 8.09-2.427.539-.405 1.01-1.011 1.483-1.753.27-.472.539-1.011.741-1.483-1.82 2.63-7.011 4.315-12.404 4.315-3.776 0-7.888-1.214-9.506-3.573 1.483 3.236 6 4.92 11.596 4.92m-3.236-5.257C3.37 16.787.472 13.955 0 12c0 .674.067 1.483.202 2.09.068.27.27.674.607 1.079 1.483 1.55 5.191 3.707 11.595 3.707 8.697 0 10.72-2.898 11.124-3.842.27-.674.472-1.888.472-2.967v-.674c-.607 2.292-8.022 5.394-14.494 5.394m-8.427-9.91C.742 7.55.337 8.763.202 9.37c-.067.27 0 .404.068.607.741 1.55 4.45 4.044 13.078 4.044 5.259 0 9.371-1.28 10.045-3.64.135-.404.135-.876 0-1.483-.202-.674-.472-1.483-.809-2.09.068 3.101-8.562 5.124-12.944 5.124-4.719 0-8.696-1.888-8.696-4.248.067-.337.135-.606.135-.809M19.82 3.034c.068.067.068.135.068.27 0 1.348-4.045 3.64-10.517 3.64-4.787 0-5.663-1.753-5.663-2.9 0-.404.135-.808.472-1.213-.607.607-1.146 1.147-1.686 1.82-.202.27-.337.54-.337.675 0 2.36 5.865 3.977 11.259 3.977 5.797 0 8.427-1.887 8.427-3.573 0-.606-.203-.943-.81-1.618a17.301 17.301 0 0 0-1.213-1.078m-1.753-1.281A11.794 11.794 0 0 0 11.933.067C9.64.067 7.55.674 5.73 1.82c-.539.27-.876.54-.876.877 0 1.01 2.36 2.09 6.54 2.09 4.112 0 7.348-1.214 7.348-2.36.067-.202-.203-.405-.675-.674' },
   };
   // Letters and colours for companies with no logo in either place, and each one's own site.
-  // A Plaid-connected bank's site comes from Plaid; these cover typed-in accounts and bills.
   var PROVIDERS = {
     'Capital One':      { m: 'C1', b: '#004879', site: 'https://myaccounts.capitalone.com' },
     'American Express': { m: 'AX', b: '#016fd0', site: 'https://www.americanexpress.com' },
@@ -301,6 +341,8 @@
     'Affirm':           { m: 'af', b: '#4a4af4', site: 'https://www.affirm.com' },
     'Liberty Mutual':   { m: 'LM', b: '#1a1446', site: 'https://www.libertymutual.com' },
     'Visible':          { m: 'V',  b: '#1f2ad6', site: 'https://www.visible.com' },
+    'Citibank':         { m: 'CI', b: '#003b70', site: 'https://online.citi.com' },
+    'Best Buy':         { m: 'BB', b: '#0046be', site: 'https://www.bestbuy.com/site/misc/best-buy-credit-cards' },
     'Chase':            { m: 'CH', b: '#117aca', site: 'https://www.chase.com' },
     'Bank of America':  { m: 'BA', b: '#012169', site: 'https://www.bankofamerica.com' },
     'Discover':         { m: 'D',  b: '#ff6000', site: 'https://www.discover.com' },
@@ -308,11 +350,39 @@
     'Venmo':            { m: 'V',  b: '#008cff', site: 'https://venmo.com' },
     'Klarna':           { m: 'K',  b: '#ffb3c7', site: 'https://www.klarna.com' },
     'Verizon':          { m: 'VZ', b: '#cd040b', site: 'https://www.verizon.com' },
-    'AT&T':             { m: 'AT', b: '#009fdb', site: 'https://www.att.com' }
+    'AT&T':             { m: 'AT', b: '#009fdb', site: 'https://www.att.com' },
+    'Netflix':          { m: 'N',  b: '#e50914', site: 'https://www.netflix.com/youraccount' },
+    'Spotify':          { m: 'S',  b: '#1db954', site: 'https://www.spotify.com/account' }
   };
+
+  // ── Kinds of account, and what each one asks for (round 3, Q-types) ───────
+  var KINDS = {
+    checking:   { label: 'Checking', group: 'have', fields: ['balance'] },
+    savings:    { label: 'Savings', group: 'have', fields: ['balance'] },
+    investment: { label: 'Investments', group: 'have', fields: ['balance'] },
+    asset:      { label: 'Things you own', group: 'have', fields: ['value'] },
+    credit:     { label: 'Credit cards', group: 'owe', fields: ['owed', 'limit', 'apr', 'minimum', 'due'] },
+    loan:       { label: 'Loans', group: 'owe', fields: ['owed', 'apr', 'monthly', 'due'] },
+    bnpl:       { label: 'Pay-later plans', group: 'owe', fields: ['each', 'left', 'every', 'due'] }
+  };
+  var KIND_ONE = { checking: 'Checking account', savings: 'Savings account', investment: 'Investment account', asset: 'Something you own (car, home…)', credit: 'Credit card', loan: 'Loan (student, car, personal)', bnpl: 'Pay-later plan (Affirm, layaway…)' };
+  var EVERY = { week: 'Every week', '2weeks': 'Every 2 weeks', month: 'Every month' };
+
+  // ── Categories (round 3, Q-categories), plus everyday spending slices ─────
+  var BILL_CATS = ['Housing', 'Utilities', 'Phone & internet', 'Insurance', 'Subscriptions', 'Transportation', 'Loans', 'Credit cards', 'Pay-later plans', 'Health', 'Other'];
+  // WHY extra slices for spending: the bill list was approved for bills; without these, groceries and takeout
+  // would all land in "Other" on the spending chart.
+  var SPEND_CATS = ['Food & dining', 'Shopping', 'Entertainment', 'Travel', 'Personal'].concat(BILL_CATS);
+  // A fixed colour per category, so a slice keeps its colour whatever else is on the chart.
+  var CAT_COLOR = {
+    'Food & dining': '#e08a4a', 'Shopping': '#4f8ef7', 'Entertainment': '#a974e8', 'Travel': '#58b6d8', 'Personal': '#e26fa5',
+    'Housing': '#7fb24a', 'Utilities': '#3fb5a3', 'Phone & internet': '#6f7ff0', 'Insurance': '#c49a5c', 'Subscriptions': '#d16fd1',
+    'Transportation': '#5aa0c8', 'Loans': '#8f9bb3', 'Credit cards': '#9a8f7d', 'Pay-later plans': '#b07be0', 'Health': '#e06f6f', 'Other': '#8a8f98'
+  };
+  var SERIES = ['#4f8ef7', '#e08a4a', '#3fb5a3', '#a974e8', '#e26fa5', '#7fb24a', '#58b6d8', '#8a8f98'];
+
   function inst(name){ return (data.institutions && data.institutions[name]) || {}; }
   function prov(name){ return PROVIDERS[name] || { m: String(name || '?').replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase() || '?', b: '', site: '' }; }
-  // White on a dark brand colour, near-black on a pale one (Robinhood's lime, Klarna's pink).
   function inkOn(hex){
     var h = String(hex || '').replace('#', ''); if (h.length !== 6) return '#fff';
     var r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
@@ -320,47 +390,44 @@
   }
   function mark(name){
     var p = inst(name);
-    if (p.logo && /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(p.logo)) {
-      return '<span class="mark logo" aria-hidden="true"><img src="' + p.logo + '" alt=""></span>';
-    }
+    if (p.logo && /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(p.logo)) return '<span class="mark logo" aria-hidden="true"><img src="' + p.logo + '" alt=""></span>';
     var br = BRAND[name];
     if (br) return '<span class="mark" style="--b:' + br.c + ';color:' + inkOn(br.c) + '" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="' + br.d + '"/></svg></span>';
     var pv = prov(name), bg = p.color || pv.b;
     return '<span class="mark" style="' + (bg ? '--b:' + bg + ';color:' + inkOn(bg) : '') + '" aria-hidden="true">' + esc(pv.m) + '</span>';
   }
   function siteOf(x){ return x.site || inst(x.institution).url || prov(x.institution).site; }
-  function outBtn(x, what){ var u = siteOf(x); return u ? '<a class="ibtn" href="' + esc(u) + '" target="_blank" rel="noopener" title="Open ' + esc(x.institution) + ' to ' + what + '" aria-label="Open ' + esc(x.institution) + ' to ' + what + '">' + I.out + '</a>' : ''; }
 
+  // ── Data ─────────────────────────────────────────────────────────────────
   var DAY = 86400000;
   var data = normalise(window.youcoded && window.youcoded.data);
   function normalise(d){
     d = d && typeof d === 'object' ? d : {};
-    if (!Array.isArray(d.accounts)) d.accounts = [];
-    if (!Array.isArray(d.bills)) d.bills = [];
-    if (!Array.isArray(d.history)) d.history = [];
-    if (!d.settings || typeof d.settings !== 'object') d.settings = {};
-    if (!d.institutions || typeof d.institutions !== 'object') d.institutions = {};
-    if (!d.banks || typeof d.banks !== 'object') d.banks = {};
+    ['accounts', 'bills', 'history', 'tx', 'dismissed'].forEach(function(k){ if (!Array.isArray(d[k])) d[k] = []; });
+    ['settings', 'institutions', 'banks', 'txCursor'].forEach(function(k){ if (!d[k] || typeof d[k] !== 'object' || Array.isArray(d[k])) d[k] = {}; });
     return d;
   }
   var S = Object.assign({ staleDays: 3, warnPct: 30, alertPct: 80, reportDay: 30, reportWarnDays: 7 }, data.settings);
   var plaidOn = !!(window.youcoded && typeof window.youcoded.plaid === 'function');
-  var billSort = 'due';
-  var openId = null, billEdit = null, limitEdit = null, payEdit = null;
-  var range = '1m', editing = null, menuOpen = false, checking = false, connecting = false, form = null, bankNote = null, removing = null;
 
-  // A pinned "today" when the data names one keeps the workbench's dated numbers stable in pictures.
+  // ── View state (never saved) ─────────────────────────────────────────────
+  var range = '1m', chartMode = 'net', chartAccount = null, billSort = 'due', showAllFound = false;
+  var openId = null, editing = null, billEdit = null, limitEdit = null, payEdit = null;
+  var menuOpen = false, checking = false, connecting = false, form = null, bankNote = null, removing = null, linkSeq = 0;
+
+  // ── Small helpers ────────────────────────────────────────────────────────
   function today(){ return data.demoToday ? new Date(data.demoToday + 'T12:00:00') : new Date(); }
   function isoDay(d){ var z = new Date(d.getTime() - d.getTimezoneOffset() * 60000); return z.toISOString().slice(0, 10); }
   function day(s){ return new Date(s + 'T12:00:00'); }
   function daysBetween(a, b){ return Math.round((b - a) / DAY); }
-  // Accounting style: a negative amount is written in brackets, never with a minus.
+  // Accounting style with the dollar sign outside the brackets: $(35,329) (round 3).
   function money(n, whole){
     var s = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: whole ? 0 : 2, maximumFractionDigits: whole ? 0 : 2 });
-    // Accounting style with the dollar sign outside the brackets: $(35,329) (Destin, round 3).
     return n < 0 ? '$(' + s + ')' : '$' + s;
   }
   function short(d){ return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); }
+  // "Jul", not "Jul 26" (which reads as July 26th); the year only where it turns over.
+  function monthName(d){ return d.toLocaleDateString('en-US', { month: 'short' }) + (d.getMonth() === 0 ? ' ’' + String(d.getFullYear()).slice(2) : ''); }
   function ago(iso){
     var m = Math.round((today() - new Date(iso)) / 60000);
     if (m < 2) return 'just now';
@@ -368,21 +435,22 @@
     var h = Math.round(m / 60); if (h < 24) return h + ' hr ago';
     var d = Math.round(h / 24); return d === 1 ? 'yesterday' : d + ' days ago';
   }
-  function isStale(a){ return !a.updatedAt || (today() - new Date(a.updatedAt)) / DAY >= S.staleDays; }
   function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){ return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]; }); }
   function fullName(a){ return a.name.indexOf(a.institution) === 0 ? a.name : a.institution + ' ' + a.name; }
-  function isDebt(a){ return a.kind === 'credit' || a.kind === 'loan'; }
+  function isDebt(a){ return a.kind === 'credit' || a.kind === 'loan' || a.kind === 'bnpl'; }
+  function isStale(a){ if (a.kind === 'asset') return false; return !a.updatedAt || (today() - new Date(a.updatedAt)) / DAY >= S.staleDays; }
   function num(v){ var n = parseFloat(String(v == null ? '' : v).replace(/[$,()\s]/g, '')); return isNaN(n) ? null : n; }
   function addMonth(iso){ var d = day(iso); var m = d.getMonth(); d.setMonth(m + 1); if (d.getMonth() !== (m + 1) % 12) d.setDate(0); return isoDay(d); }
+  function addEvery(iso, every){ if (every === 'week') return isoDay(new Date(day(iso).getTime() + 7 * DAY)); if (every === '2weeks') return isoDay(new Date(day(iso).getTime() + 14 * DAY)); return addMonth(iso); }
+  function sum(list, f){ return list.reduce(function(s, x){ return s + (f ? f(x) : x); }, 0); }
+  function accountById(id){ return data.accounts.filter(function(a){ return a.id === id; })[0]; }
 
-  // ── Plaid → the page's accounts ───────────────────────────────────────
-  // A card or loan's next payment, from what the bank shares. Paid when a
-  // payment at least the minimum landed within the 25 days before the due date.
+  // ── Plaid → accounts ─────────────────────────────────────────────────────
+  // A card or loan's next payment, from what the bank shares. Paid when a payment at least the minimum landed within
+  // the 25 days before the due date. A due date months gone is a bank (or practice data) that stopped updating it.
   function paymentOf(p){
     var l = p.liability;
     if (!l || !l.nextDue || !(l.minimumPayment > 0)) return null;
-    // A due date months gone is a bank (or Plaid's practice data) that stopped updating it, not a payment that is
-    // years late: show no payment rather than an alarming, untrue warning.
     if (daysBetween(day(l.nextDue), today()) > 120) return null;
     var paid = null;
     if (l.lastPaymentDate && daysBetween(day(l.lastPaymentDate), day(l.nextDue)) <= 25 && (l.lastPaymentAmount || 0) >= l.minimumPayment) paid = l.lastPaymentDate;
@@ -391,10 +459,8 @@
   function mergePlaid(items){
     var kept = data.accounts.filter(function(a){ return a.source !== 'plaid'; });
     var old = data.accounts.filter(function(a){ return a.source === 'plaid'; });
-    var now = today().toISOString();
-    var banks = {};
-    // The same account reached through two connections to one bank (signing in to it twice): the working one wins,
-    // so a dead connection's last numbers are never counted on top of the live ones.
+    var now = today().toISOString(), banks = {};
+    // The same account reached through two connections to one bank: the working one wins.
     var live = {};
     items.forEach(function(it){ if (it.ok) it.accounts.forEach(function(p){ live[(it.institution || {}).name + '|' + (p.mask || p.name)] = true; }); });
     items.forEach(function(it){
@@ -402,32 +468,25 @@
       data.institutions[i.name] = { logo: i.logo, color: i.color, url: i.url };
       banks[it.itemId] = { name: i.name, ok: it.ok, error: it.error || null };
       if (!it.ok) {
-        // A bank that needs signing in again keeps its last numbers, which go
-        // stale and say so, rather than vanishing from the totals.
+        // A bank that needs signing in again keeps its last numbers, which go stale and say so.
         old.forEach(function(a){
           if (a.itemId !== it.itemId) return;
           var mask = (a.name.match(/(\d{4})\s*$/) || [])[1];
-          if (live[a.institution + '|' + (mask || a.name)]) return;
-          kept.push(a);
+          if (!live[a.institution + '|' + (mask || a.name)]) kept.push(a);
         });
         return;
       }
       it.accounts.forEach(function(p){
-        // Plaid files some holdings (crypto, for one) under "other": they are things you own, so they count with
-        // investments rather than vanishing from the page.
         var prev = old.filter(function(a){ return a.id === 'plaid:' + p.id; })[0] || {};
         kept.push({
-          id: 'plaid:' + p.id, itemId: it.itemId, source: 'plaid', kind: p.kind === 'other' ? 'investment' : p.kind, institution: i.name,
-          // Some banks already end the name with the last four ("AUTO LOAN ...8709"); add them only when missing.
+          id: 'plaid:' + p.id, itemId: it.itemId, source: 'plaid',
+          // Holdings Plaid files as "other" (crypto) count with investments.
+          kind: p.kind === 'other' ? 'investment' : p.kind, institution: i.name,
           name: p.name + (p.mask && p.name.indexOf(p.mask) < 0 ? ' ··' + p.mask : ''),
-          balance: p.balance,
-          available: p.available,
-          hist: prev.hist,
-          // A limit typed by hand survives when the bank shares none.
+          balance: p.balance, available: p.available, hist: prev.hist,
+          // A limit, rate or payment typed by hand survives when the bank shares none (auto loans).
           limit: p.limit != null ? p.limit : prev.limit,
           apr: p.liability && p.liability.apr != null ? Math.round(p.liability.apr * 100) / 100 : prev.apr,
-          // Plaid shares due dates for cards, student loans and mortgages only; an auto loan's payment details are
-          // entered by hand (or by chat) and must survive every refresh.
           payment: paymentOf(p) || (prev.payment && prev.payment.manual ? prev.payment : null),
           updatedAt: now
         });
@@ -436,10 +495,129 @@
     data.banks = banks;
     data.accounts = kept;
   }
-  // One net-worth point per day; a later check the same day replaces it.
+
+  // ── Purchases (round 3, Q-purchases: kept with the page) ─────────────────
+  // Stored small: i id, a account, d date, m amount (positive = money out), n name, c Plaid category, k detail, p pending.
+  var TX_DAYS = 730, TX_MAX_CHARS = 600000;
+  function mergeTx(items){
+    var byId = {};
+    data.tx.forEach(function(t){ byId[t.i] = t; });
+    items.forEach(function(it){
+      var t = it.transactions; if (!it.ok || !t) return;
+      t.added.concat(t.modified).forEach(function(x){
+        byId[x.id] = { i: x.id, a: 'plaid:' + x.account, d: x.date, m: x.amount, n: x.name, c: x.category || '', k: x.detail || '', p: x.pending ? 1 : 0 };
+      });
+      t.removed.forEach(function(id){ delete byId[id]; });
+      data.txCursor[it.itemId] = t.cursor;
+    });
+    var cut = isoDay(new Date(today().getTime() - TX_DAYS * DAY));
+    data.tx = Object.keys(byId).map(function(k){ return byId[k]; }).filter(function(t){ return t.d >= cut; })
+      .sort(function(x, y){ return x.d < y.d ? -1 : x.d > y.d ? 1 : 0; });
+    // WHY a size guard: a page keeps at most 1 MB; the oldest purchases go first so balances and bills always fit.
+    while (data.tx.length && JSON.stringify(data.tx).length > TX_MAX_CHARS) data.tx.splice(0, Math.ceil(data.tx.length / 10));
+  }
+  // The same merchant, however the bank spells it: "NETFLIX.COM 866-579" and "Netflix" both become "netflix".
+  function txKey(n){
+    return String(n || '').toLowerCase().replace(/\.(com|net|org|co|io|tv)\b/g, ' ').replace(/[^a-z ]+/g, ' ')
+      .replace(/\b(inc|llc|ltd|corp|co|payment|pymt|pmt|ach|debit|purchase|pos|autopay|recurring|online|www|the|bill|web|mobile)\b/g, ' ')
+      // Single letters are left over from codes ("P1A2B3") and would split one merchant into many.
+      .replace(/\s+/g, ' ').trim().split(' ').filter(function(w){ return w.length > 1; }).slice(0, 3).join(' ');
+  }
+  // Money moving between your own accounts, card payments and paychecks are not spending.
+  function isSpending(t){
+    if (t.p || !(t.m > 0)) return false;
+    if (t.c === 'TRANSFER_IN' || t.c === 'TRANSFER_OUT' || t.c === 'INCOME') return false;
+    if (/CREDIT_CARD_PAYMENT/.test(t.k)) return false;
+    return true;
+  }
+  function spendCat(t){
+    var c = t.c, k = t.k || '';
+    if (/INSURANCE/.test(k)) return 'Insurance';
+    if (/TELEPHONE|INTERNET|CABLE/.test(k)) return 'Phone & internet';
+    if (/RENT_AND_UTILITIES_RENT/.test(k) || c === 'HOME_IMPROVEMENT') return 'Housing';
+    if (c === 'RENT_AND_UTILITIES') return 'Utilities';
+    if (c === 'FOOD_AND_DRINK') return 'Food & dining';
+    if (c === 'GENERAL_MERCHANDISE') return 'Shopping';
+    if (c === 'ENTERTAINMENT') return /TV_AND_MOVIES|MUSIC/.test(k) ? 'Subscriptions' : 'Entertainment';
+    if (c === 'TRAVEL') return 'Travel';
+    if (c === 'TRANSPORTATION') return 'Transportation';
+    if (c === 'MEDICAL') return 'Health';
+    if (c === 'PERSONAL_CARE') return 'Personal';
+    if (c === 'LOAN_PAYMENTS') return 'Loans';
+    return 'Other';
+  }
+  // Repeating payments nobody has made a bill of yet (round 3, Q-link: as much automatic discovery as possible).
+  function discover(){
+    var known = {};
+    data.bills.forEach(function(b){ (b.match || []).forEach(function(k){ known[k] = 1; }); });
+    data.dismissed.forEach(function(k){ known[k] = 1; });
+    var groups = {};
+    data.tx.forEach(function(t){
+      if (!isSpending(t) || t.c === 'LOAN_PAYMENTS') return;
+      var k = txKey(t.n); if (!k || known[k]) return;
+      (groups[k] = groups[k] || []).push(t);
+    });
+    var out = [];
+    Object.keys(groups).forEach(function(k){
+      var g = groups[k]; if (g.length < 2) return;
+      var gaps = []; for (var i = 1; i < g.length; i++) gaps.push(daysBetween(day(g[i - 1].d), day(g[i].d)));
+      gaps.sort(function(a, b){ return a - b; });
+      var gap = gaps[Math.floor(gaps.length / 2)];
+      var every = gap >= 26 && gap <= 35 ? 'month' : gap >= 12 && gap <= 16 ? '2weeks' : gap >= 6 && gap <= 8 ? 'week' : gap >= 350 && gap <= 380 ? 'year' : null;
+      if (!every) return;
+      var amts = g.map(function(t){ return t.m; }).sort(function(a, b){ return a - b; }), mid = amts[Math.floor(amts.length / 2)];
+      var close = g.filter(function(t){ return Math.abs(t.m - mid) <= Math.max(1, mid * (every === 'month' || every === 'year' ? 0.25 : 0.1)); }).length;
+      // Weekly groceries vary; a real bill repeats at nearly the same price.
+      if (close < Math.max(2, Math.ceil(g.length * 0.7))) return;
+      var last = g[g.length - 1];
+      var next = every === 'year' ? isoDay(new Date(day(last.d).getTime() + 365 * DAY)) : addEvery(last.d, every);
+      out.push({ key: k, name: last.n, amount: mid, every: every, count: g.length, last: last.d, next: next, account: last.a, cat: spendCat(last) });
+    });
+    return out.sort(function(a, b){ return b.amount - a.amount; });
+  }
+  function billCatFor(s){
+    if (BILL_CATS.indexOf(s.cat) >= 0) return s.cat;
+    return s.every === 'month' && s.amount < 100 ? 'Subscriptions' : 'Other';
+  }
+  function linkedTx(b){
+    var keys = b.match || []; if (!keys.length) return [];
+    return data.tx.filter(function(t){ return !t.p && t.m > 0 && keys.indexOf(txKey(t.n)) >= 0; });
+  }
+  // Payments that look like a bill but are not linked yet — offered to tick (suggest, you confirm).
+  function possibleMatches(b){
+    var mine = {}; (b.match || []).forEach(function(k){ mine[k] = 1; });
+    var words = txKey(b.provider + ' ' + b.name).split(' ').filter(function(w){ return w.length >= 4; });
+    if (!words.length) return [];
+    var groups = {};
+    data.tx.forEach(function(t){
+      if (!(t.m > 0)) return;
+      var k = txKey(t.n); if (!k || mine[k]) return;
+      if (!words.some(function(w){ return k.indexOf(w) >= 0; })) return;
+      (groups[k] = groups[k] || []).push(t);
+    });
+    return Object.keys(groups).map(function(k){ var g = groups[k]; return { key: k, name: g[g.length - 1].n, count: g.length, total: sum(g, function(t){ return t.m; }) }; });
+  }
+  // Exact-name bills link themselves; a linked payment near a bill's due date marks it paid and moves it on.
+  function autoLink(){
+    data.bills.forEach(function(b){
+      if ((b.match || []).length) return;
+      var k = txKey(b.provider || b.name);
+      if (k && data.tx.some(function(t){ return txKey(t.n) === k; })) b.match = [k];
+    });
+    data.bills.forEach(function(b){
+      if (!b.due || b.monthly === false) return;
+      var paid = linkedTx(b).filter(function(t){ var g = daysBetween(day(b.due), day(t.d)); return g >= -12 && g <= 10 && (!b.lastPaid || t.d > b.lastPaid); });
+      if (!paid.length) return;
+      var t = paid[paid.length - 1];
+      b.lastPaid = t.d; b.paidLog = (b.paidLog || []).concat([t.d]).slice(-36);
+      b.amount = Math.round(t.m * 100) / 100;
+      b.due = addMonth(b.due); delete b.paid;
+    });
+  }
+
+  // One net-worth point per day, and each account's own daily balance (≈400 days) for its charts.
   function snapshot(){
     var t = totals(), d = isoDay(today());
-    // Each account keeps its own daily balance too (≈400 days), for the chart inside its opened card.
     data.accounts.forEach(function(a){
       a.hist = Array.isArray(a.hist) ? a.hist : [];
       var l = a.hist[a.hist.length - 1];
@@ -450,29 +628,31 @@
     if (last && last.d === d) last.v = Math.round(t.net); else data.history.push({ d: d, v: Math.round(t.net) });
     if (data.history.length > 3660) data.history.splice(0, data.history.length - 3660);
   }
+
+  // ── Talking to the app ───────────────────────────────────────────────────
   function syncBanks(){
     if (!plaidOn || checking) return;
     checking = true; render();
-    // Live balances on every check (questions deck: "Live, every open").
+    // Live balances on every check (round 1: "Live, every open"), then new purchases since the bookmark.
     window.youcoded.plaid({ op: 'accounts', live: true }).then(function(r){
-      checking = false;
-      if (!r || !r.ok) {
-        // A page not yet allowed, with no keys, or in a window with no bank channel (no answer at all) is not a
-        // failure worth a warning: the Add menu says how to connect.
+      if (!r || typeof r.ok !== 'boolean' || !r.ok) {
+        checking = false;
         bankNote = !r || typeof r.ok !== 'boolean' || r.code === 'NOT_APPROVED' || r.code === 'NO_KEYS' || r.code === 'UNSUPPORTED' ? null : r.message || 'The banks could not be checked.';
-        render(); return;
+        render(); return null;
       }
       bankNote = null;
-      // Merged even with no banks: an empty answer means none are connected (all removed, or practice switched to
-      // real), so accounts that came from a bank must go too. A bank that failed keeps its last numbers (mergePlaid).
       mergePlaid(r.items);
+      return window.youcoded.plaid({ op: 'transactions', cursors: data.txCursor });
+    }).then(function(r){
+      if (r === null) return;
+      checking = false;
+      if (r && r.ok) mergeTx(r.items);
+      autoLink();
       if (data.accounts.length) snapshot();
       data.checkedAt = today().toISOString();
       save(); render();
-    });
+    }, function(){ checking = false; render(); });
   }
-  // Each sign-in is numbered: starting a new one (or cancelling) makes the old one's late answer meaningless.
-  var linkSeq = 0;
   function connectBank(){
     if (!plaidOn) return;
     var mine = ++linkSeq;
@@ -484,10 +664,7 @@
       render(); syncBanks();
     });
   }
-  function cancelLink(){
-    linkSeq++; connecting = false; render();
-    window.youcoded.plaid({ op: 'cancel' });
-  }
+  function cancelLink(){ linkSeq++; connecting = false; render(); window.youcoded.plaid({ op: 'cancel' }); }
   function reconnectBank(itemId){
     if (!plaidOn) return;
     var mine = ++linkSeq;
@@ -503,17 +680,30 @@
     window.youcoded.plaid({ op: 'remove', itemId: itemId }).then(function(r){
       removing = null;
       if (!r || !r.ok) { bankNote = (r && r.message) || 'The bank could not be removed.'; render(); return; }
-      data.accounts = data.accounts.filter(function(a){ return a.itemId !== itemId; });
-      delete data.banks[itemId];
+      var gone = {}; data.accounts.forEach(function(a){ if (a.itemId === itemId) gone[a.id] = 1; });
+      data.accounts = data.accounts.filter(function(a){ return !gone[a.id]; });
+      data.tx = data.tx.filter(function(t){ return !gone[t.a]; });
+      delete data.banks[itemId]; delete data.txCursor[itemId];
       save(); render();
     });
   }
 
+  // ── Bills ────────────────────────────────────────────────────────────────
   function allBills(){
     var out = [];
-    data.accounts.forEach(function(a){ if (a.payment && a.payment.amount > 0) out.push({ id: a.id, account: a, institution: a.institution, site: a.site, name: fullName(a), sub: a.kind === 'credit' ? 'min. payment' : '', amount: a.payment.amount, due: day(a.payment.due), paid: a.payment.paid ? day(a.payment.paid) : null, overdue: a.payment.overdue, mine: a.source !== 'plaid' || !!a.payment.manual }); });
-    data.bills.forEach(function(b){ out.push({ id: b.id, bill: b, institution: b.provider, site: b.site, name: b.name, sub: b.sub || '', amount: b.amount, due: day(b.due), paid: b.paid ? day(b.paid) : null, mine: true }); });
-    return out.sort(function(x, y){ return (x.paid ? 1 : 0) - (y.paid ? 1 : 0) || x.due - y.due; });
+    data.accounts.forEach(function(a){
+      if (!a.payment || !(a.payment.amount > 0)) return;
+      out.push({ id: a.id, account: a, institution: a.institution, site: a.site, name: fullName(a),
+        sub: a.kind === 'credit' ? 'min. payment' : a.kind === 'bnpl' ? (a.left ? a.left + ' left' : '') : '',
+        cat: a.kind === 'credit' ? 'Credit cards' : a.kind === 'bnpl' ? 'Pay-later plans' : 'Loans',
+        amount: a.payment.amount, due: day(a.payment.due), paid: a.payment.paid ? day(a.payment.paid) : null, overdue: a.payment.overdue,
+        mine: a.source !== 'plaid' || !!a.payment.manual });
+    });
+    data.bills.forEach(function(b){
+      out.push({ id: b.id, bill: b, institution: b.provider, site: b.site, name: b.name, sub: b.sub || '', cat: b.category || 'Other',
+        amount: b.amount, due: day(b.due), paid: b.paid ? day(b.paid) : null, mine: true });
+    });
+    return out;
   }
   function billState(b){
     if (b.paid) return { cls: 'paid', icon: I.check, text: 'Paid ' + short(b.paid) };
@@ -539,16 +729,30 @@
     allBills().forEach(function(b){ if (!b.paid && b.due <= end) due += b.amount; if (!b.paid && daysBetween(t, b.due) <= 7) week++; });
     return { have: have, owe: owe, net: have - owe, cash: cash - due, dueThisMonth: due, dueThisWeek: week };
   }
+  // Paying a repeating bill moves it on; a pay-later plan counts down its payments; a one-off is marked paid.
+  function markPaid(id){
+    var t = isoDay(today());
+    var b = data.bills.filter(function(x){ return x.id === id; })[0];
+    var a = b ? null : accountById(id);
+    var target = b || (a && a.payment);
+    if (!target) return;
+    target.paidLog = (Array.isArray(target.paidLog) ? target.paidLog : []).concat([t]).slice(-36);
+    if (a && a.kind === 'bnpl') {
+      a.left = Math.max(0, (a.left || 1) - 1);
+      a.balance = Math.round(target.amount * a.left * 100) / 100; a.updatedAt = today().toISOString();
+      if (a.left === 0) { a.payment = null; a.note = 'Paid off'; } else { target.lastPaid = t; target.due = addEvery(target.due, target.every || 'month'); }
+    } else if (target.monthly !== false) { target.lastPaid = t; target.due = addMonth(target.due); delete target.paid; }
+    else target.paid = t;
+    snapshot(); save(); render();
+  }
 
-  // One tile per account or bank, however many things are wrong with it.
+  // ── Needs you ────────────────────────────────────────────────────────────
   function alerts(){
     var by = {}, order = [];
     function add(id, x, name, lvl, fact, action){
       if (!by[id]) { by[id] = { x: x, name: name, lvl: lvl, facts: [], action: null }; order.push(id); }
       var r = by[id]; r.facts.push(fact); if (lvl === 'bad') r.lvl = 'bad'; if (action) r.action = action;
     }
-    // A bank that needs signing in again folds into its account's tile (one card, one row), or stands alone if
-    // it has no accounts on the page yet.
     Object.keys(data.banks).forEach(function(itemId){
       var b = data.banks[itemId];
       if (b.ok || !b.error) return;
@@ -571,6 +775,7 @@
     return order.map(function(id){ return by[id]; }).sort(function(x, y){ return (x.lvl === 'bad' ? 0 : 1) - (y.lvl === 'bad' ? 0 : 1); });
   }
 
+  // ── Page ─────────────────────────────────────────────────────────────────
   function render(){
     var t = totals(), al = alerts(), h = '';
     var bad = al.filter(function(a){ return a.lvl === 'bad'; }).length;
@@ -582,17 +787,14 @@
     if (data.accounts.length || data.bills.length) h += '<button class="pill" data-jump="bills"><span class="pill-ic">' + I.cal + '</span>' + t.dueThisWeek + ' due this week</button>';
     h += '<span class="spacer"></span>';
     if (plaidOn || data.checkedAt) h += '<span class="small muted">' + (connecting ? 'Finish signing in to your bank in your browser…' : checking ? 'Checking your banks…' : data.checkedAt ? 'Checked ' + ago(data.checkedAt) : '') + '</span>';
-    // While a bank sign-in is open in the browser: a way out, for a tab that was closed or a bank that got stuck.
     if (connecting) h += '<button class="btn" data-cancel-link>Cancel</button>';
     else if (plaidOn) h += '<button class="btn" id="check"' + (checking ? ' disabled' : '') + '>' + I.refresh + 'Check now</button>';
     h += '<div style="position:relative"><button class="btn" id="add" aria-haspopup="menu" aria-expanded="' + menuOpen + '">' + I.plus + 'Add</button>';
     if (menuOpen) {
       h += '<div class="menu" role="menu">';
       h += '<button role="menuitem" data-add="bank"' + (plaidOn ? '' : ' disabled') + '>Connect a bank<span>' + (plaidOn ? 'Sign in through Plaid in your browser' : 'Needs YouCoded on your computer') + '</span></button>';
-      h += '<button role="menuitem" data-add="hand">Add an account by hand<span>For accounts that can’t connect</span></button>';
-      h += '<button role="menuitem" data-add="bill">Add a bill<span>Insurance, phone, anything with a due date</span></button>';
-      // Some banks' own login pages work in one browser and not another (American Express failed in Chrome and
-      // worked in Firefox), so where bank sign-ins open is a remembered choice.
+      h += '<button role="menuitem" data-add="hand">Add an account by hand<span>Cards, loans, pay-later plans, things you own</span></button>';
+      h += '<button role="menuitem" data-add="bill">Add a bill<span>Insurance, phone, subscriptions…</span></button>';
       var br = data.settings.browser || 'default';
       h += '<div class="menu-pick" role="group" aria-label="Open bank sign-ins in"><span>Bank sign-ins open in</span><div class="ranges">' + [['default','Default'],['firefox','Firefox'],['chrome','Chrome']].map(function(o){ return '<button class="rng' + (br === o[0] ? ' on' : '') + '" data-browser="' + o[0] + '" aria-pressed="' + (br === o[0]) + '">' + o[1] + '</button>'; }).join('') + '</div></div></div>';
     }
@@ -608,55 +810,30 @@
       document.getElementById('root').innerHTML = h; wire(); return;
     }
 
-    var hist = data.history, back30 = null;
-    for (var hi = hist.length - 1; hi >= 0; hi--) { if (daysBetween(day(hist[hi].d), today()) >= 30) { back30 = hist[hi].v; break; } }
-    h += '<div class="hero"><div class="card nw"><div class="nw-head"><div><div class="label">Net worth</div><div class="big num">' + money(t.net, true) + '</div>';
-    if (back30 != null) { var ch = t.net - back30; h += '<span class="delta num">' + (ch >= 0 ? I.up : I.down) + (ch >= 0 ? 'Up ' : 'Down ') + money(Math.abs(ch), true) + ' in 30 days</span>'; }
-    h += '</div><div class="ranges" role="group" aria-label="Chart range">';
-    [['1w','1W'],['1m','1M'],['3m','3M'],['6m','6M'],['1y','1Y'],['all','All']].forEach(function(r){ h += '<button class="rng' + (range === r[0] ? ' on' : '') + '" data-range="' + r[0] + '" aria-pressed="' + (range === r[0]) + '">' + r[1] + '</button>'; });
-    h += '</div></div><div class="chart" id="chart"></div><div class="small muted num" id="chart-sum"></div></div>';
-    h += '<div class="stats">';
-    h += stat(I.wallet, 'Cash available', money(t.cash, true), 'After ' + money(t.dueThisMonth, true) + ' still due this month', 'have');
-    h += stat(I.owe, 'Total owed', money(-t.owe, true), 'Cards and loans', 'owe');
-    h += stat(I.have, 'You have', money(t.have, true), 'Cash, savings and investments', 'have');
-    h += '</div></div>';
+    h += heroCard(t);
 
     if (al.length) {
       h += '<div class="card" id="needs"><div class="card-head"><h2>Needs you</h2></div><div class="needs">';
       al.forEach(function(a){
-        var btn = !a.action ? outBtn(a.x, 'pay')
+        var btn = !a.action ? ''
           : a.action.kind === 'edit' ? '<button class="btn sm" data-edit="' + esc(a.action.id) + '">' + I.pen + a.action.label + '</button>'
           : a.action.kind === 'reconnect' ? '<button class="btn sm" data-reconnect="' + esc(a.action.id) + '"' + (connecting ? ' disabled' : '') + '>' + a.action.label + '</button>'
           : '<button class="btn sm" data-check' + (checking ? ' disabled' : '') + '>' + a.action.label + '</button>';
-        var target = a.x && a.x.id ? (String(a.x.id).indexOf('bank:') === 0 ? '' : a.x.id) : '';
-        h += '<div class="tile need tap ' + a.lvl + '" role="button" tabindex="0" ' + (target ? 'data-focus="' + esc(target) + '"' : 'data-jump="banks"') + ' title="Show this account">' + mark(a.x.institution) + '<div class="txt"><div class="who">' + esc(a.name) + '</div><div class="facts">' + a.facts.join(' · ') + '</div></div>' + btn + '</div>';
+        var target = a.x && a.x.id && String(a.x.id).indexOf('bank:') !== 0 ? a.x.id : '';
+        h += '<div class="tile need tap ' + a.lvl + '" role="button" tabindex="0" ' + (target ? 'data-focus="' + esc(target) + '"' : 'data-jump="banks"') + ' title="Show this">' + mark(a.x.institution) + '<div class="txt"><div class="who">' + esc(a.name) + '</div><div class="facts">' + a.facts.join(' · ') + '</div></div>' + btn + '</div>';
       });
       h += '</div></div>';
     }
 
     h += '<div class="cols"><div class="card" id="have"><div class="card-head"><h2>What you have</h2><span class="total num">' + money(t.have) + '</span></div>';
-    var haveSecs = sec('checking', 'Checking') + sec('savings', 'Savings') + sec('investment', 'Investments');
+    var haveSecs = ['checking', 'savings', 'investment', 'asset'].map(sec).join('');
     h += haveSecs || '<div class="empty">Nothing here yet.</div>';
     h += '</div><div class="card" id="owe"><div class="card-head"><h2>What you owe</h2><span class="total num">' + money(-t.owe) + '</span></div>';
-    var oweSecs = sec('credit', 'Credit cards') + sec('loan', 'Loans');
+    var oweSecs = ['credit', 'loan', 'bnpl'].map(sec).join('');
     h += oweSecs || '<div class="empty">Nothing here yet.</div>';
     h += '</div></div>';
 
-    // Due date first by default, so anything late sits at the top and next month's at the bottom; or biggest first.
-    // Paid ones always sink to the end.
-    var bills = allBills().slice().sort(function(x, y){
-      return (x.paid ? 1 : 0) - (y.paid ? 1 : 0) || (billSort === 'amount' ? y.amount - x.amount : x.due - y.due);
-    });
-    h += '<div class="card" id="bills"><div class="card-head"><h2>Bills</h2><span class="total num">' + money(t.dueThisMonth) + ' <span class="small muted">still due this month</span></span>';
-    h += '<div class="ranges" role="group" aria-label="Sort bills">' + [['due','By date'],['amount','By amount']].map(function(o){ return '<button class="rng' + (billSort === o[0] ? ' on' : '') + '" data-bill-sort="' + o[0] + '" aria-pressed="' + (billSort === o[0]) + '">' + o[1] + '</button>'; }).join('') + '</div></div><div class="bills">';
-    bills.forEach(function(b){
-      var s = billState(b);
-      var markPaid = b.mine && !b.paid ? '<button class="btn sm" data-paid="' + esc(b.id) + '">Mark paid</button>' : '';
-      var bo = openId === 'bill:' + b.id;
-      h += '<div class="tile bill tap ' + s.cls + (bo ? ' open' : '') + '" role="button" tabindex="0" aria-expanded="' + bo + '" data-open="bill:' + esc(b.id) + '">' + mark(b.institution) + '<div class="name">' + esc(b.name) + (b.sub ? '<small>' + esc(b.sub) + '</small>' : '') + '</div><span class="when">' + s.icon + esc(s.text) + '</span><span class="amt num">' + money(b.amount) + '</span>' + markPaid + outBtn(b, 'pay') + I.chev + (bo ? billDetail(b) : '') + '</div>';
-    });
-    if (!bills.length) h += '<div class="empty">No bills yet. Add one, or connect a card or loan and its payments appear here.</div>';
-    h += '</div></div>';
+    h += billsCard(t);
 
     var bankIds = Object.keys(data.banks);
     if (bankIds.length) {
@@ -676,248 +853,103 @@
     drawChart(); wire();
   }
 
-  function stat(icon, label, v, sub, jump){ return '<div class="tile stat tap" role="button" tabindex="0" data-jump="' + jump + '" title="Show these accounts"><span class="badge">' + icon + '</span><div><div class="label">' + label + '</div><div class="v num">' + v + '</div><div class="sub">' + sub + '</div></div>' + I.chev.replace('class="chev"', 'class="chev" style="transform:rotate(-90deg)"') + '</div>'; }
-
-  function sec(k, label){
-    var list = data.accounts.filter(function(a){ return a.kind === k; });
-    if (!list.length) return '';
-    var sum = list.reduce(function(s, a){ return s + a.balance; }, 0);
-    // Owed money reads as a negative in brackets, so the two columns add up to net worth at a glance.
-    var signed = (k === 'credit' || k === 'loan') ? -sum : sum;
-    var h = '<div class="sec"><div class="sec-head"><span class="label">' + label + ' <span style="opacity:.6">' + list.length + '</span></span><span class="small num muted">' + money(signed) + '</span></div>';
-    if (k === 'credit') h += '<div class="legend">The notch on each bar is ' + S.warnPct + '%. Past it a bar turns amber, which can lower your credit score; past ' + S.alertPct + '% it turns red.</div>';
-    h += '<div class="list">';
-    list.forEach(function(a){ h += row(a); });
+  // ── The top chart (round 3, Q-charts) ────────────────────────────────────
+  var MODES = [['net', 'Net worth'], ['account', 'One account'], ['spend', 'Spending'], ['bills', 'Bills & subscriptions'], ['debt', 'Debt']];
+  var RANGES = [['1w', '1W', 7], ['1m', '1M', 31], ['3m', '3M', 92], ['6m', '6M', 183], ['1y', '1Y', 365], ['all', 'All', 1e9]];
+  function rangeDays(){ return RANGES.filter(function(r){ return r[0] === range; })[0][2]; }
+  function heroCard(t){
+    var h = '<div class="hero"><div class="card nw"><div class="modes" role="tablist" aria-label="What the chart shows">';
+    MODES.forEach(function(m){ h += '<button class="mode' + (chartMode === m[0] ? ' on' : '') + '" role="tab" aria-selected="' + (chartMode === m[0]) + '" data-mode="' + m[0] + '">' + m[1] + '</button>'; });
+    h += '</div><div class="nw-head"><div>' + headline(t) + '</div><div class="ranges" role="group" aria-label="Chart range">';
+    RANGES.forEach(function(r){ h += '<button class="rng' + (range === r[0] ? ' on' : '') + '" data-range="' + r[0] + '" aria-pressed="' + (range === r[0]) + '">' + r[1] + '</button>'; });
+    h += '</div></div><div class="chart" id="chart"></div><div class="legend-row" id="chart-legend"></div><div class="small muted num" id="chart-sum"></div></div>';
+    h += '<div class="stats">';
+    h += stat(I.wallet, 'Cash available', money(t.cash, true), 'After ' + money(t.dueThisMonth, true) + ' still due this month', 'have');
+    h += stat(I.owe, 'Total owed', money(-t.owe, true), 'Cards, loans and plans', 'owe');
+    h += stat(I.have, 'You have', money(t.have, true), 'Cash, savings, investments, things you own', 'have');
     return h + '</div></div>';
   }
-
-  function row(a){
-    var stale = isStale(a);
-    var isOpen = openId === a.id || editing === a.id;
-    var h = '<div class="tile acct tap' + (stale ? ' stale' : '') + (isOpen ? ' open' : '') + '" role="button" tabindex="0" aria-expanded="' + isOpen + '" data-open="' + esc(a.id) + '">' + mark(a.institution);
-    // Bank on top, small; the account's own name under it (Destin, round 3).
-    // Two lines, side by side: bank over account name on the left, balance over status on the right.
-    var meta = [a.apr ? a.apr + '% interest' : '', a.note ? esc(a.note) : ''].filter(Boolean).join(' · ');
-    h += '<div class="who"><span class="inst">' + esc(a.institution) + (meta ? ' · ' + meta : '') + '</span><div class="name" title="' + esc(fullName(a)) + '">' + esc(a.name) + '</div></div>';
-    h += '<div class="right"><div class="bal num">' + money(isDebt(a) ? -a.balance : a.balance) + '</div><div class="side">';
-    var when = a.updatedAt ? ago(a.updatedAt) : 'never';
-    if (stale) h += '<span class="flag">' + I.warn + (a.source === 'plaid' ? 'Out of date · ' : 'Needs update · ') + when + '</span>';
-    else h += '<span class="src" title="' + (a.source === 'plaid' ? 'Connected through Plaid' : 'Entered by you') + '">' + (a.source === 'plaid' ? I.link + 'Connected' : I.pen + when) + '</span>';
-    if (a.source !== 'plaid' && editing !== a.id) h += '<button class="btn sm" data-edit="' + esc(a.id) + '" aria-label="Update ' + esc(fullName(a)) + '">Update</button>';
-    h += outBtn(a, 'see this account') + I.chev;
-    h += '</div></div>';
-    if (a.kind === 'credit' && a.limit) {
-      var p = a.balance / a.limit * 100, lvl = p >= S.alertPct ? 'bad' : p >= S.warnPct ? 'warn' : '';
-      h += '<div class="meter ' + lvl + '"><div class="bar" title="' + Math.round(p) + '% of the limit used"><i style="width:' + Math.max(0, Math.min(100, p)) + '%"></i><span class="tick" style="left:' + S.warnPct + '%"></span></div>';
-      h += '<span class="pct num">' + (lvl ? (lvl === 'bad' ? I.stop : I.warn) : '') + Math.round(p) + '% used · ' + money(Math.max(0, a.limit - a.balance), true) + ' left</span></div>';
+  function headline(t){
+    var thisMonth = isoDay(today()).slice(0, 7);
+    if (chartMode === 'account') {
+      var list = data.accounts;
+      if (!chartAccount || !accountById(chartAccount)) chartAccount = list.length ? list[0].id : null;
+      var a = accountById(chartAccount);
+      var sel = '<select class="pick" data-chart-account aria-label="Account">' + list.map(function(x){ return '<option value="' + esc(x.id) + '"' + (x.id === chartAccount ? ' selected' : '') + '>' + esc(fullName(x)) + '</option>'; }).join('') + '</select>';
+      return sel + (a ? '<div class="big num">' + money(isDebt(a) ? -a.balance : a.balance, true) + '</div>' : '');
     }
-    if (isOpen) h += accountDetail(a);
-    if (editing === a.id) {
-      h += '<div class="edit"><input class="num" id="edit-val" inputmode="decimal" value="' + a.balance.toFixed(2) + '" aria-label="New balance"><button class="btn" data-cancel>Cancel</button><button class="btn primary" data-save="' + esc(a.id) + '">Save</button>';
-      h += '<button class="btn danger" data-delete="' + esc(a.id) + '">Delete</button><span class="hint">Or tell YouCoded in chat: “' + esc(a.institution) + ' is $…”</span></div>';
+    if (chartMode === 'spend') {
+      var s = sum(data.tx.filter(function(x){ return isSpending(x) && x.d.slice(0, 7) === thisMonth; }), function(x){ return x.m; });
+      return '<div class="label">Spent this month</div><div class="big num">' + money(s, true) + '</div>';
     }
-    return h + '</div>';
-  }
-
-  // ── Opened cards: what the page can work out, not what the card already says ──
-  // Months to pay a balance off at a fixed payment, and the interest on the way; null when the payment never
-  // gets ahead of the interest (or there is no rate to work with).
-  function payoff(balance, apr, pay){
-    if (!(balance > 0) || !(pay > 0)) return null;
-    var r = (apr || 0) / 100 / 12, b = balance, months = 0, interest = 0;
-    if (r > 0 && pay <= b * r) return { never: true };
-    while (b > 0.005 && months < 600) { var i = b * r; interest += i; b = b + i - pay; months++; }
-    return months >= 600 ? { never: true } : { months: months, interest: interest };
-  }
-  function monthsFrom(n){ var d = today(); d.setMonth(d.getMonth() + n); return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }); }
-  function monthsText(n){ var y = Math.floor(n / 12), m = n % 12; return (y ? y + (y === 1 ? ' year' : ' years') : '') + (y && m ? ' ' : '') + (m || !y ? m + (m === 1 ? ' month' : ' months') : ''); }
-  // One fact worth opening the card for: a big figure and a sentence saying what it means.
-  function insight(figure, words, tone){ return '<div class="ins' + (tone ? ' ' + tone : '') + '"><b class="num">' + figure + '</b><span>' + words + '</span></div>'; }
-  // The account's own balance, day by day, as a small line.
-  function spark(hist){
-    if (!hist || hist.length < 2) return '<div class="spark empty">Its own chart starts here and adds a point each day the page checks.</div>';
-    var pts = hist.slice(-90), vs = pts.map(function(p){ return p.v; });
-    var lo = Math.min.apply(null, vs), hi = Math.max.apply(null, vs); if (hi === lo) { hi += 1; lo -= 1; }
-    var W = 300, H = 44, x = function(i){ return (W * i / (pts.length - 1)).toFixed(1); }, y = function(v){ return (4 + (H - 8) * (1 - (v - lo) / (hi - lo))).toFixed(1); };
-    var d = pts.map(function(p, i){ return (i ? 'L' : 'M') + x(i) + ' ' + y(p.v); }).join('');
-    return '<div class="spark"><svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" role="img" aria-label="Balance over the last ' + pts.length + ' days"><path d="' + d + 'L' + W + ' ' + H + 'L0 ' + H + 'Z" class="area"/><path d="' + d + '" class="ln"/></svg><div class="spark-x"><span>' + short(day(pts[0].d)) + '</span><span>' + short(day(pts[pts.length - 1].d)) + '</span></div></div>';
-  }
-  function change30(hist, debt){
-    if (!hist || hist.length < 2) return '';
-    var now = hist[hist.length - 1], then = hist[0];
-    for (var i = hist.length - 1; i >= 0; i--) { if (daysBetween(day(hist[i].d), today()) >= 30) { then = hist[i]; break; } }
-    var diff = now.v - then.v, days = daysBetween(day(then.d), day(now.d));
-    if (!days) return '';
-    // For money owed, going down is the good direction.
-    var good = debt ? diff < 0 : diff > 0;
-    return insight((diff >= 0 ? '+' : '−') + money(Math.abs(diff), true), (debt ? (diff <= 0 ? 'less owed' : 'more owed') : (diff >= 0 ? 'more' : 'less')) + ' than ' + days + ' days ago', diff === 0 ? '' : good ? 'up' : 'down');
-  }
-  function accountDetail(a){
-    var t = totals(), h = '<div class="detail">', ins = '';
-    var debt = isDebt(a);
-    if (a.kind === 'credit') {
-      if (a.apr && a.balance > 0) ins += insight('≈' + money(a.balance * a.apr / 1200), 'interest a month if this balance is carried (' + a.apr + '% a year)', 'warnish');
-      if (a.limit) {
-        var under = a.balance - a.limit * S.warnPct / 100;
-        ins += under > 0
-          ? insight(money(Math.ceil(under), true), 'to pay now to get under ' + S.warnPct + '% of the limit, where it stops weighing on your credit score')
-          : insight(money(Math.floor(-under), true), 'you can spend before this card passes ' + S.warnPct + '% of its limit');
-      }
-      if (a.payment && a.payment.amount > 0 && a.balance > 0) {
-        var pm = payoff(a.balance, a.apr, a.payment.amount);
-        if (pm && pm.never) ins += insight('Never', 'paid off at the ' + money(a.payment.amount) + ' minimum: it barely covers the interest', 'down');
-        else if (pm) ins += insight(monthsText(pm.months), 'to clear it paying only the ' + money(a.payment.amount) + ' minimum' + (pm.interest > 1 ? ', costing about ' + money(pm.interest, true) + ' in interest' : ''));
-      }
-    } else if (a.kind === 'loan') {
-      var pay = a.payment && a.payment.amount;
-      if (pay && a.balance > 0) {
-        var p0 = payoff(a.balance, a.apr, pay), p1 = payoff(a.balance, a.apr, pay + 50);
-        if (p0 && p0.never) ins += insight('Never', 'paid off at ' + money(pay) + ' a month: that is less than the interest', 'down');
-        else if (p0) {
-          ins += insight(monthsFrom(p0.months), 'paid off at ' + money(pay) + ' a month (' + monthsText(p0.months) + ')' + (p0.interest > 1 ? ', with about ' + money(p0.interest, true) + ' of interest still to come' : ''));
-          if (p1 && !p1.never && p0.months - p1.months > 0) ins += insight(monthsText(p0.months - p1.months) + ' sooner', 'with $50 more a month' + (p0.interest - p1.interest > 1 ? ', saving about ' + money(p0.interest - p1.interest, true) + ' in interest' : ''), 'up');
-        }
-      } else if (a.apr && a.balance > 0) ins += insight('≈' + money(a.balance * a.apr / 1200), 'of interest a month at ' + a.apr + '%. Add the monthly payment to see when it is paid off.');
-      else if (a.balance > 0) ins += insight('No due date yet', a.source === 'plaid' ? 'your bank does not share payment details for this kind of loan. Add the payment and due date below, once.' : 'add the monthly payment and due date below to track it and see when it is paid off.');
-    } else if ((a.kind === 'checking' || a.kind === 'savings') && t.dueThisMonth > 0) {
-      ins += insight((a.balance / t.dueThisMonth).toFixed(1) + '×', 'what is still due this month (' + money(t.dueThisMonth, true) + ')');
+    if (chartMode === 'bills') {
+      var bs = sum(data.bills, function(b){ return sum(linkedTx(b).filter(function(x){ return x.d.slice(0, 7) === thisMonth; }), function(x){ return x.m; }); });
+      var monthly = sum(data.bills.filter(function(b){ return b.monthly !== false; }), function(b){ return b.amount; });
+      return '<div class="label">Bills paid this month</div><div class="big num">' + money(bs, true) + '</div><span class="delta num">' + money(monthly, true) + ' a month in repeating bills</span>';
     }
-    var share = debt ? (t.owe ? a.balance / t.owe : 0) : (t.have ? a.balance / t.have : 0);
-    if (share > 0 && share < 1) ins += insight(Math.round(share * 100) + '%', 'of everything you ' + (debt ? 'owe' : 'have'));
-    ins += change30(a.hist, debt);
-    h += '<div class="ins-grid">' + ins + '</div>' + spark(a.hist);
-    h += '<div class="acts"><span class="hint">' + (a.source === 'plaid' ? 'From ' + esc(a.institution) + ' through Plaid' : 'Entered by you') + ' · updated ' + (a.updatedAt ? ago(a.updatedAt) : 'never') + (a.available != null && !debt ? ' · ' + money(a.available) + ' available' : '') + '</span>';
-    if (payEdit === a.id) {
-      var pp = a.payment || {};
-      h += '<input id="pay-amt" class="num" inputmode="decimal" placeholder="Monthly payment" value="' + (pp.amount || '') + '" aria-label="Monthly payment">';
-      h += '<input id="pay-due" type="date" value="' + esc(pp.due || '') + '" aria-label="Next due date">';
-      h += '<input id="pay-apr" class="num" inputmode="decimal" placeholder="Interest %" value="' + (a.apr || '') + '" aria-label="Interest rate">';
-      h += '<button class="btn sm" data-pay-cancel>Cancel</button><button class="btn sm primary" data-pay-save="' + esc(a.id) + '">Save</button>';
-    } else if (limitEdit === a.id) {
-      h += '<input id="limit-val" class="num" inputmode="decimal" value="' + (a.limit || '') + '" aria-label="Credit limit"><button class="btn sm" data-limit-cancel>Cancel</button><button class="btn sm primary" data-limit-save="' + esc(a.id) + '">Save limit</button>';
-    } else {
-      if (a.source !== 'plaid' && editing !== a.id) h += '<button class="btn sm" data-edit="' + esc(a.id) + '">' + I.pen + 'Update balance</button>';
-      if (a.kind === 'credit') h += '<button class="btn sm" data-limit="' + esc(a.id) + '">' + (a.limit ? 'Change limit' : 'Set limit') + '</button>';
-      // Where the bank shares no payment (auto loans, any typed-in loan), or it was entered by hand: add or change it.
-      if ((a.kind === 'loan' || a.kind === 'credit') && (!a.payment || a.payment.manual || a.source !== 'plaid')) h += '<button class="btn sm" data-pay="' + esc(a.id) + '">' + (a.payment ? 'Change payment' : 'Add payment & due date') + '</button>';
-      var u = siteOf(a); if (u) h += '<a class="btn sm" href="' + esc(u) + '" target="_blank" rel="noopener">' + I.out + 'Open ' + esc(a.institution) + '</a>';
-      if (a.source === 'plaid') h += '<button class="btn sm" data-jump="banks">Manage bank</button>';
-    }
-    return h + '</div></div>';
-  }
-  function billDetail(b){
-    var h = '<div class="detail">', ins = '';
-    var monthly = b.bill ? b.bill.monthly !== false : true;
-    if (monthly) ins += insight(money(b.amount * 12, true), 'a year at ' + money(b.amount) + ' a month');
-    if (monthly && !b.paid) {
-      var next = [b.due], iso = isoDay(b.due);
-      for (var k = 0; k < 2; k++) { iso = addMonth(iso); next.push(day(iso)); }
-      ins += insight(next.map(short).join(' · '), 'the next three due dates');
-    }
-    var log = (b.bill && b.bill.paidLog) || (b.account && b.account.payment && b.account.payment.paidLog) || [];
-    if (log.length) ins += insight(log.length + (log.length === 1 ? ' time' : ' times'), 'marked paid here, most recently ' + short(day(log[log.length - 1])));
-    else if (!b.mine) ins += insight('Automatic', 'your bank updates this when you pay');
-    h += '<div class="ins-grid">' + ins + '</div>';
-    h += '<div class="acts">';
-    if (billEdit === b.id && b.bill) {
-      h += '<input id="bill-amt" class="num" inputmode="decimal" value="' + b.amount + '" aria-label="Amount"><input id="bill-due" type="date" value="' + esc(b.bill.due) + '" aria-label="Due date">';
-      h += '<button class="btn sm" data-bill-cancel>Cancel</button><button class="btn sm primary" data-bill-save="' + esc(b.id) + '">Save</button>';
-    } else {
-      if (b.mine && !b.paid) h += '<button class="btn sm" data-paid="' + esc(b.id) + '">' + I.check + 'Mark paid</button>';
-      if (b.bill) h += '<button class="btn sm" data-bill-edit="' + esc(b.id) + '">' + I.pen + 'Edit</button><button class="btn sm danger" data-bill-delete="' + esc(b.id) + '">Delete</button>';
-      var u = siteOf(b); if (u) h += '<a class="btn sm" href="' + esc(u) + '" target="_blank" rel="noopener">' + I.out + 'Pay at ' + esc(b.institution) + '</a>';
-    }
-    return h + '</div></div>';
-  }
-
-  // The add-by-hand forms: an account, or a bill (insurance, phone).
-  function formCard(){
-    var f = form, h = '<div class="card form-card"><div class="card-head"><h2>' + (f.type === 'bill' ? 'Add a bill' : 'Add an account by hand') + '</h2></div><div class="grid">';
-    function field(id, label, value, attrs){ return '<label class="fld"><span>' + label + '</span><input id="f-' + id + '" value="' + esc(value || '') + '" ' + (attrs || '') + '></label>'; }
-    if (f.type === 'bill') {
-      h += field('name', 'What it is', '', 'placeholder="Car insurance"');
-      h += field('provider', 'Company', '', 'placeholder="Liberty Mutual" list="f-companies"');
-      h += field('amount', 'Amount', '', 'inputmode="decimal" placeholder="138.00"');
-      h += field('due', 'Next due date', isoDay(today()), 'type="date"');
-      h += '<label class="fld chk"><input id="f-monthly" type="checkbox" checked><span>Repeats every month</span></label>';
-    } else {
-      h += field('institution', 'Company', '', 'placeholder="Earnest" list="f-companies"');
-      h += field('name', 'Account name', '', 'placeholder="Student loan"');
-      h += '<label class="fld"><span>Kind</span><select id="f-kind"><option value="checking">Checking</option><option value="savings">Savings</option><option value="investment">Investments</option><option value="credit">Credit card</option><option value="loan" selected>Loan</option></select></label>';
-      h += field('balance', 'Balance (what you have, or what you owe)', '', 'inputmode="decimal" placeholder="22,410.00"');
-      h += field('limit', 'Credit limit (cards only)', '', 'inputmode="decimal"');
-      h += field('apr', 'Interest rate %', '', 'inputmode="decimal"');
-      h += field('payment', 'Monthly payment', '', 'inputmode="decimal"');
-      h += field('due', 'Next payment due', '', 'type="date"');
-    }
-    h += '</div><datalist id="f-companies">' + Object.keys(PROVIDERS).map(function(n){ return '<option value="' + esc(n) + '">'; }).join('') + '</datalist>';
-    if (f.problem) h += '<div class="small" role="alert" style="color:var(--warn)">' + esc(f.problem) + '</div>';
-    h += '<div class="row-btns end"><button class="btn" data-form-cancel>Cancel</button><button class="btn primary" data-form-save>Add</button></div></div>';
+    if (chartMode === 'debt') return '<div class="label">Total owed</div><div class="big num">' + money(-t.owe, true) + '</div>' + change30(debtSeries(), true);
+    var back = null;
+    for (var i = data.history.length - 1; i >= 0; i--) { if (daysBetween(day(data.history[i].d), today()) >= 30) { back = data.history[i].v; break; } }
+    var h = '<div class="label">Net worth</div><div class="big num">' + money(t.net, true) + '</div>';
+    if (back != null) { var ch = t.net - back; h += '<span class="delta num">' + (ch >= 0 ? I.up : I.down) + (ch >= 0 ? 'Up ' : 'Down ') + money(Math.abs(ch), true) + ' in 30 days</span>'; }
     return h;
   }
-  function saveForm(){
-    var v = function(id){ var el = document.getElementById('f-' + id); return el ? String(el.value).trim() : ''; };
-    var now = today().toISOString();
-    if (form.type === 'bill') {
-      var amount = num(v('amount'));
-      if (!v('name') || amount == null || !v('due')) { form.problem = 'Give the bill a name, an amount and a due date.'; render(); return; }
-      var provider = v('provider') || v('name');
-      data.bills.push({ id: 'b' + Date.now(), provider: provider, name: v('provider') ? provider : v('name'), sub: v('provider') ? v('name') : '', amount: amount, due: v('due'), monthly: !!(document.getElementById('f-monthly') || {}).checked });
-    } else {
-      var bal = num(v('balance'));
-      if (!v('institution') || bal == null) { form.problem = 'Give the account a company and a balance.'; render(); return; }
-      var a = { id: 'm' + Date.now(), source: 'manual', kind: v('kind') || 'loan', institution: v('institution'), name: v('name') || v('institution'), balance: Math.abs(bal), updatedAt: now };
-      if (a.kind === 'checking' || a.kind === 'savings' || a.kind === 'investment') a.balance = bal;
-      var lim = num(v('limit')); if (lim != null && a.kind === 'credit') a.limit = lim;
-      var apr = num(v('apr')); if (apr != null) a.apr = apr;
-      var pay = num(v('payment')); if (pay != null && v('due')) a.payment = { amount: pay, due: v('due'), monthly: true };
-      data.accounts.push(a);
-    }
-    form = null; snapshot(); save(); render();
+  function change30(series, debt){
+    if (series.length < 2) return '';
+    var now = series[series.length - 1], then = series[0];
+    for (var i = series.length - 1; i >= 0; i--) { if (daysBetween(day(series[i].d), today()) >= 30) { then = series[i]; break; } }
+    var ch = now.v - then.v; if (!ch) return '';
+    return '<span class="delta num">' + (ch >= 0 ? I.up : I.down) + (debt ? (ch <= 0 ? 'Down ' : 'Up ') : (ch >= 0 ? 'Up ' : 'Down ')) + money(Math.abs(ch), true) + ' since ' + short(day(then.d)) + '</span>';
   }
-  // Paying a repeating bill moves it to next month; a one-off is marked paid.
-  function markPaid(id){
-    var t = isoDay(today());
-    var b = data.bills.filter(function(x){ return x.id === id; })[0];
-    var target = b || (data.accounts.filter(function(x){ return x.id === id; })[0] || {}).payment;
-    if (!target) return;
-    target.paidLog = (Array.isArray(target.paidLog) ? target.paidLog : []).concat([t]).slice(-36);
-    if (target.monthly !== false) { target.lastPaid = t; target.due = addMonth(target.due); delete target.paid; }
-    else target.paid = t;
-    save(); render();
+  // Total owed each day: every debt's latest known balance on that day, added up.
+  function debtSeries(){
+    var debts = data.accounts.filter(isDebt), dates = {};
+    debts.forEach(function(a){ (a.hist || []).forEach(function(p){ dates[p.d] = 1; }); });
+    return Object.keys(dates).sort().map(function(d){
+      return { d: d, v: sum(debts, function(a){ var v = 0; (a.hist || []).forEach(function(p){ if (p.d <= d) v = p.v; }); return v; }) };
+    });
   }
-
   function drawChart(){
     var el = document.getElementById('chart'); if (!el) return;
-    var hist = data.history;
-    var n = { '1w': 7, '1m': 31, '3m': 92, '6m': 183, '1y': 365, 'all': 1e9 }[range];
-    var cut = today() - n * DAY, pts = hist.filter(function(p){ return day(p.d) >= cut; });
-    var sum = document.getElementById('chart-sum');
-    if (pts.length < 2) { el.innerHTML = '<div class="empty">The chart fills in as days go by — one point each day the page checks your balances.</div>'; if (sum) sum.textContent = ''; return; }
-    var vs = pts.map(function(p){ return p.v; }), diff = vs[vs.length - 1] - vs[0];
-    if (sum) sum.textContent = (diff >= 0 ? 'Up ' : 'Down ') + money(Math.abs(diff), true) + ' since ' + short(day(pts[0].d));
-    // Round gridlines (1, 2 or 5 × a power of ten) so labels read cleanly, and only as many as the height allows.
-    var lo0 = Math.min.apply(null, vs), hi0 = Math.max.apply(null, vs), span = (hi0 - lo0) || Math.max(100, Math.abs(hi0) * 0.02);
+    var sumEl = document.getElementById('chart-sum'), legEl = document.getElementById('chart-legend');
+    sumEl.textContent = ''; legEl.innerHTML = '';
+    var cut = isoDay(new Date(today().getTime() - rangeDays() * DAY));
+    if (chartMode === 'spend' || chartMode === 'bills') return drawBars(el, legEl, sumEl, cut);
+    var pts, label = 'Net worth', debt = false;
+    if (chartMode === 'account') { var a = accountById(chartAccount); pts = a ? (a.hist || []).map(function(p){ return { d: p.d, v: isDebt(a) ? -p.v : p.v }; }) : []; label = a ? fullName(a) : ''; }
+    else if (chartMode === 'debt') { pts = debtSeries(); label = 'Total owed'; debt = true; }
+    else pts = data.history;
+    pts = pts.filter(function(p){ return p.d >= cut; });
+    drawLine(el, sumEl, pts, label, debt);
+  }
+  // Round gridlines, a margin that fits the widest label, and only as many date labels as fit — so text never collides.
+  function axis(lo0, hi0){
+    var span = (hi0 - lo0) || Math.max(100, Math.abs(hi0) * 0.02);
     var raw = span / 3, mag = Math.pow(10, Math.floor(Math.log10(raw))), step = [1, 2, 5, 10].map(function(m){ return m * mag; }).filter(function(v){ return v >= raw; })[0];
     var lo = Math.floor((lo0 - span * 0.08) / step) * step, hi = Math.ceil((hi0 + span * 0.08) / step) * step;
+    if (lo0 >= 0 && lo < 0) lo = 0;
     var k = function(v){
       var a = Math.abs(v), t = a >= 1000 ? (step >= 1000 ? Math.round(a / 1000) + 'k' : (a / 1000).toFixed(1).replace(/\.0$/, '') + 'k') : String(Math.round(a));
       return v < 0 ? '$(' + t + ')' : '$' + t;
     };
-    var ticks = []; for (var tv = lo; tv <= hi + step / 2; tv += step) ticks.push(tv);
-    var longest = ticks.reduce(function(m, v){ return Math.max(m, k(v).length); }, 0);
-    // The left margin fits the widest label with a clear gap, instead of a fixed width the labels ran into.
-    var W = el.clientWidth || 600, H = el.clientHeight || 190, L = 18 + longest * 7, R = 10, T = 10, B = 26;
+    var ticks = []; for (var v = lo; v <= hi + step / 2; v += step) ticks.push(v);
+    return { lo: lo, hi: hi, k: k, ticks: ticks, width: 18 + ticks.reduce(function(m, v){ return Math.max(m, k(v).length); }, 0) * 7 };
+  }
+  function drawLine(el, sumEl, pts, label, debt){
+    if (pts.length < 2) { el.innerHTML = '<div class="empty">This chart fills in as days go by — one point each day the page checks your balances.</div>'; return; }
+    var vs = pts.map(function(p){ return p.v; }), diff = vs[vs.length - 1] - vs[0];
+    sumEl.textContent = (diff >= 0 ? 'Up ' : 'Down ') + money(Math.abs(diff), true) + ' since ' + short(day(pts[0].d));
+    var ax = axis(Math.min.apply(null, vs), Math.max.apply(null, vs));
+    var W = el.clientWidth || 600, H = el.clientHeight || 190, L = ax.width, R = 10, T = 10, B = 26;
     var x = function(i){ return L + (W - L - R) * i / (pts.length - 1); };
-    var y = function(v){ return T + (H - T - B) * (1 - (v - lo) / (hi - lo)); };
-    var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Net worth over time"><defs><linearGradient id="fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".16"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient></defs><g class="grid axis">';
-    ticks.forEach(function(v){ s += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y(v) + '" y2="' + y(v) + '"/><text x="' + (L - 12) + '" y="' + (y(v) + 4) + '" text-anchor="end">' + k(v) + '</text>'; });
-    // Date labels: as many as fit with room between them (about one per 110px), never overlapping.
+    var y = function(v){ return T + (H - T - B) * (1 - (v - ax.lo) / (ax.hi - ax.lo)); };
+    var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + esc(label) + ' over time"><defs><linearGradient id="fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".16"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient></defs><g class="grid axis">';
+    ax.ticks.forEach(function(v){ s += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y(v) + '" y2="' + y(v) + '"/><text x="' + (L - 12) + '" y="' + (y(v) + 4) + '" text-anchor="end">' + ax.k(v) + '</text>'; });
     var nx = Math.max(1, Math.min(pts.length - 1, Math.floor((W - L - R) / 110)));
-    var dlabel = range === '1w' ? function(d){ return d.toLocaleDateString('en-US', { weekday: 'short', day: 'numeric' }); } : short;
-    for (var j = 0; j <= nx; j++) { var i = Math.round((pts.length - 1) * j / nx); s += '<text x="' + x(i) + '" y="' + (H - 6) + '" text-anchor="' + (j === 0 ? 'start' : j === nx ? 'end' : 'middle') + '">' + dlabel(day(pts[i].d)) + '</text>'; }
+    var dl = range === '1w' ? function(d){ return d.toLocaleDateString('en-US', { weekday: 'short', day: 'numeric' }); } : short;
+    for (var j = 0; j <= nx; j++) { var i = Math.round((pts.length - 1) * j / nx); s += '<text x="' + x(i) + '" y="' + (H - 6) + '" text-anchor="' + (j === 0 ? 'start' : j === nx ? 'end' : 'middle') + '">' + dl(day(pts[i].d)) + '</text>'; }
     s += '</g>';
-    if (lo < 0 && hi > 0) s += '<line class="zero" x1="' + L + '" x2="' + (W - R) + '" y1="' + y(0) + '" y2="' + y(0) + '"/>';
+    if (ax.lo < 0 && ax.hi > 0) s += '<line class="zero" x1="' + L + '" x2="' + (W - R) + '" y1="' + y(0) + '" y2="' + y(0) + '"/>';
     var d = pts.map(function(p, i){ return (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(p.v).toFixed(1); }).join('');
     s += '<path d="' + d + 'L' + x(pts.length - 1) + ' ' + (H - B) + 'L' + L + ' ' + (H - B) + 'Z" fill="url(#fill)" style="color:var(--fg)"/>';
     s += '<path class="line" d="' + d + '"/><line class="cross" id="cx" y1="' + T + '" y2="' + (H - B) + '" style="display:none"/><circle class="dot" id="cd" r="5" style="display:none"/></svg><div class="tip" id="tip" style="display:none"></div>';
@@ -933,7 +965,338 @@
     });
     svg.addEventListener('pointerleave', function(){ cx.style.display = cd.style.display = tip.style.display = 'none'; });
   }
+  // Stacked bars: spending by category, or bills by bill. A day per bar for 1W and 1M, a month per bar beyond.
+  function drawBars(el, legEl, sumEl, cut){
+    var daily = range === '1w' || range === '1m', rows = [];
+    if (chartMode === 'spend') rows = data.tx.filter(function(t){ return isSpending(t) && t.d >= cut; }).map(function(t){ return { d: t.d, key: spendCat(t), v: t.m }; });
+    else data.bills.forEach(function(b){ linkedTx(b).forEach(function(t){ if (t.d >= cut) rows.push({ d: t.d, key: b.name, v: t.m }); }); });
+    if (!rows.length) {
+      el.innerHTML = '<div class="empty">' + (chartMode === 'spend'
+        ? (data.tx.length ? 'No spending in this range.' : 'Spending shows up here once your banks share purchases — check back after the next check.')
+        : 'Bills linked to payments show up here. Add a found repeating payment, or open a bill and link its payments.') + '</div>';
+      return;
+    }
+    var bucket = function(d){ return daily ? d : d.slice(0, 7); };
+    var totalsByKey = {}; rows.forEach(function(r){ totalsByKey[r.key] = (totalsByKey[r.key] || 0) + r.v; });
+    var keys = Object.keys(totalsByKey).sort(function(a, b){ return totalsByKey[b] - totalsByKey[a]; });
+    var top = keys.slice(0, 6), rest = keys.length > 6;
+    var series = top.concat(rest ? ['Everything else'] : []);
+    var color = function(k, i){ return chartMode === 'spend' ? (CAT_COLOR[k] || '#8a8f98') : (k === 'Everything else' ? '#8a8f98' : SERIES[i % SERIES.length]); };
+    var buckets = [];
+    if (daily) { for (var t0 = new Date(day(cut).getTime() + DAY); t0 <= today(); t0 = new Date(t0.getTime() + DAY)) buckets.push(isoDay(t0)); }
+    else { var m = new Date(day(cut).getFullYear(), day(cut).getMonth(), 1); while (m <= today()) { buckets.push(isoDay(m).slice(0, 7)); m.setMonth(m.getMonth() + 1); } }
+    var grid = {}; buckets.forEach(function(b){ grid[b] = {}; });
+    rows.forEach(function(r){ var b = bucket(r.d); if (!grid[b]) return; var k = top.indexOf(r.key) >= 0 ? r.key : 'Everything else'; grid[b][k] = (grid[b][k] || 0) + r.v; });
+    var maxV = Math.max.apply(null, buckets.map(function(b){ return sum(Object.keys(grid[b]).map(function(k){ return grid[b][k]; })); }).concat([1]));
+    var ax = axis(0, maxV);
+    var W = el.clientWidth || 600, H = el.clientHeight || 190, L = ax.width, R = 10, T = 10, B = 26;
+    var bw = (W - L - R) / buckets.length, gap = Math.min(6, bw * 0.25);
+    var y = function(v){ return T + (H - T - B) * (1 - (v - ax.lo) / (ax.hi - ax.lo)); };
+    var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + (chartMode === 'spend' ? 'Spending' : 'Bills') + ' by ' + (daily ? 'day' : 'month') + '"><g class="grid axis">';
+    ax.ticks.forEach(function(v){ s += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y(v) + '" y2="' + y(v) + '"/><text x="' + (L - 12) + '" y="' + (y(v) + 4) + '" text-anchor="end">' + ax.k(v) + '</text>'; });
+    var every = Math.max(1, Math.ceil(buckets.length / Math.max(1, Math.floor((W - L - R) / 70))));
+    buckets.forEach(function(b, i){ if (i % every) return; s += '<text x="' + (L + bw * i + bw / 2) + '" y="' + (H - 6) + '" text-anchor="middle">' + (daily ? short(day(b)) : monthName(day(b + '-01'))) + '</text>'; });
+    s += '</g>';
+    buckets.forEach(function(b, i){
+      var acc = 0, total = sum(Object.keys(grid[b]).map(function(k){ return grid[b][k]; }));
+      var tip = (daily ? short(day(b)) : monthName(day(b + '-01'))) + ': ' + money(total, true) + series.filter(function(k){ return grid[b][k]; }).map(function(k){ return '\n' + k + ' ' + money(grid[b][k], true); }).join('');
+      s += '<g class="barg"><title>' + esc(tip) + '</title>';
+      series.forEach(function(k, si){
+        var v = grid[b][k]; if (!v) return;
+        var y1 = y(acc + v), y0 = y(acc); acc += v;
+        // A 2px gap between stacked pieces, so neighbouring colours never blur together.
+        s += '<rect x="' + (L + bw * i + gap / 2).toFixed(1) + '" y="' + y1.toFixed(1) + '" width="' + Math.max(1, bw - gap).toFixed(1) + '" height="' + Math.max(0, y0 - y1 - 2).toFixed(1) + '" rx="3" fill="' + color(k, si) + '"/>';
+      });
+      s += '</g>';
+    });
+    el.innerHTML = s + '</svg>';
+    legEl.innerHTML = series.map(function(k, si){ var tot = k === 'Everything else' ? sum(keys.slice(6), function(x){ return totalsByKey[x]; }) : totalsByKey[k]; return '<span class="lg"><i style="background:' + color(k, si) + '"></i>' + esc(k) + ' <b class="num">' + money(tot, true) + '</b></span>'; }).join('');
+    sumEl.textContent = money(sum(keys, function(k){ return totalsByKey[k]; }), true) + ' in total since ' + short(day(cut));
+  }
 
+  function stat(icon, label, v, sub, jump){ return '<div class="tile stat tap" role="button" tabindex="0" data-jump="' + jump + '" title="Show these accounts"><span class="badge">' + icon + '</span><div><div class="label">' + label + '</div><div class="v num">' + v + '</div><div class="sub">' + sub + '</div></div>' + I.chev.replace('class="chev"', 'class="chev" style="transform:rotate(-90deg)"') + '</div>'; }
+
+  // ── Account cards (round 3, Q-card: bank, name, balance, one useful line) ─
+  function sec(k){
+    var list = data.accounts.filter(function(a){ return a.kind === k; });
+    if (!list.length) return '';
+    var total = sum(list, function(a){ return a.balance; }), signed = isDebt({ kind: k }) ? -total : total;
+    var h = '<div class="sec"><div class="sec-head"><span class="label">' + KINDS[k].label + ' <span style="opacity:.6">' + list.length + '</span></span><span class="small num muted">' + money(signed) + '</span></div>';
+    if (k === 'credit') h += '<div class="legend">The notch on each bar is ' + S.warnPct + '%. Past it a bar turns amber, which can lower your credit score; past ' + S.alertPct + '% it turns red.</div>';
+    return h + '<div class="list">' + list.map(row).join('') + '</div></div>';
+  }
+  // The one line under the balance, chosen for the kind of account — or what is wrong, when something is.
+  function cardLine(a){
+    var bank = a.itemId && data.banks[a.itemId];
+    if (bank && !bank.ok) return '<span class="flag">' + I.warn + (bank.error && bank.error.reconnect ? 'Sign in again' : 'Not answering') + '</span>';
+    if (isStale(a)) return '<span class="flag">' + I.warn + (a.source === 'plaid' ? 'Out of date · ' : 'Needs update · ') + (a.updatedAt ? ago(a.updatedAt) : 'never') + '</span>';
+    var p = a.payment;
+    if (a.kind === 'credit') {
+      var parts = [];
+      if (a.limit) parts.push(Math.round(a.balance / a.limit * 100) + '% used');
+      if (p && !p.paid) parts.push('due ' + short(day(p.due)));
+      return parts.join(' · ');
+    }
+    if (a.kind === 'loan') {
+      if (!p) return a.apr ? a.apr + '% interest' : '';
+      var po = payoff(a.balance, a.apr, p.amount);
+      return money(p.amount) + ' due ' + short(day(p.due)) + (po && !po.never ? ' · done ' + monthsFrom(po.months, true) : '');
+    }
+    if (a.kind === 'bnpl') return a.left ? a.left + ' left · next ' + (p ? short(day(p.due)) : '—') : (a.note || '');
+    if (a.kind === 'asset') return a.updatedAt ? 'value as of ' + short(new Date(a.updatedAt)) : '';
+    var c = change30txt(a.hist);
+    return c;
+  }
+  function change30txt(hist){
+    if (!hist || hist.length < 2) return '';
+    var now = hist[hist.length - 1], then = hist[0];
+    for (var i = hist.length - 1; i >= 0; i--) { if (daysBetween(day(hist[i].d), today()) >= 30) { then = hist[i]; break; } }
+    var ch = now.v - then.v; if (Math.abs(ch) < 0.5) return '';
+    return (ch > 0 ? '+' : '−') + money(Math.abs(ch), true) + ' since ' + short(day(then.d));
+  }
+  function row(a){
+    var isOpen = openId === a.id || editing === a.id;
+    var h = '<div class="tile acct tap' + (isStale(a) ? ' stale' : '') + (isOpen ? ' open' : '') + '" role="button" tabindex="0" aria-expanded="' + isOpen + '" data-open="' + esc(a.id) + '">' + mark(a.institution);
+    h += '<div class="who"><span class="inst">' + esc(a.institution) + '</span><div class="name" title="' + esc(fullName(a)) + '">' + esc(a.name) + '</div></div>';
+    h += '<div class="right"><div class="bal num">' + money(isDebt(a) ? -a.balance : a.balance) + '</div><div class="side">' + cardLine(a) + I.chev + '</div></div>';
+    if (a.kind === 'credit' && a.limit) {
+      var p = a.balance / a.limit * 100, lvl = p >= S.alertPct ? 'bad' : p >= S.warnPct ? 'warn' : '';
+      h += '<div class="meter thin ' + lvl + '"><div class="bar" title="' + Math.round(p) + '% of the limit used"><i style="width:' + Math.max(0, Math.min(100, p)) + '%"></i><span class="tick" style="left:' + S.warnPct + '%"></span></div></div>';
+    }
+    if (isOpen) h += accountDetail(a);
+    if (editing === a.id) {
+      h += '<div class="edit"><input class="num" id="edit-val" inputmode="decimal" value="' + a.balance.toFixed(2) + '" aria-label="' + (a.kind === 'asset' ? 'What it is worth' : 'New balance') + '"><button class="btn" data-cancel>Cancel</button><button class="btn primary" data-save="' + esc(a.id) + '">Save</button>';
+      h += '<button class="btn danger" data-delete="' + esc(a.id) + '">Delete</button><span class="hint">Or tell YouCoded in chat: “' + esc(a.institution) + ' is $…”</span></div>';
+    }
+    return h + '</div>';
+  }
+
+  // ── Opened cards: what the page can work out ─────────────────────────────
+  function payoff(balance, apr, pay){
+    if (!(balance > 0) || !(pay > 0)) return null;
+    var r = (apr || 0) / 100 / 12, b = balance, months = 0, interest = 0;
+    if (r > 0 && pay <= b * r) return { never: true };
+    while (b > 0.005 && months < 600) { var i = b * r; interest += i; b = b + i - pay; months++; }
+    return months >= 600 ? { never: true } : { months: months, interest: interest };
+  }
+  function monthsFrom(n, abbrev){ var d = today(); d.setMonth(d.getMonth() + n); return d.toLocaleDateString('en-US', { month: abbrev ? 'short' : 'long', year: 'numeric' }); }
+  function monthsText(n){ var y = Math.floor(n / 12), m = n % 12; return (y ? y + (y === 1 ? ' year' : ' years') : '') + (y && m ? ' ' : '') + (m || !y ? m + (m === 1 ? ' month' : ' months') : ''); }
+  function insight(figure, words, tone){ return '<div class="ins' + (tone ? ' ' + tone : '') + '"><b class="num">' + figure + '</b><span>' + words + '</span></div>'; }
+  function spark(hist){
+    if (!hist || hist.length < 2) return '<div class="spark empty">Its own chart starts here and adds a point each day the page checks.</div>';
+    var pts = hist.slice(-90), vs = pts.map(function(p){ return p.v; });
+    var lo = Math.min.apply(null, vs), hi = Math.max.apply(null, vs); if (hi === lo) { hi += 1; lo -= 1; }
+    var W = 300, H = 44, x = function(i){ return (W * i / (pts.length - 1)).toFixed(1); }, y = function(v){ return (4 + (H - 8) * (1 - (v - lo) / (hi - lo))).toFixed(1); };
+    var d = pts.map(function(p, i){ return (i ? 'L' : 'M') + x(i) + ' ' + y(p.v); }).join('');
+    return '<div class="spark"><svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" role="img" aria-label="Balance over the last ' + pts.length + ' days"><path d="' + d + 'L' + W + ' ' + H + 'L0 ' + H + 'Z" class="area"/><path d="' + d + '" class="ln"/></svg><div class="spark-x"><span>' + short(day(pts[0].d)) + '</span><span>' + short(day(pts[pts.length - 1].d)) + '</span></div></div>';
+  }
+  function accountDetail(a){
+    var t = totals(), h = '<div class="detail">', ins = '', debt = isDebt(a), p = a.payment;
+    if (a.kind === 'credit') {
+      if (a.apr && a.balance > 0) ins += insight('≈' + money(a.balance * a.apr / 1200), 'interest a month if this balance is carried (' + a.apr + '% a year)', 'warnish');
+      if (a.limit) {
+        var under = a.balance - a.limit * S.warnPct / 100;
+        ins += under > 0 ? insight(money(Math.ceil(under), true), 'to pay now to get under ' + S.warnPct + '% of the limit, where it stops weighing on your credit score')
+          : insight(money(Math.floor(-under), true), 'you can spend before this card passes ' + S.warnPct + '% of its limit');
+      }
+      if (p && p.amount > 0 && a.balance > 0) {
+        var pm = payoff(a.balance, a.apr, p.amount);
+        if (pm && pm.never) ins += insight('Never', 'paid off at the ' + money(p.amount) + ' minimum: it barely covers the interest', 'down');
+        else if (pm) ins += insight(monthsText(pm.months), 'to clear it paying only the ' + money(p.amount) + ' minimum' + (pm.interest > 1 ? ', costing about ' + money(pm.interest, true) + ' in interest' : ''));
+      }
+    } else if (a.kind === 'loan') {
+      if (p && p.amount && a.balance > 0) {
+        var p0 = payoff(a.balance, a.apr, p.amount), p1 = payoff(a.balance, a.apr, p.amount + 50);
+        if (p0 && p0.never) ins += insight('Never', 'paid off at ' + money(p.amount) + ' a month: that is less than the interest', 'down');
+        else if (p0) {
+          ins += insight(monthsFrom(p0.months), 'paid off at ' + money(p.amount) + ' a month (' + monthsText(p0.months) + ')' + (p0.interest > 1 ? ', with about ' + money(p0.interest, true) + ' of interest still to come' : ''));
+          if (p1 && !p1.never && p0.months - p1.months > 0) ins += insight(monthsText(p0.months - p1.months) + ' sooner', 'with $50 more a month' + (p0.interest - p1.interest > 1 ? ', saving about ' + money(p0.interest - p1.interest, true) + ' in interest' : ''), 'up');
+        }
+      } else if (a.balance > 0) ins += insight('No due date yet', a.source === 'plaid' ? 'your bank does not share payment details for this kind of loan. Add them below, once.' : 'add the monthly payment and due date below to see when it is paid off.');
+    } else if (a.kind === 'bnpl') {
+      if (a.left && p) {
+        var end = p.due; for (var i = 1; i < a.left; i++) end = addEvery(end, p.every || 'month');
+        ins += insight(short(day(end)), 'the last payment, after ' + a.left + ' more of ' + money(p.amount) + ' (' + (EVERY[p.every] || 'every month').toLowerCase() + ')');
+      }
+    } else if ((a.kind === 'checking' || a.kind === 'savings') && t.dueThisMonth > 0) {
+      ins += insight((a.balance / t.dueThisMonth).toFixed(1) + '×', 'what is still due this month (' + money(t.dueThisMonth, true) + ')');
+    }
+    // Recent purchases on this account, when the bank shares them.
+    var recent = data.tx.filter(function(x){ return x.a === a.id && !x.p; }).slice(-30);
+    if (recent.length) {
+      var out = sum(recent.filter(isSpending), function(x){ return x.m; });
+      ins += insight(money(out, true), 'spent in the last ' + daysBetween(day(recent[0].d), today()) + ' days on this account');
+    }
+    var share = debt ? (t.owe ? a.balance / t.owe : 0) : (t.have ? a.balance / t.have : 0);
+    if (share > 0 && share < 1) ins += insight(Math.round(share * 100) + '%', 'of everything you ' + (debt ? 'owe' : 'have'));
+    h += '<div class="ins-grid">' + ins + '</div>' + spark(a.hist);
+    if (recent.length) {
+      h += '<div class="txlist"><div class="label">Latest</div>' + recent.slice(-5).reverse().map(function(x){ return '<div class="txrow"><span class="muted">' + short(day(x.d)) + '</span><span class="nm">' + esc(x.n) + '</span><b class="num">' + money(-x.m) + '</b></div>'; }).join('') + '</div>';
+    }
+    h += '<div class="acts"><span class="hint">' + (a.source === 'plaid' ? 'From ' + esc(a.institution) + ' through Plaid' : 'Entered by you') + ' · updated ' + (a.updatedAt ? ago(a.updatedAt) : 'never') + (a.available != null && !debt ? ' · ' + money(a.available) + ' available' : '') + '</span>';
+    if (payEdit === a.id) {
+      var pp = a.payment || {};
+      h += '<input id="pay-amt" class="num" inputmode="decimal" placeholder="Monthly payment" value="' + (pp.amount || '') + '" aria-label="Monthly payment">';
+      h += '<input id="pay-due" type="date" value="' + esc(pp.due || '') + '" aria-label="Next due date">';
+      h += '<input id="pay-apr" class="num" inputmode="decimal" placeholder="Interest %" value="' + (a.apr || '') + '" aria-label="Interest rate">';
+      h += '<button class="btn sm" data-pay-cancel>Cancel</button><button class="btn sm primary" data-pay-save="' + esc(a.id) + '">Save</button>';
+    } else if (limitEdit === a.id) {
+      h += '<input id="limit-val" class="num" inputmode="decimal" value="' + (a.limit || '') + '" aria-label="Credit limit"><button class="btn sm" data-limit-cancel>Cancel</button><button class="btn sm primary" data-limit-save="' + esc(a.id) + '">Save limit</button>';
+    } else {
+      if (a.source !== 'plaid' && editing !== a.id) h += '<button class="btn sm" data-edit="' + esc(a.id) + '">' + I.pen + (a.kind === 'asset' ? 'Update value' : 'Update balance') + '</button>';
+      if (a.kind === 'credit') h += '<button class="btn sm" data-limit="' + esc(a.id) + '">' + (a.limit ? 'Change limit' : 'Set limit') + '</button>';
+      if ((a.kind === 'loan' || a.kind === 'credit') && (!a.payment || a.payment.manual || a.source !== 'plaid')) h += '<button class="btn sm" data-pay="' + esc(a.id) + '">' + (a.payment ? 'Change payment' : 'Add payment & due date') + '</button>';
+      if (a.kind === 'bnpl' && a.payment) h += '<button class="btn sm" data-paid="' + esc(a.id) + '">' + I.check + 'Mark a payment made</button>';
+      var u = siteOf(a); if (u) h += '<a class="btn sm" href="' + esc(u) + '" target="_blank" rel="noopener">' + I.out + 'Open ' + esc(a.institution) + '</a>';
+      if (a.source === 'plaid') h += '<button class="btn sm" data-jump="banks">Manage bank</button>';
+    }
+    return h + '</div></div>';
+  }
+
+  // ── Bills card ───────────────────────────────────────────────────────────
+  function billsCard(t){
+    var bills = allBills().sort(function(x, y){
+      return (x.paid ? 1 : 0) - (y.paid ? 1 : 0) || (billSort === 'amount' ? y.amount - x.amount : x.due - y.due);
+    });
+    var h = '<div class="card" id="bills"><div class="card-head"><h2>Bills</h2><span class="total num">' + money(t.dueThisMonth) + ' <span class="small muted">still due this month</span></span>';
+    h += '<div class="ranges" role="group" aria-label="Sort bills">' + [['due','By date'],['amount','By amount']].map(function(o){ return '<button class="rng' + (billSort === o[0] ? ' on' : '') + '" data-bill-sort="' + o[0] + '" aria-pressed="' + (billSort === o[0]) + '">' + o[1] + '</button>'; }).join('') + '</div></div>';
+    var found = discover();
+    if (found.length) {
+      var shown = showAllFound ? found : found.slice(0, 4);
+      h += '<div class="found"><div class="found-head">' + I.spark + '<b>Found ' + found.length + ' repeating payment' + (found.length === 1 ? '' : 's') + '</b><span class="muted small">from your banks’ purchases — add the real bills</span></div>';
+      shown.forEach(function(f){
+        var acct = accountById(f.account);
+        h += '<div class="tile frow">' + mark(f.name) + '<div class="name">' + esc(f.name) + '<small>' + money(f.amount) + ' · ' + (f.every === '2weeks' ? 'every 2 weeks' : f.every === 'year' ? 'yearly' : f.every + 'ly') + ' · ' + f.count + ' payments' + (acct ? ' · ' + esc(fullName(acct)) : '') + '</small></div>';
+        h += '<button class="btn sm" data-dismiss-found="' + esc(f.key) + '">Not a bill</button><button class="btn sm primary" data-add-found="' + esc(f.key) + '">' + I.plus + 'Add as a bill</button></div>';
+      });
+      if (found.length > 4) h += '<button class="btn sm ghostish" data-found-all>' + (showAllFound ? 'Show fewer' : 'Show all ' + found.length) + '</button>';
+      h += '</div>';
+    }
+    h += '<div class="bills">';
+    bills.forEach(function(b){
+      var s = billState(b), bo = openId === 'bill:' + b.id;
+      var markPaid = b.mine && !b.paid && b.account && b.account.kind !== 'bnpl' || (b.bill && !b.paid) ? '<button class="btn sm" data-paid="' + esc(b.id) + '">Mark paid</button>' : '';
+      h += '<div class="tile bill tap ' + s.cls + (bo ? ' open' : '') + '" role="button" tabindex="0" aria-expanded="' + bo + '" data-open="bill:' + esc(b.id) + '">' + mark(b.institution);
+      h += '<div class="name">' + esc(b.name) + '<small>' + esc([b.cat, b.sub].filter(Boolean).join(' · ')) + '</small></div><span class="when">' + s.icon + esc(s.text) + '</span><span class="amt num">' + money(b.amount) + '</span>' + markPaid + I.chev + (bo ? billDetail(b) : '') + '</div>';
+    });
+    if (!bills.length) h += '<div class="empty">No bills yet. Add one, add a found repeating payment, or connect a card or loan and its payments appear here.</div>';
+    return h + '</div></div>';
+  }
+  function billDetail(b){
+    var h = '<div class="detail">', ins = '';
+    var monthly = b.bill ? b.bill.monthly !== false : true;
+    if (monthly) ins += insight(money(b.amount * 12, true), 'a year at ' + money(b.amount) + ' a month');
+    if (monthly && !b.paid) {
+      var next = [b.due], iso = isoDay(b.due);
+      for (var k = 0; k < 2; k++) { iso = addMonth(iso); next.push(day(iso)); }
+      ins += insight(next.map(short).join(' · '), 'the next three due dates');
+    }
+    var linked = b.bill ? linkedTx(b.bill) : [];
+    if (linked.length) {
+      var t = today(), m = isoDay(t).slice(0, 7), y1 = isoDay(new Date(t.getTime() - 365 * DAY));
+      ins += insight(money(sum(linked.filter(function(x){ return x.d >= y1; }), function(x){ return x.m; }), true), 'paid in the last 12 months (' + money(sum(linked.filter(function(x){ return x.d.slice(0, 7) === m; }), function(x){ return x.m; }), true) + ' this month)');
+      ins += insight(money(sum(linked, function(x){ return x.m; }), true), 'paid in all, ' + linked.length + ' payments since ' + short(day(linked[0].d)));
+    } else if (!b.mine) ins += insight('Automatic', 'your bank updates this when you pay');
+    h += '<div class="ins-grid">' + ins + '</div>';
+    if (linked.length) {
+      h += '<div class="txlist"><div class="label">Payments</div>' + linked.slice(-8).reverse().map(function(x){ var a = accountById(x.a); return '<div class="txrow"><span class="muted">' + short(day(x.d)) + '</span><span class="nm">' + esc(a ? fullName(a) : x.n) + '</span><b class="num">' + money(x.m) + '</b></div>'; }).join('') + '</div>';
+    }
+    if (b.bill) {
+      var maybe = possibleMatches(b.bill);
+      if (maybe.length) {
+        h += '<div class="txlist"><div class="label">Might be this bill</div>' + maybe.map(function(mm){ return '<div class="txrow"><span class="nm">' + esc(mm.name) + ' <span class="muted">· ' + mm.count + ' payment' + (mm.count === 1 ? '' : 's') + '</span></span><b class="num">' + money(mm.total, true) + '</b><button class="btn sm" data-link-key="' + esc(mm.key) + '" data-link-bill="' + esc(b.id) + '">Link</button></div>'; }).join('') + '</div>';
+      }
+      if ((b.bill.match || []).length) {
+        h += '<div class="chips"><span class="label">Matched as</span>' + b.bill.match.map(function(k){ return '<span class="chip">' + esc(k) + '<button class="chipx" aria-label="Unlink ' + esc(k) + '" data-unlink-key="' + esc(k) + '" data-link-bill="' + esc(b.id) + '">' + I.x + '</button></span>'; }).join('') + '</div>';
+      }
+    }
+    h += '<div class="acts">';
+    if (billEdit === b.id && b.bill) {
+      h += '<input id="bill-amt" class="num" inputmode="decimal" value="' + b.amount + '" aria-label="Amount"><input id="bill-due" type="date" value="' + esc(b.bill.due) + '" aria-label="Due date">';
+      h += '<select id="bill-cat" class="pick" aria-label="Category">' + BILL_CATS.map(function(c){ return '<option' + (c === (b.bill.category || 'Other') ? ' selected' : '') + '>' + c + '</option>'; }).join('') + '</select>';
+      h += '<button class="btn sm" data-bill-cancel>Cancel</button><button class="btn sm primary" data-bill-save="' + esc(b.id) + '">Save</button>';
+    } else {
+      if (!b.mine) h += '<span class="hint">Your bank updates this when you pay.</span>';
+      if (b.bill) h += '<button class="btn sm" data-bill-edit="' + esc(b.id) + '">' + I.pen + 'Edit</button><button class="btn sm danger" data-bill-delete="' + esc(b.id) + '">Delete</button>';
+      var u = siteOf(b); if (u) h += '<a class="btn sm" href="' + esc(u) + '" target="_blank" rel="noopener">' + I.out + 'Pay at ' + esc(b.institution) + '</a>';
+    }
+    return h + '</div></div>';
+  }
+
+  // ── Add-by-hand forms (round 3, Q-types: each kind asks only for what matters) ─
+  function formCard(){
+    var f = form, v = f.values || {};
+    var h = '<div class="card form-card"><div class="card-head"><h2>' + (f.type === 'bill' ? 'Add a bill' : 'Add an account by hand') + '</h2></div><div class="grid">';
+    function field(id, label, attrs){ return '<label class="fld"><span>' + label + '</span><input id="f-' + id + '" data-fv="' + id + '" value="' + esc(v[id] || '') + '" ' + (attrs || '') + '></label>'; }
+    if (f.type === 'bill') {
+      h += field('provider', 'Company', 'placeholder="Netflix" list="f-companies"');
+      h += field('name', 'What it is', 'placeholder="Streaming"');
+      h += '<label class="fld"><span>Category</span><select id="f-category" data-fv="category">' + BILL_CATS.map(function(c){ return '<option' + (c === (v.category || 'Subscriptions') ? ' selected' : '') + '>' + c + '</option>'; }).join('') + '</select></label>';
+      h += field('amount', 'Amount', 'inputmode="decimal" placeholder="15.49"');
+      h += field('due', 'Next due date', 'type="date"');
+      h += '<label class="fld chk"><input id="f-monthly" data-fv="monthly" type="checkbox"' + (v.monthly === false ? '' : ' checked') + '><span>Repeats every month</span></label>';
+    } else {
+      var kind = f.kind || 'loan';
+      h += '<label class="fld"><span>What is it?</span><select id="f-kind" data-form-kind>' + Object.keys(KIND_ONE).map(function(k){ return '<option value="' + k + '"' + (k === kind ? ' selected' : '') + '>' + KIND_ONE[k] + '</option>'; }).join('') + '</select></label>';
+      h += field('institution', kind === 'asset' ? 'What it is (e.g. "2019 Civic")' : 'Company', kind === 'asset' ? '' : 'placeholder="' + (kind === 'bnpl' ? 'Affirm' : 'Earnest') + '" list="f-companies"');
+      if (kind !== 'asset') h += field('name', 'Account name', 'placeholder="' + (kind === 'bnpl' ? 'Laptop' : kind === 'credit' ? 'Store card' : 'Student loan') + '"');
+      KINDS[kind].fields.forEach(function(fd){
+        if (fd === 'balance') h += field('balance', 'Balance', 'inputmode="decimal"');
+        if (fd === 'value') h += field('balance', 'What it is worth today', 'inputmode="decimal"');
+        if (fd === 'owed') h += field('balance', 'Amount owed', 'inputmode="decimal"');
+        if (fd === 'limit') h += field('limit', 'Credit limit', 'inputmode="decimal"');
+        if (fd === 'apr') h += field('apr', 'Interest rate %', 'inputmode="decimal"');
+        if (fd === 'minimum') h += field('payment', 'Minimum payment', 'inputmode="decimal"');
+        if (fd === 'monthly') h += field('payment', 'Monthly payment', 'inputmode="decimal"');
+        if (fd === 'each') h += field('payment', 'Each payment', 'inputmode="decimal" placeholder="86.25"');
+        if (fd === 'left') h += field('left', 'Payments left', 'inputmode="numeric" placeholder="4"');
+        if (fd === 'every') h += '<label class="fld"><span>How often</span><select id="f-every" data-fv="every">' + Object.keys(EVERY).map(function(e){ return '<option value="' + e + '"' + (e === (v.every || '2weeks') ? ' selected' : '') + '>' + EVERY[e] + '</option>'; }).join('') + '</select></label>';
+        if (fd === 'due') h += field('due', 'Next payment due', 'type="date"');
+      });
+    }
+    h += '</div><datalist id="f-companies">' + Object.keys(PROVIDERS).map(function(n){ return '<option value="' + esc(n) + '">'; }).join('') + '</datalist>';
+    if (f.problem) h += '<div class="small" role="alert" style="color:var(--warn)">' + esc(f.problem) + '</div>';
+    return h + '<div class="row-btns end"><button class="btn" data-form-cancel>Cancel</button><button class="btn primary" data-form-save>Add</button></div></div>';
+  }
+  function readForm(){
+    var v = form.values = form.values || {};
+    document.querySelectorAll('[data-fv]').forEach(function(el){ v[el.dataset.fv] = el.type === 'checkbox' ? el.checked : el.value; });
+    return v;
+  }
+  function saveForm(){
+    var v = readForm(), now = today().toISOString();
+    if (form.type === 'bill') {
+      var amount = num(v.amount);
+      if (!(v.provider || v.name) || amount == null || !v.due) { form.problem = 'Give the bill a company, an amount and a due date.'; render(); return; }
+      var provider = (v.provider || v.name).trim();
+      var b = { id: 'b' + Date.now(), provider: provider, name: provider, sub: v.provider ? (v.name || '') : '', category: v.category || 'Other', amount: amount, due: v.due, monthly: v.monthly !== false };
+      var k = txKey(provider); if (k && data.tx.some(function(t){ return txKey(t.n) === k; })) b.match = [k];
+      data.bills.push(b);
+    } else {
+      var kind = form.kind || 'loan', bal = num(v.balance), pay = num(v.payment), left = parseInt(v.left, 10);
+      if (!v.institution) { form.problem = kind === 'asset' ? 'Say what it is.' : 'Give the account a company.'; render(); return; }
+      if (kind === 'bnpl' ? !(pay > 0 && left > 0 && v.due) : bal == null) { form.problem = kind === 'bnpl' ? 'Give each payment, how many are left, and the next date.' : 'Give the balance.'; render(); return; }
+      var a = { id: 'm' + Date.now(), source: 'manual', kind: kind, institution: v.institution.trim(), name: (v.name || (kind === 'asset' ? 'Value' : v.institution)).trim(), updatedAt: now };
+      if (kind === 'bnpl') { a.left = left; a.payment = { amount: pay, due: v.due, every: v.every || '2weeks', monthly: (v.every || '2weeks') === 'month' }; a.balance = Math.round(pay * left * 100) / 100; }
+      else {
+        a.balance = isDebt(a) ? Math.abs(bal) : bal;
+        var lim = num(v.limit); if (lim != null && kind === 'credit') a.limit = lim;
+        var apr = num(v.apr); if (apr != null) a.apr = apr;
+        if (pay != null && v.due && (kind === 'credit' || kind === 'loan')) a.payment = { amount: pay, due: v.due, monthly: true };
+      }
+      data.accounts.push(a);
+    }
+    form = null; snapshot(); save(); render();
+  }
+  function addFound(key){
+    var f = discover().filter(function(x){ return x.key === key; })[0]; if (!f) return;
+    var prettyName = f.name.replace(/\s+\d[\d-]*$/, '');
+    data.bills.push({ id: 'b' + Date.now(), provider: prettyName, name: prettyName, sub: '', category: billCatFor(f), amount: Math.round(f.amount * 100) / 100,
+      due: f.next, monthly: f.every === 'month', every: f.every, match: [key], lastPaid: f.last });
+    save(); render();
+  }
+
+  // ── Wiring ───────────────────────────────────────────────────────────────
   function save(){ if (window.youcoded) window.youcoded.save(data); }
   function on(sel, fn){ document.querySelectorAll(sel).forEach(function(el){ el.onclick = function(e){ fn(el, e); }; }); }
   function toggle(id){ openId = openId === id ? null : id; billEdit = null; limitEdit = null; payEdit = null; render(); }
@@ -942,8 +1305,8 @@
     var el = document.querySelector('[data-open="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]');
     if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.focus({ preventScroll: true }); }
   }
+  function billById(id){ return data.bills.filter(function(x){ return x.id === id; })[0]; }
   function wire(){
-    // A card opens on a click anywhere but its own buttons, links and fields; Enter or Space opens it from the keyboard.
     document.querySelectorAll('[data-open]').forEach(function(el){
       el.onclick = function(e){ if (e.target.closest('button, a, input, select, .detail')) return; toggle(el.dataset.open); };
       el.onkeydown = function(e){ if ((e.key === 'Enter' || e.key === ' ') && e.target === el) { e.preventDefault(); toggle(el.dataset.open); } };
@@ -952,34 +1315,8 @@
       el.onkeydown = function(e){ if ((e.key === 'Enter' || e.key === ' ') && e.target === el) { e.preventDefault(); el.click(); } };
     });
     on('[data-focus]', function(el, e){ if (e.target.closest('button, a')) return; focusAccount(el.dataset.focus); });
-    on('[data-limit]', function(b){ limitEdit = b.dataset.limit; render(); var i = document.getElementById('limit-val'); if (i) { i.focus(); i.select(); } });
-    on('[data-limit-cancel]', function(){ limitEdit = null; render(); });
-    on('[data-pay]', function(b){ payEdit = b.dataset.pay; render(); var i = document.getElementById('pay-amt'); if (i) i.focus(); });
-    on('[data-pay-cancel]', function(){ payEdit = null; render(); });
-    on('[data-pay-save]', function(b){
-      var a = data.accounts.filter(function(x){ return x.id === b.dataset.paySave; })[0];
-      var amt = num(document.getElementById('pay-amt').value), due = document.getElementById('pay-due').value, apr = num(document.getElementById('pay-apr').value);
-      if (a) {
-        if (amt != null && amt > 0 && due) a.payment = { amount: amt, due: due, monthly: true, manual: a.source === 'plaid' };
-        if (apr != null) a.apr = apr;
-      }
-      payEdit = null; save(); render();
-    });
-    on('[data-limit-save]', function(b){
-      var v = num(document.getElementById('limit-val').value);
-      var a = data.accounts.filter(function(x){ return x.id === b.dataset.limitSave; })[0];
-      if (a) { if (v && v > 0) a.limit = v; else delete a.limit; }
-      limitEdit = null; save(); render();
-    });
-    on('[data-bill-edit]', function(b){ billEdit = b.dataset.billEdit; render(); });
-    on('[data-bill-cancel]', function(){ billEdit = null; render(); });
-    on('[data-bill-save]', function(b){
-      var bill = data.bills.filter(function(x){ return x.id === b.dataset.billSave; })[0];
-      var amt = num(document.getElementById('bill-amt').value), due = document.getElementById('bill-due').value;
-      if (bill && amt != null && due) { bill.amount = amt; bill.due = due; delete bill.paid; }
-      billEdit = null; save(); render();
-    });
-    on('[data-bill-delete]', function(b){ data.bills = data.bills.filter(function(x){ return x.id !== b.dataset.billDelete; }); openId = null; save(); render(); });
+    on('[data-mode]', function(b){ chartMode = b.dataset.mode; render(); });
+    var ca = document.querySelector('[data-chart-account]'); if (ca) ca.onchange = function(){ chartAccount = ca.value; render(); };
     on('[data-range]', function(b){ range = b.dataset.range; render(); });
     on('[data-bill-sort]', function(b){ billSort = b.dataset.billSort; render(); });
     on('[data-browser]', function(b, e){ e.stopPropagation(); data.settings.browser = b.dataset.browser; save(); render(); });
@@ -987,13 +1324,40 @@
     on('[data-edit]', function(b){ editing = b.dataset.edit; render(); var i = document.getElementById('edit-val'); if (i) { i.scrollIntoView({ block: 'center' }); i.focus(); i.select(); } });
     on('[data-cancel]', function(){ editing = null; render(); });
     on('[data-save]', function(b){
-      var v = num(document.getElementById('edit-val').value);
-      if (v == null) return;
-      var a = data.accounts.filter(function(x){ return x.id === b.dataset.save; })[0];
-      a.balance = v; a.updatedAt = today().toISOString(); editing = null; snapshot(); save(); render();
+      var v = num(document.getElementById('edit-val').value); if (v == null) return;
+      var a = accountById(b.dataset.save); a.balance = v; a.updatedAt = today().toISOString(); editing = null; snapshot(); save(); render();
     });
     on('[data-delete]', function(b){ data.accounts = data.accounts.filter(function(x){ return x.id !== b.dataset.delete; }); editing = null; snapshot(); save(); render(); });
     on('[data-paid]', function(b){ markPaid(b.dataset.paid); });
+    on('[data-limit]', function(b){ limitEdit = b.dataset.limit; render(); var i = document.getElementById('limit-val'); if (i) { i.focus(); i.select(); } });
+    on('[data-limit-cancel]', function(){ limitEdit = null; render(); });
+    on('[data-limit-save]', function(b){
+      var v = num(document.getElementById('limit-val').value), a = accountById(b.dataset.limitSave);
+      if (a) { if (v && v > 0) a.limit = v; else delete a.limit; }
+      limitEdit = null; save(); render();
+    });
+    on('[data-pay]', function(b){ payEdit = b.dataset.pay; render(); var i = document.getElementById('pay-amt'); if (i) i.focus(); });
+    on('[data-pay-cancel]', function(){ payEdit = null; render(); });
+    on('[data-pay-save]', function(b){
+      var a = accountById(b.dataset.paySave);
+      var amt = num(document.getElementById('pay-amt').value), due = document.getElementById('pay-due').value, apr = num(document.getElementById('pay-apr').value);
+      if (a) { if (amt != null && amt > 0 && due) a.payment = { amount: amt, due: due, monthly: true, manual: a.source === 'plaid' }; if (apr != null) a.apr = apr; }
+      payEdit = null; save(); render();
+    });
+    on('[data-bill-edit]', function(b){ billEdit = b.dataset.billEdit; render(); });
+    on('[data-bill-cancel]', function(){ billEdit = null; render(); });
+    on('[data-bill-save]', function(b){
+      var bill = billById(b.dataset.billSave);
+      var amt = num(document.getElementById('bill-amt').value), due = document.getElementById('bill-due').value, cat = document.getElementById('bill-cat').value;
+      if (bill && amt != null && due) { bill.amount = amt; bill.due = due; bill.category = cat; delete bill.paid; }
+      billEdit = null; save(); render();
+    });
+    on('[data-bill-delete]', function(b){ data.bills = data.bills.filter(function(x){ return x.id !== b.dataset.billDelete; }); openId = null; save(); render(); });
+    on('[data-link-key]', function(b){ var bill = billById(b.dataset.linkBill); if (bill) { bill.match = (bill.match || []).concat([b.dataset.linkKey]); save(); render(); } });
+    on('[data-unlink-key]', function(b){ var bill = billById(b.dataset.linkBill); if (bill) { bill.match = (bill.match || []).filter(function(k){ return k !== b.dataset.unlinkKey; }); save(); render(); } });
+    on('[data-add-found]', function(b){ addFound(b.dataset.addFound); });
+    on('[data-dismiss-found]', function(b){ data.dismissed.push(b.dataset.dismissFound); save(); render(); });
+    on('[data-found-all]', function(){ showAllFound = !showAllFound; render(); });
     on('[data-reconnect]', function(b){ reconnectBank(b.dataset.reconnect); });
     on('[data-check]', function(){ syncBanks(); });
     on('[data-ask-remove]', function(b){ removing = b.dataset.askRemove; render(); });
@@ -1005,9 +1369,11 @@
       e.stopPropagation(); menuOpen = false;
       var what = b.dataset.add;
       if (what === 'bank') { connectBank(); return; }
-      form = { type: what === 'bill' ? 'bill' : 'account' }; render();
-      var first = document.querySelector('.form-card input'); if (first) first.focus();
+      form = { type: what === 'bill' ? 'bill' : 'account', kind: 'loan', values: {} }; render();
+      var first = document.querySelector('.form-card input, .form-card select'); if (first) first.focus();
     });
+    var fk = document.querySelector('[data-form-kind]');
+    if (fk) fk.onchange = function(){ readForm(); form.kind = fk.value; form.problem = null; render(); };
     on('[data-form-cancel]', function(){ form = null; render(); });
     on('[data-form-save]', function(){ saveForm(); });
     var ev = document.getElementById('edit-val');
@@ -1022,8 +1388,9 @@
     window.youcoded.onData(function(d){ data = normalise(d); render(); });
     if (window.youcoded.onRefresh) window.youcoded.onRefresh(function(){ syncBanks(); });
   }
+  // Bills named like a merchant link themselves on open too, not only after a bank check.
+  autoLink();
   render();
-  // Live balances every time the page opens.
   if (plaidOn) syncBanks();
 })();
 </script>
