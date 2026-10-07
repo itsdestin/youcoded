@@ -47,6 +47,10 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/menu/composer', 'menu'),
   chat('chat/menu/code', 'menu'),
   chat('chat/menu/file', 'menu'),
+  chat('chat/voice/vocabulary', 'dialog'),
+  { ...chat('chat/voice/vocabulary#empty', 'dialog'), params: { vocabulary: 'empty' } },
+  { ...chat('chat/voice/vocabulary#stress', 'dialog', 'stress'), scenario: 'stress', params: { vocabulary: 'stress' } },
+  { ...chat('chat/voice/vocabulary#narrow', 'dialog', 'narrow'), viewport: { width: 390, height: 844 } },
   // No session at all: the first screen a new user sees.
   { name: 'welcome', tags: ['view'], scenario: 'empty' },
   { name: 'welcome/new-session', tags: ['view'], scenario: 'empty', sameAs: { name: 'welcome', why: 'a first-ever launch opens the form already' } },
@@ -65,6 +69,7 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat#questions-cc', 'view'), session: 'wb-1', params: { seed: 'bubbles-questions-cc' } },
   { ...chat('chat#chatgpt', 'view'), session: 'wb-3' },
   { ...chat('chat#chatgpt-plan-limit', 'view', 'error-state'), session: 'wb-3', params: { planLimit: '1' } },
+  { ...chat('chat#chatgpt-app-limit', 'view', 'error-state'), session: 'wb-3', params: { planLimit: 'official', chatgpt: 'official' } },
   { ...chat('chat#stalled', 'view', 'error-state'), session: 'wb-2', params: { stalled: '1' } },
   ...['key-rejected', 'key-expired', 'credit-short', 'request-refused'].map((e) => ({ ...chat(`chat#openrouter-${e}`, 'view', 'error-state'), session: 'wb-2', params: { openrouter: 'verified', providerError: e } })),
   ...['handoff', 'reasoning-stop', 'skill-first', 'approval', 'skills-spread', 'skills-chain', 'deliverables', 'mix', 'silent-steps'].map((b) => ({ ...chat(`chat#bubbles-${b}`, 'view', 'conversation'), session: 'wb-2', params: { seed: `bubbles-${b}` } })),

@@ -8,9 +8,11 @@
 // touches the microphone without having asked is KILLED by the operating
 // system, with no dialog and no error the user can read. So `voice:start` asks
 // first, waits for the answer, and only then lets the microphone open.
-import { utilityProcess, webContents } from 'electron';
+import { app, utilityProcess, webContents } from 'electron';
+import { voiceVocabularyAssetPath } from './voice-recognizer-vocabulary';
 import type { VoiceEvent } from '../../shared/voice-types';
 import { VoiceAssets } from './voice-assets';
+import { VoiceVocabularyStore } from './voice-vocabulary';
 import {
   VoiceService, voiceWorkerPath,
   type VoiceWorkerHandle, type VoiceWorkerToService,
@@ -19,6 +21,11 @@ import {
 const EVENT_CHANNEL = 'voice:event';
 
 let service: VoiceService | null = null;
+let vocabulary: VoiceVocabularyStore | null = null;
+export function getVoiceVocabularyStore(): VoiceVocabularyStore {
+  if (!vocabulary) throw new Error('Voice vocabulary is not ready.');
+  return vocabulary;
+}
 
 /** The running speech service, for the voice:* table entries (main/ipc/voice.ts); null before main starts it. */
 export function getVoiceService(): VoiceService | null { return service; }
@@ -30,16 +37,26 @@ export function getVoiceService(): VoiceService | null { return service; }
  *  ties its lifetime to the app's. `stdio: 'pipe'` is not decoration: the last
  *  line the engine prints is the only true thing we have to show the user if we
  *  ever have to close it. */
-function spawnVoiceWorker(userDataPath: string): VoiceWorkerHandle {
-  // The data folder is the worker's ONLY argument: a forked process cannot ask
-  // Electron where the app keeps its files, and it needs it to find the speech
-  // engine that was downloaded there.
-  const child = utilityProcess.fork(voiceWorkerPath(), [userDataPath], {
+function spawnVoiceWorker(userDataPath: string, vocabulary: readonly string[] = []): VoiceWorkerHandle {
+  // WHY: the fork has no Electron app API and native BPE reads need a real file
+  // outside asar. Resolve from the app directory in dev, resources in packages.
+  const asset = voiceVocabularyAssetPath(app.getAppPath(), app.isPackaged ? process.resourcesPath : undefined);
+  const child = utilityProcess.fork(voiceWorkerPath(), [userDataPath, asset], {
     serviceName: 'youcoded-voice',
     stdio: 'pipe',
   });
+  // WHY: 2000 long phrases exceed Windows' argv limit. Structured-clone sends
+  // the immutable snapshot once, ordered before start, without a temporary file.
+  const snapshot = Object.freeze([...vocabulary]);
+  let configured = false;
   return {
-    send: (msg) => child.postMessage(msg),
+    send: (msg) => {
+      // Register lifecycle callbacks before this first send can throw; the
+      // service then still owns (and can close) a fork whose pipe fails.
+      if (!configured && snapshot.length) child.postMessage({ type: 'vocabulary', phrases: snapshot });
+      configured = true;
+      child.postMessage(msg);
+    },
     kill: () => { child.kill(); },
     onMessage: (cb) => { child.on('message', (m: VoiceWorkerToService) => cb(m)); },
     onExit: (cb) => { child.on('exit', (code: number) => cb(code)); },
@@ -60,10 +77,12 @@ export function startVoice(userDataPath: string): void {
   // leaving nothing able to reach the old one.
   service?.shutdown();
 
+  // WHY: preferences share the install's profile, not the cloud/sync spaces.
+  vocabulary = new VoiceVocabularyStore(userDataPath);
   const assets = new VoiceAssets(userDataPath);
   const instance = new VoiceService({
     assets,
-    spawnWorker: () => spawnVoiceWorker(userDataPath),
+    spawnWorker: (phrases) => spawnVoiceWorker(userDataPath, phrases),
     deliver: (id: number, event: VoiceEvent) => {
       const wc = webContents.fromId(id);
       if (wc && !wc.isDestroyed()) wc.send(EVENT_CHANNEL, event);

@@ -37,17 +37,28 @@ export interface ChatGptUsage {
   other?: Array<ChatGptUsageWindow & { minutes: number }>;
 }
 
+/** How the app reaches the plan. 'codex' borrows the Codex CLI's identity
+ *  (usage bars, any plan); 'official' is OpenAI's own Sign in with ChatGPT
+ *  (no usage source, Plus/Pro). Built in but off until the Codex route stops
+ *  working (Destin, 2026-10-05). */
+export type ChatGptRouteName = 'codex' | 'official';
+
 export type ChatGptAccountStatus =
-  | { state: 'signed-out' }
+  /** `reauth`: a sign-in exists but was made on the other route, so it cannot
+   *  be used — the card asks for one fresh sign-in (questions deck Q-2). */
+  | { state: 'signed-out'; reauth?: boolean }
   /** The browser tab is open; we are waiting for OpenAI's callback. */
   | { state: 'waiting' }
   | {
       state: 'signed-in';
       email: string;
       /** OpenAI's plan name as reported at sign-in ('plus', 'pro', 'team', 'free', …).
-       *  Free-form on purpose — OpenAI renames plans; the UI title-cases it. */
+       *  Free-form on purpose — OpenAI renames plans; the UI title-cases it.
+       *  '' on the official route, which does not say. */
       plan: string;
       usage?: ChatGptUsage | null;
+      /** Absent means 'codex' (a status from a build before routes existed). */
+      route?: ChatGptRouteName;
     }
   /** Signed in, but requests are refused — the specific reason OpenAI gave
    *  (a workspace admin disabled it, the plan has no Codex access, …). Per
@@ -107,6 +118,20 @@ function resetDayPrefix(windowLabel: string, t: number): string {
 
 export function isChatGptLimitMessage(message: string | null | undefined): boolean {
   return !!message && /ChatGPT's .* session limit/.test(message);
+}
+
+/** ChatGPT's own usage page: what is left, and how much of the plan YouCoded may use. */
+export const CHATGPT_MANAGE_USAGE_LINK = 'https://chatgpt.com/settings/usage';
+
+/** The official route's limit (`subscription_sharing_usage_limit_exceeded`).
+ *  It names no window and no reset, and OpenAI's docs say not to infer either —
+ *  the cap may be YouCoded's own share rather than the whole plan — so the
+ *  sentence says only what is known and points at the page that knows the rest. */
+export const CHATGPT_APP_LIMIT_MESSAGE =
+  "You have reached the ChatGPT usage YouCoded is allowed. See what's left, or raise YouCoded's share, in ChatGPT's usage settings.";
+
+export function isChatGptAppLimitMessage(message: string | null | undefined): boolean {
+  return message === CHATGPT_APP_LIMIT_MESSAGE;
 }
 
 /** Human plan label: 'plus' → 'ChatGPT Plus'. Unknown strings pass through

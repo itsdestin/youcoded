@@ -3549,6 +3549,7 @@ function AppInner() {
                       onOpenProviderSettings={chatViewHandlers.openProviderSettings}
                       onSwitchProviders={chatViewHandlers.switchProviders}
                       onUpgradePlan={chatViewHandlers.upgradePlan}
+                      onManageUsage={chatViewHandlers.manageUsage}
                       onAddCredit={chatViewHandlers.addCredit}
                       onCancelQueued={handleCancelQueued}
                       onEditQueued={handleEditQueued}

@@ -26,7 +26,7 @@
 // at runtime. They are the reason a few members are still typed against a
 // non-shared file — R3 moves each type into shared/ as it tightens that family.
 
-import type { VoiceBridge } from './voice-types';
+import type { VoiceBridge, VoiceVocabularyBridge } from './voice-types';
 import type { PagesBridge } from './pages-types';
 import type { OfficeBridge } from './office-types';
 import type { SavedFolder, PickerFolder, SessionDefaults, ModelModes } from './prefs-types';
@@ -657,6 +657,8 @@ export const IPC = {
   VOICE_STOP: 'voice:stop',
   VOICE_CANCEL: 'voice:cancel',
   VOICE_MIC_ACCESS: 'voice:mic-access',
+  VOICE_VOCABULARY_GET: 'voice:vocabulary-get',
+  VOICE_VOCABULARY_SAVE: 'voice:vocabulary-save',
   VOICE_AUDIO: 'voice:audio',
   VOICE_EVENT: 'voice:event',   // push
   // Office (main/ipc/office.ts). Requests the editor page makes, and the window's answers to main's pushes.
@@ -1474,6 +1476,7 @@ interface ClaudeApi {
   // speech engine yet (remote browser, older builds) — the composer hides
   // the mic when it is undefined. Shape: shared/voice-types.ts.
   voice?: VoiceBridge;
+  voiceVocabulary?: VoiceVocabularyBridge;
   // YouCoded Pages (Phase 1 shell). Optional: absent until the backend
   // lands; the header hides the pinned buttons and the library shows an
   // error when it is undefined. Shape: shared/pages-types.ts.

@@ -83,6 +83,12 @@ export type VoiceEvent =
 export const MIC_REFUSED_SENTENCE =
   "Microphone access was refused by your computer. Allow it for YouCoded in your system's privacy settings, then check again.";
 
+/** Local desktop recognition hints, separate from the microphone lifecycle. */
+export interface VoiceVocabularyBridge {
+  get: () => Promise<string[]>;
+  save: (phrases: string[]) => Promise<void>;
+}
+
 export interface VoiceBridge {
   status: () => Promise<VoiceReadiness>;
   /** Fetch the speech model; progress arrives as `readiness` events. */

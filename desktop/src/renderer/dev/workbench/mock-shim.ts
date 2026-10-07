@@ -160,6 +160,7 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // mock-only.ts. Listed so the contract test covers the fake.
   'voice.status', 'voice.download', 'voice.start', 'voice.stop', 'voice.cancel', 'voice.onEvent',
   'voice.sendAudio', 'voice.micAccess',
+  'voiceVocabulary.get', 'voiceVocabulary.save',
   // Development tickets and contribution setup (design 2026-09-08). The first four
   // are real channels (dev:* in preload.ts) faked so the workbench has evidence and
   // a submission result; the last two have NO real backend and are registered in
@@ -871,6 +872,22 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     ? 'default'
     : new URLSearchParams(location.search).get('scenario') ?? 'default';
 
+  // WHY: the approved short-route preview stores hints in memory only. It never
+  // calls the speech engine, modifies transcripts, or touches real user settings.
+  const vocabularyState = typeof location === 'undefined' ? activeScenario
+    : new URLSearchParams(location.search).get('vocabulary') ?? activeScenario;
+  let vocabularyPhrases = vocabularyState === 'empty' ? [] : vocabularyState === 'stress'
+    ? Array.from({ length: 1200 }, (_, i) => `Project phrase ${i + 1}`)
+    : ['YouCoded', 'Zoë', 'Côte d’Ivoire'];
+  const voiceVocabulary = {
+    get: async () => delay([...vocabularyPhrases]),
+    save: async (phrases: string[]) => {
+      await delay(undefined);
+      if (store.refuseWrites) throw new Error('Preview save refused');
+      vocabularyPhrases = [...phrases];
+    },
+  };
+
   // WHY: conversation JSONL is replayed as reducer state, not a live scripted
   // turn (reply-script.pending). This single native review ask needs a mock
   // response so a successful Submit is not falsely reported as expired.
@@ -1229,8 +1246,13 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     state: 'signed-in', email: 'destin@example.com', plan: 'free',
     usage: chatgptUsageFixture(),
   };
+  // `?chatgpt=official` / `reauth`: the official route's signed-in card (no
+  // plan name, no bars — it cannot read them) and the one-time "sign in again"
+  // a sign-in made the old way shows after the switch.
   let chatgptStatus: ChatGptAccountStatus =
-    chatgptPin === 'signed-out' ? { state: 'signed-out' }
+    chatgptPin === 'official' ? { state: 'signed-in', email: 'destin@example.com', plan: '', usage: null, route: 'official' }
+    : chatgptPin === 'reauth' ? { state: 'signed-out', reauth: true }
+    : chatgptPin === 'signed-out' ? { state: 'signed-out' }
     : chatgptPin === 'waiting' ? { state: 'waiting' }
     : chatgptPin === 'blocked' ? { state: 'blocked', email: 'destin@example.com', reason: 'Your workspace admin has turned off Codex for this account.' }
     : chatgptPin === 'free' ? CHATGPT_SIGNED_IN_FREE
@@ -3562,7 +3584,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     session, providers, permissions, models, engine, defaults, native, detach, tags, on, theme, firstRun,
     terminal, artifacts, syncSpaces, sync, project, account, social, appearance, specialists, shell,
     skills, marketplace, folders, fs, modes, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, search, performance: perfMock,
-    update, dev: devMock, ...(remote ? { remote } : {}),
+    update, dev: devMock, voiceVocabulary, ...(remote ? { remote } : {}),
     pages: createPagesMock(activeScenario === 'empty'),
     office: createOfficeMock(activeScenario === 'empty'),
     docComments: createDocCommentsMock(activeScenario === 'empty'),

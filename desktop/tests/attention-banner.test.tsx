@@ -10,6 +10,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup, fireEvent } from '@testing-library/react';
 
 import AttentionBanner from '../src/renderer/components/AttentionBanner';
+import { CHATGPT_APP_LIMIT_MESSAGE } from '../src/shared/chatgpt-types';
 
 // The literal message provider-registry throws when a provider has no API key.
 const CONFIG_ERROR = 'OpenRouter needs an API key — add one in Settings → Providers.';
@@ -98,6 +99,25 @@ describe('AttentionBanner — the plan-limit card', () => {
   it('does NOT show Upgrade plan when no handler is wired (e.g. remote client)', () => {
     const { container } = render(<AttentionBanner state="error" errorMessage={LIMIT_MSG} />);
     expect(planButtons(container).upgradeBtn).toBeNull();
+  });
+
+  it('the official route\'s limit offers Manage usage and Switch Providers — no Upgrade plan, no Try again', () => {
+    const onManage = vi.fn();
+    const { container } = render(
+      <AttentionBanner state="error" errorMessage={CHATGPT_APP_LIMIT_MESSAGE} onRetry={vi.fn()}
+        onSwitchProviders={vi.fn()} onUpgradePlan={vi.fn()} onManageUsage={onManage} />
+    );
+    const { switchBtn, upgradeBtn } = planButtons(container);
+    expect(switchBtn).not.toBeNull();
+    expect(upgradeBtn).toBeNull();
+    expect(buttonByText(container, 'Try again')).toBeNull();
+    fireEvent.click(buttonByText(container, 'Manage usage')!);
+    expect(onManage).toHaveBeenCalledTimes(1);
+  });
+
+  it('the Codex route\'s limit never offers Manage usage', () => {
+    const { container } = render(<AttentionBanner state="error" errorMessage={LIMIT_MSG} onManageUsage={vi.fn()} />);
+    expect(buttonByText(container, 'Manage usage')).toBeNull();
   });
 });
 

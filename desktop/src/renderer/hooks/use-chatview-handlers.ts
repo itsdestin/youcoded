@@ -13,7 +13,7 @@
 // Guards: ast-grep `app-chatview-props-are-stable` (no inline function on
 // <ChatView> in App.tsx); tests/chatview-skips-uninvolved-sessions.test.tsx.
 import { useMemo } from 'react';
-import { CHATGPT_UPGRADE_URL } from '../../shared/chatgpt-types';
+import { CHATGPT_MANAGE_USAGE_LINK, CHATGPT_UPGRADE_URL } from '../../shared/chatgpt-types';
 import { OPENROUTER_CREDITS_URL } from '../../shared/provider-types';
 
 interface Setters {
@@ -38,6 +38,8 @@ export interface ChatViewHandlers {
    *  <ChatView> the same day this file was written — the regression it exists
    *  to stop, and what ast-grep `app-chatview-props-are-stable` now refuses.) */
   addCredit: () => void;
+  /** Official ChatGPT route's limit card: ChatGPT's own usage page. */
+  manageUsage: () => void;
 }
 
 export function useChatViewHandlers({ setProvidersAutoOpen, setSettingsOpen, setModelPickerOpen }: Setters): ChatViewHandlers {
@@ -46,6 +48,7 @@ export function useChatViewHandlers({ setProvidersAutoOpen, setSettingsOpen, set
     openProviderSettings: () => { setProvidersAutoOpen(true); setSettingsOpen(true); },
     switchProviders: () => setModelPickerOpen(true),
     upgradePlan: () => { void window.claude.shell.openExternal(CHATGPT_UPGRADE_URL); },
+    manageUsage: () => { void window.claude.shell.openExternal(CHATGPT_MANAGE_USAGE_LINK); },
     addCredit: () => { void window.claude.shell.openExternal(OPENROUTER_CREDITS_URL); },
   }), [setProvidersAutoOpen, setSettingsOpen, setModelPickerOpen]);
 }

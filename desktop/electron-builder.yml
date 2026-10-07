@@ -189,6 +189,11 @@ files:
 # warns "file source doesn't exist" and packs no Office, and the app opens Office files with the
 # computer's default app. Pinned by tests/office/fetch-office.test.ts.
 extraResources:
+  # WHY: native contextual BPE needs an ordinary absolute file, not an asar member.
+  # This small matching tokenizer ships independently of the existing model download.
+  - from: resources/voice
+    to: voice
+    filter: ["**/*"]
   - from: office-build/${platform}-${arch}
     to: office
     filter: ["**/*"]
