@@ -166,6 +166,8 @@ export interface AppChannelTypes {
   'voice:cancel': { request: void; response: Nothing };
   'voice:mic-access': { request: void; response: 'granted' | 'denied' | 'not-determined' | 'unknown' };
   'voice:audio': { request: { chunk: ArrayBuffer; rms: number }; response: Nothing };
+  'voice:vocabulary-get': { request: void; response: string[] };
+  'voice:vocabulary-save': { request: { phrases: string[] }; response: Nothing };
 
   // ── Social (friends and presence, over the account) ──
   'social:lookup-handle': { request: { handle: string }; response: ApiResult<SocialUserCard> };

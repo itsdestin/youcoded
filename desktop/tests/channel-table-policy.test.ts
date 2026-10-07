@@ -54,8 +54,8 @@ describe('which of the last channels a phone may call: exactly what it could bef
     // 12 docComments + 3 theme + 5 appearance + 2 favorites + 2 game + 4 arcade + 4 zoom + platform + commands + 2 ui action + system +
     // terminal + app:restart + 2 performance + 3 attention + 4 shell + 3 dialog + clipboard + 10 window (minimize maximize close
     // traffic-light icon get-id get-directory answer-close open-detached focus-and-switch) + detach:claim-pending + 8 detach/drag
-    // + 17 buddy (buddy:mascot-hit joined with the taskbar-icon buddy, 2026-10-02) + 6 integrations + 12 remote admin + 7 voice + 14 social
-    expect(entries.length).toBe(127);
+    // + 17 buddy (buddy:mascot-hit joined with the taskbar-icon buddy, 2026-10-02) + 6 integrations + 12 remote admin + 9 voice (two desktop-only vocabulary channels) + 14 social
+    expect(entries.length).toBe(129);
   });
 
   it('exactly these are open to a phone; everything else is refused from the table', () => {

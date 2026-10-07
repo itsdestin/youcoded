@@ -10,7 +10,7 @@
 // and no error the user can read. So `voice:start` asks first, waits for the answer, and only then lets the microphone open.
 import { systemPreferences } from 'electron';
 import { IPC } from '../../shared/backend-contract';
-import { getVoiceService } from '../voice/voice-handlers';
+import { getVoiceService, getVoiceVocabularyStore } from '../voice/voice-handlers';
 import { MIC_REFUSED_SENTENCE, type VoiceService } from '../voice/voice-service';
 import { defineChannel, type MainChannelDef } from './channel-def';
 
@@ -18,6 +18,9 @@ const service = (): VoiceService => { const s = getVoiceService(); if (!s) throw
 const senderId = (ctx: { sender?: { id: number } }): number => ctx.sender?.id ?? -1;
 
 export const voiceChannels: MainChannelDef[] = [
+  // WHY: the phone has a different recognizer; never pretend it saved desktop hints.
+  defineChannel({ name: IPC.VOICE_VOCABULARY_GET, kind: 'handle', desktopOnly: true, handler: () => getVoiceVocabularyStore().read() }),
+  defineChannel({ name: IPC.VOICE_VOCABULARY_SAVE, kind: 'handle', desktopOnly: true, handler: ({ phrases }) => getVoiceVocabularyStore().save(phrases) }),
   defineChannel({ name: IPC.VOICE_STATUS, kind: 'handle', desktopOnly: true, handler: () => service().status() }),
   defineChannel({ name: IPC.VOICE_DOWNLOAD, kind: 'handle', desktopOnly: true, handler: (_p, ctx) => service().download(senderId(ctx)) }),
   defineChannel({
@@ -30,7 +33,10 @@ export const voiceChannels: MainChannelDef[] = [
         // The refusal is worded exactly once, in voice-service.ts, so this sentence and the renderer's cannot drift apart.
         if (!granted) throw new Error(MIC_REFUSED_SENTENCE);
       }
-      await service().start(senderId(ctx));
+      // WHY: only the next recording sees saved changes. Read asynchronously
+      // here, then service.start copies and reserves ownership without yielding.
+      const phrases = await getVoiceVocabularyStore().read();
+      await service().start(senderId(ctx), phrases);
     },
   }),
   defineChannel({ name: IPC.VOICE_STOP, kind: 'handle', desktopOnly: true, handler: () => { service().stop(); } }),
