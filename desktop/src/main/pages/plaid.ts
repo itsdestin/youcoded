@@ -25,7 +25,7 @@ import path from 'node:path';
 import { mutateFileUnderLock } from '../artifacts/cas-write';
 import type { SecretsStore } from '../providers/secrets-store';
 import type {
-  PlaidAccount, PlaidBrowser, PlaidEnvironment, PlaidInstitution, PlaidItemSummary, PlaidRequest, PlaidResult,
+  PlaidAccount, PlaidBrowser, PlaidEnvironment, PlaidInstitution, PlaidItemSummary, PlaidRequest, PlaidResult, PlaidTransaction,
 } from '../../shared/pages-types';
 
 const PLAID_ITEMS_FILE = 'plaid-items.json';
@@ -209,7 +209,9 @@ async function runHostedLink(ctx: PlaidContext, accessToken?: string): Promise<L
     body.products = ['transactions'];
     body.required_if_supported_products = ['liabilities'];
     body.optional_products = ['investments'];
-    body.transactions = { days_requested: 30 };
+    // Two years of purchases (Plaid's maximum) for spending charts and finding repeating bills; a bank only sends
+    // what it has. Banks connected before this was raised keep the 30 days they started with.
+    body.transactions = { days_requested: 730 };
   }
   const created = await plaidCall<{ link_token: string; hosted_link_url?: string }>(ctx, '/link/token/create', body);
   if (!created.hosted_link_url) throw new PlaidError('NO_HOSTED_LINK', 'Plaid did not return a sign-in page for this account. Hosted Link may not be enabled for your Plaid team.');
@@ -342,6 +344,49 @@ async function accountsFor(ctx: PlaidContext, r: ItemRecord, live: boolean): Pro
   }
 }
 
+interface RawTransaction {
+  transaction_id: string; account_id: string; date: string; amount: number; name: string; merchant_name?: string | null;
+  pending?: boolean; personal_finance_category?: { primary?: string; detailed?: string } | null;
+}
+const MAX_SYNC_PAGES = 40;
+function slimTransaction(t: RawTransaction): PlaidTransaction {
+  return {
+    id: t.transaction_id, account: t.account_id, date: t.date, amount: t.amount,
+    name: (t.merchant_name || t.name || '').slice(0, 80),
+    category: t.personal_finance_category?.primary || undefined,
+    detail: t.personal_finance_category?.detailed || undefined,
+    ...(t.pending ? { pending: true } : {}),
+  };
+}
+
+/** Every purchase change since the page's bookmark, paged through Plaid's /transactions/sync until it says there is
+ *  no more (capped, so one bank can never loop forever). An empty bookmark means "from the start". */
+async function transactionsFor(ctx: PlaidContext, r: ItemRecord, cursor: string): Promise<PlaidItemSummary> {
+  const base: PlaidItemSummary = { itemId: r.itemId, institution: r.institution, ok: true, accounts: [] };
+  const token = await ctx.items.accessToken(r).catch(() => null);
+  if (!token) return { ...base, ok: false, error: { code: 'NO_TOKEN', message: `This computer no longer holds the sign-in for ${r.institution.name}.`, reconnect: false } };
+  const added: PlaidTransaction[] = [], modified: PlaidTransaction[] = [], removed: string[] = [];
+  let next = cursor;
+  try {
+    for (let page = 0; page < MAX_SYNC_PAGES; page++) {
+      const res = await plaidCall<{ added: RawTransaction[]; modified: RawTransaction[]; removed: Array<{ transaction_id: string }>; next_cursor: string; has_more: boolean }>(
+        ctx, '/transactions/sync', { access_token: token, count: 500, ...(next ? { cursor: next } : {}) },
+      );
+      added.push(...res.added.map(slimTransaction));
+      modified.push(...res.modified.map(slimTransaction));
+      removed.push(...res.removed.map((x) => x.transaction_id));
+      next = res.next_cursor;
+      if (!res.has_more) break;
+    }
+    return { ...base, transactions: { added, modified, removed, cursor: next } };
+  } catch (e) {
+    const err = e instanceof PlaidError ? e : new PlaidError('UNKNOWN', 'Plaid could not read this bank\'s purchases.');
+    // Purchases still being gathered for a new bank is not a failure: try again next time.
+    if (err.code === 'PRODUCT_NOT_READY') return { ...base, transactions: { added: [], modified: [], removed: [], cursor } };
+    return { ...base, ok: false, error: { code: err.code, message: err.message, reconnect: RECONNECT_CODES.has(err.code) } };
+  }
+}
+
 /** The four things a page may ask for. Nothing returned ever carries a
  *  client id, secret or access token. */
 export async function runPlaid(ctx: PlaidContext, req: PlaidRequest): Promise<PlaidResult> {
@@ -355,6 +400,11 @@ export async function runPlaid(ctx: PlaidContext, req: PlaidRequest): Promise<Pl
         const items = await ctx.items.list(ctx.env);
         const out = await Promise.all(items.map((r) => accountsFor(ctx, r, !!req.live)));
         return { ok: true, op: 'accounts', items: out };
+      }
+      case 'transactions': {
+        const items = await ctx.items.list(ctx.env);
+        const out = await Promise.all(items.map((r) => transactionsFor(ctx, r, req.cursors?.[r.itemId] ?? '')));
+        return { ok: true, op: 'transactions', items: out };
       }
       case 'connect': {
         const link = await runHostedLink(ctx);
@@ -448,6 +498,14 @@ export function cleanPlaidRequest(raw: unknown): PlaidRequest | null {
     case 'connect': return { op: 'connect', browser: cleanBrowser(o.browser) };
     case 'cancel': return { op: 'cancel' };
     case 'accounts': return { op: 'accounts', live: o.live === true };
+    case 'transactions': {
+      // Bookmarks are opaque strings from Plaid, one per bank id; anything else is dropped.
+      const cursors: Record<string, string> = {};
+      if (o.cursors && typeof o.cursors === 'object') for (const [k, v] of Object.entries(o.cursors as Record<string, unknown>)) {
+        if (/^[A-Za-z0-9_-]{1,100}$/.test(k) && typeof v === 'string' && v.length <= 2000) cursors[k] = v;
+      }
+      return { op: 'transactions', cursors };
+    }
     case 'reconnect': return itemId ? { op: 'reconnect', itemId, browser: cleanBrowser(o.browser) } : null;
     case 'remove': return itemId ? { op: 'remove', itemId } : null;
     default: return null;

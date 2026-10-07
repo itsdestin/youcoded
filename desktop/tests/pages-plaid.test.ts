@@ -170,6 +170,29 @@ describe('plaid', () => {
     expect(r.items[1].error).toEqual({ code: 'ITEM_LOGIN_REQUIRED', message: 'Sign in to Stale Bank again.', reconnect: true });
   });
 
+  it('syncs purchases from the page\'s bookmark, page by page, keeping only what the page needs', async () => {
+    await items.add('sandbox', 'item-1', 'access-1', { id: '', name: 'Bank' });
+    const pages = [
+      { added: [{ transaction_id: 't1', account_id: 'a1', date: '2026-10-01', amount: 15.49, name: 'NETFLIX.COM 866', merchant_name: 'Netflix', personal_finance_category: { primary: 'ENTERTAINMENT', detailed: 'ENTERTAINMENT_TV_AND_MOVIES' } }], modified: [], removed: [], next_cursor: 'c1', has_more: true },
+      { added: [], modified: [], removed: [{ transaction_id: 't0' }], next_cursor: 'c2', has_more: false },
+    ];
+    const { calls, fetchImpl } = fakePlaid({ '/transactions/sync': () => pages.shift()! });
+    const r = await runPlaid(ctx(fetchImpl), { op: 'transactions', cursors: { 'item-1': 'c0' } });
+    expect(calls.map((c) => c.body.cursor)).toEqual(['c0', 'c1']);
+    if (!r.ok) throw new Error(r.message);
+    expect(r.items[0].transactions).toEqual({
+      added: [{ id: 't1', account: 'a1', date: '2026-10-01', amount: 15.49, name: 'Netflix', category: 'ENTERTAINMENT', detail: 'ENTERTAINMENT_TV_AND_MOVIES' }],
+      modified: [], removed: ['t0'], cursor: 'c2',
+    });
+  });
+
+  it('a bank whose purchases are not ready yet is fine and keeps its bookmark', async () => {
+    await items.add('sandbox', 'item-1', 'access-1', { id: '', name: 'Bank' });
+    const { fetchImpl } = fakePlaid({ '/transactions/sync': () => ({ error_code: 'PRODUCT_NOT_READY', error_message: 'not yet' }) });
+    const r = await runPlaid(ctx(fetchImpl), { op: 'transactions', cursors: { 'item-1': 'keep' } });
+    expect(r.ok && r.items[0]).toMatchObject({ ok: true, transactions: { added: [], cursor: 'keep' } });
+  });
+
   it('removing a bank tells Plaid and forgets its sign-in', async () => {
     await items.add('sandbox', 'item-1', 'access-1', { id: '', name: 'Bank' });
     const { calls, fetchImpl } = fakePlaid({ '/item/remove': () => ({}) });

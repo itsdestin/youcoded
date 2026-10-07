@@ -150,6 +150,9 @@ export type PlaidRequest =
   /** Stop waiting for a bank sign-in (the person closed the browser tab). */
   | { op: 'cancel' }
   | { op: 'accounts'; live?: boolean }
+  /** New, changed and removed purchases for each bank since the page's own bookmark (Plaid's sync cursor). The page
+   *  keeps the bookmark with the purchases it saved, so a save that fails just asks for the same changes again. */
+  | { op: 'transactions'; cursors?: Record<string, string> }
   | { op: 'reconnect'; itemId: string; browser?: PlaidBrowser }
   | { op: 'remove'; itemId: string };
 
@@ -177,6 +180,23 @@ export interface PlaidItemSummary {
   ok: boolean;
   error?: { code: string; message: string; reconnect: boolean };
   accounts: PlaidAccount[];
+  /** Only on a `transactions` answer. */
+  transactions?: { added: PlaidTransaction[]; modified: PlaidTransaction[]; removed: string[]; cursor: string };
+}
+
+/** One purchase or deposit, kept small because the page saves them. `amount` follows Plaid: positive is money out. */
+export interface PlaidTransaction {
+  id: string;
+  /** The account's Plaid id. */
+  account: string;
+  date: string;
+  amount: number;
+  /** The merchant when Plaid knows it, else the bank's own description. */
+  name: string;
+  /** Plaid's category, e.g. FOOD_AND_DRINK / FOOD_AND_DRINK_RESTAURANT. */
+  category?: string;
+  detail?: string;
+  pending?: boolean;
 }
 
 export type PlaidResult =
