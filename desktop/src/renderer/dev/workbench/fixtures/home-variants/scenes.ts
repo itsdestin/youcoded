@@ -64,15 +64,16 @@ const SHARED = String.raw`
     return sceneName(sc, room) + (isLast ? ', last used' : '') + (scInfo(sc).dyn ? ', moves through its colours' : '') + ', ' + scBri(sc) + ' percent bright' + (l ? ', ' + l.c.length + ' colours' : ', colours not seen yet');
   }
   function scMoving(sc) { return scInfo(sc).dyn ? '<span class="sx-mv" title="Moves slowly through its colours">' + SC_WAVE + 'Moving</span>' : ''; }
-  function scLastPill(isLast) { return isLast ? '<span class="sx-last">Last used</span>' : ''; }
+  // WHY no chip (owner, 2026-10-06: "remove last used chip"): the last-used scene keeps only a subtle accent outline on its card.
+  function scLastPill(isLast) { return ''; }
   function scenesHtml(room) {
     var list = scenesList(room);
     if (!list.length || !scenesOpen.has(room.id)) return '';
     var last = list.reduce(function (a, b) { return Date.parse(b.last) > Date.parse(a ? a.last : 0) ? b : a; }, null);
     var sorted = list.slice().sort(function (a, b) { return sceneName(a, room).localeCompare(sceneName(b, room)); });
-    return '<div class="scenes sx open"><div class="sx-row" role="group" aria-label="Scenes in ' + esc(room.name) + ', scroll sideways">' + sorted.map(function (sc) {
+    return '<div class="scenes sx open"><div class="sx-row ' + SX_MODE + '" role="group" aria-label="Scenes in ' + esc(room.name) + ', scroll sideways">' + sorted.map(function (sc) {
       var isLast = !!(last && sc.id === last.id && Date.parse(last.last));
-      return '<button class="scene sx-card' + (isLast ? ' last' : '') + (scLook(sc) ? '' : ' unk') + '" data-scene="' + esc(sc.id) + '" aria-label="' + esc(scLabel(sc, room, isLast)) + '">' + sxCard(sc, room, isLast) + '</button>';
+      return '<button class="scene sx-card' + (isLast ? ' last' : '') + (scLook(sc) ? '' : ' unk') + (scInfo(sc).dyn ? ' dyn' : '') + '" data-scene="' + esc(sc.id) + '" aria-label="' + esc(scLabel(sc, room, isLast)) + '">' + sxCard(sc, room, isLast) + '</button>';
     }).join('') + '</div></div>';
   }
   // WHY: a row opens already scrolled to the scene used last, so the "last used" card is the first thing you see (once per row; later redraws keep your own scrolling).
@@ -102,11 +103,11 @@ const SHARED = String.raw`
 `;
 
 // Swaps the page's own scene list, and makes Scenes and each light mutually exclusive (opening one closes the other).
-function build(cardJs: string) {
+function build(mode: string) {
   return (html: string) => {
     const must = (out: string, was: string, what: string) => { if (out === was) throw new Error('scenes variant: could not find ' + what); return out; };
     let out = html;
-    out = must(out.replace(/ {2}function scenesHtml\(room\) \{[\s\S]*?\n {2}\}\n(?= {2}function lightsCard)/, () => SHARED + cardJs + '\n'), out, 'scenesHtml');
+    out = must(out.replace(/ {2}function scenesHtml\(room\) \{[\s\S]*?\n {2}\}\n(?= {2}function lightsCard)/, () => "  var SX_MODE = '" + mode + "';\n" + SHARED + GRADIENT_JS + '\n'), out, 'scenesHtml');
     // WHY: opening the room's lights closes its scenes ...
     out = must(out.replace('if (open.has(fd)) open.delete(fd); else open.add(fd);', 'if (open.has(fd)) open.delete(fd); else { open.add(fd); scenesOpen.delete(fd); }'), out, 'fold');
     // ... and opening its scenes closes its lights (same on the Home tab and the Lights tab: both use these two buttons).
@@ -172,70 +173,34 @@ const GRADIENT_CSS = String.raw`
   .sg-unk .sx-try { position: absolute; left: 8px; right: 8px; top: 38%; text-align: center; }
 `;
 
-// (b) Swatch cards: a calm glass card; name on top, a row of round colour dots, a brightness bar.
-const SWATCH_JS = String.raw`
-  function sxCard(sc, room, isLast) {
-    var l = scLook(sc), b = scBri(sc), dots = '';
-    if (l) { l.c.forEach(function (c) { dots += '<i class="sw-dot" style="background:' + esc(c) + '"></i>'; }); }
-    else { dots = '<i class="sw-dot sw-q"></i><i class="sw-dot sw-q"></i><i class="sw-dot sw-q"></i>'; }
-    return '<span class="sw-top"><span class="sx-nm">' + esc(sceneName(sc, room)) + '</span>' + scMoving(sc).replace('sx-mv', 'sx-mv sx-mv-n') + '</span>' +
-      '<span class="sw-dots">' + dots + '</span>' +
-      (l ? '' : '<span class="sx-try">Try it to see its colours</span>') +
-      '<span class="sw-bar"><span class="sw-bar-in" style="width:' + b + '%"></span></span>' +
-      '<span class="sw-foot"><span class="sx-pct">' + b + '%</span>' + scLastPill(isLast) + '</span>';
-  }
-`;
-const SWATCH_CSS = String.raw`
-  .sx-card { padding: 10px; gap: 8px; --sxw: 156px; background: var(--inset); }
-  .sw-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-height: 18px; }
-  .sw-top .sx-nm { flex: 1; min-width: 0; }
-  .sw-top .sx-mv-n, .sg-top .sx-mv-n { background: var(--well); color: var(--fg-2); border: 1px solid var(--edge-dim); }
-  .sw-dots { display: flex; gap: 6px; min-height: 26px; align-items: center; }
-  .sw-dot { width: 26px; height: 26px; border-radius: 50%; flex: 0 0 auto; border: 1px solid rgba(0,0,0,.18); box-shadow: inset 0 1px 2px rgba(255,255,255,.35); }
-  .sw-dot.sw-q { background: none; border: 1.5px dashed var(--fg-faint); box-shadow: none; }
-  .sw-bar { display: block; height: 5px; border-radius: 9999px; background: var(--well); overflow: hidden; }
-  .sw-bar-in { display: block; height: 100%; border-radius: 9999px; background: var(--fg-muted); }
-  .sw-foot { display: flex; align-items: center; justify-content: space-between; min-height: 14px; }
-  @media (max-width: 480px) { .sx-card { --sxw: 136px; padding: 8px; } .sw-dot { width: 22px; height: 22px; } }
-`;
-
-// (c) Light preview cards: a tiny night-time picture of the room's lights as glowing dots, then the name.
-const PREVIEW_JS = String.raw`
-  var SP_POS = [[22, 38], [50, 24], [78, 40], [34, 70], [68, 72]];
-  function sxCard(sc, room, isLast) {
-    var l = scLook(sc), b = scBri(sc), dots = '';
-    var n = l ? l.c.length : 4;
-    for (var i = 0; i < n; i++) {
-      var p = SP_POS[i % SP_POS.length], sz = l ? 9 + Math.round(b / 100 * 8) : 10;
-      if (l) {
-        var c = l.c[i], gl = 6 + Math.round(b / 100 * 18);
-        dots += '<i class="sp-dot" style="left:' + p[0] + '%;top:' + p[1] + '%;width:' + sz + 'px;height:' + sz + 'px;background:' + esc(c) + ';box-shadow:0 0 ' + gl + 'px ' + Math.round(gl / 3) + 'px ' + esc(c) + '"></i>';
-      } else dots += '<i class="sp-dot sp-q" style="left:' + p[0] + '%;top:' + p[1] + '%;width:' + sz + 'px;height:' + sz + 'px"></i>';
-    }
-    return '<span class="sp-stage">' + dots + '<span class="sp-top">' + scLastPill(isLast) + scMoving(sc) + '</span>' + (l ? '' : '<span class="sp-try">Try it to see its colours</span>') + '</span>' +
-      '<span class="sp-foot"><span class="sx-nm">' + esc(sceneName(sc, room)) + '</span><span class="sx-pct">' + b + '%</span></span>';
-  }
-`;
-const PREVIEW_CSS = String.raw`
-  .sx-card { --sxw: 150px; }
-  /* WHY a fixed dark stage on every theme: a glow only reads against dark, and Creme's panels are light. */
-  .sp-stage { position: relative; display: block; height: 84px; background: #16141f; background-image: radial-gradient(ellipse at 50% 120%, rgba(255,255,255,.07), transparent 70%); border-bottom: 1px solid var(--edge-dim); }
-  .sp-dot { position: absolute; border-radius: 50%; transform: translate(-50%, -50%); }
-  .sp-dot.sp-q { background: none; border: 1.5px dashed rgba(255,255,255,.35); box-shadow: none; }
-  .sp-top { position: absolute; left: 6px; right: 6px; top: 6px; display: flex; justify-content: space-between; align-items: flex-start; gap: 4px; }
-  .sp-top .sx-mv:only-child { margin-left: auto; }
-  .sp-try { position: absolute; left: 6px; right: 6px; bottom: 6px; text-align: center; font-size: 10.5px; color: rgba(255,255,255,.72); line-height: 1.25; }
-  .sp-foot { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; padding: 8px 10px 9px; }
-  .sx-card.unk .sp-stage { background-color: #1d1b26; }
-  @media (max-width: 480px) { .sx-card { --sxw: 132px; } }
+// WHY every layout keeps this gradient face: the owner chose it (scenes-all, 2026-10-06) and asked for other LAYOUTS of it.
+const LAYOUT_CSS = String.raw`
+  .sx-card.last { box-shadow: 0 0 0 1px var(--accent); }
+  /* (1) Two rows: the cards fill two stacked rows and the whole block slides sideways together. */
+  .sx-row.rows2 { display: grid; grid-auto-flow: column; grid-template-rows: repeat(2, 84px); grid-auto-columns: 128px; gap: 8px; }
+  .rows2 .sx-card { width: auto; height: 84px; flex: none; }
+  .rows2 .sg-foot { padding: 6px 8px; }
+  .rows2 .sx-mv { font-size: 0; gap: 0; padding: 3px 5px; }
+  .rows2 .sg-unk .sx-try, .mosaic .sg-unk .sx-try { top: 22px; font-size: 9.5px; line-height: 1.2; }
+  /* (2) Big cards: one row of larger, taller cards; more of each gradient shows, fewer cards at once. */
+  .sx-row.big { gap: 12px; }
+  .big .sx-card { --sxw: 210px; height: 168px; }
+  .big .sx-nm { font-size: 15px; }
+  .big .sg-face { padding: 10px; }
+  .big .sg-foot { padding: 10px; }
+  .big .sx-pct { font-size: 12px; }
+  /* (3) Mosaic: two rows where scenes that move through colours span two columns, so they get the most gradient. */
+  .sx-row.mosaic { display: grid; grid-auto-flow: column dense; grid-template-rows: repeat(2, 84px); grid-auto-columns: 92px; gap: 8px; }
+  .mosaic .sx-card { width: auto; height: 84px; flex: none; }
+  .mosaic .sx-card.dyn { grid-column: span 2; }
+  .mosaic .sg-foot { padding: 6px 8px; }
+  .mosaic .sx-pct { display: none; }
+  .mosaic .sx-card:not(.dyn) .sx-mv { display: none; }
+  @media (max-width: 480px) { .big .sx-card { --sxw: 170px; height: 150px; } .rows2 { grid-auto-columns: 116px; } }
 `;
 
-export const VARIANTS: HomeVariants = {
-  gradient: { label: 'Gradient cards', css: ROW_CSS + GRADIENT_CSS, transform: build(GRADIENT_JS), data: { ...base, startScenes: ['destins_room'] } },
-  swatch: { label: 'Swatch cards', css: ROW_CSS + SWATCH_CSS, transform: build(SWATCH_JS), data: { ...base, startScenes: ['destins_room'] } },
-  preview: { label: 'Light preview cards', css: ROW_CSS + PREVIEW_CSS, transform: build(PREVIEW_JS), data: { ...base, startScenes: ['destins_room'] } },
-  // The same three on the Lights tab's tall room cards.
-  'gradient-lights': { label: 'Gradient cards, Lights tab', css: ROW_CSS + GRADIENT_CSS, transform: build(GRADIENT_JS), data: { ...base, view: 'lights', startScenes: ['destins_room'] } },
-  'swatch-lights': { label: 'Swatch cards, Lights tab', css: ROW_CSS + SWATCH_CSS, transform: build(SWATCH_JS), data: { ...base, view: 'lights', startScenes: ['destins_room'] } },
-  'preview-lights': { label: 'Light preview cards, Lights tab', css: ROW_CSS + PREVIEW_CSS, transform: build(PREVIEW_JS), data: { ...base, view: 'lights', startScenes: ['destins_room'] } },
-};
+export const VARIANTS: HomeVariants = {};
+for (const [k, label, mode] of [['rows2', 'Two stacked rows', 'rows2'], ['big', 'Big cards', 'big'], ['mosaic', 'Mosaic', 'mosaic']] as const) {
+  VARIANTS[k] = { label, css: ROW_CSS + GRADIENT_CSS + LAYOUT_CSS, transform: build(mode), data: { ...base, startScenes: ['destins_room'] } };
+  VARIANTS[k + '-lights'] = { label: label + ', Lights tab', css: ROW_CSS + GRADIENT_CSS + LAYOUT_CSS, transform: build(mode), data: { ...base, view: 'lights', startScenes: ['destins_room'] } };
+}
