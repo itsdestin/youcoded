@@ -88,10 +88,10 @@ it('moves with the arrow keys, Home and End, and the buttons still work', async 
   expect(sent.at(-1)).toMatchObject({ temperature: 50 });
   // − and + are still there and still send.
   card().querySelector<HTMLElement>('[aria-label="Warmer"]')!.click();
-  await tick(600);
+  await tick(900); // a press sends once the presses stop (800 ms)
   expect(sent.at(-1)).toMatchObject({ temperature: 51 });
   card().querySelector<HTMLElement>('[aria-label="Cooler"]')!.click();
-  await tick(600);
+  await tick(900); // a press sends once the presses stop (800 ms)
   expect(sent.at(-1)).toMatchObject({ temperature: 50 });
 });
 

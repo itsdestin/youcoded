@@ -1283,13 +1283,7 @@ ${HOME_ICONS_JS}
       var it = null;
       rooms.forEach(function (r) { r.items.forEach(function (x) { if (x.id === tid) it = x; }); });
       if (!it) return;
-      if (thRange(it)) { var rn = thNext(it, t.getAttribute('data-delta')); setLocal(tid, rn.patch); service('climate', 'set_temperature', rn.body, tid); return; }
-      if (it.target == null) return;
-      var next = Math.round((Number(it.target) + Number(t.getAttribute('data-delta'))) * 10) / 10;
-      if (it.min != null) next = Math.max(it.min, next);
-      if (it.max != null) next = Math.min(it.max, next);
-      setLocal(tid, { target: next });
-      service('climate', 'set_temperature', { entity_id: tid, temperature: next }, tid);
+      thPress(it, t.getAttribute('data-delta')); // held at once, sent once the presses stop (home-assistant-page-dial.ts)
     }
   });
   function onAct(act, id, t) {

@@ -140,6 +140,7 @@ export function fakeHomeAssistantReset(): void {
   lastBrightness.clear();
   lastLevels.clear();
   reportDelayMs = 0;
+  nestLag = []; nestSeq = 0; nestRefuse = false; nestApplying = false;
   journal.length = 0;
   calls.length = 0;
 }
@@ -153,6 +154,16 @@ const BLANKED: Array<keyof Thing> = ['brightness', 'rgb', 'k', 'vol', 'muted', '
  *  levels in ONE message, as the real house was traced doing). 0 = instantly, which is how every older test expects it. */
 let reportDelayMs = 0;
 export function fakeHomeAssistantReportDelay(ms: number): void { reportDelayMs = ms; }
+/** A Google Nest thermostat (via the Nest SDM integration): Home Assistant ACCEPTS a set_temperature at once but the thermostat
+ *  confirms through Google Pub/Sub seconds later, each call on its own delay, so a confirmation for an EARLIER value can land after a
+ *  newer one was asked for. `delays` are cycled, one per call (e.g. [3000, 2000] makes the second call confirm first). [] = instant,
+ *  which is how every older test expects it. `nestRefuse(true)` makes Google rate-limit: the call is refused with a 429. */
+let nestLag: number[] = [];
+let nestSeq = 0;
+let nestRefuse = false;
+let nestApplying = false;
+export function fakeHomeAssistantNestLag(delays: number[]): void { nestLag = delays; nestSeq = 0; }
+export function fakeHomeAssistantNestRefuse(on: boolean): void { nestRefuse = on; }
 
 /** Every service call the page made since the last reset, in order: lets a test see WHICH service a button used
  *  (media_seek, or remote.send_command with a key name) without reading the page's code. */
@@ -315,7 +326,16 @@ export function fakeHomeAssistantFetch(req: PageFetchRequest): PageFetchResult |
     let data: Record<string, unknown> = {};
     try { data = JSON.parse(req.body ?? '{}'); } catch { /* empty body */ }
     const ids = ([] as unknown[]).concat(data.entity_id ?? []).map(String);
-    calls.push({ domain: svc[1], service: svc[2], data });
+    if (!nestApplying) calls.push({ domain: svc[1], service: svc[2], data });
+    // A Nest: refuse (429) or accept now and confirm later, each call on its own delay (see fakeHomeAssistantNestLag).
+    if (!nestApplying && svc[1] === 'climate' && svc[2] === 'set_temperature') {
+      if (nestRefuse) return { ok: true, status: 429, headers: {}, body: 'RESOURCE_EXHAUSTED' }; // ok = the fetch worked; the HTTP status is the refusal
+      if (nestLag.length) {
+        const wait = nestLag[nestSeq++ % nestLag.length];
+        pcTimers.push(setTimeout(() => { nestApplying = true; try { fakeHomeAssistantFetch(req); } finally { nestApplying = false; } }, wait));
+        return ok('[]');
+      }
+    }
     for (const id of ids) {
       const t = find(id);
       if (!t || t.state === 'unavailable') continue;

@@ -22,12 +22,12 @@ it('shows both set points in Auto and moves only the chosen one', async () => {
   // Choose the cool side: + raises 75 to 76 and sends both numbers.
   card().querySelector<HTMLElement>('[data-side="high"]')!.click();
   card().querySelector<HTMLElement>('[aria-label="Warmer"]')!.click();
-  await tick(600);
+  await tick(900); // a press sends once the presses stop (800 ms)
   expect(sent.at(-1)).toMatchObject({ entity_id: T, target_temp_low: 68, target_temp_high: 76 });
   // Press the heat side, then −: 68 becomes 67, the high side stays.
   card().querySelector<HTMLElement>('[data-side="low"]')!.click();
   card().querySelector<HTMLElement>('[aria-label="Cooler"]')!.click();
-  await tick(600);
+  await tick(900); // a press sends once the presses stop (800 ms)
   expect(sent.at(-1)).toMatchObject({ target_temp_low: 67, target_temp_high: 76 });
   expect(qa(`[data-eid="${T}"] .th-side-btn`).map((b) => b.textContent)).toEqual(['67°', '76°']);
 });

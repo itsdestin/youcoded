@@ -177,7 +177,7 @@ export const HOME_DIAL_JS = `${HOME_DIAL_GEOM_JS}
   var thDrag = null; // { id, which, k, changed }
   function thHeldNow(it, which) { return which === 'high' ? it.thi : which === 'low' ? it.tlo : it.target; }
   // Sets one handle to v. Returns false when nothing changed.
-  function thSet(it, which, v, final) {
+  function thSet(it, which, v, final, settle) {
     var lo = it.min != null ? it.min : 50, hi = it.max != null ? it.max : 90, step = it.step || 1, patch, body, val;
     if (thRange(it)) {
       var r = thClampRange(which === 'high' ? 'high' : 'low', v, it.tlo, it.thi, lo, hi, step);
@@ -187,8 +187,18 @@ export const HOME_DIAL_JS = `${HOME_DIAL_GEOM_JS}
     if (same && !final) return false;
     Object.keys(patch).forEach(function (k) { holdVal(it.id, k, patch[k], HOLD_MS, it.id); });
     thRepaint(it);
-    if (!same || final) sendSlider(it.id, 400, val, function () { quiet('/api/services/climate/set_temperature', body, it.id); }, final);
+    var go = function () { quiet('/api/services/climate/set_temperature', body, it.id); };
+    // WHY a press waits 800 ms for the next one (the Nest rubber-band): a drag throttles (400 ms), a press sends once the presses stop.
+    if (!same || final) { if (settle) sendAfter(it.id, 800, val, go); else sendSlider(it.id, 400, val, go, final); }
     return !same;
+  }
+  // One press of − or + (Home card, Favourites, Climate hero all land here): the held number moves at once; the send waits for the last press.
+  function thPress(it, delta) {
+    var which = thRange(it) ? thSideOf(it) : 'set', cur = thHeldNow(it, which);
+    if (cur == null) return;
+    var lo = it.min != null ? it.min : 50, hi = it.max != null ? it.max : 90;
+    thSet(it, which, Math.max(lo, Math.min(hi, Math.round((Number(cur) + Number(delta)) * 10) / 10)), false, true);
+    renderSoon();
   }
   // Every drawing of this thermostat (a room card, Favourites, the Climate tab) follows at once, in place.
   function thRepaint(it) {
