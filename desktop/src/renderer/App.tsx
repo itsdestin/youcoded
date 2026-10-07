@@ -19,6 +19,7 @@ import { isPlaceholderModelId } from '../shared/model-ids';
 import { useChatViewHandlers } from './hooks/use-chatview-handlers';
 import { useAppScreens } from './shoot-app-screens';
 import { ScreenMark } from './shoot-mode';
+import { DevWindowLabel } from './components/DevWindowLabel';
 
 import ErrorBoundary from './components/ErrorBoundary';
 import { AnchorTip, Button, Dialog, ErrorState, StatusStrip, Toast, Toggle } from './components/ui';
@@ -3762,14 +3763,7 @@ function AppInner() {
             ) : (
               <p className="text-xl text-fg-muted select-none">No Active Session</p>
             )}
-            {/* Dev windows only (run-dev.sh --label → preload's devLabel; null in the built app). The status bar already
-                names a dev window, but it only appears once a session is open — with several dev windows up and no
-                session (page or settings work), they were indistinguishable (Destin, 2026-10-08). */}
-            {window.claude?.devLabel && (
-              <span className="text-xs text-fg-2 px-2.5 py-0.5 rounded-sm border border-edge-dim bg-inset select-none" data-dev-window-label>
-                Dev window · <span className="text-fg font-medium">{window.claude.devLabel}</span>
-              </span>
-            )}
+            <DevWindowLabel />
             {/* scene: the hero surface renders the theme's companions (sun,
                 motes, sparkles) orbiting the mascot — big canvas, no clipping.
                 data-guide-anchor: the tour's first stop rings the buddy. */}
