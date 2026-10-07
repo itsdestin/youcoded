@@ -105,7 +105,7 @@ describe('BugReportPopup', () => {
   it('passes the bug label when submitting from the Bug tab', async () => {
     render(<BugReportPopup open={true} onClose={() => undefined} />);
     fill();
-    await screen.findByText(/Your ticket is submitted/i);
+    await screen.findByText(/Submitted to GitHub/i);
     expect((window as any).claude.dev.submitIssue).toHaveBeenCalledWith(
       expect.objectContaining({ label: 'bug' }),
     );
@@ -114,7 +114,7 @@ describe('BugReportPopup', () => {
   it('passes the enhancement label when the Feature tab is selected', async () => {
     render(<BugReportPopup open={true} onClose={() => undefined} />);
     fill('Feature');
-    await screen.findByText(/Your ticket is submitted/i);
+    await screen.findByText(/Submitted to GitHub/i);
     expect((window as any).claude.dev.submitIssue).toHaveBeenCalledWith(
       expect.objectContaining({ label: 'enhancement' }),
     );
@@ -123,7 +123,7 @@ describe('BugReportPopup', () => {
   it('passes raw fields instead of a pre-built body', async () => {
     render(<BugReportPopup open={true} onClose={() => undefined} />);
     fill();
-    await screen.findByText(/Your ticket is submitted/i);
+    await screen.findByText(/Submitted to GitHub/i);
     const callArgs = (window as any).claude.dev.submitIssue.mock.calls[0][0];
     // The body is assembled in main, where the real app version and OS live.
     expect(callArgs).toHaveProperty('kind', 'bug');
