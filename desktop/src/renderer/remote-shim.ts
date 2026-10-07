@@ -2857,6 +2857,11 @@ export function installShim(): void {
     // audio and no permission query ever passes through here. Every caller tests
     // `typeof bridge.sendAudio === 'function'` instead of assuming. Both gaps are
     // written down in the workspace rule .claude/rules/ipc-bridge.md.
+    // WHY: a phone's recognizer cannot consume this computer's Parakeet hints.
+    voiceVocabulary: {
+      get: (): Promise<string[]> => Promise.reject(new Error('Custom voice vocabulary is only available on the desktop.')),
+      save: (_phrases: string[]): Promise<void> => Promise.reject(new Error('Custom voice vocabulary is only available on the desktop.')),
+    },
     voice: {
       // Every method below refuses the moment this client is pointed at someone
       // else's desktop.
