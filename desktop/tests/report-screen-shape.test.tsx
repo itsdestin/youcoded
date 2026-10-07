@@ -86,19 +86,16 @@ describe('the ticket screen keeps its approved shape', () => {
     expect(screen.getByRole('button', { name: 'Let your assistant try to fix it' })).toBeTruthy();
   });
 
-  it('R18: evidence is plain rows with no sub-labels — explanations live in the (i)', () => {
-    // WHY it looks for the ELEMENT and not for prose (grader, 2026-09-10): the first
-    // version searched for text containing ". " — and the sub-label that actually
-    // broke this row for a whole round, "Finish this ticket in your browser, where
-    // you can attach them", has no full stop in it. The regression came back green
-    // against its own guard. SettingRow renders a description as a <p> with the muted
-    // class (SettingRow.tsx:183-191); the rule is that these rows have none.
+  it('each include choice says in its own row what ticking it adds — no (i) buttons', () => {
+    // Replaces R18 ("explained by the (i) on its row"). Destin, submit-ticket-1#ST-1 "the
+    // checkbox ux is still odd" and #ST-13 "should explain itself": the explanation is the
+    // row's own hint now. Opened from Settings there is no error, so two choices only.
     render(<BugReportPopup open onClose={() => {}} />);
-    const heading = screen.getByText('Include with ticket');
-    const section = heading.parentElement!;
-    expect(within(section).getAllByRole('checkbox')).toHaveLength(3);
-    expect(section.querySelectorAll('p.text-fg-muted')).toHaveLength(0);
-    expect(within(section).getAllByRole('button', { name: /^About / })).toHaveLength(3);
+    const section = screen.getByText('Include with ticket').parentElement!;
+    expect(within(section).getAllByRole('checkbox')).toHaveLength(2);
+    expect(within(section).queryAllByRole('button', { name: /^About / })).toHaveLength(0);
+    expect(within(section).getByText(/last 200 lines/)).toBeTruthy();
+    expect(within(section).getByText(/attach them there/)).toBeTruthy();
   });
 
   it('R22: the version line is the real one, not a fixed string', () => {
@@ -109,20 +106,46 @@ describe('the ticket screen keeps its approved shape', () => {
     render(<BugReportPopup open onClose={() => {}} />);
     fillDraft();
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
-    expect(screen.getByText(versionLine())).toBeTruthy();
+    // Always listed now (submit-ticket-1#ST-Q1): the version goes with every ticket.
+    expect(screen.getByText(new RegExp(`^${versionLine().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} — always sent`))).toBeTruthy();
     expect(screen.queryByText(/1\.2\.4/)).toBeNull();
   });
 });
 
 describe('a ticket opened from an error', () => {
-  it('starts with where it happened even though the screen was mounted before the error', () => {
-    // WHY (found shooting the practice states, 2026-10-06): every caller keeps the popup
-    // MOUNTED and opens it by passing a context, but the description was seeded only by
-    // useState's first value — the mount, when there was no context yet. So "This
-    // happened in Office." never reached a real user, and Diagnose opened a blank draft.
+  it('never pre-fills the description; offers the error as its own choice, saying what it adds', () => {
+    // Destin, submit-ticket-1#ST-13: "it shouldn't fill text in the description, but the
+    // error details checkbox should explain itself when it applies". Mounted first, then
+    // opened with a context — the way every caller does it.
     const { rerender } = render(<BugReportPopup open={false} onClose={() => {}} />);
-    rerender(<BugReportPopup open onClose={() => {}} context={{ surface: 'Office' }} />);
-    expect((screen.getByLabelText('Description') as HTMLTextAreaElement).value).toMatch(/^This happened in Office\./);
+    rerender(<BugReportPopup open onClose={() => {}} context={{ surface: 'Office', error: 'EBUSY' }} />);
+    expect((screen.getByLabelText('Description') as HTMLTextAreaElement).value).toBe('');
+    expect(screen.getByRole('checkbox', { name: 'Include error details' })).toBeTruthy();
+    expect(screen.getByText(/Adds where it happened \(Office\) and the error message/)).toBeTruthy();
+  });
+
+  it('offers no error choice when opened from Settings', () => {
+    render(<BugReportPopup open onClose={() => {}} />);
+    expect(screen.queryByRole('checkbox', { name: 'Include error details' })).toBeNull();
+  });
+
+  it('sends the error details only while their box is ticked', async () => {
+    const submitIssue = window.claude.dev.submitIssue as ReturnType<typeof vi.fn>;
+    submitIssue.mockResolvedValue({ ok: true, url: 'u' });
+    render(<BugReportPopup open onClose={() => {}} context={{ surface: 'Office', error: 'EBUSY' }} />);
+    fillDraft();
+    fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
+    await vi.waitFor(() => expect(submitIssue).toHaveBeenCalledTimes(1));
+    expect(submitIssue.mock.calls[0][0].description).toMatch(/This happened in Office\.\nEBUSY/);
+    cleanup();
+    render(<BugReportPopup open onClose={() => {}} context={{ surface: 'Office', error: 'EBUSY' }} />);
+    fillDraft();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Include error details' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
+    await vi.waitFor(() => expect(submitIssue).toHaveBeenCalledTimes(2));
+    expect(submitIssue.mock.calls[1][0].description).toBe('Opening the menu closes the window.');
   });
 
   it('opens Diagnose on the review step with AI help open, even when mounted earlier', () => {
@@ -131,12 +154,6 @@ describe('a ticket opened from an error', () => {
     expect(screen.getByRole('button', { name: 'Improve wording with the assistant' })).toBeTruthy();
   });
 
-  it('never overwrites words the user already typed', () => {
-    const { rerender } = render(<BugReportPopup open onClose={() => {}} />);
-    fillDraft();
-    rerender(<BugReportPopup open onClose={() => {}} context={{ surface: 'Office' }} />);
-    expect((screen.getByLabelText('Description') as HTMLTextAreaElement).value).toBe('Opening the menu closes the window.');
-  });
 });
 
 
@@ -153,12 +170,14 @@ describe('the review step shows the ticket as it will be sent', () => {
     expect(screen.getByRole('heading', { name: 'Sent with it' })).toBeTruthy();
   });
 
-  it('says plainly when nothing but the words goes with it', () => {
+  it('lists only the version when nothing else was chosen', () => {
     render(<BugReportPopup open onClose={() => {}} />);
     fillDraft();
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Include error details and YouCoded version' }));
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
-    expect(screen.getByText(/only your title and description/)).toBeTruthy();
+    // Only the always-sent version row; no folds.
+    const card = screen.getByRole('heading', { name: 'Sent with it' }).parentElement!;
+    expect(within(card).getByText('App version and system')).toBeTruthy();
+    expect(within(card).queryAllByRole('button')).toHaveLength(0);
   });
 });
 
@@ -223,5 +242,20 @@ describe('the contribute walkthrough keeps its approved steps', () => {
     expect(list.className).toMatch(/list-decimal/);
     expect(list.className).toMatch(/\bml-\d/);
     expect(list.className).not.toMatch(/list-inside/);
+  });
+});
+
+describe('a folded card opens inside itself', () => {
+  it('shows AI help\'s actions inside the same box as its header row', () => {
+    // Destin, submit-ticket-1#ST-3: "an expandable card should always contain expanded
+    // content within itself, not open a new separate card below".
+    render(<BugReportPopup open onClose={() => {}} />);
+    fillDraft();
+    fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
+    const header = screen.getByRole('button', { name: 'Optional AI help' });
+    fireEvent.click(header);
+    const rewrite = screen.getByRole('button', { name: 'Improve wording with the assistant' });
+    // The box holding the header row also holds the opened actions.
+    expect(header.parentElement!.contains(rewrite)).toBe(true);
   });
 });

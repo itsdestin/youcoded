@@ -27,9 +27,8 @@ describe('development design safety', () => {
   it('uses one ticket heading for both report types and discloses evidence on demand', () => {
     render(<BugReportPopup open onClose={() => {}} />);
     expect(screen.getByRole('heading', { name: 'Submit a ticket' })).toBeTruthy();
-    expect(screen.queryByText(/Logs record app activity/)).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'About recent logs' }));
-    expect(screen.getByText(/Logs record app activity/)).toBeTruthy();
+    // Each choice explains itself in its own row (submit-ticket-1#ST-1/ST-13), not behind an (i).
+    expect(screen.getByText(/last 200 lines of activity/)).toBeTruthy();
     fireEvent.click(screen.getByRole('tab', { name: 'Feature' }));
     expect(screen.getByRole('heading', { name: 'Submit a ticket' })).toBeTruthy();
   });
@@ -90,6 +89,8 @@ describe('development design safety', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: 'Include recent logs' }));
     expect(screen.queryByLabelText('Logs to review')).toBeNull();
     fireEvent.click(screen.getByText('Review ticket'));
+    // The logs are a folded row on review (submit-ticket-1#ST-C1 "folded"); open it to edit.
+    fireEvent.click(screen.getByRole('button', { name: /^Recent logs/ }));
     fireEvent.change(screen.getByLabelText('Logs to review'), { target: { value: 'Sample log' } });
     fireEvent.click(screen.getByRole('button', { name: 'Optional AI help' }));
     expect(screen.getByText(/Nothing is sent automatically/)).toBeTruthy();
@@ -100,6 +101,7 @@ describe('development design safety', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: 'Finish with attachments in GitHub' }));
     expect(screen.getByText(/GitHub uploads a file as soon as you attach it/)).toBeTruthy();
     fireEvent.click(screen.getByText('Review ticket'));
+    // The logs fold is still open from before — what you opened stays open.
     expect((screen.getByLabelText('Logs to review') as HTMLTextAreaElement).value).toBe('Sample log');
   });
   // WHY: four nouns for one object (ticket / report / bug report / issue) read as four
@@ -242,7 +244,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     fireEvent.click(screen.getByRole('checkbox', { name: 'Finish with attachments in GitHub' }));
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Continue in GitHub' }));
-    await screen.findByText(/Finish your ticket in GitHub/);
+    await screen.findByText(/open in your browser with everything you wrote/);
     expect(submitIssue).toHaveBeenCalledWith(expect.objectContaining({ browserOnly: true }));
     // WHY openExternal and not window.open: window.open is a dead call on Android
     // and remote, so the hand-off would silently do nothing there.
@@ -275,7 +277,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
-    await screen.findByText(/Finish your ticket in GitHub/);
+    await screen.findByText(/open in your browser with everything you wrote/);
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 
@@ -284,12 +286,15 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     // was gone the moment you clicked Report and you described it from memory.
     Object.assign(window, { claude: { dev: { submitIssue: vi.fn() } } });
     render(<BugReportPopup open onClose={() => {}} context={{ surface: 'Settings → Permissions', error: 'EACCES: permission denied' }} />);
-    expect((screen.getByLabelText('Description') as HTMLTextAreaElement).value)
-      .toContain('Settings → Permissions');
+    // Offered as its own choice, saying where it came from — never typed into the
+    // description for you (submit-ticket-1#ST-13).
+    expect(screen.getByText(/Adds where it happened \(Settings → Permissions\)/)).toBeTruthy();
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Permissions will not load' } });
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'It will not load.' } });
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     // Shown for review BEFORE anything is sent — never attached unseen (R11).
-    expect(screen.getByText('EACCES: permission denied')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /^The error you saw/ }));
+    expect(screen.getByText(/EACCES: permission denied/)).toBeTruthy();
   });
 
   it('keeps Diagnose an assistant action, not a blank form', async () => {
@@ -299,7 +304,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     Object.assign(window, { claude: { dev: { submitIssue: vi.fn() } } });
     render(<BugReportPopup open onClose={() => {}} context={{ surface: 'Local model settings', diagnose: true }} />);
     expect(screen.getByRole('heading', { name: 'Sent with it' })).toBeTruthy();
-    expect(screen.getByText(/Only this draft and selected details go to your chosen assistant/)).toBeTruthy();
+    expect(screen.getByText(/Only this ticket and what you chose to include go to your assistant/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Improve wording with the assistant' })).toBeTruthy();
   });
 
@@ -319,7 +324,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
     await screen.findByText(/No browser is available\./);
-    expect(screen.queryByText(/Finish your ticket in GitHub/)).toBeNull();
+    expect(screen.queryByText(/open in your browser with everything you wrote/)).toBeNull();
     // …and the report they wrote is still there.
     expect(screen.getByText('The menu closes')).toBeTruthy();
   });
@@ -339,7 +344,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Optional AI help' }));
     fireEvent.click(screen.getByRole('button', { name: 'Let your assistant try to fix it' }));
-    await screen.findByText(/Your assistant is on it/);
+    await screen.findByText(/working on a fix in a new conversation/);
     expect(openSessionIn).toHaveBeenCalledWith(expect.objectContaining({
       cwd: '/home/you/YouCoded/Development/w',
       // The DESCRIPTION is what it hands over — the words describing the problem,
@@ -429,7 +434,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
-    await screen.findByText(/Your ticket is submitted/);
+    await screen.findByText(/Submitted to GitHub/);
     expect(summarizeIssue).not.toHaveBeenCalled();
   });
 });

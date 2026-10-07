@@ -26,11 +26,13 @@ const TICKET_STATES: readonly ScreenEntry[] = [
   ticket('review', { open: [...FILL, REVIEW] }),
   ticket('review-logs', { open: [...FILL, TICK_LOGS, REVIEW] }),
   ticket('review-files', { open: [...FILL, TICK_FILES, REVIEW] }),
-  ticket('review-error', { params: { reportFrom: 'error' }, open: [TYPE_TITLE, REVIEW] }),
+  ticket('review-error', { params: { reportFrom: 'error' }, open: [...FILL, REVIEW, { do: 'click', target: { role: 'button', label: 'The error you saw From Office' } }] }),
   ticket('review-ai', { open: [...FILL, REVIEW, AI] }),
-  // Three drafts of the review step (ticket-practice.ts `ticketReview`), same ticket, logs ticked.
-  ticket('review-folded', { params: { ticketReview: 'folded' }, open: [...FILL, TICK_LOGS, REVIEW] }),
-  ticket('review-onepage', { params: { ticketReview: 'onepage' }, open: [...FILL, TICK_LOGS] }),
+  // Three looks for the include choices (ticket-practice.ts `ticketTicks`), opened from an
+  // error so all three choices show; the plain `from-error` state is the shipped look.
+  ticket('ticks-switches', { params: { reportFrom: 'error', ticketTicks: 'switches' } }),
+  ticket('ticks-left', { params: { reportFrom: 'error', ticketTicks: 'left' } }),
+  ticket('review-logs-open', { open: [...FILL, TICK_LOGS, REVIEW, { do: 'click', target: { role: 'button', label: 'Recent logs 4 lines — open to read or remove anything private' } }] }),
   ticket('handover-failed', { scenario: 'refused', open: [...FILL, REVIEW, AI, HAND_OVER], waitMs: 3500 }),
   ticket('sending', { params: { ticket: 'hold' }, open: [...FILL, REVIEW, SEND] }),
   ticket('sent', { open: [...FILL, REVIEW, SEND] }),

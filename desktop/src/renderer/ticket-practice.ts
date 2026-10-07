@@ -20,16 +20,17 @@ export function workbenchReportContext(): ReportContext | null {
     : null;
 }
 
-/** How the step after "Review ticket" shows what will be sent — three drafts for Destin
- *  (deck submit-ticket-1, ST-C1). `?ticketReview=`:
- *    cards   (shipped) — a read-only ticket card, then a "Sent with it" card showing every
- *            attached piece in full;
- *    folded  — the same, each attached piece a fold-out row you open to read or edit;
- *    onepage — no review step: what each tick adds opens right under it, and Submit is
- *              on the same page.
+/** How the "Include with ticket" choices look — three drafts for Destin (deck submit-ticket-2,
+ *  ST2-C1; he found the tick boxes "still odd"). `?ticketTicks=`:
+ *    rows     (shipped) — the setting-row recipe: title and a plain hint on the left, the tick
+ *             box at the right, vertically centred; no (i) buttons;
+ *    switches — the same rows with a switch instead of a tick box (the Settings recipe for an
+ *               on/off choice);
+ *    left     — the whole line is one tappable box, tick box on the LEFT (the guide's
+ *               "I understand" look).
  *  Delete the losers (and this switch) when he picks. */
-export type TicketReview = 'cards' | 'folded' | 'onepage';
-export function workbenchTicketReview(): TicketReview {
-  const v = param('ticketReview');
-  return v === 'folded' || v === 'onepage' ? v : 'cards';
+export type TicketTicks = 'rows' | 'switches' | 'left';
+export function workbenchTicketTicks(): TicketTicks {
+  const v = param('ticketTicks');
+  return v === 'switches' || v === 'left' ? v : 'rows';
 }
