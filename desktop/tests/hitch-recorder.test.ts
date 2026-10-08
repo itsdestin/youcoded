@@ -19,7 +19,7 @@ function setup(over: Partial<RecorderDeps> = {}) {
   let clock = NOW;
   const hist = fakeHist();
   const rec = new HitchRecorder({
-    userDataDir: '/nowhere', appVersion: '9.9.9', ipcMain: ipc as any,
+    userDataDir: '/nowhere', appVersion: '9.9.9', isPackaged: false, ipcMain: ipc as any,
     getWindowCount: () => 2, getSessionCount: () => 5,
     getAppMetrics: () => [
       { type: 'Browser', memory: { workingSetSize: 204800 }, cpu: { percentCPUUsage: 3.04 } },
@@ -175,7 +175,17 @@ describe('startup line', () => {
     expect(s).toHaveLength(1);
     expect(s[0].main).toEqual({ 'main:imports-done': 400, 'main:when-ready': 900 });
     expect(s[0].loadedMs).toBe(1500);
+    expect(s[0].packaged).toBe(false); // a developer build says so
     expect(s[0].renderer).toEqual({ marks: { 'yc:app-mounted': 2100 }, fcp: 800 });
+  });
+
+  it('records packaged as a plain boolean, true for an installed build', () => {
+    const { lines, send, rec } = setup({ isPackaged: true });
+    rec.noteMainWindowLoaded();
+    send(batch([], { startup: { marks: {}, fcp: 1 } }));
+    const s = lines.find((l) => l.kind === 'startup');
+    expect(s.packaged).toBe(true);
+    expect(typeof s.packaged).toBe('boolean');
   });
 
   it('falls back to the main half after 30 s if the renderer never reports', () => {
@@ -216,7 +226,7 @@ describe('off switch and timers', () => {
   it('real perf_hooks histogram works end to end', async () => {
     const lines: any[] = [];
     const rec = new HitchRecorder({
-      userDataDir: '/x', appVersion: '1', ipcMain: new EventEmitter() as any, getWindowCount: () => 1, getSessionCount: () => 0,
+      userDataDir: '/x', appVersion: '1', isPackaged: false, ipcMain: new EventEmitter() as any, getWindowCount: () => 1, getSessionCount: () => 0,
       getAppMetrics: () => [], getMarks: () => [], processStartMs: () => NOW, writer: { append: (r: any) => lines.push(r), flush: async () => {} },
     });
     await new Promise((r) => setTimeout(r, 300)); // let the monitor take its first samples

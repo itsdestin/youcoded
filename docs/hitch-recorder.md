@@ -23,7 +23,7 @@ observers). No UI.
 | `main-stall` | `ms` estimated time the main process did not answer (>= 100, accurate to about +/- `resMs`/2), `resMs` sampler interval, `lastIpc` + `lastIpcAgoMs` (last request main started: a hint, only meaningful when `lastIpcAgoMs` is not much larger than `ms`), `sessions`, `windows` |
 | `minute` | `loop` {p50,p99,max ms of event-loop delay, `res` sampler interval}, `procs` {browser, gpu, utility, other: {n, ws MB, cpu %}; renderer: [{ws, cpu}] top 12}, `main` {rss, heapUsed, heapTotal, external, arrayBuffers MB}, `windows`, `sessions`, `rend` {frames, framesMs (50-100 ms frames), over (detail entries not written), dropped, rejected, entries}, `stalls`, `lost` |
 | `switch` | one per session switch in a window (see "Switch marks" below): `cause`, `vm`, `dk`, `str`, `cold`, `open`, `ff`, `st`, `end`, `interrupted`, `e1`, `e2`, `mut`, `ls`, `lsv`, `loaf`, `loafMs`, `ind`, `gap`, `drain`, `src` |
-| `startup` | `main` {mark: ms since process start}, `loadedMs` (first window loaded), `renderer` {marks: yc:* ms, fcp} or null |
+| `startup` | `packaged` (boolean only: true = installed build, false = developer build; absent in files from before 2026-10-07), `main` {mark: ms since process start}, `loadedMs` (first window loaded), `renderer` {marks: yc:* ms, fcp} or null |
 
 `ctx` (only on a hitch, no layout reads): `vis`, `foc`, `vm` view mode, `dlg` a `[role=dialog]` exists, `scr` a full screen is
 open, `dpr`, `els` DOM element count (cached 10 s). (`[data-screen]` dialog names exist only in screenshot builds, so a dialog's

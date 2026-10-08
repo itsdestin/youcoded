@@ -31,7 +31,7 @@
 //            renderer, GPU, utility), main-process heap, window count, session count, and
 //            the renderers' tallies of 50-100 ms frames.
 //  - startup: millisecond gaps between the boot marks, first window loaded, the renderer's
-//            yc:* marks and first-contentful-paint.
+//            yc:* marks and first-contentful-paint, and `packaged` (boolean: installed build vs developer build).
 // EVERY STRING that reaches the file is an enum or a tight pattern, enforced here (hitch-validate.ts), not
 // trusted from the window: invoker type (6 fixed names), invoker (url, TAG.onevent, or a short letters-only API name like Window.requestAnimationFrame, else "other"), function
 // (^[A-Za-z_$][\w$.]{0,59}$ else dropped), source (^[\w.-]{1,60}\.(js|mjs)$, "inline" or "other"), event type (5
@@ -112,6 +112,8 @@ interface ProcessMetric { type: string; memory?: { workingSetSize?: number }; cp
 export interface RecorderDeps {
   userDataDir: string;
   appVersion: string;
+  /** app.isPackaged: written on the startup line so a developer-build file is never mistaken for installed-app data. */
+  isPackaged: boolean;
   ipcMain: { on: (ch: string, fn: (e: any, raw: unknown) => void) => unknown };
   getWindowCount: () => number;
   getSessionCount: () => number;
@@ -244,6 +246,9 @@ export class HitchRecorder {
     let n = 0;
     for (const m of this.d.getMarks()) if (n++ < 60) marks[appName(m.name)] = Math.max(0, Math.round(m.t - start));
     this.line('startup', {
+      // WHY: the lab found a developer build switches sessions ~3x slower than the installed app, and the owner's first
+      // recording came from a dev window. A plain yes/no (never a path or version string) lets hitch-report.mjs warn.
+      packaged: this.d.isPackaged === true,
       main: marks,
       loadedMs: this.mainLoadedAt ? Math.max(0, Math.round(this.mainLoadedAt - start)) : null,
       renderer: renderer ?? null,

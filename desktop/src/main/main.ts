@@ -1326,7 +1326,7 @@ void app.whenReady().then(async () => {
   perfMark('main:when-ready');
   // WHY here, before createWindow: the first window's did-finish-load must find the recorder.
   hitchRecorder = startHitchRecorder({
-    userDataDir: app.getPath('userData'), appVersion: app.getVersion(), ipcMain,
+    userDataDir: app.getPath('userData'), appVersion: app.getVersion(), isPackaged: app.isPackaged, ipcMain,
     getWindowCount: () => BrowserWindow.getAllWindows().length,
     getSessionCount: () => sessionManager.listSessions().length,
     getAppMetrics: () => app.getAppMetrics(),
