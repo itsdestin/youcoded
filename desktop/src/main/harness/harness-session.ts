@@ -39,7 +39,8 @@ import { destructiveRmVerdict } from './tools/rm-target';
 import { secretPathVerdict } from './tools/bash-secret-paths';
 import { adminCommandVerdict, refuseMessage, visibleSudoLines } from './tools/admin-command';
 import * as os from 'os';
-import { readImageFromDisk, MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, deliverableImageMediaType, MAX_ATTACHMENT_BYTES, imageNote, UNDELIVERABLE_IMAGE_EXTENSIONS, imageDimensions, withinImageLimits } from './image-support';
+import { readImageFromDisk, MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, MAX_ATTACHMENT_BYTES, imageNote } from './image-support';
+import { collapseOversizedImageParts, userAttachmentParts } from './image-history';
 
 // Tools whose permission SUBJECT is not a filesystem path. Bash's is a command
 // string; Skill's is a skill id. Both would be canonicalized against cwd and run
@@ -175,7 +176,7 @@ import { formatAnswers } from './tools/ask-user-question';
 import { formatArgErrors } from './tools/arg-errors';
 import { parseToolArgs } from './tool-args';
 import { PermissionCallbackFailure, permissionCallback, finalizeRemainingCalls } from './tool-group-finalization';
-import { appendUserHistory, claimBusyMessage, supersedeToolGroup, type UserPart, type ModelAttachment } from './busy-message-boundary';
+import { appendUserHistory, claimBusyMessage, supersedeToolGroup, userMessageData, type UserPart, type ModelAttachment } from './busy-message-boundary';
 import type { AskRequest, AskDecision } from './permission-broker';
 import { CLOUD_DEFAULT, type CapabilityProfile, type ImageLimits } from './capability-profile';
 import { adaptForWire } from './wire-adapter';
@@ -204,17 +205,6 @@ import {
   type ModelPricing, type SessionCostTotals,
 } from './pricing';
 import { log } from '../logger';
-
-/** The `user-message` event data for a human send. `modelAttachments` is
- *  persisted (as paths) only when it differs from `attachments` — a prepared
- *  copy stood in for an original — so ordinary sends keep today's exact shape.
- *  A failed preparation persists its original path, so reopen re-gates it. */
-function userMessageData(text: string, attachments: string[], modelAttachments?: ModelAttachment[]):
-  { text: string; attachments?: string[]; modelAttachments?: string[] } {
-  if (!attachments.length) return { text };
-  const persisted = modelAttachments?.map((m) => typeof m === 'string' ? m : m.path);
-  return { text, attachments, ...(persisted && persisted.some((p, i) => p !== attachments[i]) ? { modelAttachments: persisted } : {}) };
-}
 
 export interface HarnessSessionOpts {
   sessionId: string; cwd: string; harness: HarnessManifest; binding: ModelBinding;
@@ -2030,64 +2020,15 @@ export class HarnessSession extends EventEmitter {
    *  limits. Returns whether history changed. */
   private enforceImageLimits(): boolean { return this.collapseOversizedImages(this.profile.imageLimits); }
 
-  /** Rewrite history so no image part exceeds `limits`: a tool-result file part
-   *  becomes the shared oversized note appended to that result's text (fitting
-   *  siblings stay; text first, files, then notes); a user-message file part
-   *  becomes a trailing note text part. Same length, same order, same tool
-   *  pairing. Labels are BASENAMES (a user part has no name → 'image').
+  /** Collapse every image part over `limits` to the shared oversized note
+   *  (the rewrite itself: image-history.ts → collapseOversizedImageParts).
    *  WHY in-memory only: the reader writes this exact shape on every rebuild,
    *  so reopen reproduces it without a new persisted event, and the accepted-
    *  history store describes it (`pruned.oversized`, `note`). shownImages is
-   *  cleared like commitPrune does, so a later Read re-delivers — prepared.
-   *  WHY identity-preserving: like commitPrune, a no-op must not swap the
-   *  array, bump the capture revision or clear shownImages — that would
-   *  invalidate a published checkpoint for a history that never moved. */
+   *  cleared like commitPrune does, so a later Read re-delivers — prepared. */
   private collapseOversizedImages(limits: ImageLimits): boolean {
-    let changed = false;
-    const over = (buf: unknown): { width: number; height: number } | null => {
-      if (!Buffer.isBuffer(buf)) return null;
-      const dims = imageDimensions(buf);
-      return dims && !withinImageLimits(dims, limits) ? dims : null;
-    };
-    const next = this.history.map((m) => {
-      const content = (m as any).content;
-      if (!Array.isArray(content)) return m;
-      if (m.role === 'tool') {
-        let touched = false;
-        const parts = content.map((part: any) => {
-          if (part?.type !== 'tool-result' || part.output?.type !== 'content' || !Array.isArray(part.output.value)) return part;
-          const texts: string[] = []; const files: any[] = []; const notes: string[] = [];
-          for (const v of part.output.value) {
-            const dims = v?.type === 'file' && v.data?.type === 'data' ? over(v.data.data) : null;
-            if (dims) notes.push(imageNote({ kind: 'oversized', label: v.filename ?? part.toolName ?? 'image', width: dims.width, height: dims.height }));
-            else if (v?.type === 'text') texts.push(v.text);
-            else files.push(v);
-          }
-          if (!notes.length) return part;
-          touched = true;
-          // Same shape history-rebuild writes for a refused picture: one text
-          // part (result text + "\n<note>" per refusal), then the kept files.
-          const text = texts.join('\n') + notes.map((n) => `\n${n}`).join('');
-          return { ...part, output: files.length ? { type: 'content', value: [{ type: 'text', text }, ...files] } : { type: 'text', value: text } };
-        });
-        if (!touched) return m;
-        changed = true;
-        return { ...(m as object), content: parts } as ModelMessage;
-      }
-      if (m.role === 'user') {
-        const kept: any[] = []; const notes: any[] = [];
-        for (const p of content) {
-          const dims = p?.type === 'file' ? over(p.data) : null;
-          if (dims) notes.push({ type: 'text', text: imageNote({ kind: 'oversized', label: 'image', width: dims.width, height: dims.height }) });
-          else kept.push(p);
-        }
-        if (!notes.length) return m;
-        changed = true;
-        return { ...(m as object), content: [...kept, ...notes] } as ModelMessage;
-      }
-      return m;
-    });
-    if (!changed) return false;   // never swap the array for a no-op: untouched messages keep their identity
+    const next = collapseOversizedImageParts(this.history, limits);
+    if (!next) return false;   // never swap the array for a no-op: untouched messages keep their identity
     this.history = next;
     // Not markPruned: this is a rewrite (mutated), not compaction's prune
     // transformation. historyOrigins needs no change — indices are unchanged.
@@ -2562,35 +2503,12 @@ export class HarnessSession extends EventEmitter {
     this.capture.recordEvent(uuid);
   }
 
-  /** Parts for a user message's attachments — delivered pictures first, then a
-   *  basename note for each picture the model did NOT get — or [] when the model
-   *  cannot see images / none were attached. A refused file never throws: a turn
-   *  must not die because one attachment went missing between the composer and
-   *  the send. Since 2026-10-07 a refused PICTURE is named (oversized, missing,
-   *  preparation failed) instead of skipped silently, so the model never assumes
-   *  it saw something it did not. */
+  /** Parts for a user message's attachments (pictures, then a note per picture
+   *  the model did NOT get — image-history.ts → userAttachmentParts), or [] when
+   *  the model cannot see images / none were attached. */
   private imagePartsFor(entries: ModelAttachment[]): UserPart[] {
     if (!entries.length || !this.profile.supportsVision) return [];
-    const files: UserPart[] = []; const notes: UserPart[] = [];
-    for (const entry of entries) {
-      if (typeof entry !== 'string') {
-        // Preparation refused this picture: say so, with the preparer's reason —
-        // never "above size limit", which would send the model to crop a file
-        // the app itself could not decode.
-        notes.push({ type: 'text', text: imageNote({ kind: 'unavailable', label: path.basename(entry.path), reason: 'prepare-failed', detail: entry.prepareFailed }) });
-        continue;
-      }
-      const p = entry;
-      // WHY only image-shaped paths get a note: a PDF or text attachment was never
-      // a picture to deliver — it keeps today's silent skip (its path is in the
-      // text), so ordinary attachments keep today's prompt text and checkpoint shape.
-      if (!deliverableImageMediaType(p) && !UNDELIVERABLE_IMAGE_EXTENSIONS.has(path.extname(p).toLowerCase())) continue;
-      const img = readImageFromDisk(p, this.profile.imageLimits);   // shared reader — one table, one cap, one pixel gate
-      if (img.ok) files.push({ type: 'file', mediaType: img.mediaType, data: img.data });
-      else if (img.reason === 'oversized') notes.push({ type: 'text', text: imageNote({ kind: 'oversized', label: path.basename(p), width: img.width ?? 0, height: img.height ?? 0 }) });
-      else notes.push({ type: 'text', text: imageNote({ kind: 'unavailable', label: path.basename(p), reason: img.reason }) });
-    }
-    return [...files, ...notes];
+    return userAttachmentParts(entries, this.profile.imageLimits);
   }
 
   /** Resolve a tool's promised image paths into deliverable parts, charging the

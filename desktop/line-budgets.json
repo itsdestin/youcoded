@@ -9,10 +9,10 @@
   "budgets": {
     "shared/backend-contract.ts": 1564,
     "main/ipc-handlers.ts": 2495,
-    "main/harness/native-session-host.ts": 5367,
+    "main/harness/native-session-host.ts": 5385,
     "renderer/App.tsx": 4634,
     "main/remote-server.ts": 1320,
-    "main/harness/harness-session.ts": 4231,
+    "main/harness/harness-session.ts": 4280,
     "renderer/components/SettingsPanel.tsx": 3283,
     "renderer/remote-shim.ts": 3404,
     "renderer/state/chat-reducer.ts": 3396,

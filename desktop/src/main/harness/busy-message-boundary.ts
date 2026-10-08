@@ -8,6 +8,19 @@ export type UserPart = { type: 'file'; mediaType: string; data: Buffer } | { typ
  *  derivative), or the original plus the preparer's refusal reason. */
 export type ModelAttachment = string | { path: string; prepareFailed: string };
 
+/** The `user-message` event data for a human send. `modelAttachments` is
+ *  persisted (as paths) only when it differs from `attachments` — a prepared
+ *  copy stood in for an original — so ordinary sends keep today's exact shape.
+ *  A failed preparation persists its original path, so reopen re-gates it.
+ *  WHY here: it is shared by the opening send and the busy-message claim, and
+ *  this file owns that shared boundary (and harness-session.ts its line budget). */
+export function userMessageData(text: string, attachments: string[], modelAttachments?: ModelAttachment[]):
+  { text: string; attachments?: string[]; modelAttachments?: string[] } {
+  if (!attachments.length) return { text };
+  const persisted = modelAttachments?.map((m) => typeof m === 'string' ? m : m.path);
+  return { text, attachments, ...(persisted && persisted.some((p, i) => p !== attachments[i]) ? { modelAttachments: persisted } : {}) };
+}
+
 export interface BusyMessage {
   id: string;
   text: string;
