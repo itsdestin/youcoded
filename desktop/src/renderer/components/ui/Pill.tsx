@@ -1,4 +1,5 @@
 import { ChevronDown } from './ChevronDown';
+import { workbenchPillTintStrong } from '../../pill-practice';
 import type { MouseEvent, ReactNode } from 'react';
 
 /**
@@ -32,6 +33,17 @@ const TONE: Record<PillTone, string> = {
   danger: 'bg-destructive/15 border-destructive/30',
 };
 
+// PROPOSED (submit-ticket-5, waiting for Destin — not decided): a stronger tint for the
+// coloured tones. Measured on every theme, the 15% green/amber tint over a pale card was
+// close to invisible ("Submitted" read grey on YouCoded). Shown only behind ?pillTint=strong.
+const TONE_STRONG: Record<PillTone, string> = {
+  neutral: 'bg-fg-muted/15 border-edge',
+  info: 'bg-accent/25 border-accent/50',
+  ok: 'bg-green-500/30 border-green-600/60',
+  warning: 'bg-amber-500/30 border-amber-600/60',
+  danger: 'bg-destructive/25 border-destructive/55',
+};
+
 const DOT: Record<PillTone, string> = {
   neutral: 'bg-fg-muted',
   info: 'bg-accent',
@@ -55,7 +67,7 @@ const DOT: Record<PillTone, string> = {
 export function Pill({ tone = 'neutral', dot = false, children, className = '' }: { tone?: PillTone; dot?: boolean; children: ReactNode; className?: string }) {
   return (
     <span
-      className={`inline-flex items-center shrink-0 rounded-full border ${dot ? 'gap-1 pl-1.5 pr-2' : 'px-2'} py-px text-3xs leading-tight text-fg-2 whitespace-nowrap ${TONE[tone]} ${className}`.trim()}
+      className={`inline-flex items-center shrink-0 rounded-full border ${dot ? 'gap-1 pl-1.5 pr-2' : 'px-2'} py-px text-3xs leading-tight text-fg-2 whitespace-nowrap ${(workbenchPillTintStrong() ? TONE_STRONG : TONE)[tone]} ${className}`.trim()}
     >
       {dot && <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full shrink-0 ${DOT[tone]}`} />}
       {children}
@@ -83,7 +95,7 @@ export function PillButton({ tone = 'neutral', dot = false, open, onClick, child
       aria-haspopup="menu"
       aria-expanded={open}
       aria-label={ariaLabel}
-      className={`inline-flex items-center shrink-0 gap-1 rounded-full border ${dot ? 'pl-1.5' : 'pl-2'} pr-1.5 py-px text-3xs leading-tight text-fg-2 whitespace-nowrap transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${TONE[tone]} ${className}`.trim()}
+      className={`inline-flex items-center shrink-0 gap-1 rounded-full border ${dot ? 'pl-1.5' : 'pl-2'} pr-1.5 py-px text-3xs leading-tight text-fg-2 whitespace-nowrap transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${(workbenchPillTintStrong() ? TONE_STRONG : TONE)[tone]} ${className}`.trim()}
     >
       {dot && <span aria-hidden="true" className={`w-1.5 h-1.5 rounded-full shrink-0 ${DOT[tone]}`} />}
       {children}

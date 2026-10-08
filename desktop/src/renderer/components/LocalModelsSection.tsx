@@ -13,7 +13,7 @@
 // SAME `bg-inset/50` as their own parent card, a box wearing its box's look.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import EngineCard from './EngineCard';
-import { Button, CARD_LEVEL_1, CARD_LEVEL_2, FieldError, InputGroup, ProgressBar, Callout, ErrorState, AnchorTip, Toggle, TextInput, Select, SettingRow, Dialog, SectionLabel } from './ui';
+import { Button, CARD_LEVEL_1, CARD_LEVEL_2, FieldError, InputGroup, ProgressBar, Callout, ErrorState, AnchorTip, Toggle, TextInput, Select, SettingRow, Dialog, SectionLabel, FoldRow } from './ui';
 import type {
   CuratedModel, QuantOption, FitEstimate, DownloadProgress,
   InstalledLocalModel, DetectedEndpoint, HFSearchHit, ModelSettingsWrite, StoredModelSettings,
@@ -1151,14 +1151,13 @@ function ModelSettingsDialog({ open, modelId, name, onClose }: { open: boolean; 
         description="Never put this model to sleep. Instant replies, memory held."
         control={<Toggle checked={settings.keepLoaded} aria-label="Keep loaded" onChange={(next) => void save({ keepLoaded: next })} />}
       />
-      <SettingRow
-        variant="item"
+      {/* WHY the shared FoldRow (submit-ticket-5, proposal 1; guide "A folded box opens inside itself"): this was a hand-built fold whose content opened below its row and whose row tint ended in a hard line. */}
+      <FoldRow
         title="Advanced"
         description={advanced ? undefined : 'Graphics-chip layers, extra engine flags'}
-        onClick={() => setAdvanced((o) => !o)}
-        expanded={advanced}
-      />
-      {advanced && (
+        open={advanced}
+        onToggle={setAdvanced}
+      >
         <div className="space-y-1.5">
           <SettingRow
             variant="item"
@@ -1210,7 +1209,7 @@ function ModelSettingsDialog({ open, modelId, name, onClose }: { open: boolean; 
             />
           </div>
         </div>
-      )}
+      </FoldRow>
       {/* design §C2: a saved setting does NOT reach a model that is answering
           right now — rewriting the engine's settings file mid-reply would drop
           the model halfway through a sentence. So the save is held until this

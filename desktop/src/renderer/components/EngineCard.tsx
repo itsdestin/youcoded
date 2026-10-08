@@ -16,7 +16,7 @@
 // the two speed switches, the context length, the optional engine builds and
 // the folder.
 import { useEffect, useState } from 'react';
-import { AnchorTip, Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, ErrorState, FieldError, Pill, SettingRow, TextInput, Toggle } from './ui';
+import { AnchorTip, Button, Callout, CARD_LEVEL_1, CARD_LEVEL_2, ErrorState, FieldError, FoldRow, Pill, SettingRow, TextInput, Toggle } from './ui';
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
 import type { BackendOption, EnginePrereqs, EngineSpeedSettings } from '../../shared/engine-types';
@@ -538,16 +538,14 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
 
           {/* Advanced (Q-4 pick a): the one expandable-row shape — SettingRow with
               its chevron turned down while open. */}
-          <SettingRow
-            variant="item"
+          {/* WHY the shared FoldRow (submit-ticket-5, proposal 1; guide "A folded box opens inside itself"): this was a hand-built fold whose content opened below its row and whose row tint ended in a hard line. */}
+          <FoldRow
             title="Advanced"
             description={advancedOpen ? undefined : 'Speed settings, context length, where models are stored'}
-            onClick={() => setAdvancedOpen((o) => !o)}
-            expanded={advancedOpen}
-          />
-
-          {advancedOpen && (
-            <div className="space-y-1.5 pl-3" data-testid="engine-advanced">
+            open={advancedOpen}
+            onToggle={setAdvancedOpen}
+          >
+            <div className="space-y-1.5" data-testid="engine-advanced">
               <ScreenMark name="settings/assistant/local/engine-advanced" />
               {/* Both default ON — the best defaults ship; the switch is for ruling a
                   feature out when a model misbehaves (Destin, Q-4 note). Short hints;
@@ -670,7 +668,7 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
                 value={`${status.installedVersion ?? '—'} · ${BACKEND_WORDS[status.backend ?? ''] ?? status.backend ?? ''}`}
               />
             </div>
-          )}
+          </FoldRow>
         </div>
       )}
     </div>

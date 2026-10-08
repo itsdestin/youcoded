@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Button, CARD_LEVEL_1, Dialog, ErrorState, LoadingState } from '../ui';
+import { Button, Callout, CARD_LEVEL_1, Dialog, LoadingState } from '../ui';
 import type { ReactNode } from 'react';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { plainMessage } from '../../utils/ipc-error';
@@ -164,26 +164,26 @@ export function ContributionDesign({ open, onClose, handover, screen = 'settings
         </div>
       </div>}
 
-      {phase === 'open-failed' && <>
-        <ErrorState
-          title="The code is ready, but the conversation didn’t open"
-          explainer={`${error} The copy is still there, at ${path}.`}
-          onRetry={() => void openProject()}
-        />
-        {back}
-      </>}
+      {/* WHY the guide's notice box in place of the buttons (submit-ticket-5; the ticket's
+          approved failure, submit-ticket-1#ST-5): a failure replaces the buttons it came
+          from, inside the card it is about — one sentence with the real reason (never a
+          guessed cause), its Try again inside it, no title. The card keeps what this screen
+          is for (UX review U15). */}
+      {phase === 'open-failed' && <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
+        <p className="text-sm text-fg">YouCoded’s code is ready on this computer.</p>
+        <Callout tone="danger" actionsPlacement="below" actions={<>
+          {back && <Button size="sm" variant="secondary" onClick={onClose}>Back to ticket</Button>}
+          <Button size="sm" onClick={() => void openProject()}>Try again</Button>
+        </>}>The conversation didn’t open. {error} The code is still there, at {path}.</Callout>
+      </div>}
 
-      {phase === 'failed' && <>
-        {/* WHY the purpose line stays (UX review U15): a failure must not erase what this
-            screen is for. Retry is the one action this screen has (code review C3). */}
-        <p className="text-sm text-fg-2">{lead}</p>
-        <ErrorState
-          title="The download didn’t finish"
-          explainer={`${error} Nothing was left behind, so trying again starts cleanly.`}
-          onRetry={setup}
-        />
-        {back}
-      </>}
+      {phase === 'failed' && <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
+        <p className="text-xs text-fg-2 leading-relaxed">{lead}</p>
+        <Callout tone="danger" actionsPlacement="below" actions={<>
+          {back && <Button size="sm" variant="secondary" onClick={onClose}>Back to ticket</Button>}
+          <Button size="sm" onClick={setup}>Try again</Button>
+        </>}>The download didn’t finish. {error} Nothing was left behind, so trying again starts cleanly.</Callout>
+      </div>}
 
     </div>
   </Dialog>;

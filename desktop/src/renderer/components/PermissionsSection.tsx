@@ -151,7 +151,10 @@ import type {
  * express open/closed, and passing a caret via `control` demotes the row to a
  * non-focusable <div>.
  */
-const FOLDER_HEADER = `w-full flex items-center gap-3 px-3 py-2 text-left transition-colors stepped-hover hover:bg-inset cursor-pointer ${FOCUS_RING}`;
+// WHY no hover tint of its own (submit-ticket-5, the ST4-2 sweep: "the hard divider line at
+// the bottom is bad"): opened, the header's tint stopped in a hard line across the card above
+// the rules. The card lights instead (`has-[>button:hover]` below), like the shared FoldRow.
+const FOLDER_HEADER = `w-full flex items-center gap-3 px-3 py-2 text-left cursor-pointer ${FOCUS_RING}`;
 
 /** Rows shown per kind before "Show all N". Hiding a single row behind a click
  *  does not pay for the click, so the cut only applies above ROWS_PER_KIND + 1. */
@@ -596,7 +599,7 @@ function FolderCard({
     // to edge inside the border. Card-levels sweep: this is nested inside the
     // "Always allowed" level-1 card, so it's LEVEL-2 (`CARD_LEVEL_2`) now,
     // not its own one-off `bg-well` card.
-    <div className={`${CARD_LEVEL_2} overflow-hidden`}>
+    <div className={`${CARD_LEVEL_2} overflow-hidden stepped-hover has-[>button:hover]:bg-inset`}>
       {/* The card's top band. A ROW, not a section label: the folder name is
           user data, and putting it through a label's `tracking-wider uppercase`
           destroys its real casing and makes a legacy slug read as shouting. */}

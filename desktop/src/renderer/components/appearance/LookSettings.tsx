@@ -21,7 +21,7 @@ import {
   type GlassField, type GlassPreset, type GlassValues, type LookOverrides, type LookParticles,
 } from '../../themes/look-overrides';
 import { TERMINAL_WALLPAPER_OPACITY_FLOOR } from '../../themes/theme-engine';
-import { Button, RadioGroup, SegmentedTabs, SettingRow, FOCUS_RING } from '../ui';
+import { Button, FoldRow, RadioGroup, SegmentedTabs, SettingRow, FOCUS_RING } from '../ui';
 
 // "Auto" = the absent field = the theme's own choice (AP-S1). Named "Auto" at Destin's
 // request (appearance-panel-review-3, AR3-1): "Auto (Theme)" in place of "Theme's".
@@ -274,15 +274,14 @@ function GlassSettings({ active, raw, look, set, reducedEffects }: {
       <StackedRow title="Glass" hint={hint}>
         <SegmentedTabs tabs={tabs} value={look.glass ?? THEME} onChange={pick} variant="contained" aria-label="Glass" />
       </StackedRow>
-      <SettingRow
-        variant="item"
+      {/* WHY the shared FoldRow (submit-ticket-5, proposal 1; guide "A folded box opens inside itself"): this was a hand-built fold whose content opened below its row and whose row tint ended in a hard line. */}
+      <FoldRow
         title="Fine-tune glass"
         description={look.glass === 'custom' ? 'Your own values' : 'Set each blur and see-through level'}
-        expanded={fineTune}
-        onClick={() => setFineTune(v => !v)}
-      />
-      {fineTune && (
-        <div className="space-y-3 px-3 py-2">
+        open={fineTune}
+        onToggle={setFineTune}
+      >
+        <div className="space-y-3 py-1">
           {GLASS_SLIDERS.map(s => {
             const value = (look.glass === 'custom' ? look.glassCustom?.[s.field] : undefined)
               ?? active.background?.[s.field]
@@ -306,7 +305,7 @@ function GlassSettings({ active, raw, look, set, reducedEffects }: {
             </p>
           )}
         </div>
-      )}
+      </FoldRow>
     </div>
   );
 }
@@ -443,24 +442,20 @@ export function LookSettings() {
   const changed = LOOK_KEYS.filter(k => look[k] !== undefined).length;
   const [open, setOpen] = useState(false);
   return (
-    <div>
-      <SettingRow
-        variant="item"
-        title="Additional customizations"
-        description={changed === 0 ? 'Message bubbles, corners, glass, particles' : `${changed} changed from the theme`}
-        expanded={open}
-        onClick={() => setOpen(v => !v)}
-        className={open ? 'rounded-b-none' : ''}
-      />
-      {open && (
-        <div className="space-y-4 bg-inset/50 rounded-b-lg px-3 pt-2 pb-3">
-          <BubbleSettings />
-          <RoundnessSettings />
-          <GlassLook />
-          <ParticleSettings />
-          <ResetLook />
-        </div>
-      )}
-    </div>
+    // WHY the shared FoldRow (submit-ticket-5, proposal 1; guide "A folded box opens inside itself"): this was a hand-built fold whose content opened below its row and whose row tint ended in a hard line.
+    <FoldRow
+      title="Additional customizations"
+      description={changed === 0 ? 'Message bubbles, corners, glass, particles' : `${changed} changed from the theme`}
+      open={open}
+      onToggle={setOpen}
+    >
+      <div className="space-y-4 pt-1 pb-1">
+        <BubbleSettings />
+        <RoundnessSettings />
+        <GlassLook />
+        <ParticleSettings />
+        <ResetLook />
+      </div>
+    </FoldRow>
   );
 }

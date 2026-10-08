@@ -31,6 +31,8 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/quick-chips/edit', 'dialog'),
   chat('chat/quick-chips/add', 'dialog'),
   chat('chat/session-context', 'dialog'),
+  // A skill's fold, opened and pointed at — now the shared FoldRow (submit-ticket-5). Hover: 1×.
+  { ...chat('chat/session-context#skill-open-hover', 'dialog', 'fold'), open: [{ do: 'click', target: { role: 'tab', label: 'Skills' } }, 'theme-builder Build, preview and publish a community theme', { do: 'hover', target: { role: 'button', label: 'theme-builder Build, preview and publish a community theme' } }] },
   { ...chat('chat/session-context#ancestors', 'dialog'), session: 'wb-2', params: { contextChain: '1' } },
   chat('chat/quit-sessions', 'dialog'),
   // Each first-run warning, once per kind (localStorage is unwritten on a fresh

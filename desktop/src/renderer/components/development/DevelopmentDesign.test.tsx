@@ -203,8 +203,23 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     Object.assign(window, { claude: { dev: { setupWorkspace, setupStatus: idle } } });
     render(<ContributePopup open onClose={() => {}} />);
     fireEvent.click(screen.getByRole('button', { name: 'Download YouCoded’s code' }));
-    await screen.findByText(/Could not reach github\.com\./);
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+    const line = await screen.findByText(/Could not reach github\.com\./);
+    // The guide's notice box, its Try again inside it (submit-ticket-5), never a bare Done.
+    const box = line.closest('div.rounded-lg') as HTMLElement;
+    expect(box.className).toMatch(/destructive/);
+    expect(box.querySelector('button')?.textContent).toBe('Try again');
+    expect(screen.queryByRole('button', { name: 'Done' })).toBeNull();
+  });
+
+  it('says a conversation that would not open the same way, in the notice box', async () => {
+    const setupStatus = vi.fn().mockResolvedValue({ state: 'ready', path: '/home/you/YouCoded/Development/w' });
+    const openSessionIn = vi.fn().mockRejectedValue(new Error('No session could start.'));
+    Object.assign(window, { claude: { dev: { setupStatus, setupWorkspace: vi.fn(), openSessionIn, clearSetupStatus: vi.fn() } } });
+    render(<ContributePopup open onClose={() => {}} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Open it' }));
+    const line = await screen.findByText(/No session could start\./);
+    expect((line.closest('div.rounded-lg') as HTMLElement).className).toMatch(/destructive/);
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
 
   it('keeps the draft and offers a retry when a ticket cannot be sent', async () => {

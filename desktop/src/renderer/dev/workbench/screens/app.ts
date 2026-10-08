@@ -16,4 +16,9 @@ export const APP: readonly ScreenEntry[] = [
   // Not a screen of the app: every shared hand-drawn icon at 48px (dev/workbench/IconSheet.tsx),
   // so a malformed drawing is visible at a glance. Photo-only build only.
   { name: 'dev/icons', tags: ['dev'], viewport: { width: 1440, height: 1300 } },
+  // Not a screen either: every status tag on a popup and in a card, at fixed positions, so its
+  // tint can be measured per theme (dev/workbench/PillSheet.tsx). `pillTint=strong` is the
+  // proposed stronger tint (submit-ticket-5, waiting for Destin).
+  { name: 'dev/pills', tags: ['dev'] },
+  { name: 'dev/pills#strong', tags: ['dev'], params: { pillTint: 'strong' } },
 ];

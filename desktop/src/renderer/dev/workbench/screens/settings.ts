@@ -31,6 +31,8 @@ const TICKET_STATES: readonly ScreenEntry[] = [
   ticket('review-logs-open', { open: [...FILL, TICK_LOGS, REVIEW, { do: 'click', target: { role: 'button', label: 'Recent logs 4 lines — open to read or remove anything private' } }] }),
   ticket('sending', { params: { ticket: 'hold' }, open: [...FILL, REVIEW, SEND] }),
   ticket('sent', { open: [...FILL, REVIEW, SEND] }),
+  // The proposed stronger tag tint on the "Submitted" tag (Pill, waiting for Destin).
+  ticket('sent-strong', { params: { pillTint: 'strong' }, open: [...FILL, REVIEW, SEND] }),
   ticket('browser', { open: [...FILL, TICK_FILES, REVIEW, 'Continue in GitHub'] }),
   ticket('failed', { scenario: 'refused', open: [...FILL, REVIEW, SEND] }),
   ticket('offline', { params: { network: 'offline' }, open: [...FILL, REVIEW, SEND] }),
@@ -63,9 +65,14 @@ export const SETTINGS: readonly ScreenEntry[] = [
   settings('settings/assistant/cloud/claude-code/sign-out', 'dialog'),
   settings('settings/assistant/cloud/openrouter/key', 'dialog'),
   settings('settings/assistant/permissions', 'dialog'),
+  // A folder opened and pointed at: the card lights as one (the ST4-2 sweep). Hover: shoot at 1×.
+  { ...settings('settings/assistant/permissions#folder-open-hover', 'dialog', 'fold'), open: ['youcoded /home/destin/youcoded-dev/youcoded 4 ▸', { do: 'hover', target: { role: 'button', label: 'youcoded /home/destin/youcoded-dev/youcoded 4 ▾' } }] },
   settings('settings/assistant/permissions/skip-confirm', 'dialog'),
   settings('settings/assistant/specialists', 'dialog'),
   settings('settings/appearance', 'dialog'),
+  // The two Appearance folds, now the shared FoldRow (submit-ticket-5 proposal 1).
+  { ...settings('settings/appearance#custom-open', 'dialog', 'fold'), open: ['Additional customizations Message bubbles, corners, glass, particles', { do: 'scroll', dir: 'down', times: 2 }] },
+  { ...settings('settings/appearance#finetune-open', 'dialog', 'fold'), open: ['Additional customizations Message bubbles, corners, glass, particles', { do: 'scroll', dir: 'down', times: 8 }, 'Fine-tune glass Set each blur and see-through level', { do: 'scroll', dir: 'down', times: 8 }] },
   settings('settings/appearance/about', 'dialog'),
   settings('settings/buddy', 'dialog'),
   settings('settings/sound', 'dialog'),
@@ -94,6 +101,9 @@ export const SETTINGS: readonly ScreenEntry[] = [
   { ...settings('settings/development/contribute#walkthrough', 'dialog'), open: ['How contributing works'] },
   { ...settings('settings/development/contribute#ready', 'dialog'), params: { devCopy: 'ready' } },
   { ...settings('settings/development/contribute#downloading', 'dialog'), params: { ticket: 'hold' }, open: ['Download YouCoded’s code'] },
+  // Contribute's two failures, in the guide's notice box (submit-ticket-5).
+  { ...settings('settings/development/contribute#failed', 'dialog'), scenario: 'refused', open: ['Download YouCoded’s code'], waitMs: 3500 },
+  { ...settings('settings/development/contribute#open-failed', 'dialog'), params: { devCopy: 'ready', fail: 'dev.openSessionIn' }, open: ['Open it'] },
   settings('settings/shortcuts', 'dialog'),
   settings('settings/donate', 'dialog'),
   settings('settings/about', 'dialog'),

@@ -257,14 +257,16 @@ if ((import.meta.env.DEV || import.meta.env.VITE_WORKBENCH === '1') && __buddyMo
       // directly. `__SHOOT__` is false in every other build, so this import and the
       // screen list never ship in the app or the landing page's demo.
       if (typeof __SHOOT__ !== 'undefined' && __SHOOT__) {
-        const [{ installScreenDriver }, { SCREENS }, { default: IconSheet }] = await Promise.all([
+        const [{ installScreenDriver }, { SCREENS }, { default: IconSheet }, { default: PillSheet }] = await Promise.all([
           import('./shoot-mode'),
           import('./dev/workbench/screens'),
           // The icon sheet (`dev/icons`) sits beside the app only in the photo-only build.
           import('./dev/workbench/IconSheet'),
+          // So does the status-tag sheet (`dev/pills`, submit-ticket-5 tint check).
+          import('./dev/workbench/PillSheet'),
         ]);
         installScreenDriver(SCREENS);
-        __mount.render(<><App /><IconSheet /></>);
+        __mount.render(<><App /><IconSheet /><PillSheet /></>);
         return;
       }
       // App is already statically imported above (Root renders it).

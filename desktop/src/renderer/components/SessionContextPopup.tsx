@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Dialog, SettingRow, SegmentedTabs, Callout, Button, SectionLabel } from './ui';
+import { Dialog, SettingRow, SegmentedTabs, Callout, Button, SectionLabel, FoldRow } from './ui';
 import { UnifiedDiff } from './diff/UnifiedDiff';
 import MarkdownContent from './MarkdownContent';
 import { useOpenFilepath } from '../hooks/useOpenFilepath';
@@ -152,13 +152,8 @@ function DetailCard({ header, children }: { header: React.ReactNode; children: R
 /** An expand-in-place row: SettingRow's own `expanded` mode, the shape Destin
  *  picked on 2026-09-05 ("I HATE the bare dropdowns with a chevron"). */
 function ExpandRow({ title, description, body }: { title: string; description?: string; body: React.ReactNode }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div>
-      <SettingRow variant="item" title={title} description={description} expanded={open} onClick={() => setOpen((o) => !o)} />
-      {open && <div className="pt-1.5">{body}</div>}
-    </div>
-  );
+  // WHY the shared FoldRow (submit-ticket-5, proposal 1; guide "A folded box opens inside itself"): this was a hand-built fold whose content opened below its row and whose row tint ended in a hard line.
+  return <FoldRow title={title} description={description} flush>{body}</FoldRow>;
 }
 
 /** The got/cut switch. Destin kept the red/green comparison over a plain list of
@@ -280,19 +275,8 @@ function SkillCard({ skill, sessionId, openFile }: { skill: SessionContextSkill;
   const fetched = useSessionContextText(sessionId, 'skill', skill.id, open);
   const path = fetched?.state === 'ready' ? fetched.value.path : null;
   return (
-    <DetailCardCollapsible
-      open={open}
-      header={(
-        <SettingRow
-          variant="item"
-          className="rounded-none bg-transparent"
-          title={skill.label}
-          description={skill.description}
-          expanded={open}
-          onClick={() => setOpen((o) => !o)}
-        />
-      )}
-    >
+    // WHY the shared FoldRow (submit-ticket-5, proposal 1; guide "A folded box opens inside itself"): this was a hand-built fold whose content opened below its row and whose row tint ended in a hard line.
+    <FoldRow title={skill.label} description={skill.description} open={open} onToggle={setOpen} flush>
       {!fetched || fetched.state === 'loading' ? <p className="p-3 text-2xs text-fg-muted">Reading…</p>
         : fetched.state === 'error' ? <p className="p-3 text-2xs text-fg-muted">This skill couldn’t be read.</p>
           : (
@@ -309,18 +293,7 @@ function SkillCard({ skill, sessionId, openFile }: { skill: SessionContextSkill;
                 : <Md text={fetched.value.text} flush />}
             </>
           )}
-    </DetailCardCollapsible>
-  );
-}
-
-/** DetailCard whose body is hidden until its header is pressed. Same container,
- *  same hairline — the divider goes with the body so a closed card is one row. */
-function DetailCardCollapsible({ open, header, children }: { open: boolean; header: React.ReactNode; children: React.ReactNode }) {
-  return (
-    <div className="rounded-lg border border-edge-dim bg-inset/50 overflow-hidden">
-      {header}
-      {open && <div className="border-t border-edge-dim">{children}</div>}
-    </div>
+    </FoldRow>
   );
 }
 

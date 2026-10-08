@@ -193,7 +193,11 @@ export function SettingRow({
   // that also takes a whole-row click is just as clickable as a nav row, and
   // gating this on `isButton` would have left those two rows looking inert.
   const clickable = !!onClick || !!onSelect;
-  const hover = clickable && !disabled ? ' hover:bg-inset cursor-pointer' : '';
+  // WHY a clickable HEADER row takes no tint of its own (Destin, submit-ticket-4#ST4-2: "i don't
+  // like when hover cuts off like this in an expanded card. the hard divider line at the bottom
+  // is bad"): it sits inside its card, so its own tint stopped in a hard line across the card
+  // where the opened content began. The card it heads lights up instead (FoldRow).
+  const hover = clickable && !disabled ? (header ? ' cursor-pointer' : ' hover:bg-inset cursor-pointer') : '';
 
   const label = typeof title === 'string' ? title : undefined;
 

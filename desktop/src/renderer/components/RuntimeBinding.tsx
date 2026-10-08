@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { isAndroid, isRemoteMode } from '../platform';
 import { PRESETS } from '../../shared/harness-manifest';
-import { FieldError, SettingRow, Toggle } from './ui';
+import { FieldError, FoldRow, SettingRow, Toggle } from './ui';
 import { plainMessage } from '../utils/ipc-error';
 import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';
 
@@ -365,10 +365,10 @@ export function NativeExtras({ nb, preset, onPreset }: {
         // Round-5 note (Destin): the toggle is a SUB-CARD inside the expanded warning card,
         // not a sibling row — so the card is one container that grows, and the toggle row's
         // own tint reads as nested inside it.
-        <div className="rounded-lg bg-inset/50">
-          <SettingRow
-            variant="item"
-            className="bg-transparent"
+        // WHY the shared FoldRow (submit-ticket-5, proposal 1; guide "A folded box opens inside itself"): this was a hand-built fold — its row tint ended in a hard line above the opened part.
+        <FoldRow
+            open={nb.memDetailOpen}
+            onToggle={(next) => nb.setMemDetailOpen(() => next)}
             title={(
               // WHY `text-warning-fg` and not a fixed amber (contract R30, 2026-09-06):
               // one hard-coded amber is crisp on a dark theme and invisible on a pale
@@ -382,11 +382,9 @@ export function NativeExtras({ nb, preset, onPreset }: {
               </span>
             )}
             description={nb.memDetailOpen ? nb.memVerdict.headline : undefined}
-            onClick={() => nb.setMemDetailOpen((o) => !o)}
-            expanded={nb.memDetailOpen}
-          />
-          {nb.memDetailOpen && nb.memVerdict.verdict === 'tight' && nb.dismissMemoryWarning && (
-            <div className="px-1.5 pb-1.5">
+          >
+          {nb.memVerdict.verdict === 'tight' && nb.dismissMemoryWarning && (
+            <div>
               <SettingRow
                 variant="item"
                 className="bg-inset"
@@ -405,7 +403,7 @@ export function NativeExtras({ nb, preset, onPreset }: {
               {nb.memDismissError && <FieldError as="p" className="px-3 pb-1.5">{nb.memDismissError}</FieldError>}
             </div>
           )}
-        </div>
+        </FoldRow>
       )}
     </>
   );

@@ -29,15 +29,14 @@ describe('FoldRow', () => {
 });
 
 describe('FoldRow hover', () => {
-  it('lets the header row fill the box and take its rounded corners, so its hover tint is not a square strip', () => {
-    // Destin, submit-ticket-3#ST3-5: "the highlight/hover effect is weird there on the
-    // header. not rounded or whatever."
+  it('lights the whole box, never a strip of the header that ends in a hard line', () => {
+    // Destin, submit-ticket-3#ST3-5 ("not rounded") and submit-ticket-4#ST4-2 ("the hard divider
+    // line at the bottom is bad"): the highlight belongs to the box, open or closed.
     render(<FoldRow title="Sync log"><p>x</p></FoldRow>);
     const header = screen.getByRole('button', { name: 'Sync log' });
-    expect(header.className).toMatch(/\brounded-lg\b/);
-    expect(header.className).toMatch(/\bpx-3\b/);
-    expect(header.parentElement!.className).not.toMatch(/\bp[xy]?-\d/);
+    expect(header.className).not.toMatch(/hover:bg-/);
+    expect(header.parentElement!.className).toContain('has-[>button:hover]:bg-inset');
     fireEvent.click(header);
-    expect(header.className).toMatch(/\brounded-t-lg\b/);
+    expect(header.className).not.toMatch(/hover:bg-/);
   });
 });

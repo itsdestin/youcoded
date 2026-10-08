@@ -30,9 +30,11 @@ export type FoldRowProps = {
   /** What opens under the row. Only rendered while open. */
   children: React.ReactNode;
   className?: string;
+  /** The content carries its own padding (a list or a code block): no inner padding. */
+  flush?: boolean;
 };
 
-export function FoldRow({ title, description, open, onToggle, defaultOpen = false, children, className = '' }: FoldRowProps) {
+export function FoldRow({ title, description, open, onToggle, defaultOpen = false, children, className = '', flush = false }: FoldRowProps) {
   const [inner, setInner] = useState(defaultOpen);
   const isOpen = open ?? inner;
   const toggle = () => {
@@ -48,16 +50,15 @@ export function FoldRow({ title, description, open, onToggle, defaultOpen = fals
   // the header row drops its own box (SettingRow `header`) and the wrapper carries the same
   // look (CARD_LEVEL_1 == the setting row's box), so a closed fold looks as before.
   return (
-    <div className={`${CARD_LEVEL_1} ${className}`.trim()}>
-      {/* WHY the header row reaches the box's edges and takes its corners (Destin,
-          submit-ticket-3#ST3-5: "the highlight/hover effect is weird there on the header.
-          not rounded"): with the padding on the box, the row's hover tint was a square
-          strip inset from a rounded box. The row now carries the padding itself (py-2
-          wins over the header's py-1), so its tint fills the box — all four corners while
-          closed, the top two while open. */}
+    // WHY the WHOLE box lights while its header is pointed at (Destin, submit-ticket-4#ST4-2:
+    // "i don't like when hover cuts off like this in an expanded card. the hard divider line
+    // at the bottom is bad"; round 3 #ST3-5 "not rounded"): a tint on the header alone either
+    // sat as a square strip inside a rounded box or, opened, ended in a hard line across the
+    // card. The box's own corners shape the highlight, open or closed, with no line in it.
+    <div className={`${CARD_LEVEL_1} stepped-hover has-[>button:hover]:bg-inset ${className}`.trim()}>
       <SettingRow variant="item" header title={title} description={description} onClick={toggle} expanded={isOpen}
-        className={`px-3 py-2 ${isOpen ? 'rounded-t-lg' : 'rounded-lg'}`} />
-      {isOpen && <div className="px-3 pt-1 pb-2">{children}</div>}
+        className="px-3 py-2" />
+      {isOpen && <div className={flush ? '' : 'px-3 pt-1 pb-2'}>{children}</div>}
     </div>
   );
 }
