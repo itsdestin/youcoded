@@ -127,7 +127,7 @@ describe('the Money page', () => {
     const p = open(prior, async () => answer);
     await p.settle();
     expect(p.last().accounts.map((a: any) => a.id)).toEqual(['plaid:n1']);
-    expect(p.text()).toContain('no longer reaches any accounts');
+    expect(p.text()).toContain('This connection no longer works');
   });
 
   it('asks the app to reconnect a bank, then checks again', async () => {
@@ -370,5 +370,13 @@ describe('the Money page', () => {
   it('warns a week before a late payment reaches the credit report', () => {
     const p = open({ demoToday: TODAY, accounts: [{ id: 'm1', source: 'manual', kind: 'credit', institution: 'Synchrony', name: 'Store card', balance: 100, updatedAt: `${TODAY}T10:00:00Z`, payment: { amount: 40, due: '2026-09-12' } }] });
     expect(p.text()).toContain('24 days late · on your credit report in 6 days');
+  });
+
+  it('a Needs you card leads with its most serious consequence, then the cause, then anything else', () => {
+    const p = open({ demoToday: TODAY, accounts: [{ id: 'm1', source: 'manual', kind: 'credit', institution: 'Synchrony', name: 'Store card', balance: 820, limit: 1000, updatedAt: `${TODAY}T10:00:00Z`, payment: { amount: 40, due: '2026-09-12' } }] });
+    const card = p.d.querySelector('#needs .need')!;
+    expect(card.querySelector('.head')!.textContent).toBe('On your credit report in 6 days');
+    expect(card.querySelector('.who')!.textContent).toBe('Synchrony Store card · $40.00 payment 24 days late');
+    expect(card.querySelector('.facts')!.textContent).toBe('Also: can lower your credit score (82% of its $1,000 limit used)');
   });
 });

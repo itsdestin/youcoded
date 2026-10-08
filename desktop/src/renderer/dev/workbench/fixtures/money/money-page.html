@@ -127,7 +127,9 @@
   .need.bad { --c: var(--bad); } .need.warn { --c: var(--warn); }
   .need > * { position: relative; }
   .need .txt { flex: 1; min-width: 0; }
-  .need .who { font-weight: 500; }
+  .need .head { font-size: 15px; font-weight: 600; color: color-mix(in srgb, var(--c) 65%, var(--fg)); }
+  .need .who { font-size: 12px; color: var(--fg-2); margin-top: 2px; }
+  .need .who b { font-weight: 500; color: var(--fg); }
   .need .facts { font-size: 12px; color: var(--fg-2); margin-top: 2px; }
   .need .facts b { font-weight: 500; color: var(--fg); }
 
@@ -803,10 +805,10 @@
     var d = daysBetween(b.due, today());
     if (d > 0 || b.overdue) {
       var late = Math.max(d, 0), left = S.reportDay - late;
-      if (late === 0) return { cls: 'late', icon: I.warn, text: 'Past due', alert: 'warn' };
-      if (left <= 0) return { cls: 'late report', icon: I.stop, text: late + ' days late · may already be on your credit report', alert: 'bad' };
-      if (left <= S.reportWarnDays) return { cls: 'late report', icon: I.stop, text: late + ' days late · on your credit report in ' + left + (left === 1 ? ' day' : ' days'), alert: 'bad' };
-      return { cls: 'late', icon: I.warn, text: late + (late === 1 ? ' day late' : ' days late'), alert: 'warn' };
+      if (late === 0) return { cls: 'late', icon: I.warn, text: 'Past due', alert: 'warn', head: 'Due today: pay now to avoid a late fee', why: 'past due' };
+      if (left <= 0) return { cls: 'late report', icon: I.stop, text: late + ' days late · may already be on your credit report', alert: 'bad', head: 'May already be on your credit report', why: late + ' days late' };
+      if (left <= S.reportWarnDays) return { cls: 'late report', icon: I.stop, text: late + ' days late · on your credit report in ' + left + (left === 1 ? ' day' : ' days'), alert: 'bad', head: 'On your credit report in ' + left + (left === 1 ? ' day' : ' days'), why: late + ' days late' };
+      return { cls: 'late', icon: I.warn, text: late + (late === 1 ? ' day late' : ' days late'), alert: 'warn', head: 'Late: fees and interest may apply', why: late + (late === 1 ? ' day late' : ' days late') };
     }
     if (d === 0) return { cls: 'soon', icon: I.cal, text: 'Due today' };
     if (-d === 1) return { cls: 'soon', icon: I.cal, text: 'Due tomorrow' };
@@ -840,32 +842,39 @@
   }
 
   // ── Needs you ────────────────────────────────────────────────────────────
+  // WHY head/why: a card leads with what will happen ("On your credit report in 6 days"), not the
+  // account's state, so the most serious consequence is what is read first. Lower rank = more serious.
   function alerts(){
     var by = {}, order = [];
-    function add(id, x, name, lvl, fact, action){
-      if (!by[id]) { by[id] = { x: x, name: name, lvl: lvl, facts: [], action: null }; order.push(id); }
-      var r = by[id]; r.facts.push(fact); if (lvl === 'bad') r.lvl = 'bad'; if (action) r.action = action;
+    function add(id, x, name, lvl, rank, head, why, action){
+      if (!by[id]) { by[id] = { x: x, name: name, lvl: lvl, issues: [], action: null }; order.push(id); }
+      var r = by[id]; r.issues.push({ rank: rank, head: head, why: why }); if (lvl === 'bad') r.lvl = 'bad'; if (action) r.action = action;
     }
     Object.keys(data.banks).forEach(function(itemId){
       var b = data.banks[itemId];
       if (b.ok || !b.error) return;
       var mine = data.accounts.filter(function(a){ return a.itemId === itemId; });
       var action = b.error.reconnect ? { label: 'Reconnect ' + b.name, kind: 'reconnect', id: itemId } : null;
-      var fact = b.error.reconnect ? 'needs you to sign in again'
-        : b.error.code === 'NO_ACCOUNTS' ? 'this connection no longer reaches any accounts (often because the bank was connected again). Remove it below.'
+      var head = b.error.code === 'NO_ACCOUNTS' ? 'This connection no longer works' : 'Balance isn’t updating';
+      var why = b.error.reconnect ? esc(b.name) + ' needs you to sign in again'
+        : b.error.code === 'NO_ACCOUNTS' ? 'it reaches no accounts (often because the bank was connected again). Remove it below.'
         : esc(b.error.message);
-      if (mine.length) mine.forEach(function(a){ add(a.id, a, fullName(a), 'warn', fact, action); });
-      else add('bank:' + itemId, { institution: b.name }, b.name, 'warn', fact, action);
+      if (mine.length) mine.forEach(function(a){ add(a.id, a, fullName(a), 'warn', 3, head, why, action); });
+      else add('bank:' + itemId, { institution: b.name }, b.name, 'warn', 3, head, why, action);
     });
-    allBills().forEach(function(b){ var s = billState(b); if (s.alert) add(b.id, b, b.name, s.alert, '<b>' + money(b.amount) + '</b> payment ' + s.text); });
+    allBills().forEach(function(b){
+      var s = billState(b);
+      if (s.alert) add(b.id, b, b.name, s.alert, s.alert === 'bad' ? 0 : 1, s.head, '<b>' + money(b.amount) + '</b> payment ' + s.why);
+    });
     data.accounts.forEach(function(a){
-      if (a.kind === 'credit' && a.limit) { var p = a.balance / a.limit * 100; if (p >= S.alertPct) add(a.id, a, fullName(a), 'bad', '<b>' + Math.round(p) + '%</b> of its ' + money(a.limit, true) + ' limit used'); }
+      if (a.kind === 'credit' && a.limit) { var p = a.balance / a.limit * 100; if (p >= S.alertPct) add(a.id, a, fullName(a), 'bad', 2, 'Can lower your credit score', '<b>' + Math.round(p) + '%</b> of its ' + money(a.limit, true) + ' limit used'); }
       if (isStale(a)) {
-        if (a.source === 'plaid') { if (!data.banks[a.itemId] || data.banks[a.itemId].ok) add(a.id, a, fullName(a), 'warn', 'last updated ' + (a.updatedAt ? ago(a.updatedAt) : 'never'), plaidOn ? { label: 'Check now', kind: 'check' } : null); }
-        else add(a.id, a, fullName(a), 'warn', 'you last updated it ' + (a.updatedAt ? ago(a.updatedAt) : 'never'), { label: 'Update', kind: 'edit', id: a.id });
+        if (a.source === 'plaid') { if (!data.banks[a.itemId] || data.banks[a.itemId].ok) add(a.id, a, fullName(a), 'warn', 4, 'Balance may be out of date', 'last updated ' + (a.updatedAt ? ago(a.updatedAt) : 'never'), plaidOn ? { label: 'Check now', kind: 'check' } : null); }
+        else add(a.id, a, fullName(a), 'warn', 4, 'Balance may be out of date', 'you last updated it ' + (a.updatedAt ? ago(a.updatedAt) : 'never'), { label: 'Update', kind: 'edit', id: a.id });
       }
     });
-    return order.map(function(id){ return by[id]; }).sort(function(x, y){ return (x.lvl === 'bad' ? 0 : 1) - (y.lvl === 'bad' ? 0 : 1); });
+    var out = order.map(function(id){ var r = by[id]; r.issues.sort(function(x, y){ return x.rank - y.rank; }); return r; });
+    return out.sort(function(x, y){ return x.issues[0].rank - y.issues[0].rank; });
   }
 
   // ── Page ─────────────────────────────────────────────────────────────────
@@ -913,7 +922,7 @@
           : a.action.kind === 'reconnect' ? '<button class="btn sm" data-reconnect="' + esc(a.action.id) + '"' + (connecting ? ' disabled' : '') + '>' + a.action.label + '</button>'
           : '<button class="btn sm" data-check' + (checking ? ' disabled' : '') + '>' + a.action.label + '</button>';
         var target = a.x && a.x.id && String(a.x.id).indexOf('bank:') !== 0 ? a.x.id : '';
-        h += '<div class="tile need tap ' + a.lvl + '" role="button" tabindex="0" ' + (target ? 'data-focus="' + esc(target) + '"' : 'data-jump="banks"') + ' title="Show this">' + mark(a.x.institution) + '<div class="txt"><div class="who">' + esc(a.name) + '</div><div class="facts">' + a.facts.join(' · ') + '</div></div>' + btn + '</div>';
+        h += '<div class="tile need tap ' + a.lvl + '" role="button" tabindex="0" ' + (target ? 'data-focus="' + esc(target) + '"' : 'data-jump="banks"') + ' title="Show this">' + mark(a.x.institution) + '<div class="txt"><div class="head">' + esc(a.issues[0].head) + '</div><div class="who">' + esc(a.name) + ' · <span>' + a.issues[0].why + '</span></div>' + (a.issues.length > 1 ? '<div class="facts">Also: ' + a.issues.slice(1).map(function(i){ return esc(i.head).toLowerCase() + ' (' + i.why + ')'; }).join(' · ') + '</div>' : '') + '</div>' + btn + '</div>';
       });
       h += '</div></div>';
     }
