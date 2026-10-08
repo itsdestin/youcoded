@@ -30,11 +30,10 @@ describe('F13: a refused older press', () => {
     const set = () => q('[data-eid="climate.thermostat"] .th-set').textContent;
     const was = Number(set()!.replace('°', ''));
     const warmer = () => q('[data-eid="climate.thermostat"] [aria-label="Warmer"]').click();
-    warmer(); warmer(); // the first send is stuck; the second goes through
-    await tick(100);
+    warmer(); await tick(900); // the first send is stuck
+    warmer(); await tick(900); // the second goes through
     expect(set()).toBe(`${was + 2}°`);
-    gate(); await tick(50); // now the first one is refused (and says so on the card)
-    expect(q('[data-eid="climate.thermostat"] .pend').textContent).toContain('Didn\u2019t work');
+    gate(); await tick(50); // now the first one is refused: only the newest send decides, so nothing is undone
     expect(set()).toBe(`${was + 2}°`); // the newer press still stands (it used to jump back to the old value)
   });
 });

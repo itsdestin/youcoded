@@ -36,18 +36,25 @@ export const HOME_PENDING_JS = `
   var guesses = {}, fresh = [], HOLD_MS = 8000;
   // Numbers agree when close (a bar's rounding); anything else (names, groups, colours) when equal.
   // Within 2% of the bar's range counts as the device having taken it (Hue rounds a little).
-  function heldSame(a, b, key) { return typeof b === 'number' ? Math.abs((a || 0) - b) <= 0.02 * (key === 'brightness' ? 255 : 1) : JSON.stringify(a) === JSON.stringify(b); }
+  // A thermostat's set point (target / tlo / thi) agrees within half a step (0.5 for a whole-degree one): a Nest rounds to its own grid.
+  function heldSame(a, b, key, step) { return typeof b === 'number' ? Math.abs((a || 0) - b) <= (CLIMATE_KEYS[key] ? Math.min(0.5, (step || 1) / 2) : 0.02 * (key === 'brightness' ? 255 : 1)) : JSON.stringify(a) === JSON.stringify(b); }
   // WHY a slider's value is a TARGET (Destin's real house, rubber-banding, 2026-10-05): a Hue light answers about a
   // second after each call, with the answers for EARLIER values stamped newer than the guess, so newest-wins applied
   // the stale one and the bar jumped back and forward. A target stays until the device reports a value within 2% of
   // it, or about 4 seconds pass with no such report (then the device's word is accepted); until then every report
   // that does not match it is ignored whatever its stamp, and a check cannot drop it.
-  var TARGETS = { brightness: 1, vol: 1 };
-  function guessAgrees(it, g) { return g.field === 'state' ? it.state === g.value || (g.value === 'on' && isOn(it)) : heldSame(it[g.field], g.value, g.field); }
+  // WHY a thermostat's set points are targets too (Destin: "the ac +/- is still buggy and rubberband-y", 2026-10-07): his Nest confirms a
+  // change through Google about 2-4 seconds later, and confirmations of earlier presses land after a newer one, so the number jumped back and
+  // forth. Held for 20 s, not 4-8: the confirmation is slow and Google rate-limits rapid commands, so a late one is normal; if none ever comes
+  // the device's last word is shown after that. While held, every report that is not within half a step of the target is ignored.
+  var CLIMATE_KEYS = { target: 1, tlo: 1, thi: 1 }, CLIMATE_HOLD_MS = 20000;
+  var TARGETS = { brightness: 1, vol: 1, target: 1, tlo: 1, thi: 1 };
+  function guessAgrees(it, g) { return g.field === 'state' ? it.state === g.value || (g.value === 'on' && isOn(it)) : heldSame(it[g.field], g.value, g.field, it.step); }
   // src names what the guess belongs to (a slider's key); a guess made by a press has none
   // yet and is picked up by pendBegin() ("fresh"), which tags it with the press's key.
   function guess(id, field, value, ms, src) {
     var k = id + '|' + field, old = guesses[k], it = thing(id);
+    if (CLIMATE_KEYS[field]) ms = CLIMATE_HOLD_MS;
     if (old) clearTimeout(old.timer);
     var g = guesses[k] = { id: id, field: field, value: value, before: old ? old.before : it ? it[field] : null, until: Date.now() + (ms || 4000), src: src || null, settledAt: 0, rep: old ? old.rep : null };
     // When nobody reports, the page still gives up the guess on time and shows what the device last said (or had).
@@ -75,9 +82,11 @@ export const HOME_PENDING_JS = `
     Object.keys(guesses).forEach(function (k) {
       var g = guesses[k], it = thing(g.id);
       if (!it) { delete guesses[k]; return; }
+      // A set point means nothing once the mode changed under it (Auto holds a low and a high, every other mode one, Off none): let go, the house's numbers show.
+      if (CLIMATE_KEYS[g.field] && (it.state === 'off' || (g.field === 'target') === (it.state === 'heat_cool'))) { clearTimeout(g.timer); delete guesses[k]; return; }
       if (now > g.until) { clearTimeout(g.timer); delete guesses[k]; if (g.rep) it[g.field] = g.rep.v; else if (!g.reported) it[g.field] = g.before; return; }
       // A report that did not match is remembered (not shown): it is what the device last said if the target never comes.
-      if (!heldSame(it[g.field], g.value, g.field) || g.field === 'state' && it.state !== g.value) { g.rep = { v: it[g.field] }; g.reported = true; }
+      if (!heldSame(it[g.field], g.value, g.field, it.step) || g.field === 'state' && it.state !== g.value) { g.rep = { v: it[g.field] }; g.reported = true; }
       it[g.field] = g.value;
     });
   }
@@ -159,6 +168,15 @@ export const HOME_PENDING_JS = `
     var n = s.n; s.n = null;
     if (!n || (n.val === s.last && Date.now() - s.at < 4000)) return;
     s.last = n.val; s.at = Date.now(); n.fn();
+  }
+  // A press of a button (a thermostat's − or +) sends only after the presses stop: the number shows at once, five quick presses are one send
+  // of the final value (a Nest is rate-limited by Google, and each early send brings a late confirmation that pulls the number back).
+  // Shares the slider's record, so a drag and a press cannot fight: letting go of the drag flushes whatever is newest.
+  function sendAfter(key, ms, val, fn) {
+    var s = sends[key] || (sends[key] = { t: null, n: null, last: null, at: 0 });
+    s.n = { val: val, fn: fn };
+    clearTimeout(s.t);
+    s.t = setTimeout(function () { s.t = null; flushSend(s); }, ms);
   }
   function sendSlider(key, ms, val, fn, final) {
     var s = sends[key] || (sends[key] = { t: null, n: null, last: null, at: 0 });

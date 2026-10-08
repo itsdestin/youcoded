@@ -154,7 +154,9 @@ describe('what is undone, and when', () => {
     const start = shown();
     q('[data-eid="climate.thermostat"] [data-temp]').click();
     expect(shown()).not.toBe(start); // the guess shows at once
-    await tick(1000); // the check asked after the send was accepted
+    await tick(1000); // the send went out and was accepted; a thermostat is slow to confirm, so the guess is still held
+    expect(shown()).not.toBe(start);
+    await tick(21000); // no confirmation ever came: after the 20 s hold the device's own word shows
     expect(shown()).toBe(start);
   });
 

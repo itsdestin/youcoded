@@ -3816,7 +3816,7 @@ function createPagesMock(empty: boolean): PagesBridge {
   // narrow card or, with -climate, the Climate tab's big dial; -auto puts it in Auto (a low and a high). WHY: the dial's "Now" label must be seen
   // at the extremes beside the - and + buttons (owner's concern). Changed here, not in the pretend house's list: other screens rely on it as it is.
   const thermo = homeView ? /^thermo-(\d+)(-climate)?(-auto)?$/.exec(homeView) : null;
-  if (thermo) fakeHomeAssistantSet('climate.thermostat', { cur: Number(thermo[1]), ...(thermo[3] ? { state: 'heat_cool', target: null, tlo: Math.max(50, Number(thermo[1]) - 3), thi: Math.min(90, Number(thermo[1]) + 3), action: 'idle' } : {}) });
+  if (thermo) fakeHomeAssistantSet('climate.thermostat', { cur: Number(thermo[1]), ...(Number(thermo[1]) < 60 && !thermo[3] ? { state: 'heat', action: 'heating' } : {}) /* WHY: a cold room is heating, so the cold and hot pictures differ by more than the small number next to the line (shoot --check's LOOK-ALIKE test is coarse; the 50-degree and 90-degree pictures are genuinely different screens) */, ...(thermo[3] ? { state: 'heat_cool', target: null, tlo: Math.max(50, Number(thermo[1]) - 3), thi: Math.min(90, Number(thermo[1]) + 3), action: 'idle' } : {}) });
   if (onlyCameras || homeView === 'view-cameras' || homeView === 'camera-limited') fakeHomeAssistantNestSignedIn(true); // events need the Nest account working
   if (homeView === 'camera-events') fakeHomeAssistantCameraEvents(true);
   fakeCameraRefuse(homeView === 'camera-limited' ? FAKE_RATE_LIMIT_WHY : null);

@@ -20,7 +20,7 @@ export const HOME_MOTION_JS = `
   // WHY every animation asks first: reduced-motion must win, a hidden page must not animate
   // (nothing runs in the background), and the practice-only "before" screen switches it all off.
   function moCan() { return !moRM.matches && !document.hidden && !window.__motionOff && typeof Element.prototype.animate === 'function'; }
-  var MO_BODY = { 'data-fold': '.lights-body, .lt-grid', 'data-scenes': '.sc-list', 'data-group': '.glist' };
+  var MO_BODY = { 'data-fold': '.lights-body, .lt-grid', 'data-scenes': '.sx-row', 'data-group': '.glist' };
   // WHY data-scenes is held by '.lights': the easel button sits in the card's header, so the whole card holds button and chips.
   var MO_HOLD = { 'data-fold': '.lights, .lt', 'data-scenes': '.lights, .lt', 'data-group': '.rcard' };
   // WHY data-remote is not here any more (2026-10-05): the remote now opens by its own CSS transition inside the now-playing panel

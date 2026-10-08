@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // Owner, 2026-10-05: the thermostat's "now" marker is a line across the ring (not a dot), the ring has a handle like the brightness bar's
-// that can be dragged instead of − and +, and "Now 79°" sits beside the line without ever touching the − / + buttons or the handle.
+// that can be dragged instead of − and +, and the room's number ("79°", option b of deck now-label-all) hangs off the line's outer tip without ever touching the − / + buttons or the handle.
 // Pins: the tick, the handle's drag (one throttled, held send), keyboard steps, Auto's two handles never crossing, − / + still working,
 // and the label's place (computed by the page's own pure function; jsdom cannot measure layout).
 import { it, expect, afterEach, vi } from 'vitest';
@@ -88,10 +88,10 @@ it('moves with the arrow keys, Home and End, and the buttons still work', async 
   expect(sent.at(-1)).toMatchObject({ temperature: 50 });
   // − and + are still there and still send.
   card().querySelector<HTMLElement>('[aria-label="Warmer"]')!.click();
-  await tick(600);
+  await tick(900); // a press sends once the presses stop (800 ms)
   expect(sent.at(-1)).toMatchObject({ temperature: 51 });
   card().querySelector<HTMLElement>('[aria-label="Cooler"]')!.click();
-  await tick(600);
+  await tick(900); // a press sends once the presses stop (800 ms)
   expect(sent.at(-1)).toMatchObject({ temperature: 50 });
 });
 
@@ -138,7 +138,7 @@ it('the handle is left alone by a redraw while it is dragged', async () => {
   await tick(1000);
 });
 
-// ── Where "Now 79°" goes ─────────────────────────────────────────────────
+// ── Where "79°" goes ─────────────────────────────────────────────────
 // Checked independently of the page's own overlap test: sample points across the label's box and test them against the buttons, the handles
 // and the dial's allowed area.
 function problems(g: Record<string, number>, plan: ReturnType<typeof G.thLabelPlan>) {
@@ -165,7 +165,7 @@ it('the label never overlaps a button, a handle, the ring or leaves the card (ev
     for (let cur = 50; cur <= 90; cur += 0.5) for (let t = 50; t <= 90; t += 2) {
       for (const handles of [[(t - 50) / 40], [Math.max(0, (t - 50) / 40 - 0.1), Math.min(1, (t - 50) / 40 + 0.1)]]) {
         const range = handles.length === 2;
-        const plan = G.thLabelPlan(g, G.thAngle((cur - 50) / 40), `Now ${cur}°`.length, handles, true, range, range ? 5 : 3);
+        const plan = G.thLabelPlan(g, G.thAngle((cur - 50) / 40), `${cur}°`.length, handles, true, range, range ? 5 : 3);
         expect(problems(g, plan), `${name}: now ${cur}, set ${t}${range ? ' (Auto)' : ''}`).toEqual([]);
         stats[name].n++; if (!plan.spot) stats[name].centre++; else if (plan.spot.side === 'out') stats[name].out++;
       }
@@ -180,16 +180,34 @@ it('the label is beside the line at the extremes (room at the minimum and at the
   for (const [name, compact, narrow] of SIZES) {
     const g = G.thGeom(compact, narrow);
     for (const cur of [50, 90]) {
-      const plan = G.thLabelPlan(g, G.thAngle((cur - 50) / 40), 7, [0.5], true, false, 3);
+      const plan = G.thLabelPlan(g, G.thAngle((cur - 50) / 40), 3, [0.5], true, false, 3);
       expect(problems(g, plan), `${name} at ${cur}`).toEqual([]);
       expect(plan.spot, `${name} at ${cur} has a place beside the line`).not.toBeNull();
     }
   }
 });
 
+it('the label stays attached to the line: its nearest corner touches the line\'s tip, on the outer side when there is room', () => {
+  for (const [name, compact, narrow] of SIZES) {
+    const g = G.thGeom(compact, narrow);
+    let outer = 0, n = 0;
+    for (let cur = 50; cur <= 90; cur += 1) {
+      const plan = G.thLabelPlan(g, G.thAngle((cur - 50) / 40), 3, [0.5], true, false, 3), sp = plan.spot, o = plan.o;
+      n++; if (!sp) continue;
+      const a = G.thAngle((cur - 50) / 40) * Math.PI / 180, c = g.S / 2, ux = Math.cos(a), uy = Math.sin(a);
+      // The label's box, seen from the line's tip: the nearest point of the box to the tip is within the 2px gap plus the 2px steps (<= 15 steps) and the box's own half-size.
+      const dir = sp.side === 'out' ? 1 : -1, tip = [c + ux * (o.R + dir * o.tick), c + uy * (o.R + dir * o.tick)];
+      const dx = Math.max(sp.x - o.w / 2 - tip[0], 0, tip[0] - (sp.x + o.w / 2)), dy = Math.max(sp.y - o.h / 2 - tip[1], 0, tip[1] - (sp.y + o.h / 2));
+      expect(Math.hypot(dx, dy), `${name} at ${cur}: label ${Math.hypot(dx, dy).toFixed(1)}px from the tip`).toBeLessThanOrEqual(2 + 15 * 2 + 1);
+      if (sp.side === 'out') outer++;
+    }
+    expect(outer / n, `${name}: mostly hangs off the outer tip`).toBeGreaterThan(0.5);
+  }
+});
+
 it('the page puts the label in the middle under the number when nothing else fits', () => {
   const g = G.thGeom(true, true); // the narrowest card
-  const plan = G.thLabelPlan({ ...g, S: 40, mx: 0, my: 0 }, 135, 7, [0.5], true, false, 3); // a dial too small for any label
+  const plan = G.thLabelPlan({ ...g, S: 40, mx: 0, my: 0 }, 135, 3, [0.5], true, false, 3); // a dial too small for any label
   expect(plan.spot).toBeNull();
 });
 
@@ -209,7 +227,8 @@ it('the label is drawn at the place the page computed, as a share of the dial, a
   await open();
   const lbl = card().querySelector<HTMLElement>('.th-now-lbl');
   expect(lbl).toBeTruthy();
-  expect(lbl!.textContent).toBe('Now 74°');
+  expect(lbl!.textContent).toBe('74°'); // just the number (deck now-label-all, option b)
+  expect(lbl!.getAttribute('aria-label')).toBe('Now 74° inside'); // the meaning the word "Now" carried, kept for screen readers
   expect(lbl!.style.left).toMatch(/%$/);
   expect(card().querySelector('.th-mid .th-cur')).toBeNull();
 });
@@ -218,7 +237,7 @@ it('the centre text (Auto\'s two numbers, or the big number) fits inside the rin
   for (const [name, compact, narrow] of SIZES) {
     const g = G.thGeom(compact, narrow);
     for (const range of [false, true]) {
-      const { o } = G.thLabelPlan(g, 135, 7, [0.5], true, range, range ? 5 : 3);
+      const { o } = G.thLabelPlan(g, 135, 3, [0.5], true, range, range ? 5 : 3);
       // The text box (with its caption line) has corners that must stay inside the ring's inner edge, less the handle's overhang and a gap.
       const clear = o.R - (range ? Math.max(o.half, g.hs / 2) : o.half) - 3; // Auto's text sits beside two handles; the single number is a short word with empty corners
       const corner = Math.hypot(o.core.w / 2, o.core.h / 2) - (range ? 0 : 4);

@@ -34,14 +34,6 @@ export const HOME_CLIMATE_JS = `
     };
     return '<span class="th-lbl">' + esc(doing) + '</span><span class="th-range">' + btn('low', it.tlo, 'Heat') + '<span class="th-rcap" aria-hidden="true">to</span>' + btn('high', it.thi, 'Cool') + '</span>';
   }
-  // The new pair after one press of − or +: the chosen side moves, never past the device's limits nor across the other side.
-  function thNext(it, delta) {
-    var side = thSideOf(it), step = it.step || 1, lo = it.min != null ? it.min : 50, hi = it.max != null ? it.max : 90;
-    var next = Math.round((Number(thValue(it)) + Number(delta)) * 10) / 10;
-    var tlo = it.tlo, thi = it.thi;
-    if (side === 'low') tlo = Math.max(lo, Math.min(next, thi - step)); else thi = Math.min(hi, Math.max(next, tlo + step));
-    return { patch: { tlo: tlo, thi: thi }, body: { entity_id: it.id, target_temp_low: tlo, target_temp_high: thi } };
-  }
   // What the thermostat is DOING, in words that stay true (U11, UX review 2: it said "Cooling to 75°" at 74° because the
   // words came from the mode, not from what the machine is doing). Home Assistant's hvac_action decides: cooling and
   // heating are working toward the number, idle is holding it. thLine is the header pill's version.
