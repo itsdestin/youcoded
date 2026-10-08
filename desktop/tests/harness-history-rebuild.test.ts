@@ -705,6 +705,23 @@ describe('attachment resume (#290 follow-up fix 2)', () => {
     const out = rebuildHistory([ev('user-message', { text: 'see /tmp/huge.png', attachments: ['/tmp/huge.png'], modelAttachments: ['/tmp/cache/ok.png'] })], fakeReader);
     expect(out).toEqual([{ role: 'user', content: [{ type: 'text', text: 'see /tmp/huge.png' }, { type: 'file', mediaType: 'image/png', data: Buffer.from('png!') }] }]);
   });
+  it('a prepared copy persisted with its original size reopens with the same "downscaled" note, named by the original', () => {
+    const sized = (p: string): ImageReadResult => p.endsWith('derived.png')
+      ? { ok: true, mediaType: 'image/png', data: Buffer.from('small!'), width: 1221, height: 7372 } : fakeReader(p);
+    const out = rebuildHistory([ev('user-message', { text: 'see', attachments: ['/tmp/contact.png', '/tmp/a.txt'],
+      modelAttachments: ['/tmp/cache/abc-derived.png', '/tmp/a.txt'], originalSizes: [{ width: 2904, height: 17528 }, null] })], sized);
+    expect(out).toEqual([{ role: 'user', content: [
+      { type: 'text', text: 'see' },
+      { type: 'file', mediaType: 'image/png', data: Buffer.from('small!') },
+      { type: 'text', text: imageNote({ kind: 'downscaled', label: 'contact.png', width: 2904, height: 17528, shownWidth: 1221, shownHeight: 7372 }) },
+    ] }]);
+  });
+  it('no "downscaled" note without a stored original size, or when the copy is not actually smaller', () => {
+    const same = (p: string): ImageReadResult => ({ ok: true, mediaType: 'image/png', data: Buffer.from(p), width: 640, height: 480 });
+    const legacy = rebuildHistory([ev('user-message', { text: 'a', attachments: ['/tmp/x.png'], modelAttachments: ['/tmp/cache/x.png'] })], same);
+    const notSmaller = rebuildHistory([ev('user-message', { text: 'b', attachments: ['/tmp/x.png'], modelAttachments: ['/tmp/cache/x.png'], originalSizes: [{ width: 640, height: 480 }] })], same);
+    for (const out of [legacy, notSmaller]) expect((out[0] as any).content.filter((c: any) => c.type === 'text')).toHaveLength(1);
+  });
   it('an attachment the gate drops gets a visible basename note as a trailing text part — never silence', () => {
     const out = rebuildHistory([ev('user-message', { text: 'see', attachments: ['/tmp/huge.png', '/tmp/ok.png', '/tmp/gone.png'] })], fakeReader);
     expect(out).toEqual([{ role: 'user', content: [

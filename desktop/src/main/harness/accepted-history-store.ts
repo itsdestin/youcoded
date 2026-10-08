@@ -1084,6 +1084,11 @@ function validNote(value: unknown): value is ImageNote {
   if (note.kind === 'oversized') {
     return Number.isSafeInteger(note.width) && Number.isSafeInteger(note.height) && onlyKeys(note, ['kind', 'label', 'width', 'height']);
   }
+  // A composer picture the model got as a smaller prepared copy (image-history userAttachmentParts).
+  if (note.kind === 'downscaled') {
+    return [note.width, note.height, note.shownWidth, note.shownHeight].every(Number.isSafeInteger)
+      && onlyKeys(note, ['kind', 'label', 'width', 'height', 'shownWidth', 'shownHeight']);
+  }
   return note.kind === 'unavailable' && NOTE_REASONS.includes(note.reason)
     && (note.detail === undefined || (note.reason === 'prepare-failed' && typeof note.detail === 'string'))
     && onlyKeys(note, ['kind', 'label', 'reason', 'detail']);

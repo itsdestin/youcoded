@@ -571,6 +571,21 @@ describe('AcceptedHistoryStore', () => {
     expect(restored).toEqual({ ok: true, messages, messageOrigins: [null], eventUuids: ['u9'], revision: store.currentRevision(sessionId) });
   });
 
+  it('a user message carrying a "downscaled" note round-trips through the note descriptor', async () => {
+    const small = path.join(root, 'small.png'); fs.writeFileSync(small, pngHeader(1221, 7372));
+    const events: Fixture[] = [{ type: 'user-message', sessionId, uuid: 'u10', data: { text: 'look', attachments: ['/tmp/contact.png'], modelAttachments: [small], originalSizes: [{ width: 2904, height: 17528 }] } }];
+    writeTranscript(events);
+    const messages = [{ role: 'user', content: [
+      { type: 'text', text: 'look' },
+      { type: 'file', mediaType: 'image/png', data: fs.readFileSync(small) },
+      { type: 'text', text: imageNote({ kind: 'downscaled', label: 'contact.png', width: 2904, height: 17528, shownWidth: 1221, shownHeight: 7372 }) },
+    ] }];
+    const restored = await roundTrip({ references: events.map(refFor), messages: messages as any });
+    expect(restored).toEqual({ ok: true, messages, messageOrigins: [null], eventUuids: ['u10'], revision: store.currentRevision(sessionId) });
+    expect(sidecar()).toContain('"downscaled"');
+    expect(sidecar()).not.toContain('small text may be unreadable');   // fields only, never the sentence
+  });
+
   it('a note that does not recompute exactly is not describable (no silent drift)', async () => {
     const events: Fixture[] = [{ type: 'tool-result', sessionId, uuid: 't4', data: { toolUseId: 'call_3', toolName: 'Read', toolResult: 'Read image', images: ['/tmp/a.png'] } }];
     writeTranscript(events);

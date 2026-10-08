@@ -1177,7 +1177,13 @@ resume paths re-read pictures by path, so nothing short of `/clear` recovered.
   largest size under both limits with a 10% margin (the incident sheet → 1221×7372 on OpenAI).
   Read prepares before it promises and discloses the downscale; `native:send` prepares composer
   attachments (serialised per session) and the message persists `modelAttachments` beside
-  `attachments` (the UI keeps the original path). Decode bound 80 MP; PNG first, JPEG only if still
+  `attachments` (the UI keeps the original path). A prepared composer picture is DISCLOSED to the
+  model: `userAttachmentParts` appends `[image downscaled: <basename> was W×H px, shown at w×h px
+  (pct%); small text may be unreadable]` (`ImageNote` kind `downscaled`). The original's size rides
+  the `ModelAttachment` from `native:send` (the preparer already read that header, async) and is
+  persisted as `originalSizes`; the shown size comes from the bytes the reader already returned —
+  no new blocking read. Reopen (`history-rebuild.ts`) and the accepted-history store's `note`
+  descriptor reproduce the same sentence; events from before `originalSizes` reopen without it. Decode bound 80 MP; PNG first, JPEG only if still
   over 10 MB. The service answers a typed result, and each refusal says its own cause: the worker
   checks the first bytes and only GIF/WebP/junk is `undecodable` (declined with a convert hint); a
   job past its time limit is `timeout` ("took longer than 15 s on this computer"); a worker crash,

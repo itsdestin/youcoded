@@ -132,6 +132,11 @@ interface UserMessageData extends SubagentStamp {
    *  Present only when at least one entry differs. `attachments` stays the
    *  picker path for the UI. */
   modelAttachments?: string[];
+  /** Native: the ORIGINAL W×H of each picture the model was given as a smaller
+   *  prepared copy, parallel to `attachments` (null elsewhere). Present only when
+   *  one was. Reopen uses it to write the same "[image downscaled: …]" note the
+   *  live send wrote, without re-reading the original. */
+  originalSizes?: Array<{ width: number; height: number } | null>;
   /**
    * Task 4 (native specialists, background execution) — marks this as a
    * SYNTHETIC turn the host injected (a background specialist's finished

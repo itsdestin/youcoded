@@ -327,6 +327,41 @@ describe('HarnessSession.send — attachments become image parts', () => {
     const user = await capturePrompt(true, [huge], resolveProfile({ providerType: 'chatgpt', modelId: 'gpt-x', contextLength: null }), undefined, [small]);
     expect(providerFileBytes(user.content.find((p: any) => p.type === 'file'))).toEqual(pngHeader(610, 3686));
   });
+  it('a downscaled composer picture is disclosed to the model, persisted with its original size, and reopens identically', async () => {
+    const { HarnessSession } = await import('../src/main/harness/harness-session');
+    const { ASSISTANT_PRESET } = await import('../src/shared/harness-manifest');
+    const { EMPTY_SKILL_CATALOG } = await import('./helpers/harness-fakes');
+    const { MockLanguageModelV4, simulateReadableStream } = await import('ai/test');
+    const { rebuildHistory } = await import('../src/main/harness/history-rebuild');
+    const { readImageFromDisk } = await import('../src/main/harness/image-support');
+    const contact = path.join(dir, 'contact.png'); fs.writeFileSync(contact, pngHeader(2904, 17528));
+    const derived = path.join(dir, 'abc123-contact.png'); fs.writeFileSync(derived, pngHeader(1221, 7372));
+    const notes = path.join(dir, 'b.txt'); fs.writeFileSync(notes, 'hello');
+    const profile = resolveProfile({ providerType: 'chatgpt', modelId: 'gpt-x', contextLength: null });
+    let seen: any;
+    const model = new MockLanguageModelV4({ doStream: async (o: any) => { seen = o.prompt; return { stream: simulateReadableStream({ chunks: [
+      { type: 'stream-start', warnings: [] },
+      { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } },
+    ] }) }; } });
+    const events: any[] = [];
+    const session = new HarnessSession({ sessionId: 's-down', cwd: dir, harness: ASSISTANT_PRESET, binding: { providerId: 'chatgpt', modelId: 'gpt-x' },
+      skillCatalog: EMPTY_SKILL_CATALOG, profile } as any, async () => model as any);
+    session.on('transcript-event', (e: any) => events.push(e));
+    await session.send('look', [contact, notes], [{ path: derived, original: { path: contact, width: 2904, height: 17528 } }, notes]);
+    const NOTE = imageNote({ kind: 'downscaled', label: 'contact.png', width: 2904, height: 17528, shownWidth: 1221, shownHeight: 7372 });
+    const user = seen.find((m: any) => m.role === 'user');
+    expect(providerFileBytes(user.content.find((p: any) => p.type === 'file'))).toEqual(pngHeader(1221, 7372));
+    expect(user.content.at(-1)).toEqual({ type: 'text', text: NOTE });
+    expect(user.content.filter((p: any) => p.type === 'text')).toHaveLength(2);   // the text, the note — b.txt adds nothing
+    const event = events.find(e => e.type === 'user-message');
+    expect(event.data).toEqual({ text: 'look', attachments: [contact, notes], modelAttachments: [derived, notes], originalSizes: [{ width: 2904, height: 17528 }, null] });
+    const live = session.acceptedHistory().messages[0];
+    expect(rebuildHistory([event], (p) => readImageFromDisk(p, profile.imageLimits))[0]).toEqual(live);
+  });
+  it('a send with only a non-image attachment persists today’s exact event shape — no originalSizes, no modelAttachments', async () => {
+    const { userMessageData } = await import('../src/main/harness/busy-message-boundary');
+    expect(userMessageData('hi', ['/b.txt'], ['/b.txt'])).toEqual({ text: 'hi', attachments: ['/b.txt'] });
+  });
   it('a message whose only attachments are non-images keeps today’s plain-string shape — no note, no parts', async () => {
     const notes = path.join(dir, 'notes.txt'); fs.writeFileSync(notes, 'hello');
     const user = await capturePrompt(true, [notes], resolveProfile({ providerType: 'chatgpt', modelId: 'gpt-x', contextLength: null }));

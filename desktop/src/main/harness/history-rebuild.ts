@@ -29,7 +29,7 @@ import { markAppGenerated } from './compaction';
 import { validatedDeltaReferences } from './session-store';
 import { compactionSourceDigest } from './compaction-record';
 // Pure string helpers and a type only — the READER itself stays injected.
-import { imageNote, deliverableImageMediaType, UNDELIVERABLE_IMAGE_EXTENSIONS, type ImageReadResult } from './image-support';
+import { imageNote, downscaledNote, deliverableImageMediaType, UNDELIVERABLE_IMAGE_EXTENSIONS, type ImageReadResult } from './image-support';
 
 // Synthesized result text for a tool-call that has no persisted result — a
 // transcript truncated by a crash mid-execution (see backfillUnpairedToolCalls).
@@ -192,12 +192,22 @@ export function rebuildHistory(events: TranscriptEvent[], readImage?: RebuildIma
         // today's exact plain-string shape.
         const paths = Array.isArray(e.data?.modelAttachments) ? (e.data.modelAttachments as string[])
           : Array.isArray(e.data?.attachments) ? (e.data.attachments as string[]) : [];
+        // WHY originalSizes (persisted by userMessageData): a prepared copy gets the
+        // same "[image downscaled: …]" note it got live, from the stored original
+        // size and the derivative's bytes the reader returns — no extra file read.
+        const originals = Array.isArray(e.data?.attachments) ? (e.data.attachments as string[]) : [];
+        const sizes = Array.isArray(e.data?.originalSizes) ? (e.data.originalSizes as unknown[]) : [];
         const files: Array<{ type: 'file'; mediaType: string; data: Buffer }> = [];
         const notes: Array<{ type: 'text'; text: string }> = [];
-        if (readImage) for (const p of paths) {
+        if (readImage) for (const [i, p] of paths.entries()) {
           // Pictures only (same rule as imagePartsFor): a PDF/text attachment is skipped silently, as today.
           if (!deliverableImageMediaType(p) && !UNDELIVERABLE_IMAGE_EXTENSIONS.has(path.extname(p).toLowerCase())) continue;
           const img = readImage(p);
+          const size = sizes[i] as { width?: unknown; height?: unknown } | null | undefined;
+          const note = img.ok && p !== originals[i] && typeof originals[i] === 'string' && size
+            && Number.isSafeInteger(size.width) && Number.isSafeInteger(size.height)
+            ? downscaledNote({ path: originals[i], width: size.width as number, height: size.height as number }, img) : null;
+          if (note) notes.push({ type: 'text', text: note });
           if (img.ok) files.push({ type: 'file', mediaType: img.mediaType, data: img.data });
           else if (img.reason === 'oversized') notes.push({ type: 'text', text: imageNote({ kind: 'oversized', label: path.basename(p), width: img.width ?? 0, height: img.height ?? 0 }) });
           else notes.push({ type: 'text', text: imageNote({ kind: 'unavailable', label: path.basename(p), reason: img.reason }) });

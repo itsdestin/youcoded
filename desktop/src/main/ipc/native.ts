@@ -47,7 +47,10 @@ async function modelPathsFor(runtime: RemoteNativeRuntime, sessionId: string, fi
     if (!deliverableImageMediaType(f)) return f;
     try {
       const r = await preparer.prepare(f, limits);
-      if (r.kind === 'prepared') return r.path;
+      // WHY the original's size rides along: the model is told the picture was shrunk
+      // (userAttachmentParts' "downscaled" note). The preparer already read that
+      // header (async), so the send path adds no file read at all.
+      if (r.kind === 'prepared') return { path: r.path, original: { path: f, width: r.width, height: r.height } };
       // A refusal travels WITH its reason so the model is told preparation failed
       // (and why), not that the picture is merely over a size limit.
       if (r.kind === 'refused') return { path: f, prepareFailed: r.reason };

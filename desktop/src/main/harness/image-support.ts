@@ -87,9 +87,12 @@ export function imageDimensions(buf: Buffer): { width: number; height: number } 
 // live and resumed histories are byte-identical and the accepted-history
 // store (which recomputes a note from fields on restore) can describe either.
 // parseImageNote must stay the exact inverse of imageNote.
+// `downscaled` (a picture the model DID get, but smaller) shares the family so
+// the store and the rebuild describe it the same way.
 export type ImageNote =
   | { kind: 'oversized'; label: string; width: number; height: number }
-  | { kind: 'unavailable'; label: string; reason: 'missing' | 'too-many-bytes' | 'undeliverable' | 'prepare-failed'; detail?: string };
+  | { kind: 'unavailable'; label: string; reason: 'missing' | 'too-many-bytes' | 'undeliverable' | 'prepare-failed'; detail?: string }
+  | { kind: 'downscaled'; label: string; width: number; height: number; shownWidth: number; shownHeight: number };
 const UNAVAILABLE_TEXT = {
   'missing': 'could not be read',
   'too-many-bytes': `exceeds the ${MAX_ATTACHMENT_BYTES / (1024 * 1024)} MB per-image size limit`,
@@ -98,6 +101,12 @@ const UNAVAILABLE_TEXT = {
 } as const;
 export function imageNote(n: ImageNote): string {
   if (n.kind === 'oversized') return `[image not attached: ${n.label} is ${n.width}×${n.height} px, above this model's image size limit]`;
+  if (n.kind === 'downscaled') {
+    // WHY the percentage is derived, not stored: parse ignores it and the
+    // store's recompute check (imageNote(parse(x)) === x) rejects a tampered one.
+    const pct = Math.round((100 * Math.max(n.shownWidth / Math.max(1, n.width), n.shownHeight / Math.max(1, n.height))));
+    return `[image downscaled: ${n.label} was ${n.width}×${n.height} px, shown at ${n.shownWidth}×${n.shownHeight} px (${pct}%); small text may be unreadable]`;
+  }
   // `detail` (prepare-failed only) carries the preparer's own reason so the model
   // learns WHY (unreadable format, too slow, shrink failed, over the decode
   // bound) and what to do.
@@ -106,9 +115,21 @@ export function imageNote(n: ImageNote): string {
 }
 const OVERSIZED_RE = /^\[image not attached: (.+) is (\d+)×(\d+) px, above this model's image size limit\]$/;
 const PREPARE_FAILED_RE = /^\[image not attached: (.+?) could not be downscaled for the model(?:: (.+))?\]$/;
+/** The "[image downscaled: …]" note when the delivered copy really is smaller
+ *  than the original on either edge, else null. One helper for the live send
+ *  (image-history userAttachmentParts) and the reopen (history-rebuild), so both
+ *  write the identical sentence. Labelled by the ORIGINAL's basename. */
+export function downscaledNote(original: { path: string; width: number; height: number }, shown: { width?: number; height?: number }): string | null {
+  if (shown.width === undefined || shown.height === undefined) return null;
+  if (shown.width >= original.width && shown.height >= original.height) return null;
+  return imageNote({ kind: 'downscaled', label: path.basename(original.path), width: original.width, height: original.height, shownWidth: shown.width, shownHeight: shown.height });
+}
+const DOWNSCALED_RE = /^\[image downscaled: (.+) was (\d+)×(\d+) px, shown at (\d+)×(\d+) px \(\d+%\); small text may be unreadable\]$/;
 export function parseImageNote(line: string): ImageNote | null {
   const m = OVERSIZED_RE.exec(line);
   if (m) return { kind: 'oversized', label: m[1], width: Number(m[2]), height: Number(m[3]) };
+  const d = DOWNSCALED_RE.exec(line);
+  if (d) return { kind: 'downscaled', label: d[1], width: Number(d[2]), height: Number(d[3]), shownWidth: Number(d[4]), shownHeight: Number(d[5]) };
   const f = PREPARE_FAILED_RE.exec(line);
   if (f) return { kind: 'unavailable', label: f[1], reason: 'prepare-failed', ...(f[2] !== undefined ? { detail: f[2] } : {}) };
   for (const reason of ['missing', 'too-many-bytes', 'undeliverable'] as const) {

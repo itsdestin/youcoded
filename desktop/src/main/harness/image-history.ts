@@ -7,7 +7,7 @@ import * as path from 'path';
 import type { ModelMessage } from 'ai';
 import type { ImageLimits } from './capability-profile';
 import type { ModelAttachment, UserPart } from './busy-message-boundary';
-import { readImageFromDisk, deliverableImageMediaType, imageNote, UNDELIVERABLE_IMAGE_EXTENSIONS, imageDimensions, withinImageLimits, patchCount } from './image-support';
+import { readImageFromDisk, deliverableImageMediaType, imageNote, downscaledNote, UNDELIVERABLE_IMAGE_EXTENSIONS, imageDimensions, withinImageLimits, patchCount } from './image-support';
 
 /** Rewrite history so no image part exceeds `limits`: a tool-result file part
  *  becomes the shared oversized note appended to that result's text (fitting
@@ -110,20 +110,29 @@ function collapseImageParts(history: ModelMessage[], pick: (part: object, buf: u
 export function userAttachmentParts(entries: ModelAttachment[], limits: ImageLimits): UserPart[] {
   const files: UserPart[] = []; const notes: UserPart[] = [];
   for (const entry of entries) {
-    if (typeof entry !== 'string') {
+    if (typeof entry !== 'string' && 'prepareFailed' in entry) {
       // Preparation refused this picture: say so, with the preparer's reason —
       // never "above size limit", which would send the model to crop a file
       // the app itself could not decode.
       notes.push({ type: 'text', text: imageNote({ kind: 'unavailable', label: path.basename(entry.path), reason: 'prepare-failed', detail: entry.prepareFailed }) });
       continue;
     }
-    const p = entry;
+    const p = typeof entry === 'string' ? entry : entry.path;
     // WHY only image-shaped paths get a note: a PDF or text attachment was never
     // a picture to deliver — it keeps today's silent skip (its path is in the
     // text), so ordinary attachments keep today's prompt text and checkpoint shape.
     if (!deliverableImageMediaType(p) && !UNDELIVERABLE_IMAGE_EXTENSIONS.has(path.extname(p).toLowerCase())) continue;
     const img = readImageFromDisk(p, limits);   // shared reader — one table, one cap, one pixel gate
-    if (img.ok) files.push({ type: 'file', mediaType: img.mediaType, data: img.data });
+    if (img.ok) {
+      files.push({ type: 'file', mediaType: img.mediaType, data: img.data });
+      // WHY a "downscaled" note for a prepared composer picture: the model got a
+      // smaller copy and, untold, would read a blurred screenshot as the real
+      // thing. Original size from native:send (the preparer's async header read);
+      // shown size from the bytes this reader already returned — no extra read
+      // on this synchronous path. Labelled by the ORIGINAL's basename.
+      const note = typeof entry === 'string' ? null : downscaledNote(entry.original, img);
+      if (note) notes.push({ type: 'text', text: note });
+    }
     else if (img.reason === 'oversized') notes.push({ type: 'text', text: imageNote({ kind: 'oversized', label: path.basename(p), width: img.width ?? 0, height: img.height ?? 0 }) });
     else notes.push({ type: 'text', text: imageNote({ kind: 'unavailable', label: path.basename(p), reason: img.reason }) });
   }

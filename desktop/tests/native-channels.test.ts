@@ -82,13 +82,16 @@ describe('native:send', () => {
   });
   it('prepares every picture attachment against the session limits and hands the host the model-facing paths', async () => {
     const send = vi.fn(() => ({ status: 'sent' }));
-    const prepare = vi.fn(async (p: string, _limits: unknown) => p.endsWith('huge.png') ? { kind: 'prepared', path: '/cache/abc-huge.png' } : { kind: 'unchanged' });
+    const prepare = vi.fn(async (p: string, _limits: unknown) => p.endsWith('huge.png')
+      ? { kind: 'prepared', path: '/cache/abc-huge.png', width: 2904, height: 17528, preparedWidth: 1221, preparedHeight: 7372 } : { kind: 'unchanged' });
     const limits = { maxEdgePx: 8192, maxPatches: 30_000 };
     const rt: any = { nativeHost: { send, imageLimitsFor: () => limits }, records: { noteSend: vi.fn() }, imagePreparer: { prepare, preparedPathFor: () => null } };
     expect(await call('native:send', { sessionId: 's', text: 'hi', attachments: ['/a/huge.png', 7, '/b.txt', '/c/ok.png'] }, desktopCtx(rt))).toEqual({ status: 'sent' });
     expect(prepare.mock.calls.map((c: any[]) => c[0])).toEqual(['/a/huge.png', '/c/ok.png']);   // only deliverable images are prepared
     expect(prepare.mock.calls[0][1]).toBe(limits);
-    expect(send).toHaveBeenCalledWith('s', 'hi', ['/a/huge.png', '/b.txt', '/c/ok.png'], ['/cache/abc-huge.png', '/b.txt', '/c/ok.png']);
+    // A prepared picture carries its original's path and size (for the "downscaled" note); the rest stay bare paths, byte-identical.
+    expect(send).toHaveBeenCalledWith('s', 'hi', ['/a/huge.png', '/b.txt', '/c/ok.png'],
+      [{ path: '/cache/abc-huge.png', original: { path: '/a/huge.png', width: 2904, height: 17528 } }, '/b.txt', '/c/ok.png']);
   });
   it('a refused preparation reaches the host as a marker carrying the reason, so the note says what really happened', async () => {
     const send = vi.fn(() => ({ status: 'sent' }));
