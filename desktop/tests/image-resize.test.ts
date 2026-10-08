@@ -11,9 +11,11 @@ import { IMAGE_LIMITS_DEFAULT } from '../src/main/harness/capability-profile';
 import { writeRealPng } from './helpers/image-fixtures';
 
 /** Writing, decoding, box-filtering and re-encoding an 18-MP PNG in pure JS.
- *  EXECUTOR: replace with 3× the wall time you measure in Task 11 step 2b
- *  (never below 15 s; Windows CI is slower). */
-const REAL_PNG_BUDGET_MS = 30_000;
+ *  WHY 15 s: 3× measured wall time, floored at 15 s. The built worker resized the
+ *  larger 51-MP incident size (2904×17528 → 1221×7372) in 1.87 s flat / 3.11 s
+ *  noise (2026-10-07, Linux); 3 × 3.11 s = 9.3 s, so the floor wins and still
+ *  covers this smaller fixture on a slower Windows CI runner. */
+const REAL_PNG_BUDGET_MS = 15_000;
 
 describe('boxDownscale averages the source block of every destination pixel, channel by channel', () => {
   it('a 2×2 → 1×1 averages the four pixels', () => {

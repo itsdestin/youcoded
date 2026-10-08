@@ -21,11 +21,15 @@ function nodeSpawn(job: ResizeJob): WorkerLike {
   return new Worker(workerPath(), { workerData: job });
 }
 
-/** Per-job time limit. EXECUTOR: set this to 3× the wall time measured for the
- *  real 2904×17528 incident size in Task 11 step 2b (never below 15 s) and
- *  record the measurement here; 60 s is a placeholder, not a measurement.
+/** Per-job time limit: 3× the measured wall time at the incident size, floored at 15 s.
+ *  WHY 15 s: the BUILT worker resizing a 2904×17528 PNG to 1221×7372 over a real
+ *  worker_threads Worker (2026-10-07, Linux, 32 cores, idle) took 1.87 s for flat
+ *  pixels (worker rss 951 MB, process peak 1.37 GB) and 3.11 s for incompressible
+ *  noise — the worst case for inflate (worker rss 1.56 GB, process peak 1.96 GB).
+ *  3 × 3.11 s = 9.3 s is under the floor, so the floor wins; it leaves room for a
+ *  slower or busier machine without letting a stuck job hold the send for a minute.
  *  Not exported: nothing outside this file reads it (knip's ratchet). */
-const RESIZE_JOB_TIMEOUT_MS = 60_000;
+const RESIZE_JOB_TIMEOUT_MS = 15_000;
 
 export function createResizeService(opts: { spawn?: (job: ResizeJob) => WorkerLike; jobTimeoutMs?: number } = {}): { resize: ResizeFn } {
   const spawn = opts.spawn ?? nodeSpawn;
