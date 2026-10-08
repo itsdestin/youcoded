@@ -10,6 +10,9 @@ export const PAGES: readonly ScreenEntry[] = [
   pg('pages', 'view'),
   { ...pg('pages#empty', 'view', 'empty-state'), scenario: 'empty' },
   pg('pages/page/page-week-planner', 'view'),
+  // The paint studio sample: the Pages kit's slider (`.yc-range`, Brush size/Opacity) — shown when
+  // the kit took the app's slider look (submit-ticket-6#ST6-Q1).
+  pg('pages/page/page-paint', 'view'),
   pg('pages/focus/page-focus-timer', 'view'),
   // Approval states, one fixture page each.
   pg('pages/page/page-weather', 'view', 'approval'),

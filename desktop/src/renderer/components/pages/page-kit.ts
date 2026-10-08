@@ -151,7 +151,17 @@ table.yc-table td { padding: 8px; border-bottom: 1px solid var(--edge-dim); }
 .yc-tool:hover { background: var(--inset); color: var(--fg); }
 .yc-tool--on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 .yc-tool svg { width: 18px; height: 18px; }
-.yc-range { width: 100%; accent-color: var(--accent); }
+/* The slider: the app's own look (ui/Slider.tsx, Destin submit-ticket-5#ST5-5 and #ST6-Q1) —
+   a round track, the accent fill to a round handle, its end wrapping the handle. CSS only, as a
+   page is plain HTML: the thumb is a white circle ringed in the accent, and its shadow (offset
+   left by half a thumb past the track) paints the fill up to the handle's centre; with the ring
+   that makes one shape whose end is concentric with the handle. The track clips the shadow. */
+.yc-range { -webkit-appearance: none; appearance: none; box-sizing: border-box; width: 100%; height: 20px; margin: 0; border-radius: 999px; background: var(--inset); border: 1px solid var(--edge-dim); overflow: hidden; cursor: pointer; }
+.yc-range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 18px; height: 18px; border-radius: 50%; background: #fff; border: 3px solid var(--accent); box-shadow: calc(-100vw - 9px) 0 0 100vw var(--accent); }
+.yc-range::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: #fff; border: 3px solid var(--accent); }
+.yc-range::-moz-range-progress { height: 100%; border-radius: 999px; background: var(--accent); }
+.yc-range:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.yc-range:disabled { opacity: .5; cursor: not-allowed; }
 .yc-swatches { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
 .yc-swatch { width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--edge); cursor: pointer; padding: 0; }
 .yc-swatch--on { outline: 2px solid var(--fg); outline-offset: 2px; }
