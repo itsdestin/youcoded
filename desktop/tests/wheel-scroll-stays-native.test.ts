@@ -169,7 +169,9 @@ describe('wheel scrolling stays native', () => {
   const sitesIn = (file: string) => blockingRegistrations(readFileSync(file, 'utf8'), constantsFor(file, cache));
   const rel = (f: string) => relative(ROOT, f).replace(/\\/g, '/');
 
-  it('no renderer call site registers a wheel/touch listener that can make a scroll wait, outside the allowlist', () => {
+  // WHY the explicit timeout: this parses every renderer file with the TypeScript compiler. It takes ~2 s alone but
+  // exceeded the 30 s default when the full suite runs ~1,100 files in parallel (seen red in `verify.sh --full`).
+  it('no renderer call site registers a wheel/touch listener that can make a scroll wait, outside the allowlist', { timeout: 120_000 }, () => {
     const offenders: string[] = [];
     for (const file of files) {
       for (const site of sitesIn(file)) {
