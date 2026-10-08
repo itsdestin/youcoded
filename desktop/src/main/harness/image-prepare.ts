@@ -20,14 +20,16 @@ import type { ImageLimits } from './capability-profile';
  *  bytes (320 MB at this bound) in the worker. The 2026-10-06 incident image
  *  was 50.9 MP and must prepare; anything larger is declined with a hint. */
 export const MAX_DECODE_PIXELS = 80_000_000;
+// WHY not exported (these three): only this file reads them; exporting them added
+// unused exports to knip's ratchet. Tests reach them through prepareTarget/prepare.
 /** Enough to reach a JPEG SOF past large EXIF/ICC segments; PNG/GIF/WebP need
  *  under 64 bytes. */
-export const HEADER_READ_BYTES = 256 * 1024;
+const HEADER_READ_BYTES = 256 * 1024;
 /** Provider limits are "at most": aim 10% under both so rounding, "after
  *  processing" and an off-by-one tile can never push a prepared picture over. */
-export const PREPARE_MARGIN = 0.9;
+const PREPARE_MARGIN = 0.9;
 
-export type ResizeFormat = 'png' | 'jpeg';
+type ResizeFormat = 'png' | 'jpeg';
 export type ResizeFn = (req: { bytes: Buffer; width: number; height: number; format: ResizeFormat }) => Promise<Buffer | null>;
 
 export type PreparedImage =

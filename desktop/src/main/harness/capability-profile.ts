@@ -109,7 +109,9 @@ export const IMAGE_LIMITS_OPENAI: ImageLimits = { maxEdgePx: 8192, maxPatches: 3
 /** Everyone else. 4096² = 16,384 patches, below every published limit we know
  *  of (Anthropic documents 8000 px per side); unverified against a live reply. */
 export const IMAGE_LIMITS_DEFAULT: ImageLimits = { maxEdgePx: 4096, maxPatches: 16_384 };
-export function imageLimitsFor(t: ProfileProviderType): ImageLimits {
+// WHY not exported: resolveProfile (below) is its only caller; everything else reads
+// the resolved `profile.imageLimits`, so an export would only grow knip's ratchet.
+function imageLimitsFor(t: ProfileProviderType): ImageLimits {
   return t === 'openai' || t === 'chatgpt' ? IMAGE_LIMITS_OPENAI : IMAGE_LIMITS_DEFAULT;
 }
 
