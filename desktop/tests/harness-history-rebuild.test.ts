@@ -769,7 +769,7 @@ describe('image tool-result resume', () => {
     const out = rebuildHistory(pair(['/tmp/gone.png']), fakeReader);
     const toolMsg = out.find((m: any) => m.role === 'tool') as any;
     expect(toolMsg.content[0].output.type).toBe('text');
-    expect(toolMsg.content[0].output.value).toContain('[image no longer available: /tmp/gone.png]');
+    expect(toolMsg.content[0].output.value).toContain('[image no longer available: gone.png]');
   });
 
   // Brief's title had an unescaped apostrophe inside single quotes (a syntax
@@ -809,7 +809,7 @@ describe('image tool-result resume', () => {
     expect(toolMsg.content[0].output).toEqual({
       type: 'content',
       value: [
-        { type: 'text', text: 'Read images\n[image no longer available: /tmp/gone.png]' },
+        { type: 'text', text: 'Read images\n[image no longer available: gone.png]' },
         { type: 'file', mediaType: 'image/png', filename: 'ok.png', data: { type: 'data', data: Buffer.from('png!') } },
       ],
     });

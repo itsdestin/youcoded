@@ -2330,6 +2330,25 @@ describe('image tool-results', () => {
     expect(secondToolMsg.content[0].output.value).toContain('already visible earlier');
   });
 
+  it('a prepared picture’s "already visible" note names the original file, never the hashed cache path', async () => {
+    const dir = mkTmpDir();
+    const cached = tmpImage(dir, 'a1b2c3d4e5f6a7b8-contact.png');   // a derivative's name in the image cache
+    const read = fakeTool('Read', { onExecute: () => ({ text: 'Read image', images: [cached], imageLabels: ['contact.png'] }) });
+    const model = scriptedModel([
+      stream(...textChunks('a', 'reading'), toolCallChunk('c1', 'Read', { file_path: '/x/contact.png' }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'done'), finishChunk('stop')),
+      stream(...textChunks('c', 'again'), toolCallChunk('c2', 'Read', { file_path: '/x/contact.png' }), finishChunk('tool-calls')),
+      stream(...textChunks('d', 'done again'), finishChunk('stop')),
+    ]);
+    const session = new HarnessSession(makeOpts({ tools: [read], decide: async () => ALLOW }), async () => model as any);
+    collect(session);
+    await session.send('go');
+    await session.send('go again');
+    const value = ((session as any).history as any[]).filter((m) => m.role === 'tool').pop().content[0].output.value;
+    expect(value).toBe('Read image\n[image not re-attached: contact.png is unchanged and already visible earlier in this conversation]');
+    expect(value).not.toContain(cached);
+  });
+
   it('the per-turn image count budget skips with a named note', async () => {
     const dir = mkTmpDir();
     // MAX_IMAGES_PER_TURN distinct, never-before-seen images fill the budget

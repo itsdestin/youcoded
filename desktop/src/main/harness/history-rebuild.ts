@@ -279,7 +279,8 @@ export function rebuildHistory(events: TranscriptEvent[], readImage?: RebuildIma
           // limits, e.g. after a model switch) must be refused on reopen with the
           // exact text the live driver writes — never sent back to the provider.
           else if (img.reason === 'oversized') text += `\n${imageNote({ kind: 'oversized', label, width: img.width ?? 0, height: img.height ?? 0 })}`;
-          else text += `\n[image no longer available: ${p}]`;
+          // The label, never `p`: a prepared derivative's path is the hashed cache file.
+          else text += `\n[image no longer available: ${label}]`;
         }
         toolResults.push({
           type: 'tool-result', toolCallId: String(e.data?.toolUseId ?? ''), toolName: String(e.data?.toolName ?? ''),

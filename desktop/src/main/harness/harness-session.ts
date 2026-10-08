@@ -2540,17 +2540,19 @@ export class HarnessSession extends EventEmitter {
       // promise, Task 4) — but time passed between that stat and this delivery,
       // so it can have vanished. Re-stat rather than trust the promise. The
       // reader below says WHY it declined, so only the mtime is kept here.
+      // WHY the label in EVERY note below, never `p`: a prepared derivative's path is
+      // the hashed cache file (<hash>-contact.png); the model knows it as contact.png.
+      const label = payload.imageLabels?.[paths.indexOf(p)] ?? path.basename(p);   // N9: a derivative keeps its ORIGINAL name
       let mtime: number;
       try { mtime = fs.statSync(p).mtimeMs; } catch {
-        text += `\n[image not attached: ${p} is no longer readable]`; continue;
+        text += `\n[image not attached: ${label} is no longer readable]`; continue;
       }
       if (this.shownImages.get(p)?.mtime === mtime) {
-        text += `\n[image not re-attached: ${p} is unchanged and already visible earlier in this conversation]`; continue;
+        text += `\n[image not re-attached: ${label} is unchanged and already visible earlier in this conversation]`; continue;
       }
       if (budget.count >= MAX_IMAGES_PER_TURN) {
-        text += `\n[image not attached: over the ${MAX_IMAGES_PER_TURN}-images-per-turn budget — ask again next turn if you still need it]`; continue;
+        text += `\n[image not attached: ${label} is over the ${MAX_IMAGES_PER_TURN}-images-per-turn budget — ask again next turn if you still need it]`; continue;
       }
-      const label = payload.imageLabels?.[paths.indexOf(p)] ?? path.basename(p);   // N9: a derivative keeps its ORIGINAL name
       // WHY the session's limits: a picture over the provider's pixel budget is
       // refused HERE, before it enters history — once in, every later request
       // would resend it and the provider would reject the whole conversation.
@@ -2559,13 +2561,13 @@ export class HarnessSession extends EventEmitter {
         // Name the real cause (error-message-standards.md). The oversized note is
         // the shared basename form so reopen rebuilds the identical text.
         if (img.reason === 'oversized') text += `\n${imageNote({ kind: 'oversized', label, width: img.width ?? 0, height: img.height ?? 0 })}`;
-        else if (img.reason === 'undeliverable') text += `\n[image not attached: ${p} is not a deliverable image format]`;
-        else if (img.reason === 'too-many-bytes') text += `\n[image not attached: ${p} exceeds the ${MAX_ATTACHMENT_BYTES / (1024 * 1024)} MB per-image size limit]`;
-        else text += `\n[image not attached: ${p} could not be read]`;
+        else if (img.reason === 'undeliverable') text += `\n[image not attached: ${label} is not a deliverable image format]`;
+        else if (img.reason === 'too-many-bytes') text += `\n[image not attached: ${label} exceeds the ${MAX_ATTACHMENT_BYTES / (1024 * 1024)} MB per-image size limit]`;
+        else text += `\n[image not attached: ${label} could not be read]`;
         continue;
       }
       if (budget.bytes + img.data.length > MAX_IMAGE_BYTES_PER_TURN) {
-        text += `\n[image not attached: over the ${MAX_IMAGE_BYTES_PER_TURN / (1024 * 1024)} MB-per-turn image budget]`; continue;
+        text += `\n[image not attached: ${label} is over the ${MAX_IMAGE_BYTES_PER_TURN / (1024 * 1024)} MB-per-turn image budget]`; continue;
       }
       budget.count += 1; budget.bytes += img.data.length;
       this.shownImages.set(p, { mtime, toolCallId });
