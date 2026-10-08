@@ -270,7 +270,7 @@ export interface VisualBubble {
   /** Every reasoning segment of the bubble, joined by a blank line, keyed by
    *  the first one's messageId. */
   reasoning?: { content: string; messageId: string };
-  text?: { content: string; messageId: string };
+  text?: { content: string; messageId: string; findIndex: number };
   plan?: { content: string; messageId: string; planFilePath?: string; allowedPrompts?: unknown };
   /** Every tool group in the bubble, in call order. Rendered as ONE group. */
   toolGroupIds: string[];
@@ -284,6 +284,7 @@ export interface VisualBubble {
 export function splitIntoBubbles(turn: Pick<AssistantTurn, 'segments'>): VisualBubble[] {
   const bubbles: VisualBubble[] = [];
   let current: VisualBubble | null = null;
+  let textIndex = 0;
   const spoken = () => !!(current && (current.text || current.plan));
   const open = (key: string): VisualBubble => {
     current = { key, toolGroupIds: [] };
@@ -304,7 +305,7 @@ export function splitIntoBubbles(turn: Pick<AssistantTurn, 'segments'>): VisualB
       // text / tool / text shape keeps one bubble per text block).
       if (spoken()) { bubbles.push(current!); current = null; }
       const bubble = current ?? open(seg.messageId);
-      bubble.text = { content: seg.content, messageId: seg.messageId };
+      bubble.text = { content: seg.content, messageId: seg.messageId, findIndex: textIndex++ };
     } else if (seg.type === 'plan') {
       // A plan counts as speech; the following ExitPlanMode group attaches below.
       if (spoken()) { bubbles.push(current!); current = null; }
@@ -544,7 +545,10 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
                 <SessionRefsEnabled.Provider value={true}>
                   {/* incremental: this text grows while the reply streams, so finished
                       blocks are drawn once instead of re-parsed per word (sweep A5). */}
-                  <MarkdownContent content={bubble.text.content} sessionId={sessionId} incremental />
+                  {/* WHY: message-only Find must never walk adjacent reasoning, tool controls or plan cards. */}
+                  <span data-message-find-body={bubble.text.findIndex} className="contents">
+                    <MarkdownContent content={bubble.text.content} sessionId={sessionId} incremental />
+                  </span>
                 </SessionRefsEnabled.Provider>
               )}
               {bubble.plan && (

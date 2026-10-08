@@ -13,7 +13,9 @@
 // the call count is observed.
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render } from '@testing-library/react';
+import { render, fireEvent, screen, act } from '@testing-library/react';
+import { FOLD_IDLE_MS, FOLD_ROOT_MARGIN } from '../src/renderer/hooks/use-entry-folding';
+import { ChatMessageFindIndex } from '../src/renderer/components/chat-message-find';
 // The unmemoised view: this harness delivers new state by re-rendering with the
 // SAME props, which the memoised default export skips by design (see ChatView.tsx).
 import { UnmemoizedChatView as ChatView } from '../src/renderer/components/ChatView';
@@ -156,6 +158,224 @@ function sessionState(overrides: Record<string, unknown>) {
 const view = () => <ChatView sessionId="s1" visible={true} sessionActive={true} />;
 
 describe('ChatView — the archive-boundary scan runs per appended entry, not per streamed delta', () => {
+  it('a source and mounted Markdown mismatch leaves the Find counter pending instead of a wrong count', () => {
+    // This suite's MarkdownContent mock shows literal syntax; the real renderer
+    // strips it. The adapter must notice that mismatch before reporting a hit.
+    mocks.state = sessionState({ timeline: [{ kind: 'assistant-turn', turnId: 'a' }], assistantTurns: new Map([['a', textTurn('a', '**bold**')]]) });
+    const view = render(<ChatView sessionId="s1" visible sessionActive />);
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
+    fireEvent.change(screen.getByLabelText('Find in chat'), { target: { value: 'bold' } });
+    const counter = view.container.querySelector('.find-row .tabular-nums');
+    expect(counter?.textContent).toBe('');
+    view.unmount();
+  });
+
+  it('refreshes active Find after streamed text, appended page and removal without Enter', async () => {
+    (globalThis as any).CSS = { highlights: new Map() };
+    (window as any).Highlight = class { constructor(public range: Range) {} };
+    const timeline = [{ kind: 'assistant-turn', turnId: 'a' }];
+    mocks.state = sessionState({ timeline, assistantTurns: new Map([['a', textTurn('a', 'hello')]]) });
+    const spy = vi.spyOn(ChatMessageFindIndex.prototype, 'prepareSearch');
+    const r = render(view());
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
+    expect(spy).not.toHaveBeenCalled(); // opening an empty Find never parses history
+    fireEvent.change(screen.getByLabelText('Find in chat'), { target: { value: 'hello' } });
+    await vi.waitFor(() => expect(screen.getByText('1/1')).toBeTruthy());
+    spy.mockClear();
+    mocks.state = { ...mocks.state, assistantTurns: new Map([['a', textTurn('a', 'hello hello')]]) };
+    r.rerender(view());
+    expect(spy).not.toHaveBeenCalled(); // never reconcile synchronously per streamed word
+    await vi.waitFor(() => expect(screen.getByText('1/2')).toBeTruthy());
+    mocks.state = { ...mocks.state, timeline: [...timeline, { kind: 'assistant-turn', turnId: 'b' }], assistantTurns: new Map([['a', textTurn('a', 'hello hello')], ['b', textTurn('b', 'hello')]]) };
+    r.rerender(view());
+    await vi.waitFor(() => expect(screen.getByText('1/3')).toBeTruthy());
+    mocks.state = { ...mocks.state, timeline: [{ kind: 'assistant-turn', turnId: 'b' }] };
+    r.rerender(view());
+    await vi.waitFor(() => expect(screen.getByText('1/1')).toBeTruthy());
+    r.unmount(); spy.mockRestore(); delete (globalThis as any).CSS; delete (window as any).Highlight;
+  });
+
+  it('continuous sub-80ms source updates still publish a completed Find count', async () => {
+    const timeline = [{ kind: 'assistant-turn', turnId: 'a' }];
+    mocks.state = sessionState({ timeline, assistantTurns: new Map([['a', textTurn('a', 'hello')]]) });
+    const r = render(view());
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
+    fireEvent.change(screen.getByLabelText('Find in chat'), { target: { value: 'hello' } });
+    await vi.waitFor(() => expect(screen.getByText('1/1')).toBeTruthy());
+    vi.useFakeTimers();
+    for (let i = 0; i < 12; i++) {
+      mocks.state = { ...mocks.state, assistantTurns: new Map([['a', textTurn('a', `hello ${i}`)]]) };
+      r.rerender(view());
+      await act(async () => { await vi.advanceTimersByTimeAsync(40); });
+      expect(r.container.querySelector('.find-row .tabular-nums')?.textContent).not.toBe('');
+    }
+    vi.useRealTimers();
+    r.unmount();
+  });
+
+  it('recovers pending count after a transient rendered-body mismatch without Enter', async () => {
+    mocks.state = sessionState({ timeline: [{ kind: 'assistant-turn', turnId: 'a' }], assistantTurns: new Map([['a', textTurn('a', '**bold**')]]) });
+    const r = render(view());
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
+    fireEvent.change(screen.getByLabelText('Find in chat'), { target: { value: 'bold' } });
+    expect(r.container.querySelector('.find-row .tabular-nums')?.textContent).toBe('');
+    // The mocked markdown catches up with the source projection on its own.
+    const body = r.container.querySelector('[data-message-find-body]')!;
+    await act(async () => { body.querySelector('[data-testid="md"]')!.textContent = 'bold'; await Promise.resolve(); });
+    await vi.waitFor(() => expect(screen.getByText('1/1')).toBeTruthy());
+    r.unmount();
+  });
+
+  it('a streamed word refreshes only on Find navigation, not on every history render', async () => {
+    const highlights = new Map();
+    (globalThis as any).CSS = { highlights };
+    (window as any).Highlight = class { constructor(public range: Range) {} };
+    mocks.state = sessionState({ timeline: [{ kind: 'assistant-turn', turnId: 'a' }], assistantTurns: new Map([['a', textTurn('a', 'hello')]]) });
+    const spy = vi.spyOn(ChatMessageFindIndex.prototype, 'prepareSearch');
+    const view = render(<ChatView sessionId="s1" visible sessionActive />);
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
+    fireEvent.change(screen.getByLabelText('Find in chat'), { target: { value: 'hello' } });
+    await vi.waitFor(() => expect(screen.getByText('1/1')).toBeTruthy());
+    spy.mockClear();
+    mocks.state = { ...mocks.state, assistantTurns: new Map([['a', textTurn('a', 'hello hello')]]) };
+    view.rerender(<ChatView sessionId="s1" visible sessionActive />);
+    expect(spy).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByLabelText('Next (Enter)'));
+    await vi.waitFor(() => expect(spy).toHaveBeenCalled());
+    await vi.waitFor(() => expect(screen.getByText('2/2')).toBeTruthy());
+    expect(spy.mock.calls.length).toBeLessThanOrEqual(2); // navigation and the coalesced source push
+    view.unmount();
+    spy.mockRestore();
+    delete (globalThis as any).CSS;
+    delete (window as any).Highlight;
+  });
+
+  it('Find selection releases bottom-stick before scrolling and growth cannot repin it', async () => {
+    const originalResize = globalThis.ResizeObserver;
+    const originalIO = globalThis.IntersectionObserver;
+    let foldReport!: (entries: IntersectionObserverEntry[]) => void;
+    (globalThis as any).IntersectionObserver = class {
+      constructor(cb: (entries: IntersectionObserverEntry[]) => void, opts?: IntersectionObserverInit) {
+        if (opts?.rootMargin === FOLD_ROOT_MARGIN) foldReport = cb;
+      }
+      observe() {} unobserve() {} disconnect() {} takeRecords() { return []; }
+    };
+    const originalHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight');
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get() { return this.hasAttribute('data-entry-key') ? 120 : 0; } });
+    const originalRect = Range.prototype.getBoundingClientRect;
+    const originalScroll = HTMLElement.prototype.scrollIntoView;
+    const resizeCallbacks: Array<() => void> = [];
+    (globalThis as any).ResizeObserver = class {
+      constructor(cb: () => void) { resizeCallbacks.push(cb); }
+      observe() {} disconnect() {} unobserve() {}
+    };
+    (globalThis as any).CSS = { highlights: new Map() };
+    (window as any).Highlight = class { constructor(public range: Range) {} };
+    let scroller: HTMLElement;
+    Range.prototype.getBoundingClientRect = () => ({ top: scroller?.scrollTop === 250 ? 200 : -500, bottom: scroller?.scrollTop === 250 ? 220 : -480 } as DOMRect);
+    const scroll = vi.fn(function (this: HTMLElement) { this.closest('.chat-scroll')!.scrollTop = 250; });
+    HTMLElement.prototype.scrollIntoView = scroll;
+    mocks.state = sessionState({ timeline: [
+      { kind: 'assistant-turn', turnId: 'older' }, { kind: 'assistant-turn', turnId: 'latest' },
+    ], assistantTurns: new Map([['older', textTurn('older', 'needle')], ['latest', textTurn('latest', 'latest')]]) });
+    const r = render(view());
+    scroller = r.container.querySelector('.chat-scroll') as HTMLElement;
+    scroller.getBoundingClientRect = () => ({ top: 0, bottom: 800 } as DOMRect);
+    let height = 2000;
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, get: () => height });
+    const older = r.container.querySelector<HTMLElement>('[data-entry-key="older"]')!;
+    vi.useFakeTimers();
+    act(() => {
+      foldReport([{ target: older, isIntersecting: false } as unknown as IntersectionObserverEntry]);
+      vi.advanceTimersByTime(FOLD_IDLE_MS);
+    });
+    vi.useRealTimers();
+    expect(older.querySelector('[data-message-find-body]')).toBeNull();
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
+    expect(older.querySelector('[data-message-find-body]')).toBeNull();
+    expect(screen.queryByText('Jump to bottom')).toBeNull(); // opening Find is not navigation
+    fireEvent.change(screen.getByLabelText('Find in chat'), { target: { value: 'needle' } });
+    await vi.waitFor(() => expect(scroll).toHaveBeenCalled());
+    expect(older.querySelector('[data-message-find-body]')).toBeTruthy();
+    expect(scroller.scrollTop).toBe(250);
+    expect(Range.prototype.getBoundingClientRect().top).toBeGreaterThan(scroller.getBoundingClientRect().top);
+    expect(screen.getByText('Jump to bottom')).toBeTruthy();
+    height = 2500; // content growth after search navigation
+    act(() => { resizeCallbacks.forEach((cb) => cb()); });
+    expect(scroller.scrollTop).toBe(250);
+    expect(Range.prototype.getBoundingClientRect().bottom).toBeLessThan(scroller.getBoundingClientRect().bottom);
+    r.unmount(); vi.restoreAllMocks();
+    Range.prototype.getBoundingClientRect = originalRect;
+    if (originalScroll) HTMLElement.prototype.scrollIntoView = originalScroll;
+    else delete (HTMLElement.prototype as any).scrollIntoView;
+    globalThis.ResizeObserver = originalResize;
+    globalThis.IntersectionObserver = originalIO;
+    if (originalHeight) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', originalHeight);
+    else delete (HTMLElement.prototype as any).offsetHeight;
+    delete (globalThis as any).CSS; delete (window as any).Highlight;
+  });
+
+  it('Find leaves offscreen loaded rows folded and reveals only the selected message', async () => {
+    const previousIO = globalThis.IntersectionObserver;
+    const previousHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight');
+    let report!: (entries: IntersectionObserverEntry[]) => void;
+    (globalThis as any).IntersectionObserver = class {
+      constructor(cb: (entries: IntersectionObserverEntry[]) => void) { report = cb; }
+      observe() {} unobserve() {} disconnect() {} takeRecords() { return []; }
+    };
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get() { return this.hasAttribute('data-entry-key') ? 120 : 0; } });
+    const highlights = new Map();
+    (globalThis as any).CSS = { highlights };
+    (window as any).Highlight = class { constructor(public range: Range) {} };
+    const timeline = ['a', 'b', 'c'].map((id) => ({ kind: 'assistant-turn', turnId: id }));
+    mocks.state = sessionState({ timeline, assistantTurns: new Map(timeline.map(({ turnId }) => [turnId, textTurn(turnId, `message ${turnId}`)])) });
+    const view = render(<ChatView sessionId="s1" visible sessionActive />);
+    const entries = [...view.container.querySelectorAll<HTMLElement>('[data-entry-key]')];
+    // Geometry makes a/c distant while b is the viewport's sole neighbor.
+    entries.forEach((el, i) => { el.getBoundingClientRect = () => ({ top: (i - 1) * 5000, bottom: (i - 1) * 5000 + 120 } as DOMRect); });
+    vi.useFakeTimers();
+    act(() => { report(entries.map((target) => ({ target, isIntersecting: false }) as unknown as IntersectionObserverEntry)); vi.advanceTimersByTime(FOLD_IDLE_MS); });
+    vi.useRealTimers();
+    expect(entries.every((el) => !el.querySelector('[data-message-find-body]'))).toBe(true);
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
+    expect(entries.every((el) => !el.querySelector('[data-message-find-body]'))).toBe(true);
+    fireEvent.change(screen.getByLabelText('Find in chat'), { target: { value: 'message b' } });
+    await vi.waitFor(() => expect(entries[1].querySelector('[data-message-find-body]')).toBeTruthy());
+    expect(entries[0].querySelector('[data-message-find-body]')).toBeNull();
+    expect(entries[2].querySelector('[data-message-find-body]')).toBeNull();
+    expect(screen.getByText('1/1')).toBeTruthy();
+    view.unmount();
+    if (previousHeight) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', previousHeight);
+    else delete (HTMLElement.prototype as any).offsetHeight;
+    globalThis.IntersectionObserver = previousIO;
+    delete (globalThis as any).CSS;
+    delete (window as any).Highlight;
+  });
+
+  it('Find uses message-only source rather than reasoning and metadata on the real timeline', async () => {
+    const highlights = new Map();
+    (globalThis as any).CSS = { highlights };
+    (window as any).Highlight = class { constructor(public range: Range) {} };
+    mocks.state = sessionState({ timeline: [
+      { kind: 'user', message: { id: 'u', content: 'Hello user', timestamp: 1000 } },
+      { kind: 'assistant-turn', turnId: 'a' },
+      { kind: 'prompt', prompt: { promptId: 'p', title: 'Secret card', buttons: [] } },
+    ], assistantTurns: new Map([['a', { ...textTurn('a', 'Hello assistant'), segments: [
+      { type: 'reasoning', content: 'Secret thoughts', messageId: 'reasoning' },
+      { type: 'text', content: 'Hello assistant', messageId: 'reply' },
+    ] }]]) });
+    const r = render(view());
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
+    const input = screen.getByLabelText('Find in chat');
+    fireEvent.change(input, { target: { value: 'Secret' } });
+    await vi.waitFor(() => expect(screen.getByText('0/0')).toBeTruthy());
+    fireEvent.change(input, { target: { value: 'Hello' } });
+    await vi.waitFor(() => expect(screen.getByText('1/2')).toBeTruthy());
+    expect(r.container.querySelectorAll('[data-message-find-body]')).toHaveLength(2);
+    r.unmount();
+    delete (globalThis as any).CSS;
+    delete (window as any).Highlight;
+  });
   it('a delta (same timeline reference, new turn object, new timestamps) does not rescan', () => {
     const timeline = [{ kind: 'assistant-turn', turnId: 'turn_1' }];
     mocks.state = sessionState({
