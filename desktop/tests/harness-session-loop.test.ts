@@ -3197,6 +3197,18 @@ describe('HarnessSession keeps over-limit pictures out of model memory and recov
     expect(prompts.some((p) => JSON.stringify(p.prompt).includes(NOTE))).toBe(true);
   });
 
+  it('a compaction refused because a turn is in flight leaves history and its revision untouched', async () => {
+    const session = new HarnessSession(makeOpts({ tools: [], contextLength: 128_000, profile: chatgpt() }), async () => scriptedModel([]) as any);
+    session.seedHistory(blockedHistory());
+    const history = (session as any).history;
+    const revision = session.acceptedHistory().revision;
+    (session as any).abort = new AbortController();   // the state a running turn holds
+    expect(await session.compactNow()).toEqual({ ok: false, reason: 'turn-in-flight' });
+    expect((session as any).history).toBe(history);
+    expect(session.acceptedHistory().revision).toBe(revision);
+    (session as any).abort = null;
+  });
+
   it('an oversized composer attachment becomes a trailing note on recovery; the text stays', async () => {
     const prompts: any[] = [];
     const session = new HarnessSession(makeOpts({ tools: [], contextLength: 128_000, profile: lax() }), async () => twoStep(prompts) as any);

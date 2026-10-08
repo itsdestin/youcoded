@@ -2155,9 +2155,10 @@ export class HarnessSession extends EventEmitter {
    *  the CURRENT model, but the kept tail and the post-compaction check are sized
    *  for the smaller model about to take over, so success means it fits there. */
   async compactNow(focus?: string, targetContextLength?: number): Promise<{ ok: true } | { ok: false; reason: 'turn-in-flight' | 'nothing-to-compact' | 'summary-failed' | 'interrupted' | 'cannot-fit' }> {
-    // Neither the summariser nor the kept tail may carry an over-limit picture (2026-10-07).
-    this.enforceImageLimits();
     if (this.abort) return { ok: false, reason: 'turn-in-flight' };
+    // Neither the summariser nor the kept tail may carry an over-limit picture (2026-10-07).
+    // WHY below the guard: a running turn owns history; never rewrite it under that turn.
+    this.enforceImageLimits();
     this.abort = new AbortController();
     // Idle here (abort was null), so no turn owns this flag; a leftover from the
     // last turn's Stop must not make this summary read as stopped.
