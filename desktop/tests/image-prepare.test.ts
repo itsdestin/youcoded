@@ -90,6 +90,30 @@ describe('ImagePreparer', () => {
     fs.writeFileSync(p, pngHeader(640, 480));
     expect(await prep.prepare(p, IMAGE_LIMITS_OPENAI)).toEqual({ kind: 'unchanged', width: 640, height: 480 });
     expect(prep.preparedPathFor(p)).toBeNull();
+    // Refused case: prepare again (prepared), then make the picture exceed the decode bound.
+    fs.writeFileSync(p, pngHeader(2904, 17528));
+    await prep.prepare(p, IMAGE_LIMITS_OPENAI);
+    expect(prep.preparedPathFor(p)).toBeTruthy();
+    fs.writeFileSync(p, pngHeader(20000, 20000));
+    expect((await prep.prepare(p, IMAGE_LIMITS_OPENAI)).kind).toBe('refused');
+    expect(prep.preparedPathFor(p)).toBeNull();
+  });
+
+  it('a JPEG fallback still over the byte cap is refused with the size, not a decoder failure', async () => {
+    const p = path.join(dir, 'noisy.png'); fs.writeFileSync(p, pngHeader(8000, 8000));
+    const fatBoth: ResizeFn = async () => Buffer.alloc(11 * 1024 * 1024);
+    const r = await new ImagePreparer(cache, fatBoth).prepare(p, IMAGE_LIMITS_OPENAI);
+    expect(r).toMatchObject({ kind: 'refused', width: 8000, height: 8000 });
+    if (r.kind === 'refused') { expect(r.reason).toMatch(/still over 10 MB after shrinking/); expect(r.reason).not.toMatch(/decoder/); }
+    expect(fs.existsSync(cache) ? fs.readdirSync(cache) : []).toEqual([]);
+  });
+
+  it('limits no size can meet are refused as oversized, never sent unchecked', async () => {
+    expect(prepareTarget(100, 100, { maxEdgePx: 1, maxPatches: 0 })).toBeNull();
+    const p = path.join(dir, 'tiny.png'); fs.writeFileSync(p, pngHeader(100, 100));
+    const r = await new ImagePreparer(cache, resize).prepare(p, { maxEdgePx: 1, maxPatches: 0 });
+    expect(r).toMatchObject({ kind: 'refused', width: 100, height: 100 });
+    if (r.kind === 'refused') expect(r.reason).toMatch(/too large/);
   });
 
   it('concurrent prepares of one path share one job', async () => {

@@ -42,22 +42,24 @@ export interface ImagePreparerLike {
   preparedPathFor(absPath: string): string | null;
 }
 
-/** null = fits, leave it alone. Otherwise the largest floor-scaled size whose
- *  long edge and rounded-up patch count both sit under limits×margin. The
- *  area estimate can land a tile over (ceil per axis), so step down 1% until
- *  it fits — two steps at most in practice; 64 is a hard stop. */
+/** null = fits (leave it alone) OR no size can meet the limits; the caller
+ *  tells them apart with withinImageLimits. Otherwise the largest floor-scaled
+ *  size whose long edge and rounded-up patch count both sit under
+ *  limits×margin. The area estimate can land a tile over (ceil per axis), so
+ *  step down 1% until it fits — two steps at most in practice; 64 is a hard
+ *  stop. WHY null after the hard stop: an unchecked last guess could still
+ *  break the limits and be sent; refusing is the honest outcome. */
 export function prepareTarget(width: number, height: number, limits: ImageLimits, margin = PREPARE_MARGIN): { width: number; height: number } | null {
   if (withinImageLimits({ width, height }, limits)) return null;
   const edgeCap = limits.maxEdgePx * margin;
   const patchCap = limits.maxPatches * margin;
   let scale = Math.min(1, edgeCap / Math.max(width, height), Math.sqrt((patchCap * IMAGE_PATCH_PX * IMAGE_PATCH_PX) / (width * height)));
-  let target = { width: 1, height: 1 };
   for (let i = 0; i < 64; i++) {
-    target = { width: Math.max(1, Math.floor(width * scale)), height: Math.max(1, Math.floor(height * scale)) };
+    const target = { width: Math.max(1, Math.floor(width * scale)), height: Math.max(1, Math.floor(height * scale)) };
     if (Math.max(target.width, target.height) <= edgeCap && patchCount(target.width, target.height) <= patchCap) return target;
     scale *= 0.99;
   }
-  return target;
+  return null;
 }
 
 /** `<16 hex>-<original basename>.<ext>`: the hash keys the cache (path, size,
@@ -117,8 +119,13 @@ export class ImagePreparer implements ImagePreparerLike {
     if (dims.width * dims.height > MAX_DECODE_PIXELS) {
       return { kind: 'refused', ...dims, reason: `is ${dims.width}×${dims.height} px — too large to downscale for the model (over ${MAX_DECODE_PIXELS / 1_000_000} megapixels). Crop or shrink it with Bash (e.g. magick in.png -resize 4000x4000 out.png) and Read the copy.` };
     }
+    if (withinImageLimits(dims, limits)) return { kind: 'unchanged', ...dims };
     const target = prepareTarget(dims.width, dims.height, limits);
-    if (!target) return { kind: 'unchanged', ...dims };
+    // WHY refused, not unchanged: over the limits and no size fits them, so
+    // sending the original would only fail again at the provider.
+    if (!target) {
+      return { kind: 'refused', ...dims, reason: `is ${dims.width}×${dims.height} px — too large to downscale for the model (no size fits this provider's picture limits). Crop it with Bash and Read the copy.` };
+    }
     const file = (ext: 'png' | 'jpg') => path.join(this.cacheDir, derivativeName(absPath, st.size, st.mtimeMs, target, ext));
     const done = (p: string, mediaType: 'image/png' | 'image/jpeg'): PreparedImage =>
       ({ kind: 'prepared', path: p, mediaType, ...dims, preparedWidth: target.width, preparedHeight: target.height });
@@ -132,8 +139,13 @@ export class ImagePreparer implements ImagePreparerLike {
       // WHY JPEG second: screenshots are text; PNG keeps it crisp. Only a PNG
       // that still breaks the byte cap trades sharpness for size.
       if (out && out.length > MAX_ATTACHMENT_BYTES) { out = await this.resize({ bytes, width: target.width, height: target.height, format: 'jpeg' }); p = file('jpg'); mediaType = 'image/jpeg'; }
-      if (!out || out.length > MAX_ATTACHMENT_BYTES) {
+      if (!out) {
         return { kind: 'refused', ...dims, reason: `is ${dims.width}×${dims.height} px and could not be downscaled for the model (the image decoder declined it — only PNG and JPEG can be shrunk here). Convert or shrink it with Bash (e.g. magick in.gif[0] -resize 4000x4000 out.png) and Read the copy.` };
+      }
+      // WHY a separate detail: here the decoder WORKED and even the JPEG is too
+      // big; blaming the decoder would invent a cause (error-message-standards).
+      if (out.length > MAX_ATTACHMENT_BYTES) {
+        return { kind: 'refused', ...dims, reason: `is ${dims.width}×${dims.height} px and still over ${MAX_ATTACHMENT_BYTES / (1024 * 1024)} MB after shrinking; crop it or save a smaller copy with Bash and Read that.` };
       }
       await fs.promises.mkdir(this.cacheDir, { recursive: true });
       const tmp = `${p}.${process.pid}.tmp`;
