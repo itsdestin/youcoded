@@ -40,7 +40,7 @@ import { secretPathVerdict } from './tools/bash-secret-paths';
 import { adminCommandVerdict, refuseMessage, visibleSudoLines } from './tools/admin-command';
 import * as os from 'os';
 import { readImageFromDisk, MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, MAX_ATTACHMENT_BYTES, imageNote } from './image-support';
-import { collapseOversizedImageParts, userAttachmentParts } from './image-history';
+import { collapseOversizedImageParts, collapseLargestImageParts, userAttachmentParts } from './image-history';
 
 // Tools whose permission SUBJECT is not a filesystem path. Bash's is a command
 // string; Skill's is a skill id. Both would be canonicalized against cwd and run
@@ -2026,8 +2026,9 @@ export class HarnessSession extends EventEmitter {
    *  so reopen reproduces it without a new persisted event, and the accepted-
    *  history store describes it (`pruned.oversized`, `note`). shownImages is
    *  cleared like commitPrune does, so a later Read re-delivers — prepared. */
-  private collapseOversizedImages(limits: ImageLimits): boolean {
-    const next = collapseOversizedImageParts(this.history, limits);
+  private collapseOversizedImages(limits: ImageLimits): boolean { return this.adoptImageRewrite(collapseOversizedImageParts(this.history, limits)); }
+
+  private adoptImageRewrite(next: ModelMessage[] | null): boolean {
     if (!next) return false;   // never swap the array for a no-op: untouched messages keep their identity
     this.history = next;
     // Not markPruned: this is a rewrite (mutated), not compaction's prune
@@ -2806,10 +2807,12 @@ export class HarnessSession extends EventEmitter {
             // Oversized picture (2026-10-07): the provider named the budget; collapse
             // every image part over it to the shared note, then retry ONCE. Nothing
             // is retried unchanged — collapse must report a change. This is the
-            // safety net behind enforceImageLimits (a wrong-high placeholder limit).
+            // safety net behind enforceImageLimits (a wrong-high placeholder limit). WHY the
+            // second mode: our patch count may disagree with the provider's (image-history.ts).
             const tooLarge = replayable && !imageRetried ? imageTooLarge(err) : null;
-            if (tooLarge && this.collapseOversizedImages({ maxEdgePx: this.profile.imageLimits.maxEdgePx,
-              maxPatches: Math.min(this.profile.imageLimits.maxPatches, tooLarge.limitPatches) })) {
+            if (tooLarge && (this.collapseOversizedImages({ maxEdgePx: this.profile.imageLimits.maxEdgePx,
+              maxPatches: Math.min(this.profile.imageLimits.maxPatches, tooLarge.limitPatches) })
+              || this.adoptImageRewrite(collapseLargestImageParts(this.history, tooLarge.requiredPatches, tooLarge.limitPatches)))) {
               imageRetried = true;
               this.prefixMoved = true;
               turnUsage.expectedRebuild = true;

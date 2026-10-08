@@ -1193,7 +1193,12 @@ resume paths re-read pictures by path, so nothing short of `/clear` recovered.
   accepted in `error.message`, `detail` or a top-level `message`; the live object was never
   captured — with no output started, image parts over the reported limit collapse to the note,
   the capture revision bumps, and the step is retried once. A second rejection surfaces the
-  provider's own words.
+  provider's own words. **Count-disagreement fallback** (`image-history.ts`
+  `collapseLargestImageParts`): when the provider rejected but no part is over its limit by OUR
+  count (so the size-based pass changed nothing) and history holds a measurable picture, the
+  largest pictures by our count (ties: most recent first) collapse to the same oversized note,
+  with their real W×H, until `requiredPatches − removed ≤ limit`; then the same single retry.
+  Without it the picture was resent on every message. No picture in history → no retry.
 
 ### Accepted limitations (declared, not bugs)
 

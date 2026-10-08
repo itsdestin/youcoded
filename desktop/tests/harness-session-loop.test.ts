@@ -3197,6 +3197,66 @@ describe('HarnessSession keeps over-limit pictures out of model memory and recov
     expect(events.find(e => e.type === 'session-error')!.data.text).toContain('requires 49868 patches');
   });
 
+  describe('when the provider counts patches differently from us', () => {
+    const rejectAs = (required: number, limit: number) => Object.assign(new Error('rejected'), { statusCode: 400,
+      responseBody: JSON.stringify({ error: { message: `The image you provided requires ${required} patches after processing, exceeding the limit of ${limit}.` } }) });
+    const thenOk = (prompts: any[], err: Error) => {
+      const scripts = [stream({ type: 'error', error: err }), stream(...textChunks('a', 'done'), finishChunk('stop'))];
+      let index = 0;
+      return new MockLanguageModelV4({ doStream: async (o: any) => { prompts.push(o); return { stream: simulateReadableStream({ chunks: scripts[index++] ?? stream(finishChunk('stop')) }) }; } });
+    };
+    const userPic = (text: string, data: Buffer) => ({ role: 'user', content: [{ type: 'text', text }, { type: 'file', mediaType: 'image/png', data }] });
+    const note = (w: number, h: number) => ({ type: 'text', text: imageNote({ kind: 'oversized', label: 'image', width: w, height: h }) });
+
+    it('a picture under our count but over the provider’s is collapsed to the note and the step is retried once', async () => {
+      const prompts: any[] = [];
+      // 640×480 is 300 patches by our count, far under 30,000 — only the provider says otherwise.
+      const session = new HarnessSession(makeOpts({ tools: [], contextLength: 128_000, profile: chatgpt() }), async () => thenOk(prompts, rejectAs(49_868, 30_000)) as any);
+      session.seedHistory([userPic('pic', fine), { role: 'assistant', content: 'seen' }] as any);
+      const events = collect(session);
+      await session.send('again');
+      expect(prompts).toHaveLength(2);
+      expect(events.some(e => e.type === 'session-error')).toBe(false);
+      expect(session.acceptedHistory().messages[0]).toEqual({ role: 'user', content: [{ type: 'text', text: 'pic' }, note(640, 480)] });
+      expect(JSON.stringify(prompts[1].prompt)).not.toContain(fine.toString('base64'));
+    });
+
+    it('only as many pictures as the provider’s numbers need are collapsed, the largest first', async () => {
+      const prompts: any[] = [];
+      const small = pngHeader(640, 480);     // 300 patches
+      const big = pngHeader(1280, 960);      // 1,200 patches: removing it alone covers the 1,000 over
+      const session = new HarnessSession(makeOpts({ tools: [], contextLength: 128_000, profile: chatgpt() }), async () => thenOk(prompts, rejectAs(31_000, 30_000)) as any);
+      session.seedHistory([userPic('big', big), { role: 'assistant', content: 'a' }, userPic('small', small), { role: 'assistant', content: 'b' }] as any);
+      await session.send('again');
+      expect(prompts).toHaveLength(2);
+      const [first, , second] = session.acceptedHistory().messages as any[];
+      expect(first.content).toEqual([{ type: 'text', text: 'big' }, note(1280, 960)]);
+      expect(second.content[1]).toMatchObject({ type: 'file', data: small });
+    });
+
+    it('between equal pictures the most recent is collapsed first', async () => {
+      const prompts: any[] = [];
+      const older = pngHeader(640, 480); const newer = pngHeader(640, 480);
+      const session = new HarnessSession(makeOpts({ tools: [], contextLength: 128_000, profile: chatgpt() }), async () => thenOk(prompts, rejectAs(30_100, 30_000)) as any);
+      session.seedHistory([userPic('older', older), { role: 'assistant', content: 'a' }, userPic('newer', newer), { role: 'assistant', content: 'b' }] as any);
+      await session.send('again');
+      const [first, , second] = session.acceptedHistory().messages as any[];
+      expect(first.content[1]).toMatchObject({ type: 'file', data: older });
+      expect(second.content).toEqual([{ type: 'text', text: 'newer' }, note(640, 480)]);
+    });
+
+    it('with no picture in history there is nothing to collapse: no retry, the provider error surfaces', async () => {
+      let calls = 0;
+      const model = new MockLanguageModelV4({ doStream: async () => { calls++; return { stream: simulateReadableStream({ chunks: stream({ type: 'error', error: rejectAs(49_868, 30_000) }) }) }; } });
+      const session = new HarnessSession(makeOpts({ tools: [], contextLength: 128_000, profile: chatgpt() }), async () => model as any);
+      session.seedHistory([{ role: 'user', content: 'words only' }, { role: 'assistant', content: 'ok' }] as any);
+      const events = collect(session);
+      await session.send('more words');
+      expect(calls).toBe(1);
+      expect(events.find(e => e.type === 'session-error')!.data.text).toContain('requires 49868 patches');
+    });
+  });
+
   it('retries at most once: a second rejection surfaces', async () => {
     let calls = 0;
     const model = new MockLanguageModelV4({ doStream: async () => { calls++; return { stream: simulateReadableStream({ chunks: stream({ type: 'error', error: PATCH_400() }) }) }; } });
