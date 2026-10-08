@@ -75,6 +75,16 @@
   .rng { appearance: none; font: inherit; font-size: 11px; font-weight: 500; height: 26px; min-width: 40px; padding: 0 10px; border: 0; border-radius: 9999px;
     background: transparent; color: var(--fg-2); cursor: pointer; }
   .rng.on { background: var(--fg); color: var(--panel); }
+  .bill-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 0 0 10px; }
+  .btab { appearance: none; font: inherit; text-align: left; display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 12px;
+    border: 1px solid var(--edge-dim); background: var(--well); color: var(--fg-2); cursor: pointer; min-width: 0; }
+  .btab > span { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .btab b { font-size: 15px; color: var(--fg); }
+  .btab:hover { border-color: var(--edge); }
+  .btab.on { border-color: var(--fg); background: var(--inset); }
+  .btab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .bill-cat-pick { margin: 0 0 10px; }
+  .sub-year { margin: -4px 0 10px; }
   .chart { position: relative; height: 190px; margin-top: 14px; }
   .chart svg { width: 100%; height: 100%; display: block; overflow: visible; }
   .chart .grid line { stroke: color-mix(in srgb, var(--fg) 8%, transparent); }
@@ -411,7 +421,7 @@
   var plaidOn = !!(window.youcoded && typeof window.youcoded.plaid === 'function');
 
   // ── View state (never saved) ─────────────────────────────────────────────
-  var range = '1m', chartMode = 'net', chartAccount = null, billSort = 'due', showAllFound = false;
+  var range = '1m', chartMode = 'net', chartAccount = null, billSort = 'due', showAllFound = false, billView = 'all', billCatPick = '';
   var openId = null, editing = null, billEdit = null, limitEdit = null, payEdit = null;
   var menuOpen = false, checking = false, connecting = false, form = null, bankNote = null, removing = null, linkSeq = 0;
 
@@ -597,7 +607,9 @@
     return /MUSIC_AND_AUDIO|TV_AND_MOVIES|INSURANCE|TELEPHONE|INTERNET_AND_CABLE|RENT_AND_UTILITIES|GYMS_AND_FITNESS/.test(k);
   }
   function billCatFor(s){
-    if (BILL_CATS.indexOf(s.cat) >= 0) return s.cat;
+    if (BILL_CATS.indexOf(s.cat) >= 0 && s.cat !== 'Other') return s.cat;
+    // A known subscription company (Claude, Xbox) is a subscription whatever the bank filed it under.
+    if (s.guess) return 'Subscriptions';
     return s.every === 'month' && s.amount < 100 ? 'Subscriptions' : 'Other';
   }
   function linkedTx(b){
@@ -726,7 +738,25 @@
     });
     return out;
   }
+  // WHY two groups: a missed rent or card payment costs late fees and credit; a missed Hulu renewal costs nothing.
+  // Subscriptions are the Subscriptions category unless moved by hand (bill.optional).
+  function isSub(b){
+    if (!b.bill) return false;
+    return b.bill.optional != null ? !!b.bill.optional : b.bill.category === 'Subscriptions';
+  }
+  // What a bill costs in an average month, whatever its schedule.
+  function perMonth(b){
+    var every = b.bill ? (b.bill.every || (b.bill.monthly === false ? 'once' : 'month')) : (b.account && b.account.payment && b.account.payment.every) || 'month';
+    return every === 'week' ? b.amount * 52 / 12 : every === '2weeks' ? b.amount * 26 / 12 : every === 'year' ? b.amount / 12 : every === 'once' ? 0 : b.amount;
+  }
   function billState(b){
+    // Subscriptions renew on their own: a passed date is news, never a late-payment warning.
+    if (isSub(b) && !b.paid) {
+      var sd = daysBetween(b.due, today());
+      if (sd > 0) return { cls: '', icon: '', text: 'Renewal was ' + short(b.due) };
+      if (sd === 0) return { cls: '', icon: '', text: 'Renews today' };
+      return { cls: '', icon: '', text: 'Renews in ' + (-sd) + (sd === -1 ? ' day' : ' days') + ' · ' + short(b.due) };
+    }
     if (b.paid) return { cls: 'paid', icon: I.check, text: 'Paid ' + short(b.paid) };
     var d = daysBetween(b.due, today());
     if (d > 0 || b.overdue) {
@@ -1176,12 +1206,26 @@
 
   // ── Bills card ───────────────────────────────────────────────────────────
   function billsCard(t){
-    var bills = allBills().sort(function(x, y){
+    var every = allBills();
+    var groups = { bills: every.filter(function(b){ return !isSub(b); }), subs: every.filter(isSub) };
+    var inView = billView === 'all' ? every : groups[billView];
+    var cats = {}; inView.forEach(function(b){ cats[b.cat] = 1; });
+    var catList = Object.keys(cats).sort();
+    if (billCatPick && !cats[billCatPick]) billCatPick = '';
+    var bills = inView.filter(function(b){ return !billCatPick || b.cat === billCatPick; }).sort(function(x, y){
       return (x.paid ? 1 : 0) - (y.paid ? 1 : 0) || (billSort === 'amount' ? y.amount - x.amount : x.due - y.due);
     });
+    var monthOf = function(list){ return sum(list, perMonth); };
     var h = '<div class="card" id="bills"><div class="card-head"><h2>Bills</h2><span class="total num">' + money(t.dueThisMonth) + ' <span class="small muted">still due this month</span></span>';
     h += '<div class="ranges" role="group" aria-label="Sort bills">' + [['due','By date'],['amount','By amount']].map(function(o){ return '<button class="rng' + (billSort === o[0] ? ' on' : '') + '" data-bill-sort="' + o[0] + '" aria-pressed="' + (billSort === o[0]) + '">' + o[1] + '</button>'; }).join('') + '</div></div>';
-    var found = discover();
+    // Which group is showing, each with what it costs a month: the number that says what could be cut.
+    h += '<div class="bill-tabs" role="tablist" aria-label="Show">' + [['all', 'All', every], ['bills', 'Bills', groups.bills], ['subs', 'Subscriptions', groups.subs]].map(function(o){
+      return '<button class="btab' + (billView === o[0] ? ' on' : '') + '" role="tab" aria-selected="' + (billView === o[0]) + '" data-bill-view="' + o[0] + '"><span>' + o[1] + ' <span class="muted">' + o[2].length + '</span></span><b class="num">' + money(monthOf(o[2]), true) + '<span class="muted small">/mo</span></b></button>';
+    }).join('') + '</div>';
+    if (billView === 'subs' && groups.subs.length) h += '<div class="hint sub-year">' + money(monthOf(groups.subs) * 12, true) + ' a year on subscriptions</div>';
+    if (catList.length > 1) h += '<select class="pick bill-cat-pick" data-bill-cat-pick aria-label="Category"><option value="">All categories</option>' + catList.map(function(c){ return '<option' + (c === billCatPick ? ' selected' : '') + '>' + esc(c) + '</option>'; }).join('') + '</select>';
+    // Suggestions follow the group being shown.
+    var found = discover().filter(function(f){ return billView === 'all' || (billView === 'subs') === (billCatFor(f) === 'Subscriptions'); });
     if (found.length) {
       var shown = showAllFound ? found : found.slice(0, 4);
       h += '<div class="found"><div class="found-head">' + I.spark + '<b>Found ' + found.length + ' likely bill' + (found.length === 1 ? '' : 's') + '</b><span class="muted small">from your banks’ purchases — add the real bills</span></div>';
@@ -1196,11 +1240,12 @@
     h += '<div class="bills">';
     bills.forEach(function(b){
       var s = billState(b), bo = openId === 'bill:' + b.id;
-      var markPaid = b.mine && !b.paid && b.account && b.account.kind !== 'bnpl' || (b.bill && !b.paid) ? '<button class="btn sm" data-paid="' + esc(b.id) + '">Mark paid</button>' : '';
+      var markPaid = !isSub(b) && (b.mine && !b.paid && b.account && b.account.kind !== 'bnpl' || (b.bill && !b.paid)) ? '<button class="btn sm" data-paid="' + esc(b.id) + '">Mark paid</button>' : '';
       h += '<div class="tile bill tap ' + s.cls + (bo ? ' open' : '') + '" role="button" tabindex="0" aria-expanded="' + bo + '" data-open="bill:' + esc(b.id) + '">' + mark(b.institution);
-      h += '<div class="name">' + esc(b.name) + '<small>' + esc([b.cat, b.sub].filter(Boolean).join(' · ')) + '</small></div><span class="when">' + s.icon + esc(s.text) + '</span><span class="amt num">' + money(b.amount) + '</span>' + markPaid + I.chev + (bo ? billDetail(b) : '') + '</div>';
+      h += '<div class="name">' + esc(b.name) + '<small>' + esc([b.cat, b.sub, isSub(b) && perMonth(b) ? money(perMonth(b) * 12, true) + ' a year' : ''].filter(Boolean).join(' · ')) + '</small></div><span class="when">' + s.icon + esc(s.text) + '</span><span class="amt num">' + money(b.amount) + '</span>' + markPaid + I.chev + (bo ? billDetail(b) : '') + '</div>';
     });
-    if (!bills.length) h += '<div class="empty">No bills yet. Add one, add a found repeating payment, or connect a card or loan and its payments appear here.</div>';
+    if (!bills.length && every.length) h += '<div class="empty">' + (billView === 'subs' ? 'No subscriptions yet. Open a bill and choose Move to subscriptions.' : 'Nothing here.') + '</div>';
+    if (!every.length) h += '<div class="empty">No bills yet. Add one, add a found repeating payment, or connect a card or loan and its payments appear here.</div>';
     return h + '</div></div>';
   }
   function billDetail(b){
@@ -1238,6 +1283,7 @@
       h += '<button class="btn sm" data-bill-cancel>Cancel</button><button class="btn sm primary" data-bill-save="' + esc(b.id) + '">Save</button>';
     } else {
       if (!b.mine) h += '<span class="hint">Your bank updates this when you pay.</span>';
+      if (b.bill) h += '<button class="btn sm" data-bill-move="' + esc(b.id) + '">' + (isSub(b) ? 'Move to bills' : 'Move to subscriptions') + '</button>';
       if (b.bill) h += '<button class="btn sm" data-bill-edit="' + esc(b.id) + '">' + I.pen + 'Edit</button><button class="btn sm danger" data-bill-delete="' + esc(b.id) + '">Delete</button>';
       var u = siteOf(b); if (u) h += '<a class="btn sm" href="' + esc(u) + '" target="_blank" rel="noopener">' + I.out + 'Pay at ' + esc(b.institution) + '</a>';
     }
@@ -1340,6 +1386,14 @@
     var ca = document.querySelector('[data-chart-account]'); if (ca) ca.onchange = function(){ chartAccount = ca.value; render(); };
     on('[data-range]', function(b){ range = b.dataset.range; render(); });
     on('[data-bill-sort]', function(b){ billSort = b.dataset.billSort; render(); });
+    on('[data-bill-view]', function(b){ billView = b.dataset.billView; render(); });
+    on('[data-bill-move]', function(el, e){
+      e.stopPropagation();
+      var bill = data.bills.filter(function(x){ return x.id === el.dataset.billMove; })[0]; if (!bill) return;
+      bill.optional = !isSub({ bill: bill });
+      save(); render();
+    });
+    document.querySelectorAll('[data-bill-cat-pick]').forEach(function(el){ el.onchange = function(){ billCatPick = el.value; render(); }; });
     on('[data-browser]', function(b, e){ e.stopPropagation(); data.settings.browser = b.dataset.browser; save(); render(); });
     on('[data-jump]', function(b){ var t = document.getElementById(b.dataset.jump); if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
     on('[data-edit]', function(b){ editing = b.dataset.edit; render(); var i = document.getElementById('edit-val'); if (i) { i.scrollIntoView({ block: 'center' }); i.focus(); i.select(); } });

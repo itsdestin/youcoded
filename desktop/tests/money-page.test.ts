@@ -263,6 +263,28 @@ describe('the Money page', () => {
     expect(p.last().bills[0]).toMatchObject({ name: 'Spotify', amount: 20.72, due: '2026-10-14', match: ['spotify'] });
   });
 
+  it('splits must-pay bills from subscriptions, each with its monthly cost, and moves one between them', () => {
+    const p = open({ demoToday: TODAY, bills: [
+      { id: 'r', provider: 'Landlord', name: 'Rent', amount: 1200, due: '2026-10-20', monthly: true, category: 'Housing' },
+      { id: 'h', provider: 'Hulu', name: 'Hulu', amount: 20, due: '2026-10-02', monthly: true, category: 'Subscriptions' },
+    ] });
+    const names = () => [...p.d.querySelectorAll('.bill .name')].map((e) => e.firstChild!.textContent);
+    expect(p.d.querySelector('[data-bill-view="subs"]')!.textContent).toContain('$20/mo');
+    // A passed renewal is not a late payment: no warning, no alert.
+    expect(p.text()).toContain('Renewal was');
+    expect(p.text()).not.toContain('days late');
+    p.click('[data-bill-view="bills"]');
+    expect(names()).toEqual(['Rent']);
+    p.click('[data-bill-view="subs"]');
+    expect(names()).toEqual(['Hulu']);
+    expect(p.text()).toContain('$240 a year on subscriptions');
+    p.click('[data-open="bill:h"]');
+    p.click('[data-bill-move="h"]');
+    expect(p.last().bills[1].optional).toBe(false);
+    p.click('[data-bill-view="bills"]');
+    expect(names()).toEqual(['Hulu', 'Rent']);
+  });
+
   it('a linked payment near a bill\'s due date marks it paid and moves it to next month', async () => {
     const p = open({ demoToday: TODAY, bills: [{ id: 'b1', provider: 'Netflix', name: 'Netflix', amount: 15.49, due: '2026-10-03', monthly: true, category: 'Subscriptions' }] },
       withPurchases([tx('n3', '2026-10-03', 17.99, 'NETFLIX.COM 866-579')]));
