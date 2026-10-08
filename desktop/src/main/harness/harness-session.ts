@@ -14,6 +14,7 @@
 import { withChatGptRequest } from '../providers/chatgpt-request-diagnostics';
 import { classifyProviderError } from '../providers/provider-error-code';
 import { isContextOverflow } from '../providers/context-overflow';
+import { imageTooLarge } from '../providers/image-too-large';
 import { cacheTokensForStep } from './cache-usage';
 import { EventEmitter } from 'events';
 import { createHash, randomUUID } from 'crypto';
@@ -38,7 +39,7 @@ import { destructiveRmVerdict } from './tools/rm-target';
 import { secretPathVerdict } from './tools/bash-secret-paths';
 import { adminCommandVerdict, refuseMessage, visibleSudoLines } from './tools/admin-command';
 import * as os from 'os';
-import { readImageFromDisk, MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, deliverableImageMediaType, MAX_ATTACHMENT_BYTES, imageNote, UNDELIVERABLE_IMAGE_EXTENSIONS } from './image-support';
+import { readImageFromDisk, MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, deliverableImageMediaType, MAX_ATTACHMENT_BYTES, imageNote, UNDELIVERABLE_IMAGE_EXTENSIONS, imageDimensions, withinImageLimits } from './image-support';
 
 // Tools whose permission SUBJECT is not a filesystem path. Bash's is a command
 // string; Skill's is a skill id. Both would be canonicalized against cwd and run
@@ -176,7 +177,7 @@ import { parseToolArgs } from './tool-args';
 import { PermissionCallbackFailure, permissionCallback, finalizeRemainingCalls } from './tool-group-finalization';
 import { appendUserHistory, claimBusyMessage, supersedeToolGroup, type UserPart, type ModelAttachment } from './busy-message-boundary';
 import type { AskRequest, AskDecision } from './permission-broker';
-import { CLOUD_DEFAULT, type CapabilityProfile } from './capability-profile';
+import { CLOUD_DEFAULT, type CapabilityProfile, type ImageLimits } from './capability-profile';
 import { adaptForWire } from './wire-adapter';
 import { planCompaction, pruneToolOutputs, summarizePrompt, estimateTokens, countImageOutputs, contextBudget, planContextBudget, selectCompactionCut, summaryProvenanceNote, markAppGenerated, fitSummaryToolOutputs, validateCompactionCandidate, type CompactionConfig } from './compaction';
 import { toReport, type PrefillProgress } from '../providers/prefill-progress';
@@ -1131,6 +1132,10 @@ export class HarnessSession extends EventEmitter {
     if (changed) this.seededContinuationBinding = undefined;
     if (contextLength !== undefined) this.opts.contextLength = contextLength;
     if (profile) this.profile = profile;
+    // WHY: a history that fit the old provider must never reach a stricter one.
+    // Re-applying the gate here (not only on the error path) means the first
+    // request after a switch already carries the note, not the picture.
+    if (profile) this.enforceImageLimits();
     // Same applied-only-when-provided shape as contextLength: a swap to a
     // model with no published price must be able to CLEAR a price the old
     // model had, so `null` is a real value here and only `undefined` skips.
@@ -1892,6 +1897,8 @@ export class HarnessSession extends EventEmitter {
   /** Automatic selection retires complete groups into one summary. A failed
    * candidate leaves accepted history intact and fences this exact revision. */
   private async maybeCompact(model: LanguageModel, aiTools: Record<string, any>, force = false): Promise<boolean> {
+    // Neither the summariser nor the kept tail may carry an over-limit picture (2026-10-07).
+    this.enforceImageLimits();
     const estimatedInput = requestOccupancy({ history: this.history, identity: this.requestSizingIdentity(),
       revision: this.capture.revision, fixedCost: this.requestFixedCost(), anchor: this.usageAnchor }).tokens;
     const plan = planContextBudget({ contextLength: this.opts.contextLength ?? null,
@@ -2019,6 +2026,76 @@ export class HarnessSession extends EventEmitter {
     this.servedReads.clear(); this.servedSkills.clear();
   }
 
+  /** The gate, re-applied to what is already in memory: the session's current
+   *  limits. Returns whether history changed. */
+  private enforceImageLimits(): boolean { return this.collapseOversizedImages(this.profile.imageLimits); }
+
+  /** Rewrite history so no image part exceeds `limits`: a tool-result file part
+   *  becomes the shared oversized note appended to that result's text (fitting
+   *  siblings stay; text first, files, then notes); a user-message file part
+   *  becomes a trailing note text part. Same length, same order, same tool
+   *  pairing. Labels are BASENAMES (a user part has no name → 'image').
+   *  WHY in-memory only: the reader writes this exact shape on every rebuild,
+   *  so reopen reproduces it without a new persisted event, and the accepted-
+   *  history store describes it (`pruned.oversized`, `note`). shownImages is
+   *  cleared like commitPrune does, so a later Read re-delivers — prepared.
+   *  WHY identity-preserving: like commitPrune, a no-op must not swap the
+   *  array, bump the capture revision or clear shownImages — that would
+   *  invalidate a published checkpoint for a history that never moved. */
+  private collapseOversizedImages(limits: ImageLimits): boolean {
+    let changed = false;
+    const over = (buf: unknown): { width: number; height: number } | null => {
+      if (!Buffer.isBuffer(buf)) return null;
+      const dims = imageDimensions(buf);
+      return dims && !withinImageLimits(dims, limits) ? dims : null;
+    };
+    const next = this.history.map((m) => {
+      const content = (m as any).content;
+      if (!Array.isArray(content)) return m;
+      if (m.role === 'tool') {
+        let touched = false;
+        const parts = content.map((part: any) => {
+          if (part?.type !== 'tool-result' || part.output?.type !== 'content' || !Array.isArray(part.output.value)) return part;
+          const texts: string[] = []; const files: any[] = []; const notes: string[] = [];
+          for (const v of part.output.value) {
+            const dims = v?.type === 'file' && v.data?.type === 'data' ? over(v.data.data) : null;
+            if (dims) notes.push(imageNote({ kind: 'oversized', label: v.filename ?? part.toolName ?? 'image', width: dims.width, height: dims.height }));
+            else if (v?.type === 'text') texts.push(v.text);
+            else files.push(v);
+          }
+          if (!notes.length) return part;
+          touched = true;
+          // Same shape history-rebuild writes for a refused picture: one text
+          // part (result text + "\n<note>" per refusal), then the kept files.
+          const text = texts.join('\n') + notes.map((n) => `\n${n}`).join('');
+          return { ...part, output: files.length ? { type: 'content', value: [{ type: 'text', text }, ...files] } : { type: 'text', value: text } };
+        });
+        if (!touched) return m;
+        changed = true;
+        return { ...(m as object), content: parts } as ModelMessage;
+      }
+      if (m.role === 'user') {
+        const kept: any[] = []; const notes: any[] = [];
+        for (const p of content) {
+          const dims = p?.type === 'file' ? over(p.data) : null;
+          if (dims) notes.push({ type: 'text', text: imageNote({ kind: 'oversized', label: 'image', width: dims.width, height: dims.height }) });
+          else kept.push(p);
+        }
+        if (!notes.length) return m;
+        changed = true;
+        return { ...(m as object), content: [...kept, ...notes] } as ModelMessage;
+      }
+      return m;
+    });
+    if (!changed) return false;   // never swap the array for a no-op: untouched messages keep their identity
+    this.history = next;
+    // Not markPruned: this is a rewrite (mutated), not compaction's prune
+    // transformation. historyOrigins needs no change — indices are unchanged.
+    this.capture.mutated(); this.prefixMoved = true;
+    this.shownImages.clear(); this.reconcileTriggerVisibility();
+    return true;
+  }
+
   // Live prefill progress from llama.cpp, forwarded onto the SAME
   // assistant-thinking notice the size-only estimate already drives — the UI
   // upgrades in place from "reading N tokens" to a real fraction + countdown.
@@ -2136,6 +2213,8 @@ export class HarnessSession extends EventEmitter {
    *  the CURRENT model, but the kept tail and the post-compaction check are sized
    *  for the smaller model about to take over, so success means it fits there. */
   async compactNow(focus?: string, targetContextLength?: number): Promise<{ ok: true } | { ok: false; reason: 'turn-in-flight' | 'nothing-to-compact' | 'summary-failed' | 'interrupted' | 'cannot-fit' }> {
+    // Neither the summariser nor the kept tail may carry an over-limit picture (2026-10-07).
+    this.enforceImageLimits();
     if (this.abort) return { ok: false, reason: 'turn-in-flight' };
     this.abort = new AbortController();
     // Idle here (abort was null), so no turn owns this flag; a leftover from the
@@ -2794,6 +2873,7 @@ export class HarnessSession extends EventEmitter {
         // WHY: all retries belong to this logical step, not newly allocated steps.
         let step: StepResult;
         let overflowRetried = false;
+        let imageRetried = false;
         this.overflowOutputStarted = false;
         while (true) {
           try {
@@ -2804,7 +2884,20 @@ export class HarnessSession extends EventEmitter {
           } catch (err) {
             // Only a rejected request with no emitted output is safe to replay.
             // Completed tools were already appended before this step and are never rerun.
-            if (overflowRetried || partialAssistantText || this.overflowOutputStarted || !isContextOverflow(err, this.binding.providerId)
+            const replayable = !partialAssistantText && !this.overflowOutputStarted;
+            // Oversized picture (2026-10-07): the provider named the budget; collapse
+            // every image part over it to the shared note, then retry ONCE. Nothing
+            // is retried unchanged — collapse must report a change. This is the
+            // safety net behind enforceImageLimits (a wrong-high placeholder limit).
+            const tooLarge = replayable && !imageRetried ? imageTooLarge(err) : null;
+            if (tooLarge && this.collapseOversizedImages({ maxEdgePx: this.profile.imageLimits.maxEdgePx,
+              maxPatches: Math.min(this.profile.imageLimits.maxPatches, tooLarge.limitPatches) })) {
+              imageRetried = true;
+              this.prefixMoved = true;
+              turnUsage.expectedRebuild = true;
+              continue;
+            }
+            if (overflowRetried || !replayable || !isContextOverflow(err, this.binding.providerId)
               || !await this.maybeCompact(model, aiTools, true)) throw err;
             overflowRetried = true;
             this.prefixMoved = true;
