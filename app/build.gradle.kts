@@ -273,7 +273,7 @@ dependencies {
 
     // Unit tests
     testImplementation("junit:junit:4.13.2")
-    testImplementation("org.json:json:20260719")
+    testImplementation("org.json:json:20260814")
     // Coroutines test support for runTest in SubagentWatcherTest
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
     // kotlin.test assertions (assertTrue/assertEquals/etc.) for JVM unit tests
