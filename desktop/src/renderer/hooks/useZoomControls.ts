@@ -106,7 +106,7 @@ export function useZoomControls() {
         }
       }, 50);
     };
-    // WHY the platform split (measured 2026-10-04, docs/active/investigations/2026-10-04-performance-gap-review.md 4d):
+    // WHY the platform split (measured 2026-10-04, docs/archive/investigations/2026-10-04-performance-gap-review.md 4d):
     // a NON-passive wheel listener on window makes the browser ask the page's main thread before it scrolls
     // ANYTHING, so whenever the page is busy (a reply streaming, a terminal flood) every scroll waits. On the
     // desktop app that wait was ~400 ms of a 400 ms main-thread block, in all 24 of 24 trials. A passive listener

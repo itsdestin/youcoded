@@ -1,6 +1,6 @@
 // sheet-window — the arithmetic behind drawing only the part of a big spreadsheet that is on screen.
 //
-// WHY (2026-10-04, docs/active/investigations/2026-10-04-performance-gap-review.md 4c/4d): CsvView and XlsxView drew
+// WHY (2026-10-04, docs/archive/investigations/2026-10-04-performance-gap-review.md 4c/4d): CsvView and XlsxView drew
 // EVERY cell (a 2,000 x 100 sheet = 200,000 cells = 205,030 page elements): 10 s to open with a 7 s freeze, 0.5 s
 // per cell click, a 7 s freeze to close. Rows and columns that cannot be seen are now blank spacer space instead
 // (renderer-lists.md: "draw only what can be seen").
