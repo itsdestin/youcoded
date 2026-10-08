@@ -367,18 +367,21 @@ async function transactionsFor(ctx: PlaidContext, r: ItemRecord, cursor: string)
   if (!token) return { ...base, ok: false, error: { code: 'NO_TOKEN', message: `This computer no longer holds the sign-in for ${r.institution.name}.`, reconnect: false } };
   const added: PlaidTransaction[] = [], modified: PlaidTransaction[] = [], removed: string[] = [];
   let next = cursor;
+  let status: string | undefined;
   try {
     for (let page = 0; page < MAX_SYNC_PAGES; page++) {
-      const res = await plaidCall<{ added: RawTransaction[]; modified: RawTransaction[]; removed: Array<{ transaction_id: string }>; next_cursor: string; has_more: boolean }>(
+      const res = await plaidCall<{ added: RawTransaction[]; modified: RawTransaction[]; removed: Array<{ transaction_id: string }>; next_cursor: string; has_more: boolean; transactions_update_status?: string }>(
         ctx, '/transactions/sync', { access_token: token, count: 500, ...(next ? { cursor: next } : {}) },
       );
       added.push(...res.added.map(slimTransaction));
       modified.push(...res.modified.map(slimTransaction));
       removed.push(...res.removed.map((x) => x.transaction_id));
       next = res.next_cursor;
+      // WHY kept: whether Plaid has finished fetching older history, which explains a short purchase list.
+      status = res.transactions_update_status ?? status;
       if (!res.has_more) break;
     }
-    return { ...base, transactions: { added, modified, removed, cursor: next } };
+    return { ...base, transactions: { added, modified, removed, cursor: next, ...(status ? { history: status } : {}) } };
   } catch (e) {
     const err = e instanceof PlaidError ? e : new PlaidError('UNKNOWN', 'Plaid could not read this bank\'s purchases.');
     // Purchases still being gathered for a new bank is not a failure: try again next time.

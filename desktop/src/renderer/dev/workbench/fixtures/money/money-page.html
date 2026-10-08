@@ -85,6 +85,22 @@
   .btab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .bill-cat-pick { margin: 0 0 10px; }
   .sub-year { margin: -4px 0 10px; }
+  .subs { display: flex; flex-direction: column; gap: 8px; }
+  .srow { display: flex; align-items: flex-start; gap: 12px; padding: 12px; }
+  .srow .mark { width: 34px; height: 34px; border-radius: 10px; font-size: 11px; flex: none; }
+  .srow.gone { opacity: .7; }
+  .sbody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+  .stop { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  .stop b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .stop .amt { margin-left: auto; font-weight: 600; }
+  .tag { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; padding: 1px 6px; border-radius: 9999px; border: 1px dashed color-mix(in srgb, var(--fg) 30%, transparent); color: var(--fg-2); }
+  .sstate { font-size: 12px; color: var(--fg-muted); }
+  .sstate.ok { color: var(--fg-2); }
+  .sstate.warn { color: #b7791f; font-weight: 500; }
+  .scharges { display: flex; flex-wrap: wrap; gap: 4px; }
+  .scharges .chip { padding: 2px 8px; font-size: 11px; }
+  .srow .acts { display: flex; flex-wrap: wrap; gap: 6px; }
+  .sub-gone { margin: 14px 0 6px; }
   .chart { position: relative; height: 190px; margin-top: 14px; }
   .chart svg { width: 100%; height: 100%; display: block; overflow: visible; }
   .chart .grid line { stroke: color-mix(in srgb, var(--fg) 8%, transparent); }
@@ -581,7 +597,7 @@
       if (close < Math.max(2, Math.ceil(g.length * 0.7))) return;
       var last = g[g.length - 1];
       var next = every === 'year' ? isoDay(new Date(day(last.d).getTime() + 365 * DAY)) : addEvery(last.d, every);
-      out.push({ key: k, name: last.n, amount: mid, every: every, count: g.length, last: last.d, next: next, account: last.a, cat: spendCat(last) });
+      out.push({ key: k, name: last.n, amount: mid, every: every, count: g.length, last: last.d, next: next, account: last.a, cat: spendCat(last), tx: g });
     });
     // WHY a second pass: banks shared only ~30 days of purchases, so a monthly bill has been
     // charged once and the repeat rule above can never see it. A known subscription company or
@@ -592,13 +608,38 @@
       if (seen[k]) return;
       var g = groups[k], last = g[g.length - 1];
       if (!looksLikeBill(k, last)) return;
-      guesses.push({ key: k, name: last.n, amount: last.m, every: 'month', count: g.length, last: last.d, next: addMonth(last.d), account: last.a, cat: spendCat(last), guess: true });
+      guesses.push({ key: k, name: last.n, amount: last.m, every: 'month', count: g.length, last: last.d, next: addMonth(last.d), account: last.a, cat: spendCat(last), guess: true, tx: g });
     });
     return out.sort(function(a, b){ return b.amount - a.amount; })
       .concat(guesses.sort(function(a, b){ return b.amount - a.amount; }));
   }
   // Companies that bill on a schedule, matched against the cleaned-up name (txKey).
   var SUB_NAMES = /\b(netflix|hulu|spotify|paramount|crunchyroll|disney|hbo|peacock|youtube|prime|audible|kindle|icloud|apple one|google one|google storage|dropbox|adobe|lightroom|photoshop|canva|new york times|nyt|wsj|washington post|patreon|duolingo|anthropic|claude|openai|chatgpt|github|microsoft|xbox|game pass|playstation|nintendo|onstar|siriusxm|sirius|visible|verizon|tmobile|att|cricket|cox|spectrum|xfinity|comcast|lemonade|liberty mutual|geico|progressive|allstate|state farm|planet fitness|fitness|gym|membership|subscription)\b/;
+  // Where to see or cancel a subscription, for companies whose page is known. Matched against txKey of the name.
+  var SUB_LINKS = [
+    [/netflix/, 'https://www.netflix.com/account'], [/hulu/, 'https://secure.hulu.com/account'],
+    [/spotify/, 'https://www.spotify.com/account/subscription/'], [/paramount/, 'https://www.paramountplus.com/account/'],
+    [/crunchyroll/, 'https://www.crunchyroll.com/account/membership'], [/disney/, 'https://www.disneyplus.com/account'],
+    [/\bhbo\b|\bmax\b/, 'https://auth.max.com/subscription'], [/peacock/, 'https://www.peacocktv.com/account'],
+    [/youtube/, 'https://www.youtube.com/paid_memberships'], [/prime|amazon/, 'https://www.amazon.com/mc'],
+    [/audible/, 'https://www.audible.com/account/overview'], [/apple|icloud/, 'https://apps.apple.com/account/subscriptions'],
+    [/google/, 'https://play.google.com/store/account/subscriptions'], [/dropbox/, 'https://www.dropbox.com/account/plan'],
+    [/adobe|lightroom|photoshop/, 'https://account.adobe.com/plans'], [/new york times|nyt/, 'https://myaccount.nytimes.com/seg/subscription'],
+    [/anthropic|claude/, 'https://claude.ai/settings/billing'], [/chatgpt/, 'https://chatgpt.com/#settings/Subscription'],
+    [/openai/, 'https://platform.openai.com/settings/organization/billing/overview'],
+    [/xbox|microsoft/, 'https://account.microsoft.com/services'], [/playstation/, 'https://www.playstation.com/acct/management'],
+    [/patreon/, 'https://www.patreon.com/settings/memberships'], [/duolingo/, 'https://www.duolingo.com/settings/subscription'],
+    [/github/, 'https://github.com/settings/billing'], [/sirius/, 'https://care.siriusxm.com/'], [/onstar/, 'https://www.onstar.com/']
+  ];
+  function manageLink(name){
+    var k = txKey(name);
+    for (var i = 0; i < SUB_LINKS.length; i++) if (SUB_LINKS[i][0].test(k)) return SUB_LINKS[i][1];
+    return '';
+  }
+  // The oldest purchase the banks have shared: "seen once" means once since then, not once ever.
+  function historyStart(){
+    return data.tx.length ? data.tx[0].d : null;
+  }
   function looksLikeBill(key, t){
     var k = t.k || '';
     // Movie theaters share the streaming category but are one-off tickets.
@@ -733,6 +774,7 @@
         mine: a.source !== 'plaid' || !!a.payment.manual });
     });
     data.bills.forEach(function(b){
+      if (b.cancelled) return;
       out.push({ id: b.id, bill: b, institution: b.provider, site: b.site, name: b.name, sub: b.sub || '', cat: b.category || 'Other',
         amount: b.amount, due: day(b.due), paid: b.paid ? day(b.paid) : null, mine: true });
     });
@@ -1225,13 +1267,14 @@
     if (billView === 'subs' && groups.subs.length) h += '<div class="hint sub-year">' + money(monthOf(groups.subs) * 12, true) + ' a year on subscriptions</div>';
     if (catList.length > 1) h += '<select class="pick bill-cat-pick" data-bill-cat-pick aria-label="Category"><option value="">All categories</option>' + catList.map(function(c){ return '<option' + (c === billCatPick ? ' selected' : '') + '>' + esc(c) + '</option>'; }).join('') + '</select>';
     // Suggestions follow the group being shown.
+    if (billView === 'subs') return h + subsReview(groups.subs) + '</div>';
     var found = discover().filter(function(f){ return billView === 'all' || (billView === 'subs') === (billCatFor(f) === 'Subscriptions'); });
     if (found.length) {
       var shown = showAllFound ? found : found.slice(0, 4);
       h += '<div class="found"><div class="found-head">' + I.spark + '<b>Found ' + found.length + ' likely bill' + (found.length === 1 ? '' : 's') + '</b><span class="muted small">from your banks’ purchases — add the real bills</span></div>';
       shown.forEach(function(f){
         var acct = accountById(f.account);
-        h += '<div class="tile frow">' + mark(f.name) + '<div class="name">' + esc(f.name) + '<small>' + money(f.amount) + ' · ' + (f.every === '2weeks' ? 'every 2 weeks' : f.every === 'year' ? 'yearly' : f.every + 'ly') + ' · ' + (f.guess ? (f.count === 1 ? 'seen once' : 'seen ' + f.count + ' times') + ', looks like a subscription' : f.count + ' payments') + (acct ? ' · ' + esc(fullName(acct)) : '') + '</small></div>';
+        h += '<div class="tile frow">' + mark(f.name) + '<div class="name">' + esc(f.name) + '<small>' + money(f.amount) + ' · ' + (f.every === '2weeks' ? 'every 2 weeks' : f.every === 'year' ? 'yearly' : f.every + 'ly') + ' · ' + (f.count === 1 ? '1 charge' : f.count + ' charges') + (historyStart() ? ' since ' + short(day(historyStart())) : '') + (f.guess ? ', looks like a subscription' : '') + (acct ? ' · ' + esc(fullName(acct)) : '') + '</small></div>';
         h += '<button class="btn sm" data-dismiss-found="' + esc(f.key) + '">Not a bill</button><button class="btn sm primary" data-add-found="' + esc(f.key) + '">' + I.plus + 'Add as a bill</button></div>';
       });
       if (found.length > 4) h += '<button class="btn sm ghostish" data-found-all>' + (showAllFound ? 'Show fewer' : 'Show all ' + found.length) + '</button>';
@@ -1247,6 +1290,48 @@
     if (!bills.length && every.length) h += '<div class="empty">' + (billView === 'subs' ? 'No subscriptions yet. Open a bill and choose Move to subscriptions.' : 'Nothing here.') + '</div>';
     if (!every.length) h += '<div class="empty">No bills yet. Add one, add a found repeating payment, or connect a card or loan and its payments appear here.</div>';
     return h + '</div></div>';
+  }
+  // The Subscriptions tab: every subscription with the dates it was actually charged, whether it still looks
+  // active, and a link to where it can be cancelled. Suggested ones sit alongside, to track or dismiss.
+  function subsReview(subs){
+    var t = today(), start = historyStart();
+    var items = subs.map(function(b){ return { id: b.id, bill: b.bill, name: b.name, provider: b.institution, amount: b.amount, monthly: perMonth(b), every: b.bill.every || 'month', charges: linkedTx(b.bill) }; });
+    discover().forEach(function(f){
+      if (billCatFor(f) !== 'Subscriptions') return;
+      items.push({ found: f, name: f.name.replace(/\s+\d[\d-]*$/, ''), provider: f.name, amount: f.amount, monthly: f.every === 'year' ? f.amount / 12 : f.amount, every: f.every, charges: f.tx || [] });
+    });
+    var h = '<div class="hint sub-year">' + (items.length ? money(sum(items, function(x){ return x.monthly; }) * 12, true) + ' a year if all of these are real' : 'No subscriptions yet.') +
+      (start ? ' · charges below go back to ' + short(day(start)) + ', as far as your banks have shared' : '') + '</div>';
+    h += '<div class="subs">' + items.sort(function(a, b){ return b.monthly - a.monthly; }).map(function(x){ return subRow(x, t); }).join('') + '</div>';
+    var gone = data.bills.filter(function(b){ return b.cancelled; });
+    if (gone.length) {
+      h += '<div class="label sub-gone">Cancelled</div><div class="subs">' + gone.map(function(b){
+        return subRow({ id: b.id, bill: b, name: b.name, provider: b.provider, amount: b.amount, monthly: 0, every: b.every || 'month', charges: linkedTx(b), cancelled: b.cancelled }, t);
+      }).join('') + '</div>';
+    }
+    return h;
+  }
+  function subRow(x, t){
+    var cyc = { week: 7, '2weeks': 14, month: 31, year: 366 }[x.every] || 31;
+    var ch = x.charges, last = ch.length ? day(ch[ch.length - 1].d) : null, ago = last ? daysBetween(last, t) : null;
+    var state;
+    if (x.cancelled) {
+      var after = ch.filter(function(c){ return c.d > x.cancelled; });
+      state = after.length ? { cls: 'warn', text: 'Charged again ' + short(day(after[after.length - 1].d)) + ' after you cancelled' } : { cls: '', text: 'Cancelled ' + short(day(x.cancelled)) + ' · no charge since' };
+    } else if (!last) state = { cls: '', text: 'No payments linked yet: open it under All to link them' };
+    else if (ago <= cyc + 5) state = { cls: 'ok', text: 'Active · charged ' + short(last) + (ago === 0 ? ' (today)' : ' (' + ago + (ago === 1 ? ' day' : ' days') + ' ago)') };
+    else state = { cls: 'warn', text: 'No charge since ' + short(last) + ' · may already be cancelled' };
+    var h = '<div class="tile srow' + (x.cancelled ? ' gone' : '') + '">' + mark(x.provider) + '<div class="sbody">';
+    h += '<div class="stop"><b>' + esc(x.name) + '</b>' + (x.found ? '<span class="tag">Suggested</span>' : '') + '<span class="amt num">' + money(x.amount) + '<span class="muted small">' + (x.every === 'year' ? '/yr' : x.every === 'week' ? '/wk' : x.every === '2weeks' ? '/2 wk' : '/mo') + '</span></span></div>';
+    h += '<div class="sstate ' + state.cls + '">' + esc(state.text) + '</div>';
+    if (ch.length) h += '<div class="scharges">' + ch.slice(-6).reverse().map(function(c){ return '<span class="chip">' + short(day(c.d)) + ' · ' + money(c.m) + '</span>'; }).join('') + '</div>';
+    var u = manageLink(x.name + ' ' + (x.provider || ''));
+    h += '<div class="acts">';
+    if (u && !x.cancelled) h += '<a class="btn sm" href="' + esc(u) + '" target="_blank" rel="noopener">' + I.out + 'Manage at ' + esc(x.name) + '</a>';
+    if (x.found) h += '<button class="btn sm" data-dismiss-found="' + esc(x.found.key) + '">Not a subscription</button><button class="btn sm primary" data-add-found="' + esc(x.found.key) + '">' + I.plus + 'Track it</button>';
+    else if (x.cancelled) h += '<button class="btn sm" data-sub-restore="' + esc(x.id) + '">Still have it</button>';
+    else h += '<button class="btn sm" data-sub-cancel="' + esc(x.id) + '">I cancelled it</button>';
+    return h + '</div></div></div>';
   }
   function billDetail(b){
     var h = '<div class="detail">', ins = '';
@@ -1387,6 +1472,14 @@
     on('[data-range]', function(b){ range = b.dataset.range; render(); });
     on('[data-bill-sort]', function(b){ billSort = b.dataset.billSort; render(); });
     on('[data-bill-view]', function(b){ billView = b.dataset.billView; render(); });
+    on('[data-sub-cancel]', function(el){
+      var bill = data.bills.filter(function(x){ return x.id === el.dataset.subCancel; })[0]; if (!bill) return;
+      bill.cancelled = isoDay(today()); save(); render();
+    });
+    on('[data-sub-restore]', function(el){
+      var bill = data.bills.filter(function(x){ return x.id === el.dataset.subRestore; })[0]; if (!bill) return;
+      delete bill.cancelled; save(); render();
+    });
     on('[data-bill-move]', function(el, e){
       e.stopPropagation();
       var bill = data.bills.filter(function(x){ return x.id === el.dataset.billMove; })[0]; if (!bill) return;

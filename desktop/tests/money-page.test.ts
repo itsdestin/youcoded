@@ -258,7 +258,7 @@ describe('the Money page', () => {
     ]));
     await p.settle(); await p.settle();
     expect(p.text()).toContain('Found 1 likely bill');
-    expect(p.text()).toContain('seen once, looks like a subscription');
+    expect(p.text()).toContain('1 charge since Sep 14, looks like a subscription');
     p.click('[data-add-found="spotify"]');
     expect(p.last().bills[0]).toMatchObject({ name: 'Spotify', amount: 20.72, due: '2026-10-14', match: ['spotify'] });
   });
@@ -276,13 +276,37 @@ describe('the Money page', () => {
     p.click('[data-bill-view="bills"]');
     expect(names()).toEqual(['Rent']);
     p.click('[data-bill-view="subs"]');
-    expect(names()).toEqual(['Hulu']);
+    expect([...p.d.querySelectorAll('.srow .stop b')].map((e) => e.textContent)).toEqual(['Hulu']);
     expect(p.text()).toContain('$240 a year on subscriptions');
+    p.click('[data-bill-view="all"]');
     p.click('[data-open="bill:h"]');
     p.click('[data-bill-move="h"]');
     expect(p.last().bills[1].optional).toBe(false);
     p.click('[data-bill-view="bills"]');
     expect(names()).toEqual(['Hulu', 'Rent']);
+  });
+
+  it('reviews each subscription by the dates it was charged, links to where to cancel it, and remembers a cancel', async () => {
+    const p = open({ demoToday: TODAY, bills: [
+      { id: 'n', provider: 'Netflix', name: 'Netflix', amount: 15.49, due: '2026-11-03', monthly: true, category: 'Subscriptions', match: ['netflix'] },
+      { id: 'c', provider: 'Crunchyroll', name: 'Crunchyroll', amount: 10.9, due: '2026-08-01', monthly: true, category: 'Subscriptions', match: ['crunchyroll'] },
+    ] }, withPurchases([
+      tx('n1', '2026-09-03', 15.49, 'NETFLIX.COM'), tx('n2', '2026-10-03', 15.49, 'NETFLIX.COM'),
+      tx('c1', '2026-07-01', 10.9, 'Crunchyroll'),
+    ]));
+    await p.settle(); await p.settle();
+    p.click('[data-bill-view="subs"]');
+    const row = (name: string) => [...p.d.querySelectorAll('.srow')].find((r) => r.querySelector('.stop b')!.textContent === name)!;
+    expect(row('Netflix').textContent).toContain('Active · charged Oct 3 (3 days ago)');
+    expect([...row('Netflix').querySelectorAll('.scharges .chip')].map((c) => c.textContent)).toEqual(['Oct 3 · $15.49', 'Sep 3 · $15.49']);
+    expect(row('Netflix').querySelector('a')!.getAttribute('href')).toBe('https://www.netflix.com/account');
+    expect(row('Crunchyroll').textContent).toContain('No charge since Jul 1 · may already be cancelled');
+    expect(p.text()).toContain('go back to Jul 1');
+    (row('Crunchyroll').querySelector('[data-sub-cancel]') as HTMLElement).click();
+    expect(p.last().bills[1].cancelled).toBe(TODAY);
+    // Cancelled leaves the monthly total and moves to its own list.
+    expect(p.d.querySelector('[data-bill-view="subs"]')!.textContent).toContain('$15/mo');
+    expect(p.text()).toContain('Cancelled Oct 6 · no charge since');
   });
 
   it('a linked payment near a bill\'s due date marks it paid and moves it to next month', async () => {

@@ -181,7 +181,8 @@ export interface PlaidItemSummary {
   error?: { code: string; message: string; reconnect: boolean };
   accounts: PlaidAccount[];
   /** Only on a `transactions` answer. */
-  transactions?: { added: PlaidTransaction[]; modified: PlaidTransaction[]; removed: string[]; cursor: string };
+  /** `history` is Plaid's transactions_update_status: HISTORICAL_UPDATE_COMPLETE once older purchases have all arrived. */
+  transactions?: { added: PlaidTransaction[]; modified: PlaidTransaction[]; removed: string[]; cursor: string; history?: string };
 }
 
 /** One purchase or deposit, kept small because the page saves them. `amount` follows Plaid: positive is money out. */

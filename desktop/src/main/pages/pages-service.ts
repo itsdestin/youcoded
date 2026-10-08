@@ -451,6 +451,10 @@ class PagesService {
         // Which kinds of account each bank sent (never balances), to explain one that seems missing.
         else log('INFO', 'Pages', 'Plaid accounts', { bank: it.institution.name, types: it.accounts.map((a) => `${a.type}/${a.subtype ?? ''}`) });
       }
+      // Whether each bank has sent its older purchases yet (counts and a status, never a purchase).
+      if (result.ok && req.op === 'transactions') for (const it of result.items) {
+        if (it.ok && it.transactions) log('INFO', 'Pages', 'Plaid purchases', { bank: it.institution.name, added: it.transactions.added.length, history: it.transactions.history ?? 'unknown', fromStart: !req.cursors?.[it.itemId] });
+      }
       return result;
     } finally {
       if (linking) { if (this.plaidLinking.get(id) === mine) this.plaidLinking.delete(id); } else this.gate.release(id);
