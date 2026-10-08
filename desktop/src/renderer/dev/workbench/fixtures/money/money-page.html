@@ -573,7 +573,28 @@
       var next = every === 'year' ? isoDay(new Date(day(last.d).getTime() + 365 * DAY)) : addEvery(last.d, every);
       out.push({ key: k, name: last.n, amount: mid, every: every, count: g.length, last: last.d, next: next, account: last.a, cat: spendCat(last) });
     });
-    return out.sort(function(a, b){ return b.amount - a.amount; });
+    // WHY a second pass: banks shared only ~30 days of purchases, so a monthly bill has been
+    // charged once and the repeat rule above can never see it. A known subscription company or
+    // a bill-like bank category is enough to suggest it; it is still only a suggestion to confirm.
+    var seen = {}; out.forEach(function(f){ seen[f.key] = 1; });
+    var guesses = [];
+    Object.keys(groups).forEach(function(k){
+      if (seen[k]) return;
+      var g = groups[k], last = g[g.length - 1];
+      if (!looksLikeBill(k, last)) return;
+      guesses.push({ key: k, name: last.n, amount: last.m, every: 'month', count: g.length, last: last.d, next: addMonth(last.d), account: last.a, cat: spendCat(last), guess: true });
+    });
+    return out.sort(function(a, b){ return b.amount - a.amount; })
+      .concat(guesses.sort(function(a, b){ return b.amount - a.amount; }));
+  }
+  // Companies that bill on a schedule, matched against the cleaned-up name (txKey).
+  var SUB_NAMES = /\b(netflix|hulu|spotify|paramount|crunchyroll|disney|hbo|peacock|youtube|prime|audible|kindle|icloud|apple one|google one|google storage|dropbox|adobe|lightroom|photoshop|canva|new york times|nyt|wsj|washington post|patreon|duolingo|anthropic|claude|openai|chatgpt|github|microsoft|xbox|game pass|playstation|nintendo|onstar|siriusxm|sirius|visible|verizon|tmobile|att|cricket|cox|spectrum|xfinity|comcast|lemonade|liberty mutual|geico|progressive|allstate|state farm|planet fitness|fitness|gym|membership|subscription)\b/;
+  function looksLikeBill(key, t){
+    var k = t.k || '';
+    // Movie theaters share the streaming category but are one-off tickets.
+    if (/theat|cinema|\bamc\b/.test(key)) return false;
+    if (SUB_NAMES.test(key)) return true;
+    return /MUSIC_AND_AUDIO|TV_AND_MOVIES|INSURANCE|TELEPHONE|INTERNET_AND_CABLE|RENT_AND_UTILITIES|GYMS_AND_FITNESS/.test(k);
   }
   function billCatFor(s){
     if (BILL_CATS.indexOf(s.cat) >= 0) return s.cat;
@@ -1163,10 +1184,10 @@
     var found = discover();
     if (found.length) {
       var shown = showAllFound ? found : found.slice(0, 4);
-      h += '<div class="found"><div class="found-head">' + I.spark + '<b>Found ' + found.length + ' repeating payment' + (found.length === 1 ? '' : 's') + '</b><span class="muted small">from your banks’ purchases — add the real bills</span></div>';
+      h += '<div class="found"><div class="found-head">' + I.spark + '<b>Found ' + found.length + ' likely bill' + (found.length === 1 ? '' : 's') + '</b><span class="muted small">from your banks’ purchases — add the real bills</span></div>';
       shown.forEach(function(f){
         var acct = accountById(f.account);
-        h += '<div class="tile frow">' + mark(f.name) + '<div class="name">' + esc(f.name) + '<small>' + money(f.amount) + ' · ' + (f.every === '2weeks' ? 'every 2 weeks' : f.every === 'year' ? 'yearly' : f.every + 'ly') + ' · ' + f.count + ' payments' + (acct ? ' · ' + esc(fullName(acct)) : '') + '</small></div>';
+        h += '<div class="tile frow">' + mark(f.name) + '<div class="name">' + esc(f.name) + '<small>' + money(f.amount) + ' · ' + (f.every === '2weeks' ? 'every 2 weeks' : f.every === 'year' ? 'yearly' : f.every + 'ly') + ' · ' + (f.guess ? (f.count === 1 ? 'seen once' : 'seen ' + f.count + ' times') + ', looks like a subscription' : f.count + ' payments') + (acct ? ' · ' + esc(fullName(acct)) : '') + '</small></div>';
         h += '<button class="btn sm" data-dismiss-found="' + esc(f.key) + '">Not a bill</button><button class="btn sm primary" data-add-found="' + esc(f.key) + '">' + I.plus + 'Add as a bill</button></div>';
       });
       if (found.length > 4) h += '<button class="btn sm ghostish" data-found-all>' + (showAllFound ? 'Show fewer' : 'Show all ' + found.length) + '</button>';

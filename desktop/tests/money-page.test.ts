@@ -243,10 +243,24 @@ describe('the Money page', () => {
     await p.settle(); await p.settle();
     expect(p.last().txCursor).toEqual({ b: 'cur1' });
     expect(p.last().tx).toHaveLength(4);
-    expect(p.text()).toContain('Found 1 repeating payment');
+    expect(p.text()).toContain('Found 1 likely bill');
     p.click('[data-add-found="netflix"]');
     expect(p.last().bills[0]).toMatchObject({ name: 'Netflix', amount: 15.49, due: '2026-10-03', category: 'Subscriptions', match: ['netflix'] });
-    expect(p.text()).not.toContain('Found 1 repeating payment');
+    expect(p.text()).not.toContain('Found 1 likely bill');
+  });
+
+  it('offers a subscription charged only once, but not a one-off movie ticket or a coffee', async () => {
+    // Banks share ~30 days of purchases at first, so a monthly bill has only been charged once.
+    const p = open({ demoToday: TODAY }, withPurchases([
+      tx('s1', '2026-09-14', 20.72, 'Spotify', 'ENTERTAINMENT', 'ENTERTAINMENT_MUSIC_AND_AUDIO'),
+      tx('h1', '2026-09-20', 63.36, 'Harkins Theatres'),
+      tx('c1', '2026-09-22', 8, 'Black Rock Coffee Bar', 'FOOD_AND_DRINK', 'FOOD_AND_DRINK_COFFEE'),
+    ]));
+    await p.settle(); await p.settle();
+    expect(p.text()).toContain('Found 1 likely bill');
+    expect(p.text()).toContain('seen once, looks like a subscription');
+    p.click('[data-add-found="spotify"]');
+    expect(p.last().bills[0]).toMatchObject({ name: 'Spotify', amount: 20.72, due: '2026-10-14', match: ['spotify'] });
   });
 
   it('a linked payment near a bill\'s due date marks it paid and moves it to next month', async () => {
