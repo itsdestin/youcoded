@@ -56,7 +56,7 @@ describe('development design safety', () => {
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
     expect(dev.logTail).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Include recent logs' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'Include recent logs' }));
     await vi.waitFor(() => expect(dev.logTail).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByText('Review ticket'));
     expect(screen.getByText('Optional AI help')).toBeTruthy();
@@ -85,8 +85,8 @@ describe('development design safety', () => {
     expect(screen.queryByText('Optional AI help')).toBeNull();
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'A retained title' } });
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'A retained description' } });
-    expect(screen.getByRole('checkbox', { name: 'Include recent logs' }).getAttribute('aria-checked')).toBe('false');
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Include recent logs' }));
+    expect(screen.getByRole('switch', { name: 'Include recent logs' }).getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(screen.getByRole('switch', { name: 'Include recent logs' }));
     expect(screen.queryByLabelText('Logs to review')).toBeNull();
     fireEvent.click(screen.getByText('Review ticket'));
     // The logs are a folded row on review (submit-ticket-1#ST-C1 "folded"); open it to edit.
@@ -98,7 +98,7 @@ describe('development design safety', () => {
     fireEvent.click(screen.getByText('Back to draft'));
     expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('A retained title');
     expect((screen.getByLabelText('Description') as HTMLTextAreaElement).value).toBe('A retained description');
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Finish with attachments in GitHub' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'Finish with attachments in GitHub' }));
     expect(screen.getByText(/GitHub uploads a file as soon as you attach it/)).toBeTruthy();
     fireEvent.click(screen.getByText('Review ticket'));
     // The logs fold is still open from before — what you opened stays open.
@@ -135,7 +135,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     expect(document.body.textContent).not.toMatch(CAPTION);
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'A title' } });
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'A description' } });
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Include recent logs' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'Include recent logs' }));
     fireEvent.click(screen.getByText('Review ticket'));
     expect(document.body.textContent).not.toMatch(CAPTION);
     fireEvent.click(screen.getByRole('button', { name: 'Optional AI help' }));
@@ -145,7 +145,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
   it('does not collect logs for feature requests', () => {
     render(<BugReportPopup open onClose={() => {}} />);
     fireEvent.click(screen.getByRole('tab', { name: 'Feature' }));
-    expect(screen.queryByRole('checkbox', { name: 'Include recent logs' })).toBeNull();
+    expect(screen.queryByRole('switch', { name: 'Include recent logs' })).toBeNull();
   });
   it('never connects managed setup to the old installer', async () => {
     const installWorkspace = vi.fn();
@@ -241,7 +241,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     render(<BugReportPopup open onClose={() => {}} />);
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Finish with attachments in GitHub' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'Finish with attachments in GitHub' }));
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Continue in GitHub' }));
     await screen.findByText(/open in your browser with everything you wrote/);

@@ -92,7 +92,7 @@ describe('the ticket screen keeps its approved shape', () => {
     // row's own hint now. Opened from Settings there is no error, so two choices only.
     render(<BugReportPopup open onClose={() => {}} />);
     const section = screen.getByText('Include with ticket').parentElement!;
-    expect(within(section).getAllByRole('checkbox')).toHaveLength(2);
+    expect(within(section).getAllByRole('switch')).toHaveLength(2);
     expect(within(section).queryAllByRole('button', { name: /^About / })).toHaveLength(0);
     expect(within(section).getByText(/last 200 lines/)).toBeTruthy();
     expect(within(section).getByText(/attach them there/)).toBeTruthy();
@@ -120,13 +120,13 @@ describe('a ticket opened from an error', () => {
     const { rerender } = render(<BugReportPopup open={false} onClose={() => {}} />);
     rerender(<BugReportPopup open onClose={() => {}} context={{ surface: 'Office', error: 'EBUSY' }} />);
     expect((screen.getByLabelText('Description') as HTMLTextAreaElement).value).toBe('');
-    expect(screen.getByRole('checkbox', { name: 'Include error details' })).toBeTruthy();
+    expect(screen.getByRole('switch', { name: 'Include error details' })).toBeTruthy();
     expect(screen.getByText(/Adds where it happened \(Office\) and the error message/)).toBeTruthy();
   });
 
   it('offers no error choice when opened from Settings', () => {
     render(<BugReportPopup open onClose={() => {}} />);
-    expect(screen.queryByRole('checkbox', { name: 'Include error details' })).toBeNull();
+    expect(screen.queryByRole('switch', { name: 'Include error details' })).toBeNull();
   });
 
   it('sends the error details only while their box is ticked', async () => {
@@ -141,7 +141,7 @@ describe('a ticket opened from an error', () => {
     cleanup();
     render(<BugReportPopup open onClose={() => {}} context={{ surface: 'Office', error: 'EBUSY' }} />);
     fillDraft();
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Include error details' }));
+    fireEvent.click(screen.getByRole('switch', { name: 'Include error details' }));
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
     await vi.waitFor(() => expect(submitIssue).toHaveBeenCalledTimes(2));
@@ -257,5 +257,24 @@ describe('a folded card opens inside itself', () => {
     const rewrite = screen.getByRole('button', { name: 'Improve wording with the assistant' });
     // The box holding the header row also holds the opened actions.
     expect(header.parentElement!.contains(rewrite)).toBe(true);
+  });
+});
+
+describe('while a ticket sends', () => {
+  it('shows only the sending box under "Your ticket", then the summary when it is done', async () => {
+    // Destin, submit-ticket-2#ST2-10: "bare sending your ticket box under your ticket
+    // header, gets replaced with the submission summary when done".
+    let finish: (v: unknown) => void = () => {};
+    (window.claude.dev.submitIssue as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(r => { finish = r; }));
+    render(<BugReportPopup open onClose={() => {}} />);
+    fillDraft();
+    fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
+    expect(await screen.findByText(/Sending your ticket/)).toBeTruthy();
+    expect(screen.getByText('Your ticket')).toBeTruthy();
+    expect(screen.queryByText('The menu closes')).toBeNull();
+    finish({ ok: true, url: 'u' });
+    expect(await screen.findByText('The menu closes')).toBeTruthy();
+    expect(screen.getByText('Submitted')).toBeTruthy();
   });
 });

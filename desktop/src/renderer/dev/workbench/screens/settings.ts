@@ -8,8 +8,8 @@ const TICKET = 'settings/development/bug-report';
 const TYPE_TITLE = { do: 'type', target: { role: 'textbox', label: 'Title' }, text: 'Settings text is cut off on my phone' };
 const TYPE_DESCRIPTION = { do: 'type', target: { role: 'textbox', label: 'Description' },
   text: 'On my phone, Settings → Sound cuts off the right edge of the Volume card. I expected it to fit the screen.' };
-const TICK_LOGS = { do: 'click', target: { role: 'checkbox', label: 'Include recent logs' } };
-const TICK_FILES = { do: 'click', target: { role: 'checkbox', label: 'Finish with attachments in GitHub' } };
+const TICK_LOGS = { do: 'click', target: { role: 'switch', label: 'Include recent logs' } };
+const TICK_FILES = { do: 'click', target: { role: 'switch', label: 'Finish with attachments in GitHub' } };
 const FILL = [TYPE_TITLE, TYPE_DESCRIPTION];
 const REVIEW = 'Review ticket';
 const SEND = 'Submit public ticket';
@@ -28,10 +28,6 @@ const TICKET_STATES: readonly ScreenEntry[] = [
   ticket('review-files', { open: [...FILL, TICK_FILES, REVIEW] }),
   ticket('review-error', { params: { reportFrom: 'error' }, open: [...FILL, REVIEW, { do: 'click', target: { role: 'button', label: 'The error you saw From Office' } }] }),
   ticket('review-ai', { open: [...FILL, REVIEW, AI] }),
-  // Three looks for the include choices (ticket-practice.ts `ticketTicks`), opened from an
-  // error so all three choices show; the plain `from-error` state is the shipped look.
-  ticket('ticks-switches', { params: { reportFrom: 'error', ticketTicks: 'switches' } }),
-  ticket('ticks-left', { params: { reportFrom: 'error', ticketTicks: 'left' } }),
   ticket('review-logs-open', { open: [...FILL, TICK_LOGS, REVIEW, { do: 'click', target: { role: 'button', label: 'Recent logs 4 lines — open to read or remove anything private' } }] }),
   ticket('handover-failed', { scenario: 'refused', open: [...FILL, REVIEW, AI, HAND_OVER], waitMs: 3500 }),
   ticket('sending', { params: { ticket: 'hold' }, open: [...FILL, REVIEW, SEND] }),
@@ -72,7 +68,10 @@ export const SETTINGS: readonly ScreenEntry[] = [
   settings('settings/sound', 'dialog'),
   // Only a two-graphics-chip computer shows this row; `gpus=2` makes the practice app one.
   { ...settings('settings/performance', 'dialog'), params: { gpus: '2' } },
+  // Folds opened (the shared fold opens inside its box — submit-ticket-2#ST2-Q1).
+  { ...settings('settings/performance#fold-open', 'dialog', 'fold'), params: { gpus: '2' }, open: ['Why YouCoded uses the discrete GPU'] },
   settings('settings/sync', 'dialog', 'error-state'),
+  { ...settings('settings/sync#log-open', 'dialog', 'fold'), params: { sync: 'ok' }, open: [{ do: 'scroll', dir: 'down', times: 8 }, 'Sync log', { do: 'scroll', dir: 'down', times: 8 }] },
   { ...settings('settings/sync#ok', 'dialog'), params: { sync: 'ok' } },
   { ...settings('settings/sync#auth-error', 'dialog', 'error-state'), params: { sync: 'auth-error' } },
   { ...settings('settings/sync#oversize', 'dialog', 'error-state'), params: { sync: 'oversize' } },
@@ -91,6 +90,9 @@ export const SETTINGS: readonly ScreenEntry[] = [
   settings('settings/shortcuts', 'dialog'),
   settings('settings/donate', 'dialog'),
   settings('settings/about', 'dialog'),
+  { ...settings('settings/about#account-open', 'dialog', 'fold'), open: ['Your account (optional)'] },
+  { ...settings('settings/about#stats-open', 'dialog', 'fold'), open: ['Anonymous usage stats'] },
+  { ...settings('settings/about#licenses-open', 'dialog', 'fold'), open: [{ do: 'scroll', dir: 'down', times: 8 }, 'Open-source libraries'] },
   // Android-only rows (isAndroid() gates AndroidSettings vs. DesktopSettings).
   { ...settings('settings/android/tier', 'dialog'), params: { platform: 'android' } },
   { ...settings('settings/android/connect-desktop', 'dialog'), params: { platform: 'android' } },

@@ -1,12 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { versionLine } from '../../app-version';
 import { plainMessage } from '../../utils/ipc-error';
-import { Button, Callout, CARD_LEVEL_1, Checkbox, ConsentRow, Dialog, LoadingState, Pill, SectionLabel, SegmentedTabs, SettingRow, Textarea, TextInput, Toggle } from '../ui';
+import { Button, Callout, CARD_LEVEL_1, Dialog, FoldRow, LoadingState, Pill, SectionLabel, SegmentedTabs, SettingRow, Textarea, TextInput, Toggle } from '../ui';
 import type { PillTone } from '../ui/Pill';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
 import { useNetworkOnline } from '../../hooks/useNetworkOnline';
-import { workbenchTicketTicks } from '../../ticket-practice';
 
 // WHY a phase rather than a boolean: the flow stopped at draft -> review, so
 // sending, sent and opened-in-GitHub had no surface at all. A failure is NOT a
@@ -72,7 +71,6 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
   const [aiBusy, setAiBusy] = useState(false);
   const [aiNote, setAiNote] = useState('');
   const review = phase === 'review';
-  const ticks = workbenchTicketTicks();
   const narrow = useNarrowViewport();
   // Read only to word a failed send: "no network" is said only when the computer itself
   // reports none (useNetworkOnline's rule) — never guessed from the error text.
@@ -224,19 +222,12 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
 
   // ── One "include" choice ───────────────────────────────────────────────────
   // WHY a plain hint under every title, and no (i) (Destin, submit-ticket-1#ST-1 "the checkbox
-  // ux is still odd", #ST-13 "should explain itself"): each choice now says in the row what
-  // ticking it adds. This replaces signed R18 ("explained by the (i) on its row"). Three looks
-  // behind ?ticketTicks= for him to pick from (ticket-practice.ts).
+  // ux is still odd", #ST-13 "should explain itself"; replaces signed R18). WHY a switch
+  // (submit-ticket-2#ST2-C1 "switches"): the guide's setting row — title and hint left, the
+  // app's switch at the right, vertically centred.
   const tick = (o: { title: string; hint: string; label: string; checked: boolean; onChange: (v: boolean) => void }) =>
-    ticks === 'left'
-      ? <ConsentRow key={o.label} checked={o.checked} onChange={o.onChange}>{/* its name is its words; ConsentRow takes no label */}
-          <span className="block text-xs text-fg">{o.title}</span>
-          <span className="block text-3xs text-fg-2">{o.hint}</span>
-        </ConsentRow>
-      : <SettingRow key={o.label} variant="item" title={o.title} description={o.hint}
-          control={ticks === 'switches'
-            ? <Toggle aria-label={o.label} checked={o.checked} onChange={o.onChange} />
-            : <Checkbox aria-label={o.label} checked={o.checked} onChange={o.onChange} />} />;
+    <SettingRow key={o.label} variant="item" title={o.title} description={o.hint}
+      control={<Toggle aria-label={o.label} checked={o.checked} onChange={o.onChange} />} />;
 
   // WHY the files notice stays (R14): GitHub uploads a file the moment it is attached.
   const filesNotice = <Callout>GitHub uploads a file as soon as you attach it — before you submit the issue — so check and crop it first. You attach files yourself in your browser; nothing is uploaded from here.</Callout>;
@@ -295,7 +286,7 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
 
   const logLines = logText ? logText.split('\n').filter(Boolean).length : 0;
   // Folded rows, picked on submit-ticket-1#ST-C1 ("folded"). Each opens INSIDE its own box
-  // (FoldCard below; Destin, ST-3).
+  // (the shared FoldRow, which opens inside its box since Destin's ST-3).
   const sentWithIt = <section>
     <SectionLabel className="mb-2">Sent with it</SectionLabel>
     <div className={`${CARD_LEVEL_1} p-3 space-y-2`}>
@@ -303,13 +294,13 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
           version and system, whatever is ticked, so the review says so. The main process
           writes that line with the system's release number too (dev-tools.ts). */}
       <SettingRow variant="item" title="App version and system" description={`${versionLine()} — always sent, so maintainers know what you’re running`} />
-      {errorOn && <FoldCard title="The error you saw" description={context?.surface ? `From ${context.surface}` : 'The error message'} open={openPiece === 'error'} onToggle={toggle('error')}>
+      {errorOn && <FoldRow title="The error you saw" description={context?.surface ? `From ${context.surface}` : 'The error message'} open={openPiece === 'error'} onToggle={toggle('error')}>
         <p className="text-xs text-fg-2 font-mono whitespace-pre-wrap break-all">{errorDetails}</p>
-      </FoldCard>}
-      {isBug && logs && <FoldCard title="Recent logs" description={logsBusy ? 'Reading recent logs…' : logLines ? `${logLines} lines — open to read or remove anything private` : 'No recent log lines were found.'} open={openPiece === 'logs'} onToggle={toggle('logs')}>
+      </FoldRow>}
+      {isBug && logs && <FoldRow title="Recent logs" description={logsBusy ? 'Reading recent logs…' : logLines ? `${logLines} lines — open to read or remove anything private` : 'No recent log lines were found.'} open={openPiece === 'logs'} onToggle={toggle('logs')}>
         {/* WHY filled by logTail (code review C5): the box once collected nothing at all. */}
         <Textarea id="report-logs" aria-label="Logs to review" className="w-full h-24" value={logText} onChange={e => setLogText(e.target.value)} placeholder={logsBusy ? 'Reading recent logs…' : 'No recent log lines were found.'} />
-      </FoldCard>}
+      </FoldRow>}
       {attachments && filesNotice}
     </div>
   </section>;
@@ -319,7 +310,7 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
   // content within itself, not open a new separate card below").
   // WHY the plain words for the hand-over (ST-7, ST-11: "what does that even mean", "unclear"):
   // "a working copy" meant nothing to him; it is YouCoded's code, downloaded to this computer.
-  const aiHelp = <FoldCard title="Optional AI help" open={aiInfo} onToggle={setAiInfo}>
+  const aiHelp = <FoldRow title="Optional AI help" open={aiInfo} onToggle={setAiInfo}>
     <div className="space-y-2">
       <p className="text-xs text-fg-2">Only this ticket and what you chose to include go to your assistant. Nothing is sent automatically; it uses your plan.</p>
       {/* WHY a note when nothing rewrote it (design review F17): never a silent no-op. */}
@@ -330,7 +321,7 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
         description="Downloads YouCoded’s code to this computer and starts a new conversation that works on it. Uses a lot of your plan."
         control={<Button size="sm" variant="secondary" aria-label={isBug ? 'Let your assistant try to fix it' : 'Let your assistant try to build it'} disabled={!description.trim()} onClick={handOver}>Start</Button>} />
     </div>
-  </FoldCard>;
+  </FoldRow>;
 
   // A failed action REPLACES the buttons it came from (approved, submit-ticket-1#ST-5/ST-6).
   const failure = error && <Callout tone={online || errorFrom === 'handover' ? 'danger' : 'warning'} actionsPlacement="below"
@@ -374,10 +365,13 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
         {sendButtons}
       </>}
 
-      {phase === 'sending' && <>
-        {summaryCard()}
+      {/* WHY only a box under the label (Destin, submit-ticket-2#ST2-10: "bare sending your
+          ticket box under your ticket header, gets replaced with the submission summary when
+          done"): the ticket card and a second sending card read as two things at once. */}
+      {phase === 'sending' && <section>
+        <SectionLabel className="mb-2">Your ticket</SectionLabel>
         {waiting(<LoadingState verb="Sending" what="your ticket" variant="inline" />)}
-      </>}
+      </section>}
 
       {phase === 'sent' && <>
         {summaryCard({ tone: 'ok', text: 'Submitted' },
@@ -396,7 +390,9 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
         </>)}
         {/* WHY the way back in (UX review U1). */}
         {pair(<Button variant="secondary" className={wide} onClick={onClose}>Done</Button>,
-          <Button className={wide} onClick={openTicket}>Open it again</Button>)}
+          // "Open in browser": Destin's words (submit-ticket-2#ST2-6 "Open in Browser"), in
+          // the app's sentence case (decisions "Sentence case everywhere").
+          <Button className={wide} onClick={openTicket}>Open in browser</Button>)}
       </>}
 
       {phase === 'handing-over' && <>
@@ -417,24 +413,4 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
 
     </div>
   </Dialog>;
-}
-
-/**
- * A card that folds open WITHIN ITSELF: its header row (title, hint, arrow at the right)
- * and, once opened, its content — inside the same box.
- *
- * WHY not FoldRow (Destin, submit-ticket-1#ST-3: "an expandable card should always contain
- * expanded content within itself, not open a new separate card below"): FoldRow draws its
- * content as a SIBLING under the boxed row, so opened content reads as a second card. The
- * shared FoldRow is used by About, Backup & sync, Performance, setup and the status bar
- * menu, so changing it is a separate ask (submit-ticket-friction.md); this is the shape
- * proposed for it. A box built as a first-level card re-levels itself when nested.
- */
-function FoldCard({ title, description, open, onToggle, children }: {
-  title: string; description?: string; open: boolean; onToggle: (next: boolean) => void; children: React.ReactNode;
-}) {
-  return <div className={`${CARD_LEVEL_1} px-3 py-1.5`}>
-    <SettingRow variant="item" header title={title} description={description} onClick={() => onToggle(!open)} expanded={open} />
-    {open && <div className="pt-1 pb-1.5">{children}</div>}
-  </div>;
 }

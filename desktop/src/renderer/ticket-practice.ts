@@ -19,18 +19,3 @@ export function workbenchReportContext(): ReportContext | null {
     ? { surface: 'Office', error: 'Could not save "Budget.xlsx": the file is open in another program (EBUSY).' }
     : null;
 }
-
-/** How the "Include with ticket" choices look — three drafts for Destin (deck submit-ticket-2,
- *  ST2-C1; he found the tick boxes "still odd"). `?ticketTicks=`:
- *    rows     (shipped) — the setting-row recipe: title and a plain hint on the left, the tick
- *             box at the right, vertically centred; no (i) buttons;
- *    switches — the same rows with a switch instead of a tick box (the Settings recipe for an
- *               on/off choice);
- *    left     — the whole line is one tappable box, tick box on the LEFT (the guide's
- *               "I understand" look).
- *  Delete the losers (and this switch) when he picks. */
-export type TicketTicks = 'rows' | 'switches' | 'left';
-export function workbenchTicketTicks(): TicketTicks {
-  const v = param('ticketTicks');
-  return v === 'switches' || v === 'left' ? v : 'rows';
-}

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { SettingRow } from './SettingRow';
+import { CARD_LEVEL_1 } from './cardLevels';
 
 /**
  * The fold-out row — anything that opens in place (a log, advanced options,
@@ -13,8 +14,8 @@ import { SettingRow } from './SettingRow';
  * 2026-09-05) and rejected again in fix batch 1. The box and the right-hand
  * arrow are SettingRow's own (`expanded`), so this reuses it rather than
  * drawing a sixth row shape; what this adds is owning the open state and
- * rendering the opened content directly under the row — a sibling, not a box
- * inside the row's box.
+ * rendering the opened content INSIDE the same box, under the row (since
+ * 2026-10-07 — see the return below; it used to be a sibling under the box).
  *
  * Controlled (`open` + `onToggle`) when the caller needs to react to opening
  * (Sync log fetches its lines then), uncontrolled otherwise.
@@ -39,11 +40,18 @@ export function FoldRow({ title, description, open, onToggle, defaultOpen = fals
     if (open === undefined) setInner(next);
     onToggle?.(next);
   };
+  // WHY the content opens INSIDE the box (Destin, submit-ticket-1#ST-3: "an expandable card
+  // should always contain expanded content within itself, not open a new separate card
+  // below. we made the same mistake in our new about page"; confirmed for every fold,
+  // submit-ticket-2#ST2-Q1 "all"): the row used to be the box and its content a sibling
+  // under it, so opened text read as loose text or a second card. Now the box wraps both;
+  // the header row drops its own box (SettingRow `header`) and the wrapper carries the same
+  // look (CARD_LEVEL_1 == the setting row's box), so a closed fold looks as before:
+  // py-1 here + the header's py-1 = the boxed row's py-2.
   return (
-    <div className={className}>
-      <SettingRow variant="item" title={title} description={description} onClick={toggle} expanded={isOpen} />
-      {/* 8px under the row — the one gap between neighbouring boxes (popup-spacing SP-5). */}
-      {isOpen && <div className="mt-2">{children}</div>}
+    <div className={`${CARD_LEVEL_1} px-3 py-1 ${className}`.trim()}>
+      <SettingRow variant="item" header title={title} description={description} onClick={toggle} expanded={isOpen} />
+      {isOpen && <div className="pt-1 pb-2">{children}</div>}
     </div>
   );
 }
