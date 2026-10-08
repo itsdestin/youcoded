@@ -20,7 +20,7 @@ export type PageHome =
  *  A named glyph, not an image: the pinned button is 16px in the header bar
  *  and follows `currentColor` like the Projects folder beside it. */
 export type PageIcon =
-  | 'page' | 'timer' | 'notes' | 'paint' | 'chart' | 'calendar' | 'list' | 'game'
+  | 'page' | 'timer' | 'notes' | 'paint' | 'chart' | 'calendar' | 'list' | 'game' | 'money'
   // Built-in pages only.
   | 'office';
 
@@ -125,7 +125,84 @@ export type PageConnection =
       socketDeny?: string[];
       /** How main plays a camera on the page's behalf. */
       videoProfile?: VideoProfile;
-    };
+    }
+  /** Bank balances through Plaid (finance dashboard, 2026-10-05). The page
+   *  never reaches Plaid itself: it asks the app (`youcoded.plaid`) to connect
+   *  a bank, read balances, reconnect or remove one, and main holds the Plaid
+   *  keys and every bank's sign-in (main/pages/plaid.ts). The key is saved
+   *  like any other under service "Plaid" at the environment's address, so
+   *  practice (sandbox) and real (production) keys never mix. */
+  | { id: string; kind: 'plaid'; environment: PlaidEnvironment; keyHelp?: { steps: string[] } };
+
+export type PlaidEnvironment = 'sandbox' | 'production';
+/** The saved-key address for a Plaid environment. */
+export function plaidAddress(env: PlaidEnvironment): string { return `${env}.plaid.com`; }
+export const PLAID_SERVICE = 'Plaid';
+
+/** Which browser a bank sign-in opens in. Some banks' own login pages fail in one browser and work in another
+ *  (American Express's, in Chrome, on the first real try), so the person can pick. */
+export type PlaidBrowser = 'default' | 'firefox' | 'chrome';
+
+/** What a page may ask Plaid for, through the app. */
+export type PlaidRequest =
+  | { op: 'status' }
+  | { op: 'connect'; browser?: PlaidBrowser }
+  /** Stop waiting for a bank sign-in (the person closed the browser tab). */
+  | { op: 'cancel' }
+  | { op: 'accounts'; live?: boolean }
+  /** New, changed and removed purchases for each bank since the page's own bookmark (Plaid's sync cursor). The page
+   *  keeps the bookmark with the purchases it saved, so a save that fails just asks for the same changes again. */
+  | { op: 'transactions'; cursors?: Record<string, string> }
+  | { op: 'reconnect'; itemId: string; browser?: PlaidBrowser }
+  | { op: 'remove'; itemId: string };
+
+/** A bank as Plaid describes it. `logo` is a data: PNG; `color` a #rrggbb. */
+export interface PlaidInstitution { id: string; name: string; logo?: string; color?: string; url?: string }
+
+export interface PlaidAccount {
+  id: string; name: string; officialName?: string; mask?: string;
+  type: string; subtype?: string;
+  kind: 'checking' | 'savings' | 'investment' | 'credit' | 'loan' | 'other';
+  /** Plaid's `current`: what is in the account, or what is owed on a card or loan. */
+  balance: number;
+  available?: number; limit?: number; currency?: string;
+  /** Cards and loans, where the bank shares it (Plaid Liabilities). */
+  liability?: {
+    apr?: number; minimumPayment?: number; nextDue?: string;
+    lastPaymentDate?: string; lastPaymentAmount?: number; isOverdue?: boolean;
+  };
+}
+
+/** One connected bank. `error.reconnect` means "sign in to this bank again". */
+export interface PlaidItemSummary {
+  itemId: string;
+  institution: PlaidInstitution;
+  ok: boolean;
+  error?: { code: string; message: string; reconnect: boolean };
+  accounts: PlaidAccount[];
+  /** Only on a `transactions` answer. */
+  /** `history` is Plaid's transactions_update_status: HISTORICAL_UPDATE_COMPLETE once older purchases have all arrived. */
+  transactions?: { added: PlaidTransaction[]; modified: PlaidTransaction[]; removed: string[]; cursor: string; history?: string };
+}
+
+/** One purchase or deposit, kept small because the page saves them. `amount` follows Plaid: positive is money out. */
+export interface PlaidTransaction {
+  id: string;
+  /** The account's Plaid id. */
+  account: string;
+  date: string;
+  amount: number;
+  /** The merchant when Plaid knows it, else the bank's own description. */
+  name: string;
+  /** Plaid's category, e.g. FOOD_AND_DRINK / FOOD_AND_DRINK_RESTAURANT. */
+  category?: string;
+  detail?: string;
+  pending?: boolean;
+}
+
+export type PlaidResult =
+  | { ok: true; op: PlaidRequest['op']; items: PlaidItemSummary[] }
+  | { ok: false; op: PlaidRequest['op']; code: string; message: string };
 
 /** How main asks a device for camera video. `send` is a JSON template that
  *  may hold `{{offer}}` and `{{target}}` but never `{{key}}`; the other three
@@ -326,6 +403,8 @@ export interface PagesBridge {
   deleteSavedKey?: (service: string, address: string) => Promise<SavedPageKey[]>;
   /** The one door out of a page. Main checks it against the approvals on disk. */
   fetch?: (id: string, req: PageFetchRequest) => Promise<PageFetchResult>;
+  /** Plaid on the page's behalf (main/pages/plaid.ts). Desktop only. */
+  plaid?: (id: string, req: PlaidRequest) => Promise<PlaidResult>;
   /** The live socket (platform tooling). Absent where a window cannot hold one. */
   socketOpen?: (req: PageSocketCall & { url: string }) => Promise<PageSocketOpenResult>;
   socketSend?: (req: PageSocketCall & { socket: string; text: string }) => Promise<PageSocketCallResult>;

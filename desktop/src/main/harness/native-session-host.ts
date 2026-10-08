@@ -26,6 +26,7 @@ import { rebuildHistoryWithOrigins, restorePortableHistory } from './history-reb
 import { compactionSourceDigest } from './compaction-record';
 import { PAGE_TURNS } from '../transcript-page';
 import { readImageFromDisk } from './image-support';
+import type { ModelAttachment } from './busy-message-boundary';
 import { SessionStore, validatedDeltaReferences, type NativeSessionListEntry } from './session-store';
 import { PermissionBroker } from './permission-broker';
 import { AdminPasswordService, type AdminPasswordServiceLike } from './admin-password-service';
@@ -37,7 +38,7 @@ import { getShell } from './tools/bash';
 import { rulesForMode, sameRule, isCrossProjectRule, CROSS_PROJECT_SLUG, DESTRUCTIVE_DENY_LIST, type NativePermissionMode, type PermissionRule } from '../../shared/permission-types';
 import { assembleSystemPrompt, assembleSystemPromptParts, gitSnapshotAsync } from './prompt-assembly';
 import { prepareProjectInstructions, type ProjectInstructionFile } from './injection/project-instructions';
-import { resolveProfile, effectiveContextForModel, type CapabilityProfile, type ProfileProviderType } from './capability-profile';
+import { resolveProfile, effectiveContextForModel, IMAGE_LIMITS_DEFAULT, type CapabilityProfile, type ProfileProviderType, type ImageLimits } from './capability-profile';
 import { CORE_TOOLS } from './tools';
 import type { ToolServices, SpecialistReservation, SpecialistSpawnOpts, SpecialistManageOutcome, SpecialistResumeOutcome } from './tools/types';
 import { createSkillCatalog, SkillNotFound, type SkillCatalog } from './skills/skill-catalog';
@@ -102,7 +103,7 @@ const NOOP_REMEMBERED_STORE: RememberedRuleStore = {
 // input the user has no way to know is piling up unseen.
 /** One unit of work for the turn drain: the message text plus any composer
  *  attachments that must ride with it. */
-type SendUnit = { text: string; attachments: string[] };
+type SendUnit = { text: string; attachments: string[]; modelAttachments?: ModelAttachment[] };
 
 const SEND_QUEUE_LIMIT = 10;
 /** Resume could not read the saved conversation. No cause named: a lock, EMFILE and a bad disk look alike. */
@@ -327,8 +328,10 @@ interface LiveEntry {
   // shift() (see runTurns), so a removed entry can never be shifted out and sent.
   // `attachments` are absolute composer file paths; image ones become image
   // parts on the user message. Carried through the QUEUE too, or a message sent
-  // while a turn was in flight would silently lose its pictures.
-  queue: { id: string; text: string; attachments: string[]; ready?: boolean; /** when it was queued (ms), for the strip */ at?: number }[];
+  // while a turn was in flight would silently lose its pictures. The same holds
+  // for `modelAttachments` (the prepared copies the model reads, parallel to
+  // `attachments`): dropping it here would resend the over-limit original.
+  queue: { id: string; text: string; attachments: string[]; modelAttachments?: ModelAttachment[]; ready?: boolean; /** when it was queued (ms), for the strip */ at?: number }[];
   // True from dispatch until runTurns finishes the last queued turn. Host-owned
   // (HarnessSession's in-flight state is private); safe because Node is single-threaded.
   inFlight: boolean;
@@ -3071,7 +3074,7 @@ export class NativeSessionHost extends EventEmitter {
    * the instant the session exists, so the message the user typed is never
    * thrown away — which is the real harm; better wording alone still loses it.
    */
-  private startingSends = new Map<string, { id: string; text: string; attachments: string[]; at?: number }[]>();
+  private startingSends = new Map<string, { id: string; text: string; attachments: string[]; modelAttachments?: ModelAttachment[]; at?: number }[]>();
 
   /** Mark an id as being built. Called at the TOP of create() and resume(), so
    *  the window a pre-live send can fall into is covered from its first tick. */
@@ -3082,7 +3085,7 @@ export class NativeSessionHost extends EventEmitter {
   /** Stop holding sends for an id, returning whatever was held. Called by wire()
    *  on success, and by create()/resume() when they give up — a message held for
    *  a session that never came up must not sit in memory forever. */
-  private endStarting(sessionId: string): { id: string; text: string; attachments: string[]; at?: number }[] {
+  private endStarting(sessionId: string): { id: string; text: string; attachments: string[]; modelAttachments?: ModelAttachment[]; at?: number }[] {
     const held = this.startingSends.get(sessionId) ?? [];
     this.startingSends.delete(sessionId);
     return held;
@@ -3252,8 +3255,11 @@ export class NativeSessionHost extends EventEmitter {
     // WHY: the portable record also needs pre-reopen event references even when
     // there is no private continuation sidecar to restore or publish.
     this.store.hydrateReferences(sessionId, persisted);
-    const rebuilt = rebuildHistoryWithOrigins(persisted, readImageFromDisk);
-    const portable = restorePortableHistory(persisted, readImageFromDisk,
+    // WHY the closure: the pixel gate is the SESSION's provider limits, and the
+    // reader is the one place every resume path agrees on what is too big.
+    const readImage = (p: string) => readImageFromDisk(p, session.profileSnapshot.imageLimits);
+    const rebuilt = rebuildHistoryWithOrigins(persisted, readImage);
+    const portable = restorePortableHistory(persisted, readImage,
       reason => this.logContinuation(sessionId, `portable-${reason}`, 'restore'));
     if (portable) this.restoredCompactionGeneration.set(session, portable.generation);
     if (store) {
@@ -3264,6 +3270,9 @@ export class NativeSessionHost extends EventEmitter {
         const restored = await store.restore({
           sessionId, transcriptPath: this.store.transcriptPath(sessionId, cwd),
           binding: identity, assemblyDigest: session.assemblyDigest(),
+          // WHY: the checkpoint re-reads ORIGINAL picture files; an over-limit one
+          // must fail the restore (image-oversized) so the gated rebuild above wins.
+          imageLimits: session.profileSnapshot.imageLimits,
         });
         if (restored.ok) {
           // WHY: old summary sidecars may cite a retired identical message.
@@ -3361,7 +3370,7 @@ export class NativeSessionHost extends EventEmitter {
     if (held.length > 0) {
       const [first, ...rest] = held;
       entry.queue.push(...rest);
-      this.send(sessionId, first.text, first.attachments);
+      this.send(sessionId, first.text, first.attachments, first.modelAttachments);
       this.announceQueue(sessionId); // the first one is no longer waiting
     }
   }
@@ -4091,7 +4100,10 @@ export class NativeSessionHost extends EventEmitter {
    *  re-entrancy (a second send while a turn is in flight) — the host never
    *  calls it re-entrantly (inFlight gates that), so the only remaining throw
    *  surface is a provider-factory rejection, which runTurns catches. */
-  send(sessionId: string, text: string, attachments: string[] = []): NativeSendResult {
+  send(sessionId: string, text: string, attachments: string[] = [], modelAttachments?: ModelAttachment[]): NativeSendResult {
+    // WHY modelAttachments rides every path below (held, queued, dispatched):
+    // it is what the model reads — a prepared copy of an over-limit picture —
+    // and any path that dropped it would resend the original the provider refuses.
     const entry = this.live.get(sessionId);
     if (!entry) {
       // Not live YET is not the same as not live any more. A session still being
@@ -4103,7 +4115,7 @@ export class NativeSessionHost extends EventEmitter {
       if (held) {
         if (held.length >= SEND_QUEUE_LIMIT) return { status: 'failed', reason: 'starting' };
         const queueId = randomUUID();
-        held.push({ id: queueId, text, attachments, at: Date.now() });
+        held.push({ id: queueId, text, attachments, ...(modelAttachments ? { modelAttachments } : {}), at: Date.now() });
         this.announceQueue(sessionId);
         return { status: 'queued', queueId };
       }
@@ -4123,7 +4135,7 @@ export class NativeSessionHost extends EventEmitter {
       const queueId = randomUUID();
       // WHY: both the host drainer and a future in-turn claimant must leave this
       // head untouched until the IPC acknowledgement has had a macrotask to flush.
-      const queued = { id: queueId, text, attachments, ready: false, at: Date.now() };
+      const queued = { id: queueId, text, attachments, ...(modelAttachments ? { modelAttachments } : {}), ready: false, at: Date.now() };
       entry.queue.push(queued);
       this.announceQueue(sessionId); // every screen shows it, not only the one that sent it (R5-4a)
       setImmediate(() => {
@@ -4148,9 +4160,15 @@ export class NativeSessionHost extends EventEmitter {
     // its send() so this promise never rejects — .then(resolve, resolve) is
     // belt-and-suspenders against a future throw path.
     entry.running = new Promise<void>((resolve) => {
-      setImmediate(() => { void this.runTurns(sessionId, entry, { text, attachments }).then(resolve, resolve); });
+      setImmediate(() => { void this.runTurns(sessionId, entry, { text, attachments, modelAttachments }).then(resolve, resolve); });
     });
     return { status: 'sent' };
+  }
+
+  /** The live session's picture limits, for the send handler's preparation step.
+   *  A session still starting gets the conservative default. */
+  imageLimitsFor(sessionId: string): ImageLimits {
+    return this.live.get(sessionId)?.session.profileSnapshot.imageLimits ?? IMAGE_LIMITS_DEFAULT;
   }
 
   /** Cancel/edit a queued-but-not-yet-sent message (Task 11). Sync findIndex +
@@ -4208,7 +4226,7 @@ export class NativeSessionHost extends EventEmitter {
   /** WHY: only the live root driver may remove an acknowledged FIFO head.
    * No awaits between checking generation/readiness/quiesce and the shift. */
   private takeReadyBusyMessage(sessionId: string, session: HarnessSession):
-    { id: string; text: string; attachments: string[]; restore: () => void } | undefined {
+    { id: string; text: string; attachments: string[]; modelAttachments?: ModelAttachment[]; restore: () => void } | undefined {
     const entry = this.live.get(sessionId);
     if (!entry || entry.session !== session || entry.parentSessionId || !entry.inFlight ||
         entry.quiescing || entry.compacting || entry.queue[0]?.ready === false) return;
@@ -4261,7 +4279,7 @@ export class NativeSessionHost extends EventEmitter {
           }
           try {
             if (typeof next === 'function') await next();
-            else await entry.session.send(next.text, next.attachments);
+            else await entry.session.send(next.text, next.attachments, next.modelAttachments);
           } catch (err) {
             log('ERROR', 'NativeSessionHost', 'send failed', { sessionId, error: String(err) });
           }

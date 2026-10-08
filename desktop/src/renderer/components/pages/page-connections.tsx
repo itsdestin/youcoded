@@ -14,6 +14,7 @@
 //     what a service already received.
 import React, { useState } from 'react';
 import type { PageConnection, PageConnectionStatus, PageSummary, PagesBridge } from '../../../shared/pages-types';
+import { PLAID_SERVICE, plaidAddress } from '../../../shared/pages-types';
 import { isRemoteMode } from '../../platform';
 import { isWorkbenchMode } from '../../workbench-mode';
 import { Button, ErrorState, TextInput } from '../ui';
@@ -79,6 +80,12 @@ export function describeConnection(c: PageConnection): { what: string; limit: st
         ? { what: `Look things up on your ${c.service}${at}${using}.`, limit: `Cannot change anything there. ${only}` }
         : { what: `Look up and change things on your ${c.service}${at}${using}.`, limit: c.needsKey ? `It can do whatever that key allows. ${only}` : only };
     }
+    // Finance dashboard (2026-10-05). Practice mode says so plainly, so nobody
+    // thinks their real bank is reachable from a sandbox page.
+    case 'plaid':
+      return c.environment === 'sandbox'
+        ? { what: "See Plaid's made-up practice banks, using your Plaid keys.", limit: 'Nothing real is reached.' }
+        : { what: 'See balances, credit limits and due dates from banks you connect through Plaid, using your Plaid keys.', limit: 'Cannot move money. Each bank is added only when you sign in to it in your browser, and you can remove it any time.' };
   }
 }
 
@@ -197,10 +204,26 @@ function ConnectionLine({ c, children, small }: { c: PageConnectionStatus; child
 /** How to find a key: the page's author may supply the steps (they travel with
  *  the page); otherwise a general pointer. Shown as the author's words, not the
  *  app's, because the app cannot vouch for them. */
-type KeyedLine = PageConnectionStatus & { kind: 'key' | 'device' };
+type KeyedLine = (PageConnectionStatus & { kind: 'key' | 'device' })
+  // A Plaid line is keyed like the rest, under the service and address its
+  // saved key lives at (pages-types plaidAddress), so the saved-key offer and
+  // the storage note read the same way for it.
+  | (PageConnectionStatus & { kind: 'plaid'; service: string; address: string });
+
+function plaidKeyed(c: PageConnectionStatus & { kind: 'plaid' }): KeyedLine {
+  return { ...c, service: PLAID_SERVICE, address: plaidAddress(c.environment) };
+}
+
+/** Plaid's own dashboard page where both keys are shown. */
+const PLAID_KEYS_PAGE = 'https://dashboard.plaid.com/developers/keys';
+const PLAID_KEY_STEPS = (env: string) => [
+  'Sign in at dashboard.plaid.com (making an account is free).',
+  'Open Developers, then Keys.',
+  `Copy your client ID and your ${env === 'sandbox' ? 'Sandbox' : 'Production'} secret into the two boxes below.`,
+];
 
 function KeyHelp({ c }: { c: KeyedLine }) {
-  const steps = c.keyHelp?.steps ?? [];
+  const steps = c.keyHelp?.steps ?? (c.kind === 'plaid' ? PLAID_KEY_STEPS(c.environment) : []);
   // Home-device deck, S-key-and-control: a device that names where its keys
   // are made gets a button straight there, on the address the person allowed,
   // so nobody has to find a settings screen inside Home Assistant by hand.
@@ -215,6 +238,12 @@ function KeyHelp({ c }: { c: KeyedLine }) {
         onClick={() => { void window.claude.shell.openExternal(`http://${c.address}${c.keyPage}`); }}
       >
         Open {c.service}
+      </Button>
+    </div>
+  ) : c.kind === 'plaid' ? (
+    <div>
+      <Button variant="secondary" className="w-full" data-open-key-page onClick={() => { void window.claude.shell.openExternal(PLAID_KEYS_PAGE); }}>
+        Open Plaid's dashboard
       </Button>
     </div>
   ) : null;
@@ -288,6 +317,13 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
   const [step, setStep] = useState<'what' | 'keys'>(() =>
     isWorkbenchMode() && new URLSearchParams(location.search).get('pagesStep') === 'keys' ? 'keys' : 'what');
   const [keys, setKeys] = useState<Record<string, string>>({});
+  // Plaid takes two values; they are joined into the one saved key here.
+  const [plaidParts, setPlaidParts] = useState<Record<string, { clientId: string; secret: string }>>({});
+  const setPlaidPart = (id: string, part: 'clientId' | 'secret', v: string) => setPlaidParts((m) => {
+    const next = { ...(m[id] ?? { clientId: '', secret: '' }), [part]: v };
+    setKeys((k) => ({ ...k, [id]: next.clientId.trim() && next.secret.trim() ? JSON.stringify({ clientId: next.clientId.trim(), secret: next.secret.trim() }) : '' }));
+    return { ...m, [id]: next };
+  });
   const [differentKey, setDifferentKey] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
   // Allowing can fail where nothing is wrong with the page: a computer with no
@@ -312,7 +348,8 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
   const shown = asking.map(asTyped);
   const addressesOk = shown.every((c) => c.kind !== 'device' || cleanDeviceAddress(addresses[c.id]) !== null);
 
-  const keyLines = shown.filter((c): c is KeyedLine => c.kind === 'key' || (c.kind === 'device' && c.needsKey));
+  const keyLines: KeyedLine[] = shown.flatMap((c): KeyedLine[] =>
+    c.kind === 'key' || (c.kind === 'device' && c.needsKey) ? [c as KeyedLine] : c.kind === 'plaid' ? [plaidKeyed(c)] : []);
   // A saved key is kept per service AND address, so it is only offered while
   // the device is still at the address it was saved for.
   const suggested = (id: string) => {
@@ -375,6 +412,26 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
         <div key={c.id} className="flex flex-col gap-3" data-page-key-step={c.service}>
           {toType.length > 1 && <div className="text-sm font-medium text-fg">{c.service}</div>}
           <KeyHelp c={c} />
+          {c.kind === 'plaid' ? (<>
+            <TextInput
+              autoComplete="off"
+              spellCheck={false}
+              aria-label="Your Plaid client ID"
+              placeholder="Client ID"
+              value={plaidParts[c.id]?.clientId ?? ''}
+              onChange={(e) => setPlaidPart(c.id, 'clientId', e.target.value)}
+              className="select-text"
+            />
+            <TextInput
+              type="password"
+              autoComplete="off"
+              aria-label={`Your Plaid ${c.environment === 'sandbox' ? 'Sandbox' : 'Production'} secret`}
+              placeholder={`${c.environment === 'sandbox' ? 'Sandbox' : 'Production'} secret`}
+              value={plaidParts[c.id]?.secret ?? ''}
+              onChange={(e) => setPlaidPart(c.id, 'secret', e.target.value)}
+              className="select-text"
+            />
+          </>) : (
           <TextInput
             type="password"
             autoComplete="off"
@@ -384,6 +441,7 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
             onChange={(e) => setKeys((m) => ({ ...m, [c.id]: e.target.value }))}
             className="select-text"
           />
+          )}
         </div>
       ))}
       {/* Review round 2, D-2: "page never sees it" read as nonsense to someone
@@ -425,16 +483,19 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
             {c.kind === 'device' && (
               <DeviceAddressField c={c} value={addresses[c.id] ?? ''} onChange={(v) => setAddresses((m) => ({ ...m, [c.id]: v }))} />
             )}
-            {(c.kind === 'key' || c.kind === 'device') && savedHere(c) && (
-              <div className="flex items-center gap-2 text-xs text-fg-muted" data-saved-key-offer>
-                <span>{differentKey[c.id] ? `You'll paste a different ${c.service} key next.` : `Uses your saved ${c.service} key.`}</span>
-                {here && (
-                  <Button variant="secondary" size="sm" onClick={() => setDifferentKey((m) => ({ ...m, [c.id]: !m[c.id] }))}>
-                    {differentKey[c.id] ? 'Use the saved key' : 'Use a different key'}
-                  </Button>
-                )}
-              </div>
-            )}
+            {(() => {
+              const k = keyLines.find((x) => x.id === c.id);
+              return k && savedHere(k) ? (
+                <div className="flex items-center gap-2 text-xs text-fg-muted" data-saved-key-offer>
+                  <span>{differentKey[c.id] ? `You'll paste a different ${k.service} key next.` : `Uses your saved ${k.service} key.`}</span>
+                  {here && (
+                    <Button variant="secondary" size="sm" onClick={() => setDifferentKey((m) => ({ ...m, [c.id]: !m[c.id] }))}>
+                      {differentKey[c.id] ? 'Use the saved key' : 'Use a different key'}
+                    </Button>
+                  )}
+                </div>
+              ) : null;
+            })()}
           </ConnectionLine>
         ))}
       </div>

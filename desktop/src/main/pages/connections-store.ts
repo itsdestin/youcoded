@@ -98,7 +98,9 @@ export interface ConnectionsSnapshot {
 export class PageConnectionsStore {
   private readonly file: string;
 
-  constructor(userDataDir: string, private readonly secrets: SecretsStore) {
+  // WHY public: the Plaid bank list (plaid.ts) lives beside this file under the same keychain, so the pages
+  // service builds it from these two rather than threading two more arguments through ipc-handlers.
+  constructor(readonly userDataDir: string, readonly secrets: SecretsStore) {
     this.file = path.join(userDataDir, CONNECTIONS_FILE);
   }
 

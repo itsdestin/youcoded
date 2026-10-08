@@ -29,6 +29,8 @@ import { GrepTool, resolveRgPath } from '../src/main/harness/tools/grep';
 import { TodoWriteTool } from '../src/main/harness/tools/todo-write';
 import { shellCwdMissHint, workspaceRootMissHint } from '../src/main/harness/tools/guards';
 import type { ToolContext } from '../src/main/harness/tools/types';
+import { pngHeader } from './helpers/image-fixtures';
+import { IMAGE_LIMITS_OPENAI } from '../src/main/harness/capability-profile';
 import { defineTool, SEARCH_TIMEOUT_MS } from '../src/main/harness/tools/registry';
 
 // Each test gets a fresh tmp sandbox + fresh ToolContext (readRegistry/todos maps),
@@ -265,6 +267,59 @@ describe('Read: image delivery', () => {
     // A refusal must never also promise the image (2026-08-11 review, Fix 5) —
     // the sibling refusal tests above pin this; this one didn't.
     expect(r.images).toBeUndefined();
+  });
+
+  it('promises the PREPARED file for an over-limit picture and discloses the downscale', async () => {
+    const p = path.join(dir, 'contact.png');
+    fs.writeFileSync(p, pngHeader(2904, 17528));
+    const small = path.join(dir, 'cache', 'abc-contact.png');
+    fs.mkdirSync(path.dirname(small)); fs.writeFileSync(small, pngHeader(1221, 7372));
+    const prepare = vi.fn(async () => ({ kind: 'prepared' as const, path: small, mediaType: 'image/png' as const, width: 2904, height: 17528, preparedWidth: 1221, preparedHeight: 7372 }));
+    const r = await ReadTool.execute({ file_path: p }, { ...makeCtx(dir), supportsVision: true, imageLimits: IMAGE_LIMITS_OPENAI, services: { images: { prepare, preparedPathFor: () => null } } });
+    expect(r.isError).toBeFalsy();
+    expect(prepare).toHaveBeenCalledWith(p, IMAGE_LIMITS_OPENAI);
+    expect(r.images).toEqual([small]);
+    expect(r.imageLabels).toEqual(['contact.png']);
+    expect(r.text).toBe(`Read image ${p} (2904×17528 px, shown downscaled to 1221×7372, 42% of original; small text may be unreadable — Read individual screenshots or crops for detail).`);
+  });
+
+  it('an in-budget picture is promised as-is with today’s text; prepare() is consulted once and says unchanged', async () => {
+    const p = path.join(dir, 'ok.png');
+    fs.writeFileSync(p, pngHeader(640, 480));
+    const prepare = vi.fn(async () => ({ kind: 'unchanged' as const, width: 640, height: 480 }));
+    const r = await ReadTool.execute({ file_path: p }, { ...makeCtx(dir), supportsVision: true, services: { images: { prepare, preparedPathFor: () => null } } });
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(r.images).toEqual([p]);
+    expect(r.text).toContain('Read image');
+    expect(r.text).toContain('image/png');
+  });
+
+  it('a refusal from the preparer is an honest Read rejection that promises nothing', async () => {
+    const p = path.join(dir, 'vast.png');
+    fs.writeFileSync(p, pngHeader(20000, 20000));
+    const reason = 'is 20000×20000 px — too large to downscale for the model (over 80 megapixels). Crop or shrink it with Bash (e.g. magick in.png -resize 4000x4000 out.png) and Read the copy.';
+    const prepare = vi.fn(async () => ({ kind: 'refused' as const, reason, width: 20000, height: 20000 }));
+    const r = await ReadTool.execute({ file_path: p }, { ...makeCtx(dir), supportsVision: true, services: { images: { prepare, preparedPathFor: () => null } } });
+    expect(r.isError).toBe(true);
+    expect(r.images).toBeUndefined();
+    expect(r.text).toBe(`Read rejected: ${p} ${reason}`);
+  });
+
+  it('with no preparer wired (tests, one-off contexts) the path is promised and the DRIVER’s gate decides', async () => {
+    const p = path.join(dir, 'contact2.png');
+    fs.writeFileSync(p, pngHeader(2904, 17528));
+    const r = await ReadTool.execute({ file_path: p }, { ...makeCtx(dir), supportsVision: true });
+    expect(r.images).toEqual([p]);
+  });
+
+  it('a model without vision gets the existing refusal and the preparer is never asked', async () => {
+    const p = path.join(dir, 'contact3.png');
+    fs.writeFileSync(p, pngHeader(2904, 17528));
+    const prepare = vi.fn(async () => ({ kind: 'unchanged' as const }));
+    const r = await ReadTool.execute({ file_path: p }, { ...makeCtx(dir), supportsVision: false, services: { images: { prepare, preparedPathFor: () => null } } });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain('cannot view images');
+    expect(prepare).not.toHaveBeenCalled();
   });
 
   it('advertises image reading only to vision models', () => {

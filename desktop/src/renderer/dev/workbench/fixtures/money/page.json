@@ -1,0 +1,32 @@
+{
+  "name": "Money",
+  "description": "Every account, card, loan and bill in one place: net worth, limits, and what is due next.",
+  "icon": "money",
+  "connections": [
+    {
+      "id": "bank",
+      "kind": "plaid",
+      "environment": "sandbox"
+    }
+  ],
+  "dataHelp": [
+    "Amounts are plain numbers in dollars (22100, not \"$22,100\"). Dates are \"YYYY-MM-DD\"; times are full ISO date-times.",
+    "accounts: a list. Each account is { id, source, kind, institution, name, balance, updatedAt } plus optional limit, apr, note, payment, left.",
+    "- id: unique text. For one added by hand use \"m\" followed by digits (e.g. \"m1791250000000\").",
+    "- source: \"manual\" for anything added by hand or by you; \"plaid\" for accounts the bank fills in.",
+    "- kind: \"checking\", \"savings\", \"investment\", \"asset\" (something owned: a car), \"credit\" (a credit card), \"loan\" (student, car, personal) or \"bnpl\" (a pay-later plan: Affirm, layaway).",
+    "- institution: the company's name, spelled the usual way (\"Earnest\", \"MOHELA\", \"Capital One\", \"American Express\", \"Affirm\"). For an asset, what it is (\"2019 Civic\").",
+    "- balance: always positive. For cards, loans and pay-later plans it is the amount owed; the page shows owed money in brackets itself.",
+    "- updatedAt: set it to the current date-time whenever you change a balance, or the page will say it needs updating.",
+    "- limit: a credit card's credit limit. apr: the interest rate as a percent number (5.2). note: a few words.",
+    "- payment: the next payment on a card, loan or plan, { amount, due, monthly: true }. A pay-later plan's payment also has every: \"week\", \"2weeks\" or \"month\", and the account has left (payments left); its balance is amount \u00d7 left.",
+    "- On an account with source \"plaid\" the bank shares no payment for some loans (auto loans): set payment with \"manual\": true and it is kept through refreshes; apr may be set too. Never change a plaid account's balance: it is refreshed from the bank.",
+    "bills: bills that are not an account (insurance, phone, subscriptions). Each is { id, provider, name, sub, category, amount, due, monthly, match }.",
+    "- id: \"b\" followed by digits. provider and name: the company (\"Netflix\"). sub: what it is (\"streaming\"). due: the next due date. monthly: true when it repeats every month.",
+    "- category: one of Housing, Utilities, Phone & internet, Insurance, Subscriptions, Transportation, Loans, Credit cards, Pay-later plans, Health, Other.",
+    "- match: merchant keys (lowercase, like \"netflix\") whose payments belong to this bill; payments are linked and bills marked paid from them automatically.",
+    "Marking a bill or payment paid: when monthly, move due forward one month, set lastPaid to today's date and add today to paidLog; otherwise set paid to today's date. A pay-later plan: subtract one from left and move due on by its every.",
+    "tx is the list of purchases the banks shared (i id, a account id, d date, m amount with money out positive, n merchant, c and k categories). Read it to answer spending questions; do not change it.",
+    "history, banks, institutions, txCursor, dismissed and checkedAt are written by the page itself: leave them alone. settings holds staleDays, warnPct, alertPct and browser."
+  ]
+}

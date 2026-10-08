@@ -1151,3 +1151,99 @@ cap is gone). `BashOutput` reads new output since the last look (or lists this c
   `null` ("at least N") and the hint names the log, which holds everything.
 
 Rule: `.claude/rules/harness-tools.md` → the "Background Bash" bullet.
+
+## Pictures: admission gate, shrink-once, enforcement, bounded recovery (2026-10-07)
+
+What broke: Read handed a 2,904×17,528 px contact sheet (6.8 MB, under the 10 MB byte cap) to a
+ChatGPT session; OpenAI rejected it — "requires 49868 patches after processing, exceeding the
+limit of 30000" — and because failed turns keep history, every later message resent it. Three
+resume paths re-read pictures by path, so nothing short of `/clear` recovered.
+
+- **Limits are provider-type facts** on the capability profile (`imageLimits`,
+  `capability-profile.ts`): OpenAI/ChatGPT `30,000` patches (the one verified number; its `8192`
+  edge is an explicit, unverified guess); everyone else a conservative `4096 px / 16,384`
+  placeholder. 32-px patches, rounded up per axis (`image-support.ts` `patchCount`).
+  <!-- verify: {"path": "youcoded/desktop/src/main/harness/capability-profile.ts", "contains": "IMAGE_LIMITS_OPENAI"} -->
+- **The ONE reader gates by header** (`readImageFromDisk(path, limits)`): dimensions parsed from
+  the bytes already read (PNG/JPEG/GIF/WebP), still one stat + one read. Over budget →
+  `[image not attached: <basename> is W×H px, above this model's image size limit]`, written
+  identically by the live driver, the reopen rebuild, the portable checkpoint and a collapse. The
+  private checkpoint refuses such an image (`image-oversized`) so the host falls back to the gated
+  rebuild; collapsed results and attachment notes are describable (`pruned.oversized`, `note`).
+- **Shrink once, as a real file, only when the limits fail** (`image-prepare.ts`;
+  `image-resize-service.ts` starts one `worker_threads` Worker per job — `image-resize-worker.ts`,
+  `pngjs`/`jpeg-js`, a box filter — and terminates it after; `nativeImage` is not available off the
+  main thread). Cache: `<userData>/image-cache/<hash>-<basename>.png|jpg`. The target is the
+  largest size under both limits with a 10% margin (the incident sheet → 1221×7372 on OpenAI).
+  Read prepares before it promises and discloses the downscale; `native:send` prepares composer
+  attachments (serialised per session) and the message persists `modelAttachments` beside
+  `attachments` (the UI keeps the original path). A prepared composer picture is DISCLOSED to the
+  model: `userAttachmentParts` appends `[image downscaled: <basename> was W×H px, shown at w×h px
+  (pct%); small text may be unreadable]` (`ImageNote` kind `downscaled`). The original's size rides
+  the `ModelAttachment` from `native:send` (the preparer already read that header, async) and is
+  persisted as `originalSizes`; the shown size comes from the bytes the reader already returned —
+  no new blocking read. Reopen (`history-rebuild.ts`) and the accepted-history store's `note`
+  descriptor reproduce the same sentence; events from before `originalSizes` reopen without it. Decode bound 80 MP; PNG first, JPEG only if still
+  over 10 MB. The service answers a typed result, and each refusal says its own cause: the worker
+  checks the first bytes and only GIF/WebP/junk is `undecodable` (declined with a convert hint); a
+  job past its time limit is `timeout` ("took longer than 15 s on this computer"); a worker crash,
+  a corrupt PNG/JPEG or jpeg-js's memory cap is `failed` ("the shrinking step failed"). A refused or
+  failed attachment gets a note, never silence. Measured at the incident size: ~1.9 s (flat pixels) to
+  ~3.1 s (noise) per resize. Memory: 951 MB / 1.56 GB were WHOLE-PROCESS RSS at job end, including
+  the smoke test's own synthetic 203 MB source bitmap — not the worker's share, which is roughly
+  0.6–1.2 GB. `RESIZE_JOB_TIMEOUT_MS` is the 15 s floor.
+  The built worker runs from inside `app.asar` with no unpacking (smoke-tested 2026-10-07).
+  <!-- verify: {"path": "youcoded/desktop/src/main/create-runtime.ts", "contains": "'image-cache'"} -->
+- **Enforcement** (`HarnessSession.enforceImageLimits`): the gate is re-applied to in-memory
+  history on every provider/profile change (`setBinding`) and before any compaction or summary
+  (`maybeCompact`, `compactNow`). The history rewrite itself lives in `harness/image-history.ts`.
+- **Recovery** (`providers/image-too-large.ts`, `collapseOversizedImages`): on that exact 400 —
+  accepted in `error.message`, `detail` or a top-level `message`; the live object was never
+  captured — with no output started, image parts over the reported limit collapse to the note,
+  the capture revision bumps, and the step is retried once. A second rejection surfaces the
+  provider's own words. **Count-disagreement fallback** (`image-history.ts`
+  `collapseLargestImageParts`): when the provider rejected but no part is over its limit by OUR
+  count (so the size-based pass changed nothing) and history holds a measurable picture, the
+  largest pictures by our count (ties: most recent first) collapse to the same oversized note,
+  with their real W×H, until `requiredPatches − removed ≤ limit`; then the same single retry.
+  Without it the picture was resent on every message. No picture in history → no retry.
+
+### Accepted limitations (declared, not bugs)
+
+- **The image cache is never swept.** Deleting it is safe: a missing derivative becomes a
+  "no longer available" / "could not be read" note on reopen.
+- **After a switch to stricter limits, a derivative that no longer fits is COLLAPSED to the note,
+  not re-prepared** — a fresh Read of the original prepares a copy for the new provider.
+- **A user-message picture collapsed in memory is labelled `image`** until a reopen relabels it by
+  basename (the rebuild knows the path).
+- **A picture whose preparation failed** is told to the model with the preparer's reason live; on
+  reopen the original is re-gated and gets the "above size limit" note instead.
+- **The live ChatGPT error object was never captured**: the classifier matches the sentence read
+  off a screenshot, in three envelopes.
+- **A non-vision session reopened after pictures** carries size/missing notes where the live
+  session had none.
+- **A phone can mark a picture message "unsure".** The phone's request times out at 30 s
+  (`remote-shim.ts` `REQUEST_TIMEOUT_MS`), and a worst-case preparation is two resize passes (PNG,
+  then JPEG) of up to 15 s each, serialised behind earlier sends. Nothing is resent automatically;
+  the message's echo clears the mark when it lands. Pressing "Send again" meanwhile sends a NEW
+  copy, so the message would arrive twice.
+- **No "preparing" indicator on the desktop.** After sending a huge picture the chat can sit silent
+  for up to ~30 s while it is shrunk; the reply then starts normally.
+- **The non-OpenAI default (`4096 px / 16,384` patches) is a conservative placeholder**, so 5K
+  screenshots and 48 MP photos are downscaled for providers that might accept them as they are.
+  The model is told (Read's text, the composer's "downscaled" note); the person is not.
+- **The count-disagreement fallback collapses by OUR count**: if the provider's count differs, the
+  picture it actually objected to may not be the largest one we measure, so a still-rejected retry
+  surfaces the provider's words (one retry only, as above). When the provider's reported count is
+  far above our total, the fallback may collapse every measurable picture in the conversation
+  before its single retry.
+- **One resize at the incident's size adds roughly 0.6–1.2 GB to the app's process** (the smoke
+  test's whole-process RSS of up to 1.56 GB included its own 203 MB source bitmap) — transient,
+  released when the worker terminates. Streaming decode is the candidate fix.
+
+Guards: `tests/image-support.test.ts`, `image-prepare.test.ts`, `image-resize.test.ts`,
+`image-too-large.test.ts`, the over-limit pictures suite in `harness-session-loop.test.ts`, the
+oversized cases in `accepted-history-store.test.ts`, `harness-history-rebuild.test.ts`,
+`harness-tools-core.test.ts`, `native-image-attachments.test.ts` and
+`native-session-host-continuation.test.ts`, and the attachment-preparation cases in
+`native-channels.test.ts`.

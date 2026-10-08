@@ -1,6 +1,6 @@
 // A page's one-shot socket exchange with its approved home device.
 //
-// Design: youcoded-dev/docs/active/specs/2026-10-01-device-live-connection.md
+// Design: youcoded-dev/docs/archive/specs/2026-10-01-device-live-connection.md
 //
 // WHY: some devices offer their settings only over a socket (Home Assistant
 // renames things and moves them between rooms that way, never over plain web

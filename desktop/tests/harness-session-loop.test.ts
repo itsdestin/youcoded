@@ -14,7 +14,10 @@ import { HarnessSession } from '../src/main/harness/harness-session';
 import { BashTool } from '../src/main/harness/tools/bash';
 import { settleAdminCapability, resetAdminCapabilityForTests } from '../src/main/harness/admin-capability';
 import { isContextOverflow } from '../src/main/providers/context-overflow';
-import { MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, MAX_ATTACHMENT_BYTES } from '../src/main/harness/image-support';
+import { MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, MAX_ATTACHMENT_BYTES, imageNote, readImageFromDisk } from '../src/main/harness/image-support';
+import { rebuildHistory } from '../src/main/harness/history-rebuild';
+import * as crypto from 'crypto';
+import { pngHeader, providerFileBytes } from './helpers/image-fixtures';
 import type { HarnessManifest } from '../src/shared/harness-manifest';
 import type { TranscriptEvent } from '../src/shared/types';
 import type { PermissionDecision } from '../src/shared/permission-types';
@@ -34,7 +37,7 @@ import { MockLanguageModelV4, simulateReadableStream } from 'ai/test';
 // compaction suite's own scaffolding rather than hand-rolling a second way to
 // force the summarize branch.
 import { HARNESS, makeOpts, fakeTool, makeSession, scriptModel, drainTurn, FAKE_SESSION_CWD } from './helpers/harness-fakes';
-import { CLOUD_DEFAULT } from '../src/main/harness/capability-profile';
+import { CLOUD_DEFAULT, resolveProfile, IMAGE_LIMITS_OPENAI } from '../src/main/harness/capability-profile';
 
 function collect(session: HarnessSession): TranscriptEvent[] {
   const events: TranscriptEvent[] = [];
@@ -2286,6 +2289,24 @@ describe('image tool-results', () => {
     expect(ev!.data.images).toEqual([imgPath]);
   });
 
+  it('live gate: a tiny file whose header claims 2904×17528 is refused by the driver with the basename note', async () => {
+    const dir = mkTmpDir();
+    const imgPath = path.join(dir, 'contact.png');
+    fs.writeFileSync(imgPath, pngHeader(2904, 17528));
+    const read = fakeTool('Read', { onExecute: () => ({ text: 'Read image', images: [imgPath] }) });
+    const model = scriptedModel([
+      stream(toolCallChunk('c1', 'Read', { file_path: imgPath }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'done'), finishChunk('stop')),
+    ]);
+    const session = new HarnessSession(makeOpts({ tools: [read], decide: async () => ALLOW,
+      profile: resolveProfile({ providerType: 'chatgpt', modelId: 'gpt-x', contextLength: null }) }), async () => model as any);
+    const events = collect(session);
+    await session.send('go');
+    const toolMsg = ((session as any).history as any[]).filter((m) => m.role === 'tool').pop();
+    expect(toolMsg.content[0].output).toEqual({ type: 'text', value: 'Read image\n' + imageNote({ kind: 'oversized', label: 'contact.png', width: 2904, height: 17528 }) });
+    expect(events.find((e) => e.type === 'tool-result')!.data.images).toBeUndefined();
+  });
+
   it('an unchanged re-fetch is deduped with a named note, no second copy', async () => {
     const dir = mkTmpDir();
     const imgPath = tmpImage(dir, 'x.png');
@@ -2307,6 +2328,25 @@ describe('image tool-results', () => {
     const secondToolMsg = toolMsgs[toolMsgs.length - 1];   // last tool message of turn 2
     expect(secondToolMsg.content[0].output.type).toBe('text');   // deduped → no second image, stays text-only
     expect(secondToolMsg.content[0].output.value).toContain('already visible earlier');
+  });
+
+  it('a prepared picture’s "already visible" note names the original file, never the hashed cache path', async () => {
+    const dir = mkTmpDir();
+    const cached = tmpImage(dir, 'a1b2c3d4e5f6a7b8-contact.png');   // a derivative's name in the image cache
+    const read = fakeTool('Read', { onExecute: () => ({ text: 'Read image', images: [cached], imageLabels: ['contact.png'] }) });
+    const model = scriptedModel([
+      stream(...textChunks('a', 'reading'), toolCallChunk('c1', 'Read', { file_path: '/x/contact.png' }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'done'), finishChunk('stop')),
+      stream(...textChunks('c', 'again'), toolCallChunk('c2', 'Read', { file_path: '/x/contact.png' }), finishChunk('tool-calls')),
+      stream(...textChunks('d', 'done again'), finishChunk('stop')),
+    ]);
+    const session = new HarnessSession(makeOpts({ tools: [read], decide: async () => ALLOW }), async () => model as any);
+    collect(session);
+    await session.send('go');
+    await session.send('go again');
+    const value = ((session as any).history as any[]).filter((m) => m.role === 'tool').pop().content[0].output.value;
+    expect(value).toBe('Read image\n[image not re-attached: contact.png is unchanged and already visible earlier in this conversation]');
+    expect(value).not.toContain(cached);
   });
 
   it('the per-turn image count budget skips with a named note', async () => {
@@ -3056,5 +3096,241 @@ describe('HarnessSession — the model factory always gets the session id as cac
     expect(await session.compactNow()).toEqual({ ok: true });
     expect(seen).toHaveLength(1);
     expect(seen[0].cacheKey).toBe('sess-xyz');
+  });
+});
+
+describe('HarnessSession keeps over-limit pictures out of model memory and recovers from the provider rejection', () => {
+  const PATCH_400 = () => Object.assign(new Error('rejected'), { statusCode: 400,
+    responseBody: JSON.stringify({ error: { message: 'The image you provided requires 49868 patches after processing, exceeding the limit of 30000.' } }) });
+  const huge = Buffer.concat([pngHeader(2904, 17528), Buffer.alloc(40)]);
+  const fine = pngHeader(640, 480);
+  const NOTE = imageNote({ kind: 'oversized', label: 'contact.png', width: 2904, height: 17528 });
+  /** A finished turn: the model asked Read for pictures and got two back — one over budget. */
+  const blockedHistory = () => ([
+    { role: 'user', content: 'look at the sheet' },
+    { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c0', toolName: 'Read', input: { file_path: '/tmp/contact.png' } }] },
+    { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c0', toolName: 'Read', output: { type: 'content', value: [
+      { type: 'text', text: 'Read images' },
+      { type: 'file', mediaType: 'image/png', data: { type: 'data', data: huge }, filename: 'contact.png' },
+      { type: 'file', mediaType: 'image/png', data: { type: 'data', data: fine }, filename: 'ok.png' },
+    ] } }] },
+    { role: 'assistant', content: 'I see them.' },
+  ] as any);
+  const chatgpt = () => resolveProfile({ providerType: 'chatgpt', modelId: 'gpt-x', contextLength: null });
+  /** Limits that ACCEPT the sheet: only the provider's rejection can trigger a collapse — the safety-net scenario (a wrong-high placeholder). */
+  const lax = () => ({ ...chatgpt(), imageLimits: { maxEdgePx: 100_000, maxPatches: 1_000_000 } });
+  const twoStep = (prompts: any[]) => {
+    const scripts = [stream({ type: 'error', error: PATCH_400() }), stream(...textChunks('a', 'done'), finishChunk('stop'))];
+    let index = 0;
+    return new MockLanguageModelV4({ doStream: async (o: any) => { prompts.push(o); return { stream: simulateReadableStream({ chunks: scripts[index++] ?? stream(finishChunk('stop')) }) }; } });
+  };
+
+  it('safety net: collapses the offending image to the note, retries ONCE, the turn completes, no tool rerun', async () => {
+    const read = fakeTool('Read');
+    const prompts: any[] = [];
+    const session = new HarnessSession(makeOpts({ tools: [read], decide: async () => ALLOW, contextLength: 128_000, profile: lax() }), async () => twoStep(prompts) as any);
+    session.seedHistory(blockedHistory());
+    const events = collect(session);
+    await session.send('uh');
+    expect(prompts).toHaveLength(2);
+    expect((read as any).calls).toHaveLength(0);
+    expect(events.some(e => e.type === 'turn-complete')).toBe(true);
+    expect(events.some(e => e.type === 'session-error')).toBe(false);
+    const out = (session.acceptedHistory().messages.find((m: any) => m.role === 'tool') as any).content[0].output;
+    expect(out).toEqual({ type: 'content', value: [
+      { type: 'text', text: 'Read images\n' + NOTE },
+      { type: 'file', mediaType: 'image/png', data: { type: 'data', data: fine }, filename: 'ok.png' },
+    ] });
+    expect(JSON.stringify(prompts[1].prompt)).toContain("above this model's image size limit");
+  });
+
+  it('collapse output equals rebuildHistory output for the same persisted tool events (one label, one shape)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-collapse-'));
+    const contact = path.join(dir, 'contact.png'); fs.writeFileSync(contact, huge);
+    const ok = path.join(dir, 'ok.png'); fs.writeFileSync(ok, fine);
+    const ev = (type: string, data: any) => ({ type, sessionId: 's', uuid: crypto.randomUUID(), timestamp: 1, data }) as any;
+    // Tool events only: a collapsed bare user part is labelled 'image' (no path in memory), the rebuild knows the basename.
+    const events = [
+      ev('user-message', { text: 'see' }),
+      ev('tool-use', { toolUseId: 't1', toolName: 'Read', toolInput: { file_path: contact } }),
+      ev('tool-result', { toolUseId: 't1', toolName: 'Read', toolResult: 'Read images', images: [contact, ok] }),
+      ev('turn-complete', {}),
+    ];
+    const permissive = rebuildHistory(events, (p) => readImageFromDisk(p));             // pre-gate shape: both pictures in
+    const gated = rebuildHistory(events, (p) => readImageFromDisk(p, IMAGE_LIMITS_OPENAI));
+    const session = new HarnessSession(makeOpts({ tools: [], profile: chatgpt() }), async () => scriptedModel([]) as any);
+    session.seedHistory(permissive);
+    expect((session as any).collapseOversizedImages(IMAGE_LIMITS_OPENAI)).toBe(true);
+    expect((session as any).history).toEqual(gated);
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+  });
+
+  it('a provider switch to stricter limits collapses history before the next request', async () => {
+    const prompts: any[] = [];
+    const model = new MockLanguageModelV4({ doStream: async (o: any) => { prompts.push(o); return { stream: simulateReadableStream({ chunks: stream(...textChunks('a', 'ok'), finishChunk('stop')) }) }; } });
+    const session = new HarnessSession(makeOpts({ tools: [], contextLength: 128_000, profile: lax() }), async () => model as any);
+    session.seedHistory(blockedHistory());
+    const before = session.acceptedHistory().revision;
+    session.setBinding({ providerId: 'chatgpt', modelId: 'gpt-y' }, null, chatgpt());
+    expect(session.acceptedHistory().revision).toBeGreaterThan(before);
+    await session.send('now?');
+    expect(JSON.stringify(prompts[0].prompt)).toContain(NOTE);
+    expect(JSON.stringify(prompts[0].prompt)).not.toContain(huge.toString('base64'));
+  });
+
+  it('a summary never receives an over-limit picture: compaction enforces the limits first', async () => {
+    const prompts: any[] = [];
+    const model = new MockLanguageModelV4({ doStream: async (o: any) => { prompts.push(o); return { stream: simulateReadableStream({ chunks: stream(...textChunks('s', 'summary'), finishChunk('stop')) }) }; } });
+    const session = new HarnessSession(makeOpts({ tools: [], contextLength: 128_000, profile: chatgpt() }), async () => model as any);
+    // Seeded past the gate on purpose; a later exchange puts the picture's group in the retired span.
+    session.seedHistory([...blockedHistory(), { role: 'user', content: 'and now?' }, { role: 'assistant', content: 'later' }] as any);
+    await session.compactNow();
+    expect(prompts.length).toBeGreaterThan(0);
+    const fileBytes = (p: any) => p.prompt.flatMap((m: any) => Array.isArray(m.content) ? m.content : [])
+      .flatMap((c: any) => c.type === 'tool-result' && c.output?.type === 'content' ? c.output.value : [c])
+      .filter((c: any) => c.type === 'file').map(providerFileBytes);
+    for (const p of prompts) {
+      expect(fileBytes(p).some((b: Buffer) => b.equals(huge))).toBe(false);
+      expect(JSON.stringify(p.prompt)).not.toContain(huge.toString('base64'));
+    }
+    // The summariser saw the note in the picture's place, and the kept history holds no over-limit picture either.
+    expect(prompts.some((p) => JSON.stringify(p.prompt).includes(NOTE))).toBe(true);
+  });
+
+  it('a compaction refused because a turn is in flight leaves history and its revision untouched', async () => {
+    const session = new HarnessSession(makeOpts({ tools: [], contextLength: 128_000, profile: chatgpt() }), async () => scriptedModel([]) as any);
+    session.seedHistory(blockedHistory());
+    const history = (session as any).history;
+    const revision = session.acceptedHistory().revision;
+    (session as any).abort = new AbortController();   // the state a running turn holds
+    expect(await session.compactNow()).toEqual({ ok: false, reason: 'turn-in-flight' });
+    expect((session as any).history).toBe(history);
+    expect(session.acceptedHistory().revision).toBe(revision);
+    (session as any).abort = null;
+  });
+
+  it('an oversized composer attachment becomes a trailing note on recovery; the text stays', async () => {
+    const prompts: any[] = [];
+    const session = new HarnessSession(makeOpts({ tools: [], contextLength: 128_000, profile: lax() }), async () => twoStep(prompts) as any);
+    session.seedHistory([{ role: 'user', content: [{ type: 'text', text: '/tmp/huge.png what' }, { type: 'file', mediaType: 'image/png', data: huge }] }, { role: 'assistant', content: 'hm' }] as any);
+    await session.send('again');
+    expect(prompts).toHaveLength(2);
+    expect(session.acceptedHistory().messages[0]).toEqual({ role: 'user', content: [{ type: 'text', text: '/tmp/huge.png what' }, { type: 'text', text: imageNote({ kind: 'oversized', label: 'image', width: 2904, height: 17528 }) }] });
+  });
+
+  it('does not retry when nothing in history is over the reported limit — the provider error surfaces unchanged', async () => {
+    let calls = 0;
+    const model = new MockLanguageModelV4({ doStream: async () => { calls++; return { stream: simulateReadableStream({ chunks: stream({ type: 'error', error: PATCH_400() }) }) }; } });
+    const session = new HarnessSession(makeOpts({ tools: [], contextLength: 128_000, profile: chatgpt() }), async () => model as any);
+    const events = collect(session);
+    await session.send('plain text');
+    expect(calls).toBe(1);
+    expect(events.find(e => e.type === 'session-error')!.data.text).toContain('requires 49868 patches');
+  });
+
+  describe('when the provider counts patches differently from us', () => {
+    const rejectAs = (required: number, limit: number) => Object.assign(new Error('rejected'), { statusCode: 400,
+      responseBody: JSON.stringify({ error: { message: `The image you provided requires ${required} patches after processing, exceeding the limit of ${limit}.` } }) });
+    const thenOk = (prompts: any[], err: Error) => {
+      const scripts = [stream({ type: 'error', error: err }), stream(...textChunks('a', 'done'), finishChunk('stop'))];
+      let index = 0;
+      return new MockLanguageModelV4({ doStream: async (o: any) => { prompts.push(o); return { stream: simulateReadableStream({ chunks: scripts[index++] ?? stream(finishChunk('stop')) }) }; } });
+    };
+    const userPic = (text: string, data: Buffer) => ({ role: 'user', content: [{ type: 'text', text }, { type: 'file', mediaType: 'image/png', data }] });
+    const note = (w: number, h: number) => ({ type: 'text', text: imageNote({ kind: 'oversized', label: 'image', width: w, height: h }) });
+
+    it('a picture under our count but over the provider’s is collapsed to the note and the step is retried once', async () => {
+      const prompts: any[] = [];
+      // 640×480 is 300 patches by our count, far under 30,000 — only the provider says otherwise.
+      const session = new HarnessSession(makeOpts({ tools: [], contextLength: 128_000, profile: chatgpt() }), async () => thenOk(prompts, rejectAs(49_868, 30_000)) as any);
+      session.seedHistory([userPic('pic', fine), { role: 'assistant', content: 'seen' }] as any);
+      const events = collect(session);
+      await session.send('again');
+      expect(prompts).toHaveLength(2);
+      expect(events.some(e => e.type === 'session-error')).toBe(false);
+      expect(session.acceptedHistory().messages[0]).toEqual({ role: 'user', content: [{ type: 'text', text: 'pic' }, note(640, 480)] });
+      expect(JSON.stringify(prompts[1].prompt)).not.toContain(fine.toString('base64'));
+    });
+
+    it('only as many pictures as the provider’s numbers need are collapsed, the largest first', async () => {
+      const prompts: any[] = [];
+      const small = pngHeader(640, 480);     // 300 patches
+      const big = pngHeader(1280, 960);      // 1,200 patches: removing it alone covers the 1,000 over
+      const session = new HarnessSession(makeOpts({ tools: [], contextLength: 128_000, profile: chatgpt() }), async () => thenOk(prompts, rejectAs(31_000, 30_000)) as any);
+      session.seedHistory([userPic('big', big), { role: 'assistant', content: 'a' }, userPic('small', small), { role: 'assistant', content: 'b' }] as any);
+      await session.send('again');
+      expect(prompts).toHaveLength(2);
+      const [first, , second] = session.acceptedHistory().messages as any[];
+      expect(first.content).toEqual([{ type: 'text', text: 'big' }, note(1280, 960)]);
+      expect(second.content[1]).toMatchObject({ type: 'file', data: small });
+    });
+
+    it('between equal pictures the most recent is collapsed first', async () => {
+      const prompts: any[] = [];
+      const older = pngHeader(640, 480); const newer = pngHeader(640, 480);
+      const session = new HarnessSession(makeOpts({ tools: [], contextLength: 128_000, profile: chatgpt() }), async () => thenOk(prompts, rejectAs(30_100, 30_000)) as any);
+      session.seedHistory([userPic('older', older), { role: 'assistant', content: 'a' }, userPic('newer', newer), { role: 'assistant', content: 'b' }] as any);
+      await session.send('again');
+      const [first, , second] = session.acceptedHistory().messages as any[];
+      expect(first.content[1]).toMatchObject({ type: 'file', data: older });
+      expect(second.content).toEqual([{ type: 'text', text: 'newer' }, note(640, 480)]);
+    });
+
+    it('with no picture in history there is nothing to collapse: no retry, the provider error surfaces', async () => {
+      let calls = 0;
+      const model = new MockLanguageModelV4({ doStream: async () => { calls++; return { stream: simulateReadableStream({ chunks: stream({ type: 'error', error: rejectAs(49_868, 30_000) }) }) }; } });
+      const session = new HarnessSession(makeOpts({ tools: [], contextLength: 128_000, profile: chatgpt() }), async () => model as any);
+      session.seedHistory([{ role: 'user', content: 'words only' }, { role: 'assistant', content: 'ok' }] as any);
+      const events = collect(session);
+      await session.send('more words');
+      expect(calls).toBe(1);
+      expect(events.find(e => e.type === 'session-error')!.data.text).toContain('requires 49868 patches');
+    });
+  });
+
+  it('retries at most once: a second rejection surfaces', async () => {
+    let calls = 0;
+    const model = new MockLanguageModelV4({ doStream: async () => { calls++; return { stream: simulateReadableStream({ chunks: stream({ type: 'error', error: PATCH_400() }) }) }; } });
+    const session = new HarnessSession(makeOpts({ tools: [], contextLength: 128_000, profile: lax() }), async () => model as any);
+    session.seedHistory(blockedHistory());
+    const events = collect(session);
+    await session.send('uh');
+    expect(calls).toBe(2);
+    expect(events.some(e => e.type === 'session-error')).toBe(true);
+  });
+
+  it('never retries after output began', async () => {
+    let calls = 0;
+    const model = new MockLanguageModelV4({ doStream: async () => { calls++; return { stream: simulateReadableStream({ chunks: stream(...textChunks('p', 'partial'), { type: 'error', error: PATCH_400() }) }) }; } });
+    const session = new HarnessSession(makeOpts({ tools: [], contextLength: 128_000, profile: lax() }), async () => model as any);
+    session.seedHistory(blockedHistory());
+    await session.send('uh');
+    expect(calls).toBe(1);
+  });
+
+  it('a no-op enforce keeps history identity, the capture revision and the shown-image cache', () => {
+    const session = new HarnessSession(makeOpts({ tools: [], contextLength: 128_000, profile: lax() }), async () => scriptedModel([]) as any);
+    session.seedHistory([...blockedHistory(), { role: 'user', content: [{ type: 'text', text: 'pic' }, { type: 'file', mediaType: 'image/png', data: fine }] }] as any);
+    (session as any).shownImages.set('/tmp/ok.png', { mtime: 1, toolCallId: 'c0' });
+    const history = (session as any).history;
+    const revision = session.acceptedHistory().revision;
+    // Same binding, a profile whose limits everything already fits: nothing may move.
+    session.setBinding((session as any).binding, undefined, lax());
+    expect((session as any).enforceImageLimits()).toBe(false);
+    expect((session as any).history).toBe(history);
+    expect(session.acceptedHistory().revision).toBe(revision);
+    expect((session as any).shownImages.size).toBe(1);
+  });
+
+  it('prepared bytes are stable across requests: the same file part object is sent twice', async () => {
+    const prompts: any[] = [];
+    const model = new MockLanguageModelV4({ doStream: async (o: any) => { prompts.push(o); return { stream: simulateReadableStream({ chunks: stream(...textChunks('a', 'ok'), finishChunk('stop')) }) }; } });
+    const session = new HarnessSession(makeOpts({ tools: [], contextLength: 128_000, profile: chatgpt() }), async () => model as any);
+    session.seedHistory([{ role: 'user', content: [{ type: 'text', text: 'pic' }, { type: 'file', mediaType: 'image/png', data: fine }] }, { role: 'assistant', content: 'ok' }] as any);
+    const first = (session as any).history[0];
+    await session.send('one'); await session.send('two');
+    expect((session as any).history[0]).toBe(first);            // same message object, never rebuilt
+    expect((session as any).history[0].content[1].data).toBe(fine);   // never re-encoded, never copied
+    expect(prompts).toHaveLength(2);
   });
 });

@@ -28,7 +28,7 @@ import { MAX_PAGE_DATA_BYTES, MAX_PINNED_PAGES, OFFICE_PAGE_ID, OFFICE_PAGE_SUMM
 
 export const PAGES_DIR = 'Pages';
 const PINS_DIR = '.pins';
-const ICONS: ReadonlySet<string> = new Set(['page', 'timer', 'notes', 'paint', 'chart', 'calendar', 'list', 'game']);
+const ICONS: ReadonlySet<string> = new Set(['page', 'timer', 'notes', 'paint', 'chart', 'calendar', 'list', 'game', 'money']);
 // "<base> (from <device>, <date>).<ext>" — the transport's conflict-copy shape
 // (sync-spaces/guards.ts), matched for .json AND .html; store-core's matcher is
 // .json-only.

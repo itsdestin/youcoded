@@ -16,6 +16,7 @@
 // change the address and the old approval no longer matches, so the page asks
 // again (deck S-change). Renaming the id alone does not re-ask.
 import type { KeyScheme, PageAccess, PageConnection, VideoProfile } from '../../shared/pages-types';
+import { PLAID_SERVICE, plaidAddress } from '../../shared/pages-types';
 import { cleanDeviceAddress, urlMatchesDevice } from '../../shared/page-device-address';
 
 /** Where a key connection's key is attached when the manifest does not say.
@@ -38,6 +39,16 @@ export function keyPlacement(c: PageConnection): KeyPlacement {
   // else "Bearer" for Authorization and nothing for any other header.
   const scheme: KeyScheme = inQuery ? 'none' : (c.keyScheme ?? (param === 'authorization' ? 'bearer' : 'none'));
   return { in: inQuery ? 'query' : 'header', param, scheme };
+}
+
+/** The saved key a connection stands on, as service + address, or null for a
+ *  kind that holds no pasted key. One place, so approval, the settings list,
+ *  pruning and deletion agree on which connections own a key. */
+export function savedKeyTarget(c: PageConnection): { service: string; address: string } | null {
+  if (c.kind === 'key') return { service: c.service, address: c.address };
+  if (c.kind === 'device') return c.needsKey ? { service: c.service, address: c.address } : null;
+  if (c.kind === 'plaid') return { service: PLAID_SERVICE, address: plaidAddress(c.environment) };
+  return null;
 }
 
 /** The header value for a key under a scheme. */
@@ -261,6 +272,14 @@ export function parseConnections(raw: unknown): PageConnection[] {
         }
         break;
       }
+      // Finance dashboard (2026-10-05): bank balances through Plaid. One per
+      // page; the environment decides which saved key and which Plaid host.
+      case 'plaid': {
+        if (out.some((x) => x.kind === 'plaid')) break;
+        const environment = o.environment === 'production' ? 'production' : o.environment === 'sandbox' ? 'sandbox' : null;
+        if (environment) c = { id, kind: 'plaid', environment, keyHelp: cleanSteps(o.keyHelp) };
+        break;
+      }
       default: break;
     }
     if (!c) continue;
@@ -271,7 +290,7 @@ export function parseConnections(raw: unknown): PageConnection[] {
   const hasOpen = out.some((c) => c.kind === 'open');
   // A device counts as credentialled even without a key: a page that could
   // read the home AND send anywhere is the bridge the block exists to stop.
-  const hasCredential = out.some((c) => c.kind === 'key' || c.kind === 'youcoded' || c.kind === 'github' || c.kind === 'device');
+  const hasCredential = out.some((c) => c.kind === 'key' || c.kind === 'youcoded' || c.kind === 'github' || c.kind === 'device' || c.kind === 'plaid');
   if (hasOpen && hasCredential) return [];
   return out;
 }
@@ -327,6 +346,9 @@ export function fingerprint(c: PageConnection): string {
       // device page without any keeps the fingerprint it always had.
       return `device|${c.service}|${c.access}|${c.needsKey ? 'key' : 'nokey'}${moved}${profileSegment(c)}`;
     }
+    // Switching practice → real banks changes which money the page can see, so
+    // it asks again.
+    case 'plaid': return `plaid|${c.environment}`;
   }
 }
 
@@ -358,6 +380,9 @@ export function covers(c: PageConnection, target: string | URL): boolean {
     case 'key': return c.address === host;
     case 'youcoded': return host === YOUCODED_HOST;
     case 'github': return host === GITHUB_HOST;
+    // Never reachable through youcoded.fetch: Plaid is only ever called by main
+    // (plaid.ts), so a page cannot aim the Plaid keys at an address of its own.
+    case 'plaid': return false;
   }
 }
 

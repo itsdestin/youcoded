@@ -106,6 +106,13 @@ export const pagesChannels: MainChannelDef[] = [
       (await getPagesService()?.fetch(str(p?.id), p?.request ?? { url: '' }))
         ?? { ok: false as const, reason: 'network' as const, message: NOT_AVAILABLE },
   }),
+  // Plaid (finance dashboard): a bank sign-in opens a browser on THIS computer, so a phone never reaches it.
+  defineChannel({
+    name: IPC.PAGES_PLAID, kind: 'handle', desktopOnly: true,
+    handler: async (p) =>
+      (await getPagesService()?.plaid(str(p?.id), p?.request))
+        ?? { ok: false as const, op: 'status' as const, code: 'UNAVAILABLE', message: NOT_AVAILABLE },
+  }),
   defineChannel({
     name: IPC.PAGES_SOCKET_OPEN, kind: 'handle', remoteOnError: socketFailure,
     handler: async (p, ctx) => {
