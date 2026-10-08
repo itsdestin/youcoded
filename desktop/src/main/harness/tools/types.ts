@@ -10,6 +10,7 @@ import type { ShellRegistry } from '../shell-registry';
 import type { RunningCalls } from '../askpass/running-calls';
 import type { AdminPasswordServiceLike } from '../admin-password-service';
 import type { ImageLimits } from '../capability-profile';
+import type { ImagePreparerLike } from '../image-prepare';
 
 /** Task 6 — what the Task tool's execute() hands the host to actually run a
  *  specialist. Structural, mirroring the rest of ToolServices: the tool never
@@ -100,6 +101,10 @@ export type SpecialistResumeOutcome =
 // imports the service implementation.
 export interface ToolServices {
   search?: { search(query: string, signal: AbortSignal): Promise<{ results: Array<{ title: string; url: string; snippet?: string }>; source: string }> };
+  /** Picture preparation (image-prepare.ts): Read calls prepare() before it
+   *  promises an over-limit image. Absent in tests and one-off contexts — the
+   *  reader's pixel gate still holds. */
+  images?: ImagePreparerLike;
   /** Task 6 — the Task tool's host-side collaborators. Per-parent slot and
    *  single-writer state live on NativeSessionHost (spec §5 Global
    *  Constraints scope decision: PER-PARENT, never host-global), so the tool

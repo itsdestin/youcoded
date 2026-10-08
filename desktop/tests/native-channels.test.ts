@@ -77,8 +77,50 @@ describe('native:send', () => {
     const rt: any = { nativeHost: { send } };
     await call('native:send', { sessionId: 's', text: 'hi', attachments: ['/a.png', 7, null, '/b.txt'] }, desktopCtx(rt));
     await call('native:send', { sessionId: 's', text: 'hi', attachments: '/not-an-array' }, phoneCtx(rt));
-    expect(send).toHaveBeenNthCalledWith(1, 's', 'hi', ['/a.png', '/b.txt']);
-    expect(send).toHaveBeenNthCalledWith(2, 's', 'hi', []);
+    expect(send).toHaveBeenNthCalledWith(1, 's', 'hi', ['/a.png', '/b.txt'], ['/a.png', '/b.txt']);
+    expect(send).toHaveBeenNthCalledWith(2, 's', 'hi', [], []);
+  });
+  it('prepares every picture attachment against the session limits and hands the host the model-facing paths', async () => {
+    const send = vi.fn(() => ({ status: 'sent' }));
+    const prepare = vi.fn(async (p: string, _limits: unknown) => p.endsWith('huge.png') ? { kind: 'prepared', path: '/cache/abc-huge.png' } : { kind: 'unchanged' });
+    const limits = { maxEdgePx: 8192, maxPatches: 30_000 };
+    const rt: any = { nativeHost: { send, imageLimitsFor: () => limits }, records: { noteSend: vi.fn() }, imagePreparer: { prepare, preparedPathFor: () => null } };
+    expect(await call('native:send', { sessionId: 's', text: 'hi', attachments: ['/a/huge.png', 7, '/b.txt', '/c/ok.png'] }, desktopCtx(rt))).toEqual({ status: 'sent' });
+    expect(prepare.mock.calls.map((c: any[]) => c[0])).toEqual(['/a/huge.png', '/c/ok.png']);   // only deliverable images are prepared
+    expect(prepare.mock.calls[0][1]).toBe(limits);
+    expect(send).toHaveBeenCalledWith('s', 'hi', ['/a/huge.png', '/b.txt', '/c/ok.png'], ['/cache/abc-huge.png', '/b.txt', '/c/ok.png']);
+  });
+  it('a refused preparation reaches the host as a marker carrying the reason, so the note says what really happened', async () => {
+    const send = vi.fn(() => ({ status: 'sent' }));
+    const reason = 'is 20000×20000 px — too large to downscale for the model (over 80 megapixels). Crop or shrink it with Bash (e.g. magick in.png -resize 4000x4000 out.png) and Read the copy.';
+    const rt: any = { nativeHost: { send, imageLimitsFor: () => ({ maxEdgePx: 8192, maxPatches: 30_000 }) }, records: { noteSend: vi.fn() },
+      imagePreparer: { prepare: async () => ({ kind: 'refused', reason, width: 20000, height: 20000 }), preparedPathFor: () => null } };
+    await call('native:send', { sessionId: 's', text: 'hi', attachments: ['/vast.png'] }, desktopCtx(rt));
+    expect(send).toHaveBeenCalledWith('s', 'hi', ['/vast.png'], [{ path: '/vast.png', prepareFailed: reason }]);
+  });
+  it('a preparer that throws never blocks the send; the original path is used', async () => {
+    const send = vi.fn(() => ({ status: 'sent' }));
+    const rt: any = { nativeHost: { send, imageLimitsFor: () => ({ maxEdgePx: 1, maxPatches: 1 }) }, records: { noteSend: vi.fn() }, imagePreparer: { prepare: async () => { throw new Error('boom'); }, preparedPathFor: () => null } };
+    expect(await call('native:send', { sessionId: 's', text: 'hi', attachments: ['/a.png'] }, desktopCtx(rt))).toEqual({ status: 'sent' });
+    expect(send).toHaveBeenCalledWith('s', 'hi', ['/a.png'], ['/a.png']);
+  });
+  it('sends to one session are serialised: a plain follow-up waits behind a message whose picture is still being prepared', async () => {
+    const order: string[] = [];
+    const send = vi.fn((_s: string, text: string) => { order.push(text); return { status: 'sent' }; });
+    let release!: () => void; let entered!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const preparing = new Promise<void>((r) => { entered = r; });   // resolved the moment the preparer is entered — no microtask guessing
+    const rt: any = { nativeHost: { send, imageLimitsFor: () => ({ maxEdgePx: 8192, maxPatches: 30_000 }) }, records: { noteSend: vi.fn() },
+      imagePreparer: { prepare: async () => { entered(); await gate; return { kind: 'prepared', path: '/cache/x.png' }; }, preparedPathFor: () => null } };
+    const first = call('native:send', { sessionId: 's', text: 'with picture', attachments: ['/a.png'] }, desktopCtx(rt));
+    const second = call('native:send', { sessionId: 's', text: 'plain follow-up' }, desktopCtx(rt));
+    const other = call('native:send', { sessionId: 'other', text: 'another session' }, desktopCtx(rt));
+    await preparing;
+    await other;
+    expect(order).toEqual(['another session']);          // the picture is still being prepared; the follow-up waits; another session is not held back
+    release();
+    await Promise.all([first, second]);
+    expect(order).toEqual(['another session', 'with picture', 'plain follow-up']);
   });
   it('a phone that arrives before the runtime exists is told "not live", as before', async () => {
     expect(await call('native:send', { sessionId: 's', text: 'x' }, phoneCtx(null))).toEqual({ status: 'failed', reason: 'not-live' });
