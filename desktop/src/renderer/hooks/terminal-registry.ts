@@ -82,6 +82,15 @@ export function unregisterTerminal(sessionId: string) {
  *
  * @param tailRows When set, only the last `tailRows` buffer rows are serialized (see screenTextOf). Omit for the full buffer.
  */
+/** Rig instrument (perf-lab `cut` leg): the terminal's sticky modes, so a test can prove they survive a cut backlog. */
+export function getTerminalModes(sessionId: string): { bracketedPaste: boolean; appCursorKeys: boolean; cursorHidden: boolean | null } | null {
+  const t = terminals.get(sessionId);
+  if (!t) return null;
+  // cursorHidden has no public API in xterm 6; read the core service, tolerating its absence.
+  const hidden = (t as unknown as { _core?: { coreService?: { isCursorHidden?: boolean } } })._core?.coreService?.isCursorHidden;
+  return { bracketedPaste: t.modes.bracketedPasteMode, appCursorKeys: t.modes.applicationCursorKeysMode, cursorHidden: typeof hidden === 'boolean' ? hidden : null };
+}
+
 export function getScreenText(sessionId: string, tailRows?: number): string | null {
   const terminal = terminals.get(sessionId);
   if (!terminal) return null;

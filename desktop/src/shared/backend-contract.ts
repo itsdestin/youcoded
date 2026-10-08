@@ -122,6 +122,10 @@ export const IPC = {
   SKILLS_INSTALL_MANY: 'skills:install-many',
   SKILLS_APPLY_OUTPUT_STYLE: 'skills:apply-output-style',
   TERMINAL_READY: 'session:terminal-ready',
+  // Fire-and-forget, renderer -> main: this terminal finished parsing N characters of output. Drives PTY flow control (pty-worker.js).
+  TERMINAL_ACK: 'session:terminal-ack',
+  // Fire-and-forget, renderer -> main: a hidden window's backlog was cut; ask the program to repaint (worker size nudge).
+  TERMINAL_REPAINT: 'session:terminal-repaint',
   // Main -> Renderer
   SESSION_CREATED: 'session:created',
   SESSION_DESTROYED: 'session:destroyed',
@@ -662,6 +666,9 @@ export const IPC = {
   VOICE_VOCABULARY_SAVE: 'voice:vocabulary-save',
   VOICE_AUDIO: 'voice:audio',
   VOICE_EVENT: 'voice:event',   // push
+  // Hitch recorder: renderer -> main, fire-and-forget, desktop only. Registered by main/hitch-recorder.ts itself (it is created in whenReady),
+  // deliberately NOT a channel-table entry and never phone-reachable.
+  PERF_HITCH_BATCH: 'perf:hitch-batch',
   // Office (main/ipc/office.ts). Requests the editor page makes, and the window's answers to main's pushes.
   OFFICE_STATUS: 'office:status',
   OFFICE_CREATE: 'office:create',
@@ -1015,6 +1022,12 @@ interface SessionBridge {
   sendOutcomes(sessionId: string, ids: string[]): Promise<import('./send-outcome-types').SendOutcomesReply | undefined>;
   resize(sessionId: string, cols: number, rows: number): void;
   signalReady(sessionId: string): void;
+  /** Terminal flow control: the terminal finished parsing `chars` characters of this session's output.
+   *  Fire-and-forget. A desktop window sends it to main; a remote client / the phone app drops it (only the
+   *  desktop's own window may brake a program, so a slow phone can never stall it). */
+  ackOutput(sessionId: string, chars: number): void;
+  /** Ask the program to repaint once after a hidden window's backlog was cut. Desktop window only; a no-op for remote clients. */
+  requestRepaint(sessionId: string): void;
   respondToPermission(requestId: string, decision: object): Promise<boolean>;
   browse(): Promise<any[]>;
   /** Order is (sessionId, projectSlug, count, all) on every bridge and caller. */

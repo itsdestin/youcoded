@@ -4,6 +4,7 @@ import React from 'react';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import MarkdownContent from './MarkdownContent';
+import { OPEN_FENCE_CHUNK_LINES } from './markdown-blocks';
 import { SessionRefsEnabled } from './session-refs-context';
 import { MARKDOWN_STREAM_CORPUS, tokenDeltas, prefixesOf } from '../../../tests/helpers/markdown-stream-corpus';
 
@@ -38,6 +39,13 @@ vi.mock('remark-parse', async (importOriginal) => {
       };
     },
   };
+});
+// How many highlighters were built. rehype-highlight builds one (and registers ~37
+// languages) each time it is called; the app must call it once, not once per render.
+const highlighterBuilds = vi.hoisted(() => ({ n: 0 }));
+vi.mock('rehype-highlight', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('rehype-highlight')>();
+  return { default: (...args: any[]) => { highlighterBuilds.n++; return (actual.default as any)(...args); } };
 });
 // The reference block resolves ids asynchronously; a fixed stand-in keeps the
 // streaming comparisons below about markdown, not about a network answer.
@@ -84,6 +92,20 @@ const FENCES: { name: string; md: string; code: string }[] = [
     code: 'abc\n',
   },
 ];
+
+describe('syntax highlighter', () => {
+  // perf-lab 2026-10-04: a fresh highlighter per render was ~1.8 s of a 34 s reply stream.
+  it('is built once, not once per render', () => {
+    const before = highlighterBuilds.n;
+    for (let i = 0; i < 5; i++) {
+      const r = render(<MarkdownContent content={'```ts\nconst a = 1;\n```'} />);
+      expect(r.container.querySelector('.hljs-keyword')).not.toBeNull();
+      r.unmount();
+    }
+    expect(highlighterBuilds.n - before).toBe(0);
+    expect(highlighterBuilds.n).toBeLessThanOrEqual(1);
+  });
+});
 
 describe('MarkdownContent fenced code blocks', () => {
   for (const f of FENCES) {
@@ -402,9 +424,11 @@ describe('remote images wait for a tap; local images render inline', () => {
 // Streaming (smoothness sweep A5): a growing reply is drawn piece by piece, and
 // the page must be byte-for-byte what drawing the whole text at once gives.
 describe('MarkdownContent while a reply streams in', () => {
-  const Bubble = ({ md, incremental }: { md: string; incremental?: boolean }) => (
+  // `live` = the reply is still streaming (only then may a long open fence be drawn in chunks).
+  // Defaults to `incremental`, i.e. a streaming bubble; pass live={false} for a finished one.
+  const Bubble = ({ md, incremental, live = incremental }: { md: string; incremental?: boolean; live?: boolean }) => (
     <SessionRefsEnabled.Provider value={true}>
-      <MarkdownContent content={md} sessionId="s1" incremental={incremental} />
+      <MarkdownContent content={md} sessionId="s1" incremental={incremental} live={live} />
     </SessionRefsEnabled.Provider>
   );
   // The page as markup with each element's attributes in name order. WHY sorted:
@@ -414,12 +438,27 @@ describe('MarkdownContent while a reply streams in', () => {
   // one. Order carries no meaning to the browser, and today's whole-message
   // render updates in place too; everything else — text nodes included — is
   // compared exactly.
-  const canonical = (root: Element): string => Array.from(root.childNodes).map((n) => {
-    if (n.nodeType !== 1) return n.nodeType === 3 ? JSON.stringify(n.textContent) : '';
-    const el = n as Element;
-    const attrs = Array.from(el.attributes).map((a) => `${a.name}=${JSON.stringify(a.value)}`).sort().join(' ');
-    return `<${el.tagName.toLowerCase()} ${attrs}>${canonical(el)}</${el.tagName.toLowerCase()}>`;
-  }).join('');
+  // WHY adjacent text nodes are joined (without touching the page): a long open code
+  // fence is drawn in chunks, so one run of plain text can arrive as two text nodes
+  // where the whole-message render has one. The browser shows them identically.
+  const canonical = (root: Element): string => {
+    const parts: string[] = [];
+    let text = '';
+    const flush = () => { if (text) parts.push(JSON.stringify(text)); text = ''; };
+    // A frozen chunk of a still-open fence sits in a plain wrapper span (CSS containment only);
+    // it is looked through, since it adds no text and no visible structure.
+    const flat = (nodes: Node[]): Node[] => nodes.flatMap((n) => (n.nodeType === 1 && (n as Element).classList.contains('yc-fence-chunk') ? flat(Array.from(n.childNodes)) : [n]));
+    for (const n of flat(Array.from(root.childNodes))) {
+      if (n.nodeType === 3) { text += n.textContent ?? ''; continue; }
+      if (n.nodeType !== 1) continue;
+      flush();
+      const el = n as Element;
+      const attrs = Array.from(el.attributes).map((a) => `${a.name}=${JSON.stringify(a.value)}`).sort().join(' ');
+      parts.push(`<${el.tagName.toLowerCase()} ${attrs}>${canonical(el)}</${el.tagName.toLowerCase()}>`);
+    }
+    flush();
+    return parts.join('');
+  };
   const wholeHtml = (md: string) => {
     const r = render(<Bubble md={md} />);
     const html = canonical(r.container);
@@ -673,6 +712,353 @@ describe('MarkdownContent while a reply streams in', () => {
     const code = lines(150, (i) => `  const value${i} = compute(${i}, "string ${i}") + other[${i}];`);
     const costs = streamCosts('Here', `Here:\n\n\`\`\`ts\n${code}\n`, tokenDeltas('  more(1);\n\n  <div>[x]: y</div>\n  after_blank();\n'));
     expectNoMoreThanToday(costs);
+  });
+
+  // The perf-lab "D7" class (2026-10-04): one long code fence redrew from its first
+  // line on every word, so per-word cost grew with the fence and the thread sat at
+  // 100%. Pinned by COUNTING the characters handed to the parser/colourer per word
+  // (not milliseconds): once the fence is long, a word must cost the same whether
+  // the fence is 200 lines or 800.
+  describe('one very long code fence that is still being typed', () => {
+    const codeLine = (i: number) => `  const value${i} = compute(${i}, "row-${i}") ?? fallback[${i % 7}]; // step ${i}`;
+    const fenceMd = (n: number) => `Here is the file:\n\n\`\`\`ts\nexport function generated() {\n${lines(n, codeLine)}\n`;
+    const perWordCost = (n: number) => {
+      const deltas = tokenDeltas('  more(1);\n\n  after_blank();\n  const a = 1; // tail words\n');
+      return streamCosts('Here', fenceMd(n), deltas).map((c) => c.drawn.reduce((t, x) => t + x.length, 0));
+    };
+
+    it('does work per word that does not grow with the fence', () => {
+      const short = perWordCost(200);
+      const long = perWordCost(800);
+      const lineLen = codeLine(500).length + 1;
+      // Never more than the live tail (under two chunks of lines) plus the opening.
+      const bound = 2 * OPEN_FENCE_CHUNK_LINES * lineLen + 200;
+      expect(Math.max(...short)).toBeLessThanOrEqual(bound);
+      expect(Math.max(...long)).toBeLessThanOrEqual(bound);
+      // ...and the cost of the 800-line fence is not a bigger multiple of the 200-line one's.
+      expect(Math.max(...long)).toBeLessThanOrEqual(Math.max(...short) + 2 * lineLen);
+    });
+
+    it('draws the same page as the whole message, tail words and Copy included', () => {
+      const md = fenceMd(260);
+      const deltas = tokenDeltas('  more(1);\n\n  after_blank();\n\t tabbed(2);\n  const a = 1;\n');
+      const live = render(<Bubble md="Here" incremental />);
+      live.rerender(<Bubble md={md} incremental />);
+      const codeEl = () => live.container.querySelector('pre code');
+      let full = md;
+      for (const d of deltas) {
+        full += d;
+        live.rerender(<Bubble md={full} incremental />);
+        const whole = render(<Bubble md={full} />);
+        expect(canonical(live.container), `after ${JSON.stringify(d)}`).toBe(canonical(whole.container));
+        whole.unmount();
+      }
+      expect(codeEl()).not.toBeNull();
+      live.unmount();
+    });
+
+    it('keeps the same code block (no remount) as the fence grows past a chunk, and when it closes', () => {
+      const live = render(<Bubble md={fenceMd(38)} incremental />);
+      live.rerender(<Bubble md={fenceMd(39)} incremental />);
+      const pre = live.container.querySelector('pre')!;
+      for (const n of [50, 90, 220]) {
+        live.rerender(<Bubble md={fenceMd(n)} incremental />);
+        expect(live.container.querySelector('pre')).toBe(pre);
+      }
+      live.rerender(<Bubble md={`${fenceMd(220)}\`\`\`\n\nDone.`} incremental />);
+      expect(live.container.querySelector('pre')).toBe(pre);
+      expect(live.container.textContent).toContain('Done.');
+      live.unmount();
+    });
+
+    it('colours the whole block as one piece once the fence closes', () => {
+      // A block comment straddling a chunk edge is only coloured right once the fence closes.
+      const body = lines(160, (i) => (i === 49 ? '/* start of a long' : i === 51 ? 'comment ends */' : `const a${i} = ${i};`));
+      const closed = `\`\`\`js\n${body}\n\`\`\`\n`;
+      const live = render(<Bubble md="Here" incremental />);
+      live.rerender(<Bubble md={`\`\`\`js\n${body}\n`} incremental />);
+      live.rerender(<Bubble md={closed} incremental />);
+      const whole = render(<Bubble md={closed} />);
+      expect(canonical(live.container)).toBe(canonical(whole.container));
+      whole.unmount();
+      live.unmount();
+    });
+
+    // Review 2026-10-04 item 1: the head used to be wrapped in a Provider only once it existed,
+    // so crossing 40 lines (and closing) changed the root element type and rebuilt the block.
+    it('keeps the SAME code block from under 40 lines, across the threshold, and across close', () => {
+      // Mounted on its first words and grown, as a reply is: text drawn at mount stays one group.
+      const live = render(<Bubble md="Here" incremental />);
+      live.rerender(<Bubble md={fenceMd(10)} incremental />);
+      const pre = live.container.querySelector('pre')!;
+      const code = pre.querySelector('code')!;
+      const copy = live.container.querySelector('button')!;
+      for (const n of [30, 37, 38, 39, 40, 41, 60, 100]) {
+        live.rerender(<Bubble md={fenceMd(n)} incremental />);
+        expect(live.container.querySelector('pre'), `at ${n} lines`).toBe(pre);
+        expect(pre.querySelector('code')).toBe(code);
+        expect(live.container.querySelector('button')).toBe(copy);
+      }
+      live.rerender(<Bubble md={`${fenceMd(100)}\`\`\`\n\nDone.`} incremental />);
+      expect(live.container.querySelector('pre')).toBe(pre);
+      expect(pre.querySelector('code')).toBe(code);
+      expect(live.container.querySelector('button')).toBe(copy);
+      live.unmount();
+    });
+
+    // Review item 2: a reply that STOPS with its fence open (Stop, error, truncation, an old
+    // message) must draw as one block, exactly like a message that was never streamed.
+    describe('a fence that never closes', () => {
+      // A block comment that straddles the 20-line chunk edge: coloured wrongly if chunked.
+      const body = lines(60, (i) => (i === 18 ? '/* a long comment' : i === 22 ? 'that ends here */' : `const a${i} = ${i}; // note`));
+      const md = `\`\`\`js\n${body}\n`;
+      const words = tokenDeltas(md);
+
+      it('draws as one piece, with the SAME block, once the reply stops', () => {
+        const live = render(<Bubble md="Here" incremental />);
+        let text = 'Here\n\n';
+        for (const d of words) { text += d; live.rerender(<Bubble md={text} incremental />); }
+        const pre = live.container.querySelector('pre')!;
+        live.rerender(<Bubble md={text} incremental live={false} />); // the turn ended
+        expect(live.container.querySelector('pre')).toBe(pre);
+        const whole = render(<MarkdownContent content={text} sessionId="s1" />);
+        // Without gating, the lines after the chunk edge stay coloured as code, not comment.
+        expect(canonical(live.container)).toBe(canonical(whole.container));
+        whole.unmount();
+        live.unmount();
+      });
+
+      it('never takes the chunked path when the message is not streaming (history, finished)', () => {
+        markdownRenders.length = 0;
+        const view = render(<Bubble md="Here" incremental live={false} />);
+        let text = 'Here\n\n';
+        for (const d of words) { text += d; view.rerender(<Bubble md={text} incremental live={false} />); }
+        // One piece: the biggest thing drawn is the whole fence, never a short tail.
+        const fenceDraws = markdownRenders.filter((x) => x.startsWith('```js'));
+        expect(fenceDraws.at(-1)).toBe(md);
+        const whole = render(<MarkdownContent content={text} sessionId="s1" />);
+        expect(canonical(view.container)).toBe(canonical(whole.container));
+        whole.unmount();
+        view.unmount();
+      });
+    });
+
+    // Review item 3: a chunk is drawn as `opening + chunk` with no closer; blank lines at the
+    // edge must come out exactly as in the whole block. NO text-node joining is applied that
+    // could hide a blank-line difference except merging adjacent text nodes, which cannot.
+    describe('blank lines at chunk edges', () => {
+      const mdWithBlanks = (blanks: number[], total = 90) => {
+        const rows = Array.from({ length: total }, (_, i) => (blanks.includes(i + 1) ? '' : `const v${i} = ${i};`));
+        return `\`\`\`js\n${rows.join('\n')}\n`;
+      };
+      for (const [name, blanks] of [
+        ['blank last line of the first chunk (20)', [20]],
+        ['blank at 20, 40 and 60', [20, 40, 60]],
+        ['two blanks across an edge (20, 21)', [20, 21]],
+        ['two blanks ending a chunk (39, 40)', [39, 40]],
+        ['blank first line of a chunk (21)', [21]],
+        ['three blanks (60, 61, 62)', [60, 61, 62]],
+      ] as [string, number[]][]) {
+        it(`draws "${name}" like the whole message after every line`, () => {
+          const md = mdWithBlanks(blanks);
+          const rows = md.split('\n');
+          markdownRenders.length = 0;
+          const live = render(<Bubble md="Here" incremental />);
+          let text = '';
+          for (let n = 1; n <= rows.length; n++) {
+            text = rows.slice(0, n).join('\n') + (n < rows.length ? '\n' : '');
+            live.rerender(<Bubble md={`Here\n\n${text}`} incremental />);
+            expect(canonical(live.container), `after ${n} lines`).toBe(wholeHtml(`Here\n\n${text}`));
+          }
+          // Not vacuous: frozen 20-line chunks (opening + 20 lines + the empty tail of the split) really were drawn.
+          expect(markdownRenders.some((x) => x.startsWith('```js\n') && x.split('\n').length === 22)).toBe(true);
+          live.unmount();
+        });
+      }
+    });
+
+    // Review item 4: shapes that must stay correct (some fall back to the whole block).
+    describe('other fence shapes', () => {
+      const code = lines(70, (i) => `  call(${i}); // line ${i}`);
+      for (const [name, md] of [
+        ['an info string with attributes', `\`\`\`ts title="x.ts"\n${code}\n`],
+        ['a ~~~ fence', `~~~ts\n${code}\n`],
+        ['a 4-backtick fence containing a ``` line', `\`\`\`\`ts\n${code}\n\`\`\`\n${code}\n`],
+        ['no language', `\`\`\`\n${code}\n`],
+        ['CRLF line endings', `\`\`\`ts\r\n${code.replace(/\n/g, '\r\n')}\r\n`],
+      ] as [string, string][]) {
+        it(`draws ${name} like the whole message, token by token`, () => {
+          const deltas = tokenDeltas(md);
+          const live = render(<Bubble md="Here" incremental />);
+          let text = 'Here\n\n';
+          live.rerender(<Bubble md={text} incremental />);
+          deltas.forEach((d, i) => {
+            text += d;
+            live.rerender(<Bubble md={text} incremental />);
+            // Every 7th step keeps the run short; the last step is always checked.
+            if (i % 7 === 0 || i === deltas.length - 1) expect(canonical(live.container), `after ${i}`).toBe(wholeHtml(text));
+          });
+          live.unmount();
+        });
+      }
+
+      it('falls back to the whole block for a ~~~ / 4-backtick fence holding a closing-looking line', () => {
+        const md = `Here\n\n\`\`\`\`ts\n${code}\n\`\`\`\n${code}\n`;
+        markdownRenders.length = 0;
+        const live = render(<Bubble md="Here" incremental />);
+        live.rerender(<Bubble md={md} incremental />);
+        expect(markdownRenders.some((x) => x.startsWith('````ts') && x.endsWith(`${code}\n`))).toBe(true);
+        live.unmount();
+      });
+    });
+
+    // A bubble that MOUNTS part-way through a reply (switching back to the chat, a torn-off window,
+    // a chat that was hidden while the reply began) draws what it was given as one group, with text
+    // before the fence in it. The rest of the reply must still be cheap per word, keep the same
+    // code block, and draw as one piece when the turn ends.
+    describe('a bubble that mounts in the middle of an open fence', () => {
+      const row = (i: number) => (i % 10 === 9 ? '' : `  const value${i} = compute(${i}); // step ${i}`);
+      const mount = (n: number) => `Intro paragraph.\n\n- a list before it\n\n\`\`\`ts\n${lines(n, row)}\n`;
+      const more = tokenDeltas(lines(120, (i) => row(i + 1000)) + '\n');
+
+      it('keeps per-word work bounded and the page equal to the whole message', () => {
+        const live = render(<Bubble md={mount(100)} incremental />);
+        const pre = live.container.querySelector('pre')!;
+        let md = mount(100);
+        const costs: number[] = [];
+        more.forEach((d, i) => {
+          md += d;
+          splitterParsed.chars = 0;
+          markdownRenders.length = 0;
+          live.rerender(<Bubble md={md} incremental />);
+          costs.push(splitterParsed.chars + markdownRenders.reduce((n, x) => n + x.length, 0));
+          expect(live.container.querySelector('pre')).toBe(pre);
+          if (i % 25 === 0 || i === more.length - 1) expect(canonical(live.container), `after word ${i}`).toBe(wholeHtml(md));
+        });
+        // After the first update (which may split the message once), a word costs the prefix
+        // plus a tail of under two chunks — not the fence, which by now is 220 lines.
+        const lineLen = row(1).length + 1;
+        const bound = mount(0).length + 2 * OPEN_FENCE_CHUNK_LINES * lineLen + 400;
+        for (const c of costs.slice(1)) expect(c).toBeLessThanOrEqual(2 * bound);
+        expect(Math.max(...costs.slice(1))).toBeLessThan(md.length / 2);
+        // The reply ends: one piece again, same block.
+        live.rerender(<Bubble md={md} incremental live={false} />);
+        expect(live.container.querySelector('pre')).toBe(pre);
+        const whole = render(<MarkdownContent content={md} sessionId="s1" />);
+        expect(canonical(live.container)).toBe(canonical(whole.container));
+        whole.unmount();
+        live.unmount();
+      });
+
+      // The perf rig's own fence has NO blank line, and a bubble that mounted after the fence began
+      // (slow machine, hidden chat) never got a blank line to split on — so it stayed O(n^2).
+      it('stays bounded when the open fence holds no blank line at all', () => {
+        const rowNb = (i: number) => `  const value${i} = compute(${i}); // step ${i}`;
+        const base = `Intro paragraph.\n\n\`\`\`ts\n${lines(100, rowNb)}\n`;
+        const live = render(<Bubble md={base} incremental />);
+        const pre = live.container.querySelector('pre')!;
+        let md = base;
+        const costs: number[] = [];
+        tokenDeltas(lines(120, (i) => rowNb(i + 1000)) + '\n').forEach((d, i, all) => {
+          md += d;
+          markdownRenders.length = 0;
+          splitterParsed.chars = 0;
+          live.rerender(<Bubble md={md} incremental />);
+          costs.push(splitterParsed.chars + markdownRenders.reduce((n, x) => n + x.length, 0));
+          expect(live.container.querySelector('pre')).toBe(pre);
+          if (i === all.length - 1) expect(canonical(live.container)).toBe(wholeHtml(md));
+        });
+        const lineLen = rowNb(1).length + 1;
+        expect(Math.max(...costs.slice(1))).toBeLessThanOrEqual(4 * (2 * OPEN_FENCE_CHUNK_LINES * lineLen + 400));
+        expect(Math.max(...costs.slice(1))).toBeLessThan(md.length / 3);
+        live.rerender(<Bubble md={md} incremental live={false} />);
+        expect(live.container.querySelector('pre')).toBe(pre);
+        live.unmount();
+      });
+
+      it('Copy still takes the whole fence, and only that fence', async () => {
+        const writeText = vi.fn();
+        Object.assign(navigator, { clipboard: { writeText } });
+        const md = `Intro\n\n\`\`\`sh\necho other\n\`\`\`\n\n${mount(90).split('Intro paragraph.\n\n')[1]}${lines(40, row)}\n`;
+        const live = render(<Bubble md={md} incremental />);
+        live.rerender(<Bubble md={`${md}  tail();`} incremental />);
+        const buttons = screen.getAllByRole('button', { name: 'Copy' });
+        fireEvent.click(buttons[0]);
+        expect(writeText.mock.calls[0][0]).toBe('echo other\n');
+        fireEvent.click(buttons[1]);
+        const copied = writeText.mock.calls[1][0] as string;
+        expect(copied).toContain('const value0 =');
+        expect(copied).toContain('tail();');
+        expect(copied).not.toContain('echo other');
+        live.unmount();
+      });
+    });
+
+    // perf-lab 2026-10-04: without containment, layout of the newest line re-ran over the whole
+    // block (70 -> 520 ms per 2 s on 500 lines). It must NOT be paint containment: that clips
+    // sideways and a long code line would stop scrolling the <pre>.
+    it('wraps each frozen chunk in a layout-contained block that does not clip', async () => {
+      const { readFileSync } = await import('node:fs');
+      const css = readFileSync(`${process.cwd()}/src/renderer/styles/globals.css`, 'utf8');
+      const rule = /\.yc-fence-chunk\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+      expect(rule).toMatch(/display:\s*block/);
+      expect(rule).toMatch(/contain:\s*layout/);
+      // Without this a long line in a frozen chunk is unreachable by scrolling (measured, real Chromium).
+      expect(rule).toMatch(/width:\s*max-content/);
+      expect(rule).not.toMatch(/paint|content-visibility|overflow/);
+      const live = render(<Bubble md="Here" incremental />);
+      live.rerender(<Bubble md={fenceMd(130)} incremental />);
+      expect(live.container.querySelectorAll('pre code > .yc-fence-chunk').length).toBeGreaterThan(3);
+      live.unmount();
+    });
+
+    // Review 3: the turn ENDING flips `live` for the whole bubble. Only a group that holds an open
+    // fence may redraw for that; every finished block must be skipped by its memo, or each reply
+    // ends with a hitch proportional to its length (re-parse + re-colour of everything).
+    describe('when the turn ends', () => {
+      const groupsMd = (n: number, tail = '') =>
+        Array.from({ length: n }, (_, i) => `Paragraph ${i} with \`code\` and **bold**.\n\n\`\`\`js\nconst x${i} = ${i};\n\`\`\``).join('\n\n') + tail;
+      const grow = (md: string, live: boolean) => {
+        const view = render(<Bubble md="Para" incremental live={live} />);
+        view.rerender(<Bubble md={md} incremental live={live} />);
+        view.rerender(<Bubble md={`${md} more`} incremental live={live} />);
+        return view;
+      };
+      it('redraws nothing in a reply of 30 finished groups', () => {
+        const md = groupsMd(30);
+        const view = grow(md, true);
+        markdownRenders.length = 0;
+        splitterParsed.chars = 0;
+        view.rerender(<Bubble md={`${md} more`} incremental live={false} />);
+        expect(markdownRenders).toEqual([]);
+        expect(splitterParsed.chars).toBe(0);
+        view.unmount();
+      });
+      it('redraws only the group holding the open fence', () => {
+        const md = groupsMd(30, `\n\n\`\`\`js\n${lines(60, (i) => `const y${i} = ${i};`)}\n`);
+        const view = grow(md, true);
+        markdownRenders.length = 0;
+        view.rerender(<Bubble md={`${md} more`} incremental live={false} />);
+        expect(markdownRenders).toHaveLength(1);
+        expect(markdownRenders[0].startsWith('```js')).toBe(true);
+        view.unmount();
+      });
+    });
+
+    it('copies the whole fence, frozen lines included', async () => {
+      const writeText = vi.fn();
+      Object.assign(navigator, { clipboard: { writeText } });
+      const md = fenceMd(220);
+      const live = render(<Bubble md="Here" incremental />);
+      live.rerender(<Bubble md={md} incremental />);
+      live.rerender(<Bubble md={`${md}  last();`} incremental />);
+      fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+      const copied = writeText.mock.calls[0][0] as string;
+      expect(copied).toContain('const value0 =');
+      expect(copied).toContain('const value219 =');
+      expect(copied).toContain('last();');
+      live.unmount();
+    });
   });
 
   // Switching back to a session mid-reply mounts the bubble on a long prefix

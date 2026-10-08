@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, protocol, safeStorage, screen, shell, webContents } from 'electron';
+import { app, BrowserWindow, ipcMain, powerMonitor, Menu, protocol, safeStorage, screen, shell, webContents } from 'electron';
 import path from 'path';
 // A write to a closed stdout/stderr throws EPIPE, and with no listener that is
 // an uncaught exception that kills the whole main process — the app dies with
@@ -117,7 +117,8 @@ import { excludeFromCapture } from './window-exclude-capture';
 import { cleanupStaleDownloads } from './update-installer';
 import { startDailyHeartbeat } from './analytics-service';
 import { loadConfigSync, setAppliedAtLaunch, setCachedGpu } from './performance-config';
-import { perfMark } from './perf-marks';
+import { perfMark, getPerfMarks } from './perf-marks';
+import { startHitchRecorder, traceIpc, hitchLogDisabled, type HitchRecorder, type IpcTrace } from './hitch-recorder';
 import { loadDefaultAppIcon } from './app-icon';
 
 // Perf lab instrumentation: perfMark() is a no-op unless YOUCODED_PERF_LOG is
@@ -132,6 +133,12 @@ import { loadDefaultAppIcon } from './app-icon';
 // therefore already been loaded and evaluated by the time this line runs — this
 // mark is the END of the import phase, not the start of the module.
 perfMark('main:imports-done');
+
+// Hitch recorder (hitch-recorder.ts): the IPC trace must wrap ipcMain BEFORE any handler
+// registers, so it is installed here at module level; the recorder itself starts in whenReady.
+// Both are no-ops under YOUCODED_HITCH_LOG=0.
+let hitchRecorder: HitchRecorder | null = null;
+const hitchIpcTrace: IpcTrace | undefined = hitchLogDisabled() ? undefined : (() => { try { return traceIpc(ipcMain); } catch { return undefined; } })();
 
 // Last-resort safety net for async work nobody awaited. The main process runs
 // a lot of fire-and-forget I/O (watchers, poll timers, disk caches, loadURL);
@@ -969,7 +976,7 @@ function createWindow(firstRunManager?: FirstRunManager): OutboxBroadcast {
   // the app.whenReady() block. createAppWindow is synchronous and returns before
   // its loadURL/loadFile promise can settle, so this listener is still attached
   // in the same tick as the load call and cannot miss the event.
-  mainWindow.webContents.once('did-finish-load', () => perfMark('main:main-window:did-finish-load'));
+  mainWindow.webContents.once('did-finish-load', () => { perfMark('main:main-window:did-finish-load'); hitchRecorder?.noteMainWindowLoaded(); });
   // Installer launch check only (scripts/smoke-test.js): report whether the
   // main window actually rendered. Registered here for the same reason as the
   // perf mark above — the main window, not a detached or buddy window.
@@ -1317,6 +1324,19 @@ if (!app.isPackaged && process.env.YOUCODED_DEVTOOLS_PORT) {
 // it and keeps the app alive rather than exiting silently.
 void app.whenReady().then(async () => {
   perfMark('main:when-ready');
+  // WHY here, before createWindow: the first window's did-finish-load must find the recorder.
+  hitchRecorder = startHitchRecorder({
+    userDataDir: app.getPath('userData'), appVersion: app.getVersion(), isPackaged: app.isPackaged, ipcMain,
+    getWindowCount: () => BrowserWindow.getAllWindows().length,
+    getSessionCount: () => sessionManager.listSessions().length,
+    getAppMetrics: () => app.getAppMetrics(),
+    getMarks: getPerfMarks,
+    processStartMs: () => process.getCreationTime?.() ?? Date.now() - process.uptime() * 1000,
+    trace: hitchIpcTrace,
+  });
+  // A sleep or lock makes the event-loop monitor's numbers span hours: tell the recorder to discard them.
+  const slept = () => hitchRecorder?.noteSleep();
+  powerMonitor.on('suspend', slept); powerMonitor.on('resume', slept); powerMonitor.on('lock-screen', slept); powerMonitor.on('unlock-screen', slept);
   await rotateLog();
   perfMark('main:chore:rotate-log:done');
 
@@ -1955,7 +1975,7 @@ async function runShutdown(): Promise<void> {
   // an unflushed write just means that one session's offer is a run stale,
   // not lost (the desktop-lifecycle `open` entry it came from is harmless).
   await Promise.race([
-    welcomeBackStore?.flush() ?? Promise.resolve(),
+    Promise.all([welcomeBackStore?.flush(), hitchRecorder?.stop()]),
     new Promise<void>((r) => setTimeout(r, 1_000)),
   ]).catch(() => {});
   // Office: a save mid-translation finishes (≤5 s), then the temp base goes; unsaved edits stay in their recovery journals (Task 8). Awaited last.

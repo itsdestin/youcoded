@@ -168,6 +168,16 @@ const ALLOWED_REGISTRATIONS: Record<string, string> = {
     'the computer door itself: the ONE place every table entry is registered with Electron',
   'ipc-handlers.ts: IPC.REMOTE_REHYDRATE':
     'connection housekeeping: preload\'s shape parity with the phone\'s Refresh button (the phone\'s Refresh is filled by session:open, one-core R5-2); a window IS the copy and says so here',
+  // The hitch recorder (main/hitch-recorder.ts, 2026-10-05) is the one deliberate exception: a recorder of the app's own
+  // performance, created in whenReady, listening on a desktop-only fire-and-forget channel no phone can name (the phone door
+  // only ever dispatches table entries, and remote-server.ts/remote-shim.ts/Kotlin never mention it: hitch-recorder-wiring.test.ts).
+  // The other two are its trace wrapper around ipcMain.handle/on, which names the channel main last started.
+  'hitch-recorder.ts: HITCH_CHANNEL':
+    'desktop-only: the renderer preload\'s performance batches; not a feature, no phone/Android lane (pinned in hitch-recorder-wiring.test.ts)',
+  'hitch-recorder.ts: <detached handle>':
+    'the last-IPC-channel trace wraps ipcMain.handle before any handler registers; it only stores a name and a time',
+  'hitch-recorder.ts: <detached on>':
+    'the last-IPC-channel trace wraps ipcMain.on before any handler registers; it only stores a name and a time',
 };
 const ALLOWED_CASES: Record<string, string> = {
   'client:ready': 'connection housekeeping: the page is listening, so the host sends the session list, topic names and last status',

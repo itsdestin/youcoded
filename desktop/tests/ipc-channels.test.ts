@@ -2546,3 +2546,45 @@ describe('pages:* Phase 2 channel parity', () => {
     expect(read('src', 'shared', 'pages-types.ts')).toContain('PAGE_VIDEO_CHANNELS');
   });
 });
+
+// Terminal flow control's acknowledgement channel (2026-10-04). It is DESKTOP-WINDOW-ONLY by design: only a
+// desktop window's own terminal may release the brake on a flooding program, so a slow phone can never stall
+// the desktop. Each surface therefore handles it differently — pinned here so a future "parity fix" does not
+// quietly give phones the brake. (Merged onto one-core: the two channels are table entries in main/ipc/session.ts
+// that the phone door refuses silently, so there is no hand-written case in remote-server.ts any more.)
+describe('session:terminal-ack (terminal flow control)', () => {
+  const preload = readSource('src', 'main', 'preload.ts');
+  const contract = readSource('src', 'shared', 'backend-contract.ts');
+  const sessionTable = readSource('src', 'main', 'ipc', 'session.ts');
+  const handlers = readSource('src', 'main', 'ipc-handlers.ts');
+  const shim = readSource('src', 'renderer', 'remote-shim.ts');
+  const kotlin = fs.readFileSync(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'), 'utf8');
+
+  it('desktop: the same channel string in preload and the contract, sent by ackOutput, handled in main through the table', () => {
+    expect(preload).toContain("TERMINAL_ACK: 'session:terminal-ack'");
+    expect(contract).toContain("TERMINAL_ACK: 'session:terminal-ack'");
+    expect(preload).toMatch(/ackOutput:[^\n]*\n[^\n]*ipcRenderer\.send\(IPC\.TERMINAL_ACK/);
+    expect(sessionTable).toMatch(/name: IPC\.TERMINAL_ACK, kind: 'on', desktopOnly: true, refusal: \{ kind: 'silent' \}/);
+    expect(handlers).toContain('terminalOutput.ack(');
+    expect(readSource('src', 'main', 'terminal-output-router.ts')).toContain('const ack = (');
+  });
+
+  it('remote clients: the shim sends nothing, and the host refuses a stray one silently so it never reaches the PTY worker', () => {
+    expect(shim).toMatch(/ackOutput: \(_sessionId: string, _chars: number\) => \{\}/);
+    expect(shim).not.toMatch(/fire\('session:terminal-ack'/);
+    expect(readSource('src', 'main', 'remote-server.ts')).not.toMatch(/ackOutput|bounceSize/);
+  });
+
+  it('the repaint request is desktop-window-only the same way: shim no-op, silent refusal for a phone, Android has no branch', () => {
+    expect(preload).toContain("TERMINAL_REPAINT: 'session:terminal-repaint'");
+    expect(contract).toContain("TERMINAL_REPAINT: 'session:terminal-repaint'");
+    expect(sessionTable).toMatch(/name: IPC\.TERMINAL_REPAINT, kind: 'on', desktopOnly: true, refusal: \{ kind: 'silent' \}/);
+    expect(shim).toMatch(/requestRepaint: \(_sessionId: string\) => \{\}/);
+    expect(kotlin).not.toContain('session:terminal-repaint');
+  });
+
+  it('Android deliberately omits it: its own PTY runtime has no worker credit loop, and the shim never sends it', () => {
+    expect(kotlin).not.toContain('session:terminal-ack');
+    expect(kotlin).toContain('session:terminal-ready');   // the sibling it was modelled on IS handled there
+  });
+});

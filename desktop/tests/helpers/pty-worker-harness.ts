@@ -24,22 +24,29 @@ const WORKER_SRC = fs
   .replace(/^#![^\n]*\n/, '');
 
 /** Load the real pty-worker with a fake node-pty, and spawn its PTY. */
-export function loadWorker(subagentModel?: string) {
+export function loadWorker(subagentModel?: string, extraEnv: Record<string, string> = {}, platform: string = process.platform) {
   const writes: string[] = [];
   let spawnedEnv: Record<string, string | undefined> = {};
   let onExit: ((result: { exitCode: number }) => void) | undefined;
+  // Every onData listener the worker attaches (its own forwarder plus any echo-wait one), so a test can
+  // feed output the way the real PTY would.
+  const dataListeners: Array<(d: string) => void> = [];
   const fakePty = {
     pid: 1234,
     write: (d: string) => { writes.push(d); },
-    resize: vi.fn(),
+    resize: vi.fn(function (this: any, c: number, r: number) { fakePty.cols = c; fakePty.rows = r; }),
     kill: vi.fn(),
-    onData: () => ({ dispose() { /* no data in these tests */ } }),
+    onData: (cb: (d: string) => void) => { dataListeners.push(cb); return { dispose() { const i = dataListeners.indexOf(cb); if (i >= 0) dataListeners.splice(i, 1); } }; },
+    pause: vi.fn(),
+    resume: vi.fn(),
+    cols: 80,
+    rows: 24,
     onExit: (cb: (result: { exitCode: number }) => void) => { onExit = cb; },
   };
   const fakeProcess: any = new EventEmitter();
   Object.assign(fakeProcess, {
-    env: { ...process.env, CLAUDE_CODE_SUBAGENT_MODEL: subagentModel },
-    platform: process.platform,
+    env: { ...process.env, CLAUDE_CODE_SUBAGENT_MODEL: subagentModel, ...extraEnv },
+    platform,
     pid: 4242,
     hrtime: process.hrtime,
     send: vi.fn(),
@@ -66,7 +73,8 @@ export function loadWorker(subagentModel?: string) {
   const deliver = listeners[0] as (msg: any) => void;
   deliver({ type: 'spawn', command: '/bin/sh', args: [], cwd: '/tmp', cols: 120, rows: 30, sessionId: 'test-claude-session' });
   writes.length = 0;   // drop anything the spawn itself wrote
-  return { deliver, writes, spawnedEnv, fakePty, fakeProcess, exitPty: () => onExit?.({ exitCode: 0 }) };
+  const emitData = (d: string) => { for (const cb of [...dataListeners]) cb(d); };
+  return { deliver, writes, spawnedEnv, fakePty, fakeProcess, emitData, exitPty: () => onExit?.({ exitCode: 0 }) };
 }
 
 /** Let the worker's promise-based input queue, and its inter-chunk timers, run

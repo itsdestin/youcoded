@@ -433,3 +433,43 @@ describe('app chrome is not copy material', () => {
     expect(writeText).toHaveBeenCalledWith('Edited app.ts');
   });
 });
+
+
+// A long code fence still being written is drawn as block-level chunk spans; the right-click
+// "Copy code block" / "Ask about this" must still hand over exactly the fence's source.
+describe('code block menu on a streaming, chunked fence', async () => {
+  const React = (await import('react')).default;
+  const { render, cleanup } = await import('@testing-library/react');
+  const { default: MarkdownContent } = await import('../MarkdownContent');
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+  it('copies the fence source with no extra blank lines at chunk edges', async () => {
+    // jsdom has no innerText; emulate the measured Chromium behaviour (a blank line after each block chunk)
+    // so a regression to innerText shows up here instead of only in the real browser.
+    const desc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'innerText');
+    Object.defineProperty(HTMLElement.prototype, 'innerText', {
+      configurable: true,
+      get(this: HTMLElement) {
+        const walk = (n: Node): string => n.nodeType === 3 ? n.textContent ?? '' :
+          Array.from(n.childNodes).map(walk).join('') + ((n as Element).classList?.contains('yc-fence-chunk') ? '\n' : '');
+        return walk(this);
+      },
+    });
+    try {
+      const code = Array.from({ length: 130 }, (_, i) => `const v${i} = ${i};`).join('\n');
+      const md = `\`\`\`js\n${code}\n`;
+      const wrap = (m: string) => React.createElement('div', { className: 'chat-scroll' }, React.createElement(MarkdownContent, { content: m, incremental: true, live: true }));
+      const view = render(wrap('Here'));
+      view.rerender(wrap(`Here\n\n${md}`));
+      expect(view.container.querySelectorAll('.yc-fence-chunk').length).toBeGreaterThan(3); // really chunked
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+      const entries = buildContextMenu(view.container.querySelector('pre code')!)!;
+      const copy = entries.find((e) => e.type === 'item' && e.id === 'copy-code') as any;
+      copy.run();
+      expect(writeText).toHaveBeenCalledWith(code);
+    } finally {
+      if (desc) Object.defineProperty(HTMLElement.prototype, 'innerText', desc); else delete (HTMLElement.prototype as any).innerText;
+    }
+  });
+});

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
+import { memoWhileClosed } from './memo-while-closed';
 import type { SkillEntry, CommandEntry } from '../../shared/types';
 import SkillCard from './SkillCard';
 import { useSkills } from '../state/skill-context';
@@ -34,7 +35,7 @@ interface Props {
 const categoryChips = ['personal', 'work', 'development', 'admin', 'other'] as const;
 type CategoryChip = typeof categoryChips[number];
 
-export default function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, filterStore, onSelect, onSelectCommand, onClose, onOpenManager, onOpenMarketplace, onOpenLibrary, onOpenMarketplaceDetail }: Props) {
+function CommandDrawer({ open, searchMode, externalFilter: externalFilterProp, filterStore, onSelect, onSelectCommand, onClose, onOpenManager, onOpenMarketplace, onOpenLibrary, onOpenMarketplaceDetail }: Props) {
   const { drawerSkills, drawerCommands, favorites, setFavorite, loadError, retryLoad } = useSkills();
   // Mounted under every session whether or not it is showing, so only OPENING
   // it asks the marketplace to load (audit W16); the plugin-name badges fill
@@ -438,3 +439,7 @@ function AddSkillsCard({ onClick }: { onClick: () => void }) {
     </button>
   );
 }
+
+// WHY (2026-10-05): mounted under every session; the shell re-render on a switch used to build
+// every SkillCard of a closed drawer. See memo-while-closed.ts.
+export default memoWhileClosed(CommandDrawer);

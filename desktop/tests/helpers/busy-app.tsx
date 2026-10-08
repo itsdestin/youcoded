@@ -20,7 +20,7 @@ import { vi } from 'vitest';
 import { render, act, fireEvent } from '@testing-library/react';
 import { installMock } from '../../src/renderer/dev/workbench/install-mock';
 import type { MockStore } from '../../src/renderer/dev/workbench/mock-store';
-import { resetSubtreeRenders, subtreeRenders, lastVisible, terminalWrites } from './busy-app-probes';
+import { resetSubtreeRenders, subtreeRenders, namedRenders, lastVisible, terminalWrites } from './busy-app-probes';
 
 /** The timers the harness drives. Not React's scheduler (setImmediate /
  *  MessageChannel): faking those would stop React itself. */
@@ -71,7 +71,14 @@ export interface BusyApp {
   /** Types into the visible session's composer, the whole value at once. */
   type(value: string): Promise<void>;
   /** Switches tabs through the session strip's All Sessions menu. */
-  switchTo(id: string): Promise<void>;
+  switchTo(id: string, how?: 'pointer' | 'keyboard'): Promise<void>;
+  /** Like switchTo, but the counters are zeroed AFTER the menu is open, so they hold only what
+   *  the switch itself (the row click and its settling) caused. */
+  switchMeasured(id: string): Promise<void>;
+  /** Commits that touched the named component's subtree (see countProbe) since the last reset. */
+  namedRenders(name: string): number;
+  /** Layout reads made on the session strip's own elements since the last reset. */
+  stripLayoutReads(): { getComputedStyle: number; getBoundingClientRect: number };
   /** Advances the fake clock `ms`, letting frames, timers, promises and effects run. */
   wait(ms?: number): Promise<void>;
 }
@@ -232,6 +239,28 @@ function wrapBridge(claude: any, calls: string[]): void {
   });
 }
 
+// ── layout-read accounting ──────────────────────────────────────────────────
+// Counts getComputedStyle / getBoundingClientRect calls on elements inside the
+// session strip. jsdom has no layout, but a call is a call: in a browser each is
+// a forced style/layout when anything is dirty, which a plain switch always is.
+const stripReads = { getComputedStyle: 0, getBoundingClientRect: 0 };
+let readsWrapped = false;
+const inStrip = (el: unknown) => el instanceof Element && !!el.closest('[data-session-strip]');
+function wrapLayoutReads(): void {
+  if (readsWrapped) return;
+  readsWrapped = true;
+  const gcs = window.getComputedStyle.bind(window);
+  window.getComputedStyle = ((el: Element, pseudo?: string | null) => {
+    if (inStrip(el)) stripReads.getComputedStyle++;
+    return gcs(el, pseudo);
+  }) as typeof window.getComputedStyle;
+  const gbr = Element.prototype.getBoundingClientRect;
+  Element.prototype.getBoundingClientRect = function (this: Element) {
+    if (inStrip(this)) stripReads.getBoundingClientRect++;
+    return gbr.call(this);
+  };
+}
+
 // ── clock ───────────────────────────────────────────────────────────────────
 async function wait(ms = 50): Promise<void> {
   if (!vi.isFakeTimers()) throw new Error('busy-app: fake the timers (FAKE_TIMERS) before mounting');
@@ -326,6 +355,7 @@ export async function mountBusyApp(
   installStorage();
   installBrowserStubs();
   wrapListeners();
+  wrapLayoutReads();
   crashes.length = 0;
   live.clear();
   registry.clear();
@@ -387,7 +417,9 @@ export async function mountBusyApp(
     terminalRenders: (id) => subtreeRenders.terminal.get(id) ?? 0,
     otherTabRenders: (...except) => Object.fromEntries(
       sessionIds.filter((id) => !except.includes(id)).map((id) => [id, renders(id)])),
-    resetCounts: async () => { await drainScheduledWork(); resetSubtreeRenders(); window.__appInnerProfile?.reset(); },
+    resetCounts: async () => { await drainScheduledWork(); resetSubtreeRenders(); stripReads.getComputedStyle = 0; stripReads.getBoundingClientRect = 0; window.__appInnerProfile?.reset(); },
+    namedRenders: (name) => namedRenders.get(name) ?? 0,
+    stripLayoutReads: () => ({ ...stripReads }),
     crashes: () => [...crashes],
     listenersAfterOpening,
     bridgeCalls,
@@ -445,7 +477,19 @@ export async function mountBusyApp(
       await wait(FRAME_MS);
     },
 
-    async switchTo(id) {
+    async switchMeasured(id) {
+      const trigger = document.querySelector('[data-session-strip] path[d="M19 9l-7 7-7-7"]')?.closest('button');
+      if (!trigger) throw new Error('busy-app: no All Sessions button in the session strip');
+      await act(async () => { fireEvent.click(trigger); });
+      await app.resetCounts();
+      const row = document.querySelector(`[data-session-id="${id}"] [role="button"]`);
+      if (!row) throw new Error(`busy-app: no row for ${id} in the All Sessions menu`);
+      await act(async () => { fireEvent.click(row); });
+      await wait(500);
+      if (app.visibleId() !== id) throw new Error(`busy-app: switched to ${id} but ${app.visibleId()} is showing`);
+    },
+
+    async switchTo(id, how = 'pointer') {
       // The path a mouse user takes: the strip's All Sessions menu, then the
       // row. (In a zero-width jsdom header the strip packs every pill except
       // the active one into that menu.)
@@ -454,7 +498,8 @@ export async function mountBusyApp(
       await act(async () => { fireEvent.click(trigger); });
       const row = document.querySelector(`[data-session-id="${id}"] [role="button"]`);
       if (!row) throw new Error(`busy-app: no row for ${id} in the All Sessions menu`);
-      await act(async () => { fireEvent.click(row); });
+      // detail > 0 is a real pointer click; Enter/Space on a focused row arrives as a keydown (focus-composer-after-switch).
+      await act(async () => { how === 'keyboard' ? fireEvent.keyDown(row, { key: 'Enter' }) : fireEvent.click(row, { detail: 1 }); });
       await wait(500);
       if (app.visibleId() !== id) throw new Error(`busy-app: switched to ${id} but ${app.visibleId()} is showing`);
     },

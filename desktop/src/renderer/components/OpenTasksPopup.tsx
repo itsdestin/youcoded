@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { memoWhileClosed } from './memo-while-closed';
 import { useEscClose } from '../hooks/use-esc-close';
 import type { TaskState } from '../state/task-state';
 import { Button, Dialog } from './ui';
@@ -101,7 +102,7 @@ function SectionHeader({ label }: { label: string }) {
   );
 }
 
-export default function OpenTasksPopup({ open, tasks, onClose, onMarkInactive, onUnhide }: Props) {
+function OpenTasksPopup({ open, tasks, onClose, onMarkInactive, onUnhide }: Props) {
   // ESC routing through the central LIFO stack — same pattern as other L2 popups (AboutPopup, etc.)
   useEscClose(open, onClose);
 
@@ -194,3 +195,7 @@ export default function OpenTasksPopup({ open, tasks, onClose, onMarkInactive, o
     </>
   );
 }
+
+// WHY (2026-10-05): mounted by the shell all the time, so every session switch rebuilt this closed popup.
+// memoWhileClosed ignores prop changes until `open` flips (memo-while-closed.ts).
+export default memoWhileClosed(OpenTasksPopup);

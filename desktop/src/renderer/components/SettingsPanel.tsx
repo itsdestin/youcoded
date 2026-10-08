@@ -21,6 +21,7 @@ import { DevelopmentPopup } from './development/DevelopmentPopup';
 import { HelpPopup } from './HelpPopup';
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
+import { memoWhileClosed } from './memo-while-closed';
 import { ContributePopup } from './development/ContributePopup';
 import PerformanceButton from './PerformanceButton';
 import AccountSection from './AccountSection';
@@ -260,7 +261,7 @@ function ShortcutsPopup({ open, onClose }: { open: boolean; onClose: () => void 
   );
 }
 
-export default function SettingsPanel({ open, onClose, onSendInput, onRunCommand, hasActiveSession, activeSessionCwd, onOpenThemeMarketplace, onPublishTheme, onOpenClaudePreferences, syncAutoOpen, onSyncAutoOpenHandled, providersAutoOpen, onProvidersAutoOpenHandled, specialistsAutoOpen, onSpecialistsAutoOpenHandled, onShowMeAround }: Props) {
+function SettingsPanel({ open, onClose, onSendInput, onRunCommand, hasActiveSession, activeSessionCwd, onOpenThemeMarketplace, onPublishTheme, onOpenClaudePreferences, syncAutoOpen, onSyncAutoOpenHandled, providersAutoOpen, onProvidersAutoOpenHandled, specialistsAutoOpen, onSpecialistsAutoOpenHandled, onShowMeAround }: Props) {
   useEscClose(open, onClose);
   // Slide polish: track animation window so CSS can reduce backdrop-filter cost
   // and suppress scrollbar-thumb while the 300ms transform is running. Also
@@ -3281,3 +3282,7 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
   );
 }
 
+
+// WHY (2026-10-05): the shell re-renders on every session switch and used to rebuild this whole
+// tree each time while closed. See memo-while-closed.ts.
+export default memoWhileClosed(SettingsPanel);

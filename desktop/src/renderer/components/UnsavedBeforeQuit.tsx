@@ -20,7 +20,9 @@ import {
   type DraftFileStatus, type UnsavedEdit,
 } from '../state/unsaved-editors';
 
-export function UnsavedBeforeQuit() {
+// WHY memo (2026-10-05): no props, all state is its own — but PageHost re-renders with the shell on every
+// session switch and rebuilt this closed dialog each time.
+export const UnsavedBeforeQuit = React.memo(function UnsavedBeforeQuit() {
   const { quitRefused: r } = useOfficeAlerts();
   const edits = useUnsavedEdits();
   useScreenOpen('app/unsaved-before-quit', () => { previewFiles(); previewQuitRefused(); });
@@ -111,7 +113,7 @@ export function UnsavedBeforeQuit() {
       </div>
     </Dialog>
   );
-}
+});
 
 // ── One row: a file with unsaved edits, and what can be done about it here ──
 // WHY Save rather than "Open it" (fix round 13, controller's decision): opening a parked draft

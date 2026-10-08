@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { memoWhileClosed } from '../memo-while-closed';
 import { versionLine } from '../../app-version';
 import { plainMessage } from '../../utils/ipc-error';
 import { AnchorTip, Button, Callout, Checkbox, Dialog, ErrorState, LoadingState, SegmentedTabs, SettingRow, Textarea, TextInput } from '../ui';
@@ -37,7 +38,7 @@ const HANDOVER_PROMPT = (kind: string, description: string) =>
  */
 export type ReportContext = { error?: string; surface?: string; diagnose?: boolean };
 
-export function ReportDesign({ open, onClose, context }: { open: boolean; onClose: () => void; context?: ReportContext }) {
+function ReportDesignImpl({ open, onClose, context }: { open: boolean; onClose: () => void; context?: ReportContext }) {
   useEscClose(open, onClose);
   // WHY: closing or going back must not discard a draft. Persistence beyond this mounted
   // component and real originating context remain unbuilt.
@@ -323,3 +324,6 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
     </div>
   </Dialog>;
 }
+
+// Same reason as SettingsPanel: a closed report form is never rebuilt by a parent re-render.
+export const ReportDesign = memoWhileClosed(ReportDesignImpl);

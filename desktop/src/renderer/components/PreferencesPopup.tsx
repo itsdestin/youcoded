@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { memoWhileClosed } from './memo-while-closed';
 import { createPortal } from 'react-dom';
 import { useTheme } from '../state/theme-context';
 import { useEscClose } from '../hooks/use-esc-close';
@@ -51,7 +52,7 @@ const PERMISSION_LABELS: Record<PermissionDefault, { label: string; desc: string
   bypassPermissions: { label: 'Bypass', desc: 'Skip all permission prompts (risky)' },
 };
 
-export default function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props) {
+function PreferencesPopup({ open, onClose, onOpenAdvanced, showAdvanced }: Props) {
   useEscClose(open, onClose);
   const [prefs, setPrefs] = useState<PrefsState>(DEFAULTS);
   const [loaded, setLoaded] = useState(false);
@@ -271,3 +272,7 @@ function ToggleRow({ label, desc, checked, onChange }: { label: string; desc: st
     />
   );
 }
+
+// WHY (2026-10-05): mounted by the shell all the time, so every session switch rebuilt this closed popup.
+// memoWhileClosed ignores prop changes until `open` flips (memo-while-closed.ts).
+export default memoWhileClosed(PreferencesPopup);

@@ -272,6 +272,24 @@ function mayHoldDefinitionOrHtml(text: string): boolean {
 }
 
 /**
+ * Whether the text appended to the last piece COMPLETES a code fence's opening line: some line of the grown
+ * piece (from the line the old text ended in, onward) is a fence opener and its line ending lies in the
+ * appended part. WHY (2026-10-04, perf fix 5): the fence's start is only recorded by a parse of a text whose
+ * opening line is complete (openFenceBody). Extending the piece without parsing at that moment keeps "no fence
+ * start" for the whole fence, so it is never drawn in chunks and every word re-reads it all (the original
+ * O(n^2)). Deliberately NOT conditional on how the old text looked: the opener can arrive whole in one update
+ * after "Here is the file:\n", after a line of spaces, as "``" then "`ts\n", or as a second fence after a
+ * closed one — the only reliable signal is "an opener line just got its line ending".
+ */
+function completesFenceOpener(last: string, text: string): boolean {
+  const from = Math.max(last.lastIndexOf('\n'), last.lastIndexOf('\r')) + 1;
+  for (const m of text.slice(from).matchAll(/(?:^|[\r\n]) {0,3}(?:`{3,}[^`\r\n]*|~{3,}[^\r\n]*)(?:\r\n?|\n)/g)) {
+    if (from + m.index! + m[0].length > last.length) return true;
+  }
+  return false;
+}
+
+/**
  * The previous pieces with only the LAST one grown by the appended text — or
  * null when that is not certain, and the tail must be parsed.
  *
@@ -302,6 +320,9 @@ function extendLastPiece(prev: MarkdownBlocks, content: string): MarkdownBlocks 
     const from = Math.max(last.fenceBody, lineStart(text, Math.max(0, last.text.length - 1)));
     if (FENCE_CLOSE_LINE.test(text.slice(from))) return null;
   } else if (hasBlankLine(text) || mayHoldDefinitionOrHtml(text)) {
+    return null;
+  } else if (completesFenceOpener(last.text, text)) {
+    // One parse of the tail, once per fence, so the piece records where the fence's code starts.
     return null;
   }
   const live = prev.live.slice();
@@ -479,6 +500,13 @@ interface DrawnGroup {
   labels: string[];
   /** The winning definitions of those labels that live OUTSIDE it, to put in front (withDefinitions). */
   defs: string;
+  /**
+   * Set on the LAST group when it ends in a top-level code fence that is still open:
+   * where in `source` that fence's opening line starts. Lets a bubble that mounted
+   * mid-reply (switching back to a chat, a torn-off window, a chat that was hidden)
+   * still draw a long fence in chunks, though text came before it in the same group.
+   */
+  fenceAt?: number;
 }
 
 /** Link definitions that won (first of each label), indexed by labelKey. */
@@ -560,7 +588,10 @@ export function advanceStream(view: StreamView, content: string): StreamView {
   // exactly today's render, no parse — until new text could start a piece of
   // its own. Splitting earlier parsed the whole message and then redrew all of
   // it anyway as group 0, on top of today's cost, every word.
-  if (!view.blocks && !mayStartPiece(content, view.drawn.length)) return oneDocument(content);
+  // WHY also split when the text ends in an open code fence: a bubble that mounted after the fence
+  // began has no blank line to wait for (code often has none for hundreds of lines), so it stayed one
+  // document and redrew the whole fence per word. One parse here, then the cheap extend path.
+  if (!view.blocks && !mayStartPiece(content, view.drawn.length) && !mayEndInOpenFence(content)) return oneDocument(content);
   const floor = view.blocks ? view.floor : view.drawn.length;
   const blocks = splitMarkdownBlocks(content, view.blocks);
   if (blocks.whole) {
@@ -673,6 +704,13 @@ function defsFor(g: DrawnGroup, labels: string[], lookup: (key: string) => DefIn
   return found.map((d) => d.text).join('\n\n');
 }
 
+/** Whether `content` may end inside a code fence: an odd number of lines that could open or close one. */
+function mayEndInOpenFence(content: string): boolean {
+  let n = 0;
+  for (const _ of content.matchAll(/(?:^|\n) {0,3}(?:`{3,}|~{3,})/g)) n++;
+  return n % 2 === 1;
+}
+
 /**
  * Whether a piece could start at or after `floor` in `content`: pieces start
  * only on the line after a blank line, so with no blank line ending at or after
@@ -709,7 +747,17 @@ function trimTrailingBlank(text: string): string {
 
 const groupOf = (pieces: Piece[], last: boolean): DrawnGroup => {
   const source = pieces.length === 1 ? pieces[0].text : pieces.map((p) => p.text).join('');
+  // WHY only the last group, and from the splitter's own `fenceBody`: it is the one place that
+  // has already decided (by parsing) that the message ends in a TOP-LEVEL open fence — scanning
+  // the text for a backtick line cannot tell that from one inside a quote, a list or another fence.
+  const tail = pieces[pieces.length - 1];
+  let fenceAt: number | undefined;
+  if (last && tail.fenceBody !== undefined) {
+    const before = source.length - tail.text.length;
+    fenceAt = before + lineStart(tail.text, tail.fenceBody - 1);
+  }
   return {
+    ...(fenceAt !== undefined ? { fenceAt } : {}),
     key: pieces[0].start,
     source,
     draw: last ? source : trimTrailingBlank(source),
@@ -792,4 +840,72 @@ function planStream(blocks: MarkdownBlocks, floor: number, settledPiecesIn: numb
     settledPieces: settledPiecesIn + groupPieces[s - 1] + 1,
     pending: groups.slice(s),
   };
+}
+
+// ---------------------------------------------------------------------------
+// A long code fence that is still being typed.
+
+/** Lines per frozen chunk of an open code fence (see splitOpenFence). */
+export const OPEN_FENCE_CHUNK_LINES = 20;
+
+export interface OpenFenceSplit {
+  /** Everything before the fence in the same piece of text (empty when the fence starts it). */
+  prefix: string;
+  /** The fence's opening line, with its line ending — hand it to every chunk so each reads as the same language. */
+  opening: string;
+  /** The code lines that are final, in whole chunks of OPEN_FENCE_CHUNK_LINES; each line ends with "\n". */
+  frozen: string;
+  /** Everything after them: the few dozen newest lines plus the line still being typed. */
+  tail: string;
+}
+
+/**
+ * Cut a message piece that is ONE still-open code fence into a frozen head and a
+ * small live tail, or null when it is not that (or is still too short to bother).
+ *
+ * WHY (perf-lab 2026-10-04, "D7"): a reply writing one 500-line fence redrew the
+ * whole fence — parse, syntax-colour, element tree — on every streamed word, so
+ * the cost per word grew with the fence and the screen's thread sat at 100%.
+ * Lines of an open fence are final the moment their line ending arrives (nothing
+ * typed later can change them: only a closing fence line ends the block, and we
+ * refuse to split when any line could be one), so the head is drawn once, in
+ * chunks, and only the tail is redrawn per word.
+ *
+ * Only the plain, common shape is split — a fence at column 0, LF line endings,
+ * nothing before it — everything else keeps today's whole-block drawing. The tail
+ * is always at least one chunk long (20-39 lines) so a line is coloured with plenty
+ * of context before it is frozen.
+ */
+export function splitOpenFence(whole: string, fenceAt = 0): OpenFenceSplit | null {
+  const source = whole.slice(fenceAt);
+  const open = /^(`{3,}|~{3,})([^\n]*)\n/.exec(source);
+  if (!open || whole.includes('\r')) return null;
+  // A backtick fence's info string may not hold a backtick (then it is not a fence).
+  if (open[1][0] === '`' && open[2].includes('`')) return null;
+  // The reference block is drawn by its own component from the whole body.
+  if (/^\s*conversations(?:\s|$)/.test(open[2])) return null;
+  const openingLen = open[0].length;
+  // Any line that could close the fence means the block may already be finished.
+  if (FENCE_CLOSE_LINE.test(source.slice(openingLen - 1))) return null;
+  // Complete lines in the code; the line still being typed is not counted.
+  let lines = 0;
+  for (let at = source.indexOf('\n', openingLen); at !== -1; at = source.indexOf('\n', at + 1)) lines++;
+  const frozenLines = lines < 2 * OPEN_FENCE_CHUNK_LINES ? 0 : Math.floor((lines - OPEN_FENCE_CHUNK_LINES) / OPEN_FENCE_CHUNK_LINES) * OPEN_FENCE_CHUNK_LINES;
+  if (frozenLines === 0) return null;
+  let end = openingLen;
+  for (let i = 0; i < frozenLines; i++) end = source.indexOf('\n', end) + 1;
+  return { prefix: whole.slice(0, fenceAt), opening: open[0], frozen: source.slice(openingLen, end), tail: source.slice(end) };
+}
+
+/** The frozen head cut into its chunks of OPEN_FENCE_CHUNK_LINES lines (each line ends with "\n"). */
+export function fenceChunks(frozen: string): string[] {
+  const chunks: string[] = [];
+  let start = 0;
+  while (start < frozen.length) {
+    let end = start;
+    for (let i = 0; i < OPEN_FENCE_CHUNK_LINES; i++) end = frozen.indexOf('\n', end) + 1;
+    chunks.push(frozen.slice(start, end));
+    start = end;
+  }
+  return chunks;
 }
