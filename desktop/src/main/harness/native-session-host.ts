@@ -3270,6 +3270,9 @@ export class NativeSessionHost extends EventEmitter {
         const restored = await store.restore({
           sessionId, transcriptPath: this.store.transcriptPath(sessionId, cwd),
           binding: identity, assemblyDigest: session.assemblyDigest(),
+          // WHY: the checkpoint re-reads ORIGINAL picture files; an over-limit one
+          // must fail the restore (image-oversized) so the gated rebuild above wins.
+          imageLimits: session.profileSnapshot.imageLimits,
         });
         if (restored.ok) {
           // WHY: old summary sidecars may cite a retired identical message.

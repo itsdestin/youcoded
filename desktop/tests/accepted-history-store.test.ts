@@ -5,6 +5,9 @@ import * as path from 'path';
 import { AcceptedHistoryStore, type AcceptedHistoryProposal } from '../src/main/harness/accepted-history-store';
 import { imageCollapsedToolResultText, isAppGenerated, markAppGenerated, summaryProvenanceNote, prunedToolResultText } from '../src/main/harness/compaction';
 import type { PersistedEventReference } from '../src/main/harness/session-store';
+import { imageNote } from '../src/main/harness/image-support';
+import { IMAGE_LIMITS_OPENAI } from '../src/main/harness/capability-profile';
+import { pngHeader } from './helpers/image-fixtures';
 
 // Pass-through fs whose sync reads are RECORDED while `watch.on` is set — how the
 // B8 test proves publish()/restore() make no blocking read (vi.spyOn cannot patch
@@ -513,6 +516,68 @@ describe('AcceptedHistoryStore', () => {
     manifest.messages[0].content.parts[0].pruned.keepChars = long.length + 1;
     fs.writeFileSync(store.manifestPath(sessionId), JSON.stringify(manifest));
     expect(await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'malformed' });
+  });
+
+  it('restore refuses an image the session limits now call oversized — the host falls back to the gated rebuild', async () => {
+    const image = path.join(root, 'huge.png');
+    fs.writeFileSync(image, pngHeader(2904, 17528));
+    const events: Fixture[] = [{ type: 'tool-result', sessionId, uuid: 't2', data: { toolUseId: 'call_1', toolName: 'Read', toolResult: 'here it is', images: [image] } }];
+    writeTranscript(events);
+    const messages = [{ role: 'tool', content: [{ type: 'tool-result', toolCallId: 'call_1', toolName: 'Read', output: { type: 'content', value: [
+      { type: 'text', text: 'here it is' },
+      { type: 'file', mediaType: 'image/png', data: { type: 'data', data: fs.readFileSync(image) }, filename: 'huge.png' },
+    ] } }] }];
+    const revision = await store.invalidate(sessionId, 'history-mutation');
+    await expect(store.publish(proposal({ references: events.map(refFor), messages: messages as any, revision }))).resolves.toEqual({ ok: true });
+    expect((await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).ok).toBe(true);
+    expect(await store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest, imageLimits: IMAGE_LIMITS_OPENAI })).toEqual({ ok: false, reason: 'image-oversized' });
+  });
+
+  it('describes and restores a text result whose oversized image collapsed to the note', async () => {
+    const events: Fixture[] = [{ type: 'tool-result', sessionId, uuid: 't3', data: { toolUseId: 'call_2', toolName: 'Read', toolResult: 'Read image', images: ['/tmp/contact.png'] } }];
+    writeTranscript(events);
+    const value = 'Read image\n' + imageNote({ kind: 'oversized', label: 'contact.png', width: 2904, height: 17528 });
+    const messages = [{ role: 'tool', content: [{ type: 'tool-result', toolCallId: 'call_2', toolName: 'Read', output: { type: 'text', value } }] }];
+    const restored = await roundTrip({ references: events.map(refFor), messages: messages as any });
+    // A pruned part is never a replayable portable origin (replayableOrigin), same as keepChars.
+    expect(restored).toEqual({ ok: true, messages, messageOrigins: [null], eventUuids: ['t3'], revision: store.currentRevision(sessionId) });
+    expect(sidecar()).toContain('"oversized"');
+    expect(sidecar()).not.toContain('above this model');   // fields, never the sentence
+  });
+
+  it('describes and restores a MIXED result: a fitting sibling kept, one image collapsed', async () => {
+    const ok = path.join(root, 'ok.png'); fs.writeFileSync(ok, pngHeader(640, 480));
+    const events: Fixture[] = [{ type: 'tool-result', sessionId, uuid: 't5', data: { toolUseId: 'call_5', toolName: 'Read', toolResult: 'Read images', images: ['/tmp/contact.png', ok] } }];
+    writeTranscript(events);
+    const text = 'Read images\n' + imageNote({ kind: 'oversized', label: 'contact.png', width: 2904, height: 17528 });
+    const messages = [{ role: 'tool', content: [{ type: 'tool-result', toolCallId: 'call_5', toolName: 'Read', output: { type: 'content', value: [
+      { type: 'text', text },
+      { type: 'file', mediaType: 'image/png', data: { type: 'data', data: fs.readFileSync(ok) }, filename: 'ok.png' },
+    ] } }] }];
+    const restored = await roundTrip({ references: events.map(refFor), messages: messages as any });
+    expect(restored).toEqual({ ok: true, messages, messageOrigins: [null], eventUuids: ['t5'], revision: store.currentRevision(sessionId) });
+  });
+
+  it('a user message with a trailing attachment note round-trips; modelAttachments is where its bytes are found', async () => {
+    const small = path.join(root, 'small.png'); fs.writeFileSync(small, pngHeader(610, 3686));
+    const events: Fixture[] = [{ type: 'user-message', sessionId, uuid: 'u9', data: { text: 'look', attachments: ['/tmp/huge.png', '/tmp/gone.png'], modelAttachments: [small, '/tmp/gone.png'] } }];
+    writeTranscript(events);
+    const messages = [{ role: 'user', content: [
+      { type: 'text', text: 'look' },
+      { type: 'file', mediaType: 'image/png', data: fs.readFileSync(small) },
+      { type: 'text', text: imageNote({ kind: 'unavailable', label: 'gone.png', reason: 'missing' }) },
+    ] }];
+    const restored = await roundTrip({ references: events.map(refFor), messages: messages as any });
+    expect(restored).toEqual({ ok: true, messages, messageOrigins: [null], eventUuids: ['u9'], revision: store.currentRevision(sessionId) });
+  });
+
+  it('a note that does not recompute exactly is not describable (no silent drift)', async () => {
+    const events: Fixture[] = [{ type: 'tool-result', sessionId, uuid: 't4', data: { toolUseId: 'call_3', toolName: 'Read', toolResult: 'Read image', images: ['/tmp/a.png'] } }];
+    writeTranscript(events);
+    const value = "Read image\n[image not attached: a.png is 2904×17528 px, above this model's image size limit] trailing";
+    const messages = [{ role: 'tool', content: [{ type: 'tool-result', toolCallId: 'call_3', toolName: 'Read', output: { type: 'text', value } }] }];
+    const revision = await store.invalidate(sessionId, 'history-mutation');
+    await expect(store.publish(proposal({ references: events.map(refFor), messages: messages as any, revision }))).resolves.toEqual({ ok: false, reason: 'unreferenced-history' });
   });
 
   it('keeps injected user strings as bounded literals and refuses an oversized one', async () => {
