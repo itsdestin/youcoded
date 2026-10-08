@@ -19,6 +19,7 @@ import { isPlaceholderModelId } from '../shared/model-ids';
 import { useChatViewHandlers } from './hooks/use-chatview-handlers';
 import { useAppScreens } from './shoot-app-screens';
 import { ScreenMark } from './shoot-mode';
+import { DevWindowLabel } from './components/DevWindowLabel';
 
 import ErrorBoundary from './components/ErrorBoundary';
 import { AnchorTip, Button, Dialog, ErrorState, StatusStrip, Toast, Toggle } from './components/ui';
@@ -3762,6 +3763,7 @@ function AppInner() {
             ) : (
               <p className="text-xl text-fg-muted select-none">No Active Session</p>
             )}
+            <DevWindowLabel />
             {/* scene: the hero surface renders the theme's companions (sun,
                 motes, sparkles) orbiting the mascot — big canvas, no clipping.
                 data-guide-anchor: the tour's first stop rings the buddy. */}

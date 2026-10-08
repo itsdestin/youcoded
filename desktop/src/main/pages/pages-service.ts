@@ -9,8 +9,11 @@
 import path from 'node:path';
 import chokidar, { type FSWatcher } from 'chokidar';
 import { PagesStore, PAGES_DIR, isUnderPagesDir, type PagesStoreDeps } from './pages-store';
-import { applyScheme, fingerprint, keyPlacement, withApprovedAddress } from './page-connections';
+import { applyScheme, fingerprint, keyPlacement, savedKeyTarget, withApprovedAddress } from './page-connections';
+import { log } from '../logger';
+import { PlaidItemsStore, cleanPlaidRequest, openPlaidLink, parseCredentials, runPlaid } from './plaid';
 import { cleanDeviceAddress } from '../../shared/page-device-address';
+import { setPersonalPagesRoot } from '../claude-code-pages-mcp';
 import { hashHtml, savedKeyId, splitSavedKeyId, type PageApproval } from './connections-store';
 import { PageRateGate, performPageFetch, type PageCredential } from './page-fetch';
 import { checkDeviceSocketAccess, performPageSocket, type DeviceSocketAccess, type PageSocketContext } from './page-socket';
@@ -19,8 +22,9 @@ import { PageLiveVideos } from './page-live-video';
 import type { ExternalChangeEvent } from '../artifacts/project-watcher';
 import type {
   PageApproveResult, PageConnection, PageFetchRequest, PageFetchResult,
-  PageRefreshState, PageSummary, SavedPageKey,
+  PageRefreshState, PageSummary, PlaidResult, SavedPageKey,
 } from '../../shared/pages-types';
+import { PLAID_SERVICE, plaidAddress } from '../../shared/pages-types';
 
 const DEBOUNCE_MS = 300;
 
@@ -45,6 +49,10 @@ export interface PagesServiceDeps extends PagesStoreDeps {
   socketConnect?: PageSocketContext['connect'];
   /** Test injection for a page's LIVE socket (page-live-socket.ts). */
   liveSocketConnect?: (url: string, headers: Record<string, string>) => LiveWsLike;
+  /** Test injection: the connected-banks store. Production builds it from `connections`. */
+  plaidItems?: PlaidItemsStore;
+  /** Test injection: opening Plaid's sign-in page (production: openPlaidLink). */
+  openExternal?: (url: string) => Promise<void> | void;
 }
 
 class PagesService {
@@ -68,8 +76,12 @@ class PagesService {
    *  change to either closes that page's live sockets. */
   private readonly seenSignature = new Map<string, string>();
 
+  /** Connected banks (plaid.ts), kept beside the page connections under the same keychain. */
+  private readonly plaidItems: PlaidItemsStore | undefined;
+
   constructor(private readonly deps: PagesServiceDeps) {
     this.store = new PagesStore({ ...deps, refreshState: (id) => this.freshness.get(id) });
+    this.plaidItems = deps.plaidItems ?? (deps.connections ? new PlaidItemsStore(deps.connections.userDataDir, deps.connections.secrets) : undefined);
     this.sockets = new PageLiveSockets({
       access: (pageId, url, signal) => this.socketAccess(pageId, url, signal),
       gate: this.gate,
@@ -258,17 +270,23 @@ class PagesService {
     }
 
     for (const c of waiting) {
-      if (c.kind !== 'key' && !(c.kind === 'device' && c.needsKey)) continue;
+      const target = savedKeyTarget(c);
+      if (!target) continue;
       const typed = (keys?.[c.id] ?? '').trim();
       const reuseSaved = typed === '' || typed === 'saved';
       if (!reuseSaved && opts.remote) return { ok: false, message: NO_KEYS_FROM_REMOTE };
+      // A Plaid key is both halves as one JSON string (the card builds it);
+      // refuse half of one here rather than save something that can never work.
+      if (!reuseSaved && c.kind === 'plaid' && !parseCredentials(typed)) {
+        return { ok: false, message: 'Paste both the Plaid client ID and the secret to connect.' };
+      }
       try {
         if (reuseSaved) {
-          if (!(await store.savedKey(c.service, c.address))) {
-            return { ok: false, message: `No ${c.service} key is saved on this computer yet. Add one to let this page use it.` };
+          if (!(await store.savedKey(target.service, target.address))) {
+            return { ok: false, message: `No ${target.service} key is saved on this computer yet. Add one to let this page use it.` };
           }
         } else {
-          await store.saveKey(c.service, c.address, typed, keyPlacement(c));
+          await store.saveKey(target.service, target.address, typed, keyPlacement(c));
         }
       } catch (e) { return { ok: false, message: messageOf(e) }; }
     }
@@ -328,7 +346,7 @@ class PagesService {
       out.push({
         ...parts,
         usedBy: pages
-          .filter((p) => (p.connections ?? []).some((c) => (c.kind === 'key' || c.kind === 'device') && c.approved && savedKeyId(c.service, c.address) === id))
+          .filter((p) => (p.connections ?? []).some((c) => { const t = savedKeyTarget(c); return !!t && c.approved && savedKeyId(t.service, t.address) === id; }))
           .map((p) => ({ id: p.id, name: p.name })),
       });
     }
@@ -342,11 +360,11 @@ class PagesService {
     // Every page that stood on this key is paused now, so its band is stale.
     // Read that list BEFORE the delete, while the approvals still say who.
     const affected = before
-      .filter((p) => (p.connections ?? []).some((c) => (c.kind === 'key' || c.kind === 'device') && c.service === service && c.address === address))
+      .filter((p) => (p.connections ?? []).some((c) => { const t = savedKeyTarget(c); return !!t && t.service === service && t.address === address; }))
       .map((p) => p.id);
     // Which connection of each page stood on this key, for the live sockets.
     const connectionsOn = before.flatMap((p) => (p.connections ?? [])
-      .filter((c) => (c.kind === 'key' || c.kind === 'device') && c.service === service && c.address === address)
+      .filter((c) => { const t = savedKeyTarget(c); return !!t && t.service === service && t.address === address; })
       .map((c) => ({ page: p.id, connection: c.id })));
     await this.deps.connections?.deleteSavedKey(service, address).catch(() => { /* nothing saved under that name */ });
     for (const id of affected) this.freshness.delete(id);
@@ -379,6 +397,67 @@ class PagesService {
       return result;
     } finally {
       this.gate.release(id);
+    }
+  }
+
+  /** Pages that are mid-way through a bank sign-in, so a second press of
+   *  "Connect a bank" does not open a second browser tab. */
+  private readonly plaidLinking = new Map<string, AbortController>();
+
+  /** `pages:plaid` — the page asked the app to do one Plaid thing. The page
+   *  must hold an APPROVED plaid connection (the fingerprint on disk matches),
+   *  and the answer never carries a key or a bank's sign-in. Desktop only:
+   *  the remote bridge does not offer it, because a bank sign-in opens a
+   *  browser on this computer. */
+  async plaid(id: string, raw: unknown): Promise<PlaidResult> {
+    const req = cleanPlaidRequest(raw);
+    if (!req) return { ok: false, op: 'status', code: 'BAD_REQUEST', message: 'The page asked Plaid for something the app does not do.' };
+    const refuse = (message: string, code = 'NOT_APPROVED'): PlaidResult => ({ ok: false, op: req.op, code, message });
+    const store = this.deps.connections;
+    const items = this.plaidItems;
+    if (!store || !items) return refuse('Bank connections are not available on this computer.', 'UNAVAILABLE');
+    const info = await this.store.connectionsOf(id);
+    const pageKey = await this.store.approvalKeyFor(id);
+    if (!info || !pageKey) return refuse('This page is no longer in your library.');
+    const c = info.connections.find((x) => x.kind === 'plaid');
+    if (!c || c.kind !== 'plaid') return refuse('This page has no bank connection.');
+    let records: Record<string, PageApproval>;
+    try { records = await store.approvalsFor(pageKey); } catch (e) { return refuse(messageOf(e)); }
+    if (records[c.id]?.fingerprint !== fingerprint(c)) return refuse('This page has not been allowed to use your banks yet.');
+    const record = await store.savedKey(PLAID_SERVICE, plaidAddress(c.environment));
+    const creds = parseCredentials(record ? await store.keyValue(record).catch(() => null) : null);
+    if (!creds) return refuse('No Plaid keys are saved on this computer. Open the page’s connections to add them.', 'NO_KEYS');
+
+    // Cancel stops this page's open sign-in. Starting a new one also stops the old one, so a closed browser tab can
+    // never leave the Connect button stuck.
+    if (req.op === 'cancel') { this.plaidLinking.get(id)?.abort(); this.plaidLinking.delete(id); return { ok: true, op: 'cancel', items: [] }; }
+    const linking = req.op === 'connect' || req.op === 'reconnect';
+    if (!linking && !(await this.gate.acquire(id))) return refuse('This page is asking faster than the app will allow. Try again shortly.', 'TOO_MANY');
+    let mine: AbortController | undefined;
+    if (linking) { this.plaidLinking.get(id)?.abort(); mine = new AbortController(); this.plaidLinking.set(id, mine); }
+    try {
+      const result = await runPlaid({
+        env: c.environment, creds, items,
+        openExternal: this.deps.openExternal ?? openPlaidLink,
+        browser: req.op === 'connect' || req.op === 'reconnect' ? req.browser : undefined,
+        fetchImpl: this.deps.fetchImpl,
+        signal: mine?.signal,
+      }, req);
+      if (req.op === 'accounts') this.noteFreshness(id, result.ok && result.items.every((i) => i.ok));
+      // Plaid's code only (never a key or message), so a failed connection can be diagnosed from the log.
+      if (!result.ok && result.code !== 'CANCELLED') log('WARN', 'Pages', 'Plaid request failed', { op: req.op, code: result.code, env: c.environment });
+      if (result.ok && req.op === 'accounts') for (const it of result.items) {
+        if (!it.ok) log('WARN', 'Pages', 'Plaid bank not answering', { code: it.error?.code, bank: it.institution.name });
+        // Which kinds of account each bank sent (never balances), to explain one that seems missing.
+        else log('INFO', 'Pages', 'Plaid accounts', { bank: it.institution.name, types: it.accounts.map((a) => `${a.type}/${a.subtype ?? ''}`) });
+      }
+      // Whether each bank has sent its older purchases yet (counts and a status, never a purchase).
+      if (result.ok && req.op === 'transactions') for (const it of result.items) {
+        if (it.ok && it.transactions) log('INFO', 'Pages', 'Plaid purchases', { bank: it.institution.name, added: it.transactions.added.length, history: it.transactions.history ?? 'unknown', fromStart: !req.cursors?.[it.itemId] });
+      }
+      return result;
+    } finally {
+      if (linking) { if (this.plaidLinking.get(id) === mine) this.plaidLinking.delete(id); } else this.gate.release(id);
     }
   }
 
@@ -457,8 +536,10 @@ class PagesService {
   private async credentialFor(c: PageConnection): Promise<PageCredential | null> {
     const store = this.deps.connections;
     switch (c.kind) {
+      // Plaid's keys go only into plaid.ts's own calls, never onto a page fetch.
       case 'public':
       case 'open':
+      case 'plaid':
         return null;
       case 'device':
       case 'key': {
@@ -500,7 +581,7 @@ class PagesService {
     for (const p of pages) {
       const key = await this.store.approvalKeyFor(p.id);
       if (key) livePageKeys.add(key);
-      for (const c of p.connections ?? []) if (c.kind === 'key' || c.kind === 'device') usedKeyIds.add(savedKeyId(c.service, c.address));
+      for (const c of p.connections ?? []) { const t = savedKeyTarget(c); if (t) usedKeyIds.add(savedKeyId(t.service, t.address)); }
     }
     await store.prune(livePageKeys, usedKeyIds).catch(() => { /* housekeeping, never a user-visible failure */ });
   }
@@ -532,6 +613,8 @@ function messageOf(e: unknown): string {
 let service: PagesService | null = null;
 
 export function initPagesService(deps: PagesServiceDeps): PagesService {
+  // The assistant's page-data tools (claude-code-pages-mcp.ts) look in the same Personal Pages/ folder.
+  setPersonalPagesRoot(() => { const root = deps.personalRoot(); return root ? path.join(root, PAGES_DIR) : null; });
   service?.stop();
   service = new PagesService(deps);
   service.ensureWatching();

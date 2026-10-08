@@ -12,6 +12,8 @@ export const PAGES: readonly ScreenEntry[] = [
   { ...pg('pages#empty', 'view', 'empty-state'), scenario: 'empty' },
   pg('pages/page/page-week-planner', 'view'),
   pg('pages/focus/page-focus-timer', 'view'),
+  // Finance dashboard mockup (design stage, 2026-10-05).
+  pg('pages/page/page-money', 'view', 'money'),
   // The theme's wallpaper through a page in the newer 'float' chrome style (shoot with a wallpaper theme: --themes halftone-dimension).
   { ...pg('pages/page/page-week-planner#float', 'view'), params: { chrome: 'float' } },
   // Approval states, one fixture page each.

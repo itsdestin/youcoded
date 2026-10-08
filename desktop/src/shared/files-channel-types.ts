@@ -22,7 +22,7 @@ import type { getPagesService } from '../main/pages/pages-service';
 import type { ensureProjectCoalesced } from '../main/artifacts/project-manager';
 import type { readFileHead } from '../main/fs-read-head';
 import type { ChatsearchReadRequest } from './chatsearch-refs';
-import type { PageFetchRequest, PageSocketCall, PageSocketOpenResult, PageSocketCallResult, PageVideoStartRequest, PageVideoCall, PageVideoStartResult } from './pages-types';
+import type { PageFetchRequest, PlaidResult, PageSocketCall, PageSocketOpenResult, PageSocketCallResult, PageVideoStartRequest, PageVideoCall, PageVideoStartResult } from './pages-types';
 
 type Answer<F extends (...a: any[]) => any> = Awaited<ReturnType<F>>;
 type PagesService = NonNullable<ReturnType<typeof getPagesService>>;
@@ -102,6 +102,7 @@ export interface FilesChannelTypes {
   'pages:saved-keys': { request: void; response: PagesAnswer<'savedKeys'> };
   'pages:delete-saved-key': { request: { service: string; address: string }; response: PagesAnswer<'deleteSavedKey'> };
   'pages:fetch': { request: { id: string; request: PageFetchRequest }; response: PagesAnswer<'fetch'> | { ok: false; reason: 'network'; message: string } };
+  'pages:plaid': { request: { id: string; request: unknown }; response: PlaidResult };
   // Live sockets and camera video (spec 2026-10-04). Each call names its page and frame; main knows the caller itself
   // (a window or a phone), so these rows carry no owner. Events come back as the pages:socket-event push, not a row.
   'pages:socket-open': { request: PageSocketCall & { url: string }; response: PageSocketOpenResult };

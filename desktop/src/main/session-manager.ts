@@ -10,6 +10,7 @@ import { EventEmitter } from 'events';
 import { log } from './logger';
 import { deployClaudeCodeLinkMcp } from './claude-code-mcp';
 import { deployClaudeCodeDocCommentsMcp } from './claude-code-doc-comments-mcp';
+import { deployClaudeCodePagesMcp, personalPagesRoot } from './claude-code-pages-mcp';
 
 // Optional — which may not be installed; fall back to bare command name
 let whichSync: ((cmd: string) => string) | null = null;
@@ -332,6 +333,14 @@ export class SessionManager extends EventEmitter {
         this.emit('doc-comments-mcp-attached', id, resolvedCwd, docComments.token, docComments.serverId, docComments.deployDir);
       } catch (err) {
         log('WARN', 'SessionManager', 'doc-comments MCP deploy failed — this session starts without comment tools', { error: String(err) });
+      }
+      // Page data (finance dashboard): read any page's saved data freely; a change asks with the normal
+      // permission card, because UpdatePageData is deliberately left off --allowedTools. Best-effort, like the others.
+      try {
+        const pages = deployClaudeCodePagesMcp(app.getPath('userData'), nodePath, [personalPagesRoot() ?? '', resolvedCwd ? path.join(resolvedCwd, 'Pages') : '']);
+        if (pages) { mcpConfigPaths.push(pages.configPath); allowedToolNames.push(...pages.allowedTools); }
+      } catch (err) {
+        log('WARN', 'SessionManager', 'pages MCP deploy failed — this session starts without page-data tools', { error: String(err) });
       }
       if (mcpConfigPaths.length) args.push('--mcp-config', ...mcpConfigPaths);
       if (allowedToolNames.length) args.push('--allowedTools', ...allowedToolNames);

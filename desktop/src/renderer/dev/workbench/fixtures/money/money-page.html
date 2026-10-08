@@ -1,0 +1,1595 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Money</title>
+<!--
+  Money page (finance dashboard). Decisions: docs/active/design/2026-10-05-finance-dashboard/ —
+  round 1 (summary first, grouped by kind, card bars warn at 30% / alert at 80%, bills by due
+  date with late and credit-report warnings, live check on open, stale after 3 days, typed-in
+  accounts editable here and by chat), reviews 1–2 (Home-page glass look, links out, brackets),
+  and round 3 (purchases kept with the page, chart modes, per-kind accounts, categories, found
+  bills that you confirm, trimmed cards, $(…) format, 1W/1M, bills sortable).
+  Everything shown comes from youcoded.data (and youcoded.plaid when connected), so the same
+  file runs against the workbench's made-up numbers and against real banks.
+-->
+<style>
+  :root { --warn: var(--warning-fg, #c77a00); --bad: var(--destructive-fg, #d33); }
+  body { font-size: 14px; }
+  .num { font-variant-numeric: tabular-nums; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 16px 20px 32px; display: flex; flex-direction: column; gap: 14px; }
+
+  /* Raised glass, same recipe as the Home page's look layer: a faint top-lit gradient, a hairline
+     highlight along the top edge, a soft shadow under it. Colours only from the theme. */
+  .card { position: relative; border-radius: 24px; padding: 18px; border: 1px solid color-mix(in srgb, var(--fg) 11%, transparent);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--fg) 6%, var(--panel)), var(--panel));
+    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--fg) 12%, transparent), 0 14px 30px -18px rgba(0,0,0,.55); }
+  .tile { position: relative; border-radius: 18px; border: 1px solid color-mix(in srgb, var(--fg) 9%, transparent);
+    background: color-mix(in srgb, var(--fg) 4%, var(--panel)); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--fg) 8%, transparent); }
+  :root[data-yc-see-through] .card { background: linear-gradient(180deg, color-mix(in srgb, var(--fg) 6%, transparent), transparent 55%),
+      color-mix(in srgb, var(--panel) calc(var(--panels-opacity, 1) * 60%), transparent); }
+  .card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .card-head h2 { flex: 1; font-size: 16px; font-weight: 600; letter-spacing: -.005em; }
+  .card-head .total { font-size: 15px; font-weight: 500; }
+  .label { font-size: 11px; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; color: var(--fg-muted); }
+  .muted { color: var(--fg-muted); }
+  .small { font-size: 12px; }
+  svg.i { width: 16px; height: 16px; flex: none; }
+
+  /* Top row: the page's name and quiet status pills, like the Home page's tab row. */
+  .top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .pill { appearance: none; font: inherit; font-size: 13px; display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 14px 0 6px;
+    border-radius: 9999px; border: 1px solid var(--edge-dim); background: var(--panel); color: var(--fg); white-space: nowrap; cursor: pointer;
+    transition: border-color 120ms ease, transform 90ms ease; }
+  .pill:hover { border-color: var(--edge); }
+  .pill:active { transform: scale(.97); }
+  .pill.title { background: var(--fg); border-color: var(--fg); color: var(--panel); cursor: default; font-weight: 500; }
+  .pill.title:active { transform: none; }
+  .pill-ic { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: var(--well); color: var(--fg-2); }
+  .pill.title .pill-ic { background: var(--panel); color: var(--fg); }
+  .pill-ic.bad { background: var(--bad); color: #fff; box-shadow: 0 0 14px color-mix(in srgb, var(--bad) 60%, transparent); }
+  .pill-ic.warn { background: var(--warn); color: #1a1200; }
+  .pill-ic.ok { background: color-mix(in srgb, var(--fg) 12%, var(--panel)); }
+  .pill-ic svg { width: 14px; height: 14px; }
+  .top .spacer { flex: 1; }
+  .btn { appearance: none; font: inherit; font-size: 12px; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px;
+    border-radius: 9999px; border: 1px solid var(--edge); background: var(--inset); color: var(--fg); cursor: pointer; white-space: nowrap; text-decoration: none;
+    transition: background-color 120ms ease, border-color 120ms ease, transform 90ms ease; }
+  .btn:hover { background: var(--well); border-color: var(--fg-faint); }
+  .btn:active { transform: scale(.97); }
+  .btn:focus-visible, .pill:focus-visible, .ibtn:focus-visible, .rng:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .btn.primary { background: var(--fg); border-color: var(--fg); color: var(--panel); }
+  .btn.sm { height: 28px; font-size: 11px; padding: 0 10px; }
+  .btn svg { width: 14px; height: 14px; }
+  .ibtn { appearance: none; width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--edge-dim); background: var(--panel); color: var(--fg-2);
+    display: inline-grid; place-items: center; cursor: pointer; flex: none; text-decoration: none; transition: border-color 120ms ease, color 120ms ease, transform 90ms ease; }
+  .ibtn:hover { border-color: var(--edge); color: var(--fg); }
+  .ibtn:active { transform: scale(.94); }
+  .ibtn svg { width: 14px; height: 14px; }
+
+  /* Hero: the big number and its chart in one card, the three other totals beside it. */
+  .hero { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(220px, 1fr); gap: 14px; }
+  .nw .big { font-size: 40px; font-weight: 500; line-height: 1.05; letter-spacing: -.01em; margin-top: 6px; }
+  .nw .delta { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 12px; padding: 3px 10px; border-radius: 9999px;
+    background: color-mix(in srgb, var(--fg) 7%, transparent); color: var(--fg-2); }
+  .nw .delta svg { width: 12px; height: 12px; }
+  .nw-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .ranges { display: inline-flex; padding: 3px; gap: 2px; border-radius: 9999px; background: var(--well); border: 1px solid var(--edge-dim); }
+  .rng { appearance: none; font: inherit; font-size: 11px; font-weight: 500; height: 26px; min-width: 40px; padding: 0 10px; border: 0; border-radius: 9999px;
+    background: transparent; color: var(--fg-2); cursor: pointer; }
+  .rng.on { background: var(--fg); color: var(--panel); }
+  .bill-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin: 0 0 10px; }
+  .btab { appearance: none; font: inherit; text-align: left; display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 12px;
+    border: 1px solid var(--edge-dim); background: var(--well); color: var(--fg-2); cursor: pointer; min-width: 0; }
+  .btab > span { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .btab b { font-size: 15px; color: var(--fg); }
+  .btab:hover { border-color: var(--edge); }
+  .btab.on { border-color: var(--fg); background: var(--inset); }
+  .btab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .bill-cat-pick { margin: 0 0 10px; }
+  .sub-year { margin: -4px 0 10px; }
+  .subs { display: flex; flex-direction: column; gap: 8px; }
+  .srow { display: flex; align-items: flex-start; gap: 12px; padding: 12px; }
+  .srow .mark { width: 34px; height: 34px; border-radius: 10px; font-size: 11px; flex: none; }
+  .srow.gone { opacity: .7; }
+  .sbody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+  .stop { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  .stop b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .stop .amt { margin-left: auto; font-weight: 600; }
+  .tag { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; padding: 1px 6px; border-radius: 9999px; border: 1px dashed color-mix(in srgb, var(--fg) 30%, transparent); color: var(--fg-2); }
+  .sstate { font-size: 12px; color: var(--fg-muted); }
+  .sstate.ok { color: var(--fg-2); }
+  .sstate.warn { color: #b7791f; font-weight: 500; }
+  .scharges { display: flex; flex-wrap: wrap; gap: 4px; }
+  .scharges .chip { padding: 2px 8px; font-size: 11px; }
+  .srow .acts { display: flex; flex-wrap: wrap; gap: 6px; }
+  .sub-gone { margin: 14px 0 6px; }
+  .chart { position: relative; height: 190px; margin-top: 14px; }
+  .chart svg { width: 100%; height: 100%; display: block; overflow: visible; }
+  .chart .grid line { stroke: color-mix(in srgb, var(--fg) 8%, transparent); }
+  .chart .axis text { fill: var(--fg-muted); font-size: 11px; }
+  .chart .line { fill: none; stroke: var(--fg); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .chart .zero { stroke: var(--fg-faint); stroke-dasharray: 3 4; }
+  .chart .cross { stroke: var(--fg-muted); }
+  .chart .dot { fill: var(--fg); stroke: var(--panel); stroke-width: 3; }
+  .tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--edge); border-radius: 12px; padding: 6px 10px; font-size: 12px;
+    box-shadow: 0 8px 24px -8px rgba(0,0,0,.5); white-space: nowrap; transform: translate(-50%, -120%); }
+  .stats { display: flex; flex-direction: column; gap: 10px; }
+  .stat { padding: 14px 16px; display: flex; align-items: center; gap: 12px; flex: 1; }
+  .stat .v { font-size: 22px; font-weight: 500; line-height: 1.15; margin-top: 2px; }
+  .stat .sub { font-size: 11px; color: var(--fg-muted); margin-top: 2px; }
+  .badge { width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; flex: none; background: var(--well); color: var(--fg-2); }
+  .badge svg { width: 18px; height: 18px; }
+
+  /* Needs you: one tile per account, glowing in its warning colour. */
+  .needs { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 10px; }
+  .need { display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 14px; overflow: hidden;
+    border-color: color-mix(in srgb, var(--c) 45%, transparent); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--c) 25%, transparent), 0 10px 26px -16px var(--c); }
+  .need::before { content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; opacity: .22;
+    background: radial-gradient(120% 160% at 0% 0%, var(--c), transparent 70%); }
+  .need.bad { --c: var(--bad); } .need.warn { --c: var(--warn); }
+  .need > * { position: relative; }
+  .need .txt { flex: 1; min-width: 0; }
+  .need .head { font-size: 15px; font-weight: 600; color: color-mix(in srgb, var(--c) 65%, var(--fg)); }
+  .need .who { font-size: 12px; color: var(--fg-2); margin-top: 2px; }
+  .need .who b { font-weight: 500; color: var(--fg); }
+  .need .facts { font-size: 12px; color: var(--fg-2); margin-top: 2px; }
+  .need .facts b { font-weight: 500; color: var(--fg); }
+
+  /* Accounts */
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+  .sec + .sec { margin-top: 12px; }
+  .sec-head { display: flex; align-items: baseline; justify-content: space-between; padding: 0 4px 8px; }
+  .list { display: flex; flex-direction: column; gap: 6px; }
+  .acct { padding: 8px 10px 8px 12px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 4px 12px; align-items: center; }
+  .acct .who { min-width: 0; }
+  .acct .who .inst { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .acct .right { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+  .acct .right .side { min-height: 26px; }
+  .acct .right .side .ibtn { width: 26px; height: 26px; }
+  .acct .right .side .btn.sm { height: 24px; }
+  .acct .inst { display: block; font-size: 11px; font-weight: 500; color: var(--fg-muted); letter-spacing: .02em; line-height: 1.3; }
+  .acct.stale .name, .acct.stale .bal { color: var(--fg-dim); }
+  .mark { width: 34px; height: 34px; border-radius: 12px; display: grid; place-items: center; font-size: 11px; font-weight: 700; letter-spacing: -.02em;
+    color: #fff; background: var(--b, var(--well)); box-shadow: inset 0 1px 0 rgba(255,255,255,.25); flex: none; }
+  .acct > .mark { grid-row: auto; }
+  .acct .name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .acct .bal { font-weight: 500; text-align: right; }
+  /* Second line spans both columns so the status and buttons never squeeze the name on the first line. */
+  .acct .row2 { grid-column: 2 / -1; display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .acct .meta { flex: 1; min-width: 0; font-size: 12px; color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .acct .side { display: flex; align-items: center; justify-content: flex-end; gap: 6px; font-size: 12px; color: var(--fg-muted); flex: none; }
+  .src { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+  .src svg { width: 12px; height: 12px; }
+  .flag { display: inline-flex; align-items: center; gap: 4px; color: var(--warn); white-space: nowrap; }
+  .flag svg { width: 12px; height: 12px; }
+  .acct .meter { margin-top: 0; }
+  .meter { grid-column: 2 / -1; display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+  .bar { flex: 1; height: 10px; border-radius: 9999px; background: color-mix(in srgb, var(--fg) 9%, var(--well)); position: relative; overflow: hidden; }
+  .bar > i { position: absolute; inset: 0 auto 0 0; border-radius: 9999px; background: var(--fg-2); }
+  .bar .tick { position: absolute; top: 2px; bottom: 2px; width: 2px; border-radius: 2px; background: var(--panel); opacity: .9; }
+  .meter.warn .bar > i { background: var(--warn); box-shadow: 0 0 12px color-mix(in srgb, var(--warn) 60%, transparent); }
+  .meter.bad .bar > i { background: var(--bad); box-shadow: 0 0 12px color-mix(in srgb, var(--bad) 60%, transparent); }
+  .meter .pct { font-size: 12px; color: var(--fg-2); white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; min-width: 150px; justify-content: flex-end; }
+  .meter.warn .pct svg { color: var(--warn); } .meter.bad .pct svg { color: var(--bad); }
+  .meter .pct svg { width: 12px; height: 12px; }
+  .legend { font-size: 11px; color: var(--fg-muted); padding: 0 4px 8px; }
+  .edit { grid-column: 2 / -1; display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+  .edit input { font: inherit; font-size: 14px; width: 150px; height: 32px; padding: 0 12px; border-radius: 9999px; border: 1px solid var(--edge); background: var(--inset); color: var(--fg); }
+  .edit input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .edit .hint { flex: 1; min-width: 160px; font-size: 11px; color: var(--fg-muted); }
+
+  /* Bills */
+  .bills { display: flex; flex-direction: column; gap: 8px; }
+  .bill { display: flex; gap: 12px; align-items: center; padding: 8px 10px 8px 12px; }
+  .bill .name { flex: 1; min-width: 0; }
+  .bill .mark { width: 30px; height: 30px; border-radius: 10px; font-size: 10px; }
+  .bill .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bill .name small { font-size: 11px; color: var(--fg-muted); margin-left: 6px; }
+  .when { font-size: 12px; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 9999px; white-space: nowrap;
+    background: color-mix(in srgb, var(--fg) 6%, transparent); color: var(--fg-2); }
+  .when svg { width: 12px; height: 12px; }
+  .bill.soon .when { background: color-mix(in srgb, var(--fg) 12%, transparent); color: var(--fg); }
+  .bill.late .when { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--fg); }
+  .bill.late .when svg { color: var(--warn); }
+  .bill.report { border-color: color-mix(in srgb, var(--bad) 45%, transparent); box-shadow: 0 10px 26px -18px var(--bad); }
+  .bill.report .when { background: color-mix(in srgb, var(--bad) 20%, transparent); color: var(--fg); font-weight: 500; }
+  .bill.report .when svg { color: var(--bad); }
+  .bill.paid { opacity: .6; }
+  .bill .amt { font-weight: 500; text-align: right; min-width: 76px; }
+
+  .menu { position: absolute; right: 0; top: calc(100% + 8px); background: var(--panel); border: 1px solid var(--edge); border-radius: 16px; padding: 6px;
+    min-width: 240px; z-index: 5; box-shadow: 0 16px 40px -12px rgba(0,0,0,.5); }
+  .menu button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; text-align: left; background: none; border: 0; color: var(--fg);
+    font: inherit; font-size: 13px; padding: 9px 12px; border-radius: 10px; cursor: pointer; }
+  .menu button:hover { background: var(--inset); }
+  .menu span { font-size: 11px; color: var(--fg-muted); }
+  .menu-pick { border-top: 1px solid var(--edge-dim); margin-top: 4px; padding: 8px 10px 4px; display: flex; flex-direction: column; gap: 6px; }
+  .menu .menu-pick .rng { display: inline-flex; width: auto; padding: 0 10px; font-size: 11px; border-radius: 9999px; color: var(--fg-2); }
+  .menu .menu-pick .rng.on { background: var(--fg); color: var(--panel); }
+  .empty { padding: 28px 12px; text-align: center; color: var(--fg-muted); font-size: 13px; }
+
+  @media (max-width: 860px) { .hero, .cols { grid-template-columns: 1fr; } .stats { flex-direction: row; flex-wrap: wrap; } .stat { min-width: 200px; } }
+  @media (max-width: 560px) {
+    .bill { flex-wrap: wrap; } .bill .when { order: 9; margin-left: 42px; } .bill .ibtn { display: none; }
+    .nw .big { font-size: 32px; } .meter .pct { min-width: 0; }
+  }
+  /* Real logos: a bank's own picture from Plaid fills the badge; a brand mark sits inside it. */
+  .mark svg { width: 20px; height: 20px; }
+  .bill .mark svg { width: 16px; height: 16px; }
+  .mark.logo { background: #fff; overflow: hidden; padding: 4px; }
+  .mark.logo img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .btn.danger { border-color: var(--bad); color: var(--fg); }
+  .btn.danger:hover { background: color-mix(in srgb, var(--bad) 18%, var(--inset)); }
+  .btn:disabled { opacity: .5; cursor: default; transform: none; }
+  .menu button:disabled { opacity: .5; cursor: default; background: none; }
+  .row-btns { display: flex; gap: 8px; flex-wrap: wrap; } .row-btns.end { justify-content: flex-end; margin-top: 14px; }
+  .empty-card { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 28px; }
+  .empty-card h2 { font-size: 18px; font-weight: 600; } .empty-card p { max-width: 560px; }
+  .badge.big { width: 48px; height: 48px; border-radius: 16px; } .badge.big svg { width: 22px; height: 22px; }
+  .form-card .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+  .fld { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--fg-2); }
+  .fld input, .fld select { font: inherit; font-size: 14px; height: 34px; padding: 0 12px; border-radius: 12px; border: 1px solid var(--edge); background: var(--inset); color: var(--fg); }
+  .fld input:focus, .fld select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .fld.chk { flex-direction: row; align-items: center; gap: 8px; align-self: end; height: 34px; }
+  .fld.chk input { height: auto; accent-color: var(--accent); }
+  .bank-row { display: flex; align-items: center; gap: 12px; padding: 8px 10px 8px 12px; }
+  .bank-row .name { flex: 1; font-weight: 500; }
+  .need.note { padding: 10px 12px; }
+  /* Everything you can open answers the pointer like the Home page's tiles: the edge brightens and the card lifts a
+     touch on hover, it squeezes slightly while pressed, and an open card stays lit. Transform only, so nothing reflows. */
+  .tap { cursor: pointer; transition: transform 140ms ease, border-color 140ms ease, box-shadow 180ms ease, background-color 140ms ease; }
+  @media (hover: hover) {
+    .tap:hover { border-color: color-mix(in srgb, var(--fg) 22%, transparent); transform: translateY(-1px);
+      box-shadow: inset 0 1px 0 color-mix(in srgb, var(--fg) 12%, transparent), 0 12px 26px -14px rgba(0,0,0,.6); }
+    .need.tap:hover { border-color: color-mix(in srgb, var(--c) 70%, transparent); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--c) 30%, transparent), 0 14px 32px -12px var(--c); }
+    .tap:hover .chev { color: var(--fg); }
+  }
+  .tap:active { transform: scale(.985); }
+  .tap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .tap.open { border-color: color-mix(in srgb, var(--fg) 26%, transparent); background: color-mix(in srgb, var(--fg) 7%, var(--panel)); }
+  .tap.open:active { transform: none; }
+  .chev { width: 16px; height: 16px; color: var(--fg-faint); transition: transform 180ms ease, color 140ms ease; flex: none; }
+  .open > .chev, .open .head-chev .chev { transform: rotate(180deg); }
+  .acct .chev { grid-column: 3; justify-self: end; }
+  .detail { cursor: default; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px 18px; padding-top: 12px; margin-top: 6px; border-top: 1px solid color-mix(in srgb, var(--fg) 10%, transparent); }
+  .acct .detail { grid-column: 1 / -1; }
+  .bill .detail { flex-basis: 100%; }
+  .dt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .dt span { font-size: 11px; color: var(--fg-muted); letter-spacing: .04em; text-transform: uppercase; }
+  .dt b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
+  .ins-grid { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; }
+  .ins { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border-radius: 14px; background: color-mix(in srgb, var(--fg) 5%, transparent); border: 1px solid color-mix(in srgb, var(--fg) 7%, transparent); }
+  .ins b { font-size: 16px; font-weight: 600; }
+  .ins span { font-size: 12px; color: var(--fg-2); line-height: 1.35; }
+  .ins.up b { color: color-mix(in srgb, #3fb950 75%, var(--fg)); }
+  .ins.down b, .ins.warnish b { color: var(--warn); }
+  .spark { grid-column: 1 / -1; }
+  .spark svg { width: 100%; height: 44px; display: block; }
+  .spark .ln { fill: none; stroke: var(--fg-2); stroke-width: 1.6; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+  .spark .area { fill: color-mix(in srgb, var(--fg) 7%, transparent); }
+  .spark-x { display: flex; justify-content: space-between; font-size: 11px; color: var(--fg-muted); margin-top: 2px; }
+  .spark.empty { font-size: 12px; color: var(--fg-muted); padding: 4px 0; }
+  .detail .acts { grid-column: 1 / -1; display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+  .detail .acts .hint { flex: 1; min-width: 160px; font-size: 11px; color: var(--fg-muted); }
+  .detail input { font: inherit; font-size: 14px; width: 140px; height: 30px; padding: 0 12px; border-radius: 9999px; border: 1px solid var(--edge); background: var(--inset); color: var(--fg); }
+  .bill { flex-wrap: wrap; }
+  .stat.tap .chev { margin-left: auto; }
+  @media (prefers-reduced-motion: reduce) { .pill, .btn, .ibtn, .tap, .chev { transition: none; } .tap:hover, .tap:active { transform: none; } }
+
+  /* Round 3: chart modes, bar legend, found bills, purchase lists, matched-as chips, thin card bars. */
+  .modes { display: flex; flex-wrap: wrap; gap: 4px; margin: -4px 0 12px; }
+  .mode { appearance: none; font: inherit; font-size: 12px; font-weight: 500; height: 28px; padding: 0 12px; border-radius: 9999px; cursor: pointer;
+    border: 1px solid var(--edge-dim); background: transparent; color: var(--fg-2); transition: border-color 120ms ease, background-color 120ms ease; }
+  .mode:hover { border-color: var(--edge); color: var(--fg); }
+  .mode.on { background: color-mix(in srgb, var(--fg) 12%, var(--panel)); border-color: color-mix(in srgb, var(--fg) 30%, transparent); color: var(--fg); }
+  .mode:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .pick { font: inherit; font-size: 13px; height: 30px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--edge); background: var(--inset); color: var(--fg); max-width: 100%; }
+  .nw .pick { margin-bottom: 6px; }
+  .legend-row { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 8px; }
+  .lg { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-2); }
+  .lg i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+  .lg b { font-weight: 500; color: var(--fg); }
+  .chart .barg rect { transition: opacity 120ms ease; }
+  .chart .barg:hover rect { opacity: .82; }
+  .found { margin-bottom: 12px; padding: 12px; border-radius: 18px; border: 1px dashed color-mix(in srgb, var(--fg) 18%, transparent); display: flex; flex-direction: column; gap: 8px; }
+  .found-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .found-head svg { color: var(--fg-2); }
+  .frow { display: flex; align-items: center; gap: 12px; padding: 8px 10px 8px 12px; }
+  .frow .mark { width: 30px; height: 30px; border-radius: 10px; font-size: 10px; }
+  .frow .name, .bill .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .frow .name small, .bill .name small { display: block; font-size: 11px; color: var(--fg-muted); margin-left: 0; }
+  .btn.ghostish { align-self: flex-start; background: transparent; border-color: transparent; color: var(--fg-2); }
+  .txlist { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 2px; }
+  .txlist .label { margin-bottom: 4px; }
+  .txrow { display: flex; align-items: center; gap: 10px; font-size: 12px; padding: 3px 0; border-bottom: 1px solid color-mix(in srgb, var(--fg) 6%, transparent); }
+  .txrow:last-child { border-bottom: 0; }
+  .txrow .muted { min-width: 52px; }
+  .txrow .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-2); }
+  .txrow b { font-weight: 500; }
+  .chips { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 2px 4px 2px 10px; border-radius: 9999px; background: color-mix(in srgb, var(--fg) 8%, transparent); }
+  .chipx { appearance: none; border: 0; background: transparent; color: var(--fg-muted); width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; cursor: pointer; }
+  .chipx:hover { background: color-mix(in srgb, var(--fg) 12%, transparent); color: var(--fg); }
+  .chipx svg { width: 12px; height: 12px; }
+  .meter.thin { margin-top: 2px; }
+  .meter.thin .bar { height: 5px; }
+  .meter.thin .bar .tick { top: 0; bottom: 0; }
+  .acct .side .flag, .acct .side { font-size: 12px; }
+</style></head>
+<body>
+<div class="wrap" id="root"></div>
+<script>
+(function(){
+  // ── Icons ────────────────────────────────────────────────────────────────
+  function ic(d){ return '<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + '</svg>'; }
+  var I = {
+    money: ic('<path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>'),
+    warn: ic('<path d="M12 3 2 20h20L12 3z"/><path d="M12 10v4M12 17h.01"/>'),
+    stop: ic('<circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5h.01"/>'),
+    pen: ic('<path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4z"/>'),
+    refresh: ic('<path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4"/>'),
+    check: ic('<path d="m5 12.5 4.5 4.5L19 7.5"/>'),
+    plus: ic('<path d="M12 5v14M5 12h14"/>'),
+    out: ic('<path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>'),
+    cal: ic('<rect x="4" y="5" width="16" height="16" rx="2"/><path d="M4 10h16M8 3v4M16 3v4"/>'),
+    up: ic('<path d="m6 15 6-6 6 6"/>'),
+    down: ic('<path d="m6 9 6 6 6-6"/>'),
+    wallet: ic('<path d="M3 7a2 2 0 0 1 2-2h13v4"/><path d="M3 7v11a2 2 0 0 0 2 2h15V9H5a2 2 0 0 1-2-2z"/><path d="M16 14.5h.01"/>'),
+    owe: ic('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18M7 15h4"/>'),
+    have: ic('<path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/>'),
+    bank: ic('<path d="M3 10 12 4l9 6M5 10v8M9 10v8M15 10v8M19 10v8M3 20h18"/>'),
+    spark: ic('<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/>'),
+    x: ic('<path d="M6 6l12 12M18 6 6 18"/>'),
+    chev: '<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>'
+  };
+
+  // Real logos for well-known companies, drawn as one-colour marks on their own brand colour.
+  // Source: Simple Icons (simpleicons.org), CC0 — free to copy, kept here so the page needs
+  // nothing from the internet. A bank connected through Plaid brings its own logo instead.
+  var BRAND = {
+    "American Express": { c: '#2E77BC', d: 'M16.015 14.378c0-.32-.135-.496-.344-.622-.21-.12-.464-.135-.81-.135h-1.543v2.82h.675v-1.027h.72c.24 0 .39.024.478.125.12.13.104.38.104.55v.35h.66v-.555c-.002-.25-.017-.376-.108-.516-.06-.08-.18-.18-.33-.234l.02-.008c.18-.072.48-.297.48-.747zm-.87.407l-.028-.002c-.09.053-.195.058-.33.058h-.81v-.63h.824c.12 0 .24 0 .33.05.098.048.156.147.15.255 0 .12-.045.215-.134.27zM20.297 15.837H19v.6h1.304c.676 0 1.05-.278 1.05-.884 0-.28-.066-.448-.187-.582-.153-.133-.392-.193-.73-.207l-.376-.015c-.104 0-.18 0-.255-.03-.09-.03-.15-.105-.15-.21 0-.09.017-.166.09-.21.083-.046.177-.066.272-.06h1.23v-.602h-1.35c-.704 0-.958.437-.958.84 0 .9.776.855 1.407.87.104 0 .18.015.225.06.046.03.082.106.082.18 0 .077-.035.15-.08.18-.06.053-.15.07-.277.07zM0 0v10.096L.81 8.22h1.75l.225.464V8.22h2.043l.45 1.02.437-1.013h6.502c.295 0 .56.057.756.236v-.23h1.787v.23c.307-.17.686-.23 1.12-.23h2.606l.24.466v-.466h1.918l.254.465v-.466h1.858v3.948H20.87l-.36-.6v.585h-2.353l-.256-.63h-.583l-.27.614h-1.213c-.48 0-.84-.104-1.08-.24v.24h-2.89v-.884c0-.12-.03-.12-.105-.135h-.105v1.036H6.067v-.48l-.21.48H4.69l-.202-.48v.465H2.235l-.256-.624H1.4l-.256.624H0V24h23.786v-7.108c-.27.135-.613.18-.973.18H21.09v-.255c-.21.165-.57.255-.914.255H14.71v-.9c0-.12-.018-.12-.12-.12h-.075v1.022h-1.8v-1.066c-.298.136-.643.15-.928.136h-.214v.915h-2.18l-.54-.617-.57.6H4.742v-3.93h3.61l.518.602.554-.6h2.412c.28 0 .74.03.942.225v-.24h2.177c.202 0 .644.045.903.225v-.24h3.265v.24c.163-.164.508-.24.803-.24h1.89v.24c.194-.15.464-.24.84-.24h1.176V0H0zM21.156 14.955c.004.005.006.012.01.016.01.01.024.01.032.02l-.042-.035zM23.828 13.082h.065v.555h-.065zM23.865 15.03v-.005c-.03-.025-.046-.048-.075-.07-.15-.153-.39-.215-.764-.225l-.36-.012c-.12 0-.194-.007-.27-.03-.09-.03-.15-.105-.15-.21 0-.09.03-.16.09-.204.076-.045.15-.05.27-.05h1.223v-.588h-1.283c-.69 0-.96.437-.96.84 0 .9.78.855 1.41.87.104 0 .18.015.224.06.046.03.076.106.076.18 0 .07-.034.138-.09.18-.045.056-.136.07-.27.07h-1.288v.605h1.287c.42 0 .734-.118.9-.36h.03c.09-.134.135-.3.135-.523 0-.24-.045-.39-.135-.526zM18.597 14.208v-.583h-2.235V16.458h2.235v-.585h-1.57v-.57h1.533v-.584h-1.532v-.51M13.51 8.787h.685V11.6h-.684zM13.126 9.543l-.007.006c0-.314-.13-.5-.34-.624-.217-.125-.47-.135-.81-.135H10.43v2.82h.674v-1.034h.72c.24 0 .39.03.487.12.122.136.107.378.107.548v.354h.677v-.553c0-.25-.016-.375-.11-.516-.09-.107-.202-.19-.33-.237.172-.07.472-.3.472-.75zm-.855.396h-.015c-.09.054-.195.056-.33.056H11.1v-.623h.825c.12 0 .24.004.33.05.09.04.15.128.15.25s-.047.22-.134.266zM15.92 9.373h.632v-.6h-.644c-.464 0-.804.105-1.02.33-.286.3-.362.69-.362 1.11 0 .512.123.833.36 1.074.232.238.645.31.97.31h.78l.255-.627h1.39l.262.627h1.36v-2.11l1.272 2.11h.95l.002.002V8.786h-.684v1.963l-1.18-1.96h-1.02V11.4L18.11 8.744h-1.004l-.943 2.22h-.3c-.177 0-.362-.03-.468-.134-.125-.15-.186-.36-.186-.662 0-.285.08-.51.194-.63.133-.135.272-.165.516-.165zm1.668-.108l.464 1.118v.002h-.93l.466-1.12zM2.38 10.97l.254.628H4V9.393l.972 2.205h.584l.973-2.202.015 2.202h.69v-2.81H6.118l-.807 1.904-.876-1.905H3.343v2.663L2.205 8.787h-.997L.01 11.597h.72l.26-.626h1.39zm-.688-1.705l.46 1.118-.003.002h-.915l.457-1.12zM11.856 13.62H9.714l-.85.923-.825-.922H5.346v2.82H8l.855-.932.824.93h1.302v-.94h.838c.6 0 1.17-.164 1.17-.945l-.006-.003c0-.78-.598-.93-1.128-.93zM7.67 15.853l-.014-.002H6.02v-.557h1.47v-.574H6.02v-.51H7.7l.733.82-.764.824zm2.642.33l-1.03-1.147 1.03-1.108v2.253zm1.553-1.258h-.885v-.717h.885c.24 0 .42.098.42.344 0 .243-.15.372-.42.372zM9.967 9.373v-.586H7.73V11.6h2.237v-.58H8.4v-.564h1.527V9.88H8.4v-.507' },
+    "Wells Fargo": { c: '#D71E28', d: 'M12.136 13.949c0 .392-.245.616-.719.616h-.628v-1.226h.628c.48 0 .72.212.72.61zM6.922 15.06h1.044l-.523-1.443-.521 1.443zm12.46-1.82c-.72 0-1.109.562-1.109 1.526 0 .97.384 1.526 1.108 1.526.725 0 1.108-.556 1.108-1.526 0-.964-.389-1.526-1.108-1.526zM23.73 0v24H.269V0h23.462zm-5.548 10.652c.484.245.948.354 1.571.354.895 0 1.481-.458 1.481-1.171 0-.6-.357-1.014-1.028-1.172l-.677-.158c-.394-.092-.559-.25-.559-.517 0-.322.25-.523.74-.523s.778.18.89.604l.048.186h.383v-.943a2.927 2.927 0 0 0-1.352-.338c-.911 0-1.497.447-1.497 1.166 0 .556.34.965.996 1.112l.676.152c.432.099.592.273.592.562 0 .354-.261.55-.784.55-.59 0-.894-.24-1.027-.697l-.07-.235h-.383v1.068zm-3.378.245h3.02V9.595h-.383l-.043.19c-.106.486-.255.638-.607.638h-.74V7.557h.506v-.474h-1.753v.474h.453v2.866h-.453v.474zm-3.355 0h3.02V9.595h-.384l-.042.19c-.107.486-.256.638-.608.638h-.74V7.557h.506v-.474H11.45v.474h.452v2.866h-.452v.474zm-8.758-3.34.938 3.34h.74l.778-2.768.756 2.768h.74l.932-3.34h.736v2.866h-.453v.474h3.201V9.595h-.383l-.043.19c-.106.486-.26.638-.607.638h-.922V9.241h1.071a.58.58 0 0 0 .059-.273.55.55 0 0 0-.059-.26h-1.07v-1.15h.884c.357 0 .48.157.596.615l.038.147h.383V7.083H6.49v.474h.522l-.613 2.305-.762-2.779h-.766l-.746 2.774-.624-2.3h.501v-.474H2.266v.474h.426zm1.412 7.002v-1.22h.947c.358 0 .48.158.597.615l.038.147h.383v-1.236H2.857v.474h.453v2.866h-.453v.474h1.78v-.474h-.533v-1.112H5.2a.58.58 0 0 0 .058-.272.551.551 0 0 0-.058-.262H4.104zm9.114 1.913a.461.461 0 0 0-.048-.224.663.663 0 0 1-.112.011c-.245 0-.309-.142-.34-.458l-.022-.201c-.048-.43-.245-.708-.73-.746v-.017c.48-.022.975-.349.975-.964 0-.621-.496-1.008-1.257-1.008H9.542v.474h.453v2.866H9.26l-1.332-3.34H7.22l-1.305 3.34h-.373v.474h1.412v-.474h-.448l.245-.682h1.385l.245.682h-.437v.474h3.35v-.474h-.505v-1.16h.293c.586 0 .761.212.826.762l.02.19c.06.507.31.725.826.725.15 0 .299-.01.416-.027a.46.46 0 0 0 .048-.223zm3.633-1.788h-1.417a.52.52 0 0 0-.059.256c0 .11.016.18.059.268h.634v.964a1.598 1.598 0 0 1-.629.125c-.767 0-1.166-.56-1.166-1.53s.4-1.532 1.124-1.532c.485 0 .767.245.932.67l.058.153h.384v-.976a3.063 3.063 0 0 0-1.412-.337c-1.172 0-1.96.8-1.96 2.027 0 1.231.767 2.016 1.96 2.016.474 0 .964-.136 1.492-.404v-1.7zm4.512.082c0-1.182-.831-2.021-1.982-2.021-1.145 0-1.981.839-1.981 2.021 0 1.188.83 2.022 1.981 2.022 1.156 0 1.982-.834 1.982-2.022z' },
+    "Robinhood": { c: '#CCFF00', d: 'M2.84 24h.53c.096 0 .192-.048.224-.128C7.591 13.696 11.94 8.656 14.67 5.638c.112-.128.064-.225-.096-.225h-4.88a.55.55 0 0 0-.45.225L5.746 9.972c-.514.642-.642 1.236-.642 2.086v4.43c-1.14 3.194-1.862 5.361-2.392 7.32-.032.125.016.192.129.192M20.447.646c-.754-.802-4.157-.834-5.73-.224a3 3 0 0 0-.786.465 41 41 0 0 0-3.323 3.178c-.112.113-.064.225.097.225h5.409c.497 0 .786.289.786.786v6.1c0 .16.128.208.225.064l3.258-4.254c.53-.69.69-.898.835-1.861.192-1.413.08-3.58-.77-4.479m-6.982 16.18 2.231-3.676a.7.7 0 0 0 .064-.29V6.73c0-.16-.112-.225-.224-.097-3.355 3.74-5.971 7.672-8.395 12.407-.06.12.016.225.16.177l5.009-1.54c.565-.174.882-.402 1.155-.852' },
+    "Chase": { c: '#117ACA', d: 'M0 15.415c0 .468.38.85.848.85h5.937V.575L0 7.72v7.695m15.416 8.582c.467 0 .846-.38.846-.849v-5.937H.573l7.146 6.785h7.697M24 8.587a.844.844 0 0 0-.847-.846h-5.938V23.43l6.782-7.148L24 8.586M8.585.003a.847.847 0 0 0-.847.847v5.94h15.688L16.282.003H8.585Z' },
+    "Bank of America": { c: '#012169', d: 'M15.194 7.57c.487-.163 1.047-.307 1.534-.451-1.408-.596-3.176-1.227-4.764-1.625-.253.073-1.01.271-1.534.434.541.162 2.328.577 4.764 1.642zm-8.896 6.785c.577.343 1.19.812 1.786 1.209 3.952-3.068 7.85-5.432 12.127-6.767-.596-.307-1.119-.578-1.787-.902-2.562.65-6.947 2.4-12.126 6.46zm-.758-6.46c-2.112.974-4.331 2.31-5.54 3.085.433.199.866.361 1.461.65 2.671-1.805 4.764-2.905 5.594-3.266-.595-.217-1.154-.361-1.515-.47zm8.066.234c-.686-.379-3.068-1.263-4.71-1.642-.487.18-1.173.451-1.642.65.595.162 2.815.758 4.71 1.714.487-.235 1.173-.523 1.642-.722zm-3.374 1.552c-.56-.27-1.173-.523-1.643-.74-1.425.704-3.284 1.769-5.63 3.447.505.27 1.047.595 1.624.92 1.805-1.335 3.627-2.598 5.649-3.627zm1.732 8.825c3.79-3.249 9.113-6.407 12.036-7.544a48.018 48.018 0 00-1.949-1.155c-3.771 1.246-8.174 4.007-12.108 7.129.667.505 1.371 1.028 2.02 1.57zm2.851-.235h-.108l-.18-.27h-.109v.27h-.072v-.596h.27c.055 0 .109 0 .145.036.054.019.072.073.072.127 0 .108-.09.162-.198.162zm-.289-.343c.09 0 .199.018.199-.09 0-.072-.072-.09-.144-.09h-.163v.18zm-.523.036c0-.289.235-.523.541-.523.307 0 .542.234.542.523a.543.543 0 01-.542.542.532.532 0 01-.54-.542m.107 0c0 .235.199.433.451.433a.424.424 0 100-.848c-.27 0-.45.199-.45.415' },
+    "Discover": { c: '#FF6000', d: 'M14.58 12a2.023 2.023 0 1 1-2.025-2.023h.002c1.118 0 2.023.906 2.023 2.023zm-5.2-2.001c-1.124 0-2.025.884-2.025 1.99 0 1.118.878 1.984 2.007 1.984.319 0 .593-.063.93-.221v-.873c-.296.297-.559.416-.895.416-.747 0-1.277-.542-1.277-1.312 0-.73.547-1.306 1.243-1.306.354 0 .622.126.93.428v-.873a1.898 1.898 0 0 0-.913-.233zm-3.352 1.545c-.445-.165-.576-.273-.576-.479 0-.239.233-.422.553-.422.222 0 .405.091.598.308l.388-.508a1.665 1.665 0 0 0-1.117-.422c-.673 0-1.186.467-1.186 1.089 0 .524.239.792.936 1.043.291.103.438.171.513.217a.456.456 0 0 1 .222.394c0 .308-.245.536-.576.536-.354 0-.639-.177-.809-.507l-.479.461c.342.502.752.724 1.317.724.771 0 1.311-.513 1.311-1.249-.002-.603-.252-.876-1.095-1.185zM24 10.3a.29.29 0 0 1-.288.291.29.29 0 0 1-.291-.291v-.003A.29.29 0 1 1 24 10.3zm-.059.001a.235.235 0 0 0-.231-.239.234.234 0 0 0-.232.239c0 .132.104.239.232.239a.235.235 0 0 0 .231-.239zM3.472 13.887h.742v-3.803h-.742v3.803zm12.702-1.248l-1.014-2.554h-.81l1.614 3.9h.399l1.643-3.9h-.804l-1.028 2.554zm2.166 1.248h2.104v-.644h-1.362v-1.027h1.312v-.644h-1.312v-.844h1.362v-.644H18.34v3.803zm5.409-3.557l.11.138h-.097l-.094-.13v.13h-.08v-.334h.107c.081 0 .126.036.126.103.001.046-.025.08-.072.093zm-.006-.092c0-.029-.021-.043-.06-.043h-.014v.087h.014c.039 0 .06-.014.06-.044zm-1.228 2.047l1.197 1.602H22.8l-1.027-1.528h-.097v1.528h-.741v-3.803h1.1c.855 0 1.346.411 1.346 1.123 0 .583-.308.965-.866 1.078zm.103-1.038c0-.37-.251-.563-.713-.563h-.228v1.152h.217c.473-.001.724-.207.724-.589zm-19.487.742a1.91 1.91 0 0 1-.69 1.46c-.365.303-.781.439-1.357.439H.001v-3.803H1.09c1.202 0 2.041.781 2.041 1.904zm-.764-.006c0-.364-.154-.718-.411-.947-.245-.222-.536-.308-1.015-.308H.742v2.515h.199c.479 0 .782-.092 1.015-.302.256-.228.411-.593.411-.958z' },
+    "PayPal": { c: '#002991', d: 'M15.607 4.653H8.941L6.645 19.251H1.82L4.862 0h7.995c3.754 0 6.375 2.294 6.473 5.513-.648-.478-2.105-.86-3.722-.86m6.57 5.546c0 3.41-3.01 6.853-6.958 6.853h-2.493L11.595 24H6.74l1.845-11.538h3.592c4.208 0 7.346-3.634 7.153-6.949a5.24 5.24 0 0 1 2.848 4.686M9.653 5.546h6.408c.907 0 1.942.222 2.363.541-.195 2.741-2.655 5.483-6.441 5.483H8.714Z' },
+    "Venmo": { c: '#008CFF', d: 'M21.772 13.119c-.267 0-.381-.251-.38-.655 0-.533.121-1.575.712-1.575.267 0 .357.243.357.598 0 .533-.13 1.632-.689 1.632Zm.502-3.377c-1.677 0-2.405 1.285-2.405 2.658 0 1.042.421 1.874 1.693 1.874 1.717 0 2.438-1.406 2.438-2.763 0-1.025-.462-1.769-1.726-1.769Zm-3.833 0c-.558 0-.964.17-1.393.477-.154-.275-.462-.477-.932-.477-.542 0-.947.219-1.247.437l-.04-.364H13.54l-.688 4.354h1.506l.479-3.053c.129-.065.323-.154.518-.154.145 0 .267.049.267.267 0 .056-.016.145-.024.218l-.429 2.722h1.498l.478-3.053c.138-.073.324-.154.51-.154.146 0 .268.049.268.267 0 .056-.017.145-.025.218l-.429 2.722h1.499l.461-2.908c.025-.153.049-.388.049-.549 0-.582-.267-.97-1.037-.97Zm-6.871 0c-.575 0-.98.219-1.287.421l-.017-.348H8.962l-.689 4.354H9.78l.478-3.053c.13-.065.324-.154.518-.154.147 0 .268.049.268.242 0 .081-.024.227-.032.299l-.422 2.666h1.499l.462-2.908c.024-.153.049-.388.049-.549 0-.582-.268-.97-1.03-.97Zm-5.631 1.834c.041-.485.413-.824.697-.824.162 0 .299.097.299.291 0 .404-.713.533-.996.533Zm.843-1.834c-1.604 0-2.382 1.39-2.382 2.698 0 1.01.478 1.817 1.814 1.817.527 0 1.07-.113 1.418-.282l.186-1.26c-.494.25-.874.347-1.271.347-.365 0-.64-.194-.64-.687.826-.008 2.252-.347 2.252-1.453 0-.687-.494-1.18-1.377-1.18Zm-4.239.267c.089.186.146.412.146.743 0 .606-.429 1.494-.777 2.06l-.373-2.989L0 9.969l.705 4.2h1.757c.77-1.01 1.718-2.448 1.718-3.554 0-.347-.073-.622-.235-.889l-1.402.283Z' },
+    "Klarna": { c: '#FFB3C7', d: 'M4.592 2v20H0V2h4.592zm11.46 0c0 4.194-1.583 8.105-4.415 11.068l-.278.283L17.702 22h-5.668l-6.893-9.4 1.779-1.332c2.858-2.14 4.535-5.378 4.637-8.924L11.562 2h4.49zM21.5 17a2.5 2.5 0 110 5 2.5 2.5 0 010-5z' },
+    "Verizon": { c: '#CD040B', d: 'M18.302 0H22v.003L10.674 24H7.662L2 12h3.727l3.449 7.337z' },
+    "AT&T": { c: '#009FDB', d: 'M4.584 21.438a12.077 12.077 0 0 0 7.349 2.495 12 12 0 0 0 7.887-2.967c-.944.607-3.64 2.023-7.887 2.023-3.708 0-6.068-.81-7.349-1.55m8.158.606c2.966 0 6.202-.809 8.09-2.427.539-.405 1.01-1.011 1.483-1.753.27-.472.539-1.011.741-1.483-1.82 2.63-7.011 4.315-12.404 4.315-3.776 0-7.888-1.214-9.506-3.573 1.483 3.236 6 4.92 11.596 4.92m-3.236-5.257C3.37 16.787.472 13.955 0 12c0 .674.067 1.483.202 2.09.068.27.27.674.607 1.079 1.483 1.55 5.191 3.707 11.595 3.707 8.697 0 10.72-2.898 11.124-3.842.27-.674.472-1.888.472-2.967v-.674c-.607 2.292-8.022 5.394-14.494 5.394m-8.427-9.91C.742 7.55.337 8.763.202 9.37c-.067.27 0 .404.068.607.741 1.55 4.45 4.044 13.078 4.044 5.259 0 9.371-1.28 10.045-3.64.135-.404.135-.876 0-1.483-.202-.674-.472-1.483-.809-2.09.068 3.101-8.562 5.124-12.944 5.124-4.719 0-8.696-1.888-8.696-4.248.067-.337.135-.606.135-.809M19.82 3.034c.068.067.068.135.068.27 0 1.348-4.045 3.64-10.517 3.64-4.787 0-5.663-1.753-5.663-2.9 0-.404.135-.808.472-1.213-.607.607-1.146 1.147-1.686 1.82-.202.27-.337.54-.337.675 0 2.36 5.865 3.977 11.259 3.977 5.797 0 8.427-1.887 8.427-3.573 0-.606-.203-.943-.81-1.618a17.301 17.301 0 0 0-1.213-1.078m-1.753-1.281A11.794 11.794 0 0 0 11.933.067C9.64.067 7.55.674 5.73 1.82c-.539.27-.876.54-.876.877 0 1.01 2.36 2.09 6.54 2.09 4.112 0 7.348-1.214 7.348-2.36.067-.202-.203-.405-.675-.674' },
+  };
+  // Letters and colours for companies with no logo in either place, and each one's own site.
+  var PROVIDERS = {
+    'Capital One':      { m: 'C1', b: '#004879', site: 'https://myaccounts.capitalone.com' },
+    'American Express': { m: 'AX', b: '#016fd0', site: 'https://www.americanexpress.com' },
+    'Robinhood':        { m: 'RH', b: '#0b8f2a', site: 'https://robinhood.com' },
+    'Synchrony':        { m: 'SY', b: '#3b3b3b', site: 'https://www.mysynchrony.com' },
+    'Wells Fargo':      { m: 'WF', b: '#c8102e', site: 'https://www.wellsfargo.com' },
+    'Earnest':          { m: 'E',  b: '#2a52be', site: 'https://www.earnest.com' },
+    'MOHELA':           { m: 'MO', b: '#0b4a8b', site: 'https://www.mohela.com' },
+    'Affirm':           { m: 'af', b: '#4a4af4', site: 'https://www.affirm.com' },
+    'Liberty Mutual':   { m: 'LM', b: '#1a1446', site: 'https://www.libertymutual.com' },
+    'Visible':          { m: 'V',  b: '#1f2ad6', site: 'https://www.visible.com' },
+    'Citibank':         { m: 'CI', b: '#003b70', site: 'https://online.citi.com' },
+    'Best Buy':         { m: 'BB', b: '#0046be', site: 'https://www.bestbuy.com/site/misc/best-buy-credit-cards' },
+    'Chase':            { m: 'CH', b: '#117aca', site: 'https://www.chase.com' },
+    'Bank of America':  { m: 'BA', b: '#012169', site: 'https://www.bankofamerica.com' },
+    'Discover':         { m: 'D',  b: '#ff6000', site: 'https://www.discover.com' },
+    'PayPal':           { m: 'PP', b: '#002991', site: 'https://www.paypal.com' },
+    'Venmo':            { m: 'V',  b: '#008cff', site: 'https://venmo.com' },
+    'Klarna':           { m: 'K',  b: '#ffb3c7', site: 'https://www.klarna.com' },
+    'Verizon':          { m: 'VZ', b: '#cd040b', site: 'https://www.verizon.com' },
+    'AT&T':             { m: 'AT', b: '#009fdb', site: 'https://www.att.com' },
+    'Netflix':          { m: 'N',  b: '#e50914', site: 'https://www.netflix.com/youraccount' },
+    'Spotify':          { m: 'S',  b: '#1db954', site: 'https://www.spotify.com/account' }
+  };
+
+  // ── Kinds of account, and what each one asks for (round 3, Q-types) ───────
+  var KINDS = {
+    checking:   { label: 'Checking', group: 'have', fields: ['balance'] },
+    savings:    { label: 'Savings', group: 'have', fields: ['balance'] },
+    investment: { label: 'Investments', group: 'have', fields: ['balance'] },
+    asset:      { label: 'Things you own', group: 'have', fields: ['value'] },
+    credit:     { label: 'Credit cards', group: 'owe', fields: ['owed', 'limit', 'apr', 'minimum', 'due'] },
+    loan:       { label: 'Loans', group: 'owe', fields: ['owed', 'apr', 'monthly', 'due'] },
+    bnpl:       { label: 'Pay-later plans', group: 'owe', fields: ['each', 'left', 'every', 'due'] }
+  };
+  var KIND_ONE = { checking: 'Checking account', savings: 'Savings account', investment: 'Investment account', asset: 'Something you own (car, home…)', credit: 'Credit card', loan: 'Loan (student, car, personal)', bnpl: 'Pay-later plan (Affirm, layaway…)' };
+  var EVERY = { week: 'Every week', '2weeks': 'Every 2 weeks', month: 'Every month' };
+
+  // ── Categories (round 3, Q-categories), plus everyday spending slices ─────
+  var BILL_CATS = ['Housing', 'Utilities', 'Phone & internet', 'Insurance', 'Subscriptions', 'Transportation', 'Loans', 'Credit cards', 'Pay-later plans', 'Health', 'Other'];
+  // WHY extra slices for spending: the bill list was approved for bills; without these, groceries and takeout
+  // would all land in "Other" on the spending chart.
+  var SPEND_CATS = ['Food & dining', 'Shopping', 'Entertainment', 'Travel', 'Personal'].concat(BILL_CATS);
+  // A fixed colour per category, so a slice keeps its colour whatever else is on the chart.
+  var CAT_COLOR = {
+    'Food & dining': '#e08a4a', 'Shopping': '#4f8ef7', 'Entertainment': '#a974e8', 'Travel': '#58b6d8', 'Personal': '#e26fa5',
+    'Housing': '#7fb24a', 'Utilities': '#3fb5a3', 'Phone & internet': '#6f7ff0', 'Insurance': '#c49a5c', 'Subscriptions': '#d16fd1',
+    'Transportation': '#5aa0c8', 'Loans': '#8f9bb3', 'Credit cards': '#9a8f7d', 'Pay-later plans': '#b07be0', 'Health': '#e06f6f', 'Other': '#8a8f98'
+  };
+  var SERIES = ['#4f8ef7', '#e08a4a', '#3fb5a3', '#a974e8', '#e26fa5', '#7fb24a', '#58b6d8', '#8a8f98'];
+
+  function inst(name){ return (data.institutions && data.institutions[name]) || {}; }
+  function prov(name){ return PROVIDERS[name] || { m: String(name || '?').replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase() || '?', b: '', site: '' }; }
+  function inkOn(hex){
+    var h = String(hex || '').replace('#', ''); if (h.length !== 6) return '#fff';
+    var r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+    return (0.299 * r + 0.587 * g + 0.114 * b) > 160 ? '#111' : '#fff';
+  }
+  function mark(name){
+    var p = inst(name);
+    if (p.logo && /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(p.logo)) return '<span class="mark logo" aria-hidden="true"><img src="' + p.logo + '" alt=""></span>';
+    var br = BRAND[name];
+    if (br) return '<span class="mark" style="--b:' + br.c + ';color:' + inkOn(br.c) + '" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor"><path d="' + br.d + '"/></svg></span>';
+    var pv = prov(name), bg = p.color || pv.b;
+    return '<span class="mark" style="' + (bg ? '--b:' + bg + ';color:' + inkOn(bg) : '') + '" aria-hidden="true">' + esc(pv.m) + '</span>';
+  }
+  function siteOf(x){ return x.site || inst(x.institution).url || prov(x.institution).site; }
+
+  // ── Data ─────────────────────────────────────────────────────────────────
+  var DAY = 86400000;
+  var data = normalise(window.youcoded && window.youcoded.data);
+  function normalise(d){
+    d = d && typeof d === 'object' ? d : {};
+    ['accounts', 'bills', 'history', 'tx', 'dismissed'].forEach(function(k){ if (!Array.isArray(d[k])) d[k] = []; });
+    ['settings', 'institutions', 'banks', 'txCursor'].forEach(function(k){ if (!d[k] || typeof d[k] !== 'object' || Array.isArray(d[k])) d[k] = {}; });
+    return d;
+  }
+  var S = Object.assign({ staleDays: 3, warnPct: 30, alertPct: 80, reportDay: 30, reportWarnDays: 7 }, data.settings);
+  var plaidOn = !!(window.youcoded && typeof window.youcoded.plaid === 'function');
+
+  // ── View state (never saved) ─────────────────────────────────────────────
+  var range = '1m', chartMode = 'net', chartAccount = null, billSort = 'due', showAllFound = false, billView = 'all', billCatPick = '';
+  var openId = null, editing = null, billEdit = null, limitEdit = null, payEdit = null;
+  var menuOpen = false, checking = false, connecting = false, form = null, bankNote = null, removing = null, linkSeq = 0;
+
+  // ── Small helpers ────────────────────────────────────────────────────────
+  function today(){ return data.demoToday ? new Date(data.demoToday + 'T12:00:00') : new Date(); }
+  function isoDay(d){ var z = new Date(d.getTime() - d.getTimezoneOffset() * 60000); return z.toISOString().slice(0, 10); }
+  function day(s){ return new Date(s + 'T12:00:00'); }
+  function daysBetween(a, b){ return Math.round((b - a) / DAY); }
+  // Accounting style with the dollar sign outside the brackets: $(35,329) (round 3).
+  function money(n, whole){
+    var s = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: whole ? 0 : 2, maximumFractionDigits: whole ? 0 : 2 });
+    return n < 0 ? '$(' + s + ')' : '$' + s;
+  }
+  function short(d){ return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); }
+  // "Jul", not "Jul 26" (which reads as July 26th); the year only where it turns over.
+  function monthName(d){ return d.toLocaleDateString('en-US', { month: 'short' }) + (d.getMonth() === 0 ? ' ’' + String(d.getFullYear()).slice(2) : ''); }
+  function ago(iso){
+    var m = Math.round((today() - new Date(iso)) / 60000);
+    if (m < 2) return 'just now';
+    if (m < 60) return m + ' min ago';
+    var h = Math.round(m / 60); if (h < 24) return h + ' hr ago';
+    var d = Math.round(h / 24); return d === 1 ? 'yesterday' : d + ' days ago';
+  }
+  function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){ return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]; }); }
+  function fullName(a){ return a.name.indexOf(a.institution) === 0 ? a.name : a.institution + ' ' + a.name; }
+  function isDebt(a){ return a.kind === 'credit' || a.kind === 'loan' || a.kind === 'bnpl'; }
+  function isStale(a){ if (a.kind === 'asset') return false; return !a.updatedAt || (today() - new Date(a.updatedAt)) / DAY >= S.staleDays; }
+  function num(v){ var n = parseFloat(String(v == null ? '' : v).replace(/[$,()\s]/g, '')); return isNaN(n) ? null : n; }
+  function addMonth(iso){ var d = day(iso); var m = d.getMonth(); d.setMonth(m + 1); if (d.getMonth() !== (m + 1) % 12) d.setDate(0); return isoDay(d); }
+  function addEvery(iso, every){ if (every === 'week') return isoDay(new Date(day(iso).getTime() + 7 * DAY)); if (every === '2weeks') return isoDay(new Date(day(iso).getTime() + 14 * DAY)); return addMonth(iso); }
+  function sum(list, f){ return list.reduce(function(s, x){ return s + (f ? f(x) : x); }, 0); }
+  function accountById(id){ return data.accounts.filter(function(a){ return a.id === id; })[0]; }
+
+  // ── Plaid → accounts ─────────────────────────────────────────────────────
+  // A card or loan's next payment, from what the bank shares. Paid when a payment at least the minimum landed within
+  // the 25 days before the due date. A due date months gone is a bank (or practice data) that stopped updating it.
+  function paymentOf(p){
+    var l = p.liability;
+    if (!l || !l.nextDue || !(l.minimumPayment > 0)) return null;
+    if (daysBetween(day(l.nextDue), today()) > 120) return null;
+    var paid = null;
+    if (l.lastPaymentDate && daysBetween(day(l.lastPaymentDate), day(l.nextDue)) <= 25 && (l.lastPaymentAmount || 0) >= l.minimumPayment) paid = l.lastPaymentDate;
+    return { amount: l.minimumPayment, due: l.nextDue, paid: paid, overdue: !!l.isOverdue };
+  }
+  function mergePlaid(items){
+    var kept = data.accounts.filter(function(a){ return a.source !== 'plaid'; });
+    var old = data.accounts.filter(function(a){ return a.source === 'plaid'; });
+    var now = today().toISOString(), banks = {};
+    // The same account reached through two connections to one bank: the working one wins.
+    var live = {};
+    items.forEach(function(it){ if (it.ok) it.accounts.forEach(function(p){ live[(it.institution || {}).name + '|' + (p.mask || p.name)] = true; }); });
+    items.forEach(function(it){
+      var i = it.institution || {};
+      data.institutions[i.name] = { logo: i.logo, color: i.color, url: i.url };
+      banks[it.itemId] = { name: i.name, ok: it.ok, error: it.error || null };
+      if (!it.ok) {
+        // A bank that needs signing in again keeps its last numbers, which go stale and say so.
+        old.forEach(function(a){
+          if (a.itemId !== it.itemId) return;
+          var mask = (a.name.match(/(\d{4})\s*$/) || [])[1];
+          if (!live[a.institution + '|' + (mask || a.name)]) kept.push(a);
+        });
+        return;
+      }
+      it.accounts.forEach(function(p){
+        var prev = old.filter(function(a){ return a.id === 'plaid:' + p.id; })[0] || {};
+        kept.push({
+          id: 'plaid:' + p.id, itemId: it.itemId, source: 'plaid',
+          // Holdings Plaid files as "other" (crypto) count with investments.
+          kind: p.kind === 'other' ? 'investment' : p.kind, institution: i.name,
+          name: p.name + (p.mask && p.name.indexOf(p.mask) < 0 ? ' ··' + p.mask : ''),
+          balance: p.balance, available: p.available, hist: prev.hist,
+          // A limit, rate or payment typed by hand survives when the bank shares none (auto loans).
+          limit: p.limit != null ? p.limit : prev.limit,
+          apr: p.liability && p.liability.apr != null ? Math.round(p.liability.apr * 100) / 100 : prev.apr,
+          payment: paymentOf(p) || (prev.payment && prev.payment.manual ? prev.payment : null),
+          updatedAt: now
+        });
+      });
+    });
+    data.banks = banks;
+    data.accounts = kept;
+  }
+
+  // ── Purchases (round 3, Q-purchases: kept with the page) ─────────────────
+  // Stored small: i id, a account, d date, m amount (positive = money out), n name, c Plaid category, k detail, p pending.
+  var TX_DAYS = 730, TX_MAX_CHARS = 600000;
+  function mergeTx(items){
+    var byId = {};
+    data.tx.forEach(function(t){ byId[t.i] = t; });
+    items.forEach(function(it){
+      var t = it.transactions; if (!it.ok || !t) return;
+      t.added.concat(t.modified).forEach(function(x){
+        byId[x.id] = { i: x.id, a: 'plaid:' + x.account, d: x.date, m: x.amount, n: x.name, c: x.category || '', k: x.detail || '', p: x.pending ? 1 : 0 };
+      });
+      t.removed.forEach(function(id){ delete byId[id]; });
+      data.txCursor[it.itemId] = t.cursor;
+    });
+    var cut = isoDay(new Date(today().getTime() - TX_DAYS * DAY));
+    data.tx = Object.keys(byId).map(function(k){ return byId[k]; }).filter(function(t){ return t.d >= cut; })
+      .sort(function(x, y){ return x.d < y.d ? -1 : x.d > y.d ? 1 : 0; });
+    // WHY a size guard: a page keeps at most 1 MB; the oldest purchases go first so balances and bills always fit.
+    while (data.tx.length && JSON.stringify(data.tx).length > TX_MAX_CHARS) data.tx.splice(0, Math.ceil(data.tx.length / 10));
+  }
+  // The same merchant, however the bank spells it: "NETFLIX.COM 866-579" and "Netflix" both become "netflix".
+  function txKey(n){
+    return String(n || '').toLowerCase().replace(/\.(com|net|org|co|io|tv)\b/g, ' ').replace(/[^a-z ]+/g, ' ')
+      .replace(/\b(inc|llc|ltd|corp|co|payment|pymt|pmt|ach|debit|purchase|pos|autopay|recurring|online|www|the|bill|web|mobile)\b/g, ' ')
+      // Single letters are left over from codes ("P1A2B3") and would split one merchant into many.
+      .replace(/\s+/g, ' ').trim().split(' ').filter(function(w){ return w.length > 1; }).slice(0, 3).join(' ');
+  }
+  // Money moving between your own accounts, card payments and paychecks are not spending.
+  function isSpending(t){
+    if (t.p || !(t.m > 0)) return false;
+    if (t.c === 'TRANSFER_IN' || t.c === 'TRANSFER_OUT' || t.c === 'INCOME') return false;
+    if (/CREDIT_CARD_PAYMENT/.test(t.k)) return false;
+    return true;
+  }
+  function spendCat(t){
+    var c = t.c, k = t.k || '';
+    if (/INSURANCE/.test(k)) return 'Insurance';
+    if (/TELEPHONE|INTERNET|CABLE/.test(k)) return 'Phone & internet';
+    if (/RENT_AND_UTILITIES_RENT/.test(k) || c === 'HOME_IMPROVEMENT') return 'Housing';
+    if (c === 'RENT_AND_UTILITIES') return 'Utilities';
+    if (c === 'FOOD_AND_DRINK') return 'Food & dining';
+    if (c === 'GENERAL_MERCHANDISE') return 'Shopping';
+    if (c === 'ENTERTAINMENT') return /TV_AND_MOVIES|MUSIC/.test(k) ? 'Subscriptions' : 'Entertainment';
+    if (c === 'TRAVEL') return 'Travel';
+    if (c === 'TRANSPORTATION') return 'Transportation';
+    if (c === 'MEDICAL') return 'Health';
+    if (c === 'PERSONAL_CARE') return 'Personal';
+    if (c === 'LOAN_PAYMENTS') return 'Loans';
+    return 'Other';
+  }
+  // Repeating payments nobody has made a bill of yet (round 3, Q-link: as much automatic discovery as possible).
+  function discover(){
+    var known = {};
+    data.bills.forEach(function(b){ (b.match || []).forEach(function(k){ known[k] = 1; }); });
+    data.dismissed.forEach(function(k){ known[k] = 1; });
+    var groups = {};
+    data.tx.forEach(function(t){
+      if (!isSpending(t) || t.c === 'LOAN_PAYMENTS') return;
+      var k = txKey(t.n); if (!k || known[k]) return;
+      (groups[k] = groups[k] || []).push(t);
+    });
+    var out = [];
+    Object.keys(groups).forEach(function(k){
+      var g = groups[k]; if (g.length < 2) return;
+      var gaps = []; for (var i = 1; i < g.length; i++) gaps.push(daysBetween(day(g[i - 1].d), day(g[i].d)));
+      gaps.sort(function(a, b){ return a - b; });
+      var gap = gaps[Math.floor(gaps.length / 2)];
+      var every = gap >= 26 && gap <= 35 ? 'month' : gap >= 12 && gap <= 16 ? '2weeks' : gap >= 6 && gap <= 8 ? 'week' : gap >= 350 && gap <= 380 ? 'year' : null;
+      if (!every) return;
+      var amts = g.map(function(t){ return t.m; }).sort(function(a, b){ return a - b; }), mid = amts[Math.floor(amts.length / 2)];
+      var close = g.filter(function(t){ return Math.abs(t.m - mid) <= Math.max(1, mid * (every === 'month' || every === 'year' ? 0.25 : 0.1)); }).length;
+      // Weekly groceries vary; a real bill repeats at nearly the same price.
+      if (close < Math.max(2, Math.ceil(g.length * 0.7))) return;
+      var last = g[g.length - 1];
+      var next = every === 'year' ? isoDay(new Date(day(last.d).getTime() + 365 * DAY)) : addEvery(last.d, every);
+      out.push({ key: k, name: last.n, amount: mid, every: every, count: g.length, last: last.d, next: next, account: last.a, cat: spendCat(last), tx: g });
+    });
+    // WHY a second pass: banks shared only ~30 days of purchases, so a monthly bill has been
+    // charged once and the repeat rule above can never see it. A known subscription company or
+    // a bill-like bank category is enough to suggest it; it is still only a suggestion to confirm.
+    var seen = {}; out.forEach(function(f){ seen[f.key] = 1; });
+    var guesses = [];
+    Object.keys(groups).forEach(function(k){
+      if (seen[k]) return;
+      var g = groups[k], last = g[g.length - 1];
+      if (!looksLikeBill(k, last)) return;
+      guesses.push({ key: k, name: last.n, amount: last.m, every: 'month', count: g.length, last: last.d, next: addMonth(last.d), account: last.a, cat: spendCat(last), guess: true, tx: g });
+    });
+    return out.sort(function(a, b){ return b.amount - a.amount; })
+      .concat(guesses.sort(function(a, b){ return b.amount - a.amount; }));
+  }
+  // Companies that bill on a schedule, matched against the cleaned-up name (txKey).
+  var SUB_NAMES = /\b(netflix|hulu|spotify|paramount|crunchyroll|disney|hbo|peacock|youtube|prime|audible|kindle|icloud|apple one|google one|google storage|dropbox|adobe|lightroom|photoshop|canva|new york times|nyt|wsj|washington post|patreon|duolingo|anthropic|claude|openai|chatgpt|github|microsoft|xbox|game pass|playstation|nintendo|onstar|siriusxm|sirius|visible|verizon|tmobile|att|cricket|cox|spectrum|xfinity|comcast|lemonade|liberty mutual|geico|progressive|allstate|state farm|planet fitness|fitness|gym|membership|subscription)\b/;
+  // Where to see or cancel a subscription, for companies whose page is known. Matched against txKey of the name.
+  var SUB_LINKS = [
+    [/netflix/, 'https://www.netflix.com/account'], [/hulu/, 'https://secure.hulu.com/account'],
+    [/spotify/, 'https://www.spotify.com/account/subscription/'], [/paramount/, 'https://www.paramountplus.com/account/'],
+    [/crunchyroll/, 'https://www.crunchyroll.com/account/membership'], [/disney/, 'https://www.disneyplus.com/account'],
+    [/\bhbo\b|\bmax\b/, 'https://auth.max.com/subscription'], [/peacock/, 'https://www.peacocktv.com/account'],
+    [/youtube/, 'https://www.youtube.com/paid_memberships'], [/prime|amazon/, 'https://www.amazon.com/mc'],
+    [/audible/, 'https://www.audible.com/account/overview'], [/apple|icloud/, 'https://apps.apple.com/account/subscriptions'],
+    [/google/, 'https://play.google.com/store/account/subscriptions'], [/dropbox/, 'https://www.dropbox.com/account/plan'],
+    [/adobe|lightroom|photoshop/, 'https://account.adobe.com/plans'], [/new york times|nyt/, 'https://myaccount.nytimes.com/seg/subscription'],
+    [/anthropic|claude/, 'https://claude.ai/settings/billing'], [/chatgpt/, 'https://chatgpt.com/#settings/Subscription'],
+    [/openai/, 'https://platform.openai.com/settings/organization/billing/overview'],
+    [/xbox|microsoft/, 'https://account.microsoft.com/services'], [/playstation/, 'https://www.playstation.com/acct/management'],
+    [/patreon/, 'https://www.patreon.com/settings/memberships'], [/duolingo/, 'https://www.duolingo.com/settings/subscription'],
+    [/github/, 'https://github.com/settings/billing'], [/sirius/, 'https://care.siriusxm.com/'], [/onstar/, 'https://www.onstar.com/']
+  ];
+  function manageLink(name){
+    var k = txKey(name);
+    for (var i = 0; i < SUB_LINKS.length; i++) if (SUB_LINKS[i][0].test(k)) return SUB_LINKS[i][1];
+    return '';
+  }
+  // The oldest purchase the banks have shared: "seen once" means once since then, not once ever.
+  function historyStart(){
+    return data.tx.length ? data.tx[0].d : null;
+  }
+  function looksLikeBill(key, t){
+    var k = t.k || '';
+    // Movie theaters share the streaming category but are one-off tickets.
+    if (/theat|cinema|\bamc\b/.test(key)) return false;
+    if (SUB_NAMES.test(key)) return true;
+    return /MUSIC_AND_AUDIO|TV_AND_MOVIES|INSURANCE|TELEPHONE|INTERNET_AND_CABLE|RENT_AND_UTILITIES|GYMS_AND_FITNESS/.test(k);
+  }
+  function billCatFor(s){
+    if (BILL_CATS.indexOf(s.cat) >= 0 && s.cat !== 'Other') return s.cat;
+    // A known subscription company (Claude, Xbox) is a subscription whatever the bank filed it under.
+    if (s.guess) return 'Subscriptions';
+    return s.every === 'month' && s.amount < 100 ? 'Subscriptions' : 'Other';
+  }
+  function linkedTx(b){
+    var keys = b.match || []; if (!keys.length) return [];
+    return data.tx.filter(function(t){ return !t.p && t.m > 0 && keys.indexOf(txKey(t.n)) >= 0; });
+  }
+  // Payments that look like a bill but are not linked yet — offered to tick (suggest, you confirm).
+  function possibleMatches(b){
+    var mine = {}; (b.match || []).forEach(function(k){ mine[k] = 1; });
+    var words = txKey(b.provider + ' ' + b.name).split(' ').filter(function(w){ return w.length >= 4; });
+    if (!words.length) return [];
+    var groups = {};
+    data.tx.forEach(function(t){
+      if (!(t.m > 0)) return;
+      var k = txKey(t.n); if (!k || mine[k]) return;
+      if (!words.some(function(w){ return k.indexOf(w) >= 0; })) return;
+      (groups[k] = groups[k] || []).push(t);
+    });
+    return Object.keys(groups).map(function(k){ var g = groups[k]; return { key: k, name: g[g.length - 1].n, count: g.length, total: sum(g, function(t){ return t.m; }) }; });
+  }
+  // Exact-name bills link themselves; a linked payment near a bill's due date marks it paid and moves it on.
+  function priceRose(was, now){ return now - was >= Math.max(0.25, was * 0.02); }
+  // The latest rise among a list of charges (oldest first), or null.
+  function chargeRise(ch){
+    for (var i = ch.length - 1; i > 0; i--) if (priceRose(ch[i - 1].m, ch[i].m)) return { from: ch[i - 1].m, to: ch[i].m, on: ch[i].d };
+    return null;
+  }
+  function riseText(r){ return money(r.from) + ' → ' + money(r.to) + ' on ' + short(day(r.on)); }
+  function autoLink(){
+    data.bills.forEach(function(b){
+      if ((b.match || []).length) return;
+      var k = txKey(b.provider || b.name);
+      if (k && data.tx.some(function(t){ return txKey(t.n) === k; })) b.match = [k];
+    });
+    data.bills.forEach(function(b){
+      if (!b.due || b.monthly === false) return;
+      var paid = linkedTx(b).filter(function(t){ var g = daysBetween(day(b.due), day(t.d)); return g >= -12 && g <= 10 && (!b.lastPaid || t.d > b.lastPaid); });
+      if (!paid.length) return;
+      var t = paid[paid.length - 1];
+      b.lastPaid = t.d; b.paidLog = (b.paidLog || []).concat([t.d]).slice(-36);
+      var was = b.amount, now = Math.round(t.m * 100) / 100;
+      // WHY a threshold: tax and currency rounding move a charge by cents; a real price rise is bigger.
+      if (was > 0 && priceRose(was, now)) b.priceUp = { from: was, to: now, on: t.d };
+      b.amount = now;
+      b.due = addMonth(b.due); delete b.paid;
+    });
+  }
+
+  // One net-worth point per day, and each account's own daily balance (≈400 days) for its charts.
+  function snapshot(){
+    var t = totals(), d = isoDay(today());
+    data.accounts.forEach(function(a){
+      a.hist = Array.isArray(a.hist) ? a.hist : [];
+      var l = a.hist[a.hist.length - 1];
+      if (l && l.d === d) l.v = a.balance; else a.hist.push({ d: d, v: a.balance });
+      if (a.hist.length > 400) a.hist.splice(0, a.hist.length - 400);
+    });
+    var last = data.history[data.history.length - 1];
+    if (last && last.d === d) last.v = Math.round(t.net); else data.history.push({ d: d, v: Math.round(t.net) });
+    if (data.history.length > 3660) data.history.splice(0, data.history.length - 3660);
+  }
+
+  // ── Talking to the app ───────────────────────────────────────────────────
+  function syncBanks(){
+    if (!plaidOn || checking) return;
+    checking = true; render();
+    // Live balances on every check (round 1: "Live, every open"), then new purchases since the bookmark.
+    window.youcoded.plaid({ op: 'accounts', live: true }).then(function(r){
+      if (!r || typeof r.ok !== 'boolean' || !r.ok) {
+        checking = false;
+        bankNote = !r || typeof r.ok !== 'boolean' || r.code === 'NOT_APPROVED' || r.code === 'NO_KEYS' || r.code === 'UNSUPPORTED' ? null : r.message || 'The banks could not be checked.';
+        render(); return null;
+      }
+      bankNote = null;
+      mergePlaid(r.items);
+      return window.youcoded.plaid({ op: 'transactions', cursors: data.txCursor });
+    }).then(function(r){
+      if (r === null) return;
+      checking = false;
+      if (r && r.ok) mergeTx(r.items);
+      autoLink();
+      if (data.accounts.length) snapshot();
+      data.checkedAt = today().toISOString();
+      save(); render();
+    }, function(){ checking = false; render(); });
+  }
+  function connectBank(){
+    if (!plaidOn) return;
+    var mine = ++linkSeq;
+    connecting = true; bankNote = null; render();
+    window.youcoded.plaid({ op: 'connect', browser: data.settings.browser || 'default' }).then(function(r){
+      if (mine !== linkSeq) return;
+      connecting = false;
+      if (!r || !r.ok) { bankNote = r && r.code === 'CANCELLED' ? null : (r && r.message) || 'The bank could not be connected.'; render(); return; }
+      render(); syncBanks();
+    });
+  }
+  function cancelLink(){ linkSeq++; connecting = false; render(); window.youcoded.plaid({ op: 'cancel' }); }
+  function reconnectBank(itemId){
+    if (!plaidOn) return;
+    var mine = ++linkSeq;
+    connecting = true; render();
+    window.youcoded.plaid({ op: 'reconnect', itemId: itemId, browser: data.settings.browser || 'default' }).then(function(r){
+      if (mine !== linkSeq) return;
+      connecting = false;
+      if (!r || !r.ok) { bankNote = (r && r.message) || 'The bank could not be reconnected.'; render(); return; }
+      render(); syncBanks();
+    });
+  }
+  function removeBank(itemId){
+    window.youcoded.plaid({ op: 'remove', itemId: itemId }).then(function(r){
+      removing = null;
+      if (!r || !r.ok) { bankNote = (r && r.message) || 'The bank could not be removed.'; render(); return; }
+      var gone = {}; data.accounts.forEach(function(a){ if (a.itemId === itemId) gone[a.id] = 1; });
+      data.accounts = data.accounts.filter(function(a){ return !gone[a.id]; });
+      data.tx = data.tx.filter(function(t){ return !gone[t.a]; });
+      delete data.banks[itemId]; delete data.txCursor[itemId];
+      save(); render();
+    });
+  }
+
+  // ── Bills ────────────────────────────────────────────────────────────────
+  function allBills(){
+    var out = [];
+    data.accounts.forEach(function(a){
+      if (!a.payment || !(a.payment.amount > 0)) return;
+      out.push({ id: a.id, account: a, institution: a.institution, site: a.site, name: fullName(a),
+        sub: a.kind === 'credit' ? 'min. payment' : a.kind === 'bnpl' ? (a.left ? a.left + ' left' : '') : '',
+        cat: a.kind === 'credit' ? 'Credit cards' : a.kind === 'bnpl' ? 'Pay-later plans' : 'Loans',
+        amount: a.payment.amount, due: day(a.payment.due), paid: a.payment.paid ? day(a.payment.paid) : null, overdue: a.payment.overdue,
+        mine: a.source !== 'plaid' || !!a.payment.manual });
+    });
+    data.bills.forEach(function(b){
+      if (b.cancelled) return;
+      out.push({ id: b.id, bill: b, institution: b.provider, site: b.site, name: b.name, sub: b.sub || '', cat: b.category || 'Other',
+        amount: b.amount, due: day(b.due), paid: b.paid ? day(b.paid) : null, mine: true });
+    });
+    return out;
+  }
+  // WHY two groups: a missed rent or card payment costs late fees and credit; a missed Hulu renewal costs nothing.
+  // Subscriptions are the Subscriptions category unless moved by hand (bill.optional).
+  function isSub(b){
+    if (!b.bill) return false;
+    return b.bill.optional != null ? !!b.bill.optional : b.bill.category === 'Subscriptions';
+  }
+  // What a bill costs in an average month, whatever its schedule.
+  function perMonth(b){
+    var every = b.bill ? (b.bill.every || (b.bill.monthly === false ? 'once' : 'month')) : (b.account && b.account.payment && b.account.payment.every) || 'month';
+    return every === 'week' ? b.amount * 52 / 12 : every === '2weeks' ? b.amount * 26 / 12 : every === 'year' ? b.amount / 12 : every === 'once' ? 0 : b.amount;
+  }
+  function billState(b){
+    // Subscriptions renew on their own: a passed date is news, never a late-payment warning.
+    if (isSub(b) && !b.paid) {
+      var sd = daysBetween(b.due, today());
+      if (sd > 0) return { cls: '', icon: '', text: 'Renewal was ' + short(b.due) };
+      if (sd === 0) return { cls: '', icon: '', text: 'Renews today' };
+      return { cls: '', icon: '', text: 'Renews in ' + (-sd) + (sd === -1 ? ' day' : ' days') + ' · ' + short(b.due) };
+    }
+    if (b.paid) return { cls: 'paid', icon: I.check, text: 'Paid ' + short(b.paid) };
+    var d = daysBetween(b.due, today());
+    if (d > 0 || b.overdue) {
+      var late = Math.max(d, 0), left = S.reportDay - late;
+      if (late === 0) return { cls: 'late', icon: I.warn, text: 'Past due', alert: 'warn', head: 'Due today: pay now to avoid a late fee', why: 'past due' };
+      if (left <= 0) return { cls: 'late report', icon: I.stop, text: late + ' days late · may already be on your credit report', alert: 'bad', head: 'May already be on your credit report', why: late + ' days late' };
+      if (left <= S.reportWarnDays) return { cls: 'late report', icon: I.stop, text: late + ' days late · on your credit report in ' + left + (left === 1 ? ' day' : ' days'), alert: 'bad', head: 'On your credit report in ' + left + (left === 1 ? ' day' : ' days'), why: late + ' days late' };
+      return { cls: 'late', icon: I.warn, text: late + (late === 1 ? ' day late' : ' days late'), alert: 'warn', head: 'Late: fees and interest may apply', why: late + (late === 1 ? ' day late' : ' days late') };
+    }
+    if (d === 0) return { cls: 'soon', icon: I.cal, text: 'Due today' };
+    if (-d === 1) return { cls: 'soon', icon: I.cal, text: 'Due tomorrow' };
+    return { cls: -d <= 7 ? 'soon' : '', icon: '', text: 'Due in ' + (-d) + ' days · ' + short(b.due) };
+  }
+  function totals(){
+    var have = 0, owe = 0, cash = 0;
+    data.accounts.forEach(function(a){
+      if (isDebt(a)) owe += a.balance; else have += a.balance;
+      if (a.kind === 'checking' || a.kind === 'savings') cash += a.balance;
+    });
+    var t = today(), end = new Date(t.getFullYear(), t.getMonth() + 1, 0, 23), due = 0, week = 0;
+    allBills().forEach(function(b){ if (!b.paid && b.due <= end) due += b.amount; if (!b.paid && daysBetween(t, b.due) <= 7) week++; });
+    return { have: have, owe: owe, net: have - owe, cash: cash - due, dueThisMonth: due, dueThisWeek: week };
+  }
+  // Paying a repeating bill moves it on; a pay-later plan counts down its payments; a one-off is marked paid.
+  function markPaid(id){
+    var t = isoDay(today());
+    var b = data.bills.filter(function(x){ return x.id === id; })[0];
+    var a = b ? null : accountById(id);
+    var target = b || (a && a.payment);
+    if (!target) return;
+    target.paidLog = (Array.isArray(target.paidLog) ? target.paidLog : []).concat([t]).slice(-36);
+    if (a && a.kind === 'bnpl') {
+      a.left = Math.max(0, (a.left || 1) - 1);
+      a.balance = Math.round(target.amount * a.left * 100) / 100; a.updatedAt = today().toISOString();
+      if (a.left === 0) { a.payment = null; a.note = 'Paid off'; } else { target.lastPaid = t; target.due = addEvery(target.due, target.every || 'month'); }
+    } else if (target.monthly !== false) { target.lastPaid = t; target.due = addMonth(target.due); delete target.paid; }
+    else target.paid = t;
+    snapshot(); save(); render();
+  }
+
+  // ── Needs you ────────────────────────────────────────────────────────────
+  // WHY head/why: a card leads with what will happen ("On your credit report in 6 days"), not the
+  // account's state, so the most serious consequence is what is read first. Lower rank = more serious.
+  function alerts(){
+    var by = {}, order = [];
+    function add(id, x, name, lvl, rank, head, why, action){
+      if (!by[id]) { by[id] = { x: x, name: name, lvl: lvl, issues: [], action: null }; order.push(id); }
+      var r = by[id]; r.issues.push({ rank: rank, head: head, why: why }); if (lvl === 'bad') r.lvl = 'bad'; if (action) r.action = action;
+    }
+    Object.keys(data.banks).forEach(function(itemId){
+      var b = data.banks[itemId];
+      if (b.ok || !b.error) return;
+      var mine = data.accounts.filter(function(a){ return a.itemId === itemId; });
+      var action = b.error.reconnect ? { label: 'Reconnect ' + b.name, kind: 'reconnect', id: itemId } : null;
+      var head = b.error.code === 'NO_ACCOUNTS' ? 'This connection no longer works' : 'Balance isn’t updating';
+      var why = b.error.reconnect ? esc(b.name) + ' needs you to sign in again'
+        : b.error.code === 'NO_ACCOUNTS' ? 'it reaches no accounts (often because the bank was connected again). Remove it below.'
+        : esc(b.error.message);
+      if (mine.length) mine.forEach(function(a){ add(a.id, a, fullName(a), 'warn', 3, head, why, action); });
+      else add('bank:' + itemId, { institution: b.name }, b.name, 'warn', 3, head, why, action);
+    });
+    allBills().forEach(function(b){
+      var s = billState(b);
+      if (s.alert) add(b.id, b, b.name, s.alert, s.alert === 'bad' ? 0 : 1, s.head, '<b>' + money(b.amount) + '</b> payment ' + s.why);
+    });
+    data.bills.forEach(function(b){
+      if (b.cancelled || !b.priceUp || b.priceUp.seen) return;
+      var r = b.priceUp, yr = (r.to - r.from) * (b.every === 'year' ? 1 : b.every === 'week' ? 52 : b.every === '2weeks' ? 26 : 12);
+      add('price:' + b.id, { id: 'bill:' + b.id, institution: b.provider }, b.name, 'warn', 5, 'Price went up', riseText(r) + ' · <b>' + money(yr, true) + '</b> more a year',
+        { label: 'Got it', kind: 'ack', id: b.id });
+    });
+    data.accounts.forEach(function(a){
+      if (a.kind === 'credit' && a.limit) { var p = a.balance / a.limit * 100; if (p >= S.alertPct) add(a.id, a, fullName(a), 'bad', 2, 'Can lower your credit score', '<b>' + Math.round(p) + '%</b> of its ' + money(a.limit, true) + ' limit used'); }
+      if (isStale(a)) {
+        if (a.source === 'plaid') { if (!data.banks[a.itemId] || data.banks[a.itemId].ok) add(a.id, a, fullName(a), 'warn', 4, 'Balance may be out of date', 'last updated ' + (a.updatedAt ? ago(a.updatedAt) : 'never'), plaidOn ? { label: 'Check now', kind: 'check' } : null); }
+        else add(a.id, a, fullName(a), 'warn', 4, 'Balance may be out of date', 'you last updated it ' + (a.updatedAt ? ago(a.updatedAt) : 'never'), { label: 'Update', kind: 'edit', id: a.id });
+      }
+    });
+    var out = order.map(function(id){ var r = by[id]; r.issues.sort(function(x, y){ return x.rank - y.rank; }); return r; });
+    return out.sort(function(x, y){ return x.issues[0].rank - y.issues[0].rank; });
+  }
+
+  // ── Page ─────────────────────────────────────────────────────────────────
+  function render(){
+    var t = totals(), al = alerts(), h = '';
+    var bad = al.filter(function(a){ return a.lvl === 'bad'; }).length;
+
+    h += '<div class="top">';
+    h += '<span class="pill title"><span class="pill-ic">' + I.money + '</span>Money</span>';
+    if (al.length) h += '<button class="pill" data-jump="needs"><span class="pill-ic ' + (bad ? 'bad' : 'warn') + '">' + (bad ? I.stop : I.warn) + '</span>' + al.length + ' to look at</button>';
+    else if (data.accounts.length) h += '<span class="pill"><span class="pill-ic ok">' + I.check + '</span>All clear</span>';
+    if (data.accounts.length || data.bills.length) h += '<button class="pill" data-jump="bills"><span class="pill-ic">' + I.cal + '</span>' + t.dueThisWeek + ' due this week</button>';
+    h += '<span class="spacer"></span>';
+    if (plaidOn || data.checkedAt) h += '<span class="small muted">' + (connecting ? 'Finish signing in to your bank in your browser…' : checking ? 'Checking your banks…' : data.checkedAt ? 'Checked ' + ago(data.checkedAt) : '') + '</span>';
+    if (connecting) h += '<button class="btn" data-cancel-link>Cancel</button>';
+    else if (plaidOn) h += '<button class="btn" id="check"' + (checking ? ' disabled' : '') + '>' + I.refresh + 'Check now</button>';
+    h += '<div style="position:relative"><button class="btn" id="add" aria-haspopup="menu" aria-expanded="' + menuOpen + '">' + I.plus + 'Add</button>';
+    if (menuOpen) {
+      h += '<div class="menu" role="menu">';
+      h += '<button role="menuitem" data-add="bank"' + (plaidOn ? '' : ' disabled') + '>Connect a bank<span>' + (plaidOn ? 'Sign in through Plaid in your browser' : 'Needs YouCoded on your computer') + '</span></button>';
+      h += '<button role="menuitem" data-add="hand">Add an account by hand<span>Cards, loans, pay-later plans, things you own</span></button>';
+      h += '<button role="menuitem" data-add="bill">Add a bill<span>Insurance, phone, subscriptions…</span></button>';
+      var br = data.settings.browser || 'default';
+      h += '<div class="menu-pick" role="group" aria-label="Open bank sign-ins in"><span>Bank sign-ins open in</span><div class="ranges">' + [['default','Default'],['firefox','Firefox'],['chrome','Chrome']].map(function(o){ return '<button class="rng' + (br === o[0] ? ' on' : '') + '" data-browser="' + o[0] + '" aria-pressed="' + (br === o[0]) + '">' + o[1] + '</button>'; }).join('') + '</div></div></div>';
+    }
+    h += '</div></div>';
+
+    if (bankNote) h += '<div class="tile need warn note" role="alert"><span class="badge">' + I.warn + '</span><div class="txt"><div class="facts">' + esc(bankNote) + '</div></div><button class="btn sm" data-dismiss-note>Dismiss</button></div>';
+    if (form) h += formCard();
+
+    if (!data.accounts.length && !data.bills.length && !form) {
+      h += '<div class="card empty-card"><span class="badge big">' + I.bank + '</span><h2>Everything you have and owe, in one place</h2>';
+      h += '<p class="muted">Connect a bank to see live balances, card limits and due dates. Accounts that can’t connect can be added by hand, and YouCoded can update them when you tell it in chat.</p>';
+      h += '<div class="row-btns">' + (plaidOn ? '<button class="btn primary" data-add="bank">' + I.bank + 'Connect a bank</button>' : '') + '<button class="btn" data-add="hand">' + I.pen + 'Add an account by hand</button></div></div>';
+      document.getElementById('root').innerHTML = h; wire(); return;
+    }
+
+    h += heroCard(t);
+
+    if (al.length) {
+      h += '<div class="card" id="needs"><div class="card-head"><h2>Needs you</h2></div><div class="needs">';
+      al.forEach(function(a){
+        var btn = !a.action ? ''
+          : a.action.kind === 'edit' ? '<button class="btn sm" data-edit="' + esc(a.action.id) + '">' + I.pen + a.action.label + '</button>'
+          : a.action.kind === 'ack' ? '<button class="btn sm" data-ack-price="' + esc(a.action.id) + '">' + a.action.label + '</button>'
+          : a.action.kind === 'reconnect' ? '<button class="btn sm" data-reconnect="' + esc(a.action.id) + '"' + (connecting ? ' disabled' : '') + '>' + a.action.label + '</button>'
+          : '<button class="btn sm" data-check' + (checking ? ' disabled' : '') + '>' + a.action.label + '</button>';
+        var target = a.x && a.x.id && String(a.x.id).indexOf('bank:') !== 0 ? a.x.id : '';
+        h += '<div class="tile need tap ' + a.lvl + '" role="button" tabindex="0" ' + (target ? 'data-focus="' + esc(target) + '"' : 'data-jump="banks"') + ' title="Show this">' + mark(a.x.institution) + '<div class="txt"><div class="head">' + esc(a.issues[0].head) + '</div><div class="who">' + esc(a.name) + ' · <span>' + a.issues[0].why + '</span></div>' + (a.issues.length > 1 ? '<div class="facts">Also: ' + a.issues.slice(1).map(function(i){ return esc(i.head).toLowerCase() + ' (' + i.why + ')'; }).join(' · ') + '</div>' : '') + '</div>' + btn + '</div>';
+      });
+      h += '</div></div>';
+    }
+
+    h += '<div class="cols"><div class="card" id="have"><div class="card-head"><h2>What you have</h2><span class="total num">' + money(t.have) + '</span></div>';
+    var haveSecs = ['checking', 'savings', 'investment', 'asset'].map(sec).join('');
+    h += haveSecs || '<div class="empty">Nothing here yet.</div>';
+    h += '</div><div class="card" id="owe"><div class="card-head"><h2>What you owe</h2><span class="total num">' + money(-t.owe) + '</span></div>';
+    var oweSecs = ['credit', 'loan', 'bnpl'].map(sec).join('');
+    h += oweSecs || '<div class="empty">Nothing here yet.</div>';
+    h += '</div></div>';
+
+    h += billsCard(t);
+
+    var bankIds = Object.keys(data.banks);
+    if (bankIds.length) {
+      h += '<div class="card" id="banks"><div class="card-head"><h2>Connected banks</h2><span class="small muted">Through Plaid. Removing one stops it sharing.</span></div><div class="list">';
+      bankIds.forEach(function(id){
+        var b = data.banks[id];
+        h += '<div class="tile bank-row">' + mark(b.name) + '<div class="name">' + esc(b.name) + '</div><span class="small ' + (b.ok ? 'muted' : 'flag') + '">' + (b.ok ? 'Connected' : (b.error && b.error.reconnect ? 'Needs you to sign in again' : 'Not answering')) + '</span>';
+        h += removing === id
+          ? '<button class="btn sm" data-cancel-remove>Keep</button><button class="btn sm danger" data-remove-bank="' + esc(id) + '">Remove ' + esc(b.name) + '</button>'
+          : '<button class="btn sm" data-ask-remove="' + esc(id) + '">Remove</button>';
+        h += '</div>';
+      });
+      h += '</div></div>';
+    }
+
+    document.getElementById('root').innerHTML = h;
+    drawChart(); wire();
+  }
+
+  // ── The top chart (round 3, Q-charts) ────────────────────────────────────
+  var MODES = [['net', 'Net worth'], ['account', 'One account'], ['spend', 'Spending'], ['bills', 'Bills & subscriptions'], ['debt', 'Debt']];
+  var RANGES = [['1w', '1W', 7], ['1m', '1M', 31], ['3m', '3M', 92], ['6m', '6M', 183], ['1y', '1Y', 365], ['all', 'All', 1e9]];
+  function rangeDays(){ return RANGES.filter(function(r){ return r[0] === range; })[0][2]; }
+  function heroCard(t){
+    var h = '<div class="hero"><div class="card nw"><div class="modes" role="tablist" aria-label="What the chart shows">';
+    MODES.forEach(function(m){ h += '<button class="mode' + (chartMode === m[0] ? ' on' : '') + '" role="tab" aria-selected="' + (chartMode === m[0]) + '" data-mode="' + m[0] + '">' + m[1] + '</button>'; });
+    h += '</div><div class="nw-head"><div>' + headline(t) + '</div><div class="ranges" role="group" aria-label="Chart range">';
+    RANGES.forEach(function(r){ h += '<button class="rng' + (range === r[0] ? ' on' : '') + '" data-range="' + r[0] + '" aria-pressed="' + (range === r[0]) + '">' + r[1] + '</button>'; });
+    h += '</div></div><div class="chart" id="chart"></div><div class="legend-row" id="chart-legend"></div><div class="small muted num" id="chart-sum"></div></div>';
+    h += '<div class="stats">';
+    h += stat(I.wallet, 'Cash available', money(t.cash, true), 'After ' + money(t.dueThisMonth, true) + ' still due this month', 'have');
+    h += stat(I.owe, 'Total owed', money(-t.owe, true), 'Cards, loans and plans', 'owe');
+    h += stat(I.have, 'You have', money(t.have, true), 'Cash, savings, investments, things you own', 'have');
+    return h + '</div></div>';
+  }
+  function headline(t){
+    var thisMonth = isoDay(today()).slice(0, 7);
+    if (chartMode === 'account') {
+      var list = data.accounts;
+      if (!chartAccount || !accountById(chartAccount)) chartAccount = list.length ? list[0].id : null;
+      var a = accountById(chartAccount);
+      var sel = '<select class="pick" data-chart-account aria-label="Account">' + list.map(function(x){ return '<option value="' + esc(x.id) + '"' + (x.id === chartAccount ? ' selected' : '') + '>' + esc(fullName(x)) + '</option>'; }).join('') + '</select>';
+      return sel + (a ? '<div class="big num">' + money(isDebt(a) ? -a.balance : a.balance, true) + '</div>' : '');
+    }
+    if (chartMode === 'spend') {
+      var s = sum(data.tx.filter(function(x){ return isSpending(x) && x.d.slice(0, 7) === thisMonth; }), function(x){ return x.m; });
+      return '<div class="label">Spent this month</div><div class="big num">' + money(s, true) + '</div>';
+    }
+    if (chartMode === 'bills') {
+      var bs = sum(data.bills, function(b){ return sum(linkedTx(b).filter(function(x){ return x.d.slice(0, 7) === thisMonth; }), function(x){ return x.m; }); });
+      var monthly = sum(data.bills.filter(function(b){ return b.monthly !== false; }), function(b){ return b.amount; });
+      return '<div class="label">Bills paid this month</div><div class="big num">' + money(bs, true) + '</div><span class="delta num">' + money(monthly, true) + ' a month in repeating bills</span>';
+    }
+    if (chartMode === 'debt') return '<div class="label">Total owed</div><div class="big num">' + money(-t.owe, true) + '</div>' + change30(debtSeries(), true);
+    var back = null;
+    for (var i = data.history.length - 1; i >= 0; i--) { if (daysBetween(day(data.history[i].d), today()) >= 30) { back = data.history[i].v; break; } }
+    var h = '<div class="label">Net worth</div><div class="big num">' + money(t.net, true) + '</div>';
+    if (back != null) { var ch = t.net - back; h += '<span class="delta num">' + (ch >= 0 ? I.up : I.down) + (ch >= 0 ? 'Up ' : 'Down ') + money(Math.abs(ch), true) + ' in 30 days</span>'; }
+    return h;
+  }
+  function change30(series, debt){
+    if (series.length < 2) return '';
+    var now = series[series.length - 1], then = series[0];
+    for (var i = series.length - 1; i >= 0; i--) { if (daysBetween(day(series[i].d), today()) >= 30) { then = series[i]; break; } }
+    var ch = now.v - then.v; if (!ch) return '';
+    return '<span class="delta num">' + (ch >= 0 ? I.up : I.down) + (debt ? (ch <= 0 ? 'Down ' : 'Up ') : (ch >= 0 ? 'Up ' : 'Down ')) + money(Math.abs(ch), true) + ' since ' + short(day(then.d)) + '</span>';
+  }
+  // Total owed each day: every debt's latest known balance on that day, added up.
+  function debtSeries(){
+    var debts = data.accounts.filter(isDebt), dates = {};
+    debts.forEach(function(a){ (a.hist || []).forEach(function(p){ dates[p.d] = 1; }); });
+    return Object.keys(dates).sort().map(function(d){
+      return { d: d, v: sum(debts, function(a){ var v = 0; (a.hist || []).forEach(function(p){ if (p.d <= d) v = p.v; }); return v; }) };
+    });
+  }
+  function drawChart(){
+    var el = document.getElementById('chart'); if (!el) return;
+    var sumEl = document.getElementById('chart-sum'), legEl = document.getElementById('chart-legend');
+    sumEl.textContent = ''; legEl.innerHTML = '';
+    var cut = isoDay(new Date(today().getTime() - rangeDays() * DAY));
+    if (chartMode === 'spend' || chartMode === 'bills') return drawBars(el, legEl, sumEl, cut);
+    var pts, label = 'Net worth', debt = false;
+    if (chartMode === 'account') { var a = accountById(chartAccount); pts = a ? (a.hist || []).map(function(p){ return { d: p.d, v: isDebt(a) ? -p.v : p.v }; }) : []; label = a ? fullName(a) : ''; }
+    else if (chartMode === 'debt') { pts = debtSeries(); label = 'Total owed'; debt = true; }
+    else pts = data.history;
+    pts = pts.filter(function(p){ return p.d >= cut; });
+    drawLine(el, sumEl, pts, label, debt);
+  }
+  // Round gridlines, a margin that fits the widest label, and only as many date labels as fit — so text never collides.
+  function axis(lo0, hi0){
+    var span = (hi0 - lo0) || Math.max(100, Math.abs(hi0) * 0.02);
+    var raw = span / 3, mag = Math.pow(10, Math.floor(Math.log10(raw))), step = [1, 2, 5, 10].map(function(m){ return m * mag; }).filter(function(v){ return v >= raw; })[0];
+    var lo = Math.floor((lo0 - span * 0.08) / step) * step, hi = Math.ceil((hi0 + span * 0.08) / step) * step;
+    if (lo0 >= 0 && lo < 0) lo = 0;
+    var k = function(v){
+      var a = Math.abs(v), t = a >= 1000 ? (step >= 1000 ? Math.round(a / 1000) + 'k' : (a / 1000).toFixed(1).replace(/\.0$/, '') + 'k') : String(Math.round(a));
+      return v < 0 ? '$(' + t + ')' : '$' + t;
+    };
+    var ticks = []; for (var v = lo; v <= hi + step / 2; v += step) ticks.push(v);
+    return { lo: lo, hi: hi, k: k, ticks: ticks, width: 18 + ticks.reduce(function(m, v){ return Math.max(m, k(v).length); }, 0) * 7 };
+  }
+  function drawLine(el, sumEl, pts, label, debt){
+    if (pts.length < 2) { el.innerHTML = '<div class="empty">This chart fills in as days go by — one point each day the page checks your balances.</div>'; return; }
+    var vs = pts.map(function(p){ return p.v; }), diff = vs[vs.length - 1] - vs[0];
+    sumEl.textContent = (diff >= 0 ? 'Up ' : 'Down ') + money(Math.abs(diff), true) + ' since ' + short(day(pts[0].d));
+    var ax = axis(Math.min.apply(null, vs), Math.max.apply(null, vs));
+    var W = el.clientWidth || 600, H = el.clientHeight || 190, L = ax.width, R = 10, T = 10, B = 26;
+    var x = function(i){ return L + (W - L - R) * i / (pts.length - 1); };
+    var y = function(v){ return T + (H - T - B) * (1 - (v - ax.lo) / (ax.hi - ax.lo)); };
+    var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + esc(label) + ' over time"><defs><linearGradient id="fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="currentColor" stop-opacity=".16"/><stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient></defs><g class="grid axis">';
+    ax.ticks.forEach(function(v){ s += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y(v) + '" y2="' + y(v) + '"/><text x="' + (L - 12) + '" y="' + (y(v) + 4) + '" text-anchor="end">' + ax.k(v) + '</text>'; });
+    var nx = Math.max(1, Math.min(pts.length - 1, Math.floor((W - L - R) / 110)));
+    var dl = range === '1w' ? function(d){ return d.toLocaleDateString('en-US', { weekday: 'short', day: 'numeric' }); } : short;
+    for (var j = 0; j <= nx; j++) { var i = Math.round((pts.length - 1) * j / nx); s += '<text x="' + x(i) + '" y="' + (H - 6) + '" text-anchor="' + (j === 0 ? 'start' : j === nx ? 'end' : 'middle') + '">' + dl(day(pts[i].d)) + '</text>'; }
+    s += '</g>';
+    if (ax.lo < 0 && ax.hi > 0) s += '<line class="zero" x1="' + L + '" x2="' + (W - R) + '" y1="' + y(0) + '" y2="' + y(0) + '"/>';
+    var d = pts.map(function(p, i){ return (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(p.v).toFixed(1); }).join('');
+    s += '<path d="' + d + 'L' + x(pts.length - 1) + ' ' + (H - B) + 'L' + L + ' ' + (H - B) + 'Z" fill="url(#fill)" style="color:var(--fg)"/>';
+    s += '<path class="line" d="' + d + '"/><line class="cross" id="cx" y1="' + T + '" y2="' + (H - B) + '" style="display:none"/><circle class="dot" id="cd" r="5" style="display:none"/></svg><div class="tip" id="tip" style="display:none"></div>';
+    el.innerHTML = s;
+    var svg = el.querySelector('svg'), cx = el.querySelector('#cx'), cd = el.querySelector('#cd'), tip = el.querySelector('#tip');
+    svg.addEventListener('pointermove', function(e){
+      var r = svg.getBoundingClientRect(), px = (e.clientX - r.left) * W / r.width;
+      var i = Math.max(0, Math.min(pts.length - 1, Math.round((px - L) / (W - L - R) * (pts.length - 1))));
+      cx.setAttribute('x1', x(i)); cx.setAttribute('x2', x(i)); cx.style.display = '';
+      cd.setAttribute('cx', x(i)); cd.setAttribute('cy', y(pts[i].v)); cd.style.display = '';
+      tip.style.display = ''; tip.style.left = (x(i) * r.width / W) + 'px'; tip.style.top = (y(pts[i].v) * r.height / H) + 'px';
+      tip.innerHTML = '<span class="muted">' + short(day(pts[i].d)) + '</span>&nbsp; <b class="num">' + money(pts[i].v, true) + '</b>';
+    });
+    svg.addEventListener('pointerleave', function(){ cx.style.display = cd.style.display = tip.style.display = 'none'; });
+  }
+  // Stacked bars: spending by category, or bills by bill. A day per bar for 1W and 1M, a month per bar beyond.
+  function drawBars(el, legEl, sumEl, cut){
+    var daily = range === '1w' || range === '1m', rows = [];
+    if (chartMode === 'spend') rows = data.tx.filter(function(t){ return isSpending(t) && t.d >= cut; }).map(function(t){ return { d: t.d, key: spendCat(t), v: t.m }; });
+    else data.bills.forEach(function(b){ linkedTx(b).forEach(function(t){ if (t.d >= cut) rows.push({ d: t.d, key: b.name, v: t.m }); }); });
+    if (!rows.length) {
+      el.innerHTML = '<div class="empty">' + (chartMode === 'spend'
+        ? (data.tx.length ? 'No spending in this range.' : 'Spending shows up here once your banks share purchases — check back after the next check.')
+        : 'Bills linked to payments show up here. Add a found repeating payment, or open a bill and link its payments.') + '</div>';
+      return;
+    }
+    var bucket = function(d){ return daily ? d : d.slice(0, 7); };
+    var totalsByKey = {}; rows.forEach(function(r){ totalsByKey[r.key] = (totalsByKey[r.key] || 0) + r.v; });
+    var keys = Object.keys(totalsByKey).sort(function(a, b){ return totalsByKey[b] - totalsByKey[a]; });
+    var top = keys.slice(0, 6), rest = keys.length > 6;
+    var series = top.concat(rest ? ['Everything else'] : []);
+    var color = function(k, i){ return chartMode === 'spend' ? (CAT_COLOR[k] || '#8a8f98') : (k === 'Everything else' ? '#8a8f98' : SERIES[i % SERIES.length]); };
+    var buckets = [];
+    if (daily) { for (var t0 = new Date(day(cut).getTime() + DAY); t0 <= today(); t0 = new Date(t0.getTime() + DAY)) buckets.push(isoDay(t0)); }
+    else { var m = new Date(day(cut).getFullYear(), day(cut).getMonth(), 1); while (m <= today()) { buckets.push(isoDay(m).slice(0, 7)); m.setMonth(m.getMonth() + 1); } }
+    var grid = {}; buckets.forEach(function(b){ grid[b] = {}; });
+    rows.forEach(function(r){ var b = bucket(r.d); if (!grid[b]) return; var k = top.indexOf(r.key) >= 0 ? r.key : 'Everything else'; grid[b][k] = (grid[b][k] || 0) + r.v; });
+    var maxV = Math.max.apply(null, buckets.map(function(b){ return sum(Object.keys(grid[b]).map(function(k){ return grid[b][k]; })); }).concat([1]));
+    var ax = axis(0, maxV);
+    var W = el.clientWidth || 600, H = el.clientHeight || 190, L = ax.width, R = 10, T = 10, B = 26;
+    var bw = (W - L - R) / buckets.length, gap = Math.min(6, bw * 0.25);
+    var y = function(v){ return T + (H - T - B) * (1 - (v - ax.lo) / (ax.hi - ax.lo)); };
+    var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + (chartMode === 'spend' ? 'Spending' : 'Bills') + ' by ' + (daily ? 'day' : 'month') + '"><g class="grid axis">';
+    ax.ticks.forEach(function(v){ s += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + y(v) + '" y2="' + y(v) + '"/><text x="' + (L - 12) + '" y="' + (y(v) + 4) + '" text-anchor="end">' + ax.k(v) + '</text>'; });
+    var every = Math.max(1, Math.ceil(buckets.length / Math.max(1, Math.floor((W - L - R) / 70))));
+    buckets.forEach(function(b, i){ if (i % every) return; s += '<text x="' + (L + bw * i + bw / 2) + '" y="' + (H - 6) + '" text-anchor="middle">' + (daily ? short(day(b)) : monthName(day(b + '-01'))) + '</text>'; });
+    s += '</g>';
+    buckets.forEach(function(b, i){
+      var acc = 0, total = sum(Object.keys(grid[b]).map(function(k){ return grid[b][k]; }));
+      var tip = (daily ? short(day(b)) : monthName(day(b + '-01'))) + ': ' + money(total, true) + series.filter(function(k){ return grid[b][k]; }).map(function(k){ return '\n' + k + ' ' + money(grid[b][k], true); }).join('');
+      s += '<g class="barg"><title>' + esc(tip) + '</title>';
+      series.forEach(function(k, si){
+        var v = grid[b][k]; if (!v) return;
+        var y1 = y(acc + v), y0 = y(acc); acc += v;
+        // A 2px gap between stacked pieces, so neighbouring colours never blur together.
+        s += '<rect x="' + (L + bw * i + gap / 2).toFixed(1) + '" y="' + y1.toFixed(1) + '" width="' + Math.max(1, bw - gap).toFixed(1) + '" height="' + Math.max(0, y0 - y1 - 2).toFixed(1) + '" rx="3" fill="' + color(k, si) + '"/>';
+      });
+      s += '</g>';
+    });
+    el.innerHTML = s + '</svg>';
+    legEl.innerHTML = series.map(function(k, si){ var tot = k === 'Everything else' ? sum(keys.slice(6), function(x){ return totalsByKey[x]; }) : totalsByKey[k]; return '<span class="lg"><i style="background:' + color(k, si) + '"></i>' + esc(k) + ' <b class="num">' + money(tot, true) + '</b></span>'; }).join('');
+    sumEl.textContent = money(sum(keys, function(k){ return totalsByKey[k]; }), true) + ' in total since ' + short(day(cut));
+  }
+
+  function stat(icon, label, v, sub, jump){ return '<div class="tile stat tap" role="button" tabindex="0" data-jump="' + jump + '" title="Show these accounts"><span class="badge">' + icon + '</span><div><div class="label">' + label + '</div><div class="v num">' + v + '</div><div class="sub">' + sub + '</div></div>' + I.chev.replace('class="chev"', 'class="chev" style="transform:rotate(-90deg)"') + '</div>'; }
+
+  // ── Account cards (round 3, Q-card: bank, name, balance, one useful line) ─
+  function sec(k){
+    var list = data.accounts.filter(function(a){ return a.kind === k; });
+    if (!list.length) return '';
+    var total = sum(list, function(a){ return a.balance; }), signed = isDebt({ kind: k }) ? -total : total;
+    var h = '<div class="sec"><div class="sec-head"><span class="label">' + KINDS[k].label + ' <span style="opacity:.6">' + list.length + '</span></span><span class="small num muted">' + money(signed) + '</span></div>';
+    if (k === 'credit') h += '<div class="legend">The notch on each bar is ' + S.warnPct + '%. Past it a bar turns amber, which can lower your credit score; past ' + S.alertPct + '% it turns red.</div>';
+    return h + '<div class="list">' + list.map(row).join('') + '</div></div>';
+  }
+  // The one line under the balance, chosen for the kind of account — or what is wrong, when something is.
+  function cardLine(a){
+    var bank = a.itemId && data.banks[a.itemId];
+    if (bank && !bank.ok) return '<span class="flag">' + I.warn + (bank.error && bank.error.reconnect ? 'Sign in again' : 'Not answering') + '</span>';
+    if (isStale(a)) return '<span class="flag">' + I.warn + (a.source === 'plaid' ? 'Out of date · ' : 'Needs update · ') + (a.updatedAt ? ago(a.updatedAt) : 'never') + '</span>';
+    var p = a.payment;
+    if (a.kind === 'credit') {
+      var parts = [];
+      if (a.limit) parts.push(Math.round(a.balance / a.limit * 100) + '% used');
+      if (p && !p.paid) parts.push('due ' + short(day(p.due)));
+      return parts.join(' · ');
+    }
+    if (a.kind === 'loan') {
+      if (!p) return a.apr ? a.apr + '% interest' : '';
+      var po = payoff(a.balance, a.apr, p.amount);
+      return money(p.amount) + ' due ' + short(day(p.due)) + (po && !po.never ? ' · done ' + monthsFrom(po.months, true) : '');
+    }
+    if (a.kind === 'bnpl') return a.left ? a.left + ' left · next ' + (p ? short(day(p.due)) : '—') : (a.note || '');
+    if (a.kind === 'asset') return a.updatedAt ? 'value as of ' + short(new Date(a.updatedAt)) : '';
+    var c = change30txt(a.hist);
+    return c;
+  }
+  function change30txt(hist){
+    if (!hist || hist.length < 2) return '';
+    var now = hist[hist.length - 1], then = hist[0];
+    for (var i = hist.length - 1; i >= 0; i--) { if (daysBetween(day(hist[i].d), today()) >= 30) { then = hist[i]; break; } }
+    var ch = now.v - then.v; if (Math.abs(ch) < 0.5) return '';
+    return (ch > 0 ? '+' : '−') + money(Math.abs(ch), true) + ' since ' + short(day(then.d));
+  }
+  function row(a){
+    var isOpen = openId === a.id || editing === a.id;
+    var h = '<div class="tile acct tap' + (isStale(a) ? ' stale' : '') + (isOpen ? ' open' : '') + '" role="button" tabindex="0" aria-expanded="' + isOpen + '" data-open="' + esc(a.id) + '">' + mark(a.institution);
+    h += '<div class="who"><span class="inst">' + esc(a.institution) + '</span><div class="name" title="' + esc(fullName(a)) + '">' + esc(a.name) + '</div></div>';
+    h += '<div class="right"><div class="bal num">' + money(isDebt(a) ? -a.balance : a.balance) + '</div><div class="side">' + cardLine(a) + I.chev + '</div></div>';
+    if (a.kind === 'credit' && a.limit) {
+      var p = a.balance / a.limit * 100, lvl = p >= S.alertPct ? 'bad' : p >= S.warnPct ? 'warn' : '';
+      h += '<div class="meter thin ' + lvl + '"><div class="bar" title="' + Math.round(p) + '% of the limit used"><i style="width:' + Math.max(0, Math.min(100, p)) + '%"></i><span class="tick" style="left:' + S.warnPct + '%"></span></div></div>';
+    }
+    if (isOpen) h += accountDetail(a);
+    if (editing === a.id) {
+      h += '<div class="edit"><input class="num" id="edit-val" inputmode="decimal" value="' + a.balance.toFixed(2) + '" aria-label="' + (a.kind === 'asset' ? 'What it is worth' : 'New balance') + '"><button class="btn" data-cancel>Cancel</button><button class="btn primary" data-save="' + esc(a.id) + '">Save</button>';
+      h += '<button class="btn danger" data-delete="' + esc(a.id) + '">Delete</button><span class="hint">Or tell YouCoded in chat: “' + esc(a.institution) + ' is $…”</span></div>';
+    }
+    return h + '</div>';
+  }
+
+  // ── Opened cards: what the page can work out ─────────────────────────────
+  function payoff(balance, apr, pay){
+    if (!(balance > 0) || !(pay > 0)) return null;
+    var r = (apr || 0) / 100 / 12, b = balance, months = 0, interest = 0;
+    if (r > 0 && pay <= b * r) return { never: true };
+    while (b > 0.005 && months < 600) { var i = b * r; interest += i; b = b + i - pay; months++; }
+    return months >= 600 ? { never: true } : { months: months, interest: interest };
+  }
+  function monthsFrom(n, abbrev){ var d = today(); d.setMonth(d.getMonth() + n); return d.toLocaleDateString('en-US', { month: abbrev ? 'short' : 'long', year: 'numeric' }); }
+  function monthsText(n){ var y = Math.floor(n / 12), m = n % 12; return (y ? y + (y === 1 ? ' year' : ' years') : '') + (y && m ? ' ' : '') + (m || !y ? m + (m === 1 ? ' month' : ' months') : ''); }
+  function insight(figure, words, tone){ return '<div class="ins' + (tone ? ' ' + tone : '') + '"><b class="num">' + figure + '</b><span>' + words + '</span></div>'; }
+  function spark(hist){
+    if (!hist || hist.length < 2) return '<div class="spark empty">Its own chart starts here and adds a point each day the page checks.</div>';
+    var pts = hist.slice(-90), vs = pts.map(function(p){ return p.v; });
+    var lo = Math.min.apply(null, vs), hi = Math.max.apply(null, vs); if (hi === lo) { hi += 1; lo -= 1; }
+    var W = 300, H = 44, x = function(i){ return (W * i / (pts.length - 1)).toFixed(1); }, y = function(v){ return (4 + (H - 8) * (1 - (v - lo) / (hi - lo))).toFixed(1); };
+    var d = pts.map(function(p, i){ return (i ? 'L' : 'M') + x(i) + ' ' + y(p.v); }).join('');
+    return '<div class="spark"><svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" role="img" aria-label="Balance over the last ' + pts.length + ' days"><path d="' + d + 'L' + W + ' ' + H + 'L0 ' + H + 'Z" class="area"/><path d="' + d + '" class="ln"/></svg><div class="spark-x"><span>' + short(day(pts[0].d)) + '</span><span>' + short(day(pts[pts.length - 1].d)) + '</span></div></div>';
+  }
+  function accountDetail(a){
+    var t = totals(), h = '<div class="detail">', ins = '', debt = isDebt(a), p = a.payment;
+    if (a.kind === 'credit') {
+      if (a.apr && a.balance > 0) ins += insight('≈' + money(a.balance * a.apr / 1200), 'interest a month if this balance is carried (' + a.apr + '% a year)', 'warnish');
+      if (a.limit) {
+        var under = a.balance - a.limit * S.warnPct / 100;
+        ins += under > 0 ? insight(money(Math.ceil(under), true), 'to pay now to get under ' + S.warnPct + '% of the limit, where it stops weighing on your credit score')
+          : insight(money(Math.floor(-under), true), 'you can spend before this card passes ' + S.warnPct + '% of its limit');
+      }
+      if (p && p.amount > 0 && a.balance > 0) {
+        var pm = payoff(a.balance, a.apr, p.amount);
+        if (pm && pm.never) ins += insight('Never', 'paid off at the ' + money(p.amount) + ' minimum: it barely covers the interest', 'down');
+        else if (pm) ins += insight(monthsText(pm.months), 'to clear it paying only the ' + money(p.amount) + ' minimum' + (pm.interest > 1 ? ', costing about ' + money(pm.interest, true) + ' in interest' : ''));
+      }
+    } else if (a.kind === 'loan') {
+      if (p && p.amount && a.balance > 0) {
+        var p0 = payoff(a.balance, a.apr, p.amount), p1 = payoff(a.balance, a.apr, p.amount + 50);
+        if (p0 && p0.never) ins += insight('Never', 'paid off at ' + money(p.amount) + ' a month: that is less than the interest', 'down');
+        else if (p0) {
+          ins += insight(monthsFrom(p0.months), 'paid off at ' + money(p.amount) + ' a month (' + monthsText(p0.months) + ')' + (p0.interest > 1 ? ', with about ' + money(p0.interest, true) + ' of interest still to come' : ''));
+          if (p1 && !p1.never && p0.months - p1.months > 0) ins += insight(monthsText(p0.months - p1.months) + ' sooner', 'with $50 more a month' + (p0.interest - p1.interest > 1 ? ', saving about ' + money(p0.interest - p1.interest, true) + ' in interest' : ''), 'up');
+        }
+      } else if (a.balance > 0) ins += insight('No due date yet', a.source === 'plaid' ? 'your bank does not share payment details for this kind of loan. Add them below, once.' : 'add the monthly payment and due date below to see when it is paid off.');
+    } else if (a.kind === 'bnpl') {
+      if (a.left && p) {
+        var end = p.due; for (var i = 1; i < a.left; i++) end = addEvery(end, p.every || 'month');
+        ins += insight(short(day(end)), 'the last payment, after ' + a.left + ' more of ' + money(p.amount) + ' (' + (EVERY[p.every] || 'every month').toLowerCase() + ')');
+      }
+    } else if ((a.kind === 'checking' || a.kind === 'savings') && t.dueThisMonth > 0) {
+      ins += insight((a.balance / t.dueThisMonth).toFixed(1) + '×', 'what is still due this month (' + money(t.dueThisMonth, true) + ')');
+    }
+    // Recent purchases on this account, when the bank shares them.
+    var recent = data.tx.filter(function(x){ return x.a === a.id && !x.p; }).slice(-30);
+    if (recent.length) {
+      var out = sum(recent.filter(isSpending), function(x){ return x.m; });
+      ins += insight(money(out, true), 'spent in the last ' + daysBetween(day(recent[0].d), today()) + ' days on this account');
+    }
+    var share = debt ? (t.owe ? a.balance / t.owe : 0) : (t.have ? a.balance / t.have : 0);
+    if (share > 0 && share < 1) ins += insight(Math.round(share * 100) + '%', 'of everything you ' + (debt ? 'owe' : 'have'));
+    h += '<div class="ins-grid">' + ins + '</div>' + spark(a.hist);
+    if (recent.length) {
+      h += '<div class="txlist"><div class="label">Latest</div>' + recent.slice(-5).reverse().map(function(x){ return '<div class="txrow"><span class="muted">' + short(day(x.d)) + '</span><span class="nm">' + esc(x.n) + '</span><b class="num">' + money(-x.m) + '</b></div>'; }).join('') + '</div>';
+    }
+    h += '<div class="acts"><span class="hint">' + (a.source === 'plaid' ? 'From ' + esc(a.institution) + ' through Plaid' : 'Entered by you') + ' · updated ' + (a.updatedAt ? ago(a.updatedAt) : 'never') + (a.available != null && !debt ? ' · ' + money(a.available) + ' available' : '') + '</span>';
+    if (payEdit === a.id) {
+      var pp = a.payment || {};
+      h += '<input id="pay-amt" class="num" inputmode="decimal" placeholder="Monthly payment" value="' + (pp.amount || '') + '" aria-label="Monthly payment">';
+      h += '<input id="pay-due" type="date" value="' + esc(pp.due || '') + '" aria-label="Next due date">';
+      h += '<input id="pay-apr" class="num" inputmode="decimal" placeholder="Interest %" value="' + (a.apr || '') + '" aria-label="Interest rate">';
+      h += '<button class="btn sm" data-pay-cancel>Cancel</button><button class="btn sm primary" data-pay-save="' + esc(a.id) + '">Save</button>';
+    } else if (limitEdit === a.id) {
+      h += '<input id="limit-val" class="num" inputmode="decimal" value="' + (a.limit || '') + '" aria-label="Credit limit"><button class="btn sm" data-limit-cancel>Cancel</button><button class="btn sm primary" data-limit-save="' + esc(a.id) + '">Save limit</button>';
+    } else {
+      if (a.source !== 'plaid' && editing !== a.id) h += '<button class="btn sm" data-edit="' + esc(a.id) + '">' + I.pen + (a.kind === 'asset' ? 'Update value' : 'Update balance') + '</button>';
+      if (a.kind === 'credit') h += '<button class="btn sm" data-limit="' + esc(a.id) + '">' + (a.limit ? 'Change limit' : 'Set limit') + '</button>';
+      if ((a.kind === 'loan' || a.kind === 'credit') && (!a.payment || a.payment.manual || a.source !== 'plaid')) h += '<button class="btn sm" data-pay="' + esc(a.id) + '">' + (a.payment ? 'Change payment' : 'Add payment & due date') + '</button>';
+      if (a.kind === 'bnpl' && a.payment) h += '<button class="btn sm" data-paid="' + esc(a.id) + '">' + I.check + 'Mark a payment made</button>';
+      var u = siteOf(a); if (u) h += '<a class="btn sm" href="' + esc(u) + '" target="_blank" rel="noopener">' + I.out + 'Open ' + esc(a.institution) + '</a>';
+      if (a.source === 'plaid') h += '<button class="btn sm" data-jump="banks">Manage bank</button>';
+    }
+    return h + '</div></div>';
+  }
+
+  // ── Bills card ───────────────────────────────────────────────────────────
+  function billsCard(t){
+    var every = allBills();
+    var groups = { bills: every.filter(function(b){ return !isSub(b); }), subs: every.filter(isSub) };
+    var inView = billView === 'all' ? every : groups[billView];
+    var cats = {}; inView.forEach(function(b){ cats[b.cat] = 1; });
+    var catList = Object.keys(cats).sort();
+    if (billCatPick && !cats[billCatPick]) billCatPick = '';
+    var bills = inView.filter(function(b){ return !billCatPick || b.cat === billCatPick; }).sort(function(x, y){
+      return (x.paid ? 1 : 0) - (y.paid ? 1 : 0) || (billSort === 'amount' ? y.amount - x.amount : x.due - y.due);
+    });
+    var monthOf = function(list){ return sum(list, perMonth); };
+    var h = '<div class="card" id="bills"><div class="card-head"><h2>Bills</h2><span class="total num">' + money(t.dueThisMonth) + ' <span class="small muted">still due this month</span></span>';
+    h += '<div class="ranges" role="group" aria-label="Sort bills">' + [['due','By date'],['amount','By amount']].map(function(o){ return '<button class="rng' + (billSort === o[0] ? ' on' : '') + '" data-bill-sort="' + o[0] + '" aria-pressed="' + (billSort === o[0]) + '">' + o[1] + '</button>'; }).join('') + '</div></div>';
+    // Which group is showing, each with what it costs a month: the number that says what could be cut.
+    h += '<div class="bill-tabs" role="tablist" aria-label="Show">' + [['all', 'All', every], ['bills', 'Bills', groups.bills], ['subs', 'Subscriptions', groups.subs]].map(function(o){
+      return '<button class="btab' + (billView === o[0] ? ' on' : '') + '" role="tab" aria-selected="' + (billView === o[0]) + '" data-bill-view="' + o[0] + '"><span>' + o[1] + ' <span class="muted">' + o[2].length + '</span></span><b class="num">' + money(monthOf(o[2]), true) + '<span class="muted small">/mo</span></b></button>';
+    }).join('') + '</div>';
+    if (billView === 'subs' && groups.subs.length) h += '<div class="hint sub-year">' + money(monthOf(groups.subs) * 12, true) + ' a year on subscriptions</div>';
+    if (catList.length > 1) h += '<select class="pick bill-cat-pick" data-bill-cat-pick aria-label="Category"><option value="">All categories</option>' + catList.map(function(c){ return '<option' + (c === billCatPick ? ' selected' : '') + '>' + esc(c) + '</option>'; }).join('') + '</select>';
+    // Suggestions follow the group being shown.
+    if (billView === 'subs') return h + subsReview(groups.subs) + '</div>';
+    var found = discover().filter(function(f){ return billView === 'all' || (billView === 'subs') === (billCatFor(f) === 'Subscriptions'); });
+    if (found.length) {
+      var shown = showAllFound ? found : found.slice(0, 4);
+      h += '<div class="found"><div class="found-head">' + I.spark + '<b>Found ' + found.length + ' likely bill' + (found.length === 1 ? '' : 's') + '</b><span class="muted small">from your banks’ purchases — add the real bills</span></div>';
+      shown.forEach(function(f){
+        var acct = accountById(f.account);
+        h += '<div class="tile frow">' + mark(f.name) + '<div class="name">' + esc(f.name) + '<small>' + money(f.amount) + ' · ' + (f.every === '2weeks' ? 'every 2 weeks' : f.every === 'year' ? 'yearly' : f.every + 'ly') + ' · ' + (f.count === 1 ? '1 charge' : f.count + ' charges') + (historyStart() ? ' since ' + short(day(historyStart())) : '') + (f.guess ? ', looks like a subscription' : '') + (acct ? ' · ' + esc(fullName(acct)) : '') + '</small></div>';
+        h += '<button class="btn sm" data-dismiss-found="' + esc(f.key) + '">Not a bill</button><button class="btn sm primary" data-add-found="' + esc(f.key) + '">' + I.plus + 'Add as a bill</button></div>';
+      });
+      if (found.length > 4) h += '<button class="btn sm ghostish" data-found-all>' + (showAllFound ? 'Show fewer' : 'Show all ' + found.length) + '</button>';
+      h += '</div>';
+    }
+    h += '<div class="bills">';
+    bills.forEach(function(b){
+      var s = billState(b), bo = openId === 'bill:' + b.id;
+      var markPaid = !isSub(b) && (b.mine && !b.paid && b.account && b.account.kind !== 'bnpl' || (b.bill && !b.paid)) ? '<button class="btn sm" data-paid="' + esc(b.id) + '">Mark paid</button>' : '';
+      h += '<div class="tile bill tap ' + s.cls + (bo ? ' open' : '') + '" role="button" tabindex="0" aria-expanded="' + bo + '" data-open="bill:' + esc(b.id) + '">' + mark(b.institution);
+      h += '<div class="name">' + esc(b.name) + '<small>' + esc([b.cat, b.sub, isSub(b) && perMonth(b) ? money(perMonth(b) * 12, true) + ' a year' : ''].filter(Boolean).join(' · ')) + '</small></div><span class="when">' + s.icon + esc(s.text) + '</span><span class="amt num">' + money(b.amount) + '</span>' + markPaid + I.chev + (bo ? billDetail(b) : '') + '</div>';
+    });
+    if (!bills.length && every.length) h += '<div class="empty">' + (billView === 'subs' ? 'No subscriptions yet. Open a bill and choose Move to subscriptions.' : 'Nothing here.') + '</div>';
+    if (!every.length) h += '<div class="empty">No bills yet. Add one, add a found repeating payment, or connect a card or loan and its payments appear here.</div>';
+    return h + '</div></div>';
+  }
+  // The Subscriptions tab: every subscription with the dates it was actually charged, whether it still looks
+  // active, and a link to where it can be cancelled. Suggested ones sit alongside, to track or dismiss.
+  function subsReview(subs){
+    var t = today(), start = historyStart();
+    var items = subs.map(function(b){ return { id: b.id, bill: b.bill, name: b.name, provider: b.institution, amount: b.amount, monthly: perMonth(b), every: b.bill.every || 'month', charges: linkedTx(b.bill) }; });
+    discover().forEach(function(f){
+      if (billCatFor(f) !== 'Subscriptions') return;
+      items.push({ found: f, name: f.name.replace(/\s+\d[\d-]*$/, ''), provider: f.name, amount: f.amount, monthly: f.every === 'year' ? f.amount / 12 : f.amount, every: f.every, charges: f.tx || [] });
+    });
+    var h = '<div class="hint sub-year">' + (items.length ? money(sum(items, function(x){ return x.monthly; }) * 12, true) + ' a year if all of these are real' : 'No subscriptions yet.') +
+      (start ? ' · charges below go back to ' + short(day(start)) + ', as far as your banks have shared' : '') + '</div>';
+    h += '<div class="subs">' + items.sort(function(a, b){ return b.monthly - a.monthly; }).map(function(x){ return subRow(x, t); }).join('') + '</div>';
+    var gone = data.bills.filter(function(b){ return b.cancelled; });
+    if (gone.length) {
+      h += '<div class="label sub-gone">Cancelled</div><div class="subs">' + gone.map(function(b){
+        return subRow({ id: b.id, bill: b, name: b.name, provider: b.provider, amount: b.amount, monthly: 0, every: b.every || 'month', charges: linkedTx(b), cancelled: b.cancelled }, t);
+      }).join('') + '</div>';
+    }
+    return h;
+  }
+  function subRow(x, t){
+    var cyc = { week: 7, '2weeks': 14, month: 31, year: 366 }[x.every] || 31;
+    var ch = x.charges, last = ch.length ? day(ch[ch.length - 1].d) : null, ago = last ? daysBetween(last, t) : null;
+    var state;
+    if (x.cancelled) {
+      var after = ch.filter(function(c){ return c.d > x.cancelled; });
+      state = after.length ? { cls: 'warn', text: 'Charged again ' + short(day(after[after.length - 1].d)) + ' after you cancelled' } : { cls: '', text: 'Cancelled ' + short(day(x.cancelled)) + ' · no charge since' };
+    } else if (!last) state = { cls: '', text: 'No payments linked yet: open it under All to link them' };
+    else if (ago <= cyc + 5) state = { cls: 'ok', text: 'Active · charged ' + short(last) + (ago === 0 ? ' (today)' : ' (' + ago + (ago === 1 ? ' day' : ' days') + ' ago)') };
+    else state = { cls: 'warn', text: 'No charge since ' + short(last) + ' · may already be cancelled' };
+    var h = '<div class="tile srow' + (x.cancelled ? ' gone' : '') + '">' + mark(x.provider) + '<div class="sbody">';
+    h += '<div class="stop"><b>' + esc(x.name) + '</b>' + (x.found ? '<span class="tag">Suggested</span>' : '') + '<span class="amt num">' + money(x.amount) + '<span class="muted small">' + (x.every === 'year' ? '/yr' : x.every === 'week' ? '/wk' : x.every === '2weeks' ? '/2 wk' : '/mo') + '</span></span></div>';
+    h += '<div class="sstate ' + state.cls + '">' + esc(state.text) + '</div>';
+    var rise = (x.bill && x.bill.priceUp) || chargeRise(ch);
+    if (rise && !x.cancelled) h += '<div class="sstate warn">Price went up: ' + esc(riseText(rise)) + '</div>';
+    if (ch.length) h += '<div class="scharges">' + ch.slice(-6).reverse().map(function(c){ return '<span class="chip">' + short(day(c.d)) + ' · ' + money(c.m) + '</span>'; }).join('') + '</div>';
+    var u = manageLink(x.name + ' ' + (x.provider || ''));
+    h += '<div class="acts">';
+    if (u && !x.cancelled) h += '<a class="btn sm" href="' + esc(u) + '" target="_blank" rel="noopener">' + I.out + 'Manage at ' + esc(x.name) + '</a>';
+    if (x.found) h += '<button class="btn sm" data-dismiss-found="' + esc(x.found.key) + '">Not a subscription</button><button class="btn sm primary" data-add-found="' + esc(x.found.key) + '">' + I.plus + 'Track it</button>';
+    else if (x.cancelled) h += '<button class="btn sm" data-sub-restore="' + esc(x.id) + '">Still have it</button>';
+    else h += '<button class="btn sm" data-sub-cancel="' + esc(x.id) + '">I cancelled it</button>';
+    return h + '</div></div></div>';
+  }
+  function billDetail(b){
+    var h = '<div class="detail">', ins = '';
+    var monthly = b.bill ? b.bill.monthly !== false : true;
+    if (monthly) ins += insight(money(b.amount * 12, true), 'a year at ' + money(b.amount) + ' a month');
+    if (monthly && !b.paid) {
+      var next = [b.due], iso = isoDay(b.due);
+      for (var k = 0; k < 2; k++) { iso = addMonth(iso); next.push(day(iso)); }
+      ins += insight(next.map(short).join(' · '), 'the next three due dates');
+    }
+    var linked = b.bill ? linkedTx(b.bill) : [];
+    if (linked.length) {
+      var t = today(), m = isoDay(t).slice(0, 7), y1 = isoDay(new Date(t.getTime() - 365 * DAY));
+      ins += insight(money(sum(linked.filter(function(x){ return x.d >= y1; }), function(x){ return x.m; }), true), 'paid in the last 12 months (' + money(sum(linked.filter(function(x){ return x.d.slice(0, 7) === m; }), function(x){ return x.m; }), true) + ' this month)');
+      ins += insight(money(sum(linked, function(x){ return x.m; }), true), 'paid in all, ' + linked.length + ' payments since ' + short(day(linked[0].d)));
+    } else if (!b.mine) ins += insight('Automatic', 'your bank updates this when you pay');
+    h += '<div class="ins-grid">' + ins + '</div>';
+    if (linked.length) {
+      h += '<div class="txlist"><div class="label">Payments</div>' + linked.slice(-8).reverse().map(function(x){ var a = accountById(x.a); return '<div class="txrow"><span class="muted">' + short(day(x.d)) + '</span><span class="nm">' + esc(a ? fullName(a) : x.n) + '</span><b class="num">' + money(x.m) + '</b></div>'; }).join('') + '</div>';
+    }
+    if (b.bill) {
+      var maybe = possibleMatches(b.bill);
+      if (maybe.length) {
+        h += '<div class="txlist"><div class="label">Might be this bill</div>' + maybe.map(function(mm){ return '<div class="txrow"><span class="nm">' + esc(mm.name) + ' <span class="muted">· ' + mm.count + ' payment' + (mm.count === 1 ? '' : 's') + '</span></span><b class="num">' + money(mm.total, true) + '</b><button class="btn sm" data-link-key="' + esc(mm.key) + '" data-link-bill="' + esc(b.id) + '">Link</button></div>'; }).join('') + '</div>';
+      }
+      if ((b.bill.match || []).length) {
+        h += '<div class="chips"><span class="label">Matched as</span>' + b.bill.match.map(function(k){ return '<span class="chip">' + esc(k) + '<button class="chipx" aria-label="Unlink ' + esc(k) + '" data-unlink-key="' + esc(k) + '" data-link-bill="' + esc(b.id) + '">' + I.x + '</button></span>'; }).join('') + '</div>';
+      }
+    }
+    h += '<div class="acts">';
+    if (billEdit === b.id && b.bill) {
+      h += '<input id="bill-amt" class="num" inputmode="decimal" value="' + b.amount + '" aria-label="Amount"><input id="bill-due" type="date" value="' + esc(b.bill.due) + '" aria-label="Due date">';
+      h += '<select id="bill-cat" class="pick" aria-label="Category">' + BILL_CATS.map(function(c){ return '<option' + (c === (b.bill.category || 'Other') ? ' selected' : '') + '>' + c + '</option>'; }).join('') + '</select>';
+      h += '<button class="btn sm" data-bill-cancel>Cancel</button><button class="btn sm primary" data-bill-save="' + esc(b.id) + '">Save</button>';
+    } else {
+      if (!b.mine) h += '<span class="hint">Your bank updates this when you pay.</span>';
+      if (b.bill) h += '<button class="btn sm" data-bill-move="' + esc(b.id) + '">' + (isSub(b) ? 'Move to bills' : 'Move to subscriptions') + '</button>';
+      if (b.bill) h += '<button class="btn sm" data-bill-edit="' + esc(b.id) + '">' + I.pen + 'Edit</button><button class="btn sm danger" data-bill-delete="' + esc(b.id) + '">Delete</button>';
+      var u = siteOf(b); if (u) h += '<a class="btn sm" href="' + esc(u) + '" target="_blank" rel="noopener">' + I.out + 'Pay at ' + esc(b.institution) + '</a>';
+    }
+    return h + '</div></div>';
+  }
+
+  // ── Add-by-hand forms (round 3, Q-types: each kind asks only for what matters) ─
+  function formCard(){
+    var f = form, v = f.values || {};
+    var h = '<div class="card form-card"><div class="card-head"><h2>' + (f.type === 'bill' ? 'Add a bill' : 'Add an account by hand') + '</h2></div><div class="grid">';
+    function field(id, label, attrs){ return '<label class="fld"><span>' + label + '</span><input id="f-' + id + '" data-fv="' + id + '" value="' + esc(v[id] || '') + '" ' + (attrs || '') + '></label>'; }
+    if (f.type === 'bill') {
+      h += field('provider', 'Company', 'placeholder="Netflix" list="f-companies"');
+      h += field('name', 'What it is', 'placeholder="Streaming"');
+      h += '<label class="fld"><span>Category</span><select id="f-category" data-fv="category">' + BILL_CATS.map(function(c){ return '<option' + (c === (v.category || 'Subscriptions') ? ' selected' : '') + '>' + c + '</option>'; }).join('') + '</select></label>';
+      h += field('amount', 'Amount', 'inputmode="decimal" placeholder="15.49"');
+      h += field('due', 'Next due date', 'type="date"');
+      h += '<label class="fld chk"><input id="f-monthly" data-fv="monthly" type="checkbox"' + (v.monthly === false ? '' : ' checked') + '><span>Repeats every month</span></label>';
+    } else {
+      var kind = f.kind || 'loan';
+      h += '<label class="fld"><span>What is it?</span><select id="f-kind" data-form-kind>' + Object.keys(KIND_ONE).map(function(k){ return '<option value="' + k + '"' + (k === kind ? ' selected' : '') + '>' + KIND_ONE[k] + '</option>'; }).join('') + '</select></label>';
+      h += field('institution', kind === 'asset' ? 'What it is (e.g. "2019 Civic")' : 'Company', kind === 'asset' ? '' : 'placeholder="' + (kind === 'bnpl' ? 'Affirm' : 'Earnest') + '" list="f-companies"');
+      if (kind !== 'asset') h += field('name', 'Account name', 'placeholder="' + (kind === 'bnpl' ? 'Laptop' : kind === 'credit' ? 'Store card' : 'Student loan') + '"');
+      KINDS[kind].fields.forEach(function(fd){
+        if (fd === 'balance') h += field('balance', 'Balance', 'inputmode="decimal"');
+        if (fd === 'value') h += field('balance', 'What it is worth today', 'inputmode="decimal"');
+        if (fd === 'owed') h += field('balance', 'Amount owed', 'inputmode="decimal"');
+        if (fd === 'limit') h += field('limit', 'Credit limit', 'inputmode="decimal"');
+        if (fd === 'apr') h += field('apr', 'Interest rate %', 'inputmode="decimal"');
+        if (fd === 'minimum') h += field('payment', 'Minimum payment', 'inputmode="decimal"');
+        if (fd === 'monthly') h += field('payment', 'Monthly payment', 'inputmode="decimal"');
+        if (fd === 'each') h += field('payment', 'Each payment', 'inputmode="decimal" placeholder="86.25"');
+        if (fd === 'left') h += field('left', 'Payments left', 'inputmode="numeric" placeholder="4"');
+        if (fd === 'every') h += '<label class="fld"><span>How often</span><select id="f-every" data-fv="every">' + Object.keys(EVERY).map(function(e){ return '<option value="' + e + '"' + (e === (v.every || '2weeks') ? ' selected' : '') + '>' + EVERY[e] + '</option>'; }).join('') + '</select></label>';
+        if (fd === 'due') h += field('due', 'Next payment due', 'type="date"');
+      });
+    }
+    h += '</div><datalist id="f-companies">' + Object.keys(PROVIDERS).map(function(n){ return '<option value="' + esc(n) + '">'; }).join('') + '</datalist>';
+    if (f.problem) h += '<div class="small" role="alert" style="color:var(--warn)">' + esc(f.problem) + '</div>';
+    return h + '<div class="row-btns end"><button class="btn" data-form-cancel>Cancel</button><button class="btn primary" data-form-save>Add</button></div></div>';
+  }
+  function readForm(){
+    var v = form.values = form.values || {};
+    document.querySelectorAll('[data-fv]').forEach(function(el){ v[el.dataset.fv] = el.type === 'checkbox' ? el.checked : el.value; });
+    return v;
+  }
+  function saveForm(){
+    var v = readForm(), now = today().toISOString();
+    if (form.type === 'bill') {
+      var amount = num(v.amount);
+      if (!(v.provider || v.name) || amount == null || !v.due) { form.problem = 'Give the bill a company, an amount and a due date.'; render(); return; }
+      var provider = (v.provider || v.name).trim();
+      var b = { id: 'b' + Date.now(), provider: provider, name: provider, sub: v.provider ? (v.name || '') : '', category: v.category || 'Other', amount: amount, due: v.due, monthly: v.monthly !== false };
+      var k = txKey(provider); if (k && data.tx.some(function(t){ return txKey(t.n) === k; })) b.match = [k];
+      data.bills.push(b);
+    } else {
+      var kind = form.kind || 'loan', bal = num(v.balance), pay = num(v.payment), left = parseInt(v.left, 10);
+      if (!v.institution) { form.problem = kind === 'asset' ? 'Say what it is.' : 'Give the account a company.'; render(); return; }
+      if (kind === 'bnpl' ? !(pay > 0 && left > 0 && v.due) : bal == null) { form.problem = kind === 'bnpl' ? 'Give each payment, how many are left, and the next date.' : 'Give the balance.'; render(); return; }
+      var a = { id: 'm' + Date.now(), source: 'manual', kind: kind, institution: v.institution.trim(), name: (v.name || (kind === 'asset' ? 'Value' : v.institution)).trim(), updatedAt: now };
+      if (kind === 'bnpl') { a.left = left; a.payment = { amount: pay, due: v.due, every: v.every || '2weeks', monthly: (v.every || '2weeks') === 'month' }; a.balance = Math.round(pay * left * 100) / 100; }
+      else {
+        a.balance = isDebt(a) ? Math.abs(bal) : bal;
+        var lim = num(v.limit); if (lim != null && kind === 'credit') a.limit = lim;
+        var apr = num(v.apr); if (apr != null) a.apr = apr;
+        if (pay != null && v.due && (kind === 'credit' || kind === 'loan')) a.payment = { amount: pay, due: v.due, monthly: true };
+      }
+      data.accounts.push(a);
+    }
+    form = null; snapshot(); save(); render();
+  }
+  function addFound(key){
+    var f = discover().filter(function(x){ return x.key === key; })[0]; if (!f) return;
+    var prettyName = f.name.replace(/\s+\d[\d-]*$/, '');
+    data.bills.push({ id: 'b' + Date.now(), provider: prettyName, name: prettyName, sub: '', category: billCatFor(f), amount: Math.round(f.amount * 100) / 100,
+      due: f.next, monthly: f.every === 'month', every: f.every, match: [key], lastPaid: f.last });
+    save(); render();
+  }
+
+  // ── Wiring ───────────────────────────────────────────────────────────────
+  function save(){ if (window.youcoded) window.youcoded.save(data); }
+  function on(sel, fn){ document.querySelectorAll(sel).forEach(function(el){ el.onclick = function(e){ fn(el, e); }; }); }
+  function toggle(id){ openId = openId === id ? null : id; billEdit = null; limitEdit = null; payEdit = null; render(); }
+  function focusAccount(id){
+    if (String(id).indexOf('bill:') === 0) billView = 'all';
+    openId = id; render();
+    var el = document.querySelector('[data-open="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]');
+    if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.focus({ preventScroll: true }); }
+  }
+  function billById(id){ return data.bills.filter(function(x){ return x.id === id; })[0]; }
+  function wire(){
+    document.querySelectorAll('[data-open]').forEach(function(el){
+      el.onclick = function(e){ if (e.target.closest('button, a, input, select, .detail')) return; toggle(el.dataset.open); };
+      el.onkeydown = function(e){ if ((e.key === 'Enter' || e.key === ' ') && e.target === el) { e.preventDefault(); toggle(el.dataset.open); } };
+    });
+    document.querySelectorAll('[data-focus], .tap[data-jump]').forEach(function(el){
+      el.onkeydown = function(e){ if ((e.key === 'Enter' || e.key === ' ') && e.target === el) { e.preventDefault(); el.click(); } };
+    });
+    on('[data-focus]', function(el, e){ if (e.target.closest('button, a')) return; focusAccount(el.dataset.focus); });
+    on('[data-mode]', function(b){ chartMode = b.dataset.mode; render(); });
+    var ca = document.querySelector('[data-chart-account]'); if (ca) ca.onchange = function(){ chartAccount = ca.value; render(); };
+    on('[data-range]', function(b){ range = b.dataset.range; render(); });
+    on('[data-bill-sort]', function(b){ billSort = b.dataset.billSort; render(); });
+    on('[data-bill-view]', function(b){ billView = b.dataset.billView; render(); });
+    on('[data-sub-cancel]', function(el){
+      var bill = data.bills.filter(function(x){ return x.id === el.dataset.subCancel; })[0]; if (!bill) return;
+      bill.cancelled = isoDay(today()); save(); render();
+    });
+    on('[data-sub-restore]', function(el){
+      var bill = data.bills.filter(function(x){ return x.id === el.dataset.subRestore; })[0]; if (!bill) return;
+      delete bill.cancelled; save(); render();
+    });
+    on('[data-bill-move]', function(el, e){
+      e.stopPropagation();
+      var bill = data.bills.filter(function(x){ return x.id === el.dataset.billMove; })[0]; if (!bill) return;
+      bill.optional = !isSub({ bill: bill });
+      save(); render();
+    });
+    document.querySelectorAll('[data-bill-cat-pick]').forEach(function(el){ el.onchange = function(){ billCatPick = el.value; render(); }; });
+    on('[data-browser]', function(b, e){ e.stopPropagation(); data.settings.browser = b.dataset.browser; save(); render(); });
+    on('[data-jump]', function(b){ var t = document.getElementById(b.dataset.jump); if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+    on('[data-edit]', function(b){ editing = b.dataset.edit; render(); var i = document.getElementById('edit-val'); if (i) { i.scrollIntoView({ block: 'center' }); i.focus(); i.select(); } });
+    on('[data-cancel]', function(){ editing = null; render(); });
+    on('[data-save]', function(b){
+      var v = num(document.getElementById('edit-val').value); if (v == null) return;
+      var a = accountById(b.dataset.save); a.balance = v; a.updatedAt = today().toISOString(); editing = null; snapshot(); save(); render();
+    });
+    on('[data-delete]', function(b){ data.accounts = data.accounts.filter(function(x){ return x.id !== b.dataset.delete; }); editing = null; snapshot(); save(); render(); });
+    on('[data-paid]', function(b){ markPaid(b.dataset.paid); });
+    on('[data-limit]', function(b){ limitEdit = b.dataset.limit; render(); var i = document.getElementById('limit-val'); if (i) { i.focus(); i.select(); } });
+    on('[data-limit-cancel]', function(){ limitEdit = null; render(); });
+    on('[data-limit-save]', function(b){
+      var v = num(document.getElementById('limit-val').value), a = accountById(b.dataset.limitSave);
+      if (a) { if (v && v > 0) a.limit = v; else delete a.limit; }
+      limitEdit = null; save(); render();
+    });
+    on('[data-pay]', function(b){ payEdit = b.dataset.pay; render(); var i = document.getElementById('pay-amt'); if (i) i.focus(); });
+    on('[data-pay-cancel]', function(){ payEdit = null; render(); });
+    on('[data-pay-save]', function(b){
+      var a = accountById(b.dataset.paySave);
+      var amt = num(document.getElementById('pay-amt').value), due = document.getElementById('pay-due').value, apr = num(document.getElementById('pay-apr').value);
+      if (a) { if (amt != null && amt > 0 && due) a.payment = { amount: amt, due: due, monthly: true, manual: a.source === 'plaid' }; if (apr != null) a.apr = apr; }
+      payEdit = null; save(); render();
+    });
+    on('[data-bill-edit]', function(b){ billEdit = b.dataset.billEdit; render(); });
+    on('[data-bill-cancel]', function(){ billEdit = null; render(); });
+    on('[data-bill-save]', function(b){
+      var bill = billById(b.dataset.billSave);
+      var amt = num(document.getElementById('bill-amt').value), due = document.getElementById('bill-due').value, cat = document.getElementById('bill-cat').value;
+      if (bill && amt != null && due) { bill.amount = amt; bill.due = due; bill.category = cat; delete bill.paid; }
+      billEdit = null; save(); render();
+    });
+    on('[data-bill-delete]', function(b){ data.bills = data.bills.filter(function(x){ return x.id !== b.dataset.billDelete; }); openId = null; save(); render(); });
+    on('[data-link-key]', function(b){ var bill = billById(b.dataset.linkBill); if (bill) { bill.match = (bill.match || []).concat([b.dataset.linkKey]); save(); render(); } });
+    on('[data-unlink-key]', function(b){ var bill = billById(b.dataset.linkBill); if (bill) { bill.match = (bill.match || []).filter(function(k){ return k !== b.dataset.unlinkKey; }); save(); render(); } });
+    on('[data-add-found]', function(b){ addFound(b.dataset.addFound); });
+    on('[data-dismiss-found]', function(b){ data.dismissed.push(b.dataset.dismissFound); save(); render(); });
+    on('[data-found-all]', function(){ showAllFound = !showAllFound; render(); });
+    on('[data-reconnect]', function(b){ reconnectBank(b.dataset.reconnect); });
+    on('[data-check]', function(){ syncBanks(); });
+    on('[data-ack-price]', function(el){ var b = billById(el.dataset.ackPrice); if (b && b.priceUp) { b.priceUp.seen = true; save(); render(); } });
+    on('[data-ask-remove]', function(b){ removing = b.dataset.askRemove; render(); });
+    on('[data-cancel-remove]', function(){ removing = null; render(); });
+    on('[data-remove-bank]', function(b){ removeBank(b.dataset.removeBank); });
+    on('[data-dismiss-note]', function(){ bankNote = null; render(); });
+    on('[data-cancel-link]', function(){ cancelLink(); });
+    on('[data-add]', function(b, e){
+      e.stopPropagation(); menuOpen = false;
+      var what = b.dataset.add;
+      if (what === 'bank') { connectBank(); return; }
+      form = { type: what === 'bill' ? 'bill' : 'account', kind: 'loan', values: {} }; render();
+      var first = document.querySelector('.form-card input, .form-card select'); if (first) first.focus();
+    });
+    var fk = document.querySelector('[data-form-kind]');
+    if (fk) fk.onchange = function(){ readForm(); form.kind = fk.value; form.problem = null; render(); };
+    on('[data-form-cancel]', function(){ form = null; render(); });
+    on('[data-form-save]', function(){ saveForm(); });
+    var ev = document.getElementById('edit-val');
+    if (ev) ev.onkeydown = function(e){ if (e.key === 'Enter') document.querySelector('[data-save]').click(); if (e.key === 'Escape') { e.preventDefault(); editing = null; render(); } };
+    var add = document.getElementById('add'); if (add) add.onclick = function(e){ e.stopPropagation(); menuOpen = !menuOpen; render(); };
+    var chk = document.getElementById('check'); if (chk) chk.onclick = function(){ syncBanks(); };
+  }
+  document.addEventListener('click', function(){ if (menuOpen) { menuOpen = false; render(); } });
+  window.addEventListener('resize', drawChart);
+  if (window.youcoded) {
+    // A change from elsewhere (YouCoded updating a balance from chat, another window) redraws in place.
+    window.youcoded.onData(function(d){ data = normalise(d); render(); });
+    if (window.youcoded.onRefresh) window.youcoded.onRefresh(function(){ syncBanks(); });
+  }
+  // Bills named like a merchant link themselves on open too, not only after a bank check.
+  autoLink();
+  render();
+  if (plaidOn) syncBanks();
+})();
+</script>
+</body></html>

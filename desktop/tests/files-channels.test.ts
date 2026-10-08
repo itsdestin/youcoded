@@ -137,8 +137,8 @@ describe('which of these a phone may call: exactly what it could before', () => 
   const entries = CHANNEL_TABLE.filter((d) => inFamily(d.name));
   const phoneOpen = (d: (typeof entries)[number]) => !d.desktopOnly && d.remoteAllowed !== false;
 
-  it('the table holds all 57 channels of the group', () => {
-    expect(entries).toHaveLength(57); // 21 artifacts + 5 project + 2 chatsearch + 9 git + 17 pages (10 + 4 socket + 3 video) + 3 singles
+  it('the table holds all 58 channels of the group', () => {
+    expect(entries).toHaveLength(58); // 21 artifacts + 5 project + 2 chatsearch + 9 git + 18 pages (10 + 4 socket + 3 video + plaid) + 3 singles
   });
 
   it('exactly these are open to a phone; everything else is refused', () => {
@@ -161,6 +161,8 @@ describe('which of these a phone may call: exactly what it could before', () => 
       'artifacts:append-version', 'artifacts:delete-project', 'artifacts:exclude', 'artifacts:import-file', 'artifacts:include-external',
       'artifacts:remove-record', 'artifacts:rename', 'artifacts:save',
       'git:commit', 'git:commit-file-diff', 'git:discard', 'git:file-review', 'git:file-status', 'git:stage', 'git:unstage', 'git:unwatch', 'git:watch',
+      // A bank sign-in opens a browser on the computer, so a phone never reaches Plaid.
+      'pages:plaid',
       'project:write-context-file',
     ]);
   });

@@ -45,7 +45,7 @@ import { useDismissTop, useEscClose } from '../../hooks/use-esc-close';
 import { isWorkbenchDocument, workbenchScreenFrame } from '../../workbench-mode';
 import { Button, LoadingState, ErrorState, Tooltip } from '../ui';
 import { ScreenBand } from '../ScreenBand';
-import type { PageDocument, PageFetchRequest, PageFetchResult, PageLoadFailure, PageSummary, PagesBridge } from '../../../shared/pages-types';
+import type { PageDocument, PageFetchRequest, PageFetchResult, PageLoadFailure, PageSummary, PagesBridge, PlaidRequest, PlaidResult } from '../../../shared/pages-types';
 import { MAX_PAGE_DATA_BYTES, MAX_PINNED_PAGES, OFFICE_PAGE_ID } from '../../../shared/pages-types';
 import { OfficeView } from '../office/OfficeView';
 import { HOME_TAB, officeDocFor, previewOfficeComments, previewOfficeTabs, revealInline, selectTab, useOfficeTabs } from '../office/office-store';
@@ -61,6 +61,7 @@ import { PageCodeChanged } from './PageCodeChanged';
 import { usePaneGlass } from './use-pane-glass';
 import {
   PAGE_DATA_MESSAGE, PAGE_DATA_SET_MESSAGE, PAGE_ESC_MESSAGE, PAGE_FETCH_MESSAGE, PAGE_FETCH_RESULT_MESSAGE,
+  PAGE_PLAID_MESSAGE, PAGE_PLAID_RESULT_MESSAGE,
   PAGE_REFRESH_MESSAGE, PAGE_THEME_MESSAGE, paneIsGlass, prepareHostedDocument, readThemeCss, watchThemeCss,
 } from './page-theme';
 import { useScreenOpen, ScreenMark } from '../../shoot-mode';
@@ -257,11 +258,28 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
     };
     const onMessage = (e: MessageEvent) => {
       if (e.source !== frameRef.current?.contentWindow) return;
-      const d = e.data as { type?: unknown; data?: unknown; id?: unknown; url?: unknown; method?: unknown; headers?: unknown; body?: unknown; as?: unknown; socket?: unknown } | null;
+      const d = e.data as { type?: unknown; data?: unknown; id?: unknown; url?: unknown; method?: unknown; headers?: unknown; body?: unknown; as?: unknown; socket?: unknown; request?: unknown } | null;
       if (!d) return;
       // Esc inside the page = Esc on the view: leave, unless Settings or the
       // library is open over it (their own Esc handling owns the key then).
       if (d.type === PAGE_ESC_MESSAGE) { dismissTop(); return; }
+      if (d.type === PAGE_PLAID_MESSAGE) {
+        // Plaid on the page's behalf: the request is passed through as-is and
+        // main keeps only the shapes it knows (plaid.ts cleanPlaidRequest).
+        if (typeof d.id !== 'string') return;
+        const id = d.id;
+        const source = e.source as Window;
+        const answer = (result: PlaidResult) => {
+          try { source.postMessage({ type: PAGE_PLAID_RESULT_MESSAGE, id, result }, '*'); } catch { /* the frame went away */ }
+        };
+        const bridge = pagesBridge();
+        const op = (d.request as { op?: PlaidRequest['op'] } | null)?.op ?? 'status';
+        if (!bridge?.plaid) { answer({ ok: false, op, code: 'UNSUPPORTED', message: 'Bank connections work in YouCoded on your computer only.' }); return; }
+        bridge.plaid(pageId, d.request as PlaidRequest).then(answer, () => {
+          answer({ ok: false, op, code: 'UNKNOWN', message: 'The bank request could not be completed.' });
+        });
+        return;
+      }
       if (d.type === PAGE_FETCH_MESSAGE) {
         if (typeof d.id !== 'string') return;
         const id = d.id;
