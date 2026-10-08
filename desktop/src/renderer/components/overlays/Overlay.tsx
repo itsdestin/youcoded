@@ -74,6 +74,9 @@ type OverlayPanelProps = {
   'aria-modal'?: boolean;
   'aria-labelledby'?: string;
   'aria-label'?: string;
+  /** The Toast's live region ("polite"). Declared so the type says what reaches the div —
+   *  tests/aria-props.test.ts flags an undeclared aria-* prop on a component. */
+  'aria-live'?: 'off' | 'polite' | 'assertive';
 };
 
 // Single-element .layer-surface. An earlier split added an inner

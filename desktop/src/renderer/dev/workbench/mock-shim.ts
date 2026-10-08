@@ -2091,6 +2091,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     path in descriptions ? descriptions[path] : (seeded ?? null);
 
   const SYNC_NOW = Date.now();
+  // A fixed moment for practice LOG lines, which print absolute times (see sync.getLog).
+  // "Ago" texts keep using SYNC_NOW: they read the same on every run already.
+  const PRACTICE_LOG_CLOCK = Date.UTC(2026, 8, 30, 14, 5, 0);
   const syncSpaces = {
     status: async () => ({
       enabled: true,
@@ -2237,10 +2240,13 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         'machine-mbp': SYNC_NOW - 86_400_000,
       },
     }),
+    // Stamped with the fixed PRACTICE_LOG_CLOCK, not the real clock. WHY (submit-ticket
+    // friction, proposal 21): the printed times changed every run, so every before/after
+    // picture of Backup & sync's Sync log read as "changed" when nothing had.
     getLog: async (n = 30) => [
-      `[${new Date(SYNC_NOW - 120_000).toISOString()}] INFO  pulled personal (3 files)`,
-      `[${new Date(SYNC_NOW - 120_000).toISOString()}] INFO  pushed project:youcoded (1 file)`,
-      `[${new Date(SYNC_NOW - 300_000).toISOString()}] INFO  backup -> Google Drive complete`,
+      `[${new Date(PRACTICE_LOG_CLOCK - 120_000).toISOString()}] INFO  pulled personal (3 files)`,
+      `[${new Date(PRACTICE_LOG_CLOCK - 120_000).toISOString()}] INFO  pushed project:youcoded (1 file)`,
+      `[${new Date(PRACTICE_LOG_CLOCK - 300_000).toISOString()}] INFO  backup -> Google Drive complete`,
     ].slice(0, n),
     // WHY the real shapes (sync-state.ts forceSync/pushBackend/addBackend): since error
     // inventory 2026-09-10 Backup & Sync READS these answers instead of assuming success —

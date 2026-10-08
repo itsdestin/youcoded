@@ -24,6 +24,10 @@ export type ScreenEntry = {
    *  'ArrowDown' }`). WHY (games-social friction, proposal 9): an opened menu or folded card
    *  otherwise needs a workbench-only switch in production code just to be photographed. */
   open?: readonly (string | { readonly do: string; readonly [k: string]: unknown })[];
+  /** The screen mark this state ends on, when it is not its own plain name — a dialog that
+   *  hands over to another (the ticket → Contribute) shows the OTHER one's mark. `shoot`
+   *  checks this mark instead (submit-ticket friction, proposal 18). */
+  mark?: string;
   /** Another screen this one is EXPECTED to look identical to, and why. */
   sameAs?: { name: string; why: string };
 };

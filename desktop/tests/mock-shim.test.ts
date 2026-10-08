@@ -23,6 +23,20 @@ describe('channels', () => {
     createMockShim(createStore(scenario)) as any;
 
   describe('workbench channels', () => {
+    // WHY (submit-ticket friction, proposal 21): the Sync log was stamped with the real clock,
+    // so every before/after picture of Backup & sync came out "changed" in the log lines alone.
+    it('stamps the practice Sync log with a fixed clock, so two runs read the same', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      try {
+        vi.setSystemTime(new Date('2026-01-01T10:00:00Z'));
+        const first = await shim().sync.getLog(30);
+        vi.setSystemTime(new Date('2026-06-15T23:30:00Z'));
+        const second = await shim().sync.getLog(30);
+        expect(first.length).toBeGreaterThan(0);
+        expect(second).toEqual(first);
+      } finally { vi.useRealTimers(); }
+    });
+
     it('serves a long sample file only to the review-only marketplace file viewer', async () => {
       const c = shim();
       const sample = await c.marketplace.readComponent({ pluginId: 'ui-guide-preview', kind: 'skill', name: 'sample' });
