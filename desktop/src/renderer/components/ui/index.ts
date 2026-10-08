@@ -99,6 +99,9 @@ export { Pill, PillButton } from './Pill';
 // The small anchored menu (games-social friction, proposal 8) — Menu.tsx says why.
 export { Menu, MenuItem, MenuRadioItem, MenuNote } from './Menu';
 
+// The one slider (submit-ticket-5#ST5-5) — Slider.tsx says why.
+export { Slider } from './Slider';
+
 export { ZoomPill } from './ZoomPill';
 export type { ZoomPillProps } from './ZoomPill';
 

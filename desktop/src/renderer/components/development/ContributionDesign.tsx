@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Button, Callout, CARD_LEVEL_1, Dialog, LoadingState } from '../ui';
+import { Button, Callout, CARD_LEVEL_1, Dialog, FoldRow, LoadingState } from '../ui';
+import { networkOnlineNow } from '../../hooks/useNetworkOnline';
 import type { ReactNode } from 'react';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { plainMessage } from '../../utils/ipc-error';
@@ -23,6 +24,8 @@ export function ContributionDesign({ open, onClose, handover, screen = 'settings
   screen?: string;
 }) {
   useEscClose(open, onClose);
+  // Read only to word a failed download: "no network" only when the computer says so.
+  const online = networkOnlineNow();
   const [phase, setPhase] = useState<Phase>('idle');
   const [error, setError] = useState('');
   const [path, setPath] = useState('');
@@ -169,20 +172,34 @@ export function ContributionDesign({ open, onClose, handover, screen = 'settings
           from, inside the card it is about — one sentence with the real reason (never a
           guessed cause), its Try again inside it, no title. The card keeps what this screen
           is for (UX review U15). */}
+      {/* WHY plain words first and the raw reason folded away (Destin, submit-ticket-5#ST5-9:
+          "mock failure dev open session in might scare our users. this error is just confusing
+          and unhelpful"): the operation's own text ("spawn claude ENOENT", git's output) is for
+          a bug report, not the message. The sentence says what happened and what still holds,
+          without guessing a cause (error-message standards); "no network" is said only when
+          the computer reports none. The details stay one click away for whoever needs them. */}
       {phase === 'open-failed' && <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
         <p className="text-sm text-fg">YouCoded’s code is ready on this computer.</p>
         <Callout tone="danger" actionsPlacement="below" actions={<>
           {back && <Button size="sm" variant="secondary" onClick={onClose}>Back to ticket</Button>}
           <Button size="sm" onClick={() => void openProject()}>Try again</Button>
-        </>}>The conversation didn’t open. {error} The code is still there, at {path}.</Callout>
+        </>}>The new conversation didn’t open. The code is still on this computer, so trying again picks up where this left off.</Callout>
+        {error && <FoldRow title="Details">
+          <p className="text-2xs text-fg-2 font-mono break-all">{error}</p>
+        </FoldRow>}
       </div>}
 
       {phase === 'failed' && <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
         <p className="text-xs text-fg-2 leading-relaxed">{lead}</p>
-        <Callout tone="danger" actionsPlacement="below" actions={<>
+        <Callout tone={online ? 'danger' : 'warning'} actionsPlacement="below" actions={<>
           {back && <Button size="sm" variant="secondary" onClick={onClose}>Back to ticket</Button>}
           <Button size="sm" onClick={setup}>Try again</Button>
-        </>}>The download didn’t finish. {error} Nothing was left behind, so trying again starts cleanly.</Callout>
+        </>}>{online
+          ? 'The download didn’t finish. Nothing was left behind, so trying again starts cleanly.'
+          : 'This computer isn’t connected to a network, so the download couldn’t start.'}</Callout>
+        {error && <FoldRow title="Details">
+          <p className="text-2xs text-fg-2 font-mono break-all">{error}</p>
+        </FoldRow>}
       </div>}
 
     </div>

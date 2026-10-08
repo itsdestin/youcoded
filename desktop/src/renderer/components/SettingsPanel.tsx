@@ -36,7 +36,7 @@ import type { BuddyHelperStatus, BuddyStyle } from '../../shared/types';
 import { BuddyStyleRow, readBuddyStyle, saveBuddyStyle, trayPlaceName } from './BuddyStyleRow';
 // UiToggle is aliased because this file still exports its own `Toggle` (the
 // compat wrapper below) that AboutPopup imports by that name.
-import { Button, CARD_LEVEL_1, CloseButton, Toggle as UiToggle, TextInput, InputGroup, LoadingState, RadioGroup, SegmentedTabs, Dialog, SettingRow, RowStatus, Callout, StatusStrip, ErrorState, FieldError, SectionLabel, FieldRow } from './ui';
+import { Button, CARD_LEVEL_1, CloseButton, Slider, Toggle as UiToggle, TextInput, InputGroup, LoadingState, RadioGroup, SegmentedTabs, Dialog, SettingRow, RowStatus, Callout, StatusStrip, ErrorState, FieldError, SectionLabel, FieldRow } from './ui';
 import { useGuideReset } from './guide/guide-events';
 
 // Both are Vite `define` substitutions, so they're constants at module scope.
@@ -635,8 +635,8 @@ function SoundButton() {
     });
   }, []);
 
-  const handleVolumeChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const v = parseFloat(e.target.value);
+  // Takes the number itself: the shared Slider hands its value over, not an input event.
+  const setVolumeValue = useCallback((v: number) => {
     setVolume(v);
     try { localStorage.setItem(SOUND_VOLUME_KEY, String(v)); } catch {}
   }, []);
@@ -700,15 +700,9 @@ function SoundButton() {
                         )}
                       </svg>
                     </button>
-                    <input
-                      type="range"
-                      min="0"
-                      max="1"
-                      step="0.05"
-                      value={volume}
-                      onChange={handleVolumeChange}
-                      className="flex-1 h-1 accent-accent"
-                    />
+                    {/* WHY the shared Slider (Destin, submit-ticket-5#ST5-5: "use for volume too"). */}
+                    <Slider min={0} max={1} step={0.05} value={volume} aria-label="Volume"
+                      aria-valuetext={`${Math.round(volume * 100)}%`} onChange={setVolumeValue} />
                     <span className="text-3xs text-fg-muted w-8 text-right">{Math.round(volume * 100)}%</span>
                   </div>
                 </section>

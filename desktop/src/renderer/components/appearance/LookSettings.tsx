@@ -21,7 +21,7 @@ import {
   type GlassField, type GlassPreset, type GlassValues, type LookOverrides, type LookParticles,
 } from '../../themes/look-overrides';
 import { TERMINAL_WALLPAPER_OPACITY_FLOOR } from '../../themes/theme-engine';
-import { Button, FoldRow, RadioGroup, SegmentedTabs, SettingRow, FOCUS_RING } from '../ui';
+import { Button, FoldRow, RadioGroup, SegmentedTabs, SettingRow, Slider, FOCUS_RING } from '../ui';
 
 // "Auto" = the absent field = the theme's own choice (AP-S1). Named "Auto" at Destin's
 // request (appearance-panel-review-3, AR3-1): "Auto (Theme)" in place of "Theme's".
@@ -183,18 +183,14 @@ function LookSlider({
   disabled?: boolean;
 }) {
   return (
-    <div className={`flex items-center justify-between gap-3 ${disabled ? 'opacity-40' : ''}`}>
+    <div className={`flex items-center justify-between gap-3 ${disabled ? 'opacity-60' : ''}`}>
       {/* Fixed label column so every slider in a stack starts and ends at the same x. */}
       <span className="text-xs text-fg-2 shrink-0 w-28">{label}</span>
       <div className="flex items-center gap-2 flex-1">
-        <input
-          type="range" min={min} max={max} step={step}
-          value={value}
-          disabled={disabled}
-          aria-label={label}
-          onChange={e => onChange(parseFloat(e.target.value))}
-          className="flex-1 accent-accent"
-        />
+        {/* WHY the shared Slider (submit-ticket-5#ST5-5): the round handle with its fill
+            wrapped around it, one look for every slider in the app. */}
+        <Slider min={min} max={max} step={step} value={value} disabled={disabled}
+          aria-label={label} aria-valuetext={format(value)} onChange={onChange} />
         <span className="text-3xs text-fg-muted w-9 text-right">{format(value)}</span>
       </div>
     </div>

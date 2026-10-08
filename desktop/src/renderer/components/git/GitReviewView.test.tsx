@@ -377,3 +377,15 @@ describe('GitReviewView', () => {
     await waitFor(() => expect(git.stage).toHaveBeenCalledTimes(1));
   });
 });
+
+describe('GitReviewCard highlight', () => {
+  it('lights the whole card when its header is pointed at, never a header band', async () => {
+    // Destin, submit-ticket-5#ST5-Q2 (the ST4-2 sweep): the header tint ran edge to edge and
+    // stopped in a hard line above the opened changes.
+    const { GitReviewCard } = await import('./GitReviewCard');
+    render(<GitReviewCard expanded onToggle={() => {}} headerLeft={<span>abc fix</span>}><p>diff</p></GitReviewCard>);
+    const header = screen.getByRole('button', { name: /abc fix/ });
+    expect(header.className).not.toMatch(/hover:bg-/);
+    expect(header.parentElement!.className).toContain('has-[>button:hover]:bg-inset');
+  });
+});

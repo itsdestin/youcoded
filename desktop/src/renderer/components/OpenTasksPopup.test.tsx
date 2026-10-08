@@ -155,3 +155,21 @@ describe('OpenTasksPopup', () => {
     expect(screen.queryByText('Done 6')).toBeNull();
   });
 });
+
+describe('OpenTasksPopup folded sections', () => {
+  it('folds Completed and Marked inactive in the shared fold, with no full-width line', () => {
+    // Destin, submit-ticket-5#ST5-Q2: the sweep's hard line above "Marked inactive".
+    render(
+      <OpenTasksPopup open onClose={noop} onMarkInactive={noop} onUnhide={noop} tasks={[
+        task({ id: '1', subject: 'Done thing', status: 'completed' }),
+        task({ id: '2', subject: 'Hidden thing', status: 'pending', markedInactive: true, orderIndex: 1 }),
+      ]} />,
+    );
+    for (const name of [/^Completed/, /^Marked inactive/]) {
+      const row = screen.getByRole('button', { name });
+      // The shared fold: a box holding its own header row (FoldRow), never a bare toggle.
+      expect(row.parentElement!.className).toContain('has-[>button:hover]:bg-inset');
+    }
+    expect(document.querySelector('.border-t')).toBeNull();
+  });
+});

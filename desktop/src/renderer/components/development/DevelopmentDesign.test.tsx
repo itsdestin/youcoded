@@ -203,22 +203,31 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     Object.assign(window, { claude: { dev: { setupWorkspace, setupStatus: idle } } });
     render(<ContributePopup open onClose={() => {}} />);
     fireEvent.click(screen.getByRole('button', { name: 'Download YouCoded’s code' }));
-    const line = await screen.findByText(/Could not reach github\.com\./);
-    // The guide's notice box, its Try again inside it (submit-ticket-5), never a bare Done.
+    // Plain words in the notice box, its Try again inside it (submit-ticket-5#ST5-9);
+    // the operation's own text is one fold away, never the message itself.
+    const line = await screen.findByText(/The download didn’t finish/);
     const box = line.closest('div.rounded-lg') as HTMLElement;
     expect(box.className).toMatch(/destructive/);
     expect(box.querySelector('button')?.textContent).toBe('Try again');
+    expect(screen.queryByText(/Could not reach github\.com\./)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    expect(screen.getByText(/Could not reach github\.com\./)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Done' })).toBeNull();
   });
 
-  it('says a conversation that would not open the same way, in the notice box', async () => {
+  it('says a conversation that would not open in plain words, with the raw reason folded away', async () => {
+    // Destin, submit-ticket-5#ST5-9: "mock failure dev open session in might scare our users.
+    // this error is just confusing and unhelpful".
     const setupStatus = vi.fn().mockResolvedValue({ state: 'ready', path: '/home/you/YouCoded/Development/w' });
-    const openSessionIn = vi.fn().mockRejectedValue(new Error('No session could start.'));
+    const openSessionIn = vi.fn().mockRejectedValue(new Error('spawn claude ENOENT'));
     Object.assign(window, { claude: { dev: { setupStatus, setupWorkspace: vi.fn(), openSessionIn, clearSetupStatus: vi.fn() } } });
     render(<ContributePopup open onClose={() => {}} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Open it' }));
-    const line = await screen.findByText(/No session could start\./);
+    const line = await screen.findByText(/The new conversation didn’t open/);
     expect((line.closest('div.rounded-lg') as HTMLElement).className).toMatch(/destructive/);
+    expect(screen.queryByText(/ENOENT/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    expect(screen.getByText(/spawn claude ENOENT/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
   });
 

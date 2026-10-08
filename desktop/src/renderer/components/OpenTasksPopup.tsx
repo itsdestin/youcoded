@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useEscClose } from '../hooks/use-esc-close';
 import type { TaskState } from '../state/task-state';
-import { Button, Dialog, SectionLabel } from './ui';
+import { Button, Dialog, FoldRow, SectionLabel } from './ui';
 
 // L2 popup opened by OpenTasksChip in the StatusBar. Groups tasks by status:
 // In progress → Pending → Completed (collapsible). A separate "Marked inactive"
@@ -158,40 +158,33 @@ export default function OpenTasksPopup({ open, tasks, onClose, onMarkInactive, o
             </>
           )}
 
-          {/* Completed section — collapsible. Keep the count on the toggle itself
-              so a collapsed section signals "there are N items hidden here." */}
-          {completed.length > 0 && (
-            <>
-              <button
-                aria-expanded={completedOpen}
-                className="w-full text-left text-xs font-medium text-fg-muted px-2 pt-2 pb-1 flex justify-between items-baseline hover:text-fg"
-                onClick={() => setCompletedOpen(v => !v)}
-              >
-                <span>Completed</span>
-                <span>{completed.length} {completedOpen ? '▾' : '▸'}</span>
-              </button>
-              {completedOpen && completed.map(t => (
-                <Row key={t.id} t={t} group="completed" onMarkInactive={onMarkInactive} onUnhide={onUnhide} />
-              ))}
-            </>
-          )}
-
-          {/* Marked inactive section — same collapsed-toggle-with-count pattern. */}
-          {inactive.length > 0 && (
-            <>
-              <button
-                aria-expanded={inactiveOpen}
-                className="w-full text-left text-xs font-medium text-fg-muted px-2 pt-2 pb-1 flex justify-between items-baseline hover:text-fg border-t border-edge-dim mt-1"
-                onClick={() => setInactiveOpen(v => !v)}
-              >
-                <span>Marked inactive</span>
-                <span>{inactive.length} {inactiveOpen ? '▾' : '▸'}</span>
-              </button>
-              {inactiveOpen && inactive.map(t => (
-                <Row key={t.id} t={t} group="inactive" onMarkInactive={onMarkInactive} onUnhide={onUnhide} />
-              ))}
-            </>
-          )}
+          {/* WHY the shared FoldRow for both folded sections (Destin, submit-ticket-5#ST5-Q2: fix
+              the hard edge the sweep found): "Marked inactive" sat under a full-width line, and
+              both were bare text toggles with a ▸ on the right of a count — the guide's one
+              fold-out look is a boxed row that opens inside itself. The count stays in the
+              row's hint so a closed section still says how much is inside. */}
+          {(completed.length > 0 || inactive.length > 0) && <div className="space-y-2 pt-2">
+            {completed.length > 0 && (
+              <FoldRow title="Completed" description={`${completed.length} ${completed.length === 1 ? 'task' : 'tasks'}`}
+                open={completedOpen} onToggle={setCompletedOpen} flush>
+                <div className="pb-1">
+                  {completed.map(t => (
+                    <Row key={t.id} t={t} group="completed" onMarkInactive={onMarkInactive} onUnhide={onUnhide} />
+                  ))}
+                </div>
+              </FoldRow>
+            )}
+            {inactive.length > 0 && (
+              <FoldRow title="Marked inactive" description={`${inactive.length} ${inactive.length === 1 ? 'task' : 'tasks'}`}
+                open={inactiveOpen} onToggle={setInactiveOpen} flush>
+                <div className="pb-1">
+                  {inactive.map(t => (
+                    <Row key={t.id} t={t} group="inactive" onMarkInactive={onMarkInactive} onUnhide={onUnhide} />
+                  ))}
+                </div>
+              </FoldRow>
+            )}
+          </div>}
         </>
       </Dialog>
     </>

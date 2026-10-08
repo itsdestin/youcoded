@@ -25,6 +25,11 @@ function subscribe(cb: () => void) {
 
 const read = () => !workbenchNetworkOffline() && (typeof navigator === 'undefined' || navigator.onLine !== false);
 
+/** The same answer, read once, with no listener — for a screen that only words a failure it
+ *  just met (the ticket, Contribute). WHY not the hook there: those popups stay mounted while
+ *  closed, and a hidden surface keeps no window listeners (performance rule 2). */
+export const networkOnlineNow = read;
+
 export function useNetworkOnline(): boolean {
   return useSyncExternalStore(subscribe, read, () => true);
 }

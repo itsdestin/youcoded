@@ -65,7 +65,7 @@ export const SETTINGS: readonly ScreenEntry[] = [
   settings('settings/assistant/cloud/claude-code/sign-out', 'dialog'),
   settings('settings/assistant/cloud/openrouter/key', 'dialog'),
   settings('settings/assistant/permissions', 'dialog'),
-  // A folder opened and pointed at: the card lights as one (the ST4-2 sweep). Hover: shoot at 1×.
+  // A folder opened and pointed at: the card lights as one (the ST4-2 sweep).
   { ...settings('settings/assistant/permissions#folder-open-hover', 'dialog', 'fold'), open: ['youcoded /home/destin/youcoded-dev/youcoded 4 ▸', { do: 'hover', target: { role: 'button', label: 'youcoded /home/destin/youcoded-dev/youcoded 4 ▾' } }] },
   settings('settings/assistant/permissions/skip-confirm', 'dialog'),
   settings('settings/assistant/specialists', 'dialog'),
@@ -103,13 +103,15 @@ export const SETTINGS: readonly ScreenEntry[] = [
   { ...settings('settings/development/contribute#downloading', 'dialog'), params: { ticket: 'hold' }, open: ['Download YouCoded’s code'] },
   // Contribute's two failures, in the guide's notice box (submit-ticket-5).
   { ...settings('settings/development/contribute#failed', 'dialog'), scenario: 'refused', open: ['Download YouCoded’s code'], waitMs: 3500 },
-  { ...settings('settings/development/contribute#open-failed', 'dialog'), params: { devCopy: 'ready', fail: 'dev.openSessionIn' }, open: ['Open it'] },
+  { ...settings('settings/development/contribute#open-failed', 'dialog'), params: { devCopy: 'ready', devOpen: 'fail' }, open: ['Open it'] },
+  { ...settings('settings/development/contribute#open-failed-details', 'dialog'), params: { devCopy: 'ready', devOpen: 'fail' }, open: ['Open it', 'Details'] },
+  { ...settings('settings/development/contribute#failed-details', 'dialog'), scenario: 'refused', open: ['Download YouCoded’s code', 'Details'], waitMs: 3500 },
   settings('settings/shortcuts', 'dialog'),
   settings('settings/donate', 'dialog'),
   settings('settings/about', 'dialog'),
   { ...settings('settings/about#account-open', 'dialog', 'fold'), open: ['Your account (optional)'] },
-  // The fold header's hover (submit-ticket-3#ST3-5: "not rounded"); shoot hover states at
-  // SHOOT_SCALE=1 (project-switcher friction: a 1.5× pointer lands one row off).
+  // The fold header's hover (submit-ticket-3#ST3-5: "not rounded"). Shoot at the normal 1.5×:
+  // the pointer offset that once landed a hover one row off was fixed on 2026-10-06 (a394a871).
   { ...settings('settings/about#fold-hover', 'dialog', 'fold'), open: [{ do: 'hover', target: { role: 'button', label: 'Your account (optional)' } }], sameAs: { name: 'settings/about', why: 'only the pointer highlight differs, a faint tint the look-alike check may not count' } },
   { ...settings('settings/about#stats-open', 'dialog', 'fold'), open: ['Anonymous usage stats'] },
   { ...settings('settings/about#licenses-open', 'dialog', 'fold'), open: [{ do: 'scroll', dir: 'down', times: 8 }, 'Open-source libraries'] },

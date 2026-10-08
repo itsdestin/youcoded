@@ -21,4 +21,8 @@ export const APP: readonly ScreenEntry[] = [
   // proposed stronger tint (submit-ticket-5, waiting for Destin).
   { name: 'dev/pills', tags: ['dev'] },
   { name: 'dev/pills#strong', tags: ['dev'], params: { pillTint: 'strong' } },
+  // Open tasks with tasks in it — the real popup over practice tasks (dev/workbench/
+  // OpenTasksPractice.tsx), since no practice conversation creates tasks. Both folded sections
+  // start open (five or fewer in each), as in the app (submit-ticket-5#ST5-Q2).
+  { name: 'dev/open-tasks', tags: ['dev'], mark: 'chat/open-tasks' },
 ];

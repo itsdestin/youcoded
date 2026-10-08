@@ -31,7 +31,7 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/quick-chips/edit', 'dialog'),
   chat('chat/quick-chips/add', 'dialog'),
   chat('chat/session-context', 'dialog'),
-  // A skill's fold, opened and pointed at — now the shared FoldRow (submit-ticket-5). Hover: 1×.
+  // A skill's fold, opened and pointed at — now the shared FoldRow (submit-ticket-5).
   { ...chat('chat/session-context#skill-open-hover', 'dialog', 'fold'), open: [{ do: 'click', target: { role: 'tab', label: 'Skills' } }, 'theme-builder Build, preview and publish a community theme', { do: 'hover', target: { role: 'button', label: 'theme-builder Build, preview and publish a community theme' } }] },
   { ...chat('chat/session-context#ancestors', 'dialog'), session: 'wb-2', params: { contextChain: '1' } },
   chat('chat/quit-sessions', 'dialog'),
@@ -141,5 +141,10 @@ export const CHAT: readonly ScreenEntry[] = [
   // The reading view of the Word and Excel files whose comments office/*-comments shows in
   // Office's own panel — the two are compared side by side (finish plan Task 6).
   chat('chat/files/open/a-launch-brief', 'pane', 'viewer'),
+  // Git review (Review changes): a commit card opened and pointed at — the card lights as one,
+  // no hard line above the changes (submit-ticket-5#ST5-Q2). Marked by the drawer itself
+  // ('chat/files'): the review replaces the viewer, whose own mark goes with it.
+  { ...chat('chat/files/open/a-launch-brief#git-review', 'pane', 'viewer'), mark: 'chat/files',
+    open: ['Review changes', '▸ a1b2c3d chat: cache the per-session selector…', { do: 'hover', target: { role: 'button', labelStarts: '▸ a1b2c3d chat: cache the per-session selector' } }] },
   chat('chat/files/open/a-q3-sales-comments', 'pane', 'viewer'),
 ];

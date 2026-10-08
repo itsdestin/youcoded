@@ -5,7 +5,7 @@ import { Button, Callout, CARD_LEVEL_1, Dialog, FoldRow, LoadingState, Pill, Sec
 import type { PillTone } from '../ui/Pill';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
-import { useNetworkOnline } from '../../hooks/useNetworkOnline';
+import { networkOnlineNow } from '../../hooks/useNetworkOnline';
 import { ContributionDesign } from './ContributionDesign';
 
 // WHY a phase rather than a boolean: the flow stopped at draft -> review, so
@@ -76,7 +76,7 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
   const narrow = useNarrowViewport();
   // Read only to word a failed send: "no network" is said only when the computer itself
   // reports none (useNetworkOnline's rule) — never guessed from the error text.
-  const online = useNetworkOnline();
+  const online = networkOnlineNow();
 
   // WHY an effect and not only useState's first value (found shooting the practice states,
   // 2026-10-06): every caller keeps this popup MOUNTED and opens it by handing it a context,

@@ -1831,7 +1831,10 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       return new Promise(resolve => setTimeout(() => {
         if (activeScenario === 'refused') {
           setupState = 'failed';
-          setupError = 'Could not reach github.com to download the project.';
+          // WHY git's own words (submit-ticket-5#ST5-9): the practice failure must read like the
+          // real one — dev-tools.ts keeps the failing step's last lines — so a picture of the
+          // screen shows what a user would actually meet, not a tidied-up sentence.
+          setupError = "git exited with code 128 — fatal: unable to access 'https://github.com/itsdestin/youcoded-dev/': Could not resolve host: github.com";
           resolve({ ok: false as const, error: setupError });
         } else {
           setupState = 'ready';
@@ -1847,6 +1850,15 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // and the screen can ASK what it is doing when it reopens. A per-step progress
     // feed cannot answer that question — reopening would show nothing.
     setupStatus: async () => ({ state: setupState, path: setupPath, error: setupError }),
+    // `?devOpen=fail`: the new conversation can't start — rejected the way Electron rejects a
+    // failed IPC call, with a real-world reason (the CLI missing), so the screen's wording is
+    // judged against the text a user could really get (submit-ticket-5#ST5-9).
+    openSessionIn: async (_a?: { cwd: string; initialInput?: string }) => {
+      if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('devOpen') === 'fail') {
+        throw new Error("Error invoking remote method 'dev:open-session-in': Error: spawn claude ENOENT");
+      }
+      return { id: 'wb-dev-session' };
+    },
     clearSetupStatus: async () => { if (setupState !== 'running') { setupState = 'idle'; setupPath = ''; setupError = ''; } },
   };
 

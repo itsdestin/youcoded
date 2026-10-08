@@ -73,6 +73,16 @@ const CONSUMERS = walk(RENDERER)
 const INTENTIONALLY_UNADOPTED = new Set<string>([]);
 
 describe('primitive adoption', () => {
+  it('every slider is the shared Slider — no hand-made range input', () => {
+    // WHY (Destin, submit-ticket-5#ST5-5): one slider look everywhere — a round handle with
+    // its fill wrapped around it. The browser's own range input is drawn ONLY inside
+    // ui/Slider.tsx (outside CONSUMERS); a second one would be a second look. Cross-file and
+    // already loaded here, so it rides this test rather than a new text guard. The Pages kit's
+    // `.yc-range` is plain HTML in a user's page, not app code, and is not scanned.
+    const offenders = CONSUMERS.filter((f) => !f.path.includes(join('renderer', 'dev', '')) && /type=["']range["']/.test(f.src)).map((f) => f.path);
+    expect(offenders).toEqual([]);
+  });
+
   it('every ui/ primitive is used outside components/ui/', () => {
     // Scan EXPORTED COMPONENT NAMES, not filenames. The first version of this
     // test derived names from `^[A-Z]\w*\.tsx` filenames, which silently skipped
