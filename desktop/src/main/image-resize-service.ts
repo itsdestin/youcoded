@@ -24,8 +24,10 @@ function nodeSpawn(job: ResizeJob): WorkerLike {
 /** Per-job time limit: 3× the measured wall time at the incident size, floored at 15 s.
  *  WHY 15 s: the BUILT worker resizing a 2904×17528 PNG to 1221×7372 over a real
  *  worker_threads Worker (2026-10-07, Linux, 32 cores, idle) took 1.87 s for flat
- *  pixels (worker rss 951 MB, process peak 1.37 GB) and 3.11 s for incompressible
- *  noise — the worst case for inflate (worker rss 1.56 GB, process peak 1.96 GB).
+ *  pixels and 3.11 s for incompressible noise — the worst case for inflate.
+ *  Memory: the 951 MB (flat) and 1.56 GB (noise) figures are WHOLE-PROCESS RSS read
+ *  at job end (process peak 1.37 GB / 1.96 GB), and they INCLUDE the smoke test's
+ *  own synthetic 203 MB source bitmap; the worker's own share is roughly 0.6–1.2 GB.
  *  3 × 3.11 s = 9.3 s is under the floor, so the floor wins; it leaves room for a
  *  slower or busier machine without letting a stuck job hold the send for a minute.
  *  Not exported: nothing outside this file reads it (knip's ratchet). */

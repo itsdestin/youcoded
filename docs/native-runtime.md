@@ -1189,7 +1189,9 @@ resume paths re-read pictures by path, so nothing short of `/clear` recovered.
   job past its time limit is `timeout` ("took longer than 15 s on this computer"); a worker crash,
   a corrupt PNG/JPEG or jpeg-js's memory cap is `failed` ("the shrinking step failed"). A refused or
   failed attachment gets a note, never silence. Measured at the incident size: ~1.9 s (flat pixels) to
-  ~3.1 s (noise) per resize, worker memory 0.95–1.56 GB; `RESIZE_JOB_TIMEOUT_MS` is the 15 s floor.
+  ~3.1 s (noise) per resize. Memory: 951 MB / 1.56 GB were WHOLE-PROCESS RSS at job end, including
+  the smoke test's own synthetic 203 MB source bitmap — not the worker's share, which is roughly
+  0.6–1.2 GB. `RESIZE_JOB_TIMEOUT_MS` is the 15 s floor.
   The built worker runs from inside `app.asar` with no unpacking (smoke-tested 2026-10-07).
   <!-- verify: {"path": "youcoded/desktop/src/main/create-runtime.ts", "contains": "'image-cache'"} -->
 - **Enforcement** (`HarnessSession.enforceImageLimits`): the gate is re-applied to in-memory
@@ -1220,8 +1222,9 @@ resume paths re-read pictures by path, so nothing short of `/clear` recovered.
   off a screenshot, in three envelopes.
 - **A non-vision session reopened after pictures** carries size/missing notes where the live
   session had none.
-- **Peak memory for one resize at the incident's size is about 1.5 GB inside the app's process** —
-  transient, released when the worker terminates. Streaming decode is the candidate fix.
+- **One resize at the incident's size adds roughly 0.6–1.2 GB to the app's process** (the smoke
+  test's whole-process RSS of up to 1.56 GB included its own 203 MB source bitmap) — transient,
+  released when the worker terminates. Streaming decode is the candidate fix.
 
 Guards: `tests/image-support.test.ts`, `image-prepare.test.ts`, `image-resize.test.ts`,
 `image-too-large.test.ts`, the over-limit pictures suite in `harness-session-loop.test.ts`, the
