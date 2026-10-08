@@ -30,7 +30,14 @@ const HEADER_READ_BYTES = 256 * 1024;
 const PREPARE_MARGIN = 0.9;
 
 type ResizeFormat = 'png' | 'jpeg';
-export type ResizeFn = (req: { bytes: Buffer; width: number; height: number; format: ResizeFormat }) => Promise<Buffer | null>;
+/** WHY a discriminated result (not Buffer | null): one null used to stand for
+ *  "not PNG/JPEG", "the worker crashed" and "it timed out" alike, and the refusal
+ *  blamed the decoder for all three. Each reason now gets its own wording. */
+export type ResizeResult =
+  | { ok: true; bytes: Buffer }
+  | { ok: false; reason: 'undecodable' | 'failed' }
+  | { ok: false; reason: 'timeout'; afterMs: number };
+export type ResizeFn = (req: { bytes: Buffer; width: number; height: number; format: ResizeFormat }) => Promise<ResizeResult>;
 
 export type PreparedImage =
   | { kind: 'unchanged'; width?: number; height?: number }
@@ -136,14 +143,25 @@ export class ImagePreparer implements ImagePreparerLike {
     }
     const run = this.chain.then(async (): Promise<PreparedImage> => {
       const bytes = await fs.promises.readFile(absPath);
-      let out = await this.resize({ bytes, width: target.width, height: target.height, format: 'png' });
+      let res = await this.resize({ bytes, width: target.width, height: target.height, format: 'png' });
       let p = file('png'); let mediaType: 'image/png' | 'image/jpeg' = 'image/png';
       // WHY JPEG second: screenshots are text; PNG keeps it crisp. Only a PNG
       // that still breaks the byte cap trades sharpness for size.
-      if (out && out.length > MAX_ATTACHMENT_BYTES) { out = await this.resize({ bytes, width: target.width, height: target.height, format: 'jpeg' }); p = file('jpg'); mediaType = 'image/jpeg'; }
-      if (!out) {
-        return { kind: 'refused', ...dims, reason: `is ${dims.width}×${dims.height} px and could not be downscaled for the model (the image decoder declined it — only PNG and JPEG can be shrunk here). Convert or shrink it with Bash (e.g. magick in.gif[0] -resize 4000x4000 out.png) and Read the copy.` };
+      if (res.ok && res.bytes.length > MAX_ATTACHMENT_BYTES) { res = await this.resize({ bytes, width: target.width, height: target.height, format: 'jpeg' }); p = file('jpg'); mediaType = 'image/jpeg'; }
+      // WHY three wordings (error-message-standards: never invent a cause): only
+      // the worker's own format check may blame the decoder; a slow job and a
+      // crashed one say exactly that, and neither suggests converting the file.
+      if (!res.ok) {
+        const size = `is ${dims.width}×${dims.height} px and`;
+        if (res.reason === 'undecodable') {
+          return { kind: 'refused', ...dims, reason: `${size} could not be downscaled for the model (the image decoder could not read it — only PNG and JPEG can be shrunk here). Convert or shrink it with Bash (e.g. magick in.gif[0] -resize 4000x4000 out.png) and Read the copy.` };
+        }
+        if (res.reason === 'timeout') {
+          return { kind: 'refused', ...dims, reason: `${size} could not be downscaled for the model (shrinking it took longer than ${Math.round(res.afterMs / 1000)} s on this computer). Crop it or save a smaller copy with Bash and Read that.` };
+        }
+        return { kind: 'refused', ...dims, reason: `${size} could not be downscaled for the model (the shrinking step failed). Crop it or save a smaller copy with Bash and Read that.` };
       }
+      const out = res.bytes;
       // WHY a separate detail: here the decoder WORKED and even the JPEG is too
       // big; blaming the decoder would invent a cause (error-message-standards).
       if (out.length > MAX_ATTACHMENT_BYTES) {

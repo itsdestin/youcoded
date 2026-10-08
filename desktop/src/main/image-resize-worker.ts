@@ -12,22 +12,30 @@ import * as jpeg from 'jpeg-js';
 
 export interface ResizeJob { bytes: Uint8Array; width: number; height: number; format: 'png' | 'jpeg' }
 export interface Decoded { data: Uint8Array; width: number; height: number }
+/** What the worker posts back. WHY two failure reasons (not one null): the
+ *  preparer words them differently, and saying "the decoder could not read it"
+ *  about a PNG that ran out of memory would invent a cause
+ *  (error-message-standards). `undecodable` = not PNG/JPEG at all (GIF, WebP,
+ *  junk), decided from the magic bytes BEFORE any decode; `failed` = a PNG/JPEG
+ *  whose decode or encode threw (corrupt data, jpeg-js's memory cap). */
+export type ResizeReply = { ok: true; bytes: Uint8Array } | { ok: false; reason: 'undecodable' | 'failed' };
 
 /** PNG or JPEG → RGBA. Anything else (GIF, WebP, junk) is null: those formats
- *  are declined upstream with a convert hint rather than guessed at. The 80 MP
- *  guard is enforced by the caller before dispatch; jpeg-js gets it again as a
- *  belt-and-braces option. */
+ *  are declined upstream with a convert hint rather than guessed at. A PNG/JPEG
+ *  that fails to decode THROWS — runResizeJob reports that as `failed`, not as
+ *  an unreadable format. The 80 MP guard is enforced by the caller before
+ *  dispatch; jpeg-js gets it again as a belt-and-braces option. */
 export function decodeImage(bytes: Buffer): Decoded | null {
-  try {
-    if (bytes.length >= 8 && bytes.readUInt32BE(0) === 0x89504e47) {
-      const png = PNG.sync.read(bytes);
-      return { data: new Uint8Array(png.data.buffer, png.data.byteOffset, png.data.byteLength), width: png.width, height: png.height };
-    }
-    if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xd8) {
-      const out = jpeg.decode(bytes, { useTArray: true, maxResolutionInMP: 80, maxMemoryUsageInMB: 512 });
-      return { data: out.data, width: out.width, height: out.height };
-    }
-  } catch { /* undecodable → null */ }
+  if (bytes.length >= 8 && bytes.readUInt32BE(0) === 0x89504e47) {
+    const png = PNG.sync.read(bytes);
+    return { data: new Uint8Array(png.data.buffer, png.data.byteOffset, png.data.byteLength), width: png.width, height: png.height };
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+    // WHY its memory cap throws through: hitting maxMemoryUsageInMB means the
+    // JPEG was readable but too big to hold — a `failed` shrink, not `undecodable`.
+    const out = jpeg.decode(bytes, { useTArray: true, maxResolutionInMP: 80, maxMemoryUsageInMB: 512 });
+    return { data: out.data, width: out.width, height: out.height };
+  }
   return null;
 }
 
@@ -63,17 +71,24 @@ function encodeImage(rgba: Uint8Array, w: number, h: number, format: 'png' | 'jp
   return jpeg.encode({ data: Buffer.from(rgba.buffer, rgba.byteOffset, rgba.byteLength), width: w, height: h }, 85).data;
 }
 
-/** The whole job, in one call — exported so tests run it in-process. */
-export function runResizeJob(job: ResizeJob, decoder: typeof decodeImage = decodeImage): Buffer | null {
-  const decoded = decoder(Buffer.from(job.bytes.buffer, job.bytes.byteOffset, job.bytes.byteLength));
-  if (!decoded) return null;
-  const rgba = decoded.width === job.width && decoded.height === job.height ? decoded.data : boxDownscale(decoded.data, decoded.width, decoded.height, job.width, job.height);
-  return encodeImage(rgba, job.width, job.height, job.format);
+/** The whole job, in one call — exported so tests run it in-process. Never
+ *  throws: every failure is a typed reply (see ResizeReply for the split). */
+export function runResizeJob(job: ResizeJob, decoder: typeof decodeImage = decodeImage): ResizeReply {
+  try {
+    const decoded = decoder(Buffer.from(job.bytes.buffer, job.bytes.byteOffset, job.bytes.byteLength));
+    if (!decoded) return { ok: false, reason: 'undecodable' };
+    const rgba = decoded.width === job.width && decoded.height === job.height ? decoded.data : boxDownscale(decoded.data, decoded.width, decoded.height, job.width, job.height);
+    const out = encodeImage(rgba, job.width, job.height, job.format);
+    return { ok: true, bytes: new Uint8Array(out.buffer, out.byteOffset, out.byteLength) };
+  } catch {
+    return { ok: false, reason: 'failed' };
+  }
 }
 
 if (!isMainThread && parentPort) {
   const out = runResizeJob(workerData as ResizeJob);
-  // Peak RSS of THIS thread's process is what the Task 11 smoke reads back.
+  // The smoke run reads this line back. NOTE: process.memoryUsage().rss is the
+  // WHOLE process's RSS (main thread + every worker), not this thread's share.
   if (process.env.YOUCODED_RESIZE_SMOKE) console.error(`resize-worker rss=${Math.round(process.memoryUsage().rss / 1048576)} MB`);
-  parentPort.postMessage(out ? new Uint8Array(out.buffer, out.byteOffset, out.byteLength) : null);
+  parentPort.postMessage(out);
 }

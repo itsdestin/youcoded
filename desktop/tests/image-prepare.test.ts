@@ -7,6 +7,8 @@ import { IMAGE_LIMITS_OPENAI, IMAGE_LIMITS_DEFAULT } from '../src/main/harness/c
 import { patchCount } from '../src/main/harness/image-support';
 import { pngHeader, gifHeader } from './helpers/image-fixtures';
 
+const ok = (bytes: Buffer) => ({ ok: true as const, bytes });
+
 describe('prepareTarget shrinks only when the limits fail, to the largest size under both with a 10% margin', () => {
   it('leaves an in-budget picture alone, even a big one', () => {
     expect(prepareTarget(4096, 4096, IMAGE_LIMITS_OPENAI)).toBeNull();
@@ -44,7 +46,7 @@ describe('ImagePreparer', () => {
   beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'imgprep-')); cache = path.join(dir, 'cache'); });
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }));
   const calls: any[] = [];
-  const resize: ResizeFn = async (req) => { calls.push(req); return req.format === 'png' ? Buffer.concat([pngHeader(req.width, req.height), Buffer.from('small')]) : Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0, 0x11, 8, req.height >> 8, req.height & 255, req.width >> 8, req.width & 255, 3]); };
+  const resize: ResizeFn = async (req) => { calls.push(req); return ok(req.format === 'png' ? Buffer.concat([pngHeader(req.width, req.height), Buffer.from('small')]) : Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0, 0x11, 8, req.height >> 8, req.height & 255, req.width >> 8, req.width & 255, 3])); };
 
   it('an in-budget picture is unchanged and the resizer is never called', async () => {
     const p = path.join(dir, 'ok.png'); fs.writeFileSync(p, pngHeader(4000, 4000));
@@ -101,7 +103,7 @@ describe('ImagePreparer', () => {
 
   it('a JPEG fallback still over the byte cap is refused with the size, not a decoder failure', async () => {
     const p = path.join(dir, 'noisy.png'); fs.writeFileSync(p, pngHeader(8000, 8000));
-    const fatBoth: ResizeFn = async () => Buffer.alloc(11 * 1024 * 1024);
+    const fatBoth: ResizeFn = async () => ok(Buffer.alloc(11 * 1024 * 1024));
     const r = await new ImagePreparer(cache, fatBoth).prepare(p, IMAGE_LIMITS_OPENAI);
     expect(r).toMatchObject({ kind: 'refused', width: 8000, height: 8000 });
     if (r.kind === 'refused') { expect(r.reason).toMatch(/still over 10 MB after shrinking/); expect(r.reason).not.toMatch(/decoder/); }
@@ -121,7 +123,7 @@ describe('ImagePreparer', () => {
     let n = 0;
     let release!: () => void;
     const gate = new Promise<void>((r) => { release = r; });
-    const gated: ResizeFn = async (req) => { n++; await gate; return pngHeader(req.width, req.height); };
+    const gated: ResizeFn = async (req) => { n++; await gate; return ok(pngHeader(req.width, req.height)); };
     const prep = new ImagePreparer(cache, gated);
     const a = prep.prepare(p, IMAGE_LIMITS_OPENAI);
     const b = prep.prepare(p, IMAGE_LIMITS_OPENAI);
@@ -133,7 +135,7 @@ describe('ImagePreparer', () => {
   it('falls back to JPEG only when the PNG is still over the byte cap', async () => {
     // WHY 8000²: over OpenAI's patch budget (62,500) yet under the 80 MP decode bound — 9000² (81 MP) would be refused before any resize.
     const p = path.join(dir, 'big.png'); fs.writeFileSync(p, Buffer.concat([pngHeader(8000, 8000), Buffer.alloc(10)]));
-    const fatPng: ResizeFn = async (req) => req.format === 'png' ? Buffer.alloc(11 * 1024 * 1024) : Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0, 0x11, 8, 8, 0, 8, 0, 3]);
+    const fatPng: ResizeFn = async (req) => ok(req.format === 'png' ? Buffer.alloc(11 * 1024 * 1024) : Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0, 0x11, 8, 8, 0, 8, 0, 3]));
     const r = await new ImagePreparer(cache, fatPng).prepare(p, IMAGE_LIMITS_OPENAI);
     expect(r.kind).toBe('prepared');
     if (r.kind === 'prepared') { expect(r.mediaType).toBe('image/jpeg'); expect(r.path).toMatch(/\.jpg$/); }
@@ -141,16 +143,48 @@ describe('ImagePreparer', () => {
 
   it('refuses honestly when decode is impossible or the picture is beyond the decode bound — never the original bytes', async () => {
     const p = path.join(dir, 'anim.gif'); fs.writeFileSync(p, gifHeader(5000, 5000));   // 25 MP: under the bound, so only the resizer can refuse
-    const cannot: ResizeFn = async () => null;
+    const cannot: ResizeFn = async () => ({ ok: false, reason: 'undecodable' });
     // WHY the default limits: 5000² fits OpenAI's (24,649 patches, 5000 px edge) and would come back unchanged; its 5000 px edge breaks the default 4096.
     const r = await new ImagePreparer(cache, cannot).prepare(p, IMAGE_LIMITS_DEFAULT);
     expect(r).toMatchObject({ kind: 'refused', width: 5000, height: 5000 });
-    if (r.kind === 'refused') expect(r.reason).toMatch(/could not be downscaled/);
+    if (r.kind === 'refused') {
+      expect(r.reason).toMatch(/could not be downscaled/);
+      expect(r.reason).toMatch(/the image decoder could not read it — only PNG and JPEG can be shrunk here/);
+      expect(r.reason).toMatch(/Convert or shrink it with Bash/);
+    }
     const q = path.join(dir, 'vast.png'); fs.writeFileSync(q, pngHeader(20000, 20000));
     const v = await new ImagePreparer(cache, resize).prepare(q, IMAGE_LIMITS_OPENAI);
     expect(v).toMatchObject({ kind: 'refused', width: 20000, height: 20000 });
     if (v.kind === 'refused') expect(v.reason).toContain(`${MAX_DECODE_PIXELS / 1_000_000} megapixels`);
     expect(fs.existsSync(cache) ? fs.readdirSync(cache) : []).toEqual([]);
+  });
+
+  it('a resize that runs out of time says how long it took on this computer and never blames the decoder', async () => {
+    const p = path.join(dir, 'slow.png'); fs.writeFileSync(p, pngHeader(2904, 17528));
+    const slow: ResizeFn = async () => ({ ok: false, reason: 'timeout', afterMs: 15_000 });
+    const r = await new ImagePreparer(cache, slow).prepare(p, IMAGE_LIMITS_OPENAI);
+    expect(r).toMatchObject({ kind: 'refused', width: 2904, height: 17528 });
+    if (r.kind === 'refused') {
+      expect(r.reason).toBe('is 2904×17528 px and could not be downscaled for the model (shrinking it took longer than 15 s on this computer). Crop it or save a smaller copy with Bash and Read that.');
+      expect(r.reason).not.toMatch(/decoder|Convert/);
+    }
+    expect(fs.existsSync(cache) ? fs.readdirSync(cache) : []).toEqual([]);
+  });
+
+  it('a resize that fails says the shrinking step failed and never blames the decoder', async () => {
+    const p = path.join(dir, 'crash.png'); fs.writeFileSync(p, pngHeader(2904, 17528));
+    const crashed: ResizeFn = async () => ({ ok: false, reason: 'failed' });
+    const r = await new ImagePreparer(cache, crashed).prepare(p, IMAGE_LIMITS_OPENAI);
+    if (r.kind !== 'refused') throw new Error(`expected a refusal, got ${r.kind}`);
+    expect(r.reason).toBe('is 2904×17528 px and could not be downscaled for the model (the shrinking step failed). Crop it or save a smaller copy with Bash and Read that.');
+  });
+
+  it('a JPEG fallback that fails is worded by its own reason', async () => {
+    const p = path.join(dir, 'big.png'); fs.writeFileSync(p, pngHeader(8000, 8000));
+    const pngTooFatThenSlow: ResizeFn = async (req) => req.format === 'png' ? ok(Buffer.alloc(11 * 1024 * 1024)) : { ok: false, reason: 'timeout', afterMs: 15_000 };
+    const r = await new ImagePreparer(cache, pngTooFatThenSlow).prepare(p, IMAGE_LIMITS_OPENAI);
+    if (r.kind !== 'refused') throw new Error(`expected a refusal, got ${r.kind}`);
+    expect(r.reason).toMatch(/took longer than 15 s on this computer/);
   });
 
   it('a read error is a refusal, not a throw', async () => {

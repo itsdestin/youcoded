@@ -1178,8 +1178,11 @@ resume paths re-read pictures by path, so nothing short of `/clear` recovered.
   Read prepares before it promises and discloses the downscale; `native:send` prepares composer
   attachments (serialised per session) and the message persists `modelAttachments` beside
   `attachments` (the UI keeps the original path). Decode bound 80 MP; PNG first, JPEG only if still
-  over 10 MB; GIF/WebP cannot be decoded and are declined with a convert hint; a refused or failed
-  attachment gets a note, never silence. Measured at the incident size: ~1.9 s (flat pixels) to
+  over 10 MB. The service answers a typed result, and each refusal says its own cause: the worker
+  checks the first bytes and only GIF/WebP/junk is `undecodable` (declined with a convert hint); a
+  job past its time limit is `timeout` ("took longer than 15 s on this computer"); a worker crash,
+  a corrupt PNG/JPEG or jpeg-js's memory cap is `failed` ("the shrinking step failed"). A refused or
+  failed attachment gets a note, never silence. Measured at the incident size: ~1.9 s (flat pixels) to
   ~3.1 s (noise) per resize, worker memory 0.95–1.56 GB; `RESIZE_JOB_TIMEOUT_MS` is the 15 s floor.
   The built worker runs from inside `app.asar` with no unpacking (smoke-tested 2026-10-07).
   <!-- verify: {"path": "youcoded/desktop/src/main/create-runtime.ts", "contains": "'image-cache'"} -->

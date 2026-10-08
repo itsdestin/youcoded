@@ -3,11 +3,11 @@
 // memory goes back with the thread. image-prepare.ts already serialises jobs.
 import * as path from 'path';
 import { Worker } from 'worker_threads';
-import type { ResizeFn } from './harness/image-prepare';
-import type { ResizeJob } from './image-resize-worker';
+import type { ResizeFn, ResizeResult } from './harness/image-prepare';
+import type { ResizeJob, ResizeReply } from './image-resize-worker';
 
 export interface WorkerLike {
-  on(event: 'message', cb: (bytes: Uint8Array | null) => void): void;
+  on(event: 'message', cb: (reply: ResizeReply) => void): void;
   on(event: 'error' | 'exit', cb: (...a: any[]) => void): void;
   terminate(): Promise<unknown> | void;
 }
@@ -38,19 +38,22 @@ export function createResizeService(opts: { spawn?: (job: ResizeJob) => WorkerLi
     let settled = false;
     const job: ResizeJob = { bytes: new Uint8Array(req.bytes.buffer, req.bytes.byteOffset, req.bytes.byteLength), width: req.width, height: req.height, format: req.format };
     const worker = spawn(job);
-    const finish = (bytes: Buffer | null) => {
+    const finish = (result: ResizeResult) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       void worker.terminate();
-      resolve(bytes);
+      resolve(result);
     };
-    // WHY resolve null, not reject: a dead or slow worker is "could not
-    // downscale", which the preparer already turns into an honest refusal.
-    const timer = setTimeout(() => finish(null), jobTimeoutMs);
-    worker.on('message', (bytes) => finish(bytes ? Buffer.from(bytes) : null));
-    worker.on('error', () => finish(null));
-    worker.on('exit', () => finish(null));
+    // WHY resolve a typed failure, not reject: the preparer turns each reason
+    // into its OWN honest refusal — a slow job is "took longer than N s", a
+    // crashed worker is "the shrinking step failed", and only the worker's own
+    // `undecodable` verdict may blame the picture's format.
+    const timer = setTimeout(() => finish({ ok: false, reason: 'timeout', afterMs: jobTimeoutMs }), jobTimeoutMs);
+    worker.on('message', (reply) => finish(reply?.ok ? { ok: true, bytes: Buffer.from(reply.bytes.buffer, reply.bytes.byteOffset, reply.bytes.byteLength) }
+      : { ok: false, reason: reply?.reason === 'undecodable' ? 'undecodable' : 'failed' }));
+    worker.on('error', () => finish({ ok: false, reason: 'failed' }));
+    worker.on('exit', () => finish({ ok: false, reason: 'failed' }));
   });
   return { resize };
 }

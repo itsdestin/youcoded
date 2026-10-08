@@ -99,7 +99,8 @@ const UNAVAILABLE_TEXT = {
 export function imageNote(n: ImageNote): string {
   if (n.kind === 'oversized') return `[image not attached: ${n.label} is ${n.width}×${n.height} px, above this model's image size limit]`;
   // `detail` (prepare-failed only) carries the preparer's own reason so the model
-  // learns WHY (decoder declined it, over the decode bound) and what to do.
+  // learns WHY (unreadable format, too slow, shrink failed, over the decode
+  // bound) and what to do.
   const detail = n.reason === 'prepare-failed' && n.detail ? `: ${n.detail}` : '';
   return `[image not attached: ${n.label} ${UNAVAILABLE_TEXT[n.reason]}${detail}]`;
 }

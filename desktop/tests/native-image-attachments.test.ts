@@ -338,8 +338,8 @@ describe('HarnessSession.send — attachments become image parts', () => {
   it('a preparation failure is told to the model as such, with the preparer’s reason — never as "above size limit"', async () => {
     const huge = path.join(dir, 'huge.png'); fs.writeFileSync(huge, pngHeader(2904, 17528));
     const user = await capturePrompt(true, [huge], resolveProfile({ providerType: 'chatgpt', modelId: 'gpt-x', contextLength: null }), undefined,
-      [{ path: huge, prepareFailed: 'is 2904×17528 px and could not be downscaled for the model (the image decoder declined it)' }]);
+      [{ path: huge, prepareFailed: 'is 2904×17528 px and could not be downscaled for the model (shrinking it took longer than 15 s on this computer)' }]);
     expect(user.content.some((p: any) => p.type === 'file')).toBe(false);
-    expect(user.content.at(-1)).toEqual({ type: 'text', text: imageNote({ kind: 'unavailable', label: 'huge.png', reason: 'prepare-failed', detail: 'is 2904×17528 px and could not be downscaled for the model (the image decoder declined it)' }) });
+    expect(user.content.at(-1)).toEqual({ type: 'text', text: imageNote({ kind: 'unavailable', label: 'huge.png', reason: 'prepare-failed', detail: 'is 2904×17528 px and could not be downscaled for the model (shrinking it took longer than 15 s on this computer)' }) });
   });
 });

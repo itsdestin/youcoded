@@ -8,7 +8,7 @@ import { createResizeService, type WorkerLike } from '../src/main/image-resize-s
 import { ImagePreparer } from '../src/main/harness/image-prepare';
 import { imageDimensions } from '../src/main/harness/image-support';
 import { IMAGE_LIMITS_DEFAULT } from '../src/main/harness/capability-profile';
-import { writeRealPng } from './helpers/image-fixtures';
+import { writeRealPng, webpVp8Header, pngHeader } from './helpers/image-fixtures';
 
 /** Writing, decoding, box-filtering and re-encoding an 18-MP PNG in pure JS.
  *  WHY 15 s: 3× measured wall time, floored at 15 s. The built worker resized the
@@ -37,7 +37,10 @@ describe('runResizeJob (the worker body) decodes, shrinks and encodes real pictu
     const p = path.join(dir, 'tall.png');
     writeRealPng(p, 3000, 6000);
     const before = fs.readFileSync(p);
-    const prep = new ImagePreparer(path.join(dir, 'cache'), async (req) => runResizeJob({ bytes: req.bytes, width: req.width, height: req.height, format: req.format }));
+    const prep = new ImagePreparer(path.join(dir, 'cache'), async (req) => {
+      const reply = runResizeJob({ bytes: req.bytes, width: req.width, height: req.height, format: req.format });
+      return reply.ok ? { ok: true, bytes: Buffer.from(reply.bytes) } : reply;
+    });
     const r = await prep.prepare(p, IMAGE_LIMITS_DEFAULT);   // 3000×6000 is over 4096 on the long edge
     expect(r.kind).toBe('prepared');
     if (r.kind !== 'prepared') return;
@@ -49,19 +52,30 @@ describe('runResizeJob (the worker body) decodes, shrinks and encodes real pictu
 
   it('JPEG in, JPEG out at the requested size', () => {
     const png = new PNG({ width: 64, height: 32 }); png.data.fill(90);
-    const jpegIn = runResizeJob({ bytes: new Uint8Array(PNG.sync.write(png)), width: 64, height: 32, format: 'jpeg' })!;
-    expect(decodeImage(Buffer.from(jpegIn))).toMatchObject({ width: 64, height: 32 });
-    const out = runResizeJob({ bytes: jpegIn, width: 16, height: 8, format: 'jpeg' })!;
-    expect(imageDimensions(Buffer.from(out))).toEqual({ width: 16, height: 8 });
+    const first = runResizeJob({ bytes: new Uint8Array(PNG.sync.write(png)), width: 64, height: 32, format: 'jpeg' });
+    if (!first.ok) throw new Error(first.reason);
+    expect(decodeImage(Buffer.from(first.bytes))).toMatchObject({ width: 64, height: 32 });
+    const out = runResizeJob({ bytes: first.bytes, width: 16, height: 8, format: 'jpeg' });
+    if (!out.ok) throw new Error(out.reason);
+    expect(imageDimensions(Buffer.from(out.bytes))).toEqual({ width: 16, height: 8 });
   });
 
-  it('GIF/WebP/junk cannot be decoded → null, never a throw', () => {
-    expect(runResizeJob({ bytes: new Uint8Array(Buffer.from('GIF89a\x10\x00\x10\x00', 'latin1')), width: 8, height: 8, format: 'png' })).toBeNull();
-    expect(runResizeJob({ bytes: new Uint8Array([1, 2, 3]), width: 8, height: 8, format: 'png' })).toBeNull();
+  it('GIF/WebP/junk are reported undecodable from their first bytes, never a throw', () => {
+    expect(runResizeJob({ bytes: new Uint8Array(Buffer.from('GIF89a\x10\x00\x10\x00', 'latin1')), width: 8, height: 8, format: 'png' })).toEqual({ ok: false, reason: 'undecodable' });
+    expect(runResizeJob({ bytes: new Uint8Array(webpVp8Header(64, 64)), width: 8, height: 8, format: 'png' })).toEqual({ ok: false, reason: 'undecodable' });
+    expect(runResizeJob({ bytes: new Uint8Array([1, 2, 3]), width: 8, height: 8, format: 'png' })).toEqual({ ok: false, reason: 'undecodable' });
+  });
+
+  it('a PNG or JPEG whose decode throws (corrupt data, the JPEG memory cap) is a failed shrink, not an undecodable format', () => {
+    const truncatedPng = Buffer.concat([pngHeader(64, 64), Buffer.from('not an IDAT')]);
+    expect(runResizeJob({ bytes: new Uint8Array(truncatedPng), width: 8, height: 8, format: 'png' })).toEqual({ ok: false, reason: 'failed' });
+    const memoryCap = () => { throw new Error('maxMemoryUsageInMB limit exceeded by at least 1MB'); };
+    const jpegMagic = new Uint8Array([0xff, 0xd8, 0xff, 0xc0]);
+    expect(runResizeJob({ bytes: jpegMagic, width: 8, height: 8, format: 'jpeg' }, memoryCap)).toEqual({ ok: false, reason: 'failed' });
   });
 });
 
-describe('createResizeService runs one worker per job, terminates it after, and turns a timeout into null', () => {
+describe('createResizeService runs one worker per job, terminates it after, and names why a job failed', () => {
   function fakeWorker() {
     const handlers: Record<string, Function[]> = { message: [], error: [], exit: [] };
     const w = {
@@ -77,28 +91,39 @@ describe('createResizeService runs one worker per job, terminates it after, and 
     const svc = createResizeService({ spawn: () => { const w = fakeWorker(); workers.push(w); return w; } });
     const p = svc.resize({ bytes: Buffer.from('in'), width: 1, height: 2, format: 'png' });
     expect(workers).toHaveLength(1);
-    workers[0].emit('message', new Uint8Array([1, 2]));
-    expect(await p).toEqual(Buffer.from([1, 2]));
+    workers[0].emit('message', { ok: true, bytes: new Uint8Array([1, 2]) });
+    expect(await p).toEqual({ ok: true, bytes: Buffer.from([1, 2]) });
     expect(workers[0].terminated).toBe(1);
     const q = svc.resize({ bytes: Buffer.from('in'), width: 1, height: 2, format: 'png' });
     expect(workers).toHaveLength(2);
-    workers[1].emit('message', null);
-    expect(await q).toBeNull();
+    workers[1].emit('message', { ok: false, reason: 'undecodable' });
+    expect(await q).toEqual({ ok: false, reason: 'undecodable' });
   });
-  it('a worker that errors or exits mid-job resolves null', async () => {
+  it('a worker that reports a failed shrink resolves failed', async () => {
+    const w = fakeWorker();
+    const svc = createResizeService({ spawn: () => w });
+    const p = svc.resize({ bytes: Buffer.from('in'), width: 1, height: 1, format: 'png' });
+    w.emit('message', { ok: false, reason: 'failed' });
+    expect(await p).toEqual({ ok: false, reason: 'failed' });
+  });
+  it('a worker that errors or exits mid-job resolves failed, never undecodable', async () => {
     const w = fakeWorker();
     const svc = createResizeService({ spawn: () => w });
     const p = svc.resize({ bytes: Buffer.from('in'), width: 1, height: 1, format: 'png' });
     w.emit('error', new Error('boom'));
-    expect(await p).toBeNull();
+    expect(await p).toEqual({ ok: false, reason: 'failed' });
+    const x = fakeWorker();
+    const q = createResizeService({ spawn: () => x }).resize({ bytes: Buffer.from('in'), width: 1, height: 1, format: 'png' });
+    x.emit('exit', 1);
+    expect(await q).toEqual({ ok: false, reason: 'failed' });
   });
-  it('a job over its time limit resolves null and the worker is terminated', async () => {
+  it('a job over its time limit resolves timeout with the limit and the worker is terminated', async () => {
     vi.useFakeTimers();
     const w = fakeWorker();
     const svc = createResizeService({ spawn: () => w, jobTimeoutMs: 500 });
     const p = svc.resize({ bytes: Buffer.from('in'), width: 1, height: 1, format: 'png' });
     vi.advanceTimersByTime(501);
-    expect(await p).toBeNull();
+    expect(await p).toEqual({ ok: false, reason: 'timeout', afterMs: 500 });
     expect(w.terminated).toBe(1);
     vi.useRealTimers();
   });

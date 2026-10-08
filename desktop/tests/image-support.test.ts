@@ -94,7 +94,7 @@ describe('image-support', () => {
         { kind: 'unavailable', label: 'x.png', reason: 'too-many-bytes' },
         { kind: 'unavailable', label: 'x.svg', reason: 'undeliverable' },
         { kind: 'unavailable', label: 'x.gif', reason: 'prepare-failed' },
-        { kind: 'unavailable', label: 'x.gif', reason: 'prepare-failed', detail: 'is 5000×5000 px and could not be downscaled for the model (the image decoder declined it)' },
+        { kind: 'unavailable', label: 'x.gif', reason: 'prepare-failed', detail: 'is 5000×5000 px and could not be downscaled for the model (the image decoder could not read it — only PNG and JPEG can be shrunk here)' },
       ];
       for (const n of notes) expect(parseImageNote(imageNote(n))).toEqual(n);
       expect(imageNote(notes[0])).toBe("[image not attached: contact.png is 2904×17528 px, above this model's image size limit]");
