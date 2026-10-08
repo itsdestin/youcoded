@@ -118,11 +118,11 @@ describe('the Money page', () => {
 
   it('a bank connected twice is counted once: the dead connection\'s copies give way to the working one', async () => {
     const prior = { demoToday: TODAY, banks: { old: { name: 'Capital One', ok: true } }, accounts: [
-      { id: 'plaid:o1', itemId: 'old', source: 'plaid', kind: 'credit', institution: 'Capital One', name: 'Quicksilver ··3863', balance: 100, updatedAt: `${TODAY}T10:00:00Z` },
+      { id: 'plaid:o1', itemId: 'old', source: 'plaid', kind: 'credit', institution: 'Capital One', name: 'Quicksilver ··0000', balance: 100, updatedAt: `${TODAY}T10:00:00Z` },
     ] };
     const answer = { ok: true, op: 'accounts', items: [
       { itemId: 'old', ok: false, institution: { id: '', name: 'Capital One' }, accounts: [], error: { code: 'NO_ACCOUNTS', message: 'x', reconnect: false } },
-      { itemId: 'new', ok: true, institution: { id: '', name: 'Capital One' }, accounts: [{ id: 'n1', name: 'Quicksilver', mask: '3863', type: 'credit', kind: 'credit', balance: 120 }] },
+      { itemId: 'new', ok: true, institution: { id: '', name: 'Capital One' }, accounts: [{ id: 'n1', name: 'Quicksilver', mask: '0000', type: 'credit', kind: 'credit', balance: 120 }] },
     ] };
     const p = open(prior, async () => answer);
     await p.settle();
