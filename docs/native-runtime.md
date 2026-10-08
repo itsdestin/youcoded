@@ -1234,7 +1234,9 @@ resume paths re-read pictures by path, so nothing short of `/clear` recovered.
   The model is told (Read's text, the composer's "downscaled" note); the person is not.
 - **The count-disagreement fallback collapses by OUR count**: if the provider's count differs, the
   picture it actually objected to may not be the largest one we measure, so a still-rejected retry
-  surfaces the provider's words (one retry only, as above).
+  surfaces the provider's words (one retry only, as above). When the provider's reported count is
+  far above our total, the fallback may collapse every measurable picture in the conversation
+  before its single retry.
 - **One resize at the incident's size adds roughly 0.6–1.2 GB to the app's process** (the smoke
   test's whole-process RSS of up to 1.56 GB included its own 203 MB source bitmap) — transient,
   released when the worker terminates. Streaming decode is the candidate fix.
