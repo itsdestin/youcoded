@@ -1222,6 +1222,19 @@ resume paths re-read pictures by path, so nothing short of `/clear` recovered.
   off a screenshot, in three envelopes.
 - **A non-vision session reopened after pictures** carries size/missing notes where the live
   session had none.
+- **A phone can mark a picture message "unsure".** The phone's request times out at 30 s
+  (`remote-shim.ts` `REQUEST_TIMEOUT_MS`), and a worst-case preparation is two resize passes (PNG,
+  then JPEG) of up to 15 s each, serialised behind earlier sends. Nothing is resent automatically;
+  the message's echo clears the mark when it lands. Pressing "Send again" meanwhile sends a NEW
+  copy, so the message would arrive twice.
+- **No "preparing" indicator on the desktop.** After sending a huge picture the chat can sit silent
+  for up to ~30 s while it is shrunk; the reply then starts normally.
+- **The non-OpenAI default (`4096 px / 16,384` patches) is a conservative placeholder**, so 5K
+  screenshots and 48 MP photos are downscaled for providers that might accept them as they are.
+  The model is told (Read's text, the composer's "downscaled" note); the person is not.
+- **The count-disagreement fallback collapses by OUR count**: if the provider's count differs, the
+  picture it actually objected to may not be the largest one we measure, so a still-rejected retry
+  surfaces the provider's words (one retry only, as above).
 - **One resize at the incident's size adds roughly 0.6–1.2 GB to the app's process** (the smoke
   test's whole-process RSS of up to 1.56 GB included its own 203 MB source bitmap) — transient,
   released when the worker terminates. Streaming decode is the candidate fix.
