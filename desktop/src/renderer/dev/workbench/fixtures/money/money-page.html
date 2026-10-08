@@ -674,6 +674,13 @@
     return Object.keys(groups).map(function(k){ var g = groups[k]; return { key: k, name: g[g.length - 1].n, count: g.length, total: sum(g, function(t){ return t.m; }) }; });
   }
   // Exact-name bills link themselves; a linked payment near a bill's due date marks it paid and moves it on.
+  function priceRose(was, now){ return now - was >= Math.max(0.25, was * 0.02); }
+  // The latest rise among a list of charges (oldest first), or null.
+  function chargeRise(ch){
+    for (var i = ch.length - 1; i > 0; i--) if (priceRose(ch[i - 1].m, ch[i].m)) return { from: ch[i - 1].m, to: ch[i].m, on: ch[i].d };
+    return null;
+  }
+  function riseText(r){ return money(r.from) + ' → ' + money(r.to) + ' on ' + short(day(r.on)); }
   function autoLink(){
     data.bills.forEach(function(b){
       if ((b.match || []).length) return;
@@ -686,7 +693,10 @@
       if (!paid.length) return;
       var t = paid[paid.length - 1];
       b.lastPaid = t.d; b.paidLog = (b.paidLog || []).concat([t.d]).slice(-36);
-      b.amount = Math.round(t.m * 100) / 100;
+      var was = b.amount, now = Math.round(t.m * 100) / 100;
+      // WHY a threshold: tax and currency rounding move a charge by cents; a real price rise is bigger.
+      if (was > 0 && priceRose(was, now)) b.priceUp = { from: was, to: now, on: t.d };
+      b.amount = now;
       b.due = addMonth(b.due); delete b.paid;
     });
   }
@@ -866,6 +876,12 @@
       var s = billState(b);
       if (s.alert) add(b.id, b, b.name, s.alert, s.alert === 'bad' ? 0 : 1, s.head, '<b>' + money(b.amount) + '</b> payment ' + s.why);
     });
+    data.bills.forEach(function(b){
+      if (b.cancelled || !b.priceUp || b.priceUp.seen) return;
+      var r = b.priceUp, yr = (r.to - r.from) * (b.every === 'year' ? 1 : b.every === 'week' ? 52 : b.every === '2weeks' ? 26 : 12);
+      add('price:' + b.id, { id: 'bill:' + b.id, institution: b.provider }, b.name, 'warn', 5, 'Price went up', riseText(r) + ' · <b>' + money(yr, true) + '</b> more a year',
+        { label: 'Got it', kind: 'ack', id: b.id });
+    });
     data.accounts.forEach(function(a){
       if (a.kind === 'credit' && a.limit) { var p = a.balance / a.limit * 100; if (p >= S.alertPct) add(a.id, a, fullName(a), 'bad', 2, 'Can lower your credit score', '<b>' + Math.round(p) + '%</b> of its ' + money(a.limit, true) + ' limit used'); }
       if (isStale(a)) {
@@ -919,6 +935,7 @@
       al.forEach(function(a){
         var btn = !a.action ? ''
           : a.action.kind === 'edit' ? '<button class="btn sm" data-edit="' + esc(a.action.id) + '">' + I.pen + a.action.label + '</button>'
+          : a.action.kind === 'ack' ? '<button class="btn sm" data-ack-price="' + esc(a.action.id) + '">' + a.action.label + '</button>'
           : a.action.kind === 'reconnect' ? '<button class="btn sm" data-reconnect="' + esc(a.action.id) + '"' + (connecting ? ' disabled' : '') + '>' + a.action.label + '</button>'
           : '<button class="btn sm" data-check' + (checking ? ' disabled' : '') + '>' + a.action.label + '</button>';
         var target = a.x && a.x.id && String(a.x.id).indexOf('bank:') !== 0 ? a.x.id : '';
@@ -1333,6 +1350,8 @@
     var h = '<div class="tile srow' + (x.cancelled ? ' gone' : '') + '">' + mark(x.provider) + '<div class="sbody">';
     h += '<div class="stop"><b>' + esc(x.name) + '</b>' + (x.found ? '<span class="tag">Suggested</span>' : '') + '<span class="amt num">' + money(x.amount) + '<span class="muted small">' + (x.every === 'year' ? '/yr' : x.every === 'week' ? '/wk' : x.every === '2weeks' ? '/2 wk' : '/mo') + '</span></span></div>';
     h += '<div class="sstate ' + state.cls + '">' + esc(state.text) + '</div>';
+    var rise = (x.bill && x.bill.priceUp) || chargeRise(ch);
+    if (rise && !x.cancelled) h += '<div class="sstate warn">Price went up: ' + esc(riseText(rise)) + '</div>';
     if (ch.length) h += '<div class="scharges">' + ch.slice(-6).reverse().map(function(c){ return '<span class="chip">' + short(day(c.d)) + ' · ' + money(c.m) + '</span>'; }).join('') + '</div>';
     var u = manageLink(x.name + ' ' + (x.provider || ''));
     h += '<div class="acts">';
@@ -1462,6 +1481,7 @@
   function on(sel, fn){ document.querySelectorAll(sel).forEach(function(el){ el.onclick = function(e){ fn(el, e); }; }); }
   function toggle(id){ openId = openId === id ? null : id; billEdit = null; limitEdit = null; payEdit = null; render(); }
   function focusAccount(id){
+    if (String(id).indexOf('bill:') === 0) billView = 'all';
     openId = id; render();
     var el = document.querySelector('[data-open="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]');
     if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.focus({ preventScroll: true }); }
@@ -1537,6 +1557,7 @@
     on('[data-found-all]', function(){ showAllFound = !showAllFound; render(); });
     on('[data-reconnect]', function(b){ reconnectBank(b.dataset.reconnect); });
     on('[data-check]', function(){ syncBanks(); });
+    on('[data-ack-price]', function(el){ var b = billById(el.dataset.ackPrice); if (b && b.priceUp) { b.priceUp.seen = true; save(); render(); } });
     on('[data-ask-remove]', function(b){ removing = b.dataset.askRemove; render(); });
     on('[data-cancel-remove]', function(){ removing = null; render(); });
     on('[data-remove-bank]', function(b){ removeBank(b.dataset.removeBank); });

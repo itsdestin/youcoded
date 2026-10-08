@@ -317,6 +317,28 @@ describe('the Money page', () => {
     expect(p.last().bills[0]).toMatchObject({ match: ['netflix'], lastPaid: '2026-10-03', due: '2026-11-03', amount: 17.99 });
   });
 
+  it('a price rise on a tracked subscription shows on its card and in Needs you until acknowledged', async () => {
+    const p = open({ demoToday: TODAY, bills: [{ id: 'b1', provider: 'Netflix', name: 'Netflix', amount: 15.49, due: '2026-10-03', monthly: true, category: 'Subscriptions' }] },
+      withPurchases([tx('n2', '2026-09-03', 15.49, 'NETFLIX.COM'), tx('n3', '2026-10-03', 17.99, 'NETFLIX.COM 866-579')]));
+    await p.settle(); await p.settle();
+    const card = p.d.querySelector('#needs .need')!;
+    expect(card.querySelector('.head')!.textContent).toBe('Price went up');
+    expect(card.querySelector('.who')!.textContent).toBe('Netflix · $15.49 → $17.99 on Oct 3 · $30 more a year');
+    p.click('[data-bill-view="subs"]');
+    expect(p.d.querySelector('.srow')!.textContent).toContain('Price went up: $15.49 → $17.99 on Oct 3');
+    p.click('[data-ack-price="b1"]');
+    expect(p.last().bills[0].priceUp).toMatchObject({ from: 15.49, to: 17.99, seen: true });
+    expect(p.d.querySelector('#needs')).toBeNull();
+  });
+
+  it('a few cents of tax is not a price rise', async () => {
+    const p = open({ demoToday: TODAY, bills: [{ id: 'b1', provider: 'Spotify', name: 'Spotify', amount: 20.72, due: '2026-10-03', monthly: true, category: 'Subscriptions' }] },
+      withPurchases([tx('s1', '2026-10-03', 20.81, 'Spotify', 'ENTERTAINMENT', 'ENTERTAINMENT_MUSIC_AND_AUDIO')]));
+    await p.settle(); await p.settle();
+    expect(p.last().bills[0].amount).toBe(20.81);
+    expect(p.last().bills[0].priceUp).toBeUndefined();
+  });
+
   it('spending leaves out transfers, and the chart can switch to it', async () => {
     const p = open({ demoToday: TODAY }, withPurchases([
       tx('g1', '2026-10-02', 40, 'Safeway', 'FOOD_AND_DRINK', 'FOOD_AND_DRINK_GROCERIES'),
