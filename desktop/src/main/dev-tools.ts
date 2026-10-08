@@ -830,8 +830,45 @@ export type WorkspaceSetupStatus = {
 let setupStatusState: WorkspaceSetupStatus = { state: 'idle' };
 let setupInFlight: Promise<{ ok: true; path: string } | { ok: false; error: string }> | null = null;
 
-export function workspaceSetupStatus(): WorkspaceSetupStatus {
-  return setupStatusState;
+export async function workspaceSetupStatus(): Promise<WorkspaceSetupStatus> {
+  // WHY it looks on disk when nothing is in memory (submit-ticket-3#ST3-Q1): the "ready"
+  // answer used to live only in this variable, so every app restart forgot it and the next
+  // "Let your assistant try to fix it" / Contribute downloaded YouCoded's code AGAIN — into
+  // a new folder each time (-2, -3 …), about 1 GB apiece. A finished copy on disk is ready.
+  if (setupStatusState.state !== 'idle') return setupStatusState;
+  const found = await findManagedWorkspace();
+  return found ? { state: 'ready', path: found } : setupStatusState;
+}
+
+const WORKSPACE_BASE = 'youcoded-workspace';
+const workspaceRoot = () => path.join(os.homedir(), 'YouCoded', 'Development');
+const workspaceCandidate = (root: string, n: number) => path.join(root, n === 0 ? WORKSPACE_BASE : `${WORKSPACE_BASE}-${n + 1}`);
+
+/**
+ * A copy this setup FINISHED: the workspace's own git folder and setup script, and the
+ * app's repository that setup.sh clones. A half-made copy (a crash mid-clone) has no
+ * app repository, and a folder the user made by hand has no git folder, so neither is
+ * ever picked up as ours — R9: a folder that is already there is never written into.
+ */
+async function isFinishedWorkspace(dir: string): Promise<boolean> {
+  try {
+    await Promise.all(['.git', 'setup.sh', path.join('youcoded', 'desktop', 'package.json')]
+      .map(p => fs.promises.access(path.join(dir, p))));
+    return true;
+  } catch { return false; }
+}
+
+/**
+ * The first finished copy under ~/YouCoded/Development, in the order setup names them
+ * (youcoded-workspace, -2, -3 …), or null. Reads only; never moves, deletes or edits a
+ * copy. Async, so a click never waits on the disk (performance rule 1).
+ */
+async function findManagedWorkspace(root: string = workspaceRoot()): Promise<string | null> {
+  for (let n = 0; n < 100; n++) {
+    const candidate = workspaceCandidate(root, n);
+    if (await isFinishedWorkspace(candidate)) return candidate;
+  }
+  return null;
 }
 
 /**
@@ -848,10 +885,9 @@ export function clearWorkspaceSetupStatus(): void {
 
 /** A folder under ~/YouCoded/Development that does not exist yet. Never reuses one. */
 function freeWorkspacePath(): string {
-  const root = path.join(os.homedir(), 'YouCoded', 'Development');
-  const base = 'youcoded-workspace';
+  const root = workspaceRoot();
   for (let n = 0; n < 100; n++) {
-    const candidate = path.join(root, n === 0 ? base : `${base}-${n + 1}`);
+    const candidate = workspaceCandidate(root, n);
     if (!fs.existsSync(candidate)) return candidate;
   }
   throw new Error('Too many development workspaces already exist in YouCoded/Development.');
@@ -879,6 +915,14 @@ export function setupManagedWorkspace(
       return tail ? `${base} — ${tail}` : base;
     };
     try {
+      // WHY reuse first (submit-ticket-3#ST3-Q1, the repeat download): a finished copy
+      // from an earlier run — even before a restart — is used as it is. Not registered
+      // again: the user may have taken it off their project list on purpose.
+      const existing = await findManagedWorkspace();
+      if (existing) {
+        setupStatusState = { state: 'ready', path: existing };
+        return { ok: true as const, path: existing };
+      }
       target = freeWorkspacePath();
       fs.mkdirSync(path.dirname(target), { recursive: true });
       await runStreamed('git', ['clone', '--depth', '50', WORKSPACE_REPO, target], keep);

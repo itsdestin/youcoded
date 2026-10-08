@@ -205,20 +205,6 @@ describe('a failure says what failed, inside one notice with its own buttons', (
     expect(await screen.findByText(/isn.t connected to a network/)).toBeTruthy();
   });
 
-  it('never says the ticket failed to send when the hand-over failed, and retries the hand-over', async () => {
-    const dev = window.claude.dev as unknown as Record<string, ReturnType<typeof vi.fn>>;
-    dev.setupWorkspace.mockResolvedValue({ ok: false, error: 'Could not reach github.com.' });
-    render(<BugReportPopup open onClose={() => {}} />);
-    fillDraft();
-    fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Optional AI help' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Let your assistant try to fix it' }));
-    await screen.findByText(/Could not reach github\.com\./);
-    expect(screen.queryByText(/ticket wasn.t sent/)).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
-    await vi.waitFor(() => expect(dev.setupWorkspace).toHaveBeenCalledTimes(2));
-    expect(dev.submitIssue).not.toHaveBeenCalled();
-  });
 });
 
 describe('the contribute walkthrough keeps its approved steps', () => {

@@ -1761,9 +1761,13 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   const SETUP_MS = 2500;
   // Main-process state in the real thing: setup is not owned by the dialog, so
   // closing it cannot cancel setup and reopening can ask where it got to.
-  let setupState: 'idle' | 'running' | 'ready' | 'failed' = 'idle';
+  // `?devCopy=ready`: YouCoded's code is already on this computer from an earlier run — the
+  // real app now finds it on disk (dev-tools.ts findManagedWorkspace), so Contribute opens on
+  // "ready" with no download.
+  const copyReady = typeof location !== 'undefined' && new URLSearchParams(location.search).get('devCopy') === 'ready';
+  let setupState: 'idle' | 'running' | 'ready' | 'failed' = copyReady ? 'ready' : 'idle';
   const ticketHold = () => typeof location !== 'undefined' && new URLSearchParams(location.search).get('ticket') === 'hold';
-  let setupPath = '';
+  let setupPath = copyReady ? '/home/destin/YouCoded/Development/youcoded-workspace' : '';
   let setupError = '';
   const devMock = {
     // Real channels (dev:log-tail, dev:diagnostics, dev:summarize-issue,

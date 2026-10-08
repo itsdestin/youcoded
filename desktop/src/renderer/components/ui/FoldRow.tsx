@@ -46,12 +46,18 @@ export function FoldRow({ title, description, open, onToggle, defaultOpen = fals
   // submit-ticket-2#ST2-Q1 "all"): the row used to be the box and its content a sibling
   // under it, so opened text read as loose text or a second card. Now the box wraps both;
   // the header row drops its own box (SettingRow `header`) and the wrapper carries the same
-  // look (CARD_LEVEL_1 == the setting row's box), so a closed fold looks as before:
-  // py-1 here + the header's py-1 = the boxed row's py-2.
+  // look (CARD_LEVEL_1 == the setting row's box), so a closed fold looks as before.
   return (
-    <div className={`${CARD_LEVEL_1} px-3 py-1 ${className}`.trim()}>
-      <SettingRow variant="item" header title={title} description={description} onClick={toggle} expanded={isOpen} />
-      {isOpen && <div className="pt-1 pb-2">{children}</div>}
+    <div className={`${CARD_LEVEL_1} ${className}`.trim()}>
+      {/* WHY the header row reaches the box's edges and takes its corners (Destin,
+          submit-ticket-3#ST3-5: "the highlight/hover effect is weird there on the header.
+          not rounded"): with the padding on the box, the row's hover tint was a square
+          strip inset from a rounded box. The row now carries the padding itself (py-2
+          wins over the header's py-1), so its tint fills the box — all four corners while
+          closed, the top two while open. */}
+      <SettingRow variant="item" header title={title} description={description} onClick={toggle} expanded={isOpen}
+        className={`px-3 py-2 ${isOpen ? 'rounded-t-lg' : 'rounded-lg'}`} />
+      {isOpen && <div className="px-3 pt-1 pb-2">{children}</div>}
     </div>
   );
 }

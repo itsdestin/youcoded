@@ -155,8 +155,8 @@ describe('ContributePopup', () => {
 
   it('sets the workspace up and never uses the fixed-folder installer', async () => {
     render(<ContributePopup open={true} onClose={() => undefined} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Set up development workspace' }));
-    await screen.findByText(/Your development workspace is ready/i);
+    fireEvent.click(await screen.findByRole('button', { name: 'Download YouCoded’s code' }));
+    await screen.findByText(/YouCoded’s code is ready on this computer/i);
     expect((window as any).claude.dev.setupWorkspace).toHaveBeenCalled();
     expect((window as any).claude.dev.installWorkspace).not.toHaveBeenCalled();
   });
@@ -164,7 +164,7 @@ describe('ContributePopup', () => {
   it('opens the finished project in a session', async () => {
     const onClose = vi.fn();
     render(<ContributePopup open={true} onClose={onClose} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Set up development workspace' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Download YouCoded’s code' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Open it' }));
     await vi.waitFor(() => expect((window as any).claude.dev.openSessionIn).toHaveBeenCalledWith(
       expect.objectContaining({ cwd: '/h/YouCoded/Development/youcoded-workspace' }),

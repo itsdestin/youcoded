@@ -156,10 +156,10 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     // dead. Destin rejected the disabled/greyed treatment: the workbench must look like the app.
     // It now also asserts the NEW path IS taken: "installWorkspace was not called" alone stays
     // true if the button does nothing at all, which is how a dead button passes a safety test.
-    fireEvent.click(screen.getByRole('button', { name: 'Set up development workspace' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Download YouCoded’s code' }));
     expect(setupWorkspace).toHaveBeenCalledTimes(1);
     expect(installWorkspace).not.toHaveBeenCalled();
-    await screen.findByText(/Your development workspace is ready/);
+    await screen.findByText(/YouCoded’s code is ready on this computer/);
   });
 
   it('finds setup still running when you close and come back', async () => {
@@ -170,8 +170,8 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     const setupStatus = vi.fn().mockResolvedValue({ state: 'running' });
     Object.assign(window, { claude: { dev: { setupStatus, setupWorkspace: vi.fn() } } });
     render(<ContributePopup open onClose={() => {}} />);
-    await screen.findByText(/Setting up your development workspace/);
-    expect(screen.queryByRole('button', { name: 'Set up development workspace' })).toBeNull();
+    await screen.findByText(/Downloading YouCoded’s code/);
+    expect(screen.queryByRole('button', { name: 'Download YouCoded’s code' })).toBeNull();
   });
 
   it('notices setup finishing while the screen is open', async () => {
@@ -184,15 +184,15 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
       .mockResolvedValue({ state: 'ready', path: '/home/you/YouCoded/Development/w' });
     Object.assign(window, { claude: { dev: { setupStatus, setupWorkspace: vi.fn(), clearSetupStatus: vi.fn() } } });
     render(<ContributePopup open onClose={() => {}} />);
-    await screen.findByText(/Setting up your development workspace/);
-    await screen.findByText(/Your development workspace is ready/, {}, { timeout: 4000 });
+    await screen.findByText(/Downloading YouCoded’s code/);
+    await screen.findByText(/YouCoded’s code is ready on this computer/, {}, { timeout: 4000 });
   });
 
   it('shows a setup that finished while you were away', async () => {
     const setupStatus = vi.fn().mockResolvedValue({ state: 'ready', path: '/home/you/YouCoded/Projects/w' });
     Object.assign(window, { claude: { dev: { setupStatus, setupWorkspace: vi.fn() } } });
     render(<ContributePopup open onClose={() => {}} />);
-    await screen.findByText(/Your development workspace is ready/);
+    await screen.findByText(/YouCoded’s code is ready on this computer/);
   });
 
   it('offers a way forward when setup fails, and never just Done', async () => {
@@ -202,7 +202,7 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     const setupWorkspace = vi.fn().mockResolvedValue({ ok: false, error: 'Could not reach github.com.' });
     Object.assign(window, { claude: { dev: { setupWorkspace, setupStatus: idle } } });
     render(<ContributePopup open onClose={() => {}} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Set up development workspace' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Download YouCoded’s code' }));
     await screen.findByText(/Could not reach github\.com\./);
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
   });
@@ -329,44 +329,47 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     expect(screen.getByText('The menu closes')).toBeTruthy();
   });
 
-  it('hands the ticket to a working copy without sending it anywhere', async () => {
-    // The action carried over from the deleted screen. The grader found NO test
-    // touched it at all. Two promises worth pinning: it reuses a workspace that is
-    // already set up rather than cloning a second ~1GB copy, and it does not submit.
+  it('hands the ticket to Contribute, which starts the conversation with it, without sending it anywhere', async () => {
+    // submit-ticket-3#ST3-Q1 "contribute": the ticket no longer downloads anything itself.
+    // A finished copy is reused (no second download), the new conversation starts with the
+    // ticket's words, nothing is filed, and the ticket comes back saying so.
     const submitIssue = vi.fn();
     const setupWorkspace = vi.fn();
     const setupStatus = vi.fn().mockResolvedValue({ state: 'ready', path: '/home/you/YouCoded/Development/w' });
     const openSessionIn = vi.fn().mockResolvedValue({ id: 's1' });
-    Object.assign(window, { claude: { dev: { submitIssue, setupWorkspace, setupStatus, openSessionIn } } });
+    Object.assign(window, { claude: { dev: { submitIssue, setupWorkspace, setupStatus, openSessionIn, clearSetupStatus: vi.fn().mockResolvedValue(undefined) } } });
     render(<BugReportPopup open onClose={() => {}} />);
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Optional AI help' }));
     fireEvent.click(screen.getByRole('button', { name: 'Let your assistant try to fix it' }));
+    // Contribute, in plain words, already knowing the copy is there.
+    fireEvent.click(await screen.findByRole('button', { name: 'Start' }));
     await screen.findByText(/working on a fix in a new conversation/);
     expect(openSessionIn).toHaveBeenCalledWith(expect.objectContaining({
       cwd: '/home/you/YouCoded/Development/w',
-      // The DESCRIPTION is what it hands over — the words describing the problem,
-      // not the title.
       initialInput: expect.stringContaining('Opening the menu closes the window.') as unknown as string,
     }));
-    expect(setupWorkspace).not.toHaveBeenCalled();   // already set up — no second clone
-    expect(submitIssue).not.toHaveBeenCalled();      // nothing was filed
+    expect(setupWorkspace).not.toHaveBeenCalled();
+    expect(submitIssue).not.toHaveBeenCalled();
   });
 
-  it('says so when a working copy cannot be set up, and keeps the draft', async () => {
+  it('says the download size and keeps the way back to the ticket', async () => {
     const setupStatus = vi.fn().mockResolvedValue({ state: 'idle' });
-    const setupWorkspace = vi.fn().mockResolvedValue({ ok: false, error: 'Could not reach github.com.' });
-    Object.assign(window, { claude: { dev: { submitIssue: vi.fn(), setupWorkspace, setupStatus, openSessionIn: vi.fn() } } });
+    Object.assign(window, { claude: { dev: { submitIssue: vi.fn(), setupWorkspace: vi.fn(), setupStatus, openSessionIn: vi.fn() } } });
     render(<BugReportPopup open onClose={() => {}} />);
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
     fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
     fireEvent.click(screen.getByRole('button', { name: 'Optional AI help' }));
     fireEvent.click(screen.getByRole('button', { name: 'Let your assistant try to fix it' }));
-    await screen.findByText(/Could not reach github\.com\./);
+    expect(screen.getByText(/about 1 GB/)).toBeTruthy();
+    expect(screen.getByText(/will work on “The menu closes”/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Back to ticket' }));
+    expect(screen.queryByText(/about 1 GB/)).toBeNull();
     expect(screen.getByText('The menu closes')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Submit public ticket' })).toBeTruthy();
   });
 
   it('rewrites the wording only when something actually rewrote it', async () => {

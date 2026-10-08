@@ -6,12 +6,13 @@ import type { PillTone } from '../ui/Pill';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
 import { useNetworkOnline } from '../../hooks/useNetworkOnline';
+import { ContributionDesign } from './ContributionDesign';
 
 // WHY a phase rather than a boolean: the flow stopped at draft -> review, so
 // sending, sent and opened-in-GitHub had no surface at all. A failure is NOT a
 // phase — it renders on the review step with the draft intact, which is what
 // "your details stay in the draft and you can retry" actually requires.
-type Phase = 'draft' | 'review' | 'sending' | 'sent' | 'opened' | 'handing-over' | 'handed-over';
+type Phase = 'draft' | 'review' | 'sending' | 'sent' | 'opened' | 'handed-over';
 
 // Carried over from the screen this replaces. The old flow's second action was
 // "Let Claude Try to Fix It": set the workspace up, open a session, hand it the
@@ -45,7 +46,11 @@ const HANDOVER_PROMPT = (kind: string, description: string, errorDetails: string
 export type ReportContext = { error?: string; surface?: string; diagnose?: boolean };
 
 export function ReportDesign({ open, onClose, context }: { open: boolean; onClose: () => void; context?: ReportContext }) {
-  useEscClose(open, onClose);
+  // WHY a flag for the Contribute screen (submit-ticket-3#ST3-Q1 "contribute"): the ticket
+  // hands "Let your assistant try to fix it" to Contribute, which explains and runs the
+  // download. It opens on top of this popup, and Escape belongs to it while it shows.
+  const [contributing, setContributing] = useState(false);
+  useEscClose(open && !contributing, onClose);
   // WHY: closing or going back must not discard a draft. Persistence beyond this mounted
   // component and real originating context remain unbuilt.
   const [kind, setKind] = useState('bug');
@@ -62,10 +67,7 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
   const [attachments, setAttachments] = useState(false);
   const [aiInfo, setAiInfo] = useState(!!context?.diagnose);
   const [error, setError] = useState('');
-  // WHY which action failed is kept (submit-ticket-1): a failed hand-over used to be
-  // headed "Your ticket wasn't sent" — about a ticket nobody had tried to send — and its
-  // Retry SENT the ticket. Each failure now says what failed and retries that.
-  const [errorFrom, setErrorFrom] = useState<'send' | 'handover'>('send');
+
   const [url, setUrl] = useState('');
   const [truncated, setTruncated] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
@@ -132,30 +134,14 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
     }
   };
 
-  const handOver = async () => {
-    setError('');
-    setPhase('handing-over');
-    try {
-      // The MANAGED setup, not the legacy fixed-folder installer the old screen
-      // used: that one pulled into ~/youcoded-dev if it recognised it, which R9
-      // forbids. Already set up? Reuse it rather than cloning a second copy.
-      const status = await window.claude.dev.setupStatus();
-      const ready = status.state === 'ready' && status.path
-        ? { ok: true as const, path: status.path }
-        : await window.claude.dev.setupWorkspace();
-      if (!ready.ok) { setErrorFrom('handover'); setError(ready.error); setPhase('review'); return; }
-      await window.claude.dev.openSessionIn({ cwd: ready.path, initialInput: HANDOVER_PROMPT(kind, description, errorOn ? errorDetails : '') });
-      setPhase('handed-over');
-    } catch (e: unknown) {
-      setErrorFrom('handover');
-      setError(plainMessage(e, 'A working copy could not be opened, so nothing was started.'));
-      setPhase('review');
-    }
-  };
+  // WHY no download here any more (submit-ticket-3#ST3-Q1 "contribute"; Destin on the
+  // waiting screen: "when would a user encounter this screen?"): the ticket popup used to run
+  // the ~1 GB download itself, with its own waiting and failed screens. Contribute is the one
+  // place that explains it and reuses the copy already made; the ticket's words go with it.
+  const handOver = () => { setError(''); setContributing(true); };
 
   const send = async () => {
     setError('');
-    setErrorFrom('send');
     setTruncated(false);
     setPhase('sending');
     try {
@@ -318,22 +304,20 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
       <SettingRow variant="item" title="Improve the wording" description="Rewrites your title and description. You read it before sending."
         control={<Button size="sm" variant="secondary" aria-label="Improve wording with the assistant" disabled={aiBusy} onClick={improve}>{aiBusy ? 'Rewriting…' : 'Rewrite'}</Button>} />
       <SettingRow variant="item" title={isBug ? 'Let your assistant try to fix it' : 'Let your assistant try to build it'}
-        description="Downloads YouCoded’s code to this computer and starts a new conversation that works on it. Uses a lot of your plan."
+        description="Opens a new conversation that works on it, in your assistant’s own copy of YouCoded’s code. Uses a lot of your plan."
         control={<Button size="sm" variant="secondary" aria-label={isBug ? 'Let your assistant try to fix it' : 'Let your assistant try to build it'} disabled={!description.trim()} onClick={handOver}>Start</Button>} />
     </div>
   </FoldRow>;
 
   // A failed action REPLACES the buttons it came from (approved, submit-ticket-1#ST-5/ST-6).
-  const failure = error && <Callout tone={online || errorFrom === 'handover' ? 'danger' : 'warning'} actionsPlacement="below"
+  const failure = error && <Callout tone={online ? 'danger' : 'warning'} actionsPlacement="below"
     actions={<>
       <Button size="sm" variant="secondary" onClick={backToDraft}>Back to draft</Button>
-      <Button size="sm" onClick={errorFrom === 'send' ? send : handOver}>Try again</Button>
+      <Button size="sm" onClick={send}>Try again</Button>
     </>}>
-    {errorFrom === 'handover'
-      ? <>YouCoded’s code couldn’t be downloaded, so your assistant didn’t start. {error} Your ticket hasn’t been sent.</>
-      : online
-        ? <>Your ticket wasn’t sent. {error} Your draft is still here.</>
-        : <>This computer isn’t connected to a network, so your ticket wasn’t sent. Your draft is still here.</>}
+    {online
+      ? <>Your ticket wasn’t sent. {error} Your draft is still here.</>
+      : <>This computer isn’t connected to a network, so your ticket wasn’t sent. Your draft is still here.</>}
   </Callout>;
 
   const sendButtons = failure || pair(
@@ -348,7 +332,8 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
   </div>;
   const openTicket = () => void window.claude.shell.openExternal(url);
 
-  return <Dialog screen="settings/development/bug-report" open={open} onClose={onClose} size="document" title="Submit a ticket">
+  return <>
+  <Dialog screen="settings/development/bug-report" open={open} onClose={onClose} size="document" title="Submit a ticket">
     <div className="space-y-4">{/* WHY no p-4: the Dialog body already pads 16px (doubled margins, 2026-09-28) */}
 
       {phase === 'draft' && <>
@@ -395,12 +380,6 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
           <Button className={wide} onClick={openTicket}>Open in browser</Button>)}
       </>}
 
-      {phase === 'handing-over' && <>
-        {summaryCard({ tone: 'neutral', text: 'Not sent' })}
-        {waiting(<LoadingState verb="Downloading" what="YouCoded’s code for your assistant" variant="inline" />,
-          'This can take a few minutes the first time. Your ticket hasn’t been sent.')}
-      </>}
-
       {phase === 'handed-over' && <>
         {summaryCard({ tone: 'neutral', text: 'Not sent' },
           <p>Your assistant is working on a fix in a new conversation. Nothing was sent to GitHub — you can still send this ticket.</p>)}
@@ -412,5 +391,12 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
       </>}
 
     </div>
-  </Dialog>;
+  </Dialog>
+  {/* WHY on top of the ticket, not in its place (shoot --check: Escape must close only the
+      top layer): Contribute opens over the ticket, so Escape, the ✕ or Back to ticket all
+      land back on the ticket, untouched. */}
+  <ContributionDesign open={open && contributing} onClose={() => setContributing(false)} screen="settings/development/bug-report"
+    handover={{ title: title.trim(), kind: isBug ? 'bug' : 'feature', initialInput: HANDOVER_PROMPT(kind, description, errorOn ? errorDetails : ''),
+      onStarted: () => { setContributing(false); setPhase('handed-over'); } }} />
+  </>;
 }

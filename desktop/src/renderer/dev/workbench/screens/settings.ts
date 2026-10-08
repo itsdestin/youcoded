@@ -29,14 +29,17 @@ const TICKET_STATES: readonly ScreenEntry[] = [
   ticket('review-error', { params: { reportFrom: 'error' }, open: [...FILL, REVIEW, { do: 'click', target: { role: 'button', label: 'The error you saw From Office' } }] }),
   ticket('review-ai', { open: [...FILL, REVIEW, AI] }),
   ticket('review-logs-open', { open: [...FILL, TICK_LOGS, REVIEW, { do: 'click', target: { role: 'button', label: 'Recent logs 4 lines — open to read or remove anything private' } }] }),
-  ticket('handover-failed', { scenario: 'refused', open: [...FILL, REVIEW, AI, HAND_OVER], waitMs: 3500 }),
   ticket('sending', { params: { ticket: 'hold' }, open: [...FILL, REVIEW, SEND] }),
   ticket('sent', { open: [...FILL, REVIEW, SEND] }),
   ticket('browser', { open: [...FILL, TICK_FILES, REVIEW, 'Continue in GitHub'] }),
   ticket('failed', { scenario: 'refused', open: [...FILL, REVIEW, SEND] }),
   ticket('offline', { params: { network: 'offline' }, open: [...FILL, REVIEW, SEND] }),
-  ticket('handing-over', { params: { ticket: 'hold' }, open: [...FILL, REVIEW, AI, HAND_OVER] }),
-  ticket('handed-over', { open: [...FILL, REVIEW, AI, HAND_OVER], waitMs: 3500 }),
+  // The hand-over to Contribute (submit-ticket-3#ST3-Q1): what you see, with no copy yet,
+  // with one already on this computer, while it downloads, and once the assistant started.
+  ticket('handover', { open: [...FILL, REVIEW, AI, HAND_OVER] }),
+  ticket('handover-ready', { params: { devCopy: 'ready' }, open: [...FILL, REVIEW, AI, HAND_OVER] }),
+  ticket('handover-downloading', { params: { ticket: 'hold' }, open: [...FILL, REVIEW, AI, HAND_OVER, 'Download and start'] }),
+  ticket('handed-over', { params: { devCopy: 'ready' }, open: [...FILL, REVIEW, AI, HAND_OVER, 'Start'] }),
   ticket('phone', { viewport: PHONE, open: FILL }),
   ticket('phone-review', { viewport: PHONE, open: [...FILL, TICK_LOGS, REVIEW] }),
   ticket('small', { viewport: SMALL, open: FILL }),
@@ -70,6 +73,7 @@ export const SETTINGS: readonly ScreenEntry[] = [
   { ...settings('settings/performance', 'dialog'), params: { gpus: '2' } },
   // Folds opened (the shared fold opens inside its box — submit-ticket-2#ST2-Q1).
   { ...settings('settings/performance#fold-open', 'dialog', 'fold'), params: { gpus: '2' }, open: ['Why YouCoded uses the discrete GPU'] },
+  { ...settings('settings/performance#fold-open-hover', 'dialog', 'fold'), params: { gpus: '2' }, open: ['Why YouCoded uses the discrete GPU', { do: 'hover', target: { role: 'button', label: 'Why YouCoded uses the discrete GPU' } }], sameAs: { name: 'settings/performance#fold-open', why: 'only the pointer highlight differs, a faint tint the look-alike check may not count' } },
   settings('settings/sync', 'dialog', 'error-state'),
   { ...settings('settings/sync#log-open', 'dialog', 'fold'), params: { sync: 'ok' }, open: [{ do: 'scroll', dir: 'down', times: 8 }, 'Sync log', { do: 'scroll', dir: 'down', times: 8 }] },
   { ...settings('settings/sync#ok', 'dialog'), params: { sync: 'ok' } },
@@ -87,10 +91,16 @@ export const SETTINGS: readonly ScreenEntry[] = [
   // or a setup waiting; `network=offline` and the `refused` scenario fail the send.
   ...TICKET_STATES,
   settings('settings/development/contribute', 'dialog'),
+  { ...settings('settings/development/contribute#walkthrough', 'dialog'), open: ['How contributing works'] },
+  { ...settings('settings/development/contribute#ready', 'dialog'), params: { devCopy: 'ready' } },
+  { ...settings('settings/development/contribute#downloading', 'dialog'), params: { ticket: 'hold' }, open: ['Download YouCoded’s code'] },
   settings('settings/shortcuts', 'dialog'),
   settings('settings/donate', 'dialog'),
   settings('settings/about', 'dialog'),
   { ...settings('settings/about#account-open', 'dialog', 'fold'), open: ['Your account (optional)'] },
+  // The fold header's hover (submit-ticket-3#ST3-5: "not rounded"); shoot hover states at
+  // SHOOT_SCALE=1 (project-switcher friction: a 1.5× pointer lands one row off).
+  { ...settings('settings/about#fold-hover', 'dialog', 'fold'), open: [{ do: 'hover', target: { role: 'button', label: 'Your account (optional)' } }], sameAs: { name: 'settings/about', why: 'only the pointer highlight differs, a faint tint the look-alike check may not count' } },
   { ...settings('settings/about#stats-open', 'dialog', 'fold'), open: ['Anonymous usage stats'] },
   { ...settings('settings/about#licenses-open', 'dialog', 'fold'), open: [{ do: 'scroll', dir: 'down', times: 8 }, 'Open-source libraries'] },
   // Android-only rows (isAndroid() gates AndroidSettings vs. DesktopSettings).

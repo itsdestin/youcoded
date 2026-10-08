@@ -140,8 +140,47 @@ describe('setting up a managed development workspace', () => {
     // Without this, one failure made the start button unreachable for the session.
     failOn = 'git';
     await setupManagedWorkspace(() => {});
-    expect(workspaceSetupStatus().state).toBe('failed');
+    expect((await workspaceSetupStatus()).state).toBe('failed');
     clearWorkspaceSetupStatus();
-    expect(workspaceSetupStatus().state).toBe('idle');
+    expect((await workspaceSetupStatus()).state).toBe('idle');
+  });
+});
+
+describe('reusing the copy already on this computer', () => {
+  // WHY (submit-ticket-3#ST3-Q1): the "ready" answer lived only in memory, so after every
+  // restart the next setup downloaded YouCoded's code again into a NEW folder (-2, -3 …),
+  // about 1 GB each. A finished copy on disk is now found and reused.
+  const finished = (name: string) => {
+    const dir = path.join(home, 'YouCoded', 'Development', name);
+    fs.mkdirSync(path.join(dir, '.git'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'setup.sh'), '#!/bin/bash\n');
+    fs.mkdirSync(path.join(dir, 'youcoded', 'desktop'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'youcoded', 'desktop', 'package.json'), '{}');
+    fs.writeFileSync(path.join(dir, 'my-work.txt'), 'keep');
+    return dir;
+  };
+
+  it('uses the finished copy instead of downloading again', async () => {
+    const dir = finished('youcoded-workspace');
+    const registered: string[] = [];
+    const r = await setupManagedWorkspace(p => registered.push(p));
+    expect(r).toEqual({ ok: true, path: dir });
+    expect(runs).toEqual([]);                 // no clone, no setup.sh
+    expect(registered).toEqual([]);           // not re-added to the project list
+    expect(fs.readFileSync(path.join(dir, 'my-work.txt'), 'utf8')).toBe('keep');
+  });
+
+  it('reports it ready when the screen asks, with nothing remembered in memory', async () => {
+    const dir = finished('youcoded-workspace-2');
+    expect(await workspaceSetupStatus()).toEqual({ state: 'ready', path: dir });
+  });
+
+  it('skips a half-made copy and leaves it exactly as it is', async () => {
+    const half = path.join(home, 'YouCoded', 'Development', 'youcoded-workspace');
+    fs.mkdirSync(path.join(half, '.git'), { recursive: true });   // clone started, setup never ran
+    const good = finished('youcoded-workspace-2');
+    const r = await setupManagedWorkspace(() => {});
+    expect(r).toEqual({ ok: true, path: good });
+    expect(fs.readdirSync(half)).toEqual(['.git']);
   });
 });
