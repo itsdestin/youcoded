@@ -46,6 +46,8 @@ export interface CapabilityProfile {
    *  blocks). Everything else gets the wire-adapter split. Provider-type fact,
    *  not a model fact — the registry never overrides it. */
   nativeImageToolResults: boolean;
+  /** Admission limits for pictures (see ImageLimits). Provider-type fact. */
+  imageLimits: ImageLimits;
   /** May the model-invoked Task tool (Task 6, spec decision 4) be attached, to
    *  spawn a specialist subagent? Spec decision 4: a weak/unverified
    *  orchestrator does not actually parallelize delegated work — it
@@ -85,6 +87,30 @@ export interface CapabilityProfile {
    *  below excludes it: provider-registry documents that type as the Ollama /
    *  LM Studio shape, i.e. a local model in disguise. */
   announcePrefill: boolean;
+}
+
+/** How big a picture this provider type accepts in ONE request. Patches are
+ *  32-px tiles, rounded UP per axis (image-support.ts patchCount). PROVIDER-
+ *  TYPE fact like nativeImageToolResults: computed in resolveProfile, spread
+ *  over every base, never read off a registry entry.
+ *  WHY two rows: the only number ever measured is OpenAI's "requires 49868
+ *  patches after processing, exceeding the limit of 30000" (ChatGPT route,
+ *  2026-10-06). Every other value is a deliberately conservative placeholder —
+ *  wrong-high fails the whole turn with a provider error, wrong-low only means
+ *  a picture is downscaled further than needed. Raise a row only with a
+ *  captured provider response. */
+export interface ImageLimits { maxEdgePx: number; maxPatches: number }
+/** OpenAI's wire (direct key and Sign in with ChatGPT). maxPatches VERIFIED.
+ *  maxEdgePx is NOT: no edge-length rejection was ever captured; 8192 is an
+ *  explicit, conservative guess kept above 30,000 patches' natural reach
+ *  (a 30,000-patch picture of any aspect ratio up to about 1:7 is already
+ *  patch-bound first), so the one verified limit stays the binding one. */
+export const IMAGE_LIMITS_OPENAI: ImageLimits = { maxEdgePx: 8192, maxPatches: 30_000 };
+/** Everyone else. 4096² = 16,384 patches, below every published limit we know
+ *  of (Anthropic documents 8000 px per side); unverified against a live reply. */
+export const IMAGE_LIMITS_DEFAULT: ImageLimits = { maxEdgePx: 4096, maxPatches: 16_384 };
+export function imageLimitsFor(t: ProfileProviderType): ImageLimits {
+  return t === 'openai' || t === 'chatgpt' ? IMAGE_LIMITS_OPENAI : IMAGE_LIMITS_DEFAULT;
 }
 
 export type ProfileProviderType =
@@ -185,6 +211,8 @@ export const CLOUD_DEFAULT: CapabilityProfile = {
   // a direct use of CLOUD_DEFAULT can't accidentally claim the one capability
   // that is exclusive to a single provider.
   nativeImageToolResults: false,
+  // Placeholder like nativeImageToolResults: resolveProfile spreads imageLimitsFor() over this.
+  imageLimits: IMAGE_LIMITS_DEFAULT,
   // Placeholder in the same shape as the two above: resolveProfile ALWAYS
   // spreads the real provider-type answer over this. False is also the honest
   // value for a session that genuinely IS this default — a hosted model.
@@ -350,6 +378,8 @@ function localFallback(ctx: number | null): BehavioralProfile {
     // Anthropic can carry an image inside a tool result), never a model fact, so
     // there is no local model, known or unknown, for which this could be true.
     nativeImageToolResults: false,
+    // Placeholder like nativeImageToolResults: resolveProfile spreads imageLimitsFor() over this.
+    imageLimits: IMAGE_LIMITS_DEFAULT,
     // Conservative default (spec decision 4): an UNKNOWN local model has not
     // been vetted as a capable orchestrator, however large its window — a weak
     // model handed the Task tool serial-collapses back into doing the
@@ -450,12 +480,15 @@ export function resolveProfile(d: DiscoveredModel, registry: KnownModelEntry[] =
   // notice exists to explain a minutes-long local prefill that hosted models
   // never have.
   const announcePrefill = d.providerType === 'local-engine' || d.providerType === 'openai-compatible';
+  // WHY: provider-type fact like the two above, spread onto every return so a
+  // registry entry can never override a picture-size limit.
+  const imageLimits = imageLimitsFor(d.providerType);
   if (d.providerType !== 'local-engine') {
-    return { ...CLOUD_DEFAULT, promptVariant: cloudVariant(d.providerType), ...sizing, mcpToolBudgetTokens, supportsVision, nativeImageToolResults, announcePrefill };
+    return { ...CLOUD_DEFAULT, promptVariant: cloudVariant(d.providerType), ...sizing, mcpToolBudgetTokens, supportsVision, nativeImageToolResults, imageLimits, announcePrefill };
   }
   const base = localFallback(d.contextLength);
   const known = matchKnownModel(d.modelId, registry);   // LAYER 2 overlay
-  if (!known) return { ...base, ...sizing, mcpToolBudgetTokens, supportsVision, nativeImageToolResults, announcePrefill };
+  if (!known) return { ...base, ...sizing, mcpToolBudgetTokens, supportsVision, nativeImageToolResults, imageLimits, announcePrefill };
   return {
     maxToolPresentation: known.maxToolPresentation ?? base.maxToolPresentation,
     promptVariant: known.promptVariant ?? base.promptVariant,
@@ -483,6 +516,7 @@ export function resolveProfile(d: DiscoveredModel, registry: KnownModelEntry[] =
     mcpToolBudgetTokens,
     supportsVision,
     nativeImageToolResults,
+    imageLimits,
     announcePrefill,
   };
 }
