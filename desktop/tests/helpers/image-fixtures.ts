@@ -41,3 +41,10 @@ export function writeRealPng(file: string, w: number, h: number): void {
   }
   fs.writeFileSync(file, PNG.sync.write(png));
 }
+/** The bytes of a file part as the PROVIDER received it. The SDK hands a mock
+ *  model `{ type: 'data', data }`; base64 strings and raw bytes are accepted
+ *  too, so the assertion does not depend on which form a version chooses. */
+export function providerFileBytes(part: { data: unknown }): Buffer {
+  const d: any = part.data && typeof part.data === 'object' && 'type' in (part.data as object) ? (part.data as any).data : part.data;
+  return typeof d === 'string' ? Buffer.from(d, 'base64') : Buffer.from(d);
+}

@@ -21,6 +21,7 @@ import { HOSTED_MAX_CONCURRENT_SPECIALISTS, SPECIALIST_NOTE_MAX_CHARS, SPECIALIS
 import { OWNER, DelegationLedger } from '../src/main/harness/specialists/delegation-ledger';
 import { ModelSearchTool } from '../src/main/harness/tools/model-search';
 import type { CatalogModel } from '../src/shared/provider-types';
+import { pngHeader, providerFileBytes } from './helpers/image-fixtures';
 
 /** Ceiling for this file's fire-and-forget-write polls, as a tries count at the
  *  10ms interval each loop already uses (1,500 x 10ms = 15s, matching the
@@ -2037,6 +2038,71 @@ describe('NativeSessionHost', () => {
       expect((r2 as { queueId: string }).queueId.length).toBeGreaterThan(0);
       await waitForTurnComplete(host, 1);
       expect(events).toEqual(['first', 'second']); // user-message for 'second' fires only when drained
+    });
+
+    it('an over-limit picture queued behind a running turn still arrives as its prepared derivative', async () => {
+      // Same shape as the FIFO test above, but on a vision provider with the
+      // OpenAI picture limits (chatgpt), and a model that records each request.
+      const prompts: any[] = [];
+      const capturing = async () => new MockLanguageModelV4({ doStream: async (o: any) => {
+        prompts.push(o);
+        return { stream: delayedStream(CHUNKS, 15) };
+      } }) as any;
+      const h = new NativeSessionHost(new SessionStore(new NativeHome(root)), capturing, NO_CONTEXT, async () => 'chatgpt', async () => null);
+      const sid = 'q-picture';
+      await h.create({ sessionId: sid, cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+      try {
+        const events: any[] = [];
+        h.on('transcript-event', (e: any) => { if (e.type === 'user-message') events.push(e); });
+        const huge = path.join(root, 'huge.png'); fs.writeFileSync(huge, pngHeader(2904, 17528));
+        const small = path.join(root, 'small.png'); fs.writeFileSync(small, pngHeader(610, 3686));
+        // One turn-complete, as in the FIFO test: the queued head is claimed into the running turn.
+        const done = waitForTurnComplete(h, 1);
+        // first send starts a turn and is held open; the second is queued with the derivative as its model-facing path
+        expect(h.send(sid, 'first')).toEqual({ status: 'sent' });
+        expect(h.send(sid, 'picture', [huge], [small]).status).toBe('queued');
+        await done;
+        const event = events.find((e) => e.type === 'user-message' && e.data.attachments?.[0] === huge)!;
+        expect(event.data.modelAttachments).toEqual([small]);
+        const prompt = prompts.at(-1);                                           // the queued turn's request
+        const user = prompt.prompt.filter((m: any) => m.role === 'user').at(-1);
+        expect(providerFileBytes(user.content.find((p: any) => p.type === 'file'))).toEqual(pngHeader(610, 3686));
+      } finally { await h.destroyAll(); }
+    });
+
+    it('a picture queued during a notice pass is drained as its own turn with its prepared derivative', async () => {
+      // The host's drain loop (not the in-turn claim above) sends this one: it
+      // was queued while a notice — not a user turn — held the session.
+      const prompts: any[] = [];
+      const capturing = async () => new MockLanguageModelV4({ doStream: async (o: any) => {
+        prompts.push(o);
+        return { stream: simulateReadableStream({ chunks: CHUNKS }) };
+      } }) as any;
+      const h = new NativeSessionHost(new SessionStore(new NativeHome(root)), capturing, NO_CONTEXT, async () => 'chatgpt', async () => null);
+      const sid = 'q-picture-notice';
+      await h.create({ sessionId: sid, cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+      try {
+        const entry = (h as any).live.get(sid);
+        let entered!: () => void;
+        let release!: () => void;
+        const started = new Promise<void>((r) => { entered = r; });
+        const gate = new Promise<void>((r) => { release = r; });
+        vi.spyOn(entry.session, 'runNotice').mockImplementation(async () => { entered(); await gate; });
+        const events: any[] = [];
+        h.on('transcript-event', (e: any) => { if (e.type === 'user-message') events.push(e); });
+        const huge = path.join(root, 'huge.png'); fs.writeFileSync(huge, pngHeader(2904, 17528));
+        const small = path.join(root, 'small.png'); fs.writeFileSync(small, pngHeader(610, 3686));
+        (h as any).queueHostNotice(sid, 'notice', { kind: 'shell', runs: [] }, 'test');
+        await started;
+        expect(h.send(sid, 'picture', [huge], [small]).status).toBe('queued');
+        release();
+        await vi.waitFor(() => expect(events.some((e) => e.data.attachments?.[0] === huge)).toBe(true));
+        await entry.running;
+        const event = events.find((e) => e.data.attachments?.[0] === huge)!;
+        expect(event.data.modelAttachments).toEqual([small]);
+        const user = prompts.at(-1).prompt.filter((m: any) => m.role === 'user').at(-1);
+        expect(providerFileBytes(user.content.find((p: any) => p.type === 'file'))).toEqual(pngHeader(610, 3686));
+      } finally { await h.destroyAll(); }
     });
 
     it.each(['idle notice pass', 'user turn tail'])('delivers FIFO sends accepted during an %s before stable idle', async (start) => {

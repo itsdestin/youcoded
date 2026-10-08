@@ -28,15 +28,18 @@ import type { ModelMessage, TextPart, ToolCallPart, ToolResultPart } from 'ai';
 import { markAppGenerated } from './compaction';
 import { validatedDeltaReferences } from './session-store';
 import { compactionSourceDigest } from './compaction-record';
+// Pure string helpers and a type only — the READER itself stays injected.
+import { imageNote, deliverableImageMediaType, UNDELIVERABLE_IMAGE_EXTENSIONS, type ImageReadResult } from './image-support';
 
 // Synthesized result text for a tool-call that has no persisted result — a
 // transcript truncated by a crash mid-execution (see backfillUnpairedToolCalls).
 const CRASH_UNPAIRED_TEXT = 'Canceled: this call never completed (the app was closed mid-execution).';
 
 /** Re-reads a persisted image path at rebuild time. Injected (not imported) so
- *  the module stays pure and tests need no filesystem. Production passes
- *  image-support.readImageFromDisk. #290 follow-up fix 2. */
-export type RebuildImageReader = (absPath: string) => { mediaType: string; data: Buffer } | null;
+ *  the module stays pure and tests need no filesystem. Production passes a
+ *  closure over image-support.readImageFromDisk with the SESSION's limits, so a
+ *  reopen refuses exactly what the live driver refused. #290 follow-up fix 2. */
+export type RebuildImageReader = (absPath: string) => ImageReadResult;
 
 /** Restore only from a checkpoint whose cut can be proven against the persisted
  * events. New coalesced parts carry validated UUID/range witnesses; legacy parts
@@ -180,15 +183,27 @@ export function rebuildHistory(events: TranscriptEvent[], readImage?: RebuildIma
       case 'user-message': {
         flushAssistant(); flushResults();
         const text = String(e.data?.text ?? '');
-        // Mirror beginTurn's live push exactly: parts array ONLY when an image was
-        // actually readable — a vanished file degrades to the plain string, the same
-        // skip-with-the-path-still-in-text semantics send() had live (#290 follow-up
-        // fix 2). No reader (pure/legacy call) means today's exact plain-string shape.
-        const paths = Array.isArray(e.data?.attachments) ? (e.data.attachments as string[]) : [];
-        const parts: Array<{ type: 'file'; mediaType: string; data: Buffer }> = [];
-        if (readImage) for (const p of paths) { const img = readImage(p); if (img) parts.push({ type: 'file', mediaType: img.mediaType, data: img.data }); }
-        const message = parts.length
-          ? ({ role: 'user', content: [{ type: 'text', text }, ...parts] } as ModelMessage)
+        // Mirror beginTurn's live push exactly (imagePartsFor): text, then the
+        // pictures that are readable AND within the session's limits, then a
+        // basename note per picture that is not — so a reopen can never smuggle
+        // an over-limit picture back into the request, and the model is told
+        // about each one it lacks. The MODEL's paths win (modelAttachments: a
+        // prepared copy where one was made). No reader (pure/legacy call) means
+        // today's exact plain-string shape.
+        const paths = Array.isArray(e.data?.modelAttachments) ? (e.data.modelAttachments as string[])
+          : Array.isArray(e.data?.attachments) ? (e.data.attachments as string[]) : [];
+        const files: Array<{ type: 'file'; mediaType: string; data: Buffer }> = [];
+        const notes: Array<{ type: 'text'; text: string }> = [];
+        if (readImage) for (const p of paths) {
+          // Pictures only (same rule as imagePartsFor): a PDF/text attachment is skipped silently, as today.
+          if (!deliverableImageMediaType(p) && !UNDELIVERABLE_IMAGE_EXTENSIONS.has(path.extname(p).toLowerCase())) continue;
+          const img = readImage(p);
+          if (img.ok) files.push({ type: 'file', mediaType: img.mediaType, data: img.data });
+          else if (img.reason === 'oversized') notes.push({ type: 'text', text: imageNote({ kind: 'oversized', label: path.basename(p), width: img.width ?? 0, height: img.height ?? 0 }) });
+          else notes.push({ type: 'text', text: imageNote({ kind: 'unavailable', label: path.basename(p), reason: img.reason }) });
+        }
+        const message = files.length || notes.length
+          ? ({ role: 'user', content: [{ type: 'text', text }, ...files, ...notes] } as ModelMessage)
           : { role: 'user', content: text } as ModelMessage;
         out.push(e.data?.injected ? markAppGenerated(message) : message);
         origins.push([e.uuid]);
@@ -237,16 +252,23 @@ export function rebuildHistory(events: TranscriptEvent[], readImage?: RebuildIma
         // partially-available result still delivers whatever IS readable.
         let text = base;
         const files: Array<{ type: 'file'; mediaType: string; data: { type: 'data'; data: Buffer }; filename: string }> = [];
+        // The live driver's model-facing names (a prepared derivative's ORIGINAL basename).
+        const labels = Array.isArray(e.data?.imageLabels) ? (e.data.imageLabels as string[]) : [];
         for (const p of imagePaths) {
-          const img = readImage(p);
           // Fix 3 (2026-08-11 review): identical derivation to resolveToolImages
-          // in harness-session.ts — the file's own basename, not the tool's
-          // name. If these two ever disagree, a resumed session labels images
-          // differently from a live one. Importing `path` here (pure string
-          // manipulation) doesn't compromise this module's purity rule — that
-          // rule is specifically about the IMAGE READER staying injected, not
-          // about avoiding stdlib string utilities.
-          if (img) files.push({ type: 'file', mediaType: img.mediaType, data: { type: 'data', data: img.data }, filename: path.basename(p) });
+          // in harness-session.ts — the persisted label, else the file's own
+          // basename, never the tool's name. If these two ever disagree, a
+          // resumed session labels images differently from a live one.
+          // Importing `path` here (pure string manipulation) doesn't compromise
+          // this module's purity rule — that rule is specifically about the
+          // IMAGE READER staying injected, not about avoiding stdlib utilities.
+          const label = labels[imagePaths.indexOf(p)] ?? path.basename(p);
+          const img = readImage(p);
+          if (img.ok) files.push({ type: 'file', mediaType: img.mediaType, data: { type: 'data', data: img.data }, filename: label });
+          // WHY the shared note: an over-limit picture (now over the session's
+          // limits, e.g. after a model switch) must be refused on reopen with the
+          // exact text the live driver writes — never sent back to the provider.
+          else if (img.reason === 'oversized') text += `\n${imageNote({ kind: 'oversized', label, width: img.width ?? 0, height: img.height ?? 0 })}`;
           else text += `\n[image no longer available: ${p}]`;
         }
         toolResults.push({

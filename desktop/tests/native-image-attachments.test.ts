@@ -31,8 +31,12 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { resolveProfile, CLOUD_DEFAULT } from '../src/main/harness/capability-profile';
+import { resolveProfile, CLOUD_DEFAULT, type CapabilityProfile } from '../src/main/harness/capability-profile';
 import { ReadTool } from '../src/main/harness/tools/read';
+import type { ToolServices } from '../src/main/harness/tools/types';
+import { pngHeader, providerFileBytes } from './helpers/image-fixtures';
+import { imageNote } from '../src/main/harness/image-support';
+import type { ModelAttachment } from '../src/main/harness/busy-message-boundary';
 
 // 1x1 PNG.
 const PNG = Buffer.from(
@@ -163,7 +167,8 @@ describe('Read tool — images are refused with the RIGHT reason', () => {
 // part. These assert on what the PROVIDER receives, not on our own plumbing —
 // the whole bug class here was plumbing that looked right and delivered nothing.
 describe('HarnessSession.send — attachments become image parts', () => {
-  async function capturePrompt(supportsVision: boolean, attachments: string[]) {
+  async function capturePrompt(supportsVision: boolean, attachments: string[], profile?: CapabilityProfile,
+                               toolServices?: ToolServices, modelAttachments?: ModelAttachment[]) {
     const { HarnessSession } = await import('../src/main/harness/harness-session');
     const { ASSISTANT_PRESET } = await import('../src/shared/harness-manifest');
     const { EMPTY_SKILL_CATALOG } = await import('./helpers/harness-fakes');
@@ -184,9 +189,10 @@ describe('HarnessSession.send — attachments become image parts', () => {
       sessionId: 's-img', cwd: dir, harness: ASSISTANT_PRESET,
       binding: { providerId: 'openrouter', modelId: 'm' },
       skillCatalog: EMPTY_SKILL_CATALOG,
-      profile: { ...CLOUD_DEFAULT, supportsVision },
+      profile: profile ?? { ...CLOUD_DEFAULT, supportsVision },
+      ...(toolServices ? { toolServices } : {}),
     } as any, async () => model as any);
-    await session.send('look at this', attachments);
+    await session.send('look at this', attachments, modelAttachments);
     return seen.find((m: any) => m.role === 'user');
   }
 
@@ -224,7 +230,44 @@ describe('HarnessSession.send — attachments become image parts', () => {
     expect(input.content.some((part: any) => part.type === 'file')).toBe(supportsVision);
     const event = events.find(e => e.type === 'user-message' && e.data.attachments?.[0] === p);
     expect(event.data.text).toBe('');
+    // The model read the picker path itself, so nothing differs to persist.
+    expect(event.data.modelAttachments).toBeUndefined();
     expect(session.acceptedHistory().eventUuids).toContain(event.uuid);
+  });
+
+  it('a busy message carrying a prepared copy persists it as modelAttachments and the model gets the copy', async () => {
+    const { HarnessSession } = await import('../src/main/harness/harness-session');
+    const { ASSISTANT_PRESET } = await import('../src/shared/harness-manifest');
+    const { EMPTY_SKILL_CATALOG } = await import('./helpers/harness-fakes');
+    const { MockLanguageModelV4, simulateReadableStream } = await import('ai/test');
+    const huge = path.join(dir, 'huge.png'); fs.writeFileSync(huge, pngHeader(2904, 17528));
+    const small = path.join(dir, 'small.png'); fs.writeFileSync(small, pngHeader(610, 3686));
+    const prompts: any[] = [];
+    const model = new MockLanguageModelV4({ doStream: async (req: any) => {
+      prompts.push(req.prompt);
+      return { stream: simulateReadableStream({ chunks: [
+        { type: 'stream-start', warnings: [] },
+        { type: 'text-start', id: 'reply' }, { type: 'text-delta', id: 'reply', delta: 'ok' }, { type: 'text-end', id: 'reply' },
+        { type: 'finish', finishReason: { unified: 'stop' }, usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } },
+      ] }) };
+    } });
+    const events: any[] = [];
+    let queued = true;
+    const session = new HarnessSession({ sessionId: 'busy-prepared', cwd: dir, harness: ASSISTANT_PRESET,
+      binding: { providerId: 'chatgpt', modelId: 'gpt-x' }, skillCatalog: EMPTY_SKILL_CATALOG,
+      profile: resolveProfile({ providerType: 'chatgpt', modelId: 'gpt-x', contextLength: null }),
+      takeReadyBusyMessage: () => {
+        if (!queued) return;
+        queued = false;
+        return { id: 'image', text: 'picture', attachments: [huge], modelAttachments: [small] };
+      },
+    }, async () => model as any);
+    session.on('transcript-event', event => events.push(event));
+    await session.send('first');
+    const event = events.find(e => e.type === 'user-message' && e.data.attachments?.[0] === huge);
+    expect(event.data.modelAttachments).toEqual([small]);
+    const input = prompts[1].filter((m: any) => m.role === 'user').at(-1);
+    expect(providerFileBytes(input.content.find((p: any) => p.type === 'file'))).toEqual(pngHeader(610, 3686));
   });
 
   it('attaches the pixels for a vision-capable model', async () => {
@@ -270,5 +313,33 @@ describe('HarnessSession.send — attachments become image parts', () => {
     // The turn must not die because a temp file was cleaned up; the path is
     // still in the message text either way.
     noFileParts(await capturePrompt(true, [path.join(dir, 'gone.png')]));
+  });
+
+  it('an attachment over the provider limit is NOT delivered, and the model is told so by basename', async () => {
+    const huge = path.join(dir, 'huge.png'); fs.writeFileSync(huge, pngHeader(2904, 17528));
+    const user = await capturePrompt(true, [huge], resolveProfile({ providerType: 'chatgpt', modelId: 'gpt-x', contextLength: null }));
+    expect(user.content.some((p: any) => p.type === 'file')).toBe(false);
+    expect(user.content.at(-1)).toMatchObject({ type: 'text', text: imageNote({ kind: 'oversized', label: 'huge.png', width: 2904, height: 17528 }) });
+  });
+  it('modelAttachments is read in place of attachments', async () => {
+    const huge = path.join(dir, 'huge.png'); fs.writeFileSync(huge, pngHeader(2904, 17528));
+    const small = path.join(dir, 'small.png'); fs.writeFileSync(small, pngHeader(610, 3686));
+    const user = await capturePrompt(true, [huge], resolveProfile({ providerType: 'chatgpt', modelId: 'gpt-x', contextLength: null }), undefined, [small]);
+    expect(providerFileBytes(user.content.find((p: any) => p.type === 'file'))).toEqual(pngHeader(610, 3686));
+  });
+  it('a message whose only attachments are non-images keeps today’s plain-string shape — no note, no parts', async () => {
+    const notes = path.join(dir, 'notes.txt'); fs.writeFileSync(notes, 'hello');
+    const user = await capturePrompt(true, [notes], resolveProfile({ providerType: 'chatgpt', modelId: 'gpt-x', contextLength: null }));
+    // The AI SDK normalizes a plain-string user message to ONE text part before
+    // the provider sees it (see the NOTE above), so "plain string" is asserted as
+    // exactly that single part: no file, no note.
+    expect(user.content).toEqual([{ type: 'text', text: 'look at this' }]);
+  });
+  it('a preparation failure is told to the model as such, with the preparer’s reason — never as "above size limit"', async () => {
+    const huge = path.join(dir, 'huge.png'); fs.writeFileSync(huge, pngHeader(2904, 17528));
+    const user = await capturePrompt(true, [huge], resolveProfile({ providerType: 'chatgpt', modelId: 'gpt-x', contextLength: null }), undefined,
+      [{ path: huge, prepareFailed: 'is 2904×17528 px and could not be downscaled for the model (the image decoder declined it)' }]);
+    expect(user.content.some((p: any) => p.type === 'file')).toBe(false);
+    expect(user.content.at(-1)).toEqual({ type: 'text', text: imageNote({ kind: 'unavailable', label: 'huge.png', reason: 'prepare-failed', detail: 'is 2904×17528 px and could not be downscaled for the model (the image decoder declined it)' }) });
   });
 });

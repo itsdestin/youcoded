@@ -1,10 +1,20 @@
 import type { ModelMessage } from 'ai';
 import { finalizeRemainingCalls } from './tool-group-finalization';
 
+/** One part a user message carries after its text: a delivered picture, or a
+ *  note naming a picture the model did not get. */
+export type UserPart = { type: 'file'; mediaType: string; data: Buffer } | { type: 'text'; text: string };
+/** What the model is handed per attachment: a path (original or prepared
+ *  derivative), or the original plus the preparer's refusal reason. */
+export type ModelAttachment = string | { path: string; prepareFailed: string };
+
 export interface BusyMessage {
   id: string;
   text: string;
   attachments: string[];
+  /** WHY: a message queued while a turn ran must still reach the model as its
+   *  prepared copy — parallel to `attachments`, absent when they are the same. */
+  modelAttachments?: ModelAttachment[];
   restore?: () => void;
 }
 
@@ -30,15 +40,17 @@ export function claimBusyMessage(
 /** WHY: the emitted event is the authority for both live and rebuilt history;
  * no synthetic steer or app-generated marker is used for human input. */
 export function appendUserHistory(
-  text: string, attachments: string[], emit: () => string, appGenerated: boolean,
-  imageParts: (paths: string[]) => Array<{ type: 'file'; mediaType: string; data: Buffer }>,
+  text: string, modelPaths: ModelAttachment[], emit: () => string, appGenerated: boolean,
+  imageParts: (paths: ModelAttachment[]) => UserPart[],
   markAppGenerated: (message: ModelMessage) => ModelMessage,
   history: ModelMessage[], origins: Array<string[] | null>, record: (uuid: string) => void,
 ): void {
-  const images = imageParts(attachments);
+  const parts = imageParts(modelPaths);
   const uuid = emit();
-  const message = (images.length
-    ? { role: 'user', content: [{ type: 'text', text }, ...images] } as ModelMessage
+  // WHY parts may be notes: an attachment the gate refused is a trailing text
+  // part naming it, so the model is told rather than left to assume it saw it.
+  const message = (parts.length
+    ? { role: 'user', content: [{ type: 'text', text }, ...parts] } as ModelMessage
     : { role: 'user', content: text } as ModelMessage);
   history.push(appGenerated ? markAppGenerated(message) : message);
   origins.push([uuid]);

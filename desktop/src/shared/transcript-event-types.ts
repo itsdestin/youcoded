@@ -125,6 +125,13 @@ interface UserMessageData extends SubagentStamp {
   /** Native: absolute composer attachment paths, persisted so resume can
    *  re-read the pixels (events carry no binary). #290 follow-up fix 2. */
   attachments?: string[];
+  /** Native (2026-10-07): the paths the MODEL was given, parallel to
+   *  `attachments` — a prepared, downscaled copy where the original was over
+   *  the provider's image limits, the original elsewhere (including a picture
+   *  whose preparation failed: reopen re-gates it and writes the oversized note).
+   *  Present only when at least one entry differs. `attachments` stays the
+   *  picker path for the UI. */
+  modelAttachments?: string[];
   /**
    * Task 4 (native specialists, background execution) — marks this as a
    * SYNTHETIC turn the host injected (a background specialist's finished
@@ -190,6 +197,8 @@ interface ToolResultData extends SubagentStamp {
   /** Native only: absolute paths of images the tool delivered (Read on an
    *  image). Resume re-reads them; the UI may render a chip. */
   images?: string[];
+  /** Model-facing name per `images` entry — the ORIGINAL basename for a prepared derivative. */
+  imageLabels?: string[];
   /** Claude Code only: the JSONL line's OWN timestamp (epoch ms), 0 when the
    *  line has none. `timestamp` on the event is stamped at PARSE time, which is
    *  "now" for a whole transcript read from offset 0 on resume — so it cannot

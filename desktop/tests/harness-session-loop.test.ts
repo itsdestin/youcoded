@@ -14,7 +14,8 @@ import { HarnessSession } from '../src/main/harness/harness-session';
 import { BashTool } from '../src/main/harness/tools/bash';
 import { settleAdminCapability, resetAdminCapabilityForTests } from '../src/main/harness/admin-capability';
 import { isContextOverflow } from '../src/main/providers/context-overflow';
-import { MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, MAX_ATTACHMENT_BYTES } from '../src/main/harness/image-support';
+import { MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, MAX_ATTACHMENT_BYTES, imageNote } from '../src/main/harness/image-support';
+import { pngHeader } from './helpers/image-fixtures';
 import type { HarnessManifest } from '../src/shared/harness-manifest';
 import type { TranscriptEvent } from '../src/shared/types';
 import type { PermissionDecision } from '../src/shared/permission-types';
@@ -34,7 +35,7 @@ import { MockLanguageModelV4, simulateReadableStream } from 'ai/test';
 // compaction suite's own scaffolding rather than hand-rolling a second way to
 // force the summarize branch.
 import { HARNESS, makeOpts, fakeTool, makeSession, scriptModel, drainTurn, FAKE_SESSION_CWD } from './helpers/harness-fakes';
-import { CLOUD_DEFAULT } from '../src/main/harness/capability-profile';
+import { CLOUD_DEFAULT, resolveProfile } from '../src/main/harness/capability-profile';
 
 function collect(session: HarnessSession): TranscriptEvent[] {
   const events: TranscriptEvent[] = [];
@@ -2284,6 +2285,24 @@ describe('image tool-results', () => {
 
     const ev = events.find((e) => e.type === 'tool-result');
     expect(ev!.data.images).toEqual([imgPath]);
+  });
+
+  it('live gate: a tiny file whose header claims 2904×17528 is refused by the driver with the basename note', async () => {
+    const dir = mkTmpDir();
+    const imgPath = path.join(dir, 'contact.png');
+    fs.writeFileSync(imgPath, pngHeader(2904, 17528));
+    const read = fakeTool('Read', { onExecute: () => ({ text: 'Read image', images: [imgPath] }) });
+    const model = scriptedModel([
+      stream(toolCallChunk('c1', 'Read', { file_path: imgPath }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'done'), finishChunk('stop')),
+    ]);
+    const session = new HarnessSession(makeOpts({ tools: [read], decide: async () => ALLOW,
+      profile: resolveProfile({ providerType: 'chatgpt', modelId: 'gpt-x', contextLength: null }) }), async () => model as any);
+    const events = collect(session);
+    await session.send('go');
+    const toolMsg = ((session as any).history as any[]).filter((m) => m.role === 'tool').pop();
+    expect(toolMsg.content[0].output).toEqual({ type: 'text', value: 'Read image\n' + imageNote({ kind: 'oversized', label: 'contact.png', width: 2904, height: 17528 }) });
+    expect(events.find((e) => e.type === 'tool-result')!.data.images).toBeUndefined();
   });
 
   it('an unchanged re-fetch is deduped with a named note, no second copy', async () => {

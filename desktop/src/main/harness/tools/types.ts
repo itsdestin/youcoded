@@ -9,6 +9,7 @@ import type { DelegatedModels } from '../specialists/delegated-models';
 import type { ShellRegistry } from '../shell-registry';
 import type { RunningCalls } from '../askpass/running-calls';
 import type { AdminPasswordServiceLike } from '../admin-password-service';
+import type { ImageLimits } from '../capability-profile';
 
 /** Task 6 — what the Task tool's execute() hands the host to actually run a
  *  specialist. Structural, mirroring the rest of ToolServices: the tool never
@@ -289,6 +290,8 @@ export interface ToolContext {
   /** Whether the SESSION's current model can see images (profile.supportsVision).
    *  Optional so test/one-off contexts default to the conservative false. */
   supportsVision?: boolean;
+  /** The session's picture limits (profile.imageLimits); Read prepares against them. Absent → prepare uses IMAGE_LIMITS_DEFAULT. */
+  imageLimits?: ImageLimits;
   /** G-1 background Bash: this session's shell registry — where a
    *  run_in_background start or a handed-off command lives, and what
    *  BashOutput/KillShell read. Absent in test/one-off contexts, in which
@@ -353,6 +356,8 @@ export interface ToolResultPayload {
    *  and amends `text` with a named note for anything it skips — the tool only
    *  ever promises what it has already stat'd (resolve-before-promise). */
   images?: string[];
+  /** Model-facing name per `images` entry (same order). Read sets the ORIGINAL basename for a prepared derivative. */
+  imageLabels?: string[];
 }
 
 export interface NativeTool<A = any> {
