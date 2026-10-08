@@ -31,6 +31,8 @@ import { SessionStore } from './harness/session-store';
 import { NativeSessionHost } from './harness/native-session-host';
 import { startAdminPassword } from './harness/admin-password-startup';
 import { AcceptedHistoryStore } from './harness/accepted-history-store';
+import { ImagePreparer } from './harness/image-prepare';
+import { createResizeService } from './image-resize-service';
 import { SpecialistCatalog } from './harness/specialists/catalog';
 import type { ProfileProviderType } from './harness/capability-profile';
 import { PermissionStore } from './harness/permission-store';
@@ -82,7 +84,10 @@ export type RemoteNativeRuntime = Pick<NativeRuntime,
   | 'sessionState'
   // WHY records and fills (one-core R5-2): the phone door fills a screen from the record (session:open) and holds a
   // screen's pushes while it is being filled, the same as the computer's door.
-  | 'records' | 'fills'>;
+  | 'records' | 'fills'
+  // WHY imagePreparer: native:send runs for both doors, and a phone's picture attachment needs the
+  // same shrink-before-send as the computer's.
+  | 'imagePreparer'>;
 
 type TitleAppliedListener = (desktopId: string, title: string) => void;
 
@@ -101,6 +106,9 @@ export interface NativeRuntime {
   claudeAccount: ClaudeAccount;
   searchKeyStore: SearchKeyStore;
   searchService: SearchService;
+  /** Shrinks pictures too big for the session's model to a cached copy; native:send
+   *  awaits it for attachments, and the Read tool reaches it as services.images. */
+  imagePreparer: ImagePreparer;
   specialistCatalog: SpecialistCatalog;
   nativeHost: NativeSessionHost;
   modelManager: ModelManager;
@@ -255,6 +263,10 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
   // app has, since there is no native transcript-deletion UI today.
   const acceptedHistory = new AcceptedHistoryStore(userDataDir);
   void acceptedHistory.cleanupOrphans().catch(() => { /* best-effort cleanup */ });
+  // Shrunk copies of pictures too big for a model (image-prepare.ts). Profile-
+  // private like the continuation store: userData, never NativeHome.
+  // (Resize workers are per-job; nothing to stop at quit.)
+  const imagePreparer = new ImagePreparer(path.join(userDataDir, 'image-cache'), createResizeService().resize);
   const nativeHost = new NativeSessionHost(
     new SessionStore(nativeHome),
     // Pass the per-turn opts (e.g. serialToolCalls for small local models) straight through.
@@ -378,6 +390,8 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
     // reads services.search (the chain-walking SearchService).
     {
       search: searchService,
+      // The Read tool shrinks an over-limit picture before it promises it to the model.
+      images: imagePreparer,
       // Task 14 fix pass: same shape as the context/slots (~2295) and
       // vision-support (~2324) closures above — providers first, then the
       // catalog rows for those providers. NativeSessionHost.toolWiring()
@@ -620,7 +634,7 @@ export function createRuntime(deps: CreateRuntimeDeps): NativeRuntime {
   return {
     nativeHome, permissionStore, stepGuardSettings, contextSettings, secretsStore, engineManager,
     chatgptAuth: chatgptForUi, providerRegistry, openRouterSignIn, modelCatalog, claudeAccount,
-    searchKeyStore, searchService, specialistCatalog, nativeHost, modelManager, namingSettings,
+    searchKeyStore, searchService, imagePreparer, specialistCatalog, nativeHost, modelManager, namingSettings,
     sessionNamer, applyAutomaticTitle, queueTitle, publishNamingMode, resolvePortableModel,
     stampProviderTypes, sessionState, records, fills,
     onTitleApplied: (listener) => { titleListeners.push(listener); },

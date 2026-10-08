@@ -24,6 +24,7 @@ import type { AskDecision } from '../src/main/harness/permission-broker';
 import { MockLanguageModelV4 } from 'ai/test';
 import { textChunks, toolCallChunk, finishChunk, stream, scriptedModel } from './helpers/scripted-model';
 import { EMPTY_SKILL_CATALOG } from './helpers/harness-fakes';
+import { imageNote, type ImageReadResult } from '../src/main/harness/image-support';
 
 // Permissive fake tool (mirrors the loop suite's helper) — records executions,
 // subject undefined so tool-layer guards are skipped and decide() is the gate.
@@ -665,16 +666,22 @@ describe('rebuildHistory — the resume deep-equal contract', () => {
 // module stays pure and this suite needs no filesystem.
 describe('attachment resume (#290 follow-up fix 2)', () => {
   const ev = (type: string, data: any) => ({ type, sessionId: 's', uuid: crypto.randomUUID(), timestamp: 1, data }) as any;
-  const fakeReader = (p: string) => p.endsWith('ok.png') ? { mediaType: 'image/png', data: Buffer.from('png!') } : null;
+  const fakeReader = (p: string): ImageReadResult =>
+    p.endsWith('ok.png') ? { ok: true, mediaType: 'image/png', data: Buffer.from('png!') }
+    : p.endsWith('huge.png') ? { ok: false, reason: 'oversized', width: 2904, height: 17528 }
+    : { ok: false, reason: 'missing' };
 
   it('re-reads persisted attachment paths into user-message parts', () => {
     const out = rebuildHistory([ev('user-message', { text: 'see /tmp/ok.png', attachments: ['/tmp/ok.png'] })], fakeReader);
     expect(out).toEqual([{ role: 'user', content: [{ type: 'text', text: 'see /tmp/ok.png' }, { type: 'file', mediaType: 'image/png', data: Buffer.from('png!') }] }]);
   });
 
-  it('a vanished attachment degrades to the plain-string shape (path still in text)', () => {
+  it('a vanished image attachment becomes a missing note naming it by basename', () => {
     const out = rebuildHistory([ev('user-message', { text: 'see /tmp/gone.png', attachments: ['/tmp/gone.png'] })], fakeReader);
-    expect(out).toEqual([{ role: 'user', content: 'see /tmp/gone.png' }]);
+    expect(out).toEqual([{ role: 'user', content: [
+      { type: 'text', text: 'see /tmp/gone.png' },
+      { type: 'text', text: imageNote({ kind: 'unavailable', label: 'gone.png', reason: 'missing' }) },
+    ] }]);
   });
 
   it('no reader (pure/legacy call) keeps today\'s exact behavior', () => {
@@ -687,7 +694,46 @@ describe('attachment resume (#290 follow-up fix 2)', () => {
     // one vanished attachment among several must not sink the whole message
     // back to the bare-string shape and lose the image that IS still there.
     const out = rebuildHistory([ev('user-message', { text: 'see both', attachments: ['/tmp/ok.png', '/tmp/gone.png'] })], fakeReader);
-    expect(out).toEqual([{ role: 'user', content: [{ type: 'text', text: 'see both' }, { type: 'file', mediaType: 'image/png', data: Buffer.from('png!') }] }]);
+    expect(out).toEqual([{ role: 'user', content: [
+      { type: 'text', text: 'see both' },
+      { type: 'file', mediaType: 'image/png', data: Buffer.from('png!') },
+      { type: 'text', text: imageNote({ kind: 'unavailable', label: 'gone.png', reason: 'missing' }) },
+    ] }]);
+  });
+
+  it('reads modelAttachments (the prepared copies) when present, attachments otherwise', () => {
+    const out = rebuildHistory([ev('user-message', { text: 'see /tmp/huge.png', attachments: ['/tmp/huge.png'], modelAttachments: ['/tmp/cache/ok.png'] })], fakeReader);
+    expect(out).toEqual([{ role: 'user', content: [{ type: 'text', text: 'see /tmp/huge.png' }, { type: 'file', mediaType: 'image/png', data: Buffer.from('png!') }] }]);
+  });
+  it('a prepared copy persisted with its original size reopens with the same "downscaled" note, named by the original', () => {
+    const sized = (p: string): ImageReadResult => p.endsWith('derived.png')
+      ? { ok: true, mediaType: 'image/png', data: Buffer.from('small!'), width: 1221, height: 7372 } : fakeReader(p);
+    const out = rebuildHistory([ev('user-message', { text: 'see', attachments: ['/tmp/contact.png', '/tmp/a.txt'],
+      modelAttachments: ['/tmp/cache/abc-derived.png', '/tmp/a.txt'], originalSizes: [{ width: 2904, height: 17528 }, null] })], sized);
+    expect(out).toEqual([{ role: 'user', content: [
+      { type: 'text', text: 'see' },
+      { type: 'file', mediaType: 'image/png', data: Buffer.from('small!') },
+      { type: 'text', text: imageNote({ kind: 'downscaled', label: 'contact.png', width: 2904, height: 17528, shownWidth: 1221, shownHeight: 7372 }) },
+    ] }]);
+  });
+  it('no "downscaled" note without a stored original size, or when the copy is not actually smaller', () => {
+    const same = (p: string): ImageReadResult => ({ ok: true, mediaType: 'image/png', data: Buffer.from(p), width: 640, height: 480 });
+    const legacy = rebuildHistory([ev('user-message', { text: 'a', attachments: ['/tmp/x.png'], modelAttachments: ['/tmp/cache/x.png'] })], same);
+    const notSmaller = rebuildHistory([ev('user-message', { text: 'b', attachments: ['/tmp/x.png'], modelAttachments: ['/tmp/cache/x.png'], originalSizes: [{ width: 640, height: 480 }] })], same);
+    for (const out of [legacy, notSmaller]) expect((out[0] as any).content.filter((c: any) => c.type === 'text')).toHaveLength(1);
+  });
+  it('an attachment the gate drops gets a visible basename note as a trailing text part — never silence', () => {
+    const out = rebuildHistory([ev('user-message', { text: 'see', attachments: ['/tmp/huge.png', '/tmp/ok.png', '/tmp/gone.png'] })], fakeReader);
+    expect(out).toEqual([{ role: 'user', content: [
+      { type: 'text', text: 'see' },
+      { type: 'file', mediaType: 'image/png', data: Buffer.from('png!') },
+      { type: 'text', text: imageNote({ kind: 'oversized', label: 'huge.png', width: 2904, height: 17528 }) },
+      { type: 'text', text: imageNote({ kind: 'unavailable', label: 'gone.png', reason: 'missing' }) },
+    ] }]);
+  });
+  it('non-image attachments never get a note — a PDF or text file is skipped silently, as today', () => {
+    const out = rebuildHistory([ev('user-message', { text: 'see', attachments: ['/tmp/notes.pdf', '/tmp/a.txt'] })], fakeReader);
+    expect(out).toEqual([{ role: 'user', content: 'see' }]);
   });
 });
 
@@ -696,7 +742,10 @@ describe('attachment resume (#290 follow-up fix 2)', () => {
 // carries the path, never the binary, and rebuildHistory re-reads it through
 // the injected reader into the exact live content-output shape (Task 5).
 describe('image tool-result resume', () => {
-  const fakeReader = (p: string) => p.endsWith('ok.png') ? { mediaType: 'image/png', data: Buffer.from('png!') } : null;
+  const fakeReader = (p: string): ImageReadResult =>
+    p.endsWith('ok.png') ? { ok: true, mediaType: 'image/png', data: Buffer.from('png!') }
+    : p.endsWith('huge.png') ? { ok: false, reason: 'oversized', width: 2904, height: 17528 }
+    : { ok: false, reason: 'missing' };
   const ev = (type: string, data: any) => ({ type, sessionId: 's', uuid: crypto.randomUUID(), timestamp: 1, data }) as any;
   const pair = (images: string[]) => [
     ev('tool-use', { toolUseId: 't1', toolName: 'Read', toolInput: { file_path: images[0] } }),
@@ -720,7 +769,7 @@ describe('image tool-result resume', () => {
     const out = rebuildHistory(pair(['/tmp/gone.png']), fakeReader);
     const toolMsg = out.find((m: any) => m.role === 'tool') as any;
     expect(toolMsg.content[0].output.type).toBe('text');
-    expect(toolMsg.content[0].output.value).toContain('[image no longer available: /tmp/gone.png]');
+    expect(toolMsg.content[0].output.value).toContain('[image no longer available: gone.png]');
   });
 
   // Brief's title had an unescaped apostrophe inside single quotes (a syntax
@@ -729,6 +778,22 @@ describe('image tool-result resume', () => {
     const out = rebuildHistory(pair(['/tmp/ok.png']));
     const toolMsg = out.find((m: any) => m.role === 'tool') as any;
     expect(toolMsg.content[0].output).toEqual({ type: 'text', value: 'Read image' });
+  });
+
+  it('an oversized tool image becomes the basename note the live driver writes — reopen cannot smuggle it back', () => {
+    const out = rebuildHistory(pair(['/tmp/shots/huge.png']), fakeReader);
+    const toolMsg = out.find((m: any) => m.role === 'tool') as any;
+    expect(toolMsg.content[0].output).toEqual({ type: 'text', value: 'Read image\n' + imageNote({ kind: 'oversized', label: 'huge.png', width: 2904, height: 17528 }) });
+  });
+
+  it('a persisted imageLabels entry names a prepared derivative by its ORIGINAL basename', () => {
+    const out = rebuildHistory([
+      ev('tool-use', { toolUseId: 't1', toolName: 'Read', toolInput: { file_path: '/tmp/contact.png' } }),
+      ev('tool-result', { toolUseId: 't1', toolName: 'Read', toolResult: 'Read image', images: ['/cache/0123456789abcdef-ok.png'], imageLabels: ['contact.png'] }),
+      ev('turn-complete', {}),
+    ], fakeReader);
+    const toolMsg = out.find((m: any) => m.role === 'tool') as any;
+    expect(toolMsg.content[0].output.value[1]).toMatchObject({ type: 'file', filename: 'contact.png' });
   });
 
   it('partial availability: some images present, some gone — both handled in one result', () => {
@@ -744,7 +809,7 @@ describe('image tool-result resume', () => {
     expect(toolMsg.content[0].output).toEqual({
       type: 'content',
       value: [
-        { type: 'text', text: 'Read images\n[image no longer available: /tmp/gone.png]' },
+        { type: 'text', text: 'Read images\n[image no longer available: gone.png]' },
         { type: 'file', mediaType: 'image/png', filename: 'ok.png', data: { type: 'data', data: Buffer.from('png!') } },
       ],
     });

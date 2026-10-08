@@ -378,9 +378,10 @@ describe('RemoteServer and the shell provider', () => {
     const send = vi.fn(() => ({ status: 'sent' }));
     giveRuntime(server, { nativeHost: { send } });
     await drive(server, { type: 'native:send', id: 'n1', payload: { sessionId: 's1', text: 'look /up/a.png', attachments: ['/up/a.png', 42] } });
-    expect(send).toHaveBeenCalledWith('s1', 'look /up/a.png', ['/up/a.png']);
+    // The fourth argument is the model-facing copy; with no preparer on the runtime it equals the files.
+    expect(send).toHaveBeenCalledWith('s1', 'look /up/a.png', ['/up/a.png'], ['/up/a.png']);
     await drive(server, { type: 'native:send', id: 'n2', payload: { sessionId: 's1', text: 'no files' } });
-    expect(send).toHaveBeenLastCalledWith('s1', 'no files', []);
+    expect(send).toHaveBeenLastCalledWith('s1', 'no files', [], []);
   });
 
   // A phone's settings read and write the same files the same way as the desktop's —

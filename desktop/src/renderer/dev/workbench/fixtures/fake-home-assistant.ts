@@ -112,13 +112,18 @@ const ROOMS: Array<{ id: string; name: string; items: Thing[]; scenes?: Array<{ 
 // Round 4: what the page shows about where each thing comes from, and Hue
 // scenes per room, so chips, Problems and Scenes have something to show.
 const MAKERS: Record<string, [string, string]> = { binary_sensor: ['', 'entry_ping'], button: ['', 'entry_wol'], light: ['Signify Netherlands B.V.', 'entry_hue'], climate: ['Google Nest', 'entry_nest'], camera: ['Google Nest', 'entry_nest'], remote: ['Google', 'entry_atv'] };
+// WHY one stamp for every device, read once: reading the clock per device let it tick a millisecond between the TV
+// (media_player) and its remote, which are seeded one after the other. The remote then looked like it came on AFTER the
+// TV's Cast side last changed, the page's castStale rule called the TV's "playing" old news, and home-page-tv.test.ts
+// failed 5 of 6 on a slow CI runner (PR #613). Every device's last change is the same moment, as it always meant to be.
+const SEEDED_SINCE = new Date(Date.now() - 3 * 3600_000).toISOString();
 for (const r of ROOMS) for (const t of r.items) {
   const d = t.id.split('.')[0];
   const [maker, entry] = MAKERS[d] ?? (t.model?.startsWith('Sonos') ? ['Sonos', 'entry_sonos'] : ['Google Inc.', 'entry_cast']);
   t.maker ??= maker; t.entry ??= entry;
   // Like the real template's 'cast' flag: a media player that comes through the Google Cast integration.
   if (d === 'media_player' && t.entry === 'entry_cast') t.cast = true;
-  t.since = new Date(Date.now() - 3 * 3600_000).toISOString();
+  t.since = SEEDED_SINCE;
 }
 const ago = (h: number) => new Date(Date.now() - h * 3600_000).toISOString();
 // Each scene's own brightness (0-255) and whether it moves through its colours, as a Hue scene reports them (2026-10-07).

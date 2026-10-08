@@ -24,10 +24,40 @@ import { findProjectInstructionsPath, locateContextFile, readWholeContextFile } 
 import { isPhoneDeniedFile, KEPT_ON_COMPUTER } from '../phone-read-deny';
 import { noteModelUsed } from '../conversations/service';
 import { defineChannel, type MainChannelCtx, type MainChannelDef } from './channel-def';
+import { deliverableImageMediaType } from '../harness/image-support';
+import type { ModelAttachment } from '../harness/busy-message-boundary';
+import type { RemoteNativeRuntime } from '../create-runtime';
 
 /** The most a phone is sent of one instruction file (the computer's panel has no cap; instruction files are small). */
 const PHONE_CONTEXT_MAX_BYTES = 1024 * 1024;
 const NOT_LIVE_SEND = { status: 'failed', reason: 'not-live' } as const;
+
+// WHY a per-session chain: send() is synchronous by contract (native-runtime.md),
+// so the one async step a big picture needs — shrinking it to a cached file —
+// runs here first. Chaining per session keeps order: a plain follow-up typed
+// while a picture is still being prepared must not reach the host first.
+const sendChains = new Map<string, Promise<unknown>>();
+
+/** The paths the MODEL sees, index-aligned with `files` (the user's own paths stay what the chat shows). */
+async function modelPathsFor(runtime: RemoteNativeRuntime, sessionId: string, files: string[]): Promise<ModelAttachment[]> {
+  const preparer = runtime.imagePreparer;
+  if (!preparer) return files;
+  const limits = runtime.nativeHost.imageLimitsFor(sessionId);
+  return Promise.all(files.map(async (f): Promise<ModelAttachment> => {
+    if (!deliverableImageMediaType(f)) return f;
+    try {
+      const r = await preparer.prepare(f, limits);
+      // WHY the original's size rides along: the model is told the picture was shrunk
+      // (userAttachmentParts' "downscaled" note). The preparer already read that
+      // header (async), so the send path adds no file read at all.
+      if (r.kind === 'prepared') return { path: r.path, original: { path: f, width: r.width, height: r.height } };
+      // A refusal travels WITH its reason so the model is told preparation failed
+      // (and why), not that the picture is merely over a size limit.
+      if (r.kind === 'refused') return { path: f, prepareFailed: r.reason };
+      return f;
+    } catch { return f; }   // the gate still refuses an unprepared oversized file, with a note
+  }));
+}
 
 /** WHY a short cache (R6-3 review): finding a skill's file runs the computer's skill scan (synchronous reads across every plugin), and a phone could
  *  ask in a loop. A found path is kept for a few seconds; it is judged again on every read, so a stale entry can never skip a check. */
@@ -76,15 +106,26 @@ export const nativeChannels: MainChannelDef[] = [
   // M1: answers {status:'sent'|'queued'|'failed'} so the screen can draw truthful bubbles; send() never throws.
   defineChannel({
     name: IPC.NATIVE_SEND, kind: 'handle',
-    handler: ({ sessionId, text, attachments, sendId }, ctx) => {
+    handler: async ({ sessionId, text, attachments, sendId }, ctx) => {
       // Only text paths are handed to the host (the phone's old rule; a hand-made message cannot slip anything else in).
       const files = (Array.isArray(attachments) ? attachments : []).filter((a): a is string => typeof a === 'string');
       if (!ctx.runtime) return NOT_LIVE_SEND;
-      const result = ctx.runtime.nativeHost.send(sessionId, text, files);
-      // The host took it (sent now, or queued behind the running turn): note the id so a phone that lost the answer can learn so (R5-4b).
-      // A 'failed' answer is NOT noted: the host did not accept it, which is exactly what "not received" means.
-      if (sendId !== undefined && result && result.status !== 'failed') ctx.runtime.records.noteSend(sessionId, sendId);
-      return result;
+      const runtime = ctx.runtime;
+      const previous = sendChains.get(sessionId) ?? Promise.resolve();
+      const turn = previous.then(async () => {
+        // Pictures are prepared (shrunk to a cached copy when over the model's limits) BEFORE the synchronous send.
+        const modelFiles = await modelPathsFor(runtime, sessionId, files);
+        const result = runtime.nativeHost.send(sessionId, text, files, modelFiles);
+        // The host took it (sent now, or queued behind the running turn): note the id so a phone that lost the answer can learn so (R5-4b).
+        // A 'failed' answer is NOT noted: the host did not accept it, which is exactly what "not received" means.
+        if (sendId !== undefined && result && result.status !== 'failed') runtime.records.noteSend(sessionId, sendId);
+        return result;
+      });
+      const tail = turn.catch(() => undefined);
+      sendChains.set(sessionId, tail);
+      // Forget a settled chain that nothing newer replaced, so idle sessions hold no entry.
+      void tail.then(() => { if (sendChains.get(sessionId) === tail) sendChains.delete(sessionId); });
+      return turn;
     },
   }),
   defineChannel({ name: IPC.NATIVE_QUEUE_REMOVE, kind: 'handle', handler: ({ sessionId, queueId }, ctx) => ctx.runtime ? ctx.runtime.nativeHost.removeQueued(sessionId, queueId) : false }),

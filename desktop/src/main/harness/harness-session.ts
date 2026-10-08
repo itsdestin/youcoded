@@ -14,6 +14,7 @@
 import { withChatGptRequest } from '../providers/chatgpt-request-diagnostics';
 import { classifyProviderError } from '../providers/provider-error-code';
 import { isContextOverflow } from '../providers/context-overflow';
+import { imageTooLarge } from '../providers/image-too-large';
 import { cacheTokensForStep } from './cache-usage';
 import { EventEmitter } from 'events';
 import { createHash, randomUUID } from 'crypto';
@@ -38,7 +39,8 @@ import { destructiveRmVerdict } from './tools/rm-target';
 import { secretPathVerdict } from './tools/bash-secret-paths';
 import { adminCommandVerdict, refuseMessage, visibleSudoLines } from './tools/admin-command';
 import * as os from 'os';
-import { readImageFromDisk, MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, deliverableImageMediaType, MAX_ATTACHMENT_BYTES } from './image-support';
+import { readImageFromDisk, MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, MAX_ATTACHMENT_BYTES, imageNote } from './image-support';
+import { collapseOversizedImageParts, collapseLargestImageParts, userAttachmentParts } from './image-history';
 
 // Tools whose permission SUBJECT is not a filesystem path. Bash's is a command
 // string; Skill's is a skill id. Both would be canonicalized against cwd and run
@@ -174,9 +176,9 @@ import { formatAnswers } from './tools/ask-user-question';
 import { formatArgErrors } from './tools/arg-errors';
 import { parseToolArgs } from './tool-args';
 import { PermissionCallbackFailure, permissionCallback, finalizeRemainingCalls } from './tool-group-finalization';
-import { appendUserHistory, claimBusyMessage, supersedeToolGroup } from './busy-message-boundary';
+import { appendUserHistory, claimBusyMessage, supersedeToolGroup, userMessageData, type UserPart, type ModelAttachment } from './busy-message-boundary';
 import type { AskRequest, AskDecision } from './permission-broker';
-import { CLOUD_DEFAULT, type CapabilityProfile } from './capability-profile';
+import { CLOUD_DEFAULT, type CapabilityProfile, type ImageLimits } from './capability-profile';
 import { adaptForWire } from './wire-adapter';
 import { planCompaction, pruneToolOutputs, summarizePrompt, estimateTokens, countImageOutputs, contextBudget, planContextBudget, selectCompactionCut, summaryProvenanceNote, markAppGenerated, fitSummaryToolOutputs, validateCompactionCandidate, type CompactionConfig } from './compaction';
 import { toReport, type PrefillProgress } from '../providers/prefill-progress';
@@ -228,7 +230,7 @@ export interface HarnessSessionOpts {
   tools?: NativeTool[];
   /** Root-only synchronous FIFO claim. restore returns an unaccepted claim to the host
    * if an event append fails; no second turn or await occurs during a claim. */
-  takeReadyBusyMessage?: () => ({ id: string; text: string; attachments: string[]; restore?: () => void } | undefined);
+  takeReadyBusyMessage?: () => ({ id: string; text: string; attachments: string[]; modelAttachments?: ModelAttachment[]; restore?: () => void } | undefined);
   /** Pure permission decision for (tool, subject) — the configured layers
    *  (preset/mode/deny-list/remembered). Absent → every gated tool asks. */
   decide?: (tool: string, subject: string | undefined) => Promise<PermissionDecision>;
@@ -1120,6 +1122,10 @@ export class HarnessSession extends EventEmitter {
     if (changed) this.seededContinuationBinding = undefined;
     if (contextLength !== undefined) this.opts.contextLength = contextLength;
     if (profile) this.profile = profile;
+    // WHY: a history that fit the old provider must never reach a stricter one.
+    // Re-applying the gate here (not only on the error path) means the first
+    // request after a switch already carries the note, not the picture.
+    if (profile) this.enforceImageLimits();
     // Same applied-only-when-provided shape as contextLength: a swap to a
     // model with no published price must be able to CLEAR a price the old
     // model had, so `null` is a real value here and only `undefined` skips.
@@ -1881,6 +1887,8 @@ export class HarnessSession extends EventEmitter {
   /** Automatic selection retires complete groups into one summary. A failed
    * candidate leaves accepted history intact and fences this exact revision. */
   private async maybeCompact(model: LanguageModel, aiTools: Record<string, any>, force = false): Promise<boolean> {
+    // Neither the summariser nor the kept tail may carry an over-limit picture (2026-10-07).
+    this.enforceImageLimits();
     const estimatedInput = requestOccupancy({ history: this.history, identity: this.requestSizingIdentity(),
       revision: this.capture.revision, fixedCost: this.requestFixedCost(), anchor: this.usageAnchor }).tokens;
     const plan = planContextBudget({ contextLength: this.opts.contextLength ?? null,
@@ -2008,6 +2016,28 @@ export class HarnessSession extends EventEmitter {
     this.servedReads.clear(); this.servedSkills.clear();
   }
 
+  /** The gate, re-applied to what is already in memory: the session's current
+   *  limits. Returns whether history changed. */
+  private enforceImageLimits(): boolean { return this.collapseOversizedImages(this.profile.imageLimits); }
+
+  /** Collapse every image part over `limits` to the shared oversized note
+   *  (the rewrite itself: image-history.ts → collapseOversizedImageParts).
+   *  WHY in-memory only: the reader writes this exact shape on every rebuild,
+   *  so reopen reproduces it without a new persisted event, and the accepted-
+   *  history store describes it (`pruned.oversized`, `note`). shownImages is
+   *  cleared like commitPrune does, so a later Read re-delivers — prepared. */
+  private collapseOversizedImages(limits: ImageLimits): boolean { return this.adoptImageRewrite(collapseOversizedImageParts(this.history, limits)); }
+
+  private adoptImageRewrite(next: ModelMessage[] | null): boolean {
+    if (!next) return false;   // never swap the array for a no-op: untouched messages keep their identity
+    this.history = next;
+    // Not markPruned: this is a rewrite (mutated), not compaction's prune
+    // transformation. historyOrigins needs no change — indices are unchanged.
+    this.capture.mutated(); this.prefixMoved = true;
+    this.shownImages.clear(); this.reconcileTriggerVisibility();
+    return true;
+  }
+
   // Live prefill progress from llama.cpp, forwarded onto the SAME
   // assistant-thinking notice the size-only estimate already drives — the UI
   // upgrades in place from "reading N tokens" to a real fraction + countdown.
@@ -2126,6 +2156,9 @@ export class HarnessSession extends EventEmitter {
    *  for the smaller model about to take over, so success means it fits there. */
   async compactNow(focus?: string, targetContextLength?: number): Promise<{ ok: true } | { ok: false; reason: 'turn-in-flight' | 'nothing-to-compact' | 'summary-failed' | 'interrupted' | 'cannot-fit' }> {
     if (this.abort) return { ok: false, reason: 'turn-in-flight' };
+    // Neither the summariser nor the kept tail may carry an over-limit picture (2026-10-07).
+    // WHY below the guard: a running turn owns history; never rewrite it under that turn.
+    this.enforceImageLimits();
     this.abort = new AbortController();
     // Idle here (abort was null), so no turn owns this flag; a leftover from the
     // last turn's Stop must not make this summary read as stopped.
@@ -2410,9 +2443,12 @@ export class HarnessSession extends EventEmitter {
 
   /** WHY: keep composer text byte-identical for optimistic bubble dedup;
    * image parts ride alongside it, and paths persist for replay. */
-  async send(text: string, attachments: string[] = []): Promise<void> {
+  async send(text: string, attachments: string[] = [], modelAttachments?: ModelAttachment[]): Promise<void> {
     // Persist paths for image replay; keep no-attachment event shape unchanged.
-    return this.beginTurn(text, () => this.emitEvent('user-message', attachments.length ? { text, attachments } : { text }), attachments);
+    // WHY modelAttachments: the model reads the prepared copy where one exists,
+    // while the event's `attachments` keeps the picker path the UI shows.
+    return this.beginTurn(text, () => this.emitEvent('user-message', userMessageData(text, attachments, modelAttachments)),
+      modelAttachments ?? attachments);
   }
 
   /** Task 4 (native specialists, background execution) — inject a background
@@ -2469,18 +2505,12 @@ export class HarnessSession extends EventEmitter {
     this.capture.recordEvent(uuid);
   }
 
-  /** Image parts for a user message, or [] when the model cannot see images / none
-   *  were attached. Unreadable or oversized files are SKIPPED rather than thrown:
-   *  a turn must not die because one attachment went missing between the composer
-   *  and the send, and the path is still in the message text either way. */
-  private imagePartsFor(attachments: string[]): Array<{ type: 'file'; mediaType: string; data: Buffer }> {
-    if (!attachments.length || !this.profile.supportsVision) return [];
-    const parts: Array<{ type: 'file'; mediaType: string; data: Buffer }> = [];
-    for (const p of attachments) {
-      const img = readImageFromDisk(p);   // shared reader — one table, one cap (fix 3)
-      if (img) parts.push({ type: 'file', mediaType: img.mediaType, data: img.data });
-    }
-    return parts;
+  /** Parts for a user message's attachments (pictures, then a note per picture
+   *  the model did NOT get — image-history.ts → userAttachmentParts), or [] when
+   *  the model cannot see images / none were attached. */
+  private imagePartsFor(entries: ModelAttachment[]): UserPart[] {
+    if (!entries.length || !this.profile.supportsVision) return [];
+    return userAttachmentParts(entries, this.profile.imageLimits);
   }
 
   /** Resolve a tool's promised image paths into deliverable parts, charging the
@@ -2501,7 +2531,7 @@ export class HarnessSession extends EventEmitter {
     payload: ToolResultPayload,
     budget: { count: number; bytes: number },
     toolCallId: string,
-  ): { text: string; images: Array<{ path: string; mediaType: string; data: Buffer; filename: string }> } {
+  ): { text: string; images: Array<{ path: string; mediaType: string; data: Buffer; filename: string }>; labels?: string[] } {
     const paths = payload.images ?? [];
     if (!paths.length) return { text: payload.text, images: [] };
     let text = payload.text;
@@ -2509,67 +2539,69 @@ export class HarnessSession extends EventEmitter {
     for (const p of paths) {
       // The tool already stat'd this file before promising it (resolve-before-
       // promise, Task 4) — but time passed between that stat and this delivery,
-      // so it can have vanished. Re-stat rather than trust the promise. Kept
-      // (not just its mtime) so a later null-from-readImageFromDisk can be
-      // diagnosed against this SAME stat instead of a second, possibly-stale one.
+      // so it can have vanished. Re-stat rather than trust the promise. The
+      // reader below says WHY it declined, so only the mtime is kept here.
+      // WHY the label in EVERY note below, never `p`: a prepared derivative's path is
+      // the hashed cache file (<hash>-contact.png); the model knows it as contact.png.
+      const label = payload.imageLabels?.[paths.indexOf(p)] ?? path.basename(p);   // N9: a derivative keeps its ORIGINAL name
       let mtime: number;
-      let st: fs.Stats;
-      try { st = fs.statSync(p); mtime = st.mtimeMs; } catch {
-        text += `\n[image not attached: ${p} is no longer readable]`; continue;
+      try { mtime = fs.statSync(p).mtimeMs; } catch {
+        text += `\n[image not attached: ${label} is no longer readable]`; continue;
       }
       if (this.shownImages.get(p)?.mtime === mtime) {
-        text += `\n[image not re-attached: ${p} is unchanged and already visible earlier in this conversation]`; continue;
+        text += `\n[image not re-attached: ${label} is unchanged and already visible earlier in this conversation]`; continue;
       }
       if (budget.count >= MAX_IMAGES_PER_TURN) {
-        text += `\n[image not attached: over the ${MAX_IMAGES_PER_TURN}-images-per-turn budget — ask again next turn if you still need it]`; continue;
+        text += `\n[image not attached: ${label} is over the ${MAX_IMAGES_PER_TURN}-images-per-turn budget — ask again next turn if you still need it]`; continue;
       }
-      const img = readImageFromDisk(p);
-      if (!img) {
-        // readImageFromDisk collapses three distinct causes to null. The old
-        // text guessed "vanished" for all of them — near-impossible here since
-        // the stat four lines up already succeeded — which is exactly the
-        // unverified-cause error message this repo's standard forbids. Name
-        // the real one instead: undeliverable FORMAT, oversized (the stat we
-        // already have is trustworthy for this), or — the one genuine
-        // "vanished/unreadable" case — a read that threw between the stat and
-        // here.
-        if (!deliverableImageMediaType(p)) {
-          text += `\n[image not attached: ${p} is not a deliverable image format]`;
-        } else if (st.size > MAX_ATTACHMENT_BYTES) {
-          text += `\n[image not attached: ${p} exceeds the ${MAX_ATTACHMENT_BYTES / (1024 * 1024)} MB per-image size limit]`;
-        } else {
-          text += `\n[image not attached: ${p} could not be read]`;
-        }
+      // WHY the session's limits: a picture over the provider's pixel budget is
+      // refused HERE, before it enters history — once in, every later request
+      // would resend it and the provider would reject the whole conversation.
+      const img = readImageFromDisk(p, this.profile.imageLimits);
+      if (!img.ok) {
+        // Name the real cause (error-message-standards.md). The oversized note is
+        // the shared basename form so reopen rebuilds the identical text.
+        if (img.reason === 'oversized') text += `\n${imageNote({ kind: 'oversized', label, width: img.width ?? 0, height: img.height ?? 0 })}`;
+        else if (img.reason === 'undeliverable') text += `\n[image not attached: ${label} is not a deliverable image format]`;
+        else if (img.reason === 'too-many-bytes') text += `\n[image not attached: ${label} exceeds the ${MAX_ATTACHMENT_BYTES / (1024 * 1024)} MB per-image size limit]`;
+        else text += `\n[image not attached: ${label} could not be read]`;
         continue;
       }
       if (budget.bytes + img.data.length > MAX_IMAGE_BYTES_PER_TURN) {
-        text += `\n[image not attached: over the ${MAX_IMAGE_BYTES_PER_TURN / (1024 * 1024)} MB-per-turn image budget]`; continue;
+        text += `\n[image not attached: ${label} is over the ${MAX_IMAGE_BYTES_PER_TURN / (1024 * 1024)} MB-per-turn image budget]`; continue;
       }
       budget.count += 1; budget.bytes += img.data.length;
       this.shownImages.set(p, { mtime, toolCallId });
       // Fix 3 (2026-08-11 review): carry the file's own basename through so
       // toolResultPart can label the part with it instead of the tool's name —
       // see that method for why an unset filename defeats the point.
-      images.push({ path: p, mediaType: img.mediaType, data: img.data, filename: path.basename(p) });
+      // imageLabels (when the tool supplied them) replaces it: a prepared
+      // derivative is named by its ORIGINAL file, never its cache name.
+      images.push({ path: p, mediaType: img.mediaType, data: img.data, filename: label });
     }
-    return { text, images };
+    // WHY labels only when supplied: the event persists them so reopen names the
+    // file the same way; without them the basename rule already agrees.
+    return { text, images, ...(payload.imageLabels ? { labels: images.map((i) => i.filename) } : {}) };
   }
 
   /** WHY: busy input shares the opening send's durable event/image/capture path. */
-  private acceptUserMessage(text: string, attachments: string[], emit: () => string, appGenerated = false): void {
-    appendUserHistory(text, attachments, emit, appGenerated, paths => this.imagePartsFor(paths),
+  private acceptUserMessage(text: string, modelPaths: ModelAttachment[], emit: () => string, appGenerated = false): void {
+    appendUserHistory(text, modelPaths, emit, appGenerated, paths => this.imagePartsFor(paths),
       markAppGenerated, this.history, this.historyOrigins, uuid => this.capture.recordEvent(uuid));
   }
 
   /** Restore an unaccepted ready head before the host's next drain. */
   private acceptReadyBusyMessage(): boolean {
+    // WHY the same event rule as send(): a message queued behind a running turn
+    // must reach the model as its prepared copy and persist it identically.
     return claimBusyMessage(this.opts.takeReadyBusyMessage, item => this.acceptUserMessage(
-      item.text, item.attachments, () => this.emitEvent('user-message',
-        item.attachments.length ? { text: item.text, attachments: item.attachments } : { text: item.text })));
+      item.text, item.modelAttachments ?? item.attachments, () => this.emitEvent('user-message',
+        userMessageData(item.text, item.attachments, item.modelAttachments))));
   }
 
-  /** `emit` distinguishes user sends from skill invocation; the driver is shared. */
-  private async beginTurn(text: string, emit: () => string, attachments: string[] = [], appGenerated = false): Promise<void> {
+  /** `emit` distinguishes user sends from skill invocation; the driver is shared.
+   *  `attachments` is what the MODEL reads (prepared copies where they exist). */
+  private async beginTurn(text: string, emit: () => string, attachments: ModelAttachment[] = [], appGenerated = false): Promise<void> {
     // Never overwrite the active turn's single-slot state.
     if (this.abort) {
       throw new Error('HarnessSession: a turn is already in flight — callers must serialize send()/runSkill() per session.');
@@ -2763,6 +2795,7 @@ export class HarnessSession extends EventEmitter {
         // WHY: all retries belong to this logical step, not newly allocated steps.
         let step: StepResult;
         let overflowRetried = false;
+        let imageRetried = false;
         this.overflowOutputStarted = false;
         while (true) {
           try {
@@ -2773,7 +2806,22 @@ export class HarnessSession extends EventEmitter {
           } catch (err) {
             // Only a rejected request with no emitted output is safe to replay.
             // Completed tools were already appended before this step and are never rerun.
-            if (overflowRetried || partialAssistantText || this.overflowOutputStarted || !isContextOverflow(err, this.binding.providerId)
+            const replayable = !partialAssistantText && !this.overflowOutputStarted;
+            // Oversized picture (2026-10-07): the provider named the budget; collapse
+            // every image part over it to the shared note, then retry ONCE. Nothing
+            // is retried unchanged — collapse must report a change. This is the
+            // safety net behind enforceImageLimits (a wrong-high placeholder limit). WHY the
+            // second mode: our patch count may disagree with the provider's (image-history.ts).
+            const tooLarge = replayable && !imageRetried ? imageTooLarge(err) : null;
+            if (tooLarge && (this.collapseOversizedImages({ maxEdgePx: this.profile.imageLimits.maxEdgePx,
+              maxPatches: Math.min(this.profile.imageLimits.maxPatches, tooLarge.limitPatches) })
+              || this.adoptImageRewrite(collapseLargestImageParts(this.history, tooLarge.requiredPatches, tooLarge.limitPatches)))) {
+              imageRetried = true;
+              this.prefixMoved = true;
+              turnUsage.expectedRebuild = true;
+              continue;
+            }
+            if (overflowRetried || !replayable || !isContextOverflow(err, this.binding.providerId)
               || !await this.maybeCompact(model, aiTools, true)) throw err;
             overflowRetried = true;
             this.prefixMoved = true;
@@ -3106,6 +3154,10 @@ export class HarnessSession extends EventEmitter {
             ...(payload.structuredPatch ? { structuredPatch: payload.structuredPatch } : {}),
             // Paths only — events carry no binary; resume re-reads (history-rebuild.ts).
             ...(delivered.images.length ? { images: delivered.images.map((i) => i.path) } : {}),
+            // WHY persisted: reopen must name a prepared derivative by its ORIGINAL
+            // basename too, and the cache path alone cannot say what that was.
+            // Parallel to `images`, so only present beside it.
+            ...(delivered.labels && delivered.images.length ? { imageLabels: delivered.labels } : {}),
           }));
           resultParts.push(this.toolResultPart(call, delivered.text, delivered.images));
         }
@@ -4157,6 +4209,9 @@ export class HarnessSession extends EventEmitter {
       ...(this.opts.adminPasswordService ? { adminPasswordService: this.opts.adminPasswordService } : {}),
       todos: this.todos,
       supportsVision: this.profile.supportsVision,
+      // WHY: Read prepares an over-limit picture against the SAME limits the
+      // driver gates with, so its derivative is never refused downstream.
+      imageLimits: this.profile.imageLimits,
       ...(this.opts.toolServices ? { services: this.opts.toolServices } : {}),
     });
   }
