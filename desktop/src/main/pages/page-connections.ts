@@ -15,7 +15,8 @@
 // An approval is recorded against a FINGERPRINT, not an id: widen the access or
 // change the address and the old approval no longer matches, so the page asks
 // again (deck S-change). Renaming the id alone does not re-ask.
-import type { KeyScheme, PageAccess, PageConnection } from '../../shared/pages-types';
+import type { KeyScheme, PageAccess, PageConnection, VideoProfile } from '../../shared/pages-types';
+import { cleanDeviceAddress, urlMatchesDevice } from '../../shared/page-device-address';
 
 /** Where a key connection's key is attached when the manifest does not say.
  *  A header is the common case and the safer one: a key in a query string is
@@ -30,7 +31,7 @@ export interface KeyPlacement { in: 'header' | 'query'; param: string; scheme: K
  *  WHY a scheme at all: a bare key in an Authorization header is rejected by
  *  most services, so without it the commonest kind of key never worked. */
 export function keyPlacement(c: PageConnection): KeyPlacement {
-  if (c.kind !== 'key') return { ...DEFAULT_KEY_PLACEMENT };
+  if (c.kind !== 'key' && c.kind !== 'device') return { ...DEFAULT_KEY_PLACEMENT };
   const inQuery = !!c.keyParam && c.keyIn === 'query';
   const param = c.keyParam ?? DEFAULT_KEY_PLACEMENT.param;
   // A query parameter never carries a word; a header takes the author's word,
@@ -86,6 +87,77 @@ function cleanParam(raw: unknown): string | null {
   const name = raw.trim().toLowerCase();
   if (!name || name.length > 64 || !/^[a-z0-9!#$%&'*+.^_`|~-]+$/.test(name)) return null;
   return name;
+}
+
+/** A path on a device where its key is made (Home Assistant:
+ *  `/profile/security`). Plain path characters only, so the Open button can
+ *  never be pointed anywhere but the allowed device. */
+function cleanKeyPage(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const p = raw.trim();
+  return /^(\/[A-Za-z0-9_.-]+)+\/?$/.test(p) && p.length <= 120 && !p.includes('..') ? p : undefined;
+}
+
+/** A device's socket greeting. Bounded, and the key token at most once: the
+ *  app substitutes the key into this one message only, so it is the single
+ *  place a key ever enters a socket. Dropped (not trimmed) when it breaks a
+ *  rule, so a half-greeting is never sent. */
+const MAX_SOCKET_HELLO = 512;
+export const SOCKET_KEY_TOKEN = '{{key}}';
+function cleanSocketHello(raw: unknown): string | undefined {
+  if (typeof raw !== 'string' || !raw.trim() || raw.length > MAX_SOCKET_HELLO) return undefined;
+  return raw.split(SOCKET_KEY_TOKEN).length <= 2 ? raw : undefined;
+}
+
+/** Device-profile cleaning (spec 2026-10-04). Every string is short and plain
+ *  so nothing a manifest writes can become a pattern main would run. Anything
+ *  that breaks a rule is DROPPED, never trimmed into something else. */
+const MAX_PROFILE_WORD = 64;
+const MAX_VIDEO_SEND = 2048;
+const MAX_SOCKET_DENY = 16;
+/** A reply type, e.g. `auth_ok`. */
+function cleanReplyType(raw: unknown): string | undefined {
+  return typeof raw === 'string' && /^[A-Za-z0-9_./-]{1,64}$/.test(raw) ? raw : undefined;
+}
+/** The manifest's extra denied message-type prefixes (e.g. `config/`), lower-
+ *  cased, sorted and de-duplicated so order never changes the fingerprint.
+ *  WHY strict: the approval card lists exactly this list and main enforces
+ *  exactly this list, so a list that is not wholly valid (wrong type, an
+ *  odd entry, more than MAX_SOCKET_DENY) must never be half-kept. Returns
+ *  `undefined` when the manifest has none, `null` when it is invalid, and the
+ *  caller then drops the WHOLE connection (nothing runs on a profile the
+ *  person was not shown accurately). */
+function cleanSocketDeny(raw: unknown): string[] | undefined | null {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw) || raw.length > MAX_SOCKET_DENY) return null;
+  const out = new Set<string>();
+  for (const p of raw) {
+    const v = typeof p === 'string' ? p.trim().toLowerCase() : '';
+    if (!/^[a-z0-9_./-]{1,64}$/.test(v)) return null;
+    out.add(v);
+  }
+  return out.size ? [...out].sort() : undefined;
+}
+/** A dotted path into a reply (`event.answer`). */
+function cleanDotted(raw: unknown): string | undefined {
+  return typeof raw === 'string' && raw.length <= MAX_PROFILE_WORD && /^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*$/.test(raw) ? raw : undefined;
+}
+function cleanVideoProfile(raw: unknown): VideoProfile | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  // WHY must end with ".": the device's form is `domain.`; a bare letter or word
+  // would widen "a camera" to "anything the device has" (step-1 code review, item 5).
+  const targetPrefix = typeof o.targetPrefix === 'string' && /^[a-z0-9_.]{1,64}$/.test(o.targetPrefix) && o.targetPrefix.endsWith('.') ? o.targetPrefix : undefined;
+  // Where main opens ITS OWN socket for a video; absent means the Home Assistant path.
+  const socketPath = typeof o.socketPath === 'string' && /^\/[A-Za-z0-9_./-]{0,127}$/.test(o.socketPath) && !o.socketPath.includes('..') ? o.socketPath : undefined;
+  // WHY no {{key}}: the key may enter a socket only through the greeting.
+  const send = typeof o.send === 'string' && o.send.length > 0 && Buffer.byteLength(o.send) <= MAX_VIDEO_SEND
+    && !o.send.includes(SOCKET_KEY_TOKEN) ? o.send : undefined;
+  const answer = cleanDotted(o.answer);
+  const candidate = cleanDotted(o.candidate);
+  const failed = cleanDotted(o.failed);
+  if (!targetPrefix || !send || !answer || !candidate || !failed) return undefined;
+  return { targetPrefix, ...(socketPath ? { socketPath } : {}), send, answer, candidate, failed };
 }
 
 function cleanSteps(raw: unknown): { steps: string[] } | undefined {
@@ -156,6 +228,39 @@ export function parseConnections(raw: unknown): PageConnection[] {
         }
         break;
       }
+      // Home-device deck (2026-10-01). The address is the page's SUGGESTION:
+      // the person may change it on the approval card, and the approval records
+      // what they allowed. A suggestion that is not a home address is dropped,
+      // so the card never offers a website in a device's clothing.
+      case 'device': {
+        const address = cleanDeviceAddress(o.address);
+        const service = typeof o.service === 'string' ? o.service.trim().slice(0, MAX_SERVICE) : '';
+        if (address && service) {
+          c = { id, kind: 'device', service, address, access: cleanAccess(o.access), needsKey: o.needsKey !== false, keyHelp: cleanSteps(o.keyHelp) };
+          const keyPage = cleanKeyPage(o.keyPage);
+          if (keyPage) c.keyPage = keyPage;
+          const param = cleanParam(o.keyParam);
+          if (param) { c.keyIn = o.keyIn === 'query' ? 'query' : 'header'; c.keyParam = param; }
+          if (o.keyScheme === 'bearer' || o.keyScheme === 'token' || o.keyScheme === 'none') c.keyScheme = o.keyScheme;
+          const hello = cleanSocketHello(o.socketHello);
+          if (hello) c.socketHello = hello;
+          // WHY strict, like socketDeny: a bad socketAuthFailed silently dropped meant a wrong key was never
+          // recognised, so the socket retried logins for ten minutes (Home Assistant bans an address after a
+          // few failed logins). A reply type that is present but invalid drops the whole connection.
+          const ready = cleanReplyType(o.socketReady);
+          if (o.socketReady !== undefined && !ready) { c = null; break; }
+          if (ready) c.socketReady = ready;
+          const authFailed = cleanReplyType(o.socketAuthFailed);
+          if (o.socketAuthFailed !== undefined && !authFailed) { c = null; break; }
+          if (authFailed) c.socketAuthFailed = authFailed;
+          const deny = cleanSocketDeny(o.socketDeny);
+          if (deny === null) { c = null; break; }
+          if (deny) c.socketDeny = deny;
+          const video = cleanVideoProfile(o.videoProfile);
+          if (video) c.videoProfile = video;
+        }
+        break;
+      }
       default: break;
     }
     if (!c) continue;
@@ -164,9 +269,26 @@ export function parseConnections(raw: unknown): PageConnection[] {
     if (out.length >= MAX_CONNECTIONS) break;
   }
   const hasOpen = out.some((c) => c.kind === 'open');
-  const hasCredential = out.some((c) => c.kind === 'key' || c.kind === 'youcoded' || c.kind === 'github');
+  // A device counts as credentialled even without a key: a page that could
+  // read the home AND send anywhere is the bridge the block exists to stop.
+  const hasCredential = out.some((c) => c.kind === 'key' || c.kind === 'youcoded' || c.kind === 'github' || c.kind === 'device');
   if (hasOpen && hasCredential) return [];
   return out;
+}
+
+/** The cleaned device profile as JSON with sorted keys (so key order in the
+ *  manifest never matters), or '' when the connection has none. */
+function profileSegment(c: Extract<PageConnection, { kind: 'device' }>): string {
+  const profile: Record<string, unknown> = {};
+  if (c.socketHello) profile.socketHello = c.socketHello;
+  if (c.socketReady) profile.socketReady = c.socketReady;
+  if (c.socketAuthFailed) profile.socketAuthFailed = c.socketAuthFailed;
+  if (c.socketDeny?.length) profile.socketDeny = c.socketDeny;
+  if (c.videoProfile) profile.videoProfile = c.videoProfile;
+  if (!Object.keys(profile).length) return '';
+  const sorted = (v: unknown): unknown => Array.isArray(v) ? v.map(sorted)
+    : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sorted((v as Record<string, unknown>)[k])])) : v;
+  return `|profile:${JSON.stringify(sorted(profile))}`;
 }
 
 /** What an approval is recorded against. Access and address are in it because
@@ -191,15 +313,46 @@ export function fingerprint(c: PageConnection): string {
         ? '' : `|${p.in}:${p.param}`;
       return `key|${c.service}|${c.address}|${c.access}${moved}`;
     }
+    // No address: the person chooses it, and it is recorded beside the
+    // approval (see withApprovedAddress). A page whose author later suggests a
+    // different address therefore does not re-ask — the one allowed stands.
+    // Placement and needsKey are in it because both change what is sent.
+    case 'device': {
+      const p = keyPlacement(c);
+      const moved = p.in === DEFAULT_KEY_PLACEMENT.in && p.param === DEFAULT_KEY_PLACEMENT.param ? '' : `|${p.in}:${p.param}`;
+      // WHY one `|profile:` segment: the greeting and every other device-profile
+      // field (what "logged in" looks like, what is refused, how video is
+      // asked for) decide what the page can do through the socket, so changing
+      // any of them asks again. It rides only when something is present, so a
+      // device page without any keeps the fingerprint it always had.
+      return `device|${c.service}|${c.access}|${c.needsKey ? 'key' : 'nokey'}${moved}${profileSegment(c)}`;
+    }
   }
+}
+
+/** A device connection carries the address the person ALLOWED once approved,
+ *  never the manifest's suggestion. Every reader that decides what a page may
+ *  reach (the listing, approve, the fetch door) goes through this, so the
+ *  suggestion can never be what is actually contacted. An approval with no
+ *  usable address leaves the suggestion in place — and fetch() refuses a
+ *  device that has none recorded. */
+export function withApprovedAddress(c: PageConnection, approvedAddress: string | undefined): PageConnection {
+  if (c.kind !== 'device' || !approvedAddress) return c;
+  const address = cleanDeviceAddress(approvedAddress);
+  return address ? { ...c, address } : c;
 }
 
 /** Does this connection cover that hostname? EXACT match, never a suffix: a
  *  suffix test would let `api.example.com.attacker.test` pass for
  *  `api.example.com`. `open` covers anything the network guard allows. */
-export function covers(c: PageConnection, hostname: string): boolean {
+export function covers(c: PageConnection, target: string | URL): boolean {
+  const hostname = typeof target === 'string' ? target : target.hostname;
   const host = hostname.trim().replace(/\.$/, '').toLowerCase();
   switch (c.kind) {
+    // A device is host AND port: another service on the same box is not the
+    // device that was allowed. A bare hostname (no URL) cannot prove its port,
+    // so it never matches.
+    case 'device': return typeof target !== 'string' && urlMatchesDevice(target, c.address);
     case 'open': return true;
     case 'public': return c.address === host;
     case 'key': return c.address === host;
@@ -227,7 +380,7 @@ export function methodAllowed(c: PageConnection, method: string, pathname = '/')
     return (c.writePaths ?? []).some((p) => pathname === p || pathname.startsWith(p + '/'));
   }
   const lookupOnly = c.kind === 'public'
-    || ((c.kind === 'key' || c.kind === 'github') && c.access === 'lookup');
+    || ((c.kind === 'key' || c.kind === 'github' || c.kind === 'device') && c.access === 'lookup');
   if (!lookupOnly) return ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(m);
   return m === 'GET' || m === 'HEAD';
 }

@@ -196,3 +196,12 @@ describe('the rate cap', () => {
     expect(await gate.acquire('personal:dash')).toBe(false);
   });
 });
+
+describe('a recorded clip is only for a device', () => {
+  it('refuses as:video on a public connection, before any request goes out', async () => {
+    const fetchMock = ok('x');
+    const res = await performPageFetch(get('https://hnrss.org/clip.mp4', { as: 'video' }), ctx([feed], fetchMock));
+    expect(res).toMatchObject({ ok: false });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

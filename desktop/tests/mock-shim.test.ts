@@ -23,6 +23,60 @@ describe('channels', () => {
     createMockShim(createStore(scenario)) as any;
 
   describe('workbench channels', () => {
+    it('answers a live page socket with the pretend Home Assistant: greeting, login, then replies', async () => {
+      vi.useFakeTimers();
+      try {
+        const c = shim();
+        const approval = c.pages.approve('page-home', { ha: 'k' }); // the mock's own 350 ms pause
+        await vi.advanceTimersByTimeAsync(400);
+        await approval;
+        const heard: any[] = [];
+        c.pages.onSocketEvent((e: any) => heard.push(e));
+        const call = { page: 'page-home', frame: 'f1' };
+        const opened = await c.pages.socketOpen({ ...call, url: 'http://homeassistant.local:8123/api/websocket' });
+        expect(opened.ok).toBe(true);
+        await vi.advanceTimersByTimeAsync(40);
+        expect(heard.map((e) => e.kind === 'state' ? e.state : JSON.parse(e.texts[0]).type)).toEqual(['open', 'auth_required']);
+        // The app logs in for the page, so "logged in" arrives with the greeting; the page sends only its own calls.
+        await c.pages.socketSend({ ...call, socket: opened.socket, text: '{"id":7,"type":"config/area_registry/list"}' });
+        await vi.advanceTimersByTimeAsync(40);
+        const texts = heard.flatMap((e) => (e.kind === 'messages' ? e.texts : [])).map((t: string) => JSON.parse(t));
+        expect(texts.map((t: any) => t.type)).toEqual(['auth_required', 'auth_ok', 'result']);
+        expect(texts[2].id).toBe(7);
+        // Not another frame's, and not a website.
+        expect((await c.pages.socketSend({ ...call, frame: 'f2', socket: opened.socket, text: '{}' })).ok).toBe(false);
+        expect((await c.pages.socketOpen({ ...call, url: 'http://evil.example/api/websocket' })).ok).toBe(false);
+        await c.pages.socketClose({ ...call, socket: opened.socket });
+        expect((await c.pages.socketPing({ ...call, socket: opened.socket })).ok).toBe(false);
+      } finally { vi.useRealTimers(); }
+    });
+
+    it('plays a pretend camera: the host asks, the mock answers, and a stranger or an unapproved line is refused', async () => {
+      vi.useFakeTimers();
+      try {
+        const c = shim();
+        const call = { page: 'page-home', frame: 'f1', connection: 'ha', target: 'camera.living_room', offer: 'v=0' };
+        expect((await c.pages.videoStart(call)).ok).toBe(false); // not approved yet
+        const approval = c.pages.approve('page-home', { ha: 'k' });
+        await vi.advanceTimersByTimeAsync(400);
+        await approval;
+        const heard: any[] = [];
+        c.pages.onSocketEvent((e: any) => heard.push(e));
+        expect((await c.pages.videoStart({ ...call, target: 'light.kitchen' })).ok).toBe(false);
+        const started = await c.pages.videoStart(call);
+        expect(started.ok).toBe(true);
+        await vi.advanceTimersByTimeAsync(40);
+        expect(heard).toEqual([{ socket: started.video, kind: 'video-answer', answer: expect.stringContaining('workbench answer') }]);
+        // The pretend peer and picture source are handed to the real host code, never the network.
+        expect(c.pages.videoPlayback).toBeTruthy();
+        // Handed over as it is: a peer is made at once (not a Promise after the practice delay), so the real host code can drive it.
+        expect(typeof c.pages.videoPlayback.createPeer().addTransceiver).toBe('function');
+        expect((await c.pages.videoPing({ page: 'page-home', frame: 'f1', video: started.video })).ok).toBe(true);
+        await c.pages.videoStop({ page: 'page-home', frame: 'f1', video: started.video });
+        expect((await c.pages.videoPing({ page: 'page-home', frame: 'f1', video: started.video })).ok).toBe(false);
+      } finally { vi.useRealTimers(); }
+    });
+
     it('answers the seeded native question request once and emits its distinct tool result', async () => {
       vi.stubGlobal('location', { search: '?seed=bubbles-questions-native' });
       try {

@@ -41,6 +41,10 @@ export interface LookOverrides {
 /** What the three one-tap glass choices mean. Terminal knobs are left to the
  *  theme — only Fine-tune reaches them — because the terminal already has its
  *  own readability floor and a preset has no business moving it. */
+/** Set on <html> by ThemeProvider while Settings → Appearance → "Show theme background behind pages" is OFF (default ON, so
+ *  absent). Pages and Office read it off the DOM (page-theme.ts → paneIsGlass, office-theme.ts). */
+export const PAGES_SOLID_ATTR = 'data-pages-solid';
+
 export const GLASS_PRESETS: Record<Exclude<GlassPreset, 'custom'>, GlassValues> = {
   clear:   { 'panels-blur': 10, 'panels-opacity': 0.55, 'bubble-blur': 8,  'bubble-opacity': 0.6 },
   frosted: { 'panels-blur': 24, 'panels-opacity': 0.78, 'bubble-blur': 16, 'bubble-opacity': 0.8 },

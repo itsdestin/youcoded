@@ -11,6 +11,8 @@
 import type { ChannelCtx, ChannelDef, ChannelTypes } from '../../shared/backend-contract';
 import type { RemoteNativeRuntime } from '../create-runtime';
 import type { CreateSessionDeps } from '../dev-tools';
+import type { PageSocketEvent } from '../../shared/pages-types';
+import type { PushResult } from '../pages/page-live-socket';
 
 /** What a table handler is given besides its payload. Typed with the slice of the runtime the
  *  PHONE door can also reach (RemoteNativeRuntime), because a handler both doors run may only
@@ -37,7 +39,7 @@ export interface DesktopServices {
  *  desktop handlers must know whether the window is still there (session:create fails cleanly if
  *  the window closed while it started) or send straight back to it (transcript replay). A phone
  *  has none. */
-interface DesktopSender { id: number; isDestroyed?(): boolean; send?(channel: string, ...args: any[]): void; once?(event: string, listener: () => void): unknown }
+interface DesktopSender { id: number; isDestroyed?(): boolean; send?(channel: string, ...args: any[]): void; once?(event: string, listener: () => void): unknown; on?(event: string, listener: (...args: any[]) => void): unknown }
 /** WHY (2026-09-30 one-core R3-7): what only the PHONE door holds, the mirror of DesktopServices. A file
  *  channel needs to know which folders this phone may see (the ones the computer shows, plus the folder
  *  of a chat that is running), to give the phone its own watch id, and to mint its download links. */
@@ -65,6 +67,11 @@ export interface RemoteServices {
   relayToOthers(message: { type: string; payload: unknown }, opts?: { queueWhileRestoring?: boolean }): void;
   /** Send to this computer's own windows only. */
   sendToWindows(channel: string, payload: unknown): void;
+  /** WHY (2026-10-05, HA-pages merge): push one live page-socket event to THIS phone only, never broadcast and never queued
+   *  for a restore (a live feed is not replayed later). Says 'backed-up' when the phone has stopped reading, so the
+   *  socket (not the phone's connection) is closed. The pages:socket-* entries use it as the phone's side of "the owner
+   *  hears its own socket" (the computer door's twin is the calling window, see pages/page-owner.ts). */
+  pageSocketPush(event: PageSocketEvent): PushResult;
   /** WHY (2026-10-01 one-core R3-8): the remote-access host this phone is talking to, for the read-only admin channels
    *  (config, client count, status, device list). The computer's door reads the same host through remote-admin.ts's bind. */
   host: RemoteHost;

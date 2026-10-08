@@ -18,6 +18,19 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
+import { VoiceAssets } from '../src/main/voice/voice-assets';
+import { startVoice, getVoiceService, shutdownVoiceHandlers } from '../src/main/voice/voice-handlers';
+
+const electronHost = vi.hoisted(() => ({
+  app: { getAppPath: vi.fn(() => ''), isPackaged: false },
+  child: { postMessage: vi.fn(), kill: vi.fn(), on: vi.fn(), stderr: { on: vi.fn() } },
+  fork: vi.fn(),
+}));
+vi.mock('electron', () => ({
+  app: electronHost.app,
+  utilityProcess: { fork: electronHost.fork },
+  webContents: { fromId: () => ({ isDestroyed: () => false, once() {}, removeListener() {}, send() {} }) },
+}));
 import type { VoiceEvent } from '../src/shared/voice-types';
 import {
   VoiceService,
@@ -34,12 +47,13 @@ import {
 class FakeWorker implements VoiceWorkerHandle {
   sent: VoiceServiceToWorker[] = [];
   killed = 0;
+  autoExit = true;
   private msgCb: ((m: VoiceWorkerToService) => void) | null = null;
   private exitCb: ((code: number | null) => void) | null = null;
   private errCb: ((line: string) => void) | null = null;
 
   send(msg: VoiceServiceToWorker): void { this.sent.push(msg); }
-  kill(): void { this.killed += 1; }
+  kill(): void { this.killed += 1; if (this.autoExit) this.die(0); }
   onMessage(cb: (m: VoiceWorkerToService) => void): void { this.msgCb = cb; }
   onExit(cb: (code: number | null) => void): void { this.exitCb = cb; }
   onStderr(cb: (line: string) => void): void { this.errCb = cb; }
@@ -77,17 +91,19 @@ interface Harness {
   /** Every worker spawned, oldest first — a second spawn (after the first is
    *  killed) lands here, which is what the stale-worker cases need. */
   workers: FakeWorker[];
+  snapshots: (readonly string[] | undefined)[];
 }
 
 function harness(opts: { installed?: boolean; alive?: number[] } = {}): Harness {
   const workers: FakeWorker[] = [];
+  const snapshots: (readonly string[] | undefined)[] = [];
   const events: Array<{ to: number; event: VoiceEvent }> = [];
   const alive = new Set(opts.alive ?? [1, 2]);
   const goneCallbacks = new Map<number, Set<() => void>>();
 
   const service = new VoiceService({
     assets: makeAssets(opts.installed ?? true),
-    spawnWorker: () => { const w = new FakeWorker(); workers.push(w); return w; },
+    spawnWorker: (phrases?: readonly string[]) => { snapshots.push(phrases); const w = new FakeWorker(); workers.push(w); return w; },
     deliver: (to, event) => { events.push({ to, event }); },
     isWindowAlive: (id) => alive.has(id),
     onWindowGone: (id, cb) => {
@@ -103,6 +119,7 @@ function harness(opts: { installed?: boolean; alive?: number[] } = {}): Harness 
   return {
     service,
     workers,
+    snapshots,
     // The CURRENT worker: the newest spawned, so a test that replaces a dead one
     // reaches the live engine rather than the corpse.
     get worker() { return workers[workers.length - 1]; },
@@ -117,9 +134,166 @@ function harness(opts: { installed?: boolean; alive?: number[] } = {}): Harness 
   } as Harness;
 }
 
+describe('desktop speech worker host wiring', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+    electronHost.app.getAppPath.mockReturnValue(path.resolve(__dirname, '..'));
+    electronHost.fork.mockReturnValue(electronHost.child);
+    vi.spyOn(VoiceAssets.prototype, 'installed').mockReturnValue(INSTALLED);
+  });
+  afterEach(() => { shutdownVoiceHandlers(); vi.restoreAllMocks(); vi.useRealTimers(); });
+  it('passes an absolute dev resource path and sends nonempty snapshot before start, without large argv', async () => {
+    const profile = path.resolve(__dirname, 'fake-profile');
+    startVoice(profile);
+    const phrases = ['Destin', 'two words'];
+    await getVoiceService()!.start(1, phrases);
+    phrases[0] = 'Saved later';
+    expect(electronHost.fork.mock.calls[0][1]).toEqual([profile, path.resolve(__dirname, '../resources/voice/parakeet-tdt-v3.vocab')]);
+    expect(electronHost.child.postMessage.mock.calls.map(([message]) => message)).toEqual([
+      { type: 'vocabulary', phrases: ['Destin', 'two words'] }, { type: 'start' },
+    ]);
+  });
+  it('releases reserved ownership when spawning fails, so the next window can retry', async () => {
+    startVoice(path.resolve(__dirname, 'fake-profile'));
+    electronHost.fork.mockImplementationOnce(() => { throw new Error('fork failed'); });
+    await expect(getVoiceService()!.start(1, ['Destin'])).rejects.toThrow('fork failed');
+    await expect(getVoiceService()!.start(2, ['Phoebe'])).resolves.toBeUndefined();
+  });
+  it('keeps the empty-list message protocol unchanged', async () => {
+    startVoice(path.resolve(__dirname, 'fake-profile'));
+    await getVoiceService()!.start(1);
+    expect(electronHost.child.postMessage.mock.calls.map(([message]) => message)).toEqual([{ type: 'start' }]);
+  });
+});
+
 describe('voice-service: exactly one ending per start', () => {
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
+
+  it('refuses a window that closed during the asynchronous vocabulary read without spawning', async () => {
+    const h = harness();
+    h.closeWindow(1);
+    await expect(h.service.start(1, ['Destin'])).rejects.toThrow('window');
+    expect(h.workers).toEqual([]);
+  });
+
+  it('copies vocabulary and reuses its worker until the next recording changes content', async () => {
+    const h = harness();
+    const phrases = ['Destin'];
+    await h.service.start(1, phrases);
+    const old = h.worker;
+    old.autoExit = false;
+    phrases[0] = 'Phoebe';
+    expect(h.snapshots).toEqual([['Destin']]);
+    await expect(h.service.start(2, phrases)).rejects.toThrow('another YouCoded window');
+    expect(old.killed).toBe(0);
+    old.say({ type: 'ready' });
+    old.say({ type: 'final', text: 'Destin' });
+    await h.service.start(1, ['Destin']);
+    expect(h.workers).toHaveLength(1);
+    h.service.cancel();
+    const next = h.service.start(1, phrases);
+    expect(old.killed).toBe(1);
+    expect(h.workers).toHaveLength(1); // no two resident recognizers
+    h.service.pushAudio(1, new ArrayBuffer(32), 0.2);
+    old.say({ type: 'ready' });
+    old.say({ type: 'final', text: 'stale' });
+    old.die(0);
+    await next;
+    expect(h.snapshots).toEqual([['Destin'], ['Phoebe']]);
+    expect(h.worker.types()).toEqual(['start', 'audio']);
+    expect(h.endings()).toEqual([{ type: 'final', text: 'Destin' }]);
+    h.service.shutdown();
+  });
+
+  it('same-window reload reserves the new session synchronously and cancel during replacement prevents spawning', async () => {
+    const h = harness();
+    await h.service.start(1, ['Destin']);
+    const old = h.worker;
+    old.autoExit = false;
+    const next = h.service.start(1, ['Phoebe']);
+    await expect(h.service.start(2, ['Zyphora'])).rejects.toThrow('another YouCoded window');
+    h.service.cancel();
+    old.die(0);
+    await next;
+    expect(h.workers).toHaveLength(1);
+    expect(h.endings()).toEqual([]);
+    await h.service.start(2, []);
+    expect(h.snapshots).toEqual([['Destin'], undefined]);
+    h.service.shutdown();
+  });
+
+  it('stop while replacement waits queues audio and stop behind start', async () => {
+    const h = harness();
+    await h.service.start(1, ['Destin']);
+    const old = h.worker;
+    old.autoExit = false;
+    h.service.cancel();
+    const next = h.service.start(1, ['Phoebe']);
+    h.service.pushAudio(1, new ArrayBuffer(32), 0.2);
+    h.service.stop();
+    old.die(0);
+    await next;
+    expect(h.worker.types()).toEqual(['start', 'audio', 'stop']);
+    h.worker.say({ type: 'ready' });
+    h.worker.say({ type: 'final', text: 'Phoebe' });
+    expect(h.endings()).toEqual([{ type: 'final', text: 'Phoebe' }]);
+    h.service.shutdown();
+  });
+
+  it('a replacement that never exits rejects start at the load deadline with one error and never spawns a second recognizer', async () => {
+    const h = harness();
+    await h.service.start(1, ['Destin']);
+    h.worker.autoExit = false;
+    h.service.cancel();
+    const next = h.service.start(1, ['Phoebe']);
+    h.service.stop();
+    const rejected = expect(next).rejects.toThrow('previous speech engine did not report closing');
+    vi.advanceTimersByTime(60000);
+    await rejected;
+    expect(h.workers).toHaveLength(1);
+    expect(h.endings()).toHaveLength(1);
+    expect(h.endings()[0]).toEqual({ type: 'error', message: 'Voice stopped: the previous speech engine did not report closing within 60 seconds.' });
+    h.worker.die(0);
+    await h.service.start(2, ['Phoebe']);
+    expect(h.workers).toHaveLength(2);
+    h.service.shutdown();
+  });
+
+  it('cancel then start while loading preserves the same copied vocabulary, while a different list waits for exit', async () => {
+    const h = harness();
+    await h.service.start(1, ['Destin']);
+    const old = h.worker;
+    old.autoExit = false;
+    h.service.cancel();
+    await h.service.start(1, ['Destin']);
+    expect(h.workers).toHaveLength(1);
+    h.service.cancel();
+    const next = h.service.start(1, ['Phoebe']);
+    h.closeWindow(1);
+    await next;
+    old.die(0);
+    expect(h.workers).toHaveLength(1);
+    expect(h.endings()).toEqual([]);
+    await h.service.start(2, ['Phoebe']);
+    expect(h.workers).toHaveLength(2);
+    h.service.shutdown();
+  });
+
+  it('idle unload accepts a new snapshot without preserving old hints', async () => {
+    const h = harness();
+    await h.service.start(1, ['Destin']);
+    const old = h.worker;
+    old.autoExit = false;
+    old.say({ type: 'ready' });
+    old.say({ type: 'final', text: 'Destin' });
+    vi.advanceTimersByTime(10 * 60 * 1000);
+    old.die(0);
+    await h.service.start(1, ['Phoebe']);
+    expect(h.snapshots).toEqual([['Destin'], ['Phoebe']]);
+    h.service.shutdown();
+  });
 
   it('1. you stop it: one final, and a second final from the engine is ignored', async () => {
     const h = harness();

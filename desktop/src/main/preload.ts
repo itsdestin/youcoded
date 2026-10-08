@@ -340,6 +340,14 @@ const IPC = {
   PAGES_SAVED_KEYS: 'pages:saved-keys',
   PAGES_DELETE_SAVED_KEY: 'pages:delete-saved-key',
   PAGES_FETCH: 'pages:fetch',
+  PAGES_SOCKET_OPEN: 'pages:socket-open',
+  PAGES_SOCKET_SEND: 'pages:socket-send',
+  PAGES_SOCKET_CLOSE: 'pages:socket-close',
+  PAGES_SOCKET_PING: 'pages:socket-ping',
+  PAGES_SOCKET_EVENT: 'pages:socket-event',
+  PAGES_VIDEO_START: 'pages:video-start',
+  PAGES_VIDEO_STOP: 'pages:video-stop',
+  PAGES_VIDEO_PING: 'pages:video-ping',
   FS_READ_HEAD: 'fs:read-head',
   FILE_UPLOAD: 'file:upload',
   PERMISSIONS_LIST: 'permissions:list',
@@ -386,6 +394,8 @@ const IPC = {
   VOICE_STOP: 'voice:stop',
   VOICE_CANCEL: 'voice:cancel',
   VOICE_MIC_ACCESS: 'voice:mic-access',
+  VOICE_VOCABULARY_GET: 'voice:vocabulary-get',
+  VOICE_VOCABULARY_SAVE: 'voice:vocabulary-save',
   VOICE_AUDIO: 'voice:audio',
   VOICE_EVENT: 'voice:event',
   OFFICE_STATUS: 'office:status',
@@ -1876,6 +1886,11 @@ contextBridge.exposeInMainWorld('claude', {
   // phone the operating system's own recogniser owns the microphone, and the
   // Activity's permission launcher owns the permission question — so the shared
   // renderer tests `typeof bridge.sendAudio === 'function'` instead of assuming.
+  // WHY: vocabulary editing has no microphone side effects and stays local.
+  voiceVocabulary: {
+    get: (): Promise<string[]> => ipcRenderer.invoke(IPC.VOICE_VOCABULARY_GET),
+    save: (phrases: string[]): Promise<void> => ipcRenderer.invoke(IPC.VOICE_VOCABULARY_SAVE, { phrases }),
+  },
   voice: {
     status: (): Promise<unknown> => ipcRenderer.invoke(IPC.VOICE_STATUS),
     download: (): Promise<void> => ipcRenderer.invoke(IPC.VOICE_DOWNLOAD),
@@ -1991,8 +2006,7 @@ contextBridge.exposeInMainWorld('claude', {
       return () => ipcRenderer.removeListener('artifacts:changed', handler);
     },
   },
-  // YouCoded Pages (Phase 1): the library, pins, a page's document + data,
-  // and the change push. Shape: shared/pages-types.ts PagesBridge.
+  // YouCoded Pages: library, pins, document + data, change push. Shape: shared/pages-types.ts PagesBridge.
   pages: {
     list: () => ipcRenderer.invoke(IPC.PAGES_LIST),
     get: (id: string) => ipcRenderer.invoke(IPC.PAGES_GET, { id }),
@@ -2006,13 +2020,18 @@ contextBridge.exposeInMainWorld('claude', {
     // Phase 2. `keys` carries a pasted key per key-connection id, or 'saved' to
     // reuse the one already kept; main is the side that decides, so a pasted
     // key from a phone is refused there rather than here.
-    approve: (id: string, keys: Record<string, string>) => ipcRenderer.invoke(IPC.PAGES_APPROVE, { id, keys }),
+    approve: (id: string, keys: Record<string, string>, addresses?: Record<string, string>) => ipcRenderer.invoke(IPC.PAGES_APPROVE, { id, keys, addresses }),
     removeConnection: (id: string, connectionId: string) => ipcRenderer.invoke(IPC.PAGES_REMOVE_CONNECTION, { id, connectionId }),
     refresh: (id: string) => ipcRenderer.invoke(IPC.PAGES_REFRESH, { id }),
     savedKeys: () => ipcRenderer.invoke(IPC.PAGES_SAVED_KEYS),
     // Both parts: a key is identified by service AND address.
     deleteSavedKey: (service: string, address: string) => ipcRenderer.invoke(IPC.PAGES_DELETE_SAVED_KEY, { service, address }),
     fetch: (id: string, req: unknown) => ipcRenderer.invoke(IPC.PAGES_FETCH, { id, request: req }),
+    // Live sockets + camera video a page holds through main: ONE object each, main knows the calling window itself.
+    socketOpen: (req: unknown) => ipcRenderer.invoke(IPC.PAGES_SOCKET_OPEN, req), socketSend: (req: unknown) => ipcRenderer.invoke(IPC.PAGES_SOCKET_SEND, req),
+    socketClose: (req: unknown) => ipcRenderer.invoke(IPC.PAGES_SOCKET_CLOSE, req), socketPing: (req: unknown) => ipcRenderer.invoke(IPC.PAGES_SOCKET_PING, req),
+    videoStart: (req: unknown) => ipcRenderer.invoke(IPC.PAGES_VIDEO_START, req), videoStop: (req: unknown) => ipcRenderer.invoke(IPC.PAGES_VIDEO_STOP, req), videoPing: (req: unknown) => ipcRenderer.invoke(IPC.PAGES_VIDEO_PING, req),
+    onSocketEvent: (cb: (e: unknown) => void) => { const h = (_e: unknown, ev: unknown) => cb(ev); ipcRenderer.on(IPC.PAGES_SOCKET_EVENT, h); return () => ipcRenderer.removeListener(IPC.PAGES_SOCKET_EVENT, h); },
   },
   // Document comments (T3, design docs/active/specs/2026-09-26-doc-comments-
   // build-design.md §1.6). Channel strings are inlined (preload cannot import
