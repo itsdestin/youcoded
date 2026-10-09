@@ -11,12 +11,12 @@
 // (layout A): this session's tags first, larger and filled; then "Add a tag" with the search,
 // the other tags as grey outlines and archived ones flat grey. Clicking a tag opens its edit
 // box in the card. A surface whose header already shows the name passes no `name`.
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import type { TagRecord } from '../../../shared/tags';
 import { DEFAULT_TAG_COLOR } from '../../../shared/tags';
 import type { TagRegistryApi } from '../../hooks/useTagRegistry';
-import { Button, CARD_LEVEL_1, CARD_LEVEL_2, ErrorState, FieldError, FoldRow, InputGroup, SectionLabel, SettingRow, Textarea, Toggle } from '../ui';
-import { ChipAction, TagChip, TagWord, mix } from './TagChip';
+import { Button, CARD_LEVEL_1, CARD_LEVEL_2, ErrorState, FieldError, InputGroup, SectionLabel, SettingRow, Textarea, Toggle } from '../ui';
+import { ChipAction, TagWord, mix } from './TagChip';
 import { NewTagFields, TagFields } from './TagCloud';
 import { PinIcon } from './PinIcon';
 
@@ -60,19 +60,23 @@ export function PinRow({ pin }: { pin: Props['pin'] }) {
  *  Exported for the close prompt (backlog row 17), whose top card is this same card.
  *  Without `onNote` the card shows the name alone — the close prompt's state where the
  *  note could not be read, so nothing may suggest it is empty or editable. */
-export function SessionHeaderCard({ name, onRename, note, onNote }: { name?: string; onRename?: () => void; note: string; onNote?: (t: string) => void }) {
+export function SessionHeaderCard({ name, onRename, note, onNote, children }: { name?: string; onRename?: () => void; note: string; onNote?: (t: string) => void; children?: ReactNode }) {
   return (
     <div className={`${CARD_LEVEL_1} p-4`}>
       <NoteBlock name={name} onRename={onRename} note={note} onNote={onNote} />
+      {/* More about this session inside its own card (a close-prompt design under review,
+          close-session-2: its switches at the card's foot). */}
+      {children && <div className="mt-3 -mx-1">{children}</div>}
     </div>
   );
 }
 
 /** The name (when given) and the note — no card of its own, so a sheet can place it. */
 function NoteBlock({ name, onRename, note, onNote, hang = true }: { name?: string; onRename?: () => void; note: string; onNote?: (t: string) => void; hang?: boolean }) {
-  // The project card hangs the note's box into the card's margin so its WORDS line up with
-  // the name; in the narrow Resume sheet that left the box touching the card's edge.
-  const ml = hang ? '-ml-2.5' : '', mlAdd = hang ? '-ml-2' : '';
+  // The project card hangs the READ note into the card's margin so its WORDS line up with
+  // the name; in the narrow Resume sheet that left the box touching the card's edge. The
+  // text box and "+ Add a note" no longer hang (below).
+  const ml = hang ? '-ml-2.5' : '';
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(note);
   const fit = (el: HTMLTextAreaElement | null) => { if (el) { el.style.height = 'auto'; el.style.height = `${el.scrollHeight}px`; } };
@@ -91,9 +95,15 @@ function NoteBlock({ name, onRename, note, onNote, hang = true }: { name?: strin
         </svg>
       </button></div>}
       {!onNote ? null : editing ? (
-        <Textarea size="sm" ref={fit} rows={1} autoFocus value={draft} aria-label="Note"
+        // WHY the app's plain text box (Destin, close-session-1#CS-3: "the styling of the note
+        // text input box is a bit odd"): it was a one-line pill hung 10px into the card's left
+        // margin — so its right edge stopped short — in italics. Now it is the box every other
+        // multi-line field uses (the ticket's description, a quick chip's message): the
+        // standard size, full width with the card's own margins, upright words, three lines to
+        // start and growing with the note.
+        <Textarea ref={fit} rows={3} autoFocus value={draft} aria-label="Note"
           placeholder="A note for later — shows under All sessions"
-          className={`${top} ${ml} w-full text-sm italic overflow-hidden`}
+          className={`${top} w-full min-h-20 overflow-hidden`}
           onChange={(e) => { setDraft(e.target.value); fit(e.currentTarget); }}
           onKeyDown={(e) => { if (e.key === 'Escape') { setDraft(note); setEditing(false); } }}
           onBlur={commit} />
@@ -103,9 +113,12 @@ function NoteBlock({ name, onRename, note, onNote, hang = true }: { name?: strin
           <span className="text-sm italic text-fg-dim whitespace-pre-wrap break-words">“{note}”</span>
         </button>
       ) : (
-        // Its own line under the name (a bare inline button sat beside it).
+        // Its own line under the name. WHY full width (Destin, close-session-1#CS-1: "the add a
+        // note button should be full width with matching left/right margins"): it was a small
+        // button hung 8px into the card's left margin. Dashed still — an add button among
+        // things it adds, like "+ New tag".
         <div><button type="button" onClick={() => { setDraft(''); setEditing(true); }}
-          className={`${top} ${mlAdd} inline-flex items-center gap-1 rounded-md border border-dashed border-edge-dim px-2 py-1 text-xs text-fg-muted hover:text-fg hover:border-edge hover:bg-inset transition-colors`}>
+          className={`${top} w-full flex items-center justify-center gap-1 rounded-md border border-dashed border-edge-dim px-2 py-1.5 text-xs text-fg-muted hover:text-fg hover:border-edge hover:bg-inset transition-colors`}>
           <span aria-hidden className="text-sm leading-none">+</span>
           Add a note
         </button></div>
@@ -241,22 +254,3 @@ export function SessionTagsCard(p: TagsProps) {
   );
 }
 
-/** The same Tags card, folded to one row — "Tags" with the session's tags as its summary —
- *  that opens inside itself (guide: a folded box opens inside itself; a folded row carries a
- *  short summary, like the ticket review's). A close-prompt design under review
- *  (close-session-1, practice switch `?closeTags=folded`), not used elsewhere yet. */
-export function SessionTagsFold(p: TagsProps) {
-  const t = useTagEditor(p);
-  // Controlled so the summary can step aside when open: the opened card lists the same tags
-  // again, larger, and a second copy in the header read as a mistake (seen on the first shots).
-  const [open, setOpen] = useState(false);
-  if (t.failed) return t.failed;
-  const summary = open ? undefined : t.applied.length
-    ? <span className="inline-flex flex-wrap items-center gap-1 pt-0.5">{t.applied.map((tag) => <TagChip key={tag.id} tag={tag} />)}</span>
-    : 'No tags yet';
-  return (
-    <FoldRow title="Tags" description={summary} open={open} onToggle={setOpen}>
-      <div className="space-y-3 pb-1"><TagsBody t={t} /></div>
-    </FoldRow>
-  );
-}

@@ -19,9 +19,10 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat/close-session#tag-edit', 'dialog'), open: ['Edit work'] },
   // The note being written in place ("+ Add a note" on a session with none).
   { ...chat('chat/close-session#note-typing', 'dialog'), session: 'wb-2', open: ['+ Add a note', { do: 'type', target: { role: 'textbox', label: 'Note' }, text: 'Pick this up after the release' }] },
-  // The design under review (?closeTags=folded): the Tags card folded to one row, shut and opened.
-  { ...chat('chat/close-session#folded', 'dialog'), params: { closeTags: 'folded' } },
-  { ...chat('chat/close-session#folded-open', 'dialog'), params: { closeTags: 'folded' }, open: ['Tags…'] },
+  // Where Pin to top and Mark complete sit (?closeFlags=, deck close-session-2): a labelled
+  // card each, or inside the session's own card. The plain name shows the shipped "In your lists".
+  { ...chat('chat/close-session#flags-split', 'dialog'), params: { closeFlags: 'split' } },
+  { ...chat('chat/close-session#flags-subject', 'dialog'), params: { closeFlags: 'subject' } },
   chat('chat/find', 'bar'),
   chat('chat/skills', 'drawer'),
   chat('chat/commands', 'drawer'),
@@ -34,6 +35,8 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat/resume#stress', 'dialog'), scenario: 'stress' },
   chat('chat/open-tasks', 'dialog'),
   chat('chat/tags', 'dialog'),
+  // Session details with its note being written (the shared note box, close-session-2).
+  { ...chat('chat/tags#note-typing', 'dialog'), open: ['+ Add a note', { do: 'type', target: { role: 'textbox', label: 'Note' }, text: 'Pick this up after the release' }] },
   chat('chat/status-bar', 'dialog'),
   chat('chat/status-bar/themes', 'dialog'),
   chat('chat/context', 'dialog'),

@@ -3,13 +3,13 @@ import { useEscClose } from '../hooks/use-esc-close';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { triggerTip } from './guide/tips';
 import { useTagRegistry } from '../hooks/useTagRegistry';
-import { PinRow, SessionHeaderCard, SessionTagsCard, SessionTagsFold } from './tags/SessionDetails';
+import { PinRow, SessionHeaderCard, SessionTagsCard } from './tags/SessionDetails';
 import SessionRenameDialog from './SessionRenameDialog';
-import { Button, Callout, CARD_LEVEL_1, Dialog, FoldRow, SettingRow, Toggle } from './ui';
+import { Button, Callout, CARD_LEVEL_1, Dialog, FoldRow, SectionLabel, SettingRow, Toggle } from './ui';
 import { META_UNSUPPORTED_FALLBACK, type SessionMetaResult } from '../../shared/types';
 import { plainMessage } from '../utils/ipc-error';
 import { isTypingTarget } from '../utils/is-typing-target';
-import { workbenchCloseTagsFolded } from '../close-prompt-practice';
+import { workbenchCloseFlagsLayout } from '../close-prompt-practice';
 
 // The two reserved flags, serialised in this order into buildResult's `flags`.
 // Priority shows as "Pin to top" (pick-menus-2#PM2-3); Complete is the prompt's own question.
@@ -219,6 +219,15 @@ export default function CloseSessionPrompt({ open, sessionName, sessionId, onCan
     setTagIds((prev) => { const s = new Set(prev); if (next) s.add(id); else s.delete(id); return s; });
   const name = sessionName || 'Untitled session';
   const tagsProps = { registry, appliedIds: tagIds, onToggleTag: toggleTag };
+  const rename = sessionId ? () => setRenaming(true) : undefined;
+  const flagsLayout = workbenchCloseFlagsLayout();
+  const pinRow = <PinRow pin={{ pinned: sel.priority, onPin: (next) => setSel((prev) => ({ ...prev, priority: next })) }} />;
+  // Mark complete keeps its check icon so its words start on the same edge as Pin to top's.
+  const completeRow = (
+    <SettingRow header variant="item" title={COMPLETE_TITLE} description={COMPLETE_HINT}
+      icon={<CompleteGlyph done={sel.complete} className={`w-3.5 h-3.5 transition-colors ${sel.complete ? 'text-accent' : 'text-fg-muted'}`} />}
+      control={<Toggle checked={sel.complete} onChange={(next) => setSel((prev) => ({ ...prev, complete: next }))} aria-label={COMPLETE_TITLE} />} />
+  );
 
   return (
     <>
@@ -263,18 +272,38 @@ export default function CloseSessionPrompt({ open, sessionName, sessionId, onCan
             ) : (
               <>
                 {/* Pending writes: the note and tags edit local state; Close session commits. */}
-                <SessionHeaderCard name={name} onRename={sessionId ? () => setRenaming(true) : undefined} note={note} onNote={setNote} />
-                {workbenchCloseTagsFolded() ? <SessionTagsFold {...tagsProps} /> : <SessionTagsCard {...tagsProps} />}
-                {/* Pin to top and Mark complete in ONE card: both are yes/no facts about this
-                    session (guide: a group that is one idea keeps one card). Mark complete
-                    sits last, right above the button that acts on it. Unlabelled, like
-                    Session details' Pin card. */}
-                <div className={`${CARD_LEVEL_1} px-3 py-1`}>
-                  <PinRow pin={{ pinned: sel.priority, onPin: (next) => setSel((prev) => ({ ...prev, priority: next })) }} />
-                  <SettingRow header variant="item" title={COMPLETE_TITLE} description={COMPLETE_HINT}
-                    icon={<CompleteGlyph done={sel.complete} className={`w-3.5 h-3.5 transition-colors ${sel.complete ? 'text-accent' : 'text-fg-muted'}`} />}
-                    control={<Toggle checked={sel.complete} onChange={(next) => setSel((prev) => ({ ...prev, complete: next }))} aria-label={COMPLETE_TITLE} />} />
-                </div>
+                {flagsLayout === 'subject' ? (
+                  <SessionHeaderCard name={name} onRename={rename} note={note} onNote={setNote}>{pinRow}{completeRow}</SessionHeaderCard>
+                ) : (
+                  <SessionHeaderCard name={name} onRename={rename} note={note} onNote={setNote} />
+                )}
+                <SessionTagsCard {...tagsProps} />
+                {/* WHY the two switches have their own label (Destin, close-session-1#CS-1: "weird
+                    for them to fall under the "tags" subheader, as they aren't exactly tags? and
+                    its not completely clear if they should share a card"): unlabelled under the
+                    labelled Tags card they read as filed under Tags — the guide's "once one card
+                    has a label, every card does". Three arrangements are on close-session-2's
+                    pick slide; `lists` is shipped until he picks. */}
+                {flagsLayout === 'lists' && (
+                  <section>
+                    {/* One card: both rows change where this session shows in your lists (pinned
+                        first in the session lists; complete leaves the resume list). */}
+                    <SectionLabel className="mb-2">In your lists</SectionLabel>
+                    <div className={`${CARD_LEVEL_1} px-3 py-1`}>{pinRow}{completeRow}</div>
+                  </section>
+                )}
+                {flagsLayout === 'split' && (
+                  <>
+                    <section>
+                      <SectionLabel className="mb-2">Session lists</SectionLabel>
+                      <div className={`${CARD_LEVEL_1} px-3 py-1`}>{pinRow}</div>
+                    </section>
+                    <section>
+                      <SectionLabel className="mb-2">Resume list</SectionLabel>
+                      <div className={`${CARD_LEVEL_1} px-3 py-1`}>{completeRow}</div>
+                    </section>
+                  </>
+                )}
               </>
             )}
           </div>

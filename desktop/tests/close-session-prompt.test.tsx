@@ -58,6 +58,17 @@ describe('CloseSessionPrompt', () => {
     expect(screen.queryByRole('button', { name: 'Edit tags and note' })).toBeNull();
   });
 
+  it('puts Pin to top and Mark complete under their own label, not under Tags', async () => {
+    // close-session-1#CS-1: "weird for them to fall under the "tags" subheader".
+    mockWindowClaude({ tags: [], note: '', supported: true, flags: {} });
+    mount();
+    const label = await screen.findByText('In your lists');
+    const card = label.parentElement!;
+    expect(card).toContainElement(screen.getByRole('switch', { name: 'Pin to top' }));
+    expect(card).toContainElement(screen.getByRole('switch', { name: 'Mark complete' }));
+    expect(screen.getByText('Tags').parentElement).not.toContainElement(screen.getByRole('switch', { name: 'Pin to top' }));
+  });
+
   it('shows what is already applied: the pin, the tag and the note', async () => {
     mockWindowClaude({ tags: ['tag_work'], note: 'blocked on the gh dead-end', supported: true, flags: { priority: true } });
     mount();
