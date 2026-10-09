@@ -506,14 +506,23 @@ describe('still-running marks (LONG_RUN_NOTICE_MS)', () => {
   it.skipIf(!posix)('a run that finishes before a mark emits nothing, and its pending marks are cleared on exit', async () => {
     const marks: number[] = [];
     reg.on('long-running', (_run, ms) => marks.push(ms));
+    const started = Date.now();
     const r = reg.start(startSpec('echo hi', dir));
     if (!r.ok) throw new Error('start failed');
     expect(r.run.longRunTimers).toHaveLength(2);
     await r.run.exited;
+    const ranMs = Date.now() - started;
     // The exit path clears the timers — the structural guard that nothing can
     // fire later for a run that is no longer running.
     expect(r.run.longRunTimers).toHaveLength(0);
-    expect(marks).toHaveLength(0);
+    // WHY measured, not assumed (2026-10-09): at load average ~45 even `echo` outlived the 60 ms
+    // mark, so a mark fired WHILE it ran — correct behaviour — and "no marks" failed a full run.
+    // The promise under test is "nothing fires after exit": wait past the last mark and check
+    // no mark arrived late. When the run did finish before the first mark, none fired at all.
+    const atExit = marks.length;
+    await new Promise((res) => setTimeout(res, 200));
+    expect(marks).toHaveLength(atExit);
+    if (ranMs < 60 - JITTER_MS) expect(marks).toHaveLength(0);
   });
 
   it.skipIf(!posix)('an adopted hand-off counts the time it already ran in the foreground', async () => {

@@ -45,6 +45,21 @@ async function editor() {
   return { s, run, opened };
 }
 const settle = () => new Promise((r) => setTimeout(r, 30));
+// WHY wait for the journal's change log, not a fixed 30 ms (2026-10-09): it is written after the
+// call returns, and at load average ~45 that took longer — readdir threw ENOENT, or the folder
+// existed with no log yet, in full runs while the file passed alone. Returns as soon as a
+// journal holds a non-empty changes.log; gives up after 5 s and lets the test's own check fail.
+async function journalWritten(): Promise<void> {
+  const until = Date.now() + 5000;
+  while (Date.now() < until) {
+    const dirs = await fsp.readdir(journals()).catch(() => [] as string[]);
+    for (const d of dirs) {
+      const size = await fsp.stat(path.join(journals(), d, 'changes.log')).then((st) => st.size, () => 0);
+      if (size > 0) return;
+    }
+    await settle();
+  }
+}
 
 describe('the recovery journal', () => {
   it('a window closed before its save: the next open gets the opened document and every edit back', async () => {
@@ -143,7 +158,7 @@ describe('the recovery journal', () => {
     await settle();
     await expect(fsp.readdir(journals())).rejects.toThrow(); // no folder at all
     await a.run(a.s.token, 'save_changes', { changes: ['c1'], deleteIndex: null, count: 1 });
-    await settle();
+    await journalWritten(); // WHY: see journalWritten
     const [name] = await fsp.readdir(journals());
     expect(name).not.toContain('plan');
     // WHY POSIX only: Windows has no group/other permission bits (its mode always reads 0o666).
@@ -254,7 +269,7 @@ describe('the recovery journal', () => {
   it('skips a last line cut short by a crash, and refuses another document\'s id', async () => {
     const a = await editor();
     await a.run(a.s.token, 'save_changes', { changes: ['c1'], deleteIndex: null, count: 1 });
-    await settle();
+    await journalWritten(); // WHY: see journalWritten
     const [name] = await fsp.readdir(journals());
     await fsp.appendFile(path.join(journals(), name, 'changes.log'), '[null,["c2"');
     await sessions.close(a.s.token);

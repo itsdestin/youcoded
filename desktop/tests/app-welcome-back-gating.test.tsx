@@ -145,7 +145,11 @@ afterEach(() => {
 // ≈10 s alone on 2026-10-04, and a full run on a busy machine timed the first test out.
 const APP_IMPORT_MS = 60_000;
 beforeAll(async () => { await import('../src/renderer/App'); }, APP_IMPORT_MS);
-const APPEAR_MS = 4000;
+// WHY 20 s (2026-10-09): a full run at load average ~38, just after a restart, needed more
+// than 4 s for the mounted App to show the screen; the three positive waits failed while the
+// file passed alone. A found screen returns at once, so only a broken one pays the wait (under
+// the 30 s test timeout); the negative checks do not use this number.
+const APPEAR_MS = 20_000;
 
 describe('App — the Welcome back screen only ever opens once, in the leader window, never remote or Android', () => {
   it('asks once when the strip is empty and this window is the leader', async () => {

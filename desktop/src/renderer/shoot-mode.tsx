@@ -68,13 +68,17 @@ export function installScreenDriver(screens: readonly { name: string; session?: 
     for (const t0 = performance.now(); performance.now() - t0 < ms; await frame()) if (openers.has(n)) return openers.get(n)!;
     return null;
   };
+  const OPENER_WAIT_MS = 10_000;
   (window as any).__youcodedScreens = {
     // The whole list, with tags / scenario / params, so the CLI never keeps a copy.
     list: () => screens,
     registered: () => [...openers.keys()],
     // Opens every KNOWN prefix of `name` in order (settings → settings/assistant →
     // settings/assistant/cloud). A prefix that is a known screen must register an
-    // opener within 3 s of its parent opening, or the open fails with its name.
+    // opener within OPENER_WAIT_MS of its parent opening, or the open fails with its name.
+    // WHY 10 s, not 3 (2026-10-09): `shoot --check` in verify, at load average ~38 just after
+    // a restart, missed settings/android/tier ("no opener registered") — its section mounts
+    // late — and passed alone. A registered opener returns at once; only a missing one waits.
     // A `#state` suffix (`chat/resume#stress`) is the same screen under other practice
     // data (the entry's scenario / params): it opens, and is marked, as the plain name.
     async open(name: string): Promise<{ ok: true } | { ok: false; reason: string }> {
@@ -84,7 +88,7 @@ export function installScreenDriver(screens: readonly { name: string; session?: 
       // `_select-session` helper; a leading underscore marks it as not a screen).
       const session = screens.find((s) => s.name === name)?.session;
       if (session) {
-        const select = await waitFor('_select-session', 3000);
+        const select = await waitFor('_select-session', OPENER_WAIT_MS);
         if (!select) return { ok: false, reason: 'no _select-session helper registered' };
         select(session);
         await frame();
@@ -93,7 +97,7 @@ export function installScreenDriver(screens: readonly { name: string; session?: 
       for (let i = 1; i <= parts.length; i++) {
         const p = parts.slice(0, i).join('/');
         if (!known.includes(p) && p !== base) continue;
-        const open = await waitFor(p, 3000);
+        const open = await waitFor(p, OPENER_WAIT_MS);
         if (!open) return { ok: false, reason: `no opener registered for ${p} (is its component mounted?)` };
         open();
         await frame();

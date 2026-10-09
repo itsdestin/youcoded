@@ -2193,9 +2193,13 @@ describe('HarnessSession — multi-step turn driver', () => {
 // Bash call reported ~7 tok/s instead of ~30.
 // ---------------------------------------------------------------------------
 describe('turn-complete tokensPerSecond', () => {
+  const TOOL_MS = 600;
   it('excludes time spent OUTSIDE the stream (tool execution)', async () => {
     const slowTool = fakeTool('Read', {
-      onExecute: async () => { await new Promise((r) => setTimeout(r, 120)); return { text: 'done' }; },
+      // WHY 600 ms, not 120 (2026-10-09): at load average ~45 the two streams alone took over
+      // 120 ms, so the generation rate fell under a 120 ms wall-clock bound and the test failed in a
+      // full run (it passed alone). A longer tool keeps the same proof with room for a busy machine.
+      onExecute: async () => { await new Promise((r) => setTimeout(r, TOOL_MS)); return { text: 'done' }; },
     });
     const model = scriptedModel([
       stream(...textChunks('a', 'x'.repeat(80)), toolCallChunk('c1', 'Read', { file_path: 'a.ts' }), finishChunk('tool-calls', 10, 100)),
@@ -2206,12 +2210,12 @@ describe('turn-complete tokensPerSecond', () => {
     await session.send('go');
 
     const usage = events.find((e) => e.type === 'turn-complete')!.data.usage as any;
-    // 200 output tokens. The tool alone burned 120ms of wall-clock; if that were
-    // in the denominator the rate would be dragged toward ~1,600 tok/s or below.
+    // 200 output tokens. The tool alone burned TOOL_MS of wall-clock; if that were
+    // in the denominator the rate would be dragged toward ~333 tok/s or below.
     // Generation time is a small fraction of the turn, so the rate must be HIGHER
     // than the wall-clock rate would give.
     expect(usage.tokensPerSecond).toBeGreaterThan(0);
-    const wallClockRate = 200 / 0.12;   // an upper bound on what wall-clock could yield
+    const wallClockRate = 200 / (TOOL_MS / 1000);   // an upper bound on what wall-clock could yield
     expect(usage.tokensPerSecond).toBeGreaterThan(wallClockRate);
   });
 

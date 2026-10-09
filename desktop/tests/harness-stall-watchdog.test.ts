@@ -61,11 +61,19 @@ function modelFromStreams(makers: Array<() => ReadableStream>) {
 // 250ms is ~16x the Windows tick and ~60x the measured ideal path, and costs
 // the file well under two seconds. Do NOT tighten these back toward the
 // event-loop noise floor to save milliseconds.
-const STALL_MS = 250;
+//
+// WHY 750, not 250 (2026-10-09): a full verify at load average ~45 (the suite's own workers,
+// just after a restart) gave the retry's first chunk more than 250ms, so a second warning fired
+// and the first test failed; it passed alone. 750ms is three times the old margin and costs the
+// file a few seconds more.
+const STALL_MS = 750;
 // The "keeps emitting" case needs the opposite margin: its chunk SPACING must
 // stay far below the window, or a scheduling hiccup between chunks fires the
-// watchdog and fails a never-warns assertion. 4ms spacing vs a 400ms window.
-const STREAMING_WINDOW_MS = 400;
+// watchdog and fails a never-warns assertion. 4ms spacing vs the window below.
+// WHY 2,000, not 400 (2026-10-09): a full verify at load average ~36 paused the 4ms-spaced
+// chunks past 400ms and the never-warns check failed (it passed alone). The window only costs
+// time when the watchdog fires, which is exactly the failure, so a wide one is free.
+const STREAMING_WINDOW_MS = 2000;
 
 // Raising the watchdog budgets moved the risk rather than removing it: the
 // both-attempts-stall case now spends warn+countdown twice = ~1.0s of REAL time
@@ -276,7 +284,7 @@ describe('HarnessSession — streaming inactivity watchdog', () => {
   });
 
   it('a stream that keeps emitting (slower than the warn window) NEVER trips the watchdog', async () => {
-    // Chunks spaced 4ms apart, warn window 400ms → the watchdog is re-armed on
+    // Chunks spaced 4ms apart, warn window STREAMING_WINDOW_MS → the watchdog is re-armed on
     // every chunk and never fires. No stall warning, clean completion.
     const model = new MockLanguageModelV4({
       doStream: async () => ({
