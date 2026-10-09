@@ -1,31 +1,28 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useEscClose } from '../hooks/use-esc-close';
+import { useScrollFade } from '../hooks/useScrollFade';
 import { triggerTip } from './guide/tips';
 import { useTagRegistry } from '../hooks/useTagRegistry';
-import { TagNoteEditor } from './tags/TagNoteEditor';
-import { PinIcon } from './tags/PinIcon';
-import { TagChip } from './tags/TagChip';
-import { TagGlyph, NotePageGlyph, PencilGlyph } from './tags/glyphs';
-import type { TagRecord } from '../../shared/tags';
-import { Button, Dialog, SettingRow, Toggle } from './ui';
+import { PinRow, SessionHeaderCard, SessionTagsCard, SessionTagsFold } from './tags/SessionDetails';
+import SessionRenameDialog from './SessionRenameDialog';
+import { Button, Callout, CARD_LEVEL_1, Dialog, FoldRow, SettingRow, Toggle } from './ui';
 import { META_UNSUPPORTED_FALLBACK, type SessionMetaResult } from '../../shared/types';
 import { plainMessage } from '../utils/ipc-error';
 import { isTypingTarget } from '../utils/is-typing-target';
+import { workbenchCloseTagsFolded } from '../close-prompt-practice';
 
-// The two reserved flags no longer share a control here (2026-07-31). Complete
-// is the dialog's actual question, so it gets the one prominent check button;
-// Priority is a tag and sits in the tag list. FLAG_ORDER survives only as the
-// serialization order for buildResult's `flags` array — the labels it used to
-// carry now live at each control.
+// The two reserved flags, serialised in this order into buildResult's `flags`.
+// Priority shows as "Pin to top" (pick-menus-2#PM2-3); Complete is the prompt's own question.
 type FlagName = 'priority' | 'complete';
 const FLAG_ORDER: FlagName[] = ['priority', 'complete'];
 
 const COMPLETE_TITLE = 'Mark complete';
 const COMPLETE_HINT = 'Hides it from the resume list unless you turn on Show complete.';
 
-/** The check-in-a-circle from the Resume Browser card, so the same act looks the
- *  same in both places. Filled when set; the check knocks out with var(--canvas)
- *  rather than a hardcoded white so it survives a dark or community theme. */
+/** The Resume card's check-in-a-circle, so marking complete looks the same in both places.
+ *  WHY kept as the row's icon: it shares a card with Pin to top, whose pin icon would
+ *  otherwise leave the two rows' words starting at different edges. The check knocks out
+ *  with var(--canvas), never a fixed white, so it survives dark and community themes. */
 function CompleteGlyph({ done, className = '' }: { done: boolean; className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -33,39 +30,6 @@ function CompleteGlyph({ done, className = '' }: { done: boolean; className?: st
       <circle cx="12" cy="12" r="9" fill={done ? 'currentColor' : 'none'} />
       <path d="M8 12.5l2.5 2.5L16 9.5" stroke={done ? 'var(--canvas)' : 'currentColor'} />
     </svg>
-  );
-}
-
-// WHY: SaveButton was a leftover from an earlier draft of this dialog — the
-// component was defined but never rendered. Removed during the 2026-08-06
-// unused-code sweep. The collapsed summary has no save control of its own.
-
-/** Chosen from four candidates in the workbench, 2026-07-31: a Toggle rather
- *  than a card or a checkbox, because it is the shape Skip permissions and Show
- *  Complete already use and the app should have one way of asking a yes/no.
- *
- *  Built on SettingRow, not hand-rolled. The ast-grep rule
- *  `no-hand-rolled-setting-row-toggle` says a label with a switch beside it IS a
- *  SettingRow — and this is exactly that, so it belongs in the primitive rather
- *  than in the exception list (TOGGLES_OUTSIDE_A_ROW in
- *  `setting-row-authority.test.tsx`). The full suite caught the hand-rolled
- *  version back when that guard was a test; `verify.sh`'s related-tests pass
- *  did not, because the authority test names no file this branch touched.
- *
- *  `className` restores the bordered-card treatment the workbench comparison
- *  settled on: SettingRow's own base is the borderless `bg-inset/50` in-panel
- *  row, which is right in a settings LIST but too quiet for the one decision
- *  this dialog exists to ask. Structure from the primitive, weight from here. */
-function MarkComplete({ checked, onChange }: { checked: boolean; onChange: (next: boolean) => void }) {
-  return (
-    <SettingRow
-      variant="item"
-      icon={<CompleteGlyph done={checked} className={`w-5 h-5 shrink-0 transition-colors ${checked ? 'text-accent' : 'text-fg-faint'}`} />}
-      title={COMPLETE_TITLE}
-      description={COMPLETE_HINT}
-      control={<Toggle checked={checked} onChange={onChange} aria-label={COMPLETE_TITLE} />}
-      className="border border-edge-dim !bg-inset hover:border-edge"
-    />
   );
 }
 
@@ -99,7 +63,17 @@ const SUPPRESS_KEY = CLOSE_PROMPT_SUPPRESS_KEY;
 
 // Shown when the user closes an active session. Preloads the session's current
 // tags + note (so applied tags stay selected — nothing changes unless the user
-// toggles it), and lets them set Priority/Complete in the same step.
+// toggles it), and lets them set Pin to top / Mark complete in the same step.
+//
+// WHY it is Session details now (backlog row 17, Destin 2026-10-04 "want to work on this
+// page more"; deck close-session-1): every other surface edits a session's name, note, tags
+// and pin in Session details, whose Tags card is edited in place — this prompt was the last
+// one on the older editor (a summary card that swapped into a second form, with Mark
+// complete pushed below the fold). It now shows the same cards: the session's own card (no
+// label — the card about the popup's subject), the Tags card, then one card for the two
+// yes/no facts. Unlike Session details nothing here writes until Close session: the cards
+// edit local state and the caller writes the delta (tag renames/colours still write at once,
+// as everywhere).
 export default function CloseSessionPrompt({ open, sessionName, sessionId, onCancel, onConfirm }: Props) {
   const [sel, setSel] = useState<Record<FlagName, boolean>>({ priority: false, complete: false });
   // "Don't show again" — persisted to localStorage so the caller can skip this
@@ -109,10 +83,21 @@ export default function CloseSessionPrompt({ open, sessionName, sessionId, onCan
   const [tagIds, setTagIds] = useState<Set<string>>(new Set());
   // The notes tip's moment: the first time this prompt shows (guide/tips.ts).
   useEffect(() => { if (open) triggerTip('notes'); }, [open]);
-  // The tag/note EDITOR is collapsed by default (see the summary block below).
-  // Not persisted and not remembered across opens: each close starts from the
-  // summary, because the common case is closing a session without filing it.
-  const [editing, setEditing] = useState(false);
+  // Rename opens the shared rename popup over this one (Session details' name card does the
+  // same). It writes at once, like a tag rename; the name shown follows the session list.
+  const [renaming, setRenaming] = useState(false);
+  // Try again on a failed read re-runs the load below.
+  const [attempt, setAttempt] = useState(0);
+  // A failed read's own words, shown only under Details (submit-ticket-5#ST5-9: the
+  // operation's text is for a bug report, not the message). Null when the read worked.
+  const [readError, setReadError] = useState<string | null>(null);
+  // WHY its own fade: this dialog owns its scroll band (scrollBody={false}, so its footer stays
+  // put), and Dialog's fade only reaches the body it owns. With a tag's edit box open the band
+  // scrolls, and without this it ended in a hard cut under the footer (guide: the content
+  // fades at the hidden edge, never a solid strip). The masked fade (`.scroll-mask`, the
+  // content itself fading), never the painted band — scroll-mask.test.ts. Declared before the
+  // early return.
+  const bodyRef = useScrollFade<HTMLDivElement>();
   const [note, setNote] = useState('');
   // The session's tags/note as loaded on open — the baseline for the delta, so
   // Cancel changes nothing and Confirm only writes what the user toggled.
@@ -147,8 +132,9 @@ export default function CloseSessionPrompt({ open, sessionName, sessionId, onCan
   useEffect(() => {
     if (!open) return;
     setSel({ ...EMPTY_FLAGS });
-    setEditing(false);   // every close starts from the summary, not the editor
+    setRenaming(false);
     setDontShowAgain(false);
+    setReadError(null);
     setMetaSupported(true);
     setMetaLoaded(false);
     const blank = { tags: new Set<string>(), note: '', flags: { ...EMPTY_FLAGS } };
@@ -163,7 +149,7 @@ export default function CloseSessionPrompt({ open, sessionName, sessionId, onCan
     const unreadable = (reason: string) => {
       setTagIds(new Set()); setNote(''); setOriginal(blank);
       setMetaSupported(false);
-      setMetaReason(`Couldn't load this conversation's tags and note, so they can't be changed here: ${reason}`);
+      setReadError(reason);
       setMetaLoaded(true);
     };
     Promise.resolve((window as any).claude.session.getMeta(sessionId))
@@ -189,17 +175,11 @@ export default function CloseSessionPrompt({ open, sessionName, sessionId, onCan
       .catch((err: unknown) => { if (!cancelled) unreadable(plainMessage(err)); });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, sessionId]);
+  }, [open, sessionId, attempt]);
 
   // Reserved flags to set + the tag delta (add/remove vs. the loaded baseline) +
   // the note. useCallback keeps a stable identity so the Enter effect below
   // doesn't re-subscribe its keydown listener every render.
-  // What the collapsed summary shows. Priority rides `sel` rather than `tagIds`
-  // because it is a reserved flag, so it has to be folded in here by hand.
-  const appliedTags = [...tagIds]
-    .map((id) => registry.byId.get(id))
-    .filter((t): t is TagRecord => !!t);
-
   const buildResult = useCallback(() => ({
     flags: Object.fromEntries(
       FLAG_ORDER.filter((f) => sel[f] !== original.flags[f]).map((f) => [f, sel[f]]),
@@ -220,122 +200,87 @@ export default function CloseSessionPrompt({ open, sessionName, sessionId, onCan
       if (e.key !== 'Enter') return;
       // Don't hijack Enter while the user is typing in the tag search or the note.
       if (isTypingTarget(e.target as Element)) return;
+      // WHY a focused control keeps its own Enter: the cards are now full of buttons (a tag
+      // opens its edit box, "+ New tag", "+ Add a note", a tag's ×). Enter on one of them used
+      // to reach this listener too and close the session mid-edit — and Enter on Close session
+      // itself fired it twice (its click and this). The rename popup sits on top: its Enter
+      // is its own.
+      const el = e.target as Element | null;
+      if (renaming || e.defaultPrevented || el?.closest?.('button, [role="button"], [role="switch"], a, select')) return;
       onConfirm(buildResult());
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [open, buildResult, onConfirm]);
+  }, [open, buildResult, onConfirm, renaming]);
 
   if (!open) return null;
 
+  const toggleTag = (id: string, next: boolean) =>
+    setTagIds((prev) => { const s = new Set(prev); if (next) s.add(id); else s.delete(id); return s; });
+  const name = sessionName || 'Untitled session';
+  const tagsProps = { registry, appliedIds: tagIds, onToggleTag: toggleTag };
+
   return (
     <>
-      {/* P-15: title + session name come from the shared Dialog header now, so
-          this prompt gets the same header (and the ✕) every other dialog has
-          instead of a hand-rolled copy of it. */}
-      <Dialog screen="chat/close-session" open onClose={onCancel} size="prompt" title="Close session" subtitle={sessionName} scrollBody={false}>
+      {/* The shared popup at Session details' width (`panel`, 420px — still a narrow popup),
+          titled by what it does. The session's name moved from the subtitle into its own
+          card, as on Session details and the detail pages (guide: the item's name is in the
+          top card, not the title). */}
+      <Dialog screen="chat/close-session" open onClose={onCancel} size="panel" title="Close session" scrollBody={false}>
           {/* min-h-0 + overflow-y-auto: this dialog passes scrollBody={false}
-              because it renders its own header and footer, and Dialog's own doc
-              is explicit that doing so makes the SCROLL REGION the caller's
-              job — "the symptom is a dialog that clips with no way to reach the
-              bottom". It did exactly that once the tag editor opened on a short
-              viewport (found 2026-07-31 reviewing captures at 900px): the
-              header and footer are fixed, so only this middle band may grow,
-              and without min-h-0 a flex child refuses to shrink below its
-              content and pushes "Close session" off the panel. */}
-          <div className="px-4 py-4 flex flex-col gap-3 min-h-0 overflow-y-auto">
+              because it renders its own footer, and Dialog's own doc is explicit
+              that doing so makes the SCROLL REGION the caller's job — "the symptom
+              is a dialog that clips with no way to reach the bottom". The header
+              and footer are fixed, so only this middle band may grow; without
+              min-h-0 a flex child refuses to shrink below its content and pushes
+              "Close session" off the panel on a short window. */}
+          <div ref={bodyRef} className="scroll-mask px-4 py-4 flex flex-col gap-4 min-h-0">
             {!metaLoaded ? null : !metaSupported ? (
-              <p className="text-2xs text-fg-muted leading-snug">{metaReason}</p>
+              <>
+                {/* Name only: the note could not be read (or cannot be stored here), so
+                    nothing may suggest it is empty or editable. */}
+                <SessionHeaderCard name={name} note="" />
+                {/* WHY the notice box in place of the cards (guide: a problem replaces the
+                    card it is about; was a bare grey line on the popup): one plain sentence
+                    saying what still works, Try again inside it when it was a failed read,
+                    the operation's own words folded under Details (submit-ticket-5#ST5-9).
+                    A host that simply cannot store them (Android) is information, not an
+                    error: its own sentence, no button. */}
+                {readError !== null ? (
+                  <div className="flex flex-col gap-2">
+                    <Callout tone="danger" actionsPlacement="below"
+                      actions={<Button size="sm" onClick={() => setAttempt((n) => n + 1)}>Try again</Button>}>
+                      Couldn’t load this conversation’s tags and note, so they can’t be changed here. Closing it still works.
+                    </Callout>
+                    {readError && <FoldRow title="Details">
+                      <p className="text-2xs text-fg-2 font-mono break-all">{readError}</p>
+                    </FoldRow>}
+                  </div>
+                ) : (
+                  <Callout tone="info">{metaReason}</Callout>
+                )}
+              </>
             ) : (
               <>
-              {/* Tags and note lead — closing a session is mostly a filing
-                  action — but the full editor is a tag list and a textarea,
-                  which is a lot of form in front of a dialog whose primary
-                  button is "Close session". So the default is a SUMMARY of what
-                  is applied, and the editor opens in place.
-                  Settled over ten workbench comparison rounds (view=compare,
-                  surface close-prompt-body): a card whose contents swap while
-                  the card itself stays put, glyphs instead of section labels,
-                  the note quoted and clamped to two lines, and the editor as a
-                  single well closed by a Save pill. */}
-              {editing ? (
-                  // Pin to top (the Priority flag), as in the in-session popup and
-                  // the Resume Browser's sheet. Unlike those this one is DEFERRED:
-                  // the dialog collects a result and the caller writes it on
-                  // confirm, so the pin toggles local state instead of calling
-                  // setFlag. Cancel must leave nothing behind. (Editing a tag
-                  // itself — rename, colour, delete — writes at once, as the
-                  // Manage tags popup it replaced did.)
-                  //
-                  // "Save" collapses back to the summary and writes NOTHING —
-                  // the dialog's own button is what commits. Pinned in a test,
-                  // because the label invites someone to wire it to onConfirm.
-                  <TagNoteEditor
-                    appliedIds={tagIds}
-                    onToggleTag={(id, next) => setTagIds((prev) => { const s = new Set(prev); if (next) s.add(id); else s.delete(id); return s; })}
-                    registry={registry}
-                    note={note}
-                    onNote={setNote}
-                    footer={{ label: 'Save', onClick: () => setEditing(false) }}
-                    pin={{ pinned: sel.priority, onPin: (next) => setSel((prev) => ({ ...prev, priority: next })) }}
-                  />
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setEditing(true)}
-                    aria-label="Edit tags and note"
-                    // The card lives HERE now, not on a shared wrapper: the
-                    // editor brings its own (TagNoteEditor), and both states
-                    // draw the same border/fill/padding so the dialog body
-                    // still doesn't change shape when you click in.
-                    // Hover brightens the BORDER, the way a field does — it becomes one on
-                    // click, and a fill change here would shift under the text.
-                    className="group relative w-full text-left rounded-lg border border-edge-dim hover:border-edge active:border-fg-muted transition-colors bg-inset px-3 py-2.5"
-                  >
-                    {/* Fixed 16px glyph column so the chips and the note text
-                        start on the SAME left edge — letting each row set its
-                        own indent left them a pixel or two apart. */}
-                    <span className="grid grid-cols-[16px_1fr] items-start gap-x-1.5 gap-y-1.5 pr-6">
-                      <TagGlyph className="w-3 h-3 text-fg-muted mt-0.5" />
-                      <span className="flex flex-wrap items-center gap-1 min-w-0">
-                        {sel.priority && <span className="flex items-center" role="img" aria-label="Pinned to top" title="Pinned to top"><PinIcon className="w-3 h-3 text-fg-2" /></span>}
-                        {appliedTags.map((t) => <TagChip key={t.id} tag={t} />)}
-                        {!sel.priority && appliedTags.length === 0 && (
-                          <span className="text-2xs text-fg-muted">No tags</span>
-                        )}
-                      </span>
-                      <NotePageGlyph className="w-3 h-3 text-fg-muted mt-0.5" />
-                      {note.trim() ? (
-                        // Quoted and clamped to two lines: roughly a sentence
-                        // gets through and the card can grow by one line and no
-                        // further, so "Close session" stays where the user left it.
-                        <span className="text-2xs text-fg-muted italic leading-snug line-clamp-2 min-w-0">
-                          “{note.trim()}”
-                        </span>
-                      ) : (
-                        <span className="text-2xs text-fg-muted min-w-0">No note</span>
-                      )}
-                    </span>
-                    <span className="absolute top-2.5 right-3 text-fg-faint group-hover:text-fg transition-colors">
-                      <PencilGlyph className="w-3.5 h-3.5" />
-                    </span>
-                  </button>
-                )}
-
-              {/* Mark complete sits LAST: the tags above are optional filing,
-                  this is the actual "are you done with it?" question, and it
-                  reads better immediately above the button that acts on it. */}
-              <MarkComplete
-                checked={sel.complete}
-                onChange={(next) => setSel((prev) => ({ ...prev, complete: next }))}
-              />
+                {/* Pending writes: the note and tags edit local state; Close session commits. */}
+                <SessionHeaderCard name={name} onRename={sessionId ? () => setRenaming(true) : undefined} note={note} onNote={setNote} />
+                {workbenchCloseTagsFolded() ? <SessionTagsFold {...tagsProps} /> : <SessionTagsCard {...tagsProps} />}
+                {/* Pin to top and Mark complete in ONE card: both are yes/no facts about this
+                    session (guide: a group that is one idea keeps one card). Mark complete
+                    sits last, right above the button that acts on it. Unlabelled, like
+                    Session details' Pin card. */}
+                <div className={`${CARD_LEVEL_1} px-3 py-1`}>
+                  <PinRow pin={{ pinned: sel.priority, onPin: (next) => setSel((prev) => ({ ...prev, priority: next })) }} />
+                  <SettingRow header variant="item" title={COMPLETE_TITLE} description={COMPLETE_HINT}
+                    icon={<CompleteGlyph done={sel.complete} className={`w-3.5 h-3.5 transition-colors ${sel.complete ? 'text-accent' : 'text-fg-muted'}`} />}
+                    control={<Toggle checked={sel.complete} onChange={(next) => setSel((prev) => ({ ...prev, complete: next }))} aria-label={COMPLETE_TITLE} />} />
+                </div>
               </>
             )}
           </div>
-          {/* P-15 (review 2026-08-26): the dialog has a ✕ now, so "Cancel" is
-              redundant and gone. "Don't show again" stays bottom-left where it
-              always was, on the shared Toggle (a real switch), and with only one
-              button on the right nothing wraps at the prompt width any more. */}
+          {/* P-15 (review 2026-08-26): the dialog has a ✕, so no Cancel. "Don't show
+              again" sits bottom-left beside the one filled button — allowed by the guide
+              because the button balances it on the same line (principle 6). */}
           <div className="px-4 pb-4 flex items-center justify-between gap-3">
             {/* Don't show again — persists suppress flag to localStorage so App.tsx
                 skips this prompt on future closes and destroys sessions directly. */}
@@ -359,6 +304,7 @@ export default function CloseSessionPrompt({ open, sessionName, sessionId, onCan
             </Button>
           </div>
       </Dialog>
+      {renaming && sessionId && <SessionRenameDialog id={sessionId} name={name} onClose={() => setRenaming(false)} />}
     </>
   );
 }

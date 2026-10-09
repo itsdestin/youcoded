@@ -1,8 +1,9 @@
 // src/renderer/components/tags/SessionDetails.tsx
 //
 // Session details: a session's name and note, its tags and Pin to top — the editor every
-// surface but the close prompt uses (status bar popup, Resume's organize sheet, the side
-// panel's sheet, a project's conversation preview).
+// surface uses (status bar popup, Resume's organize sheet, the side panel's sheet, a
+// project's conversation preview, and since close-session-1 the close prompt, which
+// composes the exported cards below with its own Mark complete).
 //
 // WHY this shape (tags-final#TF-1 → session-details-1…5, Destin 2026-10-04): the top card
 // mirrors a project's card — the name large (click to rename), then the note "in quotes and
@@ -14,8 +15,8 @@ import { useMemo, useState } from 'react';
 import type { TagRecord } from '../../../shared/tags';
 import { DEFAULT_TAG_COLOR } from '../../../shared/tags';
 import type { TagRegistryApi } from '../../hooks/useTagRegistry';
-import { Button, CARD_LEVEL_1, CARD_LEVEL_2, ErrorState, FieldError, InputGroup, SectionLabel, SettingRow, Textarea, Toggle } from '../ui';
-import { ChipAction, TagWord, mix } from './TagChip';
+import { Button, CARD_LEVEL_1, CARD_LEVEL_2, ErrorState, FieldError, FoldRow, InputGroup, SectionLabel, SettingRow, Textarea, Toggle } from '../ui';
+import { ChipAction, TagChip, TagWord, mix } from './TagChip';
 import { NewTagFields, TagFields } from './TagCloud';
 import { PinIcon } from './PinIcon';
 
@@ -35,20 +36,31 @@ type Props = {
 export function SessionDetails(p: Props) {
   return (
     <div className="flex flex-col gap-4">
-      <HeaderCard name={p.name} onRename={p.onRename} note={p.note} onNote={p.onNote} />
-      <Tags {...p} />
+      <SessionHeaderCard name={p.name} onRename={p.onRename} note={p.note} onNote={p.onNote} />
+      <SessionTagsCard {...p} />
       <div className={`${CARD_LEVEL_1} px-3 py-1`}>
-        <SettingRow header variant="item" title="Pin to top" icon={<PinIcon className="w-3.5 h-3.5 text-fg-muted" />}
-          description="Keeps this session first in your session lists"
-          control={<Toggle checked={p.pin.pinned} onChange={p.pin.onPin} aria-label="Pin to top" />} />
+        <PinRow pin={p.pin} />
       </div>
     </div>
   );
 }
 
+/** Pin to top as a setting row, for a card to hold. WHY exported (close-session-1): the close
+ *  prompt puts it in one card with Mark complete — both are yes/no facts about the session. */
+export function PinRow({ pin }: { pin: Props['pin'] }) {
+  return (
+    <SettingRow header variant="item" title="Pin to top" icon={<PinIcon className="w-3.5 h-3.5 text-fg-muted" />}
+      description="Keeps this session first in your session lists"
+      control={<Toggle checked={pin.pinned} onChange={pin.onPin} aria-label="Pin to top" />} />
+  );
+}
+
 /** The project card's title + description recipe (ProjectHero): a small label, the name
- *  large, then the note as plain words you click to edit — or "+ Add a note". */
-function HeaderCard({ name, onRename, note, onNote }: { name?: string; onRename?: () => void; note: string; onNote: (t: string) => void }) {
+ *  large, then the note as plain words you click to edit — or "+ Add a note".
+ *  Exported for the close prompt (backlog row 17), whose top card is this same card.
+ *  Without `onNote` the card shows the name alone — the close prompt's state where the
+ *  note could not be read, so nothing may suggest it is empty or editable. */
+export function SessionHeaderCard({ name, onRename, note, onNote }: { name?: string; onRename?: () => void; note: string; onNote?: (t: string) => void }) {
   return (
     <div className={`${CARD_LEVEL_1} p-4`}>
       <NoteBlock name={name} onRename={onRename} note={note} onNote={onNote} />
@@ -57,7 +69,7 @@ function HeaderCard({ name, onRename, note, onNote }: { name?: string; onRename?
 }
 
 /** The name (when given) and the note — no card of its own, so a sheet can place it. */
-function NoteBlock({ name, onRename, note, onNote, hang = true }: { name?: string; onRename?: () => void; note: string; onNote: (t: string) => void; hang?: boolean }) {
+function NoteBlock({ name, onRename, note, onNote, hang = true }: { name?: string; onRename?: () => void; note: string; onNote?: (t: string) => void; hang?: boolean }) {
   // The project card hangs the note's box into the card's margin so its WORDS line up with
   // the name; in the narrow Resume sheet that left the box touching the card's edge.
   const ml = hang ? '-ml-2.5' : '', mlAdd = hang ? '-ml-2' : '';
@@ -66,7 +78,7 @@ function NoteBlock({ name, onRename, note, onNote, hang = true }: { name?: strin
   const fit = (el: HTMLTextAreaElement | null) => { if (el) { el.style.height = 'auto'; el.style.height = `${el.scrollHeight}px`; } };
   // No name above (Resume, side panel, Projects): the note leads the card, no gap over it.
   const top = name !== undefined ? 'mt-1.5' : '';
-  const commit = () => { setEditing(false); if (draft.trim() !== note.trim()) onNote(draft.trim()); };
+  const commit = () => { setEditing(false); if (onNote && draft.trim() !== note.trim()) onNote(draft.trim()); };
   return (
     <div>
       {/* The Resume card's title control: dotted underline and a pencil, click to rename. */}
@@ -78,7 +90,7 @@ function NoteBlock({ name, onRename, note, onNote, hang = true }: { name?: strin
           <path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
         </svg>
       </button></div>}
-      {editing ? (
+      {!onNote ? null : editing ? (
         <Textarea size="sm" ref={fit} rows={1} autoFocus value={draft} aria-label="Note"
           placeholder="A note for later — shows under All sessions"
           className={`${top} ${ml} w-full text-sm italic overflow-hidden`}
@@ -131,7 +143,7 @@ function OtherPill({ t, onEdit, onAdd, picked }: { t: TagRecord; onEdit: () => v
 }
 
 /** The tag editor's pieces, for each layout to arrange. */
-function useTagEditor({ registry, appliedIds, onToggleTag }: Pick<Props, 'registry' | 'appliedIds' | 'onToggleTag'>) {
+function useTagEditor({ registry, appliedIds, onToggleTag }: TagsProps) {
   const [query, setQuery] = useState('');
   const [picked, setPicked] = useState<string | 'new' | null>(null);
   const q = query.trim().toLowerCase();
@@ -195,22 +207,56 @@ function useTagEditor({ registry, appliedIds, onToggleTag }: Pick<Props, 'regist
   return { failed, stale, applied, appliedPills, search, otherCloud, editBox, openNew: () => setPicked('new') };
 }
 
-function Tags(p: Props) {
+type TagsProps = Pick<Props, 'registry' | 'appliedIds' | 'onToggleTag'>;
+
+/** What the Tags card holds: this session's tags, then "Add a tag" with the search and the
+ *  other tags, then the edit box of the tag picked. Shared by the card and the fold. */
+function TagsBody({ t }: { t: ReturnType<typeof useTagEditor> }) {
+  return (
+    <>
+      {t.stale}
+      {t.appliedPills}
+      <div className="space-y-2">
+        <div className="text-xs font-medium text-fg-2">Add a tag</div>
+        {t.search}
+        {t.otherCloud}
+      </div>
+      {t.editBox}
+    </>
+  );
+}
+
+/** "Tags" and its card. Exported for the close prompt, which edits tags in this same card
+ *  (backlog row 17: it was the last surface on the older tag editor). */
+export function SessionTagsCard(p: TagsProps) {
   const t = useTagEditor(p);
   if (t.failed) return t.failed;
   return (
     <section>
       <SectionLabel className="mb-2">Tags</SectionLabel>
       <div className={`${CARD_LEVEL_1} p-3 space-y-3`}>
-        {t.stale}
-        {t.appliedPills}
-        <div className="space-y-2">
-          <div className="text-xs font-medium text-fg-2">Add a tag</div>
-          {t.search}
-          {t.otherCloud}
-        </div>
-        {t.editBox}
+        <TagsBody t={t} />
       </div>
     </section>
+  );
+}
+
+/** The same Tags card, folded to one row — "Tags" with the session's tags as its summary —
+ *  that opens inside itself (guide: a folded box opens inside itself; a folded row carries a
+ *  short summary, like the ticket review's). A close-prompt design under review
+ *  (close-session-1, practice switch `?closeTags=folded`), not used elsewhere yet. */
+export function SessionTagsFold(p: TagsProps) {
+  const t = useTagEditor(p);
+  // Controlled so the summary can step aside when open: the opened card lists the same tags
+  // again, larger, and a second copy in the header read as a mistake (seen on the first shots).
+  const [open, setOpen] = useState(false);
+  if (t.failed) return t.failed;
+  const summary = open ? undefined : t.applied.length
+    ? <span className="inline-flex flex-wrap items-center gap-1 pt-0.5">{t.applied.map((tag) => <TagChip key={tag.id} tag={tag} />)}</span>
+    : 'No tags yet';
+  return (
+    <FoldRow title="Tags" description={summary} open={open} onToggle={setOpen}>
+      <div className="space-y-3 pb-1"><TagsBody t={t} /></div>
+    </FoldRow>
   );
 }

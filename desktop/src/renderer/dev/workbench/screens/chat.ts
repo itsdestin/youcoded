@@ -10,6 +10,18 @@ export const CHAT: readonly ScreenEntry[] = [
   chat('chat/switcher', 'menu'),
   chat('chat/rename-session', 'dialog'),
   chat('chat/close-session', 'dialog'),
+  // The close prompt's other faces (backlog row 17, deck close-session-1): a session
+  // carrying only a note (wb-5), one with nothing on it (wb-2), and a phone.
+  { ...chat('chat/close-session#note', 'dialog'), session: 'wb-5' },
+  { ...chat('chat/close-session#bare', 'dialog'), session: 'wb-2' },
+  { ...chat('chat/close-session#phone', 'dialog', 'narrow'), viewport: { width: 390, height: 844 } },
+  // A tag clicked: its edit box opens inside the Tags card, as in Session details.
+  { ...chat('chat/close-session#tag-edit', 'dialog'), open: ['Edit work'] },
+  // The note being written in place ("+ Add a note" on a session with none).
+  { ...chat('chat/close-session#note-typing', 'dialog'), session: 'wb-2', open: ['+ Add a note', { do: 'type', target: { role: 'textbox', label: 'Note' }, text: 'Pick this up after the release' }] },
+  // The design under review (?closeTags=folded): the Tags card folded to one row, shut and opened.
+  { ...chat('chat/close-session#folded', 'dialog'), params: { closeTags: 'folded' } },
+  { ...chat('chat/close-session#folded-open', 'dialog'), params: { closeTags: 'folded' }, open: ['Tags…'] },
   chat('chat/find', 'bar'),
   chat('chat/skills', 'drawer'),
   chat('chat/commands', 'drawer'),

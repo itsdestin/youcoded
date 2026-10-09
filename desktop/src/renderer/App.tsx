@@ -4494,7 +4494,7 @@ function AppInner() {
       />
       <CloseSessionPrompt
         open={closePromptFor !== null}
-        sessionName={closePromptName ?? sessions.find((s) => s.id === closePromptFor)?.name}
+        sessionName={sessions.find((s) => s.id === closePromptFor)?.name ?? closePromptName /* WHY live first: the prompt renames now (close-session-1); a peer window's session keeps its captured name */}
         sessionId={closePromptFor}
         onCancel={() => { setClosePromptFor(null); setClosePromptName(undefined); }}
         onConfirm={(result) => {

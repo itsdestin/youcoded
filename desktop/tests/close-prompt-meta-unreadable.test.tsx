@@ -10,9 +10,10 @@
  * so typing a note REPLACED the stored one the user was never shown.
  *
  * A read that failed now reaches the prompt as `unreadable` (or a rejection), and the
- * prompt uses its existing "can't be changed here" state: the reason is shown, the tag
- * and note controls are not, and confirming writes nothing to either. A conversation
- * that simply has no note yet still shows "No note".
+ * prompt uses its "can't be changed here" state: the notice box takes the cards' place
+ * (close-session-1) with Try again, the operation's own words under Details, no tag or
+ * note controls, and confirming writes nothing to either. A conversation that simply has
+ * no note yet still offers "+ Add a note".
  */
 import React from 'react';
 import '@testing-library/jest-dom/vitest';
@@ -46,7 +47,8 @@ describe('CloseSessionPrompt — an unreadable note is not "No note"', () => {
 
     expect(await screen.findByText(/couldn.t load this conversation.s tags and note/i)).toBeInTheDocument();
     expect(screen.queryByText('No note')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Edit tags and note' })).toBeNull();
+    expect(screen.queryByPlaceholderText('Search or create a tag…')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Add a note/ })).toBeNull();
     expect(screen.queryByText(/Error invoking remote method/)).toBeNull();
 
     confirm();
@@ -58,15 +60,30 @@ describe('CloseSessionPrompt — an unreadable note is not "No note"', () => {
     mount();
 
     expect(await screen.findByText(/couldn.t load this conversation.s tags and note/i)).toBeInTheDocument();
+    // The raw words are for a bug report: folded under Details, one click away.
+    expect(screen.queryByText(/EACCES: permission denied/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
     expect(screen.getByText(/EACCES: permission denied/)).toBeInTheDocument();
     expect(screen.queryByText('No note')).toBeNull();
   });
 
-  it('a conversation that really has no note still says "No note"', async () => {
+  it('Try again reads again, and a read that now works brings the cards back', async () => {
+    const getMeta = vi.fn()
+      .mockRejectedValueOnce(new Error('store unavailable'))
+      .mockResolvedValue({ tags: [], note: 'kept note', supported: true, flags: {} });
+    mockWindowClaude(getMeta);
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText(/kept note/)).toBeInTheDocument();
+    expect(getMeta).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(/couldn.t load/i)).toBeNull();
+  });
+
+  it('a conversation that really has no note still offers to add one', async () => {
     mockWindowClaude(vi.fn().mockResolvedValue({ tags: [], note: '', supported: true, flags: {} }));
     mount();
 
-    expect(await screen.findByText('No note')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /Add a note/ })).toBeInTheDocument();
     expect(screen.queryByText(/couldn.t load/i)).toBeNull();
   });
 });
