@@ -34,11 +34,9 @@ import { RemovedProjectsCard } from './RemovedProjectsCard';
 
 // --- Explainer content (updated for V2 multi-instance model) ---
 
-// WHY these words (small-fixes-1): the old intro said "your conversations, projects, and files"
-// live in GitHub, which reads as every project and file on the computer. Only the two folders
-// inside YouCoded's own folder are copied (sync-spaces/managed-roots.ts: Personal, and each
-// folder in Projects); memory, instructions, skills and settings ride only the Drive/iCloud
-// daily copy (sync-service.ts pushDrive/pushiCloud). Say exactly that, in plain words.
+// WHY these words (small-fixes-1): "your conversations, projects, and files" read as everything on
+// the computer. Sync copies only ~/YouCoded's Personal + Projects (sync-spaces/managed-roots.ts);
+// memory, instructions, skills and settings ride only the Drive/iCloud daily copy (sync-service.ts).
 const SYNC_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
   intro:
     "YouCoded can keep two kinds of copy. Sync across devices is the main one: it copies the YouCoded folder in your home folder — your Personal folder, which holds your conversations, and each project in its Projects folder — to your own private GitHub, and keeps them the same on every device you use. Extra backups (Google Drive, iCloud) keep a daily copy on top of that. Folders anywhere else on your computer are not copied.",
