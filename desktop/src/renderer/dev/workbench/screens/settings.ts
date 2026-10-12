@@ -66,7 +66,9 @@ export const SETTINGS: readonly ScreenEntry[] = [
   settings('settings/assistant/cloud/openrouter/key', 'dialog'),
   settings('settings/assistant/permissions', 'dialog'),
   // A folder opened and pointed at: the card lights as one (the ST4-2 sweep).
-  { ...settings('settings/assistant/permissions#folder-open-hover', 'dialog', 'fold'), open: ['youcoded /home/destin/youcoded-dev/youcoded 4 ▸', { do: 'hover', target: { role: 'button', label: 'youcoded /home/destin/youcoded-dev/youcoded 4 ▾' } }] },
+  // Scrolls first: the backup warning at the top of the modes card (backup-warning-1) pushed the
+  // folder rows below the fold at 1440×900.
+  { ...settings('settings/assistant/permissions#folder-open-hover', 'dialog', 'fold'), open: [{ do: 'scroll', dir: 'down', times: 3 }, 'youcoded /home/destin/youcoded-dev/youcoded 4 ▸', { do: 'hover', target: { role: 'button', label: 'youcoded /home/destin/youcoded-dev/youcoded 4 ▾' } }] },
   settings('settings/assistant/permissions/skip-confirm', 'dialog'),
   settings('settings/assistant/specialists', 'dialog'),
   // error-notices-1 (2026-10-12): a setting that couldn't load (one line + Retry), and a
