@@ -48,6 +48,10 @@ const TICKET_STATES: readonly ScreenEntry[] = [
   ticket('small-review', { viewport: SMALL, open: [...FILL, TICK_LOGS, REVIEW] }),
 ];
 
+// The wizard's own ✕ and Escape both return to Backup & sync's main view (SyncSetupWizard
+// useEscClose → onClose); the popup stays open.
+const WIZARD_ESCAPE = 'the add-a-backup wizard returns to Backup & sync';
+
 export const SETTINGS: readonly ScreenEntry[] = [
   settings('settings', 'drawer'),
   settings('settings/account', 'dialog'),
@@ -103,9 +107,9 @@ export const SETTINGS: readonly ScreenEntry[] = [
   { ...settings('settings/sync#explainer', 'dialog'), open: ['What is this?'] },
   // The add-a-backup wizard's two failures (small-fixes-1): the helper tool's install, and making
   // the GitHub repository on Start backup — each a notice with Try again in its button's place.
-  { ...settings('settings/sync#add-install-failed', 'dialog', 'error-state'), params: { syncSetup: 'install-failed' },
+  { ...settings('settings/sync#add-install-failed', 'dialog', 'error-state'), params: { syncSetup: 'install-failed' }, escapeStepsBack: WIZARD_ESCAPE,
     open: [{ do: 'scroll', dir: 'down', times: 8 }, '＋ Add a backup', '☁ Google Drive…', 'Install now'] },
-  { ...settings('settings/sync#add-save-failed', 'dialog', 'error-state'), params: { syncSetup: 'save-failed' },
+  { ...settings('settings/sync#add-save-failed', 'dialog', 'error-state'), params: { syncSetup: 'save-failed' }, escapeStepsBack: WIZARD_ESCAPE,
     open: [{ do: 'scroll', dir: 'down', times: 8 }, '＋ Add a backup', '⌂ GitHub…', 'Start backup'] },
   // "Remove backup?" on the default fixture's one backend (drive-1).
   settings('settings/sync/remove-backend', 'dialog'),

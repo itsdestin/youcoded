@@ -32,6 +32,10 @@ export type ScreenEntry = {
    *  before/after skips it on the before side instead of reporting it NOT TAKEN (close-session
    *  friction, proposal 20). Remove it once the before side has the state too. */
   newIn?: 'after';
+  /** Why Escape here steps back INSIDE the popup instead of closing it (a wizard that owns its
+   *  own ✕ and Escape, inside Backup & sync). `shoot --check` then expects every layer to stay
+   *  open after Escape, rather than the top one to close. */
+  escapeStepsBack?: string;
   /** Another screen this one is EXPECTED to look identical to, and why. */
   sameAs?: { name: string; why: string };
 };
