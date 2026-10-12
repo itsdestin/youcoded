@@ -286,11 +286,27 @@ function EditView({ tool, sessionId }: { tool: ToolCallState; sessionId?: string
   );
 }
 
+/** Whether a finished Write made a new file or replaced one, read from the tool's own result
+ *  — or null when the result does not say (still running, failed, or wording we don't know).
+ *
+ *  WHY (small-fixes-1): the card said "New file" on EVERY Write, including one that replaced an
+ *  existing file. The tool's input never says which; only its result does. Claude Code answers
+ *  "File created successfully at: …" or "The file … has been updated successfully."; the
+ *  native Write tool (harness/tools/write.ts) answers "Created …" or "Overwrote …". Unknown is
+ *  shown as no chip, never guessed as new (error-message-standards: unknown is not "none"). */
+export function writeOutcome(response: string | undefined): 'created' | 'replaced' | null {
+  const r = (response ?? '').trimStart();
+  if (/^File created successfully\b/.test(r) || /^Created\s/.test(r)) return 'created';
+  if (/^The file .* has been (?:updated|overwritten)\b/s.test(r) || /^Overwrote\s/.test(r)) return 'replaced';
+  return null;
+}
+
 function WriteView({ tool, sessionId }: { tool: ToolCallState; sessionId?: string }) {
   // Fix: an object file_path crashed basename(); an object content crashed .split().
   const fp = asString(tool.input.file_path);
   const content = asString(tool.input.content);
   const lineCount = content ? content.split('\n').length : 0;
+  const outcome = tool.status === 'complete' && !tool.error ? writeOutcome(tool.response) : null;
 
   return (
     <div className="space-y-2">
@@ -299,7 +315,8 @@ function WriteView({ tool, sessionId }: { tool: ToolCallState; sessionId?: strin
         sessionId={sessionId}
         chips={
           <>
-            <Chip tone="add">New file</Chip>
+            {outcome === 'created' && <Chip tone="add">New file</Chip>}
+            {outcome === 'replaced' && <Chip tone="warn">Replaced file</Chip>}
             {lineCount > 0 && <span className="text-3xs text-fg-muted">{lineCount} lines</span>}
           </>
         }
