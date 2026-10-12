@@ -9,8 +9,6 @@ export const APP: readonly ScreenEntry[] = [
   app('app/unsaved-before-quit', 'dialog'),
   // A short window: the list scrolls and the buttons stay put (close-session-4, the footer slot).
   { ...app('app/unsaved-before-quit#short', 'dialog'), viewport: { width: 1440, height: 480 } },
-  // The other look on close-session-5's pick slide: plain rows in one box (?unsavedList=rows).
-  { ...app('app/unsaved-before-quit#rows', 'dialog'), params: { unsavedList: 'rows' } },
   // Refused after teardown, when it was a restart: the chats have stopped; it will quit instead.
   app('app/unsaved-before-quit/after-restart', 'dialog'),
   // "Discard and quit" asks in place first.
