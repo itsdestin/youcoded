@@ -18,8 +18,8 @@ import { isTypingTarget } from '../utils/is-typing-target';
 
 const OWNS_ENTER = 'button, a[href], select, summary, [role="button"], [role="switch"], [role="checkbox"], [role="radio"], [role="menuitem"], [role="option"], [role="tab"], [role="link"], [contenteditable="true"]';
 
-/** True when this keydown should confirm the popup. Exported for its test. */
-export function isConfirmEnter(e: KeyboardEvent): boolean {
+/** True when this keydown should confirm the popup. */
+function isConfirmEnter(e: KeyboardEvent): boolean {
   if (e.key !== 'Enter' || e.defaultPrevented || e.repeat || e.isComposing) return false;
   if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return false;
   const el = e.target instanceof Element ? e.target : null;
