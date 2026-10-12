@@ -69,6 +69,11 @@ export const SETTINGS: readonly ScreenEntry[] = [
   { ...settings('settings/assistant/permissions#folder-open-hover', 'dialog', 'fold'), open: ['youcoded /home/destin/youcoded-dev/youcoded 4 ▸', { do: 'hover', target: { role: 'button', label: 'youcoded /home/destin/youcoded-dev/youcoded 4 ▾' } }] },
   settings('settings/assistant/permissions/skip-confirm', 'dialog'),
   settings('settings/assistant/specialists', 'dialog'),
+  // error-notices-1 (2026-10-12): a setting that couldn't load (one line + Retry), and a
+  // general error with Report bug / Diagnose (Permissions).
+  { ...settings('settings/assistant/specialists#load-failed', 'dialog', 'error-state'), params: { fail: 'specialists.getDelegatedModels' } },
+  { ...settings('settings/assistant/permissions#load-failed', 'dialog', 'error-state'), params: { fail: 'permissions.list' } },
+  { ...settings('settings/assistant/general#step-guard-failed', 'dialog', 'error-state'), params: { fail: 'native.getStepGuard' } },
   settings('settings/appearance', 'dialog'),
   // The two Appearance folds, now the shared FoldRow (submit-ticket-5 proposal 1).
   { ...settings('settings/appearance#custom-open', 'dialog', 'fold'), open: ['Additional customizations Message bubbles, corners, glass, particles', { do: 'scroll', dir: 'down', times: 2 }] },

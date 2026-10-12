@@ -101,6 +101,10 @@ export const CHAT: readonly ScreenEntry[] = [
   { ...chat('chat/skills#load-failed', 'drawer', 'error-state'), params: { fail: 'skills.list' } },
   { ...chat('chat/tags#load-failed', 'dialog', 'error-state'), params: { fail: 'tags.list' } },
   { ...chat('chat/close-session#meta-unreadable', 'dialog', 'error-state'), params: { fail: 'session.getMeta' } },
+  // error-notices-1 (2026-10-12): more of the app's "couldn't load" notices, so every
+  // screen family's error box can be seen (the Resume list, the model menu).
+  { ...chat('chat/resume#load-failed', 'dialog', 'error-state'), params: { fail: 'session.browse' } },
+  { ...chat('chat/model-picker#load-failed', 'dialog', 'error-state'), params: { fail: 'providers.list' } },
   // Each game, signed in (a friend online). Chess and Connect 4 land on a board by
   // autoplay; autoplay=0 keeps them in the lobby, where the head-to-head record shows.
   { ...chat('chat/games/flappy', 'pane', 'games'), params: { signedIn: '1' } },

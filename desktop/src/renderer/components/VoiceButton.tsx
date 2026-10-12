@@ -37,7 +37,7 @@ import { useEscClose } from '../hooks/use-esc-close';
 import { MicIcon } from './Icons';
 import type { VoiceReadiness } from '../../shared/voice-types';
 import type { VoicePhase } from '../hooks/useVoiceInput';
-import { Tooltip } from './ui';
+import { ErrorState, Tooltip } from './ui';
 
 /** Round-2 alternatives (review deck 2026-09-05, V-1: "alternatives for the
  *  counter/feedback location and styling, and the animation on the mic icon").
@@ -218,15 +218,25 @@ export function VoiceButton({ phase, readiness, level, seconds, error, disabled,
             not ship and could not be tested on Windows or macOS from here. That
             costs 175 MB more and removes the wait to unpack it. */}
         <p className="text-2xs text-fg-muted mt-2">One-time download: about 650 MB.</p>
-        {downloadFailed && (
+        {downloadFailed ? (
           // The computer's OWN words, never a guess about the network —
           // docs/error-message-standards.md.
-          <p className="text-2xs text-fg-2 leading-snug mt-2 whitespace-pre-line">{error}</p>
+          // WHY ErrorState (error-notices-1, 2026-10-12): a failed download is the notice
+          // box in the buttons' place, with Not now and Retry inside it at the right
+          // (guide "Status and notices": a failed action replaces the buttons it came
+          // from). It was a grey line above the same two loose buttons.
+          <ErrorState
+            className="mt-3"
+            message={<span className="whitespace-pre-line">{error}</span>}
+            moreActions={[{ label: 'Not now', onClick: () => { onClearError(); setOpen(false); } }]}
+            onRetry={onDownload}
+          />
+        ) : (
+          <div className="flex justify-end gap-2 mt-3">
+            <Button variant="ghost" size="sm" onClick={() => { onClearError(); setOpen(false); }}>Not now</Button>
+            <Button variant="primary" size="sm" onClick={onDownload}>Download</Button>
+          </div>
         )}
-        <div className="flex justify-end gap-2 mt-3">
-          <Button variant="ghost" size="sm" onClick={() => { onClearError(); setOpen(false); }}>Not now</Button>
-          <Button variant="primary" size="sm" onClick={onDownload}>{downloadFailed ? 'Retry' : 'Download'}</Button>
-        </div>
       </>
     );
   } else if (state === 'unavailable') {

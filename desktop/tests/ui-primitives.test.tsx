@@ -622,14 +622,16 @@ describe('state family', () => {
     expect(onClick).toHaveBeenCalled();
   });
 
-  it('errors are NEUTRAL cards, not red-tinted boxes', () => {
-    // Option C, chosen explicitly over B ("destructive-tinted callout").
-    // The dot carries the failure; the container does not (rule 6).
+  it('errors are the red-tinted notice box, with no separate mark', () => {
+    // error-notices-1 (2026-10-12) reversed Option C (a neutral grey box with a red
+    // dot): the guide's notice box carries the colour in its tint and border, and
+    // nothing else is red. Full guard: tests/error-state.test.tsx.
     const { container } = render(<ErrorState message="Fetch failed" onRetry={() => {}} />);
     const card = container.firstElementChild as HTMLElement;
-    expect(card.className).toContain('bg-inset/50');
-    expect(card.className).not.toContain('bg-destructive');
-    expect(card.querySelector('.bg-destructive')).not.toBeNull(); // the mark
+    expect(card.className).toContain('bg-destructive/10');
+    expect(card.className).toContain('border-destructive/50');
+    expect(card.className).not.toContain('bg-inset/50');
+    expect(card.querySelector('.bg-destructive')).toBeNull(); // the old dot is gone
   });
 
   it('Retry is a FILLED primary', () => {

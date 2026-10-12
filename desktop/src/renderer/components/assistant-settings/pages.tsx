@@ -15,7 +15,7 @@ import SkipPermissionsSection, { type PermissionOverrides } from './SkipPermissi
 import FolderSwitcher from '../FolderSwitcher';
 import SessionNaming from './SessionNaming';
 import SavedContextSettings from './SavedContextSettings';
-import { Button, FieldError, FieldRow, SettingRow, Toggle, TypeableSelect } from '../ui';
+import { ErrorState, FieldError, FieldRow, SettingRow, Toggle, TypeableSelect } from '../ui';
 
 // The pages of Assistant settings. Five, in one flat list (review round 1,
 // 2026-09-05 — P-5 note: one "Cloud providers" page for the three sign-in /
@@ -225,7 +225,10 @@ export function StepGuardRow() {
     <TypeableSelect aria-label="Step guard" options={STEP_GUARD_OPTIONS} value={saved === null ? '' : String(saved)} onCommit={commit} disabled={loading || saving || !loaded} />
     {loading && <p className="text-3xs text-fg-muted">Loading…</p>}
     {validationError && <FieldError as="p">{validationError}</FieldError>}
-    {ioError && <FieldError as="div">{ioError} <Button size="sm" variant="ghost" onClick={() => { if (retryValue !== undefined) save(retryValue); else void load(); }}>Retry</Button></FieldError>}
+    {/* WHY ErrorState, not a field-error line with a bare text Retry inside it
+        (error-notices-1, 2026-10-12): an error you can act on is the notice box with its
+        button inside at the right; the miniature box is for a line with nothing to press. */}
+    {ioError && <ErrorState variant="inline" message={ioError} onRetry={() => { if (retryValue !== undefined) save(retryValue); else void load(); }} />}
   </FieldRow>;
 }
 

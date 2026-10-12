@@ -3,7 +3,7 @@ import { useGameState, useGameDispatch } from '../../state/game-context';
 import { useAccount } from '../../state/account-context';
 import BrailleSpinner from '../BrailleSpinner';
 import { GameConnection } from '../../state/game-types';
-import { Button, CARD_LEVEL_1, Callout, FieldError, LoadingState, SectionLabel, SettingRow } from '../ui';
+import { Button, CARD_LEVEL_1, Callout, ErrorState, FieldError, LoadingState, SectionLabel, SettingRow } from '../ui';
 import type { HeadToHead } from '../../state/marketplace-api-client';
 import { recordSentence, recordsByOpponent } from './head-to-head';
 import { useFriends, type ApiResult } from './useFriends';
@@ -71,42 +71,24 @@ function ErrorScreen({ connection }: { connection: GameConnection }) {
     setTimeout(() => setRetrying(false), 4000);
   };
 
+  // WHY ErrorState, not the big red "!" disc over a red line (error-notices-1,
+  // 2026-10-12): that screen was the old "errors are a mark, not a box" rule. The
+  // guide now makes every error the one notice box, buttons inside at the right, and
+  // a problem takes the place of what it is about — here the whole game pane. The
+  // words are the same two (the connection's own error, then the hint); Retry is the
+  // filled button, last; "Reload app" still appears only after two retries.
+  const more = [
+    ...(retryCount >= 2 ? [{ label: 'Reload app', onClick: () => reloadAfterOfficeSave() }] : []),
+    { label: 'Dismiss', onClick: () => dispatch({ type: 'CLEAR_CHALLENGE' }) },
+  ];
   return (
-    <div className="flex-1 flex flex-col items-center justify-center gap-4 px-4 py-8">
-      {/* G-2 (§5.5): was `bg-red-900/30`, a raw Tailwind colour identical in
-          every theme. `--destructive` is the token for exactly this, and it is
-          derived per theme so the disc stays legible on light packs too.
-          Design rule 6 also says errors are not red BOXES — this is a mark, and
-          it stays a mark. */}
-      <div className="w-16 h-16 rounded-full bg-destructive/20 flex items-center justify-center">
-        <span className="text-2xl text-destructive-fg" aria-hidden="true">!</span>
-      </div>
-      {/* WHY FieldError, not a hand-rolled text-destructive-fg line (guide:
-          "no red/coloured body text for messages"): the box above already
-          carries the failure mark, so the line itself is the shared
-          component, not a second red signal. */}
-      <FieldError as="p" size="2xs" className="text-center">{state.partyError}</FieldError>
-      <p className="text-xs text-fg-muted text-center max-w-xs">{hint}</p>
-      {/* WHY outlined (guide: secondary actions are outlined, never bare text):
-          all three were hand-rolled text-link/text-fg-2/text-fg-muted buttons. */}
-      <div className="flex gap-2 mt-1 items-center">
-        <Button variant="secondary" size="sm" onClick={handleRetry} disabled={retrying}>
-          {retrying ? 'Retrying…' : 'Retry'}
-        </Button>
-        {retryCount >= 2 && (
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => reloadAfterOfficeSave()}
-            title="Hard reload the renderer — drops all in-memory state"
-          >
-            Reload app
-          </Button>
-        )}
-        <Button variant="secondary" size="sm" onClick={() => dispatch({ type: 'CLEAR_CHALLENGE' })}>
-          Dismiss
-        </Button>
-      </div>
+    <div className="flex-1 flex flex-col justify-center px-4 py-8">
+      <ErrorState
+        message={<>{state.partyError} {hint}</>}
+        moreActions={more}
+        busy={retrying}
+        onRetry={handleRetry}
+      />
     </div>
   );
 }

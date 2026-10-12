@@ -62,7 +62,7 @@ const TONE: Record<CalloutTone, { surface: string; body: string; title: string }
 
 export type CalloutProps = {
   tone?: CalloutTone;
-  /** Optional bold lead-in line above the body. The ONLY coloured text. */
+  /** Optional bold lead-in line above the body, in the normal text colour (2026-10-05). */
   title?: React.ReactNode;
   className?: string;
   /** Collapse to the title line; the body opens on click. Needs `title`.
@@ -92,16 +92,20 @@ export type CalloutProps = {
   /** Optional: a title-only notice (e.g. "Download interrupted" with its
    *  Resume/Delete) has nothing more to say underneath. */
   children?: React.ReactNode;
+  /** Passed to the box itself. WHY (error-notices-1, 2026-10-12): ErrorState now draws
+   *  THIS box and must keep announcing itself (`alert`); a wrapper div would add a layer
+   *  around every error and take the caller's margins off the box. */
+  role?: 'alert' | 'status';
 };
 
 // WHY `data-parts-agree` on the action rows (2026-10-05): shoot's "parts agree" check reads
 // marked rows and fails when the buttons in one differ in height — a notice's buttons sit
 // side by side, so they must match.
-export function Callout({ tone = 'info', title, className = '', collapsible = false, actions, actionsPlacement = 'right', compact = false, children }: CalloutProps) {
+export function Callout({ tone = 'info', title, className = '', collapsible = false, actions, actionsPlacement = 'right', compact = false, children, role }: CalloutProps) {
   const t = TONE[tone];
   if (collapsible && title) {
     return (
-      <details className={`group rounded-lg p-3 border ${t.surface} ${className}`.trim()}>
+      <details role={role} className={`group rounded-lg p-3 border ${t.surface} ${className}`.trim()}>
         {/* The browser's own left-hand triangle is hidden; the arrow sits on the
             right and turns like the session switcher's (Destin, 2026-09-16). */}
         <summary className={`flex items-center justify-between gap-2 list-none [&::-webkit-details-marker]:hidden text-xs font-medium cursor-pointer select-none ${t.title}`}>
@@ -132,25 +136,25 @@ export function Callout({ tone = 'info', title, className = '', collapsible = fa
   );
   if (compact) {
     return (
-      <div className={`rounded-lg px-2.5 py-1.5 border flex flex-wrap items-center gap-x-3 gap-y-1.5 ${t.surface} ${className}`.trim()}>
+      <div role={role} className={`rounded-lg px-2.5 py-1.5 border flex flex-wrap items-center gap-x-3 gap-y-1.5 ${t.surface} ${className}`.trim()}>
         <div className="flex-1 min-w-40">{text}</div>
         {actions && <div data-parts-agree="notice buttons" className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">{actions}</div>}
       </div>
     );
   }
   if (!actions) {
-    return <div className={`rounded-lg p-3 border ${t.surface} ${className}`.trim()}>{text}</div>;
+    return <div role={role} className={`rounded-lg p-3 border ${t.surface} ${className}`.trim()}>{text}</div>;
   }
   if (actionsPlacement === 'below') {
     return (
-      <div className={`rounded-lg p-3 border ${t.surface} ${className}`.trim()}>
+      <div role={role} className={`rounded-lg p-3 border ${t.surface} ${className}`.trim()}>
         {text}
         <div data-parts-agree="notice buttons" className="mt-2 flex flex-wrap items-center justify-end gap-2">{actions}</div>
       </div>
     );
   }
   return (
-    <div className={`rounded-lg p-3 border ${t.surface} ${className}`.trim()}>
+    <div role={role} className={`rounded-lg p-3 border ${t.surface} ${className}`.trim()}>
       {/* WHY flex-wrap with a basis on the text: side by side when there is
           room, and on a phone the button group drops to its own line (still
           at the right, via ml-auto) instead of squeezing the words into a

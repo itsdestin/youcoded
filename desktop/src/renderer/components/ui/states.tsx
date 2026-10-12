@@ -1,5 +1,5 @@
 import React from 'react';
-import { CALLOUT_DANGER_SURFACE } from './Callout';
+import { Callout, CALLOUT_DANGER_SURFACE } from './Callout';
 import BrailleSpinner from '../BrailleSpinner';
 import { Button } from './Button';
 import { triggerTip } from '../guide/tips';
@@ -8,8 +8,8 @@ import { triggerTip } from '../guide/tips';
  * The loading / empty / error family (changes 31-34, §1.6).
  *
  * Shared anatomy: [mark] message [action].
- * Marks carry meaning — braille spinner = working, nothing = empty,
- * destructive dot = failed.
+ * Marks carry meaning — braille spinner = working, nothing = empty. A failure
+ * is the red-tinted notice box itself (ErrorState, below; no separate mark).
  *
  * Two variants everywhere:
  *   block  — list surfaces, text-sm, vertical breathing room
@@ -84,11 +84,6 @@ export function EmptyState({ message, action, variant = 'block', className = '' 
   );
 }
 
-/** The failure mark. Shared with Toast's error tone. */
-function ErrorDot() {
-  return <span className="w-1.5 h-1.5 rounded-full bg-destructive shrink-0" aria-hidden="true" />;
-}
-
 type ErrorStateCommon = {
   /**
    * Layout only, no longer a discriminant: 'general' stacks, 'recoverable' is a row.
@@ -141,16 +136,23 @@ type ErrorStateAction =
 export type ErrorStateProps = ErrorStateCommon & ErrorStateText & ErrorStateAction;
 
 /**
- * Option C, chosen explicitly over A ("quiet inline") and B ("destructive-tinted
- * callout"): the container is NEUTRAL, and the destructive dot alone carries the
- * failure. Errors are not red boxes (design rule 6).
+ * The error is THE notice box — the shared Callout, danger tone (red tint + red
+ * border, normal-colour words) — with its buttons inside it at the right.
+ *
+ * WHY (error-notices-1, 2026-10-12): this used to be "Option C" (2026-07-16 spec
+ * §1.6): a NEUTRAL grey inset box whose small red dot alone carried the failure,
+ * chosen over a "destructive-tinted callout". The design guide Destin has since
+ * approved reverses that: "every warning, error or info notice is the one tinted box
+ * with a matching border … only the box carries the colour" (guide-draft "Status and
+ * notices"; decisions "Error notices: no red titles, app-wide"). So the grey box and
+ * the dot are gone and every caller gets the guide's box without changing a line.
+ * The dot went too because the guide allows colour in the box only.
  *
  * The `general` mode IS the two-action fallback component that
  * docs/error-message-standards.md schedules for v1.3.1 — every user-facing error
  * is either specific+Retry or general+two-actions.
  */
 export function ErrorState(props: ErrorStateProps) {
-  const container = `bg-inset/50 rounded-lg p-3 ${props.className ?? ''}`.trim();
   // `mode` no longer narrows the type, so the layout is chosen from the text shape
   // unless a caller overrides it. Title+explainer stacks; a bare message is a row.
   const general = (props.mode ?? ('title' in props ? 'general' : 'recoverable')) === 'general';
@@ -190,40 +192,32 @@ export function ErrorState(props: ErrorStateProps) {
     </>
   );
 
+  // Whatever text shape the caller gave, the box shows it: a title (general errors)
+  // is the notice's lead line in the normal text colour, the explainer or message its body.
+  const body = props.explainer ?? props.message;
   if (general) {
+    // WHY 'below' (G-28, Destin 2026-09-10: "buttons should either be full modal width
+    // or on the righthand side"): a general error is a title and a sentence or two, so
+    // its buttons get their own line at the bottom RIGHT — the same placement the old
+    // stacked layout had, and the one the notice box uses for a long notice
+    // (provider-notices#PN-1). Never bottom left, where a filled button reads as stray.
     return (
-      <div className={container} role="alert">
-        <div className="flex items-start gap-2">
-          <span className="mt-1.5">
-            <ErrorDot />
-          </span>
-          <div className="flex flex-col gap-2 min-w-0">
-            <span className="text-sm font-medium text-fg">{props.title}</span>
-            <span className="text-2xs text-fg-dim leading-relaxed">{props.explainer}</span>
-            {/* WHY justify-end (G-28, Destin 2026-09-10): "buttons should either be full
-                modal width or on the righthand side" — a filled button at the bottom LEFT
-                reads as stray rather than as the thing to press. The row layout below is
-                the other permitted case: its action is inline with the text, on the right. */}
-            <div className="flex items-center justify-end gap-2">{actions}</div>
-          </div>
-        </div>
-      </div>
+      <Callout tone="danger" role="alert" className={props.className} title={props.title} actions={actions} actionsPlacement="below">
+        {body}
+      </Callout>
     );
   }
 
+  // A one-line error keeps its buttons on the same line, at the right (they wrap below,
+  // still right-aligned, when there is no room). `inline` — inside a section, a menu or
+  // a card — is the notice box's slim one-line form (provider-notices-2: "why is this red
+  // box so tall"); `block` — a whole list or pane that failed — is the full box.
+  // Retry stays the FILLED button (review correction: an outline reads as dim on dark themes).
   const block = (props.variant ?? 'block') === 'block';
   return (
-    <div className={container} role="alert">
-      <div className="flex items-center gap-2">
-        <ErrorDot />
-        <span className={`flex-1 min-w-0 text-fg-2 ${block ? 'text-sm' : 'text-2xs'}`}>
-          {props.message}
-        </span>
-        {/* Retry is FILLED primary — an explicit review correction from secondary,
-            because secondary reads as a dim outline on dark themes. */}
-        {actions}
-      </div>
-    </div>
+    <Callout tone="danger" role="alert" className={props.className} title={props.title} actions={actions} compact={!block}>
+      {body}
+    </Callout>
   );
 }
 

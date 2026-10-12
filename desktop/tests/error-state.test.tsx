@@ -20,6 +20,7 @@ import '@testing-library/jest-dom/vitest';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, cleanup, screen, fireEvent } from '@testing-library/react';
 import { ErrorState } from '../src/renderer/components/ui/states';
+import { Callout } from '../src/renderer/components/ui/Callout';
 
 afterEach(cleanup);
 
@@ -110,11 +111,61 @@ describe('ErrorState — where the buttons sit (G-28)', () => {
   });
 
   it('keeps a one-line error’s action inline with its text', () => {
-    // The other permitted placement: the action belongs to that line, on its right.
+    // The other permitted placement: the action belongs to that line, on its right —
+    // the buttons' row sits beside the words in the same line of the notice box.
     const { container } = render(<ErrorState message="Could not read the file." onRetry={() => {}} />);
     const row = container.querySelector('button')!.parentElement!;
-    expect(row.className).not.toContain('justify-end');
-    expect(row.textContent).toContain('Could not read the file.');
+    expect(row.className).toContain('ml-auto'); // pushed to the right-hand end
+    expect(row.parentElement!.textContent).toContain('Could not read the file.');
+    expect(row.parentElement!.className).toContain('flex'); // same line as the words
+  });
+});
+
+describe('ErrorState — it IS the notice box (error-notices-1)', () => {
+  // WHY this guard (2026-10-12): ErrorState was a neutral grey box with a red dot
+  // ("Option C") while the design guide made every error the one red-tinted notice
+  // box. The two drifted for weeks because nothing tied them together: new screens
+  // followed the component, not the guide. These pins compare ErrorState with the
+  // shared notice box itself, so the two cannot drift again — change the box and
+  // every error follows; hand-draw a box here and this fails.
+  const outer = (el: React.ReactElement) => {
+    const { container, unmount } = render(el);
+    const box = container.firstElementChild as HTMLElement;
+    const out = { tag: box.tagName, className: box.className };
+    unmount();
+    return out;
+  };
+
+  it('a one-line error draws the danger notice box, buttons inside it', () => {
+    const err = outer(<ErrorState message="Could not read the file." onRetry={() => {}} />);
+    const box = outer(<Callout tone="danger" actions={<button>x</button>}>y</Callout>);
+    expect(err).toEqual(box);
+  });
+
+  it('an inline error draws the slim one-line notice box', () => {
+    const err = outer(<ErrorState variant="inline" message="Could not read the file." onRetry={() => {}} />);
+    const box = outer(<Callout tone="danger" compact actions={<button>x</button>}>y</Callout>);
+    expect(err).toEqual(box);
+  });
+
+  it('a general error draws the notice box with its buttons on their own line', () => {
+    const err = outer(<ErrorState title="Gone" explainer="No idea." onReportBug={() => {}} />);
+    const box = outer(<Callout tone="danger" title="t" actionsPlacement="below" actions={<button>x</button>}>y</Callout>);
+    expect(err).toEqual(box);
+  });
+
+  it('keeps announcing itself, and paints nothing red but the box', () => {
+    const { container } = render(<ErrorState title="Gone" explainer="No idea." onReportBug={() => {}} />);
+    const box = container.firstElementChild as HTMLElement;
+    expect(box.getAttribute('role')).toBe('alert');
+    // No dot, no red words: the guide allows colour in the box's tint and border only.
+    expect(container.querySelector('[class*="bg-destructive"]:not([role="alert"])')).toBeNull();
+    expect(container.querySelector('[class*="text-destructive"]')).toBeNull();
+  });
+
+  it('puts the caller’s spacing on the box itself', () => {
+    const { container } = render(<ErrorState className="mt-2" message="x" onRetry={() => {}} />);
+    expect((container.firstElementChild as HTMLElement).className).toContain('mt-2');
   });
 });
 
