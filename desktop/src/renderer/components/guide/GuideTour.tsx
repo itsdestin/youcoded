@@ -15,28 +15,32 @@ import GuideRing, { findGuideAnchor } from './GuideRing';
 import { useGuideAdvance } from './guide-events';
 import { tourStops, type GuideAction, type GuideScreen, type GuideStop } from './guide-stops';
 import { ScreenMark } from '../../shoot-mode';
+import { takeTourStart } from './guide-state';
+import { useEscClose } from '../../hooks/use-esc-close';
 
 interface Props {
   stops?: readonly GuideStop[];
   /** Open (or return to) a screen. Called on every stop, including a Back. */
   onOpenScreen: (screen: GuideScreen) => void;
-  /** `done` is true on the last Next, false on Skip. */
-  onExit: (done: boolean) => void;
+  /** `done` is true on the last Next, false on Skip. `stay` (Escape): close only
+   *  the bubble and leave the screen under it open. */
+  onExit: (done: boolean, stay?: boolean) => void;
   onMarketplace?: () => void;
-  /** Start on this stop instead of the first. Only the photo-only build passes
-   *  it (shoot's `tour/<stop>` screens, App.tsx); a person always starts at 1. */
-  startAt?: string;
 }
 
-export default function GuideTour({ stops: given, onOpenScreen, onExit, onMarketplace, startAt }: Props) {
+export default function GuideTour({ stops: given, onOpenScreen, onExit, onMarketplace }: Props) {
   // WHY tourStops() and not the constant: the backup-warning practice (backlog
   // row 18) adds a stop in the workbench; everywhere else it IS GUIDE_STOPS.
   const [stops] = useState(() => given ?? tourStops());
-  const [index, setIndex] = useState(() => Math.max(0, startAt ? stops.findIndex((s) => s.id === startAt) : 0));
+  // The photo-only build may ask for a later stop (guide-state takeTourStart).
+  const [index, setIndex] = useState(() => { const at = takeTourStart(); return Math.max(0, at ? stops.findIndex((s) => s.id === at) : 0); });
   const stop = stops[index];
   const last = index === stops.length - 1;
 
-  useEffect(() => { if (stop) onOpenScreen(stop.screen); }, [stop, onOpenScreen]);
+  // `escKey` re-registers Escape (TourEscape below) in the same update that
+  // opens the stop's screen, so it lands on top of that screen's own entry.
+  const [escKey, setEscKey] = useState(0);
+  useEffect(() => { if (stop) { onOpenScreen(stop.screen); setEscKey((k) => k + 1); } }, [stop, onOpenScreen]);
 
   // "Do it now" only while the control it would press is on screen — a
   // button that does nothing is worse than no button. Polled, because the
@@ -83,6 +87,7 @@ export default function GuideTour({ stops: given, onOpenScreen, onExit, onMarket
 
   return (
     <>
+      <TourEscape key={escKey} onSkip={onExit} />
       {stop.anchor && <GuideRing anchor={stop.anchor} />}
       <GuideBubble eyebrow={`${index + 1} of ${stops.length}`} buttons={buttons} pose={stop.pose} label="Tour">
         {!anchorPresent && stop.textWhenMissing ? stop.textWhenMissing : stop.text}
@@ -92,4 +97,17 @@ export default function GuideTour({ stops: given, onOpenScreen, onExit, onMarket
       </GuideBubble>
     </>
   );
+}
+
+/** Escape ends the tour and closes only its bubble, like any popup (guide: Popups).
+ *  WHY a keyed child: Escape goes to the LAST overlay that registered, and each
+ *  stop opens its screen (the Projects view…) after the tour registered, so
+ *  Escape closed that screen under the bubble and left the tour floating over
+ *  nothing (shoot --check, tour/files). Remounted (new `key`) in the same update
+ *  that opens the screen, it registers after it — the tour is drawn after those
+ *  screens in App — so Skip tour is back on top. Settings stops whose dialog
+ *  opens ~350ms later still take one Escape for that dialog first. */
+function TourEscape({ onSkip }: { onSkip: (done: boolean, stay?: boolean) => void }) {
+  useEscClose(true, useCallback(() => onSkip(false, true), [onSkip]));
+  return null;
 }

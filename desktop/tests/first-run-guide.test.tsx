@@ -38,6 +38,7 @@ import {
 } from '../src/renderer/components/guide/guide-state';
 import { dismissTip, resetTipsForSitting, stopAllTips, triggerTip, TIPS } from '../src/renderer/components/guide/tips';
 import GuideTour from '../src/renderer/components/guide/GuideTour';
+import { EscCloseProvider, useEscClose } from '../src/renderer/hooks/use-esc-close';
 import type { GuideStop } from '../src/renderer/components/guide/guide-stops';
 
 beforeEach(() => { resetGuideState(); resetTipsForSitting(); });
@@ -132,6 +133,23 @@ describe('GuideTour', () => {
     fireEvent.click(screen.getByText('Next'));
     fireEvent.click(screen.getByText('Done'));
     expect(onExit).toHaveBeenCalledWith(true);
+  });
+
+  it('Escape ends the tour over the screen its stop opened, leaving that screen open', () => {
+    // The stop's screen registers its own Escape when the tour opens it — after the tour
+    // mounted. Escape must still go to the tour, and only close its bubble (`stay`).
+    const screenClosed = vi.fn();
+    function StopScreen({ open }: { open: boolean }) { useEscClose(open, screenClosed); return null; }
+    function Harness() {
+      const [open, setOpen] = React.useState(false);
+      const onOpenScreen = React.useCallback(() => setOpen(true), []);
+      return <><StopScreen open={open} /><GuideTour stops={STOPS} onOpenScreen={onOpenScreen} onExit={onExit} /></>;
+    }
+    const onExit = vi.fn();
+    render(<EscCloseProvider><Harness /></EscCloseProvider>);
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onExit).toHaveBeenCalledWith(false, true);
+    expect(screenClosed).not.toHaveBeenCalled();
   });
 
   it('draws no ring for an anchor that is not on screen', () => {

@@ -562,8 +562,6 @@ function AppInner() {
   // 2026-09-10, Q-11: fresh installs only). See guide-state.ts.
   const handleFirstRunComplete = useCallback(() => { armGuideForFreshInstall(); setIsFirstRun(false); }, []);
   const [tourOpen, setTourOpen] = useState(false);
-  // Photo-only build only: shoot's `tour/<stop>` screens open the tour on that stop.
-  const [tourStartAt, setTourStartAt] = useState<string | undefined>(undefined);
   useEffect(() => { if (isFirstRun === false && isGuidePending()) setTourOpen(true); }, [isFirstRun]);
 
   // Welcome screen "New session" expansion form state
@@ -3662,16 +3660,15 @@ function AppInner() {
   // entire shell (2026-09-16 A1).
   const guideThinking = useSessionIsThinking(sessionId ?? '');
   const guideBusy = !!sessionId && guideThinking;
-  const exitTour = useCallback(() => {
+  const exitTour = useCallback((_done?: boolean, stay?: boolean) => {
     markGuideDone();
     setTourOpen(false);
     lastGuideScreen.current = null;
-    // Leave the person on the welcome screen, or their session — never inside
-    // a settings page the tour opened for its own reasons.
-    setSettingsOpen(false); setProvidersAutoOpen(false);
-    dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' });
-    dispatchArtifact({ type: 'PAGE_VIEW_CLOSED' });
-    requestGuideReset();
+    // Skip/Done leave the person on the welcome screen or their session — never inside a page the
+    // tour opened. Escape (`stay`) closes only the bubble, like any popup: the screen under it stays.
+    // WHY (backup-warning-1): Escape used to close that screen and leave the tour floating.
+    if (!stay) { setSettingsOpen(false); setProvidersAutoOpen(false); dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' }); }
+    if (!stay) { dispatchArtifact({ type: 'PAGE_VIEW_CLOSED' }); requestGuideReset(); }
   }, []);
 
   // Terminal mode on touch/remote platforms — show minimal input with special keys
@@ -3742,7 +3739,7 @@ function AppInner() {
   const toggleGamePanel = useCallback(() => gameDispatch({ type: 'TOGGLE_PANEL' }), [gameDispatch]);
   const toggleSettings = useCallback(() => setSettingsOpen(prev => !prev), []);
   // Photo-only build: `shoot` opens these screens by name (shoot-app-screens.ts).
-  useAppScreens({ sessionId, setSettingsOpen, setActiveView, setClosePromptFor, openDrawer: handleOpenDrawer, setModelPickerOpen, setPreferencesOpen, setResumeRequested, setOpenTasksPopupOpen, toggleView: handleToggleView, openSessionFiles: (id) => dispatchArtifact({ type: 'DRAWER_OPENED', sessionId: id }), selectSession: handleSelectSession, gamePanelOpen: gameState.panelOpen, toggleGamePanel, openProjects: () => dispatchArtifact({ type: 'PROJECT_VIEW_OPENED' }), openPagesView: () => dispatchArtifact({ type: 'PAGE_VIEW_OPENED' }), openPagesLibrary: () => dispatchArtifact({ type: 'PAGES_VIEW_OPENED' }), createPage: () => setPageCreate({ title: 'Create a page', initialInput: '/page-builder ' }), showTakeover: (phase) => setTakeoverPrompt({ device: 'Devins laptop', phase }), openWelcomeForm, showNativeResumeModel: () => { setPendingNativeBinding(null); setPendingNativeResume({ claudeSessionId: 'shoot-native-resume', projectSlug: 'youcoded', projectPath: '/home/destin/youcoded-dev/youcoded' }); }, setQuitPrompt, gateSkip, gateSmallModel, gateFullAuto, setPublishThemeSlug, setShareSkillId, openTour: (stop) => { setTourStartAt(stop); setTourOpen(true); } });
+  useAppScreens({ sessionId, setSettingsOpen, setActiveView, setClosePromptFor, openDrawer: handleOpenDrawer, setModelPickerOpen, setPreferencesOpen, setResumeRequested, setOpenTasksPopupOpen, toggleView: handleToggleView, openSessionFiles: (id) => dispatchArtifact({ type: 'DRAWER_OPENED', sessionId: id }), selectSession: handleSelectSession, gamePanelOpen: gameState.panelOpen, toggleGamePanel, openProjects: () => dispatchArtifact({ type: 'PROJECT_VIEW_OPENED' }), openPagesView: () => dispatchArtifact({ type: 'PAGE_VIEW_OPENED' }), openPagesLibrary: () => dispatchArtifact({ type: 'PAGES_VIEW_OPENED' }), createPage: () => setPageCreate({ title: 'Create a page', initialInput: '/page-builder ' }), showTakeover: (phase) => setTakeoverPrompt({ device: 'Devins laptop', phase }), openWelcomeForm, showNativeResumeModel: () => { setPendingNativeBinding(null); setPendingNativeResume({ claudeSessionId: 'shoot-native-resume', projectSlug: 'youcoded', projectPath: '/home/destin/youcoded-dev/youcoded' }); }, setQuitPrompt, gateSkip, gateSmallModel, gateFullAuto, setPublishThemeSlug, setShareSkillId, setTourOpen });
   const openResumeBrowser = useCallback(() => setResumeRequested(true), []);
 
   // Still loading first-run check
@@ -4460,7 +4457,7 @@ function AppInner() {
           host stays out while the tour is up. Design:
           docs/active/specs/2026-09-10-first-run-guide-design.md */}
       {tourOpen ? (
-        <GuideTour startAt={tourStartAt} onOpenScreen={openGuideScreen} onExit={exitTour} onMarketplace={() => { setSettingsOpen(false); openMarketplace('themes'); }} />
+        <GuideTour onOpenScreen={openGuideScreen} onExit={exitTour} onMarketplace={() => { setSettingsOpen(false); openMarketplace('themes'); }} />
       ) : (
         <GuideTipHost busy={guideBusy} />
       )}

@@ -463,7 +463,10 @@ export default function PermissionsSection() {
               button: this block stays free of controls (native-permissions
               rule). Only under `?backupNote=permissions` in the workbench. */}
           {backupNoteHome() === 'permissions' && (
-            <Callout tone="info">{BACKUP_NOTE_TEXT}</Callout>
+            <Callout tone="info">
+              {/* The card's own reading size, so the notice doesn't shout over the modes. */}
+              <span className="text-2xs leading-relaxed">{BACKUP_NOTE_TEXT}</span>
+            </Callout>
           )}
         </div>
       </div>
