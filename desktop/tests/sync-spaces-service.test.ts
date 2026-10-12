@@ -336,8 +336,7 @@ describe('sync-spaces service transition serialization', () => {
 
     let resolved = false;
     const p = svc.syncSpacesSyncNowAwaited('project:beta', 10_000).then(() => { resolved = true; });
-    await new Promise((r) => setTimeout(r, 20)); // let the call reach the engine
-    expect(engine.syncSpace).toHaveBeenCalled();
+    await vi.waitFor(() => expect(engine.syncSpace).toHaveBeenCalled());
     expect(resolved).toBe(false); // parked awaiting the push — must not have resolved
 
     releaseSync();
@@ -608,6 +607,7 @@ describe('sync-spaces service transition serialization', () => {
     h.registry = [{ schemaVersion: 1, name: 'alpha', repoName: 'r-alpha', displayName: 'alpha', state: 'active', updatedAt: 1 }];
     const before = [...h.projects];
     h.hub.opts.onEvent({ type: 'connected' });
+    // settle (negative assertion): reconnecting must not create a project.
     await new Promise((r) => setTimeout(r, 20));
     expect(h.projects).toEqual(before); // no new create
     void svc;

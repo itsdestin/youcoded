@@ -939,14 +939,12 @@ describe('promo fakes', () => {
       c.on.hookEvent((e: any) => hooks.push(e));
       const created = await c.session.create({ name: 'Resuming...', cwd: '/home/you/School/Econ 201', resumeSessionId: 'wb-past-0' });
       expect(created.name).toBe('econ midterm brief');
-      await new Promise((r) => setTimeout(r, 120));
-      expect(hooks).toEqual([expect.objectContaining({ type: 'SessionStart', sessionId: created.id })]);
+      await vi.waitFor(() => expect(hooks).toEqual([expect.objectContaining({ type: 'SessionStart', sessionId: created.id })]));
       // A plain create keeps its given name, and is lifted out of "Initializing" too
       // (2026-09-26: it used to sit there forever, so no journey could send a message).
       const plain = await c.session.create({ name: 'fresh', cwd: '/home/you' });
-      await new Promise((r) => setTimeout(r, 120));
       expect(plain.name).toBe('fresh');
-      expect(hooks).toEqual([expect.objectContaining({ sessionId: created.id }), expect.objectContaining({ type: 'SessionStart', sessionId: plain.id })]);
+      await vi.waitFor(() => expect(hooks).toEqual([expect.objectContaining({ sessionId: created.id }), expect.objectContaining({ type: 'SessionStart', sessionId: plain.id })]));
     });
   });
 });

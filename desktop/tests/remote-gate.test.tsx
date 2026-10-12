@@ -67,6 +67,7 @@ describe('RemoteGate', () => {
   it('with a saved key, says it is connecting and never draws the password box', async () => {
     const f = fakeShim({ savedKey: true });
     await mount(f);
+    // settle (negative assertion): past the grace timer the password box must still not appear.
     await act(async () => { await new Promise((r) => setTimeout(r, 1600)); });
     expect(screen.getByText('Connecting to your computer…')).toBeTruthy();
     expect(passwordBox()).toBeNull();

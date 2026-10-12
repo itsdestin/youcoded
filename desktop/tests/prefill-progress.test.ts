@@ -6,7 +6,7 @@
 // shape (rather than one invented to match the parser) is the point: this is the
 // contract with an external server, and a fixture that only agrees with our own
 // assumptions would prove nothing.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   parseProgressChunk,
   parseTimingsChunk,
@@ -124,9 +124,8 @@ describe('withPrefillProgress — the tee must not disturb the SDK', () => {
     const wrapped = withPrefillProgress(base as any, (p) => seen.push(p.processed));
     const res = await wrapped('http://x' as any);
     await res.text();                       // drain the SDK branch
-    await new Promise((r) => setTimeout(r, 20));   // let the scan branch finish
 
-    expect(seen).toEqual([0, 2048, 4096, 5003, 5515, 5519]);
+    await vi.waitFor(() => expect(seen).toEqual([0, 2048, 4096, 5003, 5515, 5519]));
   });
 
   it('passes error responses straight through untouched', async () => {
@@ -604,8 +603,7 @@ describe('withPrefillProgress — the reply tap rides the same tee', () => {
     const wrapped = withPrefillProgress(base as any, undefined, (t) => seen.push(t));
     const res = await wrapped('http://x/v1/chat/completions' as any);
     expect(await res.text()).toBe(frames.map((f) => `data: ${JSON.stringify(f)}\n\n`).join('') + 'data: [DONE]\n\n');
-    await new Promise((r) => setTimeout(r, 20));
-    expect(seen).toEqual([{ promptPerSecond: 84.05715886803026, generatePerSecond: 37.821109441135555 }]);
+    await vi.waitFor(() => expect(seen).toEqual([{ promptPerSecond: 84.05715886803026, generatePerSecond: 37.821109441135555 }]));
   });
 
   it('does not tee at all when nobody is listening', async () => {

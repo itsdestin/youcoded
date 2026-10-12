@@ -8,7 +8,7 @@
 // interop with the native store (round trip both directions), a fresh
 // invocation with no prior list() call, and the docx/xlsx pending-mutation
 // queue's bounded-timeout behaviour when nothing is applying requests.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import fs from 'fs';
 import os from 'os';
@@ -541,15 +541,12 @@ describe('docx/xlsx target — the pending-mutation queue client', () => {
     await fs.promises.writeFile(path.join(root, 'report.docx'), 'stands in for an open document');
     const callPromise = client.callTool('ResolveComment', { path: 'report.docx', commentId: 'w-1' }, 8000);
     const pendingDir = path.join(root, '.youcoded', 'comments', '.pending');
-    let requestFile: string | null = null;
-    for (let i = 0; i < 200 && !requestFile; i++) {
-      if (fs.existsSync(pendingDir)) {
-        const files = fs.readdirSync(pendingDir).filter((f) => f.endsWith('.json') && !f.endsWith('.result.json'));
-        if (files.length) requestFile = path.join(pendingDir, files[0]);
-      }
-      if (!requestFile) await new Promise((r) => setTimeout(r, 10));
-    }
-    expect(requestFile).not.toBeNull();
+    // WHY vi.waitFor (not a 200 x 10 ms counted loop): a loaded machine outran the count.
+    const requestFile = await vi.waitFor(() => {
+      const files = fs.existsSync(pendingDir) ? fs.readdirSync(pendingDir).filter((f) => f.endsWith('.json') && !f.endsWith('.result.json')) : [];
+      expect(files.length).toBeGreaterThan(0);
+      return path.join(pendingDir, files[0]);
+    });
     const id = path.basename(requestFile!, '.json');
     fs.renameSync(requestFile!, path.join(pendingDir, `${id}.claimed`));
     fs.writeFileSync(path.join(pendingDir, `${id}.result.json`), JSON.stringify({ ok: true, queued: true }));

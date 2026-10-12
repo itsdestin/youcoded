@@ -75,6 +75,7 @@ describe('useSessionMeta — a late answer for the previous session is ignored',
     rerender({ id: 'new' });
     await waitFor(() => expect([...result.current.tags]).toEqual(['tag_new']));
     finishOld({ tags: ['tag_old'], note: 'old note', supported: true });
+    // settle (negative assertion): the old session's late answer must not overwrite.
     await new Promise((r) => setTimeout(r, 20));
 
     expect([...result.current.tags]).toEqual(['tag_new']);

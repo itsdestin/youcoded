@@ -1150,9 +1150,8 @@ describe('conversations service composition root', () => {
     const svc = await freshService(startOpts());
     svc.noteSessionStarted('claude-r', path.join(tmpRoot, 'r'), 'claude');
     svc.noteTranscriptEvent('claude-r', ev({ type: 'turn-complete' }), 'claude');
-    await new Promise((r) => setTimeout(r, 10));
     // World keeps turning: the prompt push still fired despite the upsert reject.
-    expect(h.syncSpacesSyncNow).toHaveBeenCalledWith('personal');
+    await vi.waitFor(() => expect(h.syncSpacesSyncNow).toHaveBeenCalledWith('personal'));
   });
 
   // --- Native phantom-record cleanup (2026-07-18) -------------------------

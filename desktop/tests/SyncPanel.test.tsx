@@ -128,6 +128,7 @@ describe('Backup & sync reports only what the backend confirmed', () => {
     );
     expect(within(alert).getByRole('button', { name: 'Retry' })).toBeInTheDocument();
     expect(within(alert).getByRole('button', { name: 'Report bug' })).toBeInTheDocument();
+    // settle (negative assertion): the alert must still be there after its old 2 s auto-clear.
     await new Promise((r) => setTimeout(r, 2300));
     expect(alert).toBeInTheDocument();
     expect(screen.queryByText('Error')).toBeNull();

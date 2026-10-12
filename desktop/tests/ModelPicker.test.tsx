@@ -166,6 +166,7 @@ describe('list refresh after a download', () => {
       const before = (window.claude.providers.catalog as any).mock.calls.length;
       subscribers.forEach((cb) => cb({ downloadId: 'd1', state: 'downloading' }));
       subscribers.forEach((cb) => cb({ downloadId: 'd1', state: 'verifying' }));
+      // settle (negative assertion): no refetch may follow the download states.
       await new Promise((r) => setTimeout(r, 30));
       expect((window.claude.providers.catalog as any).mock.calls.length).toBe(before);
     });
@@ -177,6 +178,7 @@ describe('list refresh after a download', () => {
       fireEvent.click(trigger);                       // open
       await waitFor(() => expect((window.claude.providers.catalog as any).mock.calls.length).toBe(2));
       fireEvent.click(trigger);                       // close — must NOT refetch
+      // settle (negative assertion): closing must not refetch; the count stays at 2.
       await new Promise((r) => setTimeout(r, 30));
       expect((window.claude.providers.catalog as any).mock.calls.length).toBe(2);
       catalogRows = AFTER;

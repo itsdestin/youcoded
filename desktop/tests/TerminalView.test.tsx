@@ -567,6 +567,7 @@ describe('workbench screen and terminal surface', () => {
       // Later fits (window resize → fitAndSync) must not write it again.
       window.dispatchEvent(new Event('resize'));
       window.dispatchEvent(new Event('resize'));
+      // settle (negative assertion): later resizes must not write it a second time.
       await new Promise((r) => setTimeout(r, 50));
       expect(writeSpy).toHaveBeenCalledTimes(1);
     });

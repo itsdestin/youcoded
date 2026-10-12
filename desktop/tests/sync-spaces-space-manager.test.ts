@@ -241,6 +241,7 @@ describe('SpaceManager — non-blocking reads and writes', () => {
     await m.flush();
     expect(readDisk().enabled).toBe(true);
     release(); // now the stale refresh result arrives
+    // settle (negative assertion): the stale refresh must not undo the newer change.
     await new Promise((r) => setTimeout(r, 10));
     expect(m.isEnabled()).toBe(true); // the newer change survives
     expect(readDisk().enabled).toBe(true);

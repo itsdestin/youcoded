@@ -593,6 +593,7 @@ describe('which model is asked', () => {
     h.namer.noteEvent(userMessage('opening'));
     h.namer.noteEvent(turnComplete());
     h.namer.noteEvent(turnComplete());
+    // settle (negative assertion): no second naming may run at once.
     await new Promise((r) => setTimeout(r, 30));
     expect(peak).toBe(1);
   });

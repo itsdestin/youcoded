@@ -188,8 +188,7 @@ describe.skipIf(!posix)('ShellRegistry (POSIX processes)', () => {
     const r = reg.start(startSpec('seq 1 300', dir));
     if (!r.ok) throw new Error('start failed');
     await r.run.exited;
-    await new Promise((res) => setTimeout(res, 300));   // let a trailing debounce fire
-    expect(r.run.tail).toHaveLength(RING_LINES);
+    await vi.waitFor(() => expect(r.run.tail).toHaveLength(RING_LINES));
     expect(r.run.tail[0]).toBe('101');
     const last = views[views.length - 1];
     expect(last.status).toBe('exited');
@@ -520,6 +519,7 @@ describe('still-running marks (LONG_RUN_NOTICE_MS)', () => {
     // The promise under test is "nothing fires after exit": wait past the last mark and check
     // no mark arrived late. When the run did finish before the first mark, none fired at all.
     const atExit = marks.length;
+    // settle (negative assertion): no mark may fire after exit.
     await new Promise((res) => setTimeout(res, 200));
     expect(marks).toHaveLength(atExit);
     if (ranMs < 60 - JITTER_MS) expect(marks).toHaveLength(0);

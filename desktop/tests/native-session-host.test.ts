@@ -750,6 +750,7 @@ describe('NativeSessionHost', () => {
     // and flushes the open part. Give the old stream's remaining chunk delays
     // (15ms each) generous room to fire if the abort did NOT take.
     const afterResume = appends.length;
+    // settle (negative assertion): the aborted stream must write nothing more.
     await new Promise((r) => setTimeout(r, 120));
     expect(appends.length).toBe(afterResume); // the orphan wrote nothing more
 
@@ -1790,9 +1791,7 @@ describe('NativeSessionHost', () => {
         (p as any).rememberRule('a', cwdA, userRule);
         // The persist is fire-and-forget, so wait for it to land before reading
         // from a session that has no in-memory copy of its own.
-        for (let i = 0; i < 100 && (await store.rulesFor(cwdB)).length === 0; i++) {
-          await new Promise((r) => setTimeout(r, 10));
-        }
+        await vi.waitFor(async () => expect((await store.rulesFor(cwdB)).length).toBeGreaterThan(0));
 
         const decideB = (p as any).buildDecide('b', cwdB, []);
         expect((await decideB('Task', SUBJECT)).action).toBe('allow');
@@ -2416,6 +2415,7 @@ describe('NativeSessionHost', () => {
 
       await qHost.quiesce('qz');
       const appendsAtQuiesce = appendSpy.mock.calls.length;
+      // settle (negative assertion): the queued survivor must never run.
       await new Promise((r) => setTimeout(r, 80)); // the queue would have drained by now
       expect(appendSpy.mock.calls.length).toBe(appendsAtQuiesce); // queued-survivor never ran
 
@@ -2440,6 +2440,7 @@ describe('NativeSessionHost', () => {
       await qHost.quiesce('qz2');
 
       const appendsAtQuiesce = appendSpy.mock.calls.length;
+      // settle (negative assertion): no appends after quiesce.
       await new Promise((r) => setTimeout(r, 80));
       expect(appendSpy.mock.calls.length).toBe(appendsAtQuiesce); // no post-quiesce appends
       // Aborted mid-stream: the turn must NOT have reached turn-complete.
@@ -2486,6 +2487,7 @@ describe('NativeSessionHost', () => {
       (qHost as any).kickIdleDeliveryPass('qz4');
       expect((qHost as any).live.get('qz4').inFlight).toBeFalsy();
 
+      // settle (negative assertion): no appends after quiesce.
       await new Promise((r) => setTimeout(r, 80));
       expect(appendSpy.mock.calls.length).toBe(appendsAtQuiesce);
       await qHost.destroyAll();
@@ -2979,10 +2981,7 @@ describe('NativeSessionHost', () => {
 
         // Disk path (next run): wait for the fire-and-forget persist, then read
         // it back through a host that holds NOTHING in memory for this session.
-        for (let i = 0; i < 100 && !(await store.rulesFor(F)).some((r) => r.specialist === 'worker'); i++) {
-          await new Promise((r) => setTimeout(r, 10));
-        }
-        expect((await store.rulesFor(F)).some((r) => r.specialist === 'worker')).toBe(true);
+        await vi.waitFor(async () => expect((await store.rulesFor(F)).some((r) => r.specialist === 'worker')).toBe(true));
         const restarted = new NativeSessionHost(
           new SessionStore(new NativeHome(root)), factory, NO_CONTEXT, async () => null, async () => null, undefined, store,
         );
@@ -5815,8 +5814,7 @@ describe('G-1 background Bash — registry lifetime and finished notices', () =>
     const run = startIn('p3', 'echo a', 'ta');
     reg('p3').emit('long-running', run, 5 * 60_000);          // mark queued behind the busy turn
     await run.exited;                                         // ...then the run finishes (completion queued after it)
-    await new Promise((r) => setTimeout(r, 50));
-    expect(((host as any).pendingHostNotices.get('p3') ?? []).map((n: any) => n.meta?.kind)).toEqual(['shell-running', 'shell']);
+    await vi.waitFor(() => expect(((host as any).pendingHostNotices.get('p3') ?? []).map((n: any) => n.meta?.kind)).toEqual(['shell-running', 'shell']));
     release();
     await waitForEvent(host, (e) => e.type === 'user-message' && e.data.injected === 'shell-complete');
     await host.drain('p3');
@@ -5945,6 +5943,7 @@ describe('G-1 background Bash — registry lifetime and finished notices', () =>
   it.skipIf(!posix)('interrupt() leaves background runs alone', async () => {
     const a = startIn('p1', 'sleep 5', 'ta');
     host.interrupt('p1');
+    // settle (negative assertion): interrupt must not stop the background run.
     await new Promise((r) => setTimeout(r, 100));
     expect(a.status).toBe('running');
   });
@@ -5968,8 +5967,7 @@ describe('G-1 background Bash — registry lifetime and finished notices', () =>
     host.on('shell-event', (e: any) => views.push(e));
     const a = startIn('p1', 'echo hi', 'ta');
     await a.exited;
-    await new Promise((r) => setTimeout(r, 300));
-    expect(views[views.length - 1]).toEqual({ sessionId: 'p1', run: expect.objectContaining({ shellId: a.shellId, status: 'exited', exitCode: 0, tail: 'hi' }) });
+    await vi.waitFor(() => expect(views[views.length - 1]).toEqual({ sessionId: 'p1', run: expect.objectContaining({ shellId: a.shellId, status: 'exited', exitCode: 0, tail: 'hi' }) }));
     expect(host.shellRunsFor('p1').map((v: any) => v.shellId)).toEqual([a.shellId]);
     expect(host.shellRunsFor('nope')).toEqual([]);
   });

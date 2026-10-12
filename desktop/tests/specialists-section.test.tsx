@@ -51,6 +51,7 @@ describe('SpecialistsSection mount', () => {
 
     await waitFor(() => expect(list).toHaveBeenCalled());
     // Give a second, racing call a chance to land before asserting the count.
+    // settle (negative assertion): a racing second call must not land.
     await new Promise((r) => setTimeout(r, 30));
     expect(list).toHaveBeenCalledTimes(1);
     expect(list).toHaveBeenCalledWith({ cwd: 'cwd-settings-mount-once', ensurePersonalFolder: true });

@@ -1047,6 +1047,7 @@ describe('per-model settings', () => {
 
       // Past the deadline: an un-cancelled waiter would write models.ini, reload
       // and unload here.
+      // settle (negative assertion): past the deadline nothing may write, reload or spawn.
       await new Promise((r) => setTimeout(r, 400));
       expect(readPreset()).toBe(presetAfterStop);
       expect(mockSpawn.mock.calls.length).toBe(spawnsAfterStop);
