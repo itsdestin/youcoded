@@ -16,6 +16,7 @@ import { VoiceButton, VoiceMeter, VoiceStyleContext } from './VoiceButton';
 import { StatusStrip } from './ui/StatusStrip';
 import { LocalModelDownloadStrip } from './LocalModelDownloadStrip';
 import { useVoiceInput } from '../hooks/useVoiceInput';
+import { usePopupOpen } from '../hooks/use-esc-close';
 import BrailleBurst from './BrailleBurst';
 import FlowingKeywordsText from './FlowingKeywords';
 import StopButton from './StopButton';
@@ -434,6 +435,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   // When Enter is pressed while the textarea is blurred, we must also
   // preventDefault and send — otherwise the browser inserts a newline
   // into the newly-focused textarea instead of submitting the message.
+  const popupOpen = usePopupOpen();
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (disabled) return;
@@ -451,6 +453,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
         return;
       }
       if (e.ctrlKey || e.metaKey || e.altKey) return;
+      // WHY (Destin, approved in chat 2026-10-12): with a popup open, Enter belongs to the popup.
+      // This listener ran first, sent the draft and marked the key handled, so the popup's own
+      // Enter (Close session) stood down and a message went out behind it.
+      if (e.key === 'Enter' && popupOpen()) return;
       if (e.key !== 'Backspace' && e.key !== 'Enter' && e.key.length !== 1) return;
       // WHY: a key arriving while no text field has focus came from a physical
       // keyboard — an on-screen keyboard only exists while a field is focused.
@@ -471,7 +477,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [disabled]);
+  }, [disabled, popupOpen]);
 
   // Unfocus textarea after idle so global shortcuts (e.g. Shift to open
   // session switcher, Shift+Space to cycle model) work without conflicting.

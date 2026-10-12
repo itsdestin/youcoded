@@ -16,6 +16,7 @@ import ToolBody from './tool-views/ToolBody';
 import { useExpandAllToggle, getInitialExpanded } from '../hooks/useExpandAllToggle';
 import { isTypingTarget } from '../utils/is-typing-target';
 import { useCardKeysLive } from '../state/card-keys-context';
+import { usePopupOpen } from '../hooks/use-esc-close';
 import { asString } from '../utils/tool-input';
 import { normalizeQuestions, isValidQuestions } from './ask-question-normalize';
 // Full-auto safety stop (spec 2026-08-12, M5 2b): per-family copy + the
@@ -716,6 +717,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   // the consequence confirm is open so arrow/Enter don't drive the hidden row,
   // and while this card's chat is not the one on screen.
   const keysLive = useCardKeysLive();
+  const popupOpen = usePopupOpen();
   useEffect(() => {
     if (responding || confirmingAlways || confirmingExternal || !keysLive || noKeyboard) return;
     const handler = (e: KeyboardEvent) => {
@@ -724,6 +726,9 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
       if (e.defaultPrevented) return;
       // Don't steal keyboard events when user is typing in an input
       if (isTypingTarget(e.target as Element)) return;
+      // WHY (Destin, approved in chat 2026-10-12): with a popup open, its keys are its own —
+      // Enter on an empty spot in the popup answered this card behind it, and a digit could too.
+      if (popupOpen()) return;
 
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         e.preventDefault();
@@ -739,7 +744,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [responding, confirmingAlways, confirmingExternal, keysLive, noKeyboard, focusIdx, count]);
+  }, [responding, confirmingAlways, confirmingExternal, keysLive, noKeyboard, focusIdx, count, popupOpen]);
 
   const pad = isAndroid() ? 'py-2' : 'py-1';
   const ring = 'ring-2 ring-white/40';
@@ -1101,12 +1106,16 @@ function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
   // Keyboard: Arrow Up/Down cycles options, Enter toggles selection, Ctrl+Enter submits.
   // Off while this card's chat is not the one on screen (state/card-keys-context.ts).
   const keysLive = useCardKeysLive();
+  const popupOpen = usePopupOpen();
   useEffect(() => {
     if (responding || !keysLive) return;
     const handler = (e: KeyboardEvent) => {
       // An Enter InputBar already sent as a message is not an answer here.
       if (e.defaultPrevented) return;
       if (isTypingTarget(e.target as Element)) return;
+      // WHY (Destin, approved in chat 2026-10-12): with a popup open, its keys are its own —
+      // Enter on an empty spot in the popup answered this card behind it, and a digit could too.
+      if (popupOpen()) return;
 
       if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
         e.preventDefault();
@@ -1128,7 +1137,7 @@ function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [responding, keysLive, focusedOption, optionCount, allOptions, handleSelect, handleSubmit]);
+  }, [responding, keysLive, focusedOption, optionCount, allOptions, handleSelect, handleSubmit, popupOpen]);
 
   const pad = isAndroid() ? 'py-2' : 'py-1.5';
   let flatIdx = 0; // Running index across all questions' options for keyboard focus

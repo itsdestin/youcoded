@@ -6,6 +6,7 @@ import { Button, ButtonVariant } from './ui/Button';
 import { isAndroid } from '../platform';
 import { isTypingTarget } from '../utils/is-typing-target';
 import { useCardKeysLive } from '../state/card-keys-context';
+import { usePopupOpen } from '../hooks/use-esc-close';
 import { PROMPT_FAILURE_COPY, PROMPT_UNKNOWN_FAILURE, type PromptAnswerResult } from '../state/prompt-input';
 
 export type PromptCardButton = InteractivePrompt['buttons'][number];
@@ -150,6 +151,7 @@ export default React.memo(function PromptCard({ prompt, onSelect, keyboardShortc
   // answer keys meant for the chat on screen — see state/card-keys-context.ts.
   const keysLive = useCardKeysLive();
   const shortcutsOn = keyboardShortcuts && keysLive && prompt.title !== TRUST_PROMPT_TITLE;
+  const popupOpen = usePopupOpen();
   useEffect(() => {
     if (completed || !shortcutsOn) return;
     const handler = (e: KeyboardEvent) => {
@@ -157,6 +159,9 @@ export default React.memo(function PromptCard({ prompt, onSelect, keyboardShortc
       // an answer to this card.
       if (e.defaultPrevented) return;
       if (isTypingTarget(e.target as Element)) return;
+      // WHY (Destin, approved in chat 2026-10-12): with a popup open, its keys are its own —
+      // Enter on an empty spot in the popup answered this card behind it, and a digit could too.
+      if (popupOpen()) return;
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         e.preventDefault();
         setConfirmIdx(-1);
@@ -183,7 +188,7 @@ export default React.memo(function PromptCard({ prompt, onSelect, keyboardShortc
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [completed, shortcutsOn, buttons, focusIdx, activate]);
+  }, [completed, shortcutsOn, buttons, focusIdx, activate, popupOpen]);
 
   if (completed) {
     return (

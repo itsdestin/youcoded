@@ -12,6 +12,8 @@ import PromptCard from '../src/renderer/components/PromptCard';
 import { CompactToolStrip } from '../src/renderer/components/buddy/CompactToolStrip';
 import { ChatProvider } from '../src/renderer/state/chat-context';
 import { CardKeysLiveContext } from '../src/renderer/state/card-keys-context';
+import { EscCloseProvider } from '../src/renderer/hooks/use-esc-close';
+import { Dialog } from '../src/renderer/components/ui/Dialog';
 import type { ToolCallState } from '../src/shared/types';
 import type { InteractivePrompt } from '../src/renderer/state/chat-types';
 
@@ -197,6 +199,23 @@ describe('a stray Enter', () => {
       } finally {
         window.removeEventListener('keydown', composer);
       }
+      expect(respondToPermission).not.toHaveBeenCalled();
+    });
+
+    it('ignores Enter while a popup is open over the chat', async () => {
+      // Destin, approved in chat 2026-10-12: Enter in a popup answered the card behind it.
+      render(
+        <EscCloseProvider>
+          <ChatProvider>
+            <CardKeysLiveContext.Provider value>
+              <ToolCard sessionId="s1" tool={writeAsk()} />
+            </CardKeysLiveContext.Provider>
+          </ChatProvider>
+          <Dialog open onClose={() => {}} title="Session details" noScreen="test"><p>a popup</p></Dialog>
+        </EscCloseProvider>,
+      );
+      pressEnterOnBody();
+      await new Promise((r) => setTimeout(r, 0));
       expect(respondToPermission).not.toHaveBeenCalled();
     });
 

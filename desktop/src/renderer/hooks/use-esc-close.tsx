@@ -88,6 +88,11 @@ class EscStore {
     if (c.spent !== !inside) { c.spent = !inside; this.emit(); }
   }
 
+  /** A popup (not a panel beside the chat) is open somewhere. */
+  hasPopup(): boolean {
+    return this.stack.some((c) => !c.layeredWhile);
+  }
+
   /** The real top, spent or not — what the Android Back button acts on. */
   top(): Closer | undefined {
     return this.stack[this.stack.length - 1];
@@ -186,6 +191,24 @@ export function useEscClose(
     if (!store) return true;
     return idRef.current !== null && store.top()?.id === idRef.current;
   }, [store]);
+}
+
+/**
+ * A stable `() => boolean`: is a popup open right now? For window-level key listeners that act
+ * on the chat — the chat's permission/question cards and the message box — so an Enter meant for
+ * a popup never answers a card or sends a message behind it.
+ *
+ * WHY (Destin, approved in chat 2026-10-12, close-session-friction): with a popup open, Enter
+ * pressed on an empty spot reached the message box's window listener first, which sent the draft
+ * and marked the key handled — so the popup's own Enter stood down — and a waiting chat card
+ * could answer the same key. The files drawer beside the chat is a PANEL, not a popup: it stays
+ * open through a reply, so it does not count. Read at key time, never subscribed: a listener
+ * needs the answer only when a key arrives, and nothing re-renders for it (performance rule 3).
+ * False without a provider (isolated tests render no stack).
+ */
+export function usePopupOpen(): () => boolean {
+  const store = useContext(EscStoreContext);
+  return useCallback(() => !!store?.hasPopup(), [store]);
 }
 
 export function useEscStackEmpty(): boolean {
